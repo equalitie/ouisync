@@ -1,0 +1,24 @@
+import os ;
+local Architecture = [ os.environ BOOSTARCH ] ;
+local BinutilsPrefix = [ os.environ BINUTILS_PREFIX ] ;
+local CompilerFullPath = [ os.environ COMPILER_FULL_PATH ] ;
+
+using clang : $(Architecture) : $(CompilerFullPath) :
+<archiver>$(BinutilsPrefix)ar
+<compileflags>-fPIC
+<compileflags>-fexceptions
+<compileflags>-frtti
+<compileflags>-ffunction-sections
+<compileflags>-funwind-tables
+<compileflags>-fstack-protector-strong
+<compileflags>-Wno-invalid-command-line-argument
+<compileflags>-Wno-unused-command-line-argument
+<compileflags>-no-canonical-prefixes
+<compileflags>-DANDROID
+<compileflags>-Wa,--noexecstack
+<compileflags>-Wformat
+<compileflags>-Werror=format-security
+<compileflags>-DNDEBUG
+<compileflags>-O2
+<compileflags>-g
+;

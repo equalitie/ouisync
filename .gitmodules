@@ -1,0 +1,3 @@
+[submodule "modules/cryfs"]
+	path = modules/cryfs
+	url = https://github.com/cryfs/cryfs
