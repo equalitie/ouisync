@@ -29,4 +29,10 @@ set_target_properties(cryfs PROPERTIES
     INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/modules/cryfs/src"
 )
 
+add_library(ouisync STATIC
+    "src/create_cry_device.cpp"
+)
+target_include_directories(ouisync PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(ouisync PUBLIC Boost::filesystem cryfs)
+
 add_subdirectory(test)
