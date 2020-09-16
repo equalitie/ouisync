@@ -10,26 +10,28 @@
 using namespace ouisync;
 namespace sys = boost::system;
 using namespace std;
+template<class T> using Ref = cpputils::unique_ref<T>;
+
+void ls(cryfs::CryDevice& dev, const fs::path& path) {
+    auto dir = dev.LoadDir(path);
+    assert(dir);
+    for (auto& ch : (*dir)->children()) {
+        if (ch.name == "." || ch.name == "..") continue;
+        cout << ch.name << "\n";
+    }
+}
 
 int main() {
     fs::path testdir = fs::unique_path("/tmp/ouisync-test-%%%%-%%%%-%%%%-%%%%");
 
-    cerr << "Testdir: " << testdir << "\n";
+    cout << "Testdir: " << testdir << "\n";
 
     auto device = ouisync::create_cry_device(testdir);
 
-    auto dir = device->LoadDir("/");
-
-    assert(dir);
-
-    auto children = (*dir)->children();
-    cerr << "children count: " << children.size() << "\n";
-    for (auto& c : children) {
-        cerr << "c: " << c.name << "\n";
-    }
+    ls(*device, "/");
 
     device = nullptr;
 
-    cerr << "Deleting " << testdir << "\n";
+    cout << "Deleting " << testdir << "\n";
     fs::remove_all(testdir);
 }
