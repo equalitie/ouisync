@@ -3,6 +3,7 @@
 
 #include <block_store.h>
 #include <create_cry_device.h>
+#include <defer.h>
 
 #include <cryfs/impl/filesystem/CryDevice.h>
 
@@ -12,6 +13,7 @@ using namespace std;
 
 int main() {
     fs::path testdir = fs::unique_path("/tmp/ouisync-test-%%%%-%%%%-%%%%-%%%%");
+
     cerr << "Testdir: " << testdir << "\n";
 
     auto device = ouisync::create_cry_device(testdir);
@@ -25,4 +27,9 @@ int main() {
     for (auto& c : children) {
         cerr << "c: " << c.name << "\n";
     }
+
+    device = nullptr;
+
+    cerr << "Deleting " << testdir << "\n";
+    fs::remove_all(testdir);
 }
