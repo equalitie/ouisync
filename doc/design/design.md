@@ -32,6 +32,8 @@ The previous requirements are in contrast with the majority of existing solution
   - Conflicting modifications are handled in a user-unfriendly way (if supported at all).
   - Services, protocols and tools are proprietary or closed source, thus an inherent security liability.
 
+In addition, OuiSync strives to fulfill its requirements in a user-friendly and accessible way, providing end-user tools ready to be used in the main mobile and desktop platforms.  All protocols are open and software is released under Free/Libre and Open Source Software licenses.
+
 # Content
 
 Content.
