@@ -14,6 +14,24 @@ Communications between devices in OuiSync are resistant to interference thanks t
 
 [Ouinet]: https://github.com/equalitie/ouinet/
 
+# Requirements
+
+OuiSync caters to users who want to keep, for availability or backup purposes, copies of a set of files synchronized between different devices be them their own, or belonging to other users.
+
+Also, some of these devices are trusted to access, modify and share file data (like an encrypted smartphone or desktop computer), while others (like a permanently online Raspberry Pi or virtual private server) are only trusted to blindly store and convey data to others.
+
+Moreover, users want the system to behave in a way which is respectful with their privacy, secure, and available despite limited network connectivity.
+
+The previous requirements are in contrast with the majority of existing solutions, where some of the following issues arise:
+
+  - Users rely on third-party providers running servers which can access file data and become a bottleneck and single point of failure or control of the system.
+  - Other devices need good network reachability (e.g. static IP address, port-forwarding router) or have to resort to dedicated rendez-vous or tunneling helper servers.
+  - Devices need an active network connection even if they are physically close to each other.
+  - All devices keeping copies of the data have access to their content.
+  - Users need to adopt ad hoc workarounds (like encrypted file system layers or archive files), which break the usability of the system, to keep data private.
+  - Conflicting modifications are handled in a user-unfriendly way (if supported at all).
+  - Services, protocols and tools are proprietary or closed source, thus an inherent security liability.
+
 # Content
 
 Content.
