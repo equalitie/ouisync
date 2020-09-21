@@ -34,6 +34,22 @@ The previous requirements are in contrast with the majority of existing solution
 
 In addition, OuiSync strives to fulfill its requirements in a user-friendly and accessible way, providing end-user tools ready to be used in the main mobile and desktop platforms. All protocols are open and software is released under Free/Libre and Open Source Software licenses.
 
+# Usage scenarios
+
+## Backup device
+
+In this case, Alice has an encrypted smartphone that she uses to read work documents and take pictures of her journeys. She travels a lot and she worries that she might lose the phone and thus the files in it, but she does not want to reveal her files to untrusted third parties. Sitting in a drawer at home she also has an old Raspberry Pi that she used to watch videos on her TV.
+
+So she uses OuiSync to create two *folders* in her phone: one with *Documents* and another with *Voyage pictures*. She also connects the Pi (whose SD card has much unused space) permanently to the router, installs OuiSync and creates one *safe* for each folder in the phone. The Pi has no storage encryption but it is not a risk to Alice since OuiSync safes only see encrypted data and have no access to file data nor metadata.
+
+TODO: diagram
+
+## File sharing
+
+## Backed-up file sharing
+
+## Conflict resolution
+
 # Content
 
 Content.
