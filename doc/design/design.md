@@ -48,6 +48,10 @@ TODO: diagram
 
 ## File sharing
 
+Alice wants to share her *Voyage pictures* folders with Bob so that he can see the pictures and add more that he took with his camera when traveling together. So Bob installs OuiSync in his computer and configures a folder to synchronize with Alice's. Bob's device retrieves encrypted data both from Alice's phone and Pi peer-to-peer, so he's able to decrypt and access files in the folder after a while. When he adds new files, encrypted data is retrieved by the other devices as well, so the files become available in Alice's phone.
+
+TODO: diagram
+
 ## Backed-up file sharing
 
 ## Conflict resolution
