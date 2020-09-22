@@ -66,6 +66,20 @@ TODO: diagram
 
 ## Conflict resolution
 
+To better remember everything about their journey, Alice and Bob start to write some notes in text files that accompany the pictures. They simultaneously start annotating different picture sets. Even if they add or modify different files at the same time, OuiSync has no issues in synchronizing (*merging*) the changes.
+
+However, at one point Alice and Bob start modifying the same file at similar times. In this case, OuiSync may not be able to automatically merge the changes, and a *conflict* arises which may need to be *resolved* by Alice or Bob. This is illustrated in the diagram below.
+
+TODO: diagram
+
+In it, Alice and Bob start with the same version of file $X$ in their devices, $X_1$. The Pi's safe stores the latest *commit* (i.e. set of encrypted changes) $C_1$ leading to $X_1$. Bob is offline at the moment. Then Alice modifies $X_1$, creating version $X_{2A}$, which follows $X_1$ (shown as $X_1 \to X_{2A}$); the $C_{2A}$ commit associated with the change is only received by the Pi's safe, which is always online.
+
+While offline, Bob also modifies $X_1$ locally, creating version $X_{2B}$ with commit $C_{2B}$. Then he goes online, so Alice and the Pi both receive Bob's $C_{2B}$, while Bob receives Alice's $C_{2A}$.
+
+The OuiSync protocol allows the Pi's safe to see that $C_{2B}$ follows $C_1$, but it does not necessarily follow $C_{2A}$, so it keeps both (as they may be conflicting, something it cannot tell without access to unencrypted data). In contrast, both Alice's and Bob's folders do see that the other's commits do not necessarily follow their own latest one, plus they affect the same file; thus this file is marked as being in conflict and the other's version is kept to help resolve it.
+
+Alice sees OuiSync's notification about the conflict and reworks her version so that it also contains the changes that Bob added (also available from OuiSync), thus creating version $X_{3A2B}$. The new $C_{3A2B}$ commit gets propagated to Bob and the Pi. They both see that this does indeed follow all the latest commits that they know, so it cannot create a new conflict. Bob's device also recognizes $X_{3A2B}$ as following both $X_2A$ and $X_2B$, so the conflict gets automatically resolved there.
+
 # Content
 
 Content.
