@@ -54,7 +54,15 @@ Since Alice's Pi is online all the time, it does not matter that Alice's and Bob
 
 TODO: diagram
 
-## Backed-up file sharing
+## Storage incentives
+
+The connection of Alice's home Pi is not specially robust, and now that Bob is adding his very high-quality camera pictures to the shared folder, it becomes quite clear that the Pi will soon run out of storage. So Alice and Bob start looking for bigger, more reliable alternative backup storage.
+
+Charlie offers himself to host a OuiSync safe for them in one of his virtual servers in exchange for a small monthly amount. The servers have reliable and fast connections with plenty of storage space, so Alice and Bob accept the offer and together with Charlie they configure the new safe. When it comes online, it automatically starts gathering encrypted data from Alice's and Bob's devices, so it ends up with a copy of all data (but it still has no access to the files themselves).
+
+Should Alice and Bob decide that they no longer want to use Charlie's services, they only need to find an alternative place to setup a new safe and let it replicate all of the folder's data before removing Charlie's safe.
+
+TODO: diagram
 
 ## Conflict resolution
 
