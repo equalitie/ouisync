@@ -10,6 +10,10 @@ namespace blockstore {
 }
 
 namespace ouisync {
+    class BlockSync;
+}
+
+namespace ouisync {
 
 class BlockStore : public blockstore::BlockStore2 {
 public:
@@ -44,6 +48,7 @@ public:
 
 private:
     std::unique_ptr<blockstore::ondisk::OnDiskBlockStore2> _bs;
+    std::unique_ptr<BlockSync> _sync;
 };
 
 } // namespace

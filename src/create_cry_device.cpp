@@ -71,7 +71,7 @@ loadOrCreateConfig(const fs::path& config_file, const cryfs::LocalStateDir& stat
 
 namespace ouisync {
 
-unique_ptr<cryfs::CryDevice>
+unique_ptr<fspp::Device>
 create_cry_device(const fs::path& rootdir)
 {
     fs::path basedir(rootdir / "basedir");
@@ -90,7 +90,7 @@ create_cry_device(const fs::path& rootdir)
     bool allowIntegrityViolations = false;
     const bool missingBlockIsIntegrityViolation = true;
 
-    return make_unique<cryfs::CryDevice>(
+    auto dev = make_unique<cryfs::CryDevice>(
             std::move(config.configFile),
             std::move(blockStore),
             statedir,
@@ -98,6 +98,10 @@ create_cry_device(const fs::path& rootdir)
             allowIntegrityViolations,
             missingBlockIsIntegrityViolation,
             std::move(onIntegrityViolation));
+
+    dev->setContext(fspp::Context(fspp::noatime()));
+
+    return dev;
 }
 
 } // ouisync namespace
