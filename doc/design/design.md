@@ -44,7 +44,7 @@ So she uses OuiSync to create two *folders* in her phone: one with *Documents* a
 
 Now every time that Alice goes online with her phone, modifications to the folders (like added pictures) are exchanged peer-to-peer as encrypted data with the Pi and stored locally. OuiSync at the Pi keeps some history of changes, so Alice can safely remove old pictures from the phone or recover accidentally modified files.
 
-![Figure: Folders using a different device as backup](images/backup.svg)
+![Figure: Folders using a different device as backup](images/uc-backup.svg)
 
 ## File sharing
 
