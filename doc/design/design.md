@@ -62,7 +62,7 @@ Charlie offers himself to host a OuiSync safe for them in one of his virtual ser
 
 Should Alice and Bob decide that they no longer want to use Charlie's services, they only need to find an alternative place to setup a new safe and let it replicate all of the folder's data before removing Charlie's safe.
 
-TODO: diagram
+![Figure: Incentivized backup of shared folders](images/uc-incentives.svg)
 
 ## Conflict resolution
 
