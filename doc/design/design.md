@@ -52,7 +52,7 @@ Alice wants to share her *Voyage pictures* folders with Bob so that he can see t
 
 Since Alice's Pi is online all the time, it does not matter that Alice's and Bob's devices are not simultaneously online. Changes received by the Pi when either one of the devices is online end up being propagated to the other one when it gets connected.
 
-TODO: diagram
+![Figure: Folders shared among different users](images/uc-sharing.svg)
 
 ## Storage incentives
 
