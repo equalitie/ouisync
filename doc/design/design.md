@@ -70,7 +70,7 @@ To better remember everything about their journey, Alice and Bob start to write 
 
 However, at one point Alice and Bob start modifying the same file at similar times. In this case, OuiSync may not be able to automatically merge the changes, and a *conflict* arises which may need to be *resolved* by Alice or Bob. This is illustrated in the diagram below.
 
-TODO: diagram
+![Figure: Occurrence and resolution of a conflict](images/uc-conflict.svg)
 
 In it, Alice and Bob start with exact replicas of the shared folder. In them, the file named $X$ contains identical data; we will call that initial state $X_1$. The Pi's safe stores the latest *commit* (i.e. versioned set of all encrypted data in the replica) $C_1$, which contains $X_1$. Bob is offline at the moment.
 
