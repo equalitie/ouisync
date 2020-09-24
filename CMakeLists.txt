@@ -36,5 +36,6 @@ add_library(ouisync STATIC
 )
 target_include_directories(ouisync PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(ouisync PUBLIC Boost::filesystem cryfs)
+target_compile_features(ouisync PRIVATE cxx_std_17)
 
 add_subdirectory(test)
