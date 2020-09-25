@@ -83,3 +83,9 @@ The OuiSync protocol allows the Pi's safe to see that $C_{2B}$ follows $C_1$, bu
 Alice sees OuiSync's notification about the conflict and reworks her file so that it also contains the changes that Bob added (also available from OuiSync), thus creating $F_{3A2B}$. The resulting $C_{3A2B}$ commit is obtained by Bob and the Pi. They both see that this does indeed follow all the latest commits that they know, so it cannot create a new conflict. Bob's device also recognizes $F_{3A2B}$ as following both $F_{2A}$ and $F_{2B}$, so the conflict gets automatically resolved there.
 
 Finally, at a later time Alice or Bob may choose to drop old copies of files in their replicas of the shared folder and save some disk space. For instance, some intermediate *folder snapshots* may be removed (i.e. leaving a more coarse granularity of folder history, as shown for Alice), or just the latest copies of files be left (as shown for Bob). Snapshots cannot be removed from safes like the Pi, since they have no access to file data or metadata, but oldest commits can be purged instead. In all cases, encrypted data which is no longer used by the remaining commits is dropped.
+
+# Appendix: Copyright notices
+
+Material design icons in diagrams are copyright Google, LLC and used under the [Apache License v2.0][].
+
+[Apache License v2.0]: https://www.apache.org/licenses/LICENSE-2.0
