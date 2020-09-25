@@ -72,15 +72,15 @@ However, at one point Alice and Bob start modifying the same file at similar tim
 
 ![Figure: Occurrence and resolution of a conflict](images/uc-conflict.svg)
 
-In it, Alice and Bob start with exact replicas of the shared folder. In them, the file named $X$ contains identical data; we will call that initial state $X_1$. The Pi's safe stores the latest *commit* (i.e. versioned set of all encrypted data in the replica) $C_1$, which contains $X_1$. Bob is offline at the moment.
+In it, Alice and Bob start with exact replicas of the shared folder. In them, the file named $F$ contains identical data; we will call that initial state $F_1$. The Pi's safe stores the latest *commit* (i.e. versioned set of all encrypted data in the replica) $C_1$, which contains $F_1$. Bob is offline at the moment.
 
-Then Alice modifies $X_1$ locally to obtain $X_{2A}$, which *follows* $X_1$ (shown as $X_1 \to X_{2A}$); the new $C_{2A}$ commit associated with the change is only noticed and obtained by the Pi's safe, which is always online.
+Then Alice modifies $F_1$ locally to obtain $F_{2A}$, which *follows* $F_1$ (shown as $F_1 \to F_{2A}$); the new $C_{2A}$ commit associated with the change is only noticed and obtained by the Pi's safe, which is always online.
 
-While offline, Bob also modifies $X_1$ locally to obtain $X_{2B}$, creating commit $C_{2B}$. Then he goes online, so Alice and the Pi both obtain Bob's $C_{2B}$, while Bob obtains Alice's $C_{2A}$.
+While offline, Bob also modifies $F_1$ locally to obtain $F_{2B}$, creating commit $C_{2B}$. Then he goes online, so Alice and the Pi both obtain Bob's $C_{2B}$, while Bob obtains Alice's $C_{2A}$.
 
 The OuiSync protocol allows the Pi's safe to see that $C_{2B}$ follows $C_1$, but it does not necessarily follow $C_{2A}$, so it keeps both (as they may be conflicting, something it cannot tell without access to unencrypted data). Each of Alice's and Bob's folders also sees that the other's commit does not necessarily follow its own latest one, but it can also see that both commits affect the same file; thus this file is marked as being in conflict and the other's latest file is kept to help resolve it.
 
-Alice sees OuiSync's notification about the conflict and reworks her file so that it also contains the changes that Bob added (also available from OuiSync), thus creating $X_{3A2B}$. The resulting $C_{3A2B}$ commit is obtained by Bob and the Pi. They both see that this does indeed follow all the latest commits that they know, so it cannot create a new conflict. Bob's device also recognizes $X_{3A2B}$ as following both $X_{2A}$ and $X_{2B}$, so the conflict gets automatically resolved there.
+Alice sees OuiSync's notification about the conflict and reworks her file so that it also contains the changes that Bob added (also available from OuiSync), thus creating $F_{3A2B}$. The resulting $C_{3A2B}$ commit is obtained by Bob and the Pi. They both see that this does indeed follow all the latest commits that they know, so it cannot create a new conflict. Bob's device also recognizes $F_{3A2B}$ as following both $F_{2A}$ and $F_{2B}$, so the conflict gets automatically resolved there.
 
 Finally, at a later time Alice or Bob may choose to drop old copies of files in their replicas of the shared folder and save some disk space. For instance, some intermediate *folder snapshots* may be removed (i.e. leaving a more coarse granularity of folder history, as shown for Alice), or just the latest copies of files be left (as shown for Bob). Snapshots cannot be removed from safes like the Pi, since they have no access to file data or metadata, but oldest commits can be purged instead. In all cases, encrypted data which is no longer used by the remaining commits is dropped.
 

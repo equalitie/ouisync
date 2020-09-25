@@ -866,7 +866,7 @@
            id="tspan2408"
            x="60.680202"
            y="52.484882"
-           style="fill:#000000;fill-opacity:1;stroke-width:0.264583px">X<tspan
+           style="fill:#000000;fill-opacity:1;stroke-width:0.264583px">F<tspan
    style="font-size:65%;baseline-shift:sub;fill:#000000;fill-opacity:1"
    id="tspan2412">1</tspan></tspan></text>
     </g>
@@ -880,7 +880,7 @@
          y="65.27491"
          x="34.395832"
          id="tspan2414"
-         sodipodi:role="line">(alters X)</tspan></text>
+         sodipodi:role="line">(alters F)</tspan></text>
     <g
        id="g2437-6"
        transform="translate(-34.094021,23.744358)">
@@ -898,7 +898,7 @@
            y="52.484882"
            x="60.680202"
            id="tspan2408-2"
-           sodipodi:role="line">X<tspan
+           sodipodi:role="line">F<tspan
    id="tspan2412-6"
    style="font-size:65%;baseline-shift:sub;fill:#000000;fill-opacity:1">1</tspan></tspan></text>
     </g>
@@ -920,7 +920,7 @@
            y="76.22924"
            x="60.982014"
            id="tspan2408-0"
-           sodipodi:role="line">X<tspan
+           sodipodi:role="line">F<tspan
    id="tspan2482"
    style="font-size:65%;baseline-shift:sub">2A</tspan></tspan></text>
     </g>
@@ -949,7 +949,7 @@
            y="52.484882"
            x="60.680202"
            id="tspan2408-7"
-           sodipodi:role="line">X<tspan
+           sodipodi:role="line">F<tspan
    id="tspan2412-2"
    style="font-size:65%;baseline-shift:sub;fill:#000000;fill-opacity:1">1</tspan></tspan></text>
     </g>
@@ -1017,7 +1017,7 @@
          id="tspan2414-9"
          x="103.1875"
          y="99.670746"
-         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:5.64444px;font-family:sans-serif;-inkscape-font-specification:'sans-serif, Normal';font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;fill:#000000;fill-opacity:1;stroke-width:0.264583px">(alters X)</tspan></text>
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:5.64444px;font-family:sans-serif;-inkscape-font-specification:'sans-serif, Normal';font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;fill:#000000;fill-opacity:1;stroke-width:0.264583px">(alters F)</tspan></text>
     <g
        transform="translate(34.697646,58.140192)"
        id="g2437-6-1">
@@ -1035,7 +1035,7 @@
            id="tspan2408-2-1"
            x="60.680202"
            y="52.484882"
-           style="fill:#000000;fill-opacity:1;stroke-width:0.264583px">X<tspan
+           style="fill:#000000;fill-opacity:1;stroke-width:0.264583px">F<tspan
    style="font-size:65%;baseline-shift:sub;fill:#000000;fill-opacity:1"
    id="tspan2412-6-1">1</tspan></tspan></text>
     </g>
@@ -1057,7 +1057,7 @@
            id="tspan2408-0-7"
            x="60.982014"
            y="76.22924"
-           style="fill:#000000;fill-opacity:1;stroke-width:0.264583px">X<tspan
+           style="fill:#000000;fill-opacity:1;stroke-width:0.264583px">F<tspan
    style="font-size:65%;baseline-shift:sub"
    id="tspan2482-6">2B</tspan></tspan></text>
     </g>
@@ -1330,7 +1330,7 @@
            id="tspan2408-2-6"
            x="60.680202"
            y="52.484882"
-           style="fill:#000000;fill-opacity:1;stroke-width:0.264583px">X<tspan
+           style="fill:#000000;fill-opacity:1;stroke-width:0.264583px">F<tspan
    style="font-size:65%;baseline-shift:sub;fill:#000000;fill-opacity:1"
    id="tspan2412-6-4">1</tspan></tspan></text>
     </g>
@@ -1352,7 +1352,7 @@
            id="tspan2408-0-0"
            x="60.982014"
            y="76.22924"
-           style="fill:#000000;fill-opacity:1;stroke-width:0.264583px">X<tspan
+           style="fill:#000000;fill-opacity:1;stroke-width:0.264583px">F<tspan
    style="font-size:65%;baseline-shift:sub"
    id="tspan2482-9">2A</tspan></tspan></text>
     </g>
@@ -1374,7 +1374,7 @@
            id="tspan2408-0-05"
            x="60.982014"
            y="76.22924"
-           style="fill:#000000;fill-opacity:1;stroke-width:0.264583px">X<tspan
+           style="fill:#000000;fill-opacity:1;stroke-width:0.264583px">F<tspan
    style="font-size:65%;baseline-shift:sub"
    id="tspan2482-94">2B</tspan></tspan></text>
     </g>
@@ -1411,7 +1411,7 @@
            y="52.484882"
            x="60.680202"
            id="tspan2408-2-1-2"
-           sodipodi:role="line">X<tspan
+           sodipodi:role="line">F<tspan
    id="tspan2412-6-1-5"
    style="font-size:65%;baseline-shift:sub;fill:#000000;fill-opacity:1">1</tspan></tspan></text>
     </g>
@@ -1433,7 +1433,7 @@
            y="76.22924"
            x="60.982014"
            id="tspan2408-0-7-8"
-           sodipodi:role="line">X<tspan
+           sodipodi:role="line">F<tspan
    id="tspan2482-6-4"
    style="font-size:65%;baseline-shift:sub">2B</tspan></tspan></text>
     </g>
@@ -1455,7 +1455,7 @@
            y="76.22924"
            x="60.982014"
            id="tspan2408-0-7-0"
-           sodipodi:role="line">X<tspan
+           sodipodi:role="line">F<tspan
    id="tspan2482-6-6"
    style="font-size:65%;baseline-shift:sub">2A</tspan></tspan></text>
     </g>
@@ -1514,7 +1514,7 @@
            y="52.484882"
            x="60.680202"
            id="tspan2408-2-6-8"
-           sodipodi:role="line">X<tspan
+           sodipodi:role="line">F<tspan
    id="tspan2412-6-4-0"
    style="font-size:65%;baseline-shift:sub;fill:#000000;fill-opacity:1">1</tspan></tspan></text>
     </g>
@@ -1536,7 +1536,7 @@
            y="76.22924"
            x="60.982014"
            id="tspan2408-0-0-4"
-           sodipodi:role="line">X<tspan
+           sodipodi:role="line">F<tspan
    id="tspan2482-9-0"
    style="font-size:65%;baseline-shift:sub">2A</tspan></tspan></text>
     </g>
@@ -1558,7 +1558,7 @@
            y="76.22924"
            x="60.982014"
            id="tspan2408-0-05-2"
-           sodipodi:role="line">X<tspan
+           sodipodi:role="line">F<tspan
    id="tspan2482-94-6"
    style="font-size:65%;baseline-shift:sub">2B</tspan></tspan></text>
     </g>
@@ -1596,7 +1596,7 @@
            id="tspan2408-0-0-4-7"
            x="56.954147"
            y="211.16675"
-           style="fill:#000000;fill-opacity:1;stroke-width:0.264583px">X<tspan
+           style="fill:#000000;fill-opacity:1;stroke-width:0.264583px">F<tspan
    style="font-size:65%;baseline-shift:sub"
    id="tspan2482-9-0-2">3A2B</tspan></tspan></text>
     </g>
@@ -1667,7 +1667,7 @@
            id="tspan2408-2-6-8-4"
            x="60.680202"
            y="52.484882"
-           style="fill:#000000;fill-opacity:1;stroke-width:0.264583px">X<tspan
+           style="fill:#000000;fill-opacity:1;stroke-width:0.264583px">F<tspan
    style="font-size:65%;baseline-shift:sub;fill:#000000;fill-opacity:1"
    id="tspan2412-6-4-0-2">1</tspan></tspan></text>
     </g>
@@ -1689,7 +1689,7 @@
            id="tspan2408-0-0-4-0"
            x="60.982014"
            y="76.22924"
-           style="fill:#000000;fill-opacity:1;stroke-width:0.264583px">X<tspan
+           style="fill:#000000;fill-opacity:1;stroke-width:0.264583px">F<tspan
    style="font-size:65%;baseline-shift:sub"
    id="tspan2482-9-0-4">2B</tspan></tspan></text>
     </g>
@@ -1711,7 +1711,7 @@
            id="tspan2408-0-05-2-0"
            x="60.982014"
            y="76.22924"
-           style="fill:#000000;fill-opacity:1;stroke-width:0.264583px">X<tspan
+           style="fill:#000000;fill-opacity:1;stroke-width:0.264583px">F<tspan
    style="font-size:65%;baseline-shift:sub"
    id="tspan2482-94-6-5">2A</tspan></tspan></text>
     </g>
@@ -1749,7 +1749,7 @@
            y="211.16675"
            x="56.954147"
            id="tspan2408-0-0-4-7-8"
-           sodipodi:role="line">X<tspan
+           sodipodi:role="line">F<tspan
    id="tspan2482-9-0-2-3"
    style="font-size:65%;baseline-shift:sub">3A2B</tspan></tspan></text>
     </g>
@@ -1998,7 +1998,7 @@
            id="tspan2408-2-6-8-1"
            x="60.680202"
            y="52.484882"
-           style="fill:#000000;fill-opacity:1;stroke-width:0.264583px">X<tspan
+           style="fill:#000000;fill-opacity:1;stroke-width:0.264583px">F<tspan
    style="font-size:65%;baseline-shift:sub;fill:#000000;fill-opacity:1"
    id="tspan2412-6-4-0-5">1</tspan></tspan></text>
     </g>
@@ -2020,7 +2020,7 @@
            y="211.16675"
            x="56.954147"
            id="tspan2408-0-0-4-7-6"
-           sodipodi:role="line">X<tspan
+           sodipodi:role="line">F<tspan
    id="tspan2482-9-0-2-5"
    style="font-size:65%;baseline-shift:sub">3A2B</tspan></tspan></text>
     </g>
@@ -2061,7 +2061,7 @@
            id="tspan2408-0-0-4-7-8-0"
            x="56.954147"
            y="211.16675"
-           style="fill:#000000;fill-opacity:1;stroke-width:0.264583px">X<tspan
+           style="fill:#000000;fill-opacity:1;stroke-width:0.264583px">F<tspan
    style="font-size:65%;baseline-shift:sub"
    id="tspan2482-9-0-2-3-8">3A2B</tspan></tspan></text>
     </g>
