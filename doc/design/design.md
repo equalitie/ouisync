@@ -13,6 +13,7 @@ OuiSync uses strong encryption when communicating with other devices to protect 
 Communications between devices in OuiSync are resistant to interference thanks to technologies developed for the [Ouinet][] project. Peer-to-peer (P2P) techniques are used for the discovery of other devices and communication with them without the need of a server. Local discovery allows devices to talk directly over a (maybe isolated) local network. If no network is available at all, Wi-Fi Direct or Bluetooth can be used instead for direct device-to-device (D2D) communication.
 
 [Ouinet]: https://github.com/equalitie/ouinet/
+    "Ouinet (GitHub)"
 
 # Requirements
 
@@ -95,6 +96,7 @@ OuiSync uses [version vectors][] to track changes to the different replicas of a
  3. Detect potential conflicts and (in end-user replicas) apply automatic merge strategies, or otherwise signal conflicts in particular files (while still allowing updates and modifications).
 
 [version vectors]: https://en.wikipedia.org/wiki/Version_vector
+    "Version vector (Wikipedia)"
 
 ## Transport protocol
 
