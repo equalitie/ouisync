@@ -72,7 +72,7 @@ However, at one point Alice and Bob start modifying the same file at similar tim
 
 ![Figure: Occurrence and resolution of a conflict](images/uc-conflict.svg)
 
-In it, Alice and Bob start with exact replicas of the shared folder. In them, the file named $F$ contains identical data; we will call that initial state $F_1$. The Pi's safe stores the latest *commit* (i.e. versioned set of all encrypted data in the replica) $C_1$, which contains $F_1$. Bob is offline at the moment.
+In it, Alice and Bob start with exact *replicas* of the shared folder. In them, the file named $F$ contains identical data; we will call that initial state $F_1$. The Pi's safe stores the latest *commit* (i.e. versioned set of all encrypted data in the replica) $C_1$, which contains $F_1$. Bob is offline at the moment.
 
 Then Alice modifies $F_1$ locally to obtain $F_{2A}$, which *follows* $F_1$ (shown as $F_1 \to F_{2A}$); the new $C_{2A}$ commit associated with the change is only noticed and obtained by the Pi's safe, which is always online.
 
