@@ -98,7 +98,23 @@ OuiSync uses [version vectors][] to track changes to the different replicas of a
 [version vectors]: https://en.wikipedia.org/wiki/Version_vector
     "Version vector (Wikipedia)"
 
-## Transport protocol
+## Transport protocols
+
+When trying to enable communication between two devices without the need of a mediating server, it is necessary to resort to peer-to-peer (P2P) techniques.
+
+OuiSync uses protocols developed for [Ouinet][], which offer additional protections against network interference by cleverly using industry standards like BitTorrent's distributed hash table (DHT) for the discovery of remote devices, and the [uTP][] transport protocol for NAT-friendly bandwidth-efficient communication between them. Ouinet protocols also include the use of [UPnP][] to make devices more reachable when possible, and multicast to discover other devices in local area networks.
+
+[Ouinet]: https://github.com/equalitie/ouinet/
+    "Ouinet (GitHub)"
+[uTP]: https://en.wikipedia.org/wiki/Micro_Transport_Protocol
+    "Micro Transport Protocol (Wikipedia)"
+[UPnP]: https://en.wikipedia.org/wiki/Universal_Plug_and_Play
+    "Universal Plug and Play (Wikipedia)"
+
+OuiSync also supports direct device-to-device (D2D) communication in the absence of network infrastructure. The technology choices include [Wi-Fi Direct][] and Bluetooth, which are pervasive in mobile devices.
+
+[Wi-Fi Direct]: https://en.wikipedia.org/wiki/Wi-Fi_Direct
+    "Wi-Fi Direct (Wikipedia)"
 
 ## Storage
 
