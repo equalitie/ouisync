@@ -84,6 +84,22 @@ Alice sees OuiSync's notification about the conflict and reworks her file so tha
 
 Finally, at a later time Alice or Bob may choose to drop old copies of files in their replicas of the shared folder and save some disk space. For instance, some intermediate *folder snapshots* may be removed (i.e. leaving a more coarse granularity of folder history, as shown for Alice), or just the latest copies of files be left (as shown for Bob). Snapshots cannot be removed from safes like the Pi, since they have no access to file data or metadata, but oldest commits can be purged instead. In all cases, encrypted data which is no longer used by the remaining commits is dropped.
 
+# Design decisions
+
+## Synchronization mechanism
+
+OuiSync uses [version vectors][] to track changes to the different replicas of a shared folder. The latest commit of each replica is made available to other replicas as a *version vector* and its associated *encrypted data*. The comparison of such vectors allows a replica to decide whether a commit strictly precedes its own, strictly follows it, or does not necessarily follow it (in which case there may be a conflict). This allows the different replicas to:
+
+ 1. Efficiently incorporate changes from other replicas in the absence of conflicts. This is done by retrieving missing encrypted data *blocks* from other replicas.
+ 2. Independently modify files in the folder.
+ 3. Detect potential conflicts and (in end-user replicas) apply automatic merge strategies, or otherwise signal conflicts in particular files (while still allowing updates and modifications).
+
+[version vectors]: https://en.wikipedia.org/wiki/Version_vector
+
+## Transport protocol
+
+## Storage
+
 # Appendix: Copyright notices
 
 Material design icons in diagrams are copyright Google, LLC and used under the [Apache License v2.0][].
