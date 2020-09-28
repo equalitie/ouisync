@@ -15,3 +15,6 @@ zero.
 
 **Notation**: We denote by C_{VersionVector} the Commit (VersionVector, EncryptedData).
 (edited)
+
+**Definition _Branch_**: A _Branch_ is a set of commits where for each two distinct
+commits c_i and c_j either c_i < c_j or c_j < c_i.
