@@ -36,6 +36,9 @@ Say we have two branches B1 and B2. The head of B1 is C12 and the head of B2 is
 C21 like so:
 
 ```
+             +-> block ID
+             |    +-> block data (encrypted)
+             |    |
 B1/C12 = { (123, aaa), (124, bbb), (234, ccc), (235, ddd), (236, fff) }
 B2/C21 = { (123, aaa), (124, bbb), (234, ccc), (235, eee),            }
                                                            |--------|

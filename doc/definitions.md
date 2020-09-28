@@ -18,3 +18,9 @@ zero.
 
 **Definition _Branch_**: A _Branch_ is a set of commits where for each two distinct
 commits c_i and c_j either c_i < c_j or c_j < c_i.
+
+**Definition _Branch HEAD_**: A _Branch HEAD_ is a commit H in the branch for which
+each other commit c_i of that branch holds that c_i < H.
+
+**Definition _Branch ID_**: An array of 16 random bytes that locally represent
+a branch.
