@@ -89,14 +89,14 @@ Finally, at a later time Alice or Bob may choose to drop old copies of files in 
 
 ## Synchronization mechanism
 
-OuiSync uses [version vectors][] to track changes to the different replicas of a shared folder. The latest commit of each replica is made available to other replicas as a *version vector* and its associated *encrypted data*. The comparison of such vectors allows a replica to decide whether a commit strictly precedes its own, strictly follows it, or does not necessarily follow it (in which case there may be a conflict). Commits stand on their own and do not explicitly point to others. All of this allows the different replicas to:
+OuiSync uses [version vectors][version vector] to track changes to the different replicas of a shared folder. The latest commit of each replica is made available to other replicas as a *version vector* and its associated *encrypted data*. The comparison of such vectors allows a replica to decide whether a commit strictly precedes its own, strictly follows it, or does not necessarily follow it (in which case there may be a conflict). Commits stand on their own and do not explicitly point to others. All of this allows the different replicas to:
 
  1. Efficiently incorporate changes from other replicas in the absence of conflicts. This is done by retrieving missing encrypted *blocks* from other replicas.
  2. Independently modify files in the folder.
  3. Detect potential conflicts and (in end-user replicas) apply automatic merge strategies, or otherwise signal conflicts in particular files (while still allowing updates and modifications).
  4. Keep or drop arbitrary commits from storage without breaking other commits.
 
-[version vectors]: https://en.wikipedia.org/wiki/Version_vector
+[version vector]: https://en.wikipedia.org/wiki/Version_vector
     "Version vector (Wikipedia)"
 
 ## Transport protocols
@@ -129,6 +129,31 @@ To ensure a good usability of OuiSync as day-to-day storage, desktop versions us
 
 [FUSE]: https://en.wikipedia.org/wiki/Filesystem_in_Userspace
     "Filesystem in Userspace (Wikipedia)"
+
+# Commit synchronization
+
+Many of the properties of OuiSync stem from the way a folder and its evolution are represented and exchanged.
+
+Raw folder data (i.e. file contents) as well as metadata (directory tree, file and directory names, sizes, time stamps) are encoded into fixed-size immutable blocks, then these blocks are encrypted with a key (shared between the different end-user replicas which have access to the data), with blocks being given random, unique and immutable identifiers on creation. This encoding and encryption is handled by [CryFS][].
+
+The state of a folder in a particular end-user replica at a given point in time is represented as the set of encrypted blocks in use at that moment. That set is tagged with a [version vector][] which names the last known version of the folder for each end-user replica known by this one (including itself).
+
+Given that explanation, the following definitions are used:
+
+  - **Replica identifier (RID):** A UUID uniquely identifying an end-user replica (safes have no RID).
+  - **Version:** A 64-bit unsigned integer.
+  - **Version vector:** A map from replica identifier to version. The absence of a particular RID/version pair in the map is equivalent to having an entry for that RID in the vector with a version equal to zero.
+  - **Object identifier (OID):** An array of 16 completely random bytes uniquely identifying a block.
+  - **Encrypted block:** An array of at most 32 KiB worth of encrypted data.
+  - **Encrypted data:** A map from object identifier to encrypted block.
+  - **Commit:** A pair of version vector and encrypted data. We use the notation $C_{VersionVector}$ to indicate the commit tagged with that version vector, e.g. $C_{A1B2}$ for the commit with a version vector where replica *A* (a shorthand for its UUID) has version 1 and replica *B* has version 2.
+
+The main difference with other directed acyclic graph-based (DAG-based) systems like [Git][] is that there are no explicit pointers to other commits. In contrast with diff-based systems like [Subversion][], each commit is self-contained and includes all references needed to reconstruct its associated data (except for decryption keys). Both features allow the user to drop arbitrary commits from their replica (e.g. to progressively reduce the granularity of older backups) and save disk space without invalidating other commits.
+
+[Git]: https://git-scm.com/
+[Subversion]: https://subversion.apache.org/
+
+TODO diagrams
 
 # Appendix: Copyright notices
 
