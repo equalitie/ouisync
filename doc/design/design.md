@@ -91,7 +91,7 @@ Finally, at a later time Alice or Bob may choose to drop old copies of files in 
 
 OuiSync uses [version vectors][] to track changes to the different replicas of a shared folder. The latest commit of each replica is made available to other replicas as a *version vector* and its associated *encrypted data*. The comparison of such vectors allows a replica to decide whether a commit strictly precedes its own, strictly follows it, or does not necessarily follow it (in which case there may be a conflict). Commits stand on their own and do not explicitly point to others. All of this allows the different replicas to:
 
- 1. Efficiently incorporate changes from other replicas in the absence of conflicts. This is done by retrieving missing encrypted data *blocks* from other replicas.
+ 1. Efficiently incorporate changes from other replicas in the absence of conflicts. This is done by retrieving missing encrypted *blocks* from other replicas.
  2. Independently modify files in the folder.
  3. Detect potential conflicts and (in end-user replicas) apply automatic merge strategies, or otherwise signal conflicts in particular files (while still allowing updates and modifications).
  4. Keep or drop arbitrary commits from storage without breaking other commits.
