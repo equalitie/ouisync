@@ -60,6 +60,16 @@ public:
         hash_detail::perform_static_assertions();
     }
 
+    inline void update(const void* buffer, size_t size)
+    {
+        if (!_is_set) {
+            hash_detail::new_impl(algo, _impl.data());
+            _is_set = true;
+        }
+        hash_detail::update_impl(algo, _impl.data(),
+                reinterpret_cast<const uint8_t*>(buffer), size);
+    }
+
     inline void update(boost::string_view sv)
     {
         update(sv.data(), sv.size());
@@ -142,16 +152,6 @@ private:
 private:
     bool _is_set = false;
     ImplBuffer _impl;
-
-    inline void update(const void* buffer, size_t size)
-    {
-        if (!_is_set) {
-            hash_detail::new_impl(algo, _impl.data());
-            _is_set = true;
-        }
-        hash_detail::update_impl(algo, _impl.data(),
-                reinterpret_cast<const uint8_t*>(buffer), size);
-    }
 };
 
 using Sha1   = Hash<HashAlgorithm::sha1>;

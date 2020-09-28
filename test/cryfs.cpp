@@ -2,7 +2,9 @@
 #include <iostream>
 
 #include <block_store.h>
+#include <block_sync.h>
 #include <create_cry_device.h>
+#include <version_vector.h>
 
 #include <fspp/fs_interface/Device.h>
 #include <fspp/fs_interface/Dir.h>
@@ -54,12 +56,14 @@ int main() {
     cout << "Testdir: " << testdir << "\n";
 
     {
-        auto cry_device = ouisync::create_cry_device(testdir);
+        auto sync = make_unique<BlockSync>();
+        auto cry_device = ouisync::create_cry_device(testdir, move(sync));
         TestDevice device{move(cry_device)};
 
         device.mkdir("/a/b");
         device.ls("/");
         device.ls("/a");
+        sleep(2);
     }
 
     cout << "Deleting " << testdir << "\n";

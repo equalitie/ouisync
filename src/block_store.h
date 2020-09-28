@@ -20,7 +20,7 @@ public:
     using BlockId = blockstore::BlockId;
 
 public:
-    BlockStore(fs::path basedir);
+    BlockStore(fs::path basedir, std::unique_ptr<BlockSync> sync);
 
     BlockId createBlockId() const override;
 
