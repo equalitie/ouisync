@@ -6,7 +6,7 @@
 
 The OuiSync project aims to provide users with a friendly tool to synchronize folders with files between their own devices or those of other users (either trusted or untrusted), while keeping the data private and secure both in transit and in rest, and all that in spite of poor or spotty connectivity between devices and without the need of dedicated servers or even local network infrastructure.
 
-OuiSync implements a distributed protocol for the exchange and synchronization of file changes that allows it to use automatic merge strategies and simple conflict resolution propagation, thus sparing users from manual or low-level handling of synchronization issues.
+OuiSync implements a distributed protocol for the exchange and synchronization of file changes that allows it to use automatic merge strategies and simple conflict resolution propagation, thus sparing users from manual or low-level handling of synchronization issues. Old versions of data may be kept, with user-configurable granularity.
 
 OuiSync uses strong encryption when communicating with other devices to protect from eavesdropping and tampering; data is also only propagated to devices selected for storage to enhance privacy, and then only an allowed subset can access the actual files and metadata. When storing data permanently, OuiSync also uses strong encryption that protects it in case of device seizure.
 
@@ -25,11 +25,11 @@ Moreover, users want the system to behave in a way which is respectful with thei
 
 The previous requirements are in contrast with the majority of existing solutions, where some of the following issues arise:
 
-  - Users rely on third-party providers running servers which can access file data and become a bottleneck and single point of failure or control of the system.
-  - Other devices need good network reachability (e.g. static IP address, port-forwarding router) or have to resort to dedicated rendez-vous or tunneling helper servers.
-  - Devices need an active network connection even if they are physically close to each other.
+  - Users rely on third-party providers running servers which can access file data and become a bottleneck and single point of failure, surveillance or control of the system.
+  - Other devices need good network reachability (e.g. static IP address, port-forwarding router) or they have to resort to dedicated rendez-vous or tunneling helper servers.
+  - Devices need network connection to the outside world even if they are physically close to each other.
   - All devices keeping copies of the data have access to their content.
-  - Users need to adopt ad hoc workarounds (like encrypted file system layers or archive files), which break the usability of the system, to keep data private.
+  - Users need to adopt ad hoc workarounds (like encrypted file system layers or archive files) to keep data private, breaking the usability of the system.
   - Conflicting modifications are handled in a user-unfriendly way (if supported at all).
   - Services, protocols and tools are proprietary or closed source, thus an inherent security liability.
 
