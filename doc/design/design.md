@@ -159,6 +159,8 @@ The main difference with other directed acyclic graph-based (DAG-based) systems 
 
 TODO diagrams
 
+![Figure: A series of commits changing data: any of them can be dropped](images/commit-sequence.svg)
+
 # Appendix: Copyright notices
 
 Material design icons in diagrams are copyright Google, LLC and used under the [Apache License v2.0][].
