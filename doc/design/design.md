@@ -152,7 +152,7 @@ Given that explanation, the following definitions are used:
   - **Encrypted data:** A map from block identifier to encrypted block.
   - **Commit:** A pair of version vector and encrypted data. We use the notation $C_{VersionVector}$ to indicate the commit tagged with that version vector, e.g. $C_{A1B2}$ for the commit with a version vector where replica *A* (a shorthand for its UUID) has version 1 and replica *B* has version 2.
 
-The main difference with other directed acyclic graph-based (DAG-based) systems like [Git][] is that there are no explicit pointers to other commits. In contrast with diff-based systems like [Subversion][], each commit is self-contained and includes all references needed to reconstruct its associated data (except for decryption keys). The combination of both features allows the user to drop arbitrary commits from their replica (e.g. to progressively reduce the granularity of older backups) and save disk space without invalidating other commits.
+The main difference with other directed acyclic graph-based (DAG-based) systems like [Git][] is that there are no explicit pointers to other commits. In contrast with diff-based systems like [Subversion][], each commit is self-contained and includes all references needed to reconstruct its associated data (except for decryption keys). The combination of both features allows the user to *drop arbitrary commits* from their replica (e.g. to progressively reduce the granularity of older backups) and save disk space without invalidating other commits. Thanks to the use of version vectors, the remaining commits maintain their relative order.
 
 [Git]: https://git-scm.com/
 [Subversion]: https://subversion.apache.org/
