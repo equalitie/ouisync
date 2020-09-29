@@ -143,12 +143,12 @@ Given that explanation, the following definitions are used:
   - **Replica identifier (RID):** A UUID uniquely identifying an end-user replica (safes have no RID).
   - **Version:** A 64-bit unsigned integer.
   - **Version vector:** A map from replica identifier to version. The absence of a particular RID/version pair in the map is equivalent to having an entry for that RID in the vector with a version equal to zero.
-  - **Object identifier (OID):** An array of 16 completely random bytes uniquely identifying a block.
-  - **Encrypted block:** An array of at most 32 KiB worth of encrypted data.
-  - **Encrypted data:** A map from object identifier to encrypted block.
+  - **Block identifier (BID):** An array of 16 completely random bytes uniquely identifying a block.
+  - **Encrypted block:** An array of 32 KiB worth of encrypted data.
+  - **Encrypted data:** A map from block identifier to encrypted block.
   - **Commit:** A pair of version vector and encrypted data. We use the notation $C_{VersionVector}$ to indicate the commit tagged with that version vector, e.g. $C_{A1B2}$ for the commit with a version vector where replica *A* (a shorthand for its UUID) has version 1 and replica *B* has version 2.
 
-The main difference with other directed acyclic graph-based (DAG-based) systems like [Git][] is that there are no explicit pointers to other commits. In contrast with diff-based systems like [Subversion][], each commit is self-contained and includes all references needed to reconstruct its associated data (except for decryption keys). Both features allow the user to drop arbitrary commits from their replica (e.g. to progressively reduce the granularity of older backups) and save disk space without invalidating other commits.
+The main difference with other directed acyclic graph-based (DAG-based) systems like [Git][] is that there are no explicit pointers to other commits. In contrast with diff-based systems like [Subversion][], each commit is self-contained and includes all references needed to reconstruct its associated data (except for decryption keys). The combination of both features allows the user to drop arbitrary commits from their replica (e.g. to progressively reduce the granularity of older backups) and save disk space without invalidating other commits.
 
 [Git]: https://git-scm.com/
 [Subversion]: https://subversion.apache.org/
