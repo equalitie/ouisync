@@ -140,6 +140,8 @@ Raw folder data (i.e. file contents) as well as metadata (directory tree, file a
 
 The state of a folder in a particular end-user replica at a given point in time is represented as the set of encrypted blocks in use at that moment. That set is tagged with a [version vector][] which names the last known version of the folder for each end-user replica known by this one (including itself).
 
+![Figure: A commit consists of a version vector and encrypted blocks](images/commit.svg)
+
 Given that explanation, the following definitions are used:
 
   - **Replica identifier (RID):** A UUID uniquely identifying an end-user replica (safes have no RID).
