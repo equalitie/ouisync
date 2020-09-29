@@ -136,6 +136,8 @@ Many of the properties of OuiSync stem from the way a folder and its evolution a
 
 Raw folder data (i.e. file contents) as well as metadata (directory tree, file and directory names, sizes, time stamps) are encoded into fixed-size immutable blocks, then these blocks are encrypted with a key (shared between the different end-user replicas which have access to the data), with blocks being given random, unique and immutable identifiers on creation. This encoding and encryption is handled by [CryFS][].
 
+![Figure: Conversion of folder into encrypted blocks](images/folder-blocks.svg)
+
 The state of a folder in a particular end-user replica at a given point in time is represented as the set of encrypted blocks in use at that moment. That set is tagged with a [version vector][] which names the last known version of the folder for each end-user replica known by this one (including itself).
 
 Given that explanation, the following definitions are used:
