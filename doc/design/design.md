@@ -152,14 +152,28 @@ Given that explanation, the following definitions are used:
   - **Encrypted data:** A map from block identifier to encrypted block.
   - **Commit:** A pair of version vector and encrypted data. We use the notation $C_{VersionVector}$ to indicate the commit tagged with that version vector, e.g. $C_{A1B2}$ for the commit with a version vector where replica *A* (a shorthand for its UUID) has version 1 and replica *B* has version 2.
 
-The main difference with other directed acyclic graph-based (DAG-based) systems like [Git][] is that there are no explicit pointers to other commits. In contrast with diff-based systems like [Subversion][], each commit is self-contained and includes all references needed to reconstruct its associated data (except for decryption keys). The combination of both features allows the user to *drop arbitrary commits* from their replica (e.g. to progressively reduce the granularity of older backups) and save disk space without invalidating other commits. Thanks to the use of version vectors, the remaining commits maintain their relative order.
+By having a version vector associated with each commit, any commit $C_x$ can be compared to any other commit $C_y$ as being either:
+
+  - **Identical:** $C_x = C_y$ (commutative: $C_y = C_x$)
+  - **Preceding:** $C_x < C_y$ (transitive: if $C_x < C_y$ and $C_y < C_z$ then $C_x < C_z$), or $C_x \to C_y$
+  - **Following:** $C_x > C_y$ (transitive), or $C_y \to C_x$
+  - **Concurrent:** $C_x \parallel C_y$ (commutative: $C_y \parallel C_x$). This can only happen with commits from different replicas.
+
+This implicit, partial ordering of commits allows each replica to create a directed acyclic graph (DAG) view of the commits that it knows from itself and from other replicas, so that:
+
+  - A **branch** is formed by commits which are **ordered**, i.e. for $C_x \neq C_y$ either $C_x < C_y$ or $C_x > C_y$.
+  - The **head** of the branch is its latest commit, i.e. for $C_x \neq C_{head}$ in the branch $C_x < C_{head}$.
+  - Whenever concurrent commits happen in the branch, a new branch appears in the DAG for each of them, stemming from their common preceding head.
+  - A commit following the heads of several branches **resolves** them back into a single branch having that commit as its head.
+
+![Figure: A DAG of commits branching and resolving](images/commit-sequence.svg)
+
+The main difference with other DAG-based systems like [Git][] is that there are no explicit pointers to other commits. In contrast with diff-based systems like [Subversion][], each commit is self-contained and includes all references needed to reconstruct its associated data (except for decryption keys). The combination of both features allows the user to *drop arbitrary commits* from their replica (e.g. to progressively reduce the granularity of older backups) and save disk space without invalidating other commits. Thanks to the use of version vectors, the remaining commits maintain their relative order.
 
 [Git]: https://git-scm.com/
 [Subversion]: https://subversion.apache.org/
 
-TODO diagrams
-
-![Figure: A series of commits changing data: any of them can be dropped](images/commit-sequence.svg)
+TODO describe conflicts
 
 # Appendix: Copyright notices
 
