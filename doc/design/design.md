@@ -41,7 +41,7 @@ In addition, OuiSync strives to fulfill its requirements in a user-friendly and 
 
 In this case, Alice has an encrypted smartphone that she uses to read work documents and take pictures of her journeys. She travels a lot and she worries that she might lose the phone and thus the files in it, but she does not want to reveal her files to untrusted third parties. Sitting in a drawer at home she also has an old Raspberry Pi that she used to watch videos on her TV.
 
-So she uses OuiSync to create two *folders* in her phone: one with *Documents* and another with *Voyage pictures*. She also connects the Pi (whose SD card has much unused space) permanently to the router, installs OuiSync and creates one *safe* for each folder in the phone. The Pi has no storage encryption but it is not a risk to Alice since OuiSync safes only see encrypted data and have no access to file data nor metadata.
+So she uses OuiSync to create two **folders** in her phone: one with *Documents* and another with *Voyage pictures*. She also connects the Pi (whose SD card has much unused space) permanently to the router, installs OuiSync and creates one **safe** for each folder in the phone. The Pi has no storage encryption but it is not a risk to Alice since OuiSync safes only see encrypted data and have no access to file data nor metadata.
 
 Now every time that Alice goes online with her phone, modifications to the folders (like added pictures) are exchanged peer-to-peer as encrypted data with the Pi and stored locally. OuiSync at the Pi keeps some history of changes, so Alice can safely remove old pictures from the phone or recover accidentally modified files.
 
@@ -67,15 +67,15 @@ Should Alice and Bob decide that they no longer want to use Charlie's services, 
 
 ## Conflict resolution
 
-To better remember everything about their journey, Alice and Bob start to write some notes in text files that accompany the pictures. They simultaneously start annotating different picture sets. Even if they add or modify different files at the same time, OuiSync has no issues in synchronizing (*merging*) the changes, as long as they affect different files.
+To better remember everything about their journey, Alice and Bob start to write some notes in text files that accompany the pictures. They simultaneously start annotating different picture sets. Even if they add or modify different files at the same time, OuiSync has no issues in synchronizing (**merging**) the changes, as long as they affect different files.
 
-However, at one point Alice and Bob start modifying the same file at similar times. In this case, OuiSync may not be able to automatically merge the changes, and a *conflict* arises which may need to be *resolved* by Alice or Bob. This is illustrated in the diagram below.
+However, at one point Alice and Bob start modifying the same file at similar times. In this case, OuiSync may not be able to automatically merge the changes, and a **conflict** arises which may need to be **resolved** by Alice or Bob. This is illustrated in the diagram below.
 
 ![Figure: Occurrence and resolution of a conflict](images/uc-conflict.svg)
 
-In it, Alice and Bob start with exact *replicas* of the shared folder. In them, the file named $F$ contains identical data; we will call that initial state $F_1$. The Pi's safe stores the latest *commit* (i.e. versioned set of all encrypted data in the replica) $C_1$, which contains $F_1$. Bob is offline at the moment.
+In it, Alice and Bob start with exact **replicas** of the shared folder. In them, the file named $F$ contains identical data; we will call that initial state $F_1$. The Pi's safe stores the latest **commit** (i.e. versioned set of all encrypted data in the replica) $C_1$, which contains $F_1$. Bob is offline at the moment.
 
-Then Alice modifies $F_1$ locally to obtain $F_{2A}$, which *follows* $F_1$ (shown as $F_1 \to F_{2A}$); the new $C_{2A}$ commit associated with the change is only noticed and obtained by the Pi's safe, which is always online.
+Then Alice modifies $F_1$ locally to obtain $F_{2A}$, which **follows** $F_1$ (shown as $F_1 \to F_{2A}$); the new $C_{2A}$ commit associated with the change is only noticed and obtained by the Pi's safe, which is always online.
 
 While offline, Bob also modifies $F_1$ locally to obtain $F_{2B}$, creating commit $C_{2B}$. Then he goes online, so Alice and the Pi both obtain Bob's $C_{2B}$, while Bob obtains Alice's $C_{2A}$.
 
@@ -83,15 +83,15 @@ The OuiSync protocol allows the Pi's safe to see that $C_{2B}$ follows $C_1$, bu
 
 Alice sees OuiSync's notification about the conflict and reworks her file so that it also contains the changes that Bob added (also available from OuiSync), thus creating $F_{3A2B}$. The resulting $C_{3A2B}$ commit is obtained by Bob and the Pi. They both see that this does indeed follow all the latest commits that they know, so it cannot create a new conflict. Bob's device also recognizes $F_{3A2B}$ as following both $F_{2A}$ and $F_{2B}$, so the conflict gets automatically resolved there.
 
-Finally, at a later time Alice or Bob may choose to drop old copies of files in their replicas of the shared folder and save some disk space. For instance, some intermediate *folder snapshots* may be removed (i.e. leaving a more coarse granularity of folder history, as shown for Alice), or just the latest copies of files be left (as shown for Bob). Snapshots cannot be removed from safes like the Pi, since they have no access to file data or metadata, but oldest commits can be purged instead. In all cases, encrypted data which is no longer used by the remaining commits is dropped.
+Finally, at a later time Alice or Bob may choose to drop old copies of files in their replicas of the shared folder and save some disk space. For instance, some intermediate **folder snapshots** may be removed (i.e. leaving a more coarse granularity of folder history, as shown for Alice), or just the latest copies of files be left (as shown for Bob). Snapshots cannot be removed from safes like the Pi, since they have no access to file data or metadata, but oldest commits can be purged instead. In all cases, encrypted data which is no longer used by the remaining commits is dropped.
 
 # Design decisions
 
 ## Synchronization mechanism
 
-OuiSync uses [version vectors][version vector] to track changes to the different replicas of a shared folder. The latest commit of each replica is made available to other replicas as a *version vector* and its associated *encrypted data*. The comparison of such vectors allows a replica to decide whether a commit strictly precedes its own, strictly follows it, or does not necessarily follow it (in which case there may be a conflict). Commits stand on their own and do not explicitly point to others. All of this allows the different replicas to:
+OuiSync uses [version vectors][version vector] to track changes to the different replicas of a shared folder. The latest commit of each replica is made available to other replicas as a **version vector** and its associated **encrypted data**. The comparison of such vectors allows a replica to decide whether a commit strictly precedes its own, strictly follows it, or does not necessarily follow it (in which case there may be a conflict). Commits stand on their own and do not explicitly point to others. All of this allows the different replicas to:
 
- 1. Efficiently incorporate changes from other replicas in the absence of conflicts. This is done by retrieving missing encrypted *blocks* from other replicas.
+ 1. Efficiently incorporate changes from other replicas in the absence of conflicts. This is done by retrieving missing encrypted **blocks** from other replicas.
  2. Independently modify files in the folder.
  3. Detect potential conflicts and (in end-user replicas) apply automatic merge strategies, or otherwise signal conflicts in particular files (while still allowing updates and modifications).
  4. Keep or drop arbitrary commits from storage without breaking other commits.
