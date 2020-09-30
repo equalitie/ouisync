@@ -179,6 +179,21 @@ The main difference with other DAG-based systems like [Git][] is that there are 
 
 ## Commit transfers and conflicts
 
+When working on a shared folder in a single end-user replica, updates to folder data just create new commits that follow the main branch head and become the new one. This causes no problem.
+
+However, when other end-user replicas are added to the equation, the local replica also retrieves new commits from others. Depending on how the remote commit $C_r$ compares to this replica's head $C_h$, different things can happen:
+
+  - If they are equal ($C_r = C_h$), we already have all its data and we can just ignore it.
+  - If the remote commit precedes our head ($C_r < C_h$), it is outdated and we may ignore it.
+  - If the remote commit follows our head ($C_r > C_h$), we proceed to retrieve whatever encrypted data we lack from that commit. The commit is saved as the new head. If the local replica is an end-user one, it can decrypt the data and update local files if needed.
+
+However, if the remote commit is *concurrent* with our head ($C_r \parallel C_h$), that means that changes to data happened independently in different replicas. Those changes may or may not be compatible, so they may need further inspection. Since there is no way of knowing without unencrypted access to data, the local replica retrieves missing encrypted data from the remote commit.
+
+So this is where the story stops for a safe replica. However, an end-user replica can indeed decrypt that data, so it proceeds to check the actual changes to shared folder data:
+
+  - If changes are compatible (e.g. affecting different files), changes are **merged** without user intervention, local files are updated if needed, and a new commit is synthesized which automatically resolves the branching caused by the remote commit. The new commit becomes the new head.
+  - If changes are not compatible (e.g. changing the same data in a single file), the commits are said to cause a **conflict**. This needs to be handled manually by the user.
+
 TODO describe conflicts
 
 # Appendix: Copyright notices
