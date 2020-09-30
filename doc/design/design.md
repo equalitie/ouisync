@@ -134,6 +134,8 @@ To ensure a good usability of OuiSync as day-to-day storage, desktop versions us
 
 Many of the properties of OuiSync stem from the way a folder and its evolution are represented and exchanged.
 
+## Data, blocks and version vectors
+
 Raw folder data (i.e. file contents) as well as metadata (directory tree, file and directory names, sizes, time stamps) are encoded into fixed-size immutable blocks, then these blocks are encrypted with a key (shared between the different end-user replicas which have access to the data), with blocks being given random, unique and immutable identifiers on creation. This encoding and encryption is handled by [CryFS][].
 
 ![Figure: Conversion of folder into encrypted blocks](images/folder-blocks.svg)
@@ -141,6 +143,8 @@ Raw folder data (i.e. file contents) as well as metadata (directory tree, file a
 The state of a folder in a particular end-user replica at a given point in time is represented as the set of encrypted blocks in use at that moment. That set is tagged with a [version vector][] which names the last known version of the folder for each end-user replica known by this one (including itself).
 
 ![Figure: A commit consists of a version vector and encrypted blocks](images/commit.svg)
+
+## Commits, ordering and branches
 
 Given that explanation, the following definitions are used:
 
@@ -172,6 +176,8 @@ The main difference with other DAG-based systems like [Git][] is that there are 
 
 [Git]: https://git-scm.com/
 [Subversion]: https://subversion.apache.org/
+
+## Commit transfers and conflicts
 
 TODO describe conflicts
 
