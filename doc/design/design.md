@@ -196,6 +196,10 @@ This is where the story ends for a safe replica. However, an end-user replica ca
 
 When a conflict arises, since the end-user replica has access to the data of conflicting commits, it can help the user fix the conflict e.g. by offering access to the versions of the affected files modified by the other replicas so as to show differences. Once the user has manually resolved the issue, a new commit is created that *follows the conflicting commits*, thus *resolving the conflict*. The new commit becomes the new head.
 
+In both branching cases (conflicting and non-conflicting), when the new resolving commit is received by another replica, the commit also resolves the branching there and it becomes the new head, unless that replica already has a branch of commits which follow one of the previously branching commits. In this case, the resolving commit and the head of that branch are still concurrent and the two branches need resolving (either automatic or manual).
+
+TODO conflict after conflict diagram
+
 # Appendix: Copyright notices
 
 Material design icons in diagrams are copyright Google, LLC and used under the [Apache License v2.0][].
