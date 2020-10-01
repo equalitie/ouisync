@@ -191,8 +191,8 @@ However, if the remote commit is *concurrent* with our head ($C_r \parallel C_h$
 
 This is where the story ends for a safe replica. However, an end-user replica can indeed decrypt that data, so it proceeds to check the actual changes to shared folder data:
 
-  - If changes are compatible (e.g. affecting different files), changes are **merged** without user intervention, local files are updated if needed, and a new commit is synthesized which automatically resolves the branching caused by the remote commit. The new commit becomes the new head.
-  - If changes are not compatible (e.g. changing the same data in a single file), the commits are said to cause a **conflict**. This needs to be handled manually by the user.
+  - If changes are compatible (e.g. affecting different files), changes are **merged** without user intervention, local files are updated if needed, and a new commit is synthesized which *follows the concurrent commits* and *automatically resolves the branching* caused by the remote commit. The new commit becomes the new head.
+  - If changes are not compatible (e.g. changing the same data in a single file), the commits are said to cause a **conflict**. This needs to be handled *manually* by the user.
 
 TODO describe conflicts
 
