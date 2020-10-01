@@ -66,6 +66,7 @@ blocks/
   + hashes = { (B1, hash), (B2, hash) }
   + 3/
     # A directory with a single subdirectory doesn't need the "hashes" file
+    # unless it's the root.
     + 4/
       + data = ccc
     + 5
