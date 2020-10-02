@@ -8,7 +8,6 @@ using namespace ouisync;
 using std::move;
 using std::unique_ptr;
 using boost::optional;
-using boost::none;
 using cpputils::Data;
 
 namespace {
@@ -42,20 +41,23 @@ namespace {
     }
 }
 
-static
-fs::path _get_file_path(const fs::path& root, const BlockId &blockId) {
-    std::string block_id_str = blockId.ToString();
-    fs::path path = root;
+fs::path BlockStore::_get_dir_for_block(const BlockId &block_id) const {
+    std::string block_id_str = block_id.ToString();
+    fs::path path = _rootdir;
     unsigned part = 0;
     size_t start = 0;
     while (auto s = block_id_part_hex_size(part++)) {
         path /= block_id_str.substr(start, s);
         start += s;
     }
-    return path / "data";
+    return path;
 }
 
-static inline auto digest(const cpputils::Data& data) {
+fs::path BlockStore::_get_data_file_path(const BlockId &block_id) const {
+    return _get_dir_for_block(block_id) / "data";
+}
+
+static inline auto create_digest(const cpputils::Data& data) {
     Sha256 hash;
     hash.update(data.data(), data.size());
     return hash.close();
@@ -69,8 +71,8 @@ BlockStore::BlockStore(const fs::path& basedir, unique_ptr<BlockSync> sync)
 }
 
 bool BlockStore::tryCreate(const BlockId &blockId, const Data &data) {
-    auto filepath = _get_file_path(_rootdir, blockId);
-    if (boost::filesystem::exists(filepath)) {
+    auto filepath = _get_data_file_path(blockId);
+    if (fs::exists(filepath)) {
         return false;
     }
 
@@ -79,8 +81,8 @@ bool BlockStore::tryCreate(const BlockId &blockId, const Data &data) {
 }
 
 bool BlockStore::remove(const BlockId &blockId) {
-    auto filepath = _get_file_path(_rootdir, blockId);
-    if (!boost::filesystem::is_regular_file(filepath)) { // TODO Is this branch necessary?
+    auto filepath = _get_data_file_path(blockId);
+    if (!fs::is_regular_file(filepath)) { // TODO Is this branch necessary?
         return false;
     }
     bool retval = fs::remove(filepath);
@@ -88,8 +90,8 @@ bool BlockStore::remove(const BlockId &blockId) {
         cpputils::logging::LOG(cpputils::logging::ERR, "Couldn't find block {} to remove", blockId.ToString());
         return false;
     }
-    if (boost::filesystem::is_empty(filepath.parent_path())) {
-        boost::filesystem::remove(filepath.parent_path());
+    if (fs::is_empty(filepath.parent_path())) {
+        fs::remove(filepath.parent_path());
     }
 
     _sync->add_action(BlockSync::ActionRemoveBlock{blockId});
@@ -98,8 +100,8 @@ bool BlockStore::remove(const BlockId &blockId) {
 }
 
 optional<Data> BlockStore::load(const BlockId &blockId) const {
-    auto fileContent = Data::LoadFromFile(_get_file_path(_rootdir, blockId));
-    if (fileContent == none) {
+    auto fileContent = Data::LoadFromFile(_get_data_file_path(blockId));
+    if (!fileContent) {
         return boost::none;
     }
     return {move(*fileContent)};
@@ -108,11 +110,11 @@ optional<Data> BlockStore::load(const BlockId &blockId) const {
 void BlockStore::store(const BlockId &blockId, const Data &data) {
   Data fileContent(data.size());
   std::memcpy(fileContent.data(), data.data(), data.size());
-  auto filepath = _get_file_path(_rootdir, blockId);
-  boost::filesystem::create_directories(filepath.parent_path());
+  auto filepath = _get_data_file_path(blockId);
+  fs::create_directories(filepath.parent_path());
   fileContent.StoreToFile(filepath);
 
-  _sync->add_action(BlockSync::ActionModifyBlock{blockId, digest(data)});
+  _sync->add_action(BlockSync::ActionModifyBlock{blockId, create_digest(data)});
 }
 
 uint64_t BlockStore::numBlocks() const {

@@ -45,6 +45,11 @@ public:
     virtual ~BlockStore();
 
 private:
+
+    fs::path _get_dir_for_block(const BlockId&) const;
+    fs::path _get_data_file_path(const BlockId&) const;
+
+private:
     fs::path _rootdir;
     std::unique_ptr<BlockSync> _sync;
 };
