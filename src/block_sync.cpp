@@ -2,14 +2,14 @@
 #include <iostream>
 #include "variant.h"
 
+#include <hex.h>
+#include <array_io.h>
+
 using namespace ouisync;
 
 inline
 const char* action_name(const BlockSync::Action& a) {
     return apply(a,
-            [] (const BlockSync::ActionCreateBlock&) {
-                return "ActionCreateBlock";
-            }, 
             [] (const BlockSync::ActionModifyBlock&) {
                 return "ActionModifyBlock";
             },
@@ -40,14 +40,15 @@ void BlockSync::remove_block(const BlockId& block_id)
 void BlockSync::add_action(Action&& action) {
     std::scoped_lock<std::mutex> lock(_mutex);
 
-    apply(action, [] (auto& a) {
+    apply(action,
+        [&] (const BlockSync::ActionModifyBlock& a) {
+            std::cerr << action_name(a) << " " << a.id.ToString() << " -> " << to_hex(a.digest) << "\n";
+        },
+        [&] (const BlockSync::ActionRemoveBlock& a) {
             std::cerr << action_name(a) << " " << a.id.ToString() << "\n";
-       });
+        });
 
     return apply(action,
-            [&] (const BlockSync::ActionCreateBlock& a) {
-                insert_block(a.id, a.digest);
-            }, 
             [&] (const BlockSync::ActionModifyBlock& a) {
                 insert_block(a.id, a.digest);
             },

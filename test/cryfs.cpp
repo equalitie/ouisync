@@ -52,7 +52,7 @@ struct TestDevice {
 };
 
 int main() {
-    fs::path testdir = fs::unique_path("/tmp/ouisync-test-%%%%-%%%%-%%%%-%%%%");
+    fs::path testdir = fs::unique_path("/tmp/ouisync/test-%%%%-%%%%-%%%%-%%%%");
     cout << "Testdir: " << testdir << "\n";
 
     {

@@ -20,9 +20,7 @@ public:
     using BlockId = blockstore::BlockId;
 
 public:
-    BlockStore(fs::path basedir, std::unique_ptr<BlockSync> sync);
-
-    BlockId createBlockId() const override;
+    BlockStore(const fs::path& basedir, std::unique_ptr<BlockSync> sync);
 
     WARN_UNUSED_RESULT
     bool tryCreate(const BlockId &blockId, const cpputils::Data &data) override;
@@ -47,7 +45,7 @@ public:
     virtual ~BlockStore();
 
 private:
-    std::unique_ptr<blockstore::ondisk::OnDiskBlockStore2> _bs;
+    fs::path _rootdir;
     std::unique_ptr<BlockSync> _sync;
 };
 

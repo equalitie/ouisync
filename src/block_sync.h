@@ -13,10 +13,6 @@ class BlockSync {
     using Digest = Sha256::Digest;
 
 public:
-    struct ActionCreateBlock {
-        BlockId id;
-        Digest digest;
-    };
     struct ActionModifyBlock {
         BlockId id;
         Digest digest;
@@ -26,7 +22,6 @@ public:
     };
 
     using Action = boost::variant<
-        ActionCreateBlock,
         ActionModifyBlock,
         ActionRemoveBlock>;
 
