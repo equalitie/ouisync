@@ -2,6 +2,7 @@
 
 #include <blockstore/interface/BlockStore2.h>
 #include <namespaces.h>
+#include <boost/uuid/uuid.hpp>
 
 namespace blockstore {
     namespace ondisk {
@@ -46,12 +47,11 @@ public:
 
 private:
 
-    fs::path _get_dir_for_block(const BlockId&) const;
-    fs::path _get_data_file_path(const BlockId&) const;
-
 private:
     fs::path _rootdir;
     std::unique_ptr<BlockSync> _sync;
+    Uuid _branch_id;
+    std::mutex _mutex;
 };
 
 } // namespace

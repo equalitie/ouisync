@@ -8,6 +8,7 @@ set(BOOST_COMPONENTS
     filesystem
     iostreams
     program_options
+    serialization
     regex
     system
     unit_test_framework

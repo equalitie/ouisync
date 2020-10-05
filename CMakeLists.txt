@@ -32,12 +32,11 @@ set_target_properties(cryfs PROPERTIES
 add_library(ouisync STATIC
     "src/create_cry_device.cpp"
     "src/block_store.cpp"
-    "src/hash_store.cpp"
     "src/hash.cpp"
     "src/block_sync.cpp"
 )
 target_include_directories(ouisync PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(ouisync PUBLIC Boost::filesystem cryfs)
+target_link_libraries(ouisync PUBLIC Boost::filesystem Boost::serialization cryfs)
 target_compile_features(ouisync PRIVATE cxx_std_17)
 
 add_subdirectory(test)

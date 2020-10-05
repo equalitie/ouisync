@@ -6,6 +6,7 @@
 namespace boost {
     template<class T> class optional;
     namespace filesystem {}
+    namespace uuids { struct uuid; }
 }
 
 namespace ouisync {
@@ -13,5 +14,6 @@ namespace ouisync {
 namespace fs = boost::filesystem;
 template<class T> using Opt = boost::optional<T>;
 using boost::string_view;
+using Uuid = boost::uuids::uuid;
 
 } // namespace

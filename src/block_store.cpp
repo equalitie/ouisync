@@ -1,8 +1,17 @@
 #include <block_store.h>
 #include <block_sync.h>
-#include "hash_store.h"
+#include "array_io.h"
+#include "hex.h"
 #include <blockstore/implementations/ondisk/OnDiskBlockStore2.h>
 #include <boost/filesystem.hpp>
+
+#include <boost/archive/text_oarchive.hpp>
+#include <boost/archive/text_iarchive.hpp>
+#include <boost/serialization/map.hpp>
+#include <boost/serialization/array.hpp>
+#include <boost/uuid/uuid_io.hpp>
+#include <boost/uuid/uuid_serialize.hpp>
+
 #include <cpp-utils/system/diskspace.h>
 
 using namespace ouisync;
@@ -42,19 +51,25 @@ namespace {
     }
 }
 
-fs::path BlockStore::_get_dir_for_block(const BlockId &block_id) const {
+static
+fs::path _get_dir_for_block(const BlockId &block_id) {
     std::string block_id_str = block_id.ToString();
-    fs::path path = _rootdir;
+    fs::path path;
     unsigned part = 0;
     size_t start = 0;
     while (auto s = block_id_part_hex_size(part++)) {
-        path /= block_id_str.substr(start, s);
+        if (start == 0) {
+            path = block_id_str.substr(start, s);
+        } else {
+            path /= block_id_str.substr(start, s);
+        }
         start += s;
     }
     return path;
 }
 
-fs::path BlockStore::_get_data_file_path(const BlockId &block_id) const {
+static
+fs::path _get_data_file_path(const BlockId &block_id) {
     return _get_dir_for_block(block_id) / "data";
 }
 
@@ -72,7 +87,7 @@ BlockStore::BlockStore(const fs::path& basedir, unique_ptr<BlockSync> sync)
 }
 
 bool BlockStore::tryCreate(const BlockId &blockId, const Data &data) {
-    auto filepath = _get_data_file_path(blockId);
+    auto filepath = _rootdir/_get_data_file_path(blockId);
     if (fs::exists(filepath)) {
         return false;
     }
@@ -82,7 +97,7 @@ bool BlockStore::tryCreate(const BlockId &blockId, const Data &data) {
 }
 
 bool BlockStore::remove(const BlockId &blockId) {
-    auto filepath = _get_data_file_path(blockId);
+    auto filepath = _rootdir/_get_data_file_path(blockId);
     if (!fs::is_regular_file(filepath)) { // TODO Is this branch necessary?
         return false;
     }
@@ -101,25 +116,67 @@ bool BlockStore::remove(const BlockId &blockId) {
 }
 
 optional<Data> BlockStore::load(const BlockId &blockId) const {
-    auto fileContent = Data::LoadFromFile(_get_data_file_path(blockId));
+    auto fileContent = Data::LoadFromFile(_rootdir/_get_data_file_path(blockId));
     if (!fileContent) {
         return boost::none;
     }
     return {move(*fileContent)};
 }
 
+using Hashes = std::map<std::string, Sha256::Digest>;
+
+static Sha256::Digest map_digest(const Hashes& hashes) {
+    Sha256 hash;
+    for (auto& [k, v] : hashes) {
+        hash.update(k);
+        hash.update(v);
+    }
+    return hash.close();
+}
+
+static Hashes load_hashes(const fs::path& path)
+{
+    Hashes result;
+
+    fs::ifstream ifs(path);
+    if (!ifs.is_open()) return result;
+    boost::archive::text_iarchive ia(ifs);
+    ia >> result;
+    return result;
+}
+
+static void store_hashes(const fs::path& path, const Hashes& map)
+{
+    fs::ofstream ofs(path);
+    boost::archive::text_oarchive oa(ofs);
+    oa << map;
+}
+
 void BlockStore::store(const BlockId &block_id, const Data &data) {
-  Data fileContent(data.size());
-  std::memcpy(fileContent.data(), data.data(), data.size());
-  auto filepath = _get_data_file_path(block_id);
-  fs::create_directories(filepath.parent_path());
-  fileContent.StoreToFile(filepath);
-
-  auto digest = create_digest(data);
-
-  HashStore::store(_get_dir_for_block(block_id) / "hashes", block_id, digest);
-
-  _sync->add_action(BlockSync::ActionModifyBlock{block_id, digest});
+    Data fileContent(data.size());
+    std::memcpy(fileContent.data(), data.data(), data.size());
+    auto filepath = _rootdir/_get_data_file_path(block_id);
+    fs::create_directories(filepath.parent_path());
+    fileContent.StoreToFile(filepath);
+    
+    auto digest = create_digest(data);
+    auto dir = _get_dir_for_block(block_id);
+    
+    {
+        std::scoped_lock<std::mutex> lock(_mutex);
+        do {
+            auto f = dir.filename().string();
+            dir.remove_filename();
+            auto hash_file = _rootdir / dir / "hashes";
+            auto hashes = load_hashes(hash_file);
+            hashes[f] = digest;
+            store_hashes(hash_file, hashes);
+            digest = map_digest(hashes);
+        }
+        while (!dir.empty());
+    }
+    
+    _sync->add_action(BlockSync::ActionModifyBlock{block_id, digest});
 }
 
 uint64_t BlockStore::numBlocks() const {
