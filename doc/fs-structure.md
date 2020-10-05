@@ -39,8 +39,8 @@ C21 like so:
              +-> block ID
              |    +-> block data (encrypted)
              |    |
-B1/C12 = { (123, aaa), (124, bbb), (234, ccc), (235, ddd), (236, fff) }
-B2/C21 = { (123, aaa), (124, bbb), (234, ccc), (235, eee),            }
+B1/C12 = { (123, aaa), (124, bbb), (567, ccc), (568, ddd), (569, fff) }
+B2/C21 = { (123, aaa), (124, bbb), (567, ccc), (568, eee),            }
                                                            |--------|
                                                            Missing in B2
                                                |--------|
@@ -62,18 +62,16 @@ blocks/
       + data = aaa
     + 4/
       + data = bbb
-+ 2/
++ 5/
   + hashes = { (B1, hash), (B2, hash) }
-  + 3/
-    # A directory with a single subdirectory doesn't need the "hashes" file
-    # unless it's the root.
-    + 4/
+  + 6/
+    + 7/
       + data = ccc
-    + 5
+    + 8/
       + conflict = { (B1,hash(ddd)), (B2,hash(eee)) }
       + data.hash(ddd) = ddd
       + data.hash(eee) = eee
-    + 6/
+    + 9/
       + conflict = { (B1,hash(fff)), (B2,) }
       + data.hash(fff) = fff
 ```
