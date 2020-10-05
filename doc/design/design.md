@@ -198,7 +198,7 @@ When a conflict arises, since the end-user replica has access to the data of con
 
 In both branching cases (conflicting and non-conflicting), when the new resolving commit is received by another replica, the commit also resolves the branching there and it becomes the new head, unless that replica already has a branch of commits which follow one of the previously branching commits. In this case, the resolving commit and the head of that branch are still concurrent and the two branches need resolving (either automatic or manual).
 
-TODO conflict after conflict diagram
+![Figure: Repeated conflicts being resolved in two replicas](images/commit-conflicts.svg)
 
 # Appendix: Copyright notices
 
