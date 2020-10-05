@@ -11,9 +11,9 @@
    inkscape:version="1.0 (4035a4fb49, 2020-05-01)"
    id="svg2450"
    version="1.1"
-   viewBox="0 0 324.32511 96.783332"
-   height="96.783333mm"
-   width="324.3251mm">
+   viewBox="0 0 340.49436 97.325988"
+   height="97.325989mm"
+   width="340.49435mm">
   <defs
      id="defs2444">
     <marker
@@ -154,9 +154,9 @@
      inkscape:document-rotation="0"
      inkscape:current-layer="layer1"
      inkscape:document-units="px"
-     inkscape:cy="182.89764"
-     inkscape:cx="622.89764"
-     inkscape:zoom="0.49917218"
+     inkscape:cy="184.94861"
+     inkscape:cx="618.87077"
+     inkscape:zoom="0.35296803"
      inkscape:pageshadow="2"
      inkscape:pageopacity="0.0"
      borderopacity="1.0"
@@ -164,8 +164,8 @@
      pagecolor="#ffffff"
      id="base">
     <inkscape:grid
-       originy="-83.899993"
-       originx="0.76666659"
+       originy="-83.357342"
+       originx="0.76666653"
        id="grid3022"
        type="xygrid" />
   </sodipodi:namedview>
@@ -182,7 +182,7 @@
     </rdf:RDF>
   </metadata>
   <g
-     transform="translate(0.76666665,-83.900001)"
+     transform="translate(0.76666659,-83.357349)"
      id="layer1"
      inkscape:groupmode="layer"
      inkscape:label="Capa 1">
@@ -435,5 +435,48 @@
        id="path3553"
        d="m 259.93655,117.05592 30.4737,30.45841"
        style="font-variation-settings:normal;display:inline;opacity:1;vector-effect:none;fill:none;fill-opacity:1;fill-rule:evenodd;stroke:#000000;stroke-width:0.79375;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-dashoffset:0;stroke-opacity:1;marker-end:url(#marker4076);stop-color:#000000;stop-opacity:1" />
+    <text
+       id="text4292"
+       y="134.91891"
+       x="127.40514"
+       style="font-size:8.46667px;line-height:4.36562px;font-family:sans-serif;-inkscape-font-specification:'sans-serif, Normal';text-align:center;letter-spacing:0px;word-spacing:0px;writing-mode:lr-tb;text-anchor:middle;fill:#d40000;fill-opacity:1;stroke:#d40000;stroke-width:0.264583px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1"
+       xml:space="preserve"><tspan
+         style="fill:#d40000;fill-opacity:1;stroke:#d40000;stroke-width:0.264583px;stroke-opacity:1"
+         y="134.91891"
+         x="127.40514"
+         id="tspan4290"
+         sodipodi:role="line">conflict 1</tspan></text>
+    <text
+       xml:space="preserve"
+       style="font-size:8.46667px;line-height:4.36562px;font-family:sans-serif;-inkscape-font-specification:'sans-serif, Normal';text-align:center;letter-spacing:0px;word-spacing:0px;writing-mode:lr-tb;text-anchor:middle;fill:#d40000;fill-opacity:1;stroke:#d40000;stroke-width:0.264583px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1"
+       x="219.30466"
+       y="134.91891"
+       id="text4292-3"><tspan
+         sodipodi:role="line"
+         id="tspan4290-8"
+         x="219.30466"
+         y="134.91891"
+         style="fill:#d40000;fill-opacity:1;stroke:#d40000;stroke-width:0.264583px;stroke-opacity:1">conflict 2</tspan></text>
+    <text
+       xml:space="preserve"
+       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:8.46667px;line-height:4.36562px;font-family:sans-serif;-inkscape-font-specification:'sans-serif, Normal';font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;text-align:center;letter-spacing:0px;word-spacing:0px;writing-mode:lr-tb;text-anchor:middle;fill:#338000;fill-opacity:1;stroke:#338000;stroke-width:0.264583px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1"
+       x="288.75394"
+       y="94.922325"
+       id="text4292-5"><tspan
+         y="94.922325"
+         x="288.75394"
+         id="tspan5642"
+         sodipodi:role="line">resolved 1</tspan></text>
+    <text
+       id="text4292-5-1"
+       y="137.30331"
+       x="313.38324"
+       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:8.46667px;line-height:4.36562px;font-family:sans-serif;-inkscape-font-specification:'sans-serif, Normal';font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;text-align:center;letter-spacing:0px;word-spacing:0px;writing-mode:lr-tb;text-anchor:middle;fill:#338000;fill-opacity:1;stroke:#338000;stroke-width:0.264583px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1"
+       xml:space="preserve"><tspan
+         style="stroke-width:0.264583px"
+         sodipodi:role="line"
+         id="tspan5642-1"
+         x="313.38324"
+         y="137.30331">resolved 2</tspan></text>
   </g>
 </svg>
