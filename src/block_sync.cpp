@@ -42,7 +42,7 @@ void BlockSync::add_action(Action&& action) {
 
     apply(action,
         [&] (const BlockSync::ActionModifyBlock& a) {
-            std::cerr << action_name(a) << " " << a.id.ToString() << " -> " << to_hex(a.digest) << "\n";
+            std::cerr << action_name(a) << " " << a.id.ToString() << " -> " << to_hex<char>(a.digest) << "\n";
         },
         [&] (const BlockSync::ActionRemoveBlock& a) {
             std::cerr << action_name(a) << " " << a.id.ToString() << "\n";

@@ -32,6 +32,7 @@ set_target_properties(cryfs PROPERTIES
 add_library(ouisync STATIC
     "src/create_cry_device.cpp"
     "src/block_store.cpp"
+    "src/hash_store.cpp"
     "src/hash.cpp"
     "src/block_sync.cpp"
 )

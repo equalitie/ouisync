@@ -1,9 +1,17 @@
 #pragma once
 
-namespace boost { namespace filesystem {} }
+#include <boost/utility/string_view_fwd.hpp>
+#include <boost/optional/optional_fwd.hpp>
+
+namespace boost {
+    template<class T> class optional;
+    namespace filesystem {}
+}
 
 namespace ouisync {
 
 namespace fs = boost::filesystem;
+template<class T> using Opt = boost::optional<T>;
+using boost::string_view;
 
 } // namespace

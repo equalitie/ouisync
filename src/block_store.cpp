@@ -1,5 +1,6 @@
 #include <block_store.h>
 #include <block_sync.h>
+#include "hash_store.h"
 #include <blockstore/implementations/ondisk/OnDiskBlockStore2.h>
 #include <boost/filesystem.hpp>
 #include <cpp-utils/system/diskspace.h>
@@ -107,14 +108,18 @@ optional<Data> BlockStore::load(const BlockId &blockId) const {
     return {move(*fileContent)};
 }
 
-void BlockStore::store(const BlockId &blockId, const Data &data) {
+void BlockStore::store(const BlockId &block_id, const Data &data) {
   Data fileContent(data.size());
   std::memcpy(fileContent.data(), data.data(), data.size());
-  auto filepath = _get_data_file_path(blockId);
+  auto filepath = _get_data_file_path(block_id);
   fs::create_directories(filepath.parent_path());
   fileContent.StoreToFile(filepath);
 
-  _sync->add_action(BlockSync::ActionModifyBlock{blockId, create_digest(data)});
+  auto digest = create_digest(data);
+
+  HashStore::store(_get_dir_for_block(block_id) / "hashes", block_id, digest);
+
+  _sync->add_action(BlockSync::ActionModifyBlock{block_id, digest});
 }
 
 uint64_t BlockStore::numBlocks() const {
