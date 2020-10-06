@@ -66,6 +66,6 @@ int main() {
         sleep(2);
     }
 
-    cout << "Deleting " << testdir << "\n";
-    fs::remove_all(testdir);
+    //cout << "Deleting " << testdir << "\n";
+    //fs::remove_all(testdir);
 }

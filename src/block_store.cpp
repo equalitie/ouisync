@@ -13,6 +13,7 @@
 #include <boost/uuid/uuid_serialize.hpp>
 
 #include <cpp-utils/system/diskspace.h>
+#include "objects/object.h"
 
 using namespace ouisync;
 using std::move;
@@ -79,9 +80,10 @@ static inline auto create_digest(const cpputils::Data& data) {
     return hash.close();
 }
 
-BlockStore::BlockStore(const fs::path& basedir, unique_ptr<BlockSync> sync)
-    : _rootdir(basedir / "blocks")
-    , _sync(move(sync))
+BlockStore::BlockStore(const fs::path& basedir, unique_ptr<BlockSync> sync) :
+    _rootdir(basedir / "blocks"),
+    _objdir(basedir / "objects"),
+    _sync(move(sync))
 {
     fs::create_directories(_rootdir);
 }
@@ -162,8 +164,23 @@ void BlockStore::store(const BlockId &block_id, const Data &data) {
     auto digest = create_digest(data);
     auto dir = _get_dir_for_block(block_id);
     
+    std::scoped_lock<std::mutex> lock(_mutex);
     {
-        std::scoped_lock<std::mutex> lock(_mutex);
+
+        std::cerr << "1!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
+        objects::Tree tree;
+        auto d = tree.calculate_digest();
+        auto r = tree.store(_objdir);
+        std::cerr << "2!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! " << _objdir << " "  << bool(r) << "\n";
+        assert(r);
+        auto o = objects::Object::load(_objdir, d);
+        std::cerr << "3!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
+        assert(o);
+        std::cerr << "4!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! " << bool(o->as_block()) << " " << bool(o->as_tree()) << "\n";
+        assert(o->as_tree());
+        std::cerr << "5!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
+    }
+    {
         do {
             auto f = dir.filename().string();
             dir.remove_filename();

@@ -34,6 +34,9 @@ add_library(ouisync STATIC
     "src/block_store.cpp"
     "src/hash.cpp"
     "src/block_sync.cpp"
+    "src/objects/object.cpp"
+    "src/objects/tree.cpp"
+    "src/objects/block.cpp"
 )
 target_include_directories(ouisync PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(ouisync PUBLIC Boost::filesystem Boost::serialization cryfs)

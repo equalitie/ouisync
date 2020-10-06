@@ -49,6 +49,7 @@ private:
 
 private:
     fs::path _rootdir;
+    fs::path _objdir;
     std::unique_ptr<BlockSync> _sync;
     Uuid _branch_id;
     std::mutex _mutex;

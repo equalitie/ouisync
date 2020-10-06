@@ -5,7 +5,9 @@
 
 namespace boost {
     template<class T> class optional;
-    namespace filesystem {}
+    namespace filesystem {
+        class path;
+    }
     namespace uuids { struct uuid; }
 }
 
