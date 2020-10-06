@@ -50,23 +50,27 @@ namespace hash_detail {
 template<HashAlgorithm algo>
 class Hash final {
 private:
-    using ImplBuffer = std::array<uint8_t, hash_detail::ImplSize<algo>::value>;
+    // CryptoPP does an assert (in debug mode) that the data is aligned to 16 bytes.
+    static constexpr size_t MEM_ALIGN = 16;
+    using ImplBuffer = std::array<uint8_t, hash_detail::ImplSize<algo>::value + MEM_ALIGN>;
 
 public:
     static constexpr size_t DigestSize = hash_detail::DigestSize<algo>::value;
     using Digest = std::array<uint8_t, DigestSize>;
 
-    Hash() {
+    Hash() :
+        _data(_impl.data() + MEM_ALIGN - (((size_t)_impl.data())%MEM_ALIGN))
+    {
         hash_detail::perform_static_assertions();
     }
 
     inline void update(const void* buffer, size_t size)
     {
         if (!_is_set) {
-            hash_detail::new_impl(algo, _impl.data());
+            hash_detail::new_impl(algo, _data);
             _is_set = true;
         }
-        hash_detail::update_impl(algo, _impl.data(),
+        hash_detail::update_impl(algo, _data,
                 reinterpret_cast<const uint8_t*>(buffer), size);
     }
 
@@ -104,12 +108,12 @@ public:
     inline Digest close()
     {
         if (!_is_set) {
-            hash_detail::new_impl(algo, _impl.data());
+            hash_detail::new_impl(algo, _data);
             _is_set = true;
         }
         Digest result;
-        hash_detail::close_impl(algo, _impl.data(), result.data());
-        hash_detail::free_impl(algo, _impl.data());
+        hash_detail::close_impl(algo, _data, result.data());
+        hash_detail::free_impl(algo, _data);
         _is_set = false;
         return result;
     }
@@ -128,7 +132,7 @@ public:
 
     ~Hash() {
         if (_is_set) {
-            hash_detail::free_impl(algo, _impl.data());
+            hash_detail::free_impl(algo, _data);
         }
     }
 
@@ -152,6 +156,7 @@ private:
 private:
     bool _is_set = false;
     ImplBuffer _impl;
+    uint8_t* _data;
 };
 
 using Sha1   = Hash<HashAlgorithm::sha1>;
