@@ -155,44 +155,42 @@ static void store_hashes(const fs::path& path, const Hashes& map)
 }
 
 void BlockStore::store(const BlockId &block_id, const Data &data) {
-    Data fileContent(data.size());
-    std::memcpy(fileContent.data(), data.data(), data.size());
+    std::scoped_lock<std::mutex> lock(_mutex);
+
     auto filepath = _rootdir/_get_data_file_path(block_id);
     fs::create_directories(filepath.parent_path());
-    fileContent.StoreToFile(filepath);
-    
+    data.StoreToFile(filepath);
+
     auto digest = create_digest(data);
     auto dir = _get_dir_for_block(block_id);
-    
-    std::scoped_lock<std::mutex> lock(_mutex);
-    {
 
-        std::cerr << "1!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
-        objects::Tree tree;
-        auto d = tree.calculate_digest();
-        auto r = tree.store(_objdir);
-        std::cerr << "2!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! " << _objdir << " "  << bool(r) << "\n";
-        assert(r);
-        auto o = objects::Object::load(_objdir, d);
-        std::cerr << "3!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
-        assert(o);
-        std::cerr << "4!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! " << bool(o->as_block()) << " " << bool(o->as_tree()) << "\n";
-        assert(o->as_tree());
-        std::cerr << "5!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
-    }
-    {
-        do {
-            auto f = dir.filename().string();
-            dir.remove_filename();
-            auto hash_file = _rootdir / dir / "hashes";
-            auto hashes = load_hashes(hash_file);
-            hashes[f] = digest;
-            store_hashes(hash_file, hashes);
-            digest = map_digest(hashes);
-        }
-        while (!dir.empty());
-    }
-    
+    //{
+    //    std::cerr << "1!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
+    //    objects::Tree tree;
+    //    auto d = tree.calculate_digest();
+    //    auto r = tree.store(_objdir);
+    //    std::cerr << "2!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! " << _objdir << " "  << bool(r) << "\n";
+    //    assert(r);
+    //    auto o = objects::Object::load(_objdir, d);
+    //    std::cerr << "3!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
+    //    assert(o);
+    //    std::cerr << "4!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! " << bool(o->as_block()) << " " << bool(o->as_tree()) << "\n";
+    //    assert(o->as_tree());
+    //    std::cerr << "5!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
+    //}
+    //{
+    //    do {
+    //        auto f = dir.filename().string();
+    //        dir.remove_filename();
+    //        auto hash_file = _rootdir / dir / "hashes";
+    //        auto hashes = load_hashes(hash_file);
+    //        hashes[f] = digest;
+    //        store_hashes(hash_file, hashes);
+    //        digest = map_digest(hashes);
+    //    }
+    //    while (!dir.empty());
+    //}
+
     _sync->add_action(BlockSync::ActionModifyBlock{block_id, digest});
 }
 
