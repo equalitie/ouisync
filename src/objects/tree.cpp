@@ -23,7 +23,7 @@ Sha256::Digest Tree::calculate_digest() const
     return hash.close();
 }
 
-Opt<Sha256::Digest> Tree::store(const fs::path& root) const
+Id Tree::store(const fs::path& root) const
 {
     return store_object(root, *this);
 }

@@ -1,10 +1,10 @@
 #pragma once
 
+#include "id.h"
 #include "../hash.h"
 #include "../namespaces.h"
 
 #include <vector>
-#include <boost/serialization/vector.hpp>
 
 namespace ouisync::objects {
 
@@ -21,7 +21,7 @@ public:
         ar & _data;
     }
 
-    Opt<Sha256::Digest> store(const fs::path&) const;
+    Id store(const fs::path&) const;
 
 private:
     std::vector<uint8_t> _data;

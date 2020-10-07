@@ -1,5 +1,5 @@
 #pragma once
-#include "../hash.h"
+#include "id.h"
 #include "../namespaces.h"
 
 #include <map>
@@ -22,7 +22,7 @@ public:
         ar & static_cast<TreeMap&>(*this);
     }
 
-    Opt<Sha256::Digest> store(const fs::path& root) const;
+    Id store(const fs::path& root) const;
 };
 
 } // namespace

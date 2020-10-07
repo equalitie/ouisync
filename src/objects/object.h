@@ -2,10 +2,10 @@
 
 #include "block.h"
 #include "tree.h"
+#include "id.h"
 #include "../variant.h"
 #include "../namespaces.h"
 
-#include <boost/optional.hpp>
 #include <boost/filesystem/path.hpp>
 
 namespace ouisync::objects {
@@ -20,7 +20,7 @@ public:
     Object(const Object&) = delete;
 
     static
-    Opt<Object> load(const fs::path& root, const Sha256::Digest&);
+    Object load(const fs::path& root, const Sha256::Digest&);
 
     Block* as_block() { return boost::get<Block>(&_variant); }
     Tree * as_tree () { return boost::get<Tree >(&_variant); }
@@ -30,7 +30,7 @@ public:
 
     Sha256::Digest calculate_digest() const;
 
-    Opt<Sha256::Digest> store(const fs::path& root) const;
+    Id store(const fs::path& root) const;
 
     static
     fs::path path_from_digest(const Sha256::Digest& digest);

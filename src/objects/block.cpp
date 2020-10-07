@@ -3,10 +3,11 @@
 #include "store_object.h"
 
 #include <boost/optional.hpp>
+#include <boost/serialization/vector.hpp>
 
 using namespace ouisync;
 using namespace ouisync::objects;
 
-Opt<Sha256::Digest> Block::store(const fs::path& root) const {
+Id Block::store(const fs::path& root) const {
     return store_object(root, *this);
 }

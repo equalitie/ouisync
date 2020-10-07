@@ -5,6 +5,7 @@
 #include <boost/filesystem/fstream.hpp>
 #include <boost/archive/text_iarchive.hpp>
 #include <boost/serialization/string.hpp>
+#include <boost/serialization/vector.hpp>
 
 using namespace ouisync;
 using namespace ouisync::objects;
@@ -23,10 +24,11 @@ Sha256::Digest Object::calculate_digest() const {
     return ouisync::apply(_variant, [] (const auto& v) { return v.calculate_digest(); });
 }
 
-Opt<Object> Object::load(const fs::path& root, const Sha256::Digest& digest)
+Object Object::load(const fs::path& root, const Sha256::Digest& digest)
 {
     fs::ifstream ifs(root / path_from_digest(digest), fs::ifstream::binary);
-    if (!ifs.is_open()) return boost::none;
+    if (!ifs.is_open())
+        throw std::runtime_error("Failed to open object");
     boost::archive::text_iarchive ia(ifs);
     Object result;
     tagged::Load loader{result._variant};
@@ -34,7 +36,7 @@ Opt<Object> Object::load(const fs::path& root, const Sha256::Digest& digest)
     return result;
 }
 
-Opt<Sha256::Digest> Object::store(const fs::path& root) const
+Id Object::store(const fs::path& root) const
 {
     return ouisync::apply(_variant, [&root] (const auto& v) { return v.store(root); });
 }
