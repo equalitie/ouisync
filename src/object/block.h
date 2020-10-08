@@ -37,10 +37,24 @@ public:
     }
 
     template<class Archive>
-    void serialize(Archive& ar, const unsigned int version) {
+    void save(Archive& ar, const unsigned int version) const {
         auto d = data();
-        auto ptr = static_cast<uint8_t*>(d ? d->data() : nullptr);
-        auto size = d ? d->size() : 0;
+        auto ptr = static_cast<const uint8_t*>(d ? d->data() : nullptr);
+        uint32_t size = d ? d->size() : 0;
+        ar & size;
+        ar & boost::serialization::make_array<const uint8_t>(ptr, size);
+    }
+
+    template<class Archive>
+    void load(Archive& ar, const unsigned int version) {
+        uint32_t size;
+        ar & size;
+        auto d = data();
+        if (!d || d->size() != size) {
+            _data = Opt<Data>(Data(size));
+            d = data();
+        }
+        auto ptr = static_cast<uint8_t*>(d->data());
         ar & boost::serialization::make_array<uint8_t>(ptr, size);
     }
 
@@ -67,6 +81,8 @@ public:
                     return &*d;
                 });
     }
+
+    BOOST_SERIALIZATION_SPLIT_MEMBER()
 
 private:
     RefOrOptData _data;
