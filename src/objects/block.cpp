@@ -3,7 +3,6 @@
 #include "store_object.h"
 
 #include <boost/optional.hpp>
-#include <boost/serialization/vector.hpp>
 
 using namespace ouisync;
 using namespace ouisync::objects;
