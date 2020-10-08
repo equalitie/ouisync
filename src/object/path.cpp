@@ -17,7 +17,21 @@ fs::path path::from_id(const Id& id)
     return fs::path(prefix.begin(), prefix.end()) / fs::path(rest.begin(), rest.end());
 }
 
-Opt<Id> path::to_id(const fs::path&)
+Opt<Id> path::to_id(const fs::path& ps)
 {
-    assert(0 && "TODO");
+    Id result;
+    std::array<char, std::tuple_size<Id>::value * 2> hex;
+
+    auto i = hex.begin();
+
+    for (auto& p : ps) {
+        for (auto c : p.native()) {
+            if (i == hex.end()) return boost::none;
+            *i++ = c;
+        }
+    }
+
+    if (i != hex.end()) return boost::none;
+
+    return from_hex<uint8_t>(hex);
 }
