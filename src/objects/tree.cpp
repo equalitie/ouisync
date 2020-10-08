@@ -1,7 +1,7 @@
 #include "tree.h"
 #include "tagged.h"
 #include "object.h"
-#include "store_object.h"
+#include "store.h"
 
 #include "../hex.h"
 #include "../array_io.h"
@@ -25,5 +25,5 @@ Sha256::Digest Tree::calculate_digest() const
 
 Id Tree::store(const fs::path& root) const
 {
-    return store_object(root, *this);
+    return objects::store(root, *this);
 }

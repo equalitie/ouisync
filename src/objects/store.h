@@ -13,7 +13,7 @@ namespace ouisync::objects {
 
 template<class O>
 inline
-Id store_object(const fs::path& root, const O& object) {
+Id store(const fs::path& root, const O& object) {
     auto digest = object.calculate_digest();
     auto path = root / path::from_id(digest);
     // XXX: if this probes every single directory in path, then it might be
