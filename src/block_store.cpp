@@ -13,7 +13,7 @@
 #include <boost/uuid/uuid_serialize.hpp>
 
 #include <cpp-utils/system/diskspace.h>
-#include "object/object.h"
+#include "object/any.h"
 
 using namespace ouisync;
 using std::move;
