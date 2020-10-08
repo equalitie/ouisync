@@ -1,7 +1,7 @@
 #include <iostream>
 #include <array>
 
-namespace ouisync {
+namespace std {
 
     template<class T, size_t N>
     std::ostream& operator<<(std::ostream& os, const std::array<T, N>& as)
