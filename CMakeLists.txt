@@ -29,6 +29,14 @@ set_target_properties(cryfs PROPERTIES
     INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/modules/cryfs/src"
 )
 
+function(set_warning_level TARGET)
+    if(MSVC)
+        target_compile_options(${TARGET} PRIVATE /W4 /WX)
+    else()
+        target_compile_options(${TARGET} PRIVATE -Wall -Wextra -Werror -Wno-unused-parameter)
+    endif()
+endfunction(set_warning_level)
+
 add_library(ouisync STATIC
     "src/create_cry_device.cpp"
     "src/block_store.cpp"
@@ -43,5 +51,7 @@ add_library(ouisync STATIC
 target_include_directories(ouisync PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(ouisync PUBLIC Boost::filesystem Boost::serialization cryfs)
 target_compile_features(ouisync PRIVATE cxx_std_17)
+set_warning_level(ouisync)
+
 
 add_subdirectory(test)

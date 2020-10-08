@@ -53,6 +53,8 @@ public:
                 ++that_i;
             }
         }
+
+        return result;
     }
 
     bool operator<=(const VersionVector& that_vv) const {

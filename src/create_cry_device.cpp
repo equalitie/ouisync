@@ -58,8 +58,10 @@ loadOrCreateConfig(const fs::path& config_file, const cryfs::LocalStateDir& stat
         switch(config.left()) {
             case cryfs::CryConfigFile::LoadError::DecryptionFailed:
                 cerr << "Failed to decrypt the config file. Did you enter the correct password?\n";
+                break;
             case cryfs::CryConfigFile::LoadError::ConfigFileNotFound:
                 cerr << "Could not find the cryfs.config file. Are you sure this is a valid CryFS file system?\n";
+                break;
         }
         exit(1);
     }

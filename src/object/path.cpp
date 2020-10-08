@@ -19,7 +19,6 @@ fs::path path::from_id(const Id& id)
 
 Opt<Id> path::to_id(const fs::path& ps)
 {
-    Id result;
     std::array<char, std::tuple_size<Id>::value * 2> hex;
 
     auto i = hex.begin();
