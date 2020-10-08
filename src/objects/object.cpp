@@ -10,16 +10,6 @@
 using namespace ouisync;
 using namespace ouisync::objects;
 
-/* static */
-fs::path Object::path_from_digest(const Sha256::Digest& digest) {
-    auto hex_digest = to_hex<char>(digest);
-    string_view hex_digest_str{hex_digest.data(), hex_digest.size()};
-    static const size_t prefix_size = 3;
-    auto prefix = hex_digest_str.substr(0, prefix_size);
-    auto rest   = hex_digest_str.substr(prefix_size, hex_digest_str.size() - prefix_size);
-    return fs::path(prefix.begin(), prefix.end()) / fs::path(rest.begin(), rest.end());
-}
-
 Sha256::Digest Object::calculate_digest() const {
     return ouisync::apply(_variant, [] (const auto& v) { return v.calculate_digest(); });
 }

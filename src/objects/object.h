@@ -29,9 +29,6 @@ public:
 
     Id store(const fs::path& root) const;
 
-    static
-    fs::path path_from_digest(const Sha256::Digest& digest);
-
 private:
     Variant _variant;
 };
