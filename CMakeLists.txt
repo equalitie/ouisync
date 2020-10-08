@@ -38,6 +38,7 @@ add_library(ouisync STATIC
     "src/object/tree.cpp"
     "src/object/block.cpp"
     "src/object/path.cpp"
+    "src/object/remove.cpp"
 )
 target_include_directories(ouisync PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(ouisync PUBLIC Boost::filesystem Boost::serialization cryfs)
