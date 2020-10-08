@@ -42,7 +42,6 @@ add_library(ouisync STATIC
     "src/block_store.cpp"
     "src/hash.cpp"
     "src/block_sync.cpp"
-    "src/object/any.cpp"
     "src/object/tree.cpp"
     "src/object/block.cpp"
     "src/object/path.cpp"

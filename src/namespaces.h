@@ -2,6 +2,7 @@
 
 #include <boost/utility/string_view_fwd.hpp>
 #include <boost/optional/optional_fwd.hpp>
+#include <boost/variant/variant_fwd.hpp>
 
 namespace boost {
     template<class T> class optional;
@@ -21,5 +22,6 @@ namespace sys = boost::system;
 template<class T> using Opt = boost::optional<T>;
 using boost::string_view;
 using Uuid = boost::uuids::uuid;
+using boost::variant;
 
 } // namespace

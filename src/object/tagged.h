@@ -1,8 +1,9 @@
 #pragma once
 
 #include "tag.h"
-#include "any.h"
 
+#include <boost/variant.hpp>
+#include <boost/serialization/split_member.hpp>
 #include <boost/archive/archive_exception.hpp>
 
 namespace ouisync::object::tagged {
@@ -39,32 +40,44 @@ struct Load {
     BOOST_SERIALIZATION_SPLIT_MEMBER()
 };
 
-template<>
-struct Load<Any::Variant> {
-    Any::Variant& var;
+namespace detail {
+    template<class T, class... Ts> struct LoadVariant {
+        template<class Variant, class Archive>
+        static void load(Tag tag, Variant& result, Archive& ar) {
+            if (tag == GetTag<T>::value) {
+                T obj;
+                ar & obj;
+                result = std::move(obj);
+                return;
+            }
+            LoadVariant<Ts...>::load(tag, result, ar);
+        }
+    };
+    template<class T> struct LoadVariant<T> {
+        template<class Variant, class Archive>
+        static void load(Tag tag, Variant& result, Archive& ar) {
+            if (tag == GetTag<T>::value) {
+                T obj;
+                ar & obj;
+                result = std::move(obj);
+                return;
+            }
+            throw boost::archive::archive_exception(
+                    boost::archive::archive_exception::unregistered_class);
+        }
+    };
+} // detail namespace
+
+template<class... Ts>
+struct Load<boost::variant<Ts...>> {
+    using Variant = boost::variant<Ts...>;
+    Variant& var;
 
     template<class Archive>
     void load(Archive& ar, const unsigned int version) {
         Tag tag;
         ar & tag;
-
-        switch (tag) {
-            case Tag::Tree: { 
-                Tree t;
-                ar & t;
-                var = std::move(t);
-                return;
-            }
-            case Tag::Block: {
-                Block b;
-                ar & b;
-                var = std::move(b);
-                return;
-            }
-        }
-
-        throw boost::archive::archive_exception(
-                boost::archive::archive_exception::unregistered_class);
+        detail::LoadVariant<Ts...>::load(tag, var, ar);
     }
 
     BOOST_SERIALIZATION_SPLIT_MEMBER()

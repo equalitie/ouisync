@@ -1,12 +1,10 @@
 #include "tree.h"
 #include "tagged.h"
-#include "any.h"
 #include "store.h"
 
 #include "../hex.h"
 #include "../array_io.h"
 
-#include <boost/archive/text_oarchive.hpp>
 #include <iostream>
 #include <boost/filesystem.hpp>
 
