@@ -12,8 +12,8 @@ namespace ouisync::object {
 
 template<class O>
 inline
-O load(const fs::path& root, const Id& id) {
-    fs::ifstream ifs(root / path::from_id(id), fs::ifstream::binary);
+O load(const fs::path& path) {
+    fs::ifstream ifs(path, fs::ifstream::binary);
     if (!ifs.is_open())
         throw std::runtime_error("Failed to open object");
     boost::archive::text_iarchive ia(ifs);
@@ -21,6 +21,24 @@ O load(const fs::path& root, const Id& id) {
     tagged::Load<O> loader{result};
     ia >> loader;
     return result;
+}
+
+template<class O>
+inline
+O load(const fs::path& objdir, const Id& id) {
+    return load<O>(objdir / path::from_id(id));
+}
+
+template<class O0, class O1, class ... Os> // Two or more
+inline
+variant<O0, O1, Os...> load(const fs::path& objdir, const Id& id) {
+    return load<variant<O0, O1, Os...>>(objdir / path::from_id(id));
+}
+
+template<class O0, class O1, class ... Os> // Two or more
+inline
+variant<O0, O1, Os...> load(const fs::path& path) {
+    return load<variant<O0, O1, Os...>>(path);
 }
 
 } // namespaces
