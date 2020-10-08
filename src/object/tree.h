@@ -3,6 +3,7 @@
 #include "../namespaces.h"
 
 #include <map>
+#include <iosfwd>
 #include <boost/filesystem/path.hpp>
 #include <boost/serialization/map.hpp>
 #include <boost/serialization/array.hpp>
@@ -23,6 +24,8 @@ public:
         ar & static_cast<TreeMap&>(*this);
     }
 };
+
+std::ostream& operator<<(std::ostream&, const Tree&);
 
 } // namespace
 

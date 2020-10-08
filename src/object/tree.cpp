@@ -25,3 +25,15 @@ Id Tree::store(const fs::path& root) const
 {
     return object::store(root, *this);
 }
+
+std::ostream& ouisync::object::operator<<(std::ostream& os, const Tree& tree) {
+    os << "Tree";
+    for (auto& [k, v] : tree) {
+        auto hex = to_hex<char>(v);
+        string_view short_hex(hex.data(),
+               std::min<size_t>(6, std::tuple_size<decltype(hex)>::value));
+
+        os << " " << k << ":" << short_hex;
+    }
+    return os;
+}

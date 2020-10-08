@@ -88,4 +88,6 @@ private:
     RefOrOptData _data;
 };
 
+std::ostream& operator<<(std::ostream&, const Block&);
+
 } // namespace
