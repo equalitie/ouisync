@@ -10,8 +10,8 @@
 using namespace ouisync;
 using namespace ouisync::object;
 
-Sha256::Digest Any::calculate_digest() const {
-    return ouisync::apply(_variant, [] (const auto& v) { return v.calculate_digest(); });
+Id Any::calculate_id() const {
+    return ouisync::apply(_variant, [] (const auto& v) { return v.calculate_id(); });
 }
 
 Id Any::store(const fs::path& root) const

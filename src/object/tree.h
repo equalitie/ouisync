@@ -10,19 +10,18 @@
 namespace ouisync::object {
 
 namespace {
-    using TreeMap = std::map<std::string, Sha256::Digest>;
+    using TreeMap = std::map<std::string, Id>;
 }
 
 class Tree final : TreeMap {
 public:
-    Sha256::Digest calculate_digest() const;
+    Id calculate_id() const;
+    Id store(const fs::path& root) const;
 
     template<class Archive>
     void serialize(Archive& ar, const unsigned int version) {
         ar & static_cast<TreeMap&>(*this);
     }
-
-    Id store(const fs::path& root) const;
 };
 
 } // namespace

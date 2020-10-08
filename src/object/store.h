@@ -14,8 +14,8 @@ namespace ouisync::object {
 template<class O>
 inline
 Id store(const fs::path& root, const O& object) {
-    auto digest = object.calculate_digest();
-    auto path = root / path::from_id(digest);
+    auto id = object.calculate_id();
+    auto path = root / path::from_id(id);
     // XXX: if this probes every single directory in path, then it might be
     // slow and in such case we could instead try to create only the last 2.
     fs::create_directories(path.parent_path());
@@ -24,7 +24,7 @@ Id store(const fs::path& root, const O& object) {
     boost::archive::text_oarchive oa(ofs);
     tagged::Save<O> save{object};
     oa << save;
-    return digest;
+    return id;
 }
 
 } // namespaces

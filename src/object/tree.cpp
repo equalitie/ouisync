@@ -13,7 +13,7 @@
 using namespace ouisync;
 using namespace ouisync::object;
 
-Sha256::Digest Tree::calculate_digest() const
+Id Tree::calculate_id() const
 {
     Sha256 hash;
     for (auto& [k,v] : *this) {

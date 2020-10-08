@@ -25,7 +25,7 @@ public:
     const Block* as_block() const { return boost::get<Block>(&_variant); }
     const Tree * as_tree () const { return boost::get<Tree >(&_variant); }
 
-    Sha256::Digest calculate_digest() const;
+    Id calculate_id() const;
 
     Id store(const fs::path& root) const;
 

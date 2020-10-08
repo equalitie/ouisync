@@ -17,7 +17,7 @@ fs::path path::from_id(const Id& id)
     return fs::path(prefix.begin(), prefix.end()) / fs::path(rest.begin(), rest.end());
 }
 
-Opt<Id>  path::to_id(const fs::path&)
+Opt<Id> path::to_id(const fs::path&)
 {
     assert(0 && "TODO");
 }

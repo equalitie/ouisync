@@ -28,7 +28,7 @@ public:
     // would cause another entry in Object::Variant.
     Block(const Data& data) : _data(std::ref(const_cast<Data&>(data))) {}
 
-    Sha256::Digest calculate_digest() const {
+    Id calculate_id() const {
         Sha256 hash;
         const Data* d = data();
         if (!d) return hash.close();
