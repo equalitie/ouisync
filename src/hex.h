@@ -128,14 +128,14 @@ inline boost::optional<std::array<OutputT, InputSize/2>> from_hex(boost::string_
     return output;
 }
 
-template<class T, size_t N>
-inline boost::optional<std::array<T, N/2>> from_hex(const std::array<T, N>& hex)
+template<class OutputT, class InputT, size_t N>
+inline boost::optional<std::array<OutputT, N/2>> from_hex(const std::array<InputT, N>& hex)
 {
-    static_assert(is_byte_type<T>::value, "Not a bytestring type");
+    static_assert(is_byte_type<InputT>::value, "Not a bytestring type");
     // TODO: This can be generalized to odd number as well
     static_assert(N % 2 == 0, "Input number must have even number of characters");
 
-    std::array<T, N/2> output;
+    std::array<OutputT, N/2> output;
 
     for (size_t i = 0; i < N; i += 2) {
         boost::optional<unsigned char> oc;
