@@ -13,7 +13,7 @@ namespace {
     using TreeMap = std::map<std::string, Id>;
 }
 
-class Tree final : TreeMap {
+class Tree final : public TreeMap {
 public:
     Id calculate_id() const;
     Id store(const fs::path& root) const;
