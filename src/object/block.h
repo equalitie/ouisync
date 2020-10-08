@@ -1,7 +1,6 @@
 #pragma once
 
 #include "id.h"
-#include "../hash.h"
 #include "../namespaces.h"
 #include "../variant.h"
 
@@ -28,13 +27,7 @@ public:
     // would cause another entry in Object::Variant.
     Block(const Data& data) : _data(std::ref(const_cast<Data&>(data))) {}
 
-    Id calculate_id() const {
-        Sha256 hash;
-        const Data* d = data();
-        if (!d) return hash.close();
-        hash.update(d->data(), d->size());
-        return hash.close();
-    }
+    Id calculate_id() const;
 
     template<class Archive>
     void save(Archive& ar, const unsigned int version) const {
@@ -60,27 +53,8 @@ public:
 
     Id store(const fs::path&) const;
 
-    Data* data() {
-        return apply(_data,
-                [](std::reference_wrapper<Data> d) {
-                    return &d.get();
-                },
-                [](Opt<Data>& d) -> Data* {
-                    if (!d) return nullptr;
-                    return &*d;
-                });
-    }
-
-    const Data* data() const {
-        return apply(_data,
-                [](const std::reference_wrapper<Data> d) {
-                    return &d.get();
-                },
-                [](const Opt<Data>& d) -> const Data* {
-                    if (!d) return nullptr;
-                    return &*d;
-                });
-    }
+          Data* data();
+    const Data* data() const;
 
     BOOST_SERIALIZATION_SPLIT_MEMBER()
 

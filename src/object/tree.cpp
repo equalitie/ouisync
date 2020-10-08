@@ -27,7 +27,7 @@ Id Tree::store(const fs::path& root) const
 }
 
 std::ostream& ouisync::object::operator<<(std::ostream& os, const Tree& tree) {
-    os << "Tree";
+    os << "Tree " << tree.size();
     for (auto& [k, v] : tree) {
         auto hex = to_hex<char>(v);
         string_view short_hex(hex.data(),
