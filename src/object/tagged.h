@@ -40,8 +40,8 @@ struct Load {
 };
 
 template<>
-struct Load<Object::Variant> {
-    Object::Variant& var;
+struct Load<Any::Variant> {
+    Any::Variant& var;
 
     template<class Archive>
     void load(Archive& ar, const unsigned int version) {

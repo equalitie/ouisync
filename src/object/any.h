@@ -10,14 +10,14 @@
 
 namespace ouisync::object {
 
-class Object final {
+class Any final {
 public:
     using Variant = boost::variant<Block, Tree>;
 
 public:
-    Object() = default;
-    Object(Object&&) = default;
-    Object(const Object&) = delete;
+    Any() = default;
+    Any(Any&&) = default;
+    Any(const Any&) = delete;
 
     Block* as_block() { return boost::get<Block>(&_variant); }
     Tree * as_tree () { return boost::get<Tree >(&_variant); }

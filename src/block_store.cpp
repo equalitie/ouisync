@@ -171,7 +171,7 @@ void BlockStore::store(const BlockId &block_id, const Data &data) {
     //    auto r = tree.store(_objdir);
     //    std::cerr << "2!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! " << _objdir << " "  << bool(r) << "\n";
     //    assert(r);
-    //    auto o = objects::Object::load(_objdir, d);
+    //    auto o = objects::Any::load(_objdir, d);
     //    std::cerr << "3!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
     //    assert(o);
     //    std::cerr << "4!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! " << bool(o->as_block()) << " " << bool(o->as_tree()) << "\n";

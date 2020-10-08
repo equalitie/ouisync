@@ -10,11 +10,11 @@
 using namespace ouisync;
 using namespace ouisync::object;
 
-Sha256::Digest Object::calculate_digest() const {
+Sha256::Digest Any::calculate_digest() const {
     return ouisync::apply(_variant, [] (const auto& v) { return v.calculate_digest(); });
 }
 
-Id Object::store(const fs::path& root) const
+Id Any::store(const fs::path& root) const
 {
     return ouisync::apply(_variant, [&root] (const auto& v) { return v.store(root); });
 }
