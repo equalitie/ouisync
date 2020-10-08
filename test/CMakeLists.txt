@@ -9,3 +9,7 @@ set_warning_level(test-cryfs)
 add_executable(test-version-vector "version-vector.cpp")
 target_link_libraries(test-version-vector PUBLIC Boost::unit_test_framework)
 set_warning_level(test-version-vector)
+
+add_executable(test-objects "objects.cpp")
+target_link_libraries(test-objects PUBLIC Boost::unit_test_framework ouisync)
+set_warning_level(test-objects)
