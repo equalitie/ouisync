@@ -19,9 +19,6 @@ public:
     Object(Object&&) = default;
     Object(const Object&) = delete;
 
-    static
-    Object load(const fs::path& root, const Sha256::Digest&);
-
     Block* as_block() { return boost::get<Block>(&_variant); }
     Tree * as_tree () { return boost::get<Tree >(&_variant); }
     
