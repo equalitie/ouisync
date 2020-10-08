@@ -2,11 +2,9 @@
 
 #include "id.h"
 #include "tagged.h"
-#include "object.h"
 #include "path.h"
 
-#include <boost/optional.hpp>
-#include <boost/archive/text_oarchive.hpp>
+#include <boost/archive/text_iarchive.hpp>
 #include <boost/filesystem/fstream.hpp>
 #include <boost/filesystem/operations.hpp>
 
