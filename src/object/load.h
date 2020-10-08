@@ -10,7 +10,7 @@
 #include <boost/filesystem/fstream.hpp>
 #include <boost/filesystem/operations.hpp>
 
-namespace ouisync::objects {
+namespace ouisync::object {
 
 template<class O>
 inline

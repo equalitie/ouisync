@@ -2,7 +2,7 @@
 
 #include "../hash.h"
 
-namespace ouisync::objects {
+namespace ouisync::object {
 
 using Id = Sha256::Digest;
 

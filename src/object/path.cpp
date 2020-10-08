@@ -2,7 +2,7 @@
 #include "../hex.h"
 
 using namespace ouisync;
-using namespace ouisync::objects;
+using namespace ouisync::object;
 
 fs::path path::from_id(const Id& id)
 {

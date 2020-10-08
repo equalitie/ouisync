@@ -6,7 +6,7 @@
 #include <boost/optional.hpp>
 #include <boost/filesystem/path.hpp>
 
-namespace ouisync::objects::path {
+namespace ouisync::object::path {
 
 fs::path from_id(const Id&);
 Opt<Id>  to_id(const fs::path&);

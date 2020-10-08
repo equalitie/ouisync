@@ -1,6 +1,6 @@
 #pragma once
 
-namespace ouisync::objects {
+namespace ouisync::object {
 
 enum class Tag : uint8_t {
     Tree = 1,

@@ -7,7 +7,7 @@
 #include <boost/serialization/map.hpp>
 #include <boost/serialization/array.hpp>
 
-namespace ouisync::objects {
+namespace ouisync::object {
 
 namespace {
     using TreeMap = std::map<std::string, Sha256::Digest>;

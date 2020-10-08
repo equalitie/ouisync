@@ -5,7 +5,7 @@
 
 #include <boost/archive/archive_exception.hpp>
 
-namespace ouisync::objects::tagged {
+namespace ouisync::object::tagged {
 
 template<class Obj>
 struct Save {

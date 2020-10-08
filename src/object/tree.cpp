@@ -11,7 +11,7 @@
 #include <boost/filesystem.hpp>
 
 using namespace ouisync;
-using namespace ouisync::objects;
+using namespace ouisync::object;
 
 Sha256::Digest Tree::calculate_digest() const
 {
@@ -25,5 +25,5 @@ Sha256::Digest Tree::calculate_digest() const
 
 Id Tree::store(const fs::path& root) const
 {
-    return objects::store(root, *this);
+    return object::store(root, *this);
 }

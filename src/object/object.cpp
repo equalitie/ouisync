@@ -8,7 +8,7 @@
 #include <boost/serialization/vector.hpp>
 
 using namespace ouisync;
-using namespace ouisync::objects;
+using namespace ouisync::object;
 
 Sha256::Digest Object::calculate_digest() const {
     return ouisync::apply(_variant, [] (const auto& v) { return v.calculate_digest(); });

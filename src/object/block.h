@@ -8,7 +8,7 @@
 #include "cpp-utils/data/Data.h"
 #include <boost/serialization/array_wrapper.hpp>
 
-namespace ouisync::objects {
+namespace ouisync::object {
 
 class Block {
 private:

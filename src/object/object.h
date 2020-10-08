@@ -8,7 +8,7 @@
 
 #include <boost/filesystem/path.hpp>
 
-namespace ouisync::objects {
+namespace ouisync::object {
 
 class Object final {
 public:
