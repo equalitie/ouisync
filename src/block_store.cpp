@@ -128,35 +128,6 @@ optional<Data> BlockStore::load(const BlockId &blockId) const {
     return {move(*fileContent)};
 }
 
-using Hashes = std::map<std::string, Sha256::Digest>;
-
-static Sha256::Digest map_digest(const Hashes& hashes) {
-    Sha256 hash;
-    for (auto& [k, v] : hashes) {
-        hash.update(k);
-        hash.update(v);
-    }
-    return hash.close();
-}
-
-static Hashes load_hashes(const fs::path& path)
-{
-    Hashes result;
-
-    fs::ifstream ifs(path);
-    if (!ifs.is_open()) return result;
-    boost::archive::text_iarchive ia(ifs);
-    ia >> result;
-    return result;
-}
-
-static void store_hashes(const fs::path& path, const Hashes& map)
-{
-    fs::ofstream ofs(path);
-    boost::archive::text_oarchive oa(ofs);
-    oa << map;
-}
-
 void BlockStore::store(const BlockId &block_id, const Data &data) {
     std::scoped_lock<std::mutex> lock(_mutex);
 
@@ -164,37 +135,7 @@ void BlockStore::store(const BlockId &block_id, const Data &data) {
     fs::create_directories(filepath.parent_path());
     data.StoreToFile(filepath);
 
-    auto digest = create_digest(data);
-    auto dir = _get_dir_for_block(block_id);
-
-    //{
-    //    std::cerr << "1!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
-    //    objects::Tree tree;
-    //    auto d = tree.calculate_digest();
-    //    auto r = tree.store(_objdir);
-    //    std::cerr << "2!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! " << _objdir << " "  << bool(r) << "\n";
-    //    assert(r);
-    //    auto o = objects::Any::load(_objdir, d);
-    //    std::cerr << "3!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
-    //    assert(o);
-    //    std::cerr << "4!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! " << bool(o->as_block()) << " " << bool(o->as_tree()) << "\n";
-    //    assert(o->as_tree());
-    //    std::cerr << "5!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
-    //}
-    //{
-    //    do {
-    //        auto f = dir.filename().string();
-    //        dir.remove_filename();
-    //        auto hash_file = _rootdir / dir / "hashes";
-    //        auto hashes = load_hashes(hash_file);
-    //        hashes[f] = digest;
-    //        store_hashes(hash_file, hashes);
-    //        digest = map_digest(hashes);
-    //    }
-    //    while (!dir.empty());
-    //}
-
-    _sync->add_action(BlockSync::ActionModifyBlock{block_id, digest});
+    //_sync->add_action(BlockSync::ActionModifyBlock{block_id, digest});
 }
 
 uint64_t BlockStore::numBlocks() const {
