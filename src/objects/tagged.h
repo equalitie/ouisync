@@ -20,7 +20,27 @@ struct Save {
     BOOST_SERIALIZATION_SPLIT_MEMBER()
 };
 
+template<class Obj>
 struct Load {
+    Obj& obj;
+
+    template<class Archive>
+    void load(Archive& ar, const unsigned int version) {
+        Tag tag;
+        ar & tag;
+
+        if (tag != GetTag<Obj>::value) {
+            throw std::runtime_error("Object not of the requested type");
+        }
+
+        ar & obj;
+    }
+
+    BOOST_SERIALIZATION_SPLIT_MEMBER()
+};
+
+template<>
+struct Load<Object::Variant> {
     Object::Variant& var;
 
     template<class Archive>
@@ -49,6 +69,5 @@ struct Load {
 
     BOOST_SERIALIZATION_SPLIT_MEMBER()
 };
-
 
 } // namespaces

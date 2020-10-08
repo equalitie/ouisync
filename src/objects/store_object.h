@@ -2,6 +2,7 @@
 
 #include "id.h"
 #include "tagged.h"
+#include "path.h"
 
 #include <boost/optional.hpp>
 #include <boost/archive/text_oarchive.hpp>
@@ -14,7 +15,7 @@ template<class O>
 inline
 Id store_object(const fs::path& root, const O& object) {
     auto digest = object.calculate_digest();
-    auto path = root / Object::path_from_digest(digest);
+    auto path = root / path::from_id(digest);
     // XXX: if this probes every single directory in path, then it might be
     // slow and in such case we could instead try to create only the last 2.
     fs::create_directories(path.parent_path());
