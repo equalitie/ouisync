@@ -46,7 +46,7 @@ int main(int argc, char** argv)
     }
 
     try {
-        auto obj = object::load<object::Tree, object::Block>(path);
+        auto obj = object::io::load<object::Tree, object::Block>(path);
         cout << obj << "\n";
     } catch (const exception& ex) {
         cerr << ex.what() << "\n";

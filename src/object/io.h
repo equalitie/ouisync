@@ -9,7 +9,7 @@
 #include <boost/filesystem/fstream.hpp>
 #include <boost/filesystem/operations.hpp>
 
-namespace ouisync::object {
+namespace ouisync::object::io {
 
 // --- store ---------------------------------------------------------
 

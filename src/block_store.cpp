@@ -179,7 +179,7 @@ optional<Data> BlockStore::load(const BlockId &blockId) const {
 }
 
 void list(const fs::path& objdir, object::Id id, std::string pad = "") {
-    auto obj = object::load<object::Tree, object::Block>(objdir, id);
+    auto obj = object::io::load<object::Tree, object::Block>(objdir, id);
 
     apply(obj,
             [&] (const object::Tree& tree) {
@@ -203,7 +203,7 @@ _store(const fs::path& objdir,
         const Data &data)
 {
     auto on_exit = defer([&] {
-            if (old_object_id) object::remove(objdir, *old_object_id);
+            if (old_object_id) object::io::remove(objdir, *old_object_id);
         });
 
     if (path_range.empty()) {
@@ -217,7 +217,7 @@ _store(const fs::path& objdir,
     object::Tree tree;
 
     if (old_object_id) {
-        tree = object::load<object::Tree>(objdir, *old_object_id);
+        tree = object::io::load<object::Tree>(objdir, *old_object_id);
     }
 
     auto [child_i, inserted] = tree.insert(std::make_pair(child_name, object::Id()));

@@ -3,7 +3,7 @@
 #include <boost/system/error_code.hpp>
 #include <boost/filesystem/operations.hpp>
 
-namespace ouisync::object {
+namespace ouisync::object::io {
 
 bool remove(const fs::path& objdir, const Id& id) {
     auto p = path::from_id(id);

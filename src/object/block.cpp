@@ -18,7 +18,7 @@ Id Block::calculate_id() const {
 }
 
 Id Block::store(const fs::path& root) const {
-    return object::store(root, *this);
+    return object::io::store(root, *this);
 }
 
 std::ostream& ouisync::object::operator<<(std::ostream& os, const Block& block) {

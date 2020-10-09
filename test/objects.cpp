@@ -57,7 +57,7 @@ BOOST_AUTO_TEST_CASE(block_is_same) {
     Data data(random.data(1000));
     object::Block b1(data);
     b1.store(testdir);
-    auto b2 = object::load<object::Block>(testdir, b1.calculate_id());
+    auto b2 = object::io::load<object::Block>(testdir, b1.calculate_id());
     BOOST_REQUIRE_EQUAL(to_hex<char>(b1.calculate_id()), to_hex<char>(b2.calculate_id()));
 }
 
@@ -69,6 +69,6 @@ BOOST_AUTO_TEST_CASE(tree_is_same) {
     t1[random.string(2)]  = random.object_id();
     t1[random.string(10)] = random.object_id();
     t1.store(testdir);
-    auto t2 = object::load<object::Tree>(testdir, t1.calculate_id());
+    auto t2 = object::io::load<object::Tree>(testdir, t1.calculate_id());
     BOOST_REQUIRE_EQUAL(to_hex<char>(t1.calculate_id()), to_hex<char>(t2.calculate_id()));
 }
