@@ -8,6 +8,7 @@
 
 #include <boost/asio/buffer.hpp>
 #include <boost/utility/string_view.hpp>
+#include <boost/endian/conversion.hpp>
 
 namespace ouisync {
 
@@ -103,6 +104,14 @@ public:
     inline void update(const std::array<uint8_t, N>& data)
     {
         update(data.data(), N);
+    }
+
+    template<class N>
+    inline
+    std::enable_if_t<std::is_integral<N>::value, void> update(N n)
+    {
+        boost::endian::native_to_big_inplace(n);
+        update(&n, sizeof(n));
     }
 
     inline Digest close()
