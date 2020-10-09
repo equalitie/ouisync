@@ -14,6 +14,7 @@ using namespace ouisync::object;
 Id Tree::calculate_id() const
 {
     Sha256 hash;
+    hash.update(uint32_t(hash.size()));
     for (auto& [k,v] : *this) {
         hash.update(k);
         hash.update(v);

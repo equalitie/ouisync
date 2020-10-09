@@ -12,7 +12,11 @@ using namespace ouisync::object;
 Id Block::calculate_id() const {
     Sha256 hash;
     const Data* d = data();
-    if (!d) return hash.close();
+    if (!d) {
+        hash.update(uint32_t(0));
+        return hash.close();
+    }
+    hash.update(uint32_t(d->size()));
     hash.update(d->data(), d->size());
     return hash.close();
 }
