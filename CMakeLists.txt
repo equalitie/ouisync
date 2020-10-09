@@ -49,6 +49,7 @@ add_library(ouisync STATIC
     "src/object/block.cpp"
     "src/object/path.cpp"
     "src/object/remove.cpp"
+    "src/object/tagged.cpp"
     "src/object/tag.cpp"
 )
 target_include_directories(ouisync PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)

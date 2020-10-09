@@ -8,6 +8,10 @@
 
 namespace ouisync::object::tagged {
 
+namespace detail {
+    std::exception bad_tag_exception(Tag requested, Tag parsed);
+}
+
 template<class Obj>
 struct Save {
     const Obj& obj;
@@ -31,7 +35,7 @@ struct Load {
         ar & tag;
 
         if (tag != GetTag<Obj>::value) {
-            throw std::runtime_error("Object not of the requested type");
+            throw detail::bad_tag_exception(GetTag<Obj>::value, tag);
         }
 
         ar & obj;
