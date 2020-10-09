@@ -1,5 +1,6 @@
-#include <ostream>
 #include "tag.h"
+
+#include <ostream>
 
 using namespace ouisync::object;
 

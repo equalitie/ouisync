@@ -1,10 +1,11 @@
 #pragma once
 
+#include <cstdint> // uint8_t
 #include <iosfwd>
 
 namespace ouisync::object {
 
-enum class Tag : uint8_t {
+enum class Tag : std::uint8_t {
     Tree = 1,
     Block
 };
