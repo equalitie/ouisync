@@ -12,6 +12,9 @@ find_package(Threads REQUIRED)
 set(BuildBoost_DIR "${CMAKE_CURRENT_SOURCE_DIR}/cmake/build-boost")
 find_package(BuildBoost REQUIRED)
 
+set (CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -fno-omit-frame-pointer -fsanitize=address")
+set (CMAKE_LINKER_FLAGS_DEBUG "${CMAKE_LINKER_FLAGS_DEBUG} -fno-omit-frame-pointer -fsanitize=address")
+
 # Dependency config for CryFS, it is basically a copy of the one in
 # modules/cryfs/cmake-utils/DependenciesFromConan.cmake but changed to use
 # Boost found through the above find_package instead of the one from Conan.
