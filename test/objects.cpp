@@ -1,6 +1,5 @@
 #define BOOST_TEST_MODULE objects
 #include <boost/test/included/unit_test.hpp>
-#include <iostream>
 
 #include "object/block.h"
 #include "object/load.h"
@@ -8,6 +7,8 @@
 #include "hex.h"
 #include "array_io.h"
 
+#include <iostream>
+#include <random>
 #include <boost/filesystem.hpp>
 #include <boost/variant.hpp>
 #include <boost/serialization/string.hpp>
@@ -17,18 +18,29 @@ using namespace ouisync;
 
 using Data = cpputils::Data;
 
-static Data _test_data() {
-    Data d(256);
-    for (size_t i = 0; i < d.size(); ++i) {
-        static_cast<char*>(d.data())[i] = char(i);
-    }
-    return d;
-}
+struct Random {
+    Random() : gen(std::random_device()()) {}
 
-BOOST_AUTO_TEST_CASE(block) {
+    Data data(size_t size) {
+        Data d(size);
+        auto ptr = static_cast<char*>(d.data());
+        std::uniform_int_distribution<> distrib(0, 255);
+        for (size_t i = 0; i < d.size(); ++i) {
+            ptr[i] = distrib(gen);
+        }
+        return d;
+    }
+
+    std::mt19937 gen;
+};
+
+
+BOOST_AUTO_TEST_CASE(block_is_same) {
     fs::path testdir = fs::unique_path("/tmp/ouisync/test-objects-%%%%-%%%%-%%%%-%%%%");
 
-    Data data(_test_data());
+    Random random;
+
+    Data data(random.data(1000));
 
     object::Block b1(data);
     b1.store(testdir);
