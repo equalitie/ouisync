@@ -8,15 +8,38 @@
 #include <cpp-utils/io/IOStreamConsole.h>
 #include <cpp-utils/io/NoninteractiveConsole.h>
 #include <cryfs/impl/config/CryPasswordBasedKeyProvider.h>
+#include <cryfs/impl/config/CryPresetPasswordBasedKeyProvider.h>
 #include <cpp-utils/random/OSRandomGenerator.h>
 
 using namespace ouisync;
 namespace sys = boost::system;
 using namespace std;
 
+inline
+cpputils::unique_ref<cryfs::CryKeyProvider>
+create_key_provider(shared_ptr<cpputils::NoninteractiveConsole> console) {
+    auto askPassword = [] { return "test-password"; };
+    auto settings = cpputils::SCrypt::DefaultSettings;
+    return cpputils::make_unique_ref<cryfs::CryPasswordBasedKeyProvider>(
+      console,
+      askPassword,
+      askPassword,
+      cpputils::make_unique_ref<cpputils::SCrypt>(settings)
+    );
+}
+
+inline
+cpputils::unique_ref<cryfs::CryKeyProvider>
+create_test_key_provider() {
+    auto settings = cpputils::SCrypt::TestSettings;
+    return cpputils::make_unique_ref<cryfs::CryPresetPasswordBasedKeyProvider>(
+        "mypassword", cpputils::make_unique_ref<cpputils::SCrypt>(settings)
+    );
+}
+
 static
 cpputils::either<cryfs::CryConfigFile::LoadError, cryfs::CryConfigLoader::ConfigLoadResult>
-loadOrCreateConfigFile(fs::path config_file, cryfs::LocalStateDir statedir) {
+loadOrCreateConfigFile(fs::path config_file, cryfs::LocalStateDir statedir, bool test) {
     auto console_ = make_shared<cpputils::IOStreamConsole>();
     auto console  = make_shared<cpputils::NoninteractiveConsole>(move(console_));
 
@@ -26,21 +49,12 @@ loadOrCreateConfigFile(fs::path config_file, cryfs::LocalStateDir statedir) {
     boost::optional<bool> missing_block_is_integrity_violation;
     boost::optional<string> cipher;
 
+
     auto &key_generator = cpputils::Random::OSRandom();
-    auto settings = cpputils::SCrypt::DefaultSettings;
-
-    auto askPassword = [] { return "test-password"; };
-
-    auto keyProvider = cpputils::make_unique_ref<cryfs::CryPasswordBasedKeyProvider>(
-      console,
-      askPassword,
-      askPassword,
-      cpputils::make_unique_ref<cpputils::SCrypt>(settings)
-    );
 
     return cryfs::CryConfigLoader(console,
             key_generator,
-            std::move(keyProvider),
+            test ? create_test_key_provider() : create_key_provider(console),
             std::move(statedir),
             cipher,
             block_size_bytes,
@@ -51,8 +65,8 @@ loadOrCreateConfigFile(fs::path config_file, cryfs::LocalStateDir statedir) {
 
 static
 cryfs::CryConfigLoader::ConfigLoadResult
-loadOrCreateConfig(const fs::path& config_file, const cryfs::LocalStateDir& statedir) {
-    auto config = loadOrCreateConfigFile(config_file, statedir);
+loadOrCreateConfig(const fs::path& config_file, const cryfs::LocalStateDir& statedir, bool test) {
+    auto config = loadOrCreateConfigFile(config_file, statedir, test);
 
     if (config.is_left()) {
         switch(config.left()) {
@@ -75,7 +89,7 @@ loadOrCreateConfig(const fs::path& config_file, const cryfs::LocalStateDir& stat
 namespace ouisync {
 
 unique_ptr<fspp::Device>
-create_cry_device(const fs::path& rootdir, unique_ptr<BlockSync> sync)
+create_cry_device(const fs::path& rootdir, unique_ptr<BlockSync> sync, bool test)
 {
     fs::path basedir(rootdir / "basedir");
     fs::create_directories(basedir);
@@ -84,7 +98,7 @@ create_cry_device(const fs::path& rootdir, unique_ptr<BlockSync> sync)
 
     auto blockStore = cpputils::make_unique_ref<ouisync::BlockStore>(basedir, move(sync));
 
-    cryfs::CryConfigLoader::ConfigLoadResult config = loadOrCreateConfig(config_file, statedir);
+    cryfs::CryConfigLoader::ConfigLoadResult config = loadOrCreateConfig(config_file, statedir, test);
 
     auto onIntegrityViolation = [] () {
         cerr << "Integrity has been violated\n";

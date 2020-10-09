@@ -57,7 +57,7 @@ int main() {
 
     {
         auto sync = make_unique<BlockSync>();
-        auto cry_device = ouisync::create_cry_device(testdir, move(sync));
+        auto cry_device = ouisync::create_cry_device(testdir, move(sync), true);
         TestDevice device{move(cry_device)};
 
         device.mkdir("/a/b");
