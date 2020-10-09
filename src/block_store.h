@@ -1,5 +1,7 @@
 #pragma once
 
+#include "object/id.h"
+
 #include <blockstore/interface/BlockStore2.h>
 #include <namespaces.h>
 #include <boost/uuid/uuid.hpp>
@@ -12,6 +14,7 @@ namespace blockstore {
 
 namespace ouisync {
     class BlockSync;
+    class RootId;
 }
 
 namespace ouisync {
@@ -46,10 +49,9 @@ public:
     virtual ~BlockStore();
 
 private:
-
-private:
     fs::path _rootdir;
     fs::path _objdir;
+    std::unique_ptr<RootId> _root_id;
     std::unique_ptr<BlockSync> _sync;
     Uuid _branch_id;
     std::mutex _mutex;

@@ -1,12 +1,14 @@
-#include <block_store.h>
-#include <block_sync.h>
+#include "block_store.h"
+#include "block_sync.h"
 #include "array_io.h"
 #include "hex.h"
+#include "defer.h"
+
 #include <blockstore/implementations/ondisk/OnDiskBlockStore2.h>
 #include <boost/filesystem.hpp>
 
+#include <boost/range/iterator_range.hpp>
 #include <boost/archive/text_oarchive.hpp>
-#include <boost/archive/text_iarchive.hpp>
 #include <boost/serialization/map.hpp>
 #include <boost/serialization/array.hpp>
 #include <boost/uuid/uuid_io.hpp>
@@ -56,7 +58,7 @@ namespace {
 }
 
 static
-fs::path _get_dir_for_block(const BlockId &block_id) {
+fs::path _get_data_file_path(const BlockId &block_id) {
     std::string block_id_str = block_id.ToString();
     fs::path path;
     unsigned part = 0;
@@ -72,16 +74,54 @@ fs::path _get_dir_for_block(const BlockId &block_id) {
     return path;
 }
 
-static
-fs::path _get_data_file_path(const BlockId &block_id) {
-    return _get_dir_for_block(block_id) / "data";
-}
-
 static inline auto create_digest(const cpputils::Data& data) {
     Sha256 hash;
     hash.update(data.data(), data.size());
     return hash.close();
 }
+
+class ouisync::RootId {
+public:
+    static Opt<RootId> load(const fs::path& path) {
+        fs::fstream file(path, fs::fstream::binary);
+        if (!file.is_open()) return boost::none;
+
+        object::Id root_id;
+
+        boost::archive::text_oarchive oa(file);
+        oa & root_id;
+
+        return RootId(path, root_id);
+    }
+
+    RootId(const fs::path& file_path, const object::Id& root_id) :
+        _file_path(file_path),
+        _root_id(root_id)
+    {
+        store(root_id);
+    }
+
+    void store(const object::Id& root_id) {
+        fs::fstream file(_file_path, fs::fstream::binary | fs::fstream::trunc | fs::fstream::out);
+        if (!file.is_open())
+            throw std::runtime_error("Failed to open root hash file");
+        boost::archive::text_oarchive oa(file);
+        oa & root_id;
+        _root_id = root_id;
+    }
+
+    const object::Id& get() const {
+        return _root_id;
+    }
+
+    void set(const object::Id& id) {
+        _root_id = id;
+    }
+
+private:
+    fs::path _file_path;
+    object::Id _root_id;
+};
 
 BlockStore::BlockStore(const fs::path& basedir, unique_ptr<BlockSync> sync) :
     _rootdir(basedir / "blocks"),
@@ -89,6 +129,17 @@ BlockStore::BlockStore(const fs::path& basedir, unique_ptr<BlockSync> sync) :
     _sync(move(sync))
 {
     fs::create_directories(_rootdir);
+    fs::create_directories(_objdir);
+
+    auto root_id_path = basedir / "root";
+    auto opt_root_id = RootId::load(root_id_path);
+
+    if (!opt_root_id) {
+        object::Tree root_obj;
+        opt_root_id = RootId(root_id_path, root_obj.store(_objdir));
+    }
+
+    _root_id = std::make_unique<RootId>(std::move(*opt_root_id));
 }
 
 bool BlockStore::tryCreate(const BlockId &blockId, const Data &data) {
@@ -128,12 +179,80 @@ optional<Data> BlockStore::load(const BlockId &blockId) const {
     return {move(*fileContent)};
 }
 
+void list(const fs::path& objdir, object::Id id, std::string pad = "") {
+    auto obj = object::load<object::Tree, object::Block>(objdir, id);
+
+    apply(obj,
+            [&] (const object::Tree& tree) {
+                std::cerr << pad << tree << "\n";
+                pad += "  ";
+                for (auto p : tree) {
+                    list(objdir, p.second, pad);
+                }
+            },
+            [&] (const auto& o) {
+                std::cerr << pad << o << "\n";
+            });
+}
+
+template<class PathRange>
+static
+object::Id
+_store(const fs::path& objdir,
+        Opt<object::Id> old_object_id,
+        PathRange path_range,
+        const Data &data)
+{
+    auto on_exit = defer([&] {
+            if (old_object_id) object::remove(objdir, *old_object_id);
+        });
+
+    if (path_range.empty()) {
+        const object::Block block(data);
+        return block.store(objdir);
+    }
+
+    auto child_name = path_range.front().string();
+    path_range.advance_begin(1);
+
+    object::Tree tree;
+
+    if (old_object_id) {
+        tree = object::load<object::Tree>(objdir, *old_object_id);
+    }
+
+    auto [child_i, inserted] = tree.insert(std::make_pair(child_name, object::Id()));
+
+    Opt<object::Id> old_child_id;
+    if (!inserted) old_child_id = child_i->second;
+
+    child_i->second = _store(objdir, old_child_id, path_range, data);
+
+    return tree.store(objdir);
+}
+
 void BlockStore::store(const BlockId &block_id, const Data &data) {
     std::scoped_lock<std::mutex> lock(_mutex);
 
-    auto filepath = _rootdir/_get_data_file_path(block_id);
-    fs::create_directories(filepath.parent_path());
-    data.StoreToFile(filepath);
+    auto filepath = _get_data_file_path(block_id);
+
+    {
+        auto abs_filepath = _rootdir/filepath;
+        fs::create_directories(abs_filepath.parent_path());
+        data.StoreToFile(abs_filepath);
+    }
+
+    {
+        auto dirs_range = boost::make_iterator_range(filepath);
+        assert(!dirs_range.empty());
+
+        auto id = _store(_objdir, _root_id->get(), dirs_range, data);
+        _root_id->set(id);
+
+        std::cerr << "Root: " << to_hex<char>(id) << "\n";
+        list(_objdir, _root_id->get());
+        std::cerr << "\n\n\n";
+    }
 
     //_sync->add_action(BlockSync::ActionModifyBlock{block_id, digest});
 }
