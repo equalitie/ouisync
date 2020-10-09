@@ -79,8 +79,9 @@ public:
 
         object::Id root_id;
 
-        boost::archive::text_oarchive oa(file);
-        oa & root_id;
+        boost::archive::text_iarchive oa(file);
+        object::tagged::Load<object::Id> load{root_id};
+        oa & load;
 
         return RootId(path, root_id);
     }
@@ -97,7 +98,8 @@ public:
         if (!file.is_open())
             throw std::runtime_error("Failed to open root hash file");
         boost::archive::text_oarchive oa(file);
-        oa & root_id;
+        object::tagged::Save<object::Id> save{root_id};
+        oa & save;
         _root_id = root_id;
     }
 
@@ -107,6 +109,7 @@ public:
 
     void set(const object::Id& id) {
         _root_id = id;
+        store(_root_id);
     }
 
 private:

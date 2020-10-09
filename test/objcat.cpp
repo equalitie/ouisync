@@ -2,6 +2,9 @@
 #include "object/block.h"
 #include "object/io.h"
 #include "namespaces.h"
+#include "variant.h"
+#include "hex.h"
+#include "array_io.h"
 
 #include <iostream>
 #include <boost/filesystem.hpp>
@@ -10,6 +13,9 @@
 
 using namespace std;
 using namespace ouisync;
+using object::Id;
+using object::Block;
+using object::Tree;
 
 void usage(ostream& os, const string& appname) {
     os << "Usage:\n";
@@ -46,8 +52,12 @@ int main(int argc, char** argv)
     }
 
     try {
-        auto obj = object::io::load<object::Tree, object::Block>(path);
-        cout << obj << "\n";
+        auto obj = object::io::load<Id, Tree, Block>(path);
+
+        apply(obj,
+                [](Id id) { cout << "Id " << to_hex<char>(id) << "\n"; },
+                [](const auto& obj) { cout << obj << "\n"; });
+
     } catch (const exception& ex) {
         cerr << ex.what() << "\n";
     }
