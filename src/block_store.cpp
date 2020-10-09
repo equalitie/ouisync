@@ -2,12 +2,10 @@
 #include "block_sync.h"
 #include "array_io.h"
 #include "hex.h"
-#include "defer.h"
 
 #include <blockstore/implementations/ondisk/OnDiskBlockStore2.h>
 #include <boost/filesystem.hpp>
 
-#include <boost/range/iterator_range.hpp>
 #include <boost/archive/text_oarchive.hpp>
 #include <boost/serialization/map.hpp>
 #include <boost/serialization/array.hpp>
@@ -188,42 +186,6 @@ void list(const fs::path& objdir, object::Id id, std::string pad = "") {
             });
 }
 
-template<class PathRange>
-static
-object::Id
-_store(const fs::path& objdir,
-        Opt<object::Id> old_object_id,
-        PathRange path_range,
-        const Data &data)
-{
-    auto on_exit = defer([&] {
-            if (old_object_id) object::io::remove(objdir, *old_object_id);
-        });
-
-    if (path_range.empty()) {
-        const object::Block block(data);
-        return block.store(objdir);
-    }
-
-    auto child_name = path_range.front().string();
-    path_range.advance_begin(1);
-
-    object::Tree tree;
-
-    if (old_object_id) {
-        tree = object::io::load<object::Tree>(objdir, *old_object_id);
-    }
-
-    auto [child_i, inserted] = tree.insert(std::make_pair(child_name, object::Id()));
-
-    Opt<object::Id> old_child_id;
-    if (!inserted) old_child_id = child_i->second;
-
-    child_i->second = _store(objdir, old_child_id, path_range, data);
-
-    return tree.store(objdir);
-}
-
 void BlockStore::store(const BlockId &block_id, const Data &data) {
     std::scoped_lock<std::mutex> lock(_mutex);
 
@@ -236,10 +198,8 @@ void BlockStore::store(const BlockId &block_id, const Data &data) {
     }
 
     {
-        auto dirs_range = boost::make_iterator_range(filepath);
-        assert(!dirs_range.empty());
-
-        auto id = _store(_objdir, _root_id->get(), dirs_range, data);
+        object::Block block(data);
+        auto id = object::io::store(_objdir, _root_id->get(), filepath, block);
         _root_id->set(id);
 
         std::cerr << "Root: " << to_hex<char>(id) << "\n";

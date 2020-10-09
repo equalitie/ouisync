@@ -15,9 +15,9 @@ namespace ouisync::object::io {
 
 template<class O>
 inline
-Id store(const fs::path& root, const O& object) {
+Id store(const fs::path& objdir, const O& object) {
     auto id = object.calculate_id();
-    auto path = root / path::from_id(id);
+    auto path = objdir / path::from_id(id);
     // XXX: if this probes every single directory in path, then it might be
     // slow and in such case we could instead try to create only the last 2.
     fs::create_directories(path.parent_path());
@@ -28,6 +28,8 @@ Id store(const fs::path& root, const O& object) {
     oa << save;
     return id;
 }
+
+Id store(const fs::path& objdir, Id root_tree, const fs::path& objpath, const Block&);
 
 // --- load ----------------------------------------------------------
 
