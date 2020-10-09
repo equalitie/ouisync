@@ -1,6 +1,6 @@
 #include "tree.h"
 #include "tagged.h"
-#include "store.h"
+#include "io.h"
 
 #include "../hex.h"
 #include "../array_io.h"

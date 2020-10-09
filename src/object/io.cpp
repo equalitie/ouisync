@@ -1,5 +1,4 @@
-#include "remove.h"
-#include "path.h"
+#include "io.h"
 
 #include <boost/system/error_code.hpp>
 #include <boost/filesystem/operations.hpp>
@@ -13,4 +12,4 @@ bool remove(const fs::path& objdir, const Id& id) {
     return bool(ec);
 }
 
-} // namespaces
+} // namespace

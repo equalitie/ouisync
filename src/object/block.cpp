@@ -1,5 +1,5 @@
 #include "block.h"
-#include "store.h"
+#include "io.h"
 #include "../hash.h"
 #include "../array_io.h"
 #include "../hex.h"
