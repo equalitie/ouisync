@@ -14,19 +14,6 @@ namespace {
     template<> struct is_byte_type<unsigned char> { static const bool value = true; };
 }
 
-inline bool is_hex(boost::string_view s)
-{
-    static const std::string hex_chars = "0123456789abcdefABCDEF";
-
-    for (size_t i = 0; i < s.size(); i++) {
-        if (hex_chars.find(s[i]) == std::string::npos) {
-            return false;
-        }
-    }
-
-    return true;
-}
-
 template<class OutputT, size_t N, class InputT> std::array<OutputT, 2*N> to_hex(const std::array<InputT, N>& as)
 {
     static_assert(is_byte_type<InputT>::value, "Not a bytestring type");

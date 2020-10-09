@@ -73,12 +73,6 @@ fs::path _get_data_file_path(const BlockId &block_id) {
     return path;
 }
 
-static inline auto create_digest(const cpputils::Data& data) {
-    Sha256 hash;
-    hash.update(data.data(), data.size());
-    return hash.close();
-}
-
 class ouisync::RootId {
 public:
     static Opt<RootId> load(const fs::path& path) {
