@@ -11,6 +11,10 @@ namespace ouisync::object::io {
 
 namespace {
     using PathRange = boost::iterator_range<fs::path::iterator>;
+
+    PathRange path_range(const fs::path& path) {
+        return boost::make_iterator_range(path);
+    }
 }
 
 static
@@ -45,11 +49,32 @@ Id _store_recur(const fs::path& objdir, Opt<Id> old_object_id, PathRange path, c
 
 Id store(const fs::path& objdir, Id root_tree, const fs::path& objpath, const Block& block)
 {
-    return _store_recur(
-            objdir,
-            root_tree,
-            boost::make_iterator_range(objpath),
-            block);
+    return _store_recur(objdir, root_tree, path_range(objpath), block);
+}
+
+inline
+Block _load_recur(const fs::path& objdir, const Id& root_id, PathRange path) {
+    if (path.empty())
+        throw std::runtime_error("Can't load object without name");
+
+    auto tree = load<Tree>(objdir, root_id);
+    auto name = path.front().string();
+
+    auto i = tree.find(name);
+
+    if (i == tree.end()) {
+        throw std::runtime_error("Block not found");
+    }
+
+    if (path.advance_begin(1); path.empty()) {
+        return load<Block>(objdir, i->second);
+    } else {
+        return _load_recur(objdir, i->second, path);
+    }
+}
+
+Block load(const fs::path& objdir, const Id& root_id, const fs::path& objpath) {
+    return _load_recur(objdir, root_id, path_range(objpath));
 }
 
 bool remove(const fs::path& objdir, const Id& id) {

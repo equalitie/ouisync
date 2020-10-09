@@ -13,6 +13,12 @@ namespace ouisync::object::io {
 
 // --- store ---------------------------------------------------------
 
+/*
+ * Store a single and flat (no subnodes) object to disk.  The type O may be any
+ * object that has GetTag<O> specialization (in tag.h) as well as standard
+ * serialization methods.
+ * Returns Id of the stored object.
+ */
 template<class O>
 inline
 Id store(const fs::path& objdir, const O& object) {
@@ -63,6 +69,8 @@ inline
 variant<O0, O1, Os...> load(const fs::path& path) {
     return load<variant<O0, O1, Os...>>(path);
 }
+
+Block load(const fs::path& objdir, const Id& root_id, const fs::path& objpath);
 
 // --- remove --------------------------------------------------------
 

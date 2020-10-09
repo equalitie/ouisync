@@ -18,4 +18,5 @@ set_warning_level(test-version-vector)
 
 add_executable(test-objects "objects.cpp")
 target_link_libraries(test-objects PUBLIC Boost::unit_test_framework ouisync)
+target_compile_features(test-objects PRIVATE cxx_std_17)
 set_warning_level(test-objects)
