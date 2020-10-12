@@ -166,11 +166,17 @@ bool BlockStore::remove(const BlockId &blockId) {
 }
 
 optional<Data> BlockStore::load(const BlockId &blockId) const {
-    auto fileContent = Data::LoadFromFile(_rootdir/_get_data_file_path(blockId));
-    if (!fileContent) {
+    std::scoped_lock<std::mutex> lock(const_cast<std::mutex&>(_mutex));
+    try {
+        auto path = _get_data_file_path(blockId);
+        auto block = object::io::load(_objdir, _root_id->get(), path);
+        return {move(*block.data())};
+    } catch (...) {
+        // XXX: need to distinguis between "not found" and any other error.
+        // I think the former should result in boost::none while the latter
+        // should rethrow. But this needs to be checked as well.
         return boost::none;
     }
-    return {move(*fileContent)};
 }
 
 void list(const fs::path& objdir, object::Id id, std::string pad = "") {
@@ -194,40 +200,54 @@ void BlockStore::store(const BlockId &block_id, const Data &data) {
 
     auto filepath = _get_data_file_path(block_id);
 
-    {
-        auto abs_filepath = _rootdir/filepath;
-        fs::create_directories(abs_filepath.parent_path());
-        data.StoreToFile(abs_filepath);
-    }
+    object::Block block(data);
+    auto id = object::io::store(_objdir, _root_id->get(), filepath, block);
+    _root_id->set(id);
 
-    {
-        object::Block block(data);
-        auto id = object::io::store(_objdir, _root_id->get(), filepath, block);
-        _root_id->set(id);
-
-        std::cerr << "Root: " << to_hex<char>(id) << "\n";
-        list(_objdir, _root_id->get());
-        std::cerr << "\n\n\n";
-    }
+    //std::cerr << "Root: " << to_hex<char>(id) << "\n";
+    //list(_objdir, _root_id->get());
+    //std::cerr << "\n\n\n";
 
     //_sync->add_action(BlockSync::ActionModifyBlock{block_id, digest});
 }
 
+namespace {
+    using HexBlockId = std::array<char, BlockId::STRING_LENGTH>;
+}
+
+template<class F>
+static
+void _for_each_block(const fs::path& objdir, object::Id id, const F& f, HexBlockId& hex_block_id, size_t start)
+{
+    auto obj = object::io::load<object::Tree, object::Block>(objdir, id);
+
+    apply(obj,
+            [&] (const object::Tree& tree) {
+                for (auto& [name, obj_id] : tree) {
+                    if (start + name.size() > hex_block_id.size()) { assert(0); continue; }
+                    memcpy(hex_block_id.data() + start, name.data(), name.size());
+                    _for_each_block(objdir, obj_id, f, hex_block_id, start + name.size());
+                }
+            },
+            [&] (const auto& o) {
+                if (start != hex_block_id.size()) { assert(0); return; }
+                auto block_id = from_hex<char>(hex_block_id);
+                if (!block_id) { assert(0); return; }
+                f(BlockId::FromBinary(block_id->data()));
+            });
+}
+
+template<class F>
+static
+void _for_each_block(const fs::path& objdir, object::Id id, const F& f)
+{
+    HexBlockId hex_block_id; // just allocation on the stack
+    return _for_each_block(objdir, id, f, hex_block_id, 0);
+}
+
 uint64_t BlockStore::numBlocks() const {
-    fs::recursive_directory_iterator i(_rootdir);
-
     uint64_t count = 0;
-
-    for (auto i : fs::recursive_directory_iterator(_rootdir)) {
-        if (fs::is_directory(i.path())) {
-            continue;
-        }
-        if (i.path().filename() != "data") {
-            continue;
-        }
-        ++count;
-    }
-
+    _for_each_block(_objdir, _root_id->get(), [&] (const auto&) { ++count; });
     return count;
 }
 
@@ -239,39 +259,8 @@ uint64_t BlockStore::blockSizeFromPhysicalBlockSize(uint64_t blockSize) const {
     return blockSize;
 }
 
-static
-BlockId reconstruct_id_from_block_path(const fs::path& root, fs::path p)
-{
-    p = p.parent_path(); // Remove the file name
-
-    auto pi = p.begin();
-
-    // Ignore the directories contained in root
-    for (auto _ : root) { ++pi; }
-
-    std::string str_id;
-
-    while (pi != p.end()) {
-        str_id += pi->string();
-        ++pi;
-    }
-
-    return BlockId::FromString(str_id);
-}
-
 void BlockStore::forEachBlock(std::function<void (const BlockId &)> callback) const {
-    assert(0 && "TODO: Test this");
-    fs::recursive_directory_iterator i(_rootdir);
-
-    for (auto i : fs::recursive_directory_iterator(_rootdir)) {
-        if (fs::is_directory(i.path())) {
-            continue;
-        }
-        if (i.path().filename() != "data") {
-            continue;
-        }
-        callback(reconstruct_id_from_block_path(_rootdir, i.path()));
-    }
+    _for_each_block(_objdir, _root_id->get(), callback);
 }
 
 BlockStore::~BlockStore() {}
