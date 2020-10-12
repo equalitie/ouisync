@@ -45,7 +45,7 @@ So she uses OuiSync to create two **folders** in her phone: one with *Documents*
 
 Now every time that Alice goes online with her phone, modifications to the folders (like added pictures) are exchanged peer-to-peer as encrypted data with the Pi and stored locally. OuiSync at the Pi keeps some history of changes, so Alice can safely remove old pictures from the phone or recover accidentally modified files.
 
-![Figure: Folders using a different device as backup](images/uc-backup.svg)
+![Figure: Folders using a different device as backup](images/uc-backup.svg){width=20%}
 
 ## File sharing
 
@@ -53,7 +53,7 @@ Alice wants to share her *Voyage pictures* folders with Bob so that he can see t
 
 Since Alice's Pi is online all the time, it does not matter that Alice's and Bob's devices are not simultaneously online. Changes received by the Pi when either one of the devices is online end up being propagated to the other one when it gets connected.
 
-![Figure: Folders shared among different users](images/uc-sharing.svg)
+![Figure: Folders shared among different users](images/uc-sharing.svg){width=60%}
 
 ## Storage incentives
 
@@ -63,7 +63,7 @@ Charlie offers himself to host a OuiSync safe for them in one of his virtual ser
 
 Should Alice and Bob decide that they no longer want to use Charlie's services, they only need to find an alternative place to setup a new safe and let it replicate all of the folder's data before removing Charlie's safe.
 
-![Figure: Incentivized backup of shared folders](images/uc-incentives.svg)
+![Figure: Incentivized backup of shared folders](images/uc-incentives.svg){width=60%}
 
 ## Conflict resolution
 
@@ -71,7 +71,7 @@ To better remember everything about their journey, Alice and Bob start to write 
 
 However, at one point Alice and Bob start modifying the same file at similar times. In this case, OuiSync may not be able to automatically merge the changes, and a **conflict** arises which may need to be **resolved** by Alice or Bob. This is illustrated in the diagram below.
 
-![Figure: Occurrence and resolution of a conflict](images/uc-conflict.svg)
+![Figure: Occurrence and resolution of a conflict](images/uc-conflict.svg){width=40%}
 
 In it, Alice and Bob start with exact **replicas** of the shared folder. In them, the file named $F$ contains identical data; we will call that initial state $F_1$. The Pi's safe stores the latest **commit** (i.e. versioned set of all encrypted data in the replica) $C_1$, which contains $F_1$. Bob is offline at the moment.
 
@@ -138,11 +138,11 @@ Many of the properties of OuiSync stem from the way a folder and its evolution a
 
 Raw folder data (i.e. file contents) as well as metadata (directory tree, file and directory names, sizes, time stamps) are encoded into fixed-size immutable blocks, then these blocks are encrypted with a key (shared between the different end-user replicas which have access to the data), with blocks being given random, unique and immutable identifiers on creation. This encoding and encryption is handled by [CryFS][].
 
-![Figure: Conversion of folder into encrypted blocks](images/folder-blocks.svg)
+![Figure: Conversion of folder into encrypted blocks](images/folder-blocks.svg){width=40%}
 
 The state of a folder in a particular end-user replica at a given point in time is represented as the set of encrypted blocks in use at that moment. That set is tagged with a [version vector][] which names the last known version of the folder for each end-user replica known by this one (including itself).
 
-![Figure: A commit consists of a version vector and encrypted blocks](images/commit.svg)
+![Figure: A commit consists of a version vector and encrypted blocks](images/commit.svg){width=20%}
 
 ## Commits, ordering and branches
 
@@ -170,7 +170,7 @@ This implicit, partial ordering of commits allows each replica to create a direc
   - Whenever concurrent commits happen in the branch, a new branch appears in the DAG for each of them, stemming from their common preceding head.
   - A commit following the heads of several branches **resolves** them back into a single branch having that commit as its head.
 
-![Figure: A DAG of commits branching and resolving](images/commit-sequence.svg)
+![Figure: A DAG of commits branching and resolving](images/commit-sequence.svg){width=60%}
 
 The main difference with other DAG-based systems like [Git][] is that there are no explicit pointers to other commits. In contrast with diff-based systems like [Subversion][], each commit is self-contained and includes all references needed to reconstruct its associated data (except for decryption keys). The combination of both features allows the user to *drop arbitrary commits* from their replica (e.g. to progressively reduce the granularity of older backups) and save disk space without invalidating other commits. Thanks to the use of version vectors, the remaining commits maintain their relative order.
 
@@ -198,7 +198,7 @@ When a conflict arises, since the end-user replica has access to the data of con
 
 In both branching cases (conflicting and non-conflicting), when the new resolving commit is received by another replica, the commit also resolves the branching there and it becomes the new head, unless that replica already has a branch of commits which follow one of the previously branching commits. In this case, the resolving commit and the head of that branch are still concurrent and the two branches need resolving (either automatic or manual).
 
-![Figure: Repeated conflicts being resolved in two replicas](images/commit-conflicts.svg)
+![Figure: Repeated conflicts being resolved in two replicas](images/commit-conflicts.svg){width=60%}
 
 # Appendix: Copyright notices
 
