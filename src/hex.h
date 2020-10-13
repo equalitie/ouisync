@@ -51,6 +51,24 @@ std::array<OutputT, InputSize*2> to_hex(const InputT* input)
 }
 
 inline
+std::string to_hex(boost::string_view input)
+{
+    std::string output;
+    output.reserve(input.size() * 2);
+
+    const char* digits = "0123456789abcdef";
+
+    while (!input.empty()) {
+        unsigned char c = *reinterpret_cast<const unsigned char*>(&input.front());
+        output += digits[(c >> 4) & 0xf];
+        output += digits[(c >> 0) & 0xf];
+        input.remove_prefix(1);
+    }
+
+    return output;
+}
+
+inline
 boost::optional<unsigned char> from_hex(char c)
 {
     if ('0' <= c && c <= '9') {
