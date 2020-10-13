@@ -18,14 +18,18 @@ namespace {
 }
 
 static
-Id _store_recur(const fs::path& objdir, Opt<Id> old_object_id, PathRange path, const Block &block)
+Opt<Id> _store_recur(const fs::path& objdir, Opt<Id> old_object_id, PathRange path, const Block &block, bool replace)
 {
+    Opt<Id> obj_id;
+
     auto on_exit = defer([&] {
-            if (old_object_id) remove(objdir, *old_object_id);
+            if (old_object_id && obj_id) remove(objdir, *old_object_id);
         });
 
     if (path.empty()) {
-        return block.store(objdir);
+        if (replace) obj_id = store(objdir, block);
+        else         obj_id = maybe_store(objdir, block);
+        return obj_id;
     }
 
     auto child_name = path.front().string();
@@ -42,14 +46,25 @@ Id _store_recur(const fs::path& objdir, Opt<Id> old_object_id, PathRange path, c
     Opt<Id> old_child_id;
     if (!inserted) old_child_id = child_i->second;
 
-    child_i->second = _store_recur(objdir, old_child_id, path, block);
+    obj_id = _store_recur(objdir, old_child_id, path, block, replace);
 
+    if (!obj_id) return boost::none;
+
+    child_i->second = *obj_id;
     return tree.store(objdir);
 }
 
 Id store(const fs::path& objdir, Id root_tree, const fs::path& objpath, const Block& block)
 {
-    return _store_recur(objdir, root_tree, path_range(objpath), block);
+    auto id = _store_recur(objdir, root_tree, path_range(objpath), block, true);
+    assert(id);
+    if (!id) throw std::runtime_error("Object not replaced as it should have been");
+    return *id;
+}
+
+Opt<Id> maybe_store(const fs::path& objdir, Id root_tree, const fs::path& objpath, const Block& block)
+{
+    return _store_recur(objdir, root_tree, path_range(objpath), block, false);
 }
 
 inline
