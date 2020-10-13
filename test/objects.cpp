@@ -23,6 +23,7 @@ using cpputils::Data;
 using object::Tree;
 using object::Block;
 using object::Id;
+using boost::variant;
 
 struct Random {
     Random() : gen(std::random_device()()) {}
@@ -32,6 +33,13 @@ struct Random {
         auto ptr = static_cast<char*>(d.data());
         fill(ptr, size);
         return d;
+    }
+
+    std::vector<char> vector(size_t size) {
+        std::vector<char> v(size);
+        auto ptr = static_cast<char*>(v.data());
+        fill(ptr, size);
+        return v;
     }
 
     std::string string(size_t size) {
@@ -61,6 +69,10 @@ auto files_in(const auto& path) {
     return fs::recursive_directory_iterator(path) |
         boost::adaptors::filtered([](auto p) {
                 return fs::is_regular_file(p); });
+}
+
+size_t count_files(const fs::path& path) {
+    return boost::distance(files_in(path));
 }
 
 fs::path choose_test_dir() {
@@ -106,9 +118,85 @@ BOOST_AUTO_TEST_CASE(tree_path) {
     auto new_root_id = object::io::store(objdir, old_root_id, "foo/bar", b1);
 
     BOOST_REQUIRE(!fs::exists(objdir/object::path::from_id(old_root_id)));
-    BOOST_REQUIRE_EQUAL(boost::distance(files_in(objdir)), 3);
+    BOOST_REQUIRE_EQUAL(count_files(objdir), 3);
 
     auto b2 = object::io::load(objdir, new_root_id, "foo/bar");
 
     REQUIRE_HEX_EQUAL(b1.calculate_id(), b2.calculate_id());
+}
+
+//--------------------------------------------------------------------
+Id store(const fs::path& objdir, const vector<char>& v) {
+    Data d(v.size());
+    memcpy(d.data(), v.data(), v.size());
+    Block block(d);
+    return block.store(objdir);
+}
+
+//--------------------------------------------------------------------
+
+BOOST_AUTO_TEST_CASE(tree_remove) {
+    fs::path objdir = choose_test_dir();
+    cout << objdir << "\n";
+
+    Random random;
+
+    // Delete data from root
+    {
+        auto data_id = store(objdir, random.vector(256));
+
+        Tree root;
+        root.insert({"data", data_id});
+
+        auto root_id = object::io::store(objdir, root);
+
+        BOOST_REQUIRE_EQUAL(count_files(objdir), 2);
+
+        auto opt_root_id = object::io::remove(objdir, root_id, "data");
+        BOOST_REQUIRE(opt_root_id);
+        root_id = *opt_root_id;
+
+        root = object::io::load<Tree>(objdir, root_id);
+
+        BOOST_REQUIRE_EQUAL(count_files(objdir), 1);
+        BOOST_REQUIRE_EQUAL(root.size(), 0);
+
+        BOOST_REQUIRE(object::io::remove(objdir, root_id));
+        BOOST_REQUIRE_EQUAL(count_files(objdir), 0);
+    }
+
+    // Delete data from subdir, then delete the subdir
+    {
+        auto data_id = store(objdir, random.vector(256));
+
+        Tree dir;
+        dir.insert({"data", data_id});
+        auto dir_id = object::io::store(objdir, dir);
+
+        Tree root;
+        root.insert({"dir", dir_id});
+        auto root_id = object::io::store(objdir, root);
+
+        BOOST_REQUIRE_EQUAL(count_files(objdir), 3);
+
+        auto opt_root_id = object::io::remove(objdir, root_id, "dir/data");
+        BOOST_REQUIRE(opt_root_id);
+        root_id = *opt_root_id;
+        root = object::io::load<Tree>(objdir, root_id);
+
+        BOOST_REQUIRE_EQUAL(root.size(), 1);
+        BOOST_REQUIRE_EQUAL(count_files(objdir), 2);
+
+        opt_root_id = object::io::remove(objdir, root_id, "dir");
+        BOOST_REQUIRE(opt_root_id);
+        root_id = *opt_root_id;
+        root = object::io::load<Tree>(objdir, root_id);
+
+        BOOST_REQUIRE_EQUAL(root.size(), 0);
+        BOOST_REQUIRE_EQUAL(count_files(objdir), 1);
+
+        BOOST_REQUIRE(object::io::remove(objdir, root_id));
+
+        BOOST_REQUIRE_EQUAL(count_files(objdir), 0);
+    }
 }
