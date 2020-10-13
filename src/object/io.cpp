@@ -97,7 +97,7 @@ bool remove(const fs::path& objdir, const Id& id) {
     sys::error_code ec;
     // XXX: If this is a tree, remove it's children as well.
     fs::remove(objdir/p, ec);
-    return bool(ec);
+    return !ec;
 }
 
 static
