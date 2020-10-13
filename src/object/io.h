@@ -117,6 +117,11 @@ Block load(const fs::path& objdir, const Id& root_id, const fs::path& objpath);
 
 bool remove(const fs::path& objdir, const Id& id);
 
+/*
+ * Return Id of the new root removal took place.
+ */
+Opt<Id> remove(const fs::path& objdir, Id root, const fs::path& path);
+
 // -------------------------------------------------------------------
 
 } // namespace
