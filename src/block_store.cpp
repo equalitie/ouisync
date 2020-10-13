@@ -136,31 +136,28 @@ BlockStore::BlockStore(const fs::path& basedir, unique_ptr<BlockSync> sync) :
     _root_id = std::make_unique<RootId>(std::move(*opt_root_id));
 }
 
-bool BlockStore::tryCreate(const BlockId &blockId, const Data &data) {
-    auto filepath = _rootdir/_get_data_file_path(blockId);
-    if (fs::exists(filepath)) {
-        return false;
+bool BlockStore::tryCreate(const BlockId &block_id, const Data &data) {
+    std::scoped_lock<std::mutex> lock(_mutex);
+
+    auto filepath = _get_data_file_path(block_id);
+
+    object::Block block(data);
+    auto id = object::io::maybe_store(_objdir, _root_id->get(), filepath, block);
+
+    if (id) {
+        _root_id->set(*id);
+        return true;
     }
 
-    store(blockId, data);
-    return true;
+    return false;
 }
 
-bool BlockStore::remove(const BlockId &blockId) {
-    auto filepath = _rootdir/_get_data_file_path(blockId);
-    if (!fs::is_regular_file(filepath)) { // TODO Is this branch necessary?
-        return false;
-    }
-    bool retval = fs::remove(filepath);
-    if (!retval) {
-        cpputils::logging::LOG(cpputils::logging::ERR, "Couldn't find block {} to remove", blockId.ToString());
-        return false;
-    }
-    if (fs::is_empty(filepath.parent_path())) {
-        fs::remove(filepath.parent_path());
-    }
+bool BlockStore::remove(const BlockId &block_id) {
+    std::scoped_lock<std::mutex> lock(_mutex);
 
-    _sync->add_action(BlockSync::ActionRemoveBlock{blockId});
+    auto opt_new_id = object::io::remove(_objdir, _root_id->get(), _get_data_file_path(block_id));
+    if (!opt_new_id) return false;
+    _root_id->set(*opt_new_id);
 
     return true;
 }
