@@ -137,7 +137,6 @@ Id store(const fs::path& objdir, const vector<char>& v) {
 
 BOOST_AUTO_TEST_CASE(tree_remove) {
     fs::path objdir = choose_test_dir();
-    cout << objdir << "\n";
 
     Random random;
 
@@ -198,5 +197,32 @@ BOOST_AUTO_TEST_CASE(tree_remove) {
         BOOST_REQUIRE(object::io::remove(objdir, root_id));
 
         BOOST_REQUIRE_EQUAL(count_files(objdir), 0);
+    }
+
+    // Delete subdir, check data is deleted with it
+    {
+        auto data_id = store(objdir, random.vector(256));
+
+        Tree dir;
+        dir.insert({"data", data_id});
+        auto dir_id = object::io::store(objdir, dir);
+
+        Tree root;
+        root.insert({"dir", dir_id});
+        auto root_id = object::io::store(objdir, root);
+
+        BOOST_REQUIRE_EQUAL(count_files(objdir), 3);
+
+        auto opt_root_id = object::io::remove(objdir, root_id, "dir");
+        BOOST_REQUIRE(opt_root_id);
+        root_id = *opt_root_id;
+        root = object::io::load<Tree>(objdir, root_id);
+
+        BOOST_REQUIRE_EQUAL(root.size(), 0);
+        BOOST_REQUIRE_EQUAL(count_files(objdir), 1);
+
+        object::io::remove(objdir, root_id);
+        BOOST_REQUIRE_EQUAL(count_files(objdir), 0);
+    }
     }
 }

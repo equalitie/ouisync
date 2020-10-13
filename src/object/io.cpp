@@ -23,7 +23,7 @@ Opt<Id> _store_recur(const fs::path& objdir, Opt<Id> old_object_id, PathRange pa
     Opt<Id> obj_id;
 
     auto on_exit = defer([&] {
-            if (old_object_id && obj_id) remove(objdir, *old_object_id);
+            if (old_object_id && obj_id) flat::remove(objdir, *old_object_id);
         });
 
     if (path.empty()) {
@@ -92,12 +92,26 @@ Block load(const fs::path& objdir, const Id& root_id, const fs::path& objpath) {
     return _load_recur(objdir, root_id, path_range(objpath));
 }
 
-bool remove(const fs::path& objdir, const Id& id) {
-    auto p = path::from_id(id);
+bool flat::remove(const fs::path& objdir, const Id& id) {
     sys::error_code ec;
-    // XXX: If this is a tree, remove it's children as well.
-    fs::remove(objdir/p, ec);
+    fs::remove(objdir/path::from_id(id), ec);
     return !ec;
+}
+
+bool remove(const fs::path& objdir, const Id& id) {
+    auto obj = load<Tree, JustTag<Block>>(objdir, id);
+
+    apply(obj,
+            [&](const Tree& tree) {
+                for (auto& [name, id] : tree) {
+                    (void)name; // https://stackoverflow.com/a/40714311/273348
+                    remove(objdir, id);
+                }
+            },
+            [&](const JustTag<Block>&) {
+            });
+
+    return flat::remove(objdir, id);
 }
 
 static
@@ -126,7 +140,7 @@ Opt<Id> _remove_recur(const fs::path& objdir, Id tree_id, PathRange path)
         i->second = *opt_new_id;
     }
 
-    remove(objdir, tree_id);
+    flat::remove(objdir, tree_id);
     return tree->store(objdir);
 }
 

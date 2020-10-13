@@ -115,6 +115,16 @@ Block load(const fs::path& objdir, const Id& root_id, const fs::path& objpath);
 
 // --- remove --------------------------------------------------------
 
+namespace flat {
+    /*
+     * Remove a single object. Keep children if it's a Tree.
+     */
+    bool remove(const fs::path& objdir, const Id& id);
+}
+
+/*
+ * Remove an object. Also remove it's children if it's a Tree.
+ */
 bool remove(const fs::path& objdir, const Id& id);
 
 /*
