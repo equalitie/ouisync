@@ -76,6 +76,7 @@ O load(const fs::path& path) {
     return result;
 }
 
+//------------------------------------
 template<class O>
 inline
 O load(const fs::path& objdir, const Id& id) {
@@ -94,6 +95,22 @@ variant<O0, O1, Os...> load(const fs::path& path) {
     return load<variant<O0, O1, Os...>>(path);
 }
 
+//------------------------------------
+template<class O>
+inline
+Opt<O> maybe_load(const fs::path& objdir, const Id& id) {
+    auto p = objdir / path::from_id(id);
+    if (!fs::exists(p)) return boost::none;
+    return load<O>(p);
+}
+
+template<class O0, class O1, class ... Os> // Two or more
+inline
+Opt<variant<O0, O1, Os...>> maybe_load(const fs::path& objdir, const Id& id) {
+    return maybe_load<variant<O0, O1, Os...>>(objdir, id);
+}
+
+//------------------------------------
 Block load(const fs::path& objdir, const Id& root_id, const fs::path& objpath);
 
 // --- remove --------------------------------------------------------
