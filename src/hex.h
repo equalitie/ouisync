@@ -14,7 +14,7 @@ namespace {
     template<> struct is_byte_type<unsigned char> { static const bool value = true; };
 }
 
-template<class OutputT, size_t N, class InputT> std::array<OutputT, 2*N> to_hex(const std::array<InputT, N>& as)
+template<class OutputT, size_t N, class InputT> std::array<OutputT, 2*N> to_hex(const std::array<InputT, N>& as) noexcept
 {
     static_assert(is_byte_type<InputT>::value, "Not a bytestring type");
 
@@ -33,7 +33,7 @@ template<class OutputT, size_t N, class InputT> std::array<OutputT, 2*N> to_hex(
 
 template<class OutputT, size_t InputSize, class InputT>
 inline
-std::array<OutputT, InputSize*2> to_hex(const InputT* input)
+std::array<OutputT, InputSize*2> to_hex(const InputT* input) noexcept
 {
     static_assert(is_byte_type<InputT>::value, "Not a bytestring type");
 
@@ -51,7 +51,7 @@ std::array<OutputT, InputSize*2> to_hex(const InputT* input)
 }
 
 inline
-std::string to_hex(boost::string_view input)
+std::string to_hex(boost::string_view input) noexcept
 {
     std::string output;
     output.reserve(input.size() * 2);
@@ -69,7 +69,7 @@ std::string to_hex(boost::string_view input)
 }
 
 inline
-boost::optional<unsigned char> from_hex(char c)
+boost::optional<unsigned char> from_hex(char c) noexcept
 {
     if ('0' <= c && c <= '9') {
         return c - '0';
@@ -81,7 +81,7 @@ boost::optional<unsigned char> from_hex(char c)
 }
 
 inline
-boost::optional<unsigned char> from_hex(char c1, char c2)
+boost::optional<unsigned char> from_hex(char c1, char c2) noexcept
 {
     auto on1 = from_hex(c1);
     if (!on1) return boost::none;
@@ -90,7 +90,7 @@ boost::optional<unsigned char> from_hex(char c1, char c2)
     return *on1*16+*on2;
 }
 
-inline boost::optional<std::string> from_hex(boost::string_view hex)
+inline boost::optional<std::string> from_hex(boost::string_view hex) noexcept
 {
     std::string output((hex.size() >> 1) + (hex.size() & 1), '\0');
 
@@ -110,7 +110,7 @@ inline boost::optional<std::string> from_hex(boost::string_view hex)
 }
 
 template<class OutputT, size_t InputSize>
-inline boost::optional<std::array<OutputT, InputSize/2>> from_hex(boost::string_view hex)
+inline boost::optional<std::array<OutputT, InputSize/2>> from_hex(boost::string_view hex) noexcept
 {
     static_assert(InputSize % 2 == 0, "");
 
@@ -134,7 +134,7 @@ inline boost::optional<std::array<OutputT, InputSize/2>> from_hex(boost::string_
 }
 
 template<class OutputT, class InputT, size_t N>
-inline boost::optional<std::array<OutputT, N/2>> from_hex(const std::array<InputT, N>& hex)
+inline boost::optional<std::array<OutputT, N/2>> from_hex(const std::array<InputT, N>& hex) noexcept
 {
     static_assert(is_byte_type<InputT>::value, "Not a bytestring type");
     // TODO: This can be generalized to odd number as well
