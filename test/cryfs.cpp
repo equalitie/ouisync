@@ -1,3 +1,6 @@
+#define BOOST_TEST_MODULE objects
+#include <boost/test/included/unit_test.hpp>
+
 #include <boost/filesystem.hpp>
 #include <iostream>
 
@@ -81,9 +84,16 @@ std::vector<char> read(Ref<OpenFile>& file, size_t size) {
     return v;
 }
 
-int main() {
+namespace std {
+    std::ostream& operator<<(std::ostream& os, const std::vector<char>& v) {
+        for (auto c : v) os << int(c);
+        return os;
+    }
+}
+
+BOOST_AUTO_TEST_CASE(store_and_restore) {
     fs::path testdir = fs::unique_path("/tmp/ouisync/test-cryfs-%%%%-%%%%-%%%%-%%%%");
-    cout << "Testdir: " << testdir << "\n";
+    //cout << "Testdir: " << testdir << "\n";
 
     {
         auto cry_device = ouisync::create_cry_device(testdir, true);
@@ -99,9 +109,6 @@ int main() {
         TestDevice device{move(cry_device)};
         auto f = device.open_file("/a/b");
         auto v = read(f, 3);
-        assert(v == std::vector<char>({1,2,3}));
+        BOOST_REQUIRE_EQUAL(v, decltype(v)({1,2,3}));
     }
-
-    //cout << "Deleting " << testdir << "\n";
-    //fs::remove_all(testdir);
 }
