@@ -73,14 +73,14 @@ fs::path _get_data_file_path(const BlockId &block_id) {
 class ouisync::RootId {
 public:
     static Opt<RootId> load(const fs::path& path) {
-        fs::fstream file(path, fs::fstream::binary);
+        fs::fstream file(path, file.binary | file.in);
         if (!file.is_open()) return boost::none;
 
         object::Id root_id;
 
         boost::archive::text_iarchive oa(file);
         object::tagged::Load<object::Id> load{root_id};
-        oa & load;
+        oa >> load;
 
         return RootId(path, root_id);
     }
@@ -98,7 +98,7 @@ public:
             throw std::runtime_error("Failed to open root hash file");
         boost::archive::text_oarchive oa(file);
         object::tagged::Save<object::Id> save{root_id};
-        oa & save;
+        oa << save;
         _root_id = root_id;
     }
 
@@ -117,10 +117,8 @@ private:
 };
 
 BlockStore::BlockStore(const fs::path& basedir) :
-    _rootdir(basedir / "blocks"),
     _objdir(basedir / "objects")
 {
-    fs::create_directories(_rootdir);
     fs::create_directories(_objdir);
 
     auto root_id_path = basedir / "root";
@@ -160,13 +158,13 @@ bool BlockStore::remove(const BlockId &block_id) {
     return true;
 }
 
-optional<Data> BlockStore::load(const BlockId &blockId) const {
+optional<Data> BlockStore::load(const BlockId &block_id) const {
     std::scoped_lock<std::mutex> lock(const_cast<std::mutex&>(_mutex));
     try {
-        auto path = _get_data_file_path(blockId);
+        auto path = _get_data_file_path(block_id);
         auto block = object::io::load(_objdir, _root_id->get(), path);
         return {move(*block.data())};
-    } catch (...) {
+    } catch (const std::exception&) {
         // XXX: need to distinguis between "not found" and any other error.
         // I think the former should result in boost::none while the latter
         // should rethrow. But this needs to be checked as well.
@@ -198,10 +196,6 @@ void BlockStore::store(const BlockId &block_id, const Data &data) {
     object::Block block(data);
     auto id = object::io::store(_objdir, _root_id->get(), filepath, block);
     _root_id->set(id);
-
-    //std::cerr << "Root: " << to_hex<char>(id) << "\n";
-    //list(_objdir, _root_id->get());
-    //std::cerr << "\n\n\n";
 }
 
 namespace {
@@ -245,7 +239,7 @@ uint64_t BlockStore::numBlocks() const {
 }
 
 uint64_t BlockStore::estimateNumFreeBytes() const {
-	return cpputils::free_disk_space_in_bytes(_rootdir);
+	return cpputils::free_disk_space_in_bytes(_objdir);
 }
 
 uint64_t BlockStore::blockSizeFromPhysicalBlockSize(uint64_t blockSize) const {
