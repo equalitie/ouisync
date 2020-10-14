@@ -2,7 +2,6 @@
 #include <iostream>
 
 #include <block_store.h>
-#include <block_sync.h>
 #include <create_cry_device.h>
 #include <version_vector.h>
 
@@ -56,8 +55,7 @@ int main() {
     cout << "Testdir: " << testdir << "\n";
 
     {
-        auto sync = make_unique<BlockSync>();
-        auto cry_device = ouisync::create_cry_device(testdir, move(sync), true);
+        auto cry_device = ouisync::create_cry_device(testdir, true);
         TestDevice device{move(cry_device)};
 
         device.mkdir("/a/b");

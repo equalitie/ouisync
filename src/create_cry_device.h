@@ -10,8 +10,6 @@ namespace fspp { class Device; }
 
 namespace ouisync {
 
-class BlockSync;
-
-std::unique_ptr<fspp::Device> create_cry_device(const fs::path& root, std::unique_ptr<BlockSync>, bool test=false);
+std::unique_ptr<fspp::Device> create_cry_device(const fs::path& root, bool test=false);
 
 } // namespace

@@ -1,6 +1,5 @@
 #include <create_cry_device.h>
 #include <block_store.h>
-#include <block_sync.h>
 
 #include <cryfs/impl/localstate/LocalStateDir.h>
 #include <cryfs/impl/config/CryConfigLoader.h>
@@ -89,14 +88,14 @@ loadOrCreateConfig(const fs::path& config_file, const cryfs::LocalStateDir& stat
 namespace ouisync {
 
 unique_ptr<fspp::Device>
-create_cry_device(const fs::path& rootdir, unique_ptr<BlockSync> sync, bool test)
+create_cry_device(const fs::path& rootdir, bool test)
 {
     fs::path basedir(rootdir / "basedir");
     fs::create_directories(basedir);
     fs::path config_file = basedir / "cryfs.config";
     cryfs::LocalStateDir statedir(rootdir / "statedir");
 
-    auto blockStore = cpputils::make_unique_ref<ouisync::BlockStore>(basedir, move(sync));
+    auto blockStore = cpputils::make_unique_ref<ouisync::BlockStore>(basedir);
 
     cryfs::CryConfigLoader::ConfigLoadResult config = loadOrCreateConfig(config_file, statedir, test);
 

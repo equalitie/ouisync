@@ -13,7 +13,6 @@ namespace blockstore {
 }
 
 namespace ouisync {
-    class BlockSync;
     class RootId;
 }
 
@@ -24,7 +23,7 @@ public:
     using BlockId = blockstore::BlockId;
 
 public:
-    BlockStore(const fs::path& basedir, std::unique_ptr<BlockSync> sync);
+    BlockStore(const fs::path& basedir);
 
     WARN_UNUSED_RESULT
     bool tryCreate(const BlockId &blockId, const cpputils::Data &data) override;
@@ -52,7 +51,6 @@ private:
     fs::path _rootdir;
     fs::path _objdir;
     std::unique_ptr<RootId> _root_id;
-    std::unique_ptr<BlockSync> _sync;
     Uuid _branch_id;
     std::mutex _mutex;
 };

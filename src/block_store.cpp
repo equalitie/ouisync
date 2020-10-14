@@ -1,5 +1,4 @@
 #include "block_store.h"
-#include "block_sync.h"
 #include "array_io.h"
 #include "hex.h"
 
@@ -117,10 +116,9 @@ private:
     object::Id _root_id;
 };
 
-BlockStore::BlockStore(const fs::path& basedir, unique_ptr<BlockSync> sync) :
+BlockStore::BlockStore(const fs::path& basedir) :
     _rootdir(basedir / "blocks"),
-    _objdir(basedir / "objects"),
-    _sync(move(sync))
+    _objdir(basedir / "objects")
 {
     fs::create_directories(_rootdir);
     fs::create_directories(_objdir);
@@ -204,8 +202,6 @@ void BlockStore::store(const BlockId &block_id, const Data &data) {
     //std::cerr << "Root: " << to_hex<char>(id) << "\n";
     //list(_objdir, _root_id->get());
     //std::cerr << "\n\n\n";
-
-    //_sync->add_action(BlockSync::ActionModifyBlock{block_id, digest});
 }
 
 namespace {
