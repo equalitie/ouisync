@@ -65,14 +65,27 @@ struct Random {
 #define REQUIRE_HEX_EQUAL(a, b) \
     BOOST_REQUIRE_EQUAL(to_hex<char>(a), to_hex<char>(b));
 
+bool is_refcount(const auto& path) {
+    return path.extension() == ".rc";
+}
+
 auto files_in(const auto& path) {
     return fs::recursive_directory_iterator(path) |
         boost::adaptors::filtered([](auto p) {
                 return fs::is_regular_file(p); });
 }
 
+auto objects_in(const auto& path) {
+    return files_in(path) |
+        boost::adaptors::filtered([](auto p) { return !is_refcount(p.path()); });
+}
+
 size_t count_files(const fs::path& path) {
     return boost::distance(files_in(path));
+}
+
+size_t count_objects(const fs::path& path) {
+    return boost::distance(objects_in(path));
 }
 
 fs::path choose_test_dir() {
@@ -118,7 +131,7 @@ BOOST_AUTO_TEST_CASE(tree_path) {
     auto new_root_id = object::io::store(objdir, old_root_id, "foo/bar", b1);
 
     BOOST_REQUIRE(!fs::exists(objdir/object::path::from_id(old_root_id)));
-    BOOST_REQUIRE_EQUAL(count_files(objdir), 3);
+    BOOST_REQUIRE_EQUAL(count_objects(objdir), 3);
 
     auto b2 = object::io::load(objdir, new_root_id, "foo/bar");
 
@@ -131,6 +144,11 @@ Id store(const fs::path& objdir, const vector<char>& v) {
     memcpy(d.data(), v.data(), v.size());
     Block block(d);
     return block.store(objdir);
+}
+
+Id store(const fs::path& objdir, const Id& root, const fs::path path, const Data& d) {
+    Block block(d);
+    return object::io::store(objdir, root, path, d);
 }
 
 //--------------------------------------------------------------------
@@ -149,7 +167,7 @@ BOOST_AUTO_TEST_CASE(tree_remove) {
 
         auto root_id = object::io::store(objdir, root);
 
-        BOOST_REQUIRE_EQUAL(count_files(objdir), 2);
+        BOOST_REQUIRE_EQUAL(count_objects(objdir), 2);
 
         auto opt_root_id = object::io::remove(objdir, root_id, "data");
         BOOST_REQUIRE(opt_root_id);
@@ -157,11 +175,11 @@ BOOST_AUTO_TEST_CASE(tree_remove) {
 
         root = object::io::load<Tree>(objdir, root_id);
 
-        BOOST_REQUIRE_EQUAL(count_files(objdir), 1);
+        BOOST_REQUIRE_EQUAL(count_objects(objdir), 1);
         BOOST_REQUIRE_EQUAL(root.size(), 0);
 
         BOOST_REQUIRE(object::io::remove(objdir, root_id));
-        BOOST_REQUIRE_EQUAL(count_files(objdir), 0);
+        BOOST_REQUIRE_EQUAL(count_objects(objdir), 0);
     }
 
     // Delete data from subdir, then delete the subdir
@@ -176,7 +194,7 @@ BOOST_AUTO_TEST_CASE(tree_remove) {
         root.insert({"dir", dir_id});
         auto root_id = object::io::store(objdir, root);
 
-        BOOST_REQUIRE_EQUAL(count_files(objdir), 3);
+        BOOST_REQUIRE_EQUAL(count_objects(objdir), 3);
 
         auto opt_root_id = object::io::remove(objdir, root_id, "dir/data");
         BOOST_REQUIRE(opt_root_id);
@@ -184,7 +202,7 @@ BOOST_AUTO_TEST_CASE(tree_remove) {
         root = object::io::load<Tree>(objdir, root_id);
 
         BOOST_REQUIRE_EQUAL(root.size(), 1);
-        BOOST_REQUIRE_EQUAL(count_files(objdir), 2);
+        BOOST_REQUIRE_EQUAL(count_objects(objdir), 2);
 
         opt_root_id = object::io::remove(objdir, root_id, "dir");
         BOOST_REQUIRE(opt_root_id);
@@ -192,11 +210,11 @@ BOOST_AUTO_TEST_CASE(tree_remove) {
         root = object::io::load<Tree>(objdir, root_id);
 
         BOOST_REQUIRE_EQUAL(root.size(), 0);
-        BOOST_REQUIRE_EQUAL(count_files(objdir), 1);
+        BOOST_REQUIRE_EQUAL(count_objects(objdir), 1);
 
         BOOST_REQUIRE(object::io::remove(objdir, root_id));
 
-        BOOST_REQUIRE_EQUAL(count_files(objdir), 0);
+        BOOST_REQUIRE_EQUAL(count_objects(objdir), 0);
     }
 
     // Delete subdir, check data is deleted with it
@@ -211,7 +229,7 @@ BOOST_AUTO_TEST_CASE(tree_remove) {
         root.insert({"dir", dir_id});
         auto root_id = object::io::store(objdir, root);
 
-        BOOST_REQUIRE_EQUAL(count_files(objdir), 3);
+        BOOST_REQUIRE_EQUAL(count_objects(objdir), 3);
 
         auto opt_root_id = object::io::remove(objdir, root_id, "dir");
         BOOST_REQUIRE(opt_root_id);
@@ -219,10 +237,48 @@ BOOST_AUTO_TEST_CASE(tree_remove) {
         root = object::io::load<Tree>(objdir, root_id);
 
         BOOST_REQUIRE_EQUAL(root.size(), 0);
-        BOOST_REQUIRE_EQUAL(count_files(objdir), 1);
+        BOOST_REQUIRE_EQUAL(count_objects(objdir), 1);
 
         object::io::remove(objdir, root_id);
-        BOOST_REQUIRE_EQUAL(count_files(objdir), 0);
+        BOOST_REQUIRE_EQUAL(count_objects(objdir), 0);
     }
+
+    // Delete data from one root, preserve (using refcount) in the other
+    {
+        Data data  = random.data(256);
+
+        // These are to make sure the two roots are different objects.
+        Data data1 = random.data(256);
+        Data data2 = random.data(256);
+
+        Id root1_id, root2_id;
+
+        root1_id = object::io::store(objdir, Tree{});
+        root1_id = store(objdir, root1_id, "data", data);
+        root1_id = store(objdir, root1_id, "data1", data1);
+
+        root2_id = object::io::store(objdir, Tree{});
+        root2_id = store(objdir, root2_id, "data", data);
+        root2_id = store(objdir, root2_id, "data2", data2);
+
+        BOOST_REQUIRE_EQUAL(count_objects(objdir), 2 /* roots */ + 3 /* data */);
+
+        auto opt_root1_id = object::io::remove(objdir, root1_id, "data");
+        BOOST_REQUIRE(opt_root1_id);
+        root1_id = *opt_root1_id;
+        Tree root1 = object::io::load<Tree>(objdir, root1_id);
+
+        BOOST_REQUIRE_EQUAL(root1.size(), 1);
+        // Since root2 still has "data", we expect it to be not deleted.
+        BOOST_REQUIRE_EQUAL(count_objects(objdir), 2 /* roots */ + 3 /* data */);
+
+        auto opt_root2_id = object::io::remove(objdir, root2_id, "data");
+        BOOST_REQUIRE(opt_root2_id);
+        root2_id = *opt_root2_id;
+        Tree root2 = object::io::load<Tree>(objdir, root2_id);
+
+        BOOST_REQUIRE_EQUAL(root2.size(), 1);
+        // Since root2 still has "data", we expect it to be not deleted.
+        BOOST_REQUIRE_EQUAL(count_objects(objdir), 2 /* roots */ + 2 /* data */);
     }
 }

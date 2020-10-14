@@ -11,6 +11,10 @@
 
 namespace ouisync::object::io {
 
+using RefCount = uint32_t;
+
+RefCount refcount(const fs::path& objdir, const Id&);
+
 // --- store ---------------------------------------------------------
 
 namespace detail {
