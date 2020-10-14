@@ -8,7 +8,7 @@
 
 namespace ouisync::object::path {
 
-fs::path from_id(const Id&);
-Opt<Id>  to_id(const fs::path&);
+fs::path from_id(const Id&) noexcept;
+Opt<Id>  to_id(const fs::path&) noexcept;
 
 } // namespaces
