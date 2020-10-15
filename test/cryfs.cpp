@@ -65,7 +65,8 @@ struct TestDevice {
         return (*file)->open(fspp::openflags_t::RDONLY());
     }
 
-    bool is_in(const auto& what, const auto& where) const {
+    template<class T, class Ts>
+    bool is_in(const T& what, const Ts& where) const {
         for (auto& w : where) if (w.name == what) return true;
         return false;
     };

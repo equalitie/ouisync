@@ -35,7 +35,7 @@ public:
     boost::optional<cpputils::Data> load(const BlockId &blockId) const override;
 
     // Store the block with the given blockId. If it doesn't exist, it is created.
-    void store(const BlockId &blockId, const cpputils::Data &data);
+    void store(const BlockId &blockId, const cpputils::Data &data) override;
 
     uint64_t numBlocks() const override;
 
@@ -51,7 +51,6 @@ private:
     fs::path _rootdir;
     fs::path _objdir;
     std::unique_ptr<RootId> _root_id;
-    Uuid _branch_id;
     std::mutex _mutex;
 };
 

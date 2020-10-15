@@ -65,17 +65,17 @@ struct Random {
 #define REQUIRE_HEX_EQUAL(a, b) \
     BOOST_REQUIRE_EQUAL(to_hex<char>(a), to_hex<char>(b));
 
-bool is_refcount(const auto& path) {
+bool is_refcount(const fs::path& path) {
     return path.extension() == ".rc";
 }
 
-auto files_in(const auto& path) {
+auto files_in(const fs::path& path) {
     return fs::recursive_directory_iterator(path) |
         boost::adaptors::filtered([](auto p) {
                 return fs::is_regular_file(p); });
 }
 
-auto objects_in(const auto& path) {
+auto objects_in(const fs::path& path) {
     return files_in(path) |
         boost::adaptors::filtered([](auto p) { return !is_refcount(p.path()); });
 }
