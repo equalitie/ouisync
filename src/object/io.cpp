@@ -1,6 +1,7 @@
 #include "io.h"
 #include "block.h"
 #include "tree.h"
+#include "refcount.h"
 #include "../defer.h"
 
 #include "../hex.h"
@@ -26,76 +27,11 @@ namespace {
         return os << path;
     }
 
-    fs::path refcount_path(const Id& id) noexcept {
-        return path::from_id(id).concat(".rc");
-    }
-
     std::string debug(const fs::path& p) noexcept {
         fs::ifstream t(p);
         return std::string((std::istreambuf_iterator<char>(t)),
                             std::istreambuf_iterator<char>());
     }
-
-    uint32_t increment_refcount(const fs::path& objdir, const Id& id)
-    {
-        auto path = objdir / refcount_path(id);
-        fs::fstream f(path, f.binary | f.in | f.out);
-        if (!f.is_open()) {
-            // Does not exist, create a new one
-            f.open(path, f.binary | f.out | f.trunc);
-            if (!f.is_open()) {
-                throw std::runtime_error("Failed to increment refcount");
-            }
-            f << 1 << '\n';
-            return 1;
-        }
-        uint32_t rc;
-        f >> rc;
-        ++rc;
-        f.seekp(0);
-        f << rc << '\n';
-        return rc;
-    }
-
-    uint32_t decrement_refcount(const fs::path& objdir, const Id& id)
-    {
-        auto path = objdir / refcount_path(id);
-        fs::fstream f(path, f.binary | f.in | f.out);
-        if (!f.is_open()) {
-            if (!fs::exists(path)) {
-                // No one held this object
-                return 0;
-            }
-            throw std::runtime_error("Failed to decrement refcount");
-        }
-        uint32_t rc;
-        f >> rc;
-        if (rc == 0) throw std::runtime_error("Decrementing zero refcount");
-        --rc;
-        if (rc == 0) {
-            f.close();
-            fs::remove(path);
-            return 0;
-        }
-        f.seekp(0);
-        f << rc;
-        return rc;
-    }
-}
-
-RefCount refcount(const fs::path& objdir, const Id& id) {
-    auto path = objdir / refcount_path(id);
-    fs::fstream f(path, f.binary | f.in);
-    if (!f.is_open()) {
-        if (!fs::exists(path)) {
-            // No one is holding this object
-            return 0;
-        }
-        throw std::runtime_error("Failed to decrement refcount");
-    }
-    uint32_t rc;
-    f >> rc;
-    return rc;
 }
 
 static
@@ -131,7 +67,7 @@ Opt<Id> _store_recur(const fs::path& objdir, Opt<Id> old_object_id, PathRange pa
 
     if (!obj_id) return boost::none;
 
-    increment_refcount(objdir, *obj_id);
+    refcount::increment(objdir, *obj_id);
     child_i->second = *obj_id;
     return tree.store(objdir);
 }
@@ -175,7 +111,7 @@ Block load(const fs::path& objdir, const Id& root_id, const fs::path& objpath) {
 }
 
 bool flat::remove(const fs::path& objdir, const Id& id) {
-    auto rc = decrement_refcount(objdir, id);
+    auto rc = refcount::decrement(objdir, id);
     if (rc > 0) return true;
     sys::error_code ec;
     fs::remove(objdir/path::from_id(id), ec);
