@@ -9,11 +9,9 @@
 #include <boost/archive/text_oarchive.hpp>
 #include <boost/serialization/map.hpp>
 #include <boost/serialization/array.hpp>
-#include <boost/uuid/uuid_io.hpp>
-#include <boost/uuid/uuid_serialize.hpp>
-#include <boost/uuid/uuid_generators.hpp>
 
 #include <cpp-utils/system/diskspace.h>
+
 #include "object/block.h"
 #include "object/tree.h"
 #include "object/io.h"
@@ -74,11 +72,11 @@ fs::path _get_data_file_path(const BlockId &block_id) {
 
 class ouisync::Root {
 public:
-    static Root load_or_create(const fs::path& rootdir, const fs::path& objdir, Uuid user_id) {
+    static Root load_or_create(const fs::path& rootdir, const fs::path& objdir, UserId user_id) {
         object::Id root_id;
         VersionVector clock;
 
-        fs::path path = rootdir / to_string(user_id);
+        fs::path path = rootdir / user_id.to_string();
 
         fs::fstream file(path, file.binary | file.in);
 
@@ -121,35 +119,15 @@ public:
         }
     }
 
-    Root(const fs::path& file_path, const Uuid& user_id, const object::Id& root_id, VersionVector clock) :
+    Root(const fs::path& file_path, const UserId& user_id, const object::Id& root_id, VersionVector clock) :
         _file_path(file_path), _user_id(user_id), _root_id(root_id), _clock(std::move(clock)) {}
 
 private:
     fs::path _file_path;
-    Uuid _user_id;
+    UserId _user_id;
     object::Id _root_id;
     VersionVector _clock;
 };
-
-static
-Uuid _load_or_create_user_id(const fs::path& path) {
-    fs::fstream f(path, f.binary | f.in);
-    if (!f.is_open()) {
-        if (fs::exists(path)) {
-            throw std::runtime_error("Failed to open user id file");
-        }
-        f.open(path, f.binary | f.out | f.trunc);
-        if (!f.is_open()) {
-            throw std::runtime_error("Failed to open file for storing user id");
-        }
-        Uuid new_id = boost::uuids::random_generator()();
-        f << new_id << "\n";
-        return new_id;
-    }
-    Uuid result;
-    f >> result;
-    return result;
-}
 
 BlockStore::BlockStore(const fs::path& basedir) :
     _rootdir(basedir / "roots"),
@@ -158,7 +136,7 @@ BlockStore::BlockStore(const fs::path& basedir) :
     fs::create_directories(_rootdir);
     fs::create_directories(_objdir);
 
-    _user_id = _load_or_create_user_id(basedir / "user_id");
+    _user_id = UserId::load_or_create(basedir / "user_id");
     _root = std::make_unique<Root>(Root::load_or_create(_rootdir, _objdir, _user_id));
 }
 

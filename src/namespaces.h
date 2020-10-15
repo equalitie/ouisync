@@ -9,7 +9,6 @@ namespace boost {
     namespace filesystem {
         class path;
     }
-    namespace uuids { struct uuid; }
     namespace system {
         class error_code;
     }
@@ -21,7 +20,6 @@ namespace fs = boost::filesystem;
 namespace sys = boost::system;
 template<class T> using Opt = boost::optional<T>;
 using boost::string_view;
-using Uuid = boost::uuids::uuid;
 using boost::variant;
 
 } // namespace

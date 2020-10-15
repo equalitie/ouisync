@@ -1,19 +1,16 @@
 #pragma once
 
-#include <boost/uuid/uuid.hpp>
+#include "user_id.h"
 #include <map>
 
 namespace ouisync {
 
 class VersionVector {
-public:
-    using Uuid = boost::uuids::uuid;
-
 private:
-    using Map = std::map<Uuid, uint64_t>;
+    using Map = std::map<UserId, uint64_t>;
 
 public:
-    void increment(const Uuid& id)
+    void increment(const UserId& id)
     {
         auto iter = _vv.insert(std::make_pair(id, 0U)).first;
         ++value_of(iter);
@@ -99,7 +96,7 @@ public:
 
 private:
     static
-    const Uuid& id_of(const Map::const_iterator& i)
+    const UserId& id_of(const Map::const_iterator& i)
     {
         return i->first;
     }
