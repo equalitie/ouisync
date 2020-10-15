@@ -78,18 +78,8 @@ BlockStore::BlockStore(const fs::path& basedir) :
 
 bool BlockStore::tryCreate(const BlockId &block_id, const Data &data) {
     std::scoped_lock<std::mutex> lock(_mutex);
-
-    auto filepath = _get_data_file_path(block_id);
-
-    object::Block block(data);
-    auto id = object::io::maybe_store(_objdir, _branch->root_object_id(), filepath, block);
-
-    if (id) {
-        _branch->root_object_id(*id);
-        return true;
-    }
-
-    return false;
+    auto path = _get_data_file_path(block_id);
+    return _branch->maybe_store(path, data);
 }
 
 bool BlockStore::remove(const BlockId &block_id) {

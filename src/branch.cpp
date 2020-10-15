@@ -1,6 +1,8 @@
 #include "branch.h"
 #include "object/tree.h"
 #include "object/tagged.h"
+#include "object/block.h"
+#include "object/io.h"
 
 #include <boost/filesystem.hpp>
 #include <boost/archive/text_oarchive.hpp>
@@ -21,7 +23,7 @@ Branch Branch::load_or_create(const fs::path& rootdir, const fs::path& objdir, U
     if (!file.is_open()) {
         object::Tree root_obj;
         root_id = root_obj.store(objdir);
-        Branch branch{path, user_id, root_id, std::move(clock)};
+        Branch branch(path, objdir, user_id, root_id, std::move(clock));
         branch.store();
         return branch;
     }
@@ -31,7 +33,16 @@ Branch Branch::load_or_create(const fs::path& rootdir, const fs::path& objdir, U
     oa >> load;
     oa >> clock;
 
-    return Branch{path, user_id, root_id, move(clock)};
+    return Branch{path, objdir, user_id, root_id, move(clock)};
+}
+
+bool Branch::maybe_store(const fs::path& path, const Data& data)
+{
+    object::Block block(data);
+    auto oid = object::io::maybe_store(_objdir, root_object_id(), path, block);
+    if (!oid) return false;
+    root_object_id(*oid);
+    return true;
 }
 
 void Branch::store() {
@@ -53,6 +64,12 @@ void Branch::root_object_id(const object::Id& id) {
     }
 }
 
-Branch::Branch(const fs::path& file_path, const UserId& user_id, const object::Id& root_id, VersionVector clock) :
-    _file_path(file_path), _user_id(user_id), _root_id(root_id), _clock(std::move(clock)) {}
+Branch::Branch(const fs::path& file_path, const fs::path& objdir,
+        const UserId& user_id, const object::Id& root_id, VersionVector clock) :
+    _file_path(file_path),
+    _objdir(objdir),
+    _user_id(user_id),
+    _root_id(root_id),
+    _clock(std::move(clock))
+{}
 
