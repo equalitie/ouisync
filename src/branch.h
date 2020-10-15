@@ -32,6 +32,8 @@ public:
 
     void store(const fs::path&, const Data&);
 
+    Opt<Data> maybe_load(const fs::path&) const;
+
     bool remove(const fs::path&);
 
 private:

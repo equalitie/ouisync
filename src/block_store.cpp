@@ -89,16 +89,7 @@ bool BlockStore::remove(const BlockId &block_id) {
 
 optional<Data> BlockStore::load(const BlockId &block_id) const {
     std::scoped_lock<std::mutex> lock(const_cast<std::mutex&>(_mutex));
-    try {
-        auto path = _get_data_file_path(block_id);
-        auto block = object::io::load(_objdir, _branch->root_object_id(), path);
-        return {move(*block.data())};
-    } catch (const std::exception&) {
-        // XXX: need to distinguis between "not found" and any other error.
-        // I think the former should result in boost::none while the latter
-        // should rethrow. But this needs to be checked as well.
-        return boost::none;
-    }
+    return _branch->maybe_load(_get_data_file_path(block_id));
 }
 
 void list(const fs::path& objdir, object::Id id, std::string pad = "") {

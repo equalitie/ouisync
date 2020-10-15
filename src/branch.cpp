@@ -52,6 +52,19 @@ void Branch::store(const fs::path& path, const Data& data)
     root_object_id(id);
 }
 
+Opt<Branch::Data> Branch::maybe_load(const fs::path& path) const
+{
+    try {
+        auto block = object::io::load(_objdir, root_object_id(), path);
+        return {move(*block.data())};
+    } catch (const std::exception&) {
+        // XXX: need to distinguis between "not found" and any other error.
+        // I think the former should result in boost::none while the latter
+        // should rethrow. But this needs to be checked as well.
+        return boost::none;
+    }
+}
+
 bool Branch::remove(const fs::path& path)
 {
     auto oid = object::io::remove(_objdir, root_object_id(), path);
