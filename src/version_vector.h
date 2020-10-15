@@ -92,6 +92,11 @@ public:
         return true;
     }
 
+    template<class Archive>
+    void serialize(Archive& ar, unsigned version) {
+        ar & _vv;
+    }
+
 private:
     static
     const Uuid& id_of(const Map::const_iterator& i)
