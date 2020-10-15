@@ -92,22 +92,6 @@ optional<Data> BlockStore::load(const BlockId &block_id) const {
     return _branch->maybe_load(_get_data_file_path(block_id));
 }
 
-void list(const fs::path& objdir, object::Id id, std::string pad = "") {
-    auto obj = object::io::load<object::Tree, object::Block>(objdir, id);
-
-    apply(obj,
-            [&] (const object::Tree& tree) {
-                std::cerr << pad << tree << "\n";
-                pad += "  ";
-                for (auto p : tree) {
-                    list(objdir, p.second, pad);
-                }
-            },
-            [&] (const auto& o) {
-                std::cerr << pad << o << "\n";
-            });
-}
-
 void BlockStore::store(const BlockId &block_id, const Data &data) {
     std::scoped_lock<std::mutex> lock(_mutex);
     _branch->store(_get_data_file_path(block_id), data);
