@@ -13,7 +13,7 @@ namespace blockstore {
 }
 
 namespace ouisync {
-    class RootId;
+    class Root;
 }
 
 namespace ouisync {
@@ -50,7 +50,8 @@ public:
 private:
     fs::path _rootdir;
     fs::path _objdir;
-    std::unique_ptr<RootId> _root_id;
+    std::unique_ptr<Root> _root;
+    Uuid _user_id;
     std::mutex _mutex;
 };
 

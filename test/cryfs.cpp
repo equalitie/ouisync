@@ -94,7 +94,7 @@ namespace std {
 
 BOOST_AUTO_TEST_CASE(store_and_restore) {
     fs::path testdir = fs::unique_path("/tmp/ouisync/test-cryfs-%%%%-%%%%-%%%%-%%%%");
-    //cout << "Testdir: " << testdir << "\n";
+    cout << "Testdir: " << testdir << "\n";
 
     {
         auto cry_device = ouisync::create_cry_device(testdir, true);

@@ -1,6 +1,7 @@
 #include "block_store.h"
 #include "array_io.h"
 #include "hex.h"
+#include "version_vector.h"
 
 #include <blockstore/implementations/ondisk/OnDiskBlockStore2.h>
 #include <boost/filesystem.hpp>
@@ -10,6 +11,7 @@
 #include <boost/serialization/array.hpp>
 #include <boost/uuid/uuid_io.hpp>
 #include <boost/uuid/uuid_serialize.hpp>
+#include <boost/uuid/uuid_generators.hpp>
 
 #include <cpp-utils/system/diskspace.h>
 #include "object/block.h"
@@ -70,66 +72,94 @@ fs::path _get_data_file_path(const BlockId &block_id) {
     return path;
 }
 
-class ouisync::RootId {
+class ouisync::Root {
 public:
-    static Opt<RootId> load(const fs::path& path) {
-        fs::fstream file(path, file.binary | file.in);
-        if (!file.is_open()) return boost::none;
-
+    static Root load_or_create(const fs::path& rootdir, const fs::path& objdir, Uuid user_id) {
         object::Id root_id;
+        VersionVector clock;
+
+        fs::path path = rootdir / to_string(user_id);
+
+        fs::fstream file(path, file.binary | file.in);
+
+        if (!file.is_open()) {
+            object::Tree root_obj;
+            root_id = root_obj.store(objdir);
+            Root root{path, user_id, root_id, std::move(clock)};
+            root.store();
+            return root;
+        }
 
         boost::archive::text_iarchive oa(file);
         object::tagged::Load<object::Id> load{root_id};
         oa >> load;
+        oa >> clock;
 
-        return RootId(path, root_id);
+        return Root{path, user_id, root_id, move(clock)};
     }
 
-    RootId(const fs::path& file_path, const object::Id& root_id) :
-        _file_path(file_path),
-        _root_id(root_id)
-    {
-        store(root_id);
-    }
-
-    void store(const object::Id& root_id) {
-        fs::fstream file(_file_path, fs::fstream::binary | fs::fstream::trunc | fs::fstream::out);
+    void store() {
+        fs::fstream file(_file_path, file.binary | file.trunc | file.out);
         if (!file.is_open())
-            throw std::runtime_error("Failed to open root hash file");
+            throw std::runtime_error("Failed to open root file");
         boost::archive::text_oarchive oa(file);
-        object::tagged::Save<object::Id> save{root_id};
+        object::tagged::Save<object::Id> save{_root_id};
         oa << save;
-        _root_id = root_id;
+        oa << _clock;
     }
 
-    const object::Id& get() const {
+    const object::Id& get_id() const {
         return _root_id;
     }
 
-    void set(const object::Id& id) {
+    void set_id(const object::Id& id) {
+        auto old_id = _root_id;
         _root_id = id;
-        store(_root_id);
+        if (_root_id != old_id) {
+            _clock.increment(_user_id);
+            store();
+        }
     }
+
+    Root(const fs::path& file_path, const Uuid& user_id, const object::Id& root_id, VersionVector clock) :
+        _file_path(file_path), _user_id(user_id), _root_id(root_id), _clock(std::move(clock)) {}
 
 private:
     fs::path _file_path;
+    Uuid _user_id;
     object::Id _root_id;
+    VersionVector _clock;
 };
 
+static
+Uuid _load_or_create_user_id(const fs::path& path) {
+    fs::fstream f(path, f.binary | f.in);
+    if (!f.is_open()) {
+        if (fs::exists(path)) {
+            throw std::runtime_error("Failed to open user id file");
+        }
+        f.open(path, f.binary | f.out | f.trunc);
+        if (!f.is_open()) {
+            throw std::runtime_error("Failed to open file for storing user id");
+        }
+        Uuid new_id = boost::uuids::random_generator()();
+        f << new_id << "\n";
+        return new_id;
+    }
+    Uuid result;
+    f >> result;
+    return result;
+}
+
 BlockStore::BlockStore(const fs::path& basedir) :
+    _rootdir(basedir / "roots"),
     _objdir(basedir / "objects")
 {
+    fs::create_directories(_rootdir);
     fs::create_directories(_objdir);
 
-    auto root_id_path = basedir / "root";
-    auto opt_root_id = RootId::load(root_id_path);
-
-    if (!opt_root_id) {
-        object::Tree root_obj;
-        opt_root_id = RootId(root_id_path, root_obj.store(_objdir));
-    }
-
-    _root_id = std::make_unique<RootId>(std::move(*opt_root_id));
+    _user_id = _load_or_create_user_id(basedir / "user_id");
+    _root = std::make_unique<Root>(Root::load_or_create(_rootdir, _objdir, _user_id));
 }
 
 bool BlockStore::tryCreate(const BlockId &block_id, const Data &data) {
@@ -138,10 +168,10 @@ bool BlockStore::tryCreate(const BlockId &block_id, const Data &data) {
     auto filepath = _get_data_file_path(block_id);
 
     object::Block block(data);
-    auto id = object::io::maybe_store(_objdir, _root_id->get(), filepath, block);
+    auto id = object::io::maybe_store(_objdir, _root->get_id(), filepath, block);
 
     if (id) {
-        _root_id->set(*id);
+        _root->set_id(*id);
         return true;
     }
 
@@ -151,9 +181,9 @@ bool BlockStore::tryCreate(const BlockId &block_id, const Data &data) {
 bool BlockStore::remove(const BlockId &block_id) {
     std::scoped_lock<std::mutex> lock(_mutex);
 
-    auto opt_new_id = object::io::remove(_objdir, _root_id->get(), _get_data_file_path(block_id));
+    auto opt_new_id = object::io::remove(_objdir, _root->get_id(), _get_data_file_path(block_id));
     if (!opt_new_id) return false;
-    _root_id->set(*opt_new_id);
+    _root->set_id(*opt_new_id);
 
     return true;
 }
@@ -162,7 +192,7 @@ optional<Data> BlockStore::load(const BlockId &block_id) const {
     std::scoped_lock<std::mutex> lock(const_cast<std::mutex&>(_mutex));
     try {
         auto path = _get_data_file_path(block_id);
-        auto block = object::io::load(_objdir, _root_id->get(), path);
+        auto block = object::io::load(_objdir, _root->get_id(), path);
         return {move(*block.data())};
     } catch (const std::exception&) {
         // XXX: need to distinguis between "not found" and any other error.
@@ -194,8 +224,8 @@ void BlockStore::store(const BlockId &block_id, const Data &data) {
     auto filepath = _get_data_file_path(block_id);
 
     object::Block block(data);
-    auto id = object::io::store(_objdir, _root_id->get(), filepath, block);
-    _root_id->set(id);
+    auto id = object::io::store(_objdir, _root->get_id(), filepath, block);
+    _root->set_id(id);
 }
 
 namespace {
@@ -234,7 +264,7 @@ void _for_each_block(const fs::path& objdir, object::Id id, const F& f)
 
 uint64_t BlockStore::numBlocks() const {
     uint64_t count = 0;
-    _for_each_block(_objdir, _root_id->get(), [&] (const auto&) { ++count; });
+    _for_each_block(_objdir, _root->get_id(), [&] (const auto&) { ++count; });
     return count;
 }
 
@@ -247,7 +277,7 @@ uint64_t BlockStore::blockSizeFromPhysicalBlockSize(uint64_t blockSize) const {
 }
 
 void BlockStore::forEachBlock(std::function<void (const BlockId &)> callback) const {
-    _for_each_block(_objdir, _root_id->get(), callback);
+    _for_each_block(_objdir, _root->get_id(), callback);
 }
 
 BlockStore::~BlockStore() {}
