@@ -45,6 +45,7 @@ add_library(ouisync STATIC
     "src/create_cry_device.cpp"
     "src/block_store.cpp"
     "src/hash.cpp"
+    "src/branch.cpp"
     "src/object/tree.cpp"
     "src/object/block.cpp"
     "src/object/path.cpp"

@@ -1,13 +1,12 @@
 #pragma once
 
-#include "object/id.h"
-#include "user_id.h"
+#include "branch.h"
 
 #include <blockstore/interface/BlockStore2.h>
 #include <namespaces.h>
 
 namespace ouisync {
-    class Root;
+    class Branch;
 }
 
 namespace ouisync {
@@ -42,9 +41,9 @@ public:
     virtual ~BlockStore();
 
 private:
-    fs::path _rootdir;
+    fs::path _branchdir;
     fs::path _objdir;
-    std::unique_ptr<Root> _root;
+    std::unique_ptr<Branch> _branch;
     UserId _user_id;
     std::mutex _mutex;
 };
