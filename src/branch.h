@@ -29,7 +29,10 @@ public:
     void root_object_id(const object::Id& id);
 
     bool maybe_store(const fs::path&, const Data&);
+
     void store(const fs::path&, const Data&);
+
+    bool remove(const fs::path&);
 
 private:
     Branch(const fs::path& file_path, const fs::path& objdir,

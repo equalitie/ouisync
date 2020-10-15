@@ -84,12 +84,7 @@ bool BlockStore::tryCreate(const BlockId &block_id, const Data &data) {
 
 bool BlockStore::remove(const BlockId &block_id) {
     std::scoped_lock<std::mutex> lock(_mutex);
-
-    auto opt_new_id = object::io::remove(_objdir, _branch->root_object_id(), _get_data_file_path(block_id));
-    if (!opt_new_id) return false;
-    _branch->root_object_id(*opt_new_id);
-
-    return true;
+    return _branch->remove(_get_data_file_path(block_id));
 }
 
 optional<Data> BlockStore::load(const BlockId &block_id) const {

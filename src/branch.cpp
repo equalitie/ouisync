@@ -52,6 +52,14 @@ void Branch::store(const fs::path& path, const Data& data)
     root_object_id(id);
 }
 
+bool Branch::remove(const fs::path& path)
+{
+    auto oid = object::io::remove(_objdir, root_object_id(), path);
+    if (!oid) return false;
+    root_object_id(*oid);
+    return true;
+}
+
 void Branch::store_self() const {
     fs::fstream file(_file_path, file.binary | file.trunc | file.out);
     if (!file.is_open())
