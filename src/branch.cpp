@@ -24,7 +24,7 @@ Branch Branch::load_or_create(const fs::path& rootdir, const fs::path& objdir, U
         object::Tree root_obj;
         root_id = root_obj.store(objdir);
         Branch branch(path, objdir, user_id, root_id, std::move(clock));
-        branch.store();
+        branch.store_self();
         return branch;
     }
 
@@ -45,7 +45,14 @@ bool Branch::maybe_store(const fs::path& path, const Data& data)
     return true;
 }
 
-void Branch::store() {
+void Branch::store(const fs::path& path, const Data& data)
+{
+    object::Block block(data);
+    auto id = object::io::store(_objdir, root_object_id(), path, block);
+    root_object_id(id);
+}
+
+void Branch::store_self() const {
     fs::fstream file(_file_path, file.binary | file.trunc | file.out);
     if (!file.is_open())
         throw std::runtime_error("Failed to open branch file");
@@ -60,7 +67,7 @@ void Branch::root_object_id(const object::Id& id) {
     _root_id = id;
     if (_root_id != old_id) {
         _clock.increment(_user_id);
-        store();
+        store_self();
     }
 }
 

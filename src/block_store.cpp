@@ -124,12 +124,7 @@ void list(const fs::path& objdir, object::Id id, std::string pad = "") {
 
 void BlockStore::store(const BlockId &block_id, const Data &data) {
     std::scoped_lock<std::mutex> lock(_mutex);
-
-    auto filepath = _get_data_file_path(block_id);
-
-    object::Block block(data);
-    auto id = object::io::store(_objdir, _branch->root_object_id(), filepath, block);
-    _branch->root_object_id(id);
+    _branch->store(_get_data_file_path(block_id), data);
 }
 
 namespace {

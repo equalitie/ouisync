@@ -29,13 +29,14 @@ public:
     void root_object_id(const object::Id& id);
 
     bool maybe_store(const fs::path&, const Data&);
+    void store(const fs::path&, const Data&);
 
 private:
     Branch(const fs::path& file_path, const fs::path& objdir,
             const UserId& user_id, const object::Id& root_id,
             VersionVector clock);
 
-    void store();
+    void store_self() const;
 
 private:
     fs::path _file_path;
