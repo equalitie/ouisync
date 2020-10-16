@@ -36,6 +36,10 @@ public:
 
     bool remove(const fs::path&);
 
+    const fs::path& object_directory() const {
+        return _objdir;
+    }
+
 private:
     Branch(const fs::path& file_path, const fs::path& objdir,
             const UserId& user_id, const object::Id& root_id,

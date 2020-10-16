@@ -20,7 +20,8 @@ namespace detail {
         // XXX: if this probes every single directory in path, then it might be
         // slow and in such case we could instead try to create only the last 2.
         fs::create_directories(path.parent_path());
-        fs::ofstream ofs(path, std::fstream::out | std::fstream::binary | std::fstream::trunc);
+        fs::ofstream ofs(path, ofs.out | ofs.binary | ofs.trunc);
+        assert(ofs.is_open());
         if (!ofs.is_open()) throw std::runtime_error("Failed to store object");
         boost::archive::text_oarchive oa(ofs);
         tagged::Save<O> save{object};
@@ -55,11 +56,6 @@ Opt<Id> maybe_store(const fs::path& objdir, const O& object) {
     detail::store_at(path, object);
     return id;
 }
-
-Id store(const fs::path& objdir, Id root_tree, const fs::path& objpath, const Block&);
-
-Opt<Id> maybe_store(const fs::path& objdir, Id root_tree, const fs::path& objpath, const Block&);
-
 
 // --- load ----------------------------------------------------------
 
@@ -110,27 +106,12 @@ Opt<variant<O0, O1, Os...>> maybe_load(const fs::path& objdir, const Id& id) {
     return maybe_load<variant<O0, O1, Os...>>(objdir, id);
 }
 
-//------------------------------------
-Block load(const fs::path& objdir, const Id& root_id, const fs::path& objpath);
-
 // --- remove --------------------------------------------------------
 
-namespace flat {
-    /*
-     * Remove a single object. Keep children if it's a Tree.
-     */
-    bool remove(const fs::path& objdir, const Id& id);
-}
-
 /*
- * Remove an object. Also remove it's children if it's a Tree.
+ * Remove a single object. Note that this keeps children if it's a Tree.
  */
 bool remove(const fs::path& objdir, const Id& id);
-
-/*
- * Return Id of the new root removal took place.
- */
-Opt<Id> remove(const fs::path& objdir, Id root, const fs::path& path);
 
 // -------------------------------------------------------------------
 

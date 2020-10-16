@@ -7,6 +7,7 @@
 #include "namespaces.h"
 #include "hex.h"
 #include "array_io.h"
+#include "branch.h"
 
 #include <iostream>
 #include <random>
@@ -92,6 +93,13 @@ fs::path choose_test_dir() {
     return fs::unique_path("/tmp/ouisync/test-objects-%%%%-%%%%-%%%%-%%%%");
 }
 
+namespace cpputils {
+    static
+    std::ostream& operator<<(std::ostream& os, const Data& d) {
+        return os << d.ToString();
+    }
+}
+
 BOOST_AUTO_TEST_CASE(block_is_same) {
     fs::path testdir = choose_test_dir();
 
@@ -115,170 +123,131 @@ BOOST_AUTO_TEST_CASE(tree_is_same) {
     REQUIRE_HEX_EQUAL(t1.calculate_id(), t2.calculate_id());
 }
 
-BOOST_AUTO_TEST_CASE(tree_path) {
-    fs::path objdir = choose_test_dir();
+Branch create_branch(const fs::path testdir, const char* user_id_file_name) {
+    fs::path objdir = testdir/"objects";
+    fs::path branchdir = testdir/"branches";
+
+    fs::create_directories(objdir);
+    fs::create_directories(branchdir);
+
+    UserId user_id = UserId::load_or_create(testdir/user_id_file_name);
+
+    return Branch::load_or_create(branchdir, objdir, user_id);
+}
+
+BOOST_AUTO_TEST_CASE(tree_branch_store_and_load) {
+    fs::path testdir = choose_test_dir();
 
     Random random;
 
-    Data data(random.data(1000));
-    Block b1(data);
+    Data d1(random.data(1000));
 
-    Tree root;
+    Branch branch = create_branch(testdir, "user_id");
 
-    auto old_root_id = root.store(objdir);
-    BOOST_REQUIRE(fs::exists(objdir/object::path::from_id(old_root_id)));
+    branch.store("foo/bar", d1);
 
-    auto new_root_id = object::io::store(objdir, old_root_id, "foo/bar", b1);
+    BOOST_REQUIRE_EQUAL(count_objects(branch.object_directory()), 3 /* root + foo + bar */);
 
-    BOOST_REQUIRE(!fs::exists(objdir/object::path::from_id(old_root_id)));
-    BOOST_REQUIRE_EQUAL(count_objects(objdir), 3);
+    auto od2 = branch.maybe_load("foo/bar");
 
-    auto b2 = object::io::load(objdir, new_root_id, "foo/bar");
-
-    REQUIRE_HEX_EQUAL(b1.calculate_id(), b2.calculate_id());
+    BOOST_REQUIRE(od2);
+    BOOST_REQUIRE_EQUAL(d1, *od2);
 }
-
-//--------------------------------------------------------------------
-Id store(const fs::path& objdir, const vector<char>& v) {
-    Data d(v.size());
-    memcpy(d.data(), v.data(), v.size());
-    Block block(d);
-    return block.store(objdir);
-}
-
-Id store(const fs::path& objdir, const Id& root, const fs::path path, const Data& d) {
-    Block block(d);
-    return object::io::store(objdir, root, path, d);
-}
-
-//--------------------------------------------------------------------
 
 BOOST_AUTO_TEST_CASE(tree_remove) {
-    fs::path objdir = choose_test_dir();
+    fs::path testdir = choose_test_dir();
 
     Random random;
 
     // Delete data from root
     {
-        auto data_id = store(objdir, random.vector(256));
+        auto data = random.data(256);
 
-        Tree root;
-        root.insert({"data", data_id});
+        Branch branch = create_branch(testdir/"1", "user_id");
+        branch.store("data", data);
 
-        auto root_id = object::io::store(objdir, root);
+        Tree root = object::io::load<Tree>(branch.object_directory(), branch.root_object_id());
 
-        BOOST_REQUIRE_EQUAL(count_objects(objdir), 2);
+        BOOST_REQUIRE_EQUAL(root.size(), 1);
+        BOOST_REQUIRE_EQUAL(root.begin()->first, "data");
+        BOOST_REQUIRE_EQUAL(count_objects(branch.object_directory()), 2);
 
-        auto opt_root_id = object::io::remove(objdir, root_id, "data");
-        BOOST_REQUIRE(opt_root_id);
-        root_id = *opt_root_id;
+        Block block = object::io::load<Block>(branch.object_directory(), root.begin()->second);
+        BOOST_REQUIRE(block.data());
+        BOOST_REQUIRE_EQUAL(data, *block.data());
 
-        root = object::io::load<Tree>(objdir, root_id);
+        bool removed = branch.remove("data");
+        BOOST_REQUIRE(removed);
 
-        BOOST_REQUIRE_EQUAL(count_objects(objdir), 1);
+        root = object::io::load<Tree>(branch.object_directory(), branch.root_object_id());
+
         BOOST_REQUIRE_EQUAL(root.size(), 0);
-
-        BOOST_REQUIRE(object::io::remove(objdir, root_id));
-        BOOST_REQUIRE_EQUAL(count_objects(objdir), 0);
+        BOOST_REQUIRE_EQUAL(count_objects(branch.object_directory()), 1);
     }
 
     // Delete data from subdir, then delete the subdir
     {
-        auto data_id = store(objdir, random.vector(256));
+        Branch branch = create_branch(testdir/"2", "user_id");
 
-        Tree dir;
-        dir.insert({"data", data_id});
-        auto dir_id = object::io::store(objdir, dir);
+        auto data = random.data(256);
+        branch.store("dir/data", data);
 
-        Tree root;
-        root.insert({"dir", dir_id});
-        auto root_id = object::io::store(objdir, root);
+        BOOST_REQUIRE_EQUAL(count_objects(branch.object_directory()), 3);
 
-        BOOST_REQUIRE_EQUAL(count_objects(objdir), 3);
+        bool removed = branch.remove("dir/data");
+        BOOST_REQUIRE(removed);
 
-        auto opt_root_id = object::io::remove(objdir, root_id, "dir/data");
-        BOOST_REQUIRE(opt_root_id);
-        root_id = *opt_root_id;
-        root = object::io::load<Tree>(objdir, root_id);
+        BOOST_REQUIRE_EQUAL(count_objects(branch.object_directory()), 2);
 
-        BOOST_REQUIRE_EQUAL(root.size(), 1);
-        BOOST_REQUIRE_EQUAL(count_objects(objdir), 2);
+        removed = branch.remove("dir");
+        BOOST_REQUIRE(removed);
 
-        opt_root_id = object::io::remove(objdir, root_id, "dir");
-        BOOST_REQUIRE(opt_root_id);
-        root_id = *opt_root_id;
-        root = object::io::load<Tree>(objdir, root_id);
-
-        BOOST_REQUIRE_EQUAL(root.size(), 0);
-        BOOST_REQUIRE_EQUAL(count_objects(objdir), 1);
-
-        BOOST_REQUIRE(object::io::remove(objdir, root_id));
-
-        BOOST_REQUIRE_EQUAL(count_objects(objdir), 0);
+        BOOST_REQUIRE_EQUAL(count_objects(branch.object_directory()), 1);
     }
 
     // Delete subdir, check data is deleted with it
     {
-        auto data_id = store(objdir, random.vector(256));
+        Branch branch = create_branch(testdir/"3", "user_id");
 
-        Tree dir;
-        dir.insert({"data", data_id});
-        auto dir_id = object::io::store(objdir, dir);
+        auto data = random.data(256);
+        branch.store("dir/data", data);
 
-        Tree root;
-        root.insert({"dir", dir_id});
-        auto root_id = object::io::store(objdir, root);
+        BOOST_REQUIRE_EQUAL(count_objects(branch.object_directory()), 3);
 
-        BOOST_REQUIRE_EQUAL(count_objects(objdir), 3);
+        bool removed = branch.remove("dir");
+        BOOST_REQUIRE(removed);
 
-        auto opt_root_id = object::io::remove(objdir, root_id, "dir");
-        BOOST_REQUIRE(opt_root_id);
-        root_id = *opt_root_id;
-        root = object::io::load<Tree>(objdir, root_id);
-
-        BOOST_REQUIRE_EQUAL(root.size(), 0);
-        BOOST_REQUIRE_EQUAL(count_objects(objdir), 1);
-
-        object::io::remove(objdir, root_id);
-        BOOST_REQUIRE_EQUAL(count_objects(objdir), 0);
+        BOOST_REQUIRE_EQUAL(count_objects(branch.object_directory()), 1);
     }
 
     // Delete data from one root, preserve (using refcount) in the other
     {
+        Branch branch1 = create_branch(testdir/"4", "user1_id");
+        Branch branch2 = create_branch(testdir/"4", "user2_id");
+
+        BOOST_REQUIRE_EQUAL(branch1.object_directory(), branch2.object_directory());
+
         Data data  = random.data(256);
 
-        // These are to make sure the two roots are different objects.
-        Data data1 = random.data(256);
-        Data data2 = random.data(256);
+        branch1.store("data", data);
+        branch1.store("other_data", random.data(256));
 
-        Id root1_id, root2_id;
+        branch2.store("data", data);
+        branch2.store("other_data", random.data(256));
 
-        root1_id = object::io::store(objdir, Tree{});
-        root1_id = store(objdir, root1_id, "data", data);
-        root1_id = store(objdir, root1_id, "data1", data1);
+        BOOST_REQUIRE_EQUAL(count_objects(branch1.object_directory()),
+                2 /* roots */ + 3 /* data */);
 
-        root2_id = object::io::store(objdir, Tree{});
-        root2_id = store(objdir, root2_id, "data", data);
-        root2_id = store(objdir, root2_id, "data2", data2);
+        branch1.remove("data");
 
-        BOOST_REQUIRE_EQUAL(count_objects(objdir), 2 /* roots */ + 3 /* data */);
+        // Same count as before, since "data" is still in branch2
+        BOOST_REQUIRE_EQUAL(count_objects(branch1.object_directory()),
+                2 /* roots */ + 3 /* data */);
 
-        auto opt_root1_id = object::io::remove(objdir, root1_id, "data");
-        BOOST_REQUIRE(opt_root1_id);
-        root1_id = *opt_root1_id;
-        Tree root1 = object::io::load<Tree>(objdir, root1_id);
+        branch2.remove("data");
 
-        BOOST_REQUIRE_EQUAL(root1.size(), 1);
-        // Since root2 still has "data", we expect it to be not deleted.
-        BOOST_REQUIRE_EQUAL(count_objects(objdir), 2 /* roots */ + 3 /* data */);
-
-        auto opt_root2_id = object::io::remove(objdir, root2_id, "data");
-        BOOST_REQUIRE(opt_root2_id);
-        root2_id = *opt_root2_id;
-        Tree root2 = object::io::load<Tree>(objdir, root2_id);
-
-        BOOST_REQUIRE_EQUAL(root2.size(), 1);
-        // Since root2 still has "data", we expect it to be not deleted.
-        BOOST_REQUIRE_EQUAL(count_objects(objdir), 2 /* roots */ + 2 /* data */);
+        // Same count as before, since "data" is still in branch2
+        BOOST_REQUIRE_EQUAL(count_objects(branch1.object_directory()),
+                2 /* roots */ + 2 /* data */);
     }
 }
