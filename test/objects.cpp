@@ -246,7 +246,7 @@ BOOST_AUTO_TEST_CASE(tree_remove) {
 
         branch2.remove("data");
 
-        // Same count as before, since "data" is still in branch2
+        // Now "data" should have been removed all together
         BOOST_REQUIRE_EQUAL(count_objects(branch1.object_directory()),
                 2 /* roots */ + 2 /* data */);
     }
