@@ -7,7 +7,7 @@ target_include_directories(test-cryfs PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src
 set_warning_level(test-cryfs)
 
 add_executable(objcat "objcat.cpp")
-target_link_libraries(objcat  Threads::Threads ouisync)
+target_link_libraries(objcat Threads::Threads ouisync)
 target_compile_features(objcat PRIVATE cxx_std_17)
 target_include_directories(objcat PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 set_warning_level(objcat)

@@ -65,7 +65,13 @@ if (${CMAKE_SYSTEM_NAME} STREQUAL "Android")
     )
 else()
     set(BOOST_ENVIRONMENT )
-    set(BOOST_ARCH_CONFIGURATION )
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+        set(BOOST_ARCH_CONFIGURATION cxxflags="-stdlib=libc++" linkflags="stdlib=libc++")
+        set(BOOST_BOOTSTRAP_TOOLSET --with-toolset=clang)
+    else()
+        set(BOOST_ARCH_CONFIGURATION)
+        set(BOOST_BOOTSTRAP_TOOLSET)
+    endif()
 endif()
 
 set(BUILT_BOOST_VERSION ${BOOST_VERSION})
@@ -107,7 +113,7 @@ externalproject_add(built_boost
     PATCH_COMMAND ${BOOST_PATCH_COMMAND}
     CONFIGURE_COMMAND
            cd ${CMAKE_CURRENT_BINARY_DIR}/boost/src/built_boost
-        && ./bootstrap.sh
+           && ./bootstrap.sh ${BOOST_BOOTSTRAP_TOOLSET}
     BUILD_COMMAND
            cd ${CMAKE_CURRENT_BINARY_DIR}/boost/src/built_boost
         && ${BOOST_ENVIRONMENT} ./b2

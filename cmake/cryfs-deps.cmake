@@ -1,5 +1,9 @@
 include(cmake-utils/conan.cmake)
 
+if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    add_compile_options(-stdlib=libc++)
+endif()
+
 conan_cmake_run(
     CONANFILE conanfile.py
     BUILD missing)
