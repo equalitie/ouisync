@@ -7,6 +7,8 @@ project(OuiSync)
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fcoroutines-ts -stdlib=libc++ -std=c++17")
+else()
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fcoroutines -std=c++2a -DBOOST_ASIO_HAS_STD_COROUTINE")
 endif()
 
 set(CMAKE_THREAD_PREFER_PTHREAD TRUE)
@@ -60,10 +62,9 @@ add_library(ouisync STATIC
 )
 
 target_compile_definitions(ouisync PRIVATE -DBOOST_ASIO_HAS_CO_AWAIT)
-target_compile_definitions(ouisync PRIVATE -DBOOST_COROUTINES_NO_DEPRECATED_WARNING)
 target_include_directories(ouisync PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(ouisync PUBLIC Boost::filesystem Boost::serialization cryfs)
-target_compile_features(ouisync PRIVATE cxx_std_17)
+#target_compile_features(ouisync PRIVATE cxx_std_17)
 set_warning_level(ouisync)
 
 
