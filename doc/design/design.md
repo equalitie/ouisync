@@ -121,11 +121,13 @@ OuiSync also supports direct device-to-device (D2D) communication in the absence
 
 One key feature of OuiSync is that folder data is never stored nor sent to other devices in the clear, not even for synchronization purposes. This provides protection against the device being seized and allows having safes, i.e. replicas which can participate in the synchronization process while not being able to see the actual exchanged contents of the folder.
 
-A storage technology is needed which allows for data and metadata encryption while working with blocks that are amenable to efficient exchange over the network. We found [CryFS][] to fulfill these needs and allow tight integration into our system.
+A storage technology is needed which allows for data and metadata encryption while working with blocks that are amenable to efficient exchange over the network. We found [CryFS][] and its use of [AES][] encryption to fulfill these needs and allow tight integration into our system.
 
 [CryFS]: https://www.cryfs.org/
+[AES]: https://en.wikipedia.org/wiki/Advanced_Encryption_Standard
+    "Advanced Encryption Standard (Wikipedia)"
 
-To ensure a good usability of OuiSync as day-to-day storage, desktop versions use [FUSE][] to provide access to shared folders as normal directories in the file system.
+To ensure a good usability of OuiSync as day-to-day storage, a method is needed to provide access to shared folders as normal directories in the file system. [FUSE][] offers this possibility in desktop systems.
 
 [FUSE]: https://en.wikipedia.org/wiki/Filesystem_in_Userspace
     "Filesystem in Userspace (Wikipedia)"
