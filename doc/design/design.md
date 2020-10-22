@@ -15,11 +15,11 @@ Communications between devices in OuiSync are resistant to interference thanks t
 [Ouinet]: https://github.com/equalitie/ouinet/
     "Ouinet (GitHub)"
 
-# Requirements
+# Design requirements
 
 OuiSync caters to users who want to keep, for availability or backup purposes, copies of a set of files synchronized between different devices be them their own, or belonging to other users.
 
-Also, some of these devices are trusted to access, modify and share file data (like an encrypted smartphone or desktop computer), while others (like a permanently online Raspberry Pi or virtual private server) are only trusted to blindly store and convey data to others.
+Users may prefer to trust some of these devices (like an encrypted smartphone or desktop computer) to access, modify and share file data, while they may only trust other devices (like a permanently online Raspberry Pi or virtual private server) to blindly store and convey data to others.
 
 Moreover, users want the system to behave in a way which is respectful with their privacy, secure, and available despite limited network connectivity.
 
@@ -41,7 +41,7 @@ In addition, OuiSync strives to fulfill its requirements in a user-friendly and 
 
 In this case, Alice has an encrypted smartphone that she uses to read work documents and take pictures of her journeys. She travels a lot and she worries that she might lose the phone and thus the files in it, but she does not want to reveal her files to untrusted third parties. Sitting in a drawer at home she also has an old Raspberry Pi that she used to watch videos on her TV.
 
-So she uses OuiSync to create two **folders** in her phone: one with *Documents* and another with *Voyage pictures*. She also connects the Pi (whose SD card has much unused space) permanently to the router, installs OuiSync and creates one **safe** for each folder in the phone. The Pi has no storage encryption but it is not a risk to Alice since OuiSync safes only see encrypted data and have no access to file data nor metadata.
+So she uses OuiSync to create two **folders** in her phone: one with *Documents* and another with *Voyage pictures*. Their data is encrypted outside her OuiSync application. She connects the Pi (whose SD card has much unused space) permanently to the router, installs OuiSync and creates one **safe** for each folder in the phone. The Pi has no storage encryption but it is not a risk to Alice since OuiSync safes only see encrypted data and have no cleartext access to file data nor metadata.
 
 Now every time that Alice goes online with her phone, modifications to the folders (like added pictures) are exchanged peer-to-peer as encrypted data with the Pi and stored locally. OuiSync at the Pi keeps some history of changes, so Alice can safely remove old pictures from the phone or recover accidentally modified files.
 
@@ -59,7 +59,7 @@ Since Alice's Pi is online all the time, it does not matter that Alice's and Bob
 
 The connection of Alice's home Pi is not specially robust, and now that Bob is adding his very high-quality camera pictures to the shared folder, it becomes quite clear that the Pi will soon run out of storage. So Alice and Bob start looking for bigger, more reliable alternative backup storage.
 
-Charlie offers himself to host a OuiSync safe for them in one of his virtual servers in exchange for a small monthly amount. The servers have reliable and fast connections with plenty of storage space, so Alice and Bob accept the offer and together with Charlie they configure the new safe. When it comes online, it automatically starts gathering encrypted data from Alice's and Bob's devices, so it ends up with a copy of all data (but it still has no access to the files themselves).
+Charlie offers himself to host a OuiSync safe for them in one of his virtual servers in exchange for a small monthly payment. The servers have reliable and fast connections with plenty of storage space, so Alice and Bob accept the offer and together with Charlie they configure the new safe. When it comes online, it automatically starts gathering encrypted data from Alice's and Bob's devices, so it ends up with a copy of all data (but it still has no cleartext access to the files themselves).
 
 Should Alice and Bob decide that they no longer want to use Charlie's services, they only need to find an alternative place to setup a new safe and let it replicate all of the folder's data before removing Charlie's safe.
 
@@ -83,7 +83,7 @@ The OuiSync protocol allows the Pi's safe to see that $C_{2B}$ follows $C_1$, bu
 
 Alice sees OuiSync's notification about the conflict and reworks her file so that it also contains the changes that Bob added (also available from OuiSync), thus creating $F_{3A2B}$. The resulting $C_{3A2B}$ commit is obtained by Bob and the Pi. They both see that this does indeed follow all the latest commits that they know, so it cannot create a new conflict. Bob's device also recognizes $F_{3A2B}$ as following both $F_{2A}$ and $F_{2B}$, so the conflict gets automatically resolved there.
 
-Finally, at a later time Alice or Bob may choose to drop old copies of files in their replicas of the shared folder and save some disk space. For instance, some intermediate **folder snapshots** may be removed (i.e. leaving a more coarse granularity of folder history, as shown for Alice), or just the latest copies of files be left (as shown for Bob). Snapshots cannot be removed from safes like the Pi, since they have no access to file data or metadata, but oldest commits can be purged instead. In all cases, encrypted data which is no longer used by the remaining commits is dropped.
+Finally, at a later time Alice or Bob may choose to drop old copies of files in their replicas of the shared folder and save some disk space. For instance, some intermediate **folder snapshots** may be removed (i.e. leaving a more coarse granularity of folder history, as shown for Alice), or just the latest copies of files be left (as shown for Bob). Snapshots cannot be removed from safes like the Pi, since they have no cleartext access to file data nor metadata, but oldest commits can be purged instead. In all cases, encrypted data which is no longer used by the remaining commits is dropped.
 
 # Design decisions
 
