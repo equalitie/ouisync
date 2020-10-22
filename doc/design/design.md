@@ -41,7 +41,7 @@ In addition, OuiSync strives to fulfill its requirements in a user-friendly and 
 
 In this case, Alice has an encrypted smartphone that she uses to read work documents and take pictures of her journeys. She travels a lot and she worries that she might lose the phone and thus the files in it, but she does not want to reveal her files to untrusted third parties. Sitting in a drawer at home she also has an old Raspberry Pi that she used to watch videos on her TV.
 
-So she uses OuiSync to create two **folders** in her phone: one with *Documents* and another with *Voyage pictures*. Their data is encrypted outside her OuiSync application. She connects the Pi (whose SD card has much unused space) permanently to the router, installs OuiSync and creates one **safe** for each folder in the phone. The Pi has no storage encryption but it is not a risk to Alice since OuiSync safes only see encrypted data and have no cleartext access to file data nor metadata.
+So she uses OuiSync to create two **folders** in her phone: one with *Documents* and another with *Voyage pictures*. Their data is encrypted outside her OuiSync application. She connects the Pi (whose SD card has much unused space) permanently to the router, installs OuiSync and creates one **safe** for each folder in the phone (so that now there are two **replicas** of each folder). The Pi has no storage encryption but it is not a risk to Alice since OuiSync safes only see encrypted data and have no cleartext access to file data nor metadata.
 
 Now every time that Alice goes online with her phone, modifications to the folders (like added pictures) are exchanged peer-to-peer as encrypted data with the Pi and stored locally. OuiSync at the Pi keeps some history of changes, so Alice can safely remove old pictures from the phone or recover accidentally modified files.
 
@@ -73,7 +73,7 @@ However, at one point Alice and Bob start modifying the same file at similar tim
 
 ![Figure: Occurrence and resolution of a conflict](images/uc-conflict.svg){width=40%}
 
-In it, Alice and Bob start with exact **replicas** of the shared folder. In them, the file named $F$ contains identical data originating from Alice; we will call that initial state $F_{A1}$. The Pi's safe stores the latest **commit** (i.e. versioned set of all encrypted data in the replica) $C_{A1}$, which contains $F_{A1}$. Bob is offline at the moment.
+In it, Alice and Bob start with exact replicas of the shared folder. In them, the file named $F$ contains identical data originating from Alice; we will call that initial state $F_{A1}$. The Pi's safe stores the latest **commit** (i.e. versioned set of all encrypted data in the replica) $C_{A1}$, which contains $F_{A1}$. Bob is offline at the moment.
 
 Then Alice modifies $F_{A1}$ locally to obtain $F_{A2}$, which **follows** $F_{A1}$ (shown as $F_{A1} \to F_{A2}$); the new $C_{A2}$ commit associated with the change is only noticed and obtained by the Pi's safe, which is always online.
 
