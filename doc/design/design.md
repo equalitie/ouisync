@@ -69,7 +69,7 @@ Should Alice and Bob decide that they no longer want to use Charlie's services, 
 
 To better remember everything about their journey, Alice and Bob start to write some notes in text files that accompany the pictures. They simultaneously start annotating different picture sets. Even if they add or modify different files at the same time, OuiSync has no issues in synchronizing (**merging**) the changes, as long as they affect different files.
 
-However, at one point Alice and Bob start modifying the same file at similar times. In this case, OuiSync may not be able to automatically merge the changes, and a **conflict** arises which may need to be **resolved** by Alice or Bob. This is illustrated in the diagram below.
+However, at one point Alice and Bob start modifying the same file at similar times. In this case, OuiSync may not be able to automatically merge the changes, and a **conflict** arises which may need to be **resolved** by Alice or Bob. This is illustrated in the diagram below. Please note how OuiSync locally keeps changes from divergent replicas until one can decrypt the data and proceed to automatic merge or manual resolution.
 
 ![Figure: Occurrence and resolution of a conflict](images/uc-conflict.svg){width=40%}
 
