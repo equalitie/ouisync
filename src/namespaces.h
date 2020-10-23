@@ -12,12 +12,16 @@ namespace boost {
     namespace system {
         class error_code;
     }
+    namespace asio {
+    }
 }
 
 namespace ouisync {
 
 namespace fs = boost::filesystem;
 namespace sys = boost::system;
+namespace net = boost::asio;
+
 template<class T> using Opt = boost::optional<T>;
 using boost::string_view;
 using boost::variant;
