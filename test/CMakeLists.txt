@@ -21,6 +21,12 @@ target_link_libraries(test-objects PUBLIC Boost::unit_test_framework ouisync)
 target_compile_features(test-objects PRIVATE cxx_std_17)
 set_warning_level(test-objects)
 
+add_executable(test-file test-file.cpp ../src/file.cpp)
+target_link_libraries(test-file PUBLIC Boost::unit_test_framework Boost::filesystem "${CMAKE_THREAD_LIBS_INIT}")
+target_compile_definitions(test-file PRIVATE -DBOOST_ASIO_HAS_CO_AWAIT)
+target_compile_features(test-file PRIVATE cxx_std_17)
+set_warning_level(test-file)
+
 add_executable(test-utils test-utils.cpp)
 target_link_libraries(test-utils PUBLIC Boost::unit_test_framework "${CMAKE_THREAD_LIBS_INIT}")
 target_compile_definitions(test-utils PRIVATE -DBOOST_ASIO_HAS_CO_AWAIT)
