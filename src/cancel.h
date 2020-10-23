@@ -6,17 +6,20 @@
 
 namespace ouisync {
 
-class Cancel {
-private:
+class Cancel;
+
+namespace CancelDetail {
     class ConnectionBase {
         private:
-
-        friend class Cancel;
-
+        friend class ouisync::Cancel;
         virtual void execute() = 0;
-
         intrusive::list_hook _hook;
     };
+}
+
+class Cancel : private CancelDetail::ConnectionBase {
+private:
+    using ConnectionBase = CancelDetail::ConnectionBase;
 
 public:
     template<class OnCancel>
@@ -63,12 +66,11 @@ public:
 
     Cancel(Cancel& parent)
     {
-        parent._children.push_back(*this);
+        parent._connections.push_back(*this);
     }
 
     Cancel(Cancel&& other) :
         _connections(std::move(other._connections)),
-        _children(std::move(other._children)),
         _call_count(other._call_count)
     {
         _hook.swap_nodes(other._hook);
@@ -78,7 +80,6 @@ public:
     Cancel& operator=(Cancel&& other)
     {
         _connections = std::move(other._connections);
-        _children    = std::move(other._children);
 
         if (_hook.is_linked()) _hook.unlink();
         _hook.swap_nodes(other._hook);
@@ -113,10 +114,10 @@ public:
     size_t size() const { return _connections.size(); }
 
 private:
-    intrusive::list_hook _hook;
+    void execute() override { (*this)(); }
 
+private:
     intrusive::list<ConnectionBase, &ConnectionBase::_hook> _connections;
-    intrusive::list<Cancel, &Cancel::_hook> _children;
     size_t _call_count = 0;
 };
 

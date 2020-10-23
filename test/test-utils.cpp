@@ -15,6 +15,30 @@ void spawn(net::io_context& ioc, Awaitable&& awaitable) {
     co_spawn(ioc, std::move(awaitable), net::detached);
 }
 
+BOOST_AUTO_TEST_CASE(cancel) {
+    {
+        Cancel c;
+
+        bool canceled = false;
+        auto con = c.connect([&] { canceled = true; });
+
+        c();
+
+        BOOST_REQUIRE(canceled);
+    }
+    {
+        Cancel c1;
+        Cancel c2(c1);
+
+        bool canceled = false;
+        auto con = c2.connect([&] { canceled = true; });
+
+        c1();
+
+        BOOST_REQUIRE(canceled);
+    }
+}
+
 BOOST_AUTO_TEST_CASE(barrier) {
     net::io_context ioc;
 
