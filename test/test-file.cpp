@@ -1,7 +1,7 @@
 #define BOOST_TEST_MODULE file
 #include <boost/test/included/unit_test.hpp>
 
-#include "../src/namespaces.h"
+#include "../src/shortcuts.h"
 #include "../src/file.h"
 
 #include <iostream>

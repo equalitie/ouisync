@@ -1,6 +1,6 @@
 #pragma once
 
-#include <namespaces.h>
+#include "shortcuts.h"
 #include <boost/filesystem/path.hpp>
 
 // This is likely just a temporary helper function to make creation of

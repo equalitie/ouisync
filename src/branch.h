@@ -3,7 +3,7 @@
 #include "object/id.h"
 #include "user_id.h"
 #include "version_vector.h"
-#include "namespaces.h"
+#include "shortcuts.h"
 
 #include <boost/filesystem/path.hpp>
 #include <boost/optional.hpp>

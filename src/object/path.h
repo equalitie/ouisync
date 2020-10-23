@@ -1,7 +1,7 @@
 #pragma once
 
 #include "id.h"
-#include "../namespaces.h"
+#include "../shortcuts.h"
 
 #include <boost/optional.hpp>
 #include <boost/filesystem/path.hpp>

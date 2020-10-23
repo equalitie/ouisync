@@ -1,7 +1,7 @@
 #define BOOST_TEST_MODULE utils
 #include <boost/test/included/unit_test.hpp>
 
-#include "../src/namespaces.h"
+#include "../src/shortcuts.h"
 #include "../src/block.h"
 
 #include <boost/asio.hpp>

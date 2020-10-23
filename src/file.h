@@ -1,7 +1,7 @@
 #pragma once
 
 #include "cancel.h"
-#include "namespaces.h"
+#include "shortcuts.h"
 
 #include <boost/asio/posix/stream_descriptor.hpp>
 #include <boost/asio/awaitable.hpp>

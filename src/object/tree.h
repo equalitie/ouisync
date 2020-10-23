@@ -1,6 +1,6 @@
 #pragma once
 #include "id.h"
-#include "../namespaces.h"
+#include "../shortcuts.h"
 
 #include <map>
 #include <iosfwd>

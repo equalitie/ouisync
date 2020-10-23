@@ -1,9 +1,9 @@
 #pragma once
 
 #include "branch.h"
+#include "shortcuts.h"
 
 #include <blockstore/interface/BlockStore2.h>
-#include <namespaces.h>
 
 namespace ouisync {
     class Branch;

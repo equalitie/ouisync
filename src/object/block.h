@@ -1,7 +1,7 @@
 #pragma once
 
 #include "id.h"
-#include "../namespaces.h"
+#include "../shortcuts.h"
 #include "../variant.h"
 
 #include "cpp-utils/data/Data.h"

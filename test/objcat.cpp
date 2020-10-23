@@ -1,7 +1,7 @@
 #include "object/tree.h"
 #include "object/block.h"
 #include "object/io.h"
-#include "namespaces.h"
+#include "shortcuts.h"
 #include "variant.h"
 #include "hex.h"
 #include "array_io.h"

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "namespaces.h"
+#include "shortcuts.h"
 #include "intrusive_list.h"
 #include <boost/optional.hpp>
 #include <boost/asio/use_awaitable.hpp>

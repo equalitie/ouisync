@@ -4,7 +4,7 @@
 #include <boost/uuid/uuid_io.hpp>
 #include <boost/uuid/uuid_serialize.hpp>
 
-#include "namespaces.h"
+#include "shortcuts.h"
 
 namespace ouisync {
 

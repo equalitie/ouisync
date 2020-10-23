@@ -1,7 +1,7 @@
 #pragma once
 
 #include "intrusive_list.h"
-#include "namespaces.h"
+#include "shortcuts.h"
 #include <boost/optional.hpp>
 
 namespace ouisync {
