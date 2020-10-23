@@ -13,13 +13,13 @@ namespace ouisync {
  *
  * Usage:
  *
- * Block block(ioc);
+ * Barrier barrier(ioc);
  *
- * co_spawn(ioc, [lock = block.lock()]() -> net::awaitable<void> {
+ * co_spawn(ioc, [lock = barrier.lock()]() -> net::awaitable<void> {
  *     co_await do_something();
  * });
  *
- * co_spawn(ioc, [lock = block.lock()]() -> net::awaitable<void> {
+ * co_spawn(ioc, [lock = barrier.lock()]() -> net::awaitable<void> {
  *     co_await do_something();
  *     // This is unnecessary, for release() is called on lock destructor
  *     lock.release();
@@ -27,16 +27,16 @@ namespace ouisync {
  *
  * // Returns when both of the above coroutines have called release()
  * // or the destructor on their lock
- * co_await block.wait();
+ * co_await barrier.wait();
  */
 
-class Block {
+class Barrier {
 public:
     using executor_type = net::io_context::executor_type;
 
 public:
     class Lock {
-        friend class Block;
+        friend class Barrier;
 
         private:
         Lock() = default;
@@ -45,15 +45,15 @@ public:
         Lock(const Lock&)            = delete;
         Lock& operator=(const Lock&) = delete;
 
-        Lock(Lock&& other) : block(other.block)
+        Lock(Lock&& other) : barrier(other.barrier)
         {
             hook.swap_nodes(other.hook);
-            other.block = nullptr;
+            other.barrier = nullptr;
         }
 
         Lock& operator=(Lock&& other) {
-            block = other.block;
-            other.block = nullptr;
+            barrier = other.barrier;
+            other.barrier = nullptr;
             if (hook.is_linked()) hook.unlink();
             hook.swap_nodes(other.hook);
             return *this;
@@ -64,23 +64,23 @@ public:
 
         private:
         intrusive::list_hook hook;
-        Block* block;
+        Barrier* barrier;
     };
 
 public:
-    Block(net::io_context&);
-    Block(executor_type);
+    Barrier(net::io_context&);
+    Barrier(executor_type);
 
-    Block(const Block&) = delete;
+    Barrier(const Barrier&) = delete;
 
-    Block& operator=(Block&&)      = delete; // TODO
-    Block& operator=(const Block&) = delete; // TODO
+    Barrier& operator=(Barrier&&)      = delete; // TODO
+    Barrier& operator=(const Barrier&) = delete; // TODO
 
     [[nodiscard]] Lock lock();
     [[nodiscard]] net::awaitable<void> wait();
 
 private:
-    void try_unblock();
+    void try_release();
 
 private:
     using Sig = void();
@@ -98,23 +98,23 @@ private:
     intrusive::list<WaitEntry, &WaitEntry::hook> _wait_entries;
 };
 
-inline Block::Block(net::io_context& ioc) :
+inline Barrier::Barrier(net::io_context& ioc) :
     _ex(ioc.get_executor())
 {}
 
-inline Block::Block(executor_type exec) :
+inline Barrier::Barrier(executor_type exec) :
     _ex(std::move(exec))
 {}
 
-inline Block::Lock Block::lock()
+inline Barrier::Lock Barrier::lock()
 {
     Lock lock;
-    lock.block = this;
+    lock.barrier = this;
     _locks.push_back(lock);
     return lock;
 }
 
-inline void Block::try_unblock()
+inline void Barrier::try_release()
 {
     if (!_locks.empty()) return;
 
@@ -127,19 +127,19 @@ inline void Block::try_unblock()
     }
 }
 
-inline void Block::Lock::release()
+inline void Barrier::Lock::release()
 {
     if (!hook.is_linked()) return;
     hook.unlink();
-    block->try_unblock();
+    barrier->try_release();
 }
 
-inline Block::Lock::~Lock()
+inline Barrier::Lock::~Lock()
 {
     release();
 }
 
-inline net::awaitable<void> Block::wait()
+inline net::awaitable<void> Barrier::wait()
 {
     if (_locks.empty()) co_return;
 
