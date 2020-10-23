@@ -61,3 +61,35 @@ BOOST_AUTO_TEST_CASE(barrier) {
 
     ioc.run();
 }
+
+BOOST_AUTO_TEST_CASE(barrier_cancel) {
+    net::io_context ioc;
+
+    spawn(ioc, [&] () mutable -> net::awaitable<void> {
+        Barrier barrier(ioc);
+
+        Cancel cancel;
+        auto done = make_shared<bool>(false);
+
+        spawn(ioc, [&, done, lock = barrier.lock()] () mutable -> net::awaitable<void> {
+            while (!*done) {
+                co_await net::post(ioc, net::use_awaitable);
+            }
+        });
+
+        spawn(ioc, [&] () mutable -> net::awaitable<void> {
+            co_await net::post(ioc, net::use_awaitable);
+            cancel();
+        });
+
+        try {
+            co_await barrier.wait(cancel);
+        }
+        catch(sys::system_error e) {
+            BOOST_REQUIRE_EQUAL(e.code(), net::error::operation_aborted);
+            *done = true;
+        }
+    });
+
+    ioc.run();
+}

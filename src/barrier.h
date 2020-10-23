@@ -1,7 +1,6 @@
 #pragma once
 
-#include "shortcuts.h"
-#include "intrusive_list.h"
+#include "cancel.h"
 #include <boost/optional.hpp>
 #include <boost/asio/use_awaitable.hpp>
 #include <boost/asio/io_context.hpp>
@@ -77,20 +76,22 @@ public:
     Barrier& operator=(const Barrier&) = delete; // TODO
 
     [[nodiscard]] Lock lock();
-    [[nodiscard]] net::awaitable<void> wait();
+    [[nodiscard]] net::awaitable<void> wait(Cancel cancel = Cancel());
 
 private:
-    void try_release();
-
-private:
-    using Sig = void();
+    using Sig = void(sys::error_code);
     using AsyncResult = net::async_result<std::decay_t<decltype(net::use_awaitable)>, Sig>;
     using Handler = AsyncResult::handler_type;
 
     struct WaitEntry {
+        Cancel* cancel = nullptr;
         intrusive::list_hook hook;
         Opt<Handler> handler;
     };
+
+private:
+    void try_release_all();
+    void release_single(WaitEntry&);
 
 private:
     executor_type _ex;
@@ -114,16 +115,28 @@ inline Barrier::Lock Barrier::lock()
     return lock;
 }
 
-inline void Barrier::try_release()
+inline void Barrier::release_single(WaitEntry& wait_entry)
+{
+    assert(wait_entry.handler && wait_entry.cancel);
+
+    if (!wait_entry.handler) return;
+
+    net::post(_ex, [
+        h = std::move(*wait_entry.handler),
+        c = wait_entry.cancel
+    ] () mutable {
+        sys::error_code ec;
+        if (c && *c) ec = net::error::operation_aborted;
+        h(ec);
+    });
+}
+
+inline void Barrier::try_release_all()
 {
     if (!_locks.empty()) return;
-
     auto es = std::move(_wait_entries);
-
     for (auto& e : es) {
-        assert(e.handler);
-        if (!e.handler) continue;
-        net::post(_ex, std::move(*e.handler));
+        release_single(e);
     }
 }
 
@@ -131,7 +144,7 @@ inline void Barrier::Lock::release()
 {
     if (!hook.is_linked()) return;
     hook.unlink();
-    barrier->try_release();
+    barrier->try_release_all();
 }
 
 inline Barrier::Lock::~Lock()
@@ -139,12 +152,17 @@ inline Barrier::Lock::~Lock()
     release();
 }
 
-inline net::awaitable<void> Barrier::wait()
+inline net::awaitable<void> Barrier::wait(Cancel cancel)
 {
     if (_locks.empty()) co_return;
 
     WaitEntry wait_entry;
+    wait_entry.cancel = &cancel;
     _wait_entries.push_back(wait_entry);
+
+    auto cc = cancel.connect([&] {
+        release_single(wait_entry);
+    });
 
     // http://open-std.org/JTC1/SC22/WG21/docs/papers/2019/p1943r0.html
     co_await net::async_initiate<decltype(net::use_awaitable), Sig>(
