@@ -137,10 +137,50 @@ private:
     size_t _call_count = 0;
 };
 
+/*
+ * Invokes cancelation from destructor
+ */
 class ScopedCancel : public Cancel {
 public:
     using Cancel::Cancel;
 
+    /*
+     * Usecase:
+     *
+     * struct Foo {
+     *     net::awaitable<void> Foo::async_fn(Cancel cancel) {
+     *         // Invoke `cancel()` on scope exit
+     *         auto cancel_con = _scoped_cancel.connect(cancel);
+     *         ...
+     *     }
+     *
+     *     ScopedCancel _scoped_cancel;
+     * }
+     */
+    template<class OnCancel>
+    [[nodiscard]]
+    auto connect(Cancel& c)
+    {
+        return Cancel::connect([&c] { c(); });
+    }
+
+    /*
+     * Usecase:
+     *
+     * struct Foo {
+     *     net::awaitable<void> Foo::async_fn(Cancel cancel) {
+     *         auto cancel_con = _scoped_cancel.connect(cancel, [&] { _timer.cancel(); });
+     *
+     *         // The above is a shorthand for:
+     *         // auto cancel_con1 = cancel.connect([&] { _timer.cancel(); });
+     *         // auto cancel_con2 = _scoped_cancel.connect([&] { cancel(); });
+     *         ...
+     *     }
+     *
+     *     ScopedCancel _scoped_cancel;
+     *     net::deadline_timer _timer;
+     * }
+     */
     template<class OnCancel>
     [[nodiscard]]
     auto connect(Cancel& c, OnCancel&& on_cancel_)
