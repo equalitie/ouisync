@@ -61,8 +61,7 @@ public:
     Cancel(const Cancel&)            = delete;
     Cancel& operator=(const Cancel&) = delete;
 
-    Cancel(Cancel& parent) :
-        _parent(&parent)
+    Cancel(Cancel& parent)
     {
         parent._children.push_back(*this);
     }
@@ -74,10 +73,6 @@ public:
     {
         _hook.swap_nodes(other._hook);
         other._call_count = 0;
-
-        for (auto& c : _children) {
-            c._parent = this;
-        }
     }
 
     Cancel& operator=(Cancel&& other)
@@ -90,10 +85,6 @@ public:
 
         _call_count = other._call_count;
         other._call_count = 0;
-
-        for (auto& c : _children) {
-            c._parent = this;
-        }
 
         return *this;
     }
@@ -121,19 +112,11 @@ public:
 
     size_t size() const { return _connections.size(); }
 
-    ~Cancel()
-    {
-        for (auto& c : _children) {
-            c._parent = nullptr;
-        }
-    }
-
 private:
     intrusive::list_hook _hook;
 
     intrusive::list<ConnectionBase, &ConnectionBase::_hook> _connections;
     intrusive::list<Cancel, &Cancel::_hook> _children;
-    Cancel* _parent = nullptr;
     size_t _call_count = 0;
 };
 
