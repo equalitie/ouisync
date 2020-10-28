@@ -71,9 +71,21 @@ public:
     Barrier(executor_type);
 
     Barrier(const Barrier&) = delete;
+    Barrier& operator=(const Barrier&) = delete;
 
-    Barrier& operator=(Barrier&&)      = delete; // TODO
-    Barrier& operator=(const Barrier&) = delete; // TODO
+    Barrier(Barrier&& other) :
+        _ex(other._ex),
+        _locks(std::move(other._locks)),
+        _wait_entries(std::move(other._wait_entries))
+    {
+        for (auto& l : _locks) l.barrier = this;
+    }
+
+    Barrier& operator=(Barrier&&) = delete; // TODO
+
+    size_t lock_count() const {
+        return _locks.size();
+    }
 
     [[nodiscard]] Lock lock();
     [[nodiscard]] net::awaitable<void> wait(Cancel cancel = Cancel());
