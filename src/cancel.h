@@ -128,6 +128,9 @@ class ScopedCancel : public Cancel {
 public:
     using Cancel::Cancel;
 
+    ScopedCancel(ScopedCancel&&) = default;
+    ScopedCancel& operator=(ScopedCancel&&) = default;
+
     /*
      * Usecase:
      *
@@ -141,7 +144,6 @@ public:
      *     ScopedCancel _scoped_cancel;
      * }
      */
-    template<class OnCancel>
     [[nodiscard]]
     auto connect(Cancel& c)
     {
