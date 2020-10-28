@@ -31,7 +31,7 @@ namespace ouisync {
 
 class Barrier {
 public:
-    using executor_type = net::io_context::executor_type;
+    using executor_type = net::any_io_executor;
 
 public:
     class Lock {
