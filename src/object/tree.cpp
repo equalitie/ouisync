@@ -11,11 +11,11 @@
 using namespace ouisync;
 using namespace ouisync::object;
 
-Id Tree::calculate_id() const
+Id ouisync::object::calculate_id(const Tree& tree)
 {
     Sha256 hash;
     hash.update(uint32_t(hash.size()));
-    for (auto& [k,v] : *this) {
+    for (auto& [k,v] : tree) {
         hash.update(k);
         hash.update(v);
     }
@@ -28,7 +28,7 @@ Id Tree::store(const fs::path& root) const
 }
 
 std::ostream& ouisync::object::operator<<(std::ostream& os, const Tree& tree) {
-    auto hex_id = to_hex<char>(tree.calculate_id());
+    auto hex_id = to_hex<char>(calculate_id(tree));
 
     const auto short_sw = [](const auto& a) -> string_view {
         return string_view(a.data(),

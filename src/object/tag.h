@@ -1,6 +1,7 @@
 #pragma once
 
 #include "id.h"
+#include "block.h"
 
 #include <cstdint> // uint8_t
 #include <iosfwd>
@@ -18,7 +19,7 @@ enum class Tag : std::uint8_t {
  * expected_tag while avoiding reading the object from a file.
  * E.g.:
  *
- * if (maybe_load<JustTag<Block>>(objdir, object_id)) {
+ * if (maybe_load<JustTag<Data>>(objdir, object_id)) {
  *     remove(objdir, object_id);
  * }
  */
@@ -29,7 +30,6 @@ struct JustTag {
 };
 
 class Tree;
-class Block;
 
 template<class> struct GetTag;
 template<> struct GetTag<Tree>  { static constexpr Tag value = Tag::Tree;  };

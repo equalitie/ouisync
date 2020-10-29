@@ -10,6 +10,7 @@
 #include <boost/filesystem.hpp>
 #include <boost/variant.hpp>
 #include <boost/serialization/string.hpp>
+#include <boost/serialization/vector.hpp>
 
 using namespace std;
 using namespace ouisync;

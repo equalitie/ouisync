@@ -15,12 +15,12 @@
 #include <boost/variant.hpp>
 #include <boost/range/distance.hpp>
 #include <boost/serialization/string.hpp>
+#include <boost/serialization/vector.hpp>
 #include <boost/range/adaptor/filtered.hpp>
 
 using namespace std;
 using namespace ouisync;
 
-using cpputils::Data;
 using object::Tree;
 using object::Block;
 using object::Id;
@@ -29,16 +29,9 @@ using boost::variant;
 struct Random {
     Random() : gen(std::random_device()()) {}
 
-    Data data(size_t size) {
-        Data d(size);
-        auto ptr = static_cast<char*>(d.data());
-        fill(ptr, size);
-        return d;
-    }
-
-    std::vector<char> vector(size_t size) {
-        std::vector<char> v(size);
-        auto ptr = static_cast<char*>(v.data());
+    std::vector<uint8_t> vector(size_t size) {
+        std::vector<uint8_t> v(size);
+        auto ptr = static_cast<uint8_t*>(v.data());
         fill(ptr, size);
         return v;
     }
@@ -55,9 +48,9 @@ struct Random {
         return id;
     }
 
-    void fill(char* ptr, size_t size) {
+    void fill(void* ptr, size_t size) {
         std::uniform_int_distribution<> distrib(0, 255);
-        for (size_t i = 0; i < size; ++i) ptr[i] = distrib(gen);
+        for (size_t i = 0; i < size; ++i) ((char*)ptr)[i] = distrib(gen);
     }
 
     std::mt19937 gen;
@@ -93,22 +86,15 @@ fs::path choose_test_dir() {
     return fs::unique_path("/tmp/ouisync/test-objects-%%%%-%%%%-%%%%-%%%%");
 }
 
-namespace cpputils {
-    static
-    std::ostream& operator<<(std::ostream& os, const Data& d) {
-        return os << d.ToString();
-    }
-}
-
 BOOST_AUTO_TEST_CASE(block_is_same) {
     fs::path testdir = choose_test_dir();
 
     Random random;
-    Data data(random.data(1000));
-    object::Block b1(data);
-    b1.store(testdir);
-    auto b2 = object::io::load<object::Block>(testdir, b1.calculate_id());
-    REQUIRE_HEX_EQUAL(b1.calculate_id(), b2.calculate_id());
+    object::Block b1(random.vector(1000));
+    //b1.store(testdir);
+    object::io::store(testdir, b1);
+    auto b2 = object::io::load<object::Block>(testdir, object::calculate_id(b1));
+    REQUIRE_HEX_EQUAL(object::calculate_id(b1), object::calculate_id(b2));
 }
 
 BOOST_AUTO_TEST_CASE(tree_is_same) {
@@ -118,9 +104,9 @@ BOOST_AUTO_TEST_CASE(tree_is_same) {
     object::Tree t1;
     t1[random.string(2)]  = random.object_id();
     t1[random.string(10)] = random.object_id();
-    t1.store(testdir);
-    auto t2 = object::io::load<object::Tree>(testdir, t1.calculate_id());
-    REQUIRE_HEX_EQUAL(t1.calculate_id(), t2.calculate_id());
+    object::io::store(testdir, t1);
+    auto t2 = object::io::load<object::Tree>(testdir, object::calculate_id(t1));
+    REQUIRE_HEX_EQUAL(object::calculate_id(t1), object::calculate_id(t2));
 }
 
 Branch create_branch(const fs::path testdir, const char* user_id_file_name) {
@@ -140,7 +126,7 @@ BOOST_AUTO_TEST_CASE(tree_branch_store_and_load) {
 
     Random random;
 
-    Data d1(random.data(1000));
+    Block d1(random.vector(1000));
 
     Branch branch = create_branch(testdir, "user_id");
 
@@ -161,7 +147,7 @@ BOOST_AUTO_TEST_CASE(tree_remove) {
 
     // Delete data from root
     {
-        auto data = random.data(256);
+        auto data = random.vector(256);
 
         Branch branch = create_branch(testdir/"1", "user_id");
         branch.store("data", data);
@@ -173,8 +159,7 @@ BOOST_AUTO_TEST_CASE(tree_remove) {
         BOOST_REQUIRE_EQUAL(count_objects(branch.object_directory()), 2);
 
         Block block = object::io::load<Block>(branch.object_directory(), root.begin()->second);
-        BOOST_REQUIRE(block.data());
-        BOOST_REQUIRE_EQUAL(data, *block.data());
+        BOOST_REQUIRE_EQUAL(data, block);
 
         bool removed = branch.remove("data");
         BOOST_REQUIRE(removed);
@@ -189,7 +174,7 @@ BOOST_AUTO_TEST_CASE(tree_remove) {
     {
         Branch branch = create_branch(testdir/"2", "user_id");
 
-        auto data = random.data(256);
+        auto data = random.vector(256);
         branch.store("dir/data", data);
 
         BOOST_REQUIRE_EQUAL(count_objects(branch.object_directory()), 3);
@@ -209,7 +194,7 @@ BOOST_AUTO_TEST_CASE(tree_remove) {
     {
         Branch branch = create_branch(testdir/"3", "user_id");
 
-        auto data = random.data(256);
+        auto data = random.vector(256);
         branch.store("dir/data", data);
 
         BOOST_REQUIRE_EQUAL(count_objects(branch.object_directory()), 3);
@@ -227,13 +212,13 @@ BOOST_AUTO_TEST_CASE(tree_remove) {
 
         BOOST_REQUIRE_EQUAL(branch1.object_directory(), branch2.object_directory());
 
-        Data data  = random.data(256);
+        auto data  = random.vector(256);
 
         branch1.store("data", data);
-        branch1.store("other_data", random.data(256));
+        branch1.store("other_data", random.vector(256));
 
         branch2.store("data", data);
-        branch2.store("other_data", random.data(256));
+        branch2.store("other_data", random.vector(256));
 
         BOOST_REQUIRE_EQUAL(count_objects(branch1.object_directory()),
                 2 /* roots */ + 3 /* data */);

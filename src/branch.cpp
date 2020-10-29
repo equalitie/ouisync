@@ -1,4 +1,5 @@
 #include "branch.h"
+#include "variant.h"
 #include "object/tree.h"
 #include "object/tagged.h"
 #include "object/block.h"
@@ -9,6 +10,7 @@
 #include <boost/filesystem.hpp>
 #include <boost/archive/text_oarchive.hpp>
 #include <boost/archive/text_iarchive.hpp>
+#include <boost/serialization/vector.hpp>
 #include <boost/range/iterator_range.hpp>
 
 using namespace ouisync;
@@ -17,6 +19,7 @@ using object::Id;
 using object::Block;
 using object::Tree;
 using object::JustTag;
+using Data = Branch::Data;
 
 namespace {
     using PathRange = boost::iterator_range<fs::path::iterator>;
@@ -78,7 +81,7 @@ bool _flat_remove(const fs::path& objdir, const Id& id) {
 //--------------------------------------------------------------------
 
 static
-Opt<Id> _store_recur(const fs::path& objdir, Opt<Id> old_object_id, PathRange path, const Block &block, bool replace)
+Opt<Id> _store_recur(const fs::path& objdir, Opt<Id> old_object_id, PathRange path, const Branch::Data &block, bool replace)
 {
     Opt<Id> obj_id;
 
@@ -115,8 +118,7 @@ Opt<Id> _store_recur(const fs::path& objdir, Opt<Id> old_object_id, PathRange pa
 
 void Branch::store(const fs::path& path, const Data& data)
 {
-    object::Block block(data);
-    auto oid = _store_recur(_objdir, root_object_id(), path_range(path), block, true);
+    auto oid = _store_recur(_objdir, root_object_id(), path_range(path), data, true);
     assert(oid);
     if (!oid) throw std::runtime_error("Object not replaced as it should have been");
     root_object_id(*oid);
@@ -124,8 +126,7 @@ void Branch::store(const fs::path& path, const Data& data)
 
 bool Branch::maybe_store(const fs::path& path, const Data& data)
 {
-    object::Block block(data);
-    auto oid = _store_recur(_objdir, root_object_id(), path_range(path), block, false);
+    auto oid = _store_recur(_objdir, root_object_id(), path_range(path), data, false);
     if (!oid) return false;
     root_object_id(*oid);
     return true;
@@ -134,7 +135,7 @@ bool Branch::maybe_store(const fs::path& path, const Data& data)
 //--------------------------------------------------------------------
 
 inline
-Opt<Block> _maybe_load_recur(const fs::path& objdir, const Id& root_id, PathRange path) {
+Opt<Branch::Data> _maybe_load_recur(const fs::path& objdir, const Id& root_id, PathRange path) {
     if (path.empty())
         throw std::runtime_error("Can't load object without name");
 
@@ -150,7 +151,7 @@ Opt<Block> _maybe_load_recur(const fs::path& objdir, const Id& root_id, PathRang
     }
 
     if (path.advance_begin(1); path.empty()) {
-        return object::io::maybe_load<Block>(objdir, i->second);
+        return object::io::maybe_load<Branch::Data>(objdir, i->second);
     } else {
         return _maybe_load_recur(objdir, i->second, path);
     }
@@ -160,14 +161,14 @@ Opt<Branch::Data> Branch::maybe_load(const fs::path& path) const
 {
     auto ob = _maybe_load_recur(_objdir, root_object_id(), path_range(path));
     if (!ob) return boost::none;
-    return move(*ob->data());
+    return move(*ob);
 }
 
 //--------------------------------------------------------------------
 
 static
 bool _remove_with_children(const fs::path& objdir, const Id& id) {
-    auto obj = object::io::load<Tree, JustTag<Block>>(objdir, id);
+    auto obj = object::io::load<Tree, JustTag<Data>>(objdir, id);
 
     apply(obj,
             [&](const Tree& tree) {
@@ -176,7 +177,7 @@ bool _remove_with_children(const fs::path& objdir, const Id& id) {
                     _remove_with_children(objdir, id);
                 }
             },
-            [&](const JustTag<Block>&) {
+            [&](const JustTag<Data>&) {
             });
 
     return _flat_remove(objdir, id);

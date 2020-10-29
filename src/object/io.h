@@ -38,7 +38,7 @@ namespace detail {
 template<class O>
 inline
 Id store(const fs::path& objdir, const O& object) {
-    auto id = object.calculate_id();
+    auto id = calculate_id(object);
     auto path = objdir / path::from_id(id);
     detail::store_at(path, object);
     return id;
@@ -50,7 +50,7 @@ Id store(const fs::path& objdir, const O& object) {
 template<class O>
 inline
 Opt<Id> maybe_store(const fs::path& objdir, const O& object) {
-    auto id = object.calculate_id();
+    auto id = calculate_id(object);
     auto path = objdir / path::from_id(id);
     if (fs::exists(path)) return boost::none;
     detail::store_at(path, object);

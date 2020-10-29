@@ -9,46 +9,43 @@
 using namespace ouisync;
 using namespace ouisync::object;
 
-Id Block::calculate_id() const {
+Id ouisync::object::calculate_id(const std::vector<uint8_t>& v) {
     Sha256 hash;
-    const Data* d = data();
-    if (!d) {
+    if (!v.empty()) {
         hash.update(uint32_t(0));
         return hash.close();
     }
-    hash.update(uint32_t(d->size()));
-    hash.update(d->data(), d->size());
+    hash.update(uint32_t(v.size()));
+    hash.update(v.data(), v.size());
     return hash.close();
 }
 
-Id Block::store(const fs::path& root) const {
-    return object::io::store(root, *this);
+namespace std {
+    std::ostream& operator<<(std::ostream& os, const std::vector<uint8_t>& v) {
+        auto id = to_hex<char>(::ouisync::object::calculate_id(v));
+        string_view sw(id.data(), std::min<size_t>(6, std::tuple_size<decltype(id)>::value));
+        return os << "Data " << sw;
+    }
 }
 
-std::ostream& ouisync::object::operator<<(std::ostream& os, const Block& block) {
-    auto id = to_hex<char>(block.calculate_id());
-    string_view sw(id.data(), std::min<size_t>(6, std::tuple_size<decltype(id)>::value));
-    return os << "Block " << sw;
-}
-
-Block::Data* Block::data() {
-    return apply(_data,
-            [](std::reference_wrapper<Data> d) {
-                return &d.get();
-            },
-            [](Opt<Data>& d) -> Data* {
-                if (!d) return nullptr;
-                return &*d;
-            });
-}
-
-const Block::Data* Block::data() const {
-    return apply(_data,
-            [](const std::reference_wrapper<Data> d) {
-                return &d.get();
-            },
-            [](const Opt<Data>& d) -> const Data* {
-                if (!d) return nullptr;
-                return &*d;
-            });
-}
+//Block::Data* Block::data() {
+//    return apply(_data,
+//            [](std::reference_wrapper<Data> d) {
+//                return &d.get();
+//            },
+//            [](Opt<Data>& d) -> Data* {
+//                if (!d) return nullptr;
+//                return &*d;
+//            });
+//}
+//
+//const Block::Data* Block::data() const {
+//    return apply(_data,
+//            [](const std::reference_wrapper<Data> d) {
+//                return &d.get();
+//            },
+//            [](const Opt<Data>& d) -> const Data* {
+//                if (!d) return nullptr;
+//                return &*d;
+//            });
+//}

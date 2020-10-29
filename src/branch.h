@@ -8,15 +8,11 @@
 #include <boost/filesystem/path.hpp>
 #include <boost/optional.hpp>
 
-namespace cpputils {
-    class Data;
-}
-
 namespace ouisync {
 
 class Branch {
 public:
-    using Data = cpputils::Data;
+    using Data = std::vector<uint8_t>;
 
 public:
     static Branch load_or_create(

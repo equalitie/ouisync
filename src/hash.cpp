@@ -1,5 +1,6 @@
 #include "hash.h"
 
+#if 0
 #include <cryptlib.h>
 #include <sha.h>
 
@@ -72,3 +73,4 @@ void free_impl(HashAlgorithm algo, void* impl) {
 }
 
 }} // namespaces
+#endif

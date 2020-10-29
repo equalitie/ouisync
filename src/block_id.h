@@ -1,10 +1,7 @@
 #pragma once
 
-#include <blockstore/utils/BlockId.h>
-
-// Block id is a class instance of IdWrapper
-// defined in modules/cryfs/src/blockstore/utils/IdWrapper.h
+#include <array>
 
 namespace ouisync {
-    using blockstore::BlockId;
+    using BlockId = std::array<uint8_t, 16>;
 }

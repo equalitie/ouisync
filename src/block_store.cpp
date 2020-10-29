@@ -6,19 +6,16 @@
 #include "object/tree.h"
 #include "object/io.h"
 
-#include <blockstore/implementations/ondisk/OnDiskBlockStore2.h>
 #include <boost/filesystem/operations.hpp>
-
-#include <cpp-utils/system/diskspace.h>
 
 using namespace ouisync;
 using std::move;
 using std::unique_ptr;
 using boost::optional;
-using cpputils::Data;
 
 namespace {
-    constexpr size_t BLOCK_ID_HEX_SIZE = BlockId::STRING_LENGTH;
+    constexpr size_t BLOCK_ID_HEX_SIZE = 2 *
+        std::tuple_size<BlockId>::value * sizeof(BlockId::value_type);
 
     /*
      * Unlike in original CryFS, we want the directory structure to also
@@ -50,17 +47,19 @@ namespace {
 
 static
 fs::path _get_data_file_path(const BlockId &block_id) {
-    std::string block_id_str = block_id.ToString();
+    auto hex_block_id = to_hex<char>(block_id);
     fs::path path;
     unsigned part = 0;
     size_t start = 0;
-    while (auto s = block_id_part_hex_size(part++)) {
+    while (auto size = block_id_part_hex_size(part++)) {
+        string_view sv(hex_block_id.data() + start, size);
+
         if (start == 0) {
-            path = block_id_str.substr(start, s);
+            path = sv.to_string();
         } else {
-            path /= block_id_str.substr(start, s);
+            path /= sv.to_string();
         }
-        start += s;
+        start += size;
     }
     return path;
 }
@@ -87,7 +86,7 @@ bool BlockStore::remove(const BlockId &block_id) {
     return _branch->remove(_get_data_file_path(block_id));
 }
 
-optional<Data> BlockStore::load(const BlockId &block_id) const {
+optional<BlockStore::Data> BlockStore::load(const BlockId &block_id) const {
     std::scoped_lock<std::mutex> lock(const_cast<std::mutex&>(_mutex));
     return _branch->maybe_load(_get_data_file_path(block_id));
 }
@@ -95,58 +94,6 @@ optional<Data> BlockStore::load(const BlockId &block_id) const {
 void BlockStore::store(const BlockId &block_id, const Data &data) {
     std::scoped_lock<std::mutex> lock(_mutex);
     _branch->store(_get_data_file_path(block_id), data);
-}
-
-namespace {
-    using HexBlockId = std::array<char, BlockId::STRING_LENGTH>;
-}
-
-template<class F>
-static
-void _for_each_block(const fs::path& objdir, object::Id id, const F& f, HexBlockId& hex_block_id, size_t start)
-{
-    auto obj = object::io::load<object::Tree, object::Block>(objdir, id);
-
-    apply(obj,
-            [&] (const object::Tree& tree) {
-                for (auto& [name, obj_id] : tree) {
-                    if (start + name.size() > hex_block_id.size()) { assert(0); continue; }
-                    memcpy(hex_block_id.data() + start, name.data(), name.size());
-                    _for_each_block(objdir, obj_id, f, hex_block_id, start + name.size());
-                }
-            },
-            [&] (const auto& o) {
-                if (start != hex_block_id.size()) { assert(0); return; }
-                auto block_id = from_hex<char>(hex_block_id);
-                if (!block_id) { assert(0); return; }
-                f(BlockId::FromBinary(block_id->data()));
-            });
-}
-
-template<class F>
-static
-void _for_each_block(const fs::path& objdir, object::Id id, const F& f)
-{
-    HexBlockId hex_block_id;
-    return _for_each_block(objdir, id, f, hex_block_id, 0);
-}
-
-uint64_t BlockStore::numBlocks() const {
-    uint64_t count = 0;
-    _for_each_block(_objdir, _branch->root_object_id(), [&] (const auto&) { ++count; });
-    return count;
-}
-
-uint64_t BlockStore::estimateNumFreeBytes() const {
-	return cpputils::free_disk_space_in_bytes(_objdir);
-}
-
-uint64_t BlockStore::blockSizeFromPhysicalBlockSize(uint64_t blockSize) const {
-    return blockSize;
-}
-
-void BlockStore::forEachBlock(std::function<void (const BlockId &)> callback) const {
-    _for_each_block(_objdir, _branch->root_object_id(), callback);
 }
 
 BlockStore::~BlockStore() {}

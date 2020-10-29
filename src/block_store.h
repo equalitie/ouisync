@@ -1,9 +1,8 @@
 #pragma once
 
 #include "branch.h"
+#include "block_id.h"
 #include "shortcuts.h"
-
-#include <blockstore/interface/BlockStore2.h>
 
 namespace ouisync {
     class Branch;
@@ -11,32 +10,21 @@ namespace ouisync {
 
 namespace ouisync {
 
-class BlockStore : public blockstore::BlockStore2 {
+class BlockStore {
 public:
-    using BlockId = blockstore::BlockId;
+    using Data = std::vector<uint8_t>;
 
 public:
     BlockStore(const fs::path& basedir);
 
-    WARN_UNUSED_RESULT
-    bool tryCreate(const BlockId &blockId, const cpputils::Data &data) override;
+    bool tryCreate(const BlockId &blockId, const Data &data);
 
-    WARN_UNUSED_RESULT
-    bool remove(const BlockId &blockId) override;
+    bool remove(const BlockId &blockId);
 
-    WARN_UNUSED_RESULT
-    boost::optional<cpputils::Data> load(const BlockId &blockId) const override;
+    boost::optional<Data> load(const BlockId &blockId) const;
 
     // Store the block with the given blockId. If it doesn't exist, it is created.
-    void store(const BlockId &blockId, const cpputils::Data &data) override;
-
-    uint64_t numBlocks() const override;
-
-    uint64_t estimateNumFreeBytes() const override;
-
-    uint64_t blockSizeFromPhysicalBlockSize(uint64_t blockSize) const override;
-
-    void forEachBlock(std::function<void (const BlockId &)> callback) const override;
+    void store(const BlockId &blockId, const Data &data);
 
     virtual ~BlockStore();
 

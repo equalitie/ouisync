@@ -16,7 +16,6 @@ namespace {
 
 class Tree final : public TreeMap {
 public:
-    Id calculate_id() const;
     Id store(const fs::path& root) const;
 
     template<class Archive>
@@ -24,6 +23,8 @@ public:
         ar & static_cast<TreeMap&>(*this);
     }
 };
+
+Id calculate_id(const Tree&);
 
 std::ostream& operator<<(std::ostream&, const Tree&);
 

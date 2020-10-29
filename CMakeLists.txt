@@ -31,7 +31,6 @@ endfunction(set_warning_level)
 
 add_library(ouisync STATIC
     "src/user_id.cpp"
-    "src/create_cry_device.cpp"
     "src/block_store.cpp"
     "src/hash.cpp"
     "src/branch.cpp"
