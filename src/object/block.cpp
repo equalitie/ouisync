@@ -27,25 +27,3 @@ namespace std {
         return os << "Data " << sw;
     }
 }
-
-//Block::Data* Block::data() {
-//    return apply(_data,
-//            [](std::reference_wrapper<Data> d) {
-//                return &d.get();
-//            },
-//            [](Opt<Data>& d) -> Data* {
-//                if (!d) return nullptr;
-//                return &*d;
-//            });
-//}
-//
-//const Block::Data* Block::data() const {
-//    return apply(_data,
-//            [](const std::reference_wrapper<Data> d) {
-//                return &d.get();
-//            },
-//            [](const Opt<Data>& d) -> const Data* {
-//                if (!d) return nullptr;
-//                return &*d;
-//            });
-//}
