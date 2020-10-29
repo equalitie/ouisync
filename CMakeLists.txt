@@ -18,6 +18,9 @@ find_package(Threads REQUIRED)
 set(BuildBoost_DIR "${CMAKE_CURRENT_SOURCE_DIR}/cmake/build-boost")
 find_package(BuildBoost REQUIRED)
 
+set(BuildCryptoPP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+find_package(BuildCryptoPP REQUIRED)
+
 set (CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -fno-omit-frame-pointer -fsanitize=address")
 set (CMAKE_LINKER_FLAGS_DEBUG "${CMAKE_LINKER_FLAGS_DEBUG} -fno-omit-frame-pointer -fsanitize=address")
 
@@ -45,7 +48,7 @@ add_library(ouisync STATIC
 
 target_compile_definitions(ouisync PRIVATE -DBOOST_ASIO_HAS_CO_AWAIT)
 target_include_directories(ouisync PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(ouisync PUBLIC Boost::filesystem Boost::serialization)
+target_link_libraries(ouisync PUBLIC Boost::filesystem Boost::serialization CryptoPP)
 #target_compile_features(ouisync PRIVATE cxx_std_17)
 set_warning_level(ouisync)
 

@@ -85,7 +85,7 @@ BOOST_AUTO_TEST_CASE(barrier_cancel) {
         try {
             co_await barrier.wait(cancel);
         }
-        catch(sys::system_error e) {
+        catch(const sys::system_error& e) {
             BOOST_REQUIRE_EQUAL(e.code(), net::error::operation_aborted);
             *done = true;
         }
