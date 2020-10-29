@@ -21,23 +21,6 @@ find_package(BuildBoost REQUIRED)
 set (CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -fno-omit-frame-pointer -fsanitize=address")
 set (CMAKE_LINKER_FLAGS_DEBUG "${CMAKE_LINKER_FLAGS_DEBUG} -fno-omit-frame-pointer -fsanitize=address")
 
-# Dependency config for CryFS, it is basically a copy of the one in
-# modules/cryfs/cmake-utils/DependenciesFromConan.cmake but changed to use
-# Boost found through the above find_package instead of the one from Conan.
-set(DEPENDENCY_CONFIG
-    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/cryfs-deps.cmake"
-    CACHE FILEPATH
-    "cmake configuration file defining how to get dependencies"
-)
-
-add_subdirectory(modules/cryfs EXCLUDE_FROM_ALL)
-
-# This will set up include directories for cryfs when included by
-# target_link_libraries.
-set_target_properties(cryfs PROPERTIES
-    INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/modules/cryfs/src"
-)
-
 function(set_warning_level TARGET)
     if(MSVC)
         target_compile_options(${TARGET} PRIVATE /W4 /WX)
@@ -63,7 +46,7 @@ add_library(ouisync STATIC
 
 target_compile_definitions(ouisync PRIVATE -DBOOST_ASIO_HAS_CO_AWAIT)
 target_include_directories(ouisync PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(ouisync PUBLIC Boost::filesystem Boost::serialization cryfs)
+target_link_libraries(ouisync PUBLIC Boost::filesystem Boost::serialization)
 #target_compile_features(ouisync PRIVATE cxx_std_17)
 set_warning_level(ouisync)
 
