@@ -33,7 +33,8 @@ int main() {
 
     net::signal_set signals(ioc, SIGINT, SIGTERM);
     signals.async_wait([&] (sys::error_code, int) {
-        fuse.exit_loop();
+        fuse.finish();
+        ioc.reset();
     });
 
     ioc.run();
