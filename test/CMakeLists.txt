@@ -1,7 +1,7 @@
 project(Tests)
 
 add_executable(objcat "objcat.cpp")
-target_link_libraries(objcat Threads::Threads ouisync)
+target_link_libraries(objcat Threads::Threads libouisync)
 target_compile_features(objcat PRIVATE cxx_std_17)
 target_include_directories(objcat PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 set_warning_level(objcat)
@@ -11,7 +11,7 @@ target_link_libraries(test-version-vector PUBLIC Boost::unit_test_framework)
 set_warning_level(test-version-vector)
 
 add_executable(test-objects "test-objects.cpp")
-target_link_libraries(test-objects PUBLIC Boost::unit_test_framework ouisync)
+target_link_libraries(test-objects PUBLIC Boost::unit_test_framework libouisync)
 target_compile_features(test-objects PRIVATE cxx_std_17)
 set_warning_level(test-objects)
 

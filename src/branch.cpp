@@ -134,7 +134,7 @@ bool Branch::maybe_store(const fs::path& path, const Data& data)
 
 //--------------------------------------------------------------------
 
-inline
+static
 Opt<Branch::Data> _maybe_load_recur(const fs::path& objdir, const Id& root_id, PathRange path) {
     if (path.empty())
         throw std::runtime_error("Can't load object without name");

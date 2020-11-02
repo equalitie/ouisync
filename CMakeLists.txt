@@ -32,7 +32,7 @@ function(set_warning_level TARGET)
     endif()
 endfunction(set_warning_level)
 
-add_library(ouisync STATIC
+add_library(libouisync STATIC
     "src/user_id.cpp"
     "src/block_store.cpp"
     "src/hash.cpp"
@@ -46,11 +46,15 @@ add_library(ouisync STATIC
     "src/object/refcount.cpp"
 )
 
-target_compile_definitions(ouisync PRIVATE -DBOOST_ASIO_HAS_CO_AWAIT)
-target_include_directories(ouisync PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(ouisync PUBLIC Boost::filesystem Boost::serialization CryptoPP)
-#target_compile_features(ouisync PRIVATE cxx_std_17)
-set_warning_level(ouisync)
+target_compile_definitions(libouisync PRIVATE -DBOOST_ASIO_HAS_CO_AWAIT)
+target_include_directories(libouisync PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(libouisync PUBLIC Boost::filesystem Boost::serialization CryptoPP)
+#target_compile_features(libouisync PRIVATE cxx_std_17)
+set_warning_level(libouisync)
 
+add_executable(ouisync src/ouisync.cpp src/fuse.cpp)
+target_include_directories(ouisync PRIVATE /usr/include/fuse)
+target_compile_definitions(ouisync PRIVATE -D_FILE_OFFSET_BITS=64)
+target_link_libraries(ouisync PRIVATE libouisync fuse)
 
 add_subdirectory(test)
