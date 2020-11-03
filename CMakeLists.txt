@@ -52,8 +52,8 @@ target_link_libraries(libouisync PUBLIC Boost::filesystem Boost::serialization C
 #target_compile_features(libouisync PRIVATE cxx_std_17)
 set_warning_level(libouisync)
 
-add_executable(ouisync src/ouisync.cpp src/fuse.cpp)
-target_include_directories(ouisync PRIVATE /usr/include/fuse)
+add_executable(ouisync src/ouisync.cpp src/fuse_runner.cpp)
+target_include_directories(ouisync PRIVATE /usr/include)
 target_compile_definitions(ouisync PRIVATE -D_FILE_OFFSET_BITS=64)
 target_link_libraries(ouisync PRIVATE libouisync fuse)
 
