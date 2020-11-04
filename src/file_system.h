@@ -33,13 +33,16 @@ public:
     net::awaitable<Attr> get_attr(const fs::path&);
     net::awaitable<size_t> read(const fs::path&, char* buf, size_t size, off_t offset);
     net::awaitable<size_t> truncate(const fs::path&, size_t);
+    net::awaitable<void> mknod(const fs::path&, mode_t mode, dev_t dev);
 
     executor_type get_executor() { return _ex; }
 
 private:
-    template<class T> T& find(const fs::path& path);
-    Tree& find_tree(const fs::path& path);
+    Tree& find_tree(const fs::path&);
+    template<class T> T& find(const fs::path&);
 
+    template<class PathRange> Tree& find_tree(PathRange);
+    template<class T, class PathRange> T& find(PathRange);
 private:
     executor_type _ex;
     Tree _debug_tree;

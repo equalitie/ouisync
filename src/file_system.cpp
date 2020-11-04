@@ -18,18 +18,12 @@ namespace {
     }
 
     // Debug
-    //std::ostream& operator<<(std::ostream& os, PathRange r) {
-    //    fs::path path;
-    //    for (auto& p : r) path /= p;
-    //    return os << path;
-    //}
-
-    // Debug
-    //std::string debug(const fs::path& p) noexcept {
-    //    fs::ifstream t(p);
-    //    return std::string((std::istreambuf_iterator<char>(t)),
-    //                        std::istreambuf_iterator<char>());
-    //}
+    inline
+    std::ostream& __attribute__((unused)) operator<<(std::ostream& os, PathRange r) {
+        fs::path path;
+        for (auto& p : r) path /= p;
+        return os << path;
+    }
 }
 
 FileSystem::FileSystem(executor_type ex) :
@@ -41,10 +35,11 @@ FileSystem::FileSystem(executor_type ex) :
     };
 }
 
-FileSystem::Tree& FileSystem::find_tree(const fs::path& path_)
+template<class PathRange>
+FileSystem::Tree& FileSystem::find_tree(PathRange path)
 {
-    if (!path_.is_absolute()) throw_errno(ENOENT);
-    auto path = path_range(path_);
+    if (path.begin() == path.end()) throw_errno(EINVAL);
+
     path.advance_begin(1);
 
     auto* tree = &_debug_tree;
@@ -61,12 +56,21 @@ FileSystem::Tree& FileSystem::find_tree(const fs::path& path_)
     return *tree;
 }
 
-template<class T>
-T& FileSystem::find(const fs::path& path)
+template<class T, class PathRange>
+T& FileSystem::find(PathRange path_range)
 {
-    auto p = get<T>(&find_tree(path));
-    if (!p) throw_errno(ENOENT);
+    auto p = get<T>(&find_tree(path_range));
+    if (!p) throw_errno(EINVAL);
     return *p;
+}
+
+FileSystem::Tree& FileSystem::find_tree(const fs::path& path) {
+    return find_tree(path_range(path));
+}
+
+template<class T>
+T& FileSystem::find(const fs::path& path) {
+    return find<T>(path_range(path));
 }
 
 net::awaitable<FileSystem::Attr> FileSystem::get_attr(const fs::path& path)
@@ -106,9 +110,25 @@ net::awaitable<size_t> FileSystem::read(const fs::path& path, char* buf, size_t 
     co_return size;
 }
 
+net::awaitable<void> FileSystem::mknod(const fs::path& path_, mode_t mode, dev_t dev)
+{
+    if (S_ISFIFO(mode)) throw_errno(EINVAL); // TODO?
+
+    auto path = path_range(path_);
+    if (path.begin() == path.end()) throw_errno(EINVAL);
+
+    auto dirpath = path;
+    dirpath.advance_end(-1);
+    Dir& dir = find<Dir>(dirpath);
+
+    auto inserted = dir.insert({path.back().native(), {}}).second;
+    if (!inserted) throw_errno(EEXIST);
+    co_return;
+}
+
 net::awaitable<size_t> FileSystem::truncate(const fs::path& path, size_t size)
 {
     File& content = find<File>(path);
-    content.resize(std::min(content.size(), size));
+    content.resize(size);
     co_return content.size();
 }

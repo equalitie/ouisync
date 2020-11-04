@@ -41,6 +41,7 @@ private:
     static int ouisync_fuse_read(const char *path, char *buf, size_t size, off_t offset,
                       struct fuse_file_info *fi);
     static int ouisync_fuse_truncate(const char *path, off_t offset);
+    static int ouisync_fuse_mknod(const char *path, mode_t mode, dev_t);
 
     template<class F,
         class R = typename std::decay_t<std::result_of_t<F(FileSystem&)>>::value_type

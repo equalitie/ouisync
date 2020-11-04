@@ -25,6 +25,7 @@ FuseRunner::FuseRunner(FileSystem& fs, fs::path mountdir) :
 {
     const struct fuse_operations ouisync_fuse_oper = {
         .getattr        = ouisync_fuse_getattr,
+        .mknod          = ouisync_fuse_mknod,
         .truncate       = ouisync_fuse_truncate,
         .open           = ouisync_fuse_open,
         .read           = ouisync_fuse_read,
@@ -164,8 +165,9 @@ int FuseRunner::ouisync_fuse_open(const char *path_, struct fuse_file_info *fi)
 
     // TODO: Documentations says the app may pass O_TRUNC here, so we should handle it.
 
-    if ((fi->flags & O_ACCMODE) != O_RDONLY)
-        return -EACCES;
+    // TODO:
+    //if ((fi->flags & O_ACCMODE) != O_RDONLY)
+    //    return -EACCES;
 
     return 0;
 }
@@ -175,13 +177,8 @@ int FuseRunner::ouisync_fuse_read(const char *path_, char *buf, size_t size, off
                       struct fuse_file_info*)
 {
     fs::path path(path_);
-
-    auto rs = query_fs([&] (auto& fs) {
-        return fs.read(path, buf, size, offset);
-    });
-
-    if (!rs) return - rs.error().value();
-    return rs.value();
+    auto rs = query_fs([&] (auto& fs) { return fs.read(path, buf, size, offset); });
+    return rs ? rs.value() : -rs.error().value();
 }
 
 /* static */
@@ -189,8 +186,18 @@ int FuseRunner::ouisync_fuse_truncate(const char *path_, off_t offset)
 {
     fs::path path(path_);
     auto rs = query_fs([&] (auto& fs) { return fs.truncate(path, offset); });
-    if (!rs) return - rs.error().value();
-    return rs.value();
+    return rs ? 0 : -rs.error().value();
+}
+
+/* static */
+int FuseRunner::ouisync_fuse_mknod(const char *path_, mode_t mode, dev_t rdev)
+{
+    fs::path path(path_);
+    auto r = query_fs([&] (auto& fs) -> net::awaitable<int> {
+            co_await fs.mknod(path, mode, rdev);
+            co_return 0;
+        });
+    return r ? 0 : -r.error().value();
 }
 
 void FuseRunner::run_loop()
