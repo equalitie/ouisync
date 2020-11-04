@@ -32,6 +32,7 @@ public:
     net::awaitable<std::vector<std::string>> readdir(const fs::path&);
     net::awaitable<Attr> get_attr(const fs::path&);
     net::awaitable<size_t> read(const fs::path&, char* buf, size_t size, off_t offset);
+    net::awaitable<size_t> truncate(const fs::path&, size_t);
 
     executor_type get_executor() { return _ex; }
 

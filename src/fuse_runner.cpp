@@ -25,6 +25,7 @@ FuseRunner::FuseRunner(FileSystem& fs, fs::path mountdir) :
 {
     const struct fuse_operations ouisync_fuse_oper = {
         .getattr        = ouisync_fuse_getattr,
+        .truncate       = ouisync_fuse_truncate,
         .open           = ouisync_fuse_open,
         .read           = ouisync_fuse_read,
         .readdir        = ouisync_fuse_readdir,
@@ -161,6 +162,8 @@ int FuseRunner::ouisync_fuse_open(const char *path_, struct fuse_file_info *fi)
 
     if (!is_file_result) return - is_file_result.error().value();
 
+    // TODO: Documentations says the app may pass O_TRUNC here, so we should handle it.
+
     if ((fi->flags & O_ACCMODE) != O_RDONLY)
         return -EACCES;
 
@@ -177,6 +180,15 @@ int FuseRunner::ouisync_fuse_read(const char *path_, char *buf, size_t size, off
         return fs.read(path, buf, size, offset);
     });
 
+    if (!rs) return - rs.error().value();
+    return rs.value();
+}
+
+/* static */
+int FuseRunner::ouisync_fuse_truncate(const char *path_, off_t offset)
+{
+    fs::path path(path_);
+    auto rs = query_fs([&] (auto& fs) { return fs.truncate(path, offset); });
     if (!rs) return - rs.error().value();
     return rs.value();
 }

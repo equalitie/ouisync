@@ -104,14 +104,11 @@ net::awaitable<size_t> FileSystem::read(const fs::path& path, char* buf, size_t 
     }
 
     co_return size;
+}
 
-    //if(strcmp(path+1, filename) != 0) return -ENOENT;
-    //size_t len = strlen(contents);
-    //if (offset < len) {
-    //    if (offset + size > len) size = len - offset;
-    //    memcpy(buf, contents + offset, size);
-    //} else {
-    //    size = 0;
-    //}
-    //return size;
+net::awaitable<size_t> FileSystem::truncate(const fs::path& path, size_t size)
+{
+    File& content = find<File>(path);
+    content.resize(std::min(content.size(), size));
+    co_return content.size();
 }
