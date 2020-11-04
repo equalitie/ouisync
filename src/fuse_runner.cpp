@@ -27,6 +27,7 @@ FuseRunner::FuseRunner(FileSystem& fs, fs::path mountdir) :
         .getattr        = _fuse_getattr,
         .mknod          = _fuse_mknod,
         .unlink         = _fuse_unlink, // remove file
+        .rmdir          = _fuse_rmdir,
         .truncate       = _fuse_truncate,
         .utime          = _fuse_utime,
         .open           = _fuse_open,
@@ -219,6 +220,17 @@ int FuseRunner::_fuse_unlink(const char* path_)
     fs::path path(path_);
     auto r = query_fs([&] (auto& fs) -> net::awaitable<int> {
         co_await fs.remove_file(path);
+        co_return 0;
+    });
+    return r ? 0 : -r.error().value();
+}
+
+/* static */
+int FuseRunner::_fuse_rmdir(const char* path_)
+{
+    fs::path path(path_);
+    auto r = query_fs([&] (auto& fs) -> net::awaitable<int> {
+        co_await fs.remove_directory(path);
         co_return 0;
     });
     return r ? 0 : -r.error().value();

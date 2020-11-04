@@ -42,6 +42,7 @@ private:
     static int _fuse_mknod(const char* path, mode_t, dev_t);
     static int _fuse_utime(const char* path, utimbuf*);
     static int _fuse_unlink(const char* path);
+	static int _fuse_rmdir(const char*);
 
     template<class F,
         class R = typename std::decay_t<std::result_of_t<F(FileSystem&)>>::value_type

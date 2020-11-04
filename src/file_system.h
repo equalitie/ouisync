@@ -35,6 +35,7 @@ public:
     net::awaitable<size_t> truncate(const fs::path&, size_t);
     net::awaitable<void> mknod(const fs::path&, mode_t mode, dev_t dev);
     net::awaitable<void> remove_file(const fs::path&);
+    net::awaitable<void> remove_directory(const fs::path&);
 
     executor_type get_executor() { return _ex; }
 

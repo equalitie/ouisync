@@ -139,6 +139,15 @@ net::awaitable<void> FileSystem::remove_file(const fs::path& path)
     co_return;
 }
 
+net::awaitable<void> FileSystem::remove_directory(const fs::path& path)
+{
+    Dir& dir = find_parent(path);
+    auto pr = path_range(path);
+    size_t n = dir.erase(pr.back().native());
+    if (n == 0) throw_errno(EEXIST);
+    co_return;
+}
+
 net::awaitable<size_t> FileSystem::truncate(const fs::path& path, size_t size)
 {
     File& content = find<File>(path);
