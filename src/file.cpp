@@ -1,4 +1,5 @@
 #include "file.h"
+#include "error.h"
 
 #include <boost/asio/use_awaitable.hpp>
 #include <boost/asio/read.hpp>
@@ -10,19 +11,6 @@ using namespace ouisync;
 
 namespace errc = boost::system::errc;
 namespace posix = net::posix;
-
-static void throw_error(const sys::error_code& ec)
-{
-    assert(ec);
-    if (!ec) throw sys::system_error(make_error_code(errc::no_message));
-    throw sys::system_error(ec);
-}
-
-static void throw_errno()
-{
-    auto ec = make_error_code(static_cast<errc::errc_t>(errno));
-    throw_error(ec);
-}
 
 void File::seek(size_t pos)
 {
