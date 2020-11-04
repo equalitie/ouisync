@@ -38,6 +38,7 @@ private:
     static int _fuse_readdir(const char* path, void *buf, fuse_fill_dir_t filler, off_t, fuse_file_info*);
     static int _fuse_open(const char* path, fuse_file_info*);
     static int _fuse_read(const char* path, char *buf, size_t size, off_t offset, fuse_file_info *fi);
+    static int _fuse_write(const char *, const char *, size_t, off_t, struct fuse_file_info *);
     static int _fuse_truncate(const char* path, off_t);
     static int _fuse_mknod(const char* path, mode_t, dev_t);
     static int _fuse_mkdir(const char* path, mode_t);

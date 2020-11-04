@@ -33,6 +33,7 @@ FuseRunner::FuseRunner(FileSystem& fs, fs::path mountdir) :
         .utime     = _fuse_utime,
         .open      = _fuse_open,
         .read      = _fuse_read,
+        .write     = _fuse_write,
         .readdir   = _fuse_readdir,
         .init      = _fuse_init,
     };
@@ -182,6 +183,19 @@ int FuseRunner::_fuse_read(const char *path_, char *buf, size_t size, off_t offs
 {
     fs::path path(path_);
     auto rs = query_fs([&] (auto& fs) { return fs.read(path, buf, size, offset); });
+    return rs ? rs.value() : -rs.error().value();
+}
+
+/* static */
+int FuseRunner::_fuse_write(
+        const char* path_,
+        const char* buf,
+        size_t size,
+        off_t offset,
+        struct fuse_file_info* fi)
+{
+    fs::path path(path_);
+    auto rs = query_fs([&] (auto& fs) { return fs.write(path, buf, size, offset); });
     return rs ? rs.value() : -rs.error().value();
 }
 

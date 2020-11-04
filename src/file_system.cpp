@@ -120,6 +120,21 @@ net::awaitable<size_t> FileSystem::read(const fs::path& path, char* buf, size_t 
     co_return size;
 }
 
+net::awaitable<int> FileSystem::write(const fs::path& path, const char* buf, size_t size, off_t offset)
+{
+    File& content = find<File>(path);
+
+    size_t len = content.size();
+
+    if (offset + size > len) {
+        content.resize(offset + size);
+    }
+
+    memcpy(content.data() + offset, buf, size);
+
+    co_return size;
+}
+
 net::awaitable<void> FileSystem::mknod(const fs::path& path, mode_t mode, dev_t dev)
 {
     if (S_ISFIFO(mode)) throw_errno(EINVAL); // TODO?
