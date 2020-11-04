@@ -23,14 +23,14 @@ FuseRunner::FuseRunner(FileSystem& fs, fs::path mountdir) :
     _mountdir(std::move(mountdir)),
     _work(net::make_work_guard(_fs.get_executor()))
 {
-    const struct fuse_operations ouisync_fuse_oper = {
-        .getattr        = ouisync_fuse_getattr,
-        .mknod          = ouisync_fuse_mknod,
-        .truncate       = ouisync_fuse_truncate,
-        .open           = ouisync_fuse_open,
-        .read           = ouisync_fuse_read,
-        .readdir        = ouisync_fuse_readdir,
-        .init           = ouisync_fuse_init,
+    const struct fuse_operations _fuse_oper = {
+        .getattr        = _fuse_getattr,
+        .mknod          = _fuse_mknod,
+        .truncate       = _fuse_truncate,
+        .open           = _fuse_open,
+        .read           = _fuse_read,
+        .readdir        = _fuse_readdir,
+        .init           = _fuse_init,
     };
 
     static const char* argv[] = { "ouisync" };
@@ -45,7 +45,7 @@ FuseRunner::FuseRunner(FileSystem& fs, fs::path mountdir) :
         throw std::runtime_error("FUSE: Failed to mount");
     }
 
-    _fuse = fuse_new(_fuse_channel, &_fuse_args, &ouisync_fuse_oper, sizeof(ouisync_fuse_oper), this);
+    _fuse = fuse_new(_fuse_channel, &_fuse_args, &_fuse_oper, sizeof(_fuse_oper), this);
 
     if (!_fuse) {
         fuse_unmount(_mountdir.c_str(), _fuse_channel);
@@ -62,7 +62,7 @@ static FuseRunner* _get_self()
 }
 
 /* static */
-void* FuseRunner::ouisync_fuse_init(struct fuse_conn_info *conn)
+void* FuseRunner::_fuse_init(struct fuse_conn_info *conn)
 {
     (void) conn;
     return _get_self();
@@ -99,7 +99,7 @@ Result<R> FuseRunner::query_fs(F&& f) {
 }
 
 /* static */
-int FuseRunner::ouisync_fuse_getattr(const char *path_, struct stat *stbuf)
+int FuseRunner::_fuse_getattr(const char *path_, struct stat *stbuf)
 {
     fs::path path = path_;
 
@@ -124,7 +124,7 @@ int FuseRunner::ouisync_fuse_getattr(const char *path_, struct stat *stbuf)
 }
 
 /* static */
-int FuseRunner::ouisync_fuse_readdir(const char *path_, void *buf, fuse_fill_dir_t filler,
+int FuseRunner::_fuse_readdir(const char *path_, void *buf, fuse_fill_dir_t filler,
                          off_t offset, struct fuse_file_info *fi)
 {
     (void) offset;
@@ -152,7 +152,7 @@ int FuseRunner::ouisync_fuse_readdir(const char *path_, void *buf, fuse_fill_dir
 }
 
 /* static */
-int FuseRunner::ouisync_fuse_open(const char *path_, struct fuse_file_info *fi)
+int FuseRunner::_fuse_open(const char *path_, struct fuse_file_info *fi)
 {
     fs::path path(path_);
 
@@ -173,7 +173,7 @@ int FuseRunner::ouisync_fuse_open(const char *path_, struct fuse_file_info *fi)
 }
 
 /* static */
-int FuseRunner::ouisync_fuse_read(const char *path_, char *buf, size_t size, off_t offset,
+int FuseRunner::_fuse_read(const char *path_, char *buf, size_t size, off_t offset,
                       struct fuse_file_info*)
 {
     fs::path path(path_);
@@ -182,7 +182,7 @@ int FuseRunner::ouisync_fuse_read(const char *path_, char *buf, size_t size, off
 }
 
 /* static */
-int FuseRunner::ouisync_fuse_truncate(const char *path_, off_t offset)
+int FuseRunner::_fuse_truncate(const char *path_, off_t offset)
 {
     fs::path path(path_);
     auto rs = query_fs([&] (auto& fs) { return fs.truncate(path, offset); });
@@ -190,7 +190,7 @@ int FuseRunner::ouisync_fuse_truncate(const char *path_, off_t offset)
 }
 
 /* static */
-int FuseRunner::ouisync_fuse_mknod(const char *path_, mode_t mode, dev_t rdev)
+int FuseRunner::_fuse_mknod(const char *path_, mode_t mode, dev_t rdev)
 {
     fs::path path(path_);
     auto r = query_fs([&] (auto& fs) -> net::awaitable<int> {

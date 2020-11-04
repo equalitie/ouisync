@@ -33,15 +33,13 @@ public:
 private:
     void run_loop();
 
-    static void* ouisync_fuse_init(struct fuse_conn_info *conn);
-    static int ouisync_fuse_getattr(const char *path, struct stat *stbuf);
-    static int ouisync_fuse_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
-                         off_t offset, struct fuse_file_info *fi);
-    static int ouisync_fuse_open(const char *path, struct fuse_file_info *fi);
-    static int ouisync_fuse_read(const char *path, char *buf, size_t size, off_t offset,
-                      struct fuse_file_info *fi);
-    static int ouisync_fuse_truncate(const char *path, off_t offset);
-    static int ouisync_fuse_mknod(const char *path, mode_t mode, dev_t);
+    static void* _fuse_init(struct fuse_conn_info*);
+    static int _fuse_getattr(const char *path, struct stat*);
+    static int _fuse_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t, fuse_file_info*);
+    static int _fuse_open(const char *path, fuse_file_info*);
+    static int _fuse_read(const char *path, char *buf, size_t size, off_t offset, fuse_file_info *fi);
+    static int _fuse_truncate(const char *path, off_t);
+    static int _fuse_mknod(const char *path, mode_t, dev_t);
 
     template<class F,
         class R = typename std::decay_t<std::result_of_t<F(FileSystem&)>>::value_type
