@@ -2,6 +2,7 @@
 
 #include "shortcuts.h"
 #include "cancel.h"
+#include "result.h"
 
 #define FUSE_USE_VERSION 26
 #include <fuse.h>
@@ -13,6 +14,8 @@
 
 namespace ouisync {
 
+class FileSystem;
+
 class FuseRunner {
 private:
     struct Impl;
@@ -21,7 +24,7 @@ public:
     using executor_type = net::any_io_executor;
 
 public:
-    FuseRunner(executor_type ex, fs::path mountdir);
+    FuseRunner(FileSystem&, fs::path mountdir);
 
     void finish();
 
@@ -38,8 +41,13 @@ private:
     static int ouisync_fuse_read(const char *path, char *buf, size_t size, off_t offset,
                       struct fuse_file_info *fi);
 
+    template<class F,
+        class R = typename std::decay_t<std::result_of_t<F(FileSystem&)>>::value_type
+        >
+    static Result<R> query_fs(F&& f);
+
 private:
-    executor_type _ex;
+    FileSystem& _fs;
     const fs::path _mountdir;
     std::thread _thread;
     net::executor_work_guard<executor_type> _work;

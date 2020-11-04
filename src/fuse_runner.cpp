@@ -1,4 +1,5 @@
 #include "fuse_runner.h"
+#include "file_system.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,16 +13,15 @@
 #include "defer.h"
 
 #include <boost/asio/signal_set.hpp>
+#include <boost/asio/detached.hpp>
+#include <boost/asio/co_spawn.hpp>
 
 using namespace ouisync;
 
-const char* filename = "hello";
-const char* contents = "hello world";
-
-FuseRunner::FuseRunner(executor_type ex, fs::path mountdir) :
-    _ex(ex),
+FuseRunner::FuseRunner(FileSystem& fs, fs::path mountdir) :
+    _fs(fs),
     _mountdir(std::move(mountdir)),
-    _work(net::make_work_guard(_ex))
+    _work(net::make_work_guard(_fs.get_executor()))
 {
     const struct fuse_operations ouisync_fuse_oper = {
         .getattr        = ouisync_fuse_getattr,
@@ -37,78 +37,148 @@ FuseRunner::FuseRunner(executor_type ex, fs::path mountdir) :
     auto free_args_on_exit = defer([&] { fuse_opt_free_args(&_fuse_args); });
 
     _fuse_channel = fuse_mount(_mountdir.c_str(), &_fuse_args);
-    if (!_fuse_channel)
-        throw std::runtime_error("FUSE: Failed to mount");
 
-    _fuse = fuse_new(_fuse_channel, &_fuse_args, &ouisync_fuse_oper, sizeof(ouisync_fuse_oper), nullptr);
-    if (!_fuse)
+    if (!_fuse_channel) {
+        fuse_opt_free_args(&_fuse_args);
+        throw std::runtime_error("FUSE: Failed to mount");
+    }
+
+    _fuse = fuse_new(_fuse_channel, &_fuse_args, &ouisync_fuse_oper, sizeof(ouisync_fuse_oper), this);
+
+    if (!_fuse) {
+        fuse_unmount(_mountdir.c_str(), _fuse_channel);
+        fuse_opt_free_args(&_fuse_args);
         throw std::runtime_error("FUSE: failed in fuse_new");
+    }
 
     _thread = std::thread([this] { run_loop(); });
+}
+
+static FuseRunner* _get_self()
+{
+    return reinterpret_cast<FuseRunner*>(fuse_get_context()->private_data);
 }
 
 /* static */
 void* FuseRunner::ouisync_fuse_init(struct fuse_conn_info *conn)
 {
     (void) conn;
-    return nullptr;
+    return _get_self();
+}
+
+template<class F, class R>
+/* static */
+Result<R> FuseRunner::query_fs(F&& f) {
+    FuseRunner* self = _get_self();
+    auto& fs = self->_fs;
+    auto ex = fs.get_executor();
+
+    std::mutex m;
+    m.lock();
+    Result<R> ret = R{};
+
+    // XXX: Do we need to net::post?
+    net::post(ex, [&] () mutable {
+        co_spawn(ex, [&] () -> net::awaitable<void> {
+            try {
+                ret = co_await f(fs);
+            }
+            catch (const sys::system_error& e) {
+                ret = outcome::failure(e.code());
+            }
+        }, [&] (auto) {
+            m.unlock();
+        });
+    });
+
+    auto lock = std::scoped_lock<std::mutex>(m);
+
+    return ret;
 }
 
 /* static */
-int FuseRunner::ouisync_fuse_getattr(const char *path, struct stat *stbuf)
+int FuseRunner::ouisync_fuse_getattr(const char *path_, struct stat *stbuf)
 {
-    int res = 0;
-    memset(stbuf, 0, sizeof(struct stat));
-    if (strcmp(path, "/") == 0) {
-        stbuf->st_mode = S_IFDIR | 0755;
-        stbuf->st_nlink = 2;
-    } else if (strcmp(path+1, filename) == 0) {
-        stbuf->st_mode = S_IFREG | 0444;
-        stbuf->st_nlink = 1;
-        stbuf->st_size = strlen(contents);
-    } else {
-        res = -ENOENT;
-    }
-    return res;
+    fs::path path = path_;
+
+    auto attr = query_fs([&] (auto& fs) {
+        return fs.get_attr(path);
+    });
+
+    if (!attr) return -ENOENT;
+
+    apply(attr.value(),
+            [&] (FileSystem::DirAttr) {
+                stbuf->st_mode = S_IFDIR | 0755;
+                stbuf->st_nlink = 1;
+            },
+            [&] (FileSystem::FileAttr a) {
+                stbuf->st_mode = S_IFREG | 0444;
+                stbuf->st_nlink = 1;
+                stbuf->st_size = a.size;
+            });
+
+    return 0;
 }
 
 /* static */
-int FuseRunner::ouisync_fuse_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
+int FuseRunner::ouisync_fuse_readdir(const char *path_, void *buf, fuse_fill_dir_t filler,
                          off_t offset, struct fuse_file_info *fi)
 {
     (void) offset;
     (void) fi;
-    if (strcmp(path, "/") != 0)
-        return -ENOENT;
+
+    fs::path path(path_);
+
+    auto direntries = query_fs([&] (auto& fs) {
+        return fs.readdir(path);
+    });
+
+    if (!direntries) {
+        assert(direntries.error().value() == ENOENT);
+        return - direntries.error().value();
+    }
+
     filler(buf, ".", NULL, 0);
     filler(buf, "..", NULL, 0);
-    filler(buf, filename, NULL, 0);
+
+    for (auto& e : direntries.value()) {
+        filler(buf, e.c_str(), NULL, 0);
+    }
+
     return 0;
 }
 
 /* static */
-int FuseRunner::ouisync_fuse_open(const char *path, struct fuse_file_info *fi)
+int FuseRunner::ouisync_fuse_open(const char *path_, struct fuse_file_info *fi)
 {
-    if (strcmp(path+1, filename) != 0)
-        return -ENOENT;
+    fs::path path(path_);
+
+    auto is_file_result = query_fs([&] (auto& fs) -> net::awaitable<bool> {
+        auto attr = co_await fs.get_attr(path);
+        co_return bool(boost::get<FileSystem::FileAttr>(&attr));
+    });
+
+    if (!is_file_result) return - is_file_result.error().value();
+
     if ((fi->flags & O_ACCMODE) != O_RDONLY)
         return -EACCES;
+
     return 0;
 }
 
 /* static */
-int FuseRunner::ouisync_fuse_read(const char *path, char *buf, size_t size, off_t offset,
+int FuseRunner::ouisync_fuse_read(const char *path_, char *buf, size_t size, off_t offset,
                       struct fuse_file_info*)
 {
-    if(strcmp(path+1, filename) != 0) return -ENOENT;
-    size_t len = strlen(contents);
-    if (offset < len) {
-        if (offset + size > len) size = len - offset;
-        memcpy(buf, contents + offset, size);
-    } else {
-        size = 0;
-    }
-    return size;
+    fs::path path(path_);
+
+    auto rs = query_fs([&] (auto& fs) {
+        return fs.read(path, buf, size, offset);
+    });
+
+    if (!rs) return - rs.error().value();
+    return rs.value();
 }
 
 void FuseRunner::run_loop()

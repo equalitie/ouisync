@@ -1,6 +1,8 @@
 #pragma once
 
 #include "shortcuts.h"
+#include <boost/system/error_code.hpp>
+#include <boost/system/system_error.hpp>
 
 namespace ouisync {
 

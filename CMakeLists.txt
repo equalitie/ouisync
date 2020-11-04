@@ -37,6 +37,7 @@ add_library(libouisync STATIC
     "src/block_store.cpp"
     "src/hash.cpp"
     "src/branch.cpp"
+    "src/file_system.cpp"
     "src/object/tree.cpp"
     "src/object/block.cpp"
     "src/object/path.cpp"
