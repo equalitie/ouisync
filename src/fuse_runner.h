@@ -34,12 +34,14 @@ private:
     void run_loop();
 
     static void* _fuse_init(struct fuse_conn_info*);
-    static int _fuse_getattr(const char *path, struct stat*);
-    static int _fuse_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t, fuse_file_info*);
-    static int _fuse_open(const char *path, fuse_file_info*);
-    static int _fuse_read(const char *path, char *buf, size_t size, off_t offset, fuse_file_info *fi);
-    static int _fuse_truncate(const char *path, off_t);
-    static int _fuse_mknod(const char *path, mode_t, dev_t);
+    static int _fuse_getattr(const char* path, struct stat*);
+    static int _fuse_readdir(const char* path, void *buf, fuse_fill_dir_t filler, off_t, fuse_file_info*);
+    static int _fuse_open(const char* path, fuse_file_info*);
+    static int _fuse_read(const char* path, char *buf, size_t size, off_t offset, fuse_file_info *fi);
+    static int _fuse_truncate(const char* path, off_t);
+    static int _fuse_mknod(const char* path, mode_t, dev_t);
+    static int _fuse_utime(const char* path, utimbuf*);
+    static int _fuse_unlink(const char* path);
 
     template<class F,
         class R = typename std::decay_t<std::result_of_t<F(FileSystem&)>>::value_type

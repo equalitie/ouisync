@@ -34,12 +34,14 @@ public:
     net::awaitable<size_t> read(const fs::path&, char* buf, size_t size, off_t offset);
     net::awaitable<size_t> truncate(const fs::path&, size_t);
     net::awaitable<void> mknod(const fs::path&, mode_t mode, dev_t dev);
+    net::awaitable<void> remove_file(const fs::path&);
 
     executor_type get_executor() { return _ex; }
 
 private:
     Tree& find_tree(const fs::path&);
     template<class T> T& find(const fs::path&);
+    Dir& find_parent(const fs::path&);
 
     template<class PathRange> Tree& find_tree(PathRange);
     template<class T, class PathRange> T& find(PathRange);

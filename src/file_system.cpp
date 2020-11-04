@@ -73,6 +73,16 @@ T& FileSystem::find(const fs::path& path) {
     return find<T>(path_range(path));
 }
 
+FileSystem::Dir& FileSystem::find_parent(const fs::path& path_)
+{
+    auto path = path_range(path_);
+    if (path.begin() == path.end()) throw_errno(EINVAL);
+
+    auto dirpath = path;
+    dirpath.advance_end(-1);
+    return find<Dir>(dirpath);
+}
+
 net::awaitable<FileSystem::Attr> FileSystem::get_attr(const fs::path& path)
 {
     Tree& t = find_tree(path);
@@ -110,19 +120,22 @@ net::awaitable<size_t> FileSystem::read(const fs::path& path, char* buf, size_t 
     co_return size;
 }
 
-net::awaitable<void> FileSystem::mknod(const fs::path& path_, mode_t mode, dev_t dev)
+net::awaitable<void> FileSystem::mknod(const fs::path& path, mode_t mode, dev_t dev)
 {
     if (S_ISFIFO(mode)) throw_errno(EINVAL); // TODO?
-
-    auto path = path_range(path_);
-    if (path.begin() == path.end()) throw_errno(EINVAL);
-
-    auto dirpath = path;
-    dirpath.advance_end(-1);
-    Dir& dir = find<Dir>(dirpath);
-
-    auto inserted = dir.insert({path.back().native(), {}}).second;
+    Dir& dir = find_parent(path);
+    auto pr = path_range(path);
+    auto inserted = dir.insert({pr.back().native(), {}}).second;
     if (!inserted) throw_errno(EEXIST);
+    co_return;
+}
+
+net::awaitable<void> FileSystem::remove_file(const fs::path& path)
+{
+    Dir& dir = find_parent(path);
+    auto pr = path_range(path);
+    size_t n = dir.erase(pr.back().native());
+    if (n == 0) throw_errno(EEXIST);
     co_return;
 }
 
