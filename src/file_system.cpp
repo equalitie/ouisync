@@ -125,7 +125,17 @@ net::awaitable<void> FileSystem::mknod(const fs::path& path, mode_t mode, dev_t 
     if (S_ISFIFO(mode)) throw_errno(EINVAL); // TODO?
     Dir& dir = find_parent(path);
     auto pr = path_range(path);
-    auto inserted = dir.insert({pr.back().native(), {}}).second;
+    auto inserted = dir.insert({pr.back().native(), File{}}).second;
+    if (!inserted) throw_errno(EEXIST);
+    co_return;
+}
+
+net::awaitable<void> FileSystem::mkdir(const fs::path& path, mode_t mode)
+{
+    Dir& dir = find_parent(path);
+    auto pr = path_range(path);
+    // Why does pr.back() cause an asan crash?
+    auto inserted = dir.insert({(--pr.end())->native(), Dir{}}).second;
     if (!inserted) throw_errno(EEXIST);
     co_return;
 }

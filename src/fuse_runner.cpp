@@ -24,16 +24,17 @@ FuseRunner::FuseRunner(FileSystem& fs, fs::path mountdir) :
     _work(net::make_work_guard(_fs.get_executor()))
 {
     const struct fuse_operations _fuse_oper = {
-        .getattr        = _fuse_getattr,
-        .mknod          = _fuse_mknod,
-        .unlink         = _fuse_unlink, // remove file
-        .rmdir          = _fuse_rmdir,
-        .truncate       = _fuse_truncate,
-        .utime          = _fuse_utime,
-        .open           = _fuse_open,
-        .read           = _fuse_read,
-        .readdir        = _fuse_readdir,
-        .init           = _fuse_init,
+        .getattr   = _fuse_getattr,
+        .mknod     = _fuse_mknod,
+        .mkdir     = _fuse_mkdir,
+        .unlink    = _fuse_unlink, // remove file
+        .rmdir     = _fuse_rmdir,
+        .truncate  = _fuse_truncate,
+        .utime     = _fuse_utime,
+        .open      = _fuse_open,
+        .read      = _fuse_read,
+        .readdir   = _fuse_readdir,
+        .init      = _fuse_init,
     };
 
     static const char* argv[] = { "ouisync" };
@@ -200,6 +201,17 @@ int FuseRunner::_fuse_mknod(const char *path_, mode_t mode, dev_t rdev)
             co_await fs.mknod(path, mode, rdev);
             co_return 0;
         });
+    return r ? 0 : -r.error().value();
+}
+
+/* static */
+int FuseRunner::_fuse_mkdir(const char* path_, mode_t mode)
+{
+    fs::path path(path_);
+    auto r = query_fs([&] (auto& fs) -> net::awaitable<int> {
+        co_await fs.mkdir(path, mode);
+        co_return 0;
+    });
     return r ? 0 : -r.error().value();
 }
 
