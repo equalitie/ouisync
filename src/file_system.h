@@ -42,8 +42,6 @@ public:
     executor_type get_executor() { return _ex; }
 
 private:
-    Tree& find_tree(const fs::path&);
-    template<class T> T& find(const fs::path&);
     Dir& find_parent(const fs::path&);
 
     template<class PathRange> Tree& find_tree(PathRange);

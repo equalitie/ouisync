@@ -64,15 +64,6 @@ T& FileSystem::find(PathRange path_range)
     return *p;
 }
 
-FileSystem::Tree& FileSystem::find_tree(const fs::path& path) {
-    return find_tree(path_range(path));
-}
-
-template<class T>
-T& FileSystem::find(const fs::path& path) {
-    return find<T>(path_range(path));
-}
-
 FileSystem::Dir& FileSystem::find_parent(const fs::path& path_)
 {
     auto path = path_range(path_);
@@ -85,7 +76,7 @@ FileSystem::Dir& FileSystem::find_parent(const fs::path& path_)
 
 net::awaitable<FileSystem::Attr> FileSystem::get_attr(const fs::path& path)
 {
-    Tree& t = find_tree(path);
+    Tree& t = find_tree(path_range(path));
 
     co_return apply(t,
             [&] (const Dir&) -> Attr { return DirAttr{}; },
@@ -96,7 +87,7 @@ net::awaitable<vector<string>> FileSystem::readdir(const fs::path& path)
 {
     std::vector<std::string> nodes;
 
-    for (auto& [name, val] : find<Dir>(path)) {
+    for (auto& [name, val] : find<Dir>(path_range(path))) {
         (void) val;
         nodes.push_back(name);
     }
@@ -106,7 +97,7 @@ net::awaitable<vector<string>> FileSystem::readdir(const fs::path& path)
 
 net::awaitable<size_t> FileSystem::read(const fs::path& path, char* buf, size_t size, off_t offset)
 {
-    File& content = find<File>(path);
+    File& content = find<File>(path_range(path));
 
     size_t len = content.size();
 
@@ -122,7 +113,7 @@ net::awaitable<size_t> FileSystem::read(const fs::path& path, char* buf, size_t 
 
 net::awaitable<int> FileSystem::write(const fs::path& path, const char* buf, size_t size, off_t offset)
 {
-    File& content = find<File>(path);
+    File& content = find<File>(path_range(path));
 
     size_t len = content.size();
 
@@ -175,7 +166,7 @@ net::awaitable<void> FileSystem::remove_directory(const fs::path& path)
 
 net::awaitable<size_t> FileSystem::truncate(const fs::path& path, size_t size)
 {
-    File& content = find<File>(path);
+    File& content = find<File>(path_range(path));
     content.resize(size);
     co_return content.size();
 }
