@@ -84,20 +84,18 @@ Result<R> FuseRunner::query_fs(F&& f) {
     m.lock();
     Result<R> ret = R{};
 
-    // XXX: Do we need to net::post?
-    net::post(ex, [&] () mutable {
-        co_spawn(ex, [&] () -> net::awaitable<void> {
-            try {
-                ret = co_await f(fs);
-            }
-            catch (const sys::system_error& e) {
-                ret = outcome::failure(e.code());
-            }
-        }, [&] (auto) {
-            m.unlock();
-        });
+    co_spawn(ex, [&] () -> net::awaitable<void> {
+        try {
+            ret = co_await f(fs);
+        }
+        catch (const sys::system_error& e) {
+            ret = outcome::failure(e.code());
+        }
+    }, [&] (auto) {
+        m.unlock();
     });
 
+    // Wait for the mutex to get unlocked
     auto lock = std::scoped_lock<std::mutex>(m);
 
     return ret;
