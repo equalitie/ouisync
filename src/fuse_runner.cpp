@@ -107,6 +107,15 @@ static fs::path remove_root(const char* path)
     return fs::path(path + 1);
 }
 
+template<class Result>
+static void report_if_error(const char* function_name, const Result& r, const char* path)
+{
+    if (r) return;
+    std::cerr << "FUSE: Error in function '" <<
+        function_name << "' path '" <<
+        path << "' error: " << r.error().message() << "\n";
+}
+
 /* static */
 int FuseRunner::_fuse_getattr(const char *path_, struct stat *stbuf)
 {
@@ -115,6 +124,8 @@ int FuseRunner::_fuse_getattr(const char *path_, struct stat *stbuf)
     auto attr = query_fs([&] (auto& fs) {
         return fs.get_attr(path_range(path));
     });
+
+    report_if_error("getattr", attr, path_);
 
     if (!attr) return -ENOENT;
 
@@ -145,6 +156,8 @@ int FuseRunner::_fuse_readdir(const char *path_, void *buf, fuse_fill_dir_t fill
         return fs.readdir(path_range(path));
     });
 
+    report_if_error("readdir", direntries, path_);
+
     if (!direntries) {
         assert(direntries.error().value() == ENOENT);
         return - direntries.error().value();
@@ -169,6 +182,8 @@ int FuseRunner::_fuse_open(const char *path_, struct fuse_file_info *fi)
         auto attr = co_await fs.get_attr(path_range(path));
         co_return bool(boost::get<FileSystem::FileAttr>(&attr));
     });
+
+    report_if_error("open", is_file_result, path_);
 
     if (!is_file_result) return - is_file_result.error().value();
 
@@ -200,6 +215,7 @@ int FuseRunner::_fuse_write(
 {
     fs::path path = remove_root(path_);
     auto rs = query_fs([&] (auto& fs) { return fs.write(path_range(path), buf, size, offset); });
+    report_if_error("write", rs, path_);
     return rs ? rs.value() : -rs.error().value();
 }
 
@@ -208,6 +224,7 @@ int FuseRunner::_fuse_truncate(const char *path_, off_t offset)
 {
     fs::path path = remove_root(path_);
     auto rs = query_fs([&] (auto& fs) { return fs.truncate(path_range(path), offset); });
+    report_if_error("truncate", rs, path_);
     return rs ? 0 : -rs.error().value();
 }
 
@@ -219,6 +236,7 @@ int FuseRunner::_fuse_mknod(const char *path_, mode_t mode, dev_t rdev)
             co_await fs.mknod(path_range(path), mode, rdev);
             co_return 0;
         });
+    report_if_error("truncate", r, path_);
     return r ? 0 : -r.error().value();
 }
 
@@ -230,6 +248,7 @@ int FuseRunner::_fuse_mkdir(const char* path_, mode_t mode)
         co_await fs.mkdir(path_range(path), mode);
         co_return 0;
     });
+    report_if_error("mkdir", r, path_);
     return r ? 0 : -r.error().value();
 }
 
@@ -252,6 +271,7 @@ int FuseRunner::_fuse_unlink(const char* path_)
         co_await fs.remove_file(path_range(path));
         co_return 0;
     });
+    report_if_error("unlink", r, path_);
     return r ? 0 : -r.error().value();
 }
 
@@ -263,6 +283,7 @@ int FuseRunner::_fuse_rmdir(const char* path_)
         co_await fs.remove_directory(path_range(path));
         co_return 0;
     });
+    report_if_error("rmdir", r, path_);
     return r ? 0 : -r.error().value();
 }
 
