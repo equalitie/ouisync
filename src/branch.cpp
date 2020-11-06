@@ -1,17 +1,16 @@
 #include "branch.h"
 #include "variant.h"
+#include "path_range.h"
 #include "object/tree.h"
 #include "object/tagged.h"
 #include "object/block.h"
 #include "object/io.h"
 #include "object/refcount.h"
 
-
 #include <boost/filesystem.hpp>
 #include <boost/archive/text_oarchive.hpp>
 #include <boost/archive/text_iarchive.hpp>
 #include <boost/serialization/vector.hpp>
-#include <boost/range/iterator_range.hpp>
 
 using namespace ouisync;
 using std::move;
@@ -20,28 +19,6 @@ using object::Block;
 using object::Tree;
 using object::JustTag;
 using Data = Branch::Data;
-
-namespace {
-    using PathRange = boost::iterator_range<fs::path::iterator>;
-
-    PathRange path_range(const fs::path& path) {
-        return boost::make_iterator_range(path);
-    }
-
-    // Debug
-    //std::ostream& operator<<(std::ostream& os, PathRange r) {
-    //    fs::path path;
-    //    for (auto& p : r) path /= p;
-    //    return os << path;
-    //}
-
-    // Debug
-    //std::string debug(const fs::path& p) noexcept {
-    //    fs::ifstream t(p);
-    //    return std::string((std::istreambuf_iterator<char>(t)),
-    //                        std::istreambuf_iterator<char>());
-    //}
-}
 
 /* static */
 Branch Branch::load_or_create(const fs::path& rootdir, const fs::path& objdir, UserId user_id) {

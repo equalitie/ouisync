@@ -10,22 +10,6 @@ using std::map;
 using std::string;
 using boost::get;
 
-namespace {
-    using PathRange = boost::iterator_range<fs::path::iterator>;
-
-    PathRange path_range(const fs::path& path) {
-        return boost::make_iterator_range(path);
-    }
-
-    // Debug
-    inline
-    std::ostream& __attribute__((unused)) operator<<(std::ostream& os, PathRange r) {
-        fs::path path;
-        for (auto& p : r) path /= p;
-        return os << path;
-    }
-}
-
 FileSystem::FileSystem(executor_type ex, FileSystemOptions options) :
     _ex(std::move(ex)),
     _options(std::move(options))
@@ -45,13 +29,8 @@ FileSystem::FileSystem(executor_type ex, FileSystemOptions options) :
     _branches.insert(std::make_pair(_user_id, std::move(branch)));
 }
 
-template<class PathRange>
 FileSystem::Tree& FileSystem::find_tree(PathRange path)
 {
-    if (path.begin() == path.end()) throw_errno(EINVAL);
-
-    path.advance_begin(1);
-
     auto* tree = &_debug_tree;
 
     for (auto& p : path) {
@@ -66,7 +45,7 @@ FileSystem::Tree& FileSystem::find_tree(PathRange path)
     return *tree;
 }
 
-template<class T, class PathRange>
+template<class T>
 T& FileSystem::find(PathRange path_range)
 {
     auto p = get<T>(&find_tree(path_range));
@@ -74,30 +53,28 @@ T& FileSystem::find(PathRange path_range)
     return *p;
 }
 
-FileSystem::Dir& FileSystem::find_parent(const fs::path& path_)
+FileSystem::Dir& FileSystem::find_parent(PathRange path)
 {
-    auto path = path_range(path_);
     if (path.begin() == path.end()) throw_errno(EINVAL);
-
-    auto dirpath = path;
-    dirpath.advance_end(-1);
-    return find<Dir>(dirpath);
+    path.advance_end(-1);
+    return find<Dir>(path);
 }
 
-net::awaitable<FileSystem::Attr> FileSystem::get_attr(const fs::path& path)
+net::awaitable<FileSystem::Attr> FileSystem::get_attr(PathRange path)
 {
-    Tree& t = find_tree(path_range(path));
+
+    Tree& t = find_tree(path);
 
     co_return apply(t,
             [&] (const Dir&) -> Attr { return DirAttr{}; },
             [&] (const File& f) -> Attr { return FileAttr{f.size()}; });
 }
 
-net::awaitable<vector<string>> FileSystem::readdir(const fs::path& path)
+net::awaitable<vector<string>> FileSystem::readdir(PathRange path)
 {
     std::vector<std::string> nodes;
 
-    for (auto& [name, val] : find<Dir>(path_range(path))) {
+    for (auto& [name, val] : find<Dir>(path)) {
         (void) val;
         nodes.push_back(name);
     }
@@ -105,9 +82,9 @@ net::awaitable<vector<string>> FileSystem::readdir(const fs::path& path)
     co_return nodes;
 }
 
-net::awaitable<size_t> FileSystem::read(const fs::path& path, char* buf, size_t size, off_t offset)
+net::awaitable<size_t> FileSystem::read(PathRange path, char* buf, size_t size, off_t offset)
 {
-    File& content = find<File>(path_range(path));
+    File& content = find<File>(path);
 
     size_t len = content.size();
 
@@ -121,9 +98,9 @@ net::awaitable<size_t> FileSystem::read(const fs::path& path, char* buf, size_t 
     co_return size;
 }
 
-net::awaitable<int> FileSystem::write(const fs::path& path, const char* buf, size_t size, off_t offset)
+net::awaitable<int> FileSystem::write(PathRange path, const char* buf, size_t size, off_t offset)
 {
-    File& content = find<File>(path_range(path));
+    File& content = find<File>(path);
 
     size_t len = content.size();
 
@@ -136,47 +113,43 @@ net::awaitable<int> FileSystem::write(const fs::path& path, const char* buf, siz
     co_return size;
 }
 
-net::awaitable<void> FileSystem::mknod(const fs::path& path, mode_t mode, dev_t dev)
+net::awaitable<void> FileSystem::mknod(PathRange path, mode_t mode, dev_t dev)
 {
     if (S_ISFIFO(mode)) throw_errno(EINVAL); // TODO?
     Dir& dir = find_parent(path);
-    auto pr = path_range(path);
-    auto inserted = dir.insert({pr.back().native(), File{}}).second;
+    auto inserted = dir.insert({path.back().native(), File{}}).second;
     if (!inserted) throw_errno(EEXIST);
     co_return;
 }
 
-net::awaitable<void> FileSystem::mkdir(const fs::path& path, mode_t mode)
+net::awaitable<void> FileSystem::mkdir(PathRange path, mode_t mode)
 {
     Dir& dir = find_parent(path);
-    auto pr = path_range(path);
-    // Why does pr.back() cause an asan crash?
-    auto inserted = dir.insert({(--pr.end())->native(), Dir{}}).second;
+    // Why does path.back() cause an asan crash?
+    auto inserted = dir.insert({(--path.end())->native(), Dir{}}).second;
     if (!inserted) throw_errno(EEXIST);
     co_return;
 }
 
-net::awaitable<void> FileSystem::remove_file(const fs::path& path)
+net::awaitable<void> FileSystem::remove_file(PathRange path)
 {
     Dir& dir = find_parent(path);
-    auto pr = path_range(path);
-    size_t n = dir.erase(pr.back().native());
+    size_t n = dir.erase(path.back().native());
     if (n == 0) throw_errno(EEXIST);
     co_return;
 }
 
-net::awaitable<void> FileSystem::remove_directory(const fs::path& path)
+net::awaitable<void> FileSystem::remove_directory(PathRange path)
 {
     Dir& dir = find_parent(path);
-    auto pr = path_range(path);
-    size_t n = dir.erase(pr.back().native());
+    size_t n = dir.erase(path.back().native());
     if (n == 0) throw_errno(EEXIST);
     co_return;
 }
 
-net::awaitable<size_t> FileSystem::truncate(const fs::path& path, size_t size)
+net::awaitable<size_t> FileSystem::truncate(PathRange path, size_t size)
 {
-    File& content = find<File>(path_range(path));
+    File& content = find<File>(path);
     content.resize(size);
     co_return content.size();
 }

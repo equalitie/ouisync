@@ -6,6 +6,7 @@
 #include "file_system_options.h"
 #include "user_id.h"
 #include "branch.h"
+#include "path_range.h"
 #include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/awaitable.hpp>
 #include <string>
@@ -32,23 +33,23 @@ public:
 
     FileSystem(executor_type ex, FileSystemOptions);
 
-    net::awaitable<std::vector<std::string>> readdir(const fs::path&);
-    net::awaitable<Attr> get_attr(const fs::path&);
-    net::awaitable<size_t> read(const fs::path&, char* buf, size_t size, off_t offset);
-    net::awaitable<int> write(const fs::path&, const char* buf, size_t size, off_t offset);
-    net::awaitable<size_t> truncate(const fs::path&, size_t);
-    net::awaitable<void> mknod(const fs::path&, mode_t mode, dev_t dev);
-    net::awaitable<void> mkdir(const fs::path&, mode_t mode);
-    net::awaitable<void> remove_file(const fs::path&);
-    net::awaitable<void> remove_directory(const fs::path&);
+    net::awaitable<std::vector<std::string>> readdir(PathRange);
+    net::awaitable<Attr> get_attr(PathRange);
+    net::awaitable<size_t> read(PathRange, char* buf, size_t size, off_t offset);
+    net::awaitable<int> write(PathRange, const char* buf, size_t size, off_t offset);
+    net::awaitable<size_t> truncate(PathRange, size_t);
+    net::awaitable<void> mknod(PathRange, mode_t mode, dev_t dev);
+    net::awaitable<void> mkdir(PathRange, mode_t mode);
+    net::awaitable<void> remove_file(PathRange);
+    net::awaitable<void> remove_directory(PathRange);
 
     executor_type get_executor() { return _ex; }
 
 private:
-    Dir& find_parent(const fs::path&);
+    Dir& find_parent(PathRange);
 
-    template<class PathRange> Tree& find_tree(PathRange);
-    template<class T, class PathRange> T& find(PathRange);
+    Tree& find_tree(PathRange);
+    template<class T> T& find(PathRange);
 private:
     executor_type _ex;
     FileSystemOptions _options;
