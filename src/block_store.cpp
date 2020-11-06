@@ -2,7 +2,7 @@
 #include "array_io.h"
 #include "hex.h"
 #include "version_vector.h"
-#include "object/block.h"
+#include "object/blob.h"
 #include "object/tree.h"
 #include "object/io.h"
 

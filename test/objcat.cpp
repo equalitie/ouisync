@@ -1,5 +1,5 @@
 #include "object/tree.h"
-#include "object/block.h"
+#include "object/blob.h"
 #include "object/io.h"
 #include "shortcuts.h"
 #include "variant.h"
@@ -15,7 +15,7 @@
 using namespace std;
 using namespace ouisync;
 using object::Id;
-using object::Block;
+using object::Blob;
 using object::Tree;
 
 void usage(ostream& os, const string& appname) {
@@ -53,7 +53,7 @@ int main(int argc, char** argv)
     }
 
     try {
-        auto obj = object::io::load<Id, Tree, Block>(path);
+        auto obj = object::io::load<Id, Tree, Blob>(path);
 
         apply(obj,
                 [](Id id) { cout << "Id " << to_hex<char>(id) << "\n"; },

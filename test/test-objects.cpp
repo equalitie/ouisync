@@ -1,7 +1,7 @@
 #define BOOST_TEST_MODULE objects
 #include <boost/test/included/unit_test.hpp>
 
-#include "object/block.h"
+#include "object/blob.h"
 #include "object/tree.h"
 #include "object/io.h"
 #include "shortcuts.h"
@@ -22,7 +22,7 @@ using namespace std;
 using namespace ouisync;
 
 using object::Tree;
-using object::Block;
+using object::Blob;
 using object::Id;
 using boost::variant;
 
@@ -86,14 +86,14 @@ fs::path choose_test_dir() {
     return fs::unique_path("/tmp/ouisync/test-objects-%%%%-%%%%-%%%%-%%%%");
 }
 
-BOOST_AUTO_TEST_CASE(block_is_same) {
+BOOST_AUTO_TEST_CASE(blob_is_same) {
     fs::path testdir = choose_test_dir();
 
     Random random;
-    object::Block b1(random.vector(1000));
+    object::Blob b1(random.vector(1000));
     //b1.store(testdir);
     object::io::store(testdir, b1);
-    auto b2 = object::io::load<object::Block>(testdir, object::calculate_id(b1));
+    auto b2 = object::io::load<object::Blob>(testdir, object::calculate_id(b1));
     REQUIRE_HEX_EQUAL(object::calculate_id(b1), object::calculate_id(b2));
 }
 
@@ -126,7 +126,7 @@ BOOST_AUTO_TEST_CASE(tree_branch_store_and_load) {
 
     Random random;
 
-    Block d1(random.vector(1000));
+    Blob d1(random.vector(1000));
 
     Branch branch = create_branch(testdir, "user_id");
 
@@ -158,8 +158,8 @@ BOOST_AUTO_TEST_CASE(tree_remove) {
         BOOST_REQUIRE_EQUAL(root.begin()->first, "data");
         BOOST_REQUIRE_EQUAL(count_objects(branch.object_directory()), 2);
 
-        Block block = object::io::load<Block>(branch.object_directory(), root.begin()->second);
-        BOOST_REQUIRE_EQUAL(data, block);
+        Blob blob = object::io::load<Blob>(branch.object_directory(), root.begin()->second);
+        BOOST_REQUIRE_EQUAL(data, blob);
 
         bool removed = branch.remove("data");
         BOOST_REQUIRE(removed);

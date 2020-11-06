@@ -1,6 +1,7 @@
 #pragma once
 
 #include "object/id.h"
+#include "object/blob.h"
 #include "user_id.h"
 #include "version_vector.h"
 #include "shortcuts.h"
@@ -12,7 +13,7 @@ namespace ouisync {
 
 class Branch {
 public:
-    using Data = std::vector<uint8_t>;
+    using Blob = object::Blob;
 
 public:
     static Branch load_or_create(
@@ -24,11 +25,11 @@ public:
 
     void root_object_id(const object::Id& id);
 
-    bool maybe_store(const fs::path&, const Data&);
+    bool maybe_store(const fs::path&, const Blob&);
 
-    void store(const fs::path&, const Data&);
+    void store(const fs::path&, const Blob&);
 
-    Opt<Data> maybe_load(const fs::path&) const;
+    Opt<Blob> maybe_load(const fs::path&) const;
 
     bool remove(const fs::path&);
 

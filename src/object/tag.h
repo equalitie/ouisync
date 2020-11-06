@@ -1,7 +1,7 @@
 #pragma once
 
 #include "id.h"
-#include "block.h"
+#include "blob.h"
 
 #include <cstdint> // uint8_t
 #include <iosfwd>
@@ -10,7 +10,7 @@ namespace ouisync::object {
 
 enum class Tag : std::uint8_t {
     Tree = 1,
-    Block,
+    Blob,
     Id
 };
 
@@ -33,7 +33,7 @@ class Tree;
 
 template<class> struct GetTag;
 template<> struct GetTag<Tree>  { static constexpr Tag value = Tag::Tree;  };
-template<> struct GetTag<Block> { static constexpr Tag value = Tag::Block; };
+template<> struct GetTag<Blob>  { static constexpr Tag value = Tag::Blob;  };
 template<> struct GetTag<Id>    { static constexpr Tag value = Tag::Id;    };
 template<class T> struct GetTag<JustTag<T>> { static constexpr Tag value = GetTag<T>::value; };
 

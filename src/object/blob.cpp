@@ -1,4 +1,4 @@
-#include "block.h"
+#include "blob.h"
 #include "io.h"
 #include "../hash.h"
 #include "../array_io.h"

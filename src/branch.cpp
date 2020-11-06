@@ -3,7 +3,7 @@
 #include "path_range.h"
 #include "object/tree.h"
 #include "object/tagged.h"
-#include "object/block.h"
+#include "object/blob.h"
 #include "object/io.h"
 #include "object/refcount.h"
 
@@ -15,10 +15,10 @@
 using namespace ouisync;
 using std::move;
 using object::Id;
-using object::Block;
+using object::Blob;
 using object::Tree;
 using object::JustTag;
-using Data = Branch::Data;
+using Blob = Branch::Blob;
 
 /* static */
 Branch Branch::load_or_create(const fs::path& rootdir, const fs::path& objdir, UserId user_id) {
@@ -58,13 +58,13 @@ bool _flat_remove(const fs::path& objdir, const Id& id) {
 //--------------------------------------------------------------------
 
 static
-Opt<Id> _store_recur(const fs::path& objdir, Opt<Id> old_object_id, PathRange path, const Branch::Data &block, bool replace)
+Opt<Id> _store_recur(const fs::path& objdir, Opt<Id> old_object_id, PathRange path, const Blob& blob, bool replace)
 {
     Opt<Id> obj_id;
 
     if (path.empty()) {
-        if (replace) obj_id = object::io::store(objdir, block);
-        else         obj_id = object::io::maybe_store(objdir, block);
+        if (replace) obj_id = object::io::store(objdir, blob);
+        else         obj_id = object::io::maybe_store(objdir, blob);
         if (old_object_id && obj_id) _flat_remove(objdir, *old_object_id);
         return obj_id;
     }
@@ -83,7 +83,7 @@ Opt<Id> _store_recur(const fs::path& objdir, Opt<Id> old_object_id, PathRange pa
     Opt<Id> old_child_id;
     if (!inserted) old_child_id = child_i->second;
 
-    obj_id = _store_recur(objdir, old_child_id, path, block, replace);
+    obj_id = _store_recur(objdir, old_child_id, path, blob, replace);
 
     if (!obj_id) return boost::none;
 
@@ -93,17 +93,17 @@ Opt<Id> _store_recur(const fs::path& objdir, Opt<Id> old_object_id, PathRange pa
     return tree.store(objdir);
 }
 
-void Branch::store(const fs::path& path, const Data& data)
+void Branch::store(const fs::path& path, const Blob& blob)
 {
-    auto oid = _store_recur(_objdir, root_object_id(), path_range(path), data, true);
+    auto oid = _store_recur(_objdir, root_object_id(), path_range(path), blob, true);
     assert(oid);
     if (!oid) throw std::runtime_error("Object not replaced as it should have been");
     root_object_id(*oid);
 }
 
-bool Branch::maybe_store(const fs::path& path, const Data& data)
+bool Branch::maybe_store(const fs::path& path, const Blob& blob)
 {
-    auto oid = _store_recur(_objdir, root_object_id(), path_range(path), data, false);
+    auto oid = _store_recur(_objdir, root_object_id(), path_range(path), blob, false);
     if (!oid) return false;
     root_object_id(*oid);
     return true;
@@ -111,8 +111,9 @@ bool Branch::maybe_store(const fs::path& path, const Data& data)
 
 //--------------------------------------------------------------------
 
+template<class Obj>
 static
-Opt<Branch::Data> _maybe_load_recur(const fs::path& objdir, const Id& root_id, PathRange path) {
+Opt<Obj> _maybe_load_recur(const fs::path& objdir, const Id& root_id, PathRange path) {
     if (path.empty())
         throw std::runtime_error("Can't load object without name");
 
@@ -124,19 +125,19 @@ Opt<Branch::Data> _maybe_load_recur(const fs::path& objdir, const Id& root_id, P
     auto i = tree->find(name);
 
     if (i == tree->end()) {
-        throw std::runtime_error("Block not found");
+        throw std::runtime_error("Blob not found");
     }
 
     if (path.advance_begin(1); path.empty()) {
-        return object::io::maybe_load<Branch::Data>(objdir, i->second);
+        return object::io::maybe_load<Obj>(objdir, i->second);
     } else {
-        return _maybe_load_recur(objdir, i->second, path);
+        return _maybe_load_recur<Obj>(objdir, i->second, path);
     }
 }
 
-Opt<Branch::Data> Branch::maybe_load(const fs::path& path) const
+Opt<Blob> Branch::maybe_load(const fs::path& path) const
 {
-    auto ob = _maybe_load_recur(_objdir, root_object_id(), path_range(path));
+    auto ob = _maybe_load_recur<Blob>(_objdir, root_object_id(), path_range(path));
     if (!ob) return boost::none;
     return move(*ob);
 }
@@ -145,7 +146,7 @@ Opt<Branch::Data> Branch::maybe_load(const fs::path& path) const
 
 static
 bool _remove_with_children(const fs::path& objdir, const Id& id) {
-    auto obj = object::io::load<Tree, JustTag<Data>>(objdir, id);
+    auto obj = object::io::load<Tree, JustTag<Blob>>(objdir, id);
 
     apply(obj,
             [&](const Tree& tree) {
@@ -154,7 +155,7 @@ bool _remove_with_children(const fs::path& objdir, const Id& id) {
                     _remove_with_children(objdir, id);
                 }
             },
-            [&](const JustTag<Data>&) {
+            [&](const JustTag<Blob>&) {
             });
 
     return _flat_remove(objdir, id);
