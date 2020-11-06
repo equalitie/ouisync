@@ -30,6 +30,10 @@ public:
         ar & _uuid;
     }
 
+    friend std::ostream& operator<<(std::ostream& os, const UserId& id) {
+        return os << id._uuid;
+    }
+
 private:
     UserId(const boost::uuids::uuid&);
 
