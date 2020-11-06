@@ -3,6 +3,9 @@
 #include "shortcuts.h"
 #include "variant.h"
 #include "error.h"
+#include "file_system_options.h"
+#include "user_id.h"
+#include "branch.h"
 #include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/awaitable.hpp>
 #include <string>
@@ -27,7 +30,7 @@ public:
     struct FileAttr { size_t size; };
     using Attr = variant<DirAttr, FileAttr>;
 
-    FileSystem(executor_type ex);
+    FileSystem(executor_type ex, FileSystemOptions);
 
     net::awaitable<std::vector<std::string>> readdir(const fs::path&);
     net::awaitable<Attr> get_attr(const fs::path&);
@@ -48,6 +51,9 @@ private:
     template<class T, class PathRange> T& find(PathRange);
 private:
     executor_type _ex;
+    FileSystemOptions _options;
+    UserId _user_id;
+    std::map<UserId, Branch> _branches;
     Tree _debug_tree;
 };
 

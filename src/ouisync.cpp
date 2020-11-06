@@ -3,6 +3,7 @@
 #include "fuse_runner.h"
 #include "file_system.h"
 #include "shortcuts.h"
+#include "file_system_options.h"
 
 #include <boost/asio.hpp>
 #include <boost/filesystem.hpp>
@@ -19,18 +20,13 @@ int main() {
 
     cout << "Basedir: " << basedir << "\n";
 
+    FileSystemOptions opts(basedir);
+
     auto mountdir = basedir / "mountdir";
-    auto branchdir = basedir / "branches";
-    auto objdir = basedir / "objects";
 
     fs::create_directories(mountdir);
-    fs::create_directories(branchdir);
-    fs::create_directories(objdir);
 
-    auto user_id = UserId::load_or_create(basedir / "user_id");
-    auto branch = Branch::load_or_create(branchdir, objdir, user_id);
-
-    FileSystem fs(ioc.get_executor());
+    FileSystem fs(ioc.get_executor(), move(opts));
     FuseRunner fuse(fs, mountdir);
 
     net::signal_set signals(ioc, SIGINT, SIGTERM);
