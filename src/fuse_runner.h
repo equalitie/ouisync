@@ -49,7 +49,7 @@ private:
     template<class F,
         class R = typename std::decay_t<std::result_of_t<F(FileSystem&)>>::value_type
         >
-    static Result<R> query_fs(F&& f);
+    static Result<R> query_fs(const char* fname, F&& f);
 
 private:
     FileSystem& _fs;
