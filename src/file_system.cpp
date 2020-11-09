@@ -169,9 +169,14 @@ net::awaitable<void> FileSystem::remove_file(PathRange path)
 
 net::awaitable<void> FileSystem::remove_directory(PathRange path)
 {
-    Dir& dir = find_parent(path);
-    size_t n = dir.erase(path.back().native());
-    if (n == 0) throw_error(sys::errc::file_exists);
+    if (path.empty()) {
+        // XXX: Branch removal not yet implemented
+        throw_error(sys::errc::operation_not_permitted);
+    }
+
+    auto& branch = find_branch(path);
+    path.advance_begin(1);
+    branch.rmdir(path);
     co_return;
 }
 

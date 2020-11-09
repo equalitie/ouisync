@@ -59,6 +59,23 @@ bool _flat_remove(const fs::path& objdir, const Id& id) {
     return object::io::remove(objdir, id);
 }
 
+static
+bool _remove_with_children(const fs::path& objdir, const Id& id) {
+    auto obj = object::io::load<Tree, JustTag<Blob>>(objdir, id);
+
+    apply(obj,
+            [&](const Tree& tree) {
+                for (auto& [name, id] : tree) {
+                    (void)name; // https://stackoverflow.com/a/40714311/273348
+                    _remove_with_children(objdir, id);
+                }
+            },
+            [&](const JustTag<Blob>&) {
+            });
+
+    return _flat_remove(objdir, id);
+}
+
 //--------------------------------------------------------------------
 
 static
@@ -211,21 +228,38 @@ void Branch::mkdir(PathRange path)
 //--------------------------------------------------------------------
 
 static
-bool _remove_with_children(const fs::path& objdir, const Id& id) {
-    auto obj = object::io::load<Tree, JustTag<Blob>>(objdir, id);
+Id _rmdir_recur(const fs::path& objdir, Id tree_id, PathRange path)
+{
+    assert(!path.empty());
 
-    apply(obj,
-            [&](const Tree& tree) {
-                for (auto& [name, id] : tree) {
-                    (void)name; // https://stackoverflow.com/a/40714311/273348
-                    _remove_with_children(objdir, id);
-                }
-            },
-            [&](const JustTag<Blob>&) {
-            });
+    auto child_name = path.front().string();
+    path.advance_begin(1);
 
-    return _flat_remove(objdir, id);
+    auto tree = object::io::maybe_load<Tree>(objdir, tree_id);
+    if (!tree) throw_error(sys::errc::no_such_file_or_directory);
+
+    auto i = tree->find(child_name);
+    if (i == tree->end()) throw_error(sys::errc::no_such_file_or_directory);
+
+    if (path.empty()) {
+        _remove_with_children(objdir, i->second);
+        tree->erase(i);
+    } else {
+        i->second = _rmdir_recur(objdir, i->second, path);
+    }
+
+    _flat_remove(objdir, tree_id);
+    return tree->store(objdir);
 }
+
+void Branch::rmdir(PathRange path)
+{
+    if (path.empty()) throw_error(sys::errc::operation_not_permitted);
+    auto new_root_id = _rmdir_recur(_objdir, root_object_id(), path);
+    root_object_id(new_root_id);
+}
+
+//--------------------------------------------------------------------
 
 static
 Opt<Id> _remove_recur(const fs::path& objdir, Id tree_id, PathRange path)

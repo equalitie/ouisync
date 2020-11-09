@@ -8,6 +8,7 @@
 #include "hex.h"
 #include "array_io.h"
 #include "branch.h"
+#include "path_range.h"
 
 #include <iostream>
 #include <random>
@@ -151,6 +152,31 @@ BOOST_AUTO_TEST_CASE(tree_branch_store_and_load) {
 
     BOOST_REQUIRE(od2);
     BOOST_REQUIRE_EQUAL(d1, *od2);
+}
+
+BOOST_AUTO_TEST_CASE(branch_directories) {
+    fs::path testdir = choose_test_dir();
+
+    {
+        Branch branch = create_branch(testdir/"1", "user_id");
+        BOOST_REQUIRE_EQUAL(count_objects(branch.object_directory()), 1);
+
+        branch.mkdir(path_range("dir"));
+        BOOST_REQUIRE_EQUAL(count_objects(branch.object_directory()), 2);
+    }
+
+    {
+        Branch branch = create_branch(testdir/"2", "user_id");
+        auto empty_root_id = branch.root_object_id();
+
+        branch.mkdir(path_range("dir"));
+        BOOST_REQUIRE_EQUAL(count_objects(branch.object_directory()), 2);
+
+        branch.rmdir(path_range("dir"));
+        BOOST_REQUIRE_EQUAL(count_objects(branch.object_directory()), 1);
+
+        BOOST_REQUIRE_EQUAL(branch.root_object_id(), empty_root_id);
+    }
 }
 
 BOOST_AUTO_TEST_CASE(tree_remove) {
