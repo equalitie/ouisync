@@ -44,6 +44,8 @@ public:
         return _objdir;
     }
 
+    void mkdir(PathRange);
+
 private:
     Branch(const fs::path& file_path, const fs::path& objdir,
             const UserId& user_id, const object::Id& root_id,

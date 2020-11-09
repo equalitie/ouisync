@@ -60,7 +60,6 @@ FileSystem::Dir& FileSystem::find_parent(PathRange path)
     return find<Dir>(path);
 }
 
-static
 Branch& FileSystem::find_branch(PathRange path)
 {
     if (path.empty()) throw_error(sys::errc::invalid_argument);
@@ -148,10 +147,15 @@ net::awaitable<void> FileSystem::mknod(PathRange path, mode_t mode, dev_t dev)
 
 net::awaitable<void> FileSystem::mkdir(PathRange path, mode_t mode)
 {
-    Dir& dir = find_parent(path);
-    // Why does path.back() cause an asan crash?
-    auto inserted = dir.insert({(--path.end())->native(), Dir{}}).second;
-    if (!inserted) throw_errno(EEXIST);
+    if (path.empty()) {
+        // The root directory is reserved for branches, users can't create
+        // new directories there.
+        throw_error(sys::errc::operation_not_permitted);
+    }
+
+    auto& branch = find_branch(path);
+    path.advance_begin(1);
+    branch.mkdir(path);
     co_return;
 }
 

@@ -166,6 +166,49 @@ FileSystemAttrib Branch::get_attr(PathRange path) const
 }
 
 //--------------------------------------------------------------------
+static
+Id _mkdir_recur(const fs::path& objdir, Id parent_id, PathRange path)
+{
+    assert(!path.empty());
+
+    auto child_name = path.front().string();
+    path.advance_begin(1);
+    bool is_last = path.empty();
+
+    Tree tree = object::io::load<Tree>(objdir, parent_id);
+
+    Id obj_id;
+
+    if (is_last) {
+        auto [child_i, inserted] = tree.insert(std::make_pair(child_name, Id{}));
+        if (!inserted) {
+            throw_error(sys::errc::file_exists);
+        }
+        obj_id = object::io::store(objdir, Tree{});
+        child_i->second = obj_id;
+    } else {
+        auto child_i = tree.find(child_name);
+        if (child_i == tree.end()) {
+            throw_error(sys::errc::no_such_file_or_directory);
+        }
+        obj_id = _mkdir_recur(objdir, child_i->second, path);
+        child_i->second = obj_id;
+    }
+
+    object::refcount::increment(objdir, obj_id);
+    _flat_remove(objdir, parent_id);
+    return tree.store(objdir);
+}
+
+void Branch::mkdir(PathRange path)
+{
+    if (path.empty()) throw_error(sys::errc::invalid_argument);
+
+    auto new_root_id = _mkdir_recur(_objdir, root_object_id(), path);
+    root_object_id(new_root_id);
+}
+
+//--------------------------------------------------------------------
 
 static
 bool _remove_with_children(const fs::path& objdir, const Id& id) {
