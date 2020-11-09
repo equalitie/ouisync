@@ -36,9 +36,9 @@ FileSystem::Tree& FileSystem::find_tree(PathRange path)
     for (auto& p : path) {
         auto dir = get<Dir>(tree);
         assert(dir);
-        if (!dir) throw_errno(ENOENT);
+        if (!dir) throw_error(sys::errc::no_such_file_or_directory);
         auto i = dir->find(p.native());
-        if (i == dir->end()) throw_errno(ENOENT);
+        if (i == dir->end()) throw_error(sys::errc::no_such_file_or_directory);
         tree = &i->second;
     }
 
@@ -49,13 +49,13 @@ template<class T>
 T& FileSystem::find(PathRange path_range)
 {
     auto p = get<T>(&find_tree(path_range));
-    if (!p) throw_errno(EINVAL);
+    if (!p) throw_error(sys::errc::invalid_argument);
     return *p;
 }
 
 FileSystem::Dir& FileSystem::find_parent(PathRange path)
 {
-    if (path.begin() == path.end()) throw_errno(EINVAL);
+    if (path.begin() == path.end()) throw_error(sys::errc::invalid_argument);
     path.advance_end(-1);
     return find<Dir>(path);
 }
@@ -153,10 +153,10 @@ net::awaitable<int> FileSystem::write(PathRange path, const char* buf, size_t si
 
 net::awaitable<void> FileSystem::mknod(PathRange path, mode_t mode, dev_t dev)
 {
-    if (S_ISFIFO(mode)) throw_errno(EINVAL); // TODO?
+    if (S_ISFIFO(mode)) throw_error(sys::errc::invalid_argument); // TODO?
     Dir& dir = find_parent(path);
     auto inserted = dir.insert({path.back().native(), File{}}).second;
-    if (!inserted) throw_errno(EEXIST);
+    if (!inserted) throw_error(sys::errc::file_exists);
     co_return;
 }
 
@@ -173,7 +173,7 @@ net::awaitable<void> FileSystem::remove_file(PathRange path)
 {
     Dir& dir = find_parent(path);
     size_t n = dir.erase(path.back().native());
-    if (n == 0) throw_errno(EEXIST);
+    if (n == 0) throw_error(sys::errc::file_exists);
     co_return;
 }
 
@@ -181,7 +181,7 @@ net::awaitable<void> FileSystem::remove_directory(PathRange path)
 {
     Dir& dir = find_parent(path);
     size_t n = dir.erase(path.back().native());
-    if (n == 0) throw_errno(EEXIST);
+    if (n == 0) throw_error(sys::errc::file_exists);
     co_return;
 }
 
