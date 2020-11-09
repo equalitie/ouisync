@@ -12,19 +12,19 @@ namespace ouisync {
 
 class BlockStore {
 public:
-    using Data = std::vector<uint8_t>;
+    using Blob = object::Blob;
 
 public:
     BlockStore(const fs::path& basedir);
 
-    bool tryCreate(const BlockId &blockId, const Data &data);
+    bool tryCreate(const BlockId &blockId, const Blob &);
 
     bool remove(const BlockId &blockId);
 
-    boost::optional<Data> load(const BlockId &blockId) const;
+    boost::optional<Blob> load(const BlockId &blockId) const;
 
     // Store the block with the given blockId. If it doesn't exist, it is created.
-    void store(const BlockId &blockId, const Data &data);
+    void store(const BlockId &blockId, const Blob &data);
 
     virtual ~BlockStore();
 

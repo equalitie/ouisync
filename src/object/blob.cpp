@@ -9,7 +9,7 @@
 using namespace ouisync;
 using namespace ouisync::object;
 
-Id ouisync::object::calculate_id(const std::vector<uint8_t>& v) {
+Id ouisync::object::calculate_id(const Blob& v) {
     Sha256 hash;
     if (!v.empty()) {
         hash.update(uint32_t(0));
@@ -21,7 +21,7 @@ Id ouisync::object::calculate_id(const std::vector<uint8_t>& v) {
 }
 
 namespace std {
-    std::ostream& operator<<(std::ostream& os, const std::vector<uint8_t>& v) {
+    std::ostream& operator<<(std::ostream& os, const Blob& v) {
         auto id = to_hex<char>(::ouisync::object::calculate_id(v));
         string_view sw(id.data(), std::min<size_t>(6, std::tuple_size<decltype(id)>::value));
         return os << "Data " << sw;

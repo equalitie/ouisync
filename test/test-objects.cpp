@@ -109,6 +109,19 @@ BOOST_AUTO_TEST_CASE(tree_is_same) {
     REQUIRE_HEX_EQUAL(object::calculate_id(t1), object::calculate_id(t2));
 }
 
+BOOST_AUTO_TEST_CASE(read_tag) {
+    fs::path testdir = choose_test_dir();
+
+    Random random;
+    Blob blob = random.vector(256);
+    auto id = object::io::store(testdir, blob);
+    try {
+        object::io::load<object::JustTag<Blob>>(testdir, id);
+    } catch (...) {
+        BOOST_REQUIRE(false);
+    }
+}
+
 Branch create_branch(const fs::path testdir, const char* user_id_file_name) {
     fs::path objdir = testdir/"objects";
     fs::path branchdir = testdir/"branches";

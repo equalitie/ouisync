@@ -75,7 +75,7 @@ BlockStore::BlockStore(const fs::path& basedir) :
     _branch = std::make_unique<Branch>(Branch::load_or_create(_branchdir, _objdir, _user_id));
 }
 
-bool BlockStore::tryCreate(const BlockId &block_id, const Data &data) {
+bool BlockStore::tryCreate(const BlockId &block_id, const Blob &data) {
     std::scoped_lock<std::mutex> lock(_mutex);
     auto path = _get_data_file_path(block_id);
     return _branch->maybe_store(path, data);
@@ -86,12 +86,12 @@ bool BlockStore::remove(const BlockId &block_id) {
     return _branch->remove(_get_data_file_path(block_id));
 }
 
-optional<BlockStore::Data> BlockStore::load(const BlockId &block_id) const {
+optional<BlockStore::Blob> BlockStore::load(const BlockId &block_id) const {
     std::scoped_lock<std::mutex> lock(const_cast<std::mutex&>(_mutex));
     return _branch->maybe_load(_get_data_file_path(block_id));
 }
 
-void BlockStore::store(const BlockId &block_id, const Data &data) {
+void BlockStore::store(const BlockId &block_id, const Blob &data) {
     std::scoped_lock<std::mutex> lock(_mutex);
     _branch->store(_get_data_file_path(block_id), data);
 }
