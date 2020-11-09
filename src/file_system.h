@@ -51,6 +51,9 @@ private:
 
     Tree& find_tree(PathRange);
     template<class T> T& find(PathRange);
+
+    Branch& find_branch(PathRange);
+
 private:
     executor_type _ex;
     FileSystemOptions _options;
