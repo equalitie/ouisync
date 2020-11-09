@@ -2,6 +2,9 @@
 
 #include <boost/filesystem.hpp>
 #include <boost/uuid/uuid_generators.hpp>
+#include <boost/lexical_cast.hpp>
+#include <boost/optional.hpp>
+#include <boost/utility/string_view.hpp>
 
 using namespace ouisync;
 
@@ -39,4 +42,12 @@ UserId::UserId(const boost::uuids::uuid& uuid) :
 std::string UserId::to_string() const
 {
     return boost::uuids::to_string(_uuid);
+}
+
+/* static */
+Opt<UserId> UserId::from_string(string_view s)
+try {
+    return UserId(boost::lexical_cast<boost::uuids::uuid>(s));
+} catch (...) {
+    return boost::none;
 }

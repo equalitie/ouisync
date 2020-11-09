@@ -21,6 +21,8 @@ public:
 
     std::string to_string() const;
 
+    static Opt<UserId> from_string(string_view);
+
     bool operator<(const UserId& other) const {
         return _uuid < other._uuid;
     }
