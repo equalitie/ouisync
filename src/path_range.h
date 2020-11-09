@@ -1,5 +1,6 @@
 #pragma once
 
+#include <boost/filesystem/path.hpp>
 #include <boost/range/iterator_range.hpp>
 
 namespace ouisync {
