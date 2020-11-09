@@ -2,9 +2,12 @@
 
 #include "object/id.h"
 #include "object/blob.h"
+#include "object/tree.h"
 #include "user_id.h"
 #include "version_vector.h"
+#include "path_range.h"
 #include "shortcuts.h"
+#include "file_system_attrib.h"
 
 #include <boost/filesystem/path.hpp>
 #include <boost/optional.hpp>
@@ -14,6 +17,7 @@ namespace ouisync {
 class Branch {
 public:
     using Blob = object::Blob;
+    using Tree = object::Tree;
 
 public:
     static Branch load_or_create(
@@ -30,6 +34,9 @@ public:
     void store(const fs::path&, const Blob&);
 
     Opt<Blob> maybe_load(const fs::path&) const;
+
+    Tree readdir(PathRange) const;
+    FileSystemAttrib get_attr(PathRange) const;
 
     bool remove(const fs::path&);
 

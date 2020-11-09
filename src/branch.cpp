@@ -1,5 +1,6 @@
 #include "branch.h"
 #include "variant.h"
+#include "error.h"
 #include "path_range.h"
 #include "object/tree.h"
 #include "object/tagged.h"
@@ -12,6 +13,8 @@
 #include <boost/archive/text_iarchive.hpp>
 #include <boost/serialization/vector.hpp>
 
+#include <iostream>
+
 using namespace ouisync;
 using std::move;
 using object::Id;
@@ -19,6 +22,7 @@ using object::Blob;
 using object::Tree;
 using object::JustTag;
 using Blob = Branch::Blob;
+using Tree = Branch::Tree;
 
 /* static */
 Branch Branch::load_or_create(const fs::path& rootdir, const fs::path& objdir, UserId user_id) {
@@ -115,7 +119,7 @@ template<class Obj>
 static
 Opt<Obj> _maybe_load_recur(const fs::path& objdir, const Id& root_id, PathRange path) {
     if (path.empty())
-        throw std::runtime_error("Can't load object without name");
+        return object::io::maybe_load<Obj>(objdir, root_id);
 
     auto tree = object::io::maybe_load<Tree>(objdir, root_id);
     if (!tree) return boost::none;
@@ -125,14 +129,11 @@ Opt<Obj> _maybe_load_recur(const fs::path& objdir, const Id& root_id, PathRange 
     auto i = tree->find(name);
 
     if (i == tree->end()) {
-        throw std::runtime_error("Blob not found");
+        return boost::none;
     }
 
-    if (path.advance_begin(1); path.empty()) {
-        return object::io::maybe_load<Obj>(objdir, i->second);
-    } else {
-        return _maybe_load_recur<Obj>(objdir, i->second, path);
-    }
+    path.advance_begin(1);
+    return _maybe_load_recur<Obj>(objdir, i->second, path);
 }
 
 Opt<Blob> Branch::maybe_load(const fs::path& path) const
@@ -140,6 +141,28 @@ Opt<Blob> Branch::maybe_load(const fs::path& path) const
     auto ob = _maybe_load_recur<Blob>(_objdir, root_object_id(), path_range(path));
     if (!ob) return boost::none;
     return move(*ob);
+}
+
+Tree Branch::readdir(PathRange path) const
+{
+    auto ob = _maybe_load_recur<Tree>(_objdir, root_object_id(), path);
+    if (!ob) throw_error(sys::errc::no_such_file_or_directory);
+    return move(*ob);
+}
+
+FileSystemAttrib Branch::get_attr(PathRange path) const
+{
+    // XXX This function is very inefficient because it loads whole blobs into
+    // memory and also it does two recursive calls instead of just one.
+
+    auto tree = _maybe_load_recur<Tree>(_objdir, root_object_id(), path);
+    if (tree) return FileSystemDirAttrib{};
+
+    auto blob = _maybe_load_recur<Blob>(_objdir, root_object_id(), path);
+    if (blob) return FileSystemFileAttrib{blob->size()};
+
+    throw_error(sys::errc::no_such_file_or_directory);
+    return FileSystemAttrib{};
 }
 
 //--------------------------------------------------------------------

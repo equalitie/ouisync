@@ -119,7 +119,11 @@ static fs::path remove_root(const char* path)
 template<class Result>
 static void report_if_error(const char* function_name, const Result& r, const char* path)
 {
-    if (r) return;
+    if (r) {
+        std::cerr << "FUSE: Success in function '" <<
+            function_name << "' path '" << path << "'\n";
+        return;
+    }
     std::cerr << "FUSE: Error in function '" <<
         function_name << "' path '" <<
         path << "' error: " << r.error().message() << "\n";
@@ -142,11 +146,11 @@ int FuseRunner::_fuse_getattr(const char *path_, struct stat *stbuf)
     if (!attr) return -ENOENT;
 
     apply(attr.value(),
-            [&] (FileSystem::DirAttr) {
+            [&] (FileSystem::DirAttrib) {
                 stbuf->st_mode = S_IFDIR | 0755;
                 stbuf->st_nlink = 1;
             },
-            [&] (FileSystem::FileAttr a) {
+            [&] (FileSystem::FileAttrib a) {
                 stbuf->st_mode = S_IFREG | 0444;
                 stbuf->st_nlink = 1;
                 stbuf->st_size = a.size;
@@ -192,7 +196,7 @@ int FuseRunner::_fuse_open(const char *path_, struct fuse_file_info *fi)
 
     auto is_file_result = QUERY_FS([&] (auto& fs) -> net::awaitable<bool> {
         auto attr = co_await fs.get_attr(path_range(path));
-        co_return bool(boost::get<FileSystem::FileAttr>(&attr));
+        co_return bool(boost::get<FileSystem::FileAttrib>(&attr));
     });
 
     report_if_error("open", is_file_result, path_);

@@ -60,23 +60,61 @@ FileSystem::Dir& FileSystem::find_parent(PathRange path)
     return find<Dir>(path);
 }
 
-net::awaitable<FileSystem::Attr> FileSystem::get_attr(PathRange path)
+net::awaitable<FileSystem::Attrib> FileSystem::get_attr(PathRange path)
 {
 
-    Tree& t = find_tree(path);
+    //Tree& t = find_tree(path);
 
-    co_return apply(t,
-            [&] (const Dir&) -> Attr { return DirAttr{}; },
-            [&] (const File& f) -> Attr { return FileAttr{f.size()}; });
+    //co_return apply(t,
+    //        [&] (const Dir&) -> Attr { return DirAttr{}; },
+    //        [&] (const File& f) -> Attr { return FileAttr{f.size()}; });
+
+    //std::cerr << "getattr " << path << "\n";
+    //co_return DirAttr{};
+
+    if (path.empty()) co_return DirAttrib{};
+
+    auto user_id = UserId::from_string(path.front().native());
+    if (!user_id) throw_error(sys::errc::no_such_file_or_directory);
+
+    auto i = _branches.find(*user_id);
+    if (i == _branches.end()) throw_error(sys::errc::no_such_file_or_directory);
+    auto& branch = i->second;
+
+    path.advance_begin(1);
+    auto ret = branch.get_attr(path);
+    co_return ret;
 }
 
 net::awaitable<vector<string>> FileSystem::readdir(PathRange path)
 {
     std::vector<std::string> nodes;
 
-    for (auto& [name, val] : find<Dir>(path)) {
-        (void) val;
-        nodes.push_back(name);
+    //for (auto& [name, val] : find<Dir>(path)) {
+    //    (void) val;
+    //    nodes.push_back(name);
+    //}
+
+    if (path.empty()) {
+        for (auto& [name, branch] : _branches) {
+            (void) branch;
+            nodes.push_back(name.to_string());
+        }
+    }
+    else {
+        auto user_id = UserId::from_string(path.front().native());
+        if (!user_id) throw_error(sys::errc::no_such_file_or_directory);
+
+        auto i = _branches.find(*user_id);
+        if (i == _branches.end()) throw_error(sys::errc::no_such_file_or_directory);
+        auto& branch = i->second;
+
+        path.advance_begin(1);
+        auto dir = branch.readdir(path);
+
+        for (auto& [name, hash] : dir) {
+            nodes.push_back(name);
+        }
     }
 
     co_return nodes;

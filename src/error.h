@@ -14,6 +14,12 @@ inline void throw_error(const sys::error_code& ec)
     throw sys::system_error(ec);
 }
 
+inline void throw_error(sys::errc::errc_t e)
+{
+    auto ec = make_error_code(static_cast<sys::errc::errc_t>(e));
+    throw_error(ec);
+}
+
 inline void throw_errno(int errno_)
 {
     namespace errc = boost::system::errc;

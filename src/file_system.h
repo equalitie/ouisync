@@ -4,6 +4,7 @@
 #include "variant.h"
 #include "error.h"
 #include "file_system_options.h"
+#include "file_system_attrib.h"
 #include "user_id.h"
 #include "branch.h"
 #include "path_range.h"
@@ -27,14 +28,14 @@ public:
     using executor_type = net::any_io_executor;
 
 public:
-    struct DirAttr {};
-    struct FileAttr { size_t size; };
-    using Attr = variant<DirAttr, FileAttr>;
+    using DirAttrib  = FileSystemDirAttrib;
+    using FileAttrib = FileSystemFileAttrib;
+    using Attrib     = FileSystemAttrib;
 
     FileSystem(executor_type ex, FileSystemOptions);
 
     net::awaitable<std::vector<std::string>> readdir(PathRange);
-    net::awaitable<Attr> get_attr(PathRange);
+    net::awaitable<Attrib> get_attr(PathRange);
     net::awaitable<size_t> read(PathRange, char* buf, size_t size, off_t offset);
     net::awaitable<int> write(PathRange, const char* buf, size_t size, off_t offset);
     net::awaitable<size_t> truncate(PathRange, size_t);
