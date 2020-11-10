@@ -113,6 +113,16 @@ Opt<Id> _update_dir(const fs::path& objdir, Id tree_id, PathRange path, F&& f)
     return _flat_store(objdir, tree);
 }
 
+template<class F>
+void Branch::update_dir(PathRange path, F&& f)
+{
+    auto oid = _update_dir(_objdir, root_object_id(), path, std::forward<F>(f));
+
+    if (oid) {
+        root_object_id(*oid);
+    }
+}
+
 // Same as above but make sure the tree isn't modified
 template<class F>
 static
@@ -130,6 +140,12 @@ void _query_dir(const fs::path& objdir, Id tree_id, PathRange path, F&& f)
     }
 }
 
+template<class F>
+void Branch::query_dir(PathRange path, F&& f) const
+{
+    _query_dir(_objdir, root_object_id(), path, std::forward<F>(f));
+}
+
 //--------------------------------------------------------------------
 
 void Branch::store(PathRange path, const Blob& blob)
@@ -137,16 +153,13 @@ void Branch::store(PathRange path, const Blob& blob)
     auto dirpath = path;
     dirpath.advance_end(-1);
 
-    auto oid = _update_dir(_objdir, root_object_id(), dirpath,
+    update_dir(dirpath,
         [&] (Tree& tree) {
             auto [child_i, inserted] = tree.insert(std::make_pair(path.back().native(), Id{}));
             if (!inserted) throw_error(sys::errc::file_exists);
             child_i->second = _flat_store(_objdir, blob);
             return true;
         });
-
-    assert(oid);
-    if (oid) root_object_id(*oid);
 }
 
 void Branch::store(const fs::path& path, const Blob& blob)
@@ -163,7 +176,7 @@ size_t Branch::write(PathRange path, const char* buf, size_t size, size_t offset
     auto parent_dir = path;
     parent_dir.advance_end(-1);
 
-    auto oid = _update_dir(_objdir, root_object_id(), parent_dir,
+    update_dir(parent_dir,
         [&] (Tree& tree) {
             auto i = tree.find(path.back().native());
             if (i == tree.end()) throw_error(sys::errc::no_such_file_or_directory);
@@ -186,9 +199,6 @@ size_t Branch::write(PathRange path, const char* buf, size_t size, size_t offset
             return true;
         });
 
-    assert(oid);
-    if (oid) root_object_id(*oid);
-
     return size;
 }
 
@@ -201,7 +211,7 @@ size_t Branch::read(PathRange path, const char* buf, size_t size, size_t offset)
     auto parent_dir = path;
     parent_dir.advance_end(-1);
 
-    _query_dir(_objdir, root_object_id(), parent_dir,
+    query_dir(parent_dir,
         [&] (const Tree& tree) {
             auto i = tree.find(path.back().native());
             if (i == tree.end()) throw_error(sys::errc::no_such_file_or_directory);
@@ -231,7 +241,7 @@ size_t Branch::truncate(PathRange path, size_t size)
     auto parent_dir = path;
     parent_dir.advance_end(-1);
 
-    auto oid = _update_dir(_objdir, root_object_id(), parent_dir,
+    update_dir(parent_dir,
         [&] (Tree& tree) {
             auto i = tree.find(path.back().native());
             if (i == tree.end()) throw_error(sys::errc::no_such_file_or_directory);
@@ -247,8 +257,6 @@ size_t Branch::truncate(PathRange path, size_t size)
 
             return true;
         });
-
-    if (oid) root_object_id(*oid);
 
     return size;
 }
@@ -266,7 +274,7 @@ Opt<Blob> Branch::maybe_load(const fs::path& path_) const
 
     Opt<Blob> retval;
 
-    _query_dir(_objdir, root_object_id(), dirpath,
+    query_dir(dirpath,
         [&] (const Tree& tree) {
             auto i = tree.find(path.back().native());
             if (i == tree.end()) throw_error(sys::errc::no_such_file_or_directory);
@@ -282,8 +290,7 @@ Tree Branch::readdir(PathRange path) const
 {
     Opt<Tree> retval;
 
-    _query_dir(_objdir, root_object_id(), path,
-        [&] (const Tree& tree) { retval = tree; });
+    query_dir(path, [&] (const Tree& tree) { retval = tree; });
 
     assert(retval);
     return std::move(*retval);
@@ -300,7 +307,7 @@ FileSystemAttrib Branch::get_attr(PathRange path) const
 
     FileSystemAttrib attrib;
 
-    _query_dir(_objdir, root_object_id(), parent_path,
+    query_dir(parent_path,
         [&] (const Tree& parent) {
             auto i = parent.find(path.back().native());
             if (i == parent.end()) throw_error(sys::errc::no_such_file_or_directory);
@@ -325,15 +332,13 @@ void Branch::mkdir(PathRange path)
     auto parent_path = path;
     parent_path.advance_end(-1);
 
-    auto oid = _update_dir(_objdir, root_object_id(), parent_path,
+    update_dir(parent_path,
         [&] (Tree& parent) {
             auto [i, inserted] = parent.insert(std::make_pair(path.back().native(), Id{}));
             if (!inserted) throw_error(sys::errc::file_exists);
             i->second = _flat_store(_objdir, Tree{});
             return true;
         });
-
-    if (oid) root_object_id(*oid);
 }
 
 //--------------------------------------------------------------------
@@ -345,7 +350,7 @@ bool Branch::remove(PathRange path)
     auto parent_path = path;
     parent_path.advance_end(-1);
 
-    auto oid = _update_dir(_objdir, root_object_id(), parent_path,
+    update_dir(parent_path,
         [&] (Tree& tree) {
             auto i = tree.find(path.back().native());
             if (i == tree.end()) throw_error(sys::errc::no_such_file_or_directory);
@@ -354,8 +359,6 @@ bool Branch::remove(PathRange path)
             return true;
         });
 
-    if (!oid) return false;
-    root_object_id(*oid);
     return true;
 }
 

@@ -60,6 +60,9 @@ private:
 
     void store_self() const;
 
+    template<class F> void update_dir(PathRange, F&&);
+    template<class F> void query_dir(PathRange, F&&) const;
+
 private:
     fs::path _file_path;
     fs::path _objdir;
