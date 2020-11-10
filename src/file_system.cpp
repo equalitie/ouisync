@@ -53,13 +53,6 @@ T& FileSystem::find(PathRange path_range)
     return *p;
 }
 
-FileSystem::Dir& FileSystem::find_parent(PathRange path)
-{
-    if (path.begin() == path.end()) throw_error(sys::errc::invalid_argument);
-    path.advance_end(-1);
-    return find<Dir>(path);
-}
-
 Branch& FileSystem::find_branch(PathRange path)
 {
     if (path.empty()) throw_error(sys::errc::invalid_argument);
@@ -107,18 +100,18 @@ net::awaitable<vector<string>> FileSystem::readdir(PathRange path)
 
 net::awaitable<size_t> FileSystem::read(PathRange path, char* buf, size_t size, off_t offset)
 {
-    File& content = find<File>(path);
-
-    size_t len = content.size();
-
-    if (size_t(offset) < len) {
-        if (offset + size > len) size = len - offset;
-        memcpy(buf, content.data() + offset, size);
-    } else {
-        size = 0;
+    if (path.empty()) {
+        throw_error(sys::errc::invalid_argument);
     }
 
-    co_return size;
+    auto& branch = find_branch(path);
+    path.advance_begin(1);
+
+    if (path.empty()) {
+        throw_error(sys::errc::is_a_directory);
+    }
+
+    co_return branch.read(path, buf, size, offset);
 }
 
 net::awaitable<size_t> FileSystem::write(PathRange path, const char* buf, size_t size, off_t offset)
@@ -131,7 +124,7 @@ net::awaitable<size_t> FileSystem::write(PathRange path, const char* buf, size_t
     path.advance_begin(1);
 
     if (path.empty()) {
-        throw_error(sys::errc::operation_not_permitted);
+        throw_error(sys::errc::is_a_directory);
     }
 
     co_return branch.write(path, buf, size, offset);
@@ -173,9 +166,19 @@ net::awaitable<void> FileSystem::mkdir(PathRange path, mode_t mode)
 
 net::awaitable<void> FileSystem::remove_file(PathRange path)
 {
-    Dir& dir = find_parent(path);
-    size_t n = dir.erase(path.back().native());
-    if (n == 0) throw_error(sys::errc::file_exists);
+    if (path.empty()) {
+        throw_error(sys::errc::is_a_directory);
+    }
+
+    auto& branch = find_branch(path);
+    path.advance_begin(1);
+
+    if (path.empty()) {
+        // XXX: Branch removal not yet implemented
+        throw_error(sys::errc::operation_not_permitted);
+    }
+
+    branch.remove(path);
     co_return;
 }
 
@@ -188,13 +191,30 @@ net::awaitable<void> FileSystem::remove_directory(PathRange path)
 
     auto& branch = find_branch(path);
     path.advance_begin(1);
+
+    if (path.empty()) {
+        // XXX: Branch removal not yet implemented
+        throw_error(sys::errc::operation_not_permitted);
+    }
+
     branch.rmdir(path);
     co_return;
 }
 
 net::awaitable<size_t> FileSystem::truncate(PathRange path, size_t size)
 {
-    File& content = find<File>(path);
-    content.resize(size);
-    co_return content.size();
+    if (path.empty()) {
+        // XXX: Branch removal not yet implemented
+        throw_error(sys::errc::is_a_directory);
+    }
+
+    auto& branch = find_branch(path);
+    path.advance_begin(1);
+
+    if (path.empty()) {
+        // XXX: Branch removal not yet implemented
+        throw_error(sys::errc::is_a_directory);
+    }
+
+    co_return branch.truncate(path, size);
 }

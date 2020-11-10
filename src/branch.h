@@ -35,6 +35,7 @@ public:
     void store(const fs::path&, const Blob&);
 
     size_t write(PathRange, const char* buf, size_t size, size_t offset);
+    size_t read(PathRange, const char* buf, size_t size, size_t offset);
 
     Opt<Blob> maybe_load(const fs::path&) const;
 
@@ -42,6 +43,9 @@ public:
     FileSystemAttrib get_attr(PathRange) const;
 
     bool remove(const fs::path&);
+    bool remove(PathRange);
+
+    size_t truncate(PathRange, size_t);
 
     const fs::path& object_directory() const {
         return _objdir;

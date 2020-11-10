@@ -12,8 +12,11 @@
 #include <boost/archive/text_oarchive.hpp>
 #include <boost/archive/text_iarchive.hpp>
 #include <boost/serialization/vector.hpp>
+#include <string.h> // memcpy
 
 #include <iostream>
+#include "array_io.h"
+#include "hex.h"
 
 using namespace ouisync;
 using std::move;
@@ -80,12 +83,13 @@ bool _remove_with_children(const fs::path& objdir, const Id& id) {
 
 template<class F>
 static
-Id _update_dir(const fs::path& objdir, Id tree_id, PathRange path, F&& f)
+Opt<Id> _update_dir(const fs::path& objdir, Id tree_id, PathRange path, F&& f)
 {
     Tree tree = object::io::load<Tree>(objdir, tree_id);
 
     if (path.empty()) {
-        f(tree);
+        auto updated = f(tree);
+        if (!updated) return boost::none;
     } else {
         auto child_i = tree.find(path.front().string());
 
@@ -94,7 +98,9 @@ Id _update_dir(const fs::path& objdir, Id tree_id, PathRange path, F&& f)
         }
 
         path.advance_begin(1);
-        child_i->second = _update_dir(objdir, child_i->second, path, std::forward<F>(f));
+        auto oid = _update_dir(objdir, child_i->second, path, std::forward<F>(f));
+        if (!oid) return oid;
+        child_i->second = *oid;
     }
 
     _flat_remove(objdir, tree_id);
@@ -109,15 +115,17 @@ void Branch::store(PathRange path, const Blob& blob)
     auto dirpath = path;
     dirpath.advance_end(-1);
 
-    auto id = _update_dir(_objdir, root_object_id(), dirpath,
+    auto oid = _update_dir(_objdir, root_object_id(), dirpath,
         [&] (Tree& tree) {
             auto [child_i, inserted] = tree.insert(std::make_pair(path.back().native(), Id{}));
             if (!inserted) throw_error(sys::errc::file_exists);
             child_i->second = object::io::store(_objdir, blob);
             object::refcount::increment(_objdir, child_i->second);
+            return true;
         });
 
-    root_object_id(id);
+    assert(oid);
+    if (oid) root_object_id(*oid);
 }
 
 void Branch::store(const fs::path& path, const Blob& blob)
@@ -125,13 +133,6 @@ void Branch::store(const fs::path& path, const Blob& blob)
     store(path_range(path), blob);
 }
 
-//bool Branch::maybe_store(const fs::path& path, const Blob& blob)
-//{
-//    auto oid = _store_recur(_objdir, root_object_id(), path_range(path), blob, false);
-//    if (!oid) return false;
-//    root_object_id(*oid);
-//    return true;
-//}
 //--------------------------------------------------------------------
 
 size_t Branch::write(PathRange path, const char* buf, size_t size, size_t offset)
@@ -141,10 +142,13 @@ size_t Branch::write(PathRange path, const char* buf, size_t size, size_t offset
     auto parent_dir = path;
     parent_dir.advance_end(-1);
 
-    auto id = _update_dir(_objdir, root_object_id(), parent_dir,
+    auto oid = _update_dir(_objdir, root_object_id(), parent_dir,
         [&] (Tree& tree) {
             auto i = tree.find(path.back().native());
             if (i == tree.end()) throw_error(sys::errc::no_such_file_or_directory);
+
+            // XXX: Write only the necessary part to disk without loading
+            // the whole blob into the memory.
             auto blob = object::io::load<Blob>(_objdir, i->second);
 
             size_t len = blob.size();
@@ -158,9 +162,78 @@ size_t Branch::write(PathRange path, const char* buf, size_t size, size_t offset
             _flat_remove(_objdir, i->second);
             i->second = object::io::store(_objdir, blob);
             object::refcount::increment(_objdir, i->second);
+
+            return true;
         });
 
-    root_object_id(id);
+    assert(oid);
+    if (oid) root_object_id(*oid);
+
+    return size;
+}
+
+//--------------------------------------------------------------------
+
+size_t Branch::read(PathRange path, const char* buf, size_t size, size_t offset)
+{
+    if (path.empty()) throw_error(sys::errc::is_a_directory);
+
+    auto parent_dir = path;
+    parent_dir.advance_end(-1);
+
+    auto oid = _update_dir(_objdir, root_object_id(), parent_dir,
+        [&] (Tree& tree) {
+            auto i = tree.find(path.back().native());
+            if (i == tree.end()) throw_error(sys::errc::no_such_file_or_directory);
+
+            // XXX: Read only what's needed, not the whole blob
+            auto blob = object::io::load<Blob>(_objdir, i->second);
+
+            size_t len = blob.size();
+
+            if (size_t(offset) < len) {
+                if (offset + size > len) size = len - offset;
+                memcpy((void*)buf, blob.data() + offset, size);
+            } else {
+                size = 0;
+            }
+            return false;
+        });
+
+    assert(!oid);
+    if (oid) root_object_id(*oid);
+
+    return size;
+}
+
+//--------------------------------------------------------------------
+
+size_t Branch::truncate(PathRange path, size_t size)
+{
+    if (path.empty()) throw_error(sys::errc::is_a_directory);
+
+    auto parent_dir = path;
+    parent_dir.advance_end(-1);
+
+    auto oid = _update_dir(_objdir, root_object_id(), parent_dir,
+        [&] (Tree& tree) {
+            auto i = tree.find(path.back().native());
+            if (i == tree.end()) throw_error(sys::errc::no_such_file_or_directory);
+
+            // XXX: Read only what's needed, not the whole blob
+            auto blob = object::io::load<Blob>(_objdir, i->second);
+
+            blob.resize(std::min<size_t>(blob.size(), size));
+            size = blob.size();
+
+            _flat_remove(_objdir, i->second);
+            i->second = object::io::store(_objdir, blob);
+            object::refcount::increment(_objdir, i->second);
+
+            return true;
+        });
+
+    if (oid) root_object_id(*oid);
 
     return size;
 }
@@ -204,17 +277,29 @@ Tree Branch::readdir(PathRange path) const
 
 FileSystemAttrib Branch::get_attr(PathRange path) const
 {
-    // XXX This function is very inefficient because it loads whole blobs into
-    // memory and also it does two recursive calls instead of just one.
+    if (path.empty()) return FileSystemDirAttrib{};
 
-    auto tree = _maybe_load_recur<Tree>(_objdir, root_object_id(), path);
-    if (tree) return FileSystemDirAttrib{};
+    auto parent_path = path;
+    parent_path.advance_end(-1);
 
-    auto blob = _maybe_load_recur<Blob>(_objdir, root_object_id(), path);
-    if (blob) return FileSystemFileAttrib{blob->size()};
+    FileSystemAttrib attrib;
 
-    throw_error(sys::errc::no_such_file_or_directory);
-    return FileSystemAttrib{};
+    auto oid = _update_dir(_objdir, root_object_id(), parent_path,
+        [&] (Tree& parent) {
+            auto i = parent.find(path.back().native());
+            if (i == parent.end()) throw_error(sys::errc::no_such_file_or_directory);
+
+            // XXX: Don't load the whole objects into memory.
+            auto obj = object::io::load<Tree, Blob>(_objdir, i->second);
+
+            apply(obj,
+                [&] (const Tree&) { attrib = FileSystemDirAttrib{}; },
+                [&] (const Blob& b) { attrib = FileSystemFileAttrib{b.size()}; });
+
+            return false;
+        });
+
+    return attrib;
 }
 
 //--------------------------------------------------------------------
@@ -326,12 +411,17 @@ Opt<Id> _remove_recur(const fs::path& objdir, Id tree_id, PathRange path)
     return tree->store(objdir);
 }
 
-bool Branch::remove(const fs::path& path)
+bool Branch::remove(PathRange path)
 {
-    auto oid = _remove_recur(_objdir, root_object_id(), path_range(path));
+    auto oid = _remove_recur(_objdir, root_object_id(), path);
     if (!oid) return false;
     root_object_id(*oid);
     return true;
+}
+
+bool Branch::remove(const fs::path& path)
+{
+    return remove(path_range(path));
 }
 
 //--------------------------------------------------------------------
