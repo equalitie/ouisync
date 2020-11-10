@@ -87,6 +87,14 @@ fs::path choose_test_dir() {
     return fs::unique_path("/tmp/ouisync/test-objects-%%%%-%%%%-%%%%-%%%%");
 }
 
+BOOST_AUTO_TEST_CASE(blob_id_calculation) {
+    Random random;
+    auto data1 = random.vector(256);
+    auto data2 = random.vector(256);
+    BOOST_REQUIRE_NE(data1, data2);
+    BOOST_REQUIRE_NE(object::calculate_id(data1), object::calculate_id(data2));
+}
+
 BOOST_AUTO_TEST_CASE(blob_is_same) {
     fs::path testdir = choose_test_dir();
 
@@ -135,25 +143,6 @@ Branch create_branch(const fs::path testdir, const char* user_id_file_name) {
     return Branch::load_or_create(branchdir, objdir, user_id);
 }
 
-BOOST_AUTO_TEST_CASE(tree_branch_store_and_load) {
-    fs::path testdir = choose_test_dir();
-
-    Random random;
-
-    Blob d1(random.vector(1000));
-
-    Branch branch = create_branch(testdir, "user_id");
-
-    branch.store("foo/bar", d1);
-
-    BOOST_REQUIRE_EQUAL(count_objects(branch.object_directory()), 3 /* root + foo + bar */);
-
-    auto od2 = branch.maybe_load("foo/bar");
-
-    BOOST_REQUIRE(od2);
-    BOOST_REQUIRE_EQUAL(d1, *od2);
-}
-
 BOOST_AUTO_TEST_CASE(branch_directories) {
     fs::path testdir = choose_test_dir();
 
@@ -177,6 +166,26 @@ BOOST_AUTO_TEST_CASE(branch_directories) {
 
         BOOST_REQUIRE_EQUAL(branch.root_object_id(), empty_root_id);
     }
+}
+
+BOOST_AUTO_TEST_CASE(tree_branch_store_and_load) {
+    fs::path testdir = choose_test_dir();
+
+    Random random;
+
+    Blob d1(random.vector(1000));
+
+    Branch branch = create_branch(testdir, "user_id");
+
+    branch.mkdir(path_range("foo"));
+    branch.store("foo/bar", d1);
+
+    BOOST_REQUIRE_EQUAL(count_objects(branch.object_directory()), 3 /* root + foo + bar */);
+
+    auto od2 = branch.maybe_load("foo/bar");
+
+    BOOST_REQUIRE(od2);
+    BOOST_REQUIRE_EQUAL(d1, *od2);
 }
 
 BOOST_AUTO_TEST_CASE(tree_remove) {
@@ -214,6 +223,7 @@ BOOST_AUTO_TEST_CASE(tree_remove) {
         Branch branch = create_branch(testdir/"2", "user_id");
 
         auto data = random.vector(256);
+        branch.mkdir(path_range("dir"));
         branch.store("dir/data", data);
 
         BOOST_REQUIRE_EQUAL(count_objects(branch.object_directory()), 3);
@@ -234,6 +244,7 @@ BOOST_AUTO_TEST_CASE(tree_remove) {
         Branch branch = create_branch(testdir/"3", "user_id");
 
         auto data = random.vector(256);
+        branch.mkdir(path_range("dir"));
         branch.store("dir/data", data);
 
         BOOST_REQUIRE_EQUAL(count_objects(branch.object_directory()), 3);
@@ -250,28 +261,32 @@ BOOST_AUTO_TEST_CASE(tree_remove) {
         Branch branch2 = create_branch(testdir/"4", "user2_id");
 
         BOOST_REQUIRE_EQUAL(branch1.object_directory(), branch2.object_directory());
+        auto objdir = branch1.object_directory();
 
         auto data  = random.vector(256);
 
+        BOOST_REQUIRE_EQUAL(count_objects(objdir), 1 /* root */);
+
         branch1.store("data", data);
+        BOOST_REQUIRE_EQUAL(count_objects(objdir), 2 /* root */ + 1 /* data */);
+
         branch1.store("other_data", random.vector(256));
+        BOOST_REQUIRE_EQUAL(count_objects(objdir), 2 /* root */ + 2 /* data */);
 
         branch2.store("data", data);
+        BOOST_REQUIRE_EQUAL(count_objects(objdir), 2 /* root */ + 2 /* data */);
         branch2.store("other_data", random.vector(256));
 
-        BOOST_REQUIRE_EQUAL(count_objects(branch1.object_directory()),
-                2 /* roots */ + 3 /* data */);
+        BOOST_REQUIRE_EQUAL(count_objects(objdir), 2 /* roots */ + 3 /* data */);
 
         branch1.remove("data");
 
         // Same count as before, since "data" is still in branch2
-        BOOST_REQUIRE_EQUAL(count_objects(branch1.object_directory()),
-                2 /* roots */ + 3 /* data */);
+        BOOST_REQUIRE_EQUAL(count_objects(objdir), 2 /* roots */ + 3 /* data */);
 
         branch2.remove("data");
 
         // Now "data" should have been removed all together
-        BOOST_REQUIRE_EQUAL(count_objects(branch1.object_directory()),
-                2 /* roots */ + 2 /* data */);
+        BOOST_REQUIRE_EQUAL(count_objects(objdir), 2 /* roots */ + 2 /* data */);
     }
 }
