@@ -37,7 +37,7 @@ public:
     net::awaitable<std::vector<std::string>> readdir(PathRange);
     net::awaitable<Attrib> get_attr(PathRange);
     net::awaitable<size_t> read(PathRange, char* buf, size_t size, off_t offset);
-    net::awaitable<int> write(PathRange, const char* buf, size_t size, off_t offset);
+    net::awaitable<size_t> write(PathRange, const char* buf, size_t size, off_t offset);
     net::awaitable<size_t> truncate(PathRange, size_t);
     net::awaitable<void> mknod(PathRange, mode_t mode, dev_t dev);
     net::awaitable<void> mkdir(PathRange, mode_t mode);

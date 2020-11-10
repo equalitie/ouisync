@@ -121,27 +121,39 @@ net::awaitable<size_t> FileSystem::read(PathRange path, char* buf, size_t size, 
     co_return size;
 }
 
-net::awaitable<int> FileSystem::write(PathRange path, const char* buf, size_t size, off_t offset)
+net::awaitable<size_t> FileSystem::write(PathRange path, const char* buf, size_t size, off_t offset)
 {
-    File& content = find<File>(path);
-
-    size_t len = content.size();
-
-    if (offset + size > len) {
-        content.resize(offset + size);
+    if (path.empty()) {
+        throw_error(sys::errc::invalid_argument);
     }
 
-    memcpy(content.data() + offset, buf, size);
+    auto& branch = find_branch(path);
+    path.advance_begin(1);
 
-    co_return size;
+    if (path.empty()) {
+        throw_error(sys::errc::operation_not_permitted);
+    }
+
+    co_return branch.write(path, buf, size, offset);
 }
 
 net::awaitable<void> FileSystem::mknod(PathRange path, mode_t mode, dev_t dev)
 {
     if (S_ISFIFO(mode)) throw_error(sys::errc::invalid_argument); // TODO?
-    Dir& dir = find_parent(path);
-    auto inserted = dir.insert({path.back().native(), File{}}).second;
-    if (!inserted) throw_error(sys::errc::file_exists);
+
+    if (path.empty()) {
+        throw_error(sys::errc::invalid_argument);
+    }
+
+    auto& branch = find_branch(path);
+    path.advance_begin(1);
+
+    if (path.empty()) {
+        throw_error(sys::errc::is_a_directory);
+    }
+
+    branch.store(path, object::Blob{});
+
     co_return;
 }
 

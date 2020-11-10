@@ -132,6 +132,38 @@ void Branch::store(const fs::path& path, const Blob& blob)
 //    root_object_id(*oid);
 //    return true;
 //}
+//--------------------------------------------------------------------
+
+size_t Branch::write(PathRange path, const char* buf, size_t size, size_t offset)
+{
+    if (path.empty()) throw_error(sys::errc::is_a_directory);
+
+    auto parent_dir = path;
+    parent_dir.advance_end(-1);
+
+    auto id = _update_dir(_objdir, root_object_id(), parent_dir,
+        [&] (Tree& tree) {
+            auto i = tree.find(path.back().native());
+            if (i == tree.end()) throw_error(sys::errc::no_such_file_or_directory);
+            auto blob = object::io::load<Blob>(_objdir, i->second);
+
+            size_t len = blob.size();
+
+            if (offset + size > len) {
+                blob.resize(offset + size);
+            }
+
+            memcpy(blob.data() + offset, buf, size);
+
+            _flat_remove(_objdir, i->second);
+            i->second = object::io::store(_objdir, blob);
+            object::refcount::increment(_objdir, i->second);
+        });
+
+    root_object_id(id);
+
+    return size;
+}
 
 //--------------------------------------------------------------------
 

@@ -34,6 +34,8 @@ public:
     void store(PathRange, const Blob&);
     void store(const fs::path&, const Blob&);
 
+    size_t write(PathRange, const char* buf, size_t size, size_t offset);
+
     Opt<Blob> maybe_load(const fs::path&) const;
 
     Tree readdir(PathRange) const;
