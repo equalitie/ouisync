@@ -161,7 +161,7 @@ BOOST_AUTO_TEST_CASE(branch_directories) {
         branch.mkdir(path_range("dir"));
         BOOST_REQUIRE_EQUAL(count_objects(branch.object_directory()), 2);
 
-        branch.rmdir(path_range("dir"));
+        branch.remove(path_range("dir"));
         BOOST_REQUIRE_EQUAL(count_objects(branch.object_directory()), 1);
 
         BOOST_REQUIRE_EQUAL(branch.root_object_id(), empty_root_id);

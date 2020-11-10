@@ -276,6 +276,8 @@ Opt<Blob> Branch::maybe_load(const fs::path& path_) const
     return retval;
 }
 
+//--------------------------------------------------------------------
+
 Tree Branch::readdir(PathRange path) const
 {
     Opt<Tree> retval;
@@ -286,6 +288,8 @@ Tree Branch::readdir(PathRange path) const
     assert(retval);
     return std::move(*retval);
 }
+
+//--------------------------------------------------------------------
 
 FileSystemAttrib Branch::get_attr(PathRange path) const
 {
@@ -334,73 +338,22 @@ void Branch::mkdir(PathRange path)
 
 //--------------------------------------------------------------------
 
-static
-Id _rmdir_recur(const fs::path& objdir, Id tree_id, PathRange path)
-{
-    assert(!path.empty());
-
-    auto child_name = path.front().string();
-    path.advance_begin(1);
-
-    auto tree = object::io::maybe_load<Tree>(objdir, tree_id);
-    if (!tree) throw_error(sys::errc::no_such_file_or_directory);
-
-    auto i = tree->find(child_name);
-    if (i == tree->end()) throw_error(sys::errc::no_such_file_or_directory);
-
-    if (path.empty()) {
-        _remove_with_children(objdir, i->second);
-        tree->erase(i);
-    } else {
-        i->second = _rmdir_recur(objdir, i->second, path);
-    }
-
-    _flat_remove(objdir, tree_id);
-    return tree->store(objdir);
-}
-
-void Branch::rmdir(PathRange path)
-{
-    if (path.empty()) throw_error(sys::errc::operation_not_permitted);
-    auto new_root_id = _rmdir_recur(_objdir, root_object_id(), path);
-    root_object_id(new_root_id);
-}
-
-//--------------------------------------------------------------------
-
-static
-Opt<Id> _remove_recur(const fs::path& objdir, Id tree_id, PathRange path)
-{
-    if (path.empty()) {
-        // Assuming the root obj can't be deleted with this function.
-        return boost::none;
-    }
-
-    auto child_name = path.front().string();
-    path.advance_begin(1);
-
-    auto tree = object::io::maybe_load<Tree>(objdir, tree_id);
-    if (!tree) return boost::none;
-
-    auto i = tree->find(child_name);
-    if (i == tree->end()) return boost::none;
-
-    if (path.empty()) {
-        if (!_remove_with_children(objdir, i->second)) return boost::none;
-        tree->erase(i);
-    } else {
-        auto opt_new_id = _remove_recur(objdir, i->second, path);
-        if (!opt_new_id) return boost::none;
-        i->second = *opt_new_id;
-    }
-
-    _flat_remove(objdir, tree_id);
-    return tree->store(objdir);
-}
-
 bool Branch::remove(PathRange path)
 {
-    auto oid = _remove_recur(_objdir, root_object_id(), path);
+    if (path.empty()) throw_error(sys::errc::operation_not_permitted);
+
+    auto parent_path = path;
+    parent_path.advance_end(-1);
+
+    auto oid = _update_dir(_objdir, root_object_id(), parent_path,
+        [&] (Tree& tree) {
+            auto i = tree.find(path.back().native());
+            if (i == tree.end()) throw_error(sys::errc::no_such_file_or_directory);
+            _remove_with_children(_objdir, i->second);
+            tree.erase(i);
+            return true;
+        });
+
     if (!oid) return false;
     root_object_id(*oid);
     return true;

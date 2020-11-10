@@ -52,7 +52,6 @@ public:
     }
 
     void mkdir(PathRange);
-    void rmdir(PathRange);
 
 private:
     Branch(const fs::path& file_path, const fs::path& objdir,

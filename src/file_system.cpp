@@ -168,7 +168,7 @@ net::awaitable<void> FileSystem::remove_directory(PathRange path)
         throw_error(sys::errc::operation_not_permitted);
     }
 
-    branch.rmdir(path);
+    branch.remove(path);
     co_return;
 }
 
