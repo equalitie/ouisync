@@ -177,6 +177,25 @@ BOOST_AUTO_TEST_CASE(tree_branch_store_and_load) {
 
     Branch branch = create_branch(testdir, "user_id");
 
+    branch.store("bar", d1);
+
+    BOOST_REQUIRE_EQUAL(count_objects(branch.object_directory()), 2 /* root + bar */);
+
+    auto od2 = branch.maybe_load("bar");
+
+    BOOST_REQUIRE(od2);
+    BOOST_REQUIRE_EQUAL(d1, *od2);
+}
+
+BOOST_AUTO_TEST_CASE(tree_branch_store_and_load_in_subdir) {
+    fs::path testdir = choose_test_dir();
+
+    Random random;
+
+    Blob d1(random.vector(1000));
+
+    Branch branch = create_branch(testdir, "user_id");
+
     branch.mkdir(path_range("foo"));
     branch.store("foo/bar", d1);
 

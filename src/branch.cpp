@@ -109,7 +109,6 @@ void Branch::store(PathRange path, const Blob& blob)
     auto dirpath = path;
     dirpath.advance_end(-1);
 
-    auto old_id = root_object_id();
     auto id = _update_dir(_objdir, root_object_id(), dirpath,
         [&] (Tree& tree) {
             auto [child_i, inserted] = tree.insert(std::make_pair(path.back().native(), Id{}));
