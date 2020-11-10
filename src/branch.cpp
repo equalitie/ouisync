@@ -62,6 +62,14 @@ bool _flat_remove(const fs::path& objdir, const Id& id) {
     return object::io::remove(objdir, id);
 }
 
+template<class Obj>
+static
+Id _flat_store(const fs::path& objdir, const Obj& obj) {
+    auto new_id = object::io::store(objdir, obj);
+    object::refcount::increment(objdir, new_id);
+    return new_id;
+}
+
 static
 bool _remove_with_children(const fs::path& objdir, const Id& id) {
     auto obj = object::io::load<Tree, JustTag<Blob>>(objdir, id);
@@ -78,8 +86,6 @@ bool _remove_with_children(const fs::path& objdir, const Id& id) {
 
     return _flat_remove(objdir, id);
 }
-
-//--------------------------------------------------------------------
 
 template<class F>
 static
@@ -104,11 +110,10 @@ Opt<Id> _update_dir(const fs::path& objdir, Id tree_id, PathRange path, F&& f)
     }
 
     _flat_remove(objdir, tree_id);
-    auto new_tree_id = tree.store(objdir);
-    object::refcount::increment(objdir, new_tree_id);
-
-    return new_tree_id;
+    return _flat_store(objdir, tree);
 }
+
+//--------------------------------------------------------------------
 
 void Branch::store(PathRange path, const Blob& blob)
 {
@@ -119,8 +124,7 @@ void Branch::store(PathRange path, const Blob& blob)
         [&] (Tree& tree) {
             auto [child_i, inserted] = tree.insert(std::make_pair(path.back().native(), Id{}));
             if (!inserted) throw_error(sys::errc::file_exists);
-            child_i->second = object::io::store(_objdir, blob);
-            object::refcount::increment(_objdir, child_i->second);
+            child_i->second = _flat_store(_objdir, blob);
             return true;
         });
 
@@ -160,8 +164,7 @@ size_t Branch::write(PathRange path, const char* buf, size_t size, size_t offset
             memcpy(blob.data() + offset, buf, size);
 
             _flat_remove(_objdir, i->second);
-            i->second = object::io::store(_objdir, blob);
-            object::refcount::increment(_objdir, i->second);
+            i->second = _flat_store(_objdir, blob);
 
             return true;
         });
@@ -227,8 +230,7 @@ size_t Branch::truncate(PathRange path, size_t size)
             size = blob.size();
 
             _flat_remove(_objdir, i->second);
-            i->second = object::io::store(_objdir, blob);
-            object::refcount::increment(_objdir, i->second);
+            i->second = _flat_store(_objdir, blob);
 
             return true;
         });
@@ -240,39 +242,40 @@ size_t Branch::truncate(PathRange path, size_t size)
 
 //--------------------------------------------------------------------
 
-template<class Obj>
-static
-Opt<Obj> _maybe_load_recur(const fs::path& objdir, const Id& root_id, PathRange path) {
-    if (path.empty())
-        return object::io::maybe_load<Obj>(objdir, root_id);
-
-    auto tree = object::io::maybe_load<Tree>(objdir, root_id);
-    if (!tree) return boost::none;
-
-    auto name = path.front().string();
-
-    auto i = tree->find(name);
-
-    if (i == tree->end()) {
-        return boost::none;
-    }
-
-    path.advance_begin(1);
-    return _maybe_load_recur<Obj>(objdir, i->second, path);
-}
-
-Opt<Blob> Branch::maybe_load(const fs::path& path) const
+Opt<Blob> Branch::maybe_load(const fs::path& path_) const
 {
-    auto ob = _maybe_load_recur<Blob>(_objdir, root_object_id(), path_range(path));
-    if (!ob) return boost::none;
-    return move(*ob);
+    PathRange path(path_);
+
+    if (path.empty()) throw_error(sys::errc::is_a_directory);
+
+    auto dirpath = path;
+    dirpath.advance_end(-1);
+
+    Opt<Blob> retval;
+
+    _update_dir(_objdir, root_object_id(), dirpath,
+        [&] (const Tree& tree) {
+            auto i = tree.find(path.back().native());
+            if (i == tree.end()) throw_error(sys::errc::no_such_file_or_directory);
+            retval = object::io::load<Blob>(_objdir, i->second);
+            return false;
+        });
+
+    return retval;
 }
 
 Tree Branch::readdir(PathRange path) const
 {
-    auto ob = _maybe_load_recur<Tree>(_objdir, root_object_id(), path);
-    if (!ob) throw_error(sys::errc::no_such_file_or_directory);
-    return move(*ob);
+    Opt<Tree> retval;
+
+    _update_dir(_objdir, root_object_id(), path,
+        [&] (const Tree& tree) {
+            retval = tree;
+            return false;
+        });
+
+    assert(retval);
+    return std::move(*retval);
 }
 
 FileSystemAttrib Branch::get_attr(PathRange path) const
@@ -303,46 +306,23 @@ FileSystemAttrib Branch::get_attr(PathRange path) const
 }
 
 //--------------------------------------------------------------------
-static
-Id _mkdir_recur(const fs::path& objdir, Id parent_id, PathRange path)
-{
-    assert(!path.empty());
-
-    auto child_name = path.front().string();
-    path.advance_begin(1);
-    bool is_last = path.empty();
-
-    Tree tree = object::io::load<Tree>(objdir, parent_id);
-
-    Id obj_id;
-
-    if (is_last) {
-        auto [child_i, inserted] = tree.insert(std::make_pair(child_name, Id{}));
-        if (!inserted) {
-            throw_error(sys::errc::file_exists);
-        }
-        obj_id = object::io::store(objdir, Tree{});
-        child_i->second = obj_id;
-    } else {
-        auto child_i = tree.find(child_name);
-        if (child_i == tree.end()) {
-            throw_error(sys::errc::no_such_file_or_directory);
-        }
-        obj_id = _mkdir_recur(objdir, child_i->second, path);
-        child_i->second = obj_id;
-    }
-
-    object::refcount::increment(objdir, obj_id);
-    _flat_remove(objdir, parent_id);
-    return tree.store(objdir);
-}
 
 void Branch::mkdir(PathRange path)
 {
     if (path.empty()) throw_error(sys::errc::invalid_argument);
 
-    auto new_root_id = _mkdir_recur(_objdir, root_object_id(), path);
-    root_object_id(new_root_id);
+    auto parent_path = path;
+    parent_path.advance_end(-1);
+
+    auto oid = _update_dir(_objdir, root_object_id(), parent_path,
+        [&] (Tree& parent) {
+            auto [i, inserted] = parent.insert(std::make_pair(path.back().native(), Id{}));
+            if (!inserted) throw_error(sys::errc::file_exists);
+            i->second = _flat_store(_objdir, Tree{});
+            return true;
+        });
+
+    if (oid) root_object_id(*oid);
 }
 
 //--------------------------------------------------------------------
