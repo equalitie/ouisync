@@ -11,7 +11,7 @@ using namespace ouisync::object;
 
 Id ouisync::object::calculate_id(const Blob& v) {
     Sha256 hash;
-    if (!v.empty()) {
+    if (v.empty()) {
         hash.update(uint32_t(0));
         return hash.close();
     }
