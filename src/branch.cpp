@@ -78,41 +78,52 @@ bool _remove_with_children(const fs::path& objdir, const Id& id) {
 
 //--------------------------------------------------------------------
 
+template<class F>
 static
-Id _store_recur(const fs::path& objdir, Id tree_id, PathRange path, const Blob& blob)
+Id _update_dir(const fs::path& objdir, Id tree_id, PathRange path, F&& f)
 {
-    auto child_name = path.front().string();
-    path.advance_begin(1);
-
     Tree tree = object::io::load<Tree>(objdir, tree_id);
 
-    Id obj_id;
-
     if (path.empty()) {
-        obj_id = object::io::store(objdir, blob);
-        auto [child_i, inserted] = tree.insert(std::make_pair(child_name, obj_id));
-        if (!inserted) {
-            _flat_remove(objdir, child_i->second);
-        }
-        child_i->second = obj_id;
+        f(tree);
     } else {
-        auto child_i = tree.find(child_name);
+        auto child_i = tree.find(path.front().string());
+
         if (child_i == tree.end()) {
             throw_error(sys::errc::no_such_file_or_directory);
         }
-        obj_id = _store_recur(objdir, child_i->second, path, blob);
-        child_i->second = obj_id;
+
+        path.advance_begin(1);
+        child_i->second = _update_dir(objdir, child_i->second, path, std::forward<F>(f));
     }
 
-    object::refcount::increment(objdir, obj_id);
     _flat_remove(objdir, tree_id);
-    return tree.store(objdir);
+    auto new_tree_id = tree.store(objdir);
+    object::refcount::increment(objdir, new_tree_id);
+
+    return new_tree_id;
+}
+
+void Branch::store(PathRange path, const Blob& blob)
+{
+    auto dirpath = path;
+    dirpath.advance_end(-1);
+
+    auto old_id = root_object_id();
+    auto id = _update_dir(_objdir, root_object_id(), dirpath,
+        [&] (Tree& tree) {
+            auto [child_i, inserted] = tree.insert(std::make_pair(path.back().native(), Id{}));
+            if (!inserted) throw_error(sys::errc::file_exists);
+            child_i->second = object::io::store(_objdir, blob);
+            object::refcount::increment(_objdir, child_i->second);
+        });
+
+    root_object_id(id);
 }
 
 void Branch::store(const fs::path& path, const Blob& blob)
 {
-    auto id = _store_recur(_objdir, root_object_id(), path_range(path), blob);
-    root_object_id(id);
+    store(path_range(path), blob);
 }
 
 //bool Branch::maybe_store(const fs::path& path, const Blob& blob)

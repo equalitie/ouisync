@@ -31,6 +31,7 @@ public:
 
     bool maybe_store(const fs::path&, const Blob&);
 
+    void store(PathRange, const Blob&);
     void store(const fs::path&, const Blob&);
 
     Opt<Blob> maybe_load(const fs::path&) const;
