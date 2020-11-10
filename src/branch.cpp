@@ -79,56 +79,49 @@ bool _remove_with_children(const fs::path& objdir, const Id& id) {
 //--------------------------------------------------------------------
 
 static
-Opt<Id> _store_recur(const fs::path& objdir, Opt<Id> old_object_id, PathRange path, const Blob& blob, bool replace)
+Id _store_recur(const fs::path& objdir, Id tree_id, PathRange path, const Blob& blob)
 {
-    Opt<Id> obj_id;
-
-    if (path.empty()) {
-        if (replace) obj_id = object::io::store(objdir, blob);
-        else         obj_id = object::io::maybe_store(objdir, blob);
-        if (old_object_id && obj_id) _flat_remove(objdir, *old_object_id);
-        return obj_id;
-    }
-
     auto child_name = path.front().string();
     path.advance_begin(1);
 
-    Tree tree;
+    Tree tree = object::io::load<Tree>(objdir, tree_id);
 
-    if (old_object_id) {
-        tree = object::io::load<Tree>(objdir, *old_object_id);
+    Id obj_id;
+
+    if (path.empty()) {
+        obj_id = object::io::store(objdir, blob);
+        auto [child_i, inserted] = tree.insert(std::make_pair(child_name, obj_id));
+        if (!inserted) {
+            _flat_remove(objdir, child_i->second);
+        }
+        child_i->second = obj_id;
+    } else {
+        auto child_i = tree.find(child_name);
+        if (child_i == tree.end()) {
+            throw_error(sys::errc::no_such_file_or_directory);
+        }
+        obj_id = _store_recur(objdir, child_i->second, path, blob);
+        child_i->second = obj_id;
     }
 
-    auto [child_i, inserted] = tree.insert(std::make_pair(child_name, Id{}));
-
-    Opt<Id> old_child_id;
-    if (!inserted) old_child_id = child_i->second;
-
-    obj_id = _store_recur(objdir, old_child_id, path, blob, replace);
-
-    if (!obj_id) return boost::none;
-
-    object::refcount::increment(objdir, *obj_id);
-    child_i->second = *obj_id;
-    if (old_object_id) _flat_remove(objdir, *old_object_id);
+    object::refcount::increment(objdir, obj_id);
+    _flat_remove(objdir, tree_id);
     return tree.store(objdir);
 }
 
 void Branch::store(const fs::path& path, const Blob& blob)
 {
-    auto oid = _store_recur(_objdir, root_object_id(), path_range(path), blob, true);
-    assert(oid);
-    if (!oid) throw std::runtime_error("Object not replaced as it should have been");
-    root_object_id(*oid);
+    auto id = _store_recur(_objdir, root_object_id(), path_range(path), blob);
+    root_object_id(id);
 }
 
-bool Branch::maybe_store(const fs::path& path, const Blob& blob)
-{
-    auto oid = _store_recur(_objdir, root_object_id(), path_range(path), blob, false);
-    if (!oid) return false;
-    root_object_id(*oid);
-    return true;
-}
+//bool Branch::maybe_store(const fs::path& path, const Blob& blob)
+//{
+//    auto oid = _store_recur(_objdir, root_object_id(), path_range(path), blob, false);
+//    if (!oid) return false;
+//    root_object_id(*oid);
+//    return true;
+//}
 
 //--------------------------------------------------------------------
 
