@@ -14,11 +14,6 @@ FileSystem::FileSystem(executor_type ex, FileSystemOptions options) :
     _ex(std::move(ex)),
     _options(std::move(options))
 {
-    _debug_tree = Dir{
-        { string("dir"), Dir{ { string("file"), string("content") } } },
-        { string("hello"), string("world") }
-    };
-
     _user_id = UserId::load_or_create(_options.user_id_file_path());
 
     auto branch = Branch::load_or_create(
@@ -27,30 +22,6 @@ FileSystem::FileSystem(executor_type ex, FileSystemOptions options) :
             _user_id);
 
     _branches.insert(std::make_pair(_user_id, std::move(branch)));
-}
-
-FileSystem::Tree& FileSystem::find_tree(PathRange path)
-{
-    auto* tree = &_debug_tree;
-
-    for (auto& p : path) {
-        auto dir = get<Dir>(tree);
-        assert(dir);
-        if (!dir) throw_error(sys::errc::no_such_file_or_directory);
-        auto i = dir->find(p.native());
-        if (i == dir->end()) throw_error(sys::errc::no_such_file_or_directory);
-        tree = &i->second;
-    }
-
-    return *tree;
-}
-
-template<class T>
-T& FileSystem::find(PathRange path_range)
-{
-    auto p = get<T>(&find_tree(path_range));
-    if (!p) throw_error(sys::errc::invalid_argument);
-    return *p;
 }
 
 Branch& FileSystem::find_branch(PathRange path)
