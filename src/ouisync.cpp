@@ -2,6 +2,7 @@
 #include "branch.h"
 #include "fuse_runner.h"
 #include "file_system.h"
+#include "network.h"
 #include "shortcuts.h"
 #include "options.h"
 
@@ -38,12 +39,13 @@ int main(int argc, char* argv[]) {
     fs::create_directories(options.mountdir);
 
     FileSystem fs(ioc.get_executor(), options);
+    Network network(ioc.get_executor(), fs, options);
     FuseRunner fuse(fs, options.mountdir);
 
     net::signal_set signals(ioc, SIGINT, SIGTERM, SIGHUP);
     signals.async_wait([&] (sys::error_code, int) {
         fuse.finish();
-        ioc.reset();
+        network.finish();
     });
 
     ioc.run();

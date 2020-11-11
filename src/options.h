@@ -4,6 +4,8 @@
 
 #include <boost/filesystem/path.hpp>
 #include <boost/program_options.hpp>
+#include <boost/asio/ip/tcp.hpp>
+#include <boost/optional.hpp>
 
 namespace ouisync {
 
@@ -22,6 +24,9 @@ public:
     fs::path objectdir;
     fs::path mountdir;
     fs::path user_id_file_path;
+
+    Opt<net::ip::tcp::endpoint> accept_endpoint;
+    Opt<net::ip::tcp::endpoint> connect_endpoint;
 
 private:
     boost::program_options::options_description description;

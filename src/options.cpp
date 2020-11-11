@@ -1,7 +1,42 @@
 #include "options.h"
 
+#include <boost/asio/ip/address.hpp>
+#include <iostream>
+
 using namespace ouisync;
 using namespace boost::program_options;
+using net::ip::tcp;
+
+namespace std {
+    // XXX: Move this somewhere else
+    static std::istream& operator>>(std::istream& is, tcp::endpoint& ep)
+    {
+        using I = std::istreambuf_iterator<char>;
+
+        std::string addr_str;
+
+        for (auto i = I(is); i != I(); ++i)
+        {
+            if (*i == ':') { break; }
+            addr_str.push_back(*i);
+        }
+
+        char colon = '\0';
+        is >> colon;
+
+        if (colon != ':')
+            throw std::runtime_error("Failed to parse endpoint");
+
+        auto addr = net::ip::make_address(addr_str);
+
+        uint16_t port = -1;
+        is >> port;
+
+        ep = tcp::endpoint(addr, port);
+
+        return is;
+    }
+}
 
 Options::Options() :
     help(false),
@@ -11,6 +46,10 @@ Options::Options() :
         ( "help,h", value(&help), "produce this help")
 
         ( "basedir", value(&basedir)->required(), "base directory")
+
+        ( "connect", value(&connect_endpoint), "peer's TCP endpoint")
+
+        ( "accept", value(&accept_endpoint), "our accepting TCP endpoint")
 
         ;
 }

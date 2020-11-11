@@ -40,6 +40,8 @@ add_library(libouisync STATIC
     "src/file_system.cpp"
     "src/file_system_attrib.cpp"
     "src/options.cpp"
+    "src/network.cpp"
+    "src/dealer.cpp"
     "src/object/tree.cpp"
     "src/object/blob.cpp"
     "src/object/path.cpp"
