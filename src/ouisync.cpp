@@ -40,7 +40,7 @@ int main(int argc, char* argv[]) {
     FileSystem fs(ioc.get_executor(), options);
     FuseRunner fuse(fs, options.mountdir);
 
-    net::signal_set signals(ioc, SIGINT, SIGTERM);
+    net::signal_set signals(ioc, SIGINT, SIGTERM, SIGHUP);
     signals.async_wait([&] (sys::error_code, int) {
         fuse.finish();
         ioc.reset();
