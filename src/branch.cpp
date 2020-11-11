@@ -14,18 +14,12 @@
 #include <boost/serialization/vector.hpp>
 #include <string.h> // memcpy
 
-#include <iostream>
-#include "array_io.h"
-#include "hex.h"
-
 using namespace ouisync;
 using std::move;
 using object::Id;
 using object::Blob;
 using object::Tree;
 using object::JustTag;
-using Blob = Branch::Blob;
-using Tree = Branch::Tree;
 
 /* static */
 Branch Branch::load_or_create(const fs::path& rootdir, const fs::path& objdir, UserId user_id) {
@@ -40,7 +34,7 @@ Branch Branch::load_or_create(const fs::path& rootdir, const fs::path& objdir, U
         object::Tree root_obj;
         root_id = root_obj.store(objdir);
         object::refcount::increment(objdir, root_id);
-        Branch branch(path, objdir, user_id, root_id, std::move(clock));
+        Branch branch(path, objdir, user_id, root_id, move(clock));
         branch.store_self();
         return branch;
     }
@@ -146,14 +140,18 @@ void Branch::query_dir(PathRange path, F&& f) const
     _query_dir(_objdir, root_object_id(), path, std::forward<F>(f));
 }
 
+static
+PathRange parent(PathRange path) {
+    path.advance_end(-1);
+    return path;
+}
 //--------------------------------------------------------------------
 
 void Branch::store(PathRange path, const Blob& blob)
 {
-    auto dirpath = path;
-    dirpath.advance_end(-1);
+    if (path.empty()) throw_error(sys::errc::is_a_directory);
 
-    update_dir(dirpath,
+    update_dir(parent(path),
         [&] (Tree& tree) {
             auto [child_i, inserted] = tree.insert(std::make_pair(path.back().native(), Id{}));
             if (!inserted) throw_error(sys::errc::file_exists);
@@ -173,10 +171,7 @@ size_t Branch::write(PathRange path, const char* buf, size_t size, size_t offset
 {
     if (path.empty()) throw_error(sys::errc::is_a_directory);
 
-    auto parent_dir = path;
-    parent_dir.advance_end(-1);
-
-    update_dir(parent_dir,
+    update_dir(parent(path),
         [&] (Tree& tree) {
             auto i = tree.find(path.back().native());
             if (i == tree.end()) throw_error(sys::errc::no_such_file_or_directory);
@@ -208,10 +203,7 @@ size_t Branch::read(PathRange path, const char* buf, size_t size, size_t offset)
 {
     if (path.empty()) throw_error(sys::errc::is_a_directory);
 
-    auto parent_dir = path;
-    parent_dir.advance_end(-1);
-
-    query_dir(parent_dir,
+    query_dir(parent(path),
         [&] (const Tree& tree) {
             auto i = tree.find(path.back().native());
             if (i == tree.end()) throw_error(sys::errc::no_such_file_or_directory);
@@ -238,10 +230,7 @@ size_t Branch::truncate(PathRange path, size_t size)
 {
     if (path.empty()) throw_error(sys::errc::is_a_directory);
 
-    auto parent_dir = path;
-    parent_dir.advance_end(-1);
-
-    update_dir(parent_dir,
+    update_dir(parent(path),
         [&] (Tree& tree) {
             auto i = tree.find(path.back().native());
             if (i == tree.end()) throw_error(sys::errc::no_such_file_or_directory);
@@ -269,12 +258,9 @@ Opt<Blob> Branch::maybe_load(const fs::path& path_) const
 
     if (path.empty()) throw_error(sys::errc::is_a_directory);
 
-    auto dirpath = path;
-    dirpath.advance_end(-1);
-
     Opt<Blob> retval;
 
-    query_dir(dirpath,
+    query_dir(parent(path),
         [&] (const Tree& tree) {
             auto i = tree.find(path.back().native());
             if (i == tree.end()) throw_error(sys::errc::no_such_file_or_directory);
@@ -293,7 +279,7 @@ Tree Branch::readdir(PathRange path) const
     query_dir(path, [&] (const Tree& tree) { retval = tree; });
 
     assert(retval);
-    return std::move(*retval);
+    return move(*retval);
 }
 
 //--------------------------------------------------------------------
@@ -302,12 +288,9 @@ FileSystemAttrib Branch::get_attr(PathRange path) const
 {
     if (path.empty()) return FileSystemDirAttrib{};
 
-    auto parent_path = path;
-    parent_path.advance_end(-1);
-
     FileSystemAttrib attrib;
 
-    query_dir(parent_path,
+    query_dir(parent(path),
         [&] (const Tree& parent) {
             auto i = parent.find(path.back().native());
             if (i == parent.end()) throw_error(sys::errc::no_such_file_or_directory);
@@ -329,10 +312,7 @@ void Branch::mkdir(PathRange path)
 {
     if (path.empty()) throw_error(sys::errc::invalid_argument);
 
-    auto parent_path = path;
-    parent_path.advance_end(-1);
-
-    update_dir(parent_path,
+    update_dir(parent(path),
         [&] (Tree& parent) {
             auto [i, inserted] = parent.insert(std::make_pair(path.back().native(), Id{}));
             if (!inserted) throw_error(sys::errc::file_exists);
@@ -347,10 +327,7 @@ bool Branch::remove(PathRange path)
 {
     if (path.empty()) throw_error(sys::errc::operation_not_permitted);
 
-    auto parent_path = path;
-    parent_path.advance_end(-1);
-
-    update_dir(parent_path,
+    update_dir(parent(path),
         [&] (Tree& tree) {
             auto i = tree.find(path.back().native());
             if (i == tree.end()) throw_error(sys::errc::no_such_file_or_directory);
@@ -396,7 +373,7 @@ Branch::Branch(const fs::path& file_path, const fs::path& objdir,
     _objdir(objdir),
     _user_id(user_id),
     _root_id(root_id),
-    _clock(std::move(clock))
+    _clock(move(clock))
 {}
 
 //--------------------------------------------------------------------
