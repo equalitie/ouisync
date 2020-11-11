@@ -39,6 +39,7 @@ add_library(libouisync STATIC
     "src/branch.cpp"
     "src/file_system.cpp"
     "src/file_system_attrib.cpp"
+    "src/options.cpp"
     "src/object/tree.cpp"
     "src/object/blob.cpp"
     "src/object/path.cpp"
@@ -50,7 +51,7 @@ add_library(libouisync STATIC
 
 target_compile_definitions(libouisync PRIVATE -DBOOST_ASIO_HAS_CO_AWAIT)
 target_include_directories(libouisync PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(libouisync PUBLIC Boost::filesystem Boost::serialization CryptoPP)
+target_link_libraries(libouisync PUBLIC Boost::filesystem Boost::serialization Boost::program_options CryptoPP)
 #target_compile_features(libouisync PRIVATE cxx_std_17)
 set_warning_level(libouisync)
 

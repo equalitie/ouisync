@@ -1,0 +1,30 @@
+#pragma once
+
+#include "shortcuts.h"
+
+#include <boost/filesystem/path.hpp>
+#include <boost/program_options.hpp>
+
+namespace ouisync {
+
+class Options {
+public:
+    Options();
+
+    void parse(unsigned args, char** argv);
+
+    void write_help(std::ostream&);
+
+    bool help;
+
+    fs::path basedir;
+    fs::path branchdir;
+    fs::path objectdir;
+    fs::path mountdir;
+    fs::path user_id_file_path;
+
+private:
+    boost::program_options::options_description description;
+};
+
+} // namespace

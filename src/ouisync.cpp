@@ -3,7 +3,7 @@
 #include "fuse_runner.h"
 #include "file_system.h"
 #include "shortcuts.h"
-#include "file_system_options.h"
+#include "options.h"
 
 #include <boost/asio.hpp>
 #include <boost/filesystem.hpp>
@@ -13,21 +13,32 @@
 using namespace std;
 using namespace ouisync;
 
-int main() {
+int main(int argc, char* argv[]) {
     net::io_context ioc;
 
-    auto basedir = fs::unique_path("/tmp/ouisync/test-%%%%-%%%%-%%%%-%%%%");
+    Options options;
 
-    cout << "Basedir: " << basedir << "\n";
+    try {
+        options.parse(argc, argv);
 
-    FileSystemOptions opts(basedir);
+        if (options.help) {
+            options.write_help(cout);
+            exit(0);
+        }
+    }
+    catch (const std::exception& e) {
+        cerr << "Failed to parse options:\n";
+        cerr << e.what() << "\n\n";
+        options.write_help(cerr);
+        exit(1);
+    }
 
-    auto mountdir = basedir / "mountdir";
+    fs::create_directories(options.branchdir);
+    fs::create_directories(options.objectdir);
+    fs::create_directories(options.mountdir);
 
-    fs::create_directories(mountdir);
-
-    FileSystem fs(ioc.get_executor(), move(opts));
-    FuseRunner fuse(fs, mountdir);
+    FileSystem fs(ioc.get_executor(), options);
+    FuseRunner fuse(fs, options.mountdir);
 
     net::signal_set signals(ioc, SIGINT, SIGTERM);
     signals.async_wait([&] (sys::error_code, int) {

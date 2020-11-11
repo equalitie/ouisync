@@ -2,7 +2,7 @@
 
 #include "shortcuts.h"
 #include "error.h"
-#include "file_system_options.h"
+#include "options.h"
 #include "file_system_attrib.h"
 #include "user_id.h"
 #include "branch.h"
@@ -23,7 +23,7 @@ public:
     using FileAttrib = FileSystemFileAttrib;
     using Attrib     = FileSystemAttrib;
 
-    FileSystem(executor_type ex, FileSystemOptions);
+    FileSystem(executor_type ex, Options);
 
     net::awaitable<std::vector<std::string>> readdir(PathRange);
     net::awaitable<Attrib> get_attr(PathRange);
@@ -42,7 +42,7 @@ private:
 
 private:
     executor_type _ex;
-    FileSystemOptions _options;
+    const Options _options;
     UserId _user_id;
     std::map<UserId, Branch> _branches;
 };
