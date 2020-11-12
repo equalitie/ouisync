@@ -39,10 +39,8 @@ public:
     class Lock {
         friend class Bouncer;
 
-        private:
-        Lock() = default;
-
         public:
+        Lock() : bouncer(nullptr) {}
         Lock(const Lock&)            = delete;
         Lock& operator=(const Lock&) = delete;
 
@@ -59,6 +57,8 @@ public:
             hook.swap_nodes(other.hook);
             return *this;
         }
+
+        operator bool() const { return hook.is_linked(); }
 
         ~Lock();
         void release();
@@ -87,6 +87,8 @@ public:
 
     [[nodiscard]] net::awaitable<Lock> wait(Cancel cancel);
 
+    [[nodiscard]] Lock lock();
+
 private:
     using Sig = void(sys::error_code);
     using AsyncResult = net::async_result<std::decay_t<decltype(net::use_awaitable)>, Sig>;
@@ -97,8 +99,6 @@ private:
         intrusive::list_hook hook;
         Opt<Handler> handler;
     };
-
-    [[nodiscard]] Lock lock();
 
 private:
     void try_release_first_in_queue();
@@ -120,6 +120,9 @@ inline Bouncer::Bouncer(executor_type exec) :
 
 inline Bouncer::Lock Bouncer::lock()
 {
+    if (!_locks.empty())
+        throw std::runtime_error("Bouncer: requesting lock while someone else is waiting");
+
     Lock lock;
     lock.bouncer = this;
     _locks.push_back(lock);
