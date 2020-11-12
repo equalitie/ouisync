@@ -54,11 +54,44 @@ namespace MessageDetail {
             RqBranch,
             RsBranch
         >;
+
+    using RequestVariant
+        = variant<
+            RqBranchList,
+            RqBranch
+        >;
+
+    using ResponseVariant
+        = variant<
+            RsBranchList,
+            RsBranch
+        >;
 } // MessageDetail namespace
+
+struct Request : MessageDetail::RequestVariant
+{
+    using Variant = MessageDetail::RequestVariant;
+    using Variant::Variant;
+};
+
+struct Response : MessageDetail::ResponseVariant
+{
+    using Variant = MessageDetail::ResponseVariant;
+    using Variant::Variant;
+};
 
 struct Message : MessageDetail::MessageVariant
 {
-    using MessageVariant = MessageDetail::MessageVariant;
+    using Variant = MessageDetail::MessageVariant;
+    using Variant::Variant;
+
+    Message(Request r) {
+        apply(r, [&] (auto& r) { static_cast<Variant&>(*this) = std::move(r); });
+    }
+
+    Message(Response r) {
+        apply(r, [&] (auto& r) { static_cast<Variant&>(*this) = std::move(r); });
+    }
 
     static
     net::awaitable<Message> receive(net::ip::tcp::socket&, Cancel);
@@ -68,7 +101,7 @@ struct Message : MessageDetail::MessageVariant
 
     template<class Archive>
     void serialize(Archive& ar, const unsigned int) {
-        ar & static_cast<MessageVariant&>(*this);
+        ar & static_cast<Variant&>(*this);
     }
 };
 
@@ -76,6 +109,8 @@ std::ostream& operator<<(std::ostream&, const RqBranchList&);
 std::ostream& operator<<(std::ostream&, const RsBranchList&);
 std::ostream& operator<<(std::ostream&, const RqBranch&);
 std::ostream& operator<<(std::ostream&, const RsBranch&);
+std::ostream& operator<<(std::ostream&, const Request&);
+std::ostream& operator<<(std::ostream&, const Response&);
 std::ostream& operator<<(std::ostream&, const Message&);
 
 } // namespace

@@ -15,6 +15,8 @@ Network::Network(executor_type ex, FileSystem& fs, Options options) :
     _fs(fs),
     _options(move(options))
 {
+    (void) _fs; // TODO: To be used
+
     if (_options.accept_endpoint) {
         co_spawn(_ex, keep_accepting(*_options.accept_endpoint), net::detached);
     }
@@ -69,13 +71,14 @@ void Network::spawn_message_broker(tcp::socket socket)
 
     co_spawn(_ex,
     [ &,
+      ex = _ex,
       c = move(cancel),
       s = move(socket)
     ]
     () mutable -> net::awaitable<void> {
         try {
             if (c) co_return;
-            MessageBroker broker(_fs, move(s));
+            MessageBroker broker(ex, move(s));
             co_await broker.run(move(c));
         }
         catch (const std::exception& e) {

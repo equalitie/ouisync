@@ -92,6 +92,16 @@ std::ostream& ouisync::operator<<(std::ostream& os, const RsBranch&) {
     return os << "RsBranch";
 }
 
+std::ostream& ouisync::operator<<(std::ostream& os, const Request& m) {
+    apply(m, [&os] (auto& m) { os << m; });
+    return os;
+}
+
+std::ostream& ouisync::operator<<(std::ostream& os, const Response& m) {
+    apply(m, [&os] (auto& m) { os << m; });
+    return os;
+}
+
 std::ostream& ouisync::operator<<(std::ostream& os, const Message& m) {
     apply(m, [&os] (auto& m) { os << m; });
     return os;
