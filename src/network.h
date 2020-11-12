@@ -23,7 +23,7 @@ private:
     net::awaitable<void> keep_accepting(net::ip::tcp::endpoint);
     net::awaitable<void> connect(net::ip::tcp::endpoint);
 
-    void spawn_message_broker(net::ip::tcp::socket);
+    void establish_communication(net::ip::tcp::socket);
 
 private:
     executor_type _ex;

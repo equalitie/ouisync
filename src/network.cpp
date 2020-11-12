@@ -1,4 +1,7 @@
 #include "network.h"
+#include "barrier.h"
+#include "client.h"
+#include "server.h"
 #include "message_broker.h"
 
 #include <boost/asio/detached.hpp>
@@ -38,7 +41,7 @@ net::awaitable<void> Network::keep_accepting(tcp::endpoint ep)
         while (!cancel) {
             tcp::socket socket = co_await acceptor.async_accept(net::use_awaitable);
             if (cancel) break;
-            spawn_message_broker(move(socket));
+            establish_communication(move(socket));
         }
     }
     catch (const std::exception& e) {
@@ -56,7 +59,7 @@ net::awaitable<void> Network::connect(tcp::endpoint ep)
         tcp::socket socket(_ex);
         auto close_socket = cancel.connect([&] { socket.close(); });
         co_await socket.async_connect(ep, net::use_awaitable);
-        if (!cancel) spawn_message_broker(move(socket));
+        if (!cancel) establish_communication(move(socket));
     }
     catch (const std::exception& e) {
         if (!cancel) {
@@ -65,7 +68,7 @@ net::awaitable<void> Network::connect(tcp::endpoint ep)
     }
 }
 
-void Network::spawn_message_broker(tcp::socket socket)
+void Network::establish_communication(tcp::socket socket)
 {
     Cancel cancel(_lifetime_cancel);
 
@@ -76,16 +79,24 @@ void Network::spawn_message_broker(tcp::socket socket)
       s = move(socket)
     ]
     () mutable -> net::awaitable<void> {
-        try {
-            if (c) co_return;
-            MessageBroker broker(ex, move(s));
-            co_await broker.run(move(c));
-        }
-        catch (const std::exception& e) {
-            std::cerr << "MessageBroker finished with an exception: "
-                << e.what() << "\n";
-        }
-        co_return;
+        if (c) co_return;
+
+        auto ep = s.remote_endpoint();
+        std::cerr << "Establishing communication with " << ep << "\n";
+
+        Barrier b(ex);
+
+        MessageBroker broker(ex, move(s));
+        Server server(broker.server());
+        Client client(broker.client());
+
+        co_spawn(ex, broker.run(c), [&, l = b.lock()](auto){c();});
+        co_spawn(ex, server.run(c), [&, l = b.lock()](auto){c();});
+        co_spawn(ex, client.run(c), [&, l = b.lock()](auto){c();});
+
+        co_await b.wait({});
+
+        std::cerr << "Finished communication with " << ep << "\n";
     },
     net::detached);
 }
