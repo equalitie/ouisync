@@ -41,6 +41,7 @@ add_library(libouisync STATIC
     "src/options.cpp"
     "src/network.cpp"
     "src/dealer.cpp"
+    "src/message.cpp"
     "src/object/tree.cpp"
     "src/object/blob.cpp"
     "src/object/path.cpp"

@@ -16,10 +16,9 @@ public:
 
     net::awaitable<void> run(Cancel);
 
-public:
+private:
     FileSystem& _fs;
     net::ip::tcp::socket _socket;
-    ScopedCancel _lifetime_cancel;
 };
 
 } // namespace
