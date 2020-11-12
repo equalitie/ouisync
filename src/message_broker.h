@@ -10,9 +10,9 @@ namespace ouisync {
 
 class FileSystem;
 
-class Dealer {
+class MessageBroker {
 public:
-    Dealer(FileSystem&, net::ip::tcp::socket);
+    MessageBroker(FileSystem&, net::ip::tcp::socket);
 
     net::awaitable<void> run(Cancel);
 

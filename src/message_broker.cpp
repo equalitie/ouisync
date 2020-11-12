@@ -1,4 +1,4 @@
-#include "dealer.h"
+#include "message_broker.h"
 #include "error.h"
 #include "message.h"
 
@@ -8,14 +8,14 @@ using namespace ouisync;
 using net::ip::tcp;
 using std::move;
 
-Dealer::Dealer(FileSystem& fs, tcp::socket socket) :
+MessageBroker::MessageBroker(FileSystem& fs, tcp::socket socket) :
     _fs(fs),
     _socket(move(socket))
 {
     (void) _fs;
 }
 
-net::awaitable<void> Dealer::run(Cancel cancel)
+net::awaitable<void> MessageBroker::run(Cancel cancel)
 {
     std::cerr << "Going to communicate with " << _socket.remote_endpoint() << "\n";
     co_await Message::send(_socket, {RqBranchList{}}, cancel);

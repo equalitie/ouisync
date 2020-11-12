@@ -1,5 +1,5 @@
 #include "network.h"
-#include "dealer.h"
+#include "message_broker.h"
 
 #include <boost/asio/detached.hpp>
 #include <boost/asio/co_spawn.hpp>
@@ -36,7 +36,7 @@ net::awaitable<void> Network::keep_accepting(tcp::endpoint ep)
         while (!cancel) {
             tcp::socket socket = co_await acceptor.async_accept(net::use_awaitable);
             if (cancel) break;
-            spawn_dealer(move(socket));
+            spawn_message_broker(move(socket));
         }
     }
     catch (const std::exception& e) {
@@ -54,7 +54,7 @@ net::awaitable<void> Network::connect(tcp::endpoint ep)
         tcp::socket socket(_ex);
         auto close_socket = cancel.connect([&] { socket.close(); });
         co_await socket.async_connect(ep, net::use_awaitable);
-        if (!cancel) spawn_dealer(move(socket));
+        if (!cancel) spawn_message_broker(move(socket));
     }
     catch (const std::exception& e) {
         if (!cancel) {
@@ -63,7 +63,7 @@ net::awaitable<void> Network::connect(tcp::endpoint ep)
     }
 }
 
-void Network::spawn_dealer(tcp::socket socket)
+void Network::spawn_message_broker(tcp::socket socket)
 {
     Cancel cancel(_lifetime_cancel);
 
@@ -75,11 +75,11 @@ void Network::spawn_dealer(tcp::socket socket)
     () mutable -> net::awaitable<void> {
         try {
             if (c) co_return;
-            Dealer dealer(_fs, move(s));
-            co_await dealer.run(move(c));
+            MessageBroker broker(_fs, move(s));
+            co_await broker.run(move(c));
         }
         catch (const std::exception& e) {
-            std::cerr << "Dealer finished with exception: "
+            std::cerr << "MessageBroker finished with an exception: "
                 << e.what() << "\n";
         }
         co_return;

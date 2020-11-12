@@ -40,7 +40,7 @@ add_library(libouisync STATIC
     "src/file_system_attrib.cpp"
     "src/options.cpp"
     "src/network.cpp"
-    "src/dealer.cpp"
+    "src/message_broker.cpp"
     "src/message.cpp"
     "src/object/tree.cpp"
     "src/object/blob.cpp"
