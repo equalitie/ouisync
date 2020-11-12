@@ -3,6 +3,7 @@
 
 #include "../src/shortcuts.h"
 #include "../src/barrier.h"
+#include "../src/bouncer.h"
 
 #include <boost/asio.hpp>
 //#include <iostream>
@@ -89,6 +90,51 @@ BOOST_AUTO_TEST_CASE(barrier_cancel) {
             BOOST_REQUIRE_EQUAL(e.code(), net::error::operation_aborted);
             *done = true;
         }
+    });
+
+    ioc.run();
+}
+
+BOOST_AUTO_TEST_CASE(bouncer) {
+    net::io_context ioc;
+
+    const unsigned N = 10;
+
+    spawn(ioc, [&] () mutable -> net::awaitable<void> {
+        Barrier barrier(ioc);
+        Bouncer bouncer(ioc);
+
+        bool in_protected_area = false;
+
+        spawn(ioc, [&, lock = barrier.lock()] () mutable -> net::awaitable<void> {
+            co_await net::post(ioc, net::use_awaitable);
+            auto bouncer_lock = co_await bouncer.wait({});
+
+            BOOST_REQUIRE(!in_protected_area);
+            in_protected_area = true;
+
+            for (auto i = 0u; i < N; ++i) {
+                co_await net::post(ioc, net::use_awaitable);
+            }
+
+            in_protected_area = false;
+        });
+
+        spawn(ioc, [&, lock = barrier.lock()] () mutable -> net::awaitable<void> {
+            co_await net::post(ioc, net::use_awaitable);
+            auto bouncer_lock = co_await bouncer.wait({});
+
+            BOOST_REQUIRE(!in_protected_area);
+            in_protected_area = true;
+
+            for (auto i = 0u; i < N; ++i) {
+                co_await net::post(ioc, net::use_awaitable);
+            }
+
+            in_protected_area = false;
+        });
+
+        co_await barrier.wait();
     });
 
     ioc.run();
