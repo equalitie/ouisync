@@ -36,6 +36,7 @@ add_library(libouisync STATIC
     "src/user_id.cpp"
     "src/hash.cpp"
     "src/branch.cpp"
+    "src/snapshot.cpp"
     "src/file_system.cpp"
     "src/file_system_attrib.cpp"
     "src/options.cpp"

@@ -4,6 +4,8 @@
 #include <array>
 #include "block_id.h"
 
+#include <boost/optional.hpp>
+
 namespace ouisync {
 
 namespace {

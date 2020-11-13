@@ -1,0 +1,46 @@
+#pragma once
+
+#include "commit.h"
+#include "shortcuts.h"
+
+#include <set>
+#include <boost/filesystem/path.hpp>
+
+namespace ouisync {
+
+class Snapshot {
+public:
+    using Commits = std::set<Commit>;
+
+public:
+    Snapshot(const Snapshot&) = delete;
+    Snapshot& operator=(const Snapshot&) = delete;
+
+    Snapshot(Snapshot&&);
+    Snapshot& operator=(Snapshot&&);
+
+    static Snapshot create(const fs::path& snapshotdir, fs::path objdir, Commits);
+
+    const Commits& commits() { return _commits; }
+
+    object::Id id() { return _id; }
+
+    ~Snapshot();
+
+private:
+    Snapshot(const object::Id&, fs::path path, fs::path objdir, Commits);
+
+    static void store_commits(const fs::path&, const Commits&);
+    static Commits load_commits(const fs::path&);
+
+    void destroy() noexcept;
+
+private:
+    bool _is_valid = false;
+    object::Id _id;
+    fs::path _path;
+    fs::path _objdir;
+    Commits _commits;
+};
+
+} // namespace
