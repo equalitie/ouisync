@@ -12,12 +12,18 @@
 
 namespace ouisync {
 
+enum class MessageType { Request, Response };
+
 struct RqBranchList {
+    static constexpr MessageType type = MessageType::Request;
+
     template<class Archive>
     void serialize(Archive&, const unsigned int) {}
 };
 
 struct RsBranchList : std::vector<UserId> {
+    static constexpr MessageType type = MessageType::Response;
+
     using std::vector<UserId>::vector;
 
     template<class Archive>
@@ -27,6 +33,8 @@ struct RsBranchList : std::vector<UserId> {
 };
 
 struct RqBranch {
+    static constexpr MessageType type = MessageType::Request;
+
     UserId branch_id;
 
     template<class Archive>
@@ -36,6 +44,8 @@ struct RqBranch {
 };
 
 struct RsBranch {
+    static constexpr MessageType type = MessageType::Response;
+
     VersionVector version_vector;
     object::Id root_id;
 

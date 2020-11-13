@@ -108,12 +108,21 @@ net::awaitable<void> MessageBroker::handle_message(Message m, Cancel cancel)
         _rx_pending_response = move(m);
     };
 
-    apply(m,
-        [&] (RqBranchList& m) { fill_rq(m); },
-        [&] (RqBranch& m)     { fill_rq(m); },
-        [&] (RsBranchList& m) { fill_rs(m); },
-        [&] (RsBranch& m)     { fill_rs(m); }
-    );
+    apply(m, [&] (auto& m) {
+            using M = std::decay_t<decltype(m)>;
+
+            static_assert(
+                    M::type == MessageType::Request ||
+                    M::type == MessageType::Response
+                    , "Message is neither request nor a response");
+
+            if constexpr (M::type == MessageType::Request) {
+                fill_rq(m);
+            }
+            else {
+                fill_rs(m);
+            }
+        });
 
     co_return;
 }
