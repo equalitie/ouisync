@@ -6,13 +6,37 @@
 namespace ouisync::object::refcount {
 
 static
-fs::path refcount_path(const Id& id) noexcept {
-    return path::from_id(id).concat(".rc");
+fs::path object_path(const Id& id) noexcept {
+    return path::from_id(id);
 }
 
-Number increment(const fs::path& objdir, const Id& id)
+static
+fs::path refcount_path(fs::path path) noexcept {
+    path.concat(".rc");
+    return path;
+}
+
+Number read(const fs::path& path_)
 {
-    auto path = objdir / refcount_path(id);
+    auto path = refcount_path(path_);
+
+    fs::fstream f(path, f.binary | f.in);
+    if (!f.is_open()) {
+        if (!fs::exists(path)) {
+            // No one is holding this object
+            return 0;
+        }
+        throw std::runtime_error("Failed to decrement refcount");
+    }
+    Number rc;
+    f >> rc;
+    return rc;
+}
+
+Number increment(const fs::path& path_)
+{
+    auto path = refcount_path(path_);
+
     fs::fstream f(path, f.binary | f.in | f.out);
     if (!f.is_open()) {
         // Does not exist, create a new one
@@ -31,9 +55,10 @@ Number increment(const fs::path& objdir, const Id& id)
     return rc;
 }
 
-Number decrement(const fs::path& objdir, const Id& id)
+Number decrement(const fs::path& path_)
 {
-    auto path = objdir / refcount_path(id);
+    auto path = refcount_path(path_);
+
     fs::fstream f(path, f.binary | f.in | f.out);
     if (!f.is_open()) {
         if (!fs::exists(path)) {
@@ -56,19 +81,18 @@ Number decrement(const fs::path& objdir, const Id& id)
     return rc;
 }
 
+Number increment(const fs::path& objdir, const Id& id)
+{
+    return increment(objdir / object_path(id));
+}
+
+Number decrement(const fs::path& objdir, const Id& id)
+{
+    return decrement(objdir / object_path(id));
+}
+
 Number read(const fs::path& objdir, const Id& id) {
-    auto path = objdir / refcount_path(id);
-    fs::fstream f(path, f.binary | f.in);
-    if (!f.is_open()) {
-        if (!fs::exists(path)) {
-            // No one is holding this object
-            return 0;
-        }
-        throw std::runtime_error("Failed to decrement refcount");
-    }
-    Number rc;
-    f >> rc;
-    return rc;
+    return read(objdir / object_path(id));
 }
 
 } // namespace
