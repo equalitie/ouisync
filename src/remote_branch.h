@@ -25,9 +25,9 @@ public:
     const VersionVector& version_vector() const { return _version_vector; }
     const object::Id& root_object_id() const { return _root; }
 
-    object::Tree readdir(PathRange) const { assert(0 && "TODO"); }
-    FileSystemAttrib get_attr(PathRange) const { assert(0 && "TODO"); }
-    size_t read(PathRange, const char* buf, size_t size, size_t offset) const { assert(0 && "TODO"); }
+    object::Tree readdir(PathRange) const;
+    FileSystemAttrib get_attr(PathRange) const;
+    size_t read(PathRange, const char* buf, size_t size, size_t offset) const;
 
 private:
     template<class T> void store(const fs::path&, const T&);

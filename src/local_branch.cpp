@@ -111,29 +111,6 @@ void LocalBranch::update_dir(PathRange path, F&& f)
     }
 }
 
-// Same as above but make sure the tree isn't modified
-template<class F>
-static
-void _query_dir(const fs::path& objdir, Id tree_id, PathRange path, F&& f)
-{
-    const Tree tree = object::io::load<Tree>(objdir, tree_id);
-
-    if (path.empty()) {
-        f(tree);
-    } else {
-        auto child_i = tree.find(path.front().string());
-        if (child_i == tree.end()) throw_error(sys::errc::no_such_file_or_directory);
-        path.advance_begin(1);
-        _query_dir(objdir, child_i->second, path, std::forward<F>(f));
-    }
-}
-
-template<class F>
-void LocalBranch::query_dir(PathRange path, F&& f) const
-{
-    _query_dir(_objdir, root_object_id(), path, std::forward<F>(f));
-}
-
 static
 PathRange parent(PathRange path) {
     path.advance_end(-1);
@@ -195,27 +172,7 @@ size_t LocalBranch::write(PathRange path, const char* buf, size_t size, size_t o
 
 size_t LocalBranch::read(PathRange path, const char* buf, size_t size, size_t offset)
 {
-    if (path.empty()) throw_error(sys::errc::is_a_directory);
-
-    query_dir(parent(path),
-        [&] (const Tree& tree) {
-            auto i = tree.find(path.back().native());
-            if (i == tree.end()) throw_error(sys::errc::no_such_file_or_directory);
-
-            // XXX: Read only what's needed, not the whole blob
-            auto blob = object::io::load<Blob>(_objdir, i->second);
-
-            size_t len = blob.size();
-
-            if (size_t(offset) < len) {
-                if (offset + size > len) size = len - offset;
-                memcpy((void*)buf, blob.data() + offset, size);
-            } else {
-                size = 0;
-            }
-        });
-
-    return size;
+    return BranchIo::read(_objdir, root_object_id(), path, buf, size, offset);
 }
 
 //--------------------------------------------------------------------
@@ -246,58 +203,23 @@ size_t LocalBranch::truncate(PathRange path, size_t size)
 
 //--------------------------------------------------------------------
 
-Opt<Blob> LocalBranch::maybe_load(const fs::path& path_) const
+Opt<Blob> LocalBranch::maybe_load(const fs::path& path) const
 {
-    PathRange path(path_);
-
-    if (path.empty()) throw_error(sys::errc::is_a_directory);
-
-    Opt<Blob> retval;
-
-    query_dir(parent(path),
-        [&] (const Tree& tree) {
-            auto i = tree.find(path.back().native());
-            if (i == tree.end()) throw_error(sys::errc::no_such_file_or_directory);
-            retval = object::io::load<Blob>(_objdir, i->second);
-        });
-
-    return retval;
+    return BranchIo::maybe_load(_objdir, root_object_id(), path);
 }
 
 //--------------------------------------------------------------------
 
 Tree LocalBranch::readdir(PathRange path) const
 {
-    Opt<Tree> retval;
-
-    query_dir(path, [&] (const Tree& tree) { retval = tree; });
-
-    assert(retval);
-    return move(*retval);
+    return BranchIo::readdir(_objdir, root_object_id(), path);
 }
 
 //--------------------------------------------------------------------
 
 FileSystemAttrib LocalBranch::get_attr(PathRange path) const
 {
-    if (path.empty()) return FileSystemDirAttrib{};
-
-    FileSystemAttrib attrib;
-
-    query_dir(parent(path),
-        [&] (const Tree& parent) {
-            auto i = parent.find(path.back().native());
-            if (i == parent.end()) throw_error(sys::errc::no_such_file_or_directory);
-
-            // XXX: Don't load the whole objects into memory.
-            auto obj = object::io::load<Tree, Blob>(_objdir, i->second);
-
-            apply(obj,
-                [&] (const Tree&) { attrib = FileSystemDirAttrib{}; },
-                [&] (const Blob& b) { attrib = FileSystemFileAttrib{b.size()}; });
-        });
-
-    return attrib;
+    return BranchIo::get_attr(_objdir, root_object_id(), path);
 }
 
 //--------------------------------------------------------------------
