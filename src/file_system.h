@@ -5,7 +5,7 @@
 #include "options.h"
 #include "file_system_attrib.h"
 #include "user_id.h"
-#include "branch.h"
+#include "local_branch.h"
 #include "path_range.h"
 
 #include <boost/asio/any_io_executor.hpp>
@@ -41,14 +41,16 @@ public:
 
     Snapshot create_snapshot() const;
 
+    const std::map<UserId, LocalBranch>& branches() const { return _branches; }
+
 private:
-    Branch& find_branch(PathRange);
+    LocalBranch& find_branch(PathRange);
 
 private:
     executor_type _ex;
     const Options _options;
     UserId _user_id;
-    std::map<UserId, Branch> _branches;
+    std::map<UserId, LocalBranch> _branches;
 };
 
 } // namespace

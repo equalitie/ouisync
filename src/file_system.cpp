@@ -17,7 +17,7 @@ FileSystem::FileSystem(executor_type ex, Options options) :
 {
     _user_id = UserId::load_or_create(_options.user_id_file_path);
 
-    auto branch = Branch::load_or_create(
+    auto branch = LocalBranch::load_or_create(
             _options.branchdir,
             _options.objectdir,
             _user_id);
@@ -25,7 +25,7 @@ FileSystem::FileSystem(executor_type ex, Options options) :
     _branches.insert(std::make_pair(_user_id, std::move(branch)));
 }
 
-Branch& FileSystem::find_branch(PathRange path)
+LocalBranch& FileSystem::find_branch(PathRange path)
 {
     if (path.empty()) throw_error(sys::errc::invalid_argument);
     auto user_id = UserId::from_string(path.front().native());

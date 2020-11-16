@@ -7,7 +7,7 @@
 #include "shortcuts.h"
 #include "hex.h"
 #include "array_io.h"
-#include "branch.h"
+#include "local_branch.h"
 #include "path_range.h"
 
 #include <iostream>
@@ -131,7 +131,7 @@ BOOST_AUTO_TEST_CASE(read_tag) {
     }
 }
 
-Branch create_branch(const fs::path testdir, const char* user_id_file_name) {
+LocalBranch create_branch(const fs::path testdir, const char* user_id_file_name) {
     fs::path objdir = testdir/"objects";
     fs::path branchdir = testdir/"branches";
 
@@ -140,14 +140,14 @@ Branch create_branch(const fs::path testdir, const char* user_id_file_name) {
 
     UserId user_id = UserId::load_or_create(testdir/user_id_file_name);
 
-    return Branch::load_or_create(branchdir, objdir, user_id);
+    return LocalBranch::load_or_create(branchdir, objdir, user_id);
 }
 
 BOOST_AUTO_TEST_CASE(branch_directories) {
     fs::path testdir = choose_test_dir();
 
     {
-        Branch branch = create_branch(testdir/"1", "user_id");
+        LocalBranch branch = create_branch(testdir/"1", "user_id");
         BOOST_REQUIRE_EQUAL(count_objects(branch.object_directory()), 1);
 
         branch.mkdir(path_range("dir"));
@@ -155,7 +155,7 @@ BOOST_AUTO_TEST_CASE(branch_directories) {
     }
 
     {
-        Branch branch = create_branch(testdir/"2", "user_id");
+        LocalBranch branch = create_branch(testdir/"2", "user_id");
         auto empty_root_id = branch.root_object_id();
 
         branch.mkdir(path_range("dir"));
@@ -175,7 +175,7 @@ BOOST_AUTO_TEST_CASE(tree_branch_store_and_load) {
 
     Blob d1(random.vector(1000));
 
-    Branch branch = create_branch(testdir, "user_id");
+    LocalBranch branch = create_branch(testdir, "user_id");
 
     branch.store("bar", d1);
 
@@ -194,7 +194,7 @@ BOOST_AUTO_TEST_CASE(tree_branch_store_and_load_in_subdir) {
 
     Blob d1(random.vector(1000));
 
-    Branch branch = create_branch(testdir, "user_id");
+    LocalBranch branch = create_branch(testdir, "user_id");
 
     branch.mkdir(path_range("foo"));
     branch.store("foo/bar", d1);
@@ -216,7 +216,7 @@ BOOST_AUTO_TEST_CASE(tree_remove) {
     {
         auto data = random.vector(256);
 
-        Branch branch = create_branch(testdir/"1", "user_id");
+        LocalBranch branch = create_branch(testdir/"1", "user_id");
         branch.store("data", data);
 
         Tree root = object::io::load<Tree>(branch.object_directory(), branch.root_object_id());
@@ -239,7 +239,7 @@ BOOST_AUTO_TEST_CASE(tree_remove) {
 
     // Delete data from subdir, then delete the subdir
     {
-        Branch branch = create_branch(testdir/"2", "user_id");
+        LocalBranch branch = create_branch(testdir/"2", "user_id");
 
         auto data = random.vector(256);
         branch.mkdir(path_range("dir"));
@@ -260,7 +260,7 @@ BOOST_AUTO_TEST_CASE(tree_remove) {
 
     // Delete subdir, check data is deleted with it
     {
-        Branch branch = create_branch(testdir/"3", "user_id");
+        LocalBranch branch = create_branch(testdir/"3", "user_id");
 
         auto data = random.vector(256);
         branch.mkdir(path_range("dir"));
@@ -276,8 +276,8 @@ BOOST_AUTO_TEST_CASE(tree_remove) {
 
     // Delete data from one root, preserve (using refcount) in the other
     {
-        Branch branch1 = create_branch(testdir/"4", "user1_id");
-        Branch branch2 = create_branch(testdir/"4", "user2_id");
+        LocalBranch branch1 = create_branch(testdir/"4", "user1_id");
+        LocalBranch branch2 = create_branch(testdir/"4", "user2_id");
 
         BOOST_REQUIRE_EQUAL(branch1.object_directory(), branch2.object_directory());
         auto objdir = branch1.object_directory();

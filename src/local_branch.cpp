@@ -1,4 +1,4 @@
-#include "branch.h"
+#include "local_branch.h"
 #include "variant.h"
 #include "error.h"
 #include "path_range.h"
@@ -22,7 +22,7 @@ using object::Tree;
 using object::JustTag;
 
 /* static */
-Branch Branch::load_or_create(const fs::path& rootdir, const fs::path& objdir, UserId user_id) {
+LocalBranch LocalBranch::load_or_create(const fs::path& rootdir, const fs::path& objdir, UserId user_id) {
     object::Id root_id;
     VersionVector clock;
 
@@ -34,7 +34,7 @@ Branch Branch::load_or_create(const fs::path& rootdir, const fs::path& objdir, U
         object::Tree root_obj;
         root_id = root_obj.store(objdir);
         object::refcount::increment(objdir, root_id);
-        Branch branch(path, objdir, user_id, root_id, move(clock));
+        LocalBranch branch(path, objdir, user_id, root_id, move(clock));
         branch.store_self();
         return branch;
     }
@@ -44,7 +44,7 @@ Branch Branch::load_or_create(const fs::path& rootdir, const fs::path& objdir, U
     oa >> load;
     oa >> clock;
 
-    return Branch{path, objdir, user_id, root_id, move(clock)};
+    return LocalBranch{path, objdir, user_id, root_id, move(clock)};
 }
 
 //--------------------------------------------------------------------
@@ -108,7 +108,7 @@ Opt<Id> _update_dir(const fs::path& objdir, Id tree_id, PathRange path, F&& f)
 }
 
 template<class F>
-void Branch::update_dir(PathRange path, F&& f)
+void LocalBranch::update_dir(PathRange path, F&& f)
 {
     auto oid = _update_dir(_objdir, root_object_id(), path, std::forward<F>(f));
 
@@ -135,7 +135,7 @@ void _query_dir(const fs::path& objdir, Id tree_id, PathRange path, F&& f)
 }
 
 template<class F>
-void Branch::query_dir(PathRange path, F&& f) const
+void LocalBranch::query_dir(PathRange path, F&& f) const
 {
     _query_dir(_objdir, root_object_id(), path, std::forward<F>(f));
 }
@@ -147,7 +147,7 @@ PathRange parent(PathRange path) {
 }
 //--------------------------------------------------------------------
 
-void Branch::store(PathRange path, const Blob& blob)
+void LocalBranch::store(PathRange path, const Blob& blob)
 {
     if (path.empty()) throw_error(sys::errc::is_a_directory);
 
@@ -160,14 +160,14 @@ void Branch::store(PathRange path, const Blob& blob)
         });
 }
 
-void Branch::store(const fs::path& path, const Blob& blob)
+void LocalBranch::store(const fs::path& path, const Blob& blob)
 {
     store(path_range(path), blob);
 }
 
 //--------------------------------------------------------------------
 
-size_t Branch::write(PathRange path, const char* buf, size_t size, size_t offset)
+size_t LocalBranch::write(PathRange path, const char* buf, size_t size, size_t offset)
 {
     if (path.empty()) throw_error(sys::errc::is_a_directory);
 
@@ -199,7 +199,7 @@ size_t Branch::write(PathRange path, const char* buf, size_t size, size_t offset
 
 //--------------------------------------------------------------------
 
-size_t Branch::read(PathRange path, const char* buf, size_t size, size_t offset)
+size_t LocalBranch::read(PathRange path, const char* buf, size_t size, size_t offset)
 {
     if (path.empty()) throw_error(sys::errc::is_a_directory);
 
@@ -226,7 +226,7 @@ size_t Branch::read(PathRange path, const char* buf, size_t size, size_t offset)
 
 //--------------------------------------------------------------------
 
-size_t Branch::truncate(PathRange path, size_t size)
+size_t LocalBranch::truncate(PathRange path, size_t size)
 {
     if (path.empty()) throw_error(sys::errc::is_a_directory);
 
@@ -252,7 +252,7 @@ size_t Branch::truncate(PathRange path, size_t size)
 
 //--------------------------------------------------------------------
 
-Opt<Blob> Branch::maybe_load(const fs::path& path_) const
+Opt<Blob> LocalBranch::maybe_load(const fs::path& path_) const
 {
     PathRange path(path_);
 
@@ -272,7 +272,7 @@ Opt<Blob> Branch::maybe_load(const fs::path& path_) const
 
 //--------------------------------------------------------------------
 
-Tree Branch::readdir(PathRange path) const
+Tree LocalBranch::readdir(PathRange path) const
 {
     Opt<Tree> retval;
 
@@ -284,7 +284,7 @@ Tree Branch::readdir(PathRange path) const
 
 //--------------------------------------------------------------------
 
-FileSystemAttrib Branch::get_attr(PathRange path) const
+FileSystemAttrib LocalBranch::get_attr(PathRange path) const
 {
     if (path.empty()) return FileSystemDirAttrib{};
 
@@ -308,7 +308,7 @@ FileSystemAttrib Branch::get_attr(PathRange path) const
 
 //--------------------------------------------------------------------
 
-void Branch::mkdir(PathRange path)
+void LocalBranch::mkdir(PathRange path)
 {
     if (path.empty()) throw_error(sys::errc::invalid_argument);
 
@@ -323,7 +323,7 @@ void Branch::mkdir(PathRange path)
 
 //--------------------------------------------------------------------
 
-bool Branch::remove(PathRange path)
+bool LocalBranch::remove(PathRange path)
 {
     if (path.empty()) throw_error(sys::errc::operation_not_permitted);
 
@@ -339,14 +339,14 @@ bool Branch::remove(PathRange path)
     return true;
 }
 
-bool Branch::remove(const fs::path& path)
+bool LocalBranch::remove(const fs::path& path)
 {
     return remove(path_range(path));
 }
 
 //--------------------------------------------------------------------
 
-void Branch::store_self() const {
+void LocalBranch::store_self() const {
     fs::fstream file(_file_path, file.binary | file.trunc | file.out);
     if (!file.is_open())
         throw std::runtime_error("Failed to open branch file");
@@ -358,7 +358,7 @@ void Branch::store_self() const {
 
 //--------------------------------------------------------------------
 
-void Branch::root_object_id(const object::Id& id) {
+void LocalBranch::root_object_id(const object::Id& id) {
     if (_root_id == id) return;
     _root_id = id;
     _clock.increment(_user_id);
@@ -367,7 +367,7 @@ void Branch::root_object_id(const object::Id& id) {
 
 //--------------------------------------------------------------------
 
-Branch::Branch(const fs::path& file_path, const fs::path& objdir,
+LocalBranch::LocalBranch(const fs::path& file_path, const fs::path& objdir,
         const UserId& user_id, const object::Id& root_id, VersionVector clock) :
     _file_path(file_path),
     _objdir(objdir),

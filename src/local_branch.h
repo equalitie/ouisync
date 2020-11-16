@@ -14,13 +14,13 @@
 
 namespace ouisync {
 
-class Branch {
+class LocalBranch {
 public:
     using Blob = object::Blob;
     using Tree = object::Tree;
 
 public:
-    static Branch load_or_create(
+    static LocalBranch load_or_create(
             const fs::path& branchdir, const fs::path& objdir, UserId);
 
     const object::Id& root_object_id() const {
@@ -56,7 +56,7 @@ public:
     const VersionVector& version_vector() const { return _clock; }
 
 private:
-    Branch(const fs::path& file_path, const fs::path& objdir,
+    LocalBranch(const fs::path& file_path, const fs::path& objdir,
             const UserId& user_id, const object::Id& root_id,
             VersionVector clock);
 
