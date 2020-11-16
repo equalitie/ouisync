@@ -1,5 +1,6 @@
 #include "file_system.h"
 #include "snapshot.h"
+#include "branch_io.h"
 
 #include <iostream>
 #include <boost/filesystem.hpp>
@@ -10,6 +11,7 @@ using std::vector;
 using std::map;
 using std::string;
 using boost::get;
+using std::make_pair;
 
 FileSystem::FileSystem(executor_type ex, Options options) :
     _ex(std::move(ex)),
@@ -17,12 +19,17 @@ FileSystem::FileSystem(executor_type ex, Options options) :
 {
     _user_id = UserId::load_or_create(_options.user_id_file_path);
 
-    auto branch = LocalBranch::load_or_create(
-            _options.branchdir,
-            _options.objectdir,
-            _user_id);
+    for (auto f : fs::directory_iterator(_options.branchdir)) {
+        auto branch = BranchIo::load(f, _options.objectdir);
+        auto local_branch = boost::get<LocalBranch>(&branch);
+        auto uid = local_branch->user_id();
+        _branches.insert(make_pair(uid, std::move(*local_branch)));
+    }
 
-    _branches.insert(std::make_pair(_user_id, std::move(branch)));
+    if (_branches.count(_user_id) == 0) {
+        _branches.insert(make_pair(_user_id,
+                    LocalBranch::create(_options.branchdir, _options.objectdir, _user_id)));
+    }
 }
 
 LocalBranch& FileSystem::find_branch(PathRange path)

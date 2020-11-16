@@ -2,6 +2,7 @@
 #include "variant.h"
 #include "error.h"
 #include "path_range.h"
+#include "branch_io.h"
 #include "object/tree.h"
 #include "object/tagged.h"
 #include "object/blob.h"
@@ -9,8 +10,8 @@
 #include "object/refcount.h"
 
 #include <boost/filesystem.hpp>
-#include <boost/archive/text_oarchive.hpp>
-#include <boost/archive/text_iarchive.hpp>
+#include <boost/archive/binary_oarchive.hpp>
+#include <boost/archive/binary_iarchive.hpp>
 #include <boost/serialization/vector.hpp>
 #include <string.h> // memcpy
 
@@ -22,29 +23,22 @@ using object::Tree;
 using object::JustTag;
 
 /* static */
-LocalBranch LocalBranch::load_or_create(const fs::path& rootdir, const fs::path& objdir, UserId user_id) {
+LocalBranch LocalBranch::create(const fs::path& rootdir, const fs::path& objdir, UserId user_id) {
     object::Id root_id;
     VersionVector clock;
 
     fs::path path = rootdir / user_id.to_string();
 
-    fs::fstream file(path, file.binary | file.in);
-
-    if (!file.is_open()) {
-        object::Tree root_obj;
-        root_id = root_obj.store(objdir);
-        object::refcount::increment(objdir, root_id);
-        LocalBranch branch(path, objdir, user_id, root_id, move(clock));
-        branch.store_self();
-        return branch;
+    if (fs::exists(path)) {
+        throw std::runtime_error("Local branch already exits");
     }
 
-    boost::archive::text_iarchive oa(file);
-    object::tagged::Load<object::Id> load{root_id};
-    oa >> load;
-    oa >> clock;
-
-    return LocalBranch{path, objdir, user_id, root_id, move(clock)};
+    object::Tree root_obj;
+    root_id = root_obj.store(objdir);
+    object::refcount::increment(objdir, root_id);
+    LocalBranch branch(path, objdir, user_id, root_id, move(clock));
+    branch.store_self();
+    return branch;
 }
 
 //--------------------------------------------------------------------
@@ -348,12 +342,14 @@ bool LocalBranch::remove(const fs::path& path)
 
 void LocalBranch::store_self() const {
     fs::fstream file(_file_path, file.binary | file.trunc | file.out);
+
     if (!file.is_open())
         throw std::runtime_error("Failed to open branch file");
-    boost::archive::text_oarchive oa(file);
-    object::tagged::Save<object::Id> save{_root_id};
-    oa << save;
-    oa << _clock;
+
+    boost::archive::binary_oarchive oa(file);
+
+    store_tag(oa);
+    store_rest(oa);
 }
 
 //--------------------------------------------------------------------
@@ -376,5 +372,32 @@ LocalBranch::LocalBranch(const fs::path& file_path, const fs::path& objdir,
     _clock(move(clock))
 {}
 
+LocalBranch::LocalBranch(const fs::path& file_path, const fs::path& objdir, IArchive& ar) :
+    _file_path(file_path),
+    _objdir(objdir)
+{
+    load_rest(ar);
+}
+
 //--------------------------------------------------------------------
 
+void LocalBranch::store_tag(OArchive& ar) const
+{
+    ar << BranchIo::BranchType::Local;
+}
+
+void LocalBranch::store_rest(OArchive& ar) const
+{
+    ar << _user_id;
+    ar << _root_id;
+    ar << _clock;
+}
+
+void LocalBranch::load_rest(IArchive& ar)
+{
+    ar >> _user_id;
+    ar >> _root_id;
+    ar >> _clock;
+}
+
+//--------------------------------------------------------------------
