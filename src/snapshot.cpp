@@ -22,7 +22,7 @@ static object::Id calculate_id(const std::set<Commit>& commits)
     return hash.close();
 }
 
-Snapshot::Snapshot(const object::Id& id, fs::path path, fs::path objdir, Commits commits) :
+Snapshot::Snapshot(const Id& id, fs::path path, fs::path objdir, Commits commits) :
     _is_valid(true),
     _id(id),
     _path(std::move(path)),

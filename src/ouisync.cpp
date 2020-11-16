@@ -37,6 +37,7 @@ int main(int argc, char* argv[]) {
     fs::create_directories(options.branchdir);
     fs::create_directories(options.objectdir);
     fs::create_directories(options.mountdir);
+    fs::create_directories(options.snapshotdir);
 
     FileSystem fs(ioc.get_executor(), options);
     Network network(ioc.get_executor(), fs, options);

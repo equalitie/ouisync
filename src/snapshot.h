@@ -11,6 +11,7 @@ namespace ouisync {
 class Snapshot {
 public:
     using Commits = std::set<Commit>;
+    using Id = object::Id;
 
 public:
     Snapshot(const Snapshot&) = delete;
@@ -23,12 +24,12 @@ public:
 
     const Commits& commits() { return _commits; }
 
-    object::Id id() { return _id; }
+    Id id() { return _id; }
 
     ~Snapshot();
 
 private:
-    Snapshot(const object::Id&, fs::path path, fs::path objdir, Commits);
+    Snapshot(const Id&, fs::path path, fs::path objdir, Commits);
 
     static void store_commits(const fs::path&, const Commits&);
     static Commits load_commits(const fs::path&);
@@ -37,7 +38,7 @@ private:
 
 private:
     bool _is_valid = false;
-    object::Id _id;
+    Id _id;
     fs::path _path;
     fs::path _objdir;
     Commits _commits;

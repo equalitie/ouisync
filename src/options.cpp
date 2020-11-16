@@ -63,6 +63,7 @@ void Options::parse(unsigned argc, char** argv)
     branchdir         = basedir / "branches";
     objectdir         = basedir / "objects";
     mountdir          = basedir / "mount";
+    snapshotdir       = basedir / "snapshots";
     user_id_file_path = basedir / "user_id";
 }
 

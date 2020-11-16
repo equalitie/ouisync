@@ -23,6 +23,7 @@ public:
     fs::path branchdir;
     fs::path objectdir;
     fs::path mountdir;
+    fs::path snapshotdir;
     fs::path user_id_file_path;
 
     Opt<net::ip::tcp::endpoint> accept_endpoint;

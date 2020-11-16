@@ -1,4 +1,5 @@
 #include "file_system.h"
+#include "snapshot.h"
 
 #include <iostream>
 #include <boost/filesystem.hpp>
@@ -32,6 +33,18 @@ Branch& FileSystem::find_branch(PathRange path)
     auto i = _branches.find(*user_id);
     if (i == _branches.end()) throw_error(sys::errc::invalid_argument);
     return i->second;
+}
+
+Snapshot FileSystem::create_snapshot() const
+{
+    Snapshot::Commits commits;
+
+    for (auto& [user_id, branch] : _branches) {
+        (void) user_id;
+        commits.insert({branch.version_vector(), branch.root_object_id()});
+    }
+
+    return Snapshot::create(_options.snapshotdir, _options.objectdir, std::move(commits));
 }
 
 net::awaitable<FileSystem::Attrib> FileSystem::get_attr(PathRange path)

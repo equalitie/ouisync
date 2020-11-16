@@ -53,6 +53,8 @@ public:
 
     void mkdir(PathRange);
 
+    const VersionVector& version_vector() const { return _clock; }
+
 private:
     Branch(const fs::path& file_path, const fs::path& objdir,
             const UserId& user_id, const object::Id& root_id,

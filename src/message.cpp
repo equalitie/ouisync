@@ -1,5 +1,7 @@
 #include "message.h"
 #include "error.h"
+#include "hex.h"
+#include "array_io.h"
 
 #include <boost/endian/conversion.hpp>
 
@@ -14,6 +16,8 @@
 #include <boost/serialization/vector.hpp>
 #include <boost/serialization/map.hpp>
 #include <boost/serialization/array.hpp>
+
+#include <algorithm>
 
 static const size_t MAX_MESSAGE_SIZE = 1 << 20; // 1MB
 
@@ -76,20 +80,25 @@ catch (const std::exception& e) {
     throw;
 }
 
-std::ostream& ouisync::operator<<(std::ostream& os, const RqBranchList&) {
-    return os << "RqBranchList";
+static std::array<char, 8> short_id(const object::Id& id)
+{
+    static_assert(std::tuple_size<std::decay_t<decltype(id)>>::value >= 8);
+    auto hex = to_hex<char>(id);
+    std::array<char, 8> ret;
+    for (auto i = 0u; i < 8; i++) ret[i] = hex[i];
+    return ret;
 }
 
-std::ostream& ouisync::operator<<(std::ostream& os, const RsBranchList&) {
-    return os << "RsBranchList";
+std::ostream& ouisync::operator<<(std::ostream& os, const RqHeads&) {
+    return os << "RqHeads";
 }
 
-std::ostream& ouisync::operator<<(std::ostream& os, const RqBranch&) {
-    return os << "RqBranch";
-}
-
-std::ostream& ouisync::operator<<(std::ostream& os, const RsBranch&) {
-    return os << "RsBranch";
+std::ostream& ouisync::operator<<(std::ostream& os, const RsHeads& m) {
+    os << "RsHeads";
+    for (auto& c : m) {
+        os << " " << short_id(c.root_object_id);
+    }
+    return os;
 }
 
 std::ostream& ouisync::operator<<(std::ostream& os, const Request& m) {

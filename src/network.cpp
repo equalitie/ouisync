@@ -18,8 +18,6 @@ Network::Network(executor_type ex, FileSystem& fs, Options options) :
     _fs(fs),
     _options(move(options))
 {
-    (void) _fs; // TODO: To be used
-
     if (_options.accept_endpoint) {
         co_spawn(_ex, keep_accepting(*_options.accept_endpoint), net::detached);
     }
@@ -87,8 +85,8 @@ void Network::establish_communication(tcp::socket socket)
         Barrier b(ex);
 
         MessageBroker broker(ex, move(s));
-        Server server(broker.server());
-        Client client(broker.client());
+        Server server(broker.server(), _fs);
+        Client client(broker.client(), _fs);
 
         co_spawn(ex, broker.run(c), [&, l = b.lock()](auto){c();});
         co_spawn(ex, server.run(c), [&, l = b.lock()](auto){c();});

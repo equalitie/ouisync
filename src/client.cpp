@@ -5,16 +5,16 @@
 using namespace ouisync;
 using std::move;
 
-Client::Client(MessageBroker::Client&& broker) :
-    _broker(move(broker))
-{}
+Client::Client(MessageBroker::Client&& broker, FileSystem& fs) :
+    _broker(move(broker)),
+    _fs(fs)
+{
+    (void) _fs;
+}
 
 net::awaitable<void> Client::run(Cancel cancel)
 {
-    std::cerr << "Client " << __LINE__ << "\n";
-    co_await _broker.send(RqBranchList{}, cancel);
-    std::cerr << "Client " << __LINE__ << " " << bool(cancel) << "\n";
+    co_await _broker.send(RqHeads{}, cancel);
     auto rs = co_await _broker.receive(cancel);
-
     std::cerr << "Client received " << rs << "\n";
 }

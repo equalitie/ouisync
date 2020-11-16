@@ -4,7 +4,7 @@
 #include "cancel.h"
 #include "user_id.h"
 #include "version_vector.h"
-#include "object/id.h"
+#include "commit.h"
 #include "variant.h"
 
 #include <boost/asio/ip/tcp.hpp>
@@ -14,67 +14,40 @@ namespace ouisync {
 
 enum class MessageType { Request, Response };
 
-struct RqBranchList {
+struct RqHeads {
     static constexpr MessageType type = MessageType::Request;
 
     template<class Archive>
     void serialize(Archive&, const unsigned int) {}
 };
 
-struct RsBranchList : std::vector<UserId> {
+struct RsHeads : std::vector<Commit> {
     static constexpr MessageType type = MessageType::Response;
 
-    using std::vector<UserId>::vector;
+    using Parent = std::vector<Commit>;
+    using Parent::Parent;
 
     template<class Archive>
     void serialize(Archive& ar, const unsigned int) {
-        ar & static_cast<std::vector<UserId>&>(*this);
-    }
-};
-
-struct RqBranch {
-    static constexpr MessageType type = MessageType::Request;
-
-    UserId branch_id;
-
-    template<class Archive>
-    void serialize(Archive& ar, const unsigned int) {
-        ar & branch_id;
-    }
-};
-
-struct RsBranch {
-    static constexpr MessageType type = MessageType::Response;
-
-    VersionVector version_vector;
-    object::Id root_id;
-
-    template<class Archive>
-    void serialize(Archive& ar, const unsigned int) {
-        ar & version_vector;
-        ar & root_id;
+        ar & static_cast<Parent&>(*this);
     }
 };
 
 namespace MessageDetail {
     using MessageVariant
         = variant<
-            RqBranchList,
-            RsBranchList,
-            RqBranch,
-            RsBranch
+            RqHeads,
+            RsHeads
         >;
 
     using RequestVariant
         = variant<
-            RqBranchList,
-            RqBranch
+            RqHeads
         >;
 
     using ResponseVariant
         = variant<
-            RsBranchList,
-            RsBranch
+            RsHeads
         >;
 } // MessageDetail namespace
 
@@ -115,10 +88,8 @@ struct Message : MessageDetail::MessageVariant
     }
 };
 
-std::ostream& operator<<(std::ostream&, const RqBranchList&);
-std::ostream& operator<<(std::ostream&, const RsBranchList&);
-std::ostream& operator<<(std::ostream&, const RqBranch&);
-std::ostream& operator<<(std::ostream&, const RsBranch&);
+std::ostream& operator<<(std::ostream&, const RqHeads&);
+std::ostream& operator<<(std::ostream&, const RsHeads&);
 std::ostream& operator<<(std::ostream&, const Request&);
 std::ostream& operator<<(std::ostream&, const Response&);
 std::ostream& operator<<(std::ostream&, const Message&);

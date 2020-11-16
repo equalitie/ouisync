@@ -14,6 +14,8 @@
 
 namespace ouisync {
 
+class Snapshot;
+
 class FileSystem {
 public:
     using executor_type = net::any_io_executor;
@@ -36,6 +38,8 @@ public:
     net::awaitable<void> remove_directory(PathRange);
 
     executor_type get_executor() { return _ex; }
+
+    Snapshot create_snapshot() const;
 
 private:
     Branch& find_branch(PathRange);
