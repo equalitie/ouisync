@@ -36,16 +36,21 @@ int main(int argc, char* argv[]) {
 
     fs::create_directories(options.branchdir);
     fs::create_directories(options.objectdir);
-    fs::create_directories(options.mountdir);
     fs::create_directories(options.snapshotdir);
 
     FileSystem fs(ioc.get_executor(), options);
     Network network(ioc.get_executor(), fs, options);
-    FuseRunner fuse(fs, options.mountdir);
+
+    unique_ptr<FuseRunner> fuse;
+
+    if (options.mountdir) {
+        fs::create_directories(*options.mountdir);
+        fuse = make_unique<FuseRunner>(fs, *options.mountdir);
+    }
 
     net::signal_set signals(ioc, SIGINT, SIGTERM, SIGHUP);
     signals.async_wait([&] (sys::error_code, int) {
-        fuse.finish();
+        if (fuse) fuse->finish();
         network.finish();
     });
 

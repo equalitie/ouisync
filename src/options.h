@@ -22,9 +22,10 @@ public:
     fs::path basedir;
     fs::path branchdir;
     fs::path objectdir;
-    fs::path mountdir;
     fs::path snapshotdir;
     fs::path user_id_file_path;
+
+    Opt<fs::path> mountdir;
 
     Opt<net::ip::tcp::endpoint> accept_endpoint;
     Opt<net::ip::tcp::endpoint> connect_endpoint;

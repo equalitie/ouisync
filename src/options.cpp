@@ -47,6 +47,8 @@ Options::Options() :
 
         ( "basedir", value(&basedir)->required(), "base directory")
 
+        ( "mountdir", value(&mountdir), "mount directory")
+
         ( "connect", value(&connect_endpoint), "peer's TCP endpoint")
 
         ( "accept", value(&accept_endpoint), "our accepting TCP endpoint")
@@ -62,7 +64,6 @@ void Options::parse(unsigned argc, char** argv)
 
     branchdir         = basedir / "branches";
     objectdir         = basedir / "objects";
-    mountdir          = basedir / "mount";
     snapshotdir       = basedir / "snapshots";
     user_id_file_path = basedir / "user_id";
 }
