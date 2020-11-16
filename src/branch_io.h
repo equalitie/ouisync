@@ -3,7 +3,7 @@
 #include "local_branch.h"
 #include "remote_branch.h"
 
-#include <boost/filesystem.hpp>
+#include <boost/filesystem/path.hpp>
 
 namespace ouisync {
 

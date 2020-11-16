@@ -12,6 +12,7 @@ using std::map;
 using std::string;
 using boost::get;
 using std::make_pair;
+using Branch = FileSystem::Branch;
 
 FileSystem::FileSystem(executor_type ex, Options options) :
     _ex(std::move(ex)),
@@ -32,7 +33,7 @@ FileSystem::FileSystem(executor_type ex, Options options) :
     }
 }
 
-LocalBranch& FileSystem::find_branch(PathRange path)
+Branch& FileSystem::find_branch(PathRange path)
 {
     if (path.empty()) throw_error(sys::errc::invalid_argument);
     auto user_id = UserId::from_string(path.front().native());
@@ -42,13 +43,21 @@ LocalBranch& FileSystem::find_branch(PathRange path)
     return i->second;
 }
 
+static Commit _get_commit(const Branch& b) {
+    return {
+        apply(b, [] (const auto& b) { return b.version_vector(); }),
+        apply(b, [] (const auto& b) { return b.root_object_id(); })
+    };
+
+}
+
 Snapshot FileSystem::create_snapshot() const
 {
     Snapshot::Commits commits;
 
     for (auto& [user_id, branch] : _branches) {
         (void) user_id;
-        commits.insert({branch.version_vector(), branch.root_object_id()});
+        commits.insert(_get_commit(branch));
     }
 
     return Snapshot::create(_options.snapshotdir, _options.objectdir, std::move(commits));
@@ -61,7 +70,7 @@ net::awaitable<FileSystem::Attrib> FileSystem::get_attr(PathRange path)
     auto& branch = find_branch(path);
 
     path.advance_begin(1);
-    auto ret = branch.get_attr(path);
+    auto ret = apply(branch, [&] (auto& b) { return b.get_attr(path); });
     co_return ret;
 }
 
@@ -79,7 +88,7 @@ net::awaitable<vector<string>> FileSystem::readdir(PathRange path)
         auto& branch = find_branch(path);
 
         path.advance_begin(1);
-        auto dir = branch.readdir(path);
+        auto dir = apply(branch, [&](auto& b) { return b.readdir(path); });
 
         for (auto& [name, hash] : dir) {
             nodes.push_back(name);
@@ -102,7 +111,7 @@ net::awaitable<size_t> FileSystem::read(PathRange path, char* buf, size_t size, 
         throw_error(sys::errc::is_a_directory);
     }
 
-    co_return branch.read(path, buf, size, offset);
+    co_return apply(branch, [&] (auto& b) { return b.read(path, buf, size, offset); });
 }
 
 net::awaitable<size_t> FileSystem::write(PathRange path, const char* buf, size_t size, off_t offset)
@@ -118,7 +127,14 @@ net::awaitable<size_t> FileSystem::write(PathRange path, const char* buf, size_t
         throw_error(sys::errc::is_a_directory);
     }
 
-    co_return branch.write(path, buf, size, offset);
+    co_return apply(branch,
+            [&] (LocalBranch& b) -> size_t {
+                return b.write(path, buf, size, offset);
+            },
+            [&] (RemoteBranch&) -> size_t {
+                throw_error(sys::errc::operation_not_permitted);
+                return 0; // Satisfy warning
+            });
 }
 
 net::awaitable<void> FileSystem::mknod(PathRange path, mode_t mode, dev_t dev)
@@ -136,7 +152,13 @@ net::awaitable<void> FileSystem::mknod(PathRange path, mode_t mode, dev_t dev)
         throw_error(sys::errc::is_a_directory);
     }
 
-    branch.store(path, object::Blob{});
+    apply(branch,
+        [&] (LocalBranch& b) {
+            b.store(path, object::Blob{});
+        },
+        [&] (RemoteBranch&) {
+            throw_error(sys::errc::operation_not_permitted);
+        });
 
     co_return;
 }
@@ -151,7 +173,15 @@ net::awaitable<void> FileSystem::mkdir(PathRange path, mode_t mode)
 
     auto& branch = find_branch(path);
     path.advance_begin(1);
-    branch.mkdir(path);
+
+    apply(branch,
+        [&] (LocalBranch& b) {
+            b.mkdir(path);
+        },
+        [&] (RemoteBranch&) {
+            throw_error(sys::errc::operation_not_permitted);
+        });
+
     co_return;
 }
 
@@ -169,7 +199,14 @@ net::awaitable<void> FileSystem::remove_file(PathRange path)
         throw_error(sys::errc::operation_not_permitted);
     }
 
-    branch.remove(path);
+    apply(branch,
+        [&] (LocalBranch& b) {
+            b.remove(path);
+        },
+        [&] (RemoteBranch&) {
+            throw_error(sys::errc::operation_not_permitted);
+        });
+
     co_return;
 }
 
@@ -188,7 +225,14 @@ net::awaitable<void> FileSystem::remove_directory(PathRange path)
         throw_error(sys::errc::operation_not_permitted);
     }
 
-    branch.remove(path);
+    apply(branch,
+        [&] (LocalBranch& b) {
+            b.remove(path);
+        },
+        [&] (RemoteBranch&) {
+            throw_error(sys::errc::operation_not_permitted);
+        });
+
     co_return;
 }
 
@@ -207,5 +251,12 @@ net::awaitable<size_t> FileSystem::truncate(PathRange path, size_t size)
         throw_error(sys::errc::is_a_directory);
     }
 
-    co_return branch.truncate(path, size);
+    co_return apply(branch,
+        [&] (LocalBranch& b) -> size_t {
+            return b.truncate(path, size);
+        },
+        [&] (RemoteBranch&) {
+            throw_error(sys::errc::operation_not_permitted);
+            return 0; // Satisfy warning
+        });
 }

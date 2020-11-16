@@ -26,6 +26,8 @@ struct RsHeads : std::vector<Commit> {
 
     using Parent = std::vector<Commit>;
     using Parent::Parent;
+    using Parent::begin;
+    using Parent::end;
 
     template<class Archive>
     void serialize(Archive& ar, const unsigned int) {

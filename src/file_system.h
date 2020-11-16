@@ -7,6 +7,7 @@
 #include "user_id.h"
 #include "local_branch.h"
 #include "path_range.h"
+#include "branch_io.h"
 
 #include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/awaitable.hpp>
@@ -19,6 +20,7 @@ class Snapshot;
 class FileSystem {
 public:
     using executor_type = net::any_io_executor;
+    using Branch = BranchIo::Branch;
 
 public:
     using DirAttrib  = FileSystemDirAttrib;
@@ -41,16 +43,16 @@ public:
 
     Snapshot create_snapshot() const;
 
-    const std::map<UserId, LocalBranch>& branches() const { return _branches; }
+    const std::map<UserId, Branch>& branches() const { return _branches; }
 
 private:
-    LocalBranch& find_branch(PathRange);
+    Branch& find_branch(PathRange);
 
 private:
     executor_type _ex;
     const Options _options;
     UserId _user_id;
-    std::map<UserId, LocalBranch> _branches;
+    std::map<UserId, Branch> _branches;
 };
 
 } // namespace
