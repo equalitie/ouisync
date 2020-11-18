@@ -1,6 +1,8 @@
 #include "file_system.h"
 #include "snapshot.h"
 #include "branch_io.h"
+#include "random.h"
+#include "hex.h"
 
 #include <iostream>
 #include <boost/filesystem.hpp>
@@ -14,21 +16,48 @@ using boost::get;
 using std::make_pair;
 using Branch = FileSystem::Branch;
 
+/* static */
+FileSystem::HexBranchId FileSystem::generate_branch_id()
+{
+    static constexpr size_t hex_size = std::tuple_size<HexBranchId>::value;
+    static_assert(hex_size % 2 == 0, "Hex size must be an even number");
+    std::array<uint8_t, hex_size/2> bin;
+    random::generate_non_blocking(bin.data(), bin.size());
+    return to_hex<char>(bin);
+}
+
+Opt<FileSystem::HexBranchId> FileSystem::str_to_branch_id(const std::string& name)
+{
+    if (name.size() != std::tuple_size<HexBranchId>::value)
+        return boost::none;
+
+    // XXX: Check that all letters are hex
+
+    HexBranchId bid;
+    for (size_t i = 0; i < name.size(); ++i) bid[i] = name[i];
+    return bid;
+}
+
 FileSystem::FileSystem(executor_type ex, Options options) :
     _ex(std::move(ex)),
     _options(std::move(options))
 {
     _user_id = UserId::load_or_create(_options.user_id_file_path);
 
+    bool local_exists = false;
+
     for (auto f : fs::directory_iterator(_options.branchdir)) {
         auto branch = BranchIo::load(f, _options.objectdir);
-        auto local_branch = boost::get<LocalBranch>(&branch);
-        auto uid = local_branch->user_id();
-        _branches.insert(make_pair(uid, std::move(*local_branch)));
+        auto branch_id = str_to_branch_id(f.path().filename().native());
+        if (!branch_id) {
+            throw std::runtime_error("FileSystem: Invalid branch name format");
+        }
+        local_exists |= bool(boost::get<LocalBranch>(&branch));
+        _branches.insert(make_pair(*branch_id, std::move(branch)));
     }
 
-    if (_branches.count(_user_id) == 0) {
-        _branches.insert(make_pair(_user_id,
+    if (!local_exists) {
+        _branches.insert(make_pair(generate_branch_id(),
                     LocalBranch::create(_options.branchdir, _options.objectdir, _user_id)));
     }
 }
@@ -36,9 +65,9 @@ FileSystem::FileSystem(executor_type ex, Options options) :
 Branch& FileSystem::find_branch(PathRange path)
 {
     if (path.empty()) throw_error(sys::errc::invalid_argument);
-    auto user_id = UserId::from_string(path.front().native());
-    if (!user_id) throw_error(sys::errc::invalid_argument);
-    auto i = _branches.find(*user_id);
+    auto branch_id = str_to_branch_id(path.front().native());
+    if (!branch_id) throw_error(sys::errc::invalid_argument);
+    auto i = _branches.find(*branch_id);
     if (i == _branches.end()) throw_error(sys::errc::invalid_argument);
     return i->second;
 }
@@ -55,8 +84,8 @@ Snapshot FileSystem::create_snapshot() const
 {
     Snapshot::Commits commits;
 
-    for (auto& [user_id, branch] : _branches) {
-        (void) user_id;
+    for (auto& [branch_id, branch] : _branches) {
+        (void) branch_id;
         commits.insert(_get_commit(branch));
     }
 
@@ -81,7 +110,7 @@ net::awaitable<vector<string>> FileSystem::readdir(PathRange path)
     if (path.empty()) {
         for (auto& [name, branch] : _branches) {
             (void) branch;
-            nodes.push_back(name.to_string());
+            nodes.push_back(std::string(name.begin(), name.end()));
         }
     }
     else {
@@ -285,9 +314,10 @@ FileSystem::get_or_create_remote_branch(const UserId& user_id, const object::Id&
             return nullptr;
     }
 
-    auto path = _options.remotes / user_id.to_string();
+    auto branch_id = generate_branch_id();
+    auto path = _options.remotes / std::string(branch_id.begin(), branch_id.end());
 
-    auto [i, inserted] = _branches.insert(std::make_pair(user_id,
+    auto [i, inserted] = _branches.insert(std::make_pair(branch_id,
                 RemoteBranch(user_id, root, vv, path, _options.objectdir)));
 
     assert(inserted);

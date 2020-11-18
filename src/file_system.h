@@ -22,6 +22,9 @@ public:
     using executor_type = net::any_io_executor;
     using Branch = BranchIo::Branch;
 
+private:
+    using HexBranchId = std::array<char, 16*2>; // 16*8 = 128 bits (*2 for hex)
+
 public:
     using DirAttrib  = FileSystemDirAttrib;
     using FileAttrib = FileSystemFileAttrib;
@@ -43,8 +46,6 @@ public:
 
     Snapshot create_snapshot() const;
 
-    const std::map<UserId, Branch>& branches() const { return _branches; }
-
     // Note: may return nullptr if the version vector is below a version vector
     // of an already existing branch.
     RemoteBranch*
@@ -59,11 +60,17 @@ private:
     static
     object::Id get_root_id(const Branch& b);
 
+    static
+    HexBranchId generate_branch_id();
+
+    static
+    Opt<HexBranchId> str_to_branch_id(const std::string&);
+
 private:
     executor_type _ex;
     const Options _options;
     UserId _user_id;
-    std::map<UserId, Branch> _branches;
+    std::map<HexBranchId, Branch> _branches;
 };
 
 } // namespace
