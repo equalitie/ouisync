@@ -30,7 +30,7 @@ BranchIo::Branch BranchIo::load(const fs::path& path, const fs::path& objdir)
     if (type == BranchType::Local) {
         return LocalBranch(path, objdir, archive);
     } else {
-        return RemoteBranch{};
+        return RemoteBranch(path, objdir, archive);
     }
 }
 
