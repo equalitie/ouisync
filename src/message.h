@@ -29,6 +29,8 @@ struct RsHeads : std::vector<Commit> {
     using Parent::begin;
     using Parent::end;
 
+    UserId user_id;
+
     template<class Archive>
     void serialize(Archive& ar, const unsigned int) {
         ar & static_cast<Parent&>(*this);

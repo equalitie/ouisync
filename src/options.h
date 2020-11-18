@@ -23,6 +23,7 @@ public:
     fs::path branchdir;
     fs::path objectdir;
     fs::path snapshotdir;
+    fs::path remotes;
     fs::path user_id_file_path;
 
     Opt<fs::path> mountdir;

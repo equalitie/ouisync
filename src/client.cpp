@@ -13,24 +13,6 @@ Client::Client(MessageBroker::Client&& broker, FileSystem& fs) :
     (void) _fs;
 }
 
-static
-VersionVector _get_version_vector(const Branch& b)
-{
-    return apply(b, [] (auto& b) { return b.version_vector(); });
-}
-
-template<class Where>
-static
-bool _is_contained_in(const Commit& what, Where& where)
-{
-    for (auto& [user_id, branch] : where) {
-        (void) user_id;
-        if (what.version_vector <= _get_version_vector(branch))
-            return true;
-    }
-    return false;
-}
-
 net::awaitable<void> Client::run(Cancel cancel)
 {
     co_await _broker.send(RqHeads{}, cancel);
@@ -41,7 +23,7 @@ net::awaitable<void> Client::run(Cancel cancel)
     assert(heads);
 
     for (auto& commit : *heads) {
-        if (_is_contained_in(commit, _fs.branches()))
-            continue;
+        auto branch = _fs.get_or_create_remote_branch(heads->user_id, commit.root_object_id, commit.version_vector);
+        (void) branch;
     }
 }

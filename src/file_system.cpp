@@ -260,3 +260,37 @@ net::awaitable<size_t> FileSystem::truncate(PathRange path, size_t size)
             return 0; // Satisfy warning
         });
 }
+
+/* static */
+const VersionVector& FileSystem::get_version_vector(const Branch& b)
+{
+    return *apply(b, [] (auto& b) { return &b.version_vector(); });
+}
+
+object::Id FileSystem::get_root_id(const Branch& b)
+{
+    return apply(b, [] (auto& b) { return b.root_object_id(); });
+}
+
+RemoteBranch*
+FileSystem::get_or_create_remote_branch(const UserId& user_id, const object::Id& root, const VersionVector& vv)
+{
+    for (auto& [_, branch] : _branches) {
+        (void) _;
+
+        if (root == get_root_id(branch))
+            return boost::get<RemoteBranch>(&branch);
+
+        if (vv <= get_version_vector(branch))
+            return nullptr;
+    }
+
+    auto path = _options.remotes / user_id.to_string();
+
+    auto [i, inserted] = _branches.insert(std::make_pair(user_id,
+                RemoteBranch(user_id, root, vv, path, _options.objectdir)));
+
+    assert(inserted);
+
+    return boost::get<RemoteBranch>(&i->second);
+}

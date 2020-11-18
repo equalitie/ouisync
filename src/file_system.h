@@ -45,8 +45,19 @@ public:
 
     const std::map<UserId, Branch>& branches() const { return _branches; }
 
+    // Note: may return nullptr if the version vector is below a version vector
+    // of an already existing branch.
+    RemoteBranch*
+    get_or_create_remote_branch(const UserId&, const object::Id&, const VersionVector&);
+
 private:
     Branch& find_branch(PathRange);
+
+    static
+    const VersionVector& get_version_vector(const Branch& b);
+
+    static
+    object::Id get_root_id(const Branch& b);
 
 private:
     executor_type _ex;
