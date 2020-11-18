@@ -2,7 +2,6 @@
 
 #include "shortcuts.h"
 #include "cancel.h"
-#include "user_id.h"
 #include "version_vector.h"
 #include "commit.h"
 #include "variant.h"
@@ -28,8 +27,6 @@ struct RsHeads : std::vector<Commit> {
     using Parent::Parent;
     using Parent::begin;
     using Parent::end;
-
-    UserId user_id;
 
     template<class Archive>
     void serialize(Archive& ar, const unsigned int) {

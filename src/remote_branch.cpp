@@ -24,8 +24,7 @@ Id _flat_store(const fs::path& objdir, const Obj& obj) {
     return new_id;
 }
 
-RemoteBranch::RemoteBranch(const UserId& user_id, const Id& root, VersionVector, fs::path filepath, fs::path objdir) :
-    _user_id(user_id),
+RemoteBranch::RemoteBranch(const Id& root, VersionVector, fs::path filepath, fs::path objdir) :
     _root(root),
     _filepath(std::move(filepath)),
     _objdir(std::move(objdir))
@@ -125,7 +124,6 @@ void RemoteBranch::store_tag(OArchive& ar) const
 
 void RemoteBranch::store_rest(OArchive& ar) const
 {
-    ar << _user_id;
     ar << _root;
     ar << _version_vector;
     ar << _objects;
@@ -133,7 +131,6 @@ void RemoteBranch::store_rest(OArchive& ar) const
 
 void RemoteBranch::load_rest(IArchive& ar)
 {
-    ar >> _user_id;
     ar >> _root;
     ar >> _version_vector;
     ar >> _objects;

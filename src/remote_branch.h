@@ -45,7 +45,7 @@ private:
     using OArchive = boost::archive::binary_oarchive;
 
 public:
-    RemoteBranch(const UserId& user_id, const Id& root, VersionVector, fs::path filepath, fs::path objdir);
+    RemoteBranch(const Id& root, VersionVector, fs::path filepath, fs::path objdir);
 
     RemoteBranch(fs::path filepath, fs::path objdir, IArchive&);
 
@@ -76,7 +76,6 @@ private:
     void store_self() const;
 
 private:
-    UserId _user_id;
     Id _root;
     fs::path _filepath;
     fs::path _objdir;

@@ -49,7 +49,7 @@ public:
     // Note: may return nullptr if the version vector is below a version vector
     // of an already existing branch.
     RemoteBranch*
-    get_or_create_remote_branch(const UserId&, const object::Id&, const VersionVector&);
+    get_or_create_remote_branch(const object::Id& root, const VersionVector&);
 
 private:
     Branch& find_branch(PathRange);

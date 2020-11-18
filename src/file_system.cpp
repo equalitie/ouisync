@@ -302,7 +302,7 @@ object::Id FileSystem::get_root_id(const Branch& b)
 }
 
 RemoteBranch*
-FileSystem::get_or_create_remote_branch(const UserId& user_id, const object::Id& root, const VersionVector& vv)
+FileSystem::get_or_create_remote_branch(const object::Id& root, const VersionVector& vv)
 {
     for (auto& [_, branch] : _branches) {
         (void) _;
@@ -318,7 +318,7 @@ FileSystem::get_or_create_remote_branch(const UserId& user_id, const object::Id&
     auto path = _options.remotes / std::string(branch_id.begin(), branch_id.end());
 
     auto [i, inserted] = _branches.insert(std::make_pair(branch_id,
-                RemoteBranch(user_id, root, vv, path, _options.objectdir)));
+                RemoteBranch(root, vv, path, _options.objectdir)));
 
     assert(inserted);
 
