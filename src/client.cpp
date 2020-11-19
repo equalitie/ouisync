@@ -4,13 +4,13 @@
 
 using namespace ouisync;
 using std::move;
-using Branch = FileSystem::Branch;
+using Branch = Repository::Branch;
 
-Client::Client(MessageBroker::Client&& broker, FileSystem& fs) :
+Client::Client(MessageBroker::Client&& broker, Repository& repo) :
     _broker(move(broker)),
-    _fs(fs)
+    _repo(repo)
 {
-    (void) _fs;
+    (void) _repo;
 }
 
 net::awaitable<void> Client::run(Cancel cancel)
@@ -23,7 +23,7 @@ net::awaitable<void> Client::run(Cancel cancel)
     assert(heads);
 
     for (auto& commit : *heads) {
-        auto branch = _fs.get_or_create_remote_branch(commit);
+        auto branch = _repo.get_or_create_remote_branch(commit);
         (void) branch;
     }
 }

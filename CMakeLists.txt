@@ -39,7 +39,7 @@ add_library(libouisync STATIC
     "src/remote_branch.cpp"
     "src/branch_io.cpp"
     "src/snapshot.cpp"
-    "src/file_system.cpp"
+    "src/repository.cpp"
     "src/file_system_attrib.cpp"
     "src/options.cpp"
     "src/network.cpp"

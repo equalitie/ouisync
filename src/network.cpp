@@ -13,9 +13,9 @@ using namespace ouisync;
 using net::ip::tcp;
 using std::move;
 
-Network::Network(executor_type ex, FileSystem& fs, Options options) :
+Network::Network(executor_type ex, Repository& repo, Options options) :
     _ex(ex),
-    _fs(fs),
+    _repo(repo),
     _options(move(options))
 {
     if (_options.accept_endpoint) {
@@ -85,8 +85,8 @@ void Network::establish_communication(tcp::socket socket)
         Barrier b(ex);
 
         MessageBroker broker(ex, move(s));
-        Server server(broker.server(), _fs);
-        Client client(broker.client(), _fs);
+        Server server(broker.server(), _repo);
+        Client client(broker.client(), _repo);
 
         co_spawn(ex, broker.run(c), [&, l = b.lock()](auto){c();});
         co_spawn(ex, server.run(c), [&, l = b.lock()](auto){c();});

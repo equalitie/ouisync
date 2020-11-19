@@ -1,4 +1,4 @@
-#include "file_system.h"
+#include "repository.h"
 #include "snapshot.h"
 #include "branch_io.h"
 #include "random.h"
@@ -14,10 +14,10 @@ using std::map;
 using std::string;
 using boost::get;
 using std::make_pair;
-using Branch = FileSystem::Branch;
+using Branch = Repository::Branch;
 
 /* static */
-FileSystem::HexBranchId FileSystem::generate_branch_id()
+Repository::HexBranchId Repository::generate_branch_id()
 {
     static constexpr size_t hex_size = std::tuple_size<HexBranchId>::value;
     static_assert(hex_size % 2 == 0, "Hex size must be an even number");
@@ -26,7 +26,7 @@ FileSystem::HexBranchId FileSystem::generate_branch_id()
     return to_hex<char>(bin);
 }
 
-Opt<FileSystem::HexBranchId> FileSystem::str_to_branch_id(const std::string& name)
+Opt<Repository::HexBranchId> Repository::str_to_branch_id(const std::string& name)
 {
     if (name.size() != std::tuple_size<HexBranchId>::value)
         return boost::none;
@@ -38,7 +38,7 @@ Opt<FileSystem::HexBranchId> FileSystem::str_to_branch_id(const std::string& nam
     return bid;
 }
 
-FileSystem::FileSystem(executor_type ex, Options options) :
+Repository::Repository(executor_type ex, Options options) :
     _ex(std::move(ex)),
     _options(std::move(options))
 {
@@ -50,7 +50,7 @@ FileSystem::FileSystem(executor_type ex, Options options) :
         auto branch = BranchIo::load(f, _options.objectdir);
         auto branch_id = str_to_branch_id(f.path().filename().native());
         if (!branch_id) {
-            throw std::runtime_error("FileSystem: Invalid branch name format");
+            throw std::runtime_error("Repository: Invalid branch name format");
         }
         local_exists |= bool(boost::get<LocalBranch>(&branch));
         _branches.insert(make_pair(*branch_id, std::move(branch)));
@@ -64,7 +64,7 @@ FileSystem::FileSystem(executor_type ex, Options options) :
     }
 }
 
-Branch& FileSystem::find_branch(PathRange path)
+Branch& Repository::find_branch(PathRange path)
 {
     if (path.empty()) throw_error(sys::errc::invalid_argument);
     auto branch_id = str_to_branch_id(path.front().native());
@@ -82,7 +82,7 @@ static Commit _get_commit(const Branch& b) {
 
 }
 
-Snapshot FileSystem::create_snapshot() const
+Snapshot Repository::create_snapshot() const
 {
     Snapshot::Commits commits;
 
@@ -94,7 +94,7 @@ Snapshot FileSystem::create_snapshot() const
     return Snapshot::create(_options.snapshotdir, _options.objectdir, std::move(commits));
 }
 
-net::awaitable<FileSystem::Attrib> FileSystem::get_attr(PathRange path)
+net::awaitable<Repository::Attrib> Repository::get_attr(PathRange path)
 {
     if (path.empty()) co_return DirAttrib{};
 
@@ -105,7 +105,7 @@ net::awaitable<FileSystem::Attrib> FileSystem::get_attr(PathRange path)
     co_return ret;
 }
 
-net::awaitable<vector<string>> FileSystem::readdir(PathRange path)
+net::awaitable<vector<string>> Repository::readdir(PathRange path)
 {
     std::vector<std::string> nodes;
 
@@ -129,7 +129,7 @@ net::awaitable<vector<string>> FileSystem::readdir(PathRange path)
     co_return nodes;
 }
 
-net::awaitable<size_t> FileSystem::read(PathRange path, char* buf, size_t size, off_t offset)
+net::awaitable<size_t> Repository::read(PathRange path, char* buf, size_t size, off_t offset)
 {
     if (path.empty()) {
         throw_error(sys::errc::invalid_argument);
@@ -145,7 +145,7 @@ net::awaitable<size_t> FileSystem::read(PathRange path, char* buf, size_t size, 
     co_return apply(branch, [&] (auto& b) { return b.read(path, buf, size, offset); });
 }
 
-net::awaitable<size_t> FileSystem::write(PathRange path, const char* buf, size_t size, off_t offset)
+net::awaitable<size_t> Repository::write(PathRange path, const char* buf, size_t size, off_t offset)
 {
     if (path.empty()) {
         throw_error(sys::errc::invalid_argument);
@@ -168,7 +168,7 @@ net::awaitable<size_t> FileSystem::write(PathRange path, const char* buf, size_t
             });
 }
 
-net::awaitable<void> FileSystem::mknod(PathRange path, mode_t mode, dev_t dev)
+net::awaitable<void> Repository::mknod(PathRange path, mode_t mode, dev_t dev)
 {
     if (S_ISFIFO(mode)) throw_error(sys::errc::invalid_argument); // TODO?
 
@@ -194,7 +194,7 @@ net::awaitable<void> FileSystem::mknod(PathRange path, mode_t mode, dev_t dev)
     co_return;
 }
 
-net::awaitable<void> FileSystem::mkdir(PathRange path, mode_t mode)
+net::awaitable<void> Repository::mkdir(PathRange path, mode_t mode)
 {
     if (path.empty()) {
         // The root directory is reserved for branches, users can't create
@@ -216,7 +216,7 @@ net::awaitable<void> FileSystem::mkdir(PathRange path, mode_t mode)
     co_return;
 }
 
-net::awaitable<void> FileSystem::remove_file(PathRange path)
+net::awaitable<void> Repository::remove_file(PathRange path)
 {
     if (path.empty()) {
         throw_error(sys::errc::is_a_directory);
@@ -241,7 +241,7 @@ net::awaitable<void> FileSystem::remove_file(PathRange path)
     co_return;
 }
 
-net::awaitable<void> FileSystem::remove_directory(PathRange path)
+net::awaitable<void> Repository::remove_directory(PathRange path)
 {
     if (path.empty()) {
         // XXX: Branch removal not yet implemented
@@ -267,7 +267,7 @@ net::awaitable<void> FileSystem::remove_directory(PathRange path)
     co_return;
 }
 
-net::awaitable<size_t> FileSystem::truncate(PathRange path, size_t size)
+net::awaitable<size_t> Repository::truncate(PathRange path, size_t size)
 {
     if (path.empty()) {
         // XXX: Branch removal not yet implemented
@@ -293,18 +293,18 @@ net::awaitable<size_t> FileSystem::truncate(PathRange path, size_t size)
 }
 
 /* static */
-const VersionVector& FileSystem::get_version_vector(const Branch& b)
+const VersionVector& Repository::get_version_vector(const Branch& b)
 {
     return *apply(b, [] (auto& b) { return &b.version_vector(); });
 }
 
-object::Id FileSystem::get_root_id(const Branch& b)
+object::Id Repository::get_root_id(const Branch& b)
 {
     return apply(b, [] (auto& b) { return b.root_object_id(); });
 }
 
 RemoteBranch*
-FileSystem::get_or_create_remote_branch(const Commit& commit)
+Repository::get_or_create_remote_branch(const Commit& commit)
 {
     for (auto& [_, branch] : _branches) {
         (void) _;

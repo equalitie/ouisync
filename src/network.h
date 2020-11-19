@@ -8,14 +8,14 @@
 
 namespace ouisync {
 
-class FileSystem;
+class Repository;
 
 class Network {
 public:
     using executor_type = net::any_io_executor;
 
 public:
-    Network(executor_type, FileSystem&, Options);
+    Network(executor_type, Repository&, Options);
 
     void finish();
 
@@ -27,7 +27,7 @@ private:
 
 private:
     executor_type _ex;
-    FileSystem& _fs;
+    Repository& _repo;
     const Options _options;
     ScopedCancel _lifetime_cancel;
 };

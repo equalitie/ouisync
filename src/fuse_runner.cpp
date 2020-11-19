@@ -1,5 +1,5 @@
 #include "fuse_runner.h"
-#include "file_system.h"
+#include "repository.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -18,10 +18,10 @@
 
 using namespace ouisync;
 
-FuseRunner::FuseRunner(FileSystem& fs, fs::path mountdir) :
-    _fs(fs),
+FuseRunner::FuseRunner(Repository& repo, fs::path mountdir) :
+    _repo(repo),
     _mountdir(std::move(mountdir)),
-    _work(net::make_work_guard(_fs.get_executor()))
+    _work(net::make_work_guard(_repo.get_executor()))
 {
     const struct fuse_operations _fuse_oper = {
         .getattr   = _fuse_getattr,
@@ -77,8 +77,8 @@ template<class F, class R>
 /* static */
 Result<R> FuseRunner::query_fs(const char* fname, F&& f) {
     FuseRunner* self = _get_self();
-    auto& fs = self->_fs;
-    auto ex = fs.get_executor();
+    auto& repo = self->_repo;
+    auto ex = repo.get_executor();
 
     std::mutex m;
     m.lock();
@@ -86,13 +86,13 @@ Result<R> FuseRunner::query_fs(const char* fname, F&& f) {
 
     co_spawn(ex, [&] () -> net::awaitable<void> {
         try {
-            ret = co_await f(fs);
+            ret = co_await f(repo);
         }
         catch (const sys::system_error& e) {
             ret = outcome::failure(e.code());
         }
         catch (const std::exception& e) {
-            std::cerr << "FileSystem has thrown a non system exception "
+            std::cerr << "Repository has thrown a non system exception "
                 "when calling '" << fname << "': "
                 << e.what() << ". FuseRunner doens't know how to deal with it. "
                 "Exiting\n";
@@ -146,11 +146,11 @@ int FuseRunner::_fuse_getattr(const char *path_, struct stat *stbuf)
     if (!attr) return -ENOENT;
 
     apply(attr.value(),
-            [&] (FileSystem::DirAttrib) {
+            [&] (Repository::DirAttrib) {
                 stbuf->st_mode = S_IFDIR | 0755;
                 stbuf->st_nlink = 1;
             },
-            [&] (FileSystem::FileAttrib a) {
+            [&] (Repository::FileAttrib a) {
                 stbuf->st_mode = S_IFREG | 0444;
                 stbuf->st_nlink = 1;
                 stbuf->st_size = a.size;
@@ -196,7 +196,7 @@ int FuseRunner::_fuse_open(const char *path_, struct fuse_file_info *fi)
 
     auto is_file_result = QUERY_FS([&] (auto& fs) -> net::awaitable<bool> {
         auto attr = co_await fs.get_attr(path_range(path));
-        co_return bool(boost::get<FileSystem::FileAttrib>(&attr));
+        co_return bool(boost::get<Repository::FileAttrib>(&attr));
     });
 
     report_if_error("open", is_file_result, path_);

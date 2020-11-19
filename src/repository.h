@@ -18,7 +18,7 @@ namespace ouisync {
 
 class Snapshot;
 
-class FileSystem {
+class Repository {
 public:
     using executor_type = net::any_io_executor;
     using Branch = BranchIo::Branch;
@@ -31,7 +31,7 @@ public:
     using FileAttrib = FileSystemFileAttrib;
     using Attrib     = FileSystemAttrib;
 
-    FileSystem(executor_type ex, Options);
+    Repository(executor_type ex, Options);
 
     net::awaitable<std::vector<std::string>> readdir(PathRange);
     net::awaitable<Attrib> get_attr(PathRange);

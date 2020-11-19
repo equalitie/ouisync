@@ -1,19 +1,19 @@
 #pragma once
 
 #include "message_broker.h"
-#include "file_system.h"
+#include "repository.h"
 
 namespace ouisync {
 
 class Server {
 public:
-    Server(MessageBroker::Server&&, FileSystem&);
+    Server(MessageBroker::Server&&, Repository&);
 
     net::awaitable<void> run(Cancel);
 
 private:
     MessageBroker::Server _broker;
-    FileSystem& _fs;
+    Repository& _repo;
 };
 
 } // namespace

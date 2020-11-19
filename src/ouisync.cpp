@@ -1,5 +1,5 @@
 #include "fuse_runner.h"
-#include "file_system.h"
+#include "repository.h"
 #include "network.h"
 #include "shortcuts.h"
 #include "options.h"
@@ -36,14 +36,14 @@ int main(int argc, char* argv[]) {
     fs::create_directories(options.objectdir);
     fs::create_directories(options.snapshotdir);
 
-    FileSystem fs(ioc.get_executor(), options);
-    Network network(ioc.get_executor(), fs, options);
+    Repository repo(ioc.get_executor(), options);
+    Network network(ioc.get_executor(), repo, options);
 
     unique_ptr<FuseRunner> fuse;
 
     if (options.mountdir) {
         fs::create_directories(*options.mountdir);
-        fuse = make_unique<FuseRunner>(fs, *options.mountdir);
+        fuse = make_unique<FuseRunner>(repo, *options.mountdir);
     }
 
     net::signal_set signals(ioc, SIGINT, SIGTERM, SIGHUP);

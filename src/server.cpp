@@ -6,11 +6,10 @@
 using namespace ouisync;
 using std::move;
 
-Server::Server(MessageBroker::Server&& broker, FileSystem& fs) :
+Server::Server(MessageBroker::Server&& broker, Repository& repo) :
     _broker(move(broker)),
-    _fs(fs)
+    _repo(repo)
 {
-    (void) _fs;
 }
 
 net::awaitable<void> Server::run(Cancel cancel)
@@ -26,7 +25,7 @@ net::awaitable<void> Server::run(Cancel cancel)
 
         auto handle_rq_heads = [&] () -> AwaitVoid {
             if (!snapshot) {
-                snapshot = _fs.create_snapshot();
+                snapshot = _repo.create_snapshot();
             }
 
             RsHeads rsp;

@@ -14,7 +14,7 @@
 
 namespace ouisync {
 
-class FileSystem;
+class Repository;
 
 class FuseRunner {
 private:
@@ -24,7 +24,7 @@ public:
     using executor_type = net::any_io_executor;
 
 public:
-    FuseRunner(FileSystem&, fs::path mountdir);
+    FuseRunner(Repository&, fs::path mountdir);
 
     void finish();
 
@@ -47,12 +47,12 @@ private:
     static int _fuse_rmdir(const char*);
 
     template<class F,
-        class R = typename std::decay_t<std::result_of_t<F(FileSystem&)>>::value_type
+        class R = typename std::decay_t<std::result_of_t<F(Repository&)>>::value_type
         >
     static Result<R> query_fs(const char* fname, F&& f);
 
 private:
-    FileSystem& _fs;
+    Repository& _repo;
     const fs::path _mountdir;
     std::thread _thread;
     net::executor_work_guard<executor_type> _work;
