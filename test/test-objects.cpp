@@ -9,6 +9,7 @@
 #include "array_io.h"
 #include "local_branch.h"
 #include "path_range.h"
+#include "random.h"
 
 #include <iostream>
 #include <random>
@@ -28,7 +29,13 @@ using object::Id;
 using boost::variant;
 
 struct Random {
-    Random() : gen(std::random_device()()) {}
+    using Seed = std::mt19937::result_type;
+
+    static Seed seed() {
+        return std::random_device()();
+    }
+
+    Random() : gen(seed()) {}
 
     std::vector<uint8_t> vector(size_t size) {
         std::vector<uint8_t> v(size);
@@ -141,7 +148,7 @@ LocalBranch create_branch(const fs::path testdir, const char* user_id_file_name)
     UserId user_id = UserId::load_or_create(testdir/user_id_file_name);
 
     Random random;
-    auto name = random.string(16);
+    auto name = to_hex(random.string(16));
     return LocalBranch::create(branchdir/name, objdir, user_id);
 }
 
