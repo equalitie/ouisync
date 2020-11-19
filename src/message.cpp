@@ -101,6 +101,18 @@ std::ostream& ouisync::operator<<(std::ostream& os, const RsHeads& m) {
     return os;
 }
 
+std::ostream& ouisync::operator<<(std::ostream& os, const RqObject& rq) {
+    return os << "RqObject " << short_id(rq.object_id);
+}
+
+std::ostream& ouisync::operator<<(std::ostream& os, const RsObject& m) {
+    os << "RsObject";
+    apply(m.object,
+            [&] (const object::Tree&) { os << " Tree"; },
+            [&] (const object::Blob&) { os << " Blob"; });
+    return os;
+}
+
 std::ostream& ouisync::operator<<(std::ostream& os, const Request& m) {
     apply(m, [&os] (auto& m) { os << m; });
     return os;

@@ -36,10 +36,21 @@ net::awaitable<void> Server::run(Cancel cancel)
             }
 
             co_await _broker.send(move(rsp), cancel);
-            std::cerr << "Server sent\n";
+        };
+
+        auto handle_rq_object = [&] (const RqObject& rq) -> AwaitVoid {
+            if (!snapshot) {
+                snapshot = _repo.create_snapshot();
+            }
+
+            RsObject rs;
+            auto object = snapshot->load_object(rq.object_id);
+
+            co_await _broker.send({RsObject{std::move(object)}}, cancel);
         };
 
         co_await apply(m,
-            [&] (const RqHeads&) { return handle_rq_heads(); });
+            [&] (const RqHeads&) { return handle_rq_heads(); },
+            [&] (const RqObject& rq) { return handle_rq_object(rq); });
     }
 }

@@ -5,6 +5,8 @@
 #include "version_vector.h"
 #include "commit.h"
 #include "variant.h"
+#include "object/tree.h"
+#include "object/blob.h"
 
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/awaitable.hpp>
@@ -34,21 +36,47 @@ struct RsHeads : std::vector<Commit> {
     }
 };
 
+struct RqObject {
+    static constexpr auto type = MessageType::Request;
+
+    object::Id object_id;
+
+    template<class Archive>
+    void serialize(Archive& ar, const unsigned) {
+        ar & object_id;
+    }
+};
+
+struct RsObject {
+    static constexpr auto type = MessageType::Response;
+
+    variant<object::Blob, object::Tree> object;
+
+    template<class Archive>
+    void serialize(Archive& ar, const unsigned) {
+        ar & object;
+    }
+};
+
 namespace MessageDetail {
     using MessageVariant
         = variant<
             RqHeads,
-            RsHeads
+            RsHeads,
+            RqObject,
+            RsObject
         >;
 
     using RequestVariant
         = variant<
-            RqHeads
+            RqHeads,
+            RqObject
         >;
 
     using ResponseVariant
         = variant<
-            RsHeads
+            RsHeads,
+            RsObject
         >;
 } // MessageDetail namespace
 
@@ -91,6 +119,8 @@ struct Message : MessageDetail::MessageVariant
 
 std::ostream& operator<<(std::ostream&, const RqHeads&);
 std::ostream& operator<<(std::ostream&, const RsHeads&);
+std::ostream& operator<<(std::ostream&, const RqObject&);
+std::ostream& operator<<(std::ostream&, const RsObject&);
 std::ostream& operator<<(std::ostream&, const Request&);
 std::ostream& operator<<(std::ostream&, const Response&);
 std::ostream& operator<<(std::ostream&, const Message&);

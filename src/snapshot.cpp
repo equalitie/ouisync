@@ -1,7 +1,11 @@
 #include "snapshot.h"
 #include "hash.h"
 #include "hex.h"
+#include "variant.h"
 #include "object/refcount.h"
+#include "object/tree.h"
+#include "object/blob.h"
+#include "object/io.h"
 
 #include <boost/filesystem/fstream.hpp>
 #include <boost/archive/binary_iarchive.hpp>
@@ -9,6 +13,7 @@
 #include <boost/serialization/set.hpp>
 #include <boost/serialization/map.hpp>
 #include <boost/serialization/array.hpp>
+#include <boost/serialization/vector.hpp>
 
 #include <iostream>
 
@@ -51,6 +56,11 @@ Snapshot& Snapshot::operator=(Snapshot&& other)
     _commits = std::move(other._commits);
 
     return *this;
+}
+
+Snapshot::Object Snapshot::load_object(const Id& id)
+{
+    return object::io::load<Blob, Tree>(_objdir, id);
 }
 
 /* static */
