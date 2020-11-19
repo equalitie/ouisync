@@ -24,10 +24,11 @@ Id _flat_store(const fs::path& objdir, const Obj& obj) {
     return new_id;
 }
 
-RemoteBranch::RemoteBranch(const Id& root, VersionVector, fs::path filepath, fs::path objdir) :
-    _root(root),
+RemoteBranch::RemoteBranch(Commit commit, fs::path filepath, fs::path objdir) :
     _filepath(std::move(filepath)),
-    _objdir(std::move(objdir))
+    _objdir(std::move(objdir)),
+    _root(commit.root_object_id),
+    _version_vector(commit.version_vector)
 {
 }
 

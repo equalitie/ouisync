@@ -140,7 +140,9 @@ LocalBranch create_branch(const fs::path testdir, const char* user_id_file_name)
 
     UserId user_id = UserId::load_or_create(testdir/user_id_file_name);
 
-    return LocalBranch::create(branchdir, objdir, user_id);
+    Random random;
+    auto name = random.string(16);
+    return LocalBranch::create(branchdir/name, objdir, user_id);
 }
 
 BOOST_AUTO_TEST_CASE(branch_directories) {

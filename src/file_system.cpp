@@ -57,8 +57,10 @@ FileSystem::FileSystem(executor_type ex, Options options) :
     }
 
     if (!local_exists) {
-        _branches.insert(make_pair(generate_branch_id(),
-                    LocalBranch::create(_options.branchdir, _options.objectdir, _user_id)));
+        auto branch_id = generate_branch_id();
+        fs::path path = _options.branchdir / std::string(branch_id.begin(), branch_id.end());
+        _branches.insert(make_pair(branch_id,
+                    LocalBranch::create(path, _options.objectdir, _user_id)));
     }
 }
 
@@ -302,15 +304,15 @@ object::Id FileSystem::get_root_id(const Branch& b)
 }
 
 RemoteBranch*
-FileSystem::get_or_create_remote_branch(const object::Id& root, const VersionVector& vv)
+FileSystem::get_or_create_remote_branch(const Commit& commit)
 {
     for (auto& [_, branch] : _branches) {
         (void) _;
 
-        if (root == get_root_id(branch))
+        if (commit.root_object_id == get_root_id(branch))
             return boost::get<RemoteBranch>(&branch);
 
-        if (vv <= get_version_vector(branch))
+        if (commit.version_vector <= get_version_vector(branch))
             return nullptr;
     }
 
@@ -318,7 +320,7 @@ FileSystem::get_or_create_remote_branch(const object::Id& root, const VersionVec
     auto path = _options.remotes / std::string(branch_id.begin(), branch_id.end());
 
     auto [i, inserted] = _branches.insert(std::make_pair(branch_id,
-                RemoteBranch(root, vv, path, _options.objectdir)));
+                RemoteBranch(commit, path, _options.objectdir)));
 
     assert(inserted);
 

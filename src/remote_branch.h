@@ -7,6 +7,7 @@
 #include "version_vector.h"
 #include "path_range.h"
 #include "file_system_attrib.h"
+#include "commit.h"
 
 #include <boost/asio/awaitable.hpp>
 #include <boost/filesystem/path.hpp>
@@ -45,7 +46,7 @@ private:
     using OArchive = boost::archive::binary_oarchive;
 
 public:
-    RemoteBranch(const Id& root, VersionVector, fs::path filepath, fs::path objdir);
+    RemoteBranch(Commit, fs::path filepath, fs::path objdir);
 
     RemoteBranch(fs::path filepath, fs::path objdir, IArchive&);
 
@@ -76,10 +77,10 @@ private:
     void store_self() const;
 
 private:
-    Id _root;
     fs::path _filepath;
     fs::path _objdir;
 
+    Id _root;
     VersionVector _version_vector;
 
     std::map<object::Id, ObjectEntry> _objects;

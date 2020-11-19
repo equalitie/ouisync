@@ -8,6 +8,7 @@
 #include "local_branch.h"
 #include "path_range.h"
 #include "branch_io.h"
+#include "commit.h"
 
 #include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/awaitable.hpp>
@@ -49,7 +50,7 @@ public:
     // Note: may return nullptr if the version vector is below a version vector
     // of an already existing branch.
     RemoteBranch*
-    get_or_create_remote_branch(const object::Id& root, const VersionVector&);
+    get_or_create_remote_branch(const Commit&);
 
 private:
     Branch& find_branch(PathRange);

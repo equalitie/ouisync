@@ -23,7 +23,7 @@ net::awaitable<void> Client::run(Cancel cancel)
     assert(heads);
 
     for (auto& commit : *heads) {
-        auto branch = _fs.get_or_create_remote_branch(commit.root_object_id, commit.version_vector);
+        auto branch = _fs.get_or_create_remote_branch(commit);
         (void) branch;
     }
 }

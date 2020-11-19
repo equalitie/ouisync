@@ -15,6 +15,8 @@
 #include <boost/serialization/vector.hpp>
 #include <string.h> // memcpy
 
+#include <iostream>
+
 using namespace ouisync;
 using std::move;
 using object::Id;
@@ -23,11 +25,9 @@ using object::Tree;
 using object::JustTag;
 
 /* static */
-LocalBranch LocalBranch::create(const fs::path& rootdir, const fs::path& objdir, UserId user_id) {
+LocalBranch LocalBranch::create(const fs::path& path, const fs::path& objdir, UserId user_id) {
     object::Id root_id;
     VersionVector clock;
-
-    fs::path path = rootdir / user_id.to_string();
 
     if (fs::exists(path)) {
         throw std::runtime_error("Local branch already exits");
@@ -36,7 +36,7 @@ LocalBranch LocalBranch::create(const fs::path& rootdir, const fs::path& objdir,
     object::Tree root_obj;
     root_id = root_obj.store(objdir);
     object::refcount::increment(objdir, root_id);
-    LocalBranch branch(path, objdir, user_id, root_id, move(clock));
+    LocalBranch branch(path, objdir, user_id, Commit{move(clock), root_id});
     branch.store_self();
     return branch;
 }
@@ -286,12 +286,12 @@ void LocalBranch::root_object_id(const object::Id& id) {
 //--------------------------------------------------------------------
 
 LocalBranch::LocalBranch(const fs::path& file_path, const fs::path& objdir,
-        const UserId& user_id, const object::Id& root_id, VersionVector clock) :
+        const UserId& user_id, Commit commit) :
     _file_path(file_path),
     _objdir(objdir),
     _user_id(user_id),
-    _root_id(root_id),
-    _clock(move(clock))
+    _root_id(commit.root_object_id),
+    _clock(move(commit.version_vector))
 {}
 
 LocalBranch::LocalBranch(const fs::path& file_path, const fs::path& objdir, IArchive& ar) :

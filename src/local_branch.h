@@ -8,6 +8,7 @@
 #include "path_range.h"
 #include "shortcuts.h"
 #include "file_system_attrib.h"
+#include "commit.h"
 
 #include <boost/filesystem/path.hpp>
 #include <boost/optional.hpp>
@@ -30,7 +31,7 @@ public:
 
 public:
     static
-    LocalBranch create(const fs::path& rootdir, const fs::path& objdir, UserId user_id);
+    LocalBranch create(const fs::path& path, const fs::path& objdir, UserId user_id);
 
     const object::Id& root_object_id() const {
         return _root_id;
@@ -80,7 +81,7 @@ private:
     LocalBranch(const fs::path& file_path, const fs::path& objdir, IArchive&);
 
     LocalBranch(const fs::path& file_path, const fs::path& objdir,
-            const UserId&, const object::Id& root_id, VersionVector);
+            const UserId&, Commit);
 
     void store_self() const;
 
