@@ -129,28 +129,12 @@ net::awaitable<void> MessageBroker::handle_message(Message m, Cancel cancel)
 
 //--------------------------------------------------------------------
 
-net::awaitable<void> MessageBroker::keep_receiving(Cancel cancel)
-try {
+net::awaitable<void> MessageBroker::run(Cancel cancel)
+{
     while (true) {
         auto m = co_await Message::receive(_socket, cancel);
         co_await handle_message(std::move(m), cancel);
     }
-}
-catch (const sys::system_error& e) {
-    if (cancel) co_return;
-    std::cerr << "MessageBroker: keep_receiving stopped: "
-        << e.what() << "\n";
-}
-catch (const std::exception& e) {
-    std::cerr << "MessageBroker: Unknown std::exception in keep_receiving: "
-        << e.what() << "\n";
-}
-
-//--------------------------------------------------------------------
-
-net::awaitable<void> MessageBroker::run(Cancel cancel)
-{
-    co_await keep_receiving(cancel);
 }
 
 //--------------------------------------------------------------------

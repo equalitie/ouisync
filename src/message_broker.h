@@ -58,7 +58,6 @@ public:
     net::awaitable<void> run(Cancel);
 
 private:
-    net::awaitable<void> keep_receiving(Cancel);
     net::awaitable<void> send(Message, Cancel);
     net::awaitable<void> handle_message(Message, Cancel);
 

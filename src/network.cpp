@@ -66,6 +66,33 @@ net::awaitable<void> Network::connect(tcp::endpoint ep)
     }
 }
 
+namespace {
+    struct FirstError {
+        const char* whence;
+        std::string message;
+    };
+
+    struct OnExit {
+        Cancel& cancel;
+        const char* whence;
+        Barrier::Lock lock;
+        Opt<FirstError>& first_error;
+
+        void operator() (std::exception_ptr eptr) {
+            if (first_error) return;
+            cancel();
+            first_error = FirstError{whence, {}};
+            if (eptr) {
+                try {
+                    std::rethrow_exception(eptr);
+                } catch (const std::exception& ex) {
+                    first_error->message = ex.what();
+                }
+            }
+        }
+    };
+}
+
 void Network::establish_communication(tcp::socket socket)
 {
     Cancel cancel(_lifetime_cancel);
@@ -88,13 +115,21 @@ void Network::establish_communication(tcp::socket socket)
         Server server(broker.server(), _repo);
         Client client(broker.client(), _repo);
 
-        co_spawn(ex, broker.run(c), [&, l = b.lock()](auto){c();});
-        co_spawn(ex, server.run(c), [&, l = b.lock()](auto){c();});
-        co_spawn(ex, client.run(c), [&, l = b.lock()](auto){c();});
+        Opt<FirstError> first_error;
+
+        co_spawn(ex, broker.run(c), OnExit{c, "broker", b.lock(), first_error});
+        co_spawn(ex, server.run(c), OnExit{c, "server", b.lock(), first_error});
+        co_spawn(ex, client.run(c), OnExit{c, "client", b.lock(), first_error});
 
         co_await b.wait({});
 
         std::cerr << "Finished communication with " << ep << "\n";
+
+        assert(first_error);
+
+        if (first_error) {
+            std::cerr << "    " << first_error->whence << ": " << first_error->message << "\n";
+        }
     },
     net::detached);
 }
