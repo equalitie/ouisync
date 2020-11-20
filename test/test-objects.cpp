@@ -52,7 +52,7 @@ struct Random {
 
     Id object_id() {
         Id id;
-        fill(reinterpret_cast<char*>(id.data()), id.size());
+        fill(reinterpret_cast<char*>(id.data()), id.size);
         return id;
     }
 

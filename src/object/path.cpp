@@ -19,7 +19,7 @@ fs::path path::from_id(const Id& id) noexcept
 
 Opt<Id> path::to_id(const fs::path& ps) noexcept
 {
-    std::array<char, std::tuple_size<Id>::value * 2> hex;
+    std::array<char, Id::size * 2> hex;
 
     auto i = hex.begin();
 
@@ -32,5 +32,7 @@ Opt<Id> path::to_id(const fs::path& ps) noexcept
 
     if (i != hex.end()) return boost::none;
 
-    return from_hex<uint8_t>(hex);
+    auto opt_bin = from_hex<uint8_t>(hex);
+    if (!opt_bin) return boost::none;
+    return Id{*opt_bin};
 }

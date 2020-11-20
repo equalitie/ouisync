@@ -28,18 +28,12 @@ Id Tree::store(const fs::path& root) const
 }
 
 std::ostream& ouisync::object::operator<<(std::ostream& os, const Tree& tree) {
-    auto hex_id = to_hex<char>(calculate_id(tree));
+    auto hex_id = calculate_id(tree).short_hex();
 
-    const auto short_sw = [](const auto& a) -> string_view {
-        return string_view(a.data(),
-               std::min<size_t>(6, std::tuple_size<std::decay_t<decltype(a)>>::value));
-    };
-
-    os << "Tree id:" << short_sw(hex_id) << " size:" << tree.size();
+    os << "Tree id:" << hex_id << " size:" << tree.size();
 
     for (auto& [k, v] : tree) {
-        auto hex_id = to_hex<char>(v);
-        os << " " << k << ":" << short_sw(hex_id);
+        os << " " << k << ":" << v.short_hex();
     }
 
     return os;

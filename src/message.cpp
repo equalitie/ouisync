@@ -80,15 +80,6 @@ catch (const std::exception& e) {
     throw;
 }
 
-static std::array<char, 8> short_id(const object::Id& id)
-{
-    static_assert(std::tuple_size<std::decay_t<decltype(id)>>::value >= 8);
-    auto hex = to_hex<char>(id);
-    std::array<char, 8> ret;
-    for (auto i = 0u; i < 8; i++) ret[i] = hex[i];
-    return ret;
-}
-
 std::ostream& ouisync::operator<<(std::ostream& os, const RqHeads&) {
     return os << "RqHeads";
 }
@@ -96,13 +87,13 @@ std::ostream& ouisync::operator<<(std::ostream& os, const RqHeads&) {
 std::ostream& ouisync::operator<<(std::ostream& os, const RsHeads& m) {
     os << "RsHeads";
     for (auto& c : m) {
-        os << " " << short_id(c.root_object_id);
+        os << " " << c.root_object_id.short_hex();
     }
     return os;
 }
 
 std::ostream& ouisync::operator<<(std::ostream& os, const RqObject& rq) {
-    return os << "RqObject " << short_id(rq.object_id);
+    return os << "RqObject " << rq.object_id.short_hex();
 }
 
 std::ostream& ouisync::operator<<(std::ostream& os, const RsObject& m) {
