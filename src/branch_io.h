@@ -32,6 +32,9 @@ public:
 
     static
     Opt<Blob> maybe_load(const fs::path& objdir, Id root_id, PathRange);
+
+    static
+    Id id_of(const fs::path& objdir, const Id& root_id, PathRange);
 };
 
 } // namespace

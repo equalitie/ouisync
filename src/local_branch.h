@@ -71,6 +71,8 @@ public:
 
     const UserId& user_id() const { return _user_id; }
 
+    object::Id id_of(PathRange) const;
+
 private:
     friend class BranchIo;
 

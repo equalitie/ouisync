@@ -303,6 +303,13 @@ LocalBranch::LocalBranch(const fs::path& file_path, const fs::path& objdir, IArc
 
 //--------------------------------------------------------------------
 
+object::Id LocalBranch::id_of(PathRange path) const
+{
+    return BranchIo::id_of(_objdir, root_object_id(), path);
+}
+
+//--------------------------------------------------------------------
+
 void LocalBranch::store_tag(OArchive& ar) const
 {
     ar << BranchIo::BranchType::Local;

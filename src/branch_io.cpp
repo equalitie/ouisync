@@ -134,3 +134,20 @@ Opt<Blob> BranchIo::maybe_load(const fs::path& objdir, Id root_id, PathRange pat
 
     return retval;
 }
+
+/* static */
+Id BranchIo::id_of(const fs::path& objdir, const Id& root_id, PathRange path)
+{
+    if (path.empty()) return root_id;
+
+    Id retval;
+
+    _query_dir(objdir, root_id, _parent(path),
+        [&] (const Tree& tree) {
+            auto i = tree.find(path.back().native());
+            if (i == tree.end()) throw_error(sys::errc::no_such_file_or_directory);
+            retval = i->second;
+        });
+
+    return retval;
+}
