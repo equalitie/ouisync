@@ -71,6 +71,8 @@ public:
 
     object::Id id_of(PathRange) const;
 
+    friend std::ostream& operator<<(std::ostream&, const LocalBranch&);
+
 private:
     friend class BranchIo;
 

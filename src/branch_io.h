@@ -35,6 +35,9 @@ public:
 
     static
     Id id_of(const fs::path& objdir, const Id& root_id, PathRange);
+
+    static
+    void show(std::ostream&, const fs::path& objdir, const Id& root_id);
 };
 
 } // namespace

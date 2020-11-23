@@ -338,3 +338,9 @@ void LocalBranch::load_rest(IArchive& ar)
 }
 
 //--------------------------------------------------------------------
+
+std::ostream& ouisync::operator<<(std::ostream& os, const LocalBranch& branch)
+{
+    BranchIo::show(os, branch._objdir, branch._root_id);
+    return os;
+}

@@ -151,3 +151,34 @@ Id BranchIo::id_of(const fs::path& objdir, const Id& root_id, PathRange path)
 
     return retval;
 }
+
+//--------------------------------------------------------------------
+
+static
+void _show(std::ostream& os, fs::path objdir, Id id, std::string pad = "") {
+    if (!object::io::exists(objdir, id)) {
+        os << pad << " !!! object " << id.short_hex() << " does not exist !!!\n";
+        return;
+    }
+
+    auto obj = object::io::load<Tree, Blob>(objdir, id);
+    auto rc = object::refcount::read(objdir, id);
+
+    apply(obj,
+            [&] (const Tree& t) {
+                os << pad << t << " (Rc:" << rc << ")\n";
+                for (auto& [name, id] : t) {
+                    _show(os, objdir, id, pad + "  ");
+                }
+            },
+            [&] (const Blob& b) {
+                os << pad << b << " (Rc:" << rc << ")\n";
+            });
+}
+
+void BranchIo::show(std::ostream& os, const fs::path& objdir, const Id& root_id)
+{
+    _show(os, objdir, root_id, "");
+}
+
+//--------------------------------------------------------------------

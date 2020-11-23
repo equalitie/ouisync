@@ -100,30 +100,6 @@ size_t refcount(LocalBranch& b, const fs::path path) {
     return object::refcount::read(b.object_directory(), id);
 };
 
-void show(fs::path objdir, Id id, std::string pad = "") {
-    using std::cerr;
-    if (!object::io::exists(objdir, id)) {
-        cerr << pad << " !!! object " << id.short_hex() << " does not exist !!!\n";
-        return;
-    }
-    auto obj = object::io::load<Tree, Blob>(objdir, id);
-    auto rc = object::refcount::read(objdir, id);
-    apply(obj,
-            [&] (const Tree& t) {
-                cerr << pad << t << " (Rc:" << rc << ")\n";
-                for (auto& [name, id] : t) {
-                    show(objdir, id, pad + "  ");
-                }
-            },
-            [&] (const Blob& b) {
-                cerr << pad << b << " (Rc:" << rc << ")\n";
-            });
-}
-
-void show(const LocalBranch& branch) {
-    show(branch.object_directory(), branch.root_object_id());
-}
-
 BOOST_AUTO_TEST_CASE(blob_id_calculation) {
     Random random;
     auto data1 = random.vector(256);
