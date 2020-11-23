@@ -22,8 +22,7 @@ Id ouisync::object::calculate_id(const Blob& v) {
 
 namespace std {
     std::ostream& operator<<(std::ostream& os, const Blob& v) {
-        auto id = to_hex<char>(::ouisync::object::calculate_id(v));
-        string_view sw(id.data(), std::min<size_t>(6, std::tuple_size<decltype(id)>::value));
-        return os << "Data " << sw;
+        auto id = ::ouisync::object::calculate_id(v);
+        return os << "Data id:" << id << " size:" << v.size();
     }
 }
