@@ -34,3 +34,8 @@ std::ostream& ouisync::object::operator<<(std::ostream& os, const Id::ShortHex& 
     for (auto c : h) { os << c; }
     return os;
 }
+
+std::ostream& ouisync::object::operator<<(std::ostream& os, const Id& id)
+{
+    return os << id.short_hex();
+}

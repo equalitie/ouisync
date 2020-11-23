@@ -41,6 +41,8 @@ public:
 
     Hex hex() const;
     ShortHex short_hex() const;
+
+    friend std::ostream& operator<<(std::ostream& os, const Id&);
 };
 
 } // namespaces
