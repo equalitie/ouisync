@@ -60,6 +60,7 @@ Snapshot& Snapshot::operator=(Snapshot&& other)
 
 Snapshot::Object Snapshot::load_object(const Id& id)
 {
+    // XXX: Test the object belongs to this snapshot?
     return object::io::load<Blob, Tree>(_objdir, id);
 }
 
@@ -134,4 +135,15 @@ void Snapshot::destroy() noexcept
 Snapshot::~Snapshot()
 {
     destroy();
+}
+
+std::ostream& ouisync::operator<<(std::ostream& os, const Snapshot& s)
+{
+    os << "id:" << s._id.short_hex() << " roots:[";
+    bool is_first = true;
+    for (auto& c : s._commits) {
+        if (!is_first) os << ", ";
+        os << c.root_object_id.short_hex();
+    }
+    return os << "]";
 }

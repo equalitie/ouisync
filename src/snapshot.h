@@ -5,6 +5,7 @@
 
 #include <set>
 #include <boost/filesystem/path.hpp>
+#include <iosfwd>
 
 namespace ouisync {
 
@@ -42,6 +43,8 @@ private:
     static Commits load_commits(const fs::path&);
 
     void destroy() noexcept;
+
+    friend std::ostream& operator<<(std::ostream&, const Snapshot&);
 
 private:
     bool _is_valid = false;
