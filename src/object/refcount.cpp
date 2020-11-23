@@ -3,6 +3,9 @@
 #include <boost/filesystem/fstream.hpp>
 #include <boost/filesystem/operations.hpp>
 
+#include <iostream>
+#include <sstream>
+
 namespace ouisync::object::refcount {
 
 static
@@ -26,7 +29,9 @@ Number read(const fs::path& path_)
             // No one is holding this object
             return 0;
         }
-        throw std::runtime_error("Failed to decrement refcount");
+        std::stringstream ss;
+        ss << "Failed to read refcount: " << path;
+        throw std::runtime_error(ss.str());
     }
     Number rc;
     f >> rc;
@@ -42,7 +47,9 @@ Number increment(const fs::path& path_)
         // Does not exist, create a new one
         f.open(path, f.binary | f.out | f.trunc);
         if (!f.is_open()) {
-            throw std::runtime_error("Failed to increment refcount");
+            std::stringstream ss;
+            ss << "Failed to increment refcount: " << path;
+            throw std::runtime_error(ss.str());
         }
         f << 1 << '\n';
         return 1;
@@ -50,6 +57,7 @@ Number increment(const fs::path& path_)
     Number rc;
     f >> rc;
     ++rc;
+    //std::cerr << "Refcount++ " << (rc-1) << " -> " << rc << " " << path << "\n";
     f.seekp(0);
     f << rc << '\n';
     return rc;
@@ -65,12 +73,15 @@ Number decrement(const fs::path& path_)
             // No one held this object
             return 0;
         }
-        throw std::runtime_error("Failed to decrement refcount");
+        std::stringstream ss;
+        ss << "Failed to decrement refcount: " << path;
+        throw std::runtime_error(ss.str());
     }
     Number rc;
     f >> rc;
     if (rc == 0) throw std::runtime_error("Decrementing zero refcount");
     --rc;
+    //std::cerr << "Refcount-- " << (rc+1) << " -> " << rc << " " << path << "\n";
     if (rc == 0) {
         f.close();
         fs::remove(path);

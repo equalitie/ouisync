@@ -39,8 +39,6 @@ public:
 
     void root_object_id(const object::Id& id);
 
-    bool maybe_store(const fs::path&, const Blob&);
-
     // XXX: Deprecated, use `write` instead. I believe these are currently
     // only being used in tests.
     void store(PathRange, const Blob&);

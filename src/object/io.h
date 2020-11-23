@@ -8,6 +8,7 @@
 #include <boost/archive/text_oarchive.hpp>
 #include <boost/filesystem/fstream.hpp>
 #include <boost/filesystem/operations.hpp>
+#include <boost/format.hpp>
 
 namespace ouisync::object::io {
 
@@ -49,12 +50,12 @@ Id store(const fs::path& objdir, const O& object) {
  */
 template<class O>
 inline
-Opt<Id> maybe_store(const fs::path& objdir, const O& object) {
+std::pair<Id, bool> store_(const fs::path& objdir, const O& object) {
     auto id = calculate_id(object);
     auto path = objdir / path::from_id(id);
-    if (fs::exists(path)) return boost::none;
+    if (fs::exists(path)) return {id, false};
     detail::store_at(path, object);
-    return id;
+    return {id, true};
 }
 
 // --- load ----------------------------------------------------------
@@ -63,8 +64,9 @@ template<class O>
 inline
 O load(const fs::path& path) {
     fs::ifstream ifs(path, fs::ifstream::binary);
-    if (!ifs.is_open())
-        throw std::runtime_error("Failed to open object");
+    if (!ifs.is_open()) {
+        throw std::runtime_error(str(boost::format("Failed to open object %1%") % path));
+    }
     boost::archive::text_iarchive ia(ifs);
     O result;
     tagged::Load<O> loader{result};

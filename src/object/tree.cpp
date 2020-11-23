@@ -2,9 +2,6 @@
 #include "tagged.h"
 #include "io.h"
 
-#include "../hex.h"
-#include "../array_io.h"
-
 #include <iostream>
 #include <boost/filesystem.hpp>
 
@@ -28,13 +25,17 @@ Id Tree::store(const fs::path& root) const
 }
 
 std::ostream& ouisync::object::operator<<(std::ostream& os, const Tree& tree) {
-    auto hex_id = calculate_id(tree).short_hex();
+    auto id = calculate_id(tree);
+    auto hex_id = id.short_hex();
 
-    os << "Tree id:" << hex_id << " size:" << tree.size();
+    os << "Tree id:" << hex_id << " [";
 
+    bool is_first = true;
     for (auto& [k, v] : tree) {
-        os << " " << k << ":" << v.short_hex();
+        if (!is_first) os << ", ";
+        is_first = false;
+        os << k << ":" << v.short_hex();
     }
 
-    return os;
+    return os << "]";
 }

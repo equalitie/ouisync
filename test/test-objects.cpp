@@ -4,6 +4,7 @@
 #include "object/blob.h"
 #include "object/tree.h"
 #include "object/io.h"
+#include "object/refcount.h"
 #include "shortcuts.h"
 #include "hex.h"
 #include "array_io.h"
@@ -94,6 +95,35 @@ fs::path choose_test_dir() {
     return fs::unique_path("/tmp/ouisync/test-objects-%%%%-%%%%-%%%%-%%%%");
 }
 
+size_t refcount(LocalBranch& b, const fs::path path) {
+    auto id = b.id_of(path_range(path));
+    return object::refcount::read(b.object_directory(), id);
+};
+
+void show(fs::path objdir, Id id, std::string pad = "") {
+    using std::cerr;
+    if (!object::io::exists(objdir, id)) {
+        cerr << pad << " !!! object " << id.short_hex() << " does not exist !!!\n";
+        return;
+    }
+    auto obj = object::io::load<Tree, Blob>(objdir, id);
+    auto rc = object::refcount::read(objdir, id);
+    apply(obj,
+            [&] (const Tree& t) {
+                cerr << pad << t << " (Rc:" << rc << ")\n";
+                for (auto& [name, id] : t) {
+                    show(objdir, id, pad + "  ");
+                }
+            },
+            [&] (const Blob& b) {
+                cerr << pad << b << " (Rc:" << rc << ")\n";
+            });
+}
+
+void show(const LocalBranch& branch) {
+    show(branch.object_directory(), branch.root_object_id());
+}
+
 BOOST_AUTO_TEST_CASE(blob_id_calculation) {
     Random random;
     auto data1 = random.vector(256);
@@ -161,6 +191,7 @@ BOOST_AUTO_TEST_CASE(branch_directories) {
 
         branch.mkdir(path_range("dir"));
         BOOST_REQUIRE_EQUAL(count_objects(branch.object_directory()), 2);
+        BOOST_REQUIRE_EQUAL(refcount(branch, "dir"), 1);
     }
 
     {
@@ -169,6 +200,7 @@ BOOST_AUTO_TEST_CASE(branch_directories) {
 
         branch.mkdir(path_range("dir"));
         BOOST_REQUIRE_EQUAL(count_objects(branch.object_directory()), 2);
+        BOOST_REQUIRE_EQUAL(refcount(branch, "dir"), 1);
 
         branch.remove(path_range("dir"));
         BOOST_REQUIRE_EQUAL(count_objects(branch.object_directory()), 1);
@@ -206,6 +238,8 @@ BOOST_AUTO_TEST_CASE(tree_branch_store_and_load_in_subdir) {
     LocalBranch branch = create_branch(testdir, "user_id");
 
     branch.mkdir(path_range("foo"));
+    BOOST_REQUIRE_EQUAL(refcount(branch, "foo"), 1);
+
     branch.store("foo/bar", d1);
 
     BOOST_REQUIRE_EQUAL(count_objects(branch.object_directory()), 3 /* root + foo + bar */);
@@ -214,6 +248,82 @@ BOOST_AUTO_TEST_CASE(tree_branch_store_and_load_in_subdir) {
 
     BOOST_REQUIRE(od2);
     BOOST_REQUIRE_EQUAL(d1, *od2);
+}
+
+BOOST_AUTO_TEST_CASE(create_Y_shape) {
+    fs::path testdir = choose_test_dir();
+    Random random;
+
+    LocalBranch branch1 = create_branch(testdir, "user1_id");
+    LocalBranch branch2 = create_branch(testdir, "user2_id");
+
+    BOOST_REQUIRE_EQUAL(branch1.object_directory(), branch2.object_directory());
+
+    auto objdir = branch1.object_directory();
+
+    BOOST_REQUIRE_EQUAL(branch1.root_object_id().hex(),
+                        branch2.root_object_id().hex());
+
+    BOOST_REQUIRE_EQUAL(count_objects(objdir), 1 /* root */);
+
+    //----------------------------------------------------------------
+    branch1.mkdir(path_range("A"));
+    branch2.mkdir(path_range("B"));
+    branch1.mkdir(path_range("A/C"));
+
+    //          o   o
+    //         A|  /
+    //         1o /B
+    //         C|/
+    //         2o
+
+    BOOST_REQUIRE_EQUAL(branch1.id_of(path_range("A/C")).hex(),
+                        branch2.id_of(path_range("B")).hex());
+
+    BOOST_REQUIRE_EQUAL(refcount(branch1, "A"), 1);
+    BOOST_REQUIRE_EQUAL(refcount(branch2, "B"), 2);
+    BOOST_REQUIRE_EQUAL(refcount(branch1, "A/C"), 2);
+
+    //----------------------------------------------------------------
+    branch2.mkdir(path_range("B/C"));
+
+    //          o   o
+    //          A\ /B
+    //           2o
+    //            |C
+    //           1o
+
+    BOOST_REQUIRE_EQUAL(branch1.id_of(path_range("A")).hex(),
+                        branch2.id_of(path_range("B")).hex());
+
+    BOOST_REQUIRE_EQUAL(refcount(branch1, "A"), 2);
+    BOOST_REQUIRE_EQUAL(refcount(branch2, "B"), 2);
+    BOOST_REQUIRE_EQUAL(refcount(branch1, "A/C"), 1);
+    BOOST_REQUIRE_EQUAL(refcount(branch2, "B/C"), 1);
+
+    ////----------------------------------------------------------------
+    auto data  = random.vector(256);
+
+    branch1.store(path_range("A/C/D"), data);
+    branch2.store(path_range("B/C/D"), data);
+
+    //          o   o
+    //          A\ /B
+    //            o
+    //            |C
+    //            o
+    //            |D
+    //            o
+
+    BOOST_REQUIRE_EQUAL(branch1.id_of(path_range("A")).hex(),
+                        branch2.id_of(path_range("B")).hex());
+
+    BOOST_REQUIRE_EQUAL(refcount(branch1, "A"), 2);
+    BOOST_REQUIRE_EQUAL(refcount(branch2, "B"), 2);
+    BOOST_REQUIRE_EQUAL(refcount(branch1, "A/C"), 1);
+    BOOST_REQUIRE_EQUAL(refcount(branch1, "A/C/D"), 1);
+
+    //----------------------------------------------------------------
 }
 
 BOOST_AUTO_TEST_CASE(tree_remove) {
@@ -316,5 +426,76 @@ BOOST_AUTO_TEST_CASE(tree_remove) {
 
         // Now "data" should have been removed all together
         BOOST_REQUIRE_EQUAL(count_objects(objdir), 2 /* roots */ + 2 /* data */);
+    }
+
+    {
+        LocalBranch branch1 = create_branch(testdir/"5", "user1_id");
+        auto objdir = branch1.object_directory();
+
+        BOOST_REQUIRE_EQUAL(count_objects(objdir), 1 /* root */);
+
+        auto data  = random.vector(256);
+
+        branch1.mkdir(path_range("A"));
+        branch1.mkdir(path_range("A/B"));
+        branch1.store(path_range("A/B/C"), data);
+
+        BOOST_REQUIRE_EQUAL(count_objects(objdir), 4);
+
+        branch1.remove(path_range("A/B"));
+
+        BOOST_REQUIRE_EQUAL(count_objects(objdir), 2);
+    }
+
+    {
+        LocalBranch branch1 = create_branch(testdir/"6", "user1_id");
+        LocalBranch branch2 = create_branch(testdir/"6", "user2_id");
+
+        BOOST_REQUIRE_EQUAL(branch1.object_directory(), branch2.object_directory());
+        auto objdir = branch1.object_directory();
+
+        BOOST_REQUIRE_EQUAL(count_objects(objdir), 1 /* root */);
+
+        auto data  = random.vector(256);
+
+        //                   o   o
+        //                   A\ /B
+        //                     o
+        //                     |C
+        //                     o
+        //                     |D
+        //                     *
+
+        // BR1 = BR2
+        BOOST_REQUIRE_EQUAL(count_objects(objdir), 1);
+
+        branch1.mkdir(path_range("A"));
+        // (BR1/A = BR2) + BR1
+        BOOST_REQUIRE_EQUAL(count_objects(objdir), 2);
+
+        branch2.mkdir(path_range("B"));
+        // BR1 + BR2 + (BR1/A = BR2/B)
+        BOOST_REQUIRE_EQUAL(count_objects(objdir), 3);
+
+        branch1.mkdir(path_range("A/C"));
+        branch2.mkdir(path_range("B/C"));
+        branch1.store(path_range("A/C/D"), data);
+        branch2.store(path_range("B/C/D"), data);
+
+        auto refcount = [&] (auto& branch, const fs::path path) {
+            auto id = branch.id_of(path_range(path));
+            return object::refcount::read(objdir, id);
+        };
+
+        BOOST_REQUIRE_EQUAL(refcount(branch1, "A"), 2);
+        BOOST_REQUIRE_EQUAL(refcount(branch2, "B"), 2);
+        BOOST_REQUIRE_EQUAL(refcount(branch1, "A/C"), 1);
+        BOOST_REQUIRE_EQUAL(refcount(branch1, "A/C/D"), 1);
+
+        BOOST_REQUIRE_EQUAL(count_objects(objdir), 5);
+
+        branch1.remove(path_range("A/C/D"));
+
+        BOOST_REQUIRE_EQUAL(count_objects(objdir), 7);
     }
 }
