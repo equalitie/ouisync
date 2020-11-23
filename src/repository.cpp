@@ -40,7 +40,8 @@ Opt<Repository::HexBranchId> Repository::str_to_branch_id(const std::string& nam
 
 Repository::Repository(executor_type ex, Options options) :
     _ex(std::move(ex)),
-    _options(std::move(options))
+    _options(std::move(options)),
+    _on_change(_ex)
 {
     _user_id = UserId::load_or_create(_options.user_id_file_path);
 
@@ -82,7 +83,7 @@ static Commit _get_commit(const Branch& b) {
 
 }
 
-Snapshot Repository::create_snapshot() const
+Snapshot Repository::create_snapshot()
 {
     Snapshot::Commits commits;
 
@@ -91,7 +92,9 @@ Snapshot Repository::create_snapshot() const
         commits.insert(_get_commit(branch));
     }
 
-    return Snapshot::create(_options.snapshotdir, _options.objectdir, std::move(commits));
+    auto snapshot = Snapshot::create(_options.snapshotdir, _options.objectdir, std::move(commits));
+    _last_snapshot_id = snapshot.id();
+    return snapshot;
 }
 
 net::awaitable<Repository::Attrib> Repository::get_attr(PathRange path)
@@ -158,7 +161,7 @@ net::awaitable<size_t> Repository::write(PathRange path, const char* buf, size_t
         throw_error(sys::errc::is_a_directory);
     }
 
-    co_return apply(branch,
+    auto retval = apply(branch,
             [&] (LocalBranch& b) -> size_t {
                 return b.write(path, buf, size, offset);
             },
@@ -166,6 +169,9 @@ net::awaitable<size_t> Repository::write(PathRange path, const char* buf, size_t
                 throw_error(sys::errc::operation_not_permitted);
                 return 0; // Satisfy warning
             });
+
+    _on_change.notify();
+    co_return retval;
 }
 
 net::awaitable<void> Repository::mknod(PathRange path, mode_t mode, dev_t dev)
@@ -191,6 +197,7 @@ net::awaitable<void> Repository::mknod(PathRange path, mode_t mode, dev_t dev)
             throw_error(sys::errc::operation_not_permitted);
         });
 
+    _on_change.notify();
     co_return;
 }
 
@@ -213,6 +220,7 @@ net::awaitable<void> Repository::mkdir(PathRange path, mode_t mode)
             throw_error(sys::errc::operation_not_permitted);
         });
 
+    _on_change.notify();
     co_return;
 }
 
@@ -238,6 +246,7 @@ net::awaitable<void> Repository::remove_file(PathRange path)
             throw_error(sys::errc::operation_not_permitted);
         });
 
+    _on_change.notify();
     co_return;
 }
 
@@ -264,6 +273,7 @@ net::awaitable<void> Repository::remove_directory(PathRange path)
             throw_error(sys::errc::operation_not_permitted);
         });
 
+    _on_change.notify();
     co_return;
 }
 
@@ -282,7 +292,7 @@ net::awaitable<size_t> Repository::truncate(PathRange path, size_t size)
         throw_error(sys::errc::is_a_directory);
     }
 
-    co_return apply(branch,
+    auto retval = apply(branch,
         [&] (LocalBranch& b) -> size_t {
             return b.truncate(path, size);
         },
@@ -290,6 +300,9 @@ net::awaitable<size_t> Repository::truncate(PathRange path, size_t size)
             throw_error(sys::errc::operation_not_permitted);
             return 0; // Satisfy warning
         });
+
+    _on_change.notify();
+    co_return retval;
 }
 
 /* static */

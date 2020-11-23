@@ -3,6 +3,7 @@
 #include "object/blob.h"
 
 #include <iostream>
+#include <boost/optional/optional_io.hpp>
 
 using namespace ouisync;
 using std::move;
@@ -32,39 +33,49 @@ Client::download_branch(RemoteBranch& branch, Id object_id, Cancel cancel)
     co_await _broker.send(RqObject{object_id}, cancel);
     auto rs = co_await receive<RsObject>(cancel);
 
-    apply(rs.object,
-        [&] (const Tree& tree) -> AwaitVoid {
-            auto id = co_await branch.insert_tree(tree);
-            assert(id == object_id);
+    auto handle_tree = [&] (const Tree& tree) -> AwaitVoid {
+        assert(object_id == object::calculate_id(tree));
+        Id id = co_await branch.insert_tree(tree);
+        assert(id == object_id);
 
-            for (auto& [child_name, child_id] : tree) {
-                (void) child_name;
-                download_branch(branch, child_id, cancel);
-            }
-        },
-        [&] (const Blob& blob) -> AwaitVoid {
-            co_await branch.insert_blob(blob);
-        });
+        for (auto& [child_name, child_id] : tree) {
+            (void) child_name;
+            co_await download_branch(branch, child_id, cancel);
+        }
+    };
+
+    auto handle_blob = [&] (const Blob& blob) -> AwaitVoid {
+        assert(object_id == object::calculate_id(blob));
+        co_await branch.insert_blob(blob);
+    };
+
+    co_await apply(rs.object,
+        [&] (const Tree& m) { return handle_tree(m); },
+        [&] (const Blob& m) { return handle_blob(m); });
 
     co_await branch.mark_complete(object_id);
 }
 
 net::awaitable<void> Client::run(Cancel cancel)
 {
-    co_await _broker.send(RqHeads{}, cancel);
-    auto rs = co_await _broker.receive(cancel);
-    std::cerr << "Client received " << rs << "\n";
+    Opt<Snapshot::Id> last_snapshot_id;
 
-    auto* heads = boost::get<RsHeads>(&rs);
-    assert(heads);
+    while (true) {
+        co_await _broker.send(RqSnapshot{last_snapshot_id}, cancel);
+        auto rs = co_await _broker.receive(cancel);
 
-    for (auto& commit : *heads) {
-        auto branch = _repo.get_or_create_remote_branch(commit);
+        auto* heads = boost::get<RsSnapshot>(&rs);
+        assert(heads);
+        last_snapshot_id = heads->snapshot_id;
 
-        if (!branch) {
-            continue;
+        for (auto& commit : *heads) {
+            auto branch = _repo.get_or_create_remote_branch(commit);
+
+            if (!branch) {
+                continue;
+            }
+
+            co_await download_branch(*branch, branch->root_object_id(), cancel);
         }
-
-        co_await download_branch(*branch, branch->root_object_id(), cancel);
     }
 }

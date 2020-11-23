@@ -9,14 +9,14 @@
 #include "path_range.h"
 #include "branch_io.h"
 #include "commit.h"
+#include "wait.h"
+#include "snapshot.h"
 
 #include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/awaitable.hpp>
 #include <string>
 
 namespace ouisync {
-
-class Snapshot;
 
 class Repository {
 public:
@@ -45,12 +45,18 @@ public:
 
     executor_type get_executor() { return _ex; }
 
-    Snapshot create_snapshot() const;
+    Snapshot create_snapshot();
 
     // Note: may return nullptr if the version vector is below a version vector
     // of an already existing branch.
     RemoteBranch*
     get_or_create_remote_branch(const Commit&);
+
+    Opt<Snapshot::Id> last_snapshot_id() const { return _last_snapshot_id; }
+
+    Wait& on_change() { return _on_change; }
+
+    const fs::path& object_directory() const { return _options.objectdir; }
 
 private:
     Branch& find_branch(PathRange);
@@ -72,6 +78,8 @@ private:
     const Options _options;
     UserId _user_id;
     std::map<HexBranchId, Branch> _branches;
+    Opt<Snapshot::Id> _last_snapshot_id;
+    Wait _on_change;
 };
 
 } // namespace

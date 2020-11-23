@@ -2,6 +2,7 @@
 #include "snapshot.h"
 
 #include <iostream>
+#include <boost/optional/optional_io.hpp>
 
 using namespace ouisync;
 using std::move;
@@ -21,14 +22,25 @@ net::awaitable<void> Server::run(Cancel cancel)
     while (true) {
         auto m = co_await _broker.receive(cancel);
 
-        std::cerr << "Server received " << m << "\n";
+        std::cerr << "Server received " << m << "   Snapshot:" << snapshot << "\n";
 
-        auto handle_rq_heads = [&] () -> AwaitVoid {
-            if (!snapshot) {
-                snapshot = _repo.create_snapshot();
+        auto handle_rq_snapshot = [&] (const RqSnapshot& rq) -> AwaitVoid {
+            snapshot = _repo.create_snapshot();
+
+            std::cerr << "Server created snapshot 1: " << *snapshot << "\n";
+            for (auto commit : snapshot->commits()) {
+                BranchIo::show(std::cerr, _repo.object_directory(), commit.root_object_id);
             }
 
-            RsHeads rsp;
+            if (rq.last_snapshot_id &&
+                    snapshot->id() == *rq.last_snapshot_id) {
+                std::cerr << "Server waiting for a change\n";
+                co_await _repo.on_change().wait(cancel);
+                std::cerr << "done\n";
+            }
+
+            RsSnapshot rsp;
+            rsp.snapshot_id = snapshot->id();
             rsp.reserve(snapshot->commits().size());
 
             for (auto& c : snapshot->commits()) {
@@ -41,6 +53,7 @@ net::awaitable<void> Server::run(Cancel cancel)
         auto handle_rq_object = [&] (const RqObject& rq) -> AwaitVoid {
             if (!snapshot) {
                 snapshot = _repo.create_snapshot();
+                std::cerr << "Server created snapshot 2: " << *snapshot << "\n";
             }
 
             RsObject rs;
@@ -50,7 +63,7 @@ net::awaitable<void> Server::run(Cancel cancel)
         };
 
         co_await apply(m,
-            [&] (const RqHeads&) { return handle_rq_heads(); },
+            [&] (const RqSnapshot& rq) { return handle_rq_snapshot(rq); },
             [&] (const RqObject& rq) { return handle_rq_object(rq); });
     }
 }

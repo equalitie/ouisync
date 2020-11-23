@@ -8,6 +8,8 @@
 #include <boost/serialization/vector.hpp>
 #include <boost/serialization/set.hpp>
 
+#include <iostream>
+
 using namespace ouisync;
 
 using std::move;
@@ -81,11 +83,16 @@ net::awaitable<Id> RemoteBranch::insert_tree(const Tree& tree)
 
 net::awaitable<void> RemoteBranch::insert_object(const Id& objid, set<Id> children)
 {
-    bool inserted =
+    //auto [i, inserted] =
         _objects.insert(make_pair(objid,
-                ObjectEntry{ObjectState::Incomplete, std::move(children)})).second;
+                ObjectEntry{ObjectState::Incomplete, std::move(children)}));
 
-    assert(inserted);
+    //if (!inserted) {
+    //    std::cerr << "RemoteBranch warning: inserted already existing object "
+    //        << objid.short_hex() << " (children count: " << children.size() << " vs " << i->second.children.size() << ")\n";
+    //    assert(children == i->second.children);
+    //}
+
     co_return store_self();
 }
 
@@ -110,7 +117,7 @@ void RemoteBranch::store_self() const {
     fs::fstream file(_filepath, file.binary | file.trunc | file.out);
 
     if (!file.is_open())
-        throw std::runtime_error("Failed to open branch file");
+        throw std::runtime_error(str(boost::format("Failed to open branch file %1%") % _filepath));
 
     OArchive oa(file);
 
