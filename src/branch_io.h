@@ -32,6 +32,8 @@ public:
 
         void show(std::ostream&) const;
 
+        bool object_exists(const Id&) const;
+
     private:
         const fs::path& _objdir;
         const Id& _root_id;

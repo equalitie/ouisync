@@ -171,3 +171,10 @@ void BranchIo::Immutable::show(std::ostream& os) const
 }
 
 //--------------------------------------------------------------------
+
+bool BranchIo::Immutable::object_exists(const Id& id) const
+{
+    return object::io::exists(_objdir, id);
+}
+
+//--------------------------------------------------------------------
