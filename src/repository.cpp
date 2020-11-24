@@ -1,12 +1,17 @@
 #include "repository.h"
 #include "snapshot.h"
 #include "branch_io.h"
+#include "branch_type.h"
 #include "random.h"
 #include "hex.h"
 
 #include <iostream>
 #include <boost/filesystem.hpp>
 #include <boost/range/iterator_range.hpp>
+
+#include <boost/archive/binary_oarchive.hpp>
+#include <boost/archive/binary_iarchive.hpp>
+#include <boost/serialization/vector.hpp>
 
 using namespace ouisync;
 using std::vector;
@@ -15,6 +20,25 @@ using std::string;
 using boost::get;
 using std::make_pair;
 using Branch = Repository::Branch;
+
+static
+Branch _load_branch(const fs::path& path, const fs::path& objdir)
+{
+    fs::fstream file(path, file.binary | file.in);
+    boost::archive::binary_iarchive archive(file);
+
+    BranchType type;
+
+    archive >> type;
+
+    assert(type == BranchType::Local || type == BranchType::Remote);
+
+    if (type == BranchType::Local) {
+        return LocalBranch(path, objdir, archive);
+    } else {
+        return RemoteBranch(path, objdir, archive);
+    }
+}
 
 /* static */
 Repository::HexBranchId Repository::generate_branch_id()
@@ -48,7 +72,7 @@ Repository::Repository(executor_type ex, Options options) :
     bool local_exists = false;
 
     for (auto f : fs::directory_iterator(_options.branchdir)) {
-        auto branch = BranchIo::load(f, _options.objectdir);
+        auto branch = _load_branch(f, _options.objectdir);
         auto branch_id = str_to_branch_id(f.path().filename().native());
         if (!branch_id) {
             throw std::runtime_error("Repository: Invalid branch name format");

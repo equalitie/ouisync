@@ -1,8 +1,9 @@
 #pragma once
 
 #include "object/tree.h"
-#include "local_branch.h"
-#include "remote_branch.h"
+#include "object/blob.h"
+#include "path_range.h"
+#include "file_system_attrib.h"
 
 #include <boost/filesystem/path.hpp>
 
@@ -10,15 +11,11 @@ namespace ouisync {
 
 class BranchIo {
 public:
-    enum class BranchType { Local, Remote };
     using Id = object::Id;
-    using Branch = variant<LocalBranch, RemoteBranch>;
     using Tree = object::Tree;
     using Blob = object::Blob;
 
 public:
-    static
-    Branch load(const fs::path& path, const fs::path& objdir);
 
     static
     Tree readdir(const fs::path& objdir, Id root_id, PathRange path);

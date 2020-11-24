@@ -1,4 +1,5 @@
 #include "local_branch.h"
+#include "branch_type.h"
 #include "variant.h"
 #include "error.h"
 #include "path_range.h"
@@ -320,7 +321,7 @@ object::Id LocalBranch::id_of(PathRange path) const
 
 void LocalBranch::store_tag(OArchive& ar) const
 {
-    ar << BranchIo::BranchType::Local;
+    ar << BranchType::Local;
 }
 
 void LocalBranch::store_rest(OArchive& ar) const

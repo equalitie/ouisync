@@ -1,5 +1,6 @@
 #include "remote_branch.h"
 #include "branch_io.h"
+#include "branch_type.h"
 #include "object/io.h"
 #include "object/refcount.h"
 
@@ -127,7 +128,7 @@ void RemoteBranch::store_self() const {
 
 void RemoteBranch::store_tag(OArchive& ar) const
 {
-    ar << BranchIo::BranchType::Remote;
+    ar << BranchType::Remote;
 }
 
 void RemoteBranch::store_rest(OArchive& ar) const

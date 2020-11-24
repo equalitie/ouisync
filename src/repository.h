@@ -6,7 +6,7 @@
 #include "file_system_attrib.h"
 #include "user_id.h"
 #include "local_branch.h"
-#include "path_range.h"
+#include "remote_branch.h"
 #include "branch_io.h"
 #include "commit.h"
 #include "wait.h"
@@ -21,7 +21,7 @@ namespace ouisync {
 class Repository {
 public:
     using executor_type = net::any_io_executor;
-    using Branch = BranchIo::Branch;
+    using Branch = variant<LocalBranch, RemoteBranch>;
 
 private:
     using HexBranchId = std::array<char, 16*2>; // 16*8 = 128 bits (*2 for hex)
