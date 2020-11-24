@@ -80,24 +80,24 @@ catch (const std::exception& e) {
     throw;
 }
 
-std::ostream& ouisync::operator<<(std::ostream& os, const RqSnapshot& m) {
-    os << "RqSnapshot ";
-    if (m.last_snapshot_id) {
-        os << m.last_snapshot_id->short_hex();
+std::ostream& ouisync::operator<<(std::ostream& os, const RqSnapshotGroup& m) {
+    os << "RqSnapshotGroup{";
+    if (m.last_snapshot_group_id) {
+        os << m.last_snapshot_group_id->short_hex();
     } else {
         os << "nil";
     }
-    return os;
+    return os << "}";
 }
 
-std::ostream& ouisync::operator<<(std::ostream& os, const RsSnapshot& m) {
-    os << "RsSnapshot " << m.snapshot_id.short_hex() << " [";
+std::ostream& ouisync::operator<<(std::ostream& os, const RsSnapshotGroup& m) {
+    os << "RsSnapshotGroup{" << m.snapshot_group_id.short_hex() << " [";
     bool is_first = true;
     for (auto& c : m) {
         if (!is_first) { os << ", "; is_first = true; }
         os << c.root_object_id.short_hex();
     }
-    return os << "]";
+    return os << "]}";
 }
 
 std::ostream& ouisync::operator<<(std::ostream& os, const RqObject& rq) {

@@ -11,9 +11,10 @@ namespace ouisync {
 
 namespace object { class Tree; struct Blob; }
 
+//////////////////////////////////////////////////////////////////////
+
 class Snapshot {
 public:
-    using Commits = std::set<Commit>;
     using Id = object::Id;
     using Tree = object::Tree;
     using Blob = object::Blob;
@@ -26,21 +27,21 @@ public:
     Snapshot(Snapshot&&);
     Snapshot& operator=(Snapshot&&);
 
-    static Snapshot create(const fs::path& snapshotdir, fs::path objdir, Commits);
+    static Snapshot create(const fs::path& snapshotdir, fs::path objdir, Commit);
 
-    const Commits& commits() { return _commits; }
+    const Commit& commit() const { return _commit; }
 
-    Id id() { return _id; }
+    const Id& id() const { return _id; }
 
     Object load_object(const Id&);
 
     ~Snapshot();
 
 private:
-    Snapshot(const Id&, fs::path path, fs::path objdir, Commits);
+    Snapshot(const Id&, fs::path path, fs::path objdir, Commit);
 
-    static void store_commits(const fs::path&, const Commits&);
-    static Commits load_commits(const fs::path&);
+    static void store_commit(const fs::path&, const Commit&);
+    static Commit load_commit(const fs::path&);
 
     void destroy() noexcept;
 
@@ -51,7 +52,43 @@ private:
     Id _id;
     fs::path _path;
     fs::path _objdir;
-    Commits _commits;
+    Commit _commit;
 };
+
+//////////////////////////////////////////////////////////////////////
+
+class SnapshotGroup : private std::vector<Snapshot> {
+private:
+    using Parent = std::vector<Snapshot>;
+
+public:
+    using Id = object::Id;
+
+public:
+    SnapshotGroup(std::vector<Snapshot> snapshots) :
+        Parent(std::move(snapshots)),
+        _id(calculate_id())
+    {}
+
+    SnapshotGroup(SnapshotGroup&&) = default;
+    SnapshotGroup& operator=(SnapshotGroup&) = default;
+
+    const Id& id() const { return _id; }
+
+    using Parent::size;
+
+    auto begin() const { return Parent::begin(); }
+    auto end()   const { return Parent::end();   }
+
+    friend std::ostream& operator<<(std::ostream&, const SnapshotGroup&);
+
+private:
+    Id calculate_id() const;
+
+private:
+    Id _id;
+};
+
+//////////////////////////////////////////////////////////////////////
 
 } // namespace

@@ -55,7 +55,7 @@ public:
     [[nodiscard]] net::awaitable<void> insert_blob(const Blob&);
     [[nodiscard]] net::awaitable<Id>   insert_tree(const Tree&);
 
-    void erase(const fs::path& filepath);
+    void destroy();
 
     const VersionVector& version_vector() const { return _version_vector; }
     const object::Id& root_object_id() const { return _root; }

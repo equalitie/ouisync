@@ -19,20 +19,20 @@
 
 using namespace ouisync;
 
-static object::Id calculate_id(const std::set<Commit>& commits)
+static object::Id calculate_id(const Commit& commit)
 {
     Sha256 hash;
-    hash.update(uint32_t(commits.size()));
-    for (auto& commit : commits) hash.update(commit.root_object_id);
+    hash.update("Snapshot");
+    hash.update(commit.root_object_id);
     return hash.close();
 }
 
-Snapshot::Snapshot(const Id& id, fs::path path, fs::path objdir, Commits commits) :
+Snapshot::Snapshot(const Id& id, fs::path path, fs::path objdir, Commit commit) :
     _is_valid(true),
     _id(id),
     _path(std::move(path)),
     _objdir(std::move(objdir)),
-    _commits(std::move(commits))
+    _commit(std::move(commit))
 {}
 
 Snapshot::Snapshot(Snapshot&& other) :
@@ -40,7 +40,7 @@ Snapshot::Snapshot(Snapshot&& other) :
     _id(other._id),
     _path(std::move(other._path)),
     _objdir(std::move(other._objdir)),
-    _commits(std::move(other._commits))
+    _commit(std::move(other._commit))
 {
     other._is_valid = false;
 }
@@ -53,7 +53,7 @@ Snapshot& Snapshot::operator=(Snapshot&& other)
     _id = other._id;
     _path = std::move(other._path);
     _objdir = std::move(other._objdir);
-    _commits = std::move(other._commits);
+    _commit = std::move(other._commit);
 
     return *this;
 }
@@ -65,7 +65,7 @@ Snapshot::Object Snapshot::load_object(const Id& id)
 }
 
 /* static */
-void Snapshot::store_commits(const fs::path& path, const Commits& commits)
+void Snapshot::store_commit(const fs::path& path, const Commit& commit)
 {
     fs::ofstream ofs(path, ofs.out | ofs.binary | ofs.trunc);
     assert(ofs.is_open());
@@ -74,11 +74,11 @@ void Snapshot::store_commits(const fs::path& path, const Commits& commits)
         throw std::runtime_error("Failed to store object");
 
     boost::archive::binary_oarchive oa(ofs);
-    oa << commits;
+    oa << commit;
 }
 
 /* static */
-Snapshot::Commits Snapshot::load_commits(const fs::path& path)
+Commit Snapshot::load_commit(const fs::path& path)
 {
     fs::ifstream ifs(path, ifs.binary);
 
@@ -86,29 +86,27 @@ Snapshot::Commits Snapshot::load_commits(const fs::path& path)
         throw std::runtime_error("Failed to open object");
 
     boost::archive::binary_iarchive ia(ifs);
-    Commits commits;
-    ia >> commits;
-    return commits;
+    Commit commit;
+    ia >> commit;
+    return commit;
 }
 
 /* static */
-Snapshot Snapshot::create(const fs::path& snapshotdir, fs::path objdir, Commits commits)
+Snapshot Snapshot::create(const fs::path& snapshotdir, fs::path objdir, Commit commit)
 {
-    auto id = calculate_id(commits);
+    auto id = calculate_id(commit);
 
     auto id_hex = to_hex<char>(id);
     auto path = snapshotdir / fs::path(id_hex.begin(), id_hex.end());
 
     // XXX: Handle failures
 
-    for (auto& commit : commits) {
-        object::refcount::increment(objdir, commit.root_object_id);
-    }
+    object::refcount::increment(objdir, commit.root_object_id);
 
-    store_commits(path, commits);
+    store_commit(path, commit);
     object::refcount::increment(path);
 
-    return Snapshot(id, std::move(path), std::move(objdir), std::move(commits));
+    return Snapshot(id, std::move(path), std::move(objdir), std::move(commit));
 }
 
 void Snapshot::destroy() noexcept
@@ -120,10 +118,7 @@ void Snapshot::destroy() noexcept
     // XXX: Handle failures
 
     try {
-        for (auto& commit : _commits) {
-            object::refcount::decrement(_objdir, commit.root_object_id);
-        }
-
+        object::refcount::decrement(_objdir, _commit.root_object_id);
         object::refcount::decrement(_path);
     }
     catch (const std::exception& e) {
@@ -137,13 +132,30 @@ Snapshot::~Snapshot()
     destroy();
 }
 
+SnapshotGroup::Id SnapshotGroup::calculate_id() const
+{
+    Sha256 hash;
+    hash.update("SnapshotGroup");
+    hash.update(uint32_t(size()));
+    for (auto& s : *this) {
+        hash.update(s.id());
+    }
+    return hash.close();
+}
+
 std::ostream& ouisync::operator<<(std::ostream& os, const Snapshot& s)
 {
-    os << "id:" << s._id.short_hex() << " roots:[";
+    return os << "id:" << s._id << " root:" << s._commit.root_object_id;
+}
+
+std::ostream& ouisync::operator<<(std::ostream& os, const SnapshotGroup& g)
+{
+    os << "SnapshotGroup{id:" << g.id() << "[";
     bool is_first = true;
-    for (auto& c : s._commits) {
-        if (!is_first) os << ", ";
-        os << c.root_object_id.short_hex();
+    for (auto& s : g) {
+        if (!is_first) { os << ", "; }
+        is_first = false;
+        os << s;
     }
-    return os << "]";
+    return os << "]}";
 }

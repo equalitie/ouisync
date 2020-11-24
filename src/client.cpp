@@ -62,15 +62,15 @@ Client::download_branch(RemoteBranch& branch, Id object_id, Cancel cancel)
 
 net::awaitable<void> Client::run(Cancel cancel)
 {
-    Opt<Snapshot::Id> last_snapshot_id;
+    Opt<SnapshotGroup::Id> last_snapshot_group_id;
 
     while (true) {
-        co_await _broker.send(RqSnapshot{last_snapshot_id}, cancel);
+        co_await _broker.send(RqSnapshotGroup{last_snapshot_group_id}, cancel);
         auto rs = co_await _broker.receive(cancel);
 
-        auto* heads = boost::get<RsSnapshot>(&rs);
+        auto* heads = boost::get<RsSnapshotGroup>(&rs);
         assert(heads);
-        last_snapshot_id = heads->snapshot_id;
+        last_snapshot_group_id = heads->snapshot_group_id;
 
         for (auto& commit : *heads) {
             auto branch = _repo.get_or_create_remote_branch(commit);

@@ -16,20 +16,20 @@ namespace ouisync {
 
 enum class MessageType { Request, Response };
 
-struct RqSnapshot {
+struct RqSnapshotGroup {
     static constexpr MessageType type = MessageType::Request;
 
     // Response shall be delayed until server's last snapshot
-    // Id is different from last_snapshot_id.
-    Opt<Snapshot::Id> last_snapshot_id;
+    // Id is different from last_snapshot_group_id.
+    Opt<Snapshot::Id> last_snapshot_group_id;
 
     template<class Archive>
     void serialize(Archive& ar, const unsigned int) {
-        ar & last_snapshot_id;
+        ar & last_snapshot_group_id;
     }
 };
 
-struct RsSnapshot : std::vector<Commit> {
+struct RsSnapshotGroup : std::vector<Commit> {
     static constexpr MessageType type = MessageType::Response;
 
     using Parent = std::vector<Commit>;
@@ -37,11 +37,11 @@ struct RsSnapshot : std::vector<Commit> {
     using Parent::begin;
     using Parent::end;
 
-    Snapshot::Id snapshot_id;
+    Snapshot::Id snapshot_group_id;
 
     template<class Archive>
     void serialize(Archive& ar, const unsigned int) {
-        ar & snapshot_id & static_cast<Parent&>(*this);
+        ar & snapshot_group_id & static_cast<Parent&>(*this);
     }
 };
 
@@ -70,21 +70,21 @@ struct RsObject {
 namespace MessageDetail {
     using MessageVariant
         = variant<
-            RqSnapshot,
-            RsSnapshot,
+            RqSnapshotGroup,
+            RsSnapshotGroup,
             RqObject,
             RsObject
         >;
 
     using RequestVariant
         = variant<
-            RqSnapshot,
+            RqSnapshotGroup,
             RqObject
         >;
 
     using ResponseVariant
         = variant<
-            RsSnapshot,
+            RsSnapshotGroup,
             RsObject
         >;
 } // MessageDetail namespace
@@ -126,8 +126,8 @@ struct Message : MessageDetail::MessageVariant
     }
 };
 
-std::ostream& operator<<(std::ostream&, const RqSnapshot&);
-std::ostream& operator<<(std::ostream&, const RsSnapshot&);
+std::ostream& operator<<(std::ostream&, const RqSnapshotGroup&);
+std::ostream& operator<<(std::ostream&, const RsSnapshotGroup&);
 std::ostream& operator<<(std::ostream&, const RqObject&);
 std::ostream& operator<<(std::ostream&, const RsObject&);
 std::ostream& operator<<(std::ostream&, const Request&);

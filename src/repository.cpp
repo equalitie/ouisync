@@ -110,18 +110,19 @@ static BranchIo::Immutable _immutable_io(const Branch& b) {
     return apply(b, [&] (auto& b) { return b.immutable_io(); });
 }
 
-Snapshot Repository::create_snapshot()
+SnapshotGroup Repository::create_snapshot_group()
 {
-    Snapshot::Commits commits;
+    std::vector<Snapshot> snapshots;
 
     for (auto& [branch_id, branch] : _branches) {
         (void) branch_id;
-        commits.insert(_get_commit(branch));
+        snapshots.push_back(Snapshot::create(
+                _options.snapshotdir, _options.objectdir, _get_commit(branch)));
     }
 
-    auto snapshot = Snapshot::create(_options.snapshotdir, _options.objectdir, std::move(commits));
-    _last_snapshot_id = snapshot.id();
-    return snapshot;
+    SnapshotGroup group(std::move(snapshots));
+    _last_snapshot_id = group.id();
+    return group;
 }
 
 net::awaitable<Repository::Attrib> Repository::get_attr(PathRange path)

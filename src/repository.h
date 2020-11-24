@@ -45,7 +45,7 @@ public:
 
     executor_type get_executor() { return _ex; }
 
-    Snapshot create_snapshot();
+    SnapshotGroup create_snapshot_group();
 
     // Note: may return nullptr if the version vector is below a version vector
     // of an already existing branch.
