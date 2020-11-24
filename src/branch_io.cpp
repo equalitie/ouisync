@@ -46,7 +46,7 @@ BranchIo::Immutable::Immutable(const fs::path& objdir, const Id& root_id) :
 
 //--------------------------------------------------------------------
 
-Tree BranchIo::Immutable::readdir(PathRange path)
+Tree BranchIo::Immutable::readdir(PathRange path) const
 {
     Opt<Tree> retval;
     _query_dir(_objdir, _root_id, path, [&] (const Tree& tree) { retval = tree; });
@@ -56,7 +56,7 @@ Tree BranchIo::Immutable::readdir(PathRange path)
 
 //--------------------------------------------------------------------
 
-FileSystemAttrib BranchIo::Immutable::get_attr(PathRange path)
+FileSystemAttrib BranchIo::Immutable::get_attr(PathRange path) const
 {
     if (path.empty()) return FileSystemDirAttrib{};
 
@@ -80,7 +80,7 @@ FileSystemAttrib BranchIo::Immutable::get_attr(PathRange path)
 
 //--------------------------------------------------------------------
 
-size_t BranchIo::Immutable::read(PathRange path, const char* buf, size_t size, size_t offset)
+size_t BranchIo::Immutable::read(PathRange path, const char* buf, size_t size, size_t offset) const
 {
     if (path.empty()) throw_error(sys::errc::is_a_directory);
 
@@ -107,7 +107,7 @@ size_t BranchIo::Immutable::read(PathRange path, const char* buf, size_t size, s
 
 //--------------------------------------------------------------------
 
-Opt<Blob> BranchIo::Immutable::maybe_load(PathRange path)
+Opt<Blob> BranchIo::Immutable::maybe_load(PathRange path) const
 {
     if (path.empty()) throw_error(sys::errc::is_a_directory);
 
@@ -125,7 +125,7 @@ Opt<Blob> BranchIo::Immutable::maybe_load(PathRange path)
 
 //--------------------------------------------------------------------
 
-Id BranchIo::Immutable::id_of(PathRange path)
+Id BranchIo::Immutable::id_of(PathRange path) const
 {
     if (path.empty()) return _root_id;
 
@@ -165,7 +165,7 @@ void _show(std::ostream& os, fs::path objdir, Id id, std::string pad = "") {
             });
 }
 
-void BranchIo::Immutable::show(std::ostream& os)
+void BranchIo::Immutable::show(std::ostream& os) const
 {
     return _show(os, _objdir, _root_id, "");
 }

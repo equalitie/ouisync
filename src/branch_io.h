@@ -20,12 +20,17 @@ public:
     public:
         Immutable(const fs::path& objdir, const Id& root_id);
 
-        Tree readdir(PathRange path);
-        FileSystemAttrib get_attr(PathRange path);
-        size_t read(PathRange path, const char* buf, size_t size, size_t offset);
-        Opt<Blob> maybe_load(PathRange);
-        Id id_of(PathRange);
-        void show(std::ostream&);
+        Tree readdir(PathRange path) const;
+
+        FileSystemAttrib get_attr(PathRange path) const;
+
+        size_t read(PathRange path, const char* buf, size_t size, size_t offset) const;
+
+        Opt<Blob> maybe_load(PathRange) const;
+
+        Id id_of(PathRange) const;
+
+        void show(std::ostream&) const;
 
     private:
         const fs::path& _objdir;
