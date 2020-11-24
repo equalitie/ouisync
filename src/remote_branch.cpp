@@ -97,21 +97,6 @@ net::awaitable<void> RemoteBranch::insert_object(const Id& objid, set<Id> childr
     co_return store_self();
 }
 
-Tree RemoteBranch::readdir(PathRange path) const
-{
-    return BranchIo::readdir(_objdir, _root, path);
-}
-
-FileSystemAttrib RemoteBranch::get_attr(PathRange path) const
-{
-    return BranchIo::get_attr(_objdir, _root, path);
-}
-
-size_t RemoteBranch::read(PathRange path, const char* buf, size_t size, size_t offset) const
-{
-    return BranchIo::read(_objdir, _root, path, buf, size, offset);
-}
-
 //--------------------------------------------------------------------
 
 void RemoteBranch::store_self() const {

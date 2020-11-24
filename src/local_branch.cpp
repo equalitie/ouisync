@@ -172,13 +172,6 @@ size_t LocalBranch::write(PathRange path, const char* buf, size_t size, size_t o
 
 //--------------------------------------------------------------------
 
-size_t LocalBranch::read(PathRange path, const char* buf, size_t size, size_t offset)
-{
-    return BranchIo::read(_objdir, root_object_id(), path, buf, size, offset);
-}
-
-//--------------------------------------------------------------------
-
 size_t LocalBranch::truncate(PathRange path, size_t size)
 {
     if (path.empty()) throw_error(sys::errc::is_a_directory);
@@ -203,27 +196,6 @@ size_t LocalBranch::truncate(PathRange path, size_t size)
         });
 
     return size;
-}
-
-//--------------------------------------------------------------------
-
-Opt<Blob> LocalBranch::maybe_load(const fs::path& path) const
-{
-    return BranchIo::maybe_load(_objdir, root_object_id(), path);
-}
-
-//--------------------------------------------------------------------
-
-Tree LocalBranch::readdir(PathRange path) const
-{
-    return BranchIo::readdir(_objdir, root_object_id(), path);
-}
-
-//--------------------------------------------------------------------
-
-FileSystemAttrib LocalBranch::get_attr(PathRange path) const
-{
-    return BranchIo::get_attr(_objdir, root_object_id(), path);
 }
 
 //--------------------------------------------------------------------
@@ -314,7 +286,7 @@ LocalBranch::LocalBranch(const fs::path& file_path, const fs::path& objdir, IArc
 
 object::Id LocalBranch::id_of(PathRange path) const
 {
-    return BranchIo::id_of(_objdir, root_object_id(), path);
+    return immutable_io().id_of(path);
 }
 
 //--------------------------------------------------------------------
@@ -342,6 +314,6 @@ void LocalBranch::load_rest(IArchive& ar)
 
 std::ostream& ouisync::operator<<(std::ostream& os, const LocalBranch& branch)
 {
-    BranchIo::show(os, branch._objdir, branch._root_id);
+    branch.immutable_io().show(os);
     return os;
 }

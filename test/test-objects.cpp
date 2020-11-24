@@ -198,7 +198,7 @@ BOOST_AUTO_TEST_CASE(tree_branch_store_and_load) {
 
     BOOST_REQUIRE_EQUAL(count_objects(branch.object_directory()), 2 /* root + bar */);
 
-    auto od2 = branch.maybe_load("bar");
+    auto od2 = branch.immutable_io().maybe_load(path_range("bar"));
 
     BOOST_REQUIRE(od2);
     BOOST_REQUIRE_EQUAL(d1, *od2);
@@ -220,7 +220,7 @@ BOOST_AUTO_TEST_CASE(tree_branch_store_and_load_in_subdir) {
 
     BOOST_REQUIRE_EQUAL(count_objects(branch.object_directory()), 3 /* root + foo + bar */);
 
-    auto od2 = branch.maybe_load("foo/bar");
+    auto od2 = branch.immutable_io().maybe_load(path_range("foo/bar"));
 
     BOOST_REQUIRE(od2);
     BOOST_REQUIRE_EQUAL(d1, *od2);

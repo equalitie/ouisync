@@ -16,25 +16,21 @@ public:
     using Blob = object::Blob;
 
 public:
+    class Immutable {
+    public:
+        Immutable(const fs::path& objdir, const Id& root_id);
 
-    static
-    Tree readdir(const fs::path& objdir, Id root_id, PathRange path);
+        Tree readdir(PathRange path);
+        FileSystemAttrib get_attr(PathRange path);
+        size_t read(PathRange path, const char* buf, size_t size, size_t offset);
+        Opt<Blob> maybe_load(PathRange);
+        Id id_of(PathRange);
+        void show(std::ostream&);
 
-    static
-    FileSystemAttrib get_attr(const fs::path& objdir, Id root_id, PathRange path);
-
-    static
-    size_t read(const fs::path& objdir, Id root_id, PathRange path,
-        const char* buf, size_t size, size_t offset);
-
-    static
-    Opt<Blob> maybe_load(const fs::path& objdir, Id root_id, PathRange);
-
-    static
-    Id id_of(const fs::path& objdir, const Id& root_id, PathRange);
-
-    static
-    void show(std::ostream&, const fs::path& objdir, const Id& root_id);
+    private:
+        const fs::path& _objdir;
+        const Id& _root_id;
+    };
 };
 
 } // namespace

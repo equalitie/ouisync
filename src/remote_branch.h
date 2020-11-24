@@ -8,6 +8,7 @@
 #include "path_range.h"
 #include "file_system_attrib.h"
 #include "commit.h"
+#include "branch_io.h"
 
 #include <boost/asio/awaitable.hpp>
 #include <boost/filesystem/path.hpp>
@@ -59,10 +60,9 @@ public:
     const VersionVector& version_vector() const { return _version_vector; }
     const object::Id& root_object_id() const { return _root; }
 
-    object::Tree readdir(PathRange) const;
-    FileSystemAttrib get_attr(PathRange) const;
-    size_t read(PathRange, const char* buf, size_t size, size_t offset) const;
-
+    BranchIo::Immutable immutable_io() const {
+        return BranchIo::Immutable(_objdir, _root);
+    }
 
     void store_tag(OArchive&) const;
     void store_rest(OArchive&) const;

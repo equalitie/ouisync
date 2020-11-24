@@ -104,7 +104,10 @@ static Commit _get_commit(const Branch& b) {
         apply(b, [] (const auto& b) { return b.version_vector(); }),
         apply(b, [] (const auto& b) { return b.root_object_id(); })
     };
+}
 
+static BranchIo::Immutable _immutable_io(const Branch& b) {
+    return apply(b, [&] (auto& b) { return b.immutable_io(); });
 }
 
 Snapshot Repository::create_snapshot()
@@ -128,7 +131,7 @@ net::awaitable<Repository::Attrib> Repository::get_attr(PathRange path)
     auto& branch = find_branch(path);
 
     path.advance_begin(1);
-    auto ret = apply(branch, [&] (auto& b) { return b.get_attr(path); });
+    auto ret = _immutable_io(branch).get_attr(path);
     co_return ret;
 }
 
@@ -146,7 +149,7 @@ net::awaitable<vector<string>> Repository::readdir(PathRange path)
         auto& branch = find_branch(path);
 
         path.advance_begin(1);
-        auto dir = apply(branch, [&](auto& b) { return b.readdir(path); });
+        auto dir = _immutable_io(branch).readdir(path);
 
         for (auto& [name, hash] : dir) {
             nodes.push_back(name);
@@ -169,7 +172,7 @@ net::awaitable<size_t> Repository::read(PathRange path, char* buf, size_t size, 
         throw_error(sys::errc::is_a_directory);
     }
 
-    co_return apply(branch, [&] (auto& b) { return b.read(path, buf, size, offset); });
+    co_return _immutable_io(branch).read(path, buf, size, offset);
 }
 
 net::awaitable<size_t> Repository::write(PathRange path, const char* buf, size_t size, off_t offset)

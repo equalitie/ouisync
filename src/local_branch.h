@@ -45,20 +45,16 @@ public:
 
     void root_object_id(const object::Id& id);
 
+    BranchIo::Immutable immutable_io() const {
+        return BranchIo::Immutable(_objdir, _root_id);
+    }
+
     // XXX: Deprecated, use `write` instead. I believe these are currently
     // only being used in tests.
     void store(PathRange, const Blob&);
     void store(const fs::path&, const Blob&);
 
     size_t write(PathRange, const char* buf, size_t size, size_t offset);
-    size_t read(PathRange, const char* buf, size_t size, size_t offset);
-
-    // XXX: Deprecated, use `read` instead. I believe these are currently
-    // only being used in tests.
-    Opt<Blob> maybe_load(const fs::path&) const;
-
-    Tree readdir(PathRange) const;
-    FileSystemAttrib get_attr(PathRange) const;
 
     bool remove(const fs::path&);
     bool remove(PathRange);

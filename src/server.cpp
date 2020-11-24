@@ -29,7 +29,7 @@ net::awaitable<void> Server::run(Cancel cancel)
 
             std::cerr << "Server created snapshot 1: " << *snapshot << "\n";
             for (auto commit : snapshot->commits()) {
-                BranchIo::show(std::cerr, _repo.object_directory(), commit.root_object_id);
+                BranchIo::Immutable(_repo.object_directory(), commit.root_object_id).show(std::cerr);
             }
 
             if (rq.last_snapshot_id &&
