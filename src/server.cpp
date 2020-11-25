@@ -32,7 +32,7 @@ net::awaitable<void> Server::run(Cancel cancel)
         auto handle_rq_snapshot_group = [&] (const RqSnapshotGroup& rq) -> AwaitVoid {
             snapshot_group.emplace(_repo.create_snapshot_group());
 
-            std::cerr << "Server created snapshot 1: " << *snapshot_group << "\n";
+            std::cerr << "Server created snapshots: " << *snapshot_group << "\n";
 
             if (rq.last_snapshot_group_id &&
                     snapshot_group->id() == *rq.last_snapshot_group_id) {
@@ -55,11 +55,6 @@ net::awaitable<void> Server::run(Cancel cancel)
         auto handle_rq_object = [&] (const RqObject& rq) -> AwaitVoid {
             if (!snapshot_group) {
                 throw_error(sys::errc::protocol_error);
-            }
-
-            if (!snapshot_group) {
-                snapshot_group.emplace(_repo.create_snapshot_group());
-                std::cerr << "Server created snapshot 2: " << *snapshot_group << "\n";
             }
 
             RsObject rs;

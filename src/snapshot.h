@@ -33,8 +33,6 @@ public:
 
     const Id& id() const { return _id; }
 
-    Object load_object(const Id&);
-
     ~Snapshot();
 
 private:
@@ -48,6 +46,7 @@ private:
     friend std::ostream& operator<<(std::ostream&, const Snapshot&);
 
 private:
+    // Is invalid if this is default constructed or moved from.
     bool _is_valid = false;
     Id _id;
     fs::path _path;

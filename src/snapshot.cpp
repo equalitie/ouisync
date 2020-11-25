@@ -58,12 +58,6 @@ Snapshot& Snapshot::operator=(Snapshot&& other)
     return *this;
 }
 
-Snapshot::Object Snapshot::load_object(const Id& id)
-{
-    // XXX: Test the object belongs to this snapshot?
-    return object::io::load<Blob, Tree>(_objdir, id);
-}
-
 /* static */
 void Snapshot::store_commit(const fs::path& path, const Commit& commit)
 {
@@ -150,7 +144,7 @@ std::ostream& ouisync::operator<<(std::ostream& os, const Snapshot& s)
 
 std::ostream& ouisync::operator<<(std::ostream& os, const SnapshotGroup& g)
 {
-    os << "SnapshotGroup{id:" << g.id() << "[";
+    os << "SnapshotGroup{id:" << g.id() << " [";
     bool is_first = true;
     for (auto& s : g) {
         if (!is_first) { os << ", "; }

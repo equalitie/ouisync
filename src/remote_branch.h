@@ -64,11 +64,11 @@ public:
         return BranchIo::Immutable(_objdir, _root);
     }
 
+private:
     void store_tag(OArchive&) const;
     void store_rest(OArchive&) const;
     void load_rest(IArchive&);
 
-private:
     template<class T> void store(const fs::path&, const T&);
     template<class T> void load(const fs::path&, T& value);
 
