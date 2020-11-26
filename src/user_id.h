@@ -36,6 +36,10 @@ public:
         return os << id._uuid;
     }
 
+    bool operator==(const UserId& other) const {
+        return _uuid == other._uuid;
+    }
+
 private:
     UserId(const boost::uuids::uuid&);
 
