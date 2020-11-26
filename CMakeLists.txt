@@ -48,6 +48,7 @@ add_library(libouisync STATIC
     "src/server.cpp"
     "src/message.cpp"
     "src/random.cpp"
+    "src/commit.cpp"
     "src/object/id.cpp"
     "src/object/tree.cpp"
     "src/object/blob.cpp"

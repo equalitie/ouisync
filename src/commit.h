@@ -18,6 +18,8 @@ struct Commit {
         ar & root_object_id;
         ar & version_vector;
     }
+
+    friend std::ostream& operator<<(std::ostream&, const Commit&);
 };
 
 } // namespace
