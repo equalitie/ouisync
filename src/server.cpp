@@ -8,6 +8,7 @@
 
 using namespace ouisync;
 using std::move;
+using std::make_pair;
 using object::Blob;
 using object::Tree;
 using Object = variant<Blob, Tree>;
@@ -27,26 +28,19 @@ net::awaitable<void> Server::run(Cancel cancel)
     while (true) {
         auto m = co_await _broker.receive(cancel);
 
-        std::cerr << "Server received " << m << "\n";
-
         auto handle_rq_snapshot_group = [&] (const RqSnapshotGroup& rq) -> AwaitVoid {
             snapshot_group.emplace(_repo.create_snapshot_group());
 
-            std::cerr << "Server created snapshots: " << *snapshot_group << "\n";
-
             if (rq.last_snapshot_group_id &&
                     snapshot_group->id() == *rq.last_snapshot_group_id) {
-                std::cerr << "Server waiting for a change\n";
                 co_await _repo.on_change().wait(cancel);
-                std::cerr << "done\n";
             }
 
             RsSnapshotGroup rsp;
             rsp.snapshot_group_id = snapshot_group->id();
-            rsp.reserve(snapshot_group->size());
 
-            for (auto& s : *snapshot_group) {
-                rsp.push_back(s.commit());
+            for (auto& [user_id, snapshot] : *snapshot_group) {
+                rsp.insert(make_pair(user_id, snapshot.commit()));
             }
 
             co_await _broker.send(move(rsp), cancel);

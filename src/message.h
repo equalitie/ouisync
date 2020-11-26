@@ -29,10 +29,10 @@ struct RqSnapshotGroup {
     }
 };
 
-struct RsSnapshotGroup : std::vector<Commit> {
+struct RsSnapshotGroup : std::map<UserId, Commit> {
     static constexpr MessageType type = MessageType::Response;
 
-    using Parent = std::vector<Commit>;
+    using Parent = std::map<UserId, Commit>;
     using Parent::Parent;
     using Parent::begin;
     using Parent::end;

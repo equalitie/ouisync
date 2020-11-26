@@ -3,7 +3,7 @@
 #include "commit.h"
 #include "shortcuts.h"
 
-#include <set>
+#include <map>
 #include <boost/filesystem/path.hpp>
 #include <iosfwd>
 
@@ -56,15 +56,15 @@ private:
 
 //////////////////////////////////////////////////////////////////////
 
-class SnapshotGroup : private std::vector<Snapshot> {
+class SnapshotGroup : private std::map<UserId, Snapshot> {
 private:
-    using Parent = std::vector<Snapshot>;
+    using Parent = std::map<UserId, Snapshot>;
 
 public:
     using Id = object::Id;
 
 public:
-    SnapshotGroup(std::vector<Snapshot> snapshots) :
+    SnapshotGroup(Parent snapshots) :
         Parent(std::move(snapshots)),
         _id(calculate_id())
     {}

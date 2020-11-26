@@ -131,8 +131,9 @@ SnapshotGroup::Id SnapshotGroup::calculate_id() const
     Sha256 hash;
     hash.update("SnapshotGroup");
     hash.update(uint32_t(size()));
-    for (auto& s : *this) {
-        hash.update(s.id());
+    for (auto& [user_id, snapshot] : *this) {
+        hash.update(user_id.to_string());
+        hash.update(snapshot.id());
     }
     return hash.close();
 }
@@ -146,10 +147,10 @@ std::ostream& ouisync::operator<<(std::ostream& os, const SnapshotGroup& g)
 {
     os << "SnapshotGroup{id:" << g.id() << " [";
     bool is_first = true;
-    for (auto& s : g) {
+    for (auto& [user_id, snapshot] : g) {
         if (!is_first) { os << ", "; }
         is_first = false;
-        os << s;
+        os << "(" << user_id << ", " << snapshot.id() << ", " << snapshot.commit().root_object_id << ")";
     }
     return os << "]}";
 }

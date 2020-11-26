@@ -56,8 +56,6 @@ Client::download_branch(RemoteBranch& branch, Id object_id, Cancel cancel)
     co_await apply(rs.object,
         [&] (const Tree& m) { return handle_tree(m); },
         [&] (const Blob& m) { return handle_blob(m); });
-
-    co_await branch.mark_complete(object_id);
 }
 
 net::awaitable<void> Client::run(Cancel cancel)
@@ -66,14 +64,12 @@ net::awaitable<void> Client::run(Cancel cancel)
 
     while (true) {
         co_await _broker.send(RqSnapshotGroup{last_snapshot_group_id}, cancel);
-        auto rs = co_await _broker.receive(cancel);
+        auto snapshot_group = co_await receive<RsSnapshotGroup>(cancel);
 
-        auto* heads = boost::get<RsSnapshotGroup>(&rs);
-        assert(heads);
-        last_snapshot_group_id = heads->snapshot_group_id;
+        last_snapshot_group_id = snapshot_group.snapshot_group_id;
 
-        for (auto& commit : *heads) {
-            auto branch = _repo.get_or_create_remote_branch(commit);
+        for (auto& [user_id, commit] : snapshot_group) {
+            auto branch = co_await _repo.get_or_create_remote_branch(user_id, commit);
 
             if (!branch) {
                 continue;

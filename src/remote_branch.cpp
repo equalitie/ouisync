@@ -30,8 +30,7 @@ Id _flat_store(const fs::path& objdir, const Obj& obj) {
 RemoteBranch::RemoteBranch(Commit commit, fs::path filepath, fs::path objdir) :
     _filepath(std::move(filepath)),
     _objdir(std::move(objdir)),
-    _root(commit.root_object_id),
-    _version_vector(commit.version_vector)
+    _commit(std::move(commit))
 {
 }
 
@@ -42,59 +41,28 @@ RemoteBranch::RemoteBranch(fs::path filepath, fs::path objdir, IArchive& ar) :
     load_rest(ar);
 }
 
-net::awaitable<void> RemoteBranch::mark_complete(const Id& id)
-{
-    auto i = _objects.find(id);
-    assert(i != _objects.end());
-
-    if (i == _objects.end()) {
-        throw std::runtime_error("RemoteBranch::mark_complete: id not found");
-    }
-
-    auto& entry = i->second;
-
-    entry.state = ObjectState::Complete;
-
-    for (auto& child : entry.children) {
-        _objects.erase(child);
-    }
-
-    co_return store_self();
-}
-
 net::awaitable<void> RemoteBranch::insert_blob(const Blob& blob)
 {
-    auto id = _flat_store(_objdir, blob);
-    co_await insert_object(id, {});
+    [[maybe_unused]] auto id = _flat_store(_objdir, blob);
+    // XXX: TODO
+    store_self();
+    co_return;
 }
 
 net::awaitable<Id> RemoteBranch::insert_tree(const Tree& tree)
 {
-    auto id = _flat_store(_objdir, tree);
-
-    set<Id> children;
-    for (auto [name, hash] : tree) {
-        (void) name;
-        children.insert(hash);
-    }
-
-    co_await insert_object(id, std::move(children));
+    [[maybe_unused]] auto id = _flat_store(_objdir, tree);
+    // XXX: TODO
+    store_self();
     co_return id;
 }
 
-net::awaitable<void> RemoteBranch::insert_object(const Id& objid, set<Id> children)
+net::awaitable<void> RemoteBranch::introduce_commit(const Commit& commit)
 {
-    //auto [i, inserted] =
-        _objects.insert(make_pair(objid,
-                ObjectEntry{ObjectState::Incomplete, std::move(children)}));
-
-    //if (!inserted) {
-    //    std::cerr << "RemoteBranch warning: inserted already existing object "
-    //        << objid.short_hex() << " (children count: " << children.size() << " vs " << i->second.children.size() << ")\n";
-    //    assert(children == i->second.children);
-    //}
-
-    co_return store_self();
+    _commit = commit;
+    // XXX: TODO
+    store_self();
+    co_return;
 }
 
 //--------------------------------------------------------------------
@@ -118,16 +86,12 @@ void RemoteBranch::store_tag(OArchive& ar) const
 
 void RemoteBranch::store_rest(OArchive& ar) const
 {
-    ar << _root;
-    ar << _version_vector;
-    ar << _objects;
+    ar << _commit;
 }
 
 void RemoteBranch::load_rest(IArchive& ar)
 {
-    ar >> _root;
-    ar >> _version_vector;
-    ar >> _objects;
+    ar >> _commit;
 }
 
 //--------------------------------------------------------------------

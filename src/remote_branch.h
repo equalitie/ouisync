@@ -24,24 +24,9 @@ namespace ouisync {
 
 class RemoteBranch {
 private:
-    // Complete objects are those whose all sub-object have also
-    // been downloaded. Thus deleting them will delete it's children
-    // as well.
-    enum class ObjectState { Incomplete, Complete };
-
     using Id   = object::Id;
     using Tree = object::Tree;
     using Blob = object::Blob;
-
-    struct ObjectEntry {
-        ObjectState state;
-        std::set<Id> children;
-
-        template<class Archive>
-        void serialize(Archive& ar, unsigned version) {
-            ar & state & children;
-        }
-    };
 
     using IArchive = boost::archive::binary_iarchive;
     using OArchive = boost::archive::binary_oarchive;
@@ -51,17 +36,18 @@ public:
 
     RemoteBranch(fs::path filepath, fs::path objdir, IArchive&);
 
-    [[nodiscard]] net::awaitable<void> mark_complete(const Id&);
     [[nodiscard]] net::awaitable<void> insert_blob(const Blob&);
     [[nodiscard]] net::awaitable<Id>   insert_tree(const Tree&);
 
+    [[nodiscard]] net::awaitable<void> introduce_commit(const Commit&);
+
     void destroy();
 
-    const VersionVector& version_vector() const { return _version_vector; }
-    const object::Id& root_object_id() const { return _root; }
+    const VersionVector& version_vector() const { return _commit.version_vector; }
+    const object::Id& root_object_id() const { return _commit.root_object_id; }
 
     BranchIo::Immutable immutable_io() const {
-        return BranchIo::Immutable(_objdir, _root);
+        return BranchIo::Immutable(_objdir, root_object_id());
     }
 
 private:
@@ -72,18 +58,13 @@ private:
     template<class T> void store(const fs::path&, const T&);
     template<class T> void load(const fs::path&, T& value);
 
-    [[nodiscard]] net::awaitable<void> insert_object(const Id& objid, std::set<Id> children);
-
     void store_self() const;
 
 private:
     fs::path _filepath;
     fs::path _objdir;
 
-    Id _root;
-    VersionVector _version_vector;
-
-    std::map<object::Id, ObjectEntry> _objects;
+    Commit _commit;
 };
 
 } // namespace

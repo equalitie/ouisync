@@ -40,28 +40,6 @@ Branch _load_branch(const fs::path& path, const fs::path& objdir)
     }
 }
 
-/* static */
-Repository::HexBranchId Repository::generate_branch_id()
-{
-    static constexpr size_t hex_size = std::tuple_size<HexBranchId>::value;
-    static_assert(hex_size % 2 == 0, "Hex size must be an even number");
-    std::array<uint8_t, hex_size/2> bin;
-    random::generate_non_blocking(bin.data(), bin.size());
-    return to_hex<char>(bin);
-}
-
-Opt<Repository::HexBranchId> Repository::str_to_branch_id(const std::string& name)
-{
-    if (name.size() != std::tuple_size<HexBranchId>::value)
-        return boost::none;
-
-    // XXX: Check that all letters are hex
-
-    HexBranchId bid;
-    for (size_t i = 0; i < name.size(); ++i) bid[i] = name[i];
-    return bid;
-}
-
 Repository::Repository(executor_type ex, Options options) :
     _ex(std::move(ex)),
     _options(std::move(options)),
@@ -69,22 +47,18 @@ Repository::Repository(executor_type ex, Options options) :
 {
     _user_id = UserId::load_or_create(_options.user_id_file_path);
 
-    bool local_exists = false;
-
     for (auto f : fs::directory_iterator(_options.branchdir)) {
         auto branch = _load_branch(f, _options.objectdir);
-        auto branch_id = str_to_branch_id(f.path().filename().native());
-        if (!branch_id) {
+        auto user_id = UserId::from_string(f.path().filename().native());
+        if (!user_id) {
             throw std::runtime_error("Repository: Invalid branch name format");
         }
-        local_exists |= bool(boost::get<LocalBranch>(&branch));
-        _branches.insert(make_pair(*branch_id, std::move(branch)));
+        _branches.insert(make_pair(*user_id, std::move(branch)));
     }
 
-    if (!local_exists) {
-        auto branch_id = generate_branch_id();
-        fs::path path = _options.branchdir / std::string(branch_id.begin(), branch_id.end());
-        _branches.insert(make_pair(branch_id,
+    if (_branches.count(_user_id) == 0) {
+        fs::path path = _options.branchdir / _user_id.to_string();
+        _branches.insert(make_pair(_user_id,
                     LocalBranch::create(path, _options.objectdir, _user_id)));
     }
 }
@@ -92,9 +66,9 @@ Repository::Repository(executor_type ex, Options options) :
 Branch& Repository::find_branch(PathRange path)
 {
     if (path.empty()) throw_error(sys::errc::invalid_argument);
-    auto branch_id = str_to_branch_id(path.front().native());
-    if (!branch_id) throw_error(sys::errc::invalid_argument);
-    auto i = _branches.find(*branch_id);
+    auto user_id = UserId::from_string(path.front().native());
+    if (!user_id) throw_error(sys::errc::invalid_argument);
+    auto i = _branches.find(*user_id);
     if (i == _branches.end()) throw_error(sys::errc::invalid_argument);
     return i->second;
 }
@@ -112,12 +86,13 @@ static BranchIo::Immutable _immutable_io(const Branch& b) {
 
 SnapshotGroup Repository::create_snapshot_group()
 {
-    std::vector<Snapshot> snapshots;
+    std::map<UserId, Snapshot> snapshots;
 
-    for (auto& [branch_id, branch] : _branches) {
-        (void) branch_id;
-        snapshots.push_back(Snapshot::create(
-                _options.snapshotdir, _options.objectdir, _get_commit(branch)));
+    for (auto& [user_id, branch] : _branches) {
+        auto snapshot = Snapshot::create(
+                _options.snapshotdir, _options.objectdir, _get_commit(branch));
+
+        snapshots.insert(std::make_pair(user_id, std::move(snapshot)));
     }
 
     SnapshotGroup group(std::move(snapshots));
@@ -143,7 +118,7 @@ net::awaitable<vector<string>> Repository::readdir(PathRange path)
     if (path.empty()) {
         for (auto& [name, branch] : _branches) {
             (void) branch;
-            nodes.push_back(std::string(name.begin(), name.end()));
+            nodes.push_back(name.to_string());
         }
     }
     else {
@@ -344,26 +319,36 @@ object::Id Repository::get_root_id(const Branch& b)
     return apply(b, [] (auto& b) { return b.root_object_id(); });
 }
 
-RemoteBranch*
-Repository::get_or_create_remote_branch(const Commit& commit)
+net::awaitable<RemoteBranch*>
+Repository::get_or_create_remote_branch(const UserId& user_id, const Commit& commit)
 {
-    for (auto& [_, branch] : _branches) {
-        (void) _;
-
-        if (commit.root_object_id == get_root_id(branch))
-            return boost::get<RemoteBranch>(&branch);
-
-        if (commit.version_vector <= get_version_vector(branch))
-            return nullptr;
+    if (user_id == _user_id) {
+        // XXX: In future we could also do donwload of local branches, e.g. for
+        // cases when a user loses some data.
+        co_return nullptr;
     }
 
-    auto branch_id = generate_branch_id();
-    auto path = _options.remotes / std::string(branch_id.begin(), branch_id.end());
+    auto i = _branches.find(user_id);
 
-    auto [i, inserted] = _branches.insert(std::make_pair(branch_id,
-                RemoteBranch(commit, path, _options.objectdir)));
+    if (i == _branches.end()) {
+        auto path = _options.remotes / user_id.to_string();
 
-    assert(inserted);
+        i = _branches.insert(std::make_pair(user_id,
+             RemoteBranch(commit, path, _options.objectdir))).first;
 
-    return boost::get<RemoteBranch>(&i->second);
+        co_return boost::get<RemoteBranch>(&i->second);
+    }
+
+    auto* branch = boost::get<RemoteBranch>(&i->second);
+
+    assert(branch);
+    if (!branch) co_return nullptr;
+
+    if (commit.version_vector <= branch->version_vector()) {
+        co_return nullptr;
+    }
+
+    co_await branch->introduce_commit(commit);
+
+    co_return branch;
 }

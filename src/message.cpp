@@ -93,9 +93,9 @@ std::ostream& ouisync::operator<<(std::ostream& os, const RqSnapshotGroup& m) {
 std::ostream& ouisync::operator<<(std::ostream& os, const RsSnapshotGroup& m) {
     os << "RsSnapshotGroup{" << m.snapshot_group_id.short_hex() << " [";
     bool is_first = true;
-    for (auto& c : m) {
+    for (auto& [user_id, commit] : m) {
         if (!is_first) { os << ", "; is_first = true; }
-        os << c.root_object_id.short_hex();
+        os << "(" << user_id << ", " << commit.root_object_id << ")";
     }
     return os << "]}";
 }
@@ -105,11 +105,7 @@ std::ostream& ouisync::operator<<(std::ostream& os, const RqObject& rq) {
 }
 
 std::ostream& ouisync::operator<<(std::ostream& os, const RsObject& m) {
-    os << "RsObject";
-    apply(m.object,
-            [&] (const object::Tree&) { os << " Tree"; },
-            [&] (const object::Blob&) { os << " Blob"; });
-    return os;
+    return os << "RsObject{" << m.object << "}";
 }
 
 std::ostream& ouisync::operator<<(std::ostream& os, const Request& m) {
