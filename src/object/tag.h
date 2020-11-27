@@ -3,14 +3,12 @@
 #include <cstdint> // uint8_t
 #include <iosfwd>
 
-namespace ouisync { class ObjectId; }
-
 namespace ouisync::object {
 
 enum class Tag : std::uint8_t {
     Tree = 1,
     Blob,
-    Id
+    ObjectId
 };
 
 /*
@@ -24,18 +22,11 @@ enum class Tag : std::uint8_t {
  */
 template<class T>
 struct JustTag {
+    static constexpr Tag tag = T::tag;
+
     template<class Archive>
     void serialize(Archive&, const unsigned int version) {}
 };
-
-class Tree;
-struct Blob;
-
-template<class> struct GetTag;
-template<> struct GetTag<Tree>  { static constexpr Tag value = Tag::Tree;  };
-template<> struct GetTag<Blob>  { static constexpr Tag value = Tag::Blob;  };
-template<> struct GetTag<ObjectId> { static constexpr Tag value = Tag::Id;    };
-template<class T> struct GetTag<JustTag<T>> { static constexpr Tag value = GetTag<T>::value; };
 
 std::ostream& operator<<(std::ostream& os, Tag tag);
 

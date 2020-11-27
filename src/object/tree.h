@@ -1,4 +1,7 @@
 #pragma once
+
+#include "tag.h"
+
 #include "../object_id.h"
 #include "../shortcuts.h"
 
@@ -16,6 +19,8 @@ namespace {
 
 class Tree final : public TreeMap {
 public:
+    static constexpr Tag tag = Tag::Tree;
+
     ObjectId store(const fs::path& root) const;
 
     template<class Archive>

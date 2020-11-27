@@ -1,5 +1,6 @@
 #pragma once
 
+#include "tag.h"
 #include "../object_id.h"
 #include "../shortcuts.h"
 
@@ -7,6 +8,8 @@ namespace ouisync::object {
 
 struct Blob : std::vector<uint8_t>
 {
+    static constexpr Tag tag = Tag::Blob;
+
     using Parent = std::vector<uint8_t>;
     using std::vector<uint8_t>::vector;
 

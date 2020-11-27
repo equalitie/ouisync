@@ -18,7 +18,7 @@ struct Save {
 
     template<class Archive>
     void save(Archive& ar, const unsigned int version) const {
-        ar & GetTag<Obj>::value;
+        ar & Obj::tag;
         ar & obj;
     }
 
@@ -34,8 +34,8 @@ struct Load {
         Tag tag;
         ar & tag;
 
-        if (tag != GetTag<Obj>::value) {
-            throw detail::bad_tag_exception(GetTag<Obj>::value, tag);
+        if (tag != Obj::tag) {
+            throw detail::bad_tag_exception(Obj::tag, tag);
         }
 
         ar & obj;
@@ -48,7 +48,7 @@ namespace detail {
     template<class T, class... Ts> struct LoadVariant {
         template<class Variant, class Archive>
         static void load(Tag tag, Variant& result, Archive& ar) {
-            if (tag == GetTag<T>::value) {
+            if (tag == T::tag) {
                 T obj;
                 ar & obj;
                 result = std::move(obj);
@@ -60,7 +60,7 @@ namespace detail {
     template<class T> struct LoadVariant<T> {
         template<class Variant, class Archive>
         static void load(Tag tag, Variant& result, Archive& ar) {
-            if (tag == GetTag<T>::value) {
+            if (tag == T::tag) {
                 T obj;
                 ar & obj;
                 result = std::move(obj);
