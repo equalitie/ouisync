@@ -1,6 +1,6 @@
 #include "branch_io.h"
 #include "error.h"
-#include "object/refcount.h"
+#include "refcount.h"
 #include "object/io.h"
 #include "object/tagged.h"
 
@@ -150,7 +150,7 @@ void _show(std::ostream& os, fs::path objdir, ObjectId id, std::string pad = "")
     }
 
     auto obj = object::io::load<Tree, Blob>(objdir, id);
-    auto rc = object::refcount::read(objdir, id);
+    auto rc = refcount::read(objdir, id);
 
     apply(obj,
             [&] (const Tree& t) {

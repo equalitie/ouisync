@@ -2,7 +2,7 @@
 #include "hash.h"
 #include "hex.h"
 #include "variant.h"
-#include "object/refcount.h"
+#include "refcount.h"
 #include "object/tree.h"
 #include "object/blob.h"
 #include "object/io.h"
@@ -95,10 +95,10 @@ Snapshot Snapshot::create(const fs::path& snapshotdir, fs::path objdir, Commit c
 
     // XXX: Handle failures
 
-    object::refcount::increment(objdir, commit.root_id);
+    refcount::increment(objdir, commit.root_id);
 
     store_commit(path, commit);
-    object::refcount::increment(path);
+    refcount::increment(path);
 
     return Snapshot(id, std::move(path), std::move(objdir), std::move(commit));
 }
@@ -112,8 +112,8 @@ void Snapshot::destroy() noexcept
     // XXX: Handle failures
 
     try {
-        object::refcount::decrement(_objdir, _commit.root_id);
-        object::refcount::decrement(_path);
+        refcount::decrement(_objdir, _commit.root_id);
+        refcount::decrement(_path);
     }
     catch (const std::exception& e) {
         std::cerr << "Snapshot::destroy() attempted to throw an exception\n";

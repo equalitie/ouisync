@@ -1,11 +1,11 @@
 #pragma once
 
-#include "../object_id.h"
-#include "../shortcuts.h"
+#include "object_id.h"
+#include "shortcuts.h"
 
 #include <cstdint>
 
-namespace ouisync::object::refcount {
+namespace ouisync::refcount {
 
 using Number = uint32_t;
 

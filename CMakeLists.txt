@@ -50,13 +50,13 @@ add_library(libouisync STATIC
     "src/random.cpp"
     "src/commit.cpp"
     "src/object_id.cpp"
+    "src/refcount.cpp"
     "src/object/tree.cpp"
     "src/object/blob.cpp"
     "src/object/path.cpp"
     "src/object/tagged.cpp"
     "src/object/tag.cpp"
     "src/object/io.cpp"
-    "src/object/refcount.cpp"
 )
 
 target_compile_definitions(libouisync PRIVATE -DBOOST_ASIO_HAS_CO_AWAIT)

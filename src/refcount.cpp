@@ -1,16 +1,16 @@
 #include "refcount.h"
-#include "path.h"
+#include "object/path.h"
 #include <boost/filesystem/fstream.hpp>
 #include <boost/filesystem/operations.hpp>
 
 #include <iostream>
 #include <sstream>
 
-namespace ouisync::object::refcount {
+namespace ouisync::refcount {
 
 static
 fs::path object_path(const ObjectId& id) noexcept {
-    return path::from_id(id);
+    return object::path::from_id(id);
 }
 
 static

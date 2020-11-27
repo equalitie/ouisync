@@ -8,7 +8,7 @@
 #include "object/tagged.h"
 #include "object/blob.h"
 #include "object/io.h"
-#include "object/refcount.h"
+#include "refcount.h"
 
 #include <boost/filesystem.hpp>
 #include <boost/archive/binary_oarchive.hpp>
@@ -44,7 +44,7 @@ LocalBranch LocalBranch::create(const fs::path& path, const fs::path& objdir, Us
 
 static
 bool _flat_remove(const fs::path& objdir, const ObjectId& id) {
-    auto rc = object::refcount::decrement(objdir, id);
+    auto rc = refcount::decrement(objdir, id);
     if (rc > 0) return true;
     return object::io::remove(objdir, id);
 }
@@ -71,7 +71,7 @@ static
 ObjectId _update_dir(size_t branch_count, const fs::path& objdir, ObjectId tree_id, PathRange path, F&& f)
 {
     Tree tree = object::io::load<Tree>(objdir, tree_id);
-    auto rc = object::refcount::read(objdir, tree_id);
+    auto rc = refcount::read(objdir, tree_id);
     assert(rc);
 
     Opt<ObjectId> child_id;
@@ -92,7 +92,7 @@ ObjectId _update_dir(size_t branch_count, const fs::path& objdir, ObjectId tree_
 
     auto [new_id, created] = object::io::store_(objdir, tree);
     if (created && child_id) {
-        object::refcount::increment(objdir, *child_id);
+        refcount::increment(objdir, *child_id);
     }
 
     if (branch_count == 1) {
@@ -251,7 +251,7 @@ void LocalBranch::store_self() const {
     store_tag(oa);
     store_rest(oa);
 
-    object::refcount::increment(_objdir, _root_id);
+    refcount::increment(_objdir, _root_id);
 }
 
 //--------------------------------------------------------------------

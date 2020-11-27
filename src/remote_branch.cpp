@@ -2,7 +2,7 @@
 #include "branch_io.h"
 #include "branch_type.h"
 #include "object/io.h"
-#include "object/refcount.h"
+#include "refcount.h"
 
 #include <boost/archive/binary_iarchive.hpp>
 #include <boost/archive/binary_oarchive.hpp>
@@ -22,7 +22,7 @@ template<class Obj>
 static
 ObjectId _flat_store(const fs::path& objdir, const Obj& obj) {
     auto new_id = object::io::store(objdir, obj);
-    object::refcount::increment(objdir, new_id);
+    refcount::increment(objdir, new_id);
     return new_id;
 }
 
