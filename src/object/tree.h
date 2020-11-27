@@ -22,11 +22,13 @@ public:
     void serialize(Archive& ar, const unsigned int version) {
         ar & static_cast<TreeMap&>(*this);
     }
+
+    ObjectId calculate_id() const;
+
+    friend std::ostream& operator<<(std::ostream&, const Tree&);
 };
 
-ObjectId calculate_id(const Tree&);
 
-std::ostream& operator<<(std::ostream&, const Tree&);
 
 } // namespace
 

@@ -1,10 +1,9 @@
 #pragma once
 
-#include "../object_id.h"
-#include "blob.h"
-
 #include <cstdint> // uint8_t
 #include <iosfwd>
+
+namespace ouisync { class ObjectId; }
 
 namespace ouisync::object {
 
@@ -30,6 +29,7 @@ struct JustTag {
 };
 
 class Tree;
+struct Blob;
 
 template<class> struct GetTag;
 template<> struct GetTag<Tree>  { static constexpr Tag value = Tag::Tree;  };

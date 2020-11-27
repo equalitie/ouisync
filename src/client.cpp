@@ -34,7 +34,7 @@ Client::download_branch(RemoteBranch& branch, ObjectId object_id, Cancel cancel)
     auto rs = co_await receive<RsObject>(cancel);
 
     auto handle_tree = [&] (const Tree& tree) -> AwaitVoid {
-        assert(object_id == object::calculate_id(tree));
+        assert(object_id == tree.calculate_id());
         ObjectId id = co_await branch.insert_tree(tree);
         assert(id == object_id);
 
@@ -49,7 +49,7 @@ Client::download_branch(RemoteBranch& branch, ObjectId object_id, Cancel cancel)
     };
 
     auto handle_blob = [&] (const Blob& blob) -> AwaitVoid {
-        assert(object_id == object::calculate_id(blob));
+        assert(object_id == blob.calculate_id());
         co_await branch.insert_blob(blob);
     };
 

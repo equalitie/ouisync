@@ -13,16 +13,15 @@ struct Blob : std::vector<uint8_t>
     Blob(const Parent& p) : Parent(p) {}
     Blob(Parent&& p) : Parent(std::move(p)) {}
 
+    ObjectId calculate_id() const;
+
     template<class Archive>
     void serialize(Archive& ar, const unsigned int version) {
         ar & static_cast<std::vector<uint8_t>&>(*this);
     }
-};
 
-ObjectId calculate_id(const Blob&);
+    friend std::ostream& operator<<(std::ostream&, const Blob&);
+};
 
 } // namespace
 
-namespace std {
-    std::ostream& operator<<(std::ostream&, const ::ouisync::object::Blob&);
-}

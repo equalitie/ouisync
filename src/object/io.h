@@ -39,7 +39,7 @@ namespace detail {
 template<class O>
 inline
 ObjectId store(const fs::path& objdir, const O& object) {
-    auto id = calculate_id(object);
+    auto id = object.calculate_id();
     auto path = objdir / path::from_id(id);
     detail::store_at(path, object);
     return id;
@@ -51,7 +51,7 @@ ObjectId store(const fs::path& objdir, const O& object) {
 template<class O>
 inline
 std::pair<ObjectId, bool> store_(const fs::path& objdir, const O& object) {
-    auto id = calculate_id(object);
+    auto id = object.calculate_id();
     auto path = objdir / path::from_id(id);
     if (fs::exists(path)) return {id, false};
     detail::store_at(path, object);

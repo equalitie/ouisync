@@ -44,6 +44,10 @@ struct Random {
         return v;
     }
 
+    Blob blob(size_t size) {
+        return {vector(size)};
+    }
+
     std::string string(size_t size) {
         std::string result(size, '\0');
         fill(&result[0], size);
@@ -101,10 +105,10 @@ size_t refcount(LocalBranch& b, const fs::path path) {
 
 BOOST_AUTO_TEST_CASE(blob_id_calculation) {
     Random random;
-    auto data1 = random.vector(256);
-    auto data2 = random.vector(256);
+    auto data1 = random.blob(256);
+    auto data2 = random.blob(256);
     BOOST_REQUIRE_NE(data1, data2);
-    BOOST_REQUIRE_NE(object::calculate_id(data1), object::calculate_id(data2));
+    BOOST_REQUIRE_NE(data1.calculate_id(), data2.calculate_id());
 }
 
 BOOST_AUTO_TEST_CASE(blob_is_same) {
@@ -114,8 +118,8 @@ BOOST_AUTO_TEST_CASE(blob_is_same) {
     object::Blob b1(random.vector(1000));
     //b1.store(testdir);
     object::io::store(testdir, b1);
-    auto b2 = object::io::load<object::Blob>(testdir, object::calculate_id(b1));
-    REQUIRE_HEX_EQUAL(object::calculate_id(b1), object::calculate_id(b2));
+    auto b2 = object::io::load<object::Blob>(testdir, b1.calculate_id());
+    REQUIRE_HEX_EQUAL(b1.calculate_id(), b2.calculate_id());
 }
 
 BOOST_AUTO_TEST_CASE(tree_is_same) {
@@ -126,8 +130,8 @@ BOOST_AUTO_TEST_CASE(tree_is_same) {
     t1[random.string(2)]  = random.object_id();
     t1[random.string(10)] = random.object_id();
     object::io::store(testdir, t1);
-    auto t2 = object::io::load<object::Tree>(testdir, object::calculate_id(t1));
-    REQUIRE_HEX_EQUAL(object::calculate_id(t1), object::calculate_id(t2));
+    auto t2 = object::io::load<object::Tree>(testdir, t1.calculate_id());
+    REQUIRE_HEX_EQUAL(t1.calculate_id(), t2.calculate_id());
 }
 
 BOOST_AUTO_TEST_CASE(read_tag) {
@@ -307,7 +311,7 @@ BOOST_AUTO_TEST_CASE(tree_remove) {
 
     // Delete data from root
     {
-        auto data = random.vector(256);
+        auto data = random.blob(256);
 
         LocalBranch branch = create_branch(testdir/"1", "user_id");
         branch.store("data", data);

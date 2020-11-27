@@ -9,20 +9,14 @@
 using namespace ouisync;
 using namespace ouisync::object;
 
-ObjectId ouisync::object::calculate_id(const Blob& v) {
+ObjectId Blob::calculate_id() const {
     Sha256 hash;
-    if (v.empty()) {
-        hash.update(uint32_t(0));
-        return hash.close();
-    }
-    hash.update(uint32_t(v.size()));
-    hash.update(v.data(), v.size());
+    hash.update(uint32_t(size()));
+    hash.update(data(), size());
     return hash.close();
 }
 
-namespace std {
-    std::ostream& operator<<(std::ostream& os, const Blob& v) {
-        auto id = ::ouisync::object::calculate_id(v);
-        return os << "Data id:" << id << " size:" << v.size();
-    }
+std::ostream& ouisync::object::operator<<(std::ostream& os, const Blob& b) {
+    auto id = b.calculate_id();
+    return os << "Data id:" << id << " size:" << b.size();
 }
