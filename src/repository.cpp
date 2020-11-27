@@ -352,3 +352,21 @@ Repository::get_or_create_remote_branch(const UserId& user_id, const Commit& com
 
     co_return branch;
 }
+
+void Repository::introduce_commit_to_local_branch(const Commit& commit)
+{
+    auto i = _branches.find(_user_id);
+    if (i == _branches.end()) {
+        throw std::runtime_error("Local branch doesn't exist");
+    }
+
+    auto b = boost::get<LocalBranch>(&i->second);
+
+    if (!b) {
+        throw std::runtime_error("Branch is not local");
+    }
+
+    if (b->introduce_commit(commit)) {
+        _on_change.notify();
+    }
+}

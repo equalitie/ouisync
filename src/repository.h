@@ -56,6 +56,8 @@ public:
 
     const fs::path& object_directory() const { return _options.objectdir; }
 
+    void introduce_commit_to_local_branch(const Commit&);
+
 private:
     Branch& find_branch(PathRange);
 

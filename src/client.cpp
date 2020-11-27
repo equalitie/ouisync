@@ -76,6 +76,8 @@ net::awaitable<void> Client::run(Cancel cancel)
             }
 
             co_await download_branch(*branch, branch->root_id(), cancel);
+
+            _repo.introduce_commit_to_local_branch(commit);
         }
     }
 }

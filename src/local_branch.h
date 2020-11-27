@@ -39,11 +39,9 @@ public:
     LocalBranch(const fs::path& file_path, const fs::path& objdir,
             const UserId&, Commit);
 
-    const ObjectId& root_id() const {
-        return _root_id;
-    }
+    const ObjectId& root_id() const { return _root_id; }
 
-    void root_id(const ObjectId& id);
+    void set_root_id(const ObjectId& id);
 
     BranchIo::Immutable immutable_io() const {
         return BranchIo::Immutable(_objdir, _root_id);
@@ -72,6 +70,8 @@ public:
     const UserId& user_id() const { return _user_id; }
 
     ObjectId id_of(PathRange) const;
+
+    bool introduce_commit(const Commit&);
 
     friend std::ostream& operator<<(std::ostream&, const LocalBranch&);
 

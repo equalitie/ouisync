@@ -105,8 +105,8 @@ ObjectId _update_dir(size_t branch_count, const fs::path& objdir, ObjectId tree_
 template<class F>
 void LocalBranch::update_dir(PathRange path, F&& f)
 {
-    auto id = _update_dir(1, _objdir, root_id(), path, std::forward<F>(f));
-    root_id(id);
+    auto id = _update_dir(1, _objdir, _root_id, path, std::forward<F>(f));
+    set_root_id(id);
 }
 
 static
@@ -256,7 +256,7 @@ void LocalBranch::store_self() const {
 
 //--------------------------------------------------------------------
 
-void LocalBranch::root_id(const ObjectId& id) {
+void LocalBranch::set_root_id(const ObjectId& id) {
     if (_root_id == id) return;
     _root_id = id;
     _stamp.increment(_user_id);
@@ -279,6 +279,23 @@ LocalBranch::LocalBranch(const fs::path& file_path, const fs::path& objdir, IArc
     _objdir(objdir)
 {
     load_rest(ar);
+}
+
+//--------------------------------------------------------------------
+
+bool LocalBranch::introduce_commit(const Commit& commit)
+{
+    if (!(_stamp <= commit.stamp)) return false;
+    if (_root_id == commit.root_id) return false;
+
+    refcount::decrement(_objdir, _root_id);
+
+    _root_id = commit.root_id;
+    _stamp   = commit.stamp;
+
+    store_self();
+
+    return true;
 }
 
 //--------------------------------------------------------------------
