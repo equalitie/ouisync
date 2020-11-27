@@ -34,7 +34,7 @@ LocalBranch LocalBranch::create(const fs::path& path, const fs::path& objdir, Us
     }
 
     object::Tree root_obj;
-    root_id = root_obj.store(objdir);
+    root_id = object::io::store(objdir, root_obj);
     LocalBranch branch(path, objdir, user_id, Commit{move(clock), root_id});
     branch.store_self();
     return branch;

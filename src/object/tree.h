@@ -21,8 +21,6 @@ class Tree final : public TreeMap {
 public:
     static constexpr Tag tag = Tag::Tree;
 
-    ObjectId store(const fs::path& root) const;
-
     template<class Archive>
     void serialize(Archive& ar, const unsigned int version) {
         ar & static_cast<TreeMap&>(*this);

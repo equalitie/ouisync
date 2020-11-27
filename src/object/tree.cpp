@@ -19,11 +19,6 @@ ObjectId Tree::calculate_id() const
     return hash.close();
 }
 
-ObjectId Tree::store(const fs::path& root) const
-{
-    return object::io::store(root, *this);
-}
-
 std::ostream& ouisync::object::operator<<(std::ostream& os, const Tree& tree) {
     auto id = tree.calculate_id();
     auto hex_id = id.short_hex();
