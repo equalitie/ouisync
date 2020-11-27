@@ -21,16 +21,13 @@ ObjectId Tree::calculate_id() const
 }
 
 std::ostream& ouisync::object::operator<<(std::ostream& os, const Tree& tree) {
-    auto id = tree.calculate_id();
-    auto hex_id = id.short_hex();
-
-    os << "Tree id:" << hex_id << " [";
+    os << "Tree id:" << tree.calculate_id() << " [";
 
     bool is_first = true;
     for (auto& [k, v] : tree) {
         if (!is_first) os << ", ";
         is_first = false;
-        os << k << ":" << v.short_hex();
+        os << k << ":" << v;
     }
 
     return os << "]";

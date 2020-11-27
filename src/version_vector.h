@@ -7,7 +7,8 @@ namespace ouisync {
 
 class VersionVector {
 private:
-    using Map = std::map<UserId, uint64_t>;
+    using Version = uint64_t;
+    using Map = std::map<UserId, Version>;
 
 public:
     void increment(const UserId& id)
@@ -102,13 +103,13 @@ private:
     }
 
     static
-    uint64_t& value_of(Map::iterator& i)
+    Version& value_of(Map::iterator& i)
     {
         return i->second;
     }
 
     static
-    const uint64_t& value_of(const Map::const_iterator& i)
+    const Version& value_of(const Map::const_iterator& i)
     {
         return i->second;
     }
