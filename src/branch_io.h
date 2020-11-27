@@ -11,14 +11,13 @@ namespace ouisync {
 
 class BranchIo {
 public:
-    using Id = object::Id;
     using Tree = object::Tree;
     using Blob = object::Blob;
 
 public:
     class Immutable {
     public:
-        Immutable(const fs::path& objdir, const Id& root_id);
+        Immutable(const fs::path& objdir, const ObjectId& root_id);
 
         Tree readdir(PathRange path) const;
 
@@ -28,15 +27,15 @@ public:
 
         Opt<Blob> maybe_load(PathRange) const;
 
-        Id id_of(PathRange) const;
+        ObjectId id_of(PathRange) const;
 
         void show(std::ostream&) const;
 
-        bool object_exists(const Id&) const;
+        bool object_exists(const ObjectId&) const;
 
     private:
         const fs::path& _objdir;
-        const Id& _root_id;
+        const ObjectId& _root_id;
     };
 };
 

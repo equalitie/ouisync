@@ -26,7 +26,7 @@ net::awaitable<T> Client::receive(Cancel cancel)
 }
 
 net::awaitable<void>
-Client::download_branch(RemoteBranch& branch, Id object_id, Cancel cancel)
+Client::download_branch(RemoteBranch& branch, ObjectId object_id, Cancel cancel)
 {
     using AwaitVoid = net::awaitable<void>;
 
@@ -35,7 +35,7 @@ Client::download_branch(RemoteBranch& branch, Id object_id, Cancel cancel)
 
     auto handle_tree = [&] (const Tree& tree) -> AwaitVoid {
         assert(object_id == object::calculate_id(tree));
-        Id id = co_await branch.insert_tree(tree);
+        ObjectId id = co_await branch.insert_tree(tree);
         assert(id == object_id);
 
         for (auto& [child_name, child_id] : tree) {

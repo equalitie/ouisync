@@ -1,6 +1,6 @@
 #pragma once
 
-#include "id.h"
+#include "object_id.h"
 #include "../shortcuts.h"
 
 #include <boost/optional.hpp>
@@ -8,7 +8,7 @@
 
 namespace ouisync::object::path {
 
-fs::path from_id(const Id&) noexcept;
-Opt<Id>  to_id(const fs::path&) noexcept;
+fs::path from_id(const ObjectId&) noexcept;
+Opt<ObjectId>  to_id(const fs::path&) noexcept;
 
 } // namespaces

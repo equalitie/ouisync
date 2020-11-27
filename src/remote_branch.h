@@ -1,6 +1,6 @@
 #pragma once
 
-#include "object/id.h"
+#include "object_id.h"
 #include "object/tree.h"
 #include "object/blob.h"
 #include "shortcuts.h"
@@ -24,7 +24,6 @@ namespace ouisync {
 
 class RemoteBranch {
 private:
-    using Id   = object::Id;
     using Tree = object::Tree;
     using Blob = object::Blob;
 
@@ -37,14 +36,14 @@ public:
     RemoteBranch(fs::path filepath, fs::path objdir, IArchive&);
 
     [[nodiscard]] net::awaitable<void> insert_blob(const Blob&);
-    [[nodiscard]] net::awaitable<Id>   insert_tree(const Tree&);
+    [[nodiscard]] net::awaitable<ObjectId> insert_tree(const Tree&);
 
     [[nodiscard]] net::awaitable<void> introduce_commit(const Commit&);
 
     void destroy();
 
     const VersionVector& stamp() const { return _commit.stamp; }
-    const object::Id& root_id() const { return _commit.root_id; }
+    const ObjectId& root_id() const { return _commit.root_id; }
 
     BranchIo::Immutable immutable_io() const {
         return BranchIo::Immutable(_objdir, root_id());

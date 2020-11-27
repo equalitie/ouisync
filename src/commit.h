@@ -1,13 +1,13 @@
 #pragma once
 
 #include "version_vector.h"
-#include "object/id.h"
+#include "object_id.h"
 
 namespace ouisync {
 
 struct Commit {
     VersionVector stamp;
-    object::Id root_id;
+    ObjectId root_id;
 
     bool operator<(const Commit& other) const {
         return root_id < other.root_id;

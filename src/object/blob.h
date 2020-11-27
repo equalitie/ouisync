@@ -1,6 +1,6 @@
 #pragma once
 
-#include "id.h"
+#include "../object_id.h"
 #include "../shortcuts.h"
 
 namespace ouisync::object {
@@ -19,7 +19,7 @@ struct Blob : std::vector<uint8_t>
     }
 };
 
-Id calculate_id(const Blob&);
+ObjectId calculate_id(const Blob&);
 
 } // namespace
 

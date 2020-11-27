@@ -49,7 +49,7 @@ add_library(libouisync STATIC
     "src/message.cpp"
     "src/random.cpp"
     "src/commit.cpp"
-    "src/object/id.cpp"
+    "src/object_id.cpp"
     "src/object/tree.cpp"
     "src/object/blob.cpp"
     "src/object/path.cpp"

@@ -15,13 +15,12 @@ using namespace ouisync;
 
 using std::move;
 using std::make_pair;
-using object::Id;
 using object::Tree;
 using std::set;
 
 template<class Obj>
 static
-Id _flat_store(const fs::path& objdir, const Obj& obj) {
+ObjectId _flat_store(const fs::path& objdir, const Obj& obj) {
     auto new_id = object::io::store(objdir, obj);
     object::refcount::increment(objdir, new_id);
     return new_id;
@@ -49,7 +48,7 @@ net::awaitable<void> RemoteBranch::insert_blob(const Blob& blob)
     co_return;
 }
 
-net::awaitable<Id> RemoteBranch::insert_tree(const Tree& tree)
+net::awaitable<ObjectId> RemoteBranch::insert_tree(const Tree& tree)
 {
     [[maybe_unused]] auto id = _flat_store(_objdir, tree);
     // XXX: TODO

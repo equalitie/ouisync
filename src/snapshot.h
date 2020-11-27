@@ -15,7 +15,7 @@ namespace object { class Tree; struct Blob; }
 
 class Snapshot {
 public:
-    using Id = object::Id;
+    using Id = ObjectId;
     using Tree = object::Tree;
     using Blob = object::Blob;
     using Object = variant<Blob, Tree>;
@@ -31,12 +31,12 @@ public:
 
     const Commit& commit() const { return _commit; }
 
-    const Id& id() const { return _id; }
+    const ObjectId& id() const { return _id; }
 
     ~Snapshot();
 
 private:
-    Snapshot(const Id&, fs::path path, fs::path objdir, Commit);
+    Snapshot(const ObjectId&, fs::path path, fs::path objdir, Commit);
 
     static void store_commit(const fs::path&, const Commit&);
     static Commit load_commit(const fs::path&);
@@ -48,7 +48,7 @@ private:
 private:
     // Is invalid if this is default constructed or moved from.
     bool _is_valid = false;
-    Id _id;
+    ObjectId _id;
     fs::path _path;
     fs::path _objdir;
     Commit _commit;
@@ -61,7 +61,7 @@ private:
     using Parent = std::map<UserId, Snapshot>;
 
 public:
-    using Id = object::Id;
+    using Id = ObjectId;
 
 public:
     SnapshotGroup(Parent snapshots) :
@@ -72,7 +72,7 @@ public:
     SnapshotGroup(SnapshotGroup&&) = default;
     SnapshotGroup& operator=(SnapshotGroup&) = default;
 
-    const Id& id() const { return _id; }
+    const ObjectId& id() const { return _id; }
 
     using Parent::size;
 
@@ -82,10 +82,10 @@ public:
     friend std::ostream& operator<<(std::ostream&, const SnapshotGroup&);
 
 private:
-    Id calculate_id() const;
+    ObjectId calculate_id() const;
 
 private:
-    Id _id;
+    ObjectId _id;
 };
 
 //////////////////////////////////////////////////////////////////////

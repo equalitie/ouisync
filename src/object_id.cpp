@@ -1,17 +1,16 @@
-#include "id.h"
+#include "object_id.h"
 #include "hex.h"
 #include <ostream>
 
 using namespace ouisync;
-using namespace ouisync::object;
 
-Id::Hex Id::hex() const
+ObjectId::Hex ObjectId::hex() const
 {
     auto hex = to_hex<char>(*this);
     return hex;
 }
 
-Id::ShortHex Id::short_hex() const
+ObjectId::ShortHex ObjectId::short_hex() const
 {
     auto hex = to_hex<char>(*this);
 
@@ -23,19 +22,19 @@ Id::ShortHex Id::short_hex() const
     return ret;
 }
 
-std::ostream& ouisync::object::operator<<(std::ostream& os, const Id::Hex& h)
+std::ostream& ouisync::operator<<(std::ostream& os, const ObjectId::Hex& h)
 {
     for (auto c : h) { os << c; }
     return os;
 }
 
-std::ostream& ouisync::object::operator<<(std::ostream& os, const Id::ShortHex& h)
+std::ostream& ouisync::operator<<(std::ostream& os, const ObjectId::ShortHex& h)
 {
     for (auto c : h) { os << c; }
     return os;
 }
 
-std::ostream& ouisync::object::operator<<(std::ostream& os, const Id& id)
+std::ostream& ouisync::operator<<(std::ostream& os, const ObjectId& id)
 {
     return os << id.short_hex();
 }

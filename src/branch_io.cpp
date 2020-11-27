@@ -8,7 +8,6 @@
 #include <boost/serialization/vector.hpp>
 
 using namespace ouisync;
-using object::Id;
 using object::Tree;
 using object::Blob;
 using object::JustTag;
@@ -17,7 +16,7 @@ using object::JustTag;
 
 template<class F>
 static
-void _query_dir(const fs::path& objdir, Id tree_id, PathRange path, F&& f)
+void _query_dir(const fs::path& objdir, ObjectId tree_id, PathRange path, F&& f)
 {
     const Tree tree = object::io::load<Tree>(objdir, tree_id);
 
@@ -39,7 +38,7 @@ PathRange _parent(PathRange path) {
 
 //--------------------------------------------------------------------
 
-BranchIo::Immutable::Immutable(const fs::path& objdir, const Id& root_id) :
+BranchIo::Immutable::Immutable(const fs::path& objdir, const ObjectId& root_id) :
     _objdir(objdir),
     _root_id(root_id)
 {}
@@ -125,11 +124,11 @@ Opt<Blob> BranchIo::Immutable::maybe_load(PathRange path) const
 
 //--------------------------------------------------------------------
 
-Id BranchIo::Immutable::id_of(PathRange path) const
+ObjectId BranchIo::Immutable::id_of(PathRange path) const
 {
     if (path.empty()) return _root_id;
 
-    Id retval;
+    ObjectId retval;
 
     _query_dir(_objdir, _root_id, _parent(path),
         [&] (const Tree& tree) {
@@ -144,7 +143,7 @@ Id BranchIo::Immutable::id_of(PathRange path) const
 //--------------------------------------------------------------------
 
 static
-void _show(std::ostream& os, fs::path objdir, Id id, std::string pad = "") {
+void _show(std::ostream& os, fs::path objdir, ObjectId id, std::string pad = "") {
     if (!object::io::exists(objdir, id)) {
         os << pad << " !!! object " << id.short_hex() << " does not exist !!!\n";
         return;
@@ -172,7 +171,7 @@ void BranchIo::Immutable::show(std::ostream& os) const
 
 //--------------------------------------------------------------------
 
-bool BranchIo::Immutable::object_exists(const Id& id) const
+bool BranchIo::Immutable::object_exists(const ObjectId& id) const
 {
     return object::io::exists(_objdir, id);
 }

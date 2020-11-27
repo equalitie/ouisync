@@ -9,7 +9,7 @@
 namespace ouisync::object::refcount {
 
 static
-fs::path object_path(const Id& id) noexcept {
+fs::path object_path(const ObjectId& id) noexcept {
     return path::from_id(id);
 }
 
@@ -92,17 +92,17 @@ Number decrement(const fs::path& path_)
     return rc;
 }
 
-Number increment(const fs::path& objdir, const Id& id)
+Number increment(const fs::path& objdir, const ObjectId& id)
 {
     return increment(objdir / object_path(id));
 }
 
-Number decrement(const fs::path& objdir, const Id& id)
+Number decrement(const fs::path& objdir, const ObjectId& id)
 {
     return decrement(objdir / object_path(id));
 }
 
-Number read(const fs::path& objdir, const Id& id) {
+Number read(const fs::path& objdir, const ObjectId& id) {
     return read(objdir / object_path(id));
 }
 

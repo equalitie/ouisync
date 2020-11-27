@@ -1,6 +1,6 @@
 #pragma once
 
-#include "id.h"
+#include "../object_id.h"
 #include "tagged.h"
 #include "path.h"
 
@@ -38,7 +38,7 @@ namespace detail {
  */
 template<class O>
 inline
-Id store(const fs::path& objdir, const O& object) {
+ObjectId store(const fs::path& objdir, const O& object) {
     auto id = calculate_id(object);
     auto path = objdir / path::from_id(id);
     detail::store_at(path, object);
@@ -50,7 +50,7 @@ Id store(const fs::path& objdir, const O& object) {
  */
 template<class O>
 inline
-std::pair<Id, bool> store_(const fs::path& objdir, const O& object) {
+std::pair<ObjectId, bool> store_(const fs::path& objdir, const O& object) {
     auto id = calculate_id(object);
     auto path = objdir / path::from_id(id);
     if (fs::exists(path)) return {id, false};
@@ -77,13 +77,13 @@ O load(const fs::path& path) {
 //------------------------------------
 template<class O>
 inline
-O load(const fs::path& objdir, const Id& id) {
+O load(const fs::path& objdir, const ObjectId& id) {
     return load<O>(objdir / path::from_id(id));
 }
 
 template<class O0, class O1, class ... Os> // Two or more
 inline
-variant<O0, O1, Os...> load(const fs::path& objdir, const Id& id) {
+variant<O0, O1, Os...> load(const fs::path& objdir, const ObjectId& id) {
     return load<variant<O0, O1, Os...>>(objdir / path::from_id(id));
 }
 
@@ -96,7 +96,7 @@ variant<O0, O1, Os...> load(const fs::path& path) {
 //------------------------------------
 template<class O>
 inline
-Opt<O> maybe_load(const fs::path& objdir, const Id& id) {
+Opt<O> maybe_load(const fs::path& objdir, const ObjectId& id) {
     auto p = objdir / path::from_id(id);
     if (!fs::exists(p)) return boost::none;
     return load<O>(p);
@@ -104,7 +104,7 @@ Opt<O> maybe_load(const fs::path& objdir, const Id& id) {
 
 template<class O0, class O1, class ... Os> // Two or more
 inline
-Opt<variant<O0, O1, Os...>> maybe_load(const fs::path& objdir, const Id& id) {
+Opt<variant<O0, O1, Os...>> maybe_load(const fs::path& objdir, const ObjectId& id) {
     return maybe_load<variant<O0, O1, Os...>>(objdir, id);
 }
 
@@ -113,13 +113,13 @@ Opt<variant<O0, O1, Os...>> maybe_load(const fs::path& objdir, const Id& id) {
 /*
  * Remove a single object. Note that this keeps children if it's a Tree.
  */
-bool remove(const fs::path& objdir, const Id& id);
+bool remove(const fs::path& objdir, const ObjectId& id);
 
 // -------------------------------------------------------------------
 
 // --- exists --------------------------------------------------------
 
-bool exists(const fs::path& objdir, const Id& id);
+bool exists(const fs::path& objdir, const ObjectId& id);
 
 // -------------------------------------------------------------------
 

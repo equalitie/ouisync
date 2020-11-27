@@ -1,5 +1,5 @@
 #pragma once
-#include "id.h"
+#include "../object_id.h"
 #include "../shortcuts.h"
 
 #include <map>
@@ -11,12 +11,12 @@
 namespace ouisync::object {
 
 namespace {
-    using TreeMap = std::map<std::string, Id>;
+    using TreeMap = std::map<std::string, ObjectId>;
 }
 
 class Tree final : public TreeMap {
 public:
-    Id store(const fs::path& root) const;
+    ObjectId store(const fs::path& root) const;
 
     template<class Archive>
     void serialize(Archive& ar, const unsigned int version) {
@@ -24,7 +24,7 @@ public:
     }
 };
 
-Id calculate_id(const Tree&);
+ObjectId calculate_id(const Tree&);
 
 std::ostream& operator<<(std::ostream&, const Tree&);
 

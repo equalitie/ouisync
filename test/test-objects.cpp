@@ -26,7 +26,6 @@ using namespace ouisync;
 
 using object::Tree;
 using object::Blob;
-using object::Id;
 using boost::variant;
 
 struct Random {
@@ -51,8 +50,8 @@ struct Random {
         return result;
     }
 
-    Id object_id() {
-        Id id;
+    ObjectId object_id() {
+        ObjectId id;
         fill(reinterpret_cast<char*>(id.data()), id.size);
         return id;
     }

@@ -63,7 +63,7 @@ private:
     const VersionVector& get_stamp(const Branch& b);
 
     static
-    object::Id get_root_id(const Branch& b);
+    ObjectId get_root_id(const Branch& b);
 
 private:
     executor_type _ex;

@@ -14,7 +14,6 @@
 
 using namespace std;
 using namespace ouisync;
-using object::Id;
 using object::Blob;
 using object::Tree;
 
@@ -53,10 +52,10 @@ int main(int argc, char** argv)
     }
 
     try {
-        auto obj = object::io::load<Id, Tree, Blob>(path);
+        auto obj = object::io::load<ObjectId, Tree, Blob>(path);
 
         apply(obj,
-                [](Id id) { cout << "Id " << to_hex<char>(id) << "\n"; },
+                [](ObjectId id) { cout << "ObjectId " << to_hex<char>(id) << "\n"; },
                 [](const auto& obj) { cout << obj << "\n"; });
 
     } catch (const exception& ex) {

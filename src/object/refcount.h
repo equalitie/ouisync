@@ -1,6 +1,6 @@
 #pragma once
 
-#include "id.h"
+#include "../object_id.h"
 #include "../shortcuts.h"
 
 #include <cstdint>
@@ -13,8 +13,8 @@ Number read(const fs::path&);
 Number increment(const fs::path&);
 Number decrement(const fs::path&);
 
-Number read(const fs::path& objdir, const Id&);
-Number increment(const fs::path& objdir, const Id&);
-Number decrement(const fs::path& objdir, const Id&);
+Number read(const fs::path& objdir, const ObjectId&);
+Number increment(const fs::path& objdir, const ObjectId&);
+Number decrement(const fs::path& objdir, const ObjectId&);
 
 } // namespace

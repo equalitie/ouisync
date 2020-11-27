@@ -20,14 +20,13 @@
 
 using namespace ouisync;
 using std::move;
-using object::Id;
 using object::Blob;
 using object::Tree;
 using object::JustTag;
 
 /* static */
 LocalBranch LocalBranch::create(const fs::path& path, const fs::path& objdir, UserId user_id) {
-    object::Id root_id;
+    ObjectId root_id;
     VersionVector clock;
 
     if (fs::exists(path)) {
@@ -44,14 +43,14 @@ LocalBranch LocalBranch::create(const fs::path& path, const fs::path& objdir, Us
 //--------------------------------------------------------------------
 
 static
-bool _flat_remove(const fs::path& objdir, const Id& id) {
+bool _flat_remove(const fs::path& objdir, const ObjectId& id) {
     auto rc = object::refcount::decrement(objdir, id);
     if (rc > 0) return true;
     return object::io::remove(objdir, id);
 }
 
 static
-bool _remove_with_children(const fs::path& objdir, const Id& id) {
+bool _remove_with_children(const fs::path& objdir, const ObjectId& id) {
     auto obj = object::io::load<Tree, JustTag<Blob>>(objdir, id);
 
     apply(obj,
@@ -69,13 +68,13 @@ bool _remove_with_children(const fs::path& objdir, const Id& id) {
 
 template<class F>
 static
-Id _update_dir(size_t branch_count, const fs::path& objdir, Id tree_id, PathRange path, F&& f)
+ObjectId _update_dir(size_t branch_count, const fs::path& objdir, ObjectId tree_id, PathRange path, F&& f)
 {
     Tree tree = object::io::load<Tree>(objdir, tree_id);
     auto rc = object::refcount::read(objdir, tree_id);
     assert(rc);
 
-    Opt<Id> child_id;
+    Opt<ObjectId> child_id;
 
     if (path.empty()) {
         child_id = f(tree, branch_count + (rc-1));
@@ -123,7 +122,7 @@ void LocalBranch::store(PathRange path, const Blob& blob)
 
     update_dir(parent(path),
         [&] (Tree& tree, auto) {
-            auto [i, inserted] = tree.insert(std::make_pair(path.back().native(), Id{}));
+            auto [i, inserted] = tree.insert(std::make_pair(path.back().native(), ObjectId{}));
             if (!inserted) throw_error(sys::errc::file_exists);
             auto [id, created] = object::io::store_(_objdir, blob);
             i->second = id;
@@ -206,7 +205,7 @@ void LocalBranch::mkdir(PathRange path)
 
     update_dir(parent(path),
         [&] (Tree& parent, auto) {
-            auto [i, inserted] = parent.insert(std::make_pair(path.back().native(), Id{}));
+            auto [i, inserted] = parent.insert(std::make_pair(path.back().native(), ObjectId{}));
             if (!inserted) throw_error(sys::errc::file_exists);
             auto [id, created] = object::io::store_(_objdir, Tree{});
             i->second = id;
@@ -257,7 +256,7 @@ void LocalBranch::store_self() const {
 
 //--------------------------------------------------------------------
 
-void LocalBranch::root_id(const object::Id& id) {
+void LocalBranch::root_id(const ObjectId& id) {
     if (_root_id == id) return;
     _root_id = id;
     _stamp.increment(_user_id);
@@ -284,7 +283,7 @@ LocalBranch::LocalBranch(const fs::path& file_path, const fs::path& objdir, IArc
 
 //--------------------------------------------------------------------
 
-object::Id LocalBranch::id_of(PathRange path) const
+ObjectId LocalBranch::id_of(PathRange path) const
 {
     return immutable_io().id_of(path);
 }

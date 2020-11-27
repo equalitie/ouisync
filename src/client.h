@@ -8,9 +8,6 @@ namespace ouisync {
 class RemoteBranch;
 
 class Client {
-private:
-    using Id = object::Id;
-
 public:
     Client(MessageBroker::Client&&, Repository&);
 
@@ -18,7 +15,7 @@ public:
 
 private:
     template<class T> net::awaitable<T> receive(Cancel);
-    net::awaitable<void> download_branch(RemoteBranch&, Id, Cancel);
+    net::awaitable<void> download_branch(RemoteBranch&, ObjectId, Cancel);
 
 private:
     MessageBroker::Client _broker;

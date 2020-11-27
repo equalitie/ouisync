@@ -5,13 +5,13 @@
 
 namespace ouisync::object::io {
 
-bool remove(const fs::path& objdir, const Id& id) {
+bool remove(const fs::path& objdir, const ObjectId& id) {
     sys::error_code ec;
     fs::remove(objdir/path::from_id(id), ec);
     return !ec;
 }
 
-bool exists(const fs::path& objdir, const Id& id) {
+bool exists(const fs::path& objdir, const ObjectId& id) {
     return fs::exists(objdir/path::from_id(id));
 }
 

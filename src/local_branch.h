@@ -1,6 +1,6 @@
 #pragma once
 
-#include "object/id.h"
+#include "object_id.h"
 #include "object/blob.h"
 #include "object/tree.h"
 #include "user_id.h"
@@ -39,11 +39,11 @@ public:
     LocalBranch(const fs::path& file_path, const fs::path& objdir,
             const UserId&, Commit);
 
-    const object::Id& root_id() const {
+    const ObjectId& root_id() const {
         return _root_id;
     }
 
-    void root_id(const object::Id& id);
+    void root_id(const ObjectId& id);
 
     BranchIo::Immutable immutable_io() const {
         return BranchIo::Immutable(_objdir, _root_id);
@@ -71,7 +71,7 @@ public:
 
     const UserId& user_id() const { return _user_id; }
 
-    object::Id id_of(PathRange) const;
+    ObjectId id_of(PathRange) const;
 
     friend std::ostream& operator<<(std::ostream&, const LocalBranch&);
 
@@ -90,7 +90,7 @@ private:
     fs::path _file_path;
     fs::path _objdir;
     UserId _user_id;
-    object::Id _root_id;
+    ObjectId _root_id;
     VersionVector _stamp;
 };
 

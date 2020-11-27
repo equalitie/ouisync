@@ -19,7 +19,7 @@
 
 using namespace ouisync;
 
-static object::Id calculate_id(const Commit& commit)
+static ObjectId calculate_id(const Commit& commit)
 {
     Sha256 hash;
     hash.update("Snapshot");
@@ -27,7 +27,7 @@ static object::Id calculate_id(const Commit& commit)
     return hash.close();
 }
 
-Snapshot::Snapshot(const Id& id, fs::path path, fs::path objdir, Commit commit) :
+Snapshot::Snapshot(const ObjectId& id, fs::path path, fs::path objdir, Commit commit) :
     _is_valid(true),
     _id(id),
     _path(std::move(path)),

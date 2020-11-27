@@ -4,7 +4,7 @@
 using namespace ouisync;
 using namespace ouisync::object;
 
-fs::path path::from_id(const Id& id) noexcept
+fs::path path::from_id(const ObjectId& id) noexcept
 {
     auto hex = to_hex<char>(id);
     string_view hex_sv{hex.data(), hex.size()};
@@ -17,9 +17,9 @@ fs::path path::from_id(const Id& id) noexcept
     return fs::path(prefix.begin(), prefix.end()) / fs::path(rest.begin(), rest.end());
 }
 
-Opt<Id> path::to_id(const fs::path& ps) noexcept
+Opt<ObjectId> path::to_id(const fs::path& ps) noexcept
 {
-    std::array<char, Id::size * 2> hex;
+    std::array<char, ObjectId::size * 2> hex;
 
     auto i = hex.begin();
 
@@ -34,5 +34,5 @@ Opt<Id> path::to_id(const fs::path& ps) noexcept
 
     auto opt_bin = from_hex<uint8_t>(hex);
     if (!opt_bin) return boost::none;
-    return Id{*opt_bin};
+    return ObjectId{*opt_bin};
 }

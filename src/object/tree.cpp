@@ -8,7 +8,7 @@
 using namespace ouisync;
 using namespace ouisync::object;
 
-Id ouisync::object::calculate_id(const Tree& tree)
+ObjectId ouisync::object::calculate_id(const Tree& tree)
 {
     Sha256 hash;
     hash.update(uint32_t(hash.size()));
@@ -19,7 +19,7 @@ Id ouisync::object::calculate_id(const Tree& tree)
     return hash.close();
 }
 
-Id Tree::store(const fs::path& root) const
+ObjectId Tree::store(const fs::path& root) const
 {
     return object::io::store(root, *this);
 }

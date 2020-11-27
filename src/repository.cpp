@@ -314,7 +314,7 @@ const VersionVector& Repository::get_stamp(const Branch& b)
     return *apply(b, [] (auto& b) { return &b.stamp(); });
 }
 
-object::Id Repository::get_root_id(const Branch& b)
+ObjectId Repository::get_root_id(const Branch& b)
 {
     return apply(b, [] (auto& b) { return b.root_id(); });
 }

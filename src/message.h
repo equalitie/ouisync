@@ -48,7 +48,7 @@ struct RsSnapshotGroup : std::map<UserId, Commit> {
 struct RqObject {
     static constexpr auto type = MessageType::Request;
 
-    object::Id object_id;
+    ObjectId object_id;
 
     template<class Archive>
     void serialize(Archive& ar, const unsigned) {

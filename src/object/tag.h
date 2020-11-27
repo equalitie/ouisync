@@ -1,6 +1,6 @@
 #pragma once
 
-#include "id.h"
+#include "../object_id.h"
 #include "blob.h"
 
 #include <cstdint> // uint8_t
@@ -34,7 +34,7 @@ class Tree;
 template<class> struct GetTag;
 template<> struct GetTag<Tree>  { static constexpr Tag value = Tag::Tree;  };
 template<> struct GetTag<Blob>  { static constexpr Tag value = Tag::Blob;  };
-template<> struct GetTag<Id>    { static constexpr Tag value = Tag::Id;    };
+template<> struct GetTag<ObjectId> { static constexpr Tag value = Tag::Id;    };
 template<class T> struct GetTag<JustTag<T>> { static constexpr Tag value = GetTag<T>::value; };
 
 std::ostream& operator<<(std::ostream& os, Tag tag);
