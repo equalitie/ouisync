@@ -13,11 +13,10 @@
 
 namespace ouisync::object {
 
-namespace {
-    using TreeMap = std::map<std::string, ObjectId>;
-}
+class Tree final : public std::map<std::string, ObjectId> {
+private:
+    using Parent = std::map<std::string, ObjectId>;
 
-class Tree final : public TreeMap {
 public:
     static constexpr Tag tag = Tag::Tree;
 
@@ -32,7 +31,7 @@ public:
 
     template<class Archive>
     void serialize(Archive& ar, const unsigned int version) {
-        ar & static_cast<TreeMap&>(*this);
+        ar & static_cast<Parent&>(*this);
     }
 
     ObjectId calculate_id() const;
