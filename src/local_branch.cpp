@@ -106,8 +106,8 @@ Id _update_dir(size_t branch_count, const fs::path& objdir, Id tree_id, PathRang
 template<class F>
 void LocalBranch::update_dir(PathRange path, F&& f)
 {
-    auto id = _update_dir(1, _objdir, root_object_id(), path, std::forward<F>(f));
-    root_object_id(id);
+    auto id = _update_dir(1, _objdir, root_id(), path, std::forward<F>(f));
+    root_id(id);
 }
 
 static
@@ -257,10 +257,10 @@ void LocalBranch::store_self() const {
 
 //--------------------------------------------------------------------
 
-void LocalBranch::root_object_id(const object::Id& id) {
+void LocalBranch::root_id(const object::Id& id) {
     if (_root_id == id) return;
     _root_id = id;
-    _clock.increment(_user_id);
+    _stamp.increment(_user_id);
     store_self();
 }
 
@@ -271,8 +271,8 @@ LocalBranch::LocalBranch(const fs::path& file_path, const fs::path& objdir,
     _file_path(file_path),
     _objdir(objdir),
     _user_id(user_id),
-    _root_id(commit.root_object_id),
-    _clock(move(commit.version_vector))
+    _root_id(commit.root_id),
+    _stamp(move(commit.stamp))
 {}
 
 LocalBranch::LocalBranch(const fs::path& file_path, const fs::path& objdir, IArchive& ar) :
@@ -300,14 +300,14 @@ void LocalBranch::store_rest(OArchive& ar) const
 {
     ar << _user_id;
     ar << _root_id;
-    ar << _clock;
+    ar << _stamp;
 }
 
 void LocalBranch::load_rest(IArchive& ar)
 {
     ar >> _user_id;
     ar >> _root_id;
-    ar >> _clock;
+    ar >> _stamp;
 }
 
 //--------------------------------------------------------------------

@@ -23,7 +23,7 @@ static object::Id calculate_id(const Commit& commit)
 {
     Sha256 hash;
     hash.update("Snapshot");
-    hash.update(commit.root_object_id);
+    hash.update(commit.root_id);
     return hash.close();
 }
 
@@ -95,7 +95,7 @@ Snapshot Snapshot::create(const fs::path& snapshotdir, fs::path objdir, Commit c
 
     // XXX: Handle failures
 
-    object::refcount::increment(objdir, commit.root_object_id);
+    object::refcount::increment(objdir, commit.root_id);
 
     store_commit(path, commit);
     object::refcount::increment(path);
@@ -112,7 +112,7 @@ void Snapshot::destroy() noexcept
     // XXX: Handle failures
 
     try {
-        object::refcount::decrement(_objdir, _commit.root_object_id);
+        object::refcount::decrement(_objdir, _commit.root_id);
         object::refcount::decrement(_path);
     }
     catch (const std::exception& e) {
@@ -140,7 +140,7 @@ SnapshotGroup::Id SnapshotGroup::calculate_id() const
 
 std::ostream& ouisync::operator<<(std::ostream& os, const Snapshot& s)
 {
-    return os << "id:" << s._id << " root:" << s._commit.root_object_id;
+    return os << "id:" << s._id << " root:" << s._commit.root_id;
 }
 
 std::ostream& ouisync::operator<<(std::ostream& os, const SnapshotGroup& g)
@@ -150,7 +150,7 @@ std::ostream& ouisync::operator<<(std::ostream& os, const SnapshotGroup& g)
     for (auto& [user_id, snapshot] : g) {
         if (!is_first) { os << ", "; }
         is_first = false;
-        os << "(" << user_id << ", " << snapshot.id() << ", " << snapshot.commit().root_object_id << ")";
+        os << "(" << user_id << ", " << snapshot.id() << ", " << snapshot.commit().root_id << ")";
     }
     return os << "]}";
 }

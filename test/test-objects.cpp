@@ -172,7 +172,7 @@ BOOST_AUTO_TEST_CASE(branch_directories) {
 
     {
         LocalBranch branch = create_branch(testdir/"2", "user_id");
-        auto empty_root_id = branch.root_object_id();
+        auto empty_root_id = branch.root_id();
 
         branch.mkdir(path_range("dir"));
         BOOST_REQUIRE_EQUAL(count_objects(branch.object_directory()), 2);
@@ -181,7 +181,7 @@ BOOST_AUTO_TEST_CASE(branch_directories) {
         branch.remove(path_range("dir"));
         BOOST_REQUIRE_EQUAL(count_objects(branch.object_directory()), 1);
 
-        BOOST_REQUIRE_EQUAL(branch.root_object_id(), empty_root_id);
+        BOOST_REQUIRE_EQUAL(branch.root_id(), empty_root_id);
     }
 }
 
@@ -237,8 +237,7 @@ BOOST_AUTO_TEST_CASE(create_Y_shape) {
 
     auto objdir = branch1.object_directory();
 
-    BOOST_REQUIRE_EQUAL(branch1.root_object_id().hex(),
-                        branch2.root_object_id().hex());
+    BOOST_REQUIRE_EQUAL(branch1.root_id(), branch2.root_id());
 
     BOOST_REQUIRE_EQUAL(count_objects(objdir), 1 /* root */);
 
@@ -314,7 +313,7 @@ BOOST_AUTO_TEST_CASE(tree_remove) {
         LocalBranch branch = create_branch(testdir/"1", "user_id");
         branch.store("data", data);
 
-        Tree root = object::io::load<Tree>(branch.object_directory(), branch.root_object_id());
+        Tree root = object::io::load<Tree>(branch.object_directory(), branch.root_id());
 
         BOOST_REQUIRE_EQUAL(root.size(), 1);
         BOOST_REQUIRE_EQUAL(root.begin()->first, "data");
@@ -326,7 +325,7 @@ BOOST_AUTO_TEST_CASE(tree_remove) {
         bool removed = branch.remove("data");
         BOOST_REQUIRE(removed);
 
-        root = object::io::load<Tree>(branch.object_directory(), branch.root_object_id());
+        root = object::io::load<Tree>(branch.object_directory(), branch.root_id());
 
         BOOST_REQUIRE_EQUAL(root.size(), 0);
         BOOST_REQUIRE_EQUAL(count_objects(branch.object_directory()), 1);

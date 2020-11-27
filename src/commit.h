@@ -6,17 +6,17 @@
 namespace ouisync {
 
 struct Commit {
-    VersionVector version_vector;
-    object::Id root_object_id;
+    VersionVector stamp;
+    object::Id root_id;
 
     bool operator<(const Commit& other) const {
-        return root_object_id < other.root_object_id;
+        return root_id < other.root_id;
     }
 
     template<class Archive>
     void serialize(Archive& ar, const unsigned int version) {
-        ar & root_object_id;
-        ar & version_vector;
+        ar & root_id;
+        ar & stamp;
     }
 
     friend std::ostream& operator<<(std::ostream&, const Commit&);

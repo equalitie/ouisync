@@ -43,11 +43,11 @@ public:
 
     void destroy();
 
-    const VersionVector& version_vector() const { return _commit.version_vector; }
-    const object::Id& root_object_id() const { return _commit.root_object_id; }
+    const VersionVector& stamp() const { return _commit.stamp; }
+    const object::Id& root_id() const { return _commit.root_id; }
 
     BranchIo::Immutable immutable_io() const {
-        return BranchIo::Immutable(_objdir, root_object_id());
+        return BranchIo::Immutable(_objdir, root_id());
     }
 
 private:

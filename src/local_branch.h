@@ -39,11 +39,11 @@ public:
     LocalBranch(const fs::path& file_path, const fs::path& objdir,
             const UserId&, Commit);
 
-    const object::Id& root_object_id() const {
+    const object::Id& root_id() const {
         return _root_id;
     }
 
-    void root_object_id(const object::Id& id);
+    void root_id(const object::Id& id);
 
     BranchIo::Immutable immutable_io() const {
         return BranchIo::Immutable(_objdir, _root_id);
@@ -67,7 +67,7 @@ public:
 
     void mkdir(PathRange);
 
-    const VersionVector& version_vector() const { return _clock; }
+    const VersionVector& stamp() const { return _stamp; }
 
     const UserId& user_id() const { return _user_id; }
 
@@ -91,7 +91,7 @@ private:
     fs::path _objdir;
     UserId _user_id;
     object::Id _root_id;
-    VersionVector _clock;
+    VersionVector _stamp;
 };
 
 } // namespace

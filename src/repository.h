@@ -60,7 +60,7 @@ private:
     Branch& find_branch(PathRange);
 
     static
-    const VersionVector& get_version_vector(const Branch& b);
+    const VersionVector& get_stamp(const Branch& b);
 
     static
     object::Id get_root_id(const Branch& b);

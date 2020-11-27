@@ -75,7 +75,7 @@ net::awaitable<void> Client::run(Cancel cancel)
                 continue;
             }
 
-            co_await download_branch(*branch, branch->root_object_id(), cancel);
+            co_await download_branch(*branch, branch->root_id(), cancel);
         }
     }
 }

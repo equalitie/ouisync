@@ -95,7 +95,7 @@ std::ostream& ouisync::operator<<(std::ostream& os, const RsSnapshotGroup& m) {
     bool is_first = true;
     for (auto& [user_id, commit] : m) {
         if (!is_first) { os << ", "; is_first = true; }
-        os << "(" << user_id << ", " << commit.root_object_id << ")";
+        os << "(" << user_id << ", " << commit.root_id << ")";
     }
     return os << "]}";
 }

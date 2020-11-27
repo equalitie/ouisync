@@ -75,8 +75,8 @@ Branch& Repository::find_branch(PathRange path)
 
 static Commit _get_commit(const Branch& b) {
     return {
-        apply(b, [] (const auto& b) { return b.version_vector(); }),
-        apply(b, [] (const auto& b) { return b.root_object_id(); })
+        apply(b, [] (const auto& b) { return b.stamp(); }),
+        apply(b, [] (const auto& b) { return b.root_id(); })
     };
 }
 
@@ -309,14 +309,14 @@ net::awaitable<size_t> Repository::truncate(PathRange path, size_t size)
 }
 
 /* static */
-const VersionVector& Repository::get_version_vector(const Branch& b)
+const VersionVector& Repository::get_stamp(const Branch& b)
 {
-    return *apply(b, [] (auto& b) { return &b.version_vector(); });
+    return *apply(b, [] (auto& b) { return &b.stamp(); });
 }
 
 object::Id Repository::get_root_id(const Branch& b)
 {
-    return apply(b, [] (auto& b) { return b.root_object_id(); });
+    return apply(b, [] (auto& b) { return b.root_id(); });
 }
 
 net::awaitable<RemoteBranch*>
@@ -344,7 +344,7 @@ Repository::get_or_create_remote_branch(const UserId& user_id, const Commit& com
     assert(branch);
     if (!branch) co_return nullptr;
 
-    if (commit.version_vector <= branch->version_vector()) {
+    if (commit.stamp <= branch->stamp()) {
         co_return nullptr;
     }
 
