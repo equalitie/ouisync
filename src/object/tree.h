@@ -21,6 +21,15 @@ class Tree final : public TreeMap {
 public:
     static constexpr Tag tag = Tag::Tree;
 
+    struct Nothing {
+        static constexpr Tag tag = Tree::tag;
+
+        template<class Archive>
+        void load(Archive& ar, const unsigned int version) {}
+
+        BOOST_SERIALIZATION_SPLIT_MEMBER()
+    };
+
     template<class Archive>
     void serialize(Archive& ar, const unsigned int version) {
         ar & static_cast<TreeMap&>(*this);

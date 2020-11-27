@@ -141,7 +141,7 @@ BOOST_AUTO_TEST_CASE(read_tag) {
     Blob blob = random.vector(256);
     auto id = object::io::store(testdir, blob);
     try {
-        object::io::load<object::JustTag<Blob>>(testdir, id);
+        object::io::load<Blob::Nothing>(testdir, id);
     } catch (...) {
         BOOST_REQUIRE(false);
     }

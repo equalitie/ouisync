@@ -22,7 +22,6 @@ using namespace ouisync;
 using std::move;
 using object::Blob;
 using object::Tree;
-using object::JustTag;
 
 /* static */
 LocalBranch LocalBranch::create(const fs::path& path, const fs::path& objdir, UserId user_id) {
@@ -51,7 +50,7 @@ bool _flat_remove(const fs::path& objdir, const ObjectId& id) {
 
 static
 bool _remove_with_children(const fs::path& objdir, const ObjectId& id) {
-    auto obj = object::io::load<Tree, JustTag<Blob>>(objdir, id);
+    auto obj = object::io::load<Tree, Blob::Nothing>(objdir, id);
 
     apply(obj,
             [&](const Tree& tree) {
@@ -60,7 +59,7 @@ bool _remove_with_children(const fs::path& objdir, const ObjectId& id) {
                     _remove_with_children(objdir, id);
                 }
             },
-            [&](const JustTag<Blob>&) {
+            [&](const Blob::Nothing&) {
             });
 
     return _flat_remove(objdir, id);

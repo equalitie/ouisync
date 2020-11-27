@@ -10,7 +10,6 @@
 using namespace ouisync;
 using object::Tree;
 using object::Blob;
-using object::JustTag;
 
 //--------------------------------------------------------------------
 
@@ -66,12 +65,11 @@ FileSystemAttrib BranchIo::Immutable::get_attr(PathRange path) const
             auto i = parent.find(path.back().native());
             if (i == parent.end()) throw_error(sys::errc::no_such_file_or_directory);
 
-            // XXX: Don't load the whole objects into memory.
-            auto obj = object::io::load<Tree, Blob>(_objdir, i->second);
+            auto obj = object::io::load<Tree::Nothing, Blob::Size>(_objdir, i->second);
 
             apply(obj,
-                [&] (const Tree&) { attrib = FileSystemDirAttrib{}; },
-                [&] (const Blob& b) { attrib = FileSystemFileAttrib{b.size()}; });
+                [&] (const Tree::Nothing&) { attrib = FileSystemDirAttrib{}; },
+                [&] (const Blob::Size& b) { attrib = FileSystemFileAttrib{b.value}; });
         });
 
     return attrib;
