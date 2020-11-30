@@ -41,8 +41,6 @@ public:
 
     const ObjectId& root_id() const { return _root_id; }
 
-    void set_root_id(const ObjectId& id);
-
     BranchIo::Immutable immutable_io() const {
         return BranchIo::Immutable(_objdir, _root_id);
     }
@@ -77,6 +75,8 @@ public:
 
 private:
     friend class BranchIo;
+
+    void set_root_id(const ObjectId& id);
 
     void store_tag(OArchive&) const;
     void store_rest(OArchive&) const;

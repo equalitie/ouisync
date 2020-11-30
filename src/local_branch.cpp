@@ -288,12 +288,17 @@ bool LocalBranch::introduce_commit(const Commit& commit)
     if (!(_stamp <= commit.stamp)) return false;
     if (_root_id == commit.root_id) return false;
 
-    refcount::decrement(_objdir, _root_id);
+    auto old_root = _root_id;
+    auto rc = refcount::decrement(_objdir, old_root);
 
     _root_id = commit.root_id;
     _stamp   = commit.stamp;
 
     store_self();
+
+    if (rc == 0) {
+        _remove_with_children(_objdir, old_root);
+    }
 
     return true;
 }
