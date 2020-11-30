@@ -22,7 +22,7 @@ void _query_dir(const fs::path& objdir, ObjectId tree_id, PathRange path, F&& f)
     if (path.empty()) {
         f(tree);
     } else {
-        auto child_i = tree.find(path.front().string());
+        auto child_i = tree.find(path.front());
         if (child_i == tree.end()) throw_error(sys::errc::no_such_file_or_directory);
         path.advance_begin(1);
         _query_dir(objdir, child_i->second, path, std::forward<F>(f));
@@ -62,7 +62,7 @@ FileSystemAttrib BranchIo::Immutable::get_attr(PathRange path) const
 
     _query_dir(_objdir, _root_id, _parent(path),
         [&] (const Tree& parent) {
-            auto i = parent.find(path.back().native());
+            auto i = parent.find(path.back());
             if (i == parent.end()) throw_error(sys::errc::no_such_file_or_directory);
 
             auto obj = object::io::load<Tree::Nothing, Blob::Size>(_objdir, i->second);
@@ -83,7 +83,7 @@ size_t BranchIo::Immutable::read(PathRange path, const char* buf, size_t size, s
 
     _query_dir(_objdir, _root_id, _parent(path),
         [&] (const Tree& tree) {
-            auto i = tree.find(path.back().native());
+            auto i = tree.find(path.back());
             if (i == tree.end()) throw_error(sys::errc::no_such_file_or_directory);
 
             // XXX: Read only what's needed, not the whole blob
@@ -112,7 +112,7 @@ Opt<Blob> BranchIo::Immutable::maybe_load(PathRange path) const
 
     _query_dir(_objdir, _root_id, _parent(path),
         [&] (const Tree& tree) {
-            auto i = tree.find(path.back().native());
+            auto i = tree.find(path.back());
             if (i == tree.end()) throw_error(sys::errc::no_such_file_or_directory);
             retval = object::io::load<Blob>(_objdir, i->second);
         });
@@ -130,7 +130,7 @@ ObjectId BranchIo::Immutable::id_of(PathRange path) const
 
     _query_dir(_objdir, _root_id, _parent(path),
         [&] (const Tree& tree) {
-            auto i = tree.find(path.back().native());
+            auto i = tree.find(path.back());
             if (i == tree.end()) throw_error(sys::errc::no_such_file_or_directory);
             retval = i->second;
         });

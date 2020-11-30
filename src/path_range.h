@@ -1,14 +1,15 @@
 #pragma once
 
-#include <boost/filesystem/path.hpp>
+#include "path.h"
 #include <boost/range/iterator_range.hpp>
 
 namespace ouisync {
 
-using PathRange = boost::iterator_range<fs::path::iterator>;
+//using Path = std::vector<std::string>;
+using PathRange = boost::iterator_range<Path::const_iterator>;
 
 inline
-PathRange path_range(const fs::path& path) {
+PathRange path_range(const Path& path) {
     return boost::make_iterator_range(path);
 }
 

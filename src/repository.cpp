@@ -49,7 +49,7 @@ Repository::Repository(executor_type ex, Options options) :
 
     for (auto f : fs::directory_iterator(_options.branchdir)) {
         auto branch = _load_branch(f, _options.objectdir);
-        auto user_id = UserId::from_string(f.path().filename().native());
+        auto user_id = UserId::from_string(f.path().filename().string());
         if (!user_id) {
             throw std::runtime_error("Repository: Invalid branch name format");
         }
@@ -66,7 +66,7 @@ Repository::Repository(executor_type ex, Options options) :
 Branch& Repository::find_branch(PathRange path)
 {
     if (path.empty()) throw_error(sys::errc::invalid_argument);
-    auto user_id = UserId::from_string(path.front().native());
+    auto user_id = UserId::from_string(path.front());
     if (!user_id) throw_error(sys::errc::invalid_argument);
     auto i = _branches.find(*user_id);
     if (i == _branches.end()) throw_error(sys::errc::invalid_argument);

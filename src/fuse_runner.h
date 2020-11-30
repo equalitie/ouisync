@@ -3,6 +3,7 @@
 #include "shortcuts.h"
 #include "cancel.h"
 #include "result.h"
+#include "path_range.h"
 
 #define FUSE_USE_VERSION 26
 #include <fuse.h>
@@ -47,9 +48,9 @@ private:
     static int _fuse_rmdir(const char*);
 
     template<class F,
-        class R = typename std::decay_t<std::result_of_t<F(Repository&)>>::value_type
+        class R = typename std::decay_t<std::result_of_t<F(Repository&, const PathRange&)>>::value_type
         >
-    static Result<R> query_fs(const char* fname, F&& f);
+    static Result<R> query_fs(const char* fname, const char* cfile, F&& f);
 
 private:
     Repository& _repo;

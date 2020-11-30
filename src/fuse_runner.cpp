@@ -73,9 +73,17 @@ void* FuseRunner::_fuse_init(struct fuse_conn_info *conn)
     return _get_self();
 }
 
+static fs::path remove_root(const char* path)
+{
+    assert(*path == '/');
+    return fs::path(path + 1);
+}
+
 template<class F, class R>
 /* static */
-Result<R> FuseRunner::query_fs(const char* fname, F&& f) {
+Result<R> FuseRunner::query_fs(const char* fname, const char* cpath, F&& f) {
+    Path path = remove_root(cpath);
+
     FuseRunner* self = _get_self();
     auto& repo = self->_repo;
     auto ex = repo.get_executor();
@@ -86,7 +94,7 @@ Result<R> FuseRunner::query_fs(const char* fname, F&& f) {
 
     co_spawn(ex, [&] () -> net::awaitable<void> {
         try {
-            ret = co_await f(repo);
+            ret = co_await f(repo, path);
         }
         catch (const sys::system_error& e) {
             ret = outcome::failure(e.code());
@@ -108,13 +116,7 @@ Result<R> FuseRunner::query_fs(const char* fname, F&& f) {
     return ret;
 }
 
-#define QUERY_FS(f) query_fs(__PRETTY_FUNCTION__, f)
-
-static fs::path remove_root(const char* path)
-{
-    assert(*path == '/');
-    return fs::path(path + 1);
-}
+#define QUERY_FS(path, f) query_fs(__PRETTY_FUNCTION__, path, f)
 
 template<class Result>
 static void report_if_error(const char* function_name, const Result& r, const char* path)
@@ -130,12 +132,10 @@ static void report_if_error(const char* function_name, const Result& r, const ch
 }
 
 /* static */
-int FuseRunner::_fuse_getattr(const char *path_, struct stat *stbuf)
+int FuseRunner::_fuse_getattr(const char *cpath, struct stat *stbuf)
 {
-    fs::path path = remove_root(path_);
-
-    auto attr = QUERY_FS([&] (auto& fs) {
-        return fs.get_attr(path_range(path));
+    auto attr = QUERY_FS(cpath, [&] (auto& fs, auto& path) {
+        return fs.get_attr(path);
     });
 
     // System asks for a lot of files that don't exist right after mounting and
@@ -160,19 +160,17 @@ int FuseRunner::_fuse_getattr(const char *path_, struct stat *stbuf)
 }
 
 /* static */
-int FuseRunner::_fuse_readdir(const char *path_, void *buf, fuse_fill_dir_t filler,
+int FuseRunner::_fuse_readdir(const char *cpath, void *buf, fuse_fill_dir_t filler,
                          off_t offset, struct fuse_file_info *fi)
 {
     (void) offset;
     (void) fi;
 
-    fs::path path = remove_root(path_);
-
-    auto direntries = QUERY_FS([&] (auto& fs) {
-        return fs.readdir(path_range(path));
+    auto direntries = QUERY_FS(cpath, [&] (auto& fs, auto& path) {
+        return fs.readdir(path);
     });
 
-    report_if_error("readdir", direntries, path_);
+    report_if_error("readdir", direntries, cpath);
 
     if (!direntries) {
         assert(direntries.error().value() == ENOENT);
@@ -190,16 +188,14 @@ int FuseRunner::_fuse_readdir(const char *path_, void *buf, fuse_fill_dir_t fill
 }
 
 /* static */
-int FuseRunner::_fuse_open(const char *path_, struct fuse_file_info *fi)
+int FuseRunner::_fuse_open(const char *cpath, struct fuse_file_info *fi)
 {
-    fs::path path = remove_root(path_);
-
-    auto is_file_result = QUERY_FS([&] (auto& fs) -> net::awaitable<bool> {
-        auto attr = co_await fs.get_attr(path_range(path));
+    auto is_file_result = QUERY_FS(cpath, [&] (auto& fs, auto& path) -> net::awaitable<bool> {
+        auto attr = co_await fs.get_attr(path);
         co_return bool(boost::get<Repository::FileAttrib>(&attr));
     });
 
-    report_if_error("open", is_file_result, path_);
+    report_if_error("open", is_file_result, cpath);
 
     if (!is_file_result) return - is_file_result.error().value();
 
@@ -213,58 +209,53 @@ int FuseRunner::_fuse_open(const char *path_, struct fuse_file_info *fi)
 }
 
 /* static */
-int FuseRunner::_fuse_read(const char *path_, char *buf, size_t size, off_t offset,
+int FuseRunner::_fuse_read(const char *cpath, char *buf, size_t size, off_t offset,
                       struct fuse_file_info*)
 {
-    fs::path path = remove_root(path_);
-    auto rs = QUERY_FS([&] (auto& fs) { return fs.read(path_range(path), buf, size, offset); });
+    auto rs = QUERY_FS(cpath, [&] (auto& fs, auto& path) { return fs.read(path, buf, size, offset); });
     return rs ? rs.value() : -rs.error().value();
 }
 
 /* static */
 int FuseRunner::_fuse_write(
-        const char* path_,
+        const char* cpath,
         const char* buf,
         size_t size,
         off_t offset,
         struct fuse_file_info* fi)
 {
-    fs::path path = remove_root(path_);
-    auto rs = QUERY_FS([&] (auto& fs) { return fs.write(path_range(path), buf, size, offset); });
-    report_if_error("write", rs, path_);
+    auto rs = QUERY_FS(cpath, [&] (auto& fs, auto& path) { return fs.write(path, buf, size, offset); });
+    report_if_error("write", rs, cpath);
     return rs ? rs.value() : -rs.error().value();
 }
 
 /* static */
-int FuseRunner::_fuse_truncate(const char *path_, off_t offset)
+int FuseRunner::_fuse_truncate(const char *cpath, off_t offset)
 {
-    fs::path path = remove_root(path_);
-    auto rs = QUERY_FS([&] (auto& fs) { return fs.truncate(path_range(path), offset); });
-    report_if_error("truncate", rs, path_);
+    auto rs = QUERY_FS(cpath, [&] (auto& fs, auto& path) { return fs.truncate(path, offset); });
+    report_if_error("truncate", rs, cpath);
     return rs ? 0 : -rs.error().value();
 }
 
 /* static */
-int FuseRunner::_fuse_mknod(const char *path_, mode_t mode, dev_t rdev)
+int FuseRunner::_fuse_mknod(const char *cpath, mode_t mode, dev_t rdev)
 {
-    fs::path path = remove_root(path_);
-    auto r = QUERY_FS([&] (auto& fs) -> net::awaitable<int> {
-            co_await fs.mknod(path_range(path), mode, rdev);
+    auto r = QUERY_FS(cpath, [&] (auto& fs, auto& path) -> net::awaitable<int> {
+            co_await fs.mknod(path, mode, rdev);
             co_return 0;
         });
-    report_if_error("truncate", r, path_);
+    report_if_error("truncate", r, cpath);
     return r ? 0 : -r.error().value();
 }
 
 /* static */
-int FuseRunner::_fuse_mkdir(const char* path_, mode_t mode)
+int FuseRunner::_fuse_mkdir(const char* cpath, mode_t mode)
 {
-    fs::path path = remove_root(path_);
-    auto r = QUERY_FS([&] (auto& fs) -> net::awaitable<int> {
-        co_await fs.mkdir(path_range(path), mode);
+    auto r = QUERY_FS(cpath, [&] (auto& fs, auto& path) -> net::awaitable<int> {
+        co_await fs.mkdir(path, mode);
         co_return 0;
     });
-    report_if_error("mkdir", r, path_);
+    report_if_error("mkdir", r, cpath);
     return r ? 0 : -r.error().value();
 }
 
@@ -280,26 +271,24 @@ int FuseRunner::_fuse_utime(const char *path_, utimbuf* b)
 }
 
 /* static */
-int FuseRunner::_fuse_unlink(const char* path_)
+int FuseRunner::_fuse_unlink(const char* cpath)
 {
-    fs::path path = remove_root(path_);
-    auto r = QUERY_FS([&] (auto& fs) -> net::awaitable<int> {
-        co_await fs.remove_file(path_range(path));
+    auto r = QUERY_FS(cpath, [&] (auto& fs, auto& path) -> net::awaitable<int> {
+        co_await fs.remove_file(path);
         co_return 0;
     });
-    report_if_error("unlink", r, path_);
+    report_if_error("unlink", r, cpath);
     return r ? 0 : -r.error().value();
 }
 
 /* static */
-int FuseRunner::_fuse_rmdir(const char* path_)
+int FuseRunner::_fuse_rmdir(const char* cpath)
 {
-    fs::path path = remove_root(path_);
-    auto r = QUERY_FS([&] (auto& fs) -> net::awaitable<int> {
-        co_await fs.remove_directory(path_range(path));
+    auto r = QUERY_FS(cpath, [&] (auto& fs, auto& path) -> net::awaitable<int> {
+        co_await fs.remove_directory(path);
         co_return 0;
     });
-    report_if_error("rmdir", r, path_);
+    report_if_error("rmdir", r, cpath);
     return r ? 0 : -r.error().value();
 }
 
