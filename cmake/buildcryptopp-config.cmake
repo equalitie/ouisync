@@ -13,11 +13,17 @@ else()
     set(cryptopp_flags "${cryptopp_flags}")
 endif()
 
+if(CMAKE_GENERATOR MATCHES "Makefiles")
+    set(MAKE_CMD $(MAKE))
+else()
+    set(MAKE_CMD make)
+endif()
+
 # XXX: Using both add_custom_command and add_custom_target seem to be faster
 # than just running $(MAKE) directly from add_custom_command. Not sure why.
 add_custom_command(
     OUTPUT ${cryptopp_lib}
-    COMMAND $(MAKE) libcryptopp.a ${cryptopp_flags}
+    COMMAND ${MAKE_CMD} libcryptopp.a ${cryptopp_flags}
     WORKING_DIRECTORY ${cryptopp_srcdir})
 
 add_custom_target(CryptoPP_Target DEPENDS ${cryptopp_lib})
