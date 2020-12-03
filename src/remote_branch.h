@@ -68,7 +68,16 @@ private:
     using Parents  = std::set<ObjectId>;
     using Children = std::set<ObjectId>;
 
+    // Objects whose all children have been downloaded and also whose parent's
+    // are either non existent (root) or incomplete.
+    std::set<ObjectId> _complete_objects;
+
+    // Objects that have been downloaded, but some of its childrent haven't
+    // been.
     std::map<ObjectId, Children> _incomplete_objects;
+
+    // Objects that are known to be in this snapshot, but haven't yet been
+    // downloaded.
     std::map<ObjectId, Parents> _missing_objects;
 
     Commit _commit;
