@@ -61,6 +61,8 @@ private:
     template<class Obj>
     net::awaitable<ObjectId> insert_object(const Obj& obj, std::set<ObjectId> children);
 
+    void filter_missing(std::set<ObjectId>& objs) const;
+
 private:
     fs::path _filepath;
     fs::path _objdir;

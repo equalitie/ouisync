@@ -43,7 +43,6 @@ RemoteBranch::RemoteBranch(fs::path filepath, fs::path objdir, IArchive& ar) :
 
 net::awaitable<ObjectId> RemoteBranch::insert_blob(const Blob& blob)
 {
-    std::cerr << "Inserting blob " << blob.calculate_id() << " " << _commit << "\n";
     return insert_object(blob, {});
 }
 
@@ -56,41 +55,57 @@ static std::set<ObjectId> _children(const Tree& tree)
 
 net::awaitable<ObjectId> RemoteBranch::insert_tree(const Tree& tree)
 {
-    std::cerr << "Inserting tree " << tree.calculate_id() << " " << _commit << "\n";
     return insert_object(tree, _children(tree));
+}
+
+void RemoteBranch::filter_missing(std::set<ObjectId>& objs) const
+{
+    for (auto i = objs.begin(); i != objs.end();) {
+        auto j = std::next(i);
+        if (object::io::exists(_objdir, *i)) objs.erase(i);
+        i = j;
+    }
 }
 
 template<class Obj>
 net::awaitable<ObjectId> RemoteBranch::insert_object(const Obj& obj, std::set<ObjectId> children)
 {
-    [[maybe_unused]] auto id = _flat_store(_objdir, obj);
+    // Missing objects:    Object -> Parents
+    // Incomplete objects: Object -> Children
 
-    if (!children.empty()) {
+    auto id = obj.calculate_id();
+
+    auto parents = std::move(_missing_objects.at(id));
+    _missing_objects.erase(id);
+
+    if (children.empty()) {
+        _complete_objects.insert(id);
+    } else {
+        filter_missing(children);
+
         for (auto& child : children) {
-            auto i = _missing_objects.insert({child, {}}).first;
-            i->second.insert(id);
+            _missing_objects[child].insert(id);
         }
 
-        _incomplete_objects.insert({id, move(children)});
-    }
-
-    auto i = _missing_objects.find(id);
-
-    if (i == _missing_objects.end()) {
-        throw std::runtime_error("The Object is not missing");
-    }
-
-    for (auto& parent : i->second) {
-        auto incomplete_i = _incomplete_objects.find(parent);
-
-        if (incomplete_i == _incomplete_objects.end()) {
-            throw std::runtime_error("No such incomplete object");
+        if (children.empty()) {
+            _complete_objects.insert(id);
+        } else {
+            _incomplete_objects.insert({id, move(children)});
         }
+    }
 
-        incomplete_i->second.erase(i->first);
+    _flat_store(_objdir, obj);
 
-        if (incomplete_i->second.empty()) {
-            _incomplete_objects.erase(incomplete_i);
+    // Check that any of the parents of `obj` became "complete".
+    for (auto& parent : parents) {
+        auto& missing_children = _incomplete_objects.at(parent);
+
+        missing_children.erase(id);
+
+        if (missing_children.empty()) {
+            // Reference counting stays the same
+            _incomplete_objects.erase(id);
+            _complete_objects.insert(id);
         }
     }
 
@@ -102,9 +117,14 @@ net::awaitable<void> RemoteBranch::introduce_commit(const Commit& commit)
 {
     _commit = commit;
 
-    // XXX: TODO
+    // Missing objects don't increase refcount
     _missing_objects.clear();
-    _incomplete_objects.clear();
+
+    auto incomplete_objects = std::move(_incomplete_objects);
+    auto complete_objects   = std::move(_complete_objects);
+
+    for (auto& [id, _] : incomplete_objects) refcount::deep_remove(_objdir, id);
+    for (auto& id      : complete_objects)   refcount::deep_remove(_objdir, id);
 
     _missing_objects.insert({_commit.root_id, {}});
 
