@@ -23,9 +23,15 @@ namespace hash_detail {
     // in hash.cpp to make sure this stays correct in case cryptopp
     // changes it.
     template<HashAlgorithm algo> struct ImplSize;
+#ifdef __ANDROID__
+    template<> struct ImplSize<HashAlgorithm::sha1>   { static constexpr size_t value = 192; };
+    template<> struct ImplSize<HashAlgorithm::sha256> { static constexpr size_t value = 200; };
+    template<> struct ImplSize<HashAlgorithm::sha512> { static constexpr size_t value = 336; };
+#else
     template<> struct ImplSize<HashAlgorithm::sha1>   { static constexpr size_t value = 208; };
     template<> struct ImplSize<HashAlgorithm::sha256> { static constexpr size_t value = 224; };
     template<> struct ImplSize<HashAlgorithm::sha512> { static constexpr size_t value = 368; };
+#endif
 
     template<HashAlgorithm algo> struct DigestSize;
     template<> struct DigestSize<HashAlgorithm::sha1>   { static constexpr size_t value = 20; };
