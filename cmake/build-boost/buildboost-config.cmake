@@ -11,8 +11,11 @@ set(BOOST_COMPONENTS
     serialization
     regex
     system
-    unit_test_framework
 )
+
+if (NOT ${CMAKE_SYSTEM_NAME} STREQUAL "Android")
+    set(BOOST_COMPONENTS ${BOOST_COMPONENTS} unit_test_framework)
+endif()
 
 string(REPLACE "." "_" BOOST_VERSION_FILENAME ${BOOST_VERSION})
 
