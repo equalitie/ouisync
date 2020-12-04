@@ -122,8 +122,8 @@ template<class Result>
 static void report_if_error(const char* function_name, const Result& r, const char* path)
 {
     if (r) {
-        std::cerr << "FUSE: Success in function '" <<
-            function_name << "' path '" << path << "'\n";
+        //std::cerr << "FUSE: Success in function '" <<
+        //    function_name << "' path '" << path << "'\n";
         return;
     }
     std::cerr << "FUSE: Error in function '" <<
