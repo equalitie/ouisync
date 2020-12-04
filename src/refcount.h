@@ -17,4 +17,7 @@ Number read(const fs::path& objdir, const ObjectId&);
 Number increment(const fs::path& objdir, const ObjectId&);
 Number decrement(const fs::path& objdir, const ObjectId&);
 
+bool flat_remove(const fs::path& objdir, const ObjectId& id);
+void deep_remove(const fs::path& objdir, const ObjectId& id);
+
 } // namespace

@@ -41,30 +41,6 @@ LocalBranch LocalBranch::create(const fs::path& path, const fs::path& objdir, Us
 
 //--------------------------------------------------------------------
 
-static
-bool _flat_remove(const fs::path& objdir, const ObjectId& id) {
-    auto rc = refcount::decrement(objdir, id);
-    if (rc > 0) return true;
-    return object::io::remove(objdir, id);
-}
-
-static
-bool _remove_with_children(const fs::path& objdir, const ObjectId& id) {
-    auto obj = object::io::load<Tree, Blob::Nothing>(objdir, id);
-
-    apply(obj,
-            [&](const Tree& tree) {
-                for (auto& [name, id] : tree) {
-                    (void)name; // https://stackoverflow.com/a/40714311/273348
-                    _remove_with_children(objdir, id);
-                }
-            },
-            [&](const Blob::Nothing&) {
-            });
-
-    return _flat_remove(objdir, id);
-}
-
 template<class F>
 static
 ObjectId _update_dir(size_t branch_count, const fs::path& objdir, ObjectId tree_id, PathRange path, F&& f)
@@ -95,7 +71,7 @@ ObjectId _update_dir(size_t branch_count, const fs::path& objdir, ObjectId tree_
     }
 
     if (branch_count == 1) {
-        _flat_remove(objdir, tree_id);
+        refcount::flat_remove(objdir, tree_id);
     }
 
     return new_id;
@@ -158,7 +134,7 @@ size_t LocalBranch::write(PathRange path, const char* buf, size_t size, size_t o
             memcpy(blob.data() + offset, buf, size);
 
             if (branch_count <= 1) {
-                _flat_remove(_objdir, child.id());
+                refcount::flat_remove(_objdir, child.id());
             }
 
             child.set_id(object::io::store(_objdir, blob));
@@ -186,7 +162,7 @@ size_t LocalBranch::truncate(PathRange path, size_t size)
             size = blob.size();
 
             if (branch_count <= 1) {
-                _flat_remove(_objdir, child.id());
+                refcount::flat_remove(_objdir, child.id());
             }
 
             child.set_id(object::io::store(_objdir, blob));
@@ -223,7 +199,7 @@ bool LocalBranch::remove(PathRange path)
             auto child = tree.find(path.back());
             if (!child) throw_error(sys::errc::no_such_file_or_directory);
             if (branch_count <= 1) {
-                _remove_with_children(_objdir, child.id());
+                refcount::deep_remove(_objdir, child.id());
             }
             tree.erase(child);
             return boost::none;
@@ -297,7 +273,7 @@ bool LocalBranch::introduce_commit(const Commit& commit)
     store_self();
 
     if (rc == 0) {
-        _remove_with_children(_objdir, old_root);
+        refcount::deep_remove(_objdir, old_root);
     }
 
     return true;
