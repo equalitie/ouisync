@@ -9,6 +9,7 @@
 #include <boost/asio/buffer.hpp>
 #include <boost/utility/string_view.hpp>
 #include <boost/endian/conversion.hpp>
+#include <sha.h> // cryptopp
 
 namespace ouisync {
 
@@ -22,16 +23,14 @@ namespace hash_detail {
     // This was done manually, but there is a static assertion
     // in hash.cpp to make sure this stays correct in case cryptopp
     // changes it.
+    // XXX This was done this was to avoid including <sha.h> in this
+    // file. The approach failed once we needed to cross compile the
+    // code. Thus we can avoid doing it all together and simply use
+    // structures defined in <sha.h>.
     template<HashAlgorithm algo> struct ImplSize;
-#ifdef __ANDROID__
-    template<> struct ImplSize<HashAlgorithm::sha1>   { static constexpr size_t value = 192; };
-    template<> struct ImplSize<HashAlgorithm::sha256> { static constexpr size_t value = 200; };
-    template<> struct ImplSize<HashAlgorithm::sha512> { static constexpr size_t value = 336; };
-#else
-    template<> struct ImplSize<HashAlgorithm::sha1>   { static constexpr size_t value = 208; };
-    template<> struct ImplSize<HashAlgorithm::sha256> { static constexpr size_t value = 224; };
-    template<> struct ImplSize<HashAlgorithm::sha512> { static constexpr size_t value = 368; };
-#endif
+    template<> struct ImplSize<HashAlgorithm::sha1>   { static constexpr size_t value = sizeof(CryptoPP::SHA1); };
+    template<> struct ImplSize<HashAlgorithm::sha256> { static constexpr size_t value = sizeof(CryptoPP::SHA256); };
+    template<> struct ImplSize<HashAlgorithm::sha512> { static constexpr size_t value = sizeof(CryptoPP::SHA512); };
 
     template<HashAlgorithm algo> struct DigestSize;
     template<> struct DigestSize<HashAlgorithm::sha1>   { static constexpr size_t value = 20; };

@@ -1,7 +1,6 @@
 #include "hash.h"
 
 #include <cryptlib.h>
-#include <sha.h>
 
 namespace ouisync { namespace hash_detail {
 
