@@ -9,4 +9,19 @@ set(cryptopp_srcdir ${CMAKE_CURRENT_BINARY_DIR}/cryptopp-src)
 
 file(COPY ${cryptopp_cmake_srcdir}/CMakeLists.txt DESTINATION ${cryptopp_srcdir})
 
+option(BUILD_SHARED "" OFF)
+option(BUILD_TESTING "" OFF)
+
+if(ANDROID)
+    include_directories(${ANDROID_NDK}/sources/android/cpufeatures)
+endif()
+
 add_subdirectory(${cryptopp_srcdir})
+
+if(ANDROID)
+    add_library(CryptoPP STATIC ${ANDROID_NDK}/sources/android/cpufeatures/cpu-features.c)
+    target_link_libraries(CryptoPP PUBLIC cryptopp-static)
+    target_include_directories(CryptoPP PUBLIC ${cryptopp_srcdir})
+else()
+    add_library(CryptoPP ALIAS cryptopp-static)
+endif()
