@@ -1,5 +1,8 @@
 #include "refcount.h"
-#include "object/path.h"
+#include "object/tree.h"
+#include "object/blob.h"
+#include "object/io.h"
+#include "variant.h"
 #include <boost/filesystem/fstream.hpp>
 #include <boost/filesystem/operations.hpp>
 
@@ -7,6 +10,9 @@
 #include <sstream>
 
 namespace ouisync::refcount {
+
+using object::Tree;
+using object::Blob;
 
 static
 fs::path object_path(const ObjectId& id) noexcept {
@@ -105,5 +111,32 @@ Number decrement(const fs::path& objdir, const ObjectId& id)
 Number read(const fs::path& objdir, const ObjectId& id) {
     return read(objdir / object_path(id));
 }
+
+// -------------------------------------------------------------------
+
+bool flat_remove(const fs::path& objdir, const ObjectId& id) {
+    auto rc = refcount::decrement(objdir, id);
+    if (rc > 0) return true;
+    return object::io::remove(objdir, id);
+}
+
+
+void deep_remove(const fs::path& objdir, const ObjectId& id) {
+    auto obj = object::io::load<Tree, Blob::Nothing>(objdir, id);
+
+    apply(obj,
+            [&](const Tree& tree) {
+                for (auto& [name, id] : tree) {
+                    (void)name; // https://stackoverflow.com/a/40714311/273348
+                    deep_remove(objdir, id);
+                }
+            },
+            [&](const Blob::Nothing&) {
+            });
+
+    flat_remove(objdir, id);
+}
+
+// -------------------------------------------------------------------
 
 } // namespace

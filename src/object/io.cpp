@@ -1,4 +1,5 @@
 #include "io.h"
+#include "../refcount.h"
 
 #include <boost/system/error_code.hpp>
 #include <boost/filesystem/operations.hpp>

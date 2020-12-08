@@ -127,8 +127,8 @@ BOOST_AUTO_TEST_CASE(tree_is_same) {
 
     Random random;
     object::Tree t1;
-    t1[random.string(2)]  = random.object_id();
-    t1[random.string(10)] = random.object_id();
+    t1[random.string(2)].set_id(random.object_id());
+    t1[random.string(10)].set_id(random.object_id());
     object::io::store(testdir, t1);
     auto t2 = object::io::load<object::Tree>(testdir, t1.calculate_id());
     REQUIRE_HEX_EQUAL(t1.calculate_id(), t2.calculate_id());
