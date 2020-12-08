@@ -16,7 +16,7 @@ if(ANDROID)
     include_directories(${ANDROID_NDK}/sources/android/cpufeatures)
 endif()
 
-add_subdirectory(${cryptopp_srcdir})
+add_subdirectory(${cryptopp_srcdir} ${cryptopp_srcdir}/binaries)
 
 if(ANDROID)
     add_library(CryptoPP STATIC ${ANDROID_NDK}/sources/android/cpufeatures/cpu-features.c)
