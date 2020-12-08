@@ -11,8 +11,6 @@
 #include "refcount.h"
 
 #include <boost/filesystem.hpp>
-#include <boost/archive/binary_oarchive.hpp>
-#include <boost/archive/binary_iarchive.hpp>
 #include <boost/serialization/vector.hpp>
 #include <string.h> // memcpy
 
@@ -222,7 +220,7 @@ void LocalBranch::store_self() const {
     if (!file.is_open())
         throw std::runtime_error("Failed to open branch file");
 
-    boost::archive::binary_oarchive oa(file);
+    OutputArchive oa(file);
 
     store_tag(oa);
     store_rest(oa);
@@ -250,7 +248,7 @@ LocalBranch::LocalBranch(const fs::path& file_path, const fs::path& objdir,
     _stamp(move(commit.stamp))
 {}
 
-LocalBranch::LocalBranch(const fs::path& file_path, const fs::path& objdir, IArchive& ar) :
+LocalBranch::LocalBranch(const fs::path& file_path, const fs::path& objdir, InputArchive& ar) :
     _file_path(file_path),
     _objdir(objdir)
 {
@@ -288,19 +286,19 @@ ObjectId LocalBranch::id_of(PathRange path) const
 
 //--------------------------------------------------------------------
 
-void LocalBranch::store_tag(OArchive& ar) const
+void LocalBranch::store_tag(OutputArchive& ar) const
 {
     ar << BranchType::Local;
 }
 
-void LocalBranch::store_rest(OArchive& ar) const
+void LocalBranch::store_rest(OutputArchive& ar) const
 {
     ar << _user_id;
     ar << _root_id;
     ar << _stamp;
 }
 
-void LocalBranch::load_rest(IArchive& ar)
+void LocalBranch::load_rest(InputArchive& ar)
 {
     ar >> _user_id;
     ar >> _root_id;

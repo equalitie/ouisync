@@ -3,13 +3,12 @@
 #include "hex.h"
 #include "variant.h"
 #include "refcount.h"
+#include "archive.h"
 #include "object/tree.h"
 #include "object/blob.h"
 #include "object/io.h"
 
 #include <boost/filesystem/fstream.hpp>
-#include <boost/archive/binary_iarchive.hpp>
-#include <boost/archive/binary_oarchive.hpp>
 #include <boost/serialization/set.hpp>
 #include <boost/serialization/map.hpp>
 #include <boost/serialization/array.hpp>
@@ -67,7 +66,7 @@ void Snapshot::store_commit(const fs::path& path, const Commit& commit)
     if (!ofs.is_open())
         throw std::runtime_error("Failed to store object");
 
-    boost::archive::binary_oarchive oa(ofs);
+    OutputArchive oa(ofs);
     oa << commit;
 }
 
@@ -79,7 +78,7 @@ Commit Snapshot::load_commit(const fs::path& path)
     if (!ifs.is_open())
         throw std::runtime_error("Failed to open object");
 
-    boost::archive::binary_iarchive ia(ifs);
+    InputArchive ia(ifs);
     Commit commit;
     ia >> commit;
     return commit;

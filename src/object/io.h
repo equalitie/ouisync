@@ -1,11 +1,10 @@
 #pragma once
 
 #include "../object_id.h"
+#include "../archive.h"
 #include "tagged.h"
 #include "path.h"
 
-#include <boost/archive/text_iarchive.hpp>
-#include <boost/archive/text_oarchive.hpp>
 #include <boost/filesystem/fstream.hpp>
 #include <boost/filesystem/operations.hpp>
 #include <boost/format.hpp>
@@ -24,7 +23,7 @@ namespace detail {
         fs::ofstream ofs(path, ofs.out | ofs.binary | ofs.trunc);
         assert(ofs.is_open());
         if (!ofs.is_open()) throw std::runtime_error("Failed to store object");
-        boost::archive::text_oarchive oa(ofs);
+        OutputArchive oa(ofs);
         tagged::Save<O> save{object};
         oa << save;
     }
@@ -67,7 +66,7 @@ O load(const fs::path& path) {
     if (!ifs.is_open()) {
         throw std::runtime_error(str(boost::format("Failed to open object %1%") % path));
     }
-    boost::archive::text_iarchive ia(ifs);
+    InputArchive ia(ifs);
     O result;
     tagged::Load<O> loader{result};
     ia >> loader;

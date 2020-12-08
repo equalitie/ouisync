@@ -2,6 +2,7 @@
 #include "error.h"
 #include "hex.h"
 #include "array_io.h"
+#include "archive.h"
 
 #include <boost/endian/conversion.hpp>
 
@@ -9,8 +10,6 @@
 #include <boost/asio/write.hpp>
 #include <boost/asio/use_awaitable.hpp>
 
-#include <boost/archive/binary_iarchive.hpp>
-#include <boost/archive/binary_oarchive.hpp>
 #include <boost/serialization/optional.hpp>
 #include <boost/serialization/variant.hpp>
 #include <boost/serialization/vector.hpp>
@@ -44,7 +43,7 @@ try {
 
     std::stringstream ss(move(rx_buf));
 
-    boost::archive::binary_iarchive ia(ss);
+    InputArchive ia(ss);
     Message m;
     ia >> m;
 
@@ -61,7 +60,7 @@ try {
     auto close_socket = cancel.connect([&] { socket.close(); });
 
     std::stringstream ss;
-    boost::archive::binary_oarchive oa(ss);
+    OutputArchive oa(ss);
     oa << message;
     std::string ms = move(*ss.rdbuf()).str();
     assert(ms.size() < MAX_MESSAGE_SIZE);

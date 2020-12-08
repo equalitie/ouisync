@@ -3,9 +3,8 @@
 #include "branch_type.h"
 #include "object/io.h"
 #include "refcount.h"
+#include "archive.h"
 
-#include <boost/archive/binary_iarchive.hpp>
-#include <boost/archive/binary_oarchive.hpp>
 #include <boost/serialization/vector.hpp>
 #include <boost/serialization/set.hpp>
 
@@ -34,7 +33,7 @@ RemoteBranch::RemoteBranch(Commit commit, fs::path filepath, fs::path objdir) :
     _missing_objects.insert({_commit.root_id, {}});
 }
 
-RemoteBranch::RemoteBranch(fs::path filepath, fs::path objdir, IArchive& ar) :
+RemoteBranch::RemoteBranch(fs::path filepath, fs::path objdir, InputArchive& ar) :
     _filepath(std::move(filepath)),
     _objdir(std::move(objdir))
 {
@@ -140,25 +139,25 @@ void RemoteBranch::store_self() const {
     if (!file.is_open())
         throw std::runtime_error(str(boost::format("Failed to open branch file %1%") % _filepath));
 
-    OArchive oa(file);
+    OutputArchive oa(file);
 
     store_tag(oa);
     store_body(oa);
 }
 
-void RemoteBranch::store_tag(OArchive& ar) const
+void RemoteBranch::store_tag(OutputArchive& ar) const
 {
     ar << BranchType::Remote;
 }
 
-void RemoteBranch::store_body(OArchive& ar) const
+void RemoteBranch::store_body(OutputArchive& ar) const
 {
     ar << _commit;
     ar << _missing_objects;
     ar << _incomplete_objects;
 }
 
-void RemoteBranch::load_body(IArchive& ar)
+void RemoteBranch::load_body(InputArchive& ar)
 {
     ar >> _commit;
     ar >> _missing_objects;

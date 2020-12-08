@@ -4,13 +4,12 @@
 #include "branch_type.h"
 #include "random.h"
 #include "hex.h"
+#include "archive.h"
 
 #include <iostream>
 #include <boost/filesystem.hpp>
 #include <boost/range/iterator_range.hpp>
 
-#include <boost/archive/binary_oarchive.hpp>
-#include <boost/archive/binary_iarchive.hpp>
 #include <boost/serialization/vector.hpp>
 
 using namespace ouisync;
@@ -25,7 +24,7 @@ static
 Branch _load_branch(const fs::path& path, const fs::path& objdir)
 {
     fs::fstream file(path, file.binary | file.in);
-    boost::archive::binary_iarchive archive(file);
+    InputArchive archive(file);
 
     BranchType type;
 

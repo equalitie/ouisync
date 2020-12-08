@@ -14,18 +14,12 @@
 #include <boost/filesystem/path.hpp>
 #include <boost/optional.hpp>
 
-namespace boost::archive {
-    class binary_iarchive;
-    class binary_oarchive;
-} // boost::archive namespace
-
 namespace ouisync {
 
-class LocalBranch {
-private:
-    using IArchive = boost::archive::binary_iarchive;
-    using OArchive = boost::archive::binary_oarchive;
+class InputArchive;
+class OutputArchive;
 
+class LocalBranch {
 public:
     using Blob = object::Blob;
     using Tree = object::Tree;
@@ -34,7 +28,7 @@ public:
     static
     LocalBranch create(const fs::path& path, const fs::path& objdir, UserId user_id);
 
-    LocalBranch(const fs::path& file_path, const fs::path& objdir, IArchive&);
+    LocalBranch(const fs::path& file_path, const fs::path& objdir, InputArchive&);
 
     LocalBranch(const fs::path& file_path, const fs::path& objdir,
             const UserId&, Commit);
@@ -78,9 +72,9 @@ private:
 
     void set_root_id(const ObjectId& id);
 
-    void store_tag(OArchive&) const;
-    void store_rest(OArchive&) const;
-    void load_rest(IArchive&);
+    void store_tag(OutputArchive&) const;
+    void store_rest(OutputArchive&) const;
+    void load_rest(InputArchive&);
 
     void store_self() const;
 

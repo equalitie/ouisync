@@ -14,25 +14,20 @@
 #include <boost/filesystem/path.hpp>
 #include <map>
 
-namespace boost::archive {
-    class binary_iarchive;
-    class binary_oarchive;
-}
-
 namespace ouisync {
+
+class InputArchive;
+class OutputArchive;
 
 class RemoteBranch {
 private:
     using Tree = object::Tree;
     using Blob = object::Blob;
 
-    using IArchive = boost::archive::binary_iarchive;
-    using OArchive = boost::archive::binary_oarchive;
-
 public:
     RemoteBranch(Commit, fs::path filepath, fs::path objdir);
 
-    RemoteBranch(fs::path filepath, fs::path objdir, IArchive&);
+    RemoteBranch(fs::path filepath, fs::path objdir, InputArchive&);
 
     [[nodiscard]] net::awaitable<ObjectId> insert_blob(const Blob&);
     [[nodiscard]] net::awaitable<ObjectId> insert_tree(const Tree&);
@@ -49,9 +44,9 @@ public:
     }
 
 private:
-    void store_tag(OArchive&) const;
-    void store_body(OArchive&) const;
-    void load_body(IArchive&);
+    void store_tag(OutputArchive&) const;
+    void store_body(OutputArchive&) const;
+    void load_body(InputArchive&);
 
     template<class T> void store(const fs::path&, const T&);
     template<class T> void load(const fs::path&, T& value);
