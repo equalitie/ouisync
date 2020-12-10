@@ -122,6 +122,10 @@ bool flat_remove(const fs::path& objdir, const ObjectId& id) {
 
 
 void deep_remove(const fs::path& objdir, const ObjectId& id) {
+    auto rc = decrement(objdir, id);
+
+    if (rc > 0) return;
+
     auto obj = object::io::load<Tree, Blob::Nothing>(objdir, id);
 
     apply(obj,
@@ -134,7 +138,7 @@ void deep_remove(const fs::path& objdir, const ObjectId& id) {
             [&](const Blob::Nothing&) {
             });
 
-    flat_remove(objdir, id);
+    object::io::remove(objdir, id);
 }
 
 // -------------------------------------------------------------------
