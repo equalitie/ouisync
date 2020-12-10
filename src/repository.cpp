@@ -60,6 +60,8 @@ Repository::Repository(executor_type ex, Options options) :
         _branches.insert(make_pair(_user_id,
                     LocalBranch::create(path, _options.objectdir, _user_id)));
     }
+
+    std::cout << "User ID: " << _user_id << "\n";
 }
 
 Branch& Repository::find_branch(PathRange path)
