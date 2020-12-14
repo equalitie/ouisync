@@ -4,6 +4,7 @@
 #include "variant.h"
 #include "refcount.h"
 #include "archive.h"
+#include "random.h"
 #include "object/tree.h"
 #include "object/blob.h"
 #include "object/io.h"
@@ -84,20 +85,26 @@ Commit Snapshot::load_commit(const fs::path& path)
     return commit;
 }
 
+static auto _random_file_name(const fs::path& dir)
+{
+    std::array<unsigned char, 16> rnd;
+    random::generate_non_blocking(rnd.data(), rnd.size());
+    auto hex = to_hex<char>(rnd);
+    return dir / fs::path(hex.begin(), hex.end());
+}
+
 /* static */
 Snapshot Snapshot::create(const fs::path& snapshotdir, fs::path objdir, Commit commit)
 {
     auto id = calculate_id(commit);
 
-    auto id_hex = to_hex<char>(id);
-    auto path = snapshotdir / fs::path(id_hex.begin(), id_hex.end());
+    auto path = _random_file_name(snapshotdir);
 
     // XXX: Handle failures
 
     refcount::increment(objdir, commit.root_id);
 
     store_commit(path, commit);
-    refcount::increment(path);
 
     return Snapshot(id, std::move(path), std::move(objdir), std::move(commit));
 }
@@ -112,7 +119,6 @@ void Snapshot::destroy() noexcept
 
     try {
         refcount::decrement(_objdir, _commit.root_id);
-        refcount::decrement(_path);
     }
     catch (const std::exception& e) {
         std::cerr << "Snapshot::destroy() attempted to throw an exception\n";
