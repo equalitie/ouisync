@@ -27,7 +27,8 @@ private:
 public:
     RemoteBranch(Commit, fs::path filepath, fs::path objdir);
 
-    RemoteBranch(fs::path filepath, fs::path objdir, InputArchive&);
+    static
+    RemoteBranch load(fs::path filepath, fs::path objdir);
 
     [[nodiscard]] net::awaitable<ObjectId> insert_blob(const Blob&);
     [[nodiscard]] net::awaitable<ObjectId> insert_tree(const Tree&);
@@ -43,7 +44,17 @@ public:
         return BranchIo::Immutable(_objdir, root_id());
     }
 
+    template<class Archive>
+    void serialize(Archive& ar, unsigned) {
+        ar & _commit
+           & _complete_objects
+           & _incomplete_objects
+           & _missing_objects;
+    }
+
 private:
+    RemoteBranch(fs::path filepath, fs::path objdir);
+
     void store_tag(OutputArchive&) const;
     void store_body(OutputArchive&) const;
     void load_body(InputArchive&);

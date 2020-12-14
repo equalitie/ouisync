@@ -20,25 +20,6 @@ using boost::get;
 using std::make_pair;
 using Branch = Repository::Branch;
 
-static
-Branch _load_branch(const fs::path& path, const fs::path& objdir)
-{
-    fs::fstream file(path, file.binary | file.in);
-    InputArchive archive(file);
-
-    BranchType type;
-
-    archive >> type;
-
-    assert(type == BranchType::Local || type == BranchType::Remote);
-
-    if (type == BranchType::Local) {
-        return LocalBranch(path, objdir, archive);
-    } else {
-        return RemoteBranch(path, objdir, archive);
-    }
-}
-
 Repository::Repository(executor_type ex, Options options) :
     _ex(std::move(ex)),
     _options(std::move(options)),
@@ -47,18 +28,23 @@ Repository::Repository(executor_type ex, Options options) :
     _user_id = UserId::load_or_create(_options.user_id_file_path);
 
     for (auto f : fs::directory_iterator(_options.branchdir)) {
-        auto branch = _load_branch(f, _options.objectdir);
         auto user_id = UserId::from_string(f.path().filename().string());
         if (!user_id) {
             throw std::runtime_error("Repository: Invalid branch name format");
         }
+        auto branch = LocalBranch::load(f, _options.objectdir, _user_id);
         _branches.insert(make_pair(*user_id, std::move(branch)));
     }
 
-    if (_branches.count(_user_id) == 0) {
+    fs::path local_branch_path = _options.basedir / "local_branch";
+
+    if (fs::exists(local_branch_path)) {
         fs::path path = _options.branchdir / _user_id.to_string();
         _branches.insert(make_pair(_user_id,
-                    LocalBranch::create(path, _options.objectdir, _user_id)));
+                    LocalBranch::load(path, _options.objectdir, _user_id)));
+    } else {
+        _branches.insert(make_pair(_user_id,
+                    LocalBranch::create(local_branch_path, _options.objectdir, _user_id)));
     }
 
     std::cout << "User ID: " << _user_id << "\n";

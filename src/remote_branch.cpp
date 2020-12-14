@@ -17,6 +17,14 @@ using std::make_pair;
 using object::Tree;
 using std::set;
 
+/* static */
+RemoteBranch RemoteBranch::load(fs::path filepath, fs::path objdir)
+{
+    RemoteBranch branch(filepath, objdir);
+    archive::load(filepath, branch);
+    return branch;
+}
+
 template<class Obj>
 static
 ObjectId _flat_store(const fs::path& objdir, const Obj& obj) {
@@ -33,12 +41,10 @@ RemoteBranch::RemoteBranch(Commit commit, fs::path filepath, fs::path objdir) :
     _missing_objects.insert({_commit.root_id, {}});
 }
 
-RemoteBranch::RemoteBranch(fs::path filepath, fs::path objdir, InputArchive& ar) :
+RemoteBranch::RemoteBranch(fs::path filepath, fs::path objdir) :
     _filepath(std::move(filepath)),
     _objdir(std::move(objdir))
-{
-    load_body(ar);
-}
+{}
 
 net::awaitable<ObjectId> RemoteBranch::insert_blob(const Blob& blob)
 {

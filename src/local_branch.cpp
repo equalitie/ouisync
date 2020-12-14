@@ -9,6 +9,7 @@
 #include "object/blob.h"
 #include "object/io.h"
 #include "refcount.h"
+#include "archive.h"
 
 #include <boost/filesystem.hpp>
 #include <boost/serialization/vector.hpp>
@@ -22,7 +23,8 @@ using object::Blob;
 using object::Tree;
 
 /* static */
-LocalBranch LocalBranch::create(const fs::path& path, const fs::path& objdir, UserId user_id) {
+LocalBranch LocalBranch::create(const fs::path& path, const fs::path& objdir, UserId user_id)
+{
     ObjectId root_id;
     VersionVector clock;
 
@@ -34,6 +36,14 @@ LocalBranch LocalBranch::create(const fs::path& path, const fs::path& objdir, Us
     root_id = object::io::store(objdir, root_obj);
     LocalBranch branch(path, objdir, user_id, Commit{move(clock), root_id});
     branch.store_self();
+    return branch;
+}
+
+/* static */
+LocalBranch LocalBranch::load(const fs::path& file_path, const fs::path& objdir, UserId user_id)
+{
+    LocalBranch branch(file_path, objdir, user_id);
+    archive::load(file_path, branch);
     return branch;
 }
 
@@ -215,16 +225,7 @@ bool LocalBranch::remove(const fs::path& fspath)
 //--------------------------------------------------------------------
 
 void LocalBranch::store_self() const {
-    fs::fstream file(_file_path, file.binary | file.trunc | file.out);
-
-    if (!file.is_open())
-        throw std::runtime_error("Failed to open branch file");
-
-    OutputArchive oa(file);
-
-    store_tag(oa);
-    store_rest(oa);
-
+    archive::store(_file_path, *this);
     refcount::increment(_objdir, _root_id);
 }
 
@@ -248,11 +249,12 @@ LocalBranch::LocalBranch(const fs::path& file_path, const fs::path& objdir,
     _stamp(move(commit.stamp))
 {}
 
-LocalBranch::LocalBranch(const fs::path& file_path, const fs::path& objdir, InputArchive& ar) :
+LocalBranch::LocalBranch(const fs::path& file_path, const fs::path& objdir,
+        const UserId& user_id) :
     _file_path(file_path),
-    _objdir(objdir)
+    _objdir(objdir),
+    _user_id(user_id)
 {
-    load_rest(ar);
 }
 
 //--------------------------------------------------------------------
@@ -282,27 +284,6 @@ bool LocalBranch::introduce_commit(const Commit& commit)
 ObjectId LocalBranch::id_of(PathRange path) const
 {
     return immutable_io().id_of(path);
-}
-
-//--------------------------------------------------------------------
-
-void LocalBranch::store_tag(OutputArchive& ar) const
-{
-    ar << BranchType::Local;
-}
-
-void LocalBranch::store_rest(OutputArchive& ar) const
-{
-    ar << _user_id;
-    ar << _root_id;
-    ar << _stamp;
-}
-
-void LocalBranch::load_rest(InputArchive& ar)
-{
-    ar >> _user_id;
-    ar >> _root_id;
-    ar >> _stamp;
 }
 
 //--------------------------------------------------------------------

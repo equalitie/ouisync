@@ -28,10 +28,8 @@ public:
     static
     LocalBranch create(const fs::path& path, const fs::path& objdir, UserId user_id);
 
-    LocalBranch(const fs::path& file_path, const fs::path& objdir, InputArchive&);
-
-    LocalBranch(const fs::path& file_path, const fs::path& objdir,
-            const UserId&, Commit);
+    static
+    LocalBranch load(const fs::path& file_path, const fs::path& objdir, UserId user_id);
 
     const ObjectId& root_id() const { return _root_id; }
 
@@ -67,14 +65,18 @@ public:
 
     friend std::ostream& operator<<(std::ostream&, const LocalBranch&);
 
+    template<class Archive>
+    void serialize(Archive& ar, unsigned) {
+        ar & _root_id & _stamp;
+    }
+
 private:
     friend class BranchIo;
 
-    void set_root_id(const ObjectId& id);
+    LocalBranch(const fs::path& file_path, const fs::path& objdir, const UserId&);
+    LocalBranch(const fs::path& file_path, const fs::path& objdir, const UserId&, Commit);
 
-    void store_tag(OutputArchive&) const;
-    void store_rest(OutputArchive&) const;
-    void load_rest(InputArchive&);
+    void set_root_id(const ObjectId& id);
 
     void store_self() const;
 
