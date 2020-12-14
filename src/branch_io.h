@@ -33,6 +33,11 @@ public:
 
         bool object_exists(const ObjectId&) const;
 
+        friend std::ostream& operator<<(std::ostream& os, const BranchIo::Immutable& b) {
+            b.show(os);
+            return os;
+        }
+
     private:
         const fs::path& _objdir;
         const ObjectId& _root_id;
