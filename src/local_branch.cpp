@@ -33,9 +33,13 @@ LocalBranch LocalBranch::create(const fs::path& path, const fs::path& objdir, Us
     }
 
     object::Tree root_obj;
+
     root_id = object::io::store(objdir, root_obj);
+    refcount::increment(objdir, root_id);
+
     LocalBranch branch(path, objdir, user_id, Commit{move(clock), root_id});
     branch.store_self();
+
     return branch;
 }
 
@@ -89,14 +93,25 @@ template<class F>
 void LocalBranch::update_dir(PathRange path, F&& f)
 {
     auto id = _update_dir(1, _objdir, _commit.root_id, path, std::forward<F>(f));
-    set_root_id(id);
+
+    if (_commit.root_id == id) return;
+
+    _commit.root_id = id;
+    _commit.stamp.increment(_user_id);
+
+    store_self();
+
+    refcount::increment(_objdir, _commit.root_id);
 }
+
+//--------------------------------------------------------------------
 
 static
 PathRange parent(PathRange path) {
     path.advance_end(-1);
     return path;
 }
+
 //--------------------------------------------------------------------
 
 void LocalBranch::store(PathRange path, const Blob& blob)
@@ -226,16 +241,6 @@ bool LocalBranch::remove(const fs::path& fspath)
 
 void LocalBranch::store_self() const {
     archive::store(_file_path, *this);
-    refcount::increment(_objdir, _commit.root_id);
-}
-
-//--------------------------------------------------------------------
-
-void LocalBranch::set_root_id(const ObjectId& id) {
-    if (_commit.root_id == id) return;
-    _commit.root_id = id;
-    _commit.stamp.increment(_user_id);
-    store_self();
 }
 
 //--------------------------------------------------------------------
@@ -269,6 +274,7 @@ bool LocalBranch::introduce_commit(const Commit& commit)
     _commit = move(commit);
 
     store_self();
+    refcount::increment(_objdir, _commit.root_id);
 
     if (rc == 0) {
         refcount::deep_remove(_objdir, old_root);

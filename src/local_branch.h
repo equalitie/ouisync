@@ -76,8 +76,6 @@ private:
     LocalBranch(const fs::path& file_path, const fs::path& objdir, const UserId&);
     LocalBranch(const fs::path& file_path, const fs::path& objdir, const UserId&, Commit);
 
-    void set_root_id(const ObjectId& id);
-
     void store_self() const;
 
     template<class F> void update_dir(PathRange, F&&);
