@@ -3,6 +3,7 @@
 #include "commit.h"
 #include "shortcuts.h"
 
+#include <set>
 #include <map>
 #include <boost/filesystem/path.hpp>
 #include <iosfwd>
@@ -31,27 +32,26 @@ public:
 
     const Commit& commit() const { return _commit; }
 
-    const ObjectId& id() const { return _id; }
+    void capture_object(const ObjectId&);
 
     ~Snapshot();
 
-private:
-    Snapshot(const ObjectId&, fs::path path, fs::path objdir, Commit);
+    ObjectId calculate_id() const;
 
-    static void store_commit(const fs::path&, const Commit&);
-    static Commit load_commit(const fs::path&);
+private:
+    Snapshot(fs::path path, fs::path objdir, Commit);
+
+    void store();
 
     void destroy() noexcept;
 
     friend std::ostream& operator<<(std::ostream&, const Snapshot&);
 
 private:
-    // Is invalid if this is default constructed or moved from.
-    bool _is_valid = false;
-    ObjectId _id;
     fs::path _path;
     fs::path _objdir;
     Commit _commit;
+    std::set<ObjectId> _captured_objs;
 };
 
 //////////////////////////////////////////////////////////////////////

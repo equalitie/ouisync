@@ -76,9 +76,11 @@ SnapshotGroup Repository::create_snapshot_group()
     std::map<UserId, Snapshot> snapshots;
 
     for (auto& [user_id, branch] : _branches) {
+        auto commit = _get_commit(branch);
+        auto root_id = commit.root_id;
         auto snapshot = Snapshot::create(
-                _options.snapshotdir, _options.objectdir, _get_commit(branch));
-
+                _options.snapshotdir, _options.objectdir, std::move(commit));
+        snapshot.capture_object(root_id);
         snapshots.insert(std::make_pair(user_id, std::move(snapshot)));
     }
 
