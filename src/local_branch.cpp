@@ -10,6 +10,7 @@
 #include "object/io.h"
 #include "refcount.h"
 #include "archive.h"
+#include "snapshot.h"
 
 #include <boost/filesystem.hpp>
 #include <boost/serialization/vector.hpp>
@@ -235,6 +236,15 @@ bool LocalBranch::remove(const fs::path& fspath)
 {
     Path path(fspath);
     return remove(path);
+}
+
+//--------------------------------------------------------------------
+
+Snapshot LocalBranch::create_snapshot(const fs::path& snapshotdir) const
+{
+    auto snapshot = Snapshot::create(snapshotdir, _objdir, _commit);
+    snapshot.capture_object(_commit.root_id);
+    return snapshot;
 }
 
 //--------------------------------------------------------------------

@@ -18,6 +18,7 @@ namespace ouisync {
 
 class InputArchive;
 class OutputArchive;
+class Snapshot;
 
 class RemoteBranch {
 private:
@@ -51,6 +52,8 @@ public:
            & _incomplete_objects
            & _missing_objects;
     }
+
+    Snapshot create_snapshot(const fs::path& snapshotdir) const;
 
 private:
     RemoteBranch(fs::path filepath, fs::path objdir);

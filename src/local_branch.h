@@ -18,6 +18,7 @@ namespace ouisync {
 
 class InputArchive;
 class OutputArchive;
+class Snapshot;
 
 class LocalBranch {
 public:
@@ -62,6 +63,8 @@ public:
     ObjectId id_of(PathRange) const;
 
     bool introduce_commit(const Commit&);
+
+    Snapshot create_snapshot(const fs::path& snapshotdir) const;
 
     friend std::ostream& operator<<(std::ostream&, const LocalBranch&);
 

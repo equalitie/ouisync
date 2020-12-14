@@ -60,15 +60,12 @@ Branch& Repository::find_branch(PathRange path)
     return i->second;
 }
 
-static Commit _get_commit(const Branch& b) {
-    return {
-        apply(b, [] (const auto& b) { return b.stamp(); }),
-        apply(b, [] (const auto& b) { return b.root_id(); })
-    };
-}
-
 static BranchIo::Immutable _immutable_io(const Branch& b) {
     return apply(b, [&] (auto& b) { return b.immutable_io(); });
+}
+
+static Snapshot _create_snapshot(const Branch& b, const fs::path& snapshotdir) {
+    return apply(b, [&] (auto& b) { return b.create_snapshot(snapshotdir); });
 }
 
 SnapshotGroup Repository::create_snapshot_group()
@@ -76,12 +73,7 @@ SnapshotGroup Repository::create_snapshot_group()
     std::map<UserId, Snapshot> snapshots;
 
     for (auto& [user_id, branch] : _branches) {
-        auto commit = _get_commit(branch);
-        auto root_id = commit.root_id;
-        auto snapshot = Snapshot::create(
-                _options.snapshotdir, _options.objectdir, std::move(commit));
-        snapshot.capture_object(root_id);
-        snapshots.insert(std::make_pair(user_id, std::move(snapshot)));
+        snapshots.insert({user_id, _create_snapshot(branch, _options.snapshotdir)});
     }
 
     SnapshotGroup group(std::move(snapshots));
