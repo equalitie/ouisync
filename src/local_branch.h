@@ -31,10 +31,10 @@ public:
     static
     LocalBranch load(const fs::path& file_path, const fs::path& objdir, UserId user_id);
 
-    const ObjectId& root_id() const { return _root_id; }
+    const ObjectId& root_id() const { return _commit.root_id; }
 
     BranchIo::Immutable immutable_io() const {
-        return BranchIo::Immutable(_objdir, _root_id);
+        return BranchIo::Immutable(_objdir, _commit.root_id);
     }
 
     // XXX: Deprecated, use `write` instead. I believe these are currently
@@ -55,7 +55,7 @@ public:
 
     void mkdir(PathRange);
 
-    const VersionVector& stamp() const { return _stamp; }
+    const VersionVector& stamp() const { return _commit.stamp; }
 
     const UserId& user_id() const { return _user_id; }
 
@@ -67,7 +67,7 @@ public:
 
     template<class Archive>
     void serialize(Archive& ar, unsigned) {
-        ar & _root_id & _stamp;
+        ar & _commit;
     }
 
 private:
@@ -86,8 +86,7 @@ private:
     fs::path _file_path;
     fs::path _objdir;
     UserId _user_id;
-    ObjectId _root_id;
-    VersionVector _stamp;
+    Commit _commit;
 };
 
 } // namespace
