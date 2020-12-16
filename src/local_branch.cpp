@@ -239,6 +239,14 @@ bool LocalBranch::remove(const fs::path& fspath)
 }
 
 //--------------------------------------------------------------------
+void LocalBranch::sanity_check() const {
+    if (!object::io::is_complete(_objdir, _commit.root_id)) {
+        std::cerr << *this << "\n";
+        assert(0 && "LocalBranch is incomplete\n");
+    }
+}
+
+//--------------------------------------------------------------------
 
 Snapshot LocalBranch::create_snapshot(const fs::path& snapshotdir) const
 {

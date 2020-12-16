@@ -139,6 +139,17 @@ net::awaitable<void> RemoteBranch::introduce_commit(const Commit& commit)
 }
 
 //--------------------------------------------------------------------
+void RemoteBranch::sanity_check() const {
+    for (auto& [id, _] : _incomplete_objects) {
+        assert(object::io::exists(_objdir, id));
+    }
+
+    for (auto& id : _complete_objects) {
+        assert(object::io::is_complete(_objdir, id));
+    }
+}
+
+//--------------------------------------------------------------------
 
 Snapshot RemoteBranch::create_snapshot(const fs::path& snapshotdir) const
 {

@@ -73,6 +73,8 @@ public:
         ar & _commit;
     }
 
+    void sanity_check() const;
+
 private:
     friend class BranchIo;
 

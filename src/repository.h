@@ -61,6 +61,8 @@ public:
 private:
     Branch& find_branch(PathRange);
 
+    void sanity_check() const;
+
     static
     const VersionVector& get_stamp(const Branch& b);
 

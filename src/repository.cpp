@@ -20,6 +20,10 @@ using boost::get;
 using std::make_pair;
 using Branch = Repository::Branch;
 
+static void _sanity_check(const Branch& b) {
+    apply(b, [&] (auto& b) { b.sanity_check(); });
+}
+
 Repository::Repository(executor_type ex, Options options) :
     _ex(std::move(ex)),
     _options(std::move(options)),
@@ -349,5 +353,12 @@ void Repository::introduce_commit_to_local_branch(const Commit& commit)
 
     if (b->introduce_commit(commit)) {
         _on_change.notify();
+    }
+}
+
+void Repository::sanity_check() const
+{
+    for (auto& [_, branch] : _branches) {
+        _sanity_check(branch);
     }
 }

@@ -55,6 +55,8 @@ public:
 
     Snapshot create_snapshot(const fs::path& snapshotdir) const;
 
+    void sanity_check() const;
+
     friend std::ostream& operator<<(std::ostream&, const RemoteBranch&);
 
 private:
