@@ -22,6 +22,9 @@ class OutputArchive : public boost::archive::binary_oarchive
 };
 
 namespace archive {
+
+    //----------------------------------------------------------------
+
     namespace detail {
         template<class Obj>
         void load(InputArchive& o, Obj& obj)
@@ -47,6 +50,15 @@ namespace archive {
         }
     }
 
+    //--- load -------------------------------------------------------
+
+    template<class Obj, class... OtherObjs>
+    void load(std::istream& s, Obj& obj, OtherObjs&... other_objs)
+    {
+        InputArchive a(s);
+        detail::load(a, obj, other_objs...);
+    }
+
     template<class Obj, class... OtherObjs>
     void load(const fs::path& path, Obj& obj, OtherObjs&... other_objs)
     {
@@ -54,8 +66,16 @@ namespace archive {
         if (!ifs.is_open()) {
             throw std::runtime_error("archive::load: Failed to open object");
         }
-        InputArchive ia(ifs);
-        detail::load(ia, obj, other_objs...);
+        load(ifs, obj, other_objs...);
+    }
+
+    //--- store ------------------------------------------------------
+
+    template<class Obj, class... OtherObjs>
+    void store(std::ostream& s, const Obj& obj, const OtherObjs&... other_objs)
+    {
+        OutputArchive a(s);
+        detail::store(a, obj, other_objs...);
     }
 
     template<class Obj, class... OtherObjs>
@@ -64,9 +84,10 @@ namespace archive {
         fs::ofstream ofs(path, ofs.out | ofs.binary | ofs.trunc);
         assert(ofs.is_open());
         if (!ofs.is_open()) throw std::runtime_error("Failed to store object");
-        OutputArchive oa(ofs);
-        detail::store(oa, obj, other_objs...);
+        store(ofs, obj, other_objs...);
     }
+
+    //----------------------------------------------------------------
 }
 
 } // namespace
