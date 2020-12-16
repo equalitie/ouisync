@@ -304,6 +304,7 @@ ObjectId LocalBranch::id_of(PathRange path) const
 
 std::ostream& ouisync::operator<<(std::ostream& os, const LocalBranch& branch)
 {
+    os  << "LocalBranch:\n";
     branch.immutable_io().show(os);
     return os;
 }

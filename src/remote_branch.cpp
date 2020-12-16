@@ -194,3 +194,18 @@ void RemoteBranch::load_body(InputArchive& ar)
 }
 
 //--------------------------------------------------------------------
+
+std::ostream& ouisync::operator<<(std::ostream& os, const RemoteBranch& b)
+{
+    os << "RemoteBranch:\n";
+    os << BranchIo::Immutable(b._objdir, b._commit.root_id);
+    os << "Complete objs: ";
+    for (auto& id : b._complete_objects) {
+        os << id << ", ";
+    }
+    os << "\nIncomplete objs: ";
+    for (auto& [id, _] : b._incomplete_objects) {
+        os << id << ", ";
+    }
+    return os << "\n";
+}
