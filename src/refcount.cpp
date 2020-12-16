@@ -25,7 +25,8 @@ fs::path refcount_path(fs::path path) noexcept {
     return path;
 }
 
-Number read(const fs::path& path_)
+static
+Number _read(const fs::path& path_)
 {
     auto path = refcount_path(path_);
 
@@ -44,7 +45,8 @@ Number read(const fs::path& path_)
     return rc;
 }
 
-Number increment(const fs::path& path_)
+static
+Number _increment(const fs::path& path_)
 {
     auto path = refcount_path(path_);
 
@@ -69,7 +71,8 @@ Number increment(const fs::path& path_)
     return rc;
 }
 
-Number decrement(const fs::path& path_)
+static
+Number _decrement(const fs::path& path_)
 {
     auto path = refcount_path(path_);
 
@@ -100,16 +103,16 @@ Number decrement(const fs::path& path_)
 
 Number increment(const fs::path& objdir, const ObjectId& id)
 {
-    return increment(objdir / object_path(id));
+    return _increment(objdir / object_path(id));
 }
 
 Number decrement(const fs::path& objdir, const ObjectId& id)
 {
-    return decrement(objdir / object_path(id));
+    return _decrement(objdir / object_path(id));
 }
 
 Number read(const fs::path& objdir, const ObjectId& id) {
-    return read(objdir / object_path(id));
+    return _read(objdir / object_path(id));
 }
 
 // -------------------------------------------------------------------
