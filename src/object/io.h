@@ -114,11 +114,13 @@ Opt<variant<O0, O1, Os...>> maybe_load(const fs::path& objdir, const ObjectId& i
  */
 bool remove(const fs::path& objdir, const ObjectId& id);
 
-// -------------------------------------------------------------------
-
 // --- exists --------------------------------------------------------
 
 bool exists(const fs::path& objdir, const ObjectId& id);
+
+// --- is_complete ---------------------------------------------------
+
+bool is_complete(const fs::path& objdir, const ObjectId& id);
 
 // -------------------------------------------------------------------
 
