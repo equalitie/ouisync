@@ -148,7 +148,7 @@ void _show(std::ostream& os, fs::path objdir, ObjectId id, std::string pad = "")
     }
 
     auto obj = object::io::load<Tree, Blob>(objdir, id);
-    auto rc = refcount::read(objdir, id);
+    auto rc = refcount::read_recursive(objdir, id);
 
     apply(obj,
             [&] (const Tree& t) {

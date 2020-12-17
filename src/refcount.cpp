@@ -5,6 +5,7 @@
 #include "variant.h"
 #include <boost/filesystem/fstream.hpp>
 #include <boost/filesystem/operations.hpp>
+#include <boost/endian/conversion.hpp>
 
 #include <iostream>
 #include <sstream>
@@ -15,8 +16,8 @@ using object::Tree;
 using object::Blob;
 
 static
-fs::path object_path(const ObjectId& id) noexcept {
-    return object::path::from_id(id);
+fs::path object_path(const fs::path& objdir, const ObjectId& id) noexcept {
+    return objdir / object::path::from_id(id);
 }
 
 static
@@ -26,108 +27,121 @@ fs::path refcount_path(fs::path path) noexcept {
 }
 
 static
-Number _read(const fs::path& path_)
+Number read_number(std::istream& s)
 {
-    auto path = refcount_path(path_);
-
-    fs::fstream f(path, f.binary | f.in);
-    if (!f.is_open()) {
-        if (!fs::exists(path)) {
-            // No one is holding this object
-            return 0;
-        }
-        std::stringstream ss;
-        ss << "Failed to read refcount: " << path;
-        throw std::runtime_error(ss.str());
-    }
-    Number rc;
-    f >> rc;
-    return rc;
+    Number n;
+    s.read(reinterpret_cast<char*>(&n), sizeof(n));
+    boost::endian::big_to_native_inplace(n);
+    return n;
 }
 
 static
-Number _increment(const fs::path& path_)
+void write_number(std::ostream& s, Number n)
 {
-    auto path = refcount_path(path_);
-
-    fs::fstream f(path, f.binary | f.in | f.out);
-    if (!f.is_open()) {
-        // Does not exist, create a new one
-        f.open(path, f.binary | f.out | f.trunc);
-        if (!f.is_open()) {
-            std::stringstream ss;
-            ss << "Failed to increment refcount: " << path;
-            throw std::runtime_error(ss.str());
-        }
-        f << 1 << '\n';
-        return 1;
-    }
-    Number rc;
-    f >> rc;
-    ++rc;
-    //std::cerr << "Refcount++ " << (rc-1) << " -> " << rc << " " << path << "\n";
-    f.seekp(0);
-    f << rc << '\n';
-    return rc;
-}
-
-static
-Number _decrement(const fs::path& path_)
-{
-    auto path = refcount_path(path_);
-
-    fs::fstream f(path, f.binary | f.in | f.out);
-    if (!f.is_open()) {
-        if (!fs::exists(path)) {
-            // No one held this object
-            return 0;
-        }
-        std::stringstream ss;
-        ss << "Failed to decrement refcount: " << path;
-        throw std::runtime_error(ss.str());
-    }
-    Number rc;
-    f >> rc;
-    if (rc == 0) throw std::runtime_error("Decrementing zero refcount");
-    --rc;
-    //std::cerr << "Refcount-- " << (rc+1) << " -> " << rc << " " << path << "\n";
-    if (rc == 0) {
-        f.close();
-        fs::remove(path);
-        return 0;
-    }
-    f.seekp(0);
-    f << rc;
-    return rc;
-}
-
-Number increment(const fs::path& objdir, const ObjectId& id)
-{
-    return _increment(objdir / object_path(id));
-}
-
-Number decrement(const fs::path& objdir, const ObjectId& id)
-{
-    return _decrement(objdir / object_path(id));
-}
-
-Number read(const fs::path& objdir, const ObjectId& id) {
-    return _read(objdir / object_path(id));
+    boost::endian::native_to_big_inplace(n);
+    s.write(reinterpret_cast<char*>(&n), sizeof(n));
 }
 
 // -------------------------------------------------------------------
 
-bool flat_remove(const fs::path& objdir, const ObjectId& id) {
-    auto rc = refcount::decrement(objdir, id);
-    if (rc > 0) return true;
-    return object::io::remove(objdir, id);
+} // namespace
+
+namespace ouisync {
+
+/* static */
+Rc Rc::load(const fs::path& objdir, const ObjectId& id)
+{
+    using F = fs::fstream;
+
+    auto path = refcount::refcount_path(refcount::object_path(objdir, id));
+
+    auto f = std::make_unique<fs::fstream>(path, F::binary | F::in | F::out);
+
+    if (!f->is_open()) {
+        // File doesn't exist, assume Rc numbers are zero then
+        return Rc{std::move(path), std::move(f), 0, 0};
+    }
+
+    auto n1 = refcount::read_number(*f);
+    auto n2 = refcount::read_number(*f);
+    return Rc{std::move(path), std::move(f), n1, n2};
 }
 
+void Rc::commit()
+{
+    using F = fs::fstream;
+
+    if (!_file->is_open()) {
+        if (fs::exists(_path)) {
+            std::cerr << "Rc file created by other Rc object " << _path << "\n";
+            assert(false); exit(1);
+        }
+        _file->open(_path, F::binary | F::in | F::out | F::trunc);
+    }
+
+    if (!_file->is_open()) {
+        std::stringstream ss;
+        ss << "Failed to commit refcount: " << _path;
+        throw std::runtime_error(ss.str());
+    }
+
+    _file->seekp(0);
+    refcount::write_number(*_file, _recursive_count);
+    refcount::write_number(*_file, _direct_count);
+}
+
+void Rc::increment_recursive_count() {
+    ++_recursive_count;
+    commit();
+}
+void Rc::increment_direct_count()    {
+    ++_direct_count;
+    commit();
+}
+
+void Rc::decrement_recursive_count() {
+    assert(_recursive_count);
+    --_recursive_count;
+    commit();
+}
+
+void Rc::decrement_direct_count(){
+    assert(_direct_count);
+    --_direct_count;
+    commit();
+}
+
+} // namespace
+
+namespace ouisync::refcount {
+
+// -------------------------------------------------------------------
+Number increment_recursive(const fs::path& objdir, const ObjectId& id)
+{
+    auto rc = Rc::load(objdir, id);
+    rc.increment_recursive_count();
+    return rc.recursive_count();
+}
+
+Number read_recursive(const fs::path& objdir, const ObjectId& id) {
+    auto rc = Rc::load(objdir, id);
+    return rc.recursive_count();
+}
+
+// -------------------------------------------------------------------
+
+void flat_remove(const fs::path& objdir, const ObjectId& id) {
+    auto rc = Rc::load(objdir, id);
+    rc.decrement_recursive_count();
+    if (!rc.both_are_zero()) return;
+    object::io::remove(objdir, id);
+}
 
 void deep_remove(const fs::path& objdir, const ObjectId& id) {
-    auto rc = decrement(objdir, id);
+    auto rc = Rc::load(objdir, id);
+    rc.decrement_recursive_count();
 
-    if (rc > 0) return;
+    if (rc.recursive_count() > 0) return;
 
     auto obj = object::io::load<Tree, Blob::Nothing>(objdir, id);
 
@@ -141,7 +155,9 @@ void deep_remove(const fs::path& objdir, const ObjectId& id) {
             [&](const Blob::Nothing&) {
             });
 
-    object::io::remove(objdir, id);
+    if (rc.direct_count() == 0) {
+        object::io::remove(objdir, id);
+    }
 }
 
 // -------------------------------------------------------------------

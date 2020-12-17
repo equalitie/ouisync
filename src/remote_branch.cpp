@@ -30,7 +30,7 @@ template<class Obj>
 static
 ObjectId _flat_store(const fs::path& objdir, const Obj& obj) {
     auto new_id = object::io::store(objdir, obj);
-    refcount::increment(objdir, new_id);
+    refcount::increment_recursive(objdir, new_id);
     return new_id;
 }
 

@@ -100,7 +100,7 @@ fs::path choose_test_dir() {
 
 size_t refcount(LocalBranch& b, const fs::path path) {
     auto id = b.id_of(path_range(path));
-    return ouisync::refcount::read(b.object_directory(), id);
+    return ouisync::refcount::read_recursive(b.object_directory(), id);
 };
 
 BOOST_AUTO_TEST_CASE(blob_id_calculation) {
@@ -462,7 +462,7 @@ BOOST_AUTO_TEST_CASE(tree_remove) {
 
         auto refcount = [&] (auto& branch, const fs::path path) {
             auto id = branch.id_of(Path(path));
-            return ouisync::refcount::read(objdir, id);
+            return ouisync::refcount::read_recursive(objdir, id);
         };
 
         BOOST_REQUIRE_EQUAL(refcount(branch1, "A"), 2);

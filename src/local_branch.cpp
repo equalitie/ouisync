@@ -36,7 +36,7 @@ LocalBranch LocalBranch::create(const fs::path& path, const fs::path& objdir, Us
     object::Tree root_obj;
 
     root_id = object::io::store(objdir, root_obj);
-    refcount::increment(objdir, root_id);
+    refcount::increment_recursive(objdir, root_id);
 
     LocalBranch branch(path, objdir, user_id, Commit{move(clock), root_id});
     branch.store_self();
@@ -53,14 +53,24 @@ LocalBranch LocalBranch::load(const fs::path& file_path, const fs::path& objdir,
 }
 
 //--------------------------------------------------------------------
+static
+void decrement_rc_and_remove_single_node(const fs::path& objdir, const ObjectId& id)
+{
+    auto rc = Rc::load(objdir, id);
+    rc.decrement_recursive_count();
+    if (!rc.both_are_zero()) return;
+    object::io::remove(objdir, id);
+}
+
+//--------------------------------------------------------------------
 
 template<class F>
 static
 ObjectId _update_dir(size_t branch_count, const fs::path& objdir, ObjectId tree_id, PathRange path, F&& f)
 {
     Tree tree = object::io::load<Tree>(objdir, tree_id);
-    auto rc = refcount::read(objdir, tree_id);
-    assert(rc);
+    auto rc = refcount::read_recursive(objdir, tree_id);
+    assert(rc > 0);
 
     Opt<ObjectId> new_child_id;
 
@@ -80,11 +90,11 @@ ObjectId _update_dir(size_t branch_count, const fs::path& objdir, ObjectId tree_
 
     auto [new_id, created] = object::io::store_(objdir, tree);
     if (created && new_child_id) {
-        refcount::increment(objdir, *new_child_id);
+        refcount::increment_recursive(objdir, *new_child_id);
     }
 
     if (branch_count == 1) {
-        refcount::flat_remove(objdir, tree_id);
+        decrement_rc_and_remove_single_node(objdir, tree_id);
     }
 
     return new_id;
@@ -102,7 +112,7 @@ void LocalBranch::update_dir(PathRange path, F&& f)
 
     store_self();
 
-    refcount::increment(_objdir, _commit.root_id);
+    refcount::increment_recursive(_objdir, _commit.root_id);
 }
 
 //--------------------------------------------------------------------
@@ -158,7 +168,7 @@ size_t LocalBranch::write(PathRange path, const char* buf, size_t size, size_t o
             memcpy(blob.data() + offset, buf, size);
 
             if (branch_count <= 1) {
-                refcount::flat_remove(_objdir, child.id());
+                decrement_rc_and_remove_single_node(_objdir, child.id());
             }
 
             child.set_id(object::io::store(_objdir, blob));
@@ -186,7 +196,7 @@ size_t LocalBranch::truncate(PathRange path, size_t size)
             size = blob.size();
 
             if (branch_count <= 1) {
-                refcount::flat_remove(_objdir, child.id());
+                decrement_rc_and_remove_single_node(_objdir, child.id());
             }
 
             child.set_id(object::io::store(_objdir, blob));
@@ -287,16 +297,13 @@ bool LocalBranch::introduce_commit(const Commit& commit)
     if (_commit.root_id == commit.root_id) return false;
 
     auto old_root = _commit.root_id;
-    auto rc = refcount::decrement(_objdir, old_root);
+    //auto rc = refcount::decrement(_objdir, old_root);
 
     _commit = move(commit);
 
     store_self();
-    refcount::increment(_objdir, _commit.root_id);
-
-    if (rc == 0) {
-        refcount::deep_remove(_objdir, old_root);
-    }
+    refcount::increment_recursive(_objdir, _commit.root_id);
+    refcount::deep_remove(_objdir, old_root);
 
     return true;
 }

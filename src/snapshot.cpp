@@ -60,7 +60,7 @@ void Snapshot::capture_object(const ObjectId& obj)
 {
     auto [_, inserted] = _captured_objs.insert(obj);
     if (!inserted) return;
-    refcount::increment(_objdir, obj);
+    refcount::increment_recursive(_objdir, obj);
 }
 
 void Snapshot::store()
