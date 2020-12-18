@@ -179,34 +179,7 @@ Snapshot RemoteBranch::create_snapshot(const fs::path& snapshotdir) const
 //--------------------------------------------------------------------
 
 void RemoteBranch::store_self() const {
-    fs::fstream file(_filepath, file.binary | file.trunc | file.out);
-
-    if (!file.is_open())
-        throw std::runtime_error(str(boost::format("Failed to open branch file %1%") % _filepath));
-
-    OutputArchive oa(file);
-
-    store_tag(oa);
-    store_body(oa);
-}
-
-void RemoteBranch::store_tag(OutputArchive& ar) const
-{
-    ar << BranchType::Remote;
-}
-
-void RemoteBranch::store_body(OutputArchive& ar) const
-{
-    ar << _commit;
-    ar << _missing_objects;
-    ar << _incomplete_objects;
-}
-
-void RemoteBranch::load_body(InputArchive& ar)
-{
-    ar >> _commit;
-    ar >> _missing_objects;
-    ar >> _incomplete_objects;
+    archive::store(_filepath, *this);
 }
 
 //--------------------------------------------------------------------

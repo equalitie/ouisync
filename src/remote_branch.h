@@ -36,21 +36,11 @@ public:
 
     [[nodiscard]] net::awaitable<void> introduce_commit(const Commit&);
 
-    void destroy();
-
     const VersionVector& stamp() const { return _commit.stamp; }
     const ObjectId& root_id() const { return _commit.root_id; }
 
     BranchIo::Immutable immutable_io() const {
         return BranchIo::Immutable(_objdir, root_id());
-    }
-
-    template<class Archive>
-    void serialize(Archive& ar, unsigned) {
-        ar & _commit
-           & _complete_objects
-           & _incomplete_objects
-           & _missing_objects;
     }
 
     Snapshot create_snapshot(const fs::path& snapshotdir) const;
@@ -62,19 +52,22 @@ public:
 private:
     RemoteBranch(fs::path filepath, fs::path objdir);
 
-    void store_tag(OutputArchive&) const;
-    void store_body(OutputArchive&) const;
-    void load_body(InputArchive&);
-
-    template<class T> void store(const fs::path&, const T&);
-    template<class T> void load(const fs::path&, T& value);
-
     void store_self() const;
 
     template<class Obj>
     net::awaitable<ObjectId> insert_object(const Obj& obj, std::set<ObjectId> children);
 
     void filter_missing(std::set<ObjectId>& objs) const;
+
+    friend class boost::serialization::access;
+
+    template<class Archive>
+    void serialize(Archive& ar, unsigned) {
+        ar & _commit
+           & _complete_objects
+           & _incomplete_objects
+           & _missing_objects;
+    }
 
 private:
     fs::path _filepath;
