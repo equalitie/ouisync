@@ -87,6 +87,20 @@ net::awaitable<ObjectId> RemoteBranch::insert_object(const Obj& obj, std::set<Ob
 
     if (children.empty()) {
         _complete_objects.insert(id);
+
+        // Check that any of the parents of `obj` became "complete".
+        for (auto& parent : parents) {
+            auto& missing_children = _incomplete_objects.at(parent);
+
+            missing_children.erase(id);
+
+            if (missing_children.empty()) {
+                // Reference counting stays the same
+                _incomplete_objects.erase(parent);
+                _complete_objects.insert(parent);
+                _complete_objects.erase(id);
+            }
+        }
     } else {
         filter_missing(children);
 
@@ -102,19 +116,6 @@ net::awaitable<ObjectId> RemoteBranch::insert_object(const Obj& obj, std::set<Ob
     }
 
     _flat_store(_objdir, obj);
-
-    // Check that any of the parents of `obj` became "complete".
-    for (auto& parent : parents) {
-        auto& missing_children = _incomplete_objects.at(parent);
-
-        missing_children.erase(id);
-
-        if (missing_children.empty()) {
-            // Reference counting stays the same
-            _incomplete_objects.erase(id);
-            _complete_objects.insert(id);
-        }
-    }
 
     store_self();
     co_return id;
