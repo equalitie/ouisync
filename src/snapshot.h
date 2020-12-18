@@ -10,16 +10,14 @@
 
 namespace ouisync {
 
-namespace object { class Tree; struct Blob; }
-
 //////////////////////////////////////////////////////////////////////
 
 class Snapshot {
+private:
+    enum class Type { full, flat };
+
 public:
     using Id = ObjectId;
-    using Tree = object::Tree;
-    using Blob = object::Blob;
-    using Object = variant<Blob, Tree>;
 
 public:
     Snapshot(const Snapshot&) = delete;
@@ -32,7 +30,8 @@ public:
 
     const Commit& commit() const { return _commit; }
 
-    void capture_object(const ObjectId&);
+    void capture_full_object(const ObjectId&);
+    void capture_flat_object(const ObjectId&);
 
     ~Snapshot();
 
@@ -51,7 +50,7 @@ private:
     fs::path _path;
     fs::path _objdir;
     Commit _commit;
-    std::set<ObjectId> _captured_objs;
+    std::map<ObjectId, Type> _captured_objs;
 };
 
 //////////////////////////////////////////////////////////////////////

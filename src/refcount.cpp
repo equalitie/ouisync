@@ -132,7 +132,7 @@ Number read_recursive(const fs::path& objdir, const ObjectId& id) {
 
 void flat_remove(const fs::path& objdir, const ObjectId& id) {
     auto rc = Rc::load(objdir, id);
-    rc.decrement_recursive_count();
+    rc.decrement_direct_count();
     if (!rc.both_are_zero()) return;
     object::io::remove(objdir, id);
 }

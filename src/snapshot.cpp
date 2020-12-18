@@ -5,6 +5,7 @@
 #include "refcount.h"
 #include "archive.h"
 #include "random.h"
+#include "branch_io.h"
 #include "object/tree.h"
 #include "object/blob.h"
 #include "object/io.h"
@@ -26,8 +27,9 @@ ObjectId Snapshot::calculate_id() const
     hash.update("Snapshot");
     hash.update(_commit.root_id);
     hash.update(uint32_t(_captured_objs.size()));
-    for (auto& id : _captured_objs) {
+    for (auto& [id, type] : _captured_objs) {
         hash.update(id);
+        hash.update(static_cast<std::underlying_type_t<Type>>(type));
     }
     return hash.close();
 }
@@ -57,11 +59,18 @@ Snapshot& Snapshot::operator=(Snapshot&& other)
     return *this;
 }
 
-void Snapshot::capture_object(const ObjectId& obj)
+void Snapshot::capture_full_object(const ObjectId& obj)
 {
-    auto [_, inserted] = _captured_objs.insert(obj);
+    auto [_, inserted] = _captured_objs.insert({obj, Type::full});
     if (!inserted) return;
     refcount::increment_recursive(_objdir, obj);
+}
+
+void Snapshot::capture_flat_object(const ObjectId& obj)
+{
+    auto [_, inserted] = _captured_objs.insert({obj, Type::flat});
+    if (!inserted) return;
+    Rc::load(_objdir, obj).increment_direct_count();
 }
 
 void Snapshot::store()
@@ -89,8 +98,11 @@ Snapshot Snapshot::create(const fs::path& snapshotdir, fs::path objdir, Commit c
 void Snapshot::destroy() noexcept
 {
     try {
-        for (auto id : _captured_objs) {
-            refcount::flat_remove(_objdir, id);
+        for (auto& [id, type] : _captured_objs) {
+            switch (type) {
+                case Type::full: refcount::deep_remove(_objdir, id); break;
+                case Type::flat: refcount::flat_remove(_objdir, id); break;
+            }
         }
     }
     catch (const std::exception& e) {

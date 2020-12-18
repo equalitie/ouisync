@@ -131,8 +131,14 @@ net::awaitable<void> RemoteBranch::introduce_commit(const Commit& commit)
     auto incomplete_objects = std::move(_incomplete_objects);
     auto complete_objects   = std::move(_complete_objects);
 
-    for (auto& [id, _] : incomplete_objects) refcount::deep_remove(_objdir, id);
-    for (auto& id      : complete_objects)   refcount::deep_remove(_objdir, id);
+
+    for (auto& [id, _] : incomplete_objects) {
+        refcount::flat_remove(_objdir, id);
+    }
+
+    for (auto& id      : complete_objects) {
+        refcount::deep_remove(_objdir, id);
+    }
 
     _missing_objects.insert({_commit.root_id, {}});
 
@@ -162,11 +168,11 @@ Snapshot RemoteBranch::create_snapshot(const fs::path& snapshotdir) const
 
     if (_incomplete_objects.empty()) {
         for (auto& [id, _] : _incomplete_objects) {
-            snapshot.capture_object(id);
+            snapshot.capture_flat_object(id);
         }
     } else {
         for (auto& id : _complete_objects) {
-            snapshot.capture_object(id);
+            snapshot.capture_full_object(id);
         }
     }
 
