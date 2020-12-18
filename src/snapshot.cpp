@@ -8,6 +8,7 @@
 #include "object/tree.h"
 #include "object/blob.h"
 #include "object/io.h"
+#include "ouisync_assert.h"
 
 #include <boost/filesystem/fstream.hpp>
 #include <boost/serialization/set.hpp>

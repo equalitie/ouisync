@@ -5,6 +5,7 @@
 #include "refcount.h"
 #include "archive.h"
 #include "snapshot.h"
+#include "ouisync_assert.h"
 
 #include <boost/serialization/vector.hpp>
 #include <boost/serialization/set.hpp>
@@ -141,11 +142,11 @@ net::awaitable<void> RemoteBranch::introduce_commit(const Commit& commit)
 //--------------------------------------------------------------------
 void RemoteBranch::sanity_check() const {
     for (auto& [id, _] : _incomplete_objects) {
-        assert(object::io::exists(_objdir, id));
+        ouisync_assert(object::io::exists(_objdir, id));
     }
 
     for (auto& id : _complete_objects) {
-        assert(object::io::is_complete(_objdir, id));
+        ouisync_assert(object::io::is_complete(_objdir, id));
     }
 }
 

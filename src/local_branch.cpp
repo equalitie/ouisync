@@ -11,6 +11,7 @@
 #include "refcount.h"
 #include "archive.h"
 #include "snapshot.h"
+#include "ouisync_assert.h"
 
 #include <boost/filesystem.hpp>
 #include <boost/serialization/vector.hpp>
@@ -251,8 +252,9 @@ bool LocalBranch::remove(const fs::path& fspath)
 //--------------------------------------------------------------------
 void LocalBranch::sanity_check() const {
     if (!object::io::is_complete(_objdir, _commit.root_id)) {
+        std::cerr << "LocalBranch is incomplete:\n";
         std::cerr << *this << "\n";
-        assert(0 && "LocalBranch is incomplete\n");
+        ouisync_assert(false);
     }
 }
 
