@@ -27,14 +27,6 @@ RemoteBranch RemoteBranch::load(fs::path filepath, Options::RemoteBranch options
     return branch;
 }
 
-template<class Obj>
-static
-ObjectId _flat_store(const fs::path& objdir, const Obj& obj) {
-    auto new_id = object::io::store(objdir, obj);
-    refcount::increment_recursive(objdir, new_id);
-    return new_id;
-}
-
 RemoteBranch::RemoteBranch(Commit commit, fs::path filepath, Options::RemoteBranch options) :
     _filepath(std::move(filepath)),
     _options(move(options)),
@@ -80,7 +72,17 @@ net::awaitable<ObjectId> RemoteBranch::insert_object(const Obj& obj, std::set<Ob
     // Missing objects:    Object -> Parents
     // Incomplete objects: Object -> Children
 
-    auto id = obj.calculate_id();
+    filter_missing(children);
+
+    bool is_complete = children.empty();
+
+    ObjectId id;
+
+    if (is_complete) {
+        id = full_store(obj);
+    } else {
+        id = flat_store(obj);
+    }
 
     auto parents = std::move(_missing_objects.at(id));
     _missing_objects.erase(id);
@@ -95,15 +97,19 @@ net::awaitable<ObjectId> RemoteBranch::insert_object(const Obj& obj, std::set<Ob
             missing_children.erase(id);
 
             if (missing_children.empty()) {
-                // Reference counting stays the same
+                Rc rc = Rc::load(_options.objectdir, parent);
+                rc.decrement_direct_count();
+                rc.increment_recursive_count();
+
                 _incomplete_objects.erase(parent);
                 _complete_objects.insert(parent);
+
+                // We no longer need to keep track of it as it's covered by the
+                // parent.
                 _complete_objects.erase(id);
             }
         }
     } else {
-        filter_missing(children);
-
         for (auto& child : children) {
             _missing_objects[child].insert(id);
         }
@@ -114,8 +120,6 @@ net::awaitable<ObjectId> RemoteBranch::insert_object(const Obj& obj, std::set<Ob
             _incomplete_objects.insert({id, move(children)});
         }
     }
-
-    _flat_store(_options.objectdir, obj);
 
     store_self();
     co_return id;
@@ -144,6 +148,21 @@ net::awaitable<void> RemoteBranch::introduce_commit(const Commit& commit)
 
     store_self();
     co_return;
+}
+
+//--------------------------------------------------------------------
+template<class Obj>
+ObjectId RemoteBranch::flat_store(const Obj& obj) {
+    auto new_id = object::io::store(_options.objectdir, obj);
+    Rc::load(_options.objectdir, new_id).increment_direct_count();
+    return new_id;
+}
+
+template<class Obj>
+ObjectId RemoteBranch::full_store(const Obj& obj) {
+    auto new_id = object::io::store(_options.objectdir, obj);
+    refcount::increment_recursive(_options.objectdir, new_id);
+    return new_id;
 }
 
 //--------------------------------------------------------------------

@@ -300,7 +300,7 @@ bool LocalBranch::introduce_commit(const Commit& commit)
 
     auto old_root = _commit.root_id;
 
-    _commit = move(commit);
+    _commit = commit;
 
     store_self();
     refcount::increment_recursive(_options.objectdir, _commit.root_id);

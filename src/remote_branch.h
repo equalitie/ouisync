@@ -70,6 +70,9 @@ private:
            & _missing_objects;
     }
 
+    template<class Obj> ObjectId flat_store(const Obj&);
+    template<class Obj> ObjectId full_store(const Obj&);
+
 private:
     fs::path _filepath;
     Options::RemoteBranch _options;
