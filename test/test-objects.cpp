@@ -150,15 +150,19 @@ BOOST_AUTO_TEST_CASE(read_tag) {
 LocalBranch create_branch(const fs::path testdir, const char* user_id_file_name) {
     fs::path objdir = testdir/"objects";
     fs::path branchdir = testdir/"branches";
+    fs::path snapshotdir = testdir/"snapshots";
 
     fs::create_directories(objdir);
     fs::create_directories(branchdir);
+    fs::create_directories(snapshotdir);
+
+    Options::LocalBranch options{.objectdir = objdir, .snapshotdir = snapshotdir};
 
     UserId user_id = UserId::load_or_create(testdir/user_id_file_name);
 
     Random random;
     auto name = to_hex(random.string(16));
-    return LocalBranch::create(branchdir/name, objdir, user_id);
+    return LocalBranch::create(branchdir/name, user_id, move(options));
 }
 
 BOOST_AUTO_TEST_CASE(branch_directories) {

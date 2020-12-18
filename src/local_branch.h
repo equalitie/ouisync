@@ -10,6 +10,7 @@
 #include "file_system_attrib.h"
 #include "commit.h"
 #include "branch_io.h"
+#include "options.h"
 
 #include <boost/filesystem/path.hpp>
 #include <boost/optional.hpp>
@@ -27,10 +28,10 @@ public:
 
 public:
     static
-    LocalBranch create(const fs::path& path, const fs::path& objdir, UserId user_id);
+    LocalBranch create(const fs::path& path, UserId user_id, Options::LocalBranch);
 
     static
-    LocalBranch load(const fs::path& file_path, const fs::path& objdir, UserId user_id);
+    LocalBranch load(const fs::path& file_path, UserId user_id, Options::LocalBranch);
 
     const ObjectId& root_id() const { return _commit.root_id; }
 
@@ -64,7 +65,7 @@ public:
 
     bool introduce_commit(const Commit&);
 
-    Snapshot create_snapshot(const fs::path& snapshotdir) const;
+    Snapshot create_snapshot() const;
 
     friend std::ostream& operator<<(std::ostream&, const LocalBranch&);
 
@@ -78,8 +79,8 @@ public:
 private:
     friend class BranchIo;
 
-    LocalBranch(const fs::path& file_path, const fs::path& objdir, const UserId&);
-    LocalBranch(const fs::path& file_path, const fs::path& objdir, const UserId&, Commit);
+    LocalBranch(const fs::path& file_path, const UserId&, Options::LocalBranch);
+    LocalBranch(const fs::path& file_path, const UserId&, Commit, Options::LocalBranch);
 
     void store_self() const;
 
@@ -88,6 +89,7 @@ private:
 private:
     fs::path _file_path;
     fs::path _objdir;
+    fs::path _snapshotdir;
     UserId _user_id;
     Commit _commit;
 };

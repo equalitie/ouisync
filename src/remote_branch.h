@@ -9,6 +9,7 @@
 #include "file_system_attrib.h"
 #include "commit.h"
 #include "branch_io.h"
+#include "options.h"
 
 #include <boost/asio/awaitable.hpp>
 #include <boost/filesystem/path.hpp>
@@ -26,10 +27,10 @@ private:
     using Blob = object::Blob;
 
 public:
-    RemoteBranch(Commit, fs::path filepath, fs::path objdir);
+    RemoteBranch(Commit, fs::path filepath, Options::RemoteBranch);
 
     static
-    RemoteBranch load(fs::path filepath, fs::path objdir);
+    RemoteBranch load(fs::path filepath, Options::RemoteBranch);
 
     [[nodiscard]] net::awaitable<ObjectId> insert_blob(const Blob&);
     [[nodiscard]] net::awaitable<ObjectId> insert_tree(const Tree&);
@@ -43,14 +44,14 @@ public:
         return BranchIo::Immutable(_objdir, root_id());
     }
 
-    Snapshot create_snapshot(const fs::path& snapshotdir) const;
+    Snapshot create_snapshot() const;
 
     void sanity_check() const;
 
     friend std::ostream& operator<<(std::ostream&, const RemoteBranch&);
 
 private:
-    RemoteBranch(fs::path filepath, fs::path objdir);
+    RemoteBranch(fs::path filepath, Options::RemoteBranch);
 
     void store_self() const;
 
@@ -72,6 +73,7 @@ private:
 private:
     fs::path _filepath;
     fs::path _objdir;
+    fs::path _snapshotdir;
 
     using Parents  = std::set<ObjectId>;
     using Children = std::set<ObjectId>;

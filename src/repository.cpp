@@ -39,7 +39,7 @@ Repository::Repository(executor_type ex, Options options) :
         if (!user_id) {
             throw std::runtime_error("Repository: Invalid branch name format");
         }
-        auto branch = LocalBranch::load(f, _options.objectdir, _user_id);
+        auto branch = RemoteBranch::load(f, _options);
         _branches.insert(make_pair(*user_id, std::move(branch)));
     }
 
@@ -48,10 +48,10 @@ Repository::Repository(executor_type ex, Options options) :
     if (fs::exists(local_branch_path)) {
         fs::path path = _options.branchdir / _user_id.to_string();
         _branches.insert(make_pair(_user_id,
-                    LocalBranch::load(path, _options.objectdir, _user_id)));
+                    LocalBranch::load(path, _user_id, _options)));
     } else {
         _branches.insert(make_pair(_user_id,
-                    LocalBranch::create(local_branch_path, _options.objectdir, _user_id)));
+                    LocalBranch::create(local_branch_path, _user_id, _options)));
     }
 
     std::cout << "User ID: " << _user_id << "\n";
@@ -72,7 +72,7 @@ static BranchIo::Immutable _immutable_io(const Branch& b) {
 }
 
 static Snapshot _create_snapshot(const Branch& b, const fs::path& snapshotdir) {
-    return apply(b, [&] (auto& b) { return b.create_snapshot(snapshotdir); });
+    return apply(b, [&] (auto& b) { return b.create_snapshot(); });
 }
 
 SnapshotGroup Repository::create_snapshot_group()
@@ -377,7 +377,7 @@ Repository::get_or_create_remote_branch(const UserId& user_id, const Commit& com
         auto path = _options.remotes / user_id.to_string();
 
         i = _branches.insert(std::make_pair(user_id,
-             RemoteBranch(commit, path, _options.objectdir))).first;
+             RemoteBranch(commit, path, _options))).first;
 
         co_return boost::get<RemoteBranch>(&i->second);
     }

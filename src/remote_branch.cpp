@@ -20,9 +20,9 @@ using object::Tree;
 using std::set;
 
 /* static */
-RemoteBranch RemoteBranch::load(fs::path filepath, fs::path objdir)
+RemoteBranch RemoteBranch::load(fs::path filepath, Options::RemoteBranch options)
 {
-    RemoteBranch branch(filepath, objdir);
+    RemoteBranch branch(filepath, move(options));
     archive::load(filepath, branch);
     return branch;
 }
@@ -35,17 +35,19 @@ ObjectId _flat_store(const fs::path& objdir, const Obj& obj) {
     return new_id;
 }
 
-RemoteBranch::RemoteBranch(Commit commit, fs::path filepath, fs::path objdir) :
+RemoteBranch::RemoteBranch(Commit commit, fs::path filepath, Options::RemoteBranch options) :
     _filepath(std::move(filepath)),
-    _objdir(std::move(objdir)),
+    _objdir(std::move(options.objectdir)),
+    _snapshotdir(std::move(options.snapshotdir)),
     _commit(std::move(commit))
 {
     _missing_objects.insert({_commit.root_id, {}});
 }
 
-RemoteBranch::RemoteBranch(fs::path filepath, fs::path objdir) :
+RemoteBranch::RemoteBranch(fs::path filepath, Options::RemoteBranch options) :
     _filepath(std::move(filepath)),
-    _objdir(std::move(objdir))
+    _objdir(std::move(options.objectdir)),
+    _snapshotdir(std::move(options.snapshotdir))
 {}
 
 net::awaitable<ObjectId> RemoteBranch::insert_blob(const Blob& blob)
@@ -159,9 +161,9 @@ void RemoteBranch::sanity_check() const {
 
 //--------------------------------------------------------------------
 
-Snapshot RemoteBranch::create_snapshot(const fs::path& snapshotdir) const
+Snapshot RemoteBranch::create_snapshot() const
 {
-    auto snapshot = Snapshot::create(snapshotdir, _objdir, _commit);
+    auto snapshot = Snapshot::create(_snapshotdir, _objdir, _commit);
 
     if (_incomplete_objects.empty()) {
         for (auto& [id, _] : _incomplete_objects) {

@@ -25,7 +25,7 @@ using object::Blob;
 using object::Tree;
 
 /* static */
-LocalBranch LocalBranch::create(const fs::path& path, const fs::path& objdir, UserId user_id)
+LocalBranch LocalBranch::create(const fs::path& path, UserId user_id, Options::LocalBranch options)
 {
     ObjectId root_id;
     VersionVector clock;
@@ -36,19 +36,19 @@ LocalBranch LocalBranch::create(const fs::path& path, const fs::path& objdir, Us
 
     object::Tree root_obj;
 
-    root_id = object::io::store(objdir, root_obj);
-    refcount::increment_recursive(objdir, root_id);
+    root_id = object::io::store(options.objectdir, root_obj);
+    refcount::increment_recursive(options.objectdir, root_id);
 
-    LocalBranch branch(path, objdir, user_id, Commit{move(clock), root_id});
+    LocalBranch branch(path, user_id, Commit{move(clock), root_id}, move(options));
     branch.store_self();
 
     return branch;
 }
 
 /* static */
-LocalBranch LocalBranch::load(const fs::path& file_path, const fs::path& objdir, UserId user_id)
+LocalBranch LocalBranch::load(const fs::path& file_path, UserId user_id, Options::LocalBranch options)
 {
-    LocalBranch branch(file_path, objdir, user_id);
+    LocalBranch branch(file_path, user_id, std::move(options));
     archive::load(file_path, branch);
     return branch;
 }
@@ -260,9 +260,9 @@ void LocalBranch::sanity_check() const {
 
 //--------------------------------------------------------------------
 
-Snapshot LocalBranch::create_snapshot(const fs::path& snapshotdir) const
+Snapshot LocalBranch::create_snapshot() const
 {
-    auto snapshot = Snapshot::create(snapshotdir, _objdir, _commit);
+    auto snapshot = Snapshot::create(_snapshotdir, _objdir, _commit);
     snapshot.capture_full_object(_commit.root_id);
     return snapshot;
 }
@@ -275,18 +275,20 @@ void LocalBranch::store_self() const {
 
 //--------------------------------------------------------------------
 
-LocalBranch::LocalBranch(const fs::path& file_path, const fs::path& objdir,
-        const UserId& user_id, Commit commit) :
+LocalBranch::LocalBranch(const fs::path& file_path, const UserId& user_id,
+        Commit commit, Options::LocalBranch options) :
     _file_path(file_path),
-    _objdir(objdir),
+    _objdir(std::move(options.objectdir)),
+    _snapshotdir(std::move(options.snapshotdir)),
     _user_id(user_id),
     _commit(move(commit))
 {}
 
-LocalBranch::LocalBranch(const fs::path& file_path, const fs::path& objdir,
-        const UserId& user_id) :
+LocalBranch::LocalBranch(const fs::path& file_path,
+        const UserId& user_id, Options::LocalBranch options) :
     _file_path(file_path),
-    _objdir(objdir),
+    _objdir(std::move(options.objectdir)),
+    _snapshotdir(std::move(options.snapshotdir)),
     _user_id(user_id)
 {
 }
