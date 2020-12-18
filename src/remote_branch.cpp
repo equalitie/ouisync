@@ -163,9 +163,6 @@ Snapshot RemoteBranch::create_snapshot(const fs::path& snapshotdir) const
 {
     auto snapshot = Snapshot::create(snapshotdir, _objdir, _commit);
 
-    // NOTE: Incomplete objects may have complete objects as descendants, but
-    // not vice versa.
-
     if (_incomplete_objects.empty()) {
         for (auto& [id, _] : _incomplete_objects) {
             snapshot.capture_flat_object(id);
