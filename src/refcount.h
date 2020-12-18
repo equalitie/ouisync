@@ -53,6 +53,10 @@ class Rc {
         return _recursive_count == 0 && _direct_count == 0;
     }
 
+    friend std::ostream& operator<<(std::ostream& os, const Rc& rc) {
+        return os << "Rc{" << rc._recursive_count << ", " << rc._direct_count << "}";
+    }
+
   private:
     Rc(fs::path path, std::unique_ptr<fs::fstream> f, Number k, Number l) :
         _path(std::move(path)),

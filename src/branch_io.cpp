@@ -148,17 +148,17 @@ void _show(std::ostream& os, fs::path objdir, ObjectId id, std::string pad = "")
     }
 
     auto obj = object::io::load<Tree, Blob>(objdir, id);
-    auto rc = refcount::read_recursive(objdir, id);
+    auto rc = Rc::load(objdir, id);
 
     apply(obj,
             [&] (const Tree& t) {
-                os << pad << t << " (Rc:" << rc << ")\n";
+                os << pad << t << " (" << rc << ")\n";
                 for (auto& [name, id] : t) {
                     _show(os, objdir, id, pad + "  ");
                 }
             },
             [&] (const Blob& b) {
-                os << pad << b << " (Rc:" << rc << ")\n";
+                os << pad << b << " (" << rc << ")\n";
             });
 }
 
