@@ -41,7 +41,7 @@ public:
     const ObjectId& root_id() const { return _commit.root_id; }
 
     BranchIo::Immutable immutable_io() const {
-        return BranchIo::Immutable(_objdir, root_id());
+        return BranchIo::Immutable(_options.objectdir, root_id());
     }
 
     Snapshot create_snapshot() const;
@@ -72,8 +72,7 @@ private:
 
 private:
     fs::path _filepath;
-    fs::path _objdir;
-    fs::path _snapshotdir;
+    Options::RemoteBranch _options;
 
     using Parents  = std::set<ObjectId>;
     using Children = std::set<ObjectId>;

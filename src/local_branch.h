@@ -36,7 +36,7 @@ public:
     const ObjectId& root_id() const { return _commit.root_id; }
 
     BranchIo::Immutable immutable_io() const {
-        return BranchIo::Immutable(_objdir, _commit.root_id);
+        return BranchIo::Immutable(_options.objectdir, _commit.root_id);
     }
 
     // XXX: Deprecated, use `write` instead. I believe these are currently
@@ -52,7 +52,7 @@ public:
     size_t truncate(PathRange, size_t);
 
     const fs::path& object_directory() const {
-        return _objdir;
+        return _options.objectdir;
     }
 
     void mkdir(PathRange);
@@ -88,8 +88,7 @@ private:
 
 private:
     fs::path _file_path;
-    fs::path _objdir;
-    fs::path _snapshotdir;
+    Options::LocalBranch _options;
     UserId _user_id;
     Commit _commit;
 };

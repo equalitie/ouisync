@@ -104,7 +104,7 @@ ObjectId _update_dir(size_t branch_count, const fs::path& objdir, ObjectId tree_
 template<class F>
 void LocalBranch::update_dir(PathRange path, F&& f)
 {
-    auto id = _update_dir(1, _objdir, _commit.root_id, path, std::forward<F>(f));
+    auto id = _update_dir(1, _options.objectdir, _commit.root_id, path, std::forward<F>(f));
 
     if (_commit.root_id == id) return;
 
@@ -113,7 +113,7 @@ void LocalBranch::update_dir(PathRange path, F&& f)
 
     store_self();
 
-    refcount::increment_recursive(_objdir, _commit.root_id);
+    refcount::increment_recursive(_options.objectdir, _commit.root_id);
 }
 
 //--------------------------------------------------------------------
@@ -134,7 +134,7 @@ void LocalBranch::store(PathRange path, const Blob& blob)
         [&] (Tree& tree, auto) {
             auto [child, inserted] = tree.insert(std::make_pair(path.back(), ObjectId{}));
             if (!inserted) throw_error(sys::errc::file_exists);
-            auto [id, created] = object::io::store_(_objdir, blob);
+            auto [id, created] = object::io::store_(_options.objectdir, blob);
             child.set_id(id);
             return id;
         });
@@ -158,7 +158,7 @@ size_t LocalBranch::write(PathRange path, const char* buf, size_t size, size_t o
 
             // XXX: Write only the necessary part to disk without loading
             // the whole blob into the memory.
-            auto blob = object::io::load<Blob>(_objdir, child.id());
+            auto blob = object::io::load<Blob>(_options.objectdir, child.id());
 
             size_t len = blob.size();
 
@@ -169,10 +169,10 @@ size_t LocalBranch::write(PathRange path, const char* buf, size_t size, size_t o
             memcpy(blob.data() + offset, buf, size);
 
             if (branch_count <= 1) {
-                decrement_rc_and_remove_single_node(_objdir, child.id());
+                decrement_rc_and_remove_single_node(_options.objectdir, child.id());
             }
 
-            child.set_id(object::io::store(_objdir, blob));
+            child.set_id(object::io::store(_options.objectdir, blob));
             return child.id();
         });
 
@@ -191,16 +191,16 @@ size_t LocalBranch::truncate(PathRange path, size_t size)
             if (!child) throw_error(sys::errc::no_such_file_or_directory);
 
             // XXX: Read only what's needed, not the whole blob
-            auto blob = object::io::load<Blob>(_objdir, child.id());
+            auto blob = object::io::load<Blob>(_options.objectdir, child.id());
 
             blob.resize(std::min<size_t>(blob.size(), size));
             size = blob.size();
 
             if (branch_count <= 1) {
-                decrement_rc_and_remove_single_node(_objdir, child.id());
+                decrement_rc_and_remove_single_node(_options.objectdir, child.id());
             }
 
-            child.set_id(object::io::store(_objdir, blob));
+            child.set_id(object::io::store(_options.objectdir, blob));
             return child.id();
         });
 
@@ -217,7 +217,7 @@ void LocalBranch::mkdir(PathRange path)
         [&] (Tree& parent, auto) {
             auto [child, inserted] = parent.insert(std::make_pair(path.back(), ObjectId{}));
             if (!inserted) throw_error(sys::errc::file_exists);
-            auto [id, created] = object::io::store_(_objdir, Tree{});
+            auto [id, created] = object::io::store_(_options.objectdir, Tree{});
             child.set_id(id);
             return id;
         });
@@ -234,7 +234,7 @@ bool LocalBranch::remove(PathRange path)
             auto child = tree.find(path.back());
             if (!child) throw_error(sys::errc::no_such_file_or_directory);
             if (branch_count <= 1) {
-                refcount::deep_remove(_objdir, child.id());
+                refcount::deep_remove(_options.objectdir, child.id());
             }
             tree.erase(child);
             return boost::none;
@@ -251,7 +251,7 @@ bool LocalBranch::remove(const fs::path& fspath)
 
 //--------------------------------------------------------------------
 void LocalBranch::sanity_check() const {
-    if (!object::io::is_complete(_objdir, _commit.root_id)) {
+    if (!object::io::is_complete(_options.objectdir, _commit.root_id)) {
         std::cerr << "LocalBranch is incomplete:\n";
         std::cerr << *this << "\n";
         ouisync_assert(false);
@@ -262,7 +262,7 @@ void LocalBranch::sanity_check() const {
 
 Snapshot LocalBranch::create_snapshot() const
 {
-    auto snapshot = Snapshot::create(_snapshotdir, _objdir, _commit);
+    auto snapshot = Snapshot::create(_commit, _options);
     snapshot.capture_full_object(_commit.root_id);
     return snapshot;
 }
@@ -278,8 +278,7 @@ void LocalBranch::store_self() const {
 LocalBranch::LocalBranch(const fs::path& file_path, const UserId& user_id,
         Commit commit, Options::LocalBranch options) :
     _file_path(file_path),
-    _objdir(std::move(options.objectdir)),
-    _snapshotdir(std::move(options.snapshotdir)),
+    _options(move(options)),
     _user_id(user_id),
     _commit(move(commit))
 {}
@@ -287,8 +286,7 @@ LocalBranch::LocalBranch(const fs::path& file_path, const UserId& user_id,
 LocalBranch::LocalBranch(const fs::path& file_path,
         const UserId& user_id, Options::LocalBranch options) :
     _file_path(file_path),
-    _objdir(std::move(options.objectdir)),
-    _snapshotdir(std::move(options.snapshotdir)),
+    _options(move(options)),
     _user_id(user_id)
 {
 }
@@ -301,13 +299,12 @@ bool LocalBranch::introduce_commit(const Commit& commit)
     if (_commit.root_id == commit.root_id) return false;
 
     auto old_root = _commit.root_id;
-    //auto rc = refcount::decrement(_objdir, old_root);
 
     _commit = move(commit);
 
     store_self();
-    refcount::increment_recursive(_objdir, _commit.root_id);
-    refcount::deep_remove(_objdir, old_root);
+    refcount::increment_recursive(_options.objectdir, _commit.root_id);
+    refcount::deep_remove(_options.objectdir, old_root);
 
     return true;
 }

@@ -31,9 +31,18 @@ public:
     Opt<net::ip::tcp::endpoint> accept_endpoint;
     Opt<net::ip::tcp::endpoint> connect_endpoint;
 
+    struct Snapshot {
+        fs::path objectdir;
+        fs::path snapshotdir;
+    };
+
     struct LocalBranch {
         fs::path objectdir;
         fs::path snapshotdir;
+
+        operator Snapshot() const {
+            return { objectdir, snapshotdir };
+        }
     };
 
     operator LocalBranch() const {
@@ -43,6 +52,10 @@ public:
     struct RemoteBranch {
         fs::path objectdir;
         fs::path snapshotdir;
+
+        operator Snapshot() const {
+            return { objectdir, snapshotdir };
+        }
     };
 
     operator RemoteBranch() const {

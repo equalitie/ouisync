@@ -87,10 +87,10 @@ static auto _random_file_name(const fs::path& dir)
 }
 
 /* static */
-Snapshot Snapshot::create(const fs::path& snapshotdir, fs::path objdir, Commit commit)
+Snapshot Snapshot::create(Commit commit, Options::Snapshot options)
 {
-    auto path = _random_file_name(snapshotdir);
-    Snapshot s(std::move(path), std::move(objdir), std::move(commit));
+    auto path = _random_file_name(options.snapshotdir);
+    Snapshot s(std::move(path), std::move(options.objectdir), std::move(commit));
     s.store();
     return s;
 }

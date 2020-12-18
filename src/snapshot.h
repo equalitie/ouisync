@@ -2,6 +2,7 @@
 
 #include "commit.h"
 #include "shortcuts.h"
+#include "options.h"
 
 #include <set>
 #include <map>
@@ -26,7 +27,7 @@ public:
     Snapshot(Snapshot&&);
     Snapshot& operator=(Snapshot&&);
 
-    static Snapshot create(const fs::path& snapshotdir, fs::path objdir, Commit);
+    static Snapshot create(Commit, Options::Snapshot);
 
     const Commit& commit() const { return _commit; }
 

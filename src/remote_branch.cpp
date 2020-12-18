@@ -37,8 +37,7 @@ ObjectId _flat_store(const fs::path& objdir, const Obj& obj) {
 
 RemoteBranch::RemoteBranch(Commit commit, fs::path filepath, Options::RemoteBranch options) :
     _filepath(std::move(filepath)),
-    _objdir(std::move(options.objectdir)),
-    _snapshotdir(std::move(options.snapshotdir)),
+    _options(move(options)),
     _commit(std::move(commit))
 {
     _missing_objects.insert({_commit.root_id, {}});
@@ -46,8 +45,7 @@ RemoteBranch::RemoteBranch(Commit commit, fs::path filepath, Options::RemoteBran
 
 RemoteBranch::RemoteBranch(fs::path filepath, Options::RemoteBranch options) :
     _filepath(std::move(filepath)),
-    _objdir(std::move(options.objectdir)),
-    _snapshotdir(std::move(options.snapshotdir))
+    _options(std::move(options))
 {}
 
 net::awaitable<ObjectId> RemoteBranch::insert_blob(const Blob& blob)
@@ -71,7 +69,7 @@ void RemoteBranch::filter_missing(std::set<ObjectId>& objs) const
 {
     for (auto i = objs.begin(); i != objs.end();) {
         auto j = std::next(i);
-        if (object::io::exists(_objdir, *i)) objs.erase(i);
+        if (object::io::exists(_options.objectdir, *i)) objs.erase(i);
         i = j;
     }
 }
@@ -117,7 +115,7 @@ net::awaitable<ObjectId> RemoteBranch::insert_object(const Obj& obj, std::set<Ob
         }
     }
 
-    _flat_store(_objdir, obj);
+    _flat_store(_options.objectdir, obj);
 
     store_self();
     co_return id;
@@ -135,11 +133,11 @@ net::awaitable<void> RemoteBranch::introduce_commit(const Commit& commit)
 
 
     for (auto& [id, _] : incomplete_objects) {
-        refcount::flat_remove(_objdir, id);
+        refcount::flat_remove(_options.objectdir, id);
     }
 
     for (auto& id      : complete_objects) {
-        refcount::deep_remove(_objdir, id);
+        refcount::deep_remove(_options.objectdir, id);
     }
 
     _missing_objects.insert({_commit.root_id, {}});
@@ -151,11 +149,11 @@ net::awaitable<void> RemoteBranch::introduce_commit(const Commit& commit)
 //--------------------------------------------------------------------
 void RemoteBranch::sanity_check() const {
     for (auto& [id, _] : _incomplete_objects) {
-        ouisync_assert(object::io::exists(_objdir, id));
+        ouisync_assert(object::io::exists(_options.objectdir, id));
     }
 
     for (auto& id : _complete_objects) {
-        ouisync_assert(object::io::is_complete(_objdir, id));
+        ouisync_assert(object::io::is_complete(_options.objectdir, id));
     }
 }
 
@@ -163,7 +161,7 @@ void RemoteBranch::sanity_check() const {
 
 Snapshot RemoteBranch::create_snapshot() const
 {
-    auto snapshot = Snapshot::create(_snapshotdir, _objdir, _commit);
+    auto snapshot = Snapshot::create(_commit, _options);
 
     if (_incomplete_objects.empty()) {
         for (auto& [id, _] : _incomplete_objects) {
@@ -189,7 +187,7 @@ void RemoteBranch::store_self() const {
 std::ostream& ouisync::operator<<(std::ostream& os, const RemoteBranch& b)
 {
     os << "RemoteBranch:\n";
-    os << BranchIo::Immutable(b._objdir, b._commit.root_id);
+    os << BranchIo::Immutable(b._options.objectdir, b._commit.root_id);
     os << "Complete objs: ";
     for (auto& id : b._complete_objects) {
         os << id << ", ";
