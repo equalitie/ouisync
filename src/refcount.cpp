@@ -3,6 +3,7 @@
 #include "object/blob.h"
 #include "object/io.h"
 #include "variant.h"
+#include "ouisync_assert.h"
 #include <boost/filesystem/fstream.hpp>
 #include <boost/filesystem/operations.hpp>
 #include <boost/endian/conversion.hpp>
@@ -74,7 +75,7 @@ void Rc::commit()
     if (!_file->is_open()) {
         if (fs::exists(_path)) {
             std::cerr << "Rc file created by other Rc object " << _path << "\n";
-            assert(false); exit(1);
+            ouisync_assert(false); exit(1);
         }
         _file->open(_path, F::binary | F::in | F::out | F::trunc);
     }
@@ -100,13 +101,13 @@ void Rc::increment_direct_count()    {
 }
 
 void Rc::decrement_recursive_count() {
-    assert(_recursive_count);
+    ouisync_assert(_recursive_count);
     --_recursive_count;
     commit();
 }
 
 void Rc::decrement_direct_count(){
-    assert(_direct_count);
+    ouisync_assert(_direct_count);
     --_direct_count;
     commit();
 }
