@@ -5,6 +5,7 @@
 #include "random.h"
 #include "hex.h"
 #include "archive.h"
+#include "defer.h"
 
 #include <iostream>
 #include <boost/filesystem.hpp>
@@ -19,6 +20,8 @@ using std::string;
 using boost::get;
 using std::make_pair;
 using Branch = Repository::Branch;
+
+#define SANITY_CHECK_EACH_IO_FN false
 
 static void _sanity_check(const Branch& b) {
     apply(b, [&] (auto& b) { b.sanity_check(); });
@@ -74,6 +77,11 @@ static Snapshot _create_snapshot(const Branch& b, const fs::path& snapshotdir) {
 
 SnapshotGroup Repository::create_snapshot_group()
 {
+#if SANITY_CHECK_EACH_IO_FN
+    sanity_check();
+    auto at_exit = defer([&] { sanity_check(); });
+#endif
+
     std::map<UserId, Snapshot> snapshots;
 
     for (auto& [user_id, branch] : _branches) {
@@ -87,6 +95,11 @@ SnapshotGroup Repository::create_snapshot_group()
 
 net::awaitable<Repository::Attrib> Repository::get_attr(PathRange path)
 {
+#if SANITY_CHECK_EACH_IO_FN
+    sanity_check();
+    auto at_exit = defer([&] { sanity_check(); });
+#endif
+
     if (path.empty()) co_return DirAttrib{};
 
     auto& branch = find_branch(path);
@@ -98,6 +111,11 @@ net::awaitable<Repository::Attrib> Repository::get_attr(PathRange path)
 
 net::awaitable<vector<string>> Repository::readdir(PathRange path)
 {
+#if SANITY_CHECK_EACH_IO_FN
+    sanity_check();
+    auto at_exit = defer([&] { sanity_check(); });
+#endif
+
     std::vector<std::string> nodes;
 
     if (path.empty()) {
@@ -122,6 +140,11 @@ net::awaitable<vector<string>> Repository::readdir(PathRange path)
 
 net::awaitable<size_t> Repository::read(PathRange path, char* buf, size_t size, off_t offset)
 {
+#if SANITY_CHECK_EACH_IO_FN
+    sanity_check();
+    auto at_exit = defer([&] { sanity_check(); });
+#endif
+
     if (path.empty()) {
         throw_error(sys::errc::invalid_argument);
     }
@@ -138,6 +161,11 @@ net::awaitable<size_t> Repository::read(PathRange path, char* buf, size_t size, 
 
 net::awaitable<size_t> Repository::write(PathRange path, const char* buf, size_t size, off_t offset)
 {
+#if SANITY_CHECK_EACH_IO_FN
+    sanity_check();
+    auto at_exit = defer([&] { sanity_check(); });
+#endif
+
     if (path.empty()) {
         throw_error(sys::errc::invalid_argument);
     }
@@ -164,6 +192,11 @@ net::awaitable<size_t> Repository::write(PathRange path, const char* buf, size_t
 
 net::awaitable<void> Repository::mknod(PathRange path, mode_t mode, dev_t dev)
 {
+#if SANITY_CHECK_EACH_IO_FN
+    sanity_check();
+    auto at_exit = defer([&] { sanity_check(); });
+#endif
+
     if (S_ISFIFO(mode)) throw_error(sys::errc::invalid_argument); // TODO?
 
     if (path.empty()) {
@@ -191,6 +224,11 @@ net::awaitable<void> Repository::mknod(PathRange path, mode_t mode, dev_t dev)
 
 net::awaitable<void> Repository::mkdir(PathRange path, mode_t mode)
 {
+#if SANITY_CHECK_EACH_IO_FN
+    sanity_check();
+    auto at_exit = defer([&] { sanity_check(); });
+#endif
+
     if (path.empty()) {
         // The root directory is reserved for branches, users can't create
         // new directories there.
@@ -214,6 +252,11 @@ net::awaitable<void> Repository::mkdir(PathRange path, mode_t mode)
 
 net::awaitable<void> Repository::remove_file(PathRange path)
 {
+#if SANITY_CHECK_EACH_IO_FN
+    sanity_check();
+    auto at_exit = defer([&] { sanity_check(); });
+#endif
+
     if (path.empty()) {
         throw_error(sys::errc::is_a_directory);
     }
@@ -240,6 +283,11 @@ net::awaitable<void> Repository::remove_file(PathRange path)
 
 net::awaitable<void> Repository::remove_directory(PathRange path)
 {
+#if SANITY_CHECK_EACH_IO_FN
+    sanity_check();
+    auto at_exit = defer([&] { sanity_check(); });
+#endif
+
     if (path.empty()) {
         // XXX: Branch removal not yet implemented
         throw_error(sys::errc::operation_not_permitted);
@@ -267,6 +315,11 @@ net::awaitable<void> Repository::remove_directory(PathRange path)
 
 net::awaitable<size_t> Repository::truncate(PathRange path, size_t size)
 {
+#if SANITY_CHECK_EACH_IO_FN
+    sanity_check();
+    auto at_exit = defer([&] { sanity_check(); });
+#endif
+
     if (path.empty()) {
         // XXX: Branch removal not yet implemented
         throw_error(sys::errc::is_a_directory);
@@ -307,6 +360,11 @@ ObjectId Repository::get_root_id(const Branch& b)
 net::awaitable<RemoteBranch*>
 Repository::get_or_create_remote_branch(const UserId& user_id, const Commit& commit)
 {
+#if SANITY_CHECK_EACH_IO_FN
+    sanity_check();
+    auto at_exit = defer([&] { sanity_check(); });
+#endif
+
     if (user_id == _user_id) {
         // XXX: In future we could also do donwload of local branches, e.g. for
         // cases when a user loses some data.
@@ -340,6 +398,11 @@ Repository::get_or_create_remote_branch(const UserId& user_id, const Commit& com
 
 void Repository::introduce_commit_to_local_branch(const Commit& commit)
 {
+#if SANITY_CHECK_EACH_IO_FN
+    sanity_check();
+    auto at_exit = defer([&] { sanity_check(); });
+#endif
+
     auto i = _branches.find(_user_id);
     if (i == _branches.end()) {
         throw std::runtime_error("Local branch doesn't exist");
