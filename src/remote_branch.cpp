@@ -40,11 +40,6 @@ RemoteBranch::RemoteBranch(fs::path filepath, Options::RemoteBranch options) :
     _options(std::move(options))
 {}
 
-net::awaitable<ObjectId> RemoteBranch::insert_blob(const Blob& blob)
-{
-    return insert_object(blob, {});
-}
-
 static std::set<ObjectId> _children(const Tree& tree)
 {
     std::set<ObjectId> ret;
@@ -52,9 +47,20 @@ static std::set<ObjectId> _children(const Tree& tree)
     return ret;
 }
 
+net::awaitable<ObjectId> RemoteBranch::insert_blob(const Blob& blob)
+{
+    auto id = object::io::store(_options.objectdir, blob);
+    insert_object(id, {});
+    store_self();
+    co_return id;
+}
+
 net::awaitable<ObjectId> RemoteBranch::insert_tree(const Tree& tree)
 {
-    return insert_object(tree, _children(tree));
+    auto id = object::io::store(_options.objectdir, tree);
+    insert_object(id, _children(tree));
+    store_self();
+    co_return id;
 }
 
 void RemoteBranch::filter_missing(std::set<ObjectId>& objs) const
@@ -66,8 +72,7 @@ void RemoteBranch::filter_missing(std::set<ObjectId>& objs) const
     }
 }
 
-template<class Obj>
-net::awaitable<ObjectId> RemoteBranch::insert_object(const Obj& obj, std::set<ObjectId> children)
+void RemoteBranch::insert_object(const ObjectId& id, std::set<ObjectId> children)
 {
     // Missing objects:    Object -> Parents
     // Incomplete objects: Object -> Children
@@ -76,12 +81,10 @@ net::awaitable<ObjectId> RemoteBranch::insert_object(const Obj& obj, std::set<Ob
 
     bool is_complete = children.empty();
 
-    ObjectId id;
-
     if (is_complete) {
-        id = full_store(obj);
+        Rc::load(_options.objectdir, id).increment_recursive_count();
     } else {
-        id = flat_store(obj);
+        Rc::load(_options.objectdir, id).increment_direct_count();
     }
 
     auto parents = std::move(_missing_objects.at(id));
@@ -90,7 +93,7 @@ net::awaitable<ObjectId> RemoteBranch::insert_object(const Obj& obj, std::set<Ob
     if (children.empty()) {
         _complete_objects.insert(id);
 
-        // Check that any of the parents of `obj` became "complete".
+        // Check that any of the parents of `id` became "complete".
         for (auto& parent : parents) {
             auto& missing_children = _incomplete_objects.at(parent);
 
@@ -120,9 +123,6 @@ net::awaitable<ObjectId> RemoteBranch::insert_object(const Obj& obj, std::set<Ob
             _incomplete_objects.insert({id, move(children)});
         }
     }
-
-    store_self();
-    co_return id;
 }
 
 net::awaitable<void> RemoteBranch::introduce_commit(const Commit& commit)
@@ -148,21 +148,6 @@ net::awaitable<void> RemoteBranch::introduce_commit(const Commit& commit)
 
     store_self();
     co_return;
-}
-
-//--------------------------------------------------------------------
-template<class Obj>
-ObjectId RemoteBranch::flat_store(const Obj& obj) {
-    auto new_id = object::io::store(_options.objectdir, obj);
-    Rc::load(_options.objectdir, new_id).increment_direct_count();
-    return new_id;
-}
-
-template<class Obj>
-ObjectId RemoteBranch::full_store(const Obj& obj) {
-    auto new_id = object::io::store(_options.objectdir, obj);
-    refcount::increment_recursive(_options.objectdir, new_id);
-    return new_id;
 }
 
 //--------------------------------------------------------------------

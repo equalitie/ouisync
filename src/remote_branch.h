@@ -55,8 +55,7 @@ private:
 
     void store_self() const;
 
-    template<class Obj>
-    net::awaitable<ObjectId> insert_object(const Obj& obj, std::set<ObjectId> children);
+    void insert_object(const ObjectId&, std::set<ObjectId> children);
 
     void filter_missing(std::set<ObjectId>& objs) const;
 
@@ -69,9 +68,6 @@ private:
            & _incomplete_objects
            & _missing_objects;
     }
-
-    template<class Obj> ObjectId flat_store(const Obj&);
-    template<class Obj> ObjectId full_store(const Obj&);
 
 private:
     fs::path _filepath;
