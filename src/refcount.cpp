@@ -77,6 +77,7 @@ void Rc::commit()
             std::cerr << "Rc file created by other Rc object " << _path << "\n";
             ouisync_assert(false); exit(1);
         }
+        if (both_are_zero()) return;
         _file->open(_path, F::binary | F::in | F::out | F::trunc);
     }
 
@@ -84,6 +85,12 @@ void Rc::commit()
         std::stringstream ss;
         ss << "Failed to commit refcount: " << _path;
         throw std::runtime_error(ss.str());
+    }
+
+    if (both_are_zero()) {
+        _file->close();
+        fs::remove(_path);
+        return;
     }
 
     _file->seekp(0);
