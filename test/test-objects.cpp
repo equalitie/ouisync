@@ -10,10 +10,9 @@
 #include "array_io.h"
 #include "local_branch.h"
 #include "path_range.h"
-#include "random.h"
+#include "utils.h"
 
 #include <iostream>
-#include <random>
 #include <boost/filesystem.hpp>
 #include <boost/variant.hpp>
 #include <boost/range/distance.hpp>
@@ -27,46 +26,6 @@ using namespace ouisync;
 using object::Tree;
 using object::Blob;
 using boost::variant;
-
-struct Random {
-    using Seed = std::mt19937::result_type;
-
-    static Seed seed() {
-        return std::random_device()();
-    }
-
-    Random() : gen(seed()) {}
-
-    std::vector<uint8_t> vector(size_t size) {
-        std::vector<uint8_t> v(size);
-        auto ptr = static_cast<uint8_t*>(v.data());
-        fill(ptr, size);
-        return v;
-    }
-
-    Blob blob(size_t size) {
-        return {vector(size)};
-    }
-
-    std::string string(size_t size) {
-        std::string result(size, '\0');
-        fill(&result[0], size);
-        return result;
-    }
-
-    ObjectId object_id() {
-        ObjectId id;
-        fill(reinterpret_cast<char*>(id.data()), id.size);
-        return id;
-    }
-
-    void fill(void* ptr, size_t size) {
-        std::uniform_int_distribution<> distrib(0, 255);
-        for (size_t i = 0; i < size; ++i) ((char*)ptr)[i] = distrib(gen);
-    }
-
-    std::mt19937 gen;
-};
 
 #define REQUIRE_HEX_EQUAL(a, b) \
     BOOST_REQUIRE_EQUAL(to_hex<char>(a), to_hex<char>(b));

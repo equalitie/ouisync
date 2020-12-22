@@ -15,6 +15,11 @@ target_link_libraries(test-objects PUBLIC Boost::unit_test_framework libouisync)
 target_compile_features(test-objects PRIVATE cxx_std_17)
 set_warning_level(test-objects)
 
+add_executable(test-snapshot "test-snapshot.cpp")
+target_link_libraries(test-snapshot PUBLIC Boost::unit_test_framework libouisync)
+target_compile_features(test-snapshot PRIVATE cxx_std_17)
+set_warning_level(test-snapshot)
+
 add_executable(test-file test-file.cpp ../src/file.cpp ../src/file_locker.cpp)
 target_link_libraries(test-file PUBLIC Boost::unit_test_framework Boost::filesystem "${CMAKE_THREAD_LIBS_INIT}")
 target_compile_definitions(test-file PRIVATE -DBOOST_ASIO_HAS_CO_AWAIT)
