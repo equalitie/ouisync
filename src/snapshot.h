@@ -17,6 +17,11 @@ class Snapshot {
 public:
     using Id = ObjectId;
 
+    // Hex of this type is used to create the file name where Snapshot is
+    // stored. Currently Snapshots are not treated as immutable objects but
+    // that may change in the future.
+    using NameTag = std::array<unsigned char, 16>;
+
 public:
     Snapshot(const Snapshot&) = delete;
     Snapshot& operator=(const Snapshot&) = delete;
@@ -40,8 +45,10 @@ public:
 
     void sanity_check() const;
 
+    NameTag name_tag() const { return _name_tag; }
+
 private:
-    Snapshot(fs::path path, fs::path objdir, fs::path snapshotdir, Commit);
+    Snapshot(fs::path objdir, fs::path snapshotdir, Commit);
 
     void store();
 
@@ -50,6 +57,7 @@ private:
     void filter_missing(std::set<ObjectId>& objs) const;
 
 private:
+    NameTag _name_tag;
     fs::path _path;
     fs::path _objdir;
     fs::path _snapshotdir;

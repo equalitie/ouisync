@@ -23,6 +23,19 @@ using namespace ouisync;
 using namespace std;
 using object::Tree;
 
+static auto _generate_random_name_tag()
+{
+    Snapshot::NameTag rnd;
+    random::generate_non_blocking(rnd.data(), rnd.size());
+    return rnd;
+}
+
+static auto _path_from_tag(const Snapshot::NameTag& name_tag, const fs::path& dir)
+{
+    auto hex = to_hex<char>(name_tag);
+    return dir / fs::path(hex.begin(), hex.end());
+}
+
 ObjectId Snapshot::calculate_id() const
 {
     Sha256 hash;
@@ -47,8 +60,9 @@ ObjectId Snapshot::calculate_id() const
     return hash.close();
 }
 
-Snapshot::Snapshot(fs::path path, fs::path objdir, fs::path snapshotdir, Commit commit) :
-    _path(std::move(path)),
+Snapshot::Snapshot(fs::path objdir, fs::path snapshotdir, Commit commit) :
+    _name_tag(_generate_random_name_tag()),
+    _path(_path_from_tag(_name_tag, snapshotdir)),
     _objdir(std::move(objdir)),
     _snapshotdir(std::move(snapshotdir)),
     _commit(move(commit))
@@ -57,6 +71,7 @@ Snapshot::Snapshot(fs::path path, fs::path objdir, fs::path snapshotdir, Commit 
 }
 
 Snapshot::Snapshot(Snapshot&& other) :
+    _name_tag(other._name_tag),
     _path(std::move(other._path)),
     _objdir(std::move(other._objdir)),
     _snapshotdir(std::move(other._snapshotdir)),
@@ -71,15 +86,26 @@ Snapshot& Snapshot::operator=(Snapshot&& other)
 {
     forget();
 
-    _path   = std::move(other._path);
-    _objdir = std::move(other._objdir);
-    _commit = std::move(other._commit);
+    _name_tag = other._name_tag;
+    _path     = std::move(other._path);
+    _objdir   = std::move(other._objdir);
+    _commit   = std::move(other._commit);
 
     _complete_objects   = move(other._complete_objects);
     _incomplete_objects = move(other._incomplete_objects);
     _missing_objects    = move(other._missing_objects);
 
     return *this;
+}
+
+/* static */
+Snapshot Snapshot::create(Commit commit, Options::Snapshot options)
+{
+    Snapshot s(std::move(options.objectdir),
+            move(options.snapshotdir), std::move(commit));
+
+    s.store();
+    return s;
 }
 
 void Snapshot::filter_missing(set<ObjectId>& objs) const
@@ -152,26 +178,6 @@ void Snapshot::store()
             _missing_objects);
 }
 
-static auto _random_file_name(const fs::path& dir)
-{
-    std::array<unsigned char, 16> rnd;
-    random::generate_non_blocking(rnd.data(), rnd.size());
-    auto hex = to_hex<char>(rnd);
-    return dir / fs::path(hex.begin(), hex.end());
-}
-
-/* static */
-Snapshot Snapshot::create(Commit commit, Options::Snapshot options)
-{
-    auto path = _random_file_name(options.snapshotdir);
-
-    Snapshot s(std::move(path), std::move(options.objectdir),
-            move(options.snapshotdir), std::move(commit));
-
-    s.store();
-    return s;
-}
-
 void Snapshot::forget() noexcept
 {
     auto complete_objects   = move(_complete_objects);
@@ -191,7 +197,7 @@ void Snapshot::forget() noexcept
 
 Snapshot Snapshot::clone() const
 {
-    Snapshot c(_random_file_name(_snapshotdir), _objdir, _snapshotdir, _commit);
+    Snapshot c(_objdir, _snapshotdir, _commit);
 
     for (auto& id : _complete_objects) {
         c._complete_objects.insert(id);
