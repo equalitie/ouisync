@@ -17,8 +17,6 @@
 
 namespace ouisync {
 
-class InputArchive;
-class OutputArchive;
 class Snapshot;
 
 class RemoteBranch {
@@ -35,7 +33,7 @@ public:
     [[nodiscard]] net::awaitable<ObjectId> insert_blob(const Blob&);
     [[nodiscard]] net::awaitable<ObjectId> insert_tree(const Tree&);
 
-    [[nodiscard]] net::awaitable<void> introduce_commit(const Commit&);
+    void introduce_commit(const Commit&);
 
     const VersionVector& stamp() const { return _commit.stamp; }
     const ObjectId& root_id() const { return _commit.root_id; }
@@ -55,40 +53,22 @@ private:
 
     void store_self() const;
 
-    void insert_object(const ObjectId&, std::set<ObjectId> children);
-
-    void filter_missing(std::set<ObjectId>& objs) const;
-
     friend class boost::serialization::access;
 
     template<class Archive>
     void serialize(Archive& ar, unsigned) {
-        ar & _commit
-           & _complete_objects
-           & _incomplete_objects
-           & _missing_objects;
+        // XXX Store snapshot file name
+        //ar & _commit
+        //   & _complete_objects
+        //   & _incomplete_objects
+        //   & _missing_objects;
     }
 
 private:
     fs::path _filepath;
     Options::RemoteBranch _options;
-
-    using Parents  = std::set<ObjectId>;
-    using Children = std::set<ObjectId>;
-
-    // Objects whose all children have been downloaded and also whose parent's
-    // are either non existent (root) or incomplete.
-    std::set<ObjectId> _complete_objects;
-
-    // Objects that have been downloaded, but some of its childrent haven't
-    // been.
-    std::map<ObjectId, Children> _incomplete_objects;
-
-    // Objects that are known to be in this snapshot, but haven't yet been
-    // downloaded.
-    std::map<ObjectId, Parents> _missing_objects;
-
     Commit _commit;
+    std::unique_ptr<Snapshot> _snapshot;
 };
 
 } // namespace

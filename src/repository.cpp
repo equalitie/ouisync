@@ -391,7 +391,7 @@ Repository::get_or_create_remote_branch(const UserId& user_id, const Commit& com
         co_return nullptr;
     }
 
-    co_await branch->introduce_commit(commit);
+    branch->introduce_commit(commit);
 
     co_return branch;
 }

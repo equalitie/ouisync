@@ -6,6 +6,7 @@
 #include "../shortcuts.h"
 
 #include <map>
+#include <set>
 #include <iosfwd>
 #include <boost/filesystem/path.hpp>
 #include <boost/serialization/map.hpp>
@@ -110,6 +111,12 @@ public:
 
     MutableHandle operator[](std::string key) {
         return insert({std::move(key), ObjectId{}}).first;
+    }
+
+    std::set<ObjectId> children() const {
+        std::set<ObjectId> ch;
+        for (auto& [_, id] : *this) { ch.insert(id); }
+        return ch;
     }
 
 public:

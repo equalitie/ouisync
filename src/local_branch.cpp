@@ -263,7 +263,7 @@ void LocalBranch::sanity_check() const {
 Snapshot LocalBranch::create_snapshot() const
 {
     auto snapshot = Snapshot::create(_commit, _options);
-    snapshot.capture_full_object(_commit.root_id);
+    snapshot.insert_object(_commit.root_id, {});
     return snapshot;
 }
 
