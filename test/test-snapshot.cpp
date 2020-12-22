@@ -86,19 +86,57 @@ struct Environment {
 BOOST_AUTO_TEST_CASE(simple_forget) {
     Environment env("simple_forget");
 
-    auto blob = rnd.blob(256);
-    auto blob_id = blob.calculate_id();
-    Tree root;
-    root["blob"].set_id(blob_id);
+    //           R
+    //           ↓
+    //           A
 
-    auto root_id = env.store(root);
+    auto A = rnd.blob(256);
+    Tree R;
+    R["A"].set_id(A.calculate_id());
 
-    auto snapshot = env.create_snapshot(root_id);
+    env.store(R);
+    auto snapshot = env.create_snapshot(R.calculate_id());
+    snapshot.insert_object(R.calculate_id(), R.children());
 
-    snapshot.insert_object(root_id, {blob_id});
-    env.store(blob);
-    snapshot.insert_object(blob_id, {});
+    env.store(A);
+    snapshot.insert_object(A.calculate_id(), {});
 
+    snapshot.forget();
+
+    BOOST_REQUIRE_EQUAL(boost::distance(env.object_dir_files()), 0);
+}
+
+BOOST_AUTO_TEST_CASE(partial_forget) {
+    Environment env("partial_forget");
+
+    //           R
+    //          ↙ ↘
+    //         A   N
+    //             ↓
+    //             B
+
+    auto A = rnd.blob(256);
+    auto B = rnd.blob(256);
+    Tree R;
+    Tree N;
+
+    N["B"].set_id(B.calculate_id());
+
+    R["A"].set_id(A.calculate_id());
+    R["N"].set_id(N.calculate_id());
+
+    auto snapshot = env.create_snapshot(R.calculate_id());
+
+    env.store(R);
+    snapshot.insert_object(R.calculate_id(), R.children());
+
+    env.store(A);
+    snapshot.insert_object(A.calculate_id(), {});
+
+    env.store(N);
+    snapshot.insert_object(N.calculate_id(), N.children());
+
+    snapshot.sanity_check();
     snapshot.forget();
 
     BOOST_REQUIRE_EQUAL(boost::distance(env.object_dir_files()), 0);
