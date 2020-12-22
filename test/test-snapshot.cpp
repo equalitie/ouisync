@@ -80,6 +80,10 @@ struct Environment {
             boost::adaptors::filtered([](auto p) { return !is_refcount(p.path()); });
     }
 
+    Rc load_rc(const ObjectId& id) const {
+        return Rc::load(options.objectdir, id);
+    }
+
     Options::Snapshot options;
 };
 
@@ -135,6 +139,46 @@ BOOST_AUTO_TEST_CASE(partial_forget) {
 
     env.store(N);
     snapshot.insert_object(N.calculate_id(), N.children());
+
+    snapshot.sanity_check();
+    snapshot.forget();
+
+    BOOST_REQUIRE_EQUAL(boost::distance(env.object_dir_files()), 0);
+}
+
+BOOST_AUTO_TEST_CASE(two_levels) {
+    Environment env("two_levels");
+
+    //           R
+    //           ↓
+    //           N
+    //           ↓
+    //           A
+
+    Tree R;
+    Tree N;
+    Blob A = rnd.blob(256);
+
+    N["A"].set_id(A.calculate_id());
+    R["N"].set_id(N.calculate_id());
+
+    auto snapshot = env.create_snapshot(R.calculate_id());
+
+    env.store(R);
+    snapshot.insert_object(R.calculate_id(), R.children());
+
+    env.store(N);
+    snapshot.insert_object(N.calculate_id(), N.children());
+
+    env.store(A);
+    snapshot.insert_object(A.calculate_id(), {});
+
+    std::cerr << snapshot << "\n";
+
+    auto R_rc = env.load_rc(R.calculate_id());
+
+    BOOST_REQUIRE_EQUAL(R_rc.direct_count()   , 0);
+    BOOST_REQUIRE_EQUAL(R_rc.recursive_count(), 1);
 
     snapshot.sanity_check();
     snapshot.forget();
