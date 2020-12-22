@@ -106,6 +106,8 @@ public:
 
     friend std::ostream& operator<<(std::ostream&, const SnapshotGroup&);
 
+    ~SnapshotGroup();
+
 private:
     ObjectId calculate_id() const;
 

@@ -262,6 +262,13 @@ SnapshotGroup::Id SnapshotGroup::calculate_id() const
     return hash.close();
 }
 
+SnapshotGroup::~SnapshotGroup()
+{
+    for (auto& [_, s] : static_cast<Parent&>(*this)) {
+        s.forget();
+    }
+}
+
 std::ostream& ouisync::operator<<(std::ostream& os, const SnapshotGroup& g)
 {
     os << "SnapshotGroup{id:" << g.id() << " [";
