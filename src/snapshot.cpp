@@ -20,101 +20,235 @@
 #include <iostream>
 
 using namespace ouisync;
+using namespace std;
+using object::Tree;
+
+static auto _generate_random_name_tag()
+{
+    Snapshot::NameTag rnd;
+    random::generate_non_blocking(rnd.data(), rnd.size());
+    return rnd;
+}
+
+static auto _path_from_tag(const Snapshot::NameTag& name_tag, const fs::path& dir)
+{
+    auto hex = to_hex<char>(name_tag);
+    return dir / fs::path(hex.begin(), hex.end());
+}
 
 ObjectId Snapshot::calculate_id() const
 {
     Sha256 hash;
     hash.update("Snapshot");
     hash.update(_commit.root_id);
-    hash.update(uint32_t(_captured_objs.size()));
-    for (auto& [id, type] : _captured_objs) {
+
+    hash.update(uint32_t(_complete_objects.size()));
+    for (auto& id : _complete_objects) {
         hash.update(id);
-        hash.update(static_cast<std::underlying_type_t<Type>>(type));
     }
+
+    hash.update(uint32_t(_incomplete_objects.size()));
+    for (auto& [id, type] : _incomplete_objects) {
+        hash.update(id);
+    }
+
+    hash.update(uint32_t(_missing_objects.size()));
+    for (auto& [id, type] : _missing_objects) {
+        hash.update(id);
+    }
+
     return hash.close();
 }
 
-Snapshot::Snapshot(fs::path path, fs::path objdir, Commit commit) :
-    _path(std::move(path)),
+Snapshot::Snapshot(fs::path objdir, fs::path snapshotdir, Commit commit) :
+    _name_tag(_generate_random_name_tag()),
+    _path(_path_from_tag(_name_tag, snapshotdir)),
     _objdir(std::move(objdir)),
-    _commit(std::move(commit))
-{}
+    _snapshotdir(std::move(snapshotdir)),
+    _commit(move(commit))
+{
+    _missing_objects.insert({_commit.root_id, {}});
+}
 
 Snapshot::Snapshot(Snapshot&& other) :
+    _name_tag(other._name_tag),
     _path(std::move(other._path)),
     _objdir(std::move(other._objdir)),
-    _commit(std::move(other._commit)),
-    _captured_objs(std::move(other._captured_objs))
-{}
+    _snapshotdir(std::move(other._snapshotdir)),
+    _commit(move(other._commit)),
+    _complete_objects(move(other._complete_objects)),
+    _incomplete_objects(move(other._incomplete_objects)),
+    _missing_objects(move(other._missing_objects))
+{
+}
 
 Snapshot& Snapshot::operator=(Snapshot&& other)
 {
-    destroy();
+    forget();
 
-    _path = std::move(other._path);
-    _objdir = std::move(other._objdir);
-    _commit = std::move(other._commit);
-    _captured_objs = std::move(other._captured_objs);
+    _name_tag = other._name_tag;
+    _path     = std::move(other._path);
+    _objdir   = std::move(other._objdir);
+    _commit   = std::move(other._commit);
+
+    _complete_objects   = move(other._complete_objects);
+    _incomplete_objects = move(other._incomplete_objects);
+    _missing_objects    = move(other._missing_objects);
 
     return *this;
-}
-
-void Snapshot::capture_full_object(const ObjectId& obj)
-{
-    auto [_, inserted] = _captured_objs.insert({obj, Type::full});
-    if (!inserted) return;
-    refcount::increment_recursive(_objdir, obj);
-}
-
-void Snapshot::capture_flat_object(const ObjectId& obj)
-{
-    auto [_, inserted] = _captured_objs.insert({obj, Type::flat});
-    if (!inserted) return;
-    Rc::load(_objdir, obj).increment_direct_count();
-}
-
-void Snapshot::store()
-{
-    archive::store(_path, _captured_objs);
-}
-
-static auto _random_file_name(const fs::path& dir)
-{
-    std::array<unsigned char, 16> rnd;
-    random::generate_non_blocking(rnd.data(), rnd.size());
-    auto hex = to_hex<char>(rnd);
-    return dir / fs::path(hex.begin(), hex.end());
 }
 
 /* static */
 Snapshot Snapshot::create(Commit commit, Options::Snapshot options)
 {
-    auto path = _random_file_name(options.snapshotdir);
-    Snapshot s(std::move(path), std::move(options.objectdir), std::move(commit));
+    Snapshot s(std::move(options.objectdir),
+            move(options.snapshotdir), std::move(commit));
+
     s.store();
     return s;
 }
 
-void Snapshot::destroy() noexcept
+void Snapshot::filter_missing(set<ObjectId>& objs) const
 {
-    try {
-        for (auto& [id, type] : _captured_objs) {
-            switch (type) {
-                case Type::full: refcount::deep_remove(_objdir, id); break;
-                case Type::flat: refcount::flat_remove(_objdir, id); break;
+    for (auto i = objs.begin(); i != objs.end();) {
+        auto j = std::next(i);
+        if (object::io::exists(_objdir, *i)) objs.erase(i);
+        i = j;
+    }
+}
+
+void Snapshot::insert_object(const ObjectId& id, set<ObjectId> children)
+{
+    // Missing objects:    Object -> Parents
+    // Incomplete objects: Object -> Children
+
+    filter_missing(children);
+
+    bool is_complete = children.empty();
+
+    if (is_complete) {
+        Rc::load(_objdir, id).increment_recursive_count();
+    } else {
+        Rc::load(_objdir, id).increment_direct_count();
+    }
+
+    auto parents = move(_missing_objects.at(id));
+    _missing_objects.erase(id);
+
+    if (children.empty()) {
+        _complete_objects.insert(id);
+
+        // Check that any of the parents of `id` became "complete".
+        for (auto& parent : parents) {
+            auto& missing_children = _incomplete_objects.at(parent);
+
+            missing_children.erase(id);
+
+            if (missing_children.empty()) {
+                Rc rc = Rc::load(_objdir, parent);
+                rc.decrement_direct_count();
+                rc.increment_recursive_count();
+
+                _incomplete_objects.erase(parent);
+                _complete_objects.insert(parent);
+
+                // We no longer need to keep track of it as it's covered by the
+                // parent.
+                _complete_objects.erase(id);
             }
+        }
+    } else {
+        for (auto& child : children) {
+            _missing_objects[child].insert(id);
+        }
+
+        if (children.empty()) {
+            _complete_objects.insert(id);
+        } else {
+            _incomplete_objects.insert({id, move(children)});
+        }
+    }
+}
+
+void Snapshot::store()
+{
+    archive::store(_path,
+            _complete_objects,
+            _incomplete_objects,
+            _missing_objects);
+}
+
+void Snapshot::forget() noexcept
+{
+    auto complete_objects   = move(_complete_objects);
+    auto incomplete_objects = move(_incomplete_objects);
+    try {
+        for (auto& id : complete_objects) {
+            refcount::deep_remove(_objdir, id);
+        }
+        for (auto& [id, _] : incomplete_objects) {
+            refcount::flat_remove(_objdir, id);
         }
     }
     catch (const std::exception& e) {
-        std::cerr << "Snapshot::destroy() attempted to throw an exception\n";
         exit(1);
+    }
+}
+
+Snapshot Snapshot::clone() const
+{
+    Snapshot c(_objdir, _snapshotdir, _commit);
+
+    for (auto& id : _complete_objects) {
+        c._complete_objects.insert(id);
+        Rc::load(_objdir, id).increment_recursive_count();
+    }
+
+    for (auto& o : _incomplete_objects) {
+        c._incomplete_objects.insert(o);
+        Rc::load(_objdir, o.first).increment_direct_count();
+    }
+
+    for (auto& o : _missing_objects) {
+        c._missing_objects.insert(o);
+    }
+
+    return c;
+}
+
+void Snapshot::sanity_check() const
+{
+    for (auto& [id, _] : _incomplete_objects) {
+        ouisync_assert(object::io::exists(_objdir, id));
+    }
+
+    for (auto& id : _complete_objects) {
+        ouisync_assert(object::io::is_complete(_objdir, id));
     }
 }
 
 Snapshot::~Snapshot()
 {
-    destroy();
+    forget();
 }
+
+std::ostream& ouisync::operator<<(std::ostream& os, const Snapshot& s)
+{
+    os << "Snapshot: " << s._commit << "\n";
+    os << BranchIo::Immutable(s._objdir, s._commit.root_id);
+    os << "Complete objs: ";
+    for (auto& id : s._complete_objects) {
+        os << id << ", ";
+    }
+    os << "\nIncomplete objs: ";
+    for (auto& [id, _] : s._incomplete_objects) {
+        os << id << ", ";
+    }
+    return os << "\n";
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// SnapshotGroup
 
 SnapshotGroup::Id SnapshotGroup::calculate_id() const
 {
@@ -128,9 +262,11 @@ SnapshotGroup::Id SnapshotGroup::calculate_id() const
     return hash.close();
 }
 
-std::ostream& ouisync::operator<<(std::ostream& os, const Snapshot& s)
+SnapshotGroup::~SnapshotGroup()
 {
-    return os << "id:" << s.calculate_id() << " root:" << s._commit.root_id;
+    for (auto& [_, s] : static_cast<Parent&>(*this)) {
+        s.forget();
+    }
 }
 
 std::ostream& ouisync::operator<<(std::ostream& os, const SnapshotGroup& g)

@@ -14,11 +14,13 @@ namespace ouisync {
 //////////////////////////////////////////////////////////////////////
 
 class Snapshot {
-private:
-    enum class Type { full, flat };
-
 public:
     using Id = ObjectId;
+
+    // Hex of this type is used to create the file name where Snapshot is
+    // stored. Currently Snapshots are not treated as immutable objects but
+    // that may change in the future.
+    using NameTag = std::array<unsigned char, 16>;
 
 public:
     Snapshot(const Snapshot&) = delete;
@@ -31,27 +33,50 @@ public:
 
     const Commit& commit() const { return _commit; }
 
-    void capture_full_object(const ObjectId&);
-    void capture_flat_object(const ObjectId&);
+    void insert_object(const ObjectId&, std::set<ObjectId> children);
 
     ~Snapshot();
 
     ObjectId calculate_id() const;
 
+    void forget() noexcept;
+
+    Snapshot clone() const;
+
+    void sanity_check() const;
+
+    NameTag name_tag() const { return _name_tag; }
+
 private:
-    Snapshot(fs::path path, fs::path objdir, Commit);
+    Snapshot(fs::path objdir, fs::path snapshotdir, Commit);
 
     void store();
 
-    void destroy() noexcept;
-
     friend std::ostream& operator<<(std::ostream&, const Snapshot&);
 
+    void filter_missing(std::set<ObjectId>& objs) const;
+
 private:
+    NameTag _name_tag;
     fs::path _path;
     fs::path _objdir;
+    fs::path _snapshotdir;
     Commit _commit;
-    std::map<ObjectId, Type> _captured_objs;
+
+    using Parents  = std::set<ObjectId>;
+    using Children = std::set<ObjectId>;
+
+    // Objects whose all children have been downloaded and also whose parent's
+    // are either non existent (root) or incomplete.
+    std::set<ObjectId> _complete_objects;
+
+    // Objects that have been downloaded, but some of its childrent haven't
+    // been.
+    std::map<ObjectId, Children> _incomplete_objects;
+
+    // Objects that are known to be in this snapshot, but haven't yet been
+    // downloaded.
+    std::map<ObjectId, Parents> _missing_objects;
 };
 
 //////////////////////////////////////////////////////////////////////
@@ -80,6 +105,8 @@ public:
     auto end()   const { return Parent::end();   }
 
     friend std::ostream& operator<<(std::ostream&, const SnapshotGroup&);
+
+    ~SnapshotGroup();
 
 private:
     ObjectId calculate_id() const;
