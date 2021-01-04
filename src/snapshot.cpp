@@ -42,18 +42,18 @@ ObjectId Snapshot::calculate_id() const
     hash.update("Snapshot");
     hash.update(_commit.root_id);
 
-    hash.update(uint32_t(_complete_objects.size()));
-    for (auto& id : _complete_objects) {
+    hash.update(uint32_t(_objects.complete.size()));
+    for (auto& id : _objects.complete) {
         hash.update(id);
     }
 
-    hash.update(uint32_t(_incomplete_objects.size()));
-    for (auto& [id, type] : _incomplete_objects) {
+    hash.update(uint32_t(_objects.incomplete.size()));
+    for (auto& [id, type] : _objects.incomplete) {
         hash.update(id);
     }
 
-    hash.update(uint32_t(_missing_objects.size()));
-    for (auto& [id, type] : _missing_objects) {
+    hash.update(uint32_t(_objects.missing.size()));
+    for (auto& [id, type] : _objects.missing) {
         hash.update(id);
     }
 
@@ -67,7 +67,7 @@ Snapshot::Snapshot(fs::path objdir, fs::path snapshotdir, Commit commit) :
     _snapshotdir(std::move(snapshotdir)),
     _commit(move(commit))
 {
-    _missing_objects.insert({_commit.root_id, {}});
+    _objects.missing.insert({_commit.root_id, {}});
 }
 
 Snapshot::Snapshot(Snapshot&& other) :
@@ -76,9 +76,7 @@ Snapshot::Snapshot(Snapshot&& other) :
     _objdir(std::move(other._objdir)),
     _snapshotdir(std::move(other._snapshotdir)),
     _commit(move(other._commit)),
-    _complete_objects(move(other._complete_objects)),
-    _incomplete_objects(move(other._incomplete_objects)),
-    _missing_objects(move(other._missing_objects))
+    _objects(move(other._objects))
 {
 }
 
@@ -90,10 +88,7 @@ Snapshot& Snapshot::operator=(Snapshot&& other)
     _path     = std::move(other._path);
     _objdir   = std::move(other._objdir);
     _commit   = std::move(other._commit);
-
-    _complete_objects   = move(other._complete_objects);
-    _incomplete_objects = move(other._incomplete_objects);
-    _missing_objects    = move(other._missing_objects);
+    _objects  = move(other._objects);
 
     return *this;
 }
@@ -119,7 +114,7 @@ void Snapshot::filter_missing(set<ObjectId>& objs) const
 
 void Snapshot::notify_parent_that_child_completed(const ObjectId& parent_id, const ObjectId& child)
 {
-    auto& parent = _incomplete_objects.at(parent_id);
+    auto& parent = _objects.incomplete.at(parent_id);
 
     parent.missing_children.erase(child);
 
@@ -132,12 +127,12 @@ void Snapshot::notify_parent_that_child_completed(const ObjectId& parent_id, con
     rc.increment_recursive_count();
 
     auto grandparents = move(parent.parents);
-    _incomplete_objects.erase(parent_id);
-    _complete_objects.insert(parent_id);
+    _objects.incomplete.erase(parent_id);
+    _objects.complete.insert(parent_id);
 
     // We no longer need to keep track of it as it's covered by the
     // parent.
-    _complete_objects.erase(child);
+    _objects.complete.erase(child);
 
     for (auto grandparent : grandparents) {
         notify_parent_that_child_completed(grandparent, parent_id);
@@ -156,11 +151,11 @@ void Snapshot::insert_object(const ObjectId& id, set<ObjectId> children)
         Rc::load(_objdir, id).increment_direct_count();
     }
 
-    auto missing_obj = move(_missing_objects.at(id));
-    _missing_objects.erase(id);
+    auto missing_obj = move(_objects.missing.at(id));
+    _objects.missing.erase(id);
 
     if (children.empty()) {
-        _complete_objects.insert(id);
+        _objects.complete.insert(id);
 
         // Check that any of the parents of `id` became "complete".
         for (auto& parent_id : missing_obj.parents) {
@@ -168,32 +163,27 @@ void Snapshot::insert_object(const ObjectId& id, set<ObjectId> children)
         }
     } else {
         for (auto& child : children) {
-            _missing_objects[child].parents.insert(id);
+            _objects.missing[child].parents.insert(id);
         }
 
-        _incomplete_objects.insert({id, {move(missing_obj.parents), move(children)}});
+        _objects.incomplete.insert({id, {move(missing_obj.parents), move(children)}});
     }
 }
 
 void Snapshot::store()
 {
-    archive::store(_path,
-            _complete_objects,
-            _incomplete_objects,
-            _missing_objects);
+    archive::store(_path, _objects);
 }
 
 void Snapshot::forget() noexcept
 {
-    auto complete_objects   = move(_complete_objects);
-    auto incomplete_objects = move(_incomplete_objects);
-    _missing_objects.clear();
+    auto objects = move(_objects);
 
     try {
-        for (auto& id : complete_objects) {
+        for (auto& id : objects.complete) {
             refcount::deep_remove(_objdir, id);
         }
-        for (auto& [id, _] : incomplete_objects) {
+        for (auto& [id, _] : objects.incomplete) {
             refcount::flat_remove(_objdir, id);
         }
     }
@@ -206,18 +196,18 @@ Snapshot Snapshot::clone() const
 {
     Snapshot c(_objdir, _snapshotdir, _commit);
 
-    for (auto& id : _complete_objects) {
-        c._complete_objects.insert(id);
+    for (auto& id : _objects.complete) {
+        c._objects.complete.insert(id);
         Rc::load(_objdir, id).increment_recursive_count();
     }
 
-    for (auto& o : _incomplete_objects) {
-        c._incomplete_objects.insert(o);
+    for (auto& o : _objects.incomplete) {
+        c._objects.incomplete.insert(o);
         Rc::load(_objdir, o.first).increment_direct_count();
     }
 
-    for (auto& o : _missing_objects) {
-        c._missing_objects.insert(o);
+    for (auto& o : _objects.missing) {
+        c._objects.missing.insert(o);
     }
 
     return c;
@@ -225,11 +215,11 @@ Snapshot Snapshot::clone() const
 
 void Snapshot::sanity_check() const
 {
-    for (auto& [id, _] : _incomplete_objects) {
+    for (auto& [id, _] : _objects.incomplete) {
         ouisync_assert(object::io::exists(_objdir, id));
     }
 
-    for (auto& id : _complete_objects) {
+    for (auto& id : _objects.complete) {
         ouisync_assert(object::io::is_complete(_objdir, id));
     }
 }
@@ -244,11 +234,11 @@ std::ostream& ouisync::operator<<(std::ostream& os, const Snapshot& s)
     os << "Snapshot: " << s._commit << "\n";
     os << BranchIo::Immutable(s._objdir, s._commit.root_id);
     os << "Complete objs: ";
-    for (auto& id : s._complete_objects) {
+    for (auto& id : s._objects.complete) {
         os << id << ", ";
     }
     os << "\nIncomplete objs: ";
-    for (auto& [id, _] : s._incomplete_objects) {
+    for (auto& [id, _] : s._objects.incomplete) {
         os << id << ", ";
     }
     return os << "\n";
