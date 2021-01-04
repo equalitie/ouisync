@@ -146,9 +146,6 @@ void Snapshot::notify_parent_that_child_completed(const ObjectId& parent_id, con
 
 void Snapshot::insert_object(const ObjectId& id, set<ObjectId> children)
 {
-    // Missing objects:    Object -> Parents
-    // Incomplete objects: Object -> Children
-
     filter_missing(children);
 
     bool is_complete = children.empty();
@@ -174,11 +171,7 @@ void Snapshot::insert_object(const ObjectId& id, set<ObjectId> children)
             _missing_objects[child].parents.insert(id);
         }
 
-        if (children.empty()) {
-            _complete_objects.insert(id);
-        } else {
-            _incomplete_objects.insert({id, {move(missing_obj.parents), move(children)}});
-        }
+        _incomplete_objects.insert({id, {move(missing_obj.parents), move(children)}});
     }
 }
 

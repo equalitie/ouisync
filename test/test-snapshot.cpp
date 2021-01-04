@@ -173,8 +173,6 @@ BOOST_AUTO_TEST_CASE(two_levels) {
     env.store(A);
     snapshot.insert_object(A.calculate_id(), {});
 
-    std::cerr << snapshot << "\n";
-
     auto R_rc = env.load_rc(R.calculate_id());
 
     BOOST_REQUIRE_EQUAL(R_rc.direct_count()   , 0);
