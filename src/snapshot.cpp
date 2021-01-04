@@ -132,25 +132,25 @@ void Snapshot::insert_object(const ObjectId& id, set<ObjectId> children)
         Rc::load(_objdir, id).increment_direct_count();
     }
 
-    auto parents = move(_missing_objects.at(id));
+    auto missing_obj = move(_missing_objects.at(id));
     _missing_objects.erase(id);
 
     if (children.empty()) {
         _complete_objects.insert(id);
 
         // Check that any of the parents of `id` became "complete".
-        for (auto& parent : parents) {
-            auto& missing_children = _incomplete_objects.at(parent);
+        for (auto& parent_id : missing_obj.parents) {
+            auto& parent = _incomplete_objects.at(parent_id);
 
-            missing_children.erase(id);
+            parent.missing_children.erase(id);
 
-            if (missing_children.empty()) {
-                Rc rc = Rc::load(_objdir, parent);
+            if (parent.missing_children.empty()) {
+                Rc rc = Rc::load(_objdir, parent_id);
                 rc.decrement_direct_count();
                 rc.increment_recursive_count();
 
-                _incomplete_objects.erase(parent);
-                _complete_objects.insert(parent);
+                _incomplete_objects.erase(parent_id);
+                _complete_objects.insert(parent_id);
 
                 // We no longer need to keep track of it as it's covered by the
                 // parent.
@@ -159,13 +159,13 @@ void Snapshot::insert_object(const ObjectId& id, set<ObjectId> children)
         }
     } else {
         for (auto& child : children) {
-            _missing_objects[child].insert(id);
+            _missing_objects[child].parents.insert(id);
         }
 
         if (children.empty()) {
             _complete_objects.insert(id);
         } else {
-            _incomplete_objects.insert({id, move(children)});
+            _incomplete_objects.insert({id, {move(children)}});
         }
     }
 }

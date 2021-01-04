@@ -63,8 +63,28 @@ private:
     fs::path _snapshotdir;
     Commit _commit;
 
-    using Parents  = std::set<ObjectId>;
-    using Children = std::set<ObjectId>;
+    struct CompleteObject {
+        template<class Archive>
+        void serialize(Archive& ar, const unsigned int version) {}
+    };
+
+    struct IncompleteObject {
+        std::set<ObjectId> missing_children;
+
+        template<class Archive>
+        void serialize(Archive& ar, const unsigned int version) {
+            ar & missing_children;
+        }
+    };
+
+    struct MissingObject {
+        std::set<ObjectId> parents;
+
+        template<class Archive>
+        void serialize(Archive& ar, const unsigned int version) {
+            ar & parents;
+        }
+    };
 
     // Objects whose all children have been downloaded and also whose parent's
     // are either non existent (root) or incomplete.
@@ -72,11 +92,11 @@ private:
 
     // Objects that have been downloaded, but some of its childrent haven't
     // been.
-    std::map<ObjectId, Children> _incomplete_objects;
+    std::map<ObjectId, IncompleteObject> _incomplete_objects;
 
     // Objects that are known to be in this snapshot, but haven't yet been
     // downloaded.
-    std::map<ObjectId, Parents> _missing_objects;
+    std::map<ObjectId, MissingObject> _missing_objects;
 };
 
 //////////////////////////////////////////////////////////////////////
