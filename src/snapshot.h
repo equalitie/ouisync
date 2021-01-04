@@ -56,6 +56,8 @@ private:
 
     void filter_missing(std::set<ObjectId>& objs) const;
 
+    void notify_parent_that_child_completed(const ObjectId& parent, const ObjectId& child);
+
 private:
     NameTag _name_tag;
     fs::path _path;
@@ -69,10 +71,12 @@ private:
     };
 
     struct IncompleteObject {
+        std::set<ObjectId> parents;
         std::set<ObjectId> missing_children;
 
         template<class Archive>
         void serialize(Archive& ar, const unsigned int version) {
+            ar & parents;
             ar & missing_children;
         }
     };

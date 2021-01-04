@@ -117,6 +117,33 @@ void Snapshot::filter_missing(set<ObjectId>& objs) const
     }
 }
 
+void Snapshot::notify_parent_that_child_completed(const ObjectId& parent_id, const ObjectId& child)
+{
+    auto& parent = _incomplete_objects.at(parent_id);
+
+    parent.missing_children.erase(child);
+
+    if (!parent.missing_children.empty()) {
+        return;
+    }
+
+    Rc rc = Rc::load(_objdir, parent_id);
+    rc.decrement_direct_count();
+    rc.increment_recursive_count();
+
+    auto grandparents = move(parent.parents);
+    _incomplete_objects.erase(parent_id);
+    _complete_objects.insert(parent_id);
+
+    // We no longer need to keep track of it as it's covered by the
+    // parent.
+    _complete_objects.erase(child);
+
+    for (auto grandparent : grandparents) {
+        notify_parent_that_child_completed(grandparent, parent_id);
+    }
+}
+
 void Snapshot::insert_object(const ObjectId& id, set<ObjectId> children)
 {
     // Missing objects:    Object -> Parents
@@ -140,22 +167,7 @@ void Snapshot::insert_object(const ObjectId& id, set<ObjectId> children)
 
         // Check that any of the parents of `id` became "complete".
         for (auto& parent_id : missing_obj.parents) {
-            auto& parent = _incomplete_objects.at(parent_id);
-
-            parent.missing_children.erase(id);
-
-            if (parent.missing_children.empty()) {
-                Rc rc = Rc::load(_objdir, parent_id);
-                rc.decrement_direct_count();
-                rc.increment_recursive_count();
-
-                _incomplete_objects.erase(parent_id);
-                _complete_objects.insert(parent_id);
-
-                // We no longer need to keep track of it as it's covered by the
-                // parent.
-                _complete_objects.erase(id);
-            }
+            notify_parent_that_child_completed(parent_id, id);
         }
     } else {
         for (auto& child : children) {
@@ -165,7 +177,7 @@ void Snapshot::insert_object(const ObjectId& id, set<ObjectId> children)
         if (children.empty()) {
             _complete_objects.insert(id);
         } else {
-            _incomplete_objects.insert({id, {move(children)}});
+            _incomplete_objects.insert({id, {move(missing_obj.parents), move(children)}});
         }
     }
 }
@@ -182,6 +194,8 @@ void Snapshot::forget() noexcept
 {
     auto complete_objects   = move(_complete_objects);
     auto incomplete_objects = move(_incomplete_objects);
+    _missing_objects.clear();
+
     try {
         for (auto& id : complete_objects) {
             refcount::deep_remove(_objdir, id);
