@@ -103,15 +103,6 @@ Snapshot Snapshot::create(Commit commit, Options::Snapshot options)
     return s;
 }
 
-void Snapshot::filter_missing(set<ObjectId>& objs) const
-{
-    for (auto i = objs.begin(); i != objs.end();) {
-        auto j = std::next(i);
-        if (object::io::exists(_objdir, *i)) objs.erase(i);
-        i = j;
-    }
-}
-
 void Snapshot::notify_parent_that_child_completed(const ObjectId& parent_id, const ObjectId& child)
 {
     auto& parent = _objects.incomplete.at(parent_id);
@@ -141,7 +132,9 @@ void Snapshot::notify_parent_that_child_completed(const ObjectId& parent_id, con
 
 void Snapshot::insert_object(const ObjectId& id, set<ObjectId> children)
 {
-    filter_missing(children);
+    // XXX: We should check here whether `children` are already stored on
+    // disk and if so, not mark them as missing. We'll also need to update
+    // their rc counts appropriately.
 
     bool is_complete = children.empty();
 
@@ -151,8 +144,15 @@ void Snapshot::insert_object(const ObjectId& id, set<ObjectId> children)
         Rc::load(_objdir, id).increment_direct_count();
     }
 
-    auto missing_obj = move(_objects.missing.at(id));
-    _objects.missing.erase(id);
+    auto missing_obj_i = _objects.missing.find(id);
+
+    if (missing_obj_i == _objects.missing.end()) {
+        throw std::runtime_error(
+                "Snapshot: Inserting object that is not known to be missing");
+    }
+
+    auto missing_obj = move(missing_obj_i->second);
+    _objects.missing.erase(missing_obj_i);
 
     if (children.empty()) {
         _objects.complete.insert(id);

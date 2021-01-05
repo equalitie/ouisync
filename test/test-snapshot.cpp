@@ -9,6 +9,7 @@
 #include "path_range.h"
 #include "utils.h"
 #include "snapshot.h"
+#include "ostream/set.h"
 
 #include <iostream>
 #include <random>
@@ -175,6 +176,82 @@ BOOST_AUTO_TEST_CASE(two_levels) {
 
     BOOST_REQUIRE_EQUAL(R_rc.direct_count()   , 0);
     BOOST_REQUIRE_EQUAL(R_rc.recursive_count(), 1);
+
+    snapshot.sanity_check();
+    snapshot.forget();
+
+    BOOST_REQUIRE_EQUAL(boost::distance(env.object_dir_files()), 0);
+}
+
+BOOST_AUTO_TEST_CASE(insert_outside_node) {
+    Environment env("insert_outside_node");
+
+    // Node A is stored before R is inserted into the snapshot
+    //
+    //           R
+    //           ↓
+    //           A
+
+    Tree R;
+    Blob A = rnd.blob(256);
+
+    R["A"].set_id(A.calculate_id());
+
+    auto snapshot = env.create_snapshot(R.calculate_id());
+
+    env.store(R);
+    env.store(A);
+    snapshot.insert_object(R.calculate_id(), R.children());
+    snapshot.insert_object(A.calculate_id(), {});
+
+    auto R_rc = env.load_rc(R.calculate_id());
+    auto A_rc = env.load_rc(A.calculate_id());
+
+    BOOST_REQUIRE_EQUAL(R_rc.direct_count()   , 0);
+    BOOST_REQUIRE_EQUAL(R_rc.recursive_count(), 1);
+    BOOST_REQUIRE_EQUAL(A_rc.direct_count()   , 0);
+    BOOST_REQUIRE_EQUAL(A_rc.recursive_count(), 1);
+
+    snapshot.sanity_check();
+    snapshot.forget();
+
+    BOOST_REQUIRE_EQUAL(boost::distance(env.object_dir_files()), 0);
+}
+
+BOOST_AUTO_TEST_CASE(store_then_insert) {
+    Environment env("store_then_insert");
+
+    // Nodes are first stored and then inserted into the snapshot
+    //
+    //           R
+    //           ↓
+    //           N
+    //           ↓
+    //           A
+
+    Tree R;
+    Tree N;
+    Blob A = rnd.blob(256);
+
+    N["A"].set_id(A.calculate_id());
+    R["N"].set_id(N.calculate_id());
+
+    auto snapshot = env.create_snapshot(R.calculate_id());
+
+    env.store(R);
+    env.store(N);
+    env.store(A);
+    snapshot.insert_object(R.calculate_id(), R.children());
+    snapshot.insert_object(N.calculate_id(), N.children());
+    snapshot.insert_object(A.calculate_id(), {});
+
+    auto R_rc = env.load_rc(R.calculate_id());
+    auto A_rc = env.load_rc(A.calculate_id());
+
+    BOOST_REQUIRE_EQUAL(R_rc.direct_count()   , 0);
+    BOOST_REQUIRE_EQUAL(R_rc.recursive_count(), 1);
+    BOOST_REQUIRE_EQUAL(A_rc.direct_count()   , 0);
+    BOOST_REQUIRE_EQUAL(A_rc.recursive_count(), 1);
 
     snapshot.sanity_check();
     snapshot.forget();
