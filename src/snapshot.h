@@ -52,11 +52,53 @@ private:
 
     void store();
 
+    void notify_parent_that_child_completed(const ObjectId& parent, const ObjectId& child);
+
+    bool update_downwards(const ObjectId& node, const std::set<ObjectId>& children);
+
+    std::set<ObjectId> children_of(const ObjectId& id) const;
+
+    void increment_recursive_count(const ObjectId&) const;
+    void increment_direct_count(const ObjectId&) const;
+
+    enum class NodeType {
+        Missing, Incomplete, Complete
+    };
+
+    struct Children {
+        std::set<ObjectId> missing;
+        std::set<ObjectId> complete;
+        std::set<ObjectId> incomplete;
+
+        template<class Archive>
+        void serialize(Archive& ar, const unsigned) {
+            ar & missing & complete & incomplete;
+        }
+    };
+
+    struct Node {
+        NodeType type;
+        std::set<ObjectId> parents;
+        Children children;
+
+        bool is_complete() const {
+            return children.missing.empty()
+                && children.incomplete.empty();
+        }
+
+        template<class Archive>
+        void serialize(Archive& ar, const unsigned) {
+            ar & type & parents & children;
+        }
+    };
+
+    friend std::ostream& operator<<(std::ostream&, NodeType);
+    friend std::ostream& operator<<(std::ostream&, const Node&);
+    friend std::ostream& operator<<(std::ostream&, const Children&);
     friend std::ostream& operator<<(std::ostream&, const Snapshot&);
 
-    void filter_missing(std::set<ObjectId>& objs) const;
 
-    void notify_parent_that_child_completed(const ObjectId& parent, const ObjectId& child);
+    Children sort_children(const std::set<ObjectId>& children) const;
 
 private:
     NameTag _name_tag;
@@ -65,46 +107,7 @@ private:
     fs::path _snapshotdir;
     Commit _commit;
 
-    struct IncompleteObject {
-        std::set<ObjectId> parents;
-        std::set<ObjectId> missing_children;
-
-        template<class Archive>
-        void serialize(Archive& ar, const unsigned int version) {
-            ar & parents;
-            ar & missing_children;
-        }
-    };
-
-    struct MissingObject {
-        std::set<ObjectId> parents;
-
-        template<class Archive>
-        void serialize(Archive& ar, const unsigned int version) {
-            ar & parents;
-        }
-    };
-
-    struct Objects {
-        // Objects whose all children have been downloaded and also whose
-        // parent's are either non existent (root) or incomplete.
-        std::set<ObjectId> complete;
-
-        // Objects that have been downloaded, but some of its childrent haven't
-        // been.
-        std::map<ObjectId, IncompleteObject> incomplete;
-
-        // Objects that are known to be in this snapshot, but haven't yet been
-        // downloaded.
-        std::map<ObjectId, MissingObject> missing;
-
-        template<class Archive>
-        void serialize(Archive& ar, const unsigned int version) {
-            ar & complete & incomplete & missing;
-        }
-    };
-
-    Objects _objects;
+    std::map<ObjectId, Node> _nodes;
 };
 
 //////////////////////////////////////////////////////////////////////

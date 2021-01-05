@@ -97,12 +97,20 @@ BOOST_AUTO_TEST_CASE(simple_forget) {
     Tree R;
     R["A"].set_id(A.calculate_id());
 
+    cerr << "R: " << R.calculate_id() << "\n";
+    cerr << "A: " << A.calculate_id() << "\n";
+
+    std::cerr << "--------- 1\n";
     env.store(R);
     auto snapshot = env.create_snapshot(R.calculate_id());
+    std::cerr << "--------- 2\n";
     snapshot.insert_object(R.calculate_id(), R.children());
+    std::cerr << "--------- 3\n";
+    cerr  << snapshot << "\n";
 
     env.store(A);
     snapshot.insert_object(A.calculate_id(), {});
+    std::cerr << "--------- 4\n";
 
     snapshot.forget();
 
@@ -127,6 +135,11 @@ BOOST_AUTO_TEST_CASE(partial_forget) {
 
     R["A"].set_id(A.calculate_id());
     R["N"].set_id(N.calculate_id());
+
+    cerr << "R: " << R.calculate_id() << "\n";
+    cerr << "A: " << A.calculate_id() << "\n";
+    cerr << "N: " << N.calculate_id() << "\n";
+    cerr << "B: " << B.calculate_id() << "\n";
 
     auto snapshot = env.create_snapshot(R.calculate_id());
 
