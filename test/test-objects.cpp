@@ -7,7 +7,6 @@
 #include "refcount.h"
 #include "shortcuts.h"
 #include "hex.h"
-#include "array_io.h"
 #include "local_branch.h"
 #include "path_range.h"
 #include "utils.h"
@@ -26,9 +25,6 @@ using namespace ouisync;
 using object::Tree;
 using object::Blob;
 using boost::variant;
-
-#define REQUIRE_HEX_EQUAL(a, b) \
-    BOOST_REQUIRE_EQUAL(to_hex<char>(a), to_hex<char>(b));
 
 bool is_refcount(const fs::path& path) {
     return path.extension() == ".rc";
@@ -78,7 +74,7 @@ BOOST_AUTO_TEST_CASE(blob_is_same) {
     //b1.store(testdir);
     object::io::store(testdir, b1);
     auto b2 = object::io::load<object::Blob>(testdir, b1.calculate_id());
-    REQUIRE_HEX_EQUAL(b1.calculate_id(), b2.calculate_id());
+    BOOST_REQUIRE_EQUAL(b1.calculate_id(), b2.calculate_id());
 }
 
 BOOST_AUTO_TEST_CASE(tree_is_same) {
@@ -90,7 +86,7 @@ BOOST_AUTO_TEST_CASE(tree_is_same) {
     t1[random.string(10)].set_id(random.object_id());
     object::io::store(testdir, t1);
     auto t2 = object::io::load<object::Tree>(testdir, t1.calculate_id());
-    REQUIRE_HEX_EQUAL(t1.calculate_id(), t2.calculate_id());
+    BOOST_REQUIRE_EQUAL(t1.calculate_id(), t2.calculate_id());
 }
 
 BOOST_AUTO_TEST_CASE(read_tag) {

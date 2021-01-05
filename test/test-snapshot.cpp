@@ -5,8 +5,6 @@
 #include "object/tree.h"
 #include "object/io.h"
 #include "refcount.h"
-#include "hex.h"
-#include "array_io.h"
 #include "local_branch.h"
 #include "path_range.h"
 #include "utils.h"

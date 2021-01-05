@@ -1,9 +1,7 @@
 #include "blob.h"
-#include "io.h"
 #include "../hash.h"
-#include "../array_io.h"
-#include "../hex.h"
 
+#include <ostream>
 #include <boost/optional.hpp>
 
 using namespace ouisync;
