@@ -52,39 +52,30 @@ private:
 
     void store();
 
-    void notify_parent_that_child_completed(const ObjectId& parent, const ObjectId& child);
+    bool check_complete_and_notify_parents(const ObjectId&);
 
     bool update_downwards(const ObjectId& node, const std::set<ObjectId>& children);
 
     std::set<ObjectId> children_of(const ObjectId& id) const;
 
     void increment_recursive_count(const ObjectId&) const;
+    void decrement_recursive_count(const ObjectId&) const;
+
     void increment_direct_count(const ObjectId&) const;
+    void decrement_direct_count(const ObjectId&) const;
 
     enum class NodeType {
         Missing, Incomplete, Complete
     };
 
-    struct Children {
-        std::set<ObjectId> missing;
-        std::set<ObjectId> complete;
-        std::set<ObjectId> incomplete;
-
-        template<class Archive>
-        void serialize(Archive& ar, const unsigned) {
-            ar & missing & complete & incomplete;
-        }
-    };
+    bool check_all_complete(const std::set<ObjectId>& nodes);
 
     struct Node {
         NodeType type;
         std::set<ObjectId> parents;
-        Children children;
+        std::set<ObjectId> children;
 
-        bool is_complete() const {
-            return children.missing.empty()
-                && children.incomplete.empty();
-        }
+        bool is_root() const { return parents.empty(); }
 
         template<class Archive>
         void serialize(Archive& ar, const unsigned) {
@@ -94,11 +85,10 @@ private:
 
     friend std::ostream& operator<<(std::ostream&, NodeType);
     friend std::ostream& operator<<(std::ostream&, const Node&);
-    friend std::ostream& operator<<(std::ostream&, const Children&);
     friend std::ostream& operator<<(std::ostream&, const Snapshot&);
 
 
-    Children sort_children(const std::set<ObjectId>& children) const;
+    void update_child(const ObjectId& child, const ObjectId& parent);
 
 private:
     NameTag _name_tag;
@@ -106,6 +96,20 @@ private:
     fs::path _objdir;
     fs::path _snapshotdir;
     Commit _commit;
+
+    // Each node here is:
+    //
+    // * Held by 1 direct count *by this snapshot* if it is "incomplete".
+    // * Held by 1 recursive count *by this snapshot* if it is "complete" but
+    //   some of its parents are not complete. It is also held by recursive count
+    //   from each of its "complete" parents.
+    // 
+    // Once a node that has parents in _nodes has all its parents "complete",
+    // it is evicted from _nodes and it is further held by recursive counts
+    // only from its parents.
+    //
+    // Complete nodes that don't have parents (roots) are still held by 1 recursive
+    // count *by this snapshot*.
 
     std::map<ObjectId, Node> _nodes;
 };

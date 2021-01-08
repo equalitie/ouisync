@@ -97,20 +97,15 @@ BOOST_AUTO_TEST_CASE(simple_forget) {
     Tree R;
     R["A"].set_id(A.calculate_id());
 
-    cerr << "R: " << R.calculate_id() << "\n";
-    cerr << "A: " << A.calculate_id() << "\n";
+    //cerr << "R: " << R.calculate_id() << "\n";
+    //cerr << "A: " << A.calculate_id() << "\n";
 
-    std::cerr << "--------- 1\n";
     env.store(R);
     auto snapshot = env.create_snapshot(R.calculate_id());
-    std::cerr << "--------- 2\n";
     snapshot.insert_object(R.calculate_id(), R.children());
-    std::cerr << "--------- 3\n";
-    cerr  << snapshot << "\n";
 
     env.store(A);
     snapshot.insert_object(A.calculate_id(), {});
-    std::cerr << "--------- 4\n";
 
     snapshot.forget();
 
@@ -265,6 +260,104 @@ BOOST_AUTO_TEST_CASE(store_then_insert) {
     BOOST_REQUIRE_EQUAL(R_rc.recursive_count(), 1);
     BOOST_REQUIRE_EQUAL(A_rc.direct_count()   , 0);
     BOOST_REQUIRE_EQUAL(A_rc.recursive_count(), 1);
+
+    snapshot.sanity_check();
+    snapshot.forget();
+
+    BOOST_REQUIRE_EQUAL(boost::distance(env.object_dir_files()), 0);
+}
+
+BOOST_AUTO_TEST_CASE(diamond_shape) {
+    Environment env("diamond_shape");
+
+    //
+    //           R
+    //          ↙ ↘
+    //         N   M
+    //        ↙ ↘ ↙
+    //       B   A     // B is here mostly so that N != M
+
+    Tree R;
+    Tree N;
+    Tree M;
+    Blob A = rnd.blob(256);
+    Blob B = rnd.blob(256);
+
+    N["A"].set_id(A.calculate_id());
+    N["B"].set_id(B.calculate_id());
+
+    M["A"].set_id(A.calculate_id());
+
+    R["N"].set_id(N.calculate_id());
+    R["M"].set_id(M.calculate_id());
+
+    auto snapshot = env.create_snapshot(R.calculate_id());
+
+    cerr << "R: " << R.calculate_id() << "\n";
+    cerr << "N: " << N.calculate_id() << "\n";
+    cerr << "M: " << M.calculate_id() << "\n";
+    cerr << "B: " << B.calculate_id() << "\n";
+    cerr << "A: " << A.calculate_id() << "\n";
+
+    env.store(R);
+    snapshot.insert_object(R.calculate_id(), R.children());
+
+    env.store(N);
+    snapshot.insert_object(N.calculate_id(), N.children());
+
+    env.store(M);
+    snapshot.insert_object(M.calculate_id(), M.children());
+
+    env.store(A);
+    snapshot.insert_object(A.calculate_id(), {});
+
+    env.store(B);
+    snapshot.insert_object(B.calculate_id(), {});
+
+    auto R_rc = env.load_rc(R.calculate_id());
+    auto A_rc = env.load_rc(A.calculate_id());
+
+    cerr << "===================================\n";
+    cerr << snapshot << "\n";
+    BOOST_REQUIRE_EQUAL(R_rc.recursive_count(), 1);
+
+    snapshot.sanity_check();
+    snapshot.forget();
+
+    BOOST_REQUIRE_EQUAL(boost::distance(env.object_dir_files()), 0);
+}
+
+BOOST_AUTO_TEST_CASE(auto_insert_existing) {
+    Environment env("auto_insert_existing");
+
+    // Nodes are first stored and then inserted into the snapshot
+    //
+    //           R
+    //           ↓
+    //           N
+    //           ↓
+    //           A
+
+    Tree R;
+    Tree N;
+    Blob A = rnd.blob(256);
+
+    N["A"].set_id(A.calculate_id());
+    R["N"].set_id(N.calculate_id());
+
+    auto snapshot = env.create_snapshot(R.calculate_id());
+
+    env.store(R);
+    env.store(N);
+    env.store(A);
+    snapshot.insert_object(R.calculate_id(), R.children());
+
+    auto R_rc = env.load_rc(R.calculate_id());
+    auto A_rc = env.load_rc(A.calculate_id());
+
+    cerr << "===================================\n";
+    cerr << snapshot << "\n";
+    BOOST_REQUIRE_EQUAL(R_rc.recursive_count(), 1);
 
     snapshot.sanity_check();
     snapshot.forget();
