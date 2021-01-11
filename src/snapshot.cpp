@@ -113,8 +113,10 @@ bool Snapshot::check_complete_and_notify_parents(const ObjectId& node_id)
     increment_recursive_count(node_id);
     decrement_direct_count(node_id);
 
-    auto parents = node.parents;
+    // Keep copies as code below may erase `node` from `_nodes` while iterating
+    // over `children` or `parents`.
     auto children = node.children;
+    auto parents  = node.parents;
 
     for (auto& child_id : children) {
         increment_recursive_count(child_id);
@@ -178,7 +180,15 @@ void Snapshot::insert_object(const ObjectId& node_id, set<ObjectId> children)
 {
     auto i = _nodes.find(node_id);
 
-    if (i == _nodes.end() || i->second.type != NodeType::Missing) return;
+    // This can happen if:
+    // A. this function is called with node_id of a node whose parent hasn't been
+    //    inserted yet, or
+    // B. This function is called with node_id of a node which has been previously
+    //    inserted, it was decided it is complete, all its parents were complete and
+    //    thus it the node was removed from _nodes.
+    if (i == _nodes.end()) return;
+
+    if (i->second.type != NodeType::Missing) return;
 
     auto& node = i->second;
 
@@ -186,14 +196,26 @@ void Snapshot::insert_object(const ObjectId& node_id, set<ObjectId> children)
 
     increment_direct_count(node_id);
 
-    node.children = move(children);
+    // Don't move because later code may remove `node` from `_nodes` while
+    // iteratirng over children.
+    node.children = children;
 
     for (auto& child_id : node.children) {
         auto [child_i, inserted] = _nodes.insert({child_id, {NodeType::Missing, {}, {}}});
         child_i->second.parents.insert(node_id);
     }
 
-    check_complete_and_notify_parents(node_id);
+    size_t existing_children = 0;
+
+    for (auto& child_id : children) {
+        if (!object::io::exists(_objdir, child_id)) continue;
+        existing_children++;
+        insert_object(child_id, children_of(child_id));
+    }
+
+    if (existing_children == 0) {
+        check_complete_and_notify_parents(node_id);
+    }
 }
 
 void Snapshot::store()

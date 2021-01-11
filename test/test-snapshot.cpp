@@ -354,6 +354,11 @@ BOOST_AUTO_TEST_CASE(auto_insert_existing) {
     N["A"].set_id(A.calculate_id());
     R["N"].set_id(N.calculate_id());
 
+    [[maybe_unused]] auto names =
+        { ObjectId::debug_name(R.calculate_id(), "R"),
+          ObjectId::debug_name(N.calculate_id(), "N"),
+          ObjectId::debug_name(A.calculate_id(), "A")};
+
     auto snapshot = env.create_snapshot(R.calculate_id());
 
     env.store(R);
