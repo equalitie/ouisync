@@ -143,7 +143,7 @@ ObjectId BranchIo::Immutable::id_of(PathRange path) const
 static
 void _show(std::ostream& os, fs::path objdir, ObjectId id, std::string pad = "") {
     if (!object::io::exists(objdir, id)) {
-        os << pad << "!!! object " << id.short_hex() << " does not exist !!!\n";
+        os << pad << "!!! object " << id << " does not exist !!!\n";
         return;
     }
 
