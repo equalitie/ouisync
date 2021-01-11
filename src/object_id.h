@@ -8,6 +8,25 @@ namespace ouisync {
 class ObjectId : public Sha256::Digest {
 private:
     using Parent = Sha256::Digest;
+    using NameMap = std::map<ObjectId, std::list<std::string>>;
+
+public:
+    class RiaaNameMap {
+      public:
+        ~RiaaNameMap();
+
+      private:
+        friend class ObjectId;
+
+        using MapIter  = NameMap::iterator;
+        using ListIter = std::list<std::string>::iterator;
+
+        RiaaNameMap(MapIter i, ListIter j) : map_iter(i), list_iter(j) {}
+
+
+        MapIter map_iter;
+        ListIter list_iter;
+    };
 
 public:
     static constexpr object::Tag tag = object::Tag::ObjectId;
@@ -29,6 +48,8 @@ public:
         ShortHex(const Parent& p) : Parent(p) {}
         friend std::ostream& operator<<(std::ostream&, const ShortHex&);
     };
+
+    static RiaaNameMap debug_name(const ObjectId&, std::string name);
 
 public:
     using Parent::Parent;

@@ -4,7 +4,6 @@
 #include "shortcuts.h"
 #include "variant.h"
 #include "hex.h"
-#include "array_io.h"
 
 #include <iostream>
 #include <boost/filesystem.hpp>
@@ -55,7 +54,7 @@ int main(int argc, char** argv)
         auto obj = object::io::load<ObjectId, Tree, Blob>(path);
 
         apply(obj,
-                [](ObjectId id) { cout << "ObjectId " << to_hex<char>(id) << "\n"; },
+                [](ObjectId id) { cout << "ObjectId " << id << "\n"; },
                 [](const auto& obj) { cout << obj << "\n"; });
 
     } catch (const exception& ex) {

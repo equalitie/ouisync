@@ -10,6 +10,8 @@
 #include "object/blob.h"
 #include "object/io.h"
 #include "ouisync_assert.h"
+#include "ostream/set.h"
+#include "ostream/map.h"
 
 #include <boost/filesystem/fstream.hpp>
 #include <boost/serialization/set.hpp>
@@ -22,6 +24,7 @@
 using namespace ouisync;
 using namespace std;
 using object::Tree;
+using object::Blob;
 
 static auto _generate_random_name_tag()
 {
@@ -42,18 +45,9 @@ ObjectId Snapshot::calculate_id() const
     hash.update("Snapshot");
     hash.update(_commit.root_id);
 
-    hash.update(uint32_t(_complete_objects.size()));
-    for (auto& id : _complete_objects) {
-        hash.update(id);
-    }
-
-    hash.update(uint32_t(_incomplete_objects.size()));
-    for (auto& [id, type] : _incomplete_objects) {
-        hash.update(id);
-    }
-
-    hash.update(uint32_t(_missing_objects.size()));
-    for (auto& [id, type] : _missing_objects) {
+    hash.update(uint32_t(_nodes.size()));
+    for (auto& [id, n] : _nodes) {
+        hash.update(static_cast<std::underlying_type_t<NodeType>>(n.type));
         hash.update(id);
     }
 
@@ -67,7 +61,7 @@ Snapshot::Snapshot(fs::path objdir, fs::path snapshotdir, Commit commit) :
     _snapshotdir(std::move(snapshotdir)),
     _commit(move(commit))
 {
-    _missing_objects.insert({_commit.root_id, {}});
+    _nodes.insert({_commit.root_id, {NodeType::Missing, {}, {}}});
 }
 
 Snapshot::Snapshot(Snapshot&& other) :
@@ -76,9 +70,7 @@ Snapshot::Snapshot(Snapshot&& other) :
     _objdir(std::move(other._objdir)),
     _snapshotdir(std::move(other._snapshotdir)),
     _commit(move(other._commit)),
-    _complete_objects(move(other._complete_objects)),
-    _incomplete_objects(move(other._incomplete_objects)),
-    _missing_objects(move(other._missing_objects))
+    _nodes(move(other._nodes))
 {
 }
 
@@ -90,10 +82,7 @@ Snapshot& Snapshot::operator=(Snapshot&& other)
     _path     = std::move(other._path);
     _objdir   = std::move(other._objdir);
     _commit   = std::move(other._commit);
-
-    _complete_objects   = move(other._complete_objects);
-    _incomplete_objects = move(other._incomplete_objects);
-    _missing_objects    = move(other._missing_objects);
+    _nodes  = move(other._nodes);
 
     return *this;
 }
@@ -108,86 +97,155 @@ Snapshot Snapshot::create(Commit commit, Options::Snapshot options)
     return s;
 }
 
-void Snapshot::filter_missing(set<ObjectId>& objs) const
+bool Snapshot::check_complete_and_notify_parents(const ObjectId& node_id)
 {
-    for (auto i = objs.begin(); i != objs.end();) {
-        auto j = std::next(i);
-        if (object::io::exists(_objdir, *i)) objs.erase(i);
-        i = j;
+    auto& node = _nodes.at(node_id);
+
+    // Can't be Complete as only Incomplete childs call this function.
+    ouisync_assert(node.type == NodeType::Incomplete);
+
+    if (!check_all_complete(node.children))
+        return false;
+
+    node.type = NodeType::Complete;
+
+    // Held by this Snapshot
+    increment_recursive_count(node_id);
+    decrement_direct_count(node_id);
+
+    // Keep copies as code below may erase `node` from `_nodes` while iterating
+    // over `children` or `parents`.
+    auto children = node.children;
+    auto parents  = node.parents;
+
+    for (auto& child_id : children) {
+        increment_recursive_count(child_id);
+
+        auto& child = _nodes.at(child_id);
+
+        if (check_all_complete(child.parents)) {
+            // Remove the refcound held by this snapshot and stop tracking this
+            // node.
+            decrement_recursive_count(child_id);
+            _nodes.erase(child_id);
+        }
     }
+
+    for (auto& parent_id : parents) {
+        check_complete_and_notify_parents(parent_id);
+    }
+
+    return true;
 }
 
-void Snapshot::insert_object(const ObjectId& id, set<ObjectId> children)
+std::set<ObjectId> Snapshot::children_of(const ObjectId& id) const
 {
-    // Missing objects:    Object -> Parents
-    // Incomplete objects: Object -> Children
+    auto obj = object::io::load<Tree, Blob::Nothing>(_objdir, id);
+    if (auto tree = boost::get<Tree>(&obj)) {
+        return tree->children();
+    }
+    return {};
+}
 
-    filter_missing(children);
+void Snapshot::increment_recursive_count(const ObjectId& id) const
+{
+    Rc::load(_objdir, id).increment_recursive_count();
+}
 
-    bool is_complete = children.empty();
+void Snapshot::increment_direct_count(const ObjectId& id) const
+{
+    Rc::load(_objdir, id).increment_direct_count();
+}
 
-    if (is_complete) {
-        Rc::load(_objdir, id).increment_recursive_count();
-    } else {
-        Rc::load(_objdir, id).increment_direct_count();
+void Snapshot::decrement_recursive_count(const ObjectId& id) const
+{
+    Rc::load(_objdir, id).decrement_recursive_count();
+}
+
+void Snapshot::decrement_direct_count(const ObjectId& id) const
+{
+    Rc::load(_objdir, id).decrement_direct_count();
+}
+
+bool Snapshot::check_all_complete(const set<ObjectId>& nodes)
+{
+    for (auto& id : nodes) {
+        if (_nodes.at(id).type != NodeType::Complete)
+            return false;
+    }
+    return true;
+}
+
+void Snapshot::insert_object(const ObjectId& node_id, set<ObjectId> children)
+{
+    auto i = _nodes.find(node_id);
+
+    // This can happen if:
+    // A. this function is called with node_id of a node whose parent hasn't been
+    //    inserted yet, or
+    // B. This function is called with node_id of a node which has been previously
+    //    inserted, it was decided it is complete, all its parents were complete and
+    //    thus it the node was removed from _nodes.
+    if (i == _nodes.end()) return;
+
+    if (i->second.type != NodeType::Missing) return;
+
+    auto& node = i->second;
+
+    node.type = NodeType::Incomplete;
+
+    increment_direct_count(node_id);
+
+    // Don't move because later code may remove `node` from `_nodes` while
+    // iteratirng over children.
+    node.children = children;
+
+    for (auto& child_id : node.children) {
+        auto [child_i, inserted] = _nodes.insert({child_id, {NodeType::Missing, {}, {}}});
+        child_i->second.parents.insert(node_id);
     }
 
-    auto parents = move(_missing_objects.at(id));
-    _missing_objects.erase(id);
+    size_t existing_children = 0;
 
-    if (children.empty()) {
-        _complete_objects.insert(id);
+    for (auto& child_id : children) {
+        if (!object::io::exists(_objdir, child_id)) continue;
+        existing_children++;
+        insert_object(child_id, children_of(child_id));
+    }
 
-        // Check that any of the parents of `id` became "complete".
-        for (auto& parent : parents) {
-            auto& missing_children = _incomplete_objects.at(parent);
-
-            missing_children.erase(id);
-
-            if (missing_children.empty()) {
-                Rc rc = Rc::load(_objdir, parent);
-                rc.decrement_direct_count();
-                rc.increment_recursive_count();
-
-                _incomplete_objects.erase(parent);
-                _complete_objects.insert(parent);
-
-                // We no longer need to keep track of it as it's covered by the
-                // parent.
-                _complete_objects.erase(id);
-            }
-        }
-    } else {
-        for (auto& child : children) {
-            _missing_objects[child].insert(id);
-        }
-
-        if (children.empty()) {
-            _complete_objects.insert(id);
-        } else {
-            _incomplete_objects.insert({id, move(children)});
-        }
+    if (existing_children == 0) {
+        check_complete_and_notify_parents(node_id);
     }
 }
 
 void Snapshot::store()
 {
-    archive::store(_path,
-            _complete_objects,
-            _incomplete_objects,
-            _missing_objects);
+    archive::store(_path, _nodes);
 }
 
 void Snapshot::forget() noexcept
 {
-    auto complete_objects   = move(_complete_objects);
-    auto incomplete_objects = move(_incomplete_objects);
+    if (_nodes.empty()) return;
+
+    auto nodes = move(_nodes);
+
     try {
-        for (auto& id : complete_objects) {
-            refcount::deep_remove(_objdir, id);
-        }
-        for (auto& [id, _] : incomplete_objects) {
-            refcount::flat_remove(_objdir, id);
+        for (auto& [id, node] : nodes) {
+            switch (node.type) {
+                case NodeType::Complete: {
+                    refcount::deep_remove(_objdir, id);
+                }
+                break;
+
+                case NodeType::Incomplete: {
+                    refcount::flat_remove(_objdir, id);
+                }
+                break;
+
+                case NodeType::Missing: {
+                }
+                break;
+            }
         }
     }
     catch (const std::exception& e) {
@@ -199,18 +257,24 @@ Snapshot Snapshot::clone() const
 {
     Snapshot c(_objdir, _snapshotdir, _commit);
 
-    for (auto& id : _complete_objects) {
-        c._complete_objects.insert(id);
-        Rc::load(_objdir, id).increment_recursive_count();
-    }
+    for (auto& [id, node] : _nodes) {
+        c._nodes.insert({id, node});
 
-    for (auto& o : _incomplete_objects) {
-        c._incomplete_objects.insert(o);
-        Rc::load(_objdir, o.first).increment_direct_count();
-    }
+        switch (node.type) {
+            case NodeType::Complete: {
+                increment_recursive_count(id);
+            }
+            break;
 
-    for (auto& o : _missing_objects) {
-        c._missing_objects.insert(o);
+            case NodeType::Incomplete: {
+                increment_direct_count(id);
+            }
+            break;
+
+            case NodeType::Missing: {
+            }
+            break;
+        }
     }
 
     return c;
@@ -218,13 +282,13 @@ Snapshot Snapshot::clone() const
 
 void Snapshot::sanity_check() const
 {
-    for (auto& [id, _] : _incomplete_objects) {
-        ouisync_assert(object::io::exists(_objdir, id));
-    }
+    //for (auto& [id, _] : _objects.incomplete) {
+    //    ouisync_assert(object::io::exists(_objdir, id));
+    //}
 
-    for (auto& id : _complete_objects) {
-        ouisync_assert(object::io::is_complete(_objdir, id));
-    }
+    //for (auto& id : _objects.complete) {
+    //    ouisync_assert(object::io::is_complete(_objdir, id));
+    //}
 }
 
 Snapshot::~Snapshot()
@@ -236,15 +300,31 @@ std::ostream& ouisync::operator<<(std::ostream& os, const Snapshot& s)
 {
     os << "Snapshot: " << s._commit << "\n";
     os << BranchIo::Immutable(s._objdir, s._commit.root_id);
-    os << "Complete objs: ";
-    for (auto& id : s._complete_objects) {
-        os << id << ", ";
+    if (s._nodes.empty()) {
+        os << "EMPTY!!!\n";
     }
-    os << "\nIncomplete objs: ";
-    for (auto& [id, _] : s._incomplete_objects) {
-        os << id << ", ";
+    for (auto& [id, n] : s._nodes) {
+        os << id << ": " << n << "\n";
     }
-    return os << "\n";
+    return os;
+}
+
+std::ostream& ouisync::operator<<(std::ostream& os, Snapshot::NodeType t)
+{
+    switch (t) {
+        case Snapshot::NodeType::Missing:    return os << "Missing";
+        case Snapshot::NodeType::Incomplete: return os << "Incomplete";
+        case Snapshot::NodeType::Complete:   return os << "Complete";
+    }
+    return os;
+}
+
+std::ostream& ouisync::operator<<(std::ostream& os, const Snapshot::Node& n)
+{
+    os << "Node{" << n.type << ", ";
+    os << "parents: " << n.parents << ", ";
+    os << "children: " << n.children << "}";
+    return os;
 }
 
 ////////////////////////////////////////////////////////////////////////////////

@@ -52,9 +52,43 @@ private:
 
     void store();
 
+    bool check_complete_and_notify_parents(const ObjectId&);
+
+    bool update_downwards(const ObjectId& node, const std::set<ObjectId>& children);
+
+    std::set<ObjectId> children_of(const ObjectId& id) const;
+
+    void increment_recursive_count(const ObjectId&) const;
+    void decrement_recursive_count(const ObjectId&) const;
+
+    void increment_direct_count(const ObjectId&) const;
+    void decrement_direct_count(const ObjectId&) const;
+
+    enum class NodeType {
+        Missing, Incomplete, Complete
+    };
+
+    bool check_all_complete(const std::set<ObjectId>& nodes);
+
+    struct Node {
+        NodeType type;
+        std::set<ObjectId> parents;
+        std::set<ObjectId> children;
+
+        bool is_root() const { return parents.empty(); }
+
+        template<class Archive>
+        void serialize(Archive& ar, const unsigned) {
+            ar & type & parents & children;
+        }
+    };
+
+    friend std::ostream& operator<<(std::ostream&, NodeType);
+    friend std::ostream& operator<<(std::ostream&, const Node&);
     friend std::ostream& operator<<(std::ostream&, const Snapshot&);
 
-    void filter_missing(std::set<ObjectId>& objs) const;
+
+    void update_child(const ObjectId& child, const ObjectId& parent);
 
 private:
     NameTag _name_tag;
@@ -63,20 +97,21 @@ private:
     fs::path _snapshotdir;
     Commit _commit;
 
-    using Parents  = std::set<ObjectId>;
-    using Children = std::set<ObjectId>;
+    // Each node here is:
+    //
+    // * Held by 1 direct count *by this snapshot* if it is "incomplete".
+    // * Held by 1 recursive count *by this snapshot* if it is "complete" but
+    //   some of its parents are not complete. It is also held by recursive count
+    //   from each of its "complete" parents.
+    // 
+    // Once a node that has parents in _nodes has all its parents "complete",
+    // it is evicted from _nodes and it is further held by recursive counts
+    // only from its parents.
+    //
+    // Complete nodes that don't have parents (roots) are still held by 1 recursive
+    // count *by this snapshot*.
 
-    // Objects whose all children have been downloaded and also whose parent's
-    // are either non existent (root) or incomplete.
-    std::set<ObjectId> _complete_objects;
-
-    // Objects that have been downloaded, but some of its childrent haven't
-    // been.
-    std::map<ObjectId, Children> _incomplete_objects;
-
-    // Objects that are known to be in this snapshot, but haven't yet been
-    // downloaded.
-    std::map<ObjectId, Parents> _missing_objects;
+    std::map<ObjectId, Node> _nodes;
 };
 
 //////////////////////////////////////////////////////////////////////

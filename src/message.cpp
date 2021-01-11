@@ -1,7 +1,5 @@
 #include "message.h"
 #include "error.h"
-#include "hex.h"
-#include "array_io.h"
 #include "archive.h"
 
 #include <boost/endian/conversion.hpp>
@@ -82,7 +80,7 @@ catch (const std::exception& e) {
 std::ostream& ouisync::operator<<(std::ostream& os, const RqSnapshotGroup& m) {
     os << "RqSnapshotGroup{";
     if (m.last_snapshot_group_id) {
-        os << m.last_snapshot_group_id->short_hex();
+        os << *m.last_snapshot_group_id;
     } else {
         os << "nil";
     }
@@ -90,7 +88,7 @@ std::ostream& ouisync::operator<<(std::ostream& os, const RqSnapshotGroup& m) {
 }
 
 std::ostream& ouisync::operator<<(std::ostream& os, const RsSnapshotGroup& m) {
-    os << "RsSnapshotGroup{" << m.snapshot_group_id.short_hex() << " [";
+    os << "RsSnapshotGroup{" << m.snapshot_group_id << " [";
     bool is_first = true;
     for (auto& [user_id, commit] : m) {
         if (!is_first) { os << ", "; is_first = true; }
@@ -100,7 +98,7 @@ std::ostream& ouisync::operator<<(std::ostream& os, const RsSnapshotGroup& m) {
 }
 
 std::ostream& ouisync::operator<<(std::ostream& os, const RqObject& rq) {
-    return os << "RqObject " << rq.object_id.short_hex();
+    return os << "RqObject " << rq.object_id;
 }
 
 std::ostream& ouisync::operator<<(std::ostream& os, const RsObject& m) {
