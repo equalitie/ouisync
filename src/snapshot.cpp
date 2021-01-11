@@ -113,23 +113,24 @@ bool Snapshot::check_complete_and_notify_parents(const ObjectId& node_id)
     increment_recursive_count(node_id);
     decrement_direct_count(node_id);
 
-    auto copy = node;
+    auto parents = node.parents;
+    auto children = node.children;
 
-    auto all_parents_complete = true;
-
-    for (auto& parent_id : copy.parents) {
-        bool complete = check_complete_and_notify_parents(parent_id);
-        all_parents_complete = all_parents_complete && complete;
-    }
-
-    if (all_parents_complete && !copy.is_root()) {
-        // This Snapshot no longer needs to keep track of this node.
-        decrement_recursive_count(node_id);
-        _nodes.erase(node_id);
-    }
-
-    for (auto& child_id : copy.children) {
+    for (auto& child_id : children) {
         increment_recursive_count(child_id);
+
+        auto& child = _nodes.at(child_id);
+
+        if (check_all_complete(child.parents)) {
+            // Remove the refcound held by this snapshot and stop tracking this
+            // node.
+            decrement_recursive_count(child_id);
+            _nodes.erase(child_id);
+        }
+    }
+
+    for (auto& parent_id : parents) {
+        check_complete_and_notify_parents(parent_id);
     }
 
     return true;

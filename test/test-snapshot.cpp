@@ -97,8 +97,9 @@ BOOST_AUTO_TEST_CASE(simple_forget) {
     Tree R;
     R["A"].set_id(A.calculate_id());
 
-    //cerr << "R: " << R.calculate_id() << "\n";
-    //cerr << "A: " << A.calculate_id() << "\n";
+    [[maybe_unused]] auto names =
+        { ObjectId::debug_name(R.calculate_id(), "R"),
+          ObjectId::debug_name(A.calculate_id(), "A")};
 
     env.store(R);
     auto snapshot = env.create_snapshot(R.calculate_id());
@@ -130,11 +131,6 @@ BOOST_AUTO_TEST_CASE(partial_forget) {
 
     R["A"].set_id(A.calculate_id());
     R["N"].set_id(N.calculate_id());
-
-    cerr << "R: " << R.calculate_id() << "\n";
-    cerr << "A: " << A.calculate_id() << "\n";
-    cerr << "N: " << N.calculate_id() << "\n";
-    cerr << "B: " << B.calculate_id() << "\n";
 
     auto snapshot = env.create_snapshot(R.calculate_id());
 
@@ -275,7 +271,7 @@ BOOST_AUTO_TEST_CASE(diamond_shape) {
     //          ↙ ↘
     //         N   M
     //        ↙ ↘ ↙
-    //       B   A     // B is here mostly so that N != M
+    //       B   A     // B is here so that N != M
 
     Tree R;
     Tree N;
@@ -291,13 +287,14 @@ BOOST_AUTO_TEST_CASE(diamond_shape) {
     R["N"].set_id(N.calculate_id());
     R["M"].set_id(M.calculate_id());
 
-    auto snapshot = env.create_snapshot(R.calculate_id());
+    [[maybe_unused]] auto names =
+        { ObjectId::debug_name(R.calculate_id(), "R"),
+          ObjectId::debug_name(M.calculate_id(), "M"),
+          ObjectId::debug_name(N.calculate_id(), "N"),
+          ObjectId::debug_name(A.calculate_id(), "A"),
+          ObjectId::debug_name(B.calculate_id(), "B")};
 
-    cerr << "R: " << R.calculate_id() << "\n";
-    cerr << "N: " << N.calculate_id() << "\n";
-    cerr << "M: " << M.calculate_id() << "\n";
-    cerr << "B: " << B.calculate_id() << "\n";
-    cerr << "A: " << A.calculate_id() << "\n";
+    auto snapshot = env.create_snapshot(R.calculate_id());
 
     env.store(R);
     snapshot.insert_object(R.calculate_id(), R.children());
@@ -315,10 +312,22 @@ BOOST_AUTO_TEST_CASE(diamond_shape) {
     snapshot.insert_object(B.calculate_id(), {});
 
     auto R_rc = env.load_rc(R.calculate_id());
+    auto M_rc = env.load_rc(M.calculate_id());
+    auto N_rc = env.load_rc(N.calculate_id());
     auto A_rc = env.load_rc(A.calculate_id());
+    auto B_rc = env.load_rc(B.calculate_id());
 
-    cerr << "===================================\n";
-    cerr << snapshot << "\n";
+    BOOST_REQUIRE_EQUAL(R_rc.direct_count()   , 0);
+    BOOST_REQUIRE_EQUAL(R_rc.recursive_count(), 1);
+    BOOST_REQUIRE_EQUAL(N_rc.direct_count()   , 0);
+    BOOST_REQUIRE_EQUAL(N_rc.recursive_count(), 1);
+    BOOST_REQUIRE_EQUAL(M_rc.direct_count()   , 0);
+    BOOST_REQUIRE_EQUAL(M_rc.recursive_count(), 1);
+    BOOST_REQUIRE_EQUAL(A_rc.direct_count()   , 0);
+    BOOST_REQUIRE_EQUAL(A_rc.recursive_count(), 2);
+    BOOST_REQUIRE_EQUAL(B_rc.direct_count()   , 0);
+    BOOST_REQUIRE_EQUAL(B_rc.recursive_count(), 1);
+
     BOOST_REQUIRE_EQUAL(R_rc.recursive_count(), 1);
 
     snapshot.sanity_check();
@@ -355,8 +364,6 @@ BOOST_AUTO_TEST_CASE(auto_insert_existing) {
     auto R_rc = env.load_rc(R.calculate_id());
     auto A_rc = env.load_rc(A.calculate_id());
 
-    cerr << "===================================\n";
-    cerr << snapshot << "\n";
     BOOST_REQUIRE_EQUAL(R_rc.recursive_count(), 1);
 
     snapshot.sanity_check();
