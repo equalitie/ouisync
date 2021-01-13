@@ -18,23 +18,25 @@ using namespace std;
 using object::Tree;
 
 /* static */
-RemoteBranch RemoteBranch::load(fs::path filepath, Options::RemoteBranch options)
+RemoteBranch RemoteBranch::load(fs::path filepath, ObjectStore& objects, Options::RemoteBranch options)
 {
-    RemoteBranch branch(filepath, move(options));
+    RemoteBranch branch(filepath, objects, move(options));
     archive::load(filepath, branch);
     return branch;
 }
 
-RemoteBranch::RemoteBranch(Commit commit, fs::path filepath, Options::RemoteBranch options) :
+RemoteBranch::RemoteBranch(Commit commit, fs::path filepath, ObjectStore& objects, Options::RemoteBranch options) :
     _filepath(std::move(filepath)),
+    _objects(objects),
     _options(move(options)),
     _commit(move(commit)),
     _snapshot(make_unique<Snapshot>(Snapshot::create(_commit, _options)))
 {
 }
 
-RemoteBranch::RemoteBranch(fs::path filepath, Options::RemoteBranch options) :
+RemoteBranch::RemoteBranch(fs::path filepath, ObjectStore& objects, Options::RemoteBranch options) :
     _filepath(std::move(filepath)),
+    _objects(objects),
     _options(move(options))
 {}
 

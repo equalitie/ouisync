@@ -10,6 +10,7 @@
 #include "commit.h"
 #include "branch_io.h"
 #include "options.h"
+#include "object_store.h"
 
 #include <boost/asio/awaitable.hpp>
 #include <boost/filesystem/path.hpp>
@@ -25,10 +26,10 @@ private:
     using Blob = object::Blob;
 
 public:
-    RemoteBranch(Commit, fs::path filepath, Options::RemoteBranch);
+    RemoteBranch(Commit, fs::path filepath, ObjectStore&, Options::RemoteBranch);
 
     static
-    RemoteBranch load(fs::path filepath, Options::RemoteBranch);
+    RemoteBranch load(fs::path filepath, ObjectStore&, Options::RemoteBranch);
 
     [[nodiscard]] net::awaitable<ObjectId> insert_blob(const Blob&);
     [[nodiscard]] net::awaitable<ObjectId> insert_tree(const Tree&);
@@ -49,7 +50,7 @@ public:
     friend std::ostream& operator<<(std::ostream&, const RemoteBranch&);
 
 private:
-    RemoteBranch(fs::path filepath, Options::RemoteBranch);
+    RemoteBranch(fs::path filepath, ObjectStore&, Options::RemoteBranch);
 
     void store_self() const;
 
@@ -66,6 +67,7 @@ private:
 
 private:
     fs::path _filepath;
+    ObjectStore& _objects;
     Options::RemoteBranch _options;
     Commit _commit;
     std::unique_ptr<Snapshot> _snapshot;

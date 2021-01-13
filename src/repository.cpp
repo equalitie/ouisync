@@ -30,6 +30,7 @@ static void _sanity_check(const Branch& b) {
 Repository::Repository(executor_type ex, Options options) :
     _ex(std::move(ex)),
     _options(std::move(options)),
+    _objects(_options.objectdir),
     _on_change(_ex)
 {
     _user_id = UserId::load_or_create(_options.user_id_file_path);
@@ -39,7 +40,7 @@ Repository::Repository(executor_type ex, Options options) :
         if (!user_id) {
             throw std::runtime_error("Repository: Invalid branch name format");
         }
-        auto branch = RemoteBranch::load(f, _options);
+        auto branch = RemoteBranch::load(f, _objects, _options);
         _branches.insert(make_pair(*user_id, std::move(branch)));
     }
 
@@ -377,7 +378,7 @@ Repository::get_or_create_remote_branch(const UserId& user_id, const Commit& com
         auto path = _options.remotes / user_id.to_string();
 
         i = _branches.insert(std::make_pair(user_id,
-             RemoteBranch(commit, path, _options))).first;
+             RemoteBranch(commit, path, _objects, _options))).first;
 
         co_return boost::get<RemoteBranch>(&i->second);
     }

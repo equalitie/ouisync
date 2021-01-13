@@ -51,6 +51,7 @@ add_library(libouisync STATIC
     "src/commit.cpp"
     "src/object_id.cpp"
     "src/refcount.cpp"
+    "src/object_store.cpp"
     "src/object/tree.cpp"
     "src/object/blob.cpp"
     "src/object/path.cpp"
