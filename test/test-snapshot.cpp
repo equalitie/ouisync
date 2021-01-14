@@ -47,6 +47,7 @@ Options::Snapshot create_options(string testname)
 struct Environment {
     Environment(string testname)
         : options(create_options(testname))
+        , objstore(options.objectdir)
     {}
 
     template<class Obj> ObjectId store(const Obj& obj) {
@@ -55,7 +56,7 @@ struct Environment {
 
     Snapshot create_snapshot(ObjectId root)
     {
-        return Snapshot::create({{}, root}, options);
+        return Snapshot::create({{}, root}, objstore, options);
     }
 
     static
@@ -79,11 +80,12 @@ struct Environment {
             boost::adaptors::filtered([](auto p) { return !is_refcount(p.path()); });
     }
 
-    Rc load_rc(const ObjectId& id) const {
-        return Rc::load(options.objectdir, id);
+    Rc load_rc(const ObjectId& id) {
+        return objstore.rc(id);
     }
 
     Options::Snapshot options;
+    ObjectStore objstore;
 };
 
 BOOST_AUTO_TEST_CASE(simple_forget) {

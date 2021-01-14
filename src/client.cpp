@@ -41,7 +41,7 @@ Client::download_branch(RemoteBranch& branch, ObjectId object_id, Cancel cancel)
         for (auto& [child_name, child_id] : tree) {
             (void) child_name;
 
-            if (branch.immutable_io().object_exists(child_id))
+            if (branch.branch_view().object_exists(child_id))
                 continue;
 
             co_await download_branch(branch, child_id, cancel);

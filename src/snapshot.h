@@ -11,6 +11,7 @@
 
 namespace ouisync {
 
+class ObjectStore;
 //////////////////////////////////////////////////////////////////////
 
 class Snapshot {
@@ -29,7 +30,7 @@ public:
     Snapshot(Snapshot&&);
     Snapshot& operator=(Snapshot&&);
 
-    static Snapshot create(Commit, Options::Snapshot);
+    static Snapshot create(Commit, ObjectStore&, Options::Snapshot);
 
     const Commit& commit() const { return _commit; }
 
@@ -48,7 +49,7 @@ public:
     NameTag name_tag() const { return _name_tag; }
 
 private:
-    Snapshot(fs::path objdir, fs::path snapshotdir, Commit);
+    Snapshot(ObjectStore&, fs::path objdir, fs::path snapshotdir, Commit);
 
     void store();
 
@@ -94,6 +95,7 @@ private:
     NameTag _name_tag;
     fs::path _path;
     fs::path _objdir;
+    ObjectStore* _objects = nullptr;
     fs::path _snapshotdir;
     Commit _commit;
 

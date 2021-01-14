@@ -1,5 +1,4 @@
 #include "remote_branch.h"
-#include "branch_io.h"
 #include "branch_type.h"
 #include "object/io.h"
 #include "refcount.h"
@@ -18,30 +17,32 @@ using namespace std;
 using object::Tree;
 
 /* static */
-RemoteBranch RemoteBranch::load(fs::path filepath, Options::RemoteBranch options)
+RemoteBranch RemoteBranch::load(fs::path filepath, ObjectStore& objects, Options::RemoteBranch options)
 {
-    RemoteBranch branch(filepath, move(options));
+    RemoteBranch branch(filepath, objects, move(options));
     archive::load(filepath, branch);
     return branch;
 }
 
-RemoteBranch::RemoteBranch(Commit commit, fs::path filepath, Options::RemoteBranch options) :
+RemoteBranch::RemoteBranch(Commit commit, fs::path filepath, ObjectStore& objects, Options::RemoteBranch options) :
     _filepath(std::move(filepath)),
+    _objects(objects),
     _options(move(options)),
     _commit(move(commit)),
-    _snapshot(make_unique<Snapshot>(Snapshot::create(_commit, _options)))
+    _snapshot(make_unique<Snapshot>(Snapshot::create(_commit, _objects, _options)))
 {
 }
 
-RemoteBranch::RemoteBranch(fs::path filepath, Options::RemoteBranch options) :
+RemoteBranch::RemoteBranch(fs::path filepath, ObjectStore& objects, Options::RemoteBranch options) :
     _filepath(std::move(filepath)),
+    _objects(objects),
     _options(move(options))
 {}
 
 net::awaitable<ObjectId> RemoteBranch::insert_blob(const Blob& blob)
 {
-    auto id = object::io::store(_options.objectdir, blob);
-    if (!_snapshot) _snapshot = make_unique<Snapshot>(Snapshot::create(_commit, _options));
+    auto id = _objects.store(blob);
+    if (!_snapshot) _snapshot = make_unique<Snapshot>(Snapshot::create(_commit, _objects, _options));
     _snapshot->insert_object(id, {});
     store_self();
     co_return id;
@@ -49,8 +50,8 @@ net::awaitable<ObjectId> RemoteBranch::insert_blob(const Blob& blob)
 
 net::awaitable<ObjectId> RemoteBranch::insert_tree(const Tree& tree)
 {
-    auto id = object::io::store(_options.objectdir, tree);
-    if (!_snapshot) _snapshot = make_unique<Snapshot>(Snapshot::create(_commit, _options));
+    auto id = _objects.store(tree);
+    if (!_snapshot) _snapshot = make_unique<Snapshot>(Snapshot::create(_commit, _objects, _options));
     _snapshot->insert_object(id, tree.children());
     store_self();
     co_return id;
@@ -60,7 +61,7 @@ void RemoteBranch::introduce_commit(const Commit& commit)
 {
     _commit = commit;
     if (_snapshot) { _snapshot->forget(); }
-    _snapshot = make_unique<Snapshot>(Snapshot::create(_commit, _options));
+    _snapshot = make_unique<Snapshot>(Snapshot::create(_commit, _objects, _options));
     store_self();
 }
 
@@ -76,7 +77,7 @@ Snapshot RemoteBranch::create_snapshot() const
 {
     ouisync_assert(_snapshot);
     if (!_snapshot) {
-        return Snapshot::create(_commit, _options);
+        return Snapshot::create(_commit, _objects, _options);
     }
     return _snapshot->clone();
 }

@@ -8,8 +8,9 @@
 #include "path_range.h"
 #include "file_system_attrib.h"
 #include "commit.h"
-#include "branch_io.h"
+#include "branch_view.h"
 #include "options.h"
+#include "object_store.h"
 
 #include <boost/asio/awaitable.hpp>
 #include <boost/filesystem/path.hpp>
@@ -18,6 +19,7 @@
 namespace ouisync {
 
 class Snapshot;
+class ObjectStore;
 
 class RemoteBranch {
 private:
@@ -25,10 +27,10 @@ private:
     using Blob = object::Blob;
 
 public:
-    RemoteBranch(Commit, fs::path filepath, Options::RemoteBranch);
+    RemoteBranch(Commit, fs::path filepath, ObjectStore&, Options::RemoteBranch);
 
     static
-    RemoteBranch load(fs::path filepath, Options::RemoteBranch);
+    RemoteBranch load(fs::path filepath, ObjectStore&, Options::RemoteBranch);
 
     [[nodiscard]] net::awaitable<ObjectId> insert_blob(const Blob&);
     [[nodiscard]] net::awaitable<ObjectId> insert_tree(const Tree&);
@@ -38,8 +40,8 @@ public:
     const VersionVector& stamp() const { return _commit.stamp; }
     const ObjectId& root_id() const { return _commit.root_id; }
 
-    BranchIo::Immutable immutable_io() const {
-        return BranchIo::Immutable(_options.objectdir, root_id());
+    BranchView branch_view() const {
+        return BranchView(_objects, root_id());
     }
 
     Snapshot create_snapshot() const;
@@ -49,7 +51,7 @@ public:
     friend std::ostream& operator<<(std::ostream&, const RemoteBranch&);
 
 private:
-    RemoteBranch(fs::path filepath, Options::RemoteBranch);
+    RemoteBranch(fs::path filepath, ObjectStore&, Options::RemoteBranch);
 
     void store_self() const;
 
@@ -66,6 +68,7 @@ private:
 
 private:
     fs::path _filepath;
+    ObjectStore& _objects;
     Options::RemoteBranch _options;
     Commit _commit;
     std::unique_ptr<Snapshot> _snapshot;

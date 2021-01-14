@@ -5,11 +5,12 @@
 #include "refcount.h"
 #include "archive.h"
 #include "random.h"
-#include "branch_io.h"
+#include "branch_view.h"
 #include "object/tree.h"
 #include "object/blob.h"
 #include "object/io.h"
 #include "ouisync_assert.h"
+#include "object_store.h"
 #include "ostream/set.h"
 #include "ostream/map.h"
 
@@ -54,10 +55,11 @@ ObjectId Snapshot::calculate_id() const
     return hash.close();
 }
 
-Snapshot::Snapshot(fs::path objdir, fs::path snapshotdir, Commit commit) :
+Snapshot::Snapshot(ObjectStore& objects, fs::path objdir, fs::path snapshotdir, Commit commit) :
     _name_tag(_generate_random_name_tag()),
     _path(_path_from_tag(_name_tag, snapshotdir)),
     _objdir(std::move(objdir)),
+    _objects(&objects),
     _snapshotdir(std::move(snapshotdir)),
     _commit(move(commit))
 {
@@ -68,6 +70,7 @@ Snapshot::Snapshot(Snapshot&& other) :
     _name_tag(other._name_tag),
     _path(std::move(other._path)),
     _objdir(std::move(other._objdir)),
+    _objects(other._objects),
     _snapshotdir(std::move(other._snapshotdir)),
     _commit(move(other._commit)),
     _nodes(move(other._nodes))
@@ -81,6 +84,7 @@ Snapshot& Snapshot::operator=(Snapshot&& other)
     _name_tag = other._name_tag;
     _path     = std::move(other._path);
     _objdir   = std::move(other._objdir);
+    _objects  = other._objects;
     _commit   = std::move(other._commit);
     _nodes  = move(other._nodes);
 
@@ -88,9 +92,9 @@ Snapshot& Snapshot::operator=(Snapshot&& other)
 }
 
 /* static */
-Snapshot Snapshot::create(Commit commit, Options::Snapshot options)
+Snapshot Snapshot::create(Commit commit, ObjectStore& objects, Options::Snapshot options)
 {
-    Snapshot s(std::move(options.objectdir),
+    Snapshot s(objects, std::move(options.objectdir),
             move(options.snapshotdir), std::move(commit));
 
     s.store();
@@ -149,22 +153,22 @@ std::set<ObjectId> Snapshot::children_of(const ObjectId& id) const
 
 void Snapshot::increment_recursive_count(const ObjectId& id) const
 {
-    Rc::load(_objdir, id).increment_recursive_count();
+    _objects->rc(id).increment_recursive_count();
 }
 
 void Snapshot::increment_direct_count(const ObjectId& id) const
 {
-    Rc::load(_objdir, id).increment_direct_count();
+    _objects->rc(id).increment_direct_count();
 }
 
 void Snapshot::decrement_recursive_count(const ObjectId& id) const
 {
-    Rc::load(_objdir, id).decrement_recursive_count();
+    _objects->rc(id).decrement_recursive_count();
 }
 
 void Snapshot::decrement_direct_count(const ObjectId& id) const
 {
-    Rc::load(_objdir, id).decrement_direct_count();
+    _objects->rc(id).decrement_direct_count();
 }
 
 bool Snapshot::check_all_complete(const set<ObjectId>& nodes)
@@ -208,7 +212,7 @@ void Snapshot::insert_object(const ObjectId& node_id, set<ObjectId> children)
     size_t existing_children = 0;
 
     for (auto& child_id : children) {
-        if (!object::io::exists(_objdir, child_id)) continue;
+        if (!_objects->exists(child_id)) continue;
         existing_children++;
         insert_object(child_id, children_of(child_id));
     }
@@ -233,12 +237,12 @@ void Snapshot::forget() noexcept
         for (auto& [id, node] : nodes) {
             switch (node.type) {
                 case NodeType::Complete: {
-                    refcount::deep_remove(_objdir, id);
+                    _objects->rc(id).decrement_recursive_count();
                 }
                 break;
 
                 case NodeType::Incomplete: {
-                    refcount::flat_remove(_objdir, id);
+                    _objects->rc(id).decrement_direct_count();
                 }
                 break;
 
@@ -255,7 +259,7 @@ void Snapshot::forget() noexcept
 
 Snapshot Snapshot::clone() const
 {
-    Snapshot c(_objdir, _snapshotdir, _commit);
+    Snapshot c(*_objects, _objdir, _snapshotdir, _commit);
 
     for (auto& [id, node] : _nodes) {
         c._nodes.insert({id, node});
@@ -299,7 +303,7 @@ Snapshot::~Snapshot()
 std::ostream& ouisync::operator<<(std::ostream& os, const Snapshot& s)
 {
     os << "Snapshot: " << s._commit << "\n";
-    os << BranchIo::Immutable(s._objdir, s._commit.root_id);
+    os << BranchView(const_cast<ObjectStore&>(*s._objects), s._commit.root_id);
     if (s._nodes.empty()) {
         os << "EMPTY!!!\n";
     }

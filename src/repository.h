@@ -7,10 +7,10 @@
 #include "user_id.h"
 #include "local_branch.h"
 #include "remote_branch.h"
-#include "branch_io.h"
 #include "commit.h"
 #include "wait.h"
 #include "snapshot.h"
+#include "object_store.h"
 
 #include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/awaitable.hpp>
@@ -72,6 +72,7 @@ private:
 private:
     executor_type _ex;
     const Options _options;
+    ObjectStore _objects;
     UserId _user_id;
     std::map<UserId, Branch> _branches;
     Opt<Snapshot::Id> _last_snapshot_id;
