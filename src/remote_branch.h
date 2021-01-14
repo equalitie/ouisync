@@ -41,7 +41,7 @@ public:
     const ObjectId& root_id() const { return _commit.root_id; }
 
     BranchIo::Immutable immutable_io() const {
-        return BranchIo::Immutable(_options.objectdir, root_id());
+        return BranchIo::Immutable(_objects, root_id());
     }
 
     Snapshot create_snapshot() const;

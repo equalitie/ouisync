@@ -1,6 +1,7 @@
 #include "branch_io.h"
 #include "error.h"
 #include "refcount.h"
+#include "object_store.h"
 #include "object/io.h"
 #include "object/tagged.h"
 
@@ -15,9 +16,9 @@ using object::Blob;
 
 template<class F>
 static
-void _query_dir(const fs::path& objdir, ObjectId tree_id, PathRange path, F&& f)
+void _query_dir(ObjectStore& objects, ObjectId tree_id, PathRange path, F&& f)
 {
-    const Tree tree = object::io::load<Tree>(objdir, tree_id);
+    const Tree tree = objects.load<Tree>(tree_id);
 
     if (path.empty()) {
         f(tree);
@@ -25,7 +26,7 @@ void _query_dir(const fs::path& objdir, ObjectId tree_id, PathRange path, F&& f)
         auto child = tree.find(path.front());
         if (!child) throw_error(sys::errc::no_such_file_or_directory);
         path.advance_begin(1);
-        _query_dir(objdir, child.id(), path, std::forward<F>(f));
+        _query_dir(objects, child.id(), path, std::forward<F>(f));
     }
 }
 
@@ -37,8 +38,8 @@ PathRange _parent(PathRange path) {
 
 //--------------------------------------------------------------------
 
-BranchIo::Immutable::Immutable(const fs::path& objdir, const ObjectId& root_id) :
-    _objdir(objdir),
+BranchIo::Immutable::Immutable(ObjectStore& objects, const ObjectId& root_id) :
+    _objects(objects),
     _root_id(root_id)
 {}
 
@@ -47,7 +48,7 @@ BranchIo::Immutable::Immutable(const fs::path& objdir, const ObjectId& root_id) 
 Tree BranchIo::Immutable::readdir(PathRange path) const
 {
     Opt<Tree> retval;
-    _query_dir(_objdir, _root_id, path, [&] (const Tree& tree) { retval = tree; });
+    _query_dir(_objects, _root_id, path, [&] (const Tree& tree) { retval = tree; });
     assert(retval);
     return move(*retval);
 }
@@ -60,12 +61,12 @@ FileSystemAttrib BranchIo::Immutable::get_attr(PathRange path) const
 
     FileSystemAttrib attrib;
 
-    _query_dir(_objdir, _root_id, _parent(path),
+    _query_dir(_objects, _root_id, _parent(path),
         [&] (const Tree& parent) {
             auto child = parent.find(path.back());
             if (!child) throw_error(sys::errc::no_such_file_or_directory);
 
-            auto obj = object::io::load<Tree::Nothing, Blob::Size>(_objdir, child.id());
+            auto obj = _objects.load<Tree::Nothing, Blob::Size>(child.id());
 
             apply(obj,
                 [&] (const Tree::Nothing&) { attrib = FileSystemDirAttrib{}; },
@@ -81,13 +82,13 @@ size_t BranchIo::Immutable::read(PathRange path, const char* buf, size_t size, s
 {
     if (path.empty()) throw_error(sys::errc::is_a_directory);
 
-    _query_dir(_objdir, _root_id, _parent(path),
+    _query_dir(_objects, _root_id, _parent(path),
         [&] (const Tree& tree) {
             auto child = tree.find(path.back());
             if (!child) throw_error(sys::errc::no_such_file_or_directory);
 
             // XXX: Read only what's needed, not the whole blob
-            auto blob = object::io::load<Blob>(_objdir, child.id());
+            auto blob = _objects.load<Blob>(child.id());
 
             size_t len = blob.size();
 
@@ -110,11 +111,11 @@ Opt<Blob> BranchIo::Immutable::maybe_load(PathRange path) const
 
     Opt<Blob> retval;
 
-    _query_dir(_objdir, _root_id, _parent(path),
+    _query_dir(_objects, _root_id, _parent(path),
         [&] (const Tree& tree) {
             auto child = tree.find(path.back());
             if (!child) throw_error(sys::errc::no_such_file_or_directory);
-            retval = object::io::load<Blob>(_objdir, child.id());
+            retval = _objects.load<Blob>(child.id());
         });
 
     return retval;
@@ -128,7 +129,7 @@ ObjectId BranchIo::Immutable::id_of(PathRange path) const
 
     ObjectId retval;
 
-    _query_dir(_objdir, _root_id, _parent(path),
+    _query_dir(_objects, _root_id, _parent(path),
         [&] (const Tree& tree) {
             auto child = tree.find(path.back());
             if (!child) throw_error(sys::errc::no_such_file_or_directory);
@@ -141,20 +142,20 @@ ObjectId BranchIo::Immutable::id_of(PathRange path) const
 //--------------------------------------------------------------------
 
 static
-void _show(std::ostream& os, fs::path objdir, ObjectId id, std::string pad = "") {
-    if (!object::io::exists(objdir, id)) {
+void _show(std::ostream& os, ObjectStore& objects, ObjectId id, std::string pad = "") {
+    if (!objects.exists(id)) {
         os << pad << "!!! object " << id << " does not exist !!!\n";
         return;
     }
 
-    auto obj = object::io::load<Tree, Blob>(objdir, id);
-    auto rc = Rc::load(objdir, id);
+    auto obj = objects.load<Tree, Blob>(id);
+    auto rc = objects.rc(id);
 
     apply(obj,
             [&] (const Tree& t) {
                 os << pad << t << " (" << rc << ")\n";
                 for (auto& [name, id] : t) {
-                    _show(os, objdir, id, pad + "  ");
+                    _show(os, objects, id, pad + "  ");
                 }
             },
             [&] (const Blob& b) {
@@ -164,14 +165,14 @@ void _show(std::ostream& os, fs::path objdir, ObjectId id, std::string pad = "")
 
 void BranchIo::Immutable::show(std::ostream& os) const
 {
-    return _show(os, _objdir, _root_id, "");
+    return _show(os, _objects, _root_id, "");
 }
 
 //--------------------------------------------------------------------
 
 bool BranchIo::Immutable::object_exists(const ObjectId& id) const
 {
-    return object::io::exists(_objdir, id);
+    return _objects.exists(id);
 }
 
 //--------------------------------------------------------------------

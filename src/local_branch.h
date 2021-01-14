@@ -37,7 +37,7 @@ public:
     const ObjectId& root_id() const { return _commit.root_id; }
 
     BranchIo::Immutable immutable_io() const {
-        return BranchIo::Immutable(_options.objectdir, _commit.root_id);
+        return BranchIo::Immutable(_objects, _commit.root_id);
     }
 
     // XXX: Deprecated, use `write` instead. I believe these are currently

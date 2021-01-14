@@ -9,6 +9,8 @@
 
 namespace ouisync {
 
+class ObjectStore;
+
 class BranchIo {
 public:
     using Tree = object::Tree;
@@ -17,7 +19,7 @@ public:
 public:
     class Immutable {
     public:
-        Immutable(const fs::path& objdir, const ObjectId& root_id);
+        Immutable(ObjectStore&, const ObjectId& root_id);
 
         Tree readdir(PathRange path) const;
 
@@ -39,7 +41,7 @@ public:
         }
 
     private:
-        const fs::path& _objdir;
+        ObjectStore& _objects;
         const ObjectId& _root_id;
     };
 };

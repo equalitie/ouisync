@@ -302,7 +302,7 @@ Snapshot::~Snapshot()
 std::ostream& ouisync::operator<<(std::ostream& os, const Snapshot& s)
 {
     os << "Snapshot: " << s._commit << "\n";
-    os << BranchIo::Immutable(s._objdir, s._commit.root_id);
+    os << BranchIo::Immutable(const_cast<ObjectStore&>(*s._objects), s._commit.root_id);
     if (s._nodes.empty()) {
         os << "EMPTY!!!\n";
     }
