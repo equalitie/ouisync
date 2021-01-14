@@ -11,6 +11,7 @@
 #include "commit.h"
 #include "branch_io.h"
 #include "options.h"
+#include "object_store.h"
 
 #include <boost/filesystem/path.hpp>
 #include <boost/optional.hpp>
@@ -28,10 +29,10 @@ public:
 
 public:
     static
-    LocalBranch create(const fs::path& path, UserId user_id, Options::LocalBranch);
+    LocalBranch create(const fs::path& path, UserId user_id, ObjectStore&, Options::LocalBranch);
 
     static
-    LocalBranch load(const fs::path& file_path, UserId user_id, Options::LocalBranch);
+    LocalBranch load(const fs::path& file_path, UserId user_id, ObjectStore&, Options::LocalBranch);
 
     const ObjectId& root_id() const { return _commit.root_id; }
 
@@ -79,8 +80,8 @@ public:
 private:
     friend class BranchIo;
 
-    LocalBranch(const fs::path& file_path, const UserId&, Options::LocalBranch);
-    LocalBranch(const fs::path& file_path, const UserId&, Commit, Options::LocalBranch);
+    LocalBranch(const fs::path& file_path, const UserId&, ObjectStore&, Options::LocalBranch);
+    LocalBranch(const fs::path& file_path, const UserId&, Commit, ObjectStore&, Options::LocalBranch);
 
     void store_self() const;
 
@@ -89,6 +90,7 @@ private:
 private:
     fs::path _file_path;
     Options::LocalBranch _options;
+    ObjectStore& _objects;
     UserId _user_id;
     Commit _commit;
 };

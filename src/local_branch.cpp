@@ -25,7 +25,7 @@ using object::Blob;
 using object::Tree;
 
 /* static */
-LocalBranch LocalBranch::create(const fs::path& path, UserId user_id, Options::LocalBranch options)
+LocalBranch LocalBranch::create(const fs::path& path, UserId user_id, ObjectStore& objects, Options::LocalBranch options)
 {
     ObjectId root_id;
     VersionVector clock;
@@ -39,16 +39,16 @@ LocalBranch LocalBranch::create(const fs::path& path, UserId user_id, Options::L
     root_id = object::io::store(options.objectdir, root_obj);
     refcount::increment_recursive(options.objectdir, root_id);
 
-    LocalBranch branch(path, user_id, Commit{move(clock), root_id}, move(options));
+    LocalBranch branch(path, user_id, Commit{move(clock), root_id}, objects, move(options));
     branch.store_self();
 
     return branch;
 }
 
 /* static */
-LocalBranch LocalBranch::load(const fs::path& file_path, UserId user_id, Options::LocalBranch options)
+LocalBranch LocalBranch::load(const fs::path& file_path, UserId user_id, ObjectStore& objects, Options::LocalBranch options)
 {
-    LocalBranch branch(file_path, user_id, std::move(options));
+    LocalBranch branch(file_path, user_id, objects, std::move(options));
     archive::load(file_path, branch);
     return branch;
 }
@@ -276,17 +276,19 @@ void LocalBranch::store_self() const {
 //--------------------------------------------------------------------
 
 LocalBranch::LocalBranch(const fs::path& file_path, const UserId& user_id,
-        Commit commit, Options::LocalBranch options) :
+        Commit commit, ObjectStore& objects, Options::LocalBranch options) :
     _file_path(file_path),
     _options(move(options)),
+    _objects(objects),
     _user_id(user_id),
     _commit(move(commit))
 {}
 
 LocalBranch::LocalBranch(const fs::path& file_path,
-        const UserId& user_id, Options::LocalBranch options) :
+        const UserId& user_id, ObjectStore& objects, Options::LocalBranch options) :
     _file_path(file_path),
     _options(move(options)),
+    _objects(objects),
     _user_id(user_id)
 {
 }

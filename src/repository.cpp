@@ -49,10 +49,10 @@ Repository::Repository(executor_type ex, Options options) :
     if (fs::exists(local_branch_path)) {
         fs::path path = _options.branchdir / _user_id.to_string();
         _branches.insert(make_pair(_user_id,
-                    LocalBranch::load(path, _user_id, _options)));
+                    LocalBranch::load(path, _user_id, _objects, _options)));
     } else {
         _branches.insert(make_pair(_user_id,
-                    LocalBranch::create(local_branch_path, _user_id, _options)));
+                    LocalBranch::create(local_branch_path, _user_id, _objects, _options)));
     }
 
     std::cout << "User ID: " << _user_id << "\n";

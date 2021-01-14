@@ -42,7 +42,7 @@ RemoteBranch::RemoteBranch(fs::path filepath, ObjectStore& objects, Options::Rem
 
 net::awaitable<ObjectId> RemoteBranch::insert_blob(const Blob& blob)
 {
-    auto id = object::io::store(_options.objectdir, blob);
+    auto id = _objects.store(blob);
     if (!_snapshot) _snapshot = make_unique<Snapshot>(Snapshot::create(_commit, _options));
     _snapshot->insert_object(id, {});
     store_self();
@@ -51,7 +51,7 @@ net::awaitable<ObjectId> RemoteBranch::insert_blob(const Blob& blob)
 
 net::awaitable<ObjectId> RemoteBranch::insert_tree(const Tree& tree)
 {
-    auto id = object::io::store(_options.objectdir, tree);
+    auto id = _objects.store(tree);
     if (!_snapshot) _snapshot = make_unique<Snapshot>(Snapshot::create(_commit, _options));
     _snapshot->insert_object(id, tree.children());
     store_self();

@@ -19,6 +19,7 @@
 namespace ouisync {
 
 class Snapshot;
+class ObjectStore;
 
 class RemoteBranch {
 private:
