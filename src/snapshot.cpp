@@ -5,7 +5,7 @@
 #include "refcount.h"
 #include "archive.h"
 #include "random.h"
-#include "branch_io.h"
+#include "branch_view.h"
 #include "object/tree.h"
 #include "object/blob.h"
 #include "object/io.h"
@@ -303,7 +303,7 @@ Snapshot::~Snapshot()
 std::ostream& ouisync::operator<<(std::ostream& os, const Snapshot& s)
 {
     os << "Snapshot: " << s._commit << "\n";
-    os << BranchIo::Immutable(const_cast<ObjectStore&>(*s._objects), s._commit.root_id);
+    os << BranchView(const_cast<ObjectStore&>(*s._objects), s._commit.root_id);
     if (s._nodes.empty()) {
         os << "EMPTY!!!\n";
     }

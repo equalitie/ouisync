@@ -1,5 +1,4 @@
 #include "remote_branch.h"
-#include "branch_io.h"
 #include "branch_type.h"
 #include "object/io.h"
 #include "refcount.h"

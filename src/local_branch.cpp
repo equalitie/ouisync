@@ -3,7 +3,7 @@
 #include "variant.h"
 #include "error.h"
 #include "path_range.h"
-#include "branch_io.h"
+#include "branch_view.h"
 #include "object/tree.h"
 #include "object/tagged.h"
 #include "object/blob.h"
@@ -317,7 +317,7 @@ bool LocalBranch::introduce_commit(const Commit& commit)
 
 ObjectId LocalBranch::id_of(PathRange path) const
 {
-    return immutable_io().id_of(path);
+    return branch_view().id_of(path);
 }
 
 //--------------------------------------------------------------------
@@ -325,6 +325,6 @@ ObjectId LocalBranch::id_of(PathRange path) const
 std::ostream& ouisync::operator<<(std::ostream& os, const LocalBranch& branch)
 {
     os  << "LocalBranch:\n";
-    branch.immutable_io().show(os);
+    branch.branch_view().show(os);
     return os;
 }

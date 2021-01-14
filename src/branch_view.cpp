@@ -1,4 +1,4 @@
-#include "branch_io.h"
+#include "branch_view.h"
 #include "error.h"
 #include "refcount.h"
 #include "object_store.h"
@@ -38,14 +38,14 @@ PathRange _parent(PathRange path) {
 
 //--------------------------------------------------------------------
 
-BranchIo::Immutable::Immutable(ObjectStore& objects, const ObjectId& root_id) :
+BranchView::BranchView(ObjectStore& objects, const ObjectId& root_id) :
     _objects(objects),
     _root_id(root_id)
 {}
 
 //--------------------------------------------------------------------
 
-Tree BranchIo::Immutable::readdir(PathRange path) const
+Tree BranchView::readdir(PathRange path) const
 {
     Opt<Tree> retval;
     _query_dir(_objects, _root_id, path, [&] (const Tree& tree) { retval = tree; });
@@ -55,7 +55,7 @@ Tree BranchIo::Immutable::readdir(PathRange path) const
 
 //--------------------------------------------------------------------
 
-FileSystemAttrib BranchIo::Immutable::get_attr(PathRange path) const
+FileSystemAttrib BranchView::get_attr(PathRange path) const
 {
     if (path.empty()) return FileSystemDirAttrib{};
 
@@ -78,7 +78,7 @@ FileSystemAttrib BranchIo::Immutable::get_attr(PathRange path) const
 
 //--------------------------------------------------------------------
 
-size_t BranchIo::Immutable::read(PathRange path, const char* buf, size_t size, size_t offset) const
+size_t BranchView::read(PathRange path, const char* buf, size_t size, size_t offset) const
 {
     if (path.empty()) throw_error(sys::errc::is_a_directory);
 
@@ -105,7 +105,7 @@ size_t BranchIo::Immutable::read(PathRange path, const char* buf, size_t size, s
 
 //--------------------------------------------------------------------
 
-Opt<Blob> BranchIo::Immutable::maybe_load(PathRange path) const
+Opt<Blob> BranchView::maybe_load(PathRange path) const
 {
     if (path.empty()) throw_error(sys::errc::is_a_directory);
 
@@ -123,7 +123,7 @@ Opt<Blob> BranchIo::Immutable::maybe_load(PathRange path) const
 
 //--------------------------------------------------------------------
 
-ObjectId BranchIo::Immutable::id_of(PathRange path) const
+ObjectId BranchView::id_of(PathRange path) const
 {
     if (path.empty()) return _root_id;
 
@@ -163,14 +163,14 @@ void _show(std::ostream& os, ObjectStore& objects, ObjectId id, std::string pad 
             });
 }
 
-void BranchIo::Immutable::show(std::ostream& os) const
+void BranchView::show(std::ostream& os) const
 {
     return _show(os, _objects, _root_id, "");
 }
 
 //--------------------------------------------------------------------
 
-bool BranchIo::Immutable::object_exists(const ObjectId& id) const
+bool BranchView::object_exists(const ObjectId& id) const
 {
     return _objects.exists(id);
 }

@@ -122,8 +122,8 @@ struct Branch {
     void store(PathRange path, const Blob& blob) { return branch.store(path, blob); }
     void store(fs::path path, const Blob& blob) { return branch.store(path, blob); }
 
-    BranchIo::Immutable immutable_io() const {
-        return branch.immutable_io();
+    BranchView branch_view() const {
+        return branch.branch_view();
     }
 
     ObjectId id_of(PathRange path) const { return branch.id_of(path); }
@@ -188,7 +188,7 @@ BOOST_AUTO_TEST_CASE(tree_branch_store_and_load) {
 
     BOOST_REQUIRE_EQUAL(count_objects(branch.object_directory()), 2 /* root + bar */);
 
-    auto od2 = branch.immutable_io().maybe_load(Path("bar"));
+    auto od2 = branch.branch_view().maybe_load(Path("bar"));
 
     BOOST_REQUIRE(od2);
     BOOST_REQUIRE_EQUAL(d1, *od2);
@@ -210,7 +210,7 @@ BOOST_AUTO_TEST_CASE(tree_branch_store_and_load_in_subdir) {
 
     BOOST_REQUIRE_EQUAL(count_objects(branch.object_directory()), 3 /* root + foo + bar */);
 
-    auto od2 = branch.immutable_io().maybe_load(Path("foo/bar"));
+    auto od2 = branch.branch_view().maybe_load(Path("foo/bar"));
 
     BOOST_REQUIRE(od2);
     BOOST_REQUIRE_EQUAL(d1, *od2);

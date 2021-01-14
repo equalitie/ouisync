@@ -9,7 +9,7 @@
 #include "shortcuts.h"
 #include "file_system_attrib.h"
 #include "commit.h"
-#include "branch_io.h"
+#include "branch_view.h"
 #include "options.h"
 #include "object_store.h"
 
@@ -36,8 +36,8 @@ public:
 
     const ObjectId& root_id() const { return _commit.root_id; }
 
-    BranchIo::Immutable immutable_io() const {
-        return BranchIo::Immutable(_objects, _commit.root_id);
+    BranchView branch_view() const {
+        return BranchView(_objects, _commit.root_id);
     }
 
     // XXX: Deprecated, use `write` instead. I believe these are currently
@@ -78,7 +78,7 @@ public:
     void sanity_check() const;
 
 private:
-    friend class BranchIo;
+    friend class BranchView;
 
     LocalBranch(const fs::path& file_path, const UserId&, ObjectStore&, Options::LocalBranch);
     LocalBranch(const fs::path& file_path, const UserId&, Commit, ObjectStore&, Options::LocalBranch);

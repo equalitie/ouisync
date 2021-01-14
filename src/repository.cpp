@@ -1,6 +1,6 @@
 #include "repository.h"
 #include "snapshot.h"
-#include "branch_io.h"
+#include "branch_view.h"
 #include "branch_type.h"
 #include "random.h"
 #include "hex.h"
@@ -68,8 +68,8 @@ Branch& Repository::find_branch(PathRange path)
     return i->second;
 }
 
-static BranchIo::Immutable _immutable_io(const Branch& b) {
-    return apply(b, [&] (auto& b) { return b.immutable_io(); });
+static BranchView _branch_view(const Branch& b) {
+    return apply(b, [&] (auto& b) { return b.branch_view(); });
 }
 
 static Snapshot _create_snapshot(const Branch& b, const fs::path& snapshotdir) {
@@ -106,7 +106,7 @@ net::awaitable<Repository::Attrib> Repository::get_attr(PathRange path)
     auto& branch = find_branch(path);
 
     path.advance_begin(1);
-    auto ret = _immutable_io(branch).get_attr(path);
+    auto ret = _branch_view(branch).get_attr(path);
     co_return ret;
 }
 
@@ -129,7 +129,7 @@ net::awaitable<vector<string>> Repository::readdir(PathRange path)
         auto& branch = find_branch(path);
 
         path.advance_begin(1);
-        auto dir = _immutable_io(branch).readdir(path);
+        auto dir = _branch_view(branch).readdir(path);
 
         for (auto& [name, hash] : dir) {
             nodes.push_back(name);
@@ -157,7 +157,7 @@ net::awaitable<size_t> Repository::read(PathRange path, char* buf, size_t size, 
         throw_error(sys::errc::is_a_directory);
     }
 
-    co_return _immutable_io(branch).read(path, buf, size, offset);
+    co_return _branch_view(branch).read(path, buf, size, offset);
 }
 
 net::awaitable<size_t> Repository::write(PathRange path, const char* buf, size_t size, off_t offset)

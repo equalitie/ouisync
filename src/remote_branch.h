@@ -8,7 +8,7 @@
 #include "path_range.h"
 #include "file_system_attrib.h"
 #include "commit.h"
-#include "branch_io.h"
+#include "branch_view.h"
 #include "options.h"
 #include "object_store.h"
 
@@ -40,8 +40,8 @@ public:
     const VersionVector& stamp() const { return _commit.stamp; }
     const ObjectId& root_id() const { return _commit.root_id; }
 
-    BranchIo::Immutable immutable_io() const {
-        return BranchIo::Immutable(_objects, root_id());
+    BranchView branch_view() const {
+        return BranchView(_objects, root_id());
     }
 
     Snapshot create_snapshot() const;

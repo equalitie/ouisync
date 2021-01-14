@@ -7,7 +7,6 @@
 #include "user_id.h"
 #include "local_branch.h"
 #include "remote_branch.h"
-#include "branch_io.h"
 #include "commit.h"
 #include "wait.h"
 #include "snapshot.h"
