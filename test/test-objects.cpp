@@ -103,11 +103,13 @@ BOOST_AUTO_TEST_CASE(read_tag) {
 }
 
 struct Branch {
+    fs::path objdir;
     ObjectStore objects;
     LocalBranch branch;
 
     Branch(fs::path branchdir, UserId user_id, Options::LocalBranch opts) :
-        objects(opts.objectdir),
+        objdir(opts.objectdir),
+        objects(objdir),
         branch(LocalBranch::create(branchdir, user_id, objects, opts))
     {}
 
@@ -116,7 +118,7 @@ struct Branch {
         return objects.rc(id).recursive_count();
     };
 
-    auto object_directory() { return branch.object_directory(); };
+    auto object_directory() { return objdir; };
 
     auto root_id() const { return branch.root_id(); }
 

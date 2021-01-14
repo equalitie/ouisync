@@ -52,10 +52,6 @@ public:
 
     size_t truncate(PathRange, size_t);
 
-    const fs::path& object_directory() const {
-        return _options.objectdir;
-    }
-
     void mkdir(PathRange);
 
     const VersionVector& stamp() const { return _commit.stamp; }
