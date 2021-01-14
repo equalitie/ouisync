@@ -58,6 +58,8 @@ public:
 
     void introduce_commit_to_local_branch(const Commit&);
 
+    ObjectStore& object_store() { return _objects; }
+
 private:
     Branch& find_branch(PathRange);
 
