@@ -1,6 +1,6 @@
 #include "object/tree.h"
 #include "object/blob.h"
-#include "object/io.h"
+#include "object_store.h"
 #include "shortcuts.h"
 #include "variant.h"
 #include "hex.h"
@@ -51,7 +51,7 @@ int main(int argc, char** argv)
     }
 
     try {
-        auto obj = object::io::load<ObjectId, Tree, Blob>(path);
+        auto obj = ObjectStore::load<ObjectId, Tree, Blob>(path);
 
         apply(obj,
                 [](ObjectId id) { cout << "ObjectId " << id << "\n"; },

@@ -51,7 +51,13 @@ size_t count_objects(const fs::path& path) {
 }
 
 fs::path choose_test_dir() {
-    return fs::unique_path("/tmp/ouisync/test-objects-%%%%-%%%%-%%%%-%%%%");
+    auto path = fs::unique_path("/tmp/ouisync/test-objects-%%%%-%%%%-%%%%-%%%%");
+    fs::create_directory(path);
+    return path;
+}
+
+ObjectStore create_object_store() {
+    return ObjectStore(choose_test_dir());
 }
 
 BOOST_AUTO_TEST_CASE(blob_id_calculation) {
@@ -63,36 +69,35 @@ BOOST_AUTO_TEST_CASE(blob_id_calculation) {
 }
 
 BOOST_AUTO_TEST_CASE(blob_is_same) {
-    fs::path testdir = choose_test_dir();
+    auto objstore = create_object_store();
 
     Random random;
     object::Blob b1(random.vector(1000));
-    //b1.store(testdir);
-    object::io::store(testdir, b1);
-    auto b2 = object::io::load<object::Blob>(testdir, b1.calculate_id());
+    objstore.store(b1);
+    auto b2 = objstore.load<object::Blob>(b1.calculate_id());
     BOOST_REQUIRE_EQUAL(b1.calculate_id(), b2.calculate_id());
 }
 
 BOOST_AUTO_TEST_CASE(tree_is_same) {
-    fs::path testdir = choose_test_dir();
+    auto objstore = create_object_store();
 
     Random random;
     object::Tree t1;
     t1[random.string(2)].set_id(random.object_id());
     t1[random.string(10)].set_id(random.object_id());
-    object::io::store(testdir, t1);
-    auto t2 = object::io::load<object::Tree>(testdir, t1.calculate_id());
+    objstore.store(t1);
+    auto t2 = objstore.load<object::Tree>(t1.calculate_id());
     BOOST_REQUIRE_EQUAL(t1.calculate_id(), t2.calculate_id());
 }
 
 BOOST_AUTO_TEST_CASE(read_tag) {
-    fs::path testdir = choose_test_dir();
+    auto objstore = create_object_store();
 
     Random random;
     Blob blob = random.vector(256);
-    auto id = object::io::store(testdir, blob);
+    auto id = objstore.store(blob);
     try {
-        object::io::load<Blob::Nothing>(testdir, id);
+        objstore.load<Blob::Nothing>(id);
     } catch (...) {
         BOOST_REQUIRE(false);
     }
@@ -303,19 +308,19 @@ BOOST_AUTO_TEST_CASE(tree_remove) {
         Branch branch = create_branch(testdir/"1", "user_id");
         branch.store("data", data);
 
-        Tree root = object::io::load<Tree>(branch.object_directory(), branch.root_id());
+        Tree root = branch.objects.load<Tree>(branch.root_id());
 
         BOOST_REQUIRE_EQUAL(root.size(), 1);
         BOOST_REQUIRE_EQUAL(root.begin()->first, "data");
         BOOST_REQUIRE_EQUAL(count_objects(branch.object_directory()), 2);
 
-        Blob blob = object::io::load<Blob>(branch.object_directory(), root.begin()->second);
+        Blob blob = branch.objects.load<Blob>(root.begin()->second);
         BOOST_REQUIRE_EQUAL(data, blob);
 
         bool removed = branch.remove("data");
         BOOST_REQUIRE(removed);
 
-        root = object::io::load<Tree>(branch.object_directory(), branch.root_id());
+        root = branch.objects.load<Tree>(branch.root_id());
 
         BOOST_REQUIRE_EQUAL(root.size(), 0);
         BOOST_REQUIRE_EQUAL(count_objects(branch.object_directory()), 1);

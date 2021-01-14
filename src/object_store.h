@@ -24,14 +24,15 @@ public:
     template<class O>
     std::pair<ObjectId, bool> store_(const O& object);
 
-    template<class O> O load(const fs::path& path);
     template<class O> O load(const ObjectId& id);
     
     template<class O0, class O1, class ... Os> // Two or more
     variant<O0, O1, Os...> load(const ObjectId& id);
     
+    template<class O> static O load(const fs::path& path);
+
     template<class O0, class O1, class ... Os> // Two or more
-    variant<O0, O1, Os...> load(const fs::path& path);
+    variant<O0, O1, Os...> static load(const fs::path& path);
 
     template<class O>
     Opt<O> maybe_load(const ObjectId& id);
