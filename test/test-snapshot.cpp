@@ -29,34 +29,39 @@ using object::Blob;
 MainTestDir main_test_dir("snapshot");
 Random rnd;
 
-Options::Snapshot create_options(string testname)
+struct Directories {
+    fs::path objectdir;
+    fs::path snapshotdir;
+};
+
+Directories create_directories(string testname)
 {
     auto dir = main_test_dir.subdir(testname);
 
-    Options::Snapshot opts {
+    Directories dirs {
         .objectdir   = dir / "objects",
         .snapshotdir = dir / "snapshots"
     };
 
-    fs::create_directories(opts.objectdir);
-    fs::create_directories(opts.snapshotdir);
+    fs::create_directories(dirs.objectdir);
+    fs::create_directories(dirs.snapshotdir);
 
-    return opts;
+    return dirs;
 }
 
 struct Environment {
     Environment(string testname)
-        : options(create_options(testname))
-        , objstore(options.objectdir)
+        : dirs(create_directories(testname))
+        , objstore(dirs.objectdir)
     {}
 
     template<class Obj> ObjectId store(const Obj& obj) {
-        return object::io::store(options.objectdir, obj);
+        return objstore.store(obj);
     }
 
     Snapshot create_snapshot(ObjectId root)
     {
-        return Snapshot::create({{}, root}, objstore, options);
+        return Snapshot::create({{}, root}, objstore, {dirs.snapshotdir});
     }
 
     static
@@ -72,11 +77,11 @@ struct Environment {
     }
 
     auto object_dir_files() {
-        return files_in(options.objectdir);
+        return files_in(dirs.objectdir);
     }
 
     auto object_files() {
-        return files_in(options.objectdir) |
+        return files_in(dirs.objectdir) |
             boost::adaptors::filtered([](auto p) { return !is_refcount(p.path()); });
     }
 
@@ -84,7 +89,7 @@ struct Environment {
         return objstore.rc(id);
     }
 
-    Options::Snapshot options;
+    Directories dirs;
     ObjectStore objstore;
 };
 

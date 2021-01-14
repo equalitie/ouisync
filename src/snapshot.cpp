@@ -55,10 +55,9 @@ ObjectId Snapshot::calculate_id() const
     return hash.close();
 }
 
-Snapshot::Snapshot(ObjectStore& objects, fs::path objdir, fs::path snapshotdir, Commit commit) :
+Snapshot::Snapshot(ObjectStore& objects, fs::path snapshotdir, Commit commit) :
     _name_tag(_generate_random_name_tag()),
     _path(_path_from_tag(_name_tag, snapshotdir)),
-    _objdir(std::move(objdir)),
     _objects(&objects),
     _snapshotdir(std::move(snapshotdir)),
     _commit(move(commit))
@@ -69,7 +68,6 @@ Snapshot::Snapshot(ObjectStore& objects, fs::path objdir, fs::path snapshotdir, 
 Snapshot::Snapshot(Snapshot&& other) :
     _name_tag(other._name_tag),
     _path(std::move(other._path)),
-    _objdir(std::move(other._objdir)),
     _objects(other._objects),
     _snapshotdir(std::move(other._snapshotdir)),
     _commit(move(other._commit)),
@@ -83,7 +81,6 @@ Snapshot& Snapshot::operator=(Snapshot&& other)
 
     _name_tag = other._name_tag;
     _path     = std::move(other._path);
-    _objdir   = std::move(other._objdir);
     _objects  = other._objects;
     _commit   = std::move(other._commit);
     _nodes  = move(other._nodes);
@@ -94,8 +91,7 @@ Snapshot& Snapshot::operator=(Snapshot&& other)
 /* static */
 Snapshot Snapshot::create(Commit commit, ObjectStore& objects, Options::Snapshot options)
 {
-    Snapshot s(objects, std::move(options.objectdir),
-            move(options.snapshotdir), std::move(commit));
+    Snapshot s(objects, move(options.snapshotdir), std::move(commit));
 
     s.store();
     return s;
@@ -144,7 +140,7 @@ bool Snapshot::check_complete_and_notify_parents(const ObjectId& node_id)
 
 std::set<ObjectId> Snapshot::children_of(const ObjectId& id) const
 {
-    auto obj = object::io::load<Tree, Blob::Nothing>(_objdir, id);
+    auto obj = _objects->load<Tree, Blob::Nothing>(id);
     if (auto tree = boost::get<Tree>(&obj)) {
         return tree->children();
     }
@@ -259,7 +255,7 @@ void Snapshot::forget() noexcept
 
 Snapshot Snapshot::clone() const
 {
-    Snapshot c(*_objects, _objdir, _snapshotdir, _commit);
+    Snapshot c(*_objects, _snapshotdir, _commit);
 
     for (auto& [id, node] : _nodes) {
         c._nodes.insert({id, node});

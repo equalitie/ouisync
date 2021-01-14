@@ -32,7 +32,6 @@ public:
     Opt<net::ip::tcp::endpoint> connect_endpoint;
 
     struct Snapshot {
-        fs::path objectdir;
         fs::path snapshotdir;
     };
 
@@ -41,7 +40,7 @@ public:
         fs::path snapshotdir;
 
         operator Snapshot() const {
-            return { objectdir, snapshotdir };
+            return { snapshotdir };
         }
     };
 
@@ -54,7 +53,7 @@ public:
         fs::path snapshotdir;
 
         operator Snapshot() const {
-            return { objectdir, snapshotdir };
+            return { snapshotdir };
         }
     };
 

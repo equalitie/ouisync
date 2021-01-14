@@ -49,7 +49,7 @@ public:
     NameTag name_tag() const { return _name_tag; }
 
 private:
-    Snapshot(ObjectStore&, fs::path objdir, fs::path snapshotdir, Commit);
+    Snapshot(ObjectStore&, fs::path snapshotdir, Commit);
 
     void store();
 
@@ -94,7 +94,6 @@ private:
 private:
     NameTag _name_tag;
     fs::path _path;
-    fs::path _objdir;
     ObjectStore* _objects = nullptr;
     fs::path _snapshotdir;
     Commit _commit;
