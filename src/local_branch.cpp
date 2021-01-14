@@ -7,7 +7,6 @@
 #include "object/tree.h"
 #include "object/tagged.h"
 #include "object/blob.h"
-#include "object/io.h"
 #include "refcount.h"
 #include "archive.h"
 #include "snapshot.h"

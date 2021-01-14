@@ -3,7 +3,6 @@
 
 #include "object/blob.h"
 #include "object/tree.h"
-#include "object/io.h"
 #include "refcount.h"
 #include "local_branch.h"
 #include "path_range.h"

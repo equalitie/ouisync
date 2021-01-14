@@ -8,7 +8,6 @@
 #include "branch_view.h"
 #include "object/tree.h"
 #include "object/blob.h"
-#include "object/io.h"
 #include "ouisync_assert.h"
 #include "object_store.h"
 #include "ostream/set.h"

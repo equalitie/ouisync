@@ -2,7 +2,6 @@
 #include "error.h"
 #include "refcount.h"
 #include "object_store.h"
-#include "object/io.h"
 #include "object/tagged.h"
 
 #include <boost/filesystem.hpp>

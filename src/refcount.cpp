@@ -1,7 +1,6 @@
 #include "refcount.h"
 #include "object/tree.h"
 #include "object/blob.h"
-#include "object/io.h"
 #include "variant.h"
 #include "ouisync_assert.h"
 #include "object_store.h"
