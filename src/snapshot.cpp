@@ -10,6 +10,7 @@
 #include "object/blob.h"
 #include "object/io.h"
 #include "ouisync_assert.h"
+#include "object_store.h"
 #include "ostream/set.h"
 #include "ostream/map.h"
 
@@ -152,22 +153,22 @@ std::set<ObjectId> Snapshot::children_of(const ObjectId& id) const
 
 void Snapshot::increment_recursive_count(const ObjectId& id) const
 {
-    Rc::load(_objdir, id).increment_recursive_count();
+    _objects->rc(id).increment_recursive_count();
 }
 
 void Snapshot::increment_direct_count(const ObjectId& id) const
 {
-    Rc::load(_objdir, id).increment_direct_count();
+    _objects->rc(id).increment_direct_count();
 }
 
 void Snapshot::decrement_recursive_count(const ObjectId& id) const
 {
-    Rc::load(_objdir, id).decrement_recursive_count();
+    _objects->rc(id).decrement_recursive_count();
 }
 
 void Snapshot::decrement_direct_count(const ObjectId& id) const
 {
-    Rc::load(_objdir, id).decrement_direct_count();
+    _objects->rc(id).decrement_direct_count();
 }
 
 bool Snapshot::check_all_complete(const set<ObjectId>& nodes)
@@ -211,7 +212,7 @@ void Snapshot::insert_object(const ObjectId& node_id, set<ObjectId> children)
     size_t existing_children = 0;
 
     for (auto& child_id : children) {
-        if (!object::io::exists(_objdir, child_id)) continue;
+        if (!_objects->exists(child_id)) continue;
         existing_children++;
         insert_object(child_id, children_of(child_id));
     }
@@ -236,12 +237,12 @@ void Snapshot::forget() noexcept
         for (auto& [id, node] : nodes) {
             switch (node.type) {
                 case NodeType::Complete: {
-                    refcount::deep_remove(_objdir, id);
+                    _objects->rc(id).decrement_recursive_count();
                 }
                 break;
 
                 case NodeType::Incomplete: {
-                    refcount::flat_remove(_objdir, id);
+                    _objects->rc(id).decrement_direct_count();
                 }
                 break;
 

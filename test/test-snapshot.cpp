@@ -80,8 +80,8 @@ struct Environment {
             boost::adaptors::filtered([](auto p) { return !is_refcount(p.path()); });
     }
 
-    Rc load_rc(const ObjectId& id) const {
-        return Rc::load(options.objectdir, id);
+    Rc load_rc(const ObjectId& id) {
+        return objstore.rc(id);
     }
 
     Options::Snapshot options;

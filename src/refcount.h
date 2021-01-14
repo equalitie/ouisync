@@ -8,6 +8,8 @@
 
 namespace ouisync {
 
+class ObjectStore;
+
 /*
  * We need two counters to keep track of referenced objects: one for when an
  * object is also resposible for preserving all its children, and one for
@@ -38,7 +40,6 @@ class Rc {
     using Number = uint32_t;
 
   public:
-    static Rc load(const fs::path& objdir, const ObjectId&);
 
     Number recursive_count() { return _recursive_count; }
     Number direct_count()    { return _direct_count;    }
@@ -49,6 +50,8 @@ class Rc {
     void decrement_recursive_count();
     void decrement_direct_count();
 
+    void decrement_recursive_count_but_dont_remove();
+
     bool both_are_zero() const {
         return _recursive_count == 0 && _direct_count == 0;
     }
@@ -58,7 +61,14 @@ class Rc {
     }
 
   private:
-    Rc(fs::path path, std::unique_ptr<fs::fstream> f, Number k, Number l) :
+    friend class ObjectStore;
+
+    static Rc load(ObjectStore&, const ObjectId&);
+
+    Rc(ObjectStore& objects, const ObjectId& obj_id, fs::path path,
+            std::unique_ptr<fs::fstream> f, Number k, Number l) :
+        _objects(&objects),
+        _obj_id(obj_id),
         _path(std::move(path)),
         _file(std::move(f)),
         _recursive_count(k),
@@ -68,23 +78,13 @@ class Rc {
     void commit();
 
   private:
+    ObjectStore* _objects;
+    ObjectId _obj_id;
     fs::path _path;
     // fs::fstream doesn't have a move constructor defined in Boost 1.74
     std::unique_ptr<fs::fstream> _file;
     Number _recursive_count;
     Number _direct_count;
 };
-
-} // namespace
-
-namespace ouisync::refcount {
-
-using Number = uint32_t;
-
-Number read_recursive(const fs::path& objdir, const ObjectId&);
-Number increment_recursive(const fs::path& objdir, const ObjectId&);
-
-void flat_remove(const fs::path& objdir, const ObjectId& id);
-void deep_remove(const fs::path& objdir, const ObjectId& id);
 
 } // namespace

@@ -109,7 +109,7 @@ struct Branch {
 
     size_t refcount(const fs::path path) {
         auto id = branch.id_of(path_range(path));
-        return ouisync::refcount::read_recursive(branch.object_directory(), id);
+        return objects.rc(id).recursive_count();
     };
 
     auto object_directory() { return branch.object_directory(); };
@@ -447,15 +447,10 @@ BOOST_AUTO_TEST_CASE(tree_remove) {
         branch1.store(Path("A/C/D"), data);
         branch2.store(Path("B/C/D"), data);
 
-        auto refcount = [&] (auto& branch, const fs::path path) {
-            auto id = branch.id_of(Path(path));
-            return ouisync::refcount::read_recursive(objdir, id);
-        };
-
-        BOOST_REQUIRE_EQUAL(refcount(branch1, "A"), 2);
-        BOOST_REQUIRE_EQUAL(refcount(branch2, "B"), 2);
-        BOOST_REQUIRE_EQUAL(refcount(branch1, "A/C"), 1);
-        BOOST_REQUIRE_EQUAL(refcount(branch1, "A/C/D"), 1);
+        BOOST_REQUIRE_EQUAL(branch1.refcount("A"), 2);
+        BOOST_REQUIRE_EQUAL(branch2.refcount("B"), 2);
+        BOOST_REQUIRE_EQUAL(branch1.refcount("A/C"), 1);
+        BOOST_REQUIRE_EQUAL(branch1.refcount("A/C/D"), 1);
 
         BOOST_REQUIRE_EQUAL(count_objects(objdir), 5);
 
