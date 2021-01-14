@@ -47,6 +47,7 @@ Options::Snapshot create_options(string testname)
 struct Environment {
     Environment(string testname)
         : options(create_options(testname))
+        , objstore(options.objectdir)
     {}
 
     template<class Obj> ObjectId store(const Obj& obj) {
@@ -55,7 +56,7 @@ struct Environment {
 
     Snapshot create_snapshot(ObjectId root)
     {
-        return Snapshot::create({{}, root}, options);
+        return Snapshot::create({{}, root}, objstore, options);
     }
 
     static
@@ -84,6 +85,7 @@ struct Environment {
     }
 
     Options::Snapshot options;
+    ObjectStore objstore;
 };
 
 BOOST_AUTO_TEST_CASE(simple_forget) {
