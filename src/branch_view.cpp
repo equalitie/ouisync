@@ -49,7 +49,7 @@ Tree BranchView::readdir(PathRange path) const
     Opt<Tree> retval;
     _query_dir(_objects, _root_id, path, [&] (const Tree& tree) { retval = tree; });
     assert(retval);
-    return move(*retval);
+    return std::move(*retval);
 }
 
 //--------------------------------------------------------------------

@@ -14,99 +14,93 @@
 
 namespace ouisync::object {
 
-class Tree final : private std::map<std::string, ObjectId> {
+class Tree final {
 private:
-    using Parent = std::map<std::string, ObjectId>;
-
-    struct Erase { ObjectId id; };
-    struct Move { ObjectId from, to; };
-    struct Insert { ObjectId id; };
-
-    using Edit = variant<Erase, Move, Insert>;
+    using Impl = std::map<std::string, ObjectId>;
 
     template<bool is_mutable>
     class Handle {
-        using TreePtr = std::conditional_t<is_mutable, Tree*, const Tree*>;
-        using Iterator = std::conditional_t<is_mutable, Parent::iterator, Parent::const_iterator>;
+        using ImplPtr = std::conditional_t<is_mutable, Impl*, const Impl*>;
+        using Iterator = std::conditional_t<is_mutable, Impl::iterator, Impl::const_iterator>;
 
       public:
         Handle() = default;
         Handle(const Handle&) = default;
         Handle& operator=(const Handle&) = default;
 
-        Handle(Handle&& other) : tree(other.tree), i(other.i)
+        Handle(Handle&& other) : impl(other.impl), i(other.i)
         {
-            other.tree = nullptr;
-            other.i = Parent::iterator();
+            other.impl = nullptr;
+            other.i = Impl::iterator();
         }
 
         Handle& operator=(Handle&& other)
         {
-            tree = other.tree;
+            impl = other.impl;
             i = other.i;
-            other.tree = nullptr;
-            other.i = Parent::iterator();
+            other.impl = nullptr;
+            other.i = Impl::iterator();
             return *this;
         }
 
         ObjectId id() const {
-            assert(tree);
-            if (!tree) exit(1);
+            assert(impl);
+            if (!impl) exit(1);
             return i->second;
         }
 
-        operator bool() const { return tree != nullptr; }
+        operator bool() const { return impl != nullptr; }
 
         void set_id(const ObjectId& id) {
-            assert(tree);
-            if (!tree) exit(1);
+            assert(impl);
+            if (!impl) exit(1);
             if (id == i->second) return;
             i->second = id;
         }
 
       private:
         friend class Tree;
-        Handle(TreePtr tree, Iterator i)
-            : tree(tree), i(i) {}
+        Handle(ImplPtr impl, Iterator i)
+            : impl(impl), i(i) {}
 
       private:
-        TreePtr tree = nullptr;
+        ImplPtr impl = nullptr;
         Iterator i;
     };
 
 public:
-    auto begin() const { return Parent::begin(); }
-    auto end()   const { return Parent::end();   }
+    auto begin() const { return _impl.begin(); }
+    auto end()   const { return _impl.end();   }
 
-    using Parent::size;
+    size_t size() const { return _impl.size(); }
 
     using MutableHandle   = Handle<true>;
     using ImmutableHandle = Handle<false>;
 
     ImmutableHandle find(const std::string& k) const {
-        auto i = Parent::find(k);
-        if (i == Parent::end()) return {};
-        return {this, i};
+        auto i = _impl.find(k);
+        if (i == _impl.end()) return {};
+        return {&_impl, i};
     }
 
     MutableHandle find(const std::string& k) {
-        auto i = Parent::find(k);
-        if (i == Parent::end()) return {};
-        return {this, i};
+        auto i = _impl.find(k);
+        if (i == _impl.end()) return {};
+        return {&_impl, i};
     }
 
     void erase(const MutableHandle& h)
     {
-        assert(h.tree);
-        assert(h.tree == this);
-        if (h.tree != this) exit(1);
-        Parent::erase(h.i);
+        assert(h.impl);
+        assert(h.impl == &_impl);
+        if (h.impl != &_impl) exit(1);
+        _impl.erase(h.i);
     }
 
     std::pair<MutableHandle, bool>
     insert(std::pair<std::string, ObjectId> pair) {
-        auto [i,inserted] = Parent::insert(std::move(pair));
-        return {MutableHandle{this, i}, inserted};
+        auto [i,inserted] = _impl.insert(std::move(pair));
+        return {MutableHandle{&_impl, i}, inserted};
     }
 
     MutableHandle operator[](std::string key) {
@@ -115,7 +109,7 @@ public:
 
     std::set<ObjectId> children() const {
         std::set<ObjectId> ch;
-        for (auto& [_, id] : *this) { ch.insert(id); }
+        for (auto& [_, id] : _impl) { ch.insert(id); }
         return ch;
     }
 
@@ -133,12 +127,15 @@ public:
 
     template<class Archive>
     void serialize(Archive& ar, const unsigned int version) {
-        ar & static_cast<Parent&>(*this);
+        ar & _impl;
     }
 
     ObjectId calculate_id() const;
 
     friend std::ostream& operator<<(std::ostream&, const Tree&);
+
+private:
+    Impl _impl;
 };
 
 
