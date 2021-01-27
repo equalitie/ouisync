@@ -1,5 +1,6 @@
 #include "tree.h"
 #include "tagged.h"
+#include "../version_vector.h"
 
 #include <iostream>
 #include <boost/filesystem.hpp>
@@ -8,14 +9,13 @@ using namespace ouisync;
 using namespace ouisync::object;
 
 static void _hash(Sha256 hash, const Tree::VersionedIds& ids) {
-    for (auto& [id, vv] : ids) {
+    hash.update(uint32_t(ids.size()));
+    for (auto& [id, vvs] : ids) {
         hash.update(id);
-        hash.update(uint32_t(vv.size()));
-        assert("TODO" && 0);
-        //for (auto& [a,b] : vv) {
-        //    hash.update(a);
-        //    hash.update(b);
-        //}
+        hash.update(uint32_t(vvs.size()));
+        for (auto& vv : vvs) {
+            hash.update(vv);
+        }
     }
 }
 

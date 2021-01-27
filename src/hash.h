@@ -111,6 +111,13 @@ public:
         update(data.data(), N);
     }
 
+    template<class T>
+    inline
+    std::enable_if_t<!std::is_integral<T>::value, void> update(const T& t)
+    {
+        update_hash(t, *this);
+    }
+
     template<class N>
     inline
     std::enable_if_t<std::is_integral<N>::value, void> update(N n)

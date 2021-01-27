@@ -99,6 +99,16 @@ public:
     auto begin() const { return _vv.begin(); }
     auto end()   const { return _vv.end();   }
 
+    template<class Hash>
+    friend void update_hash(const VersionVector& vv, Hash& hash)
+    {
+        hash.update(uint32_t(vv.size()));
+        for (auto& [k, v] : vv._vv) {
+            hash.update(k);
+            hash.update(v);
+        }
+    }
+
 private:
     static
     const UserId& id_of(const Map::const_iterator& i)

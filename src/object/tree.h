@@ -12,6 +12,7 @@
 #include <boost/filesystem/path.hpp>
 #include <boost/serialization/map.hpp>
 #include <boost/serialization/array.hpp>
+#include <boost/range/adaptor/map.hpp>
 
 namespace ouisync::object {
 
@@ -133,6 +134,10 @@ public:
             }
         }
         return ch;
+    }
+
+    auto children_names() const {
+        return boost::adaptors::keys(_name_map);
     }
 
 public:

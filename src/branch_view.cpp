@@ -38,22 +38,27 @@ PathRange _parent(PathRange path) {
     return path;
 }
 
-set<ObjectId> cd_into(ObjectStore& objstore, const set<ObjectId>& from, const std::string& where)
-{
-    set<ObjectId> retval;
+struct MultiDir {
+    set<ObjectId> ids;
+    ObjectStore* objstore;
 
-    for (auto& from_id : from) {
-        const auto obj = objstore.load<Tree, Blob::Nothing>(from_id);
-        auto tree = boost::get<Tree>(&obj);
-        if (!tree) continue;
-        auto versions = tree->find(where);
-        for (auto& [id, clock] : versions) {
-            retval.insert(id);
+    MultiDir cd_into(const std::string& where)
+    {
+        MultiDir retval{{}, objstore};
+    
+        for (auto& from_id : ids) {
+            const auto obj = objstore->load<Tree, Blob::Nothing>(from_id);
+            auto tree = boost::get<Tree>(&obj);
+            if (!tree) continue;
+            auto versions = tree->find(where);
+            for (auto& [id, clock] : versions) {
+                retval.ids.insert(id);
+            }
         }
+    
+        return retval;
     }
-
-    return retval;
-}
+};
 
 //map<ObjectId, set<VersionVector>> file(ObjectStore& objstore, const set<ObjectId>& dirs, const std::string& name)
 //{
@@ -74,6 +79,20 @@ set<ObjectId> cd_into(ObjectStore& objstore, const set<ObjectId>& from, const st
 
 //--------------------------------------------------------------------
 
+//class ConflictNameAssigner {
+//public:
+//    ConflictNameAssigner(string name_root) : _root(std::move(name_root)) {}
+//
+//    void add(const Tree::VersionedIds& versioned_ids)
+//    {
+//    }
+//
+//private:
+//    string _root;
+//};
+
+//--------------------------------------------------------------------
+
 BranchView::BranchView(ObjectStore& objects, const ObjectId& root_id) :
     _objects(objects),
     _root_id(root_id)
@@ -83,12 +102,22 @@ BranchView::BranchView(ObjectStore& objects, const ObjectId& root_id) :
 
 set<string> BranchView::readdir(PathRange path) const
 {
-    throw std::runtime_error("not implemented yet");
-    return {};
-    //Opt<Tree> retval;
-    //_query_dir(_objects, _root_id, path, [&] (const Tree& tree) { retval = tree; });
-    //assert(retval);
-    //return std::move(*retval);
+    set<string> files;
+
+    MultiDir dir{{_root_id}, &_objects};
+
+    for (auto& p : path) {
+        dir = dir.cd_into(p);
+    }
+
+    for (auto& id : dir.ids) {
+        auto tree = _objects.load<Tree>(id);
+        for (auto& name : tree.children_names()) {
+            files.insert(name);
+        }
+    }
+
+    return files;
 }
 
 //--------------------------------------------------------------------

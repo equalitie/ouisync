@@ -69,4 +69,10 @@ public:
     friend std::ostream& operator<<(std::ostream& os, const ObjectId&);
 };
 
+template<class Hash>
+inline void update_hash(const ObjectId& id, Hash& hash)
+{
+    hash.update(static_cast<const typename Hash::Digest&>(id));
+}
+
 } // namespaces
