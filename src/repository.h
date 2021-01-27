@@ -5,8 +5,9 @@
 #include "options.h"
 #include "file_system_attrib.h"
 #include "user_id.h"
-#include "local_branch.h"
-#include "remote_branch.h"
+#include "branch.h"
+//#include "local_branch.h"
+//#include "remote_branch.h"
 #include "commit.h"
 #include "wait.h"
 #include "snapshot.h"
@@ -21,7 +22,6 @@ namespace ouisync {
 class Repository {
 public:
     using executor_type = net::any_io_executor;
-    using Branch = variant<LocalBranch, RemoteBranch>;
 
 public:
     using DirAttrib  = FileSystemDirAttrib;
@@ -46,9 +46,9 @@ public:
 
     // Note: may return nullptr if the version vector is below a version vector
     // of an already existing branch.
-    [[nodiscard]]
-    net::awaitable<RemoteBranch*>
-    get_or_create_remote_branch(const UserId&, const Commit&);
+    //[[nodiscard]]
+    //net::awaitable<RemoteBranch*>
+    //get_or_create_remote_branch(const UserId&, const Commit&);
 
     Opt<Snapshot::Id> last_snapshot_id() const { return _last_snapshot_id; }
 
@@ -56,27 +56,28 @@ public:
 
     const fs::path& object_directory() const { return _options.objectdir; }
 
-    void introduce_commit_to_local_branch(const Commit&);
+    //void introduce_commit_to_local_branch(const Commit&);
 
     ObjectStore& object_store() { return _objects; }
 
 private:
-    Branch& find_branch(PathRange);
+    //Branch& find_branch(PathRange);
 
     void sanity_check() const;
 
-    static
-    const VersionVector& get_stamp(const Branch& b);
+    //static
+    //const VersionVector& get_stamp(const Branch& b);
 
-    static
-    ObjectId get_root_id(const Branch& b);
+    //static
+    //ObjectId get_root_id(const Branch& b);
 
 private:
     executor_type _ex;
     const Options _options;
     ObjectStore _objects;
     UserId _user_id;
-    std::map<UserId, Branch> _branches;
+    std::unique_ptr<Branch> _branch;
+    //std::map<UserId, Branch> _branches;
     Opt<Snapshot::Id> _last_snapshot_id;
     Wait _on_change;
 };
