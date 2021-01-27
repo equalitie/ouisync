@@ -3,6 +3,7 @@
 #include "refcount.h"
 #include "object_store.h"
 #include "object/tagged.h"
+#include "error.h"
 
 #include <boost/filesystem.hpp>
 #include <boost/serialization/vector.hpp>
@@ -10,30 +11,66 @@
 using namespace ouisync;
 using object::Tree;
 using object::Blob;
+using std::set;
+using std::string;
 
 //--------------------------------------------------------------------
 
-template<class F>
-static
-void _query_dir(ObjectStore& objects, ObjectId tree_id, PathRange path, F&& f)
-{
-    const Tree tree = objects.load<Tree>(tree_id);
-
-    if (path.empty()) {
-        f(tree);
-    } else {
-        auto child = tree.find(path.front());
-        if (!child) throw_error(sys::errc::no_such_file_or_directory);
-        path.advance_begin(1);
-        _query_dir(objects, child.id(), path, std::forward<F>(f));
-    }
-}
+//template<class F>
+//static
+//void _query_dir(ObjectStore& objects, ObjectId tree_id, PathRange path, F&& f)
+//{
+//    const Tree tree = objects.load<Tree>(tree_id);
+//
+//    if (path.empty()) {
+//        f(tree);
+//    } else {
+//        auto child = tree.find(path.front());
+//        if (!child) throw_error(sys::errc::no_such_file_or_directory);
+//        path.advance_begin(1);
+//        _query_dir(objects, child.id(), path, std::forward<F>(f));
+//    }
+//}
 
 static
 PathRange _parent(PathRange path) {
     path.advance_end(-1);
     return path;
 }
+
+set<ObjectId> cd_into(ObjectStore& objstore, const set<ObjectId>& from, const std::string& where)
+{
+    set<ObjectId> retval;
+
+    for (auto& from_id : from) {
+        const auto obj = objstore.load<Tree, Blob::Nothing>(from_id);
+        auto tree = boost::get<Tree>(&obj);
+        if (!tree) continue;
+        auto versions = tree->find(where);
+        for (auto& [id, clock] : versions) {
+            retval.insert(id);
+        }
+    }
+
+    return retval;
+}
+
+//map<ObjectId, set<VersionVector>> file(ObjectStore& objstore, const set<ObjectId>& dirs, const std::string& name)
+//{
+//    map<ObjectId, set<VersionVector>> retval;
+//
+//    for (auto& dir : dirs) {
+//        const auto obj = objects.load<Tree, Blob::Nothing>(tree_id);
+//        auto tree = boost::get<Tree>(&obj);
+//        if (!tree) continue;
+//        auto versions = tree.find(name);
+//        for (auto& [id, clock] : versions) {
+//            retval[id].;
+//        }
+//    }
+//
+//    return retval;
+//}
 
 //--------------------------------------------------------------------
 
@@ -44,122 +81,136 @@ BranchView::BranchView(ObjectStore& objects, const ObjectId& root_id) :
 
 //--------------------------------------------------------------------
 
-Tree BranchView::readdir(PathRange path) const
+set<string> BranchView::readdir(PathRange path) const
 {
-    Opt<Tree> retval;
-    _query_dir(_objects, _root_id, path, [&] (const Tree& tree) { retval = tree; });
-    assert(retval);
-    return std::move(*retval);
+    throw std::runtime_error("not implemented yet");
+    return {};
+    //Opt<Tree> retval;
+    //_query_dir(_objects, _root_id, path, [&] (const Tree& tree) { retval = tree; });
+    //assert(retval);
+    //return std::move(*retval);
 }
 
 //--------------------------------------------------------------------
 
 FileSystemAttrib BranchView::get_attr(PathRange path) const
 {
-    if (path.empty()) return FileSystemDirAttrib{};
+    throw std::runtime_error("not implemented yet");
+    return {};
 
-    FileSystemAttrib attrib;
+    //if (path.empty()) return FileSystemDirAttrib{};
 
-    _query_dir(_objects, _root_id, _parent(path),
-        [&] (const Tree& parent) {
-            auto child = parent.find(path.back());
-            if (!child) throw_error(sys::errc::no_such_file_or_directory);
+    //FileSystemAttrib attrib;
 
-            auto obj = _objects.load<Tree::Nothing, Blob::Size>(child.id());
+    //_query_dir(_objects, _root_id, _parent(path),
+    //    [&] (const Tree& parent) {
+    //        auto child = parent.find(path.back());
+    //        if (!child) throw_error(sys::errc::no_such_file_or_directory);
 
-            apply(obj,
-                [&] (const Tree::Nothing&) { attrib = FileSystemDirAttrib{}; },
-                [&] (const Blob::Size& b) { attrib = FileSystemFileAttrib{b.value}; });
-        });
+    //        auto obj = _objects.load<Tree::Nothing, Blob::Size>(child.id());
 
-    return attrib;
+    //        apply(obj,
+    //            [&] (const Tree::Nothing&) { attrib = FileSystemDirAttrib{}; },
+    //            [&] (const Blob::Size& b) { attrib = FileSystemFileAttrib{b.value}; });
+    //    });
+
+    //return attrib;
 }
 
 //--------------------------------------------------------------------
 
 size_t BranchView::read(PathRange path, const char* buf, size_t size, size_t offset) const
 {
-    if (path.empty()) throw_error(sys::errc::is_a_directory);
+    throw std::runtime_error("not implemented yet");
+    return 0;
 
-    _query_dir(_objects, _root_id, _parent(path),
-        [&] (const Tree& tree) {
-            auto child = tree.find(path.back());
-            if (!child) throw_error(sys::errc::no_such_file_or_directory);
+    //if (path.empty()) throw_error(sys::errc::is_a_directory);
 
-            // XXX: Read only what's needed, not the whole blob
-            auto blob = _objects.load<Blob>(child.id());
+    //_query_dir(_objects, _root_id, _parent(path),
+    //    [&] (const Tree& tree) {
+    //        auto child = tree.find(path.back());
+    //        if (!child) throw_error(sys::errc::no_such_file_or_directory);
 
-            size_t len = blob.size();
+    //        // XXX: Read only what's needed, not the whole blob
+    //        auto blob = _objects.load<Blob>(child.id());
 
-            if (size_t(offset) < len) {
-                if (offset + size > len) size = len - offset;
-                memcpy((void*)buf, blob.data() + offset, size);
-            } else {
-                size = 0;
-            }
-        });
+    //        size_t len = blob.size();
 
-    return size;
+    //        if (size_t(offset) < len) {
+    //            if (offset + size > len) size = len - offset;
+    //            memcpy((void*)buf, blob.data() + offset, size);
+    //        } else {
+    //            size = 0;
+    //        }
+    //    });
+
+    //return size;
 }
 
 //--------------------------------------------------------------------
 
 Opt<Blob> BranchView::maybe_load(PathRange path) const
 {
-    if (path.empty()) throw_error(sys::errc::is_a_directory);
+    throw std::runtime_error("not implemented yet");
+    return  boost::none;
 
-    Opt<Blob> retval;
+    //if (path.empty()) throw_error(sys::errc::is_a_directory);
 
-    _query_dir(_objects, _root_id, _parent(path),
-        [&] (const Tree& tree) {
-            auto child = tree.find(path.back());
-            if (!child) throw_error(sys::errc::no_such_file_or_directory);
-            retval = _objects.load<Blob>(child.id());
-        });
+    //Opt<Blob> retval;
 
-    return retval;
+    //_query_dir(_objects, _root_id, _parent(path),
+    //    [&] (const Tree& tree) {
+    //        auto child = tree.find(path.back());
+    //        if (!child) throw_error(sys::errc::no_such_file_or_directory);
+    //        retval = _objects.load<Blob>(child.id());
+    //    });
+
+    //return retval;
 }
 
 //--------------------------------------------------------------------
 
 ObjectId BranchView::id_of(PathRange path) const
 {
-    if (path.empty()) return _root_id;
+    throw std::runtime_error("not implemented yet");
+    return {};
 
-    ObjectId retval;
+    //if (path.empty()) return _root_id;
 
-    _query_dir(_objects, _root_id, _parent(path),
-        [&] (const Tree& tree) {
-            auto child = tree.find(path.back());
-            if (!child) throw_error(sys::errc::no_such_file_or_directory);
-            retval = child.id();
-        });
+    //ObjectId retval;
 
-    return retval;
+    //_query_dir(_objects, _root_id, _parent(path),
+    //    [&] (const Tree& tree) {
+    //        auto child = tree.find(path.back());
+    //        if (!child) throw_error(sys::errc::no_such_file_or_directory);
+    //        retval = child.id();
+    //    });
+
+    //return retval;
 }
 
 //--------------------------------------------------------------------
 
 static
 void _show(std::ostream& os, ObjectStore& objects, ObjectId id, std::string pad = "") {
-    if (!objects.exists(id)) {
-        os << pad << "!!! object " << id << " does not exist !!!\n";
-        return;
-    }
+    //if (!objects.exists(id)) {
+    //    os << pad << "!!! object " << id << " does not exist !!!\n";
+    //    return;
+    //}
 
-    auto obj = objects.load<Tree, Blob>(id);
-    auto rc = objects.rc(id);
+    //auto obj = objects.load<Tree, Blob>(id);
+    //auto rc = objects.rc(id);
 
-    apply(obj,
-            [&] (const Tree& t) {
-                os << pad << t << " (" << rc << ")\n";
-                for (auto& [name, id] : t) {
-                    _show(os, objects, id, pad + "  ");
-                }
-            },
-            [&] (const Blob& b) {
-                os << pad << b << " (" << rc << ")\n";
-            });
+    //apply(obj,
+    //        [&] (const Tree& t) {
+    //            os << pad << t << " (" << rc << ")\n";
+    //            for (auto& [name, id] : t) {
+    //                _show(os, objects, id, pad + "  ");
+    //            }
+    //        },
+    //        [&] (const Blob& b) {
+    //            os << pad << b << " (" << rc << ")\n";
+    //        });
 }
 
 void BranchView::show(std::ostream& os) const

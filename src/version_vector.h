@@ -95,6 +95,10 @@ public:
         ar & _vv;
     }
 
+    size_t size() const { return _vv.size(); }
+    auto begin() const { return _vv.begin(); }
+    auto end()   const { return _vv.end();   }
+
 private:
     static
     const UserId& id_of(const Map::const_iterator& i)

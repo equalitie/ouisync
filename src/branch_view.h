@@ -19,7 +19,7 @@ public:
 public:
     BranchView(ObjectStore&, const ObjectId& root_id);
 
-    Tree readdir(PathRange path) const;
+    std::set<std::string> readdir(PathRange path) const;
 
     FileSystemAttrib get_attr(PathRange path) const;
 

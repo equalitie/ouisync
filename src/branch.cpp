@@ -68,37 +68,40 @@ template<class F>
 static
 ObjectId _update_dir(size_t branch_count, ObjectStore& objstore, ObjectId tree_id, PathRange path, F&& f)
 {
-    Tree tree = objstore.load<Tree>(tree_id);
-    auto rc = objstore.rc(tree_id).recursive_count();
-    assert(rc > 0);
+    assert("TODO" && 0);
+    return {};
 
-    Opt<ObjectId> new_child_id;
+    //Tree tree = objstore.load<Tree>(tree_id);
+    //auto rc = objstore.rc(tree_id).recursive_count();
+    //assert(rc > 0);
 
-    if (path.empty()) {
-        new_child_id = f(tree, branch_count + (rc-1));
-    } else {
-        auto child = tree.find(path.front());
+    //Opt<ObjectId> new_child_id;
 
-        if (!child) {
-            throw_error(sys::errc::no_such_file_or_directory);
-        }
+    //if (path.empty()) {
+    //    new_child_id = f(tree, branch_count + (rc-1));
+    //} else {
+    //    auto child = tree.find(path.front());
 
-        path.advance_begin(1);
-        new_child_id = _update_dir(branch_count + (rc-1), objstore, child.id(), path, std::forward<F>(f));
-        child.set_id(*new_child_id);
-    }
+    //    if (!child) {
+    //        throw_error(sys::errc::no_such_file_or_directory);
+    //    }
 
-    auto [new_id, created] = objstore.store_(tree);
+    //    path.advance_begin(1);
+    //    new_child_id = _update_dir(branch_count + (rc-1), objstore, child.id(), path, std::forward<F>(f));
+    //    child.set_id(*new_child_id);
+    //}
 
-    if (created && new_child_id) {
-        objstore.rc(*new_child_id).increment_recursive_count();
-    }
+    //auto [new_id, created] = objstore.store_(tree);
 
-    if (branch_count == 1) {
-        decrement_rc_and_remove_single_node(objstore, tree_id);
-    }
+    //if (created && new_child_id) {
+    //    objstore.rc(*new_child_id).increment_recursive_count();
+    //}
 
-    return new_id;
+    //if (branch_count == 1) {
+    //    decrement_rc_and_remove_single_node(objstore, tree_id);
+    //}
+
+    //return new_id;
 }
 
 template<class F>
@@ -128,16 +131,17 @@ PathRange parent(PathRange path) {
 
 void Branch::store(PathRange path, const Blob& blob)
 {
-    if (path.empty()) throw_error(sys::errc::is_a_directory);
+    assert("TODO" && 0);
+    //if (path.empty()) throw_error(sys::errc::is_a_directory);
 
-    update_dir(parent(path),
-        [&] (Tree& tree, auto) {
-            auto [child, inserted] = tree.insert(std::make_pair(path.back(), ObjectId{}));
-            if (!inserted) throw_error(sys::errc::file_exists);
-            auto [id, created] = _objects.store_(blob);
-            child.set_id(id);
-            return id;
-        });
+    //update_dir(parent(path),
+    //    [&] (Tree& tree, auto) {
+    //        auto [child, inserted] = tree.insert(std::make_pair(path.back(), ObjectId{}));
+    //        if (!inserted) throw_error(sys::errc::file_exists);
+    //        auto [id, created] = _objects.store_(blob);
+    //        child.set_id(id);
+    //        return id;
+    //    });
 }
 
 void Branch::store(const fs::path& path, const Blob& blob)
@@ -149,104 +153,119 @@ void Branch::store(const fs::path& path, const Blob& blob)
 
 size_t Branch::write(PathRange path, const char* buf, size_t size, size_t offset)
 {
-    if (path.empty()) throw_error(sys::errc::is_a_directory);
+    assert("TODO" && 0);
+    return 0;
 
-    update_dir(parent(path),
-        [&] (Tree& tree, size_t branch_count) {
-            auto child = tree.find(path.back());
-            if (!child) throw_error(sys::errc::no_such_file_or_directory);
+    //if (path.empty()) throw_error(sys::errc::is_a_directory);
 
-            // XXX: Write only the necessary part to disk without loading
-            // the whole blob into the memory.
-            auto blob = _objects.load<Blob>(child.id());
+    //update_dir(parent(path),
+    //    [&] (Tree& tree, size_t branch_count) {
+    //        auto child = tree.find(path.back());
+    //        if (!child) throw_error(sys::errc::no_such_file_or_directory);
 
-            size_t len = blob.size();
+    //        // XXX: Write only the necessary part to disk without loading
+    //        // the whole blob into the memory.
+    //        auto blob = _objects.load<Blob>(child.id());
 
-            if (offset + size > len) {
-                blob.resize(offset + size);
-            }
+    //        size_t len = blob.size();
 
-            memcpy(blob.data() + offset, buf, size);
+    //        if (offset + size > len) {
+    //            blob.resize(offset + size);
+    //        }
 
-            if (branch_count <= 1) {
-                decrement_rc_and_remove_single_node(_objects, child.id());
-            }
+    //        memcpy(blob.data() + offset, buf, size);
 
-            child.set_id(_objects.store(blob));
-            return child.id();
-        });
+    //        if (branch_count <= 1) {
+    //            decrement_rc_and_remove_single_node(_objects, child.id());
+    //        }
 
-    return size;
+    //        child.set_id(_objects.store(blob));
+    //        return child.id();
+    //    });
+
+    //return size;
 }
 
 //--------------------------------------------------------------------
 
 size_t Branch::truncate(PathRange path, size_t size)
 {
-    if (path.empty()) throw_error(sys::errc::is_a_directory);
+    assert("TODO" && 0);
+    return 0;
 
-    update_dir(parent(path),
-        [&] (Tree& tree, auto branch_count) {
-            auto child = tree.find(path.back());
-            if (!child) throw_error(sys::errc::no_such_file_or_directory);
+    //if (path.empty()) throw_error(sys::errc::is_a_directory);
 
-            // XXX: Read only what's needed, not the whole blob
-            auto blob = _objects.load<Blob>(child.id());
+    //update_dir(parent(path),
+    //    [&] (Tree& tree, auto branch_count) {
+    //        auto child = tree.find(path.back());
+    //        if (!child) throw_error(sys::errc::no_such_file_or_directory);
 
-            blob.resize(std::min<size_t>(blob.size(), size));
-            size = blob.size();
+    //        // XXX: Read only what's needed, not the whole blob
+    //        auto blob = _objects.load<Blob>(child.id());
 
-            if (branch_count <= 1) {
-                decrement_rc_and_remove_single_node(_objects, child.id());
-            }
+    //        blob.resize(std::min<size_t>(blob.size(), size));
+    //        size = blob.size();
 
-            child.set_id(_objects.store(blob));
-            return child.id();
-        });
+    //        if (branch_count <= 1) {
+    //            decrement_rc_and_remove_single_node(_objects, child.id());
+    //        }
 
-    return size;
+    //        child.set_id(_objects.store(blob));
+    //        return child.id();
+    //    });
+
+    //return size;
 }
 
 //--------------------------------------------------------------------
 
 void Branch::mkdir(PathRange path)
 {
-    if (path.empty()) throw_error(sys::errc::invalid_argument);
+    assert("TODO" && 0);
+    return;
 
-    update_dir(parent(path),
-        [&] (Tree& parent, auto) {
-            auto [child, inserted] = parent.insert(std::make_pair(path.back(), ObjectId{}));
-            if (!inserted) throw_error(sys::errc::file_exists);
-            auto [id, created] = _objects.store_(Tree{});
-            child.set_id(id);
-            return id;
-        });
+    //if (path.empty()) throw_error(sys::errc::invalid_argument);
+
+    //update_dir(parent(path),
+    //    [&] (Tree& parent, auto) {
+    //        auto [child, inserted] = parent.insert(std::make_pair(path.back(), ObjectId{}));
+    //        if (!inserted) throw_error(sys::errc::file_exists);
+    //        auto [id, created] = _objects.store_(Tree{});
+    //        child.set_id(id);
+    //        return id;
+    //    });
 }
 
 //--------------------------------------------------------------------
 
 bool Branch::remove(PathRange path)
 {
-    if (path.empty()) throw_error(sys::errc::operation_not_permitted);
+    assert("TODO" && 0);
+    return false;
 
-    update_dir(parent(path),
-        [&] (Tree& tree, size_t branch_count) {
-            auto child = tree.find(path.back());
-            if (!child) throw_error(sys::errc::no_such_file_or_directory);
-            if (branch_count <= 1) {
-                _objects.rc(child.id()).decrement_recursive_count();
-            }
-            tree.erase(child);
-            return boost::none;
-        });
+    //if (path.empty()) throw_error(sys::errc::operation_not_permitted);
 
-    return true;
+    //update_dir(parent(path),
+    //    [&] (Tree& tree, size_t branch_count) {
+    //        auto child = tree.find(path.back());
+    //        if (!child) throw_error(sys::errc::no_such_file_or_directory);
+    //        if (branch_count <= 1) {
+    //            _objects.rc(child.id()).decrement_recursive_count();
+    //        }
+    //        tree.erase(child);
+    //        return boost::none;
+    //    });
+
+    //return true;
 }
 
 bool Branch::remove(const fs::path& fspath)
 {
-    Path path(fspath);
-    return remove(path);
+    assert("TODO" && 0);
+    return false;
+
+    //Path path(fspath);
+    //return remove(path);
 }
 
 //--------------------------------------------------------------------

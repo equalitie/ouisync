@@ -63,7 +63,7 @@ net::awaitable<vector<string>> Repository::readdir(PathRange path)
 
     auto dir = _branch->branch_view().readdir(path);
 
-    for (auto& [name, hash] : dir) {
+    for (auto& name : dir) {
         nodes.push_back(name);
     }
 

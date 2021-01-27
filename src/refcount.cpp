@@ -11,6 +11,8 @@
 #include <iostream>
 #include <sstream>
 
+#include <boost/serialization/vector.hpp>
+
 using namespace ouisync;
 
 using object::Tree;
@@ -112,8 +114,7 @@ void Rc::decrement_recursive_count() {
 
     apply(obj,
             [&](const Tree& tree) {
-                for (auto& [name, id] : tree) {
-                    (void)name; // https://stackoverflow.com/a/40714311/273348
+                for (auto& id : tree.children()) {
                     Rc::load(*_objects, id).decrement_recursive_count();
                 }
             },

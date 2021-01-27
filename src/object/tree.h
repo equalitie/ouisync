@@ -16,17 +16,18 @@
 namespace ouisync::object {
 
 class Tree final {
-private:
+public:
     using ObjectVersions = std::vector<VersionVector>;
     using VersionedIds = std::map<ObjectId, ObjectVersions>;
 
+private:
     using NameMap = std::map<std::string, VersionedIds>;
     //using NameMap = std::map<std::string, ObjectId>;
 
     template<bool is_mutable>
     class Handle {
         using ImplPtr = std::conditional_t<is_mutable, NameMap*, const NameMap*>;
-        using Iterator = std::conditional_t<is_mutable, NameMap::iterator, NameMap::const_iterator>;
+        using NameIterator = std::conditional_t<is_mutable, NameMap::iterator, NameMap::const_iterator>;
 
       public:
         Handle() = default;
@@ -69,14 +70,18 @@ private:
         //    i->second = id;
         //}
 
+        auto begin() const { if (name_map) return i->second.begin(); else return empty.begin(); }
+        auto end()   const { if (name_map) return i->second.end();   else return empty.end();   }
+
       private:
         friend class Tree;
-        Handle(ImplPtr name_map, Iterator i)
+        Handle(ImplPtr name_map, NameIterator i)
             : name_map(name_map), i(i) {}
 
       private:
         ImplPtr name_map = nullptr;
-        Iterator i;
+        NameIterator i;
+        VersionedIds empty;
     };
 
 public:
@@ -120,7 +125,7 @@ public:
     //    return insert({std::move(key), ObjectId{}}).first;
     //}
 
-    std::set<ObjectId> children() const {
+    auto children() const {
         std::set<ObjectId> ch;
         for (auto& [_, ids] : _name_map) {
             for (auto& [id, versions] : ids) {

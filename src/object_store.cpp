@@ -4,6 +4,8 @@
 
 #include "variant.h"
 
+#include <boost/serialization/vector.hpp>
+
 using namespace ouisync;
 using namespace std;
 using object::Blob;
@@ -29,14 +31,15 @@ bool ObjectStore::exists(const ObjectId& id) const {
 bool ObjectStore::is_complete(const ObjectId& id) {
     if (!exists(id)) return false;
 
-    auto v = load<Blob, Tree>(id);
+    auto v = load<Blob::Nothing, Tree>(id);
 
     return apply(v,
-        [&] (const Blob&) { return true; },
+        [&] (const Blob::Nothing&) { return true; },
         [&] (const Tree& tree) {
-            for (auto& [_, id] : tree) {
-                if (!is_complete(id)) return false;
-            }
+            assert("TODO" && 0);
+            //for (auto& [_, id] : tree) {
+            //    if (!is_complete(id)) return false;
+            //}
             return true;
         });
 }
