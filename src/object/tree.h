@@ -4,6 +4,7 @@
 
 #include "../object_id.h"
 #include "../shortcuts.h"
+#include "../version_vector.h"
 
 #include <map>
 #include <set>
@@ -16,8 +17,11 @@ namespace ouisync::object {
 
 class Tree final {
 private:
-    //using NameMap = std::map<std::string, std::map<ObjectId, std::set<VersionVector>>>;
-    using NameMap = std::map<std::string, ObjectId>;
+    using ObjectVersions = std::vector<VersionVector>;
+    using VersionedIds = std::map<ObjectId, ObjectVersions>;
+
+    using NameMap = std::map<std::string, VersionedIds>;
+    //using NameMap = std::map<std::string, ObjectId>;
 
     template<bool is_mutable>
     class Handle {
@@ -44,7 +48,13 @@ private:
             return *this;
         }
 
-        ObjectId id() const {
+        const VersionedIds& versioned_ids() const {
+            assert(name_map);
+            if (!name_map) exit(1);
+            return i->second;
+        }
+
+        VersionedIds& versioned_ids() {
             assert(name_map);
             if (!name_map) exit(1);
             return i->second;
@@ -52,12 +62,12 @@ private:
 
         operator bool() const { return name_map != nullptr; }
 
-        void set_id(const ObjectId& id) {
-            assert(name_map);
-            if (!name_map) exit(1);
-            if (id == i->second) return;
-            i->second = id;
-        }
+        //void set_id(const ObjectId& id) {
+        //    assert(name_map);
+        //    if (!name_map) exit(1);
+        //    if (id == i->second) return;
+        //    i->second = id;
+        //}
 
       private:
         friend class Tree;
@@ -98,21 +108,25 @@ public:
         _name_map.erase(h.i);
     }
 
-    std::pair<MutableHandle, bool>
-    insert(std::pair<std::string, ObjectId> pair) {
-        auto [i,inserted] = _name_map.insert(std::move(pair));
-        return {MutableHandle{&_name_map, i}, inserted};
-    }
+    //std::pair<MutableHandle, bool>
+    //insert(std::pair<std::string, ObjectId> pair) {
+    //    auto [i,inserted] = _name_map.insert(std::move(pair));
+    //    return {MutableHandle{&_name_map, i}, inserted};
+    //}
 
-    MutableHandle operator[](std::string key) {
-        //auto [i,inserted] = _name_map.insert({std::move(key), {}});
-        //return MutableHandle{&_name_map, i};
-        return insert({std::move(key), ObjectId{}}).first;
-    }
+    //MutableHandle operator[](std::string key) {
+    //    //auto [i,inserted] = _name_map.insert({std::move(key), {}});
+    //    //return MutableHandle{&_name_map, i};
+    //    return insert({std::move(key), ObjectId{}}).first;
+    //}
 
     std::set<ObjectId> children() const {
         std::set<ObjectId> ch;
-        for (auto& [_, id] : _name_map) { ch.insert(id); }
+        for (auto& [_, ids] : _name_map) {
+            for (auto& [id, versions] : ids) {
+                ch.insert(id);
+            }
+        }
         return ch;
     }
 
