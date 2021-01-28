@@ -58,7 +58,7 @@ public:
 
     const UserId& user_id() const { return _user_id; }
 
-    ObjectId id_of(PathRange) const;
+    //ObjectId id_of(PathRange) const;
 
     bool introduce_commit(const Commit&);
 

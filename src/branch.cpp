@@ -14,6 +14,7 @@
 
 #include <boost/filesystem.hpp>
 #include <boost/serialization/vector.hpp>
+#include <boost/serialization/set.hpp>
 #include <string.h> // memcpy
 
 #include <iostream>
@@ -333,10 +334,10 @@ bool Branch::introduce_commit(const Commit& commit)
 
 //--------------------------------------------------------------------
 
-ObjectId Branch::id_of(PathRange path) const
-{
-    return branch_view().id_of(path);
-}
+//ObjectId Branch::id_of(PathRange path) const
+//{
+//    return branch_view().id_of(path);
+//}
 
 //--------------------------------------------------------------------
 

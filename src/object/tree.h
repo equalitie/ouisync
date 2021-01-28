@@ -18,7 +18,7 @@ namespace ouisync::object {
 
 class Tree final {
 public:
-    using ObjectVersions = std::vector<VersionVector>;
+    using ObjectVersions = std::set<VersionVector>;
     using VersionedIds = std::map<ObjectId, ObjectVersions>;
 
 private:

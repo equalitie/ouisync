@@ -5,6 +5,7 @@
 #include "variant.h"
 
 #include <boost/serialization/vector.hpp>
+#include <boost/serialization/set.hpp>
 
 using namespace ouisync;
 using namespace std;

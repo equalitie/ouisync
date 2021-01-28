@@ -7,11 +7,13 @@
 
 #include <boost/filesystem.hpp>
 #include <boost/serialization/vector.hpp>
+#include <boost/serialization/set.hpp>
 
 using namespace ouisync;
 using object::Tree;
 using object::Blob;
 using std::set;
+using std::map;
 using std::string;
 
 //--------------------------------------------------------------------
@@ -38,28 +40,6 @@ PathRange _parent(PathRange path) {
     return path;
 }
 
-struct MultiDir {
-    set<ObjectId> ids;
-    ObjectStore* objstore;
-
-    MultiDir cd_into(const std::string& where)
-    {
-        MultiDir retval{{}, objstore};
-    
-        for (auto& from_id : ids) {
-            const auto obj = objstore->load<Tree, Blob::Nothing>(from_id);
-            auto tree = boost::get<Tree>(&obj);
-            if (!tree) continue;
-            auto versions = tree->find(where);
-            for (auto& [id, clock] : versions) {
-                retval.ids.insert(id);
-            }
-        }
-    
-        return retval;
-    }
-};
-
 //map<ObjectId, set<VersionVector>> file(ObjectStore& objstore, const set<ObjectId>& dirs, const std::string& name)
 //{
 //    map<ObjectId, set<VersionVector>> retval;
@@ -79,18 +59,118 @@ struct MultiDir {
 
 //--------------------------------------------------------------------
 
-//class ConflictNameAssigner {
-//public:
-//    ConflictNameAssigner(string name_root) : _root(std::move(name_root)) {}
-//
-//    void add(const Tree::VersionedIds& versioned_ids)
-//    {
-//    }
-//
-//private:
-//    string _root;
-//};
+class ConflictNameAssigner {
+public:
+    using Name = string;
 
+    ConflictNameAssigner(string name_root) :
+        _name_root(std::move(name_root)) {}
+
+    void add(const Tree::VersionedIds& versioned_ids)
+    {
+        for (auto& [id, vvs] : versioned_ids) {
+            for (auto& vv : vvs) {
+                _versions[id].insert(vv);
+            }
+        }
+    }
+
+    map<Name, ObjectId> resolve() const
+    {
+        map<Name, ObjectId> ret;
+
+        if (_versions.empty()) return ret;
+
+        if (_versions.size() == 1) {
+            ret.insert({_name_root, _versions.begin()->first});
+            return ret;
+        }
+
+        // TODO: Need a proper way to indentify different versions. With this
+        // simplistic version it could happen that the user opens a file with
+        // one name, but it could change before it is saved.
+        unsigned cnt = 0;
+
+        for (auto& [obj_id, vv] : _versions) {
+            std::stringstream ss;
+            ss << _name_root << "-" << (cnt++);
+            ret[ss.str()] = obj_id;
+        }
+
+        return ret;
+    }
+
+private:
+    string _name_root;
+    map<ObjectId, set<VersionVector>> _versions;
+};
+
+class ouisync::MultiDir {
+public:
+    set<ObjectId> ids;
+    ObjectStore* objstore;
+
+    MultiDir cd_into(const std::string& where) const
+    {
+        MultiDir retval{{}, objstore};
+    
+        for (auto& from_id : ids) {
+            const auto obj = objstore->load<Tree, Blob::Nothing>(from_id);
+            auto tree = boost::get<Tree>(&obj);
+            if (!tree) continue;
+            auto versions = tree->find(where);
+            for (auto& [id, clock] : versions) {
+                retval.ids.insert(id);
+            }
+        }
+    
+        return retval;
+    }
+
+    MultiDir cd_into(PathRange path) const
+    {
+        MultiDir result = *this;
+        for (auto& p : path) { result = result.cd_into(p); }
+        return result;
+    }
+
+    map<string, ObjectId> list() const {
+        map<string, ConflictNameAssigner> name_resolvers;
+
+        for (auto& id : ids) {
+            auto tree = objstore->load<Tree>(id);
+            for (auto& [name, versioned_ids] : tree) {
+                auto [i, _] = name_resolvers.insert({name, {name}});
+                i->second.add(versioned_ids);
+            }
+        }
+
+        map<string, ObjectId> result;
+
+        for (auto& [_, name_resolver] : name_resolvers) {
+            for (auto& [name, object_id] : name_resolver.resolve()) {
+                result.insert({name, object_id});
+            }
+        }
+
+        return result;
+    }
+
+    ObjectId file(const std::string& name) const
+    {
+        // XXX: using `list()` is an overkill here.
+        auto lst = list();
+        auto i = lst.find(name);
+        if (i == lst.end()) throw_error(sys::errc::no_such_file_or_directory);
+        return i->second;
+    }
+};
+
+//--------------------------------------------------------------------
+MultiDir BranchView::root() const
+{
+    return MultiDir{{_root_id}, &_objects};
+}
 //--------------------------------------------------------------------
 
 BranchView::BranchView(ObjectStore& objects, const ObjectId& root_id) :
@@ -102,121 +182,70 @@ BranchView::BranchView(ObjectStore& objects, const ObjectId& root_id) :
 
 set<string> BranchView::readdir(PathRange path) const
 {
-    set<string> files;
 
-    MultiDir dir{{_root_id}, &_objects};
+    MultiDir dir = root().cd_into(path);
 
-    for (auto& p : path) {
-        dir = dir.cd_into(p);
+    set<string> names;
+
+    for (auto& [name, object_id] : dir.list()) {
+        names.insert(name);
     }
 
-    for (auto& id : dir.ids) {
-        auto tree = _objects.load<Tree>(id);
-        for (auto& name : tree.children_names()) {
-            files.insert(name);
-        }
-    }
-
-    return files;
+    return names;
 }
 
 //--------------------------------------------------------------------
 
 FileSystemAttrib BranchView::get_attr(PathRange path) const
 {
-    throw std::runtime_error("not implemented yet");
-    return {};
+    if (path.empty()) return FileSystemDirAttrib{};
 
-    //if (path.empty()) return FileSystemDirAttrib{};
+    MultiDir dir = root().cd_into(_parent(path));
 
-    //FileSystemAttrib attrib;
+    auto file_id = dir.file(path.back());
 
-    //_query_dir(_objects, _root_id, _parent(path),
-    //    [&] (const Tree& parent) {
-    //        auto child = parent.find(path.back());
-    //        if (!child) throw_error(sys::errc::no_such_file_or_directory);
+    auto obj = _objects.load<Tree::Nothing, Blob::Size>(file_id);
 
-    //        auto obj = _objects.load<Tree::Nothing, Blob::Size>(child.id());
+    FileSystemAttrib attrib;
 
-    //        apply(obj,
-    //            [&] (const Tree::Nothing&) { attrib = FileSystemDirAttrib{}; },
-    //            [&] (const Blob::Size& b) { attrib = FileSystemFileAttrib{b.value}; });
-    //    });
+    apply(obj,
+        [&] (const Tree::Nothing&) { attrib = FileSystemDirAttrib{}; },
+        [&] (const Blob::Size& b) { attrib = FileSystemFileAttrib{b.value}; });
 
-    //return attrib;
+    return attrib;
 }
 
 //--------------------------------------------------------------------
 
 size_t BranchView::read(PathRange path, const char* buf, size_t size, size_t offset) const
 {
-    throw std::runtime_error("not implemented yet");
-    return 0;
+    if (path.empty()) throw_error(sys::errc::is_a_directory);
 
-    //if (path.empty()) throw_error(sys::errc::is_a_directory);
+    MultiDir dir = root().cd_into(_parent(path));
 
-    //_query_dir(_objects, _root_id, _parent(path),
-    //    [&] (const Tree& tree) {
-    //        auto child = tree.find(path.back());
-    //        if (!child) throw_error(sys::errc::no_such_file_or_directory);
+    auto blob = _objects.load<Blob>(dir.file(path.back()));
 
-    //        // XXX: Read only what's needed, not the whole blob
-    //        auto blob = _objects.load<Blob>(child.id());
+    size_t len = blob.size();
 
-    //        size_t len = blob.size();
+    if (size_t(offset) < len) {
+        if (offset + size > len) size = len - offset;
+        memcpy((void*)buf, blob.data() + offset, size);
+    } else {
+        size = 0;
+    }
 
-    //        if (size_t(offset) < len) {
-    //            if (offset + size > len) size = len - offset;
-    //            memcpy((void*)buf, blob.data() + offset, size);
-    //        } else {
-    //            size = 0;
-    //        }
-    //    });
-
-    //return size;
+    return size;
 }
 
 //--------------------------------------------------------------------
 
-Opt<Blob> BranchView::maybe_load(PathRange path) const
-{
-    throw std::runtime_error("not implemented yet");
-    return  boost::none;
-
-    //if (path.empty()) throw_error(sys::errc::is_a_directory);
-
-    //Opt<Blob> retval;
-
-    //_query_dir(_objects, _root_id, _parent(path),
-    //    [&] (const Tree& tree) {
-    //        auto child = tree.find(path.back());
-    //        if (!child) throw_error(sys::errc::no_such_file_or_directory);
-    //        retval = _objects.load<Blob>(child.id());
-    //    });
-
-    //return retval;
-}
-
-//--------------------------------------------------------------------
-
-ObjectId BranchView::id_of(PathRange path) const
-{
-    throw std::runtime_error("not implemented yet");
-    return {};
-
-    //if (path.empty()) return _root_id;
-
-    //ObjectId retval;
-
-    //_query_dir(_objects, _root_id, _parent(path),
-    //    [&] (const Tree& tree) {
-    //        auto child = tree.find(path.back());
-    //        if (!child) throw_error(sys::errc::no_such_file_or_directory);
-    //        retval = child.id();
-    //    });
-
-    //return retval;
-}
+//ObjectId BranchView::id_of(PathRange path) const
+//{
+//    if (path.empty()) return _root_id;
+//
+//    // XXX: This won't work for directories
+//    return root().cd_into(_parent(path)).file(path.back());
+//}
 
 //--------------------------------------------------------------------
 
