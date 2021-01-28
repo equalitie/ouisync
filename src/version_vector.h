@@ -55,7 +55,14 @@ public:
         return result;
     }
 
-    bool operator<=(const VersionVector& that_vv) const {
+    // This one does a standard std::map comparison of keys and values. It does NOT
+    // express causal relationship. It is mostly useful for storing VersionVector
+    // in collections such as std::set which require this operator.
+    bool operator<(const VersionVector& other) const {
+        return _vv < other._vv;
+    }
+
+    bool same_as_or_happened_before(const VersionVector& that_vv) const {
         const Map& that = that_vv._vv;
 
         auto this_i = _vv.begin();

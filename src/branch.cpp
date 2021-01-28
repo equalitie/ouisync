@@ -316,7 +316,7 @@ Branch::Branch(const fs::path& file_path,
 
 bool Branch::introduce_commit(const Commit& commit)
 {
-    if (!(_commit.stamp <= commit.stamp)) return false;
+    if (!(_commit.stamp.same_as_or_happened_before(commit.stamp))) return false;
     if (_commit.root_id == commit.root_id) return false;
 
     auto old_root = _commit.root_id;
