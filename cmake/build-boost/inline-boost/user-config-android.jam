@@ -5,6 +5,7 @@ local CompilerFullPath = [ os.environ COMPILER_FULL_PATH ] ;
 
 using clang : $(Architecture) : $(CompilerFullPath) :
 <archiver>$(BinutilsPrefix)ar
+<ranlib>$(BinutilsPrefix)ranlib
 <compileflags>-fPIC
 <compileflags>-fexceptions
 <compileflags>-frtti
