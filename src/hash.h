@@ -111,6 +111,13 @@ public:
         update(data.data(), N);
     }
 
+    template<class T1, class T2>
+    inline void update(const std::pair<T1, T2>& pair)
+    {
+        update(pair.first);
+        update(pair.second);
+    }
+
     template<class T>
     inline
     std::enable_if_t<!std::is_integral<T>::value, void> update(const T& t)
