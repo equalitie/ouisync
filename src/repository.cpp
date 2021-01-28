@@ -1,6 +1,6 @@
 #include "repository.h"
 #include "snapshot.h"
-#include "branch_io.h"
+#include "branch_view.h"
 #include "branch_type.h"
 #include "random.h"
 #include "hex.h"
@@ -30,6 +30,7 @@ static void _sanity_check(const Branch& b) {
 Repository::Repository(executor_type ex, Options options) :
     _ex(std::move(ex)),
     _options(std::move(options)),
+    _objects(_options.objectdir),
     _on_change(_ex)
 {
     _user_id = UserId::load_or_create(_options.user_id_file_path);
@@ -39,7 +40,7 @@ Repository::Repository(executor_type ex, Options options) :
         if (!user_id) {
             throw std::runtime_error("Repository: Invalid branch name format");
         }
-        auto branch = LocalBranch::load(f, _options.objectdir, _user_id);
+        auto branch = RemoteBranch::load(f, _objects, _options);
         _branches.insert(make_pair(*user_id, std::move(branch)));
     }
 
@@ -48,10 +49,10 @@ Repository::Repository(executor_type ex, Options options) :
     if (fs::exists(local_branch_path)) {
         fs::path path = _options.branchdir / _user_id.to_string();
         _branches.insert(make_pair(_user_id,
-                    LocalBranch::load(path, _options.objectdir, _user_id)));
+                    LocalBranch::load(path, _user_id, _objects, _options)));
     } else {
         _branches.insert(make_pair(_user_id,
-                    LocalBranch::create(local_branch_path, _options.objectdir, _user_id)));
+                    LocalBranch::create(local_branch_path, _user_id, _objects, _options)));
     }
 
     std::cout << "User ID: " << _user_id << "\n";
@@ -67,12 +68,12 @@ Branch& Repository::find_branch(PathRange path)
     return i->second;
 }
 
-static BranchIo::Immutable _immutable_io(const Branch& b) {
-    return apply(b, [&] (auto& b) { return b.immutable_io(); });
+static BranchView _branch_view(const Branch& b) {
+    return apply(b, [&] (auto& b) { return b.branch_view(); });
 }
 
 static Snapshot _create_snapshot(const Branch& b, const fs::path& snapshotdir) {
-    return apply(b, [&] (auto& b) { return b.create_snapshot(snapshotdir); });
+    return apply(b, [&] (auto& b) { return b.create_snapshot(); });
 }
 
 SnapshotGroup Repository::create_snapshot_group()
@@ -105,7 +106,7 @@ net::awaitable<Repository::Attrib> Repository::get_attr(PathRange path)
     auto& branch = find_branch(path);
 
     path.advance_begin(1);
-    auto ret = _immutable_io(branch).get_attr(path);
+    auto ret = _branch_view(branch).get_attr(path);
     co_return ret;
 }
 
@@ -128,7 +129,7 @@ net::awaitable<vector<string>> Repository::readdir(PathRange path)
         auto& branch = find_branch(path);
 
         path.advance_begin(1);
-        auto dir = _immutable_io(branch).readdir(path);
+        auto dir = _branch_view(branch).readdir(path);
 
         for (auto& [name, hash] : dir) {
             nodes.push_back(name);
@@ -156,7 +157,7 @@ net::awaitable<size_t> Repository::read(PathRange path, char* buf, size_t size, 
         throw_error(sys::errc::is_a_directory);
     }
 
-    co_return _immutable_io(branch).read(path, buf, size, offset);
+    co_return _branch_view(branch).read(path, buf, size, offset);
 }
 
 net::awaitable<size_t> Repository::write(PathRange path, const char* buf, size_t size, off_t offset)
@@ -377,7 +378,7 @@ Repository::get_or_create_remote_branch(const UserId& user_id, const Commit& com
         auto path = _options.remotes / user_id.to_string();
 
         i = _branches.insert(std::make_pair(user_id,
-             RemoteBranch(commit, path, _options.objectdir))).first;
+             RemoteBranch(commit, path, _objects, _options))).first;
 
         co_return boost::get<RemoteBranch>(&i->second);
     }
@@ -391,7 +392,7 @@ Repository::get_or_create_remote_branch(const UserId& user_id, const Commit& com
         co_return nullptr;
     }
 
-    co_await branch->introduce_commit(commit);
+    branch->introduce_commit(commit);
 
     co_return branch;
 }

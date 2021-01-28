@@ -31,6 +31,36 @@ public:
     Opt<net::ip::tcp::endpoint> accept_endpoint;
     Opt<net::ip::tcp::endpoint> connect_endpoint;
 
+    struct Snapshot {
+        fs::path snapshotdir;
+    };
+
+    struct LocalBranch {
+        fs::path objectdir;
+        fs::path snapshotdir;
+
+        operator Snapshot() const {
+            return { snapshotdir };
+        }
+    };
+
+    operator LocalBranch() const {
+        return { objectdir, snapshotdir };
+    }
+
+    struct RemoteBranch {
+        fs::path objectdir;
+        fs::path snapshotdir;
+
+        operator Snapshot() const {
+            return { snapshotdir };
+        }
+    };
+
+    operator RemoteBranch() const {
+        return { objectdir, snapshotdir };
+    }
+
 private:
     boost::program_options::options_description description;
 };

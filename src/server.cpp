@@ -1,6 +1,5 @@
 #include "server.h"
 #include "snapshot.h"
-#include "object/io.h"
 
 #include <iostream>
 #include <boost/optional/optional_io.hpp>
@@ -53,7 +52,7 @@ net::awaitable<void> Server::run(Cancel cancel)
 
             RsObject rs;
             // XXX Test that rq.object_id belongs to this snapshot_group
-            auto object = object::io::load<Blob,Tree>(_repo.object_directory(), rq.object_id);
+            auto object = _repo.object_store().load<Blob,Tree>(rq.object_id);
 
             co_await _broker.send({RsObject{std::move(object)}}, cancel);
         };

@@ -3,11 +3,10 @@
 #include "variant.h"
 #include "error.h"
 #include "path_range.h"
-#include "branch_io.h"
+#include "branch_view.h"
 #include "object/tree.h"
 #include "object/tagged.h"
 #include "object/blob.h"
-#include "object/io.h"
 #include "refcount.h"
 #include "archive.h"
 #include "snapshot.h"
@@ -25,7 +24,7 @@ using object::Blob;
 using object::Tree;
 
 /* static */
-LocalBranch LocalBranch::create(const fs::path& path, const fs::path& objdir, UserId user_id)
+LocalBranch LocalBranch::create(const fs::path& path, UserId user_id, ObjectStore& objects, Options::LocalBranch options)
 {
     ObjectId root_id;
     VersionVector clock;
@@ -36,41 +35,41 @@ LocalBranch LocalBranch::create(const fs::path& path, const fs::path& objdir, Us
 
     object::Tree root_obj;
 
-    root_id = object::io::store(objdir, root_obj);
-    refcount::increment_recursive(objdir, root_id);
+    root_id = objects.store(root_obj);
+    objects.rc(root_id).increment_recursive_count();
 
-    LocalBranch branch(path, objdir, user_id, Commit{move(clock), root_id});
+    LocalBranch branch(path, user_id, Commit{move(clock), root_id}, objects, move(options));
     branch.store_self();
 
     return branch;
 }
 
 /* static */
-LocalBranch LocalBranch::load(const fs::path& file_path, const fs::path& objdir, UserId user_id)
+LocalBranch LocalBranch::load(const fs::path& file_path, UserId user_id, ObjectStore& objects, Options::LocalBranch options)
 {
-    LocalBranch branch(file_path, objdir, user_id);
+    LocalBranch branch(file_path, user_id, objects, std::move(options));
     archive::load(file_path, branch);
     return branch;
 }
 
 //--------------------------------------------------------------------
 static
-void decrement_rc_and_remove_single_node(const fs::path& objdir, const ObjectId& id)
+void decrement_rc_and_remove_single_node(ObjectStore& objstore, const ObjectId& id)
 {
-    auto rc = Rc::load(objdir, id);
-    rc.decrement_recursive_count();
+    auto rc = objstore.rc(id);
+    rc.decrement_recursive_count_but_dont_remove();
     if (!rc.both_are_zero()) return;
-    object::io::remove(objdir, id);
+    objstore.remove(id);
 }
 
 //--------------------------------------------------------------------
 
 template<class F>
 static
-ObjectId _update_dir(size_t branch_count, const fs::path& objdir, ObjectId tree_id, PathRange path, F&& f)
+ObjectId _update_dir(size_t branch_count, ObjectStore& objstore, ObjectId tree_id, PathRange path, F&& f)
 {
-    Tree tree = object::io::load<Tree>(objdir, tree_id);
-    auto rc = refcount::read_recursive(objdir, tree_id);
+    Tree tree = objstore.load<Tree>(tree_id);
+    auto rc = objstore.rc(tree_id).recursive_count();
     assert(rc > 0);
 
     Opt<ObjectId> new_child_id;
@@ -85,17 +84,18 @@ ObjectId _update_dir(size_t branch_count, const fs::path& objdir, ObjectId tree_
         }
 
         path.advance_begin(1);
-        new_child_id = _update_dir(branch_count + (rc-1), objdir, child.id(), path, std::forward<F>(f));
+        new_child_id = _update_dir(branch_count + (rc-1), objstore, child.id(), path, std::forward<F>(f));
         child.set_id(*new_child_id);
     }
 
-    auto [new_id, created] = object::io::store_(objdir, tree);
+    auto [new_id, created] = objstore.store_(tree);
+
     if (created && new_child_id) {
-        refcount::increment_recursive(objdir, *new_child_id);
+        objstore.rc(*new_child_id).increment_recursive_count();
     }
 
     if (branch_count == 1) {
-        decrement_rc_and_remove_single_node(objdir, tree_id);
+        decrement_rc_and_remove_single_node(objstore, tree_id);
     }
 
     return new_id;
@@ -104,7 +104,7 @@ ObjectId _update_dir(size_t branch_count, const fs::path& objdir, ObjectId tree_
 template<class F>
 void LocalBranch::update_dir(PathRange path, F&& f)
 {
-    auto id = _update_dir(1, _objdir, _commit.root_id, path, std::forward<F>(f));
+    auto id = _update_dir(1, _objects, _commit.root_id, path, std::forward<F>(f));
 
     if (_commit.root_id == id) return;
 
@@ -113,7 +113,7 @@ void LocalBranch::update_dir(PathRange path, F&& f)
 
     store_self();
 
-    refcount::increment_recursive(_objdir, _commit.root_id);
+    _objects.rc(_commit.root_id).increment_recursive_count();
 }
 
 //--------------------------------------------------------------------
@@ -134,7 +134,7 @@ void LocalBranch::store(PathRange path, const Blob& blob)
         [&] (Tree& tree, auto) {
             auto [child, inserted] = tree.insert(std::make_pair(path.back(), ObjectId{}));
             if (!inserted) throw_error(sys::errc::file_exists);
-            auto [id, created] = object::io::store_(_objdir, blob);
+            auto [id, created] = _objects.store_(blob);
             child.set_id(id);
             return id;
         });
@@ -158,7 +158,7 @@ size_t LocalBranch::write(PathRange path, const char* buf, size_t size, size_t o
 
             // XXX: Write only the necessary part to disk without loading
             // the whole blob into the memory.
-            auto blob = object::io::load<Blob>(_objdir, child.id());
+            auto blob = _objects.load<Blob>(child.id());
 
             size_t len = blob.size();
 
@@ -169,10 +169,10 @@ size_t LocalBranch::write(PathRange path, const char* buf, size_t size, size_t o
             memcpy(blob.data() + offset, buf, size);
 
             if (branch_count <= 1) {
-                decrement_rc_and_remove_single_node(_objdir, child.id());
+                decrement_rc_and_remove_single_node(_objects, child.id());
             }
 
-            child.set_id(object::io::store(_objdir, blob));
+            child.set_id(_objects.store(blob));
             return child.id();
         });
 
@@ -191,16 +191,16 @@ size_t LocalBranch::truncate(PathRange path, size_t size)
             if (!child) throw_error(sys::errc::no_such_file_or_directory);
 
             // XXX: Read only what's needed, not the whole blob
-            auto blob = object::io::load<Blob>(_objdir, child.id());
+            auto blob = _objects.load<Blob>(child.id());
 
             blob.resize(std::min<size_t>(blob.size(), size));
             size = blob.size();
 
             if (branch_count <= 1) {
-                decrement_rc_and_remove_single_node(_objdir, child.id());
+                decrement_rc_and_remove_single_node(_objects, child.id());
             }
 
-            child.set_id(object::io::store(_objdir, blob));
+            child.set_id(_objects.store(blob));
             return child.id();
         });
 
@@ -217,7 +217,7 @@ void LocalBranch::mkdir(PathRange path)
         [&] (Tree& parent, auto) {
             auto [child, inserted] = parent.insert(std::make_pair(path.back(), ObjectId{}));
             if (!inserted) throw_error(sys::errc::file_exists);
-            auto [id, created] = object::io::store_(_objdir, Tree{});
+            auto [id, created] = _objects.store_(Tree{});
             child.set_id(id);
             return id;
         });
@@ -234,7 +234,7 @@ bool LocalBranch::remove(PathRange path)
             auto child = tree.find(path.back());
             if (!child) throw_error(sys::errc::no_such_file_or_directory);
             if (branch_count <= 1) {
-                refcount::deep_remove(_objdir, child.id());
+                _objects.rc(child.id()).decrement_recursive_count();
             }
             tree.erase(child);
             return boost::none;
@@ -251,7 +251,7 @@ bool LocalBranch::remove(const fs::path& fspath)
 
 //--------------------------------------------------------------------
 void LocalBranch::sanity_check() const {
-    if (!object::io::is_complete(_objdir, _commit.root_id)) {
+    if (!_objects.is_complete(_commit.root_id)) {
         std::cerr << "LocalBranch is incomplete:\n";
         std::cerr << *this << "\n";
         ouisync_assert(false);
@@ -260,10 +260,10 @@ void LocalBranch::sanity_check() const {
 
 //--------------------------------------------------------------------
 
-Snapshot LocalBranch::create_snapshot(const fs::path& snapshotdir) const
+Snapshot LocalBranch::create_snapshot() const
 {
-    auto snapshot = Snapshot::create(snapshotdir, _objdir, _commit);
-    snapshot.capture_full_object(_commit.root_id);
+    auto snapshot = Snapshot::create(_commit, _objects, _options);
+    snapshot.insert_object(_commit.root_id, {});
     return snapshot;
 }
 
@@ -275,18 +275,20 @@ void LocalBranch::store_self() const {
 
 //--------------------------------------------------------------------
 
-LocalBranch::LocalBranch(const fs::path& file_path, const fs::path& objdir,
-        const UserId& user_id, Commit commit) :
+LocalBranch::LocalBranch(const fs::path& file_path, const UserId& user_id,
+        Commit commit, ObjectStore& objects, Options::LocalBranch options) :
     _file_path(file_path),
-    _objdir(objdir),
+    _options(move(options)),
+    _objects(objects),
     _user_id(user_id),
     _commit(move(commit))
 {}
 
-LocalBranch::LocalBranch(const fs::path& file_path, const fs::path& objdir,
-        const UserId& user_id) :
+LocalBranch::LocalBranch(const fs::path& file_path,
+        const UserId& user_id, ObjectStore& objects, Options::LocalBranch options) :
     _file_path(file_path),
-    _objdir(objdir),
+    _options(move(options)),
+    _objects(objects),
     _user_id(user_id)
 {
 }
@@ -299,13 +301,13 @@ bool LocalBranch::introduce_commit(const Commit& commit)
     if (_commit.root_id == commit.root_id) return false;
 
     auto old_root = _commit.root_id;
-    //auto rc = refcount::decrement(_objdir, old_root);
 
-    _commit = move(commit);
+    _commit = commit;
 
     store_self();
-    refcount::increment_recursive(_objdir, _commit.root_id);
-    refcount::deep_remove(_objdir, old_root);
+
+    _objects.rc(_commit.root_id).increment_recursive_count();
+    _objects.rc(old_root).decrement_recursive_count();
 
     return true;
 }
@@ -314,7 +316,7 @@ bool LocalBranch::introduce_commit(const Commit& commit)
 
 ObjectId LocalBranch::id_of(PathRange path) const
 {
-    return immutable_io().id_of(path);
+    return branch_view().id_of(path);
 }
 
 //--------------------------------------------------------------------
@@ -322,6 +324,6 @@ ObjectId LocalBranch::id_of(PathRange path) const
 std::ostream& ouisync::operator<<(std::ostream& os, const LocalBranch& branch)
 {
     os  << "LocalBranch:\n";
-    branch.immutable_io().show(os);
+    branch.branch_view().show(os);
     return os;
 }
