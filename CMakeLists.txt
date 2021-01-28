@@ -21,8 +21,8 @@ find_package(BuildBoost REQUIRED)
 set(BuildCryptoPP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 find_package(BuildCryptoPP REQUIRED)
 
-set (CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -fno-omit-frame-pointer -fsanitize=address")
-set (CMAKE_LINKER_FLAGS_DEBUG "${CMAKE_LINKER_FLAGS_DEBUG} -fno-omit-frame-pointer -fsanitize=address")
+set (CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -fno-omit-frame-pointer")
+set (CMAKE_LINKER_FLAGS_DEBUG "${CMAKE_LINKER_FLAGS_DEBUG} -fno-omit-frame-pointer")
 
 function(set_warning_level TARGET)
     if(MSVC)
