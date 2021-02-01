@@ -2,6 +2,7 @@
 
 #include "tag.h"
 
+#include "../user_id.h"
 #include "../object_id.h"
 #include "../shortcuts.h"
 #include "../version_vector.h"
@@ -18,12 +19,19 @@ namespace ouisync::object {
 
 class Tree final {
 public:
-    using ObjectVersions = std::set<VersionVector>;
-    using VersionedIds = std::map<ObjectId, ObjectVersions>;
+    struct Meta {
+        UserId created_by;
+        VersionVector version_vector;
+
+        template<class Archive>
+        void serialize(Archive& ar, const unsigned int version) {
+            ar & created_by & version_vector;
+        }
+    };
+    using VersionedIds = std::map<ObjectId, Meta>;
 
 private:
     using NameMap = std::map<std::string, VersionedIds>;
-    //using NameMap = std::map<std::string, ObjectId>;
 
     template<bool is_mutable>
     class Handle {

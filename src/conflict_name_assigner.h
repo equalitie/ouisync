@@ -18,10 +18,8 @@ public:
 
     void add(const object::Tree::VersionedIds& versioned_ids)
     {
-        for (auto& [id, vvs] : versioned_ids) {
-            for (auto& vv : vvs) {
-                _versions[id].insert(vv);
-            }
+        for (auto& [id, meta] : versioned_ids) {
+            _versions[id].insert(meta.version_vector);
         }
     }
 

@@ -10,12 +10,10 @@ using namespace ouisync::object;
 
 static void _hash(Sha256 hash, const Tree::VersionedIds& ids) {
     hash.update(uint32_t(ids.size()));
-    for (auto& [id, vvs] : ids) {
+    for (auto& [id, meta] : ids) {
         hash.update(id);
-        hash.update(uint32_t(vvs.size()));
-        for (auto& vv : vvs) {
-            hash.update(vv);
-        }
+        hash.update(meta.created_by);
+        hash.update(meta.version_vector);
     }
 }
 
