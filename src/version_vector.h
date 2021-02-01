@@ -116,6 +116,23 @@ public:
         }
     }
 
+    Version version_of(const UserId& uid) const {
+        auto i = _vv.find(uid);
+        if (i == _vv.end()) return 0u;
+        assert(i->second != 0u);
+        return i->second;
+    }
+
+    void set_version(const UserId& uid, Version v) {
+        if (v == 0) {
+            auto i = _vv.find(uid);
+            if (i == _vv.end()) return;
+            _vv.erase(i);
+        } else {
+            _vv[uid] = v;
+        }
+    }
+
 private:
     static
     const UserId& id_of(const Map::const_iterator& i)

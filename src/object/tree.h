@@ -28,6 +28,7 @@ public:
             ar & created_by & version_vector;
         }
     };
+
     using VersionedIds = std::map<ObjectId, Meta>;
 
 private:
