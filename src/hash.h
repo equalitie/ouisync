@@ -1,11 +1,14 @@
 #pragma once
 
+#include "shortcuts.h"
+
 #include <array>
 #include <cstring>
 #include <memory>
 #include <string>
 #include <vector>
 
+#include <boost/optional.hpp>
 #include <boost/asio/buffer.hpp>
 #include <boost/utility/string_view.hpp>
 #include <boost/endian/conversion.hpp>
@@ -20,28 +23,15 @@ enum class HashAlgorithm {
 };
 
 namespace hash_detail {
-    // This was done manually, but there is a static assertion
-    // in hash.cpp to make sure this stays correct in case cryptopp
-    // changes it.
-    // XXX This was done this was to avoid including <sha.h> in this
-    // file. The approach failed once we needed to cross compile the
-    // code. Thus we can avoid doing it all together and simply use
-    // structures defined in <sha.h>.
-    template<HashAlgorithm algo> struct ImplSize;
-    template<> struct ImplSize<HashAlgorithm::sha1>   { static constexpr size_t value = sizeof(CryptoPP::SHA1); };
-    template<> struct ImplSize<HashAlgorithm::sha256> { static constexpr size_t value = sizeof(CryptoPP::SHA256); };
-    template<> struct ImplSize<HashAlgorithm::sha512> { static constexpr size_t value = sizeof(CryptoPP::SHA512); };
-
     template<HashAlgorithm algo> struct DigestSize;
     template<> struct DigestSize<HashAlgorithm::sha1>   { static constexpr size_t value = 20; };
     template<> struct DigestSize<HashAlgorithm::sha256> { static constexpr size_t value = 32; };
     template<> struct DigestSize<HashAlgorithm::sha512> { static constexpr size_t value = 64; };
 
-    void perform_static_assertions();
-    void new_impl(HashAlgorithm, void* impl);
-    void update_impl(HashAlgorithm, void* impl, const uint8_t* data_in, size_t);
-    void close_impl(HashAlgorithm, void* impl, uint8_t* data_out);
-    void free_impl(HashAlgorithm, void* impl);
+    template<HashAlgorithm algo> struct Impl;
+    template<> struct Impl<HashAlgorithm::sha1>   { using Type = CryptoPP::SHA1; };
+    template<> struct Impl<HashAlgorithm::sha256> { using Type = CryptoPP::SHA256; };
+    template<> struct Impl<HashAlgorithm::sha512> { using Type = CryptoPP::SHA512; };
 
 } // namespace hash_detail
 
@@ -56,28 +46,22 @@ namespace hash_detail {
 template<HashAlgorithm algo>
 class Hash final {
 private:
-    // CryptoPP does an assert (in debug mode) that the data is aligned to 16 bytes.
-    static constexpr size_t MEM_ALIGN = 16;
-    using ImplBuffer = std::array<uint8_t, hash_detail::ImplSize<algo>::value + MEM_ALIGN>;
+    using Impl = typename hash_detail::Impl<algo>::Type;
 
 public:
     static constexpr size_t DigestSize = hash_detail::DigestSize<algo>::value;
     using Digest = std::array<uint8_t, DigestSize>;
 
-    Hash() :
-        _data(_impl.data() + MEM_ALIGN - (((size_t)_impl.data())%MEM_ALIGN))
+    Hash()
     {
-        hash_detail::perform_static_assertions();
     }
 
     inline void update(const void* buffer, size_t size)
     {
-        if (!_is_set) {
-            hash_detail::new_impl(algo, _data);
-            _is_set = true;
+        if (!_impl) {
+            _impl = Impl();
         }
-        hash_detail::update_impl(algo, _data,
-                reinterpret_cast<const uint8_t*>(buffer), size);
+        _impl->Update((CryptoPP::byte*) buffer, size);
     }
 
     inline void update(boost::string_view sv)
@@ -135,14 +119,12 @@ public:
 
     inline Digest close()
     {
-        if (!_is_set) {
-            hash_detail::new_impl(algo, _data);
-            _is_set = true;
+        if (!_impl) {
+            _impl = Impl();
         }
         Digest result;
-        hash_detail::close_impl(algo, _data, result.data());
-        hash_detail::free_impl(algo, _data);
-        _is_set = false;
+        _impl->Final(result.data());
+        _impl = boost::none;
         return result;
     }
 
@@ -156,12 +138,6 @@ public:
 
     static constexpr size_t size() {
         return DigestSize;
-    }
-
-    ~Hash() {
-        if (_is_set) {
-            hash_detail::free_impl(algo, _data);
-        }
     }
 
 private:
@@ -182,9 +158,7 @@ private:
     }
 
 private:
-    bool _is_set = false;
-    ImplBuffer _impl;
-    uint8_t* _data;
+    Opt<Impl> _impl;
 };
 
 using Sha1   = Hash<HashAlgorithm::sha1>;
