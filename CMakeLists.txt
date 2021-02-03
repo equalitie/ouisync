@@ -21,8 +21,17 @@ find_package(BuildBoost REQUIRED)
 set(BuildCryptoPP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 find_package(BuildCryptoPP REQUIRED)
 
-set (CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -fno-omit-frame-pointer")
-set (CMAKE_LINKER_FLAGS_DEBUG "${CMAKE_LINKER_FLAGS_DEBUG} -fno-omit-frame-pointer")
+# 2021-01-29:
+# On Android, the sanitizer causes the linker to fail.
+# The solution may be to make sure to compile all the libraries using the sanitizer flag, but
+# it requires verification.
+if (NOT ANDROID)
+    set (CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -fno-omit-frame-pointer -fsanitize=address")
+    set (CMAKE_LINKER_FLAGS_DEBUG "${CMAKE_LINKER_FLAGS_DEBUG} -fno-omit-frame-pointer -fsanitize=address")
+else()
+    set (CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -fno-omit-frame-pointer")
+    set (CMAKE_LINKER_FLAGS_DEBUG "${CMAKE_LINKER_FLAGS_DEBUG} -fno-omit-frame-pointer")
+endif()
 
 function(set_warning_level TARGET)
     if(MSVC)
