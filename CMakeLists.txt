@@ -37,15 +37,18 @@ function(set_warning_level TARGET)
     if(MSVC)
         target_compile_options(${TARGET} PRIVATE /W4 /WX)
     else()
-        target_compile_options(${TARGET} PRIVATE -Wall -Wextra -Werror -Wno-unused-parameter)
+        target_compile_options(${TARGET} PRIVATE -Wall -Wextra -Werror)
+        if (CMAKE_BUILD_TYPE STREQUAL "Debug")
+            target_compile_options(${TARGET} PRIVATE -Wno-unused-parameter -Wno-unused-private-field)
+        endif()
     endif()
 endfunction(set_warning_level)
 
 add_library(libouisync STATIC
     "src/user_id.cpp"
-    "src/hash.cpp"
-    "src/local_branch.cpp"
-    "src/remote_branch.cpp"
+    "src/branch.cpp"
+    #"src/local_branch.cpp"
+    #"src/remote_branch.cpp"
     "src/branch_view.cpp"
     "src/snapshot.cpp"
     "src/repository.cpp"
@@ -80,5 +83,5 @@ if(NOT ANDROID)
     target_compile_definitions(ouisync PRIVATE -D_FILE_OFFSET_BITS=64)
     target_link_libraries(ouisync PRIVATE libouisync fuse)
 
-    add_subdirectory(test)
+    #add_subdirectory(test)
 endif()

@@ -2,8 +2,11 @@
 
 #include "tag.h"
 
+#include "../user_id.h"
 #include "../object_id.h"
 #include "../shortcuts.h"
+#include "../version_vector.h"
+#include "../ouisync_assert.h"
 
 #include <map>
 #include <set>
@@ -11,113 +14,137 @@
 #include <boost/filesystem/path.hpp>
 #include <boost/serialization/map.hpp>
 #include <boost/serialization/array.hpp>
+#include <boost/range/adaptor/map.hpp>
 
 namespace ouisync::object {
 
-class Tree final : private std::map<std::string, ObjectId> {
+class Tree final {
+public:
+    struct VersionedObject {
+        ObjectId object_id;
+        VersionVector version_vector;
+
+        template<class Archive>
+        void serialize(Archive& ar, const unsigned int version) {
+            ar & object_id & version_vector;
+        }
+    };
+
+    using UserMap = std::map<UserId, VersionedObject>;
+
 private:
-    using Parent = std::map<std::string, ObjectId>;
-
-    struct Erase { ObjectId id; };
-    struct Move { ObjectId from, to; };
-    struct Insert { ObjectId id; };
-
-    using Edit = variant<Erase, Move, Insert>;
+    using NameMap = std::map<std::string, UserMap>;
 
     template<bool is_mutable>
     class Handle {
-        using TreePtr = std::conditional_t<is_mutable, Tree*, const Tree*>;
-        using Iterator = std::conditional_t<is_mutable, Parent::iterator, Parent::const_iterator>;
+        using ImplPtr = std::conditional_t<is_mutable, NameMap*, const NameMap*>;
+        using NameIterator = std::conditional_t<is_mutable, NameMap::iterator, NameMap::const_iterator>;
+        using UserIterator = std::conditional_t<is_mutable, UserMap::iterator, UserMap::const_iterator>;
 
       public:
         Handle() = default;
         Handle(const Handle&) = default;
         Handle& operator=(const Handle&) = default;
 
-        Handle(Handle&& other) : tree(other.tree), i(other.i)
+        Handle(Handle&& other) : name_map(other.name_map), i(other.i)
         {
-            other.tree = nullptr;
-            other.i = Parent::iterator();
+            other.name_map = nullptr;
+            other.i = NameMap::iterator();
         }
 
         Handle& operator=(Handle&& other)
         {
-            tree = other.tree;
+            name_map = other.name_map;
             i = other.i;
-            other.tree = nullptr;
-            other.i = Parent::iterator();
+            other.name_map = nullptr;
+            other.i = NameMap::iterator();
             return *this;
         }
 
-        ObjectId id() const {
-            assert(tree);
-            if (!tree) exit(1);
+        const UserMap& versioned_ids() const {
+            assert(name_map);
+            if (!name_map) exit(1);
             return i->second;
         }
 
-        operator bool() const { return tree != nullptr; }
+        UserMap& versioned_ids() {
+            assert(name_map);
+            if (!name_map) exit(1);
+            return i->second;
+        }
 
-        void set_id(const ObjectId& id) {
-            assert(tree);
-            if (!tree) exit(1);
-            if (id == i->second) return;
-            i->second = id;
+        operator bool() const { return name_map != nullptr; }
+
+        UserIterator begin() const { if (name_map) return i->second.begin(); else return empty.begin(); }
+        UserIterator end()   const { if (name_map) return i->second.end();   else return empty.end();   }
+
+        UserIterator begin() { if (name_map) return i->second.begin(); else return empty.begin(); }
+        UserIterator end()   { if (name_map) return i->second.end();   else return empty.end();   }
+
+        UserIterator find(const UserId& uid) {
+            ouisync_assert(name_map);
+            return i->second.find(uid);
         }
 
       private:
         friend class Tree;
-        Handle(TreePtr tree, Iterator i)
-            : tree(tree), i(i) {}
+        Handle(ImplPtr name_map, NameIterator i)
+            : name_map(name_map), i(i) {}
 
       private:
-        TreePtr tree = nullptr;
-        Iterator i;
+        ImplPtr name_map = nullptr;
+        NameIterator i;
+        UserMap empty;
     };
 
 public:
-    auto begin() const { return Parent::begin(); }
-    auto end()   const { return Parent::end();   }
+    auto begin() const { return _name_map.begin(); }
+    auto end()   const { return _name_map.end();   }
 
-    using Parent::size;
+    size_t size() const { return _name_map.size(); }
 
     using MutableHandle   = Handle<true>;
     using ImmutableHandle = Handle<false>;
 
     ImmutableHandle find(const std::string& k) const {
-        auto i = Parent::find(k);
-        if (i == Parent::end()) return {};
-        return {this, i};
+        auto i = _name_map.find(k);
+        if (i == _name_map.end()) return {};
+        return {&_name_map, i};
     }
 
     MutableHandle find(const std::string& k) {
-        auto i = Parent::find(k);
-        if (i == Parent::end()) return {};
-        return {this, i};
+        auto i = _name_map.find(k);
+        if (i == _name_map.end()) return {};
+        return {&_name_map, i};
+    }
+
+    UserMap& operator[](const std::string& dirname) {
+        return _name_map[dirname];
     }
 
     void erase(const MutableHandle& h)
     {
-        assert(h.tree);
-        assert(h.tree == this);
-        if (h.tree != this) exit(1);
-        Parent::erase(h.i);
+        assert(h.name_map);
+        assert(h.name_map == &_name_map);
+        if (h.name_map != &_name_map) exit(1);
+        _name_map.erase(h.i);
     }
 
-    std::pair<MutableHandle, bool>
-    insert(std::pair<std::string, ObjectId> pair) {
-        auto [i,inserted] = Parent::insert(std::move(pair));
-        return {MutableHandle{this, i}, inserted};
-    }
-
-    MutableHandle operator[](std::string key) {
-        return insert({std::move(key), ObjectId{}}).first;
-    }
-
-    std::set<ObjectId> children() const {
+    auto children() const {
         std::set<ObjectId> ch;
-        for (auto& [_, id] : *this) { ch.insert(id); }
+        for (auto& [_, user_map] : _name_map) {
+            for (auto& [user, vobj] : user_map) {
+                ch.insert(vobj.object_id);
+            }
+        }
         return ch;
     }
+
+    auto children_names() const {
+        return boost::adaptors::keys(_name_map);
+    }
+
+    void print(std::ostream&, unsigned level = 0) const;
 
 public:
     static constexpr Tag tag = Tag::Tree;
@@ -133,12 +160,15 @@ public:
 
     template<class Archive>
     void serialize(Archive& ar, const unsigned int version) {
-        ar & static_cast<Parent&>(*this);
+        ar & _name_map;
     }
 
     ObjectId calculate_id() const;
 
     friend std::ostream& operator<<(std::ostream&, const Tree&);
+
+private:
+    NameMap _name_map;
 };
 
 

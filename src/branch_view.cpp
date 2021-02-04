@@ -3,31 +3,22 @@
 #include "refcount.h"
 #include "object_store.h"
 #include "object/tagged.h"
+#include "error.h"
+#include "multi_dir.h"
 
 #include <boost/filesystem.hpp>
 #include <boost/serialization/vector.hpp>
+#include <boost/serialization/set.hpp>
+#include <iostream>
 
 using namespace ouisync;
 using object::Tree;
 using object::Blob;
+using std::set;
+using std::map;
+using std::string;
 
 //--------------------------------------------------------------------
-
-template<class F>
-static
-void _query_dir(ObjectStore& objects, ObjectId tree_id, PathRange path, F&& f)
-{
-    const Tree tree = objects.load<Tree>(tree_id);
-
-    if (path.empty()) {
-        f(tree);
-    } else {
-        auto child = tree.find(path.front());
-        if (!child) throw_error(sys::errc::no_such_file_or_directory);
-        path.advance_begin(1);
-        _query_dir(objects, child.id(), path, std::forward<F>(f));
-    }
-}
 
 static
 PathRange _parent(PathRange path) {
@@ -35,6 +26,11 @@ PathRange _parent(PathRange path) {
     return path;
 }
 
+//--------------------------------------------------------------------
+MultiDir BranchView::root() const
+{
+    return MultiDir{{_root_id}, &_objects};
+}
 //--------------------------------------------------------------------
 
 BranchView::BranchView(ObjectStore& objects, const ObjectId& root_id) :
@@ -44,12 +40,18 @@ BranchView::BranchView(ObjectStore& objects, const ObjectId& root_id) :
 
 //--------------------------------------------------------------------
 
-Tree BranchView::readdir(PathRange path) const
+set<string> BranchView::readdir(PathRange path) const
 {
-    Opt<Tree> retval;
-    _query_dir(_objects, _root_id, path, [&] (const Tree& tree) { retval = tree; });
-    assert(retval);
-    return move(*retval);
+
+    MultiDir dir = root().cd_into(path);
+
+    set<string> names;
+
+    for (auto& [name, object_id] : dir.list()) {
+        names.insert(name);
+    }
+
+    return names;
 }
 
 //--------------------------------------------------------------------
@@ -58,19 +60,17 @@ FileSystemAttrib BranchView::get_attr(PathRange path) const
 {
     if (path.empty()) return FileSystemDirAttrib{};
 
+    MultiDir dir = root().cd_into(_parent(path));
+
+    auto file_id = dir.file(path.back());
+
+    auto obj = _objects.load<Tree::Nothing, Blob::Size>(file_id);
+
     FileSystemAttrib attrib;
 
-    _query_dir(_objects, _root_id, _parent(path),
-        [&] (const Tree& parent) {
-            auto child = parent.find(path.back());
-            if (!child) throw_error(sys::errc::no_such_file_or_directory);
-
-            auto obj = _objects.load<Tree::Nothing, Blob::Size>(child.id());
-
-            apply(obj,
-                [&] (const Tree::Nothing&) { attrib = FileSystemDirAttrib{}; },
-                [&] (const Blob::Size& b) { attrib = FileSystemFileAttrib{b.value}; });
-        });
+    apply(obj,
+        [&] (const Tree::Nothing&) { attrib = FileSystemDirAttrib{}; },
+        [&] (const Blob::Size& b) { attrib = FileSystemFileAttrib{b.value}; });
 
     return attrib;
 }
@@ -81,61 +81,20 @@ size_t BranchView::read(PathRange path, const char* buf, size_t size, size_t off
 {
     if (path.empty()) throw_error(sys::errc::is_a_directory);
 
-    _query_dir(_objects, _root_id, _parent(path),
-        [&] (const Tree& tree) {
-            auto child = tree.find(path.back());
-            if (!child) throw_error(sys::errc::no_such_file_or_directory);
+    MultiDir dir = root().cd_into(_parent(path));
 
-            // XXX: Read only what's needed, not the whole blob
-            auto blob = _objects.load<Blob>(child.id());
+    auto blob = _objects.load<Blob>(dir.file(path.back()));
 
-            size_t len = blob.size();
+    size_t len = blob.size();
 
-            if (size_t(offset) < len) {
-                if (offset + size > len) size = len - offset;
-                memcpy((void*)buf, blob.data() + offset, size);
-            } else {
-                size = 0;
-            }
-        });
+    if (size_t(offset) < len) {
+        if (offset + size > len) size = len - offset;
+        memcpy((void*)buf, blob.data() + offset, size);
+    } else {
+        size = 0;
+    }
 
     return size;
-}
-
-//--------------------------------------------------------------------
-
-Opt<Blob> BranchView::maybe_load(PathRange path) const
-{
-    if (path.empty()) throw_error(sys::errc::is_a_directory);
-
-    Opt<Blob> retval;
-
-    _query_dir(_objects, _root_id, _parent(path),
-        [&] (const Tree& tree) {
-            auto child = tree.find(path.back());
-            if (!child) throw_error(sys::errc::no_such_file_or_directory);
-            retval = _objects.load<Blob>(child.id());
-        });
-
-    return retval;
-}
-
-//--------------------------------------------------------------------
-
-ObjectId BranchView::id_of(PathRange path) const
-{
-    if (path.empty()) return _root_id;
-
-    ObjectId retval;
-
-    _query_dir(_objects, _root_id, _parent(path),
-        [&] (const Tree& tree) {
-            auto child = tree.find(path.back());
-            if (!child) throw_error(sys::errc::no_such_file_or_directory);
-            retval = child.id();
-        });
-
-    return retval;
 }
 
 //--------------------------------------------------------------------
@@ -152,9 +111,12 @@ void _show(std::ostream& os, ObjectStore& objects, ObjectId id, std::string pad 
 
     apply(obj,
             [&] (const Tree& t) {
-                os << pad << t << " (" << rc << ")\n";
-                for (auto& [name, id] : t) {
-                    _show(os, objects, id, pad + "  ");
+                os << pad << "Tree ID:" << t.calculate_id() << " (" << rc << ")\n";
+                for (auto& [name, name_map] : t) {
+                    for (auto& [user, vobj] : name_map) {
+                        os << pad << "  U: " << user << "\n";
+                        _show(os, objects, vobj.object_id, pad + "    ");
+                    }
                 }
             },
             [&] (const Blob& b) {

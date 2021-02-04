@@ -6,11 +6,14 @@
 namespace ouisync {
 
 class VersionVector {
-private:
+public:
     using Version = uint64_t;
+
+private:
     using Map = std::map<UserId, Version>;
 
 public:
+
     void increment(const UserId& id)
     {
         auto iter = _vv.insert(std::make_pair(id, 0U)).first;
@@ -55,7 +58,14 @@ public:
         return result;
     }
 
-    bool operator<=(const VersionVector& that_vv) const {
+    // This one does a standard std::map comparison of keys and values. It does NOT
+    // express causal relationship. It is mostly useful for storing VersionVector
+    // in collections such as std::set which require this operator.
+    bool operator<(const VersionVector& other) const {
+        return _vv < other._vv;
+    }
+
+    bool same_as_or_happened_before(const VersionVector& that_vv) const {
         const Map& that = that_vv._vv;
 
         auto this_i = _vv.begin();
@@ -93,6 +103,37 @@ public:
     template<class Archive>
     void serialize(Archive& ar, unsigned version) {
         ar & _vv;
+    }
+
+    size_t size() const { return _vv.size(); }
+    auto begin() const { return _vv.begin(); }
+    auto end()   const { return _vv.end();   }
+
+    template<class Hash>
+    friend void update_hash(const VersionVector& vv, Hash& hash)
+    {
+        hash.update(uint32_t(vv.size()));
+        for (auto& [k, v] : vv._vv) {
+            hash.update(k);
+            hash.update(v);
+        }
+    }
+
+    Version version_of(const UserId& uid) const {
+        auto i = _vv.find(uid);
+        if (i == _vv.end()) return 0u;
+        assert(i->second != 0u);
+        return i->second;
+    }
+
+    void set_version(const UserId& uid, Version v) {
+        if (v == 0) {
+            auto i = _vv.find(uid);
+            if (i == _vv.end()) return;
+            _vv.erase(i);
+        } else {
+            _vv[uid] = v;
+        }
     }
 
 private:

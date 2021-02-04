@@ -10,6 +10,7 @@
 namespace ouisync {
 
 class ObjectStore;
+class MultiDir;
 
 class BranchView {
 public:
@@ -19,15 +20,13 @@ public:
 public:
     BranchView(ObjectStore&, const ObjectId& root_id);
 
-    Tree readdir(PathRange path) const;
+    std::set<std::string> readdir(PathRange path) const;
 
     FileSystemAttrib get_attr(PathRange path) const;
 
     size_t read(PathRange path, const char* buf, size_t size, size_t offset) const;
 
-    Opt<Blob> maybe_load(PathRange) const;
-
-    ObjectId id_of(PathRange) const;
+    //ObjectId id_of(PathRange) const;
 
     void show(std::ostream&) const;
 
@@ -37,6 +36,9 @@ public:
         b.show(os);
         return os;
     }
+
+private:
+    MultiDir root() const;
 
 private:
     ObjectStore& _objects;

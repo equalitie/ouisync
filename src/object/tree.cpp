@@ -1,5 +1,6 @@
 #include "tree.h"
 #include "tagged.h"
+#include "../version_vector.h"
 
 #include <iostream>
 #include <boost/filesystem.hpp>
@@ -12,22 +13,44 @@ ObjectId Tree::calculate_id() const
     Sha256 hash;
     hash.update(static_cast<std::underlying_type_t<Tag>>(tag));
     hash.update(uint32_t(size()));
-    for (auto& [k,v] : *this) {
-        hash.update(k);
-        hash.update(v);
+    for (auto& [filename,user_map] : *this) {
+        hash.update(filename);
+
+        hash.update(uint32_t(user_map.size()));
+
+        for (auto& [user, vobj] : user_map) {
+            hash.update(user);
+            hash.update(vobj.object_id);
+            hash.update(vobj.version_vector);
+        }
     }
+
     return hash.close();
 }
 
-std::ostream& ouisync::object::operator<<(std::ostream& os, const Tree& tree) {
-    os << "Tree id:" << tree.calculate_id() << " [";
+struct Padding {
+    unsigned level = 0;
+    Padding(unsigned level) : level(level) {}
 
-    bool is_first = true;
-    for (auto& [k, v] : tree) {
-        if (!is_first) os << ", ";
-        is_first = false;
-        os << k << ":" << v;
+    friend std::ostream& operator<<(std::ostream& os, Padding pad) {
+        for (unsigned i = 0; i < pad.level; ++i) { os << " "; }
+        return os;
     }
+};
 
-    return os << "]";
+void Tree::print(std::ostream& os, unsigned level) const
+{
+    os << Padding(level*4) << "Tree id:" << calculate_id() << "\n";
+    for (auto& [filename, user_map] : _name_map) {
+        os << Padding(level*4) << "  filename:" << filename << "\n";
+        for (auto& [user, vobj]: user_map) {
+            os << Padding(level*4) << "    user:" << user << "\n";
+            os << Padding(level*4) << "    obj:"  << vobj.object_id << "\n";
+        }
+    }
+}
+
+std::ostream& ouisync::object::operator<<(std::ostream& os, const Tree& tree) {
+    tree.print(os, 0);
+    return os;
 }

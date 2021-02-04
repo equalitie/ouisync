@@ -40,6 +40,12 @@ public:
         return _uuid == other._uuid;
     }
 
+    template<class Hash>
+    friend void update_hash(const UserId& uid, Hash& hash)
+    {
+        hash.update(uid._uuid.begin(), boost::uuids::uuid::static_size());
+    }
+
 private:
     UserId(const boost::uuids::uuid&);
 

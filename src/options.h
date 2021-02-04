@@ -35,6 +35,19 @@ public:
         fs::path snapshotdir;
     };
 
+    struct Branch {
+        fs::path objectdir;
+        fs::path snapshotdir;
+
+        operator Snapshot() const {
+            return { snapshotdir };
+        }
+    };
+
+    operator Branch() const {
+        return { objectdir, snapshotdir };
+    }
+
     struct LocalBranch {
         fs::path objectdir;
         fs::path snapshotdir;
