@@ -21,6 +21,7 @@ using boost::get;
 using std::make_pair;
 
 #define SANITY_CHECK_EACH_IO_FN false
+#define DEBUG_PRINT_CALL false
 
 Repository::Repository(executor_type ex, Options options) :
     _ex(std::move(ex)),
@@ -44,6 +45,10 @@ Repository::Repository(executor_type ex, Options options) :
 
 net::awaitable<Repository::Attrib> Repository::get_attr(PathRange path)
 {
+#if DEBUG_PRINT_CALL
+    std::cerr << "Enter: " << __PRETTY_FUNCTION__ << "\n";
+#endif
+
 #if SANITY_CHECK_EACH_IO_FN
     sanity_check();
     auto at_exit = defer([&] { sanity_check(); });
@@ -54,6 +59,10 @@ net::awaitable<Repository::Attrib> Repository::get_attr(PathRange path)
 
 net::awaitable<vector<string>> Repository::readdir(PathRange path)
 {
+#if DEBUG_PRINT_CALL
+    std::cerr << "Enter: " << __PRETTY_FUNCTION__ << "\n";
+#endif
+
 #if SANITY_CHECK_EACH_IO_FN
     sanity_check();
     auto at_exit = defer([&] { sanity_check(); });
@@ -72,6 +81,10 @@ net::awaitable<vector<string>> Repository::readdir(PathRange path)
 
 net::awaitable<size_t> Repository::read(PathRange path, char* buf, size_t size, off_t offset)
 {
+#if DEBUG_PRINT_CALL
+    std::cerr << "Enter: " << __PRETTY_FUNCTION__ << "\n";
+#endif
+
 #if SANITY_CHECK_EACH_IO_FN
     sanity_check();
     auto at_exit = defer([&] { sanity_check(); });
@@ -86,6 +99,10 @@ net::awaitable<size_t> Repository::read(PathRange path, char* buf, size_t size, 
 
 net::awaitable<size_t> Repository::write(PathRange path, const char* buf, size_t size, off_t offset)
 {
+#if DEBUG_PRINT_CALL
+    std::cerr << "Enter: " << __PRETTY_FUNCTION__ << "\n";
+#endif
+
 #if SANITY_CHECK_EACH_IO_FN
     sanity_check();
     auto at_exit = defer([&] { sanity_check(); });
@@ -104,6 +121,10 @@ net::awaitable<size_t> Repository::write(PathRange path, const char* buf, size_t
 
 net::awaitable<void> Repository::mknod(PathRange path, mode_t mode, dev_t dev)
 {
+#if DEBUG_PRINT_CALL
+    std::cerr << "Enter: " << __PRETTY_FUNCTION__ << "\n";
+#endif
+
 #if SANITY_CHECK_EACH_IO_FN
     sanity_check();
     auto at_exit = defer([&] { sanity_check(); });
@@ -124,6 +145,10 @@ net::awaitable<void> Repository::mknod(PathRange path, mode_t mode, dev_t dev)
 
 net::awaitable<void> Repository::mkdir(PathRange path, mode_t mode)
 {
+#if DEBUG_PRINT_CALL
+    std::cerr << "Enter: " << __PRETTY_FUNCTION__ << "\n";
+#endif
+
 #if SANITY_CHECK_EACH_IO_FN
     sanity_check();
     auto at_exit = defer([&] { sanity_check(); });
@@ -137,6 +162,10 @@ net::awaitable<void> Repository::mkdir(PathRange path, mode_t mode)
 
 net::awaitable<void> Repository::remove_file(PathRange path)
 {
+#if DEBUG_PRINT_CALL
+    std::cerr << "Enter: " << __PRETTY_FUNCTION__ << "\n";
+#endif
+
 #if SANITY_CHECK_EACH_IO_FN
     sanity_check();
     auto at_exit = defer([&] { sanity_check(); });
@@ -154,6 +183,10 @@ net::awaitable<void> Repository::remove_file(PathRange path)
 
 net::awaitable<void> Repository::remove_directory(PathRange path)
 {
+#if DEBUG_PRINT_CALL
+    std::cerr << "Enter: " << __PRETTY_FUNCTION__ << "\n";
+#endif
+
 #if SANITY_CHECK_EACH_IO_FN
     sanity_check();
     auto at_exit = defer([&] { sanity_check(); });
@@ -171,6 +204,10 @@ net::awaitable<void> Repository::remove_directory(PathRange path)
 
 net::awaitable<size_t> Repository::truncate(PathRange path, size_t size)
 {
+#if DEBUG_PRINT_CALL
+    std::cerr << "Enter: " << __PRETTY_FUNCTION__ << "\n";
+#endif
+
 #if SANITY_CHECK_EACH_IO_FN
     sanity_check();
     auto at_exit = defer([&] { sanity_check(); });
