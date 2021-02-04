@@ -16,10 +16,10 @@ public:
     ConflictNameAssigner(std::string name_root) :
         _name_root(std::move(name_root)) {}
 
-    void add(const object::Tree::VersionedIds& versioned_ids)
+    void add(const object::Tree::UserMap& usr_map)
     {
-        for (auto& [id, meta] : versioned_ids) {
-            _versions[id].insert(meta.version_vector);
+        for (auto& [user_id, vobj] : usr_map) {
+            _versions[user_id] = vobj.object_id;
         }
     }
 
@@ -32,7 +32,7 @@ public:
         if (_versions.empty()) return ret;
 
         if (_versions.size() == 1) {
-            ret.insert({_name_root, _versions.begin()->first});
+            ret.insert({_name_root, _versions.begin()->second});
             return ret;
         }
 
@@ -41,10 +41,10 @@ public:
         // one name, but it could change before it is saved.
         unsigned cnt = 0;
 
-        for (auto& [obj_id, vv] : _versions) {
+        for (auto& [user_id, object_id] : _versions) {
             std::stringstream ss;
             ss << _name_root << "-" << (cnt++);
-            ret[ss.str()] = obj_id;
+            ret[ss.str()] = object_id;
         }
 
         return ret;
@@ -52,7 +52,7 @@ public:
 
 private:
     std::string _name_root;
-    std::map<ObjectId, std::set<VersionVector>> _versions;
+    std::map<UserId, ObjectId> _versions;
 };
 
 }
