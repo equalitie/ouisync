@@ -9,6 +9,7 @@
 #include <boost/filesystem.hpp>
 #include <boost/serialization/vector.hpp>
 #include <boost/serialization/set.hpp>
+#include <iostream>
 
 using namespace ouisync;
 using object::Tree;
@@ -19,46 +20,11 @@ using std::string;
 
 //--------------------------------------------------------------------
 
-//template<class F>
-//static
-//void _query_dir(ObjectStore& objects, ObjectId tree_id, PathRange path, F&& f)
-//{
-//    const Tree tree = objects.load<Tree>(tree_id);
-//
-//    if (path.empty()) {
-//        f(tree);
-//    } else {
-//        auto child = tree.find(path.front());
-//        if (!child) throw_error(sys::errc::no_such_file_or_directory);
-//        path.advance_begin(1);
-//        _query_dir(objects, child.id(), path, std::forward<F>(f));
-//    }
-//}
-
 static
 PathRange _parent(PathRange path) {
     path.advance_end(-1);
     return path;
 }
-
-//map<ObjectId, set<VersionVector>> file(ObjectStore& objstore, const set<ObjectId>& dirs, const std::string& name)
-//{
-//    map<ObjectId, set<VersionVector>> retval;
-//
-//    for (auto& dir : dirs) {
-//        const auto obj = objects.load<Tree, Blob::Nothing>(tree_id);
-//        auto tree = boost::get<Tree>(&obj);
-//        if (!tree) continue;
-//        auto versions = tree.find(name);
-//        for (auto& [id, clock] : versions) {
-//            retval[id].;
-//        }
-//    }
-//
-//    return retval;
-//}
-
-//--------------------------------------------------------------------
 
 //--------------------------------------------------------------------
 MultiDir BranchView::root() const
@@ -133,36 +99,29 @@ size_t BranchView::read(PathRange path, const char* buf, size_t size, size_t off
 
 //--------------------------------------------------------------------
 
-//ObjectId BranchView::id_of(PathRange path) const
-//{
-//    if (path.empty()) return _root_id;
-//
-//    // XXX: This won't work for directories
-//    return root().cd_into(_parent(path)).file(path.back());
-//}
-
-//--------------------------------------------------------------------
-
 static
 void _show(std::ostream& os, ObjectStore& objects, ObjectId id, std::string pad = "") {
-    //if (!objects.exists(id)) {
-    //    os << pad << "!!! object " << id << " does not exist !!!\n";
-    //    return;
-    //}
+    if (!objects.exists(id)) {
+        os << pad << "!!! object " << id << " does not exist !!!\n";
+        return;
+    }
 
-    //auto obj = objects.load<Tree, Blob>(id);
-    //auto rc = objects.rc(id);
+    auto obj = objects.load<Tree, Blob>(id);
+    auto rc = objects.rc(id);
 
-    //apply(obj,
-    //        [&] (const Tree& t) {
-    //            os << pad << t << " (" << rc << ")\n";
-    //            for (auto& [name, id] : t) {
-    //                _show(os, objects, id, pad + "  ");
-    //            }
-    //        },
-    //        [&] (const Blob& b) {
-    //            os << pad << b << " (" << rc << ")\n";
-    //        });
+    apply(obj,
+            [&] (const Tree& t) {
+                os << pad << "Tree ID:" << t.calculate_id() << " (" << rc << ")\n";
+                for (auto& [name, name_map] : t) {
+                    for (auto& [user, vobj] : name_map) {
+                        os << pad << "  U: " << user << "\n";
+                        _show(os, objects, vobj.object_id, pad + "    ");
+                    }
+                }
+            },
+            [&] (const Blob& b) {
+                os << pad << b << " (" << rc << ")\n";
+            });
 }
 
 void BranchView::show(std::ostream& os) const
