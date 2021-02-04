@@ -6,6 +6,7 @@
 #include "../object_id.h"
 #include "../shortcuts.h"
 #include "../version_vector.h"
+#include "../ouisync_assert.h"
 
 #include <map>
 #include <set>
@@ -19,25 +20,26 @@ namespace ouisync::object {
 
 class Tree final {
 public:
-    struct Meta {
-        UserId created_by;
+    struct VersionedObject {
+        ObjectId object_id;
         VersionVector version_vector;
 
         template<class Archive>
         void serialize(Archive& ar, const unsigned int version) {
-            ar & created_by & version_vector;
+            ar & object_id & version_vector;
         }
     };
 
-    using VersionedIds = std::map<ObjectId, Meta>;
+    using UserMap = std::map<UserId, VersionedObject>;
 
 private:
-    using NameMap = std::map<std::string, VersionedIds>;
+    using NameMap = std::map<std::string, UserMap>;
 
     template<bool is_mutable>
     class Handle {
         using ImplPtr = std::conditional_t<is_mutable, NameMap*, const NameMap*>;
         using NameIterator = std::conditional_t<is_mutable, NameMap::iterator, NameMap::const_iterator>;
+        using UserIterator = std::conditional_t<is_mutable, UserMap::iterator, UserMap::const_iterator>;
 
       public:
         Handle() = default;
@@ -59,13 +61,13 @@ private:
             return *this;
         }
 
-        const VersionedIds& versioned_ids() const {
+        const UserMap& versioned_ids() const {
             assert(name_map);
             if (!name_map) exit(1);
             return i->second;
         }
 
-        VersionedIds& versioned_ids() {
+        UserMap& versioned_ids() {
             assert(name_map);
             if (!name_map) exit(1);
             return i->second;
@@ -73,15 +75,16 @@ private:
 
         operator bool() const { return name_map != nullptr; }
 
-        //void set_id(const ObjectId& id) {
-        //    assert(name_map);
-        //    if (!name_map) exit(1);
-        //    if (id == i->second) return;
-        //    i->second = id;
-        //}
+        UserIterator begin() const { if (name_map) return i->second.begin(); else return empty.begin(); }
+        UserIterator end()   const { if (name_map) return i->second.end();   else return empty.end();   }
 
-        auto begin() const { if (name_map) return i->second.begin(); else return empty.begin(); }
-        auto end()   const { if (name_map) return i->second.end();   else return empty.end();   }
+        UserIterator begin() { if (name_map) return i->second.begin(); else return empty.begin(); }
+        UserIterator end()   { if (name_map) return i->second.end();   else return empty.end();   }
+
+        UserIterator find(const UserId& uid) {
+            ouisync_assert(name_map);
+            return i->second.find(uid);
+        }
 
       private:
         friend class Tree;
@@ -91,7 +94,7 @@ private:
       private:
         ImplPtr name_map = nullptr;
         NameIterator i;
-        VersionedIds empty;
+        UserMap empty;
     };
 
 public:
@@ -115,6 +118,10 @@ public:
         return {&_name_map, i};
     }
 
+    UserMap& operator[](const std::string& dirname) {
+        return _name_map[dirname];
+    }
+
     void erase(const MutableHandle& h)
     {
         assert(h.name_map);
@@ -123,23 +130,11 @@ public:
         _name_map.erase(h.i);
     }
 
-    //std::pair<MutableHandle, bool>
-    //insert(std::pair<std::string, ObjectId> pair) {
-    //    auto [i,inserted] = _name_map.insert(std::move(pair));
-    //    return {MutableHandle{&_name_map, i}, inserted};
-    //}
-
-    //MutableHandle operator[](std::string key) {
-    //    //auto [i,inserted] = _name_map.insert({std::move(key), {}});
-    //    //return MutableHandle{&_name_map, i};
-    //    return insert({std::move(key), ObjectId{}}).first;
-    //}
-
     auto children() const {
         std::set<ObjectId> ch;
-        for (auto& [_, ids] : _name_map) {
-            for (auto& [id, versions] : ids) {
-                ch.insert(id);
+        for (auto& [_, user_map] : _name_map) {
+            for (auto& [user, vobj] : user_map) {
+                ch.insert(vobj.object_id);
             }
         }
         return ch;
@@ -148,6 +143,8 @@ public:
     auto children_names() const {
         return boost::adaptors::keys(_name_map);
     }
+
+    void print(std::ostream&, unsigned level = 0) const;
 
 public:
     static constexpr Tag tag = Tag::Tree;
