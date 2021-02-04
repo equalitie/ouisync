@@ -6,11 +6,14 @@
 namespace ouisync {
 
 class VersionVector {
-private:
+public:
     using Version = uint64_t;
+
+private:
     using Map = std::map<UserId, Version>;
 
 public:
+
     void increment(const UserId& id)
     {
         auto iter = _vv.insert(std::make_pair(id, 0U)).first;
