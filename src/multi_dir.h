@@ -21,9 +21,9 @@ public:
             const auto obj = objstore->load<Tree, Blob::Nothing>(from_id);
             auto tree = boost::get<Tree>(&obj);
             if (!tree) continue;
-            auto versions = tree->find(where);
-            for (auto& [id, clock] : versions) {
-                retval.ids.insert(id);
+            auto user_map = tree->find(where);
+            for (auto& [user_id, vobj] : user_map) {
+                retval.ids.insert(vobj.object_id);
             }
         }
     
