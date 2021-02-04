@@ -26,6 +26,7 @@ class Branch {
 public:
     using Blob = object::Blob;
     using Tree = object::Tree;
+    class FileOp;
 
 public:
     static
@@ -58,8 +59,6 @@ public:
 
     const UserId& user_id() const { return _user_id; }
 
-    //ObjectId id_of(PathRange) const;
-
     bool introduce_commit(const Commit&);
 
     Snapshot create_snapshot() const;
@@ -82,6 +81,8 @@ private:
     void store_self() const;
 
     template<class F> void update_dir(PathRange, F&&);
+
+    std::unique_ptr<FileOp> get_file(PathRange);
 
 private:
     fs::path _file_path;

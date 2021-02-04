@@ -23,6 +23,9 @@ using namespace ouisync;
 using std::move;
 using object::Blob;
 using object::Tree;
+using std::unique_ptr;
+using std::make_unique;
+using std::string;
 
 /* static */
 Branch Branch::create(const fs::path& path, UserId user_id, ObjectStore& objects, Options::Branch options)
@@ -65,61 +68,196 @@ void decrement_rc_and_remove_single_node(ObjectStore& objstore, const ObjectId& 
 
 //--------------------------------------------------------------------
 
-template<class F>
-static
-ObjectId _update_dir(size_t branch_count, ObjectStore& objstore, ObjectId tree_id, PathRange path, F&& f)
-{
-    assert("TODO" && 0);
-    return {};
+struct Op {
+    virtual Opt<Commit> commit() = 0;
+    virtual ObjectStore& objstore() = 0;
+    virtual ~Op() {}
+};
 
-    //Tree tree = objstore.load<Tree>(tree_id);
-    //auto rc = objstore.rc(tree_id).recursive_count();
-    //assert(rc > 0);
+struct TreeOp : Op {
+    virtual Tree& tree() = 0;
+    virtual ~TreeOp() {};
+};
 
-    //Opt<ObjectId> new_child_id;
+#define DBG std::cerr << __PRETTY_FUNCTION__ << ":" << __LINE__ << " "
 
-    //if (path.empty()) {
-    //    new_child_id = f(tree, branch_count + (rc-1));
-    //} else {
-    //    auto child = tree.find(path.front());
+class Root : public TreeOp {
+public:
+    Root(ObjectStore& objstore, const UserId& this_user_id, const Commit& commit) :
+        _objstore(objstore),
+        _this_user_id(this_user_id),
+        _commit(commit)
+    {
+        _tree = _objstore.load<Tree>(_commit.root_id);
+    }
 
-    //    if (!child) {
-    //        throw_error(sys::errc::no_such_file_or_directory);
-    //    }
+    Tree& tree() override {
+        return _tree;
+    }
 
-    //    path.advance_begin(1);
-    //    new_child_id = _update_dir(branch_count + (rc-1), objstore, child.id(), path, std::forward<F>(f));
-    //    child.set_id(*new_child_id);
-    //}
+    Opt<Commit> commit() override {
+        auto old_id = _commit.root_id;
+        auto new_id = _tree.calculate_id();
 
-    //auto [new_id, created] = objstore.store_(tree);
+        if (new_id == old_id) return boost::none;
 
-    //if (created && new_child_id) {
-    //    objstore.rc(*new_child_id).increment_recursive_count();
-    //}
+        _objstore.store(_tree);
 
-    //if (branch_count == 1) {
-    //    decrement_rc_and_remove_single_node(objstore, tree_id);
-    //}
+        for (auto id : _tree.children()) {
+            objstore().rc(id).increment_recursive_count();
+        }
 
-    //return new_id;
-}
+        _objstore.rc(new_id).increment_recursive_count();
+        _objstore.rc(old_id).decrement_recursive_count();
 
-template<class F>
-void Branch::update_dir(PathRange path, F&& f)
-{
-    auto id = _update_dir(1, _objects, _commit.root_id, path, std::forward<F>(f));
+        _commit.root_id = new_id;
+        _commit.stamp.increment(_this_user_id);
 
-    if (_commit.root_id == id) return;
+        return _commit;
+    }
 
-    _commit.root_id = id;
-    _commit.stamp.increment(_user_id);
+    ObjectStore& objstore() override { return _objstore; }
 
-    store_self();
+private:
+    ObjectStore& _objstore;
+    UserId _this_user_id;
+    Commit _commit;
+    Tree _tree;
+};
 
-    _objects.rc(_commit.root_id).increment_recursive_count();
-}
+class Cd : public TreeOp {
+public:
+    Cd(unique_ptr<TreeOp> parent, const UserId& this_user_id, string dirname, bool create = false) :
+        _parent(move(parent)),
+        _this_user_id(this_user_id),
+        _dirname(move(dirname))
+    {
+        auto child_versions = _parent->tree().find(_dirname);
 
+        if (!child_versions && !create) throw_error(sys::errc::no_such_file_or_directory);
+
+        VersionVector::Version highest_version = 0u;
+
+        for (auto& [user_id, vobj] : child_versions) {
+            // XXX: It should be enough to take a version that has been completely downloaded.
+            // But we don't keep that meta information yet. Thus we're using the fact here that
+            // whenever a user makes a change to a node, that node must have been complete.
+            if (user_id == _this_user_id) {
+                _old_tree_id = vobj.object_id;
+                _next_tree_vv = vobj.version_vector;
+                _next_tree_vv.increment(_this_user_id);
+                _tree = objstore().load<Tree>(vobj.object_id);
+                return;
+            }
+
+            highest_version = std::max(highest_version, vobj.version_vector.version_of(_this_user_id));
+        }
+
+        _next_tree_vv.set_version(_this_user_id, highest_version + 1);
+    }
+
+    Tree& tree() override {
+        return _tree;
+    }
+
+    Opt<Commit> commit() override {
+        auto new_tree_id = _tree.calculate_id();
+
+        if (_old_tree_id && *_old_tree_id == new_tree_id) {
+            return boost::none;
+        }
+
+        _parent->tree()[_dirname][_this_user_id] = { new_tree_id, _next_tree_vv };
+
+        objstore().store(_tree);
+
+        for (auto id : _tree.children()) {
+            objstore().rc(id).increment_recursive_count();
+        }
+
+        return _parent->commit();
+    }
+
+    ObjectStore& objstore() override {
+        return _parent->objstore();
+    }
+
+private:
+    unique_ptr<TreeOp> _parent;
+    UserId _this_user_id;
+    string _dirname;
+    Opt<ObjectId> _old_tree_id;
+    Tree _tree;
+    VersionVector _next_tree_vv;
+};
+
+class Branch::FileOp : public Op {
+private:
+    struct OldData {
+        ObjectId blob_id;
+        VersionVector version_vector;
+    };
+
+public:
+    FileOp(unique_ptr<TreeOp> parent, const UserId& this_user_id, string filename) :
+        _parent(move(parent)),
+        _this_user_id(this_user_id),
+        _filename(move(filename))
+    {
+        auto per_name = _parent->tree().find(_filename);
+
+        if (!per_name) {
+            return;
+        }
+
+        auto i = per_name.find(_this_user_id);
+
+        if (i != per_name.end()) {
+            _old = OldData { i->second.object_id, i->second.version_vector };
+            _blob = objstore().load<Blob>(_old->blob_id);
+        }
+    }
+
+    Opt<Blob>& blob() { return _blob; }
+
+    Opt<Commit> commit() override {
+        if (!_blob && !_old) return boost::none;
+
+        if (!_blob) { // Was removed
+            // We need a mark that the file was removed.
+            assert("TODO" && 0);
+        }
+
+        auto new_id = _blob->calculate_id();
+
+        if (_old && _old->blob_id == new_id) return boost::none;
+
+        objstore().store(*_blob);
+
+        VersionVector vv;
+
+        if (_old) {
+            vv = _old->version_vector;
+        }
+
+        vv.increment(_this_user_id);
+
+        _parent->tree()[_filename][_this_user_id] = { new_id, move(vv) };
+
+        return _parent->commit();
+    }
+
+    ObjectStore& objstore() override {
+        return _parent->objstore();
+    }
+
+private:
+    unique_ptr<TreeOp> _parent;
+    UserId _this_user_id;
+    string _filename;
+    Opt<OldData> _old;
+    Opt<Blob> _blob;
+};
 //--------------------------------------------------------------------
 
 static
@@ -129,20 +267,29 @@ PathRange parent(PathRange path) {
 }
 
 //--------------------------------------------------------------------
+unique_ptr<Branch::FileOp> Branch::get_file(PathRange path)
+{
+    if (path.empty()) throw_error(sys::errc::is_a_directory);
+
+    unique_ptr<TreeOp> dir = make_unique<Root>(_objects, _user_id, _commit);
+
+    for (auto& p : parent(path)) {
+        dir = make_unique<Cd>(move(dir), _user_id, p);
+    }
+
+    return make_unique<FileOp>(move(dir), _user_id, path.back());
+}
+//--------------------------------------------------------------------
 
 void Branch::store(PathRange path, const Blob& blob)
 {
-    assert("TODO" && 0);
-    //if (path.empty()) throw_error(sys::errc::is_a_directory);
+    auto file = get_file(path);
 
-    //update_dir(parent(path),
-    //    [&] (Tree& tree, auto) {
-    //        auto [child, inserted] = tree.insert(std::make_pair(path.back(), ObjectId{}));
-    //        if (!inserted) throw_error(sys::errc::file_exists);
-    //        auto [id, created] = _objects.store_(blob);
-    //        child.set_id(id);
-    //        return id;
-    //    });
+    file->blob() = blob;
+
+    if (auto commit = file->commit()) {
+        _commit = *commit;
+    }
 }
 
 void Branch::store(const fs::path& path, const Blob& blob)
@@ -154,87 +301,73 @@ void Branch::store(const fs::path& path, const Blob& blob)
 
 size_t Branch::write(PathRange path, const char* buf, size_t size, size_t offset)
 {
-    assert("TODO" && 0);
-    return 0;
+    if (path.empty()) throw_error(sys::errc::is_a_directory);
 
-    //if (path.empty()) throw_error(sys::errc::is_a_directory);
+    auto file = get_file(path);
 
-    //update_dir(parent(path),
-    //    [&] (Tree& tree, size_t branch_count) {
-    //        auto child = tree.find(path.back());
-    //        if (!child) throw_error(sys::errc::no_such_file_or_directory);
+    if (!file->blob()) {
+        file->blob() = Blob{};
+    }
 
-    //        // XXX: Write only the necessary part to disk without loading
-    //        // the whole blob into the memory.
-    //        auto blob = _objects.load<Blob>(child.id());
+    auto& blob = *file->blob();
 
-    //        size_t len = blob.size();
+    size_t len = blob.size();
 
-    //        if (offset + size > len) {
-    //            blob.resize(offset + size);
-    //        }
+    if (offset + size > len) {
+        blob.resize(offset + size);
+    }
 
-    //        memcpy(blob.data() + offset, buf, size);
+    memcpy(blob.data() + offset, buf, size);
 
-    //        if (branch_count <= 1) {
-    //            decrement_rc_and_remove_single_node(_objects, child.id());
-    //        }
+    if (auto commit = file->commit()) {
+        _commit = *commit;
+    }
 
-    //        child.set_id(_objects.store(blob));
-    //        return child.id();
-    //    });
-
-    //return size;
+    return size;
 }
 
 //--------------------------------------------------------------------
 
 size_t Branch::truncate(PathRange path, size_t size)
 {
-    assert("TODO" && 0);
-    return 0;
+    if (path.empty()) throw_error(sys::errc::is_a_directory);
 
-    //if (path.empty()) throw_error(sys::errc::is_a_directory);
+    auto file = get_file(path);
 
-    //update_dir(parent(path),
-    //    [&] (Tree& tree, auto branch_count) {
-    //        auto child = tree.find(path.back());
-    //        if (!child) throw_error(sys::errc::no_such_file_or_directory);
+    if (!file->blob()) {
+        file->blob() = Blob{};
+    }
 
-    //        // XXX: Read only what's needed, not the whole blob
-    //        auto blob = _objects.load<Blob>(child.id());
+    auto& blob = *file->blob();
 
-    //        blob.resize(std::min<size_t>(blob.size(), size));
-    //        size = blob.size();
+    blob.resize(std::min<size_t>(blob.size(), size));
 
-    //        if (branch_count <= 1) {
-    //            decrement_rc_and_remove_single_node(_objects, child.id());
-    //        }
+    if (auto commit = file->commit()) {
+        _commit = *commit;
+    }
 
-    //        child.set_id(_objects.store(blob));
-    //        return child.id();
-    //    });
-
-    //return size;
+    return blob.size();
 }
 
 //--------------------------------------------------------------------
 
 void Branch::mkdir(PathRange path)
 {
-    assert("TODO" && 0);
-    return;
+    if (path.empty()) throw_error(sys::errc::invalid_argument);
 
-    //if (path.empty()) throw_error(sys::errc::invalid_argument);
+    unique_ptr<TreeOp> dir = make_unique<Root>(_objects, _user_id, _commit);
 
-    //update_dir(parent(path),
-    //    [&] (Tree& parent, auto) {
-    //        auto [child, inserted] = parent.insert(std::make_pair(path.back(), ObjectId{}));
-    //        if (!inserted) throw_error(sys::errc::file_exists);
-    //        auto [id, created] = _objects.store_(Tree{});
-    //        child.set_id(id);
-    //        return id;
-    //    });
+    for (auto& p : parent(path)) {
+        dir = make_unique<Cd>(move(dir), _user_id, p);
+    }
+
+    if (dir->tree().find(path.back())) throw_error(sys::errc::file_exists);
+
+    dir = make_unique<Cd>(move(dir), _user_id, path.back(), true);
+
+    if (auto commit = dir->commit()) {
+        _commit = *commit;
+    }
 }
 
 //--------------------------------------------------------------------
@@ -262,11 +395,8 @@ bool Branch::remove(PathRange path)
 
 bool Branch::remove(const fs::path& fspath)
 {
-    assert("TODO" && 0);
-    return false;
-
-    //Path path(fspath);
-    //return remove(path);
+    Path path(fspath);
+    return remove(path);
 }
 
 //--------------------------------------------------------------------
