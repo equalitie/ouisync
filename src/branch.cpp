@@ -68,22 +68,24 @@ void decrement_rc_and_remove_single_node(ObjectStore& objstore, const ObjectId& 
 
 //--------------------------------------------------------------------
 
-struct Op {
+class Branch::Op {
+    public:
     virtual Opt<Commit> commit() = 0;
     virtual ObjectStore& objstore() = 0;
     virtual ~Op() {}
 };
 
-struct TreeOp : Op {
+class Branch::TreeOp : public Branch::Op {
+    public:
     virtual Tree& tree() = 0;
     virtual ~TreeOp() {};
 };
 
 #define DBG std::cerr << __PRETTY_FUNCTION__ << ":" << __LINE__ << " "
 
-class Root : public TreeOp {
+class Branch::RootOp : public Branch::TreeOp {
 public:
-    Root(ObjectStore& objstore, const UserId& this_user_id, const Commit& commit) :
+    RootOp(ObjectStore& objstore, const UserId& this_user_id, const Commit& commit) :
         _objstore(objstore),
         _this_user_id(this_user_id),
         _commit(commit)
@@ -125,9 +127,9 @@ private:
     Tree _tree;
 };
 
-class Cd : public TreeOp {
+class Branch::CdOp : public Branch::TreeOp {
 public:
-    Cd(unique_ptr<TreeOp> parent, const UserId& this_user_id, string dirname, bool create = false) :
+    CdOp(unique_ptr<Branch::TreeOp> parent, const UserId& this_user_id, string dirname, bool create = false) :
         _parent(move(parent)),
         _this_user_id(this_user_id),
         _dirname(move(dirname))
@@ -191,7 +193,7 @@ private:
     VersionVector _next_tree_vv;
 };
 
-class Branch::FileOp : public Op {
+class Branch::FileOp : public Branch::Op {
 private:
     struct OldData {
         ObjectId blob_id;
@@ -258,6 +260,35 @@ private:
     Opt<OldData> _old;
     Opt<Blob> _blob;
 };
+
+// XXX: This is just a stub, proper implementation needs to create an entry
+// that marks the file/directory as removed. Otherwise concurrent edits would
+// always re-add that directory back.
+class Branch::RemoveOp : public Branch::Op {
+public:
+    RemoveOp(unique_ptr<Branch::TreeOp> parent, string filename) :
+        _parent(move(parent))
+    {
+        _tree_entry = _parent->tree().find(filename);
+
+        if (!_tree_entry) {
+            throw_error(sys::errc::no_such_file_or_directory);
+        }
+    }
+
+    Opt<Commit> commit() override {
+        _parent->tree().erase(_tree_entry);
+        return _parent->commit();
+    }
+
+    ObjectStore& objstore() override {
+        return _parent->objstore();
+    }
+
+private:
+    unique_ptr<Branch::TreeOp> _parent;
+    Tree::MutableHandle _tree_entry;
+};
 //--------------------------------------------------------------------
 
 static
@@ -267,29 +298,46 @@ PathRange parent(PathRange path) {
 }
 
 //--------------------------------------------------------------------
+unique_ptr<Branch::TreeOp> Branch::root()
+{
+    return make_unique<Branch::RootOp>(_objects, _user_id, _commit);
+}
+
+unique_ptr<Branch::TreeOp> Branch::cd_into(PathRange path)
+{
+    unique_ptr<TreeOp> dir = root();
+
+    for (auto& p : path) {
+        dir = make_unique<Branch::CdOp>(move(dir), _user_id, p);
+    }
+
+    return dir;
+}
+
 unique_ptr<Branch::FileOp> Branch::get_file(PathRange path)
 {
     if (path.empty()) throw_error(sys::errc::is_a_directory);
 
-    unique_ptr<TreeOp> dir = make_unique<Root>(_objects, _user_id, _commit);
-
-    for (auto& p : parent(path)) {
-        dir = make_unique<Cd>(move(dir), _user_id, p);
-    }
+    unique_ptr<TreeOp> dir = cd_into(parent(path));
 
     return make_unique<FileOp>(move(dir), _user_id, path.back());
 }
+
+template<class OpT>
+void Branch::commit(const unique_ptr<OpT>& op)
+{
+    if (auto commit = op->commit()) {
+        _commit = *commit;
+    }
+}
+
 //--------------------------------------------------------------------
 
 void Branch::store(PathRange path, const Blob& blob)
 {
     auto file = get_file(path);
-
     file->blob() = blob;
-
-    if (auto commit = file->commit()) {
-        _commit = *commit;
-    }
+    commit(file);
 }
 
 void Branch::store(const fs::path& path, const Blob& blob)
@@ -319,9 +367,7 @@ size_t Branch::write(PathRange path, const char* buf, size_t size, size_t offset
 
     memcpy(blob.data() + offset, buf, size);
 
-    if (auto commit = file->commit()) {
-        _commit = *commit;
-    }
+    commit(file);
 
     return size;
 }
@@ -342,9 +388,7 @@ size_t Branch::truncate(PathRange path, size_t size)
 
     blob.resize(std::min<size_t>(blob.size(), size));
 
-    if (auto commit = file->commit()) {
-        _commit = *commit;
-    }
+    commit(file);
 
     return blob.size();
 }
@@ -355,42 +399,26 @@ void Branch::mkdir(PathRange path)
 {
     if (path.empty()) throw_error(sys::errc::invalid_argument);
 
-    unique_ptr<TreeOp> dir = make_unique<Root>(_objects, _user_id, _commit);
-
-    for (auto& p : parent(path)) {
-        dir = make_unique<Cd>(move(dir), _user_id, p);
-    }
+    unique_ptr<TreeOp> dir = cd_into(parent(path));
 
     if (dir->tree().find(path.back())) throw_error(sys::errc::file_exists);
 
-    dir = make_unique<Cd>(move(dir), _user_id, path.back(), true);
+    dir = make_unique<Branch::CdOp>(move(dir), _user_id, path.back(), true);
 
-    if (auto commit = dir->commit()) {
-        _commit = *commit;
-    }
+    commit(dir);
 }
 
 //--------------------------------------------------------------------
 
 bool Branch::remove(PathRange path)
 {
-    assert("TODO" && 0);
-    return false;
+    if (path.empty()) throw_error(sys::errc::operation_not_permitted);
 
-    //if (path.empty()) throw_error(sys::errc::operation_not_permitted);
+    auto dir = cd_into(parent(path));
+    auto rm = make_unique<Branch::RemoveOp>(move(dir), path.back());
 
-    //update_dir(parent(path),
-    //    [&] (Tree& tree, size_t branch_count) {
-    //        auto child = tree.find(path.back());
-    //        if (!child) throw_error(sys::errc::no_such_file_or_directory);
-    //        if (branch_count <= 1) {
-    //            _objects.rc(child.id()).decrement_recursive_count();
-    //        }
-    //        tree.erase(child);
-    //        return boost::none;
-    //    });
-
-    //return true;
+    commit(rm);
+    return true;
 }
 
 bool Branch::remove(const fs::path& fspath)
@@ -461,13 +489,6 @@ bool Branch::introduce_commit(const Commit& commit)
 
     return true;
 }
-
-//--------------------------------------------------------------------
-
-//ObjectId Branch::id_of(PathRange path) const
-//{
-//    return branch_view().id_of(path);
-//}
 
 //--------------------------------------------------------------------
 

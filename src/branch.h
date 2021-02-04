@@ -26,7 +26,13 @@ class Branch {
 public:
     using Blob = object::Blob;
     using Tree = object::Tree;
+    class Op;
+    class TreeOp;
     class FileOp;
+    class RootOp;
+    class BranchOp;
+    class RemoveOp;
+    class CdOp;
 
 public:
     static
@@ -82,6 +88,12 @@ private:
 
     template<class F> void update_dir(PathRange, F&&);
 
+
+    template<class OpT>
+    void commit(const std::unique_ptr<OpT>&);
+
+    std::unique_ptr<TreeOp> root();
+    std::unique_ptr<TreeOp> cd_into(PathRange);
     std::unique_ptr<FileOp> get_file(PathRange);
 
 private:
