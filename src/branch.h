@@ -28,6 +28,7 @@ public:
     using Tree = object::Tree;
     class Op;
     class TreeOp;
+    class HasTreeParrentOp;
     class FileOp;
     class RootOp;
     class BranchOp;

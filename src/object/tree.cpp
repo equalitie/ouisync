@@ -28,6 +28,19 @@ ObjectId Tree::calculate_id() const
     return hash.close();
 }
 
+VersionVector Tree::calculate_version_vector_union() const
+{
+    VersionVector result;
+
+    for (auto& [filename, user_map] : _name_map) {
+        for (auto& [username, vobj] : user_map) {
+            result = result.merge(vobj.version_vector);
+        }
+    }
+
+    return result;
+}
+
 struct Padding {
     unsigned level = 0;
     Padding(unsigned level) : level(level) {}

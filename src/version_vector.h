@@ -65,7 +65,7 @@ public:
         return _vv < other._vv;
     }
 
-    bool same_as_or_happened_before(const VersionVector& that_vv) const {
+    bool is_same_or_happened_before(const VersionVector& that_vv) const {
         const Map& that = that_vv._vv;
 
         auto this_i = _vv.begin();
@@ -98,6 +98,10 @@ public:
         }
 
         return true;
+    }
+
+    bool is_concurrent_or_happened_after(const VersionVector& that_vv) const {
+        return !this->is_same_or_happened_before(that_vv);
     }
 
     template<class Archive>

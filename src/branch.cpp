@@ -27,6 +27,8 @@ using std::unique_ptr;
 using std::make_unique;
 using std::string;
 
+#define DBG std::cerr << __PRETTY_FUNCTION__ << ":" << __LINE__ << " "
+
 /* static */
 Branch Branch::create(const fs::path& path, UserId user_id, ObjectStore& objects, Options::Branch options)
 {
@@ -72,6 +74,7 @@ class Branch::Op {
     public:
     virtual Opt<Commit> commit() = 0;
     virtual ObjectStore& objstore() = 0;
+    virtual Branch::RootOp* root() = 0;
     virtual ~Op() {}
 };
 
@@ -80,8 +83,6 @@ class Branch::TreeOp : public Branch::Op {
     virtual Tree& tree() = 0;
     virtual ~TreeOp() {};
 };
-
-#define DBG std::cerr << __PRETTY_FUNCTION__ << ":" << __LINE__ << " "
 
 class Branch::RootOp : public Branch::TreeOp {
 public:
@@ -113,12 +114,23 @@ public:
         _objstore.rc(old_id).decrement_recursive_count();
 
         _commit.root_id = new_id;
-        _commit.stamp.increment(_this_user_id);
+
+        auto new_stamp = _tree.calculate_version_vector_union();
+
+        assert(new_stamp.is_concurrent_or_happened_after(_commit.stamp));
+
+        _commit.stamp = move(new_stamp);
 
         return _commit;
     }
 
     ObjectStore& objstore() override { return _objstore; }
+
+    RootOp* root() override { return this; }
+
+    void increment(VersionVector& vv) const {
+        vv.set_version(_this_user_id, _commit.stamp.version_of(_this_user_id) + 1);
+    }
 
 private:
     ObjectStore& _objstore;
@@ -128,9 +140,14 @@ private:
 };
 
 class Branch::CdOp : public Branch::TreeOp {
+    struct Old {
+        ObjectId tree_id;
+        VersionVector tree_vv;
+    };
 public:
     CdOp(unique_ptr<Branch::TreeOp> parent, const UserId& this_user_id, string dirname, bool create = false) :
         _parent(move(parent)),
+        _root(_parent->root()),
         _this_user_id(this_user_id),
         _dirname(move(dirname))
     {
@@ -138,24 +155,16 @@ public:
 
         if (!child_versions && !create) throw_error(sys::errc::no_such_file_or_directory);
 
-        VersionVector::Version highest_version = 0u;
-
         for (auto& [user_id, vobj] : child_versions) {
             // XXX: It should be enough to take a version that has been completely downloaded.
             // But we don't keep that meta information yet. Thus we're using the fact here that
             // whenever a user makes a change to a node, that node must have been complete.
             if (user_id == _this_user_id) {
-                _old_tree_id = vobj.object_id;
-                _next_tree_vv = vobj.version_vector;
-                _next_tree_vv.increment(_this_user_id);
+                _old = Old{ vobj.object_id, vobj.version_vector };
                 _tree = objstore().load<Tree>(vobj.object_id);
                 return;
             }
-
-            highest_version = std::max(highest_version, vobj.version_vector.version_of(_this_user_id));
         }
-
-        _next_tree_vv.set_version(_this_user_id, highest_version + 1);
     }
 
     Tree& tree() override {
@@ -165,11 +174,21 @@ public:
     Opt<Commit> commit() override {
         auto new_tree_id = _tree.calculate_id();
 
-        if (_old_tree_id && *_old_tree_id == new_tree_id) {
+        if (_old && _old->tree_id == new_tree_id) {
             return boost::none;
         }
 
-        _parent->tree()[_dirname][_this_user_id] = { new_tree_id, _next_tree_vv };
+        VersionVector new_vv;
+
+        if (_old) {
+            // XXX: We should make a union of all `_dirname`s per each users
+            // that we've have downloaded *completely*.
+            new_vv = _old->tree_vv;
+        }
+
+        root()->increment(new_vv);
+
+        _parent->tree()[_dirname][_this_user_id] = { new_tree_id, move(new_vv) };
 
         objstore().store(_tree);
 
@@ -184,13 +203,15 @@ public:
         return _parent->objstore();
     }
 
+    RootOp* root() override { return _root; }
+
 private:
     unique_ptr<TreeOp> _parent;
+    RootOp* _root;
     UserId _this_user_id;
     string _dirname;
-    Opt<ObjectId> _old_tree_id;
+    Opt<Old> _old;
     Tree _tree;
-    VersionVector _next_tree_vv;
 };
 
 class Branch::FileOp : public Branch::Op {
@@ -242,7 +263,7 @@ public:
             vv = _old->version_vector;
         }
 
-        vv.increment(_this_user_id);
+        root()->increment(vv);
 
         _parent->tree()[_filename][_this_user_id] = { new_id, move(vv) };
 
@@ -252,6 +273,8 @@ public:
     ObjectStore& objstore() override {
         return _parent->objstore();
     }
+
+    RootOp* root() override { return _parent->root(); }
 
 private:
     unique_ptr<TreeOp> _parent;
@@ -284,6 +307,8 @@ public:
     ObjectStore& objstore() override {
         return _parent->objstore();
     }
+
+    RootOp* root() override { return _parent->root(); }
 
 private:
     unique_ptr<Branch::TreeOp> _parent;
@@ -475,7 +500,7 @@ Branch::Branch(const fs::path& file_path,
 
 bool Branch::introduce_commit(const Commit& commit)
 {
-    if (!(_commit.stamp.same_as_or_happened_before(commit.stamp))) return false;
+    if (!(_commit.stamp.is_same_or_happened_before(commit.stamp))) return false;
     if (_commit.root_id == commit.root_id) return false;
 
     auto old_root = _commit.root_id;

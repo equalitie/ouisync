@@ -146,6 +146,8 @@ public:
 
     void print(std::ostream&, unsigned level = 0) const;
 
+    VersionVector calculate_version_vector_union() const;
+
 public:
     static constexpr Tag tag = Tag::Tree;
 
@@ -170,8 +172,6 @@ public:
 private:
     NameMap _name_map;
 };
-
-
 
 } // namespace
 
