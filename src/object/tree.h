@@ -148,6 +148,18 @@ public:
 
     VersionVector calculate_version_vector_union() const;
 
+    template<class F>
+    void for_each_unique_child(const F& f) const {
+        for (auto& [filename, usermap] : _name_map) {
+            std::set<ObjectId> used;
+            for (auto& [user_id, vobj] : usermap) {
+                if (used.count(vobj.object_id)) continue;
+                used.insert(vobj.object_id);
+                f(filename, vobj.object_id);
+            }
+        }
+    }
+
 public:
     static constexpr Tag tag = Tag::Tree;
 

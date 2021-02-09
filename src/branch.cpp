@@ -26,8 +26,19 @@ using object::Tree;
 using std::unique_ptr;
 using std::make_unique;
 using std::string;
+using std::set;
 
 #define DBG std::cerr << __PRETTY_FUNCTION__ << ":" << __LINE__ << " "
+
+static
+void insert_object(Branch::HashSet& hash_set, const ObjectId& id, const string& filename, const ObjectId& parent_id) {
+    auto i = hash_set.insert({id, {}}).first;
+    Sha256 hash;
+    hash.update(parent_id);
+    hash.update(filename);
+    auto inserted = i->second.insert(hash.close()).second;
+    ouisync_assert(inserted);
+}
 
 /* static */
 Branch Branch::create(const fs::path& path, UserId user_id, ObjectStore& objects, Options::Branch options)
@@ -42,7 +53,6 @@ Branch Branch::create(const fs::path& path, UserId user_id, ObjectStore& objects
     object::Tree root_obj;
 
     root_id = objects.store(root_obj);
-    objects.rc(root_id).increment_recursive_count();
 
     Branch branch(path, user_id, Commit{move(clock), root_id}, objects, move(options));
     branch.store_self();
@@ -76,10 +86,11 @@ class Branch::TreeOp : public Branch::Op {
 
 class Branch::RootOp : public Branch::TreeOp {
 public:
-    RootOp(ObjectStore& objstore, const UserId& this_user_id, const Commit& commit) :
+    RootOp(ObjectStore& objstore, const UserId& this_user_id, const Commit& commit, Branch::HashSet& hash_set) :
         _objstore(objstore),
         _this_user_id(this_user_id),
-        _commit(commit)
+        _commit(commit),
+        _hash_set(hash_set)
     {
         _tree = _objstore.load<Tree>(_commit.root_id);
     }
@@ -96,12 +107,12 @@ public:
 
         _objstore.store(_tree);
 
-        for (auto id : _tree.children()) {
-            objstore().rc(id).increment_recursive_count();
-        }
+        _tree.for_each_unique_child([&] (auto& filename, auto& child_id) {
+                insert_object(child_id, filename, new_id);
+            });
 
-        _objstore.rc(new_id).increment_recursive_count();
-        _objstore.rc(old_id).decrement_recursive_count();
+        insert_object(new_id, "", new_id);
+        remove_object(old_id, "", old_id);
 
         _commit.root_id = new_id;
 
@@ -122,11 +133,43 @@ public:
         vv.set_version(_this_user_id, _commit.stamp.version_of(_this_user_id) + 1);
     }
 
+    void insert_object(const ObjectId& id, const string& filename, const ObjectId& parent_id) {
+        ::insert_object(_hash_set, id, filename, parent_id);
+    }
+
+    void remove_object(const ObjectId& id, const string& filename, const ObjectId& parent_id) {
+        auto i = _hash_set.find(id);
+        ouisync_assert(i != _hash_set.end());
+        Sha256 hash;
+        hash.update(parent_id);
+        hash.update(filename);
+        auto erased = i->second.erase(hash.close());
+        ouisync_assert(erased);
+        if (!i->second.empty()) return;
+
+        // If we're here, that means no other node points to this object.
+        _hash_set.erase(i);
+
+        auto obj = _objstore.load<Tree, Blob::Nothing>(id);
+    
+        apply(obj,
+                [&](const Tree& tree) {
+                    tree.for_each_unique_child([&] (auto& filename, auto& object_id) {
+                        remove_object(object_id, filename, id);
+                    });
+                },
+                [&](const Blob::Nothing&) {
+                });
+
+        _objstore.remove(id);
+    }
+
 private:
     ObjectStore& _objstore;
     UserId _this_user_id;
     Commit _commit;
     Tree _tree;
+    Branch::HashSet& _hash_set;
 };
 
 class Branch::CdOp : public Branch::TreeOp {
@@ -182,9 +225,9 @@ public:
 
         objstore().store(_tree);
 
-        for (auto id : _tree.children()) {
-            objstore().rc(id).increment_recursive_count();
-        }
+        _tree.for_each_unique_child([&] (auto& filename, auto& child_id) {
+                _root->insert_object(child_id, filename, new_tree_id);
+            });
 
         return _parent->commit();
     }
@@ -315,7 +358,7 @@ PathRange parent(PathRange path) {
 //--------------------------------------------------------------------
 unique_ptr<Branch::TreeOp> Branch::root()
 {
-    return make_unique<Branch::RootOp>(_objects, _user_id, _commit);
+    return make_unique<Branch::RootOp>(_objects, _user_id, _commit, _hash_set);
 }
 
 unique_ptr<Branch::TreeOp> Branch::cd_into(PathRange path)
@@ -466,7 +509,9 @@ Branch::Branch(const fs::path& file_path, const UserId& user_id,
     _objects(objects),
     _user_id(user_id),
     _commit(move(commit))
-{}
+{
+    insert_object(_hash_set, _commit.root_id, "", _commit.root_id);
+}
 
 Branch::Branch(const fs::path& file_path,
         const UserId& user_id, ObjectStore& objects, Options::Branch options) :

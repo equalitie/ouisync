@@ -35,6 +35,11 @@ public:
     class RemoveOp;
     class CdOp;
 
+    using HashSet = std::map<ObjectId, std::set<Sha256::Digest>>;
+    //                                         |______________|
+    //                                                |
+    //         Hash(parent.object_id || file-name)  <-+
+
 public:
     static
     Branch create(const fs::path& path, UserId user_id, ObjectStore&, Options::Branch);
@@ -70,7 +75,7 @@ public:
 
     template<class Archive>
     void serialize(Archive& ar, unsigned) {
-        ar & _commit;
+        ar & _commit & _hash_set;
     }
 
     void sanity_check() const;
@@ -99,6 +104,7 @@ private:
     ObjectStore& _objects;
     UserId _user_id;
     Commit _commit;
+    HashSet _hash_set;
 };
 
 } // namespace
