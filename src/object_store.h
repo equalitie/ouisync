@@ -3,7 +3,7 @@
 #include "object_id.h"
 #include "archive.h"
 #include "shortcuts.h"
-#include "object/tag.h"
+#include "object_tag.h"
 
 #include <boost/filesystem/path.hpp>
 #include <boost/filesystem/fstream.hpp>
@@ -15,11 +15,11 @@ namespace ouisync {
 // -------------------------------------------------------------------
 namespace detail {
 
-std::exception bad_tag_exception(object::Tag requested, object::Tag parsed);
+std::exception bad_tag_exception(ObjectTag requested, ObjectTag parsed);
 
 template<class T, class... Ts> struct LoadVariant {
     template<class Variant, class Archive>
-    static void load(object::Tag tag, Variant& result, Archive& ar) {
+    static void load(ObjectTag tag, Variant& result, Archive& ar) {
         if (tag == T::tag) {
             T obj;
             ar & obj;
@@ -31,7 +31,7 @@ template<class T, class... Ts> struct LoadVariant {
 };
 template<class T> struct LoadVariant<T> {
     template<class Variant, class Archive>
-    static void load(object::Tag tag, Variant& result, Archive& ar) {
+    static void load(ObjectTag tag, Variant& result, Archive& ar) {
         if (tag == T::tag) {
             T obj;
             ar & obj;
@@ -62,7 +62,7 @@ struct LoadWithTag {
 
     template<class Archive>
     void load(Archive& ar, const unsigned int version) {
-        object::Tag tag;
+        ObjectTag tag;
         ar & tag;
 
         if (tag != Obj::tag) {
@@ -84,7 +84,7 @@ struct LoadWithTag<boost::variant<Ts...>> {
 
     template<class Archive>
     void load(Archive& ar, const unsigned int version) {
-        object::Tag tag;
+        ObjectTag tag;
         ar & tag;
         detail::LoadVariant<Ts...>::load(tag, var, ar);
     }

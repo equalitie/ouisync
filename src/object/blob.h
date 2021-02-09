@@ -1,6 +1,6 @@
 #pragma once
 
-#include "tag.h"
+#include "../object_tag.h"
 #include "../object_id.h"
 #include "../shortcuts.h"
 
@@ -12,10 +12,10 @@ namespace ouisync::object {
 struct Blob : std::vector<uint8_t>
 {
 public:
-    static constexpr Tag tag = Tag::Blob;
+    static constexpr ObjectTag tag = ObjectTag::Blob;
 
     struct Nothing {
-        static constexpr Tag tag = Blob::tag;
+        static constexpr ObjectTag tag = Blob::tag;
 
         template<class Archive>
         void load(Archive& ar, const unsigned int version) {}
@@ -24,7 +24,7 @@ public:
     };
 
     struct Size {
-        static constexpr Tag tag = Blob::tag;
+        static constexpr ObjectTag tag = Blob::tag;
 
         uint32_t value;
 

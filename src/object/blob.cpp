@@ -9,7 +9,7 @@ using namespace ouisync::object;
 
 ObjectId Blob::calculate_id() const {
     Sha256 hash;
-    hash.update(static_cast<std::underlying_type_t<Tag>>(tag));
+    hash.update(static_cast<std::underlying_type_t<ObjectTag>>(tag));
     hash.update(uint32_t(size()));
     hash.update(data(), size());
     return hash.close();

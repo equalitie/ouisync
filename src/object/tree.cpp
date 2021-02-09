@@ -10,7 +10,7 @@ using namespace ouisync::object;
 ObjectId Tree::calculate_id() const
 {
     Sha256 hash;
-    hash.update(static_cast<std::underlying_type_t<Tag>>(tag));
+    hash.update(static_cast<std::underlying_type_t<ObjectTag>>(tag));
     hash.update(uint32_t(size()));
     for (auto& [filename,user_map] : *this) {
         hash.update(filename);

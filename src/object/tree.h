@@ -1,9 +1,9 @@
 #pragma once
 
-#include "tag.h"
 
 #include "../user_id.h"
 #include "../object_id.h"
+#include "../object_tag.h"
 #include "../shortcuts.h"
 #include "../version_vector.h"
 #include "../ouisync_assert.h"
@@ -161,10 +161,10 @@ public:
     }
 
 public:
-    static constexpr Tag tag = Tag::Tree;
+    static constexpr ObjectTag tag = ObjectTag::Tree;
 
     struct Nothing {
-        static constexpr Tag tag = Tree::tag;
+        static constexpr ObjectTag tag = Tree::tag;
 
         template<class Archive>
         void load(Archive& ar, const unsigned int version) {}
