@@ -18,10 +18,6 @@
 
 namespace ouisync {
 
-class InputArchive;
-class OutputArchive;
-class Snapshot;
-
 class Branch {
 public:
     using Blob = object::Blob;
@@ -50,7 +46,7 @@ public:
     const ObjectId& root_id() const { return _commit.root_id; }
 
     BranchView branch_view() const {
-        return BranchView(_objects, _commit.root_id);
+        return BranchView(_objstore, _commit.root_id);
     }
 
     // XXX: Deprecated, use `write` instead. I believe these are currently
@@ -101,7 +97,7 @@ private:
 private:
     fs::path _file_path;
     Options::Branch _options;
-    ObjectStore& _objects;
+    ObjectStore& _objstore;
     UserId _user_id;
     Commit _commit;
     HashSet _hash_set;

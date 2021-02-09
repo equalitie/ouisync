@@ -38,7 +38,7 @@ void insert_object(Branch::HashSet& hash_set, const ObjectId& id, const string& 
 }
 
 /* static */
-Branch Branch::create(const fs::path& path, UserId user_id, ObjectStore& objects, Options::Branch options)
+Branch Branch::create(const fs::path& path, UserId user_id, ObjectStore& objstore, Options::Branch options)
 {
     ObjectId root_id;
     VersionVector clock;
@@ -49,18 +49,18 @@ Branch Branch::create(const fs::path& path, UserId user_id, ObjectStore& objects
 
     object::Tree root_obj;
 
-    root_id = objects.store(root_obj);
+    root_id = objstore.store(root_obj);
 
-    Branch branch(path, user_id, Commit{move(clock), root_id}, objects, move(options));
+    Branch branch(path, user_id, Commit{move(clock), root_id}, objstore, move(options));
     branch.store_self();
 
     return branch;
 }
 
 /* static */
-Branch Branch::load(const fs::path& file_path, UserId user_id, ObjectStore& objects, Options::Branch options)
+Branch Branch::load(const fs::path& file_path, UserId user_id, ObjectStore& objstore, Options::Branch options)
 {
-    Branch branch(file_path, user_id, objects, std::move(options));
+    Branch branch(file_path, user_id, objstore, std::move(options));
     archive::load(file_path, branch);
     return branch;
 }
@@ -355,7 +355,7 @@ PathRange parent(PathRange path) {
 //--------------------------------------------------------------------
 unique_ptr<Branch::TreeOp> Branch::root()
 {
-    return make_unique<Branch::RootOp>(_objects, _user_id, _commit, _hash_set);
+    return make_unique<Branch::RootOp>(_objstore, _user_id, _commit, _hash_set);
 }
 
 unique_ptr<Branch::TreeOp> Branch::cd_into(PathRange path)
@@ -484,7 +484,7 @@ bool Branch::remove(const fs::path& fspath)
 
 //--------------------------------------------------------------------
 void Branch::sanity_check() const {
-    if (!_objects.is_complete(_commit.root_id)) {
+    if (!_objstore.is_complete(_commit.root_id)) {
         std::cerr << "Branch is incomplete:\n";
         std::cerr << *this << "\n";
         ouisync_assert(false);
@@ -500,10 +500,10 @@ void Branch::store_self() const {
 //--------------------------------------------------------------------
 
 Branch::Branch(const fs::path& file_path, const UserId& user_id,
-        Commit commit, ObjectStore& objects, Options::Branch options) :
+        Commit commit, ObjectStore& objstore, Options::Branch options) :
     _file_path(file_path),
     _options(move(options)),
-    _objects(objects),
+    _objstore(objstore),
     _user_id(user_id),
     _commit(move(commit))
 {
@@ -511,10 +511,10 @@ Branch::Branch(const fs::path& file_path, const UserId& user_id,
 }
 
 Branch::Branch(const fs::path& file_path,
-        const UserId& user_id, ObjectStore& objects, Options::Branch options) :
+        const UserId& user_id, ObjectStore& objstore, Options::Branch options) :
     _file_path(file_path),
     _options(move(options)),
-    _objects(objects),
+    _objstore(objstore),
     _user_id(user_id)
 {
 }
