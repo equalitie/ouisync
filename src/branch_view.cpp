@@ -1,6 +1,5 @@
 #include "branch_view.h"
 #include "error.h"
-#include "refcount.h"
 #include "object_store.h"
 #include "object/tagged.h"
 #include "error.h"
@@ -107,11 +106,10 @@ void _show(std::ostream& os, ObjectStore& objects, ObjectId id, std::string pad 
     }
 
     auto obj = objects.load<Tree, Blob>(id);
-    auto rc = objects.rc(id);
 
     apply(obj,
             [&] (const Tree& t) {
-                os << pad << "Tree ID:" << t.calculate_id() << " (" << rc << ")\n";
+                os << pad << "Tree ID:" << t.calculate_id() << "\n";
                 for (auto& [name, name_map] : t) {
                     for (auto& [user, vobj] : name_map) {
                         os << pad << "  U: " << user << "\n";
@@ -120,7 +118,7 @@ void _show(std::ostream& os, ObjectStore& objects, ObjectId id, std::string pad 
                 }
             },
             [&] (const Blob& b) {
-                os << pad << b << " (" << rc << ")\n";
+                os << pad << b << "\n";
             });
 }
 

@@ -5,7 +5,6 @@
 #include "shortcuts.h"
 #include "object/tagged.h"
 #include "object/path.h"
-#include "refcount.h"
 
 #include <boost/filesystem/path.hpp>
 #include <boost/filesystem/fstream.hpp>
@@ -49,13 +48,9 @@ public:
     
     bool is_complete(const ObjectId& id);
 
-    Rc rc(const ObjectId& id) { return Rc::load(*this, id); }
-
 private:
     template<class O>
     void store_at(const fs::path& path, const O& object);
-
-    friend class Rc;
 
 private:
     fs::path _objdir;
