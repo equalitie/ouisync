@@ -5,7 +5,6 @@
 #include "path_range.h"
 #include "branch_view.h"
 #include "object/tree.h"
-#include "object/tagged.h"
 #include "object/blob.h"
 #include "archive.h"
 #include "ouisync_assert.h"

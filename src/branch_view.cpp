@@ -1,7 +1,6 @@
 #include "branch_view.h"
 #include "error.h"
 #include "object_store.h"
-#include "object/tagged.h"
 #include "error.h"
 #include "multi_dir.h"
 

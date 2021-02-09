@@ -78,3 +78,12 @@ fs::path ObjectStore::id_to_path(const ObjectId& id) const noexcept
 //    if (!opt_bin) return boost::none;
 //    return ObjectId{*opt_bin};
 //}
+
+std::exception ouisync::detail::bad_tag_exception(object::Tag requested, object::Tag parsed)
+{
+    std::stringstream ss;
+    ss << "Object not of the requested type "
+       << "(requested:" << requested << "; parsed:" << parsed << ")";
+    return std::runtime_error(ss.str());
+}
+

@@ -1,5 +1,4 @@
 #include "tree.h"
-#include "tagged.h"
 #include "../version_vector.h"
 
 #include <iostream>

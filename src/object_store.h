@@ -3,7 +3,7 @@
 #include "object_id.h"
 #include "archive.h"
 #include "shortcuts.h"
-#include "object/tagged.h"
+#include "object/tag.h"
 
 #include <boost/filesystem/path.hpp>
 #include <boost/filesystem/fstream.hpp>
@@ -11,6 +11,89 @@
 #include <boost/format.hpp>
 
 namespace ouisync {
+
+// -------------------------------------------------------------------
+namespace detail {
+
+std::exception bad_tag_exception(object::Tag requested, object::Tag parsed);
+
+template<class T, class... Ts> struct LoadVariant {
+    template<class Variant, class Archive>
+    static void load(object::Tag tag, Variant& result, Archive& ar) {
+        if (tag == T::tag) {
+            T obj;
+            ar & obj;
+            result = std::move(obj);
+            return;
+        }
+        LoadVariant<Ts...>::load(tag, result, ar);
+    }
+};
+template<class T> struct LoadVariant<T> {
+    template<class Variant, class Archive>
+    static void load(object::Tag tag, Variant& result, Archive& ar) {
+        if (tag == T::tag) {
+            T obj;
+            ar & obj;
+            result = std::move(obj);
+            return;
+        }
+        throw boost::archive::archive_exception(
+                boost::archive::archive_exception::unregistered_class);
+    }
+};
+
+template<class Obj>
+struct SaveWithTag {
+    const Obj& obj;
+
+    template<class Archive>
+    void save(Archive& ar, const unsigned int version) const {
+        ar & Obj::tag;
+        ar & obj;
+    }
+
+    BOOST_SERIALIZATION_SPLIT_MEMBER()
+};
+
+template<class Obj>
+struct LoadWithTag {
+    Obj& obj;
+
+    template<class Archive>
+    void load(Archive& ar, const unsigned int version) {
+        object::Tag tag;
+        ar & tag;
+
+        if (tag != Obj::tag) {
+            throw bad_tag_exception(Obj::tag, tag);
+        }
+
+        ar & obj;
+    }
+
+    BOOST_SERIALIZATION_SPLIT_MEMBER()
+
+};
+
+
+template<class... Ts>
+struct LoadWithTag<boost::variant<Ts...>> {
+    using Variant = boost::variant<Ts...>;
+    Variant& var;
+
+    template<class Archive>
+    void load(Archive& ar, const unsigned int version) {
+        object::Tag tag;
+        ar & tag;
+        detail::LoadVariant<Ts...>::load(tag, var, ar);
+    }
+
+    BOOST_SERIALIZATION_SPLIT_MEMBER()
+};
+
+} // detail namespace
+// -------------------------------------------------------------------
 
 class ObjectStore {
 public:
@@ -67,7 +150,7 @@ void ObjectStore::store_at(const fs::path& path, const O& object) {
     assert(ofs.is_open());
     if (!ofs.is_open()) throw std::runtime_error("Failed to store object");
     OutputArchive oa(ofs);
-    object::tagged::Save<O> save{object};
+    detail::SaveWithTag<O> save{object};
     oa << save;
 }
 
@@ -110,7 +193,7 @@ O ObjectStore::load(const fs::path& path) {
     }
     InputArchive ia(ifs);
     O result;
-    object::tagged::Load<O> loader{result};
+    detail::LoadWithTag<O> loader{result};
     ia >> loader;
     return result;
 }
