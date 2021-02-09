@@ -1,5 +1,4 @@
 #include "branch.h"
-#include "branch_type.h"
 #include "variant.h"
 #include "error.h"
 #include "path_range.h"
