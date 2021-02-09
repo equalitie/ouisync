@@ -66,10 +66,6 @@ public:
 
     const UserId& user_id() const { return _user_id; }
 
-    bool introduce_commit(const Commit&);
-
-    Snapshot create_snapshot() const;
-
     friend std::ostream& operator<<(std::ostream&, const Branch&);
 
     template<class Archive>

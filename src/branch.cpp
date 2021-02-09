@@ -59,16 +59,6 @@ Branch Branch::load(const fs::path& file_path, UserId user_id, ObjectStore& obje
 }
 
 //--------------------------------------------------------------------
-static
-void decrement_rc_and_remove_single_node(ObjectStore& objstore, const ObjectId& id)
-{
-    auto rc = objstore.rc(id);
-    rc.decrement_recursive_count_but_dont_remove();
-    if (!rc.both_are_zero()) return;
-    objstore.remove(id);
-}
-
-//--------------------------------------------------------------------
 
 class Branch::Op {
     public:
@@ -463,15 +453,6 @@ void Branch::sanity_check() const {
 
 //--------------------------------------------------------------------
 
-Snapshot Branch::create_snapshot() const
-{
-    auto snapshot = Snapshot::create(_commit, _objects, _options);
-    snapshot.insert_object(_commit.root_id, {});
-    return snapshot;
-}
-
-//--------------------------------------------------------------------
-
 void Branch::store_self() const {
     archive::store(_file_path, *this);
 }
@@ -494,25 +475,6 @@ Branch::Branch(const fs::path& file_path,
     _objects(objects),
     _user_id(user_id)
 {
-}
-
-//--------------------------------------------------------------------
-
-bool Branch::introduce_commit(const Commit& commit)
-{
-    if (!(_commit.stamp.is_same_or_happened_before(commit.stamp))) return false;
-    if (_commit.root_id == commit.root_id) return false;
-
-    auto old_root = _commit.root_id;
-
-    _commit = commit;
-
-    store_self();
-
-    _objects.rc(_commit.root_id).increment_recursive_count();
-    _objects.rc(old_root).decrement_recursive_count();
-
-    return true;
 }
 
 //--------------------------------------------------------------------
