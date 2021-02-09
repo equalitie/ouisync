@@ -1,5 +1,4 @@
 #include "repository.h"
-#include "snapshot.h"
 #include "branch_view.h"
 #include "branch_type.h"
 #include "random.h"

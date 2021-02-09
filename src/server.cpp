@@ -1,5 +1,4 @@
 #include "server.h"
-#include "snapshot.h"
 
 #include <iostream>
 #include <boost/optional/optional_io.hpp>

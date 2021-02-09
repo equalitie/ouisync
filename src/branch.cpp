@@ -9,7 +9,6 @@
 #include "object/blob.h"
 #include "refcount.h"
 #include "archive.h"
-#include "snapshot.h"
 #include "ouisync_assert.h"
 
 #include <boost/filesystem.hpp>

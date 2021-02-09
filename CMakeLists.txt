@@ -48,7 +48,6 @@ add_library(libouisync STATIC
     "src/user_id.cpp"
     "src/branch.cpp"
     "src/branch_view.cpp"
-    "src/snapshot.cpp"
     "src/repository.cpp"
     "src/file_system_attrib.cpp"
     "src/options.cpp"

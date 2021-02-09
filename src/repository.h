@@ -10,7 +10,6 @@
 //#include "remote_branch.h"
 #include "commit.h"
 #include "wait.h"
-#include "snapshot.h"
 #include "object_store.h"
 
 #include <boost/asio/any_io_executor.hpp>
@@ -42,34 +41,14 @@ public:
 
     executor_type get_executor() { return _ex; }
 
-    SnapshotGroup create_snapshot_group();
-
-    // Note: may return nullptr if the version vector is below a version vector
-    // of an already existing branch.
-    //[[nodiscard]]
-    //net::awaitable<RemoteBranch*>
-    //get_or_create_remote_branch(const UserId&, const Commit&);
-
-    Opt<Snapshot::Id> last_snapshot_id() const { return _last_snapshot_id; }
-
     Wait& on_change() { return _on_change; }
 
     const fs::path& object_directory() const { return _options.objectdir; }
 
-    //void introduce_commit_to_local_branch(const Commit&);
-
     ObjectStore& object_store() { return _objects; }
 
 private:
-    //Branch& find_branch(PathRange);
-
     void sanity_check() const;
-
-    //static
-    //const VersionVector& get_stamp(const Branch& b);
-
-    //static
-    //ObjectId get_root_id(const Branch& b);
 
 private:
     executor_type _ex;
@@ -77,8 +56,6 @@ private:
     ObjectStore _objects;
     UserId _user_id;
     std::unique_ptr<Branch> _branch;
-    //std::map<UserId, Branch> _branches;
-    Opt<Snapshot::Id> _last_snapshot_id;
     Wait _on_change;
 };
 
