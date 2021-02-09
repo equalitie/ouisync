@@ -1,6 +1,7 @@
 #include "object_store.h"
 #include "object/blob.h"
 #include "object/tree.h"
+#include "hex.h"
 
 #include "variant.h"
 
@@ -21,12 +22,12 @@ ObjectStore::ObjectStore(fs::path object_dir) :
 
 bool ObjectStore::remove(const ObjectId& id) {
     sys::error_code ec;
-    fs::remove(_objdir/object::path::from_id(id), ec);
+    fs::remove(_objdir/id_to_path(id), ec);
     return !ec;
 }
 
 bool ObjectStore::exists(const ObjectId& id) const {
-    return fs::exists(_objdir/object::path::from_id(id));
+    return fs::exists(_objdir/id_to_path(id));
 }
 
 bool ObjectStore::is_complete(const ObjectId& id) {
@@ -44,3 +45,36 @@ bool ObjectStore::is_complete(const ObjectId& id) {
             return true;
         });
 }
+
+fs::path ObjectStore::id_to_path(const ObjectId& id) const noexcept
+{
+    auto hex = to_hex<char>(id);
+    string_view hex_sv{hex.data(), hex.size()};
+
+    static const size_t prefix_size = 3;
+
+    auto prefix = hex_sv.substr(0, prefix_size);
+    auto rest   = hex_sv.substr(prefix_size, hex_sv.size() - prefix_size);
+
+    return fs::path(prefix.begin(), prefix.end()) / fs::path(rest.begin(), rest.end());
+}
+
+//Opt<ObjectId> ObjectStore::path_to_id(const fs::path& ps) const noexcept
+//{
+//    std::array<char, ObjectId::size * 2> hex;
+//
+//    auto i = hex.begin();
+//
+//    for (auto& p : ps) {
+//        for (auto c : p.native()) {
+//            if (i == hex.end()) return boost::none;
+//            *i++ = c;
+//        }
+//    }
+//
+//    if (i != hex.end()) return boost::none;
+//
+//    auto opt_bin = from_hex<uint8_t>(hex);
+//    if (!opt_bin) return boost::none;
+//    return ObjectId{*opt_bin};
+//}

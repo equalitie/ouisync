@@ -4,7 +4,6 @@
 #include "archive.h"
 #include "shortcuts.h"
 #include "object/tagged.h"
-#include "object/path.h"
 
 #include <boost/filesystem/path.hpp>
 #include <boost/filesystem/fstream.hpp>
@@ -52,6 +51,8 @@ private:
     template<class O>
     void store_at(const fs::path& path, const O& object);
 
+    fs::path id_to_path(const ObjectId&) const noexcept;
+
 private:
     fs::path _objdir;
 };
@@ -80,7 +81,7 @@ template<class O>
 inline
 ObjectId ObjectStore::store(const O& object) {
     auto id = object.calculate_id();
-    auto path = _objdir / object::path::from_id(id);
+    auto path = _objdir / id_to_path(id);
     store_at(path, object);
     return id;
 }
@@ -92,7 +93,7 @@ template<class O>
 inline
 std::pair<ObjectId, bool> ObjectStore::store_(const O& object) {
     auto id = object.calculate_id();
-    auto path = _objdir / object::path::from_id(id);
+    auto path = _objdir / id_to_path(id);
     if (fs::exists(path)) return {id, false};
     store_at(path, object);
     return {id, true};
@@ -118,13 +119,13 @@ O ObjectStore::load(const fs::path& path) {
 template<class O>
 inline
 O ObjectStore::load(const ObjectId& id) {
-    return load<O>(_objdir / object::path::from_id(id));
+    return load<O>(_objdir / id_to_path(id));
 }
 
 template<class O0, class O1, class ... Os> // Two or more
 inline
 variant<O0, O1, Os...> ObjectStore::load(const ObjectId& id) {
-    return load<variant<O0, O1, Os...>>(_objdir / object::path::from_id(id));
+    return load<variant<O0, O1, Os...>>(_objdir / id_to_path(id));
 }
 
 template<class O0, class O1, class ... Os> // Two or more
@@ -137,7 +138,7 @@ variant<O0, O1, Os...> ObjectStore::load(const fs::path& path) {
 template<class O>
 inline
 Opt<O> ObjectStore::maybe_load(const ObjectId& id) {
-    auto p = _objdir / object::path::from_id(id);
+    auto p = _objdir / id_to_path(id);
     if (!fs::exists(p)) return boost::none;
     return load<O>(p);
 }
