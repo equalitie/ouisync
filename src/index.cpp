@@ -13,6 +13,21 @@ Index::Index(ObjectStore& objstore) :
     _objstore(objstore)
 {}
 
+void Index::set_root(const ObjectId& new_root_id)
+{
+    if (_root) {
+        if (*_root == new_root_id) return;
+        auto old_root_id = *_root;
+        // The order is important as removing old root first could remove
+        // object that are descendants of the new root.
+        insert_object(new_root_id, "", new_root_id);
+        remove_object(old_root_id, "", old_root_id);
+    } else {
+        insert_object(new_root_id, "", new_root_id);
+    }
+    _root = new_root_id;
+}
+
 void Index::insert_object(const ObjectId& id, const string& filename, const ObjectId& parent_id)
 {
     auto i = _elements.insert({id, {}}).first;

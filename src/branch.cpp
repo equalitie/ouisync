@@ -92,8 +92,7 @@ public:
                 _index.insert_object(child_id, filename, new_id);
             });
 
-        _index.insert_object(new_id, "", new_id);
-        _index.remove_object(old_id, "", old_id);
+        _index.set_root(new_id);
 
         _commit.root_id = new_id;
 
@@ -458,7 +457,7 @@ Branch::Branch(const fs::path& file_path, const UserId& user_id,
     _commit(move(commit)),
     _index(_objstore)
 {
-    _index.insert_object(_commit.root_id, "", _commit.root_id);
+    _index.set_root(_commit.root_id);
 }
 
 Branch::Branch(const fs::path& file_path,
