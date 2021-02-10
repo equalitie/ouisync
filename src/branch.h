@@ -2,7 +2,7 @@
 
 #include "object_id.h"
 #include "object/blob.h"
-#include "object/tree.h"
+#include "directory.h"
 #include "user_id.h"
 #include "version_vector.h"
 #include "path_range.h"
@@ -21,7 +21,6 @@ namespace ouisync {
 class Branch {
 public:
     using Blob = object::Blob;
-    using Tree = object::Tree;
     class Op;
     class TreeOp;
     class HasTreeParrentOp;

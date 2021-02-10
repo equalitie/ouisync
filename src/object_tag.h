@@ -9,7 +9,7 @@ namespace ouisync {
 // changing it will break the object storage as well as the peer exchange
 // protocol.
 enum class ObjectTag : std::uint8_t {
-    Tree = 1,
+    Directory = 1,
     Blob
 };
 

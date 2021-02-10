@@ -1,13 +1,12 @@
-#include "tree.h"
-#include "../version_vector.h"
+#include "directory.h"
+#include "version_vector.h"
 
 #include <iostream>
 #include <boost/filesystem.hpp>
 
 using namespace ouisync;
-using namespace ouisync::object;
 
-ObjectId Tree::calculate_id() const
+ObjectId Directory::calculate_id() const
 {
     Sha256 hash;
     hash.update(static_cast<std::underlying_type_t<ObjectTag>>(tag));
@@ -27,7 +26,7 @@ ObjectId Tree::calculate_id() const
     return hash.close();
 }
 
-VersionVector Tree::calculate_version_vector_union() const
+VersionVector Directory::calculate_version_vector_union() const
 {
     VersionVector result;
 
@@ -50,9 +49,9 @@ struct Padding {
     }
 };
 
-void Tree::print(std::ostream& os, unsigned level) const
+void Directory::print(std::ostream& os, unsigned level) const
 {
-    os << Padding(level*4) << "Tree id:" << calculate_id() << "\n";
+    os << Padding(level*4) << "Directory id:" << calculate_id() << "\n";
     for (auto& [filename, user_map] : _name_map) {
         os << Padding(level*4) << "  filename:" << filename << "\n";
         for (auto& [user, vobj]: user_map) {
@@ -62,7 +61,7 @@ void Tree::print(std::ostream& os, unsigned level) const
     }
 }
 
-std::ostream& ouisync::object::operator<<(std::ostream& os, const Tree& tree) {
+std::ostream& ouisync::operator<<(std::ostream& os, const Directory& tree) {
     tree.print(os, 0);
     return os;
 }

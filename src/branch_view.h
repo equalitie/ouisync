@@ -1,6 +1,6 @@
 #pragma once
 
-#include "object/tree.h"
+#include "directory.h"
 #include "object/blob.h"
 #include "path_range.h"
 #include "file_system_attrib.h"
@@ -14,7 +14,6 @@ class MultiDir;
 
 class BranchView {
 public:
-    using Tree = object::Tree;
     using Blob = object::Blob;
 
 public:

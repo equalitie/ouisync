@@ -61,7 +61,7 @@ add_library(libouisync STATIC
     "src/object_id.cpp"
     "src/object_tag.cpp"
     "src/object_store.cpp"
-    "src/object/tree.cpp"
+    "src/directory.cpp"
     "src/object/blob.cpp"
 )
 

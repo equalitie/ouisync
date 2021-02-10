@@ -3,7 +3,7 @@
 #include "error.h"
 #include "path_range.h"
 #include "branch_view.h"
-#include "object/tree.h"
+#include "directory.h"
 #include "object/blob.h"
 #include "archive.h"
 #include "ouisync_assert.h"
@@ -18,7 +18,6 @@
 using namespace ouisync;
 using std::move;
 using object::Blob;
-using object::Tree;
 using std::unique_ptr;
 using std::make_unique;
 using std::string;
@@ -46,7 +45,7 @@ Branch Branch::create(const fs::path& path, UserId user_id, ObjectStore& objstor
         throw std::runtime_error("Local branch already exits");
     }
 
-    object::Tree root_obj;
+    Directory root_obj;
 
     root_id = objstore.store(root_obj);
 
@@ -76,7 +75,7 @@ class Branch::Op {
 
 class Branch::TreeOp : public Branch::Op {
     public:
-    virtual Tree& tree() = 0;
+    virtual Directory& tree() = 0;
     virtual ~TreeOp() {};
 };
 
@@ -88,10 +87,10 @@ public:
         _commit(commit),
         _hash_set(hash_set)
     {
-        _tree = _objstore.load<Tree>(_commit.root_id);
+        _tree = _objstore.load<Directory>(_commit.root_id);
     }
 
-    Tree& tree() override {
+    Directory& tree() override {
         return _tree;
     }
 
@@ -146,11 +145,11 @@ public:
         // If we're here, that means no other node points to this object.
         _hash_set.erase(i);
 
-        auto obj = _objstore.load<Tree, Blob::Nothing>(id);
+        auto obj = _objstore.load<Directory, Blob::Nothing>(id);
     
         apply(obj,
-                [&](const Tree& tree) {
-                    tree.for_each_unique_child([&] (auto& filename, auto& object_id) {
+                [&](const Directory& d) {
+                    d.for_each_unique_child([&] (auto& filename, auto& object_id) {
                         remove_object(object_id, filename, id);
                     });
                 },
@@ -164,7 +163,7 @@ private:
     ObjectStore& _objstore;
     UserId _this_user_id;
     Commit _commit;
-    Tree _tree;
+    Directory _tree;
     Branch::HashSet& _hash_set;
 };
 
@@ -190,13 +189,13 @@ public:
             // whenever a user makes a change to a node, that node must have been complete.
             if (user_id == _this_user_id) {
                 _old = Old{ vobj.object_id, vobj.version_vector };
-                _tree = objstore().load<Tree>(vobj.object_id);
+                _tree = objstore().load<Directory>(vobj.object_id);
                 return;
             }
         }
     }
 
-    Tree& tree() override {
+    Directory& tree() override {
         return _tree;
     }
 
@@ -240,7 +239,7 @@ private:
     UserId _this_user_id;
     string _dirname;
     Opt<Old> _old;
-    Tree _tree;
+    Directory _tree;
 };
 
 class Branch::FileOp : public Branch::Op {
@@ -341,7 +340,7 @@ public:
 
 private:
     unique_ptr<Branch::TreeOp> _parent;
-    Tree::MutableHandle _tree_entry;
+    Directory::MutableHandle _tree_entry;
 };
 //--------------------------------------------------------------------
 

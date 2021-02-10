@@ -5,7 +5,7 @@
 #include "version_vector.h"
 #include "commit.h"
 #include "variant.h"
-#include "object/tree.h"
+#include "directory.h"
 #include "object/blob.h"
 
 #include <boost/asio/ip/tcp.hpp>
@@ -29,7 +29,7 @@ struct RqObject {
 struct RsObject {
     static constexpr auto type = MessageType::Response;
 
-    variant<object::Blob, object::Tree> object;
+    variant<object::Blob, Directory> object;
 
     template<class Archive>
     void serialize(Archive& ar, const unsigned) {

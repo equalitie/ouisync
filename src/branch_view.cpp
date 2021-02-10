@@ -10,7 +10,6 @@
 #include <iostream>
 
 using namespace ouisync;
-using object::Tree;
 using object::Blob;
 using std::set;
 using std::map;
@@ -62,12 +61,12 @@ FileSystemAttrib BranchView::get_attr(PathRange path) const
 
     auto file_id = dir.file(path.back());
 
-    auto obj = _objects.load<Tree::Nothing, Blob::Size>(file_id);
+    auto obj = _objects.load<Directory::Nothing, Blob::Size>(file_id);
 
     FileSystemAttrib attrib;
 
     apply(obj,
-        [&] (const Tree::Nothing&) { attrib = FileSystemDirAttrib{}; },
+        [&] (const Directory::Nothing&) { attrib = FileSystemDirAttrib{}; },
         [&] (const Blob::Size& b) { attrib = FileSystemFileAttrib{b.value}; });
 
     return attrib;
@@ -104,12 +103,12 @@ void _show(std::ostream& os, ObjectStore& objects, ObjectId id, std::string pad 
         return;
     }
 
-    auto obj = objects.load<Tree, Blob>(id);
+    auto obj = objects.load<Directory, Blob>(id);
 
     apply(obj,
-            [&] (const Tree& t) {
-                os << pad << "Tree ID:" << t.calculate_id() << "\n";
-                for (auto& [name, name_map] : t) {
+            [&] (const Directory& d) {
+                os << pad << "Directory ID:" << d.calculate_id() << "\n";
+                for (auto& [name, name_map] : d) {
                     for (auto& [user, vobj] : name_map) {
                         os << pad << "  U: " << user << "\n";
                         _show(os, objects, vobj.object_id, pad + "    ");

@@ -1,6 +1,6 @@
 #include "client.h"
 #include "error.h"
-#include "object/tree.h"
+#include "directory.h"
 #include "object/blob.h"
 
 #include <iostream>
@@ -8,8 +8,6 @@
 
 using namespace ouisync;
 using std::move;
-//using Branch = Repository::Branch;
-using Tree = object::Tree;
 using Blob = object::Blob;
 
 Client::Client(MessageBroker::Client&& broker, Repository& repo) :
