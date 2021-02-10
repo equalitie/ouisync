@@ -65,32 +65,43 @@ public:
         return _vv < other._vv;
     }
 
-    bool is_same_or_happened_before(const VersionVector& that_vv) const {
+    bool happened_before(const VersionVector& that_vv) const {
         const Map& that = that_vv._vv;
 
         auto this_i = _vv.begin();
         auto that_i = that.begin();
 
+        bool that_has_bigger = false;
+
         while (true) {
             if (this_i == _vv.end()) {
-                return true;
+                if (that_i != that.end()) that_has_bigger = true;
+                return that_has_bigger;
             }
             else if (that_i == that.end()) {
-                if (value_of(this_i) > 0) return false;
-                ++this_i;
-                continue;
+                // We know (this_i != _vv.end()) because otherwise we'd be in the
+                // above branch. Thus we know 'this' has a bigger value and therefore
+                // couldn't have happened before 'that'.
+                return false;
             }
 
             if (id_of(this_i) < id_of(that_i)) {
-                if (value_of(this_i) > 0) return false;
-                ++this_i;
+                // This has a bigger value, so coudln't have happened before.
+                return false;
             }
             else if (id_of(that_i) < id_of(this_i)) {
+                that_has_bigger = true;
                 ++that_i;
             }
             else {
                 if (value_of(this_i) != value_of(that_i)) {
-                    return value_of(this_i) < value_of(that_i);
+                    if (value_of(this_i) < value_of(that_i)) {
+                        that_has_bigger = true;
+                    } else {
+                        // This has a bigger value, so coudln't have happened
+                        // before.
+                        return false;
+                    }
                 }
                 ++this_i;
                 ++that_i;
@@ -100,8 +111,16 @@ public:
         return true;
     }
 
-    bool is_concurrent_or_happened_after(const VersionVector& that_vv) const {
-        return !this->is_same_or_happened_before(that_vv);
+    bool happened_after(const VersionVector& that_vv) const {
+        return that_vv.happened_before(*this);
+    }
+
+    bool operator==(const VersionVector& that_vv) const {
+        return _vv == that_vv._vv;
+    }
+
+    bool operator!=(const VersionVector& that_vv) const {
+        return _vv != that_vv._vv;
     }
 
     template<class Archive>

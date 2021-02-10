@@ -98,7 +98,7 @@ public:
 
         auto new_stamp = _tree.calculate_version_vector_union();
 
-        assert(new_stamp.is_concurrent_or_happened_after(_commit.stamp));
+        assert(new_stamp.happened_after(_commit.stamp));
 
         _commit.stamp = move(new_stamp);
 
