@@ -12,6 +12,7 @@
 #include "branch_view.h"
 #include "options.h"
 #include "object_store.h"
+#include "index.h"
 
 #include <boost/filesystem/path.hpp>
 #include <boost/optional.hpp>
@@ -19,7 +20,7 @@
 namespace ouisync {
 
 class Branch {
-public:
+private:
     class Op;
     class TreeOp;
     class HasTreeParrentOp;
@@ -28,11 +29,6 @@ public:
     class BranchOp;
     class RemoveOp;
     class CdOp;
-
-    using HashSet = std::map<ObjectId, std::set<Sha256::Digest>>;
-    //                                         |______________|
-    //                                                |
-    //         Hash(parent.object_id || file-name)  <-+
 
 public:
     static
@@ -69,7 +65,7 @@ public:
 
     template<class Archive>
     void serialize(Archive& ar, unsigned) {
-        ar & _commit & _hash_set;
+        ar & _commit & _index;
     }
 
     void sanity_check() const;
@@ -98,7 +94,7 @@ private:
     ObjectStore& _objstore;
     UserId _user_id;
     Commit _commit;
-    HashSet _hash_set;
+    Index _index;
 };
 
 } // namespace
