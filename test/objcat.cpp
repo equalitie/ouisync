@@ -1,5 +1,5 @@
-#include "object/tree.h"
-#include "object/blob.h"
+#include "directory.h"
+#include "file_blob.h"
 #include "object_store.h"
 #include "shortcuts.h"
 #include "variant.h"
@@ -13,8 +13,6 @@
 
 using namespace std;
 using namespace ouisync;
-using object::Blob;
-using object::Tree;
 
 void usage(ostream& os, const string& appname) {
     os << "Usage:\n";
@@ -51,7 +49,7 @@ int main(int argc, char** argv)
     }
 
     try {
-        auto obj = ObjectStore::load<ObjectId, Tree, Blob>(path);
+        auto obj = ObjectStore::load<Directory, FileBlob>(path);
 
         apply(obj,
                 [](ObjectId id) { cout << "ObjectId " << id << "\n"; },

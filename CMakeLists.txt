@@ -78,5 +78,5 @@ if(NOT ANDROID)
     target_compile_definitions(ouisync PRIVATE -D_FILE_OFFSET_BITS=64)
     target_link_libraries(ouisync PRIVATE libouisync fuse)
 
-    #add_subdirectory(test)
+    add_subdirectory(test)
 endif()
