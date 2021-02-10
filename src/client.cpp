@@ -1,4 +1,5 @@
 #include "client.h"
+#include "error.h"
 #include "object/tree.h"
 #include "object/blob.h"
 

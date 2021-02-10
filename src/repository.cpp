@@ -4,6 +4,7 @@
 #include "hex.h"
 #include "archive.h"
 #include "defer.h"
+#include "error.h"
 
 #include <iostream>
 #include <boost/filesystem.hpp>
