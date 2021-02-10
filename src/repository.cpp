@@ -1,11 +1,10 @@
 #include "repository.h"
-#include "snapshot.h"
 #include "branch_view.h"
-#include "branch_type.h"
 #include "random.h"
 #include "hex.h"
 #include "archive.h"
 #include "defer.h"
+#include "error.h"
 
 #include <iostream>
 #include <boost/filesystem.hpp>
@@ -136,7 +135,7 @@ net::awaitable<void> Repository::mknod(PathRange path, mode_t mode, dev_t dev)
         throw_error(sys::errc::is_a_directory);
     }
 
-    _branch->store(path, object::Blob{});
+    _branch->store(path, FileBlob{});
 
     _on_change.notify();
 

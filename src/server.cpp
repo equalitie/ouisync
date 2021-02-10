@@ -1,5 +1,4 @@
 #include "server.h"
-#include "snapshot.h"
 
 #include <iostream>
 #include <boost/optional/optional_io.hpp>
@@ -8,9 +7,7 @@
 using namespace ouisync;
 using std::move;
 using std::make_pair;
-using object::Blob;
-using object::Tree;
-using Object = variant<Blob, Tree>;
+using Object = variant<FileBlob, Directory>;
 
 Server::Server(MessageBroker::Server&& broker, Repository& repo) :
     _broker(move(broker))//,

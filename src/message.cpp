@@ -78,26 +78,6 @@ catch (const std::exception& e) {
     throw;
 }
 
-std::ostream& ouisync::operator<<(std::ostream& os, const RqSnapshotGroup& m) {
-    os << "RqSnapshotGroup{";
-    if (m.last_snapshot_group_id) {
-        os << *m.last_snapshot_group_id;
-    } else {
-        os << "nil";
-    }
-    return os << "}";
-}
-
-std::ostream& ouisync::operator<<(std::ostream& os, const RsSnapshotGroup& m) {
-    os << "RsSnapshotGroup{" << m.snapshot_group_id << " [";
-    bool is_first = true;
-    for (auto& [user_id, commit] : m) {
-        if (!is_first) { os << ", "; is_first = true; }
-        os << "(" << user_id << ", " << commit.root_id << ")";
-    }
-    return os << "]}";
-}
-
 std::ostream& ouisync::operator<<(std::ostream& os, const RqObject& rq) {
     return os << "RqObject " << rq.object_id;
 }

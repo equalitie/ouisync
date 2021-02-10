@@ -1,6 +1,5 @@
 #pragma once
 
-#include "object/tag.h"
 #include "hash.h"
 
 namespace ouisync {
@@ -29,8 +28,6 @@ public:
     };
 
 public:
-    static constexpr object::Tag tag = object::Tag::ObjectId;
-
     static constexpr size_t size = std::tuple_size<Parent>::value;
 
     struct Hex : std::array<char, size*2>{

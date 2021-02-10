@@ -13,7 +13,6 @@ public:
 
 private:
     MessageBroker::Server _broker;
-    //Repository& _repo;
 };
 
 } // namespace

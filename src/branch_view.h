@@ -1,7 +1,7 @@
 #pragma once
 
-#include "object/tree.h"
-#include "object/blob.h"
+#include "directory.h"
+#include "file_blob.h"
 #include "path_range.h"
 #include "file_system_attrib.h"
 
@@ -14,10 +14,6 @@ class MultiDir;
 
 class BranchView {
 public:
-    using Tree = object::Tree;
-    using Blob = object::Blob;
-
-public:
     BranchView(ObjectStore&, const ObjectId& root_id);
 
     std::set<std::string> readdir(PathRange path) const;
@@ -25,8 +21,6 @@ public:
     FileSystemAttrib get_attr(PathRange path) const;
 
     size_t read(PathRange path, const char* buf, size_t size, size_t offset) const;
-
-    //ObjectId id_of(PathRange) const;
 
     void show(std::ostream&) const;
 

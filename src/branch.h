@@ -1,8 +1,8 @@
 #pragma once
 
 #include "object_id.h"
-#include "object/blob.h"
-#include "object/tree.h"
+#include "file_blob.h"
+#include "directory.h"
 #include "user_id.h"
 #include "version_vector.h"
 #include "path_range.h"
@@ -18,14 +18,8 @@
 
 namespace ouisync {
 
-class InputArchive;
-class OutputArchive;
-class Snapshot;
-
 class Branch {
 public:
-    using Blob = object::Blob;
-    using Tree = object::Tree;
     class Op;
     class TreeOp;
     class HasTreeParrentOp;
@@ -34,6 +28,11 @@ public:
     class BranchOp;
     class RemoveOp;
     class CdOp;
+
+    using HashSet = std::map<ObjectId, std::set<Sha256::Digest>>;
+    //                                         |______________|
+    //                                                |
+    //         Hash(parent.object_id || file-name)  <-+
 
 public:
     static
@@ -45,13 +44,13 @@ public:
     const ObjectId& root_id() const { return _commit.root_id; }
 
     BranchView branch_view() const {
-        return BranchView(_objects, _commit.root_id);
+        return BranchView(_objstore, _commit.root_id);
     }
 
     // XXX: Deprecated, use `write` instead. I believe these are currently
     // only being used in tests.
-    void store(PathRange, const Blob&);
-    void store(const fs::path&, const Blob&);
+    void store(PathRange, const FileBlob&);
+    void store(const fs::path&, const FileBlob&);
 
     size_t write(PathRange, const char* buf, size_t size, size_t offset);
 
@@ -66,15 +65,11 @@ public:
 
     const UserId& user_id() const { return _user_id; }
 
-    bool introduce_commit(const Commit&);
-
-    Snapshot create_snapshot() const;
-
     friend std::ostream& operator<<(std::ostream&, const Branch&);
 
     template<class Archive>
     void serialize(Archive& ar, unsigned) {
-        ar & _commit;
+        ar & _commit & _hash_set;
     }
 
     void sanity_check() const;
@@ -100,9 +95,10 @@ private:
 private:
     fs::path _file_path;
     Options::Branch _options;
-    ObjectStore& _objects;
+    ObjectStore& _objstore;
     UserId _user_id;
     Commit _commit;
+    HashSet _hash_set;
 };
 
 } // namespace

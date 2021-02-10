@@ -1,12 +1,12 @@
 #pragma once
 
-#include "tag.h"
 
-#include "../user_id.h"
-#include "../object_id.h"
-#include "../shortcuts.h"
-#include "../version_vector.h"
-#include "../ouisync_assert.h"
+#include "user_id.h"
+#include "object_id.h"
+#include "object_tag.h"
+#include "shortcuts.h"
+#include "version_vector.h"
+#include "ouisync_assert.h"
 
 #include <map>
 #include <set>
@@ -16,9 +16,9 @@
 #include <boost/serialization/array.hpp>
 #include <boost/range/adaptor/map.hpp>
 
-namespace ouisync::object {
+namespace ouisync {
 
-class Tree final {
+class Directory final {
 public:
     struct VersionedObject {
         ObjectId object_id;
@@ -87,7 +87,7 @@ private:
         }
 
       private:
-        friend class Tree;
+        friend class Directory;
         Handle(ImplPtr name_map, NameIterator i)
             : name_map(name_map), i(i) {}
 
@@ -148,11 +148,23 @@ public:
 
     VersionVector calculate_version_vector_union() const;
 
+    template<class F>
+    void for_each_unique_child(const F& f) const {
+        for (auto& [filename, usermap] : _name_map) {
+            std::set<ObjectId> used;
+            for (auto& [user_id, vobj] : usermap) {
+                if (used.count(vobj.object_id)) continue;
+                used.insert(vobj.object_id);
+                f(filename, vobj.object_id);
+            }
+        }
+    }
+
 public:
-    static constexpr Tag tag = Tag::Tree;
+    static constexpr ObjectTag tag = ObjectTag::Directory;
 
     struct Nothing {
-        static constexpr Tag tag = Tree::tag;
+        static constexpr ObjectTag tag = Directory::tag;
 
         template<class Archive>
         void load(Archive& ar, const unsigned int version) {}
@@ -167,11 +179,10 @@ public:
 
     ObjectId calculate_id() const;
 
-    friend std::ostream& operator<<(std::ostream&, const Tree&);
+    friend std::ostream& operator<<(std::ostream&, const Directory&);
 
 private:
     NameMap _name_map;
 };
 
 } // namespace
-

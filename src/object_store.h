@@ -3,9 +3,7 @@
 #include "object_id.h"
 #include "archive.h"
 #include "shortcuts.h"
-#include "object/tagged.h"
-#include "object/path.h"
-#include "refcount.h"
+#include "object_tag.h"
 
 #include <boost/filesystem/path.hpp>
 #include <boost/filesystem/fstream.hpp>
@@ -13,6 +11,89 @@
 #include <boost/format.hpp>
 
 namespace ouisync {
+
+// -------------------------------------------------------------------
+namespace detail {
+
+std::exception bad_tag_exception(ObjectTag requested, ObjectTag parsed);
+
+template<class T, class... Ts> struct LoadVariant {
+    template<class Variant, class Archive>
+    static void load(ObjectTag tag, Variant& result, Archive& ar) {
+        if (tag == T::tag) {
+            T obj;
+            ar & obj;
+            result = std::move(obj);
+            return;
+        }
+        LoadVariant<Ts...>::load(tag, result, ar);
+    }
+};
+template<class T> struct LoadVariant<T> {
+    template<class Variant, class Archive>
+    static void load(ObjectTag tag, Variant& result, Archive& ar) {
+        if (tag == T::tag) {
+            T obj;
+            ar & obj;
+            result = std::move(obj);
+            return;
+        }
+        throw boost::archive::archive_exception(
+                boost::archive::archive_exception::unregistered_class);
+    }
+};
+
+template<class Obj>
+struct SaveWithTag {
+    const Obj& obj;
+
+    template<class Archive>
+    void save(Archive& ar, const unsigned int version) const {
+        ar & Obj::tag;
+        ar & obj;
+    }
+
+    BOOST_SERIALIZATION_SPLIT_MEMBER()
+};
+
+template<class Obj>
+struct LoadWithTag {
+    Obj& obj;
+
+    template<class Archive>
+    void load(Archive& ar, const unsigned int version) {
+        ObjectTag tag;
+        ar & tag;
+
+        if (tag != Obj::tag) {
+            throw bad_tag_exception(Obj::tag, tag);
+        }
+
+        ar & obj;
+    }
+
+    BOOST_SERIALIZATION_SPLIT_MEMBER()
+
+};
+
+
+template<class... Ts>
+struct LoadWithTag<boost::variant<Ts...>> {
+    using Variant = boost::variant<Ts...>;
+    Variant& var;
+
+    template<class Archive>
+    void load(Archive& ar, const unsigned int version) {
+        ObjectTag tag;
+        ar & tag;
+        detail::LoadVariant<Ts...>::load(tag, var, ar);
+    }
+
+    BOOST_SERIALIZATION_SPLIT_MEMBER()
+};
+
+} // detail namespace
+// -------------------------------------------------------------------
 
 class ObjectStore {
 public:
@@ -49,13 +130,11 @@ public:
     
     bool is_complete(const ObjectId& id);
 
-    Rc rc(const ObjectId& id) { return Rc::load(*this, id); }
-
 private:
     template<class O>
     void store_at(const fs::path& path, const O& object);
 
-    friend class Rc;
+    fs::path id_to_path(const ObjectId&) const noexcept;
 
 private:
     fs::path _objdir;
@@ -71,7 +150,7 @@ void ObjectStore::store_at(const fs::path& path, const O& object) {
     assert(ofs.is_open());
     if (!ofs.is_open()) throw std::runtime_error("Failed to store object");
     OutputArchive oa(ofs);
-    object::tagged::Save<O> save{object};
+    detail::SaveWithTag<O> save{object};
     oa << save;
 }
 
@@ -85,7 +164,7 @@ template<class O>
 inline
 ObjectId ObjectStore::store(const O& object) {
     auto id = object.calculate_id();
-    auto path = _objdir / object::path::from_id(id);
+    auto path = _objdir / id_to_path(id);
     store_at(path, object);
     return id;
 }
@@ -97,7 +176,7 @@ template<class O>
 inline
 std::pair<ObjectId, bool> ObjectStore::store_(const O& object) {
     auto id = object.calculate_id();
-    auto path = _objdir / object::path::from_id(id);
+    auto path = _objdir / id_to_path(id);
     if (fs::exists(path)) return {id, false};
     store_at(path, object);
     return {id, true};
@@ -114,7 +193,7 @@ O ObjectStore::load(const fs::path& path) {
     }
     InputArchive ia(ifs);
     O result;
-    object::tagged::Load<O> loader{result};
+    detail::LoadWithTag<O> loader{result};
     ia >> loader;
     return result;
 }
@@ -123,13 +202,13 @@ O ObjectStore::load(const fs::path& path) {
 template<class O>
 inline
 O ObjectStore::load(const ObjectId& id) {
-    return load<O>(_objdir / object::path::from_id(id));
+    return load<O>(_objdir / id_to_path(id));
 }
 
 template<class O0, class O1, class ... Os> // Two or more
 inline
 variant<O0, O1, Os...> ObjectStore::load(const ObjectId& id) {
-    return load<variant<O0, O1, Os...>>(_objdir / object::path::from_id(id));
+    return load<variant<O0, O1, Os...>>(_objdir / id_to_path(id));
 }
 
 template<class O0, class O1, class ... Os> // Two or more
@@ -142,7 +221,7 @@ variant<O0, O1, Os...> ObjectStore::load(const fs::path& path) {
 template<class O>
 inline
 Opt<O> ObjectStore::maybe_load(const ObjectId& id) {
-    auto p = _objdir / object::path::from_id(id);
+    auto p = _objdir / id_to_path(id);
     if (!fs::exists(p)) return boost::none;
     return load<O>(p);
 }

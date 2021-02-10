@@ -1,6 +1,6 @@
 #pragma once
 
-#include "object/tree.h"
+#include "directory.h"
 
 #include <map>
 #include <set>
@@ -16,7 +16,7 @@ public:
     ConflictNameAssigner(std::string name_root) :
         _name_root(std::move(name_root)) {}
 
-    void add(const object::Tree::UserMap& usr_map)
+    void add(const Directory::UserMap& usr_map)
     {
         for (auto& [user_id, vobj] : usr_map) {
             _versions[user_id] = vobj.object_id;

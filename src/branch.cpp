@@ -1,15 +1,9 @@
 #include "branch.h"
-#include "branch_type.h"
 #include "variant.h"
 #include "error.h"
 #include "path_range.h"
 #include "branch_view.h"
-#include "object/tree.h"
-#include "object/tagged.h"
-#include "object/blob.h"
-#include "refcount.h"
 #include "archive.h"
-#include "snapshot.h"
 #include "ouisync_assert.h"
 
 #include <boost/filesystem.hpp>
@@ -21,16 +15,25 @@
 
 using namespace ouisync;
 using std::move;
-using object::Blob;
-using object::Tree;
 using std::unique_ptr;
 using std::make_unique;
 using std::string;
+using std::set;
 
 #define DBG std::cerr << __PRETTY_FUNCTION__ << ":" << __LINE__ << " "
 
+static
+void insert_object(Branch::HashSet& hash_set, const ObjectId& id, const string& filename, const ObjectId& parent_id) {
+    auto i = hash_set.insert({id, {}}).first;
+    Sha256 hash;
+    hash.update(parent_id);
+    hash.update(filename);
+    auto inserted = i->second.insert(hash.close()).second;
+    ouisync_assert(inserted);
+}
+
 /* static */
-Branch Branch::create(const fs::path& path, UserId user_id, ObjectStore& objects, Options::Branch options)
+Branch Branch::create(const fs::path& path, UserId user_id, ObjectStore& objstore, Options::Branch options)
 {
     ObjectId root_id;
     VersionVector clock;
@@ -39,33 +42,22 @@ Branch Branch::create(const fs::path& path, UserId user_id, ObjectStore& objects
         throw std::runtime_error("Local branch already exits");
     }
 
-    object::Tree root_obj;
+    Directory root_obj;
 
-    root_id = objects.store(root_obj);
-    objects.rc(root_id).increment_recursive_count();
+    root_id = objstore.store(root_obj);
 
-    Branch branch(path, user_id, Commit{move(clock), root_id}, objects, move(options));
+    Branch branch(path, user_id, Commit{move(clock), root_id}, objstore, move(options));
     branch.store_self();
 
     return branch;
 }
 
 /* static */
-Branch Branch::load(const fs::path& file_path, UserId user_id, ObjectStore& objects, Options::Branch options)
+Branch Branch::load(const fs::path& file_path, UserId user_id, ObjectStore& objstore, Options::Branch options)
 {
-    Branch branch(file_path, user_id, objects, std::move(options));
+    Branch branch(file_path, user_id, objstore, std::move(options));
     archive::load(file_path, branch);
     return branch;
-}
-
-//--------------------------------------------------------------------
-static
-void decrement_rc_and_remove_single_node(ObjectStore& objstore, const ObjectId& id)
-{
-    auto rc = objstore.rc(id);
-    rc.decrement_recursive_count_but_dont_remove();
-    if (!rc.both_are_zero()) return;
-    objstore.remove(id);
 }
 
 //--------------------------------------------------------------------
@@ -80,21 +72,22 @@ class Branch::Op {
 
 class Branch::TreeOp : public Branch::Op {
     public:
-    virtual Tree& tree() = 0;
+    virtual Directory& tree() = 0;
     virtual ~TreeOp() {};
 };
 
 class Branch::RootOp : public Branch::TreeOp {
 public:
-    RootOp(ObjectStore& objstore, const UserId& this_user_id, const Commit& commit) :
+    RootOp(ObjectStore& objstore, const UserId& this_user_id, const Commit& commit, Branch::HashSet& hash_set) :
         _objstore(objstore),
         _this_user_id(this_user_id),
-        _commit(commit)
+        _commit(commit),
+        _hash_set(hash_set)
     {
-        _tree = _objstore.load<Tree>(_commit.root_id);
+        _tree = _objstore.load<Directory>(_commit.root_id);
     }
 
-    Tree& tree() override {
+    Directory& tree() override {
         return _tree;
     }
 
@@ -106,12 +99,12 @@ public:
 
         _objstore.store(_tree);
 
-        for (auto id : _tree.children()) {
-            objstore().rc(id).increment_recursive_count();
-        }
+        _tree.for_each_unique_child([&] (auto& filename, auto& child_id) {
+                insert_object(child_id, filename, new_id);
+            });
 
-        _objstore.rc(new_id).increment_recursive_count();
-        _objstore.rc(old_id).decrement_recursive_count();
+        insert_object(new_id, "", new_id);
+        remove_object(old_id, "", old_id);
 
         _commit.root_id = new_id;
 
@@ -132,11 +125,43 @@ public:
         vv.set_version(_this_user_id, _commit.stamp.version_of(_this_user_id) + 1);
     }
 
+    void insert_object(const ObjectId& id, const string& filename, const ObjectId& parent_id) {
+        ::insert_object(_hash_set, id, filename, parent_id);
+    }
+
+    void remove_object(const ObjectId& id, const string& filename, const ObjectId& parent_id) {
+        auto i = _hash_set.find(id);
+        ouisync_assert(i != _hash_set.end());
+        Sha256 hash;
+        hash.update(parent_id);
+        hash.update(filename);
+        auto erased = i->second.erase(hash.close());
+        ouisync_assert(erased);
+        if (!i->second.empty()) return;
+
+        // If we're here, that means no other node points to this object.
+        _hash_set.erase(i);
+
+        auto obj = _objstore.load<Directory, FileBlob::Nothing>(id);
+    
+        apply(obj,
+                [&](const Directory& d) {
+                    d.for_each_unique_child([&] (auto& filename, auto& object_id) {
+                        remove_object(object_id, filename, id);
+                    });
+                },
+                [&](const FileBlob::Nothing&) {
+                });
+
+        _objstore.remove(id);
+    }
+
 private:
     ObjectStore& _objstore;
     UserId _this_user_id;
     Commit _commit;
-    Tree _tree;
+    Directory _tree;
+    Branch::HashSet& _hash_set;
 };
 
 class Branch::CdOp : public Branch::TreeOp {
@@ -161,13 +186,13 @@ public:
             // whenever a user makes a change to a node, that node must have been complete.
             if (user_id == _this_user_id) {
                 _old = Old{ vobj.object_id, vobj.version_vector };
-                _tree = objstore().load<Tree>(vobj.object_id);
+                _tree = objstore().load<Directory>(vobj.object_id);
                 return;
             }
         }
     }
 
-    Tree& tree() override {
+    Directory& tree() override {
         return _tree;
     }
 
@@ -192,9 +217,9 @@ public:
 
         objstore().store(_tree);
 
-        for (auto id : _tree.children()) {
-            objstore().rc(id).increment_recursive_count();
-        }
+        _tree.for_each_unique_child([&] (auto& filename, auto& child_id) {
+                _root->insert_object(child_id, filename, new_tree_id);
+            });
 
         return _parent->commit();
     }
@@ -211,7 +236,7 @@ private:
     UserId _this_user_id;
     string _dirname;
     Opt<Old> _old;
-    Tree _tree;
+    Directory _tree;
 };
 
 class Branch::FileOp : public Branch::Op {
@@ -237,11 +262,11 @@ public:
 
         if (i != per_name.end()) {
             _old = OldData { i->second.object_id, i->second.version_vector };
-            _blob = objstore().load<Blob>(_old->blob_id);
+            _blob = objstore().load<FileBlob>(_old->blob_id);
         }
     }
 
-    Opt<Blob>& blob() { return _blob; }
+    Opt<FileBlob>& blob() { return _blob; }
 
     Opt<Commit> commit() override {
         if (!_blob && !_old) return boost::none;
@@ -281,7 +306,7 @@ private:
     UserId _this_user_id;
     string _filename;
     Opt<OldData> _old;
-    Opt<Blob> _blob;
+    Opt<FileBlob> _blob;
 };
 
 // XXX: This is just a stub, proper implementation needs to create an entry
@@ -312,7 +337,7 @@ public:
 
 private:
     unique_ptr<Branch::TreeOp> _parent;
-    Tree::MutableHandle _tree_entry;
+    Directory::MutableHandle _tree_entry;
 };
 //--------------------------------------------------------------------
 
@@ -325,7 +350,7 @@ PathRange parent(PathRange path) {
 //--------------------------------------------------------------------
 unique_ptr<Branch::TreeOp> Branch::root()
 {
-    return make_unique<Branch::RootOp>(_objects, _user_id, _commit);
+    return make_unique<Branch::RootOp>(_objstore, _user_id, _commit, _hash_set);
 }
 
 unique_ptr<Branch::TreeOp> Branch::cd_into(PathRange path)
@@ -358,14 +383,14 @@ void Branch::commit(const unique_ptr<OpT>& op)
 
 //--------------------------------------------------------------------
 
-void Branch::store(PathRange path, const Blob& blob)
+void Branch::store(PathRange path, const FileBlob& blob)
 {
     auto file = get_file(path);
     file->blob() = blob;
     commit(file);
 }
 
-void Branch::store(const fs::path& path, const Blob& blob)
+void Branch::store(const fs::path& path, const FileBlob& blob)
 {
     store(Path(path), blob);
 }
@@ -379,7 +404,7 @@ size_t Branch::write(PathRange path, const char* buf, size_t size, size_t offset
     auto file = get_file(path);
 
     if (!file->blob()) {
-        file->blob() = Blob{};
+        file->blob() = FileBlob{};
     }
 
     auto& blob = *file->blob();
@@ -406,7 +431,7 @@ size_t Branch::truncate(PathRange path, size_t size)
     auto file = get_file(path);
 
     if (!file->blob()) {
-        file->blob() = Blob{};
+        file->blob() = FileBlob{};
     }
 
     auto& blob = *file->blob();
@@ -454,20 +479,11 @@ bool Branch::remove(const fs::path& fspath)
 
 //--------------------------------------------------------------------
 void Branch::sanity_check() const {
-    if (!_objects.is_complete(_commit.root_id)) {
+    if (!_objstore.is_complete(_commit.root_id)) {
         std::cerr << "Branch is incomplete:\n";
         std::cerr << *this << "\n";
         ouisync_assert(false);
     }
-}
-
-//--------------------------------------------------------------------
-
-Snapshot Branch::create_snapshot() const
-{
-    auto snapshot = Snapshot::create(_commit, _objects, _options);
-    snapshot.insert_object(_commit.root_id, {});
-    return snapshot;
 }
 
 //--------------------------------------------------------------------
@@ -479,40 +495,23 @@ void Branch::store_self() const {
 //--------------------------------------------------------------------
 
 Branch::Branch(const fs::path& file_path, const UserId& user_id,
-        Commit commit, ObjectStore& objects, Options::Branch options) :
+        Commit commit, ObjectStore& objstore, Options::Branch options) :
     _file_path(file_path),
     _options(move(options)),
-    _objects(objects),
+    _objstore(objstore),
     _user_id(user_id),
     _commit(move(commit))
-{}
-
-Branch::Branch(const fs::path& file_path,
-        const UserId& user_id, ObjectStore& objects, Options::Branch options) :
-    _file_path(file_path),
-    _options(move(options)),
-    _objects(objects),
-    _user_id(user_id)
 {
+    insert_object(_hash_set, _commit.root_id, "", _commit.root_id);
 }
 
-//--------------------------------------------------------------------
-
-bool Branch::introduce_commit(const Commit& commit)
+Branch::Branch(const fs::path& file_path,
+        const UserId& user_id, ObjectStore& objstore, Options::Branch options) :
+    _file_path(file_path),
+    _options(move(options)),
+    _objstore(objstore),
+    _user_id(user_id)
 {
-    if (!(_commit.stamp.is_same_or_happened_before(commit.stamp))) return false;
-    if (_commit.root_id == commit.root_id) return false;
-
-    auto old_root = _commit.root_id;
-
-    _commit = commit;
-
-    store_self();
-
-    _objects.rc(_commit.root_id).increment_recursive_count();
-    _objects.rc(old_root).decrement_recursive_count();
-
-    return true;
 }
 
 //--------------------------------------------------------------------
