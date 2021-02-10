@@ -10,7 +10,9 @@ namespace ouisync {
 
 class UserId {
 public:
-    static UserId load_or_create(const fs::path& file_path);
+    static UserId load_or_generate_random(const fs::path& file_path);
+
+    static UserId generate_random();
 
     UserId() = default;
     UserId(const UserId&) = default;

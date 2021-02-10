@@ -28,7 +28,7 @@ Repository::Repository(executor_type ex, Options options) :
     _objects(_options.objectdir),
     _on_change(_ex)
 {
-    _user_id = UserId::load_or_create(_options.user_id_file_path);
+    _user_id = UserId::load_or_generate_random(_options.user_id_file_path);
 
     fs::path branch_path = _options.basedir / "branch";
 

@@ -9,7 +9,7 @@
 using namespace ouisync;
 
 /* static */
-UserId UserId::load_or_create(const fs::path& file_path)
+UserId UserId::load_or_generate_random(const fs::path& file_path)
 {
     fs::fstream f(file_path, f.binary | f.in);
 
@@ -33,6 +33,12 @@ UserId UserId::load_or_create(const fs::path& file_path)
     boost::uuids::uuid uuid;
     f >> uuid;
     return uuid;
+}
+
+/* static */
+UserId UserId::generate_random()
+{
+    return boost::uuids::random_generator()();
 }
 
 UserId::UserId(const boost::uuids::uuid& uuid) :
