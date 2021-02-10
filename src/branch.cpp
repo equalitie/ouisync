@@ -3,8 +3,6 @@
 #include "error.h"
 #include "path_range.h"
 #include "branch_view.h"
-#include "directory.h"
-#include "object/blob.h"
 #include "archive.h"
 #include "ouisync_assert.h"
 
@@ -17,7 +15,6 @@
 
 using namespace ouisync;
 using std::move;
-using object::Blob;
 using std::unique_ptr;
 using std::make_unique;
 using std::string;
@@ -145,7 +142,7 @@ public:
         // If we're here, that means no other node points to this object.
         _hash_set.erase(i);
 
-        auto obj = _objstore.load<Directory, Blob::Nothing>(id);
+        auto obj = _objstore.load<Directory, FileBlob::Nothing>(id);
     
         apply(obj,
                 [&](const Directory& d) {
@@ -153,7 +150,7 @@ public:
                         remove_object(object_id, filename, id);
                     });
                 },
-                [&](const Blob::Nothing&) {
+                [&](const FileBlob::Nothing&) {
                 });
 
         _objstore.remove(id);
@@ -265,11 +262,11 @@ public:
 
         if (i != per_name.end()) {
             _old = OldData { i->second.object_id, i->second.version_vector };
-            _blob = objstore().load<Blob>(_old->blob_id);
+            _blob = objstore().load<FileBlob>(_old->blob_id);
         }
     }
 
-    Opt<Blob>& blob() { return _blob; }
+    Opt<FileBlob>& blob() { return _blob; }
 
     Opt<Commit> commit() override {
         if (!_blob && !_old) return boost::none;
@@ -309,7 +306,7 @@ private:
     UserId _this_user_id;
     string _filename;
     Opt<OldData> _old;
-    Opt<Blob> _blob;
+    Opt<FileBlob> _blob;
 };
 
 // XXX: This is just a stub, proper implementation needs to create an entry
@@ -386,14 +383,14 @@ void Branch::commit(const unique_ptr<OpT>& op)
 
 //--------------------------------------------------------------------
 
-void Branch::store(PathRange path, const Blob& blob)
+void Branch::store(PathRange path, const FileBlob& blob)
 {
     auto file = get_file(path);
     file->blob() = blob;
     commit(file);
 }
 
-void Branch::store(const fs::path& path, const Blob& blob)
+void Branch::store(const fs::path& path, const FileBlob& blob)
 {
     store(Path(path), blob);
 }
@@ -407,7 +404,7 @@ size_t Branch::write(PathRange path, const char* buf, size_t size, size_t offset
     auto file = get_file(path);
 
     if (!file->blob()) {
-        file->blob() = Blob{};
+        file->blob() = FileBlob{};
     }
 
     auto& blob = *file->blob();
@@ -434,7 +431,7 @@ size_t Branch::truncate(PathRange path, size_t size)
     auto file = get_file(path);
 
     if (!file->blob()) {
-        file->blob() = Blob{};
+        file->blob() = FileBlob{};
     }
 
     auto& blob = *file->blob();

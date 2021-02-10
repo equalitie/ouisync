@@ -1,5 +1,5 @@
 #include "object_store.h"
-#include "object/blob.h"
+#include "file_blob.h"
 #include "directory.h"
 #include "hex.h"
 
@@ -10,7 +10,6 @@
 
 using namespace ouisync;
 using namespace std;
-using object::Blob;
 
 ObjectStore::ObjectStore(fs::path object_dir) :
     _objdir(move(object_dir))
@@ -32,10 +31,10 @@ bool ObjectStore::exists(const ObjectId& id) const {
 bool ObjectStore::is_complete(const ObjectId& id) {
     if (!exists(id)) return false;
 
-    auto v = load<Blob::Nothing, Directory>(id);
+    auto v = load<FileBlob::Nothing, Directory>(id);
 
     return apply(v,
-        [&] (const Blob::Nothing&) { return true; },
+        [&] (const FileBlob::Nothing&) { return true; },
         [&] (const Directory&) {
             assert("TODO" && 0);
             //for (auto& [_, id] : tree) {

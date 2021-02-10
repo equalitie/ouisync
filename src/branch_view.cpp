@@ -10,7 +10,6 @@
 #include <iostream>
 
 using namespace ouisync;
-using object::Blob;
 using std::set;
 using std::map;
 using std::string;
@@ -61,13 +60,13 @@ FileSystemAttrib BranchView::get_attr(PathRange path) const
 
     auto file_id = dir.file(path.back());
 
-    auto obj = _objects.load<Directory::Nothing, Blob::Size>(file_id);
+    auto obj = _objects.load<Directory::Nothing, FileBlob::Size>(file_id);
 
     FileSystemAttrib attrib;
 
     apply(obj,
         [&] (const Directory::Nothing&) { attrib = FileSystemDirAttrib{}; },
-        [&] (const Blob::Size& b) { attrib = FileSystemFileAttrib{b.value}; });
+        [&] (const FileBlob::Size& b) { attrib = FileSystemFileAttrib{b.value}; });
 
     return attrib;
 }
@@ -80,7 +79,7 @@ size_t BranchView::read(PathRange path, const char* buf, size_t size, size_t off
 
     MultiDir dir = root().cd_into(_parent(path));
 
-    auto blob = _objects.load<Blob>(dir.file(path.back()));
+    auto blob = _objects.load<FileBlob>(dir.file(path.back()));
 
     size_t len = blob.size();
 
@@ -103,7 +102,7 @@ void _show(std::ostream& os, ObjectStore& objects, ObjectId id, std::string pad 
         return;
     }
 
-    auto obj = objects.load<Directory, Blob>(id);
+    auto obj = objects.load<Directory, FileBlob>(id);
 
     apply(obj,
             [&] (const Directory& d) {
@@ -115,7 +114,7 @@ void _show(std::ostream& os, ObjectStore& objects, ObjectId id, std::string pad 
                     }
                 }
             },
-            [&] (const Blob& b) {
+            [&] (const FileBlob& b) {
                 os << pad << b << "\n";
             });
 }

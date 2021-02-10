@@ -1,14 +1,13 @@
 #include "client.h"
 #include "error.h"
 #include "directory.h"
-#include "object/blob.h"
+#include "file_blob.h"
 
 #include <iostream>
 #include <boost/optional/optional_io.hpp>
 
 using namespace ouisync;
 using std::move;
-using Blob = object::Blob;
 
 Client::Client(MessageBroker::Client&& broker, Repository& repo) :
     _broker(move(broker)),

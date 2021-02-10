@@ -62,7 +62,7 @@ add_library(libouisync STATIC
     "src/object_tag.cpp"
     "src/object_store.cpp"
     "src/directory.cpp"
-    "src/object/blob.cpp"
+    "src/file_blob.cpp"
 )
 
 target_compile_definitions(libouisync PRIVATE -DBOOST_ASIO_HAS_CO_AWAIT)

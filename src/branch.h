@@ -1,7 +1,7 @@
 #pragma once
 
 #include "object_id.h"
-#include "object/blob.h"
+#include "file_blob.h"
 #include "directory.h"
 #include "user_id.h"
 #include "version_vector.h"
@@ -20,7 +20,6 @@ namespace ouisync {
 
 class Branch {
 public:
-    using Blob = object::Blob;
     class Op;
     class TreeOp;
     class HasTreeParrentOp;
@@ -50,8 +49,8 @@ public:
 
     // XXX: Deprecated, use `write` instead. I believe these are currently
     // only being used in tests.
-    void store(PathRange, const Blob&);
-    void store(const fs::path&, const Blob&);
+    void store(PathRange, const FileBlob&);
+    void store(const fs::path&, const FileBlob&);
 
     size_t write(PathRange, const char* buf, size_t size, size_t offset);
 

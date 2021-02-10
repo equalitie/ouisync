@@ -135,7 +135,7 @@ net::awaitable<void> Repository::mknod(PathRange path, mode_t mode, dev_t dev)
         throw_error(sys::errc::is_a_directory);
     }
 
-    _branch->store(path, object::Blob{});
+    _branch->store(path, FileBlob{});
 
     _on_change.notify();
 

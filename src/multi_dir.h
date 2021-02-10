@@ -1,14 +1,12 @@
 #pragma once
 
-#include "object/blob.h"
+#include "file_blob.h"
 #include "conflict_name_assigner.h"
 
 namespace ouisync {
 
 class MultiDir {
 public:
-    using Blob = object::Blob;
-
     std::set<ObjectId> ids;
     ObjectStore* objstore;
 
@@ -17,7 +15,7 @@ public:
         MultiDir retval{{}, objstore};
     
         for (auto& from_id : ids) {
-            const auto obj = objstore->load<Directory, Blob::Nothing>(from_id);
+            const auto obj = objstore->load<Directory, FileBlob::Nothing>(from_id);
             auto tree = boost::get<Directory>(&obj);
             if (!tree) continue;
             auto user_map = tree->find(where);

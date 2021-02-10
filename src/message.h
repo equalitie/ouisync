@@ -6,7 +6,7 @@
 #include "commit.h"
 #include "variant.h"
 #include "directory.h"
-#include "object/blob.h"
+#include "file_blob.h"
 
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/awaitable.hpp>
@@ -29,7 +29,7 @@ struct RqObject {
 struct RsObject {
     static constexpr auto type = MessageType::Response;
 
-    variant<object::Blob, Directory> object;
+    variant<FileBlob, Directory> object;
 
     template<class Archive>
     void serialize(Archive& ar, const unsigned) {
