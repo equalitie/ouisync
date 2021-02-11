@@ -60,6 +60,8 @@ public:
         ar & static_cast<Parent&>(*this);
     }
 
+    static ObjectId null_id();
+
     Hex hex() const;
     ShortHex short_hex() const;
 

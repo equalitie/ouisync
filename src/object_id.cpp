@@ -24,6 +24,16 @@ ObjectId::RiaaNameMap ObjectId::debug_name(const ObjectId& id, std::string name)
     return RiaaNameMap{i, std::prev(i->second.end())};
 }
 
+/* static */
+ObjectId ObjectId::null_id() {
+    static Opt<Parent> id;
+    if (!id) {
+        id = Parent{};
+        id->fill(0);
+    }
+    return *id;
+}
+
 ObjectId::Hex ObjectId::hex() const
 {
     auto hex = to_hex<char>(*this);
