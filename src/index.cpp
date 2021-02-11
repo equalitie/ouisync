@@ -7,69 +7,83 @@
 #include "variant.h"
 #include "ouisync_assert.h"
 
+#include <iostream>
+
 using namespace ouisync;
 using std::string;
 using std::move;
 
-Index::Index(ObjectStore& objstore) :
-    _objstore(objstore)
+Index::Element::Element(const ObjectId& id, const ObjectId& parent_id) :
+    _is_root(id == parent_id),
+    _obj_id(id),
+    _parent_id(parent_id)
 {
 }
 
-Index::Index(Commit commit, ObjectStore& objstore) :
-    _objstore(objstore),
-    _commit(move(commit))
+void Index::set_version_vector(const VersionVector& vv)
 {
-    insert_object(_commit.root_id, "", _commit.root_id);
+    ouisync_assert(vv.happened_after(_commit.stamp));
+
+    if (!vv.happened_after(_commit.stamp)) return;
+    if (vv == _commit.stamp) return;
+
+    _commit.stamp = vv;
 }
 
-void Index::set_root(const Commit& new_commit)
+void Index::insert_object(const Element& e)
 {
-    ouisync_assert(new_commit.happened_after(_commit));
+    auto i = _elements.insert({e._obj_id, {}}).first;
+    auto& parents = i->second;
+    auto j = parents.insert({e._parent_id, 0u}).first;
+    j->second++;
 
-    if (!new_commit.happened_after(_commit)) return;
-
-    // The order is important as removing old root first could remove
-    // object that are descendants of the new root.
-    insert_object(new_commit.root_id, "", new_commit.root_id);
-    remove_object(_commit.root_id, "", _commit.root_id);
-
-    _commit = new_commit;
+    if (e._is_root) {
+        _commit.root_id = e._obj_id;
+    }
 }
 
-void Index::insert_object(const ObjectId& id, const string& filename, const ObjectId& parent_id)
+void Index::remove_object(const Element& e)
 {
-    auto i = _elements.insert({id, {}}).first;
-    Sha256 hash;
-    hash.update(parent_id);
-    hash.update(filename);
-    auto inserted = i->second.insert(hash.close()).second;
-    ouisync_assert(inserted);
-}
+    auto i = _elements.find(e._obj_id);
 
-void Index::remove_object(const ObjectId& id, const string& filename, const ObjectId& parent_id) {
-    auto i = _elements.find(id);
     ouisync_assert(i != _elements.end());
-    Sha256 hash;
-    hash.update(parent_id);
-    hash.update(filename);
-    auto erased = i->second.erase(hash.close());
-    ouisync_assert(erased);
-    if (!i->second.empty()) return;
 
-    // If we're here, that means no other node points to this object.
-    _elements.erase(i);
+    auto& parents = i->second;
 
-    auto obj = _objstore.load<Directory, FileBlob::Nothing>(id);
+    auto j = parents.find(e._parent_id);
 
-    apply(obj,
-            [&](const Directory& d) {
-                d.for_each_unique_child([&] (auto& filename, auto& object_id) {
-                    remove_object(object_id, filename, id);
-                });
-            },
-            [&](const FileBlob::Nothing&) {
-            });
+    ouisync_assert(j != parents.end());
+    ouisync_assert(j->second != 0u);
 
-    _objstore.remove(id);
+    if (--j->second == 0) {
+        parents.erase(j);
+    }
+
+    if (parents.empty()) _elements.erase(i);
+}
+
+void Index::insert_object(const ObjectId& id, const ObjectId& parent_id)
+{
+    insert_object(Element(id, parent_id));
+}
+
+void Index::remove_object(const ObjectId& id, const ObjectId& parent_id)
+{
+    remove_object(Element(id, parent_id));
+}
+
+bool Index::has(const ObjectId& obj_id) const
+{
+    auto i = _elements.find(obj_id);
+    return i != _elements.end();
+}
+
+bool Index::has(const ObjectId& obj_id, const ObjectId& parent_id) const
+{
+    auto i = _elements.find(obj_id);
+    if (i == _elements.end()) return false;
+    auto j = i->second.find(parent_id);
+    if (j == i->second.end()) return false;
+    ouisync_assert(j->second != 0);
+    return j->second != 0;
 }

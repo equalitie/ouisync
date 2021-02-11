@@ -25,6 +25,7 @@ PathRange _parent(PathRange path) {
 //--------------------------------------------------------------------
 MultiDir BranchView::root() const
 {
+    ouisync_assert(_root_id != ObjectId::null_id());
     return MultiDir{{_root_id}, &_objects};
 }
 //--------------------------------------------------------------------

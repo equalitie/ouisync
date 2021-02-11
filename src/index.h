@@ -12,29 +12,54 @@ class ObjectStore;
 
 class Index {
 private:
-    using Elements = std::map<ObjectId, std::set<Sha256::Digest>>;
-    //                                          |______________|
-    //                                                 |
-    //           Hash(parent.object_id + file-name)  <-+
+    using Elements = std::map<ObjectId, std::map<ObjectId, uint32_t>>;
+    //                                              |         |
+    //                                   Parent <---+         |
+    //                                                        |
+    //  How many times is the object listed in the parent <---+
 
 public:
-    Index(ObjectStore&);
-    Index(Commit, ObjectStore&);
 
-    void set_root(const Commit&);
+    class Element {
+      public:
+        Element() {}
+        Element(const Element&) = default;
+        Element(Element&&) = default;
 
-    void insert_object(const ObjectId& id, const std::string& filename, const ObjectId& parent_id);
+        Element(const ObjectId& id, const ObjectId& parent_id);
+        Element(const ObjectId& id) : Element(id, id) {}
+
+        bool is_root() const { return _is_root; }
+
+        const ObjectId& obj_id() const { return _obj_id; }
+
+      private:
+        friend class Index;
+        bool _is_root;
+        ObjectId _obj_id;
+        ObjectId _parent_id;
+    };
+
+public:
+    void set_version_vector(const VersionVector&);
+
+    void insert_object(const ObjectId& id, const ObjectId& parent_id);
+    void remove_object(const ObjectId& id, const ObjectId& parent_id);
+
+    void insert_object(const Element&);
+    void remove_object(const Element&);
+
+    bool has(const ObjectId& obj_id) const;
+    bool has(const ObjectId& obj_id, const ObjectId& parent_id) const;
 
     template<class Archive>
     void serialize(Archive& ar, unsigned) {
         ar & _commit & _elements;
     }
 
-private:
-    void remove_object(const ObjectId& id, const std::string& filename, const ObjectId& parent_id);
+    const Commit& commit() const { return _commit; }
 
 private:
-    ObjectStore& _objstore;
     Commit _commit;
     Elements _elements;
 };

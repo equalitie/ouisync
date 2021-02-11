@@ -30,6 +30,8 @@ private:
     class RemoveOp;
     class CdOp;
 
+    using Indices = std::map<UserId, Index>;
+
 public:
     static
     Branch create(const fs::path& path, UserId user_id, ObjectStore&, Options::Branch);
@@ -37,10 +39,12 @@ public:
     static
     Branch load(const fs::path& file_path, UserId user_id, ObjectStore&, Options::Branch);
 
-    const ObjectId& root_id() const { return _commit.root_id; }
+    const Commit& commit() const { return _indices.find(_user_id)->second.commit(); }
+
+    const ObjectId& root_id() const { return commit().root_id; }
 
     BranchView branch_view() const {
-        return BranchView(_objstore, _commit.root_id);
+        return BranchView(_objstore, commit().root_id);
     }
 
     // XXX: Deprecated, use `write` instead. I believe these are currently
@@ -57,7 +61,7 @@ public:
 
     void mkdir(PathRange);
 
-    const VersionVector& stamp() const { return _commit.stamp; }
+    const VersionVector& stamp() const { return commit().stamp; }
 
     const UserId& user_id() const { return _user_id; }
 
@@ -65,10 +69,10 @@ public:
 
     template<class Archive>
     void serialize(Archive& ar, unsigned) {
-        ar & _commit & _index;
+        ar & _indices;
     }
 
-    void sanity_check() const;
+    void sanity_check() {} // TODO
 
 private:
     friend class BranchView;
@@ -80,10 +84,6 @@ private:
 
     template<class F> void update_dir(PathRange, F&&);
 
-
-    template<class OpT>
-    void commit(const std::unique_ptr<OpT>&);
-
     std::unique_ptr<TreeOp> root();
     std::unique_ptr<TreeOp> cd_into(PathRange);
     std::unique_ptr<FileOp> get_file(PathRange);
@@ -93,8 +93,7 @@ private:
     Options::Branch _options;
     ObjectStore& _objstore;
     UserId _user_id;
-    Commit _commit;
-    Index _index;
+    Indices _indices;
 };
 
 } // namespace
