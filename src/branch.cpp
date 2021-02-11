@@ -25,29 +25,47 @@ using std::set;
 /* static */
 Branch Branch::create(const fs::path& path, UserId user_id, ObjectStore& objstore, Options::Branch options)
 {
-    ObjectId root_id;
-    VersionVector clock;
-
     if (fs::exists(path)) {
         throw std::runtime_error("Local branch already exits");
     }
 
-    Directory root_obj;
+    Commit null_commit{
+        VersionVector{},
+        objstore.store(Directory{})
+    };
 
-    root_id = objstore.store(root_obj);
-
-    Branch branch(path, user_id, Commit{move(clock), root_id}, objstore, move(options));
-    branch.store_self();
-
-    return branch;
+    return Branch(path, user_id, move(null_commit), objstore, move(options));
 }
 
 /* static */
 Branch Branch::load(const fs::path& file_path, UserId user_id, ObjectStore& objstore, Options::Branch options)
 {
-    Branch branch(file_path, user_id, objstore, std::move(options));
-    archive::load(file_path, branch);
-    return branch;
+    return Branch(file_path, user_id, objstore, std::move(options));
+}
+
+//--------------------------------------------------------------------
+
+Branch::Branch(const fs::path& file_path, const UserId& user_id,
+        Commit commit, ObjectStore& objstore, Options::Branch options) :
+    _file_path(file_path),
+    _options(move(options)),
+    _objstore(objstore),
+    _user_id(user_id),
+    _commit(move(commit)),
+    _index(_commit, _objstore)
+{
+    store_self();
+}
+
+Branch::Branch(const fs::path& file_path,
+        const UserId& user_id, ObjectStore& objstore, Options::Branch options) :
+    _file_path(file_path),
+    _options(move(options)),
+    _objstore(objstore),
+    _user_id(user_id),
+    _index(_objstore)
+{
+    archive::load(file_path, *this);
 }
 
 //--------------------------------------------------------------------
@@ -92,9 +110,8 @@ public:
                 _index.insert_object(child_id, filename, new_id);
             });
 
-        _index.set_root(new_id);
-
         _commit.root_id = new_id;
+        _index.set_root({_tree.calculate_version_vector_union(), new_id});
 
         auto new_stamp = _tree.calculate_version_vector_union();
 
@@ -444,30 +461,6 @@ void Branch::sanity_check() const {
 
 void Branch::store_self() const {
     archive::store(_file_path, *this);
-}
-
-//--------------------------------------------------------------------
-
-Branch::Branch(const fs::path& file_path, const UserId& user_id,
-        Commit commit, ObjectStore& objstore, Options::Branch options) :
-    _file_path(file_path),
-    _options(move(options)),
-    _objstore(objstore),
-    _user_id(user_id),
-    _commit(move(commit)),
-    _index(_objstore)
-{
-    _index.set_root(_commit.root_id);
-}
-
-Branch::Branch(const fs::path& file_path,
-        const UserId& user_id, ObjectStore& objstore, Options::Branch options) :
-    _file_path(file_path),
-    _options(move(options)),
-    _objstore(objstore),
-    _user_id(user_id),
-    _index(_objstore)
-{
 }
 
 //--------------------------------------------------------------------

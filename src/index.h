@@ -1,6 +1,6 @@
 #pragma once
 
-#include "object_id.h"
+#include "commit.h"
 
 #include <map>
 #include <set>
@@ -19,14 +19,15 @@ private:
 
 public:
     Index(ObjectStore&);
+    Index(Commit, ObjectStore&);
 
-    void set_root(const ObjectId& id);
+    void set_root(const Commit&);
 
     void insert_object(const ObjectId& id, const std::string& filename, const ObjectId& parent_id);
 
     template<class Archive>
     void serialize(Archive& ar, unsigned) {
-        ar & _elements;
+        ar & _commit & _elements;
     }
 
 private:
@@ -34,7 +35,7 @@ private:
 
 private:
     ObjectStore& _objstore;
-    Opt<ObjectId> _root;
+    Commit _commit;
     Elements _elements;
 };
 

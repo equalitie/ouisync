@@ -5,27 +5,36 @@
 #include "directory.h"
 #include "file_blob.h"
 #include "variant.h"
+#include "ouisync_assert.h"
 
 using namespace ouisync;
 using std::string;
+using std::move;
 
 Index::Index(ObjectStore& objstore) :
     _objstore(objstore)
-{}
-
-void Index::set_root(const ObjectId& new_root_id)
 {
-    if (_root) {
-        if (*_root == new_root_id) return;
-        auto old_root_id = *_root;
-        // The order is important as removing old root first could remove
-        // object that are descendants of the new root.
-        insert_object(new_root_id, "", new_root_id);
-        remove_object(old_root_id, "", old_root_id);
-    } else {
-        insert_object(new_root_id, "", new_root_id);
-    }
-    _root = new_root_id;
+}
+
+Index::Index(Commit commit, ObjectStore& objstore) :
+    _objstore(objstore),
+    _commit(move(commit))
+{
+    insert_object(_commit.root_id, "", _commit.root_id);
+}
+
+void Index::set_root(const Commit& new_commit)
+{
+    ouisync_assert(new_commit.happened_after(_commit));
+
+    if (!new_commit.happened_after(_commit)) return;
+
+    // The order is important as removing old root first could remove
+    // object that are descendants of the new root.
+    insert_object(new_commit.root_id, "", new_commit.root_id);
+    remove_object(_commit.root_id, "", _commit.root_id);
+
+    _commit = new_commit;
 }
 
 void Index::insert_object(const ObjectId& id, const string& filename, const ObjectId& parent_id)
