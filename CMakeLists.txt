@@ -64,6 +64,7 @@ add_library(libouisync STATIC
     "src/directory.cpp"
     "src/file_blob.cpp"
     "src/index.cpp"
+    "src/version_vector.cpp"
 )
 
 target_compile_definitions(libouisync PRIVATE -DBOOST_ASIO_HAS_CO_AWAIT)

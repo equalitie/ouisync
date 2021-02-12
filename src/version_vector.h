@@ -159,6 +159,8 @@ public:
         }
     }
 
+    friend std::ostream& operator<<(std::ostream&, const VersionVector&);
+
 private:
     static
     const UserId& id_of(const Map::const_iterator& i)
