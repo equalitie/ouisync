@@ -16,6 +16,28 @@ namespace ouisync {
 
 enum class MessageType { Request, Response };
 
+struct RqNotifyOnChange {
+    static constexpr auto type = MessageType::Request;
+
+    uint64_t last_state;
+
+    template<class Archive>
+    void serialize(Archive& ar, const unsigned) {
+        ar & last_state;
+    }
+};
+
+struct RsNotifyOnChange {
+    static constexpr auto type = MessageType::Response;
+
+    uint64_t new_state;
+
+    template<class Archive>
+    void serialize(Archive& ar, const unsigned) {
+        ar & new_state;
+    }
+};
+
 struct RqIndices {
     static constexpr auto type = MessageType::Request;
 
@@ -60,6 +82,8 @@ struct RsObject {
 namespace MessageDetail {
     using MessageVariant
         = variant<
+            RqNotifyOnChange,
+            RsNotifyOnChange,
             RqIndices,
             RsIndices,
             RqObject,
@@ -68,12 +92,14 @@ namespace MessageDetail {
 
     using RequestVariant
         = variant<
+            RqNotifyOnChange,
             RqIndices,
             RqObject
         >;
 
     using ResponseVariant
         = variant<
+            RsNotifyOnChange,
             RsIndices,
             RsObject
         >;
@@ -116,6 +142,8 @@ struct Message : MessageDetail::MessageVariant
     }
 };
 
+std::ostream& operator<<(std::ostream&, const RqNotifyOnChange&);
+std::ostream& operator<<(std::ostream&, const RsNotifyOnChange&);
 std::ostream& operator<<(std::ostream&, const RqIndices&);
 std::ostream& operator<<(std::ostream&, const RsIndices&);
 std::ostream& operator<<(std::ostream&, const RqObject&);

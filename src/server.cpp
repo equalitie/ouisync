@@ -9,7 +9,7 @@ using std::move;
 using std::make_pair;
 using Object = variant<FileBlob, Directory>;
 
-Server::Server(MessageBroker::Server&& broker, const Branch& branch) :
+Server::Server(MessageBroker::Server&& broker, Branch& branch) :
     _broker(move(broker)),
     _branch(branch)
 {
@@ -34,8 +34,14 @@ net::awaitable<void> Server::run(Cancel cancel)
             co_await _broker.send({RsObject{std::move(object)}}, cancel);
         };
 
+        auto handle_notify_on_change = [&] (RqNotifyOnChange rq) -> AwaitVoid {
+            auto new_state = co_await _branch.on_change().wait(rq.last_state, cancel);
+            co_await _broker.send({RsNotifyOnChange{new_state}}, cancel);
+        };
+
         co_await apply(m,
             [&] (const RqIndices& rq) { return handle_rq_indices(rq); },
-            [&] (const RqObject& rq) { return handle_rq_object(rq); });
+            [&] (const RqObject& rq) { return handle_rq_object(rq); },
+            [&] (const RqNotifyOnChange& rq) { return handle_notify_on_change(rq); });
     }
 }

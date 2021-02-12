@@ -13,6 +13,7 @@
 #include "options.h"
 #include "object_store.h"
 #include "index.h"
+#include "wait.h"
 
 #include <boost/filesystem/path.hpp>
 #include <boost/optional.hpp>
@@ -31,14 +32,43 @@ private:
     class CdOp;
 
 public:
+    using executor_type = net::any_io_executor;
+
+    class StateChangeWait {
+      public:
+        using Counter = uint64_t;
+
+      public:
+        StateChangeWait(executor_type ex) :
+            _change_state_counter(1), _on_change(ex) {}
+
+
+        [[nodiscard]] net::awaitable<Counter> wait(Counter prev, Cancel cancel) {
+            if (prev <= _change_state_counter) {
+                co_await _on_change.wait(cancel);
+            }
+            co_return _change_state_counter;
+        }
+
+        void notify() {
+            _change_state_counter++;
+            _on_change.notify();
+        }
+
+      private:
+        Counter _change_state_counter;
+        Wait _on_change;
+    };
+
+public:
     using Indices = std::map<UserId, Index>;
 
 public:
     static
-    Branch create(const fs::path& path, UserId user_id, ObjectStore&, Options::Branch);
+    Branch create(executor_type, const fs::path& path, UserId user_id, ObjectStore&, Options::Branch);
 
     static
-    Branch load(const fs::path& file_path, UserId user_id, ObjectStore&, Options::Branch);
+    Branch load(executor_type, const fs::path& file_path, UserId user_id, ObjectStore&, Options::Branch);
 
     const Commit& commit() const { return _indices.find(_user_id)->second.commit(); }
 
@@ -79,11 +109,13 @@ public:
 
     ObjectStore& objstore() const { return _objstore; }
 
+    StateChangeWait& on_change() { return _state_change_wait; }
+
 private:
     friend class BranchView;
 
-    Branch(const fs::path& file_path, const UserId&, ObjectStore&, Options::Branch);
-    Branch(const fs::path& file_path, const UserId&, Commit, ObjectStore&, Options::Branch);
+    Branch(executor_type, const fs::path& file_path, const UserId&, ObjectStore&, Options::Branch);
+    Branch(executor_type, const fs::path& file_path, const UserId&, Commit, ObjectStore&, Options::Branch);
 
     void store_self() const;
 
@@ -93,12 +125,18 @@ private:
     std::unique_ptr<TreeOp> cd_into(PathRange);
     std::unique_ptr<FileOp> get_file(PathRange);
 
+    template<class OpPtr>
+    void do_commit(OpPtr&);
+
 private:
+    executor_type _ex;
     fs::path _file_path;
     Options::Branch _options;
     ObjectStore& _objstore;
     UserId _user_id;
     Indices _indices;
+
+    StateChangeWait _state_change_wait;
 };
 
 } // namespace

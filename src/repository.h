@@ -6,7 +6,6 @@
 #include "user_id.h"
 #include "branch.h"
 #include "commit.h"
-#include "wait.h"
 #include "object_store.h"
 
 #include <boost/asio/any_io_executor.hpp>
@@ -38,8 +37,6 @@ public:
 
     executor_type get_executor() { return _ex; }
 
-    Wait& on_change() { return _on_change; }
-
     const fs::path& object_directory() const { return _options.objectdir; }
 
     ObjectStore& object_store() { return _objects; }
@@ -55,7 +52,6 @@ private:
     ObjectStore _objects;
     UserId _user_id;
     std::unique_ptr<Branch> _branch;
-    Wait _on_change;
 };
 
 } // namespace

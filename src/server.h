@@ -7,13 +7,13 @@ namespace ouisync {
 
 class Server {
 public:
-    Server(MessageBroker::Server&&, const Branch&);
+    Server(MessageBroker::Server&&, Branch&);
 
     net::awaitable<void> run(Cancel);
 
 private:
     MessageBroker::Server _broker;
-    const Branch& _branch;
+    Branch& _branch;
 };
 
 } // namespace

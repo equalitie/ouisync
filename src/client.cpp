@@ -25,8 +25,16 @@ net::awaitable<T> Client::receive(Cancel cancel)
 
 net::awaitable<void> Client::run(Cancel cancel)
 {
-    co_await _broker.send(RqIndices{}, cancel);
-    auto indices = co_await receive<RsIndices>(cancel);
+    uint64_t state_counter = 0;
 
-    std::cerr << "got indices\n";
+    while (true) {
+        co_await _broker.send(RqIndices{}, cancel);
+        auto indices = co_await receive<RsIndices>(cancel);
+
+        std::cerr << "got indices\n";
+
+        co_await _broker.send(RqNotifyOnChange{state_counter}, cancel);
+        auto rs_on_change = co_await receive<RsNotifyOnChange>(cancel);
+        state_counter = rs_on_change.new_state;
+    }
 }

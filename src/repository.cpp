@@ -25,8 +25,7 @@ using std::make_pair;
 Repository::Repository(executor_type ex, Options options) :
     _ex(std::move(ex)),
     _options(std::move(options)),
-    _objects(_options.objectdir),
-    _on_change(_ex)
+    _objects(_options.objectdir)
 {
     _user_id = UserId::load_or_generate_random(_options.user_id_file_path);
 
@@ -34,9 +33,9 @@ Repository::Repository(executor_type ex, Options options) :
 
     if (fs::exists(branch_path)) {
         fs::path path = _options.branchdir / _user_id.to_string();
-        _branch.reset(new Branch(Branch::load(path, _user_id, _objects, _options)));
+        _branch.reset(new Branch(Branch::load(_ex, path, _user_id, _objects, _options)));
     } else {
-        _branch.reset(new Branch(Branch::create(branch_path, _user_id, _objects, _options)));
+        _branch.reset(new Branch(Branch::create(_ex, branch_path, _user_id, _objects, _options)));
     }
 
     std::cout << "User ID: " << _user_id << "\n";
@@ -113,8 +112,6 @@ net::awaitable<size_t> Repository::write(PathRange path, const char* buf, size_t
 
     auto retval = _branch->write(path, buf, size, offset);
 
-    _on_change.notify();
-
     co_return retval;
 }
 
@@ -137,8 +134,6 @@ net::awaitable<void> Repository::mknod(PathRange path, mode_t mode, dev_t dev)
 
     _branch->store(path, FileBlob{});
 
-    _on_change.notify();
-
     co_return;
 }
 
@@ -155,7 +150,6 @@ net::awaitable<void> Repository::mkdir(PathRange path, mode_t mode)
 
     _branch->mkdir(path);
 
-    _on_change.notify();
     co_return;
 }
 
@@ -176,7 +170,6 @@ net::awaitable<void> Repository::remove_file(PathRange path)
 
     _branch->remove(path);
 
-    _on_change.notify();
     co_return;
 }
 
@@ -197,7 +190,6 @@ net::awaitable<void> Repository::remove_directory(PathRange path)
 
     _branch->remove(path);
 
-    _on_change.notify();
     co_return;
 }
 
@@ -218,7 +210,6 @@ net::awaitable<size_t> Repository::truncate(PathRange path, size_t size)
 
     auto retval = _branch->truncate(path, size);
 
-    _on_change.notify();
     co_return retval;
 }
 

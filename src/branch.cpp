@@ -23,7 +23,7 @@ using std::set;
 #define DBG std::cerr << __PRETTY_FUNCTION__ << ":" << __LINE__ << " "
 
 /* static */
-Branch Branch::create(const fs::path& path, UserId user_id, ObjectStore& objstore, Options::Branch options)
+Branch Branch::create(executor_type ex, const fs::path& path, UserId user_id, ObjectStore& objstore, Options::Branch options)
 {
     if (fs::exists(path)) {
         throw std::runtime_error("Local branch already exits");
@@ -34,23 +34,25 @@ Branch Branch::create(const fs::path& path, UserId user_id, ObjectStore& objstor
         objstore.store(Directory{})
     };
 
-    return Branch(path, user_id, move(null_commit), objstore, move(options));
+    return Branch(ex, path, user_id, move(null_commit), objstore, move(options));
 }
 
 /* static */
-Branch Branch::load(const fs::path& file_path, UserId user_id, ObjectStore& objstore, Options::Branch options)
+Branch Branch::load(executor_type ex, const fs::path& file_path, UserId user_id, ObjectStore& objstore, Options::Branch options)
 {
-    return Branch(file_path, user_id, objstore, std::move(options));
+    return Branch(ex, file_path, user_id, objstore, std::move(options));
 }
 
 //--------------------------------------------------------------------
 
-Branch::Branch(const fs::path& file_path, const UserId& user_id,
+Branch::Branch(executor_type ex, const fs::path& file_path, const UserId& user_id,
         Commit commit, ObjectStore& objstore, Options::Branch options) :
+    _ex(ex),
     _file_path(file_path),
     _options(move(options)),
     _objstore(objstore),
-    _user_id(user_id)
+    _user_id(user_id),
+    _state_change_wait(_ex)
 {
     auto& idx = _indices[_user_id];
 
@@ -59,12 +61,14 @@ Branch::Branch(const fs::path& file_path, const UserId& user_id,
     store_self();
 }
 
-Branch::Branch(const fs::path& file_path,
+Branch::Branch(executor_type ex, const fs::path& file_path,
         const UserId& user_id, ObjectStore& objstore, Options::Branch options) :
+    _ex(ex),
     _file_path(file_path),
     _options(move(options)),
     _objstore(objstore),
-    _user_id(user_id)
+    _user_id(user_id),
+    _state_change_wait(_ex)
 {
     archive::load(file_path, *this);
 }
@@ -347,6 +351,15 @@ PathRange parent(PathRange path) {
 }
 
 //--------------------------------------------------------------------
+template<class OpPtr>
+void Branch::do_commit(OpPtr& op)
+{
+    if (op->commit()) {
+        _state_change_wait.notify();
+    }
+}
+
+//--------------------------------------------------------------------
 unique_ptr<Branch::TreeOp> Branch::root()
 {
     return make_unique<Branch::RootOp>(_objstore, _user_id, _indices);
@@ -378,7 +391,7 @@ void Branch::store(PathRange path, const FileBlob& blob)
 {
     auto file = get_file(path);
     file->blob() = blob;
-    file->commit();
+    do_commit(file);
 }
 
 void Branch::store(const fs::path& path, const FileBlob& blob)
@@ -408,7 +421,7 @@ size_t Branch::write(PathRange path, const char* buf, size_t size, size_t offset
 
     memcpy(blob.data() + offset, buf, size);
 
-    file->commit();
+    do_commit(file);
 
     return size;
 }
@@ -429,7 +442,7 @@ size_t Branch::truncate(PathRange path, size_t size)
 
     blob.resize(std::min<size_t>(blob.size(), size));
 
-    file->commit();
+    do_commit(file);
 
     return blob.size();
 }
@@ -446,7 +459,7 @@ void Branch::mkdir(PathRange path)
 
     dir = make_unique<Branch::CdOp>(move(dir), _user_id, path.back(), true);
 
-    dir->commit();
+    do_commit(dir);
 }
 
 //--------------------------------------------------------------------
@@ -458,7 +471,7 @@ bool Branch::remove(PathRange path)
     auto dir = cd_into(parent(path));
     auto rm = make_unique<Branch::RemoveOp>(move(dir), path.back());
 
-    rm->commit();
+    do_commit(rm);
     return true;
 }
 
