@@ -112,17 +112,14 @@ public:
         _objstore.store(_tree);
 
         _tree.for_each_unique_child([&] (auto& filename, auto& child_id) {
-                _index.insert_object(Index::Element(child_id, new_id));
+                _index.insert_object(child_id, new_id);
             });
 
-        Index::Element new_root(new_id);
-        Index::Element old_root(old_id);
-
-        _index.insert_object(new_root);
+        _index.insert_object(new_id, new_id);
 
         _index.set_version_vector(_tree.calculate_version_vector_union());
 
-        remove_recursive(old_root);
+        remove_recursive(old_id, old_id);
 
         return true;
     }
@@ -136,23 +133,23 @@ public:
         vv.set_version(_this_user_id, _index.commit().stamp.version_of(_this_user_id) + 1);
     }
 
-    void remove_recursive(const Index::Element& e) {
-        _index.remove_object(e);
+    void remove_recursive(const ObjectId& obj_id, const ObjectId& parent_id) {
+        _index.remove_object(obj_id, parent_id);
 
-        if (someone_still_has(e.obj_id())) return;
+        if (someone_still_has(obj_id)) return;
 
-        auto obj = _objstore.load<Directory, FileBlob::Nothing>(e.obj_id());
+        auto obj = _objstore.load<Directory, FileBlob::Nothing>(obj_id);
 
         apply(obj,
                 [&](const Directory& d) {
-                    d.for_each_unique_child([&] (auto& filename, auto& object_id) {
-                        remove_recursive({object_id, e.obj_id()});
+                    d.for_each_unique_child([&] (auto& filename, auto& child_id) {
+                        remove_recursive(child_id, obj_id);
                     });
                 },
                 [&](const FileBlob::Nothing&) {
                 });
 
-        _objstore.remove(e.obj_id());
+        _objstore.remove(obj_id);
     }
 
     bool someone_still_has(const ObjectId& id) const {

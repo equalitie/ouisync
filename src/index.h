@@ -18,7 +18,7 @@ private:
     //                                                        |
     //  How many times is the object listed in the parent <---+
 
-public:
+private:
 
     class Element {
       public:
@@ -45,9 +45,6 @@ public:
 
     void insert_object(const ObjectId& id, const ObjectId& parent_id);
     void remove_object(const ObjectId& id, const ObjectId& parent_id);
-
-    void insert_object(const Element&);
-    void remove_object(const Element&);
 
     bool has(const ObjectId& obj_id) const;
     bool has(const ObjectId& obj_id, const ObjectId& parent_id) const;

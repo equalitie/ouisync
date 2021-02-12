@@ -30,27 +30,27 @@ void Index::set_version_vector(const VersionVector& vv)
     _commit.stamp = vv;
 }
 
-void Index::insert_object(const Element& e)
+void Index::insert_object(const ObjectId& obj_id, const ObjectId& parent_id)
 {
-    auto i = _elements.insert({e._obj_id, {}}).first;
+    auto i = _elements.insert({obj_id, {}}).first;
     auto& parents = i->second;
-    auto j = parents.insert({e._parent_id, 0u}).first;
+    auto j = parents.insert({parent_id, 0u}).first;
     j->second++;
 
-    if (e._is_root) {
-        _commit.root_id = e._obj_id;
+    if (obj_id == parent_id) {
+        _commit.root_id = obj_id;
     }
 }
 
-void Index::remove_object(const Element& e)
+void Index::remove_object(const ObjectId& obj_id, const ObjectId& parent_id)
 {
-    auto i = _elements.find(e._obj_id);
+    auto i = _elements.find(obj_id);
 
     ouisync_assert(i != _elements.end());
 
     auto& parents = i->second;
 
-    auto j = parents.find(e._parent_id);
+    auto j = parents.find(parent_id);
 
     ouisync_assert(j != parents.end());
     ouisync_assert(j->second != 0u);
@@ -60,16 +60,6 @@ void Index::remove_object(const Element& e)
     }
 
     if (parents.empty()) _elements.erase(i);
-}
-
-void Index::insert_object(const ObjectId& id, const ObjectId& parent_id)
-{
-    insert_object(Element(id, parent_id));
-}
-
-void Index::remove_object(const ObjectId& id, const ObjectId& parent_id)
-{
-    remove_object(Element(id, parent_id));
 }
 
 bool Index::has(const ObjectId& obj_id) const
