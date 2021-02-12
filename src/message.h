@@ -7,6 +7,7 @@
 #include "variant.h"
 #include "directory.h"
 #include "file_blob.h"
+#include "branch.h"
 
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/awaitable.hpp>
@@ -14,6 +15,25 @@
 namespace ouisync {
 
 enum class MessageType { Request, Response };
+
+struct RqIndices {
+    static constexpr auto type = MessageType::Request;
+
+    template<class Archive>
+    void serialize(Archive& ar, const unsigned) {
+    }
+};
+
+struct RsIndices {
+    static constexpr auto type = MessageType::Response;
+
+    Branch::Indices indices;
+
+    template<class Archive>
+    void serialize(Archive& ar, const unsigned) {
+        ar & indices;
+    }
+};
 
 struct RqObject {
     static constexpr auto type = MessageType::Request;
@@ -40,17 +60,21 @@ struct RsObject {
 namespace MessageDetail {
     using MessageVariant
         = variant<
+            RqIndices,
+            RsIndices,
             RqObject,
             RsObject
         >;
 
     using RequestVariant
         = variant<
+            RqIndices,
             RqObject
         >;
 
     using ResponseVariant
         = variant<
+            RsIndices,
             RsObject
         >;
 } // MessageDetail namespace
@@ -92,6 +116,8 @@ struct Message : MessageDetail::MessageVariant
     }
 };
 
+std::ostream& operator<<(std::ostream&, const RqIndices&);
+std::ostream& operator<<(std::ostream&, const RsIndices&);
 std::ostream& operator<<(std::ostream&, const RqObject&);
 std::ostream& operator<<(std::ostream&, const RsObject&);
 std::ostream& operator<<(std::ostream&, const Request&);

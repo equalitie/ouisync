@@ -30,6 +30,7 @@ private:
     class RemoveOp;
     class CdOp;
 
+public:
     using Indices = std::map<UserId, Index>;
 
 public:
@@ -73,6 +74,10 @@ public:
     }
 
     void sanity_check() {} // TODO
+
+    const Indices& indices() const { return _indices; }
+
+    ObjectStore& objstore() const { return _objstore; }
 
 private:
     friend class BranchView;

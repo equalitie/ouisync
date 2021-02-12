@@ -44,6 +44,8 @@ public:
 
     ObjectStore& object_store() { return _objects; }
 
+    Branch& branch() { return *_branch; }
+
 private:
     void sanity_check() const;
 

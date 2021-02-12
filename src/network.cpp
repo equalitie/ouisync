@@ -3,6 +3,7 @@
 #include "client.h"
 #include "server.h"
 #include "message_broker.h"
+#include "repository.h"
 
 #include <boost/asio/detached.hpp>
 #include <boost/asio/co_spawn.hpp>
@@ -112,8 +113,8 @@ void Network::establish_communication(tcp::socket socket)
         Barrier b(ex);
 
         MessageBroker broker(ex, move(s));
-        Server server(broker.server(), _repo);
-        Client client(broker.client(), _repo);
+        Server server(broker.server(), _repo.branch());
+        Client client(broker.client(), _repo.branch());
 
         Opt<FirstError> first_error;
 

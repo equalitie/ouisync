@@ -78,6 +78,14 @@ catch (const std::exception& e) {
     throw;
 }
 
+std::ostream& ouisync::operator<<(std::ostream& os, const RqIndices& rq) {
+    return os << "RqIndices{}";
+}
+
+std::ostream& ouisync::operator<<(std::ostream& os, const RsIndices& m) {
+    return os << "RsIndices{...}";
+}
+
 std::ostream& ouisync::operator<<(std::ostream& os, const RqObject& rq) {
     return os << "RqObject " << rq.object_id;
 }

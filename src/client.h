@@ -1,7 +1,7 @@
 #pragma once
 
 #include "message_broker.h"
-#include "repository.h"
+#include "branch.h"
 
 namespace ouisync {
 
@@ -9,17 +9,16 @@ class RemoteBranch;
 
 class Client {
 public:
-    Client(MessageBroker::Client&&, Repository&);
+    Client(MessageBroker::Client&&, Branch&);
 
     net::awaitable<void> run(Cancel);
 
 private:
     template<class T> net::awaitable<T> receive(Cancel);
-    net::awaitable<void> download_branch(RemoteBranch&, ObjectId, Cancel);
 
 private:
     MessageBroker::Client _broker;
-    Repository& _repo;
+    Branch& _branch;
 };
 
 } // namespace
