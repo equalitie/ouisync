@@ -13,6 +13,7 @@ using namespace ouisync;
 using std::set;
 using std::map;
 using std::string;
+using std::move;
 
 //--------------------------------------------------------------------
 
@@ -25,14 +26,18 @@ PathRange _parent(PathRange path) {
 //--------------------------------------------------------------------
 MultiDir BranchView::root() const
 {
-    ouisync_assert(_root_id != ObjectId::null_id());
-    return MultiDir{{_root_id}, &_objects};
+    return MultiDir{_roots, &_objects};
 }
 //--------------------------------------------------------------------
 
 BranchView::BranchView(ObjectStore& objects, const ObjectId& root_id) :
     _objects(objects),
-    _root_id(root_id)
+    _roots({root_id})
+{}
+
+BranchView::BranchView(ObjectStore& objects, set<ObjectId> roots) :
+    _objects(objects),
+    _roots(move(roots))
 {}
 
 //--------------------------------------------------------------------
@@ -122,7 +127,7 @@ void _show(std::ostream& os, ObjectStore& objects, ObjectId id, std::string pad 
 
 void BranchView::show(std::ostream& os) const
 {
-    return _show(os, _objects, _root_id, "");
+    //return _show(os, _objects, _root_id, "");
 }
 
 //--------------------------------------------------------------------

@@ -486,6 +486,21 @@ void Branch::store_self() const {
 
 //--------------------------------------------------------------------
 
+set<ObjectId> Branch::roots() const {
+    set<ObjectId> rts;
+    for (auto& [user, index] : _indices) {
+        (void) user;
+        rts.insert(index.commit().root_id);
+    }
+    return rts;
+}
+
+BranchView Branch::branch_view() const {
+    return BranchView(_objstore, roots());
+}
+
+//--------------------------------------------------------------------
+
 std::ostream& ouisync::operator<<(std::ostream& os, const Branch& branch)
 {
     os  << "Branch:\n";

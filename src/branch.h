@@ -74,9 +74,7 @@ public:
 
     const ObjectId& root_id() const { return commit().root_id; }
 
-    BranchView branch_view() const {
-        return BranchView(_objstore, commit().root_id);
-    }
+    BranchView branch_view() const;
 
     // XXX: Deprecated, use `write` instead. I believe these are currently
     // only being used in tests.
@@ -127,6 +125,8 @@ private:
 
     template<class OpPtr>
     void do_commit(OpPtr&);
+
+    std::set<ObjectId> roots() const;
 
 private:
     executor_type _ex;

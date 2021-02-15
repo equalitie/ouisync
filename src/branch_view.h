@@ -6,6 +6,7 @@
 #include "file_system_attrib.h"
 
 #include <boost/filesystem/path.hpp>
+#include <set>
 
 namespace ouisync {
 
@@ -14,6 +15,7 @@ class MultiDir;
 
 class BranchView {
 public:
+    BranchView(ObjectStore&, std::set<ObjectId> roots);
     BranchView(ObjectStore&, const ObjectId& root_id);
 
     std::set<std::string> readdir(PathRange path) const;
@@ -36,7 +38,7 @@ private:
 
 private:
     ObjectStore& _objects;
-    const ObjectId& _root_id;
+    std::set<ObjectId> _roots;
 };
 
 } // namespace
