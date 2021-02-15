@@ -8,12 +8,15 @@
 #include <boost/asio/write.hpp>
 #include <boost/asio/use_awaitable.hpp>
 
+#include <boost/optional/optional_io.hpp>
+
 #include <boost/serialization/optional.hpp>
 #include <boost/serialization/variant.hpp>
 #include <boost/serialization/vector.hpp>
 #include <boost/serialization/map.hpp>
 #include <boost/serialization/set.hpp>
 #include <boost/serialization/array.hpp>
+
 
 #include <algorithm>
 

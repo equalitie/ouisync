@@ -98,7 +98,7 @@ public:
 
     template<class Archive>
     void serialize(Archive& ar, unsigned) {
-        ar & _indices;
+        ar & _indices & _missing_objects;
     }
 
     void sanity_check() {} // TODO
@@ -108,6 +108,10 @@ public:
     ObjectStore& objstore() const { return _objstore; }
 
     StateChangeWait& on_change() { return _state_change_wait; }
+
+    void merge_indices(const Indices& indices);
+
+    const std::set<ObjectId>& missing_objects() const { return _missing_objects; }
 
 private:
     friend class BranchView;
@@ -128,6 +132,8 @@ private:
 
     std::set<ObjectId> roots() const;
 
+    void merge_index(const UserId&, const Index&);
+
 private:
     executor_type _ex;
     fs::path _file_path;
@@ -135,6 +141,7 @@ private:
     ObjectStore& _objstore;
     UserId _user_id;
     Indices _indices;
+    std::set<ObjectId> _missing_objects;
 
     StateChangeWait _state_change_wait;
 };

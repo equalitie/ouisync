@@ -71,7 +71,8 @@ struct RqObject {
 struct RsObject {
     static constexpr auto type = MessageType::Response;
 
-    variant<FileBlob, Directory> object;
+    // boost::none if not found
+    Opt<variant<FileBlob, Directory>> object;
 
     template<class Archive>
     void serialize(Archive& ar, const unsigned) {

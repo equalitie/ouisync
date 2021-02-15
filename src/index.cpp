@@ -20,6 +20,14 @@ Index::Element::Element(const ObjectId& id, const ObjectId& parent_id) :
 {
 }
 
+bool Index::merge(const Index& other)
+{
+    if (_commit.happened_after(other._commit)) return false;
+    if (_commit == other._commit) return false;
+
+    return true;
+}
+
 void Index::set_version_vector(const VersionVector& vv)
 {
     ouisync_assert(vv.happened_after(_commit.stamp));
@@ -30,12 +38,14 @@ void Index::set_version_vector(const VersionVector& vv)
     _commit.stamp = vv;
 }
 
-void Index::insert_object(const ObjectId& obj_id, const ObjectId& parent_id)
+void Index::insert_object(const ObjectId& obj_id, const ObjectId& parent_id, size_t cnt)
 {
+    if (cnt == 0) return;
+
     auto i = _elements.insert({obj_id, {}}).first;
     auto& parents = i->second;
     auto j = parents.insert({parent_id, 0u}).first;
-    j->second++;
+    j->second += cnt;
 
     if (obj_id == parent_id) {
         _commit.root_id = obj_id;
@@ -68,12 +78,12 @@ bool Index::has(const ObjectId& obj_id) const
     return i != _elements.end();
 }
 
-bool Index::has(const ObjectId& obj_id, const ObjectId& parent_id) const
+size_t Index::count_object_in_parent(const ObjectId& obj_id, const ObjectId& parent_id) const
 {
     auto i = _elements.find(obj_id);
-    if (i == _elements.end()) return false;
+    if (i == _elements.end()) return 0;
     auto j = i->second.find(parent_id);
-    if (j == i->second.end()) return false;
+    if (j == i->second.end()) return 0;
     ouisync_assert(j->second != 0);
     return j->second != 0;
 }

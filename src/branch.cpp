@@ -480,6 +480,83 @@ bool Branch::remove(const fs::path& fspath)
 
 //--------------------------------------------------------------------
 
+void Branch::merge_indices(const Indices& indices)
+{
+    for (auto& [user, index] : indices) {
+        merge_index(user, index);
+    }
+}
+
+static bool _someone_has(const Branch::Indices& indices, const ObjectId& obj) {
+    for (auto& [user, index] : indices) {
+        (void) user;
+        if (index.has(obj) != 0) return true;
+    }
+    return false;
+}
+
+void Branch::merge_index(const UserId& user, const Index& new_index)
+{
+    // XXX: This might be excessive, we prolly only need to compare against
+    // _indices[user].
+    for (auto& [user, idx] : _indices) {
+        if (new_index.commit().happened_before(idx.commit())) {
+            return;
+        }
+        if (new_index.commit() == idx.commit()) {
+            return;
+        }
+    }
+
+    auto& old_index = _indices.insert({user, {}}).first->second;
+
+    if (old_index.commit().happened_after(new_index.commit())) return;
+    if (old_index.commit() == new_index.commit()) return;
+
+    // One user will never/must not produce concurrent commits.
+    ouisync_assert(old_index.commit().happened_before(new_index.commit()));
+
+    // XXX: The two operations below can be merged to have it
+    // done in linear time.
+
+    std::set<ObjectId> possibly_remove_from_objstore;
+
+    // Remove elements from old_index that are not in the new one
+    old_index.remove_count([&] (auto& obj_id, auto& parent_id, auto old_cnt) -> size_t {
+            auto new_cnt = new_index.count_object_in_parent(obj_id, parent_id);
+            if (new_cnt >= old_cnt) return 0;
+            auto remove_cnt = old_cnt - new_cnt;
+            if (new_cnt == 0) {
+                possibly_remove_from_objstore.insert(obj_id);
+            }
+            return remove_cnt;
+        });
+
+    for (auto& obj : possibly_remove_from_objstore) {
+        if (_someone_has(_indices, obj)) continue;
+        _objstore.remove(obj);
+        _missing_objects.erase(obj);
+    }
+
+    new_index.for_each([&] (auto& obj_id, auto& parent_id, auto new_cnt) {
+            auto old_cnt = old_index.count_object_in_parent(obj_id, parent_id);
+            ouisync_assert(old_cnt <= new_cnt);
+            if (old_cnt == new_cnt) return;
+            old_index.insert_object(obj_id, parent_id, new_cnt - old_cnt);
+            if (old_cnt == 0) {
+                if (!_objstore.exists(obj_id)) {
+                    _missing_objects.insert(obj_id);
+                }
+            }
+        });
+
+    old_index.set_version_vector(new_index.commit().stamp);
+
+    // XXX: Erase every index that which `happened_before` this new one.
+}
+
+//--------------------------------------------------------------------
+
 void Branch::store_self() const {
     archive::store(_file_path, *this);
 }

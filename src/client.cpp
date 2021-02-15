@@ -3,6 +3,8 @@
 #include "directory.h"
 #include "file_blob.h"
 
+#include "ostream/set.h"
+
 #include <iostream>
 #include <boost/optional/optional_io.hpp>
 
@@ -29,9 +31,32 @@ net::awaitable<void> Client::run(Cancel cancel)
 
     while (true) {
         co_await _broker.send(RqIndices{}, cancel);
-        auto indices = co_await receive<RsIndices>(cancel);
+        auto rs_indices = co_await receive<RsIndices>(cancel);
 
-        std::cerr << "got indices\n";
+        std::cerr << "Received indices\n";
+        _branch.merge_indices(rs_indices.indices);
+
+        std::cerr << "Missing objects: " << _branch.missing_objects() << "\n";
+        for (auto& obj_id : _branch.missing_objects()) {
+            std::cerr << "Requesting: " << obj_id << "\n";
+            co_await _broker.send(RqObject{obj_id}, cancel);
+            auto rs_obj = co_await receive<RsObject>(cancel);
+
+            if (!rs_obj.object) {
+                std::cerr << "Peer doesn't have object: " << obj_id << "\n";
+                continue;
+            }
+
+            std::cerr << "Got: " << obj_id << "\n";
+
+            apply(*rs_obj.object,
+                [&] (const FileBlob& file) {
+                    _branch.objstore().store(file);
+                },
+                [&] (const Directory& dir) {
+                    _branch.objstore().store(dir);
+                });
+        }
 
         co_await _broker.send(RqNotifyOnChange{state_counter}, cancel);
         auto rs_on_change = co_await receive<RsNotifyOnChange>(cancel);
