@@ -3,5 +3,5 @@
 using namespace ouisync;
 
 std::ostream& ouisync::operator<<(std::ostream& os, const Commit& c) {
-    return os << "Commit{" << c.root_id << ", <version-vector>}";
+    return os << "Commit{" << c.root_id << ", " << c.stamp << "}";
 }
