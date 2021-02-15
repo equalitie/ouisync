@@ -77,3 +77,15 @@ bool Index::has(const ObjectId& obj_id, const ObjectId& parent_id) const
     ouisync_assert(j->second != 0);
     return j->second != 0;
 }
+
+std::ostream& ouisync::operator<<(std::ostream& os, const Index& index)
+{
+    os << index._commit << "\n";
+    for (auto& [obj_id, parents]: index._elements) {
+        os << "  " << obj_id << "\n";
+        for (auto& [parent_id, cnt] : parents) {
+            os << "    " << parent_id << " " << cnt << "\n";
+        }
+    }
+    return os;
+}

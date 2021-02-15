@@ -56,6 +56,8 @@ public:
 
     const Commit& commit() const { return _commit; }
 
+    friend std::ostream& operator<<(std::ostream&, const Index&);
+
 private:
     Commit _commit;
     Elements _elements;
