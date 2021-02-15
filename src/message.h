@@ -19,7 +19,7 @@ enum class MessageType { Request, Response };
 struct RqNotifyOnChange {
     static constexpr auto type = MessageType::Request;
 
-    uint64_t last_state;
+    Opt<uint64_t> last_state;
 
     template<class Archive>
     void serialize(Archive& ar, const unsigned) {
@@ -71,8 +71,10 @@ struct RqObject {
 struct RsObject {
     static constexpr auto type = MessageType::Response;
 
+    using Object = variant<FileBlob, Directory>;
+
     // boost::none if not found
-    Opt<variant<FileBlob, Directory>> object;
+    Opt<Object> object;
 
     template<class Archive>
     void serialize(Archive& ar, const unsigned) {

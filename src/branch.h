@@ -39,24 +39,23 @@ public:
         using Counter = uint64_t;
 
       public:
-        StateChangeWait(executor_type ex) :
-            _change_state_counter(1), _on_change(ex) {}
+        StateChangeWait(executor_type ex)
+            : _state_change_counter(0), _on_change(ex) {}
 
-
-        [[nodiscard]] net::awaitable<Counter> wait(Counter prev, Cancel cancel) {
-            if (prev <= _change_state_counter) {
+        [[nodiscard]] net::awaitable<Counter> wait(Opt<Counter> prev, Cancel cancel) {
+            if (!prev || *prev <= _state_change_counter) {
                 co_await _on_change.wait(cancel);
             }
-            co_return _change_state_counter;
+            co_return _state_change_counter;
         }
 
         void notify() {
-            _change_state_counter++;
+            _state_change_counter++;
             _on_change.notify();
         }
 
       private:
-        Counter _change_state_counter;
+        Counter _state_change_counter;
         Wait _on_change;
     };
 
