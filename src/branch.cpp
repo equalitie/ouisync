@@ -19,6 +19,7 @@ using std::unique_ptr;
 using std::make_unique;
 using std::string;
 using std::set;
+using std::cerr;
 
 #define DBG std::cerr << __PRETTY_FUNCTION__ << ":" << __LINE__ << " "
 
