@@ -20,6 +20,12 @@ Index::Element::Element(const ObjectId& id, const ObjectId& parent_id) :
 {
 }
 
+Index::Index()
+    : _commit({{}, Directory{}.calculate_id()})
+{
+    insert_object(_commit.root_id, _commit.root_id);
+}
+
 bool Index::merge(const Index& other)
 {
     if (_commit.happened_after(other._commit)) return false;

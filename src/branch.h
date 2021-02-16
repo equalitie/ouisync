@@ -131,7 +131,7 @@ private:
 
     std::set<ObjectId> roots() const;
 
-    void merge_index(const UserId&, const Index&);
+    void update_user_index(const UserId&, const Index&);
 
 private:
     executor_type _ex;

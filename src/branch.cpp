@@ -483,46 +483,38 @@ bool Branch::remove(const fs::path& fspath)
 void Branch::merge_indices(const Indices& indices)
 {
     for (auto& [user, index] : indices) {
-        merge_index(user, index);
+        update_user_index(user, index);
     }
+
+    // XXX: Merge indices with my index
+    // XXX: Erase every index which `happened_before` this new one.
 }
 
 static bool _someone_has(const Branch::Indices& indices, const ObjectId& obj) {
     for (auto& [user, index] : indices) {
         (void) user;
-        if (index.has(obj) != 0) return true;
+        if (index.has(obj)) return true;
     }
     return false;
 }
 
-void Branch::merge_index(const UserId& user, const Index& new_index)
+void Branch::update_user_index(const UserId& user, const Index& new_index)
 {
-    // XXX: This might be excessive, we prolly only need to compare against
-    // _indices[user].
-    for (auto& [user, idx] : _indices) {
-        if (new_index.commit().happened_before(idx.commit())) {
-            return;
-        }
-        if (new_index.commit() == idx.commit()) {
-            return;
-        }
-    }
+    auto& local_index = _indices.insert({user, {}}).first->second;
 
-    auto& old_index = _indices.insert({user, {}}).first->second;
-
-    if (old_index.commit().happened_after(new_index.commit())) return;
-    if (old_index.commit() == new_index.commit()) return;
+    if (local_index.commit().happened_after(new_index.commit())) return;
+    if (local_index.commit() == new_index.commit()) return;
 
     // One user will never/must not produce concurrent commits.
-    ouisync_assert(old_index.commit().happened_before(new_index.commit()));
+    ouisync_assert(local_index.commit().happened_before(new_index.commit()));
 
     // XXX: The two operations below can be merged to have it
     // done in linear time.
 
     std::set<ObjectId> possibly_remove_from_objstore;
 
-    // Remove elements from old_index that are not in the new one
-    old_index.remove_count([&] (auto& obj_id, auto& parent_id, auto old_cnt) -> size_t {
+    // Remove elements from local_index that are not in the new one
+    local_index.remove_count([&] (auto& obj_id, auto& parent_id, auto old_cnt) -> size_t {
             auto new_cnt = new_index.count_object_in_parent(obj_id, parent_id);
             if (new_cnt >= old_cnt) return 0;
             auto remove_cnt = old_cnt - new_cnt;
@@ -539,10 +531,10 @@ void Branch::merge_index(const UserId& user, const Index& new_index)
     }
 
     new_index.for_each([&] (auto& obj_id, auto& parent_id, auto new_cnt) {
-            auto old_cnt = old_index.count_object_in_parent(obj_id, parent_id);
+            auto old_cnt = local_index.count_object_in_parent(obj_id, parent_id);
             ouisync_assert(old_cnt <= new_cnt);
             if (old_cnt == new_cnt) return;
-            old_index.insert_object(obj_id, parent_id, new_cnt - old_cnt);
+            local_index.insert_object(obj_id, parent_id, new_cnt - old_cnt);
             if (old_cnt == 0) {
                 if (!_objstore.exists(obj_id)) {
                     _missing_objects.insert(obj_id);
@@ -550,9 +542,7 @@ void Branch::merge_index(const UserId& user, const Index& new_index)
             }
         });
 
-    old_index.set_version_vector(new_index.commit().stamp);
-
-    // XXX: Erase every index that which `happened_before` this new one.
+    local_index.set_version_vector(new_index.commit().stamp);
 }
 
 //--------------------------------------------------------------------

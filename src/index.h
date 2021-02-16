@@ -41,6 +41,8 @@ private:
     };
 
 public:
+    Index();
+
     void set_version_vector(const VersionVector&);
 
     void insert_object(const ObjectId& id, const ObjectId& parent_id, size_t cnt = 1);
