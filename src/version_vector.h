@@ -3,6 +3,8 @@
 #include "user_id.h"
 #include <map>
 
+#include <boost/assert.hpp>
+
 namespace ouisync {
 
 class VersionVector {
