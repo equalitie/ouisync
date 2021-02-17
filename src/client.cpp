@@ -25,11 +25,11 @@ net::awaitable<T> Client::receive(Cancel cancel)
     co_return std::move(*t);
 }
 
-net::awaitable<Branch::Indices> Client::fetch_indices(Cancel cancel)
+net::awaitable<Index> Client::fetch_index(Cancel cancel)
 {
-    co_await _broker.send(RqIndices{}, cancel);
-    auto rs_indices = co_await receive<RsIndices>(cancel);
-    co_return move(rs_indices.indices);
+    co_await _broker.send(RqIndex{}, cancel);
+    auto rs = co_await receive<RsIndex>(cancel);
+    co_return move(rs.index);
 }
 
 net::awaitable<Opt<RsObject::Object>> Client::fetch_object(const ObjectId& obj, Cancel cancel)
@@ -56,10 +56,10 @@ net::awaitable<void> Client::wait_for_a_change(Cancel cancel)
 net::awaitable<void> Client::run(Cancel cancel)
 {
     while (true) {
-        auto indices = co_await fetch_indices(cancel);
+        auto index = co_await fetch_index(cancel);
 
-        std::cerr << "Received indices\n";
-        _branch.merge_indices(indices);
+        std::cerr << "Received index\n";
+        _branch.merge_index(index);
 
         std::cerr << "Missing objects: " << _branch.missing_objects() << "\n";
         for (auto& obj_id : _branch.missing_objects()) {

@@ -22,9 +22,8 @@ net::awaitable<void> Server::run(Cancel cancel)
     while (true) {
         auto m = co_await _broker.receive(cancel);
 
-        auto handle_rq_indices = [&] (const RqIndices&) -> AwaitVoid {
-            RsIndices rsp{ _branch.indices() };
-            co_await _broker.send(move(rsp), cancel);
+        auto handle_rq_index = [&] (const RqIndex&) -> AwaitVoid {
+            co_await _broker.send(RsIndex{_branch.index()}, cancel);
         };
 
         auto handle_rq_object = [&] (const RqObject& rq) -> AwaitVoid {
@@ -40,7 +39,7 @@ net::awaitable<void> Server::run(Cancel cancel)
         };
 
         co_await apply(m,
-            [&] (const RqIndices& rq) { return handle_rq_indices(rq); },
+            [&] (const RqIndex& rq) { return handle_rq_index(rq); },
             [&] (const RqObject& rq) { return handle_rq_object(rq); },
             [&] (const RqNotifyOnChange& rq) { return handle_notify_on_change(rq); });
     }

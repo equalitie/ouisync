@@ -60,18 +60,11 @@ public:
     };
 
 public:
-    using Indices = std::map<UserId, Index>;
-
-public:
     static
     Branch create(executor_type, const fs::path& path, UserId user_id, ObjectStore&, Options::Branch);
 
     static
     Branch load(executor_type, const fs::path& file_path, UserId user_id, ObjectStore&, Options::Branch);
-
-    const Commit& commit() const { return _indices.find(_user_id)->second.commit(); }
-
-    const ObjectId& root_id() const { return commit().root_id; }
 
     BranchView branch_view() const;
 
@@ -89,34 +82,31 @@ public:
 
     void mkdir(PathRange);
 
-    const VersionVector& stamp() const { return commit().stamp; }
-
     const UserId& user_id() const { return _user_id; }
 
     friend std::ostream& operator<<(std::ostream&, const Branch&);
 
     template<class Archive>
     void serialize(Archive& ar, unsigned) {
-        ar & _indices & _missing_objects;
+        ar & _index;
     }
 
     void sanity_check() {} // TODO
 
-    const Indices& indices() const { return _indices; }
+    const Index& index() const { return _index; }
 
     ObjectStore& objstore() const { return _objstore; }
 
     StateChangeWait& on_change() { return _state_change_wait; }
 
-    void merge_indices(const Indices& indices);
+    void merge_index(const Index&);
 
-    const std::set<ObjectId>& missing_objects() const { return _missing_objects; }
+    const std::set<ObjectId>& missing_objects() const { return _index.missing_objects(); }
 
 private:
     friend class BranchView;
 
     Branch(executor_type, const fs::path& file_path, const UserId&, ObjectStore&, Options::Branch);
-    Branch(executor_type, const fs::path& file_path, const UserId&, Commit, ObjectStore&, Options::Branch);
 
     void store_self() const;
 
@@ -139,8 +129,7 @@ private:
     Options::Branch _options;
     ObjectStore& _objstore;
     UserId _user_id;
-    Indices _indices;
-    std::set<ObjectId> _missing_objects;
+    Index _index;
 
     StateChangeWait _state_change_wait;
 };
