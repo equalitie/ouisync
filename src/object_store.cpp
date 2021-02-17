@@ -8,6 +8,8 @@
 #include <boost/serialization/vector.hpp>
 #include <boost/serialization/set.hpp>
 
+#include <sstream>
+
 using namespace ouisync;
 using namespace std;
 
