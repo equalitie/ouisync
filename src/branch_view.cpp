@@ -44,7 +44,6 @@ BranchView::BranchView(ObjectStore& objects, set<ObjectId> roots) :
 
 set<string> BranchView::readdir(PathRange path) const
 {
-
     MultiDir dir = root().cd_into(path);
 
     set<string> names;

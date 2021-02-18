@@ -31,8 +31,13 @@ Branch Branch::create(executor_type ex, const fs::path& path, UserId user_id, Ob
     }
 
     Branch b(ex, path, user_id, objstore, move(options));
-    objstore.store(Directory{});
+
+    auto empty_dir_id = objstore.store(Directory{});
+
+    b._index = Index(user_id, {{}, empty_dir_id});
+
     b.store_self();
+
     return b;
 }
 
@@ -53,7 +58,6 @@ Branch::Branch(executor_type ex, const fs::path& file_path, const UserId& user_i
     _options(move(options)),
     _objstore(objstore),
     _user_id(user_id),
-    _index(_user_id),
     _state_change_wait(_ex)
 {
 }

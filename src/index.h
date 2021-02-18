@@ -13,17 +13,33 @@ class ObjectStore;
 
 class Index {
 private:
+    template<class K, class V> using Map = std::map<K, V>;
     using ParentId = ObjectId;
-    using Elements = std::map<ObjectId, std::map<ParentId, uint32_t>>;
-    //                                              |         |
-    //                                   Parent <---+         |
-    //                                                        |
-    //  How many times is the object listed in the parent <---+
+    using Count = uint32_t;
+    using UserMap = Map<UserId, Count>;
+    using ParentMap = Map<ParentId, UserMap>;
+    using ObjectMap = Map<ObjectId, ParentMap>;
+
+    const ObjectId& id(ObjectMap::const_iterator i) { return i->first; }
+    const ParentId& id(ParentMap::const_iterator i) { return i->first; }
+    const UserId&   id(UserMap  ::const_iterator i) { return i->first; }
+
+          ParentMap& parents(ObjectMap::iterator       i) { return i->second; }
+    const ParentMap& parents(ObjectMap::const_iterator i) { return i->second; }
+
+          UserMap& users(ParentMap::iterator       i) { return i->second; }
+    const UserMap& users(ParentMap::const_iterator i) { return i->second; }
+
+    const Count& count(UserMap::const_iterator i) { return i->second; }
+          Count& count(UserMap::iterator i) { return i->second; }
+
+    struct Item;
 
 public:
     Index() {}
-    Index(const UserId&);
+    Index(const UserId&, Commit);
 
+    void set_commit(const UserId&, const Commit&);
     void set_version_vector(const UserId&, const VersionVector&);
 
     void insert_object(const UserId&, const ObjectId& id, const ParentId& parent_id, size_t cnt = 1);
@@ -43,34 +59,21 @@ public:
 
     template<class Archive>
     void serialize(Archive& ar, unsigned) {
-        ar & _user_states & _missing_objects;
+        ar & _objects & _commits & _missing_objects;
     }
 
-private:
-    struct UserState {
-        Commit commit;
-        Elements elements;
+    bool remote_is_newer(const Commit& remote_commit, const UserId&) const;
 
-        template<class Archive>
-        void serialize(Archive& ar, unsigned) {
-            ar & commit & elements;
-        }
+    void erase_if_zero_count(ObjectMap::iterator i, ParentMap::iterator j, UserMap::iterator k);
 
-        UserState();
-    };
-
-    template<class F> static void remove_count(Elements&, F&& f);
-
-    template<class F> static void for_each(const Elements&, F&& f);
-    static void count_objects_in_parent(const Elements&, const ObjectId&, const ParentId&);
-
-    static
-    void insert_object(UserState&, const ObjectId& id, const ParentId& parent_id, size_t cnt);
-
-    size_t count_object_in_parent(const Elements&, const ObjectId& obj_id, const ObjectId& parent_id) const;
+    friend std::ostream& operator<<(std::ostream&, const Index&);
 
 private:
-    std::map<UserId, UserState> _user_states;
+    template<class F> void compare(const ObjectMap&, F&&);
+
+private:
+    ObjectMap _objects;
+    Map<UserId, Commit> _commits;
     std::set<ObjectId> _missing_objects;
 };
 

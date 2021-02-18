@@ -6,114 +6,250 @@
 #include "file_blob.h"
 #include "variant.h"
 #include "ouisync_assert.h"
+#include "iterator_range.h"
 
 #include <iostream>
 
 using namespace ouisync;
 using std::string;
 using std::move;
+using std::set;
 
-Index::Index(const UserId& user)
+Index::Index(const UserId& user_id, Commit commit)
 {
-    _user_states.insert({user, {}});
-}
-
-Index::UserState::UserState() : 
-    commit({{}, Directory{}.calculate_id()})
-{
-    Index::insert_object(*this, commit.root_id, commit.root_id, 1);
+    _objects[commit.root_id][commit.root_id][user_id] = 1;
+    _commits[user_id] = move(commit);
 }
 
 void Index::set_version_vector(const UserId& user, const VersionVector& vv)
 {
-    auto i = _user_states.find(user);
-    ouisync_assert(i != _user_states.end());
-    auto& state = i->second;
-    ouisync_assert(vv.happened_after(state.commit.stamp));
+    auto ci = _commits.find(user);
 
-    if (!vv.happened_after(state.commit.stamp)) return;
-    if (vv == state.commit.stamp) return;
+    ouisync_assert(ci != _commits.end());
+    if (ci == _commits.end()) exit(1);
 
-    state.commit.stamp = vv;
+    if (!vv.happened_after(ci->second.stamp)) return;
+    if (vv == ci->second.stamp) return;
+    ci->second.stamp = vv;
 }
 
-template<class F> void Index::remove_count(Elements& elements, F&& f) {
-    for (auto i = elements.begin(); i != elements.end();) {
-        auto i_next = std::next(i);
-        auto& parents = i->second;
-
-        for (auto j = parents.begin(); j != parents.end(); ) {
-            auto j_next = std::next(j);
-            size_t cnt = f(i->first, j->first, j->second);
-            ouisync_assert(cnt <= j->second);
-            j->second -= cnt;
-            if (j->second == 0) { parents.erase(j); }
-            j = j_next;
-        }
-
-        if (parents.empty()) elements.erase(i);
-
-        i = i_next;
-    }
-}
-
-template<class F> void Index::for_each(const Elements& elements, F&& f) {
-    for (auto i = elements.begin(); i != elements.end(); ++i) {
-        auto& parents = i->second;
-
-        for (auto j = parents.begin(); j != parents.end(); ++j) {
-            f(i->first, j->first, j->second);
-        }
-    }
-}
-
-void Index::merge(const Index& other, ObjectStore& objstore)
+template<class Map, class F>
+static
+void zip(Map& a, Map& b, F&& modifier)
 {
-    for (auto& [user, remote_] : other._user_states) {
-        auto& remote = remote_; // because clang complains when capturing the above in a lambda :-/
-        auto& local = _user_states.insert({user, {}}).first->second;
+    auto ai = a.begin();
+    auto bi = b.begin();
 
-        if (local.commit.happened_after(remote.commit)) return;
-        if (local.commit == remote.commit) return;
-
-        // One user will never/must not produce concurrent commits.
-        ouisync_assert(local.commit.happened_before(remote.commit));
-
-        // XXX: The two operations below can be merged to have it
-        // done in linear time.
-
-        std::set<ObjectId> possibly_remove_from_objstore;
-
-        // Remove elements from local.elements that are not in the new one
-        remove_count(local.elements, [&] (auto& obj_id, auto& parent_id, auto old_cnt) mutable -> size_t {
-                auto new_cnt = count_object_in_parent(remote.elements, obj_id, parent_id);
-                if (new_cnt >= old_cnt) return 0;
-                auto remove_cnt = old_cnt - new_cnt;
-                if (new_cnt == 0) {
-                    possibly_remove_from_objstore.insert(obj_id);
-                }
-                return remove_cnt;
-            });
-
-        for (auto& obj : possibly_remove_from_objstore) {
-            if (someone_has(obj)) continue;
-            objstore.remove(obj);
-            _missing_objects.erase(obj);
+    while (ai != a.end() || bi != b.end()) {
+        if (ai == a.end()) {
+            auto rni = std::next(bi);
+            modifier(bi->first, ai, bi);
+            bi = rni;
         }
+        else if (bi == b.end()) {
+            auto lni = std::next(ai);
+            modifier(ai->first, ai, bi);
+            ai = lni;
+        }
+        else if (ai->first == bi->first) {
+            auto lni = std::next(ai);
+            auto rni = std::next(bi);
+            modifier(ai->first, ai, bi);
+            ai = lni;
+            bi = rni;
+        } else {
+            if (ai->first < bi->first) {
+                auto lni = std::next(ai);
+                modifier(ai->first, ai, b.end());
+                ai = lni;
+            } else {
+                auto rni = std::next(bi);
+                modifier(bi->first, a.end(), bi);
+                bi = rni;
+            }
+        }
+    }
+}
 
-        for_each(remote.elements, [&] (auto& obj_id, auto& parent_id, auto new_cnt) {
-                auto old_cnt = count_object_in_parent(local.elements, obj_id, parent_id);
-                ouisync_assert(old_cnt <= new_cnt);
-                if (old_cnt == new_cnt) return;
-                insert_object(local, obj_id, parent_id, new_cnt - old_cnt);
-                if (old_cnt == 0) {
-                    if (!objstore.exists(obj_id)) {
-                        _missing_objects.insert(obj_id);
+struct Index::Item
+{
+    using Oi = ObjectMap::iterator;
+    using Pi = ParentMap::iterator;
+    using Ui = UserMap  ::iterator;
+
+    ObjectMap& objects;
+
+    Opt<Oi> oi;
+    Opt<Pi> pi;
+    Opt<Ui> ui;
+
+    Item(ObjectMap& os)                      : objects(os) {}
+    Item(ObjectMap& os, Oi oi)               : objects(os), oi(oi)                 { normalize(); }
+    Item(ObjectMap& os, Oi oi, Pi pi)        : objects(os), oi(oi), pi(pi)         { normalize(); }
+    Item(ObjectMap& os, Oi oi, Pi pi, Ui ui) : objects(os), oi(oi), pi(pi), ui(ui) { normalize(); }
+
+    // Make so that none of `oi`, `pi`, `ui` are `*.end()`s, but instead they're
+    // set to boost::none.
+    void normalize() {
+        using boost::none;
+        if (!oi)                        { oi = none; pi = none; ui = none; return; }
+        if (*oi == objects.end())       { oi = none; pi = none; ui = none; return; }
+        if (*pi == (*oi)->second.end()) {            pi = none; ui = none; return; }
+        if (*ui == (*pi)->second.end()) {                       ui = none; return; }
+    }
+
+    operator bool() const { return oi && pi && ui; }
+
+    Index::Count get_count() const {
+        ouisync_assert(ui);
+        return (*ui)->second;
+    }
+
+    void set_count(Index::Count cnt) {
+        ouisync_assert(cnt > 0);
+        ouisync_assert(ui);
+        (*ui)->second = cnt;
+    }
+
+    void erase()
+    {
+        if (ui) {
+            (*pi)->second.erase(*ui);
+        }
+        if (pi && (*pi)->second.empty()) {
+            (*oi)->second.erase(*pi);
+        }
+        if (oi && (*oi)->second.empty()) {
+            objects.erase(*oi);
+        }
+    }
+};
+
+template<class F> void Index::compare(const ObjectMap& remote_objects, F&& cmp)
+{
+    // Const cast below because it would have double the code if the `Item`
+    // class had to work with both `::iterator`s and `::const_iterator`s.
+    auto& lo = _objects;
+    auto& ro = const_cast<ObjectMap&>(remote_objects);
+
+    zip(lo, ro,
+        [&] (const ObjectId& obj, auto obj_li, auto obj_ri) {
+            if (obj_li != _objects.end() && obj_ri != remote_objects.end()) {
+                zip(parents(obj_li),
+                    parents(obj_ri),
+                    [&](auto& parent_id, auto parent_li, auto parent_ri)
+                    {
+                        if (parent_li != parents(obj_li).end() && parent_ri != parents(obj_ri).end()) {
+                            zip(users(parent_li), users(parent_ri),
+                                [&](auto& user_id, auto user_li, auto user_ri) {
+                                    cmp(obj, parent_id, user_id,
+                                        Item(lo, obj_li, parent_li, user_li),
+                                        Item(ro, obj_ri, parent_ri, user_ri));
+                                });
+                        }
+                        else if (parent_ri == parents(obj_ri).end()) {
+                            for (auto user_li : iterator_range(users(parent_li))) {
+                                cmp(obj, parent_id, id(user_li),
+                                    Item(lo, obj_li, parent_li, user_li),
+                                    Item(ro, obj_ri, parent_ri));
+                            }
+                        }
+                        else if (parent_li == parents(obj_li).end()) {
+                            for (auto user_ri : iterator_range(users(parent_ri))) {
+                                cmp(obj, parent_id, id(user_ri),
+                                    Item(lo, obj_li, parent_li),
+                                    Item(ro, obj_ri, parent_ri, user_ri));
+                            }
+                        }
+                        else {
+                            ouisync_assert(0);
+                        }
+                    });
+            }
+            else if (obj_ri == remote_objects.end()) {
+                for (auto parent_li : iterator_range(parents(obj_li))) {
+                    for (auto user_li : iterator_range(users(parent_li))) {
+                        cmp(obj, id(parent_li), id(user_li),
+                            Item(lo, obj_li, parent_li, user_li),
+                            Item(ro, obj_ri));
                     }
                 }
-            });
+            }
+            else if (obj_li == _objects.end()) {
+                for (auto parent_ri : iterator_range(parents(obj_ri))) {
+                    for (auto user_ri : iterator_range(users(parent_ri))) {
+                        cmp(obj, id(parent_ri), id(user_ri),
+                            Item(lo, obj_li),
+                            Item(ro, obj_ri, parent_ri, user_ri));
+                    }
+                }
+            }
+            else {
+                ouisync_assert(0);
+            }
+        });
+}
 
-        local.commit.stamp = remote.commit.stamp;
+void Index::merge(const Index& remote_index, ObjectStore& objstore)
+{
+    auto& remote_commits = remote_index._commits;
+    auto& remote_objects = remote_index._objects;
+
+    set<UserId> is_newer;
+
+    for (auto& [remote_user, remote_commit] : remote_commits) {
+        if (remote_is_newer(remote_commit, remote_user)) {
+            is_newer.insert(remote_user);
+        }
+    }
+
+    compare(remote_objects,
+        [&] (auto& obj_id, auto& parent_id, auto& user_id, Item local, Item remote)
+        {
+            if (!is_newer.count(user_id)) return;
+
+            if (local && remote) {
+                ouisync_assert(remote.get_count() > 0);
+                local.set_count(remote.get_count());
+            }
+            else if (local) {
+                local.erase();
+
+                if (!someone_has(obj_id)) {
+                    objstore.remove(obj_id);
+                }
+            }
+            else if (remote) {
+                bool obj_is_new = !someone_has(obj_id);
+
+                auto& um = _objects[obj_id][parent_id];
+                auto ui = um.insert({user_id, 0}).first;
+                ui->second = remote.get_count();
+
+                ouisync_assert(ui->second > 0);
+
+                if (obj_id == parent_id) {
+                    _commits[user_id] = remote_commits.at(user_id);
+                }
+
+                if (obj_is_new) _missing_objects.insert(obj_id);
+            }
+            else {
+                ouisync_assert(0);
+            }
+        });
+}
+
+bool Index::remote_is_newer(const Commit& remote_commit, const UserId& user) const
+{
+    auto li = _commits.find(user);
+
+    if (li == _commits.end()) {
+        return remote_commit.stamp.version_of(user) > 0;
+    } else {
+        // Sincle user can't/must not create concurrent stamps, so comparing
+        // the single version number is sufficcient.
+        return remote_commit.stamp.version_of(user) > li->second.stamp.version_of(user);
     }
 }
 
@@ -121,96 +257,71 @@ void Index::insert_object(const UserId& user, const ObjectId& obj_id, const Obje
 {
     if (cnt == 0) return;
 
-    auto state_i = _user_states.find(user);
-    ouisync_assert(state_i != _user_states.end());
-    if (state_i == _user_states.end()) return;
-    auto& state = state_i->second;
+    auto obj_i    = _objects.insert({obj_id, {}}).first;
+    auto parent_i = obj_i->second.insert({parent_id, {}}).first;
+    auto user_i   = parent_i->second.insert({user, 0}).first;
 
-    insert_object(state, obj_id, parent_id, cnt);
-}
-
-void Index::insert_object(UserState& state, const ObjectId& obj_id, const ObjectId& parent_id, size_t cnt)
-{
-    if (cnt == 0) return;
-
-    auto i = state.elements.insert({obj_id, {}}).first;
-    auto& parents = i->second;
-    auto j = parents.insert({parent_id, 0u}).first;
-    j->second += cnt;
+    user_i->second += cnt;
 
     if (obj_id == parent_id) {
-        state.commit.root_id = obj_id;
+        _commits[user].root_id = obj_id;
     }
 }
 
 void Index::remove_object(const UserId& user, const ObjectId& obj_id, const ObjectId& parent_id)
 {
-    auto state_i = _user_states.find(user);
-    assert(state_i != _user_states.end());
-    if (state_i == _user_states.end()) return;
+    auto obj_i = _objects.find(obj_id);
+    ouisync_assert(obj_i != _objects.end());
+    if (obj_i == _objects.end()) return;
 
-    auto& elements = state_i->second.elements;
+    auto parent_i = obj_i->second.find(parent_id);
+    ouisync_assert(parent_i != obj_i->second.end());
+    if (parent_i == obj_i->second.end()) return;
 
-    auto i = elements.find(obj_id);
+    auto user_i = parent_i->second.find(user);
+    ouisync_assert(user_i != parent_i->second.end());
+    if (user_i == parent_i->second.end()) return;
 
-    ouisync_assert(i != elements.end());
-
-    auto& parents = i->second;
-
-    auto j = parents.find(parent_id);
-
-    ouisync_assert(j != parents.end());
-    ouisync_assert(j->second != 0u);
-
-    if (--j->second == 0) {
-        parents.erase(j);
+    if (--user_i->second == 0) {
+        Item(_objects, obj_i, parent_i, user_i).erase();
     }
-
-    if (parents.empty()) elements.erase(i);
 }
-
-size_t Index::count_object_in_parent(const Elements& elements, const ObjectId& obj_id, const ObjectId& parent_id) const
-{
-    auto i = elements.find(obj_id);
-    if (i == elements.end()) return 0;
-    auto j = i->second.find(parent_id);
-    if (j == i->second.end()) return 0;
-    ouisync_assert(j->second != 0);
-    return j->second != 0;
-}
-
-//std::ostream& ouisync::operator<<(std::ostream& os, const Index& index)
-//{
-//    os << index._commit << "\n";
-//    for (auto& [obj_id, parents]: index._elements) {
-//        os << "  " << obj_id << "\n";
-//        for (auto& [parent_id, cnt] : parents) {
-//            os << "    " << parent_id << " " << cnt << "\n";
-//        }
-//    }
-//    return os;
-//}
 
 bool Index::someone_has(const ObjectId& obj) const
 {
-    for (auto& [user, state] : _user_states) {
-        if (state.elements.find(obj) != state.elements.end()) return true;
-    }
-    return false;
+    return _objects.find(obj) != _objects.end();
 }
 
 Opt<Commit> Index::commit(const UserId& user)
 {
-    auto i = _user_states.find(user);
-    if (i == _user_states.end()) return boost::none;
-    return i->second.commit;
+    auto i = _commits.find(user);
+    if (i == _commits.end()) return boost::none;
+    return i->second;
 }
 
 std::set<ObjectId> Index::roots() const
 {
     std::set<ObjectId> ret;
-    for (auto& [user, state] : _user_states) {
-        ret.insert(state.commit.root_id);
+    for (auto& [user, commit] : _commits) {
+        ret.insert(commit.root_id);
     }
     return ret;
+}
+
+std::ostream& ouisync::operator<<(std::ostream& os, const Index& index)
+{
+    os << "Commits = {\n";
+    for (auto& [user, commit] : index._commits) {
+        os << "  " << user << " " << commit << "\n";
+    }
+    os << "}\n";
+    os << "Objects = {\n";
+    for (auto& [obj, parents]: index._objects) {
+        for (auto& [parent, users]: parents) {
+            for (auto& [user, count]: users) {
+                os << "  " << obj << " " << parent << " " << user << " " << count << "\n";
+            }
+        }
+    }
+    return os << "}\n";
 }
