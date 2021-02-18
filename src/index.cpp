@@ -213,10 +213,12 @@ void Index::merge(const Index& remote_index, ObjectStore& objstore)
                 local.set_count(remote.get_count());
             }
             else if (local) {
+                auto id = obj_id;
+
                 local.erase();
 
-                if (!someone_has(obj_id)) {
-                    objstore.remove(obj_id);
+                if (!someone_has(id)) {
+                    objstore.remove(id);
                 }
             }
             else if (remote) {
