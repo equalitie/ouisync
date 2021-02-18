@@ -13,8 +13,10 @@ class ObjectStore;
 
 class MultiDir {
 public:
-    std::set<ObjectId> ids;
-    ObjectStore* objstore;
+    MultiDir(std::set<ObjectId> ids, ObjectStore* objstore) :
+        ids(std::move(ids)),
+        objstore(objstore)
+    {}
 
     MultiDir cd_into(const std::string& where) const;
 
@@ -23,6 +25,10 @@ public:
     std::map<std::string, ObjectId> list() const;
 
     ObjectId file(const std::string& name) const;
+
+private:
+    std::set<ObjectId> ids;
+    ObjectStore* objstore;
 };
 
 } // namespace
