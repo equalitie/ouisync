@@ -34,9 +34,7 @@ public:
         ar & _uuid;
     }
 
-    friend std::ostream& operator<<(std::ostream& os, const UserId& id) {
-        return os << id._uuid;
-    }
+    friend std::ostream& operator<<(std::ostream&, const UserId&);
 
     bool operator==(const UserId& other) const {
         return _uuid == other._uuid;

@@ -1,4 +1,6 @@
 #include "user_id.h"
+#include "hex.h"
+#include "ostream/array.h"
 
 #include <boost/filesystem.hpp>
 #include <boost/uuid/uuid_generators.hpp>
@@ -56,4 +58,10 @@ try {
     return UserId(boost::lexical_cast<boost::uuids::uuid>(s));
 } catch (...) {
     return boost::none;
+}
+
+std::ostream& ouisync::operator<<(std::ostream& os, const UserId& id) {
+    auto p = id._uuid.data;
+    std::array<uint8_t, 3> a = { p[0], p[1], p[2] };
+    return os << to_hex<char>(a);
 }
