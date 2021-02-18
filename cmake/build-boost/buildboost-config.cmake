@@ -33,7 +33,6 @@ if (${CMAKE_SYSTEM_NAME} STREQUAL "Android")
     string(REGEX REPLACE "-$" "" COMPILER_HOSTTRIPLE ${COMPILER_TOOLCHAIN_PREFIX})
     # This is the same as COMPILER_HOSTTRIPLE, _except_ on arm32.
     set(COMPILER_CC_PREFIX ${COMPILER_HOSTTRIPLE})
-
     if (${CMAKE_SYSTEM_PROCESSOR} STREQUAL "armv7-a")
         set(COMPILER_CC_PREFIX "armv7a-linux-androideabi")
         set(BOOST_ARCH "armeabiv7a")
@@ -50,7 +49,6 @@ if (${CMAKE_SYSTEM_NAME} STREQUAL "Android")
     else()
         message(FATAL_ERROR "Unsupported CMAKE_SYSTEM_PROCESSOR ${CMAKE_SYSTEM_PROCESSOR}")
     endif()
-
     set(BOOST_PATCHES ${BOOST_PATCHES} ${CMAKE_CURRENT_LIST_DIR}/inline-boost/boost-android-${BOOST_VERSION_FILENAME}.patch)
     set(BOOST_ENVIRONMENT
         export
@@ -122,6 +120,8 @@ externalproject_add(built_boost
         && ${BOOST_ENVIRONMENT} ./b2
             link=static
             threading=multi
+            architecture=combined
+            address-model=32_64
             -d+2
             -j2
             --layout=system
