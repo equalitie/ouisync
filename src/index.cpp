@@ -319,7 +319,8 @@ std::ostream& ouisync::operator<<(std::ostream& os, const Index& index)
     for (auto& [obj, parents]: index._objects) {
         for (auto& [parent, users]: parents) {
             for (auto& [user, count]: users) {
-                os << "  Object:" << obj << " Parent:" << parent << " User:" << user << " Count:" << count << "\n";
+                os << "  Object:" << obj << " Parent:" << parent
+                    << " User:" << user << " Count:" << count << "\n";
             }
         }
     }
