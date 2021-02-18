@@ -312,14 +312,14 @@ std::ostream& ouisync::operator<<(std::ostream& os, const Index& index)
 {
     os << "Commits = {\n";
     for (auto& [user, commit] : index._commits) {
-        os << "  " << user << " " << commit << "\n";
+        os << "  User:" << user << " " << commit << "\n";
     }
     os << "}\n";
     os << "Objects = {\n";
     for (auto& [obj, parents]: index._objects) {
         for (auto& [parent, users]: parents) {
             for (auto& [user, count]: users) {
-                os << "  " << obj << " " << parent << " " << user << " " << count << "\n";
+                os << "  Object:" << obj << " Parent:" << parent << " User:" << user << " Count:" << count << "\n";
             }
         }
     }
