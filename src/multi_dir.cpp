@@ -56,6 +56,24 @@ private:
     map<UserId, ObjectId> _versions;
 };
 
+bool MultiDir::has_subdirectory(string_view name) const
+{
+    for (auto& id : ids) {
+        // XXX: Should be cached
+        const auto od = objstore->maybe_load<Directory>(id);
+        if (!od) continue;
+        auto user_map = od->find(name);
+        if (!user_map) continue;
+
+        for (auto& [user_id, vobj] : user_map) {
+            // XXX: Would be faster to have this information in vobj.
+            auto is_dir = objstore->maybe_load<Directory::Nothing>(vobj.object_id);
+            if (is_dir) return true;
+        }
+    }
+    return false;
+}
+
 MultiDir MultiDir::cd_into(const string& where) const
 {
     MultiDir retval({}, *objstore);

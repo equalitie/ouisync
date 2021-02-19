@@ -64,8 +64,6 @@ public:
 
     bool remote_is_newer(const Commit& remote_commit, const UserId&) const;
 
-    void erase_if_zero_count(ObjectMap::iterator i, ParentMap::iterator j, UserMap::iterator k);
-
     friend std::ostream& operator<<(std::ostream&, const Index&);
 
 private:
