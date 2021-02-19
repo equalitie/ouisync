@@ -13,9 +13,9 @@ class ObjectStore;
 
 class MultiDir {
 public:
-    MultiDir(std::set<ObjectId> ids, ObjectStore* objstore) :
+    MultiDir(std::set<ObjectId> ids, ObjectStore& objstore) :
         ids(std::move(ids)),
-        objstore(objstore)
+        objstore(&objstore)
     {}
 
     MultiDir cd_into(const std::string& where) const;

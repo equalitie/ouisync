@@ -58,7 +58,7 @@ private:
 
 MultiDir MultiDir::cd_into(const string& where) const
 {
-    MultiDir retval{{}, objstore};
+    MultiDir retval({}, *objstore);
 
     for (auto& from_id : ids) {
         const auto obj = objstore->load<Directory, FileBlob::Nothing>(from_id);

@@ -26,7 +26,7 @@ PathRange _parent(PathRange path) {
 //--------------------------------------------------------------------
 MultiDir BranchView::root() const
 {
-    return MultiDir{_roots, &_objects};
+    return MultiDir(_roots, _objects);
 }
 //--------------------------------------------------------------------
 
