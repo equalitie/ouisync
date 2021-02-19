@@ -48,6 +48,7 @@ public:
     void merge(const Index&, ObjectStore&);
 
     Opt<Commit> commit(const UserId&);
+    const Map<UserId, Commit>& commits() const { return _commits; }
 
     friend std::ostream& operator<<(std::ostream&, const Index&);
 

@@ -58,9 +58,9 @@ private:
 
 bool MultiDir::has_subdirectory(string_view name) const
 {
-    for (auto& id : ids) {
+    for (auto& [user, commit] : versions) {
         // XXX: Should be cached
-        const auto od = objstore->maybe_load<Directory>(id);
+        const auto od = objstore->maybe_load<Directory>(commit.root_id);
         if (!od) continue;
         auto user_map = od->find(name);
         if (!user_map) continue;
@@ -78,13 +78,13 @@ MultiDir MultiDir::cd_into(const string& where) const
 {
     MultiDir retval({}, *objstore);
 
-    for (auto& from_id : ids) {
-        const auto obj = objstore->load<Directory, FileBlob::Nothing>(from_id);
+    for (auto& [user, commit] : versions) {
+        const auto obj = objstore->load<Directory, FileBlob::Nothing>(commit.root_id);
         auto tree = boost::get<Directory>(&obj);
         if (!tree) continue;
         auto user_map = tree->find(where);
         for (auto& [user_id, vobj] : user_map) {
-            retval.ids.insert(vobj.object_id);
+            retval.versions.insert({user_id, Commit{vobj.version_vector, vobj.object_id}});
         }
     }
 
@@ -110,8 +110,8 @@ ObjectId MultiDir::file(const string& name) const
 map<string, ObjectId> MultiDir::list() const {
     map<string, ConflictNameAssigner> name_resolvers;
 
-    for (auto& id : ids) {
-        auto tree = objstore->load<Directory>(id);
+    for (auto& [user, commit] : versions) {
+        auto tree = objstore->load<Directory>(commit.root_id);
         for (auto& [name, versioned_ids] : tree) {
             auto [i, _] = name_resolvers.insert({name, {name}});
             i->second.add(versioned_ids);

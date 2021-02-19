@@ -2,6 +2,8 @@
 
 #include "file_blob.h"
 #include "path_range.h"
+#include "user_id.h"
+#include "commit.h"
 
 #include <set>
 #include <map>
@@ -13,8 +15,11 @@ class ObjectStore;
 
 class MultiDir {
 public:
-    MultiDir(std::set<ObjectId> ids, ObjectStore& objstore) :
-        ids(std::move(ids)),
+    using Versions = std::map<UserId, Commit>;
+
+public:
+    MultiDir(Versions versions, ObjectStore& objstore) :
+        versions(std::move(versions)),
         objstore(&objstore)
     {}
 
@@ -29,7 +34,7 @@ public:
     ObjectId file(const std::string& name) const;
 
 private:
-    std::set<ObjectId> ids;
+    Versions versions;
     ObjectStore* objstore;
 };
 

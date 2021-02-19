@@ -4,8 +4,10 @@
 #include "file_blob.h"
 #include "path_range.h"
 #include "file_system_attrib.h"
+#include "commit.h"
 
 #include <boost/filesystem/path.hpp>
+#include <map>
 #include <set>
 
 namespace ouisync {
@@ -15,8 +17,7 @@ class MultiDir;
 
 class BranchView {
 public:
-    BranchView(ObjectStore&, std::set<ObjectId> roots);
-    BranchView(ObjectStore&, const ObjectId& root_id);
+    BranchView(ObjectStore&, std::map<UserId, Commit> commits);
 
     std::set<std::string> readdir(PathRange path) const;
 
@@ -38,7 +39,7 @@ private:
 
 private:
     ObjectStore& _objects;
-    std::set<ObjectId> _roots;
+    std::map<UserId, Commit> _commits;
 };
 
 } // namespace

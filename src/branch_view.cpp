@@ -26,18 +26,13 @@ PathRange _parent(PathRange path) {
 //--------------------------------------------------------------------
 MultiDir BranchView::root() const
 {
-    return MultiDir(_roots, _objects);
+    return MultiDir(_commits, _objects);
 }
 //--------------------------------------------------------------------
 
-BranchView::BranchView(ObjectStore& objects, const ObjectId& root_id) :
+BranchView::BranchView(ObjectStore& objects, map<UserId, Commit> commits) :
     _objects(objects),
-    _roots({root_id})
-{}
-
-BranchView::BranchView(ObjectStore& objects, set<ObjectId> roots) :
-    _objects(objects),
-    _roots(move(roots))
+    _commits(move(commits))
 {}
 
 //--------------------------------------------------------------------

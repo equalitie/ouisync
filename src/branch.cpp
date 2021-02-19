@@ -475,7 +475,7 @@ void Branch::store_self() const {
 //--------------------------------------------------------------------
 
 BranchView Branch::branch_view() const {
-    return BranchView(_objstore, _index.roots());
+    return BranchView(_objstore, _index.commits());
 }
 
 //--------------------------------------------------------------------
