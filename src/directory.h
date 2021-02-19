@@ -33,7 +33,9 @@ public:
     using UserMap = std::map<UserId, VersionedObject>;
 
 private:
-    using NameMap = std::map<std::string, UserMap>;
+    // Need to use std::less<> to enable access using string_view.
+    // https://stackoverflow.com/a/35525806/273348
+    using NameMap = std::map<std::string, UserMap, std::less<>>;
 
     template<bool is_mutable>
     class Handle {
@@ -106,13 +108,13 @@ public:
     using MutableHandle   = Handle<true>;
     using ImmutableHandle = Handle<false>;
 
-    ImmutableHandle find(const std::string& k) const {
+    ImmutableHandle find(const string_view k) const {
         auto i = _name_map.find(k);
         if (i == _name_map.end()) return {};
         return {&_name_map, i};
     }
 
-    MutableHandle find(const std::string& k) {
+    MutableHandle find(const string_view k) {
         auto i = _name_map.find(k);
         if (i == _name_map.end()) return {};
         return {&_name_map, i};
