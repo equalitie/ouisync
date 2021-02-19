@@ -1,6 +1,7 @@
 #pragma once
 
 #include "commit.h"
+#include "user_id.h"
 
 #include <map>
 #include <set>
@@ -12,88 +13,68 @@ class ObjectStore;
 
 class Index {
 private:
-    using Elements = std::map<ObjectId, std::map<ObjectId, uint32_t>>;
-    //                                              |         |
-    //                                   Parent <---+         |
-    //                                                        |
-    //  How many times is the object listed in the parent <---+
+    template<class K, class V> using Map = std::map<K, V>;
+    using ParentId = ObjectId;
+    using Count = uint32_t;
+    using UserMap = Map<UserId, Count>;
+    using ParentMap = Map<ParentId, UserMap>;
+    using ObjectMap = Map<ObjectId, ParentMap>;
 
-private:
+    const ObjectId& id(ObjectMap::const_iterator i) { return i->first; }
+    const ParentId& id(ParentMap::const_iterator i) { return i->first; }
+    const UserId&   id(UserMap  ::const_iterator i) { return i->first; }
 
-    class Element {
-      public:
-        Element() {}
-        Element(const Element&) = default;
-        Element(Element&&) = default;
+          ParentMap& parents(ObjectMap::iterator       i) { return i->second; }
+    const ParentMap& parents(ObjectMap::const_iterator i) { return i->second; }
 
-        Element(const ObjectId& id, const ObjectId& parent_id);
-        Element(const ObjectId& id) : Element(id, id) {}
+          UserMap& users(ParentMap::iterator       i) { return i->second; }
+    const UserMap& users(ParentMap::const_iterator i) { return i->second; }
 
-        bool is_root() const { return _is_root; }
+    const Count& count(UserMap::const_iterator i) { return i->second; }
+          Count& count(UserMap::iterator i) { return i->second; }
 
-        const ObjectId& obj_id() const { return _obj_id; }
-
-      private:
-        friend class Index;
-        bool _is_root;
-        ObjectId _obj_id;
-        ObjectId _parent_id;
-    };
+    struct Item;
 
 public:
-    void set_version_vector(const VersionVector&);
+    Index() {}
+    Index(const UserId&, Commit);
 
-    void insert_object(const ObjectId& id, const ObjectId& parent_id, size_t cnt = 1);
-    void remove_object(const ObjectId& id, const ObjectId& parent_id);
+    void set_commit(const UserId&, const Commit&);
+    void set_version_vector(const UserId&, const VersionVector&);
 
-    bool has(const ObjectId& obj_id) const;
-    size_t count_object_in_parent(const ObjectId& obj_id, const ObjectId& parent_id) const;
+    void insert_object(const UserId&, const ObjectId& id, const ParentId& parent_id, size_t cnt = 1);
+    void remove_object(const UserId&, const ObjectId& id, const ParentId& parent_id);
+
+    void merge(const Index&, ObjectStore&);
+
+    Opt<Commit> commit(const UserId&);
+
+    friend std::ostream& operator<<(std::ostream&, const Index&);
+
+    const std::set<ObjectId>& missing_objects() const { return _missing_objects; }
+
+    bool someone_has(const ObjectId&) const;
+
+    std::set<ObjectId> roots() const;
 
     template<class Archive>
     void serialize(Archive& ar, unsigned) {
-        ar & _commit & _elements;
+        ar & _objects & _commits & _missing_objects;
     }
 
-    const Commit& commit() const { return _commit; }
+    bool remote_is_newer(const Commit& remote_commit, const UserId&) const;
 
-    // Returns true if this index has changed.
-    bool merge(const Index&);
-
-    template<class F> void remove_count(F&& f) {
-        for (auto i = _elements.begin(); i != _elements.end();) {
-            auto i_next = std::next(i);
-            auto& parents = i->second;
-
-            for (auto j = parents.begin(); j != parents.end(); ) {
-                auto j_next = std::next(j);
-                size_t cnt = f(i->first, j->first, j->second);
-                ouisync_assert(cnt <= j->second);
-                j->second -= cnt;
-                if (j->second == 0) { parents.erase(j); }
-                j = j_next;
-            }
-
-            if (parents.empty()) _elements.erase(i);
-
-            i = i_next;
-        }
-    }
-
-    template<class F> void for_each(F&& f) const {
-        for (auto i = _elements.begin(); i != _elements.end(); ++i) {
-            auto& parents = i->second;
-
-            for (auto j = parents.begin(); j != parents.end(); ++j) {
-                f(i->first, j->first, j->second);
-            }
-        }
-    }
+    void erase_if_zero_count(ObjectMap::iterator i, ParentMap::iterator j, UserMap::iterator k);
 
     friend std::ostream& operator<<(std::ostream&, const Index&);
 
 private:
-    Commit _commit;
-    Elements _elements;
+    template<class F> void compare(const ObjectMap&, F&&);
+
+private:
+    ObjectMap _objects;
+    Map<UserId, Commit> _commits;
+    std::set<ObjectId> _missing_objects;
 };
 
 } // namespace

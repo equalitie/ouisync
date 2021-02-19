@@ -19,6 +19,7 @@ using std::unique_ptr;
 using std::make_unique;
 using std::string;
 using std::set;
+using std::cerr;
 
 #define DBG std::cerr << __PRETTY_FUNCTION__ << ":" << __LINE__ << " "
 
@@ -29,24 +30,29 @@ Branch Branch::create(executor_type ex, const fs::path& path, UserId user_id, Ob
         throw std::runtime_error("Local branch already exits");
     }
 
-    Commit null_commit{
-        VersionVector{},
-        objstore.store(Directory{})
-    };
+    Branch b(ex, path, user_id, objstore, move(options));
 
-    return Branch(ex, path, user_id, move(null_commit), objstore, move(options));
+    auto empty_dir_id = objstore.store(Directory{});
+
+    b._index = Index(user_id, {{}, empty_dir_id});
+
+    b.store_self();
+
+    return b;
 }
 
 /* static */
 Branch Branch::load(executor_type ex, const fs::path& file_path, UserId user_id, ObjectStore& objstore, Options::Branch options)
 {
-    return Branch(ex, file_path, user_id, objstore, std::move(options));
+    Branch b(ex, file_path, user_id, objstore, std::move(options));
+    archive::load(file_path, b);
+    return b;
 }
 
 //--------------------------------------------------------------------
 
 Branch::Branch(executor_type ex, const fs::path& file_path, const UserId& user_id,
-        Commit commit, ObjectStore& objstore, Options::Branch options) :
+        ObjectStore& objstore, Options::Branch options) :
     _ex(ex),
     _file_path(file_path),
     _options(move(options)),
@@ -54,23 +60,6 @@ Branch::Branch(executor_type ex, const fs::path& file_path, const UserId& user_i
     _user_id(user_id),
     _state_change_wait(_ex)
 {
-    auto& idx = _indices[_user_id];
-
-    idx.insert_object(commit.root_id, commit.root_id);
-
-    store_self();
-}
-
-Branch::Branch(executor_type ex, const fs::path& file_path,
-        const UserId& user_id, ObjectStore& objstore, Options::Branch options) :
-    _ex(ex),
-    _file_path(file_path),
-    _options(move(options)),
-    _objstore(objstore),
-    _user_id(user_id),
-    _state_change_wait(_ex)
-{
-    archive::load(file_path, *this);
 }
 
 //--------------------------------------------------------------------
@@ -90,13 +79,13 @@ class Branch::TreeOp : public Branch::Op {
 
 class Branch::RootOp : public Branch::TreeOp {
 public:
-    RootOp(ObjectStore& objstore, const UserId& this_user_id, Branch::Indices& indices) :
+    RootOp(ObjectStore& objstore, const UserId& this_user_id, Index& index) :
         _objstore(objstore),
         _this_user_id(this_user_id),
-        _indices(indices),
-        _index(indices[_this_user_id])
+        _index(index),
+        _original_commit(*_index.commit(this_user_id))
     {
-        _tree = _objstore.load<Directory>(_index.commit().root_id);
+        _tree = _objstore.load<Directory>(_original_commit.root_id);
     }
 
     Directory& tree() override {
@@ -105,19 +94,19 @@ public:
 
     bool commit() override {
         auto new_id = _tree.calculate_id();
-        auto old_id = _index.commit().root_id;
+        auto old_id = _original_commit.root_id;
 
         if (old_id == new_id) return false;
 
         _objstore.store(_tree);
 
         _tree.for_each_unique_child([&] (auto& filename, auto& child_id) {
-                _index.insert_object(child_id, new_id);
+                _index.insert_object(_this_user_id, child_id, new_id);
             });
 
-        _index.insert_object(new_id, new_id);
+        _index.insert_object(_this_user_id, new_id, new_id);
 
-        _index.set_version_vector(_tree.calculate_version_vector_union());
+        _index.set_version_vector(_this_user_id, _tree.calculate_version_vector_union());
 
         remove_recursive(old_id, old_id);
 
@@ -130,13 +119,13 @@ public:
     RootOp* root() override { return this; }
 
     void increment(VersionVector& vv) const {
-        vv.set_version(_this_user_id, _index.commit().stamp.version_of(_this_user_id) + 1);
+        vv.set_version(_this_user_id, _original_commit.stamp.version_of(_this_user_id) + 1);
     }
 
     void remove_recursive(const ObjectId& obj_id, const ObjectId& parent_id) {
-        _index.remove_object(obj_id, parent_id);
+        _index.remove_object(_this_user_id, obj_id, parent_id);
 
-        if (someone_still_has(obj_id)) return;
+        if (_index.someone_has(obj_id)) return;
 
         auto obj = _objstore.load<Directory, FileBlob::Nothing>(obj_id);
 
@@ -152,20 +141,12 @@ public:
         _objstore.remove(obj_id);
     }
 
-    bool someone_still_has(const ObjectId& id) const {
-        for (auto& [user, index] : _indices) {
-            (void) user;
-            if (index.has(id)) return true;
-        }
-        return false;
-    }
-
 private:
     ObjectStore& _objstore;
     UserId _this_user_id;
     Directory _tree;
-    Branch::Indices& _indices;
     Index& _index;
+    Commit _original_commit;
 };
 
 class Branch::CdOp : public Branch::TreeOp {
@@ -222,7 +203,7 @@ public:
         objstore().store(_tree);
 
         _tree.for_each_unique_child([&] (auto& filename, auto& child_id) {
-                _root->index().insert_object(child_id, new_tree_id);
+                _root->index().insert_object(_this_user_id, child_id, new_tree_id);
             });
 
         return _parent->commit();
@@ -359,7 +340,7 @@ void Branch::do_commit(OpPtr& op)
 //--------------------------------------------------------------------
 unique_ptr<Branch::TreeOp> Branch::root()
 {
-    return make_unique<Branch::RootOp>(_objstore, _user_id, _indices);
+    return make_unique<Branch::RootOp>(_objstore, _user_id, _index);
 }
 
 unique_ptr<Branch::TreeOp> Branch::cd_into(PathRange path)
@@ -480,79 +461,9 @@ bool Branch::remove(const fs::path& fspath)
 
 //--------------------------------------------------------------------
 
-void Branch::merge_indices(const Indices& indices)
+void Branch::merge_index(const Index& index)
 {
-    for (auto& [user, index] : indices) {
-        merge_index(user, index);
-    }
-}
-
-static bool _someone_has(const Branch::Indices& indices, const ObjectId& obj) {
-    for (auto& [user, index] : indices) {
-        (void) user;
-        if (index.has(obj) != 0) return true;
-    }
-    return false;
-}
-
-void Branch::merge_index(const UserId& user, const Index& new_index)
-{
-    // XXX: This might be excessive, we prolly only need to compare against
-    // _indices[user].
-    for (auto& [user, idx] : _indices) {
-        if (new_index.commit().happened_before(idx.commit())) {
-            return;
-        }
-        if (new_index.commit() == idx.commit()) {
-            return;
-        }
-    }
-
-    auto& old_index = _indices.insert({user, {}}).first->second;
-
-    if (old_index.commit().happened_after(new_index.commit())) return;
-    if (old_index.commit() == new_index.commit()) return;
-
-    // One user will never/must not produce concurrent commits.
-    ouisync_assert(old_index.commit().happened_before(new_index.commit()));
-
-    // XXX: The two operations below can be merged to have it
-    // done in linear time.
-
-    std::set<ObjectId> possibly_remove_from_objstore;
-
-    // Remove elements from old_index that are not in the new one
-    old_index.remove_count([&] (auto& obj_id, auto& parent_id, auto old_cnt) -> size_t {
-            auto new_cnt = new_index.count_object_in_parent(obj_id, parent_id);
-            if (new_cnt >= old_cnt) return 0;
-            auto remove_cnt = old_cnt - new_cnt;
-            if (new_cnt == 0) {
-                possibly_remove_from_objstore.insert(obj_id);
-            }
-            return remove_cnt;
-        });
-
-    for (auto& obj : possibly_remove_from_objstore) {
-        if (_someone_has(_indices, obj)) continue;
-        _objstore.remove(obj);
-        _missing_objects.erase(obj);
-    }
-
-    new_index.for_each([&] (auto& obj_id, auto& parent_id, auto new_cnt) {
-            auto old_cnt = old_index.count_object_in_parent(obj_id, parent_id);
-            ouisync_assert(old_cnt <= new_cnt);
-            if (old_cnt == new_cnt) return;
-            old_index.insert_object(obj_id, parent_id, new_cnt - old_cnt);
-            if (old_cnt == 0) {
-                if (!_objstore.exists(obj_id)) {
-                    _missing_objects.insert(obj_id);
-                }
-            }
-        });
-
-    old_index.set_version_vector(new_index.commit().stamp);
-
-    // XXX: Erase every index that which `happened_before` this new one.
+    _index.merge(index, _objstore);
 }
 
 //--------------------------------------------------------------------
@@ -563,17 +474,8 @@ void Branch::store_self() const {
 
 //--------------------------------------------------------------------
 
-set<ObjectId> Branch::roots() const {
-    set<ObjectId> rts;
-    for (auto& [user, index] : _indices) {
-        (void) user;
-        rts.insert(index.commit().root_id);
-    }
-    return rts;
-}
-
 BranchView Branch::branch_view() const {
-    return BranchView(_objstore, roots());
+    return BranchView(_objstore, _index.roots());
 }
 
 //--------------------------------------------------------------------

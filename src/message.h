@@ -19,7 +19,7 @@ enum class MessageType { Request, Response };
 struct RqNotifyOnChange {
     static constexpr auto type = MessageType::Request;
 
-    uint64_t last_state;
+    Opt<uint64_t> last_state;
 
     template<class Archive>
     void serialize(Archive& ar, const unsigned) {
@@ -38,7 +38,7 @@ struct RsNotifyOnChange {
     }
 };
 
-struct RqIndices {
+struct RqIndex {
     static constexpr auto type = MessageType::Request;
 
     template<class Archive>
@@ -46,14 +46,14 @@ struct RqIndices {
     }
 };
 
-struct RsIndices {
+struct RsIndex {
     static constexpr auto type = MessageType::Response;
 
-    Branch::Indices indices;
+    Index index;
 
     template<class Archive>
     void serialize(Archive& ar, const unsigned) {
-        ar & indices;
+        ar & index;
     }
 };
 
@@ -71,8 +71,10 @@ struct RqObject {
 struct RsObject {
     static constexpr auto type = MessageType::Response;
 
+    using Object = variant<FileBlob, Directory>;
+
     // boost::none if not found
-    Opt<variant<FileBlob, Directory>> object;
+    Opt<Object> object;
 
     template<class Archive>
     void serialize(Archive& ar, const unsigned) {
@@ -85,8 +87,8 @@ namespace MessageDetail {
         = variant<
             RqNotifyOnChange,
             RsNotifyOnChange,
-            RqIndices,
-            RsIndices,
+            RqIndex,
+            RsIndex,
             RqObject,
             RsObject
         >;
@@ -94,14 +96,14 @@ namespace MessageDetail {
     using RequestVariant
         = variant<
             RqNotifyOnChange,
-            RqIndices,
+            RqIndex,
             RqObject
         >;
 
     using ResponseVariant
         = variant<
             RsNotifyOnChange,
-            RsIndices,
+            RsIndex,
             RsObject
         >;
 } // MessageDetail namespace
@@ -145,8 +147,8 @@ struct Message : MessageDetail::MessageVariant
 
 std::ostream& operator<<(std::ostream&, const RqNotifyOnChange&);
 std::ostream& operator<<(std::ostream&, const RsNotifyOnChange&);
-std::ostream& operator<<(std::ostream&, const RqIndices&);
-std::ostream& operator<<(std::ostream&, const RsIndices&);
+std::ostream& operator<<(std::ostream&, const RqIndex&);
+std::ostream& operator<<(std::ostream&, const RsIndex&);
 std::ostream& operator<<(std::ostream&, const RqObject&);
 std::ostream& operator<<(std::ostream&, const RsObject&);
 std::ostream& operator<<(std::ostream&, const Request&);

@@ -130,6 +130,7 @@ public:
         ar & _vv;
     }
 
+    bool empty() const { return _vv.empty(); }
     size_t size() const { return _vv.size(); }
     auto begin() const { return _vv.begin(); }
     auto end()   const { return _vv.end();   }

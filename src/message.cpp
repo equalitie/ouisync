@@ -89,12 +89,12 @@ std::ostream& ouisync::operator<<(std::ostream& os, const RsNotifyOnChange& m) {
     return os << "RsNotifyOnChange{}";
 }
 
-std::ostream& ouisync::operator<<(std::ostream& os, const RqIndices& rq) {
-    return os << "RqIndices{}";
+std::ostream& ouisync::operator<<(std::ostream& os, const RqIndex& rq) {
+    return os << "RqIndex{}";
 }
 
-std::ostream& ouisync::operator<<(std::ostream& os, const RsIndices& m) {
-    return os << "RsIndices{...}";
+std::ostream& ouisync::operator<<(std::ostream& os, const RsIndex& m) {
+    return os << "RsIndex{...}";
 }
 
 std::ostream& ouisync::operator<<(std::ostream& os, const RqObject& rq) {

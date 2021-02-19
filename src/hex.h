@@ -3,6 +3,7 @@
 #include <string>
 #include <array>
 #include <boost/optional.hpp>
+#include <boost/utility/string_view.hpp>
 
 namespace ouisync {
 

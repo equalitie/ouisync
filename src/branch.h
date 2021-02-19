@@ -39,29 +39,25 @@ public:
         using Counter = uint64_t;
 
       public:
-        StateChangeWait(executor_type ex) :
-            _change_state_counter(1), _on_change(ex) {}
+        StateChangeWait(executor_type ex)
+            : _state_change_counter(0), _on_change(ex) {}
 
-
-        [[nodiscard]] net::awaitable<Counter> wait(Counter prev, Cancel cancel) {
-            if (prev <= _change_state_counter) {
+        [[nodiscard]] net::awaitable<Counter> wait(Opt<Counter> prev, Cancel cancel) {
+            if (!prev || *prev <= _state_change_counter) {
                 co_await _on_change.wait(cancel);
             }
-            co_return _change_state_counter;
+            co_return _state_change_counter;
         }
 
         void notify() {
-            _change_state_counter++;
+            _state_change_counter++;
             _on_change.notify();
         }
 
       private:
-        Counter _change_state_counter;
+        Counter _state_change_counter;
         Wait _on_change;
     };
-
-public:
-    using Indices = std::map<UserId, Index>;
 
 public:
     static
@@ -69,10 +65,6 @@ public:
 
     static
     Branch load(executor_type, const fs::path& file_path, UserId user_id, ObjectStore&, Options::Branch);
-
-    const Commit& commit() const { return _indices.find(_user_id)->second.commit(); }
-
-    const ObjectId& root_id() const { return commit().root_id; }
 
     BranchView branch_view() const;
 
@@ -90,34 +82,31 @@ public:
 
     void mkdir(PathRange);
 
-    const VersionVector& stamp() const { return commit().stamp; }
-
     const UserId& user_id() const { return _user_id; }
 
     friend std::ostream& operator<<(std::ostream&, const Branch&);
 
     template<class Archive>
     void serialize(Archive& ar, unsigned) {
-        ar & _indices & _missing_objects;
+        ar & _index;
     }
 
     void sanity_check() {} // TODO
 
-    const Indices& indices() const { return _indices; }
+    const Index& index() const { return _index; }
 
     ObjectStore& objstore() const { return _objstore; }
 
     StateChangeWait& on_change() { return _state_change_wait; }
 
-    void merge_indices(const Indices& indices);
+    void merge_index(const Index&);
 
-    const std::set<ObjectId>& missing_objects() const { return _missing_objects; }
+    const std::set<ObjectId>& missing_objects() const { return _index.missing_objects(); }
 
 private:
     friend class BranchView;
 
     Branch(executor_type, const fs::path& file_path, const UserId&, ObjectStore&, Options::Branch);
-    Branch(executor_type, const fs::path& file_path, const UserId&, Commit, ObjectStore&, Options::Branch);
 
     void store_self() const;
 
@@ -132,7 +121,7 @@ private:
 
     std::set<ObjectId> roots() const;
 
-    void merge_index(const UserId&, const Index&);
+    void update_user_index(const UserId&, const Index&);
 
 private:
     executor_type _ex;
@@ -140,8 +129,7 @@ private:
     Options::Branch _options;
     ObjectStore& _objstore;
     UserId _user_id;
-    Indices _indices;
-    std::set<ObjectId> _missing_objects;
+    Index _index;
 
     StateChangeWait _state_change_wait;
 };
