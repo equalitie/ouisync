@@ -221,6 +221,7 @@ void Index::merge(const Index& remote_index, ObjectStore& objstore)
 
                 if (!someone_has(id)) {
                     objstore.remove(id);
+                    _missing_objects.erase(id);
                 }
             }
             else if (remote) {
