@@ -1,5 +1,4 @@
 #include "repository.h"
-#include "branch_view.h"
 #include "random.h"
 #include "hex.h"
 #include "archive.h"

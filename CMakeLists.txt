@@ -47,7 +47,6 @@ endfunction(set_warning_level)
 add_library(libouisync STATIC
     "src/user_id.cpp"
     "src/branch.cpp"
-    "src/branch_view.cpp"
     "src/repository.cpp"
     "src/file_system_attrib.cpp"
     "src/options.cpp"

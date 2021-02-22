@@ -2,7 +2,6 @@
 #include "variant.h"
 #include "error.h"
 #include "path_range.h"
-#include "branch_view.h"
 #include "archive.h"
 #include "ouisync_assert.h"
 #include "multi_dir.h"
@@ -527,15 +526,28 @@ void Branch::store_self() const {
 
 //--------------------------------------------------------------------
 
-BranchView Branch::branch_view() const {
-    return BranchView(_objstore, _index.commits());
-}
-
-//--------------------------------------------------------------------
-
 std::ostream& ouisync::operator<<(std::ostream& os, const Branch& branch)
 {
-    os  << "Branch:\n";
-    branch.branch_view().show(os);
+    os  << "Branch: TODO\n";
+//    if (!objects.exists(id)) {
+//        os << pad << "!!! object " << id << " does not exist !!!\n";
+//        return;
+//    }
+//
+//    auto obj = objects.load<Directory, FileBlob>(id);
+//
+//    apply(obj,
+//            [&] (const Directory& d) {
+//                os << pad << "Directory ID:" << d.calculate_id() << "\n";
+//                for (auto& [name, name_map] : d) {
+//                    for (auto& [user, vobj] : name_map) {
+//                        os << pad << "  U: " << user << "\n";
+//                        _show(os, objects, vobj.id, pad + "    ");
+//                    }
+//                }
+//            },
+//            [&] (const FileBlob& b) {
+//                os << pad << b << "\n";
+//            });
     return os;
 }
