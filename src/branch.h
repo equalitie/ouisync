@@ -110,7 +110,7 @@ private:
 
     template<class F> void update_dir(PathRange, F&&);
 
-    std::unique_ptr<TreeOp> root();
+    std::unique_ptr<TreeOp> root_op();
     std::unique_ptr<TreeOp> cd_into(PathRange);
     std::unique_ptr<FileOp> get_file(PathRange);
 

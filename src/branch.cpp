@@ -316,6 +316,7 @@ private:
     unique_ptr<Branch::TreeOp> _parent;
     Directory::MutableHandle _tree_entry;
 };
+
 //--------------------------------------------------------------------
 
 static
@@ -334,14 +335,14 @@ void Branch::do_commit(OpPtr& op)
 }
 
 //--------------------------------------------------------------------
-unique_ptr<Branch::TreeOp> Branch::root()
+unique_ptr<Branch::TreeOp> Branch::root_op()
 {
     return make_unique<Branch::RootOp>(_objstore, _user_id, _index);
 }
 
 unique_ptr<Branch::TreeOp> Branch::cd_into(PathRange path)
 {
-    unique_ptr<TreeOp> dir = root();
+    unique_ptr<TreeOp> dir = root_op();
 
     for (auto& p : path) {
         dir = make_unique<Branch::CdOp>(move(dir), _user_id, p);
