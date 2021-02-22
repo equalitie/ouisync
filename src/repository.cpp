@@ -12,15 +12,16 @@
 
 #include <boost/serialization/vector.hpp>
 
+#define SANITY_CHECK_EACH_IO_FN false
+#define DEBUG_PRINT_CALL false
+
 using namespace ouisync;
 using std::vector;
 using std::map;
 using std::string;
 using boost::get;
 using std::make_pair;
-
-#define SANITY_CHECK_EACH_IO_FN false
-#define DEBUG_PRINT_CALL false
+using std::cerr;
 
 Repository::Repository(executor_type ex, Options options) :
     _ex(std::move(ex)),
@@ -41,29 +42,37 @@ Repository::Repository(executor_type ex, Options options) :
     std::cout << "User ID: " << _user_id << "\n";
 }
 
-net::awaitable<Repository::Attrib> Repository::get_attr(PathRange path)
+net::awaitable<Repository::Attrib> Repository::get_attr(PathRange path) try
 {
 #if DEBUG_PRINT_CALL
-    std::cerr << "Enter: " << __PRETTY_FUNCTION__ << "\n";
+    cerr << "Enter: Repository::get_attr " << path << "\n";
+    auto at_exit = defer([&] { cerr << "Leave: Repository::get_attr\n"; });
 #endif
 
 #if SANITY_CHECK_EACH_IO_FN
     sanity_check();
-    auto at_exit = defer([&] { sanity_check(); });
+    auto check_at_exit = defer([&] { sanity_check(); });
 #endif
 
     co_return _branch->branch_view().get_attr(path);
 }
+catch (const std::exception& e) {
+#if DEBUG_PRINT_CALL
+    cerr << "Exception: Repository::get_attr " << path << " what: " << e.what() << "\n";
+#endif
+    throw;
+}
 
-net::awaitable<vector<string>> Repository::readdir(PathRange path)
+net::awaitable<vector<string>> Repository::readdir(PathRange path) try
 {
 #if DEBUG_PRINT_CALL
-    std::cerr << "Enter: " << __PRETTY_FUNCTION__ << "\n";
+    cerr << "Enter: Repository::readdir " << path << "\n";
+    auto at_exit = defer([&] { cerr << "Leave: Repository::readdir\n"; });
 #endif
 
 #if SANITY_CHECK_EACH_IO_FN
     sanity_check();
-    auto at_exit = defer([&] { sanity_check(); });
+    auto check_at_exit = defer([&] { sanity_check(); });
 #endif
 
     std::vector<std::string> nodes;
@@ -76,16 +85,23 @@ net::awaitable<vector<string>> Repository::readdir(PathRange path)
 
     co_return nodes;
 }
+catch (const std::exception& e) {
+#if DEBUG_PRINT_CALL
+    cerr << "Exception: Repository::readdir " << path << " what: " << e.what() << "\n";
+#endif
+    throw;
+}
 
-net::awaitable<size_t> Repository::read(PathRange path, char* buf, size_t size, off_t offset)
+net::awaitable<size_t> Repository::read(PathRange path, char* buf, size_t size, off_t offset) try
 {
 #if DEBUG_PRINT_CALL
-    std::cerr << "Enter: " << __PRETTY_FUNCTION__ << "\n";
+    cerr << "Enter: Repository::read " << path << "\n";
+    auto at_exit = defer([&] { cerr << "Leave: Repository::read\n"; });
 #endif
 
 #if SANITY_CHECK_EACH_IO_FN
     sanity_check();
-    auto at_exit = defer([&] { sanity_check(); });
+    auto check_at_exit = defer([&] { sanity_check(); });
 #endif
 
     if (path.empty()) {
@@ -94,16 +110,23 @@ net::awaitable<size_t> Repository::read(PathRange path, char* buf, size_t size, 
 
     co_return _branch->branch_view().read(path, buf, size, offset);
 }
+catch (const std::exception& e) {
+#if DEBUG_PRINT_CALL
+    cerr << "Exception: Repository::read " << path << " what: " << e.what() << "\n";
+#endif
+    throw;
+}
 
-net::awaitable<size_t> Repository::write(PathRange path, const char* buf, size_t size, off_t offset)
+net::awaitable<size_t> Repository::write(PathRange path, const char* buf, size_t size, off_t offset) try
 {
 #if DEBUG_PRINT_CALL
-    std::cerr << "Enter: " << __PRETTY_FUNCTION__ << "\n";
+    cerr << "Enter: Repository::write " << path << "\n";
+    auto at_exit = defer([&] { cerr << "Leave: Repository::write\n"; });
 #endif
 
 #if SANITY_CHECK_EACH_IO_FN
     sanity_check();
-    auto at_exit = defer([&] { sanity_check(); });
+    auto check_at_exit = defer([&] { sanity_check(); });
 #endif
 
     if (path.empty()) {
@@ -114,16 +137,23 @@ net::awaitable<size_t> Repository::write(PathRange path, const char* buf, size_t
 
     co_return retval;
 }
+catch (const std::exception& e) {
+#if DEBUG_PRINT_CALL
+    cerr << "Exception: Repository::write " << path << " what: " << e.what() << "\n";
+#endif
+    throw;
+}
 
-net::awaitable<void> Repository::mknod(PathRange path, mode_t mode, dev_t dev)
+net::awaitable<void> Repository::mknod(PathRange path, mode_t mode, dev_t dev) try
 {
 #if DEBUG_PRINT_CALL
-    std::cerr << "Enter: " << __PRETTY_FUNCTION__ << "\n";
+    cerr << "Enter: Repository::mknod " << path << "\n";
+    auto at_exit = defer([&] { cerr << "Leave: Repository::mknod\n"; });
 #endif
 
 #if SANITY_CHECK_EACH_IO_FN
     sanity_check();
-    auto at_exit = defer([&] { sanity_check(); });
+    auto check_at_exit = defer([&] { sanity_check(); });
 #endif
 
     if (S_ISFIFO(mode)) throw_error(sys::errc::invalid_argument); // TODO?
@@ -136,32 +166,46 @@ net::awaitable<void> Repository::mknod(PathRange path, mode_t mode, dev_t dev)
 
     co_return;
 }
+catch (const std::exception& e) {
+#if DEBUG_PRINT_CALL
+    cerr << "Exception: Repository::mknod " << path << " what: " << e.what() << "\n";
+#endif
+    throw;
+}
 
-net::awaitable<void> Repository::mkdir(PathRange path, mode_t mode)
+net::awaitable<void> Repository::mkdir(PathRange path, mode_t mode) try
 {
 #if DEBUG_PRINT_CALL
-    std::cerr << "Enter: " << __PRETTY_FUNCTION__ << "\n";
+    cerr << "Enter: Repository::mkdir " << path << "\n";
+    auto at_exit = defer([&] { cerr << "Leave: Repository::mkdir\n"; });
 #endif
 
 #if SANITY_CHECK_EACH_IO_FN
     sanity_check();
-    auto at_exit = defer([&] { sanity_check(); });
+    auto check_at_exit = defer([&] { sanity_check(); });
 #endif
 
     _branch->mkdir(path);
 
     co_return;
 }
+catch (const std::exception& e) {
+#if DEBUG_PRINT_CALL
+    cerr << "Exception: Repository::mkdir " << path << " what: " << e.what() << "\n";
+#endif
+    throw;
+}
 
-net::awaitable<void> Repository::remove_file(PathRange path)
+net::awaitable<void> Repository::remove_file(PathRange path) try
 {
 #if DEBUG_PRINT_CALL
-    std::cerr << "Enter: " << __PRETTY_FUNCTION__ << "\n";
+    cerr << "Enter: Repository::remove_file " << path << "\n";
+    auto at_exit = defer([&] { cerr << "Leave: Repository::remove_file\n"; });
 #endif
 
 #if SANITY_CHECK_EACH_IO_FN
     sanity_check();
-    auto at_exit = defer([&] { sanity_check(); });
+    auto check_at_exit = defer([&] { sanity_check(); });
 #endif
 
     if (path.empty()) {
@@ -172,16 +216,23 @@ net::awaitable<void> Repository::remove_file(PathRange path)
 
     co_return;
 }
+catch (const std::exception& e) {
+#if DEBUG_PRINT_CALL
+    cerr << "Exception: Repository::remove_file " << path << " what: " << e.what() << "\n";
+#endif
+    throw;
+}
 
-net::awaitable<void> Repository::remove_directory(PathRange path)
+net::awaitable<void> Repository::remove_directory(PathRange path) try
 {
 #if DEBUG_PRINT_CALL
-    std::cerr << "Enter: " << __PRETTY_FUNCTION__ << "\n";
+    cerr << "Enter: Repository::remove_directory " << path << "\n";
+    auto at_exit = defer([&] { cerr << "Leave: Repository::remove_directory\n"; });
 #endif
 
 #if SANITY_CHECK_EACH_IO_FN
     sanity_check();
-    auto at_exit = defer([&] { sanity_check(); });
+    auto check_at_exit = defer([&] { sanity_check(); });
 #endif
 
     if (path.empty()) {
@@ -192,16 +243,23 @@ net::awaitable<void> Repository::remove_directory(PathRange path)
 
     co_return;
 }
+catch (const std::exception& e) {
+#if DEBUG_PRINT_CALL
+    cerr << "Exception: Repository::remove_directory " << path << " what: " << e.what() << "\n";
+#endif
+    throw;
+}
 
-net::awaitable<size_t> Repository::truncate(PathRange path, size_t size)
+net::awaitable<size_t> Repository::truncate(PathRange path, size_t size) try
 {
 #if DEBUG_PRINT_CALL
-    std::cerr << "Enter: " << __PRETTY_FUNCTION__ << "\n";
+    cerr << "Enter: Repository::truncate " << path << "\n";
+    auto at_exit = defer([&] { cerr << "Leave: Repository::truncate\n"; });
 #endif
 
 #if SANITY_CHECK_EACH_IO_FN
     sanity_check();
-    auto at_exit = defer([&] { sanity_check(); });
+    auto check_at_exit = defer([&] { sanity_check(); });
 #endif
 
     if (path.empty()) {
@@ -211,6 +269,12 @@ net::awaitable<size_t> Repository::truncate(PathRange path, size_t size)
     auto retval = _branch->truncate(path, size);
 
     co_return retval;
+}
+catch (const std::exception& e) {
+#if DEBUG_PRINT_CALL
+    cerr << "Exception: Repository::truncate " << path << " what: " << e.what() << "\n";
+#endif
+    throw;
 }
 
 void Repository::sanity_check() const
