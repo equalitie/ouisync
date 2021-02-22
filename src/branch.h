@@ -105,6 +105,8 @@ public:
 
     FileSystemAttrib get_attr(PathRange path) const;
 
+    size_t read(PathRange path, const char* buf, size_t size, size_t offset) const;
+
 private:
     friend class BranchView;
 

@@ -108,7 +108,7 @@ net::awaitable<size_t> Repository::read(PathRange path, char* buf, size_t size, 
         throw_error(sys::errc::is_a_directory);
     }
 
-    co_return _branch->branch_view().read(path, buf, size, offset);
+    co_return _branch->read(path, buf, size, offset);
 }
 catch (const std::exception& e) {
 #if DEBUG_PRINT_CALL

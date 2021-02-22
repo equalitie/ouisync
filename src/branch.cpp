@@ -396,6 +396,28 @@ FileSystemAttrib Branch::get_attr(PathRange path) const
 
 //--------------------------------------------------------------------
 
+size_t Branch::read(PathRange path, const char* buf, size_t size, size_t offset) const
+{
+    if (path.empty()) throw_error(sys::errc::is_a_directory);
+
+    MultiDir dir = root_multi_dir().cd_into(parent(path));
+
+    auto blob = _objstore.load<FileBlob>(dir.file(path.back()));
+
+    size_t len = blob.size();
+
+    if (size_t(offset) < len) {
+        if (offset + size > len) size = len - offset;
+        memcpy((void*)buf, blob.data() + offset, size);
+    } else {
+        size = 0;
+    }
+
+    return size;
+}
+
+//--------------------------------------------------------------------
+
 void Branch::store(PathRange path, const FileBlob& blob)
 {
     auto file = get_file(path);

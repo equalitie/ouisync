@@ -37,28 +37,6 @@ BranchView::BranchView(ObjectStore& objects, map<UserId, VersionedObject> commit
 
 //--------------------------------------------------------------------
 
-size_t BranchView::read(PathRange path, const char* buf, size_t size, size_t offset) const
-{
-    if (path.empty()) throw_error(sys::errc::is_a_directory);
-
-    MultiDir dir = root().cd_into(_parent(path));
-
-    auto blob = _objects.load<FileBlob>(dir.file(path.back()));
-
-    size_t len = blob.size();
-
-    if (size_t(offset) < len) {
-        if (offset + size > len) size = len - offset;
-        memcpy((void*)buf, blob.data() + offset, size);
-    } else {
-        size = 0;
-    }
-
-    return size;
-}
-
-//--------------------------------------------------------------------
-
 static
 void _show(std::ostream& os, ObjectStore& objects, ObjectId id, std::string pad = "") {
     if (!objects.exists(id)) {
