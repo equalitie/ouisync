@@ -15,6 +15,11 @@ class ObjectStore;
 
 class MultiDir {
 public:
+    struct Version {
+        UserId user;
+        VersionedObject vobj;
+    };
+
     using Versions = std::map<UserId, VersionedObject>;
 
 public:
@@ -29,9 +34,14 @@ public:
 
     MultiDir cd_into(PathRange path) const;
 
-    std::map<std::string, ObjectId> list() const;
+    std::set<std::string> list() const;
 
     ObjectId file(const std::string& name) const;
+
+    Opt<Version> pick_subdirectory_to_edit(const UserId& preferred_user, const string_view name);
+
+private:
+    std::map<std::string, ObjectId> list_() const;
 
 private:
     Versions versions;

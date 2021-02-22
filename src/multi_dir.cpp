@@ -5,8 +5,10 @@
 #include "error.h"
 
 #include <sstream>
+#include <iostream>
 
 using namespace ouisync;
+using std::set;
 using std::map;
 using std::string;
 using std::stringstream;
@@ -56,6 +58,50 @@ private:
     map<UserId, ObjectId> _versions;
 };
 
+Opt<MultiDir::Version> MultiDir::pick_subdirectory_to_edit(
+        const UserId& preferred_user, const string_view name)
+{
+    auto i = versions.find(preferred_user);
+
+    if (i != versions.end()) {
+        return Version{preferred_user, i->second};
+    }
+
+    Opt<Version> ret;
+
+    for (auto& [subdir_user, subdir_vobj] : versions) {
+        if (!ret) {
+            ret = Version{subdir_user, subdir_vobj};
+            continue;
+        }
+
+        if (ret->user == preferred_user) {
+            if (subdir_user != preferred_user) continue;
+            if (ret->vobj.has_smaller_user_version(subdir_vobj, preferred_user)) {
+                ret->vobj = subdir_vobj;
+            }
+        }
+        else {
+            if (subdir_user == preferred_user) {
+                ret->user = subdir_user;
+                ret->vobj = subdir_vobj;
+            }
+            else {
+                if (ret->vobj.happened_before(subdir_vobj)) {
+                    ret->user = subdir_user;
+                    ret->vobj = subdir_vobj;
+                }
+                else {
+                    // XXX: Use some kind of heuristic to try to get the
+                    // most recent vobj out of all concurrent ones.
+                }
+            }
+        }
+    }
+
+    return ret;
+}
+
 bool MultiDir::has_subdirectory(string_view name) const
 {
     for (auto& [user, vobj] : versions) {
@@ -100,32 +146,30 @@ MultiDir MultiDir::cd_into(PathRange path) const
 
 ObjectId MultiDir::file(const string& name) const
 {
-    // XXX: using `list()` is an overkill here.
-    auto lst = list();
-    auto i = lst.find(name);
-    if (i == lst.end()) throw_error(sys::errc::no_such_file_or_directory);
-    return i->second;
+    for (auto& [user, vobj] : versions) {
+        auto dir = objstore->load<Directory>(vobj.id);
+
+        auto usermap = dir.find(name);
+        if (!usermap) continue;
+
+        // XXX: resolve conflicts
+        return usermap.begin()->second.id;
+    }
+
+    throw_error(sys::errc::no_such_file_or_directory);
+    return {};
 }
 
-map<string, ObjectId> MultiDir::list() const {
-    map<string, ConflictNameAssigner> name_resolvers;
+set<string> MultiDir::list() const {
+    set<string> ret;
 
     for (auto& [user, vobj] : versions) {
-        auto tree = objstore->load<Directory>(vobj.id);
-        for (auto& [name, versioned_ids] : tree) {
-            auto [i, _] = name_resolvers.insert({name, {name}});
-            i->second.add(versioned_ids);
+        auto dir = objstore->load<Directory>(vobj.id);
+        for (auto& [filename, _] : dir) {
+            ret.insert(filename);
         }
     }
 
-    map<string, ObjectId> result;
-
-    for (auto& [_, name_resolver] : name_resolvers) {
-        for (auto& [name, object_id] : name_resolver.resolve()) {
-            result.insert({name, object_id});
-        }
-    }
-
-    return result;
+    return ret;
 }
 

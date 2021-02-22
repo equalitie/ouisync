@@ -5,6 +5,7 @@
 #include "branch_view.h"
 #include "archive.h"
 #include "ouisync_assert.h"
+#include "multi_dir.h"
 
 #include <boost/filesystem.hpp>
 #include <boost/serialization/vector.hpp>
@@ -74,6 +75,7 @@ class Branch::Op {
 class Branch::TreeOp : public Branch::Op {
     public:
     virtual Directory& tree() = 0;
+    virtual const MultiDir& multi_dir() const = 0;
     virtual ~TreeOp() {};
 };
 
@@ -83,7 +85,8 @@ public:
         _objstore(objstore),
         _this_user_id(this_user_id),
         _index(index),
-        _original_commit(*_index.commit(this_user_id))
+        _original_commit(*_index.commit(this_user_id)),
+        _multi_dir(_index.commits(), objstore)
     {
         _tree = _objstore.load<Directory>(_original_commit.id);
     }
@@ -141,40 +144,36 @@ public:
         _objstore.remove(obj_id);
     }
 
+    const MultiDir& multi_dir() const override { return _multi_dir; }
+
 private:
     ObjectStore& _objstore;
     UserId _this_user_id;
     Directory _tree;
     Index& _index;
     VersionedObject _original_commit;
+    MultiDir _multi_dir;
 };
 
 class Branch::CdOp : public Branch::TreeOp {
-    struct Old {
-        ObjectId tree_id;
-        VersionVector tree_vv;
-    };
 public:
     CdOp(unique_ptr<Branch::TreeOp> parent, const UserId& this_user_id, string dirname, bool create = false) :
         _parent(move(parent)),
         _root(_parent->root()),
         _this_user_id(this_user_id),
-        _dirname(move(dirname))
+        _dirname(move(dirname)),
+        _multi_dir(_parent->multi_dir().cd_into(_dirname))
     {
-        auto child_versions = _parent->tree().find(_dirname);
+        auto opt_user_version = _multi_dir.pick_subdirectory_to_edit(this_user_id, _dirname);
 
-        if (!child_versions && !create) throw_error(sys::errc::no_such_file_or_directory);
-
-        for (auto& [user_id, vobj] : child_versions) {
-            // XXX: It should be enough to take a version that has been completely downloaded.
-            // But we don't keep that meta information yet. Thus we're using the fact here that
-            // whenever a user makes a change to a node, that node must have been complete.
-            if (user_id == _this_user_id) {
-                _old = Old{ vobj.id, vobj.versions };
-                _tree = objstore().load<Directory>(vobj.id);
-                return;
-            }
+        if (!opt_user_version) {
+            if (!create) throw_error(sys::errc::no_such_file_or_directory);
+            return; // One will be created in `commit()`
         }
+
+        _old = opt_user_version->vobj;
+
+        _tree = objstore().load<Directory>(_old->id);
     }
 
     Directory& tree() override {
@@ -184,7 +183,7 @@ public:
     bool commit() override {
         auto new_tree_id = _tree.calculate_id();
 
-        if (_old && _old->tree_id == new_tree_id) {
+        if (_old && _old->id == new_tree_id) {
             return false;
         }
 
@@ -193,7 +192,7 @@ public:
         if (_old) {
             // XXX: We should make a union of all `_dirname`s per each users
             // that we've have downloaded *completely*.
-            new_vv = _old->tree_vv;
+            new_vv = _old->versions;
         }
 
         root()->increment(new_vv);
@@ -215,13 +214,16 @@ public:
 
     RootOp* root() override { return _root; }
 
+    const MultiDir& multi_dir() const override { return _multi_dir; }
+
 private:
     unique_ptr<TreeOp> _parent;
     RootOp* _root;
     UserId _this_user_id;
     string _dirname;
-    Opt<Old> _old;
+    Opt<VersionedObject> _old;
     Directory _tree;
+    MultiDir _multi_dir;
 };
 
 class Branch::FileOp : public Branch::Op {

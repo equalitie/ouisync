@@ -28,6 +28,10 @@ struct VersionedObject {
         return id < other.id;
     }
 
+    bool has_smaller_user_version(const VersionedObject& other, const UserId& user) const {
+        return versions.version_of(user) < other.versions.version_of(user);
+    }
+
     template<class Archive>
     void serialize(Archive& ar, const unsigned int) {
         ar & id;

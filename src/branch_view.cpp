@@ -43,8 +43,8 @@ set<string> BranchView::readdir(PathRange path) const
 
     set<string> names;
 
-    for (auto& [name, object_id] : dir.list()) {
-        names.insert(name);
+    for (auto& filename : dir.list()) {
+        names.insert(filename);
     }
 
     return names;
