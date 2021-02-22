@@ -77,7 +77,7 @@ net::awaitable<vector<string>> Repository::readdir(PathRange path) try
 
     std::vector<std::string> nodes;
 
-    auto dir = _branch->branch_view().readdir(path);
+    auto dir = _branch->readdir(path);
 
     for (auto& name : dir) {
         nodes.push_back(name);

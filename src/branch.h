@@ -101,6 +101,8 @@ public:
 
     const std::set<ObjectId>& missing_objects() const { return _index.missing_objects(); }
 
+    std::set<std::string> readdir(PathRange path) const;
+
 private:
     friend class BranchView;
 
@@ -111,6 +113,7 @@ private:
     template<class F> void update_dir(PathRange, F&&);
 
     std::unique_ptr<TreeOp> root_op();
+    MultiDir root_multi_dir() const;
     std::unique_ptr<TreeOp> cd_into(PathRange);
     std::unique_ptr<FileOp> get_file(PathRange);
 

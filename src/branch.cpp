@@ -340,6 +340,11 @@ unique_ptr<Branch::TreeOp> Branch::root_op()
     return make_unique<Branch::RootOp>(_objstore, _user_id, _index);
 }
 
+MultiDir Branch::root_multi_dir() const
+{
+    return MultiDir(_index.commits(), _objstore);
+}
+
 unique_ptr<Branch::TreeOp> Branch::cd_into(PathRange path)
 {
     unique_ptr<TreeOp> dir = root_op();
@@ -358,6 +363,13 @@ unique_ptr<Branch::FileOp> Branch::get_file(PathRange path)
     unique_ptr<TreeOp> dir = cd_into(parent(path));
 
     return make_unique<FileOp>(move(dir), _user_id, path.back());
+}
+
+//--------------------------------------------------------------------
+set<string> Branch::readdir(PathRange path) const
+{
+    MultiDir dir = root_multi_dir().cd_into(path);
+    return dir.list();
 }
 
 //--------------------------------------------------------------------

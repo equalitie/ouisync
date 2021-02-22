@@ -37,21 +37,6 @@ BranchView::BranchView(ObjectStore& objects, map<UserId, VersionedObject> commit
 
 //--------------------------------------------------------------------
 
-set<string> BranchView::readdir(PathRange path) const
-{
-    MultiDir dir = root().cd_into(path);
-
-    set<string> names;
-
-    for (auto& filename : dir.list()) {
-        names.insert(filename);
-    }
-
-    return names;
-}
-
-//--------------------------------------------------------------------
-
 FileSystemAttrib BranchView::get_attr(PathRange path) const
 {
     if (path.empty()) return FileSystemDirAttrib{};
