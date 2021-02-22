@@ -366,10 +366,32 @@ unique_ptr<Branch::FileOp> Branch::get_file(PathRange path)
 }
 
 //--------------------------------------------------------------------
+
 set<string> Branch::readdir(PathRange path) const
 {
     MultiDir dir = root_multi_dir().cd_into(path);
     return dir.list();
+}
+
+//--------------------------------------------------------------------
+
+FileSystemAttrib Branch::get_attr(PathRange path) const
+{
+    if (path.empty()) return FileSystemDirAttrib{};
+
+    MultiDir dir = root_multi_dir().cd_into(parent(path));
+
+    auto file_id = dir.file(path.back());
+
+    auto obj = _objstore.load<Directory::Nothing, FileBlob::Size>(file_id);
+
+    FileSystemAttrib attrib;
+
+    apply(obj,
+        [&] (const Directory::Nothing&) { attrib = FileSystemDirAttrib{}; },
+        [&] (const FileBlob::Size& b) { attrib = FileSystemFileAttrib{b.value}; });
+
+    return attrib;
 }
 
 //--------------------------------------------------------------------

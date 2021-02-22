@@ -103,6 +103,8 @@ public:
 
     std::set<std::string> readdir(PathRange path) const;
 
+    FileSystemAttrib get_attr(PathRange path) const;
+
 private:
     friend class BranchView;
 

@@ -54,7 +54,7 @@ net::awaitable<Repository::Attrib> Repository::get_attr(PathRange path) try
     auto check_at_exit = defer([&] { sanity_check(); });
 #endif
 
-    co_return _branch->branch_view().get_attr(path);
+    co_return _branch->get_attr(path);
 }
 catch (const std::exception& e) {
 #if DEBUG_PRINT_CALL

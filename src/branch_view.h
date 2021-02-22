@@ -19,8 +19,6 @@ class BranchView {
 public:
     BranchView(ObjectStore&, std::map<UserId, VersionedObject> commits);
 
-    FileSystemAttrib get_attr(PathRange path) const;
-
     size_t read(PathRange path, const char* buf, size_t size, size_t offset) const;
 
     void show(std::ostream&) const;

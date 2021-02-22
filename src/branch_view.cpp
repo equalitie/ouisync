@@ -37,27 +37,6 @@ BranchView::BranchView(ObjectStore& objects, map<UserId, VersionedObject> commit
 
 //--------------------------------------------------------------------
 
-FileSystemAttrib BranchView::get_attr(PathRange path) const
-{
-    if (path.empty()) return FileSystemDirAttrib{};
-
-    MultiDir dir = root().cd_into(_parent(path));
-
-    auto file_id = dir.file(path.back());
-
-    auto obj = _objects.load<Directory::Nothing, FileBlob::Size>(file_id);
-
-    FileSystemAttrib attrib;
-
-    apply(obj,
-        [&] (const Directory::Nothing&) { attrib = FileSystemDirAttrib{}; },
-        [&] (const FileBlob::Size& b) { attrib = FileSystemFileAttrib{b.value}; });
-
-    return attrib;
-}
-
-//--------------------------------------------------------------------
-
 size_t BranchView::read(PathRange path, const char* buf, size_t size, size_t offset) const
 {
     if (path.empty()) throw_error(sys::errc::is_a_directory);
