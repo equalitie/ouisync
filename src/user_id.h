@@ -40,6 +40,10 @@ public:
         return _uuid == other._uuid;
     }
 
+    bool operator!=(const UserId& other) const {
+        return _uuid != other._uuid;
+    }
+
     template<class Hash>
     friend void update_hash(const UserId& uid, Hash& hash)
     {
