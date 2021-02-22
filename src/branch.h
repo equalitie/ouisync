@@ -7,7 +7,6 @@
 #include "shortcuts.h"
 #include "file_system_attrib.h"
 #include "versioned_object.h"
-#include "branch_view.h"
 #include "options.h"
 #include "object_store.h"
 #include "index.h"
@@ -17,6 +16,8 @@
 #include <boost/optional.hpp>
 
 namespace ouisync {
+
+class MultiDir;
 
 class Branch {
 private:
@@ -64,8 +65,6 @@ public:
     static
     Branch load(executor_type, const fs::path& file_path, UserId user_id, ObjectStore&, Options::Branch);
 
-    BranchView branch_view() const;
-
     // XXX: Deprecated, use `write` instead. I believe these are currently
     // only being used in tests.
     void store(PathRange, const FileBlob&);
@@ -101,16 +100,21 @@ public:
 
     const std::set<ObjectId>& missing_objects() const { return _index.missing_objects(); }
 
-private:
-    friend class BranchView;
+    std::set<std::string> readdir(PathRange path) const;
 
+    FileSystemAttrib get_attr(PathRange path) const;
+
+    size_t read(PathRange path, const char* buf, size_t size, size_t offset) const;
+
+private:
     Branch(executor_type, const fs::path& file_path, const UserId&, ObjectStore&, Options::Branch);
 
     void store_self() const;
 
     template<class F> void update_dir(PathRange, F&&);
 
-    std::unique_ptr<TreeOp> root();
+    std::unique_ptr<TreeOp> root_op();
+    MultiDir root_multi_dir() const;
     std::unique_ptr<TreeOp> cd_into(PathRange);
     std::unique_ptr<FileOp> get_file(PathRange);
 

@@ -2,7 +2,6 @@
 #include "variant.h"
 #include "error.h"
 #include "path_range.h"
-#include "branch_view.h"
 #include "archive.h"
 #include "ouisync_assert.h"
 #include "multi_dir.h"
@@ -316,6 +315,7 @@ private:
     unique_ptr<Branch::TreeOp> _parent;
     Directory::MutableHandle _tree_entry;
 };
+
 //--------------------------------------------------------------------
 
 static
@@ -334,14 +334,19 @@ void Branch::do_commit(OpPtr& op)
 }
 
 //--------------------------------------------------------------------
-unique_ptr<Branch::TreeOp> Branch::root()
+unique_ptr<Branch::TreeOp> Branch::root_op()
 {
     return make_unique<Branch::RootOp>(_objstore, _user_id, _index);
 }
 
+MultiDir Branch::root_multi_dir() const
+{
+    return MultiDir(_index.commits(), _objstore);
+}
+
 unique_ptr<Branch::TreeOp> Branch::cd_into(PathRange path)
 {
-    unique_ptr<TreeOp> dir = root();
+    unique_ptr<TreeOp> dir = root_op();
 
     for (auto& p : path) {
         dir = make_unique<Branch::CdOp>(move(dir), _user_id, p);
@@ -357,6 +362,57 @@ unique_ptr<Branch::FileOp> Branch::get_file(PathRange path)
     unique_ptr<TreeOp> dir = cd_into(parent(path));
 
     return make_unique<FileOp>(move(dir), _user_id, path.back());
+}
+
+//--------------------------------------------------------------------
+
+set<string> Branch::readdir(PathRange path) const
+{
+    MultiDir dir = root_multi_dir().cd_into(path);
+    return dir.list();
+}
+
+//--------------------------------------------------------------------
+
+FileSystemAttrib Branch::get_attr(PathRange path) const
+{
+    if (path.empty()) return FileSystemDirAttrib{};
+
+    MultiDir dir = root_multi_dir().cd_into(parent(path));
+
+    auto file_id = dir.file(path.back());
+
+    auto obj = _objstore.load<Directory::Nothing, FileBlob::Size>(file_id);
+
+    FileSystemAttrib attrib;
+
+    apply(obj,
+        [&] (const Directory::Nothing&) { attrib = FileSystemDirAttrib{}; },
+        [&] (const FileBlob::Size& b) { attrib = FileSystemFileAttrib{b.value}; });
+
+    return attrib;
+}
+
+//--------------------------------------------------------------------
+
+size_t Branch::read(PathRange path, const char* buf, size_t size, size_t offset) const
+{
+    if (path.empty()) throw_error(sys::errc::is_a_directory);
+
+    MultiDir dir = root_multi_dir().cd_into(parent(path));
+
+    auto blob = _objstore.load<FileBlob>(dir.file(path.back()));
+
+    size_t len = blob.size();
+
+    if (size_t(offset) < len) {
+        if (offset + size > len) size = len - offset;
+        memcpy((void*)buf, blob.data() + offset, size);
+    } else {
+        size = 0;
+    }
+
+    return size;
 }
 
 //--------------------------------------------------------------------
@@ -470,15 +526,28 @@ void Branch::store_self() const {
 
 //--------------------------------------------------------------------
 
-BranchView Branch::branch_view() const {
-    return BranchView(_objstore, _index.commits());
-}
-
-//--------------------------------------------------------------------
-
 std::ostream& ouisync::operator<<(std::ostream& os, const Branch& branch)
 {
-    os  << "Branch:\n";
-    branch.branch_view().show(os);
+    os  << "Branch: TODO\n";
+//    if (!objects.exists(id)) {
+//        os << pad << "!!! object " << id << " does not exist !!!\n";
+//        return;
+//    }
+//
+//    auto obj = objects.load<Directory, FileBlob>(id);
+//
+//    apply(obj,
+//            [&] (const Directory& d) {
+//                os << pad << "Directory ID:" << d.calculate_id() << "\n";
+//                for (auto& [name, name_map] : d) {
+//                    for (auto& [user, vobj] : name_map) {
+//                        os << pad << "  U: " << user << "\n";
+//                        _show(os, objects, vobj.id, pad + "    ");
+//                    }
+//                }
+//            },
+//            [&] (const FileBlob& b) {
+//                os << pad << b << "\n";
+//            });
     return os;
 }

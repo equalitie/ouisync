@@ -1,5 +1,4 @@
 #include "repository.h"
-#include "branch_view.h"
 #include "random.h"
 #include "hex.h"
 #include "archive.h"
@@ -54,7 +53,7 @@ net::awaitable<Repository::Attrib> Repository::get_attr(PathRange path) try
     auto check_at_exit = defer([&] { sanity_check(); });
 #endif
 
-    co_return _branch->branch_view().get_attr(path);
+    co_return _branch->get_attr(path);
 }
 catch (const std::exception& e) {
 #if DEBUG_PRINT_CALL
@@ -77,7 +76,7 @@ net::awaitable<vector<string>> Repository::readdir(PathRange path) try
 
     std::vector<std::string> nodes;
 
-    auto dir = _branch->branch_view().readdir(path);
+    auto dir = _branch->readdir(path);
 
     for (auto& name : dir) {
         nodes.push_back(name);
@@ -108,7 +107,7 @@ net::awaitable<size_t> Repository::read(PathRange path, char* buf, size_t size, 
         throw_error(sys::errc::is_a_directory);
     }
 
-    co_return _branch->branch_view().read(path, buf, size, offset);
+    co_return _branch->read(path, buf, size, offset);
 }
 catch (const std::exception& e) {
 #if DEBUG_PRINT_CALL
