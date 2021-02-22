@@ -34,7 +34,7 @@ Branch Branch::create(executor_type ex, const fs::path& path, UserId user_id, Ob
 
     auto empty_dir_id = objstore.store(Directory{});
 
-    b._index = Index(user_id, {{}, empty_dir_id});
+    b._index = Index(user_id, {empty_dir_id, {}});
 
     b.store_self();
 
@@ -85,7 +85,7 @@ public:
         _index(index),
         _original_commit(*_index.commit(this_user_id))
     {
-        _tree = _objstore.load<Directory>(_original_commit.root_id);
+        _tree = _objstore.load<Directory>(_original_commit.id);
     }
 
     Directory& tree() override {
@@ -94,7 +94,7 @@ public:
 
     bool commit() override {
         auto new_id = _tree.calculate_id();
-        auto old_id = _original_commit.root_id;
+        auto old_id = _original_commit.id;
 
         if (old_id == new_id) return false;
 
@@ -119,7 +119,7 @@ public:
     RootOp* root() override { return this; }
 
     void increment(VersionVector& vv) const {
-        vv.set_version(_this_user_id, _original_commit.stamp.version_of(_this_user_id) + 1);
+        vv.set_version(_this_user_id, _original_commit.versions.version_of(_this_user_id) + 1);
     }
 
     void remove_recursive(const ObjectId& obj_id, const ObjectId& parent_id) {
@@ -146,7 +146,7 @@ private:
     UserId _this_user_id;
     Directory _tree;
     Index& _index;
-    Commit _original_commit;
+    VersionedObject _original_commit;
 };
 
 class Branch::CdOp : public Branch::TreeOp {
@@ -170,8 +170,8 @@ public:
             // But we don't keep that meta information yet. Thus we're using the fact here that
             // whenever a user makes a change to a node, that node must have been complete.
             if (user_id == _this_user_id) {
-                _old = Old{ vobj.object_id, vobj.version_vector };
-                _tree = objstore().load<Directory>(vobj.object_id);
+                _old = Old{ vobj.id, vobj.versions };
+                _tree = objstore().load<Directory>(vobj.id);
                 return;
             }
         }
@@ -225,12 +225,6 @@ private:
 };
 
 class Branch::FileOp : public Branch::Op {
-private:
-    struct OldData {
-        ObjectId blob_id;
-        VersionVector version_vector;
-    };
-
 public:
     FileOp(unique_ptr<TreeOp> parent, const UserId& this_user_id, string filename) :
         _parent(move(parent)),
@@ -246,8 +240,8 @@ public:
         auto i = per_name.find(_this_user_id);
 
         if (i != per_name.end()) {
-            _old = OldData { i->second.object_id, i->second.version_vector };
-            _blob = objstore().load<FileBlob>(_old->blob_id);
+            _old = i->second;
+            _blob = objstore().load<FileBlob>(_old->id);
         }
     }
 
@@ -263,14 +257,14 @@ public:
 
         auto new_id = _blob->calculate_id();
 
-        if (_old && _old->blob_id == new_id) return false;
+        if (_old && _old->id == new_id) return false;
 
         objstore().store(*_blob);
 
         VersionVector vv;
 
         if (_old) {
-            vv = _old->version_vector;
+            vv = _old->versions;
         }
 
         root()->increment(vv);
@@ -290,7 +284,7 @@ private:
     unique_ptr<TreeOp> _parent;
     UserId _this_user_id;
     string _filename;
-    Opt<OldData> _old;
+    Opt<VersionedObject> _old;
     Opt<FileBlob> _blob;
 };
 

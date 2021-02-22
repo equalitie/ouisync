@@ -5,7 +5,6 @@
 #include "file_system_attrib.h"
 #include "user_id.h"
 #include "branch.h"
-#include "commit.h"
 #include "object_store.h"
 
 #include <boost/asio/any_io_executor.hpp>

@@ -1,14 +1,12 @@
 #pragma once
 
-#include "object_id.h"
 #include "file_blob.h"
 #include "directory.h"
 #include "user_id.h"
-#include "version_vector.h"
 #include "path_range.h"
 #include "shortcuts.h"
 #include "file_system_attrib.h"
-#include "commit.h"
+#include "versioned_object.h"
 #include "branch_view.h"
 #include "options.h"
 #include "object_store.h"

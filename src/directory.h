@@ -2,10 +2,9 @@
 
 
 #include "user_id.h"
-#include "object_id.h"
 #include "object_tag.h"
 #include "shortcuts.h"
-#include "version_vector.h"
+#include "versioned_object.h"
 #include "ouisync_assert.h"
 
 #include <map>
@@ -20,16 +19,6 @@ namespace ouisync {
 
 class Directory final {
 public:
-    struct VersionedObject {
-        ObjectId object_id;
-        VersionVector version_vector;
-
-        template<class Archive>
-        void serialize(Archive& ar, const unsigned int version) {
-            ar & object_id & version_vector;
-        }
-    };
-
     using UserMap = std::map<UserId, VersionedObject>;
 
 private:
@@ -136,7 +125,7 @@ public:
         std::set<ObjectId> ch;
         for (auto& [_, user_map] : _name_map) {
             for (auto& [user, vobj] : user_map) {
-                ch.insert(vobj.object_id);
+                ch.insert(vobj.id);
             }
         }
         return ch;
@@ -155,9 +144,9 @@ public:
         for (auto& [filename, usermap] : _name_map) {
             std::set<ObjectId> used;
             for (auto& [user_id, vobj] : usermap) {
-                if (used.count(vobj.object_id)) continue;
-                used.insert(vobj.object_id);
-                f(filename, vobj.object_id);
+                if (used.count(vobj.id)) continue;
+                used.insert(vobj.id);
+                f(filename, vobj.id);
             }
         }
     }

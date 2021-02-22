@@ -3,7 +3,7 @@
 #include "file_blob.h"
 #include "path_range.h"
 #include "user_id.h"
-#include "commit.h"
+#include "versioned_object.h"
 
 #include <set>
 #include <map>
@@ -15,7 +15,7 @@ class ObjectStore;
 
 class MultiDir {
 public:
-    using Versions = std::map<UserId, Commit>;
+    using Versions = std::map<UserId, VersionedObject>;
 
 public:
     MultiDir(Versions versions, ObjectStore& objstore) :

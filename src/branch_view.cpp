@@ -30,7 +30,7 @@ MultiDir BranchView::root() const
 }
 //--------------------------------------------------------------------
 
-BranchView::BranchView(ObjectStore& objects, map<UserId, Commit> commits) :
+BranchView::BranchView(ObjectStore& objects, map<UserId, VersionedObject> commits) :
     _objects(objects),
     _commits(move(commits))
 {}
@@ -110,7 +110,7 @@ void _show(std::ostream& os, ObjectStore& objects, ObjectId id, std::string pad 
                 for (auto& [name, name_map] : d) {
                     for (auto& [user, vobj] : name_map) {
                         os << pad << "  U: " << user << "\n";
-                        _show(os, objects, vobj.object_id, pad + "    ");
+                        _show(os, objects, vobj.id, pad + "    ");
                     }
                 }
             },

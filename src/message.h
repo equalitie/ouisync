@@ -2,8 +2,7 @@
 
 #include "shortcuts.h"
 #include "cancel.h"
-#include "version_vector.h"
-#include "commit.h"
+#include "versioned_object.h"
 #include "variant.h"
 #include "directory.h"
 #include "file_blob.h"

@@ -15,9 +15,9 @@ using std::string;
 using std::move;
 using std::set;
 
-Index::Index(const UserId& user_id, Commit commit)
+Index::Index(const UserId& user_id, VersionedObject commit)
 {
-    _objects[commit.root_id][commit.root_id][user_id] = 1;
+    _objects[commit.id][commit.id][user_id] = 1;
     _commits[user_id] = move(commit);
 }
 
@@ -28,9 +28,9 @@ void Index::set_version_vector(const UserId& user, const VersionVector& vv)
     ouisync_assert(ci != _commits.end());
     if (ci == _commits.end()) exit(1);
 
-    if (!vv.happened_after(ci->second.stamp)) return;
-    if (vv == ci->second.stamp) return;
-    ci->second.stamp = vv;
+    if (!vv.happened_after(ci->second.versions)) return;
+    if (vv == ci->second.versions) return;
+    ci->second.versions = vv;
 }
 
 template<class Map, class F>
@@ -242,16 +242,16 @@ void Index::merge(const Index& remote_index, ObjectStore& objstore)
         });
 }
 
-bool Index::remote_is_newer(const Commit& remote_commit, const UserId& user) const
+bool Index::remote_is_newer(const VersionedObject& remote_commit, const UserId& user) const
 {
     auto li = _commits.find(user);
 
     if (li == _commits.end()) {
-        return remote_commit.stamp.version_of(user) > 0;
+        return remote_commit.versions.version_of(user) > 0;
     } else {
-        // Sincle user can't/must not create concurrent stamps, so comparing
+        // Sincle user can't/must not create concurrent versions, so comparing
         // the single version number is sufficcient.
-        return remote_commit.stamp.version_of(user) > li->second.stamp.version_of(user);
+        return remote_commit.versions.version_of(user) > li->second.versions.version_of(user);
     }
 }
 
@@ -266,7 +266,7 @@ void Index::insert_object(const UserId& user, const ObjectId& obj_id, const Obje
     user_i->second += cnt;
 
     if (obj_id == parent_id) {
-        _commits[user].root_id = obj_id;
+        _commits[user].id = obj_id;
     }
 }
 
@@ -294,7 +294,7 @@ bool Index::someone_has(const ObjectId& obj) const
     return _objects.find(obj) != _objects.end();
 }
 
-Opt<Commit> Index::commit(const UserId& user)
+Opt<VersionedObject> Index::commit(const UserId& user)
 {
     auto i = _commits.find(user);
     if (i == _commits.end()) return boost::none;
@@ -305,7 +305,7 @@ std::set<ObjectId> Index::roots() const
 {
     std::set<ObjectId> ret;
     for (auto& [user, commit] : _commits) {
-        ret.insert(commit.root_id);
+        ret.insert(commit.id);
     }
     return ret;
 }

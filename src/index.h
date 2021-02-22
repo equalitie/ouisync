@@ -1,6 +1,6 @@
 #pragma once
 
-#include "commit.h"
+#include "versioned_object.h"
 #include "user_id.h"
 
 #include <map>
@@ -37,9 +37,9 @@ private:
 
 public:
     Index() {}
-    Index(const UserId&, Commit);
+    Index(const UserId&, VersionedObject);
 
-    void set_commit(const UserId&, const Commit&);
+    void set_commit(const UserId&, const VersionedObject&);
     void set_version_vector(const UserId&, const VersionVector&);
 
     void insert_object(const UserId&, const ObjectId& id, const ParentId& parent_id, size_t cnt = 1);
@@ -47,8 +47,8 @@ public:
 
     void merge(const Index&, ObjectStore&);
 
-    Opt<Commit> commit(const UserId&);
-    const Map<UserId, Commit>& commits() const { return _commits; }
+    Opt<VersionedObject> commit(const UserId&);
+    const Map<UserId, VersionedObject>& commits() const { return _commits; }
 
     friend std::ostream& operator<<(std::ostream&, const Index&);
 
@@ -63,7 +63,7 @@ public:
         ar & _objects & _commits & _missing_objects;
     }
 
-    bool remote_is_newer(const Commit& remote_commit, const UserId&) const;
+    bool remote_is_newer(const VersionedObject& remote_commit, const UserId&) const;
 
     friend std::ostream& operator<<(std::ostream&, const Index&);
 
@@ -72,7 +72,7 @@ private:
 
 private:
     ObjectMap _objects;
-    Map<UserId, Commit> _commits;
+    Map<UserId, VersionedObject> _commits;
     std::set<ObjectId> _missing_objects;
 };
 
