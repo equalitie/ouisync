@@ -7,6 +7,7 @@
 #include "variant.h"
 #include "ouisync_assert.h"
 #include "iterator_range.h"
+#include "ostream/set.h"
 
 #include <iostream>
 
@@ -14,6 +15,7 @@ using namespace ouisync;
 using std::string;
 using std::move;
 using std::set;
+using std::cerr;
 
 Index::Index(const UserId& user_id, VersionedObject commit)
 {
@@ -314,7 +316,7 @@ std::ostream& ouisync::operator<<(std::ostream& os, const Index& index)
 {
     os << "Commits = {\n";
     for (auto& [user, commit] : index._commits) {
-        os << "  User:" << user << " " << commit << "\n";
+        os << "  User:" << user << " Root:" << commit.id << " Versions:" << commit.versions << "\n";
     }
     os << "}\n";
     os << "Objects = {\n";
@@ -326,5 +328,9 @@ std::ostream& ouisync::operator<<(std::ostream& os, const Index& index)
             }
         }
     }
-    return os << "}\n";
+    os << "}\n";
+
+    os << "Missing = " << index._missing_objects << "\n";
+
+    return os;
 }
