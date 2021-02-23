@@ -297,6 +297,11 @@ bool Index::someone_has(const ObjectId& obj) const
     return _objects.find(obj) != _objects.end();
 }
 
+bool Index::object_is_missing(const ObjectId& obj) const
+{
+    return _missing_objects.find(obj) != _missing_objects.end();
+}
+
 Opt<VersionedObject> Index::commit(const UserId& user)
 {
     auto i = _commits.find(user);

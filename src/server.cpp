@@ -6,6 +6,7 @@
 
 using namespace ouisync;
 using std::move;
+using std::cerr;
 using std::make_pair;
 using Object = variant<FileBlob, Directory>;
 
@@ -28,8 +29,7 @@ net::awaitable<void> Server::run(Cancel cancel)
 
         auto handle_rq_object = [&] (const RqObject& rq) -> AwaitVoid {
             RsObject rs;
-            auto object = _branch.objstore().load<FileBlob, Directory>(rq.object_id);
-
+            auto object = _branch.objstore().maybe_load<FileBlob, Directory>(rq.object_id);
             co_await _broker.send({RsObject{std::move(object)}}, cancel);
         };
 

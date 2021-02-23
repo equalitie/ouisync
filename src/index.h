@@ -55,6 +55,7 @@ public:
     const std::set<ObjectId>& missing_objects() const { return _missing_objects; }
 
     bool someone_has(const ObjectId&) const;
+    bool object_is_missing(const ObjectId&) const;
 
     std::set<ObjectId> roots() const;
 
