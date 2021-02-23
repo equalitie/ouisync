@@ -15,50 +15,6 @@ using std::string;
 using std::stringstream;
 using std::move;
 
-class ConflictNameAssigner {
-public:
-    using Name = string;
-
-    ConflictNameAssigner(string name_root) :
-        _name_root(move(name_root)) {}
-
-    void add(const Directory::UserMap& usr_map)
-    {
-        for (auto& [user_id, vobj] : usr_map) {
-            _versions[user_id] = vobj.id;
-        }
-    }
-
-    map<Name, ObjectId> resolve() const
-    {
-        map<Name, ObjectId> ret;
-
-        if (_versions.empty()) return ret;
-
-        if (_versions.size() == 1) {
-            ret.insert({_name_root, _versions.begin()->second});
-            return ret;
-        }
-
-        // TODO: Need a proper way to indentify different versions. With this
-        // simplistic version it could happen that the user opens a file with
-        // one name, but it could change before it is saved.
-        unsigned cnt = 0;
-
-        for (auto& [user_id, object_id] : _versions) {
-            stringstream ss;
-            ss << _name_root << "-" << (cnt++);
-            ret[ss.str()] = object_id;
-        }
-
-        return ret;
-    }
-
-private:
-    string _name_root;
-    map<UserId, ObjectId> _versions;
-};
-
 Opt<MultiDir::Version> MultiDir::pick_subdirectory_to_edit(
         const UserId& preferred_user, const string_view name)
 {
@@ -101,24 +57,6 @@ Opt<MultiDir::Version> MultiDir::pick_subdirectory_to_edit(
     }
 
     return ret;
-}
-
-bool MultiDir::has_subdirectory(string_view name) const
-{
-    for (auto& [user, vobj] : versions) {
-        // XXX: Should be cached
-        const auto od = objstore->maybe_load<Directory>(vobj.id);
-        if (!od) continue;
-        auto user_map = od->find(name);
-        if (!user_map) continue;
-
-        for (auto& [user_id, vobj] : user_map) {
-            // XXX: Would be faster to have this information in vobj.
-            auto is_dir = objstore->maybe_load<Directory::Nothing>(vobj.id);
-            if (is_dir) return true;
-        }
-    }
-    return false;
 }
 
 MultiDir MultiDir::cd_into(const string& where) const
@@ -164,6 +102,8 @@ ObjectId MultiDir::file(const string& name) const
 set<string> MultiDir::list() const {
     set<string> ret;
 
+    // XXX: Conflicting files - or directories that have been concurrently
+    // modified and removed - need to marked as such.
     for (auto& [user, vobj] : versions) {
         auto dir = objstore->load<Directory>(vobj.id);
         for (auto& [filename, _] : dir) {

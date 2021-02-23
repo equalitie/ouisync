@@ -27,8 +27,6 @@ public:
         objstore(&objstore)
     {}
 
-    bool has_subdirectory(string_view) const;
-
     MultiDir cd_into(const std::string& where) const;
 
     MultiDir cd_into(PathRange path) const;
