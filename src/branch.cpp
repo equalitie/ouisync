@@ -17,6 +17,7 @@
 #include <string.h> // memcpy
 
 #include <iostream>
+#include "ostream/padding.h"
 
 using namespace ouisync;
 using std::move;
@@ -318,28 +319,40 @@ void Branch::store_self() const {
 
 //--------------------------------------------------------------------
 
+static void print(std::ostream& os, const ObjectId& obj_id, ObjectStore& objstore, unsigned level)
+{
+    auto pad = Padding(level*2);
+    auto opt = objstore.maybe_load<Directory, FileBlob::Size>(obj_id);
+
+    if (!opt) {
+        os << pad << "!!! Object " << obj_id << " is not in ObjectStore !!!\n";
+        return;
+    }
+
+    apply(*opt,
+            [&] (const Directory& d) {
+                os << pad << "Directory id:" << obj_id << "\n";
+                for (auto& [filename, user_map] : d) {
+                    os << pad << "  " << filename << "/\n";
+                    for (auto& [user, vobj]: user_map) {
+                        os << pad << "    User:" << user << "\n";
+                        os << pad << "    Versions:" << vobj.versions << "\n";
+                        print(os, vobj.id, objstore, level + 2);
+                    }
+                }
+            },
+            [&] (const FileBlob::Size& f) {
+                os << pad << "File id:" << obj_id << " size:" << f.value << "\n";
+            });
+
+}
+
 std::ostream& ouisync::operator<<(std::ostream& os, const Branch& branch)
 {
-    os  << "Branch: TODO\n";
-//    if (!objects.exists(id)) {
-//        os << pad << "!!! object " << id << " does not exist !!!\n";
-//        return;
-//    }
-//
-//    auto obj = objects.load<Directory, FileBlob>(id);
-//
-//    apply(obj,
-//            [&] (const Directory& d) {
-//                os << pad << "Directory ID:" << d.calculate_id() << "\n";
-//                for (auto& [name, name_map] : d) {
-//                    for (auto& [user, vobj] : name_map) {
-//                        os << pad << "  U: " << user << "\n";
-//                        _show(os, objects, vobj.id, pad + "    ");
-//                    }
-//                }
-//            },
-//            [&] (const FileBlob& b) {
-//                os << pad << b << "\n";
-//            });
+    for (auto& [user, commit] : branch._index.commits()) {
+        os << "User: " << user << " Commit: " << commit.id << " " << commit.versions << "\n";
+        print(os, commit.id, branch._objstore, 1);
+    }
+
     return os;
 }
