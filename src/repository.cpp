@@ -157,11 +157,7 @@ net::awaitable<void> Repository::mknod(PathRange path, mode_t mode, dev_t dev) t
 
     if (S_ISFIFO(mode)) throw_error(sys::errc::invalid_argument); // TODO?
 
-    if (path.empty()) {
-        throw_error(sys::errc::is_a_directory);
-    }
-
-    _branch->store(path, FileBlob{});
+    _branch->mknod(path);
 
     co_return;
 }

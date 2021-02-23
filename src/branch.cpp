@@ -168,16 +168,22 @@ size_t Branch::read(PathRange path, const char* buf, size_t size, size_t offset)
 
 //--------------------------------------------------------------------
 
-void Branch::store(PathRange path, const FileBlob& blob)
+void Branch::mknod(PathRange path)
 {
-    auto file = get_file(path);
-    file->blob() = blob;
-    do_commit(file);
-}
+    // man 2 mknod
 
-void Branch::store(const fs::path& path, const FileBlob& blob)
-{
-    store(Path(path), blob);
+    if (path.empty()) {
+        throw_error(sys::errc::file_exists);
+    }
+
+    auto file = get_file(path);
+
+    if (file->blob()) {
+        throw_error(sys::errc::file_exists);
+    }
+
+    file->blob() = FileBlob{};
+    do_commit(file);
 }
 
 //--------------------------------------------------------------------

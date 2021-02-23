@@ -65,10 +65,7 @@ public:
     static
     Branch load(executor_type, const fs::path& file_path, UserId user_id, ObjectStore&, Options::Branch);
 
-    // XXX: Deprecated, use `write` instead. I believe these are currently
-    // only being used in tests.
-    void store(PathRange, const FileBlob&);
-    void store(const fs::path&, const FileBlob&);
+    void mknod(PathRange);
 
     size_t write(PathRange, const char* buf, size_t size, size_t offset);
 
