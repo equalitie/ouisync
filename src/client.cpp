@@ -62,7 +62,9 @@ net::awaitable<void> Client::run(Cancel cancel)
 
         _branch.merge_index(index);
 
-        for (auto& obj_id : _branch.missing_objects()) {
+        auto missing_objects = _branch.missing_objects();
+
+        for (auto& obj_id : missing_objects) {
             if (index.object_is_missing(obj_id)) {
                 cerr << "C: Object " << obj_id << " is missing at peer (skipping)\n";
                 continue;
@@ -82,10 +84,10 @@ net::awaitable<void> Client::run(Cancel cancel)
 
             apply(*obj,
                 [&] (const FileBlob& file) {
-                    _branch.objstore().store(file);
+                    _branch.store(file);
                 },
                 [&] (const Directory& dir) {
-                    _branch.objstore().store(dir);
+                    _branch.store(dir);
                 });
         }
 

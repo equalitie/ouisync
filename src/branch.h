@@ -91,6 +91,9 @@ public:
 
     ObjectStore& objstore() const { return _objstore; }
 
+    void store(const FileBlob&);
+    void store(const Directory&);
+
     StateChangeWait& on_change() { return _state_change_wait; }
 
     void merge_index(const Index&);

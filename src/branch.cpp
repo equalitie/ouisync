@@ -272,11 +272,42 @@ bool Branch::remove(const fs::path& fspath)
 
 void Branch::merge_index(const Index& index)
 {
-    //cerr << "Branch::merge_index\n";
-    //cerr << "Old:\n" << _index << "\n";
-    //cerr << "Merge with:\n" << index << "\n";
+    static constexpr bool debug = false;
+
+    if (debug) {
+        cerr << "----------------------------------------\n";
+        cerr << "Branch::merge_index\n";
+        cerr << "Old:\n" << _index << "\n";
+        cerr << "Merge with:\n" << index << "\n";
+        cerr << "------------------\n";
+    }
+
     _index.merge(index, _objstore);
-    //cerr << "Result:\n" << _index << "\n";
+
+    if (debug) {
+        cerr << "Result:\n" << _index << "\n";
+        cerr << "----------------------------------------\n";
+    }
+}
+
+//--------------------------------------------------------------------
+
+void Branch::store(const FileBlob& f)
+{
+    auto id = f.calculate_id();
+
+    if (_index.mark_not_missing(id)) {
+        _objstore.store(f);
+    }
+}
+
+void Branch::store(const Directory& d)
+{
+    auto id = d.calculate_id();
+
+    if (_index.mark_not_missing(id)) {
+        _objstore.store(d);
+    }
 }
 
 //--------------------------------------------------------------------

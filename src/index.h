@@ -57,6 +57,9 @@ public:
     bool someone_has(const ObjectId&) const;
     bool object_is_missing(const ObjectId&) const;
 
+    // Return true if the object was previously marked as missing.
+    bool mark_not_missing(const ObjectId&);
+
     std::set<ObjectId> roots() const;
 
     template<class Archive>
