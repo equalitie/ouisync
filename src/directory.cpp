@@ -1,4 +1,5 @@
 #include "directory.h"
+#include "ostream/padding.h"
 
 #include <iostream>
 #include <boost/filesystem.hpp>
@@ -37,16 +38,6 @@ VersionVector Directory::calculate_version_vector_union() const
 
     return result;
 }
-
-struct Padding {
-    unsigned level = 0;
-    Padding(unsigned level) : level(level) {}
-
-    friend std::ostream& operator<<(std::ostream& os, Padding pad) {
-        for (unsigned i = 0; i < pad.level; ++i) { os << " "; }
-        return os;
-    }
-};
 
 void Directory::print(std::ostream& os, unsigned level) const
 {
