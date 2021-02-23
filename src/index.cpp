@@ -135,15 +135,15 @@ template<class F> void Index::compare(const ObjectMap& remote_objects, F&& cmp)
     auto& ro = const_cast<ObjectMap&>(remote_objects);
 
     zip(lo, ro,
-        [&] (const ObjectId& obj, auto obj_li, auto obj_ri) {
+        [&] (ObjectId obj, auto obj_li, auto obj_ri) {
             if (obj_li != _objects.end() && obj_ri != remote_objects.end()) {
                 zip(parents(obj_li),
                     parents(obj_ri),
-                    [&](auto& parent_id, auto parent_li, auto parent_ri)
+                    [&](auto parent_id, auto parent_li, auto parent_ri)
                     {
                         if (parent_li != parents(obj_li).end() && parent_ri != parents(obj_ri).end()) {
                             zip(users(parent_li), users(parent_ri),
-                                [&](auto& user_id, auto user_li, auto user_ri) {
+                                [&](auto user_id, auto user_li, auto user_ri) {
                                     cmp(obj, parent_id, user_id,
                                         Item(lo, obj_li, parent_li, user_li),
                                         Item(ro, obj_ri, parent_ri, user_ri));
