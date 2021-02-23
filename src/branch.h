@@ -42,7 +42,7 @@ public:
             : _state_change_counter(0), _on_change(ex) {}
 
         [[nodiscard]] net::awaitable<Counter> wait(Opt<Counter> prev, Cancel cancel) {
-            if (!prev || *prev <= _state_change_counter) {
+            if (!prev || *prev >= _state_change_counter) {
                 co_await _on_change.wait(cancel);
             }
             co_return _state_change_counter;
