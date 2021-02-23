@@ -58,7 +58,6 @@ net::awaitable<void> Client::run(Cancel cancel)
     while (true) {
         auto index = co_await fetch_index(cancel);
 
-        std::cerr << "Client: Received index\n" << index << "\n";
         _branch.merge_index(index);
 
         for (auto& obj_id : _branch.missing_objects()) {

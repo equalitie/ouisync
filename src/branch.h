@@ -22,7 +22,7 @@ class MultiDir;
 class Branch {
 private:
     class Op;
-    class TreeOp;
+    class DirectoryOp;
     class HasTreeParrentOp;
     class FileOp;
     class RootOp;
@@ -113,10 +113,11 @@ private:
 
     template<class F> void update_dir(PathRange, F&&);
 
-    std::unique_ptr<TreeOp> root_op();
-    MultiDir root_multi_dir() const;
-    std::unique_ptr<TreeOp> cd_into(PathRange);
+    std::unique_ptr<DirectoryOp> root_op();
+    std::unique_ptr<DirectoryOp> cd_into(PathRange);
     std::unique_ptr<FileOp> get_file(PathRange);
+
+    MultiDir root_multi_dir() const;
 
     template<class OpPtr>
     void do_commit(OpPtr&);
