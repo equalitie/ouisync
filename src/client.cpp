@@ -58,19 +58,19 @@ net::awaitable<void> Client::run(Cancel cancel)
     while (true) {
         auto index = co_await fetch_index(cancel);
 
-        std::cerr << "Received index\n" << index << "\n";
+        std::cerr << "Client: Received index\n" << index << "\n";
         _branch.merge_index(index);
 
         for (auto& obj_id : _branch.missing_objects()) {
-            std::cerr << "Requesting: " << obj_id << "\n";
+            std::cerr << "Client: Requesting: " << obj_id << "\n";
             auto obj = co_await fetch_object(obj_id, cancel);
 
             if (!obj) {
-                std::cerr << "Peer doesn't have object: " << obj_id << "\n";
+                std::cerr << "Client: Peer doesn't have object: " << obj_id << "\n";
                 continue;
             }
 
-            std::cerr << "Got: " << obj_id << "\n";
+            std::cerr << "Client: Got: " << obj_id << "\n";
 
             apply(*obj,
                 [&] (const FileBlob& file) {
