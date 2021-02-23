@@ -229,7 +229,9 @@ Opt<O> ObjectStore::maybe_load(const ObjectId& id) {
 template<class O0, class O1, class ... Os> // Two or more
 inline
 Opt<variant<O0, O1, Os...>> ObjectStore::maybe_load(const ObjectId& id) {
-    return maybe_load<variant<O0, O1, Os...>>(_objdir, id);
+    auto p = _objdir / id_to_path(id);
+    if (!fs::exists(p)) return boost::none;
+    return load<O0, O1, Os...>(p);
 }
 
 } // namespace
