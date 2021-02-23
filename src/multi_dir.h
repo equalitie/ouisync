@@ -1,6 +1,5 @@
 #pragma once
 
-#include "file_blob.h"
 #include "path_range.h"
 #include "user_id.h"
 #include "versioned_object.h"

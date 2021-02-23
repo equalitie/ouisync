@@ -3,6 +3,7 @@
 #include "object_store.h"
 #include "variant.h"
 #include "error.h"
+#include "file_blob.h"
 
 #include <sstream>
 #include <iostream>
