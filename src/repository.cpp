@@ -32,8 +32,7 @@ Repository::Repository(executor_type ex, Options options) :
     fs::path branch_path = _options.basedir / "branch";
 
     if (fs::exists(branch_path)) {
-        fs::path path = _options.branchdir / _user_id.to_string();
-        _branch.reset(new Branch(Branch::load(_ex, path, _user_id, _objects, _options)));
+        _branch.reset(new Branch(Branch::load(_ex, branch_path, _user_id, _objects, _options)));
     } else {
         _branch.reset(new Branch(Branch::create(_ex, branch_path, _user_id, _objects, _options)));
     }

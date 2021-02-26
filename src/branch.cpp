@@ -81,6 +81,7 @@ template<class OpPtr>
 void Branch::do_commit(OpPtr& op)
 {
     if (op->commit()) {
+        store_self();
         _state_change_wait.notify();
     }
 }
