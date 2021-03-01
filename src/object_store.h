@@ -128,8 +128,6 @@ public:
     
     bool exists(const ObjectId& id) const;
     
-    bool is_complete(const ObjectId& id);
-
     fs::path id_to_path(const ObjectId&) const noexcept;
 
 private:

@@ -30,22 +30,6 @@ bool ObjectStore::exists(const ObjectId& id) const {
     return fs::exists(id_to_path(id));
 }
 
-bool ObjectStore::is_complete(const ObjectId& id) {
-    if (!exists(id)) return false;
-
-    auto v = load<FileBlob::Nothing, Directory>(id);
-
-    return apply(v,
-        [&] (const FileBlob::Nothing&) { return true; },
-        [&] (const Directory&) {
-            assert("TODO" && 0);
-            //for (auto& [_, id] : tree) {
-            //    if (!is_complete(id)) return false;
-            //}
-            return true;
-        });
-}
-
 fs::path ObjectStore::id_to_path(const ObjectId& id) const noexcept
 {
     auto hex = to_hex<char>(id);
