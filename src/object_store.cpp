@@ -22,12 +22,12 @@ ObjectStore::ObjectStore(fs::path object_dir) :
 
 bool ObjectStore::remove(const ObjectId& id) {
     sys::error_code ec;
-    fs::remove(_objdir/id_to_path(id), ec);
+    fs::remove(id_to_path(id), ec);
     return !ec;
 }
 
 bool ObjectStore::exists(const ObjectId& id) const {
-    return fs::exists(_objdir/id_to_path(id));
+    return fs::exists(id_to_path(id));
 }
 
 bool ObjectStore::is_complete(const ObjectId& id) {
@@ -56,7 +56,7 @@ fs::path ObjectStore::id_to_path(const ObjectId& id) const noexcept
     auto prefix = hex_sv.substr(0, prefix_size);
     auto rest   = hex_sv.substr(prefix_size, hex_sv.size() - prefix_size);
 
-    return fs::path(prefix.begin(), prefix.end()) / fs::path(rest.begin(), rest.end());
+    return _objdir / fs::path(prefix.begin(), prefix.end()) / fs::path(rest.begin(), rest.end());
 }
 
 //Opt<ObjectId> ObjectStore::path_to_id(const fs::path& ps) const noexcept
