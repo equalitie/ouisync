@@ -63,6 +63,7 @@ Branch::Branch(executor_type ex, const fs::path& file_path, const UserId& user_i
     _file_path(file_path),
     _options(move(options)),
     _objstore(objstore),
+    _block_store(_objstore),
     _user_id(user_id),
     _state_change_wait(_ex)
 {

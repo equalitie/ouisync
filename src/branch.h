@@ -9,6 +9,7 @@
 #include "versioned_object.h"
 #include "options.h"
 #include "object_store.h"
+#include "block_store.h"
 #include "index.h"
 #include "wait.h"
 
@@ -131,6 +132,7 @@ private:
     fs::path _file_path;
     Options::Branch _options;
     ObjectStore& _objstore;
+    BlockStore _block_store;
     UserId _user_id;
     Index _index;
 
