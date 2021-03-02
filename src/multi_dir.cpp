@@ -1,6 +1,5 @@
 #include "multi_dir.h"
 #include "directory.h"
-#include "object_store.h"
 #include "block_store.h"
 #include "variant.h"
 #include "error.h"

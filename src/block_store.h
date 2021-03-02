@@ -1,10 +1,10 @@
 #pragma once
 
 #include "object_id.h"
-#include "object_store.h"
 
 #include <vector>
 #include <boost/optional.hpp>
+#include <boost/filesystem/path.hpp>
 
 #include <boost/serialization/array_wrapper.hpp>
 #include <boost/serialization/split_member.hpp>

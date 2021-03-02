@@ -1,7 +1,9 @@
 #include "block_store.h"
-#include "object_store.h"
 #include "hex.h"
 #include <iostream>
+
+#include <boost/filesystem/fstream.hpp>
+#include <boost/filesystem/operations.hpp> // create_directories
 
 using namespace ouisync;
 using std::move;
