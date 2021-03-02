@@ -142,7 +142,7 @@ FileSystemAttrib Branch::get_attr(PathRange path) const
         return FileSystemDirAttrib{};
     }
 
-    auto size = FileBlob::read_size(block);
+    auto size = File::read_size(block);
 
     return FileSystemFileAttrib{size};
 }
@@ -157,7 +157,7 @@ size_t Branch::read(PathRange path, const char* buf, size_t size, size_t offset)
 
     auto block = _block_store.load(dir.file(path.back()));
 
-    FileBlob file;
+    File file;
     file.load(block);
     
     size_t len = file.size();
@@ -182,14 +182,14 @@ void Branch::mknod(PathRange path)
         throw_error(sys::errc::file_exists);
     }
 
-    auto file = get_file(path);
+    auto file_op = get_file(path);
 
-    if (file->blob()) {
+    if (file_op->file()) {
         throw_error(sys::errc::file_exists);
     }
 
-    file->blob() = FileBlob{};
-    do_commit(file);
+    file_op->file() = File{};
+    do_commit(file_op);
 }
 
 //--------------------------------------------------------------------
@@ -198,13 +198,13 @@ size_t Branch::write(PathRange path, const char* buf, size_t size, size_t offset
 {
     if (path.empty()) throw_error(sys::errc::is_a_directory);
 
-    auto file = get_file(path);
+    auto file_op = get_file(path);
 
-    if (!file->blob()) {
-        file->blob() = FileBlob{};
+    if (!file_op->file()) {
+        file_op->file() = File{};
     }
 
-    auto& blob = *file->blob();
+    auto& blob = *file_op->file();
 
     size_t len = blob.size();
 
@@ -214,7 +214,7 @@ size_t Branch::write(PathRange path, const char* buf, size_t size, size_t offset
 
     memcpy(blob.data() + offset, buf, size);
 
-    do_commit(file);
+    do_commit(file_op);
 
     return size;
 }
@@ -225,17 +225,17 @@ size_t Branch::truncate(PathRange path, size_t size)
 {
     if (path.empty()) throw_error(sys::errc::is_a_directory);
 
-    auto file = get_file(path);
+    auto file_op = get_file(path);
 
-    if (!file->blob()) {
-        file->blob() = FileBlob{};
+    if (!file_op->file()) {
+        file_op->file() = File{};
     }
 
-    auto& blob = *file->blob();
+    auto& blob = *file_op->file();
 
     blob.resize(std::min<size_t>(blob.size(), size));
 
-    do_commit(file);
+    do_commit(file_op);
 
     return blob.size();
 }
@@ -326,7 +326,7 @@ static void print(std::ostream& os, const ObjectId& obj_id, BlockStore& block_st
     }
 
     Directory d;
-    FileBlob f;
+    File f;
 
     if (d.maybe_load(*opt)) {
         os << pad << "Directory id:" << obj_id << "\n";

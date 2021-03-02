@@ -1,5 +1,5 @@
 #include "directory.h"
-#include "file_blob.h"
+#include "file.h"
 #include "block_store.h"
 #include "shortcuts.h"
 #include "variant.h"
@@ -52,7 +52,7 @@ int main(int argc, char** argv)
         auto block = BlockStore::load(path);
 
         Directory dir;
-        FileBlob file;
+        File file;
 
         if (dir.maybe_load(block)) {
             cout << dir << "\n";

@@ -62,7 +62,7 @@ add_library(libouisync STATIC
     "src/object_tag.cpp"
     "src/block_store.cpp"
     "src/directory.cpp"
-    "src/file_blob.cpp"
+    "src/file.cpp"
     "src/index.cpp"
     "src/version_vector.cpp"
 )

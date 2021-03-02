@@ -21,26 +21,26 @@ public:
 
         if (i != per_name.end()) {
             _old = i->second;
-            _blob = FileBlob{};
-            _blob->load(root()->block_store().load(_old->id));
+            _file = File{};
+            _file->load(root()->block_store().load(_old->id));
         }
     }
 
-    Opt<FileBlob>& blob() { return _blob; }
+    Opt<File>& file() { return _file; }
 
     bool commit() override {
-        if (!_blob && !_old) return false;
+        if (!_file && !_old) return false;
 
-        if (!_blob) { // Was removed
+        if (!_file) { // Was removed
             // We need a mark that the file was removed.
             assert("TODO" && 0);
         }
 
-        auto new_id = _blob->calculate_id();
+        auto new_id = _file->calculate_id();
 
         if (_old && _old->id == new_id) return false;
 
-        _blob->save(root()->block_store());
+        _file->save(root()->block_store());
 
         VersionVector vv;
 
@@ -62,7 +62,7 @@ private:
     UserId _this_user_id;
     std::string _filename;
     Opt<VersionedObject> _old;
-    Opt<FileBlob> _blob;
+    Opt<File> _file;
 };
 
 } // namespace

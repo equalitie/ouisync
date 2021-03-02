@@ -1,4 +1,4 @@
-#include "file_blob.h"
+#include "file.h"
 #include "hash.h"
 #include "archive.h"
 #include "object_tag.h"
@@ -10,27 +10,27 @@
 
 using namespace ouisync;
 
-ObjectId FileBlob::calculate_id() const
+ObjectId File::calculate_id() const
 {
     // XXX: This is inefficient
     std::stringstream ss;
     auto array = boost::serialization::make_array(data(), size());
-    auto tag = ObjectTag::FileBlob;
+    auto tag = ObjectTag::File;
     archive::store(ss, tag, uint32_t(size()), array);
     return BlockStore::calculate_block_id(ss.str().data(), ss.str().size());
 }
 
-ObjectId FileBlob::save(BlockStore& blockstore) const
+ObjectId File::save(BlockStore& blockstore) const
 {
     // XXX: This is inefficient
     std::stringstream ss;
     auto array = boost::serialization::make_array(data(), size());
-    auto tag = ObjectTag::FileBlob;
+    auto tag = ObjectTag::File;
     archive::store(ss, tag, uint32_t(size()), array);
     return blockstore.store(ss.str().data(), ss.str().size());
 }
 
-bool FileBlob::maybe_load(const BlockStore::Block& block)
+bool File::maybe_load(const BlockStore::Block& block)
 {
     // XXX: This is inefficient
     std::stringstream ss;
@@ -38,7 +38,7 @@ bool FileBlob::maybe_load(const BlockStore::Block& block)
     ObjectTag tag;
     InputArchive a(ss);
     a >> tag;
-    if (tag != ObjectTag::FileBlob) return false;
+    if (tag != ObjectTag::File) return false;
     uint32_t s;
     a >> s;
     resize(s);
@@ -48,7 +48,7 @@ bool FileBlob::maybe_load(const BlockStore::Block& block)
 }
 
 /* static */
-size_t FileBlob::read_size(const BlockStore::Block& block)
+size_t File::read_size(const BlockStore::Block& block)
 {
     // XXX: This is inefficient
     std::stringstream ss;
@@ -56,13 +56,13 @@ size_t FileBlob::read_size(const BlockStore::Block& block)
     ObjectTag tag;
     InputArchive a(ss);
     a >> tag;
-    if (tag != ObjectTag::FileBlob) throw std::runtime_error("Block doesn't represent a file");
+    if (tag != ObjectTag::File) throw std::runtime_error("Block doesn't represent a file");
     uint32_t s;
     a >> s;
     return s;
 }
 
-std::ostream& ouisync::operator<<(std::ostream& os, const FileBlob& b) {
+std::ostream& ouisync::operator<<(std::ostream& os, const File& b) {
     auto id = b.calculate_id();
     return os << "Data id:" << id << " size:" << b.size();
 }

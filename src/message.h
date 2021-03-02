@@ -4,8 +4,6 @@
 #include "cancel.h"
 #include "versioned_object.h"
 #include "variant.h"
-#include "directory.h"
-#include "file_blob.h"
 #include "branch.h"
 
 #include <boost/asio/ip/tcp.hpp>

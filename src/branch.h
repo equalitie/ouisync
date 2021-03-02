@@ -1,6 +1,6 @@
 #pragma once
 
-#include "file_blob.h"
+#include "file.h"
 #include "directory.h"
 #include "user_id.h"
 #include "path_range.h"

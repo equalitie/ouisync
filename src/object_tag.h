@@ -10,7 +10,7 @@ namespace ouisync {
 // protocol.
 enum class ObjectTag : std::uint8_t {
     Directory = 1,
-    FileBlob
+    File
 };
 
 std::ostream& operator<<(std::ostream& os, ObjectTag tag);

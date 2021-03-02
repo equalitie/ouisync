@@ -1,10 +1,9 @@
 #include "index.h"
 #include "hash.h"
 #include "ouisync_assert.h"
-#include "directory.h"
-#include "file_blob.h"
 #include "variant.h"
 #include "ouisync_assert.h"
+#include "block_store.h"
 #include "iterator_range.h"
 #include "ostream/set.h"
 

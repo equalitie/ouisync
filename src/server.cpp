@@ -8,7 +8,6 @@ using namespace ouisync;
 using std::move;
 using std::cerr;
 using std::make_pair;
-using Object = variant<FileBlob, Directory>;
 
 Server::Server(MessageBroker::Server&& broker, Branch& branch) :
     _broker(move(broker)),

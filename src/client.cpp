@@ -1,7 +1,5 @@
 #include "client.h"
 #include "error.h"
-#include "directory.h"
-#include "file_blob.h"
 
 #include "ostream/set.h"
 
