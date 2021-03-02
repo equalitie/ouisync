@@ -20,7 +20,7 @@ private:
     template<class T> net::awaitable<T> receive(Cancel);
 
     net::awaitable<Index> fetch_index(Cancel);
-    net::awaitable<Opt<RsObject::Object>> fetch_object(const ObjectId&, Cancel);
+    net::awaitable<Opt<BlockStore::Block>> fetch_block(const ObjectId&, Cancel);
     net::awaitable<void> wait_for_a_change(Cancel);
 
 private:

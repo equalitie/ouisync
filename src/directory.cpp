@@ -1,29 +1,56 @@
 #include "directory.h"
 #include "ostream/padding.h"
+#include "archive.h"
+#include "object_tag.h"
 
 #include <iostream>
+#include <sstream>
 #include <boost/filesystem.hpp>
+
+#include <boost/serialization/map.hpp>
 
 using namespace ouisync;
 
 ObjectId Directory::calculate_id() const
 {
-    Sha256 hash;
-    hash.update(static_cast<std::underlying_type_t<ObjectTag>>(tag));
-    hash.update(uint32_t(size()));
-    for (auto& [filename,user_map] : *this) {
-        hash.update(filename);
+    // XXX: This is inefficient
+    std::stringstream ss;
+    auto tag = ObjectTag::Directory;
+    archive::store(ss, tag, _name_map);
+    return BlockStore::calculate_block_id(ss.str().data(), ss.str().size());
+}
 
-        hash.update(uint32_t(user_map.size()));
+ObjectId Directory::save(BlockStore& blockstore) const
+{
+    // XXX: This is inefficient
+    std::stringstream ss;
+    auto tag = ObjectTag::Directory;
+    archive::store(ss, tag, _name_map);
+    return blockstore.store(ss.str().data(), ss.str().size());
+}
 
-        for (auto& [user, vobj] : user_map) {
-            hash.update(user);
-            hash.update(vobj.id);
-            hash.update(vobj.versions);
-        }
-    }
+bool Directory::maybe_load(const BlockStore::Block& block)
+{
+    // XXX: This is inefficient
+    std::stringstream ss;
+    ss.str(std::string(block.data(), block.size()));
+    ObjectTag tag;
+    InputArchive a(ss);
+    a >> tag;
+    if (tag != ObjectTag::Directory) return false;
+    a >> _name_map;
+    return true;
+}
 
-    return hash.close();
+/* static */
+bool Directory::block_is_dir(const BlockStore::Block& block)
+{
+    // XXX: This is inefficient
+    std::stringstream ss;
+    ss.str(std::string(block.data(), block.size()));
+    ObjectTag tag;
+    archive::load(ss, tag);
+    return tag == ObjectTag::Directory;
 }
 
 VersionVector Directory::calculate_version_vector_union() const

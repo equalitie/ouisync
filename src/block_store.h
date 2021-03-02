@@ -38,16 +38,19 @@ public:
 public:
     BlockStore(ObjectStore&);
 
-    Block load(const ObjectId&);
-    Opt<Block> maybe_load(const ObjectId&);
+    Block load(const fs::path&) const;
+    Block load(const ObjectId&) const;
+    Opt<Block> maybe_load(const ObjectId&) const;
 
+    ObjectId store(const char*, size_t);
     ObjectId store(const Block&);
     void store(const ObjectId&, const Block&);
 
     static ObjectId calculate_block_id(const Block&);
+    static ObjectId calculate_block_id(const char*, size_t);
 
 private:
-    fs::path id_to_path(const ObjectId&);
+    fs::path id_to_path(const ObjectId&) const;
 
 private:
     // XXX: Temporarily using ObjectStore

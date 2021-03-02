@@ -97,12 +97,16 @@ std::ostream& ouisync::operator<<(std::ostream& os, const RsIndex& m) {
     return os << "RsIndex{...}";
 }
 
-std::ostream& ouisync::operator<<(std::ostream& os, const RqObject& rq) {
-    return os << "RqObject " << rq.object_id;
+std::ostream& ouisync::operator<<(std::ostream& os, const RqBlock& rq) {
+    return os << "RqBlock " << rq.block_id;
 }
 
-std::ostream& ouisync::operator<<(std::ostream& os, const RsObject& m) {
-    return os << "RsObject{" << m.object << "}";
+std::ostream& ouisync::operator<<(std::ostream& os, const RsBlock& m) {
+    if (m.block) {
+        return os << "RsBlock{data}";
+    } else {
+        return os << "RsBlock{not found}";
+    }
 }
 
 std::ostream& ouisync::operator<<(std::ostream& os, const Request& m) {

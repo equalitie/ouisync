@@ -3,6 +3,7 @@
 #include "path_range.h"
 #include "user_id.h"
 #include "versioned_object.h"
+#include "block_store.h"
 
 #include <set>
 #include <map>
@@ -22,9 +23,10 @@ public:
     using Versions = std::map<UserId, VersionedObject>;
 
 public:
-    MultiDir(Versions versions, ObjectStore& objstore) :
+    MultiDir(Versions versions, ObjectStore& objstore, const BlockStore& block_store) :
         versions(std::move(versions)),
-        objstore(&objstore)
+        objstore(&objstore),
+        block_store(&block_store)
     {}
 
     MultiDir cd_into(const std::string& where) const;
@@ -43,6 +45,7 @@ private:
 private:
     Versions versions;
     ObjectStore* objstore;
+    const BlockStore* block_store;
 };
 
 } // namespace

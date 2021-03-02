@@ -6,6 +6,7 @@
 #include "shortcuts.h"
 #include "versioned_object.h"
 #include "ouisync_assert.h"
+#include "block_store.h"
 
 #include <map>
 #include <set>
@@ -152,23 +153,29 @@ public:
     }
 
 public:
-    static constexpr ObjectTag tag = ObjectTag::Directory;
+    //static constexpr ObjectTag tag = ObjectTag::Directory;
 
-    struct Nothing {
-        static constexpr ObjectTag tag = Directory::tag;
+    //struct Nothing {
+    //    static constexpr ObjectTag tag = Directory::tag;
 
-        template<class Archive>
-        void load(Archive& ar, const unsigned int version) {}
+    //    template<class Archive>
+    //    void load(Archive& ar, const unsigned int version) {}
 
-        BOOST_SERIALIZATION_SPLIT_MEMBER()
-    };
+    //    BOOST_SERIALIZATION_SPLIT_MEMBER()
+    //};
 
-    template<class Archive>
-    void serialize(Archive& ar, const unsigned int version) {
-        ar & _name_map;
-    }
+    //template<class Archive>
+    //void serialize(Archive& ar, const unsigned int version) {
+    //    ar & _name_map;
+    //}
 
     ObjectId calculate_id() const;
+
+    ObjectId save(BlockStore&) const;
+    bool maybe_load(const BlockStore::Block&);
+
+    static
+    bool block_is_dir(const BlockStore::Block&);
 
     friend std::ostream& operator<<(std::ostream&, const Directory&);
 

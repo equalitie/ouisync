@@ -49,6 +49,7 @@ private:
     executor_type _ex;
     const Options _options;
     ObjectStore _objects;
+    BlockStore _block_store;
     UserId _user_id;
     std::unique_ptr<Branch> _branch;
 };

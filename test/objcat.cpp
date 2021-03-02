@@ -49,11 +49,12 @@ int main(int argc, char** argv)
     }
 
     try {
-        auto obj = ObjectStore::load<Directory, FileBlob>(path);
+        assert(0 && "TODO");
+        //auto obj = ObjectStore::load<Directory, FileBlob>(path);
 
-        apply(obj,
-                [](ObjectId id) { cout << "ObjectId " << id << "\n"; },
-                [](const auto& obj) { cout << obj << "\n"; });
+        //apply(obj,
+        //        [](ObjectId id) { cout << "ObjectId " << id << "\n"; },
+        //        [](const auto& obj) { cout << obj << "\n"; });
 
     } catch (const exception& ex) {
         cerr << ex.what() << "\n";

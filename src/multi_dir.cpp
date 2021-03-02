@@ -61,13 +61,13 @@ Opt<MultiDir::Version> MultiDir::pick_subdirectory_to_edit(
 
 MultiDir MultiDir::cd_into(const string& where) const
 {
-    MultiDir retval({}, *objstore);
+    MultiDir retval({}, *objstore, *block_store);
 
     for (auto& [user, vobj] : versions) {
-        const auto obj = objstore->load<Directory, FileBlob::Nothing>(vobj.id);
-        auto tree = boost::get<Directory>(&obj);
-        if (!tree) continue;
-        auto user_map = tree->find(where);
+        auto block = block_store->load(vobj.id);
+        Directory tree;
+        if (!tree.maybe_load(block)) continue;
+        auto user_map = tree.find(where);
         for (auto& [user_id, vobj] : user_map) {
             retval.versions.insert({user_id, vobj});
         }
@@ -86,7 +86,11 @@ MultiDir MultiDir::cd_into(PathRange path) const
 ObjectId MultiDir::file(const string& name) const
 {
     for (auto& [user, vobj] : versions) {
-        auto dir = objstore->load<Directory>(vobj.id);
+        auto block = block_store->load(vobj.id);
+        Directory dir;
+        if (!dir.maybe_load(block)) {
+            throw std::runtime_error("MultiDir::file: Block is not a directory");
+        }
 
         auto usermap = dir.find(name);
         if (!usermap) continue;
@@ -105,7 +109,11 @@ set<string> MultiDir::list() const {
     // XXX: Conflicting files - or directories that have been concurrently
     // modified and removed - need to marked as such.
     for (auto& [user, vobj] : versions) {
-        auto dir = objstore->load<Directory>(vobj.id);
+        auto block = block_store->load(vobj.id);
+        Directory dir;
+        if (!dir.maybe_load(block)) {
+            throw std::runtime_error("MultiDir::list: Block is not a directory");
+        }
         for (auto& [filename, _] : dir) {
             ret.insert(filename);
         }

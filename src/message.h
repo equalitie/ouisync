@@ -56,28 +56,26 @@ struct RsIndex {
     }
 };
 
-struct RqObject {
+struct RqBlock {
     static constexpr auto type = MessageType::Request;
 
-    ObjectId object_id;
+    ObjectId block_id;
 
     template<class Archive>
     void serialize(Archive& ar, const unsigned) {
-        ar & object_id;
+        ar & block_id;
     }
 };
 
-struct RsObject {
+struct RsBlock {
     static constexpr auto type = MessageType::Response;
 
-    using Object = variant<FileBlob, Directory>;
-
     // boost::none if not found
-    Opt<Object> object;
+    Opt<BlockStore::Block> block;
 
     template<class Archive>
     void serialize(Archive& ar, const unsigned) {
-        ar & object;
+        ar & block;
     }
 };
 
@@ -88,22 +86,22 @@ namespace MessageDetail {
             RsNotifyOnChange,
             RqIndex,
             RsIndex,
-            RqObject,
-            RsObject
+            RqBlock,
+            RsBlock
         >;
 
     using RequestVariant
         = variant<
             RqNotifyOnChange,
             RqIndex,
-            RqObject
+            RqBlock
         >;
 
     using ResponseVariant
         = variant<
             RsNotifyOnChange,
             RsIndex,
-            RsObject
+            RsBlock
         >;
 } // MessageDetail namespace
 
@@ -148,8 +146,8 @@ std::ostream& operator<<(std::ostream&, const RqNotifyOnChange&);
 std::ostream& operator<<(std::ostream&, const RsNotifyOnChange&);
 std::ostream& operator<<(std::ostream&, const RqIndex&);
 std::ostream& operator<<(std::ostream&, const RsIndex&);
-std::ostream& operator<<(std::ostream&, const RqObject&);
-std::ostream& operator<<(std::ostream&, const RsObject&);
+std::ostream& operator<<(std::ostream&, const RqBlock&);
+std::ostream& operator<<(std::ostream&, const RsBlock&);
 std::ostream& operator<<(std::ostream&, const Request&);
 std::ostream& operator<<(std::ostream&, const Response&);
 std::ostream& operator<<(std::ostream&, const Message&);

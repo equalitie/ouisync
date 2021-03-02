@@ -25,16 +25,17 @@ using std::cerr;
 Repository::Repository(executor_type ex, Options options) :
     _ex(std::move(ex)),
     _options(std::move(options)),
-    _objects(_options.objectdir)
+    _objects(_options.objectdir),
+    _block_store(_objects)
 {
     _user_id = UserId::load_or_generate_random(_options.user_id_file_path);
 
     fs::path branch_path = _options.basedir / "branch";
 
     if (fs::exists(branch_path)) {
-        _branch.reset(new Branch(Branch::load(_ex, branch_path, _user_id, _objects, _options)));
+        _branch.reset(new Branch(Branch::load(_ex, branch_path, _user_id, _objects, _block_store, _options)));
     } else {
-        _branch.reset(new Branch(Branch::create(_ex, branch_path, _user_id, _objects, _options)));
+        _branch.reset(new Branch(Branch::create(_ex, branch_path, _user_id, _objects, _block_store, _options)));
     }
 
     std::cout << "User ID: " << _user_id << "\n";

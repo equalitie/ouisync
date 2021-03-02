@@ -32,11 +32,11 @@ net::awaitable<Index> Client::fetch_index(Cancel cancel)
     co_return move(rs.index);
 }
 
-net::awaitable<Opt<RsObject::Object>> Client::fetch_object(const ObjectId& obj, Cancel cancel)
+net::awaitable<Opt<BlockStore::Block>> Client::fetch_block(const ObjectId& id, Cancel cancel)
 {
-    co_await _broker.send(RqObject{obj}, cancel);
-    auto rs_obj = co_await receive<RsObject>(cancel);
-    co_return std::move(rs_obj.object);
+    co_await _broker.send(RqBlock{id}, cancel);
+    auto rs_obj = co_await receive<RsBlock>(cancel);
+    co_return std::move(rs_obj.block);
 }
 
 net::awaitable<void> Client::wait_for_a_change(Cancel cancel)
@@ -72,9 +72,9 @@ net::awaitable<void> Client::run(Cancel cancel)
 
             cerr << "C: Requesting: " << obj_id << "\n";
 
-            auto obj = co_await fetch_object(obj_id, cancel);
+            auto block = co_await fetch_block(obj_id, cancel);
 
-            if (!obj) {
+            if (!block) {
                 cerr << "C: Peer doesn't have object: " << obj_id << "\n";
                 // Break the loop to download a new index.
                 break;
@@ -82,13 +82,7 @@ net::awaitable<void> Client::run(Cancel cancel)
 
             cerr << "C: Got: " << obj_id << "\n";
 
-            apply(*obj,
-                [&] (const FileBlob& file) {
-                    _branch.store(file);
-                },
-                [&] (const Directory& dir) {
-                    _branch.store(dir);
-                });
+            _branch.store(*block);
         }
 
         co_await wait_for_a_change(cancel);
