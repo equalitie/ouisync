@@ -7,8 +7,8 @@ using std::move;
 
 using Block = BlockStore::Block;
 
-BlockStore::BlockStore(ObjectStore& objstore) :
-    _objstore(objstore)
+BlockStore::BlockStore(const fs::path& blockdir) :
+    _objstore(blockdir)
 {}
 
 Block BlockStore::load(const fs::path& path) const

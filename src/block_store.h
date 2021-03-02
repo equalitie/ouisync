@@ -1,6 +1,7 @@
 #pragma once
 
 #include "object_id.h"
+#include "object_store.h"
 
 #include <vector>
 #include <boost/optional.hpp>
@@ -9,8 +10,6 @@
 #include <boost/serialization/split_member.hpp>
 
 namespace ouisync {
-
-class ObjectStore;
 
 class BlockStore {
 public:
@@ -36,7 +35,7 @@ public:
     };
 
 public:
-    BlockStore(ObjectStore&);
+    BlockStore(const fs::path& blockdir);
 
     Block load(const fs::path&) const;
     Block load(const ObjectId&) const;
@@ -56,7 +55,7 @@ private:
 
 private:
     // XXX: Temporarily using ObjectStore
-    ObjectStore& _objstore;
+    ObjectStore _objstore;
 };
 
 } // namespace
