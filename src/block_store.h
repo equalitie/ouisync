@@ -49,6 +49,8 @@ public:
     static ObjectId calculate_block_id(const Block&);
     static ObjectId calculate_block_id(const char*, size_t);
 
+    void remove(const ObjectId&);
+
 private:
     fs::path id_to_path(const ObjectId&) const;
 

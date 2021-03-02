@@ -289,7 +289,7 @@ void Branch::merge_index(const Index& index)
         cerr << "------------------\n";
     }
 
-    _index.merge(index, _objstore);
+    _index.merge(index, _block_store);
 
     if (debug) {
         cerr << "Result:\n" << _index << "\n";

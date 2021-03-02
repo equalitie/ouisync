@@ -97,6 +97,11 @@ void BlockStore::store(const ObjectId& id, const Block& block)
     ofs.write(block.data(), block.size());
 }
 
+void BlockStore::remove(const ObjectId& block_id)
+{
+    _objstore.remove(block_id);
+}
+
 fs::path BlockStore::id_to_path(const ObjectId& id) const
 {
     return _objstore.id_to_path(id);
