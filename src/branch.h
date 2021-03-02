@@ -8,7 +8,7 @@
 #include "file_system_attrib.h"
 #include "versioned_object.h"
 #include "options.h"
-#include "object_store.h"
+#include "block_store.h"
 #include "index.h"
 #include "wait.h"
 
@@ -60,10 +60,10 @@ public:
 
 public:
     static
-    Branch create(executor_type, const fs::path& path, UserId user_id, ObjectStore&, Options::Branch);
+    Branch create(executor_type, const fs::path& path, UserId user_id, BlockStore&, Options::Branch);
 
     static
-    Branch load(executor_type, const fs::path& file_path, UserId user_id, ObjectStore&, Options::Branch);
+    Branch load(executor_type, const fs::path& file_path, UserId user_id, BlockStore&, Options::Branch);
 
     void mknod(PathRange);
 
@@ -89,10 +89,9 @@ public:
 
     const Index& index() const { return _index; }
 
-    ObjectStore& objstore() const { return _objstore; }
+    BlockStore& block_store() const { return _block_store; }
 
-    void store(const FileBlob&);
-    void store(const Directory&);
+    void store(const BlockStore::Block&);
 
     StateChangeWait& on_change() { return _state_change_wait; }
 
@@ -107,7 +106,7 @@ public:
     size_t read(PathRange path, const char* buf, size_t size, size_t offset) const;
 
 private:
-    Branch(executor_type, const fs::path& file_path, const UserId&, ObjectStore&, Options::Branch);
+    Branch(executor_type, const fs::path& file_path, const UserId&, BlockStore&, Options::Branch);
 
     void store_self() const;
 
@@ -130,7 +129,7 @@ private:
     executor_type _ex;
     fs::path _file_path;
     Options::Branch _options;
-    ObjectStore& _objstore;
+    BlockStore& _block_store;
     UserId _user_id;
     Index _index;
 

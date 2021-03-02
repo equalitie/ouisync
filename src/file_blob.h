@@ -3,9 +3,10 @@
 #include "object_tag.h"
 #include "object_id.h"
 #include "shortcuts.h"
+#include "block_store.h"
 
-#include <boost/serialization/array_wrapper.hpp>
-#include <boost/serialization/split_member.hpp>
+//#include <boost/serialization/array_wrapper.hpp>
+//#include <boost/serialization/split_member.hpp>
 
 namespace ouisync {
 
@@ -44,23 +45,20 @@ public:
 
     ObjectId calculate_id() const;
 
-    template<class Archive>
-    void save(Archive& ar, const unsigned int version) const {
-        ar & uint32_t(size());
-        ar & boost::serialization::make_array(data(), size());
+    ObjectId save(BlockStore&) const;
+    bool maybe_load(const BlockStore::Block&);
+
+    void load(const BlockStore::Block& block)
+    {
+        if (!maybe_load(block)) {
+            throw std::runtime_error("FileBlob:: Failed to load from block");
+        }
     }
 
-    template<class Archive>
-    void load(Archive& ar, const unsigned int version) {
-        uint32_t size;
-        ar & size;
-        resize(size);
-        ar & boost::serialization::make_array(data(), size);
-    }
+    static
+    size_t read_size(const BlockStore::Block&);
 
     friend std::ostream& operator<<(std::ostream&, const FileBlob&);
-
-    BOOST_SERIALIZATION_SPLIT_MEMBER()
 
 private:
 };

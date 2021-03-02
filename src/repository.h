@@ -5,7 +5,6 @@
 #include "file_system_attrib.h"
 #include "user_id.h"
 #include "branch.h"
-#include "object_store.h"
 
 #include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/awaitable.hpp>
@@ -38,8 +37,6 @@ public:
 
     const fs::path& object_directory() const { return _options.objectdir; }
 
-    ObjectStore& object_store() { return _objects; }
-
     Branch& branch() { return *_branch; }
 
 private:
@@ -48,7 +45,7 @@ private:
 private:
     executor_type _ex;
     const Options _options;
-    ObjectStore _objects;
+    BlockStore _block_store;
     UserId _user_id;
     std::unique_ptr<Branch> _branch;
 };

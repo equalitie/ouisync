@@ -10,7 +10,7 @@
 
 namespace ouisync {
 
-class ObjectStore;
+class BlockStore;
 
 class MultiDir {
 public:
@@ -22,9 +22,9 @@ public:
     using Versions = std::map<UserId, VersionedObject>;
 
 public:
-    MultiDir(Versions versions, ObjectStore& objstore) :
+    MultiDir(Versions versions, const BlockStore& block_store) :
         versions(std::move(versions)),
-        objstore(&objstore)
+        block_store(&block_store)
     {}
 
     MultiDir cd_into(const std::string& where) const;
@@ -42,7 +42,7 @@ private:
 
 private:
     Versions versions;
-    ObjectStore* objstore;
+    const BlockStore* block_store;
 };
 
 } // namespace

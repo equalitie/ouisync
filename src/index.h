@@ -9,7 +9,7 @@
 
 namespace ouisync {
 
-class ObjectStore;
+class BlockStore;
 
 class Index {
 private:
@@ -45,7 +45,7 @@ public:
     void insert_object(const UserId&, const ObjectId& id, const ParentId& parent_id, size_t cnt = 1);
     void remove_object(const UserId&, const ObjectId& id, const ParentId& parent_id);
 
-    void merge(const Index&, ObjectStore&);
+    void merge(const Index&, BlockStore&);
 
     Opt<VersionedObject> commit(const UserId&);
     const Map<UserId, VersionedObject>& commits() const { return _commits; }

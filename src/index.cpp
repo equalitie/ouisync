@@ -1,7 +1,6 @@
 #include "index.h"
 #include "hash.h"
 #include "ouisync_assert.h"
-#include "object_store.h"
 #include "directory.h"
 #include "file_blob.h"
 #include "variant.h"
@@ -192,7 +191,7 @@ template<class F> void Index::compare(const ObjectMap& remote_objects, F&& cmp)
         });
 }
 
-void Index::merge(const Index& remote_index, ObjectStore& objstore)
+void Index::merge(const Index& remote_index, BlockStore& block_store)
 {
     auto& remote_commits = remote_index._commits;
     auto& remote_objects = remote_index._objects;
@@ -220,7 +219,7 @@ void Index::merge(const Index& remote_index, ObjectStore& objstore)
                 local.erase();
 
                 if (!someone_has(id)) {
-                    objstore.remove(id);
+                    block_store.remove(id);
                     _missing_objects.erase(id);
                 }
             }

@@ -21,7 +21,8 @@ public:
 
         if (i != per_name.end()) {
             _old = i->second;
-            _blob = objstore().load<FileBlob>(_old->id);
+            _blob = FileBlob{};
+            _blob->load(root()->block_store().load(_old->id));
         }
     }
 
@@ -39,7 +40,7 @@ public:
 
         if (_old && _old->id == new_id) return false;
 
-        objstore().store(*_blob);
+        _blob->save(root()->block_store());
 
         VersionVector vv;
 
@@ -52,10 +53,6 @@ public:
         _parent->tree()[_filename][_this_user_id] = { new_id, std::move(vv) };
 
         return _parent->commit();
-    }
-
-    ObjectStore& objstore() {
-        return root()->objstore();
     }
 
     RootOp* root() override { return _parent->root(); }

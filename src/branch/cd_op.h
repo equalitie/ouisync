@@ -23,7 +23,11 @@ public:
 
         _old = opt_user_version->vobj;
 
-        _tree = objstore().load<Directory>(_old->id);
+        auto block = root()->block_store().load(_old->id);
+
+        if (!_tree.maybe_load(block)) {
+            throw std::runtime_error("Block doesn't represent a Directory");
+        }
     }
 
     Directory& tree() override {
@@ -49,17 +53,13 @@ public:
 
         _parent->tree()[_dirname][_this_user_id] = { new_tree_id, std::move(new_vv) };
 
-        objstore().store(_tree);
+        _tree.save(_root->block_store());
 
         _tree.for_each_unique_child([&] (auto& filename, auto& child_id) {
                 _root->index().insert_object(_this_user_id, child_id, new_tree_id);
             });
 
         return _parent->commit();
-    }
-
-    ObjectStore& objstore() {
-        return _root->objstore();
     }
 
     RootOp* root() override { return _root; }

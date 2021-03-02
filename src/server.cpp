@@ -27,10 +27,10 @@ net::awaitable<void> Server::run(Cancel cancel)
             co_await _broker.send(RsIndex{_branch.index()}, cancel);
         };
 
-        auto handle_rq_object = [&] (const RqObject& rq) -> AwaitVoid {
-            RsObject rs;
-            auto object = _branch.objstore().maybe_load<FileBlob, Directory>(rq.object_id);
-            co_await _broker.send({RsObject{std::move(object)}}, cancel);
+        auto handle_rq_block = [&] (const RqBlock& rq) -> AwaitVoid {
+            RsBlock rs;
+            auto block = _branch.block_store().maybe_load(rq.block_id);
+            co_await _broker.send({RsBlock{std::move(block)}}, cancel);
         };
 
         auto handle_notify_on_change = [&] (RqNotifyOnChange rq) -> AwaitVoid {
@@ -40,7 +40,7 @@ net::awaitable<void> Server::run(Cancel cancel)
 
         co_await apply(m,
             [&] (const RqIndex& rq) { return handle_rq_index(rq); },
-            [&] (const RqObject& rq) { return handle_rq_object(rq); },
+            [&] (const RqBlock& rq) { return handle_rq_block(rq); },
             [&] (const RqNotifyOnChange& rq) { return handle_notify_on_change(rq); });
     }
 }
