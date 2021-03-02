@@ -5,13 +5,35 @@
 #include <vector>
 #include <boost/optional.hpp>
 
+#include <boost/serialization/array_wrapper.hpp>
+#include <boost/serialization/split_member.hpp>
+
 namespace ouisync {
 
 class ObjectStore;
 
 class BlockStore {
 public:
-    using Block = std::vector<char>;
+    struct Block : std::vector<char>
+    {
+        using std::vector<char>::vector;
+
+        template<class Archive>
+        void save(Archive& ar, const unsigned int version) const {
+            ar & uint32_t(size());
+            ar & boost::serialization::make_array(data(), size());
+        }
+
+        template<class Archive>
+        void load(Archive& ar, const unsigned int version) {
+            uint32_t size;
+            ar & size;
+            resize(size);
+            ar & boost::serialization::make_array(data(), size);
+        }
+
+        BOOST_SERIALIZATION_SPLIT_MEMBER()
+    };
 
 public:
     BlockStore(ObjectStore&);
