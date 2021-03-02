@@ -12,7 +12,7 @@ public:
         _this_user_id(this_user_id),
         _index(index),
         _original_commit(*_index.commit(this_user_id)),
-        _multi_dir(_index.commits(), objstore, block_store)
+        _multi_dir(_index.commits(), block_store)
     {
         auto block = _block_store.load(_original_commit.id);
         if (!_tree.maybe_load(block)) {

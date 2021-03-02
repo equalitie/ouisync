@@ -3,7 +3,6 @@
 #include "path_range.h"
 #include "user_id.h"
 #include "versioned_object.h"
-#include "block_store.h"
 
 #include <set>
 #include <map>
@@ -11,7 +10,7 @@
 
 namespace ouisync {
 
-class ObjectStore;
+class BlockStore;
 
 class MultiDir {
 public:
@@ -23,9 +22,8 @@ public:
     using Versions = std::map<UserId, VersionedObject>;
 
 public:
-    MultiDir(Versions versions, ObjectStore& objstore, const BlockStore& block_store) :
+    MultiDir(Versions versions, const BlockStore& block_store) :
         versions(std::move(versions)),
-        objstore(&objstore),
         block_store(&block_store)
     {}
 
@@ -44,7 +42,6 @@ private:
 
 private:
     Versions versions;
-    ObjectStore* objstore;
     const BlockStore* block_store;
 };
 

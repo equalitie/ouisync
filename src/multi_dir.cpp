@@ -1,6 +1,7 @@
 #include "multi_dir.h"
 #include "directory.h"
 #include "object_store.h"
+#include "block_store.h"
 #include "variant.h"
 #include "error.h"
 #include "file_blob.h"
@@ -61,7 +62,7 @@ Opt<MultiDir::Version> MultiDir::pick_subdirectory_to_edit(
 
 MultiDir MultiDir::cd_into(const string& where) const
 {
-    MultiDir retval({}, *objstore, *block_store);
+    MultiDir retval({}, *block_store);
 
     for (auto& [user, vobj] : versions) {
         auto block = block_store->load(vobj.id);

@@ -96,7 +96,7 @@ unique_ptr<Branch::DirectoryOp> Branch::root_op()
 
 MultiDir Branch::root_multi_dir() const
 {
-    return MultiDir(_index.commits(), _objstore, _block_store);
+    return MultiDir(_index.commits(), _block_store);
 }
 
 unique_ptr<Branch::DirectoryOp> Branch::cd_into(PathRange path)
