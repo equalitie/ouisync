@@ -54,8 +54,7 @@ private:
     fs::path id_to_path(const ObjectId&) const;
 
 private:
-    // XXX: Temporarily using ObjectStore
-    ObjectStore _objstore;
+    fs::path _blockdir;
 };
 
 } // namespace

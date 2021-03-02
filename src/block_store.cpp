@@ -1,5 +1,6 @@
 #include "block_store.h"
 #include "object_store.h"
+#include "hex.h"
 #include <iostream>
 
 using namespace ouisync;
@@ -8,7 +9,7 @@ using std::move;
 using Block = BlockStore::Block;
 
 BlockStore::BlockStore(const fs::path& blockdir) :
-    _objstore(blockdir)
+    _blockdir(blockdir)
 {}
 
 Block BlockStore::load(const fs::path& path) const
@@ -99,12 +100,22 @@ void BlockStore::store(const ObjectId& id, const Block& block)
 
 void BlockStore::remove(const ObjectId& block_id)
 {
-    _objstore.remove(block_id);
+    sys::error_code ec;
+    fs::remove(id_to_path(block_id), ec);
+    return;
 }
 
 fs::path BlockStore::id_to_path(const ObjectId& id) const
 {
-    return _objstore.id_to_path(id);
+    auto hex = to_hex<char>(id);
+    string_view hex_sv{hex.data(), hex.size()};
+
+    static const size_t prefix_size = 3;
+
+    auto prefix = hex_sv.substr(0, prefix_size);
+    auto rest   = hex_sv.substr(prefix_size, hex_sv.size() - prefix_size);
+
+    return _blockdir / fs::path(prefix.begin(), prefix.end()) / fs::path(rest.begin(), rest.end());
 }
 
 /* static */
