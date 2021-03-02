@@ -91,7 +91,7 @@ void Branch::do_commit(OpPtr& op)
 //--------------------------------------------------------------------
 unique_ptr<Branch::DirectoryOp> Branch::root_op()
 {
-    return make_unique<Branch::RootOp>(_objstore, _block_store, _user_id, _index);
+    return make_unique<Branch::RootOp>(_block_store, _user_id, _index);
 }
 
 MultiDir Branch::root_multi_dir() const

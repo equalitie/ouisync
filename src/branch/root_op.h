@@ -6,8 +6,7 @@ namespace ouisync {
 
 class Branch::RootOp : public Branch::DirectoryOp {
 public:
-    RootOp(ObjectStore& objstore, BlockStore& block_store, const UserId& this_user_id, Index& index) :
-        _objstore(objstore),
+    RootOp(BlockStore& block_store, const UserId& this_user_id, Index& index) :
         _block_store(block_store),
         _this_user_id(this_user_id),
         _index(index),
@@ -47,7 +46,6 @@ public:
     }
 
     Index& index() { return _index; }
-    ObjectStore& objstore() { return _objstore; }
     BlockStore& block_store() { return _block_store; }
 
     RootOp* root() override { return this; }
@@ -70,13 +68,12 @@ public:
             });
         }
 
-        _objstore.remove(obj_id);
+        _block_store.remove(obj_id);
     }
 
     const MultiDir& multi_dir() const override { return _multi_dir; }
 
 private:
-    ObjectStore& _objstore;
     BlockStore& _block_store;
     UserId _this_user_id;
     Directory _tree;

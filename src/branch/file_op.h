@@ -55,10 +55,6 @@ public:
         return _parent->commit();
     }
 
-    ObjectStore& objstore() {
-        return root()->objstore();
-    }
-
     RootOp* root() override { return _parent->root(); }
 
 private:

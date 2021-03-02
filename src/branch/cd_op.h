@@ -62,10 +62,6 @@ public:
         return _parent->commit();
     }
 
-    ObjectStore& objstore() {
-        return _root->objstore();
-    }
-
     RootOp* root() override { return _root; }
 
     const MultiDir& multi_dir() const override { return _multi_dir; }
