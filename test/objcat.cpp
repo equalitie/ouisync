@@ -1,6 +1,6 @@
 #include "directory.h"
 #include "file_blob.h"
-#include "object_store.h"
+#include "block_store.h"
 #include "shortcuts.h"
 #include "variant.h"
 #include "hex.h"
@@ -49,12 +49,18 @@ int main(int argc, char** argv)
     }
 
     try {
-        assert(0 && "TODO");
-        //auto obj = ObjectStore::load<Directory, FileBlob>(path);
+        auto block = BlockStore::load(path);
 
-        //apply(obj,
-        //        [](ObjectId id) { cout << "ObjectId " << id << "\n"; },
-        //        [](const auto& obj) { cout << obj << "\n"; });
+        Directory dir;
+        FileBlob file;
+
+        if (dir.maybe_load(block)) {
+            cout << dir << "\n";
+        } else if (file.maybe_load(block)) {
+            cout << file << "\n";
+        } else {
+            cout << "Unrecognized block" << "\n";
+        }
 
     } catch (const exception& ex) {
         cerr << ex.what() << "\n";

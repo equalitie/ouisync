@@ -37,7 +37,7 @@ public:
 public:
     BlockStore(const fs::path& blockdir);
 
-    Block load(const fs::path&) const;
+    static Block load(const fs::path&);
     Block load(const ObjectId&) const;
     Opt<Block> maybe_load(const ObjectId&) const;
 

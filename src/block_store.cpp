@@ -12,7 +12,8 @@ BlockStore::BlockStore(const fs::path& blockdir) :
     _blockdir(blockdir)
 {}
 
-Block BlockStore::load(const fs::path& path) const
+/* static */
+Block BlockStore::load(const fs::path& path)
 {
     auto size = fs::file_size(path);
     Block block;
