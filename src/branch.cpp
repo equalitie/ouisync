@@ -30,13 +30,13 @@ using std::cerr;
 #define DBG std::cerr << __PRETTY_FUNCTION__ << ":" << __LINE__ << " "
 
 /* static */
-Branch Branch::create(executor_type ex, const fs::path& path, UserId user_id, ObjectStore& objstore, BlockStore& block_store, Options::Branch options)
+Branch Branch::create(executor_type ex, const fs::path& path, UserId user_id, BlockStore& block_store, Options::Branch options)
 {
     if (fs::exists(path)) {
         throw std::runtime_error("Local branch already exits");
     }
 
-    Branch b(ex, path, user_id, objstore, block_store, move(options));
+    Branch b(ex, path, user_id, block_store, move(options));
 
     const Directory empty_dir;
     auto empty_dir_id = empty_dir.save(block_store);
@@ -49,9 +49,9 @@ Branch Branch::create(executor_type ex, const fs::path& path, UserId user_id, Ob
 }
 
 /* static */
-Branch Branch::load(executor_type ex, const fs::path& file_path, UserId user_id, ObjectStore& objstore, BlockStore& block_store, Options::Branch options)
+Branch Branch::load(executor_type ex, const fs::path& file_path, UserId user_id, BlockStore& block_store, Options::Branch options)
 {
-    Branch b(ex, file_path, user_id, objstore, block_store, move(options));
+    Branch b(ex, file_path, user_id, block_store, move(options));
     archive::load(file_path, b);
     return b;
 }
@@ -59,11 +59,10 @@ Branch Branch::load(executor_type ex, const fs::path& file_path, UserId user_id,
 //--------------------------------------------------------------------
 
 Branch::Branch(executor_type ex, const fs::path& file_path, const UserId& user_id,
-        ObjectStore& objstore, BlockStore& block_store, Options::Branch options) :
+        BlockStore& block_store, Options::Branch options) :
     _ex(ex),
     _file_path(file_path),
     _options(move(options)),
-    _objstore(objstore),
     _block_store(block_store),
     _user_id(user_id),
     _state_change_wait(_ex)

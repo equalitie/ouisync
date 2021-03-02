@@ -33,9 +33,9 @@ Repository::Repository(executor_type ex, Options options) :
     fs::path branch_path = _options.basedir / "branch";
 
     if (fs::exists(branch_path)) {
-        _branch.reset(new Branch(Branch::load(_ex, branch_path, _user_id, _objects, _block_store, _options)));
+        _branch.reset(new Branch(Branch::load(_ex, branch_path, _user_id, _block_store, _options)));
     } else {
-        _branch.reset(new Branch(Branch::create(_ex, branch_path, _user_id, _objects, _block_store, _options)));
+        _branch.reset(new Branch(Branch::create(_ex, branch_path, _user_id, _block_store, _options)));
     }
 
     std::cout << "User ID: " << _user_id << "\n";
