@@ -27,7 +27,6 @@ net::awaitable<void> Server::run(Cancel cancel)
         };
 
         auto handle_rq_block = [&] (const RqBlock& rq) -> AwaitVoid {
-            RsBlock rs;
             auto block = _branch.block_store().maybe_load(rq.block_id);
             co_await _broker.send({RsBlock{std::move(block)}}, cancel);
         };
