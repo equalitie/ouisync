@@ -25,8 +25,10 @@ using std::cerr;
 Repository::Repository(executor_type ex, Options options) :
     _ex(std::move(ex)),
     _options(std::move(options)),
-    _block_store(_options.objectdir)
+    _block_store(_options.blockdir)
 {
+    fs::create_directories(_options.blockdir);
+
     _user_id = UserId::load_or_generate_random(_options.user_id_file_path);
 
     fs::path branch_path = _options.basedir / "branch";

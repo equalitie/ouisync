@@ -32,11 +32,6 @@ int main(int argc, char* argv[]) {
         exit(1);
     }
 
-    fs::create_directories(options.branchdir);
-    fs::create_directories(options.objectdir);
-    fs::create_directories(options.remotes);
-    fs::create_directories(options.snapshotdir);
-
     Repository repo(ioc.get_executor(), options);
     Network network(ioc.get_executor(), repo, options);
 

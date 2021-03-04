@@ -62,10 +62,7 @@ void Options::parse(unsigned argc, char** argv)
     store(parse_command_line(argc, argv, description), vars);
     notify(vars);
 
-    branchdir         = basedir / "branches";
-    objectdir         = basedir / "objects";
-    snapshotdir       = basedir / "snapshots";
-    remotes           = basedir / "remotes";
+    blockdir          = basedir / "blocks";
     user_id_file_path = basedir / "user_id";
 }
 

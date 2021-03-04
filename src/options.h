@@ -20,10 +20,7 @@ public:
     bool help;
 
     fs::path basedir;
-    fs::path branchdir;
-    fs::path objectdir;
-    fs::path snapshotdir;
-    fs::path remotes;
+    fs::path blockdir;
     fs::path user_id_file_path;
 
     Opt<fs::path> mountdir;
@@ -32,12 +29,11 @@ public:
     Opt<net::ip::tcp::endpoint> connect_endpoint;
 
     struct Branch {
-        fs::path objectdir;
-        fs::path snapshotdir;
+        fs::path blockdir;
     };
 
     operator Branch() const {
-        return { objectdir, snapshotdir };
+        return { blockdir };
     }
 
 private:

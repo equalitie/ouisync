@@ -35,8 +35,6 @@ public:
 
     executor_type get_executor() { return _ex; }
 
-    const fs::path& object_directory() const { return _options.objectdir; }
-
     Branch& branch() { return *_branch; }
 
 private:
