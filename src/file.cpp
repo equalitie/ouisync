@@ -5,65 +5,79 @@
 #include "blob.h"
 #include "block_store.h"
 
-#include <sstream>
+#include <iostream>
 #include <boost/optional.hpp>
 
 #include <boost/serialization/array_wrapper.hpp>
 
 using namespace ouisync;
+using std::move;
 
-ObjectId File::calculate_id() const
+File::File(BlockStore& block_store) :
+    _blob(Blob::empty(block_store))
 {
-    // XXX: This is inefficient
-    std::stringstream ss;
-    auto array = boost::serialization::make_array(data(), size());
-    auto tag = ObjectTag::File;
-    archive::store(ss, tag, uint32_t(size()), array);
-    return BlockStore::calculate_block_id(ss.str().data(), ss.str().size());
+    BlobStreamBuffer buf(_blob);
+    std::ostream stream(&buf);
+    OutputArchive a(stream);
+
+    a << ObjectTag::File;
+    _data_offset = buf.getp();
 }
 
-ObjectId File::save(BlockStore& blockstore) const
+File::File(Blob&& blob, size_t data_offset) :
+    _blob(move(blob)),
+    _data_offset(data_offset)
 {
-    // XXX: This is inefficient
-    std::stringstream ss;
-    auto array = boost::serialization::make_array(data(), size());
-    auto tag = ObjectTag::File;
-    archive::store(ss, tag, uint32_t(size()), array);
-    return blockstore.store(ss.str().data(), ss.str().size());
 }
 
-bool File::maybe_load(Blob& blob)
+ObjectId File::calculate_id()
 {
-    BlobStreamBuffer buf(blob);
-    std::istream s(&buf);
-    InputArchive a(s);
-    ObjectTag tag;
-    a >> tag;
-    if (tag != ObjectTag::File) return false;
-    uint32_t size;
-    a >> size;
-    resize(size);
-    auto array = boost::serialization::make_array(data(), this->size());
-    a >> array;
-    return true;
+    return _blob.id();
 }
 
 /* static */
-size_t File::read_size(Blob& blob)
+Opt<File> File::maybe_open(Blob& blob)
 {
     BlobStreamBuffer buf(blob);
-    std::istream s(&buf);
-    InputArchive a(s);
+    std::istream stream(&buf);
+    InputArchive a(stream);
+
     ObjectTag tag;
     a >> tag;
-    if (tag != ObjectTag::File) throw std::runtime_error("Block doesn't represent a file");
-    uint32_t size;
-    a >> size;
-    return size;
+    if (tag != ObjectTag::File) return boost::none;
+
+    size_t data_offset = buf.getg();
+
+    return File{move(blob), data_offset};
+}
+
+size_t File::size()
+{
+    return _blob.size() - _data_offset;
+}
+
+size_t File::write(const char* buf, size_t size, size_t offset)
+{
+    return _blob.write(buf, size, _data_offset + offset);
+}
+
+size_t File::read(char* buf, size_t size, size_t offset)
+{
+    return _blob.read(buf, size, _data_offset + offset);
+}
+
+size_t File::truncate(size_t s)
+{
+    return _blob.truncate(s + _data_offset) - _data_offset;
+}
+
+void File::commit()
+{
+    _blob.commit();
 }
 
 std::ostream& ouisync::operator<<(std::ostream& os, const File& b) {
-    auto id = b.calculate_id();
-    return os << "Data id:" << id << " size:" << b.size();
+    auto id = const_cast<File&>(b).calculate_id();
+    return os << "Data id:" << id << " size:" << b._blob.size();
 }
 

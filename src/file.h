@@ -2,38 +2,47 @@
 
 #include "object_id.h"
 #include "shortcuts.h"
+#include "blob.h"
 
 namespace ouisync {
 
-class Blob;
-class BlockStore;
-
-struct File : std::vector<uint8_t>
+struct File
 {
 public:
-    using Parent = std::vector<uint8_t>;
-    using std::vector<uint8_t>::vector;
+    File(BlockStore&);
 
-    File(const Parent& p) : Parent(p) {}
-    File(Parent&& p) : Parent(std::move(p)) {}
+    // The returned File takes ownership iff the `blob` contains
+    // the ObjectTag::File tag at the beginning.
+    static Opt<File> maybe_open(Blob& blob);
 
-    ObjectId calculate_id() const;
-
-    ObjectId save(BlockStore&) const;
-    bool maybe_load(Blob&);
-
-    void load(Blob& blob)
+    static File open(Blob& blob)
     {
-        if (!maybe_load(blob)) {
-            throw std::runtime_error("File:: Failed to load from block");
+        Opt<File> f = maybe_open(blob);
+        if (!f) {
+            throw std::runtime_error("File::open Failed to open blob");
         }
+        return std::move(*f);
     }
 
-    static size_t read_size(Blob&);
+    ObjectId calculate_id();
+
+    size_t write(const char*, size_t size, size_t offset);
+    size_t read(char*, size_t size, size_t offset);
+
+    void commit();
+
+    size_t size();
+
+    size_t truncate(size_t);
 
     friend std::ostream& operator<<(std::ostream&, const File&);
 
 private:
+    File(Blob&&, size_t);
+
+private:
+    Blob _blob;
+    size_t _data_offset;
 };
 
 } // namespace

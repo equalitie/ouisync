@@ -54,6 +54,13 @@ struct Blob::Impl
         return size;
     }
 
+    size_t truncate(size_t s) {
+        if (block.size() == s) return s;
+        block.resize(std::min<size_t>(block.size(), s));
+        block_id = boost::none;
+        return block.size();
+    }
+
     size_t size() const { return block.size(); }
 
     void commit() {
@@ -70,6 +77,11 @@ size_t Blob::read(char* buffer, size_t size, size_t offset)
 size_t Blob::write(const char* buffer, size_t size, size_t offset)
 {
     return _impl->write(buffer, size, offset);
+}
+
+size_t Blob::truncate(size_t size)
+{
+    return _impl->truncate(size);
 }
 
 void Blob::commit()

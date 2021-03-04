@@ -103,7 +103,7 @@ public:
 
     FileSystemAttrib get_attr(PathRange path) const;
 
-    size_t read(PathRange path, const char* buf, size_t size, size_t offset) const;
+    size_t read(PathRange path, char* buf, size_t size, size_t offset) const;
 
 private:
     Branch(executor_type, const fs::path& file_path, const UserId&, BlockStore&, Options::Branch);
