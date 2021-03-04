@@ -2,9 +2,11 @@
 
 #include "object_id.h"
 #include "shortcuts.h"
-#include "block_store.h"
 
 namespace ouisync {
+
+class Blob;
+class BlockStore;
 
 struct File : std::vector<uint8_t>
 {
@@ -18,17 +20,16 @@ public:
     ObjectId calculate_id() const;
 
     ObjectId save(BlockStore&) const;
-    bool maybe_load(const BlockStore::Block&);
+    bool maybe_load(Blob&);
 
-    void load(const BlockStore::Block& block)
+    void load(Blob& blob)
     {
-        if (!maybe_load(block)) {
+        if (!maybe_load(blob)) {
             throw std::runtime_error("File:: Failed to load from block");
         }
     }
 
-    static
-    size_t read_size(const BlockStore::Block&);
+    static size_t read_size(Blob&);
 
     friend std::ostream& operator<<(std::ostream&, const File&);
 

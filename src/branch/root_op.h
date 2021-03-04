@@ -1,6 +1,7 @@
 #pragma once
 
 #include "operation_interface.h"
+#include "blob.h"
 
 namespace ouisync {
 
@@ -13,8 +14,8 @@ public:
         _original_commit(*_index.commit(this_user_id)),
         _multi_dir(_index.commits(), block_store)
     {
-        auto block = _block_store.load(_original_commit.id);
-        if (!_tree.maybe_load(block)) {
+        auto blob = Blob::open(_original_commit.id, _block_store);
+        if (!_tree.maybe_load(blob)) {
             throw std::runtime_error("Failed to parse block as a directory");
         }
     }
@@ -59,10 +60,10 @@ public:
 
         if (_index.someone_has(obj_id)) return;
 
-        auto block = _block_store.load(obj_id);
+        auto blob = Blob::open(obj_id, _block_store);
 
         Directory d;
-        if (d.maybe_load(block)) {
+        if (d.maybe_load(blob)) {
             d.for_each_unique_child([&] (auto& filename, auto& child_id) {
                 remove_recursive(child_id, obj_id);
             });

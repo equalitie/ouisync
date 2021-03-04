@@ -136,13 +136,13 @@ FileSystemAttrib Branch::get_attr(PathRange path) const
 
     auto file_id = dir.file(path.back());
 
-    auto block = _block_store.load(file_id);
+    auto blob = Blob::open(file_id, _block_store);
 
-    if (Directory::block_is_dir(block)) {
+    if (Directory::blob_is_dir(blob)) {
         return FileSystemDirAttrib{};
     }
 
-    auto size = File::read_size(block);
+    auto size = File::read_size(blob);
 
     return FileSystemFileAttrib{size};
 }
@@ -155,10 +155,10 @@ size_t Branch::read(PathRange path, const char* buf, size_t size, size_t offset)
 
     MultiDir dir = root_multi_dir().cd_into(parent(path));
 
-    auto block = _block_store.load(dir.file(path.back()));
+    auto blob = Blob::open(dir.file(path.back()), _block_store);
 
     File file;
-    file.load(block);
+    file.load(blob);
     
     size_t len = file.size();
 
@@ -318,7 +318,7 @@ void Branch::store_self() const {
 static void print(std::ostream& os, const ObjectId& obj_id, BlockStore& block_store, unsigned level)
 {
     auto pad = Padding(level*2);
-    auto opt = block_store.maybe_load(obj_id);
+    auto opt = Blob::maybe_open(obj_id, block_store);
 
     if (!opt) {
         os << pad << "!!! Block " << obj_id << " is not in BlockStore !!!\n";

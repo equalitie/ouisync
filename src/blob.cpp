@@ -100,6 +100,19 @@ Blob Blob::open(const ObjectId& id, BlockStore& block_store)
 }
 
 /* static */
+Blob Blob::open(const fs::path& path, BlockStore& block_store)
+{
+    auto block = block_store.load(path);
+
+    auto impl = make_unique<Impl>();
+
+    impl->block_store = &block_store;
+    impl->block = move(block);
+
+    return {move(impl)};
+}
+
+/* static */
 Opt<Blob> Blob::maybe_open(const ObjectId& id, BlockStore& block_store)
 {
     auto block = block_store.maybe_load(id);

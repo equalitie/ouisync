@@ -18,6 +18,8 @@
 
 namespace ouisync {
 
+class Blob;
+
 class Directory final {
 public:
     using UserMap = std::map<UserId, VersionedObject>;
@@ -153,29 +155,13 @@ public:
     }
 
 public:
-    //static constexpr ObjectTag tag = ObjectTag::Directory;
-
-    //struct Nothing {
-    //    static constexpr ObjectTag tag = Directory::tag;
-
-    //    template<class Archive>
-    //    void load(Archive& ar, const unsigned int version) {}
-
-    //    BOOST_SERIALIZATION_SPLIT_MEMBER()
-    //};
-
-    //template<class Archive>
-    //void serialize(Archive& ar, const unsigned int version) {
-    //    ar & _name_map;
-    //}
-
     ObjectId calculate_id() const;
 
     ObjectId save(BlockStore&) const;
-    bool maybe_load(const BlockStore::Block&);
+    bool maybe_load(Blob&);
 
     static
-    bool block_is_dir(const BlockStore::Block&);
+    bool blob_is_dir(Blob&);
 
     friend std::ostream& operator<<(std::ostream&, const Directory&);
 

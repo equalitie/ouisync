@@ -2,6 +2,8 @@
 #include "hash.h"
 #include "archive.h"
 #include "object_tag.h"
+#include "blob.h"
+#include "block_store.h"
 
 #include <sstream>
 #include <boost/optional.hpp>
@@ -30,36 +32,34 @@ ObjectId File::save(BlockStore& blockstore) const
     return blockstore.store(ss.str().data(), ss.str().size());
 }
 
-bool File::maybe_load(const BlockStore::Block& block)
+bool File::maybe_load(Blob& blob)
 {
-    // XXX: This is inefficient
-    std::stringstream ss;
-    ss.str(std::string(block.data(), block.size()));
+    BlobStreamBuffer buf(blob);
+    std::istream s(&buf);
+    InputArchive a(s);
     ObjectTag tag;
-    InputArchive a(ss);
     a >> tag;
     if (tag != ObjectTag::File) return false;
-    uint32_t s;
-    a >> s;
-    resize(s);
-    auto array = boost::serialization::make_array(data(), size());
+    uint32_t size;
+    a >> size;
+    resize(size);
+    auto array = boost::serialization::make_array(data(), this->size());
     a >> array;
     return true;
 }
 
 /* static */
-size_t File::read_size(const BlockStore::Block& block)
+size_t File::read_size(Blob& blob)
 {
-    // XXX: This is inefficient
-    std::stringstream ss;
-    ss.str(std::string(block.data(), block.size()));
+    BlobStreamBuffer buf(blob);
+    std::istream s(&buf);
+    InputArchive a(s);
     ObjectTag tag;
-    InputArchive a(ss);
     a >> tag;
     if (tag != ObjectTag::File) throw std::runtime_error("Block doesn't represent a file");
-    uint32_t s;
-    a >> s;
-    return s;
+    uint32_t size;
+    a >> size;
+    return size;
 }
 
 std::ostream& ouisync::operator<<(std::ostream& os, const File& b) {

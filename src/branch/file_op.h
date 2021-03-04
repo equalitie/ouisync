@@ -22,7 +22,8 @@ public:
         if (i != per_name.end()) {
             _old = i->second;
             _file = File{};
-            _file->load(root()->block_store().load(_old->id));
+            auto blob = Blob::open(_old->id, root()->block_store());
+            _file->load(blob);
         }
     }
 

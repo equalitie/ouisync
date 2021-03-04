@@ -23,9 +23,9 @@ public:
 
         _old = opt_user_version->vobj;
 
-        auto block = root()->block_store().load(_old->id);
+        auto blob = Blob::open(_old->id, root()->block_store());
 
-        if (!_tree.maybe_load(block)) {
+        if (!_tree.maybe_load(blob)) {
             throw std::runtime_error("Block doesn't represent a Directory");
         }
     }
