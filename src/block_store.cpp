@@ -40,21 +40,8 @@ Block BlockStore::load(const ObjectId& block_id) const
 Opt<Block> BlockStore::maybe_load(const ObjectId& block_id) const
 {
     auto path = id_to_path(block_id);
-
     if (!fs::exists(path)) return boost::none;
-
-    auto size = fs::file_size(path);
-
-    fs::ifstream ifs(path, fs::ifstream::binary);
-
-    if (!ifs.is_open()) {
-        throw std::runtime_error("archive::load: Failed to open object");
-    }
-
-    Block block;
-    block.resize(size);
-    ifs.read(block.data(), block.size());
-    return block;
+    return load(path);
 }
 
 void BlockStore::store(const ObjectId& id, const char* data, size_t size)
