@@ -2,6 +2,7 @@
 #include "ostream/padding.h"
 #include "archive.h"
 #include "object_tag.h"
+#include "blob.h"
 
 #include <iostream>
 #include <sstream>
@@ -22,20 +23,22 @@ ObjectId Directory::calculate_id() const
 
 ObjectId Directory::save(BlockStore& blockstore) const
 {
-    // XXX: This is inefficient
-    std::stringstream ss;
-    auto tag = ObjectTag::Directory;
-    archive::store(ss, tag, _name_map);
-    return blockstore.store(ss.str().data(), ss.str().size());
+    auto blob = Blob::empty(blockstore);
+    BlobStreamBuffer buf(blob);
+    std::ostream s(&buf);
+    OutputArchive a(s);
+    a << ObjectTag::Directory;
+    a << _name_map;
+    blob.commit();
+    return blob.id();
 }
 
-bool Directory::maybe_load(const BlockStore::Block& block)
+bool Directory::maybe_load(Blob& blob)
 {
-    // XXX: This is inefficient
-    std::stringstream ss;
-    ss.str(std::string(block.data(), block.size()));
+    BlobStreamBuffer buf(blob);
+    std::istream s(&buf);
+    InputArchive a(s);
     ObjectTag tag;
-    InputArchive a(ss);
     a >> tag;
     if (tag != ObjectTag::Directory) return false;
     a >> _name_map;
@@ -43,13 +46,13 @@ bool Directory::maybe_load(const BlockStore::Block& block)
 }
 
 /* static */
-bool Directory::block_is_dir(const BlockStore::Block& block)
+bool Directory::blob_is_dir(Blob& blob)
 {
-    // XXX: This is inefficient
-    std::stringstream ss;
-    ss.str(std::string(block.data(), block.size()));
+    BlobStreamBuffer buf(blob);
+    std::istream s(&buf);
+    InputArchive a(s);
     ObjectTag tag;
-    archive::load(ss, tag);
+    a >> tag;
     return tag == ObjectTag::Directory;
 }
 

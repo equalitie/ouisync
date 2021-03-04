@@ -44,6 +44,7 @@ public:
     ObjectId store(const char*, size_t);
     ObjectId store(const Block&);
     void store(const ObjectId&, const Block&);
+    void store(const ObjectId&, const char*, size_t);
 
     static ObjectId calculate_block_id(const Block&);
     static ObjectId calculate_block_id(const char*, size_t);

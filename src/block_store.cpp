@@ -40,27 +40,12 @@ Block BlockStore::load(const ObjectId& block_id) const
 Opt<Block> BlockStore::maybe_load(const ObjectId& block_id) const
 {
     auto path = id_to_path(block_id);
-
     if (!fs::exists(path)) return boost::none;
-
-    auto size = fs::file_size(path);
-
-    fs::ifstream ifs(path, fs::ifstream::binary);
-
-    if (!ifs.is_open()) {
-        throw std::runtime_error("archive::load: Failed to open object");
-    }
-
-    Block block;
-    block.resize(size);
-    ifs.read(block.data(), block.size());
-    return block;
+    return load(path);
 }
 
-ObjectId BlockStore::store(const char* data, size_t size)
+void BlockStore::store(const ObjectId& id, const char* data, size_t size)
 {
-    auto id = calculate_block_id(data, size);
-
     auto path = id_to_path(id);
 
     // XXX: if this probes every single directory in path, then it might be
@@ -74,31 +59,26 @@ ObjectId BlockStore::store(const char* data, size_t size)
     }
 
     ofs.write(data, size);
+}
 
+ObjectId BlockStore::store(const char* data, size_t size)
+{
+    auto id = calculate_block_id(data, size);
+    store(id, data, size);
     return id;
 }
 
 ObjectId BlockStore::store(const Block& block)
 {
     auto id = calculate_block_id(block);
-
-    auto path = id_to_path(id);
-
-    // XXX: if this probes every single directory in path, then it might be
-    // slow and in such case we could instead try to create only the last 2.
-    fs::create_directories(path.parent_path());
-
-    fs::ofstream ofs(path, ofs.out | ofs.binary | ofs.trunc);
-    ofs.write(block.data(), block.size());
-
+    store(id, block.data(), block.size());
     return id;
 }
 
 void BlockStore::store(const ObjectId& id, const Block& block)
 {
     assert(id == calculate_block_id(block));
-    fs::ofstream ofs(id_to_path(id), ofs.out | ofs.binary | ofs.trunc);
-    ofs.write(block.data(), block.size());
+    store(id, block.data(), block.size());
 }
 
 void BlockStore::remove(const ObjectId& block_id)

@@ -136,40 +136,30 @@ FileSystemAttrib Branch::get_attr(PathRange path) const
 
     auto file_id = dir.file(path.back());
 
-    auto block = _block_store.load(file_id);
+    auto blob = Blob::open(file_id, _block_store);
 
-    if (Directory::block_is_dir(block)) {
+    if (Directory::blob_is_dir(blob)) {
         return FileSystemDirAttrib{};
     }
 
-    auto size = File::read_size(block);
+    auto file = File::open(blob);
 
-    return FileSystemFileAttrib{size};
+    return FileSystemFileAttrib{file.size()};
 }
 
 //--------------------------------------------------------------------
 
-size_t Branch::read(PathRange path, const char* buf, size_t size, size_t offset) const
+size_t Branch::read(PathRange path, char* buf, size_t size, size_t offset) const
 {
     if (path.empty()) throw_error(sys::errc::is_a_directory);
 
     MultiDir dir = root_multi_dir().cd_into(parent(path));
 
-    auto block = _block_store.load(dir.file(path.back()));
+    auto blob = Blob::open(dir.file(path.back()), _block_store);
 
-    File file;
-    file.load(block);
+    File file = File::open(blob);
     
-    size_t len = file.size();
-
-    if (size_t(offset) < len) {
-        if (offset + size > len) size = len - offset;
-        memcpy((void*)buf, file.data() + offset, size);
-    } else {
-        size = 0;
-    }
-
-    return size;
+    return file.read(buf, size, offset);
 }
 
 //--------------------------------------------------------------------
@@ -188,7 +178,7 @@ void Branch::mknod(PathRange path)
         throw_error(sys::errc::file_exists);
     }
 
-    file_op->file() = File{};
+    file_op->file() = File(_block_store);
     do_commit(file_op);
 }
 
@@ -201,18 +191,12 @@ size_t Branch::write(PathRange path, const char* buf, size_t size, size_t offset
     auto file_op = get_file(path);
 
     if (!file_op->file()) {
-        file_op->file() = File{};
+        file_op->file() = File(_block_store);
     }
 
-    auto& blob = *file_op->file();
+    auto& file = *file_op->file();
 
-    size_t len = blob.size();
-
-    if (offset + size > len) {
-        blob.resize(offset + size);
-    }
-
-    memcpy(blob.data() + offset, buf, size);
+    file.write(buf, size, offset);
 
     do_commit(file_op);
 
@@ -228,16 +212,16 @@ size_t Branch::truncate(PathRange path, size_t size)
     auto file_op = get_file(path);
 
     if (!file_op->file()) {
-        file_op->file() = File{};
+        file_op->file() = File(_block_store);
     }
 
-    auto& blob = *file_op->file();
+    auto& file = *file_op->file();
 
-    blob.resize(std::min<size_t>(blob.size(), size));
+    auto s = file.truncate(size);
 
     do_commit(file_op);
 
-    return blob.size();
+    return s;
 }
 
 //--------------------------------------------------------------------
@@ -318,7 +302,7 @@ void Branch::store_self() const {
 static void print(std::ostream& os, const ObjectId& obj_id, BlockStore& block_store, unsigned level)
 {
     auto pad = Padding(level*2);
-    auto opt = block_store.maybe_load(obj_id);
+    auto opt = Blob::maybe_open(obj_id, block_store);
 
     if (!opt) {
         os << pad << "!!! Block " << obj_id << " is not in BlockStore !!!\n";
@@ -326,7 +310,6 @@ static void print(std::ostream& os, const ObjectId& obj_id, BlockStore& block_st
     }
 
     Directory d;
-    File f;
 
     if (d.maybe_load(*opt)) {
         os << pad << "Directory id:" << obj_id << "\n";
@@ -338,8 +321,8 @@ static void print(std::ostream& os, const ObjectId& obj_id, BlockStore& block_st
                 print(os, vobj.id, block_store, level + 2);
             }
         }
-    } else if (f.maybe_load(*opt)) {
-        os << pad << "File id:" << obj_id << " size:" << f.size() << "\n";
+    } else if (auto f = File::maybe_open(*opt)) {
+        os << pad << "File id:" << obj_id << " size:" << f->size() << "\n";
     } else {
         os << pad << "!!! Block " << obj_id << " is neither a File nor a Directory !!!\n";
     }

@@ -49,18 +49,18 @@ int main(int argc, char** argv)
     }
 
     try {
-        auto block = BlockStore::load(path);
+        //auto blob = Blob::open(path);
 
-        Directory dir;
-        File file;
+        //Directory dir;
+        //File file;
 
-        if (dir.maybe_load(block)) {
-            cout << dir << "\n";
-        } else if (file.maybe_load(block)) {
-            cout << file << "\n";
-        } else {
-            cout << "Unrecognized block" << "\n";
-        }
+        //if (dir.maybe_load(blob)) {
+        //    cout << dir << "\n";
+        //} else if (file.maybe_load(blob)) {
+        //    cout << file << "\n";
+        //} else {
+        //    cout << "Unrecognized block" << "\n";
+        //}
 
     } catch (const exception& ex) {
         cerr << ex.what() << "\n";

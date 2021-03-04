@@ -21,8 +21,8 @@ public:
 
         if (i != per_name.end()) {
             _old = i->second;
-            _file = File{};
-            _file->load(root()->block_store().load(_old->id));
+            auto blob = Blob::open(_old->id, root()->block_store());
+            _file = File::open(blob);
         }
     }
 
@@ -40,7 +40,7 @@ public:
 
         if (_old && _old->id == new_id) return false;
 
-        _file->save(root()->block_store());
+        _file->commit();
 
         VersionVector vv;
 

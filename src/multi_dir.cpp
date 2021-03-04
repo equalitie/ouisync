@@ -1,17 +1,14 @@
 #include "multi_dir.h"
 #include "directory.h"
 #include "block_store.h"
-#include "variant.h"
 #include "error.h"
+#include "blob.h"
 
-#include <sstream>
 #include <iostream>
 
 using namespace ouisync;
 using std::set;
-using std::map;
 using std::string;
-using std::stringstream;
 using std::move;
 
 Opt<MultiDir::Version> MultiDir::pick_subdirectory_to_edit(
@@ -63,10 +60,10 @@ MultiDir MultiDir::cd_into(const string& where) const
     MultiDir retval({}, *block_store);
 
     for (auto& [user, vobj] : versions) {
-        auto block = block_store->load(vobj.id);
-        Directory tree;
-        if (!tree.maybe_load(block)) continue;
-        auto user_map = tree.find(where);
+        auto blob = Blob::open(vobj.id, *block_store);
+        Directory dir;
+        if (!dir.maybe_load(blob)) continue;
+        auto user_map = dir.find(where);
         for (auto& [user_id, vobj] : user_map) {
             retval.versions.insert({user_id, vobj});
         }
@@ -85,9 +82,9 @@ MultiDir MultiDir::cd_into(PathRange path) const
 ObjectId MultiDir::file(const string& name) const
 {
     for (auto& [user, vobj] : versions) {
-        auto block = block_store->load(vobj.id);
+        auto blob = Blob::open(vobj.id, *block_store);
         Directory dir;
-        if (!dir.maybe_load(block)) {
+        if (!dir.maybe_load(blob)) {
             throw std::runtime_error("MultiDir::file: Block is not a directory");
         }
 
@@ -108,9 +105,9 @@ set<string> MultiDir::list() const {
     // XXX: Conflicting files - or directories that have been concurrently
     // modified and removed - need to marked as such.
     for (auto& [user, vobj] : versions) {
-        auto block = block_store->load(vobj.id);
+        auto blob = Blob::open(vobj.id, *block_store);
         Directory dir;
-        if (!dir.maybe_load(block)) {
+        if (!dir.maybe_load(blob)) {
             throw std::runtime_error("MultiDir::list: Block is not a directory");
         }
         for (auto& [filename, _] : dir) {

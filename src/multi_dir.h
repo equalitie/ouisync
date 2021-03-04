@@ -22,7 +22,7 @@ public:
     using Versions = std::map<UserId, VersionedObject>;
 
 public:
-    MultiDir(Versions versions, const BlockStore& block_store) :
+    MultiDir(Versions versions, BlockStore& block_store) :
         versions(std::move(versions)),
         block_store(&block_store)
     {}
@@ -42,7 +42,7 @@ private:
 
 private:
     Versions versions;
-    const BlockStore* block_store;
+    BlockStore* block_store;
 };
 
 } // namespace
