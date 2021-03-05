@@ -75,3 +75,14 @@ inline void update_hash(const ObjectId& id, Hash& hash)
 }
 
 } // namespaces
+
+namespace std {
+    // For use with std::unordered_{map,set}
+    template<> struct hash<ouisync::ObjectId> {
+        size_t operator()(const ouisync::ObjectId& id) const {
+            // It's already a Sha256 digest, so just return the first
+            // sizeof(size_t) bytes.
+            return *((size_t*) id.data());
+        }
+    };
+} // std namespace
