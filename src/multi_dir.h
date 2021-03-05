@@ -23,8 +23,8 @@ public:
 
 public:
     MultiDir(Versions versions, BlockStore& block_store) :
-        versions(std::move(versions)),
-        block_store(&block_store)
+        _versions(std::move(versions)),
+        _block_store(&block_store)
     {}
 
     MultiDir cd_into(const std::string& where) const;
@@ -41,8 +41,8 @@ private:
     std::map<std::string, ObjectId> list_() const;
 
 private:
-    Versions versions;
-    BlockStore* block_store;
+    Versions _versions;
+    BlockStore* _block_store;
 };
 
 } // namespace

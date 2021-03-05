@@ -14,15 +14,15 @@ using std::move;
 Opt<MultiDir::Version> MultiDir::pick_subdirectory_to_edit(
         const UserId& preferred_user, const string_view name)
 {
-    auto i = versions.find(preferred_user);
+    auto i = _versions.find(preferred_user);
 
-    if (i != versions.end()) {
+    if (i != _versions.end()) {
         return Version{preferred_user, i->second};
     }
 
     Opt<Version> ret;
 
-    for (auto& [subdir_user, subdir_vobj] : versions) {
+    for (auto& [subdir_user, subdir_vobj] : _versions) {
         if (!ret) {
             ret = Version{subdir_user, subdir_vobj};
             continue;
@@ -57,15 +57,15 @@ Opt<MultiDir::Version> MultiDir::pick_subdirectory_to_edit(
 
 MultiDir MultiDir::cd_into(const string& where) const
 {
-    MultiDir retval({}, *block_store);
+    MultiDir retval({}, *_block_store);
 
-    for (auto& [user, vobj] : versions) {
-        auto blob = Blob::open(vobj.id, *block_store);
+    for (auto& [user, vobj] : _versions) {
+        auto blob = Blob::open(vobj.id, *_block_store);
         Directory dir;
         if (!dir.maybe_load(blob)) continue;
         auto user_map = dir.find(where);
         for (auto& [user_id, vobj] : user_map) {
-            retval.versions.insert({user_id, vobj});
+            retval._versions.insert({user_id, vobj});
         }
     }
 
@@ -81,8 +81,8 @@ MultiDir MultiDir::cd_into(PathRange path) const
 
 ObjectId MultiDir::file(const string& name) const
 {
-    for (auto& [user, vobj] : versions) {
-        auto blob = Blob::open(vobj.id, *block_store);
+    for (auto& [user, vobj] : _versions) {
+        auto blob = Blob::open(vobj.id, *_block_store);
         Directory dir;
         if (!dir.maybe_load(blob)) {
             throw std::runtime_error("MultiDir::file: Block is not a directory");
@@ -104,8 +104,8 @@ set<string> MultiDir::list() const {
 
     // XXX: Conflicting files - or directories that have been concurrently
     // modified and removed - need to marked as such.
-    for (auto& [user, vobj] : versions) {
-        auto blob = Blob::open(vobj.id, *block_store);
+    for (auto& [user, vobj] : _versions) {
+        auto blob = Blob::open(vobj.id, *_block_store);
         Directory dir;
         if (!dir.maybe_load(blob)) {
             throw std::runtime_error("MultiDir::list: Block is not a directory");
