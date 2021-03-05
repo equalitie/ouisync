@@ -21,7 +21,7 @@ ObjectId Directory::calculate_id() const
     return BlockStore::calculate_block_id(ss.str().data(), ss.str().size());
 }
 
-ObjectId Directory::save(BlockStore& blockstore) const
+ObjectId Directory::save(BlockStore& blockstore, Index& index) const
 {
     auto blob = Blob::empty(blockstore);
     BlobStreamBuffer buf(blob);
@@ -29,7 +29,7 @@ ObjectId Directory::save(BlockStore& blockstore) const
     OutputArchive a(s);
     a << ObjectTag::Directory;
     a << _name_map;
-    blob.commit();
+    blob.commit(index);
     return blob.id();
 }
 

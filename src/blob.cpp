@@ -84,7 +84,7 @@ size_t Blob::truncate(size_t size)
     return _impl->truncate(size);
 }
 
-void Blob::commit()
+void Blob::commit(Index&)
 {
     _impl->commit();
 }

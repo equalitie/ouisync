@@ -19,6 +19,7 @@
 namespace ouisync {
 
 class Blob;
+class Index;
 
 class Directory final {
 public:
@@ -157,7 +158,7 @@ public:
 public:
     ObjectId calculate_id() const;
 
-    ObjectId save(BlockStore&) const;
+    ObjectId save(BlockStore&, Index&) const;
     bool maybe_load(Blob&);
 
     static

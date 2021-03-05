@@ -39,9 +39,12 @@ Branch Branch::create(executor_type ex, const fs::path& path, UserId user_id, Bl
     Branch b(ex, path, user_id, block_store, move(options));
 
     const Directory empty_dir;
-    auto empty_dir_id = empty_dir.save(block_store);
+    auto empty_dir_id = empty_dir.calculate_id();
 
     b._index = Index(user_id, {empty_dir_id, {}});
+
+    auto id_ = empty_dir.save(block_store, b._index);
+    ouisync_assert(empty_dir_id == id_);
 
     b.store_self();
 

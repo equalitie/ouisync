@@ -40,7 +40,7 @@ public:
 
         if (_old && _old->id == new_id) return false;
 
-        _file->commit();
+        _file->commit(root()->index());
 
         VersionVector vv;
 

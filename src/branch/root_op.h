@@ -30,7 +30,7 @@ public:
 
         if (old_id == new_id) return false;
 
-        auto new_id_ = _tree.save(_block_store);
+        auto new_id_ = _tree.save(_block_store, _index);
         assert(new_id == new_id_);
 
         _tree.for_each_unique_child([&] (auto& filename, auto& child_id) {

@@ -11,6 +11,7 @@ namespace ouisync {
 
 class BlockStore;
 class ObjectId;
+class Index;
 
 //////////////////////////////////////////////////////////////////////
 
@@ -39,7 +40,7 @@ public:
 
     size_t truncate(size_t size);
 
-    void commit();
+    void commit(Index&);
 
     size_t size() const;
 

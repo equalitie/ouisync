@@ -6,6 +6,8 @@
 
 namespace ouisync {
 
+class Index;
+
 struct File
 {
 public:
@@ -29,7 +31,7 @@ public:
     size_t write(const char*, size_t size, size_t offset);
     size_t read(char*, size_t size, size_t offset);
 
-    void commit();
+    void commit(Index&);
 
     size_t size();
 
