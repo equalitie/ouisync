@@ -4,6 +4,7 @@
 #include "path_range.h"
 #include "archive.h"
 #include "ouisync_assert.h"
+#include "directory.h"
 #include "multi_dir.h"
 
 #include "branch/root_op.h"

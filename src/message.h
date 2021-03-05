@@ -4,7 +4,8 @@
 #include "cancel.h"
 #include "versioned_object.h"
 #include "variant.h"
-#include "branch.h"
+#include "index.h"
+#include "block.h"
 
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/awaitable.hpp>

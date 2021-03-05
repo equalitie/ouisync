@@ -1,4 +1,5 @@
 #include "server.h"
+#include "block_store.h"
 
 #include <iostream>
 #include <boost/optional/optional_io.hpp>
