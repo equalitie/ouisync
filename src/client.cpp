@@ -30,7 +30,7 @@ net::awaitable<Index> Client::fetch_index(Cancel cancel)
     co_return move(rs.index);
 }
 
-net::awaitable<Opt<BlockStore::Block>> Client::fetch_block(const ObjectId& id, Cancel cancel)
+net::awaitable<Opt<Block>> Client::fetch_block(const ObjectId& id, Cancel cancel)
 {
     co_await _broker.send(RqBlock{id}, cancel);
     auto rs_obj = co_await receive<RsBlock>(cancel);

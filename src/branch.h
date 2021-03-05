@@ -8,7 +8,6 @@
 #include "file_system_attrib.h"
 #include "versioned_object.h"
 #include "options.h"
-#include "block_store.h"
 #include "index.h"
 #include "wait.h"
 
@@ -18,6 +17,8 @@
 namespace ouisync {
 
 class MultiDir;
+class BlockStore;
+class Block;
 
 class Branch {
 private:
@@ -91,7 +92,7 @@ public:
 
     BlockStore& block_store() const { return _block_store; }
 
-    void store(const BlockStore::Block&);
+    void store(const Block&);
 
     StateChangeWait& on_change() { return _state_change_wait; }
 

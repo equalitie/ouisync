@@ -8,8 +8,6 @@
 using namespace ouisync;
 using std::move;
 
-using Block = BlockStore::Block;
-
 BlockStore::BlockStore(const fs::path& blockdir) :
     _blockdir(blockdir)
 {}

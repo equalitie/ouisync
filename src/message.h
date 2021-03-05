@@ -69,7 +69,7 @@ struct RsBlock {
     static constexpr auto type = MessageType::Response;
 
     // boost::none if not found
-    Opt<BlockStore::Block> block;
+    Opt<Block> block;
 
     template<class Archive>
     void serialize(Archive& ar, const unsigned) {

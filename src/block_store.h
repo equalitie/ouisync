@@ -1,39 +1,14 @@
 #pragma once
 
 #include "object_id.h"
+#include "block.h"
 
-#include <vector>
 #include <boost/optional.hpp>
 #include <boost/filesystem/path.hpp>
-
-#include <boost/serialization/array_wrapper.hpp>
-#include <boost/serialization/split_member.hpp>
 
 namespace ouisync {
 
 class BlockStore {
-public:
-    struct Block : std::vector<char>
-    {
-        using std::vector<char>::vector;
-
-        template<class Archive>
-        void save(Archive& ar, const unsigned int version) const {
-            ar & uint32_t(size());
-            ar & boost::serialization::make_array(data(), size());
-        }
-
-        template<class Archive>
-        void load(Archive& ar, const unsigned int version) {
-            uint32_t size;
-            ar & size;
-            resize(size);
-            ar & boost::serialization::make_array(data(), size);
-        }
-
-        BOOST_SERIALIZATION_SPLIT_MEMBER()
-    };
-
 public:
     BlockStore(const fs::path& blockdir);
 

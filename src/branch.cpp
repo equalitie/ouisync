@@ -285,7 +285,7 @@ void Branch::merge_index(const Index& index)
 
 //--------------------------------------------------------------------
 
-void Branch::store(const BlockStore::Block& b)
+void Branch::store(const Block& b)
 {
     auto id = BlockStore::calculate_block_id(b);
 

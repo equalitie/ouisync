@@ -5,7 +5,6 @@
 using namespace ouisync;
 using std::move;
 using std::make_unique;
-using Block = BlockStore::Block;
 
 struct Blob::Impl 
 {
