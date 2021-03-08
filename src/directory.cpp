@@ -22,9 +22,9 @@ ObjectId Directory::calculate_id() const
     return BlockStore::calculate_block_id(ss.str().data(), ss.str().size());
 }
 
-ObjectId Directory::save(BlockStore& blockstore, Transaction& tnx) const
+ObjectId Directory::save(Transaction& tnx) const
 {
-    auto blob = Blob::empty(blockstore);
+    auto blob = Blob::empty();
     BlobStreamBuffer buf(blob);
     std::ostream s(&buf);
     OutputArchive a(s);

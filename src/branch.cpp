@@ -1,5 +1,4 @@
 #include "branch.h"
-#include "variant.h"
 #include "error.h"
 #include "path_range.h"
 #include "archive.h"
@@ -13,9 +12,7 @@
 #include "branch/remove_op.h"
 
 #include <boost/filesystem.hpp>
-#include <boost/serialization/vector.hpp>
 #include <boost/serialization/set.hpp>
-#include <string.h> // memcpy
 
 #include <iostream>
 #include "ostream/padding.h"
@@ -45,7 +42,7 @@ Branch Branch::create(executor_type ex, const fs::path& path, UserId user_id, Bl
     b._index = Index(user_id, {empty_dir_id, {}});
 
     Transaction tnx;
-    auto id_ = empty_dir.save(block_store, tnx);
+    auto id_ = empty_dir.save(tnx);
     ouisync_assert(empty_dir_id == id_);
     tnx.commit(user_id, block_store, b._index);
 
@@ -184,7 +181,7 @@ void Branch::mknod(PathRange path)
         throw_error(sys::errc::file_exists);
     }
 
-    file_op->file() = File(_block_store);
+    file_op->file() = File();
     do_commit(file_op);
 }
 
@@ -197,7 +194,7 @@ size_t Branch::write(PathRange path, const char* buf, size_t size, size_t offset
     auto file_op = get_file(path);
 
     if (!file_op->file()) {
-        file_op->file() = File(_block_store);
+        file_op->file() = File();
     }
 
     auto& file = *file_op->file();
@@ -218,7 +215,7 @@ size_t Branch::truncate(PathRange path, size_t size)
     auto file_op = get_file(path);
 
     if (!file_op->file()) {
-        file_op->file() = File(_block_store);
+        file_op->file() = File();
     }
 
     auto& file = *file_op->file();

@@ -53,7 +53,7 @@ public:
 
         _parent->tree()[_dirname][_this_user_id] = { new_tree_id, std::move(new_vv) };
 
-        _tree.save(_root->block_store(), _root->transaction());
+        _tree.save(_root->transaction());
 
         return _parent->commit();
     }

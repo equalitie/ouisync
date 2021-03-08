@@ -9,7 +9,7 @@ using std::make_unique;
 
 struct Blob::Impl 
 {
-    BlockStore* block_store;
+    const BlockStore* block_store;
     Opt<ObjectId> block_id;
     // TODO: Implement Left-Max-Data Tree
     Block block;
@@ -90,15 +90,15 @@ void Blob::commit(Transaction& transaction)
 }
 
 /* static */
-Blob Blob::empty(BlockStore& block_store)
+Blob Blob::empty()
 {
     auto impl = make_unique<Impl>();
-    impl->block_store = &block_store;
+    impl->block_store = nullptr;
     return {move(impl)};
 }
 
 /* static */
-Blob Blob::open(const ObjectId& id, BlockStore& block_store)
+Blob Blob::open(const ObjectId& id, const BlockStore& block_store)
 {
     auto block = block_store.load(id);
 
@@ -112,7 +112,7 @@ Blob Blob::open(const ObjectId& id, BlockStore& block_store)
 }
 
 /* static */
-Blob Blob::open(const fs::path& path, BlockStore& block_store)
+Blob Blob::open(const fs::path& path, const BlockStore& block_store)
 {
     auto block = block_store.load(path);
 
@@ -125,7 +125,7 @@ Blob Blob::open(const fs::path& path, BlockStore& block_store)
 }
 
 /* static */
-Opt<Blob> Blob::maybe_open(const ObjectId& id, BlockStore& block_store)
+Opt<Blob> Blob::maybe_open(const ObjectId& id, const BlockStore& block_store)
 {
     auto block = block_store.maybe_load(id);
 

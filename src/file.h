@@ -11,7 +11,7 @@ class Transaction;
 struct File
 {
 public:
-    File(BlockStore&);
+    File();
 
     // The returned File takes ownership iff the `blob` contains
     // the ObjectTag::File tag at the beginning.

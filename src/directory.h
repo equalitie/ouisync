@@ -157,7 +157,7 @@ public:
 public:
     ObjectId calculate_id() const;
 
-    ObjectId save(BlockStore&, Transaction&) const;
+    ObjectId save(Transaction&) const;
     bool maybe_load(Blob&);
 
     static

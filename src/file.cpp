@@ -3,7 +3,6 @@
 #include "archive.h"
 #include "object_tag.h"
 #include "blob.h"
-#include "block_store.h"
 
 #include <iostream>
 #include <boost/optional.hpp>
@@ -13,8 +12,8 @@
 using namespace ouisync;
 using std::move;
 
-File::File(BlockStore& block_store) :
-    _blob(Blob::empty(block_store))
+File::File() :
+    _blob(Blob::empty())
 {
     BlobStreamBuffer buf(_blob);
     std::ostream stream(&buf);

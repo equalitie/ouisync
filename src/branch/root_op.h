@@ -31,7 +31,7 @@ public:
 
         if (old_id == new_id) return false;
 
-        auto new_id_ = _tree.save(_block_store, _transaction);
+        auto new_id_ = _tree.save(_transaction);
         assert(new_id == new_id_);
         _transaction.insert_edge(new_id, new_id);
 

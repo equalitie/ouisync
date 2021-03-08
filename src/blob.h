@@ -28,10 +28,10 @@ public:
     Blob(Blob&&);
     Blob& operator=(Blob&&);
 
-    static Blob empty(BlockStore&);
-    static Blob open(const ObjectId&, BlockStore&);
-    static Blob open(const fs::path&, BlockStore&);
-    static Opt<Blob> maybe_open(const ObjectId&, BlockStore&);
+    static Blob empty();
+    static Blob open(const ObjectId&, const BlockStore&);
+    static Blob open(const fs::path&, const BlockStore&);
+    static Opt<Blob> maybe_open(const ObjectId&, const BlockStore&);
 
     ObjectId id();
 
