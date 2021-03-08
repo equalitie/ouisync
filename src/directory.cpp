@@ -3,6 +3,7 @@
 #include "archive.h"
 #include "object_tag.h"
 #include "blob.h"
+#include "transaction.h"
 
 #include <iostream>
 #include <sstream>
@@ -21,7 +22,7 @@ ObjectId Directory::calculate_id() const
     return BlockStore::calculate_block_id(ss.str().data(), ss.str().size());
 }
 
-ObjectId Directory::save(BlockStore& blockstore, Index& index) const
+ObjectId Directory::save(BlockStore& blockstore, Transaction& tnx) const
 {
     auto blob = Blob::empty(blockstore);
     BlobStreamBuffer buf(blob);
@@ -29,7 +30,11 @@ ObjectId Directory::save(BlockStore& blockstore, Index& index) const
     OutputArchive a(s);
     a << ObjectTag::Directory;
     a << _name_map;
-    blob.commit(index);
+    blob.commit(tnx);
+    auto id = blob.id();
+
+    for_each_unique_child([&] (auto&, auto& child_id) { tnx.insert_edge(id, child_id); });
+
     return blob.id();
 }
 

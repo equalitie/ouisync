@@ -53,11 +53,7 @@ public:
 
         _parent->tree()[_dirname][_this_user_id] = { new_tree_id, std::move(new_vv) };
 
-        _tree.save(_root->block_store(), _root->index());
-
-        _tree.for_each_unique_child([&] (auto& filename, auto& child_id) {
-                _root->index().insert_object(_this_user_id, child_id, new_tree_id);
-            });
+        _tree.save(_root->block_store(), _root->transaction());
 
         return _parent->commit();
     }

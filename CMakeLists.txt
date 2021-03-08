@@ -65,6 +65,7 @@ add_library(libouisync STATIC
     "src/directory.cpp"
     "src/file.cpp"
     "src/index.cpp"
+    "src/transaction.cpp"
     "src/version_vector.cpp"
 )
 

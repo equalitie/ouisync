@@ -1,6 +1,7 @@
 #include "blob.h"
 #include "block_store.h"
 #include "hash.h"
+#include "transaction.h"
 
 using namespace ouisync;
 using std::move;
@@ -62,9 +63,9 @@ struct Blob::Impl
 
     size_t size() const { return block.size(); }
 
-    void commit() {
+    void commit(Transaction& tnx) {
         auto id = maybe_calculate_id();
-        block_store->store(id, block);
+        tnx.insert_block(id, block);
     }
 };
 
@@ -83,9 +84,9 @@ size_t Blob::truncate(size_t size)
     return _impl->truncate(size);
 }
 
-void Blob::commit(Index&)
+void Blob::commit(Transaction& transaction)
 {
-    _impl->commit();
+    _impl->commit(transaction);
 }
 
 /* static */

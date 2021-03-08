@@ -1,6 +1,5 @@
 #pragma once
 
-
 #include "user_id.h"
 #include "object_tag.h"
 #include "shortcuts.h"
@@ -19,7 +18,7 @@
 namespace ouisync {
 
 class Blob;
-class Index;
+class Transaction;
 
 class Directory final {
 public:
@@ -158,7 +157,7 @@ public:
 public:
     ObjectId calculate_id() const;
 
-    ObjectId save(BlockStore&, Index&) const;
+    ObjectId save(BlockStore&, Transaction&) const;
     bool maybe_load(Blob&);
 
     static

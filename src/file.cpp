@@ -71,9 +71,9 @@ size_t File::truncate(size_t s)
     return _blob.truncate(s + _data_offset) - _data_offset;
 }
 
-void File::commit(Index& index)
+void File::save(Transaction& tnx)
 {
-    _blob.commit(index);
+    _blob.commit(tnx);
 }
 
 std::ostream& ouisync::operator<<(std::ostream& os, const File& b) {

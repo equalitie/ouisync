@@ -2,6 +2,7 @@
 
 #include "operation_interface.h"
 #include "blob.h"
+#include "transaction.h"
 
 namespace ouisync {
 
@@ -30,14 +31,11 @@ public:
 
         if (old_id == new_id) return false;
 
-        auto new_id_ = _tree.save(_block_store, _index);
+        auto new_id_ = _tree.save(_block_store, _transaction);
         assert(new_id == new_id_);
+        _transaction.insert_edge(new_id, new_id);
 
-        _tree.for_each_unique_child([&] (auto& filename, auto& child_id) {
-                _index.insert_object(_this_user_id, child_id, new_id);
-            });
-
-        _index.insert_object(_this_user_id, new_id, new_id);
+        _transaction.commit(_this_user_id, _block_store, _index);
 
         _index.set_version_vector(_this_user_id, _tree.calculate_version_vector_union());
 
@@ -46,8 +44,9 @@ public:
         return true;
     }
 
-    Index& index() { return _index; }
+    //Index& index() { return _index; }
     BlockStore& block_store() { return _block_store; }
+    Transaction& transaction() { return _transaction; }
 
     RootOp* root() override { return this; }
 
@@ -81,6 +80,7 @@ private:
     Index& _index;
     VersionedObject _original_commit;
     MultiDir _multi_dir;
+    Transaction _transaction;
 };
 
 } // namespace

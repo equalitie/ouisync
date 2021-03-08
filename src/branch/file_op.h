@@ -1,6 +1,7 @@
 #pragma once
 
 #include "operation_interface.h"
+#include "transaction.h"
 
 namespace ouisync {
 
@@ -40,7 +41,7 @@ public:
 
         if (_old && _old->id == new_id) return false;
 
-        _file->commit(root()->index());
+        _file->save(root()->transaction());
 
         VersionVector vv;
 
