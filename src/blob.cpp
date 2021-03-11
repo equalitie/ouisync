@@ -53,10 +53,12 @@ struct NodeBlock : std::vector<ObjectId> {
 
     ObjectId calculate_id() const
     {
+        // NOTE: This MUST result in the same Id as
+        // BlockStore::calculate_block_id(to_block())
         Sha256 hash;
         hash.update(type_to_byte(BlockType::Node));
         uint16_t s = endian::native_to_big(size());
-        hash.update(&s, 2);
+        hash.update(&s, sizeof(s));
         for (auto& id : *this) { hash.update(id); }
         return hash.close();
     }
