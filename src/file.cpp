@@ -12,8 +12,7 @@
 using namespace ouisync;
 using std::move;
 
-File::File() :
-    _blob(Blob::empty())
+File::File()
 {
     BlobStreamBuffer buf(_blob);
     std::ostream stream(&buf);

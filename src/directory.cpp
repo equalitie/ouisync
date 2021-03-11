@@ -24,7 +24,7 @@ ObjectId Directory::calculate_id() const
 
 ObjectId Directory::save(Transaction& tnx) const
 {
-    auto blob = Blob::empty();
+    Blob blob;
     BlobStreamBuffer buf(blob);
     std::ostream s(&buf);
     OutputArchive a(s);

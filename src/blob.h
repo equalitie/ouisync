@@ -28,7 +28,6 @@ public:
     Blob(Blob&&);
     Blob& operator=(Blob&&);
 
-    static Blob empty();
     static Blob open(const ObjectId&, const BlockStore&);
     static Blob open(const fs::path&, const BlockStore&);
     static Opt<Blob> maybe_open(const ObjectId&, const BlockStore&);
@@ -47,6 +46,10 @@ public:
     ~Blob();
 
 private:
+    void maybe_init();
+
+    static std::unique_ptr<Impl> empty_iml();
+
     Blob(std::unique_ptr<Impl> impl);
 
 private:
