@@ -124,48 +124,44 @@ private:
     Block _block;
 };
 
-struct DataBlock : public Block {
+class DataBlock {
+private:
     static constexpr size_t header_size = 1 /* BlockType */ + sizeof(uint16_t) /* size */;
+
+public:
     static constexpr size_t max_data_size = BLOCK_SIZE - header_size;
 
     DataBlock() = default;
-    DataBlock(Block&& b) : Block(move(b)) {}
-
-    static void initialize_empty(Block& b)
-    {
-        b.resize(BLOCK_SIZE, 0);
-        b[0] = type_to_byte(BlockType::Data);
-        reinterpret_cast<uint16_t&>(b[1]) = 0u;
-    }
+    DataBlock(Block&& b) : _block(move(b)) {}
 
     ObjectId calculate_id()
     {
-        if (empty()) initialize_empty(*this);
-        ouisync_assert(size() == BLOCK_SIZE);
-        return BlockStore::calculate_block_id(data(), BLOCK_SIZE);
+        if (_block.empty()) initialize_empty(_block);
+        ouisync_assert(_block.size() == BLOCK_SIZE);
+        return BlockStore::calculate_block_id(_block.data(), BLOCK_SIZE);
     }
 
     uint16_t data_size() const {
-        if (empty()) return 0;
-        ouisync_assert(size() >= header_size);
-        if (size() < header_size) return 0;
-        auto ret = reinterpret_cast<const uint16_t&>((*this)[1]);
+        if (_block.empty()) return 0;
+        ouisync_assert(_block.size() >= header_size);
+        if (_block.size() < header_size) return 0;
+        auto ret = reinterpret_cast<const uint16_t&>(_block[1]);
         return endian::big_to_native(ret);
     }
 
     void data_resize(uint16_t s) {
         ouisync_assert(s <= max_data_size);
-        if (empty()) initialize_empty(*this);
-        reinterpret_cast<uint16_t&>((*this)[1]) = endian::native_to_big(s);
+        if (_block.empty()) initialize_empty(_block);
+        reinterpret_cast<uint16_t&>(_block[1]) = endian::native_to_big(s);
     }
 
     size_t read(char* buffer, size_t size, size_t offset) const
     {
-        if (empty()) return 0;
+        if (_block.empty()) return 0;
         auto len = data_size();
         if (offset >= len) return 0;
         if (offset + size > len) size = len - offset;
-        std::copy_n(data() + offset + header_size, size, buffer);
+        std::copy_n(_block.data() + offset + header_size, size, buffer);
         return size;
     }
 
@@ -185,10 +181,23 @@ struct DataBlock : public Block {
             data_resize(offset + size);
         }
 
-        std::copy_n(buffer, size, data() + header_size + offset);
+        std::copy_n(buffer, size, _block.data() + header_size + offset);
 
         return size;
     }
+
+    Block& as_block() { return _block; }
+
+private:
+    static void initialize_empty(Block& b)
+    {
+        b.resize(BLOCK_SIZE, 0);
+        b[0] = type_to_byte(BlockType::Data);
+        reinterpret_cast<uint16_t&>(b[1]) = 0u;
+    }
+
+private:
+    Block _block;
 };
 
 struct Blob::Impl
@@ -417,7 +426,7 @@ struct Blob::Impl
 
         apply(top_block,
             [&] (DataBlock& b) {
-                tnx.insert_block(top_id, move(b));
+                tnx.insert_block(top_id, move(b.as_block()));
             },
             [&] (NodeBlock& n) {
                 ouisync_assert(n.size());
@@ -429,7 +438,7 @@ struct Blob::Impl
                     if (i == blocks.end()) continue;
 
                     tnx.insert_edge(top_id, id);
-                    tnx.insert_block(id, move(i->second));
+                    tnx.insert_block(id, move(i->second.as_block()));
                     blocks.erase(i);
                 }
 
