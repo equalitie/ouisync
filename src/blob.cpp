@@ -53,14 +53,8 @@ struct NodeBlock : std::vector<ObjectId> {
 
     ObjectId calculate_id() const
     {
-        // NOTE: This MUST result in the same Id as
-        // BlockStore::calculate_block_id(to_block())
-        Sha256 hash;
-        hash.update(type_to_byte(BlockType::Node));
-        uint16_t s = endian::native_to_big(size());
-        hash.update(&s, sizeof(s));
-        for (auto& id : *this) { hash.update(id); }
-        return hash.close();
+        // XXX: Very inefficient
+        return BlockStore::calculate_block_id(to_block());
     }
 
     Block to_block() const {
@@ -68,7 +62,7 @@ struct NodeBlock : std::vector<ObjectId> {
         Block r(BLOCK_SIZE);
         r[0] = type_to_byte(BlockType::Node);
 
-        reinterpret_cast<uint16_t&>(r[1]) = endian::native_to_big(size());
+        reinterpret_cast<uint16_t&>(r[1]) = endian::native_to_big(uint16_t(size()));
 
         auto p = &r[0] + header_size;
 
