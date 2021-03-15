@@ -14,6 +14,16 @@
 using namespace std;
 using namespace ouisync;
 
+Opt<fs::path> g_test_root_dir;
+
+fs::path test_dir(string test_name) {
+    namespace fs = ouisync::fs;
+    if (!g_test_root_dir) {
+        g_test_root_dir = fs::unique_path("/tmp/ouisync/test-%%%%-%%%%");
+    }
+    return *g_test_root_dir / test_name;
+}
+
 BOOST_AUTO_TEST_CASE(blob) {
     {
         Blob blob;
@@ -113,7 +123,7 @@ BOOST_AUTO_TEST_CASE(blob_commit) {
 BOOST_AUTO_TEST_CASE(blob_restore_small) {
     auto uid = UserId::generate_random();
 
-    fs::path dir = ouisync::fs::unique_path("/tmp/ouisync/test-blob-restore-%%%%-%%%%");
+    fs::path dir = test_dir("restore-small-blob");
 
     Index index(uid, {});
     BlockStore block_store(dir);
@@ -140,8 +150,6 @@ BOOST_AUTO_TEST_CASE(blob_restore_small) {
         BOOST_REQUIRE_EQUAL(index.roots().size(), 1);
 
         root = *index.roots().begin();
-
-        std::cerr  << root << "\n";
     }
 
     {
@@ -160,7 +168,7 @@ BOOST_AUTO_TEST_CASE(blob_restore_small) {
 BOOST_AUTO_TEST_CASE(blob_restore_big) {
     auto uid = UserId::generate_random();
 
-    fs::path dir = ouisync::fs::unique_path("/tmp/ouisync/test-blob-restore-big-%%%%-%%%%");
+    fs::path dir = test_dir("restore-big-blob");
 
     Index index(uid, {});
     BlockStore block_store(dir);
@@ -186,8 +194,54 @@ BOOST_AUTO_TEST_CASE(blob_restore_big) {
         BOOST_REQUIRE_EQUAL(index.roots().size(), 1);
 
         root = *index.roots().begin();
+    }
 
-        std::cerr  << root << "\n";
+    {
+        Blob blob = Blob::open(root, block_store);
+
+        BOOST_REQUIRE_EQUAL(blob.size(), test.size());
+
+        string read(blob.size(), 'x');
+
+        blob.read(&read[0], read.size(), 0);
+
+        BOOST_REQUIRE_EQUAL(test, read);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(blob_restore_big_incremental) {
+    auto uid = UserId::generate_random();
+
+    fs::path dir = test_dir("restore-big-blob-incrementally");
+
+    Index index(uid, {});
+    BlockStore block_store(dir);
+
+    ObjectId root;
+
+    Random random;
+
+    string test = random.string(1 << 17);
+
+    {
+        Blob blob;
+
+        size_t wrote = 0;
+        while (wrote < test.size()) {
+            size_t w = std::min<size_t>(test.size() - wrote, 256);
+            wrote += blob.write(test.c_str() + wrote, w, wrote);
+        }
+
+        Transaction tnx;
+
+        auto id = blob.commit(tnx);
+        tnx.insert_edge(id, id);
+
+        tnx.commit(uid, block_store, index);
+
+        BOOST_REQUIRE_EQUAL(index.roots().size(), 1);
+
+        root = *index.roots().begin();
     }
 
     {
