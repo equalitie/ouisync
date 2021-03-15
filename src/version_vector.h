@@ -12,6 +12,9 @@ public:
     using Version = uint64_t;
 
 private:
+    // XXX: boost::flat_map would be better fit, but it doesn't out of the box
+    // support serialization. The following link seem to show how add it:
+    // https://www.meetingcpp.com/blog/items/a-third-way-to-use-boost-serialization.html
     using Map = std::map<UserId, Version>;
 
 public:
