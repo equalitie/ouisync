@@ -32,10 +32,10 @@ static Opt<BlockType> byte_to_type(uint8_t b) {
 
 class NodeBlock {
 public:
-    static_assert(ObjectId::size == sizeof(ObjectId));
+    static_assert(BlockId::size == sizeof(BlockId));
 
     static constexpr size_t header_size = 1 /* BlockType */ + sizeof(uint16_t) /* size */;
-    static constexpr size_t max_hash_count = (BLOCK_SIZE - header_size) / ObjectId::size;
+    static constexpr size_t max_hash_count = (BLOCK_SIZE - header_size) / BlockId::size;
 
     NodeBlock() {}
 
@@ -45,19 +45,19 @@ public:
         ouisync_assert(byte_to_type(_block[0]) == BlockType::Node);
     }
 
-    const ObjectId& operator[](size_t i) const {
+    const BlockId& operator[](size_t i) const {
         ouisync_assert(i < max_hash_count);
         ouisync_assert(i < size());
         return *(begin() + i);
     }
 
-    ObjectId& operator[](size_t i) {
+    BlockId& operator[](size_t i) {
         ouisync_assert(i < max_hash_count);
         ouisync_assert(i < size());
         return *(begin() + i);
     }
 
-    void push_back(const ObjectId& id) {
+    void push_back(const BlockId& id) {
         auto s = size();
         ouisync_assert(s < max_hash_count);
         resize(s+1);
@@ -79,45 +79,45 @@ public:
         reinterpret_cast<uint16_t&>(_block[1]) = endian::native_to_big(s);
     }
 
-    ObjectId calculate_id() const
+    BlockId calculate_id() const
     {
         return BlockStore::calculate_block_id(_block);
     }
 
     Block& as_block() { return _block; }
 
-    ObjectId& back() {
+    BlockId& back() {
         ouisync_assert(!empty());
         return (*this)[size() - 1];
     }
 
-    const ObjectId& back() const {
+    const BlockId& back() const {
         ouisync_assert(!empty());
         return (*this)[size() - 1];
     }
 
     bool empty() const { return size() == 0; }
 
-    const ObjectId* begin() const {
+    const BlockId* begin() const {
         if (empty()) return nullptr;
-        return reinterpret_cast<const ObjectId*>(&_block[header_size]);
+        return reinterpret_cast<const BlockId*>(&_block[header_size]);
     }
 
-    const ObjectId* end() const {
+    const BlockId* end() const {
         if (empty()) return nullptr;
-        return reinterpret_cast<const ObjectId*>(
-                &_block[header_size + size() * ObjectId::size]);
+        return reinterpret_cast<const BlockId*>(
+                &_block[header_size + size() * BlockId::size]);
     }
 
-    ObjectId* begin() {
+    BlockId* begin() {
         if (empty()) return nullptr;
-        return reinterpret_cast<ObjectId*>(&_block[header_size]);
+        return reinterpret_cast<BlockId*>(&_block[header_size]);
     }
 
-    ObjectId* end() {
+    BlockId* end() {
         if (empty()) return nullptr;
-        return reinterpret_cast<ObjectId*>(
-                &_block[header_size + size() * ObjectId::size]);
+        return reinterpret_cast<BlockId*>(
+                &_block[header_size + size() * BlockId::size]);
     }
 
 private:
@@ -134,7 +134,7 @@ public:
     DataBlock() = default;
     DataBlock(Block&& b) : _block(move(b)) {}
 
-    ObjectId calculate_id()
+    BlockId calculate_id()
     {
         if (_block.empty()) initialize_empty(_block);
         ouisync_assert(_block.size() == BLOCK_SIZE);
@@ -206,11 +206,11 @@ struct Blob::Impl
     // empty.
     const BlockStore* block_store;
     // If top_block_id is boost::none, then recalculation is needed.
-    Opt<ObjectId> top_block_id;
+    Opt<BlockId> top_block_id;
     variant<NodeBlock, DataBlock> top_block;
-    std::unordered_map<ObjectId, DataBlock> blocks;
+    std::unordered_map<BlockId, DataBlock> blocks;
 
-    ObjectId maybe_calculate_id()
+    BlockId maybe_calculate_id()
     {
         if (top_block_id) return *top_block_id;
 
@@ -421,7 +421,7 @@ struct Blob::Impl
         return (n.size()-1) * DataBlock::max_data_size + last->data_size();
     }
 
-    ObjectId commit(Transaction& tnx) {
+    BlockId commit(Transaction& tnx) {
         auto top_id = maybe_calculate_id();
 
         apply(top_block,
@@ -450,7 +450,7 @@ struct Blob::Impl
         return top_id;
     }
 
-    const DataBlock* load_const_data_block(const ObjectId& id, DataBlock& stack_tmp) const
+    const DataBlock* load_const_data_block(const BlockId& id, DataBlock& stack_tmp) const
     {
         auto i = blocks.find(id);
 
@@ -462,7 +462,7 @@ struct Blob::Impl
         }
     }
 
-    DataBlock remove_data_block(const ObjectId& id)
+    DataBlock remove_data_block(const BlockId& id)
     {
         auto i = blocks.find(id);
 
@@ -501,7 +501,7 @@ size_t Blob::truncate(size_t size)
     return _impl->truncate(size);
 }
 
-ObjectId Blob::commit(Transaction& transaction)
+BlockId Blob::commit(Transaction& transaction)
 {
     maybe_init();
     auto id = _impl->commit(transaction);
@@ -520,7 +520,7 @@ variant<NodeBlock, DataBlock> typed_block(Block&& b) {
 }
 
 /* static */
-Blob Blob::open(const ObjectId& id, const BlockStore& block_store)
+Blob Blob::open(const BlockId& id, const BlockStore& block_store)
 {
     auto block = block_store.load(id);
 
@@ -547,7 +547,7 @@ Blob Blob::open(const fs::path& path, const BlockStore& block_store)
 }
 
 /* static */
-Opt<Blob> Blob::maybe_open(const ObjectId& id, const BlockStore& block_store)
+Opt<Blob> Blob::maybe_open(const BlockId& id, const BlockStore& block_store)
 {
     auto block = block_store.maybe_load(id);
 
@@ -582,7 +582,7 @@ Blob& Blob::operator=(Blob&& other)
     return *this;
 }
 
-ObjectId Blob::id()
+BlockId Blob::id()
 {
     maybe_init();
     return _impl->maybe_calculate_id();

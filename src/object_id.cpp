@@ -5,19 +5,19 @@
 
 using namespace ouisync;
 
-using NameMap = std::map<ObjectId, std::list<std::string>>;
+using NameMap = std::map<BlockId, std::list<std::string>>;
 
 /* static */
 NameMap g_debug_name_map;
 
-ObjectId::RiaaNameMap::~RiaaNameMap() {
+BlockId::RiaaNameMap::~RiaaNameMap() {
     map_iter->second.erase(list_iter);
     if (map_iter->second.empty()) {
         g_debug_name_map.erase(map_iter);
     }
 }
 
-ObjectId::RiaaNameMap ObjectId::debug_name(const ObjectId& id, std::string name)
+BlockId::RiaaNameMap BlockId::debug_name(const BlockId& id, std::string name)
 {
     auto i = g_debug_name_map.insert({id, {}}).first;
     i->second.push_back(std::move(name));
@@ -25,7 +25,7 @@ ObjectId::RiaaNameMap ObjectId::debug_name(const ObjectId& id, std::string name)
 }
 
 /* static */
-ObjectId ObjectId::null_id() {
+BlockId BlockId::null_id() {
     static Opt<Parent> id;
     if (!id) {
         id = Parent{};
@@ -34,13 +34,13 @@ ObjectId ObjectId::null_id() {
     return *id;
 }
 
-ObjectId::Hex ObjectId::hex() const
+BlockId::Hex BlockId::hex() const
 {
     auto hex = to_hex<char>(*this);
     return hex;
 }
 
-ObjectId::ShortHex ObjectId::short_hex() const
+BlockId::ShortHex BlockId::short_hex() const
 {
     auto hex = to_hex<char>(*this);
 
@@ -52,19 +52,19 @@ ObjectId::ShortHex ObjectId::short_hex() const
     return ret;
 }
 
-std::ostream& ouisync::operator<<(std::ostream& os, const ObjectId::Hex& h)
+std::ostream& ouisync::operator<<(std::ostream& os, const BlockId::Hex& h)
 {
     for (auto c : h) { os << c; }
     return os;
 }
 
-std::ostream& ouisync::operator<<(std::ostream& os, const ObjectId::ShortHex& h)
+std::ostream& ouisync::operator<<(std::ostream& os, const BlockId::ShortHex& h)
 {
     for (auto c : h) { os << c; }
     return os;
 }
 
-std::ostream& ouisync::operator<<(std::ostream& os, const ObjectId& id)
+std::ostream& ouisync::operator<<(std::ostream& os, const BlockId& id)
 {
     auto i = g_debug_name_map.find(id);
     if (i != g_debug_name_map.end()) {

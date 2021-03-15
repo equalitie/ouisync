@@ -13,7 +13,7 @@
 
 using namespace ouisync;
 
-ObjectId Directory::calculate_id() const
+BlockId Directory::calculate_id() const
 {
     Blob blob;
     BlobStreamBuffer buf(blob);
@@ -23,7 +23,7 @@ ObjectId Directory::calculate_id() const
     return blob.id();
 }
 
-ObjectId Directory::save(Transaction& tnx) const
+BlockId Directory::save(Transaction& tnx) const
 {
     Blob blob;
     BlobStreamBuffer buf(blob);

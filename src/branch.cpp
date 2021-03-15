@@ -302,7 +302,7 @@ void Branch::store_self() const {
 
 //--------------------------------------------------------------------
 
-static void print(std::ostream& os, const ObjectId& obj_id, BlockStore& block_store, unsigned level)
+static void print(std::ostream& os, const BlockId& obj_id, BlockStore& block_store, unsigned level)
 {
     auto pad = Padding(level*2);
     auto opt = Blob::maybe_open(obj_id, block_store);

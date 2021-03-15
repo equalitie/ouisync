@@ -33,12 +33,12 @@ public:
 
     std::set<std::string> list() const;
 
-    ObjectId file(const std::string& name) const;
+    BlockId file(const std::string& name) const;
 
     Opt<Version> pick_subdirectory_to_edit(const UserId& preferred_user, const string_view name);
 
 private:
-    std::map<std::string, ObjectId> list_() const;
+    std::map<std::string, BlockId> list_() const;
 
 private:
     Versions _versions;

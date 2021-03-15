@@ -128,7 +128,7 @@ BOOST_AUTO_TEST_CASE(blob_restore_small) {
     Index index(uid, {});
     BlockStore block_store(dir);
 
-    ObjectId root;
+    BlockId root;
 
     string test = "hello world";
 
@@ -173,7 +173,7 @@ BOOST_AUTO_TEST_CASE(blob_restore_big) {
     Index index(uid, {});
     BlockStore block_store(dir);
 
-    ObjectId root;
+    BlockId root;
 
     Random random;
 
@@ -217,7 +217,7 @@ BOOST_AUTO_TEST_CASE(blob_restore_big_incremental) {
     Index index(uid, {});
     BlockStore block_store(dir);
 
-    ObjectId root;
+    BlockId root;
 
     Random random;
 

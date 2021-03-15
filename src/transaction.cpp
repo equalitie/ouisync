@@ -4,7 +4,7 @@
 
 using namespace ouisync;
 
-void Transaction::insert_block(const ObjectId& id, Block block)
+void Transaction::insert_block(const BlockId& id, Block block)
 {
     //ouisync_assert(id == BlockStore::calculate_block_id(block));
     _blocks.emplace(id, std::move(block));

@@ -14,13 +14,13 @@ class BlockStore;
 class Index {
 private:
     template<class K, class V> using Map = std::map<K, V>;
-    using ParentId = ObjectId;
+    using ParentId = BlockId;
     using Count = uint32_t;
     using UserMap = Map<UserId, Count>;
     using ParentMap = Map<ParentId, UserMap>;
-    using ObjectMap = Map<ObjectId, ParentMap>;
+    using ObjectMap = Map<BlockId, ParentMap>;
 
-    const ObjectId& id(ObjectMap::const_iterator i) { return i->first; }
+    const BlockId&  id(ObjectMap::const_iterator i) { return i->first; }
     const ParentId& id(ParentMap::const_iterator i) { return i->first; }
     const UserId&   id(UserMap  ::const_iterator i) { return i->first; }
 
@@ -42,8 +42,8 @@ public:
     void set_commit(const UserId&, const VersionedObject&);
     void set_version_vector(const UserId&, const VersionVector&);
 
-    void insert_object(const UserId&, const ObjectId& id, const ParentId& parent_id, size_t cnt = 1);
-    void remove_object(const UserId&, const ObjectId& id, const ParentId& parent_id);
+    void insert_object(const UserId&, const BlockId& id, const ParentId& parent_id, size_t cnt = 1);
+    void remove_object(const UserId&, const BlockId& id, const ParentId& parent_id);
 
     void merge(const Index&, BlockStore&);
 
@@ -52,19 +52,19 @@ public:
 
     friend std::ostream& operator<<(std::ostream&, const Index&);
 
-    const std::set<ObjectId>& missing_objects() const { return _missing_objects; }
+    const std::set<BlockId>& missing_blocks() const { return _missing_blocks; }
 
-    bool someone_has(const ObjectId&) const;
-    bool object_is_missing(const ObjectId&) const;
+    bool someone_has(const BlockId&) const;
+    bool object_is_missing(const BlockId&) const;
 
     // Return true if the object was previously marked as missing.
-    bool mark_not_missing(const ObjectId&);
+    bool mark_not_missing(const BlockId&);
 
-    std::set<ObjectId> roots() const;
+    std::set<BlockId> roots() const;
 
     template<class Archive>
     void serialize(Archive& ar, unsigned) {
-        ar & _objects & _commits & _missing_objects;
+        ar & _blocks & _commits & _missing_blocks;
     }
 
     bool remote_is_newer(const VersionedObject& remote_commit, const UserId&) const;
@@ -75,9 +75,9 @@ private:
     template<class F> void compare(const ObjectMap&, F&&);
 
 private:
-    ObjectMap _objects;
+    ObjectMap _blocks;
     Map<UserId, VersionedObject> _commits;
-    std::set<ObjectId> _missing_objects;
+    std::set<BlockId> _missing_blocks;
 };
 
 } // namespace

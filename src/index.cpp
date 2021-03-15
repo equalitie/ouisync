@@ -17,7 +17,7 @@ using std::cerr;
 
 Index::Index(const UserId& user_id, VersionedObject commit)
 {
-    _objects[commit.id][commit.id][user_id] = 1;
+    _blocks[commit.id][commit.id][user_id] = 1;
     _commits[user_id] = move(commit);
 }
 
@@ -129,12 +129,12 @@ template<class F> void Index::compare(const ObjectMap& remote_objects, F&& cmp)
 {
     // Const cast below because it would have double the code if the `Item`
     // class had to work with both `::iterator`s and `::const_iterator`s.
-    auto& lo = _objects;
+    auto& lo = _blocks;
     auto& ro = const_cast<ObjectMap&>(remote_objects);
 
     zip(lo, ro,
-        [&] (ObjectId obj, auto obj_li, auto obj_ri) {
-            if (obj_li != _objects.end() && obj_ri != remote_objects.end()) {
+        [&] (BlockId obj, auto obj_li, auto obj_ri) {
+            if (obj_li != _blocks.end() && obj_ri != remote_objects.end()) {
                 zip(parents(obj_li),
                     parents(obj_ri),
                     [&](auto parent_id, auto parent_li, auto parent_ri)
@@ -175,7 +175,7 @@ template<class F> void Index::compare(const ObjectMap& remote_objects, F&& cmp)
                     }
                 }
             }
-            else if (obj_li == _objects.end()) {
+            else if (obj_li == _blocks.end()) {
                 for (auto parent_ri : iterator_range(parents(obj_ri))) {
                     for (auto user_ri : iterator_range(users(parent_ri))) {
                         cmp(obj, id(parent_ri), id(user_ri),
@@ -193,7 +193,7 @@ template<class F> void Index::compare(const ObjectMap& remote_objects, F&& cmp)
 void Index::merge(const Index& remote_index, BlockStore& block_store)
 {
     auto& remote_commits = remote_index._commits;
-    auto& remote_objects = remote_index._objects;
+    auto& remote_objects = remote_index._blocks;
 
     set<UserId> is_newer;
 
@@ -219,13 +219,13 @@ void Index::merge(const Index& remote_index, BlockStore& block_store)
 
                 if (!someone_has(id)) {
                     block_store.remove(id);
-                    _missing_objects.erase(id);
+                    _missing_blocks.erase(id);
                 }
             }
             else if (remote) {
                 bool obj_is_new = !someone_has(obj_id);
 
-                auto& um = _objects[obj_id][parent_id];
+                auto& um = _blocks[obj_id][parent_id];
                 auto ui = um.insert({user_id, 0}).first;
                 ui->second = remote.get_count();
 
@@ -235,7 +235,7 @@ void Index::merge(const Index& remote_index, BlockStore& block_store)
                     _commits[user_id] = remote_commits.at(user_id);
                 }
 
-                if (obj_is_new) _missing_objects.insert(obj_id);
+                if (obj_is_new) _missing_blocks.insert(obj_id);
             }
             else {
                 ouisync_assert(0);
@@ -256,11 +256,11 @@ bool Index::remote_is_newer(const VersionedObject& remote_commit, const UserId& 
     }
 }
 
-void Index::insert_object(const UserId& user, const ObjectId& obj_id, const ObjectId& parent_id, size_t cnt)
+void Index::insert_object(const UserId& user, const BlockId& obj_id, const BlockId& parent_id, size_t cnt)
 {
     if (cnt == 0) return;
 
-    auto obj_i    = _objects.insert({obj_id, {}}).first;
+    auto obj_i    = _blocks.insert({obj_id, {}}).first;
     auto parent_i = obj_i->second.insert({parent_id, {}}).first;
     auto user_i   = parent_i->second.insert({user, 0}).first;
 
@@ -271,11 +271,11 @@ void Index::insert_object(const UserId& user, const ObjectId& obj_id, const Obje
     }
 }
 
-void Index::remove_object(const UserId& user, const ObjectId& obj_id, const ObjectId& parent_id)
+void Index::remove_object(const UserId& user, const BlockId& obj_id, const BlockId& parent_id)
 {
-    auto obj_i = _objects.find(obj_id);
-    ouisync_assert(obj_i != _objects.end());
-    if (obj_i == _objects.end()) return;
+    auto obj_i = _blocks.find(obj_id);
+    ouisync_assert(obj_i != _blocks.end());
+    if (obj_i == _blocks.end()) return;
 
     auto parent_i = obj_i->second.find(parent_id);
     ouisync_assert(parent_i != obj_i->second.end());
@@ -286,23 +286,23 @@ void Index::remove_object(const UserId& user, const ObjectId& obj_id, const Obje
     if (user_i == parent_i->second.end()) return;
 
     if (--user_i->second == 0) {
-        Item(_objects, obj_i, parent_i, user_i).erase();
+        Item(_blocks, obj_i, parent_i, user_i).erase();
     }
 }
 
-bool Index::someone_has(const ObjectId& obj) const
+bool Index::someone_has(const BlockId& obj) const
 {
-    return _objects.find(obj) != _objects.end();
+    return _blocks.find(obj) != _blocks.end();
 }
 
-bool Index::object_is_missing(const ObjectId& obj) const
+bool Index::object_is_missing(const BlockId& obj) const
 {
-    return _missing_objects.find(obj) != _missing_objects.end();
+    return _missing_blocks.find(obj) != _missing_blocks.end();
 }
 
-bool Index::mark_not_missing(const ObjectId& obj)
+bool Index::mark_not_missing(const BlockId& obj)
 {
-    return _missing_objects.erase(obj) != 0;
+    return _missing_blocks.erase(obj) != 0;
 }
 
 Opt<VersionedObject> Index::commit(const UserId& user)
@@ -312,9 +312,9 @@ Opt<VersionedObject> Index::commit(const UserId& user)
     return i->second;
 }
 
-std::set<ObjectId> Index::roots() const
+std::set<BlockId> Index::roots() const
 {
-    std::set<ObjectId> ret;
+    std::set<BlockId> ret;
     for (auto& [user, commit] : _commits) {
         ret.insert(commit.id);
     }
@@ -329,7 +329,7 @@ std::ostream& ouisync::operator<<(std::ostream& os, const Index& index)
     }
     os << "}\n";
     os << "Objects = {\n";
-    for (auto& [obj, parents]: index._objects) {
+    for (auto& [obj, parents]: index._blocks) {
         for (auto& [parent, users]: parents) {
             for (auto& [user, count]: users) {
                 os << "  Object:" << obj << " Parent:" << parent
@@ -339,7 +339,7 @@ std::ostream& ouisync::operator<<(std::ostream& os, const Index& index)
     }
     os << "}\n";
 
-    os << "Missing = " << index._missing_objects << "\n";
+    os << "Missing = " << index._missing_blocks << "\n";
 
     return os;
 }

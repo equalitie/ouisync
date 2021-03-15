@@ -28,7 +28,7 @@ File::File(Blob&& blob, size_t data_offset) :
 {
 }
 
-ObjectId File::calculate_id()
+BlockId File::calculate_id()
 {
     return _blob.id();
 }
@@ -70,7 +70,7 @@ size_t File::truncate(size_t s)
     return _blob.truncate(s + _data_offset) - _data_offset;
 }
 
-ObjectId File::save(Transaction& tnx)
+BlockId File::save(Transaction& tnx)
 {
     return _blob.commit(tnx);
 }

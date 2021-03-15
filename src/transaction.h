@@ -18,15 +18,15 @@ private:
     template<class... Args> using Set = std::unordered_set<Args...>;
     template<class... Args> using Map = std::unordered_map<Args...>;
 
-    using Blocks = Map<ObjectId, Block>;
+    using Blocks = Map<BlockId, Block>;
 
-    using Edge  = std::pair<ObjectId, ObjectId>;
+    using Edge  = std::pair<BlockId, BlockId>;
     using Edges = Set<Edge, boost::hash<Edge>>;
 
 public:
-    void insert_block(const ObjectId& id, Block);
+    void insert_block(const BlockId& id, Block);
 
-    void insert_edge(const ObjectId& from, const ObjectId& to) {
+    void insert_edge(const BlockId& from, const BlockId& to) {
         _edges.emplace(from, to);
     }
 

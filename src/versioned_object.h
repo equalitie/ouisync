@@ -7,7 +7,7 @@
 namespace ouisync {
 
 struct VersionedObject {
-    ObjectId id;
+    BlockId id;
     VersionVector versions;
 
     bool happened_before(const VersionedObject& other) const {
