@@ -312,9 +312,9 @@ struct Blob::Impl
             return b.write(buffer, size, offset);
         }
 
-        // We'll replace the top object with a node, make this data block it's
-        // first block, and finally append whatever number of blocks is still
-        // needed.
+        // We'll replace the top DataBlock with a NodeBlock and make the data
+        // block first block of the node. Finally, we'll append whatever number
+        // of blocks is still needed.
 
         NodeBlock node;
 

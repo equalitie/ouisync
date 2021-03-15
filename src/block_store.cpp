@@ -23,7 +23,7 @@ Block BlockStore::load(const fs::path& path)
     fs::ifstream ifs(path, fs::ifstream::binary);
 
     if (!ifs.is_open()) {
-        throw std::runtime_error("archive::load: Failed to open object");
+        throw std::runtime_error("archive::load: Failed to open block");
     }
 
     ifs.read(block.data(), block.size());

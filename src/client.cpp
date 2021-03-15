@@ -67,7 +67,7 @@ net::awaitable<void> Client::run(Cancel cancel)
         for (auto& block_id : missing_blocks) {
             if (index.block_is_missing(block_id)) {
                 if (dbg) {
-                    cerr << "C: Object " << block_id << " is missing at peer (skipping)\n";
+                    cerr << "C: Block " << block_id << " is missing at peer (skipping)\n";
                 }
                 continue;
             }
@@ -80,7 +80,7 @@ net::awaitable<void> Client::run(Cancel cancel)
 
             if (!block) {
                 if (dbg) {
-                    cerr << "C: Peer doesn't have object: " << block_id << "\n";
+                    cerr << "C: Peer doesn't have block: " << block_id << "\n";
                 }
                 // Break the loop to download a new index.
                 break;
