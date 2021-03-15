@@ -65,7 +65,7 @@ net::awaitable<void> Client::run(Cancel cancel)
         auto missing_blocks = _branch.missing_blocks();
 
         for (auto& block_id : missing_blocks) {
-            if (index.object_is_missing(block_id)) {
+            if (index.block_is_missing(block_id)) {
                 if (dbg) {
                     cerr << "C: Object " << block_id << " is missing at peer (skipping)\n";
                 }

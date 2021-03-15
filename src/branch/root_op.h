@@ -53,7 +53,7 @@ public:
     }
 
     void remove_recursive(const BlockId& block_id, const BlockId& parent_id) {
-        _index.remove_object(_this_user_id, block_id, parent_id);
+        _index.remove_block(_this_user_id, block_id, parent_id);
 
         if (_index.someone_has(block_id)) return;
 

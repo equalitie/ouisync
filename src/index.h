@@ -42,8 +42,8 @@ public:
     void set_commit(const UserId&, const VersionedObject&);
     void set_version_vector(const UserId&, const VersionVector&);
 
-    void insert_object(const UserId&, const BlockId& id, const ParentId& parent_id, size_t cnt = 1);
-    void remove_object(const UserId&, const BlockId& id, const ParentId& parent_id);
+    void insert_block(const UserId&, const BlockId& id, const ParentId& parent_id, size_t cnt = 1);
+    void remove_block(const UserId&, const BlockId& id, const ParentId& parent_id);
 
     void merge(const Index&, BlockStore&);
 
@@ -55,9 +55,9 @@ public:
     const std::set<BlockId>& missing_blocks() const { return _missing_blocks; }
 
     bool someone_has(const BlockId&) const;
-    bool object_is_missing(const BlockId&) const;
+    bool block_is_missing(const BlockId&) const;
 
-    // Return true if the object was previously marked as missing.
+    // Return true if the block was previously marked as missing.
     bool mark_not_missing(const BlockId&);
 
     std::set<BlockId> roots() const;
