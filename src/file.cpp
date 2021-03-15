@@ -36,6 +36,7 @@ ObjectId File::calculate_id()
 /* static */
 Opt<File> File::maybe_open(Blob& blob)
 {
+    ouisync_assert(blob.size());
     BlobStreamBuffer buf(blob);
     std::istream stream(&buf);
     InputArchive a(stream);

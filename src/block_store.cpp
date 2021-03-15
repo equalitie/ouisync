@@ -1,5 +1,6 @@
 #include "block_store.h"
 #include "hex.h"
+#include "ouisync_assert.h"
 #include <iostream>
 
 #include <boost/filesystem/fstream.hpp>
@@ -75,7 +76,7 @@ ObjectId BlockStore::store(const Block& block)
 
 void BlockStore::store(const ObjectId& id, const Block& block)
 {
-    assert(id == calculate_block_id(block));
+    ouisync_assert(id == calculate_block_id(block));
     store(id, block.data(), block.size());
 }
 
