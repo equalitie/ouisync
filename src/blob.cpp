@@ -169,15 +169,15 @@ struct Blob::Impl
 
     }
 
-    size_t read(const NodeBlock& b, char* buffer, size_t size, size_t offset)
+    size_t read(const NodeBlock& node, char* buffer, size_t size, size_t offset)
     {
         size_t read = 0;
 
         size_t i = offset / DataBlock::max_data_size;
 
         while (read < size) {
-            if (i >= b.size()) return read;
-            auto id = b[i];
+            if (i >= node.size()) return read;
+            auto id = node[i];
 
             DataBlock tmp;
             const DataBlock* p = load_const_data_block(id, tmp);
@@ -258,7 +258,7 @@ struct Blob::Impl
         // first block, and finally append whatever number of blocks is still
         // needed.
 
-        NodeBlock n;
+        NodeBlock node;
 
         size_t wrote = 0;
 
@@ -269,11 +269,11 @@ struct Blob::Impl
             offset = 0;
 
             auto id = b.calculate_id();
-            n.push_back(id);
+            node.push_back(id);
             blocks.insert({id, move(b)});
         }
 
-        top_block = move(n);
+        top_block = move(node);
 
         return wrote;
     }
@@ -339,17 +339,28 @@ struct Blob::Impl
 
     size_t size() const {
         return ouisync::apply(top_block,
-            [&] (const DataBlock& b) -> size_t { return b.data_size(); },
+            [&] (const DataBlock& b) -> size_t {
+                return size(b);
+            },
             [&] (const NodeBlock& n) -> size_t {
-                if (n.size() == 0) return 0;
-
-                DataBlock tmp;
-                const DataBlock* last = load_const_data_block(n.back(), tmp);
-
-                // Assuming all except the last block are filled to the
-                // max_data_size.
-                return (n.size()-1) * DataBlock::max_data_size + last->data_size();
+                auto s = size(n);
+                return s;
             });
+    }
+
+    size_t size(const DataBlock& b) const {
+        return b.data_size();
+    }
+
+    size_t size(const NodeBlock& n) const {
+        if (n.size() == 0) return 0;
+
+        DataBlock tmp;
+        const DataBlock* last = load_const_data_block(n.back(), tmp);
+
+        // Assuming all except the last block are filled to the
+        // max_data_size.
+        return (n.size()-1) * DataBlock::max_data_size + last->data_size();
     }
 
     ObjectId commit(Transaction& tnx) {
