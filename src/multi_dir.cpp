@@ -105,9 +105,13 @@ set<string> MultiDir::list() const {
     // XXX: Conflicting files - or directories that have been concurrently
     // modified and removed - need to marked as such.
     for (auto& [user, vobj] : _versions) {
-        auto blob = Blob::open(vobj.id, *_block_store);
+        auto blob = Blob::maybe_open(vobj.id, *_block_store);
+        if (!blob) {
+            // It's possible the network hasn't yet loaded this blob.
+            continue;
+        }
         Directory dir;
-        if (!dir.maybe_load(blob)) {
+        if (!dir.maybe_load(*blob)) {
             throw std::runtime_error("MultiDir::list: Block is not a directory");
         }
         for (auto& [filename, _] : dir) {
