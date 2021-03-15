@@ -204,7 +204,7 @@ void Index::merge(const Index& remote_index, BlockStore& block_store)
     }
 
     compare(remote_objects,
-        [&] (auto& obj_id, auto& parent_id, auto& user_id, Item local, Item remote)
+        [&] (auto& block_id, auto& parent_id, auto& user_id, Item local, Item remote)
         {
             if (!is_newer.count(user_id)) return;
 
@@ -213,7 +213,7 @@ void Index::merge(const Index& remote_index, BlockStore& block_store)
                 local.set_count(remote.get_count());
             }
             else if (local) {
-                auto id = obj_id;
+                auto id = block_id;
 
                 local.erase();
 
@@ -223,19 +223,19 @@ void Index::merge(const Index& remote_index, BlockStore& block_store)
                 }
             }
             else if (remote) {
-                bool obj_is_new = !someone_has(obj_id);
+                bool obj_is_new = !someone_has(block_id);
 
-                auto& um = _blocks[obj_id][parent_id];
+                auto& um = _blocks[block_id][parent_id];
                 auto ui = um.insert({user_id, 0}).first;
                 ui->second = remote.get_count();
 
                 ouisync_assert(ui->second > 0);
 
-                if (obj_id == parent_id) {
+                if (block_id == parent_id) {
                     _commits[user_id] = remote_commits.at(user_id);
                 }
 
-                if (obj_is_new) _missing_blocks.insert(obj_id);
+                if (obj_is_new) _missing_blocks.insert(block_id);
             }
             else {
                 ouisync_assert(0);
@@ -256,37 +256,37 @@ bool Index::remote_is_newer(const VersionedObject& remote_commit, const UserId& 
     }
 }
 
-void Index::insert_object(const UserId& user, const BlockId& obj_id, const BlockId& parent_id, size_t cnt)
+void Index::insert_object(const UserId& user, const BlockId& block_id, const BlockId& parent_id, size_t cnt)
 {
     if (cnt == 0) return;
 
-    auto obj_i    = _blocks.insert({obj_id, {}}).first;
-    auto parent_i = obj_i->second.insert({parent_id, {}}).first;
+    auto block_i  = _blocks.insert({block_id, {}}).first;
+    auto parent_i = block_i->second.insert({parent_id, {}}).first;
     auto user_i   = parent_i->second.insert({user, 0}).first;
 
     user_i->second += cnt;
 
-    if (obj_id == parent_id) {
-        _commits[user].id = obj_id;
+    if (block_id == parent_id) {
+        _commits[user].id = block_id;
     }
 }
 
-void Index::remove_object(const UserId& user, const BlockId& obj_id, const BlockId& parent_id)
+void Index::remove_object(const UserId& user, const BlockId& block_id, const BlockId& parent_id)
 {
-    auto obj_i = _blocks.find(obj_id);
-    ouisync_assert(obj_i != _blocks.end());
-    if (obj_i == _blocks.end()) return;
+    auto block_i = _blocks.find(block_id);
+    ouisync_assert(block_i != _blocks.end());
+    if (block_i == _blocks.end()) return;
 
-    auto parent_i = obj_i->second.find(parent_id);
-    ouisync_assert(parent_i != obj_i->second.end());
-    if (parent_i == obj_i->second.end()) return;
+    auto parent_i = block_i->second.find(parent_id);
+    ouisync_assert(parent_i != block_i->second.end());
+    if (parent_i == block_i->second.end()) return;
 
     auto user_i = parent_i->second.find(user);
     ouisync_assert(user_i != parent_i->second.end());
     if (user_i == parent_i->second.end()) return;
 
     if (--user_i->second == 0) {
-        Item(_blocks, obj_i, parent_i, user_i).erase();
+        Item(_blocks, block_i, parent_i, user_i).erase();
     }
 }
 

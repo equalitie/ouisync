@@ -302,20 +302,20 @@ void Branch::store_self() const {
 
 //--------------------------------------------------------------------
 
-static void print(std::ostream& os, const BlockId& obj_id, BlockStore& block_store, unsigned level)
+static void print(std::ostream& os, const BlockId& block_id, BlockStore& block_store, unsigned level)
 {
     auto pad = Padding(level*2);
-    auto opt = Blob::maybe_open(obj_id, block_store);
+    auto opt = Blob::maybe_open(block_id, block_store);
 
     if (!opt) {
-        os << pad << "!!! Block " << obj_id << " is not in BlockStore !!!\n";
+        os << pad << "!!! Block " << block_id << " is not in BlockStore !!!\n";
         return;
     }
 
     Directory d;
 
     if (d.maybe_load(*opt)) {
-        os << pad << "Directory id:" << obj_id << "\n";
+        os << pad << "Directory id:" << block_id << "\n";
         for (auto& [filename, user_map] : d) {
             os << pad << "  " << filename << "/\n";
             for (auto& [user, vobj]: user_map) {
@@ -325,9 +325,9 @@ static void print(std::ostream& os, const BlockId& obj_id, BlockStore& block_sto
             }
         }
     } else if (auto f = File::maybe_open(*opt)) {
-        os << pad << "File id:" << obj_id << " size:" << f->size() << "\n";
+        os << pad << "File id:" << block_id << " size:" << f->size() << "\n";
     } else {
-        os << pad << "!!! Block " << obj_id << " is neither a File nor a Directory !!!\n";
+        os << pad << "!!! Block " << block_id << " is neither a File nor a Directory !!!\n";
     }
 }
 
