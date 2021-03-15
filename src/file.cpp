@@ -12,8 +12,7 @@
 using namespace ouisync;
 using std::move;
 
-File::File() :
-    _blob(Blob::empty())
+File::File()
 {
     BlobStreamBuffer buf(_blob);
     std::ostream stream(&buf);
@@ -37,6 +36,7 @@ ObjectId File::calculate_id()
 /* static */
 Opt<File> File::maybe_open(Blob& blob)
 {
+    ouisync_assert(blob.size());
     BlobStreamBuffer buf(blob);
     std::istream stream(&buf);
     InputArchive a(stream);
@@ -70,9 +70,9 @@ size_t File::truncate(size_t s)
     return _blob.truncate(s + _data_offset) - _data_offset;
 }
 
-void File::save(Transaction& tnx)
+ObjectId File::save(Transaction& tnx)
 {
-    _blob.commit(tnx);
+    return _blob.commit(tnx);
 }
 
 std::ostream& ouisync::operator<<(std::ostream& os, const File& b) {

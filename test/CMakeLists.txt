@@ -16,3 +16,23 @@ target_link_libraries(test-utils PUBLIC Boost::unit_test_framework "${CMAKE_THRE
 target_compile_definitions(test-utils PRIVATE -DBOOST_ASIO_HAS_CO_AWAIT)
 target_compile_features(test-utils PRIVATE cxx_std_17)
 set_warning_level(test-utils)
+
+######################################################################
+add_executable(test-blob test-blob.cpp
+    "${CMAKE_CURRENT_SOURCE_DIR}/../src/block_store.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../src/transaction.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../src/index.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../src/user_id.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../src/version_vector.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../src/object_id.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../src/blob.cpp")
+
+target_include_directories(test-blob PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+
+target_link_libraries(test-blob PUBLIC Boost::unit_test_framework
+    CryptoPP
+    Boost::filesystem
+    "${CMAKE_THREAD_LIBS_INIT}")
+
+target_compile_features(test-blob PRIVATE cxx_std_17)
+set_warning_level(test-blob)

@@ -24,9 +24,7 @@ private:
     using Edges = Set<Edge, boost::hash<Edge>>;
 
 public:
-    void insert_block(const ObjectId& id, Block block) {
-        _blocks.emplace(id, std::move(block));
-    }
+    void insert_block(const ObjectId& id, Block);
 
     void insert_edge(const ObjectId& from, const ObjectId& to) {
         _edges.emplace(from, to);

@@ -62,6 +62,14 @@ public:
 
     static ObjectId null_id();
 
+    void from_bytes(const char* bytes) {
+        std::copy_n(bytes, size, Parent::data());
+    }
+
+    void to_bytes(char* bytes) const {
+        std::copy_n(Parent::data(), size, bytes);
+    }
+
     Hex hex() const;
     ShortHex short_hex() const;
 

@@ -9,6 +9,13 @@ namespace ouisync {
 class Block : public std::vector<char>
 {
 public:
+    Block() = default;
+    Block(const Block&) = default;
+    Block(Block&&) = default;
+
+    Block& operator=(const Block&) = default;
+    Block& operator=(Block&&) = default;
+
     using std::vector<char>::vector;
 
     template<class Archive>

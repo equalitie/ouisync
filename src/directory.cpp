@@ -15,27 +15,28 @@ using namespace ouisync;
 
 ObjectId Directory::calculate_id() const
 {
-    // XXX: This is inefficient
-    std::stringstream ss;
+    Blob blob;
+    BlobStreamBuffer buf(blob);
+    std::ostream s(&buf);
     auto tag = ObjectTag::Directory;
-    archive::store(ss, tag, _name_map);
-    return BlockStore::calculate_block_id(ss.str().data(), ss.str().size());
+    archive::store(s, tag, _name_map);
+    return blob.id();
 }
 
 ObjectId Directory::save(Transaction& tnx) const
 {
-    auto blob = Blob::empty();
+    Blob blob;
     BlobStreamBuffer buf(blob);
     std::ostream s(&buf);
     OutputArchive a(s);
     a << ObjectTag::Directory;
     a << _name_map;
-    blob.commit(tnx);
     auto id = blob.id();
+    blob.commit(tnx);
 
     for_each_unique_child([&] (auto&, auto& child_id) { tnx.insert_edge(id, child_id); });
 
-    return blob.id();
+    return id;
 }
 
 bool Directory::maybe_load(Blob& blob)
