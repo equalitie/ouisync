@@ -352,7 +352,7 @@ struct Blob::Impl
             });
     }
 
-    void commit(Transaction& tnx) {
+    ObjectId commit(Transaction& tnx) {
         auto top_id = maybe_calculate_id();
 
         apply(top_block,
@@ -366,6 +366,8 @@ struct Blob::Impl
                     tnx.insert_block(id, move(blocks.at(id)));
                 }
             });
+
+        return top_id;
     }
 
     const DataBlock* load_const_data_block(const ObjectId& id, DataBlock& stack_tmp) const
@@ -419,11 +421,12 @@ size_t Blob::truncate(size_t size)
     return _impl->truncate(size);
 }
 
-void Blob::commit(Transaction& transaction)
+ObjectId Blob::commit(Transaction& transaction)
 {
     maybe_init();
-    _impl->commit(transaction);
+    auto id = _impl->commit(transaction);
     _impl = nullptr;
+    return id;
 }
 
 static

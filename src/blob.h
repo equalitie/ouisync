@@ -39,7 +39,7 @@ public:
 
     size_t truncate(size_t size);
 
-    void commit(Transaction&);
+    ObjectId commit(Transaction&);
 
     size_t size() const;
 
