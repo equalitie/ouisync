@@ -26,13 +26,11 @@ public:
     }
 
     bool commit() override {
-        auto new_id = _tree.calculate_id();
+        auto new_id = _tree.save(_transaction);
         auto old_id = _original_commit.id;
 
         if (old_id == new_id) return false;
 
-        auto new_id_ = _tree.save(_transaction);
-        assert(new_id == new_id_);
         _transaction.insert_edge(new_id, new_id);
 
         _transaction.commit(_this_user_id, _block_store, _index);

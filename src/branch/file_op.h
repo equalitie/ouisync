@@ -37,11 +37,9 @@ public:
             assert("TODO" && 0);
         }
 
-        auto new_id = _file->calculate_id();
+        auto new_id = _file->save(root()->transaction());
 
         if (_old && _old->id == new_id) return false;
-
-        _file->save(root()->transaction());
 
         VersionVector vv;
 

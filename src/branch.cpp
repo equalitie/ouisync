@@ -37,13 +37,11 @@ Branch Branch::create(executor_type ex, const fs::path& path, UserId user_id, Bl
     Branch b(ex, path, user_id, block_store, move(options));
 
     const Directory empty_dir;
-    auto empty_dir_id = empty_dir.calculate_id();
+    Transaction tnx;
+    auto empty_dir_id = empty_dir.save(tnx);
 
     b._index = Index(user_id, {empty_dir_id, {}});
 
-    Transaction tnx;
-    auto id_ = empty_dir.save(tnx);
-    ouisync_assert(empty_dir_id == id_);
     tnx.commit(user_id, block_store, b._index);
 
     b.store_self();

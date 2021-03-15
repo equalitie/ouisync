@@ -35,7 +35,7 @@ public:
     }
 
     bool commit() override {
-        auto new_tree_id = _tree.calculate_id();
+        auto new_tree_id = _tree.save(_root->transaction());
 
         if (_old && _old->id == new_tree_id) {
             return false;
@@ -52,8 +52,6 @@ public:
         root()->increment(new_vv);
 
         _parent->tree()[_dirname][_this_user_id] = { new_tree_id, std::move(new_vv) };
-
-        _tree.save(_root->transaction());
 
         return _parent->commit();
     }
