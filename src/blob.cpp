@@ -206,6 +206,8 @@ struct Blob::Impl
 
     size_t write(NodeBlock& node, const char* buffer, size_t size, size_t offset)
     {
+        if (size != 0) top_block_id = boost::none;
+
         const auto m = DataBlock::max_data_size;
         size_t wrote = 0;
 
@@ -228,6 +230,12 @@ struct Blob::Impl
 
             auto id = block.calculate_id();
             blocks.insert({id, move(block)});
+
+            if (i < node.size()) {
+                node[i] = id;
+            } else {
+                node.push_back(id);
+            }
         }
 
         return wrote;
