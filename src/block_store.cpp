@@ -23,7 +23,7 @@ Block BlockStore::load(const fs::path& path)
     fs::ifstream ifs(path, fs::ifstream::binary);
 
     if (!ifs.is_open()) {
-        throw std::runtime_error("archive::load: Failed to open object");
+        throw std::runtime_error("archive::load: Failed to open block");
     }
 
     ifs.read(block.data(), block.size());
@@ -31,19 +31,19 @@ Block BlockStore::load(const fs::path& path)
     return block;
 }
 
-Block BlockStore::load(const ObjectId& block_id) const
+Block BlockStore::load(const BlockId& block_id) const
 {
     return load(id_to_path(block_id));
 }
 
-Opt<Block> BlockStore::maybe_load(const ObjectId& block_id) const
+Opt<Block> BlockStore::maybe_load(const BlockId& block_id) const
 {
     auto path = id_to_path(block_id);
     if (!fs::exists(path)) return boost::none;
     return load(path);
 }
 
-void BlockStore::store(const ObjectId& id, const char* data, size_t size)
+void BlockStore::store(const BlockId& id, const char* data, size_t size)
 {
     auto path = id_to_path(id);
 
@@ -60,34 +60,34 @@ void BlockStore::store(const ObjectId& id, const char* data, size_t size)
     ofs.write(data, size);
 }
 
-ObjectId BlockStore::store(const char* data, size_t size)
+BlockId BlockStore::store(const char* data, size_t size)
 {
     auto id = calculate_block_id(data, size);
     store(id, data, size);
     return id;
 }
 
-ObjectId BlockStore::store(const Block& block)
+BlockId BlockStore::store(const Block& block)
 {
     auto id = calculate_block_id(block);
     store(id, block.data(), block.size());
     return id;
 }
 
-void BlockStore::store(const ObjectId& id, const Block& block)
+void BlockStore::store(const BlockId& id, const Block& block)
 {
     ouisync_assert(id == calculate_block_id(block));
     store(id, block.data(), block.size());
 }
 
-void BlockStore::remove(const ObjectId& block_id)
+void BlockStore::remove(const BlockId& block_id)
 {
     sys::error_code ec;
     fs::remove(id_to_path(block_id), ec);
     return;
 }
 
-fs::path BlockStore::id_to_path(const ObjectId& id) const
+fs::path BlockStore::id_to_path(const BlockId& id) const
 {
     auto hex = to_hex<char>(id);
     string_view hex_sv{hex.data(), hex.size()};
@@ -101,13 +101,13 @@ fs::path BlockStore::id_to_path(const ObjectId& id) const
 }
 
 /* static */
-ObjectId BlockStore::calculate_block_id(const Block& block)
+BlockId BlockStore::calculate_block_id(const Block& block)
 {
     return calculate_block_id(block.data(), block.size());
 }
 
 /* static */
-ObjectId BlockStore::calculate_block_id(const char* data, size_t size)
+BlockId BlockStore::calculate_block_id(const char* data, size_t size)
 {
     Sha256 hash;
     hash.update(data, size);

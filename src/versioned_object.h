@@ -1,13 +1,13 @@
 #pragma once
 
 #include "version_vector.h"
-#include "object_id.h"
+#include "block_id.h"
 #include "ouisync_assert.h"
 
 namespace ouisync {
 
 struct VersionedObject {
-    ObjectId id;
+    BlockId id;
     VersionVector versions;
 
     bool happened_before(const VersionedObject& other) const {

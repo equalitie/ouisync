@@ -97,7 +97,7 @@ public:
 
     void merge_index(const Index&);
 
-    const std::set<ObjectId>& missing_objects() const { return _index.missing_objects(); }
+    const std::set<BlockId>& missing_blocks() const { return _index.missing_blocks(); }
 
     std::set<std::string> readdir(PathRange path) const;
 
@@ -121,7 +121,7 @@ private:
     template<class OpPtr>
     void do_commit(OpPtr&);
 
-    std::set<ObjectId> roots() const;
+    std::set<BlockId> roots() const;
 
     void update_user_index(const UserId&, const Index&);
 

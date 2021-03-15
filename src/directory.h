@@ -125,7 +125,7 @@ public:
     }
 
     auto children() const {
-        std::set<ObjectId> ch;
+        std::set<BlockId> ch;
         for (auto& [_, user_map] : _name_map) {
             for (auto& [user, vobj] : user_map) {
                 ch.insert(vobj.id);
@@ -145,7 +145,7 @@ public:
     template<class F>
     void for_each_unique_child(const F& f) const {
         for (auto& [filename, usermap] : _name_map) {
-            std::set<ObjectId> used;
+            std::set<BlockId> used;
             for (auto& [user_id, vobj] : usermap) {
                 if (used.count(vobj.id)) continue;
                 used.insert(vobj.id);
@@ -155,9 +155,9 @@ public:
     }
 
 public:
-    ObjectId calculate_id() const;
+    BlockId calculate_id() const;
 
-    ObjectId save(Transaction&) const;
+    BlockId save(Transaction&) const;
     bool maybe_load(Blob&);
 
     static

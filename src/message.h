@@ -58,7 +58,7 @@ struct RsIndex {
 struct RqBlock {
     static constexpr auto type = MessageType::Request;
 
-    ObjectId block_id;
+    BlockId block_id;
 
     template<class Archive>
     void serialize(Archive& ar, const unsigned) {

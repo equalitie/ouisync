@@ -10,7 +10,7 @@
 namespace ouisync {
 
 class BlockStore;
-class ObjectId;
+class BlockId;
 class Transaction;
 
 //////////////////////////////////////////////////////////////////////
@@ -28,18 +28,18 @@ public:
     Blob(Blob&&);
     Blob& operator=(Blob&&);
 
-    static Blob open(const ObjectId&, const BlockStore&);
+    static Blob open(const BlockId&, const BlockStore&);
     static Blob open(const fs::path&, const BlockStore&);
-    static Opt<Blob> maybe_open(const ObjectId&, const BlockStore&);
+    static Opt<Blob> maybe_open(const BlockId&, const BlockStore&);
 
-    ObjectId id();
+    BlockId id();
 
     size_t read(char* buffer, size_t size, size_t offset);
     size_t write(const char* buffer, size_t size, size_t offset);
 
     size_t truncate(size_t size);
 
-    ObjectId commit(Transaction&);
+    BlockId commit(Transaction&);
 
     size_t size() const;
 

@@ -1,12 +1,14 @@
 #pragma once
 
-#include "object_id.h"
 #include "shortcuts.h"
 #include "blob.h"
+
+#include <boost/optional.hpp>
 
 namespace ouisync {
 
 class Transaction;
+class BlockId;
 
 struct File
 {
@@ -26,12 +28,12 @@ public:
         return std::move(*f);
     }
 
-    ObjectId calculate_id();
+    BlockId calculate_id();
 
     size_t write(const char*, size_t size, size_t offset);
     size_t read(char*, size_t size, size_t offset);
 
-    ObjectId save(Transaction&);
+    BlockId save(Transaction&);
 
     size_t size();
 

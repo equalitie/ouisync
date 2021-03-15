@@ -24,7 +24,7 @@ add_executable(test-blob test-blob.cpp
     "${CMAKE_CURRENT_SOURCE_DIR}/../src/index.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/../src/user_id.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/../src/version_vector.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../src/object_id.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../src/block_id.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/../src/blob.cpp")
 
 target_include_directories(test-blob PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)

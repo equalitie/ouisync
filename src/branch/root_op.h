@@ -52,21 +52,21 @@ public:
         vv.set_version(_this_user_id, _original_commit.versions.version_of(_this_user_id) + 1);
     }
 
-    void remove_recursive(const ObjectId& obj_id, const ObjectId& parent_id) {
-        _index.remove_object(_this_user_id, obj_id, parent_id);
+    void remove_recursive(const BlockId& block_id, const BlockId& parent_id) {
+        _index.remove_block(_this_user_id, block_id, parent_id);
 
-        if (_index.someone_has(obj_id)) return;
+        if (_index.someone_has(block_id)) return;
 
-        auto blob = Blob::open(obj_id, _block_store);
+        auto blob = Blob::open(block_id, _block_store);
 
         Directory d;
         if (d.maybe_load(blob)) {
             d.for_each_unique_child([&] (auto& filename, auto& child_id) {
-                remove_recursive(child_id, obj_id);
+                remove_recursive(child_id, block_id);
             });
         }
 
-        _block_store.remove(obj_id);
+        _block_store.remove(block_id);
     }
 
     const MultiDir& multi_dir() const override { return _multi_dir; }

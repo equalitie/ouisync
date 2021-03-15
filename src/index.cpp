@@ -17,7 +17,7 @@ using std::cerr;
 
 Index::Index(const UserId& user_id, VersionedObject commit)
 {
-    _objects[commit.id][commit.id][user_id] = 1;
+    _blocks[commit.id][commit.id][user_id] = 1;
     _commits[user_id] = move(commit);
 }
 
@@ -73,27 +73,27 @@ void zip(Map& a, Map& b, F&& modifier)
 
 struct Index::Item
 {
-    using Oi = ObjectMap::iterator;
+    using Oi = BlockMap::iterator;
     using Pi = ParentMap::iterator;
     using Ui = UserMap  ::iterator;
 
-    ObjectMap& objects;
+    BlockMap& blocks;
 
     Opt<Oi> oi;
     Opt<Pi> pi;
     Opt<Ui> ui;
 
-    Item(ObjectMap& os)                      : objects(os) {}
-    Item(ObjectMap& os, Oi oi)               : objects(os), oi(oi)                 { normalize(); }
-    Item(ObjectMap& os, Oi oi, Pi pi)        : objects(os), oi(oi), pi(pi)         { normalize(); }
-    Item(ObjectMap& os, Oi oi, Pi pi, Ui ui) : objects(os), oi(oi), pi(pi), ui(ui) { normalize(); }
+    Item(BlockMap& os)                      : blocks(os) {}
+    Item(BlockMap& os, Oi oi)               : blocks(os), oi(oi)                 { normalize(); }
+    Item(BlockMap& os, Oi oi, Pi pi)        : blocks(os), oi(oi), pi(pi)         { normalize(); }
+    Item(BlockMap& os, Oi oi, Pi pi, Ui ui) : blocks(os), oi(oi), pi(pi), ui(ui) { normalize(); }
 
     // Make so that none of `oi`, `pi`, `ui` are `*.end()`s, but instead they're
     // set to boost::none.
     void normalize() {
         using boost::none;
         if (!oi)                        { oi = none; pi = none; ui = none; return; }
-        if (*oi == objects.end())       { oi = none; pi = none; ui = none; return; }
+        if (*oi == blocks.end())        { oi = none; pi = none; ui = none; return; }
         if (*pi == (*oi)->second.end()) {            pi = none; ui = none; return; }
         if (*ui == (*pi)->second.end()) {                       ui = none; return; }
     }
@@ -120,45 +120,45 @@ struct Index::Item
             (*oi)->second.erase(*pi);
         }
         if (oi && (*oi)->second.empty()) {
-            objects.erase(*oi);
+            blocks.erase(*oi);
         }
     }
 };
 
-template<class F> void Index::compare(const ObjectMap& remote_objects, F&& cmp)
+template<class F> void Index::compare(const BlockMap& remote_blocks, F&& cmp)
 {
     // Const cast below because it would have double the code if the `Item`
     // class had to work with both `::iterator`s and `::const_iterator`s.
-    auto& lo = _objects;
-    auto& ro = const_cast<ObjectMap&>(remote_objects);
+    auto& lo = _blocks;
+    auto& ro = const_cast<BlockMap&>(remote_blocks);
 
     zip(lo, ro,
-        [&] (ObjectId obj, auto obj_li, auto obj_ri) {
-            if (obj_li != _objects.end() && obj_ri != remote_objects.end()) {
-                zip(parents(obj_li),
-                    parents(obj_ri),
+        [&] (BlockId blk, auto blk_li, auto blk_ri) {
+            if (blk_li != _blocks.end() && blk_ri != remote_blocks.end()) {
+                zip(parents(blk_li),
+                    parents(blk_ri),
                     [&](auto parent_id, auto parent_li, auto parent_ri)
                     {
-                        if (parent_li != parents(obj_li).end() && parent_ri != parents(obj_ri).end()) {
+                        if (parent_li != parents(blk_li).end() && parent_ri != parents(blk_ri).end()) {
                             zip(users(parent_li), users(parent_ri),
                                 [&](auto user_id, auto user_li, auto user_ri) {
-                                    cmp(obj, parent_id, user_id,
-                                        Item(lo, obj_li, parent_li, user_li),
-                                        Item(ro, obj_ri, parent_ri, user_ri));
+                                    cmp(blk, parent_id, user_id,
+                                        Item(lo, blk_li, parent_li, user_li),
+                                        Item(ro, blk_ri, parent_ri, user_ri));
                                 });
                         }
-                        else if (parent_ri == parents(obj_ri).end()) {
+                        else if (parent_ri == parents(blk_ri).end()) {
                             for (auto user_li : iterator_range(users(parent_li))) {
-                                cmp(obj, parent_id, id(user_li),
-                                    Item(lo, obj_li, parent_li, user_li),
-                                    Item(ro, obj_ri, parent_ri));
+                                cmp(blk, parent_id, id(user_li),
+                                    Item(lo, blk_li, parent_li, user_li),
+                                    Item(ro, blk_ri, parent_ri));
                             }
                         }
-                        else if (parent_li == parents(obj_li).end()) {
+                        else if (parent_li == parents(blk_li).end()) {
                             for (auto user_ri : iterator_range(users(parent_ri))) {
-                                cmp(obj, parent_id, id(user_ri),
-                                    Item(lo, obj_li, parent_li),
-                                    Item(ro, obj_ri, parent_ri, user_ri));
+                                cmp(blk, parent_id, id(user_ri),
+                                    Item(lo, blk_li, parent_li),
+                                    Item(ro, blk_ri, parent_ri, user_ri));
                             }
                         }
                         else {
@@ -166,21 +166,21 @@ template<class F> void Index::compare(const ObjectMap& remote_objects, F&& cmp)
                         }
                     });
             }
-            else if (obj_ri == remote_objects.end()) {
-                for (auto parent_li : iterator_range(parents(obj_li))) {
+            else if (blk_ri == remote_blocks.end()) {
+                for (auto parent_li : iterator_range(parents(blk_li))) {
                     for (auto user_li : iterator_range(users(parent_li))) {
-                        cmp(obj, id(parent_li), id(user_li),
-                            Item(lo, obj_li, parent_li, user_li),
-                            Item(ro, obj_ri));
+                        cmp(blk, id(parent_li), id(user_li),
+                            Item(lo, blk_li, parent_li, user_li),
+                            Item(ro, blk_ri));
                     }
                 }
             }
-            else if (obj_li == _objects.end()) {
-                for (auto parent_ri : iterator_range(parents(obj_ri))) {
+            else if (blk_li == _blocks.end()) {
+                for (auto parent_ri : iterator_range(parents(blk_ri))) {
                     for (auto user_ri : iterator_range(users(parent_ri))) {
-                        cmp(obj, id(parent_ri), id(user_ri),
-                            Item(lo, obj_li),
-                            Item(ro, obj_ri, parent_ri, user_ri));
+                        cmp(blk, id(parent_ri), id(user_ri),
+                            Item(lo, blk_li),
+                            Item(ro, blk_ri, parent_ri, user_ri));
                     }
                 }
             }
@@ -193,7 +193,7 @@ template<class F> void Index::compare(const ObjectMap& remote_objects, F&& cmp)
 void Index::merge(const Index& remote_index, BlockStore& block_store)
 {
     auto& remote_commits = remote_index._commits;
-    auto& remote_objects = remote_index._objects;
+    auto& remote_blocks  = remote_index._blocks;
 
     set<UserId> is_newer;
 
@@ -203,8 +203,8 @@ void Index::merge(const Index& remote_index, BlockStore& block_store)
         }
     }
 
-    compare(remote_objects,
-        [&] (auto& obj_id, auto& parent_id, auto& user_id, Item local, Item remote)
+    compare(remote_blocks,
+        [&] (auto& block_id, auto& parent_id, auto& user_id, Item local, Item remote)
         {
             if (!is_newer.count(user_id)) return;
 
@@ -213,29 +213,29 @@ void Index::merge(const Index& remote_index, BlockStore& block_store)
                 local.set_count(remote.get_count());
             }
             else if (local) {
-                auto id = obj_id;
+                auto id = block_id;
 
                 local.erase();
 
                 if (!someone_has(id)) {
                     block_store.remove(id);
-                    _missing_objects.erase(id);
+                    _missing_blocks.erase(id);
                 }
             }
             else if (remote) {
-                bool obj_is_new = !someone_has(obj_id);
+                bool block_is_new = !someone_has(block_id);
 
-                auto& um = _objects[obj_id][parent_id];
+                auto& um = _blocks[block_id][parent_id];
                 auto ui = um.insert({user_id, 0}).first;
                 ui->second = remote.get_count();
 
                 ouisync_assert(ui->second > 0);
 
-                if (obj_id == parent_id) {
+                if (block_id == parent_id) {
                     _commits[user_id] = remote_commits.at(user_id);
                 }
 
-                if (obj_is_new) _missing_objects.insert(obj_id);
+                if (block_is_new) _missing_blocks.insert(block_id);
             }
             else {
                 ouisync_assert(0);
@@ -256,53 +256,53 @@ bool Index::remote_is_newer(const VersionedObject& remote_commit, const UserId& 
     }
 }
 
-void Index::insert_object(const UserId& user, const ObjectId& obj_id, const ObjectId& parent_id, size_t cnt)
+void Index::insert_block(const UserId& user, const BlockId& block_id, const BlockId& parent_id, size_t cnt)
 {
     if (cnt == 0) return;
 
-    auto obj_i    = _objects.insert({obj_id, {}}).first;
-    auto parent_i = obj_i->second.insert({parent_id, {}}).first;
+    auto block_i  = _blocks.insert({block_id, {}}).first;
+    auto parent_i = block_i->second.insert({parent_id, {}}).first;
     auto user_i   = parent_i->second.insert({user, 0}).first;
 
     user_i->second += cnt;
 
-    if (obj_id == parent_id) {
-        _commits[user].id = obj_id;
+    if (block_id == parent_id) {
+        _commits[user].id = block_id;
     }
 }
 
-void Index::remove_object(const UserId& user, const ObjectId& obj_id, const ObjectId& parent_id)
+void Index::remove_block(const UserId& user, const BlockId& block_id, const BlockId& parent_id)
 {
-    auto obj_i = _objects.find(obj_id);
-    ouisync_assert(obj_i != _objects.end());
-    if (obj_i == _objects.end()) return;
+    auto block_i = _blocks.find(block_id);
+    ouisync_assert(block_i != _blocks.end());
+    if (block_i == _blocks.end()) return;
 
-    auto parent_i = obj_i->second.find(parent_id);
-    ouisync_assert(parent_i != obj_i->second.end());
-    if (parent_i == obj_i->second.end()) return;
+    auto parent_i = block_i->second.find(parent_id);
+    ouisync_assert(parent_i != block_i->second.end());
+    if (parent_i == block_i->second.end()) return;
 
     auto user_i = parent_i->second.find(user);
     ouisync_assert(user_i != parent_i->second.end());
     if (user_i == parent_i->second.end()) return;
 
     if (--user_i->second == 0) {
-        Item(_objects, obj_i, parent_i, user_i).erase();
+        Item(_blocks, block_i, parent_i, user_i).erase();
     }
 }
 
-bool Index::someone_has(const ObjectId& obj) const
+bool Index::someone_has(const BlockId& block) const
 {
-    return _objects.find(obj) != _objects.end();
+    return _blocks.find(block) != _blocks.end();
 }
 
-bool Index::object_is_missing(const ObjectId& obj) const
+bool Index::block_is_missing(const BlockId& block) const
 {
-    return _missing_objects.find(obj) != _missing_objects.end();
+    return _missing_blocks.find(block) != _missing_blocks.end();
 }
 
-bool Index::mark_not_missing(const ObjectId& obj)
+bool Index::mark_not_missing(const BlockId& block)
 {
-    return _missing_objects.erase(obj) != 0;
+    return _missing_blocks.erase(block) != 0;
 }
 
 Opt<VersionedObject> Index::commit(const UserId& user)
@@ -312,9 +312,9 @@ Opt<VersionedObject> Index::commit(const UserId& user)
     return i->second;
 }
 
-std::set<ObjectId> Index::roots() const
+std::set<BlockId> Index::roots() const
 {
-    std::set<ObjectId> ret;
+    std::set<BlockId> ret;
     for (auto& [user, commit] : _commits) {
         ret.insert(commit.id);
     }
@@ -328,18 +328,18 @@ std::ostream& ouisync::operator<<(std::ostream& os, const Index& index)
         os << "  User:" << user << " Root:" << commit.id << " Versions:" << commit.versions << "\n";
     }
     os << "}\n";
-    os << "Objects = {\n";
-    for (auto& [obj, parents]: index._objects) {
+    os << "Blocks = {\n";
+    for (auto& [block, parents]: index._blocks) {
         for (auto& [parent, users]: parents) {
             for (auto& [user, count]: users) {
-                os << "  Object:" << obj << " Parent:" << parent
+                os << "  Block:" << block << " Parent:" << parent
                     << " User:" << user << " Count:" << count << "\n";
             }
         }
     }
     os << "}\n";
 
-    os << "Missing = " << index._missing_objects << "\n";
+    os << "Missing = " << index._missing_blocks << "\n";
 
     return os;
 }

@@ -79,7 +79,7 @@ MultiDir MultiDir::cd_into(PathRange path) const
     return result;
 }
 
-ObjectId MultiDir::file(const string& name) const
+BlockId MultiDir::file(const string& name) const
 {
     for (auto& [user, vobj] : _versions) {
         auto blob = Blob::open(vobj.id, *_block_store);

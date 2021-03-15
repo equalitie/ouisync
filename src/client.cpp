@@ -30,7 +30,7 @@ net::awaitable<Index> Client::fetch_index(Cancel cancel)
     co_return move(rs.index);
 }
 
-net::awaitable<Opt<Block>> Client::fetch_block(const ObjectId& id, Cancel cancel)
+net::awaitable<Opt<Block>> Client::fetch_block(const BlockId& id, Cancel cancel)
 {
     co_await _broker.send(RqBlock{id}, cancel);
     auto rs_obj = co_await receive<RsBlock>(cancel);
@@ -62,32 +62,32 @@ net::awaitable<void> Client::run(Cancel cancel)
 
         _branch.merge_index(index);
 
-        auto missing_objects = _branch.missing_objects();
+        auto missing_blocks = _branch.missing_blocks();
 
-        for (auto& obj_id : missing_objects) {
-            if (index.object_is_missing(obj_id)) {
+        for (auto& block_id : missing_blocks) {
+            if (index.block_is_missing(block_id)) {
                 if (dbg) {
-                    cerr << "C: Object " << obj_id << " is missing at peer (skipping)\n";
+                    cerr << "C: Block " << block_id << " is missing at peer (skipping)\n";
                 }
                 continue;
             }
 
             if (dbg) {
-                cerr << "C: Requesting: " << obj_id << "\n";
+                cerr << "C: Requesting: " << block_id << "\n";
             }
 
-            auto block = co_await fetch_block(obj_id, cancel);
+            auto block = co_await fetch_block(block_id, cancel);
 
             if (!block) {
                 if (dbg) {
-                    cerr << "C: Peer doesn't have object: " << obj_id << "\n";
+                    cerr << "C: Peer doesn't have block: " << block_id << "\n";
                 }
                 // Break the loop to download a new index.
                 break;
             }
 
             if (dbg) {
-                cerr << "C: Got: " << obj_id << "\n";
+                cerr << "C: Got: " << block_id << "\n";
             }
 
             _branch.store(*block);
