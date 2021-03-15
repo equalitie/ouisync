@@ -274,6 +274,7 @@ void Branch::merge_index(const Index& index)
     }
 
     _index.merge(index, _block_store);
+    store_self();
 
     if (debug) {
         cerr << "Result:\n" << _index << "\n";
@@ -289,6 +290,7 @@ void Branch::store(const Block& b)
 
     if (_index.mark_not_missing(id)) {
         _block_store.store(b);
+        store_self();
     }
 }
 
