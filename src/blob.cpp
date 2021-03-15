@@ -30,49 +30,98 @@ static Opt<BlockType> byte_to_type(uint8_t b) {
     return boost::none;
 }
 
-struct NodeBlock : std::vector<ObjectId> {
+class NodeBlock {
+public:
+    static_assert(ObjectId::size == sizeof(ObjectId));
+
     static constexpr size_t header_size = 1 /* BlockType */ + sizeof(uint16_t) /* size */;
     static constexpr size_t max_hash_count = (BLOCK_SIZE - header_size) / ObjectId::size;
 
     NodeBlock() {}
 
-    explicit NodeBlock(const Block& b)
+    explicit NodeBlock(Block&& b) : _block(move(b))
     {
-        auto type = byte_to_type(b[0]);
-        ouisync_assert(type == BlockType::Node);
-        auto size = endian::big_to_native(reinterpret_cast<const uint16_t&>(b[1]));
-        resize(size);
+        ouisync_assert(_block.empty() || _block.size() == BLOCK_SIZE);
+        ouisync_assert(byte_to_type(_block[0]) == BlockType::Node);
+    }
 
-        const char* p = b.data() + header_size;
+    const ObjectId& operator[](size_t i) const {
+        ouisync_assert(i < max_hash_count);
+        ouisync_assert(i < size());
+        return *(begin() + i);
+    }
 
-        for (auto& id : *this) {
-            id.from_bytes(p);
-            p += ObjectId::size;
+    ObjectId& operator[](size_t i) {
+        ouisync_assert(i < max_hash_count);
+        ouisync_assert(i < size());
+        return *(begin() + i);
+    }
+
+    void push_back(const ObjectId& id) {
+        auto s = size();
+        ouisync_assert(s < max_hash_count);
+        resize(s+1);
+        (*this)[s] = id;
+    }
+
+    uint16_t size() const {
+        if (_block.size() < header_size) return 0;
+        return endian::big_to_native(
+                reinterpret_cast<const uint16_t&>(_block[1]));
+    }
+
+    void resize(uint16_t s) {
+        ouisync_assert(s < max_hash_count);
+        if (_block.size() < header_size) {
+            _block.resize(BLOCK_SIZE, 0);
+            _block[0] = type_to_byte(BlockType::Node);
         }
+        reinterpret_cast<uint16_t&>(_block[1]) = endian::native_to_big(s);
     }
 
     ObjectId calculate_id() const
     {
-        // XXX: Very inefficient
-        return BlockStore::calculate_block_id(to_block());
+        return BlockStore::calculate_block_id(_block);
     }
 
-    Block to_block() const {
-        ouisync_assert(size() <= max_hash_count);
-        Block r(BLOCK_SIZE);
-        r[0] = type_to_byte(BlockType::Node);
+    Block& as_block() { return _block; }
 
-        reinterpret_cast<uint16_t&>(r[1]) = endian::native_to_big(uint16_t(size()));
-
-        auto p = &r[0] + header_size;
-
-        for (auto& id : *this) {
-            id.to_bytes(p);
-            p += ObjectId::size;
-        }
-
-        return r;
+    ObjectId& back() {
+        ouisync_assert(!empty());
+        return (*this)[size() - 1];
     }
+
+    const ObjectId& back() const {
+        ouisync_assert(!empty());
+        return (*this)[size() - 1];
+    }
+
+    bool empty() const { return size() == 0; }
+
+    const ObjectId* begin() const {
+        if (empty()) return nullptr;
+        return reinterpret_cast<const ObjectId*>(&_block[header_size]);
+    }
+
+    const ObjectId* end() const {
+        if (empty()) return nullptr;
+        return reinterpret_cast<const ObjectId*>(
+                &_block[header_size + size() * ObjectId::size]);
+    }
+
+    ObjectId* begin() {
+        if (empty()) return nullptr;
+        return reinterpret_cast<ObjectId*>(&_block[header_size]);
+    }
+
+    ObjectId* end() {
+        if (empty()) return nullptr;
+        return reinterpret_cast<ObjectId*>(
+                &_block[header_size + size() * ObjectId::size]);
+    }
+
+private:
+    Block _block;
 };
 
 struct DataBlock : public Block {
@@ -296,7 +345,7 @@ struct Blob::Impl
         constexpr auto m = DataBlock::max_data_size;
 
         if (m == 0) return 0;
-        size_t new_node_size = std::min((new_data_size+m-1) / m, node.size());
+        size_t new_node_size = std::min<uint16_t>((new_data_size+m-1) / m, node.size());
 
         // Remove children with index new_node_size and higner
         for (size_t i = 0; i < node.size() - new_node_size; ++i) {
@@ -373,8 +422,6 @@ struct Blob::Impl
             [&] (NodeBlock& n) {
                 ouisync_assert(n.size());
 
-                tnx.insert_block(top_id, n.to_block());
-
                 for (auto& id : n) {
                     auto i = blocks.find(id);
                     // Those not in blocks are assumed to not have been
@@ -385,6 +432,8 @@ struct Blob::Impl
                     tnx.insert_block(id, move(i->second));
                     blocks.erase(i);
                 }
+
+                tnx.insert_block(top_id, move(n.as_block()));
 
                 ouisync_assert(blocks.empty());
             });
