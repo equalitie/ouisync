@@ -73,27 +73,27 @@ void zip(Map& a, Map& b, F&& modifier)
 
 struct Index::Item
 {
-    using Oi = ObjectMap::iterator;
+    using Oi = BlockMap::iterator;
     using Pi = ParentMap::iterator;
     using Ui = UserMap  ::iterator;
 
-    ObjectMap& objects;
+    BlockMap& blocks;
 
     Opt<Oi> oi;
     Opt<Pi> pi;
     Opt<Ui> ui;
 
-    Item(ObjectMap& os)                      : objects(os) {}
-    Item(ObjectMap& os, Oi oi)               : objects(os), oi(oi)                 { normalize(); }
-    Item(ObjectMap& os, Oi oi, Pi pi)        : objects(os), oi(oi), pi(pi)         { normalize(); }
-    Item(ObjectMap& os, Oi oi, Pi pi, Ui ui) : objects(os), oi(oi), pi(pi), ui(ui) { normalize(); }
+    Item(BlockMap& os)                      : blocks(os) {}
+    Item(BlockMap& os, Oi oi)               : blocks(os), oi(oi)                 { normalize(); }
+    Item(BlockMap& os, Oi oi, Pi pi)        : blocks(os), oi(oi), pi(pi)         { normalize(); }
+    Item(BlockMap& os, Oi oi, Pi pi, Ui ui) : blocks(os), oi(oi), pi(pi), ui(ui) { normalize(); }
 
     // Make so that none of `oi`, `pi`, `ui` are `*.end()`s, but instead they're
     // set to boost::none.
     void normalize() {
         using boost::none;
         if (!oi)                        { oi = none; pi = none; ui = none; return; }
-        if (*oi == objects.end())       { oi = none; pi = none; ui = none; return; }
+        if (*oi == blocks.end())        { oi = none; pi = none; ui = none; return; }
         if (*pi == (*oi)->second.end()) {            pi = none; ui = none; return; }
         if (*ui == (*pi)->second.end()) {                       ui = none; return; }
     }
@@ -120,21 +120,21 @@ struct Index::Item
             (*oi)->second.erase(*pi);
         }
         if (oi && (*oi)->second.empty()) {
-            objects.erase(*oi);
+            blocks.erase(*oi);
         }
     }
 };
 
-template<class F> void Index::compare(const ObjectMap& remote_objects, F&& cmp)
+template<class F> void Index::compare(const BlockMap& remote_blocks, F&& cmp)
 {
     // Const cast below because it would have double the code if the `Item`
     // class had to work with both `::iterator`s and `::const_iterator`s.
     auto& lo = _blocks;
-    auto& ro = const_cast<ObjectMap&>(remote_objects);
+    auto& ro = const_cast<BlockMap&>(remote_blocks);
 
     zip(lo, ro,
         [&] (BlockId obj, auto obj_li, auto obj_ri) {
-            if (obj_li != _blocks.end() && obj_ri != remote_objects.end()) {
+            if (obj_li != _blocks.end() && obj_ri != remote_blocks.end()) {
                 zip(parents(obj_li),
                     parents(obj_ri),
                     [&](auto parent_id, auto parent_li, auto parent_ri)
@@ -166,7 +166,7 @@ template<class F> void Index::compare(const ObjectMap& remote_objects, F&& cmp)
                         }
                     });
             }
-            else if (obj_ri == remote_objects.end()) {
+            else if (obj_ri == remote_blocks.end()) {
                 for (auto parent_li : iterator_range(parents(obj_li))) {
                     for (auto user_li : iterator_range(users(parent_li))) {
                         cmp(obj, id(parent_li), id(user_li),
@@ -193,7 +193,7 @@ template<class F> void Index::compare(const ObjectMap& remote_objects, F&& cmp)
 void Index::merge(const Index& remote_index, BlockStore& block_store)
 {
     auto& remote_commits = remote_index._commits;
-    auto& remote_objects = remote_index._blocks;
+    auto& remote_blocks  = remote_index._blocks;
 
     set<UserId> is_newer;
 
@@ -203,7 +203,7 @@ void Index::merge(const Index& remote_index, BlockStore& block_store)
         }
     }
 
-    compare(remote_objects,
+    compare(remote_blocks,
         [&] (auto& block_id, auto& parent_id, auto& user_id, Item local, Item remote)
         {
             if (!is_newer.count(user_id)) return;
@@ -328,11 +328,11 @@ std::ostream& ouisync::operator<<(std::ostream& os, const Index& index)
         os << "  User:" << user << " Root:" << commit.id << " Versions:" << commit.versions << "\n";
     }
     os << "}\n";
-    os << "Objects = {\n";
-    for (auto& [obj, parents]: index._blocks) {
+    os << "Blocks = {\n";
+    for (auto& [block, parents]: index._blocks) {
         for (auto& [parent, users]: parents) {
             for (auto& [user, count]: users) {
-                os << "  Object:" << obj << " Parent:" << parent
+                os << "  Block:" << block << " Parent:" << parent
                     << " User:" << user << " Count:" << count << "\n";
             }
         }

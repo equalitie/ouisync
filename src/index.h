@@ -18,14 +18,14 @@ private:
     using Count = uint32_t;
     using UserMap = Map<UserId, Count>;
     using ParentMap = Map<ParentId, UserMap>;
-    using ObjectMap = Map<BlockId, ParentMap>;
+    using BlockMap = Map<BlockId, ParentMap>;
 
-    const BlockId&  id(ObjectMap::const_iterator i) { return i->first; }
+    const BlockId&  id(BlockMap ::const_iterator i) { return i->first; }
     const ParentId& id(ParentMap::const_iterator i) { return i->first; }
     const UserId&   id(UserMap  ::const_iterator i) { return i->first; }
 
-          ParentMap& parents(ObjectMap::iterator       i) { return i->second; }
-    const ParentMap& parents(ObjectMap::const_iterator i) { return i->second; }
+          ParentMap& parents(BlockMap::iterator       i) { return i->second; }
+    const ParentMap& parents(BlockMap::const_iterator i) { return i->second; }
 
           UserMap& users(ParentMap::iterator       i) { return i->second; }
     const UserMap& users(ParentMap::const_iterator i) { return i->second; }
@@ -72,10 +72,10 @@ public:
     friend std::ostream& operator<<(std::ostream&, const Index&);
 
 private:
-    template<class F> void compare(const ObjectMap&, F&&);
+    template<class F> void compare(const BlockMap&, F&&);
 
 private:
-    ObjectMap _blocks;
+    BlockMap _blocks;
     Map<UserId, VersionedObject> _commits;
     std::set<BlockId> _missing_blocks;
 };
