@@ -58,7 +58,7 @@ add_library(libouisync STATIC
     "src/random.cpp"
     "src/versioned_object.cpp"
     "src/multi_dir.cpp"
-    "src/object_id.cpp"
+    "src/block_id.cpp"
     "src/object_tag.cpp"
     "src/block_store.cpp"
     "src/blob.cpp"

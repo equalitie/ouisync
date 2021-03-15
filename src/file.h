@@ -1,12 +1,14 @@
 #pragma once
 
-#include "object_id.h"
 #include "shortcuts.h"
 #include "blob.h"
+
+#include <boost/optional.hpp>
 
 namespace ouisync {
 
 class Transaction;
+class BlockId;
 
 struct File
 {

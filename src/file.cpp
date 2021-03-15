@@ -3,6 +3,7 @@
 #include "archive.h"
 #include "object_tag.h"
 #include "blob.h"
+#include "block_id.h"
 
 #include <iostream>
 #include <boost/optional.hpp>

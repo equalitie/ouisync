@@ -1,6 +1,6 @@
 #pragma once
 
-#include "object_id.h"
+#include "block_id.h"
 #include "block.h"
 
 #include <boost/optional.hpp>

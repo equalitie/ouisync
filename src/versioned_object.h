@@ -1,7 +1,7 @@
 #pragma once
 
 #include "version_vector.h"
-#include "object_id.h"
+#include "block_id.h"
 #include "ouisync_assert.h"
 
 namespace ouisync {

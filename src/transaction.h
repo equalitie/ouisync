@@ -1,7 +1,7 @@
 #pragma once
 
 #include "block.h"
-#include "object_id.h"
+#include "block_id.h"
 
 #include <boost/functional/hash.hpp> // hash a pair
 #include <unordered_set>
