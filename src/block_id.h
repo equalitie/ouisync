@@ -10,24 +10,6 @@ private:
     using NameMap = std::map<BlockId, std::list<std::string>>;
 
 public:
-    class RiaaNameMap {
-      public:
-        ~RiaaNameMap();
-
-      private:
-        friend class BlockId;
-
-        using MapIter  = NameMap::iterator;
-        using ListIter = std::list<std::string>::iterator;
-
-        RiaaNameMap(MapIter i, ListIter j) : map_iter(i), list_iter(j) {}
-
-
-        MapIter map_iter;
-        ListIter list_iter;
-    };
-
-public:
     static constexpr size_t size = std::tuple_size<Parent>::value;
 
     struct Hex : std::array<char, size*2>{
@@ -38,6 +20,7 @@ public:
         friend std::ostream& operator<<(std::ostream&, const Hex&);
     };
 
+    // For debugging
     struct ShortHex : std::array<char, std::min<size_t>(6, size*2)>{
         static constexpr size_t size = std::min<size_t>(6, BlockId::size*2);
         using Parent = std::array<char, size>;
@@ -45,8 +28,6 @@ public:
         ShortHex(const Parent& p) : Parent(p) {}
         friend std::ostream& operator<<(std::ostream&, const ShortHex&);
     };
-
-    static RiaaNameMap debug_name(const BlockId&, std::string name);
 
 public:
     using Parent::Parent;
@@ -61,14 +42,6 @@ public:
     }
 
     static BlockId null_id();
-
-    void from_bytes(const char* bytes) {
-        std::copy_n(bytes, size, Parent::data());
-    }
-
-    void to_bytes(char* bytes) const {
-        std::copy_n(Parent::data(), size, bytes);
-    }
 
     Hex hex() const;
     ShortHex short_hex() const;

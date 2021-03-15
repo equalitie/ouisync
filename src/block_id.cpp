@@ -10,20 +10,6 @@ using NameMap = std::map<BlockId, std::list<std::string>>;
 /* static */
 NameMap g_debug_name_map;
 
-BlockId::RiaaNameMap::~RiaaNameMap() {
-    map_iter->second.erase(list_iter);
-    if (map_iter->second.empty()) {
-        g_debug_name_map.erase(map_iter);
-    }
-}
-
-BlockId::RiaaNameMap BlockId::debug_name(const BlockId& id, std::string name)
-{
-    auto i = g_debug_name_map.insert({id, {}}).first;
-    i->second.push_back(std::move(name));
-    return RiaaNameMap{i, std::prev(i->second.end())};
-}
-
 /* static */
 BlockId BlockId::null_id() {
     static Opt<Parent> id;
