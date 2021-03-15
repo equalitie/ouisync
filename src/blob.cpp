@@ -371,11 +371,22 @@ struct Blob::Impl
                 tnx.insert_block(top_id, move(b));
             },
             [&] (NodeBlock& n) {
+                ouisync_assert(n.size());
+
                 tnx.insert_block(top_id, n.to_block());
+
                 for (auto& id : n) {
+                    auto i = blocks.find(id);
+                    // Those not in blocks are assumed to not have been
+                    // modified.
+                    if (i == blocks.end()) continue;
+
                     tnx.insert_edge(top_id, id);
-                    tnx.insert_block(id, move(blocks.at(id)));
+                    tnx.insert_block(id, move(i->second));
+                    blocks.erase(i);
                 }
+
+                ouisync_assert(blocks.empty());
             });
 
         return top_id;
