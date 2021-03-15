@@ -101,8 +101,10 @@ Result<R> FuseRunner::query_fs(const char* fname, const char* cpath, F&& f) {
         }
         catch (const std::exception& e) {
             std::cerr << "Repository has thrown a non system exception "
-                "when calling '" << fname << "': "
-                << e.what() << ". FuseRunner doens't know how to deal with it. "
+                "when calling '" << fname << "'\n"
+                << "Message: " << e.what() << "\n"
+                << "Type:    " << typeid(e).name() << "\n"
+                << "FuseRunner doens't know how to deal with it\n"
                 "Exiting\n";
             exit(1);
         }
