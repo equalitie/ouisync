@@ -55,6 +55,8 @@ net::awaitable<void> Client::run(Cancel cancel)
 {
     using std::cerr;
 
+    static constexpr bool dbg = false;
+
     while (true) {
         auto index = co_await fetch_index(cancel);
 
@@ -64,25 +66,37 @@ net::awaitable<void> Client::run(Cancel cancel)
 
         for (auto& obj_id : missing_objects) {
             if (index.object_is_missing(obj_id)) {
-                cerr << "C: Object " << obj_id << " is missing at peer (skipping)\n";
+                if (dbg) {
+                    cerr << "C: Object " << obj_id << " is missing at peer (skipping)\n";
+                }
                 continue;
             }
 
-            cerr << "C: Requesting: " << obj_id << "\n";
+            if (dbg) {
+                cerr << "C: Requesting: " << obj_id << "\n";
+            }
 
             auto block = co_await fetch_block(obj_id, cancel);
 
             if (!block) {
-                cerr << "C: Peer doesn't have object: " << obj_id << "\n";
+                if (dbg) {
+                    cerr << "C: Peer doesn't have object: " << obj_id << "\n";
+                }
                 // Break the loop to download a new index.
                 break;
             }
 
-            cerr << "C: Got: " << obj_id << "\n";
+            if (dbg) {
+                cerr << "C: Got: " << obj_id << "\n";
+            }
 
             _branch.store(*block);
         }
 
         co_await wait_for_a_change(cancel);
+
+        if (dbg) {
+            cerr << "C: restart\n";
+        }
     }
 }
