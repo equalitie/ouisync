@@ -45,6 +45,8 @@ public:
 
     ~Blob();
 
+    void remove(Transaction&);
+
 private:
     void maybe_init();
 

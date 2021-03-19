@@ -31,9 +31,12 @@ BlockId Directory::save(Transaction& tnx) const
     OutputArchive a(s);
     a << ObjectTag::Directory;
     a << _name_map;
-    auto id = blob.id();
-    blob.commit(tnx);
+    auto id = blob.commit(tnx);
 
+    // NOTE: This is somewhat inconsistent if the `blob` exceeds the size of a
+    // single Blob. That is, normally (in a Blob) a block contains BlockIds of
+    // its children. However here we are associating the *root* of the `blob`
+    // with the *roots* of other blobs.
     for_each_unique_child([&] (auto&, auto& child_id) { tnx.insert_edge(id, child_id); });
 
     return id;

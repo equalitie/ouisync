@@ -432,12 +432,14 @@ struct Blob::Impl
                 ouisync_assert(n.size());
 
                 for (auto& id : n) {
+                    tnx.insert_edge(top_id, id);
+
                     auto i = blocks.find(id);
+
                     // Those not in blocks are assumed to not have been
                     // modified.
                     if (i == blocks.end()) continue;
 
-                    tnx.insert_edge(top_id, id);
                     tnx.insert_block(id, move(i->second.as_block()));
                     blocks.erase(i);
                 }
@@ -448,6 +450,19 @@ struct Blob::Impl
             });
 
         return top_id;
+    }
+
+    void remove(Transaction& transaction)
+    {
+        auto top_id = maybe_calculate_id();
+
+        apply(top_block,
+            [&] (DataBlock&) {},
+            [&] (NodeBlock& node) {
+                for (auto& child_id : node) {
+                    transaction.insert_edge(top_id, child_id);
+                }
+            });
     }
 
     const DataBlock* load_const_data_block(const BlockId& id, DataBlock& stack_tmp) const
@@ -560,6 +575,13 @@ Opt<Blob> Blob::maybe_open(const BlockId& id, const BlockStore& block_store)
     impl->top_block = typed_block(move(*block));
 
     return {move(impl)};
+}
+
+void Blob::remove(Transaction& tnx)
+{
+    if (!_impl) return;
+    auto impl = move(_impl);
+    impl->remove(tnx);
 }
 
 size_t Blob::size() const
