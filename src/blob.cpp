@@ -432,12 +432,14 @@ struct Blob::Impl
                 ouisync_assert(n.size());
 
                 for (auto& id : n) {
+                    tnx.insert_edge(top_id, id);
+
                     auto i = blocks.find(id);
+
                     // Those not in blocks are assumed to not have been
                     // modified.
                     if (i == blocks.end()) continue;
 
-                    tnx.insert_edge(top_id, id);
                     tnx.insert_block(id, move(i->second.as_block()));
                     blocks.erase(i);
                 }
