@@ -42,7 +42,6 @@ public:
         return true;
     }
 
-    //Index& index() { return _index; }
     BlockStore& block_store() { return _block_store; }
     Transaction& transaction() { return _transaction; }
 
@@ -64,6 +63,18 @@ public:
             d.for_each_unique_child([&] (auto& filename, auto& child_id) {
                 remove_recursive(child_id, block_id);
             });
+        }
+
+        Transaction tnx;
+
+        blob.remove(tnx);
+
+        for (auto [from, to] : tnx.edges()) {
+            _index.remove_block(_this_user_id, to, from);
+
+            if (!_index.someone_has(to)) {
+                _block_store.remove(to);
+            }
         }
 
         _block_store.remove(block_id);
