@@ -1,0 +1,16 @@
+[package]
+name = "ouisync"
+description = "Secure P2P file sharing"
+version = "0.1.0"
+authors = ["Adam Cigánek <adam@equalit.ie>", "Peter Jankuliak <peter@equalit.ie>"]
+license = "MPL-2.0"
+edition = "2018"
+
+[lib]
+crate-type = ["lib", "cdylib"] # TODO: we might also need `staticlib` for ios
+
+[dependencies]
+rusqlite = { version = "0.25.0", features = ["bundled"] }
+structopt = "0.3.21"
+thiserror = "1.0.24"
+tokio = { version = "1.4.0", features = ["macros", "rt-multi-thread"] }
