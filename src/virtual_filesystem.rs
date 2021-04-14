@@ -4,14 +4,12 @@ use fuser::{
 };
 use ouisync::Repository;
 use std::{
-    array,
     collections::HashMap,
     ffi::{OsStr, OsString},
     io,
     path::Path,
     time::{Duration, UNIX_EPOCH},
 };
-use tokio::task;
 
 // NOTE: this is the unix implementation of virtual filesystem which is backed by fuse. Eventually
 // there will be one for windows as well with the same public API but backed (probably) by
