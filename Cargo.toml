@@ -10,7 +10,14 @@ edition = "2018"
 crate-type = ["lib", "cdylib"] # TODO: we might also need `staticlib` for ios
 
 [dependencies]
+anyhow = "1.0.40"
+env_logger = "0.8.3"
+log = "0.4.14"
 rusqlite = { version = "0.25.0", features = ["bundled"] }
 structopt = "0.3.21"
 thiserror = "1.0.24"
-tokio = { version = "1.4.0", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1.4.0", features = ["macros", "rt-multi-thread", "signal"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.93"
+fuser = "0.7.0"

@@ -1,14 +1,10 @@
 mod error;
+mod repository;
 
-pub use self::error::Error;
+pub use self::{error::Error, repository::Repository};
 
 use rusqlite::{params, Connection};
 use tokio::task;
-
-/// This is rust-only function
-pub fn hello_world() -> Result<(), Error> {
-    Err(Error::InvalidState)
-}
 
 /// This function can be called from other languages via FFI
 #[no_mangle]

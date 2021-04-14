@@ -1,19 +1,23 @@
-use ouisync::Error;
+mod virtual_filesystem;
+
+use anyhow::Result;
+use ouisync::Repository;
 use std::{
     net::{IpAddr, SocketAddr},
     path::PathBuf,
 };
 use structopt::StructOpt;
+use tokio::signal;
 
 #[derive(StructOpt)]
 struct Options {
-    /// Base directory
-    #[structopt(short, long)]
-    base_dir: PathBuf,
-
     /// Mount directory
     #[structopt(short, long)]
-    mount_dir: Option<PathBuf>,
+    mount_dir: PathBuf,
+
+    /// Base directory
+    #[structopt(short, long)]
+    base_dir: Option<PathBuf>,
 
     /// Peer's endpoint
     #[structopt(short, long, value_name = "ip:port")]
@@ -29,19 +33,15 @@ struct Options {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Error> {
+async fn main() -> Result<()> {
     let options = Options::from_args();
 
-    println!(
-        "base_dir: {}, mount_dir: {:?}, connect: {:?}, bind: {}",
-        options.base_dir.display(),
-        options.mount_dir,
-        options.connect,
-        SocketAddr::from((options.bind, options.port))
-    );
+    env_logger::init();
 
-    ouisync::sql_example().await?;
-    ouisync::hello_world()?;
+    let repository = Repository;
+    let _mount_guard = virtual_filesystem::mount(repository, options.mount_dir)?;
+
+    signal::ctrl_c().await?;
 
     Ok(())
 }
