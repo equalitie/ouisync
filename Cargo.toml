@@ -12,18 +12,21 @@ crate-type = ["lib", "cdylib"] # TODO: we might also need `staticlib` for ios
 [dependencies]
 anyhow = "1.0.40"
 chacha20poly1305 = { version = "0.8.0-pre", features = ["alloc", "stream"] }
+dirs = "3.0.1"
 env_logger = "0.8.3"
 futures-util = "0.3.14"
 log = "0.4.14"
+rand = "0.8.3"
 sqlx = { version = "0.5.2", features = ["runtime-tokio-rustls", "sqlite"] }
 structopt = "0.3.21"
 thiserror = "1.0.24"
-tokio = { version = "1.4.0", features = ["macros", "rt-multi-thread", "signal"] }
+tokio = { version = "1.5.0", features = ["fs", "macros", "rt-multi-thread", "signal"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.93"
 fuser = "0.7.0"
 
+# The latest published version doesn't have the stream support yet:
 [patch.crates-io]
 chacha20poly1305 = { git = "https://github.com/RustCrypto/AEADs.git" }
 chacha20 = { git = "https://github.com/RustCrypto/stream-ciphers.git" }

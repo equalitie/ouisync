@@ -2,6 +2,6 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("SQL error")]
-    Sql(#[from] sqlx::Error),
+    #[error("block store error")]
+    BlockStore(#[from] crate::block_store::Error),
 }
