@@ -47,17 +47,19 @@ impl ReplicaDiscovery {
     }
 
     pub async fn wait_for_activity(&mut self) -> HashSet<SocketAddr> {
-        let mut found = self.state.found_replicas.lock().await;
-
-        while found.is_empty() {
-            drop(found);
+        loop {
             self.notify.notified().await;
-            found = self.state.found_replicas.lock().await;
-        }
 
-        let ret = found.clone();
-        *found = HashSet::new();
-        ret
+            let mut found = self.state.found_replicas.lock().await;
+
+            if found.is_empty() {
+                continue;
+            }
+
+            let ret = found.clone();
+            *found = HashSet::new();
+            return ret;
+        }
     }
 }
 
