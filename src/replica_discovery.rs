@@ -74,7 +74,7 @@ type Id = [u8; ID_LEN];
 struct State {
     id: Id,
     listener_addr: SocketAddr,
-    socket: async_std::net::UdpSocket,
+    socket: tokio::net::UdpSocket,
     send_mutex: Mutex<()>,
     found_replicas : Mutex<HashSet<SocketAddr>>,
     notify: Arc<Notify>,
@@ -95,16 +95,22 @@ enum Message {
 
 impl State {
     fn new(listener_addr: SocketAddr, notify: Arc<Notify>) -> io::Result<Self> {
+        // Using net2 because, std::net, nor async_std::net nor tokio::net lets
+        // one set reuse_address(true) before "binding" the socket.
         let sync_socket = net2::UdpBuilder::new_v4()?
             .reuse_address(true)?
             .bind((ADDR_ANY, MULTICAST_PORT))?;
 
         sync_socket.join_multicast_v4(&MULTICAST_ADDR, &ADDR_ANY)?;
 
+        // This is not necessary if this is moved to async_std::net::UdpSocket,
+        // but is if moved to tokio::net::UdpSocket.
+        sync_socket.set_nonblocking(true)?;
+
         Ok(Self{
             id: rand::random(),
             listener_addr: listener_addr,
-            socket: async_std::net::UdpSocket::from(sync_socket),
+            socket: tokio::net::UdpSocket::from_std(sync_socket).unwrap(),
             send_mutex: Mutex::new(()),
             found_replicas: Mutex::new(HashSet::new()),
             notify: notify,
