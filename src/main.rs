@@ -9,7 +9,6 @@ use std::{
 };
 use structopt::StructOpt;
 use tokio::signal;
-use async_std;
 
 #[derive(StructOpt)]
 struct Options {
@@ -35,7 +34,7 @@ struct Options {
 }
 
 async fn run_local_discovery() -> std::io::Result<()> {
-    let listener = async_std::net::TcpListener::bind(SocketAddr::from(([0,0,0,0], 0))).await?;
+    let listener = tokio::net::TcpListener::bind(SocketAddr::from(([0,0,0,0], 0))).await?;
 
     let mut discovery = ReplicaDiscovery::new(listener.local_addr().unwrap())?;
     
@@ -55,7 +54,7 @@ async fn main() -> Result<()> {
     let _mount_guard = virtual_filesystem::mount(repository, options.mount_dir)?;
 
 
-    async_std::task::spawn(run_local_discovery());
+    tokio::task::spawn(run_local_discovery());
 
     signal::ctrl_c().await?;
 

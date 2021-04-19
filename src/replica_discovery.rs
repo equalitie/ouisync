@@ -1,6 +1,5 @@
 use std::{io, sync::Arc, net::Ipv4Addr, time::Duration, net::SocketAddr, collections::HashSet};
 use async_std::{sync::Mutex, task::{spawn, sleep}};
-use async_std::net as async_net;
 use serde::{Serialize, Deserialize};
 use rand::{Rng};
 use futures::future::{abortable, AbortHandle};
@@ -74,7 +73,7 @@ type Id = [u8; ID_LEN];
 struct State {
     id: Id,
     listener_addr: SocketAddr,
-    socket: async_net::UdpSocket,
+    socket: async_std::net::UdpSocket,
     send_mutex: Mutex<()>,
     found_replicas : Mutex<HashSet<SocketAddr>>,
     notify: Arc<Notify>,
@@ -104,7 +103,7 @@ impl State {
         Ok(Self{
             id: rand::random(),
             listener_addr: listener_addr,
-            socket: async_net::UdpSocket::from(sync_socket),
+            socket: async_std::net::UdpSocket::from(sync_socket),
             send_mutex: Mutex::new(()),
             found_replicas: Mutex::new(HashSet::new()),
             notify: notify,
