@@ -1,9 +1,9 @@
 use std::{io, sync::Arc, net::Ipv4Addr, time::Duration, net::SocketAddr, collections::HashSet};
-use async_std::{sync::Mutex, task::{spawn, sleep}};
+use async_std::{task::{spawn, sleep}};
 use serde::{Serialize, Deserialize};
 use rand::{Rng};
 use futures::future::{abortable, AbortHandle};
-use tokio::sync::Notify;
+use tokio::sync::{Notify, Mutex};
 
 // Poor man's local discovery using UDP multicast.
 // XXX: We should probably use mDNS, but so far all libraries I tried had some issues.
