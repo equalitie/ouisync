@@ -7,7 +7,7 @@ pub struct BlockStore {
 }
 
 impl BlockStore {
-    /// Opens block store at the given path.
+    /// Opens block store with the given database pool.
     pub async fn open(pool: SqlitePool) -> Result<Self, Error> {
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS blocks (
