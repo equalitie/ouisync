@@ -1,7 +1,10 @@
+pub mod db;
+
 mod block;
 mod block_store;
 mod crypto;
 mod error;
+mod index;
 mod repository;
 mod replica_discovery;
 

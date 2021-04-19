@@ -1,6 +1,8 @@
-use crate::block::{BlockId, BLOCK_SIZE};
+use crate::{
+    block::{BlockId, BLOCK_SIZE},
+    error::Error,
+};
 use sqlx::{Row, SqlitePool};
-use thiserror::Error;
 
 pub struct BlockStore {
     pool: SqlitePool,
@@ -20,7 +22,7 @@ impl BlockStore {
         )
         .execute(&pool)
         .await
-        .map_err(Error::CreateSchema)?;
+        .map_err(Error::CreateDbSchema)?;
 
         Ok(Self { pool })
     }
@@ -45,10 +47,10 @@ impl BlockStore {
         let row = match row {
             Ok(Some(row)) => row,
             Ok(None) => return Err(Error::BlockNotFound(*id)),
-            Err(error) => return Err(Error::Query(error)),
+            Err(error) => return Err(Error::QueryDb(error)),
         };
 
-        let content: &[u8] = row.try_get(1).map_err(Error::Query)?;
+        let content: &[u8] = row.try_get(1).map_err(Error::QueryDb)?;
         if content.len() != BLOCK_SIZE {
             return Err(Error::WrongBlockLength(content.len()));
         }
@@ -100,27 +102,12 @@ impl BlockStore {
                 if row.map(|row| row.is_some()).unwrap_or(false) {
                     Err(Error::BlockExists(*id))
                 } else {
-                    Err(Error::Query(error))
+                    Err(Error::QueryDb(error))
                 }
             }
-            Err(error) => Err(Error::Query(error)),
+            Err(error) => Err(Error::QueryDb(error)),
         }
     }
-}
-
-/// BlockStore error
-#[derive(Debug, Error)]
-pub enum Error {
-    #[error("failed to create database schema")]
-    CreateSchema(#[source] sqlx::Error),
-    #[error("failed to execute database query")]
-    Query(#[source] sqlx::Error),
-    #[error("block not found: {0}")]
-    BlockNotFound(BlockId),
-    #[error("block already exists: {0}")]
-    BlockExists(BlockId),
-    #[error("block has wrong length (expected: {}, actual: {0})", BLOCK_SIZE)]
-    WrongBlockLength(usize),
 }
 
 #[cfg(test)]

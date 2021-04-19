@@ -2,11 +2,10 @@ mod options;
 mod virtual_filesystem;
 
 use self::options::Options;
-use anyhow::{Context, Result};
-use ouisync::{BlockStore, ReplicaDiscovery};
-use sqlx::{sqlite::SqliteConnectOptions, SqlitePool};
+use anyhow::Result;
+use ouisync::{db, BlockStore, ReplicaDiscovery};
 use structopt::StructOpt;
-use tokio::{fs, signal};
+use tokio::signal;
 
 async fn run_local_discovery() -> std::io::Result<()> {
     use std::net::SocketAddr;
@@ -26,21 +25,8 @@ async fn main() -> Result<()> {
 
     env_logger::init();
 
-    let db_path = options.db_path()?;
-    if let Some(dir) = db_path.parent() {
-        fs::create_dir_all(dir)
-            .await
-            .context("failed to create db directory")?;
-    }
-
-    let db_pool = SqlitePool::connect_with(
-        SqliteConnectOptions::new()
-            .filename(db_path)
-            .create_if_missing(true),
-    )
-    .await?;
-
-    let _block_store = BlockStore::open(db_pool).await?;
+    let pool = db::init(options.db_path()?).await?;
+    let _block_store = BlockStore::open(pool).await?;
 
     // let repository = Repository;
     // let _mount_guard = virtual_filesystem::mount(repository, options.mount_dir)?;
