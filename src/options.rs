@@ -23,6 +23,9 @@ pub(crate) struct Options {
     /// IP address to bind to
     #[structopt(long, default_value = "0.0.0.0")]
     pub bind: IpAddr,
+
+    #[structopt(short, long)]
+    pub enable_local_discovery: bool,
 }
 
 impl Options {
