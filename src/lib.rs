@@ -4,8 +4,8 @@ mod repository;
 
 pub use self::{error::Error, repository::Repository};
 
-use rusqlite::{params, Connection};
-use tokio::task;
+use futures_util::stream::TryStreamExt;
+use sqlx::{Row, SqlitePool};
 
 /// This function can be called from other languages via FFI
 #[no_mangle]
@@ -15,34 +15,47 @@ pub extern "C" fn hello_ffi() {
 
 /// Async stuff
 pub async fn sql_example() -> Result<(), Error> {
-    task::block_in_place(|| {
-        let conn = Connection::open_in_memory()?;
+    let pool = SqlitePool::connect(":memory:").await?;
 
-        conn.execute(
-            "CREATE TABLE blocks (
+    let _ = sqlx::query(
+        "CREATE TABLE blocks (
              id        BLOB PRIMARY KEY,
              version   BLOB NOT NULL,
-             child_tag BLOB)",
-            [],
-        )?;
+             child_tag BLOB
+         )",
+    )
+    .execute(&pool)
+    .await?;
 
-        let mut stmt =
-            conn.prepare("INSERT INTO blocks (id, version, child_tag) VALUES (?1, ?2, ?3)")?;
-        stmt.execute(params!["0001", "0000", "abcd"])?;
-        stmt.execute(params!["0002", "0000", "efgh"])?;
-        stmt.execute(params!["0003", "0001", "ijkl"])?;
+    let query = "INSERT INTO blocks (id, version, child_tag) VALUES (?, ?, ?)";
+    sqlx::query(query)
+        .bind("0001")
+        .bind("0000")
+        .bind("abcd")
+        .execute(&pool)
+        .await?;
+    sqlx::query(query)
+        .bind("0002")
+        .bind("0000")
+        .bind("efgh")
+        .execute(&pool)
+        .await?;
+    sqlx::query(query)
+        .bind("0003")
+        .bind("0001")
+        .bind("ijkl")
+        .execute(&pool)
+        .await?;
 
-        let mut stmt = conn.prepare("SELECT id, version, child_tag FROM blocks")?;
-        let mut rows = stmt.query([])?;
+    let mut rows = sqlx::query("SELECT id, version, child_tag FROM blocks").fetch(&pool);
 
-        while let Some(row) = rows.next()? {
-            let id: String = row.get(0)?;
-            let version: String = row.get(1)?;
-            let child_tag: String = row.get(2)?;
+    while let Some(row) = rows.try_next().await? {
+        let id: &str = row.get(0);
+        let version: &str = row.get(1);
+        let child_tag: &str = row.get(2);
 
-            println!("id={} version={} child_tag={}", id, version, child_tag);
-        }
+        println!("id={} version={} child_tag={}", id, version, child_tag);
+    }
 
-        Ok(())
-    })
+    Ok(())
 }

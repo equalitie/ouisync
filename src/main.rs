@@ -38,10 +38,12 @@ async fn main() -> Result<()> {
 
     env_logger::init();
 
-    let repository = Repository;
-    let _mount_guard = virtual_filesystem::mount(repository, options.mount_dir)?;
+    // let repository = Repository;
+    // let _mount_guard = virtual_filesystem::mount(repository, options.mount_dir)?;
 
-    signal::ctrl_c().await?;
+    // signal::ctrl_c().await?;
+
+    ouisync::sql_example().await?;
 
     Ok(())
 }
