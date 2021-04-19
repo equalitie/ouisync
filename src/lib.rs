@@ -1,8 +1,9 @@
 mod crypto;
 mod error;
 mod repository;
+mod replica_discovery;
 
-pub use self::{error::Error, repository::Repository};
+pub use self::{error::Error, repository::Repository, replica_discovery::ReplicaDiscovery};
 
 use rusqlite::{params, Connection};
 use tokio::task;
