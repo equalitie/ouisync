@@ -1,10 +1,10 @@
-use std::{io, sync::Arc, net::Ipv4Addr, time::Duration, net::SocketAddr, collections::HashSet};
-use serde::{Serialize, Deserialize};
-use rand::{Rng};
-use futures::future::{abortable, AbortHandle};
-use tokio::sync::{Notify, Mutex};
-use tokio::task::{spawn};
-use tokio::time::{sleep};
+use futures_util::future::{abortable, AbortHandle};
+use rand::Rng;
+use serde::{Deserialize, Serialize};
+use std::{collections::HashSet, io, net::Ipv4Addr, net::SocketAddr, sync::Arc, time::Duration};
+use tokio::sync::{Mutex, Notify};
+use tokio::task::spawn;
+use tokio::time::sleep;
 
 // Poor man's local discovery using UDP multicast.
 // XXX: We should probably use mDNS, but so far all libraries I tried had some issues.
@@ -12,13 +12,12 @@ pub struct ReplicaDiscovery {
     state: Arc<State>,
     notify: Arc<Notify>,
     beacon_abort: AbortHandle,
-    receiver_abort: AbortHandle
+    receiver_abort: AbortHandle,
 }
 
 impl ReplicaDiscovery {
     pub fn new(listener_addr: SocketAddr) -> io::Result<Self> {
         let notify = Arc::new(Notify::new());
-
 
         let state = State::new(listener_addr, notify.clone())?;
 
@@ -78,7 +77,7 @@ struct State {
     listener_addr: SocketAddr,
     socket: tokio::net::UdpSocket,
     send_mutex: Mutex<()>,
-    found_replicas : Mutex<HashSet<SocketAddr>>,
+    found_replicas: Mutex<HashSet<SocketAddr>>,
     notify: Arc<Notify>,
 }
 
@@ -109,7 +108,7 @@ impl State {
         // but is if moved to tokio::net::UdpSocket.
         sync_socket.set_nonblocking(true)?;
 
-        Ok(Self{
+        Ok(Self {
             id: rand::random(),
             listener_addr: listener_addr,
             socket: tokio::net::UdpSocket::from_std(sync_socket).unwrap(),
@@ -135,17 +134,19 @@ impl State {
         loop {
             let (size, addr) = self.socket.recv_from(&mut recv_buffer).await?;
 
-            let r : Message = match bincode::deserialize(&recv_buffer[..size]) {
+            let r: Message = match bincode::deserialize(&recv_buffer[..size]) {
                 Ok(r) => r,
-                Err(_) => continue
+                Err(_) => continue,
             };
 
             let (is_rq, id, listener_addr) = match r {
-                Message::ImHereYouAll{id, addr} => (true,  id, addr),
-                Message::Reply{id, addr}        => (false, id, addr),
+                Message::ImHereYouAll { id, addr } => (true, id, addr),
+                Message::Reply { id, addr } => (false, id, addr),
             };
 
-            if id == self.id { continue; }
+            if id == self.id {
+                continue;
+            }
 
             if is_rq {
                 self.send(&self.reply(), addr).await?;
@@ -158,7 +159,7 @@ impl State {
         }
     }
 
-    async fn send(&self, message : &Message, addr : SocketAddr) -> io::Result<()> {
+    async fn send(&self, message: &Message, addr: SocketAddr) -> io::Result<()> {
         let _guard = self.send_mutex.lock().await;
         let data = bincode::serialize(&message).unwrap();
         self.socket.send_to(&data, addr).await?;
@@ -166,10 +167,16 @@ impl State {
     }
 
     fn query(&self) -> Message {
-        Message::ImHereYouAll{id: self.id, addr: self.listener_addr}
+        Message::ImHereYouAll {
+            id: self.id,
+            addr: self.listener_addr,
+        }
     }
 
     fn reply(&self) -> Message {
-        Message::Reply{id: self.id, addr: self.listener_addr}
+        Message::Reply {
+            id: self.id,
+            addr: self.listener_addr,
+        }
     }
 }

@@ -1,3 +1,4 @@
+use crate::format;
 use rand::{
     distributions::{Distribution, Standard},
     Rng,
@@ -49,7 +50,7 @@ impl fmt::Debug for BlockName {
 
 impl fmt::LowerHex for BlockName {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        format_hex(f, &self.0)
+        format::hex(f, &self.0)
     }
 }
 
@@ -94,7 +95,7 @@ impl fmt::Debug for BlockVersion {
 
 impl fmt::LowerHex for BlockVersion {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        format_hex(f, &self.0)
+        format::hex(f, &self.0)
     }
 }
 
@@ -120,31 +121,6 @@ impl fmt::Debug for BlockId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{:8x}:{:8x}", self.name, self.version)
     }
-}
-
-// Format the byte slice as hex with optional truncation.
-fn format_hex(f: &mut fmt::Formatter, bytes: &[u8]) -> fmt::Result {
-    let len = f
-        .width()
-        .map(|w| w / 2)
-        .unwrap_or(bytes.len())
-        .min(bytes.len());
-
-    let (len, ellipsis) = match len {
-        0 => (0, false),
-        len if len == bytes.len() => (len, false),
-        len => (len - 1, true),
-    };
-
-    for byte in &bytes[..len] {
-        write!(f, "{:02x}", byte)?;
-    }
-
-    if ellipsis {
-        write!(f, "..")?;
-    }
-
-    Ok(())
 }
 
 #[cfg(test)]

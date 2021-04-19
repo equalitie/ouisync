@@ -1,16 +1,17 @@
 use crate::{
     block::{BlockId, BLOCK_SIZE},
+    db,
     error::Error,
 };
-use sqlx::{Row, SqlitePool};
+use sqlx::Row;
 
 pub struct BlockStore {
-    pool: SqlitePool,
+    pool: db::Pool,
 }
 
 impl BlockStore {
-    /// Opens block store with the given database pool.
-    pub async fn open(pool: SqlitePool) -> Result<Self, Error> {
+    /// Opens block store using the given database pool.
+    pub async fn open(pool: db::Pool) -> Result<Self, Error> {
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS blocks (
                  name     BLOB NOT NULL,
@@ -166,8 +167,8 @@ mod tests {
         }
     }
 
-    async fn make_pool() -> SqlitePool {
-        SqlitePool::connect(":memory:").await.unwrap()
+    async fn make_pool() -> db::Pool {
+        db::Pool::connect(":memory:").await.unwrap()
     }
 
     fn random_block_id() -> BlockId {
