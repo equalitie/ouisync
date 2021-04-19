@@ -1,20 +1,83 @@
 use std::{io, sync::Arc, net::Ipv4Addr, time::Duration, net::SocketAddr, collections::HashSet};
-use async_std::{sync::Mutex};
+use async_std::{sync::Mutex, task::{spawn, sleep}};
 use async_std::net as async_net;
 use serde::{Serialize, Deserialize};
 use rand::{Rng};
+use futures::future::{abortable, AbortHandle};
+use tokio::sync::Notify;
+
+// Poor man's local discovery using UDP multicast.
+// XXX: We should probably use mDNS, but so far all libraries I tried had some issues.
+pub struct ReplicaDiscovery {
+    state: Arc<State>,
+    notify: Arc<Notify>,
+    beacon_abort: AbortHandle,
+    receiver_abort: AbortHandle
+}
+
+impl ReplicaDiscovery {
+    pub fn new(listener_addr: SocketAddr) -> io::Result<Self> {
+        let notify = Arc::new(Notify::new());
+
+
+        let state = State::new(listener_addr, notify.clone())?;
+
+        let s = Arc::new(state);
+        let s1 = s.clone();
+        let s2 = s.clone();
+
+        let (beacon_fut, beacon_handle) = abortable(async move {
+            s1.run_beacon().await.unwrap();
+        });
+
+        spawn(beacon_fut);
+
+        let (recv_fut, recv_handle) = abortable(async move {
+            s2.run_receiver().await.unwrap();
+        });
+
+        spawn(recv_fut);
+
+        Ok(ReplicaDiscovery {
+            state: s,
+            notify: notify,
+            beacon_abort: beacon_handle,
+            receiver_abort: recv_handle,
+        })
+    }
+
+    pub async fn wait_for_activity(&mut self) -> HashSet<SocketAddr> {
+        let mut found = self.state.found_replicas.lock().await;
+
+        while found.is_empty() {
+            drop(found);
+            self.notify.notified().await;
+            found = self.state.found_replicas.lock().await;
+        }
+
+        let ret = found.clone();
+        *found = HashSet::new();
+        ret
+    }
+}
+
+impl Drop for ReplicaDiscovery {
+    fn drop(&mut self) {
+        self.beacon_abort.abort();
+        self.receiver_abort.abort();
+    }
+}
 
 const ID_LEN: usize = 16; // 128 bits
 type Id = [u8; ID_LEN];
 
-// Poor man's local discovery using UDP multicast. XXX: We should probably use mDNS, but so far all
-// libraries I tried had some issues.
-pub struct ReplicaDiscovery {
+struct State {
     id: Id,
     listener_addr: SocketAddr,
     socket: async_net::UdpSocket,
     send_mutex: Mutex<()>,
     found_replicas : Mutex<HashSet<SocketAddr>>,
+    notify: Arc<Notify>,
 }
 
 // Selected at random but to not clash with some reserved ones:
@@ -30,8 +93,8 @@ enum Message {
     Reply { id: Id, addr: SocketAddr },
 }
 
-impl ReplicaDiscovery {
-    pub fn new(listener_addr: SocketAddr) -> io::Result<Self> {
+impl State {
+    fn new(listener_addr: SocketAddr, notify: Arc<Notify>) -> io::Result<Self> {
         let sync_socket = net2::UdpBuilder::new_v4()?
             .reuse_address(true)?
             .bind((ADDR_ANY, MULTICAST_PORT))?;
@@ -44,35 +107,21 @@ impl ReplicaDiscovery {
             socket: async_net::UdpSocket::from(sync_socket),
             send_mutex: Mutex::new(()),
             found_replicas: Mutex::new(HashSet::new()),
+            notify: notify,
         })
     }
 
-    pub async fn run(self) -> Result<(), io::Error> {
-        let this = Arc::new(self);
-        let that = this.clone();
-
-        let (beacon_fut, beacon_handle) = futures::future::abortable(async move {
-            that.beacon().await.unwrap();
-        });
-
-        async_std::task::spawn(beacon_fut);
-
-        this.receiver().await?;
-        beacon_handle.abort();
-        Ok(())
-    }
-
-    async fn beacon(&self) -> io::Result<()> {
+    async fn run_beacon(&self) -> io::Result<()> {
         let multicast_endpoint = SocketAddr::new(MULTICAST_ADDR.into(), MULTICAST_PORT);
 
         loop {
             self.send(&self.query(), multicast_endpoint).await?;
             let delay = rand::thread_rng().gen_range(2..8);
-            async_std::task::sleep(Duration::from_secs(delay)).await;
+            sleep(Duration::from_secs(delay)).await;
         }
     }
 
-    async fn receiver(&self) -> io::Result<()> {
+    async fn run_receiver(&self) -> io::Result<()> {
         let mut recv_buffer = vec![0; 4096];
 
         loop {
@@ -94,9 +143,10 @@ impl ReplicaDiscovery {
                 self.send(&self.reply(), addr).await?;
             }
 
-            println!("{:?}", listener_addr);
+            //println!("{:?}", listener_addr);
 
             self.found_replicas.lock().await.insert(listener_addr);
+            self.notify.notify_one();
         }
     }
 

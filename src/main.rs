@@ -34,6 +34,17 @@ struct Options {
     bind: IpAddr,
 }
 
+async fn run_local_discovery() -> std::io::Result<()> {
+    let listener = async_std::net::TcpListener::bind(SocketAddr::from(([0,0,0,0], 0))).await?;
+
+    let mut discovery = ReplicaDiscovery::new(listener.local_addr().unwrap())?;
+    
+    loop {
+        let found = discovery.wait_for_activity().await;
+        println!("found: {:?}", found);
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let options = Options::from_args();
@@ -43,8 +54,8 @@ async fn main() -> Result<()> {
     let repository = Repository;
     let _mount_guard = virtual_filesystem::mount(repository, options.mount_dir)?;
 
-    let listener = async_std::net::TcpListener::bind(SocketAddr::from(([0,0,0,0], 0))).await?;
-    async_std::task::spawn(ReplicaDiscovery::new(listener.local_addr().unwrap())?.run());
+
+    async_std::task::spawn(run_local_discovery());
 
     signal::ctrl_c().await?;
 
