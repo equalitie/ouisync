@@ -31,6 +31,9 @@ struct Options {
     /// IP address to bind to
     #[structopt(long, default_value = "0.0.0.0")]
     bind: IpAddr,
+
+    #[structopt(short, long)]
+    enable_local_discovery: bool,
 }
 
 async fn run_local_discovery() -> std::io::Result<()> {
@@ -53,8 +56,9 @@ async fn main() -> Result<()> {
     let repository = Repository;
     let _mount_guard = virtual_filesystem::mount(repository, options.mount_dir)?;
 
-
-    tokio::task::spawn(run_local_discovery());
+    if options.enable_local_discovery {
+        tokio::task::spawn(run_local_discovery());
+    }
 
     signal::ctrl_c().await?;
 
