@@ -1,10 +1,15 @@
-use futures_util::future::{abortable, AbortHandle};
-use rand::Rng;
-use serde::{Deserialize, Serialize};
-use std::{collections::HashSet, io, net::Ipv4Addr, net::SocketAddr, sync::Arc, time::Duration};
-use tokio::sync::{Mutex, Notify};
-use tokio::task::spawn;
-use tokio::time::sleep;
+use std::{io,
+    sync::Arc,
+    net::{ Ipv4Addr, SocketAddr },
+    time::Duration,
+    collections::HashSet
+};
+use serde::{Serialize, Deserialize};
+use rand::{Rng};
+use futures::future::{abortable, AbortHandle};
+use tokio::sync::{Notify, Mutex};
+use tokio::task::{spawn};
+use tokio::time::{sleep};
 
 // Poor man's local discovery using UDP multicast.
 // XXX: We should probably use mDNS, but so far all libraries I tried had some issues.
@@ -16,10 +21,11 @@ pub struct ReplicaDiscovery {
 }
 
 impl ReplicaDiscovery {
-    pub fn new(listener_addr: SocketAddr) -> io::Result<Self> {
+    pub fn new(listener_port: u16) -> io::Result<Self> {
         let notify = Arc::new(Notify::new());
 
-        let state = State::new(listener_addr, notify.clone())?;
+
+        let state = State::new(listener_port, notify.clone())?;
 
         let s = Arc::new(state);
         let s1 = s.clone();
@@ -74,7 +80,7 @@ type Id = [u8; ID_LEN];
 
 struct State {
     id: Id,
-    listener_addr: SocketAddr,
+    listener_port: u16,
     socket: tokio::net::UdpSocket,
     send_mutex: Mutex<()>,
     found_replicas: Mutex<HashSet<SocketAddr>>,
@@ -90,12 +96,12 @@ const ADDR_ANY: Ipv4Addr = Ipv4Addr::new(0, 0, 0, 0);
 
 #[derive(Serialize, Deserialize, Debug)]
 enum Message {
-    ImHereYouAll { id: Id, addr: SocketAddr },
-    Reply { id: Id, addr: SocketAddr },
+    ImHereYouAll { id: Id, port: u16 },
+    Reply { id: Id, port: u16 },
 }
 
 impl State {
-    fn new(listener_addr: SocketAddr, notify: Arc<Notify>) -> io::Result<Self> {
+    fn new(listener_port: u16, notify: Arc<Notify>) -> io::Result<Self> {
         // Using net2 because, std::net, nor async_std::net nor tokio::net lets
         // one set reuse_address(true) before "binding" the socket.
         let sync_socket = net2::UdpBuilder::new_v4()?
@@ -110,7 +116,7 @@ impl State {
 
         Ok(Self {
             id: rand::random(),
-            listener_addr: listener_addr,
+            listener_port: listener_port,
             socket: tokio::net::UdpSocket::from_std(sync_socket).unwrap(),
             send_mutex: Mutex::new(()),
             found_replicas: Mutex::new(HashSet::new()),
@@ -139,9 +145,9 @@ impl State {
                 Err(_) => continue,
             };
 
-            let (is_rq, id, listener_addr) = match r {
-                Message::ImHereYouAll { id, addr } => (true, id, addr),
-                Message::Reply { id, addr } => (false, id, addr),
+            let (is_rq, id, listener_port) = match r {
+                Message::ImHereYouAll{id, port} => (true,  id, port),
+                Message::Reply{id, port}        => (false, id, port),
             };
 
             if id == self.id {
@@ -152,9 +158,9 @@ impl State {
                 self.send(&self.reply(), addr).await?;
             }
 
-            //println!("{:?}", listener_addr);
+            //println!("{:?}", listener_port);
 
-            self.found_replicas.lock().await.insert(listener_addr);
+            self.found_replicas.lock().await.insert(SocketAddr::new(addr.ip(), listener_port));
             self.notify.notify_one();
         }
     }
@@ -167,16 +173,10 @@ impl State {
     }
 
     fn query(&self) -> Message {
-        Message::ImHereYouAll {
-            id: self.id,
-            addr: self.listener_addr,
-        }
+        Message::ImHereYouAll{id: self.id, port: self.listener_port}
     }
 
     fn reply(&self) -> Message {
-        Message::Reply {
-            id: self.id,
-            addr: self.listener_addr,
-        }
+        Message::Reply{id: self.id, port: self.listener_port}
     }
 }

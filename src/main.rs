@@ -11,8 +11,8 @@ async fn run_local_discovery() -> std::io::Result<()> {
     use std::net::SocketAddr;
     let listener = tokio::net::TcpListener::bind(SocketAddr::from(([0,0,0,0], 0))).await?;
 
-    let mut discovery = ReplicaDiscovery::new(listener.local_addr().unwrap())?;
-    
+    let mut discovery = ReplicaDiscovery::new(listener.local_addr().unwrap().port())?;
+
     loop {
         let found = discovery.wait_for_activity().await;
         println!("found: {:?}", found);
