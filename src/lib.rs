@@ -7,12 +7,14 @@ mod format;
 mod index;
 mod repository;
 mod replica_discovery;
+mod object_stream;
 
 pub use self::{
     block::{BlockId, BlockName, BlockStore, BlockVersion, BLOCK_SIZE},
     error::Error,
     repository::Repository,
     replica_discovery::ReplicaDiscovery,
+    object_stream::ObjectStream,
 };
 
 /// This function can be called from other languages via FFI
