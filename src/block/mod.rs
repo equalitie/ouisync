@@ -1,3 +1,7 @@
+mod store;
+
+pub use self::store::BlockStore;
+
 use crate::format;
 use rand::{
     distributions::{Distribution, Standard},

@@ -1,8 +1,5 @@
-use crate::{
-    block::{BlockId, BLOCK_SIZE},
-    db,
-    error::Error,
-};
+use super::{BlockId, BLOCK_SIZE};
+use crate::{db, error::Error};
 use sqlx::Row;
 
 pub struct BlockStore {

@@ -2,7 +2,6 @@ pub mod crypto;
 pub mod db;
 
 mod block;
-mod block_store;
 mod error;
 mod format;
 mod index;
@@ -10,8 +9,7 @@ mod repository;
 mod replica_discovery;
 
 pub use self::{
-    block::{BlockId, BlockName, BlockVersion, BLOCK_SIZE},
-    block_store::BlockStore,
+    block::{BlockId, BlockName, BlockStore, BlockVersion, BLOCK_SIZE},
     error::Error,
     repository::Repository,
     replica_discovery::ReplicaDiscovery,

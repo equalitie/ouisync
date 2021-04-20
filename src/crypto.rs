@@ -1,8 +1,5 @@
 use crate::format;
-use rand::{
-    distributions::{Distribution, Standard},
-    CryptoRng, Rng,
-};
+use rand::{CryptoRng, Rng};
 use sha3::{
     digest::{generic_array::GenericArray, Digest},
     Sha3_256,
