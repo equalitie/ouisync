@@ -1,5 +1,8 @@
+/// Re-export the aead module for convenience.
+pub use chacha20poly1305::aead;
+
 use crate::format;
-use chacha20poly1305::{aead, ChaCha20Poly1305, Nonce};
+use chacha20poly1305::{ChaCha20Poly1305, Nonce};
 use rand::{CryptoRng, Rng};
 use sha3::{
     digest::{generic_array::GenericArray, Digest},
@@ -44,6 +47,12 @@ impl fmt::LowerHex for Hash {
 }
 
 type HashInner = GenericArray<u8, <Sha3_256 as Digest>::OutputSize>;
+
+/// Cipher for symmetric encryption.
+pub type Cipher = ChaCha20Poly1305;
+
+/// Authentication tag.
+pub type AuthTag = chacha20poly1305::Tag;
 
 /// Symmetric encryption/decryption secret key.
 ///

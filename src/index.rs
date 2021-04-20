@@ -32,6 +32,7 @@ impl Index {
     }
 
     /// Insert a new block into the index.
+    // TODO: insert or update
     pub async fn insert(&self, block_id: &BlockId, child_tag: &ChildTag) -> Result<(), Error> {
         sqlx::query(
             "INSERT INTO index_leaves (block_name, block_version, child_tag) VALUES (?, ?, ?)",
@@ -86,7 +87,7 @@ impl ChildTag {
     pub fn new(
         secret_key: &SecretKey,
         parent_name: &BlockName,
-        block_seq: u64,
+        block_seq: u32,
         block_kind: BlockKind,
     ) -> Self {
         let key_hash = Sha3_256::digest(secret_key.as_array().as_slice());

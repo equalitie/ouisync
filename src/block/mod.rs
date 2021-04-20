@@ -133,6 +133,10 @@ impl BlockId {
     pub fn new(name: BlockName, version: BlockVersion) -> Self {
         Self { name, version }
     }
+
+    pub fn to_array(&self) -> [u8; BLOCK_NAME_SIZE + BLOCK_VERSION_SIZE] {
+        todo!()
+    }
 }
 
 impl fmt::Display for BlockId {

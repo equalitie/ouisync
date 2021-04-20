@@ -1,4 +1,7 @@
-use crate::block::{BlockId, BLOCK_SIZE};
+use crate::{
+    block::{BlockId, BLOCK_SIZE},
+    crypto::aead,
+};
 use std::{array::TryFromSliceError, io};
 use thiserror::Error;
 
@@ -20,10 +23,18 @@ pub enum Error {
     BlockIdNotFound,
     #[error("block has wrong length (expected: {}, actual: {0})", BLOCK_SIZE)]
     WrongBlockLength(usize),
+    #[error("encryption / decryption failed")]
+    Crypto,
 }
 
 impl From<TryFromSliceError> for Error {
     fn from(_: TryFromSliceError) -> Self {
         Self::MalformedData
+    }
+}
+
+impl From<aead::Error> for Error {
+    fn from(_: aead::Error) -> Self {
+        Self::Crypto
     }
 }

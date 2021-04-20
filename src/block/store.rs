@@ -1,5 +1,5 @@
 use super::{BlockId, BLOCK_SIZE};
-use crate::{db, error::Error};
+use crate::{crypto::AuthTag, db, error::Error};
 use sqlx::Row;
 
 pub struct BlockStore {
@@ -66,20 +66,22 @@ impl BlockStore {
     ///
     /// Panics if buffer length is not equal to [`BLOCK_SIZE`].
     ///
-    pub async fn write(&self, id: &BlockId, buffer: &[u8]) -> Result<(), Error> {
+    pub async fn write(
+        &self,
+        id: &BlockId,
+        buffer: &[u8],
+        auth_tag: &AuthTag,
+    ) -> Result<(), Error> {
         assert_eq!(
             buffer.len(),
             BLOCK_SIZE,
             "incorrect buffer length for block write"
         );
 
-        // TODO:
-        let auth_tag = [0u8; 16];
-
         sqlx::query("INSERT INTO blocks (name, version, auth_tag, content) VALUES (?, ?, ?, ?)")
             .bind(id.name.as_ref())
             .bind(id.version.as_ref())
-            .bind(&auth_tag[..])
+            .bind(auth_tag.as_slice())
             .bind(buffer)
             .execute(&self.pool)
             .await
@@ -102,8 +104,9 @@ mod tests {
 
         let id = random_block_id();
         let content = random_block_content();
+        let auth_tag = AuthTag::default();
 
-        store.write(&id, &content).await.unwrap();
+        store.write(&id, &content, &auth_tag).await.unwrap();
 
         let mut buffer = vec![0; BLOCK_SIZE];
         store.read(&id, &mut buffer).await.unwrap();
@@ -133,12 +136,13 @@ mod tests {
 
         let id = random_block_id();
         let content0 = random_block_content();
+        let auth_tag = AuthTag::default();
 
-        store.write(&id, &content0).await.unwrap();
+        store.write(&id, &content0, &auth_tag).await.unwrap();
 
         let content1 = random_block_content();
 
-        match store.write(&id, &content1).await {
+        match store.write(&id, &content1, &auth_tag).await {
             Err(Error::QueryDb(_)) => (),
             Err(error) => panic!("unexpected error: {:?}", error),
             Ok(_) => panic!("unexpected success"),
