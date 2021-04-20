@@ -16,10 +16,10 @@ pub struct Blob {
 
 impl Blob {
     pub async fn open(
-        block_store: Arc<BlockStore>,
-        index: Arc<Index>,
-        secret_key: &SecretKey,
-        id: BlockId,
+        _block_store: Arc<BlockStore>,
+        _index: Arc<Index>,
+        _secret_key: &SecretKey,
+        _id: BlockId,
     ) -> Result<Self, Error> {
         todo!()
     }

@@ -1,4 +1,8 @@
 use crate::format;
+use chacha20poly1305::{
+    aead::stream::{DecryptorLE31, EncryptorLE31},
+    ChaCha20Poly1305,
+};
 use rand::{CryptoRng, Rng};
 use sha3::{
     digest::{generic_array::GenericArray, Digest},
@@ -97,17 +101,16 @@ impl Drop for SecretKeyInner {
     }
 }
 
+/// Stream encryptor.
+pub type Encryptor = EncryptorLE31<ChaCha20Poly1305>;
+
+/// Stream decryptor.
+pub type Decryptor = DecryptorLE31<ChaCha20Poly1305>;
+
 // TODO: crypto demonstration - to be deleted
 #[test]
 fn demo() {
-    use chacha20poly1305::{
-        aead::{
-            generic_array::GenericArray,
-            stream::{DecryptorLE31, EncryptorLE31},
-            NewAead, Payload,
-        },
-        ChaCha20Poly1305, Key,
-    };
+    use chacha20poly1305::aead::{generic_array::GenericArray, Payload};
 
     let blocks_plain_original = vec![
         (b"foo".to_vec(), b"Lorem ipsum dolor sit amet".to_vec()),
@@ -115,8 +118,7 @@ fn demo() {
         (b"baz".to_vec(), b"sed do eiusmod tempor".to_vec()),
     ];
 
-    // Key size is 32 bytes.
-    let key = Key::from_slice(b"a very secret key...............");
+    let key = SecretKey::random();
 
     // Nonce size is the nonce size of the underlying cipher minus nonce overhead of the
     // stream primitive. In this case it is 12 - 4 = 8
@@ -124,7 +126,7 @@ fn demo() {
 
     // Encrypt
 
-    let mut encryptor = EncryptorLE31::from_aead(ChaCha20Poly1305::new(key), nonce);
+    let mut encryptor = Encryptor::new(key.as_array(), nonce);
     let mut blocks_cipher = Vec::new();
 
     for (key_plain, value_plain) in &blocks_plain_original[..blocks_plain_original.len() - 1] {
@@ -155,7 +157,7 @@ fn demo() {
 
     // Decrypt
 
-    let mut decryptor = DecryptorLE31::from_aead(ChaCha20Poly1305::new(key), nonce);
+    let mut decryptor = Decryptor::new(key.as_array(), nonce);
     let mut blocks_plain_decrypted = Vec::new();
 
     for (key_plain, value_cipher) in &blocks_cipher[..blocks_plain_original.len() - 1] {
