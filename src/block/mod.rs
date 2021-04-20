@@ -7,7 +7,11 @@ use rand::{
     distributions::{Distribution, Standard},
     Rng,
 };
-use std::fmt;
+use std::{
+    array::TryFromSliceError,
+    convert::{TryFrom, TryInto},
+    fmt,
+};
 
 /// Block size in bytes.
 pub const BLOCK_SIZE: usize = 32 * 1024;
@@ -25,6 +29,14 @@ impl BlockName {
     /// Generate a random name using the default RNG ([`rand::thread_rng`]).
     pub fn random() -> Self {
         rand::thread_rng().gen()
+    }
+}
+
+impl TryFrom<&'_ [u8]> for BlockName {
+    type Error = TryFromSliceError;
+
+    fn try_from(slice: &[u8]) -> Result<Self, Self::Error> {
+        Ok(Self(slice.try_into()?))
     }
 }
 
@@ -70,6 +82,14 @@ impl BlockVersion {
     /// Generate a random version using the default RNG ([`rand::thread_rng`]).
     pub fn random() -> Self {
         rand::thread_rng().gen()
+    }
+}
+
+impl TryFrom<&'_ [u8]> for BlockVersion {
+    type Error = TryFromSliceError;
+
+    fn try_from(slice: &[u8]) -> Result<Self, Self::Error> {
+        Ok(Self(slice.try_into()?))
     }
 }
 

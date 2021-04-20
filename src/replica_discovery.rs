@@ -39,7 +39,7 @@ impl ReplicaDiscovery {
 
         Ok(ReplicaDiscovery {
             state: s,
-            notify: notify,
+            notify,
             beacon_abort: beacon_handle,
             receiver_abort: recv_handle,
         })
@@ -110,11 +110,11 @@ impl State {
 
         Ok(Self {
             id: rand::random(),
-            listener_addr: listener_addr,
+            listener_addr,
             socket: tokio::net::UdpSocket::from_std(sync_socket).unwrap(),
             send_mutex: Mutex::new(()),
             found_replicas: Mutex::new(HashSet::new()),
-            notify: notify,
+            notify,
         })
     }
 

@@ -1,8 +1,5 @@
 use crate::format;
-use chacha20poly1305::{
-    aead::stream::{DecryptorLE31, EncryptorLE31},
-    ChaCha20Poly1305,
-};
+use chacha20poly1305::{aead, ChaCha20Poly1305, Nonce};
 use rand::{CryptoRng, Rng};
 use sha3::{
     digest::{generic_array::GenericArray, Digest},
@@ -19,6 +16,12 @@ pub struct Hash(HashInner);
 impl From<HashInner> for Hash {
     fn from(inner: HashInner) -> Self {
         Hash(inner)
+    }
+}
+
+impl AsRef<[u8]> for Hash {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_slice()
     }
 }
 
@@ -101,84 +104,41 @@ impl Drop for SecretKeyInner {
     }
 }
 
-/// Stream encryptor.
-pub type Encryptor = EncryptorLE31<ChaCha20Poly1305>;
+const NONCE_PREFIX_SIZE: usize = 8;
 
-/// Stream decryptor.
-pub type Decryptor = DecryptorLE31<ChaCha20Poly1305>;
+pub struct NonceSequence {
+    prefix: [u8; NONCE_PREFIX_SIZE],
+}
 
-// TODO: crypto demonstration - to be deleted
-#[test]
-fn demo() {
-    use chacha20poly1305::aead::{generic_array::GenericArray, Payload};
+impl NonceSequence {
+    pub fn random() -> Self {
+        let mut prefix = [0; NONCE_PREFIX_SIZE];
+        rand::thread_rng().fill(&mut prefix[..]);
 
-    let blocks_plain_original = vec![
-        (b"foo".to_vec(), b"Lorem ipsum dolor sit amet".to_vec()),
-        (b"bar".to_vec(), b"consectetur adipiscing elit".to_vec()),
-        (b"baz".to_vec(), b"sed do eiusmod tempor".to_vec()),
-    ];
-
-    let key = SecretKey::random();
-
-    // Nonce size is the nonce size of the underlying cipher minus nonce overhead of the
-    // stream primitive. In this case it is 12 - 4 = 8
-    let nonce = GenericArray::from_slice(b"a nonce.");
-
-    // Encrypt
-
-    let mut encryptor = Encryptor::new(key.as_array(), nonce);
-    let mut blocks_cipher = Vec::new();
-
-    for (key_plain, value_plain) in &blocks_plain_original[..blocks_plain_original.len() - 1] {
-        let value_cipher = encryptor
-            .encrypt_next(Payload {
-                msg: value_plain,
-                aad: key_plain,
-            })
-            .unwrap(); // NOTE: this panics if we exhaust the counter*. The counter's max value is
-                       //       2^31 so it's unlikely to happen in practice, but we should still
-                       //       probably error gracefully instead of crashing even in this unlikely
-                       //       case.
-                       //
-                       //       *) also when the plaintext block or the associated data is too long,
-                       //          but we can easily control that.
-        blocks_cipher.push((key_plain.clone(), value_cipher));
+        Self { prefix }
     }
 
-    // Last block
-    let (key_plain, value_plain) = &blocks_plain_original[blocks_plain_original.len() - 1];
-    let value_cipher = encryptor
-        .encrypt_last(Payload {
-            msg: value_plain,
-            aad: key_plain,
-        })
-        .unwrap();
-    blocks_cipher.push((key_plain.clone(), value_cipher));
-
-    // Decrypt
-
-    let mut decryptor = Decryptor::new(key.as_array(), nonce);
-    let mut blocks_plain_decrypted = Vec::new();
-
-    for (key_plain, value_cipher) in &blocks_cipher[..blocks_plain_original.len() - 1] {
-        let value_plain = decryptor
-            .decrypt_next(Payload {
-                msg: value_cipher,
-                aad: key_plain,
-            })
-            .unwrap();
-        blocks_plain_decrypted.push((key_plain.clone(), value_plain));
+    /// Gets the shared prefix of each nonce of this sequence.
+    pub fn prefix(&self) -> &[u8; NONCE_PREFIX_SIZE] {
+        &self.prefix
     }
 
-    // Last block
-    let (key_plain, value_cipher) = &blocks_cipher[blocks_cipher.len() - 1];
-    let value_plain = decryptor
-        .decrypt_last(Payload {
-            msg: value_cipher,
-            aad: key_plain,
-        })
-        .unwrap();
-    blocks_plain_decrypted.push((key_plain.clone(), value_plain));
+    /// Gets the `index`-th nonce of this sequence.
+    pub fn get(&self, index: u32) -> Nonce {
+        let mut nonce = Nonce::default();
+        nonce[..NONCE_PREFIX_SIZE].copy_from_slice(&self.prefix);
+        nonce[NONCE_PREFIX_SIZE..].copy_from_slice(&index.to_le_bytes());
+        nonce
+    }
+}
 
-    assert_eq!(blocks_plain_original, blocks_plain_decrypted);
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nonce_sequence() {
+        let nonce = Nonce::default();
+        assert_eq!(nonce.len(), NONCE_PREFIX_SIZE + 4);
+    }
 }

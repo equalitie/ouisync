@@ -76,35 +76,16 @@ impl BlockStore {
         // TODO:
         let auth_tag = [0u8; 16];
 
-        let result = sqlx::query(
-            "INSERT INTO blocks (name, version, auth_tag, content) VALUES (?, ?, ?, ?)",
-        )
-        .bind(id.name.as_ref())
-        .bind(id.version.as_ref())
-        .bind(&auth_tag[..])
-        .bind(buffer)
-        .execute(&self.pool)
-        .await;
+        sqlx::query("INSERT INTO blocks (name, version, auth_tag, content) VALUES (?, ?, ?, ?)")
+            .bind(id.name.as_ref())
+            .bind(id.version.as_ref())
+            .bind(&auth_tag[..])
+            .bind(buffer)
+            .execute(&self.pool)
+            .await
+            .map_err(Error::QueryDb)?;
 
-        match result {
-            Ok(_) => Ok(()),
-            Err(error @ sqlx::Error::Database(_)) => {
-                // Check whether the error is due to duplicate record or some other reason.
-                // TODO: is there a way to make the update and this check atomic?
-                let row = sqlx::query("SELECT 1 FROM blocks WHERE name = ? AND version = ?")
-                    .bind(id.name.as_ref())
-                    .bind(id.version.as_ref())
-                    .fetch_optional(&self.pool)
-                    .await;
-
-                if row.map(|row| row.is_some()).unwrap_or(false) {
-                    Err(Error::BlockExists(*id))
-                } else {
-                    Err(Error::QueryDb(error))
-                }
-            }
-            Err(error) => Err(Error::QueryDb(error)),
-        }
+        Ok(())
     }
 }
 
@@ -158,7 +139,7 @@ mod tests {
         let content1 = random_block_content();
 
         match store.write(&id, &content1).await {
-            Err(Error::BlockExists(existing_id)) => assert_eq!(existing_id, id),
+            Err(Error::QueryDb(_)) => (),
             Err(error) => panic!("unexpected error: {:?}", error),
             Ok(_) => panic!("unexpected success"),
         }
