@@ -10,6 +10,7 @@ use futures::future::{abortable, AbortHandle};
 use tokio::sync::{Notify, Mutex};
 use tokio::task::{spawn};
 use tokio::time::{sleep};
+use lru::LruCache;
 
 // Poor man's local discovery using UDP multicast.
 // XXX: We should probably use mDNS, but so far all libraries I tried had some issues.
@@ -137,6 +138,8 @@ impl State {
     async fn run_receiver(&self) -> io::Result<()> {
         let mut recv_buffer = vec![0; 4096];
 
+        let mut seen = LruCache::new(256);
+
         loop {
             let (size, addr) = self.socket.recv_from(&mut recv_buffer).await?;
 
@@ -154,13 +157,19 @@ impl State {
                 continue;
             }
 
+            if seen.get(&id).is_some() { continue; }
+
             if is_rq {
                 self.send(&self.reply(), addr).await?;
             }
 
             //println!("{:?}", listener_port);
 
-            self.found_replicas.lock().await.insert(SocketAddr::new(addr.ip(), listener_port));
+            seen.put(id, ());
+
+            let replica_addr = SocketAddr::new(addr.ip(), listener_port);
+            self.found_replicas.lock().await.insert(replica_addr);
+
             self.notify.notify_one();
         }
     }
