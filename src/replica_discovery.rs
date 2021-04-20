@@ -25,7 +25,6 @@ impl ReplicaDiscovery {
     pub fn new(listener_port: u16) -> io::Result<Self> {
         let notify = Arc::new(Notify::new());
 
-
         let state = State::new(listener_port, notify.clone())?;
 
         let s = Arc::new(state);
@@ -83,7 +82,6 @@ struct State {
     id: Id,
     listener_port: u16,
     socket: tokio::net::UdpSocket,
-    send_mutex: Mutex<()>,
     found_replicas: Mutex<HashSet<SocketAddr>>,
     notify: Arc<Notify>,
 }
@@ -117,11 +115,10 @@ impl State {
 
         Ok(Self {
             id: rand::random(),
-            listener_port: listener_port,
+            listener_port,
             socket: tokio::net::UdpSocket::from_std(sync_socket).unwrap(),
-            send_mutex: Mutex::new(()),
             found_replicas: Mutex::new(HashSet::new()),
-            notify: notify,
+            notify,
         })
     }
 
@@ -174,8 +171,7 @@ impl State {
         }
     }
 
-    async fn send(&self, message: &Message, addr: SocketAddr) -> io::Result<()> {
-        let _guard = self.send_mutex.lock().await;
+    async fn send(&self, message : &Message, addr : SocketAddr) -> io::Result<()> {
         let data = bincode::serialize(&message).unwrap();
         self.socket.send_to(&data, addr).await?;
         Ok(())
