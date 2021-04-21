@@ -77,6 +77,7 @@ impl Blob {
         secret_key: SecretKey,
         directory_name: Option<BlockName>,
         directory_seq: u32,
+        name: BlockName,
     ) -> Result<Self, Error> {
         // Check the directory entry is unique
         if let Some(parent_name) = &directory_name {
@@ -95,7 +96,10 @@ impl Blob {
             parent_name: directory_name,
             seq: directory_seq,
             kind: BlockKind::Head,
-            id: BlockId::random(),
+            id: BlockId {
+                name,
+                version: BlockVersion::random(),
+            },
             content,
             position,
         };
@@ -106,6 +110,30 @@ impl Blob {
             nonce_sequence,
             current_block,
         })
+    }
+
+    /// Reads data from this blob into `buffer`, advancing the internal cursor. Returns the
+    /// number of bytes actually read which might be less than `buffer.len()` if the portion of the
+    /// blob past the internal cursor is smaller than `buffer.len()`.
+    pub async fn read(&mut self, mut buffer: &mut [u8]) -> Result<usize, Error> {
+        let mut total_len = 0;
+
+        loop {
+            let len = self.current_block.read(buffer);
+            buffer = &mut buffer[len..];
+            total_len += len;
+
+            if buffer.is_empty() {
+                break;
+            }
+
+            self.write_current_block().await?;
+            if !self.get_next_block().await? {
+                break;
+            }
+        }
+
+        Ok(total_len)
     }
 
     /// Writes `buffer` into this blob, advancing the blob's internal cursor.
@@ -121,7 +149,7 @@ impl Blob {
             }
 
             self.write_current_block().await?;
-            self.fetch_next_block().await?;
+            self.get_or_create_next_block().await?;
         }
 
         Ok(())
@@ -161,7 +189,35 @@ impl Blob {
         Ok(())
     }
 
-    async fn fetch_next_block(&mut self) -> Result<(), Error> {
+    async fn get_next_block(&mut self) -> Result<bool, Error> {
+        let (parent_name, seq) = self.next_block_details();
+
+        if let Some((id, content)) = self.read_next_block(&parent_name, seq).await? {
+            self.current_block = OpenBlock::normal(parent_name, seq, id, content);
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    async fn get_or_create_next_block(&mut self) -> Result<(), Error> {
+        let (parent_name, seq) = self.next_block_details();
+
+        let (id, content) =
+            if let Some(id_and_content) = self.read_next_block(&parent_name, seq).await? {
+                // Existing block.
+                id_and_content
+            } else {
+                // New block
+                (BlockId::random(), BlockBuffer::new())
+            };
+
+        self.current_block = OpenBlock::normal(parent_name, seq, id, content);
+
+        Ok(())
+    }
+
+    fn next_block_details(&self) -> (BlockName, u32) {
         let parent_name = if let Some(name) = self.current_block.parent_name {
             name
         } else {
@@ -174,36 +230,32 @@ impl Blob {
 
         let seq = self.current_block.next_seq();
 
-        let mut content = BlockBuffer::new();
+        (parent_name, seq)
+    }
 
-        let child_tag = ChildTag::new(&self.secret_key, &parent_name, seq, BlockKind::Normal);
-        let id = index::get(&self.pool, &child_tag).await;
-        let id = match id {
+    async fn read_next_block(
+        &self,
+        parent_name: &BlockName,
+        seq: u32,
+    ) -> Result<Option<(BlockId, BlockBuffer)>, Error> {
+        let child_tag = ChildTag::new(&self.secret_key, parent_name, seq, BlockKind::Normal);
+
+        match index::get(&self.pool, &child_tag).await {
             Ok(id) => {
-                // existing block
+                let mut content = BlockBuffer::new();
+                let auth_tag = block::read(&self.pool, &id, &mut content).await?;
+
                 let nonce = self.nonce_sequence.get(seq);
                 let aad = id.to_array(); // "additional associated data"
-                let auth_tag = block::read(&self.pool, &id, &mut content).await?;
 
                 let cipher = Cipher::new(self.secret_key.as_array());
                 cipher.decrypt_in_place_detached(&nonce, &aad, &mut content, &auth_tag)?;
 
-                id
+                Ok(Some((id, content)))
             }
-            Err(Error::BlockIdNotFound) => BlockId::random(), // new block
-            Err(error) => return Err(error),
-        };
-
-        self.current_block = OpenBlock {
-            parent_name: Some(parent_name),
-            seq,
-            kind: BlockKind::Normal,
-            id,
-            content,
-            position: 0,
-        };
-
-        Ok(())
+            Err(Error::BlockIdNotFound) => Ok(None),
+            Err(error) => Err(error),
+        }
     }
 }
 
@@ -250,6 +302,18 @@ struct OpenBlock {
 }
 
 impl OpenBlock {
+    // Create non-head open block.
+    fn normal(parent_name: BlockName, seq: u32, id: BlockId, content: BlockBuffer) -> Self {
+        Self {
+            parent_name: Some(parent_name),
+            seq,
+            kind: BlockKind::Normal,
+            id,
+            content,
+            position: 0,
+        }
+    }
+
     fn nonce_index(&self) -> u32 {
         match self.kind {
             BlockKind::Head => 0,
@@ -265,6 +329,16 @@ impl OpenBlock {
                 self.seq.checked_add(1).expect("too many blocks per blob")
             }
         }
+    }
+
+    // Reads data from the current block and advances the internal cursor. Returns the number of
+    // bytes actual read.
+    fn read(&mut self, buffer: &mut [u8]) -> usize {
+        let n = (self.content.len() - self.position).min(buffer.len());
+        buffer[..n].copy_from_slice(&self.content[self.position..self.position + n]);
+        self.position += n;
+
+        n
     }
 
     // Writes to the current block and advances the internal cursor. Returns the number of bytes
