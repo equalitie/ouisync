@@ -8,7 +8,11 @@ use crate::{
     error::Error,
     index::{self, BlockKind, ChildTag},
 };
-use std::convert::TryInto;
+use std::{
+    convert::TryInto,
+    ops::{Deref, DerefMut},
+};
+use zeroize::Zeroize;
 
 pub struct Blob {
     pool: db::Pool,
@@ -36,7 +40,7 @@ impl Blob {
             }
         }
 
-        let mut content = vec![0; BLOCK_SIZE];
+        let mut content = BlockBuffer::new();
         let auth_tag = block::read(&pool, &id, &mut content).await?;
 
         // Read nonce prefix
@@ -84,7 +88,7 @@ impl Blob {
 
         let nonce_sequence = NonceSequence::random();
         let position = nonce_sequence.prefix().len();
-        let mut content = vec![0; BLOCK_SIZE];
+        let mut content = BlockBuffer::new();
         content[..position].copy_from_slice(nonce_sequence.prefix());
 
         let current_block = OpenBlock {
@@ -170,7 +174,7 @@ impl Blob {
 
         let seq = self.current_block.next_seq();
 
-        let mut content = vec![0; BLOCK_SIZE];
+        let mut content = BlockBuffer::new();
 
         let child_tag = ChildTag::new(&self.secret_key, &parent_name, seq, BlockKind::Normal);
         let id = index::get(&self.pool, &child_tag).await;
@@ -203,13 +207,45 @@ impl Blob {
     }
 }
 
+// Buffer for keeping loaded block content and also for in-place encryption and decryption.
+#[derive(Clone)]
+struct BlockBuffer(Box<[u8]>);
+
+impl BlockBuffer {
+    fn new() -> Self {
+        Self(vec![0; BLOCK_SIZE].into_boxed_slice())
+    }
+}
+
+// Scramble the buffer on drop to prevent leaving decrypted data in memory past the buffer
+// lifetime.
+impl Drop for BlockBuffer {
+    fn drop(&mut self) {
+        self.0.zeroize()
+    }
+}
+
+impl Deref for BlockBuffer {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for BlockBuffer {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
 // Data for a block that's been loaded into memory and decrypted.
 struct OpenBlock {
     parent_name: Option<BlockName>,
     seq: u32,
     kind: BlockKind,
     id: BlockId,
-    content: Vec<u8>,
+    content: BlockBuffer,
     position: usize,
 }
 
