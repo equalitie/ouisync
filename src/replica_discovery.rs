@@ -1,4 +1,4 @@
-use futures::future::{abortable, AbortHandle};
+use crate::async_object::{AbortHandles, AsyncObject, AsyncObjectTrait};
 use lru::LruCache;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -10,82 +10,10 @@ use std::{
     time::Duration,
 };
 use tokio::sync::{Mutex, Notify};
-use tokio::task::spawn;
 use tokio::time::sleep;
-
-// Poor man's local discovery using UDP multicast.
-// XXX: We should probably use mDNS, but so far all libraries I tried had some issues.
-pub struct ReplicaDiscovery {
-    state: Arc<State>,
-    notify: Arc<Notify>,
-    beacon_abort: AbortHandle,
-    receiver_abort: AbortHandle,
-}
-
-impl ReplicaDiscovery {
-    pub fn new(listener_port: u16) -> io::Result<Self> {
-        let notify = Arc::new(Notify::new());
-
-        let state = State::new(listener_port, notify.clone())?;
-
-        let s = Arc::new(state);
-        let s1 = s.clone();
-        let s2 = s.clone();
-
-        let (beacon_fut, beacon_handle) = abortable(async move {
-            s1.run_beacon().await.unwrap();
-        });
-
-        spawn(beacon_fut);
-
-        let (recv_fut, recv_handle) = abortable(async move {
-            s2.run_receiver().await.unwrap();
-        });
-
-        spawn(recv_fut);
-
-        Ok(ReplicaDiscovery {
-            state: s,
-            notify: notify,
-            beacon_abort: beacon_handle,
-            receiver_abort: recv_handle,
-        })
-    }
-
-    pub async fn wait_for_activity(&mut self) -> HashSet<SocketAddr> {
-        loop {
-            self.notify.notified().await;
-
-            let mut found = self.state.found_replicas.lock().await;
-
-            if found.is_empty() {
-                continue;
-            }
-
-            let ret = found.clone();
-            *found = HashSet::new();
-            return ret;
-        }
-    }
-}
-
-impl Drop for ReplicaDiscovery {
-    fn drop(&mut self) {
-        self.beacon_abort.abort();
-        self.receiver_abort.abort();
-    }
-}
 
 const ID_LEN: usize = 16; // 128 bits
 type Id = [u8; ID_LEN];
-
-struct State {
-    id: Id,
-    listener_port: u16,
-    socket: tokio::net::UdpSocket,
-    found_replicas: Mutex<HashSet<SocketAddr>>,
-    notify: Arc<Notify>,
-}
 
 // Selected at random but to not clash with some reserved ones:
 // https://www.iana.org/assignments/multicast-addresses/multicast-addresses.xhtml
@@ -94,14 +22,62 @@ const MULTICAST_PORT: u16 = 9271;
 
 const ADDR_ANY: Ipv4Addr = Ipv4Addr::new(0, 0, 0, 0);
 
-#[derive(Serialize, Deserialize, Debug)]
-enum Message {
-    ImHereYouAll { id: Id, port: u16 },
-    Reply { id: Id, port: u16 },
+// Poor man's local discovery using UDP multicast.
+// XXX: We should probably use mDNS, but so far all libraries I tried had some issues.
+pub struct ReplicaDiscovery {
+    id: Id,
+    listener_port: u16,
+    socket: tokio::net::UdpSocket,
+    found_replicas: Mutex<HashSet<SocketAddr>>,
+    notify: Arc<Notify>,
+    abort_handles: AbortHandles,
 }
 
-impl State {
-    fn new(listener_port: u16, notify: Arc<Notify>) -> io::Result<Self> {
+impl ReplicaDiscovery {
+    pub fn new(listener_port: u16) -> io::Result<AsyncObject<Self>> {
+        let notify = Arc::new(Notify::new());
+
+        let n = Arc::new(ReplicaDiscovery {
+            id: rand::random(),
+            listener_port,
+            socket: Self::create_multicast_socket()?,
+            found_replicas: Mutex::new(HashSet::new()),
+            notify: notify.clone(),
+            abort_handles: AbortHandles::new(),
+        });
+
+        let n1 = n.clone();
+        let n2 = n.clone();
+
+        n.abortable_spawn(async move {
+            n1.run_beacon().await.unwrap();
+        });
+
+        n.abortable_spawn(async move {
+            n2.run_receiver().await.unwrap();
+        });
+
+        Ok(AsyncObject::new(n))
+    }
+
+    pub async fn wait_for_activity(&self) -> HashSet<SocketAddr> {
+        loop {
+            self.notify.notified().await;
+
+            let mut found = self.found_replicas.lock().await;
+
+            if found.is_empty() {
+                continue;
+            }
+
+            let ret = found.clone();
+            found.clear();
+
+            return ret;
+        }
+    }
+
+    fn create_multicast_socket() -> io::Result<tokio::net::UdpSocket> {
         // Using net2 because, std::net, nor async_std::net nor tokio::net lets
         // one set reuse_address(true) before "binding" the socket.
         let sync_socket = net2::UdpBuilder::new_v4()?
@@ -114,13 +90,7 @@ impl State {
         // but is if moved to tokio::net::UdpSocket.
         sync_socket.set_nonblocking(true)?;
 
-        Ok(Self {
-            id: rand::random(),
-            listener_port,
-            socket: tokio::net::UdpSocket::from_std(sync_socket).unwrap(),
-            found_replicas: Mutex::new(HashSet::new()),
-            notify,
-        })
+        tokio::net::UdpSocket::from_std(sync_socket)
     }
 
     async fn run_beacon(&self) -> io::Result<()> {
@@ -133,7 +103,7 @@ impl State {
         }
     }
 
-    async fn run_receiver(&self) -> io::Result<()> {
+    async fn run_receiver(self: Arc<Self>) -> io::Result<()> {
         let mut recv_buffer = vec![0; 4096];
 
         let mut seen = LruCache::new(256);
@@ -192,5 +162,17 @@ impl State {
             id: self.id,
             port: self.listener_port,
         }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+enum Message {
+    ImHereYouAll { id: Id, port: u16 },
+    Reply { id: Id, port: u16 },
+}
+
+impl AsyncObjectTrait for ReplicaDiscovery {
+    fn abort_handles(&self) -> &AbortHandles {
+        &self.abort_handles
     }
 }
