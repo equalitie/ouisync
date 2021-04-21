@@ -21,6 +21,8 @@ pub struct Blob {
     current_block: OpenBlock,
 }
 
+// TODO: figure out how to implement `flush` on `Drop`.
+
 impl Blob {
     /// Opens an existing blob.
     pub async fn open(
@@ -175,7 +177,7 @@ impl Blob {
         // Write the block to the block store.
         block::write(&self.pool, &self.current_block.id, &buffer, &auth_tag).await?;
 
-        // Write the block to the index unless this is the root blob.
+        // Write the block to the index unless it is the head block of the root blob.
         if let Some(parent_name) = &self.current_block.parent_name {
             let child_tag = ChildTag::new(
                 &self.secret_key,
@@ -353,5 +355,62 @@ impl OpenBlock {
         }
 
         n
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rand::{distributions::Standard, Rng};
+
+    #[ignore]
+    #[tokio::test]
+    async fn root_blob() {
+        let pool = init_db().await;
+        let secret_key = SecretKey::random();
+
+        let name = BlockName::random();
+
+        // Create a blob spanning 2.5 blocks
+        let orig_content: Vec<u8> = rand::thread_rng()
+            .sample_iter(Standard)
+            .take(5 * BLOCK_SIZE / 2)
+            .collect();
+
+        let mut blob = Blob::create(pool.clone(), secret_key.clone(), None, 0, name)
+            .await
+            .unwrap();
+        blob.write(&orig_content[..]).await.unwrap();
+        blob.flush().await.unwrap();
+        drop(blob);
+
+        // Re-open the blob and read its contents.
+        let mut blob = Blob::open(pool.clone(), secret_key.clone(), None, 0, todo!())
+            .await
+            .unwrap();
+
+        // Read it in chunks of this size.
+        let chunk_size = 1024;
+        let mut read_contents = vec![0; chunk_size];
+        let mut read_len = 0;
+
+        loop {
+            let len = blob.read(&mut read_contents[read_len..]).await.unwrap();
+            if len == 0 {
+                break; // done
+            }
+
+            read_len += len;
+            read_contents.resize(read_contents.len() + chunk_size, 0);
+        }
+
+        assert_eq!(&read_contents[..read_len], &orig_content[..])
+    }
+
+    async fn init_db() -> db::Pool {
+        let pool = db::Pool::connect(":memory:").await.unwrap();
+        index::init(&pool).await.unwrap();
+        block::init(&pool).await.unwrap();
+        pool
     }
 }
