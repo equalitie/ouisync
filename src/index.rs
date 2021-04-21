@@ -82,9 +82,9 @@ pub async fn exists(pool: &db::Pool, child_tag: &ChildTag) -> Result<bool, Error
 #[repr(u8)]
 pub enum BlockKind {
     // First block in a blob. The child tag points to the first block of the containing directory.
-    Head,
+    Head = 0,
     // Other than first block in a blob. The child tag points to the first block of the same blob.
-    Normal,
+    Trunk = 1,
 }
 
 /// Encrypted block parent pointer.

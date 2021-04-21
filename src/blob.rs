@@ -193,7 +193,7 @@ impl Blob {
         let (parent_name, seq) = self.next_block_details();
 
         if let Some((id, content)) = self.read_next_block(&parent_name, seq).await? {
-            self.current_block = OpenBlock::normal(parent_name, seq, id, content);
+            self.current_block = OpenBlock::trunk(parent_name, seq, id, content);
             Ok(true)
         } else {
             Ok(false)
@@ -212,7 +212,7 @@ impl Blob {
                 (BlockId::random(), BlockBuffer::new())
             };
 
-        self.current_block = OpenBlock::normal(parent_name, seq, id, content);
+        self.current_block = OpenBlock::trunk(parent_name, seq, id, content);
 
         Ok(())
     }
@@ -238,7 +238,7 @@ impl Blob {
         parent_name: &BlockName,
         seq: u32,
     ) -> Result<Option<(BlockId, BlockBuffer)>, Error> {
-        let child_tag = ChildTag::new(&self.secret_key, parent_name, seq, BlockKind::Normal);
+        let child_tag = ChildTag::new(&self.secret_key, parent_name, seq, BlockKind::Trunk);
 
         match index::get(&self.pool, &child_tag).await {
             Ok(id) => {
@@ -302,12 +302,12 @@ struct OpenBlock {
 }
 
 impl OpenBlock {
-    // Create non-head open block.
-    fn normal(parent_name: BlockName, seq: u32, id: BlockId, content: BlockBuffer) -> Self {
+    // Create trunk (non-head) open block.
+    fn trunk(parent_name: BlockName, seq: u32, id: BlockId, content: BlockBuffer) -> Self {
         Self {
             parent_name: Some(parent_name),
             seq,
-            kind: BlockKind::Normal,
+            kind: BlockKind::Trunk,
             id,
             content,
             position: 0,
@@ -317,14 +317,14 @@ impl OpenBlock {
     fn nonce_index(&self) -> u32 {
         match self.kind {
             BlockKind::Head => 0,
-            BlockKind::Normal => self.seq,
+            BlockKind::Trunk => self.seq,
         }
     }
 
     fn next_seq(&self) -> u32 {
         match self.kind {
             BlockKind::Head => 1,
-            BlockKind::Normal => {
+            BlockKind::Trunk => {
                 // TODO: should we return an error instead?
                 self.seq.checked_add(1).expect("too many blocks per blob")
             }
