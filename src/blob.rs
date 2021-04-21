@@ -30,17 +30,14 @@ impl Blob {
         secret_key: SecretKey,
         directory_name: Option<BlockName>,
         directory_seq: u32,
-        id: BlockId,
     ) -> Result<Self, Error> {
-        // Check directory name matches.
-        if let Some(parent_name) = &directory_name {
+        let id = if let Some(parent_name) = &directory_name {
             let child_tag = ChildTag::new(&secret_key, parent_name, directory_seq, BlockKind::Head);
-            match index::get(&pool, &child_tag).await {
-                Ok(actual_id) if actual_id == id => (),
-                Ok(_) | Err(Error::BlockIdNotFound) => return Err(Error::WrongDirectoryEntry),
-                Err(error) => return Err(error),
-            }
-        }
+            index::get(&pool, &child_tag).await?
+        } else {
+            assert_eq!(directory_seq, 0);
+            index::get_root(&pool).await?
+        };
 
         let mut content = BlockBuffer::new();
         let auth_tag = block::read(&pool, &id, &mut content).await?;
@@ -74,21 +71,12 @@ impl Blob {
     }
 
     /// Creates new blob.
-    pub async fn create(
+    pub fn create(
         pool: db::Pool,
         secret_key: SecretKey,
         directory_name: Option<BlockName>,
         directory_seq: u32,
-        name: BlockName,
-    ) -> Result<Self, Error> {
-        // Check the directory entry is unique
-        if let Some(parent_name) = &directory_name {
-            let child_tag = ChildTag::new(&secret_key, parent_name, directory_seq, BlockKind::Head);
-            if index::exists(&pool, &child_tag).await? {
-                return Err(Error::WrongDirectoryEntry);
-            }
-        }
-
+    ) -> Self {
         let nonce_sequence = NonceSequence::random();
         let position = nonce_sequence.prefix().len();
         let mut content = BlockBuffer::new();
@@ -98,20 +86,17 @@ impl Blob {
             parent_name: directory_name,
             seq: directory_seq,
             kind: BlockKind::Head,
-            id: BlockId {
-                name,
-                version: BlockVersion::random(),
-            },
+            id: BlockId::random(),
             content,
             position,
         };
 
-        Ok(Self {
+        Self {
             pool,
             secret_key,
             nonce_sequence,
             current_block,
-        })
+        }
     }
 
     /// Reads data from this blob into `buffer`, advancing the internal cursor. Returns the
@@ -186,6 +171,8 @@ impl Blob {
                 self.current_block.kind,
             );
             index::insert(&self.pool, &self.current_block.id, &child_tag).await?;
+        } else {
+            index::insert_root(&self.pool, &self.current_block.id).await?;
         }
 
         Ok(())
@@ -364,12 +351,10 @@ mod tests {
     use rand::{distributions::Standard, Rng};
 
     #[ignore]
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn root_blob() {
         let pool = init_db().await;
         let secret_key = SecretKey::random();
-
-        let name = BlockName::random();
 
         // Create a blob spanning 2.5 blocks
         let orig_content: Vec<u8> = rand::thread_rng()
@@ -377,15 +362,13 @@ mod tests {
             .take(5 * BLOCK_SIZE / 2)
             .collect();
 
-        let mut blob = Blob::create(pool.clone(), secret_key.clone(), None, 0, name)
-            .await
-            .unwrap();
+        let mut blob = Blob::create(pool.clone(), secret_key.clone(), None, 0);
         blob.write(&orig_content[..]).await.unwrap();
         blob.flush().await.unwrap();
         drop(blob);
 
         // Re-open the blob and read its contents.
-        let mut blob = Blob::open(pool.clone(), secret_key.clone(), None, 0, todo!())
+        let mut blob = Blob::open(pool.clone(), secret_key.clone(), None, 0)
             .await
             .unwrap();
 

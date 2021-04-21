@@ -49,13 +49,13 @@ pub async fn read(pool: &db::Pool, id: &BlockId, buffer: &mut [u8]) -> Result<Au
         Err(error) => return Err(Error::QueryDb(error)),
     };
 
-    let auth_tag: &[u8] = row.get(1);
+    let auth_tag: &[u8] = row.get(0);
     if auth_tag.len() != <AuthTag as GenericSequence<_>>::Length::USIZE {
         return Err(Error::MalformedData);
     }
     let auth_tag = AuthTag::clone_from_slice(auth_tag);
 
-    let content: &[u8] = row.get(2);
+    let content: &[u8] = row.get(1);
     if content.len() != BLOCK_SIZE {
         return Err(Error::WrongBlockLength(content.len()));
     }
@@ -112,7 +112,7 @@ mod tests {
         write(&pool, &id, &content, &auth_tag).await.unwrap();
 
         let mut buffer = vec![0; BLOCK_SIZE];
-        read(&pool, &id, &mut buffer).await.unwrap();
+        let _ = read(&pool, &id, &mut buffer).await.unwrap();
 
         assert_eq!(buffer, content);
     }

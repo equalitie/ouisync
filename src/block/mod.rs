@@ -138,7 +138,10 @@ impl BlockId {
     }
 
     pub fn to_array(&self) -> [u8; BLOCK_NAME_SIZE + BLOCK_VERSION_SIZE] {
-        todo!()
+        let mut array = [0; BLOCK_NAME_SIZE + BLOCK_VERSION_SIZE];
+        array[..BLOCK_NAME_SIZE].copy_from_slice(self.name.as_ref());
+        array[BLOCK_NAME_SIZE..].copy_from_slice(self.version.as_ref());
+        array
     }
 }
 

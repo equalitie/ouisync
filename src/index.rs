@@ -5,17 +5,21 @@ use crate::{
     error::Error,
 };
 use sha3::{Digest, Sha3_256};
-use sqlx::Row;
+use sqlx::{sqlite::SqliteRow, Row};
 use std::{convert::TryFrom, slice};
 
 /// Initializes the index. Creates the required database schema unless already exists.
 pub async fn init(pool: &db::Pool) -> Result<(), Error> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS index_leaves (
-                 block_name    BLOB NOT NULL,
-                 block_version BLOB NOT NULL,
-                 child_tag     BLOB NOT NULL UNIQUE,
-             )",
+             block_name    BLOB NOT NULL,
+             block_version BLOB NOT NULL,
+             child_tag     BLOB NOT NULL UNIQUE
+         );
+         CREATE TABLE IF NOT EXISTS branches (
+             root_block_name    BLOB NOT NULL,
+             root_block_version BLOB NOT NULL
+         );",
     )
     .execute(pool)
     .await
@@ -24,8 +28,39 @@ pub async fn init(pool: &db::Pool) -> Result<(), Error> {
     Ok(())
 }
 
+/// Insert the root block into the index
+pub async fn insert_root(pool: &db::Pool, block_id: &BlockId) -> Result<(), Error> {
+    // NOTE: currently only one branch is supported
+    sqlx::query(
+        "BEGIN;
+         DELETE FROM branches;
+         INSERT INTO branches (root_block_name, root_block_version) VALUES (?, ?);
+         COMMIT;",
+    )
+    .bind(block_id.name.as_ref())
+    .bind(block_id.version.as_ref())
+    .execute(pool)
+    .await
+    .map_err(Error::QueryDb)?;
+
+    Ok(())
+}
+
+/// Get the root block from the index.
+pub async fn get_root(pool: &db::Pool) -> Result<BlockId, Error> {
+    // NOTE: currently only one branch is supported
+    match sqlx::query("SELECT root_block_name, root_block_version FROM branches LIMIT 1")
+        .fetch_optional(pool)
+        .await
+    {
+        Ok(Some(row)) => get_block_id(&row),
+        Ok(None) => Err(Error::BlockIdNotFound),
+        Err(error) => Err(Error::QueryDb(error)),
+    }
+}
+
 /// Insert a new block into the index.
-// TODO: insert or update
+// TODO: insert or update?
 // TODO: take `Transaction` instead of `Pool`
 pub async fn insert(
     pool: &db::Pool,
@@ -45,37 +80,25 @@ pub async fn insert(
 
 /// Retrieve `BlockId` of a block with `child_tag`.
 pub async fn get(pool: &db::Pool, child_tag: &ChildTag) -> Result<BlockId, Error> {
-    let row =
-        match sqlx::query("SELECT block_name, block_version FROM index_leaves WHERE child_tag = ?")
-            .bind(child_tag.as_ref())
-            .fetch_optional(pool)
-            .await
-        {
-            Ok(Some(row)) => row,
-            Ok(None) => return Err(Error::BlockIdNotFound),
-            Err(error) => return Err(Error::QueryDb(error)),
-        };
-
-    let name: &[u8] = row.get(1);
-    let name = BlockName::try_from(name)?;
-
-    let version: &[u8] = row.get(2);
-    let version = BlockVersion::try_from(version)?;
-
-    Ok(BlockId { name, version })
-}
-
-/// Check if an entry with `child_tag` exists in the index.
-pub async fn exists(pool: &db::Pool, child_tag: &ChildTag) -> Result<bool, Error> {
-    match sqlx::query("SELECT 1 FROM index_leaves WHERE child_tag = ?")
+    match sqlx::query("SELECT block_name, block_version FROM index_leaves WHERE child_tag = ?")
         .bind(child_tag.as_ref())
         .fetch_optional(pool)
         .await
     {
-        Ok(Some(_)) => Ok(true),
-        Ok(None) => Ok(false),
+        Ok(Some(row)) => get_block_id(&row),
+        Ok(None) => Err(Error::BlockIdNotFound),
         Err(error) => Err(Error::QueryDb(error)),
     }
+}
+
+fn get_block_id(row: &SqliteRow) -> Result<BlockId, Error> {
+    let name: &[u8] = row.get(0);
+    let name = BlockName::try_from(name)?;
+
+    let version: &[u8] = row.get(1);
+    let version = BlockVersion::try_from(version)?;
+
+    Ok(BlockId { name, version })
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
