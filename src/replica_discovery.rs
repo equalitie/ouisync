@@ -1,16 +1,17 @@
-use std::{io,
-    sync::Arc,
-    net::{ Ipv4Addr, SocketAddr },
-    time::Duration,
-    collections::HashSet
-};
-use serde::{Serialize, Deserialize};
-use rand::{Rng};
 use futures::future::{abortable, AbortHandle};
-use tokio::sync::{Notify, Mutex};
-use tokio::task::{spawn};
-use tokio::time::{sleep};
 use lru::LruCache;
+use rand::Rng;
+use serde::{Deserialize, Serialize};
+use std::{
+    collections::HashSet,
+    io,
+    net::{Ipv4Addr, SocketAddr},
+    sync::Arc,
+    time::Duration,
+};
+use tokio::sync::{Mutex, Notify};
+use tokio::task::spawn;
+use tokio::time::sleep;
 
 // Poor man's local discovery using UDP multicast.
 // XXX: We should probably use mDNS, but so far all libraries I tried had some issues.
@@ -146,15 +147,17 @@ impl State {
             };
 
             let (is_rq, id, listener_port) = match r {
-                Message::ImHereYouAll{id, port} => (true,  id, port),
-                Message::Reply{id, port}        => (false, id, port),
+                Message::ImHereYouAll { id, port } => (true, id, port),
+                Message::Reply { id, port } => (false, id, port),
             };
 
             if id == self.id {
                 continue;
             }
 
-            if seen.get(&id).is_some() { continue; }
+            if seen.get(&id).is_some() {
+                continue;
+            }
 
             if is_rq {
                 self.send(&self.reply(), addr).await?;
@@ -171,17 +174,23 @@ impl State {
         }
     }
 
-    async fn send(&self, message : &Message, addr : SocketAddr) -> io::Result<()> {
+    async fn send(&self, message: &Message, addr: SocketAddr) -> io::Result<()> {
         let data = bincode::serialize(&message).unwrap();
         self.socket.send_to(&data, addr).await?;
         Ok(())
     }
 
     fn query(&self) -> Message {
-        Message::ImHereYouAll{id: self.id, port: self.listener_port}
+        Message::ImHereYouAll {
+            id: self.id,
+            port: self.listener_port,
+        }
     }
 
     fn reply(&self) -> Message {
-        Message::Reply{id: self.id, port: self.listener_port}
+        Message::Reply {
+            id: self.id,
+            port: self.listener_port,
+        }
     }
 }

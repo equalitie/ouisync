@@ -1,9 +1,9 @@
 use crate::format;
-use serde::{Serialize, Deserialize};
 use rand::{
     distributions::{Distribution, Standard},
     Rng,
 };
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
 /// Size of replica ID in bytes.
