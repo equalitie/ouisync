@@ -60,14 +60,13 @@ pub async fn get_root(pool: &db::Pool) -> Result<BlockId, Error> {
 }
 
 /// Insert a new block into the index.
-// TODO: insert or update?
 // TODO: take `Transaction` instead of `Pool`
 pub async fn insert(
     pool: &db::Pool,
     block_id: &BlockId,
     child_tag: &ChildTag,
 ) -> Result<(), Error> {
-    sqlx::query("INSERT INTO index_leaves (block_name, block_version, child_tag) VALUES (?, ?, ?)")
+    sqlx::query("INSERT OR REPLACE INTO index_leaves (block_name, block_version, child_tag) VALUES (?, ?, ?)")
         .bind(block_id.name.as_ref())
         .bind(block_id.version.as_ref())
         .bind(child_tag.as_ref())

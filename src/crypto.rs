@@ -113,8 +113,7 @@ impl Drop for SecretKeyInner {
 
 const NONCE_SIZE: usize = <chacha20poly1305::Nonce as GenericSequence<_>>::Length::USIZE;
 const NONCE_COUNTER_SIZE: usize = mem::size_of::<u32>();
-
-pub const NONCE_PREFIX_SIZE: usize = NONCE_SIZE - NONCE_COUNTER_SIZE;
+const NONCE_PREFIX_SIZE: usize = NONCE_SIZE - NONCE_COUNTER_SIZE;
 
 /// Ordered sequence of nonces. Useful when encrypting multiple messages whose order need
 /// to be maintained.
