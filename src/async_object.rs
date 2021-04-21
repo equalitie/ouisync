@@ -18,8 +18,6 @@ impl<T: AsyncObjectTrait> AsyncObject<T> {
 pub trait AsyncObjectTrait {
     fn abort_handles(&self) -> &AbortHandles;
 
-    fn foo(&self) {}
-
     fn abortable_spawn<Task>(&self, task: Task)
     where
         Task: Future + Send + 'static,
@@ -33,6 +31,14 @@ pub trait AsyncObjectTrait {
             .push(abort_handle);
         spawn(future);
     }
+
+    fn abort(&self) {
+        let handles = self.abort_handles().abort_handles.write().unwrap();
+
+        for h in &*handles {
+            h.abort();
+        }
+    }
 }
 
 impl<T: AsyncObjectTrait> Deref for AsyncObject<T> {
@@ -45,11 +51,7 @@ impl<T: AsyncObjectTrait> Deref for AsyncObject<T> {
 
 impl<T: AsyncObjectTrait> Drop for AsyncObject<T> {
     fn drop(&mut self) {
-        let handles = self.state.abort_handles().abort_handles.write().unwrap();
-
-        for h in &*handles {
-            h.abort();
-        }
+        self.state.abort();
     }
 }
 
