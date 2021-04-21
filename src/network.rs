@@ -1,40 +1,33 @@
+use crate::async_object::{AbortHandles, AsyncObject, AsyncObjectTrait};
 use crate::object_stream::ObjectStream;
 use crate::replica_discovery::ReplicaDiscovery;
 use crate::replica_id::ReplicaId;
 
-use std::{
-    collections::{HashMap, HashSet},
-    fmt, io,
-    net::SocketAddr,
-    sync::Arc,
-};
-
-use futures::future::AbortHandle;
+use std::{collections::HashMap, fmt, io, net::SocketAddr, sync::Arc};
 
 use tokio::{
     net::{TcpListener, TcpStream},
     sync::Mutex,
-    task::spawn,
 };
 
 pub struct Network {
-    _abort_handles: HashSet<AbortHandle>,
     this_replica_id: ReplicaId,
     replicas: Mutex<HashMap<ReplicaId, Replica>>,
+    abort_handles: AbortHandles,
 }
 
 impl Network {
-    pub fn new(_enable_discovery: bool) -> io::Result<Arc<Network>> {
+    pub fn new(_enable_discovery: bool) -> io::Result<AsyncObject<Network>> {
         let n = Arc::new(Network {
-            _abort_handles: HashSet::new(),
             this_replica_id: ReplicaId::random(),
             replicas: Mutex::new(HashMap::new()),
+            abort_handles: AbortHandles::new(),
         });
         let n_ = n.clone();
-        spawn(async move {
+        n.abortable_spawn(async move {
             n_.start().await.unwrap();
         });
-        Ok(n)
+        Ok(AsyncObject::new(n))
     }
 
     async fn start(self: Arc<Self>) -> io::Result<()> {
@@ -44,21 +37,21 @@ impl Network {
         let s1 = self.clone();
         let s2 = self.clone();
 
-        spawn(s1.run_discovery(listener.local_addr().unwrap().port()));
-        spawn(s2.run_listener(listener));
+        self.abortable_spawn(s1.run_discovery(listener.local_addr().unwrap().port()));
+        self.abortable_spawn(s2.run_listener(listener));
 
         Ok(())
     }
 
     async fn run_discovery(self: Arc<Self>, listener_port: u16) -> io::Result<()> {
-        let mut discovery = ReplicaDiscovery::new(listener_port)?;
+        let discovery = ReplicaDiscovery::new(listener_port)?;
 
         loop {
             let found = discovery.wait_for_activity().await;
 
             for addr in found {
                 let s = self.clone();
-                spawn(async move {
+                self.abortable_spawn(async move {
                     let socket = match TcpStream::connect(addr).await {
                         Ok(socket) => socket,
                         Err(_) => return,
@@ -75,7 +68,7 @@ impl Network {
         loop {
             let (socket, _addr) = listener.accept().await?;
             let s = self.clone();
-            spawn(async move {
+            self.abortable_spawn(async move {
                 s.handle_new_connection(ConnectionType::Accepted, socket)
                     .await
                     .ok();
@@ -107,6 +100,12 @@ impl Network {
 
         println!("{:?}", replica);
         Ok(())
+    }
+}
+
+impl AsyncObjectTrait for Network {
+    fn abort_handles(&self) -> &AbortHandles {
+        &self.abort_handles
     }
 }
 
