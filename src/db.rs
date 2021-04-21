@@ -1,4 +1,4 @@
-use crate::error::Error;
+use crate::{block, error::Error, index};
 use sqlx::{sqlite::SqliteConnectOptions, SqlitePool};
 use std::path::Path;
 use tokio::fs;
@@ -21,6 +21,10 @@ pub async fn init(path: impl AsRef<Path>) -> Result<Pool, Error> {
     )
     .await
     .map_err(Error::ConnectToDb)?;
+
+    // Create the schema
+    block::init(&pool).await?;
+    index::init(&pool).await?;
 
     Ok(pool)
 }

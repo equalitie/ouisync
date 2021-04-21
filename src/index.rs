@@ -8,70 +8,64 @@ use sha3::{Digest, Sha3_256};
 use sqlx::Row;
 use std::{convert::TryFrom, slice};
 
-/// The repository index. Contains information about the repository structure, e.g. which
-/// blocks belong to which blobs.
-pub struct Index {
-    pool: db::Pool,
-}
-
-impl Index {
-    /// Opens index using the given database pool.
-    pub async fn open(pool: db::Pool) -> Result<Self, Error> {
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS index_leaves (
+/// Initializes the index. Creates the required database schema unless already exists.
+pub async fn init(pool: &db::Pool) -> Result<(), Error> {
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS index_leaves (
                  block_name    BLOB NOT NULL,
                  block_version BLOB NOT NULL,
                  child_tag     BLOB NOT NULL UNIQUE,
              )",
-        )
-        .execute(&pool)
-        .await
-        .map_err(Error::CreateDbSchema)?;
+    )
+    .execute(pool)
+    .await
+    .map_err(Error::CreateDbSchema)?;
 
-        Ok(Self { pool })
-    }
+    Ok(())
+}
 
-    /// Insert a new block into the index.
-    // TODO: insert or update
-    pub async fn insert(&self, block_id: &BlockId, child_tag: &ChildTag) -> Result<(), Error> {
-        sqlx::query(
-            "INSERT INTO index_leaves (block_name, block_version, child_tag) VALUES (?, ?, ?)",
-        )
+/// Insert a new block into the index.
+// TODO: insert or update
+// TODO: take `Transaction` instead of `Pool`
+pub async fn insert(
+    pool: &db::Pool,
+    block_id: &BlockId,
+    child_tag: &ChildTag,
+) -> Result<(), Error> {
+    sqlx::query("INSERT INTO index_leaves (block_name, block_version, child_tag) VALUES (?, ?, ?)")
         .bind(block_id.name.as_ref())
         .bind(block_id.version.as_ref())
         .bind(child_tag.as_ref())
-        .execute(&self.pool)
+        .execute(pool)
         .await
         .map_err(Error::QueryDb)?;
 
-        Ok(())
-    }
+    Ok(())
+}
 
-    /// Retrieve `BlockId` of a block with `child_tag`.
-    pub async fn get(&self, child_tag: &ChildTag) -> Result<BlockId, Error> {
-        let row = match sqlx::query(
-            "SELECT block_name, block_version FROM index_leaves WHERE child_tag = ?",
-        )
-        .bind(child_tag.as_ref())
-        .fetch_optional(&self.pool)
-        .await
+/// Retrieve `BlockId` of a block with `child_tag`.
+pub async fn get(pool: &db::Pool, child_tag: &ChildTag) -> Result<BlockId, Error> {
+    let row =
+        match sqlx::query("SELECT block_name, block_version FROM index_leaves WHERE child_tag = ?")
+            .bind(child_tag.as_ref())
+            .fetch_optional(pool)
+            .await
         {
             Ok(Some(row)) => row,
             Ok(None) => return Err(Error::BlockIdNotFound),
             Err(error) => return Err(Error::QueryDb(error)),
         };
 
-        let name: &[u8] = row.get(1);
-        let name = BlockName::try_from(name)?;
+    let name: &[u8] = row.get(1);
+    let name = BlockName::try_from(name)?;
 
-        let version: &[u8] = row.get(2);
-        let version = BlockVersion::try_from(version)?;
+    let version: &[u8] = row.get(2);
+    let version = BlockVersion::try_from(version)?;
 
-        Ok(BlockId { name, version })
-    }
+    Ok(BlockId { name, version })
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
 #[repr(u8)]
 pub enum BlockKind {
     // First block in a blob. The child tag points to the first block of the containing directory.

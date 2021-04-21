@@ -1,6 +1,6 @@
 mod store;
 
-pub use self::store::BlockStore;
+pub use self::store::{init, read, write};
 
 use crate::format;
 use rand::{
@@ -130,8 +130,11 @@ pub struct BlockId {
 }
 
 impl BlockId {
-    pub fn new(name: BlockName, version: BlockVersion) -> Self {
-        Self { name, version }
+    pub fn random() -> Self {
+        Self {
+            name: BlockName::random(),
+            version: BlockVersion::random(),
+        }
     }
 
     pub fn to_array(&self) -> [u8; BLOCK_NAME_SIZE + BLOCK_VERSION_SIZE] {

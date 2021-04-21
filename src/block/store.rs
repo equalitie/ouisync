@@ -1,115 +1,118 @@
 use super::{BlockId, BLOCK_SIZE};
-use crate::{crypto::AuthTag, db, error::Error};
+use crate::{
+    crypto::{
+        generic_array::{sequence::GenericSequence, typenum::Unsigned},
+        AuthTag,
+    },
+    db,
+    error::Error,
+};
 use sqlx::Row;
 
-pub struct BlockStore {
-    pool: db::Pool,
+/// Initializes the block store. Creates the required database schema unless already exists.
+pub async fn init(pool: &db::Pool) -> Result<(), Error> {
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS blocks (
+             name     BLOB NOT NULL,
+             version  BLOB NOT NULL,
+             auth_tag BLOB NOT NULL,
+             content  BLOB NOT NULL,
+             PRIMARY KEY (name, version)
+         ) WITHOUT ROWID",
+    )
+    .execute(pool)
+    .await
+    .map_err(Error::CreateDbSchema)?;
+
+    Ok(())
 }
 
-impl BlockStore {
-    /// Opens block store using the given database pool.
-    pub async fn open(pool: db::Pool) -> Result<Self, Error> {
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS blocks (
-                 name     BLOB NOT NULL,
-                 version  BLOB NOT NULL,
-                 auth_tag BLOB NOT NULL,
-                 content  BLOB NOT NULL,
-                 PRIMARY KEY (name, version)
-             ) WITHOUT ROWID",
-        )
-        .execute(&pool)
+/// Reads a block from the store into a buffer.
+///
+/// # Panics
+///
+/// Panics if `buffer` length is less than [`BLOCK_SIZE`].
+pub async fn read(pool: &db::Pool, id: &BlockId, buffer: &mut [u8]) -> Result<AuthTag, Error> {
+    assert!(
+        buffer.len() >= BLOCK_SIZE,
+        "insufficient buffer length for block read"
+    );
+
+    let row = sqlx::query("SELECT auth_tag, content FROM blocks WHERE name = ? AND version = ?")
+        .bind(id.name.as_ref())
+        .bind(id.version.as_ref())
+        .fetch_optional(pool)
+        .await;
+    let row = match row {
+        Ok(Some(row)) => row,
+        Ok(None) => return Err(Error::BlockNotFound(*id)),
+        Err(error) => return Err(Error::QueryDb(error)),
+    };
+
+    let auth_tag: &[u8] = row.get(1);
+    if auth_tag.len() != <AuthTag as GenericSequence<_>>::Length::USIZE {
+        return Err(Error::MalformedData);
+    }
+    let auth_tag = AuthTag::clone_from_slice(auth_tag);
+
+    let content: &[u8] = row.get(2);
+    if content.len() != BLOCK_SIZE {
+        return Err(Error::WrongBlockLength(content.len()));
+    }
+
+    buffer.copy_from_slice(content);
+
+    Ok(auth_tag)
+}
+
+/// Writes a block into the store.
+///
+/// # Panics
+///
+/// Panics if buffer length is not equal to [`BLOCK_SIZE`].
+///
+pub async fn write(
+    pool: &db::Pool,
+    id: &BlockId,
+    buffer: &[u8],
+    auth_tag: &AuthTag,
+) -> Result<(), Error> {
+    assert_eq!(
+        buffer.len(),
+        BLOCK_SIZE,
+        "incorrect buffer length for block write"
+    );
+
+    sqlx::query("INSERT INTO blocks (name, version, auth_tag, content) VALUES (?, ?, ?, ?)")
+        .bind(id.name.as_ref())
+        .bind(id.version.as_ref())
+        .bind(auth_tag.as_slice())
+        .bind(buffer)
+        .execute(pool)
         .await
-        .map_err(Error::CreateDbSchema)?;
+        .map_err(Error::QueryDb)?;
 
-        Ok(Self { pool })
-    }
-
-    /// Reads a block from the store into a buffer.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `buffer` length is less than [`BLOCK_SIZE`].
-    pub async fn read(&self, id: &BlockId, buffer: &mut [u8]) -> Result<(), Error> {
-        assert!(
-            buffer.len() >= BLOCK_SIZE,
-            "insufficient buffer length for block read"
-        );
-
-        let row =
-            sqlx::query("SELECT auth_tag, content FROM blocks WHERE name = ? AND version = ?")
-                .bind(id.name.as_ref())
-                .bind(id.version.as_ref())
-                .fetch_optional(&self.pool)
-                .await;
-        let row = match row {
-            Ok(Some(row)) => row,
-            Ok(None) => return Err(Error::BlockNotFound(*id)),
-            Err(error) => return Err(Error::QueryDb(error)),
-        };
-
-        let content: &[u8] = row.try_get(1).map_err(Error::QueryDb)?;
-        if content.len() != BLOCK_SIZE {
-            return Err(Error::WrongBlockLength(content.len()));
-        }
-
-        buffer.copy_from_slice(content);
-
-        // TODO: return auth tag
-
-        Ok(())
-    }
-
-    /// Writes a block into the store.
-    ///
-    /// # Panics
-    ///
-    /// Panics if buffer length is not equal to [`BLOCK_SIZE`].
-    ///
-    pub async fn write(
-        &self,
-        id: &BlockId,
-        buffer: &[u8],
-        auth_tag: &AuthTag,
-    ) -> Result<(), Error> {
-        assert_eq!(
-            buffer.len(),
-            BLOCK_SIZE,
-            "incorrect buffer length for block write"
-        );
-
-        sqlx::query("INSERT INTO blocks (name, version, auth_tag, content) VALUES (?, ?, ?, ?)")
-            .bind(id.name.as_ref())
-            .bind(id.version.as_ref())
-            .bind(auth_tag.as_slice())
-            .bind(buffer)
-            .execute(&self.pool)
-            .await
-            .map_err(Error::QueryDb)?;
-
-        Ok(())
-    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::block::{BlockName, BlockVersion};
     use rand::Rng;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn write_and_read() {
         let pool = make_pool().await;
-        let store = BlockStore::open(pool).await.unwrap();
+        init(&pool).await.unwrap();
 
-        let id = random_block_id();
+        let id = BlockId::random();
         let content = random_block_content();
         let auth_tag = AuthTag::default();
 
-        store.write(&id, &content, &auth_tag).await.unwrap();
+        write(&pool, &id, &content, &auth_tag).await.unwrap();
 
         let mut buffer = vec![0; BLOCK_SIZE];
-        store.read(&id, &mut buffer).await.unwrap();
+        read(&pool, &id, &mut buffer).await.unwrap();
 
         assert_eq!(buffer, content);
     }
@@ -117,12 +120,12 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn try_read_missing_block() {
         let pool = make_pool().await;
-        let store = BlockStore::open(pool).await.unwrap();
-        let id = random_block_id();
+        init(&pool).await.unwrap();
+        let id = BlockId::random();
 
         let mut buffer = vec![0; BLOCK_SIZE];
 
-        match store.read(&id, &mut buffer).await {
+        match read(&pool, &id, &mut buffer).await {
             Err(Error::BlockNotFound(missing_id)) => assert_eq!(missing_id, id),
             Err(error) => panic!("unexpected error: {:?}", error),
             Ok(_) => panic!("unexpected success"),
@@ -132,17 +135,17 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn try_write_existing_block() {
         let pool = make_pool().await;
-        let store = BlockStore::open(pool).await.unwrap();
+        init(&pool).await.unwrap();
 
-        let id = random_block_id();
+        let id = BlockId::random();
         let content0 = random_block_content();
         let auth_tag = AuthTag::default();
 
-        store.write(&id, &content0, &auth_tag).await.unwrap();
+        write(&pool, &id, &content0, &auth_tag).await.unwrap();
 
         let content1 = random_block_content();
 
-        match store.write(&id, &content1, &auth_tag).await {
+        match write(&pool, &id, &content1, &auth_tag).await {
             Err(Error::QueryDb(_)) => (),
             Err(error) => panic!("unexpected error: {:?}", error),
             Ok(_) => panic!("unexpected success"),
@@ -151,10 +154,6 @@ mod tests {
 
     async fn make_pool() -> db::Pool {
         db::Pool::connect(":memory:").await.unwrap()
-    }
-
-    fn random_block_id() -> BlockId {
-        BlockId::new(BlockName::random(), BlockVersion::random())
     }
 
     fn random_block_content() -> Vec<u8> {

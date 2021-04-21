@@ -1,14 +1,12 @@
-/// Re-export the aead module for convenience.
-pub use chacha20poly1305::aead;
+/// Re-export the aead and generic_array module for convenience.
+pub use chacha20poly1305::aead::{self, generic_array};
 
+use self::generic_array::{sequence::GenericSequence, typenum::Unsigned, GenericArray};
 use crate::format;
 use chacha20poly1305::{ChaCha20Poly1305, Nonce};
 use rand::{CryptoRng, Rng};
-use sha3::{
-    digest::{generic_array::GenericArray, Digest},
-    Sha3_256,
-};
-use std::{fmt, sync::Arc};
+use sha3::{digest::Digest, Sha3_256};
+use std::{fmt, mem, sync::Arc};
 use zeroize::Zeroize;
 
 /// Wrapper for a 256-bit hash digest, for convenience. Also implements friendly formatting.
@@ -113,8 +111,12 @@ impl Drop for SecretKeyInner {
     }
 }
 
-const NONCE_PREFIX_SIZE: usize = 8;
+const NONCE_SIZE: usize = <chacha20poly1305::Nonce as GenericSequence<_>>::Length::USIZE;
+const NONCE_COUNTER_SIZE: usize = mem::size_of::<u32>();
+const NONCE_PREFIX_SIZE: usize = NONCE_SIZE - NONCE_COUNTER_SIZE;
 
+/// Ordered sequence of nonces. Useful when encrypting multiple messages whose order need
+/// to be maintained.
 pub struct NonceSequence {
     prefix: [u8; NONCE_PREFIX_SIZE],
 }
@@ -138,16 +140,5 @@ impl NonceSequence {
         nonce[..NONCE_PREFIX_SIZE].copy_from_slice(&self.prefix);
         nonce[NONCE_PREFIX_SIZE..].copy_from_slice(&index.to_le_bytes());
         nonce
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn nonce_sequence() {
-        let nonce = Nonce::default();
-        assert_eq!(nonce.len(), NONCE_PREFIX_SIZE + 4);
     }
 }

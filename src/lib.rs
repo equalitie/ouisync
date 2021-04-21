@@ -10,7 +10,7 @@ mod replica_discovery;
 mod repository;
 
 pub use self::{
-    block::{BlockId, BlockName, BlockStore, BlockVersion, BLOCK_SIZE},
+    block::{BlockId, BlockName, BlockVersion, BLOCK_SIZE},
     error::Error,
     replica_discovery::ReplicaDiscovery,
     repository::Repository,
