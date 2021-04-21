@@ -65,6 +65,19 @@ pub async fn get(pool: &db::Pool, child_tag: &ChildTag) -> Result<BlockId, Error
     Ok(BlockId { name, version })
 }
 
+/// Check if an entry with `child_tag` exists in the index.
+pub async fn exists(pool: &db::Pool, child_tag: &ChildTag) -> Result<bool, Error> {
+    match sqlx::query("SELECT 1 FROM index_leaves WHERE child_tag = ?")
+        .bind(child_tag.as_ref())
+        .fetch_optional(pool)
+        .await
+    {
+        Ok(Some(_)) => Ok(true),
+        Ok(None) => Ok(false),
+        Err(error) => Err(Error::QueryDb(error)),
+    }
+}
+
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 #[repr(u8)]
 pub enum BlockKind {

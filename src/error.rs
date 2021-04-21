@@ -25,6 +25,10 @@ pub enum Error {
     WrongBlockLength(usize),
     #[error("encryption / decryption failed")]
     Crypto,
+    // For new blobs means the directory entry is already taken by a different blob.
+    // For existing blobs means the directory entry doesn't match the blob.
+    #[error("wrong directory entry")]
+    WrongDirectoryEntry,
 }
 
 impl From<TryFromSliceError> for Error {
