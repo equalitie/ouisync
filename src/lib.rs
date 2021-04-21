@@ -1,6 +1,7 @@
 pub mod crypto;
 pub mod db;
 
+mod async_object;
 mod block;
 mod error;
 mod format;
@@ -12,6 +13,7 @@ mod replica_id;
 mod repository;
 
 pub use self::{
+    async_object::AsyncObject,
     block::{BlockId, BlockName, BlockStore, BlockVersion, BLOCK_SIZE},
     error::Error,
     network::Network,
