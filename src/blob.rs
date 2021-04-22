@@ -5,7 +5,7 @@ use crate::{
         AuthTag, Cipher, Nonce, NonceSequence, SecretKey,
     },
     db,
-    error::Error,
+    error::Result,
     index::{self, BlockKind, ChildTag},
 };
 use std::{
@@ -34,7 +34,7 @@ impl Blob {
         secret_key: SecretKey,
         directory_name: Option<BlockName>,
         directory_seq: u32,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self> {
         let context = Context {
             pool,
             secret_key,
@@ -116,7 +116,7 @@ impl Blob {
     /// Reads data from this blob into `buffer`, advancing the internal cursor. Returns the
     /// number of bytes actually read which might be less than `buffer.len()` if the portion of the
     /// blob past the internal cursor is smaller than `buffer.len()`.
-    pub async fn read(&mut self, mut buffer: &mut [u8]) -> Result<usize, Error> {
+    pub async fn read(&mut self, mut buffer: &mut [u8]) -> Result<usize> {
         let mut total_len = 0;
 
         loop {
@@ -147,7 +147,7 @@ impl Blob {
     }
 
     /// Writes `buffer` into this blob, advancing the blob's internal cursor.
-    pub async fn write(&mut self, mut buffer: &[u8]) -> Result<(), Error> {
+    pub async fn write(&mut self, mut buffer: &[u8]) -> Result<()> {
         // TODO: do all the db writes in a transaction
 
         loop {
@@ -180,7 +180,7 @@ impl Blob {
 
     /// Flushes this blob, ensuring that all intermediately buffered contents gets written to the
     /// store.
-    pub async fn flush(&mut self) -> Result<(), Error> {
+    pub async fn flush(&mut self) -> Result<()> {
         self.write_len().await?;
 
         if self.current_block.dirty {
@@ -201,7 +201,7 @@ impl Blob {
         number: u32,
         id: BlockId,
         content: Buffer,
-    ) -> Result<(), Error> {
+    ) -> Result<()> {
         // TODO: support head block as well
         assert!(number > 0);
 
@@ -218,7 +218,7 @@ impl Blob {
         Ok(())
     }
 
-    async fn read_block(&self, number: u32) -> Result<(BlockId, Buffer), Error> {
+    async fn read_block(&self, number: u32) -> Result<(BlockId, Buffer)> {
         self.context
             .read_block(
                 Some(&self.current_block.head_name),
@@ -228,7 +228,7 @@ impl Blob {
             .await
     }
 
-    async fn write_block(&self, id: &BlockId, number: u32, buffer: Buffer) -> Result<(), Error> {
+    async fn write_block(&self, id: &BlockId, number: u32, buffer: Buffer) -> Result<()> {
         self.context
             .write_block(
                 &self.current_block.head_name,
@@ -241,7 +241,7 @@ impl Blob {
     }
 
     // Write the current blob length into the blob header in the head block.
-    async fn write_len(&mut self) -> Result<(), Error> {
+    async fn write_len(&mut self) -> Result<()> {
         if self.current_block.number == 0 {
             let old_pos = self.current_block.content.pos;
             self.current_block.content.pos = self.nonce_sequence.prefix().len();
@@ -288,7 +288,7 @@ impl Context {
         head_name: Option<&BlockName>,
         number: u32,
         nonce_sequence: &NonceSequence,
-    ) -> Result<(BlockId, Buffer), Error> {
+    ) -> Result<(BlockId, Buffer)> {
         let (id, mut buffer, auth_tag) = self.load_block(head_name, number).await?;
 
         let nonce = nonce_sequence.get(number);
@@ -307,7 +307,7 @@ impl Context {
         &self,
         head_name: Option<&BlockName>,
         number: u32,
-    ) -> Result<(BlockId, Buffer, AuthTag), Error> {
+    ) -> Result<(BlockId, Buffer, AuthTag)> {
         let id = if let Some(child_tag) = self.child_tag(head_name, number) {
             index::get(&self.pool, &child_tag).await?
         } else {
@@ -326,7 +326,7 @@ impl Context {
         buffer: &mut [u8],
         auth_tag: &AuthTag,
         nonce: &Nonce,
-    ) -> Result<(), Error> {
+    ) -> Result<()> {
         let aad = id.to_array(); // "additional associated data"
         let cipher = Cipher::new(self.secret_key.as_array());
         cipher.decrypt_in_place_detached(&nonce, &aad, buffer, &auth_tag)?;
@@ -341,7 +341,7 @@ impl Context {
         nonce_sequence: &NonceSequence,
         id: &BlockId,
         mut buffer: Buffer,
-    ) -> Result<(), Error> {
+    ) -> Result<()> {
         let nonce = nonce_sequence.get(number);
         let aad = id.to_array(); // "additional associated data"
 
