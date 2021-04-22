@@ -1,9 +1,9 @@
-use futures::future::{abortable, AbortHandle, Future};
+use futures::future::{Future};
 use std::{
     ops::Deref,
     sync::{Arc, RwLock},
 };
-use tokio::task::spawn;
+use tokio::task::{spawn, JoinHandle};
 
 pub struct AsyncObject<T: AsyncObjectTrait> {
     state: Arc<T>,
@@ -20,16 +20,16 @@ pub trait AsyncObjectTrait {
 
     fn abortable_spawn<Task>(&self, task: Task)
     where
-        Task: Future + Send + 'static,
+        Task: Future<Output = ()> + Send + 'static,
         Task::Output: Send + 'static,
     {
-        let (future, abort_handle) = abortable(task);
+        let handle = spawn(task);
+
         self.abort_handles()
             .abort_handles
             .write()
             .unwrap()
-            .push(abort_handle);
-        spawn(future);
+            .push(handle);
     }
 
     fn abort(&self) {
@@ -56,7 +56,7 @@ impl<T: AsyncObjectTrait> Drop for AsyncObject<T> {
 }
 
 pub struct AbortHandles {
-    abort_handles: RwLock<Vec<AbortHandle>>,
+    abort_handles: RwLock<Vec<JoinHandle<()>>>,
 }
 
 impl AbortHandles {

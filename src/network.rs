@@ -43,8 +43,9 @@ impl Network {
         Ok(())
     }
 
-    async fn run_discovery(self: Arc<Self>, listener_port: u16) -> io::Result<()> {
-        let discovery = ReplicaDiscovery::new(listener_port)?;
+    async fn run_discovery(self: Arc<Self>, listener_port: u16) {
+        let discovery = ReplicaDiscovery::new(listener_port)
+            .expect("Failed to create ReplicaDiscovery");
 
         loop {
             let found = discovery.wait_for_activity().await;
@@ -64,9 +65,11 @@ impl Network {
         }
     }
 
-    async fn run_listener(self: Arc<Self>, listener: TcpListener) -> io::Result<()> {
+    async fn run_listener(self: Arc<Self>, listener: TcpListener) {
         loop {
-            let (socket, _addr) = listener.accept().await?;
+            let (socket, _addr) = listener.accept().await
+                .expect("Failed to start TcpListener");
+
             let s = self.clone();
             self.abortable_spawn(async move {
                 s.handle_new_connection(ConnectionType::Accepted, socket)
