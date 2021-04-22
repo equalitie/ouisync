@@ -21,6 +21,7 @@ pub struct Blob {
     nonce_sequence: NonceSequence,
     current_block: OpenBlock,
     len: u64,
+    len_dirty: bool,
 }
 
 // TODO: figure out how to implement `flush` on `Drop`.
@@ -70,6 +71,7 @@ impl Blob {
             nonce_sequence,
             current_block,
             len,
+            len_dirty: false,
         })
     }
 
@@ -109,6 +111,7 @@ impl Blob {
             nonce_sequence,
             current_block,
             len: 0,
+            len_dirty: false,
         }
     }
 
@@ -182,7 +185,10 @@ impl Blob {
 
             buffer = &buffer[len..];
 
-            self.len = self.len.max(self.seek_position());
+            if self.seek_position() > self.len {
+                self.len = self.seek_position();
+                self.len_dirty = true;
+            }
 
             if buffer.is_empty() {
                 break;
@@ -219,19 +225,17 @@ impl Blob {
     /// Returns the new seek position from the start of the blob.
     pub async fn seek(&mut self, pos: SeekFrom) -> Result<u64> {
         let offset = match pos {
-            SeekFrom::Start(n) => n.min(self.len()),
+            SeekFrom::Start(n) => n.min(self.len),
             SeekFrom::End(n) => {
                 if n >= 0 {
-                    self.len()
+                    self.len
                 } else {
-                    self.len().saturating_sub((-n) as u64)
+                    self.len.saturating_sub((-n) as u64)
                 }
             }
             SeekFrom::Current(n) => {
                 if n >= 0 {
-                    self.seek_position()
-                        .saturating_add(n as u64)
-                        .min(self.len())
+                    self.seek_position().saturating_add(n as u64).min(self.len)
                 } else {
                     self.seek_position().saturating_sub((-n) as u64)
                 }
@@ -278,6 +282,8 @@ impl Blob {
             return Ok(());
         }
 
+        self.current_block.id.version = BlockVersion::random();
+
         self.write_len(tx).await?;
         self.context
             .write_block(
@@ -323,11 +329,16 @@ impl Blob {
 
     // Write the current blob length into the blob header in the head block.
     async fn write_len(&mut self, tx: &mut db::Transaction) -> Result<()> {
+        if !self.len_dirty {
+            return Ok(());
+        }
+
         if self.current_block.number == 0 {
             let old_pos = self.current_block.content.pos;
             self.current_block.content.pos = self.nonce_sequence.prefix().len();
             self.current_block.content.write_u64(self.len);
             self.current_block.content.pos = old_pos;
+            self.current_block.dirty = true;
         } else {
             let (mut id, buffer) = self
                 .context
@@ -336,7 +347,7 @@ impl Blob {
 
             let mut cursor = Cursor::new(buffer);
             cursor.pos = self.nonce_sequence.prefix().len();
-            cursor.write_u64(self.len());
+            cursor.write_u64(self.len);
             id.version = BlockVersion::random();
 
             self.context
@@ -344,15 +355,17 @@ impl Blob {
                 .await?;
         }
 
+        self.len_dirty = false;
+
         Ok(())
     }
 
     // Total number of blocks in this blob including the possibly partially filled final block.
     fn block_count(&self) -> u32 {
         // https://stackoverflow.com/questions/2745074/fast-ceiling-of-an-integer-division-in-c-c
-        // NOTE: when `len()` is zero this still returns 1 which is actually correct in this case
+        // NOTE: when `len` is zero this still returns 1 which is actually correct in this case
         // because even empty blob needs one block to store the nonce prefix and the blob length.
-        (1 + (self.len().saturating_sub(1)) / BLOCK_SIZE as u64)
+        (1 + (self.len.saturating_sub(1)) / BLOCK_SIZE as u64)
             .try_into()
             .unwrap_or(u32::MAX)
     }
