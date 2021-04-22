@@ -1,9 +1,12 @@
 /// Re-export the aead and generic_array module for convenience.
-pub use chacha20poly1305::aead::{self, generic_array};
+pub use chacha20poly1305::{
+    aead::{self, generic_array},
+    Nonce,
+};
 
 use self::generic_array::{sequence::GenericSequence, typenum::Unsigned, GenericArray};
 use crate::format;
-use chacha20poly1305::{ChaCha20Poly1305, Nonce};
+use chacha20poly1305::ChaCha20Poly1305;
 use rand::{CryptoRng, Rng};
 use sha3::{digest::Digest, Sha3_256};
 use std::{fmt, mem, sync::Arc};

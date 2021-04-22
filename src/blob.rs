@@ -2,7 +2,7 @@ use crate::{
     block::{self, BlockId, BlockName, BlockVersion, BLOCK_SIZE},
     crypto::{
         aead::{AeadInPlace, NewAead},
-        Cipher, NonceSequence, SecretKey,
+        AuthTag, Cipher, Nonce, NonceSequence, SecretKey,
     },
     db,
     error::Error,
@@ -15,11 +15,8 @@ use std::{
 use zeroize::Zeroize;
 
 pub struct Blob {
-    pool: db::Pool,
-    secret_key: SecretKey,
+    context: Context,
     nonce_sequence: NonceSequence,
-    directory_name: Option<BlockName>,
-    directory_seq: u32,
     current_block: OpenBlock,
     len: u64,
 }
@@ -28,33 +25,31 @@ pub struct Blob {
 
 impl Blob {
     /// Opens an existing blob.
+    ///
+    /// - `directory_name` is the name of the head block of the directory containing the blob.
+    ///   `None` if the blob is the root blob.
+    /// - `directory_seq` is the sequence number of the blob within its directory.
     pub async fn open(
         pool: db::Pool,
         secret_key: SecretKey,
         directory_name: Option<BlockName>,
         directory_seq: u32,
     ) -> Result<Self, Error> {
-        let id = if let Some(parent_name) = &directory_name {
-            let child_tag = ChildTag::new(&secret_key, parent_name, directory_seq, BlockKind::Head);
-            index::get(&pool, &child_tag).await?
-        } else {
-            assert_eq!(directory_seq, 0);
-            index::get_root(&pool).await?
+        let context = Context {
+            pool,
+            secret_key,
+            directory_name,
+            directory_seq,
         };
 
-        let mut content = Buffer::new();
-        let auth_tag = block::read(&pool, &id, &mut content).await?;
+        let (id, buffer, auth_tag) = context.load_block(None, 0).await?;
 
-        let mut content = Cursor::new(content);
+        let mut content = Cursor::new(buffer);
 
-        // Read nonce prefix
         let nonce_sequence = NonceSequence::with_prefix(content.read_array());
-
         let nonce = nonce_sequence.get(0);
-        let aad = id.to_array(); // "additional associated data"
 
-        let cipher = Cipher::new(secret_key.as_array());
-        cipher.decrypt_in_place_detached(&nonce, &aad, &mut content[..], &auth_tag)?;
+        context.decrypt_block(&id, &mut content, &auth_tag, &nonce)?;
 
         let len = content.read_u64();
 
@@ -67,23 +62,29 @@ impl Blob {
         };
 
         Ok(Self {
-            pool,
-            secret_key,
+            context,
             nonce_sequence,
-            directory_name,
-            directory_seq,
             current_block,
             len,
         })
     }
 
-    /// Creates new blob.
+    /// Creates a new blob.
+    ///
+    /// See [`Self::open`] for explanation of `directory_name` and `directory_seq`.
     pub fn create(
         pool: db::Pool,
         secret_key: SecretKey,
         directory_name: Option<BlockName>,
         directory_seq: u32,
     ) -> Self {
+        let context = Context {
+            pool,
+            secret_key,
+            directory_name,
+            directory_seq,
+        };
+
         let nonce_sequence = NonceSequence::random();
         let mut content = Cursor::new(Buffer::new());
 
@@ -100,17 +101,14 @@ impl Blob {
         };
 
         Self {
-            pool,
-            secret_key,
+            context,
             nonce_sequence,
-            directory_name,
-            directory_seq,
             current_block,
             len: 0,
         }
     }
 
-    /// Length of the blob in bytes.
+    /// Length of this blob in bytes.
     pub fn len(&self) -> u64 {
         self.len
     }
@@ -180,6 +178,8 @@ impl Blob {
         Ok(())
     }
 
+    /// Flushes this blob, ensuring that all intermediately buffered contents gets written to the
+    /// store.
     pub async fn flush(&mut self) -> Result<(), Error> {
         self.write_len().await?;
 
@@ -219,59 +219,28 @@ impl Blob {
     }
 
     async fn read_block(&self, number: u32) -> Result<(BlockId, Buffer), Error> {
-        let id = if let Some(child_tag) = self.child_tag(number) {
-            index::get(&self.pool, &child_tag).await?
-        } else {
-            index::get_root(&self.pool).await?
-        };
-
-        let mut content = Buffer::new();
-        let auth_tag = block::read(&self.pool, &id, &mut content).await?;
-
-        let nonce = self.nonce_sequence.get(number);
-        let aad = id.to_array(); // "additional associated data"
-
-        let offset = if number == 0 {
-            self.nonce_sequence.prefix().len()
-        } else {
-            0
-        };
-
-        let cipher = Cipher::new(self.secret_key.as_array());
-        cipher.decrypt_in_place_detached(&nonce, &aad, &mut content[offset..], &auth_tag)?;
-
-        Ok((id, content))
+        self.context
+            .read_block(
+                Some(&self.current_block.head_name),
+                number,
+                &self.nonce_sequence,
+            )
+            .await
     }
 
-    async fn write_block(
-        &self,
-        id: &BlockId,
-        number: u32,
-        mut buffer: Buffer,
-    ) -> Result<(), Error> {
-        let nonce = self.nonce_sequence.get(number);
-        let aad = id.to_array(); // "additional associated data"
-
-        let offset = if number == 0 {
-            self.nonce_sequence.prefix().len()
-        } else {
-            0
-        };
-
-        let cipher = Cipher::new(self.secret_key.as_array());
-        let auth_tag = cipher.encrypt_in_place_detached(&nonce, &aad, &mut buffer[offset..])?;
-
-        block::write(&self.pool, id, &buffer, &auth_tag).await?;
-
-        if let Some(child_tag) = self.child_tag(number) {
-            index::insert(&self.pool, id, &child_tag).await?;
-        } else {
-            index::insert_root(&self.pool, id).await?;
-        }
-
-        Ok(())
+    async fn write_block(&self, id: &BlockId, number: u32, buffer: Buffer) -> Result<(), Error> {
+        self.context
+            .write_block(
+                &self.current_block.head_name,
+                number,
+                &self.nonce_sequence,
+                id,
+                buffer,
+            )
+            .await
     }
 
+    // Write the current blob length into the blob header in the head block.
     async fn write_len(&mut self) -> Result<(), Error> {
         if self.current_block.number == 0 {
             let old_pos = self.current_block.content.pos;
@@ -290,25 +259,7 @@ impl Blob {
         Ok(())
     }
 
-    fn child_tag(&self, number: u32) -> Option<ChildTag> {
-        match (number, &self.directory_name) {
-            (0, None) => None, // root
-            (0, Some(directory_name)) => Some(ChildTag::new(
-                &self.secret_key,
-                directory_name,
-                self.directory_seq,
-                BlockKind::Head,
-            )),
-            (_, _) => Some(ChildTag::new(
-                &self.secret_key,
-                &self.current_block.head_name,
-                number,
-                BlockKind::Trunk,
-            )),
-        }
-    }
-
-    // Total number of blocks in this blob including the final partially filled block.
+    // Total number of blocks in this blob including the possibly partially filled final block.
     fn block_count(&self) -> u32 {
         // https://stackoverflow.com/questions/2745074/fast-ceiling-of-an-integer-division-in-c-c
         // NOTE: when `len()` is zero this still returns 1 which is actually correct in this case
@@ -324,12 +275,128 @@ impl Blob {
     }
 }
 
+struct Context {
+    pool: db::Pool,
+    secret_key: SecretKey,
+    directory_name: Option<BlockName>,
+    directory_seq: u32,
+}
+
+impl Context {
+    async fn read_block(
+        &self,
+        head_name: Option<&BlockName>,
+        number: u32,
+        nonce_sequence: &NonceSequence,
+    ) -> Result<(BlockId, Buffer), Error> {
+        let (id, mut buffer, auth_tag) = self.load_block(head_name, number).await?;
+
+        let nonce = nonce_sequence.get(number);
+        let offset = if number == 0 {
+            nonce_sequence.prefix().len()
+        } else {
+            0
+        };
+
+        self.decrypt_block(&id, &mut buffer[offset..], &auth_tag, &nonce)?;
+
+        Ok((id, buffer))
+    }
+
+    async fn load_block(
+        &self,
+        head_name: Option<&BlockName>,
+        number: u32,
+    ) -> Result<(BlockId, Buffer, AuthTag), Error> {
+        let id = if let Some(child_tag) = self.child_tag(head_name, number) {
+            index::get(&self.pool, &child_tag).await?
+        } else {
+            index::get_root(&self.pool).await?
+        };
+
+        let mut content = Buffer::new();
+        let auth_tag = block::read(&self.pool, &id, &mut content).await?;
+
+        Ok((id, content, auth_tag))
+    }
+
+    fn decrypt_block(
+        &self,
+        id: &BlockId,
+        buffer: &mut [u8],
+        auth_tag: &AuthTag,
+        nonce: &Nonce,
+    ) -> Result<(), Error> {
+        let aad = id.to_array(); // "additional associated data"
+        let cipher = Cipher::new(self.secret_key.as_array());
+        cipher.decrypt_in_place_detached(&nonce, &aad, buffer, &auth_tag)?;
+
+        Ok(())
+    }
+
+    async fn write_block(
+        &self,
+        head_name: &BlockName,
+        number: u32,
+        nonce_sequence: &NonceSequence,
+        id: &BlockId,
+        mut buffer: Buffer,
+    ) -> Result<(), Error> {
+        let nonce = nonce_sequence.get(number);
+        let aad = id.to_array(); // "additional associated data"
+
+        let offset = if number == 0 {
+            nonce_sequence.prefix().len()
+        } else {
+            0
+        };
+
+        let cipher = Cipher::new(self.secret_key.as_array());
+        let auth_tag = cipher.encrypt_in_place_detached(&nonce, &aad, &mut buffer[offset..])?;
+
+        block::write(&self.pool, id, &buffer, &auth_tag).await?;
+
+        if let Some(child_tag) = self.child_tag(Some(head_name), number) {
+            index::insert(&self.pool, id, &child_tag).await?;
+        } else {
+            index::insert_root(&self.pool, id).await?;
+        }
+
+        Ok(())
+    }
+
+    fn child_tag(&self, head_name: Option<&BlockName>, number: u32) -> Option<ChildTag> {
+        match (number, &self.directory_name) {
+            (0, None) => None, // root
+            (0, Some(directory_name)) => Some(ChildTag::new(
+                &self.secret_key,
+                directory_name,
+                self.directory_seq,
+                BlockKind::Head,
+            )),
+            (_, _) => Some(ChildTag::new(
+                &self.secret_key,
+                head_name.expect("head name is required for trunk blocks"),
+                number,
+                BlockKind::Trunk,
+            )),
+        }
+    }
+}
+
 // Data for a block that's been loaded into memory and decrypted.
 struct OpenBlock {
+    // Name of the head block of the blob. If this `OpenBlock` represents the head block, this is
+    // the same as `id.name`.
     head_name: BlockName,
+    // Number of this blob within the blob. Head block's number is 0, then next one is 1, and so
+    // on...
     number: u32,
+    // Id of the block.
     id: BlockId,
+    // Decrypted content of the block wrapped in `Cursor` to track the current seek position.
     content: Cursor,
+    // Was this block modified since the last time it was loaded from/saved to the store?
     dirty: bool,
 }
 
