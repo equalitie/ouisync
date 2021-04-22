@@ -2,7 +2,7 @@ use crate::{
     block::{BlockId, BlockName, BlockVersion},
     crypto::{Hash, SecretKey},
     db,
-    error::Error,
+    error::{Error, Result},
 };
 use sha3::{Digest, Sha3_256};
 use sqlx::{sqlite::SqliteRow, Row};
@@ -29,7 +29,7 @@ pub async fn init(pool: &db::Pool) -> Result<(), Error> {
 }
 
 /// Insert the root block into the index
-pub async fn insert_root(pool: &db::Pool, block_id: &BlockId) -> Result<(), Error> {
+pub async fn insert_root(pool: &db::Pool, block_id: &BlockId) -> Result<()> {
     // NOTE: currently only one branch is supported
     sqlx::query(
         "BEGIN;
@@ -40,57 +40,49 @@ pub async fn insert_root(pool: &db::Pool, block_id: &BlockId) -> Result<(), Erro
     .bind(block_id.name.as_ref())
     .bind(block_id.version.as_ref())
     .execute(pool)
-    .await
-    .map_err(Error::QueryDb)?;
+    .await?;
 
     Ok(())
 }
 
 /// Get the root block from the index.
-pub async fn get_root(pool: &db::Pool) -> Result<BlockId, Error> {
+pub async fn get_root(pool: &db::Pool) -> Result<BlockId> {
     // NOTE: currently only one branch is supported
     match sqlx::query("SELECT root_block_name, root_block_version FROM branches LIMIT 1")
         .fetch_optional(pool)
-        .await
+        .await?
     {
-        Ok(Some(row)) => get_block_id(&row),
-        Ok(None) => Err(Error::BlockIdNotFound),
-        Err(error) => Err(Error::QueryDb(error)),
+        Some(row) => get_block_id(&row),
+        None => Err(Error::BlockIdNotFound),
     }
 }
 
 /// Insert a new block into the index.
 // TODO: take `Transaction` instead of `Pool`
-pub async fn insert(
-    pool: &db::Pool,
-    block_id: &BlockId,
-    child_tag: &ChildTag,
-) -> Result<(), Error> {
+pub async fn insert(pool: &db::Pool, block_id: &BlockId, child_tag: &ChildTag) -> Result<()> {
     sqlx::query("INSERT OR REPLACE INTO index_leaves (block_name, block_version, child_tag) VALUES (?, ?, ?)")
         .bind(block_id.name.as_ref())
         .bind(block_id.version.as_ref())
         .bind(child_tag.as_ref())
         .execute(pool)
-        .await
-        .map_err(Error::QueryDb)?;
+        .await?;
 
     Ok(())
 }
 
 /// Retrieve `BlockId` of a block with `child_tag`.
-pub async fn get(pool: &db::Pool, child_tag: &ChildTag) -> Result<BlockId, Error> {
+pub async fn get(pool: &db::Pool, child_tag: &ChildTag) -> Result<BlockId> {
     match sqlx::query("SELECT block_name, block_version FROM index_leaves WHERE child_tag = ?")
         .bind(child_tag.as_ref())
         .fetch_optional(pool)
-        .await
+        .await?
     {
-        Ok(Some(row)) => get_block_id(&row),
-        Ok(None) => Err(Error::BlockIdNotFound),
-        Err(error) => Err(Error::QueryDb(error)),
+        Some(row) => get_block_id(&row),
+        None => Err(Error::BlockIdNotFound),
     }
 }
 
-fn get_block_id(row: &SqliteRow) -> Result<BlockId, Error> {
+fn get_block_id(row: &SqliteRow) -> Result<BlockId> {
     let name: &[u8] = row.get(0);
     let name = BlockName::try_from(name)?;
 

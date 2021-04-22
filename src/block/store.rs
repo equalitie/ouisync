@@ -5,12 +5,12 @@ use crate::{
         AuthTag,
     },
     db,
-    error::Error,
+    error::{Error, Result},
 };
 use sqlx::Row;
 
 /// Initializes the block store. Creates the required database schema unless already exists.
-pub async fn init(pool: &db::Pool) -> Result<(), Error> {
+pub async fn init(pool: &db::Pool) -> Result<()> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS blocks (
              name     BLOB NOT NULL,
@@ -32,7 +32,7 @@ pub async fn init(pool: &db::Pool) -> Result<(), Error> {
 /// # Panics
 ///
 /// Panics if `buffer` length is less than [`BLOCK_SIZE`].
-pub async fn read(pool: &db::Pool, id: &BlockId, buffer: &mut [u8]) -> Result<AuthTag, Error> {
+pub async fn read(pool: &db::Pool, id: &BlockId, buffer: &mut [u8]) -> Result<AuthTag> {
     assert!(
         buffer.len() >= BLOCK_SIZE,
         "insufficient buffer length for block read"
@@ -42,11 +42,10 @@ pub async fn read(pool: &db::Pool, id: &BlockId, buffer: &mut [u8]) -> Result<Au
         .bind(id.name.as_ref())
         .bind(id.version.as_ref())
         .fetch_optional(pool)
-        .await;
+        .await?;
     let row = match row {
-        Ok(Some(row)) => row,
-        Ok(None) => return Err(Error::BlockNotFound(*id)),
-        Err(error) => return Err(Error::QueryDb(error)),
+        Some(row) => row,
+        None => return Err(Error::BlockNotFound(*id)),
     };
 
     let auth_tag: &[u8] = row.get(0);
@@ -71,12 +70,7 @@ pub async fn read(pool: &db::Pool, id: &BlockId, buffer: &mut [u8]) -> Result<Au
 ///
 /// Panics if buffer length is not equal to [`BLOCK_SIZE`].
 ///
-pub async fn write(
-    pool: &db::Pool,
-    id: &BlockId,
-    buffer: &[u8],
-    auth_tag: &AuthTag,
-) -> Result<(), Error> {
+pub async fn write(pool: &db::Pool, id: &BlockId, buffer: &[u8], auth_tag: &AuthTag) -> Result<()> {
     assert_eq!(
         buffer.len(),
         BLOCK_SIZE,
@@ -89,8 +83,7 @@ pub async fn write(
         .bind(auth_tag.as_slice())
         .bind(buffer)
         .execute(pool)
-        .await
-        .map_err(Error::QueryDb)?;
+        .await?;
 
     Ok(())
 }

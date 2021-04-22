@@ -17,7 +17,7 @@ pub enum Error {
     #[error("failed to create database schema")]
     CreateDbSchema(#[source] sqlx::Error),
     #[error("failed to execute database query")]
-    QueryDb(#[source] sqlx::Error),
+    QueryDb(#[from] sqlx::Error),
     #[error("data is malformed")]
     MalformedData,
     #[error("block not found: {0}")]
