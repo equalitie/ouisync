@@ -10,6 +10,8 @@ use crate::{
 };
 use std::{
     convert::TryInto,
+    io::SeekFrom,
+    mem,
     ops::{Deref, DerefMut},
 };
 use zeroize::Zeroize;
@@ -209,6 +211,58 @@ impl Blob {
         Ok(())
     }
 
+    /// Seek to an offset in the blob.
+    ///
+    /// It is allowed to specify offset that is outside of the range of the blob but such offset
+    /// will be clamped to be within the range.
+    ///
+    /// Returns the new seek position from the start of the blob.
+    pub async fn seek(&mut self, pos: SeekFrom) -> Result<u64> {
+        let offset = match pos {
+            SeekFrom::Start(n) => n.min(self.len()),
+            SeekFrom::End(n) => {
+                if n >= 0 {
+                    self.len()
+                } else {
+                    self.len().saturating_sub((-n) as u64)
+                }
+            }
+            SeekFrom::Current(n) => {
+                if n >= 0 {
+                    self.seek_position()
+                        .saturating_add(n as u64)
+                        .min(self.len())
+                } else {
+                    self.seek_position().saturating_sub((-n) as u64)
+                }
+            }
+        };
+
+        let actual_offset = offset + self.header_size() as u64;
+        let block_number = (actual_offset / BLOCK_SIZE as u64) as u32;
+        let block_offset = (actual_offset % BLOCK_SIZE as u64) as usize;
+
+        if block_number != self.current_block.number {
+            let mut tx = self.context.pool.begin().await?;
+            let (id, content) = self
+                .context
+                .read_block(
+                    &mut tx,
+                    Some(&self.current_block.head_name),
+                    block_number,
+                    &self.nonce_sequence,
+                )
+                .await?;
+            self.replace_current_block(&mut tx, block_number, id, content)
+                .await?;
+            tx.commit().await?;
+        }
+
+        self.current_block.content.pos = block_offset;
+
+        Ok(offset)
+    }
+
     /// Flushes this blob, ensuring that all intermediately buffered contents gets written to the
     /// store.
     pub async fn flush(&mut self) -> Result<()> {
@@ -220,21 +274,22 @@ impl Blob {
     }
 
     async fn flush_in(&mut self, tx: &mut db::Transaction) -> Result<()> {
-        self.write_len(tx).await?;
-
-        if self.current_block.dirty {
-            self.context
-                .write_block(
-                    tx,
-                    Some(&self.current_block.head_name),
-                    self.current_block.number,
-                    &self.nonce_sequence,
-                    &self.current_block.id,
-                    self.current_block.content.buffer.clone(),
-                )
-                .await?;
-            self.current_block.dirty = false;
+        if !self.current_block.dirty {
+            return Ok(());
         }
+
+        self.write_len(tx).await?;
+        self.context
+            .write_block(
+                tx,
+                Some(&self.current_block.head_name),
+                self.current_block.number,
+                &self.nonce_sequence,
+                &self.current_block.id,
+                self.current_block.content.buffer.clone(),
+            )
+            .await?;
+        self.current_block.dirty = false;
 
         Ok(())
     }
@@ -246,16 +301,20 @@ impl Blob {
         id: BlockId,
         content: Buffer,
     ) -> Result<()> {
-        // TODO: support head block as well
-        assert!(number > 0);
-
         self.flush_in(tx).await?;
+
+        let mut content = Cursor::new(content);
+
+        if number == 0 {
+            // If head block, skip over the header.
+            content.pos = self.header_size();
+        }
 
         self.current_block = OpenBlock {
             head_name: self.current_block.head_name,
             number,
             id,
-            content: Cursor::new(content),
+            content,
             dirty: false,
         };
 
@@ -301,6 +360,11 @@ impl Blob {
     // Returns the current seek position from the start of the blob.
     fn seek_position(&self) -> u64 {
         self.current_block.number as u64 * BLOCK_SIZE as u64 + self.current_block.content.pos as u64
+            - self.header_size() as u64
+    }
+
+    fn header_size(&self) -> usize {
+        self.nonce_sequence.prefix().len() + mem::size_of_val(&self.len)
     }
 }
 
@@ -555,7 +619,7 @@ mod tests {
     use rand::{distributions::Standard, Rng};
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn root_blob() {
+    async fn write_and_read() {
         let pool = init_db().await;
         let secret_key = SecretKey::random();
 
@@ -590,7 +654,153 @@ mod tests {
             read_contents.resize(read_contents.len() + chunk_size, 0);
         }
 
-        assert_eq!(&read_contents[..read_len], &orig_content[..])
+        assert_eq!(read_contents[..read_len], orig_content[..])
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn read_empty_blob() {
+        let pool = init_db().await;
+        let secret_key = SecretKey::random();
+
+        let mut blob = Blob::create(pool.clone(), secret_key.clone(), None, 0);
+        blob.flush().await.unwrap();
+        drop(blob);
+
+        // Re-open the blob and read its contents.
+        let mut blob = Blob::open(pool.clone(), secret_key.clone(), None, 0)
+            .await
+            .unwrap();
+
+        let mut buffer = [0; 1];
+        assert_eq!(blob.read(&mut buffer[..]).await.unwrap(), 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn len() {
+        let pool = init_db().await;
+        let secret_key = SecretKey::random();
+
+        for &size in &[
+            0,
+            1,
+            2,
+            3,
+            100,
+            1024,
+            BLOCK_SIZE,
+            2 * BLOCK_SIZE,
+            5 * BLOCK_SIZE / 2,
+        ] {
+            let content: Vec<u8> = rand::thread_rng()
+                .sample_iter(Standard)
+                .take(size)
+                .collect();
+
+            let mut blob = Blob::create(pool.clone(), secret_key.clone(), None, 0);
+            blob.write(&content[..]).await.unwrap();
+            blob.flush().await.unwrap();
+
+            assert_eq!(blob.len(), size as u64);
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn seek() {
+        let pool = init_db().await;
+        let secret_key = SecretKey::random();
+
+        let content: Vec<u8> = rand::thread_rng()
+            .sample_iter(Standard)
+            .take(5 * BLOCK_SIZE / 2)
+            .collect();
+
+        let mut blob = Blob::create(pool.clone(), secret_key.clone(), None, 0);
+        blob.write(&content[..]).await.unwrap();
+        blob.flush().await.unwrap();
+
+        let mut buffer = vec![0; 1024];
+        let len = blob.read(&mut buffer[..]).await.unwrap();
+        assert_eq!(len, 0);
+
+        // Seek from the start
+        for &offset in &[
+            0,
+            1,
+            2,
+            3,
+            100,
+            1014,
+            BLOCK_SIZE as u64,
+            2 * BLOCK_SIZE as u64,
+            content.len() as u64 - 2,
+            content.len() as u64 - 1,
+            content.len() as u64,
+        ] {
+            assert_eq!(blob.seek(SeekFrom::Start(offset)).await.unwrap(), offset);
+            let len = blob.read(&mut buffer[..]).await.unwrap();
+            assert_eq!(len, buffer.len().min(content.len() - offset as usize));
+            assert_eq!(
+                buffer[..len],
+                content[offset as usize..offset as usize + len]
+            );
+        }
+
+        // Seek past the end
+        assert_eq!(
+            blob.seek(SeekFrom::Start(content.len() as u64 + 1))
+                .await
+                .unwrap(),
+            content.len() as u64
+        );
+
+        // Seek from the end
+        assert_eq!(
+            blob.seek(SeekFrom::End(0)).await.unwrap(),
+            content.len() as u64
+        );
+        assert_eq!(
+            blob.seek(SeekFrom::End(-1)).await.unwrap(),
+            content.len() as u64 - 1
+        );
+        assert_eq!(
+            blob.seek(SeekFrom::End(-(content.len() as i64)))
+                .await
+                .unwrap(),
+            0
+        );
+
+        // Seek past the start
+        assert_eq!(
+            blob.seek(SeekFrom::End(-(content.len() as i64) - 1))
+                .await
+                .unwrap(),
+            0
+        );
+
+        // Seek past the end
+        assert_eq!(
+            blob.seek(SeekFrom::End(1)).await.unwrap(),
+            content.len() as u64
+        );
+
+        // Rewind and seek from the current position
+        blob.seek(SeekFrom::Start(0)).await.unwrap();
+
+        assert_eq!(blob.seek(SeekFrom::Current(0)).await.unwrap(), 0);
+        assert_eq!(blob.seek(SeekFrom::Current(1)).await.unwrap(), 1);
+        assert_eq!(blob.seek(SeekFrom::Current(1)).await.unwrap(), 2);
+        assert_eq!(blob.seek(SeekFrom::Current(-1)).await.unwrap(), 1);
+
+        // Seek past the start
+        assert_eq!(blob.seek(SeekFrom::Current(-2)).await.unwrap(), 0);
+
+        // Seek past the end
+        assert_eq!(
+            blob.seek(SeekFrom::Current(content.len() as i64 + 1))
+                .await
+                .unwrap(),
+            content.len() as u64
+        );
     }
 
     async fn init_db() -> db::Pool {
