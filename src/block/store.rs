@@ -32,7 +32,7 @@ pub async fn init(pool: &db::Pool) -> Result<()> {
 /// # Panics
 ///
 /// Panics if `buffer` length is less than [`BLOCK_SIZE`].
-pub async fn read(pool: &db::Pool, id: &BlockId, buffer: &mut [u8]) -> Result<AuthTag> {
+pub async fn read(tx: &mut db::Transaction, id: &BlockId, buffer: &mut [u8]) -> Result<AuthTag> {
     assert!(
         buffer.len() >= BLOCK_SIZE,
         "insufficient buffer length for block read"
@@ -41,7 +41,7 @@ pub async fn read(pool: &db::Pool, id: &BlockId, buffer: &mut [u8]) -> Result<Au
     let row = sqlx::query("SELECT auth_tag, content FROM blocks WHERE name = ? AND version = ?")
         .bind(id.name.as_ref())
         .bind(id.version.as_ref())
-        .fetch_optional(pool)
+        .fetch_optional(tx)
         .await?;
     let row = match row {
         Some(row) => row,
@@ -70,7 +70,12 @@ pub async fn read(pool: &db::Pool, id: &BlockId, buffer: &mut [u8]) -> Result<Au
 ///
 /// Panics if buffer length is not equal to [`BLOCK_SIZE`].
 ///
-pub async fn write(pool: &db::Pool, id: &BlockId, buffer: &[u8], auth_tag: &AuthTag) -> Result<()> {
+pub async fn write(
+    tx: &mut db::Transaction,
+    id: &BlockId,
+    buffer: &[u8],
+    auth_tag: &AuthTag,
+) -> Result<()> {
     assert_eq!(
         buffer.len(),
         BLOCK_SIZE,
@@ -82,7 +87,7 @@ pub async fn write(pool: &db::Pool, id: &BlockId, buffer: &[u8], auth_tag: &Auth
         .bind(id.version.as_ref())
         .bind(auth_tag.as_slice())
         .bind(buffer)
-        .execute(pool)
+        .execute(tx)
         .await?;
 
     Ok(())
@@ -102,10 +107,14 @@ mod tests {
         let content = random_block_content();
         let auth_tag = AuthTag::default();
 
-        write(&pool, &id, &content, &auth_tag).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+
+        write(&mut tx, &id, &content, &auth_tag).await.unwrap();
 
         let mut buffer = vec![0; BLOCK_SIZE];
-        let _ = read(&pool, &id, &mut buffer).await.unwrap();
+        let _ = read(&mut tx, &id, &mut buffer).await.unwrap();
+
+        tx.commit().await.unwrap();
 
         assert_eq!(buffer, content);
     }
@@ -114,11 +123,13 @@ mod tests {
     async fn try_read_missing_block() {
         let pool = make_pool().await;
         init(&pool).await.unwrap();
-        let id = BlockId::random();
 
+        let id = BlockId::random();
         let mut buffer = vec![0; BLOCK_SIZE];
 
-        match read(&pool, &id, &mut buffer).await {
+        let mut tx = pool.begin().await.unwrap();
+
+        match read(&mut tx, &id, &mut buffer).await {
             Err(Error::BlockNotFound(missing_id)) => assert_eq!(missing_id, id),
             Err(error) => panic!("unexpected error: {:?}", error),
             Ok(_) => panic!("unexpected success"),
@@ -134,11 +145,14 @@ mod tests {
         let content0 = random_block_content();
         let auth_tag = AuthTag::default();
 
-        write(&pool, &id, &content0, &auth_tag).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        write(&mut tx, &id, &content0, &auth_tag).await.unwrap();
+        tx.commit().await.unwrap();
 
         let content1 = random_block_content();
 
-        match write(&pool, &id, &content1, &auth_tag).await {
+        let mut tx = pool.begin().await.unwrap();
+        match write(&mut tx, &id, &content1, &auth_tag).await {
             Err(Error::QueryDb(_)) => (),
             Err(error) => panic!("unexpected error: {:?}", error),
             Ok(_) => panic!("unexpected success"),

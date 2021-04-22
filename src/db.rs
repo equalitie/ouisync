@@ -1,10 +1,16 @@
 use crate::{block, error::Error, index};
-use sqlx::{sqlite::SqliteConnectOptions, SqlitePool};
+use sqlx::{
+    sqlite::{Sqlite, SqliteConnectOptions},
+    SqlitePool,
+};
 use std::path::Path;
 use tokio::fs;
 
 /// Database connection pool.
 pub type Pool = SqlitePool;
+
+/// Database transaction
+pub type Transaction = sqlx::Transaction<'static, Sqlite>;
 
 /// Creates the database unless it already exsits and establish a connection to it.
 pub async fn init(path: impl AsRef<Path>) -> Result<Pool, Error> {

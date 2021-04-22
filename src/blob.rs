@@ -42,7 +42,9 @@ impl Blob {
             directory_seq,
         };
 
-        let (id, buffer, auth_tag) = context.load_block(None, 0).await?;
+        // NOTE: no need to commit this transaction because we are only reading here.
+        let mut tx = context.pool.begin().await?;
+        let (id, buffer, auth_tag) = context.load_block(&mut tx, None, 0).await?;
 
         let mut content = Cursor::new(buffer);
 
@@ -138,9 +140,27 @@ impl Blob {
                 break;
             }
 
-            let (id, content) = self.read_block(number).await?;
+            // NOTE: unlike in `write` we create a separate transaction for each iteration. This is
+            // because if we created a single transaction for the whole `read` call, then a failed
+            // read could rollback the changes made in a previous iteration which would then be
+            // lost. This is fine because there is going to be at most one dirty block within
+            // a single `read` invocation anyway.
+            let mut tx = self.context.pool.begin().await?;
 
-            self.replace_current_block(number, id, content).await?;
+            let (id, content) = self
+                .context
+                .read_block(
+                    &mut tx,
+                    Some(&self.current_block.head_name),
+                    number,
+                    &self.nonce_sequence,
+                )
+                .await?;
+
+            self.replace_current_block(&mut tx, number, id, content)
+                .await?;
+
+            tx.commit().await?;
         }
 
         Ok(total_len)
@@ -148,7 +168,8 @@ impl Blob {
 
     /// Writes `buffer` into this blob, advancing the blob's internal cursor.
     pub async fn write(&mut self, mut buffer: &[u8]) -> Result<()> {
-        // TODO: do all the db writes in a transaction
+        // Wrap the whole `write` in a transaction to make it atomic.
+        let mut tx = self.context.pool.begin().await?;
 
         loop {
             let len = self.current_block.content.write(buffer);
@@ -167,13 +188,23 @@ impl Blob {
 
             let number = self.current_block.next_number();
             let (id, content) = if number < self.block_count() {
-                self.read_block(number).await?
+                self.context
+                    .read_block(
+                        &mut tx,
+                        Some(&self.current_block.head_name),
+                        number,
+                        &self.nonce_sequence,
+                    )
+                    .await?
             } else {
                 (BlockId::random(), Buffer::new())
             };
 
-            self.replace_current_block(number, id, content).await?;
+            self.replace_current_block(&mut tx, number, id, content)
+                .await?;
         }
+
+        tx.commit().await?;
 
         Ok(())
     }
@@ -181,15 +212,27 @@ impl Blob {
     /// Flushes this blob, ensuring that all intermediately buffered contents gets written to the
     /// store.
     pub async fn flush(&mut self) -> Result<()> {
-        self.write_len().await?;
+        let mut tx = self.context.pool.begin().await?;
+        self.flush_in(&mut tx).await?;
+        tx.commit().await?;
+
+        Ok(())
+    }
+
+    async fn flush_in(&mut self, tx: &mut db::Transaction) -> Result<()> {
+        self.write_len(tx).await?;
 
         if self.current_block.dirty {
-            self.write_block(
-                &self.current_block.id,
-                self.current_block.number,
-                self.current_block.content.buffer.clone(),
-            )
-            .await?;
+            self.context
+                .write_block(
+                    tx,
+                    Some(&self.current_block.head_name),
+                    self.current_block.number,
+                    &self.nonce_sequence,
+                    &self.current_block.id,
+                    self.current_block.content.buffer.clone(),
+                )
+                .await?;
             self.current_block.dirty = false;
         }
 
@@ -198,6 +241,7 @@ impl Blob {
 
     async fn replace_current_block(
         &mut self,
+        tx: &mut db::Transaction,
         number: u32,
         id: BlockId,
         content: Buffer,
@@ -205,7 +249,7 @@ impl Blob {
         // TODO: support head block as well
         assert!(number > 0);
 
-        self.flush().await?;
+        self.flush_in(tx).await?;
 
         self.current_block = OpenBlock {
             head_name: self.current_block.head_name,
@@ -218,42 +262,27 @@ impl Blob {
         Ok(())
     }
 
-    async fn read_block(&self, number: u32) -> Result<(BlockId, Buffer)> {
-        self.context
-            .read_block(
-                Some(&self.current_block.head_name),
-                number,
-                &self.nonce_sequence,
-            )
-            .await
-    }
-
-    async fn write_block(&self, id: &BlockId, number: u32, buffer: Buffer) -> Result<()> {
-        self.context
-            .write_block(
-                &self.current_block.head_name,
-                number,
-                &self.nonce_sequence,
-                id,
-                buffer,
-            )
-            .await
-    }
-
     // Write the current blob length into the blob header in the head block.
-    async fn write_len(&mut self) -> Result<()> {
+    async fn write_len(&mut self, tx: &mut db::Transaction) -> Result<()> {
         if self.current_block.number == 0 {
             let old_pos = self.current_block.content.pos;
             self.current_block.content.pos = self.nonce_sequence.prefix().len();
             self.current_block.content.write_u64(self.len);
             self.current_block.content.pos = old_pos;
         } else {
-            let (mut id, buffer) = self.read_block(0).await?;
+            let (mut id, buffer) = self
+                .context
+                .read_block(tx, None, 0, &self.nonce_sequence)
+                .await?;
+
             let mut cursor = Cursor::new(buffer);
             cursor.pos = self.nonce_sequence.prefix().len();
             cursor.write_u64(self.len());
             id.version = BlockVersion::random();
-            self.write_block(&id, 0, cursor.buffer).await?;
+
+            self.context
+                .write_block(tx, None, 0, &self.nonce_sequence, &id, cursor.buffer)
+                .await?;
         }
 
         Ok(())
@@ -285,11 +314,12 @@ struct Context {
 impl Context {
     async fn read_block(
         &self,
+        tx: &mut db::Transaction,
         head_name: Option<&BlockName>,
         number: u32,
         nonce_sequence: &NonceSequence,
     ) -> Result<(BlockId, Buffer)> {
-        let (id, mut buffer, auth_tag) = self.load_block(head_name, number).await?;
+        let (id, mut buffer, auth_tag) = self.load_block(tx, head_name, number).await?;
 
         let nonce = nonce_sequence.get(number);
         let offset = if number == 0 {
@@ -305,17 +335,18 @@ impl Context {
 
     async fn load_block(
         &self,
+        tx: &mut db::Transaction,
         head_name: Option<&BlockName>,
         number: u32,
     ) -> Result<(BlockId, Buffer, AuthTag)> {
         let id = if let Some(child_tag) = self.child_tag(head_name, number) {
-            index::get(&self.pool, &child_tag).await?
+            index::get(tx, &child_tag).await?
         } else {
-            index::get_root(&self.pool).await?
+            index::get_root(tx).await?
         };
 
         let mut content = Buffer::new();
-        let auth_tag = block::read(&self.pool, &id, &mut content).await?;
+        let auth_tag = block::read(tx, &id, &mut content).await?;
 
         Ok((id, content, auth_tag))
     }
@@ -336,7 +367,8 @@ impl Context {
 
     async fn write_block(
         &self,
-        head_name: &BlockName,
+        tx: &mut db::Transaction,
+        head_name: Option<&BlockName>,
         number: u32,
         nonce_sequence: &NonceSequence,
         id: &BlockId,
@@ -354,12 +386,12 @@ impl Context {
         let cipher = Cipher::new(self.secret_key.as_array());
         let auth_tag = cipher.encrypt_in_place_detached(&nonce, &aad, &mut buffer[offset..])?;
 
-        block::write(&self.pool, id, &buffer, &auth_tag).await?;
+        block::write(tx, id, &buffer, &auth_tag).await?;
 
-        if let Some(child_tag) = self.child_tag(Some(head_name), number) {
-            index::insert(&self.pool, id, &child_tag).await?;
+        if let Some(child_tag) = self.child_tag(head_name, number) {
+            index::insert(tx, id, &child_tag).await?;
         } else {
-            index::insert_root(&self.pool, id).await?;
+            index::insert_root(tx, id).await?;
         }
 
         Ok(())

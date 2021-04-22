@@ -29,27 +29,25 @@ pub async fn init(pool: &db::Pool) -> Result<(), Error> {
 }
 
 /// Insert the root block into the index
-pub async fn insert_root(pool: &db::Pool, block_id: &BlockId) -> Result<()> {
+pub async fn insert_root(tx: &mut db::Transaction, block_id: &BlockId) -> Result<()> {
     // NOTE: currently only one branch is supported
     sqlx::query(
-        "BEGIN;
-         DELETE FROM branches;
-         INSERT INTO branches (root_block_name, root_block_version) VALUES (?, ?);
-         COMMIT;",
+        "DELETE FROM branches;
+         INSERT INTO branches (root_block_name, root_block_version) VALUES (?, ?);",
     )
     .bind(block_id.name.as_ref())
     .bind(block_id.version.as_ref())
-    .execute(pool)
+    .execute(tx)
     .await?;
 
     Ok(())
 }
 
 /// Get the root block from the index.
-pub async fn get_root(pool: &db::Pool) -> Result<BlockId> {
+pub async fn get_root(tx: &mut db::Transaction) -> Result<BlockId> {
     // NOTE: currently only one branch is supported
     match sqlx::query("SELECT root_block_name, root_block_version FROM branches LIMIT 1")
-        .fetch_optional(pool)
+        .fetch_optional(tx)
         .await?
     {
         Some(row) => get_block_id(&row),
@@ -59,22 +57,26 @@ pub async fn get_root(pool: &db::Pool) -> Result<BlockId> {
 
 /// Insert a new block into the index.
 // TODO: take `Transaction` instead of `Pool`
-pub async fn insert(pool: &db::Pool, block_id: &BlockId, child_tag: &ChildTag) -> Result<()> {
+pub async fn insert(
+    tx: &mut db::Transaction,
+    block_id: &BlockId,
+    child_tag: &ChildTag,
+) -> Result<()> {
     sqlx::query("INSERT OR REPLACE INTO index_leaves (block_name, block_version, child_tag) VALUES (?, ?, ?)")
         .bind(block_id.name.as_ref())
         .bind(block_id.version.as_ref())
         .bind(child_tag.as_ref())
-        .execute(pool)
+        .execute(tx)
         .await?;
 
     Ok(())
 }
 
 /// Retrieve `BlockId` of a block with `child_tag`.
-pub async fn get(pool: &db::Pool, child_tag: &ChildTag) -> Result<BlockId> {
+pub async fn get(tx: &mut db::Transaction, child_tag: &ChildTag) -> Result<BlockId> {
     match sqlx::query("SELECT block_name, block_version FROM index_leaves WHERE child_tag = ?")
         .bind(child_tag.as_ref())
-        .fetch_optional(pool)
+        .fetch_optional(tx)
         .await?
     {
         Some(row) => get_block_id(&row),
