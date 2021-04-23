@@ -1,9 +1,10 @@
 use crate::async_object::{AbortHandles, AsyncObject, AsyncObjectTrait};
+use crate::message_broker::MessageBroker;
 use crate::object_stream::ObjectStream;
 use crate::replica_discovery::ReplicaDiscovery;
 use crate::replica_id::ReplicaId;
 
-use std::{collections::HashMap, fmt, io, net::SocketAddr, sync::Arc};
+use std::{collections::HashMap, io, net::SocketAddr, sync::Arc};
 
 use tokio::{
     net::{TcpListener, TcpStream},
@@ -12,7 +13,7 @@ use tokio::{
 
 pub struct Network {
     this_replica_id: ReplicaId,
-    replicas: Mutex<HashMap<ReplicaId, Replica>>,
+    message_brokers: Mutex<HashMap<ReplicaId, AsyncObject<MessageBroker>>>,
     abort_handles: AbortHandles,
 }
 
@@ -20,7 +21,7 @@ impl Network {
     pub fn new(_enable_discovery: bool) -> io::Result<AsyncObject<Network>> {
         let n = Arc::new(Network {
             this_replica_id: ReplicaId::random(),
-            replicas: Mutex::new(HashMap::new()),
+            message_brokers: Mutex::new(HashMap::new()),
             abort_handles: AbortHandles::new(),
         });
         let n_ = n.clone();
@@ -44,8 +45,8 @@ impl Network {
     }
 
     async fn run_discovery(self: Arc<Self>, listener_port: u16) {
-        let discovery = ReplicaDiscovery::new(listener_port)
-            .expect("Failed to create ReplicaDiscovery");
+        let discovery =
+            ReplicaDiscovery::new(listener_port).expect("Failed to create ReplicaDiscovery");
 
         loop {
             let found = discovery.wait_for_activity().await;
@@ -57,9 +58,7 @@ impl Network {
                         Ok(socket) => socket,
                         Err(_) => return,
                     };
-                    s.handle_new_connection(ConnectionType::Connected, socket)
-                        .await
-                        .ok();
+                    s.handle_new_connection(socket).await.ok();
                 });
             }
         }
@@ -67,41 +66,31 @@ impl Network {
 
     async fn run_listener(self: Arc<Self>, listener: TcpListener) {
         loop {
-            let (socket, _addr) = listener.accept().await
+            let (socket, _addr) = listener
+                .accept()
+                .await
                 .expect("Failed to start TcpListener");
 
             let s = self.clone();
             self.abortable_spawn(async move {
-                s.handle_new_connection(ConnectionType::Accepted, socket)
-                    .await
-                    .ok();
+                s.handle_new_connection(socket).await.ok();
             });
         }
     }
 
-    async fn handle_new_connection(
-        self: Arc<Self>,
-        con_type: ConnectionType,
-        socket: TcpStream,
-    ) -> io::Result<()> {
+    async fn handle_new_connection(self: Arc<Self>, socket: TcpStream) -> io::Result<()> {
         let mut os = ObjectStream::new(socket);
         os.write(&self.this_replica_id).await?;
         let their_replica_id = os.read::<ReplicaId>().await?;
 
-        let mut replicas = self.replicas.lock().await;
+        let mut brokers = self.message_brokers.lock().await;
 
-        let replica = replicas.entry(their_replica_id).or_insert(Replica::new());
+        let broker = brokers
+            .entry(their_replica_id)
+            .or_insert_with(|| MessageBroker::new());
 
-        match con_type {
-            ConnectionType::Accepted => {
-                replica.accepted_stream = Some(os);
-            }
-            ConnectionType::Connected => {
-                replica.connected_stream = Some(os);
-            }
-        }
+        broker.arc().add_connection(os);
 
-        println!("{:?}", replica);
         Ok(())
     }
 }
@@ -110,37 +99,4 @@ impl AsyncObjectTrait for Network {
     fn abort_handles(&self) -> &AbortHandles {
         &self.abort_handles
     }
-}
-
-struct Replica {
-    accepted_stream: Option<ObjectStream>,
-    connected_stream: Option<ObjectStream>,
-}
-
-impl Replica {
-    fn new() -> Replica {
-        Replica {
-            accepted_stream: None,
-            connected_stream: None,
-        }
-    }
-}
-
-impl fmt::Debug for Replica {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let mut c = 0;
-        if self.accepted_stream.is_some() {
-            c += 1;
-        }
-        if self.connected_stream.is_some() {
-            c += 1;
-        }
-        write!(f, "Replica:{:?}", c)
-    }
-}
-
-#[derive(Debug)]
-enum ConnectionType {
-    Accepted,
-    Connected,
 }

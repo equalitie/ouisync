@@ -1,4 +1,4 @@
-use futures::future::{Future};
+use futures::future::Future;
 use std::{
     ops::Deref,
     sync::{Arc, RwLock},
@@ -12,6 +12,10 @@ pub struct AsyncObject<T: AsyncObjectTrait> {
 impl<T: AsyncObjectTrait> AsyncObject<T> {
     pub fn new(state: Arc<T>) -> AsyncObject<T> {
         AsyncObject { state }
+    }
+
+    pub fn arc(&self) -> Arc<T> {
+        self.state.clone()
     }
 }
 
