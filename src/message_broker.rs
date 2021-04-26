@@ -5,6 +5,7 @@ use crate::object_stream::{ObjectReader, ObjectStream, ObjectWriter};
 use crate::server::Server;
 use std::sync::Arc;
 use tokio::sync::mpsc::{error::SendError, Receiver, Sender};
+use std::ops::FnOnce;
 
 /// A stream for receiving Requests and sending Responses
 pub struct ServerStream {
@@ -44,6 +45,13 @@ impl ClientStream {
     }
 }
 
+type OnFinish = Box<dyn FnOnce() + Send>;
+
+struct State {
+    on_finish: Option<OnFinish>,
+    receiver_count: u32,
+}
+
 /// Maintains one or more connections to a peer, listening on all of them at the same time. Note
 /// that at the present all the connections are TCP based and so dropping some of them would make
 /// sense. However, in the future we may also have other transports (e.g. Bluetooth) and thus
@@ -56,11 +64,12 @@ pub struct MessageBroker {
     send_channel: Sender<Command>,
     request_tx: Sender<Request>,
     response_tx: Sender<Response>,
+    state: std::sync::Mutex<State>,
     abort_handles: AbortHandles,
 }
 
 impl MessageBroker {
-    pub fn new() -> AsyncObject<MessageBroker> {
+    pub fn new(on_finish: OnFinish) -> AsyncObject<MessageBroker> {
         let (command_tx, command_rx) = tokio::sync::mpsc::channel(1);
         let (request_tx, request_rx) = tokio::sync::mpsc::channel(1);
         let (response_tx, response_rx) = tokio::sync::mpsc::channel(1);
@@ -69,6 +78,10 @@ impl MessageBroker {
             send_channel: command_tx,
             request_tx,
             response_tx,
+            state: std::sync::Mutex::new(State{
+                on_finish: Some(on_finish),
+                receiver_count: 0,
+            }),
             abort_handles: AbortHandles::new(),
         });
 
@@ -99,7 +112,7 @@ impl MessageBroker {
                 receiver: response_rx,
             };
             client.run(stream).await;
-            s1.abort();
+            s1.finish();
         });
 
         self.abortable_spawn(async move {
@@ -109,7 +122,7 @@ impl MessageBroker {
                 receiver: request_rx,
             };
             server.run(stream).await;
-            s2.abort();
+            s2.finish();
         });
     }
 
@@ -149,26 +162,39 @@ impl MessageBroker {
                         self.clone().create_state(rxs.0, rxs.1);
                     }
                 }
-                Command::SendMessage(m) => match ws.iter_mut().next() {
-                    Some(w) => match w.write(&m).await {
-                        Ok(_) => (),
-                        _ => self.abort(),
-                    },
-                    _ => self.abort(),
-                },
+                Command::SendMessage(m) => {
+                    assert!(!ws.is_empty());
+
+                    while !ws.is_empty() {
+                        if let Ok(_) = ws[0].write(&m).await {
+                            break;
+                        }
+                        ws.remove(0);
+                    }
+
+                    if ws.is_empty() {
+                        self.finish();
+                    }
+                }
             }
         }
     }
 
     async fn run_message_receiver(self: Arc<Self>, mut r: ObjectReader) {
+        self.state.lock().unwrap().receiver_count += 1;
         loop {
             match r.read::<Message>().await {
                 Ok(msg) => {
                     self.handle_message(msg).await;
                 }
                 Err(_) => {
-                    self.abort();
-                    break;
+                    let mut state = self.state.lock().unwrap();
+                    state.receiver_count -= 1;
+
+                    if state.receiver_count == 0 {
+                        self.finish();
+                        break;
+                    }
                 }
             };
         }
@@ -182,6 +208,13 @@ impl MessageBroker {
             Message::Response(rs) => {
                 self.response_tx.send(rs).await.unwrap();
             }
+        }
+    }
+
+    fn finish(&self) {
+        self.abort();
+        if let Some(on_finish) = self.state.lock().unwrap().on_finish.take() {
+            on_finish();
         }
     }
 }

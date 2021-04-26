@@ -8,8 +8,9 @@ use std::{collections::HashMap, io, net::SocketAddr, sync::Arc};
 
 use tokio::{
     net::{TcpListener, TcpStream},
-    sync::Mutex,
 };
+
+use std::sync::Mutex;
 
 pub struct Network {
     this_replica_id: ReplicaId,
@@ -83,11 +84,17 @@ impl Network {
         os.write(&self.this_replica_id).await?;
         let their_replica_id = os.read::<ReplicaId>().await?;
 
-        let mut brokers = self.message_brokers.lock().await;
+        let s = self.clone();
+        let mut brokers = self.message_brokers.lock().unwrap();
 
         let broker = brokers
             .entry(their_replica_id)
-            .or_insert_with(|| MessageBroker::new());
+            .or_insert_with(|| MessageBroker::new(Box::new(move || {
+                let mut brokers = s.message_brokers.lock().unwrap();
+                brokers.remove(&their_replica_id);
+                // XXX: We need to tell ReplicaDiscovery to start reporting
+                // this ID again.
+            })));
 
         broker.arc().add_connection(os);
 
