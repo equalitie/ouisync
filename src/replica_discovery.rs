@@ -13,7 +13,7 @@ use tokio::sync::{Mutex, Notify};
 use tokio::time::sleep;
 
 const ID_LEN: usize = 16; // 128 bits
-type Id = [u8; ID_LEN];
+pub type RuntimeId = [u8; ID_LEN];
 
 // Selected at random but to not clash with some reserved ones:
 // https://www.iana.org/assignments/multicast-addresses/multicast-addresses.xhtml
@@ -25,10 +25,11 @@ const ADDR_ANY: Ipv4Addr = Ipv4Addr::new(0, 0, 0, 0);
 // Poor man's local discovery using UDP multicast.
 // XXX: We should probably use mDNS, but so far all libraries I tried had some issues.
 pub struct ReplicaDiscovery {
-    id: Id,
+    id: RuntimeId,
     listener_port: u16,
     socket: tokio::net::UdpSocket,
-    found_replicas: Mutex<HashSet<SocketAddr>>,
+    found_replicas: Mutex<HashSet<(RuntimeId, SocketAddr)>>,
+    seen: std::sync::Mutex<LruCache<RuntimeId, ()>>,
     notify: Arc<Notify>,
     abort_handles: AbortHandles,
 }
@@ -42,6 +43,7 @@ impl ReplicaDiscovery {
             listener_port,
             socket: Self::create_multicast_socket()?,
             found_replicas: Mutex::new(HashSet::new()),
+            seen: std::sync::Mutex::new(LruCache::new(256)),
             notify: notify.clone(),
             abort_handles: AbortHandles::new(),
         });
@@ -60,7 +62,7 @@ impl ReplicaDiscovery {
         Ok(AsyncObject::new(n))
     }
 
-    pub async fn wait_for_activity(&self) -> HashSet<SocketAddr> {
+    pub async fn wait_for_activity(&self) -> HashSet<(RuntimeId, SocketAddr)> {
         loop {
             self.notify.notified().await;
 
@@ -75,6 +77,10 @@ impl ReplicaDiscovery {
 
             return ret;
         }
+    }
+
+    pub fn forget(&self, id: &RuntimeId) {
+        self.seen.lock().unwrap().pop(id);
     }
 
     fn create_multicast_socket() -> io::Result<tokio::net::UdpSocket> {
@@ -106,8 +112,6 @@ impl ReplicaDiscovery {
     async fn run_receiver(self: Arc<Self>) -> io::Result<()> {
         let mut recv_buffer = vec![0; 4096];
 
-        let mut seen = LruCache::new(256);
-
         loop {
             let (size, addr) = self.socket.recv_from(&mut recv_buffer).await?;
 
@@ -125,8 +129,14 @@ impl ReplicaDiscovery {
                 continue;
             }
 
-            if seen.get(&id).is_some() {
-                continue;
+            {
+                let mut seen = self.seen.lock().unwrap();
+
+                if seen.get(&id).is_some() {
+                    continue;
+                }
+
+                seen.put(id, ());
             }
 
             if is_rq {
@@ -135,10 +145,8 @@ impl ReplicaDiscovery {
 
             //println!("{:?}", listener_port);
 
-            seen.put(id, ());
-
             let replica_addr = SocketAddr::new(addr.ip(), listener_port);
-            self.found_replicas.lock().await.insert(replica_addr);
+            self.found_replicas.lock().await.insert((id, replica_addr));
 
             self.notify.notify_one();
         }
@@ -167,8 +175,8 @@ impl ReplicaDiscovery {
 
 #[derive(Serialize, Deserialize, Debug)]
 enum Message {
-    ImHereYouAll { id: Id, port: u16 },
-    Reply { id: Id, port: u16 },
+    ImHereYouAll { id: RuntimeId, port: u16 },
+    Reply { id: RuntimeId, port: u16 },
 }
 
 impl AsyncObjectTrait for ReplicaDiscovery {

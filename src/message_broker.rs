@@ -3,9 +3,9 @@ use crate::client::Client;
 use crate::message::{Message, Request, Response};
 use crate::object_stream::{ObjectReader, ObjectStream, ObjectWriter};
 use crate::server::Server;
+use std::ops::FnOnce;
 use std::sync::Arc;
 use tokio::sync::mpsc::{error::SendError, Receiver, Sender};
-use std::ops::FnOnce;
 
 /// A stream for receiving Requests and sending Responses
 pub struct ServerStream {
@@ -78,7 +78,7 @@ impl MessageBroker {
             send_channel: command_tx,
             request_tx,
             response_tx,
-            state: std::sync::Mutex::new(State{
+            state: std::sync::Mutex::new(State {
                 on_finish: Some(on_finish),
                 receiver_count: 0,
             }),
