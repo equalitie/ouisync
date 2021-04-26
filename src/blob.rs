@@ -363,9 +363,7 @@ impl Blob {
     // Total number of blocks in this blob including the possibly partially filled final block.
     fn block_count(&self) -> u32 {
         // https://stackoverflow.com/questions/2745074/fast-ceiling-of-an-integer-division-in-c-c
-        // NOTE: when `len` is zero this still returns 1 which is actually correct in this case
-        // because even empty blob needs one block to store the nonce prefix and the blob length.
-        (1 + (self.len.saturating_sub(1)) / BLOCK_SIZE as u64)
+        (1 + (self.len + self.header_size() as u64 - 1) / BLOCK_SIZE as u64)
             .try_into()
             .unwrap_or(u32::MAX)
     }
@@ -629,55 +627,17 @@ impl DerefMut for Cursor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::{distributions::Standard, Rng};
+    use proptest::prelude::*;
+    use rand::{distributions::Standard, prelude::*};
+    use std::future::Future;
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn write_and_read() {
-        let pool = init_db().await;
-        let secret_key = SecretKey::random();
-
-        // Create a blob spanning 2.5 blocks
-        let orig_content: Vec<u8> = rand::thread_rng()
-            .sample_iter(Standard)
-            .take(5 * BLOCK_SIZE / 2)
-            .collect();
-
-        let mut blob = Blob::create(pool.clone(), secret_key.clone(), None, 0);
-        blob.write(&orig_content[..]).await.unwrap();
-        blob.flush().await.unwrap();
-        drop(blob);
-
-        // Re-open the blob and read its contents.
-        let mut blob = Blob::open(pool.clone(), secret_key.clone(), None, 0)
-            .await
-            .unwrap();
-
-        // Read it in chunks of this size.
-        let chunk_size = 1024;
-        let mut read_contents = vec![0; chunk_size];
-        let mut read_len = 0;
-
-        loop {
-            let len = blob.read(&mut read_contents[read_len..]).await.unwrap();
-            if len == 0 {
-                break; // done
-            }
-
-            read_len += len;
-            read_contents.resize(read_contents.len() + chunk_size, 0);
-        }
-
-        assert_eq!(read_contents[..read_len], orig_content[..])
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn read_empty_blob() {
+    async fn empty_blob() {
         let pool = init_db().await;
         let secret_key = SecretKey::random();
 
         let mut blob = Blob::create(pool.clone(), secret_key.clone(), None, 0);
         blob.flush().await.unwrap();
-        drop(blob);
 
         // Re-open the blob and read its contents.
         let mut blob = Blob::open(pool.clone(), secret_key.clone(), None, 0)
@@ -688,34 +648,134 @@ mod tests {
         assert_eq!(blob.read(&mut buffer[..]).await.unwrap(), 0);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn len() {
-        let pool = init_db().await;
-        let secret_key = SecretKey::random();
+    // Arguments for the `write_and_read` test.
+    #[derive(Debug)]
+    struct WriteAndReadArgs {
+        blob_len: usize,
+        write_len: usize,
+        read_len: usize,
+        rng_seed: u64,
+    }
 
-        for &size in &[
-            0,
-            1,
-            2,
-            3,
-            100,
-            1024,
-            BLOCK_SIZE,
-            2 * BLOCK_SIZE,
-            5 * BLOCK_SIZE / 2,
-        ] {
-            let content: Vec<u8> = rand::thread_rng()
-                .sample_iter(Standard)
-                .take(size)
-                .collect();
-
-            let mut blob = Blob::create(pool.clone(), secret_key.clone(), None, 0);
-            blob.write(&content[..]).await.unwrap();
-            blob.flush().await.unwrap();
-
-            assert_eq!(blob.len(), size as u64);
+    impl WriteAndReadArgs {
+        fn strategy() -> impl Strategy<Value = Self> {
+            (1..3 * BLOCK_SIZE)
+                .prop_flat_map(|blob_len| {
+                    (
+                        Just(blob_len),
+                        1..=blob_len,
+                        1..=blob_len + 1,
+                        any::<u64>().no_shrink(),
+                    )
+                })
+                .prop_map(|(blob_len, write_len, read_len, rng_seed)| Self {
+                    blob_len,
+                    write_len,
+                    read_len,
+                    rng_seed,
+                })
         }
     }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(32))]
+
+        #[test]
+        fn write_and_read(args in WriteAndReadArgs::strategy()) {
+            run(write_and_read_case(
+                args.blob_len,
+                args.write_len,
+                args.read_len,
+                args.rng_seed,
+            ))
+        }
+
+        #[test]
+        fn len(content_len in 0..3 * BLOCK_SIZE, rng_seed in any::<u64>().no_shrink()) {
+            run(len_case(content_len, rng_seed))
+        }
+    }
+
+    async fn write_and_read_case(
+        blob_len: usize,
+        write_len: usize,
+        read_len: usize,
+        rng_seed: u64,
+    ) {
+        let mut rng = StdRng::seed_from_u64(rng_seed);
+        let secret_key = SecretKey::generate(&mut rng);
+        let pool = init_db().await;
+
+        // Create the blob and write to it in chunks of `write_len` bytes.
+        let mut blob = Blob::create(pool.clone(), secret_key.clone(), None, 0);
+
+        let orig_content: Vec<u8> = (&mut rng).sample_iter(Standard).take(blob_len).collect();
+
+        for chunk in orig_content.chunks(write_len) {
+            blob.write(chunk).await.unwrap();
+        }
+
+        blob.flush().await.unwrap();
+
+        // Re-open the blob and read from it in chunks of `read_len` bytes
+        let mut blob = Blob::open(pool.clone(), secret_key.clone(), None, 0)
+            .await
+            .unwrap();
+
+        let mut read_content = vec![0; 0];
+        let mut read_buffer = vec![0; read_len];
+
+        loop {
+            let len = blob.read(&mut read_buffer[..]).await.unwrap();
+
+            if len == 0 {
+                break; // done
+            }
+
+            read_content.extend(&read_buffer[..len]);
+        }
+
+        assert_eq!(orig_content.len(), read_content.len());
+        assert_eq!(
+            orig_content
+                .iter()
+                .zip(&read_content)
+                .position(|(orig, read)| orig != read),
+            None
+        );
+    }
+
+    async fn len_case(content_len: usize, rng_seed: u64) {
+        let mut rng = StdRng::seed_from_u64(rng_seed);
+        let secret_key = SecretKey::generate(&mut rng);
+        let pool = init_db().await;
+
+        let content: Vec<u8> = rng.sample_iter(Standard).take(content_len).collect();
+
+        let mut blob = Blob::create(pool.clone(), secret_key.clone(), None, 0);
+        blob.write(&content[..]).await.unwrap();
+        assert_eq!(blob.len(), content_len as u64);
+
+        blob.flush().await.unwrap();
+        assert_eq!(blob.len(), content_len as u64);
+
+        let blob = Blob::open(pool.clone(), secret_key.clone(), None, 0)
+            .await
+            .unwrap();
+        assert_eq!(blob.len(), content_len as u64);
+    }
+
+    // proptest currently doesn't work with the `#[tokio::test]` macro - we need to create the
+    // runtime manually.
+    fn run<F: Future>(future: F) -> F::Output {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_time()
+            .build()
+            .unwrap()
+            .block_on(future)
+    }
+
+    /*
 
     #[tokio::test(flavor = "multi_thread")]
     async fn seek() {
@@ -815,6 +875,7 @@ mod tests {
             content.len() as u64
         );
     }
+    */
 
     async fn init_db() -> db::Pool {
         let pool = db::Pool::connect(":memory:").await.unwrap();
