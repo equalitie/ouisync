@@ -12,6 +12,8 @@ use std::{
 use tokio::sync::{Mutex, Notify};
 use tokio::time::sleep;
 
+/// ID of this replica runtime, it is different from the ReplicaId because it is generated randomly
+/// on each ReplicaDiscovery instantiation.
 const ID_LEN: usize = 16; // 128 bits
 pub type RuntimeId = [u8; ID_LEN];
 
@@ -19,7 +21,6 @@ pub type RuntimeId = [u8; ID_LEN];
 // https://www.iana.org/assignments/multicast-addresses/multicast-addresses.xhtml
 const MULTICAST_ADDR: Ipv4Addr = Ipv4Addr::new(224, 0, 0, 137);
 const MULTICAST_PORT: u16 = 9271;
-
 const ADDR_ANY: Ipv4Addr = Ipv4Addr::new(0, 0, 0, 0);
 
 // Poor man's local discovery using UDP multicast.
@@ -62,6 +63,12 @@ impl ReplicaDiscovery {
         Ok(AsyncObject::new(n))
     }
 
+    ///
+    /// Wait for replicas to be found. Once some are, they are returned and their RuntimeId is
+    /// placed into a LRU cache so as to not re-report it too frequently. Once the peer
+    /// disconnects, the user of ReplicaDiscovery should call forget with the RuntimeId and the
+    /// replica shall start reporting it again.
+    ///
     pub async fn wait_for_activity(&self) -> HashSet<(RuntimeId, SocketAddr)> {
         loop {
             self.notify.notified().await;
@@ -79,6 +86,10 @@ impl ReplicaDiscovery {
         }
     }
 
+    ///
+    /// Remove the id of the remote replica from the LRU cache so frequent announcment can start
+    /// happening again.
+    ///
     pub fn forget(&self, id: &RuntimeId) {
         self.seen.lock().unwrap().pop(id);
     }
