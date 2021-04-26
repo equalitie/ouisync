@@ -627,9 +627,10 @@ impl DerefMut for Cursor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use proptest::prelude::*;
+    use proptest::{collection::vec, prelude::*};
     use rand::{distributions::Standard, prelude::*};
     use std::future::Future;
+    use test_strategy::proptest;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn empty_blob() {
@@ -648,125 +649,196 @@ mod tests {
         assert_eq!(blob.read(&mut buffer[..]).await.unwrap(), 0);
     }
 
-    // Arguments for the `write_and_read` test.
-    #[derive(Debug)]
-    struct WriteAndReadArgs {
-        blob_len: usize,
-        write_len: usize,
-        read_len: usize,
-        rng_seed: u64,
-    }
-
-    impl WriteAndReadArgs {
-        fn strategy() -> impl Strategy<Value = Self> {
-            (1..3 * BLOCK_SIZE)
-                .prop_flat_map(|blob_len| {
-                    (
-                        Just(blob_len),
-                        1..=blob_len,
-                        1..=blob_len + 1,
-                        any::<u64>().no_shrink(),
-                    )
-                })
-                .prop_map(|(blob_len, write_len, read_len, rng_seed)| Self {
-                    blob_len,
-                    write_len,
-                    read_len,
-                    rng_seed,
-                })
-        }
-    }
-
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(32))]
-
-        #[test]
-        fn write_and_read(args in WriteAndReadArgs::strategy()) {
-            run(write_and_read_case(
-                args.blob_len,
-                args.write_len,
-                args.read_len,
-                args.rng_seed,
-            ))
-        }
-
-        #[test]
-        fn len(content_len in 0..3 * BLOCK_SIZE, rng_seed in any::<u64>().no_shrink()) {
-            run(len_case(content_len, rng_seed))
-        }
-    }
-
-    async fn write_and_read_case(
-        blob_len: usize,
-        write_len: usize,
-        read_len: usize,
-        rng_seed: u64,
+    #[proptest]
+    fn write_and_read(
+        #[strategy(1..3 * BLOCK_SIZE)] blob_len: usize,
+        #[strategy(1..=#blob_len)] write_len: usize,
+        #[strategy(1..=#blob_len + 1)] read_len: usize,
+        #[strategy(rng_seed_strategy())] rng_seed: u64,
     ) {
-        let mut rng = StdRng::seed_from_u64(rng_seed);
-        let secret_key = SecretKey::generate(&mut rng);
-        let pool = init_db().await;
+        run(async {
+            let (rng, secret_key, pool) = setup(rng_seed).await;
 
-        // Create the blob and write to it in chunks of `write_len` bytes.
-        let mut blob = Blob::create(pool.clone(), secret_key.clone(), None, 0);
+            // Create the blob and write to it in chunks of `write_len` bytes.
+            let mut blob = Blob::create(pool.clone(), secret_key.clone(), None, 0);
 
-        let orig_content: Vec<u8> = (&mut rng).sample_iter(Standard).take(blob_len).collect();
+            let orig_content: Vec<u8> = rng.sample_iter(Standard).take(blob_len).collect();
 
-        for chunk in orig_content.chunks(write_len) {
-            blob.write(chunk).await.unwrap();
-        }
-
-        blob.flush().await.unwrap();
-
-        // Re-open the blob and read from it in chunks of `read_len` bytes
-        let mut blob = Blob::open(pool.clone(), secret_key.clone(), None, 0)
-            .await
-            .unwrap();
-
-        let mut read_content = vec![0; 0];
-        let mut read_buffer = vec![0; read_len];
-
-        loop {
-            let len = blob.read(&mut read_buffer[..]).await.unwrap();
-
-            if len == 0 {
-                break; // done
+            for chunk in orig_content.chunks(write_len) {
+                blob.write(chunk).await.unwrap();
             }
 
-            read_content.extend(&read_buffer[..len]);
-        }
+            blob.flush().await.unwrap();
 
-        assert_eq!(orig_content.len(), read_content.len());
-        assert_eq!(
-            orig_content
-                .iter()
-                .zip(&read_content)
-                .position(|(orig, read)| orig != read),
-            None
-        );
+            // Re-open the blob and read from it in chunks of `read_len` bytes
+            let mut blob = Blob::open(pool.clone(), secret_key.clone(), None, 0)
+                .await
+                .unwrap();
+
+            let mut read_content = vec![0; 0];
+            let mut read_buffer = vec![0; read_len];
+
+            loop {
+                let len = blob.read(&mut read_buffer[..]).await.unwrap();
+
+                if len == 0 {
+                    break; // done
+                }
+
+                read_content.extend(&read_buffer[..len]);
+            }
+
+            assert_eq!(read_content, orig_content);
+        })
     }
 
-    async fn len_case(content_len: usize, rng_seed: u64) {
-        let mut rng = StdRng::seed_from_u64(rng_seed);
-        let secret_key = SecretKey::generate(&mut rng);
-        let pool = init_db().await;
+    #[proptest]
+    fn len(
+        #[strategy(0..3 * BLOCK_SIZE)] content_len: usize,
+        #[strategy(rng_seed_strategy())] rng_seed: u64,
+    ) {
+        run(async {
+            let (rng, secret_key, pool) = setup(rng_seed).await;
+
+            let content: Vec<u8> = rng.sample_iter(Standard).take(content_len).collect();
+
+            let mut blob = Blob::create(pool.clone(), secret_key.clone(), None, 0);
+            blob.write(&content[..]).await.unwrap();
+            assert_eq!(blob.len(), content_len as u64);
+
+            blob.flush().await.unwrap();
+            assert_eq!(blob.len(), content_len as u64);
+
+            let blob = Blob::open(pool.clone(), secret_key.clone(), None, 0)
+                .await
+                .unwrap();
+            assert_eq!(blob.len(), content_len as u64);
+        })
+    }
+
+    #[proptest]
+    fn seek_from_start(
+        #[strategy(0..2 * BLOCK_SIZE)] content_len: usize,
+        #[strategy(0..#content_len)] pos: usize,
+        #[strategy(rng_seed_strategy())] rng_seed: u64,
+    ) {
+        run(seek_from(
+            content_len,
+            SeekFrom::Start(pos as u64),
+            pos,
+            rng_seed,
+        ))
+    }
+
+    #[proptest]
+    fn seek_from_end(
+        #[strategy(0..2 * BLOCK_SIZE)] content_len: usize,
+        #[strategy(0..#content_len)] pos: usize,
+        #[strategy(rng_seed_strategy())] rng_seed: u64,
+    ) {
+        run(seek_from(
+            content_len,
+            SeekFrom::End(-((content_len - pos) as i64)),
+            pos,
+            rng_seed,
+        ))
+    }
+
+    async fn seek_from(
+        content_len: usize,
+        seek_from: SeekFrom,
+        expected_pos: usize,
+        rng_seed: u64,
+    ) {
+        let (rng, secret_key, pool) = setup(rng_seed).await;
 
         let content: Vec<u8> = rng.sample_iter(Standard).take(content_len).collect();
 
         let mut blob = Blob::create(pool.clone(), secret_key.clone(), None, 0);
         blob.write(&content[..]).await.unwrap();
-        assert_eq!(blob.len(), content_len as u64);
-
         blob.flush().await.unwrap();
-        assert_eq!(blob.len(), content_len as u64);
 
-        let blob = Blob::open(pool.clone(), secret_key.clone(), None, 0)
-            .await
-            .unwrap();
-        assert_eq!(blob.len(), content_len as u64);
+        blob.seek(seek_from).await.unwrap();
+
+        let mut read_buffer = vec![0; content.len()];
+        let len = blob.read(&mut read_buffer[..]).await.unwrap();
+        assert_eq!(read_buffer[..len], content[expected_pos..]);
     }
 
-    // proptest currently doesn't work with the `#[tokio::test]` macro - we need to create the
-    // runtime manually.
+    #[proptest]
+    fn seek_from_current(
+        #[strategy(1..2 * BLOCK_SIZE)] content_len: usize,
+        #[strategy(vec(0..#content_len, 1..10))] positions: Vec<usize>,
+        #[strategy(rng_seed_strategy())] rng_seed: u64,
+    ) {
+        run(async {
+            let (rng, secret_key, pool) = setup(rng_seed).await;
+
+            let content: Vec<u8> = rng.sample_iter(Standard).take(content_len).collect();
+
+            let mut blob = Blob::create(pool.clone(), secret_key.clone(), None, 0);
+            blob.write(&content[..]).await.unwrap();
+            blob.flush().await.unwrap();
+            blob.seek(SeekFrom::Start(0)).await.unwrap();
+
+            let mut prev_pos = 0;
+            for pos in positions {
+                blob.seek(SeekFrom::Current(pos as i64 - prev_pos as i64))
+                    .await
+                    .unwrap();
+                prev_pos = pos;
+            }
+
+            let mut read_buffer = vec![0; content.len()];
+            let len = blob.read(&mut read_buffer[..]).await.unwrap();
+            assert_eq!(read_buffer[..len], content[prev_pos..]);
+        })
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn seek_after_end() {
+        let (_, secret_key, pool) = setup(0).await;
+
+        let content = b"content";
+
+        let mut blob = Blob::create(pool.clone(), secret_key.clone(), None, 0);
+        blob.write(&content[..]).await.unwrap();
+        blob.flush().await.unwrap();
+
+        let mut read_buffer = [0];
+
+        for &offset in &[0, 1, 2] {
+            blob.seek(SeekFrom::Start(content.len() as u64 + offset))
+                .await
+                .unwrap();
+            assert_eq!(blob.read(&mut read_buffer).await.unwrap(), 0);
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn seek_before_start() {
+        let (_, secret_key, pool) = setup(0).await;
+
+        let content = b"content";
+
+        let mut blob = Blob::create(pool.clone(), secret_key.clone(), None, 0);
+        blob.write(&content[..]).await.unwrap();
+        blob.flush().await.unwrap();
+
+        let mut read_buffer = vec![0; content.len()];
+
+        for &offset in &[0, 1, 2] {
+            blob.seek(SeekFrom::End(-(content.len() as i64) - offset))
+                .await
+                .unwrap();
+            blob.read(&mut read_buffer).await.unwrap();
+            assert_eq!(read_buffer, content);
+        }
+    }
+
+    // proptest doesn't work with the `#[tokio::test]` macro yet
+    // (see https://github.com/AltSysrq/proptest/issues/179). As a workaround, create the runtime
+    // manually.
     fn run<F: Future>(future: F) -> F::Output {
         tokio::runtime::Builder::new_multi_thread()
             .enable_time()
@@ -775,107 +847,17 @@ mod tests {
             .block_on(future)
     }
 
-    /*
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn seek() {
+    async fn setup(rng_seed: u64) -> (StdRng, SecretKey, db::Pool) {
+        let mut rng = StdRng::seed_from_u64(rng_seed);
+        let secret_key = SecretKey::generate(&mut rng);
         let pool = init_db().await;
-        let secret_key = SecretKey::random();
 
-        let content: Vec<u8> = rand::thread_rng()
-            .sample_iter(Standard)
-            .take(5 * BLOCK_SIZE / 2)
-            .collect();
-
-        let mut blob = Blob::create(pool.clone(), secret_key.clone(), None, 0);
-        blob.write(&content[..]).await.unwrap();
-        blob.flush().await.unwrap();
-
-        let mut buffer = vec![0; 1024];
-        let len = blob.read(&mut buffer[..]).await.unwrap();
-        assert_eq!(len, 0);
-
-        // Seek from the start
-        for &offset in &[
-            0,
-            1,
-            2,
-            3,
-            100,
-            1014,
-            BLOCK_SIZE as u64,
-            2 * BLOCK_SIZE as u64,
-            content.len() as u64 - 2,
-            content.len() as u64 - 1,
-            content.len() as u64,
-        ] {
-            assert_eq!(blob.seek(SeekFrom::Start(offset)).await.unwrap(), offset);
-            let len = blob.read(&mut buffer[..]).await.unwrap();
-            assert_eq!(len, buffer.len().min(content.len() - offset as usize));
-            assert_eq!(
-                buffer[..len],
-                content[offset as usize..offset as usize + len]
-            );
-        }
-
-        // Seek past the end
-        assert_eq!(
-            blob.seek(SeekFrom::Start(content.len() as u64 + 1))
-                .await
-                .unwrap(),
-            content.len() as u64
-        );
-
-        // Seek from the end
-        assert_eq!(
-            blob.seek(SeekFrom::End(0)).await.unwrap(),
-            content.len() as u64
-        );
-        assert_eq!(
-            blob.seek(SeekFrom::End(-1)).await.unwrap(),
-            content.len() as u64 - 1
-        );
-        assert_eq!(
-            blob.seek(SeekFrom::End(-(content.len() as i64)))
-                .await
-                .unwrap(),
-            0
-        );
-
-        // Seek past the start
-        assert_eq!(
-            blob.seek(SeekFrom::End(-(content.len() as i64) - 1))
-                .await
-                .unwrap(),
-            0
-        );
-
-        // Seek past the end
-        assert_eq!(
-            blob.seek(SeekFrom::End(1)).await.unwrap(),
-            content.len() as u64
-        );
-
-        // Rewind and seek from the current position
-        blob.seek(SeekFrom::Start(0)).await.unwrap();
-
-        assert_eq!(blob.seek(SeekFrom::Current(0)).await.unwrap(), 0);
-        assert_eq!(blob.seek(SeekFrom::Current(1)).await.unwrap(), 1);
-        assert_eq!(blob.seek(SeekFrom::Current(1)).await.unwrap(), 2);
-        assert_eq!(blob.seek(SeekFrom::Current(-1)).await.unwrap(), 1);
-
-        // Seek past the start
-        assert_eq!(blob.seek(SeekFrom::Current(-2)).await.unwrap(), 0);
-
-        // Seek past the end
-        assert_eq!(
-            blob.seek(SeekFrom::Current(content.len() as i64 + 1))
-                .await
-                .unwrap(),
-            content.len() as u64
-        );
+        (rng, secret_key, pool)
     }
-    */
+
+    fn rng_seed_strategy() -> impl Strategy<Value = u64> {
+        any::<u64>().no_shrink()
+    }
 
     async fn init_db() -> db::Pool {
         let pool = db::Pool::connect(":memory:").await.unwrap();
