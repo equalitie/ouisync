@@ -32,6 +32,12 @@ pub enum Error {
     // For existing blobs means the directory entry doesn't match the blob.
     #[error("wrong directory entry")]
     WrongDirectoryEntry,
+    #[error("malformed directory")]
+    MalformedDirectory(#[source] bincode::Error),
+    #[error("entry already exists")]
+    EntryExists,
+    #[error("entry not found")]
+    EntryNotFound,
 }
 
 impl From<TryFromSliceError> for Error {

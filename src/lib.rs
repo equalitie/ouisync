@@ -5,7 +5,9 @@ mod async_object;
 mod blob;
 mod block;
 mod client;
+mod directory;
 mod error;
+mod file;
 mod format;
 mod index;
 mod message;
@@ -21,7 +23,9 @@ pub use self::{
     async_object::AsyncObject,
     block::{BlockId, BlockName, BlockVersion, BLOCK_SIZE},
     client::Client,
+    directory::Directory,
     error::Error,
+    file::File,
     message::{Message, Request, Response},
     message_broker::MessageBroker,
     network::Network,

@@ -171,6 +171,22 @@ impl Blob {
         Ok(total_len)
     }
 
+    /// Read all data from this blob from the current seek position until the end and return then
+    /// in a `Vec`.
+    pub async fn read_to_end(&mut self) -> Result<Vec<u8>> {
+        let mut buffer = vec![
+            0;
+            (self.len() - self.seek_position())
+                .try_into()
+                .unwrap_or(usize::MAX)
+        ];
+
+        let len = self.read(&mut buffer).await?;
+        buffer.truncate(len);
+
+        Ok(buffer)
+    }
+
     /// Writes `buffer` into this blob, advancing the blob's internal cursor.
     pub async fn write(&mut self, mut buffer: &[u8]) -> Result<()> {
         // Wrap the whole `write` in a transaction to make it atomic.
@@ -179,6 +195,9 @@ impl Blob {
         loop {
             let len = self.current_block.content.write(buffer);
 
+            // TODO: only set the dirty flag if the content actually changed. Otherwise overwirting
+            // a block with the same content it already had would result in a new block with a new
+            // version being unnecessarily created.
             if len > 0 {
                 self.current_block.dirty = true;
             }
@@ -267,6 +286,11 @@ impl Blob {
         Ok(offset)
     }
 
+    /// Truncate the blob to zero length.
+    pub async fn truncate(&mut self) -> Result<()> {
+        todo!()
+    }
+
     /// Flushes this blob, ensuring that all intermediately buffered contents gets written to the
     /// store.
     pub async fn flush(&mut self) -> Result<()> {
@@ -275,6 +299,18 @@ impl Blob {
         tx.commit().await?;
 
         Ok(())
+    }
+
+    pub(crate) fn head_name(&self) -> &BlockName {
+        &self.current_block.head_name
+    }
+
+    pub(crate) fn db_pool(&self) -> &db::Pool {
+        &self.context.pool
+    }
+
+    pub(crate) fn secret_key(&self) -> &SecretKey {
+        &self.context.secret_key
     }
 
     async fn flush_in(&mut self, tx: &mut db::Transaction) -> Result<()> {
