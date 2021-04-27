@@ -6,7 +6,8 @@ use crate::{
     },
     db,
     error::Result,
-    index::{self, BlockKind, ChildTag},
+    index,
+    locator::Locator,
 };
 use std::{
     convert::TryInto,
@@ -16,31 +17,9 @@ use std::{
 };
 use zeroize::Zeroize;
 
-// TODO: rename to `BlobLocator`
-#[derive(Clone, Copy)]
-pub(crate) struct BlobId {
-    directory_name: Option<BlockName>,
-    seq: u32,
-}
-
-impl BlobId {
-    /// Id of the root blob.
-    pub const ROOT: Self = Self {
-        directory_name: None,
-        seq: 0,
-    };
-
-    pub fn new(directory_name: BlockName, seq: u32) -> Self {
-        Self {
-            directory_name: Some(directory_name),
-            seq,
-        }
-    }
-}
-
 pub struct Blob {
     pool: db::Pool,
-    id: BlobId,
+    locator: Locator,
     secret_key: SecretKey,
     nonce_sequence: NonceSequence,
     current_block: OpenBlock,
@@ -59,11 +38,11 @@ impl Blob {
     pub(crate) async fn open(
         pool: db::Pool,
         secret_key: SecretKey,
-        blob_id: BlobId,
+        locator: Locator,
     ) -> Result<Self> {
         // NOTE: no need to commit this transaction because we are only reading here.
         let mut tx = pool.begin().await?;
-        let (id, buffer, auth_tag) = load_block(&mut tx, &secret_key, &blob_id, None, 0).await?;
+        let (id, buffer, auth_tag) = load_block(&mut tx, &secret_key, &locator).await?;
 
         let mut content = Cursor::new(buffer);
 
@@ -75,8 +54,7 @@ impl Blob {
         let len = content.read_u64();
 
         let current_block = OpenBlock {
-            head_name: id.name,
-            number: 0,
+            locator,
             id,
             content,
             dirty: false,
@@ -84,7 +62,7 @@ impl Blob {
 
         Ok(Self {
             pool,
-            id: blob_id,
+            locator,
             secret_key,
             nonce_sequence,
             current_block,
@@ -96,7 +74,7 @@ impl Blob {
     /// Creates a new blob.
     ///
     /// See [`Self::open`] for explanation of `directory_name` and `directory_seq`.
-    pub(crate) fn create(pool: db::Pool, secret_key: SecretKey, blob_id: BlobId) -> Self {
+    pub(crate) fn create(pool: db::Pool, secret_key: SecretKey, locator: Locator) -> Self {
         let nonce_sequence = NonceSequence::random();
         let mut content = Cursor::new(Buffer::new());
 
@@ -105,8 +83,7 @@ impl Blob {
 
         let id = BlockId::random();
         let current_block = OpenBlock {
-            head_name: id.name,
-            number: 0,
+            locator,
             id,
             content,
             dirty: true,
@@ -114,7 +91,7 @@ impl Blob {
 
         Self {
             pool,
-            id: blob_id,
+            locator,
             secret_key,
             nonce_sequence,
             current_block,
@@ -148,8 +125,8 @@ impl Blob {
                 break;
             }
 
-            let number = self.current_block.next_number();
-            if number >= self.block_count() {
+            let locator = self.next_locator();
+            if locator.number() >= self.block_count() {
                 break;
             }
 
@@ -160,17 +137,10 @@ impl Blob {
             // a single `read` invocation anyway.
             let mut tx = self.pool.begin().await?;
 
-            let (id, content) = read_block(
-                &mut tx,
-                &self.secret_key,
-                &self.nonce_sequence,
-                &self.id,
-                Some(&self.current_block.head_name),
-                number,
-            )
-            .await?;
+            let (id, content) =
+                read_block(&mut tx, &self.secret_key, &self.nonce_sequence, &locator).await?;
 
-            self.replace_current_block(&mut tx, number, id, content)
+            self.replace_current_block(&mut tx, locator, id, content)
                 .await?;
 
             tx.commit().await?;
@@ -221,22 +191,14 @@ impl Blob {
                 break;
             }
 
-            let number = self.current_block.next_number();
-            let (id, content) = if number < self.block_count() {
-                read_block(
-                    &mut tx,
-                    &self.secret_key,
-                    &self.nonce_sequence,
-                    &self.id,
-                    Some(&self.current_block.head_name),
-                    number,
-                )
-                .await?
+            let locator = self.next_locator();
+            let (id, content) = if locator.number() < self.block_count() {
+                read_block(&mut tx, &self.secret_key, &self.nonce_sequence, &locator).await?
             } else {
                 (BlockId::random(), Buffer::new())
             };
 
-            self.replace_current_block(&mut tx, number, id, content)
+            self.replace_current_block(&mut tx, locator, id, content)
                 .await?;
         }
 
@@ -274,18 +236,13 @@ impl Blob {
         let block_number = (actual_offset / BLOCK_SIZE as u64) as u32;
         let block_offset = (actual_offset % BLOCK_SIZE as u64) as usize;
 
-        if block_number != self.current_block.number {
+        if block_number != self.current_block.locator.number() {
+            let locator = self.locator_at(block_number);
+
             let mut tx = self.pool.begin().await?;
-            let (id, content) = read_block(
-                &mut tx,
-                &self.secret_key,
-                &self.nonce_sequence,
-                &self.id,
-                Some(&self.current_block.head_name),
-                block_number,
-            )
-            .await?;
-            self.replace_current_block(&mut tx, block_number, id, content)
+            let (id, content) =
+                read_block(&mut tx, &self.secret_key, &self.nonce_sequence, &locator).await?;
+            self.replace_current_block(&mut tx, locator, id, content)
                 .await?;
             tx.commit().await?;
         }
@@ -311,7 +268,7 @@ impl Blob {
     }
 
     pub(crate) fn head_name(&self) -> &BlockName {
-        &self.current_block.head_name
+        self.current_block.head_name()
     }
 
     pub(crate) fn db_pool(&self) -> &db::Pool {
@@ -334,13 +291,12 @@ impl Blob {
             tx,
             &self.secret_key,
             &self.nonce_sequence,
-            &self.id,
-            Some(&self.current_block.head_name),
-            self.current_block.number,
+            &self.current_block.locator,
             &self.current_block.id,
             self.current_block.content.buffer.clone(),
         )
         .await?;
+
         self.current_block.dirty = false;
 
         Ok(())
@@ -349,7 +305,7 @@ impl Blob {
     async fn replace_current_block(
         &mut self,
         tx: &mut db::Transaction,
-        number: u32,
+        locator: Locator,
         id: BlockId,
         content: Buffer,
     ) -> Result<()> {
@@ -357,14 +313,13 @@ impl Blob {
 
         let mut content = Cursor::new(content);
 
-        if number == 0 {
+        if locator.number() == 0 {
             // If head block, skip over the header.
             content.pos = self.header_size();
         }
 
         self.current_block = OpenBlock {
-            head_name: self.current_block.head_name,
-            number,
+            locator,
             id,
             content,
             dirty: false,
@@ -379,22 +334,16 @@ impl Blob {
             return Ok(());
         }
 
-        if self.current_block.number == 0 {
+        if self.current_block.locator.number() == 0 {
             let old_pos = self.current_block.content.pos;
             self.current_block.content.pos = self.nonce_sequence.prefix().len();
             self.current_block.content.write_u64(self.len);
             self.current_block.content.pos = old_pos;
             self.current_block.dirty = true;
         } else {
-            let (mut id, buffer) = read_block(
-                tx,
-                &self.secret_key,
-                &self.nonce_sequence,
-                &self.id,
-                None,
-                0,
-            )
-            .await?;
+            let locator = self.locator_at(0);
+            let (mut id, buffer) =
+                read_block(tx, &self.secret_key, &self.nonce_sequence, &locator).await?;
 
             let mut cursor = Cursor::new(buffer);
             cursor.pos = self.nonce_sequence.prefix().len();
@@ -405,9 +354,7 @@ impl Blob {
                 tx,
                 &self.secret_key,
                 &self.nonce_sequence,
-                &self.id,
-                None,
-                0,
+                &locator,
                 &id,
                 cursor.buffer,
             )
@@ -429,35 +376,34 @@ impl Blob {
 
     // Returns the current seek position from the start of the blob.
     fn seek_position(&self) -> u64 {
-        self.current_block.number as u64 * BLOCK_SIZE as u64 + self.current_block.content.pos as u64
+        self.current_block.locator.number() as u64 * BLOCK_SIZE as u64
+            + self.current_block.content.pos as u64
             - self.header_size() as u64
     }
 
     fn header_size(&self) -> usize {
         self.nonce_sequence.prefix().len() + mem::size_of_val(&self.len)
     }
-}
 
-fn child_tag(
-    secret_key: &SecretKey,
-    blob_id: &BlobId,
-    head_name: Option<&BlockName>,
-    number: u32,
-) -> Option<ChildTag> {
-    match (number, &blob_id.directory_name) {
-        (0, None) => None, // root
-        (0, Some(directory_name)) => Some(ChildTag::new(
-            secret_key,
-            directory_name,
-            blob_id.seq,
-            BlockKind::Head,
-        )),
-        (_, _) => Some(ChildTag::new(
-            secret_key,
-            head_name.expect("head name is required for trunk blocks"),
-            number,
-            BlockKind::Trunk,
-        )),
+    fn locator_at(&self, number: u32) -> Locator {
+        if number == 0 {
+            self.locator
+        } else if let Some(head_name) = self.current_block.locator.head_name() {
+            Locator::Trunk(*head_name, number)
+        } else {
+            Locator::Trunk(self.current_block.id.name, number)
+        }
+    }
+
+    fn next_locator(&self) -> Locator {
+        // TODO: return error instead of panic
+        let number = self
+            .current_block
+            .locator
+            .number()
+            .checked_add(1)
+            .expect("block count limit exceeded");
+        self.locator_at(number)
     }
 }
 
@@ -465,12 +411,11 @@ async fn read_block(
     tx: &mut db::Transaction,
     secret_key: &SecretKey,
     nonce_sequence: &NonceSequence,
-    blob_id: &BlobId,
-    head_name: Option<&BlockName>,
-    number: u32,
+    locator: &Locator,
 ) -> Result<(BlockId, Buffer)> {
-    let (id, mut buffer, auth_tag) = load_block(tx, secret_key, blob_id, head_name, number).await?;
+    let (id, mut buffer, auth_tag) = load_block(tx, secret_key, locator).await?;
 
+    let number = locator.number();
     let nonce = nonce_sequence.get(number);
     let offset = if number == 0 {
         nonce_sequence.prefix().len()
@@ -486,11 +431,9 @@ async fn read_block(
 async fn load_block(
     tx: &mut db::Transaction,
     secret_key: &SecretKey,
-    blob_id: &BlobId,
-    head_name: Option<&BlockName>,
-    number: u32,
+    locator: &Locator,
 ) -> Result<(BlockId, Buffer, AuthTag)> {
-    let id = if let Some(child_tag) = child_tag(secret_key, blob_id, head_name, number) {
+    let id = if let Some(child_tag) = locator.encode(secret_key) {
         index::get(tx, &child_tag).await?
     } else {
         index::get_root(tx).await?
@@ -520,12 +463,11 @@ async fn write_block(
     tx: &mut db::Transaction,
     secret_key: &SecretKey,
     nonce_sequence: &NonceSequence,
-    blob_id: &BlobId,
-    head_name: Option<&BlockName>,
-    number: u32,
+    locator: &Locator,
     block_id: &BlockId,
     mut buffer: Buffer,
 ) -> Result<()> {
+    let number = locator.number();
     let nonce = nonce_sequence.get(number);
     let aad = block_id.to_array(); // "additional associated data"
 
@@ -540,7 +482,7 @@ async fn write_block(
 
     block::write(tx, block_id, &buffer, &auth_tag).await?;
 
-    if let Some(child_tag) = child_tag(secret_key, blob_id, head_name, number) {
+    if let Some(child_tag) = locator.encode(secret_key) {
         index::insert(tx, block_id, &child_tag).await?;
     } else {
         index::insert_root(tx, block_id).await?;
@@ -551,12 +493,8 @@ async fn write_block(
 
 // Data for a block that's been loaded into memory and decrypted.
 struct OpenBlock {
-    // Name of the head block of the blob. If this `OpenBlock` represents the head block, this is
-    // the same as `id.name`.
-    head_name: BlockName,
-    // Number of this blob within the blob. Head block's number is 0, then next one is 1, and so
-    // on...
-    number: u32,
+    // Locator of the block.
+    locator: Locator,
     // Id of the block.
     id: BlockId,
     // Decrypted content of the block wrapped in `Cursor` to track the current seek position.
@@ -566,11 +504,8 @@ struct OpenBlock {
 }
 
 impl OpenBlock {
-    fn next_number(&self) -> u32 {
-        // TODO: return error instead of panic
-        self.number
-            .checked_add(1)
-            .expect("block count limit exceeded")
+    fn head_name(&self) -> &BlockName {
+        self.locator.head_name().unwrap_or(&self.id.name)
     }
 }
 
@@ -695,11 +630,11 @@ mod tests {
         let pool = init_db().await;
         let secret_key = SecretKey::random();
 
-        let mut blob = Blob::create(pool.clone(), secret_key.clone(), BlobId::ROOT);
+        let mut blob = Blob::create(pool.clone(), secret_key.clone(), Locator::Root);
         blob.flush().await.unwrap();
 
         // Re-open the blob and read its contents.
-        let mut blob = Blob::open(pool.clone(), secret_key.clone(), BlobId::ROOT)
+        let mut blob = Blob::open(pool.clone(), secret_key.clone(), Locator::Root)
             .await
             .unwrap();
 
@@ -718,7 +653,7 @@ mod tests {
             let (rng, secret_key, pool) = setup(rng_seed).await;
 
             // Create the blob and write to it in chunks of `write_len` bytes.
-            let mut blob = Blob::create(pool.clone(), secret_key.clone(), BlobId::ROOT);
+            let mut blob = Blob::create(pool.clone(), secret_key.clone(), Locator::Root);
 
             let orig_content: Vec<u8> = rng.sample_iter(Standard).take(blob_len).collect();
 
@@ -729,7 +664,7 @@ mod tests {
             blob.flush().await.unwrap();
 
             // Re-open the blob and read from it in chunks of `read_len` bytes
-            let mut blob = Blob::open(pool.clone(), secret_key.clone(), BlobId::ROOT)
+            let mut blob = Blob::open(pool.clone(), secret_key.clone(), Locator::Root)
                 .await
                 .unwrap();
 
@@ -760,14 +695,14 @@ mod tests {
 
             let content: Vec<u8> = rng.sample_iter(Standard).take(content_len).collect();
 
-            let mut blob = Blob::create(pool.clone(), secret_key.clone(), BlobId::ROOT);
+            let mut blob = Blob::create(pool.clone(), secret_key.clone(), Locator::Root);
             blob.write(&content[..]).await.unwrap();
             assert_eq!(blob.len(), content_len as u64);
 
             blob.flush().await.unwrap();
             assert_eq!(blob.len(), content_len as u64);
 
-            let blob = Blob::open(pool.clone(), secret_key.clone(), BlobId::ROOT)
+            let blob = Blob::open(pool.clone(), secret_key.clone(), Locator::Root)
                 .await
                 .unwrap();
             assert_eq!(blob.len(), content_len as u64);
@@ -812,7 +747,7 @@ mod tests {
 
         let content: Vec<u8> = rng.sample_iter(Standard).take(content_len).collect();
 
-        let mut blob = Blob::create(pool.clone(), secret_key.clone(), BlobId::ROOT);
+        let mut blob = Blob::create(pool.clone(), secret_key.clone(), Locator::Root);
         blob.write(&content[..]).await.unwrap();
         blob.flush().await.unwrap();
 
@@ -834,7 +769,7 @@ mod tests {
 
             let content: Vec<u8> = rng.sample_iter(Standard).take(content_len).collect();
 
-            let mut blob = Blob::create(pool.clone(), secret_key.clone(), BlobId::ROOT);
+            let mut blob = Blob::create(pool.clone(), secret_key.clone(), Locator::Root);
             blob.write(&content[..]).await.unwrap();
             blob.flush().await.unwrap();
             blob.seek(SeekFrom::Start(0)).await.unwrap();
@@ -859,7 +794,7 @@ mod tests {
 
         let content = b"content";
 
-        let mut blob = Blob::create(pool.clone(), secret_key.clone(), BlobId::ROOT);
+        let mut blob = Blob::create(pool.clone(), secret_key.clone(), Locator::Root);
         blob.write(&content[..]).await.unwrap();
         blob.flush().await.unwrap();
 
@@ -879,7 +814,7 @@ mod tests {
 
         let content = b"content";
 
-        let mut blob = Blob::create(pool.clone(), secret_key.clone(), BlobId::ROOT);
+        let mut blob = Blob::create(pool.clone(), secret_key.clone(), Locator::Root);
         blob.write(&content[..]).await.unwrap();
         blob.flush().await.unwrap();
 

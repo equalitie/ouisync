@@ -1,12 +1,11 @@
 use crate::{
     block::{BlockId, BlockName, BlockVersion},
-    crypto::{Hash, SecretKey},
+    crypto::Hash,
     db,
     error::{Error, Result},
 };
-use sha3::{Digest, Sha3_256};
 use sqlx::{sqlite::SqliteRow, Row};
-use std::{convert::TryFrom, slice};
+use std::convert::TryFrom;
 
 /// Initializes the index. Creates the required database schema unless already exists.
 pub async fn init(pool: &db::Pool) -> Result<(), Error> {
@@ -57,11 +56,7 @@ pub async fn get_root(tx: &mut db::Transaction) -> Result<BlockId> {
 
 /// Insert a new block into the index.
 // TODO: take `Transaction` instead of `Pool`
-pub async fn insert(
-    tx: &mut db::Transaction,
-    block_id: &BlockId,
-    child_tag: &ChildTag,
-) -> Result<()> {
+pub async fn insert(tx: &mut db::Transaction, block_id: &BlockId, child_tag: &Hash) -> Result<()> {
     sqlx::query("INSERT OR REPLACE INTO index_leaves (block_name, block_version, child_tag) VALUES (?, ?, ?)")
         .bind(block_id.name.as_ref())
         .bind(block_id.version.as_ref())
@@ -73,7 +68,7 @@ pub async fn insert(
 }
 
 /// Retrieve `BlockId` of a block with `child_tag`.
-pub async fn get(tx: &mut db::Transaction, child_tag: &ChildTag) -> Result<BlockId> {
+pub async fn get(tx: &mut db::Transaction, child_tag: &Hash) -> Result<BlockId> {
     match sqlx::query("SELECT block_name, block_version FROM index_leaves WHERE child_tag = ?")
         .bind(child_tag.as_ref())
         .fetch_optional(tx)
@@ -92,42 +87,4 @@ fn get_block_id(row: &SqliteRow) -> Result<BlockId> {
     let version = BlockVersion::try_from(version)?;
 
     Ok(BlockId { name, version })
-}
-
-#[derive(Copy, Clone, Eq, PartialEq, Debug)]
-#[repr(u8)]
-pub enum BlockKind {
-    // First block in a blob. The child tag points to the first block of the containing directory.
-    Head = 0,
-    // Other than first block in a blob. The child tag points to the first block of the same blob.
-    Trunk = 1,
-}
-
-/// Encrypted block parent pointer.
-pub struct ChildTag(Hash);
-
-impl ChildTag {
-    pub fn new(
-        secret_key: &SecretKey,
-        parent_name: &BlockName,
-        block_seq: u32,
-        block_kind: BlockKind,
-    ) -> Self {
-        let key_hash = Sha3_256::digest(secret_key.as_array().as_slice());
-        Self(
-            Sha3_256::new()
-                .chain(key_hash)
-                .chain(parent_name.as_ref())
-                .chain(block_seq.to_le_bytes())
-                .chain(slice::from_ref(&(block_kind as u8)))
-                .finalize()
-                .into(),
-        )
-    }
-}
-
-impl AsRef<[u8]> for ChildTag {
-    fn as_ref(&self) -> &[u8] {
-        self.0.as_ref()
-    }
 }

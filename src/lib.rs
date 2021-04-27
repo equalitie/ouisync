@@ -10,6 +10,7 @@ mod error;
 mod file;
 mod format;
 mod index;
+mod locator;
 mod message;
 mod message_broker;
 mod network;

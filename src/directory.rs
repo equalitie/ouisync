@@ -1,9 +1,10 @@
 use crate::{
-    blob::{Blob, BlobId},
+    blob::Blob,
     crypto::SecretKey,
     db,
     error::{Error, Result},
     file::File,
+    locator::Locator,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -19,8 +20,12 @@ pub struct Directory {
 
 impl Directory {
     /// Opens existing directory.
-    pub(crate) async fn open(pool: db::Pool, secret_key: SecretKey, id: BlobId) -> Result<Self> {
-        let mut blob = Blob::open(pool, secret_key, id).await?;
+    pub(crate) async fn open(
+        pool: db::Pool,
+        secret_key: SecretKey,
+        locator: Locator,
+    ) -> Result<Self> {
+        let mut blob = Blob::open(pool, secret_key, locator).await?;
         let buffer = blob.read_to_end().await?;
         let content = bincode::deserialize(&buffer).map_err(Error::MalformedDirectory)?;
 
@@ -32,8 +37,8 @@ impl Directory {
     }
 
     /// Creates new directory.
-    pub(crate) fn create(pool: db::Pool, secret_key: SecretKey, id: BlobId) -> Self {
-        let blob = Blob::create(pool, secret_key, id);
+    pub(crate) fn create(pool: db::Pool, secret_key: SecretKey, locator: Locator) -> Self {
+        let blob = Blob::create(pool, secret_key, locator);
 
         Self {
             blob,
@@ -94,7 +99,7 @@ impl Directory {
         Ok(File::create(
             self.blob.db_pool().clone(),
             self.blob.secret_key().clone(),
-            BlobId::new(*self.blob.head_name(), seq),
+            Locator::Head(*self.blob.head_name(), seq),
         ))
     }
 
@@ -105,7 +110,7 @@ impl Directory {
         Ok(Self::create(
             self.blob.db_pool().clone(),
             self.blob.secret_key().clone(),
-            BlobId::new(*self.blob.head_name(), seq),
+            Locator::Head(*self.blob.head_name(), seq),
         ))
     }
 }
@@ -130,14 +135,14 @@ impl<'a> EntryInfo<'a> {
 
     /// Open the entry.
     pub async fn open(&self) -> Result<Entry> {
-        let id = BlobId::new(*self.parent_blob.head_name(), self.data.seq);
+        let locator = Locator::Head(*self.parent_blob.head_name(), self.data.seq);
 
         match self.data.entry_type {
             EntryType::File => Ok(Entry::File(
                 File::open(
                     self.parent_blob.db_pool().clone(),
                     self.parent_blob.secret_key().clone(),
-                    id,
+                    locator,
                 )
                 .await?,
             )),
@@ -145,7 +150,7 @@ impl<'a> EntryInfo<'a> {
                 Directory::open(
                     self.parent_blob.db_pool().clone(),
                     self.parent_blob.secret_key().clone(),
-                    id,
+                    locator,
                 )
                 .await?,
             )),
