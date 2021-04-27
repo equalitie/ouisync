@@ -4,6 +4,7 @@ pub mod db;
 mod async_object;
 mod blob;
 mod block;
+mod branch;
 mod client;
 mod directory;
 mod error;

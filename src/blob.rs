@@ -1,12 +1,12 @@
 use crate::{
     block::{self, BlockId, BlockName, BlockVersion, BLOCK_SIZE},
+    branch::Branch,
     crypto::{
         aead::{AeadInPlace, NewAead},
         AuthTag, Cipher, Nonce, NonceSequence, SecretKey,
     },
     db,
     error::Result,
-    index,
     locator::Locator,
 };
 use std::{
@@ -18,6 +18,7 @@ use std::{
 use zeroize::Zeroize;
 
 pub struct Blob {
+    branch: Branch,
     pool: db::Pool,
     locator: Locator,
     secret_key: SecretKey,
@@ -40,9 +41,11 @@ impl Blob {
         secret_key: SecretKey,
         locator: Locator,
     ) -> Result<Self> {
+        let branch = Branch::new();
+
         // NOTE: no need to commit this transaction because we are only reading here.
         let mut tx = pool.begin().await?;
-        let (id, buffer, auth_tag) = load_block(&mut tx, &secret_key, &locator).await?;
+        let (id, buffer, auth_tag) = load_block(&branch, &mut tx, &secret_key, &locator).await?;
 
         let mut content = Cursor::new(buffer);
 
@@ -61,6 +64,7 @@ impl Blob {
         };
 
         Ok(Self {
+            branch,
             pool,
             locator,
             secret_key,
@@ -90,6 +94,7 @@ impl Blob {
         };
 
         Self {
+            branch: Branch::new(),
             pool,
             locator,
             secret_key,
@@ -138,7 +143,7 @@ impl Blob {
             let mut tx = self.pool.begin().await?;
 
             let (id, content) =
-                read_block(&mut tx, &self.secret_key, &self.nonce_sequence, &locator).await?;
+                read_block(&self.branch, &mut tx, &self.secret_key, &self.nonce_sequence, &locator).await?;
 
             self.replace_current_block(&mut tx, locator, id, content)
                 .await?;
@@ -193,7 +198,7 @@ impl Blob {
 
             let locator = self.next_locator();
             let (id, content) = if locator.number() < self.block_count() {
-                read_block(&mut tx, &self.secret_key, &self.nonce_sequence, &locator).await?
+                read_block(&self.branch, &mut tx, &self.secret_key, &self.nonce_sequence, &locator).await?
             } else {
                 (BlockId::random(), Buffer::new())
             };
@@ -241,7 +246,7 @@ impl Blob {
 
             let mut tx = self.pool.begin().await?;
             let (id, content) =
-                read_block(&mut tx, &self.secret_key, &self.nonce_sequence, &locator).await?;
+                read_block(&self.branch, &mut tx, &self.secret_key, &self.nonce_sequence, &locator).await?;
             self.replace_current_block(&mut tx, locator, id, content)
                 .await?;
             tx.commit().await?;
@@ -323,6 +328,7 @@ impl Blob {
         self.current_block.id.version = BlockVersion::random();
 
         write_block(
+            &mut self.branch,
             tx,
             &self.secret_key,
             &self.nonce_sequence,
@@ -352,7 +358,7 @@ impl Blob {
         } else {
             let locator = self.locator_at(0);
             let (mut id, buffer) =
-                read_block(tx, &self.secret_key, &self.nonce_sequence, &locator).await?;
+                read_block(&self.branch, tx, &self.secret_key, &self.nonce_sequence, &locator).await?;
 
             let mut cursor = Cursor::new(buffer);
             cursor.pos = self.nonce_sequence.prefix().len();
@@ -360,6 +366,7 @@ impl Blob {
             id.version = BlockVersion::random();
 
             write_block(
+                &mut self.branch,
                 tx,
                 &self.secret_key,
                 &self.nonce_sequence,
@@ -417,12 +424,13 @@ impl Blob {
 }
 
 async fn read_block(
+    branch: &Branch,
     tx: &mut db::Transaction,
     secret_key: &SecretKey,
     nonce_sequence: &NonceSequence,
     locator: &Locator,
 ) -> Result<(BlockId, Buffer)> {
-    let (id, mut buffer, auth_tag) = load_block(tx, secret_key, locator).await?;
+    let (id, mut buffer, auth_tag) = load_block(&branch, tx, secret_key, locator).await?;
 
     let number = locator.number();
     let nonce = nonce_sequence.get(number);
@@ -438,14 +446,15 @@ async fn read_block(
 }
 
 async fn load_block(
+    branch: &Branch,
     tx: &mut db::Transaction,
     secret_key: &SecretKey,
     locator: &Locator,
 ) -> Result<(BlockId, Buffer, AuthTag)> {
     let id = if let Some(encoded_locator) = locator.encode(secret_key) {
-        index::get(tx, &encoded_locator).await?
+        branch.get(tx, &encoded_locator).await?
     } else {
-        index::get_root(tx).await?
+        branch.get_root(tx).await?
     };
 
     let mut content = Buffer::new();
@@ -469,6 +478,7 @@ fn decrypt_block(
 }
 
 async fn write_block(
+    branch: &mut Branch,
     tx: &mut db::Transaction,
     secret_key: &SecretKey,
     nonce_sequence: &NonceSequence,
@@ -492,9 +502,9 @@ async fn write_block(
     block::write(tx, block_id, &buffer, &auth_tag).await?;
 
     if let Some(encoded_locator) = locator.encode(secret_key) {
-        index::insert(tx, block_id, &encoded_locator).await?;
+        branch.insert(tx, block_id, &encoded_locator).await?;
     } else {
-        index::insert_root(tx, block_id).await?;
+        branch.insert_root(tx, block_id).await?;
     }
 
     Ok(())
@@ -629,6 +639,7 @@ impl DerefMut for Cursor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::index;
     use proptest::{collection::vec, prelude::*};
     use rand::{distributions::Standard, prelude::*};
     use std::future::Future;
