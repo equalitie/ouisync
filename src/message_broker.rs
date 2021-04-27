@@ -188,13 +188,16 @@ impl MessageBroker {
                     self.handle_message(msg).await;
                 }
                 Err(_) => {
-                    let mut state = self.state.lock().unwrap();
-                    state.receiver_count -= 1;
+                    let rc = {
+                        let mut state = self.state.lock().unwrap();
+                        state.receiver_count -= 1;
+                        state.receiver_count
+                    };
 
-                    if state.receiver_count == 0 {
+                    if rc == 0 {
                         self.finish();
-                        break;
                     }
+                    break;
                 }
             };
         }

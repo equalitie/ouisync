@@ -129,17 +129,14 @@ impl AsyncObjectTrait for Network {
 }
 
 struct Mutable<T> {
-    rx: tokio::sync::watch::Receiver<()>,
-    tx: tokio::sync::watch::Sender<()>,
+    notify: tokio::sync::Notify,
     value: std::sync::Mutex<T>,
 }
 
 impl<T> Mutable<T> {
     pub fn new(value: T) -> Mutable<T> {
-        let (tx, rx) = tokio::sync::watch::channel(());
         Mutable {
-            rx,
-            tx,
+            notify: tokio::sync::Notify::new(),
             value: std::sync::Mutex::new(value),
         }
     }
@@ -150,10 +147,10 @@ impl<T> Mutable<T> {
     {
         let mut v = self.value.lock().unwrap();
         f(&mut v);
-        self.tx.send(()).unwrap();
+        self.notify.notify_one();
     }
 
-    pub async fn changed(&self) -> Result<(), tokio::sync::watch::error::RecvError> {
-        self.rx.clone().changed().await
+    pub async fn changed(&self) {
+        self.notify.notified().await
     }
 }
