@@ -129,7 +129,7 @@ pub struct EntryInfo<'a> {
 }
 
 impl<'a> EntryInfo<'a> {
-    pub fn name(&self) -> &OsStr {
+    pub fn name(&self) -> &'a OsStr {
         self.name
     }
 
@@ -214,4 +214,52 @@ struct EntryData {
     entry_type: EntryType,
     seq: u32,
     // TODO: metadata
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{block, index};
+    use std::collections::BTreeSet;
+
+    #[ignore]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn create_and_list_entries() {
+        let (pool, secret_key) = setup().await;
+
+        // Create the root directory and put some file in it.
+        let mut dir = Directory::create(pool.clone(), secret_key.clone(), Locator::Root);
+
+        let mut file_dog = dir.create_file("dog.txt".into()).unwrap();
+        file_dog.write(b"woof").await.unwrap();
+        file_dog.flush().await.unwrap();
+
+        let mut file_cat = dir.create_file("cat.txt".into()).unwrap();
+        file_cat.write(b"meow").await.unwrap();
+        file_cat.flush().await.unwrap();
+
+        dir.flush().await.unwrap();
+
+        // Reopen the dir and try to read the files.
+        let dir = Directory::open(pool, secret_key, Locator::Root)
+            .await
+            .unwrap();
+
+        let expected_names: BTreeSet<_> = vec!["dog.txt", "cat.txt"].into_iter().collect();
+        let actual_names: BTreeSet<_> = dir
+            .entries()
+            .map(|entry| entry.name().to_str().expect("not utf8"))
+            .collect();
+        assert_eq!(actual_names, expected_names);
+    }
+
+    async fn setup() -> (db::Pool, SecretKey) {
+        let pool = db::Pool::connect(":memory:").await.unwrap();
+        index::init(&pool).await.unwrap();
+        block::init(&pool).await.unwrap();
+
+        let secret_key = SecretKey::random();
+
+        (pool, secret_key)
+    }
 }
