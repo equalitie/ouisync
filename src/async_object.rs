@@ -64,9 +64,15 @@ pub struct AbortHandles {
 }
 
 impl AbortHandles {
-    pub fn new() -> AbortHandles {
-        AbortHandles {
+    pub fn new() -> Self {
+        Self {
             abort_handles: RwLock::new(Vec::new()),
         }
+    }
+}
+
+impl Default for AbortHandles {
+    fn default() -> Self {
+        AbortHandles::new()
     }
 }

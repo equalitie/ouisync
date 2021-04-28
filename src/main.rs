@@ -13,7 +13,7 @@ async fn main() -> Result<()> {
 
     env_logger::init();
 
-    let pool = db::init(options.db_path()?).await?;
+    let _pool = db::init(options.db_path()?).await?;
 
     let _network = Network::new(options.enable_local_discovery);
 

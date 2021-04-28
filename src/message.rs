@@ -17,14 +17,14 @@ pub enum Message {
 }
 
 impl Message {
-    pub fn as_response(self) -> Response {
+    pub fn into_response(self) -> Response {
         match self {
             Message::Request(_) => panic!("Message is not a response"),
             Message::Response(rs) => rs,
         }
     }
 
-    pub fn as_request(self) -> Request {
+    pub fn into_request(self) -> Request {
         match self {
             Message::Request(rq) => rq,
             Message::Response(_) => panic!("Message is not a request"),

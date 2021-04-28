@@ -95,7 +95,7 @@ impl ObjectWriter {
 ///
 /// Read object from the stream
 ///
-async fn read_impl<'a, R, Object>(byte_reader: &'a mut R) -> io::Result<Object>
+async fn read_impl<R, Object>(byte_reader: &mut R) -> io::Result<Object>
 where
     R: AsyncRead + Unpin,
     Object: serde::de::DeserializeOwned,
@@ -124,8 +124,8 @@ where
 ///
 /// Write object into the stream
 ///
-async fn write_impl<'a, W, Object: ?Sized>(
-    byte_writer: &'a mut W,
+async fn write_impl<W, Object: ?Sized>(
+    byte_writer: &mut W,
     object: &Object,
 ) -> io::Result<()>
 where

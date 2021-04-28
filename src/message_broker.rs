@@ -22,7 +22,7 @@ impl ServerStream {
         self.sender
             .send(Command::SendMessage(Message::Response(rs)))
             .await
-            .map_err(|e| SendError(e.0.as_send_message().as_response()))
+            .map_err(|e| SendError(e.0.into_send_message().into_response()))
     }
 }
 
@@ -41,7 +41,7 @@ impl ClientStream {
         self.sender
             .send(Command::SendMessage(Message::Request(rq)))
             .await
-            .map_err(|e| SendError(e.0.as_send_message().as_request()))
+            .map_err(|e| SendError(e.0.into_send_message().into_request()))
     }
 }
 
@@ -133,7 +133,7 @@ impl MessageBroker {
         self.abortable_spawn(async move {
             let (r, w) = con.into_split();
 
-            if let Err(_) = send_channel.send(Command::AddWriter(w)).await {
+            if send_channel.send(Command::AddWriter(w)).await.is_err() {
                 println!("Failed to activate writer");
                 // XXX: Tell self to abort
                 return;
@@ -166,7 +166,7 @@ impl MessageBroker {
                     assert!(!ws.is_empty());
 
                     while !ws.is_empty() {
-                        if let Ok(_) = ws[0].write(&m).await {
+                        if ws[0].write(&m).await.is_ok() {
                             break;
                         }
                         ws.remove(0);
@@ -228,7 +228,7 @@ enum Command {
 }
 
 impl Command {
-    fn as_send_message(self) -> Message {
+    fn into_send_message(self) -> Message {
         match self {
             Command::SendMessage(m) => m,
             _ => panic!("Command is not SendMessage"),

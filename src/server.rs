@@ -9,7 +9,9 @@ impl Server {
         loop {
             let rq = con.read().await;
             println!("Server: received request {:?}", rq);
-            con.write(Response::Hello).await;
+            if con.write(Response::Hello).await.is_err() {
+                return;
+            }
         }
     }
 }

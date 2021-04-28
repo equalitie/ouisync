@@ -45,7 +45,7 @@ impl ReplicaDiscovery {
             socket: Self::create_multicast_socket()?,
             found_replicas: Mutex::new(HashSet::new()),
             seen: std::sync::Mutex::new(LruCache::new(256)),
-            notify: notify.clone(),
+            notify,
             abort_handles: AbortHandles::new(),
         });
 
