@@ -1,6 +1,6 @@
 use crate::{
     block::BlockName,
-    crypto::{Hash, SecretKey},
+    crypto::{Cryptor, Hash},
 };
 use sha3::{Digest, Sha3_256};
 use std::slice;
@@ -45,18 +45,25 @@ impl Locator {
     /// One-way encoding of this `Locator` for the use in the index.
     /// Returns `None` only if `self` is `Root`. This is because root locator doesn't need to be
     /// stored in the index.
-    pub fn encode(&self, secret_key: &SecretKey) -> Option<Hash> {
+    pub fn encode(&self, cryptor: &Cryptor) -> Option<Hash> {
         let (name, seq, flag) = match self {
             Self::Root => return None,
             Self::Head(name, seq) => (name, seq, 0),
             Self::Trunk(name, seq) => (name, seq, 1),
         };
 
-        let key_hash = Sha3_256::digest(secret_key.as_array().as_slice());
+        let mut hasher = Sha3_256::new();
+
+        match cryptor {
+            Cryptor::ChaCha20Poly1305(key) => {
+                let key_hash = Sha3_256::digest(key.as_array().as_slice());
+                hasher.update(key_hash);
+            }
+            Cryptor::Null => {}
+        }
 
         Some(
-            Sha3_256::new()
-                .chain(key_hash)
+            hasher
                 .chain(name)
                 .chain(seq.to_le_bytes())
                 .chain(slice::from_ref(&flag))

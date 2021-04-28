@@ -1,6 +1,6 @@
 use crate::{
     blob::Blob,
-    crypto::SecretKey,
+    crypto::Cryptor,
     db,
     error::{Error, Result},
     file::File,
@@ -20,12 +20,8 @@ pub struct Directory {
 
 impl Directory {
     /// Opens existing directory.
-    pub(crate) async fn open(
-        pool: db::Pool,
-        secret_key: SecretKey,
-        locator: Locator,
-    ) -> Result<Self> {
-        let mut blob = Blob::open(pool, secret_key, locator).await?;
+    pub(crate) async fn open(pool: db::Pool, cryptor: Cryptor, locator: Locator) -> Result<Self> {
+        let mut blob = Blob::open(pool, cryptor, locator).await?;
         let buffer = blob.read_to_end().await?;
         let content = bincode::deserialize(&buffer).map_err(Error::MalformedDirectory)?;
 
@@ -37,8 +33,8 @@ impl Directory {
     }
 
     /// Creates new directory.
-    pub(crate) fn create(pool: db::Pool, secret_key: SecretKey, locator: Locator) -> Self {
-        let blob = Blob::create(pool, secret_key, locator);
+    pub(crate) fn create(pool: db::Pool, cryptor: Cryptor, locator: Locator) -> Self {
+        let blob = Blob::create(pool, cryptor, locator);
 
         Self {
             blob,
@@ -98,7 +94,7 @@ impl Directory {
 
         Ok(File::create(
             self.blob.db_pool().clone(),
-            self.blob.secret_key().clone(),
+            self.blob.cryptor().clone(),
             Locator::Head(*self.blob.head_name(), seq),
         ))
     }
@@ -109,7 +105,7 @@ impl Directory {
 
         Ok(Self::create(
             self.blob.db_pool().clone(),
-            self.blob.secret_key().clone(),
+            self.blob.cryptor().clone(),
             Locator::Head(*self.blob.head_name(), seq),
         ))
     }
@@ -141,7 +137,7 @@ impl<'a> EntryInfo<'a> {
             EntryType::File => Ok(Entry::File(
                 File::open(
                     self.parent_blob.db_pool().clone(),
-                    self.parent_blob.secret_key().clone(),
+                    self.parent_blob.cryptor().clone(),
                     locator,
                 )
                 .await?,
@@ -149,7 +145,7 @@ impl<'a> EntryInfo<'a> {
             EntryType::Directory => Ok(Entry::Directory(
                 Directory::open(
                     self.parent_blob.db_pool().clone(),
-                    self.parent_blob.secret_key().clone(),
+                    self.parent_blob.cryptor().clone(),
                     locator,
                 )
                 .await?,
@@ -224,10 +220,10 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn create_and_list_entries() {
-        let (pool, secret_key) = setup().await;
+        let pool = setup().await;
 
         // Create the root directory and put some file in it.
-        let mut dir = Directory::create(pool.clone(), secret_key.clone(), Locator::Root);
+        let mut dir = Directory::create(pool.clone(), Cryptor::Null, Locator::Root);
 
         let mut file_dog = dir.create_file("dog.txt".into()).unwrap();
         file_dog.write(b"woof").await.unwrap();
@@ -240,7 +236,7 @@ mod tests {
         dir.flush().await.unwrap();
 
         // Reopen the dir and try to read the files.
-        let dir = Directory::open(pool, secret_key, Locator::Root)
+        let dir = Directory::open(pool, Cryptor::Null, Locator::Root)
             .await
             .unwrap();
 
@@ -254,7 +250,7 @@ mod tests {
             (OsStr::new("dog.txt"), b"woof"),
             (OsStr::new("cat.txt"), b"meow"),
         ] {
-            let entry = dir.lookup(file_name.into()).unwrap().open().await.unwrap();
+            let entry = dir.lookup(file_name).unwrap().open().await.unwrap();
             let mut file = match entry {
                 Entry::File(file) => file,
                 _ => panic!("expecting File, got {:?}", entry.entry_type()),
@@ -265,13 +261,10 @@ mod tests {
         }
     }
 
-    async fn setup() -> (db::Pool, SecretKey) {
+    async fn setup() -> db::Pool {
         let pool = db::Pool::connect(":memory:").await.unwrap();
         index::init(&pool).await.unwrap();
         block::init(&pool).await.unwrap();
-
-        let secret_key = SecretKey::random();
-
-        (pool, secret_key)
+        pool
     }
 }
