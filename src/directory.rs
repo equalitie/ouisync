@@ -56,7 +56,7 @@ impl Directory {
         let buffer =
             bincode::serialize(&self.content).expect("failed to serialize directory content");
 
-        self.blob.truncate().await?;
+        self.blob.truncate();
         self.blob.write(&buffer).await?;
         self.blob.flush().await?;
 
@@ -222,7 +222,6 @@ mod tests {
     use crate::{block, index};
     use std::collections::BTreeSet;
 
-    #[ignore]
     #[tokio::test(flavor = "multi_thread")]
     async fn create_and_list_entries() {
         let (pool, secret_key) = setup().await;
@@ -245,12 +244,25 @@ mod tests {
             .await
             .unwrap();
 
-        let expected_names: BTreeSet<_> = vec!["dog.txt", "cat.txt"].into_iter().collect();
-        let actual_names: BTreeSet<_> = dir
-            .entries()
-            .map(|entry| entry.name().to_str().expect("not utf8"))
+        let expected_names: BTreeSet<_> = vec![OsStr::new("dog.txt"), OsStr::new("cat.txt")]
+            .into_iter()
             .collect();
+        let actual_names: BTreeSet<_> = dir.entries().map(|entry| entry.name()).collect();
         assert_eq!(actual_names, expected_names);
+
+        for &(file_name, expected_content) in &[
+            (OsStr::new("dog.txt"), b"woof"),
+            (OsStr::new("cat.txt"), b"meow"),
+        ] {
+            let entry = dir.lookup(file_name.into()).unwrap().open().await.unwrap();
+            let mut file = match entry {
+                Entry::File(file) => file,
+                _ => panic!("expecting File, got {:?}", entry.entry_type()),
+            };
+
+            let actual_content = file.read_to_end().await.unwrap();
+            assert_eq!(actual_content, expected_content);
+        }
     }
 
     async fn setup() -> (db::Pool, SecretKey) {

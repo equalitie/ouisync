@@ -253,15 +253,23 @@ impl Blob {
     }
 
     /// Truncate the blob to zero length.
-    pub async fn truncate(&mut self) -> Result<()> {
-        todo!()
+    pub fn truncate(&mut self) {
+        // TODO: reuse the truncated blocks on subsequent writes if the content is identical
+
+        if self.len == 0 {
+            return;
+        }
+
+        self.len = 0;
+        self.len_dirty = true;
     }
 
     /// Flushes this blob, ensuring that all intermediately buffered contents gets written to the
     /// store.
     pub async fn flush(&mut self) -> Result<()> {
         let mut tx = self.pool.begin().await?;
-        self.flush_in(&mut tx).await?;
+        self.write_len(&mut tx).await?;
+        self.write_current_block(&mut tx).await?;
         tx.commit().await?;
 
         Ok(())
@@ -279,29 +287,6 @@ impl Blob {
         &self.secret_key
     }
 
-    async fn flush_in(&mut self, tx: &mut db::Transaction) -> Result<()> {
-        if !self.current_block.dirty {
-            return Ok(());
-        }
-
-        self.current_block.id.version = BlockVersion::random();
-
-        self.write_len(tx).await?;
-        write_block(
-            tx,
-            &self.secret_key,
-            &self.nonce_sequence,
-            &self.current_block.locator,
-            &self.current_block.id,
-            self.current_block.content.buffer.clone(),
-        )
-        .await?;
-
-        self.current_block.dirty = false;
-
-        Ok(())
-    }
-
     async fn replace_current_block(
         &mut self,
         tx: &mut db::Transaction,
@@ -309,7 +294,8 @@ impl Blob {
         id: BlockId,
         content: Buffer,
     ) -> Result<()> {
-        self.flush_in(tx).await?;
+        self.write_len(tx).await?;
+        self.write_current_block(tx).await?;
 
         let mut content = Cursor::new(content);
 
@@ -324,6 +310,29 @@ impl Blob {
             content,
             dirty: false,
         };
+
+        Ok(())
+    }
+
+    // Write the current block into the store.
+    async fn write_current_block(&mut self, tx: &mut db::Transaction) -> Result<()> {
+        if !self.current_block.dirty {
+            return Ok(());
+        }
+
+        self.current_block.id.version = BlockVersion::random();
+
+        write_block(
+            tx,
+            &self.secret_key,
+            &self.nonce_sequence,
+            &self.current_block.locator,
+            &self.current_block.id,
+            self.current_block.content.buffer.clone(),
+        )
+        .await?;
+
+        self.current_block.dirty = false;
 
         Ok(())
     }
