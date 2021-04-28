@@ -1,8 +1,9 @@
 use crate::{
     crypto::Cryptor,
     db,
-    directory::Directory,
+    directory::{Directory, Entry, EntryType},
     error::{Error, Result},
+    file::File,
     locator::Locator,
 };
 
@@ -16,7 +17,18 @@ impl Repository {
         Self { pool, cryptor }
     }
 
-    /// Open a directory.
+    /// Open an entry (file or directory).
+    pub async fn open_entry(&self, locator: Locator, entry_type: EntryType) -> Result<Entry> {
+        match entry_type {
+            EntryType::File => Ok(Entry::File(self.open_file(locator).await?)),
+            EntryType::Directory => Ok(Entry::Directory(self.open_directory(locator).await?)),
+        }
+    }
+
+    pub async fn open_file(&self, _locator: Locator) -> Result<File> {
+        todo!()
+    }
+
     pub async fn open_directory(&self, locator: Locator) -> Result<Directory> {
         match Directory::open(self.pool.clone(), self.cryptor.clone(), locator).await {
             Ok(dir) => Ok(dir),

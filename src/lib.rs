@@ -25,7 +25,7 @@ pub use self::{
     async_object::AsyncObject,
     client::Client,
     crypto::Cryptor,
-    directory::{Directory, Entry, EntryType},
+    directory::{Directory, Entry, EntryInfo, EntryType},
     error::{Error, Result},
     file::File,
     locator::Locator,

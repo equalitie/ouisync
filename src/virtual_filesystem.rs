@@ -3,7 +3,7 @@ use fuser::{
     BackgroundSession, FileAttr, FileType, ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry,
     ReplyWrite, Request,
 };
-use ouisync::{EntryType, Error, Repository};
+use ouisync::{Entry, EntryType, Error, Repository, Result};
 use std::{
     ffi::OsStr,
     io,
@@ -59,8 +59,8 @@ impl fuser::Filesystem for VirtualFilesystem {
     fn lookup(&mut self, _req: &Request, parent: Inode, name: &OsStr, reply: ReplyEntry) {
         log::debug!("lookup (parent={}, name={:?})", parent, name);
 
-        let locator = match self.inodes.get(parent) {
-            Ok(locator) => locator,
+        let (locator, entry_type) = match self.inodes.get(parent) {
+            Ok(pair) => pair,
             Err(error) => {
                 reply.error(to_error_code(error));
                 return;
@@ -71,15 +71,34 @@ impl fuser::Filesystem for VirtualFilesystem {
         let inodes = &mut self.inodes;
 
         self.rt.block_on(async {
-            let dir = match repository.open_directory(locator).await {
-                Ok(dir) => dir,
+            let dir = match repository.open_entry(locator, entry_type).await {
+                Ok(Entry::Directory(dir)) => dir,
+                Ok(_) => {
+                    reply.error(libc::ENOTDIR);
+                    return;
+                }
                 Err(error) => {
                     reply.error(to_error_code(error));
                     return;
                 }
             };
 
-            let entry = match dir.lookup(name) {
+            let entry_info = match dir.lookup(name) {
+                Ok(info) => info,
+                Err(error) => {
+                    reply.error(to_error_code(error));
+                    return;
+                }
+            };
+
+            let inode = inodes.lookup(
+                parent,
+                name.to_owned(),
+                entry_info.locator(),
+                entry_info.entry_type(),
+            );
+
+            let entry = match entry_info.open().await {
                 Ok(entry) => entry,
                 Err(error) => {
                     reply.error(to_error_code(error));
@@ -87,41 +106,7 @@ impl fuser::Filesystem for VirtualFilesystem {
                 }
             };
 
-            let inode = inodes.lookup(parent, name.to_owned(), entry.locator());
-
-            let entry = match entry.open().await {
-                Ok(entry) => entry,
-                Err(error) => {
-                    reply.error(to_error_code(error));
-                    return;
-                }
-            };
-
-            let attr = FileAttr {
-                ino: inode,
-                size: entry.len(),
-                blocks: 0,                      // TODO: ?
-                atime: SystemTime::UNIX_EPOCH,  // TODO
-                mtime: SystemTime::UNIX_EPOCH,  // TODO
-                ctime: SystemTime::UNIX_EPOCH,  // TODO
-                crtime: SystemTime::UNIX_EPOCH, // TODO
-                kind: match entry.entry_type() {
-                    EntryType::File => FileType::RegularFile,
-                    EntryType::Directory => FileType::Directory,
-                },
-                perm: match entry.entry_type() {
-                    EntryType::File => 0o444,      // TODO
-                    EntryType::Directory => 0o555, // TODO
-                },
-                nlink: 1,
-                uid: 0, // TODO
-                gid: 0, // TODO
-                rdev: 0,
-                blksize: 0, // ?
-                padding: 0,
-                flags: 0,
-            };
-
+            let attr = get_file_attr(&entry, inode);
             reply.entry(&TTL, &attr, 0)
         })
     }
@@ -131,14 +116,29 @@ impl fuser::Filesystem for VirtualFilesystem {
         self.inodes.forget(inode, lookups)
     }
 
-    fn getattr(&mut self, _req: &Request, inode: Inode, _reply: ReplyAttr) {
+    fn getattr(&mut self, _req: &Request, inode: Inode, reply: ReplyAttr) {
         log::debug!("getattr (inode={})", inode);
 
-        // if let Some(entry) = self.entries.get(&ino) {
-        //     reply.attr(&Duration::default(), &entry.attr(ino))
-        // } else {
-        //     reply.error(libc::ENOENT)
-        // }
+        let (locator, entry_type) = match self.inodes.get(inode) {
+            Ok(pair) => pair,
+            Err(error) => {
+                reply.error(to_error_code(error));
+                return;
+            }
+        };
+
+        self.rt.block_on(async {
+            let entry = match self.repository.open_entry(locator, entry_type).await {
+                Ok(entry) => entry,
+                Err(error) => {
+                    reply.error(to_error_code(error));
+                    return;
+                }
+            };
+
+            let attr = get_file_attr(&entry, inode);
+            reply.attr(&TTL, &attr)
+        })
     }
 
     fn read(
@@ -289,6 +289,36 @@ impl fuser::Filesystem for VirtualFilesystem {
     }
 }
 
+fn get_file_attr(entry: &Entry, inode: Inode) -> FileAttr {
+    let kind = match entry.entry_type() {
+        EntryType::File => FileType::RegularFile,
+        EntryType::Directory => FileType::Directory,
+    };
+
+    FileAttr {
+        ino: inode,
+        size: entry.len(),
+        blocks: 0,                      // TODO: ?
+        atime: SystemTime::UNIX_EPOCH,  // TODO
+        mtime: SystemTime::UNIX_EPOCH,  // TODO
+        ctime: SystemTime::UNIX_EPOCH,  // TODO
+        crtime: SystemTime::UNIX_EPOCH, // TODO
+        kind,
+        perm: match entry.entry_type() {
+            EntryType::File => 0o444,      // TODO
+            EntryType::Directory => 0o555, // TODO
+        },
+        nlink: 1,
+        uid: 0, // TODO
+        gid: 0, // TODO
+        rdev: 0,
+        blksize: 0, // ?
+        padding: 0,
+        flags: 0,
+    }
+}
+
+// TODO: consider moving this to `impl Error`
 fn to_error_code(error: Error) -> libc::c_int {
     log::error!("{}", error);
 

@@ -1,5 +1,5 @@
 use fuser::FUSE_ROOT_ID;
-use ouisync::{Error, Locator, Result};
+use ouisync::{EntryType, Error, Locator, Result};
 use std::{
     collections::{hash_map::Entry, HashMap},
     ffi::OsString,
@@ -23,7 +23,13 @@ impl InodeMap {
         }
     }
 
-    pub fn lookup(&mut self, parent: Inode, name: OsString, locator: Locator) -> Inode {
+    pub fn lookup(
+        &mut self,
+        parent: Inode,
+        name: OsString,
+        locator: Locator,
+        entry_type: EntryType,
+    ) -> Inode {
         let key = (parent, name);
 
         //
@@ -39,6 +45,7 @@ impl InodeMap {
         let data = self.forward.entry(inode).or_insert_with(|| Data {
             lookups: 0,
             locator,
+            entry_type,
             key,
         });
 
@@ -61,13 +68,13 @@ impl InodeMap {
         }
     }
 
-    pub fn get(&self, inode: Inode) -> Result<Locator> {
+    pub fn get(&self, inode: Inode) -> Result<(Locator, EntryType)> {
         if inode == FUSE_ROOT_ID {
-            Ok(Locator::Root)
+            Ok((Locator::Root, EntryType::Directory))
         } else {
             self.forward
                 .get(&inode)
-                .map(|data| data.locator)
+                .map(|data| (data.locator, data.entry_type))
                 .ok_or(Error::EntryNotFound)
         }
     }
@@ -92,5 +99,6 @@ type Key = (Inode, OsString);
 struct Data {
     lookups: u64,
     locator: Locator,
+    entry_type: EntryType,
     key: Key,
 }

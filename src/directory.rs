@@ -136,6 +136,10 @@ impl<'a> EntryInfo<'a> {
         self.name
     }
 
+    pub fn entry_type(&self) -> EntryType {
+        self.data.entry_type
+    }
+
     pub fn locator(&self) -> Locator {
         Locator::Head(*self.parent_blob.head_name(), self.data.seq)
     }
