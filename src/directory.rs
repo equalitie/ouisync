@@ -18,6 +18,7 @@ pub struct Directory {
     content_dirty: bool,
 }
 
+#[allow(clippy::len_without_is_empty)]
 impl Directory {
     /// Opens existing directory.
     pub(crate) async fn open(pool: db::Pool, cryptor: Cryptor, locator: Locator) -> Result<Self> {
@@ -109,6 +110,12 @@ impl Directory {
             Locator::Head(*self.blob.head_name(), seq),
         ))
     }
+
+    /// Length of this directory in bytes. Does not include the content, only the size of directory
+    /// itself.
+    pub fn len(&self) -> u64 {
+        self.blob.len()
+    }
 }
 
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Debug, Deserialize, Serialize)]
@@ -129,16 +136,18 @@ impl<'a> EntryInfo<'a> {
         self.name
     }
 
+    pub fn locator(&self) -> Locator {
+        Locator::Head(*self.parent_blob.head_name(), self.data.seq)
+    }
+
     /// Open the entry.
     pub async fn open(&self) -> Result<Entry> {
-        let locator = Locator::Head(*self.parent_blob.head_name(), self.data.seq);
-
         match self.data.entry_type {
             EntryType::File => Ok(Entry::File(
                 File::open(
                     self.parent_blob.db_pool().clone(),
                     self.parent_blob.cryptor().clone(),
-                    locator,
+                    self.locator(),
                 )
                 .await?,
             )),
@@ -146,7 +155,7 @@ impl<'a> EntryInfo<'a> {
                 Directory::open(
                     self.parent_blob.db_pool().clone(),
                     self.parent_blob.cryptor().clone(),
-                    locator,
+                    self.locator(),
                 )
                 .await?,
             )),
@@ -160,11 +169,20 @@ pub enum Entry {
     Directory(Directory),
 }
 
+#[allow(clippy::len_without_is_empty)]
 impl Entry {
     pub fn entry_type(&self) -> EntryType {
         match self {
             Self::File(_) => EntryType::File,
             Self::Directory(_) => EntryType::Directory,
+        }
+    }
+
+    /// Length of the entry in bytes.
+    pub fn len(&self) -> u64 {
+        match self {
+            Self::File(file) => file.len(),
+            Self::Directory(dir) => dir.len(),
         }
     }
 }

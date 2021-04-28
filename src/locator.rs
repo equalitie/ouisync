@@ -10,8 +10,8 @@ use std::slice;
 /// the block "location" within the filesystem. `Locator`'s purpose is to answer the question
 /// "what is the n-th block of a given blob?".
 /// `Locator` is unique only within a branch while `BlockId` is globally unique.
-#[derive(Clone, Copy)]
-pub(crate) enum Locator {
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub enum Locator {
     /// Locator of the root block, that is, the head block of the root blob.
     Root,
     /// Locator of the head (first) block of a blob. The `BlockName` is the name of the head block

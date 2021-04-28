@@ -23,11 +23,12 @@ mod server;
 
 pub use self::{
     async_object::AsyncObject,
-    block::{BlockId, BlockName, BlockVersion, BLOCK_SIZE},
     client::Client,
-    directory::Directory,
+    crypto::Cryptor,
+    directory::{Directory, Entry, EntryType},
     error::Error,
     file::File,
+    locator::Locator,
     message::{Message, Request, Response},
     message_broker::MessageBroker,
     network::Network,
@@ -37,9 +38,3 @@ pub use self::{
     repository::Repository,
     server::Server,
 };
-
-/// This function can be called from other languages via FFI
-#[no_mangle]
-pub extern "C" fn hello_ffi() {
-    println!("Hello world")
-}
