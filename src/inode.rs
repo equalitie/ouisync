@@ -1,5 +1,5 @@
 use fuser::FUSE_ROOT_ID;
-use ouisync::Locator;
+use ouisync::{Error, Locator, Result};
 use std::{
     collections::{hash_map::Entry, HashMap},
     ffi::OsString,
@@ -61,11 +61,14 @@ impl InodeMap {
         }
     }
 
-    pub fn get(&self, inode: Inode) -> Option<Locator> {
+    pub fn get(&self, inode: Inode) -> Result<Locator> {
         if inode == FUSE_ROOT_ID {
-            Some(Locator::Root)
+            Ok(Locator::Root)
         } else {
-            self.forward.get(&inode).map(|data| data.locator)
+            self.forward
+                .get(&inode)
+                .map(|data| data.locator)
+                .ok_or(Error::EntryNotFound)
         }
     }
 }

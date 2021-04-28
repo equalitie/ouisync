@@ -28,11 +28,7 @@ pub enum Error {
     WrongBlockLength(usize),
     #[error("encryption / decryption failed")]
     Crypto,
-    // For new blobs means the directory entry is already taken by a different blob.
-    // For existing blobs means the directory entry doesn't match the blob.
-    #[error("wrong directory entry")]
-    WrongDirectoryEntry,
-    #[error("malformed directory")]
+    #[error("not a directory or directory malformed")]
     MalformedDirectory(#[source] bincode::Error),
     #[error("entry already exists")]
     EntryExists,

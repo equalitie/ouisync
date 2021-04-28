@@ -59,12 +59,12 @@ impl fuser::Filesystem for VirtualFilesystem {
     fn lookup(&mut self, _req: &Request, parent: Inode, name: &OsStr, reply: ReplyEntry) {
         log::debug!("lookup (parent={}, name={:?})", parent, name);
 
-        let locator = if let Some(locator) = self.inodes.get(parent) {
-            locator
-        } else {
-            log::error!("invalid inode: {}", parent);
-            reply.error(libc::EIO);
-            return;
+        let locator = match self.inodes.get(parent) {
+            Ok(locator) => locator,
+            Err(error) => {
+                reply.error(to_error_code(error));
+                return;
+            }
         };
 
         let repository = &self.repository;
@@ -73,31 +73,18 @@ impl fuser::Filesystem for VirtualFilesystem {
         self.rt.block_on(async {
             let dir = match repository.open_directory(locator).await {
                 Ok(dir) => dir,
-                Err(Error::BlockIdNotFound) => {
-                    log::error!("directory not found");
-                    reply.error(libc::ENOENT);
-                    return;
-                }
-                Err(Error::MalformedDirectory(error)) => {
-                    log::error!("not a directory or directory corrupted: {}", error);
-                    reply.error(libc::ENOTDIR);
-                    return;
-                }
                 Err(error) => {
-                    log::error!("failed to open directory: {}", error);
-                    reply.error(libc::EIO);
+                    reply.error(to_error_code(error));
                     return;
                 }
             };
 
             let entry = match dir.lookup(name) {
                 Ok(entry) => entry,
-                Err(Error::EntryNotFound) => {
-                    log::error!("entry not found: {:?}", name);
-                    reply.error(libc::ENOENT);
+                Err(error) => {
+                    reply.error(to_error_code(error));
                     return;
                 }
-                Err(error) => unreachable!("unexpected error {:?}", error),
             };
 
             let inode = inodes.lookup(parent, name.to_owned(), entry.locator());
@@ -105,8 +92,7 @@ impl fuser::Filesystem for VirtualFilesystem {
             let entry = match entry.open().await {
                 Ok(entry) => entry,
                 Err(error) => {
-                    log::error!("failed to open entry: {}", error);
-                    reply.error(libc::EIO);
+                    reply.error(to_error_code(error));
                     return;
                 }
             };
@@ -300,5 +286,22 @@ impl fuser::Filesystem for VirtualFilesystem {
 
         // log::debug!("mknod parent={}, name={:?}", parent, name);
         // self.make_entry(parent, name, Entry::File(vec![]), reply)
+    }
+}
+
+fn to_error_code(error: Error) -> libc::c_int {
+    log::error!("{}", error);
+
+    match error {
+        Error::CreateDbDirectory(_)
+        | Error::ConnectToDb(_)
+        | Error::CreateDbSchema(_)
+        | Error::QueryDb(_)
+        | Error::MalformedData
+        | Error::WrongBlockLength(_)
+        | Error::Crypto => libc::EIO,
+        Error::BlockIdNotFound | Error::BlockNotFound(_) | Error::EntryNotFound => libc::ENOENT,
+        Error::MalformedDirectory(_) => libc::ENOTDIR,
+        Error::EntryExists => libc::EEXIST,
     }
 }

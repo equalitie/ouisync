@@ -26,7 +26,7 @@ pub use self::{
     client::Client,
     crypto::Cryptor,
     directory::{Directory, Entry, EntryType},
-    error::Error,
+    error::{Error, Result},
     file::File,
     locator::Locator,
     message::{Message, Request, Response},
