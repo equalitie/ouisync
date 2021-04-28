@@ -13,7 +13,7 @@ pub async fn init(pool: &db::Pool) -> Result<(), Error> {
         "CREATE TABLE IF NOT EXISTS index_leaves (
              block_name    BLOB NOT NULL,
              block_version BLOB NOT NULL,
-             child_tag     BLOB NOT NULL UNIQUE
+             locator       BLOB NOT NULL UNIQUE
          );
          CREATE TABLE IF NOT EXISTS branches (
              root_block_name    BLOB NOT NULL,
@@ -56,21 +56,27 @@ pub async fn get_root(tx: &mut db::Transaction) -> Result<BlockId> {
 
 /// Insert a new block into the index.
 // TODO: take `Transaction` instead of `Pool`
-pub async fn insert(tx: &mut db::Transaction, block_id: &BlockId, child_tag: &Hash) -> Result<()> {
-    sqlx::query("INSERT OR REPLACE INTO index_leaves (block_name, block_version, child_tag) VALUES (?, ?, ?)")
-        .bind(block_id.name.as_ref())
-        .bind(block_id.version.as_ref())
-        .bind(child_tag.as_ref())
-        .execute(tx)
-        .await?;
+pub async fn insert(
+    tx: &mut db::Transaction,
+    block_id: &BlockId,
+    encoded_locator: &Hash,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT OR REPLACE INTO index_leaves (block_name, block_version, locator) VALUES (?, ?, ?)",
+    )
+    .bind(block_id.name.as_ref())
+    .bind(block_id.version.as_ref())
+    .bind(encoded_locator.as_ref())
+    .execute(tx)
+    .await?;
 
     Ok(())
 }
 
-/// Retrieve `BlockId` of a block with `child_tag`.
-pub async fn get(tx: &mut db::Transaction, child_tag: &Hash) -> Result<BlockId> {
-    match sqlx::query("SELECT block_name, block_version FROM index_leaves WHERE child_tag = ?")
-        .bind(child_tag.as_ref())
+/// Retrieve `BlockId` of a block with the given encoded `Locator`.
+pub async fn get(tx: &mut db::Transaction, encoded_locator: &Hash) -> Result<BlockId> {
+    match sqlx::query("SELECT block_name, block_version FROM index_leaves WHERE locator = ?")
+        .bind(encoded_locator.as_ref())
         .fetch_optional(tx)
         .await?
     {

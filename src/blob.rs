@@ -433,8 +433,8 @@ async fn load_block(
     secret_key: &SecretKey,
     locator: &Locator,
 ) -> Result<(BlockId, Buffer, AuthTag)> {
-    let id = if let Some(child_tag) = locator.encode(secret_key) {
-        index::get(tx, &child_tag).await?
+    let id = if let Some(encoded_locator) = locator.encode(secret_key) {
+        index::get(tx, &encoded_locator).await?
     } else {
         index::get_root(tx).await?
     };
@@ -482,8 +482,8 @@ async fn write_block(
 
     block::write(tx, block_id, &buffer, &auth_tag).await?;
 
-    if let Some(child_tag) = locator.encode(secret_key) {
-        index::insert(tx, block_id, &child_tag).await?;
+    if let Some(encoded_locator) = locator.encode(secret_key) {
+        index::insert(tx, block_id, &encoded_locator).await?;
     } else {
         index::insert_root(tx, block_id).await?;
     }
