@@ -1,7 +1,10 @@
-use crate::inode::{Inode, InodeMap};
+use crate::{
+    entry_map::{EntryMap, FileHandle},
+    inode::{Inode, InodeMap},
+};
 use fuser::{
     BackgroundSession, FileAttr, FileType, ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry,
-    ReplyWrite, Request,
+    ReplyOpen, ReplyWrite, Request,
 };
 use ouisync::{Entry, EntryType, Error, Repository, Result};
 use std::{
@@ -33,8 +36,6 @@ pub fn mount(
 /// Unmounts the virtual filesystem when dropped.
 pub struct MountGuard(BackgroundSession);
 
-type FileHandle = u64;
-
 // time-to-live for some fuse reply types.
 // TODO: find out what is this for and whether 0 is OK.
 const TTL: Duration = Duration::from_secs(0);
@@ -58,6 +59,7 @@ struct VirtualFilesystem {
     rt: tokio::runtime::Handle,
     repository: Repository,
     inodes: InodeMap,
+    entries: EntryMap,
 }
 
 impl VirtualFilesystem {
@@ -66,6 +68,7 @@ impl VirtualFilesystem {
             rt: runtime_handle,
             repository,
             inodes: InodeMap::new(),
+            entries: EntryMap::new(),
         }
     }
 }
@@ -76,19 +79,18 @@ impl fuser::Filesystem for VirtualFilesystem {
 
         let (locator, entry_type) = try_request!(self.inodes.get(parent), reply);
 
+        if entry_type != EntryType::Directory {
+            log::error!("not a directory");
+            reply.error(libc::ENOTDIR);
+            return;
+        }
+
         let repository = &self.repository;
         let inodes = &mut self.inodes;
 
         self.rt.block_on(async {
-            let dir = match try_request!(repository.open_entry(locator, entry_type).await, reply) {
-                Entry::Directory(dir) => dir,
-                _ => {
-                    reply.error(libc::ENOTDIR);
-                    return;
-                }
-            };
-
-            let entry_info = try_request!(dir.lookup(name), reply);
+            let parent_dir = try_request!(repository.open_directory(locator).await, reply);
+            let entry_info = try_request!(parent_dir.lookup(name), reply);
             let entry = try_request!(entry_info.open().await, reply);
 
             let inode = inodes.lookup(
@@ -118,6 +120,71 @@ impl fuser::Filesystem for VirtualFilesystem {
             let attr = get_file_attr(&entry, inode);
             reply.attr(&TTL, &attr)
         })
+    }
+
+    fn opendir(&mut self, _req: &Request, inode: Inode, flags: i32, reply: ReplyOpen) {
+        log::debug!("opendir (inode={}, flags={:#x})", inode, flags);
+
+        let (locator, entry_type) = try_request!(self.inodes.get(inode), reply);
+
+        if entry_type != EntryType::Directory {
+            log::error!("not a directory");
+            reply.error(libc::ENOTDIR);
+            return;
+        }
+
+        let repository = &self.repository;
+        let entries = &mut self.entries;
+
+        self.rt.block_on(async {
+            let dir = try_request!(repository.open_directory(locator).await, reply);
+            let handle = entries.insert(Entry::Directory(dir));
+            // TODO: what about the flags?
+            reply.opened(handle, 0);
+        })
+    }
+
+    fn readdir(
+        &mut self,
+        _req: &Request,
+        _inode: Inode,
+        _handle: FileHandle,
+        _offset: i64,
+        _reply: ReplyDirectory,
+    ) {
+        // log::debug!("readdir ino={}, offset={}", ino, offset);
+        // let entries = match self.entries.get(&ino) {
+        //     Some(Entry::Directory(entries)) => entries,
+        //     Some(Entry::File(_)) => {
+        //         reply.error(libc::ENOTDIR);
+        //         return;
+        //     }
+        //     None => {
+        //         reply.error(libc::ENOENT);
+        //         return;
+        //     }
+        // };
+
+        // // TODO: . and ..
+
+        // for (index, (name, &inode)) in entries.iter().enumerate().skip(offset as usize) {
+        //     let file_type = match self.entries.get(&inode) {
+        //         Some(Entry::File(_)) => FileType::RegularFile,
+        //         Some(Entry::Directory(_)) => FileType::Directory,
+        //         None => {
+        //             reply.error(libc::ENOENT);
+        //             return;
+        //         }
+        //     };
+
+        //     if reply.add(inode, (index + 3) as i64, file_type, name) {
+        //         break;
+        //     }
+        // }
+
+        // reply.ok()
+
+        todo!()
     }
 
     fn read(
@@ -191,49 +258,6 @@ impl fuser::Filesystem for VirtualFilesystem {
         // content[offset..offset + data.len()].copy_from_slice(data);
 
         // reply.written(data.len() as u32)
-    }
-
-    fn readdir(
-        &mut self,
-        _req: &Request,
-        _inode: Inode,
-        _handle: FileHandle,
-        _offset: i64,
-        _reply: ReplyDirectory,
-    ) {
-        // log::debug!("readdir ino={}, offset={}", ino, offset);
-        // let entries = match self.entries.get(&ino) {
-        //     Some(Entry::Directory(entries)) => entries,
-        //     Some(Entry::File(_)) => {
-        //         reply.error(libc::ENOTDIR);
-        //         return;
-        //     }
-        //     None => {
-        //         reply.error(libc::ENOENT);
-        //         return;
-        //     }
-        // };
-
-        // // TODO: . and ..
-
-        // for (index, (name, &inode)) in entries.iter().enumerate().skip(offset as usize) {
-        //     let file_type = match self.entries.get(&inode) {
-        //         Some(Entry::File(_)) => FileType::RegularFile,
-        //         Some(Entry::Directory(_)) => FileType::Directory,
-        //         None => {
-        //             reply.error(libc::ENOENT);
-        //             return;
-        //         }
-        //     };
-
-        //     if reply.add(inode, (index + 3) as i64, file_type, name) {
-        //         break;
-        //     }
-        // }
-
-        // reply.ok()
-
-        todo!()
     }
 
     fn mkdir(

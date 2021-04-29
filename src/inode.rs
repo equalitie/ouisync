@@ -80,18 +80,11 @@ impl InodeMap {
     }
 }
 
-fn find_available_inode(mut candidate: Inode, taken: &HashMap<Inode, Data>) -> Inode {
-    assert!((taken.len() as u64) < u64::MAX);
-
-    loop {
-        if candidate == FUSE_ROOT_ID || taken.contains_key(&candidate) {
-            candidate = candidate.wrapping_add(1);
-        } else {
-            break;
-        }
-    }
-
-    candidate
+fn find_available_inode(candidate: Inode, taken: &HashMap<Inode, Data>) -> Inode {
+    (candidate..=u64::MAX)
+        .chain(0..candidate)
+        .find(|candidate| *candidate != FUSE_ROOT_ID && !taken.contains_key(&candidate))
+        .expect("all inodes taken")
 }
 
 type Key = (Inode, OsString);

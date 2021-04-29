@@ -1,3 +1,4 @@
+mod entry_map;
 mod inode;
 mod options;
 mod virtual_filesystem;
