@@ -34,6 +34,8 @@ pub enum Error {
     EntryExists,
     #[error("entry not found")]
     EntryNotFound,
+    #[error("entry is not a directory")]
+    EntryNotDirectory,
 }
 
 impl From<TryFromSliceError> for Error {

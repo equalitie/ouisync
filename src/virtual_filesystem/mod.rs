@@ -81,13 +81,7 @@ impl fuser::Filesystem for VirtualFilesystem {
     fn lookup(&mut self, _req: &Request, parent: Inode, name: &OsStr, reply: ReplyEntry) {
         log::debug!("lookup (parent={}, name={:?})", parent, name);
 
-        let (locator, entry_type) = try_request!(self.inodes.get(parent), reply);
-
-        if entry_type != EntryType::Directory {
-            log::error!("not a directory");
-            reply.error(libc::ENOTDIR);
-            return;
-        }
+        let locator = try_request!(self.inodes.get_directory(parent), reply);
 
         let repository = &self.repository;
         let inodes = &mut self.inodes;
@@ -129,13 +123,7 @@ impl fuser::Filesystem for VirtualFilesystem {
     fn opendir(&mut self, _req: &Request, inode: Inode, flags: i32, reply: ReplyOpen) {
         log::debug!("opendir (inode={}, flags={:#x})", inode, flags);
 
-        let (locator, entry_type) = try_request!(self.inodes.get(inode), reply);
-
-        if entry_type != EntryType::Directory {
-            log::error!("not a directory");
-            reply.error(libc::ENOTDIR);
-            return;
-        }
+        let locator = try_request!(self.inodes.get_directory(inode), reply);
 
         let repository = &self.repository;
         let entries = &mut self.entries;
@@ -333,10 +321,11 @@ fn to_error_code(error: &Error) -> libc::c_int {
         | Error::CreateDbSchema(_)
         | Error::QueryDb(_)
         | Error::MalformedData
+        | Error::MalformedDirectory(_)
         | Error::WrongBlockLength(_)
         | Error::Crypto => libc::EIO,
         Error::BlockIdNotFound | Error::BlockNotFound(_) | Error::EntryNotFound => libc::ENOENT,
-        Error::MalformedDirectory(_) => libc::ENOTDIR,
         Error::EntryExists => libc::EEXIST,
+        Error::EntryNotDirectory => libc::ENOTDIR,
     }
 }

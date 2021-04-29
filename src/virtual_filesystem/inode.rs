@@ -71,6 +71,14 @@ impl InodeMap {
                 .ok_or(Error::EntryNotFound)
         }
     }
+
+    pub fn get_directory(&self, inode: Inode) -> Result<Locator> {
+        match self.get(inode) {
+            Ok((locator, EntryType::Directory)) => Ok(locator),
+            Ok(_) => Err(Error::EntryNotDirectory),
+            Err(error) => Err(error),
+        }
+    }
 }
 
 type Key = (Inode, OsString);
