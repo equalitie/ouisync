@@ -18,6 +18,12 @@ use std::{
 #[repr(transparent)]
 pub struct Hash(Inner);
 
+impl Hash {
+    pub fn null() -> Self {
+        Self(Inner::default())
+    }
+}
+
 impl From<Inner> for Hash {
     fn from(inner: Inner) -> Self {
         Hash(inner)
