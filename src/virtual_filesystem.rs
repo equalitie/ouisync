@@ -39,6 +39,21 @@ type FileHandle = u64;
 // TODO: find out what is this for and whether 0 is OK.
 const TTL: Duration = Duration::from_secs(0);
 
+// Convenience macro that unwraps the result or reports its error in the given reply and
+// returns.
+macro_rules! try_request {
+    ($result:expr, $reply:expr) => {
+        match $result {
+            Ok(value) => value,
+            Err(error) => {
+                log::error!("{}", error);
+                $reply.error(to_error_code(&error));
+                return;
+            }
+        }
+    };
+}
+
 struct VirtualFilesystem {
     rt: tokio::runtime::Handle,
     repository: Repository,
@@ -59,37 +74,22 @@ impl fuser::Filesystem for VirtualFilesystem {
     fn lookup(&mut self, _req: &Request, parent: Inode, name: &OsStr, reply: ReplyEntry) {
         log::debug!("lookup (parent={}, name={:?})", parent, name);
 
-        let (locator, entry_type) = match self.inodes.get(parent) {
-            Ok(pair) => pair,
-            Err(error) => {
-                reply.error(to_error_code(&error));
-                return;
-            }
-        };
+        let (locator, entry_type) = try_request!(self.inodes.get(parent), reply);
 
         let repository = &self.repository;
         let inodes = &mut self.inodes;
 
         self.rt.block_on(async {
-            let dir = match repository.open_entry(locator, entry_type).await {
-                Ok(Entry::Directory(dir)) => dir,
-                Ok(_) => {
+            let dir = match try_request!(repository.open_entry(locator, entry_type).await, reply) {
+                Entry::Directory(dir) => dir,
+                _ => {
                     reply.error(libc::ENOTDIR);
-                    return;
-                }
-                Err(error) => {
-                    reply.error(to_error_code(&error));
                     return;
                 }
             };
 
-            let entry_info = match dir.lookup(name) {
-                Ok(info) => info,
-                Err(error) => {
-                    reply.error(to_error_code(&error));
-                    return;
-                }
-            };
+            let entry_info = try_request!(dir.lookup(name), reply);
+            let entry = try_request!(entry_info.open().await, reply);
 
             let inode = inodes.lookup(
                 parent,
@@ -97,14 +97,6 @@ impl fuser::Filesystem for VirtualFilesystem {
                 entry_info.locator(),
                 entry_info.entry_type(),
             );
-
-            let entry = match entry_info.open().await {
-                Ok(entry) => entry,
-                Err(error) => {
-                    reply.error(to_error_code(&error));
-                    return;
-                }
-            };
 
             let attr = get_file_attr(&entry, inode);
             reply.entry(&TTL, &attr, 0)
@@ -119,23 +111,10 @@ impl fuser::Filesystem for VirtualFilesystem {
     fn getattr(&mut self, _req: &Request, inode: Inode, reply: ReplyAttr) {
         log::debug!("getattr (inode={})", inode);
 
-        let (locator, entry_type) = match self.inodes.get(inode) {
-            Ok(pair) => pair,
-            Err(error) => {
-                reply.error(to_error_code(&error));
-                return;
-            }
-        };
+        let (locator, entry_type) = try_request!(self.inodes.get(inode), reply);
 
         self.rt.block_on(async {
-            let entry = match self.repository.open_entry(locator, entry_type).await {
-                Ok(entry) => entry,
-                Err(error) => {
-                    reply.error(to_error_code(&error));
-                    return;
-                }
-            };
-
+            let entry = try_request!(self.repository.open_entry(locator, entry_type).await, reply);
             let attr = get_file_attr(&entry, inode);
             reply.attr(&TTL, &attr)
         })
