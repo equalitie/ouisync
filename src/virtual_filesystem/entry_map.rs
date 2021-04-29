@@ -4,6 +4,8 @@ use std::collections::HashMap;
 
 pub type FileHandle = u64;
 
+// TODO: create separate maps for files and directories
+
 #[derive(Default)]
 pub struct EntryMap {
     map: HashMap<FileHandle, Entry>,
@@ -18,8 +20,8 @@ impl EntryMap {
         handle
     }
 
-    pub fn remove(&mut self, _handle: FileHandle) -> Option<Entry> {
-        todo!()
+    pub fn remove(&mut self, handle: FileHandle) -> Option<Entry> {
+        self.map.remove(&handle)
     }
 
     pub fn get(&self, handle: FileHandle) -> Result<&Entry> {

@@ -117,6 +117,11 @@ impl Directory {
     pub fn len(&self) -> u64 {
         self.blob.len()
     }
+
+    /// Locator of this directory
+    pub fn locator(&self) -> &Locator {
+        self.blob.locator()
+    }
 }
 
 /// Info about a directory entry.

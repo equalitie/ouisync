@@ -7,8 +7,8 @@ use self::{
     inode::{Inode, InodeDetails, InodeMap},
 };
 use fuser::{
-    BackgroundSession, FileAttr, FileType, ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry,
-    ReplyOpen, ReplyWrite, Request,
+    BackgroundSession, FileAttr, FileType, ReplyAttr, ReplyData, ReplyDirectory, ReplyEmpty,
+    ReplyEntry, ReplyOpen, ReplyWrite, Request,
 };
 use ouisync::{Entry, EntryType, Error, Repository, Result};
 use std::{
@@ -150,6 +150,28 @@ impl fuser::Filesystem for VirtualFilesystem {
         })
     }
 
+    fn releasedir(
+        &mut self,
+        _req: &Request,
+        inode: Inode,
+        handle: FileHandle,
+        flags: i32,
+        reply: ReplyEmpty,
+    ) {
+        log::debug!(
+            "releasedir (inode={}, handle={}, flags={:#x})",
+            inode,
+            handle,
+            flags
+        );
+
+        // TODO: `forget` the inodes looked up during `readdir`
+        // TODO: what about `flags`?
+
+        let _ = self.entries.remove(handle);
+        reply.ok();
+    }
+
     fn readdir(
         &mut self,
         _req: &Request,
@@ -219,6 +241,66 @@ impl fuser::Filesystem for VirtualFilesystem {
 
         reply.ok()
     }
+
+    fn mkdir(
+        &mut self,
+        _req: &Request,
+        parent: Inode,
+        name: &OsStr,
+        mode: u32,
+        umask: u32,
+        reply: ReplyEntry,
+    ) {
+        log::debug!(
+            "mkdir (parent={}, name={:?}, mode={:#o}, umask={:#o})",
+            parent,
+            name,
+            mode,
+            umask
+        );
+
+        let InodeDetails {
+            locator,
+            entry_type,
+            ..
+        } = *try_request!(self.inodes.get(parent), reply);
+        try_request!(check_is_directory(entry_type), reply);
+
+        let repository = &self.repository;
+        let inodes = &mut self.inodes;
+
+        self.rt.block_on(async {
+            let mut parent_dir = try_request!(repository.open_directory(locator).await, reply);
+            let mut dir = try_request!(parent_dir.create_subdirectory(name.to_owned()), reply);
+            try_request!(dir.flush().await, reply);
+            try_request!(parent_dir.flush().await, reply);
+
+            // TODO: when do we `forget` this lookup?
+            let inode = inodes.lookup(
+                parent,
+                name.to_owned(),
+                *dir.locator(),
+                EntryType::Directory,
+            );
+
+            let entry = Entry::Directory(dir);
+            let attrs = get_file_attr(&entry, inode);
+
+            reply.entry(&TTL, &attrs, 0);
+        })
+    }
+
+    // fn fsyncdir(
+    //     &mut self,
+    //     _req: &Request<'_>,
+    //     inode: u64,
+    //     handle: u64,
+    //     _datasync: bool,
+    //     reply: ReplyEmpty,
+    // ) {
+    //     log::debug!("fsyncdir (inode = {}, handle = {})", inode, handle);
+    //     reply.error(libc::ENOSYS);
+    // }
 
     fn read(
         &mut self,
@@ -291,21 +373,6 @@ impl fuser::Filesystem for VirtualFilesystem {
         // content[offset..offset + data.len()].copy_from_slice(data);
 
         // reply.written(data.len() as u32)
-    }
-
-    fn mkdir(
-        &mut self,
-        _req: &Request,
-        _parent: Inode,
-        _name: &OsStr,
-        _mode: u32,
-        _umask: u32,
-        _reply: ReplyEntry,
-    ) {
-        todo!()
-
-        // log::debug!("mkdir parent={}, name={:?}", parent, name);
-        // self.make_entry(parent, name, Entry::Directory(HashMap::new()), reply)
     }
 
     fn mknod(

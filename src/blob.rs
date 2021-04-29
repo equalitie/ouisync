@@ -103,6 +103,11 @@ impl Blob {
         self.len
     }
 
+    /// Locator of this blob.
+    pub fn locator(&self) -> &Locator {
+        &self.locator
+    }
+
     /// Reads data from this blob into `buffer`, advancing the internal cursor. Returns the
     /// number of bytes actually read which might be less than `buffer.len()` if the portion of the
     /// blob past the internal cursor is smaller than `buffer.len()`.
