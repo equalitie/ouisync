@@ -54,7 +54,7 @@ impl Directory {
         let buffer =
             bincode::serialize(&self.content).expect("failed to serialize directory content");
 
-        self.blob.truncate();
+        self.blob.truncate().await?;
         self.blob.write(&buffer).await?;
         self.blob.flush().await?;
 
@@ -93,6 +93,7 @@ impl Directory {
     /// Creates a new file inside this directory.
     pub fn create_file(&mut self, name: OsString) -> Result<File> {
         let seq = self.content.insert(name, EntryType::File)?;
+        self.content_dirty = true;
 
         Ok(File::create(
             self.blob.db_pool().clone(),
@@ -104,6 +105,7 @@ impl Directory {
     /// Creates a new subdirectory of this directory.
     pub fn create_subdirectory(&mut self, name: OsString) -> Result<Self> {
         let seq = self.content.insert(name, EntryType::Directory)?;
+        self.content_dirty = true;
 
         Ok(Self::create(
             self.blob.db_pool().clone(),
@@ -257,6 +259,29 @@ mod tests {
             let actual_content = file.read_to_end().await.unwrap();
             assert_eq!(actual_content, expected_content);
         }
+    }
+
+    // TODO: test update existing directory
+    #[tokio::test(flavor = "multi_thread")]
+    async fn add_entry_to_existing_directory() {
+        let pool = setup().await;
+
+        // Create empty directory
+        let mut dir = Directory::create(pool.clone(), Cryptor::Null, Locator::Root);
+        dir.flush().await.unwrap();
+
+        // Reopen it and add a file to it.
+        let mut dir = Directory::open(pool.clone(), Cryptor::Null, Locator::Root)
+            .await
+            .unwrap();
+        let _ = dir.create_file("none.txt".into()).unwrap();
+        dir.flush().await.unwrap();
+
+        // Reopen it again and check the file is still there.
+        let dir = Directory::open(pool, Cryptor::Null, Locator::Root)
+            .await
+            .unwrap();
+        assert!(dir.lookup(OsStr::new("none.txt")).is_ok());
     }
 
     async fn setup() -> db::Pool {

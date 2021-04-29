@@ -275,15 +275,19 @@ impl Blob {
     }
 
     /// Truncate the blob to zero length.
-    pub fn truncate(&mut self) {
+    pub async fn truncate(&mut self) -> Result<()> {
         // TODO: reuse the truncated blocks on subsequent writes if the content is identical
 
         if self.len == 0 {
-            return;
+            return Ok(());
         }
 
         self.len = 0;
         self.len_dirty = true;
+
+        self.seek(SeekFrom::Start(0)).await?;
+
+        Ok(())
     }
 
     /// Flushes this blob, ensuring that all intermediately buffered contents gets written to the
