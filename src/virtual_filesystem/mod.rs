@@ -1,4 +1,8 @@
-use crate::{
+mod entry_map;
+mod handle_generator;
+mod inode;
+
+use self::{
     entry_map::{EntryMap, FileHandle},
     inode::{Inode, InodeMap},
 };
@@ -67,8 +71,8 @@ impl VirtualFilesystem {
         Self {
             rt: runtime_handle,
             repository,
-            inodes: InodeMap::new(),
-            entries: EntryMap::new(),
+            inodes: InodeMap::default(),
+            entries: EntryMap::default(),
         }
     }
 }

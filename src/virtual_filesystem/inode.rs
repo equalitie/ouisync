@@ -1,3 +1,4 @@
+use super::handle_generator::HandleGenerator;
 use fuser::FUSE_ROOT_ID;
 use ouisync::{EntryType, Error, Locator, Result};
 use std::{
@@ -8,21 +9,14 @@ use std::{
 /// Inode handle
 pub type Inode = u64;
 
+#[derive(Default)]
 pub struct InodeMap {
     forward: HashMap<Inode, Data>,
     reverse: HashMap<Key, Inode>,
-    next_inode: Inode,
+    generator: HandleGenerator,
 }
 
 impl InodeMap {
-    pub fn new() -> Self {
-        Self {
-            forward: HashMap::new(),
-            reverse: HashMap::new(),
-            next_inode: FUSE_ROOT_ID + 1,
-        }
-    }
-
     pub fn lookup(
         &mut self,
         parent: Inode,
@@ -33,13 +27,12 @@ impl InodeMap {
         let key = (parent, name);
 
         //
-        let next_inode = &mut self.next_inode;
+        let generator = &mut self.generator;
         let forward = &self.forward;
 
         let inode = *self.reverse.entry(key.clone()).or_insert_with(|| {
-            let inode = find_available_inode(*next_inode, forward);
-            *next_inode = next_inode.wrapping_add(1);
-            inode
+            generator
+                .next(|inode| inode != 0 && inode != FUSE_ROOT_ID && !forward.contains_key(&inode))
         });
 
         let data = self.forward.entry(inode).or_insert_with(|| Data {
@@ -78,13 +71,6 @@ impl InodeMap {
                 .ok_or(Error::EntryNotFound)
         }
     }
-}
-
-fn find_available_inode(candidate: Inode, taken: &HashMap<Inode, Data>) -> Inode {
-    (candidate..=u64::MAX)
-        .chain(0..candidate)
-        .find(|candidate| *candidate != FUSE_ROOT_ID && !taken.contains_key(&candidate))
-        .expect("all inodes taken")
 }
 
 type Key = (Inode, OsString);
