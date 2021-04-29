@@ -62,7 +62,7 @@ impl fuser::Filesystem for VirtualFilesystem {
         let (locator, entry_type) = match self.inodes.get(parent) {
             Ok(pair) => pair,
             Err(error) => {
-                reply.error(to_error_code(error));
+                reply.error(to_error_code(&error));
                 return;
             }
         };
@@ -78,7 +78,7 @@ impl fuser::Filesystem for VirtualFilesystem {
                     return;
                 }
                 Err(error) => {
-                    reply.error(to_error_code(error));
+                    reply.error(to_error_code(&error));
                     return;
                 }
             };
@@ -86,7 +86,7 @@ impl fuser::Filesystem for VirtualFilesystem {
             let entry_info = match dir.lookup(name) {
                 Ok(info) => info,
                 Err(error) => {
-                    reply.error(to_error_code(error));
+                    reply.error(to_error_code(&error));
                     return;
                 }
             };
@@ -101,7 +101,7 @@ impl fuser::Filesystem for VirtualFilesystem {
             let entry = match entry_info.open().await {
                 Ok(entry) => entry,
                 Err(error) => {
-                    reply.error(to_error_code(error));
+                    reply.error(to_error_code(&error));
                     return;
                 }
             };
@@ -122,7 +122,7 @@ impl fuser::Filesystem for VirtualFilesystem {
         let (locator, entry_type) = match self.inodes.get(inode) {
             Ok(pair) => pair,
             Err(error) => {
-                reply.error(to_error_code(error));
+                reply.error(to_error_code(&error));
                 return;
             }
         };
@@ -131,7 +131,7 @@ impl fuser::Filesystem for VirtualFilesystem {
             let entry = match self.repository.open_entry(locator, entry_type).await {
                 Ok(entry) => entry,
                 Err(error) => {
-                    reply.error(to_error_code(error));
+                    reply.error(to_error_code(&error));
                     return;
                 }
             };
@@ -319,9 +319,7 @@ fn get_file_attr(entry: &Entry, inode: Inode) -> FileAttr {
 }
 
 // TODO: consider moving this to `impl Error`
-fn to_error_code(error: Error) -> libc::c_int {
-    log::error!("{}", error);
-
+fn to_error_code(error: &Error) -> libc::c_int {
     match error {
         Error::CreateDbDirectory(_)
         | Error::ConnectToDb(_)

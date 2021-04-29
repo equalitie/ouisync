@@ -1,7 +1,8 @@
 use crate::{
     crypto::Cryptor,
     db,
-    directory::{Directory, Entry, EntryType},
+    directory::Directory,
+    entry::{Entry, EntryType},
     error::{Error, Result},
     file::File,
     locator::Locator,

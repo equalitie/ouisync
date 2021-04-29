@@ -2,6 +2,7 @@ use crate::{
     blob::Blob,
     crypto::Cryptor,
     db,
+    entry::{Entry, EntryType},
     error::{Error, Result},
     file::File,
     locator::Locator,
@@ -118,12 +119,6 @@ impl Directory {
     }
 }
 
-#[derive(Clone, Copy, Eq, PartialEq, Hash, Debug, Deserialize, Serialize)]
-pub enum EntryType {
-    File,
-    Directory,
-}
-
 /// Info about a directory entry.
 pub struct EntryInfo<'a> {
     parent_blob: &'a Blob,
@@ -163,30 +158,6 @@ impl<'a> EntryInfo<'a> {
                 )
                 .await?,
             )),
-        }
-    }
-}
-
-/// Filesystem entry.
-pub enum Entry {
-    File(File),
-    Directory(Directory),
-}
-
-#[allow(clippy::len_without_is_empty)]
-impl Entry {
-    pub fn entry_type(&self) -> EntryType {
-        match self {
-            Self::File(_) => EntryType::File,
-            Self::Directory(_) => EntryType::Directory,
-        }
-    }
-
-    /// Length of the entry in bytes.
-    pub fn len(&self) -> u64 {
-        match self {
-            Self::File(file) => file.len(),
-            Self::Directory(dir) => dir.len(),
         }
     }
 }

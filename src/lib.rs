@@ -7,6 +7,7 @@ mod block;
 mod branch;
 mod client;
 mod directory;
+mod entry;
 mod error;
 mod file;
 mod format;
@@ -25,7 +26,8 @@ pub use self::{
     async_object::AsyncObject,
     client::Client,
     crypto::Cryptor,
-    directory::{Directory, Entry, EntryInfo, EntryType},
+    directory::{Directory, EntryInfo},
+    entry::{Entry, EntryType},
     error::{Error, Result},
     file::File,
     locator::Locator,
