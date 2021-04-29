@@ -4,7 +4,7 @@ mod inode;
 
 use self::{
     entry_map::{EntryMap, FileHandle},
-    inode::{Inode, InodeMap},
+    inode::{Inode, InodeDetails, InodeMap},
 };
 use fuser::{
     BackgroundSession, FileAttr, FileType, ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry,
@@ -81,7 +81,12 @@ impl fuser::Filesystem for VirtualFilesystem {
     fn lookup(&mut self, _req: &Request, parent: Inode, name: &OsStr, reply: ReplyEntry) {
         log::debug!("lookup (parent={}, name={:?})", parent, name);
 
-        let locator = try_request!(self.inodes.get_directory(parent), reply);
+        let InodeDetails {
+            locator,
+            entry_type,
+            ..
+        } = *try_request!(self.inodes.get(parent), reply);
+        try_request!(check_is_directory(entry_type), reply);
 
         let repository = &self.repository;
         let inodes = &mut self.inodes;
@@ -111,7 +116,11 @@ impl fuser::Filesystem for VirtualFilesystem {
     fn getattr(&mut self, _req: &Request, inode: Inode, reply: ReplyAttr) {
         log::debug!("getattr (inode={})", inode);
 
-        let (locator, entry_type) = try_request!(self.inodes.get(inode), reply);
+        let InodeDetails {
+            locator,
+            entry_type,
+            ..
+        } = *try_request!(self.inodes.get(inode), reply);
 
         self.rt.block_on(async {
             let entry = try_request!(self.repository.open_entry(locator, entry_type).await, reply);
@@ -123,7 +132,12 @@ impl fuser::Filesystem for VirtualFilesystem {
     fn opendir(&mut self, _req: &Request, inode: Inode, flags: i32, reply: ReplyOpen) {
         log::debug!("opendir (inode={}, flags={:#x})", inode, flags);
 
-        let locator = try_request!(self.inodes.get_directory(inode), reply);
+        let InodeDetails {
+            locator,
+            entry_type,
+            ..
+        } = *try_request!(self.inodes.get(inode), reply);
+        try_request!(check_is_directory(entry_type), reply);
 
         let repository = &self.repository;
         let entries = &mut self.entries;
@@ -139,44 +153,71 @@ impl fuser::Filesystem for VirtualFilesystem {
     fn readdir(
         &mut self,
         _req: &Request,
-        _inode: Inode,
-        _handle: FileHandle,
-        _offset: i64,
-        _reply: ReplyDirectory,
+        inode: Inode,
+        handle: FileHandle,
+        offset: i64,
+        mut reply: ReplyDirectory,
     ) {
-        // log::debug!("readdir ino={}, offset={}", ino, offset);
-        // let entries = match self.entries.get(&ino) {
-        //     Some(Entry::Directory(entries)) => entries,
-        //     Some(Entry::File(_)) => {
-        //         reply.error(libc::ENOTDIR);
-        //         return;
-        //     }
-        //     None => {
-        //         reply.error(libc::ENOENT);
-        //         return;
-        //     }
-        // };
+        // Want to keep the `if`s uncollapsed here for readability.
+        #![allow(clippy::collapsible_if)]
 
-        // // TODO: . and ..
+        log::debug!(
+            "readdir (inode={}, handle={}, offset={})",
+            inode,
+            handle,
+            offset
+        );
 
-        // for (index, (name, &inode)) in entries.iter().enumerate().skip(offset as usize) {
-        //     let file_type = match self.entries.get(&inode) {
-        //         Some(Entry::File(_)) => FileType::RegularFile,
-        //         Some(Entry::Directory(_)) => FileType::Directory,
-        //         None => {
-        //             reply.error(libc::ENOENT);
-        //             return;
-        //         }
-        //     };
+        if offset < 0 {
+            log::error!("negative offset not allowed");
+            reply.error(libc::EINVAL);
+            return;
+        }
 
-        //     if reply.add(inode, (index + 3) as i64, file_type, name) {
-        //         break;
-        //     }
-        // }
+        let parent = try_request!(self.inodes.get(inode), reply).parent;
+        let dir = try_request!(self.entries.get_directory(handle), reply);
 
-        // reply.ok()
+        // Handle . and ..
+        if offset <= 0 {
+            if reply.add(inode, 1, FileType::Directory, ".") {
+                reply.ok();
+                return;
+            }
+        }
 
-        todo!()
+        if offset <= 1 && parent != 0 {
+            if reply.add(parent, 2, FileType::Directory, "..") {
+                reply.ok();
+                return;
+            }
+        }
+
+        // Index of the first "real" entry (excluding . and ..)
+        let first = if parent == 0 { 1 } else { 2 };
+
+        for (index, entry) in dir
+            .entries()
+            .enumerate()
+            .skip((offset as usize).saturating_sub(first))
+        {
+            let entry_inode = self.inodes.lookup(
+                inode,
+                entry.name().to_owned(),
+                entry.locator(),
+                entry.entry_type(),
+            );
+
+            if reply.add(
+                entry_inode,
+                (index + first + 1) as i64,
+                to_file_type(entry.entry_type()),
+                entry.name(),
+            ) {
+                break;
+            }
+        }
+
+        reply.ok()
     }
 
     fn read(
@@ -285,11 +326,6 @@ impl fuser::Filesystem for VirtualFilesystem {
 }
 
 fn get_file_attr(entry: &Entry, inode: Inode) -> FileAttr {
-    let kind = match entry.entry_type() {
-        EntryType::File => FileType::RegularFile,
-        EntryType::Directory => FileType::Directory,
-    };
-
     FileAttr {
         ino: inode,
         size: entry.len(),
@@ -298,7 +334,7 @@ fn get_file_attr(entry: &Entry, inode: Inode) -> FileAttr {
         mtime: SystemTime::UNIX_EPOCH,  // TODO
         ctime: SystemTime::UNIX_EPOCH,  // TODO
         crtime: SystemTime::UNIX_EPOCH, // TODO
-        kind,
+        kind: to_file_type(entry.entry_type()),
         perm: match entry.entry_type() {
             EntryType::File => 0o444,      // TODO
             EntryType::Directory => 0o555, // TODO
@@ -327,5 +363,19 @@ fn to_error_code(error: &Error) -> libc::c_int {
         Error::BlockIdNotFound | Error::BlockNotFound(_) | Error::EntryNotFound => libc::ENOENT,
         Error::EntryExists => libc::EEXIST,
         Error::EntryNotDirectory => libc::ENOTDIR,
+    }
+}
+
+fn to_file_type(entry_type: EntryType) -> FileType {
+    match entry_type {
+        EntryType::File => FileType::RegularFile,
+        EntryType::Directory => FileType::Directory,
+    }
+}
+
+fn check_is_directory(entry_type: EntryType) -> Result<()> {
+    match entry_type {
+        EntryType::Directory => Ok(()),
+        _ => Err(Error::EntryNotDirectory),
     }
 }

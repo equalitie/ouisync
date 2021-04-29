@@ -24,22 +24,26 @@ impl InodeMap {
         locator: Locator,
         entry_type: EntryType,
     ) -> Inode {
-        let key = (parent, name);
-
-        //
         let generator = &mut self.generator;
         let forward = &self.forward;
 
-        let inode = *self.reverse.entry(key.clone()).or_insert_with(|| {
-            generator
-                .next(|inode| inode != 0 && inode != FUSE_ROOT_ID && !forward.contains_key(&inode))
-        });
+        let inode = *self
+            .reverse
+            .entry((parent, name.clone()))
+            .or_insert_with(|| {
+                generator.next(|inode| {
+                    inode != 0 && inode != FUSE_ROOT_ID && !forward.contains_key(&inode)
+                })
+            });
 
         let data = self.forward.entry(inode).or_insert_with(|| Data {
+            details: InodeDetails {
+                locator,
+                entry_type,
+                parent,
+            },
             lookups: 0,
-            locator,
-            entry_type,
-            key,
+            name,
         });
 
         data.lookups = data.lookups.saturating_add(1);
@@ -56,36 +60,40 @@ impl InodeMap {
         entry.get_mut().lookups = entry.get().lookups.saturating_sub(lookups);
 
         if entry.get().lookups == 0 {
-            self.reverse.remove(&entry.get().key);
-            entry.remove();
+            let data = entry.remove();
+            self.reverse.remove(&(data.details.parent, data.name));
         }
     }
 
-    pub fn get(&self, inode: Inode) -> Result<(Locator, EntryType)> {
+    pub fn get(&self, inode: Inode) -> Result<&InodeDetails> {
         if inode == FUSE_ROOT_ID {
-            Ok((Locator::Root, EntryType::Directory))
+            Ok(&ROOT)
         } else {
             self.forward
                 .get(&inode)
-                .map(|data| (data.locator, data.entry_type))
+                .map(|data| &data.details)
                 .ok_or(Error::EntryNotFound)
-        }
-    }
-
-    pub fn get_directory(&self, inode: Inode) -> Result<Locator> {
-        match self.get(inode) {
-            Ok((locator, EntryType::Directory)) => Ok(locator),
-            Ok(_) => Err(Error::EntryNotDirectory),
-            Err(error) => Err(error),
         }
     }
 }
 
+#[derive(Clone, Copy)]
+pub struct InodeDetails {
+    pub locator: Locator,
+    pub entry_type: EntryType,
+    pub parent: Inode,
+}
+
+const ROOT: InodeDetails = InodeDetails {
+    locator: Locator::Root,
+    entry_type: EntryType::Directory,
+    parent: 0,
+};
+
 type Key = (Inode, OsString);
 
 struct Data {
+    details: InodeDetails,
     lookups: u64,
-    locator: Locator,
-    entry_type: EntryType,
-    key: Key,
+    name: OsString,
 }

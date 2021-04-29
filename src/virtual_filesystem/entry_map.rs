@@ -1,5 +1,5 @@
 use super::handle_generator::HandleGenerator;
-use ouisync::Entry;
+use ouisync::{Directory, Entry, Error, Result};
 use std::collections::HashMap;
 
 pub type FileHandle = u64;
@@ -18,7 +18,19 @@ impl EntryMap {
         handle
     }
 
-    pub fn remove(&mut self, handle: FileHandle) -> Option<Entry> {
+    pub fn remove(&mut self, _handle: FileHandle) -> Option<Entry> {
         todo!()
+    }
+
+    pub fn get(&self, handle: FileHandle) -> Result<&Entry> {
+        self.map.get(&handle).ok_or(Error::EntryNotFound)
+    }
+
+    pub fn get_directory(&self, handle: FileHandle) -> Result<&Directory> {
+        match self.get(handle) {
+            Ok(Entry::Directory(dir)) => Ok(dir),
+            Ok(_) => Err(Error::EntryNotDirectory),
+            Err(error) => Err(error),
+        }
     }
 }
