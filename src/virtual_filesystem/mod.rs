@@ -61,93 +61,42 @@ macro_rules! try_request {
 
 struct VirtualFilesystem {
     rt: tokio::runtime::Handle,
-    repository: Repository,
-    inodes: InodeMap,
-    entries: EntryMap,
+    inner: Inner,
 }
 
 impl VirtualFilesystem {
     fn new(runtime_handle: tokio::runtime::Handle, repository: Repository) -> Self {
         Self {
             rt: runtime_handle,
-            repository,
-            inodes: InodeMap::default(),
-            entries: EntryMap::default(),
+            inner: Inner {
+                repository,
+                inodes: InodeMap::default(),
+                entries: EntryMap::default(),
+            },
         }
     }
 }
 
 impl fuser::Filesystem for VirtualFilesystem {
     fn lookup(&mut self, _req: &Request, parent: Inode, name: &OsStr, reply: ReplyEntry) {
-        log::debug!("lookup (parent={}, name={:?})", parent, name);
-
-        let InodeDetails {
-            locator,
-            entry_type,
-            ..
-        } = *try_request!(self.inodes.get(parent), reply);
-        try_request!(check_is_directory(entry_type), reply);
-
-        let repository = &self.repository;
-        let inodes = &mut self.inodes;
-
-        self.rt.block_on(async {
-            let parent_dir = try_request!(repository.open_directory(locator).await, reply);
-            let entry_info = try_request!(parent_dir.lookup(name), reply);
-            let entry = try_request!(entry_info.open().await, reply);
-
-            let inode = inodes.lookup(
-                parent,
-                name.to_owned(),
-                entry_info.locator(),
-                entry_info.entry_type(),
-            );
-
-            let attr = get_file_attr(&entry, inode);
-            reply.entry(&TTL, &attr, 0)
-        })
+        let attr = try_request!(self.rt.block_on(self.inner.lookup(parent, name)), reply);
+        reply.entry(&TTL, &attr, 0)
     }
 
     fn forget(&mut self, _req: &Request, inode: Inode, lookups: u64) {
         log::debug!("forget (inode={}, lookups={})", inode, lookups);
-        self.inodes.forget(inode, lookups)
+        self.inner.inodes.forget(inode, lookups)
     }
 
     fn getattr(&mut self, _req: &Request, inode: Inode, reply: ReplyAttr) {
-        log::debug!("getattr (inode={})", inode);
-
-        let InodeDetails {
-            locator,
-            entry_type,
-            ..
-        } = *try_request!(self.inodes.get(inode), reply);
-
-        self.rt.block_on(async {
-            let entry = try_request!(self.repository.open_entry(locator, entry_type).await, reply);
-            let attr = get_file_attr(&entry, inode);
-            reply.attr(&TTL, &attr)
-        })
+        let attr = try_request!(self.rt.block_on(self.inner.getattr(inode)), reply);
+        reply.attr(&TTL, &attr)
     }
 
     fn opendir(&mut self, _req: &Request, inode: Inode, flags: i32, reply: ReplyOpen) {
-        log::debug!("opendir (inode={}, flags={:#x})", inode, flags);
-
-        let InodeDetails {
-            locator,
-            entry_type,
-            ..
-        } = *try_request!(self.inodes.get(inode), reply);
-        try_request!(check_is_directory(entry_type), reply);
-
-        let repository = &self.repository;
-        let entries = &mut self.entries;
-
-        self.rt.block_on(async {
-            let dir = try_request!(repository.open_directory(locator).await, reply);
-            let handle = entries.insert(Entry::Directory(dir));
-            // TODO: what about the flags?
-            reply.opened(handle, 0);
-        })
+        let handle = try_request!(self.rt.block_on(self.inner.opendir(inode, flags)), reply);
+        // TODO: what about `flags`?
+        reply.opened(handle, 0);
     }
 
     fn releasedir(
@@ -168,7 +117,7 @@ impl fuser::Filesystem for VirtualFilesystem {
         // TODO: `forget` the inodes looked up during `readdir`
         // TODO: what about `flags`?
 
-        let _ = self.entries.remove(handle);
+        let _ = self.inner.entries.remove(handle);
         reply.ok();
     }
 
@@ -180,66 +129,8 @@ impl fuser::Filesystem for VirtualFilesystem {
         offset: i64,
         mut reply: ReplyDirectory,
     ) {
-        // Want to keep the `if`s uncollapsed here for readability.
-        #![allow(clippy::collapsible_if)]
-
-        log::debug!(
-            "readdir (inode={}, handle={}, offset={})",
-            inode,
-            handle,
-            offset
-        );
-
-        if offset < 0 {
-            log::error!("negative offset not allowed");
-            reply.error(libc::EINVAL);
-            return;
-        }
-
-        let parent = try_request!(self.inodes.get(inode), reply).parent;
-        let dir = try_request!(self.entries.get_directory(handle), reply);
-
-        // Handle . and ..
-        if offset <= 0 {
-            if reply.add(inode, 1, FileType::Directory, ".") {
-                reply.ok();
-                return;
-            }
-        }
-
-        if offset <= 1 && parent != 0 {
-            if reply.add(parent, 2, FileType::Directory, "..") {
-                reply.ok();
-                return;
-            }
-        }
-
-        // Index of the first "real" entry (excluding . and ..)
-        let first = if parent == 0 { 1 } else { 2 };
-
-        for (index, entry) in dir
-            .entries()
-            .enumerate()
-            .skip((offset as usize).saturating_sub(first))
-        {
-            let entry_inode = self.inodes.lookup(
-                inode,
-                entry.name().to_owned(),
-                entry.locator(),
-                entry.entry_type(),
-            );
-
-            if reply.add(
-                entry_inode,
-                (index + first + 1) as i64,
-                to_file_type(entry.entry_type()),
-                entry.name(),
-            ) {
-                break;
-            }
-        }
-
-        reply.ok()
+        try_request!(self.inner.readdir(inode, handle, offset, &mut reply), reply);
+        reply.ok();
     }
 
     fn mkdir(
@@ -251,43 +142,12 @@ impl fuser::Filesystem for VirtualFilesystem {
         umask: u32,
         reply: ReplyEntry,
     ) {
-        log::debug!(
-            "mkdir (parent={}, name={:?}, mode={:#o}, umask={:#o})",
-            parent,
-            name,
-            mode,
-            umask
+        let attr = try_request!(
+            self.rt
+                .block_on(self.inner.mkdir(parent, name, mode, umask)),
+            reply
         );
-
-        let InodeDetails {
-            locator,
-            entry_type,
-            ..
-        } = *try_request!(self.inodes.get(parent), reply);
-        try_request!(check_is_directory(entry_type), reply);
-
-        let repository = &self.repository;
-        let inodes = &mut self.inodes;
-
-        self.rt.block_on(async {
-            let mut parent_dir = try_request!(repository.open_directory(locator).await, reply);
-            let mut dir = try_request!(parent_dir.create_subdirectory(name.to_owned()), reply);
-            try_request!(dir.flush().await, reply);
-            try_request!(parent_dir.flush().await, reply);
-
-            // TODO: when do we `forget` this lookup?
-            let inode = inodes.lookup(
-                parent,
-                name.to_owned(),
-                *dir.locator(),
-                EntryType::Directory,
-            );
-
-            let entry = Entry::Directory(dir);
-            let attrs = get_file_attr(&entry, inode);
-
-            reply.entry(&TTL, &attrs, 0);
-        })
+        reply.entry(&TTL, &attr, 0);
     }
 
     // fn fsyncdir(
@@ -389,6 +249,176 @@ impl fuser::Filesystem for VirtualFilesystem {
 
         // log::debug!("mknod parent={}, name={:?}", parent, name);
         // self.make_entry(parent, name, Entry::File(vec![]), reply)
+    }
+}
+
+struct Inner {
+    repository: Repository,
+    inodes: InodeMap,
+    entries: EntryMap,
+}
+
+impl Inner {
+    async fn lookup(&mut self, parent: Inode, name: &OsStr) -> Result<FileAttr> {
+        log::debug!("lookup (parent={}, name={:?})", parent, name);
+
+        let InodeDetails {
+            locator,
+            entry_type,
+            ..
+        } = *self.inodes.get(parent)?;
+        check_is_directory(entry_type)?;
+
+        let parent_dir = self.repository.open_directory(locator).await?;
+        let entry_info = parent_dir.lookup(name)?;
+        let entry = entry_info.open().await?;
+
+        let inode = self.inodes.lookup(
+            parent,
+            name.to_owned(),
+            entry_info.locator(),
+            entry_info.entry_type(),
+        );
+
+        Ok(get_file_attr(&entry, inode))
+    }
+
+    async fn getattr(&mut self, inode: Inode) -> Result<FileAttr> {
+        log::debug!("getattr (inode={})", inode);
+
+        let InodeDetails {
+            locator,
+            entry_type,
+            ..
+        } = *self.inodes.get(inode)?;
+
+        let entry = self.repository.open_entry(locator, entry_type).await?;
+        Ok(get_file_attr(&entry, inode))
+    }
+
+    async fn opendir(&mut self, inode: Inode, flags: i32) -> Result<FileHandle> {
+        log::debug!("opendir (inode={}, flags={:#x})", inode, flags);
+
+        let InodeDetails {
+            locator,
+            entry_type,
+            ..
+        } = *self.inodes.get(inode)?;
+        check_is_directory(entry_type)?;
+
+        let dir = self.repository.open_directory(locator).await?;
+        let handle = self.entries.insert(Entry::Directory(dir));
+
+        Ok(handle)
+    }
+
+    fn readdir(
+        &mut self,
+        inode: Inode,
+        handle: FileHandle,
+        offset: i64,
+        reply: &mut ReplyDirectory,
+    ) -> Result<()> {
+        // Want to keep the `if`s uncollapsed here for readability.
+        #![allow(clippy::collapsible_if)]
+
+        log::debug!(
+            "readdir (inode={}, handle={}, offset={})",
+            inode,
+            handle,
+            offset
+        );
+
+        // TODO:
+        // if offset < 0 {
+        //     log::error!("negative offset not allowed");
+        //     reply.error(libc::EINVAL);
+        //     return;
+        // }
+
+        let parent = self.inodes.get(inode)?.parent;
+        let dir = self.entries.get_directory(handle)?;
+
+        // Handle . and ..
+        if offset <= 0 {
+            if reply.add(inode, 1, FileType::Directory, ".") {
+                return Ok(());
+            }
+        }
+
+        if offset <= 1 && parent != 0 {
+            if reply.add(parent, 2, FileType::Directory, "..") {
+                return Ok(());
+            }
+        }
+
+        // Index of the first "real" entry (excluding . and ..)
+        let first = if parent == 0 { 1 } else { 2 };
+
+        for (index, entry) in dir
+            .entries()
+            .enumerate()
+            .skip((offset as usize).saturating_sub(first))
+        {
+            let entry_inode = self.inodes.lookup(
+                inode,
+                entry.name().to_owned(),
+                entry.locator(),
+                entry.entry_type(),
+            );
+
+            if reply.add(
+                entry_inode,
+                (index + first + 1) as i64,
+                to_file_type(entry.entry_type()),
+                entry.name(),
+            ) {
+                break;
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn mkdir(
+        &mut self,
+        parent: Inode,
+        name: &OsStr,
+        mode: u32,
+        umask: u32,
+    ) -> Result<FileAttr> {
+        log::debug!(
+            "mkdir (parent={}, name={:?}, mode={:#o}, umask={:#o})",
+            parent,
+            name,
+            mode,
+            umask
+        );
+
+        let InodeDetails {
+            locator,
+            entry_type,
+            ..
+        } = *self.inodes.get(parent)?;
+        check_is_directory(entry_type)?;
+
+        let mut parent_dir = self.repository.open_directory(locator).await?;
+        let mut dir = parent_dir.create_subdirectory(name.to_owned())?;
+
+        // TODO: should these two happen atomically (in a transaction)?
+        dir.flush().await?;
+        parent_dir.flush().await?;
+
+        // TODO: when do we `forget` this lookup?
+        let inode = self.inodes.lookup(
+            parent,
+            name.to_owned(),
+            *dir.locator(),
+            EntryType::Directory,
+        );
+
+        let entry = Entry::Directory(dir);
+        Ok(get_file_attr(&entry, inode))
     }
 }
 
