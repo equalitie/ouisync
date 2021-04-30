@@ -14,7 +14,7 @@ use std::{
 };
 
 /// Wrapper for a 256-bit hash digest, for convenience. Also implements friendly formatting.
-#[derive(Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
 #[repr(transparent)]
 pub struct Hash(Inner);
 
