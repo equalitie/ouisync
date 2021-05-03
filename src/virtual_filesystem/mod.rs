@@ -328,12 +328,9 @@ impl Inner {
             offset
         );
 
-        // TODO:
-        // if offset < 0 {
-        //     log::error!("negative offset not allowed");
-        //     reply.error(libc::EINVAL);
-        //     return;
-        // }
+        if offset < 0 {
+            return Err(Error::WrongDirectoryEntryOffset);
+        }
 
         let parent = self.inodes.get(inode).parent;
         let dir = self.entries.get_directory(handle)?;
@@ -460,6 +457,7 @@ fn to_error_code(error: &Error) -> libc::c_int {
         Error::BlockIdNotFound | Error::BlockNotFound(_) | Error::EntryNotFound => libc::ENOENT,
         Error::EntryExists => libc::EEXIST,
         Error::EntryNotDirectory => libc::ENOTDIR,
+        Error::WrongDirectoryEntryOffset => libc::EINVAL,
     }
 }
 

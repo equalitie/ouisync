@@ -36,6 +36,8 @@ pub enum Error {
     EntryNotFound,
     #[error("entry is not a directory")]
     EntryNotDirectory,
+    #[error("directory entry offset is out of range")]
+    WrongDirectoryEntryOffset,
 }
 
 impl From<TryFromSliceError> for Error {
