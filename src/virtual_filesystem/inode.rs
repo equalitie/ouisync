@@ -5,6 +5,7 @@ use std::{
     collections::{hash_map::Entry, HashMap},
     convert::TryInto,
     ffi::{OsStr, OsString},
+    fmt,
 };
 
 /// Inode handle
@@ -32,7 +33,7 @@ impl InodeMap {
         let inode = index_to_inode(index);
         assert_eq!(inode, FUSE_ROOT_ID);
 
-        log::trace!("Create inode {} (root)", FUSE_ROOT_ID);
+        log::trace!("Create inode {} for /", FUSE_ROOT_ID);
 
         Self {
             forward,
@@ -75,10 +76,9 @@ impl InodeMap {
                 entry.insert(inode);
 
                 log::trace!(
-                    "Create inode {} (parent = {}, name = {:?})",
+                    "Create inode {} for {}",
                     inode,
-                    parent,
-                    name
+                    PathDisplay(&self.forward, inode, None)
                 );
 
                 inode
@@ -111,10 +111,9 @@ impl InodeMap {
             self.reverse.remove(&key);
 
             log::trace!(
-                "Remove inode {} (parent = {}, name = {:?})",
+                "Remove inode {} for {}",
                 inode,
-                key.parent,
-                key.name
+                PathDisplay(&self.forward, key.parent, Some(&key.name))
             );
         } else {
             data.lookups -= lookups;
@@ -125,12 +124,27 @@ impl InodeMap {
     //
     // # Panics
     //
-    // Panics if the inode doesn't exists.
+    // Panics if the inode doesn't exist.
     pub fn get(&self, inode: Inode) -> &InodeDetails {
         self.forward
             .get(inode_to_index(inode))
             .map(|data| &data.details)
             .expect("inode not found")
+    }
+
+    // Returns an object that displays the absolute (from the repository root) path of a given
+    // inode. If `last` is `Some`, it is appended as the final component of the path. This is
+    // useful for printing paths of non-existing entries.
+    //
+    // # Panics
+    //
+    // Panics if the inode doesn't exist.
+    pub fn path_display<'a>(
+        &'a self,
+        inode: Inode,
+        last: Option<&'a OsStr>,
+    ) -> impl fmt::Display + 'a {
+        PathDisplay(&self.forward, inode, last)
     }
 }
 
@@ -167,4 +181,33 @@ fn inode_to_index(inode: Inode) -> usize {
         .wrapping_sub(1)
         .try_into()
         .expect("inode out of bounds")
+}
+
+// Helper to display the full path of an inode. See `InodeMap::path_display` for more info.
+struct PathDisplay<'a>(&'a Slab<InodeData>, Inode, Option<&'a OsStr>);
+
+impl fmt::Display for PathDisplay<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt_inode_path(f, self.0, self.1)?;
+
+        if let Some(last) = self.2 {
+            if self.1 > FUSE_ROOT_ID {
+                write!(f, "/")?;
+            }
+
+            write!(f, "{}", last.to_string_lossy())
+        } else {
+            Ok(())
+        }
+    }
+}
+
+fn fmt_inode_path(f: &mut fmt::Formatter, map: &Slab<InodeData>, inode: Inode) -> fmt::Result {
+    let data = &map[inode_to_index(inode)];
+
+    if data.details.parent > FUSE_ROOT_ID {
+        fmt_inode_path(f, map, data.details.parent)?;
+    }
+
+    write!(f, "/{}", data.name.to_string_lossy())
 }

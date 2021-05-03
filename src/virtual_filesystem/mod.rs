@@ -88,7 +88,11 @@ impl fuser::Filesystem for VirtualFilesystem {
     // called for the entries in `readdir` though (see the comment in that function for more
     // details).
     fn forget(&mut self, _req: &Request, inode: Inode, lookups: u64) {
-        log::debug!("forget (inode={}, lookups={})", inode, lookups);
+        log::debug!(
+            "forget {} (lookups={})",
+            self.inner.inodes.path_display(inode, None),
+            lookups
+        );
         self.inner.inodes.forget(inode, lookups)
     }
 
@@ -112,8 +116,8 @@ impl fuser::Filesystem for VirtualFilesystem {
         reply: ReplyEmpty,
     ) {
         log::debug!(
-            "releasedir (inode={}, handle={}, flags={:#x})",
-            inode,
+            "releasedir {} (handle={}, flags={:#x})",
+            self.inner.inodes.path_display(inode, None),
             handle,
             flags
         );
@@ -304,7 +308,7 @@ struct Inner {
 
 impl Inner {
     async fn lookup(&mut self, parent: Inode, name: &OsStr) -> Result<FileAttr> {
-        log::debug!("lookup (parent={}, name={:?})", parent, name);
+        log::debug!("lookup {}", self.inodes.path_display(parent, Some(name)));
 
         let parent_dir = self.open_directory_by_inode(parent).await?;
         let entry_info = parent_dir.lookup(name)?;
@@ -318,7 +322,7 @@ impl Inner {
     }
 
     async fn getattr(&mut self, inode: Inode) -> Result<FileAttr> {
-        log::debug!("getattr (inode={})", inode);
+        log::debug!("getattr {}", self.inodes.path_display(inode, None));
 
         let &InodeDetails {
             locator,
@@ -331,7 +335,11 @@ impl Inner {
     }
 
     async fn opendir(&mut self, inode: Inode, flags: i32) -> Result<FileHandle> {
-        log::debug!("opendir (inode={}, flags={:#x})", inode, flags);
+        log::debug!(
+            "opendir {} (flags={:#x})",
+            self.inodes.path_display(inode, None),
+            flags
+        );
 
         let dir = self.open_directory_by_inode(inode).await?;
         let handle = self.entries.insert(Entry::Directory(dir));
@@ -350,8 +358,8 @@ impl Inner {
         #![allow(clippy::collapsible_if)]
 
         log::debug!(
-            "readdir (inode={}, handle={}, offset={})",
-            inode,
+            "readdir {} (handle={}, offset={})",
+            self.inodes.path_display(inode, None),
             handle,
             offset
         );
@@ -417,9 +425,8 @@ impl Inner {
         umask: u32,
     ) -> Result<FileAttr> {
         log::debug!(
-            "mkdir (parent={}, name={:?}, mode={:#o}, umask={:#o})",
-            parent,
-            name,
+            "mkdir {} (mode={:#o}, umask={:#o})",
+            self.inodes.path_display(parent, Some(name)),
             mode,
             umask
         );
@@ -440,7 +447,7 @@ impl Inner {
     }
 
     async fn rmdir(&mut self, parent: Inode, name: &OsStr) -> Result<()> {
-        log::debug!("rmdir (parent = {}, name = {:?})", parent, name);
+        log::debug!("rmdir {}", self.inodes.path_display(parent, Some(name)));
 
         let mut parent_dir = self.open_directory_by_inode(parent).await?;
 
@@ -458,8 +465,8 @@ impl Inner {
 
     async fn fsyncdir(&mut self, inode: Inode, handle: FileHandle, datasync: bool) -> Result<()> {
         log::debug!(
-            "fsyncdir (inode = {}, handle = {}, datasync = {})",
-            inode,
+            "fsyncdir {} (handle={}, datasync={})",
+            self.inodes.path_display(inode, None),
             handle,
             datasync
         );
@@ -481,9 +488,8 @@ impl Inner {
         flags: i32,
     ) -> Result<(FileAttr, FileHandle, u32)> {
         log::debug!(
-            "create (parent = {}, name = {:?}, mode = {:#o}, umask = {:#o}, flags = {:#x}",
-            parent,
-            name,
+            "create {} (mode={:#o}, umask={:#o}, flags={:#x}",
+            self.inodes.path_display(parent, Some(name)),
             mode,
             umask,
             flags
@@ -505,7 +511,11 @@ impl Inner {
     }
 
     async fn flush(&mut self, inode: Inode, handle: FileHandle) -> Result<()> {
-        log::debug!("flush (inode = {}, handle = {})", inode, handle);
+        log::debug!(
+            "flush {} (handle={})",
+            self.inodes.path_display(inode, None),
+            handle
+        );
         self.entries.get_file_mut(handle)?.flush().await
     }
 
