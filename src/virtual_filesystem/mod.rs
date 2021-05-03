@@ -9,8 +9,9 @@ use fuser::{
     BackgroundSession, FileAttr, FileType, ReplyAttr, ReplyData, ReplyDirectory, ReplyEmpty,
     ReplyEntry, ReplyOpen, ReplyWrite, Request,
 };
-use ouisync::{Entry, EntryType, Error, Repository, Result};
+use ouisync::{Directory, Entry, EntryType, Error, Repository, Result};
 use std::{
+    convert::TryInto,
     ffi::OsStr,
     io,
     path::Path,
@@ -135,6 +136,8 @@ impl fuser::Filesystem for VirtualFilesystem {
         reply.ok();
     }
 
+    // TODO: implement `readdirplus`
+
     fn mkdir(
         &mut self,
         _req: &Request,
@@ -150,6 +153,11 @@ impl fuser::Filesystem for VirtualFilesystem {
             reply
         );
         reply.entry(&TTL, &attr, 0);
+    }
+
+    fn rmdir(&mut self, _req: &Request, parent: Inode, name: &OsStr, reply: ReplyEmpty) {
+        try_request!(self.rt.block_on(self.inner.rmdir(parent, name)), reply);
+        reply.ok();
     }
 
     fn fsyncdir(
@@ -273,7 +281,7 @@ impl Inner {
             entry_type,
             ..
         } = self.inodes.get(parent);
-        check_is_directory(entry_type)?;
+        entry_type.check_is_directory()?;
 
         let parent_dir = self.repository.open_directory(locator).await?;
         let entry_info = parent_dir.lookup(name)?;
@@ -307,7 +315,7 @@ impl Inner {
             entry_type,
             ..
         } = self.inodes.get(inode);
-        check_is_directory(entry_type)?;
+        entry_type.check_is_directory()?;
 
         let dir = self.repository.open_directory(locator).await?;
         let handle = self.entries.insert(Entry::Directory(dir));
@@ -405,7 +413,7 @@ impl Inner {
             entry_type,
             ..
         } = self.inodes.get(parent);
-        check_is_directory(entry_type)?;
+        entry_type.check_is_directory()?;
 
         let mut parent_dir = self.repository.open_directory(locator).await?;
         let mut dir = parent_dir.create_subdirectory(name.to_owned())?;
@@ -420,6 +428,30 @@ impl Inner {
 
         let entry = Entry::Directory(dir);
         Ok(get_file_attr(&entry, inode))
+    }
+
+    async fn rmdir(&mut self, parent: Inode, name: &OsStr) -> Result<()> {
+        log::debug!("rmdir (parent = {}, name = {:?})", parent, name);
+
+        let &InodeDetails {
+            locator,
+            entry_type,
+            ..
+        } = self.inodes.get(parent);
+        entry_type.check_is_directory()?;
+
+        let mut parent_dir = self.repository.open_directory(locator).await?;
+
+        // Check the directory is empty.
+        let dir: Directory = parent_dir.lookup(name)?.open().await?.try_into()?;
+        if dir.entries().len() > 0 {
+            return Err(Error::DirectoryNotEmpty);
+        }
+
+        parent_dir.remove_entry(name).await?;
+        parent_dir.flush().await?;
+
+        Ok(())
     }
 
     async fn fsyncdir(&mut self, inode: Inode, handle: FileHandle, datasync: bool) -> Result<()> {
@@ -478,6 +510,7 @@ fn to_error_code(error: &Error) -> libc::c_int {
         Error::EntryExists => libc::EEXIST,
         Error::EntryNotDirectory => libc::ENOTDIR,
         Error::WrongDirectoryEntryOffset => libc::EINVAL,
+        Error::DirectoryNotEmpty => libc::ENOTEMPTY,
     }
 }
 
@@ -485,12 +518,5 @@ fn to_file_type(entry_type: EntryType) -> FileType {
     match entry_type {
         EntryType::File => FileType::RegularFile,
         EntryType::Directory => FileType::Directory,
-    }
-}
-
-fn check_is_directory(entry_type: EntryType) -> Result<()> {
-    match entry_type {
-        EntryType::Directory => Ok(()),
-        _ => Err(Error::EntryNotDirectory),
     }
 }

@@ -16,7 +16,6 @@ use std::{
 pub struct Directory {
     blob: Blob,
     content: Content,
-    content_dirty: bool,
 }
 
 #[allow(clippy::len_without_is_empty)]
@@ -27,11 +26,7 @@ impl Directory {
         let buffer = blob.read_to_end().await?;
         let content = bincode::deserialize(&buffer).map_err(Error::MalformedDirectory)?;
 
-        Ok(Self {
-            blob,
-            content,
-            content_dirty: false,
-        })
+        Ok(Self { blob, content })
     }
 
     /// Creates new directory.
@@ -40,14 +35,16 @@ impl Directory {
 
         Self {
             blob,
-            content: Content::new(),
-            content_dirty: true,
+            content: Content {
+                dirty: true,
+                ..Default::default()
+            },
         }
     }
 
     /// Flushed this directory ensuring that any pending changes are written to the store.
     pub async fn flush(&mut self) -> Result<()> {
-        if !self.content_dirty {
+        if !self.content.dirty {
             return Ok(());
         }
 
@@ -58,7 +55,7 @@ impl Directory {
         self.blob.write(&buffer).await?;
         self.blob.flush().await?;
 
-        self.content_dirty = false;
+        self.content.dirty = false;
 
         Ok(())
     }
@@ -93,7 +90,6 @@ impl Directory {
     /// Creates a new file inside this directory.
     pub fn create_file(&mut self, name: OsString) -> Result<File> {
         let seq = self.content.insert(name, EntryType::File)?;
-        self.content_dirty = true;
 
         Ok(File::create(
             self.blob.db_pool().clone(),
@@ -105,13 +101,21 @@ impl Directory {
     /// Creates a new subdirectory of this directory.
     pub fn create_subdirectory(&mut self, name: OsString) -> Result<Self> {
         let seq = self.content.insert(name, EntryType::Directory)?;
-        self.content_dirty = true;
 
         Ok(Self::create(
             self.blob.db_pool().clone(),
             self.blob.cryptor().clone(),
             Locator::Head(*self.blob.head_name(), seq),
         ))
+    }
+
+    /// Removes the entry with `name` from this directory and also deletes it from the repository.
+    pub async fn remove_entry(&mut self, name: &OsStr) -> Result<()> {
+        let _seq = self.content.remove(name)?;
+
+        // TODO: actualy delete the entry blob from the database
+
+        Ok(())
     }
 
     /// Length of this directory in bytes. Does not include the content, only the size of directory
@@ -169,29 +173,37 @@ impl<'a> EntryInfo<'a> {
     }
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Default, Deserialize, Serialize)]
 struct Content {
     entries: BTreeMap<OsString, EntryData>,
+    #[serde(skip)]
+    dirty: bool,
 }
 
 impl Content {
-    fn new() -> Self {
-        Self {
-            entries: BTreeMap::new(),
-        }
-    }
-
     fn insert(&mut self, name: OsString, entry_type: EntryType) -> Result<u32> {
         let seq = self.next_seq();
 
         match self.entries.entry(name) {
             btree_map::Entry::Vacant(entry) => {
                 entry.insert(EntryData { entry_type, seq });
+                self.dirty = true;
 
                 Ok(seq)
             }
             btree_map::Entry::Occupied(_) => Err(Error::EntryExists),
         }
+    }
+
+    fn remove(&mut self, name: &OsStr) -> Result<u32> {
+        let seq = self
+            .entries
+            .remove(name)
+            .map(|data| data.seq)
+            .ok_or(Error::EntryNotFound)?;
+        self.dirty = true;
+
+        Ok(seq)
     }
 
     // Returns next available seq number.
@@ -282,6 +294,38 @@ mod tests {
             .await
             .unwrap();
         assert!(dir.lookup(OsStr::new("none.txt")).is_ok());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn remove_entry_from_existing_directory() {
+        let pool = setup().await;
+
+        let name = OsStr::new("monkey.txt");
+
+        // Create a directory with a single entry.
+        let mut parent_dir = Directory::create(pool.clone(), Cryptor::Null, Locator::Root);
+        let mut file = parent_dir.create_file(name.into()).unwrap();
+        file.flush().await.unwrap();
+        parent_dir.flush().await.unwrap();
+
+        // Reopen and remove the entry
+        let mut parent_dir = Directory::open(pool.clone(), Cryptor::Null, Locator::Root)
+            .await
+            .unwrap();
+        parent_dir.remove_entry(name).await.unwrap();
+        parent_dir.flush().await.unwrap();
+
+        // Reopen again and check the file was removed.
+        let parent_dir = Directory::open(pool, Cryptor::Null, Locator::Root)
+            .await
+            .unwrap();
+        match parent_dir.lookup(name) {
+            Err(Error::EntryNotFound) => (),
+            Err(error) => panic!("unexpected error {:?}", error),
+            Ok(_) => panic!("entry should not exists but it does"),
+        }
+
+        assert_eq!(parent_dir.entries().len(), 0);
     }
 
     async fn setup() -> db::Pool {
