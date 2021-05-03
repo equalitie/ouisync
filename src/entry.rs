@@ -1,4 +1,9 @@
-use crate::{directory::Directory, error::Error, file::File, locator::Locator};
+use crate::{
+    directory::Directory,
+    error::{Error, Result},
+    file::File,
+    locator::Locator,
+};
 use serde::{Deserialize, Serialize};
 use std::convert::TryFrom;
 
@@ -10,10 +15,17 @@ pub enum EntryType {
 }
 
 impl EntryType {
-    pub fn check_is_directory(&self) -> Result<(), EntryNotDirectory> {
+    pub fn check_is_file(&self) -> Result<()> {
+        match self {
+            EntryType::File => Ok(()),
+            EntryType::Directory => Err(Error::EntryIsDirectory),
+        }
+    }
+
+    pub fn check_is_directory(&self) -> Result<()> {
         match self {
             EntryType::Directory => Ok(()),
-            _ => Err(EntryNotDirectory),
+            _ => Err(Error::EntryNotDirectory),
         }
     }
 }
@@ -50,20 +62,12 @@ impl Entry {
 }
 
 impl TryFrom<Entry> for Directory {
-    type Error = EntryNotDirectory;
+    type Error = Error;
 
     fn try_from(entry: Entry) -> Result<Self, Self::Error> {
         match entry {
             Entry::Directory(dir) => Ok(dir),
-            _ => Err(EntryNotDirectory),
+            _ => Err(Error::EntryNotDirectory),
         }
-    }
-}
-
-pub struct EntryNotDirectory;
-
-impl From<EntryNotDirectory> for Error {
-    fn from(_: EntryNotDirectory) -> Self {
-        Self::EntryNotDirectory
     }
 }

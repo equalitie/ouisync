@@ -1,19 +1,21 @@
 mod entry_map;
 mod inode;
+mod utils;
 
 use self::{
     entry_map::{EntryMap, FileHandle},
     inode::{Inode, InodeDetails, InodeMap},
+    utils::{FormatOptionScope, MaybeOwnedMut},
 };
 use fuser::{
     BackgroundSession, FileAttr, FileType, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory,
-    ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite, Request,
+    ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow,
 };
 use ouisync::{Directory, Entry, EntryType, Error, Repository, Result};
 use std::{
     convert::TryInto,
     ffi::OsStr,
-    io,
+    io::{self, SeekFrom},
     path::Path,
     time::{Duration, SystemTime},
 };
@@ -99,6 +101,34 @@ impl fuser::Filesystem for VirtualFilesystem {
     fn getattr(&mut self, _req: &Request, inode: Inode, reply: ReplyAttr) {
         let attr = try_request!(self.rt.block_on(self.inner.getattr(inode)), reply);
         reply.attr(&TTL, &attr)
+    }
+
+    fn setattr(
+        &mut self,
+        _req: &Request,
+        inode: Inode,
+        mode: Option<u32>,
+        uid: Option<u32>,
+        gid: Option<u32>,
+        size: Option<u64>,
+        atime: Option<TimeOrNow>,
+        mtime: Option<TimeOrNow>,
+        ctime: Option<SystemTime>,
+        fh: Option<u64>,
+        crtime: Option<SystemTime>,
+        chgtime: Option<SystemTime>,
+        bkuptime: Option<SystemTime>,
+        flags: Option<u32>,
+        reply: ReplyAttr,
+    ) {
+        let attr = try_request!(
+            self.rt.block_on(self.inner.setattr(
+                inode, mode, uid, gid, size, atime, mtime, ctime, fh, crtime, chgtime, bkuptime,
+                flags,
+            )),
+            reply
+        );
+        reply.attr(&TTL, &attr);
     }
 
     fn opendir(&mut self, _req: &Request, inode: Inode, flags: i32, reply: ReplyOpen) {
@@ -198,6 +228,33 @@ impl fuser::Filesystem for VirtualFilesystem {
         reply.created(&TTL, &attr, 0, handle, flags);
     }
 
+    fn open(&mut self, _req: &Request, inode: Inode, flags: i32, reply: ReplyOpen) {
+        let (handle, flags) = try_request!(self.rt.block_on(self.inner.open(inode, flags)), reply);
+        reply.opened(handle, flags);
+    }
+
+    fn write(
+        &mut self,
+        _req: &Request<'_>,
+        inode: Inode,
+        handle: FileHandle,
+        offset: i64,
+        data: &[u8],
+        _write_flags: u32,
+        _flags: i32,
+        _lock_owner: Option<u64>,
+        reply: ReplyWrite,
+    ) {
+        // TODO: what about `write_flags`, `flags` and `lock_owner`?
+
+        let size = try_request!(
+            self.rt
+                .block_on(self.inner.write(inode, handle, offset, data)),
+            reply
+        );
+        reply.written(size);
+    }
+
     fn flush(
         &mut self,
         _req: &Request,
@@ -243,46 +300,6 @@ impl fuser::Filesystem for VirtualFilesystem {
         // reply.data(&content[start..end]);
     }
 
-    fn write(
-        &mut self,
-        _req: &Request<'_>,
-        _inode: Inode,
-        _handle: FileHandle,
-        _offset: i64,
-        _data: &[u8],
-        _write_flags: u32,
-        _flags: i32,
-        _lock_owner: Option<u64>,
-        _reply: ReplyWrite,
-    ) {
-        todo!()
-
-        // log::debug!("write ino={}, offset={}, size={}", ino, offset, data.len());
-
-        // let content = match self.entries.get_mut(&ino) {
-        //     Some(Entry::File(content)) => content,
-        //     Some(Entry::Directory(_)) => {
-        //         reply.error(libc::EISDIR);
-        //         return;
-        //     }
-        //     None => {
-        //         reply.error(libc::ENOENT);
-        //         return;
-        //     }
-        // };
-
-        // let offset = offset as usize; // FIMXE: use `usize::try_from` instead
-        // let new_len = content.len().max(offset + data.len());
-
-        // if new_len > content.len() {
-        //     content.resize(new_len, 0)
-        // }
-
-        // content[offset..offset + data.len()].copy_from_slice(data);
-
-        // reply.written(data.len() as u32)
-    }
-
     fn mknod(
         &mut self,
         _req: &Request<'_>,
@@ -318,7 +335,7 @@ impl Inner {
             .inodes
             .lookup(parent, name, entry_info.locator(), entry_info.entry_type());
 
-        Ok(get_file_attr(&entry, inode))
+        Ok(make_file_attr_for_entry(&entry, inode))
     }
 
     async fn getattr(&mut self, inode: Inode) -> Result<FileAttr> {
@@ -331,7 +348,77 @@ impl Inner {
         } = self.inodes.get(inode);
 
         let entry = self.repository.open_entry(locator, entry_type).await?;
-        Ok(get_file_attr(&entry, inode))
+        Ok(make_file_attr_for_entry(&entry, inode))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn setattr(
+        &mut self,
+        inode: Inode,
+        mode: Option<u32>,
+        uid: Option<u32>,
+        gid: Option<u32>,
+        size: Option<u64>,
+        atime: Option<TimeOrNow>,
+        mtime: Option<TimeOrNow>,
+        ctime: Option<SystemTime>,
+        handle: Option<FileHandle>,
+        crtime: Option<SystemTime>,
+        chgtime: Option<SystemTime>,
+        bkuptime: Option<SystemTime>,
+        flags: Option<u32>,
+    ) -> Result<FileAttr> {
+        let mut scope = FormatOptionScope::new();
+
+        log::debug!(
+            "setattr {} ({:#o}{}{}{}{:?}{:?}{:?}{}{:?}{:?}{:?}{:#x})",
+            self.inodes.path_display(inode, None),
+            scope.add("mode", mode),
+            scope.add("uid", uid),
+            scope.add("gid", gid),
+            scope.add("size", size),
+            scope.add("atime", atime),
+            scope.add("mtime", mtime),
+            scope.add("ctime", ctime),
+            scope.add("handle", handle),
+            scope.add("crtime", crtime),
+            scope.add("chgtime", chgtime),
+            scope.add("bkuptime", bkuptime),
+            scope.add("flags", flags)
+        );
+
+        fn check_unsupported<T>(value: Option<T>) -> Result<()> {
+            if value.is_none() {
+                Ok(())
+            } else {
+                Err(Error::OperationNotSupported)
+            }
+        }
+
+        check_unsupported(mode)?;
+        check_unsupported(uid)?;
+        check_unsupported(gid)?;
+        check_unsupported(atime)?;
+        check_unsupported(mtime)?;
+        check_unsupported(ctime)?;
+        check_unsupported(crtime)?;
+        check_unsupported(chgtime)?;
+        check_unsupported(bkuptime)?;
+        check_unsupported(flags)?;
+
+        let mut file = if let Some(handle) = handle {
+            MaybeOwnedMut::Borrowed(self.entries.get_file_mut(handle)?)
+        } else {
+            let locator = self.inodes.get(inode).locator;
+            MaybeOwnedMut::Owned(self.repository.open_file(locator).await?)
+        };
+
+        if let Some(size) = size {
+            file.seek(SeekFrom::Start(size)).await?;
+            file.truncate().await?;
+        }
+
+        Ok(make_file_attr(inode, EntryType::File, file.len()))
     }
 
     async fn opendir(&mut self, inode: Inode, flags: i32) -> Result<FileHandle> {
@@ -443,7 +530,7 @@ impl Inner {
             .lookup(parent, name, *dir.locator(), EntryType::Directory);
 
         let entry = Entry::Directory(dir);
-        Ok(get_file_attr(&entry, inode))
+        Ok(make_file_attr_for_entry(&entry, inode))
     }
 
     async fn rmdir(&mut self, parent: Inode, name: &OsStr) -> Result<()> {
@@ -504,10 +591,57 @@ impl Inner {
         let inode = self
             .inodes
             .lookup(parent, name, *entry.locator(), entry.entry_type());
-        let attr = get_file_attr(&entry, inode);
+        let attr = make_file_attr_for_entry(&entry, inode);
         let handle = self.entries.insert(entry);
 
         Ok((attr, handle, 0))
+    }
+
+    async fn open(&mut self, inode: Inode, flags: i32) -> Result<(FileHandle, u32)> {
+        log::debug!(
+            "open {} (flags={:#x})",
+            self.inodes.path_display(inode, None),
+            flags
+        );
+
+        // TODO: what about flags (parameter)?
+
+        let &InodeDetails {
+            locator,
+            entry_type,
+            ..
+        } = self.inodes.get(inode);
+        entry_type.check_is_file()?;
+
+        let file = self.repository.open_file(locator).await?;
+        let handle = self.entries.insert(Entry::File(file));
+
+        // TODO: what about flags (return value)?
+
+        Ok((handle, 0))
+    }
+
+    async fn write(
+        &mut self,
+        inode: Inode,
+        handle: FileHandle,
+        offset: i64,
+        data: &[u8],
+    ) -> Result<u32> {
+        log::debug!(
+            "write {} (handle={}, offset={}, data.len={})",
+            self.inodes.path_display(inode, None),
+            handle,
+            offset,
+            data.len(),
+        );
+
+        // TODO: what about `offset`?
+
+        let file = self.entries.get_file_mut(handle)?;
+        file.write(data).await?;
+
+        Ok(data.len().try_into().unwrap_or(u32::MAX))
     }
 
     async fn flush(&mut self, inode: Inode, handle: FileHandle) -> Result<()> {
@@ -530,17 +664,21 @@ impl Inner {
     }
 }
 
-fn get_file_attr(entry: &Entry, inode: Inode) -> FileAttr {
+fn make_file_attr_for_entry(entry: &Entry, inode: Inode) -> FileAttr {
+    make_file_attr(inode, entry.entry_type(), entry.len())
+}
+
+fn make_file_attr(inode: Inode, entry_type: EntryType, len: u64) -> FileAttr {
     FileAttr {
         ino: inode,
-        size: entry.len(),
+        size: len,
         blocks: 0,                      // TODO: ?
         atime: SystemTime::UNIX_EPOCH,  // TODO
         mtime: SystemTime::UNIX_EPOCH,  // TODO
         ctime: SystemTime::UNIX_EPOCH,  // TODO
         crtime: SystemTime::UNIX_EPOCH, // TODO
-        kind: to_file_type(entry.entry_type()),
-        perm: match entry.entry_type() {
+        kind: to_file_type(entry_type),
+        perm: match entry_type {
             EntryType::File => 0o444,      // TODO
             EntryType::Directory => 0o555, // TODO
         },
@@ -571,6 +709,7 @@ fn to_error_code(error: &Error) -> libc::c_int {
         Error::EntryIsDirectory => libc::EISDIR,
         Error::WrongDirectoryEntryOffset => libc::EINVAL,
         Error::DirectoryNotEmpty => libc::ENOTEMPTY,
+        Error::OperationNotSupported => libc::ENOSYS,
     }
 }
 

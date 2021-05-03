@@ -26,8 +26,8 @@ impl Repository {
         }
     }
 
-    pub async fn open_file(&self, _locator: Locator) -> Result<File> {
-        todo!()
+    pub async fn open_file(&self, locator: Locator) -> Result<File> {
+        File::open(self.pool.clone(), self.cryptor.clone(), locator).await
     }
 
     pub async fn open_directory(&self, locator: Locator) -> Result<Directory> {

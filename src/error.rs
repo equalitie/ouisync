@@ -42,6 +42,8 @@ pub enum Error {
     WrongDirectoryEntryOffset,
     #[error("directory is not empty")]
     DirectoryNotEmpty,
+    #[error("operation is not supported")]
+    OperationNotSupported,
 }
 
 impl From<TryFromSliceError> for Error {
