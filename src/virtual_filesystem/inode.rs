@@ -32,6 +32,8 @@ impl InodeMap {
         let inode = index_to_inode(index);
         assert_eq!(inode, FUSE_ROOT_ID);
 
+        log::trace!("Create inode {} (root)", FUSE_ROOT_ID);
+
         Self {
             forward,
             reverse: HashMap::new(),
@@ -72,6 +74,13 @@ impl InodeMap {
 
                 entry.insert(inode);
 
+                log::trace!(
+                    "Create inode {} (parent = {}, name = {:?})",
+                    inode,
+                    parent,
+                    name
+                );
+
                 inode
             }
             Entry::Occupied(entry) => {
@@ -100,6 +109,13 @@ impl InodeMap {
             };
 
             self.reverse.remove(&key);
+
+            log::trace!(
+                "Remove inode {} (parent = {}, name = {:?})",
+                inode,
+                key.parent,
+                key.name
+            );
         } else {
             data.lookups -= lookups;
         }
