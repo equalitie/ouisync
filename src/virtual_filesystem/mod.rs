@@ -152,17 +152,21 @@ impl fuser::Filesystem for VirtualFilesystem {
         reply.entry(&TTL, &attr, 0);
     }
 
-    // fn fsyncdir(
-    //     &mut self,
-    //     _req: &Request<'_>,
-    //     inode: u64,
-    //     handle: u64,
-    //     _datasync: bool,
-    //     reply: ReplyEmpty,
-    // ) {
-    //     log::debug!("fsyncdir (inode = {}, handle = {})", inode, handle);
-    //     reply.error(libc::ENOSYS);
-    // }
+    fn fsyncdir(
+        &mut self,
+        _req: &Request<'_>,
+        inode: u64,
+        handle: u64,
+        datasync: bool,
+        reply: ReplyEmpty,
+    ) {
+        try_request!(
+            self.rt
+                .block_on(self.inner.fsyncdir(inode, handle, datasync)),
+            reply
+        );
+        reply.ok();
+    }
 
     fn read(
         &mut self,
@@ -416,6 +420,22 @@ impl Inner {
 
         let entry = Entry::Directory(dir);
         Ok(get_file_attr(&entry, inode))
+    }
+
+    async fn fsyncdir(&mut self, inode: Inode, handle: FileHandle, datasync: bool) -> Result<()> {
+        log::debug!(
+            "fsyncdir (inode = {}, handle = {}, datasync = {})",
+            inode,
+            handle,
+            datasync
+        );
+
+        // TODO: what about `datasync`?
+
+        let dir = self.entries.get_directory_mut(handle)?;
+        dir.flush().await?;
+
+        Ok(())
     }
 }
 

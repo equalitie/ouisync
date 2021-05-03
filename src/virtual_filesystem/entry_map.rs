@@ -24,8 +24,22 @@ impl EntryMap {
             .ok_or(Error::EntryNotFound)
     }
 
+    pub fn get_mut(&mut self, handle: FileHandle) -> Result<&mut Entry> {
+        self.0
+            .get_mut(handle_to_index(handle))
+            .ok_or(Error::EntryNotFound)
+    }
+
     pub fn get_directory(&self, handle: FileHandle) -> Result<&Directory> {
         match self.get(handle) {
+            Ok(Entry::Directory(dir)) => Ok(dir),
+            Ok(_) => Err(Error::EntryNotDirectory),
+            Err(error) => Err(error),
+        }
+    }
+
+    pub fn get_directory_mut(&mut self, handle: FileHandle) -> Result<&mut Directory> {
+        match self.get_mut(handle) {
             Ok(Entry::Directory(dir)) => Ok(dir),
             Ok(_) => Err(Error::EntryNotDirectory),
             Err(error) => Err(error),
