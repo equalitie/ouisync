@@ -360,6 +360,8 @@ impl Inner {
             .enumerate()
             .skip((offset as usize).saturating_sub(first))
         {
+            // FIXME: according to https://libfuse.github.io/doxygen/structfuse__lowlevel__ops.html#af1ef8e59e0cb0b02dc0e406898aeaa51:
+            // > Returning a directory entry from readdir() does not affect its lookup count.
             let entry_inode = self.inodes.lookup(
                 inode,
                 entry.name().to_owned(),

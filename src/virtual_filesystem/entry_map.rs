@@ -1,31 +1,27 @@
-use super::handle_generator::HandleGenerator;
 use ouisync::{Directory, Entry, Error, Result};
-use std::collections::HashMap;
+use slab::Slab;
+use std::convert::TryInto;
 
 pub type FileHandle = u64;
 
 // TODO: create separate maps for files and directories
 
 #[derive(Default)]
-pub struct EntryMap {
-    map: HashMap<FileHandle, Entry>,
-    generator: HandleGenerator,
-}
+pub struct EntryMap(Slab<Entry>);
 
 impl EntryMap {
     pub fn insert(&mut self, entry: Entry) -> FileHandle {
-        let map = &self.map;
-        let handle = self.generator.next(|handle| !map.contains_key(&handle));
-        self.map.insert(handle, entry);
-        handle
+        index_to_handle(self.0.insert(entry))
     }
 
-    pub fn remove(&mut self, handle: FileHandle) -> Option<Entry> {
-        self.map.remove(&handle)
+    pub fn remove(&mut self, handle: FileHandle) -> Entry {
+        self.0.remove(handle_to_index(handle))
     }
 
     pub fn get(&self, handle: FileHandle) -> Result<&Entry> {
-        self.map.get(&handle).ok_or(Error::EntryNotFound)
+        self.0
+            .get(handle_to_index(handle))
+            .ok_or(Error::EntryNotFound)
     }
 
     pub fn get_directory(&self, handle: FileHandle) -> Result<&Directory> {
@@ -35,4 +31,18 @@ impl EntryMap {
             Err(error) => Err(error),
         }
     }
+}
+
+fn index_to_handle(index: usize) -> FileHandle {
+    // `usize` to `u64` should never fail but for some reason there is no `impl From<usize> for u64`.
+    match index.try_into() {
+        Ok(handle) => handle,
+        Err(_) => unreachable!(),
+    }
+}
+
+fn handle_to_index(handle: FileHandle) -> usize {
+    handle
+        .try_into()
+        .expect("invalid file handle - out of bounds")
 }
