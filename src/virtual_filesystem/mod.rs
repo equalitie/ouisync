@@ -1,5 +1,4 @@
 mod entry_map;
-mod handle_generator;
 mod inode;
 
 use self::{
@@ -70,7 +69,7 @@ impl VirtualFilesystem {
             rt: runtime_handle,
             inner: Inner {
                 repository,
-                inodes: InodeMap::default(),
+                inodes: InodeMap::new(),
                 entries: EntryMap::default(),
             },
         }
@@ -262,23 +261,20 @@ impl Inner {
     async fn lookup(&mut self, parent: Inode, name: &OsStr) -> Result<FileAttr> {
         log::debug!("lookup (parent={}, name={:?})", parent, name);
 
-        let InodeDetails {
+        let &InodeDetails {
             locator,
             entry_type,
             ..
-        } = *self.inodes.get(parent)?;
+        } = self.inodes.get(parent);
         check_is_directory(entry_type)?;
 
         let parent_dir = self.repository.open_directory(locator).await?;
         let entry_info = parent_dir.lookup(name)?;
         let entry = entry_info.open().await?;
 
-        let inode = self.inodes.lookup(
-            parent,
-            name.to_owned(),
-            entry_info.locator(),
-            entry_info.entry_type(),
-        );
+        let inode = self
+            .inodes
+            .lookup(parent, name, entry_info.locator(), entry_info.entry_type());
 
         Ok(get_file_attr(&entry, inode))
     }
@@ -286,11 +282,11 @@ impl Inner {
     async fn getattr(&mut self, inode: Inode) -> Result<FileAttr> {
         log::debug!("getattr (inode={})", inode);
 
-        let InodeDetails {
+        let &InodeDetails {
             locator,
             entry_type,
             ..
-        } = *self.inodes.get(inode)?;
+        } = self.inodes.get(inode);
 
         let entry = self.repository.open_entry(locator, entry_type).await?;
         Ok(get_file_attr(&entry, inode))
@@ -299,11 +295,11 @@ impl Inner {
     async fn opendir(&mut self, inode: Inode, flags: i32) -> Result<FileHandle> {
         log::debug!("opendir (inode={}, flags={:#x})", inode, flags);
 
-        let InodeDetails {
+        let &InodeDetails {
             locator,
             entry_type,
             ..
-        } = *self.inodes.get(inode)?;
+        } = self.inodes.get(inode);
         check_is_directory(entry_type)?;
 
         let dir = self.repository.open_directory(locator).await?;
@@ -336,7 +332,7 @@ impl Inner {
         //     return;
         // }
 
-        let parent = self.inodes.get(inode)?.parent;
+        let parent = self.inodes.get(inode).parent;
         let dir = self.entries.get_directory(handle)?;
 
         // Handle . and ..
@@ -362,12 +358,9 @@ impl Inner {
         {
             // FIXME: according to https://libfuse.github.io/doxygen/structfuse__lowlevel__ops.html#af1ef8e59e0cb0b02dc0e406898aeaa51:
             // > Returning a directory entry from readdir() does not affect its lookup count.
-            let entry_inode = self.inodes.lookup(
-                inode,
-                entry.name().to_owned(),
-                entry.locator(),
-                entry.entry_type(),
-            );
+            let entry_inode =
+                self.inodes
+                    .lookup(inode, entry.name(), entry.locator(), entry.entry_type());
 
             if reply.add(
                 entry_inode,
@@ -397,11 +390,11 @@ impl Inner {
             umask
         );
 
-        let InodeDetails {
+        let &InodeDetails {
             locator,
             entry_type,
             ..
-        } = *self.inodes.get(parent)?;
+        } = self.inodes.get(parent);
         check_is_directory(entry_type)?;
 
         let mut parent_dir = self.repository.open_directory(locator).await?;
@@ -411,13 +404,9 @@ impl Inner {
         dir.flush().await?;
         parent_dir.flush().await?;
 
-        // TODO: when do we `forget` this lookup?
-        let inode = self.inodes.lookup(
-            parent,
-            name.to_owned(),
-            *dir.locator(),
-            EntryType::Directory,
-        );
+        let inode = self
+            .inodes
+            .lookup(parent, name, *dir.locator(), EntryType::Directory);
 
         let entry = Entry::Directory(dir);
         Ok(get_file_attr(&entry, inode))

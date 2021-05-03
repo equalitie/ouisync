@@ -35,14 +35,9 @@ impl EntryMap {
 
 fn index_to_handle(index: usize) -> FileHandle {
     // `usize` to `u64` should never fail but for some reason there is no `impl From<usize> for u64`.
-    match index.try_into() {
-        Ok(handle) => handle,
-        Err(_) => unreachable!(),
-    }
+    index.try_into().unwrap_or_else(|_| unreachable!())
 }
 
 fn handle_to_index(handle: FileHandle) -> usize {
-    handle
-        .try_into()
-        .expect("invalid file handle - out of bounds")
+    handle.try_into().expect("file handle out of bounds")
 }
