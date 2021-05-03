@@ -1,4 +1,4 @@
-use ouisync::{Directory, Entry, Error, Result};
+use ouisync::{Directory, Entry, Error, File, Result};
 use slab::Slab;
 use std::convert::TryInto;
 
@@ -28,6 +28,14 @@ impl EntryMap {
         self.0
             .get_mut(handle_to_index(handle))
             .ok_or(Error::EntryNotFound)
+    }
+
+    pub fn get_file_mut(&mut self, handle: FileHandle) -> Result<&mut File> {
+        match self.get_mut(handle) {
+            Ok(Entry::File(file)) => Ok(file),
+            Ok(Entry::Directory(_)) => Err(Error::EntryIsDirectory),
+            Err(error) => Err(error),
+        }
     }
 
     pub fn get_directory(&self, handle: FileHandle) -> Result<&Directory> {

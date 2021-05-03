@@ -1,4 +1,4 @@
-use crate::{directory::Directory, error::Error, file::File};
+use crate::{directory::Directory, error::Error, file::File, locator::Locator};
 use serde::{Deserialize, Serialize};
 use std::convert::TryFrom;
 
@@ -30,6 +30,13 @@ impl Entry {
         match self {
             Self::File(_) => EntryType::File,
             Self::Directory(_) => EntryType::Directory,
+        }
+    }
+
+    pub fn locator(&self) -> &Locator {
+        match self {
+            Self::File(file) => file.locator(),
+            Self::Directory(dir) => dir.locator(),
         }
     }
 

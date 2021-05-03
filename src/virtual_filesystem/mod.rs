@@ -6,8 +6,8 @@ use self::{
     inode::{Inode, InodeDetails, InodeMap},
 };
 use fuser::{
-    BackgroundSession, FileAttr, FileType, ReplyAttr, ReplyData, ReplyDirectory, ReplyEmpty,
-    ReplyEntry, ReplyOpen, ReplyWrite, Request,
+    BackgroundSession, FileAttr, FileType, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory,
+    ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite, Request,
 };
 use ouisync::{Directory, Entry, EntryType, Error, Repository, Result};
 use std::{
@@ -176,6 +176,36 @@ impl fuser::Filesystem for VirtualFilesystem {
         reply.ok();
     }
 
+    fn create(
+        &mut self,
+        _req: &Request,
+        parent: Inode,
+        name: &OsStr,
+        mode: u32,
+        umask: u32,
+        flags: i32,
+        reply: ReplyCreate,
+    ) {
+        let (attr, handle, flags) = try_request!(
+            self.rt
+                .block_on(self.inner.create(parent, name, mode, umask, flags)),
+            reply
+        );
+        reply.created(&TTL, &attr, 0, handle, flags);
+    }
+
+    fn flush(
+        &mut self,
+        _req: &Request,
+        inode: Inode,
+        handle: FileHandle,
+        _lock_owner: u64,
+        reply: ReplyEmpty,
+    ) {
+        try_request!(self.rt.block_on(self.inner.flush(inode, handle)), reply);
+        reply.ok();
+    }
+
     fn read(
         &mut self,
         _req: &Request,
@@ -276,14 +306,7 @@ impl Inner {
     async fn lookup(&mut self, parent: Inode, name: &OsStr) -> Result<FileAttr> {
         log::debug!("lookup (parent={}, name={:?})", parent, name);
 
-        let &InodeDetails {
-            locator,
-            entry_type,
-            ..
-        } = self.inodes.get(parent);
-        entry_type.check_is_directory()?;
-
-        let parent_dir = self.repository.open_directory(locator).await?;
+        let parent_dir = self.open_directory_by_inode(parent).await?;
         let entry_info = parent_dir.lookup(name)?;
         let entry = entry_info.open().await?;
 
@@ -310,14 +333,7 @@ impl Inner {
     async fn opendir(&mut self, inode: Inode, flags: i32) -> Result<FileHandle> {
         log::debug!("opendir (inode={}, flags={:#x})", inode, flags);
 
-        let &InodeDetails {
-            locator,
-            entry_type,
-            ..
-        } = self.inodes.get(inode);
-        entry_type.check_is_directory()?;
-
-        let dir = self.repository.open_directory(locator).await?;
+        let dir = self.open_directory_by_inode(inode).await?;
         let handle = self.entries.insert(Entry::Directory(dir));
 
         Ok(handle)
@@ -408,14 +424,7 @@ impl Inner {
             umask
         );
 
-        let &InodeDetails {
-            locator,
-            entry_type,
-            ..
-        } = self.inodes.get(parent);
-        entry_type.check_is_directory()?;
-
-        let mut parent_dir = self.repository.open_directory(locator).await?;
+        let mut parent_dir = self.open_directory_by_inode(parent).await?;
         let mut dir = parent_dir.create_subdirectory(name.to_owned())?;
 
         // TODO: should these two happen atomically (in a transaction)?
@@ -433,14 +442,7 @@ impl Inner {
     async fn rmdir(&mut self, parent: Inode, name: &OsStr) -> Result<()> {
         log::debug!("rmdir (parent = {}, name = {:?})", parent, name);
 
-        let &InodeDetails {
-            locator,
-            entry_type,
-            ..
-        } = self.inodes.get(parent);
-        entry_type.check_is_directory()?;
-
-        let mut parent_dir = self.repository.open_directory(locator).await?;
+        let mut parent_dir = self.open_directory_by_inode(parent).await?;
 
         // Check the directory is empty.
         let dir: Directory = parent_dir.lookup(name)?.open().await?.try_into()?;
@@ -468,6 +470,53 @@ impl Inner {
         dir.flush().await?;
 
         Ok(())
+    }
+
+    async fn create(
+        &mut self,
+        parent: Inode,
+        name: &OsStr,
+        mode: u32,
+        umask: u32,
+        flags: i32,
+    ) -> Result<(FileAttr, FileHandle, u32)> {
+        log::debug!(
+            "create (parent = {}, name = {:?}, mode = {:#o}, umask = {:#o}, flags = {:#x}",
+            parent,
+            name,
+            mode,
+            umask,
+            flags
+        );
+
+        let mut parent_dir = self.open_directory_by_inode(parent).await?;
+        let file = parent_dir.create_file(name.to_owned())?;
+
+        parent_dir.flush().await?; // TODO: is this needed?
+
+        let entry = Entry::File(file);
+        let inode = self
+            .inodes
+            .lookup(parent, name, *entry.locator(), entry.entry_type());
+        let attr = get_file_attr(&entry, inode);
+        let handle = self.entries.insert(entry);
+
+        Ok((attr, handle, 0))
+    }
+
+    async fn flush(&mut self, inode: Inode, handle: FileHandle) -> Result<()> {
+        log::debug!("flush (inode = {}, handle = {})", inode, handle);
+        self.entries.get_file_mut(handle)?.flush().await
+    }
+
+    async fn open_directory_by_inode(&self, inode: Inode) -> Result<Directory> {
+        let &InodeDetails {
+            locator,
+            entry_type,
+            ..
+        } = self.inodes.get(inode);
+        entry_type.check_is_directory()?;
+        self.repository.open_directory(locator).await
     }
 }
 
@@ -509,6 +558,7 @@ fn to_error_code(error: &Error) -> libc::c_int {
         Error::BlockIdNotFound | Error::BlockNotFound(_) | Error::EntryNotFound => libc::ENOENT,
         Error::EntryExists => libc::EEXIST,
         Error::EntryNotDirectory => libc::ENOTDIR,
+        Error::EntryIsDirectory => libc::EISDIR,
         Error::WrongDirectoryEntryOffset => libc::EINVAL,
         Error::DirectoryNotEmpty => libc::ENOTEMPTY,
     }
