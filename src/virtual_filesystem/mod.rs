@@ -82,6 +82,10 @@ impl fuser::Filesystem for VirtualFilesystem {
         reply.entry(&TTL, &attr, 0)
     }
 
+    // NOTE: This should be called for every `lookup` but also for `mkdir`, `mknod`, 'symlink`,
+    // `link` and `create` (any request that uses `ReplyEntry` or `ReplyCreate`). It is *not*
+    // called for the entries in `readdir` though (see the comment in that function for more
+    // details).
     fn forget(&mut self, _req: &Request, inode: Inode, lookups: u64) {
         log::debug!("forget (inode={}, lookups={})", inode, lookups);
         self.inner.inodes.forget(inode, lookups)
@@ -113,7 +117,6 @@ impl fuser::Filesystem for VirtualFilesystem {
             flags
         );
 
-        // TODO: `forget` the inodes looked up during `readdir`
         // TODO: what about `flags`?
 
         let _ = self.inner.entries.remove(handle);
@@ -356,14 +359,20 @@ impl Inner {
             .enumerate()
             .skip((offset as usize).saturating_sub(first))
         {
-            // FIXME: according to https://libfuse.github.io/doxygen/structfuse__lowlevel__ops.html#af1ef8e59e0cb0b02dc0e406898aeaa51:
-            // > Returning a directory entry from readdir() does not affect its lookup count.
-            let entry_inode =
-                self.inodes
-                    .lookup(inode, entry.name(), entry.locator(), entry.entry_type());
-
+            // NOTE: According to the libfuse documentation
+            // (https://libfuse.github.io/doxygen/structfuse__lowlevel__ops.html#af1ef8e59e0cb0b02dc0e406898aeaa51)
+            // "Returning a directory entry from readdir() does not affect its lookup count".
+            // This seems to imply that `forget` won't be called for inodes returned here. So for
+            // inodes that already exist, we should probably just return them here without
+            // incrementing their lookup count. It's not clear however how to handle inodes that
+            // don't exists yet because allocating them would probably leave them dangling.
+            // That said, based on some experiments, it doesn't seem the inodes returned here are
+            // even being used (there seems to be always a separate `lookup` request for each
+            // entry). To keep things simple, we currently return an invalid inode which seems to
+            // work fine. If we start seeing panics due to invalid inodes we need to come up with
+            // a different strategy.
             if reply.add(
-                entry_inode,
+                u64::MAX, // invalid inode, see above.
                 (index + first + 1) as i64,
                 to_file_type(entry.entry_type()),
                 entry.name(),
