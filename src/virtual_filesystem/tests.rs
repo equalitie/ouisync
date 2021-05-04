@@ -1,11 +1,13 @@
 use super::*;
 use ouisync::{db, Cryptor, Locator};
+use proptest::prelude::*;
 use rand::{self, distributions::Standard, rngs::StdRng, Rng, SeedableRng};
-use std::{collections::HashMap, ffi::OsString, fs::Metadata, io::ErrorKind};
+use std::{collections::HashMap, ffi::OsString, fs::Metadata, future::Future, io::ErrorKind};
 use tempfile::{tempdir, TempDir};
+use test_strategy::proptest;
 use tokio::{
     fs::{self, File, OpenOptions},
-    io::AsyncWriteExt,
+    io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
 };
 
 #[tokio::test(flavor = "multi_thread")]
@@ -165,6 +167,46 @@ async fn append_to_file() {
 
     let content = fs::read(path).await.unwrap();
     assert_eq!(content, b"foobar");
+}
+
+#[proptest]
+fn seek_and_read(
+    #[strategy(0usize..64 * 1024)] len: usize,
+    #[strategy(0usize..#len)] offset: usize,
+    #[strategy(any::<u64>().no_shrink())] rng_seed: u64,
+) {
+    run(seek_and_read_case(len, offset, rng_seed))
+}
+
+async fn seek_and_read_case(len: usize, offset: usize, rng_seed: u64) {
+    let repo = setup().await;
+    let (_guard, mount_dir) = mount(repo);
+
+    let path = mount_dir.path().join("file.txt");
+
+    let rng = StdRng::seed_from_u64(rng_seed);
+    let content: Vec<_> = rng.sample_iter(Standard).take(len).collect();
+
+    fs::write(&path, &content).await.unwrap();
+
+    let mut file = File::open(path).await.unwrap();
+
+    let mut buffer = Vec::new();
+    file.seek(SeekFrom::Start(offset as u64)).await.unwrap();
+    file.read_to_end(&mut buffer).await.unwrap();
+
+    assert!(buffer == content[offset..]);
+}
+
+// proptest doesn't work with the `#[tokio::test]` macro yet
+// (see https://github.com/AltSysrq/proptest/issues/179). As a workaround, create the runtime
+// manually.
+fn run<F: Future>(future: F) -> F::Output {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_time()
+        .build()
+        .unwrap()
+        .block_on(future)
 }
 
 async fn setup() -> Repository {

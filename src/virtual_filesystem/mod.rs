@@ -707,10 +707,12 @@ impl Inner {
             flags
         );
 
+        // TODO: what about flags?
+
         let file = self.entries.get_file_mut(handle)?;
 
-        // TODO: what about offset?
-        // TODO: what about flags?
+        let offset: u64 = offset.try_into().map_err(|_| Error::WrongOffset)?;
+        file.seek(SeekFrom::Start(offset)).await?;
 
         // TODO: consider reusing these buffers
         let mut buffer = vec![0; size as usize];
