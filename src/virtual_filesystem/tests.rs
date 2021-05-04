@@ -1,9 +1,14 @@
 use super::*;
 use ouisync::{db, Cryptor, Locator};
-use rand::{self, distributions::Standard, Rng};
-use std::{collections::HashMap, ffi::OsString, fs::Metadata, io::ErrorKind};
+use proptest::prelude::*;
+use rand::{self, distributions::Standard, rngs::StdRng, Rng, SeedableRng};
+use std::{collections::HashMap, ffi::OsString, fs::Metadata, future::Future, io::ErrorKind};
 use tempfile::{tempdir, TempDir};
-use tokio::fs;
+use test_strategy::proptest;
+use tokio::{
+    fs::{self, File},
+    io::AsyncWriteExt,
+};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn empty_repository() {
@@ -112,11 +117,54 @@ async fn attempt_to_remove_non_empty_directory() {
         .contains_key(OsStr::new("dir")));
 }
 
+#[proptest]
+fn write_and_read_file(
+    #[strategy(0usize..1024 * 1024)] len: usize,
+    #[strategy(any::<u64>().no_shrink())] rng_seed: u64,
+) {
+    run(write_and_read_file_case(len, rng_seed))
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn write_and_read_empty_file() {
+    write_and_read_file_case(0, 0).await
+}
+
+async fn write_and_read_file_case(len: usize, rng_seed: u64) {
+    let repo = setup().await;
+    let (_guard, mount_dir) = mount(repo);
+
+    let rng = StdRng::seed_from_u64(rng_seed);
+    let orig_data: Vec<u8> = rng.sample_iter(Standard).take(len).collect();
+
+    let path = mount_dir.path().join("file.txt");
+
+    let mut file = File::create(&path).await.unwrap();
+    file.write_all(&orig_data).await.unwrap();
+
+    let read_data = fs::read(path).await.unwrap();
+
+    // Not using `assert_eq!(read_data, orig_data)` to avoid huge output on failure
+    assert_eq!(read_data.len(), orig_data.len());
+    assert!(read_data == orig_data);
+}
+
+// proptest doesn't work with the `#[tokio::test]` macro yet
+// (see https://github.com/AltSysrq/proptest/issues/179). As a workaround, create the runtime
+// manually.
+fn run<F: Future>(future: F) -> F::Output {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_time()
+        .build()
+        .unwrap()
+        .block_on(future)
+}
+
 async fn setup() -> Repository {
-    // use std::sync::Once;
-    //
-    // static LOG_INIT: Once = Once::new();
-    // LOG_INIT.call_once(env_logger::init);
+    use std::sync::Once;
+
+    static LOG_INIT: Once = Once::new();
+    LOG_INIT.call_once(env_logger::init);
 
     let pool = db::Pool::connect(":memory:").await.unwrap();
     db::create_schema(&pool).await.unwrap();

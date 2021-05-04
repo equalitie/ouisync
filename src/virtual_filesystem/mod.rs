@@ -623,9 +623,10 @@ impl Inner {
         );
 
         let mut parent_dir = self.open_directory_by_inode(parent).await?;
-        let file = parent_dir.create_file(name.to_owned())?;
+        let mut file = parent_dir.create_file(name.to_owned())?;
 
-        parent_dir.flush().await?; // TODO: is this needed?
+        file.flush().await?;
+        parent_dir.flush().await?;
 
         let entry = Entry::File(file);
         let inode = self
