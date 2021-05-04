@@ -3,30 +3,31 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
-// Helper for formatting comma-separated list of heterogenous optional values.
-pub struct FormatOptionScope {
-    sep: bool,
+// Helper for formatting separated list of heterogenous optional values.
+pub struct FormatOptionScope<'a> {
+    sep: &'a str,
+    some: bool,
 }
 
-impl FormatOptionScope {
-    pub fn new() -> Self {
-        Self { sep: false }
+impl<'a> FormatOptionScope<'a> {
+    pub fn new(sep: &'a str) -> Self {
+        Self { sep, some: false }
     }
 
-    pub fn add<'a, T>(&mut self, label: &'a str, value: Option<T>) -> FormatOption<'a, T> {
-        let sep = self.sep;
+    pub fn add<T>(&mut self, prefix: &'a str, value: Option<T>) -> FormatOption<'a, T> {
+        let sep = if self.some { Some(self.sep) } else { None };
 
         if value.is_some() {
-            self.sep = true;
+            self.some = true;
         }
 
-        FormatOption { sep, label, value }
+        FormatOption { sep, prefix, value }
     }
 }
 
 pub struct FormatOption<'a, T> {
-    sep: bool,
-    label: &'a str,
+    sep: Option<&'a str>,
+    prefix: &'a str,
     value: Option<T>,
 }
 
@@ -38,11 +39,11 @@ macro_rules! impl_fmt {
         {
             fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
                 if let Some(value) = &self.value {
-                    if self.sep {
-                        write!(f, ", ")?;
+                    if let Some(sep) = self.sep {
+                        write!(f, "{}", sep)?;
                     }
 
-                    write!(f, "{}=", self.label)?;
+                    write!(f, "{}", self.prefix)?;
                     write!(f, $format_string, value)?;
                 }
 
@@ -90,46 +91,50 @@ mod tests {
 
     #[test]
     fn format_option() {
-        let mut scope = FormatOptionScope::new();
-        assert_eq!(format!("{}", scope.add("foo", None::<i32>)), "");
+        let mut scope = FormatOptionScope::new(",");
+        assert_eq!(format!("{}", scope.add("foo=", None::<i32>)), "");
 
-        let mut scope = FormatOptionScope::new();
-        assert_eq!(format!("{}", scope.add("foo", Some(0))), "foo=0");
+        let mut scope = FormatOptionScope::new(",");
+        assert_eq!(format!("{}", scope.add("foo=", Some(0))), "foo=0");
 
-        let mut scope = FormatOptionScope::new();
+        let mut scope = FormatOptionScope::new(",");
         assert_eq!(
             format!(
                 "{}{}",
-                scope.add("foo", None::<i32>),
-                scope.add("bar", None::<i32>)
+                scope.add("foo=", None::<i32>),
+                scope.add("bar=", None::<i32>)
             ),
             ""
         );
 
-        let mut scope = FormatOptionScope::new();
+        let mut scope = FormatOptionScope::new(",");
         assert_eq!(
             format!(
                 "{}{}",
-                scope.add("foo", Some(0)),
-                scope.add("bar", None::<i32>)
+                scope.add("foo=", Some(0)),
+                scope.add("bar=", None::<i32>)
             ),
             "foo=0"
         );
 
-        let mut scope = FormatOptionScope::new();
+        let mut scope = FormatOptionScope::new(",");
         assert_eq!(
             format!(
                 "{}{}",
-                scope.add("foo", None::<i32>),
-                scope.add("bar", Some(1))
+                scope.add("foo=", None::<i32>),
+                scope.add("bar=", Some(1))
             ),
             "bar=1"
         );
 
-        let mut scope = FormatOptionScope::new();
+        let mut scope = FormatOptionScope::new(",");
         assert_eq!(
-            format!("{}{}", scope.add("foo", Some(0)), scope.add("bar", Some(1))),
-            "foo=0, bar=1"
+            format!(
+                "{}{}",
+                scope.add("foo=", Some(0)),
+                scope.add("bar=", Some(1))
+            ),
+            "foo=0,bar=1"
         );
     }
 }

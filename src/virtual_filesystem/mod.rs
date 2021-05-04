@@ -1,10 +1,12 @@
 mod entry_map;
 mod inode;
+mod open_flags;
 mod utils;
 
 use self::{
     entry_map::{EntryMap, FileHandle},
     inode::{Inode, InodeDetails, InodeMap},
+    open_flags::OpenFlags,
     utils::{FormatOptionScope, MaybeOwnedMut},
 };
 use fuser::{
@@ -132,7 +134,11 @@ impl fuser::Filesystem for VirtualFilesystem {
     }
 
     fn opendir(&mut self, _req: &Request, inode: Inode, flags: i32, reply: ReplyOpen) {
-        let handle = try_request!(self.rt.block_on(self.inner.opendir(inode, flags)), reply);
+        let handle = try_request!(
+            self.rt
+                .block_on(self.inner.opendir(inode, OpenFlags::from(flags))),
+            reply
+        );
         // TODO: what about `flags`?
         reply.opened(handle, 0);
     }
@@ -145,7 +151,10 @@ impl fuser::Filesystem for VirtualFilesystem {
         flags: i32,
         reply: ReplyEmpty,
     ) {
-        try_request!(self.inner.releasedir(inode, handle, flags), reply);
+        try_request!(
+            self.inner.releasedir(inode, handle, OpenFlags::from(flags)),
+            reply
+        );
         reply.ok();
     }
 
@@ -215,15 +224,21 @@ impl fuser::Filesystem for VirtualFilesystem {
         reply: ReplyCreate,
     ) {
         let (attr, handle, flags) = try_request!(
-            self.rt
-                .block_on(self.inner.create(parent, name, mode, umask, flags)),
+            self.rt.block_on(
+                self.inner
+                    .create(parent, name, mode, umask, OpenFlags::from(flags))
+            ),
             reply
         );
         reply.created(&TTL, &attr, 0, handle, flags);
     }
 
     fn open(&mut self, _req: &Request, inode: Inode, flags: i32, reply: ReplyOpen) {
-        let (handle, flags) = try_request!(self.rt.block_on(self.inner.open(inode, flags)), reply);
+        let (handle, flags) = try_request!(
+            self.rt
+                .block_on(self.inner.open(inode, OpenFlags::from(flags))),
+            reply
+        );
         reply.opened(handle, flags);
     }
 
@@ -238,8 +253,10 @@ impl fuser::Filesystem for VirtualFilesystem {
         reply: ReplyEmpty,
     ) {
         try_request!(
-            self.rt
-                .block_on(self.inner.release(inode, handle, flags, flush)),
+            self.rt.block_on(
+                self.inner
+                    .release(inode, handle, OpenFlags::from(flags), flush)
+            ),
             reply
         );
         reply.ok()
@@ -257,8 +274,10 @@ impl fuser::Filesystem for VirtualFilesystem {
         reply: ReplyData,
     ) {
         let data = try_request!(
-            self.rt
-                .block_on(self.inner.read(inode, handle, offset, size, flags)),
+            self.rt.block_on(
+                self.inner
+                    .read(inode, handle, offset, size, OpenFlags::from(flags))
+            ),
             reply
         );
         reply.data(&data);
@@ -272,15 +291,17 @@ impl fuser::Filesystem for VirtualFilesystem {
         offset: i64,
         data: &[u8],
         _write_flags: u32,
-        _flags: i32,
+        flags: i32,
         _lock_owner: Option<u64>,
         reply: ReplyWrite,
     ) {
-        // TODO: what about `write_flags`, `flags` and `lock_owner`?
+        // TODO: what about `write_flags` and `lock_owner`?
 
         let size = try_request!(
-            self.rt
-                .block_on(self.inner.write(inode, handle, offset, data)),
+            self.rt.block_on(
+                self.inner
+                    .write(inode, handle, offset, data, OpenFlags::from(flags))
+            ),
             reply
         );
         reply.written(size);
@@ -372,23 +393,23 @@ impl Inner {
         bkuptime: Option<SystemTime>,
         flags: Option<u32>,
     ) -> Result<FileAttr> {
-        let mut scope = FormatOptionScope::new();
+        let mut scope = FormatOptionScope::new(", ");
 
         log::debug!(
             "setattr {} ({:#o}{}{}{}{:?}{:?}{:?}{}{:?}{:?}{:?}{:#x})",
             self.inodes.path_display(inode, None),
-            scope.add("mode", mode),
-            scope.add("uid", uid),
-            scope.add("gid", gid),
-            scope.add("size", size),
-            scope.add("atime", atime),
-            scope.add("mtime", mtime),
-            scope.add("ctime", ctime),
-            scope.add("handle", handle),
-            scope.add("crtime", crtime),
-            scope.add("chgtime", chgtime),
-            scope.add("bkuptime", bkuptime),
-            scope.add("flags", flags)
+            scope.add("mode=", mode),
+            scope.add("uid=", uid),
+            scope.add("gid=", gid),
+            scope.add("size=", size),
+            scope.add("atime=", atime),
+            scope.add("mtime=", mtime),
+            scope.add("ctime=", ctime),
+            scope.add("handle=", handle),
+            scope.add("crtime=", crtime),
+            scope.add("chgtime=", chgtime),
+            scope.add("bkuptime=", bkuptime),
+            scope.add("flags=", flags)
         );
 
         fn check_unsupported<T>(value: Option<T>) -> Result<()> {
@@ -425,9 +446,9 @@ impl Inner {
         Ok(make_file_attr(inode, EntryType::File, file.len()))
     }
 
-    async fn opendir(&mut self, inode: Inode, flags: i32) -> Result<FileHandle> {
+    async fn opendir(&mut self, inode: Inode, flags: OpenFlags) -> Result<FileHandle> {
         log::debug!(
-            "opendir {} (flags={:#x})",
+            "opendir {} (flags={})",
             self.inodes.path_display(inode, None),
             flags
         );
@@ -438,9 +459,9 @@ impl Inner {
         Ok(handle)
     }
 
-    fn releasedir(&mut self, inode: Inode, handle: FileHandle, flags: i32) -> Result<()> {
+    fn releasedir(&mut self, inode: Inode, handle: FileHandle, flags: OpenFlags) -> Result<()> {
         log::debug!(
-            "releasedir {} (handle={}, flags={:#x})",
+            "releasedir {} (handle={}, flags={})",
             self.inodes.path_display(inode, None),
             handle,
             flags
@@ -588,10 +609,10 @@ impl Inner {
         name: &OsStr,
         mode: u32,
         umask: u32,
-        flags: i32,
+        flags: OpenFlags,
     ) -> Result<(FileAttr, FileHandle, u32)> {
         log::debug!(
-            "create {} (mode={:#o}, umask={:#o}, flags={:#x})",
+            "create {} (mode={:#o}, umask={:#o}, flags={})",
             self.inodes.path_display(parent, Some(name)),
             mode,
             umask,
@@ -613,9 +634,9 @@ impl Inner {
         Ok((attr, handle, 0))
     }
 
-    async fn open(&mut self, inode: Inode, flags: i32) -> Result<(FileHandle, u32)> {
+    async fn open(&mut self, inode: Inode, flags: OpenFlags) -> Result<(FileHandle, u32)> {
         log::debug!(
-            "open {} (flags={:#x})",
+            "open {} (flags={})",
             self.inodes.path_display(inode, None),
             flags
         );
@@ -641,11 +662,11 @@ impl Inner {
         &mut self,
         inode: Inode,
         handle: FileHandle,
-        flags: i32,
+        flags: OpenFlags,
         flush: bool,
     ) -> Result<()> {
         log::debug!(
-            "release {} (handle = {}, flags = {:#x}, flush = {})",
+            "release {} (handle={}, flags={}, flush={})",
             self.inodes.path_display(inode, None),
             handle,
             flags,
@@ -671,10 +692,10 @@ impl Inner {
         handle: FileHandle,
         offset: i64,
         size: u32,
-        flags: i32,
+        flags: OpenFlags,
     ) -> Result<Vec<u8>> {
         log::debug!(
-            "read {} (handle={}, offset={}, size={}, flags={:#x})",
+            "read {} (handle={}, offset={}, size={}, flags={})",
             self.inodes.path_display(inode, None),
             handle,
             offset,
@@ -701,13 +722,15 @@ impl Inner {
         handle: FileHandle,
         offset: i64,
         data: &[u8],
+        flags: OpenFlags,
     ) -> Result<u32> {
         log::debug!(
-            "write {} (handle={}, offset={}, data.len={})",
+            "write {} (handle={}, offset={}, data.len={}, flags={})",
             self.inodes.path_display(inode, None),
             handle,
             offset,
             data.len(),
+            flags,
         );
 
         // TODO: what about `offset`?
