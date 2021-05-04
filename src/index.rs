@@ -12,8 +12,15 @@ pub async fn init(pool: &db::Pool) -> Result<(), Error> {
              locator       BLOB NOT NULL UNIQUE
          );
          CREATE TABLE IF NOT EXISTS branches (
+             id                 INTEGER PRIMARY KEY,
              root_block_name    BLOB NOT NULL,
-             root_block_version BLOB NOT NULL
+             root_block_version BLOB NOT NULL,
+             merkle_root        BLOB NOT NULL
+         );
+         CREATE TABLE IF NOT EXISTS merkle_forest (
+             parent  BLOB NOT NULL,
+             bucket  INTEGER,
+             child   BLOB NOT NULL
          );",
     )
     .execute(pool)
@@ -22,4 +29,3 @@ pub async fn init(pool: &db::Pool) -> Result<(), Error> {
 
     Ok(())
 }
-
