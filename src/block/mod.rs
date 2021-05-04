@@ -21,7 +21,7 @@ pub const BLOCK_NAME_SIZE: usize = 16;
 pub const BLOCK_VERSION_SIZE: usize = 16;
 
 /// Unique name of a block which doesn't change when the block is modified.
-#[derive(Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, PartialOrd, Ord)]
 #[repr(transparent)]
 pub struct BlockName([u8; BLOCK_NAME_SIZE]);
 
@@ -74,7 +74,7 @@ impl fmt::LowerHex for BlockName {
 ///
 /// Note: does not carry any information about temporal or causal succession, i.e. it's not possible
 /// to tell which of a given two versions is "newer", only whether they are different.
-#[derive(Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, PartialOrd, Ord)]
 #[repr(transparent)]
 pub struct BlockVersion([u8; BLOCK_VERSION_SIZE]);
 
@@ -123,7 +123,7 @@ impl fmt::LowerHex for BlockVersion {
     }
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, PartialOrd, Ord)]
 pub struct BlockId {
     pub name: BlockName,
     pub version: BlockVersion,
