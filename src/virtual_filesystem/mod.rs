@@ -145,16 +145,7 @@ impl fuser::Filesystem for VirtualFilesystem {
         flags: i32,
         reply: ReplyEmpty,
     ) {
-        log::debug!(
-            "releasedir {} (handle={}, flags={:#x})",
-            self.inner.inodes.path_display(inode, None),
-            handle,
-            flags
-        );
-
-        // TODO: what about `flags`?
-
-        let _ = self.inner.entries.remove(handle);
+        try_request!(self.inner.releasedir(inode, handle, flags), reply);
         reply.ok();
     }
 
@@ -231,6 +222,24 @@ impl fuser::Filesystem for VirtualFilesystem {
     fn open(&mut self, _req: &Request, inode: Inode, flags: i32, reply: ReplyOpen) {
         let (handle, flags) = try_request!(self.rt.block_on(self.inner.open(inode, flags)), reply);
         reply.opened(handle, flags);
+    }
+
+    fn release(
+        &mut self,
+        _req: &Request<'_>,
+        inode: Inode,
+        handle: FileHandle,
+        flags: i32,
+        _lock_owner: Option<u64>,
+        flush: bool,
+        reply: ReplyEmpty,
+    ) {
+        try_request!(
+            self.rt
+                .block_on(self.inner.release(inode, handle, flags, flush)),
+            reply
+        );
+        reply.ok()
     }
 
     fn write(
@@ -434,6 +443,22 @@ impl Inner {
         Ok(handle)
     }
 
+    fn releasedir(&mut self, inode: Inode, handle: FileHandle, flags: i32) -> Result<()> {
+        log::debug!(
+            "releasedir {} (handle={}, flags={:#x})",
+            self.inodes.path_display(inode, None),
+            handle,
+            flags
+        );
+
+        // TODO: what about `flags`?
+
+        self.entries.get_directory(handle)?;
+        self.entries.remove(handle);
+
+        Ok(())
+    }
+
     fn readdir(
         &mut self,
         inode: Inode,
@@ -619,6 +644,34 @@ impl Inner {
         // TODO: what about flags (return value)?
 
         Ok((handle, 0))
+    }
+
+    async fn release(
+        &mut self,
+        inode: Inode,
+        handle: FileHandle,
+        flags: i32,
+        flush: bool,
+    ) -> Result<()> {
+        log::debug!(
+            "release {} (handle = {}, flags = {:#x}, flush = {}",
+            self.inodes.path_display(inode, None),
+            handle,
+            flags,
+            flush
+        );
+
+        // TODO: what about `flags`?
+
+        let file = self.entries.get_file_mut(handle)?;
+
+        if flush {
+            file.flush().await?;
+        }
+
+        self.entries.remove(handle);
+
+        Ok(())
     }
 
     async fn write(
