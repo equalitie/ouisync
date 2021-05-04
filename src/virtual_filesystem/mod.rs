@@ -185,6 +185,11 @@ impl fuser::Filesystem for VirtualFilesystem {
         reply.ok();
     }
 
+    fn unlink(&mut self, _req: &Request, parent: Inode, name: &OsStr, reply: ReplyEmpty) {
+        try_request!(self.rt.block_on(self.inner.unlink(parent, name)), reply);
+        reply.ok();
+    }
+
     fn fsyncdir(
         &mut self,
         _req: &Request<'_>,
@@ -556,9 +561,7 @@ impl Inner {
         }
 
         parent_dir.remove_entry(name).await?;
-        parent_dir.flush().await?;
-
-        Ok(())
+        parent_dir.flush().await
     }
 
     async fn fsyncdir(&mut self, inode: Inode, handle: FileHandle, datasync: bool) -> Result<()> {
@@ -572,9 +575,7 @@ impl Inner {
         // TODO: what about `datasync`?
 
         let dir = self.entries.get_directory_mut(handle)?;
-        dir.flush().await?;
-
-        Ok(())
+        dir.flush().await
     }
 
     async fn create(
@@ -720,6 +721,16 @@ impl Inner {
             handle
         );
         self.entries.get_file_mut(handle)?.flush().await
+    }
+
+    async fn unlink(&mut self, parent: Inode, name: &OsStr) -> Result<()> {
+        log::debug!("unlink {}", self.inodes.path_display(parent, Some(name)));
+
+        let mut parent_dir = self.open_directory_by_inode(parent).await?;
+
+        parent_dir.lookup(name)?.entry_type().check_is_file()?;
+        parent_dir.remove_entry(name).await?;
+        parent_dir.flush().await
     }
 
     async fn open_directory_by_inode(&self, inode: Inode) -> Result<Directory> {
