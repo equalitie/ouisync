@@ -242,6 +242,25 @@ impl fuser::Filesystem for VirtualFilesystem {
         reply.ok()
     }
 
+    fn read(
+        &mut self,
+        _req: &Request,
+        inode: Inode,
+        handle: FileHandle,
+        offset: i64,
+        size: u32,
+        flags: i32,
+        _lock: Option<u64>,
+        reply: ReplyData,
+    ) {
+        let data = try_request!(
+            self.rt
+                .block_on(self.inner.read(inode, handle, offset, size, flags)),
+            reply
+        );
+        reply.data(&data);
+    }
+
     fn write(
         &mut self,
         _req: &Request<'_>,
@@ -274,39 +293,6 @@ impl fuser::Filesystem for VirtualFilesystem {
     ) {
         try_request!(self.rt.block_on(self.inner.flush(inode, handle)), reply);
         reply.ok();
-    }
-
-    fn read(
-        &mut self,
-        _req: &Request,
-        _inode: Inode,
-        _handle: FileHandle,
-        _offset: i64,
-        _size: u32,
-        _flags: i32,
-        _lock: Option<u64>,
-        _reply: ReplyData,
-    ) {
-        todo!()
-
-        // log::debug!("read ino={}, offset={}, size={}", ino, offset, size);
-
-        // let content = match self.entries.get(&ino) {
-        //     Some(Entry::File(content)) => content,
-        //     Some(Entry::Directory(_)) => {
-        //         reply.error(libc::EISDIR);
-        //         return;
-        //     }
-        //     None => {
-        //         reply.error(libc::ENOENT);
-        //         return;
-        //     }
-        // };
-
-        // let start = (offset as usize).min(content.len());
-        // let end = (start + size as usize).min(content.len());
-
-        // reply.data(&content[start..end]);
     }
 
     fn mknod(
@@ -600,7 +586,7 @@ impl Inner {
         flags: i32,
     ) -> Result<(FileAttr, FileHandle, u32)> {
         log::debug!(
-            "create {} (mode={:#o}, umask={:#o}, flags={:#x}",
+            "create {} (mode={:#o}, umask={:#o}, flags={:#x})",
             self.inodes.path_display(parent, Some(name)),
             mode,
             umask,
@@ -654,7 +640,7 @@ impl Inner {
         flush: bool,
     ) -> Result<()> {
         log::debug!(
-            "release {} (handle = {}, flags = {:#x}, flush = {}",
+            "release {} (handle = {}, flags = {:#x}, flush = {})",
             self.inodes.path_display(inode, None),
             handle,
             flags,
@@ -672,6 +658,36 @@ impl Inner {
         self.entries.remove(handle);
 
         Ok(())
+    }
+
+    async fn read(
+        &mut self,
+        inode: Inode,
+        handle: FileHandle,
+        offset: i64,
+        size: u32,
+        flags: i32,
+    ) -> Result<Vec<u8>> {
+        log::debug!(
+            "read {} (handle={}, offset={}, size={}, flags={:#x})",
+            self.inodes.path_display(inode, None),
+            handle,
+            offset,
+            size,
+            flags
+        );
+
+        let file = self.entries.get_file_mut(handle)?;
+
+        // TODO: what about offset?
+        // TODO: what about flags?
+
+        // TODO: consider reusing these buffers
+        let mut buffer = vec![0; size as usize];
+        let len = file.read(&mut buffer).await?;
+        buffer.truncate(len);
+
+        Ok(buffer)
     }
 
     async fn write(
