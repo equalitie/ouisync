@@ -1,5 +1,5 @@
 use super::*;
-use ouisync::{db, Cryptor, Locator};
+use ouisync::{db, Cryptor};
 use proptest::prelude::*;
 use rand::{self, distributions::Standard, rngs::StdRng, Rng, SeedableRng};
 use std::{collections::HashMap, ffi::OsString, fs::Metadata, future::Future, io::ErrorKind};
@@ -12,16 +12,13 @@ use tokio::{
 
 #[tokio::test(flavor = "multi_thread")]
 async fn empty_repository() {
-    let repo = setup().await;
-    let (_guard, mount_dir) = mount(repo);
-
+    let (_guard, mount_dir) = setup().await;
     assert!(read_dir(mount_dir.path()).await.is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn read_directory() {
-    let repo = setup().await;
-    let mut root_dir = repo.open_directory(Locator::Root).await.unwrap();
+    let (_guard, mount_dir) = setup().await;
 
     let name_small = OsStr::new("small.txt");
     let len_small = 10;
@@ -36,30 +33,23 @@ async fn read_directory() {
         .sample_iter(Standard)
         .take(len_small)
         .collect();
-    let mut file = root_dir.create_file(name_small.into()).unwrap();
-    file.write(&content).await.unwrap();
-    file.flush().await.unwrap();
+    fs::write(mount_dir.path().join(name_small), &content)
+        .await
+        .unwrap();
 
     // Large file
     let content: Vec<u8> = rand::thread_rng()
         .sample_iter(Standard)
         .take(len_large)
         .collect();
-    let mut file = root_dir.create_file(name_large.into()).unwrap();
-    file.write(&content).await.unwrap();
-    file.flush().await.unwrap();
-
-    // Subdirectory
-    root_dir
-        .create_subdirectory(name_dir.into())
-        .unwrap()
-        .flush()
+    fs::write(mount_dir.path().join(name_large), &content)
         .await
         .unwrap();
 
-    root_dir.flush().await.unwrap();
-
-    let (_guard, mount_dir) = mount(repo);
+    // Subdirectory
+    fs::create_dir(mount_dir.path().join(name_dir))
+        .await
+        .unwrap();
 
     let entries = read_dir(mount_dir.path()).await;
 
@@ -76,8 +66,7 @@ async fn read_directory() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn attempt_to_read_non_existing_directory() {
-    let repo = setup().await;
-    let (_guard, mount_dir) = mount(repo);
+    let (_guard, mount_dir) = setup().await;
 
     match fs::read_dir(mount_dir.path().join("missing")).await {
         Err(error) if error.kind() == ErrorKind::NotFound => (),
@@ -88,8 +77,7 @@ async fn attempt_to_read_non_existing_directory() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn create_and_remove_directory() {
-    let repo = setup().await;
-    let (_guard, mount_dir) = mount(repo);
+    let (_guard, mount_dir) = setup().await;
 
     fs::create_dir(mount_dir.path().join("dir")).await.unwrap();
 
@@ -103,8 +91,7 @@ async fn create_and_remove_directory() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn attempt_to_remove_non_empty_directory() {
-    let repo = setup().await;
-    let (_guard, mount_dir) = mount(repo);
+    let (_guard, mount_dir) = setup().await;
 
     fs::create_dir(mount_dir.path().join("dir")).await.unwrap();
     fs::write(mount_dir.path().join("dir").join("file.txt"), &[])
@@ -133,8 +120,7 @@ async fn write_and_read_large_file() {
 }
 
 async fn write_and_read_file_case(len: usize, rng_seed: u64) {
-    let repo = setup().await;
-    let (_guard, mount_dir) = mount(repo);
+    let (_guard, mount_dir) = setup().await;
 
     let rng = StdRng::seed_from_u64(rng_seed);
     let orig_data: Vec<u8> = rng.sample_iter(Standard).take(len).collect();
@@ -154,8 +140,7 @@ async fn write_and_read_file_case(len: usize, rng_seed: u64) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn append_to_file() {
-    let repo = setup().await;
-    let (_guard, mount_dir) = mount(repo);
+    let (_guard, mount_dir) = setup().await;
 
     let path = mount_dir.path().join("file.txt");
 
@@ -179,8 +164,7 @@ fn seek_and_read(
 }
 
 async fn seek_and_read_case(len: usize, offset: usize, rng_seed: u64) {
-    let repo = setup().await;
-    let (_guard, mount_dir) = mount(repo);
+    let (_guard, mount_dir) = setup().await;
 
     let path = mount_dir.path().join("file.txt");
 
@@ -209,7 +193,7 @@ fn run<F: Future>(future: F) -> F::Output {
         .block_on(future)
 }
 
-async fn setup() -> Repository {
+async fn setup() -> (MountGuard, TempDir) {
     // use std::sync::Once;
 
     // static LOG_INIT: Once = Once::new();
@@ -218,17 +202,9 @@ async fn setup() -> Repository {
     let pool = db::Pool::connect(":memory:").await.unwrap();
     db::create_schema(&pool).await.unwrap();
 
-    Repository::new(pool, Cryptor::Null)
-}
-
-fn mount(repository: Repository) -> (MountGuard, TempDir) {
+    let repo = Repository::new(pool, Cryptor::Null);
     let mount_dir = tempdir().unwrap();
-    let guard = super::mount(
-        tokio::runtime::Handle::current(),
-        repository,
-        mount_dir.path(),
-    )
-    .unwrap();
+    let guard = super::mount(tokio::runtime::Handle::current(), repo, mount_dir.path()).unwrap();
 
     (guard, mount_dir)
 }
