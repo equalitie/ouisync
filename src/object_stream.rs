@@ -124,10 +124,7 @@ where
 ///
 /// Write object into the stream
 ///
-async fn write_impl<W, Object: ?Sized>(
-    byte_writer: &mut W,
-    object: &Object,
-) -> io::Result<()>
+async fn write_impl<W, Object: ?Sized>(byte_writer: &mut W, object: &Object) -> io::Result<()>
 where
     W: AsyncWrite + Unpin,
     Object: Serialize,
