@@ -161,8 +161,6 @@ impl fuser::Filesystem for VirtualFilesystem {
         reply.ok();
     }
 
-    // TODO: implement `readdirplus`
-
     fn mkdir(
         &mut self,
         _req: &Request,
@@ -300,21 +298,27 @@ impl fuser::Filesystem for VirtualFilesystem {
         reply.ok();
     }
 
-    fn mknod(
+    fn fsync(
         &mut self,
-        _req: &Request<'_>,
-        _parent: Inode,
-        _name: &OsStr,
-        _mode: u32,
-        _umask: u32,
-        _rdev: u32,
-        _reply: ReplyEntry,
+        _req: &Request,
+        inode: Inode,
+        handle: FileHandle,
+        datasync: bool,
+        reply: ReplyEmpty,
     ) {
-        todo!()
-
-        // log::debug!("mknod parent={}, name={:?}", parent, name);
-        // self.make_entry(parent, name, Entry::File(vec![]), reply)
+        try_request!(
+            self.rt.block_on(self.inner.fsync(inode, handle, datasync)),
+            reply
+        );
+        reply.ok();
     }
+
+    // TODO: access
+    // TODO: mknod
+    // TODO: lseek
+    // TODO: readdirplus
+    // TODO: rename
+    // TODO: statfs
 }
 
 struct Inner {
@@ -720,6 +724,18 @@ impl Inner {
             self.inodes.path_display(inode, None),
             handle
         );
+        self.entries.get_file_mut(handle)?.flush().await
+    }
+
+    async fn fsync(&mut self, inode: Inode, handle: FileHandle, datasync: bool) -> Result<()> {
+        log::debug!(
+            "fsync {} (handle={}, datasync={})",
+            self.inodes.path_display(inode, None),
+            handle,
+            datasync
+        );
+
+        // TODO: what about `datasync`?
         self.entries.get_file_mut(handle)?.flush().await
     }
 
