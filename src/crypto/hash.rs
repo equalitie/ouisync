@@ -22,6 +22,15 @@ impl Hash {
     pub fn null() -> Self {
         Self(Inner::default())
     }
+
+    pub fn is_null(&self) -> bool {
+        for c in self.0.as_slice() {
+            if *c != 0 {
+                return false;
+            }
+        }
+        true
+    }
 }
 
 impl From<Inner> for Hash {
