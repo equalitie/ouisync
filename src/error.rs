@@ -38,8 +38,8 @@ pub enum Error {
     EntryNotDirectory,
     #[error("entry is a directory")]
     EntryIsDirectory,
-    #[error("directory entry offset is out of range")]
-    WrongDirectoryEntryOffset,
+    #[error("offset is out of range")]
+    WrongOffset,
     #[error("directory is not empty")]
     DirectoryNotEmpty,
     #[error("operation is not supported")]
