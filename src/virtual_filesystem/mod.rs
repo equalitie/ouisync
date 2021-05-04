@@ -3,6 +3,9 @@ mod inode;
 mod open_flags;
 mod utils;
 
+#[cfg(test)]
+mod tests;
+
 use self::{
     entry_map::{EntryMap, FileHandle},
     inode::{Inode, InodeDetails, InodeMap},

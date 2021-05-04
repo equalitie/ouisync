@@ -677,45 +677,63 @@ mod tests {
 
     #[proptest]
     fn write_and_read(
+        is_root: bool,
         #[strategy(1..3 * BLOCK_SIZE)] blob_len: usize,
         #[strategy(1..=#blob_len)] write_len: usize,
         #[strategy(1..=#blob_len + 1)] read_len: usize,
         #[strategy(rng_seed_strategy())] rng_seed: u64,
     ) {
-        run(async {
-            let (rng, cryptor, pool) = setup(rng_seed).await;
+        run(write_and_read_case(
+            is_root, blob_len, write_len, read_len, rng_seed,
+        ))
+    }
 
-            // Create the blob and write to it in chunks of `write_len` bytes.
-            let mut blob = Blob::create(pool.clone(), cryptor.clone(), Locator::Root);
+    async fn write_and_read_case(
+        is_root: bool,
+        blob_len: usize,
+        write_len: usize,
+        read_len: usize,
+        rng_seed: u64,
+    ) {
+        let (mut rng, cryptor, pool) = setup(rng_seed).await;
 
-            let orig_content: Vec<u8> = rng.sample_iter(Standard).take(blob_len).collect();
+        let locator = if is_root {
+            Locator::Root
+        } else {
+            Locator::Head(rng.gen(), 0)
+        };
 
-            for chunk in orig_content.chunks(write_len) {
-                blob.write(chunk).await.unwrap();
+        // Create the blob and write to it in chunks of `write_len` bytes.
+        let mut blob = Blob::create(pool.clone(), cryptor.clone(), locator);
+
+        let orig_content: Vec<u8> = rng.sample_iter(Standard).take(blob_len).collect();
+
+        for chunk in orig_content.chunks(write_len) {
+            blob.write(chunk).await.unwrap();
+        }
+
+        blob.flush().await.unwrap();
+
+        // Re-open the blob and read from it in chunks of `read_len` bytes
+        let mut blob = Blob::open(pool.clone(), cryptor.clone(), locator)
+            .await
+            .unwrap();
+
+        let mut read_content = vec![0; 0];
+        let mut read_buffer = vec![0; read_len];
+
+        loop {
+            let len = blob.read(&mut read_buffer[..]).await.unwrap();
+
+            if len == 0 {
+                break; // done
             }
 
-            blob.flush().await.unwrap();
+            read_content.extend(&read_buffer[..len]);
+        }
 
-            // Re-open the blob and read from it in chunks of `read_len` bytes
-            let mut blob = Blob::open(pool.clone(), cryptor.clone(), Locator::Root)
-                .await
-                .unwrap();
-
-            let mut read_content = vec![0; 0];
-            let mut read_buffer = vec![0; read_len];
-
-            loop {
-                let len = blob.read(&mut read_buffer[..]).await.unwrap();
-
-                if len == 0 {
-                    break; // done
-                }
-
-                read_content.extend(&read_buffer[..len]);
-            }
-
-            assert_eq!(read_content, orig_content);
-        })
+        assert_eq!(read_content.len(), orig_content.len());
+        assert!(read_content == orig_content);
     }
 
     #[proptest]

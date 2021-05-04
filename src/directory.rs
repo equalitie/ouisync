@@ -227,7 +227,6 @@ struct EntryData {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{block, index};
     use std::collections::BTreeSet;
 
     #[tokio::test(flavor = "multi_thread")]
@@ -330,8 +329,7 @@ mod tests {
 
     async fn setup() -> db::Pool {
         let pool = db::Pool::connect(":memory:").await.unwrap();
-        index::init(&pool).await.unwrap();
-        block::init(&pool).await.unwrap();
+        db::create_schema(&pool).await.unwrap();
         pool
     }
 }
