@@ -16,7 +16,7 @@ use fuser::{
     BackgroundSession, FileAttr, FileType, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory,
     ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow,
 };
-use ouisync::{Directory, Entry, EntryType, Error, Repository, Result};
+use ouisync::{Directory, Entry, EntryType, Error, MoveDstDirectory, Repository, Result};
 use std::{
     convert::TryInto,
     ffi::OsStr,
@@ -337,12 +337,25 @@ impl fuser::Filesystem for VirtualFilesystem {
         reply.ok();
     }
 
-    // TODO: access
-    // TODO: mknod
-    // TODO: lseek
-    // TODO: readdirplus
-    // TODO: rename
-    // TODO: statfs
+    fn rename(
+        &mut self,
+        _req: &Request,
+        src_parent: Inode,
+        src_name: &OsStr,
+        dst_parent: Inode,
+        dst_name: &OsStr,
+        flags: u32,
+        reply: ReplyEmpty,
+    ) {
+        try_request!(
+            self.rt.block_on(
+                self.inner
+                    .rename(src_parent, src_name, dst_parent, dst_name, flags)
+            ),
+            reply
+        );
+        reply.ok()
+    }
 }
 
 struct Inner {
@@ -777,6 +790,46 @@ impl Inner {
         parent_dir.lookup(name)?.entry_type().check_is_file()?;
         parent_dir.remove_entry(name).await?;
         parent_dir.flush().await
+    }
+
+    async fn rename(
+        &mut self,
+        src_parent: Inode,
+        src_name: &OsStr,
+        dst_parent: Inode,
+        dst_name: &OsStr,
+        flags: u32,
+    ) -> Result<()> {
+        log::debug!(
+            "rename {} -> {} (flags={:#x})",
+            self.inodes.path_display(src_parent, Some(src_name)),
+            self.inodes.path_display(dst_parent, Some(dst_name)),
+            flags,
+        );
+
+        if flags & libc::RENAME_NOREPLACE != 0 {
+            return Err(Error::OperationNotSupported);
+        }
+
+        if flags & libc::RENAME_EXCHANGE != 0 {
+            return Err(Error::OperationNotSupported);
+        }
+
+        let mut src_dir = self.open_directory_by_inode(src_parent).await?;
+        let mut dst_dir = if src_parent == dst_parent {
+            MoveDstDirectory::Src
+        } else {
+            MoveDstDirectory::Other(self.open_directory_by_inode(dst_parent).await?)
+        };
+
+        src_dir.move_entry(src_name, &mut dst_dir, dst_name).await?;
+        src_dir.flush().await?;
+
+        if let Some(dir) = dst_dir.get_other() {
+            dir.flush().await?;
+        }
+
+        Ok(())
     }
 
     async fn open_directory_by_inode(&self, inode: Inode) -> Result<Directory> {

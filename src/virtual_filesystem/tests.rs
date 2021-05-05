@@ -182,6 +182,23 @@ async fn seek_and_read_case(len: usize, offset: usize, rng_seed: u64) {
     assert!(buffer == content[offset..]);
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn move_file() {
+    let (_guard, mount_dir) = setup().await;
+
+    let src_name = OsStr::new("src.txt");
+    let src_path = mount_dir.path().join(src_name);
+    let dst_name = OsStr::new("dst.txt");
+    let dst_path = mount_dir.path().join(dst_name);
+
+    fs::write(&src_path, b"blah").await.unwrap();
+    fs::rename(&src_path, &dst_path).await.unwrap();
+
+    let entries = read_dir(mount_dir.path()).await;
+    assert!(!entries.contains_key(src_name));
+    assert!(entries.contains_key(dst_name));
+}
+
 // proptest doesn't work with the `#[tokio::test]` macro yet
 // (see https://github.com/AltSysrq/proptest/issues/179). As a workaround, create the runtime
 // manually.

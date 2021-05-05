@@ -118,6 +118,63 @@ impl Directory {
         Ok(())
     }
 
+    /// Renames of moves an entry.
+    /// If the destination entry already exists, it will be overwritten.
+    pub async fn move_entry(
+        &mut self,
+        src_name: &OsStr,
+        dst_dir: &mut MoveDstDirectory,
+        dst_name: &OsStr,
+    ) -> Result<()> {
+        // Check we are moving entry to itself and if so, do nothing to prevent data loss.
+        if let MoveDstDirectory::Src = dst_dir {
+            if src_name == dst_name {
+                return Ok(());
+            }
+        }
+
+        let mut tx = self.blob.db_pool().begin().await?;
+
+        let (src_locator, src_entry_type) = {
+            let info = self.lookup(src_name)?;
+            (info.locator(), info.entry_type())
+        };
+        let src_head_block_id = self
+            .blob
+            .branch()
+            // `unwrap` is ok here because `src_locator` is not `Locator::Root`.
+            .get(&mut tx, &src_locator.encode(self.blob.cryptor()).unwrap())
+            .await?;
+
+        let dst_dir = dst_dir.get(self);
+        let dst_entry = dst_dir.content.vacant_entry();
+        let new_dst_locator = Locator::Head(*dst_dir.blob.head_name(), dst_entry.seq());
+
+        dst_dir
+            .blob
+            .branch()
+            .insert(
+                &mut tx,
+                &src_head_block_id,
+                // `unwrap` is ok here as well because `new_dst_locator` is not `Locator::Root`.
+                &new_dst_locator.encode(dst_dir.blob.cryptor()).unwrap(),
+            )
+            .await?;
+
+        // TODO: remove the previous dst entry from the db, if it existed.
+
+        dst_entry.insert_or_replace(dst_name.to_owned(), src_entry_type);
+
+        match self.content.remove(src_name) {
+            Ok(_) | Err(Error::EntryNotFound) => (),
+            Err(_) => unreachable!(),
+        }
+
+        tx.commit().await?;
+
+        Ok(())
+    }
+
     /// Length of this directory in bytes. Does not include the content, only the size of directory
     /// itself.
     pub fn len(&self) -> u64 {
@@ -173,6 +230,31 @@ impl<'a> EntryInfo<'a> {
     }
 }
 
+/// Destination directory of a move operation.
+#[allow(clippy::large_enum_variant)]
+pub enum MoveDstDirectory {
+    /// Same as src
+    Src,
+    /// Other than src
+    Other(Directory),
+}
+
+impl MoveDstDirectory {
+    fn get<'a>(&'a mut self, src: &'a mut Directory) -> &'a mut Directory {
+        match self {
+            Self::Src => src,
+            Self::Other(other) => other,
+        }
+    }
+
+    pub fn get_other(&mut self) -> Option<&mut Directory> {
+        match self {
+            Self::Src => None,
+            Self::Other(other) => Some(other),
+        }
+    }
+}
+
 #[derive(Default, Deserialize, Serialize)]
 struct Content {
     entries: BTreeMap<OsString, EntryData>,
@@ -182,17 +264,14 @@ struct Content {
 
 impl Content {
     fn insert(&mut self, name: OsString, entry_type: EntryType) -> Result<u32> {
+        self.vacant_entry().insert(name, entry_type)
+    }
+
+    // Reserve an entry to be inserted into later. Useful when the `seq` number is needed before
+    // creating the entry.
+    fn vacant_entry(&mut self) -> VacantEntry {
         let seq = self.next_seq();
-
-        match self.entries.entry(name) {
-            btree_map::Entry::Vacant(entry) => {
-                entry.insert(EntryData { entry_type, seq });
-                self.dirty = true;
-
-                Ok(seq)
-            }
-            btree_map::Entry::Occupied(_) => Err(Error::EntryExists),
-        }
+        VacantEntry { seq, content: self }
     }
 
     fn remove(&mut self, name: &OsStr) -> Result<u32> {
@@ -217,6 +296,44 @@ impl Content {
     }
 }
 
+struct VacantEntry<'a> {
+    content: &'a mut Content,
+    seq: u32,
+}
+
+impl VacantEntry<'_> {
+    fn seq(&self) -> u32 {
+        self.seq
+    }
+
+    fn insert(self, name: OsString, entry_type: EntryType) -> Result<u32> {
+        match self.content.entries.entry(name) {
+            btree_map::Entry::Vacant(entry) => {
+                entry.insert(EntryData {
+                    entry_type,
+                    seq: self.seq,
+                });
+                self.content.dirty = true;
+
+                Ok(self.seq)
+            }
+            btree_map::Entry::Occupied(_) => Err(Error::EntryExists),
+        }
+    }
+
+    fn insert_or_replace(self, name: OsString, entry_type: EntryType) -> u32 {
+        self.content.entries.insert(
+            name,
+            EntryData {
+                entry_type,
+                seq: self.seq,
+            },
+        );
+        self.content.dirty = true;
+        self.seq
+    }
+}
+
 #[derive(Deserialize, Serialize)]
 struct EntryData {
     entry_type: EntryType,
@@ -227,7 +344,8 @@ struct EntryData {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeSet;
+    use rand::{distributions::Standard, Rng};
+    use std::{collections::BTreeSet, convert::TryInto};
 
     #[tokio::test(flavor = "multi_thread")]
     async fn create_and_list_entries() {
@@ -327,9 +445,177 @@ mod tests {
         assert_eq!(parent_dir.entries().len(), 0);
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn move_entry_to_same_directory() {
+        let pool = setup().await;
+
+        let src_name = OsStr::new("src.txt");
+        let dst_name = OsStr::new("dst.txt");
+
+        let mut dir = Directory::create(pool.clone(), Cryptor::Null, Locator::Root);
+
+        let mut file = dir.create_file(src_name.to_owned()).unwrap();
+        let content = random_content(1024);
+        file.write(&content).await.unwrap();
+        file.flush().await.unwrap();
+
+        dir.flush().await.unwrap();
+
+        dir.move_entry(src_name, &mut MoveDstDirectory::Src, dst_name)
+            .await
+            .unwrap();
+        dir.flush().await.unwrap();
+
+        match dir.lookup(src_name) {
+            Err(Error::EntryNotFound) => (),
+            Err(error) => panic!("unexpected error {}", error),
+            Ok(_) => panic!("src entry should not exists, but it does"),
+        }
+
+        let mut file: File = dir
+            .lookup(dst_name)
+            .unwrap()
+            .open()
+            .await
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let read_content = file.read_to_end().await.unwrap();
+        assert_eq!(read_content, content);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn move_entry_to_other_directory() {
+        let pool = setup().await;
+
+        let mut root_dir = Directory::create(pool.clone(), Cryptor::Null, Locator::Root);
+        let mut src_dir = root_dir.create_subdirectory("src".into()).unwrap();
+        let mut dst_dir = root_dir.create_subdirectory("dst".into()).unwrap();
+
+        let src_name = OsStr::new("src.txt");
+        let dst_name = OsStr::new("dst.txt");
+
+        let mut file = src_dir.create_file(src_name.to_owned()).unwrap();
+        let content = random_content(1024);
+        file.write(&content).await.unwrap();
+        file.flush().await.unwrap();
+
+        src_dir.flush().await.unwrap();
+        dst_dir.flush().await.unwrap();
+
+        let mut dst_dir = MoveDstDirectory::Other(dst_dir);
+        src_dir
+            .move_entry(src_name, &mut dst_dir, dst_name)
+            .await
+            .unwrap();
+
+        let dst_dir = dst_dir.get_other().unwrap();
+
+        src_dir.flush().await.unwrap();
+        dst_dir.flush().await.unwrap();
+
+        match src_dir.lookup(src_name) {
+            Err(Error::EntryNotFound) => (),
+            Err(error) => panic!("unexpected error {}", error),
+            Ok(_) => panic!("src entry should not exists, but it does"),
+        }
+
+        let mut file: File = dst_dir
+            .lookup(dst_name)
+            .unwrap()
+            .open()
+            .await
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let read_content = file.read_to_end().await.unwrap();
+        assert_eq!(read_content, content);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn move_entry_to_itself() {
+        let pool = setup().await;
+
+        let name = OsStr::new("src.txt");
+
+        let mut dir = Directory::create(pool.clone(), Cryptor::Null, Locator::Root);
+
+        let mut file = dir.create_file(name.to_owned()).unwrap();
+        let content = random_content(1024);
+        file.write(&content).await.unwrap();
+        file.flush().await.unwrap();
+
+        dir.flush().await.unwrap();
+
+        dir.move_entry(name, &mut MoveDstDirectory::Src, name)
+            .await
+            .unwrap();
+        dir.flush().await.unwrap();
+
+        let mut file: File = dir
+            .lookup(name)
+            .unwrap()
+            .open()
+            .await
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let read_content = file.read_to_end().await.unwrap();
+        assert_eq!(read_content, content);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn move_entry_to_existing_entry() {
+        let pool = setup().await;
+
+        let src_name = OsStr::new("src.txt");
+        let dst_name = OsStr::new("dst.txt");
+
+        let mut dir = Directory::create(pool.clone(), Cryptor::Null, Locator::Root);
+
+        let mut file = dir.create_file(src_name.to_owned()).unwrap();
+        let src_content = random_content(1024);
+        file.write(&src_content).await.unwrap();
+        file.flush().await.unwrap();
+
+        let mut file = dir.create_file(dst_name.to_owned()).unwrap();
+        let dst_content = random_content(1024);
+        file.write(&dst_content).await.unwrap();
+        file.flush().await.unwrap();
+
+        dir.flush().await.unwrap();
+
+        dir.move_entry(src_name, &mut MoveDstDirectory::Src, dst_name)
+            .await
+            .unwrap();
+        dir.flush().await.unwrap();
+
+        match dir.lookup(src_name) {
+            Err(Error::EntryNotFound) => (),
+            Err(error) => panic!("unexpected error {}", error),
+            Ok(_) => panic!("src entry should not exists, but it does"),
+        }
+
+        let mut file: File = dir
+            .lookup(dst_name)
+            .unwrap()
+            .open()
+            .await
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let read_content = file.read_to_end().await.unwrap();
+        assert_eq!(read_content, src_content);
+        assert_ne!(read_content, dst_content);
+    }
+
     async fn setup() -> db::Pool {
         let pool = db::Pool::connect(":memory:").await.unwrap();
         db::create_schema(&pool).await.unwrap();
         pool
+    }
+
+    fn random_content(len: usize) -> Vec<u8> {
+        rand::thread_rng().sample_iter(Standard).take(len).collect()
     }
 }

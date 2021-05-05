@@ -301,15 +301,19 @@ impl Blob {
         Ok(())
     }
 
-    pub(crate) fn head_name(&self) -> &BlockName {
+    pub fn head_name(&self) -> &BlockName {
         self.current_block.head_name()
     }
 
-    pub(crate) fn db_pool(&self) -> &db::Pool {
+    pub fn db_pool(&self) -> &db::Pool {
         &self.pool
     }
 
-    pub(crate) fn cryptor(&self) -> &Cryptor {
+    pub fn branch(&self) -> &Branch {
+        &self.branch
+    }
+
+    pub fn cryptor(&self) -> &Cryptor {
         &self.cryptor
     }
 

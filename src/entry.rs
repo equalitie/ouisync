@@ -71,3 +71,14 @@ impl TryFrom<Entry> for Directory {
         }
     }
 }
+
+impl TryFrom<Entry> for File {
+    type Error = Error;
+
+    fn try_from(entry: Entry) -> Result<Self, Self::Error> {
+        match entry {
+            Entry::File(file) => Ok(file),
+            Entry::Directory(_) => Err(Error::EntryIsDirectory),
+        }
+    }
+}
