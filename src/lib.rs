@@ -9,6 +9,7 @@ mod client;
 mod directory;
 mod entry;
 mod error;
+mod ffi;
 mod file;
 mod format;
 mod index;
