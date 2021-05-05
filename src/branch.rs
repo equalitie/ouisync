@@ -6,49 +6,100 @@ use crate::{
     crypto::Hash,
     db,
     error::{Error, Result},
+    replica_id::ReplicaId,
 };
 use sha3::{Digest, Sha3_256};
 use sqlx::{sqlite::SqliteRow, Row};
 use std::convert::TryFrom;
+use tokio::sync::{Mutex, MutexGuard};
 
 /// Number of layers in the tree excluding the layer with root and the layer with leaf nodes.
 const INNER_LAYER_COUNT: usize = 1;
 const MAX_INNER_NODE_CHILD_COUNT: usize = 256; // = sizeof(u8)
 
+type BranchId = u32;
+
+struct State {
+    branch_id: Option<BranchId>,
+}
+
 pub struct Branch {
-    branch_id: u32,
+    state: Mutex<State>,
+    replica_id: ReplicaId,
 }
 
 impl Branch {
     pub fn new() -> Self {
-        Self { branch_id: 0 }
+        Self {
+            state: Mutex::new(State { branch_id: None }),
+            replica_id: ReplicaId::null(),
+        }
+    }
+
+    async fn lock(&self, tx: &mut db::Transaction) -> Result<(MutexGuard<'_, State>, BranchId)> {
+        let mut state = self.state.lock().await;
+
+        if let Some(branch_id) = state.branch_id {
+            return Ok((state, branch_id));
+        }
+
+        let branch_id = match sqlx::query(
+            "SELECT id FROM branches WHERE replica_id=? ORDER BY id DESC LIMIT 1",
+        )
+        .bind(self.replica_id.as_ref())
+        .fetch_optional(&mut *tx)
+        .await?
+        {
+            Some(row) => row.get(0),
+            None => sqlx::query(
+                "INSERT INTO branches(replica_id, root_block_name, root_block_version, merkle_root)
+                     VALUES (?, ?, ?, ?) RETURNING id;",
+            )
+            .bind(self.replica_id.as_ref())
+            .bind(Hash::null().as_ref())
+            .bind(Hash::null().as_ref())
+            .bind(Hash::null().as_ref())
+            .fetch_optional(tx)
+            .await?
+            .unwrap()
+            .get(0),
+        };
+
+        state.branch_id = Some(branch_id);
+
+        Ok((state, branch_id))
     }
 
     /// Insert the root block into the index
     pub async fn insert_root(&self, tx: &mut db::Transaction, block_id: &BlockId) -> Result<()> {
-        sqlx::query(
-            "INSERT INTO branches(id, root_block_name, root_block_version, merkle_root)
-             VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET root_block_name=?, root_block_version=?;",
+        let (mut state, branch_id) = self.lock(tx).await?;
+
+        let new_id: BranchId = sqlx::query(
+            "INSERT INTO branches(replica_id, root_block_name, root_block_version, merkle_root)
+             SELECT replica_id, ?, ?, merkle_root FROM branches WHERE id = ? RETURNING id",
         )
-        .bind(self.branch_id)
         .bind(block_id.name.as_ref())
         .bind(block_id.version.as_ref())
-        .bind(Hash::null().as_ref())
-        .bind(block_id.name.as_ref())
-        .bind(block_id.version.as_ref())
-        .execute(tx)
-        .await?;
+        .bind(branch_id)
+        .fetch_optional(tx)
+        .await
+        .unwrap()
+        .unwrap()
+        .get(0);
+
+        state.branch_id = Some(new_id);
 
         Ok(())
     }
 
     /// Get the root block from the index.
     pub async fn get_root(&self, tx: &mut db::Transaction) -> Result<BlockId> {
-        // NOTE: currently only one branch is supported
+        let (_state, branch_id) = self.lock(tx).await?;
+
         match sqlx::query(
             "SELECT root_block_name, root_block_version FROM branches WHERE id=? LIMIT 1",
         )
-        .bind(self.branch_id)
+        .bind(branch_id)
         .fetch_optional(tx)
         .await?
         {
@@ -197,26 +248,30 @@ impl Branch {
     }
 
     async fn write_merkle_root(&self, tx: &mut db::Transaction, root: &Hash) -> Result<()> {
-        let nullhash = Hash::null();
+        let (mut state, branch_id) = self.lock(tx).await?;
 
-        sqlx::query(
-            "INSERT INTO branches(id, root_block_name, root_block_version, merkle_root)
-             VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET merkle_root=?;",
+        let new_id = sqlx::query(
+            "INSERT INTO branches(replica_id, root_block_name, root_block_version, merkle_root)
+             SELECT replica_id, root_block_name, root_block_version, ? FROM branches
+             WHERE id=? RETURNING id",
         )
-        .bind(self.branch_id)
-        .bind(nullhash.as_ref())
-        .bind(nullhash.as_ref())
         .bind(root.as_ref())
-        .bind(root.as_ref())
-        .execute(&mut *tx)
-        .await?;
+        .bind(branch_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .unwrap()
+        .get(0);
+
+        state.branch_id = Some(new_id);
 
         Ok(())
     }
 
     async fn load_merkle_root(&self, tx: &mut db::Transaction) -> Result<Hash> {
+        let (_state, branch_id) = self.lock(tx).await?;
+
         match sqlx::query("SELECT merkle_root FROM branches WHERE id=? LIMIT 1")
-            .bind(self.branch_id)
+            .bind(branch_id)
             .fetch_optional(tx)
             .await?
         {

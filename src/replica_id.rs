@@ -19,6 +19,11 @@ impl ReplicaId {
     pub fn random() -> Self {
         rand::thread_rng().gen()
     }
+
+    /// Temporary, until replicas are properly initialized.
+    pub fn null() -> Self {
+        Self([0; REPLICA_ID_SIZE])
+    }
 }
 
 impl AsRef<[u8]> for ReplicaId {
