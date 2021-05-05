@@ -28,16 +28,22 @@ pub enum Error {
     WrongBlockLength(usize),
     #[error("encryption / decryption failed")]
     Crypto,
-    // For new blobs means the directory entry is already taken by a different blob.
-    // For existing blobs means the directory entry doesn't match the blob.
-    #[error("wrong directory entry")]
-    WrongDirectoryEntry,
-    #[error("malformed directory")]
+    #[error("not a directory or directory malformed")]
     MalformedDirectory(#[source] bincode::Error),
     #[error("entry already exists")]
     EntryExists,
     #[error("entry not found")]
     EntryNotFound,
+    #[error("entry is not a directory")]
+    EntryNotDirectory,
+    #[error("entry is a directory")]
+    EntryIsDirectory,
+    #[error("offset is out of range")]
+    WrongOffset,
+    #[error("directory is not empty")]
+    DirectoryNotEmpty,
+    #[error("operation is not supported")]
+    OperationNotSupported,
 }
 
 impl From<TryFromSliceError> for Error {
