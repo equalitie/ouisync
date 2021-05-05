@@ -308,9 +308,21 @@ impl PathWithSiblings {
             return;
         }
 
-        // XXX: This can be done better.
-        self.leafs.push((self.encoded_locator, *block_id));
-        self.leafs.sort();
+        let mut modified = false;
+
+        for leaf in &mut self.leafs {
+            if leaf.0 == self.encoded_locator {
+                modified = true;
+                leaf.1 = *block_id;
+                break;
+            }
+        }
+
+        if !modified {
+            // XXX: This can be done better.
+            self.leafs.push((self.encoded_locator, *block_id));
+            self.leafs.sort();
+        }
 
         for inner_layer in (0..INNER_LAYER_COUNT).rev() {
             let hash = self.compute_hash_for_layer(inner_layer + 1);
@@ -391,6 +403,37 @@ mod tests {
         let r = branch.get(&mut tx, &encoded_locator).await.unwrap();
 
         assert_eq!(r, block_id);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn rewrite_locator() {
+        for _ in 0..32 {
+            let pool = init_db().await;
+            let branch = Branch::new();
+
+            let b1 = BlockId::random();
+            let b2 = BlockId::random();
+
+            let locator = Locator::Head(b1.name, 0);
+
+            let encoded_locator = locator.encode(&Cryptor::Null).unwrap();
+
+            let mut tx = pool.begin().await.unwrap();
+
+            branch
+                .insert(&mut tx, &b1, &encoded_locator)
+                .await
+                .unwrap();
+
+            branch
+                .insert(&mut tx, &b2, &encoded_locator)
+                .await
+                .unwrap();
+
+            let r = branch.get(&mut tx, &encoded_locator).await.unwrap();
+
+            assert_eq!(r, b2);
+        }
     }
 
     async fn init_db() -> db::Pool {
