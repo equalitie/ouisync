@@ -29,10 +29,10 @@ pub struct Branch {
 }
 
 impl Branch {
-    pub fn new() -> Self {
+    pub fn new(replica_id: ReplicaId) -> Self {
         Self {
             state: Mutex::new(State { branch_id: None }),
-            replica_id: ReplicaId::null(),
+            replica_id,
         }
     }
 
@@ -443,7 +443,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn insert_and_read() {
         let pool = init_db().await;
-        let branch = Branch::new();
+        let branch = Branch::new(ReplicaId::random());
         let block_id = BlockId::random();
         let locator = Locator::Head(block_id.name, 0);
         let encoded_locator = locator.encode(&Cryptor::Null).unwrap();

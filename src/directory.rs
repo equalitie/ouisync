@@ -1,5 +1,6 @@
 use crate::{
     blob::Blob,
+    branch::Branch,
     crypto::Cryptor,
     db,
     error::{Error, Result},
@@ -10,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{btree_map, BTreeMap},
     ffi::{OsStr, OsString},
+    sync::Arc,
 };
 
 pub struct Directory {
@@ -20,8 +22,13 @@ pub struct Directory {
 
 impl Directory {
     /// Opens existing directory.
-    pub(crate) async fn open(pool: db::Pool, cryptor: Cryptor, locator: Locator) -> Result<Self> {
-        let mut blob = Blob::open(pool, cryptor, locator).await?;
+    pub(crate) async fn open(
+        pool: db::Pool,
+        branch: Arc<Branch>,
+        cryptor: Cryptor,
+        locator: Locator,
+    ) -> Result<Self> {
+        let mut blob = Blob::open(pool, branch, cryptor, locator).await?;
         let buffer = blob.read_to_end().await?;
         let content = bincode::deserialize(&buffer).map_err(Error::MalformedDirectory)?;
 
@@ -33,8 +40,13 @@ impl Directory {
     }
 
     /// Creates new directory.
-    pub(crate) fn create(pool: db::Pool, cryptor: Cryptor, locator: Locator) -> Self {
-        let blob = Blob::create(pool, cryptor, locator);
+    pub(crate) fn create(
+        pool: db::Pool,
+        branch: Arc<Branch>,
+        cryptor: Cryptor,
+        locator: Locator,
+    ) -> Self {
+        let blob = Blob::create(pool, branch, cryptor, locator);
 
         Self {
             blob,
@@ -94,6 +106,7 @@ impl Directory {
 
         Ok(File::create(
             self.blob.db_pool().clone(),
+            self.blob.branch().clone(),
             self.blob.cryptor().clone(),
             Locator::Head(*self.blob.head_name(), seq),
         ))
@@ -105,6 +118,7 @@ impl Directory {
 
         Ok(Self::create(
             self.blob.db_pool().clone(),
+            self.blob.branch().clone(),
             self.blob.cryptor().clone(),
             Locator::Head(*self.blob.head_name(), seq),
         ))
@@ -137,6 +151,7 @@ impl<'a> EntryInfo<'a> {
             EntryType::File => Ok(Entry::File(
                 File::open(
                     self.parent_blob.db_pool().clone(),
+                    self.parent_blob.branch().clone(),
                     self.parent_blob.cryptor().clone(),
                     locator,
                 )
@@ -145,6 +160,7 @@ impl<'a> EntryInfo<'a> {
             EntryType::Directory => Ok(Entry::Directory(
                 Directory::open(
                     self.parent_blob.db_pool().clone(),
+                    self.parent_blob.branch().clone(),
                     self.parent_blob.cryptor().clone(),
                     locator,
                 )
@@ -215,15 +231,16 @@ struct EntryData {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{block, index};
+    use crate::{block, index, replica_id::ReplicaId};
     use std::collections::BTreeSet;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn create_and_list_entries() {
         let pool = setup().await;
+        let branch = Arc::new(Branch::new(ReplicaId::random()));
 
         // Create the root directory and put some file in it.
-        let mut dir = Directory::create(pool.clone(), Cryptor::Null, Locator::Root);
+        let mut dir = Directory::create(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root);
 
         let mut file_dog = dir.create_file("dog.txt".into()).unwrap();
         file_dog.write(b"woof").await.unwrap();
@@ -236,7 +253,7 @@ mod tests {
         dir.flush().await.unwrap();
 
         // Reopen the dir and try to read the files.
-        let dir = Directory::open(pool, Cryptor::Null, Locator::Root)
+        let dir = Directory::open(pool, branch.clone(), Cryptor::Null, Locator::Root)
             .await
             .unwrap();
 
