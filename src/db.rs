@@ -1,8 +1,7 @@
 use crate::{
     block,
     error::{Error, Result},
-    index,
-    this_replica,
+    index, this_replica,
 };
 use sqlx::{
     sqlite::{Sqlite, SqliteConnectOptions},

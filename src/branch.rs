@@ -21,10 +21,10 @@ type BranchId = u32;
 
 struct Lock<'a> {
     state: MutexGuard<'a, State>,
-    branch_id: BranchId,
 }
 
 struct State {
+    branch_id: BranchId,
 }
 
 pub struct Branch {
@@ -33,52 +33,52 @@ pub struct Branch {
 }
 
 impl Branch {
-    pub fn new(replica_id: ReplicaId) -> Self {
-        Self {
-            state: Mutex::new(State{}),
-            replica_id,
-        }
-    }
-
-    async fn lock(&self, tx: &mut db::Transaction) -> Result<Lock<'_>> {
-        let state = self.state.lock().await;
+    pub async fn new(pool: db::Pool, replica_id: ReplicaId) -> Result<Self> {
+        let mut conn = pool.acquire().await?;
 
         let branch_id = match sqlx::query(
             "SELECT id FROM branches WHERE replica_id=? ORDER BY id DESC LIMIT 1",
         )
-        .bind(self.replica_id.as_ref())
-        .fetch_optional(&mut *tx)
+        .bind(replica_id.as_ref())
+        .fetch_optional(&mut conn)
         .await?
         {
             Some(row) => row.get(0),
-            None => {
-                sqlx::query(
-                    "INSERT INTO branches(replica_id, merkle_root)
+            None => sqlx::query(
+                "INSERT INTO branches(replica_id, merkle_root)
                          VALUES (?, ?) RETURNING id;",
-                )
-                .bind(self.replica_id.as_ref())
-                .bind(Hash::null().as_ref())
-                .fetch_optional(&mut *tx)
-                .await?
-                .unwrap()
-                .get(0)
-            }
+            )
+            .bind(replica_id.as_ref())
+            .bind(Hash::null().as_ref())
+            .fetch_optional(&mut conn)
+            .await?
+            .unwrap()
+            .get(0),
         };
 
-        Ok(Lock{state, branch_id})
+        Ok(Self {
+            state: Mutex::new(State { branch_id }),
+            replica_id,
+        })
+    }
+
+    async fn lock(&self) -> Lock<'_> {
+        Lock {
+            state: self.state.lock().await,
+        }
     }
 
     /// Insert the root block into the index
     pub async fn insert_root(&self, tx: &mut db::Transaction, block_id: &BlockId) -> Result<()> {
-        let mut lock = self.lock(tx).await?;
+        let mut lock = self.lock().await;
 
-        lock.branch_id = sqlx::query(
+        lock.state.branch_id = sqlx::query(
             "INSERT INTO branches(replica_id, root_block_name, root_block_version, merkle_root)
              SELECT replica_id, ?, ?, merkle_root FROM branches WHERE id = ? RETURNING id",
         )
         .bind(block_id.name.as_ref())
         .bind(block_id.version.as_ref())
-        .bind(lock.branch_id)
+        .bind(lock.state.branch_id)
         .fetch_optional(tx)
         .await
         .unwrap()
@@ -90,12 +90,12 @@ impl Branch {
 
     /// Get the root block from the index.
     pub async fn get_root(&self, tx: &mut db::Transaction) -> Result<BlockId> {
-        let lock = self.lock(tx).await?;
+        let lock = self.lock().await;
 
         match sqlx::query(
             "SELECT root_block_name, root_block_version FROM branches WHERE id=? LIMIT 1",
         )
-        .bind(lock.branch_id)
+        .bind(lock.state.branch_id)
         .fetch_optional(tx)
         .await?
         {
@@ -120,7 +120,7 @@ impl Branch {
         block_id: &BlockId,
         encoded_locator: &Hash,
     ) -> Result<()> {
-        let mut lock = self.lock(tx).await?;
+        let mut lock = self.lock().await;
 
         let merkle_root = self.load_merkle_root(tx, &lock).await?;
 
@@ -139,7 +139,7 @@ impl Branch {
 
     /// Retrieve `BlockId` of a block with the given encoded `Locator`.
     pub async fn get(&self, tx: &mut db::Transaction, encoded_locator: &Hash) -> Result<BlockId> {
-        let lock = self.lock(tx).await?;
+        let lock = self.lock().await;
 
         let merkle_root = self.load_merkle_root(tx, &lock).await?;
 
@@ -218,7 +218,12 @@ impl Branch {
         Ok(path)
     }
 
-    async fn write_path(&self, tx: &mut db::Transaction, lock: &mut Lock<'_>, path: &PathWithSiblings) -> Result<()> {
+    async fn write_path(
+        &self,
+        tx: &mut db::Transaction,
+        lock: &mut Lock<'_>,
+        path: &PathWithSiblings,
+    ) -> Result<()> {
         for (inner_i, inner_layer) in path.inner.iter().enumerate() {
             let parent_hash = path.hash_at_layer(inner_i);
 
@@ -252,14 +257,19 @@ impl Branch {
         Ok(())
     }
 
-    async fn write_merkle_root(&self, tx: &mut db::Transaction, lock: &mut Lock<'_>, root: &Hash) -> Result<()> {
-        lock.branch_id = sqlx::query(
+    async fn write_merkle_root(
+        &self,
+        tx: &mut db::Transaction,
+        lock: &mut Lock<'_>,
+        root: &Hash,
+    ) -> Result<()> {
+        lock.state.branch_id = sqlx::query(
             "INSERT INTO branches(replica_id, root_block_name, root_block_version, merkle_root)
              SELECT replica_id, root_block_name, root_block_version, ? FROM branches
              WHERE id=? RETURNING id;",
         )
         .bind(root.as_ref())
-        .bind(lock.branch_id)
+        .bind(lock.state.branch_id)
         .fetch_optional(&mut *tx)
         .await
         .unwrap()
@@ -271,7 +281,7 @@ impl Branch {
 
     async fn load_merkle_root(&self, tx: &mut db::Transaction, lock: &Lock<'_>) -> Result<Hash> {
         match sqlx::query("SELECT merkle_root FROM branches WHERE id=? LIMIT 1")
-            .bind(lock.branch_id)
+            .bind(lock.state.branch_id)
             .fetch_optional(tx)
             .await?
         {
@@ -443,7 +453,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn insert_and_read() {
         let pool = init_db().await;
-        let branch = Branch::new(ReplicaId::random());
+        let branch = Branch::new(pool.clone(), ReplicaId::random())
+            .await
+            .unwrap();
         let block_id = BlockId::random();
         let locator = Locator::Head(block_id.name, 0);
         let encoded_locator = locator.encode(&Cryptor::Null).unwrap();
@@ -464,7 +476,9 @@ mod tests {
     async fn rewrite_locator() {
         for _ in 0..32 {
             let pool = init_db().await;
-            let branch = Branch::new(ReplicaId::random());
+            let branch = Branch::new(pool.clone(), ReplicaId::random())
+                .await
+                .unwrap();
 
             let b1 = BlockId::random();
             let b2 = BlockId::random();
@@ -475,15 +489,9 @@ mod tests {
 
             let mut tx = pool.begin().await.unwrap();
 
-            branch
-                .insert(&mut tx, &b1, &encoded_locator)
-                .await
-                .unwrap();
+            branch.insert(&mut tx, &b1, &encoded_locator).await.unwrap();
 
-            branch
-                .insert(&mut tx, &b2, &encoded_locator)
-                .await
-                .unwrap();
+            branch.insert(&mut tx, &b2, &encoded_locator).await.unwrap();
 
             let r = branch.get(&mut tx, &encoded_locator).await.unwrap();
 

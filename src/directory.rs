@@ -437,15 +437,17 @@ mod tests {
         let name = OsStr::new("monkey.txt");
 
         // Create a directory with a single entry.
-        let mut parent_dir = Directory::create(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root);
+        let mut parent_dir =
+            Directory::create(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root);
         let mut file = parent_dir.create_file(name.into()).unwrap();
         file.flush().await.unwrap();
         parent_dir.flush().await.unwrap();
 
         // Reopen and remove the entry
-        let mut parent_dir = Directory::open(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root)
-            .await
-            .unwrap();
+        let mut parent_dir =
+            Directory::open(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root)
+                .await
+                .unwrap();
         parent_dir.remove_entry(name).await.unwrap();
         parent_dir.flush().await.unwrap();
 
@@ -505,7 +507,8 @@ mod tests {
     async fn move_entry_to_other_directory() {
         let (pool, branch) = setup().await;
 
-        let mut root_dir = Directory::create(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root);
+        let mut root_dir =
+            Directory::create(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root);
         let mut src_dir = root_dir.create_subdirectory("src".into()).unwrap();
         let mut dst_dir = root_dir.create_subdirectory("dst".into()).unwrap();
 
@@ -629,7 +632,11 @@ mod tests {
     async fn setup() -> (db::Pool, Arc<Branch>) {
         let pool = db::Pool::connect(":memory:").await.unwrap();
         db::create_schema(&pool).await.unwrap();
-        let branch = Arc::new(Branch::new(ReplicaId::random()));
+        let branch = Arc::new(
+            Branch::new(pool.clone(), ReplicaId::random())
+                .await
+                .unwrap(),
+        );
         (pool, branch)
     }
 
