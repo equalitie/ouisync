@@ -10,18 +10,16 @@ use crate::{
     this_replica,
 };
 
-use std::sync::Arc;
-
 pub struct Repository {
     pool: db::Pool,
-    branch: Arc<Branch>,
+    branch: Branch,
     cryptor: Cryptor,
 }
 
 impl Repository {
     pub async fn new(pool: db::Pool, cryptor: Cryptor) -> Result<Self> {
         let replica_id = this_replica::get_or_create_id(&pool).await?;
-        let branch = Arc::new(Branch::new(pool.clone(), replica_id).await?);
+        let branch = Branch::new(pool.clone(), replica_id).await?;
 
         Ok(Self {
             pool,

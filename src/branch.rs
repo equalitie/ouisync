@@ -10,7 +10,7 @@ use crate::{
 };
 use sha3::{Digest, Sha3_256};
 use sqlx::{sqlite::SqliteRow, Row};
-use std::convert::TryFrom;
+use std::{convert::TryFrom, sync::Arc};
 use tokio::sync::{Mutex, MutexGuard};
 
 /// Number of layers in the tree excluding the layer with root and the layer with leaf nodes.
@@ -26,7 +26,7 @@ struct State {
 }
 
 pub struct Branch {
-    state: Mutex<State>,
+    state: Arc<Mutex<State>>,
     replica_id: ReplicaId,
 }
 
@@ -55,9 +55,16 @@ impl Branch {
         };
 
         Ok(Self {
-            state: Mutex::new(State { branch_id }),
+            state: Arc::new(Mutex::new(State { branch_id })),
             replica_id,
         })
+    }
+
+    pub fn clone(&self) -> Self {
+        Self {
+            state: self.state.clone(),
+            replica_id: self.replica_id,
+        }
     }
 
     async fn lock(&self) -> Lock<'_> {

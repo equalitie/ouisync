@@ -12,7 +12,6 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{btree_map, BTreeMap},
     ffi::{OsStr, OsString},
-    sync::Arc,
 };
 
 pub struct Directory {
@@ -25,7 +24,7 @@ impl Directory {
     /// Opens existing directory.
     pub(crate) async fn open(
         pool: db::Pool,
-        branch: Arc<Branch>,
+        branch: Branch,
         cryptor: Cryptor,
         locator: Locator,
     ) -> Result<Self> {
@@ -39,7 +38,7 @@ impl Directory {
     /// Creates new directory.
     pub(crate) fn create(
         pool: db::Pool,
-        branch: Arc<Branch>,
+        branch: Branch,
         cryptor: Cryptor,
         locator: Locator,
     ) -> Self {
@@ -629,14 +628,12 @@ mod tests {
         assert_ne!(read_content, dst_content);
     }
 
-    async fn setup() -> (db::Pool, Arc<Branch>) {
+    async fn setup() -> (db::Pool, Branch) {
         let pool = db::Pool::connect(":memory:").await.unwrap();
         db::create_schema(&pool).await.unwrap();
-        let branch = Arc::new(
-            Branch::new(pool.clone(), ReplicaId::random())
-                .await
-                .unwrap(),
-        );
+        let branch = Branch::new(pool.clone(), ReplicaId::random())
+            .await
+            .unwrap();
         (pool, branch)
     }
 

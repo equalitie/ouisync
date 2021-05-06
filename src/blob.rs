@@ -11,12 +11,11 @@ use std::{
     io::SeekFrom,
     mem,
     ops::{Deref, DerefMut},
-    sync::Arc,
 };
 use zeroize::Zeroize;
 
 pub struct Blob {
-    branch: Arc<Branch>,
+    branch: Branch,
     pool: db::Pool,
     locator: Locator,
     cryptor: Cryptor,
@@ -36,7 +35,7 @@ impl Blob {
     /// - `directory_seq` is the sequence number of the blob within its directory.
     pub(crate) async fn open(
         pool: db::Pool,
-        branch: Arc<Branch>,
+        branch: Branch,
         cryptor: Cryptor,
         locator: Locator,
     ) -> Result<Self> {
@@ -77,7 +76,7 @@ impl Blob {
     /// See [`Self::open`] for explanation of `directory_name` and `directory_seq`.
     pub(crate) fn create(
         pool: db::Pool,
-        branch: Arc<Branch>,
+        branch: Branch,
         cryptor: Cryptor,
         locator: Locator,
     ) -> Self {
@@ -107,7 +106,7 @@ impl Blob {
         }
     }
 
-    pub fn branch(&self) -> &Arc<Branch> {
+    pub fn branch(&self) -> &Branch {
         &self.branch
     }
 
@@ -675,11 +674,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn empty_blob() {
         let pool = init_db().await;
-        let branch = Arc::new(
-            Branch::new(pool.clone(), ReplicaId::random())
-                .await
-                .unwrap(),
-        );
+        let branch = Branch::new(pool.clone(), ReplicaId::random())
+            .await
+            .unwrap();
 
         let mut blob = Blob::create(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root);
         blob.flush().await.unwrap();
@@ -910,16 +907,14 @@ mod tests {
             .block_on(future)
     }
 
-    async fn setup(rng_seed: u64) -> (StdRng, Cryptor, db::Pool, Arc<Branch>) {
+    async fn setup(rng_seed: u64) -> (StdRng, Cryptor, db::Pool, Branch) {
         let mut rng = StdRng::seed_from_u64(rng_seed);
         let secret_key = SecretKey::generate(&mut rng);
         let cryptor = Cryptor::ChaCha20Poly1305(secret_key);
         let pool = init_db().await;
-        let branch = Arc::new(
-            Branch::new(pool.clone(), ReplicaId::random())
-                .await
-                .unwrap(),
-        );
+        let branch = Branch::new(pool.clone(), ReplicaId::random())
+            .await
+            .unwrap();
 
         (rng, cryptor, pool, branch)
     }
