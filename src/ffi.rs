@@ -38,8 +38,8 @@ pub unsafe extern "C" fn close_repository(repo: *const Session) {
 }
 
 pub struct Session {
-    repository: Repository,
-    runtime: Runtime,
+    _repository: Repository,
+    _runtime: Runtime,
 }
 
 impl Session {
@@ -51,12 +51,12 @@ impl Session {
         let repository = runtime.block_on(async {
             let pool = db::init(db_path).await?;
             let cryptor = Cryptor::Null;
-            Ok::<_, Error>(Repository::new(pool, cryptor))
+            Repository::new(pool, cryptor).await
         })?;
 
         Ok(Self {
-            repository,
-            runtime,
+            _repository: repository,
+            _runtime: runtime,
         })
     }
 }

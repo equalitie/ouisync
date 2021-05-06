@@ -629,8 +629,7 @@ mod tests {
     }
 
     async fn setup() -> (db::Pool, Branch) {
-        let pool = db::Pool::connect(":memory:").await.unwrap();
-        db::create_schema(&pool).await.unwrap();
+        let pool = db::init_in_memory().await.unwrap();
         let branch = Branch::new(pool.clone(), ReplicaId::random())
             .await
             .unwrap();

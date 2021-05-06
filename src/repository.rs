@@ -1,3 +1,5 @@
+use std::path::{Component, Path};
+
 use crate::{
     crypto::Cryptor,
     db,
@@ -21,6 +23,12 @@ impl Repository {
         let index = Index::load(pool, this_replica_id).await?;
 
         Ok(Self { index, cryptor })
+    }
+
+    /// Looks up an entry by its path. The path must be relative to the repository root.If the entry exists, returns its `Locator` and `EntryType`,
+    /// otherwise returns `EntryNotFound`.
+    pub async fn lookup<P: AsRef<Path>>(&self, path: P) -> Result<(Locator, EntryType)> {
+        self.lookup_by_path(path.as_ref()).await
     }
 
     /// Open an entry (file or directory).
@@ -73,5 +81,95 @@ impl Repository {
             .branch(&self.index.this_replica_id)
             .await
             .unwrap()
+    }
+
+    async fn lookup_by_path(&self, path: &Path) -> Result<(Locator, EntryType)> {
+        let mut stack = vec![Locator::Root];
+        let mut last_type = EntryType::Directory;
+
+        for component in path.components() {
+            match component {
+                Component::Prefix(_) => return Err(Error::OperationNotSupported),
+                Component::RootDir | Component::CurDir => (),
+                Component::ParentDir => {
+                    if stack.len() > 1 {
+                        stack.pop();
+                    }
+
+                    last_type = EntryType::Directory;
+                }
+                Component::Normal(name) => {
+                    last_type.check_is_directory()?;
+
+                    let parent_dir = self.open_directory(*stack.last().unwrap()).await?;
+                    let next_entry = parent_dir.lookup(name)?;
+
+                    stack.push(next_entry.locator());
+                    last_type = next_entry.entry_type();
+                }
+            }
+        }
+
+        Ok((stack.pop().unwrap(), last_type))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn lookup() {
+        let pool = db::init_in_memory().await.unwrap();
+        let repo = Repository::new(pool, Cryptor::Null).await.unwrap();
+
+        let mut root_dir = repo.open_directory(Locator::Root).await.unwrap();
+        let mut file_a = root_dir.create_file("a.txt".into()).unwrap();
+        file_a.flush().await.unwrap();
+
+        let mut subdir = root_dir.create_subdirectory("sub".into()).unwrap();
+        let mut file_b = subdir.create_file("b.txt".into()).unwrap();
+        file_b.flush().await.unwrap();
+        subdir.flush().await.unwrap();
+
+        root_dir.flush().await.unwrap();
+
+        assert_eq!(
+            repo.lookup("").await.unwrap(),
+            (Locator::Root, EntryType::Directory)
+        );
+        assert_eq!(
+            repo.lookup("sub").await.unwrap(),
+            (*subdir.locator(), EntryType::Directory)
+        );
+        assert_eq!(
+            repo.lookup("a.txt").await.unwrap(),
+            (*file_a.locator(), EntryType::File)
+        );
+        assert_eq!(
+            repo.lookup("sub/b.txt").await.unwrap(),
+            (*file_b.locator(), EntryType::File)
+        );
+
+        assert_eq!(repo.lookup("/").await.unwrap().0, Locator::Root);
+        assert_eq!(repo.lookup("//").await.unwrap().0, Locator::Root);
+        assert_eq!(repo.lookup(".").await.unwrap().0, Locator::Root);
+        assert_eq!(repo.lookup("/.").await.unwrap().0, Locator::Root);
+        assert_eq!(repo.lookup("./").await.unwrap().0, Locator::Root);
+        assert_eq!(repo.lookup("/sub").await.unwrap().0, *subdir.locator());
+        assert_eq!(repo.lookup("sub/").await.unwrap().0, *subdir.locator());
+        assert_eq!(repo.lookup("/sub/").await.unwrap().0, *subdir.locator());
+        assert_eq!(repo.lookup("./sub").await.unwrap().0, *subdir.locator());
+        assert_eq!(repo.lookup("././sub").await.unwrap().0, *subdir.locator());
+        assert_eq!(repo.lookup("sub/.").await.unwrap().0, *subdir.locator());
+
+        assert_eq!(repo.lookup("sub/..").await.unwrap().0, Locator::Root);
+        assert_eq!(
+            repo.lookup("sub/../a.txt").await.unwrap().0,
+            *file_a.locator()
+        );
+        assert_eq!(repo.lookup("..").await.unwrap().0, Locator::Root);
+        assert_eq!(repo.lookup("../..").await.unwrap().0, Locator::Root);
+        assert_eq!(repo.lookup("sub/../..").await.unwrap().0, Locator::Root);
     }
 }

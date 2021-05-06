@@ -216,8 +216,7 @@ async fn setup() -> (MountGuard, TempDir) {
     // static LOG_INIT: Once = Once::new();
     // LOG_INIT.call_once(env_logger::init);
 
-    let pool = db::Pool::connect(":memory:").await.unwrap();
-    db::create_schema(&pool).await.unwrap();
+    let pool = db::init_in_memory().await.unwrap();
 
     let repo = Repository::new(pool, Cryptor::Null).await.unwrap();
     let mount_dir = tempdir().unwrap();

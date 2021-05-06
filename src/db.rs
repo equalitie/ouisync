@@ -27,13 +27,24 @@ pub async fn init(path: impl AsRef<Path>) -> Result<Pool> {
             .map_err(Error::CreateDbDirectory)?;
     }
 
-    let pool = SqlitePool::connect_with(
+    let pool = Pool::connect_with(
         SqliteConnectOptions::new()
             .filename(path)
             .create_if_missing(true),
     )
     .await
     .map_err(Error::ConnectToDb)?;
+
+    create_schema(&pool).await?;
+
+    Ok(pool)
+}
+
+/// Creates a memory-only database. Useful mostly for tests.
+pub async fn init_in_memory() -> Result<Pool> {
+    let pool = Pool::connect(":memory:")
+        .await
+        .map_err(Error::ConnectToDb)?;
 
     create_schema(&pool).await?;
 
