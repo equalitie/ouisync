@@ -16,7 +16,7 @@ use fuser::{
     BackgroundSession, FileAttr, FileType, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory,
     ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow,
 };
-use ouisync::{Directory, Entry, EntryType, Error, MoveDstDirectory, Repository, Result};
+use ouisync::{Directory, Entry, EntryType, Error, File, MoveDstDirectory, Repository, Result};
 use std::{
     convert::TryInto,
     ffi::OsStr,
@@ -388,7 +388,10 @@ impl Inner {
             ..
         } = self.inodes.get(inode);
 
-        let entry = self.repository.open_entry(locator, entry_type).await?;
+        let entry = self
+            .repository
+            .open_entry_by_locator(locator, entry_type)
+            .await?;
         Ok(make_file_attr_for_entry(&entry, inode))
     }
 
@@ -450,8 +453,7 @@ impl Inner {
         let mut file = if let Some(handle) = handle {
             MaybeOwnedMut::Borrowed(self.entries.get_file_mut(handle)?)
         } else {
-            let locator = self.inodes.get(inode).locator;
-            MaybeOwnedMut::Owned(self.repository.open_file(locator).await?)
+            MaybeOwnedMut::Owned(self.open_file_by_inode(inode).await?)
         };
 
         if let Some(size) = size {
@@ -660,14 +662,7 @@ impl Inner {
 
         // TODO: what about flags (parameter)?
 
-        let &InodeDetails {
-            locator,
-            entry_type,
-            ..
-        } = self.inodes.get(inode);
-        entry_type.check_is_file()?;
-
-        let file = self.repository.open_file(locator).await?;
+        let file = self.open_file_by_inode(inode).await?;
         let handle = self.entries.insert(Entry::File(file));
 
         // TODO: what about flags (return value)?
@@ -832,6 +827,16 @@ impl Inner {
         Ok(())
     }
 
+    async fn open_file_by_inode(&self, inode: Inode) -> Result<File> {
+        let &InodeDetails {
+            locator,
+            entry_type,
+            ..
+        } = self.inodes.get(inode);
+        entry_type.check_is_file()?;
+        self.repository.open_file_by_locator(locator).await
+    }
+
     async fn open_directory_by_inode(&self, inode: Inode) -> Result<Directory> {
         let &InodeDetails {
             locator,
@@ -839,7 +844,7 @@ impl Inner {
             ..
         } = self.inodes.get(inode);
         entry_type.check_is_directory()?;
-        self.repository.open_directory(locator).await
+        self.repository.open_directory_by_locator(locator).await
     }
 }
 
