@@ -19,9 +19,7 @@ const MAX_INNER_NODE_CHILD_COUNT: usize = 256; // = sizeof(u8)
 
 type BranchId = u32;
 
-struct Lock<'a> {
-    state: MutexGuard<'a, State>,
-}
+type Lock<'a> = MutexGuard<'a, State>;
 
 struct State {
     branch_id: BranchId,
@@ -63,22 +61,20 @@ impl Branch {
     }
 
     async fn lock(&self) -> Lock<'_> {
-        Lock {
-            state: self.state.lock().await,
-        }
+        self.state.lock().await
     }
 
     /// Insert the root block into the index
     pub async fn insert_root(&self, tx: &mut db::Transaction, block_id: &BlockId) -> Result<()> {
         let mut lock = self.lock().await;
 
-        lock.state.branch_id = sqlx::query(
+        lock.branch_id = sqlx::query(
             "INSERT INTO branches(replica_id, root_block_name, root_block_version, merkle_root)
              SELECT replica_id, ?, ?, merkle_root FROM branches WHERE id = ? RETURNING id",
         )
         .bind(block_id.name.as_ref())
         .bind(block_id.version.as_ref())
-        .bind(lock.state.branch_id)
+        .bind(lock.branch_id)
         .fetch_optional(tx)
         .await
         .unwrap()
@@ -95,7 +91,7 @@ impl Branch {
         match sqlx::query(
             "SELECT root_block_name, root_block_version FROM branches WHERE id=? LIMIT 1",
         )
-        .bind(lock.state.branch_id)
+        .bind(lock.branch_id)
         .fetch_optional(tx)
         .await?
         {
@@ -104,9 +100,10 @@ impl Branch {
                 if blob.is_empty() {
                     return Err(Error::BlockIdNotFound);
                 }
+                // Use unwrap here because the above check should be sufficient
+                // in determining whether the row has a valid BlockId.
                 let name = BlockName::try_from(blob).unwrap();
-                //let name = column::<BlockName>(&row, 0)?;
-                let version = column::<BlockVersion>(&row, 1)?;
+                let version = column::<BlockVersion>(&row, 1).unwrap();
                 Ok(BlockId { name, version })
             }
             None => Err(Error::BlockIdNotFound),
@@ -263,13 +260,13 @@ impl Branch {
         lock: &mut Lock<'_>,
         root: &Hash,
     ) -> Result<()> {
-        lock.state.branch_id = sqlx::query(
+        lock.branch_id = sqlx::query(
             "INSERT INTO branches(replica_id, root_block_name, root_block_version, merkle_root)
              SELECT replica_id, root_block_name, root_block_version, ? FROM branches
              WHERE id=? RETURNING id;",
         )
         .bind(root.as_ref())
-        .bind(lock.state.branch_id)
+        .bind(lock.branch_id)
         .fetch_optional(&mut *tx)
         .await
         .unwrap()
@@ -281,7 +278,7 @@ impl Branch {
 
     async fn load_merkle_root(&self, tx: &mut db::Transaction, lock: &Lock<'_>) -> Result<Hash> {
         match sqlx::query("SELECT merkle_root FROM branches WHERE id=? LIMIT 1")
-            .bind(lock.state.branch_id)
+            .bind(lock.branch_id)
             .fetch_optional(tx)
             .await?
         {
