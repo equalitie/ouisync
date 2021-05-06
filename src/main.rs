@@ -18,7 +18,7 @@ async fn main() -> Result<()> {
 
     let _network = Network::new(options.enable_local_discovery);
 
-    let repository = Repository::new(pool, cryptor);
+    let repository = Repository::new(pool, cryptor).await?;
     let _mount_guard = virtual_filesystem::mount(
         tokio::runtime::Handle::current(),
         repository,

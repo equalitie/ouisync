@@ -33,9 +33,12 @@ impl Blob {
     /// - `directory_name` is the name of the head block of the directory containing the blob.
     ///   `None` if the blob is the root blob.
     /// - `directory_seq` is the sequence number of the blob within its directory.
-    pub(crate) async fn open(pool: db::Pool, cryptor: Cryptor, locator: Locator) -> Result<Self> {
-        let branch = Branch::new();
-
+    pub(crate) async fn open(
+        pool: db::Pool,
+        branch: Branch,
+        cryptor: Cryptor,
+        locator: Locator,
+    ) -> Result<Self> {
         // NOTE: no need to commit this transaction because we are only reading here.
         let mut tx = pool.begin().await?;
         let (id, buffer, auth_tag) = load_block(&branch, &mut tx, &cryptor, &locator).await?;
@@ -71,7 +74,12 @@ impl Blob {
     /// Creates a new blob.
     ///
     /// See [`Self::open`] for explanation of `directory_name` and `directory_seq`.
-    pub(crate) fn create(pool: db::Pool, cryptor: Cryptor, locator: Locator) -> Self {
+    pub(crate) fn create(
+        pool: db::Pool,
+        branch: Branch,
+        cryptor: Cryptor,
+        locator: Locator,
+    ) -> Self {
         let nonce_sequence = NonceSequence::new(rand::random());
         let mut content = Cursor::new(Buffer::new());
 
@@ -87,7 +95,7 @@ impl Blob {
         };
 
         Self {
-            branch: Branch::new(),
+            branch,
             pool,
             locator,
             cryptor,
@@ -96,6 +104,10 @@ impl Blob {
             len: 0,
             len_dirty: false,
         }
+    }
+
+    pub fn branch(&self) -> &Branch {
+        &self.branch
     }
 
     /// Length of this blob in bytes.
@@ -307,10 +319,6 @@ impl Blob {
 
     pub fn db_pool(&self) -> &db::Pool {
         &self.pool
-    }
-
-    pub fn branch(&self) -> &Branch {
-        &self.branch
     }
 
     pub fn cryptor(&self) -> &Cryptor {
@@ -657,7 +665,7 @@ impl DerefMut for Cursor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{crypto::SecretKey, index};
+    use crate::{crypto::SecretKey, index, replica_id::ReplicaId};
     use proptest::{collection::vec, prelude::*};
     use rand::{distributions::Standard, prelude::*};
     use std::future::Future;
@@ -666,12 +674,15 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn empty_blob() {
         let pool = init_db().await;
+        let branch = Branch::new(pool.clone(), ReplicaId::random())
+            .await
+            .unwrap();
 
-        let mut blob = Blob::create(pool.clone(), Cryptor::Null, Locator::Root);
+        let mut blob = Blob::create(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root);
         blob.flush().await.unwrap();
 
         // Re-open the blob and read its contents.
-        let mut blob = Blob::open(pool.clone(), Cryptor::Null, Locator::Root)
+        let mut blob = Blob::open(pool.clone(), branch, Cryptor::Null, Locator::Root)
             .await
             .unwrap();
 
@@ -699,7 +710,7 @@ mod tests {
         read_len: usize,
         rng_seed: u64,
     ) {
-        let (mut rng, cryptor, pool) = setup(rng_seed).await;
+        let (mut rng, cryptor, pool, branch) = setup(rng_seed).await;
 
         let locator = if is_root {
             Locator::Root
@@ -708,7 +719,7 @@ mod tests {
         };
 
         // Create the blob and write to it in chunks of `write_len` bytes.
-        let mut blob = Blob::create(pool.clone(), cryptor.clone(), locator);
+        let mut blob = Blob::create(pool.clone(), branch.clone(), cryptor.clone(), locator);
 
         let orig_content: Vec<u8> = rng.sample_iter(Standard).take(blob_len).collect();
 
@@ -719,7 +730,7 @@ mod tests {
         blob.flush().await.unwrap();
 
         // Re-open the blob and read from it in chunks of `read_len` bytes
-        let mut blob = Blob::open(pool.clone(), cryptor.clone(), locator)
+        let mut blob = Blob::open(pool.clone(), branch.clone(), cryptor.clone(), locator)
             .await
             .unwrap();
 
@@ -746,18 +757,19 @@ mod tests {
         #[strategy(rng_seed_strategy())] rng_seed: u64,
     ) {
         run(async {
-            let (rng, cryptor, pool) = setup(rng_seed).await;
+            let (rng, cryptor, pool, branch) = setup(rng_seed).await;
 
             let content: Vec<u8> = rng.sample_iter(Standard).take(content_len).collect();
 
-            let mut blob = Blob::create(pool.clone(), cryptor.clone(), Locator::Root);
+            let mut blob =
+                Blob::create(pool.clone(), branch.clone(), cryptor.clone(), Locator::Root);
             blob.write(&content[..]).await.unwrap();
             assert_eq!(blob.len(), content_len as u64);
 
             blob.flush().await.unwrap();
             assert_eq!(blob.len(), content_len as u64);
 
-            let blob = Blob::open(pool.clone(), cryptor.clone(), Locator::Root)
+            let blob = Blob::open(pool.clone(), branch, cryptor.clone(), Locator::Root)
                 .await
                 .unwrap();
             assert_eq!(blob.len(), content_len as u64);
@@ -798,11 +810,11 @@ mod tests {
         expected_pos: usize,
         rng_seed: u64,
     ) {
-        let (rng, cryptor, pool) = setup(rng_seed).await;
+        let (rng, cryptor, pool, branch) = setup(rng_seed).await;
 
         let content: Vec<u8> = rng.sample_iter(Standard).take(content_len).collect();
 
-        let mut blob = Blob::create(pool.clone(), cryptor.clone(), Locator::Root);
+        let mut blob = Blob::create(pool.clone(), branch, cryptor.clone(), Locator::Root);
         blob.write(&content[..]).await.unwrap();
         blob.flush().await.unwrap();
 
@@ -820,11 +832,11 @@ mod tests {
         #[strategy(rng_seed_strategy())] rng_seed: u64,
     ) {
         run(async {
-            let (rng, cryptor, pool) = setup(rng_seed).await;
+            let (rng, cryptor, pool, branch) = setup(rng_seed).await;
 
             let content: Vec<u8> = rng.sample_iter(Standard).take(content_len).collect();
 
-            let mut blob = Blob::create(pool.clone(), cryptor.clone(), Locator::Root);
+            let mut blob = Blob::create(pool.clone(), branch, cryptor.clone(), Locator::Root);
             blob.write(&content[..]).await.unwrap();
             blob.flush().await.unwrap();
             blob.seek(SeekFrom::Start(0)).await.unwrap();
@@ -845,11 +857,11 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn seek_after_end() {
-        let (_, cryptor, pool) = setup(0).await;
+        let (_, cryptor, pool, branch) = setup(0).await;
 
         let content = b"content";
 
-        let mut blob = Blob::create(pool.clone(), cryptor, Locator::Root);
+        let mut blob = Blob::create(pool.clone(), branch, cryptor, Locator::Root);
         blob.write(&content[..]).await.unwrap();
         blob.flush().await.unwrap();
 
@@ -865,11 +877,11 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn seek_before_start() {
-        let (_, cryptor, pool) = setup(0).await;
+        let (_, cryptor, pool, branch) = setup(0).await;
 
         let content = b"content";
 
-        let mut blob = Blob::create(pool.clone(), cryptor, Locator::Root);
+        let mut blob = Blob::create(pool.clone(), branch, cryptor, Locator::Root);
         blob.write(&content[..]).await.unwrap();
         blob.flush().await.unwrap();
 
@@ -895,13 +907,16 @@ mod tests {
             .block_on(future)
     }
 
-    async fn setup(rng_seed: u64) -> (StdRng, Cryptor, db::Pool) {
+    async fn setup(rng_seed: u64) -> (StdRng, Cryptor, db::Pool, Branch) {
         let mut rng = StdRng::seed_from_u64(rng_seed);
         let secret_key = SecretKey::generate(&mut rng);
         let cryptor = Cryptor::ChaCha20Poly1305(secret_key);
         let pool = init_db().await;
+        let branch = Branch::new(pool.clone(), ReplicaId::random())
+            .await
+            .unwrap();
 
-        (rng, cryptor, pool)
+        (rng, cryptor, pool, branch)
     }
 
     fn rng_seed_strategy() -> impl Strategy<Value = u64> {

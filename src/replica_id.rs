@@ -4,7 +4,11 @@ use rand::{
     Rng,
 };
 use serde::{Deserialize, Serialize};
-use std::fmt;
+use std::{
+    array::TryFromSliceError,
+    convert::{TryFrom, TryInto},
+    fmt,
+};
 
 /// Size of replica ID in bytes.
 pub const REPLICA_ID_SIZE: usize = 16;
@@ -48,5 +52,14 @@ impl fmt::Debug for ReplicaId {
 impl fmt::LowerHex for ReplicaId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         format::hex(f, &self.0)
+    }
+}
+
+impl TryFrom<&'_ [u8]> for ReplicaId {
+    type Error = TryFromSliceError;
+
+    fn try_from(slice: &[u8]) -> Result<Self, Self::Error> {
+        //let slice: [u8; REPLICA_ID_SIZE] = slice.try_into()?;
+        Ok(Self(slice.try_into()?))
     }
 }

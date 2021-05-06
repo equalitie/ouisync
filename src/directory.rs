@@ -1,5 +1,6 @@
 use crate::{
     blob::Blob,
+    branch::Branch,
     crypto::Cryptor,
     db,
     entry::{Entry, EntryType},
@@ -21,8 +22,13 @@ pub struct Directory {
 #[allow(clippy::len_without_is_empty)]
 impl Directory {
     /// Opens existing directory.
-    pub(crate) async fn open(pool: db::Pool, cryptor: Cryptor, locator: Locator) -> Result<Self> {
-        let mut blob = Blob::open(pool, cryptor, locator).await?;
+    pub(crate) async fn open(
+        pool: db::Pool,
+        branch: Branch,
+        cryptor: Cryptor,
+        locator: Locator,
+    ) -> Result<Self> {
+        let mut blob = Blob::open(pool, branch, cryptor, locator).await?;
         let buffer = blob.read_to_end().await?;
         let content = bincode::deserialize(&buffer).map_err(Error::MalformedDirectory)?;
 
@@ -30,8 +36,13 @@ impl Directory {
     }
 
     /// Creates new directory.
-    pub(crate) fn create(pool: db::Pool, cryptor: Cryptor, locator: Locator) -> Self {
-        let blob = Blob::create(pool, cryptor, locator);
+    pub(crate) fn create(
+        pool: db::Pool,
+        branch: Branch,
+        cryptor: Cryptor,
+        locator: Locator,
+    ) -> Self {
+        let blob = Blob::create(pool, branch, cryptor, locator);
 
         Self {
             blob,
@@ -93,6 +104,7 @@ impl Directory {
 
         Ok(File::create(
             self.blob.db_pool().clone(),
+            self.blob.branch().clone(),
             self.blob.cryptor().clone(),
             Locator::Head(*self.blob.head_name(), seq),
         ))
@@ -104,6 +116,7 @@ impl Directory {
 
         Ok(Self::create(
             self.blob.db_pool().clone(),
+            self.blob.branch().clone(),
             self.blob.cryptor().clone(),
             Locator::Head(*self.blob.head_name(), seq),
         ))
@@ -213,6 +226,7 @@ impl<'a> EntryInfo<'a> {
             EntryType::File => Ok(Entry::File(
                 File::open(
                     self.parent_blob.db_pool().clone(),
+                    self.parent_blob.branch().clone(),
                     self.parent_blob.cryptor().clone(),
                     self.locator(),
                 )
@@ -221,6 +235,7 @@ impl<'a> EntryInfo<'a> {
             EntryType::Directory => Ok(Entry::Directory(
                 Directory::open(
                     self.parent_blob.db_pool().clone(),
+                    self.parent_blob.branch().clone(),
                     self.parent_blob.cryptor().clone(),
                     self.locator(),
                 )
@@ -344,15 +359,16 @@ struct EntryData {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::replica_id::ReplicaId;
     use rand::{distributions::Standard, Rng};
     use std::{collections::BTreeSet, convert::TryInto};
 
     #[tokio::test(flavor = "multi_thread")]
     async fn create_and_list_entries() {
-        let pool = setup().await;
+        let (pool, branch) = setup().await;
 
         // Create the root directory and put some file in it.
-        let mut dir = Directory::create(pool.clone(), Cryptor::Null, Locator::Root);
+        let mut dir = Directory::create(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root);
 
         let mut file_dog = dir.create_file("dog.txt".into()).unwrap();
         file_dog.write(b"woof").await.unwrap();
@@ -365,7 +381,7 @@ mod tests {
         dir.flush().await.unwrap();
 
         // Reopen the dir and try to read the files.
-        let dir = Directory::open(pool, Cryptor::Null, Locator::Root)
+        let dir = Directory::open(pool, branch.clone(), Cryptor::Null, Locator::Root)
             .await
             .unwrap();
 
@@ -393,21 +409,21 @@ mod tests {
     // TODO: test update existing directory
     #[tokio::test(flavor = "multi_thread")]
     async fn add_entry_to_existing_directory() {
-        let pool = setup().await;
+        let (pool, branch) = setup().await;
 
         // Create empty directory
-        let mut dir = Directory::create(pool.clone(), Cryptor::Null, Locator::Root);
+        let mut dir = Directory::create(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root);
         dir.flush().await.unwrap();
 
         // Reopen it and add a file to it.
-        let mut dir = Directory::open(pool.clone(), Cryptor::Null, Locator::Root)
+        let mut dir = Directory::open(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root)
             .await
             .unwrap();
         let _ = dir.create_file("none.txt".into()).unwrap();
         dir.flush().await.unwrap();
 
         // Reopen it again and check the file is still there.
-        let dir = Directory::open(pool, Cryptor::Null, Locator::Root)
+        let dir = Directory::open(pool, branch.clone(), Cryptor::Null, Locator::Root)
             .await
             .unwrap();
         assert!(dir.lookup(OsStr::new("none.txt")).is_ok());
@@ -415,25 +431,27 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn remove_entry_from_existing_directory() {
-        let pool = setup().await;
+        let (pool, branch) = setup().await;
 
         let name = OsStr::new("monkey.txt");
 
         // Create a directory with a single entry.
-        let mut parent_dir = Directory::create(pool.clone(), Cryptor::Null, Locator::Root);
+        let mut parent_dir =
+            Directory::create(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root);
         let mut file = parent_dir.create_file(name.into()).unwrap();
         file.flush().await.unwrap();
         parent_dir.flush().await.unwrap();
 
         // Reopen and remove the entry
-        let mut parent_dir = Directory::open(pool.clone(), Cryptor::Null, Locator::Root)
-            .await
-            .unwrap();
+        let mut parent_dir =
+            Directory::open(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root)
+                .await
+                .unwrap();
         parent_dir.remove_entry(name).await.unwrap();
         parent_dir.flush().await.unwrap();
 
         // Reopen again and check the file was removed.
-        let parent_dir = Directory::open(pool, Cryptor::Null, Locator::Root)
+        let parent_dir = Directory::open(pool, branch.clone(), Cryptor::Null, Locator::Root)
             .await
             .unwrap();
         match parent_dir.lookup(name) {
@@ -447,12 +465,12 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn move_entry_to_same_directory() {
-        let pool = setup().await;
+        let (pool, branch) = setup().await;
 
         let src_name = OsStr::new("src.txt");
         let dst_name = OsStr::new("dst.txt");
 
-        let mut dir = Directory::create(pool.clone(), Cryptor::Null, Locator::Root);
+        let mut dir = Directory::create(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root);
 
         let mut file = dir.create_file(src_name.to_owned()).unwrap();
         let content = random_content(1024);
@@ -486,9 +504,10 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn move_entry_to_other_directory() {
-        let pool = setup().await;
+        let (pool, branch) = setup().await;
 
-        let mut root_dir = Directory::create(pool.clone(), Cryptor::Null, Locator::Root);
+        let mut root_dir =
+            Directory::create(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root);
         let mut src_dir = root_dir.create_subdirectory("src".into()).unwrap();
         let mut dst_dir = root_dir.create_subdirectory("dst".into()).unwrap();
 
@@ -534,11 +553,11 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn move_entry_to_itself() {
-        let pool = setup().await;
+        let (pool, branch) = setup().await;
 
         let name = OsStr::new("src.txt");
 
-        let mut dir = Directory::create(pool.clone(), Cryptor::Null, Locator::Root);
+        let mut dir = Directory::create(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root);
 
         let mut file = dir.create_file(name.to_owned()).unwrap();
         let content = random_content(1024);
@@ -566,12 +585,12 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn move_entry_to_existing_entry() {
-        let pool = setup().await;
+        let (pool, branch) = setup().await;
 
         let src_name = OsStr::new("src.txt");
         let dst_name = OsStr::new("dst.txt");
 
-        let mut dir = Directory::create(pool.clone(), Cryptor::Null, Locator::Root);
+        let mut dir = Directory::create(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root);
 
         let mut file = dir.create_file(src_name.to_owned()).unwrap();
         let src_content = random_content(1024);
@@ -609,10 +628,13 @@ mod tests {
         assert_ne!(read_content, dst_content);
     }
 
-    async fn setup() -> db::Pool {
+    async fn setup() -> (db::Pool, Branch) {
         let pool = db::Pool::connect(":memory:").await.unwrap();
         db::create_schema(&pool).await.unwrap();
-        pool
+        let branch = Branch::new(pool.clone(), ReplicaId::random())
+            .await
+            .unwrap();
+        (pool, branch)
     }
 
     fn random_content(len: usize) -> Vec<u8> {

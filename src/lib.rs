@@ -1,5 +1,6 @@
 pub mod crypto;
 pub mod db;
+pub mod this_replica;
 
 mod async_object;
 mod blob;
@@ -23,20 +24,13 @@ mod repository;
 mod server;
 
 pub use self::{
-    async_object::AsyncObject,
-    client::Client,
     crypto::Cryptor,
     directory::{Directory, EntryInfo, MoveDstDirectory},
     entry::{Entry, EntryType},
     error::{Error, Result},
     file::File,
     locator::Locator,
-    message::{Message, Request, Response},
-    message_broker::MessageBroker,
     network::Network,
-    object_stream::ObjectStream,
-    replica_discovery::ReplicaDiscovery,
     replica_id::ReplicaId,
     repository::Repository,
-    server::Server,
 };

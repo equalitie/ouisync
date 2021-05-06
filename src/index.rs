@@ -8,8 +8,9 @@ pub async fn init(pool: &db::Pool) -> Result<(), Error> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS branches (
              id                 INTEGER PRIMARY KEY,
-             root_block_name    BLOB NOT NULL,
-             root_block_version BLOB NOT NULL,
+             replica_id         BLOB NOT NULL,
+             root_block_name    BLOB,
+             root_block_version BLOB,
              merkle_root        BLOB NOT NULL
          );
          CREATE TABLE IF NOT EXISTS merkle_forest (

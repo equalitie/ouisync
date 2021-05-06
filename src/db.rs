@@ -1,7 +1,7 @@
 use crate::{
     block,
     error::{Error, Result},
-    index,
+    index, this_replica,
 };
 use sqlx::{
     sqlite::{Sqlite, SqliteConnectOptions},
@@ -41,5 +41,6 @@ pub async fn init(path: impl AsRef<Path>) -> Result<Pool> {
 pub async fn create_schema(pool: &Pool) -> Result<()> {
     block::init(&pool).await?;
     index::init(&pool).await?;
+    this_replica::init(&pool).await?;
     Ok(())
 }
