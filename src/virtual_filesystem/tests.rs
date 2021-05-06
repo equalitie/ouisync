@@ -1,5 +1,5 @@
 use super::*;
-use ouisync::{db, Cryptor, ReplicaId};
+use ouisync::{db, Cryptor};
 use proptest::prelude::*;
 use rand::{self, distributions::Standard, rngs::StdRng, Rng, SeedableRng};
 use std::{collections::HashMap, ffi::OsString, fs::Metadata, future::Future, io::ErrorKind};
@@ -219,7 +219,7 @@ async fn setup() -> (MountGuard, TempDir) {
     let pool = db::Pool::connect(":memory:").await.unwrap();
     db::create_schema(&pool).await.unwrap();
 
-    let repo = Repository::new(pool, ReplicaId::random(), Cryptor::Null);
+    let repo = Repository::new(pool, Cryptor::Null).await.unwrap();
     let mount_dir = tempdir().unwrap();
     let guard = super::mount(tokio::runtime::Handle::current(), repo, mount_dir.path()).unwrap();
 

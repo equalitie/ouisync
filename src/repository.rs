@@ -6,7 +6,7 @@ use crate::{
     error::{Error, Result},
     file::File,
     locator::Locator,
-    replica_id::ReplicaId,
+    this_replica,
     branch::Branch,
 };
 
@@ -19,12 +19,15 @@ pub struct Repository {
 }
 
 impl Repository {
-    pub fn new(pool: db::Pool, replica_id: ReplicaId, cryptor: Cryptor) -> Self {
-        Self {
+    pub async fn new(pool: db::Pool, cryptor: Cryptor) -> Result<Self> {
+        let replica_id = this_replica::get_or_create_id(&pool).await?;
+        let branch = Arc::new(Branch::new(replica_id));
+
+        Ok(Self {
             pool,
-            branch: Arc::new(Branch::new(replica_id)),
+            branch,
             cryptor,
-        }
+        })
     }
 
     /// Open an entry (file or directory).
