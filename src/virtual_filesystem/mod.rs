@@ -881,7 +881,8 @@ fn to_error_code(error: &Error) -> libc::c_int {
         | Error::MalformedData
         | Error::MalformedDirectory(_)
         | Error::WrongBlockLength(_)
-        | Error::Crypto => libc::EIO,
+        | Error::Crypto
+        | Error::CreateRuntime(_) => libc::EIO,
         Error::BlockIdNotFound | Error::BlockNotFound(_) | Error::EntryNotFound => libc::ENOENT,
         Error::EntryExists => libc::EEXIST,
         Error::EntryNotDirectory => libc::ENOTDIR,

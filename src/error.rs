@@ -44,6 +44,8 @@ pub enum Error {
     DirectoryNotEmpty,
     #[error("operation is not supported")]
     OperationNotSupported,
+    #[error("failed to create runtime")]
+    CreateRuntime(#[source] io::Error),
 }
 
 impl From<TryFromSliceError> for Error {
