@@ -892,7 +892,7 @@ fn to_error_code(error: &Error) -> libc::c_int {
         Error::EntryExists => libc::EEXIST,
         Error::EntryNotDirectory => libc::ENOTDIR,
         Error::EntryIsDirectory => libc::EISDIR,
-        Error::WrongOffset => libc::EINVAL,
+        Error::WrongOffset | Error::InvalidUtf8(_) => libc::EINVAL,
         Error::DirectoryNotEmpty => libc::ENOTEMPTY,
         Error::OperationNotSupported => libc::ENOSYS,
     }
