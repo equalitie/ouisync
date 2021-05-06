@@ -924,6 +924,6 @@ mod tests {
     }
 
     async fn init_db() -> db::Pool {
-        db::init_in_memory().await.unwrap()
+        db::init(db::Store::Memory).await.unwrap()
     }
 }

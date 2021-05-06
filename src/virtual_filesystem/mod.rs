@@ -886,13 +886,12 @@ fn to_error_code(error: &Error) -> libc::c_int {
         | Error::MalformedData
         | Error::MalformedDirectory(_)
         | Error::WrongBlockLength(_)
-        | Error::Crypto
-        | Error::CreateRuntime(_) => libc::EIO,
+        | Error::Crypto => libc::EIO,
         Error::BlockIdNotFound | Error::BlockNotFound(_) | Error::EntryNotFound => libc::ENOENT,
         Error::EntryExists => libc::EEXIST,
         Error::EntryNotDirectory => libc::ENOTDIR,
         Error::EntryIsDirectory => libc::EISDIR,
-        Error::WrongOffset | Error::InvalidUtf8(_) => libc::EINVAL,
+        Error::WrongOffset => libc::EINVAL,
         Error::DirectoryNotEmpty => libc::ENOTEMPTY,
         Error::OperationNotSupported => libc::ENOSYS,
     }

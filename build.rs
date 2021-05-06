@@ -11,7 +11,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             language: cbindgen::Language::C,
             ..Default::default()
         })
-        .with_src(project_dir.join("src").join("ffi.rs"))
+        .with_src(project_dir.join("src").join("ffi").join("mod.rs"))
+        .exclude_item("DartCObject")
+        .exclude_item("DartCObjectType")
+        .exclude_item("DartCObjectValue")
         .generate()?
         .write_to_file(
             project_dir

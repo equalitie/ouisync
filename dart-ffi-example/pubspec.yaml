@@ -13,7 +13,7 @@ dev_dependencies:
   pedantic: ^1.11.0
 
 ffigen:
-    name: 'OuisyncBindings'
+    name: 'Bindings'
     description: 'Bindings to the ouisync library'
     output: 'gen/ouisync_bindings.dart'
     headers:
@@ -21,3 +21,6 @@ ffigen:
             - '../target/ouisync_bindings.h'
         include-directives:
             - '**ouisync_bindings.h'
+
+
+

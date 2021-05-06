@@ -148,7 +148,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn lookup() {
-        let pool = db::init_in_memory().await.unwrap();
+        let pool = db::init(db::Store::Memory).await.unwrap();
         let repo = Repository::new(pool, Cryptor::Null).await.unwrap();
 
         let mut root_dir = repo.open_directory_by_locator(Locator::Root).await.unwrap();

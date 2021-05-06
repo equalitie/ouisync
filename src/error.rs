@@ -44,10 +44,6 @@ pub enum Error {
     DirectoryNotEmpty,
     #[error("operation is not supported")]
     OperationNotSupported,
-    #[error("failed to create runtime")]
-    CreateRuntime(#[source] io::Error),
-    #[error("not a valid utf-8 encoded string")]
-    InvalidUtf8(#[from] std::str::Utf8Error),
 }
 
 impl From<TryFromSliceError> for Error {

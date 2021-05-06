@@ -629,7 +629,7 @@ mod tests {
     }
 
     async fn setup() -> (db::Pool, Branch) {
-        let pool = db::init_in_memory().await.unwrap();
+        let pool = db::init(db::Store::Memory).await.unwrap();
         let branch = Branch::new(pool.clone(), ReplicaId::random())
             .await
             .unwrap();
