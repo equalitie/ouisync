@@ -1,4 +1,4 @@
-use crate::{block, error::Error, index};
+use crate::{block, error::Error, index, this_replica};
 use sqlx::{
     sqlite::{Sqlite, SqliteConnectOptions},
     SqlitePool,
@@ -31,6 +31,7 @@ pub async fn init(path: impl AsRef<Path>) -> Result<Pool, Error> {
     // Create the schema
     block::init(&pool).await?;
     index::init(&pool).await?;
+    this_replica::init(&pool).await?;
 
     Ok(pool)
 }

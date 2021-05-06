@@ -3,7 +3,7 @@ mod virtual_filesystem;
 
 use self::options::Options;
 use anyhow::Result;
-use ouisync::{db, Network};
+use ouisync::{db, this_replica, Network};
 use structopt::StructOpt;
 use tokio::signal;
 
@@ -13,7 +13,9 @@ async fn main() -> Result<()> {
 
     env_logger::init();
 
-    let _pool = db::init(options.db_path()?).await?;
+    let pool = db::init(options.db_path()?).await?;
+
+    let _replica_id = this_replica::get_or_create_id(&pool).await?;
 
     let _network = Network::new(options.enable_local_discovery);
 
