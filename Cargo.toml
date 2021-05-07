@@ -16,6 +16,7 @@ chacha20poly1305 = { version = "0.7.1" }
 dirs = "3.0.1"
 env_logger = "0.8.3"
 futures = "0.3.14"
+async-recursion = "0.3.2"
 log = "0.4.14"
 net2 = "0.2" # To be able to setsockopts before a socket is bound
 rand = "0.8.3"

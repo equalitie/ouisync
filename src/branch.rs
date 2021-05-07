@@ -8,6 +8,7 @@ use crate::{
     error::{Error, Result},
     replica_id::ReplicaId,
 };
+use async_recursion::async_recursion;
 use sha3::{Digest, Sha3_256};
 use sqlx::{sqlite::SqliteRow, Row};
 use std::{convert::TryFrom, sync::Arc};
@@ -122,7 +123,7 @@ impl Branch {
         &self,
         tx: &mut db::Transaction,
         block_id: &BlockId,
-        encoded_locator: &Hash,
+        encoded_locator: &LocatorHash,
     ) -> Result<()> {
         let mut lock = self.lock().await;
 
@@ -163,7 +164,7 @@ impl Branch {
         &self,
         tx: &mut db::Transaction,
         merkle_root: &Hash,
-        encoded_locator: &Hash,
+        encoded_locator: &LocatorHash,
     ) -> Result<PathWithSiblings> {
         let mut path = PathWithSiblings::new(&merkle_root, *encoded_locator);
 
@@ -176,15 +177,15 @@ impl Branch {
         let mut parent = path.root;
 
         for level in 0..INNER_LAYER_COUNT {
-            let children = sqlx::query("SELECT bucket, child FROM merkle_forest WHERE parent = ?")
+            let children = sqlx::query("SELECT bucket, node FROM merkle_forest WHERE parent = ?")
                 .bind(parent.as_ref())
                 .fetch_all(&mut *tx)
                 .await?;
 
             for ref row in children {
                 let bucket: u32 = row.get(0);
-                let child = column::<Hash>(row, 1)?;
-                path.inner[level][bucket as usize] = child;
+                let node = column::<Hash>(row, 1)?;
+                path.inner[level][bucket as usize] = node;
             }
 
             parent = path.inner[level][path.get_bucket(level)];
@@ -196,7 +197,7 @@ impl Branch {
             path.layers_found += 1;
         }
 
-        let children = sqlx::query("SELECT child FROM merkle_forest WHERE parent = ?")
+        let children = sqlx::query("SELECT node FROM merkle_forest WHERE parent = ?")
             .bind(parent.as_ref())
             .fetch_all(&mut *tx)
             .await?;
@@ -233,7 +234,7 @@ impl Branch {
 
             for (bucket, ref hash) in inner_layer.iter().enumerate() {
                 // XXX: It should be possible to insert multiple rows at once.
-                sqlx::query("INSERT INTO merkle_forest (parent, bucket, child) VALUES (?, ?, ?)")
+                sqlx::query("INSERT INTO merkle_forest (parent, bucket, node) VALUES (?, ?, ?)")
                     .bind(parent_hash.as_ref())
                     .bind(bucket as u16)
                     .bind(hash.as_ref())
@@ -248,7 +249,7 @@ impl Branch {
         for (ref l, ref block_id) in &path.leafs {
             let blob = serialize_leaf(l, block_id);
 
-            sqlx::query("INSERT INTO merkle_forest (parent, bucket, child) VALUES (?, ?, ?)")
+            sqlx::query("INSERT INTO merkle_forest (parent, bucket, node) VALUES (?, ?, ?)")
                 .bind(parent_hash.as_ref())
                 .bind(u16::MAX)
                 .bind(blob)
@@ -267,7 +268,7 @@ impl Branch {
         lock: &mut Lock<'_>,
         root: &Hash,
     ) -> Result<()> {
-        lock.branch_id = sqlx::query(
+        let new_id = sqlx::query(
             "INSERT INTO branches(replica_id, root_block_name, root_block_version, merkle_root)
              SELECT replica_id, root_block_name, root_block_version, ? FROM branches
              WHERE id=? RETURNING id;",
@@ -279,6 +280,14 @@ impl Branch {
         .unwrap()
         .unwrap()
         .get(0);
+
+        MerkleNode::Root {
+            root: *root,
+            branch_id: lock.branch_id,
+        }
+        .remove_recursive(tx)
+        .await?;
+        lock.branch_id = new_id;
 
         Ok(())
     }
@@ -295,6 +304,144 @@ impl Branch {
     }
 }
 
+enum MerkleNode {
+    Root {
+        root: Hash,
+        branch_id: BranchId,
+    },
+    Inner {
+        node: Hash,
+        parent: Hash,
+    },
+    Leaf {
+        node: (LocatorHash, BlockId),
+        parent: Hash,
+    },
+}
+
+impl MerkleNode {
+    #[async_recursion]
+    async fn remove_recursive(&self, tx: &mut db::Transaction) -> Result<()> {
+        self.remove_single(tx).await?;
+
+        if self.is_dangling(tx).await? {
+            return Ok(());
+        }
+
+        for child in self.children(tx).await? {
+            child.remove_recursive(tx).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn remove_single(&self, tx: &mut db::Transaction) -> Result<()> {
+        match self {
+            MerkleNode::Root { root: _, branch_id } => {
+                sqlx::query("DELETE FROM branches WHERE id = ?")
+                    .bind(branch_id)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+            MerkleNode::Inner { node, parent } => {
+                sqlx::query("DELETE FROM merkle_forest WHERE parent = ?, node = ?")
+                    .bind(parent.as_ref())
+                    .bind(node.as_ref())
+                    .execute(&mut *tx)
+                    .await?;
+            }
+            MerkleNode::Leaf { node, parent } => {
+                let blob = serialize_leaf(&node.0, &node.1);
+                sqlx::query("DELETE FROM merkle_forest WHERE parent = ?, node = ?")
+                    .bind(parent.as_ref())
+                    .bind(blob)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Return true if there is nothing that references this node
+    async fn is_dangling(&self, tx: &mut db::Transaction) -> Result<bool> {
+        let r = match self {
+            MerkleNode::Root { root, branch_id: _ } => {
+                sqlx::query("SELECT 0 FROM branches WHERE merkle_root = ? LIMIT 1")
+                    .bind(root.as_ref())
+                    .fetch_optional(&mut *tx)
+                    .await?
+                    .is_some()
+            }
+            MerkleNode::Inner { node, parent } => {
+                sqlx::query("SELECT 0 FROM merkle_forest WHERE parent=?, node=? LIMIT 1")
+                    .bind(parent.as_ref())
+                    .bind(node.as_ref())
+                    .fetch_optional(&mut *tx)
+                    .await?
+                    .is_some()
+            }
+            MerkleNode::Leaf { node, parent } => {
+                let blob = serialize_leaf(&node.0, &node.1);
+                sqlx::query("SELECT 0 FROM merkle_forest WHERE parent=?, node=? LIMIT 1")
+                    .bind(parent.as_ref())
+                    .bind(blob)
+                    .fetch_optional(&mut *tx)
+                    .await?
+                    .is_some()
+            }
+        };
+
+        Ok(r)
+    }
+
+    async fn children(&self, tx: &mut db::Transaction) -> Result<Vec<MerkleNode>> {
+        match self {
+            MerkleNode::Root { root, branch_id: _ } => {
+                sqlx::query("SELECT node, parent FROM merkle_root WHERE parent=?;")
+                    .bind(root.as_ref())
+                    .fetch_all(&mut *tx)
+                    .await?
+                    .iter()
+                    .map(|row| {
+                        if INNER_LAYER_COUNT > 0 {
+                            Self::row_to_inner(row)
+                        } else {
+                            Self::row_to_leaf(row)
+                        }
+                    })
+                    .collect()
+            }
+            MerkleNode::Inner { node, parent: _ } => {
+                sqlx::query("SELECT node, parent FROM merkle_forest WHERE parent=?;")
+                    .bind(node.as_ref())
+                    .fetch_all(&mut *tx)
+                    .await?
+                    .iter()
+                    .map(Self::row_to_leaf)
+                    .collect()
+            }
+            MerkleNode::Leaf { node: _, parent: _ } => {
+                unimplemented!();
+            }
+        }
+    }
+
+    fn row_to_inner(row: &SqliteRow) -> Result<MerkleNode> {
+        Ok(MerkleNode::Inner {
+            node: column::<Hash>(row, 0)?,
+            parent: column::<Hash>(row, 1)?,
+        })
+    }
+
+    fn row_to_leaf(row: &SqliteRow) -> Result<MerkleNode> {
+        Ok(MerkleNode::Leaf {
+            node: deserialize_leaf(row.get(0))?,
+            parent: column::<Hash>(row, 1)?,
+        })
+    }
+}
+
 fn serialize_leaf(locator: &Hash, block_id: &BlockId) -> Vec<u8> {
     locator
         .as_ref()
@@ -305,7 +452,7 @@ fn serialize_leaf(locator: &Hash, block_id: &BlockId) -> Vec<u8> {
         .collect()
 }
 
-fn deserialize_leaf(blob: &[u8]) -> Result<(Hash, BlockId)> {
+fn deserialize_leaf(blob: &[u8]) -> Result<(LocatorHash, BlockId)> {
     let (b1, b2) = blob.split_at(std::mem::size_of::<Hash>());
     let (b2, b3) = b2.split_at(std::mem::size_of::<BlockName>());
     let l = Hash::try_from(b1)?;

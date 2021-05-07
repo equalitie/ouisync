@@ -18,10 +18,10 @@ pub async fn init(pool: &db::Pool) -> Result<(), Error> {
              parent  BLOB NOT NULL,
              bucket  INTEGER,
              /*
-              * Child is a hash calculated from its children (as the `parent` is), or - if this is
-              * a leaf layer - child is a blob serialized from the locator hash and BlockId
+              * Node is a hash calculated from its children (as the `parent` is), or - if this is
+              * a leaf layer - node is a blob serialized from the locator hash and BlockId
               */
-             child   BLOB NOT NULL
+             node BLOB NOT NULL
          );",
     )
     .execute(pool)
