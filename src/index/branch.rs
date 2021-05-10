@@ -338,7 +338,7 @@ impl BranchNode {
                     .await?;
             }
             BranchNode::Inner { node, parent } => {
-                sqlx::query("DELETE FROM branch_forest WHERE parent = ?, node = ?")
+                sqlx::query("DELETE FROM branch_forest WHERE parent = ? AND node = ?")
                     .bind(parent.as_ref())
                     .bind(node.as_ref())
                     .execute(&mut *tx)
@@ -346,7 +346,7 @@ impl BranchNode {
             }
             BranchNode::Leaf { node, parent } => {
                 let blob = serialize_leaf(&node.0, &node.1);
-                sqlx::query("DELETE FROM branch_forest WHERE parent = ?, node = ?")
+                sqlx::query("DELETE FROM branch_forest WHERE parent = ? AND node = ?")
                     .bind(parent.as_ref())
                     .bind(blob)
                     .execute(&mut *tx)
@@ -368,18 +368,16 @@ impl BranchNode {
                 .fetch_optional(&mut *tx)
                 .await?
                 .is_some(),
-            BranchNode::Inner { node, parent } => {
-                sqlx::query("SELECT 0 FROM branch_forest WHERE parent=?, node=? LIMIT 1")
-                    .bind(parent.as_ref())
+            BranchNode::Inner { node, parent: _ } => {
+                sqlx::query("SELECT 0 FROM branch_forest WHERE node=? LIMIT 1")
                     .bind(node.as_ref())
                     .fetch_optional(&mut *tx)
                     .await?
                     .is_some()
             }
-            BranchNode::Leaf { node, parent } => {
+            BranchNode::Leaf { node, parent: _ } => {
                 let blob = serialize_leaf(&node.0, &node.1);
-                sqlx::query("SELECT 0 FROM branch_forest WHERE parent=?, node=? LIMIT 1")
-                    .bind(parent.as_ref())
+                sqlx::query("SELECT 0 FROM branch_forest WHERE node=? LIMIT 1")
                     .bind(blob)
                     .fetch_optional(&mut *tx)
                     .await?
