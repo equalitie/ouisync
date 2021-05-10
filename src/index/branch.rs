@@ -83,7 +83,6 @@ impl Branch {
         encoded_locator: &LocatorHash,
     ) -> Result<()> {
         let mut lock = self.lock().await;
-
         let mut path = self.get_path(tx, &lock.branch_root, &encoded_locator).await?;
 
         // We shouldn't be inserting a block to a branch twice. If we do, the assumption is that we
@@ -92,9 +91,7 @@ impl Branch {
         assert!(!path.has_leaf(block_id));
 
         path.insert_leaf(&block_id);
-        self.write_path(tx, &mut lock, &path).await?;
-
-        Ok(())
+        self.write_path(tx, &mut lock, &path).await
     }
 
     /// Insert the root block into the index
@@ -121,6 +118,19 @@ impl Branch {
     /// Get the root block from the index.
     pub async fn get_root(&self, tx: &mut db::Transaction) -> Result<BlockId> {
         self.get(tx, &Hash::null()).await
+    }
+
+    /// Remove the block identified by encoded_locator from the index
+    pub async fn remove(&self, tx: &mut db::Transaction, encoded_locator: &Hash) -> Result<()> {
+        let mut lock = self.lock().await;
+        let mut path = self.get_path(tx, &lock.branch_root, encoded_locator).await?;
+        path.remove_leaf(encoded_locator);
+        self.write_path(tx, &mut lock, &path).await
+    }
+
+    /// Remove the root block from the index
+    pub async fn remove_root(&self, tx: &mut db::Transaction) -> Result<()> {
+        self.remove(tx, &Hash::null()).await
     }
 
     async fn get_path(
@@ -165,7 +175,7 @@ impl Branch {
             .fetch_all(&mut *tx)
             .await?;
 
-        path.leafs.reserve(children.len());
+        path.leaves.reserve(children.len());
 
         let mut found_leaf = false;
 
@@ -174,14 +184,14 @@ impl Branch {
             if *encoded_locator == locator {
                 found_leaf = true;
             }
-            path.leafs.push((locator, block_id));
+            path.leaves.push((locator, block_id));
         }
 
         if found_leaf {
             path.layers_found += 1;
         }
 
-        path.leafs.sort();
+        path.leaves.sort();
 
         Ok(path)
     }
@@ -209,7 +219,7 @@ impl Branch {
         let layer = PathWithSiblings::total_layer_count() - 1;
         let parent_hash = path.hash_at_layer(layer - 1);
 
-        for (ref l, ref block_id) in &path.leafs {
+        for (ref l, ref block_id) in &path.leaves {
             let blob = serialize_leaf(l, block_id);
 
             sqlx::query("INSERT INTO branch_forest (parent, bucket, node) VALUES (?, ?, ?)")
@@ -220,9 +230,7 @@ impl Branch {
                 .await?;
         }
 
-        self.write_branch_root(tx, lock, &path.root).await?;
-
-        Ok(())
+        self.write_branch_root(tx, lock, &path.root).await
     }
 
     async fn write_branch_root(
@@ -446,7 +454,7 @@ struct PathWithSiblings {
     root: Hash,
     inner: [InnerChildren; INNER_LAYER_COUNT],
     /// Note: this vector must be sorted to guarantee unique hashing.
-    leafs: Vec<(LocatorHash, BlockId)>,
+    leaves: Vec<(LocatorHash, BlockId)>,
 }
 
 impl PathWithSiblings {
@@ -456,19 +464,19 @@ impl PathWithSiblings {
             layers_found: 0,
             root: *root,
             inner: [[Hash::null(); MAX_INNER_NODE_CHILD_COUNT]; INNER_LAYER_COUNT], //Default::default(),
-            leafs: Vec::new(),
+            leaves: Vec::new(),
         }
     }
 
     fn get_leaf(&self, encoded_locator: &LocatorHash) -> Option<BlockId> {
-        self.leafs
+        self.leaves
             .iter()
             .find(|(ref l, ref _v)| l == encoded_locator)
             .map(|p| p.1)
     }
 
     fn has_leaf(&self, block_id: &BlockId) -> bool {
-        self.leafs.iter().any(|(_l, id)| id == block_id)
+        self.leaves.iter().any(|(_l, id)| id == block_id)
     }
 
     // Found root and all inner nodes.
@@ -477,7 +485,7 @@ impl PathWithSiblings {
     }
 
     fn total_layer_count() -> usize {
-        1 /* root */ + INNER_LAYER_COUNT + 1 /* leafs */
+        1 /* root */ + INNER_LAYER_COUNT + 1 /* leaves */
     }
 
     fn hash_at_layer(&self, layer: usize) -> Hash {
@@ -497,7 +505,7 @@ impl PathWithSiblings {
 
         let mut modified = false;
 
-        for leaf in &mut self.leafs {
+        for leaf in &mut self.leaves {
             if leaf.0 == self.encoded_locator {
                 modified = true;
                 leaf.1 = *block_id;
@@ -507,11 +515,69 @@ impl PathWithSiblings {
 
         if !modified {
             // XXX: This can be done better.
-            self.leafs.push((self.encoded_locator, *block_id));
-            self.leafs.sort();
+            self.leaves.push((self.encoded_locator, *block_id));
+            self.leaves.sort();
         }
 
-        for inner_layer in (0..INNER_LAYER_COUNT).rev() {
+        self.recalculate(INNER_LAYER_COUNT);
+    }
+
+    fn remove_leaf(&mut self, encoded_locator: &LocatorHash) {
+        let mut changed = false;
+
+        self.leaves = self.leaves
+            .iter()
+            .filter(|l| {
+                let keep = l.0 != *encoded_locator;
+                if !keep { changed = true; }
+                keep
+            })
+            .cloned()
+            .collect();
+
+        if !changed {
+            return;
+        }
+
+        if !self.leaves.is_empty() {
+            self.recalculate(INNER_LAYER_COUNT);
+            return;
+        }
+
+        if INNER_LAYER_COUNT > 0 {
+            self.remove_from_inner_layer(INNER_LAYER_COUNT - 1);
+        } else {
+            self.remove_root_layer();
+        }
+    }
+
+    fn remove_from_inner_layer(&mut self, inner_layer: usize) {
+        let null = Hash::null();
+        let bucket = self.get_bucket(inner_layer);
+
+        self.inner[inner_layer][bucket] = null;
+
+        let is_empty = self.inner[inner_layer].iter().all(|x| x == &null);
+
+        if !is_empty {
+            self.recalculate(inner_layer - 1);
+            return;
+        }
+
+        if inner_layer > 0 {
+            self.remove_from_inner_layer(inner_layer - 1);
+        } else {
+            self.remove_root_layer();
+        }
+    }
+
+    fn remove_root_layer(&mut self) {
+        self.root = Hash::null();
+    }
+
+    /// Recalculate layers from start_layer all the way to the root.
+    fn recalculate(&mut self, start_layer: usize) {
+        for inner_layer in (0..start_layer).rev() {
             let hash = self.compute_hash_for_layer(inner_layer + 1);
             self.inner[inner_layer][self.get_bucket(inner_layer)] = hash;
         }
@@ -523,7 +589,7 @@ impl PathWithSiblings {
     // computed/assigned.
     fn compute_hash_for_layer(&self, layer: usize) -> Hash {
         if layer == INNER_LAYER_COUNT {
-            hash_leafs(&self.leafs)
+            hash_leafs(&self.leaves)
         } else {
             hash_inner(&self.inner[layer])
         }
@@ -534,11 +600,11 @@ impl PathWithSiblings {
     }
 }
 
-fn hash_leafs(leafs: &[(LocatorHash, BlockId)]) -> Hash {
+fn hash_leafs(leaves: &[(LocatorHash, BlockId)]) -> Hash {
     let mut hash = Sha3_256::new();
     // XXX: Is updating with length enough to prevent attaks?
-    hash.update((leafs.len() as u32).to_le_bytes());
-    for (ref l, ref id) in leafs {
+    hash.update((leaves.len() as u32).to_le_bytes());
+    for (ref l, ref id) in leaves {
         hash.update(l);
         hash.update(id.name);
         hash.update(id.version);
@@ -618,6 +684,38 @@ mod tests {
             let r = branch.get(&mut tx, &encoded_locator).await.unwrap();
 
             assert_eq!(r, b2);
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn remove_locator() {
+        let pool = init_db().await;
+        let branch = Branch::new(pool.clone(), ReplicaId::random())
+            .await
+            .unwrap();
+
+        let b = BlockId::random();
+
+        let locator = Locator::Head(b.name, 0);
+
+        let encoded_locator = locator.encode(&Cryptor::Null).unwrap();
+
+        let mut tx = pool.begin().await.unwrap();
+
+        {
+            branch.insert(&mut tx, &b, &encoded_locator).await.unwrap();
+            let r = branch.get(&mut tx, &encoded_locator).await.unwrap();
+            assert_eq!(r, b);
+        }
+
+        {
+            branch.remove(&mut tx, &encoded_locator).await.unwrap();
+
+            match branch.get(&mut tx, &encoded_locator).await {
+                Err(Error::BlockIdNotFound) => { /* OK */ }
+                Err(_) => { panic!("Error should have been BlockIdNotFound"); }
+                Ok(_) => { panic!("Branch shouldn't have contained the block ID"); }
+            }
         }
     }
 
