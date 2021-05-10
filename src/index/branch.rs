@@ -519,22 +519,65 @@ impl PathWithSiblings {
             self.leaves.sort();
         }
 
-        self.recalculate();
+        self.recalculate(INNER_LAYER_COUNT);
     }
 
     fn remove_leaf(&mut self, encoded_locator: &LocatorHash) {
-        // TODO: Remove from parent if self.leaves ends up empty after this operation.
+        let mut changed = false;
+
         self.leaves = self.leaves
             .iter()
-            .filter(|l| l.0 != *encoded_locator)
+            .filter(|l| {
+                let keep = l.0 != *encoded_locator;
+                if !keep { changed = true; }
+                keep
+            })
             .cloned()
             .collect();
 
-        self.recalculate();
+        if !changed {
+            return;
+        }
+
+        if !self.leaves.is_empty() {
+            self.recalculate(INNER_LAYER_COUNT);
+            return;
+        }
+
+        if INNER_LAYER_COUNT > 0 {
+            self.remove_from_inner_layer(INNER_LAYER_COUNT - 1);
+        } else {
+            self.remove_root_layer();
+        }
     }
 
-    fn recalculate(&mut self) {
-        for inner_layer in (0..INNER_LAYER_COUNT).rev() {
+    fn remove_from_inner_layer(&mut self, inner_layer: usize) {
+        let null = Hash::null();
+        let bucket = self.get_bucket(inner_layer);
+
+        self.inner[inner_layer][bucket] = null;
+
+        let is_empty = self.inner[inner_layer].iter().all(|x| x == &null);
+
+        if !is_empty {
+            self.recalculate(inner_layer - 1);
+            return;
+        }
+
+        if inner_layer > 0 {
+            self.remove_from_inner_layer(inner_layer - 1);
+        } else {
+            self.remove_root_layer();
+        }
+    }
+
+    fn remove_root_layer(&mut self) {
+        self.root = Hash::null();
+    }
+
+    /// Recalculate layers from start_layer all the way to the root.
+    fn recalculate(&mut self, start_layer: usize) {
+        for inner_layer in (0..start_layer).rev() {
             let hash = self.compute_hash_for_layer(inner_layer + 1);
             self.inner[inner_layer][self.get_bucket(inner_layer)] = hash;
         }
