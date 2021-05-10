@@ -7,7 +7,7 @@ use crate::{
 pub async fn init(pool: &db::Pool) -> Result<(), Error> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS branches (
-             id                 INTEGER PRIMARY KEY,
+             snapshot_id        INTEGER PRIMARY KEY,
              replica_id         BLOB NOT NULL,
              root_block_name    BLOB,
              root_block_version BLOB,
