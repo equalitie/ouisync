@@ -5,7 +5,6 @@ pub mod this_replica;
 mod async_object;
 mod blob;
 mod block;
-mod branch;
 mod client;
 mod directory;
 mod entry;

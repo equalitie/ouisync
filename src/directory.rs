@@ -1,6 +1,6 @@
 use crate::{
     blob::Blob,
-    branch::Branch,
+    index::Branch,
     crypto::Cryptor,
     db,
     entry::{Entry, EntryType},

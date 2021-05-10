@@ -1,5 +1,5 @@
 use crate::{
-    branch::Branch,
+    index::Branch,
     crypto::Cryptor,
     db,
     directory::Directory,

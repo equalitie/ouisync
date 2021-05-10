@@ -1,6 +1,12 @@
+mod branch;
+
 use crate::{
     db,
     error::{Error, Result},
+};
+
+pub use self::{
+    branch::Branch,
 };
 
 /// Initializes the index. Creates the required database schema unless already exists.

@@ -1,6 +1,6 @@
 use crate::{
     block::{self, BlockId, BlockName, BlockVersion, BLOCK_SIZE},
-    branch::Branch,
+    index::Branch,
     crypto::{AuthTag, Cryptor, NonceSequence},
     db,
     error::Result,
