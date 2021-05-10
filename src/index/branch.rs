@@ -24,6 +24,7 @@ type Lock<'a> = MutexGuard<'a, State>;
 
 struct State {
     snapshot_id: SnapshotId,
+    branch_root: Hash,
 }
 
 pub struct Branch {
@@ -35,28 +36,34 @@ impl Branch {
     pub async fn new(pool: db::Pool, replica_id: ReplicaId) -> Result<Self> {
         let mut conn = pool.acquire().await?;
 
-        let snapshot_id = match sqlx::query(
-            "SELECT snapshot_id FROM branches WHERE replica_id=? ORDER BY snapshot_id DESC LIMIT 1",
+        let (snapshot_id, branch_root) = match sqlx::query(
+            "SELECT snapshot_id, branch_root FROM branches WHERE replica_id=? ORDER BY snapshot_id DESC LIMIT 1",
         )
         .bind(replica_id.as_ref())
         .fetch_optional(&mut conn)
         .await?
         {
-            Some(row) => row.get(0),
-            None => sqlx::query(
-                "INSERT INTO branches(replica_id, branch_root)
-                         VALUES (?, ?) RETURNING snapshot_id;",
-            )
-            .bind(replica_id.as_ref())
-            .bind(Hash::null().as_ref())
-            .fetch_optional(&mut conn)
-            .await?
-            .unwrap()
-            .get(0),
+            Some(row) => {
+                (row.get(0), column::<Hash>(&row, 1)?)
+            },
+            None => {
+                let snapshot_id = sqlx::query(
+                    "INSERT INTO branches(replica_id, branch_root)
+                             VALUES (?, ?) RETURNING snapshot_id;",
+                )
+                .bind(replica_id.as_ref())
+                .bind(Hash::null().as_ref())
+                .fetch_optional(&mut conn)
+                .await?
+                .unwrap()
+                .get(0);
+
+                (snapshot_id, Hash::null())
+            }
         };
 
         Ok(Self {
-            state: Arc::new(Mutex::new(State { snapshot_id })),
+            state: Arc::new(Mutex::new(State { snapshot_id, branch_root })),
             replica_id,
         })
     }
@@ -77,9 +84,7 @@ impl Branch {
     ) -> Result<()> {
         let mut lock = self.lock().await;
 
-        let branch_root = self.load_branch_root(tx, &lock).await?;
-
-        let mut path = self.get_path(tx, &branch_root, &encoded_locator).await?;
+        let mut path = self.get_path(tx, &lock.branch_root, &encoded_locator).await?;
 
         // We shouldn't be inserting a block to a branch twice. If we do, the assumption is that we
         // hit one in 2^sizeof(BlockVersion) chance that we randomly generated the same
@@ -92,27 +97,25 @@ impl Branch {
         Ok(())
     }
 
+    /// Insert the root block into the index
+    pub async fn insert_root(&self, tx: &mut db::Transaction, block_id: &BlockId) -> Result<()> {
+        self.insert(tx, block_id, &Hash::null()).await
+    }
+
     /// Retrieve `BlockId` of a block with the given encoded `Locator`.
     pub async fn get(&self, tx: &mut db::Transaction, encoded_locator: &Hash) -> Result<BlockId> {
         let lock = self.lock().await;
 
-        let branch_root = self.load_branch_root(tx, &lock).await?;
-
-        if branch_root.is_null() {
+        if lock.branch_root.is_null() {
             return Err(Error::BlockIdNotFound);
         }
 
-        let path = self.get_path(tx, &branch_root, &encoded_locator).await?;
+        let path = self.get_path(tx, &lock.branch_root, &encoded_locator).await?;
 
         match path.get_leaf(encoded_locator) {
             Some(block_id) => Ok(block_id),
             None => Err(Error::BlockIdNotFound),
         }
-    }
-
-    /// Insert the root block into the index
-    pub async fn insert_root(&self, tx: &mut db::Transaction, block_id: &BlockId) -> Result<()> {
-        self.insert(tx, block_id, &Hash::null()).await
     }
 
     /// Get the root block from the index.
@@ -243,19 +246,9 @@ impl Branch {
 
         self.remove_branch(lock.snapshot_id, root, tx).await?;
         lock.snapshot_id = new_id;
+        lock.branch_root = *root;
 
         Ok(())
-    }
-
-    async fn load_branch_root(&self, tx: &mut db::Transaction, lock: &Lock<'_>) -> Result<Hash> {
-        match sqlx::query("SELECT branch_root FROM branches WHERE snapshot_id=? LIMIT 1")
-            .bind(lock.snapshot_id)
-            .fetch_optional(tx)
-            .await?
-        {
-            Some(row) => Ok(column::<Hash>(&row, 0)?),
-            None => Ok(Hash::null()),
-        }
     }
 
     async fn remove_branch(
