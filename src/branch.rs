@@ -76,18 +76,23 @@ impl Branch {
     pub async fn insert_root(&self, tx: &mut db::Transaction, block_id: &BlockId) -> Result<()> {
         let mut lock = self.lock().await;
 
-        lock.branch_id = sqlx::query(
+        let row = sqlx::query(
             "INSERT INTO branches(replica_id, root_block_name, root_block_version, merkle_root)
-             SELECT replica_id, ?, ?, merkle_root FROM branches WHERE id = ? RETURNING id",
+             SELECT replica_id, ?, ?, merkle_root FROM branches WHERE id = ? RETURNING id, merkle_root",
         )
         .bind(block_id.name.as_ref())
         .bind(block_id.version.as_ref())
         .bind(lock.branch_id)
-        .fetch_optional(tx)
+        .fetch_optional(&mut *tx)
         .await
         .unwrap()
-        .unwrap()
-        .get(0);
+        .unwrap();
+
+        let new_id = row.get(0);
+        let root = column::<Hash>(&row, 1)?;
+
+        self.remove_branch(lock.branch_id, &root, tx).await?;
+        lock.branch_id = new_id;
 
         Ok(())
     }
@@ -281,12 +286,7 @@ impl Branch {
         .unwrap()
         .get(0);
 
-        MerkleNode::Root {
-            root: *root,
-            branch_id: lock.branch_id,
-        }
-        .remove_recursive(tx)
-        .await?;
+        self.remove_branch(lock.branch_id, root, tx).await?;
         lock.branch_id = new_id;
 
         Ok(())
@@ -301,6 +301,20 @@ impl Branch {
             Some(row) => Ok(column::<Hash>(&row, 0)?),
             None => Ok(Hash::null()),
         }
+    }
+
+    async fn remove_branch(
+        &self,
+        branch_id: BranchId,
+        root: &Hash,
+        tx: &mut db::Transaction,
+    ) -> Result<()> {
+        MerkleNode::Root {
+            root: *root,
+            branch_id,
+        }
+        .remove_recursive(tx)
+        .await
     }
 }
 
