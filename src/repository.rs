@@ -1,11 +1,11 @@
 use crate::{
-    index::Branch,
     crypto::Cryptor,
     db,
     directory::Directory,
     entry::{Entry, EntryType},
     error::{Error, Result},
     file::File,
+    index::Branch,
     locator::Locator,
     this_replica,
 };

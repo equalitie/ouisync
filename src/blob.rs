@@ -1,9 +1,9 @@
 use crate::{
     block::{self, BlockId, BlockName, BlockVersion, BLOCK_SIZE},
-    index::Branch,
     crypto::{AuthTag, Cryptor, NonceSequence},
     db,
     error::Result,
+    index::Branch,
     locator::Locator,
 };
 use std::{

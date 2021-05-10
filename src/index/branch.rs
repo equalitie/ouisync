@@ -63,7 +63,10 @@ impl Branch {
         };
 
         Ok(Self {
-            state: Arc::new(Mutex::new(State { snapshot_id, branch_root })),
+            state: Arc::new(Mutex::new(State {
+                snapshot_id,
+                branch_root,
+            })),
             replica_id,
         })
     }
@@ -83,7 +86,9 @@ impl Branch {
         encoded_locator: &LocatorHash,
     ) -> Result<()> {
         let mut lock = self.lock().await;
-        let mut path = self.get_path(tx, &lock.branch_root, &encoded_locator).await?;
+        let mut path = self
+            .get_path(tx, &lock.branch_root, &encoded_locator)
+            .await?;
 
         // We shouldn't be inserting a block to a branch twice. If we do, the assumption is that we
         // hit one in 2^sizeof(BlockVersion) chance that we randomly generated the same
@@ -107,7 +112,9 @@ impl Branch {
             return Err(Error::BlockIdNotFound);
         }
 
-        let path = self.get_path(tx, &lock.branch_root, &encoded_locator).await?;
+        let path = self
+            .get_path(tx, &lock.branch_root, &encoded_locator)
+            .await?;
 
         match path.get_leaf(encoded_locator) {
             Some(block_id) => Ok(block_id),
@@ -123,7 +130,9 @@ impl Branch {
     /// Remove the block identified by encoded_locator from the index
     pub async fn remove(&self, tx: &mut db::Transaction, encoded_locator: &Hash) -> Result<()> {
         let mut lock = self.lock().await;
-        let mut path = self.get_path(tx, &lock.branch_root, encoded_locator).await?;
+        let mut path = self
+            .get_path(tx, &lock.branch_root, encoded_locator)
+            .await?;
         path.remove_leaf(encoded_locator);
         self.write_path(tx, &mut lock, &path).await
     }
@@ -479,11 +488,6 @@ impl PathWithSiblings {
         self.leaves.iter().any(|(_l, id)| id == block_id)
     }
 
-    // Found root and all inner nodes.
-    fn has_complete_path(&self) -> bool {
-        self.layers_found > INNER_LAYER_COUNT
-    }
-
     fn total_layer_count() -> usize {
         1 /* root */ + INNER_LAYER_COUNT + 1 /* leaves */
     }
@@ -525,11 +529,14 @@ impl PathWithSiblings {
     fn remove_leaf(&mut self, encoded_locator: &LocatorHash) {
         let mut changed = false;
 
-        self.leaves = self.leaves
+        self.leaves = self
+            .leaves
             .iter()
             .filter(|l| {
                 let keep = l.0 != *encoded_locator;
-                if !keep { changed = true; }
+                if !keep {
+                    changed = true;
+                }
                 keep
             })
             .cloned()
@@ -713,8 +720,12 @@ mod tests {
 
             match branch.get(&mut tx, &encoded_locator).await {
                 Err(Error::BlockIdNotFound) => { /* OK */ }
-                Err(_) => { panic!("Error should have been BlockIdNotFound"); }
-                Ok(_) => { panic!("Branch shouldn't have contained the block ID"); }
+                Err(_) => {
+                    panic!("Error should have been BlockIdNotFound");
+                }
+                Ok(_) => {
+                    panic!("Branch shouldn't have contained the block ID");
+                }
             }
         }
     }

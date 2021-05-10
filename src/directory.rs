@@ -1,11 +1,11 @@
 use crate::{
     blob::Blob,
-    index::Branch,
     crypto::Cryptor,
     db,
     entry::{Entry, EntryType},
     error::{Error, Result},
     file::File,
+    index::Branch,
     locator::Locator,
 };
 use serde::{Deserialize, Serialize};
