@@ -13,11 +13,11 @@ pub use self::{
 pub async fn init(pool: &db::Pool) -> Result<(), Error> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS branches (
-             snapshot_id        INTEGER PRIMARY KEY,
-             replica_id         BLOB NOT NULL,
-             merkle_root        BLOB NOT NULL
+             snapshot_id   INTEGER PRIMARY KEY,
+             replica_id    BLOB NOT NULL,
+             branch_root   BLOB NOT NULL
          );
-         CREATE TABLE IF NOT EXISTS merkle_forest (
+         CREATE TABLE IF NOT EXISTS branch_forest (
              /* Parent is a hash calculated from its children */
              parent  BLOB NOT NULL,
              bucket  INTEGER,
