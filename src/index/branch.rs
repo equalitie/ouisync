@@ -175,7 +175,7 @@ impl Branch {
             .fetch_all(&mut *tx)
             .await?;
 
-        path.leafs.reserve(children.len());
+        path.leaves.reserve(children.len());
 
         let mut found_leaf = false;
 
@@ -184,14 +184,14 @@ impl Branch {
             if *encoded_locator == locator {
                 found_leaf = true;
             }
-            path.leafs.push((locator, block_id));
+            path.leaves.push((locator, block_id));
         }
 
         if found_leaf {
             path.layers_found += 1;
         }
 
-        path.leafs.sort();
+        path.leaves.sort();
 
         Ok(path)
     }
@@ -219,7 +219,7 @@ impl Branch {
         let layer = PathWithSiblings::total_layer_count() - 1;
         let parent_hash = path.hash_at_layer(layer - 1);
 
-        for (ref l, ref block_id) in &path.leafs {
+        for (ref l, ref block_id) in &path.leaves {
             let blob = serialize_leaf(l, block_id);
 
             sqlx::query("INSERT INTO branch_forest (parent, bucket, node) VALUES (?, ?, ?)")
@@ -454,7 +454,7 @@ struct PathWithSiblings {
     root: Hash,
     inner: [InnerChildren; INNER_LAYER_COUNT],
     /// Note: this vector must be sorted to guarantee unique hashing.
-    leafs: Vec<(LocatorHash, BlockId)>,
+    leaves: Vec<(LocatorHash, BlockId)>,
 }
 
 impl PathWithSiblings {
@@ -464,19 +464,19 @@ impl PathWithSiblings {
             layers_found: 0,
             root: *root,
             inner: [[Hash::null(); MAX_INNER_NODE_CHILD_COUNT]; INNER_LAYER_COUNT], //Default::default(),
-            leafs: Vec::new(),
+            leaves: Vec::new(),
         }
     }
 
     fn get_leaf(&self, encoded_locator: &LocatorHash) -> Option<BlockId> {
-        self.leafs
+        self.leaves
             .iter()
             .find(|(ref l, ref _v)| l == encoded_locator)
             .map(|p| p.1)
     }
 
     fn has_leaf(&self, block_id: &BlockId) -> bool {
-        self.leafs.iter().any(|(_l, id)| id == block_id)
+        self.leaves.iter().any(|(_l, id)| id == block_id)
     }
 
     // Found root and all inner nodes.
@@ -485,7 +485,7 @@ impl PathWithSiblings {
     }
 
     fn total_layer_count() -> usize {
-        1 /* root */ + INNER_LAYER_COUNT + 1 /* leafs */
+        1 /* root */ + INNER_LAYER_COUNT + 1 /* leaves */
     }
 
     fn hash_at_layer(&self, layer: usize) -> Hash {
@@ -505,7 +505,7 @@ impl PathWithSiblings {
 
         let mut modified = false;
 
-        for leaf in &mut self.leafs {
+        for leaf in &mut self.leaves {
             if leaf.0 == self.encoded_locator {
                 modified = true;
                 leaf.1 = *block_id;
@@ -515,16 +515,16 @@ impl PathWithSiblings {
 
         if !modified {
             // XXX: This can be done better.
-            self.leafs.push((self.encoded_locator, *block_id));
-            self.leafs.sort();
+            self.leaves.push((self.encoded_locator, *block_id));
+            self.leaves.sort();
         }
 
         self.recalculate();
     }
 
     fn remove_leaf(&mut self, encoded_locator: &LocatorHash) {
-        // TODO: Remove from parent if self.leafs ends up empty after this operation.
-        self.leafs = self.leafs
+        // TODO: Remove from parent if self.leaves ends up empty after this operation.
+        self.leaves = self.leaves
             .iter()
             .filter(|l| l.0 != *encoded_locator)
             .cloned()
@@ -546,7 +546,7 @@ impl PathWithSiblings {
     // computed/assigned.
     fn compute_hash_for_layer(&self, layer: usize) -> Hash {
         if layer == INNER_LAYER_COUNT {
-            hash_leafs(&self.leafs)
+            hash_leafs(&self.leaves)
         } else {
             hash_inner(&self.inner[layer])
         }
@@ -557,11 +557,11 @@ impl PathWithSiblings {
     }
 }
 
-fn hash_leafs(leafs: &[(LocatorHash, BlockId)]) -> Hash {
+fn hash_leafs(leaves: &[(LocatorHash, BlockId)]) -> Hash {
     let mut hash = Sha3_256::new();
     // XXX: Is updating with length enough to prevent attaks?
-    hash.update((leafs.len() as u32).to_le_bytes());
-    for (ref l, ref id) in leafs {
+    hash.update((leaves.len() as u32).to_le_bytes());
+    for (ref l, ref id) in leaves {
         hash.update(l);
         hash.update(id.name);
         hash.update(id.version);
