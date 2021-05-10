@@ -211,10 +211,18 @@ impl Branch {
         lock: &mut Lock<'_>,
         path: &PathWithSiblings,
     ) -> Result<()> {
+        if path.root.is_null() {
+            return self.write_branch_root(tx, lock, &path.root).await;
+        }
+
         for (inner_i, inner_layer) in path.inner.iter().enumerate() {
             let parent_hash = path.hash_at_layer(inner_i);
 
             for (bucket, ref hash) in inner_layer.iter().enumerate() {
+                if hash.is_null() {
+                    continue;
+                }
+
                 // XXX: It should be possible to insert multiple rows at once.
                 sqlx::query("INSERT INTO branch_forest (parent, bucket, node) VALUES (?, ?, ?)")
                     .bind(parent_hash.as_ref())
@@ -261,14 +269,14 @@ impl Branch {
         .unwrap()
         .get(0);
 
-        self.remove_branch(lock.snapshot_id, root, tx).await?;
+        self.remove_snapshot(lock.snapshot_id, &lock.branch_root, tx).await?;
         lock.snapshot_id = new_id;
         lock.branch_root = *root;
 
         Ok(())
     }
 
-    async fn remove_branch(
+    async fn remove_snapshot(
         &self,
         snapshot_id: SnapshotId,
         root: &Hash,
