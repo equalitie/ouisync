@@ -709,11 +709,15 @@ mod tests {
 
         let mut tx = pool.begin().await.unwrap();
 
+        assert_eq!(0, count_branch_forest_entries(&mut tx).await);
+
         {
             branch.insert(&mut tx, &b, &encoded_locator).await.unwrap();
             let r = branch.get(&mut tx, &encoded_locator).await.unwrap();
             assert_eq!(r, b);
         }
+
+        assert!(count_branch_forest_entries(&mut tx).await > 0);
 
         {
             branch.remove(&mut tx, &encoded_locator).await.unwrap();
@@ -728,6 +732,12 @@ mod tests {
                 }
             }
         }
+
+        assert_eq!(0, count_branch_forest_entries(&mut tx).await);
+    }
+
+    async fn count_branch_forest_entries(tx: &mut db::Transaction) -> usize {
+        sqlx::query("select 0 from branch_forest").fetch_all(&mut *tx).await.unwrap().len()
     }
 
     async fn init_db() -> db::Pool {
