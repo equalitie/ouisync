@@ -68,61 +68,6 @@ impl Branch {
         }
     }
 
-    async fn lock(&self) -> Lock<'_> {
-        self.state.lock().await
-    }
-
-    /// Insert the root block into the index
-    pub async fn insert_root(&self, tx: &mut db::Transaction, block_id: &BlockId) -> Result<()> {
-        let mut lock = self.lock().await;
-
-        let row = sqlx::query(
-            "INSERT INTO branches(replica_id, root_block_name, root_block_version, merkle_root)
-             SELECT replica_id, ?, ?, merkle_root FROM branches WHERE snapshot_id = ? RETURNING snapshot_id, merkle_root",
-        )
-        .bind(block_id.name.as_ref())
-        .bind(block_id.version.as_ref())
-        .bind(lock.snapshot_id)
-        .fetch_optional(&mut *tx)
-        .await
-        .unwrap()
-        .unwrap();
-
-        let new_id = row.get(0);
-        let root = column::<Hash>(&row, 1)?;
-
-        self.remove_branch(lock.snapshot_id, &root, tx).await?;
-        lock.snapshot_id = new_id;
-
-        Ok(())
-    }
-
-    /// Get the root block from the index.
-    pub async fn get_root(&self, tx: &mut db::Transaction) -> Result<BlockId> {
-        let lock = self.lock().await;
-
-        match sqlx::query(
-            "SELECT root_block_name, root_block_version FROM branches WHERE snapshot_id=? LIMIT 1",
-        )
-        .bind(lock.snapshot_id)
-        .fetch_optional(tx)
-        .await?
-        {
-            Some(row) => {
-                let blob: &[u8] = row.get(0);
-                if blob.is_empty() {
-                    return Err(Error::BlockIdNotFound);
-                }
-                // Use unwrap here because the above check should be sufficient
-                // in determining whether the row has a valid BlockId.
-                let name = BlockName::try_from(blob).unwrap();
-                let version = column::<BlockVersion>(&row, 1).unwrap();
-                Ok(BlockId { name, version })
-            }
-            None => Err(Error::BlockIdNotFound),
-        }
-    }
-
     /// Insert a new block into the index.
     pub async fn insert(
         &self,
@@ -163,6 +108,16 @@ impl Branch {
             Some(block_id) => Ok(block_id),
             None => Err(Error::BlockIdNotFound),
         }
+    }
+
+    /// Insert the root block into the index
+    pub async fn insert_root(&self, tx: &mut db::Transaction, block_id: &BlockId) -> Result<()> {
+        self.insert(tx, block_id, &Hash::null()).await
+    }
+
+    /// Get the root block from the index.
+    pub async fn get_root(&self, tx: &mut db::Transaction) -> Result<BlockId> {
+        self.get(tx, &Hash::null()).await
     }
 
     async fn get_path(
@@ -274,8 +229,8 @@ impl Branch {
         root: &Hash,
     ) -> Result<()> {
         let new_id = sqlx::query(
-            "INSERT INTO branches(replica_id, root_block_name, root_block_version, merkle_root)
-             SELECT replica_id, root_block_name, root_block_version, ? FROM branches
+            "INSERT INTO branches(replica_id, merkle_root)
+             SELECT replica_id, ? FROM branches
              WHERE snapshot_id=? RETURNING snapshot_id;",
         )
         .bind(root.as_ref())
@@ -315,6 +270,10 @@ impl Branch {
         }
         .remove_recursive(tx)
         .await
+    }
+
+    async fn lock(&self) -> Lock<'_> {
+        self.state.lock().await
     }
 }
 
