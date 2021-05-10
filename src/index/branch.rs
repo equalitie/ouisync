@@ -83,7 +83,6 @@ impl Branch {
         encoded_locator: &LocatorHash,
     ) -> Result<()> {
         let mut lock = self.lock().await;
-
         let mut path = self.get_path(tx, &lock.branch_root, &encoded_locator).await?;
 
         // We shouldn't be inserting a block to a branch twice. If we do, the assumption is that we
@@ -92,9 +91,7 @@ impl Branch {
         assert!(!path.has_leaf(block_id));
 
         path.insert_leaf(&block_id);
-        self.write_path(tx, &mut lock, &path).await?;
-
-        Ok(())
+        self.write_path(tx, &mut lock, &path).await
     }
 
     /// Insert the root block into the index
@@ -121,6 +118,19 @@ impl Branch {
     /// Get the root block from the index.
     pub async fn get_root(&self, tx: &mut db::Transaction) -> Result<BlockId> {
         self.get(tx, &Hash::null()).await
+    }
+
+    /// Remove the block identified by encoded_locator from the index
+    pub async fn remove(&self, tx: &mut db::Transaction, encoded_locator: &Hash) -> Result<()> {
+        let mut lock = self.lock().await;
+        let mut path = self.get_path(tx, &lock.branch_root, encoded_locator).await?;
+        path.remove_leaf(encoded_locator);
+        self.write_path(tx, &mut lock, &path).await
+    }
+
+    /// Remove the root block from the index
+    pub async fn remove_root(&self, tx: &mut db::Transaction) -> Result<()> {
+        self.remove(tx, &Hash::null()).await
     }
 
     async fn get_path(
@@ -220,9 +230,7 @@ impl Branch {
                 .await?;
         }
 
-        self.write_branch_root(tx, lock, &path.root).await?;
-
-        Ok(())
+        self.write_branch_root(tx, lock, &path.root).await
     }
 
     async fn write_branch_root(
@@ -511,6 +519,21 @@ impl PathWithSiblings {
             self.leafs.sort();
         }
 
+        self.recalculate();
+    }
+
+    fn remove_leaf(&mut self, encoded_locator: &LocatorHash) {
+        // TODO: Remove from parent if self.leafs ends up empty after this operation.
+        self.leafs = self.leafs
+            .iter()
+            .filter(|l| l.0 != *encoded_locator)
+            .cloned()
+            .collect();
+
+        self.recalculate();
+    }
+
+    fn recalculate(&mut self) {
         for inner_layer in (0..INNER_LAYER_COUNT).rev() {
             let hash = self.compute_hash_for_layer(inner_layer + 1);
             self.inner[inner_layer][self.get_bucket(inner_layer)] = hash;
@@ -618,6 +641,38 @@ mod tests {
             let r = branch.get(&mut tx, &encoded_locator).await.unwrap();
 
             assert_eq!(r, b2);
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn remove_locator() {
+        let pool = init_db().await;
+        let branch = Branch::new(pool.clone(), ReplicaId::random())
+            .await
+            .unwrap();
+
+        let b = BlockId::random();
+
+        let locator = Locator::Head(b.name, 0);
+
+        let encoded_locator = locator.encode(&Cryptor::Null).unwrap();
+
+        let mut tx = pool.begin().await.unwrap();
+
+        {
+            branch.insert(&mut tx, &b, &encoded_locator).await.unwrap();
+            let r = branch.get(&mut tx, &encoded_locator).await.unwrap();
+            assert_eq!(r, b);
+        }
+
+        {
+            branch.remove(&mut tx, &encoded_locator).await.unwrap();
+
+            match branch.get(&mut tx, &encoded_locator).await {
+                Err(Error::BlockIdNotFound) => { /* OK */ }
+                Err(_) => { panic!("Error should have been BlockIdNotFound"); }
+                Ok(_) => { panic!("Branch shouldn't have contained the block ID"); }
+            }
         }
     }
 
