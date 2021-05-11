@@ -1,5 +1,7 @@
 // This is temporary to avoid lint errors when INNER_LAYER_COUNT = 0
 #![allow(clippy::reversed_empty_ranges)]
+#![allow(clippy::absurd_extreme_comparisons)]
+#![allow(arithmetic_overflow)]
 
 use crate::{
     block::{BlockId, BlockName, BlockVersion},
@@ -15,7 +17,7 @@ use std::{convert::TryFrom, sync::Arc};
 use tokio::sync::{Mutex, MutexGuard};
 
 /// Number of layers in the tree excluding the layer with root and the layer with leaf nodes.
-const INNER_LAYER_COUNT: usize = 1;
+const INNER_LAYER_COUNT: usize = 3;
 const MAX_INNER_NODE_CHILD_COUNT: usize = 256; // = sizeof(u8)
 
 type SnapshotId = u32;
@@ -211,10 +213,18 @@ impl Branch {
         lock: &mut Lock<'_>,
         path: &PathWithSiblings,
     ) -> Result<()> {
+        if path.root.is_null() {
+            return self.write_branch_root(tx, lock, &path.root).await;
+        }
+
         for (inner_i, inner_layer) in path.inner.iter().enumerate() {
             let parent_hash = path.hash_at_layer(inner_i);
 
             for (bucket, ref hash) in inner_layer.iter().enumerate() {
+                if hash.is_null() {
+                    continue;
+                }
+
                 // XXX: It should be possible to insert multiple rows at once.
                 sqlx::query("INSERT INTO branch_forest (parent, bucket, node) VALUES (?, ?, ?)")
                     .bind(parent_hash.as_ref())
@@ -261,14 +271,15 @@ impl Branch {
         .unwrap()
         .get(0);
 
-        self.remove_branch(lock.snapshot_id, root, tx).await?;
+        self.remove_snapshot(lock.snapshot_id, &lock.branch_root, tx)
+            .await?;
         lock.snapshot_id = new_id;
         lock.branch_root = *root;
 
         Ok(())
     }
 
-    async fn remove_branch(
+    async fn remove_snapshot(
         &self,
         snapshot_id: SnapshotId,
         root: &Hash,
@@ -278,7 +289,7 @@ impl Branch {
             root: *root,
             snapshot_id,
         }
-        .remove_recursive(tx)
+        .remove_recursive(0, tx)
         .await
     }
 
@@ -287,6 +298,7 @@ impl Branch {
     }
 }
 
+#[derive(Debug)]
 enum BranchNode {
     Root {
         root: Hash,
@@ -304,15 +316,15 @@ enum BranchNode {
 
 impl BranchNode {
     #[async_recursion]
-    async fn remove_recursive(&self, tx: &mut db::Transaction) -> Result<()> {
+    async fn remove_recursive(&self, layer: usize, tx: &mut db::Transaction) -> Result<()> {
         self.remove_single(tx).await?;
 
-        if self.is_dangling(tx).await? {
+        if !self.is_dangling(tx).await? {
             return Ok(());
         }
 
-        for child in self.children(tx).await? {
-            child.remove_recursive(tx).await?;
+        for child in self.children(layer, tx).await? {
+            child.remove_recursive(layer + 1, tx).await?;
         }
 
         Ok(())
@@ -330,7 +342,7 @@ impl BranchNode {
                     .await?;
             }
             BranchNode::Inner { node, parent } => {
-                sqlx::query("DELETE FROM branch_forest WHERE parent = ?, node = ?")
+                sqlx::query("DELETE FROM branch_forest WHERE parent = ? AND node = ?")
                     .bind(parent.as_ref())
                     .bind(node.as_ref())
                     .execute(&mut *tx)
@@ -338,7 +350,7 @@ impl BranchNode {
             }
             BranchNode::Leaf { node, parent } => {
                 let blob = serialize_leaf(&node.0, &node.1);
-                sqlx::query("DELETE FROM branch_forest WHERE parent = ?, node = ?")
+                sqlx::query("DELETE FROM branch_forest WHERE parent = ? AND node = ?")
                     .bind(parent.as_ref())
                     .bind(blob)
                     .execute(&mut *tx)
@@ -351,7 +363,7 @@ impl BranchNode {
 
     /// Return true if there is nothing that references this node
     async fn is_dangling(&self, tx: &mut db::Transaction) -> Result<bool> {
-        let r = match self {
+        let has_parent = match self {
             BranchNode::Root {
                 root,
                 snapshot_id: _,
@@ -360,18 +372,16 @@ impl BranchNode {
                 .fetch_optional(&mut *tx)
                 .await?
                 .is_some(),
-            BranchNode::Inner { node, parent } => {
-                sqlx::query("SELECT 0 FROM branch_forest WHERE parent=?, node=? LIMIT 1")
-                    .bind(parent.as_ref())
+            BranchNode::Inner { node, parent: _ } => {
+                sqlx::query("SELECT 0 FROM branch_forest WHERE node=? LIMIT 1")
                     .bind(node.as_ref())
                     .fetch_optional(&mut *tx)
                     .await?
                     .is_some()
             }
-            BranchNode::Leaf { node, parent } => {
+            BranchNode::Leaf { node, parent: _ } => {
                 let blob = serialize_leaf(&node.0, &node.1);
-                sqlx::query("SELECT 0 FROM branch_forest WHERE parent=?, node=? LIMIT 1")
-                    .bind(parent.as_ref())
+                sqlx::query("SELECT 0 FROM branch_forest WHERE node=? LIMIT 1")
                     .bind(blob)
                     .fetch_optional(&mut *tx)
                     .await?
@@ -379,15 +389,15 @@ impl BranchNode {
             }
         };
 
-        Ok(r)
+        Ok(!has_parent)
     }
 
-    async fn children(&self, tx: &mut db::Transaction) -> Result<Vec<BranchNode>> {
+    async fn children(&self, layer: usize, tx: &mut db::Transaction) -> Result<Vec<BranchNode>> {
         match self {
             BranchNode::Root {
                 root,
                 snapshot_id: _,
-            } => sqlx::query("SELECT node, parent FROM branch_root WHERE parent=?;")
+            } => sqlx::query("SELECT node, parent FROM branch_forest WHERE parent=?;")
                 .bind(root.as_ref())
                 .fetch_all(&mut *tx)
                 .await?
@@ -406,12 +416,16 @@ impl BranchNode {
                     .fetch_all(&mut *tx)
                     .await?
                     .iter()
-                    .map(Self::row_to_leaf)
+                    .map(|row| {
+                        if layer < INNER_LAYER_COUNT {
+                            Self::row_to_inner(row)
+                        } else {
+                            Self::row_to_leaf(row)
+                        }
+                    })
                     .collect()
             }
-            BranchNode::Leaf { node: _, parent: _ } => {
-                unimplemented!();
-            }
+            BranchNode::Leaf { node: _, parent: _ } => Ok(Vec::new()),
         }
     }
 
@@ -691,6 +705,11 @@ mod tests {
             let r = branch.get(&mut tx, &encoded_locator).await.unwrap();
 
             assert_eq!(r, b2);
+
+            assert_eq!(
+                INNER_LAYER_COUNT + 1,
+                count_branch_forest_entries(&mut tx).await
+            );
         }
     }
 
@@ -709,11 +728,18 @@ mod tests {
 
         let mut tx = pool.begin().await.unwrap();
 
+        assert_eq!(0, count_branch_forest_entries(&mut tx).await);
+
         {
             branch.insert(&mut tx, &b, &encoded_locator).await.unwrap();
             let r = branch.get(&mut tx, &encoded_locator).await.unwrap();
             assert_eq!(r, b);
         }
+
+        assert_eq!(
+            INNER_LAYER_COUNT + 1,
+            count_branch_forest_entries(&mut tx).await
+        );
 
         {
             branch.remove(&mut tx, &encoded_locator).await.unwrap();
@@ -728,6 +754,16 @@ mod tests {
                 }
             }
         }
+
+        assert_eq!(0, count_branch_forest_entries(&mut tx).await);
+    }
+
+    async fn count_branch_forest_entries(tx: &mut db::Transaction) -> usize {
+        sqlx::query("select 0 from branch_forest")
+            .fetch_all(&mut *tx)
+            .await
+            .unwrap()
+            .len()
     }
 
     async fn init_db() -> db::Pool {
