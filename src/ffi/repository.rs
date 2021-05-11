@@ -1,7 +1,7 @@
 use super::{
     dart::DartPort,
     session,
-    utils::{self, SharedHandle, UniqueHandle},
+    utils::{self, RefHandle, SharedHandle, UniqueHandle},
 };
 use crate::{crypto::Cryptor, db, entry::EntryType, error::Error, repository::Repository};
 use std::{
@@ -9,38 +9,18 @@ use std::{
     ffi::{CStr, CString},
     os::raw::c_char,
     path::PathBuf,
-    ptr,
     sync::Arc,
 };
 
-pub type RepositoryHandle = SharedHandle<Repository>;
-pub type DirEntriesHandle = UniqueHandle<DirEntries>;
-
-/// Type of a directory entry.
-pub const DIR_ENTRY_INVALID: u8 = 0;
-pub const DIR_ENTRY_FILE: u8 = 1;
-pub const DIR_ENTRY_DIRECTORY: u8 = 2;
-
-pub struct DirEntries(Vec<DirEntry>);
-
-impl DirEntries {
-    fn get(&self, index: u64) -> Option<&DirEntry> {
-        let index: usize = index.try_into().ok()?;
-        self.0.get(index)
-    }
-}
-
-struct DirEntry {
-    name: CString,
-    entry_type: EntryType,
-}
+pub const DIR_ENTRY_FILE: u8 = 0;
+pub const DIR_ENTRY_DIRECTORY: u8 = 1;
 
 /// Opens a repository.
 ///
 /// NOTE: eventually this function will allow to specify which repository to open, but currently
 /// only one repository is supported.
 #[no_mangle]
-pub unsafe extern "C" fn open_repository(
+pub unsafe extern "C" fn repository_open(
     store: *const c_char,
     port: DartPort,
     error: *mut *const c_char,
@@ -55,27 +35,25 @@ pub unsafe extern "C" fn open_repository(
         )))
     };
 
-    log::trace!("open_repository {:?}", store);
-
     session::spawn(port, error, async move {
         let pool = db::init(store).await?;
         let cryptor = Cryptor::Null; // TODO: support encryption
         let repo = Repository::new(pool, cryptor).await?;
         let repo = Arc::new(repo);
 
-        Ok::<_, Error>(RepositoryHandle::new(repo))
+        Ok::<_, Error>(SharedHandle::new(repo))
     })
 }
 
 /// Closes a repository.
 #[no_mangle]
-pub unsafe extern "C" fn close_repository(handle: RepositoryHandle) {
+pub unsafe extern "C" fn repository_close(handle: SharedHandle<Repository>) {
     handle.release();
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn read_dir(
-    repo: RepositoryHandle,
+pub unsafe extern "C" fn repository_read_dir(
+    repo: SharedHandle<Repository>,
     path: *const c_char,
     port: i64,
     error: *mut *const c_char,
@@ -100,36 +78,54 @@ pub unsafe extern "C" fn read_dir(
         let entries = DirEntries(entries);
         let entries = Box::new(entries);
 
-        Ok::<_, Error>(DirEntriesHandle::new(entries))
+        Ok::<_, Error>(UniqueHandle::new(entries))
     })
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn destroy_dir_entries(entries: DirEntriesHandle) {
-    let _ = entries.release();
-}
+pub struct DirEntries(Vec<DirEntry>);
 
-#[no_mangle]
-pub unsafe extern "C" fn dir_entries_count(entries: DirEntriesHandle) -> u64 {
-    entries.get().0.len() as u64
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn dir_entries_name_at(
-    entries: DirEntriesHandle,
-    index: u64,
-) -> *const c_char {
-    match entries.get().get(index) {
-        Some(entry) => entry.name.as_ptr(),
-        None => ptr::null(),
+impl DirEntries {
+    fn get(&self, index: u64) -> Option<&DirEntry> {
+        let index: usize = index.try_into().ok()?;
+        self.0.get(index)
     }
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn dir_entries_type_at(entries: DirEntriesHandle, index: u64) -> u8 {
-    match entries.get().get(index).map(|entry| entry.entry_type) {
-        Some(EntryType::File) => DIR_ENTRY_FILE,
-        Some(EntryType::Directory) => DIR_ENTRY_DIRECTORY,
-        None => DIR_ENTRY_INVALID,
+pub unsafe extern "C" fn dir_entries_destroy(entries: UniqueHandle<DirEntries>) {
+    let _ = entries.release();
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn dir_entries_count(entries: UniqueHandle<DirEntries>) -> u64 {
+    entries.get().0.len() as u64
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn dir_entries_get(
+    entries: UniqueHandle<DirEntries>,
+    index: u64,
+) -> RefHandle<DirEntry> {
+    match entries.get().get(index) {
+        Some(entry) => RefHandle::new(entry),
+        None => RefHandle::NULL,
+    }
+}
+
+pub struct DirEntry {
+    name: CString,
+    entry_type: EntryType,
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn dir_entry_name(handle: RefHandle<DirEntry>) -> *const c_char {
+    handle.get().name.as_ptr()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn dir_entry_type(handle: RefHandle<DirEntry>) -> u8 {
+    match handle.get().entry_type {
+        EntryType::File => DIR_ENTRY_FILE,
+        EntryType::Directory => DIR_ENTRY_DIRECTORY,
     }
 }

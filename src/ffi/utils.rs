@@ -38,6 +38,7 @@ pub unsafe fn clear_error_ptr(error_ptr: *mut *const c_char) {
     }
 }
 
+/// FFI handle to a resource with shared ownership.
 #[repr(transparent)]
 pub struct SharedHandle<T>(u64, PhantomData<T>);
 
@@ -64,6 +65,7 @@ impl<T> From<SharedHandle<T>> for DartCObject {
     }
 }
 
+/// FFI handle to a resource with unique ownership.
 #[repr(transparent)]
 pub struct UniqueHandle<T>(u64, PhantomData<T>);
 
@@ -84,6 +86,23 @@ impl<T> UniqueHandle<T> {
 impl<T> From<UniqueHandle<T>> for DartCObject {
     fn from(handle: UniqueHandle<T>) -> Self {
         DartCObject::from(handle.0)
+    }
+}
+
+/// FFI handle to a borrowed resource.
+#[repr(transparent)]
+pub struct RefHandle<T>(u64, PhantomData<T>);
+
+impl<T> RefHandle<T> {
+    pub const NULL: Self = Self(0, PhantomData);
+
+    pub fn new(resource: &T) -> Self {
+        Self(resource as *const _ as _, PhantomData)
+    }
+
+    pub unsafe fn get(&self) -> &T {
+        assert!(self.0 != 0);
+        &*(self.0 as *const _)
     }
 }
 

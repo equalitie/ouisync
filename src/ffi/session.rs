@@ -18,7 +18,7 @@ use tokio::runtime::{self, Runtime};
 ///
 /// Returns `true` on success and `false` on error.
 #[no_mangle]
-pub unsafe extern "C" fn create_session(
+pub unsafe extern "C" fn session_create(
     post_c_object_fn: *const c_void,
     error: *mut *const c_char,
 ) -> bool {
@@ -49,7 +49,7 @@ pub unsafe extern "C" fn create_session(
 
 /// Shutdowns the ouisync session.
 #[no_mangle]
-pub unsafe extern "C" fn destroy_session() {
+pub unsafe extern "C" fn session_destroy() {
     let session = mem::replace(&mut SESSION, ptr::null_mut());
     if !session.is_null() {
         let _ = Box::from_raw(session);

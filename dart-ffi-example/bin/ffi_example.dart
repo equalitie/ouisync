@@ -28,11 +28,11 @@ class Session {
     : bindings = Bindings(lib ?? _defaultLib())
   {
     invokeSync<void>(
-      (error) => bindings.create_session(NativeApi.postCObject.cast<Void>(), error));
+      (error) => bindings.session_create(NativeApi.postCObject.cast<Void>(), error));
   }
 
   void dispose() {
-    bindings.destroy_session();
+    bindings.session_destroy();
   }
 }
 
@@ -45,7 +45,7 @@ class Repository {
   static Future<Repository> open(Session session, String store) async {
     final bindings = session.bindings;
     return Repository._(bindings, await invokeAsync<int>(
-      (port, error) => bindings.open_repository(
+      (port, error) => bindings.repository_open(
         store.toNativeUtf8().cast<Int8>(),
         port,
         error)));
@@ -53,7 +53,7 @@ class Repository {
 
   Future<DirEntries> readDir(String path) async {
     return DirEntries._(bindings, await invokeAsync<int>(
-      (port, error) => bindings.read_dir(
+      (port, error) => bindings.repository_read_dir(
         handle,
         path.toNativeUtf8().cast<Int8>(),
         port,
@@ -61,7 +61,32 @@ class Repository {
   }
 
   void dispose() {
-    bindings.close_repository(handle);
+    bindings.repository_close(handle);
+  }
+}
+
+enum DirEntryType {
+  File,
+  Directory,
+}
+
+class DirEntry {
+  final Bindings bindings;
+  final int handle;
+
+  DirEntry._(this.bindings, this.handle);
+
+  String get name => bindings.dir_entry_name(handle).cast<Utf8>().toDartString();
+
+  DirEntryType get type {
+    switch (bindings.dir_entry_type(handle)) {
+      case DIR_ENTRY_FILE:
+        return DirEntryType.File;
+      case DIR_ENTRY_DIRECTORY:
+        return DirEntryType.Directory;
+      default:
+        throw Error("invalid dir entry type");
+    }
   }
 }
 
@@ -72,18 +97,11 @@ class DirEntries with IterableMixin<DirEntry> {
   DirEntries._(this.bindings, this.handle);
 
   void dispose() {
-    bindings.destroy_dir_entries(handle);
+    bindings.dir_entries_destroy(handle);
   }
 
   @override
   Iterator<DirEntry> get iterator => DirEntriesIterator._(bindings, handle);
-}
-
-class DirEntry {
-  final String name;
-  final int type;
-
-  DirEntry._(this.name, this.type);
 }
 
 class DirEntriesIterator extends Iterator<DirEntry> {
@@ -97,13 +115,7 @@ class DirEntriesIterator extends Iterator<DirEntry> {
 
   @override DirEntry get current {
     assert(index >= 0 && index < count);
-
-    final name = bindings.dir_entries_name_at(handle, index);
-    assert(name != nullptr);
-
-    final type = bindings.dir_entries_type_at(handle, index);
-
-    return DirEntry._(name.cast<Utf8>().toDartString(), type);
+    return DirEntry._(bindings, bindings.dir_entries_get(handle, index));
   }
 
   @override
@@ -119,6 +131,14 @@ DynamicLibrary _defaultLib() {
   return DynamicLibrary.open('libouisync.so');
 }
 
+class Error implements Exception {
+  final String _message;
+
+  Error(this._message);
+
+  String toString() => _message;
+}
+
 class ErrorHelper {
   final ptr = malloc<Pointer<Int8>>();
 
@@ -128,7 +148,7 @@ class ErrorHelper {
     if (ptr.value != nullptr) {
       final error = ptr.value.cast<Utf8>().toDartString();
       // TODO: do we need to `free` the ptr here?
-      throw error;
+      throw Error(error);
     }
   }
 }
