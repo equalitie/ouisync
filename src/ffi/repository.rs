@@ -42,7 +42,7 @@ pub unsafe extern "C" fn repository_close(handle: SharedHandle<Repository>) {
 pub unsafe extern "C" fn repository_read_dir(
     repo: SharedHandle<Repository>,
     path: *const c_char,
-    port: i64,
+    port: DartPort,
     error: *mut *const c_char,
 ) {
     let path = PathBuf::from(try_ffi!(
@@ -65,7 +65,36 @@ pub unsafe extern "C" fn repository_read_dir(
         let entries = DirEntries(entries);
         let entries = Box::new(entries);
 
-        Ok::<_, Error>(UniqueHandle::new(entries))
+        Ok(UniqueHandle::new(entries))
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn repository_create_dir(
+    repo: SharedHandle<Repository>,
+    path: *const c_char,
+    port: DartPort,
+    error: *mut *const c_char,
+) {
+    let path = PathBuf::from(try_ffi!(
+        utils::c_str_to_os_str(CStr::from_ptr(path)),
+        error
+    ));
+    let repo = repo.get();
+
+    session::spawn(port, error, async move {
+        let (parent, name) = match (path.parent(), path.file_name()) {
+            (Some(parent), Some(name)) => (parent, name),
+            _ => return Err(Error::EntryExists),
+        };
+
+        let mut parent = repo.open_directory(parent).await?;
+        let mut dir = parent.create_subdirectory(name.to_owned())?;
+
+        dir.flush().await?;
+        parent.flush().await?;
+
+        Ok(())
     })
 }
 

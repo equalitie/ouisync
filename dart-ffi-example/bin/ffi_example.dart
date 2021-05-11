@@ -19,6 +19,8 @@ Future<void> main() async {
     print('${entry.name}: ${entry.type}');
   }
 
+  await repo.createDir('stuffz/thingies');
+
   entries.dispose();
   repo.dispose();
   session.dispose();
@@ -59,14 +61,23 @@ class Repository {
       (port, error) => bindings.repository_open(port, error)));
   }
 
-  Future<DirEntries> readDir(String path) async {
-    return DirEntries._(bindings, await invokeAsync<int>(
+  Future<DirEntries> readDir(String path) async =>
+    DirEntries._(bindings, await invokeAsync<int>(
       (port, error) => bindings.repository_read_dir(
         handle,
         path.toNativeUtf8().cast<Int8>(),
         port,
         error)));
-  }
+
+  Future<void> createDir(String path) =>
+    invokeAsync<void>(
+      (port, error) => bindings.repository_create_dir(
+        handle,
+        path.toNativeUtf8().cast<Int8>(),
+        port,
+        error
+      ));
+
 
   void dispose() {
     bindings.repository_close(handle);

@@ -69,11 +69,10 @@ pub unsafe extern "C" fn session_destroy() {
 }
 
 // Spawn a future on the session runtime and post the result over the given dart send port.
-pub(super) unsafe fn spawn<F, T, E>(port: DartPort, error_ptr: *mut *const c_char, fut: F)
+pub(super) unsafe fn spawn<F, T>(port: DartPort, error_ptr: *mut *const c_char, fut: F)
 where
-    F: Future<Output = Result<T, E>> + Send + 'static,
+    F: Future<Output = Result<T>> + Send + 'static,
     T: Into<DartCObject>,
-    E: fmt::Display,
 {
     let session = try_ffi!(get(), error_ptr);
     let post_c_object_fn = session.post_c_object_fn;
