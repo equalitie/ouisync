@@ -4,6 +4,7 @@ use std::{
     marker::PhantomData,
     mem,
     os::raw::c_char,
+    path::PathBuf,
     ptr,
     sync::Arc,
 };
@@ -104,6 +105,10 @@ impl<T> RefHandle<T> {
         assert!(self.0 != 0);
         &*(self.0 as *const _)
     }
+}
+
+pub unsafe fn ptr_to_path_buf(ptr: *const c_char) -> Result<PathBuf, EncodingError> {
+    Ok(PathBuf::from(c_str_to_os_str(CStr::from_ptr(ptr))?))
 }
 
 #[cfg(unix)]

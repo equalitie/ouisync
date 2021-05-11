@@ -145,6 +145,32 @@ class DirEntriesIterator extends Iterator<DirEntry> {
 
 }
 
+class File {
+  final Bindings bindings;
+  final int handle;
+
+  File._(this.bindings, this.handle);
+
+  static Future<File> open(Repository repo, String path, int mode) async {
+    final bindings = repo.bindings;
+    return File._(bindings, await invokeAsync<int>(
+      (port, error) => bindings.file_open(
+        repo.handle,
+        path.toNativeUtf8().cast<Int8>(),
+        mode,
+        port,
+        error)));
+
+  }
+
+  Future<void> close() =>
+    invokeAsync<void>((port, error) => bindings.file_close(handle, port, error));
+
+  Future<void> flush() =>
+    invokeAsync<void>((port, error) => bindings.file_flush(handle, port, error));
+
+}
+
 DynamicLibrary _defaultLib() {
   // TODO: this depends on the platform
   return DynamicLibrary.open('libouisync.so');
