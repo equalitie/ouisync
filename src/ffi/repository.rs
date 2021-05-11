@@ -3,7 +3,7 @@ use super::{
     session,
     utils::{self, RefHandle, SharedHandle, UniqueHandle},
 };
-use crate::{crypto::Cryptor, db, entry::EntryType, error::Error, repository::Repository};
+use crate::{crypto::Cryptor, entry::EntryType, error::Error, repository::Repository};
 use std::{
     convert::TryInto,
     ffi::{CStr, CString},
@@ -20,25 +20,12 @@ pub const DIR_ENTRY_DIRECTORY: u8 = 1;
 /// NOTE: eventually this function will allow to specify which repository to open, but currently
 /// only one repository is supported.
 #[no_mangle]
-pub unsafe extern "C" fn repository_open(
-    store: *const c_char,
-    port: DartPort,
-    error: *mut *const c_char,
-) {
-    let store = CStr::from_ptr(store);
-    let store = if store.to_bytes() == b":memory:" {
-        db::Store::Memory
-    } else {
-        db::Store::File(PathBuf::from(try_ffi!(
-            utils::c_str_to_os_str(store),
-            error
-        )))
-    };
+pub unsafe extern "C" fn repository_open(port: DartPort, error: *mut *const c_char) {
+    // TODO: doesn't seems this needs to be async
 
     session::spawn(port, error, async move {
-        let pool = db::init(store).await?;
         let cryptor = Cryptor::Null; // TODO: support encryption
-        let repo = Repository::new(pool, cryptor).await?;
+        let repo = Repository::new(session::pool()?.clone(), cryptor).await?;
         let repo = Arc::new(repo);
 
         Ok::<_, Error>(SharedHandle::new(repo))

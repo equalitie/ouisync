@@ -44,6 +44,12 @@ pub enum Error {
     DirectoryNotEmpty,
     #[error("operation is not supported")]
     OperationNotSupported,
+    #[error("failed to create runtime")]
+    CreateRuntime(#[source] io::Error),
+    #[error("session is not initialized")]
+    SessionNotInitialized,
+    #[error("session is already initialized")]
+    SessionAlreadyInitialized,
 }
 
 impl From<TryFromSliceError> for Error {

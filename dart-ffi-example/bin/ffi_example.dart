@@ -7,9 +7,12 @@ import 'package:ffi/ffi.dart';
 import '../gen/ouisync_bindings.dart';
 
 Future<void> main() async {
-  final session = Session(lib: DynamicLibrary.open('../target/debug/libouisync.so'));
-  final repo = await Repository.open(session, '/home/adam/.local/share/ouisync/db');
+  final session = await Session.create(
+    '/home/adam/.local/share/ouisync/db',
+    lib: DynamicLibrary.open('../target/debug/libouisync.so')
+  );
 
+  final repo = await Repository.open(session);
   final entries = await repo.readDir('/');
 
   for (var entry in entries) {
@@ -24,11 +27,19 @@ Future<void> main() async {
 class Session {
   final Bindings bindings;
 
-  Session({DynamicLibrary? lib})
-    : bindings = Bindings(lib ?? _defaultLib())
-  {
-    invokeSync<void>(
-      (error) => bindings.session_create(NativeApi.postCObject.cast<Void>(), error));
+  Session._(this.bindings);
+
+  static Future<Session> create(String store, {DynamicLibrary? lib}) async {
+    final bindings = Bindings(lib ?? _defaultLib());
+
+    await invokeAsync<void>(
+      (port, error) => bindings.session_create(
+        NativeApi.postCObject.cast<Void>(),
+        store.toNativeUtf8().cast<Int8>(),
+        port,
+        error));
+
+    return Session._(bindings);
   }
 
   void dispose() {
@@ -42,13 +53,10 @@ class Repository {
 
   Repository._(this.bindings, this.handle);
 
-  static Future<Repository> open(Session session, String store) async {
+  static Future<Repository> open(Session session) async {
     final bindings = session.bindings;
     return Repository._(bindings, await invokeAsync<int>(
-      (port, error) => bindings.repository_open(
-        store.toNativeUtf8().cast<Int8>(),
-        port,
-        error)));
+      (port, error) => bindings.repository_open(port, error)));
   }
 
   Future<DirEntries> readDir(String path) async {
