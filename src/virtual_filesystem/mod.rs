@@ -511,7 +511,7 @@ impl Inner {
         );
 
         if offset < 0 {
-            return Err(Error::WrongOffset);
+            return Err(Error::OffsetOutOfRange);
         }
 
         let parent = self.inodes.get(inode).parent;
@@ -719,7 +719,7 @@ impl Inner {
 
         let file = self.entries.get_file_mut(handle)?;
 
-        let offset: u64 = offset.try_into().map_err(|_| Error::WrongOffset)?;
+        let offset: u64 = offset.try_into().map_err(|_| Error::OffsetOutOfRange)?;
         file.seek(SeekFrom::Start(offset)).await?;
 
         // TODO: consider reusing these buffers
@@ -747,7 +747,7 @@ impl Inner {
             flags,
         );
 
-        let offset: u64 = offset.try_into().map_err(|_| Error::WrongOffset)?;
+        let offset: u64 = offset.try_into().map_err(|_| Error::OffsetOutOfRange)?;
 
         let file = self.entries.get_file_mut(handle)?;
         file.seek(SeekFrom::Start(offset)).await?;
@@ -891,7 +891,7 @@ fn to_error_code(error: &Error) -> libc::c_int {
         Error::EntryExists => libc::EEXIST,
         Error::EntryNotDirectory => libc::ENOTDIR,
         Error::EntryIsDirectory => libc::EISDIR,
-        Error::WrongOffset => libc::EINVAL,
+        Error::OffsetOutOfRange => libc::EINVAL,
         Error::DirectoryNotEmpty => libc::ENOTEMPTY,
         Error::OperationNotSupported => libc::ENOSYS,
     }

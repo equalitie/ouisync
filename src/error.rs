@@ -39,7 +39,7 @@ pub enum Error {
     #[error("entry is a directory")]
     EntryIsDirectory,
     #[error("offset is out of range")]
-    WrongOffset,
+    OffsetOutOfRange,
     #[error("directory is not empty")]
     DirectoryNotEmpty,
     #[error("operation is not supported")]

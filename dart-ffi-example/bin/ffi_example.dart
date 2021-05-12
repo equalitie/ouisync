@@ -145,6 +145,8 @@ class File {
 
   File._(this.bindings, this.handle);
 
+  static const defaultChunkSize = 1024;
+
   static Future<File> open(Repository repo, String path) async =>
     File._(repo.bindings, await withPool((pool) =>
       invoke<int>((port, error) =>
@@ -161,6 +163,42 @@ class File {
   Future<void> flush() =>
     invoke<void>((port, error) => bindings.file_flush(handle, port, error));
 
+  /// Returns a steam for the contents of this file. The read starts at the current seek position.
+  /// If [size] is not null, reads at most [size] bytes. The returned steam yields chunks of
+  /// [chunkSize] bytes.
+  Stream<List<int>> read({int? size, chunkSize: defaultChunkSize}) async* {
+    var totalBytesRead = 0;
+    var buffer = malloc<Uint8>(chunkSize);
+    var offset = 0;
+
+    try {
+      while (true) {
+        final currentChunkSize = size == null ? chunkSize : totalBytesRead - size;
+
+        final bytesRead = await invoke<int>(
+          (port, error) => bindings.file_read(
+            handle,
+            buffer.elementAt(offset),
+            max(currentChunkSize - offset, 0),
+            port,
+            error));
+
+        offset += bytesRead;
+        totalBytesRead += bytesRead;
+
+        if (offset >= currentChunkSize || bytesRead == 0) {
+          yield buffer.asTypedList(offset).toList();
+          offset = 0;
+        }
+
+        if (bytesRead == 0 || currentChunkSize < chunkSize) {
+          break;
+        }
+      }
+    } finally {
+      malloc.free(buffer);
+    }
+  }
 }
 
 DynamicLibrary _defaultLib() {

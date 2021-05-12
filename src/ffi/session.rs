@@ -1,6 +1,6 @@
 use super::{
     dart::{DartCObject, DartPort, PostCObjectFn},
-    utils,
+    utils::{self, AssumeSend},
 };
 use crate::{db, error::Result};
 use std::{
@@ -192,8 +192,3 @@ impl Sender {
         (self.post_c_object_fn)(port, &mut ().into());
     }
 }
-
-// Wrapper that bypasses the type-checker to allow sending non-Send types across threads.
-// Highly unsafe!
-struct AssumeSend<T>(T);
-unsafe impl<T> Send for AssumeSend<T> {}

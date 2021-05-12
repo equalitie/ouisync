@@ -1,7 +1,7 @@
 use super::{
     dart::DartPort,
     session,
-    utils::{self, RefHandle, SharedHandle, UniqueHandle},
+    utils::{self, AssumeSend, RefHandle, SharedHandle, UniqueHandle},
 };
 use crate::{crypto::Cryptor, entry::EntryType, error::Error, file::File, repository::Repository};
 use std::{
@@ -9,6 +9,7 @@ use std::{
     ffi::{CString, OsStr},
     os::raw::c_char,
     path::Path,
+    slice,
     sync::Arc,
 };
 use tokio::sync::Mutex;
@@ -217,6 +218,66 @@ pub unsafe extern "C" fn file_flush(
     let file = handle.get();
     session::with(port, error, |ctx| {
         ctx.spawn(async move { file.lock().await.flush().await })
+    })
+}
+
+/// Read at most `len` bytes from the file into `buffer`. Yields the number of bytes actually read
+/// (zero on EOF).
+#[no_mangle]
+pub unsafe extern "C" fn file_read(
+    handle: SharedHandle<Mutex<File>>,
+    buffer: *mut u8,
+    len: u64,
+    port: DartPort,
+    error: *mut *mut c_char,
+) {
+    session::with(port, error, |ctx| {
+        let file = handle.get();
+
+        let buffer = AssumeSend(buffer);
+        let len: usize = len.try_into().map_err(|_| Error::OffsetOutOfRange)?;
+
+        ctx.spawn(async move {
+            let buffer = slice::from_raw_parts_mut(buffer.0, len);
+            Ok(file.lock().await.read(buffer).await? as u64)
+        })
+    })
+}
+
+/// Write `len` bytes from `buffer` into the file.
+#[no_mangle]
+pub unsafe extern "C" fn file_write(
+    handle: SharedHandle<Mutex<File>>,
+    buffer: *const u8,
+    len: u64,
+    port: DartPort,
+    error: *mut *mut c_char,
+) {
+    session::with(port, error, |ctx| {
+        let file = handle.get();
+
+        let buffer = AssumeSend(buffer);
+        let len: usize = len.try_into().map_err(|_| Error::OffsetOutOfRange)?;
+
+        ctx.spawn(async move {
+            let buffer = slice::from_raw_parts(buffer.0, len);
+            file.lock().await.write(buffer).await
+        })
+    })
+}
+
+/// Truncate the file to `len` bytes.
+// TODO: `len` is currently ignored and is always set to zero.
+#[no_mangle]
+pub unsafe extern "C" fn file_truncate(
+    handle: SharedHandle<Mutex<File>>,
+    _len: u64,
+    port: DartPort,
+    error: *mut *mut c_char,
+) {
+    session::with(port, error, |ctx| {
+        let file = handle.get();
+        ctx.spawn(async move { file.lock().await.truncate().await })
     })
 }
 
