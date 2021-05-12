@@ -80,7 +80,7 @@ impl Node {
             Node::Root {
                 root,
                 snapshot_id: _,
-            } => sqlx::query("SELECT 0 FROM branches WHERE branch_root = ? LIMIT 1")
+            } => sqlx::query("SELECT 0 FROM branches WHERE root_hash=? LIMIT 1")
                 .bind(root.as_ref())
                 .fetch_optional(&mut *tx)
                 .await?

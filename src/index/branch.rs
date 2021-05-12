@@ -26,7 +26,7 @@ type Lock<'a> = MutexGuard<'a, State>;
 
 struct State {
     snapshot_id: SnapshotId,
-    branch_root: Hash,
+    root_hash: Hash,
 }
 
 pub struct Branch {
@@ -38,8 +38,8 @@ impl Branch {
     pub async fn new(pool: db::Pool, replica_id: ReplicaId) -> Result<Self> {
         let mut conn = pool.acquire().await?;
 
-        let (snapshot_id, branch_root) = match sqlx::query(
-            "SELECT snapshot_id, branch_root FROM branches WHERE replica_id=? ORDER BY snapshot_id DESC LIMIT 1",
+        let (snapshot_id, root_hash) = match sqlx::query(
+            "SELECT snapshot_id, root_hash FROM branches WHERE replica_id=? ORDER BY snapshot_id DESC LIMIT 1",
         )
         .bind(replica_id.as_ref())
         .fetch_optional(&mut conn)
@@ -50,7 +50,7 @@ impl Branch {
             },
             None => {
                 let snapshot_id = sqlx::query(
-                    "INSERT INTO branches(replica_id, branch_root)
+                    "INSERT INTO branches(replica_id, root_hash)
                              VALUES (?, ?) RETURNING snapshot_id;",
                 )
                 .bind(replica_id.as_ref())
@@ -67,7 +67,7 @@ impl Branch {
         Ok(Self {
             state: Arc::new(Mutex::new(State {
                 snapshot_id,
-                branch_root,
+                root_hash,
             })),
             replica_id,
         })
@@ -89,7 +89,7 @@ impl Branch {
     ) -> Result<()> {
         let mut lock = self.lock().await;
         let mut path = self
-            .get_path(tx, &lock.branch_root, &encoded_locator)
+            .get_path(tx, &lock.root_hash, &encoded_locator)
             .await?;
 
         // We shouldn't be inserting a block to a branch twice. If we do, the assumption is that we
@@ -110,12 +110,12 @@ impl Branch {
     pub async fn get(&self, tx: &mut db::Transaction, encoded_locator: &Hash) -> Result<BlockId> {
         let lock = self.lock().await;
 
-        if lock.branch_root.is_null() {
+        if lock.root_hash.is_null() {
             return Err(Error::BlockIdNotFound);
         }
 
         let path = self
-            .get_path(tx, &lock.branch_root, &encoded_locator)
+            .get_path(tx, &lock.root_hash, &encoded_locator)
             .await?;
 
         match path.get_leaf(encoded_locator) {
@@ -133,7 +133,7 @@ impl Branch {
     pub async fn remove(&self, tx: &mut db::Transaction, encoded_locator: &Hash) -> Result<()> {
         let mut lock = self.lock().await;
         let mut path = self
-            .get_path(tx, &lock.branch_root, encoded_locator)
+            .get_path(tx, &lock.root_hash, encoded_locator)
             .await?;
         path.remove_leaf(encoded_locator);
         self.write_path(tx, &mut lock, &path).await
@@ -147,10 +147,10 @@ impl Branch {
     async fn get_path(
         &self,
         tx: &mut db::Transaction,
-        branch_root: &Hash,
+        root_hash: &Hash,
         encoded_locator: &LocatorHash,
     ) -> Result<PathWithSiblings> {
-        let mut path = PathWithSiblings::new(&branch_root, *encoded_locator);
+        let mut path = PathWithSiblings::new(&root_hash, *encoded_locator);
 
         if path.root.is_null() {
             return Ok(path);
@@ -259,7 +259,7 @@ impl Branch {
         root: &Hash,
     ) -> Result<()> {
         let new_id = sqlx::query(
-            "INSERT INTO branches(replica_id, branch_root)
+            "INSERT INTO branches(replica_id, root_hash)
              SELECT replica_id, ? FROM branches
              WHERE snapshot_id=? RETURNING snapshot_id;",
         )
@@ -271,10 +271,10 @@ impl Branch {
         .unwrap()
         .get(0);
 
-        self.remove_snapshot(lock.snapshot_id, &lock.branch_root, tx)
+        self.remove_snapshot(lock.snapshot_id, &lock.root_hash, tx)
             .await?;
         lock.snapshot_id = new_id;
-        lock.branch_root = *root;
+        lock.root_hash = *root;
 
         Ok(())
     }
