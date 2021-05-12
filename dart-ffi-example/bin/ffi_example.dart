@@ -7,23 +7,21 @@ import 'package:ffi/ffi.dart';
 import '../gen/ouisync_bindings.dart';
 
 Future<void> main() async {
-  final session = await Session.create(
+  final session = await Session.open(
     '/home/adam/.local/share/ouisync/db',
     lib: DynamicLibrary.open('../target/debug/libouisync.so')
   );
 
   final repo = await Repository.open(session);
-  final entries = await repo.readDir('/');
+  final dir = await Directory.open(repo, '/');
 
-  for (var entry in entries) {
+  for (var entry in dir) {
     print('${entry.name}: ${entry.type}');
   }
 
-  await repo.createDir('stuffz/thingies');
-
-  entries.dispose();
-  repo.dispose();
-  session.dispose();
+  dir.close();
+  repo.close();
+  session.close();
 }
 
 class Session {
@@ -31,11 +29,11 @@ class Session {
 
   Session._(this.bindings);
 
-  static Future<Session> create(String store, {DynamicLibrary? lib}) async {
+  static Future<Session> open(String store, {DynamicLibrary? lib}) async {
     final bindings = Bindings(lib ?? _defaultLib());
 
-    await invokeAsync<void>(
-      (port, error) => bindings.session_create(
+    await invoke<void>(
+      (port, error) => bindings.session_open(
         NativeApi.postCObject.cast<Void>(),
         store.toNativeUtf8().cast<Int8>(),
         port,
@@ -44,8 +42,8 @@ class Session {
     return Session._(bindings);
   }
 
-  void dispose() {
-    bindings.session_destroy();
+  void close() {
+    bindings.session_close();
   }
 }
 
@@ -57,29 +55,11 @@ class Repository {
 
   static Future<Repository> open(Session session) async {
     final bindings = session.bindings;
-    return Repository._(bindings, await invokeAsync<int>(
+    return Repository._(bindings, await invoke<int>(
       (port, error) => bindings.repository_open(port, error)));
   }
 
-  Future<DirEntries> readDir(String path) async =>
-    DirEntries._(bindings, await invokeAsync<int>(
-      (port, error) => bindings.repository_read_dir(
-        handle,
-        path.toNativeUtf8().cast<Int8>(),
-        port,
-        error)));
-
-  Future<void> createDir(String path) =>
-    invokeAsync<void>(
-      (port, error) => bindings.repository_create_dir(
-        handle,
-        path.toNativeUtf8().cast<Int8>(),
-        port,
-        error
-      ));
-
-
-  void dispose() {
+  void close() {
     bindings.repository_close(handle);
   }
 }
@@ -109,14 +89,31 @@ class DirEntry {
   }
 }
 
-class DirEntries with IterableMixin<DirEntry> {
+class Directory with IterableMixin<DirEntry> {
   final Bindings bindings;
   final int handle;
 
-  DirEntries._(this.bindings, this.handle);
+  Directory._(this.bindings, this.handle);
 
-  void dispose() {
-    bindings.dir_entries_destroy(handle);
+  static Future<Directory> open(Repository repo, String path) async =>
+    Directory._(repo.bindings, await invoke<int>(
+      (port, error) => repo.bindings.directory_open(
+        repo.handle,
+        path.toNativeUtf8().cast<Int8>(),
+        port,
+        error)));
+
+  static Future<void> create(Repository repo, String path) =>
+    invoke<void>(
+      (port, error) => repo.bindings.directory_create(
+        repo.handle,
+        path.toNativeUtf8().cast<Int8>(),
+        port,
+        error
+      ));
+
+  void close() {
+    bindings.directory_close(handle);
   }
 
   @override
@@ -130,11 +127,11 @@ class DirEntriesIterator extends Iterator<DirEntry> {
   int index = -1;
 
   DirEntriesIterator._(this.bindings, this.handle)
-    : count = bindings.dir_entries_count(handle);
+    : count = bindings.directory_num_entries(handle);
 
   @override DirEntry get current {
     assert(index >= 0 && index < count);
-    return DirEntry._(bindings, bindings.dir_entries_get(handle, index));
+    return DirEntry._(bindings, bindings.directory_get_entry(handle, index));
   }
 
   @override
@@ -153,7 +150,7 @@ class File {
 
   static Future<File> open(Repository repo, String path, int mode) async {
     final bindings = repo.bindings;
-    return File._(bindings, await invokeAsync<int>(
+    return File._(bindings, await invoke<int>(
       (port, error) => bindings.file_open(
         repo.handle,
         path.toNativeUtf8().cast<Int8>(),
@@ -164,10 +161,10 @@ class File {
   }
 
   Future<void> close() =>
-    invokeAsync<void>((port, error) => bindings.file_close(handle, port, error));
+    invoke<void>((port, error) => bindings.file_close(handle, port, error));
 
   Future<void> flush() =>
-    invokeAsync<void>((port, error) => bindings.file_flush(handle, port, error));
+    invoke<void>((port, error) => bindings.file_flush(handle, port, error));
 
 }
 
@@ -199,7 +196,7 @@ class ErrorHelper {
 }
 
 // Helper to invoke a native async function.
-Future<T> invokeAsync<T>(void Function(int, Pointer<Pointer<Int8>>) fun) async {
+Future<T> invoke<T>(void Function(int, Pointer<Pointer<Int8>>) fun) async {
   final error = ErrorHelper();
   final recvPort = ReceivePort();
 
@@ -212,12 +209,3 @@ Future<T> invokeAsync<T>(void Function(int, Pointer<Pointer<Int8>>) fun) async {
 
   return result;
 }
-
-// Helper to invoke native sync function.
-T invokeSync<T>(T Function(Pointer<Pointer<Int8>>) fun) {
-  final helper = ErrorHelper();
-  final result = fun(helper.ptr);
-  helper.check();
-  return result;
-}
-
