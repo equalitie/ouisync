@@ -78,16 +78,6 @@ pub unsafe extern "C" fn session_close() {
     }
 }
 
-/// Free a string allocated by the native side.
-#[no_mangle]
-pub unsafe extern "C" fn string_destroy(ptr: *mut c_char) {
-    if ptr.is_null() {
-        return;
-    }
-
-    let _ = CString::from_raw(ptr);
-}
-
 unsafe fn store_from_raw(store: *const c_char) -> Result<db::Store> {
     let store = CStr::from_ptr(store);
 

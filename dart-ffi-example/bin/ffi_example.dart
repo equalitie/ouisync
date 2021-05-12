@@ -32,12 +32,13 @@ class Session {
   static Future<Session> open(String store, {DynamicLibrary? lib}) async {
     final bindings = Bindings(lib ?? _defaultLib());
 
-    await invoke<void>(
-      (port, error) => bindings.session_open(
-        NativeApi.postCObject.cast<Void>(),
-        store.toNativeUtf8().cast<Int8>(),
-        port,
-        error));
+    await withPool((pool) =>
+      invoke<void>((port, error) =>
+        bindings.session_open(
+          NativeApi.postCObject.cast<Void>(),
+          store.toNativeUtf8(allocator: pool).cast<Int8>(),
+          port,
+          error)));
 
     return Session._(bindings);
   }
@@ -96,21 +97,22 @@ class Directory with IterableMixin<DirEntry> {
   Directory._(this.bindings, this.handle);
 
   static Future<Directory> open(Repository repo, String path) async =>
-    Directory._(repo.bindings, await invoke<int>(
-      (port, error) => repo.bindings.directory_open(
-        repo.handle,
-        path.toNativeUtf8().cast<Int8>(),
-        port,
-        error)));
+    Directory._(repo.bindings, await withPool((pool) =>
+      invoke<int>((port, error) =>
+        repo.bindings.directory_open(
+          repo.handle,
+          path.toNativeUtf8(allocator: pool).cast<Int8>(),
+          port,
+          error))));
 
   static Future<void> create(Repository repo, String path) =>
-    invoke<void>(
-      (port, error) => repo.bindings.directory_create(
+    withPool((pool) =>
+      invoke<void>((port, error) => repo.bindings.directory_create(
         repo.handle,
-        path.toNativeUtf8().cast<Int8>(),
+        path.toNativeUtf8(allocator: pool).cast<Int8>(),
         port,
         error
-      ));
+      )));
 
   void close() {
     bindings.directory_close(handle);
@@ -150,14 +152,14 @@ class File {
 
   static Future<File> open(Repository repo, String path, int mode) async {
     final bindings = repo.bindings;
-    return File._(bindings, await invoke<int>(
-      (port, error) => bindings.file_open(
-        repo.handle,
-        path.toNativeUtf8().cast<Int8>(),
-        mode,
-        port,
-        error)));
-
+    return File._(bindings, await withPool((pool) =>
+      invoke<int>((port, error) =>
+        bindings.file_open(
+          repo.handle,
+          path.toNativeUtf8(allocator: pool).cast<Int8>(),
+          mode,
+          port,
+          error))));
   }
 
   Future<void> close() =>
@@ -189,13 +191,51 @@ class ErrorHelper {
   void check() {
     if (ptr.value != nullptr) {
       final error = ptr.value.cast<Utf8>().toDartString();
-      // TODO: do we need to `free` the ptr here?
+
+      // TODO: freeing stuff that was allocated on the native side. Verify this is OK.
+      malloc.free(ptr.value);
+      malloc.free(ptr);
+
       throw Error(error);
     }
   }
 }
 
-// Helper to invoke a native async function.
+/// Allocator that tracks all allocations and frees them all at the same time.
+class Pool implements Allocator {
+  List<Pointer<NativeType>> ptrs = [];
+
+  @override
+  Pointer<T> allocate<T extends NativeType>(int byteCount, {int? alignment}) {
+    final ptr = malloc.allocate<T>(byteCount, alignment: alignment);
+    ptrs.add(ptr);
+    return ptr;
+  }
+
+  @override
+  void free(Pointer<NativeType> ptr) {
+    // free on [release]
+  }
+
+  void release() {
+    for (var ptr in ptrs) {
+      malloc.free(ptr);
+    }
+  }
+}
+
+/// Call the function passing it a [Pool] which will be released when the function returns.
+Future<T> withPool<T>(Future<T> Function(Pool) fun) async {
+  final pool = Pool();
+
+  try {
+    return await fun(pool);
+  } finally {
+    pool.release();
+  }
+}
+
+/// Helper to invoke a native async function.
 Future<T> invoke<T>(void Function(int, Pointer<Pointer<Int8>>) fun) async {
   final error = ErrorHelper();
   final recvPort = ReceivePort();
