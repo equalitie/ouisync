@@ -8,7 +8,10 @@ use crate::{
     crypto::Hash,
     db,
     error::{Error, Result},
-    index::node::Node,
+    index::node::{
+        Node,
+        RootNode,
+    },
     index::LocatorHash,
     index::{
         column, deserialize_leaf, serialize_leaf, INNER_LAYER_COUNT, MAX_INNER_NODE_CHILD_COUNT,
@@ -22,60 +25,26 @@ use tokio::sync::{Mutex, MutexGuard};
 
 type SnapshotId = u32;
 
-type Lock<'a> = MutexGuard<'a, State>;
-
-struct State {
-    snapshot_id: SnapshotId,
-    root_hash: Hash,
-}
+type Lock<'a> = MutexGuard<'a, RootNode>;
 
 pub struct Branch {
-    state: Arc<Mutex<State>>,
+    root_node: Arc<Mutex<RootNode>>,
     replica_id: ReplicaId,
 }
 
 impl Branch {
     pub async fn new(pool: db::Pool, replica_id: ReplicaId) -> Result<Self> {
-        let mut conn = pool.acquire().await?;
-
-        let (snapshot_id, root_hash) = match sqlx::query(
-            "SELECT snapshot_id, root_hash FROM branches WHERE replica_id=? ORDER BY snapshot_id DESC LIMIT 1",
-        )
-        .bind(replica_id.as_ref())
-        .fetch_optional(&mut conn)
-        .await?
-        {
-            Some(row) => {
-                (row.get(0), column::<Hash>(&row, 1)?)
-            },
-            None => {
-                let snapshot_id = sqlx::query(
-                    "INSERT INTO branches(replica_id, root_hash)
-                             VALUES (?, ?) RETURNING snapshot_id;",
-                )
-                .bind(replica_id.as_ref())
-                .bind(Hash::null().as_ref())
-                .fetch_optional(&mut conn)
-                .await?
-                .unwrap()
-                .get(0);
-
-                (snapshot_id, Hash::null())
-            }
-        };
+        let root_node = RootNode::get_latest_or_create(pool, &replica_id).await?;
 
         Ok(Self {
-            state: Arc::new(Mutex::new(State {
-                snapshot_id,
-                root_hash,
-            })),
+            root_node: Arc::new(Mutex::new(root_node)),
             replica_id,
         })
     }
 
     pub fn clone(&self) -> Self {
         Self {
-            state: self.state.clone(),
+            root_node: self.root_node.clone(),
             replica_id: self.replica_id,
         }
     }
@@ -294,7 +263,7 @@ impl Branch {
     }
 
     async fn lock(&self) -> Lock<'_> {
-        self.state.lock().await
+        self.root_node.lock().await
     }
 }
 

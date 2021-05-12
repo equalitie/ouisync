@@ -4,12 +4,57 @@ use crate::{
     db,
     error::Result,
     index::LocatorHash,
-    index::{column, deserialize_leaf, serialize_leaf, INNER_LAYER_COUNT},
+    index::{
+        column,
+        deserialize_leaf,
+        serialize_leaf,
+        INNER_LAYER_COUNT
+    },
+    replica_id::ReplicaId,
 };
 use async_recursion::async_recursion;
 use sqlx::{sqlite::SqliteRow, Row};
 
 type SnapshotId = u32;
+
+pub struct RootNode {
+    pub snapshot_id: SnapshotId,
+    pub root_hash: Hash,
+}
+
+impl RootNode {
+    pub async fn get_latest_or_create(pool: db::Pool, replica_id: &ReplicaId) -> Result<Self> {
+        let mut conn = pool.acquire().await?;
+
+        let (snapshot_id, root_hash) = match sqlx::query(
+            "SELECT snapshot_id, root_hash FROM branches WHERE replica_id=? ORDER BY snapshot_id DESC LIMIT 1",
+        )
+        .bind(replica_id.as_ref())
+        .fetch_optional(&mut conn)
+        .await?
+        {
+            Some(row) => {
+                (row.get(0), column::<Hash>(&row, 1)?)
+            },
+            None => {
+                let snapshot_id = sqlx::query(
+                    "INSERT INTO branches(replica_id, root_hash)
+                             VALUES (?, ?) RETURNING snapshot_id;",
+                )
+                .bind(replica_id.as_ref())
+                .bind(Hash::null().as_ref())
+                .fetch_optional(&mut conn)
+                .await?
+                .unwrap()
+                .get(0);
+
+                (snapshot_id, Hash::null())
+            }
+        };
+
+        Ok(Self{snapshot_id, root_hash})
+    }
+}
 
 #[derive(Debug)]
 pub enum Node {
