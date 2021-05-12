@@ -4,7 +4,7 @@ import 'dart:ffi';
 import 'dart:isolate';
 import 'dart:math';
 import 'package:ffi/ffi.dart';
-import '../gen/ouisync_bindings.dart';
+import '../gen/bindings.dart';
 
 Future<void> main() async {
   final session = await Session.open(
@@ -18,6 +18,9 @@ Future<void> main() async {
   for (var entry in dir) {
     print('${entry.name}: ${entry.type}');
   }
+
+  var file = await File.create(repo, 'file#${dir.length}.txt');
+  await file.close();
 
   dir.close();
   repo.close();
@@ -150,17 +153,23 @@ class File {
 
   File._(this.bindings, this.handle);
 
-  static Future<File> open(Repository repo, String path, int mode) async {
-    final bindings = repo.bindings;
-    return File._(bindings, await withPool((pool) =>
+  static Future<File> open(Repository repo, String path) async =>
+    File._(repo.bindings, await withPool((pool) =>
       invoke<int>((port, error) =>
-        bindings.file_open(
+        repo.bindings.file_open(
           repo.handle,
           path.toNativeUtf8(allocator: pool).cast<Int8>(),
-          mode,
           port,
           error))));
-  }
+
+  static Future<File> create(Repository repo, String path) async =>
+    File._(repo.bindings, await withPool((pool) =>
+      invoke<int>((port, error) =>
+        repo.bindings.file_create(
+          repo.handle,
+          path.toNativeUtf8(allocator: pool).cast<Int8>(),
+          port,
+          error))));
 
   Future<void> close() =>
     invoke<void>((port, error) => bindings.file_close(handle, port, error));
@@ -192,7 +201,8 @@ class ErrorHelper {
     if (ptr.value != nullptr) {
       final error = ptr.value.cast<Utf8>().toDartString();
 
-      // TODO: freeing stuff that was allocated on the native side. Verify this is OK.
+      // NOTE: we are freeing a pointer here that was allocated by the native side. This *should*
+      // be fine as long as both sides are using the same allocator.
       malloc.free(ptr.value);
       malloc.free(ptr);
 

@@ -15,12 +15,12 @@ dev_dependencies:
 ffigen:
     name: 'Bindings'
     description: 'Bindings to the ouisync library'
-    output: 'gen/ouisync_bindings.dart'
+    output: 'gen/bindings.dart'
     headers:
         entry-points:
-            - '../target/ouisync_bindings.h'
+            - '../target/bindings.h'
         include-directives:
-            - '**ouisync_bindings.h'
+            - '**bindings.h'
 
 
 

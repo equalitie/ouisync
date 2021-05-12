@@ -7,7 +7,6 @@ use crate::{crypto::Cryptor, entry::EntryType, error::Error, file::File, reposit
 use std::{
     convert::TryInto,
     ffi::{CString, OsStr},
-    io::SeekFrom,
     os::raw::c_char,
     path::Path,
     sync::Arc,
@@ -16,12 +15,6 @@ use tokio::sync::Mutex;
 
 pub const DIR_ENTRY_FILE: u8 = 0;
 pub const DIR_ENTRY_DIRECTORY: u8 = 1;
-
-pub const OPEN_MODE_READ: u8 = 0b00000001;
-pub const OPEN_MODE_WRITE: u8 = 0b00000010;
-pub const OPEN_MODE_CREATE: u8 = 0b0000100;
-pub const OPEN_MODE_APPEND: u8 = 0b00001000;
-pub const OPEN_MODE_TRUNCATE: u8 = 0b00010000;
 
 /// Opens a repository.
 ///
@@ -155,7 +148,33 @@ pub unsafe extern "C" fn dir_entry_type(handle: RefHandle<DirEntry>) -> u8 {
 pub unsafe extern "C" fn file_open(
     repo: SharedHandle<Repository>,
     path: *const c_char,
-    mode: u8,
+    port: DartPort,
+    error: *mut *mut c_char,
+) {
+    session::with(port, error, |ctx| {
+        let path = utils::ptr_to_path_buf(path)?;
+        let repo = repo.get();
+
+        ctx.spawn(async move {
+            let (parent, name) = decompose_path(&path).ok_or(Error::EntryExists)?;
+
+            let file: File = repo
+                .open_directory(parent)
+                .await?
+                .lookup(name)?
+                .open()
+                .await?
+                .try_into()?;
+
+            Ok(SharedHandle::new(Arc::new(Mutex::new(file))))
+        })
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn file_create(
+    repo: SharedHandle<Repository>,
+    path: *const c_char,
     port: DartPort,
     error: *mut *mut c_char,
 ) {
@@ -167,26 +186,10 @@ pub unsafe extern "C" fn file_open(
             let (parent, name) = decompose_path(&path).ok_or(Error::EntryExists)?;
 
             let mut parent = repo.open_directory(parent).await?;
+            let mut file = parent.create_file(name.to_owned())?;
 
-            let mut file = if mode & OPEN_MODE_CREATE != 0 {
-                let file = parent.create_file(name.to_owned())?;
-                parent.flush().await?;
-                file
-            } else {
-                let entry = parent.lookup(name)?;
-                entry.entry_type().check_is_file()?;
-                entry.open().await?.try_into()?
-            };
-
-            if mode & OPEN_MODE_TRUNCATE != 0 {
-                file.truncate().await?;
-            }
-
-            if mode & OPEN_MODE_APPEND != 0 {
-                file.seek(SeekFrom::End(0)).await?;
-            }
-
-            // TODO: set whether the file is read-only/write-only/read-write
+            file.flush().await?;
+            parent.flush().await?;
 
             Ok(SharedHandle::new(Arc::new(Mutex::new(file))))
         })
