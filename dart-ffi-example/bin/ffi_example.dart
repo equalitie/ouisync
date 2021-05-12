@@ -39,7 +39,7 @@ class Session {
       invoke<void>((port, error) =>
         bindings.session_open(
           NativeApi.postCObject.cast<Void>(),
-          store.toNativeUtf8(allocator: pool).cast<Int8>(),
+          pool.toNativeUtf8(store),
           port,
           error)));
 
@@ -102,20 +102,12 @@ class Directory with IterableMixin<DirEntry> {
   static Future<Directory> open(Repository repo, String path) async =>
     Directory._(repo.bindings, await withPool((pool) =>
       invoke<int>((port, error) =>
-        repo.bindings.directory_open(
-          repo.handle,
-          path.toNativeUtf8(allocator: pool).cast<Int8>(),
-          port,
-          error))));
+        repo.bindings.directory_open(repo.handle, pool.toNativeUtf8(path), port, error))));
 
   static Future<void> create(Repository repo, String path) =>
     withPool((pool) =>
       invoke<void>((port, error) => repo.bindings.directory_create(
-        repo.handle,
-        path.toNativeUtf8(allocator: pool).cast<Int8>(),
-        port,
-        error
-      )));
+        repo.handle, pool.toNativeUtf8(path), port, error)));
 
   void close() {
     bindings.directory_close(handle);
@@ -156,20 +148,12 @@ class File {
   static Future<File> open(Repository repo, String path) async =>
     File._(repo.bindings, await withPool((pool) =>
       invoke<int>((port, error) =>
-        repo.bindings.file_open(
-          repo.handle,
-          path.toNativeUtf8(allocator: pool).cast<Int8>(),
-          port,
-          error))));
+        repo.bindings.file_open(repo.handle, pool.toNativeUtf8(path), port, error))));
 
   static Future<File> create(Repository repo, String path) async =>
     File._(repo.bindings, await withPool((pool) =>
       invoke<int>((port, error) =>
-        repo.bindings.file_create(
-          repo.handle,
-          path.toNativeUtf8(allocator: pool).cast<Int8>(),
-          port,
-          error))));
+        repo.bindings.file_create(repo.handle, pool.toNativeUtf8(path), port, error))));
 
   Future<void> close() =>
     invoke<void>((port, error) => bindings.file_close(handle, port, error));
@@ -193,11 +177,13 @@ class Error implements Exception {
 }
 
 class ErrorHelper {
-  final ptr = malloc<Pointer<Int8>>();
+  var ptr = malloc<Pointer<Int8>>();
 
   ErrorHelper();
 
   void check() {
+    assert(ptr != nullptr);
+
     if (ptr.value != nullptr) {
       final error = ptr.value.cast<Utf8>().toDartString();
 
@@ -205,6 +191,7 @@ class ErrorHelper {
       // be fine as long as both sides are using the same allocator.
       malloc.free(ptr.value);
       malloc.free(ptr);
+      ptr = nullptr;
 
       throw Error(error);
     }
@@ -232,6 +219,10 @@ class Pool implements Allocator {
       malloc.free(ptr);
     }
   }
+
+  // Convenience function to convert a dart string to a C-style nul-terminated utf-8 encoded
+  // string pointer. The pointer is allocated using this pool.
+  Pointer<Int8> toNativeUtf8(String str) => str.toNativeUtf8(allocator: this).cast<Int8>();
 }
 
 /// Call the function passing it a [Pool] which will be released when the function returns.
