@@ -55,6 +55,30 @@ impl Repository {
         self.open_directory_by_locator(locator).await
     }
 
+    /// Creates a new file at the given path. Returns both the new file and its parent directory.
+    pub async fn create_file<P: AsRef<Path>>(&self, path: P) -> Result<(File, Directory)> {
+        let (parent, name) = decompose_path(path.as_ref()).ok_or(Error::EntryExists)?;
+
+        let mut parent = self.open_directory(parent).await?;
+        let file = parent.create_file(name.to_owned())?;
+
+        Ok((file, parent))
+    }
+
+    /// Creates a new directory at the given path. Returns both the new directory and its parent
+    /// directory.
+    pub async fn create_directory<P: AsRef<Path>>(
+        &self,
+        path: P,
+    ) -> Result<(Directory, Directory)> {
+        let (parent, name) = decompose_path(path.as_ref()).ok_or(Error::EntryExists)?;
+
+        let mut parent = self.open_directory(parent).await?;
+        let dir = parent.create_directory(name.to_owned())?;
+
+        Ok((dir, parent))
+    }
+
     /// Removes (delete) the file at the given path. Returns the parent directory.
     pub async fn remove_file<P: AsRef<Path>>(&self, path: P) -> Result<Directory> {
         let (parent, name) = decompose_path(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
@@ -69,7 +93,7 @@ impl Repository {
     pub async fn remove_directory<P: AsRef<Path>>(&self, path: P) -> Result<Directory> {
         let (parent, name) = decompose_path(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
         let mut parent = self.open_directory(parent).await?;
-        parent.remove_subdirectory(name).await?;
+        parent.remove_directory(name).await?;
 
         Ok(parent)
     }
@@ -165,9 +189,9 @@ impl Repository {
     }
 }
 
-/// Decomposes `Path` into parent and filename. Returns `None` if `path` doesn't have parent
-/// (it's the root).
-pub fn decompose_path(path: &Path) -> Option<(&Path, &OsStr)> {
+// Decomposes `Path` into parent and filename. Returns `None` if `path` doesn't have parent
+// (it's the root).
+fn decompose_path(path: &Path) -> Option<(&Path, &OsStr)> {
     match (path.parent(), path.file_name()) {
         (Some(parent), Some(name)) => Some((parent, name)),
         _ => None,
@@ -187,7 +211,7 @@ mod tests {
         let mut file_a = root_dir.create_file("a.txt".into()).unwrap();
         file_a.flush().await.unwrap();
 
-        let mut subdir = root_dir.create_subdirectory("sub".into()).unwrap();
+        let mut subdir = root_dir.create_directory("sub".into()).unwrap();
         let mut file_b = subdir.create_file("b.txt".into()).unwrap();
         file_b.flush().await.unwrap();
         subdir.flush().await.unwrap();

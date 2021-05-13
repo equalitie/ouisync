@@ -579,7 +579,7 @@ impl Inner {
         );
 
         let mut parent_dir = self.open_directory_by_inode(parent).await?;
-        let mut dir = parent_dir.create_subdirectory(name.to_owned())?;
+        let mut dir = parent_dir.create_directory(name.to_owned())?;
 
         // TODO: should these two happen atomically (in a transaction)?
         dir.flush().await?;
@@ -597,7 +597,7 @@ impl Inner {
         log::debug!("rmdir {}", self.inodes.path_display(parent, Some(name)));
 
         let mut parent_dir = self.open_directory_by_inode(parent).await?;
-        parent_dir.remove_subdirectory(name).await?;
+        parent_dir.remove_directory(name).await?;
         parent_dir.flush().await
     }
 

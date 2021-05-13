@@ -2,11 +2,7 @@ use super::{
     session,
     utils::{self, AssumeSend, Port, SharedHandle},
 };
-use crate::{
-    error::Error,
-    file::File,
-    repository::{decompose_path, Repository},
-};
+use crate::{error::Error, file::File, repository::Repository};
 use std::{convert::TryInto, io::SeekFrom, os::raw::c_char, slice, sync::Arc};
 use tokio::sync::Mutex;
 
@@ -40,10 +36,7 @@ pub unsafe extern "C" fn file_create(
         let repo = repo.get();
 
         ctx.spawn(async move {
-            let (parent, name) = decompose_path(&path).ok_or(Error::EntryExists)?;
-
-            let mut parent = repo.open_directory(parent).await?;
-            let mut file = parent.create_file(name.to_owned())?;
+            let (mut file, mut parent) = repo.create_file(path).await?;
 
             file.flush().await?;
             parent.flush().await?;

@@ -2,11 +2,7 @@ use super::{
     repository, session,
     utils::{self, Port, RefHandle, SharedHandle, UniqueHandle},
 };
-use crate::{
-    entry::EntryType,
-    error::Error,
-    repository::{decompose_path, Repository},
-};
+use crate::{entry::EntryType, repository::Repository};
 use std::{convert::TryInto, ffi::CString, os::raw::c_char};
 
 // Currently this is only a read-only snapshot of a directory.
@@ -31,10 +27,7 @@ pub unsafe extern "C" fn directory_create(
         let repo = repo.get();
 
         ctx.spawn(async move {
-            let (parent, name) = decompose_path(&path).ok_or(Error::EntryExists)?;
-
-            let mut parent = repo.open_directory(parent).await?;
-            let mut dir = parent.create_subdirectory(name.to_owned())?;
+            let (mut dir, mut parent) = repo.create_directory(path).await?;
 
             dir.flush().await?;
             parent.flush().await?;

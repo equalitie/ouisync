@@ -111,7 +111,7 @@ impl Directory {
     }
 
     /// Creates a new subdirectory of this directory.
-    pub fn create_subdirectory(&mut self, name: OsString) -> Result<Self> {
+    pub fn create_directory(&mut self, name: OsString) -> Result<Self> {
         let seq = self.content.insert(name, EntryType::Directory)?;
 
         Ok(Self::create(
@@ -131,7 +131,7 @@ impl Directory {
         Ok(())
     }
 
-    pub async fn remove_subdirectory(&mut self, name: &OsStr) -> Result<()> {
+    pub async fn remove_directory(&mut self, name: &OsStr) -> Result<()> {
         let dir = self.lookup(name)?.open_directory().await?;
 
         if dir.entries().len() > 0 {
@@ -526,8 +526,8 @@ mod tests {
 
         let mut root_dir =
             Directory::create(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root);
-        let mut src_dir = root_dir.create_subdirectory("src".into()).unwrap();
-        let mut dst_dir = root_dir.create_subdirectory("dst".into()).unwrap();
+        let mut src_dir = root_dir.create_directory("src".into()).unwrap();
+        let mut dst_dir = root_dir.create_directory("dst".into()).unwrap();
 
         let src_name = OsStr::new("src.txt");
         let dst_name = OsStr::new("dst.txt");
