@@ -8,10 +8,8 @@ import 'package:ffi/ffi.dart';
 import '../gen/bindings.dart';
 
 Future<void> main() async {
-  final session = await Session.open(
-    '/home/adam/.local/share/ouisync/db',
-    lib: DynamicLibrary.open('../target/debug/libouisync.so')
-  );
+  final session = await Session.open('/home/adam/.local/share/ouisync/db',
+      lib: DynamicLibrary.open('../target/debug/libouisync.so'));
 
   final repo = await Repository.open(session);
   final dir = await Directory.open(repo, '/');
@@ -44,13 +42,9 @@ class Session {
   static Future<Session> open(String store, {DynamicLibrary? lib}) async {
     final bindings = Bindings(lib ?? _defaultLib());
 
-    await withPool((pool) =>
-      invoke<void>((port, error) =>
-        bindings.session_open(
-          NativeApi.postCObject.cast<Void>(),
-          pool.toNativeUtf8(store),
-          port,
-          error)));
+    await withPool((pool) => invoke<void>((port, error) =>
+        bindings.session_open(NativeApi.postCObject.cast<Void>(),
+            pool.toNativeUtf8(store), port, error)));
 
     return Session._(bindings);
   }
@@ -68,8 +62,10 @@ class Repository {
 
   static Future<Repository> open(Session session) async {
     final bindings = session.bindings;
-    return Repository._(bindings, await invoke<int>(
-      (port, error) => bindings.repository_open(port, error)));
+    return Repository._(
+        bindings,
+        await invoke<int>(
+            (port, error) => bindings.repository_open(port, error)));
   }
 
   void close() {
@@ -77,14 +73,9 @@ class Repository {
   }
 
   Future<EntryType?> entryType(String path) async =>
-    decodeEntryType(
-      await withPool((pool) =>
-        invoke<int>((port, error) =>
+      decodeEntryType(await withPool((pool) => invoke<int>((port, error) =>
           bindings.repository_entry_type(
-            handle,
-            pool.toNativeUtf8(path),
-            port,
-            error))));
+              handle, pool.toNativeUtf8(path), port, error))));
 
   Future<bool> entryExists(String path) async => await entryType(path) != null;
 }
@@ -95,14 +86,14 @@ enum EntryType {
 }
 
 EntryType? decodeEntryType(int n) {
-    switch (n) {
-      case ENTRY_TYPE_FILE:
-        return EntryType.file;
-      case ENTRY_TYPE_DIRECTORY:
-        return EntryType.directory;
-      default:
-        return null;
-    }
+  switch (n) {
+    case ENTRY_TYPE_FILE:
+      return EntryType.file;
+    case ENTRY_TYPE_DIRECTORY:
+      return EntryType.directory;
+    default:
+      return null;
+  }
 }
 
 class DirEntry {
@@ -111,11 +102,12 @@ class DirEntry {
 
   DirEntry._(this.bindings, this.handle);
 
-  String get name => bindings.dir_entry_name(handle).cast<Utf8>().toDartString();
+  String get name =>
+      bindings.dir_entry_name(handle).cast<Utf8>().toDartString();
 
   EntryType get type {
-    return decodeEntryType(bindings.dir_entry_type(handle))
-        ?? (throw Error("invalid dir entry type"));
+    return decodeEntryType(bindings.dir_entry_type(handle)) ??
+        (throw Error("invalid dir entry type"));
   }
 }
 
@@ -126,14 +118,15 @@ class Directory with IterableMixin<DirEntry> {
   Directory._(this.bindings, this.handle);
 
   static Future<Directory> open(Repository repo, String path) async =>
-    Directory._(repo.bindings, await withPool((pool) =>
-      invoke<int>((port, error) =>
-        repo.bindings.directory_open(repo.handle, pool.toNativeUtf8(path), port, error))));
+      Directory._(
+          repo.bindings,
+          await withPool((pool) => invoke<int>((port, error) => repo.bindings
+              .directory_open(
+                  repo.handle, pool.toNativeUtf8(path), port, error))));
 
-  static Future<void> create(Repository repo, String path) =>
-    withPool((pool) =>
+  static Future<void> create(Repository repo, String path) => withPool((pool) =>
       invoke<void>((port, error) => repo.bindings.directory_create(
-        repo.handle, pool.toNativeUtf8(path), port, error)));
+          repo.handle, pool.toNativeUtf8(path), port, error)));
 
   void close() {
     bindings.directory_close(handle);
@@ -150,9 +143,10 @@ class DirEntriesIterator extends Iterator<DirEntry> {
   int index = -1;
 
   DirEntriesIterator._(this.bindings, this.handle)
-    : count = bindings.directory_num_entries(handle);
+      : count = bindings.directory_num_entries(handle);
 
-  @override DirEntry get current {
+  @override
+  DirEntry get current {
     assert(index >= 0 && index < count);
     return DirEntry._(bindings, bindings.directory_get_entry(handle, index));
   }
@@ -162,7 +156,6 @@ class DirEntriesIterator extends Iterator<DirEntry> {
     index = min(index + 1, count);
     return index < count;
   }
-
 }
 
 class File {
@@ -173,28 +166,32 @@ class File {
 
   static const defaultChunkSize = 1024;
 
-  static Future<File> open(Repository repo, String path) async =>
-    File._(repo.bindings, await withPool((pool) =>
-      invoke<int>((port, error) =>
-        repo.bindings.file_open(repo.handle, pool.toNativeUtf8(path), port, error))));
+  static Future<File> open(Repository repo, String path) async => File._(
+      repo.bindings,
+      await withPool((pool) => invoke<int>((port, error) => repo.bindings
+          .file_open(repo.handle, pool.toNativeUtf8(path), port, error))));
 
-  static Future<File> create(Repository repo, String path) async =>
-    File._(repo.bindings, await withPool((pool) =>
-      invoke<int>((port, error) =>
-        repo.bindings.file_create(repo.handle, pool.toNativeUtf8(path), port, error))));
+  static Future<File> create(Repository repo, String path) async => File._(
+      repo.bindings,
+      await withPool((pool) => invoke<int>((port, error) => repo.bindings
+          .file_create(repo.handle, pool.toNativeUtf8(path), port, error))));
+
+  static Future<void> remove(Repository repo, String path) =>
+      withPool((pool) => invoke<void>((port, error) => repo.bindings
+          .file_remove(repo.handle, pool.toNativeUtf8(path), port, error)));
 
   Future<void> close() =>
-    invoke<void>((port, error) => bindings.file_close(handle, port, error));
+      invoke<void>((port, error) => bindings.file_close(handle, port, error));
 
   Future<void> flush() =>
-    invoke<void>((port, error) => bindings.file_flush(handle, port, error));
+      invoke<void>((port, error) => bindings.file_flush(handle, port, error));
 
   Future<List<int>> read(int offset, int size) async {
     var buffer = malloc<Uint8>(size);
 
     try {
       final actualSize = await invoke<int>((port, error) =>
-        bindings.file_read(handle, offset, buffer, size, port, error));
+          bindings.file_read(handle, offset, buffer, size, port, error));
       return buffer.asTypedList(actualSize).toList();
     } finally {
       malloc.free(buffer);
@@ -206,15 +203,15 @@ class File {
 
     try {
       buffer.asTypedList(data.length).setAll(0, data);
-      await invoke<void>((port, error) =>
-        bindings.file_write(handle, offset, buffer, data.length, port, error));
+      await invoke<void>((port, error) => bindings.file_write(
+          handle, offset, buffer, data.length, port, error));
     } finally {
       malloc.free(buffer);
     }
   }
 
-  Future<void> truncate(int size) =>
-    invoke<void>((port, error) => bindings.file_truncate(handle, size, port, error));
+  Future<void> truncate(int size) => invoke<void>(
+      (port, error) => bindings.file_truncate(handle, size, port, error));
 }
 
 DynamicLibrary _defaultLib() {
@@ -229,7 +226,6 @@ class Error implements Exception {
 
   String toString() => _message;
 }
-
 
 // Private helpers to simplify working with the native API:
 
@@ -282,7 +278,8 @@ class Pool implements Allocator {
 
   // Convenience function to convert a dart string to a C-style nul-terminated utf-8 encoded
   // string pointer. The pointer is allocated using this pool.
-  Pointer<Int8> toNativeUtf8(String str) => str.toNativeUtf8(allocator: this).cast<Int8>();
+  Pointer<Int8> toNativeUtf8(String str) =>
+      str.toNativeUtf8(allocator: this).cast<Int8>();
 }
 
 /// Call the function passing it a [Pool] which will be released when the function returns.

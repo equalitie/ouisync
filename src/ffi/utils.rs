@@ -5,7 +5,7 @@ use std::{
     marker::PhantomData,
     mem,
     os::raw::c_char,
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::Arc,
 };
 
@@ -133,11 +133,4 @@ fn os_str_as_bytes(os: &OsStr) -> Result<&[u8]> {
 #[cfg(not(unix))]
 fn os_str_to_bytes(os: &OsStr) -> Result<&[u8]> {
     os.to_str().ok_or(Error::MalfomedData).as_bytes()
-}
-
-pub fn decompose_path(path: &Path) -> Option<(&Path, &OsStr)> {
-    match (path.parent(), path.file_name()) {
-        (Some(parent), Some(name)) => Some((parent, name)),
-        _ => None,
-    }
 }

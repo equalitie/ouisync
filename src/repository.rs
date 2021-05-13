@@ -1,4 +1,7 @@
-use std::path::{Component, Path};
+use std::{
+    ffi::OsStr,
+    path::{Component, Path},
+};
 
 use crate::{
     crypto::Cryptor,
@@ -50,6 +53,14 @@ impl Repository {
     /// `EntryNotFound`.
     pub async fn lookup<P: AsRef<Path>>(&self, path: P) -> Result<(Locator, EntryType)> {
         self.lookup_by_path(path.as_ref()).await
+    }
+
+    /// Remove (delete) the file at the given path.
+    pub async fn remove_file<P: AsRef<Path>>(&self, path: P) -> Result<()> {
+        let (parent, name) = decompose_path(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
+        let mut parent = self.open_directory(parent).await?;
+        parent.remove_entry(name).await?;
+        parent.flush().await
     }
 
     /// Open an entry (file or directory) at the given locator.
@@ -140,6 +151,15 @@ impl Repository {
         }
 
         Ok((stack.pop().unwrap(), last_type))
+    }
+}
+
+/// Decomposes `Path` into parent and filename. Returns `None` if `path` doesn't have parent
+/// (it's the root).
+pub fn decompose_path(path: &Path) -> Option<(&Path, &OsStr)> {
+    match (path.parent(), path.file_name()) {
+        (Some(parent), Some(name)) => Some((parent, name)),
+        _ => None,
     }
 }
 

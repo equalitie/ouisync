@@ -2,7 +2,11 @@ use super::{
     session,
     utils::{self, AssumeSend, Port, SharedHandle},
 };
-use crate::{error::Error, file::File, repository::Repository};
+use crate::{
+    error::Error,
+    file::File,
+    repository::{decompose_path, Repository},
+};
 use std::{convert::TryInto, io::SeekFrom, os::raw::c_char, slice, sync::Arc};
 use tokio::sync::Mutex;
 
@@ -18,7 +22,7 @@ pub unsafe extern "C" fn file_open(
         let repo = repo.get();
 
         ctx.spawn(async move {
-            let (parent, name) = utils::decompose_path(&path).ok_or(Error::EntryExists)?;
+            let (parent, name) = decompose_path(&path).ok_or(Error::EntryExists)?;
 
             let file: File = repo
                 .open_directory(parent)
@@ -45,7 +49,7 @@ pub unsafe extern "C" fn file_create(
         let repo = repo.get();
 
         ctx.spawn(async move {
-            let (parent, name) = utils::decompose_path(&path).ok_or(Error::EntryExists)?;
+            let (parent, name) = decompose_path(&path).ok_or(Error::EntryExists)?;
 
             let mut parent = repo.open_directory(parent).await?;
             let mut file = parent.create_file(name.to_owned())?;
@@ -58,14 +62,30 @@ pub unsafe extern "C" fn file_create(
     })
 }
 
+/// Remove (delete) the file at the given path from the repository.
+#[no_mangle]
+pub unsafe extern "C" fn file_remove(
+    repo: SharedHandle<Repository>,
+    path: *const c_char,
+    port: Port<()>,
+    error: *mut *mut c_char,
+) {
+    session::with(port, error, |ctx| {
+        let repo = repo.get();
+        let path = utils::ptr_to_path_buf(path)?;
+
+        ctx.spawn(async move { repo.remove_file(&path).await })
+    })
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn file_close(
     handle: SharedHandle<Mutex<File>>,
     port: Port<()>,
     error: *mut *mut c_char,
 ) {
-    let file = handle.release();
     session::with(port, error, |ctx| {
+        let file = handle.release();
         ctx.spawn(async move { file.lock().await.flush().await })
     })
 }
@@ -76,8 +96,8 @@ pub unsafe extern "C" fn file_flush(
     port: Port<()>,
     error: *mut *mut c_char,
 ) {
-    let file = handle.get();
     session::with(port, error, |ctx| {
+        let file = handle.get();
         ctx.spawn(async move { file.lock().await.flush().await })
     })
 }
