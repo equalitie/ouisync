@@ -22,16 +22,7 @@ pub unsafe extern "C" fn file_open(
         let repo = repo.get();
 
         ctx.spawn(async move {
-            let (parent, name) = decompose_path(&path).ok_or(Error::EntryExists)?;
-
-            let file: File = repo
-                .open_directory(parent)
-                .await?
-                .lookup(name)?
-                .open()
-                .await?
-                .try_into()?;
-
+            let file = repo.open_file(path).await?;
             Ok(SharedHandle::new(Arc::new(Mutex::new(file))))
         })
     })

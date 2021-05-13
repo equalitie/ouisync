@@ -220,28 +220,44 @@ impl<'a> EntryInfo<'a> {
         Locator::Head(*self.parent_blob.head_name(), self.data.seq)
     }
 
-    /// Open the entry.
+    /// Opens this entry.
     pub async fn open(&self) -> Result<Entry> {
-        match self.data.entry_type {
-            EntryType::File => Ok(Entry::File(
-                File::open(
-                    self.parent_blob.db_pool().clone(),
-                    self.parent_blob.branch().clone(),
-                    self.parent_blob.cryptor().clone(),
-                    self.locator(),
-                )
-                .await?,
-            )),
-            EntryType::Directory => Ok(Entry::Directory(
-                Directory::open(
-                    self.parent_blob.db_pool().clone(),
-                    self.parent_blob.branch().clone(),
-                    self.parent_blob.cryptor().clone(),
-                    self.locator(),
-                )
-                .await?,
-            )),
+        match self.entry_type() {
+            EntryType::File => Ok(Entry::File(self.open_file_unchecked().await?)),
+            EntryType::Directory => Ok(Entry::Directory(self.open_directory_unchecked().await?)),
         }
+    }
+
+    /// Opens this entry if it's a file.
+    pub async fn open_file(&self) -> Result<File> {
+        self.entry_type().check_is_file()?;
+        self.open_file_unchecked().await
+    }
+
+    /// Opens this entry if it is a directory.
+    pub async fn open_directory(&self) -> Result<Directory> {
+        self.entry_type().check_is_directory()?;
+        self.open_directory_unchecked().await
+    }
+
+    async fn open_file_unchecked(&self) -> Result<File> {
+        File::open(
+            self.parent_blob.db_pool().clone(),
+            self.parent_blob.branch().clone(),
+            self.parent_blob.cryptor().clone(),
+            self.locator(),
+        )
+        .await
+    }
+
+    async fn open_directory_unchecked(&self) -> Result<Directory> {
+        Directory::open(
+            self.parent_blob.db_pool().clone(),
+            self.parent_blob.branch().clone(),
+            self.parent_blob.cryptor().clone(),
+            self.locator(),
+        )
+        .await
     }
 }
 
@@ -361,7 +377,7 @@ mod tests {
     use super::*;
     use crate::replica_id::ReplicaId;
     use rand::{distributions::Standard, Rng};
-    use std::{collections::BTreeSet, convert::TryInto};
+    use std::collections::BTreeSet;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn create_and_list_entries() {
@@ -395,12 +411,7 @@ mod tests {
             (OsStr::new("dog.txt"), b"woof"),
             (OsStr::new("cat.txt"), b"meow"),
         ] {
-            let entry = dir.lookup(file_name).unwrap().open().await.unwrap();
-            let mut file = match entry {
-                Entry::File(file) => file,
-                _ => panic!("expecting File, got {:?}", entry.entry_type()),
-            };
-
+            let mut file = dir.lookup(file_name).unwrap().open_file().await.unwrap();
             let actual_content = file.read_to_end().await.unwrap();
             assert_eq!(actual_content, expected_content);
         }
@@ -490,14 +501,7 @@ mod tests {
             Ok(_) => panic!("src entry should not exists, but it does"),
         }
 
-        let mut file: File = dir
-            .lookup(dst_name)
-            .unwrap()
-            .open()
-            .await
-            .unwrap()
-            .try_into()
-            .unwrap();
+        let mut file = dir.lookup(dst_name).unwrap().open_file().await.unwrap();
         let read_content = file.read_to_end().await.unwrap();
         assert_eq!(read_content, content);
     }
@@ -539,14 +543,7 @@ mod tests {
             Ok(_) => panic!("src entry should not exists, but it does"),
         }
 
-        let mut file: File = dst_dir
-            .lookup(dst_name)
-            .unwrap()
-            .open()
-            .await
-            .unwrap()
-            .try_into()
-            .unwrap();
+        let mut file = dst_dir.lookup(dst_name).unwrap().open_file().await.unwrap();
         let read_content = file.read_to_end().await.unwrap();
         assert_eq!(read_content, content);
     }
@@ -571,14 +568,7 @@ mod tests {
             .unwrap();
         dir.flush().await.unwrap();
 
-        let mut file: File = dir
-            .lookup(name)
-            .unwrap()
-            .open()
-            .await
-            .unwrap()
-            .try_into()
-            .unwrap();
+        let mut file = dir.lookup(name).unwrap().open_file().await.unwrap();
         let read_content = file.read_to_end().await.unwrap();
         assert_eq!(read_content, content);
     }
@@ -615,14 +605,7 @@ mod tests {
             Ok(_) => panic!("src entry should not exists, but it does"),
         }
 
-        let mut file: File = dir
-            .lookup(dst_name)
-            .unwrap()
-            .open()
-            .await
-            .unwrap()
-            .try_into()
-            .unwrap();
+        let mut file = dir.lookup(dst_name).unwrap().open_file().await.unwrap();
         let read_content = file.read_to_end().await.unwrap();
         assert_eq!(read_content, src_content);
         assert_ne!(read_content, dst_content);

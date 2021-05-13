@@ -370,6 +370,7 @@ impl Inner {
 
         let parent_dir = self.open_directory_by_inode(parent).await?;
         let entry_info = parent_dir.lookup(name)?;
+
         let entry = entry_info.open().await?;
 
         let inode = self
@@ -598,7 +599,7 @@ impl Inner {
         let mut parent_dir = self.open_directory_by_inode(parent).await?;
 
         // Check the directory is empty.
-        let dir: Directory = parent_dir.lookup(name)?.open().await?.try_into()?;
+        let dir = parent_dir.lookup(name)?.open_directory().await?;
         if dir.entries().len() > 0 {
             return Err(Error::DirectoryNotEmpty);
         }

@@ -1,5 +1,4 @@
 use std::{
-    convert::TryInto,
     ffi::OsStr,
     path::{Component, Path},
 };
@@ -69,7 +68,7 @@ impl Repository {
     pub async fn remove_directory<P: AsRef<Path>>(&self, path: P) -> Result<()> {
         let (parent, name) = decompose_path(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
         let mut parent = self.open_directory(parent).await?;
-        let dir: Directory = parent.lookup(name)?.open().await?.try_into()?;
+        let dir = parent.lookup(name)?.open_directory().await?;
 
         if dir.entries().len() > 0 {
             return Err(Error::DirectoryNotEmpty);
