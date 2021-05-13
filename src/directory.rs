@@ -122,11 +122,25 @@ impl Directory {
         ))
     }
 
-    /// Removes the entry with `name` from this directory and also deletes it from the repository.
-    pub async fn remove_entry(&mut self, name: &OsStr) -> Result<()> {
+    pub async fn remove_file(&mut self, name: &OsStr) -> Result<()> {
+        self.lookup(name)?.entry_type().check_is_file()?;
         let _seq = self.content.remove(name)?;
 
-        // TODO: actualy delete the entry blob from the database
+        // TODO: actually delete the file blob
+
+        Ok(())
+    }
+
+    pub async fn remove_subdirectory(&mut self, name: &OsStr) -> Result<()> {
+        let dir = self.lookup(name)?.open_directory().await?;
+
+        if dir.entries().len() > 0 {
+            return Err(Error::DirectoryNotEmpty);
+        }
+
+        let _seq = self.content.remove(name)?;
+
+        // TODO: actually delete the directory blob
 
         Ok(())
     }
@@ -458,7 +472,7 @@ mod tests {
             Directory::open(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root)
                 .await
                 .unwrap();
-        parent_dir.remove_entry(name).await.unwrap();
+        parent_dir.remove_file(name).await.unwrap();
         parent_dir.flush().await.unwrap();
 
         // Reopen again and check the file was removed.

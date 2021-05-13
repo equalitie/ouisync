@@ -597,14 +597,7 @@ impl Inner {
         log::debug!("rmdir {}", self.inodes.path_display(parent, Some(name)));
 
         let mut parent_dir = self.open_directory_by_inode(parent).await?;
-
-        // Check the directory is empty.
-        let dir = parent_dir.lookup(name)?.open_directory().await?;
-        if dir.entries().len() > 0 {
-            return Err(Error::DirectoryNotEmpty);
-        }
-
-        parent_dir.remove_entry(name).await?;
+        parent_dir.remove_subdirectory(name).await?;
         parent_dir.flush().await
     }
 
@@ -782,9 +775,7 @@ impl Inner {
         log::debug!("unlink {}", self.inodes.path_display(parent, Some(name)));
 
         let mut parent_dir = self.open_directory_by_inode(parent).await?;
-
-        parent_dir.lookup(name)?.entry_type().check_is_file()?;
-        parent_dir.remove_entry(name).await?;
+        parent_dir.remove_file(name).await?;
         parent_dir.flush().await
     }
 

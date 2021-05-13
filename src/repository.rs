@@ -34,6 +34,13 @@ impl Repository {
         self.open_directory_by_locator(Locator::Root).await
     }
 
+    /// Looks up an entry by its path. The path must be relative to the repository root.
+    /// If the entry exists, returns its `Locator` and `EntryType`, otherwise returns
+    /// `EntryNotFound`.
+    pub async fn lookup<P: AsRef<Path>>(&self, path: P) -> Result<(Locator, EntryType)> {
+        self.lookup_by_path(path.as_ref()).await
+    }
+
     /// Opens a file at the given path (relative to the repository root)
     pub async fn open_file<P: AsRef<Path>>(&self, path: P) -> Result<File> {
         let (locator, entry_type) = self.lookup(path).await?;
@@ -48,34 +55,23 @@ impl Repository {
         self.open_directory_by_locator(locator).await
     }
 
-    /// Looks up an entry by its path. The path must be relative to the repository root.
-    /// If the entry exists, returns its `Locator` and `EntryType`, otherwise returns
-    /// `EntryNotFound`.
-    pub async fn lookup<P: AsRef<Path>>(&self, path: P) -> Result<(Locator, EntryType)> {
-        self.lookup_by_path(path.as_ref()).await
-    }
-
-    /// Removes (delete) the file at the given path.
-    pub async fn remove_file<P: AsRef<Path>>(&self, path: P) -> Result<()> {
+    /// Removes (delete) the file at the given path. Returns the parent directory.
+    pub async fn remove_file<P: AsRef<Path>>(&self, path: P) -> Result<Directory> {
         let (parent, name) = decompose_path(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
         let mut parent = self.open_directory(parent).await?;
-        parent.lookup(name)?.entry_type().check_is_file()?;
-        parent.remove_entry(name).await?;
-        parent.flush().await
+        parent.remove_file(name).await?;
+
+        Ok(parent)
     }
 
-    /// Removes the directory at the given path. The directory must be empty.
-    pub async fn remove_directory<P: AsRef<Path>>(&self, path: P) -> Result<()> {
+    /// Removes the directory at the given path. The directory must be empty. Returns the parent
+    /// directory.
+    pub async fn remove_directory<P: AsRef<Path>>(&self, path: P) -> Result<Directory> {
         let (parent, name) = decompose_path(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
         let mut parent = self.open_directory(parent).await?;
-        let dir = parent.lookup(name)?.open_directory().await?;
+        parent.remove_subdirectory(name).await?;
 
-        if dir.entries().len() > 0 {
-            return Err(Error::DirectoryNotEmpty);
-        }
-
-        parent.remove_entry(name).await?;
-        parent.flush().await
+        Ok(parent)
     }
 
     /// Open an entry (file or directory) at the given locator.

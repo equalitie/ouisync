@@ -65,7 +65,7 @@ pub unsafe extern "C" fn file_remove(
         let repo = repo.get();
         let path = utils::ptr_to_path_buf(path)?;
 
-        ctx.spawn(async move { repo.remove_file(&path).await })
+        ctx.spawn(async move { repo.remove_file(&path).await?.flush().await })
     })
 }
 
