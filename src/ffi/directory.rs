@@ -1,12 +1,9 @@
 use super::{
-    session,
+    repository, session,
     utils::{self, Port, RefHandle, SharedHandle, UniqueHandle},
 };
 use crate::{entry::EntryType, error::Error, repository::Repository};
 use std::{convert::TryInto, ffi::CString, os::raw::c_char};
-
-pub const DIR_ENTRY_FILE: u8 = 0;
-pub const DIR_ENTRY_DIRECTORY: u8 = 1;
 
 // Currently this is only a read-only snapshot of a directory.
 pub struct Directory(Vec<DirEntry>);
@@ -106,8 +103,5 @@ pub unsafe extern "C" fn dir_entry_name(handle: RefHandle<DirEntry>) -> *const c
 
 #[no_mangle]
 pub unsafe extern "C" fn dir_entry_type(handle: RefHandle<DirEntry>) -> u8 {
-    match handle.get().entry_type {
-        EntryType::File => DIR_ENTRY_FILE,
-        EntryType::Directory => DIR_ENTRY_DIRECTORY,
-    }
+    repository::entry_type_to_num(handle.get().entry_type)
 }

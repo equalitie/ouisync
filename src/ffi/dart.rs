@@ -31,12 +31,23 @@ impl From<u64> for DartCObject {
     }
 }
 
+impl From<u8> for DartCObject {
+    fn from(value: u8) -> Self {
+        DartCObject {
+            type_: DartCObjectType::Int32,
+            value: DartCObjectValue {
+                as_int32: value as i32,
+            },
+        }
+    }
+}
+
 #[repr(i32)]
 #[derive(Copy, Clone)]
 pub enum DartCObjectType {
     Null = 0,
     // Bool = 1,
-    // Int32 = 2,
+    Int32 = 2,
     Int64 = 3,
     // Double = 4,
     // String = 5,
@@ -53,7 +64,7 @@ pub enum DartCObjectType {
 #[derive(Copy, Clone)]
 pub union DartCObjectValue {
     pub as_bool: bool,
-    // pub as_int32: i32,
+    pub as_int32: i32,
     pub as_int64: i64,
     // pub as_double: f64,
     // pub as_string: *mut ::std::os::raw::c_char,

@@ -45,8 +45,9 @@ impl Repository {
         self.open_directory_by_locator(locator).await
     }
 
-    /// Looks up an entry by its path. The path must be relative to the repository root.If the entry exists, returns its `Locator` and `EntryType`,
-    /// otherwise returns `EntryNotFound`.
+    /// Looks up an entry by its path. The path must be relative to the repository root.
+    /// If the entry exists, returns its `Locator` and `EntryType`, otherwise returns
+    /// `EntryNotFound`.
     pub async fn lookup<P: AsRef<Path>>(&self, path: P) -> Result<(Locator, EntryType)> {
         self.lookup_by_path(path.as_ref()).await
     }

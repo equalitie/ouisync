@@ -19,16 +19,17 @@ Future<void> main() async {
   for (var entry in dir) {
     print('${entry.name} (${entry.type}):');
 
-    final file = await File.open(repo, '/${entry.name}');
-    var bytes = await file.read(0, 1024);
-    var string = utf8.decode(bytes);
-    print('  ${string}');
-    await file.close();
+    if (entry.type == EntryType.file) {
+      final file = await File.open(repo, '/${entry.name}');
+      var bytes = await file.read(0, 1024);
+      var string = utf8.decode(bytes);
+      print('  ${string}');
+      await file.close();
+    }
   }
 
-  var file = await File.create(repo, 'file#${dir.length}.txt');
-  await file.write(0, utf8.encode('content of file#${dir.length}'));
-  await file.close();
+  var type = await repo.entryType('/foo');
+  print('$type');
 
   dir.close();
   repo.close();
@@ -74,11 +75,34 @@ class Repository {
   void close() {
     bindings.repository_close(handle);
   }
+
+  Future<EntryType?> entryType(String path) async =>
+    decodeEntryType(
+      await withPool((pool) =>
+        invoke<int>((port, error) =>
+          bindings.repository_entry_type(
+            handle,
+            pool.toNativeUtf8(path),
+            port,
+            error))));
+
+  Future<bool> entryExists(String path) async => await entryType(path) != null;
 }
 
-enum DirEntryType {
-  File,
-  Directory,
+enum EntryType {
+  file,
+  directory,
+}
+
+EntryType? decodeEntryType(int n) {
+    switch (n) {
+      case ENTRY_TYPE_FILE:
+        return EntryType.file;
+      case ENTRY_TYPE_DIRECTORY:
+        return EntryType.directory;
+      default:
+        return null;
+    }
 }
 
 class DirEntry {
@@ -89,15 +113,9 @@ class DirEntry {
 
   String get name => bindings.dir_entry_name(handle).cast<Utf8>().toDartString();
 
-  DirEntryType get type {
-    switch (bindings.dir_entry_type(handle)) {
-      case DIR_ENTRY_FILE:
-        return DirEntryType.File;
-      case DIR_ENTRY_DIRECTORY:
-        return DirEntryType.Directory;
-      default:
-        throw Error("invalid dir entry type");
-    }
+  EntryType get type {
+    return decodeEntryType(bindings.dir_entry_type(handle))
+        ?? (throw Error("invalid dir entry type"));
   }
 }
 
