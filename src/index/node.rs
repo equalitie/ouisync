@@ -4,12 +4,7 @@ use crate::{
     db,
     error::Result,
     index::LocatorHash,
-    index::{
-        column,
-        deserialize_leaf,
-        serialize_leaf,
-        INNER_LAYER_COUNT
-    },
+    index::{column, deserialize_leaf, INNER_LAYER_COUNT, MAX_INNER_NODE_CHILD_COUNT},
     replica_id::ReplicaId,
 };
 use async_recursion::async_recursion;
@@ -53,7 +48,34 @@ impl RootNode {
             }
         };
 
-        Ok(Self{snapshot_id, root_hash})
+        Ok(Self {
+            snapshot_id,
+            root_hash,
+        })
+    }
+
+    pub async fn clone_with_new_root(
+        &self,
+        tx: &mut db::Transaction,
+        root_hash: &Hash,
+    ) -> Result<RootNode> {
+        let new_id = sqlx::query(
+            "INSERT INTO branches(replica_id, root_hash)
+             SELECT replica_id, ? FROM branches
+             WHERE snapshot_id=? RETURNING snapshot_id;",
+        )
+        .bind(root_hash.as_ref())
+        .bind(self.snapshot_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .unwrap()
+        .unwrap()
+        .get(0);
+
+        Ok(RootNode {
+            snapshot_id: new_id,
+            root_hash: *root_hash,
+        })
     }
 
     pub fn as_node(&self) -> Node {
@@ -62,6 +84,95 @@ impl RootNode {
             snapshot_id: self.snapshot_id,
         }
     }
+}
+
+pub struct InnerNode {
+    node: Hash,
+    bucket: usize,
+    parent: Hash,
+}
+
+impl InnerNode {
+    pub async fn insert(
+        node: &Hash,
+        bucket: usize,
+        parent: &Hash,
+        tx: &mut db::Transaction,
+    ) -> Result<()> {
+        sqlx::query("INSERT INTO branch_forest (parent, bucket, node) VALUES (?, ?, ?)")
+            .bind(parent.as_ref())
+            .bind(bucket as u16)
+            .bind(node.as_ref())
+            .execute(&mut *tx)
+            .await?;
+        Ok(())
+    }
+}
+
+#[derive(Eq, PartialEq, Ord, PartialOrd, Debug, Clone)]
+pub struct LeafNode {
+    pub locator: Hash,
+    pub block_id: BlockId,
+}
+
+impl LeafNode {
+    pub async fn insert(leaf: &LeafNode, parent: &Hash, tx: &mut db::Transaction) -> Result<()> {
+        let blob = Self::serialize(&leaf.locator, &leaf.block_id);
+        sqlx::query("INSERT INTO branch_forest (parent, bucket, node) VALUES (?, ?, ?)")
+            .bind(parent.as_ref())
+            .bind(u16::MAX)
+            .bind(blob)
+            .execute(&mut *tx)
+            .await?;
+        Ok(())
+    }
+
+    fn serialize(locator: &Hash, block_id: &BlockId) -> Vec<u8> {
+        locator
+            .as_ref()
+            .iter()
+            .chain(block_id.name.as_ref().iter())
+            .chain(block_id.version.as_ref().iter())
+            .cloned()
+            .collect()
+    }
+}
+
+pub async fn inner_child_hashes(
+    parent: &Hash,
+    tx: &mut db::Transaction,
+) -> Result<[Hash; MAX_INNER_NODE_CHILD_COUNT]> {
+    let rows = sqlx::query("SELECT bucket, node FROM branch_forest WHERE parent=?")
+        .bind(parent.as_ref())
+        .fetch_all(&mut *tx)
+        .await?;
+
+    let mut children = [Hash::null(); MAX_INNER_NODE_CHILD_COUNT];
+
+    for ref row in rows {
+        let bucket: u32 = row.get(0);
+        let node = column::<Hash>(row, 1)?;
+        children[bucket as usize] = node;
+    }
+
+    Ok(children)
+}
+
+pub async fn leaf_children(parent: &Hash, tx: &mut db::Transaction) -> Result<Vec<LeafNode>> {
+    let rows = sqlx::query("SELECT node FROM branch_forest WHERE parent=?")
+        .bind(parent.as_ref())
+        .fetch_all(&mut *tx)
+        .await?;
+
+    let mut children = Vec::new();
+    children.reserve(rows.len());
+
+    for ref row in rows {
+        let (locator, block_id) = deserialize_leaf(row.get(0))?;
+        children.push(LeafNode { locator, block_id });
+    }
+
+    Ok(children)
 }
 
 #[derive(Debug)]
@@ -115,7 +226,7 @@ impl Node {
                     .await?;
             }
             Node::Leaf { node, parent } => {
-                let blob = serialize_leaf(&node.0, &node.1);
+                let blob = LeafNode::serialize(&node.0, &node.1);
                 sqlx::query("DELETE FROM branch_forest WHERE parent = ? AND node = ?")
                     .bind(parent.as_ref())
                     .bind(blob)
@@ -146,7 +257,7 @@ impl Node {
                     .is_some()
             }
             Node::Leaf { node, parent: _ } => {
-                let blob = serialize_leaf(&node.0, &node.1);
+                let blob = LeafNode::serialize(&node.0, &node.1);
                 sqlx::query("SELECT 0 FROM branch_forest WHERE node=? LIMIT 1")
                     .bind(blob)
                     .fetch_optional(&mut *tx)

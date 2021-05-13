@@ -8,17 +8,12 @@ use crate::{
     crypto::Hash,
     db,
     error::{Error, Result},
-    index::node::{
-        RootNode,
-    },
+    index::node::{inner_child_hashes, leaf_children, InnerNode, LeafNode, RootNode},
     index::LocatorHash,
-    index::{
-        column, deserialize_leaf, serialize_leaf, INNER_LAYER_COUNT, MAX_INNER_NODE_CHILD_COUNT,
-    },
+    index::{INNER_LAYER_COUNT, MAX_INNER_NODE_CHILD_COUNT},
     replica_id::ReplicaId,
 };
 use sha3::{Digest, Sha3_256};
-use sqlx::Row;
 use std::sync::Arc;
 use tokio::sync::{Mutex, MutexGuard};
 
@@ -56,9 +51,7 @@ impl Branch {
         encoded_locator: &LocatorHash,
     ) -> Result<()> {
         let mut lock = self.lock().await;
-        let mut path = self
-            .get_path(tx, &lock.root_hash, &encoded_locator)
-            .await?;
+        let mut path = self.get_path(tx, &lock.root_hash, &encoded_locator).await?;
 
         // We shouldn't be inserting a block to a branch twice. If we do, the assumption is that we
         // hit one in 2^sizeof(BlockVersion) chance that we randomly generated the same
@@ -83,9 +76,7 @@ impl Branch {
             return Err(Error::BlockIdNotFound);
         }
 
-        let path = self
-            .get_path(tx, &lock.root_hash, &encoded_locator)
-            .await?;
+        let path = self.get_path(tx, &lock.root_hash, &encoded_locator).await?;
 
         match path.get_leaf(encoded_locator) {
             Some(block_id) => Ok(block_id),
@@ -101,9 +92,7 @@ impl Branch {
     /// Remove the block identified by encoded_locator from the index
     pub async fn remove(&self, tx: &mut db::Transaction, encoded_locator: &Hash) -> Result<()> {
         let mut lock = self.lock().await;
-        let mut path = self
-            .get_path(tx, &lock.root_hash, encoded_locator)
-            .await?;
+        let mut path = self.get_path(tx, &lock.root_hash, encoded_locator).await?;
         path.remove_leaf(encoded_locator);
         let old_root = self.write_path(tx, &mut lock, &path).await?;
         self.remove_snapshot(&old_root, tx).await
@@ -131,17 +120,7 @@ impl Branch {
         let mut parent = path.root;
 
         for level in 0..INNER_LAYER_COUNT {
-            let children = sqlx::query("SELECT bucket, node FROM branch_forest WHERE parent = ?")
-                .bind(parent.as_ref())
-                .fetch_all(&mut *tx)
-                .await?;
-
-            for ref row in children {
-                let bucket: u32 = row.get(0);
-                let node = column::<Hash>(row, 1)?;
-                path.inner[level][bucket as usize] = node;
-            }
-
+            path.inner[level] = inner_child_hashes(&parent, tx).await?;
             parent = path.inner[level][path.get_bucket(level)];
 
             if parent.is_null() {
@@ -151,24 +130,11 @@ impl Branch {
             path.layers_found += 1;
         }
 
-        let children = sqlx::query("SELECT node FROM branch_forest WHERE parent = ?")
-            .bind(parent.as_ref())
-            .fetch_all(&mut *tx)
-            .await?;
+        path.leaves = leaf_children(&parent, tx).await?;
 
-        path.leaves.reserve(children.len());
+        let has_locator = path.leaves.iter().any(|l| l.locator == *encoded_locator);
 
-        let mut found_leaf = false;
-
-        for ref row in children {
-            let (locator, block_id) = deserialize_leaf(row.get(0))?;
-            if *encoded_locator == locator {
-                found_leaf = true;
-            }
-            path.leaves.push((locator, block_id));
-        }
-
-        if found_leaf {
+        if has_locator {
             path.layers_found += 1;
         }
 
@@ -195,28 +161,15 @@ impl Branch {
                     continue;
                 }
 
-                // XXX: It should be possible to insert multiple rows at once.
-                sqlx::query("INSERT INTO branch_forest (parent, bucket, node) VALUES (?, ?, ?)")
-                    .bind(parent_hash.as_ref())
-                    .bind(bucket as u16)
-                    .bind(hash.as_ref())
-                    .execute(&mut *tx)
-                    .await?;
+                InnerNode::insert(hash, bucket, &parent_hash, tx).await?;
             }
         }
 
         let layer = PathWithSiblings::total_layer_count() - 1;
         let parent_hash = path.hash_at_layer(layer - 1);
 
-        for (ref l, ref block_id) in &path.leaves {
-            let blob = serialize_leaf(l, block_id);
-
-            sqlx::query("INSERT INTO branch_forest (parent, bucket, node) VALUES (?, ?, ?)")
-                .bind(parent_hash.as_ref())
-                .bind(u16::MAX)
-                .bind(blob)
-                .execute(&mut *tx)
-                .await?;
+        for leaf in &path.leaves {
+            LeafNode::insert(&leaf, &parent_hash, tx).await?;
         }
 
         self.write_branch_root(tx, lock, &path.root).await
@@ -228,32 +181,13 @@ impl Branch {
         lock: &mut Lock<'_>,
         root: &Hash,
     ) -> Result<RootNode> {
-        let new_id = sqlx::query(
-            "INSERT INTO branches(replica_id, root_hash)
-             SELECT replica_id, ? FROM branches
-             WHERE snapshot_id=? RETURNING snapshot_id;",
-        )
-        .bind(root.as_ref())
-        .bind(lock.snapshot_id)
-        .fetch_optional(&mut *tx)
-        .await
-        .unwrap()
-        .unwrap()
-        .get(0);
-
+        let new_root = lock.clone_with_new_root(tx, root).await?;
         let old_root = lock.clone();
-
-        lock.snapshot_id = new_id;
-        lock.root_hash = *root;
-
+        **lock = new_root;
         Ok(old_root)
     }
 
-    async fn remove_snapshot(
-        &self,
-        root_node: &RootNode,
-        tx: &mut db::Transaction,
-    ) -> Result<()> {
+    async fn remove_snapshot(&self, root_node: &RootNode, tx: &mut db::Transaction) -> Result<()> {
         root_node.as_node().remove_recursive(0, tx).await
     }
 
@@ -275,7 +209,8 @@ struct PathWithSiblings {
     root: Hash,
     inner: [InnerChildren; INNER_LAYER_COUNT],
     /// Note: this vector must be sorted to guarantee unique hashing.
-    leaves: Vec<(LocatorHash, BlockId)>,
+    //leaves: Vec<(LocatorHash, BlockId)>,
+    leaves: Vec<LeafNode>,
 }
 
 impl PathWithSiblings {
@@ -292,12 +227,12 @@ impl PathWithSiblings {
     fn get_leaf(&self, encoded_locator: &LocatorHash) -> Option<BlockId> {
         self.leaves
             .iter()
-            .find(|(ref l, ref _v)| l == encoded_locator)
-            .map(|p| p.1)
+            .find(|l| l.locator == *encoded_locator)
+            .map(|l| l.block_id)
     }
 
     fn has_leaf(&self, block_id: &BlockId) -> bool {
-        self.leaves.iter().any(|(_l, id)| id == block_id)
+        self.leaves.iter().any(|l| l.block_id == *block_id)
     }
 
     fn total_layer_count() -> usize {
@@ -322,16 +257,19 @@ impl PathWithSiblings {
         let mut modified = false;
 
         for leaf in &mut self.leaves {
-            if leaf.0 == self.encoded_locator {
+            if leaf.locator == self.encoded_locator {
                 modified = true;
-                leaf.1 = *block_id;
+                leaf.block_id = *block_id;
                 break;
             }
         }
 
         if !modified {
             // XXX: This can be done better.
-            self.leaves.push((self.encoded_locator, *block_id));
+            self.leaves.push(LeafNode {
+                locator: self.encoded_locator,
+                block_id: *block_id,
+            });
             self.leaves.sort();
         }
 
@@ -345,7 +283,7 @@ impl PathWithSiblings {
             .leaves
             .iter()
             .filter(|l| {
-                let keep = l.0 != *encoded_locator;
+                let keep = l.locator != *encoded_locator;
                 if !keep {
                     changed = true;
                 }
@@ -419,14 +357,14 @@ impl PathWithSiblings {
     }
 }
 
-fn hash_leafs(leaves: &[(LocatorHash, BlockId)]) -> Hash {
+fn hash_leafs(leaves: &[LeafNode]) -> Hash {
     let mut hash = Sha3_256::new();
     // XXX: Is updating with length enough to prevent attaks?
     hash.update((leaves.len() as u32).to_le_bytes());
-    for (ref l, ref id) in leaves {
-        hash.update(l);
-        hash.update(id.name);
-        hash.update(id.version);
+    for ref l in leaves {
+        hash.update(l.locator);
+        hash.update(l.block_id.name);
+        hash.update(l.block_id.version);
     }
     hash.finalize().into()
 }

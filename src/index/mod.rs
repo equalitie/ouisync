@@ -44,16 +44,6 @@ pub async fn init(pool: &db::Pool) -> Result<(), Error> {
     Ok(())
 }
 
-fn serialize_leaf(locator: &Hash, block_id: &BlockId) -> Vec<u8> {
-    locator
-        .as_ref()
-        .iter()
-        .chain(block_id.name.as_ref().iter())
-        .chain(block_id.version.as_ref().iter())
-        .cloned()
-        .collect()
-}
-
 fn deserialize_leaf(blob: &[u8]) -> Result<(LocatorHash, BlockId)> {
     let (b1, b2) = blob.split_at(std::mem::size_of::<Hash>());
     let (b2, b3) = b2.split_at(std::mem::size_of::<BlockName>());
