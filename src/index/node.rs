@@ -78,10 +78,14 @@ impl RootNode {
         })
     }
 
-    pub fn as_node(&self) -> Node {
+    pub async fn remove_recursive(&self, tx: &mut db::Transaction) -> Result<()> {
+        self.as_node().remove_recursive(0, tx).await
+    }
+
+    fn as_node(&self) -> Node {
         Node::Root {
-            root: self.root_hash,
             snapshot_id: self.snapshot_id,
+            root: self.root_hash,
         }
     }
 }
@@ -186,18 +190,18 @@ pub async fn leaf_children(parent: &Hash, tx: &mut db::Transaction) -> Result<Ve
 }
 
 #[derive(Debug)]
-pub enum Node {
+enum Node {
     Root {
-        root: Hash,
         snapshot_id: SnapshotId,
+        root: Hash,
     },
     Inner {
-        node: Hash,
         parent: Hash,
+        node: Hash,
     },
     Leaf {
-        node: LeafNode,
         parent: Hash,
+        node: LeafNode,
     },
 }
 
@@ -220,22 +224,22 @@ impl Node {
     async fn remove_single(&self, tx: &mut db::Transaction) -> Result<()> {
         match self {
             Node::Root {
-                root: _,
                 snapshot_id,
+                root: _,
             } => {
                 sqlx::query("DELETE FROM branches WHERE snapshot_id=?")
                     .bind(snapshot_id)
                     .execute(&mut *tx)
                     .await?;
             }
-            Node::Inner { node, parent } => {
+            Node::Inner { parent, node } => {
                 sqlx::query("DELETE FROM branch_forest WHERE parent=? AND node=?")
                     .bind(parent.as_ref())
                     .bind(node.as_ref())
                     .execute(&mut *tx)
                     .await?;
             }
-            Node::Leaf { node, parent } => {
+            Node::Leaf { parent, node } => {
                 let blob = node.serialize();
                 sqlx::query("DELETE FROM branch_forest WHERE parent=? AND node=?")
                     .bind(parent.as_ref())
@@ -252,21 +256,21 @@ impl Node {
     async fn is_dangling(&self, tx: &mut db::Transaction) -> Result<bool> {
         let has_parent = match self {
             Node::Root {
-                root,
                 snapshot_id: _,
+                root,
             } => sqlx::query("SELECT 0 FROM branches WHERE root_hash=? LIMIT 1")
                 .bind(root.as_ref())
                 .fetch_optional(&mut *tx)
                 .await?
                 .is_some(),
-            Node::Inner { node, parent: _ } => {
+            Node::Inner { parent: _, node } => {
                 sqlx::query("SELECT 0 FROM branch_forest WHERE node=? LIMIT 1")
                     .bind(node.as_ref())
                     .fetch_optional(&mut *tx)
                     .await?
                     .is_some()
             }
-            Node::Leaf { node, parent: _ } => {
+            Node::Leaf { parent: _, node } => {
                 let blob = node.serialize();
                 sqlx::query("SELECT 0 FROM branch_forest WHERE node=? LIMIT 1")
                     .bind(blob)
@@ -282,8 +286,8 @@ impl Node {
     async fn children(&self, layer: usize, tx: &mut db::Transaction) -> Result<Vec<Node>> {
         match self {
             Node::Root {
-                root,
                 snapshot_id: _,
+                root,
             } => sqlx::query("SELECT node, parent FROM branch_forest WHERE parent=?;")
                 .bind(root.as_ref())
                 .fetch_all(&mut *tx)
@@ -297,7 +301,7 @@ impl Node {
                     }
                 })
                 .collect(),
-            Node::Inner { node, parent: _ } => {
+            Node::Inner { parent: _, node } => {
                 sqlx::query("SELECT node, parent FROM branch_forest WHERE parent=?;")
                     .bind(node.as_ref())
                     .fetch_all(&mut *tx)
@@ -312,21 +316,21 @@ impl Node {
                     })
                     .collect()
             }
-            Node::Leaf { node: _, parent: _ } => Ok(Vec::new()),
+            Node::Leaf { parent: _, node: _ } => Ok(Vec::new()),
         }
     }
 
     fn row_to_inner(row: &SqliteRow) -> Result<Node> {
         Ok(Node::Inner {
-            node: column::<Hash>(row, 0)?,
             parent: column::<Hash>(row, 1)?,
+            node: column::<Hash>(row, 0)?,
         })
     }
 
     fn row_to_leaf(row: &SqliteRow) -> Result<Node> {
         Ok(Node::Leaf {
-            node: LeafNode::deserialize(row.get(0))?,
             parent: column::<Hash>(row, 1)?,
+            node: LeafNode::deserialize(row.get(0))?,
         })
     }
 }

@@ -189,7 +189,7 @@ impl Branch {
     }
 
     async fn remove_snapshot(&self, root_node: &RootNode, tx: &mut db::Transaction) -> Result<()> {
-        root_node.as_node().remove_recursive(0, tx).await
+        root_node.remove_recursive(tx).await
     }
 
     async fn lock(&self) -> Lock<'_> {
