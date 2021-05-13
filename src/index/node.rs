@@ -86,15 +86,14 @@ impl RootNode {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
 pub struct InnerNode {
-    node: Hash,
-    bucket: usize,
-    parent: Hash,
+    pub hash: Hash,
 }
 
 impl InnerNode {
     pub async fn insert(
-        node: &Hash,
+        node: &InnerNode,
         bucket: usize,
         parent: &Hash,
         tx: &mut db::Transaction,
@@ -102,7 +101,7 @@ impl InnerNode {
         sqlx::query("INSERT INTO branch_forest (parent, bucket, node) VALUES (?, ?, ?)")
             .bind(parent.as_ref())
             .bind(bucket as u16)
-            .bind(node.as_ref())
+            .bind(node.hash.as_ref())
             .execute(&mut *tx)
             .await?;
         Ok(())
@@ -138,21 +137,21 @@ impl LeafNode {
     }
 }
 
-pub async fn inner_child_hashes(
+pub async fn inner_children(
     parent: &Hash,
     tx: &mut db::Transaction,
-) -> Result<[Hash; MAX_INNER_NODE_CHILD_COUNT]> {
+) -> Result<[InnerNode; MAX_INNER_NODE_CHILD_COUNT]> {
     let rows = sqlx::query("SELECT bucket, node FROM branch_forest WHERE parent=?")
         .bind(parent.as_ref())
         .fetch_all(&mut *tx)
         .await?;
 
-    let mut children = [Hash::null(); MAX_INNER_NODE_CHILD_COUNT];
+    let mut children = [InnerNode{hash: Hash::null()}; MAX_INNER_NODE_CHILD_COUNT];
 
     for ref row in rows {
         let bucket: u32 = row.get(0);
-        let node = column::<Hash>(row, 1)?;
-        children[bucket as usize] = node;
+        let hash = column::<Hash>(row, 1)?;
+        children[bucket as usize] = InnerNode{hash};
     }
 
     Ok(children)

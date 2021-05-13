@@ -8,7 +8,7 @@ use crate::{
     crypto::Hash,
     db,
     error::{Error, Result},
-    index::node::{inner_child_hashes, leaf_children, InnerNode, LeafNode, RootNode},
+    index::node::{inner_children, leaf_children, InnerNode, LeafNode, RootNode},
     index::LocatorHash,
     index::{INNER_LAYER_COUNT, MAX_INNER_NODE_CHILD_COUNT},
     replica_id::ReplicaId,
@@ -120,8 +120,8 @@ impl Branch {
         let mut parent = path.root;
 
         for level in 0..INNER_LAYER_COUNT {
-            path.inner[level] = inner_child_hashes(&parent, tx).await?;
-            parent = path.inner[level][path.get_bucket(level)];
+            path.inner[level] = inner_children(&parent, tx).await?;
+            parent = path.inner[level][path.get_bucket(level)].hash;
 
             if parent.is_null() {
                 return Ok(path);
@@ -156,12 +156,12 @@ impl Branch {
         for (inner_i, inner_layer) in path.inner.iter().enumerate() {
             let parent_hash = path.hash_at_layer(inner_i);
 
-            for (bucket, ref hash) in inner_layer.iter().enumerate() {
-                if hash.is_null() {
+            for (bucket, ref node) in inner_layer.iter().enumerate() {
+                if node.hash.is_null() {
                     continue;
                 }
 
-                InnerNode::insert(hash, bucket, &parent_hash, tx).await?;
+                InnerNode::insert(node, bucket, &parent_hash, tx).await?;
             }
         }
 
@@ -196,7 +196,7 @@ impl Branch {
     }
 }
 
-type InnerChildren = [Hash; MAX_INNER_NODE_CHILD_COUNT];
+type InnerChildren = [InnerNode; MAX_INNER_NODE_CHILD_COUNT];
 
 #[derive(Debug)]
 struct PathWithSiblings {
@@ -215,11 +215,18 @@ struct PathWithSiblings {
 
 impl PathWithSiblings {
     fn new(root: &Hash, encoded_locator: Hash) -> Self {
+        let null_hash = Hash::null();
+
+        let inner = [
+            [InnerNode{hash: null_hash}; MAX_INNER_NODE_CHILD_COUNT];
+            INNER_LAYER_COUNT
+        ];
+
         Self {
             encoded_locator,
             layers_found: 0,
             root: *root,
-            inner: [[Hash::null(); MAX_INNER_NODE_CHILD_COUNT]; INNER_LAYER_COUNT], //Default::default(),
+            inner,
             leaves: Vec::new(),
         }
     }
@@ -244,7 +251,7 @@ impl PathWithSiblings {
             return self.root;
         }
         let inner_layer = layer - 1;
-        self.inner[inner_layer][self.get_bucket(inner_layer)]
+        self.inner[inner_layer][self.get_bucket(inner_layer)].hash
     }
 
     // BlockVersion is needed when calculating hashes at the beginning to make this tree unique
@@ -312,9 +319,9 @@ impl PathWithSiblings {
         let null = Hash::null();
         let bucket = self.get_bucket(inner_layer);
 
-        self.inner[inner_layer][bucket] = null;
+        self.inner[inner_layer][bucket] = InnerNode{hash: null};
 
-        let is_empty = self.inner[inner_layer].iter().all(|x| x == &null);
+        let is_empty = self.inner[inner_layer].iter().all(|x| x.hash == null);
 
         if !is_empty {
             self.recalculate(inner_layer - 1);
@@ -336,7 +343,7 @@ impl PathWithSiblings {
     fn recalculate(&mut self, start_layer: usize) {
         for inner_layer in (0..start_layer).rev() {
             let hash = self.compute_hash_for_layer(inner_layer + 1);
-            self.inner[inner_layer][self.get_bucket(inner_layer)] = hash;
+            self.inner[inner_layer][self.get_bucket(inner_layer)] = InnerNode{hash};
         }
 
         self.root = self.compute_hash_for_layer(0);
@@ -369,13 +376,13 @@ fn hash_leafs(leaves: &[LeafNode]) -> Hash {
     hash.finalize().into()
 }
 
-fn hash_inner(siblings: &[Hash]) -> Hash {
+fn hash_inner(siblings: &[InnerNode]) -> Hash {
     // XXX: Have some cryptographer check this whether there are no attacks.
     let mut hash = Sha3_256::new();
     for (k, ref s) in siblings.iter().enumerate() {
-        if !s.is_null() {
+        if !s.hash.is_null() {
             hash.update((k as u16).to_le_bytes());
-            hash.update(s);
+            hash.update(s.hash);
         }
     }
     hash.finalize().into()
