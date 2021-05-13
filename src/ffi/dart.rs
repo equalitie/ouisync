@@ -61,5 +61,5 @@ pub union DartCObjectValue {
     _align: [u64; 5usize],
 }
 
-pub type DartPort = i64;
-pub type PostCObjectFn = unsafe extern "C" fn(DartPort, *mut DartCObject) -> bool;
+pub type Port = i64;
+pub type PostDartCObjectFn = unsafe extern "C" fn(Port, *mut DartCObject) -> bool;

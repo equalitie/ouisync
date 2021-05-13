@@ -1,4 +1,4 @@
-use super::dart::DartCObject;
+use super::dart::{self, DartCObject};
 use crate::error::{Error, Result};
 use std::{
     ffi::{CStr, CString, OsStr},
@@ -8,6 +8,29 @@ use std::{
     path::PathBuf,
     sync::Arc,
 };
+
+/// Type-safe wrapper over native dart SendPort.
+#[repr(transparent)]
+pub struct Port<T>(dart::Port, PhantomData<T>);
+
+impl<T> From<Port<T>> for dart::Port {
+    fn from(typed: Port<T>) -> Self {
+        typed.0
+    }
+}
+
+// `Port` is `Send`, `Copy` and `Clone` regardless of whether `T` is because it doesn't
+// actually contain `T`:
+
+unsafe impl<T> Send for Port<T> {}
+
+impl<T> Clone for Port<T> {
+    fn clone(&self) -> Self {
+        Self(self.0, PhantomData)
+    }
+}
+
+impl<T> Copy for Port<T> {}
 
 /// FFI handle to a resource with shared ownership.
 #[repr(transparent)]

@@ -1,7 +1,6 @@
 use super::{
-    dart::DartPort,
     session,
-    utils::{self, AssumeSend, RefHandle, SharedHandle, UniqueHandle},
+    utils::{self, AssumeSend, Port, RefHandle, SharedHandle, UniqueHandle},
 };
 use crate::{crypto::Cryptor, entry::EntryType, error::Error, file::File, repository::Repository};
 use std::{
@@ -23,7 +22,10 @@ pub const DIR_ENTRY_DIRECTORY: u8 = 1;
 /// NOTE: eventually this function will allow to specify which repository to open, but currently
 /// only one repository is supported.
 #[no_mangle]
-pub unsafe extern "C" fn repository_open(port: DartPort, error: *mut *mut c_char) {
+pub unsafe extern "C" fn repository_open(
+    port: Port<SharedHandle<Repository>>,
+    error: *mut *mut c_char,
+) {
     session::with(port, error, |ctx| {
         let pool = ctx.pool().clone();
         let cryptor = Cryptor::Null; // TODO: support encryption
@@ -56,7 +58,7 @@ impl Directory {
 pub unsafe extern "C" fn directory_create(
     repo: SharedHandle<Repository>,
     path: *const c_char,
-    port: DartPort,
+    port: Port<()>,
     error: *mut *mut c_char,
 ) {
     session::with(port, error, |ctx| {
@@ -81,7 +83,7 @@ pub unsafe extern "C" fn directory_create(
 pub unsafe extern "C" fn directory_open(
     repo: SharedHandle<Repository>,
     path: *const c_char,
-    port: DartPort,
+    port: Port<UniqueHandle<Directory>>,
     error: *mut *mut c_char,
 ) {
     session::with(port, error, |ctx| {
@@ -150,7 +152,7 @@ pub unsafe extern "C" fn dir_entry_type(handle: RefHandle<DirEntry>) -> u8 {
 pub unsafe extern "C" fn file_open(
     repo: SharedHandle<Repository>,
     path: *const c_char,
-    port: DartPort,
+    port: Port<SharedHandle<Mutex<File>>>,
     error: *mut *mut c_char,
 ) {
     session::with(port, error, |ctx| {
@@ -177,7 +179,7 @@ pub unsafe extern "C" fn file_open(
 pub unsafe extern "C" fn file_create(
     repo: SharedHandle<Repository>,
     path: *const c_char,
-    port: DartPort,
+    port: Port<SharedHandle<Mutex<File>>>,
     error: *mut *mut c_char,
 ) {
     session::with(port, error, |ctx| {
@@ -201,7 +203,7 @@ pub unsafe extern "C" fn file_create(
 #[no_mangle]
 pub unsafe extern "C" fn file_close(
     handle: SharedHandle<Mutex<File>>,
-    port: DartPort,
+    port: Port<()>,
     error: *mut *mut c_char,
 ) {
     let file = handle.release();
@@ -213,7 +215,7 @@ pub unsafe extern "C" fn file_close(
 #[no_mangle]
 pub unsafe extern "C" fn file_flush(
     handle: SharedHandle<Mutex<File>>,
-    port: DartPort,
+    port: Port<()>,
     error: *mut *mut c_char,
 ) {
     let file = handle.get();
@@ -230,7 +232,7 @@ pub unsafe extern "C" fn file_read(
     offset: u64,
     buffer: *mut u8,
     len: u64,
-    port: DartPort,
+    port: Port<u64>,
     error: *mut *mut c_char,
 ) {
     session::with(port, error, |ctx| {
@@ -258,7 +260,7 @@ pub unsafe extern "C" fn file_write(
     offset: u64,
     buffer: *const u8,
     len: u64,
-    port: DartPort,
+    port: Port<()>,
     error: *mut *mut c_char,
 ) {
     session::with(port, error, |ctx| {
@@ -285,7 +287,7 @@ pub unsafe extern "C" fn file_write(
 pub unsafe extern "C" fn file_truncate(
     handle: SharedHandle<Mutex<File>>,
     _len: u64,
-    port: DartPort,
+    port: Port<()>,
     error: *mut *mut c_char,
 ) {
     session::with(port, error, |ctx| {

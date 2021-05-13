@@ -1,6 +1,6 @@
 use super::{
-    dart::{DartCObject, DartPort, PostCObjectFn},
-    utils::{self, AssumeSend},
+    dart::{DartCObject, PostDartCObjectFn},
+    utils::{self, AssumeSend, Port},
 };
 use crate::{db, error::Result};
 use std::{
@@ -21,7 +21,7 @@ use tokio::runtime::{self, Runtime};
 pub unsafe extern "C" fn session_open(
     post_c_object_fn: *const c_void,
     store: *const c_char,
-    port: DartPort,
+    port: Port<()>,
     error_ptr: *mut *mut c_char,
 ) {
     let sender = Sender {
@@ -90,9 +90,9 @@ unsafe fn store_from_raw(store: *const c_char) -> Result<db::Store> {
     }
 }
 
-pub(super) unsafe fn with<F>(port: DartPort, error_ptr: *mut *mut c_char, f: F)
+pub(super) unsafe fn with<T, F>(port: Port<T>, error_ptr: *mut *mut c_char, f: F)
 where
-    F: FnOnce(Context) -> Result<()>,
+    F: FnOnce(Context<T>) -> Result<()>,
 {
     assert!(!SESSION.is_null(), "session is not initialized");
 
@@ -117,17 +117,19 @@ struct Session {
     sender: Sender,
 }
 
-pub(super) struct Context<'a> {
+pub(super) struct Context<'a, T> {
     session: &'a Session,
-    port: DartPort,
+    port: Port<T>,
     error_ptr: *mut *mut c_char,
 }
 
-impl Context<'_> {
-    pub(super) unsafe fn spawn<F, T>(self, f: F) -> Result<()>
+impl<T> Context<'_, T>
+where
+    T: Into<DartCObject> + 'static,
+{
+    pub(super) unsafe fn spawn<F>(self, f: F) -> Result<()>
     where
         F: Future<Output = Result<T>> + Send + 'static,
-        T: Into<DartCObject> + 'static,
     {
         self.session
             .runtime
@@ -143,7 +145,7 @@ impl Context<'_> {
 // Utility for sending values to dart.
 #[derive(Copy, Clone)]
 struct Sender {
-    post_c_object_fn: PostCObjectFn,
+    post_c_object_fn: PostDartCObjectFn,
 }
 
 impl Sender {
@@ -151,13 +153,13 @@ impl Sender {
     // returned future is `Send` even though `error_ptr` is not `Send`.
     unsafe fn invoke<F, T>(
         &self,
-        port: DartPort,
+        port: Port<T>,
         error_ptr: *mut *mut c_char,
         f: F,
-    ) -> impl Future<Output = ()> + Send
+    ) -> impl Future<Output = ()> + Send + 'static
     where
-        F: Future<Output = Result<T>> + Send,
-        T: Into<DartCObject>,
+        F: Future<Output = Result<T>> + Send + 'static,
+        T: Into<DartCObject> + 'static,
     {
         let error_ptr = AssumeSend(error_ptr);
         let sender = *self;
@@ -170,7 +172,7 @@ impl Sender {
         }
     }
 
-    unsafe fn send_ok<T>(&self, port: DartPort, error_ptr: *mut *mut c_char, value: T)
+    unsafe fn send_ok<T>(&self, port: Port<T>, error_ptr: *mut *mut c_char, value: T)
     where
         T: Into<DartCObject>,
     {
@@ -178,10 +180,10 @@ impl Sender {
             *error_ptr = ptr::null_mut();
         }
 
-        (self.post_c_object_fn)(port, &mut value.into());
+        (self.post_c_object_fn)(port.into(), &mut value.into());
     }
 
-    unsafe fn send_err<E>(&self, port: DartPort, error_ptr: *mut *mut c_char, error: E)
+    unsafe fn send_err<T, E>(&self, port: Port<T>, error_ptr: *mut *mut c_char, error: E)
     where
         E: fmt::Display,
     {
@@ -189,6 +191,6 @@ impl Sender {
             *error_ptr = CString::new(error.to_string()).unwrap().into_raw();
         }
 
-        (self.post_c_object_fn)(port, &mut ().into());
+        (self.post_c_object_fn)(port.into(), &mut ().into());
     }
 }
