@@ -7,6 +7,7 @@ use crate::{crypto::Cryptor, entry::EntryType, error::Error, file::File, reposit
 use std::{
     convert::TryInto,
     ffi::{CString, OsStr},
+    io::SeekFrom,
     os::raw::c_char,
     path::Path,
     slice,
@@ -226,6 +227,7 @@ pub unsafe extern "C" fn file_flush(
 #[no_mangle]
 pub unsafe extern "C" fn file_read(
     handle: SharedHandle<Mutex<File>>,
+    offset: u64,
     buffer: *mut u8,
     len: u64,
     port: DartPort,
@@ -238,8 +240,13 @@ pub unsafe extern "C" fn file_read(
         let len: usize = len.try_into().map_err(|_| Error::OffsetOutOfRange)?;
 
         ctx.spawn(async move {
+            let mut file = file.lock().await;
+            file.seek(SeekFrom::Start(offset)).await?;
+
             let buffer = slice::from_raw_parts_mut(buffer.0, len);
-            Ok(file.lock().await.read(buffer).await? as u64)
+            let len = file.read(buffer).await? as u64;
+
+            Ok(len)
         })
     })
 }
@@ -248,6 +255,7 @@ pub unsafe extern "C" fn file_read(
 #[no_mangle]
 pub unsafe extern "C" fn file_write(
     handle: SharedHandle<Mutex<File>>,
+    offset: u64,
     buffer: *const u8,
     len: u64,
     port: DartPort,
@@ -260,8 +268,13 @@ pub unsafe extern "C" fn file_write(
         let len: usize = len.try_into().map_err(|_| Error::OffsetOutOfRange)?;
 
         ctx.spawn(async move {
+            let mut file = file.lock().await;
+            file.seek(SeekFrom::Start(offset)).await?;
+
             let buffer = slice::from_raw_parts(buffer.0, len);
-            file.lock().await.write(buffer).await
+            file.write(buffer).await?;
+
+            Ok(())
         })
     })
 }

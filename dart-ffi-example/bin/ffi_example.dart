@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:collection';
+import 'dart:convert';
 import 'dart:ffi';
 import 'dart:isolate';
 import 'dart:math';
@@ -16,10 +17,17 @@ Future<void> main() async {
   final dir = await Directory.open(repo, '/');
 
   for (var entry in dir) {
-    print('${entry.name}: ${entry.type}');
+    print('${entry.name} (${entry.type}):');
+
+    final file = await File.open(repo, '/${entry.name}');
+    var bytes = await file.read(0, 1024);
+    var string = utf8.decode(bytes);
+    print('  ${string}');
+    await file.close();
   }
 
   var file = await File.create(repo, 'file#${dir.length}.txt');
+  await file.write(0, utf8.encode('content of file#${dir.length}'));
   await file.close();
 
   dir.close();
@@ -163,42 +171,32 @@ class File {
   Future<void> flush() =>
     invoke<void>((port, error) => bindings.file_flush(handle, port, error));
 
-  /// Returns a steam for the contents of this file. The read starts at the current seek position.
-  /// If [size] is not null, reads at most [size] bytes. The returned steam yields chunks of
-  /// [chunkSize] bytes.
-  Stream<List<int>> read({int? size, chunkSize: defaultChunkSize}) async* {
-    var totalBytesRead = 0;
-    var buffer = malloc<Uint8>(chunkSize);
-    var offset = 0;
+  Future<List<int>> read(int offset, int size) async {
+    var buffer = malloc<Uint8>(size);
 
     try {
-      while (true) {
-        final currentChunkSize = size == null ? chunkSize : totalBytesRead - size;
-
-        final bytesRead = await invoke<int>(
-          (port, error) => bindings.file_read(
-            handle,
-            buffer.elementAt(offset),
-            max(currentChunkSize - offset, 0),
-            port,
-            error));
-
-        offset += bytesRead;
-        totalBytesRead += bytesRead;
-
-        if (offset >= currentChunkSize || bytesRead == 0) {
-          yield buffer.asTypedList(offset).toList();
-          offset = 0;
-        }
-
-        if (bytesRead == 0 || currentChunkSize < chunkSize) {
-          break;
-        }
-      }
+      final actualSize = await invoke<int>((port, error) =>
+        bindings.file_read(handle, offset, buffer, size, port, error));
+      return buffer.asTypedList(actualSize).toList();
     } finally {
       malloc.free(buffer);
     }
   }
+
+  Future<void> write(int offset, List<int> data) async {
+    var buffer = malloc<Uint8>(data.length);
+
+    try {
+      buffer.asTypedList(data.length).setAll(0, data);
+      await invoke<void>((port, error) =>
+        bindings.file_write(handle, offset, buffer, data.length, port, error));
+    } finally {
+      malloc.free(buffer);
+    }
+  }
+
+  Future<void> truncate(int size) =>
+    invoke<void>((port, error) => bindings.file_truncate(handle, size, port, error));
 }
 
 DynamicLibrary _defaultLib() {
@@ -214,6 +212,9 @@ class Error implements Exception {
   String toString() => _message;
 }
 
+
+// Private helpers to simplify working with the native API:
+
 class ErrorHelper {
   var ptr = malloc<Pointer<Int8>>();
 
@@ -226,8 +227,11 @@ class ErrorHelper {
       final error = ptr.value.cast<Utf8>().toDartString();
 
       // NOTE: we are freeing a pointer here that was allocated by the native side. This *should*
-      // be fine as long as both sides are using the same allocator.
+      // be fine as long as both sides are using the same allocator which *should* be the case here.
+      // In case this turns out to be wrong, we should expose a native function to deallocate the
+      // string and call it here instead.
       malloc.free(ptr.value);
+
       malloc.free(ptr);
       ptr = nullptr;
 
