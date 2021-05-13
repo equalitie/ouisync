@@ -1,4 +1,5 @@
 use std::{
+    convert::TryInto,
     ffi::OsStr,
     path::{Component, Path},
 };
@@ -55,10 +56,25 @@ impl Repository {
         self.lookup_by_path(path.as_ref()).await
     }
 
-    /// Remove (delete) the file at the given path.
+    /// Removes (delete) the file at the given path.
     pub async fn remove_file<P: AsRef<Path>>(&self, path: P) -> Result<()> {
         let (parent, name) = decompose_path(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
         let mut parent = self.open_directory(parent).await?;
+        parent.lookup(name)?.entry_type().check_is_file()?;
+        parent.remove_entry(name).await?;
+        parent.flush().await
+    }
+
+    /// Removes the directory at the given path. The directory must be empty.
+    pub async fn remove_directory<P: AsRef<Path>>(&self, path: P) -> Result<()> {
+        let (parent, name) = decompose_path(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
+        let mut parent = self.open_directory(parent).await?;
+        let dir: Directory = parent.lookup(name)?.open().await?.try_into()?;
+
+        if dir.entries().len() > 0 {
+            return Err(Error::DirectoryNotEmpty);
+        }
+
         parent.remove_entry(name).await?;
         parent.flush().await
     }

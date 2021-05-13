@@ -24,6 +24,14 @@ Future<void> main() async {
       print('  ${string}');
       await file.close();
     }
+
+    if (Random().nextBool()) {
+      if (entry.type == EntryType.file) {
+        await File.remove(repo, '/${entry.name}');
+      } else {
+        await Directory.remove(repo, '/${entry.name}');
+      }
+    }
   }
 
   var type = await repo.entryType('/foo');
@@ -126,6 +134,10 @@ class Directory with IterableMixin<DirEntry> {
 
   static Future<void> create(Repository repo, String path) => withPool((pool) =>
       invoke<void>((port, error) => repo.bindings.directory_create(
+          repo.handle, pool.toNativeUtf8(path), port, error)));
+
+  static Future<void> remove(Repository repo, String path) => withPool((pool) =>
+      invoke<void>((port, error) => repo.bindings.directory_remove(
           repo.handle, pool.toNativeUtf8(path), port, error)));
 
   void close() {
