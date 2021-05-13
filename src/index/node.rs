@@ -17,6 +17,7 @@ use sqlx::{sqlite::SqliteRow, Row};
 
 type SnapshotId = u32;
 
+#[derive(Clone)]
 pub struct RootNode {
     pub snapshot_id: SnapshotId,
     pub root_hash: Hash,
@@ -53,6 +54,13 @@ impl RootNode {
         };
 
         Ok(Self{snapshot_id, root_hash})
+    }
+
+    pub fn as_node(&self) -> Node {
+        Node::Root {
+            root: self.root_hash,
+            snapshot_id: self.snapshot_id,
+        }
     }
 }
 

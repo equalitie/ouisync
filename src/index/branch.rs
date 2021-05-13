@@ -9,7 +9,6 @@ use crate::{
     db,
     error::{Error, Result},
     index::node::{
-        Node,
         RootNode,
     },
     index::LocatorHash,
@@ -67,7 +66,8 @@ impl Branch {
         assert!(!path.has_leaf(block_id));
 
         path.insert_leaf(&block_id);
-        self.write_path(tx, &mut lock, &path).await
+        let old_root = self.write_path(tx, &mut lock, &path).await?;
+        self.remove_snapshot(&old_root, tx).await
     }
 
     /// Insert the root block into the index
@@ -105,7 +105,8 @@ impl Branch {
             .get_path(tx, &lock.root_hash, encoded_locator)
             .await?;
         path.remove_leaf(encoded_locator);
-        self.write_path(tx, &mut lock, &path).await
+        let old_root = self.write_path(tx, &mut lock, &path).await?;
+        self.remove_snapshot(&old_root, tx).await
     }
 
     /// Remove the root block from the index
@@ -181,7 +182,7 @@ impl Branch {
         tx: &mut db::Transaction,
         lock: &mut Lock<'_>,
         path: &PathWithSiblings,
-    ) -> Result<()> {
+    ) -> Result<RootNode> {
         if path.root.is_null() {
             return self.write_branch_root(tx, lock, &path.root).await;
         }
@@ -226,7 +227,7 @@ impl Branch {
         tx: &mut db::Transaction,
         lock: &mut Lock<'_>,
         root: &Hash,
-    ) -> Result<()> {
+    ) -> Result<RootNode> {
         let new_id = sqlx::query(
             "INSERT INTO branches(replica_id, root_hash)
              SELECT replica_id, ? FROM branches
@@ -240,26 +241,20 @@ impl Branch {
         .unwrap()
         .get(0);
 
-        self.remove_snapshot(lock.snapshot_id, &lock.root_hash, tx)
-            .await?;
+        let old_root = lock.clone();
+
         lock.snapshot_id = new_id;
         lock.root_hash = *root;
 
-        Ok(())
+        Ok(old_root)
     }
 
     async fn remove_snapshot(
         &self,
-        snapshot_id: SnapshotId,
-        root: &Hash,
+        root_node: &RootNode,
         tx: &mut db::Transaction,
     ) -> Result<()> {
-        Node::Root {
-            root: *root,
-            snapshot_id,
-        }
-        .remove_recursive(0, tx)
-        .await
+        root_node.as_node().remove_recursive(0, tx).await
     }
 
     async fn lock(&self) -> Lock<'_> {
