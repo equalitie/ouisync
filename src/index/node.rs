@@ -1,3 +1,7 @@
+// We're not repeating enumeration name
+// https://rust-lang.github.io/rust-clippy/master/index.html#enum_variant_names
+#![allow(clippy::enum_variant_names)]
+
 use crate::{
     block::{BlockId, BlockName, BlockVersion},
     crypto::Hash,
@@ -79,11 +83,11 @@ impl RootNode {
     }
 
     pub async fn remove_recursive(&self, tx: &mut db::Transaction) -> Result<()> {
-        self.as_node().remove_recursive(0, tx).await
+        self.as_link().remove_recursive(0, tx).await
     }
 
-    fn as_node(&self) -> Node {
-        Node::Root {
+    fn as_link(&self) -> Link {
+        Link::ToRoot {
             snapshot_id: self.snapshot_id,
             root: self.root_hash,
         }
@@ -148,7 +152,7 @@ impl LeafNode {
         let version = BlockVersion::try_from(b3)?;
         Ok(LeafNode {
             locator,
-            block_id: BlockId { name, version }
+            block_id: BlockId { name, version },
         })
     }
 }
@@ -162,12 +166,12 @@ pub async fn inner_children(
         .fetch_all(&mut *tx)
         .await?;
 
-    let mut children = [InnerNode{hash: Hash::null()}; MAX_INNER_NODE_CHILD_COUNT];
+    let mut children = [InnerNode { hash: Hash::null() }; MAX_INNER_NODE_CHILD_COUNT];
 
     for ref row in rows {
         let bucket: u32 = row.get(0);
         let hash = column::<Hash>(row, 1)?;
-        children[bucket as usize] = InnerNode{hash};
+        children[bucket as usize] = InnerNode { hash };
     }
 
     Ok(children)
@@ -190,22 +194,13 @@ pub async fn leaf_children(parent: &Hash, tx: &mut db::Transaction) -> Result<Ve
 }
 
 #[derive(Debug)]
-enum Node {
-    Root {
-        snapshot_id: SnapshotId,
-        root: Hash,
-    },
-    Inner {
-        parent: Hash,
-        node: Hash,
-    },
-    Leaf {
-        parent: Hash,
-        node: LeafNode,
-    },
+enum Link {
+    ToRoot { snapshot_id: SnapshotId, root: Hash },
+    ToInner { parent: Hash, node: Hash },
+    ToLeaf { parent: Hash, node: LeafNode },
 }
 
-impl Node {
+impl Link {
     #[async_recursion]
     pub async fn remove_recursive(&self, layer: usize, tx: &mut db::Transaction) -> Result<()> {
         self.remove_single(tx).await?;
@@ -223,7 +218,7 @@ impl Node {
 
     async fn remove_single(&self, tx: &mut db::Transaction) -> Result<()> {
         match self {
-            Node::Root {
+            Link::ToRoot {
                 snapshot_id,
                 root: _,
             } => {
@@ -232,14 +227,14 @@ impl Node {
                     .execute(&mut *tx)
                     .await?;
             }
-            Node::Inner { parent, node } => {
+            Link::ToInner { parent, node } => {
                 sqlx::query("DELETE FROM branch_forest WHERE parent=? AND node=?")
                     .bind(parent.as_ref())
                     .bind(node.as_ref())
                     .execute(&mut *tx)
                     .await?;
             }
-            Node::Leaf { parent, node } => {
+            Link::ToLeaf { parent, node } => {
                 let blob = node.serialize();
                 sqlx::query("DELETE FROM branch_forest WHERE parent=? AND node=?")
                     .bind(parent.as_ref())
@@ -255,7 +250,7 @@ impl Node {
     /// Return true if there is nothing that references this node
     async fn is_dangling(&self, tx: &mut db::Transaction) -> Result<bool> {
         let has_parent = match self {
-            Node::Root {
+            Link::ToRoot {
                 snapshot_id: _,
                 root,
             } => sqlx::query("SELECT 0 FROM branches WHERE root_hash=? LIMIT 1")
@@ -263,14 +258,14 @@ impl Node {
                 .fetch_optional(&mut *tx)
                 .await?
                 .is_some(),
-            Node::Inner { parent: _, node } => {
+            Link::ToInner { parent: _, node } => {
                 sqlx::query("SELECT 0 FROM branch_forest WHERE node=? LIMIT 1")
                     .bind(node.as_ref())
                     .fetch_optional(&mut *tx)
                     .await?
                     .is_some()
             }
-            Node::Leaf { parent: _, node } => {
+            Link::ToLeaf { parent: _, node } => {
                 let blob = node.serialize();
                 sqlx::query("SELECT 0 FROM branch_forest WHERE node=? LIMIT 1")
                     .bind(blob)
@@ -283,9 +278,9 @@ impl Node {
         Ok(!has_parent)
     }
 
-    async fn children(&self, layer: usize, tx: &mut db::Transaction) -> Result<Vec<Node>> {
+    async fn children(&self, layer: usize, tx: &mut db::Transaction) -> Result<Vec<Link>> {
         match self {
-            Node::Root {
+            Link::ToRoot {
                 snapshot_id: _,
                 root,
             } => sqlx::query("SELECT node, parent FROM branch_forest WHERE parent=?;")
@@ -301,7 +296,7 @@ impl Node {
                     }
                 })
                 .collect(),
-            Node::Inner { parent: _, node } => {
+            Link::ToInner { parent: _, node } => {
                 sqlx::query("SELECT node, parent FROM branch_forest WHERE parent=?;")
                     .bind(node.as_ref())
                     .fetch_all(&mut *tx)
@@ -316,25 +311,24 @@ impl Node {
                     })
                     .collect()
             }
-            Node::Leaf { parent: _, node: _ } => Ok(Vec::new()),
+            Link::ToLeaf { parent: _, node: _ } => Ok(Vec::new()),
         }
     }
 
-    fn row_to_inner(row: &SqliteRow) -> Result<Node> {
-        Ok(Node::Inner {
+    fn row_to_inner(row: &SqliteRow) -> Result<Link> {
+        Ok(Link::ToInner {
             parent: column::<Hash>(row, 1)?,
             node: column::<Hash>(row, 0)?,
         })
     }
 
-    fn row_to_leaf(row: &SqliteRow) -> Result<Node> {
-        Ok(Node::Leaf {
+    fn row_to_leaf(row: &SqliteRow) -> Result<Link> {
+        Ok(Link::ToLeaf {
             parent: column::<Hash>(row, 1)?,
             node: LeafNode::deserialize(row.get(0))?,
         })
     }
 }
-
 
 fn column<'a, T: TryFrom<&'a [u8]>>(
     row: &'a SqliteRow,

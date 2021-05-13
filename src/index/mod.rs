@@ -1,5 +1,6 @@
 mod branch;
 mod node;
+mod path;
 
 use crate::{
     db,

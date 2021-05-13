@@ -8,11 +8,13 @@ use crate::{
     crypto::Hash,
     db,
     error::{Error, Result},
-    index::node::{inner_children, leaf_children, InnerNode, LeafNode, RootNode},
-    index::{INNER_LAYER_COUNT, MAX_INNER_NODE_CHILD_COUNT},
+    index::{
+        node::{inner_children, leaf_children, InnerNode, LeafNode, RootNode},
+        path::Path,
+        INNER_LAYER_COUNT,
+    },
     replica_id::ReplicaId,
 };
-use sha3::{Digest, Sha3_256};
 use std::sync::Arc;
 use tokio::sync::{Mutex, MutexGuard};
 
@@ -59,7 +61,7 @@ impl Branch {
         // BlockVersion twice.
         assert!(!path.has_leaf(block_id));
 
-        path.insert_leaf(&block_id);
+        path.set_leaf(&block_id);
         let old_root = self.write_path(tx, &mut lock, &path).await?;
         self.remove_snapshot(&old_root, tx).await
     }
@@ -79,7 +81,7 @@ impl Branch {
 
         let path = self.get_path(tx, &lock.root_hash, &encoded_locator).await?;
 
-        match path.get_leaf(encoded_locator) {
+        match path.get_leaf() {
             Some(block_id) => Ok(block_id),
             None => Err(Error::BlockIdNotFound),
         }
@@ -109,13 +111,14 @@ impl Branch {
         tx: &mut db::Transaction,
         root_hash: &Hash,
         encoded_locator: &LocatorHash,
-    ) -> Result<PathWithSiblings> {
-        let mut path = PathWithSiblings::new(&root_hash, *encoded_locator);
+    ) -> Result<Path> {
+        let mut path = Path::new(*encoded_locator);
 
-        if path.root.is_null() {
+        if root_hash.is_null() {
             return Ok(path);
         }
 
+        path.root = *root_hash;
         path.layers_found += 1;
 
         let mut parent = path.root;
@@ -148,14 +151,14 @@ impl Branch {
         &self,
         tx: &mut db::Transaction,
         lock: &mut Lock<'_>,
-        path: &PathWithSiblings,
+        path: &Path,
     ) -> Result<RootNode> {
         if path.root.is_null() {
             return self.write_branch_root(tx, lock, &path.root).await;
         }
 
-        for (inner_i, inner_layer) in path.inner.iter().enumerate() {
-            let parent_hash = path.hash_at_layer(inner_i);
+        for (i, inner_layer) in path.inner.iter().enumerate() {
+            let parent_hash = path.hash_at_layer(i);
 
             for (bucket, ref node) in inner_layer.iter().enumerate() {
                 if node.hash.is_null() {
@@ -166,7 +169,7 @@ impl Branch {
             }
         }
 
-        let layer = PathWithSiblings::total_layer_count() - 1;
+        let layer = Path::total_layer_count() - 1;
         let parent_hash = path.hash_at_layer(layer - 1);
 
         for leaf in &path.leaves {
@@ -195,197 +198,6 @@ impl Branch {
     async fn lock(&self) -> Lock<'_> {
         self.root_node.lock().await
     }
-}
-
-type InnerChildren = [InnerNode; MAX_INNER_NODE_CHILD_COUNT];
-
-#[derive(Debug)]
-struct PathWithSiblings {
-    encoded_locator: Hash,
-    /// Count of the number of layers found where a locator has a corresponding bucket. Including
-    /// the root and leaf layers.  (e.g. 0 -> root wasn't found; 1 -> root was found but no inner
-    /// nor leaf layers was; 2 -> root and one inner (possibly leaf if INNER_LAYER_COUNT == 0)
-    /// layers were found; ...)
-    layers_found: usize,
-    root: Hash,
-    inner: [InnerChildren; INNER_LAYER_COUNT],
-    /// Note: this vector must be sorted to guarantee unique hashing.
-    leaves: Vec<LeafNode>,
-}
-
-impl PathWithSiblings {
-    fn new(root: &Hash, encoded_locator: Hash) -> Self {
-        let null_hash = Hash::null();
-
-        let inner = [
-            [InnerNode{hash: null_hash}; MAX_INNER_NODE_CHILD_COUNT];
-            INNER_LAYER_COUNT
-        ];
-
-        Self {
-            encoded_locator,
-            layers_found: 0,
-            root: *root,
-            inner,
-            leaves: Vec::new(),
-        }
-    }
-
-    fn get_leaf(&self, encoded_locator: &LocatorHash) -> Option<BlockId> {
-        self.leaves
-            .iter()
-            .find(|l| l.locator == *encoded_locator)
-            .map(|l| l.block_id)
-    }
-
-    fn has_leaf(&self, block_id: &BlockId) -> bool {
-        self.leaves.iter().any(|l| l.block_id == *block_id)
-    }
-
-    fn total_layer_count() -> usize {
-        1 /* root */ + INNER_LAYER_COUNT + 1 /* leaves */
-    }
-
-    fn hash_at_layer(&self, layer: usize) -> Hash {
-        if layer == 0 {
-            return self.root;
-        }
-        let inner_layer = layer - 1;
-        self.inner[inner_layer][self.get_bucket(inner_layer)].hash
-    }
-
-    // BlockVersion is needed when calculating hashes at the beginning to make this tree unique
-    // across all the branches.
-    fn insert_leaf(&mut self, block_id: &BlockId) {
-        if self.has_leaf(block_id) {
-            return;
-        }
-
-        let mut modified = false;
-
-        for leaf in &mut self.leaves {
-            if leaf.locator == self.encoded_locator {
-                modified = true;
-                leaf.block_id = *block_id;
-                break;
-            }
-        }
-
-        if !modified {
-            // XXX: This can be done better.
-            self.leaves.push(LeafNode {
-                locator: self.encoded_locator,
-                block_id: *block_id,
-            });
-            self.leaves.sort();
-        }
-
-        self.recalculate(INNER_LAYER_COUNT);
-    }
-
-    fn remove_leaf(&mut self, encoded_locator: &LocatorHash) {
-        let mut changed = false;
-
-        self.leaves = self
-            .leaves
-            .iter()
-            .filter(|l| {
-                let keep = l.locator != *encoded_locator;
-                if !keep {
-                    changed = true;
-                }
-                keep
-            })
-            .cloned()
-            .collect();
-
-        if !changed {
-            return;
-        }
-
-        if !self.leaves.is_empty() {
-            self.recalculate(INNER_LAYER_COUNT);
-            return;
-        }
-
-        if INNER_LAYER_COUNT > 0 {
-            self.remove_from_inner_layer(INNER_LAYER_COUNT - 1);
-        } else {
-            self.remove_root_layer();
-        }
-    }
-
-    fn remove_from_inner_layer(&mut self, inner_layer: usize) {
-        let null = Hash::null();
-        let bucket = self.get_bucket(inner_layer);
-
-        self.inner[inner_layer][bucket] = InnerNode{hash: null};
-
-        let is_empty = self.inner[inner_layer].iter().all(|x| x.hash == null);
-
-        if !is_empty {
-            self.recalculate(inner_layer - 1);
-            return;
-        }
-
-        if inner_layer > 0 {
-            self.remove_from_inner_layer(inner_layer - 1);
-        } else {
-            self.remove_root_layer();
-        }
-    }
-
-    fn remove_root_layer(&mut self) {
-        self.root = Hash::null();
-    }
-
-    /// Recalculate layers from start_layer all the way to the root.
-    fn recalculate(&mut self, start_layer: usize) {
-        for inner_layer in (0..start_layer).rev() {
-            let hash = self.compute_hash_for_layer(inner_layer + 1);
-            self.inner[inner_layer][self.get_bucket(inner_layer)] = InnerNode{hash};
-        }
-
-        self.root = self.compute_hash_for_layer(0);
-    }
-
-    // Assumes layers higher than `layer` have their hashes/BlockVersions already
-    // computed/assigned.
-    fn compute_hash_for_layer(&self, layer: usize) -> Hash {
-        if layer == INNER_LAYER_COUNT {
-            hash_leafs(&self.leaves)
-        } else {
-            hash_inner(&self.inner[layer])
-        }
-    }
-
-    fn get_bucket(&self, inner_layer: usize) -> usize {
-        self.encoded_locator.as_ref()[inner_layer] as usize
-    }
-}
-
-fn hash_leafs(leaves: &[LeafNode]) -> Hash {
-    let mut hash = Sha3_256::new();
-    // XXX: Is updating with length enough to prevent attaks?
-    hash.update((leaves.len() as u32).to_le_bytes());
-    for ref l in leaves {
-        hash.update(l.locator);
-        hash.update(l.block_id.name);
-        hash.update(l.block_id.version);
-    }
-    hash.finalize().into()
-}
-
-fn hash_inner(siblings: &[InnerNode]) -> Hash {
-    // XXX: Have some cryptographer check this whether there are no attacks.
-    let mut hash = Sha3_256::new();
-    for (k, ref s) in siblings.iter().enumerate() {
-        if !s.hash.is_null() {
-            hash.update((k as u16).to_le_bytes());
-            hash.update(s.hash);
-        }
-    }
-    hash.finalize().into()
 }
 
 #[cfg(test)]
@@ -427,13 +239,10 @@ mod tests {
             let b2 = BlockId::random();
 
             let locator = Locator::Head(b1.name, 0);
-
             let encoded_locator = locator.encode(&Cryptor::Null).unwrap();
-
             let mut tx = pool.begin().await.unwrap();
 
             branch.insert(&mut tx, &b1, &encoded_locator).await.unwrap();
-
             branch.insert(&mut tx, &b2, &encoded_locator).await.unwrap();
 
             let r = branch.get(&mut tx, &encoded_locator).await.unwrap();
@@ -455,11 +264,8 @@ mod tests {
             .unwrap();
 
         let b = BlockId::random();
-
         let locator = Locator::Head(b.name, 0);
-
         let encoded_locator = locator.encode(&Cryptor::Null).unwrap();
-
         let mut tx = pool.begin().await.unwrap();
 
         assert_eq!(0, count_branch_forest_entries(&mut tx).await);
