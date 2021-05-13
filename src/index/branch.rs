@@ -9,13 +9,14 @@ use crate::{
     db,
     error::{Error, Result},
     index::node::{inner_children, leaf_children, InnerNode, LeafNode, RootNode},
-    index::LocatorHash,
     index::{INNER_LAYER_COUNT, MAX_INNER_NODE_CHILD_COUNT},
     replica_id::ReplicaId,
 };
 use sha3::{Digest, Sha3_256};
 use std::sync::Arc;
 use tokio::sync::{Mutex, MutexGuard};
+
+type LocatorHash = Hash;
 
 type SnapshotId = u32;
 
@@ -209,7 +210,6 @@ struct PathWithSiblings {
     root: Hash,
     inner: [InnerChildren; INNER_LAYER_COUNT],
     /// Note: this vector must be sorted to guarantee unique hashing.
-    //leaves: Vec<(LocatorHash, BlockId)>,
     leaves: Vec<LeafNode>,
 }
 

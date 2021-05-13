@@ -2,21 +2,15 @@ mod branch;
 mod node;
 
 use crate::{
-    block::{BlockId, BlockName, BlockVersion},
-    crypto::Hash,
     db,
     error::{Error, Result},
 };
-use sqlx::{sqlite::SqliteRow, Row};
-use std::convert::TryFrom;
 
 /// Number of layers in the tree excluding the layer with root and the layer with leaf nodes.
 const INNER_LAYER_COUNT: usize = 3;
 const MAX_INNER_NODE_CHILD_COUNT: usize = 256; // = sizeof(u8)
 
 pub use self::branch::Branch;
-
-type LocatorHash = Hash;
 
 /// Initializes the index. Creates the required database schema unless already exists.
 pub async fn init(pool: &db::Pool) -> Result<(), Error> {
@@ -42,22 +36,4 @@ pub async fn init(pool: &db::Pool) -> Result<(), Error> {
     .map_err(Error::CreateDbSchema)?;
 
     Ok(())
-}
-
-fn deserialize_leaf(blob: &[u8]) -> Result<(LocatorHash, BlockId)> {
-    let (b1, b2) = blob.split_at(std::mem::size_of::<Hash>());
-    let (b2, b3) = b2.split_at(std::mem::size_of::<BlockName>());
-    let l = Hash::try_from(b1)?;
-    let name = BlockName::try_from(b2)?;
-    let version = BlockVersion::try_from(b3)?;
-    Ok((l, BlockId { name, version }))
-}
-
-fn column<'a, T: TryFrom<&'a [u8]>>(
-    row: &'a SqliteRow,
-    i: usize,
-) -> std::result::Result<T, T::Error> {
-    let value: &'a [u8] = row.get::<'a>(i);
-    let value = T::try_from(value)?;
-    Ok(value)
 }

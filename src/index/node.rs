@@ -1,14 +1,14 @@
 use crate::{
-    block::BlockId,
+    block::{BlockId, BlockName, BlockVersion},
     crypto::Hash,
     db,
     error::Result,
-    index::LocatorHash,
-    index::{column, deserialize_leaf, INNER_LAYER_COUNT, MAX_INNER_NODE_CHILD_COUNT},
+    index::{INNER_LAYER_COUNT, MAX_INNER_NODE_CHILD_COUNT},
     replica_id::ReplicaId,
 };
 use async_recursion::async_recursion;
 use sqlx::{sqlite::SqliteRow, Row};
+use std::convert::TryFrom;
 
 type SnapshotId = u32;
 
@@ -116,7 +116,7 @@ pub struct LeafNode {
 
 impl LeafNode {
     pub async fn insert(leaf: &LeafNode, parent: &Hash, tx: &mut db::Transaction) -> Result<()> {
-        let blob = Self::serialize(&leaf.locator, &leaf.block_id);
+        let blob = leaf.serialize();
         sqlx::query("INSERT INTO branch_forest (parent, bucket, node) VALUES (?, ?, ?)")
             .bind(parent.as_ref())
             .bind(u16::MAX)
@@ -126,14 +126,26 @@ impl LeafNode {
         Ok(())
     }
 
-    fn serialize(locator: &Hash, block_id: &BlockId) -> Vec<u8> {
-        locator
+    fn serialize(&self) -> Vec<u8> {
+        self.locator
             .as_ref()
             .iter()
-            .chain(block_id.name.as_ref().iter())
-            .chain(block_id.version.as_ref().iter())
+            .chain(self.block_id.name.as_ref().iter())
+            .chain(self.block_id.version.as_ref().iter())
             .cloned()
             .collect()
+    }
+
+    fn deserialize(blob: &[u8]) -> Result<LeafNode> {
+        let (b1, b2) = blob.split_at(std::mem::size_of::<Hash>());
+        let (b2, b3) = b2.split_at(std::mem::size_of::<BlockName>());
+        let locator = Hash::try_from(b1)?;
+        let name = BlockName::try_from(b2)?;
+        let version = BlockVersion::try_from(b3)?;
+        Ok(LeafNode {
+            locator,
+            block_id: BlockId { name, version }
+        })
     }
 }
 
@@ -167,8 +179,7 @@ pub async fn leaf_children(parent: &Hash, tx: &mut db::Transaction) -> Result<Ve
     children.reserve(rows.len());
 
     for ref row in rows {
-        let (locator, block_id) = deserialize_leaf(row.get(0))?;
-        children.push(LeafNode { locator, block_id });
+        children.push(LeafNode::deserialize(row.get(0))?);
     }
 
     Ok(children)
@@ -185,7 +196,7 @@ pub enum Node {
         parent: Hash,
     },
     Leaf {
-        node: (LocatorHash, BlockId),
+        node: LeafNode,
         parent: Hash,
     },
 }
@@ -212,21 +223,21 @@ impl Node {
                 root: _,
                 snapshot_id,
             } => {
-                sqlx::query("DELETE FROM branches WHERE snapshot_id = ?")
+                sqlx::query("DELETE FROM branches WHERE snapshot_id=?")
                     .bind(snapshot_id)
                     .execute(&mut *tx)
                     .await?;
             }
             Node::Inner { node, parent } => {
-                sqlx::query("DELETE FROM branch_forest WHERE parent = ? AND node = ?")
+                sqlx::query("DELETE FROM branch_forest WHERE parent=? AND node=?")
                     .bind(parent.as_ref())
                     .bind(node.as_ref())
                     .execute(&mut *tx)
                     .await?;
             }
             Node::Leaf { node, parent } => {
-                let blob = LeafNode::serialize(&node.0, &node.1);
-                sqlx::query("DELETE FROM branch_forest WHERE parent = ? AND node = ?")
+                let blob = node.serialize();
+                sqlx::query("DELETE FROM branch_forest WHERE parent=? AND node=?")
                     .bind(parent.as_ref())
                     .bind(blob)
                     .execute(&mut *tx)
@@ -256,7 +267,7 @@ impl Node {
                     .is_some()
             }
             Node::Leaf { node, parent: _ } => {
-                let blob = LeafNode::serialize(&node.0, &node.1);
+                let blob = node.serialize();
                 sqlx::query("SELECT 0 FROM branch_forest WHERE node=? LIMIT 1")
                     .bind(blob)
                     .fetch_optional(&mut *tx)
@@ -314,8 +325,18 @@ impl Node {
 
     fn row_to_leaf(row: &SqliteRow) -> Result<Node> {
         Ok(Node::Leaf {
-            node: deserialize_leaf(row.get(0))?,
+            node: LeafNode::deserialize(row.get(0))?,
             parent: column::<Hash>(row, 1)?,
         })
     }
+}
+
+
+fn column<'a, T: TryFrom<&'a [u8]>>(
+    row: &'a SqliteRow,
+    i: usize,
+) -> std::result::Result<T, T::Error> {
+    let value: &'a [u8] = row.get::<'a>(i);
+    let value = T::try_from(value)?;
+    Ok(value)
 }
