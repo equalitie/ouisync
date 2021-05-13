@@ -146,7 +146,8 @@ impl Directory {
     }
 
     /// Renames of moves an entry.
-    /// If the destination entry already exists, it will be overwritten.
+    /// If the destination entry already exists and is a file, it is overwritten. If it is a
+    /// directory, no change is performed and an error is returned instead.
     pub async fn move_entry(
         &mut self,
         src_name: &OsStr,
@@ -175,7 +176,17 @@ impl Directory {
 
         let dst_dir = dst_dir.get(self);
 
-        // TODO: fail if if dst_entry exists and is a directory.
+        // Can't move over an existing directory.
+        // NOTE: we could move *into* the directory instead, but there would still be edge cases
+        // e.g. the dst entry being an existing directory there which we would still have to deal
+        // with. Keeping things simple for now.
+        if dst_dir
+            .lookup(dst_name)
+            .map(|info| info.entry_type() == EntryType::Directory)
+            .unwrap_or(false)
+        {
+            return Err(Error::EntryIsDirectory);
+        }
 
         let dst_entry = dst_dir.content.vacant_entry();
         let new_dst_locator = Locator::Head(*dst_dir.blob.head_name(), dst_entry.seq());
@@ -392,7 +403,7 @@ struct EntryData {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::replica_id::ReplicaId;
+    use crate::{index::Branch, replica_id::ReplicaId};
     use rand::{distributions::Standard, Rng};
     use std::collections::BTreeSet;
 
@@ -591,7 +602,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn move_entry_to_existing_entry() {
+    async fn move_entry_over_existing_file() {
         let (pool, branch) = setup().await;
 
         let src_name = OsStr::new("src.txt");
@@ -626,6 +637,35 @@ mod tests {
         let read_content = file.read_to_end().await.unwrap();
         assert_eq!(read_content, src_content);
         assert_ne!(read_content, dst_content);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn attempt_to_move_entry_over_existing_directory() {
+        let (pool, branch) = setup().await;
+
+        let src_name = OsStr::new("src.txt");
+        let dst_name = OsStr::new("dst");
+
+        let mut dir = Directory::create(pool.clone(), branch, Cryptor::Null, Locator::Root);
+
+        let mut src_file = dir.create_file(src_name.to_owned()).unwrap();
+        let src_content = random_content(1024);
+        src_file.write(&src_content).await.unwrap();
+        src_file.flush().await.unwrap();
+
+        let mut dst_dir = dir.create_directory(dst_name.to_owned()).unwrap();
+        dst_dir.flush().await.unwrap();
+
+        dir.flush().await.unwrap();
+
+        match dir
+            .move_entry(src_name, &mut MoveDstDirectory::Src, dst_name)
+            .await
+        {
+            Err(Error::EntryIsDirectory) => (),
+            Err(error) => panic!("unexpected error {}", error),
+            Ok(_) => panic!("the move should not have succeeded but it did"),
+        }
     }
 
     async fn setup() -> (db::Pool, Branch) {

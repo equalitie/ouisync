@@ -28,7 +28,6 @@ impl Repository {
         Ok(Self { index, cryptor })
     }
 
-
     /// Opens the root directory.
     pub async fn root(&self) -> Result<Directory> {
         self.open_directory_by_locator(Locator::Root).await
