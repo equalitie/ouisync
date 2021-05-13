@@ -174,6 +174,9 @@ impl Directory {
             .await?;
 
         let dst_dir = dst_dir.get(self);
+
+        // TODO: fail if if dst_entry exists and is a directory.
+
         let dst_entry = dst_dir.content.vacant_entry();
         let new_dst_locator = Locator::Head(*dst_dir.blob.head_name(), dst_entry.seq());
 
@@ -285,7 +288,7 @@ pub enum MoveDstDirectory {
 }
 
 impl MoveDstDirectory {
-    fn get<'a>(&'a mut self, src: &'a mut Directory) -> &'a mut Directory {
+    pub fn get<'a>(&'a mut self, src: &'a mut Directory) -> &'a mut Directory {
         match self {
             Self::Src => src,
             Self::Other(other) => other,

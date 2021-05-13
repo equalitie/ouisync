@@ -34,7 +34,7 @@ Future<void> main() async {
     }
   }
 
-  var type = await repo.entryType('/foo');
+  var type = await repo.type('/foo');
   print('$type');
 
   dir.close();
@@ -80,12 +80,15 @@ class Repository {
     bindings.repository_close(handle);
   }
 
-  Future<EntryType?> entryType(String path) async =>
-      decodeEntryType(await withPool((pool) => invoke<int>((port, error) =>
-          bindings.repository_entry_type(
-              handle, pool.toNativeUtf8(path), port, error))));
+  Future<EntryType?> type(String path) async => decodeEntryType(await withPool(
+      (pool) => invoke<int>((port, error) => bindings.repository_entry_type(
+          handle, pool.toNativeUtf8(path), port, error))));
 
-  Future<bool> entryExists(String path) async => await entryType(path) != null;
+  Future<bool> exists(String path) async => await type(path) != null;
+
+  Future<void> move(String src, String dst) =>
+      invoke<void>((port, error) => bindings.repository_move_entry(
+          handle, pool.toNativeUtf8(src), pool.toNativeUtf8(dst), port, error));
 }
 
 enum EntryType {

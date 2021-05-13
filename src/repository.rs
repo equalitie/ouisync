@@ -6,7 +6,7 @@ use std::{
 use crate::{
     crypto::Cryptor,
     db,
-    directory::Directory,
+    directory::{Directory, MoveDstDirectory},
     entry::{Entry, EntryType},
     error::{Error, Result},
     file::File,
@@ -96,6 +96,17 @@ impl Repository {
         parent.remove_directory(name).await?;
 
         Ok(parent)
+    }
+
+    /// Moves (renames) an entry from the source path to the destination path.
+    /// If both source and destination refer to the same entry, this is a no-op.
+    /// Returns the parent directories of both `src` and `dst`.
+    pub async fn move_entry<S: AsRef<Path>, D: AsRef<Path>>(
+        &self,
+        _src: S,
+        _dst: D,
+    ) -> Result<(Directory, MoveDstDirectory)> {
+        todo!()
     }
 
     /// Open an entry (file or directory) at the given locator.

@@ -59,6 +59,29 @@ pub unsafe extern "C" fn repository_entry_type(
     })
 }
 
+/// Move/rename entry from src to dst.
+#[no_mangle]
+pub unsafe extern "C" fn repository_move_entry(
+    handle: SharedHandle<Repository>,
+    src: *const c_char,
+    dst: *const c_char,
+    port: Port<()>,
+    error: *mut *mut c_char,
+) {
+    session::with(port, error, |ctx| {
+        let repo = handle.get();
+        let src = utils::ptr_to_path_buf(src)?;
+        let dst = utils::ptr_to_path_buf(dst)?;
+
+        ctx.spawn(async move {
+            let (mut src_parent, mut dst_parent) = repo.move_entry(src, dst).await?;
+            src_parent.flush().await?;
+            dst_parent.get(&mut src_parent).flush().await?;
+            Ok(())
+        })
+    })
+}
+
 pub(super) fn entry_type_to_num(entry_type: EntryType) -> u8 {
     match entry_type {
         EntryType::File => ENTRY_TYPE_FILE,
