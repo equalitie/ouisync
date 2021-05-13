@@ -102,10 +102,34 @@ impl Repository {
     /// Returns the parent directories of both `src` and `dst`.
     pub async fn move_entry<S: AsRef<Path>, D: AsRef<Path>>(
         &self,
-        _src: S,
-        _dst: D,
+        src: S,
+        dst: D,
     ) -> Result<(Directory, MoveDstDirectory)> {
-        todo!()
+        // `None` here means we are trying to move the root which is not supported.
+        let (src_parent, src_name) =
+            decompose_path(src.as_ref()).ok_or(Error::OperationNotSupported)?;
+        // `None` here means we are trying to move over the root which is a special case of moving
+        // over existing directory which is not allowed.
+        let (dst_parent, dst_name) = decompose_path(dst.as_ref()).ok_or(Error::EntryIsDirectory)?;
+
+        // TODO: check that dst is not in a subdirectory of src
+
+        let mut src_parent = self.open_directory(src_parent).await?;
+
+        let (dst_parent_locator, dst_parent_type) = self.lookup(dst_parent).await?;
+        dst_parent_type.check_is_directory()?;
+
+        let mut dst_parent = if &dst_parent_locator == src_parent.locator() {
+            MoveDstDirectory::Src
+        } else {
+            MoveDstDirectory::Other(self.open_directory_by_locator(dst_parent_locator).await?)
+        };
+
+        src_parent
+            .move_entry(src_name, &mut dst_parent, dst_name)
+            .await?;
+
+        Ok((src_parent, dst_parent))
     }
 
     /// Open an entry (file or directory) at the given locator.

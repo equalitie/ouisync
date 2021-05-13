@@ -24,18 +24,7 @@ Future<void> main() async {
       print('  ${string}');
       await file.close();
     }
-
-    if (Random().nextBool()) {
-      if (entry.type == EntryType.file) {
-        await File.remove(repo, '/${entry.name}');
-      } else {
-        await Directory.remove(repo, '/${entry.name}');
-      }
-    }
   }
-
-  var type = await repo.type('/foo');
-  print('$type');
 
   dir.close();
   repo.close();
@@ -86,9 +75,9 @@ class Repository {
 
   Future<bool> exists(String path) async => await type(path) != null;
 
-  Future<void> move(String src, String dst) =>
-      invoke<void>((port, error) => bindings.repository_move_entry(
-          handle, pool.toNativeUtf8(src), pool.toNativeUtf8(dst), port, error));
+  Future<void> move(String src, String dst) => withPool((pool) => invoke<void>(
+      (port, error) => bindings.repository_move_entry(handle,
+          pool.toNativeUtf8(src), pool.toNativeUtf8(dst), port, error)));
 }
 
 enum EntryType {
