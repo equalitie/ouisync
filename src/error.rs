@@ -22,8 +22,6 @@ pub enum Error {
     MalformedData,
     #[error("block not found: {0}")]
     BlockNotFound(BlockId),
-    #[error("block id not found")]
-    BlockIdNotFound, // TODO: remove this and use `EntryNotFound` instead
     #[error("block has wrong length (expected: {}, actual: {0})", BLOCK_SIZE)]
     WrongBlockLength(usize),
     #[error("encryption / decryption failed")]

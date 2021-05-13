@@ -76,14 +76,14 @@ impl Branch {
         let lock = self.lock().await;
 
         if lock.root_hash.is_null() {
-            return Err(Error::BlockIdNotFound);
+            return Err(Error::EntryNotFound);
         }
 
         let path = self.get_path(tx, &lock.root_hash, &encoded_locator).await?;
 
         match path.get_leaf() {
             Some(block_id) => Ok(block_id),
-            None => Err(Error::BlockIdNotFound),
+            None => Err(Error::EntryNotFound),
         }
     }
 
@@ -288,13 +288,9 @@ mod tests {
             branch.remove(&mut tx, &encoded_locator).await.unwrap();
 
             match branch.get(&mut tx, &encoded_locator).await {
-                Err(Error::BlockIdNotFound) => { /* OK */ }
-                Err(_) => {
-                    panic!("Error should have been BlockIdNotFound");
-                }
-                Ok(_) => {
-                    panic!("Branch shouldn't have contained the block ID");
-                }
+                Err(Error::EntryNotFound) => { /* OK */ }
+                Err(_) => panic!("Error should have been EntryNotFound"),
+                Ok(_) => panic!("Branch shouldn't have contained the block ID"),
             }
         }
 

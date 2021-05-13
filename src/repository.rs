@@ -90,7 +90,7 @@ impl Repository {
         .await
         {
             Ok(dir) => Ok(dir),
-            Err(Error::BlockIdNotFound) if locator == Locator::Root => {
+            Err(Error::EntryNotFound) if locator == Locator::Root => {
                 // Lazily Create the root directory
                 Ok(Directory::create(
                     self.index.pool.clone(),
