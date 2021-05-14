@@ -4,78 +4,44 @@
 #![allow(arithmetic_overflow)]
 
 use crate::{
-    block::{BlockId, BlockName, BlockVersion},
+    block::BlockId,
     crypto::Hash,
     db,
     error::{Error, Result},
+    index::{
+        node::{inner_children, leaf_children, InnerNode, LeafNode, RootNode},
+        path::Path,
+        INNER_LAYER_COUNT,
+    },
     replica_id::ReplicaId,
 };
-use async_recursion::async_recursion;
-use sha3::{Digest, Sha3_256};
-use sqlx::{sqlite::SqliteRow, Row};
-use std::{convert::TryFrom, sync::Arc};
+use std::sync::Arc;
 use tokio::sync::{Mutex, MutexGuard};
 
-/// Number of layers in the tree excluding the layer with root and the layer with leaf nodes.
-const INNER_LAYER_COUNT: usize = 3;
-const MAX_INNER_NODE_CHILD_COUNT: usize = 256; // = sizeof(u8)
+type LocatorHash = Hash;
 
 type SnapshotId = u32;
 
-type Lock<'a> = MutexGuard<'a, State>;
-
-struct State {
-    snapshot_id: SnapshotId,
-    branch_root: Hash,
-}
+type Lock<'a> = MutexGuard<'a, RootNode>;
 
 pub struct Branch {
-    state: Arc<Mutex<State>>,
+    root_node: Arc<Mutex<RootNode>>,
     replica_id: ReplicaId,
 }
 
 impl Branch {
     pub async fn new(pool: db::Pool, replica_id: ReplicaId) -> Result<Self> {
-        let mut conn = pool.acquire().await?;
-
-        let (snapshot_id, branch_root) = match sqlx::query(
-            "SELECT snapshot_id, branch_root FROM branches WHERE replica_id=? ORDER BY snapshot_id DESC LIMIT 1",
-        )
-        .bind(replica_id.as_ref())
-        .fetch_optional(&mut conn)
-        .await?
-        {
-            Some(row) => {
-                (row.get(0), column::<Hash>(&row, 1)?)
-            },
-            None => {
-                let snapshot_id = sqlx::query(
-                    "INSERT INTO branches(replica_id, branch_root)
-                             VALUES (?, ?) RETURNING snapshot_id;",
-                )
-                .bind(replica_id.as_ref())
-                .bind(Hash::null().as_ref())
-                .fetch_optional(&mut conn)
-                .await?
-                .unwrap()
-                .get(0);
-
-                (snapshot_id, Hash::null())
-            }
-        };
+        let root_node = RootNode::get_latest_or_create(pool, &replica_id).await?;
 
         Ok(Self {
-            state: Arc::new(Mutex::new(State {
-                snapshot_id,
-                branch_root,
-            })),
+            root_node: Arc::new(Mutex::new(root_node)),
             replica_id,
         })
     }
 
     pub fn clone(&self) -> Self {
         Self {
-            state: self.state.clone(),
+            root_node: self.root_node.clone(),
             replica_id: self.replica_id,
         }
     }
@@ -88,17 +54,16 @@ impl Branch {
         encoded_locator: &LocatorHash,
     ) -> Result<()> {
         let mut lock = self.lock().await;
-        let mut path = self
-            .get_path(tx, &lock.branch_root, &encoded_locator)
-            .await?;
+        let mut path = self.get_path(tx, &lock.root_hash, &encoded_locator).await?;
 
         // We shouldn't be inserting a block to a branch twice. If we do, the assumption is that we
         // hit one in 2^sizeof(BlockVersion) chance that we randomly generated the same
         // BlockVersion twice.
         assert!(!path.has_leaf(block_id));
 
-        path.insert_leaf(&block_id);
-        self.write_path(tx, &mut lock, &path).await
+        path.set_leaf(&block_id);
+        let old_root = self.write_path(tx, &mut lock, &path).await?;
+        self.remove_snapshot(&old_root, tx).await
     }
 
     /// Insert the root block into the index
@@ -110,15 +75,13 @@ impl Branch {
     pub async fn get(&self, tx: &mut db::Transaction, encoded_locator: &Hash) -> Result<BlockId> {
         let lock = self.lock().await;
 
-        if lock.branch_root.is_null() {
+        if lock.root_hash.is_null() {
             return Err(Error::BlockIdNotFound);
         }
 
-        let path = self
-            .get_path(tx, &lock.branch_root, &encoded_locator)
-            .await?;
+        let path = self.get_path(tx, &lock.root_hash, &encoded_locator).await?;
 
-        match path.get_leaf(encoded_locator) {
+        match path.get_leaf() {
             Some(block_id) => Ok(block_id),
             None => Err(Error::BlockIdNotFound),
         }
@@ -132,11 +95,10 @@ impl Branch {
     /// Remove the block identified by encoded_locator from the index
     pub async fn remove(&self, tx: &mut db::Transaction, encoded_locator: &Hash) -> Result<()> {
         let mut lock = self.lock().await;
-        let mut path = self
-            .get_path(tx, &lock.branch_root, encoded_locator)
-            .await?;
+        let mut path = self.get_path(tx, &lock.root_hash, encoded_locator).await?;
         path.remove_leaf(encoded_locator);
-        self.write_path(tx, &mut lock, &path).await
+        let old_root = self.write_path(tx, &mut lock, &path).await?;
+        self.remove_snapshot(&old_root, tx).await
     }
 
     /// Remove the root block from the index
@@ -147,32 +109,23 @@ impl Branch {
     async fn get_path(
         &self,
         tx: &mut db::Transaction,
-        branch_root: &Hash,
+        root_hash: &Hash,
         encoded_locator: &LocatorHash,
-    ) -> Result<PathWithSiblings> {
-        let mut path = PathWithSiblings::new(&branch_root, *encoded_locator);
+    ) -> Result<Path> {
+        let mut path = Path::new(*encoded_locator);
 
-        if path.root.is_null() {
+        if root_hash.is_null() {
             return Ok(path);
         }
 
+        path.root = *root_hash;
         path.layers_found += 1;
 
         let mut parent = path.root;
 
         for level in 0..INNER_LAYER_COUNT {
-            let children = sqlx::query("SELECT bucket, node FROM branch_forest WHERE parent = ?")
-                .bind(parent.as_ref())
-                .fetch_all(&mut *tx)
-                .await?;
-
-            for ref row in children {
-                let bucket: u32 = row.get(0);
-                let node = column::<Hash>(row, 1)?;
-                path.inner[level][bucket as usize] = node;
-            }
-
-            parent = path.inner[level][path.get_bucket(level)];
+            path.inner[level] = inner_children(&parent, tx).await?;
+            parent = path.inner[level][path.get_bucket(level)].hash;
 
             if parent.is_null() {
                 return Ok(path);
@@ -181,24 +134,11 @@ impl Branch {
             path.layers_found += 1;
         }
 
-        let children = sqlx::query("SELECT node FROM branch_forest WHERE parent = ?")
-            .bind(parent.as_ref())
-            .fetch_all(&mut *tx)
-            .await?;
+        path.leaves = leaf_children(&parent, tx).await?;
 
-        path.leaves.reserve(children.len());
+        let has_locator = path.leaves.iter().any(|l| l.locator == *encoded_locator);
 
-        let mut found_leaf = false;
-
-        for ref row in children {
-            let (locator, block_id) = deserialize_leaf(row.get(0))?;
-            if *encoded_locator == locator {
-                found_leaf = true;
-            }
-            path.leaves.push((locator, block_id));
-        }
-
-        if found_leaf {
+        if has_locator {
             path.layers_found += 1;
         }
 
@@ -211,42 +151,29 @@ impl Branch {
         &self,
         tx: &mut db::Transaction,
         lock: &mut Lock<'_>,
-        path: &PathWithSiblings,
-    ) -> Result<()> {
+        path: &Path,
+    ) -> Result<RootNode> {
         if path.root.is_null() {
             return self.write_branch_root(tx, lock, &path.root).await;
         }
 
-        for (inner_i, inner_layer) in path.inner.iter().enumerate() {
-            let parent_hash = path.hash_at_layer(inner_i);
+        for (i, inner_layer) in path.inner.iter().enumerate() {
+            let parent_hash = path.hash_at_layer(i);
 
-            for (bucket, ref hash) in inner_layer.iter().enumerate() {
-                if hash.is_null() {
+            for (bucket, ref node) in inner_layer.iter().enumerate() {
+                if node.hash.is_null() {
                     continue;
                 }
 
-                // XXX: It should be possible to insert multiple rows at once.
-                sqlx::query("INSERT INTO branch_forest (parent, bucket, node) VALUES (?, ?, ?)")
-                    .bind(parent_hash.as_ref())
-                    .bind(bucket as u16)
-                    .bind(hash.as_ref())
-                    .execute(&mut *tx)
-                    .await?;
+                InnerNode::insert(node, bucket, &parent_hash, tx).await?;
             }
         }
 
-        let layer = PathWithSiblings::total_layer_count() - 1;
+        let layer = Path::total_layer_count() - 1;
         let parent_hash = path.hash_at_layer(layer - 1);
 
-        for (ref l, ref block_id) in &path.leaves {
-            let blob = serialize_leaf(l, block_id);
-
-            sqlx::query("INSERT INTO branch_forest (parent, bucket, node) VALUES (?, ?, ?)")
-                .bind(parent_hash.as_ref())
-                .bind(u16::MAX)
-                .bind(blob)
-                .execute(&mut *tx)
-                .await?;
+        for leaf in &path.leaves {
+            LeafNode::insert(&leaf, &parent_hash, tx).await?;
         }
 
         self.write_branch_root(tx, lock, &path.root).await
@@ -257,401 +184,20 @@ impl Branch {
         tx: &mut db::Transaction,
         lock: &mut Lock<'_>,
         root: &Hash,
-    ) -> Result<()> {
-        let new_id = sqlx::query(
-            "INSERT INTO branches(replica_id, branch_root)
-             SELECT replica_id, ? FROM branches
-             WHERE snapshot_id=? RETURNING snapshot_id;",
-        )
-        .bind(root.as_ref())
-        .bind(lock.snapshot_id)
-        .fetch_optional(&mut *tx)
-        .await
-        .unwrap()
-        .unwrap()
-        .get(0);
-
-        self.remove_snapshot(lock.snapshot_id, &lock.branch_root, tx)
-            .await?;
-        lock.snapshot_id = new_id;
-        lock.branch_root = *root;
-
-        Ok(())
+    ) -> Result<RootNode> {
+        let new_root = lock.clone_with_new_root(tx, root).await?;
+        let old_root = lock.clone();
+        **lock = new_root;
+        Ok(old_root)
     }
 
-    async fn remove_snapshot(
-        &self,
-        snapshot_id: SnapshotId,
-        root: &Hash,
-        tx: &mut db::Transaction,
-    ) -> Result<()> {
-        BranchNode::Root {
-            root: *root,
-            snapshot_id,
-        }
-        .remove_recursive(0, tx)
-        .await
+    async fn remove_snapshot(&self, root_node: &RootNode, tx: &mut db::Transaction) -> Result<()> {
+        root_node.remove_recursive(tx).await
     }
 
     async fn lock(&self) -> Lock<'_> {
-        self.state.lock().await
+        self.root_node.lock().await
     }
-}
-
-#[derive(Debug)]
-enum BranchNode {
-    Root {
-        root: Hash,
-        snapshot_id: SnapshotId,
-    },
-    Inner {
-        node: Hash,
-        parent: Hash,
-    },
-    Leaf {
-        node: (LocatorHash, BlockId),
-        parent: Hash,
-    },
-}
-
-impl BranchNode {
-    #[async_recursion]
-    async fn remove_recursive(&self, layer: usize, tx: &mut db::Transaction) -> Result<()> {
-        self.remove_single(tx).await?;
-
-        if !self.is_dangling(tx).await? {
-            return Ok(());
-        }
-
-        for child in self.children(layer, tx).await? {
-            child.remove_recursive(layer + 1, tx).await?;
-        }
-
-        Ok(())
-    }
-
-    async fn remove_single(&self, tx: &mut db::Transaction) -> Result<()> {
-        match self {
-            BranchNode::Root {
-                root: _,
-                snapshot_id,
-            } => {
-                sqlx::query("DELETE FROM branches WHERE snapshot_id = ?")
-                    .bind(snapshot_id)
-                    .execute(&mut *tx)
-                    .await?;
-            }
-            BranchNode::Inner { node, parent } => {
-                sqlx::query("DELETE FROM branch_forest WHERE parent = ? AND node = ?")
-                    .bind(parent.as_ref())
-                    .bind(node.as_ref())
-                    .execute(&mut *tx)
-                    .await?;
-            }
-            BranchNode::Leaf { node, parent } => {
-                let blob = serialize_leaf(&node.0, &node.1);
-                sqlx::query("DELETE FROM branch_forest WHERE parent = ? AND node = ?")
-                    .bind(parent.as_ref())
-                    .bind(blob)
-                    .execute(&mut *tx)
-                    .await?;
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Return true if there is nothing that references this node
-    async fn is_dangling(&self, tx: &mut db::Transaction) -> Result<bool> {
-        let has_parent = match self {
-            BranchNode::Root {
-                root,
-                snapshot_id: _,
-            } => sqlx::query("SELECT 0 FROM branches WHERE branch_root = ? LIMIT 1")
-                .bind(root.as_ref())
-                .fetch_optional(&mut *tx)
-                .await?
-                .is_some(),
-            BranchNode::Inner { node, parent: _ } => {
-                sqlx::query("SELECT 0 FROM branch_forest WHERE node=? LIMIT 1")
-                    .bind(node.as_ref())
-                    .fetch_optional(&mut *tx)
-                    .await?
-                    .is_some()
-            }
-            BranchNode::Leaf { node, parent: _ } => {
-                let blob = serialize_leaf(&node.0, &node.1);
-                sqlx::query("SELECT 0 FROM branch_forest WHERE node=? LIMIT 1")
-                    .bind(blob)
-                    .fetch_optional(&mut *tx)
-                    .await?
-                    .is_some()
-            }
-        };
-
-        Ok(!has_parent)
-    }
-
-    async fn children(&self, layer: usize, tx: &mut db::Transaction) -> Result<Vec<BranchNode>> {
-        match self {
-            BranchNode::Root {
-                root,
-                snapshot_id: _,
-            } => sqlx::query("SELECT node, parent FROM branch_forest WHERE parent=?;")
-                .bind(root.as_ref())
-                .fetch_all(&mut *tx)
-                .await?
-                .iter()
-                .map(|row| {
-                    if INNER_LAYER_COUNT > 0 {
-                        Self::row_to_inner(row)
-                    } else {
-                        Self::row_to_leaf(row)
-                    }
-                })
-                .collect(),
-            BranchNode::Inner { node, parent: _ } => {
-                sqlx::query("SELECT node, parent FROM branch_forest WHERE parent=?;")
-                    .bind(node.as_ref())
-                    .fetch_all(&mut *tx)
-                    .await?
-                    .iter()
-                    .map(|row| {
-                        if layer < INNER_LAYER_COUNT {
-                            Self::row_to_inner(row)
-                        } else {
-                            Self::row_to_leaf(row)
-                        }
-                    })
-                    .collect()
-            }
-            BranchNode::Leaf { node: _, parent: _ } => Ok(Vec::new()),
-        }
-    }
-
-    fn row_to_inner(row: &SqliteRow) -> Result<BranchNode> {
-        Ok(BranchNode::Inner {
-            node: column::<Hash>(row, 0)?,
-            parent: column::<Hash>(row, 1)?,
-        })
-    }
-
-    fn row_to_leaf(row: &SqliteRow) -> Result<BranchNode> {
-        Ok(BranchNode::Leaf {
-            node: deserialize_leaf(row.get(0))?,
-            parent: column::<Hash>(row, 1)?,
-        })
-    }
-}
-
-fn serialize_leaf(locator: &Hash, block_id: &BlockId) -> Vec<u8> {
-    locator
-        .as_ref()
-        .iter()
-        .chain(block_id.name.as_ref().iter())
-        .chain(block_id.version.as_ref().iter())
-        .cloned()
-        .collect()
-}
-
-fn deserialize_leaf(blob: &[u8]) -> Result<(LocatorHash, BlockId)> {
-    let (b1, b2) = blob.split_at(std::mem::size_of::<Hash>());
-    let (b2, b3) = b2.split_at(std::mem::size_of::<BlockName>());
-    let l = Hash::try_from(b1)?;
-    let name = BlockName::try_from(b2)?;
-    let version = BlockVersion::try_from(b3)?;
-    Ok((l, BlockId { name, version }))
-}
-
-type InnerChildren = [Hash; MAX_INNER_NODE_CHILD_COUNT];
-type LocatorHash = Hash;
-
-#[derive(Debug)]
-struct PathWithSiblings {
-    encoded_locator: Hash,
-    /// Count of the number of layers found where a locator has a corresponding bucket. Including
-    /// the root and leaf layers.  (e.g. 0 -> root wasn't found; 1 -> root was found but no inner
-    /// nor leaf layers was; 2 -> root and one inner (possibly leaf if INNER_LAYER_COUNT == 0)
-    /// layers were found; ...)
-    layers_found: usize,
-    root: Hash,
-    inner: [InnerChildren; INNER_LAYER_COUNT],
-    /// Note: this vector must be sorted to guarantee unique hashing.
-    leaves: Vec<(LocatorHash, BlockId)>,
-}
-
-impl PathWithSiblings {
-    fn new(root: &Hash, encoded_locator: Hash) -> Self {
-        Self {
-            encoded_locator,
-            layers_found: 0,
-            root: *root,
-            inner: [[Hash::null(); MAX_INNER_NODE_CHILD_COUNT]; INNER_LAYER_COUNT], //Default::default(),
-            leaves: Vec::new(),
-        }
-    }
-
-    fn get_leaf(&self, encoded_locator: &LocatorHash) -> Option<BlockId> {
-        self.leaves
-            .iter()
-            .find(|(ref l, ref _v)| l == encoded_locator)
-            .map(|p| p.1)
-    }
-
-    fn has_leaf(&self, block_id: &BlockId) -> bool {
-        self.leaves.iter().any(|(_l, id)| id == block_id)
-    }
-
-    fn total_layer_count() -> usize {
-        1 /* root */ + INNER_LAYER_COUNT + 1 /* leaves */
-    }
-
-    fn hash_at_layer(&self, layer: usize) -> Hash {
-        if layer == 0 {
-            return self.root;
-        }
-        let inner_layer = layer - 1;
-        self.inner[inner_layer][self.get_bucket(inner_layer)]
-    }
-
-    // BlockVersion is needed when calculating hashes at the beginning to make this tree unique
-    // across all the branches.
-    fn insert_leaf(&mut self, block_id: &BlockId) {
-        if self.has_leaf(block_id) {
-            return;
-        }
-
-        let mut modified = false;
-
-        for leaf in &mut self.leaves {
-            if leaf.0 == self.encoded_locator {
-                modified = true;
-                leaf.1 = *block_id;
-                break;
-            }
-        }
-
-        if !modified {
-            // XXX: This can be done better.
-            self.leaves.push((self.encoded_locator, *block_id));
-            self.leaves.sort();
-        }
-
-        self.recalculate(INNER_LAYER_COUNT);
-    }
-
-    fn remove_leaf(&mut self, encoded_locator: &LocatorHash) {
-        let mut changed = false;
-
-        self.leaves = self
-            .leaves
-            .iter()
-            .filter(|l| {
-                let keep = l.0 != *encoded_locator;
-                if !keep {
-                    changed = true;
-                }
-                keep
-            })
-            .cloned()
-            .collect();
-
-        if !changed {
-            return;
-        }
-
-        if !self.leaves.is_empty() {
-            self.recalculate(INNER_LAYER_COUNT);
-            return;
-        }
-
-        if INNER_LAYER_COUNT > 0 {
-            self.remove_from_inner_layer(INNER_LAYER_COUNT - 1);
-        } else {
-            self.remove_root_layer();
-        }
-    }
-
-    fn remove_from_inner_layer(&mut self, inner_layer: usize) {
-        let null = Hash::null();
-        let bucket = self.get_bucket(inner_layer);
-
-        self.inner[inner_layer][bucket] = null;
-
-        let is_empty = self.inner[inner_layer].iter().all(|x| x == &null);
-
-        if !is_empty {
-            self.recalculate(inner_layer - 1);
-            return;
-        }
-
-        if inner_layer > 0 {
-            self.remove_from_inner_layer(inner_layer - 1);
-        } else {
-            self.remove_root_layer();
-        }
-    }
-
-    fn remove_root_layer(&mut self) {
-        self.root = Hash::null();
-    }
-
-    /// Recalculate layers from start_layer all the way to the root.
-    fn recalculate(&mut self, start_layer: usize) {
-        for inner_layer in (0..start_layer).rev() {
-            let hash = self.compute_hash_for_layer(inner_layer + 1);
-            self.inner[inner_layer][self.get_bucket(inner_layer)] = hash;
-        }
-
-        self.root = self.compute_hash_for_layer(0);
-    }
-
-    // Assumes layers higher than `layer` have their hashes/BlockVersions already
-    // computed/assigned.
-    fn compute_hash_for_layer(&self, layer: usize) -> Hash {
-        if layer == INNER_LAYER_COUNT {
-            hash_leafs(&self.leaves)
-        } else {
-            hash_inner(&self.inner[layer])
-        }
-    }
-
-    fn get_bucket(&self, inner_layer: usize) -> usize {
-        self.encoded_locator.as_ref()[inner_layer] as usize
-    }
-}
-
-fn hash_leafs(leaves: &[(LocatorHash, BlockId)]) -> Hash {
-    let mut hash = Sha3_256::new();
-    // XXX: Is updating with length enough to prevent attaks?
-    hash.update((leaves.len() as u32).to_le_bytes());
-    for (ref l, ref id) in leaves {
-        hash.update(l);
-        hash.update(id.name);
-        hash.update(id.version);
-    }
-    hash.finalize().into()
-}
-
-fn hash_inner(siblings: &[Hash]) -> Hash {
-    // XXX: Have some cryptographer check this whether there are no attacks.
-    let mut hash = Sha3_256::new();
-    for (k, ref s) in siblings.iter().enumerate() {
-        if !s.is_null() {
-            hash.update((k as u16).to_le_bytes());
-            hash.update(s);
-        }
-    }
-    hash.finalize().into()
-}
-
-fn column<'a, T: TryFrom<&'a [u8]>>(
-    row: &'a SqliteRow,
-    i: usize,
-) -> std::result::Result<T, T::Error> {
-    let value: &'a [u8] = row.get::<'a>(i);
-    let value = T::try_from(value)?;
-    Ok(value)
 }
 
 #[cfg(test)]
@@ -693,13 +239,10 @@ mod tests {
             let b2 = BlockId::random();
 
             let locator = Locator::Head(b1.name, 0);
-
             let encoded_locator = locator.encode(&Cryptor::Null).unwrap();
-
             let mut tx = pool.begin().await.unwrap();
 
             branch.insert(&mut tx, &b1, &encoded_locator).await.unwrap();
-
             branch.insert(&mut tx, &b2, &encoded_locator).await.unwrap();
 
             let r = branch.get(&mut tx, &encoded_locator).await.unwrap();
@@ -721,11 +264,8 @@ mod tests {
             .unwrap();
 
         let b = BlockId::random();
-
         let locator = Locator::Head(b.name, 0);
-
         let encoded_locator = locator.encode(&Cryptor::Null).unwrap();
-
         let mut tx = pool.begin().await.unwrap();
 
         assert_eq!(0, count_branch_forest_entries(&mut tx).await);
@@ -759,7 +299,7 @@ mod tests {
     }
 
     async fn count_branch_forest_entries(tx: &mut db::Transaction) -> usize {
-        sqlx::query("select 0 from branch_forest")
+        sqlx::query("select 0 from snapshot_forest")
             .fetch_all(&mut *tx)
             .await
             .unwrap()
