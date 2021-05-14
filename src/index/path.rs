@@ -2,10 +2,12 @@ use crate::{
     block::BlockId,
     crypto::Hash,
     index::{
+        LeafData,
         node::{InnerNode, LeafNode},
-        INNER_LAYER_COUNT, MAX_INNER_NODE_CHILD_COUNT,
+        Crc, INNER_LAYER_COUNT, MAX_INNER_NODE_CHILD_COUNT,
     },
 };
+use crc::{crc32, Hasher32};
 use sha3::{Digest, Sha3_256};
 
 type InnerChildren = [InnerNode; MAX_INNER_NODE_CHILD_COUNT];
@@ -35,6 +37,7 @@ pub struct Path {
     /// layers were found; ...)
     pub layers_found: usize,
     pub root: Hash,
+    pub missing_blocks_crc: Crc,
     pub inner: [InnerChildren; INNER_LAYER_COUNT],
     /// Note: this vector must be sorted to guarantee unique hashing.
     pub leaves: Vec<LeafNode>,
@@ -44,13 +47,13 @@ impl Path {
     pub fn new(locator: Hash) -> Self {
         let null_hash = Hash::null();
 
-        let inner =
-            [[InnerNode { hash: null_hash }; MAX_INNER_NODE_CHILD_COUNT]; INNER_LAYER_COUNT];
+        let inner = [[InnerNode::empty(); MAX_INNER_NODE_CHILD_COUNT]; INNER_LAYER_COUNT];
 
         Self {
             locator,
             layers_found: 0,
             root: null_hash,
+            missing_blocks_crc: 0,
             inner,
             leaves: Vec::new(),
         }
@@ -59,12 +62,12 @@ impl Path {
     pub fn get_leaf(&self) -> Option<BlockId> {
         self.leaves
             .iter()
-            .find(|l| l.locator == self.locator)
-            .map(|l| l.block_id)
+            .find(|l| l.data.locator == self.locator)
+            .map(|l| l.data.block_id)
     }
 
     pub fn has_leaf(&self, block_id: &BlockId) -> bool {
-        self.leaves.iter().any(|l| l.block_id == *block_id)
+        self.leaves.iter().any(|l| l.data.block_id == *block_id)
     }
 
     pub fn total_layer_count() -> usize {
@@ -89,9 +92,9 @@ impl Path {
         let mut modified = false;
 
         for leaf in &mut self.leaves {
-            if leaf.locator == self.locator {
+            if leaf.data.locator == self.locator {
                 modified = true;
-                leaf.block_id = *block_id;
+                leaf.data.block_id = *block_id;
                 break;
             }
         }
@@ -99,8 +102,11 @@ impl Path {
         if !modified {
             // XXX: This can be done better.
             self.leaves.push(LeafNode {
-                locator: self.locator,
-                block_id: *block_id,
+                data: LeafData {
+                    locator: self.locator,
+                    block_id: *block_id,
+                },
+                missing_blocks_crc: 0,
             });
             self.leaves.sort();
         }
@@ -115,7 +121,7 @@ impl Path {
             .leaves
             .iter()
             .filter(|l| {
-                let keep = l.locator != *locator;
+                let keep = l.data.locator != *locator;
                 if !keep {
                     changed = true;
                 }
@@ -148,7 +154,7 @@ impl Path {
         let null = Hash::null();
         let bucket = self.get_bucket(inner_layer);
 
-        self.inner[inner_layer][bucket] = InnerNode { hash: null };
+        self.inner[inner_layer][bucket] = InnerNode::empty();
 
         let is_empty = self.inner[inner_layer].iter().all(|x| x.hash == null);
 
@@ -171,20 +177,31 @@ impl Path {
     /// Recalculate layers from start_layer all the way to the root.
     fn recalculate(&mut self, start_layer: usize) {
         for inner_layer in (0..start_layer).rev() {
-            let hash = self.compute_hash_for_layer(inner_layer + 1);
-            self.inner[inner_layer][self.get_bucket(inner_layer)] = InnerNode { hash };
+            let (hash, crc) = self.compute_hash_for_layer(inner_layer + 1);
+            self.inner[inner_layer][self.get_bucket(inner_layer)] = InnerNode {
+                hash,
+                missing_blocks_crc: crc,
+            };
         }
 
-        self.root = self.compute_hash_for_layer(0);
+        let (hash, crc) = self.compute_hash_for_layer(0);
+        self.root = hash;
+        self.missing_blocks_crc = crc;
     }
 
     // Assumes layers higher than `layer` have their hashes/BlockVersions already
     // computed/assigned.
-    fn compute_hash_for_layer(&self, layer: usize) -> Hash {
+    fn compute_hash_for_layer(&self, layer: usize) -> (Hash, Crc) {
         if layer == INNER_LAYER_COUNT {
-            hash_leafs(&self.leaves)
+            (
+                hash_leafs(&self.leaves),
+                calculate_missing_blocks_crc_from_leaves(&self.leaves),
+            )
         } else {
-            hash_inner(&self.inner[layer])
+            (
+                hash_inner(&self.inner[layer]),
+                calculate_missing_blocks_crc_from_inner(&self.inner[layer]),
+            )
         }
     }
 }
@@ -194,9 +211,9 @@ fn hash_leafs(leaves: &[LeafNode]) -> Hash {
     // XXX: Is updating with length enough to prevent attaks?
     hash.update((leaves.len() as u32).to_le_bytes());
     for ref l in leaves {
-        hash.update(l.locator);
-        hash.update(l.block_id.name);
-        hash.update(l.block_id.version);
+        hash.update(l.data.locator);
+        hash.update(l.data.block_id.name);
+        hash.update(l.data.block_id.version);
     }
     hash.finalize().into()
 }
@@ -211,4 +228,36 @@ fn hash_inner(siblings: &[InnerNode]) -> Hash {
         }
     }
     hash.finalize().into()
+}
+
+fn calculate_missing_blocks_crc_from_leaves(leaves: &[LeafNode]) -> Crc {
+    if leaves.is_empty() {
+        return 0;
+    }
+
+    let mut digest = crc32::Digest::new(crc32::IEEE);
+
+    for ref l in leaves {
+        if l.missing_blocks_crc != 0 {
+            digest.write(l.missing_blocks_crc.to_le_bytes().as_ref());
+        }
+    }
+
+    digest.sum32()
+}
+
+fn calculate_missing_blocks_crc_from_inner(inner: &[InnerNode]) -> Crc {
+    if inner.is_empty() {
+        return 0;
+    }
+
+    let mut digest = crc32::Digest::new(crc32::IEEE);
+
+    for ref n in inner {
+        if n.missing_blocks_crc != 0 {
+            digest.write(n.missing_blocks_crc.to_le_bytes().as_ref());
+        }
+    }
+
+    digest.sum32()
 }
