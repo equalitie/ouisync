@@ -299,7 +299,7 @@ mod tests {
     }
 
     async fn count_branch_forest_entries(tx: &mut db::Transaction) -> usize {
-        sqlx::query("select 0 from branch_forest")
+        sqlx::query("select 0 from snapshot_forest")
             .fetch_all(&mut *tx)
             .await
             .unwrap()

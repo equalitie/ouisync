@@ -27,7 +27,7 @@ impl RootNode {
         let mut conn = pool.acquire().await?;
 
         let (snapshot_id, root_hash) = match sqlx::query(
-            "SELECT snapshot_id, root_hash FROM branches WHERE replica_id=? ORDER BY snapshot_id DESC LIMIT 1",
+            "SELECT snapshot_id, root_hash FROM snapshot_roots WHERE replica_id=? ORDER BY snapshot_id DESC LIMIT 1",
         )
         .bind(replica_id.as_ref())
         .fetch_optional(&mut conn)
@@ -38,7 +38,7 @@ impl RootNode {
             },
             None => {
                 let snapshot_id = sqlx::query(
-                    "INSERT INTO branches(replica_id, root_hash)
+                    "INSERT INTO snapshot_roots(replica_id, root_hash)
                              VALUES (?, ?) RETURNING snapshot_id;",
                 )
                 .bind(replica_id.as_ref())
@@ -64,8 +64,8 @@ impl RootNode {
         root_hash: &Hash,
     ) -> Result<RootNode> {
         let new_id = sqlx::query(
-            "INSERT INTO branches(replica_id, root_hash)
-             SELECT replica_id, ? FROM branches
+            "INSERT INTO snapshot_roots(replica_id, root_hash)
+             SELECT replica_id, ? FROM snapshot_roots
              WHERE snapshot_id=? RETURNING snapshot_id;",
         )
         .bind(root_hash.as_ref())
@@ -106,7 +106,7 @@ impl InnerNode {
         parent: &Hash,
         tx: &mut db::Transaction,
     ) -> Result<()> {
-        sqlx::query("INSERT INTO branch_forest (parent, bucket, node) VALUES (?, ?, ?)")
+        sqlx::query("INSERT INTO snapshot_forest (parent, bucket, node) VALUES (?, ?, ?)")
             .bind(parent.as_ref())
             .bind(bucket as u16)
             .bind(node.hash.as_ref())
@@ -125,7 +125,7 @@ pub struct LeafNode {
 impl LeafNode {
     pub async fn insert(leaf: &LeafNode, parent: &Hash, tx: &mut db::Transaction) -> Result<()> {
         let blob = leaf.serialize();
-        sqlx::query("INSERT INTO branch_forest (parent, bucket, node) VALUES (?, ?, ?)")
+        sqlx::query("INSERT INTO snapshot_forest (parent, bucket, node) VALUES (?, ?, ?)")
             .bind(parent.as_ref())
             .bind(u16::MAX)
             .bind(blob)
@@ -161,7 +161,7 @@ pub async fn inner_children(
     parent: &Hash,
     tx: &mut db::Transaction,
 ) -> Result<[InnerNode; MAX_INNER_NODE_CHILD_COUNT]> {
-    let rows = sqlx::query("SELECT bucket, node FROM branch_forest WHERE parent=?")
+    let rows = sqlx::query("SELECT bucket, node FROM snapshot_forest WHERE parent=?")
         .bind(parent.as_ref())
         .fetch_all(&mut *tx)
         .await?;
@@ -178,7 +178,7 @@ pub async fn inner_children(
 }
 
 pub async fn leaf_children(parent: &Hash, tx: &mut db::Transaction) -> Result<Vec<LeafNode>> {
-    let rows = sqlx::query("SELECT node FROM branch_forest WHERE parent=?")
+    let rows = sqlx::query("SELECT node FROM snapshot_forest WHERE parent=?")
         .bind(parent.as_ref())
         .fetch_all(&mut *tx)
         .await?;
@@ -222,13 +222,13 @@ impl Link {
                 snapshot_id,
                 root: _,
             } => {
-                sqlx::query("DELETE FROM branches WHERE snapshot_id=?")
+                sqlx::query("DELETE FROM snapshot_roots WHERE snapshot_id=?")
                     .bind(snapshot_id)
                     .execute(&mut *tx)
                     .await?;
             }
             Link::ToInner { parent, node } => {
-                sqlx::query("DELETE FROM branch_forest WHERE parent=? AND node=?")
+                sqlx::query("DELETE FROM snapshot_forest WHERE parent=? AND node=?")
                     .bind(parent.as_ref())
                     .bind(node.as_ref())
                     .execute(&mut *tx)
@@ -236,7 +236,7 @@ impl Link {
             }
             Link::ToLeaf { parent, node } => {
                 let blob = node.serialize();
-                sqlx::query("DELETE FROM branch_forest WHERE parent=? AND node=?")
+                sqlx::query("DELETE FROM snapshot_forest WHERE parent=? AND node=?")
                     .bind(parent.as_ref())
                     .bind(blob)
                     .execute(&mut *tx)
@@ -253,13 +253,13 @@ impl Link {
             Link::ToRoot {
                 snapshot_id: _,
                 root,
-            } => sqlx::query("SELECT 0 FROM branches WHERE root_hash=? LIMIT 1")
+            } => sqlx::query("SELECT 0 FROM snapshot_roots WHERE root_hash=? LIMIT 1")
                 .bind(root.as_ref())
                 .fetch_optional(&mut *tx)
                 .await?
                 .is_some(),
             Link::ToInner { parent: _, node } => {
-                sqlx::query("SELECT 0 FROM branch_forest WHERE node=? LIMIT 1")
+                sqlx::query("SELECT 0 FROM snapshot_forest WHERE node=? LIMIT 1")
                     .bind(node.as_ref())
                     .fetch_optional(&mut *tx)
                     .await?
@@ -267,7 +267,7 @@ impl Link {
             }
             Link::ToLeaf { parent: _, node } => {
                 let blob = node.serialize();
-                sqlx::query("SELECT 0 FROM branch_forest WHERE node=? LIMIT 1")
+                sqlx::query("SELECT 0 FROM snapshot_forest WHERE node=? LIMIT 1")
                     .bind(blob)
                     .fetch_optional(&mut *tx)
                     .await?
@@ -283,7 +283,7 @@ impl Link {
             Link::ToRoot {
                 snapshot_id: _,
                 root,
-            } => sqlx::query("SELECT node, parent FROM branch_forest WHERE parent=?;")
+            } => sqlx::query("SELECT node, parent FROM snapshot_forest WHERE parent=?;")
                 .bind(root.as_ref())
                 .fetch_all(&mut *tx)
                 .await?
@@ -297,7 +297,7 @@ impl Link {
                 })
                 .collect(),
             Link::ToInner { parent: _, node } => {
-                sqlx::query("SELECT node, parent FROM branch_forest WHERE parent=?;")
+                sqlx::query("SELECT node, parent FROM snapshot_forest WHERE parent=?;")
                     .bind(node.as_ref())
                     .fetch_all(&mut *tx)
                     .await?

@@ -80,7 +80,7 @@ impl Path {
     }
 
     // BlockVersion is needed when calculating hashes at the beginning to make this tree unique
-    // across all the branches.
+    // across all the snapshots.
     pub fn set_leaf(&mut self, block_id: &BlockId) {
         if self.has_leaf(block_id) {
             return;

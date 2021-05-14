@@ -16,12 +16,12 @@ pub use self::branch::Branch;
 /// Initializes the index. Creates the required database schema unless already exists.
 pub async fn init(pool: &db::Pool) -> Result<(), Error> {
     sqlx::query(
-        "CREATE TABLE IF NOT EXISTS branches (
+        "CREATE TABLE IF NOT EXISTS snapshot_roots (
              snapshot_id   INTEGER PRIMARY KEY,
              replica_id    BLOB NOT NULL,
              root_hash   BLOB NOT NULL
          );
-         CREATE TABLE IF NOT EXISTS branch_forest (
+         CREATE TABLE IF NOT EXISTS snapshot_forest (
              /* Parent is a hash calculated from its children */
              parent  BLOB NOT NULL,
              bucket  INTEGER,
