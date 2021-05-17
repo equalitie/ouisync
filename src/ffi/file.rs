@@ -157,3 +157,16 @@ pub unsafe extern "C" fn file_truncate(
         ctx.spawn(async move { file.lock().await.truncate().await })
     })
 }
+
+/// Retrieve the size of the file in bytes.
+#[no_mangle]
+pub unsafe extern "C" fn file_len(
+    handle: SharedHandle<Mutex<File>>,
+    port: Port<u64>,
+    error: *mut *mut c_char,
+) {
+    session::with(port, error, |ctx| {
+        let file = handle.get();
+        ctx.spawn(async move { Ok(file.lock().await.len()) })
+    })
+}
