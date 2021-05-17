@@ -19,6 +19,8 @@ const MAX_INNER_NODE_CHILD_COUNT: usize = 256; // = sizeof(u8)
 
 type Crc = u32;
 type SnapshotId = u32;
+// u64 doesn't seem to implement Decode<'_, Sqlite>
+type MissingBlocksCount = i64;
 
 pub use self::branch::Branch;
 
@@ -26,21 +28,23 @@ pub use self::branch::Branch;
 pub async fn init(pool: &db::Pool) -> Result<(), Error> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS snapshot_roots (
-             snapshot_id        INTEGER PRIMARY KEY,
-             replica_id         BLOB NOT NULL,
-             missing_blocks_crc INTEGER,
-             root_hash          BLOB NOT NULL
+             snapshot_id          INTEGER PRIMARY KEY,
+             replica_id           BLOB NOT NULL,
+             missing_blocks_crc   INTEGER,
+             missing_blocks_count INTEGER NOT NULL,
+             root_hash            BLOB NOT NULL
          );
          CREATE TABLE IF NOT EXISTS snapshot_forest (
              /* Parent is a hash calculated from its children */
-             parent             BLOB NOT NULL,
-             bucket             INTEGER,
-             missing_blocks_crc INTEGER,
+             parent               BLOB NOT NULL,
+             bucket               INTEGER,
+             missing_blocks_crc   INTEGER,
+             missing_blocks_count INTEGER NOT NULL,
              /*
               * Data is a hash calculated from its children (as the `parent` is), or - if this is
               * a leaf layer - data is a blob serialized from the locator hash and BlockId
               */
-             data               BLOB NOT NULL
+             data                 BLOB NOT NULL
          );",
     )
     .execute(pool)
@@ -55,6 +59,7 @@ pub struct SnapshotRootRow {
     pub snapshot_id: SnapshotId,
     pub replica_id: ReplicaId,
     pub missing_blocks_crc: Crc,
+    pub missing_blocks_count: MissingBlocksCount,
     pub root_hash: Hash,
 }
 
@@ -66,7 +71,8 @@ impl TryFrom<&'_ SqliteRow> for SnapshotRootRow {
             snapshot_id: row.get(0),
             replica_id: column::<ReplicaId>(row, 1)?,
             missing_blocks_crc: row.get(2),
-            root_hash: column::<Hash>(row, 3)?,
+            missing_blocks_count: row.get(3),
+            root_hash: column::<Hash>(row, 4)?,
         })
     }
 }

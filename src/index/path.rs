@@ -2,9 +2,8 @@ use crate::{
     block::BlockId,
     crypto::Hash,
     index::{
-        LeafData,
         node::{InnerNode, LeafNode},
-        Crc, INNER_LAYER_COUNT, MAX_INNER_NODE_CHILD_COUNT,
+        Crc, LeafData, INNER_LAYER_COUNT, MAX_INNER_NODE_CHILD_COUNT,
     },
 };
 use crc::{crc32, Hasher32};
@@ -38,7 +37,8 @@ pub struct Path {
     pub layers_found: usize,
     pub root: Hash,
     pub missing_blocks_crc: Crc,
-    pub inner: [InnerChildren; INNER_LAYER_COUNT],
+    pub missing_blocks_count: usize,
+    pub inner: Vec<InnerChildren>,
     /// Note: this vector must be sorted to guarantee unique hashing.
     pub leaves: Vec<LeafNode>,
 }
@@ -47,13 +47,14 @@ impl Path {
     pub fn new(locator: Hash) -> Self {
         let null_hash = Hash::null();
 
-        let inner = [[InnerNode::empty(); MAX_INNER_NODE_CHILD_COUNT]; INNER_LAYER_COUNT];
+        let inner = vec![[InnerNode::empty(); MAX_INNER_NODE_CHILD_COUNT]; INNER_LAYER_COUNT];
 
         Self {
             locator,
             layers_found: 0,
             root: null_hash,
             missing_blocks_crc: 0,
+            missing_blocks_count: 0,
             inner,
             leaves: Vec::new(),
         }
@@ -107,6 +108,7 @@ impl Path {
                     block_id: *block_id,
                 },
                 missing_blocks_crc: 0,
+                missing_blocks_count: 0,
             });
             self.leaves.sort();
         }
@@ -177,30 +179,37 @@ impl Path {
     /// Recalculate layers from start_layer all the way to the root.
     fn recalculate(&mut self, start_layer: usize) {
         for inner_layer in (0..start_layer).rev() {
-            let (hash, crc) = self.compute_hash_for_layer(inner_layer + 1);
-            self.inner[inner_layer][self.get_bucket(inner_layer)] = InnerNode {
+            let (hash, crc, cnt) = self.compute_hash_for_layer(inner_layer + 1);
+            let bucket = self.get_bucket(inner_layer);
+            self.inner[inner_layer][bucket] = InnerNode {
                 hash,
                 missing_blocks_crc: crc,
+                missing_blocks_count: cnt,
             };
         }
 
-        let (hash, crc) = self.compute_hash_for_layer(0);
+        let (hash, crc, cnt) = self.compute_hash_for_layer(0);
         self.root = hash;
         self.missing_blocks_crc = crc;
+        self.missing_blocks_count = cnt;
     }
 
     // Assumes layers higher than `layer` have their hashes/BlockVersions already
     // computed/assigned.
-    fn compute_hash_for_layer(&self, layer: usize) -> (Hash, Crc) {
+    fn compute_hash_for_layer(&self, layer: usize) -> (Hash, Crc, usize) {
         if layer == INNER_LAYER_COUNT {
+            let (crc, cnt) = calculate_missing_blocks_crc_from_leaves(&self.leaves);
             (
                 hash_leafs(&self.leaves),
-                calculate_missing_blocks_crc_from_leaves(&self.leaves),
+                crc,
+                cnt
             )
         } else {
+            let (crc, cnt) = calculate_missing_blocks_crc_from_inner(&self.inner[layer]);
             (
                 hash_inner(&self.inner[layer]),
-                calculate_missing_blocks_crc_from_inner(&self.inner[layer]),
+                crc,
+                cnt
             )
         }
     }
@@ -230,34 +239,40 @@ fn hash_inner(siblings: &[InnerNode]) -> Hash {
     hash.finalize().into()
 }
 
-fn calculate_missing_blocks_crc_from_leaves(leaves: &[LeafNode]) -> Crc {
+fn calculate_missing_blocks_crc_from_leaves(leaves: &[LeafNode]) -> (Crc, usize) {
+    let mut cnt = 0;
+
     if leaves.is_empty() {
-        return 0;
+        return (0, cnt);
     }
 
     let mut digest = crc32::Digest::new(crc32::IEEE);
 
     for ref l in leaves {
         if l.missing_blocks_crc != 0 {
+            cnt += 1;
             digest.write(l.missing_blocks_crc.to_le_bytes().as_ref());
         }
     }
 
-    digest.sum32()
+    (digest.sum32(), cnt)
 }
 
-fn calculate_missing_blocks_crc_from_inner(inner: &[InnerNode]) -> Crc {
+fn calculate_missing_blocks_crc_from_inner(inner: &[InnerNode]) -> (Crc, usize) {
+    let mut cnt = 0;
+
     if inner.is_empty() {
-        return 0;
+        return (0, cnt);
     }
 
     let mut digest = crc32::Digest::new(crc32::IEEE);
 
     for ref n in inner {
         if n.missing_blocks_crc != 0 {
+            cnt += 1;
             digest.write(n.missing_blocks_crc.to_le_bytes().as_ref());
         }
     }
 
-    digest.sum32()
+    (digest.sum32(), cnt)
 }
