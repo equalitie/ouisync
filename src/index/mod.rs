@@ -1,6 +1,10 @@
+// XXX: Until a better module name is found
+#![allow(clippy::module_inception)]
+
 mod branch;
 mod node;
 mod path;
+mod index;
 
 use crate::{
     block::{BlockId, BlockName, BlockVersion},
@@ -22,6 +26,7 @@ type SnapshotId = u32;
 // u64 doesn't seem to implement Decode<'_, Sqlite>
 type MissingBlocksCount = i64;
 
+pub use self::index::Index;
 pub use self::branch::Branch;
 
 /// Initializes the index. Creates the required database schema unless already exists.
