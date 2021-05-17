@@ -2,9 +2,9 @@
 #![allow(clippy::module_inception)]
 
 mod branch;
+mod index;
 mod node;
 mod path;
-mod index;
 
 use crate::{
     block::{BlockId, BlockName, BlockVersion},
@@ -26,8 +26,8 @@ type SnapshotId = u32;
 // u64 doesn't seem to implement Decode<'_, Sqlite>
 type MissingBlocksCount = i64;
 
-pub use self::index::Index;
 pub use self::branch::Branch;
+pub use self::index::Index;
 
 /// Initializes the index. Creates the required database schema unless already exists.
 pub async fn init(pool: &db::Pool) -> Result<(), Error> {

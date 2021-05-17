@@ -7,13 +7,9 @@ use crate::{
     db,
     error::Result,
     index::{
-        column,
-        Crc,
-        LeafData,
-        MissingBlocksCount,
-        SnapshotId,
-        INNER_LAYER_COUNT,
-        MAX_INNER_NODE_CHILD_COUNT},
+        column, Crc, LeafData, MissingBlocksCount, SnapshotId, INNER_LAYER_COUNT,
+        MAX_INNER_NODE_CHILD_COUNT,
+    },
     replica_id::ReplicaId,
 };
 use async_recursion::async_recursion;
