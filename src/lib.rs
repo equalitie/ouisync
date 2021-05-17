@@ -28,6 +28,7 @@ pub use self::{
     entry::{Entry, EntryType},
     error::{Error, Result},
     file::File,
+    index::Index,
     locator::Locator,
     network::Network,
     replica_id::ReplicaId,

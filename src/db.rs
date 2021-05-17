@@ -16,6 +16,9 @@ pub type Pool = SqlitePool;
 /// Database transaction
 pub type Transaction = sqlx::Transaction<'static, Sqlite>;
 
+/// Database connection
+pub type Connection = sqlx::pool::PoolConnection<Sqlite>;
+
 /// Creates the database unless it already exsits and establish a connection to it.
 pub async fn init(path: impl AsRef<Path>) -> Result<Pool> {
     if let Some(dir) = path.as_ref().parent() {

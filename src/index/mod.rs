@@ -1,4 +1,8 @@
+// XXX: Until a better module name is found
+#![allow(clippy::module_inception)]
+
 mod branch;
+mod index;
 mod node;
 mod path;
 
@@ -23,6 +27,7 @@ type SnapshotId = u32;
 type MissingBlocksCount = i64;
 
 pub use self::branch::Branch;
+pub use self::index::Index;
 
 /// Initializes the index. Creates the required database schema unless already exists.
 pub async fn init(pool: &db::Pool) -> Result<(), Error> {

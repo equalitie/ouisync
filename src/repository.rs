@@ -5,27 +5,22 @@ use crate::{
     entry::{Entry, EntryType},
     error::{Error, Result},
     file::File,
-    index::Branch,
+    index::{Branch, Index},
     locator::Locator,
     this_replica,
 };
 
 pub struct Repository {
-    pool: db::Pool,
-    branch: Branch,
+    pub index: Index,
     cryptor: Cryptor,
 }
 
 impl Repository {
     pub async fn new(pool: db::Pool, cryptor: Cryptor) -> Result<Self> {
-        let replica_id = this_replica::get_or_create_id(&pool).await?;
-        let branch = Branch::new(pool.clone(), replica_id).await?;
+        let this_replica_id = this_replica::get_or_create_id(&pool).await?;
+        let index = Index::load(pool, this_replica_id).await?;
 
-        Ok(Self {
-            pool,
-            branch,
-            cryptor,
-        })
+        Ok(Self { index, cryptor })
     }
 
     /// Open an entry (file or directory).
@@ -37,9 +32,11 @@ impl Repository {
     }
 
     pub async fn open_file(&self, locator: Locator) -> Result<File> {
+        let branch = self.own_branch().await;
+
         File::open(
-            self.pool.clone(),
-            self.branch.clone(),
+            self.index.pool.clone(),
+            branch,
             self.cryptor.clone(),
             locator,
         )
@@ -47,9 +44,11 @@ impl Repository {
     }
 
     pub async fn open_directory(&self, locator: Locator) -> Result<Directory> {
+        let branch = self.own_branch().await;
+
         match Directory::open(
-            self.pool.clone(),
-            self.branch.clone(),
+            self.index.pool.clone(),
+            branch.clone(),
             self.cryptor.clone(),
             locator,
         )
@@ -59,13 +58,20 @@ impl Repository {
             Err(Error::BlockIdNotFound) if locator == Locator::Root => {
                 // Lazily Create the root directory
                 Ok(Directory::create(
-                    self.pool.clone(),
-                    self.branch.clone(),
+                    self.index.pool.clone(),
+                    branch,
                     self.cryptor.clone(),
                     Locator::Root,
                 ))
             }
             Err(error) => Err(error),
         }
+    }
+
+    async fn own_branch(&self) -> Branch {
+        self.index
+            .branch(&self.index.this_replica_id)
+            .await
+            .unwrap()
     }
 }

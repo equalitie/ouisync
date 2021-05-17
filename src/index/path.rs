@@ -199,18 +199,10 @@ impl Path {
     fn compute_hash_for_layer(&self, layer: usize) -> (Hash, Crc, usize) {
         if layer == INNER_LAYER_COUNT {
             let (crc, cnt) = calculate_missing_blocks_crc_from_leaves(&self.leaves);
-            (
-                hash_leafs(&self.leaves),
-                crc,
-                cnt
-            )
+            (hash_leafs(&self.leaves), crc, cnt)
         } else {
             let (crc, cnt) = calculate_missing_blocks_crc_from_inner(&self.inner[layer]);
-            (
-                hash_inner(&self.inner[layer]),
-                crc,
-                cnt
-            )
+            (hash_inner(&self.inner[layer]), crc, cnt)
         }
     }
 }
