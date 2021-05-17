@@ -11,6 +11,7 @@ use std::{
     os::raw::{c_char, c_void},
     path::PathBuf,
     ptr,
+    sync::Once,
 };
 use tokio::runtime::{self, Runtime};
 
@@ -34,7 +35,8 @@ pub unsafe extern "C" fn session_open(
     }
 
     // Init logger
-    env_logger::init();
+    static LOG_INIT: Once = Once::new();
+    LOG_INIT.call_once(env_logger::init);
 
     let runtime = match runtime::Builder::new_multi_thread().enable_time().build() {
         Ok(runtime) => runtime,
