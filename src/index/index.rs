@@ -9,6 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+#[derive(Clone)]
 pub struct Index {
     pub pool: db::Pool,
     pub this_replica_id: ReplicaId,

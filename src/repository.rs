@@ -20,10 +20,7 @@ impl Repository {
         let this_replica_id = this_replica::get_or_create_id(&pool).await?;
         let index = Index::load(pool, this_replica_id).await?;
 
-        Ok(Self {
-            index,
-            cryptor,
-        })
+        Ok(Self { index, cryptor })
     }
 
     /// Open an entry (file or directory).
@@ -37,7 +34,13 @@ impl Repository {
     pub async fn open_file(&self, locator: Locator) -> Result<File> {
         let branch = self.own_branch().await;
 
-        File::open(self.index.pool.clone(), branch, self.cryptor.clone(), locator).await
+        File::open(
+            self.index.pool.clone(),
+            branch,
+            self.cryptor.clone(),
+            locator,
+        )
+        .await
     }
 
     pub async fn open_directory(&self, locator: Locator) -> Result<Directory> {
@@ -66,6 +69,9 @@ impl Repository {
     }
 
     async fn own_branch(&self) -> Branch {
-        self.index.branch(&self.index.this_replica_id).await.unwrap()
+        self.index
+            .branch(&self.index.this_replica_id)
+            .await
+            .unwrap()
     }
 }
