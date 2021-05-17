@@ -1,4 +1,5 @@
 use crate::{
+    Index,
     message_broker::MessageBroker,
     object_stream::ObjectStream,
     replica_discovery::{ReplicaDiscovery, RuntimeId},
@@ -22,7 +23,7 @@ pub struct Network {
 }
 
 impl Network {
-    pub fn new(_enable_discovery: bool) -> io::Result<Self> {
+    pub fn new(_enable_discovery: bool, index: Index) -> io::Result<Self> {
         let tasks = ScopedTaskSet::default();
         let task_handle = tasks.handle().clone();
 
@@ -31,6 +32,7 @@ impl Network {
             message_brokers: Mutex::new(HashMap::new()),
             to_forget: Mutable::new(HashSet::new()),
             task_handle,
+            index,
         });
 
         tasks.spawn(async move {
@@ -46,6 +48,7 @@ struct Inner {
     message_brokers: Mutex<HashMap<ReplicaId, MessageBroker>>,
     to_forget: Mutable<HashSet<RuntimeId>>,
     task_handle: ScopedTaskHandle,
+    index: Index,
 }
 
 impl Inner {
@@ -118,15 +121,19 @@ impl Inner {
 
         let s = self.clone();
         let mut brokers = self.message_brokers.lock().unwrap();
+        let index = self.index.clone();
 
         let broker = brokers.entry(their_replica_id).or_insert_with(|| {
-            MessageBroker::new(Box::new(move || {
-                let mut brokers = s.message_brokers.lock().unwrap();
-                brokers.remove(&their_replica_id);
-                if let Some(discovery_id) = discovery_id {
-                    s.to_forget.modify(|set| set.insert(discovery_id));
-                }
-            }))
+            MessageBroker::new(
+                index,
+                Box::new(move || {
+                    let mut brokers = s.message_brokers.lock().unwrap();
+                    brokers.remove(&their_replica_id);
+                    if let Some(discovery_id) = discovery_id {
+                        s.to_forget.modify(|set| set.insert(discovery_id));
+                    }
+                }),
+            )
         });
 
         broker.add_connection(os);

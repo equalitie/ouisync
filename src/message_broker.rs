@@ -1,5 +1,6 @@
 use crate::{
     client::Client,
+    Index,
     message::{Message, Request, Response},
     object_stream::{ObjectReader, ObjectStream, ObjectWriter},
     scoped_task_set::{ScopedTaskHandle, ScopedTaskSet},
@@ -68,7 +69,7 @@ pub struct MessageBroker {
 }
 
 impl MessageBroker {
-    pub fn new(on_finish: OnFinish) -> Self {
+    pub fn new(index: Index, on_finish: OnFinish) -> Self {
         let (command_tx, command_rx) = tokio::sync::mpsc::channel(1);
         let (request_tx, request_rx) = tokio::sync::mpsc::channel(1);
         let (response_tx, response_rx) = tokio::sync::mpsc::channel(1);
@@ -85,6 +86,7 @@ impl MessageBroker {
                 receiver_count: 0,
             }),
             task_handle,
+            index,
         });
 
         tasks.spawn(
@@ -120,6 +122,7 @@ struct Inner {
     response_tx: Sender<Response>,
     state: std::sync::Mutex<State>,
     task_handle: ScopedTaskHandle,
+    index: Index,
 }
 
 impl Inner {
@@ -137,7 +140,7 @@ impl Inner {
                 sender: s1.send_channel.clone(),
                 receiver: response_rx,
             };
-            client.run(stream).await;
+            client.run(stream, &s1.index).await;
             s1.finish();
         });
 
@@ -147,7 +150,7 @@ impl Inner {
                 sender: s2.send_channel.clone(),
                 receiver: request_rx,
             };
-            server.run(stream).await;
+            server.run(stream, &s2.index).await;
             s2.finish();
         });
     }

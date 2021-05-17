@@ -16,9 +16,10 @@ async fn main() -> Result<()> {
     let pool = db::init(db::Store::File(options.db_path()?)).await?;
     let cryptor = Cryptor::Null; // TODO:
 
-    let _network = Network::new(options.enable_local_discovery);
-
     let repository = Repository::new(pool, cryptor).await?;
+
+    let _network = Network::new(options.enable_local_discovery, repository.index.clone());
+
     let _mount_guard = virtual_filesystem::mount(
         tokio::runtime::Handle::current(),
         repository,

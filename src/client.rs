@@ -1,11 +1,12 @@
 use crate::message::Request;
 use crate::message_broker::ClientStream;
+use crate::Index;
 use tokio::time::{sleep, Duration};
 
 pub struct Client {}
 
 impl Client {
-    pub async fn run(&mut self, mut con: ClientStream) {
+    pub async fn run(&mut self, mut con: ClientStream, _index: &Index) {
         println!("Client started");
         loop {
             if con.write(Request::Hello).await.is_err() {
