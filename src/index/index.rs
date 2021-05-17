@@ -10,7 +10,8 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 pub struct Index {
-    pool: db::Pool,
+    pub pool: db::Pool,
+    pub this_replica_id: ReplicaId,
     branches: Arc<Mutex<HashMap<ReplicaId, Branch>>>,
 }
 
@@ -23,6 +24,7 @@ impl Index {
 
         let index = Self {
             pool: pool.clone(),
+            this_replica_id,
             branches: Arc::new(Mutex::new(HashMap::new())),
         };
 
