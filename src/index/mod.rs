@@ -35,20 +35,34 @@ pub async fn init(pool: &db::Pool) -> Result<(), Error> {
         "CREATE TABLE IF NOT EXISTS snapshot_roots (
              snapshot_id          INTEGER PRIMARY KEY,
              replica_id           BLOB NOT NULL,
+
+             -- Boolean indicating whether the subtree has been completely downloaded
+             -- (excluding blocks)
+             is_complete          INTEGER NOT NULL,
+
+             -- XXX: Should be NOT NULL
              missing_blocks_crc   INTEGER,
              missing_blocks_count INTEGER NOT NULL,
+
              root_hash            BLOB NOT NULL
          );
          CREATE TABLE IF NOT EXISTS snapshot_forest (
-             /* Parent is a hash calculated from its children */
+             -- Parent is a hash calculated from its children
              parent               BLOB NOT NULL,
+
+             -- XXX: Should be NOT NULL
              bucket               INTEGER,
+
+             -- Boolean indicating whether the subtree has been completely downloaded
+             -- (excluding blocks)
+             is_complete          INTEGER NOT NULL,
+
+             -- XXX: Should be NOT NULL
              missing_blocks_crc   INTEGER,
              missing_blocks_count INTEGER NOT NULL,
-             /*
-              * Data is a hash calculated from its children (as the `parent` is), or - if this is
-              * a leaf layer - data is a blob serialized from the locator hash and BlockId
-              */
+
+             -- Data is a hash calculated from its children (as the `parent` is), or - if this is
+             -- a leaf layer - data is a blob serialized from the locator hash and BlockId
              data                 BLOB NOT NULL
          );",
     )
@@ -63,6 +77,7 @@ pub async fn init(pool: &db::Pool) -> Result<(), Error> {
 pub struct SnapshotRootRow {
     pub snapshot_id: SnapshotId,
     pub replica_id: ReplicaId,
+    pub is_complete: bool,
     pub missing_blocks_crc: Crc,
     pub missing_blocks_count: MissingBlocksCount,
     pub root_hash: Hash,
@@ -75,9 +90,10 @@ impl TryFrom<&'_ SqliteRow> for SnapshotRootRow {
         Ok(Self {
             snapshot_id: row.get(0),
             replica_id: column::<ReplicaId>(row, 1)?,
-            missing_blocks_crc: row.get(2),
-            missing_blocks_count: row.get(3),
-            root_hash: column::<Hash>(row, 4)?,
+            is_complete: row.get::<'_, u16, _>(2) != 0,
+            missing_blocks_crc: row.get(3),
+            missing_blocks_count: row.get(4),
+            root_hash: column::<Hash>(row, 5)?,
         })
     }
 }
@@ -127,7 +143,9 @@ pub enum NodeData {
 pub struct SnapshotForestRow {
     pub parent: Hash,
     pub bucket: usize,
+    pub is_complete: bool,
     pub missing_blocks_crc: Crc,
+    pub missing_blocks_count: MissingBlocksCount,
     pub data: NodeData,
 }
 
@@ -135,7 +153,7 @@ impl TryFrom<&'_ SqliteRow> for SnapshotForestRow {
     type Error = Error;
 
     fn try_from(row: &SqliteRow) -> Result<Self, Self::Error> {
-        let blob = row.get::<'_, &[u8], _>(3);
+        let blob = row.get::<'_, &[u8], _>(5);
 
         let data = if blob.len() == std::mem::size_of::<Hash>() {
             let hash = Hash::try_from(blob).unwrap();
@@ -147,7 +165,9 @@ impl TryFrom<&'_ SqliteRow> for SnapshotForestRow {
         Ok(Self {
             parent: column::<Hash>(row, 0)?,
             bucket: row.get::<'_, u32, _>(1) as usize,
-            missing_blocks_crc: row.get(2),
+            is_complete: row.get::<'_, u16, _>(2) != 0,
+            missing_blocks_crc: row.get(3),
+            missing_blocks_count: row.get(4),
             data,
         })
     }

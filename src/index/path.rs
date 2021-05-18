@@ -107,6 +107,7 @@ impl Path {
                     locator: self.locator,
                     block_id: *block_id,
                 },
+                is_complete: true,
                 missing_blocks_crc: 0,
                 missing_blocks_count: 0,
             });
@@ -183,6 +184,7 @@ impl Path {
             let bucket = self.get_bucket(inner_layer);
             self.inner[inner_layer][bucket] = InnerNode {
                 hash,
+                is_complete: true,
                 missing_blocks_crc: crc,
                 missing_blocks_count: cnt,
             };
