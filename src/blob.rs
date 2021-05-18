@@ -665,7 +665,7 @@ impl DerefMut for Cursor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{crypto::SecretKey, index, replica_id::ReplicaId};
+    use crate::{crypto::SecretKey, replica_id::ReplicaId};
     use proptest::{collection::vec, prelude::*};
     use rand::{distributions::Standard, prelude::*};
     use std::future::Future;
@@ -924,9 +924,6 @@ mod tests {
     }
 
     async fn init_db() -> db::Pool {
-        let pool = db::Pool::connect(":memory:").await.unwrap();
-        index::init(&pool).await.unwrap();
-        block::init(&pool).await.unwrap();
-        pool
+        db::init(db::Store::Memory).await.unwrap()
     }
 }

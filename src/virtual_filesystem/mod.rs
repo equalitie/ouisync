@@ -16,7 +16,7 @@ use fuser::{
     BackgroundSession, FileAttr, FileType, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory,
     ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow,
 };
-use ouisync::{Directory, Entry, EntryType, Error, MoveDstDirectory, Repository, Result};
+use ouisync::{Directory, Entry, EntryType, Error, File, MoveDstDirectory, Repository, Result};
 use std::{
     convert::TryInto,
     ffi::OsStr,
@@ -370,6 +370,7 @@ impl Inner {
 
         let parent_dir = self.open_directory_by_inode(parent).await?;
         let entry_info = parent_dir.lookup(name)?;
+
         let entry = entry_info.open().await?;
 
         let inode = self
@@ -388,7 +389,10 @@ impl Inner {
             ..
         } = self.inodes.get(inode);
 
-        let entry = self.repository.open_entry(locator, entry_type).await?;
+        let entry = self
+            .repository
+            .open_entry_by_locator(locator, entry_type)
+            .await?;
         Ok(make_file_attr_for_entry(&entry, inode))
     }
 
@@ -450,8 +454,7 @@ impl Inner {
         let mut file = if let Some(handle) = handle {
             MaybeOwnedMut::Borrowed(self.entries.get_file_mut(handle)?)
         } else {
-            let locator = self.inodes.get(inode).locator;
-            MaybeOwnedMut::Owned(self.repository.open_file(locator).await?)
+            MaybeOwnedMut::Owned(self.open_file_by_inode(inode).await?)
         };
 
         if let Some(size) = size {
@@ -509,7 +512,7 @@ impl Inner {
         );
 
         if offset < 0 {
-            return Err(Error::WrongOffset);
+            return Err(Error::OffsetOutOfRange);
         }
 
         let parent = self.inodes.get(inode).parent;
@@ -576,7 +579,7 @@ impl Inner {
         );
 
         let mut parent_dir = self.open_directory_by_inode(parent).await?;
-        let mut dir = parent_dir.create_subdirectory(name.to_owned())?;
+        let mut dir = parent_dir.create_directory(name.to_owned())?;
 
         // TODO: should these two happen atomically (in a transaction)?
         dir.flush().await?;
@@ -594,14 +597,7 @@ impl Inner {
         log::debug!("rmdir {}", self.inodes.path_display(parent, Some(name)));
 
         let mut parent_dir = self.open_directory_by_inode(parent).await?;
-
-        // Check the directory is empty.
-        let dir: Directory = parent_dir.lookup(name)?.open().await?.try_into()?;
-        if dir.entries().len() > 0 {
-            return Err(Error::DirectoryNotEmpty);
-        }
-
-        parent_dir.remove_entry(name).await?;
+        parent_dir.remove_directory(name).await?;
         parent_dir.flush().await
     }
 
@@ -660,14 +656,7 @@ impl Inner {
 
         // TODO: what about flags (parameter)?
 
-        let &InodeDetails {
-            locator,
-            entry_type,
-            ..
-        } = self.inodes.get(inode);
-        entry_type.check_is_file()?;
-
-        let file = self.repository.open_file(locator).await?;
+        let file = self.open_file_by_inode(inode).await?;
         let handle = self.entries.insert(Entry::File(file));
 
         // TODO: what about flags (return value)?
@@ -724,7 +713,7 @@ impl Inner {
 
         let file = self.entries.get_file_mut(handle)?;
 
-        let offset: u64 = offset.try_into().map_err(|_| Error::WrongOffset)?;
+        let offset: u64 = offset.try_into().map_err(|_| Error::OffsetOutOfRange)?;
         file.seek(SeekFrom::Start(offset)).await?;
 
         // TODO: consider reusing these buffers
@@ -752,7 +741,7 @@ impl Inner {
             flags,
         );
 
-        let offset: u64 = offset.try_into().map_err(|_| Error::WrongOffset)?;
+        let offset: u64 = offset.try_into().map_err(|_| Error::OffsetOutOfRange)?;
 
         let file = self.entries.get_file_mut(handle)?;
         file.seek(SeekFrom::Start(offset)).await?;
@@ -786,9 +775,7 @@ impl Inner {
         log::debug!("unlink {}", self.inodes.path_display(parent, Some(name)));
 
         let mut parent_dir = self.open_directory_by_inode(parent).await?;
-
-        parent_dir.lookup(name)?.entry_type().check_is_file()?;
-        parent_dir.remove_entry(name).await?;
+        parent_dir.remove_file(name).await?;
         parent_dir.flush().await
     }
 
@@ -832,6 +819,16 @@ impl Inner {
         Ok(())
     }
 
+    async fn open_file_by_inode(&self, inode: Inode) -> Result<File> {
+        let &InodeDetails {
+            locator,
+            entry_type,
+            ..
+        } = self.inodes.get(inode);
+        entry_type.check_is_file()?;
+        self.repository.open_file_by_locator(locator).await
+    }
+
     async fn open_directory_by_inode(&self, inode: Inode) -> Result<Directory> {
         let &InodeDetails {
             locator,
@@ -839,7 +836,7 @@ impl Inner {
             ..
         } = self.inodes.get(inode);
         entry_type.check_is_directory()?;
-        self.repository.open_directory(locator).await
+        self.repository.open_directory_by_locator(locator).await
     }
 }
 
@@ -878,15 +875,16 @@ fn to_error_code(error: &Error) -> libc::c_int {
         | Error::ConnectToDb(_)
         | Error::CreateDbSchema(_)
         | Error::QueryDb(_)
+        | Error::BlockNotFound(_)
         | Error::MalformedData
         | Error::MalformedDirectory(_)
         | Error::WrongBlockLength(_)
         | Error::Crypto => libc::EIO,
-        Error::BlockIdNotFound | Error::BlockNotFound(_) | Error::EntryNotFound => libc::ENOENT,
+        Error::EntryNotFound => libc::ENOENT,
         Error::EntryExists => libc::EEXIST,
         Error::EntryNotDirectory => libc::ENOTDIR,
         Error::EntryIsDirectory => libc::EISDIR,
-        Error::WrongOffset => libc::EINVAL,
+        Error::OffsetOutOfRange => libc::EINVAL,
         Error::DirectoryNotEmpty => libc::ENOTEMPTY,
         Error::OperationNotSupported => libc::ENOSYS,
     }

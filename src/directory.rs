@@ -111,7 +111,7 @@ impl Directory {
     }
 
     /// Creates a new subdirectory of this directory.
-    pub fn create_subdirectory(&mut self, name: OsString) -> Result<Self> {
+    pub fn create_directory(&mut self, name: OsString) -> Result<Self> {
         let seq = self.content.insert(name, EntryType::Directory)?;
 
         Ok(Self::create(
@@ -122,17 +122,32 @@ impl Directory {
         ))
     }
 
-    /// Removes the entry with `name` from this directory and also deletes it from the repository.
-    pub async fn remove_entry(&mut self, name: &OsStr) -> Result<()> {
+    pub async fn remove_file(&mut self, name: &OsStr) -> Result<()> {
+        self.lookup(name)?.entry_type().check_is_file()?;
         let _seq = self.content.remove(name)?;
 
-        // TODO: actualy delete the entry blob from the database
+        // TODO: actually delete the file blob
+
+        Ok(())
+    }
+
+    pub async fn remove_directory(&mut self, name: &OsStr) -> Result<()> {
+        let dir = self.lookup(name)?.open_directory().await?;
+
+        if dir.entries().len() > 0 {
+            return Err(Error::DirectoryNotEmpty);
+        }
+
+        let _seq = self.content.remove(name)?;
+
+        // TODO: actually delete the directory blob
 
         Ok(())
     }
 
     /// Renames of moves an entry.
-    /// If the destination entry already exists, it will be overwritten.
+    /// If the destination entry already exists and is a file, it is overwritten. If it is a
+    /// directory, no change is performed and an error is returned instead.
     pub async fn move_entry(
         &mut self,
         src_name: &OsStr,
@@ -160,6 +175,19 @@ impl Directory {
             .await?;
 
         let dst_dir = dst_dir.get(self);
+
+        // Can't move over an existing directory.
+        // NOTE: we could move *into* the directory instead, but there would still be edge cases
+        // e.g. the dst entry being an existing directory there which we would still have to deal
+        // with. Keeping things simple for now.
+        if dst_dir
+            .lookup(dst_name)
+            .map(|info| info.entry_type() == EntryType::Directory)
+            .unwrap_or(false)
+        {
+            return Err(Error::EntryIsDirectory);
+        }
+
         let dst_entry = dst_dir.content.vacant_entry();
         let new_dst_locator = Locator::Head(*dst_dir.blob.head_name(), dst_entry.seq());
 
@@ -220,28 +248,44 @@ impl<'a> EntryInfo<'a> {
         Locator::Head(*self.parent_blob.head_name(), self.data.seq)
     }
 
-    /// Open the entry.
+    /// Opens this entry.
     pub async fn open(&self) -> Result<Entry> {
-        match self.data.entry_type {
-            EntryType::File => Ok(Entry::File(
-                File::open(
-                    self.parent_blob.db_pool().clone(),
-                    self.parent_blob.branch().clone(),
-                    self.parent_blob.cryptor().clone(),
-                    self.locator(),
-                )
-                .await?,
-            )),
-            EntryType::Directory => Ok(Entry::Directory(
-                Directory::open(
-                    self.parent_blob.db_pool().clone(),
-                    self.parent_blob.branch().clone(),
-                    self.parent_blob.cryptor().clone(),
-                    self.locator(),
-                )
-                .await?,
-            )),
+        match self.entry_type() {
+            EntryType::File => Ok(Entry::File(self.open_file_unchecked().await?)),
+            EntryType::Directory => Ok(Entry::Directory(self.open_directory_unchecked().await?)),
         }
+    }
+
+    /// Opens this entry if it's a file.
+    pub async fn open_file(&self) -> Result<File> {
+        self.entry_type().check_is_file()?;
+        self.open_file_unchecked().await
+    }
+
+    /// Opens this entry if it is a directory.
+    pub async fn open_directory(&self) -> Result<Directory> {
+        self.entry_type().check_is_directory()?;
+        self.open_directory_unchecked().await
+    }
+
+    async fn open_file_unchecked(&self) -> Result<File> {
+        File::open(
+            self.parent_blob.db_pool().clone(),
+            self.parent_blob.branch().clone(),
+            self.parent_blob.cryptor().clone(),
+            self.locator(),
+        )
+        .await
+    }
+
+    async fn open_directory_unchecked(&self) -> Result<Directory> {
+        Directory::open(
+            self.parent_blob.db_pool().clone(),
+            self.parent_blob.branch().clone(),
+            self.parent_blob.cryptor().clone(),
+            self.locator(),
+        )
+        .await
     }
 }
 
@@ -255,7 +299,7 @@ pub enum MoveDstDirectory {
 }
 
 impl MoveDstDirectory {
-    fn get<'a>(&'a mut self, src: &'a mut Directory) -> &'a mut Directory {
+    pub fn get<'a>(&'a mut self, src: &'a mut Directory) -> &'a mut Directory {
         match self {
             Self::Src => src,
             Self::Other(other) => other,
@@ -359,9 +403,9 @@ struct EntryData {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::replica_id::ReplicaId;
+    use crate::{index::Branch, replica_id::ReplicaId};
     use rand::{distributions::Standard, Rng};
-    use std::{collections::BTreeSet, convert::TryInto};
+    use std::collections::BTreeSet;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn create_and_list_entries() {
@@ -395,12 +439,7 @@ mod tests {
             (OsStr::new("dog.txt"), b"woof"),
             (OsStr::new("cat.txt"), b"meow"),
         ] {
-            let entry = dir.lookup(file_name).unwrap().open().await.unwrap();
-            let mut file = match entry {
-                Entry::File(file) => file,
-                _ => panic!("expecting File, got {:?}", entry.entry_type()),
-            };
-
+            let mut file = dir.lookup(file_name).unwrap().open_file().await.unwrap();
             let actual_content = file.read_to_end().await.unwrap();
             assert_eq!(actual_content, expected_content);
         }
@@ -447,7 +486,7 @@ mod tests {
             Directory::open(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root)
                 .await
                 .unwrap();
-        parent_dir.remove_entry(name).await.unwrap();
+        parent_dir.remove_file(name).await.unwrap();
         parent_dir.flush().await.unwrap();
 
         // Reopen again and check the file was removed.
@@ -490,14 +529,7 @@ mod tests {
             Ok(_) => panic!("src entry should not exists, but it does"),
         }
 
-        let mut file: File = dir
-            .lookup(dst_name)
-            .unwrap()
-            .open()
-            .await
-            .unwrap()
-            .try_into()
-            .unwrap();
+        let mut file = dir.lookup(dst_name).unwrap().open_file().await.unwrap();
         let read_content = file.read_to_end().await.unwrap();
         assert_eq!(read_content, content);
     }
@@ -508,8 +540,8 @@ mod tests {
 
         let mut root_dir =
             Directory::create(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root);
-        let mut src_dir = root_dir.create_subdirectory("src".into()).unwrap();
-        let mut dst_dir = root_dir.create_subdirectory("dst".into()).unwrap();
+        let mut src_dir = root_dir.create_directory("src".into()).unwrap();
+        let mut dst_dir = root_dir.create_directory("dst".into()).unwrap();
 
         let src_name = OsStr::new("src.txt");
         let dst_name = OsStr::new("dst.txt");
@@ -539,14 +571,7 @@ mod tests {
             Ok(_) => panic!("src entry should not exists, but it does"),
         }
 
-        let mut file: File = dst_dir
-            .lookup(dst_name)
-            .unwrap()
-            .open()
-            .await
-            .unwrap()
-            .try_into()
-            .unwrap();
+        let mut file = dst_dir.lookup(dst_name).unwrap().open_file().await.unwrap();
         let read_content = file.read_to_end().await.unwrap();
         assert_eq!(read_content, content);
     }
@@ -571,20 +596,13 @@ mod tests {
             .unwrap();
         dir.flush().await.unwrap();
 
-        let mut file: File = dir
-            .lookup(name)
-            .unwrap()
-            .open()
-            .await
-            .unwrap()
-            .try_into()
-            .unwrap();
+        let mut file = dir.lookup(name).unwrap().open_file().await.unwrap();
         let read_content = file.read_to_end().await.unwrap();
         assert_eq!(read_content, content);
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn move_entry_to_existing_entry() {
+    async fn move_entry_over_existing_file() {
         let (pool, branch) = setup().await;
 
         let src_name = OsStr::new("src.txt");
@@ -615,22 +633,43 @@ mod tests {
             Ok(_) => panic!("src entry should not exists, but it does"),
         }
 
-        let mut file: File = dir
-            .lookup(dst_name)
-            .unwrap()
-            .open()
-            .await
-            .unwrap()
-            .try_into()
-            .unwrap();
+        let mut file = dir.lookup(dst_name).unwrap().open_file().await.unwrap();
         let read_content = file.read_to_end().await.unwrap();
         assert_eq!(read_content, src_content);
         assert_ne!(read_content, dst_content);
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn attempt_to_move_entry_over_existing_directory() {
+        let (pool, branch) = setup().await;
+
+        let src_name = OsStr::new("src.txt");
+        let dst_name = OsStr::new("dst");
+
+        let mut dir = Directory::create(pool.clone(), branch, Cryptor::Null, Locator::Root);
+
+        let mut src_file = dir.create_file(src_name.to_owned()).unwrap();
+        let src_content = random_content(1024);
+        src_file.write(&src_content).await.unwrap();
+        src_file.flush().await.unwrap();
+
+        let mut dst_dir = dir.create_directory(dst_name.to_owned()).unwrap();
+        dst_dir.flush().await.unwrap();
+
+        dir.flush().await.unwrap();
+
+        match dir
+            .move_entry(src_name, &mut MoveDstDirectory::Src, dst_name)
+            .await
+        {
+            Err(Error::EntryIsDirectory) => (),
+            Err(error) => panic!("unexpected error {}", error),
+            Ok(_) => panic!("the move should not have succeeded but it did"),
+        }
+    }
+
     async fn setup() -> (db::Pool, Branch) {
-        let pool = db::Pool::connect(":memory:").await.unwrap();
-        db::create_schema(&pool).await.unwrap();
+        let pool = db::init(db::Store::Memory).await.unwrap();
         let branch = Branch::new(pool.clone(), ReplicaId::random())
             .await
             .unwrap();

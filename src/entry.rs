@@ -5,7 +5,6 @@ use crate::{
     locator::Locator,
 };
 use serde::{Deserialize, Serialize};
-use std::convert::TryFrom;
 
 /// Type of filesystem entry.
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Debug, Deserialize, Serialize)]
@@ -57,28 +56,6 @@ impl Entry {
         match self {
             Self::File(file) => file.len(),
             Self::Directory(dir) => dir.len(),
-        }
-    }
-}
-
-impl TryFrom<Entry> for Directory {
-    type Error = Error;
-
-    fn try_from(entry: Entry) -> Result<Self, Self::Error> {
-        match entry {
-            Entry::Directory(dir) => Ok(dir),
-            _ => Err(Error::EntryNotDirectory),
-        }
-    }
-}
-
-impl TryFrom<Entry> for File {
-    type Error = Error;
-
-    fn try_from(entry: Entry) -> Result<Self, Self::Error> {
-        match entry {
-            Entry::File(file) => Ok(file),
-            Entry::Directory(_) => Err(Error::EntryIsDirectory),
         }
     }
 }

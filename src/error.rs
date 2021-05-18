@@ -22,8 +22,6 @@ pub enum Error {
     MalformedData,
     #[error("block not found: {0}")]
     BlockNotFound(BlockId),
-    #[error("block id not found")]
-    BlockIdNotFound,
     #[error("block has wrong length (expected: {}, actual: {0})", BLOCK_SIZE)]
     WrongBlockLength(usize),
     #[error("encryption / decryption failed")]
@@ -39,7 +37,7 @@ pub enum Error {
     #[error("entry is a directory")]
     EntryIsDirectory,
     #[error("offset is out of range")]
-    WrongOffset,
+    OffsetOutOfRange,
     #[error("directory is not empty")]
     DirectoryNotEmpty,
     #[error("operation is not supported")]

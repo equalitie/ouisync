@@ -13,7 +13,7 @@ async fn main() -> Result<()> {
 
     env_logger::init();
 
-    let pool = db::init(options.db_path()?).await?;
+    let pool = db::init(db::Store::File(options.db_path()?)).await?;
     let cryptor = Cryptor::Null; // TODO:
 
     let _network = Network::new(options.enable_local_discovery);
