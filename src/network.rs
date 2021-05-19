@@ -1,8 +1,10 @@
-use crate::async_object::{AbortHandles, AsyncObject, AsyncObjectTrait};
-use crate::message_broker::MessageBroker;
-use crate::object_stream::ObjectStream;
-use crate::replica_discovery::{ReplicaDiscovery, RuntimeId};
-use crate::replica_id::ReplicaId;
+use crate::{
+    message_broker::MessageBroker,
+    object_stream::ObjectStream,
+    replica_discovery::{ReplicaDiscovery, RuntimeId},
+    replica_id::ReplicaId,
+    scoped_task_set::{ScopedTaskHandle, ScopedTaskSet},
+};
 
 use std::{
     collections::{HashMap, HashSet},
@@ -16,27 +18,37 @@ use tokio::net::{TcpListener, TcpStream};
 use std::sync::Mutex;
 
 pub struct Network {
-    this_replica_id: ReplicaId,
-    message_brokers: Mutex<HashMap<ReplicaId, MessageBroker>>,
-    to_forget: Mutable<HashSet<RuntimeId>>,
-    abort_handles: AbortHandles,
+    _tasks: ScopedTaskSet,
 }
 
 impl Network {
-    pub fn new(_enable_discovery: bool) -> io::Result<AsyncObject<Network>> {
-        let n = Arc::new(Network {
+    pub fn new(_enable_discovery: bool) -> io::Result<Self> {
+        let tasks = ScopedTaskSet::default();
+        let task_handle = tasks.handle().clone();
+
+        let inner = Arc::new(Inner {
             this_replica_id: ReplicaId::random(),
             message_brokers: Mutex::new(HashMap::new()),
             to_forget: Mutable::new(HashSet::new()),
-            abort_handles: AbortHandles::new(),
+            task_handle,
         });
-        let n_ = n.clone();
-        n.abortable_spawn(async move {
-            n_.start().await.unwrap();
-        });
-        Ok(AsyncObject::new(n))
-    }
 
+        tasks.spawn(async move {
+            inner.start().await.unwrap();
+        });
+
+        Ok(Self { _tasks: tasks })
+    }
+}
+
+struct Inner {
+    this_replica_id: ReplicaId,
+    message_brokers: Mutex<HashMap<ReplicaId, MessageBroker>>,
+    to_forget: Mutable<HashSet<RuntimeId>>,
+    task_handle: ScopedTaskHandle,
+}
+
+impl Inner {
     async fn start(self: Arc<Self>) -> io::Result<()> {
         let any_addr = SocketAddr::from(([0, 0, 0, 0], 0));
         let listener = TcpListener::bind(any_addr).await?;
@@ -44,8 +56,9 @@ impl Network {
         let s1 = self.clone();
         let s2 = self.clone();
 
-        self.abortable_spawn(s1.run_discovery(listener.local_addr().unwrap().port()));
-        self.abortable_spawn(s2.run_listener(listener));
+        self.task_handle
+            .spawn(s1.run_discovery(listener.local_addr().unwrap().port()));
+        self.task_handle.spawn(s2.run_listener(listener));
 
         Ok(())
     }
@@ -60,7 +73,7 @@ impl Network {
 
                     for (id, addr) in found {
                         let s = self.clone();
-                        self.abortable_spawn(async move {
+                        self.task_handle.spawn(async move {
                             let socket = match TcpStream::connect(addr).await {
                                 Ok(socket) => socket,
                                 Err(_) => return,
@@ -88,7 +101,7 @@ impl Network {
                 .expect("Failed to start TcpListener");
 
             let s = self.clone();
-            self.abortable_spawn(async move {
+            self.task_handle.spawn(async move {
                 s.handle_new_connection(socket, None).await.ok();
             });
         }
@@ -119,12 +132,6 @@ impl Network {
         broker.add_connection(os);
 
         Ok(())
-    }
-}
-
-impl AsyncObjectTrait for Network {
-    fn abort_handles(&self) -> &AbortHandles {
-        &self.abort_handles
     }
 }
 

@@ -2,7 +2,6 @@ pub mod crypto;
 pub mod db;
 pub mod this_replica;
 
-mod async_object;
 mod blob;
 mod block;
 mod client;
