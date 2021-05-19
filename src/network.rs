@@ -17,7 +17,7 @@ use std::sync::Mutex;
 
 pub struct Network {
     this_replica_id: ReplicaId,
-    message_brokers: Mutex<HashMap<ReplicaId, AsyncObject<MessageBroker>>>,
+    message_brokers: Mutex<HashMap<ReplicaId, MessageBroker>>,
     to_forget: Mutable<HashSet<RuntimeId>>,
     abort_handles: AbortHandles,
 }
@@ -116,7 +116,7 @@ impl Network {
             }))
         });
 
-        broker.arc().add_connection(os);
+        broker.add_connection(os);
 
         Ok(())
     }

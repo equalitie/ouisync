@@ -1,8 +1,10 @@
-use crate::async_object::{AbortHandles, AsyncObject, AsyncObjectTrait};
-use crate::client::Client;
-use crate::message::{Message, Request, Response};
-use crate::object_stream::{ObjectReader, ObjectStream, ObjectWriter};
-use crate::server::Server;
+use crate::{
+    client::Client,
+    message::{Message, Request, Response},
+    object_stream::{ObjectReader, ObjectStream, ObjectWriter},
+    scoped_task_set::{ScopedTaskHandle, ScopedTaskSet},
+    server::Server,
+};
 use std::ops::FnOnce;
 use std::sync::Arc;
 use tokio::sync::mpsc::{error::SendError, Receiver, Sender};
@@ -61,20 +63,20 @@ struct State {
 /// that it either goes to the ClientStream or ServerStream for processing by the Client and Server
 /// structures respectively.
 pub struct MessageBroker {
-    send_channel: Sender<Command>,
-    request_tx: Sender<Request>,
-    response_tx: Sender<Response>,
-    state: std::sync::Mutex<State>,
-    abort_handles: AbortHandles,
+    inner: Arc<Inner>,
+    tasks: ScopedTaskSet,
 }
 
 impl MessageBroker {
-    pub fn new(on_finish: OnFinish) -> AsyncObject<MessageBroker> {
+    pub fn new(on_finish: OnFinish) -> Self {
         let (command_tx, command_rx) = tokio::sync::mpsc::channel(1);
         let (request_tx, request_rx) = tokio::sync::mpsc::channel(1);
         let (response_tx, response_rx) = tokio::sync::mpsc::channel(1);
 
-        let broker = Arc::new(MessageBroker {
+        let tasks = ScopedTaskSet::default();
+        let task_handle = tasks.handle().clone();
+
+        let inner = Arc::new(Inner {
             send_channel: command_tx,
             request_tx,
             response_tx,
@@ -82,21 +84,45 @@ impl MessageBroker {
                 on_finish: Some(on_finish),
                 receiver_count: 0,
             }),
-            abort_handles: AbortHandles::new(),
+            task_handle,
         });
 
-        let b = broker.clone();
+        tasks.spawn(
+            inner
+                .clone()
+                .run_command_handler(command_rx, request_rx, response_rx),
+        );
 
-        broker.abortable_spawn(Self::run_command_handler(
-            b,
-            command_rx,
-            request_rx,
-            response_rx,
-        ));
-
-        AsyncObject::new(broker)
+        Self { inner, tasks }
     }
 
+    pub fn add_connection(&self, con: ObjectStream) {
+        let inner = self.inner.clone();
+        let send_channel = inner.send_channel.clone();
+
+        self.tasks.spawn(async move {
+            let (r, w) = con.into_split();
+
+            if send_channel.send(Command::AddWriter(w)).await.is_err() {
+                println!("Failed to activate writer");
+                // XXX: Tell self to abort
+                return;
+            }
+
+            inner.run_message_receiver(r).await;
+        });
+    }
+}
+
+struct Inner {
+    send_channel: Sender<Command>,
+    request_tx: Sender<Request>,
+    response_tx: Sender<Response>,
+    state: std::sync::Mutex<State>,
+    task_handle: ScopedTaskHandle,
+}
+
+impl Inner {
     fn create_state(
         self: Arc<Self>,
         request_rx: Receiver<Request>,
@@ -105,7 +131,7 @@ impl MessageBroker {
         let s1 = self.clone();
         let s2 = self.clone();
 
-        self.abortable_spawn(async move {
+        self.task_handle.spawn(async move {
             let mut client = Client {};
             let stream = ClientStream {
                 sender: s1.send_channel.clone(),
@@ -115,7 +141,7 @@ impl MessageBroker {
             s1.finish();
         });
 
-        self.abortable_spawn(async move {
+        self.task_handle.spawn(async move {
             let mut server = Server {};
             let stream = ServerStream {
                 sender: s2.send_channel.clone(),
@@ -123,23 +149,6 @@ impl MessageBroker {
             };
             server.run(stream).await;
             s2.finish();
-        });
-    }
-
-    pub fn add_connection(self: Arc<Self>, con: ObjectStream) {
-        let s = self.clone();
-        let send_channel = self.send_channel.clone();
-
-        self.abortable_spawn(async move {
-            let (r, w) = con.into_split();
-
-            if send_channel.send(Command::AddWriter(w)).await.is_err() {
-                println!("Failed to activate writer");
-                // XXX: Tell self to abort
-                return;
-            }
-
-            s.run_message_receiver(r).await;
         });
     }
 
@@ -180,7 +189,7 @@ impl MessageBroker {
         }
     }
 
-    async fn run_message_receiver(self: Arc<Self>, mut r: ObjectReader) {
+    async fn run_message_receiver(&self, mut r: ObjectReader) {
         self.state.lock().unwrap().receiver_count += 1;
         loop {
             match r.read::<Message>().await {
@@ -203,7 +212,7 @@ impl MessageBroker {
         }
     }
 
-    async fn handle_message(self: &Arc<Self>, msg: Message) {
+    async fn handle_message(&self, msg: Message) {
         match msg {
             Message::Request(rq) => {
                 self.request_tx.send(rq).await.unwrap();
@@ -215,7 +224,8 @@ impl MessageBroker {
     }
 
     fn finish(&self) {
-        self.abort();
+        self.task_handle.abort_all();
+
         if let Some(on_finish) = self.state.lock().unwrap().on_finish.take() {
             on_finish();
         }
@@ -233,11 +243,5 @@ impl Command {
             Command::SendMessage(m) => m,
             _ => panic!("Command is not SendMessage"),
         }
-    }
-}
-
-impl AsyncObjectTrait for MessageBroker {
-    fn abort_handles(&self) -> &AbortHandles {
-        &self.abort_handles
     }
 }
