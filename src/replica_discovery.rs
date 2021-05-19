@@ -55,7 +55,7 @@ impl ReplicaDiscovery {
         let state1 = state.clone();
         let state2 = state.clone();
 
-        let mut tasks = ScopedTaskSet::default();
+        let tasks = ScopedTaskSet::default();
 
         tasks.spawn(async move {
             state1.run_beacon().await.unwrap();
