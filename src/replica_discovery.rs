@@ -26,24 +26,15 @@ const ADDR_ANY: Ipv4Addr = Ipv4Addr::new(0, 0, 0, 0);
 // Poor man's local discovery using UDP multicast.
 // XXX: We should probably use mDNS, but so far all libraries I tried had some issues.
 pub struct ReplicaDiscovery {
-    state: Arc<State>,
+    inner: Arc<Inner>,
     _tasks: ScopedTaskSet,
-}
-
-struct State {
-    id: RuntimeId,
-    listener_port: u16,
-    socket: tokio::net::UdpSocket,
-    found_replicas: Mutex<HashSet<(RuntimeId, SocketAddr)>>,
-    seen: std::sync::Mutex<LruCache<RuntimeId, ()>>,
-    notify: Arc<Notify>,
 }
 
 impl ReplicaDiscovery {
     pub fn new(listener_port: u16) -> io::Result<Self> {
         let notify = Arc::new(Notify::new());
 
-        let state = Arc::new(State {
+        let inner = Arc::new(Inner {
             id: rand::random(),
             listener_port,
             socket: Self::create_multicast_socket()?,
@@ -52,21 +43,21 @@ impl ReplicaDiscovery {
             notify,
         });
 
-        let state1 = state.clone();
-        let state2 = state.clone();
+        let inner1 = inner.clone();
+        let inner2 = inner.clone();
 
         let tasks = ScopedTaskSet::default();
 
         tasks.spawn(async move {
-            state1.run_beacon().await.unwrap();
+            inner1.run_beacon().await.unwrap();
         });
 
         tasks.spawn(async move {
-            state2.run_receiver().await.unwrap();
+            inner2.run_receiver().await.unwrap();
         });
 
         Ok(Self {
-            state,
+            inner,
             _tasks: tasks,
         })
     }
@@ -79,9 +70,9 @@ impl ReplicaDiscovery {
     ///
     pub async fn wait_for_activity(&self) -> HashSet<(RuntimeId, SocketAddr)> {
         loop {
-            self.state.notify.notified().await;
+            self.inner.notify.notified().await;
 
-            let mut found = self.state.found_replicas.lock().await;
+            let mut found = self.inner.found_replicas.lock().await;
 
             if found.is_empty() {
                 continue;
@@ -99,7 +90,7 @@ impl ReplicaDiscovery {
     /// happening again.
     ///
     pub fn forget(&self, id: &RuntimeId) {
-        self.state.seen.lock().unwrap().pop(id);
+        self.inner.seen.lock().unwrap().pop(id);
     }
 
     fn create_multicast_socket() -> io::Result<tokio::net::UdpSocket> {
@@ -119,7 +110,16 @@ impl ReplicaDiscovery {
     }
 }
 
-impl State {
+struct Inner {
+    id: RuntimeId,
+    listener_port: u16,
+    socket: tokio::net::UdpSocket,
+    found_replicas: Mutex<HashSet<(RuntimeId, SocketAddr)>>,
+    seen: std::sync::Mutex<LruCache<RuntimeId, ()>>,
+    notify: Arc<Notify>,
+}
+
+impl Inner {
     async fn run_beacon(&self) -> io::Result<()> {
         let multicast_endpoint = SocketAddr::new(MULTICAST_ADDR.into(), MULTICAST_PORT);
 
@@ -130,7 +130,7 @@ impl State {
         }
     }
 
-    async fn run_receiver(self: Arc<Self>) -> io::Result<()> {
+    async fn run_receiver(&self) -> io::Result<()> {
         let mut recv_buffer = vec![0; 4096];
 
         loop {
