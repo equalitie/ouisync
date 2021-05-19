@@ -1,4 +1,4 @@
-use crate::async_object::{AbortHandles, AsyncObject, AsyncObjectTrait};
+use crate::scoped_task_set::ScopedTaskSet;
 use lru::LruCache;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -26,41 +26,49 @@ const ADDR_ANY: Ipv4Addr = Ipv4Addr::new(0, 0, 0, 0);
 // Poor man's local discovery using UDP multicast.
 // XXX: We should probably use mDNS, but so far all libraries I tried had some issues.
 pub struct ReplicaDiscovery {
+    state: Arc<State>,
+    _tasks: ScopedTaskSet,
+}
+
+struct State {
     id: RuntimeId,
     listener_port: u16,
     socket: tokio::net::UdpSocket,
     found_replicas: Mutex<HashSet<(RuntimeId, SocketAddr)>>,
     seen: std::sync::Mutex<LruCache<RuntimeId, ()>>,
     notify: Arc<Notify>,
-    abort_handles: AbortHandles,
 }
 
 impl ReplicaDiscovery {
-    pub fn new(listener_port: u16) -> io::Result<AsyncObject<Self>> {
+    pub fn new(listener_port: u16) -> io::Result<Self> {
         let notify = Arc::new(Notify::new());
 
-        let n = Arc::new(ReplicaDiscovery {
+        let state = Arc::new(State {
             id: rand::random(),
             listener_port,
             socket: Self::create_multicast_socket()?,
             found_replicas: Mutex::new(HashSet::new()),
             seen: std::sync::Mutex::new(LruCache::new(256)),
             notify,
-            abort_handles: AbortHandles::new(),
         });
 
-        let n1 = n.clone();
-        let n2 = n.clone();
+        let state1 = state.clone();
+        let state2 = state.clone();
 
-        n.abortable_spawn(async move {
-            n1.run_beacon().await.unwrap();
+        let mut tasks = ScopedTaskSet::default();
+
+        tasks.spawn(async move {
+            state1.run_beacon().await.unwrap();
         });
 
-        n.abortable_spawn(async move {
-            n2.run_receiver().await.unwrap();
+        tasks.spawn(async move {
+            state2.run_receiver().await.unwrap();
         });
 
-        Ok(AsyncObject::new(n))
+        Ok(Self {
+            state,
+            _tasks: tasks,
+        })
     }
 
     ///
@@ -71,9 +79,9 @@ impl ReplicaDiscovery {
     ///
     pub async fn wait_for_activity(&self) -> HashSet<(RuntimeId, SocketAddr)> {
         loop {
-            self.notify.notified().await;
+            self.state.notify.notified().await;
 
-            let mut found = self.found_replicas.lock().await;
+            let mut found = self.state.found_replicas.lock().await;
 
             if found.is_empty() {
                 continue;
@@ -91,7 +99,7 @@ impl ReplicaDiscovery {
     /// happening again.
     ///
     pub fn forget(&self, id: &RuntimeId) {
-        self.seen.lock().unwrap().pop(id);
+        self.state.seen.lock().unwrap().pop(id);
     }
 
     fn create_multicast_socket() -> io::Result<tokio::net::UdpSocket> {
@@ -109,7 +117,9 @@ impl ReplicaDiscovery {
 
         tokio::net::UdpSocket::from_std(sync_socket)
     }
+}
 
+impl State {
     async fn run_beacon(&self) -> io::Result<()> {
         let multicast_endpoint = SocketAddr::new(MULTICAST_ADDR.into(), MULTICAST_PORT);
 
@@ -188,10 +198,4 @@ impl ReplicaDiscovery {
 enum Message {
     ImHereYouAll { id: RuntimeId, port: u16 },
     Reply { id: RuntimeId, port: u16 },
-}
-
-impl AsyncObjectTrait for ReplicaDiscovery {
-    fn abort_handles(&self) -> &AbortHandles {
-        &self.abort_handles
-    }
 }

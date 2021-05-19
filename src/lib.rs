@@ -21,6 +21,7 @@ mod object_stream;
 mod replica_discovery;
 mod replica_id;
 mod repository;
+mod scoped_task_set;
 mod server;
 
 pub use self::{
