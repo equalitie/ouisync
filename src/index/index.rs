@@ -35,11 +35,7 @@ impl Index {
     }
 
     pub async fn branch(&self, replica_id: &ReplicaId) -> Option<Branch> {
-        self.branches
-            .lock()
-            .await
-            .get(replica_id)
-            .map(|b| b.clone())
+        self.branches.lock().await.get(replica_id).cloned()
     }
 
     async fn replicas(conn: &mut db::Connection) -> Result<HashSet<ReplicaId>> {

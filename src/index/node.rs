@@ -186,17 +186,12 @@ pub async fn inner_children(
     .fetch_all(&mut *tx)
     .await?;
 
-    let mut children = [InnerNode {
-        hash: Hash::null(),
-        is_complete: true,
-        missing_blocks_crc: 0,
-        missing_blocks_count: 0,
-    }; MAX_INNER_NODE_CHILD_COUNT];
+    let mut children = [InnerNode::empty(); MAX_INNER_NODE_CHILD_COUNT];
 
-    for ref row in rows {
+    for row in rows {
         let bucket: u32 = row.get(0);
         let is_complete = row.get::<'_, u16, _>(1) != 0;
-        let hash = column::<Hash>(row, 2)?;
+        let hash = column::<Hash>(&row, 2)?;
         let missing_blocks_crc = row.get(3);
         let missing_blocks_count = row.get::<'_, MissingBlocksCount, _>(4) as usize;
         children[bucket as usize] = InnerNode {
@@ -219,19 +214,16 @@ pub async fn leaf_children(parent: &Hash, tx: &mut db::Transaction) -> Result<Ve
     .fetch_all(&mut *tx)
     .await?;
 
-    let mut children = Vec::new();
-    children.reserve(rows.len());
-
-    for ref row in rows {
-        children.push(LeafNode {
-            data: LeafData::deserialize(row.get(0))?,
-            is_complete: row.get::<'_, u16, _>(1) != 0,
-            missing_blocks_crc: row.get(2),
-            missing_blocks_count: row.get::<'_, MissingBlocksCount, _>(3) as usize,
-        });
-    }
-
-    Ok(children)
+    rows.into_iter()
+        .map(|row| {
+            Ok(LeafNode {
+                data: LeafData::deserialize(row.get(0))?,
+                is_complete: row.get::<'_, u16, _>(1) != 0,
+                missing_blocks_crc: row.get(2),
+                missing_blocks_count: row.get::<'_, MissingBlocksCount, _>(3) as usize,
+            })
+        })
+        .collect()
 }
 
 #[derive(Debug)]
