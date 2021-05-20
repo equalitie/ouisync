@@ -128,17 +128,8 @@ impl Directory {
     }
 
     pub async fn remove_directory(&mut self, name: &OsStr) -> Result<()> {
-        let dir = self.lookup(name)?.open_directory().await?;
-
-        if dir.entries().len() > 0 {
-            return Err(Error::DirectoryNotEmpty);
-        }
-
-        let _seq = self.content.remove(name)?;
-
-        // TODO: actually delete the directory blob
-
-        Ok(())
+        self.lookup(name)?.open_directory().await?.remove().await?;
+        self.content.remove(name)
     }
 
     /// Renames of moves an entry.
@@ -208,6 +199,15 @@ impl Directory {
         tx.commit().await?;
 
         Ok(())
+    }
+
+    /// Remove this directory if its empty, otherwise fails.
+    pub async fn remove(self) -> Result<()> {
+        if !self.content.entries.is_empty() {
+            return Err(Error::DirectoryNotEmpty);
+        }
+
+        self.blob.remove().await
     }
 
     /// Length of this directory in bytes. Does not include the content, only the size of directory
@@ -505,7 +505,6 @@ mod tests {
         }
     }
 
-    #[ignore]
     #[tokio::test(flavor = "multi_thread")]
     async fn remove_subdirectory() {
         let (pool, branch) = setup().await;
