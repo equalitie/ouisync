@@ -123,17 +123,7 @@ impl Directory {
     }
 
     pub async fn remove_file(&mut self, name: &OsStr) -> Result<()> {
-        let info = self.lookup(name)?;
-        info.entry_type().check_is_file()?;
-
-        File::remove(
-            &self.blob.db_pool(),
-            &self.blob.branch(),
-            &self.blob.cryptor(),
-            &info.locator(),
-        )
-        .await?;
-
+        self.lookup(name)?.open_file().await?.remove().await?;
         self.content.remove(name)
     }
 
@@ -512,6 +502,49 @@ mod tests {
             Err(Error::EntryNotFound) => (),
             Err(error) => panic!("unexpected error {:?}", error),
             Ok(_) => panic!("file should not exists but it does"),
+        }
+    }
+
+    #[ignore]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn remove_subdirectory() {
+        let (pool, branch) = setup().await;
+
+        let name = OsStr::new("dir");
+
+        // Create a directory with a single subdirectory.
+        let mut parent_dir =
+            Directory::create(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root);
+        let mut dir = parent_dir.create_directory(name.into()).unwrap();
+        dir.flush().await.unwrap();
+        parent_dir.flush().await.unwrap();
+
+        let dir_locator = *dir.locator();
+
+        // Reopen and remove the subdirectory
+        let mut parent_dir =
+            Directory::open(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root)
+                .await
+                .unwrap();
+        parent_dir.remove_directory(name).await.unwrap();
+        parent_dir.flush().await.unwrap();
+
+        // Reopen again and check the subdiretory entry was removed.
+        let parent_dir =
+            Directory::open(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root)
+                .await
+                .unwrap();
+        match parent_dir.lookup(name) {
+            Err(Error::EntryNotFound) => (),
+            Err(error) => panic!("unexpected error {:?}", error),
+            Ok(_) => panic!("entry should not exists but it does"),
+        }
+
+        // Check the directory itself was removed as well.
+        match Directory::open(pool, branch.clone(), Cryptor::Null, dir_locator).await {
+            Err(Error::EntryNotFound) => (),
+            Err(error) => panic!("unexpected error {:?}", error),
+            Ok(_) => panic!("directory should not exists but it does"),
         }
     }
 

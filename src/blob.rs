@@ -38,8 +38,14 @@ impl Blob {
         // NOTE: no need to commit this transaction because we are only reading here.
         let mut tx = pool.begin().await?;
 
-        let (id, mut content, nonce_sequence) =
-            read_head_block(&branch, &mut tx, &cryptor, &locator).await?;
+        let (id, buffer, auth_tag) = load_block(&branch, &mut tx, &cryptor, &locator).await?;
+
+        let mut content = Cursor::new(buffer);
+
+        let nonce_sequence = NonceSequence::new(content.read_array());
+        let nonce = nonce_sequence.get(0);
+
+        cryptor.decrypt(&nonce, &id.as_array(), &mut content, &auth_tag)?;
 
         let len = content.read_u64();
 
@@ -88,35 +94,6 @@ impl Blob {
             len: 0,
             len_dirty: false,
         }
-    }
-
-    /// Removes a blob.
-    pub async fn remove(
-        pool: &db::Pool,
-        branch: &Branch,
-        cryptor: &Cryptor,
-        locator: &Locator,
-    ) -> Result<()> {
-        let mut tx = pool.begin().await?;
-
-        // Load the head block to read the blob length from it in order to know how many
-        // blocks this blob contains.
-        let (id, mut content, nonce_sequence) =
-            read_head_block(branch, &mut tx, cryptor, locator).await?;
-        let len = content.read_u64();
-        let block_count = block_count(len, &nonce_sequence);
-        let head_name = id.name;
-
-        let locators =
-            iter::once(*locator).chain((1..block_count).map(|seq| Locator::Trunk(head_name, seq)));
-        for locator in locators {
-            branch.remove(&mut tx, &locator.encode(&cryptor)).await?;
-            // TODO: delete the block as well
-        }
-
-        tx.commit().await?;
-
-        Ok(())
     }
 
     pub fn branch(&self) -> &Branch {
@@ -326,6 +303,24 @@ impl Blob {
         Ok(())
     }
 
+    /// Removes this blob.
+    pub async fn remove(self) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+
+        let locators = iter::once(self.locator)
+            .chain((1..self.block_count()).map(|seq| Locator::Trunk(*self.head_name(), seq)));
+        for locator in locators {
+            self.branch
+                .remove(&mut tx, &locator.encode(&self.cryptor))
+                .await?;
+            // TODO: delete the block as well
+        }
+
+        tx.commit().await?;
+
+        Ok(())
+    }
+
     pub fn head_name(&self) -> &BlockName {
         self.current_block.head_name()
     }
@@ -436,7 +431,10 @@ impl Blob {
 
     // Total number of blocks in this blob including the possibly partially filled final block.
     fn block_count(&self) -> u32 {
-        block_count(self.len, &self.nonce_sequence)
+        // https://stackoverflow.com/questions/2745074/fast-ceiling-of-an-integer-division-in-c-c
+        (1 + (self.len + self.header_size() as u64 - 1) / BLOCK_SIZE as u64)
+            .try_into()
+            .unwrap_or(u32::MAX)
     }
 
     // Returns the current seek position from the start of the blob.
@@ -447,7 +445,7 @@ impl Blob {
     }
 
     fn header_size(&self) -> usize {
-        header_size(self.len, &self.nonce_sequence)
+        self.nonce_sequence.prefix().len() + mem::size_of_val(&self.len)
     }
 
     fn locator_at(&self, number: u32) -> Locator {
@@ -472,17 +470,6 @@ impl Blob {
     }
 }
 
-fn block_count(len: u64, nonce_sequence: &NonceSequence) -> u32 {
-    // https://stackoverflow.com/questions/2745074/fast-ceiling-of-an-integer-division-in-c-c
-    (1 + (len + header_size(len, nonce_sequence) as u64 - 1) / BLOCK_SIZE as u64)
-        .try_into()
-        .unwrap_or(u32::MAX)
-}
-
-fn header_size(len: u64, nonce_sequence: &NonceSequence) -> usize {
-    nonce_sequence.prefix().len() + mem::size_of_val(&len)
-}
-
 async fn read_block(
     branch: &Branch,
     tx: &mut db::Transaction,
@@ -505,24 +492,6 @@ async fn read_block(
     cryptor.decrypt(&nonce, &aad, &mut buffer[offset..], &auth_tag)?;
 
     Ok((id, buffer))
-}
-
-async fn read_head_block(
-    branch: &Branch,
-    tx: &mut db::Transaction,
-    cryptor: &Cryptor,
-    locator: &Locator,
-) -> Result<(BlockId, Cursor, NonceSequence)> {
-    let (id, buffer, auth_tag) = load_block(&branch, tx, cryptor, locator).await?;
-
-    let mut content = Cursor::new(buffer);
-
-    let nonce_sequence = NonceSequence::new(content.read_array());
-    let nonce = nonce_sequence.get(0);
-
-    cryptor.decrypt(&nonce, &id.as_array(), &mut content, &auth_tag)?;
-
-    Ok((id, content, nonce_sequence))
 }
 
 async fn load_block(
@@ -954,9 +923,7 @@ mod tests {
         drop(tx);
 
         // Remove the blob
-        Blob::remove(&pool, &branch, &cryptor, &locator0)
-            .await
-            .unwrap();
+        blob.remove().await.unwrap();
 
         // Check the block entries were deleted from the branch
         let mut tx = pool.begin().await.unwrap();
