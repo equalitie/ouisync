@@ -916,16 +916,10 @@ mod tests {
         let encoded_locator0 = locator0.encode(&cryptor);
         let encoded_locator1 = locator1.encode(&cryptor);
 
-        // Check the block entries are in the branch
-        let mut tx = pool.begin().await.unwrap();
-        assert!(branch.get(&mut tx, &encoded_locator0).await.is_ok());
-        assert!(branch.get(&mut tx, &encoded_locator1).await.is_ok());
-        drop(tx);
-
         // Remove the blob
         blob.remove().await.unwrap();
 
-        // Check the block entries were deleted from the branch
+        // Check the block entries were deleted from the index.
         let mut tx = pool.begin().await.unwrap();
         assert!(matches!(
             branch.get(&mut tx, &encoded_locator0).await,
@@ -937,6 +931,43 @@ mod tests {
         ));
 
         // TODO: check the blocks are deleted as well
+    }
+
+    #[ignore]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn truncate_to_empty() {
+        let (mut rng, cryptor, pool, branch) = setup(0).await;
+
+        let parent_name = rng.gen();
+        let locator0 = Locator::Head(parent_name, 0);
+
+        let content: Vec<_> = (&mut rng)
+            .sample_iter(Standard)
+            .take(2 * BLOCK_SIZE)
+            .collect();
+
+        let mut blob = Blob::create(pool.clone(), branch.clone(), cryptor.clone(), locator0);
+        blob.write(&content).await.unwrap();
+        blob.flush().await.unwrap();
+
+        let locator1 = Locator::Trunk(*blob.head_name(), 1);
+
+        blob.truncate().await.unwrap();
+        blob.flush().await.unwrap();
+
+        // Check the blob is empty
+        let mut buffer = [0; 1];
+        blob.seek(SeekFrom::Start(0)).await.unwrap();
+        assert_eq!(blob.read(&mut buffer).await.unwrap(), 0);
+
+        // Check the second block entry was deleted from the index (the first block is not deleted
+        // because it's used to store the metadata. It's only deleted when the whole blob is
+        // deleted).
+        let mut tx = pool.begin().await.unwrap();
+        assert!(matches!(
+            branch.get(&mut tx, &locator1.encode(&cryptor)).await,
+            Err(Error::EntryNotFound)
+        ));
     }
 
     // proptest doesn't work with the `#[tokio::test]` macro yet
