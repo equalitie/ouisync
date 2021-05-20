@@ -9,7 +9,7 @@ use crate::{
 use std::{
     convert::TryInto,
     io::SeekFrom,
-    mem,
+    iter, mem,
     ops::{Deref, DerefMut},
 };
 use zeroize::Zeroize;
@@ -29,10 +29,6 @@ pub struct Blob {
 
 impl Blob {
     /// Opens an existing blob.
-    ///
-    /// - `directory_name` is the name of the head block of the directory containing the blob.
-    ///   `None` if the blob is the root blob.
-    /// - `directory_seq` is the sequence number of the blob within its directory.
     pub(crate) async fn open(
         pool: db::Pool,
         branch: Branch,
@@ -41,6 +37,7 @@ impl Blob {
     ) -> Result<Self> {
         // NOTE: no need to commit this transaction because we are only reading here.
         let mut tx = pool.begin().await?;
+
         let (id, buffer, auth_tag) = load_block(&branch, &mut tx, &cryptor, &locator).await?;
 
         let mut content = Cursor::new(buffer);
@@ -72,14 +69,7 @@ impl Blob {
     }
 
     /// Creates a new blob.
-    ///
-    /// See [`Self::open`] for explanation of `directory_name` and `directory_seq`.
-    pub(crate) fn create(
-        pool: db::Pool,
-        branch: Branch,
-        cryptor: Cryptor,
-        locator: Locator,
-    ) -> Self {
+    pub fn create(pool: db::Pool, branch: Branch, cryptor: Cryptor, locator: Locator) -> Self {
         let nonce_sequence = NonceSequence::new(rand::random());
         let mut content = Cursor::new(Buffer::new());
 
@@ -308,6 +298,24 @@ impl Blob {
         let mut tx = self.pool.begin().await?;
         self.write_len(&mut tx).await?;
         self.write_current_block(&mut tx).await?;
+        tx.commit().await?;
+
+        Ok(())
+    }
+
+    /// Removes this blob.
+    pub async fn remove(self) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+
+        let locators = iter::once(self.locator)
+            .chain((1..self.block_count()).map(|seq| Locator::Trunk(*self.head_name(), seq)));
+        for locator in locators {
+            self.branch
+                .remove(&mut tx, &locator.encode(&self.cryptor))
+                .await?;
+            // TODO: delete the block as well
+        }
+
         tx.commit().await?;
 
         Ok(())
@@ -657,7 +665,7 @@ impl DerefMut for Cursor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{crypto::SecretKey, replica_id::ReplicaId};
+    use crate::{crypto::SecretKey, error::Error, replica_id::ReplicaId};
     use proptest::{collection::vec, prelude::*};
     use rand::{distributions::Standard, prelude::*};
     use std::future::Future;
@@ -886,6 +894,80 @@ mod tests {
             blob.read(&mut read_buffer).await.unwrap();
             assert_eq!(read_buffer, content);
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn remove_blob() {
+        let (mut rng, cryptor, pool, branch) = setup(0).await;
+
+        let parent_name = rng.gen();
+        let locator0 = Locator::Head(parent_name, 0);
+
+        let content: Vec<_> = (&mut rng)
+            .sample_iter(Standard)
+            .take(2 * BLOCK_SIZE)
+            .collect();
+
+        let mut blob = Blob::create(pool.clone(), branch.clone(), cryptor.clone(), locator0);
+        blob.write(&content).await.unwrap();
+        blob.flush().await.unwrap();
+
+        let locator1 = Locator::Trunk(*blob.head_name(), 1);
+        let encoded_locator0 = locator0.encode(&cryptor);
+        let encoded_locator1 = locator1.encode(&cryptor);
+
+        // Remove the blob
+        blob.remove().await.unwrap();
+
+        // Check the block entries were deleted from the index.
+        let mut tx = pool.begin().await.unwrap();
+        assert!(matches!(
+            branch.get(&mut tx, &encoded_locator0).await,
+            Err(Error::EntryNotFound)
+        ));
+        assert!(matches!(
+            branch.get(&mut tx, &encoded_locator1).await,
+            Err(Error::EntryNotFound)
+        ));
+
+        // TODO: check the blocks are deleted as well
+    }
+
+    #[ignore]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn truncate_to_empty() {
+        let (mut rng, cryptor, pool, branch) = setup(0).await;
+
+        let parent_name = rng.gen();
+        let locator0 = Locator::Head(parent_name, 0);
+
+        let content: Vec<_> = (&mut rng)
+            .sample_iter(Standard)
+            .take(2 * BLOCK_SIZE)
+            .collect();
+
+        let mut blob = Blob::create(pool.clone(), branch.clone(), cryptor.clone(), locator0);
+        blob.write(&content).await.unwrap();
+        blob.flush().await.unwrap();
+
+        let locator1 = Locator::Trunk(*blob.head_name(), 1);
+
+        blob.truncate().await.unwrap();
+        blob.flush().await.unwrap();
+
+        // Check the blob is empty
+        let mut buffer = [0; 1];
+        blob.seek(SeekFrom::Start(0)).await.unwrap();
+        assert_eq!(blob.read(&mut buffer).await.unwrap(), 0);
+
+        // Check the second block entry was deleted from the index (the first block is not deleted
+        // because it's used to store the metadata. It's only deleted when the whole blob is
+        // deleted).
+        let mut tx = pool.begin().await.unwrap();
+        assert!(matches!(
+            branch.get(&mut tx, &locator1.encode(&cryptor)).await,
+            Err(Error::EntryNotFound)
+        ));
     }
 
     // proptest doesn't work with the `#[tokio::test]` macro yet

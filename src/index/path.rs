@@ -119,7 +119,7 @@ impl Path {
         let is_empty = self.inner[inner_layer].iter().all(|x| x.hash == null);
 
         if !is_empty {
-            self.recalculate(inner_layer - 1);
+            self.recalculate(inner_layer);
             return;
         }
 
