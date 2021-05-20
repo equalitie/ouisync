@@ -9,7 +9,7 @@ use crate::{
     db,
     error::{Error, Result},
     index::{
-        node::{inner_children, leaf_children, InnerNode, LeafNode, RootNode},
+        node::{inner_children, leaf_children, InnerNode, RootNode},
         path::Path,
         INNER_LAYER_COUNT,
     },
@@ -158,7 +158,7 @@ impl Branch {
         let parent_hash = path.hash_at_layer(layer - 1);
 
         for leaf in &path.leaves {
-            LeafNode::insert(&leaf, &parent_hash, tx).await?;
+            leaf.insert(&parent_hash, tx).await?;
         }
 
         self.write_branch_root(tx, root_node, &path.root).await

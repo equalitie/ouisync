@@ -2,16 +2,15 @@
 // https://rust-lang.github.io/rust-clippy/master/index.html#enum_variant_names
 #![allow(clippy::enum_variant_names)]
 
-use std::{iter::FromIterator, slice};
+use std::{convert::TryFrom, iter::FromIterator, slice};
 
 use crate::{
-    block::BlockId,
+    block::{BlockId, BlockName, BlockVersion},
     crypto::Hash,
     db,
     error::Result,
     index::{
-        column, Crc, LeafData, MissingBlocksCount, SnapshotId, INNER_LAYER_COUNT,
-        MAX_INNER_NODE_CHILD_COUNT,
+        column, Crc, MissingBlocksCount, SnapshotId, INNER_LAYER_COUNT, MAX_INNER_NODE_CHILD_COUNT,
     },
     replica_id::ReplicaId,
 };
@@ -158,8 +157,8 @@ pub struct LeafNode {
 }
 
 impl LeafNode {
-    pub async fn insert(leaf: &LeafNode, parent: &Hash, tx: &mut db::Transaction) -> Result<()> {
-        let blob = leaf.data.serialize();
+    pub async fn insert(&self, parent: &Hash, tx: &mut db::Transaction) -> Result<()> {
+        let blob = self.data.serialize();
         sqlx::query(
             "INSERT INTO snapshot_forest
                      (parent, bucket, is_complete, missing_blocks_crc, missing_blocks_count, data)
@@ -167,9 +166,9 @@ impl LeafNode {
         )
         .bind(parent.as_ref())
         .bind(u16::MAX)
-        .bind(leaf.is_complete as u16)
-        .bind(leaf.missing_blocks_crc)
-        .bind(leaf.missing_blocks_count as MissingBlocksCount)
+        .bind(self.is_complete as u16)
+        .bind(self.missing_blocks_crc)
+        .bind(self.missing_blocks_count as MissingBlocksCount)
         .bind(blob)
         .execute(&mut *tx)
         .await?;
@@ -259,6 +258,51 @@ impl<'a> IntoIterator for &'a LeafNodeSet {
     fn into_iter(self) -> Self::IntoIter {
         self.0.iter()
     }
+}
+
+#[derive(Debug)]
+pub struct InnerData {
+    pub hash: Hash,
+}
+
+#[derive(Eq, PartialEq, Ord, PartialOrd, Clone, Debug)]
+pub struct LeafData {
+    locator: Hash,
+    pub block_id: BlockId,
+}
+
+impl LeafData {
+    pub fn locator(&self) -> &Hash {
+        &self.locator
+    }
+
+    pub fn serialize(&self) -> Vec<u8> {
+        self.locator
+            .as_ref()
+            .iter()
+            .chain(self.block_id.name.as_ref().iter())
+            .chain(self.block_id.version.as_ref().iter())
+            .cloned()
+            .collect()
+    }
+
+    pub fn deserialize(blob: &[u8]) -> Result<Self> {
+        let (b1, b2) = blob.split_at(std::mem::size_of::<Hash>());
+        let (b2, b3) = b2.split_at(std::mem::size_of::<BlockName>());
+        let locator = Hash::try_from(b1)?;
+        let name = BlockName::try_from(b2)?;
+        let version = BlockVersion::try_from(b3)?;
+        Ok(Self {
+            locator,
+            block_id: BlockId { name, version },
+        })
+    }
+}
+
+#[derive(Debug)]
+pub enum NodeData {
+    Inner(InnerData),
+    Leaf(LeafData),
 }
 
 pub async fn inner_children(
