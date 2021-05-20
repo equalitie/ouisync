@@ -2,8 +2,8 @@ use crate::{
     block::BlockId,
     crypto::Hash,
     index::{
-        node::{InnerNode, LeafNode},
-        Crc, LeafData, INNER_LAYER_COUNT, MAX_INNER_NODE_CHILD_COUNT,
+        node::{InnerNode, LeafNode, LeafNodeSet},
+        Crc, INNER_LAYER_COUNT, MAX_INNER_NODE_CHILD_COUNT,
     },
 };
 use crc::{crc32, Hasher32};
@@ -39,8 +39,7 @@ pub struct Path {
     pub missing_blocks_crc: Crc,
     pub missing_blocks_count: usize,
     pub inner: Vec<InnerChildren>,
-    /// Note: this vector must be sorted to guarantee unique hashing.
-    pub leaves: Vec<LeafNode>,
+    pub leaves: LeafNodeSet,
 }
 
 impl Path {
@@ -56,15 +55,14 @@ impl Path {
             missing_blocks_crc: 0,
             missing_blocks_count: 0,
             inner,
-            leaves: Vec::new(),
+            leaves: LeafNodeSet::default(),
         }
     }
 
     pub fn get_leaf(&self) -> Option<BlockId> {
         self.leaves
-            .iter()
-            .find(|l| l.data.locator == self.locator)
-            .map(|l| l.data.block_id)
+            .get(&self.locator)
+            .map(|node| node.data.block_id)
     }
 
     pub fn has_leaf(&self, block_id: &BlockId) -> bool {
@@ -86,58 +84,13 @@ impl Path {
     // BlockVersion is needed when calculating hashes at the beginning to make this tree unique
     // across all the snapshots.
     pub fn set_leaf(&mut self, block_id: &BlockId) {
-        let locator = &self.locator;
-
-        if let Some(node) = self
-            .leaves
-            .iter_mut()
-            .find(|node| &node.data.locator == locator)
-        {
-            if &node.data.block_id == block_id {
-                // no change
-                return;
-            }
-
-            node.data.block_id = *block_id;
-        } else {
-            let new_node = LeafNode {
-                data: LeafData {
-                    locator: self.locator,
-                    block_id: *block_id,
-                },
-                is_complete: true,
-                missing_blocks_crc: 0,
-                missing_blocks_count: 0,
-            };
-
-            let index = self
-                .leaves
-                .iter()
-                .position(|node| node > &new_node)
-                .unwrap_or(self.leaves.len());
-            self.leaves.insert(index, new_node);
+        if self.leaves.insert_or_update(&self.locator, block_id) {
+            self.recalculate(INNER_LAYER_COUNT);
         }
-
-        self.recalculate(INNER_LAYER_COUNT);
     }
 
     pub fn remove_leaf(&mut self, locator: &Hash) {
-        let mut changed = false;
-
-        self.leaves = self
-            .leaves
-            .iter()
-            .filter(|l| {
-                let keep = l.data.locator != *locator;
-                if !keep {
-                    changed = true;
-                }
-                keep
-            })
-            .cloned()
-            .collect();
-
-        if !changed {
+        if self.leaves.remove(locator).is_none() {
             return;
         }
 
@@ -204,8 +157,8 @@ impl Path {
     // computed/assigned.
     fn compute_hash_for_layer(&self, layer: usize) -> (Hash, Crc, usize) {
         if layer == INNER_LAYER_COUNT {
-            let (crc, cnt) = calculate_missing_blocks_crc_from_leaves(&self.leaves);
-            (hash_leaves(&self.leaves), crc, cnt)
+            let (crc, cnt) = calculate_missing_blocks_crc_from_leaves(self.leaves.as_slice());
+            (hash_leaves(self.leaves.as_slice()), crc, cnt)
         } else {
             let (crc, cnt) = calculate_missing_blocks_crc_from_inner(&self.inner[layer]);
             (hash_inner(&self.inner[layer]), crc, cnt)

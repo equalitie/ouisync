@@ -2,7 +2,10 @@
 // https://rust-lang.github.io/rust-clippy/master/index.html#enum_variant_names
 #![allow(clippy::enum_variant_names)]
 
+use std::{iter::FromIterator, slice};
+
 use crate::{
+    block::BlockId,
     crypto::Hash,
     db,
     error::Result,
@@ -146,7 +149,7 @@ impl InnerNode {
     }
 }
 
-#[derive(Eq, PartialEq, Ord, PartialOrd, Debug, Clone)]
+#[derive(Eq, PartialEq, Debug, Clone)]
 pub struct LeafNode {
     pub data: LeafData,
     pub is_complete: bool,
@@ -171,6 +174,90 @@ impl LeafNode {
         .execute(&mut *tx)
         .await?;
         Ok(())
+    }
+}
+
+/// Collection that acts as a ordered set of `LeafNode`s
+#[derive(Default, Debug)]
+pub struct LeafNodeSet(Vec<LeafNode>);
+
+impl LeafNodeSet {
+    /// Inserts a new node or updates it if already exists. Returns `true` if the node was inserted
+    /// or updated and `false` if it already existed with the same `block_id`.
+    pub fn insert_or_update(&mut self, locator: &Hash, block_id: &BlockId) -> bool {
+        match self.lookup(locator) {
+            Ok(index) => {
+                let node = &mut self.0[index];
+
+                if &node.data.block_id == block_id {
+                    // node already exists with the same block id
+                    return false;
+                }
+
+                node.data.block_id = *block_id;
+            }
+            Err(index) => self.0.insert(
+                index,
+                LeafNode {
+                    data: LeafData {
+                        locator: *locator,
+                        block_id: *block_id,
+                    },
+                    is_complete: true,
+                    missing_blocks_crc: 0,
+                    missing_blocks_count: 0,
+                },
+            ),
+        }
+
+        true
+    }
+
+    pub fn remove(&mut self, locator: &Hash) -> Option<LeafNode> {
+        let index = self.lookup(locator).ok()?;
+        Some(self.0.remove(index))
+    }
+
+    pub fn get(&self, locator: &Hash) -> Option<&LeafNode> {
+        self.lookup(locator).ok().map(|index| &self.0[index])
+    }
+
+    pub fn iter(&self) -> slice::Iter<LeafNode> {
+        self.0.iter()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn as_slice(&self) -> &[LeafNode] {
+        &self.0
+    }
+
+    fn lookup(&self, locator: &Hash) -> Result<usize, usize> {
+        self.0
+            .binary_search_by(|node| node.data.locator.cmp(locator))
+    }
+}
+
+impl FromIterator<LeafNode> for LeafNodeSet {
+    fn from_iter<T>(iter: T) -> Self
+    where
+        T: IntoIterator<Item = LeafNode>,
+    {
+        let mut vec: Vec<_> = iter.into_iter().collect();
+        vec.sort_by(|lhs, rhs| lhs.data.locator.cmp(&rhs.data.locator));
+
+        Self(vec)
+    }
+}
+
+impl<'a> IntoIterator for &'a LeafNodeSet {
+    type Item = &'a LeafNode;
+    type IntoIter = slice::Iter<'a, LeafNode>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
     }
 }
 
@@ -205,7 +292,7 @@ pub async fn inner_children(
     Ok(children)
 }
 
-pub async fn leaf_children(parent: &Hash, tx: &mut db::Transaction) -> Result<Vec<LeafNode>> {
+pub async fn leaf_children(parent: &Hash, tx: &mut db::Transaction) -> Result<LeafNodeSet> {
     let rows = sqlx::query(
         "SELECT data, is_complete, missing_blocks_crc, missing_blocks_count
                             FROM snapshot_forest WHERE parent=?",

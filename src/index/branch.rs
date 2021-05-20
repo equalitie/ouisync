@@ -125,16 +125,9 @@ impl Branch {
 
         path.leaves = leaf_children(&parent, tx).await?;
 
-        let has_locator = path
-            .leaves
-            .iter()
-            .any(|l| l.data.locator == *encoded_locator);
-
-        if has_locator {
+        if path.leaves.get(encoded_locator).is_some() {
             path.layers_found += 1;
         }
-
-        path.leaves.sort();
 
         Ok(path)
     }
