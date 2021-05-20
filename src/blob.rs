@@ -492,12 +492,7 @@ async fn load_block(
     cryptor: &Cryptor,
     locator: &Locator,
 ) -> Result<(BlockId, Buffer, AuthTag)> {
-    let id = if let Some(encoded_locator) = locator.encode(cryptor) {
-        branch.get(tx, &encoded_locator).await?
-    } else {
-        branch.get_root(tx).await?
-    };
-
+    let id = branch.get(tx, &locator.encode(cryptor)).await?;
     let mut content = Buffer::new();
     let auth_tag = block::read(tx, &id, &mut content).await?;
 
@@ -526,12 +521,9 @@ async fn write_block(
     let auth_tag = cryptor.encrypt(&nonce, &aad, &mut buffer[offset..])?;
 
     block::write(tx, block_id, &buffer, &auth_tag).await?;
-
-    if let Some(encoded_locator) = locator.encode(cryptor) {
-        branch.insert(tx, block_id, &encoded_locator).await?;
-    } else {
-        branch.insert_root(tx, block_id).await?;
-    }
+    branch
+        .insert(tx, block_id, &locator.encode(cryptor))
+        .await?;
 
     Ok(())
 }

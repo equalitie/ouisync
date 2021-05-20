@@ -55,11 +55,6 @@ impl Branch {
         self.remove_snapshot(&old_root, tx).await
     }
 
-    /// Insert the root block into the index
-    pub async fn insert_root(&self, tx: &mut db::Transaction, block_id: &BlockId) -> Result<()> {
-        self.insert(tx, block_id, &Hash::null()).await
-    }
-
     /// Retrieve `BlockId` of a block with the given encoded `Locator`.
     pub async fn get(&self, tx: &mut db::Transaction, encoded_locator: &Hash) -> Result<BlockId> {
         let lock = self.root_node.lock().await;
@@ -76,11 +71,6 @@ impl Branch {
         }
     }
 
-    /// Get the root block from the index.
-    pub async fn get_root(&self, tx: &mut db::Transaction) -> Result<BlockId> {
-        self.get(tx, &Hash::null()).await
-    }
-
     /// Remove the block identified by encoded_locator from the index
     pub async fn remove(&self, tx: &mut db::Transaction, encoded_locator: &Hash) -> Result<()> {
         let mut lock = self.root_node.lock().await;
@@ -88,11 +78,6 @@ impl Branch {
         path.remove_leaf(encoded_locator);
         let old_root = self.write_path(tx, &mut lock, &path).await?;
         self.remove_snapshot(&old_root, tx).await
-    }
-
-    /// Remove the root block from the index
-    pub async fn remove_root(&self, tx: &mut db::Transaction) -> Result<()> {
-        self.remove(tx, &Hash::null()).await
     }
 
     async fn get_path(
@@ -201,7 +186,7 @@ mod tests {
             .unwrap();
         let block_id = BlockId::random();
         let locator = Locator::Head(block_id.name, 0);
-        let encoded_locator = locator.encode(&Cryptor::Null).unwrap();
+        let encoded_locator = locator.encode(&Cryptor::Null);
 
         let mut tx = pool.begin().await.unwrap();
 
@@ -227,7 +212,7 @@ mod tests {
             let b2 = BlockId::random();
 
             let locator = Locator::Head(b1.name, 0);
-            let encoded_locator = locator.encode(&Cryptor::Null).unwrap();
+            let encoded_locator = locator.encode(&Cryptor::Null);
             let mut tx = pool.begin().await.unwrap();
 
             branch.insert(&mut tx, &b1, &encoded_locator).await.unwrap();
@@ -253,7 +238,7 @@ mod tests {
 
         let b = BlockId::random();
         let locator = Locator::Head(b.name, 0);
-        let encoded_locator = locator.encode(&Cryptor::Null).unwrap();
+        let encoded_locator = locator.encode(&Cryptor::Null);
         let mut tx = pool.begin().await.unwrap();
 
         assert_eq!(0, count_branch_forest_entries(&mut tx).await);
