@@ -6,8 +6,11 @@ mod index;
 mod node;
 mod path;
 
+pub use self::branch::Branch;
+pub use self::index::Index;
+
+use self::node::{InnerData, LeafData, NodeData};
 use crate::{
-    block::{BlockId, BlockName, BlockVersion},
     crypto::Hash,
     db,
     error::{Error, Result},
@@ -15,7 +18,6 @@ use crate::{
 };
 use sqlx::{sqlite::SqliteRow, Row};
 use std::convert::TryFrom;
-use std::iter::Iterator;
 
 /// Number of layers in the tree excluding the layer with root and the layer with leaf nodes.
 const INNER_LAYER_COUNT: usize = 3;
@@ -25,9 +27,6 @@ type Crc = u32;
 type SnapshotId = u32;
 // u64 doesn't seem to implement Decode<'_, Sqlite>
 type MissingBlocksCount = i64;
-
-pub use self::branch::Branch;
-pub use self::index::Index;
 
 /// Initializes the index. Creates the required database schema unless already exists.
 pub async fn init(pool: &db::Pool) -> Result<(), Error> {
@@ -96,47 +95,6 @@ impl TryFrom<&'_ SqliteRow> for SnapshotRootRow {
             root_hash: column::<Hash>(row, 5)?,
         })
     }
-}
-
-#[derive(Debug)]
-pub struct InnerData {
-    pub hash: Hash,
-}
-
-#[derive(Eq, PartialEq, Ord, PartialOrd, Clone, Debug)]
-pub struct LeafData {
-    pub locator: Hash,
-    pub block_id: BlockId,
-}
-
-impl LeafData {
-    pub fn serialize(&self) -> Vec<u8> {
-        self.locator
-            .as_ref()
-            .iter()
-            .chain(self.block_id.name.as_ref().iter())
-            .chain(self.block_id.version.as_ref().iter())
-            .cloned()
-            .collect()
-    }
-
-    pub fn deserialize(blob: &[u8]) -> Result<LeafData> {
-        let (b1, b2) = blob.split_at(std::mem::size_of::<Hash>());
-        let (b2, b3) = b2.split_at(std::mem::size_of::<BlockName>());
-        let locator = Hash::try_from(b1)?;
-        let name = BlockName::try_from(b2)?;
-        let version = BlockVersion::try_from(b3)?;
-        Ok(LeafData {
-            locator,
-            block_id: BlockId { name, version },
-        })
-    }
-}
-
-#[derive(Debug)]
-pub enum NodeData {
-    Inner(InnerData),
-    Leaf(LeafData),
 }
 
 #[derive(Debug)]

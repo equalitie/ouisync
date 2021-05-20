@@ -3,7 +3,6 @@ use crate::{
     crypto::{Cryptor, Hash},
 };
 use sha3::{Digest, Sha3_256};
-use std::slice;
 
 /// A type of block identifier similar to `BlockId` but serving a different purpose. While
 /// `BlockId` reflects the block content (it changes when the content change), `Locator` reflects
@@ -43,15 +42,7 @@ impl Locator {
     }
 
     /// One-way encoding of this `Locator` for the use in the index.
-    /// Returns `None` only if `self` is `Root`. This is because root locator doesn't need to be
-    /// stored in the index.
-    pub fn encode(&self, cryptor: &Cryptor) -> Option<Hash> {
-        let (name, seq, flag) = match self {
-            Self::Root => return None,
-            Self::Head(name, seq) => (name, seq, 0),
-            Self::Trunk(name, seq) => (name, seq, 1),
-        };
-
+    pub fn encode(&self, cryptor: &Cryptor) -> Hash {
         let mut hasher = Sha3_256::new();
 
         match cryptor {
@@ -62,13 +53,20 @@ impl Locator {
             Cryptor::Null => {}
         }
 
-        Some(
-            hasher
-                .chain(name)
-                .chain(seq.to_le_bytes())
-                .chain(slice::from_ref(&flag))
-                .finalize()
-                .into(),
-        )
+        match self {
+            Self::Root => (),
+            Self::Head(name, seq) => {
+                hasher.update(name);
+                hasher.update(seq.to_le_bytes());
+                hasher.update(&[0]);
+            }
+            Self::Trunk(name, seq) => {
+                hasher.update(name);
+                hasher.update(seq.to_le_bytes());
+                hasher.update(&[1]);
+            }
+        }
+
+        hasher.finalize().into()
     }
 }

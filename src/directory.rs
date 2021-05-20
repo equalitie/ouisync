@@ -170,8 +170,7 @@ impl Directory {
         let src_head_block_id = self
             .blob
             .branch()
-            // `unwrap` is ok here because `src_locator` is not `Locator::Root`.
-            .get(&mut tx, &src_locator.encode(self.blob.cryptor()).unwrap())
+            .get(&mut tx, &src_locator.encode(self.blob.cryptor()))
             .await?;
 
         let dst_dir = dst_dir.get(self);
@@ -197,8 +196,7 @@ impl Directory {
             .insert(
                 &mut tx,
                 &src_head_block_id,
-                // `unwrap` is ok here as well because `new_dst_locator` is not `Locator::Root`.
-                &new_dst_locator.encode(dst_dir.blob.cryptor()).unwrap(),
+                &new_dst_locator.encode(dst_dir.blob.cryptor()),
             )
             .await?;
 
