@@ -9,7 +9,7 @@ use crate::{
 use std::{
     convert::TryInto,
     io::SeekFrom,
-    mem,
+    iter, mem,
     ops::{Deref, DerefMut},
 };
 use zeroize::Zeroize;
@@ -29,10 +29,6 @@ pub struct Blob {
 
 impl Blob {
     /// Opens an existing blob.
-    ///
-    /// - `directory_name` is the name of the head block of the directory containing the blob.
-    ///   `None` if the blob is the root blob.
-    /// - `directory_seq` is the sequence number of the blob within its directory.
     pub(crate) async fn open(
         pool: db::Pool,
         branch: Branch,
@@ -41,14 +37,9 @@ impl Blob {
     ) -> Result<Self> {
         // NOTE: no need to commit this transaction because we are only reading here.
         let mut tx = pool.begin().await?;
-        let (id, buffer, auth_tag) = load_block(&branch, &mut tx, &cryptor, &locator).await?;
 
-        let mut content = Cursor::new(buffer);
-
-        let nonce_sequence = NonceSequence::new(content.read_array());
-        let nonce = nonce_sequence.get(0);
-
-        cryptor.decrypt(&nonce, &id.as_array(), &mut content, &auth_tag)?;
+        let (id, mut content, nonce_sequence) =
+            read_head_block(&branch, &mut tx, &cryptor, &locator).await?;
 
         let len = content.read_u64();
 
@@ -72,14 +63,7 @@ impl Blob {
     }
 
     /// Creates a new blob.
-    ///
-    /// See [`Self::open`] for explanation of `directory_name` and `directory_seq`.
-    pub(crate) fn create(
-        pool: db::Pool,
-        branch: Branch,
-        cryptor: Cryptor,
-        locator: Locator,
-    ) -> Self {
+    pub fn create(pool: db::Pool, branch: Branch, cryptor: Cryptor, locator: Locator) -> Self {
         let nonce_sequence = NonceSequence::new(rand::random());
         let mut content = Cursor::new(Buffer::new());
 
@@ -104,6 +88,35 @@ impl Blob {
             len: 0,
             len_dirty: false,
         }
+    }
+
+    /// Removes a blob.
+    pub async fn remove(
+        pool: &db::Pool,
+        branch: &Branch,
+        cryptor: &Cryptor,
+        locator: &Locator,
+    ) -> Result<()> {
+        let mut tx = pool.begin().await?;
+
+        // Load the head block to read the blob length from it in order to know how many
+        // blocks this blob contains.
+        let (id, mut content, nonce_sequence) =
+            read_head_block(branch, &mut tx, cryptor, locator).await?;
+        let len = content.read_u64();
+        let block_count = block_count(len, &nonce_sequence);
+        let head_name = id.name;
+
+        let locators =
+            iter::once(*locator).chain((1..block_count).map(|seq| Locator::Trunk(head_name, seq)));
+        for locator in locators {
+            branch.remove(&mut tx, &locator.encode(&cryptor)).await?;
+            // TODO: delete the block as well
+        }
+
+        tx.commit().await?;
+
+        Ok(())
     }
 
     pub fn branch(&self) -> &Branch {
@@ -423,10 +436,7 @@ impl Blob {
 
     // Total number of blocks in this blob including the possibly partially filled final block.
     fn block_count(&self) -> u32 {
-        // https://stackoverflow.com/questions/2745074/fast-ceiling-of-an-integer-division-in-c-c
-        (1 + (self.len + self.header_size() as u64 - 1) / BLOCK_SIZE as u64)
-            .try_into()
-            .unwrap_or(u32::MAX)
+        block_count(self.len, &self.nonce_sequence)
     }
 
     // Returns the current seek position from the start of the blob.
@@ -437,7 +447,7 @@ impl Blob {
     }
 
     fn header_size(&self) -> usize {
-        self.nonce_sequence.prefix().len() + mem::size_of_val(&self.len)
+        header_size(self.len, &self.nonce_sequence)
     }
 
     fn locator_at(&self, number: u32) -> Locator {
@@ -462,6 +472,17 @@ impl Blob {
     }
 }
 
+fn block_count(len: u64, nonce_sequence: &NonceSequence) -> u32 {
+    // https://stackoverflow.com/questions/2745074/fast-ceiling-of-an-integer-division-in-c-c
+    (1 + (len + header_size(len, nonce_sequence) as u64 - 1) / BLOCK_SIZE as u64)
+        .try_into()
+        .unwrap_or(u32::MAX)
+}
+
+fn header_size(len: u64, nonce_sequence: &NonceSequence) -> usize {
+    nonce_sequence.prefix().len() + mem::size_of_val(&len)
+}
+
 async fn read_block(
     branch: &Branch,
     tx: &mut db::Transaction,
@@ -484,6 +505,24 @@ async fn read_block(
     cryptor.decrypt(&nonce, &aad, &mut buffer[offset..], &auth_tag)?;
 
     Ok((id, buffer))
+}
+
+async fn read_head_block(
+    branch: &Branch,
+    tx: &mut db::Transaction,
+    cryptor: &Cryptor,
+    locator: &Locator,
+) -> Result<(BlockId, Cursor, NonceSequence)> {
+    let (id, buffer, auth_tag) = load_block(&branch, tx, cryptor, locator).await?;
+
+    let mut content = Cursor::new(buffer);
+
+    let nonce_sequence = NonceSequence::new(content.read_array());
+    let nonce = nonce_sequence.get(0);
+
+    cryptor.decrypt(&nonce, &id.as_array(), &mut content, &auth_tag)?;
+
+    Ok((id, content, nonce_sequence))
 }
 
 async fn load_block(
@@ -657,7 +696,7 @@ impl DerefMut for Cursor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{crypto::SecretKey, replica_id::ReplicaId};
+    use crate::{crypto::SecretKey, error::Error, replica_id::ReplicaId};
     use proptest::{collection::vec, prelude::*};
     use rand::{distributions::Standard, prelude::*};
     use std::future::Future;
@@ -886,6 +925,51 @@ mod tests {
             blob.read(&mut read_buffer).await.unwrap();
             assert_eq!(read_buffer, content);
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn remove_blob() {
+        let (mut rng, cryptor, pool, branch) = setup(0).await;
+
+        let parent_name = rng.gen();
+        let locator0 = Locator::Head(parent_name, 0);
+
+        let content: Vec<_> = (&mut rng)
+            .sample_iter(Standard)
+            .take(2 * BLOCK_SIZE)
+            .collect();
+
+        let mut blob = Blob::create(pool.clone(), branch.clone(), cryptor.clone(), locator0);
+        blob.write(&content).await.unwrap();
+        blob.flush().await.unwrap();
+
+        let locator1 = Locator::Trunk(*blob.head_name(), 1);
+        let encoded_locator0 = locator0.encode(&cryptor);
+        let encoded_locator1 = locator1.encode(&cryptor);
+
+        // Check the block entries are in the branch
+        let mut tx = pool.begin().await.unwrap();
+        assert!(branch.get(&mut tx, &encoded_locator0).await.is_ok());
+        assert!(branch.get(&mut tx, &encoded_locator1).await.is_ok());
+        drop(tx);
+
+        // Remove the blob
+        Blob::remove(&pool, &branch, &cryptor, &locator0)
+            .await
+            .unwrap();
+
+        // Check the block entries were deleted from the branch
+        let mut tx = pool.begin().await.unwrap();
+        assert!(matches!(
+            branch.get(&mut tx, &encoded_locator0).await,
+            Err(Error::EntryNotFound)
+        ));
+        assert!(matches!(
+            branch.get(&mut tx, &encoded_locator1).await,
+            Err(Error::EntryNotFound)
+        ));
+
+        // TODO: check the blocks are deleted as well
     }
 
     // proptest doesn't work with the `#[tokio::test]` macro yet

@@ -123,12 +123,18 @@ impl Directory {
     }
 
     pub async fn remove_file(&mut self, name: &OsStr) -> Result<()> {
-        self.lookup(name)?.entry_type().check_is_file()?;
-        let _seq = self.content.remove(name)?;
+        let info = self.lookup(name)?;
+        info.entry_type().check_is_file()?;
 
-        // TODO: actually delete the file blob
+        File::remove(
+            &self.blob.db_pool(),
+            &self.blob.branch(),
+            &self.blob.cryptor(),
+            &info.locator(),
+        )
+        .await?;
 
-        Ok(())
+        self.content.remove(name)
     }
 
     pub async fn remove_directory(&mut self, name: &OsStr) -> Result<()> {
@@ -331,15 +337,14 @@ impl Content {
         VacantEntry { seq, content: self }
     }
 
-    fn remove(&mut self, name: &OsStr) -> Result<u32> {
-        let seq = self
-            .entries
+    fn remove(&mut self, name: &OsStr) -> Result<()> {
+        self.entries
             .remove(name)
             .map(|data| data.seq)
             .ok_or(Error::EntryNotFound)?;
         self.dirty = true;
 
-        Ok(seq)
+        Ok(())
     }
 
     // Returns next available seq number.
@@ -467,19 +472,21 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn remove_entry_from_existing_directory() {
+    async fn remove_file() {
         let (pool, branch) = setup().await;
 
         let name = OsStr::new("monkey.txt");
 
-        // Create a directory with a single entry.
+        // Create a directory with a single file.
         let mut parent_dir =
             Directory::create(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root);
         let mut file = parent_dir.create_file(name.into()).unwrap();
         file.flush().await.unwrap();
         parent_dir.flush().await.unwrap();
 
-        // Reopen and remove the entry
+        let file_locator = *file.locator();
+
+        // Reopen and remove the file
         let mut parent_dir =
             Directory::open(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root)
                 .await
@@ -487,10 +494,11 @@ mod tests {
         parent_dir.remove_file(name).await.unwrap();
         parent_dir.flush().await.unwrap();
 
-        // Reopen again and check the file was removed.
-        let parent_dir = Directory::open(pool, branch.clone(), Cryptor::Null, Locator::Root)
-            .await
-            .unwrap();
+        // Reopen again and check the file entry was removed.
+        let parent_dir =
+            Directory::open(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root)
+                .await
+                .unwrap();
         match parent_dir.lookup(name) {
             Err(Error::EntryNotFound) => (),
             Err(error) => panic!("unexpected error {:?}", error),
@@ -498,6 +506,13 @@ mod tests {
         }
 
         assert_eq!(parent_dir.entries().len(), 0);
+
+        // Check the file itself was removed as well.
+        match File::open(pool, branch.clone(), Cryptor::Null, file_locator).await {
+            Err(Error::EntryNotFound) => (),
+            Err(error) => panic!("unexpected error {:?}", error),
+            Ok(_) => panic!("file should not exists but it does"),
+        }
     }
 
     #[tokio::test(flavor = "multi_thread")]
