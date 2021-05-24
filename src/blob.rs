@@ -666,6 +666,7 @@ impl DerefMut for Cursor {
 mod tests {
     use super::*;
     use crate::{crypto::SecretKey, error::Error, replica_id::ReplicaId};
+    use assert_matches::assert_matches;
     use proptest::{collection::vec, prelude::*};
     use rand::{distributions::Standard, prelude::*};
     use std::future::Future;
@@ -921,14 +922,14 @@ mod tests {
 
         // Check the block entries were deleted from the index.
         let mut tx = pool.begin().await.unwrap();
-        assert!(matches!(
+        assert_matches!(
             branch.get(&mut tx, &encoded_locator0).await,
             Err(Error::EntryNotFound)
-        ));
-        assert!(matches!(
+        );
+        assert_matches!(
             branch.get(&mut tx, &encoded_locator1).await,
             Err(Error::EntryNotFound)
-        ));
+        );
 
         // TODO: check the blocks are deleted as well
     }
@@ -964,10 +965,10 @@ mod tests {
         // because it's used to store the metadata. It's only deleted when the whole blob is
         // deleted).
         let mut tx = pool.begin().await.unwrap();
-        assert!(matches!(
+        assert_matches!(
             branch.get(&mut tx, &locator1.encode(&cryptor)).await,
             Err(Error::EntryNotFound)
-        ));
+        );
     }
 
     // proptest doesn't work with the `#[tokio::test]` macro yet
