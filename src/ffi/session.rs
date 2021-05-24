@@ -1,5 +1,6 @@
 use super::{
     dart::{DartCObject, PostDartCObjectFn},
+    logger::Logger,
     utils::{self, AssumeSend, Port},
 };
 use crate::{db, error::Result};
@@ -11,7 +12,6 @@ use std::{
     os::raw::{c_char, c_void},
     path::PathBuf,
     ptr,
-    sync::Once,
 };
 use tokio::runtime::{self, Runtime};
 
@@ -35,8 +35,13 @@ pub unsafe extern "C" fn session_open(
     }
 
     // Init logger
-    static LOG_INIT: Once = Once::new();
-    LOG_INIT.call_once(env_logger::init);
+    let logger = match Logger::new() {
+        Ok(logger) => logger,
+        Err(error) => {
+            sender.send_err(port, error_ptr, error);
+            return;
+        }
+    };
 
     let runtime = match runtime::Builder::new_multi_thread().enable_time().build() {
         Ok(runtime) => runtime,
@@ -61,6 +66,7 @@ pub unsafe extern "C" fn session_open(
             runtime,
             pool: db::init(store).await?,
             sender,
+            _logger: logger,
         };
 
         assert!(SESSION.is_null());
@@ -117,6 +123,7 @@ struct Session {
     runtime: Runtime,
     pool: db::Pool,
     sender: Sender,
+    _logger: Logger,
 }
 
 pub(super) struct Context<'a, T> {
