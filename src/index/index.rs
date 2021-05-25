@@ -43,7 +43,7 @@ impl Index {
             .fetch_all(&mut *conn)
             .await?
             .iter()
-            .map(|row| column::<ReplicaId>(row, 0).map_err(From::from))
+            .map(|row| column(row, 0).map_err(From::from))
             .collect()
     }
 

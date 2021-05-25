@@ -49,10 +49,10 @@ impl RootNode {
             {
                 Some(row) => (
                     row.get(0),
-                    column::<Hash>(&row, 1)?,
-                    row.get::<'_, u16, _>(2) != 0,
-                    row.get::<'_, u32, _>(3),
-                    row.get::<'_, MissingBlocksCount, _>(4) as usize,
+                    column(&row, 1)?,
+                    row.get(2),
+                    row.get(3),
+                    row.get::<MissingBlocksCount, _>(4) as usize,
                 ),
                 None => {
                     let snapshot_id = sqlx::query(
@@ -161,7 +161,7 @@ impl InnerNode {
         .bind(parent.as_ref())
         .bind(self.hash.as_ref())
         .bind(bucket as u16)
-        .bind(self.is_complete as u16)
+        .bind(self.is_complete)
         .bind(self.missing_blocks_crc)
         .bind(self.missing_blocks_count as MissingBlocksCount)
         .execute(&mut *tx)
@@ -202,9 +202,9 @@ pub async fn inner_children(
     for row in rows {
         let hash = column::<Hash>(&row, 0)?;
         let bucket: u32 = row.get(1);
-        let is_complete = row.get::<'_, u16, _>(2) != 0;
+        let is_complete = row.get(2);
         let missing_blocks_crc = row.get(3);
-        let missing_blocks_count = row.get::<'_, MissingBlocksCount, _>(4) as usize;
+        let missing_blocks_count = row.get::<MissingBlocksCount, _>(4) as usize;
 
         if let Some(node) = children.get_mut(bucket as usize) {
             *node = InnerNode {
@@ -242,7 +242,7 @@ impl LeafNode {
         .bind(parent.as_ref())
         .bind(self.data.locator.as_ref())
         .bind(self.data.block_id.as_array().as_ref())
-        .bind(self.is_block_missing as u16)
+        .bind(self.is_block_missing)
         .execute(&mut *tx)
         .await?;
         Ok(())
@@ -267,7 +267,7 @@ pub async fn leaf_children(parent: &Hash, tx: &mut db::Transaction) -> Result<Le
 
             Ok(LeafNode {
                 data,
-                is_block_missing: row.get::<'_, u16, _>(2) != 0,
+                is_block_missing: row.get(2),
             })
         })
         .collect()
@@ -501,7 +501,7 @@ impl Link {
                 parent: column(row, 0)?,
                 node: InnerNode {
                     hash: column(row, 1)?,
-                    is_complete: row.get::<u16, _>(2) != 0,
+                    is_complete: row.get(2),
                     missing_blocks_crc: row.get(3),
                     missing_blocks_count: row.get::<MissingBlocksCount, _>(4) as usize,
                 },
@@ -528,7 +528,7 @@ impl Link {
                 parent: column(row, 0)?,
                 node: LeafNode {
                     data: LeafData { locator, block_id },
-                    is_block_missing: row.get::<u16, _>(3) != 0,
+                    is_block_missing: row.get(3),
                 },
             })
         })
