@@ -13,8 +13,6 @@ use crate::{
     db,
     error::{Error, Result},
 };
-use sqlx::{sqlite::SqliteRow, Row};
-use std::convert::TryFrom;
 
 /// Number of layers in the tree excluding the layer with root and the layer with leaf nodes.
 const INNER_LAYER_COUNT: usize = 3;
@@ -80,13 +78,4 @@ pub async fn init(pool: &db::Pool) -> Result<(), Error> {
     .map_err(Error::CreateDbSchema)?;
 
     Ok(())
-}
-
-fn column<'a, T: TryFrom<&'a [u8]>>(
-    row: &'a SqliteRow,
-    i: usize,
-) -> std::result::Result<T, T::Error> {
-    let value: &'a [u8] = row.get::<'a>(i);
-    let value = T::try_from(value)?;
-    Ok(value)
 }

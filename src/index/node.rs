@@ -1,21 +1,14 @@
-// We're not repeating enumeration name
-// https://rust-lang.github.io/rust-clippy/master/index.html#enum_variant_names
-#![allow(clippy::enum_variant_names)]
-
-use std::{convert::TryFrom, iter::FromIterator, slice};
-
 use crate::{
     block::BlockId,
     crypto::Hash,
     db,
     error::Result,
-    index::{
-        column, Crc, MissingBlocksCount, SnapshotId, INNER_LAYER_COUNT, MAX_INNER_NODE_CHILD_COUNT,
-    },
+    index::{Crc, MissingBlocksCount, SnapshotId, INNER_LAYER_COUNT, MAX_INNER_NODE_CHILD_COUNT},
     replica_id::ReplicaId,
 };
 use async_recursion::async_recursion;
 use sqlx::Row;
+use std::{convert::TryFrom, iter::FromIterator, slice};
 
 #[derive(Clone, Debug)]
 pub struct RootNode {
@@ -49,7 +42,7 @@ impl RootNode {
             {
                 Some(row) => (
                     row.get(0),
-                    column(&row, 1)?,
+                    row.get(1),
                     row.get(2),
                     row.get(3),
                     row.get::<MissingBlocksCount, _>(4) as usize,
@@ -200,7 +193,7 @@ pub async fn inner_children(
     let mut children = [InnerNode::empty(); MAX_INNER_NODE_CHILD_COUNT];
 
     for row in rows {
-        let hash = column::<Hash>(&row, 0)?;
+        let hash = row.get(0);
         let bucket: u32 = row.get(1);
         let is_complete = row.get(2);
         let missing_blocks_crc = row.get(3);
@@ -261,9 +254,10 @@ pub async fn leaf_children(parent: &Hash, tx: &mut db::Transaction) -> Result<Le
 
     rows.into_iter()
         .map(|row| {
-            let locator = column(&row, 0)?;
-            let block_id = column(&row, 1)?;
-            let data = LeafData { locator, block_id };
+            let data = LeafData {
+                locator: row.get(0),
+                block_id: row.get(1),
+            };
 
             Ok(LeafNode {
                 data,
@@ -390,6 +384,9 @@ impl LeafData {
     }
 }
 
+// We're not repeating enumeration name
+// https://rust-lang.github.io/rust-clippy/master/index.html#enum_variant_names
+#[allow(clippy::enum_variant_names)]
 #[derive(Debug)]
 enum Link {
     ToRoot { node: RootNode },
@@ -498,9 +495,9 @@ impl Link {
         .iter()
         .map(|row| {
             Ok(Link::ToInner {
-                parent: column(row, 0)?,
+                parent: row.get(0),
                 node: InnerNode {
-                    hash: column(row, 1)?,
+                    hash: row.get(1),
                     is_complete: row.get(2),
                     missing_blocks_crc: row.get(3),
                     missing_blocks_count: row.get::<MissingBlocksCount, _>(4) as usize,
@@ -521,13 +518,13 @@ impl Link {
         .await?
         .iter()
         .map(|row| {
-            let locator = column(row, 1)?;
-            let block_id = column(row, 2)?;
-
             Ok(Link::ToLeaf {
-                parent: column(row, 0)?,
+                parent: row.get(0),
                 node: LeafNode {
-                    data: LeafData { locator, block_id },
+                    data: LeafData {
+                        locator: row.get(1),
+                        block_id: row.get(2),
+                    },
                     is_block_missing: row.get(3),
                 },
             })

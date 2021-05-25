@@ -1,11 +1,15 @@
 use crate::format;
-use sha3::digest::generic_array::typenum::Unsigned;
 use sha3::{
     digest::{
-        generic_array::{sequence::GenericSequence, GenericArray},
+        generic_array::{sequence::GenericSequence, typenum::Unsigned, GenericArray},
         Digest,
     },
     Sha3_256,
+};
+use sqlx::{
+    error::BoxDynError,
+    sqlite::{Sqlite, SqliteTypeInfo, SqliteValueRef},
+    Decode, Type,
 };
 use std::{
     array::TryFromSliceError,
@@ -71,6 +75,19 @@ impl TryFrom<&'_ [u8]> for Hash {
     fn try_from(slice: &[u8]) -> Result<Self, Self::Error> {
         let slice: [u8; Self::SIZE] = slice.try_into()?;
         Ok(Self(slice.into()))
+    }
+}
+
+impl<'r> Decode<'r, Sqlite> for Hash {
+    fn decode(value: SqliteValueRef<'r>) -> Result<Self, BoxDynError> {
+        let slice = <&[u8]>::decode(value)?;
+        Ok(slice.try_into()?)
+    }
+}
+
+impl Type<Sqlite> for Hash {
+    fn type_info() -> SqliteTypeInfo {
+        <&[u8] as Type<Sqlite>>::type_info()
     }
 }
 

@@ -1,10 +1,5 @@
-use crate::{
-    db,
-    error::Result,
-    index::{column, Branch},
-    ReplicaId,
-};
-
+use crate::{db, error::Result, index::Branch, ReplicaId};
+use sqlx::Row;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -39,12 +34,14 @@ impl Index {
     }
 
     async fn replicas(conn: &mut db::Connection) -> Result<HashSet<ReplicaId>> {
-        sqlx::query("SELECT DISTINCT replica_id FROM snapshot_root_nodes")
-            .fetch_all(&mut *conn)
-            .await?
-            .iter()
-            .map(|row| column(row, 0).map_err(From::from))
-            .collect()
+        Ok(
+            sqlx::query("SELECT DISTINCT replica_id FROM snapshot_root_nodes")
+                .fetch_all(&mut *conn)
+                .await?
+                .iter()
+                .map(|row| row.get(0))
+                .collect(),
+        )
     }
 
     async fn read_branches(&self, replica_ids: &HashSet<ReplicaId>) -> Result<()> {

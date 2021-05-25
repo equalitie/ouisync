@@ -7,6 +7,11 @@ use rand::{
     distributions::{Distribution, Standard},
     Rng,
 };
+use sqlx::{
+    error::BoxDynError,
+    sqlite::{Sqlite, SqliteTypeInfo, SqliteValueRef},
+    Decode, Type,
+};
 use std::{
     array::TryFromSliceError,
     convert::{TryFrom, TryInto},
@@ -156,6 +161,19 @@ impl TryFrom<&[u8]> for BlockId {
         let version = BlockVersion::try_from(&slice[split_at..])?;
 
         Ok(Self { name, version })
+    }
+}
+
+impl<'r> Decode<'r, Sqlite> for BlockId {
+    fn decode(value: SqliteValueRef<'r>) -> Result<Self, BoxDynError> {
+        let slice = <&[u8]>::decode(value)?;
+        Ok(slice.try_into()?)
+    }
+}
+
+impl Type<Sqlite> for BlockId {
+    fn type_info() -> SqliteTypeInfo {
+        <&[u8] as Type<Sqlite>>::type_info()
     }
 }
 
