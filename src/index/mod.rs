@@ -9,12 +9,9 @@ mod path;
 pub use self::branch::Branch;
 pub use self::index::Index;
 
-use self::node::{InnerData, LeafData, NodeData};
 use crate::{
-    crypto::Hash,
     db,
     error::{Error, Result},
-    replica_id::ReplicaId,
 };
 use sqlx::{sqlite::SqliteRow, Row};
 use std::convert::TryFrom;
@@ -31,9 +28,12 @@ type MissingBlocksCount = i64;
 /// Initializes the index. Creates the required database schema unless already exists.
 pub async fn init(pool: &db::Pool) -> Result<(), Error> {
     sqlx::query(
-        "CREATE TABLE IF NOT EXISTS snapshot_roots (
+        "CREATE TABLE IF NOT EXISTS snapshot_root_nodes (
              snapshot_id          INTEGER PRIMARY KEY,
              replica_id           BLOB NOT NULL,
+
+             -- Hash of the children
+             hash                 BLOB NOT NULL,
 
              -- Boolean indicating whether the subtree has been completely downloaded
              -- (excluding blocks)
@@ -41,14 +41,17 @@ pub async fn init(pool: &db::Pool) -> Result<(), Error> {
 
              -- XXX: Should be NOT NULL
              missing_blocks_crc   INTEGER,
-             missing_blocks_count INTEGER NOT NULL,
-
-             root_hash            BLOB NOT NULL
+             missing_blocks_count INTEGER NOT NULL
          );
-         CREATE TABLE IF NOT EXISTS snapshot_forest (
-             -- Parent is a hash calculated from its children
+
+         CREATE TABLE IF NOT EXISTS snapshot_inner_nodes (
+             -- Parent's `hash`
              parent               BLOB NOT NULL,
 
+             -- Hash of the children
+             hash                 BLOB NOT NULL,
+
+             -- Index of this node within its siblings
              -- XXX: Should be NOT NULL
              bucket               INTEGER,
 
@@ -58,11 +61,18 @@ pub async fn init(pool: &db::Pool) -> Result<(), Error> {
 
              -- XXX: Should be NOT NULL
              missing_blocks_crc   INTEGER,
-             missing_blocks_count INTEGER NOT NULL,
+             missing_blocks_count INTEGER NOT NULL
+         );
 
-             -- Data is a hash calculated from its children (as the `parent` is), or - if this is
-             -- a leaf layer - data is a blob serialized from the locator hash and BlockId
-             data                 BLOB NOT NULL
+         CREATE TABLE IF NOT EXISTS snapshot_leaf_nodes (
+             -- Parent's `hash`
+             parent               BLOB NOT NULL,
+
+             locator              BLOB NOT NULL,
+             block_id             BLOB NOT NULL,
+
+             -- Is the block pointed to by this node missing?
+             is_block_missing     INTEGER NOT NULL
          );",
     )
     .execute(pool)
@@ -71,85 +81,6 @@ pub async fn init(pool: &db::Pool) -> Result<(), Error> {
 
     Ok(())
 }
-
-#[derive(Debug)]
-pub struct SnapshotRootRow {
-    pub snapshot_id: SnapshotId,
-    pub replica_id: ReplicaId,
-    pub is_complete: bool,
-    pub missing_blocks_crc: Crc,
-    pub missing_blocks_count: MissingBlocksCount,
-    pub root_hash: Hash,
-}
-
-impl TryFrom<&'_ SqliteRow> for SnapshotRootRow {
-    type Error = Error;
-
-    fn try_from(row: &SqliteRow) -> Result<Self, Self::Error> {
-        Ok(Self {
-            snapshot_id: row.get(0),
-            replica_id: column::<ReplicaId>(row, 1)?,
-            is_complete: row.get::<'_, u16, _>(2) != 0,
-            missing_blocks_crc: row.get(3),
-            missing_blocks_count: row.get(4),
-            root_hash: column::<Hash>(row, 5)?,
-        })
-    }
-}
-
-#[derive(Debug)]
-pub struct SnapshotForestRow {
-    pub parent: Hash,
-    pub bucket: usize,
-    pub is_complete: bool,
-    pub missing_blocks_crc: Crc,
-    pub missing_blocks_count: MissingBlocksCount,
-    pub data: NodeData,
-}
-
-impl TryFrom<&'_ SqliteRow> for SnapshotForestRow {
-    type Error = Error;
-
-    fn try_from(row: &SqliteRow) -> Result<Self, Self::Error> {
-        let blob = row.get::<'_, &[u8], _>(5);
-
-        let data = if blob.len() == std::mem::size_of::<Hash>() {
-            let hash = Hash::try_from(blob).unwrap();
-            NodeData::Inner(InnerData { hash })
-        } else {
-            NodeData::Leaf(LeafData::deserialize(blob).unwrap())
-        };
-
-        Ok(Self {
-            parent: column::<Hash>(row, 0)?,
-            bucket: row.get::<'_, u32, _>(1) as usize,
-            is_complete: row.get::<'_, u16, _>(2) != 0,
-            missing_blocks_crc: row.get(3),
-            missing_blocks_count: row.get(4),
-            data,
-        })
-    }
-}
-
-//// Debug
-//async fn fetch_snapshot_roots(tx: &mut db::Transaction) -> Result<Vec<SnapshotRootRow>> {
-//    sqlx::query("select * from snapshot_roots")
-//        .fetch_all(&mut *tx)
-//        .await?
-//        .iter()
-//        .map(SnapshotRootRow::try_from)
-//        .collect()
-//}
-//
-//// Debug
-//async fn fetch_snapshot_nodes(tx: &mut db::Transaction) -> Result<Vec<SnapshotForestRow>> {
-//    sqlx::query("select * from snapshot_forest")
-//        .fetch_all(&mut *tx)
-//        .await?
-//        .iter()
-//        .map(SnapshotForestRow::try_from)
-//        .collect()
-//}
 
 fn column<'a, T: TryFrom<&'a [u8]>>(
     row: &'a SqliteRow,

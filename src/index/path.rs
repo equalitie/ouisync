@@ -200,9 +200,9 @@ fn calculate_missing_blocks_crc_from_leaves(leaves: &[LeafNode]) -> (Crc, usize)
     let mut digest = crc32::Digest::new(crc32::IEEE);
 
     for l in leaves {
-        if l.missing_blocks_crc != 0 {
+        if l.is_block_missing {
             cnt += 1;
-            digest.write(l.missing_blocks_crc.to_le_bytes().as_ref());
+            digest.write(&[1]);
         }
     }
 

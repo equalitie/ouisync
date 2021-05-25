@@ -43,7 +43,7 @@ impl Branch {
         encoded_locator: &LocatorHash,
     ) -> Result<()> {
         let mut lock = self.root_node.lock().await;
-        let mut path = self.get_path(tx, &lock.root_hash, &encoded_locator).await?;
+        let mut path = self.get_path(tx, &lock.hash, &encoded_locator).await?;
 
         // We shouldn't be inserting a block to a branch twice. If we do, the assumption is that we
         // hit one in 2^sizeof(BlockVersion) chance that we randomly generated the same
@@ -59,11 +59,11 @@ impl Branch {
     pub async fn get(&self, tx: &mut db::Transaction, encoded_locator: &Hash) -> Result<BlockId> {
         let lock = self.root_node.lock().await;
 
-        if lock.root_hash.is_null() {
+        if lock.hash.is_null() {
             return Err(Error::EntryNotFound);
         }
 
-        let path = self.get_path(tx, &lock.root_hash, &encoded_locator).await?;
+        let path = self.get_path(tx, &lock.hash, &encoded_locator).await?;
 
         match path.get_leaf() {
             Some(block_id) => Ok(block_id),
@@ -74,7 +74,7 @@ impl Branch {
     /// Remove the block identified by encoded_locator from the index
     pub async fn remove(&self, tx: &mut db::Transaction, encoded_locator: &Hash) -> Result<()> {
         let mut lock = self.root_node.lock().await;
-        let mut path = self.get_path(tx, &lock.root_hash, encoded_locator).await?;
+        let mut path = self.get_path(tx, &lock.hash, encoded_locator).await?;
         path.remove_leaf(encoded_locator);
         let old_root = self.write_path(tx, &mut lock, &path).await?;
         self.remove_snapshot(&old_root, tx).await
@@ -177,6 +177,7 @@ impl Clone for Branch {
 mod tests {
     use super::*;
     use crate::{crypto::Cryptor, index, locator::Locator};
+    use sqlx::Row;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn insert_and_read() {
@@ -268,11 +269,15 @@ mod tests {
     }
 
     async fn count_branch_forest_entries(tx: &mut db::Transaction) -> usize {
-        sqlx::query("select 0 from snapshot_forest")
-            .fetch_all(&mut *tx)
-            .await
-            .unwrap()
-            .len()
+        sqlx::query(
+            "SELECT
+                 (SELECT COUNT(*) FROM snapshot_inner_nodes) +
+                 (SELECT COUNT(*) FROM snapshot_leaf_nodes)",
+        )
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap()
+        .get::<u32, _>(0) as usize
     }
 
     async fn init_db() -> db::Pool {

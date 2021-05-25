@@ -39,16 +39,12 @@ impl Index {
     }
 
     async fn replicas(conn: &mut db::Connection) -> Result<HashSet<ReplicaId>> {
-        Ok(
-            sqlx::query("SELECT DISTINCT replica_id FROM snapshot_roots")
-                .fetch_all(&mut *conn)
-                .await
-                .unwrap()
-                .iter()
-                .map(|row| column::<ReplicaId>(row, 0).unwrap())
-                .into_iter()
-                .collect(),
-        )
+        sqlx::query("SELECT DISTINCT replica_id FROM snapshot_root_nodes")
+            .fetch_all(&mut *conn)
+            .await?
+            .iter()
+            .map(|row| column::<ReplicaId>(row, 0).map_err(From::from))
+            .collect()
     }
 
     async fn read_branches(&self, replica_ids: &HashSet<ReplicaId>) -> Result<()> {
