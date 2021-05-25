@@ -145,6 +145,19 @@ impl BlockId {
     }
 }
 
+impl TryFrom<&[u8]> for BlockId {
+    type Error = TryFromSliceError;
+
+    fn try_from(slice: &[u8]) -> Result<Self, Self::Error> {
+        let split_at = BLOCK_NAME_SIZE.min(slice.len());
+
+        let name = BlockName::try_from(&slice[..split_at])?;
+        let version = BlockVersion::try_from(&slice[split_at..])?;
+
+        Ok(Self { name, version })
+    }
+}
+
 impl fmt::Display for BlockId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{:x}:{:x}", self.name, self.version)

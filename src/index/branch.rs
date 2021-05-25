@@ -9,7 +9,7 @@ use crate::{
     db,
     error::{Error, Result},
     index::{
-        node::{inner_children, leaf_children, InnerNode, RootNode},
+        node::{inner_children, leaf_children, RootNode},
         path::Path,
         INNER_LAYER_COUNT,
     },

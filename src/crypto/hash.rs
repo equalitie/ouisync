@@ -19,6 +19,8 @@ use std::{
 pub struct Hash(Inner);
 
 impl Hash {
+    pub const SIZE: usize = <Inner as GenericSequence<_>>::Length::USIZE;
+
     pub fn null() -> Self {
         Self(Inner::default())
     }
@@ -67,8 +69,7 @@ impl TryFrom<&'_ [u8]> for Hash {
     type Error = TryFromSliceError;
 
     fn try_from(slice: &[u8]) -> Result<Self, Self::Error> {
-        const USIZE: usize = <Inner as GenericSequence<_>>::Length::USIZE;
-        let slice: [u8; USIZE] = slice.try_into()?;
+        let slice: [u8; Self::SIZE] = slice.try_into()?;
         Ok(Self(slice.into()))
     }
 }

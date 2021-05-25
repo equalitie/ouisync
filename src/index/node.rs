@@ -5,7 +5,7 @@
 use std::{convert::TryFrom, iter::FromIterator, slice};
 
 use crate::{
-    block::{BlockId, BlockName, BlockVersion},
+    block::BlockId,
     crypto::Hash,
     db,
     error::Result,
@@ -287,15 +287,11 @@ impl LeafData {
     }
 
     pub fn deserialize(blob: &[u8]) -> Result<Self> {
-        let (b1, b2) = blob.split_at(std::mem::size_of::<Hash>());
-        let (b2, b3) = b2.split_at(std::mem::size_of::<BlockName>());
-        let locator = Hash::try_from(b1)?;
-        let name = BlockName::try_from(b2)?;
-        let version = BlockVersion::try_from(b3)?;
-        Ok(Self {
-            locator,
-            block_id: BlockId { name, version },
-        })
+        let split_at = Hash::SIZE.min(blob.len());
+        let locator = Hash::try_from(&blob[..split_at])?;
+        let block_id = BlockId::try_from(&blob[split_at..])?;
+
+        Ok(Self { locator, block_id })
     }
 }
 
