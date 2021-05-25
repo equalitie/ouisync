@@ -144,17 +144,16 @@ pub unsafe extern "C" fn file_write(
 }
 
 /// Truncate the file to `len` bytes.
-// TODO: `len` is currently ignored and is always set to zero.
 #[no_mangle]
 pub unsafe extern "C" fn file_truncate(
     handle: SharedHandle<Mutex<File>>,
-    _len: u64,
+    len: u64,
     port: Port<()>,
     error: *mut *mut c_char,
 ) {
     session::with(port, error, |ctx| {
         let file = handle.get();
-        ctx.spawn(async move { file.lock().await.truncate().await })
+        ctx.spawn(async move { file.lock().await.truncate(len).await })
     })
 }
 

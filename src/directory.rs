@@ -62,7 +62,7 @@ impl Directory {
         let buffer =
             bincode::serialize(&self.content).expect("failed to serialize directory content");
 
-        self.blob.truncate().await?;
+        self.blob.truncate(0).await?;
         self.blob.write(&buffer).await?;
         self.blob.flush().await?;
 
@@ -132,7 +132,7 @@ impl Directory {
         self.content.remove(name)
     }
 
-    /// Renames of moves an entry.
+    /// Renames or moves an entry.
     /// If the destination entry already exists and is a file, it is overwritten. If it is a
     /// directory, no change is performed and an error is returned instead.
     pub async fn move_entry(
@@ -201,7 +201,7 @@ impl Directory {
         Ok(())
     }
 
-    /// Remove this directory if its empty, otherwise fails.
+    /// Removes this directory if its empty, otherwise fails.
     pub async fn remove(self) -> Result<()> {
         if !self.content.entries.is_empty() {
             return Err(Error::DirectoryNotEmpty);
@@ -682,6 +682,8 @@ mod tests {
         let read_content = file.read_to_end().await.unwrap();
         assert_eq!(read_content, src_content);
         assert_ne!(read_content, dst_content);
+
+        // TODO: assert the original dst file has been deleted
     }
 
     #[tokio::test(flavor = "multi_thread")]

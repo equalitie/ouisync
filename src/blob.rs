@@ -2,7 +2,7 @@ use crate::{
     block::{self, BlockId, BlockName, BlockVersion, BLOCK_SIZE},
     crypto::{AuthTag, Cryptor, NonceSequence},
     db,
-    error::Result,
+    error::{Error, Result},
     index::Branch,
     locator::Locator,
 };
@@ -276,18 +276,42 @@ impl Blob {
         Ok(offset)
     }
 
-    /// Truncate the blob to zero length.
-    pub async fn truncate(&mut self) -> Result<()> {
+    /// Truncate the blob to the given length.
+    pub async fn truncate(&mut self, len: u64) -> Result<()> {
         // TODO: reuse the truncated blocks on subsequent writes if the content is identical
 
-        if self.len == 0 {
+        if len == self.len {
             return Ok(());
         }
 
-        self.len = 0;
+        if len > self.len {
+            // TODO: consider supporting this
+            return Err(Error::OperationNotSupported);
+        }
+
+        let old_block_count = self.block_count();
+
+        self.len = len;
         self.len_dirty = true;
 
-        self.seek(SeekFrom::Start(0)).await?;
+        let new_block_count = self.block_count();
+
+        if self.seek_position() > self.len {
+            self.seek(SeekFrom::End(0)).await?;
+        }
+
+        let mut tx = self.pool.begin().await?;
+
+        let locators =
+            (new_block_count..old_block_count).map(|seq| Locator::Trunk(*self.head_name(), seq));
+        for locator in locators {
+            self.branch
+                .remove(&mut tx, &locator.encode(&self.cryptor))
+                .await?;
+            // TODO: delete the block as well
+        }
+
+        tx.commit().await?;
 
         Ok(())
     }
@@ -666,6 +690,7 @@ impl DerefMut for Cursor {
 mod tests {
     use super::*;
     use crate::{crypto::SecretKey, error::Error, replica_id::ReplicaId};
+    use assert_matches::assert_matches;
     use proptest::{collection::vec, prelude::*};
     use rand::{distributions::Standard, prelude::*};
     use std::future::Future;
@@ -921,19 +946,18 @@ mod tests {
 
         // Check the block entries were deleted from the index.
         let mut tx = pool.begin().await.unwrap();
-        assert!(matches!(
+        assert_matches!(
             branch.get(&mut tx, &encoded_locator0).await,
             Err(Error::EntryNotFound)
-        ));
-        assert!(matches!(
+        );
+        assert_matches!(
             branch.get(&mut tx, &encoded_locator1).await,
             Err(Error::EntryNotFound)
-        ));
+        );
 
         // TODO: check the blocks are deleted as well
     }
 
-    #[ignore]
     #[tokio::test(flavor = "multi_thread")]
     async fn truncate_to_empty() {
         let (mut rng, cryptor, pool, branch) = setup(0).await;
@@ -952,22 +976,58 @@ mod tests {
 
         let locator1 = Locator::Trunk(*blob.head_name(), 1);
 
-        blob.truncate().await.unwrap();
+        blob.truncate(0).await.unwrap();
         blob.flush().await.unwrap();
 
         // Check the blob is empty
         let mut buffer = [0; 1];
         blob.seek(SeekFrom::Start(0)).await.unwrap();
         assert_eq!(blob.read(&mut buffer).await.unwrap(), 0);
+        assert_eq!(blob.len(), 0);
 
         // Check the second block entry was deleted from the index (the first block is not deleted
         // because it's used to store the metadata. It's only deleted when the whole blob is
         // deleted).
         let mut tx = pool.begin().await.unwrap();
-        assert!(matches!(
+        assert_matches!(
             branch.get(&mut tx, &locator1.encode(&cryptor)).await,
             Err(Error::EntryNotFound)
-        ));
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn truncate_to_shorter() {
+        let (mut rng, cryptor, pool, branch) = setup(0).await;
+
+        let parent_name = rng.gen();
+        let locator0 = Locator::Head(parent_name, 0);
+
+        let content: Vec<_> = (&mut rng)
+            .sample_iter(Standard)
+            .take(2 * BLOCK_SIZE)
+            .collect();
+
+        let mut blob = Blob::create(pool.clone(), branch.clone(), cryptor.clone(), locator0);
+        blob.write(&content).await.unwrap();
+        blob.flush().await.unwrap();
+
+        let locator1 = Locator::Trunk(*blob.head_name(), 1);
+        let new_len = BLOCK_SIZE / 2;
+
+        blob.truncate(new_len as u64).await.unwrap();
+        blob.flush().await.unwrap();
+
+        let mut buffer = vec![0; new_len];
+        blob.seek(SeekFrom::Start(0)).await.unwrap();
+        assert_eq!(blob.read(&mut buffer).await.unwrap(), new_len);
+        assert_eq!(buffer, content[..new_len]);
+        assert_eq!(blob.len(), new_len as u64);
+
+        let mut tx = pool.begin().await.unwrap();
+        assert_matches!(
+            branch.get(&mut tx, &locator1.encode(&cryptor)).await,
+            Err(Error::EntryNotFound)
+        );
     }
 
     // proptest doesn't work with the `#[tokio::test]` macro yet

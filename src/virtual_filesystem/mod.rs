@@ -458,8 +458,7 @@ impl Inner {
         };
 
         if let Some(size) = size {
-            file.seek(SeekFrom::Start(size)).await?;
-            file.truncate().await?;
+            file.truncate(size).await?;
         }
 
         Ok(make_file_attr(inode, EntryType::File, file.len()))
