@@ -117,7 +117,7 @@ pub struct InnerNode {
 
 impl InnerNode {
     pub async fn insert(
-        node: &InnerNode,
+        &self,
         bucket: usize,
         parent: &Hash,
         tx: &mut db::Transaction,
@@ -129,10 +129,10 @@ impl InnerNode {
         )
         .bind(parent.as_ref())
         .bind(bucket as u16)
-        .bind(node.is_complete as u16)
-        .bind(node.missing_blocks_crc)
-        .bind(node.missing_blocks_count as MissingBlocksCount)
-        .bind(node.hash.as_ref())
+        .bind(self.is_complete as u16)
+        .bind(self.missing_blocks_crc)
+        .bind(self.missing_blocks_count as MissingBlocksCount)
+        .bind(self.hash.as_ref())
         .execute(&mut *tx)
         .await?;
         Ok(())

@@ -135,7 +135,7 @@ impl Branch {
                     continue;
                 }
 
-                InnerNode::insert(node, bucket, &parent_hash, tx).await?;
+                node.insert(bucket, &parent_hash, tx).await?;
             }
         }
 
