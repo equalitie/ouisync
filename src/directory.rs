@@ -62,7 +62,7 @@ impl Directory {
         let buffer =
             bincode::serialize(&self.content).expect("failed to serialize directory content");
 
-        self.blob.truncate().await?;
+        self.blob.truncate(0).await?;
         self.blob.write(&buffer).await?;
         self.blob.flush().await?;
 
