@@ -87,21 +87,18 @@ impl Path {
         }
     }
 
-    pub fn remove_leaf(&mut self, locator: &Hash) {
-        if self.leaves.remove(locator).is_none() {
-            return;
-        }
+    pub fn remove_leaf(&mut self, locator: &Hash) -> Option<BlockId> {
+        let block_id = self.leaves.remove(locator)?.block_id;
 
         if !self.leaves.is_empty() {
             self.recalculate(INNER_LAYER_COUNT);
-            return;
-        }
-
-        if INNER_LAYER_COUNT > 0 {
+        } else if INNER_LAYER_COUNT > 0 {
             self.remove_from_inner_layer(INNER_LAYER_COUNT - 1);
         } else {
             self.remove_root_layer();
         }
+
+        Some(block_id)
     }
 
     pub fn get_bucket(&self, inner_layer: usize) -> usize {

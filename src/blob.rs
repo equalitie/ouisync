@@ -3,7 +3,7 @@ use crate::{
     crypto::{AuthTag, Cryptor, NonceSequence},
     db,
     error::{Error, Result},
-    index::Branch,
+    index::{self, Branch},
     locator::Locator,
 };
 use std::{
@@ -300,20 +300,9 @@ impl Blob {
             self.seek(SeekFrom::End(0)).await?;
         }
 
-        let mut tx = self.pool.begin().await?;
-
         let locators =
             (new_block_count..old_block_count).map(|seq| Locator::Trunk(*self.head_name(), seq));
-        for locator in locators {
-            self.branch
-                .remove(&mut tx, &locator.encode(&self.cryptor))
-                .await?;
-            // TODO: delete the block as well
-        }
-
-        tx.commit().await?;
-
-        Ok(())
+        self.remove_blocks(locators).await
     }
 
     /// Flushes this blob, ensuring that all intermediately buffered contents gets written to the
@@ -329,20 +318,9 @@ impl Blob {
 
     /// Removes this blob.
     pub async fn remove(self) -> Result<()> {
-        let mut tx = self.pool.begin().await?;
-
         let locators = iter::once(self.locator)
             .chain((1..self.block_count()).map(|seq| Locator::Trunk(*self.head_name(), seq)));
-        for locator in locators {
-            self.branch
-                .remove(&mut tx, &locator.encode(&self.cryptor))
-                .await?;
-            // TODO: delete the block as well
-        }
-
-        tx.commit().await?;
-
-        Ok(())
+        self.remove_blocks(locators).await
     }
 
     pub fn head_name(&self) -> &BlockName {
@@ -449,6 +427,25 @@ impl Blob {
         }
 
         self.len_dirty = false;
+
+        Ok(())
+    }
+
+    async fn remove_blocks<T>(&self, locators: T) -> Result<()>
+    where
+        T: IntoIterator<Item = Locator>,
+    {
+        let mut tx = self.pool.begin().await?;
+
+        for locator in locators {
+            let block_id = self
+                .branch
+                .remove(&mut tx, &locator.encode(&self.cryptor))
+                .await?;
+            index::remove_orphaned_block(&mut tx, &block_id).await?;
+        }
+
+        tx.commit().await?;
 
         Ok(())
     }
@@ -941,6 +938,13 @@ mod tests {
         let encoded_locator0 = locator0.encode(&cryptor);
         let encoded_locator1 = locator1.encode(&cryptor);
 
+        let block_ids = {
+            let mut tx = pool.begin().await.unwrap();
+            let id0 = branch.get(&mut tx, &encoded_locator0).await.unwrap();
+            let id1 = branch.get(&mut tx, &encoded_locator1).await.unwrap();
+            [id0, id1]
+        };
+
         // Remove the blob
         blob.remove().await.unwrap();
 
@@ -955,7 +959,14 @@ mod tests {
             Err(Error::EntryNotFound)
         );
 
-        // TODO: check the blocks are deleted as well
+        // Check the blocks were deleted as well.
+        let mut buffer = vec![0; BLOCK_SIZE];
+        for block_id in &block_ids {
+            assert_matches!(
+                block::read(&mut tx, block_id, &mut buffer).await,
+                Err(Error::BlockNotFound(_))
+            );
+        }
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -974,7 +985,18 @@ mod tests {
         blob.write(&content).await.unwrap();
         blob.flush().await.unwrap();
 
+        let locator0 = locator0.encode(&cryptor);
+
         let locator1 = Locator::Trunk(*blob.head_name(), 1);
+        let locator1 = locator1.encode(&cryptor);
+
+        let (block_id0, block_id1) = {
+            let mut tx = pool.begin().await.unwrap();
+            let id0 = branch.get(&mut tx, &locator0).await.unwrap();
+            let id1 = branch.get(&mut tx, &locator1).await.unwrap();
+
+            (id0, id1)
+        };
 
         blob.truncate(0).await.unwrap();
         blob.flush().await.unwrap();
@@ -985,14 +1007,22 @@ mod tests {
         assert_eq!(blob.read(&mut buffer).await.unwrap(), 0);
         assert_eq!(blob.len(), 0);
 
-        // Check the second block entry was deleted from the index (the first block is not deleted
-        // because it's used to store the metadata. It's only deleted when the whole blob is
-        // deleted).
+        // Check the second block entry was deleted from the index
         let mut tx = pool.begin().await.unwrap();
+        let mut buffer = vec![0; BLOCK_SIZE];
         assert_matches!(
-            branch.get(&mut tx, &locator1.encode(&cryptor)).await,
+            branch.get(&mut tx, &locator1).await,
             Err(Error::EntryNotFound)
         );
+        assert_matches!(
+            block::read(&mut tx, &block_id1, &mut buffer).await,
+            Err(Error::BlockNotFound(_))
+        );
+
+        // The first block is not deleted because it's needed to store the metadata.
+        // It's only deleted when the blob itself is deleted.
+        assert_matches!(branch.get(&mut tx, &locator0).await, Ok(_));
+        assert_matches!(block::read(&mut tx, &block_id0, &mut buffer).await, Ok(_));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1004,14 +1034,18 @@ mod tests {
 
         let content: Vec<_> = (&mut rng)
             .sample_iter(Standard)
-            .take(2 * BLOCK_SIZE)
+            .take(3 * BLOCK_SIZE)
             .collect();
 
         let mut blob = Blob::create(pool.clone(), branch.clone(), cryptor.clone(), locator0);
         blob.write(&content).await.unwrap();
         blob.flush().await.unwrap();
 
-        let locator1 = Locator::Trunk(*blob.head_name(), 1);
+        let locators = [
+            Locator::Trunk(*blob.head_name(), 1),
+            Locator::Trunk(*blob.head_name(), 2),
+        ];
+
         let new_len = BLOCK_SIZE / 2;
 
         blob.truncate(new_len as u64).await.unwrap();
@@ -1024,10 +1058,12 @@ mod tests {
         assert_eq!(blob.len(), new_len as u64);
 
         let mut tx = pool.begin().await.unwrap();
-        assert_matches!(
-            branch.get(&mut tx, &locator1.encode(&cryptor)).await,
-            Err(Error::EntryNotFound)
-        );
+        for locator in &locators {
+            assert_matches!(
+                branch.get(&mut tx, &locator.encode(&cryptor)).await,
+                Err(Error::EntryNotFound)
+            );
+        }
     }
 
     // proptest doesn't work with the `#[tokio::test]` macro yet

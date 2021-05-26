@@ -71,13 +71,22 @@ impl Branch {
         }
     }
 
-    /// Remove the block identified by encoded_locator from the index
-    pub async fn remove(&self, tx: &mut db::Transaction, encoded_locator: &Hash) -> Result<()> {
+    /// Remove the block identified by encoded_locator from the index. Returns the id of the
+    /// removed block.
+    pub async fn remove(
+        &self,
+        tx: &mut db::Transaction,
+        encoded_locator: &Hash,
+    ) -> Result<BlockId> {
         let mut lock = self.root_node.lock().await;
         let mut path = self.get_path(tx, &lock.hash, encoded_locator).await?;
-        path.remove_leaf(encoded_locator);
+        let block_id = path
+            .remove_leaf(encoded_locator)
+            .ok_or(Error::EntryNotFound)?;
         let old_root = self.write_path(tx, &mut lock, &path).await?;
-        self.remove_snapshot(&old_root, tx).await
+        self.remove_snapshot(&old_root, tx).await?;
+
+        Ok(block_id)
     }
 
     async fn get_path(
