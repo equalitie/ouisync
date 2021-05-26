@@ -239,7 +239,7 @@ impl LeafNode {
         )
         .bind(parent)
         .bind(&self.locator)
-        .bind(self.block_id.to_array().as_ref())
+        .bind(&self.block_id)
         .bind(self.is_block_missing)
         .execute(&mut *tx)
         .await?;
@@ -392,7 +392,7 @@ impl Link {
                 sqlx::query("DELETE FROM snapshot_leaf_nodes WHERE parent = ? AND locator = ? AND block_id = ?")
                     .bind(parent)
                     .bind(node.locator())
-                    .bind(node.block_id.to_array().as_ref())
+                    .bind(&node.block_id)
                     .execute(&mut *tx)
                     .await?;
             }
@@ -425,7 +425,7 @@ impl Link {
                  LIMIT 1",
             )
             .bind(node.locator())
-            .bind(node.block_id.to_array().as_ref())
+            .bind(&node.block_id)
             .fetch_optional(&mut *tx)
             .await?
             .is_some(),

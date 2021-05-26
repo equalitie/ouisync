@@ -167,8 +167,7 @@ fn hash_leaves(leaves: &[LeafNode]) -> Hash {
     hash.update((leaves.len() as u32).to_le_bytes());
     for l in leaves {
         hash.update(l.locator());
-        hash.update(l.block_id.name);
-        hash.update(l.block_id.version);
+        hash.update(l.block_id);
     }
     hash.finalize().into()
 }

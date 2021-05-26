@@ -185,7 +185,11 @@ impl Clone for Branch {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{crypto::Cryptor, index, locator::Locator};
+    use crate::{
+        crypto::{Cryptor, Hashable},
+        index,
+        locator::Locator,
+    };
     use sqlx::Row;
 
     #[tokio::test(flavor = "multi_thread")]
@@ -195,7 +199,7 @@ mod tests {
             .await
             .unwrap();
         let block_id = BlockId::random();
-        let locator = Locator::Head(block_id.name, 0);
+        let locator = random_head_locator(0);
         let encoded_locator = locator.encode(&Cryptor::Null);
 
         let mut tx = pool.begin().await.unwrap();
@@ -221,7 +225,7 @@ mod tests {
             let b1 = BlockId::random();
             let b2 = BlockId::random();
 
-            let locator = Locator::Head(b1.name, 0);
+            let locator = random_head_locator(0);
             let encoded_locator = locator.encode(&Cryptor::Null);
             let mut tx = pool.begin().await.unwrap();
 
@@ -247,7 +251,7 @@ mod tests {
             .unwrap();
 
         let b = BlockId::random();
-        let locator = Locator::Head(b.name, 0);
+        let locator = random_head_locator(0);
         let encoded_locator = locator.encode(&Cryptor::Null);
         let mut tx = pool.begin().await.unwrap();
 
@@ -293,5 +297,9 @@ mod tests {
         let pool = db::Pool::connect(":memory:").await.unwrap();
         index::init(&pool).await.unwrap();
         pool
+    }
+
+    fn random_head_locator(seq: u32) -> Locator {
+        Locator::Head(rand::random::<u64>().hash(), seq)
     }
 }

@@ -25,12 +25,7 @@ impl Hash {
     }
 
     pub fn is_null(&self) -> bool {
-        for c in self.0.as_slice() {
-            if *c != 0 {
-                return false;
-            }
-        }
-        true
+        self.0.iter().all(|&byte| byte == 0)
     }
 }
 
@@ -73,8 +68,23 @@ impl TryFrom<&'_ [u8]> for Hash {
     }
 }
 
-derive_sqlx_type_for_u8_array_wrapper!(Hash);
-derive_sqlx_encode_for_u8_array_wrapper!(Hash);
-derive_sqlx_decode_for_u8_array_wrapper!(Hash);
+derive_sqlx_traits_for_u8_array_wrapper!(Hash);
 
 type Inner = GenericArray<u8, <Sha3_256 as Digest>::OutputSize>;
+
+/// Trait for types that can be cryptographically hashed.
+pub trait Hashable {
+    fn hash(&self) -> Hash;
+}
+
+impl Hashable for &'_ [u8] {
+    fn hash(&self) -> Hash {
+        Sha3_256::digest(self).into()
+    }
+}
+
+impl Hashable for u64 {
+    fn hash(&self) -> Hash {
+        (&self.to_le_bytes()[..]).hash()
+    }
+}

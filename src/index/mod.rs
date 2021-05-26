@@ -142,7 +142,7 @@ pub async fn remove_orphaned_block(tx: &mut db::Transaction, id: &BlockId) -> Re
         "DELETE FROM blocks
          WHERE id = ? AND (SELECT 0 FROM snapshot_leaf_nodes WHERE block_id = id) IS NULL",
     )
-    .bind(id.to_array().as_ref())
+    .bind(id)
     .execute(tx)
     .await?;
 
@@ -153,8 +153,8 @@ pub async fn remove_orphaned_block(tx: &mut db::Transaction, id: &BlockId) -> Re
 mod tests {
     use super::*;
     use crate::{
-        block::{self, BlockName, BLOCK_SIZE},
-        crypto::{AuthTag, Cryptor},
+        block::{self, BLOCK_SIZE},
+        crypto::{AuthTag, Cryptor, Hashable},
         locator::Locator,
     };
 
@@ -182,11 +182,11 @@ mod tests {
             .await
             .unwrap();
 
-        let locator0 = Locator::Head(BlockName::random(), 0);
+        let locator0 = Locator::Head(rand::random::<u64>().hash(), 0);
         let locator0 = locator0.encode(&cryptor);
         branch0.insert(&mut tx, &block_id, &locator0).await.unwrap();
 
-        let locator1 = Locator::Head(BlockName::random(), 0);
+        let locator1 = Locator::Head(rand::random::<u64>().hash(), 0);
         let locator1 = locator1.encode(&cryptor);
         branch1.insert(&mut tx, &block_id, &locator1).await.unwrap();
 
