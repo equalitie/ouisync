@@ -60,13 +60,11 @@ impl Path {
     }
 
     pub fn get_leaf(&self) -> Option<BlockId> {
-        self.leaves
-            .get(&self.locator)
-            .map(|node| node.data.block_id)
+        self.leaves.get(&self.locator).map(|node| node.block_id)
     }
 
     pub fn has_leaf(&self, block_id: &BlockId) -> bool {
-        self.leaves.iter().any(|l| &l.data.block_id == block_id)
+        self.leaves.iter().any(|l| &l.block_id == block_id)
     }
 
     pub fn total_layer_count() -> usize {
@@ -171,9 +169,9 @@ fn hash_leaves(leaves: &[LeafNode]) -> Hash {
     // XXX: Is updating with length enough to prevent attaks?
     hash.update((leaves.len() as u32).to_le_bytes());
     for l in leaves {
-        hash.update(l.data.locator());
-        hash.update(l.data.block_id.name);
-        hash.update(l.data.block_id.version);
+        hash.update(l.locator());
+        hash.update(l.block_id.name);
+        hash.update(l.block_id.version);
     }
     hash.finalize().into()
 }

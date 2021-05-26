@@ -8,7 +8,7 @@ use crate::{
 };
 use async_recursion::async_recursion;
 use sqlx::Row;
-use std::{convert::TryFrom, iter::FromIterator, slice};
+use std::{iter::FromIterator, slice};
 
 #[derive(Clone, Debug)]
 pub struct RootNode {
@@ -217,11 +217,16 @@ pub async fn inner_children(
 
 #[derive(Eq, PartialEq, Debug, Clone)]
 pub struct LeafNode {
-    pub data: LeafData,
+    locator: Hash,
+    pub block_id: BlockId,
     pub is_block_missing: bool,
 }
 
 impl LeafNode {
+    pub fn locator(&self) -> &Hash {
+        &self.locator
+    }
+
     pub async fn insert(&self, parent: &Hash, tx: &mut db::Transaction) -> Result<()> {
         sqlx::query(
             "INSERT INTO snapshot_leaf_nodes (
@@ -233,8 +238,8 @@ impl LeafNode {
              VALUES (?, ?, ?, ?)",
         )
         .bind(parent)
-        .bind(&self.data.locator)
-        .bind(self.data.block_id.as_array().as_ref())
+        .bind(&self.locator)
+        .bind(self.block_id.as_array().as_ref())
         .bind(self.is_block_missing)
         .execute(&mut *tx)
         .await?;
@@ -254,13 +259,9 @@ pub async fn leaf_children(parent: &Hash, tx: &mut db::Transaction) -> Result<Le
 
     rows.into_iter()
         .map(|row| {
-            let data = LeafData {
+            Ok(LeafNode {
                 locator: row.get(0),
                 block_id: row.get(1),
-            };
-
-            Ok(LeafNode {
-                data,
                 is_block_missing: row.get(2),
             })
         })
@@ -279,20 +280,18 @@ impl LeafNodeSet {
             Ok(index) => {
                 let node = &mut self.0[index];
 
-                if &node.data.block_id == block_id {
+                if &node.block_id == block_id {
                     // node already exists with the same block id
                     return false;
                 }
 
-                node.data.block_id = *block_id;
+                node.block_id = *block_id;
             }
             Err(index) => self.0.insert(
                 index,
                 LeafNode {
-                    data: LeafData {
-                        locator: *locator,
-                        block_id: *block_id,
-                    },
+                    locator: *locator,
+                    block_id: *block_id,
                     is_block_missing: false,
                 },
             ),
@@ -323,8 +322,7 @@ impl LeafNodeSet {
     }
 
     fn lookup(&self, locator: &Hash) -> Result<usize, usize> {
-        self.0
-            .binary_search_by(|node| node.data.locator.cmp(locator))
+        self.0.binary_search_by(|node| node.locator.cmp(locator))
     }
 }
 
@@ -334,7 +332,7 @@ impl FromIterator<LeafNode> for LeafNodeSet {
         T: IntoIterator<Item = LeafNode>,
     {
         let mut vec: Vec<_> = iter.into_iter().collect();
-        vec.sort_by(|lhs, rhs| lhs.data.locator.cmp(&rhs.data.locator));
+        vec.sort_by(|lhs, rhs| lhs.locator.cmp(&rhs.locator));
 
         Self(vec)
     }
@@ -346,41 +344,6 @@ impl<'a> IntoIterator for &'a LeafNodeSet {
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.iter()
-    }
-}
-
-#[derive(Debug)]
-pub struct InnerData {
-    pub hash: Hash,
-}
-
-#[derive(Eq, PartialEq, Ord, PartialOrd, Clone, Debug)]
-pub struct LeafData {
-    locator: Hash,
-    pub block_id: BlockId,
-}
-
-impl LeafData {
-    pub fn locator(&self) -> &Hash {
-        &self.locator
-    }
-
-    pub fn serialize(&self) -> Vec<u8> {
-        self.locator
-            .as_ref()
-            .iter()
-            .chain(self.block_id.name.as_ref().iter())
-            .chain(self.block_id.version.as_ref().iter())
-            .cloned()
-            .collect()
-    }
-
-    pub fn deserialize(blob: &[u8]) -> Result<Self> {
-        let split_at = Hash::SIZE.min(blob.len());
-        let locator = Hash::try_from(&blob[..split_at])?;
-        let block_id = BlockId::try_from(&blob[split_at..])?;
-
-        Ok(Self { locator, block_id })
     }
 }
 
@@ -428,8 +391,8 @@ impl Link {
             Link::ToLeaf { parent, node } => {
                 sqlx::query("DELETE FROM snapshot_leaf_nodes WHERE parent = ? AND locator = ? AND block_id = ?")
                     .bind(parent)
-                    .bind(node.data.locator())
-                    .bind(node.data.block_id.as_array().as_ref())
+                    .bind(node.locator())
+                    .bind(node.block_id.as_array().as_ref())
                     .execute(&mut *tx)
                     .await?;
             }
@@ -461,8 +424,8 @@ impl Link {
                  WHERE locator = ? AND block_id = ?
                  LIMIT 1",
             )
-            .bind(node.data.locator())
-            .bind(node.data.block_id.as_array().as_ref())
+            .bind(node.locator())
+            .bind(node.block_id.as_array().as_ref())
             .fetch_optional(&mut *tx)
             .await?
             .is_some(),
@@ -521,10 +484,8 @@ impl Link {
             Ok(Link::ToLeaf {
                 parent: row.get(0),
                 node: LeafNode {
-                    data: LeafData {
-                        locator: row.get(1),
-                        block_id: row.get(2),
-                    },
+                    locator: row.get(1),
+                    block_id: row.get(2),
                     is_block_missing: row.get(3),
                 },
             })
