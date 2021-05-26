@@ -230,6 +230,7 @@ async fn remove_blob() {
     let (mut rng, cryptor, pool, branch) = setup(0).await;
 
     let locator0 = random_head_locator(&mut rng, 0);
+    let locator1 = locator0.next();
 
     let content: Vec<_> = (&mut rng)
         .sample_iter(Standard)
@@ -240,14 +241,13 @@ async fn remove_blob() {
     blob.write(&content).await.unwrap();
     blob.flush().await.unwrap();
 
-    let locator1 = Locator::Trunk(blob.locator().hash(), 1);
-    let encoded_locator0 = locator0.encode(&cryptor);
-    let encoded_locator1 = locator1.encode(&cryptor);
+    let locator0 = locator0.encode(&cryptor);
+    let locator1 = locator1.encode(&cryptor);
 
     let block_ids = {
         let mut tx = pool.begin().await.unwrap();
-        let id0 = branch.get(&mut tx, &encoded_locator0).await.unwrap();
-        let id1 = branch.get(&mut tx, &encoded_locator1).await.unwrap();
+        let id0 = branch.get(&mut tx, &locator0).await.unwrap();
+        let id1 = branch.get(&mut tx, &locator1).await.unwrap();
         [id0, id1]
     };
 
@@ -257,11 +257,11 @@ async fn remove_blob() {
     // Check the block entries were deleted from the index.
     let mut tx = pool.begin().await.unwrap();
     assert_matches!(
-        branch.get(&mut tx, &encoded_locator0).await,
+        branch.get(&mut tx, &locator0).await,
         Err(Error::EntryNotFound)
     );
     assert_matches!(
-        branch.get(&mut tx, &encoded_locator1).await,
+        branch.get(&mut tx, &locator1).await,
         Err(Error::EntryNotFound)
     );
 
@@ -276,6 +276,7 @@ async fn truncate_to_empty() {
     let (mut rng, cryptor, pool, branch) = setup(0).await;
 
     let locator0 = random_head_locator(&mut rng, 0);
+    let locator1 = locator0.next();
 
     let content: Vec<_> = (&mut rng)
         .sample_iter(Standard)
@@ -287,11 +288,9 @@ async fn truncate_to_empty() {
     blob.flush().await.unwrap();
 
     let locator0 = locator0.encode(&cryptor);
-
-    let locator1 = Locator::Trunk(blob.locator().hash(), 1);
     let locator1 = locator1.encode(&cryptor);
 
-    let (block_id0, block_id1) = {
+    let (old_block_id0, old_block_id1) = {
         let mut tx = pool.begin().await.unwrap();
         let id0 = branch.get(&mut tx, &locator0).await.unwrap();
         let id1 = branch.get(&mut tx, &locator1).await.unwrap();
@@ -314,12 +313,15 @@ async fn truncate_to_empty() {
         branch.get(&mut tx, &locator1).await,
         Err(Error::EntryNotFound)
     );
-    assert!(!block::exists(&mut tx, &block_id1).await.unwrap());
+    assert!(!block::exists(&mut tx, &old_block_id1).await.unwrap());
 
     // The first block is not deleted because it's needed to store the metadata.
     // It's only deleted when the blob itself is deleted.
-    assert_matches!(branch.get(&mut tx, &locator0).await, Ok(_));
-    assert!(block::exists(&mut tx, &block_id0).await.unwrap());
+    // Check that it was modified to store the new length though.
+    let new_block_id0 = branch.get(&mut tx, &locator0).await.unwrap();
+    assert_ne!(new_block_id0, old_block_id0);
+    assert!(!block::exists(&mut tx, &old_block_id0).await.unwrap());
+    assert!(block::exists(&mut tx, &new_block_id0).await.unwrap());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -327,6 +329,8 @@ async fn truncate_to_shorter() {
     let (mut rng, cryptor, pool, branch) = setup(0).await;
 
     let locator0 = random_head_locator(&mut rng, 0);
+    let locator1 = locator0.next();
+    let locator2 = locator1.next();
 
     let content: Vec<_> = (&mut rng)
         .sample_iter(Standard)
@@ -336,11 +340,6 @@ async fn truncate_to_shorter() {
     let mut blob = Blob::create(pool.clone(), branch.clone(), cryptor.clone(), locator0);
     blob.write(&content).await.unwrap();
     blob.flush().await.unwrap();
-
-    let locators = [
-        Locator::Trunk(locator0.hash(), 1),
-        Locator::Trunk(locator0.hash(), 2),
-    ];
 
     let new_len = BLOCK_SIZE / 2;
 
@@ -354,11 +353,52 @@ async fn truncate_to_shorter() {
     assert_eq!(blob.len(), new_len as u64);
 
     let mut tx = pool.begin().await.unwrap();
-    for locator in &locators {
+    for locator in &[locator1, locator2] {
         assert_matches!(
             branch.get(&mut tx, &locator.encode(&cryptor)).await,
             Err(Error::EntryNotFound)
         );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn modify_blob() {
+    let (mut rng, cryptor, pool, branch) = setup(0).await;
+
+    let locator0 = random_head_locator(&mut rng, 0);
+    let locator1 = locator0.next();
+
+    let content = vec![0; 2 * BLOCK_SIZE];
+    let mut blob = Blob::create(pool.clone(), branch.clone(), cryptor.clone(), locator0);
+    blob.write(&content).await.unwrap();
+    blob.flush().await.unwrap();
+
+    let locator0 = locator0.encode(&cryptor);
+    let locator1 = locator1.encode(&cryptor);
+
+    let (old_block_id0, old_block_id1) = {
+        let mut tx = pool.begin().await.unwrap();
+        let id0 = branch.get(&mut tx, &locator0).await.unwrap();
+        let id1 = branch.get(&mut tx, &locator1).await.unwrap();
+        (id0, id1)
+    };
+
+    let buffer = vec![1; 3 * BLOCK_SIZE / 2];
+    blob.seek(SeekFrom::Start(0)).await.unwrap();
+    blob.write(&buffer).await.unwrap();
+    blob.flush().await.unwrap();
+
+    let mut tx = pool.begin().await.unwrap();
+
+    let new_block_id0 = branch.get(&mut tx, &locator0).await.unwrap();
+    let new_block_id1 = branch.get(&mut tx, &locator1).await.unwrap();
+
+    assert_ne!(new_block_id0, old_block_id0);
+    assert_ne!(new_block_id1, old_block_id1);
+
+    // Check the old blocks were deleted
+    for block_id in &[old_block_id0, old_block_id1] {
+        assert!(!block::exists(&mut tx, block_id).await.unwrap())
     }
 }
 

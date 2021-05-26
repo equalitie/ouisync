@@ -133,7 +133,7 @@ impl Blob {
                 break;
             }
 
-            let locator = self.next_locator();
+            let locator = self.current_block.locator.next();
             if locator.number() >= self.block_count() {
                 break;
             }
@@ -205,7 +205,7 @@ impl Blob {
                 break;
             }
 
-            let locator = self.next_locator();
+            let locator = self.current_block.locator.next();
             let (id, content) = if locator.number() < self.block_count() {
                 read_block(
                     &self.branch,
@@ -477,15 +477,6 @@ impl Blob {
             Locator::Trunk(self.locator.hash(), number)
         }
     }
-
-    fn next_locator(&self) -> Locator {
-        // TODO: return error instead of panic
-        self.current_block
-            .locator
-            .sequence()
-            .nth(1)
-            .expect("block count limit exceeded")
-    }
 }
 
 async fn read_block(
@@ -547,9 +538,12 @@ async fn write_block(
     let auth_tag = cryptor.encrypt(&nonce, aad, &mut buffer[offset..])?;
 
     block::write(tx, block_id, &buffer, &auth_tag).await?;
-    branch
+    if let Some(old_block_id) = branch
         .insert(tx, block_id, &locator.encode(cryptor))
-        .await?;
+        .await?
+    {
+        index::remove_orphaned_block(tx, &old_block_id).await?;
+    }
 
     Ok(())
 }
