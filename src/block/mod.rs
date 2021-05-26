@@ -137,8 +137,7 @@ impl BlockId {
         }
     }
 
-    // TODO: rename to `to_array`
-    pub fn as_array(&self) -> [u8; BLOCK_NAME_SIZE + BLOCK_VERSION_SIZE] {
+    pub fn to_array(&self) -> [u8; BLOCK_NAME_SIZE + BLOCK_VERSION_SIZE] {
         let mut array = [0; BLOCK_NAME_SIZE + BLOCK_VERSION_SIZE];
         array[..BLOCK_NAME_SIZE].copy_from_slice(self.name.as_ref());
         array[BLOCK_NAME_SIZE..].copy_from_slice(self.version.as_ref());

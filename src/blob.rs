@@ -45,7 +45,7 @@ impl Blob {
         let nonce_sequence = NonceSequence::new(content.read_array());
         let nonce = nonce_sequence.get(0);
 
-        cryptor.decrypt(&nonce, &id.as_array(), &mut content, &auth_tag)?;
+        cryptor.decrypt(&nonce, &id.to_array(), &mut content, &auth_tag)?;
 
         let len = content.read_u64();
 
@@ -505,7 +505,7 @@ async fn read_block(
 
     let number = locator.number();
     let nonce = nonce_sequence.get(number);
-    let aad = id.as_array(); // "additional associated data"
+    let aad = id.to_array(); // "additional associated data"
 
     let offset = if number == 0 {
         nonce_sequence.prefix().len()
@@ -542,7 +542,7 @@ async fn write_block(
 ) -> Result<()> {
     let number = locator.number();
     let nonce = nonce_sequence.get(number);
-    let aad = block_id.as_array(); // "additional associated data"
+    let aad = block_id.to_array(); // "additional associated data"
 
     let offset = if number == 0 {
         nonce_sequence.prefix().len()
