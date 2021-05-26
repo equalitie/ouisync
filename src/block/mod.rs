@@ -7,11 +7,6 @@ use rand::{
     distributions::{Distribution, Standard},
     Rng,
 };
-use sqlx::{
-    error::BoxDynError,
-    sqlite::{Sqlite, SqliteTypeInfo, SqliteValueRef},
-    Decode, Type,
-};
 use std::{
     array::TryFromSliceError,
     convert::{TryFrom, TryInto},
@@ -164,18 +159,12 @@ impl TryFrom<&[u8]> for BlockId {
     }
 }
 
-impl<'r> Decode<'r, Sqlite> for BlockId {
-    fn decode(value: SqliteValueRef<'r>) -> Result<Self, BoxDynError> {
-        let slice = <&[u8]>::decode(value)?;
-        Ok(slice.try_into()?)
-    }
-}
+derive_sqlx_type_for_u8_array_wrapper!(BlockId);
+derive_sqlx_decode_for_u8_array_wrapper!(BlockId);
 
-impl Type<Sqlite> for BlockId {
-    fn type_info() -> SqliteTypeInfo {
-        <&[u8] as Type<Sqlite>>::type_info()
-    }
-}
+// NOTE: Can't derive `Encode` because it needs a way to borrow the undelying u8 array which
+// `BlockId` can't do because the array is not actually contained in it but is created on demand
+// instead.
 
 impl fmt::Display for BlockId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {

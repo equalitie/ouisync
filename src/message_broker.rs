@@ -1,10 +1,10 @@
 use crate::{
     client::Client,
-    Index,
     message::{Message, Request, Response},
     object_stream::{ObjectReader, ObjectStream, ObjectWriter},
     scoped_task_set::{ScopedTaskHandle, ScopedTaskSet},
     server::Server,
+    Index,
 };
 use std::ops::FnOnce;
 use std::sync::Arc;

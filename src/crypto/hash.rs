@@ -6,11 +6,6 @@ use sha3::{
     },
     Sha3_256,
 };
-use sqlx::{
-    error::BoxDynError,
-    sqlite::{Sqlite, SqliteTypeInfo, SqliteValueRef},
-    Decode, Type,
-};
 use std::{
     array::TryFromSliceError,
     convert::{TryFrom, TryInto},
@@ -78,17 +73,8 @@ impl TryFrom<&'_ [u8]> for Hash {
     }
 }
 
-impl<'r> Decode<'r, Sqlite> for Hash {
-    fn decode(value: SqliteValueRef<'r>) -> Result<Self, BoxDynError> {
-        let slice = <&[u8]>::decode(value)?;
-        Ok(slice.try_into()?)
-    }
-}
-
-impl Type<Sqlite> for Hash {
-    fn type_info() -> SqliteTypeInfo {
-        <&[u8] as Type<Sqlite>>::type_info()
-    }
-}
+derive_sqlx_type_for_u8_array_wrapper!(Hash);
+derive_sqlx_encode_for_u8_array_wrapper!(Hash);
+derive_sqlx_decode_for_u8_array_wrapper!(Hash);
 
 type Inner = GenericArray<u8, <Sha3_256 as Digest>::OutputSize>;

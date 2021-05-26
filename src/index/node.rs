@@ -36,7 +36,7 @@ impl RootNode {
                  ORDER BY snapshot_id DESC
                  LIMIT 1",
             )
-            .bind(replica_id.as_ref())
+            .bind(replica_id)
             .fetch_optional(&mut conn)
             .await?
             {
@@ -59,8 +59,8 @@ impl RootNode {
                          VALUES (?, ?, 1, 0, 0)
                          RETURNING snapshot_id;",
                     )
-                    .bind(replica_id.as_ref())
-                    .bind(Hash::null().as_ref())
+                    .bind(replica_id)
+                    .bind(&Hash::null())
                     .fetch_one(&mut conn)
                     .await?
                     .get(0);
@@ -101,7 +101,7 @@ impl RootNode {
              WHERE snapshot_id = ?
              RETURNING snapshot_id;",
         )
-        .bind(root_hash.as_ref())
+        .bind(root_hash)
         .bind(self.snapshot_id)
         .fetch_one(&mut *tx)
         .await?
@@ -151,8 +151,8 @@ impl InnerNode {
              )
              VALUES (?, ?, ?, ?, ?, ?)",
         )
-        .bind(parent.as_ref())
-        .bind(self.hash.as_ref())
+        .bind(parent)
+        .bind(&self.hash)
         .bind(bucket as u16)
         .bind(self.is_complete)
         .bind(self.missing_blocks_crc)
@@ -186,7 +186,7 @@ pub async fn inner_children(
          FROM snapshot_inner_nodes
          WHERE parent = ?",
     )
-    .bind(parent.as_ref())
+    .bind(parent)
     .fetch_all(&mut *tx)
     .await?;
 
@@ -232,8 +232,8 @@ impl LeafNode {
              )
              VALUES (?, ?, ?, ?)",
         )
-        .bind(parent.as_ref())
-        .bind(self.data.locator.as_ref())
+        .bind(parent)
+        .bind(&self.data.locator)
         .bind(self.data.block_id.as_array().as_ref())
         .bind(self.is_block_missing)
         .execute(&mut *tx)
@@ -248,7 +248,7 @@ pub async fn leaf_children(parent: &Hash, tx: &mut db::Transaction) -> Result<Le
          FROM snapshot_leaf_nodes
          WHERE parent = ?",
     )
-    .bind(parent.as_ref())
+    .bind(parent)
     .fetch_all(&mut *tx)
     .await?;
 
@@ -420,15 +420,15 @@ impl Link {
             }
             Link::ToInner { parent, node } => {
                 sqlx::query("DELETE FROM snapshot_inner_nodes WHERE parent = ? AND hash = ?")
-                    .bind(parent.as_ref())
-                    .bind(node.hash.as_ref())
+                    .bind(parent)
+                    .bind(&node.hash)
                     .execute(&mut *tx)
                     .await?;
             }
             Link::ToLeaf { parent, node } => {
                 sqlx::query("DELETE FROM snapshot_leaf_nodes WHERE parent = ? AND locator = ? AND block_id = ?")
-                    .bind(parent.as_ref())
-                    .bind(node.data.locator().as_ref())
+                    .bind(parent)
+                    .bind(node.data.locator())
                     .bind(node.data.block_id.as_array().as_ref())
                     .execute(&mut *tx)
                     .await?;
@@ -443,14 +443,14 @@ impl Link {
         let has_parent = match self {
             Link::ToRoot { node: root } => {
                 sqlx::query("SELECT 0 FROM snapshot_root_nodes WHERE hash = ? LIMIT 1")
-                    .bind(root.hash.as_ref())
+                    .bind(&root.hash)
                     .fetch_optional(&mut *tx)
                     .await?
                     .is_some()
             }
             Link::ToInner { parent: _, node } => {
                 sqlx::query("SELECT 0 FROM snapshot_inner_nodes WHERE hash = ? LIMIT 1")
-                    .bind(node.hash.as_ref())
+                    .bind(&node.hash)
                     .fetch_optional(&mut *tx)
                     .await?
                     .is_some()
@@ -461,7 +461,7 @@ impl Link {
                  WHERE locator = ? AND block_id = ?
                  LIMIT 1",
             )
-            .bind(node.data.locator().as_ref())
+            .bind(node.data.locator())
             .bind(node.data.block_id.as_array().as_ref())
             .fetch_optional(&mut *tx)
             .await?
@@ -489,7 +489,7 @@ impl Link {
              FROM snapshot_inner_nodes
              WHERE parent = ?;",
         )
-        .bind(parent.as_ref())
+        .bind(parent)
         .fetch_all(tx)
         .await?
         .iter()
@@ -513,7 +513,7 @@ impl Link {
              FROM snapshot_leaf_nodes
              WHERE parent = ?;",
         )
-        .bind(parent.as_ref())
+        .bind(parent)
         .fetch_all(&mut *tx)
         .await?
         .iter()
