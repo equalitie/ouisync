@@ -185,7 +185,11 @@ impl Clone for Branch {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{crypto::Cryptor, index, locator::Locator};
+    use crate::{
+        crypto::{Cryptor, Hashable},
+        index,
+        locator::Locator,
+    };
     use sqlx::Row;
 
     #[tokio::test(flavor = "multi_thread")]
@@ -296,10 +300,6 @@ mod tests {
     }
 
     fn random_head_locator(seq: u32) -> Locator {
-        use sha3::{Digest, Sha3_256};
-
-        let seed: u64 = rand::random();
-        let parent_hash = Sha3_256::digest(&seed.to_le_bytes()).into();
-        Locator::Head(parent_hash, seq)
+        Locator::Head(rand::random::<u64>().hash(), seq)
     }
 }

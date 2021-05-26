@@ -1,6 +1,6 @@
 use std::iter;
 
-use crate::crypto::{Cryptor, Hash};
+use crate::crypto::{Cryptor, Hash, Hashable};
 use sha3::{Digest, Sha3_256};
 
 /// A type of block identifier similar to `BlockId` but serving a different purpose. While
@@ -33,8 +33,36 @@ impl Locator {
         }
     }
 
-    /// Cryptographic hash of this locator.
-    pub fn hash(&self) -> Hash {
+    /// Secure encoding of this locator for the use in the index.
+    pub fn encode(&self, cryptor: &Cryptor) -> Hash {
+        let mut hasher = Sha3_256::new();
+
+        hasher.update(self.hash().as_ref());
+
+        match cryptor {
+            Cryptor::ChaCha20Poly1305(key) => {
+                hasher.update(key.as_array().as_slice().hash());
+            }
+            Cryptor::Null => {}
+        }
+
+        hasher.finalize().into()
+    }
+
+    /// Sequence of locators starting at `self` and continuing with the corresponding trunk
+    /// locators in their sequential order.
+    pub fn sequence(&self) -> impl Iterator<Item = Self> {
+        let (parent_hash, seq) = match self {
+            Self::Root | Self::Head(..) => (self.hash(), 0),
+            Self::Trunk(parent_hash, seq) => (*parent_hash, *seq),
+        };
+
+        iter::once(*self).chain((seq + 1..).map(move |seq| Self::Trunk(parent_hash, seq)))
+    }
+}
+
+impl Hashable for Locator {
+    fn hash(&self) -> Hash {
         let mut hasher = Sha3_256::new();
 
         match self {
@@ -52,33 +80,5 @@ impl Locator {
         }
 
         hasher.finalize().into()
-    }
-
-    /// Secure encoding of this locator for the use in the index.
-    pub fn encode(&self, cryptor: &Cryptor) -> Hash {
-        let mut hasher = Sha3_256::new();
-
-        hasher.update(self.hash().as_ref());
-
-        match cryptor {
-            Cryptor::ChaCha20Poly1305(key) => {
-                let key_hash = Sha3_256::digest(key.as_array().as_slice());
-                hasher.update(key_hash);
-            }
-            Cryptor::Null => {}
-        }
-
-        hasher.finalize().into()
-    }
-
-    /// Sequence of locators starting at `self` and continuing with the corresponding trunk
-    /// locators in their sequential order.
-    pub fn sequence(&self) -> impl Iterator<Item = Self> {
-        let (parent_hash, seq) = match self {
-            Self::Root | Self::Head(..) => (self.hash(), 0),
-            Self::Trunk(parent_hash, seq) => (*parent_hash, *seq),
-        };
-
-        iter::once(*self).chain((seq + 1..).map(move |seq| Self::Trunk(parent_hash, seq)))
     }
 }

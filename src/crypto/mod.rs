@@ -3,7 +3,7 @@ mod nonce;
 mod secret_key;
 
 pub use self::{
-    hash::Hash,
+    hash::{Hash, Hashable},
     nonce::{Nonce, NoncePrefix, NonceSequence},
     secret_key::SecretKey,
 };

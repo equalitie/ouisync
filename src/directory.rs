@@ -1,6 +1,6 @@
 use crate::{
     blob::Blob,
-    crypto::Cryptor,
+    crypto::{Cryptor, Hashable},
     db,
     entry::{Entry, EntryType},
     error::{Error, Result},

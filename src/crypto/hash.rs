@@ -73,3 +73,20 @@ derive_sqlx_encode_for_u8_array_wrapper!(Hash);
 derive_sqlx_decode_for_u8_array_wrapper!(Hash);
 
 type Inner = GenericArray<u8, <Sha3_256 as Digest>::OutputSize>;
+
+/// Trait for types that can be cryptographically hashed.
+pub trait Hashable {
+    fn hash(&self) -> Hash;
+}
+
+impl Hashable for &'_ [u8] {
+    fn hash(&self) -> Hash {
+        Sha3_256::digest(self).into()
+    }
+}
+
+impl Hashable for u64 {
+    fn hash(&self) -> Hash {
+        (&self.to_le_bytes()[..]).hash()
+    }
+}

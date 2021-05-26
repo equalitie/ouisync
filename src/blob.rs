@@ -1,6 +1,6 @@
 use crate::{
     block::{self, BlockId, BlockVersion, BLOCK_SIZE},
-    crypto::{AuthTag, Cryptor, NonceSequence},
+    crypto::{AuthTag, Cryptor, Hashable, NonceSequence},
     db,
     error::{Error, Result},
     index::{self, Branch},
@@ -679,7 +679,6 @@ mod tests {
     use assert_matches::assert_matches;
     use proptest::{collection::vec, prelude::*};
     use rand::{distributions::Standard, prelude::*};
-    use sha3::{Digest, Sha3_256};
     use std::future::Future;
     use test_strategy::proptest;
 
@@ -1073,9 +1072,7 @@ mod tests {
     }
 
     fn random_head_locator<R: Rng>(rng: &mut R, seq: u32) -> Locator {
-        let seed: u64 = rng.gen();
-        let parent_hash = Sha3_256::digest(&seed.to_le_bytes()).into();
-        Locator::Head(parent_hash, seq)
+        Locator::Head(rng.gen::<u64>().hash(), seq)
     }
 
     async fn init_db() -> db::Pool {
