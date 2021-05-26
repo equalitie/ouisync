@@ -70,9 +70,7 @@ impl fmt::LowerHex for BlockId {
     }
 }
 
-derive_sqlx_type_for_u8_array_wrapper!(BlockId);
-derive_sqlx_encode_for_u8_array_wrapper!(BlockId);
-derive_sqlx_decode_for_u8_array_wrapper!(BlockId);
+derive_sqlx_traits_for_u8_array_wrapper!(BlockId);
 
 #[cfg(test)]
 mod tests {

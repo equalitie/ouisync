@@ -68,9 +68,7 @@ impl TryFrom<&'_ [u8]> for Hash {
     }
 }
 
-derive_sqlx_type_for_u8_array_wrapper!(Hash);
-derive_sqlx_encode_for_u8_array_wrapper!(Hash);
-derive_sqlx_decode_for_u8_array_wrapper!(Hash);
+derive_sqlx_traits_for_u8_array_wrapper!(Hash);
 
 type Inner = GenericArray<u8, <Sha3_256 as Digest>::OutputSize>;
 
