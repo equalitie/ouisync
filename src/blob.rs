@@ -960,12 +960,8 @@ mod tests {
         );
 
         // Check the blocks were deleted as well.
-        let mut buffer = vec![0; BLOCK_SIZE];
         for block_id in &block_ids {
-            assert_matches!(
-                block::read(&mut tx, block_id, &mut buffer).await,
-                Err(Error::BlockNotFound(_))
-            );
+            assert!(!block::exists(&mut tx, block_id).await.unwrap());
         }
     }
 
@@ -1009,20 +1005,16 @@ mod tests {
 
         // Check the second block entry was deleted from the index
         let mut tx = pool.begin().await.unwrap();
-        let mut buffer = vec![0; BLOCK_SIZE];
         assert_matches!(
             branch.get(&mut tx, &locator1).await,
             Err(Error::EntryNotFound)
         );
-        assert_matches!(
-            block::read(&mut tx, &block_id1, &mut buffer).await,
-            Err(Error::BlockNotFound(_))
-        );
+        assert!(!block::exists(&mut tx, &block_id1).await.unwrap());
 
         // The first block is not deleted because it's needed to store the metadata.
         // It's only deleted when the blob itself is deleted.
         assert_matches!(branch.get(&mut tx, &locator0).await, Ok(_));
-        assert_matches!(block::read(&mut tx, &block_id0, &mut buffer).await, Ok(_));
+        assert!(block::exists(&mut tx, &block_id0).await.unwrap());
     }
 
     #[tokio::test(flavor = "multi_thread")]

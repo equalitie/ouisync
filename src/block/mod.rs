@@ -1,5 +1,7 @@
 mod store;
 
+#[cfg(test)]
+pub use self::store::exists;
 pub use self::store::{init, read, write};
 
 use crate::format;

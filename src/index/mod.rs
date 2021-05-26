@@ -157,7 +157,6 @@ mod tests {
         crypto::{AuthTag, Cryptor},
         locator::Locator,
     };
-    use assert_matches::assert_matches;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn remove_block() {
@@ -177,7 +176,7 @@ mod tests {
         let mut tx = pool.begin().await.unwrap();
 
         let block_id = BlockId::random();
-        let mut buffer = vec![0; BLOCK_SIZE];
+        let buffer = vec![0; BLOCK_SIZE];
 
         block::write(&mut tx, &block_id, &buffer, &AuthTag::default())
             .await
@@ -192,19 +191,16 @@ mod tests {
         branch1.insert(&mut tx, &block_id, &locator1).await.unwrap();
 
         assert!(!remove_orphaned_block(&mut tx, &block_id).await.unwrap());
-        assert_matches!(block::read(&mut tx, &block_id, &mut buffer).await, Ok(_));
+        assert!(block::exists(&mut tx, &block_id).await.unwrap());
 
         branch0.remove(&mut tx, &locator0).await.unwrap();
 
         assert!(!remove_orphaned_block(&mut tx, &block_id).await.unwrap());
-        assert_matches!(block::read(&mut tx, &block_id, &mut buffer).await, Ok(_));
+        assert!(block::exists(&mut tx, &block_id).await.unwrap());
 
         branch1.remove(&mut tx, &locator1).await.unwrap();
 
         assert!(remove_orphaned_block(&mut tx, &block_id).await.unwrap());
-        assert_matches!(
-            block::read(&mut tx, &block_id, &mut buffer).await,
-            Err(Error::BlockNotFound(_))
-        );
+        assert!(!block::exists(&mut tx, &block_id).await.unwrap(),);
     }
 }

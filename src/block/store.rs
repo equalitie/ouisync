@@ -89,6 +89,17 @@ pub async fn write(
     Ok(())
 }
 
+/// Checks whether a block exists in the store.
+/// (Currently used only in tests)
+#[cfg(test)]
+pub async fn exists(tx: &mut db::Transaction, id: &BlockId) -> Result<bool> {
+    Ok(sqlx::query("SELECT 0 FROM blocks WHERE id = ?")
+        .bind(id.to_array().as_ref())
+        .fetch_optional(tx)
+        .await?
+        .is_some())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
