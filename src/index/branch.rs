@@ -195,7 +195,7 @@ mod tests {
             .await
             .unwrap();
         let block_id = BlockId::random();
-        let locator = Locator::Head(block_id.name, 0);
+        let locator = random_head_locator(0);
         let encoded_locator = locator.encode(&Cryptor::Null);
 
         let mut tx = pool.begin().await.unwrap();
@@ -221,7 +221,7 @@ mod tests {
             let b1 = BlockId::random();
             let b2 = BlockId::random();
 
-            let locator = Locator::Head(b1.name, 0);
+            let locator = random_head_locator(0);
             let encoded_locator = locator.encode(&Cryptor::Null);
             let mut tx = pool.begin().await.unwrap();
 
@@ -247,7 +247,7 @@ mod tests {
             .unwrap();
 
         let b = BlockId::random();
-        let locator = Locator::Head(b.name, 0);
+        let locator = random_head_locator(0);
         let encoded_locator = locator.encode(&Cryptor::Null);
         let mut tx = pool.begin().await.unwrap();
 
@@ -293,5 +293,13 @@ mod tests {
         let pool = db::Pool::connect(":memory:").await.unwrap();
         index::init(&pool).await.unwrap();
         pool
+    }
+
+    fn random_head_locator(seq: u32) -> Locator {
+        use sha3::{Digest, Sha3_256};
+
+        let seed: u64 = rand::random();
+        let parent_hash = Sha3_256::digest(&seed.to_le_bytes()).into();
+        Locator::Head(parent_hash, seq)
     }
 }

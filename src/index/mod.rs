@@ -153,7 +153,7 @@ pub async fn remove_orphaned_block(tx: &mut db::Transaction, id: &BlockId) -> Re
 mod tests {
     use super::*;
     use crate::{
-        block::{self, BlockName, BLOCK_SIZE},
+        block::{self, BLOCK_SIZE},
         crypto::{AuthTag, Cryptor},
         locator::Locator,
     };
@@ -182,11 +182,11 @@ mod tests {
             .await
             .unwrap();
 
-        let locator0 = Locator::Head(BlockName::random(), 0);
+        let locator0 = random_head_locator(0);
         let locator0 = locator0.encode(&cryptor);
         branch0.insert(&mut tx, &block_id, &locator0).await.unwrap();
 
-        let locator1 = Locator::Head(BlockName::random(), 0);
+        let locator1 = random_head_locator(0);
         let locator1 = locator1.encode(&cryptor);
         branch1.insert(&mut tx, &block_id, &locator1).await.unwrap();
 
@@ -202,5 +202,13 @@ mod tests {
 
         assert!(remove_orphaned_block(&mut tx, &block_id).await.unwrap());
         assert!(!block::exists(&mut tx, &block_id).await.unwrap(),);
+    }
+
+    fn random_head_locator(seq: u32) -> Locator {
+        use sha3::{Digest, Sha3_256};
+
+        let seed: u64 = rand::random();
+        let parent_hash = Sha3_256::digest(&seed.to_le_bytes()).into();
+        Locator::Head(parent_hash, seq)
     }
 }

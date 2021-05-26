@@ -106,7 +106,7 @@ impl Directory {
             self.blob.db_pool().clone(),
             self.blob.branch().clone(),
             self.blob.cryptor().clone(),
-            Locator::Head(*self.blob.head_name(), seq),
+            Locator::Head(self.locator().hash(), seq),
         ))
     }
 
@@ -118,7 +118,7 @@ impl Directory {
             self.blob.db_pool().clone(),
             self.blob.branch().clone(),
             self.blob.cryptor().clone(),
-            Locator::Head(*self.blob.head_name(), seq),
+            Locator::Head(self.locator().hash(), seq),
         ))
     }
 
@@ -175,7 +175,7 @@ impl Directory {
         }
 
         let dst_entry = dst_dir.content.vacant_entry();
-        let new_dst_locator = Locator::Head(*dst_dir.blob.head_name(), dst_entry.seq());
+        let new_dst_locator = Locator::Head(dst_dir.blob.locator().hash(), dst_entry.seq());
 
         dst_dir
             .blob
@@ -239,7 +239,7 @@ impl<'a> EntryInfo<'a> {
     }
 
     pub fn locator(&self) -> Locator {
-        Locator::Head(*self.parent_blob.head_name(), self.data.seq)
+        Locator::Head(self.parent_blob.locator().hash(), self.data.seq)
     }
 
     /// Opens this entry.

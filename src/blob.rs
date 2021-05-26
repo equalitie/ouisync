@@ -1,5 +1,5 @@
 use crate::{
-    block::{self, BlockId, BlockName, BlockVersion, BLOCK_SIZE},
+    block::{self, BlockId, BlockVersion, BLOCK_SIZE},
     crypto::{AuthTag, Cryptor, NonceSequence},
     db,
     error::{Error, Result},
@@ -9,7 +9,7 @@ use crate::{
 use std::{
     convert::TryInto,
     io::SeekFrom,
-    iter, mem,
+    mem,
     ops::{Deref, DerefMut},
 };
 use zeroize::Zeroize;
@@ -300,9 +300,13 @@ impl Blob {
             self.seek(SeekFrom::End(0)).await?;
         }
 
-        let locators =
-            (new_block_count..old_block_count).map(|seq| Locator::Trunk(*self.head_name(), seq));
-        self.remove_blocks(locators).await
+        self.remove_blocks(
+            self.locator
+                .sequence()
+                .skip(new_block_count as usize)
+                .take((old_block_count - new_block_count) as usize),
+        )
+        .await
     }
 
     /// Flushes this blob, ensuring that all intermediately buffered contents gets written to the
@@ -318,13 +322,8 @@ impl Blob {
 
     /// Removes this blob.
     pub async fn remove(self) -> Result<()> {
-        let locators = iter::once(self.locator)
-            .chain((1..self.block_count()).map(|seq| Locator::Trunk(*self.head_name(), seq)));
-        self.remove_blocks(locators).await
-    }
-
-    pub fn head_name(&self) -> &BlockName {
-        self.current_block.head_name()
+        self.remove_blocks(self.locator.sequence().take(self.block_count() as usize))
+            .await
     }
 
     pub fn db_pool(&self) -> &db::Pool {
@@ -472,22 +471,18 @@ impl Blob {
     fn locator_at(&self, number: u32) -> Locator {
         if number == 0 {
             self.locator
-        } else if let Some(head_name) = self.current_block.locator.head_name() {
-            Locator::Trunk(*head_name, number)
         } else {
-            Locator::Trunk(self.current_block.id.name, number)
+            Locator::Trunk(self.locator.hash(), number)
         }
     }
 
     fn next_locator(&self) -> Locator {
         // TODO: return error instead of panic
-        let number = self
-            .current_block
+        self.current_block
             .locator
-            .number()
-            .checked_add(1)
-            .expect("block count limit exceeded");
-        self.locator_at(number)
+            .sequence()
+            .nth(1)
+            .expect("block count limit exceeded")
     }
 }
 
@@ -567,12 +562,6 @@ struct OpenBlock {
     content: Cursor,
     // Was this block modified since the last time it was loaded from/saved to the store?
     dirty: bool,
-}
-
-impl OpenBlock {
-    fn head_name(&self) -> &BlockName {
-        self.locator.head_name().unwrap_or(&self.id.name)
-    }
 }
 
 // Buffer for keeping loaded block content and also for in-place encryption and decryption.
@@ -690,6 +679,7 @@ mod tests {
     use assert_matches::assert_matches;
     use proptest::{collection::vec, prelude::*};
     use rand::{distributions::Standard, prelude::*};
+    use sha3::{Digest, Sha3_256};
     use std::future::Future;
     use test_strategy::proptest;
 
@@ -737,7 +727,7 @@ mod tests {
         let locator = if is_root {
             Locator::Root
         } else {
-            Locator::Head(rng.gen(), 0)
+            random_head_locator(&mut rng, 0)
         };
 
         // Create the blob and write to it in chunks of `write_len` bytes.
@@ -922,8 +912,7 @@ mod tests {
     async fn remove_blob() {
         let (mut rng, cryptor, pool, branch) = setup(0).await;
 
-        let parent_name = rng.gen();
-        let locator0 = Locator::Head(parent_name, 0);
+        let locator0 = random_head_locator(&mut rng, 0);
 
         let content: Vec<_> = (&mut rng)
             .sample_iter(Standard)
@@ -934,7 +923,7 @@ mod tests {
         blob.write(&content).await.unwrap();
         blob.flush().await.unwrap();
 
-        let locator1 = Locator::Trunk(*blob.head_name(), 1);
+        let locator1 = Locator::Trunk(blob.locator().hash(), 1);
         let encoded_locator0 = locator0.encode(&cryptor);
         let encoded_locator1 = locator1.encode(&cryptor);
 
@@ -969,8 +958,7 @@ mod tests {
     async fn truncate_to_empty() {
         let (mut rng, cryptor, pool, branch) = setup(0).await;
 
-        let parent_name = rng.gen();
-        let locator0 = Locator::Head(parent_name, 0);
+        let locator0 = random_head_locator(&mut rng, 0);
 
         let content: Vec<_> = (&mut rng)
             .sample_iter(Standard)
@@ -983,7 +971,7 @@ mod tests {
 
         let locator0 = locator0.encode(&cryptor);
 
-        let locator1 = Locator::Trunk(*blob.head_name(), 1);
+        let locator1 = Locator::Trunk(blob.locator().hash(), 1);
         let locator1 = locator1.encode(&cryptor);
 
         let (block_id0, block_id1) = {
@@ -1021,8 +1009,7 @@ mod tests {
     async fn truncate_to_shorter() {
         let (mut rng, cryptor, pool, branch) = setup(0).await;
 
-        let parent_name = rng.gen();
-        let locator0 = Locator::Head(parent_name, 0);
+        let locator0 = random_head_locator(&mut rng, 0);
 
         let content: Vec<_> = (&mut rng)
             .sample_iter(Standard)
@@ -1034,8 +1021,8 @@ mod tests {
         blob.flush().await.unwrap();
 
         let locators = [
-            Locator::Trunk(*blob.head_name(), 1),
-            Locator::Trunk(*blob.head_name(), 2),
+            Locator::Trunk(locator0.hash(), 1),
+            Locator::Trunk(locator0.hash(), 2),
         ];
 
         let new_len = BLOCK_SIZE / 2;
@@ -1083,6 +1070,12 @@ mod tests {
 
     fn rng_seed_strategy() -> impl Strategy<Value = u64> {
         any::<u64>().no_shrink()
+    }
+
+    fn random_head_locator<R: Rng>(rng: &mut R, seq: u32) -> Locator {
+        let seed: u64 = rng.gen();
+        let parent_hash = Sha3_256::digest(&seed.to_le_bytes()).into();
+        Locator::Head(parent_hash, seq)
     }
 
     async fn init_db() -> db::Pool {

@@ -25,12 +25,7 @@ impl Hash {
     }
 
     pub fn is_null(&self) -> bool {
-        for c in self.0.as_slice() {
-            if *c != 0 {
-                return false;
-            }
-        }
-        true
+        self.0.iter().all(|&byte| byte == 0)
     }
 }
 
