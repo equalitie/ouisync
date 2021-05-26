@@ -142,7 +142,7 @@ pub async fn remove_orphaned_block(tx: &mut db::Transaction, id: &BlockId) -> Re
         "DELETE FROM blocks
          WHERE id = ? AND (SELECT 0 FROM snapshot_leaf_nodes WHERE block_id = id) IS NULL",
     )
-    .bind(id.to_array().as_ref())
+    .bind(id)
     .execute(tx)
     .await?;
 

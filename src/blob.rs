@@ -1,5 +1,5 @@
 use crate::{
-    block::{self, BlockId, BlockVersion, BLOCK_SIZE},
+    block::{self, BlockId, BLOCK_SIZE},
     crypto::{AuthTag, Cryptor, Hashable, NonceSequence},
     db,
     error::{Error, Result},
@@ -45,7 +45,7 @@ impl Blob {
         let nonce_sequence = NonceSequence::new(content.read_array());
         let nonce = nonce_sequence.get(0);
 
-        cryptor.decrypt(&nonce, &id.to_array(), &mut content, &auth_tag)?;
+        cryptor.decrypt(&nonce, id.as_ref(), &mut content, &auth_tag)?;
 
         let len = content.read_u64();
 
@@ -367,7 +367,7 @@ impl Blob {
             return Ok(());
         }
 
-        self.current_block.id.version = BlockVersion::random();
+        self.current_block.id = BlockId::random();
 
         write_block(
             &self.branch,
@@ -399,7 +399,7 @@ impl Blob {
             self.current_block.dirty = true;
         } else {
             let locator = self.locator_at(0);
-            let (mut id, buffer) = read_block(
+            let (_, buffer) = read_block(
                 &self.branch,
                 tx,
                 &self.cryptor,
@@ -411,7 +411,6 @@ impl Blob {
             let mut cursor = Cursor::new(buffer);
             cursor.pos = self.nonce_sequence.prefix().len();
             cursor.write_u64(self.len);
-            id.version = BlockVersion::random();
 
             write_block(
                 &self.branch,
@@ -419,7 +418,7 @@ impl Blob {
                 &self.cryptor,
                 &self.nonce_sequence,
                 &locator,
-                &id,
+                &BlockId::random(),
                 cursor.buffer,
             )
             .await?;
@@ -497,7 +496,7 @@ async fn read_block(
 
     let number = locator.number();
     let nonce = nonce_sequence.get(number);
-    let aad = id.to_array(); // "additional associated data"
+    let aad = id.as_ref(); // "additional associated data"
 
     let offset = if number == 0 {
         nonce_sequence.prefix().len()
@@ -505,7 +504,7 @@ async fn read_block(
         0
     };
 
-    cryptor.decrypt(&nonce, &aad, &mut buffer[offset..], &auth_tag)?;
+    cryptor.decrypt(&nonce, aad, &mut buffer[offset..], &auth_tag)?;
 
     Ok((id, buffer))
 }
@@ -534,7 +533,7 @@ async fn write_block(
 ) -> Result<()> {
     let number = locator.number();
     let nonce = nonce_sequence.get(number);
-    let aad = block_id.to_array(); // "additional associated data"
+    let aad = block_id.as_ref(); // "additional associated data"
 
     let offset = if number == 0 {
         nonce_sequence.prefix().len()
@@ -542,7 +541,7 @@ async fn write_block(
         0
     };
 
-    let auth_tag = cryptor.encrypt(&nonce, &aad, &mut buffer[offset..])?;
+    let auth_tag = cryptor.encrypt(&nonce, aad, &mut buffer[offset..])?;
 
     block::write(tx, block_id, &buffer, &auth_tag).await?;
     branch

@@ -37,7 +37,7 @@ pub async fn read(tx: &mut db::Transaction, id: &BlockId, buffer: &mut [u8]) -> 
     );
 
     let row = sqlx::query("SELECT auth_tag, content FROM blocks WHERE id = ?")
-        .bind(id.to_array().as_ref())
+        .bind(id)
         .fetch_optional(tx)
         .await?;
     let row = match row {
@@ -80,7 +80,7 @@ pub async fn write(
     );
 
     sqlx::query("INSERT INTO blocks (id, auth_tag, content) VALUES (?, ?, ?)")
-        .bind(id.to_array().as_ref())
+        .bind(id)
         .bind(auth_tag.as_slice())
         .bind(buffer)
         .execute(tx)
@@ -94,7 +94,7 @@ pub async fn write(
 #[cfg(test)]
 pub async fn exists(tx: &mut db::Transaction, id: &BlockId) -> Result<bool> {
     Ok(sqlx::query("SELECT 0 FROM blocks WHERE id = ?")
-        .bind(id.to_array().as_ref())
+        .bind(id)
         .fetch_optional(tx)
         .await?
         .is_some())
