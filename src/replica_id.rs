@@ -13,13 +13,13 @@ use std::{
 /// Size of replica ID in bytes.
 pub const REPLICA_ID_SIZE: usize = 16;
 
-/// Unique name of a block which doesn't change when the block is modified.
+/// Unique id of a replica.
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 #[repr(transparent)]
 pub struct ReplicaId([u8; REPLICA_ID_SIZE]);
 
 impl ReplicaId {
-    /// Generate a random name using the default RNG ([`rand::thread_rng`]).
+    /// Generate a random id using the default RNG ([`rand::thread_rng`]).
     pub fn random() -> Self {
         rand::thread_rng().gen()
     }
