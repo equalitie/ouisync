@@ -63,3 +63,7 @@ impl TryFrom<&'_ [u8]> for ReplicaId {
         Ok(Self(slice.try_into()?))
     }
 }
+
+derive_sqlx_type_for_u8_array_wrapper!(ReplicaId);
+derive_sqlx_encode_for_u8_array_wrapper!(ReplicaId);
+derive_sqlx_decode_for_u8_array_wrapper!(ReplicaId);

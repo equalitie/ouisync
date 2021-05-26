@@ -47,8 +47,8 @@ pub async fn set_id(pool: &db::Pool, replica_id: &ReplicaId) -> Result<(), Error
         "INSERT INTO this_replica_id(row_id, replica_id)
              VALUES (0, ?) ON CONFLICT(row_id) DO UPDATE SET replica_id=?;",
     )
-    .bind(replica_id.as_ref())
-    .bind(replica_id.as_ref())
+    .bind(replica_id)
+    .bind(replica_id)
     .execute(&mut conn)
     .await?;
 

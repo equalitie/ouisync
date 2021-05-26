@@ -1,3 +1,6 @@
+#[macro_use]
+mod macros;
+
 pub mod crypto;
 pub mod db;
 pub mod this_replica;

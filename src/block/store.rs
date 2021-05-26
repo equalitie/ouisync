@@ -13,11 +13,9 @@ use sqlx::Row;
 pub async fn init(pool: &db::Pool) -> Result<()> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS blocks (
-             name     BLOB NOT NULL,
-             version  BLOB NOT NULL,
+             id       BLOB NOT NULL PRIMARY KEY,
              auth_tag BLOB NOT NULL,
-             content  BLOB NOT NULL,
-             PRIMARY KEY (name, version)
+             content  BLOB NOT NULL
          ) WITHOUT ROWID",
     )
     .execute(pool)
@@ -38,9 +36,8 @@ pub async fn read(tx: &mut db::Transaction, id: &BlockId, buffer: &mut [u8]) -> 
         "insufficient buffer length for block read"
     );
 
-    let row = sqlx::query("SELECT auth_tag, content FROM blocks WHERE name = ? AND version = ?")
-        .bind(id.name.as_ref())
-        .bind(id.version.as_ref())
+    let row = sqlx::query("SELECT auth_tag, content FROM blocks WHERE id = ?")
+        .bind(id.to_array().as_ref())
         .fetch_optional(tx)
         .await?;
     let row = match row {
@@ -82,15 +79,25 @@ pub async fn write(
         "incorrect buffer length for block write"
     );
 
-    sqlx::query("INSERT INTO blocks (name, version, auth_tag, content) VALUES (?, ?, ?, ?)")
-        .bind(id.name.as_ref())
-        .bind(id.version.as_ref())
+    sqlx::query("INSERT INTO blocks (id, auth_tag, content) VALUES (?, ?, ?)")
+        .bind(id.to_array().as_ref())
         .bind(auth_tag.as_slice())
         .bind(buffer)
         .execute(tx)
         .await?;
 
     Ok(())
+}
+
+/// Checks whether a block exists in the store.
+/// (Currently used only in tests)
+#[cfg(test)]
+pub async fn exists(tx: &mut db::Transaction, id: &BlockId) -> Result<bool> {
+    Ok(sqlx::query("SELECT 0 FROM blocks WHERE id = ?")
+        .bind(id.to_array().as_ref())
+        .fetch_optional(tx)
+        .await?
+        .is_some())
 }
 
 #[cfg(test)]

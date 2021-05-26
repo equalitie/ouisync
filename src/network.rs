@@ -1,10 +1,10 @@
 use crate::{
-    Index,
     message_broker::MessageBroker,
     object_stream::ObjectStream,
     replica_discovery::{ReplicaDiscovery, RuntimeId},
     replica_id::ReplicaId,
     scoped_task_set::{ScopedTaskHandle, ScopedTaskSet},
+    Index,
 };
 
 use std::{

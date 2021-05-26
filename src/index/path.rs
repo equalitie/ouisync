@@ -60,13 +60,11 @@ impl Path {
     }
 
     pub fn get_leaf(&self) -> Option<BlockId> {
-        self.leaves
-            .get(&self.locator)
-            .map(|node| node.data.block_id)
+        self.leaves.get(&self.locator).map(|node| node.block_id)
     }
 
     pub fn has_leaf(&self, block_id: &BlockId) -> bool {
-        self.leaves.iter().any(|l| &l.data.block_id == block_id)
+        self.leaves.iter().any(|l| &l.block_id == block_id)
     }
 
     pub fn total_layer_count() -> usize {
@@ -89,21 +87,18 @@ impl Path {
         }
     }
 
-    pub fn remove_leaf(&mut self, locator: &Hash) {
-        if self.leaves.remove(locator).is_none() {
-            return;
-        }
+    pub fn remove_leaf(&mut self, locator: &Hash) -> Option<BlockId> {
+        let block_id = self.leaves.remove(locator)?.block_id;
 
         if !self.leaves.is_empty() {
             self.recalculate(INNER_LAYER_COUNT);
-            return;
-        }
-
-        if INNER_LAYER_COUNT > 0 {
+        } else if INNER_LAYER_COUNT > 0 {
             self.remove_from_inner_layer(INNER_LAYER_COUNT - 1);
         } else {
             self.remove_root_layer();
         }
+
+        Some(block_id)
     }
 
     pub fn get_bucket(&self, inner_layer: usize) -> usize {
@@ -171,9 +166,9 @@ fn hash_leaves(leaves: &[LeafNode]) -> Hash {
     // XXX: Is updating with length enough to prevent attaks?
     hash.update((leaves.len() as u32).to_le_bytes());
     for l in leaves {
-        hash.update(l.data.locator());
-        hash.update(l.data.block_id.name);
-        hash.update(l.data.block_id.version);
+        hash.update(l.locator());
+        hash.update(l.block_id.name);
+        hash.update(l.block_id.version);
     }
     hash.finalize().into()
 }
@@ -200,9 +195,9 @@ fn calculate_missing_blocks_crc_from_leaves(leaves: &[LeafNode]) -> (Crc, usize)
     let mut digest = crc32::Digest::new(crc32::IEEE);
 
     for l in leaves {
-        if l.missing_blocks_crc != 0 {
+        if l.is_block_missing {
             cnt += 1;
-            digest.write(l.missing_blocks_crc.to_le_bytes().as_ref());
+            digest.write(&[1]);
         }
     }
 

@@ -1,5 +1,7 @@
 mod store;
 
+#[cfg(test)]
+pub use self::store::exists;
 pub use self::store::{init, read, write};
 
 use crate::format;
@@ -137,13 +139,33 @@ impl BlockId {
         }
     }
 
-    pub fn as_array(&self) -> [u8; BLOCK_NAME_SIZE + BLOCK_VERSION_SIZE] {
+    pub fn to_array(&self) -> [u8; BLOCK_NAME_SIZE + BLOCK_VERSION_SIZE] {
         let mut array = [0; BLOCK_NAME_SIZE + BLOCK_VERSION_SIZE];
         array[..BLOCK_NAME_SIZE].copy_from_slice(self.name.as_ref());
         array[BLOCK_NAME_SIZE..].copy_from_slice(self.version.as_ref());
         array
     }
 }
+
+impl TryFrom<&[u8]> for BlockId {
+    type Error = TryFromSliceError;
+
+    fn try_from(slice: &[u8]) -> Result<Self, Self::Error> {
+        let split_at = BLOCK_NAME_SIZE.min(slice.len());
+
+        let name = BlockName::try_from(&slice[..split_at])?;
+        let version = BlockVersion::try_from(&slice[split_at..])?;
+
+        Ok(Self { name, version })
+    }
+}
+
+derive_sqlx_type_for_u8_array_wrapper!(BlockId);
+derive_sqlx_decode_for_u8_array_wrapper!(BlockId);
+
+// NOTE: Can't derive `Encode` because it needs a way to borrow the undelying u8 array which
+// `BlockId` can't do because the array is not actually contained in it but is created on demand
+// instead.
 
 impl fmt::Display for BlockId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {

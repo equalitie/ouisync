@@ -1,8 +1,7 @@
 use crate::format;
-use sha3::digest::generic_array::typenum::Unsigned;
 use sha3::{
     digest::{
-        generic_array::{sequence::GenericSequence, GenericArray},
+        generic_array::{sequence::GenericSequence, typenum::Unsigned, GenericArray},
         Digest,
     },
     Sha3_256,
@@ -19,6 +18,8 @@ use std::{
 pub struct Hash(Inner);
 
 impl Hash {
+    pub const SIZE: usize = <Inner as GenericSequence<_>>::Length::USIZE;
+
     pub fn null() -> Self {
         Self(Inner::default())
     }
@@ -67,10 +68,13 @@ impl TryFrom<&'_ [u8]> for Hash {
     type Error = TryFromSliceError;
 
     fn try_from(slice: &[u8]) -> Result<Self, Self::Error> {
-        const USIZE: usize = <Inner as GenericSequence<_>>::Length::USIZE;
-        let slice: [u8; USIZE] = slice.try_into()?;
+        let slice: [u8; Self::SIZE] = slice.try_into()?;
         Ok(Self(slice.into()))
     }
 }
+
+derive_sqlx_type_for_u8_array_wrapper!(Hash);
+derive_sqlx_encode_for_u8_array_wrapper!(Hash);
+derive_sqlx_decode_for_u8_array_wrapper!(Hash);
 
 type Inner = GenericArray<u8, <Sha3_256 as Digest>::OutputSize>;
