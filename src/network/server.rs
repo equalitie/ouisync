@@ -1,5 +1,4 @@
-use crate::message::Response;
-use crate::message_broker::ServerStream;
+use super::{message::Response, message_broker::ServerStream};
 use crate::Index;
 
 pub struct Server {}

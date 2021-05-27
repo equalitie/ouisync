@@ -3,7 +3,7 @@ use super::{
     logger::Logger,
     utils::{self, AssumeSend, Port},
 };
-use crate::{db, error::Result};
+use crate::{crypto::Cryptor, db, error::Result, network::NetworkOptions, session::Session};
 use std::{
     ffi::{CStr, CString},
     fmt,
@@ -63,9 +63,9 @@ pub unsafe extern "C" fn session_open(
     let handle = runtime.handle().clone();
 
     handle.spawn(sender.invoke(port, error_ptr, async move {
-        let session = Session {
+        let session = SessionWrapper {
             runtime,
-            pool: db::init(store).await?,
+            session: Session::new(store, Cryptor::Null, NetworkOptions::default()).await?,
             sender,
             _logger: logger,
         };
@@ -105,30 +105,30 @@ where
 {
     assert!(!SESSION.is_null(), "session is not initialized");
 
-    let session = &*SESSION;
+    let wrapper = &*SESSION;
     let context = Context {
-        session,
+        wrapper,
         port,
         error_ptr,
     };
 
     match f(context) {
         Ok(()) => (),
-        Err(error) => session.sender.send_err(port, error_ptr, error),
+        Err(error) => wrapper.sender.send_err(port, error_ptr, error),
     }
 }
 
-static mut SESSION: *mut Session = ptr::null_mut();
+static mut SESSION: *mut SessionWrapper = ptr::null_mut();
 
-struct Session {
+struct SessionWrapper {
     runtime: Runtime,
-    pool: db::Pool,
+    session: Session,
     sender: Sender,
     _logger: Logger,
 }
 
 pub(super) struct Context<'a, T> {
-    session: &'a Session,
+    wrapper: &'a SessionWrapper,
     port: Port<T>,
     error_ptr: *mut *mut c_char,
 }
@@ -141,14 +141,14 @@ where
     where
         F: Future<Output = Result<T>> + Send + 'static,
     {
-        self.session
+        self.wrapper
             .runtime
-            .spawn(self.session.sender.invoke(self.port, self.error_ptr, f));
+            .spawn(self.wrapper.sender.invoke(self.port, self.error_ptr, f));
         Ok(())
     }
 
-    pub(super) fn pool(&self) -> &db::Pool {
-        &self.session.pool
+    pub(super) fn session(&self) -> &Session {
+        &self.wrapper.session
     }
 }
 

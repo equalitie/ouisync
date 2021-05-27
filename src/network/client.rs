@@ -1,5 +1,4 @@
-use crate::message::Request;
-use crate::message_broker::ClientStream;
+use super::{message::Request, message_broker::ClientStream};
 use crate::Index;
 use tokio::time::{sleep, Duration};
 

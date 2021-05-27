@@ -1,14 +1,18 @@
-use crate::{
+use super::{
     client::Client,
     message::{Message, Request, Response},
     object_stream::{ObjectReader, ObjectStream, ObjectWriter},
-    scoped_task_set::{ScopedTaskHandle, ScopedTaskSet},
     server::Server,
+};
+use crate::{
+    scoped_task_set::{ScopedTaskHandle, ScopedTaskSet},
     Index,
 };
-use std::ops::FnOnce;
-use std::sync::Arc;
-use tokio::sync::mpsc::{error::SendError, Receiver, Sender};
+use std::{future::Future, pin::Pin, sync::Arc};
+use tokio::sync::{
+    mpsc::{error::SendError, Receiver, Sender},
+    Mutex,
+};
 
 /// A stream for receiving Requests and sending Responses
 pub struct ServerStream {
@@ -48,7 +52,7 @@ impl ClientStream {
     }
 }
 
-type OnFinish = Box<dyn FnOnce() + Send>;
+type OnFinish = Pin<Box<dyn Future<Output = ()> + Send>>;
 
 struct State {
     on_finish: Option<OnFinish>,
@@ -81,7 +85,7 @@ impl MessageBroker {
             send_channel: command_tx,
             request_tx,
             response_tx,
-            state: std::sync::Mutex::new(State {
+            state: Mutex::new(State {
                 on_finish: Some(on_finish),
                 receiver_count: 0,
             }),
@@ -120,7 +124,7 @@ struct Inner {
     send_channel: Sender<Command>,
     request_tx: Sender<Request>,
     response_tx: Sender<Response>,
-    state: std::sync::Mutex<State>,
+    state: Mutex<State>,
     task_handle: ScopedTaskHandle,
     index: Index,
 }
@@ -141,7 +145,7 @@ impl Inner {
                 receiver: response_rx,
             };
             client.run(stream, &s1.index).await;
-            s1.finish();
+            s1.finish().await;
         });
 
         self.task_handle.spawn(async move {
@@ -151,7 +155,7 @@ impl Inner {
                 receiver: request_rx,
             };
             server.run(stream, &s2.index).await;
-            s2.finish();
+            s2.finish().await;
         });
     }
 
@@ -185,7 +189,7 @@ impl Inner {
                     }
 
                     if ws.is_empty() {
-                        self.finish();
+                        self.finish().await;
                     }
                 }
             }
@@ -193,7 +197,8 @@ impl Inner {
     }
 
     async fn run_message_receiver(&self, mut r: ObjectReader) {
-        self.state.lock().unwrap().receiver_count += 1;
+        self.state.lock().await.receiver_count += 1;
+
         loop {
             match r.read::<Message>().await {
                 Ok(msg) => {
@@ -201,13 +206,13 @@ impl Inner {
                 }
                 Err(_) => {
                     let rc = {
-                        let mut state = self.state.lock().unwrap();
+                        let mut state = self.state.lock().await;
                         state.receiver_count -= 1;
                         state.receiver_count
                     };
 
                     if rc == 0 {
-                        self.finish();
+                        self.finish().await;
                     }
                     break;
                 }
@@ -226,11 +231,12 @@ impl Inner {
         }
     }
 
-    fn finish(&self) {
+    async fn finish(&self) {
         self.task_handle.abort_all();
 
-        if let Some(on_finish) = self.state.lock().unwrap().on_finish.take() {
-            on_finish();
+        let on_finish = self.state.lock().await.on_finish.take();
+        if let Some(on_finish) = on_finish {
+            on_finish.await
         }
     }
 }

@@ -42,6 +42,8 @@ pub enum Error {
     DirectoryNotEmpty,
     #[error("operation is not supported")]
     OperationNotSupported,
+    #[error("network error")]
+    Network(#[source] io::Error),
 }
 
 impl From<TryFromSliceError> for Error {

@@ -5,27 +5,22 @@ use std::{
 
 use crate::{
     crypto::Cryptor,
-    db,
     directory::{Directory, MoveDstDirectory},
     entry::{Entry, EntryType},
     error::{Error, Result},
     file::File,
     index::{Branch, Index},
     locator::Locator,
-    this_replica,
 };
 
 pub struct Repository {
-    pub index: Index,
+    index: Index,
     cryptor: Cryptor,
 }
 
 impl Repository {
-    pub async fn new(pool: db::Pool, cryptor: Cryptor) -> Result<Self> {
-        let this_replica_id = this_replica::get_or_create_id(&pool).await?;
-        let index = Index::load(pool, this_replica_id).await?;
-
-        Ok(Self { index, cryptor })
+    pub fn new(index: Index, cryptor: Cryptor) -> Self {
+        Self { index, cryptor }
     }
 
     /// Opens the root directory.
@@ -235,11 +230,13 @@ fn decompose_path(path: &Path) -> Option<(&Path, &OsStr)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{db, replica_id::ReplicaId};
 
     #[tokio::test(flavor = "multi_thread")]
     async fn lookup() {
         let pool = db::init(db::Store::Memory).await.unwrap();
-        let repo = Repository::new(pool, Cryptor::Null).await.unwrap();
+        let index = Index::load(pool, ReplicaId::random()).await.unwrap();
+        let repo = Repository::new(index, Cryptor::Null);
 
         let mut root_dir = repo.open_directory_by_locator(Locator::Root).await.unwrap();
         let mut file_a = root_dir.create_file("a.txt".into()).unwrap();

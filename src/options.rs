@@ -1,8 +1,6 @@
 use anyhow::{Context, Result};
-use std::{
-    net::{IpAddr, SocketAddr},
-    path::PathBuf,
-};
+use ouisync::NetworkOptions;
+use std::{net::SocketAddr, path::PathBuf};
 use structopt::StructOpt;
 
 /// Command line options.
@@ -16,16 +14,8 @@ pub(crate) struct Options {
     #[structopt(short, long, value_name = "ip:port")]
     pub connect: Option<SocketAddr>,
 
-    /// Port to listen on
-    #[structopt(short, long, default_value = "65535")]
-    pub port: u16,
-
-    /// IP address to bind to
-    #[structopt(long, default_value = "0.0.0.0")]
-    pub bind: IpAddr,
-
-    #[structopt(short, long)]
-    pub enable_local_discovery: bool,
+    #[structopt(flatten)]
+    pub network: NetworkOptions,
 }
 
 impl Options {

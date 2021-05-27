@@ -1,29 +1,71 @@
-use crate::{
+mod client;
+mod message;
+mod message_broker;
+mod object_stream;
+mod replica_discovery;
+mod server;
+
+use self::{
     message_broker::MessageBroker,
     object_stream::ObjectStream,
     replica_discovery::{ReplicaDiscovery, RuntimeId},
+};
+use crate::{
     replica_id::ReplicaId,
     scoped_task_set::{ScopedTaskHandle, ScopedTaskSet},
     Index,
 };
-
 use std::{
     collections::{HashMap, HashSet},
     io,
-    net::SocketAddr,
+    net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::Arc,
 };
+use structopt::StructOpt;
+use tokio::{
+    net::{TcpListener, TcpStream},
+    sync::Mutex,
+};
 
-use tokio::net::{TcpListener, TcpStream};
+pub const DEFAULT_PORT: u16 = 65535;
 
-use std::sync::Mutex;
+#[derive(StructOpt)]
+pub struct NetworkOptions {
+    /// Port to listen on
+    #[structopt(short, long, default_value = "65535")]
+    pub port: u16,
+
+    /// IP address to bind to
+    #[structopt(short, long, default_value = "0.0.0.0", value_name = "ip")]
+    pub bind: IpAddr,
+
+    /// Enable local discovery
+    #[structopt(short, long)]
+    pub enable_local_discovery: bool,
+}
+
+impl NetworkOptions {
+    pub fn listen_addr(&self) -> SocketAddr {
+        SocketAddr::new(self.bind, self.port)
+    }
+}
+
+impl Default for NetworkOptions {
+    fn default() -> Self {
+        Self {
+            port: DEFAULT_PORT,
+            bind: Ipv4Addr::UNSPECIFIED.into(),
+            enable_local_discovery: true,
+        }
+    }
+}
 
 pub struct Network {
     _tasks: ScopedTaskSet,
 }
 
 impl Network {
-    pub fn new(_enable_discovery: bool, index: Index) -> io::Result<Self> {
+    pub async fn new(index: Index, options: NetworkOptions) -> io::Result<Self> {
         let tasks = ScopedTaskSet::default();
         let task_handle = tasks.handle().clone();
 
@@ -35,9 +77,7 @@ impl Network {
             index,
         });
 
-        tasks.spawn(async move {
-            inner.start().await.unwrap();
-        });
+        inner.start(options.listen_addr()).await?;
 
         Ok(Self { _tasks: tasks })
     }
@@ -52,16 +92,14 @@ struct Inner {
 }
 
 impl Inner {
-    async fn start(self: Arc<Self>) -> io::Result<()> {
-        let any_addr = SocketAddr::from(([0, 0, 0, 0], 0));
-        let listener = TcpListener::bind(any_addr).await?;
+    async fn start(self: Arc<Self>, addr: SocketAddr) -> io::Result<()> {
+        let listener = TcpListener::bind(addr).await?;
 
-        let s1 = self.clone();
-        let s2 = self.clone();
-
-        self.task_handle
-            .spawn(s1.run_discovery(listener.local_addr().unwrap().port()));
-        self.task_handle.spawn(s2.run_listener(listener));
+        self.task_handle.spawn(
+            self.clone()
+                .run_discovery(listener.local_addr().unwrap().port()),
+        );
+        self.task_handle.spawn(self.clone().run_listener(listener));
 
         Ok(())
     }
@@ -86,11 +124,10 @@ impl Inner {
                     }
                 }
                 _ = self.to_forget.changed() => {
-                    let mut set = self.to_forget.value.lock().unwrap();
-                    for id in &*set {
-                        discovery.forget(id);
+                    let mut set = self.to_forget.value.lock().await;
+                    for id in set.drain() {
+                        discovery.forget(&id);
                     }
-                    set.clear();
                 }
             }
         }
@@ -120,17 +157,16 @@ impl Inner {
         let their_replica_id = os.read::<ReplicaId>().await?;
 
         let s = self.clone();
-        let mut brokers = self.message_brokers.lock().unwrap();
+        let mut brokers = self.message_brokers.lock().await;
         let index = self.index.clone();
 
         let broker = brokers.entry(their_replica_id).or_insert_with(|| {
             MessageBroker::new(
                 index,
-                Box::new(move || {
-                    let mut brokers = s.message_brokers.lock().unwrap();
-                    brokers.remove(&their_replica_id);
+                Box::pin(async move {
+                    s.message_brokers.lock().await.remove(&their_replica_id);
                     if let Some(discovery_id) = discovery_id {
-                        s.to_forget.modify(|set| set.insert(discovery_id));
+                        s.to_forget.modify(|set| set.insert(discovery_id)).await;
                     }
                 }),
             )
@@ -144,22 +180,22 @@ impl Inner {
 
 struct Mutable<T> {
     notify: tokio::sync::Notify,
-    value: std::sync::Mutex<T>,
+    value: Mutex<T>,
 }
 
 impl<T> Mutable<T> {
     pub fn new(value: T) -> Mutable<T> {
         Mutable {
             notify: tokio::sync::Notify::new(),
-            value: std::sync::Mutex::new(value),
+            value: Mutex::new(value),
         }
     }
 
-    pub fn modify<F, R>(&self, f: F)
+    pub async fn modify<F, R>(&self, f: F)
     where
         F: FnOnce(&mut T) -> R + Sized,
     {
-        let mut v = self.value.lock().unwrap();
+        let mut v = self.value.lock().await;
         f(&mut v);
         self.notify.notify_one();
     }

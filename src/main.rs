@@ -3,7 +3,7 @@ mod virtual_filesystem;
 
 use self::options::Options;
 use anyhow::Result;
-use ouisync::{db, Cryptor, Network, Repository};
+use ouisync::{db, Cryptor, Session};
 use structopt::StructOpt;
 use tokio::signal;
 
@@ -13,16 +13,16 @@ async fn main() -> Result<()> {
 
     env_logger::init();
 
-    let pool = db::init(db::Store::File(options.db_path()?)).await?;
-    let cryptor = Cryptor::Null; // TODO:
-
-    let repository = Repository::new(pool, cryptor).await?;
-
-    let _network = Network::new(options.enable_local_discovery, repository.index.clone());
+    let session = Session::new(
+        db::Store::File(options.db_path()?),
+        Cryptor::Null,
+        options.network,
+    )
+    .await?;
 
     let _mount_guard = virtual_filesystem::mount(
         tokio::runtime::Handle::current(),
-        repository,
+        session.open_repository(),
         options.mount_dir,
     )?;
 
