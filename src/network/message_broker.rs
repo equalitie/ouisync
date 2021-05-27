@@ -1,9 +1,11 @@
-use crate::{
+use super::{
     client::Client,
     message::{Message, Request, Response},
     object_stream::{ObjectReader, ObjectStream, ObjectWriter},
-    scoped_task_set::{ScopedTaskHandle, ScopedTaskSet},
     server::Server,
+};
+use crate::{
+    scoped_task_set::{ScopedTaskHandle, ScopedTaskSet},
     Index,
 };
 use std::{future::Future, pin::Pin, sync::Arc};

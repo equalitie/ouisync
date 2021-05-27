@@ -1,7 +1,16 @@
-use crate::{
+mod client;
+mod message;
+mod message_broker;
+mod object_stream;
+mod replica_discovery;
+mod server;
+
+use self::{
     message_broker::MessageBroker,
     object_stream::ObjectStream,
     replica_discovery::{ReplicaDiscovery, RuntimeId},
+};
+use crate::{
     replica_id::ReplicaId,
     scoped_task_set::{ScopedTaskHandle, ScopedTaskSet},
     Index,
