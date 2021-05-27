@@ -19,6 +19,7 @@ mod network;
 mod replica_id;
 mod repository;
 mod scoped_task_set;
+mod session;
 
 pub use self::{
     crypto::Cryptor,
@@ -31,4 +32,5 @@ pub use self::{
     network::Network,
     replica_id::ReplicaId,
     repository::Repository,
+    session::Session,
 };

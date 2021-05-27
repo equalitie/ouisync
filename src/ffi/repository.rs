@@ -2,7 +2,7 @@ use super::{
     session,
     utils::{self, Port, SharedHandle},
 };
-use crate::{crypto::Cryptor, entry::EntryType, error::Error, repository::Repository};
+use crate::{entry::EntryType, error::Error, repository::Repository};
 use std::{os::raw::c_char, sync::Arc};
 
 pub const ENTRY_TYPE_INVALID: u8 = 0;
@@ -19,11 +19,9 @@ pub unsafe extern "C" fn repository_open(
     error: *mut *mut c_char,
 ) {
     session::with(port, error, |ctx| {
-        let pool = ctx.pool().clone();
-        let cryptor = Cryptor::Null; // TODO: support encryption
+        let repo = ctx.session().open_repository();
 
         ctx.spawn(async move {
-            let repo = Repository::new(pool, cryptor).await?;
             let repo = Arc::new(repo);
             Ok(SharedHandle::new(repo))
         })
