@@ -30,7 +30,8 @@ pub unsafe extern "C" fn session_open(
     };
 
     if !SESSION.is_null() {
-        sender.send_err(port, error_ptr, "session is already initialized");
+        // Session already exists.
+        sender.send_ok(port, error_ptr, ());
         return;
     }
 
