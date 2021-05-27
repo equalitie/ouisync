@@ -22,7 +22,7 @@ pub struct Network {
 }
 
 impl Network {
-    pub fn new(_enable_discovery: bool, index: Index) -> io::Result<Self> {
+    pub async fn new(_enable_discovery: bool, index: Index) -> io::Result<Self> {
         let tasks = ScopedTaskSet::default();
         let task_handle = tasks.handle().clone();
 
@@ -34,9 +34,7 @@ impl Network {
             index,
         });
 
-        tasks.spawn(async move {
-            inner.start().await.unwrap();
-        });
+        inner.start().await?;
 
         Ok(Self { _tasks: tasks })
     }
