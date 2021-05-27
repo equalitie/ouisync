@@ -35,13 +35,13 @@ impl Branch {
         })
     }
 
-    /// Insert a new block into the index.
+    /// Inserts a new block into the index. Returns the previous id at the same locator, if any.
     pub async fn insert(
         &self,
         tx: &mut db::Transaction,
         block_id: &BlockId,
         encoded_locator: &LocatorHash,
-    ) -> Result<()> {
+    ) -> Result<Option<BlockId>> {
         let mut lock = self.root_node.lock().await;
         let mut path = self.get_path(tx, &lock.hash, &encoded_locator).await?;
 
@@ -50,9 +50,11 @@ impl Branch {
         // BlockVersion twice.
         assert!(!path.has_leaf(block_id));
 
-        path.set_leaf(&block_id);
+        let old_block_id = path.set_leaf(&block_id);
         let old_root = self.write_path(tx, &mut lock, &path).await?;
-        self.remove_snapshot(&old_root, tx).await
+        self.remove_snapshot(&old_root, tx).await?;
+
+        Ok(old_block_id)
     }
 
     /// Retrieve `BlockId` of a block with the given encoded `Locator`.

@@ -8,7 +8,7 @@ use crate::{
 };
 use async_recursion::async_recursion;
 use sqlx::Row;
-use std::{iter::FromIterator, slice};
+use std::{iter::FromIterator, mem, slice};
 
 #[derive(Clone, Debug)]
 pub struct RootNode {
@@ -273,31 +273,30 @@ pub async fn leaf_children(parent: &Hash, tx: &mut db::Transaction) -> Result<Le
 pub struct LeafNodeSet(Vec<LeafNode>);
 
 impl LeafNodeSet {
-    /// Inserts a new node or updates it if already exists. Returns `true` if the node was inserted
-    /// or updated and `false` if it already existed with the same `block_id`.
-    pub fn insert_or_update(&mut self, locator: &Hash, block_id: &BlockId) -> bool {
+    /// Inserts a new node or updates it if already exists.
+    pub fn modify(&mut self, locator: &Hash, block_id: &BlockId) -> ModifyStatus {
         match self.lookup(locator) {
             Ok(index) => {
                 let node = &mut self.0[index];
 
                 if &node.block_id == block_id {
-                    // node already exists with the same block id
-                    return false;
+                    ModifyStatus::Unchanged
+                } else {
+                    ModifyStatus::Updated(mem::replace(&mut node.block_id, *block_id))
                 }
-
-                node.block_id = *block_id;
             }
-            Err(index) => self.0.insert(
-                index,
-                LeafNode {
-                    locator: *locator,
-                    block_id: *block_id,
-                    is_block_missing: false,
-                },
-            ),
+            Err(index) => {
+                self.0.insert(
+                    index,
+                    LeafNode {
+                        locator: *locator,
+                        block_id: *block_id,
+                        is_block_missing: false,
+                    },
+                );
+                ModifyStatus::Inserted
+            }
         }
-
-        true
     }
 
     pub fn remove(&mut self, locator: &Hash) -> Option<LeafNode> {
@@ -345,6 +344,12 @@ impl<'a> IntoIterator for &'a LeafNodeSet {
     fn into_iter(self) -> Self::IntoIter {
         self.0.iter()
     }
+}
+
+pub enum ModifyStatus {
+    Updated(BlockId),
+    Inserted,
+    Unchanged,
 }
 
 // We're not repeating enumeration name

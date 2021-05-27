@@ -1,11 +1,8 @@
-use crate::{
-    block::BlockId,
-    crypto::Hash,
-    index::{
-        node::{InnerNode, LeafNode, LeafNodeSet},
-        Crc, INNER_LAYER_COUNT, MAX_INNER_NODE_CHILD_COUNT,
-    },
+use super::{
+    node::{InnerNode, LeafNode, LeafNodeSet, ModifyStatus},
+    Crc, INNER_LAYER_COUNT, MAX_INNER_NODE_CHILD_COUNT,
 };
+use crate::{block::BlockId, crypto::Hash};
 use crc::{crc32, Hasher32};
 use sha3::{Digest, Sha3_256};
 
@@ -79,11 +76,18 @@ impl Path {
         self.inner[inner_layer][self.get_bucket(inner_layer)].hash
     }
 
-    // BlockVersion is needed when calculating hashes at the beginning to make this tree unique
-    // across all the snapshots.
-    pub fn set_leaf(&mut self, block_id: &BlockId) {
-        if self.leaves.insert_or_update(&self.locator, block_id) {
-            self.recalculate(INNER_LAYER_COUNT);
+    // Sets the leaf node to the given block id. Returns the previous block id, if any.
+    pub fn set_leaf(&mut self, block_id: &BlockId) -> Option<BlockId> {
+        match self.leaves.modify(&self.locator, block_id) {
+            ModifyStatus::Updated(old_block_id) => {
+                self.recalculate(INNER_LAYER_COUNT);
+                Some(old_block_id)
+            }
+            ModifyStatus::Inserted => {
+                self.recalculate(INNER_LAYER_COUNT);
+                None
+            }
+            ModifyStatus::Unchanged => None,
         }
     }
 

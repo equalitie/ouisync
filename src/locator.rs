@@ -52,12 +52,23 @@ impl Locator {
     /// Sequence of locators starting at `self` and continuing with the corresponding trunk
     /// locators in their sequential order.
     pub fn sequence(&self) -> impl Iterator<Item = Self> {
-        let (parent_hash, seq) = match self {
+        let (parent_hash, seq) = self.parent_hash_and_number();
+        iter::once(*self).chain((seq + 1..).map(move |seq| Self::Trunk(parent_hash, seq)))
+    }
+
+    pub fn next(&self) -> Self {
+        let (parent_hash, seq) = self.parent_hash_and_number();
+        Self::Trunk(
+            parent_hash,
+            seq.checked_add(1).expect("locator sequence limit exceeded"),
+        )
+    }
+
+    fn parent_hash_and_number(&self) -> (Hash, u32) {
+        match self {
             Self::Root | Self::Head(..) => (self.hash(), 0),
             Self::Trunk(parent_hash, seq) => (*parent_hash, *seq),
-        };
-
-        iter::once(*self).chain((seq + 1..).map(move |seq| Self::Trunk(parent_hash, seq)))
+        }
     }
 }
 
