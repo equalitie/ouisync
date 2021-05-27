@@ -18,20 +18,54 @@ use crate::{
 use std::{
     collections::{HashMap, HashSet},
     io,
-    net::SocketAddr,
+    net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::Arc,
 };
+use structopt::StructOpt;
 use tokio::{
     net::{TcpListener, TcpStream},
     sync::Mutex,
 };
+
+pub const DEFAULT_PORT: u16 = 65535;
+
+#[derive(StructOpt)]
+pub struct NetworkOptions {
+    /// Port to listen on
+    #[structopt(short, long, default_value = "65535")]
+    pub port: u16,
+
+    /// IP address to bind to
+    #[structopt(short, long, default_value = "0.0.0.0", value_name = "ip")]
+    pub bind: IpAddr,
+
+    /// Enable local discovery
+    #[structopt(short, long)]
+    pub enable_local_discovery: bool,
+}
+
+impl NetworkOptions {
+    pub fn listen_addr(&self) -> SocketAddr {
+        SocketAddr::new(self.bind, self.port)
+    }
+}
+
+impl Default for NetworkOptions {
+    fn default() -> Self {
+        Self {
+            port: DEFAULT_PORT,
+            bind: Ipv4Addr::UNSPECIFIED.into(),
+            enable_local_discovery: true,
+        }
+    }
+}
 
 pub struct Network {
     _tasks: ScopedTaskSet,
 }
 
 impl Network {
-    pub async fn new(_enable_discovery: bool, index: Index) -> io::Result<Self> {
+    pub async fn new(index: Index, options: NetworkOptions) -> io::Result<Self> {
         let tasks = ScopedTaskSet::default();
         let task_handle = tasks.handle().clone();
 
@@ -43,7 +77,7 @@ impl Network {
             index,
         });
 
-        inner.start().await?;
+        inner.start(options.listen_addr()).await?;
 
         Ok(Self { _tasks: tasks })
     }
@@ -58,9 +92,8 @@ struct Inner {
 }
 
 impl Inner {
-    async fn start(self: Arc<Self>) -> io::Result<()> {
-        let any_addr = SocketAddr::from(([0, 0, 0, 0], 0));
-        let listener = TcpListener::bind(any_addr).await?;
+    async fn start(self: Arc<Self>, addr: SocketAddr) -> io::Result<()> {
+        let listener = TcpListener::bind(addr).await?;
 
         self.task_handle.spawn(
             self.clone()

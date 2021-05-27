@@ -13,7 +13,12 @@ async fn main() -> Result<()> {
 
     env_logger::init();
 
-    let session = Session::new(db::Store::File(options.db_path()?), Cryptor::Null, true).await?;
+    let session = Session::new(
+        db::Store::File(options.db_path()?),
+        Cryptor::Null,
+        options.network,
+    )
+    .await?;
 
     let _mount_guard = virtual_filesystem::mount(
         tokio::runtime::Handle::current(),

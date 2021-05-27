@@ -3,7 +3,7 @@ use crate::{
     db,
     error::{Error, Result},
     index::Index,
-    network::Network,
+    network::{Network, NetworkOptions},
     repository::Repository,
     this_replica,
 };
@@ -21,12 +21,12 @@ impl Session {
     pub async fn new(
         db_store: db::Store,
         cryptor: Cryptor,
-        enable_local_discovery: bool,
+        network_options: NetworkOptions,
     ) -> Result<Self> {
         let pool = db::init(db_store).await?;
         let this_replica_id = this_replica::get_or_create_id(&pool).await?;
         let index = Index::load(pool.clone(), this_replica_id).await?;
-        let network = Network::new(enable_local_discovery, index.clone())
+        let network = Network::new(index.clone(), network_options)
             .await
             .map_err(Error::Network)?;
 

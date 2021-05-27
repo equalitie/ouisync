@@ -3,7 +3,7 @@ use super::{
     logger::Logger,
     utils::{self, AssumeSend, Port},
 };
-use crate::{crypto::Cryptor, db, error::Result, session::Session};
+use crate::{crypto::Cryptor, db, error::Result, network::NetworkOptions, session::Session};
 use std::{
     ffi::{CStr, CString},
     fmt,
@@ -65,7 +65,7 @@ pub unsafe extern "C" fn session_open(
     handle.spawn(sender.invoke(port, error_ptr, async move {
         let session = SessionWrapper {
             runtime,
-            session: Session::new(store, Cryptor::Null, true).await?,
+            session: Session::new(store, Cryptor::Null, NetworkOptions::default()).await?,
             sender,
             _logger: logger,
         };

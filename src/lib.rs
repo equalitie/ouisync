@@ -29,7 +29,7 @@ pub use self::{
     file::File,
     index::Index,
     locator::Locator,
-    network::Network,
+    network::{Network, NetworkOptions},
     replica_id::ReplicaId,
     repository::Repository,
     session::Session,
