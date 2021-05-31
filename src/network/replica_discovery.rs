@@ -21,7 +21,6 @@ pub type RuntimeId = [u8; ID_LEN];
 // https://www.iana.org/assignments/multicast-addresses/multicast-addresses.xhtml
 const MULTICAST_ADDR: Ipv4Addr = Ipv4Addr::new(224, 0, 0, 137);
 const MULTICAST_PORT: u16 = 9271;
-const ADDR_ANY: Ipv4Addr = Ipv4Addr::new(0, 0, 0, 0);
 
 // Poor man's local discovery using UDP multicast.
 // XXX: We should probably use mDNS, but so far all libraries I tried had some issues.
@@ -39,22 +38,14 @@ impl ReplicaDiscovery {
             listener_port,
             socket: Self::create_multicast_socket()?,
             found_replicas: Mutex::new(HashSet::new()),
-            seen: std::sync::Mutex::new(LruCache::new(256)),
+            seen: Mutex::new(LruCache::new(256)),
             notify,
         });
 
-        let inner1 = inner.clone();
-        let inner2 = inner.clone();
-
         let tasks = ScopedTaskSet::default();
 
-        tasks.spawn(async move {
-            inner1.run_beacon().await.unwrap();
-        });
-
-        tasks.spawn(async move {
-            inner2.run_receiver().await.unwrap();
-        });
+        tasks.spawn(inner.clone().run_beacon());
+        tasks.spawn(inner.clone().run_receiver());
 
         Ok(Self {
             inner,
@@ -89,8 +80,8 @@ impl ReplicaDiscovery {
     /// Remove the id of the remote replica from the LRU cache so frequent announcment can start
     /// happening again.
     ///
-    pub fn forget(&self, id: &RuntimeId) {
-        self.inner.seen.lock().unwrap().pop(id);
+    pub async fn forget(&self, id: &RuntimeId) {
+        self.inner.seen.lock().await.pop(id);
     }
 
     fn create_multicast_socket() -> io::Result<tokio::net::UdpSocket> {
@@ -98,9 +89,9 @@ impl ReplicaDiscovery {
         // one set reuse_address(true) before "binding" the socket.
         let sync_socket = net2::UdpBuilder::new_v4()?
             .reuse_address(true)?
-            .bind((ADDR_ANY, MULTICAST_PORT))?;
+            .bind((Ipv4Addr::UNSPECIFIED, MULTICAST_PORT))?;
 
-        sync_socket.join_multicast_v4(&MULTICAST_ADDR, &ADDR_ANY)?;
+        sync_socket.join_multicast_v4(&MULTICAST_ADDR, &Ipv4Addr::UNSPECIFIED)?;
 
         // This is not necessary if this is moved to async_std::net::UdpSocket,
         // but is if moved to tokio::net::UdpSocket.
@@ -115,30 +106,43 @@ struct Inner {
     listener_port: u16,
     socket: tokio::net::UdpSocket,
     found_replicas: Mutex<HashSet<(RuntimeId, SocketAddr)>>,
-    seen: std::sync::Mutex<LruCache<RuntimeId, ()>>,
+    seen: Mutex<LruCache<RuntimeId, ()>>,
     notify: Arc<Notify>,
 }
 
 impl Inner {
-    async fn run_beacon(&self) -> io::Result<()> {
+    async fn run_beacon(self: Arc<Self>) {
         let multicast_endpoint = SocketAddr::new(MULTICAST_ADDR.into(), MULTICAST_PORT);
 
         loop {
-            self.send(&self.query(), multicast_endpoint).await?;
+            if let Err(error) = self.send(&self.query(), multicast_endpoint).await {
+                log::error!("Failed to send discovery message: {}", error);
+                break;
+            }
+
             let delay = rand::thread_rng().gen_range(2..8);
             sleep(Duration::from_secs(delay)).await;
         }
     }
 
-    async fn run_receiver(&self) -> io::Result<()> {
+    async fn run_receiver(self: Arc<Self>) {
         let mut recv_buffer = vec![0; 4096];
 
         loop {
-            let (size, addr) = self.socket.recv_from(&mut recv_buffer).await?;
+            let (size, addr) = match self.socket.recv_from(&mut recv_buffer).await {
+                Ok(pair) => pair,
+                Err(error) => {
+                    log::error!("Failed to receive discovery message: {}", error);
+                    break;
+                }
+            };
 
             let r: Message = match bincode::deserialize(&recv_buffer[..size]) {
                 Ok(r) => r,
-                Err(_) => continue,
+                Err(error) => {
+                    log::error!("Malformed discovery message: {}", error);
+                    continue;
+                }
             };
 
             let (is_rq, id, listener_port) = match r {
@@ -151,7 +155,7 @@ impl Inner {
             }
 
             {
-                let mut seen = self.seen.lock().unwrap();
+                let mut seen = self.seen.lock().await;
 
                 if seen.get(&id).is_some() {
                     continue;
@@ -161,14 +165,16 @@ impl Inner {
             }
 
             if is_rq {
-                self.send(&self.reply(), addr).await?;
+                if let Err(error) = self.send(&self.reply(), addr).await {
+                    log::error!("Failed to send discovery message: {}", error);
+                    break;
+                }
             }
 
             //println!("{:?}", listener_port);
 
             let replica_addr = SocketAddr::new(addr.ip(), listener_port);
             self.found_replicas.lock().await.insert((id, replica_addr));
-
             self.notify.notify_one();
         }
     }

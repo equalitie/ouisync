@@ -67,17 +67,21 @@ pub struct Network {
 impl Network {
     pub async fn new(index: Index, options: NetworkOptions) -> io::Result<Self> {
         let tasks = ScopedTaskSet::default();
-        let task_handle = tasks.handle().clone();
 
-        let inner = Arc::new(Inner {
+        let listener = TcpListener::bind(options.listen_addr()).await?;
+        let local_addr = listener.local_addr()?;
+
+        let inner = Inner {
             this_replica_id: ReplicaId::random(),
             message_brokers: Mutex::new(HashMap::new()),
             to_forget: Mutable::new(HashSet::new()),
-            task_handle,
+            task_handle: tasks.handle().clone(),
             index,
-        });
+        };
 
-        inner.start(options.listen_addr()).await?;
+        let inner = Arc::new(inner);
+        tasks.spawn(inner.clone().run_discovery(local_addr.port()));
+        tasks.spawn(inner.run_listener(listener));
 
         Ok(Self { _tasks: tasks })
     }
@@ -92,17 +96,6 @@ struct Inner {
 }
 
 impl Inner {
-    async fn start(self: Arc<Self>, addr: SocketAddr) -> io::Result<()> {
-        let listener = TcpListener::bind(addr).await?;
-        let local_addr = listener.local_addr()?;
-
-        self.task_handle
-            .spawn(self.clone().run_discovery(local_addr.port()));
-        self.task_handle.spawn(self.clone().run_listener(listener));
-
-        Ok(())
-    }
-
     async fn run_discovery(self: Arc<Self>, listener_port: u16) {
         let discovery = match ReplicaDiscovery::new(listener_port) {
             Ok(discovery) => discovery,
@@ -133,7 +126,7 @@ impl Inner {
                 _ = self.to_forget.changed() => {
                     let mut set = self.to_forget.value.lock().await;
                     for id in set.drain() {
-                        discovery.forget(&id);
+                        discovery.forget(&id).await;
                     }
                 }
             }
