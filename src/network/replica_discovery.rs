@@ -3,13 +3,12 @@ use lru::LruCache;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashSet,
     io,
     net::{Ipv4Addr, SocketAddr},
     sync::Arc,
     time::Duration,
 };
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::{mpsc::Sender, Mutex};
 use tokio::time::sleep;
 
 /// ID of this replica runtime, it is different from the ReplicaId because it is generated randomly
@@ -30,50 +29,27 @@ pub struct ReplicaDiscovery {
 }
 
 impl ReplicaDiscovery {
-    pub fn new(listener_port: u16) -> io::Result<Self> {
-        let notify = Arc::new(Notify::new());
-
+    /// Newly discovered replicas are reported on `tx` and their `RuntimeId` is placed into a
+    /// LRU cache so as to not re-report it too frequently. Once the peer disconnects, the user of
+    /// `ReplicaDiscovery` should call `forget` with the `RuntimeId` and the replica shall start
+    /// reporting it again.
+    pub fn new(listener_port: u16, tx: Sender<(RuntimeId, SocketAddr)>) -> io::Result<Self> {
         let inner = Arc::new(Inner {
             id: rand::random(),
             listener_port,
             socket: Self::create_multicast_socket()?,
-            found_replicas: Mutex::new(HashSet::new()),
             seen: Mutex::new(LruCache::new(256)),
-            notify,
         });
 
         let tasks = ScopedTaskSet::default();
 
         tasks.spawn(inner.clone().run_beacon());
-        tasks.spawn(inner.clone().run_receiver());
+        tasks.spawn(inner.clone().run_receiver(tx));
 
         Ok(Self {
             inner,
             _tasks: tasks,
         })
-    }
-
-    ///
-    /// Wait for replicas to be found. Once some are, they are returned and their RuntimeId is
-    /// placed into a LRU cache so as to not re-report it too frequently. Once the peer
-    /// disconnects, the user of ReplicaDiscovery should call forget with the RuntimeId and the
-    /// replica shall start reporting it again.
-    ///
-    pub async fn wait_for_activity(&self) -> HashSet<(RuntimeId, SocketAddr)> {
-        loop {
-            self.inner.notify.notified().await;
-
-            let mut found = self.inner.found_replicas.lock().await;
-
-            if found.is_empty() {
-                continue;
-            }
-
-            let ret = found.clone();
-            found.clear();
-
-            return ret;
-        }
     }
 
     ///
@@ -105,9 +81,7 @@ struct Inner {
     id: RuntimeId,
     listener_port: u16,
     socket: tokio::net::UdpSocket,
-    found_replicas: Mutex<HashSet<(RuntimeId, SocketAddr)>>,
     seen: Mutex<LruCache<RuntimeId, ()>>,
-    notify: Arc<Notify>,
 }
 
 impl Inner {
@@ -125,7 +99,7 @@ impl Inner {
         }
     }
 
-    async fn run_receiver(self: Arc<Self>) {
+    async fn run_receiver(self: Arc<Self>, tx: Sender<(RuntimeId, SocketAddr)>) {
         let mut recv_buffer = vec![0; 4096];
 
         loop {
@@ -171,11 +145,8 @@ impl Inner {
                 }
             }
 
-            //println!("{:?}", listener_port);
-
             let replica_addr = SocketAddr::new(addr.ip(), listener_port);
-            self.found_replicas.lock().await.insert((id, replica_addr));
-            self.notify.notify_one();
+            let _ = tx.send((id, replica_addr)).await;
         }
     }
 

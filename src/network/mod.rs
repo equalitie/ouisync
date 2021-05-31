@@ -15,8 +15,9 @@ use crate::{
     scoped_task_set::{ScopedTaskHandle, ScopedTaskSet},
     Index,
 };
+use futures::future;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     io,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::Arc,
@@ -24,7 +25,10 @@ use std::{
 use structopt::StructOpt;
 use tokio::{
     net::{TcpListener, TcpStream},
-    sync::Mutex,
+    sync::{
+        mpsc::{self, Receiver, Sender},
+        Mutex,
+    },
 };
 
 pub const DEFAULT_PORT: u16 = 65535;
@@ -70,17 +74,17 @@ impl Network {
 
         let listener = TcpListener::bind(options.listen_addr()).await?;
         let local_addr = listener.local_addr()?;
+        let (forget_tx, forget_rx) = mpsc::channel(1);
 
         let inner = Inner {
-            this_replica_id: ReplicaId::random(),
             message_brokers: Mutex::new(HashMap::new()),
-            to_forget: Mutable::new(HashSet::new()),
+            forget_tx,
             task_handle: tasks.handle().clone(),
             index,
         };
 
         let inner = Arc::new(inner);
-        tasks.spawn(inner.clone().run_discovery(local_addr.port()));
+        tasks.spawn(inner.clone().run_discovery(local_addr.port(), forget_rx));
         tasks.spawn(inner.run_listener(listener));
 
         Ok(Self { _tasks: tasks })
@@ -88,16 +92,20 @@ impl Network {
 }
 
 struct Inner {
-    this_replica_id: ReplicaId,
     message_brokers: Mutex<HashMap<ReplicaId, MessageBroker>>,
-    to_forget: Mutable<HashSet<RuntimeId>>,
+    forget_tx: Sender<RuntimeId>,
     task_handle: ScopedTaskHandle,
     index: Index,
 }
 
 impl Inner {
-    async fn run_discovery(self: Arc<Self>, listener_port: u16) {
-        let discovery = match ReplicaDiscovery::new(listener_port) {
+    async fn run_discovery(
+        self: Arc<Self>,
+        listener_port: u16,
+        mut forget_rx: Receiver<RuntimeId>,
+    ) {
+        let (tx, mut rx) = mpsc::channel(1);
+        let discovery = match ReplicaDiscovery::new(listener_port, tx) {
             Ok(discovery) => discovery,
             Err(error) => {
                 log::error!("Failed to create ReplicaDiscovery: {}", error);
@@ -105,32 +113,20 @@ impl Inner {
             }
         };
 
-        loop {
-            tokio::select! {
-                found = discovery.wait_for_activity() => {
-                    for (id, addr) in found {
-                        let s = self.clone();
-                        self.task_handle.spawn(async move {
-                            let socket = match TcpStream::connect(addr).await {
-                                Ok(socket) => socket,
-                                Err(error) => {
-                                    log::error!("Failed to create outgoing TCP connection: {}", error);
-                                    return;
-                                }
-                            };
-
-                            s.handle_new_connection(socket, Some(id)).await
-                        });
-                    }
-                }
-                _ = self.to_forget.changed() => {
-                    let mut set = self.to_forget.value.lock().await;
-                    for id in set.drain() {
-                        discovery.forget(&id).await;
-                    }
-                }
+        let discover_task = async {
+            while let Some((id, addr)) = rx.recv().await {
+                self.task_handle
+                    .spawn(self.clone().establish_outgoing_connection(addr, Some(id)))
             }
-        }
+        };
+
+        let forget_task = async {
+            while let Some(id) = forget_rx.recv().await {
+                discovery.forget(&id).await;
+            }
+        };
+
+        future::join(discover_task, forget_task).await;
     }
 
     async fn run_listener(self: Arc<Self>, listener: TcpListener) {
@@ -150,23 +146,42 @@ impl Inner {
         }
     }
 
+    async fn establish_outgoing_connection(
+        self: Arc<Self>,
+        addr: SocketAddr,
+        discovery_id: Option<RuntimeId>,
+    ) {
+        let socket = match TcpStream::connect(addr).await {
+            Ok(socket) => socket,
+            Err(error) => {
+                log::error!("Failed to create outgoing TCP connection: {}", error);
+                return;
+            }
+        };
+
+        log::info!("New outgoing TCP connection: {}", addr);
+
+        self.handle_new_connection(socket, discovery_id).await
+    }
+
     async fn handle_new_connection(
         self: Arc<Self>,
         socket: TcpStream,
         discovery_id: Option<RuntimeId>,
     ) {
         let mut stream = ObjectStream::new(socket);
-        let their_replica_id = match perform_handshake(&mut stream, &self.this_replica_id).await {
-            Ok(replica_id) => replica_id,
-            Err(error) => {
-                log::error!("Failed to perform handshake: {}", error);
-                return;
-            }
-        };
+        let their_replica_id =
+            match perform_handshake(&mut stream, &self.index.this_replica_id).await {
+                Ok(replica_id) => replica_id,
+                Err(error) => {
+                    log::error!("Failed to perform handshake: {}", error);
+                    return;
+                }
+            };
 
         let s = self.clone();
-        let mut brokers = self.message_brokers.lock().await;
         let index = self.index.clone();
+        let mut brokers = self.message_brokers.lock().await;
 
         let broker = brokers.entry(their_replica_id).or_insert_with(|| {
             MessageBroker::new(
@@ -174,7 +189,7 @@ impl Inner {
                 Box::pin(async move {
                     s.message_brokers.lock().await.remove(&their_replica_id);
                     if let Some(discovery_id) = discovery_id {
-                        s.to_forget.modify(|set| set.insert(discovery_id)).await;
+                        let _ = s.forget_tx.send(discovery_id).await;
                     }
                 }),
             )
@@ -190,31 +205,4 @@ async fn perform_handshake(
 ) -> io::Result<ReplicaId> {
     stream.write(this_replica_id).await?;
     stream.read().await
-}
-
-struct Mutable<T> {
-    notify: tokio::sync::Notify,
-    value: Mutex<T>,
-}
-
-impl<T> Mutable<T> {
-    pub fn new(value: T) -> Mutable<T> {
-        Mutable {
-            notify: tokio::sync::Notify::new(),
-            value: Mutex::new(value),
-        }
-    }
-
-    pub async fn modify<F, R>(&self, f: F)
-    where
-        F: FnOnce(&mut T) -> R + Sized,
-    {
-        let mut v = self.value.lock().await;
-        f(&mut v);
-        self.notify.notify_one();
-    }
-
-    pub async fn changed(&self) {
-        self.notify.notified().await
-    }
 }
