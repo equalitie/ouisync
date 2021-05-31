@@ -10,7 +10,7 @@ use crate::{
 };
 use std::{future::Future, pin::Pin, sync::Arc};
 use tokio::sync::{
-    mpsc::{error::SendError, Receiver, Sender},
+    mpsc::{self, error::SendError, Receiver, Sender},
     Mutex,
 };
 
@@ -69,59 +69,88 @@ struct State {
 /// structures respectively.
 pub struct MessageBroker {
     inner: Arc<Inner>,
+    command_tx: Sender<Command>,
     tasks: ScopedTaskSet,
 }
 
 impl MessageBroker {
-    pub fn new(index: Index, on_finish: OnFinish) -> Self {
-        let (command_tx, command_rx) = tokio::sync::mpsc::channel(1);
-        let (request_tx, request_rx) = tokio::sync::mpsc::channel(1);
-        let (response_tx, response_rx) = tokio::sync::mpsc::channel(1);
-
+    pub fn new(index: Index, conn: ObjectStream, on_finish: OnFinish) -> Self {
         let tasks = ScopedTaskSet::default();
-        let task_handle = tasks.handle().clone();
+
+        let (command_tx, command_rx) = mpsc::channel(1);
+        let (request_tx, request_rx) = mpsc::channel(1);
+        let (response_tx, response_rx) = mpsc::channel(1);
 
         let inner = Arc::new(Inner {
-            send_channel: command_tx,
             request_tx,
             response_tx,
             state: Mutex::new(State {
                 on_finish: Some(on_finish),
                 receiver_count: 0,
             }),
-            task_handle,
+            task_handle: tasks.handle().clone(),
             index,
         });
 
-        tasks.spawn(
-            inner
-                .clone()
-                .run_command_handler(command_rx, request_rx, response_rx),
-        );
+        {
+            let inner = inner.clone();
+            let command_tx = command_tx.clone();
+            tasks.spawn(async move {
+                let mut client = Client {};
+                let stream = ClientStream {
+                    sender: command_tx,
+                    receiver: response_rx,
+                };
+                client.run(stream, &inner.index).await;
+                inner.finish().await;
+            })
+        }
 
-        Self { inner, tasks }
+        {
+            let inner = inner.clone();
+            let command_tx = command_tx.clone();
+            tasks.spawn(async move {
+                let mut server = Server {};
+                let stream = ServerStream {
+                    sender: command_tx,
+                    receiver: request_rx,
+                };
+                server.run(stream, &inner.index).await;
+                inner.finish().await;
+            })
+        }
+
+        let (reader, writer) = conn.into_split();
+
+        tasks.spawn(inner.clone().run_command_handler(command_rx, writer));
+        tasks.spawn(inner.clone().run_message_receiver(reader));
+
+        Self {
+            inner,
+            command_tx,
+            tasks,
+        }
     }
 
-    pub fn add_connection(&self, con: ObjectStream) {
-        let inner = self.inner.clone();
-        let send_channel = inner.send_channel.clone();
+    pub async fn add_connection(&self, conn: ObjectStream) {
+        let (reader, writer) = conn.into_split();
 
-        self.tasks.spawn(async move {
-            let (r, w) = con.into_split();
+        if self
+            .command_tx
+            .send(Command::AddWriter(writer))
+            .await
+            .is_err()
+        {
+            log::error!("Failed to activate writer");
+            return;
+        }
 
-            if send_channel.send(Command::AddWriter(w)).await.is_err() {
-                println!("Failed to activate writer");
-                // XXX: Tell self to abort
-                return;
-            }
-
-            inner.run_message_receiver(r).await;
-        });
+        self.tasks
+            .spawn(self.inner.clone().run_message_receiver(reader));
     }
 }
 
 struct Inner {
-    send_channel: Sender<Command>,
     request_tx: Sender<Request>,
     response_tx: Sender<Response>,
     state: Mutex<State>,
@@ -130,65 +159,25 @@ struct Inner {
 }
 
 impl Inner {
-    fn create_state(
-        self: Arc<Self>,
-        request_rx: Receiver<Request>,
-        response_rx: Receiver<Response>,
-    ) {
-        let s1 = self.clone();
-        let s2 = self.clone();
-
-        self.task_handle.spawn(async move {
-            let mut client = Client {};
-            let stream = ClientStream {
-                sender: s1.send_channel.clone(),
-                receiver: response_rx,
-            };
-            client.run(stream, &s1.index).await;
-            s1.finish().await;
-        });
-
-        self.task_handle.spawn(async move {
-            let mut server = Server {};
-            let stream = ServerStream {
-                sender: s2.send_channel.clone(),
-                receiver: request_rx,
-            };
-            server.run(stream, &s2.index).await;
-            s2.finish().await;
-        });
-    }
-
-    async fn run_command_handler(
-        self: Arc<Self>,
-        mut rx: Receiver<Command>,
-        request_rx: Receiver<Request>,
-        response_rx: Receiver<Response>,
-    ) {
-        let mut ws = Vec::new();
-
-        let mut rxs = Some((request_rx, response_rx));
+    async fn run_command_handler(self: Arc<Self>, mut rx: Receiver<Command>, writer: ObjectWriter) {
+        let mut writers = vec![writer];
 
         while let Some(command) = rx.recv().await {
             match command {
-                Command::AddWriter(w) => {
-                    ws.push(w);
-
-                    if let Some(rxs) = rxs.take() {
-                        self.clone().create_state(rxs.0, rxs.1);
-                    }
+                Command::AddWriter(writer) => {
+                    writers.push(writer);
                 }
-                Command::SendMessage(m) => {
-                    assert!(!ws.is_empty());
+                Command::SendMessage(message) => {
+                    assert!(!writers.is_empty());
 
-                    while !ws.is_empty() {
-                        if ws[0].write(&m).await.is_ok() {
+                    while !writers.is_empty() {
+                        if writers[0].write(&message).await.is_ok() {
                             break;
                         }
-                        ws.remove(0);
+                        writers.remove(0);
                     }
 
-                    if ws.is_empty() {
+                    if writers.is_empty() {
                         self.finish().await;
                     }
                 }
@@ -196,11 +185,11 @@ impl Inner {
         }
     }
 
-    async fn run_message_receiver(&self, mut r: ObjectReader) {
+    async fn run_message_receiver(self: Arc<Self>, mut reader: ObjectReader) {
         self.state.lock().await.receiver_count += 1;
 
         loop {
-            match r.read().await {
+            match reader.read().await {
                 Ok(msg) => {
                     self.handle_message(msg).await;
                 }
@@ -223,21 +212,21 @@ impl Inner {
     async fn handle_message(&self, msg: Message) {
         match msg {
             Message::Request(rq) => {
-                self.request_tx.send(rq).await.unwrap();
+                let _ = self.request_tx.send(rq).await;
             }
             Message::Response(rs) => {
-                self.response_tx.send(rs).await.unwrap();
+                let _ = self.response_tx.send(rs).await;
             }
         }
     }
 
     async fn finish(&self) {
-        self.task_handle.abort_all();
-
         let on_finish = self.state.lock().await.on_finish.take();
         if let Some(on_finish) = on_finish {
             on_finish.await
         }
+
+        self.task_handle.abort_all();
     }
 }
 

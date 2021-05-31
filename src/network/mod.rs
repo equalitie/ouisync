@@ -17,7 +17,7 @@ use crate::{
 };
 use futures::future;
 use std::{
-    collections::HashMap,
+    collections::{hash_map::Entry, HashMap},
     io,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::Arc,
@@ -179,23 +179,24 @@ impl Inner {
                 }
             };
 
-        let s = self.clone();
-        let index = self.index.clone();
         let mut brokers = self.message_brokers.lock().await;
 
-        let broker = brokers.entry(their_replica_id).or_insert_with(|| {
-            MessageBroker::new(
-                index,
-                Box::pin(async move {
-                    s.message_brokers.lock().await.remove(&their_replica_id);
-                    if let Some(discovery_id) = discovery_id {
-                        let _ = s.forget_tx.send(discovery_id).await;
-                    }
-                }),
-            )
-        });
-
-        broker.add_connection(stream);
+        match brokers.entry(their_replica_id) {
+            Entry::Occupied(entry) => entry.get().add_connection(stream).await,
+            Entry::Vacant(entry) => {
+                let s = self.clone();
+                entry.insert(MessageBroker::new(
+                    self.index.clone(),
+                    stream,
+                    Box::pin(async move {
+                        s.message_brokers.lock().await.remove(&their_replica_id);
+                        if let Some(discovery_id) = discovery_id {
+                            let _ = s.forget_tx.send(discovery_id).await;
+                        }
+                    }),
+                ));
+            }
+        }
     }
 }
 
