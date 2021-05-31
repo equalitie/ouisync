@@ -94,32 +94,39 @@ struct Inner {
 impl Inner {
     async fn start(self: Arc<Self>, addr: SocketAddr) -> io::Result<()> {
         let listener = TcpListener::bind(addr).await?;
+        let local_addr = listener.local_addr()?;
 
-        self.task_handle.spawn(
-            self.clone()
-                .run_discovery(listener.local_addr().unwrap().port()),
-        );
+        self.task_handle
+            .spawn(self.clone().run_discovery(local_addr.port()));
         self.task_handle.spawn(self.clone().run_listener(listener));
 
         Ok(())
     }
 
     async fn run_discovery(self: Arc<Self>, listener_port: u16) {
-        let discovery =
-            ReplicaDiscovery::new(listener_port).expect("Failed to create ReplicaDiscovery");
+        let discovery = match ReplicaDiscovery::new(listener_port) {
+            Ok(discovery) => discovery,
+            Err(error) => {
+                log::error!("Failed to create ReplicaDiscovery: {}", error);
+                return;
+            }
+        };
 
         loop {
             tokio::select! {
                 found = discovery.wait_for_activity() => {
-
                     for (id, addr) in found {
                         let s = self.clone();
                         self.task_handle.spawn(async move {
                             let socket = match TcpStream::connect(addr).await {
                                 Ok(socket) => socket,
-                                Err(_) => return,
+                                Err(error) => {
+                                    log::error!("Failed to create outgoing TCP connection: {}", error);
+                                    return;
+                                }
                             };
-                            s.handle_new_connection(socket, Some(id)).await.ok();
+
+                            s.handle_new_connection(socket, Some(id)).await
                         });
                     }
                 }
@@ -135,15 +142,18 @@ impl Inner {
 
     async fn run_listener(self: Arc<Self>, listener: TcpListener) {
         loop {
-            let (socket, _addr) = listener
-                .accept()
-                .await
-                .expect("Failed to start TcpListener");
+            let (socket, addr) = match listener.accept().await {
+                Ok(pair) => pair,
+                Err(error) => {
+                    log::error!("Failed to accept incoming TCP connection: {}", error);
+                    break;
+                }
+            };
 
-            let s = self.clone();
-            self.task_handle.spawn(async move {
-                s.handle_new_connection(socket, None).await.ok();
-            });
+            log::info!("New incoming TCP connection: {}", addr);
+
+            self.task_handle
+                .spawn(self.clone().handle_new_connection(socket, None));
         }
     }
 
@@ -151,10 +161,15 @@ impl Inner {
         self: Arc<Self>,
         socket: TcpStream,
         discovery_id: Option<RuntimeId>,
-    ) -> io::Result<()> {
-        let mut os = ObjectStream::new(socket);
-        os.write(&self.this_replica_id).await?;
-        let their_replica_id = os.read::<ReplicaId>().await?;
+    ) {
+        let mut stream = ObjectStream::new(socket);
+        let their_replica_id = match perform_handshake(&mut stream, &self.this_replica_id).await {
+            Ok(replica_id) => replica_id,
+            Err(error) => {
+                log::error!("Failed to perform handshake: {}", error);
+                return;
+            }
+        };
 
         let s = self.clone();
         let mut brokers = self.message_brokers.lock().await;
@@ -172,10 +187,16 @@ impl Inner {
             )
         });
 
-        broker.add_connection(os);
-
-        Ok(())
+        broker.add_connection(stream);
     }
+}
+
+async fn perform_handshake(
+    stream: &mut ObjectStream,
+    this_replica_id: &ReplicaId,
+) -> io::Result<ReplicaId> {
+    stream.write(this_replica_id).await?;
+    stream.read().await
 }
 
 struct Mutable<T> {

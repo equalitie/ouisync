@@ -200,7 +200,7 @@ impl Inner {
         self.state.lock().await.receiver_count += 1;
 
         loop {
-            match r.read::<Message>().await {
+            match r.read().await {
                 Ok(msg) => {
                     self.handle_message(msg).await;
                 }
