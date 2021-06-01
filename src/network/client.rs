@@ -6,14 +6,15 @@ pub struct Client {}
 
 impl Client {
     pub async fn run(&mut self, mut con: ClientStream, _index: &Index) {
-        println!("Client started");
+        log::debug!("Client started");
+
         loop {
             if con.send(Request::Hello).await.is_err() {
                 return;
             }
             let rs = con.recv().await;
-            println!("Client received response: {:?}", rs);
-            sleep(Duration::from_millis(1000)).await;
+            log::debug!("Client received response: {:?}", rs);
+            sleep(Duration::from_secs(10)).await;
         }
     }
 }

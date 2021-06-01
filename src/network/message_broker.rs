@@ -1,7 +1,7 @@
 use super::{
     client::Client,
     message::{Message, Request, Response},
-    object_stream::{ObjectReader, ObjectStream, ObjectWriter},
+    object_stream::{TcpObjectReader, TcpObjectStream, TcpObjectWriter},
     server::Server,
 };
 use crate::Index;
@@ -73,7 +73,7 @@ pub struct MessageBroker {
 }
 
 impl MessageBroker {
-    pub fn new(index: Index, stream: ObjectStream, on_finish: OnFinish) -> Self {
+    pub fn new(index: Index, stream: TcpObjectStream, on_finish: OnFinish) -> Self {
         // Channel party!
         let (command_tx, command_rx) = mpsc::channel(1);
         let (request_tx, request_rx) = mpsc::channel(1);
@@ -99,7 +99,7 @@ impl MessageBroker {
         }
     }
 
-    pub async fn add_connection(&self, stream: ObjectStream) {
+    pub async fn add_connection(&self, stream: TcpObjectStream) {
         if self
             .command_tx
             .send(Command::AddConnection(stream))
@@ -115,7 +115,7 @@ struct Inner {
     command_tx: mpsc::Sender<Command>,
     request_tx: mpsc::Sender<Request>,
     response_tx: mpsc::Sender<Response>,
-    writers: Vec<ObjectWriter>,
+    writers: Vec<TcpObjectWriter>,
     reader_count: usize,
     on_finish: OnFinish,
 }
@@ -166,7 +166,7 @@ impl Inner {
         }
     }
 
-    fn handle_add_connection(&mut self, stream: ObjectStream) {
+    fn handle_add_connection(&mut self, stream: TcpObjectStream) {
         let (reader, writer) = stream.into_split();
         self.writers.push(writer);
         self.reader_count += 1;
@@ -191,7 +191,7 @@ impl Inner {
 }
 
 async fn read(
-    mut reader: ObjectReader,
+    mut reader: TcpObjectReader,
     command_tx: mpsc::Sender<Command>,
     request_tx: mpsc::Sender<Request>,
     response_tx: mpsc::Sender<Response>,
@@ -218,7 +218,7 @@ async fn read(
 }
 
 enum Command {
-    AddConnection(ObjectStream),
+    AddConnection(TcpObjectStream),
     SendMessage(Message),
     CloseReader,
 }

@@ -7,7 +7,7 @@ mod server;
 
 use self::{
     message_broker::MessageBroker,
-    object_stream::ObjectStream,
+    object_stream::TcpObjectStream,
     replica_discovery::{ReplicaDiscovery, RuntimeId},
 };
 use crate::{
@@ -139,7 +139,7 @@ impl Inner {
                 }
             };
 
-            log::info!("New incoming TCP connection: {}", addr);
+            log::debug!("New incoming TCP connection: {}", addr);
 
             self.task_handle
                 .spawn(self.clone().handle_new_connection(socket, None));
@@ -159,7 +159,7 @@ impl Inner {
             }
         };
 
-        log::info!("New outgoing TCP connection: {}", addr);
+        log::debug!("New outgoing TCP connection: {}", addr);
 
         self.handle_new_connection(socket, discovery_id).await
     }
@@ -169,7 +169,7 @@ impl Inner {
         socket: TcpStream,
         discovery_id: Option<RuntimeId>,
     ) {
-        let mut stream = ObjectStream::new(socket);
+        let mut stream = TcpObjectStream::new(socket);
         let their_replica_id =
             match perform_handshake(&mut stream, &self.index.this_replica_id).await {
                 Ok(replica_id) => replica_id,
@@ -184,24 +184,30 @@ impl Inner {
         match brokers.entry(their_replica_id) {
             Entry::Occupied(entry) => entry.get().add_connection(stream).await,
             Entry::Vacant(entry) => {
-                let s = self.clone();
+                log::info!("Connected to replica {:?}", their_replica_id);
+
                 entry.insert(MessageBroker::new(
                     self.index.clone(),
                     stream,
-                    Box::pin(async move {
-                        s.message_brokers.lock().await.remove(&their_replica_id);
-                        if let Some(discovery_id) = discovery_id {
-                            let _ = s.forget_tx.send(discovery_id).await;
-                        }
-                    }),
+                    Box::pin(self.clone().on_finish(their_replica_id, discovery_id)),
                 ));
             }
+        }
+    }
+
+    async fn on_finish(self: Arc<Self>, replica_id: ReplicaId, discovery_id: Option<RuntimeId>) {
+        log::info!("Disconnected from replica {:?}", replica_id);
+
+        self.message_brokers.lock().await.remove(&replica_id);
+
+        if let Some(discovery_id) = discovery_id {
+            let _ = self.forget_tx.send(discovery_id).await;
         }
     }
 }
 
 async fn perform_handshake(
-    stream: &mut ObjectStream,
+    stream: &mut TcpObjectStream,
     this_replica_id: &ReplicaId,
 ) -> io::Result<ReplicaId> {
     stream.write(this_replica_id).await?;
