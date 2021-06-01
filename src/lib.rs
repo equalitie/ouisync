@@ -20,6 +20,7 @@ mod replica_id;
 mod repository;
 mod scoped_task_set;
 mod session;
+mod version_vector;
 
 pub use self::{
     crypto::Cryptor,
