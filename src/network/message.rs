@@ -16,18 +16,20 @@ pub enum Message {
     Response(Response),
 }
 
-impl Message {
-    pub fn into_response(self) -> Response {
-        match self {
-            Message::Request(_) => panic!("Message is not a response"),
-            Message::Response(rs) => rs,
+impl From<Message> for Request {
+    fn from(msg: Message) -> Self {
+        match msg {
+            Message::Request(rq) => rq,
+            Message::Response(_) => panic!("Message is not Request"),
         }
     }
+}
 
-    pub fn into_request(self) -> Request {
-        match self {
-            Message::Request(rq) => rq,
-            Message::Response(_) => panic!("Message is not a request"),
+impl From<Message> for Response {
+    fn from(msg: Message) -> Self {
+        match msg {
+            Message::Request(_) => panic!("Message is not Response"),
+            Message::Response(rs) => rs,
         }
     }
 }

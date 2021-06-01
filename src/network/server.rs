@@ -7,9 +7,9 @@ impl Server {
     pub async fn run(&mut self, mut con: ServerStream, _index: &Index) {
         println!("Server started");
         loop {
-            let rq = con.read().await;
+            let rq = con.recv().await;
             println!("Server: received request {:?}", rq);
-            if con.write(Response::Hello).await.is_err() {
+            if con.send(Response::Hello).await.is_err() {
                 return;
             }
         }

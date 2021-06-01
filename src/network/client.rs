@@ -8,10 +8,10 @@ impl Client {
     pub async fn run(&mut self, mut con: ClientStream, _index: &Index) {
         println!("Client started");
         loop {
-            if con.write(Request::Hello).await.is_err() {
+            if con.send(Request::Hello).await.is_err() {
                 return;
             }
-            let rs = con.read().await;
+            let rs = con.recv().await;
             println!("Client received response: {:?}", rs);
             sleep(Duration::from_millis(1000)).await;
         }
