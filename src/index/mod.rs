@@ -68,11 +68,14 @@ impl Index {
 
     async fn read_branches(&self, replica_ids: &HashSet<ReplicaId>) -> Result<()> {
         let mut branches = self.branches.lock().await;
+        let mut tx = self.pool.begin().await?;
 
         for id in replica_ids {
-            let branch = Branch::new(self.pool.clone(), *id).await?;
+            let branch = Branch::new(&mut tx, *id).await?;
             branches.insert(*id, branch);
         }
+
+        tx.commit().await?;
 
         Ok(())
     }
@@ -164,16 +167,12 @@ mod tests {
         init(&pool).await.unwrap();
         block::init(&pool).await.unwrap();
 
+        let mut tx = pool.begin().await.unwrap();
+
         let cryptor = Cryptor::Null;
 
-        let branch0 = Branch::new(pool.clone(), ReplicaId::random())
-            .await
-            .unwrap();
-        let branch1 = Branch::new(pool.clone(), ReplicaId::random())
-            .await
-            .unwrap();
-
-        let mut tx = pool.begin().await.unwrap();
+        let branch0 = Branch::new(&mut tx, ReplicaId::random()).await.unwrap();
+        let branch1 = Branch::new(&mut tx, ReplicaId::random()).await.unwrap();
 
         let block_id = BlockId::random();
         let buffer = vec![0; BLOCK_SIZE];

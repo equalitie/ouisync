@@ -26,8 +26,8 @@ pub struct Branch {
 }
 
 impl Branch {
-    pub async fn new(pool: db::Pool, replica_id: ReplicaId) -> Result<Self> {
-        let root_node = RootNode::get_latest_or_create(pool, &replica_id).await?;
+    pub async fn new(tx: &mut db::Transaction, replica_id: ReplicaId) -> Result<Self> {
+        let root_node = RootNode::get_latest_or_create(tx, &replica_id).await?;
 
         Ok(Self {
             root_node: Arc::new(Mutex::new(root_node)),
@@ -197,9 +197,11 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn insert_and_read() {
         let pool = init_db().await;
-        let branch = Branch::new(pool.clone(), ReplicaId::random())
-            .await
-            .unwrap();
+
+        let mut tx = pool.begin().await.unwrap();
+        let branch = Branch::new(&mut tx, ReplicaId::random()).await.unwrap();
+        tx.commit().await.unwrap();
+
         let block_id = BlockId::random();
         let locator = random_head_locator(0);
         let encoded_locator = locator.encode(&Cryptor::Null);
@@ -220,16 +222,15 @@ mod tests {
     async fn rewrite_locator() {
         for _ in 0..32 {
             let pool = init_db().await;
-            let branch = Branch::new(pool.clone(), ReplicaId::random())
-                .await
-                .unwrap();
+            let mut tx = pool.begin().await.unwrap();
+
+            let branch = Branch::new(&mut tx, ReplicaId::random()).await.unwrap();
 
             let b1 = BlockId::random();
             let b2 = BlockId::random();
 
             let locator = random_head_locator(0);
             let encoded_locator = locator.encode(&Cryptor::Null);
-            let mut tx = pool.begin().await.unwrap();
 
             branch.insert(&mut tx, &b1, &encoded_locator).await.unwrap();
             branch.insert(&mut tx, &b2, &encoded_locator).await.unwrap();
@@ -248,14 +249,13 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn remove_locator() {
         let pool = init_db().await;
-        let branch = Branch::new(pool.clone(), ReplicaId::random())
-            .await
-            .unwrap();
+        let mut tx = pool.begin().await.unwrap();
+
+        let branch = Branch::new(&mut tx, ReplicaId::random()).await.unwrap();
 
         let b = BlockId::random();
         let locator = random_head_locator(0);
         let encoded_locator = locator.encode(&Cryptor::Null);
-        let mut tx = pool.begin().await.unwrap();
 
         assert_eq!(0, count_branch_forest_entries(&mut tx).await);
 

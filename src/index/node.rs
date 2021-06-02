@@ -20,62 +20,45 @@ pub struct RootNode {
 }
 
 impl RootNode {
-    pub async fn get_latest_or_create(pool: db::Pool, replica_id: &ReplicaId) -> Result<Self> {
-        let mut conn = pool.acquire().await?;
+    pub async fn get_latest_or_create(
+        tx: &mut db::Transaction,
+        replica_id: &ReplicaId,
+    ) -> Result<Self> {
+        match sqlx::query(
+            "SELECT
+                 snapshot_id,
+                 hash,
+                 is_complete,
+                 missing_blocks_crc,
+                 missing_blocks_count
+             FROM snapshot_root_nodes
+             WHERE replica_id=?
+             ORDER BY snapshot_id DESC
+             LIMIT 1",
+        )
+        .bind(replica_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        {
+            Some(row) => Ok(Self {
+                snapshot_id: row.get(0),
+                hash: row.get(1),
+                is_complete: row.get(2),
+                missing_blocks_crc: row.get(3),
+                missing_blocks_count: row.get::<MissingBlocksCount, _>(4) as usize,
+            }),
+            None => {
+                let node = NewRootNode {
+                    replica_id: *replica_id,
+                    hash: Hash::null(),
+                    is_complete: true,
+                    missing_blocks_crc: 0,
+                    missing_blocks_count: 0,
+                };
 
-        let (snapshot_id, hash, is_complete, missing_blocks_crc, missing_blocks_count) =
-            match sqlx::query(
-                "SELECT
-                     snapshot_id,
-                     hash,
-                     is_complete,
-                     missing_blocks_crc,
-                     missing_blocks_count
-                 FROM snapshot_root_nodes
-                 WHERE replica_id=?
-                 ORDER BY snapshot_id DESC
-                 LIMIT 1",
-            )
-            .bind(replica_id)
-            .fetch_optional(&mut conn)
-            .await?
-            {
-                Some(row) => (
-                    row.get(0),
-                    row.get(1),
-                    row.get(2),
-                    row.get(3),
-                    row.get::<MissingBlocksCount, _>(4) as usize,
-                ),
-                None => {
-                    let snapshot_id = sqlx::query(
-                        "INSERT INTO snapshot_root_nodes (
-                             replica_id,
-                             hash,
-                             is_complete,
-                             missing_blocks_crc,
-                             missing_blocks_count
-                         )
-                         VALUES (?, ?, 1, 0, 0)
-                         RETURNING snapshot_id;",
-                    )
-                    .bind(replica_id)
-                    .bind(&Hash::null())
-                    .fetch_one(&mut conn)
-                    .await?
-                    .get(0);
-
-                    (snapshot_id, Hash::null(), true, 0, 0)
-                }
-            };
-
-        Ok(Self {
-            snapshot_id,
-            hash,
-            is_complete,
-            missing_blocks_crc,
-            missing_blocks_count,
-        })
+                node.insert(tx).await
+            }
+        }
     }
 
     pub async fn clone_with_new_root(
@@ -103,7 +86,7 @@ impl RootNode {
         )
         .bind(root_hash)
         .bind(self.snapshot_id)
-        .fetch_one(&mut *tx)
+        .fetch_one(tx)
         .await?
         .get(0);
 
@@ -122,6 +105,49 @@ impl RootNode {
 
     fn as_link(&self) -> Link {
         Link::ToRoot { node: self.clone() }
+    }
+}
+
+/// Root node that hasn't been saved into the db yet.
+#[derive(Clone, Debug)]
+pub struct NewRootNode {
+    pub replica_id: ReplicaId,
+    pub hash: Hash,
+    pub is_complete: bool,
+    pub missing_blocks_crc: Crc,
+    pub missing_blocks_count: usize,
+}
+
+impl NewRootNode {
+    /// Inserts this `NewRootNode` into the db and returns the corresponding `RootNode`.
+    pub async fn insert(&self, tx: &mut db::Transaction) -> Result<RootNode> {
+        let snapshot_id = sqlx::query(
+            "INSERT INTO snapshot_root_nodes (
+                 replica_id,
+                 hash,
+                 is_complete,
+                 missing_blocks_crc,
+                 missing_blocks_count
+             )
+             VALUES (?, ?, ?, ?, ?)
+             RETURNING snapshot_id;",
+        )
+        .bind(&self.replica_id)
+        .bind(&self.hash)
+        .bind(self.is_complete)
+        .bind(self.missing_blocks_crc)
+        .bind(self.missing_blocks_count as MissingBlocksCount)
+        .fetch_one(tx)
+        .await?
+        .get(0);
+
+        Ok(RootNode {
+            snapshot_id,
+            hash: self.hash,
+            is_complete: self.is_complete,
+            missing_blocks_crc: self.missing_blocks_crc,
+            missing_blocks_count: self.missing_blocks_count,
+        })
     }
 }
 
