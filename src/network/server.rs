@@ -33,10 +33,7 @@ impl Server {
 
     async fn push_snapshot(&mut self) -> Result<bool> {
         let request = match self.stream.recv().await {
-            Some(request) => {
-                log::trace!("recv {:?}", request);
-                request
-            }
+            Some(request) => request,
             None => return Ok(false),
         };
 
@@ -47,9 +44,11 @@ impl Server {
                     RootNode::get_latest_or_create(&mut tx, &self.index.this_replica_id).await?;
                 tx.commit().await?;
 
-                let response = Response::RootNode(node.data);
-                log::trace!("send {:?}", response);
-                let _ = self.stream.send(response).await;
+                let _ = self.stream.send(Response::RootNode(node.data)).await;
+            }
+            Request::InnerNodes(parent_hash) => {
+                // TODO:
+                // let nodes =
             }
         }
 

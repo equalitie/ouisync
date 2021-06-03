@@ -23,10 +23,13 @@ pub struct ServerStream {
 
 impl ServerStream {
     pub async fn recv(&mut self) -> Option<Request> {
-        self.rx.recv().await
+        let rq = self.rx.recv().await?;
+        log::trace!("server: recv {:?}", rq);
+        Some(rq)
     }
 
     pub async fn send(&mut self, rs: Response) -> Result<(), SendError<Response>> {
+        log::trace!("server: send {:?}", rs);
         self.tx
             .send(Command::SendMessage(Message::Response(rs)))
             .await
@@ -42,10 +45,13 @@ pub struct ClientStream {
 
 impl ClientStream {
     pub async fn recv(&mut self) -> Option<Response> {
-        self.rx.recv().await
+        let rs = self.rx.recv().await?;
+        log::trace!("client: recv {:?}", rs);
+        Some(rs)
     }
 
     pub async fn send(&mut self, rq: Request) -> Result<(), SendError<Request>> {
+        log::trace!("client: send {:?}", rq);
         self.tx
             .send(Command::SendMessage(Message::Request(rq)))
             .await

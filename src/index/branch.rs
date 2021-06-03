@@ -110,7 +110,7 @@ impl Branch {
 
         for level in 0..INNER_LAYER_COUNT {
             path.inner[level] = inner_children(&parent, tx).await?;
-            parent = path.inner[level][path.get_bucket(level)].hash;
+            parent = path.inner[level][path.get_bucket(level)].data.hash;
 
             if parent.is_null() {
                 return Ok(path);
@@ -142,7 +142,7 @@ impl Branch {
             let parent_hash = path.hash_at_layer(i);
 
             for (bucket, ref node) in inner_layer.iter().enumerate() {
-                if node.hash.is_null() {
+                if node.data.hash.is_null() {
                     continue;
                 }
 

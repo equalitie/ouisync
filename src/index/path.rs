@@ -1,5 +1,5 @@
 use super::{
-    node::{InnerNode, LeafNode, LeafNodeSet, ModifyStatus},
+    node::{InnerNode, LeafNode, LeafNodeSet, ModifyStatus, NodeData},
     Crc, INNER_LAYER_COUNT, MAX_INNER_NODE_CHILD_COUNT,
 };
 use crate::{block::BlockId, crypto::Hash};
@@ -73,7 +73,9 @@ impl Path {
             return self.root;
         }
         let inner_layer = layer - 1;
-        self.inner[inner_layer][self.get_bucket(inner_layer)].hash
+        self.inner[inner_layer][self.get_bucket(inner_layer)]
+            .data
+            .hash
     }
 
     // Sets the leaf node to the given block id. Returns the previous block id, if any.
@@ -115,7 +117,7 @@ impl Path {
 
         self.inner[inner_layer][bucket] = InnerNode::empty();
 
-        let is_empty = self.inner[inner_layer].iter().all(|x| x.hash == null);
+        let is_empty = self.inner[inner_layer].iter().all(|x| x.data.hash == null);
 
         if !is_empty {
             self.recalculate(inner_layer);
@@ -138,12 +140,12 @@ impl Path {
         for inner_layer in (0..start_layer).rev() {
             let (hash, crc, cnt) = self.compute_hash_for_layer(inner_layer + 1);
             let bucket = self.get_bucket(inner_layer);
-            self.inner[inner_layer][bucket] = InnerNode {
+            self.inner[inner_layer][bucket] = InnerNode::from(NodeData {
                 hash,
                 is_complete: true,
                 missing_blocks_crc: crc,
                 missing_blocks_count: cnt,
-            };
+            });
         }
 
         let (hash, crc, cnt) = self.compute_hash_for_layer(0);
@@ -180,9 +182,9 @@ fn hash_inner(siblings: &[InnerNode]) -> Hash {
     // XXX: Have some cryptographer check this whether there are no attacks.
     let mut hash = Sha3_256::new();
     for (k, s) in siblings.iter().enumerate() {
-        if !s.hash.is_null() {
+        if !s.data.hash.is_null() {
             hash.update((k as u16).to_le_bytes());
-            hash.update(s.hash);
+            hash.update(s.data.hash);
         }
     }
     hash.finalize().into()
@@ -217,9 +219,9 @@ fn calculate_missing_blocks_crc_from_inner(inner: &[InnerNode]) -> (Crc, usize) 
     let mut digest = crc32::Digest::new(crc32::IEEE);
 
     for n in inner {
-        if n.missing_blocks_crc != 0 {
+        if n.data.missing_blocks_crc != 0 {
             cnt += 1;
-            digest.write(n.missing_blocks_crc.to_le_bytes().as_ref());
+            digest.write(n.data.missing_blocks_crc.to_le_bytes().as_ref());
         }
     }
 

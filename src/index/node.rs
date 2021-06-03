@@ -7,7 +7,7 @@ use sqlx::Row;
 use std::{iter::FromIterator, mem, slice};
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
-pub struct RootNodeData {
+pub struct NodeData {
     pub hash: Hash,
     pub is_complete: bool,
     pub missing_blocks_crc: Crc,
@@ -17,7 +17,7 @@ pub struct RootNodeData {
 #[derive(Clone, Debug)]
 pub struct RootNode {
     pub snapshot_id: SnapshotId,
-    pub data: RootNodeData,
+    pub data: NodeData,
 }
 
 impl RootNode {
@@ -33,7 +33,7 @@ impl RootNode {
         } else {
             let node = NewRootNode {
                 replica_id: *replica_id,
-                data: RootNodeData {
+                data: NodeData {
                     hash: Hash::null(),
                     is_complete: true,
                     missing_blocks_crc: 0,
@@ -70,7 +70,7 @@ impl RootNode {
         .bind(limit)
         .map(|row| Self {
             snapshot_id: row.get(0),
-            data: RootNodeData {
+            data: NodeData {
                 hash: row.get(1),
                 is_complete: row.get(2),
                 missing_blocks_crc: row.get(3),
@@ -112,7 +112,7 @@ impl RootNode {
 
         Ok(RootNode {
             snapshot_id: new_id,
-            data: RootNodeData {
+            data: NodeData {
                 hash: *root_hash,
                 ..self.data
             },
@@ -132,7 +132,7 @@ impl RootNode {
 #[derive(Clone, Debug)]
 pub struct NewRootNode {
     pub replica_id: ReplicaId,
-    pub data: RootNodeData,
+    pub data: NodeData,
 }
 
 impl NewRootNode {
@@ -151,12 +151,12 @@ impl NewRootNode {
              )
              VALUES (?, ?, ?, ?, ?)
              ON CONFLICT (replica_id, hash) DO UPDATE SET
-                is_complete          = ?,
-                missing_blocks_crc   = ?,
-                missing_blocks_count = ?
-             WHERE excluded.is_complete          <> is_complete
-                OR excluded.missing_blocks_crc   <> missing_blocks_crc
-                OR excluded.missing_blocks_count <> missing_blocks_count;",
+                 is_complete          = ?,
+                 missing_blocks_crc   = ?,
+                 missing_blocks_count = ?
+             WHERE excluded.is_complete           <> is_complete
+                 OR excluded.missing_blocks_crc   <> missing_blocks_crc
+                 OR excluded.missing_blocks_count <> missing_blocks_count;",
         )
         .bind(&self.replica_id)
         .bind(&self.data.hash)
@@ -184,10 +184,7 @@ impl NewRootNode {
 
 #[derive(Clone, Copy, Debug)]
 pub struct InnerNode {
-    pub hash: Hash,
-    pub is_complete: bool,
-    pub missing_blocks_crc: Crc,
-    pub missing_blocks_count: usize,
+    pub data: NodeData,
 }
 
 impl InnerNode {
@@ -209,23 +206,29 @@ impl InnerNode {
              VALUES (?, ?, ?, ?, ?, ?)",
         )
         .bind(parent)
-        .bind(&self.hash)
+        .bind(&self.data.hash)
         .bind(bucket as u16)
-        .bind(self.is_complete)
-        .bind(self.missing_blocks_crc)
-        .bind(self.missing_blocks_count as MissingBlocksCount)
+        .bind(self.data.is_complete)
+        .bind(self.data.missing_blocks_crc)
+        .bind(self.data.missing_blocks_count as MissingBlocksCount)
         .execute(&mut *tx)
         .await?;
         Ok(())
     }
 
     pub fn empty() -> Self {
-        Self {
+        Self::from(NodeData {
             hash: Hash::null(),
             is_complete: true,
             missing_blocks_crc: 0,
             missing_blocks_count: 0,
-        }
+        })
+    }
+}
+
+impl From<NodeData> for InnerNode {
+    fn from(data: NodeData) -> Self {
+        Self { data }
     }
 }
 
@@ -257,12 +260,12 @@ pub async fn inner_children(
         let missing_blocks_count = row.get::<MissingBlocksCount, _>(4) as usize;
 
         if let Some(node) = children.get_mut(bucket as usize) {
-            *node = InnerNode {
+            *node = InnerNode::from(NodeData {
                 hash,
                 is_complete,
                 missing_blocks_crc,
                 missing_blocks_count,
-            };
+            });
         } else {
             log::error!("inner node ({:?}) bucket out of range: {}", hash, bucket);
             // TODO: should we return error here?
@@ -446,7 +449,7 @@ impl Link {
             Link::ToInner { parent, node } => {
                 sqlx::query("DELETE FROM snapshot_inner_nodes WHERE parent = ? AND hash = ?")
                     .bind(parent)
-                    .bind(&node.hash)
+                    .bind(&node.data.hash)
                     .execute(&mut *tx)
                     .await?;
             }
@@ -475,7 +478,7 @@ impl Link {
             }
             Link::ToInner { parent: _, node } => {
                 sqlx::query("SELECT 0 FROM snapshot_inner_nodes WHERE hash = ? LIMIT 1")
-                    .bind(&node.hash)
+                    .bind(&node.data.hash)
                     .fetch_optional(&mut *tx)
                     .await?
                     .is_some()
@@ -500,9 +503,9 @@ impl Link {
         match self {
             Link::ToRoot { node: root } => self.inner_children(tx, &root.data.hash).await,
             Link::ToInner { node, .. } if layer < INNER_LAYER_COUNT => {
-                self.inner_children(tx, &node.hash).await
+                self.inner_children(tx, &node.data.hash).await
             }
-            Link::ToInner { node, .. } => self.leaf_children(tx, &node.hash).await,
+            Link::ToInner { node, .. } => self.leaf_children(tx, &node.data.hash).await,
             Link::ToLeaf { parent: _, node: _ } => Ok(Vec::new()),
         }
     }
@@ -522,10 +525,12 @@ impl Link {
             Ok(Link::ToInner {
                 parent: row.get(0),
                 node: InnerNode {
-                    hash: row.get(1),
-                    is_complete: row.get(2),
-                    missing_blocks_crc: row.get(3),
-                    missing_blocks_count: row.get::<MissingBlocksCount, _>(4) as usize,
+                    data: NodeData {
+                        hash: row.get(1),
+                        is_complete: row.get(2),
+                        missing_blocks_crc: row.get(3),
+                        missing_blocks_count: row.get::<MissingBlocksCount, _>(4) as usize,
+                    },
                 },
             })
         })
@@ -594,7 +599,7 @@ mod tests {
 
         let new_node = NewRootNode {
             replica_id,
-            data: RootNodeData {
+            data: NodeData {
                 hash,
                 is_complete,
                 missing_blocks_crc,
@@ -665,7 +670,7 @@ mod tests {
 
         let new_node0 = NewRootNode {
             replica_id,
-            data: RootNodeData {
+            data: NodeData {
                 hash,
                 is_complete: old_is_complete,
                 missing_blocks_crc: old_missing_blocks_crc,
@@ -677,7 +682,7 @@ mod tests {
 
         let new_node1 = NewRootNode {
             replica_id,
-            data: RootNodeData {
+            data: NodeData {
                 hash,
                 is_complete: new_is_complete,
                 missing_blocks_crc: new_missing_blocks_crc,

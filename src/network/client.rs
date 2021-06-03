@@ -4,7 +4,7 @@ use super::{
 };
 use crate::{
     error::Result,
-    index::{Index, NewRootNode},
+    index::{Index, InnerNode, NewRootNode},
     replica_id::ReplicaId,
 };
 
@@ -37,18 +37,18 @@ impl Client {
     }
 
     async fn pull_snapshot(&mut self) -> Result<bool> {
-        let request = Request::RootNode;
-        log::trace!("send {:?}", request);
-        let _ = self.stream.send(request).await;
+        let _ = self.stream.send(Request::RootNode).await;
 
-        let response = match self.stream.recv().await {
-            Some(response) => {
-                log::trace!("recv {:?}", response);
-                response
-            }
-            None => return Ok(false),
-        };
+        while let Some(response) = self.stream.recv().await {
+            self.handle_response(response).await?;
 
+            // TODO: if snapshot complete, return true
+        }
+
+        Ok(false)
+    }
+
+    async fn handle_response(&mut self, response: Response) -> Result<()> {
         match response {
             Response::RootNode(data) => {
                 let node = NewRootNode {
@@ -57,14 +57,31 @@ impl Client {
                 };
 
                 let mut tx = self.index.pool.begin().await?;
-                let (_node, _changed) = node.insert(&mut tx).await?;
+                let (node, changed) = node.insert(&mut tx).await?;
+                tx.commit().await?;
 
-                // TODO: if changed == true, fetch inner nodes
+                if changed {
+                    let _ = self.stream.send(Request::InnerNodes(node.data.hash)).await;
+                }
+            }
+            Response::InnerNodes {
+                parent_hash,
+                children,
+            } => {
+                let mut tx = self.index.pool.begin().await?;
+
+                for (index, node) in children.into_iter().enumerate() {
+                    InnerNode::from(node)
+                        .insert(index, &parent_hash, &mut tx)
+                        .await?;
+                    // TODO: if the node is different from what we had, request the child nodes:
+                    // let _ = self.stream.send(Request::InnerNodes(node.data.hash)).await;
+                }
 
                 tx.commit().await?;
             }
         }
 
-        Ok(true)
+        Ok(())
     }
 }
