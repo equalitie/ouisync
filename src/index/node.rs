@@ -5,13 +5,18 @@ use futures::{Stream, TryStreamExt};
 use sqlx::Row;
 use std::{iter::FromIterator, mem, slice};
 
-#[derive(Clone, Debug)]
-pub struct RootNode {
-    pub snapshot_id: SnapshotId,
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+pub struct RootNodeData {
     pub hash: Hash,
     pub is_complete: bool,
     pub missing_blocks_crc: Crc,
     pub missing_blocks_count: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct RootNode {
+    pub snapshot_id: SnapshotId,
+    pub data: RootNodeData,
 }
 
 impl RootNode {
@@ -27,10 +32,12 @@ impl RootNode {
         } else {
             let node = NewRootNode {
                 replica_id: *replica_id,
-                hash: Hash::null(),
-                is_complete: true,
-                missing_blocks_crc: 0,
-                missing_blocks_count: 0,
+                data: RootNodeData {
+                    hash: Hash::null(),
+                    is_complete: true,
+                    missing_blocks_crc: 0,
+                    missing_blocks_count: 0,
+                },
             };
 
             node.insert(tx).await?.0
@@ -62,10 +69,12 @@ impl RootNode {
         .bind(limit)
         .map(|row| Self {
             snapshot_id: row.get(0),
-            hash: row.get(1),
-            is_complete: row.get(2),
-            missing_blocks_crc: row.get(3),
-            missing_blocks_count: row.get::<MissingBlocksCount, _>(4) as usize,
+            data: RootNodeData {
+                hash: row.get(1),
+                is_complete: row.get(2),
+                missing_blocks_crc: row.get(3),
+                missing_blocks_count: row.get::<MissingBlocksCount, _>(4) as usize,
+            },
         })
         .fetch(tx)
         .err_into()
@@ -102,10 +111,10 @@ impl RootNode {
 
         Ok(RootNode {
             snapshot_id: new_id,
-            hash: *root_hash,
-            is_complete: self.is_complete,
-            missing_blocks_crc: self.missing_blocks_crc,
-            missing_blocks_count: self.missing_blocks_count,
+            data: RootNodeData {
+                hash: *root_hash,
+                ..self.data
+            },
         })
     }
 
@@ -122,10 +131,7 @@ impl RootNode {
 #[derive(Clone, Debug)]
 pub struct NewRootNode {
     pub replica_id: ReplicaId,
-    pub hash: Hash,
-    pub is_complete: bool,
-    pub missing_blocks_crc: Crc,
-    pub missing_blocks_count: usize,
+    pub data: RootNodeData,
 }
 
 impl NewRootNode {
@@ -152,13 +158,13 @@ impl NewRootNode {
                 OR excluded.missing_blocks_count <> missing_blocks_count;",
         )
         .bind(&self.replica_id)
-        .bind(&self.hash)
-        .bind(self.is_complete)
-        .bind(self.missing_blocks_crc)
-        .bind(self.missing_blocks_count as MissingBlocksCount)
-        .bind(self.is_complete)
-        .bind(self.missing_blocks_crc)
-        .bind(self.missing_blocks_count as MissingBlocksCount)
+        .bind(&self.data.hash)
+        .bind(self.data.is_complete)
+        .bind(self.data.missing_blocks_crc)
+        .bind(self.data.missing_blocks_count as MissingBlocksCount)
+        .bind(self.data.is_complete)
+        .bind(self.data.missing_blocks_crc)
+        .bind(self.data.missing_blocks_count as MissingBlocksCount)
         .execute(tx)
         .await?;
 
@@ -168,10 +174,7 @@ impl NewRootNode {
         Ok((
             RootNode {
                 snapshot_id,
-                hash: self.hash,
-                is_complete: self.is_complete,
-                missing_blocks_crc: self.missing_blocks_crc,
-                missing_blocks_count: self.missing_blocks_count,
+                data: self.data,
             },
             changed,
         ))
@@ -464,7 +467,7 @@ impl Link {
         let has_parent = match self {
             Link::ToRoot { node: root } => {
                 sqlx::query("SELECT 0 FROM snapshot_root_nodes WHERE hash = ? LIMIT 1")
-                    .bind(&root.hash)
+                    .bind(&root.data.hash)
                     .fetch_optional(&mut *tx)
                     .await?
                     .is_some()
@@ -494,7 +497,7 @@ impl Link {
 
     async fn children(&self, layer: usize, tx: &mut db::Transaction) -> Result<Vec<Link>> {
         match self {
-            Link::ToRoot { node: root } => self.inner_children(tx, &root.hash).await,
+            Link::ToRoot { node: root } => self.inner_children(tx, &root.data.hash).await,
             Link::ToInner { node, .. } if layer < INNER_LAYER_COUNT => {
                 self.inner_children(tx, &node.hash).await
             }
@@ -590,19 +593,18 @@ mod tests {
 
         let new_node = NewRootNode {
             replica_id,
-            hash,
-            is_complete,
-            missing_blocks_crc,
-            missing_blocks_count,
+            data: RootNodeData {
+                hash,
+                is_complete,
+                missing_blocks_crc,
+                missing_blocks_count,
+            },
         };
         let (node, changed) = new_node.insert(&mut tx).await.unwrap();
         let snapshot_id = node.snapshot_id;
 
         assert!(changed);
-        assert_eq!(node.hash, new_node.hash);
-        assert_eq!(node.is_complete, new_node.is_complete);
-        assert_eq!(node.missing_blocks_crc, new_node.missing_blocks_crc);
-        assert_eq!(node.missing_blocks_count, new_node.missing_blocks_count);
+        assert_eq!(node.data, new_node.data);
 
         let node = RootNode::get_all(&mut tx, &replica_id, 1)
             .try_next()
@@ -611,10 +613,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(node.snapshot_id, snapshot_id);
-        assert_eq!(node.hash, new_node.hash);
-        assert_eq!(node.is_complete, new_node.is_complete);
-        assert_eq!(node.missing_blocks_crc, new_node.missing_blocks_crc);
-        assert_eq!(node.missing_blocks_count, new_node.missing_blocks_count);
+        assert_eq!(node.data, new_node.data);
     }
 
     #[proptest]
@@ -665,34 +664,30 @@ mod tests {
 
         let new_node0 = NewRootNode {
             replica_id,
-            hash,
-            is_complete: old_is_complete,
-            missing_blocks_crc: old_missing_blocks_crc,
-            missing_blocks_count: old_missing_blocks_count,
+            data: RootNodeData {
+                hash,
+                is_complete: old_is_complete,
+                missing_blocks_crc: old_missing_blocks_crc,
+                missing_blocks_count: old_missing_blocks_count,
+            },
         };
         let (node, _) = new_node0.insert(&mut tx).await.unwrap();
         let snapshot_id = node.snapshot_id;
 
         let new_node1 = NewRootNode {
             replica_id,
-            hash,
-            is_complete: new_is_complete,
-            missing_blocks_crc: new_missing_blocks_crc,
-            missing_blocks_count: new_missing_blocks_count,
+            data: RootNodeData {
+                hash,
+                is_complete: new_is_complete,
+                missing_blocks_crc: new_missing_blocks_crc,
+                missing_blocks_count: new_missing_blocks_count,
+            },
         };
         let (node, changed) = new_node1.insert(&mut tx).await.unwrap();
 
-        assert_eq!(
-            changed,
-            old_is_complete != new_is_complete
-                || old_missing_blocks_crc != new_missing_blocks_crc
-                || old_missing_blocks_count != new_missing_blocks_count
-        );
+        assert_eq!(changed, new_node0.data != new_node1.data);
         assert_eq!(node.snapshot_id, snapshot_id);
-        assert_eq!(node.hash, new_node1.hash);
-        assert_eq!(node.is_complete, new_node1.is_complete);
-        assert_eq!(node.missing_blocks_crc, new_node1.missing_blocks_crc);
-        assert_eq!(node.missing_blocks_count, new_node1.missing_blocks_count);
+        assert_eq!(node.data, new_node1.data);
 
         let nodes: Vec<_> = RootNode::get_all(&mut tx, &replica_id, 2)
             .try_collect()
@@ -702,13 +697,7 @@ mod tests {
         assert_eq!(nodes.len(), 1);
 
         assert_eq!(nodes[0].snapshot_id, snapshot_id);
-        assert_eq!(nodes[0].hash, new_node1.hash);
-        assert_eq!(nodes[0].is_complete, new_node1.is_complete);
-        assert_eq!(nodes[0].missing_blocks_crc, new_node1.missing_blocks_crc);
-        assert_eq!(
-            nodes[0].missing_blocks_count,
-            new_node1.missing_blocks_count
-        );
+        assert_eq!(nodes[0].data, new_node1.data);
     }
 
     async fn setup() -> db::Pool {
