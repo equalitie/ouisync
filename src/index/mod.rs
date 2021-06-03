@@ -97,7 +97,9 @@ pub async fn init(pool: &db::Pool) -> Result<(), Error> {
 
              -- XXX: Should be NOT NULL
              missing_blocks_crc   INTEGER,
-             missing_blocks_count INTEGER NOT NULL
+             missing_blocks_count INTEGER NOT NULL,
+
+             UNIQUE(replica_id, hash)
          );
 
          CREATE TABLE IF NOT EXISTS snapshot_inner_nodes (

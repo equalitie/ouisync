@@ -1,9 +1,8 @@
 use super::*;
-use crate::{crypto::SecretKey, error::Error, replica_id::ReplicaId};
+use crate::{crypto::SecretKey, error::Error, replica_id::ReplicaId, test_utils};
 use assert_matches::assert_matches;
-use proptest::{collection::vec, prelude::*};
+use proptest::collection::vec;
 use rand::{distributions::Standard, prelude::*};
-use std::future::Future;
 use test_strategy::proptest;
 
 #[tokio::test(flavor = "multi_thread")]
@@ -31,9 +30,9 @@ fn write_and_read(
     #[strategy(1..3 * BLOCK_SIZE)] blob_len: usize,
     #[strategy(1..=#blob_len)] write_len: usize,
     #[strategy(1..=#blob_len + 1)] read_len: usize,
-    #[strategy(rng_seed_strategy())] rng_seed: u64,
+    #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
 ) {
-    run(write_and_read_case(
+    test_utils::run(write_and_read_case(
         is_root, blob_len, write_len, read_len, rng_seed,
     ))
 }
@@ -89,9 +88,9 @@ async fn write_and_read_case(
 #[proptest]
 fn len(
     #[strategy(0..3 * BLOCK_SIZE)] content_len: usize,
-    #[strategy(rng_seed_strategy())] rng_seed: u64,
+    #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
 ) {
-    run(async {
+    test_utils::run(async {
         let (rng, cryptor, pool, branch) = setup(rng_seed).await;
 
         let content: Vec<u8> = rng.sample_iter(Standard).take(content_len).collect();
@@ -114,9 +113,9 @@ fn len(
 fn seek_from_start(
     #[strategy(0..2 * BLOCK_SIZE)] content_len: usize,
     #[strategy(0..#content_len)] pos: usize,
-    #[strategy(rng_seed_strategy())] rng_seed: u64,
+    #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
 ) {
-    run(seek_from(
+    test_utils::run(seek_from(
         content_len,
         SeekFrom::Start(pos as u64),
         pos,
@@ -128,9 +127,9 @@ fn seek_from_start(
 fn seek_from_end(
     #[strategy(0..2 * BLOCK_SIZE)] content_len: usize,
     #[strategy(0..#content_len)] pos: usize,
-    #[strategy(rng_seed_strategy())] rng_seed: u64,
+    #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
 ) {
-    run(seek_from(
+    test_utils::run(seek_from(
         content_len,
         SeekFrom::End(-((content_len - pos) as i64)),
         pos,
@@ -158,9 +157,9 @@ async fn seek_from(content_len: usize, seek_from: SeekFrom, expected_pos: usize,
 fn seek_from_current(
     #[strategy(1..2 * BLOCK_SIZE)] content_len: usize,
     #[strategy(vec(0..#content_len, 1..10))] positions: Vec<usize>,
-    #[strategy(rng_seed_strategy())] rng_seed: u64,
+    #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
 ) {
-    run(async {
+    test_utils::run(async {
         let (rng, cryptor, pool, branch) = setup(rng_seed).await;
 
         let content: Vec<u8> = rng.sample_iter(Standard).take(content_len).collect();
@@ -402,17 +401,6 @@ async fn modify_blob() {
     }
 }
 
-// proptest doesn't work with the `#[tokio::test]` macro yet
-// (see https://github.com/AltSysrq/proptest/issues/179). As a workaround, create the runtime
-// manually.
-fn run<F: Future>(future: F) -> F::Output {
-    tokio::runtime::Builder::new_multi_thread()
-        .enable_time()
-        .build()
-        .unwrap()
-        .block_on(future)
-}
-
 async fn setup(rng_seed: u64) -> (StdRng, Cryptor, db::Pool, Branch) {
     let mut rng = StdRng::seed_from_u64(rng_seed);
     let secret_key = SecretKey::generate(&mut rng);
@@ -420,14 +408,10 @@ async fn setup(rng_seed: u64) -> (StdRng, Cryptor, db::Pool, Branch) {
     let pool = init_db().await;
 
     let mut tx = pool.begin().await.unwrap();
-    let branch = Branch::new(&mut tx, ReplicaId::random()).await.unwrap();
+    let branch = Branch::new(&mut tx, rng.gen()).await.unwrap();
     tx.commit().await.unwrap();
 
     (rng, cryptor, pool, branch)
-}
-
-fn rng_seed_strategy() -> impl Strategy<Value = u64> {
-    any::<u64>().no_shrink()
 }
 
 fn random_head_locator<R: Rng>(rng: &mut R, seq: u32) -> Locator {

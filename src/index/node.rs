@@ -1,12 +1,7 @@
-use crate::{
-    block::BlockId,
-    crypto::Hash,
-    db,
-    error::Result,
-    index::{Crc, MissingBlocksCount, SnapshotId, INNER_LAYER_COUNT, MAX_INNER_NODE_CHILD_COUNT},
-    replica_id::ReplicaId,
-};
+use super::{Crc, MissingBlocksCount, SnapshotId, INNER_LAYER_COUNT, MAX_INNER_NODE_CHILD_COUNT};
+use crate::{block::BlockId, crypto::Hash, db, error::Result, replica_id::ReplicaId};
 use async_recursion::async_recursion;
+use futures::{Stream, TryStreamExt};
 use sqlx::Row;
 use std::{iter::FromIterator, mem, slice};
 
@@ -20,11 +15,38 @@ pub struct RootNode {
 }
 
 impl RootNode {
+    /// Returns the latest root node of the specified replica. If no such node exists yet, creates
+    /// it first.
     pub async fn get_latest_or_create(
         tx: &mut db::Transaction,
         replica_id: &ReplicaId,
     ) -> Result<Self> {
-        match sqlx::query(
+        let node = Self::get_all(&mut *tx, replica_id, 1).try_next().await?;
+        let node = if let Some(node) = node {
+            node
+        } else {
+            let node = NewRootNode {
+                replica_id: *replica_id,
+                hash: Hash::null(),
+                is_complete: true,
+                missing_blocks_crc: 0,
+                missing_blocks_count: 0,
+            };
+
+            node.insert(tx).await?.0
+        };
+
+        Ok(node)
+    }
+
+    /// Returns a stream of all (but at most `limit`) root nodes corresponding to the specified
+    /// replica ordered from the most recent to the least recent.
+    pub fn get_all<'a>(
+        tx: &'a mut db::Transaction,
+        replica_id: &'a ReplicaId,
+        limit: u32,
+    ) -> impl Stream<Item = Result<Self>> + 'a {
+        sqlx::query(
             "SELECT
                  snapshot_id,
                  hash,
@@ -32,33 +54,21 @@ impl RootNode {
                  missing_blocks_crc,
                  missing_blocks_count
              FROM snapshot_root_nodes
-             WHERE replica_id=?
+             WHERE replica_id = ?
              ORDER BY snapshot_id DESC
-             LIMIT 1",
+             LIMIT ?",
         )
         .bind(replica_id)
-        .fetch_optional(&mut *tx)
-        .await?
-        {
-            Some(row) => Ok(Self {
-                snapshot_id: row.get(0),
-                hash: row.get(1),
-                is_complete: row.get(2),
-                missing_blocks_crc: row.get(3),
-                missing_blocks_count: row.get::<MissingBlocksCount, _>(4) as usize,
-            }),
-            None => {
-                let node = NewRootNode {
-                    replica_id: *replica_id,
-                    hash: Hash::null(),
-                    is_complete: true,
-                    missing_blocks_crc: 0,
-                    missing_blocks_count: 0,
-                };
-
-                node.insert(tx).await
-            }
-        }
+        .bind(limit)
+        .map(|row| Self {
+            snapshot_id: row.get(0),
+            hash: row.get(1),
+            is_complete: row.get(2),
+            missing_blocks_crc: row.get(3),
+            missing_blocks_count: row.get::<MissingBlocksCount, _>(4) as usize,
+        })
+        .fetch(tx)
+        .err_into()
     }
 
     pub async fn clone_with_new_root(
@@ -119,9 +129,12 @@ pub struct NewRootNode {
 }
 
 impl NewRootNode {
-    /// Inserts this `NewRootNode` into the db and returns the corresponding `RootNode`.
-    pub async fn insert(&self, tx: &mut db::Transaction) -> Result<RootNode> {
-        let snapshot_id = sqlx::query(
+    /// Inserts or this `NewRootNode` into the db and returns the corresponding `RootNode`.
+    /// If a root node with the same replica id and hash already exists, updates it instead of
+    /// creating a new one.
+    /// Also returns a flag indicating whether anything changed.
+    pub async fn insert(&self, tx: &mut db::Transaction) -> Result<(RootNode, bool)> {
+        let result = sqlx::query(
             "INSERT INTO snapshot_root_nodes (
                  replica_id,
                  hash,
@@ -130,24 +143,38 @@ impl NewRootNode {
                  missing_blocks_count
              )
              VALUES (?, ?, ?, ?, ?)
-             RETURNING snapshot_id;",
+             ON CONFLICT (replica_id, hash) DO UPDATE SET
+                is_complete          = ?,
+                missing_blocks_crc   = ?,
+                missing_blocks_count = ?
+             WHERE excluded.is_complete          <> is_complete
+                OR excluded.missing_blocks_crc   <> missing_blocks_crc
+                OR excluded.missing_blocks_count <> missing_blocks_count;",
         )
         .bind(&self.replica_id)
         .bind(&self.hash)
         .bind(self.is_complete)
         .bind(self.missing_blocks_crc)
         .bind(self.missing_blocks_count as MissingBlocksCount)
-        .fetch_one(tx)
-        .await?
-        .get(0);
+        .bind(self.is_complete)
+        .bind(self.missing_blocks_crc)
+        .bind(self.missing_blocks_count as MissingBlocksCount)
+        .execute(tx)
+        .await?;
 
-        Ok(RootNode {
-            snapshot_id,
-            hash: self.hash,
-            is_complete: self.is_complete,
-            missing_blocks_crc: self.missing_blocks_crc,
-            missing_blocks_count: self.missing_blocks_count,
-        })
+        let changed = result.rows_affected() > 0;
+        let snapshot_id = result.last_insert_rowid() as SnapshotId;
+
+        Ok((
+            RootNode {
+                snapshot_id,
+                hash: self.hash,
+                is_complete: self.is_complete,
+                missing_blocks_crc: self.missing_blocks_crc,
+                missing_blocks_count: self.missing_blocks_count,
+            },
+            changed,
+        ))
     }
 }
 
@@ -522,5 +549,171 @@ impl Link {
             })
         })
         .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{crypto::Hashable, test_utils};
+    use rand::{rngs::StdRng, Rng, SeedableRng};
+    use test_strategy::proptest;
+
+    #[proptest]
+    fn insert_new_root_node(
+        hash_seed: u64,
+        is_complete: bool,
+        missing_blocks_crc: u32,
+        missing_blocks_count: usize,
+        #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
+    ) {
+        test_utils::run(insert_new_root_node_case(
+            hash_seed.hash(),
+            is_complete,
+            missing_blocks_crc,
+            missing_blocks_count,
+            StdRng::seed_from_u64(rng_seed),
+        ))
+    }
+
+    async fn insert_new_root_node_case(
+        hash: Hash,
+        is_complete: bool,
+        missing_blocks_crc: u32,
+        missing_blocks_count: usize,
+        mut rng: StdRng,
+    ) {
+        let pool = setup().await;
+        let mut tx = pool.begin().await.unwrap();
+
+        let replica_id = rng.gen();
+
+        let new_node = NewRootNode {
+            replica_id,
+            hash,
+            is_complete,
+            missing_blocks_crc,
+            missing_blocks_count,
+        };
+        let (node, changed) = new_node.insert(&mut tx).await.unwrap();
+        let snapshot_id = node.snapshot_id;
+
+        assert!(changed);
+        assert_eq!(node.hash, new_node.hash);
+        assert_eq!(node.is_complete, new_node.is_complete);
+        assert_eq!(node.missing_blocks_crc, new_node.missing_blocks_crc);
+        assert_eq!(node.missing_blocks_count, new_node.missing_blocks_count);
+
+        let node = RootNode::get_all(&mut tx, &replica_id, 1)
+            .try_next()
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(node.snapshot_id, snapshot_id);
+        assert_eq!(node.hash, new_node.hash);
+        assert_eq!(node.is_complete, new_node.is_complete);
+        assert_eq!(node.missing_blocks_crc, new_node.missing_blocks_crc);
+        assert_eq!(node.missing_blocks_count, new_node.missing_blocks_count);
+    }
+
+    #[proptest]
+    fn update_existing_root_node(
+        hash_seed: u64,
+        old_is_complete: bool,
+        new_is_complete: bool,
+        old_missing_blocks_crc: u32,
+        new_missing_blocks_crc: u32,
+        #[strategy(1usize..)] old_missing_blocks_count: usize,
+        #[strategy(0..=#old_missing_blocks_count)] new_missing_blocks_count: usize,
+        #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
+    ) {
+        test_utils::run(update_existing_root_node_case(
+            hash_seed.hash(),
+            old_is_complete,
+            new_is_complete,
+            old_missing_blocks_crc,
+            new_missing_blocks_crc,
+            old_missing_blocks_count,
+            new_missing_blocks_count,
+            StdRng::seed_from_u64(rng_seed),
+        ))
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn update_existing_root_node_with_no_change() {
+        let mut rng = StdRng::seed_from_u64(0);
+        let hash = rng.gen::<u64>().hash();
+        update_existing_root_node_case(hash, false, false, 0, 0, 0, 0, rng).await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn update_existing_root_node_case(
+        hash: Hash,
+        old_is_complete: bool,
+        new_is_complete: bool,
+        old_missing_blocks_crc: u32,
+        new_missing_blocks_crc: u32,
+        old_missing_blocks_count: usize,
+        new_missing_blocks_count: usize,
+        mut rng: StdRng,
+    ) {
+        let pool = setup().await;
+        let mut tx = pool.begin().await.unwrap();
+
+        let replica_id = rng.gen();
+
+        let new_node0 = NewRootNode {
+            replica_id,
+            hash,
+            is_complete: old_is_complete,
+            missing_blocks_crc: old_missing_blocks_crc,
+            missing_blocks_count: old_missing_blocks_count,
+        };
+        let (node, _) = new_node0.insert(&mut tx).await.unwrap();
+        let snapshot_id = node.snapshot_id;
+
+        let new_node1 = NewRootNode {
+            replica_id,
+            hash,
+            is_complete: new_is_complete,
+            missing_blocks_crc: new_missing_blocks_crc,
+            missing_blocks_count: new_missing_blocks_count,
+        };
+        let (node, changed) = new_node1.insert(&mut tx).await.unwrap();
+
+        assert_eq!(
+            changed,
+            old_is_complete != new_is_complete
+                || old_missing_blocks_crc != new_missing_blocks_crc
+                || old_missing_blocks_count != new_missing_blocks_count
+        );
+        assert_eq!(node.snapshot_id, snapshot_id);
+        assert_eq!(node.hash, new_node1.hash);
+        assert_eq!(node.is_complete, new_node1.is_complete);
+        assert_eq!(node.missing_blocks_crc, new_node1.missing_blocks_crc);
+        assert_eq!(node.missing_blocks_count, new_node1.missing_blocks_count);
+
+        let nodes: Vec<_> = RootNode::get_all(&mut tx, &replica_id, 2)
+            .try_collect()
+            .await
+            .unwrap();
+
+        assert_eq!(nodes.len(), 1);
+
+        assert_eq!(nodes[0].snapshot_id, snapshot_id);
+        assert_eq!(nodes[0].hash, new_node1.hash);
+        assert_eq!(nodes[0].is_complete, new_node1.is_complete);
+        assert_eq!(nodes[0].missing_blocks_crc, new_node1.missing_blocks_crc);
+        assert_eq!(
+            nodes[0].missing_blocks_count,
+            new_node1.missing_blocks_count
+        );
+    }
+
+    async fn setup() -> db::Pool {
+        let pool = db::Pool::connect(":memory:").await.unwrap();
+        super::super::init(&pool).await.unwrap();
+        pool
     }
 }

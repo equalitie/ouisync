@@ -20,6 +20,8 @@ mod replica_id;
 mod repository;
 mod scoped_task_set;
 mod session;
+#[cfg(test)]
+mod test_utils;
 mod version_vector;
 
 pub use self::{
