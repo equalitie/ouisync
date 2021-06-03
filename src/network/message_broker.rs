@@ -4,7 +4,7 @@ use super::{
     object_stream::{TcpObjectReader, TcpObjectStream, TcpObjectWriter},
     server::Server,
 };
-use crate::Index;
+use crate::{index::Index, replica_id::ReplicaId};
 use std::{future::Future, pin::Pin};
 use tokio::{
     select,
@@ -73,7 +73,12 @@ pub struct MessageBroker {
 }
 
 impl MessageBroker {
-    pub fn new(index: Index, stream: TcpObjectStream, on_finish: OnFinish) -> Self {
+    pub fn new(
+        index: Index,
+        their_replica_id: ReplicaId,
+        stream: TcpObjectStream,
+        on_finish: OnFinish,
+    ) -> Self {
         // Channel party!
         let (command_tx, command_rx) = mpsc::channel(1);
         let (request_tx, request_rx) = mpsc::channel(1);
@@ -91,7 +96,24 @@ impl MessageBroker {
 
         inner.handle_add_connection(stream);
 
-        task::spawn(inner.run(index, command_rx, request_rx, response_rx, finish_rx));
+        let client = Client::new(
+            index.clone(),
+            their_replica_id,
+            ClientStream {
+                tx: command_tx.clone(),
+                rx: response_rx,
+            },
+        );
+
+        let server = Server::new(
+            index,
+            ServerStream {
+                tx: command_tx.clone(),
+                rx: request_rx,
+            },
+        );
+
+        task::spawn(inner.run(client, server, command_rx, finish_rx));
 
         Self {
             command_tx,
@@ -123,28 +145,15 @@ struct Inner {
 impl Inner {
     async fn run(
         mut self,
-        index: Index,
+        mut client: Client,
+        mut server: Server,
         command_rx: mpsc::Receiver<Command>,
-        request_rx: mpsc::Receiver<Request>,
-        response_rx: mpsc::Receiver<Response>,
         finish_rx: oneshot::Receiver<()>,
     ) {
-        let mut client = Client {};
-        let client_stream = ClientStream {
-            tx: self.command_tx.clone(),
-            rx: response_rx,
-        };
-
-        let mut server = Server {};
-        let server_stream = ServerStream {
-            tx: self.command_tx.clone(),
-            rx: request_rx,
-        };
-
         select! {
             _ = self.handle_commands(command_rx) => (),
-            _ = client.run(client_stream, &index) => (),
-            _ = server.run(server_stream, &index) => (),
+            _ = client.run() => (),
+            _ = server.run() => (),
             _ = finish_rx => (),
         }
 

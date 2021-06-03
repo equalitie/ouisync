@@ -1,12 +1,10 @@
 use super::{BlockId, BLOCK_SIZE};
 use crate::{
-    crypto::{
-        generic_array::{sequence::GenericSequence, typenum::Unsigned},
-        AuthTag,
-    },
+    crypto::AuthTag,
     db,
     error::{Error, Result},
 };
+use generic_array::{sequence::GenericSequence, typenum::Unsigned};
 use sqlx::Row;
 
 /// Initializes the block store. Creates the required database schema unless already exists.

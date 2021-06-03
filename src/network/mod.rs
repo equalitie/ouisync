@@ -188,6 +188,7 @@ impl Inner {
 
                 entry.insert(MessageBroker::new(
                     self.index.clone(),
+                    their_replica_id,
                     stream,
                     Box::pin(self.clone().on_finish(their_replica_id, discovery_id)),
                 ));

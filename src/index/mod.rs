@@ -2,7 +2,10 @@ mod branch;
 mod node;
 mod path;
 
-pub use self::branch::Branch;
+pub use self::{
+    branch::Branch,
+    node::{NewRootNode, RootNode, RootNodeData},
+};
 
 use crate::{
     block::BlockId,

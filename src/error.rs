@@ -2,7 +2,7 @@ use crate::{
     block::{BlockId, BLOCK_SIZE},
     crypto::aead,
 };
-use std::{array::TryFromSliceError, io};
+use std::{array::TryFromSliceError, fmt, io};
 use thiserror::Error;
 
 /// A specialized `Result` type for convenience.
@@ -46,6 +46,14 @@ pub enum Error {
     Network(#[source] io::Error),
 }
 
+impl Error {
+    /// Returns an object that implements `Display` which prints this error together with its whole
+    /// causal chain.
+    pub fn verbose(&self) -> Verbose {
+        Verbose(self)
+    }
+}
+
 impl From<TryFromSliceError> for Error {
     fn from(_: TryFromSliceError) -> Self {
         Self::MalformedData
@@ -55,5 +63,24 @@ impl From<TryFromSliceError> for Error {
 impl From<aead::Error> for Error {
     fn from(_: aead::Error) -> Self {
         Self::Crypto
+    }
+}
+
+pub struct Verbose<'a>(&'a Error);
+
+impl fmt::Display for Verbose<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use std::error::Error;
+
+        writeln!(f, "{}", self.0)?;
+
+        let mut current = self.0 as &dyn Error;
+
+        while let Some(source) = current.source() {
+            writeln!(f, "    caused by: {}", source)?;
+            current = source;
+        }
+
+        Ok(())
     }
 }

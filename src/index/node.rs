@@ -2,10 +2,11 @@ use super::{Crc, MissingBlocksCount, SnapshotId, INNER_LAYER_COUNT, MAX_INNER_NO
 use crate::{block::BlockId, crypto::Hash, db, error::Result, replica_id::ReplicaId};
 use async_recursion::async_recursion;
 use futures::{Stream, TryStreamExt};
+use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use std::{iter::FromIterator, mem, slice};
 
-#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+#[derive(Copy, Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub struct RootNodeData {
     pub hash: Hash,
     pub is_complete: bool,

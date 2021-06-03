@@ -1,13 +1,16 @@
+use crate::index::RootNodeData;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Request {
-    Hello,
+    /// Request the latest root node from another replica.
+    RootNode,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Response {
-    Hello,
+    /// Send the latest root node of this replica to another replica.
+    RootNode(RootNodeData),
 }
 
 #[derive(Serialize, Deserialize, Debug)]

@@ -7,8 +7,8 @@ pub use self::{
     nonce::{Nonce, NoncePrefix, NonceSequence},
     secret_key::SecretKey,
 };
-/// Re-export the aead and generic_array module for convenience.
-pub use chacha20poly1305::aead::{self, generic_array};
+/// Re-export the aead module for convenience.
+pub use chacha20poly1305::aead;
 
 use self::aead::{AeadInPlace, NewAead};
 use chacha20poly1305::ChaCha20Poly1305;
