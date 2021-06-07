@@ -67,11 +67,10 @@ impl Client {
                 let mut tx = self.index.pool.begin().await?;
 
                 for (index, hash) in children.into_iter().enumerate() {
-                    InnerNode { hash }
-                        .save(&mut tx, &parent_hash, index)
-                        .await?;
-                    // TODO: if the node is different from what we had, request the child nodes:
-                    // let _ = self.stream.send(Request::InnerNodes(node.data.hash)).await;
+                    let node = InnerNode { hash };
+                    if node.save(&mut tx, &parent_hash, index).await? {
+                        let _ = self.stream.send(Request::InnerNodes(node.hash)).await;
+                    }
                 }
 
                 tx.commit().await?;
