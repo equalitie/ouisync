@@ -27,7 +27,7 @@ impl RootNode {
         }
     }
 
-    /// Create a root node of the specified replica. Returns the node itself and a flag indicating
+    /// Creates a root node of the specified replica. Returns the node itself and a flag indicating
     /// whether a new node was created (`true`) or the node already existed (`false`).
     pub async fn create(
         tx: &mut db::Transaction,
@@ -108,63 +108,68 @@ impl RootNode {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Eq, PartialEq, Debug)]
 pub struct InnerNode {
     pub hash: Hash,
 }
 
 impl InnerNode {
-    pub async fn insert(
+    /// Saves this inner node into the db. Returns whether a new node was created (`true`) or the
+    /// node already existed (`false`).
+    pub async fn save(
         &self,
-        bucket: usize,
-        parent: &Hash,
         tx: &mut db::Transaction,
-    ) -> Result<()> {
-        sqlx::query(
-            "INSERT INTO snapshot_inner_nodes (parent, hash, bucket)
-             VALUES (?, ?, ?)",
+        parent: &Hash,
+        bucket: usize,
+    ) -> Result<bool> {
+        let changes = sqlx::query(
+            "INSERT INTO snapshot_inner_nodes (parent, bucket, hash)
+             VALUES (?, ?, ?)
+             ON CONFLICT (parent, bucket) DO NOTHING",
         )
         .bind(parent)
+        .bind(bucket as u32)
         .bind(&self.hash)
-        .bind(bucket as u16)
-        .execute(&mut *tx)
+        .execute(tx)
+        .await?
+        .rows_affected();
+
+        Ok(changes > 0)
+    }
+
+    pub async fn load_children(
+        tx: &mut db::Transaction,
+        parent: &Hash,
+    ) -> Result<[Self; MAX_INNER_NODE_CHILD_COUNT]> {
+        let rows = sqlx::query(
+            "SELECT bucket, hash
+             FROM snapshot_inner_nodes
+             WHERE parent = ?",
+        )
+        .bind(parent)
+        .fetch_all(tx)
         .await?;
-        Ok(())
+
+        let mut children = [InnerNode::empty(); MAX_INNER_NODE_CHILD_COUNT];
+
+        for row in rows {
+            let bucket: u32 = row.get(0);
+            let hash = row.get(1);
+
+            if let Some(node) = children.get_mut(bucket as usize) {
+                *node = InnerNode { hash };
+            } else {
+                log::error!("inner node ({:?}) bucket out of range: {}", hash, bucket);
+                // TODO: should we return error here?
+            }
+        }
+
+        Ok(children)
     }
 
     pub fn empty() -> Self {
         Self { hash: Hash::null() }
     }
-}
-
-pub async fn inner_children(
-    parent: &Hash,
-    tx: &mut db::Transaction,
-) -> Result<[InnerNode; MAX_INNER_NODE_CHILD_COUNT]> {
-    let rows = sqlx::query(
-        "SELECT hash, bucket
-         FROM snapshot_inner_nodes
-         WHERE parent = ?",
-    )
-    .bind(parent)
-    .fetch_all(&mut *tx)
-    .await?;
-
-    let mut children = [InnerNode::empty(); MAX_INNER_NODE_CHILD_COUNT];
-
-    for row in rows {
-        let hash = row.get(0);
-        let bucket: u32 = row.get(1);
-
-        if let Some(node) = children.get_mut(bucket as usize) {
-            *node = InnerNode { hash };
-        } else {
-            log::error!("inner node ({:?}) bucket out of range: {}", hash, bucket);
-            // TODO: should we return error here?
-        }
-    }
-
-    Ok(children)
 }
 
 #[derive(Eq, PartialEq, Debug, Clone)]
@@ -433,6 +438,8 @@ impl Link {
 mod tests {
     use super::*;
     use crate::crypto::Hashable;
+    use assert_matches::assert_matches;
+    use rand::Rng;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn create_new_root_node() {
@@ -480,6 +487,83 @@ mod tests {
         assert_eq!(nodes.len(), 1);
         assert_eq!(nodes[0], node0);
     }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn create_new_inner_node() {
+        let pool = setup().await;
+
+        let parent = rand::random::<u64>().hash();
+        let hash = rand::random::<u64>().hash();
+        let bucket = rand::thread_rng().gen_range(0..MAX_INNER_NODE_CHILD_COUNT);
+
+        let mut tx = pool.begin().await.unwrap();
+
+        let node = InnerNode { hash };
+        assert!(node.save(&mut tx, &parent, bucket).await.unwrap());
+
+        let nodes = InnerNode::load_children(&mut tx, &parent).await.unwrap();
+
+        assert_eq!(nodes[bucket], node);
+        assert!(nodes[0..bucket]
+            .iter()
+            .all(|node| *node == InnerNode::empty()));
+        assert!(nodes[bucket + 1..]
+            .iter()
+            .all(|node| *node == InnerNode::empty()));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn create_existing_inner_node() {
+        let pool = setup().await;
+
+        let parent = rand::random::<u64>().hash();
+        let hash = rand::random::<u64>().hash();
+        let bucket = rand::thread_rng().gen_range(0..MAX_INNER_NODE_CHILD_COUNT);
+
+        let mut tx = pool.begin().await.unwrap();
+
+        let node0 = InnerNode { hash };
+        node0.save(&mut tx, &parent, bucket).await.unwrap();
+
+        let node1 = InnerNode { hash };
+        assert!(!node1.save(&mut tx, &parent, bucket).await.unwrap());
+
+        let nodes = InnerNode::load_children(&mut tx, &parent).await.unwrap();
+
+        assert_eq!(nodes[bucket], node0);
+        assert!(nodes[0..bucket]
+            .iter()
+            .all(|node| *node == InnerNode::empty()));
+        assert!(nodes[bucket + 1..]
+            .iter()
+            .all(|node| *node == InnerNode::empty()));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn create_conflicting_existing_inner_node() {
+        let pool = setup().await;
+
+        let parent = rand::random::<u64>().hash();
+        let bucket = rand::thread_rng().gen_range(0..MAX_INNER_NODE_CHILD_COUNT);
+
+        let hash0 = rand::random::<u64>().hash();
+        let hash1 = loop {
+            let hash = rand::random::<u64>().hash();
+            if hash != hash0 {
+                break hash;
+            }
+        };
+
+        let mut tx = pool.begin().await.unwrap();
+
+        let node0 = InnerNode { hash: hash0 };
+        node0.save(&mut tx, &parent, bucket).await.unwrap();
+
+        let node1 = InnerNode { hash: hash1 };
+        assert_matches!(node1.save(&mut tx, &parent, bucket).await, Err(_)); // TODO: match concrete error type
+    }
+
+    // TODO: test saving InnerNode requires parent to exists
 
     async fn setup() -> db::Pool {
         let pool = db::Pool::connect(":memory:").await.unwrap();

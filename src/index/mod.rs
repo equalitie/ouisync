@@ -85,33 +85,49 @@ impl Index {
 pub async fn init(pool: &db::Pool) -> Result<(), Error> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS snapshot_root_nodes (
-             snapshot_id          INTEGER PRIMARY KEY,
-             replica_id           BLOB NOT NULL,
+             snapshot_id INTEGER PRIMARY KEY,
+             replica_id  BLOB NOT NULL,
 
              -- Hash of the children
-             hash                 BLOB NOT NULL,
+             hash        BLOB NOT NULL,
 
              UNIQUE(replica_id, hash)
          );
 
          CREATE TABLE IF NOT EXISTS snapshot_inner_nodes (
              -- Parent's `hash`
-             parent               BLOB NOT NULL,
-
-             -- Hash of the children
-             hash                 BLOB NOT NULL,
+             parent      BLOB NOT NULL,
 
              -- Index of this node within its siblings
-             bucket               INTEGER NOT NULL
+             bucket      INTEGER NOT NULL,
+
+             -- Hash of the children
+             hash        BLOB NOT NULL,
+
+             UNIQUE(parent, bucket)
          );
 
          CREATE TABLE IF NOT EXISTS snapshot_leaf_nodes (
              -- Parent's `hash`
-             parent               BLOB NOT NULL,
+             parent      BLOB NOT NULL,
+             locator     BLOB NOT NULL,
+             block_id    BLOB NOT NULL
+         );
 
-             locator              BLOB NOT NULL,
-             block_id             BLOB NOT NULL
-         );",
+         -- Prevents creating multiple inner nodes with the same parent and bucket but different
+         -- hash.
+         CREATE TRIGGER IF NOT EXISTS snapshot_inner_nodes_conflict_check
+         BEFORE INSERT ON snapshot_inner_nodes
+         WHEN EXISTS(
+             SELECT 0
+             FROM snapshot_inner_nodes
+             WHERE parent = new.parent
+               AND bucket = new.bucket
+               AND hash <> new.hash
+         )
+         BEGIN
+             SELECT RAISE (ABORT, 'inner node conflict');
+         END;",
     )
     .execute(pool)
     .await

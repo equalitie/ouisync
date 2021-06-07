@@ -3,16 +3,16 @@
 #![allow(clippy::absurd_extreme_comparisons)]
 #![allow(arithmetic_overflow)]
 
+use super::{
+    node::{leaf_children, InnerNode, RootNode},
+    path::Path,
+    INNER_LAYER_COUNT,
+};
 use crate::{
     block::BlockId,
     crypto::Hash,
     db,
     error::{Error, Result},
-    index::{
-        node::{inner_children, leaf_children, RootNode},
-        path::Path,
-        INNER_LAYER_COUNT,
-    },
     replica_id::ReplicaId,
 };
 use std::{mem, sync::Arc};
@@ -109,7 +109,7 @@ impl Branch {
         let mut parent = path.root;
 
         for level in 0..INNER_LAYER_COUNT {
-            path.inner[level] = inner_children(&parent, tx).await?;
+            path.inner[level] = InnerNode::load_children(tx, &parent).await?;
             parent = path.inner[level][path.get_bucket(level)].hash;
 
             if parent.is_null() {
@@ -141,12 +141,12 @@ impl Branch {
         for (i, inner_layer) in path.inner.iter().enumerate() {
             let parent_hash = path.hash_at_layer(i);
 
-            for (bucket, ref node) in inner_layer.iter().enumerate() {
+            for (bucket, node) in inner_layer.iter().enumerate() {
                 if node.hash.is_null() {
                     continue;
                 }
 
-                node.insert(bucket, &parent_hash, tx).await?;
+                node.save(tx, &parent_hash, bucket).await?;
             }
         }
 
