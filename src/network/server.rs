@@ -44,9 +44,9 @@ impl Server {
                     RootNode::get_latest_or_create(&mut tx, &self.index.this_replica_id).await?;
                 tx.commit().await?;
 
-                let _ = self.stream.send(Response::RootNode(node.data)).await;
+                let _ = self.stream.send(Response::RootNode(node.hash)).await;
             }
-            Request::InnerNodes(parent_hash) => {
+            Request::InnerNodes(_parent_hash) => {
                 // TODO:
                 // let nodes =
             }

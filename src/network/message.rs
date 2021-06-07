@@ -1,4 +1,4 @@
-use crate::{crypto::Hash, index::NodeData};
+use crate::crypto::Hash;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -12,11 +12,11 @@ pub enum Request {
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Response {
     /// Send the latest root node of this replica to another replica.
-    RootNode(NodeData),
+    RootNode(Hash),
     /// Send all inner nodes with the given parent hash.
     InnerNodes {
         parent_hash: Hash,
-        children: Vec<NodeData>,
+        children: Vec<Hash>,
     },
 }
 

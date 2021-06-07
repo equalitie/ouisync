@@ -1,23 +1,14 @@
-use super::{Crc, MissingBlocksCount, SnapshotId, INNER_LAYER_COUNT, MAX_INNER_NODE_CHILD_COUNT};
+use super::{SnapshotId, INNER_LAYER_COUNT, MAX_INNER_NODE_CHILD_COUNT};
 use crate::{block::BlockId, crypto::Hash, db, error::Result, replica_id::ReplicaId};
 use async_recursion::async_recursion;
 use futures::{Stream, TryStreamExt};
-use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use std::{iter::FromIterator, mem, slice};
-
-#[derive(Copy, Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
-pub struct NodeData {
-    pub hash: Hash,
-    pub is_complete: bool,
-    pub missing_blocks_crc: Crc,
-    pub missing_blocks_count: usize,
-}
 
 #[derive(Clone, Debug)]
 pub struct RootNode {
     pub snapshot_id: SnapshotId,
-    pub data: NodeData,
+    pub hash: Hash,
 }
 
 impl RootNode {
@@ -33,12 +24,7 @@ impl RootNode {
         } else {
             let node = NewRootNode {
                 replica_id: *replica_id,
-                data: NodeData {
-                    hash: Hash::null(),
-                    is_complete: true,
-                    missing_blocks_crc: 0,
-                    missing_blocks_count: 0,
-                },
+                hash: Hash::null(),
             };
 
             node.insert(tx).await?.0
@@ -55,12 +41,7 @@ impl RootNode {
         limit: u32,
     ) -> impl Stream<Item = Result<Self>> + 'a {
         sqlx::query(
-            "SELECT
-                 snapshot_id,
-                 hash,
-                 is_complete,
-                 missing_blocks_crc,
-                 missing_blocks_count
+            "SELECT snapshot_id, hash
              FROM snapshot_root_nodes
              WHERE replica_id = ?
              ORDER BY snapshot_id DESC
@@ -70,12 +51,7 @@ impl RootNode {
         .bind(limit)
         .map(|row| Self {
             snapshot_id: row.get(0),
-            data: NodeData {
-                hash: row.get(1),
-                is_complete: row.get(2),
-                missing_blocks_crc: row.get(3),
-                missing_blocks_count: row.get::<MissingBlocksCount, _>(4) as usize,
-            },
+            hash: row.get(1),
         })
         .fetch(tx)
         .err_into()
@@ -87,19 +63,8 @@ impl RootNode {
         root_hash: &Hash,
     ) -> Result<RootNode> {
         let new_id = sqlx::query(
-            "INSERT INTO snapshot_root_nodes (
-                 replica_id,
-                 hash,
-                 is_complete,
-                 missing_blocks_crc,
-                 missing_blocks_count
-             )
-             SELECT
-                 replica_id,
-                 ?,
-                 is_complete,
-                 missing_blocks_crc,
-                 missing_blocks_count
+            "INSERT INTO snapshot_root_nodes (replica_id, hash)
+             SELECT replica_id, ?
              FROM snapshot_root_nodes
              WHERE snapshot_id = ?
              RETURNING snapshot_id;",
@@ -112,10 +77,7 @@ impl RootNode {
 
         Ok(RootNode {
             snapshot_id: new_id,
-            data: NodeData {
-                hash: *root_hash,
-                ..self.data
-            },
+            hash: *root_hash,
         })
     }
 
@@ -132,50 +94,44 @@ impl RootNode {
 #[derive(Clone, Debug)]
 pub struct NewRootNode {
     pub replica_id: ReplicaId,
-    pub data: NodeData,
+    pub hash: Hash,
 }
 
 impl NewRootNode {
-    /// Inserts or this `NewRootNode` into the db and returns the corresponding `RootNode`.
-    /// If a root node with the same replica id and hash already exists, updates it instead of
-    /// creating a new one.
-    /// Also returns a flag indicating whether anything changed.
+    /// Inserts or this `NewRootNode` into the db and returns the corresponding `RootNode` and a
+    /// flag indicating whether the new node was inserted (`true`) of whether it already existed
+    /// (`false`).
     pub async fn insert(&self, tx: &mut db::Transaction) -> Result<(RootNode, bool)> {
         let result = sqlx::query(
-            "INSERT INTO snapshot_root_nodes (
-                 replica_id,
-                 hash,
-                 is_complete,
-                 missing_blocks_crc,
-                 missing_blocks_count
-             )
-             VALUES (?, ?, ?, ?, ?)
-             ON CONFLICT (replica_id, hash) DO UPDATE SET
-                 is_complete          = ?,
-                 missing_blocks_crc   = ?,
-                 missing_blocks_count = ?
-             WHERE excluded.is_complete           <> is_complete
-                 OR excluded.missing_blocks_crc   <> missing_blocks_crc
-                 OR excluded.missing_blocks_count <> missing_blocks_count;",
+            "INSERT INTO snapshot_root_nodes (replica_id, hash)
+             VALUES (?, ?)
+             ON CONFLICT (replica_id, hash) DO NOTHING",
         )
         .bind(&self.replica_id)
-        .bind(&self.data.hash)
-        .bind(self.data.is_complete)
-        .bind(self.data.missing_blocks_crc)
-        .bind(self.data.missing_blocks_count as MissingBlocksCount)
-        .bind(self.data.is_complete)
-        .bind(self.data.missing_blocks_crc)
-        .bind(self.data.missing_blocks_count as MissingBlocksCount)
-        .execute(tx)
+        .bind(&self.hash)
+        .execute(&mut *tx)
         .await?;
 
         let changed = result.rows_affected() > 0;
-        let snapshot_id = result.last_insert_rowid() as SnapshotId;
+        let snapshot_id = if changed {
+            result.last_insert_rowid() as SnapshotId
+        } else {
+            sqlx::query(
+                "SELECT snapshot_id
+                 FROM snapshot_root_nodes
+                 WHERE replica_id = ? AND hash = ?",
+            )
+            .bind(&self.replica_id)
+            .bind(&self.hash)
+            .fetch_one(tx)
+            .await?
+            .get(0)
+        };
 
         Ok((
             RootNode {
                 snapshot_id,
-                data: self.data,
+                hash: self.hash,
             },
             changed,
         ))
@@ -184,7 +140,7 @@ impl NewRootNode {
 
 #[derive(Clone, Copy, Debug)]
 pub struct InnerNode {
-    pub data: NodeData,
+    pub hash: Hash,
 }
 
 impl InnerNode {
@@ -195,40 +151,19 @@ impl InnerNode {
         tx: &mut db::Transaction,
     ) -> Result<()> {
         sqlx::query(
-            "INSERT INTO snapshot_inner_nodes (
-                 parent,
-                 hash,
-                 bucket,
-                 is_complete,
-                 missing_blocks_crc,
-                 missing_blocks_count
-             )
-             VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO snapshot_inner_nodes (parent, hash, bucket)
+             VALUES (?, ?, ?)",
         )
         .bind(parent)
-        .bind(&self.data.hash)
+        .bind(&self.hash)
         .bind(bucket as u16)
-        .bind(self.data.is_complete)
-        .bind(self.data.missing_blocks_crc)
-        .bind(self.data.missing_blocks_count as MissingBlocksCount)
         .execute(&mut *tx)
         .await?;
         Ok(())
     }
 
     pub fn empty() -> Self {
-        Self::from(NodeData {
-            hash: Hash::null(),
-            is_complete: true,
-            missing_blocks_crc: 0,
-            missing_blocks_count: 0,
-        })
-    }
-}
-
-impl From<NodeData> for InnerNode {
-    fn from(data: NodeData) -> Self {
-        Self { data }
+        Self { hash: Hash::null() }
     }
 }
 
@@ -237,12 +172,7 @@ pub async fn inner_children(
     tx: &mut db::Transaction,
 ) -> Result<[InnerNode; MAX_INNER_NODE_CHILD_COUNT]> {
     let rows = sqlx::query(
-        "SELECT
-             hash,
-             bucket,
-             is_complete,
-             missing_blocks_crc,
-             missing_blocks_count
+        "SELECT hash, bucket
          FROM snapshot_inner_nodes
          WHERE parent = ?",
     )
@@ -255,17 +185,9 @@ pub async fn inner_children(
     for row in rows {
         let hash = row.get(0);
         let bucket: u32 = row.get(1);
-        let is_complete = row.get(2);
-        let missing_blocks_crc = row.get(3);
-        let missing_blocks_count = row.get::<MissingBlocksCount, _>(4) as usize;
 
         if let Some(node) = children.get_mut(bucket as usize) {
-            *node = InnerNode::from(NodeData {
-                hash,
-                is_complete,
-                missing_blocks_crc,
-                missing_blocks_count,
-            });
+            *node = InnerNode { hash };
         } else {
             log::error!("inner node ({:?}) bucket out of range: {}", hash, bucket);
             // TODO: should we return error here?
@@ -279,7 +201,6 @@ pub async fn inner_children(
 pub struct LeafNode {
     locator: Hash,
     pub block_id: BlockId,
-    pub is_block_missing: bool,
 }
 
 impl LeafNode {
@@ -289,43 +210,34 @@ impl LeafNode {
 
     pub async fn insert(&self, parent: &Hash, tx: &mut db::Transaction) -> Result<()> {
         sqlx::query(
-            "INSERT INTO snapshot_leaf_nodes (
-                 parent,
-                 locator,
-                 block_id,
-                 is_block_missing
-             )
-             VALUES (?, ?, ?, ?)",
+            "INSERT INTO snapshot_leaf_nodes (parent, locator, block_id)
+             VALUES (?, ?, ?)",
         )
         .bind(parent)
         .bind(&self.locator)
         .bind(&self.block_id)
-        .bind(self.is_block_missing)
         .execute(&mut *tx)
         .await?;
+
         Ok(())
     }
 }
 
 pub async fn leaf_children(parent: &Hash, tx: &mut db::Transaction) -> Result<LeafNodeSet> {
-    let rows = sqlx::query(
-        "SELECT locator, block_id, is_block_missing
+    Ok(sqlx::query(
+        "SELECT locator, block_id
          FROM snapshot_leaf_nodes
          WHERE parent = ?",
     )
     .bind(parent)
-    .fetch_all(&mut *tx)
-    .await?;
-
-    rows.into_iter()
-        .map(|row| {
-            Ok(LeafNode {
-                locator: row.get(0),
-                block_id: row.get(1),
-                is_block_missing: row.get(2),
-            })
-        })
-        .collect()
+    .map(|row| LeafNode {
+        locator: row.get(0),
+        block_id: row.get(1),
+    })
+    .fetch_all(tx)
+    .await?
+    .into_iter()
+    .collect())
 }
 
 /// Collection that acts as a ordered set of `LeafNode`s
@@ -351,7 +263,6 @@ impl LeafNodeSet {
                     LeafNode {
                         locator: *locator,
                         block_id: *block_id,
-                        is_block_missing: false,
                     },
                 );
                 ModifyStatus::Inserted
@@ -449,7 +360,7 @@ impl Link {
             Link::ToInner { parent, node } => {
                 sqlx::query("DELETE FROM snapshot_inner_nodes WHERE parent = ? AND hash = ?")
                     .bind(parent)
-                    .bind(&node.data.hash)
+                    .bind(&node.hash)
                     .execute(&mut *tx)
                     .await?;
             }
@@ -471,14 +382,14 @@ impl Link {
         let has_parent = match self {
             Link::ToRoot { node: root } => {
                 sqlx::query("SELECT 0 FROM snapshot_root_nodes WHERE hash = ? LIMIT 1")
-                    .bind(&root.data.hash)
+                    .bind(&root.hash)
                     .fetch_optional(&mut *tx)
                     .await?
                     .is_some()
             }
             Link::ToInner { parent: _, node } => {
                 sqlx::query("SELECT 0 FROM snapshot_inner_nodes WHERE hash = ? LIMIT 1")
-                    .bind(&node.data.hash)
+                    .bind(&node.hash)
                     .fetch_optional(&mut *tx)
                     .await?
                     .is_some()
@@ -501,68 +412,57 @@ impl Link {
 
     async fn children(&self, layer: usize, tx: &mut db::Transaction) -> Result<Vec<Link>> {
         match self {
-            Link::ToRoot { node: root } => self.inner_children(tx, &root.data.hash).await,
+            Link::ToRoot { node: root } => self.inner_children(tx, &root.hash).await,
             Link::ToInner { node, .. } if layer < INNER_LAYER_COUNT => {
-                self.inner_children(tx, &node.data.hash).await
+                self.inner_children(tx, &node.hash).await
             }
-            Link::ToInner { node, .. } => self.leaf_children(tx, &node.data.hash).await,
+            Link::ToInner { node, .. } => self.leaf_children(tx, &node.hash).await,
             Link::ToLeaf { parent: _, node: _ } => Ok(Vec::new()),
         }
     }
 
     async fn inner_children(&self, tx: &mut db::Transaction, parent: &Hash) -> Result<Vec<Link>> {
         sqlx::query(
-            "SELECT
-                 parent, hash, is_complete, missing_blocks_crc, missing_blocks_count
+            "SELECT parent, hash
              FROM snapshot_inner_nodes
              WHERE parent = ?;",
         )
         .bind(parent)
-        .fetch_all(tx)
-        .await?
-        .iter()
-        .map(|row| {
-            Ok(Link::ToInner {
-                parent: row.get(0),
-                node: InnerNode {
-                    data: NodeData {
-                        hash: row.get(1),
-                        is_complete: row.get(2),
-                        missing_blocks_crc: row.get(3),
-                        missing_blocks_count: row.get::<MissingBlocksCount, _>(4) as usize,
-                    },
-                },
-            })
+        .map(|row| Link::ToInner {
+            parent: row.get(0),
+            node: InnerNode { hash: row.get(1) },
         })
-        .collect()
+        .fetch(tx)
+        .try_collect()
+        .await
+        .map_err(From::from)
     }
 
     async fn leaf_children(&self, tx: &mut db::Transaction, parent: &Hash) -> Result<Vec<Link>> {
         sqlx::query(
-            "SELECT parent, locator, block_id, is_block_missing
+            "SELECT parent, locator, block_id
              FROM snapshot_leaf_nodes
              WHERE parent = ?;",
         )
         .bind(parent)
-        .fetch_all(&mut *tx)
-        .await?
-        .iter()
-        .map(|row| {
-            Ok(Link::ToLeaf {
-                parent: row.get(0),
-                node: LeafNode {
-                    locator: row.get(1),
-                    block_id: row.get(2),
-                    is_block_missing: row.get(3),
-                },
-            })
+        .map(|row| Link::ToLeaf {
+            parent: row.get(0),
+            node: LeafNode {
+                locator: row.get(1),
+                block_id: row.get(2),
+            },
         })
-        .collect()
+        .fetch(tx)
+        .try_collect()
+        .await
+        .map_err(From::from)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    /*
+
     use super::*;
     use crate::{crypto::Hashable, test_utils};
     use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -597,20 +497,12 @@ mod tests {
 
         let replica_id = rng.gen();
 
-        let new_node = NewRootNode {
-            replica_id,
-            data: NodeData {
-                hash,
-                is_complete,
-                missing_blocks_crc,
-                missing_blocks_count,
-            },
-        };
+        let new_node = NewRootNode { replica_id, hash };
         let (node, changed) = new_node.insert(&mut tx).await.unwrap();
         let snapshot_id = node.snapshot_id;
 
         assert!(changed);
-        assert_eq!(node.data, new_node.data);
+        assert_eq!(node.hash, new_node.hash);
 
         let node = RootNode::get_all(&mut tx, &replica_id, 1)
             .try_next()
@@ -619,7 +511,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(node.snapshot_id, snapshot_id);
-        assert_eq!(node.data, new_node.data);
+        assert_eq!(node.hash, new_node.hash);
     }
 
     #[proptest]
@@ -668,32 +560,16 @@ mod tests {
 
         let replica_id = rng.gen();
 
-        let new_node0 = NewRootNode {
-            replica_id,
-            data: NodeData {
-                hash,
-                is_complete: old_is_complete,
-                missing_blocks_crc: old_missing_blocks_crc,
-                missing_blocks_count: old_missing_blocks_count,
-            },
-        };
+        let new_node0 = NewRootNode { replica_id, hash };
         let (node, _) = new_node0.insert(&mut tx).await.unwrap();
         let snapshot_id = node.snapshot_id;
 
-        let new_node1 = NewRootNode {
-            replica_id,
-            data: NodeData {
-                hash,
-                is_complete: new_is_complete,
-                missing_blocks_crc: new_missing_blocks_crc,
-                missing_blocks_count: new_missing_blocks_count,
-            },
-        };
+        let new_node1 = NewRootNode { replica_id, hash };
         let (node, changed) = new_node1.insert(&mut tx).await.unwrap();
 
-        assert_eq!(changed, new_node0.data != new_node1.data);
+        assert_eq!(changed, new_node0.hash != new_node1.hash);
         assert_eq!(node.snapshot_id, snapshot_id);
-        assert_eq!(node.data, new_node1.data);
+        assert_eq!(node.hash, new_node1.hash);
 
         let nodes: Vec<_> = RootNode::get_all(&mut tx, &replica_id, 2)
             .try_collect()
@@ -711,4 +587,5 @@ mod tests {
         super::super::init(&pool).await.unwrap();
         pool
     }
+    */
 }

@@ -43,7 +43,7 @@ impl Branch {
         encoded_locator: &LocatorHash,
     ) -> Result<Option<BlockId>> {
         let mut lock = self.root_node.lock().await;
-        let mut path = self.get_path(tx, &lock.data.hash, &encoded_locator).await?;
+        let mut path = self.get_path(tx, &lock.hash, &encoded_locator).await?;
 
         // We shouldn't be inserting a block to a branch twice. If we do, the assumption is that we
         // hit one in 2^sizeof(BlockVersion) chance that we randomly generated the same
@@ -61,11 +61,11 @@ impl Branch {
     pub async fn get(&self, tx: &mut db::Transaction, encoded_locator: &Hash) -> Result<BlockId> {
         let lock = self.root_node.lock().await;
 
-        if lock.data.hash.is_null() {
+        if lock.hash.is_null() {
             return Err(Error::EntryNotFound);
         }
 
-        let path = self.get_path(tx, &lock.data.hash, &encoded_locator).await?;
+        let path = self.get_path(tx, &lock.hash, &encoded_locator).await?;
 
         match path.get_leaf() {
             Some(block_id) => Ok(block_id),
@@ -81,7 +81,7 @@ impl Branch {
         encoded_locator: &Hash,
     ) -> Result<BlockId> {
         let mut lock = self.root_node.lock().await;
-        let mut path = self.get_path(tx, &lock.data.hash, encoded_locator).await?;
+        let mut path = self.get_path(tx, &lock.hash, encoded_locator).await?;
         let block_id = path
             .remove_leaf(encoded_locator)
             .ok_or(Error::EntryNotFound)?;
@@ -110,7 +110,7 @@ impl Branch {
 
         for level in 0..INNER_LAYER_COUNT {
             path.inner[level] = inner_children(&parent, tx).await?;
-            parent = path.inner[level][path.get_bucket(level)].data.hash;
+            parent = path.inner[level][path.get_bucket(level)].hash;
 
             if parent.is_null() {
                 return Ok(path);
@@ -142,7 +142,7 @@ impl Branch {
             let parent_hash = path.hash_at_layer(i);
 
             for (bucket, ref node) in inner_layer.iter().enumerate() {
-                if node.data.hash.is_null() {
+                if node.hash.is_null() {
                     continue;
                 }
 

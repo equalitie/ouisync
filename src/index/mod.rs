@@ -4,7 +4,7 @@ mod path;
 
 pub use self::{
     branch::Branch,
-    node::{InnerNode, NewRootNode, NodeData, RootNode},
+    node::{InnerNode, NewRootNode, RootNode},
 };
 
 use crate::{
@@ -24,10 +24,7 @@ use tokio::sync::Mutex;
 const INNER_LAYER_COUNT: usize = 3;
 const MAX_INNER_NODE_CHILD_COUNT: usize = 256; // = sizeof(u8)
 
-type Crc = u32;
 type SnapshotId = u32;
-// u64 doesn't seem to implement Decode<'_, Sqlite>
-type MissingBlocksCount = i64;
 
 #[derive(Clone)]
 pub struct Index {
@@ -94,14 +91,6 @@ pub async fn init(pool: &db::Pool) -> Result<(), Error> {
              -- Hash of the children
              hash                 BLOB NOT NULL,
 
-             -- Boolean indicating whether the subtree has been completely downloaded
-             -- (excluding blocks)
-             is_complete          INTEGER NOT NULL,
-
-             -- XXX: Should be NOT NULL
-             missing_blocks_crc   INTEGER,
-             missing_blocks_count INTEGER NOT NULL,
-
              UNIQUE(replica_id, hash)
          );
 
@@ -113,16 +102,7 @@ pub async fn init(pool: &db::Pool) -> Result<(), Error> {
              hash                 BLOB NOT NULL,
 
              -- Index of this node within its siblings
-             -- XXX: Should be NOT NULL
-             bucket               INTEGER,
-
-             -- Boolean indicating whether the subtree has been completely downloaded
-             -- (excluding blocks)
-             is_complete          INTEGER NOT NULL,
-
-             -- XXX: Should be NOT NULL
-             missing_blocks_crc   INTEGER,
-             missing_blocks_count INTEGER NOT NULL
+             bucket               INTEGER NOT NULL
          );
 
          CREATE TABLE IF NOT EXISTS snapshot_leaf_nodes (
@@ -130,10 +110,7 @@ pub async fn init(pool: &db::Pool) -> Result<(), Error> {
              parent               BLOB NOT NULL,
 
              locator              BLOB NOT NULL,
-             block_id             BLOB NOT NULL,
-
-             -- Is the block pointed to by this node missing?
-             is_block_missing     INTEGER NOT NULL
+             block_id             BLOB NOT NULL
          );",
     )
     .execute(pool)

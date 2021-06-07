@@ -50,10 +50,10 @@ impl Client {
 
     async fn handle_response(&mut self, response: Response) -> Result<()> {
         match response {
-            Response::RootNode(data) => {
+            Response::RootNode(hash) => {
                 let node = NewRootNode {
                     replica_id: self.their_replica_id,
-                    data,
+                    hash,
                 };
 
                 let mut tx = self.index.pool.begin().await?;
@@ -61,7 +61,7 @@ impl Client {
                 tx.commit().await?;
 
                 if changed {
-                    let _ = self.stream.send(Request::InnerNodes(node.data.hash)).await;
+                    let _ = self.stream.send(Request::InnerNodes(node.hash)).await;
                 }
             }
             Response::InnerNodes {
@@ -70,8 +70,8 @@ impl Client {
             } => {
                 let mut tx = self.index.pool.begin().await?;
 
-                for (index, node) in children.into_iter().enumerate() {
-                    InnerNode::from(node)
+                for (index, hash) in children.into_iter().enumerate() {
+                    InnerNode { hash }
                         .insert(index, &parent_hash, &mut tx)
                         .await?;
                     // TODO: if the node is different from what we had, request the child nodes:
