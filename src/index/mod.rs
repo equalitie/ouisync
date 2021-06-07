@@ -4,7 +4,7 @@ mod path;
 
 pub use self::{
     branch::Branch,
-    node::{InnerNode, NewRootNode, RootNode},
+    node::{InnerNode, RootNode},
 };
 
 use crate::{

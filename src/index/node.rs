@@ -14,28 +14,53 @@ pub struct RootNode {
 impl RootNode {
     /// Returns the latest root node of the specified replica. If no such node exists yet, creates
     /// it first.
-    pub async fn get_latest_or_create(
+    pub async fn load_latest_or_create(
         tx: &mut db::Transaction,
         replica_id: &ReplicaId,
     ) -> Result<Self> {
-        let node = Self::get_all(&mut *tx, replica_id, 1).try_next().await?;
-        let node = if let Some(node) = node {
-            node
+        let node = Self::load_all(&mut *tx, replica_id, 1).try_next().await?;
+
+        if let Some(node) = node {
+            Ok(node)
         } else {
-            let node = NewRootNode {
-                replica_id: *replica_id,
-                hash: Hash::null(),
-            };
+            Ok(Self::create(tx, replica_id, Hash::null()).await?.0)
+        }
+    }
 
-            node.insert(tx).await?.0
-        };
+    /// Create a root node of the specified replica. Returns the node itself and a flag indicating
+    /// whether a new node was created (`true`) or the node already existed (`false`).
+    pub async fn create(
+        tx: &mut db::Transaction,
+        replica_id: &ReplicaId,
+        hash: Hash,
+    ) -> Result<(Self, bool)> {
+        let row = sqlx::query(
+            "INSERT INTO snapshot_root_nodes (replica_id, hash)
+             VALUES (?, ?)
+             ON CONFLICT (replica_id, hash) DO NOTHING;
+             SELECT snapshot_id, CHANGES()
+             FROM snapshot_root_nodes
+             WHERE replica_id = ? AND hash = ?",
+        )
+        .bind(replica_id)
+        .bind(&hash)
+        .bind(replica_id)
+        .bind(&hash)
+        .fetch_one(tx)
+        .await?;
 
-        Ok(node)
+        Ok((
+            RootNode {
+                snapshot_id: row.get(0),
+                hash,
+            },
+            row.get::<u32, _>(1) > 0,
+        ))
     }
 
     /// Returns a stream of all (but at most `limit`) root nodes corresponding to the specified
     /// replica ordered from the most recent to the least recent.
-    pub fn get_all<'a>(
+    pub fn load_all<'a>(
         tx: &'a mut db::Transaction,
         replica_id: &'a ReplicaId,
         limit: u32,
@@ -57,28 +82,21 @@ impl RootNode {
         .err_into()
     }
 
-    pub async fn clone_with_new_root(
-        &self,
-        tx: &mut db::Transaction,
-        root_hash: &Hash,
-    ) -> Result<RootNode> {
-        let new_id = sqlx::query(
+    pub async fn clone_with_new_hash(&self, tx: &mut db::Transaction, hash: Hash) -> Result<Self> {
+        let snapshot_id = sqlx::query(
             "INSERT INTO snapshot_root_nodes (replica_id, hash)
              SELECT replica_id, ?
              FROM snapshot_root_nodes
              WHERE snapshot_id = ?
              RETURNING snapshot_id;",
         )
-        .bind(root_hash)
+        .bind(&hash)
         .bind(self.snapshot_id)
         .fetch_one(tx)
         .await?
         .get(0);
 
-        Ok(RootNode {
-            snapshot_id: new_id,
-            hash: *root_hash,
-        })
+        Ok(Self { snapshot_id, hash })
     }
 
     pub async fn remove_recursive(&self, tx: &mut db::Transaction) -> Result<()> {
@@ -87,54 +105,6 @@ impl RootNode {
 
     fn as_link(&self) -> Link {
         Link::ToRoot { node: self.clone() }
-    }
-}
-
-/// Root node that hasn't been saved into the db yet.
-#[derive(Clone, Debug)]
-pub struct NewRootNode {
-    pub replica_id: ReplicaId,
-    pub hash: Hash,
-}
-
-impl NewRootNode {
-    /// Inserts or this `NewRootNode` into the db and returns the corresponding `RootNode` and a
-    /// flag indicating whether the new node was inserted (`true`) of whether it already existed
-    /// (`false`).
-    pub async fn insert(&self, tx: &mut db::Transaction) -> Result<(RootNode, bool)> {
-        let result = sqlx::query(
-            "INSERT INTO snapshot_root_nodes (replica_id, hash)
-             VALUES (?, ?)
-             ON CONFLICT (replica_id, hash) DO NOTHING",
-        )
-        .bind(&self.replica_id)
-        .bind(&self.hash)
-        .execute(&mut *tx)
-        .await?;
-
-        let changed = result.rows_affected() > 0;
-        let snapshot_id = if changed {
-            result.last_insert_rowid() as SnapshotId
-        } else {
-            sqlx::query(
-                "SELECT snapshot_id
-                 FROM snapshot_root_nodes
-                 WHERE replica_id = ? AND hash = ?",
-            )
-            .bind(&self.replica_id)
-            .bind(&self.hash)
-            .fetch_one(tx)
-            .await?
-            .get(0)
-        };
-
-        Ok((
-            RootNode {
-                snapshot_id,
-                hash: self.hash,
-            },
-            changed,
-        ))
     }
 }
 

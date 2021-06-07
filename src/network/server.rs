@@ -41,7 +41,7 @@ impl Server {
             Request::RootNode => {
                 let mut tx = self.index.pool.begin().await?;
                 let node =
-                    RootNode::get_latest_or_create(&mut tx, &self.index.this_replica_id).await?;
+                    RootNode::load_latest_or_create(&mut tx, &self.index.this_replica_id).await?;
                 tx.commit().await?;
 
                 let _ = self.stream.send(Response::RootNode(node.hash)).await;

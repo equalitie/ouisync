@@ -27,7 +27,7 @@ pub struct Branch {
 
 impl Branch {
     pub async fn new(tx: &mut db::Transaction, replica_id: ReplicaId) -> Result<Self> {
-        let root_node = RootNode::get_latest_or_create(tx, &replica_id).await?;
+        let root_node = RootNode::load_latest_or_create(tx, &replica_id).await?;
 
         Ok(Self {
             root_node: Arc::new(Mutex::new(root_node)),
@@ -135,7 +135,7 @@ impl Branch {
         path: &Path,
     ) -> Result<RootNode> {
         if path.root.is_null() {
-            return self.write_branch_root(tx, root_node, &path.root).await;
+            return self.write_branch_root(tx, root_node, path.root).await;
         }
 
         for (i, inner_layer) in path.inner.iter().enumerate() {
@@ -157,16 +157,16 @@ impl Branch {
             leaf.insert(&parent_hash, tx).await?;
         }
 
-        self.write_branch_root(tx, root_node, &path.root).await
+        self.write_branch_root(tx, root_node, path.root).await
     }
 
     async fn write_branch_root(
         &self,
         tx: &mut db::Transaction,
         node: &mut RootNode,
-        hash: &Hash,
+        hash: Hash,
     ) -> Result<RootNode> {
-        let new_root = node.clone_with_new_root(tx, hash).await?;
+        let new_root = node.clone_with_new_hash(tx, hash).await?;
         Ok(mem::replace(node, new_root))
     }
 

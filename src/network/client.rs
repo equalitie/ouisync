@@ -4,7 +4,7 @@ use super::{
 };
 use crate::{
     error::Result,
-    index::{Index, InnerNode, NewRootNode},
+    index::{Index, InnerNode, RootNode},
     replica_id::ReplicaId,
 };
 
@@ -51,13 +51,9 @@ impl Client {
     async fn handle_response(&mut self, response: Response) -> Result<()> {
         match response {
             Response::RootNode(hash) => {
-                let node = NewRootNode {
-                    replica_id: self.their_replica_id,
-                    hash,
-                };
-
                 let mut tx = self.index.pool.begin().await?;
-                let (node, changed) = node.insert(&mut tx).await?;
+                let (node, changed) =
+                    RootNode::create(&mut tx, &self.their_replica_id, hash).await?;
                 tx.commit().await?;
 
                 if changed {
