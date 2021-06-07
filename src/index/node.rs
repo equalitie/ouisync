@@ -5,7 +5,7 @@ use futures::{Stream, TryStreamExt};
 use sqlx::Row;
 use std::{iter::FromIterator, mem, slice};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug)]
 pub struct RootNode {
     pub snapshot_id: SnapshotId,
     pub hash: Hash,
@@ -431,125 +431,54 @@ impl Link {
 
 #[cfg(test)]
 mod tests {
-    /*
-
     use super::*;
-    use crate::{crypto::Hashable, test_utils};
-    use rand::{rngs::StdRng, Rng, SeedableRng};
-    use test_strategy::proptest;
-
-    #[proptest]
-    fn insert_new_root_node(
-        hash_seed: u64,
-        is_complete: bool,
-        missing_blocks_crc: u32,
-        missing_blocks_count: usize,
-        #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
-    ) {
-        test_utils::run(insert_new_root_node_case(
-            hash_seed.hash(),
-            is_complete,
-            missing_blocks_crc,
-            missing_blocks_count,
-            StdRng::seed_from_u64(rng_seed),
-        ))
-    }
-
-    async fn insert_new_root_node_case(
-        hash: Hash,
-        is_complete: bool,
-        missing_blocks_crc: u32,
-        missing_blocks_count: usize,
-        mut rng: StdRng,
-    ) {
-        let pool = setup().await;
-        let mut tx = pool.begin().await.unwrap();
-
-        let replica_id = rng.gen();
-
-        let new_node = NewRootNode { replica_id, hash };
-        let (node, changed) = new_node.insert(&mut tx).await.unwrap();
-        let snapshot_id = node.snapshot_id;
-
-        assert!(changed);
-        assert_eq!(node.hash, new_node.hash);
-
-        let node = RootNode::get_all(&mut tx, &replica_id, 1)
-            .try_next()
-            .await
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(node.snapshot_id, snapshot_id);
-        assert_eq!(node.hash, new_node.hash);
-    }
-
-    #[proptest]
-    fn update_existing_root_node(
-        hash_seed: u64,
-        old_is_complete: bool,
-        new_is_complete: bool,
-        old_missing_blocks_crc: u32,
-        new_missing_blocks_crc: u32,
-        #[strategy(1usize..)] old_missing_blocks_count: usize,
-        #[strategy(0..=#old_missing_blocks_count)] new_missing_blocks_count: usize,
-        #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
-    ) {
-        test_utils::run(update_existing_root_node_case(
-            hash_seed.hash(),
-            old_is_complete,
-            new_is_complete,
-            old_missing_blocks_crc,
-            new_missing_blocks_crc,
-            old_missing_blocks_count,
-            new_missing_blocks_count,
-            StdRng::seed_from_u64(rng_seed),
-        ))
-    }
+    use crate::crypto::Hashable;
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn update_existing_root_node_with_no_change() {
-        let mut rng = StdRng::seed_from_u64(0);
-        let hash = rng.gen::<u64>().hash();
-        update_existing_root_node_case(hash, false, false, 0, 0, 0, 0, rng).await
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    async fn update_existing_root_node_case(
-        hash: Hash,
-        old_is_complete: bool,
-        new_is_complete: bool,
-        old_missing_blocks_crc: u32,
-        new_missing_blocks_crc: u32,
-        old_missing_blocks_count: usize,
-        new_missing_blocks_count: usize,
-        mut rng: StdRng,
-    ) {
+    async fn create_new_root_node() {
         let pool = setup().await;
+
+        let replica_id = rand::random();
+        let hash = rand::random::<u64>().hash();
+
         let mut tx = pool.begin().await.unwrap();
+        let (node0, changed) = RootNode::create(&mut tx, &replica_id, hash).await.unwrap();
+        assert!(changed);
+        assert_eq!(node0.hash, hash);
 
-        let replica_id = rng.gen();
+        let node1 = RootNode::load_latest_or_create(&mut tx, &replica_id)
+            .await
+            .unwrap();
+        assert_eq!(node1, node0);
 
-        let new_node0 = NewRootNode { replica_id, hash };
-        let (node, _) = new_node0.insert(&mut tx).await.unwrap();
-        let snapshot_id = node.snapshot_id;
-
-        let new_node1 = NewRootNode { replica_id, hash };
-        let (node, changed) = new_node1.insert(&mut tx).await.unwrap();
-
-        assert_eq!(changed, new_node0.hash != new_node1.hash);
-        assert_eq!(node.snapshot_id, snapshot_id);
-        assert_eq!(node.hash, new_node1.hash);
-
-        let nodes: Vec<_> = RootNode::get_all(&mut tx, &replica_id, 2)
+        let nodes: Vec<_> = RootNode::load_all(&mut tx, &replica_id, 2)
             .try_collect()
             .await
             .unwrap();
-
         assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0], node0);
+    }
 
-        assert_eq!(nodes[0].snapshot_id, snapshot_id);
-        assert_eq!(nodes[0].data, new_node1.data);
+    #[tokio::test(flavor = "multi_thread")]
+    async fn create_existing_root_node() {
+        let pool = setup().await;
+
+        let replica_id = rand::random();
+        let hash = rand::random::<u64>().hash();
+
+        let mut tx = pool.begin().await.unwrap();
+        let (node0, _) = RootNode::create(&mut tx, &replica_id, hash).await.unwrap();
+
+        let (node1, changed) = RootNode::create(&mut tx, &replica_id, hash).await.unwrap();
+        assert_eq!(node0, node1);
+        assert!(!changed);
+
+        let nodes: Vec<_> = RootNode::load_all(&mut tx, &replica_id, 2)
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0], node0);
     }
 
     async fn setup() -> db::Pool {
@@ -557,5 +486,4 @@ mod tests {
         super::super::init(&pool).await.unwrap();
         pool
     }
-    */
 }
