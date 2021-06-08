@@ -2,7 +2,10 @@ use super::{
     node::{InnerNode, InnerNodeMap, LeafNodeSet, ModifyStatus},
     INNER_LAYER_COUNT,
 };
-use crate::{block::BlockId, crypto::Hash};
+use crate::{
+    block::BlockId,
+    crypto::{Hash, Hashable},
+};
 use sha3::{Digest, Sha3_256};
 
 ///
@@ -134,38 +137,16 @@ impl Path {
             self.inner[inner_layer].insert(bucket, InnerNode { hash });
         }
 
-        let hash = self.compute_hash_for_layer(0);
-        self.root = hash;
+        self.root = self.compute_hash_for_layer(0);
     }
 
     // Assumes layers higher than `layer` have their hashes/BlockVersions already
     // computed/assigned.
     fn compute_hash_for_layer(&self, layer: usize) -> Hash {
         if layer == INNER_LAYER_COUNT {
-            hash_leaves(&self.leaves)
+            self.leaves.hash()
         } else {
-            hash_inner(&self.inner[layer])
+            self.inner[layer].hash()
         }
     }
-}
-
-fn hash_leaves(leaves: &LeafNodeSet) -> Hash {
-    let mut hash = Sha3_256::new();
-    // XXX: Is updating with length enough to prevent attaks?
-    hash.update((leaves.len() as u32).to_le_bytes());
-    for l in leaves {
-        hash.update(l.locator());
-        hash.update(l.block_id);
-    }
-    hash.finalize().into()
-}
-
-fn hash_inner(siblings: &InnerNodeMap) -> Hash {
-    // XXX: Have some cryptographer check this whether there are no attacks.
-    let mut hash = Sha3_256::new();
-    for (bucket, node) in siblings.iter() {
-        hash.update(bucket.to_le_bytes());
-        hash.update(node.hash);
-    }
-    hash.finalize().into()
 }

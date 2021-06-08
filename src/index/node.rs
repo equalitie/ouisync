@@ -1,8 +1,15 @@
 use super::{SnapshotId, INNER_LAYER_COUNT};
-use crate::{block::BlockId, crypto::Hash, db, error::Result, replica_id::ReplicaId};
+use crate::{
+    block::BlockId,
+    crypto::{Hash, Hashable},
+    db,
+    error::Result,
+    replica_id::ReplicaId,
+};
 use async_recursion::async_recursion;
 use futures::{future, Stream, TryStreamExt};
 use serde::{Deserialize, Serialize};
+use sha3::{Digest, Sha3_256};
 use sqlx::Row;
 use std::{collections::BTreeMap, convert::TryInto, iter::FromIterator, mem, slice};
 
@@ -195,26 +202,24 @@ impl InnerNodeMap {
     }
 }
 
-// impl FromIterator<InnerNode> for InnerNodeMap {
-//     fn from_iter<T>(iter: T) -> Self
-//     where
-//         T: IntoIterator<Item = InnerNode>,
-//     {
-//         Self(
-//             iter.into_iter()
-//                 .enumerate()
-//                 .filter_map(|(index, node)| index.try_into().ok().map(|index| (index, node)))
-//                 .collect(),
-//         )
-//     }
-// }
-
 impl Extend<(u8, InnerNode)> for InnerNodeMap {
     fn extend<T>(&mut self, iter: T)
     where
         T: IntoIterator<Item = (u8, InnerNode)>,
     {
         self.0.extend(iter)
+    }
+}
+
+impl Hashable for InnerNodeMap {
+    fn hash(&self) -> Hash {
+        // XXX: Have some cryptographer check this whether there are no attacks.
+        let mut hasher = Sha3_256::new();
+        for (bucket, node) in self.iter() {
+            hasher.update(bucket.to_le_bytes());
+            hasher.update(node.hash);
+        }
+        hasher.finalize().into()
     }
 }
 
@@ -335,6 +340,19 @@ impl<'a> IntoIterator for &'a LeafNodeSet {
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.iter()
+    }
+}
+
+impl Hashable for LeafNodeSet {
+    fn hash(&self) -> Hash {
+        let mut hasher = Sha3_256::new();
+        // XXX: Is updating with length enough to prevent attacks?
+        hasher.update((self.len() as u32).to_le_bytes());
+        for node in self.iter() {
+            hasher.update(node.locator());
+            hasher.update(node.block_id);
+        }
+        hasher.finalize().into()
     }
 }
 
