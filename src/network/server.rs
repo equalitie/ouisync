@@ -4,7 +4,7 @@ use super::{
 };
 use crate::{
     error::Result,
-    index::{Index, InnerNode, RootNode},
+    index::{Index, InnerNode, LeafNode, RootNode},
 };
 use futures::future;
 
@@ -46,14 +46,21 @@ impl Server {
 
                 let _ = self.stream.send(Response::RootNode(node.hash)).await;
             }
-            Request::InnerNodes(parent_hash) => {
+            Request::ChildNodes(parent_hash) => {
                 let mut tx = self.index.pool.begin().await?;
-                let nodes = InnerNode::load_children(&mut tx, &parent_hash).await?;
 
-                let _ = self.stream.send(Response::InnerNodes {
-                    parent_hash,
-                    children: nodes.iter().map(|node| node.hash).collect(),
-                });
+                let nodes = InnerNode::load_children(&mut tx, &parent_hash).await?;
+                if !nodes.iter().all(InnerNode::is_empty) {
+                    let _ = self.stream.send(Response::InnerNodes {
+                        parent_hash,
+                        nodes: nodes.to_vec(),
+                    });
+                }
+
+                let nodes = LeafNode::load_children(&mut tx, &parent_hash).await?;
+                if !nodes.is_empty() {
+                    let _ = self.stream.send(Response::LeafNodes { parent_hash, nodes });
+                }
             }
         }
 

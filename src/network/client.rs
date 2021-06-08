@@ -4,7 +4,7 @@ use super::{
 };
 use crate::{
     error::Result,
-    index::{Index, InnerNode, RootNode},
+    index::{Index, RootNode},
     replica_id::ReplicaId,
 };
 
@@ -57,24 +57,21 @@ impl Client {
                 tx.commit().await?;
 
                 if changed {
-                    let _ = self.stream.send(Request::InnerNodes(node.hash)).await;
+                    let _ = self.stream.send(Request::ChildNodes(node.hash)).await;
                 }
             }
-            Response::InnerNodes {
-                parent_hash,
-                children,
-            } => {
+            Response::InnerNodes { parent_hash, nodes } => {
                 let mut tx = self.index.pool.begin().await?;
 
-                for (index, hash) in children.into_iter().enumerate() {
-                    let node = InnerNode { hash };
+                for (index, node) in nodes.into_iter().enumerate() {
                     if node.save(&mut tx, &parent_hash, index).await? {
-                        let _ = self.stream.send(Request::InnerNodes(node.hash)).await;
+                        let _ = self.stream.send(Request::ChildNodes(node.hash)).await;
                     }
                 }
 
                 tx.commit().await?;
             }
+            Response::LeafNodes { .. } => todo!(),
         }
 
         Ok(())

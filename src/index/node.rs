@@ -2,6 +2,7 @@ use super::{SnapshotId, INNER_LAYER_COUNT, MAX_INNER_NODE_CHILD_COUNT};
 use crate::{block::BlockId, crypto::Hash, db, error::Result, replica_id::ReplicaId};
 use async_recursion::async_recursion;
 use futures::{Stream, TryStreamExt};
+use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use std::{iter::FromIterator, mem, slice};
 
@@ -108,7 +109,7 @@ impl RootNode {
     }
 }
 
-#[derive(Clone, Copy, Eq, PartialEq, Debug)]
+#[derive(Clone, Copy, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub struct InnerNode {
     pub hash: Hash,
 }
@@ -170,9 +171,13 @@ impl InnerNode {
     pub fn empty() -> Self {
         Self { hash: Hash::null() }
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.hash.is_null()
+    }
 }
 
-#[derive(Eq, PartialEq, Debug, Clone)]
+#[derive(Clone, Copy, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub struct LeafNode {
     locator: Hash,
     pub block_id: BlockId,
@@ -196,27 +201,27 @@ impl LeafNode {
 
         Ok(())
     }
-}
 
-pub async fn leaf_children(parent: &Hash, tx: &mut db::Transaction) -> Result<LeafNodeSet> {
-    Ok(sqlx::query(
-        "SELECT locator, block_id
-         FROM snapshot_leaf_nodes
-         WHERE parent = ?",
-    )
-    .bind(parent)
-    .map(|row| LeafNode {
-        locator: row.get(0),
-        block_id: row.get(1),
-    })
-    .fetch_all(tx)
-    .await?
-    .into_iter()
-    .collect())
+    pub async fn load_children(tx: &mut db::Transaction, parent: &Hash) -> Result<LeafNodeSet> {
+        Ok(sqlx::query(
+            "SELECT locator, block_id
+             FROM snapshot_leaf_nodes
+             WHERE parent = ?",
+        )
+        .bind(parent)
+        .map(|row| LeafNode {
+            locator: row.get(0),
+            block_id: row.get(1),
+        })
+        .fetch_all(tx)
+        .await?
+        .into_iter()
+        .collect())
+    }
 }
 
 /// Collection that acts as a ordered set of `LeafNode`s
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Serialize, Deserialize)]
 pub struct LeafNodeSet(Vec<LeafNode>);
 
 impl LeafNodeSet {

@@ -4,7 +4,7 @@
 #![allow(arithmetic_overflow)]
 
 use super::{
-    node::{leaf_children, InnerNode, RootNode},
+    node::{InnerNode, LeafNode, RootNode},
     path::Path,
     INNER_LAYER_COUNT,
 };
@@ -119,7 +119,7 @@ impl Branch {
             path.layers_found += 1;
         }
 
-        path.leaves = leaf_children(&parent, tx).await?;
+        path.leaves = LeafNode::load_children(tx, &parent).await?;
 
         if path.leaves.get(encoded_locator).is_some() {
             path.layers_found += 1;
