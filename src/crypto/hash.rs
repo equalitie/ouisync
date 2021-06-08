@@ -15,14 +15,6 @@ pub struct Hash(Inner);
 
 impl Hash {
     pub const SIZE: usize = <Inner as GenericSequence<_>>::Length::USIZE;
-
-    pub fn null() -> Self {
-        Self(Inner::default())
-    }
-
-    pub fn is_null(&self) -> bool {
-        self.0.iter().all(|&byte| byte == 0)
-    }
 }
 
 impl From<Inner> for Hash {

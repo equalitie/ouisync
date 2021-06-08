@@ -6,7 +6,6 @@ use crate::{
     block::BlockId,
     crypto::{Hash, Hashable},
 };
-use sha3::{Digest, Sha3_256};
 
 ///
 /// Path represents a (possibly incomplete) path in a snapshot from the root to the leaf.
@@ -32,21 +31,19 @@ pub struct Path {
     /// nor leaf layers was; 2 -> root and one inner (possibly leaf if INNER_LAYER_COUNT == 0)
     /// layers were found; ...)
     pub layers_found: usize,
-    pub root: Hash,
+    pub root_hash: Hash,
     pub inner: Vec<InnerNodeMap>,
     pub leaves: LeafNodeSet,
 }
 
 impl Path {
-    pub fn new(locator: Hash) -> Self {
-        let null_hash = Hash::null();
-
+    pub fn new(root_hash: Hash, locator: Hash) -> Self {
         let inner = vec![InnerNodeMap::default(); INNER_LAYER_COUNT];
 
         Self {
             locator,
             layers_found: 0,
-            root: null_hash,
+            root_hash,
             inner,
             leaves: LeafNodeSet::default(),
         }
@@ -64,15 +61,15 @@ impl Path {
         1 /* root */ + INNER_LAYER_COUNT + 1 /* leaves */
     }
 
-    pub fn hash_at_layer(&self, layer: usize) -> Hash {
+    pub fn hash_at_layer(&self, layer: usize) -> Option<Hash> {
         if layer == 0 {
-            return self.root;
+            return Some(self.root_hash);
         }
+
         let inner_layer = layer - 1;
         self.inner[inner_layer]
             .get(self.get_bucket(inner_layer))
             .map(|node| node.hash)
-            .unwrap_or(Hash::null())
     }
 
     // Sets the leaf node to the given block id. Returns the previous block id, if any.
@@ -92,41 +89,30 @@ impl Path {
 
     pub fn remove_leaf(&mut self, locator: &Hash) -> Option<BlockId> {
         let block_id = self.leaves.remove(locator)?.block_id;
+        let mut start_layer = INNER_LAYER_COUNT;
 
-        if !self.leaves.is_empty() {
-            self.recalculate(INNER_LAYER_COUNT);
-        } else if INNER_LAYER_COUNT > 0 {
-            self.remove_from_inner_layer(INNER_LAYER_COUNT - 1);
-        } else {
-            self.remove_root_layer();
+        if self.leaves.is_empty() {
+            for layer in (0..INNER_LAYER_COUNT).rev() {
+                let bucket = self.get_bucket(layer);
+                let nodes = &mut self.inner[layer];
+
+                nodes.remove(bucket);
+
+                if nodes.is_empty() {
+                    start_layer = layer;
+                } else {
+                    break;
+                }
+            }
         }
+
+        self.recalculate(start_layer);
 
         Some(block_id)
     }
 
     pub fn get_bucket(&self, inner_layer: usize) -> u8 {
         self.locator.as_ref()[inner_layer]
-    }
-
-    fn remove_from_inner_layer(&mut self, inner_layer: usize) {
-        let bucket = self.get_bucket(inner_layer);
-
-        self.inner[inner_layer].remove(bucket);
-
-        if !self.inner[inner_layer].is_empty() {
-            self.recalculate(inner_layer);
-            return;
-        }
-
-        if inner_layer > 0 {
-            self.remove_from_inner_layer(inner_layer - 1);
-        } else {
-            self.remove_root_layer();
-        }
-    }
-
-    fn remove_root_layer(&mut self) {
-        self.root = Hash::null();
     }
 
     /// Recalculate layers from start_layer all the way to the root.
@@ -137,7 +123,7 @@ impl Path {
             self.inner[inner_layer].insert(bucket, InnerNode { hash });
         }
 
-        self.root = self.compute_hash_for_layer(0);
+        self.root_hash = self.compute_hash_for_layer(0);
     }
 
     // Assumes layers higher than `layer` have their hashes/BlockVersions already

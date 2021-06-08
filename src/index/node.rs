@@ -31,7 +31,9 @@ impl RootNode {
         if let Some(node) = node {
             Ok(node)
         } else {
-            Ok(Self::create(tx, replica_id, Hash::null()).await?.0)
+            Ok(Self::create(tx, replica_id, InnerNodeMap::default().hash())
+                .await?
+                .0)
         }
     }
 
@@ -163,12 +165,6 @@ impl InnerNode {
     }
 }
 
-impl Default for InnerNode {
-    fn default() -> Self {
-        Self { hash: Hash::null() }
-    }
-}
-
 #[derive(Default, Clone, Debug, Serialize, Deserialize)]
 pub struct InnerNodeMap(BTreeMap<u8, InnerNode>);
 
@@ -179,10 +175,6 @@ impl InnerNodeMap {
 
     pub fn get(&self, index: u8) -> Option<&InnerNode> {
         self.0.get(&index)
-    }
-
-    pub fn contains(&self, index: u8) -> bool {
-        self.0.contains_key(&index)
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (u8, &InnerNode)> {
@@ -567,8 +559,9 @@ mod tests {
         let nodes = InnerNode::load_children(&mut tx, &parent).await.unwrap();
 
         assert_eq!(nodes.get(bucket), Some(&node));
-        assert!((0..bucket).all(|b| !nodes.contains(b)));
-        assert!((bucket + 1..).all(|b| !nodes.contains(b)));
+
+        assert!((0..bucket).all(|b| nodes.get(b).is_none()));
+        assert!((bucket + 1..=u8::MAX).all(|b| nodes.get(b).is_none()));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -590,8 +583,8 @@ mod tests {
         let nodes = InnerNode::load_children(&mut tx, &parent).await.unwrap();
 
         assert_eq!(nodes.get(bucket), Some(&node0));
-        assert!((0..bucket).all(|b| !nodes.contains(b)));
-        assert!((bucket + 1..).all(|b| !nodes.contains(b)));
+        assert!((0..bucket).all(|b| nodes.get(b).is_none()));
+        assert!((bucket + 1..=u8::MAX).all(|b| nodes.get(b).is_none()));
     }
 
     #[tokio::test(flavor = "multi_thread")]

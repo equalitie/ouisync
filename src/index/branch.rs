@@ -59,13 +59,8 @@ impl Branch {
 
     /// Retrieve `BlockId` of a block with the given encoded `Locator`.
     pub async fn get(&self, tx: &mut db::Transaction, encoded_locator: &Hash) -> Result<BlockId> {
-        let lock = self.root_node.lock().await;
-
-        if lock.hash.is_null() {
-            return Err(Error::EntryNotFound);
-        }
-
-        let path = self.get_path(tx, &lock.hash, &encoded_locator).await?;
+        let root_node = self.root_node.lock().await;
+        let path = self.get_path(tx, &root_node.hash, &encoded_locator).await?;
 
         match path.get_leaf() {
             Some(block_id) => Ok(block_id),
@@ -97,16 +92,11 @@ impl Branch {
         root_hash: &Hash,
         encoded_locator: &LocatorHash,
     ) -> Result<Path> {
-        let mut path = Path::new(*encoded_locator);
+        let mut path = Path::new(*root_hash, *encoded_locator);
 
-        if root_hash.is_null() {
-            return Ok(path);
-        }
-
-        path.root = *root_hash;
         path.layers_found += 1;
 
-        let mut parent = path.root;
+        let mut parent = path.root_hash;
 
         for level in 0..INNER_LAYER_COUNT {
             path.inner[level] = InnerNode::load_children(tx, &parent).await?;
@@ -135,26 +125,22 @@ impl Branch {
         root_node: &mut RootNode,
         path: &Path,
     ) -> Result<RootNode> {
-        if path.root.is_null() {
-            return self.write_branch_root(tx, root_node, path.root).await;
-        }
-
         for (i, inner_layer) in path.inner.iter().enumerate() {
-            let parent_hash = path.hash_at_layer(i);
-
-            for (bucket, node) in inner_layer.iter() {
-                node.save(tx, &parent_hash, bucket).await?;
+            if let Some(parent_hash) = path.hash_at_layer(i) {
+                for (bucket, node) in inner_layer.iter() {
+                    node.save(tx, &parent_hash, bucket).await?;
+                }
             }
         }
 
         let layer = Path::total_layer_count() - 1;
-        let parent_hash = path.hash_at_layer(layer - 1);
-
-        for leaf in &path.leaves {
-            leaf.insert(&parent_hash, tx).await?;
+        if let Some(parent_hash) = path.hash_at_layer(layer - 1) {
+            for leaf in &path.leaves {
+                leaf.insert(&parent_hash, tx).await?;
+            }
         }
 
-        self.write_branch_root(tx, root_node, path.root).await
+        self.write_branch_root(tx, root_node, path.root_hash).await
     }
 
     async fn write_branch_root(
@@ -286,7 +272,7 @@ mod tests {
                  (SELECT COUNT(*) FROM snapshot_inner_nodes) +
                  (SELECT COUNT(*) FROM snapshot_leaf_nodes)",
         )
-        .fetch_one(&mut *tx)
+        .fetch_one(tx)
         .await
         .unwrap()
         .get::<u32, _>(0) as usize
