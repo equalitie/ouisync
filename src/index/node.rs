@@ -1,10 +1,10 @@
-use super::{SnapshotId, INNER_LAYER_COUNT, MAX_INNER_NODE_CHILD_COUNT};
+use super::{SnapshotId, INNER_LAYER_COUNT};
 use crate::{block::BlockId, crypto::Hash, db, error::Result, replica_id::ReplicaId};
 use async_recursion::async_recursion;
-use futures::{Stream, TryStreamExt};
+use futures::{future, Stream, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
-use std::{iter::FromIterator, mem, slice};
+use std::{collections::BTreeMap, convert::TryInto, iter::FromIterator, mem, slice};
 
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct RootNode {
@@ -117,19 +117,14 @@ pub struct InnerNode {
 impl InnerNode {
     /// Saves this inner node into the db. Returns whether a new node was created (`true`) or the
     /// node already existed (`false`).
-    pub async fn save(
-        &self,
-        tx: &mut db::Transaction,
-        parent: &Hash,
-        bucket: usize,
-    ) -> Result<bool> {
+    pub async fn save(&self, tx: &mut db::Transaction, parent: &Hash, bucket: u8) -> Result<bool> {
         let changes = sqlx::query(
             "INSERT INTO snapshot_inner_nodes (parent, bucket, hash)
              VALUES (?, ?, ?)
              ON CONFLICT (parent, bucket) DO NOTHING",
         )
         .bind(parent)
-        .bind(bucket as u32)
+        .bind(bucket)
         .bind(&self.hash)
         .execute(tx)
         .await?
@@ -138,42 +133,88 @@ impl InnerNode {
         Ok(changes > 0)
     }
 
-    pub async fn load_children(
-        tx: &mut db::Transaction,
-        parent: &Hash,
-    ) -> Result<[Self; MAX_INNER_NODE_CHILD_COUNT]> {
-        let rows = sqlx::query(
+    pub async fn load_children(tx: &mut db::Transaction, parent: &Hash) -> Result<InnerNodeMap> {
+        sqlx::query(
             "SELECT bucket, hash
              FROM snapshot_inner_nodes
              WHERE parent = ?",
         )
         .bind(parent)
-        .fetch_all(tx)
-        .await?;
-
-        let mut children = [InnerNode::empty(); MAX_INNER_NODE_CHILD_COUNT];
-
-        for row in rows {
+        .map(|row| {
             let bucket: u32 = row.get(0);
-            let hash = row.get(1);
+            let node = Self { hash: row.get(1) };
 
-            if let Some(node) = children.get_mut(bucket as usize) {
-                *node = InnerNode { hash };
-            } else {
-                log::error!("inner node ({:?}) bucket out of range: {}", hash, bucket);
-                // TODO: should we return error here?
-            }
-        }
-
-        Ok(children)
+            (bucket, node)
+        })
+        .fetch(tx)
+        .try_filter_map(|(bucket, node)| {
+            future::ready(Ok(bucket.try_into().ok().map(|bucket| (bucket, node))))
+        })
+        .try_collect()
+        .await
+        .map_err(From::from)
     }
+}
 
-    pub fn empty() -> Self {
+impl Default for InnerNode {
+    fn default() -> Self {
         Self { hash: Hash::null() }
     }
+}
 
+#[derive(Default, Clone, Debug, Serialize, Deserialize)]
+pub struct InnerNodeMap(BTreeMap<u8, InnerNode>);
+
+impl InnerNodeMap {
     pub fn is_empty(&self) -> bool {
-        self.hash.is_null()
+        self.0.is_empty()
+    }
+
+    pub fn get(&self, index: u8) -> Option<&InnerNode> {
+        self.0.get(&index)
+    }
+
+    pub fn contains(&self, index: u8) -> bool {
+        self.0.contains_key(&index)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (u8, &InnerNode)> {
+        self.0.iter().map(|(index, node)| (*index, node))
+    }
+
+    pub fn into_iter(self) -> impl Iterator<Item = (u8, InnerNode)> {
+        self.0.into_iter()
+    }
+
+    pub fn insert(&mut self, index: u8, node: InnerNode) -> Option<InnerNode> {
+        self.0.insert(index, node)
+    }
+
+    pub fn remove(&mut self, index: u8) -> Option<InnerNode> {
+        self.0.remove(&index)
+    }
+}
+
+// impl FromIterator<InnerNode> for InnerNodeMap {
+//     fn from_iter<T>(iter: T) -> Self
+//     where
+//         T: IntoIterator<Item = InnerNode>,
+//     {
+//         Self(
+//             iter.into_iter()
+//                 .enumerate()
+//                 .filter_map(|(index, node)| index.try_into().ok().map(|index| (index, node)))
+//                 .collect(),
+//         )
+//     }
+// }
+
+impl Extend<(u8, InnerNode)> for InnerNodeMap {
+    fn extend<T>(&mut self, iter: T)
+    where
+        T: IntoIterator<Item = (u8, InnerNode)>,
+    {
+        self.0.extend(iter)
     }
 }
 
@@ -267,8 +308,8 @@ impl LeafNodeSet {
         self.0.is_empty()
     }
 
-    pub fn as_slice(&self) -> &[LeafNode] {
-        &self.0
+    pub fn len(&self) -> usize {
+        self.0.len()
     }
 
     fn lookup(&self, locator: &Hash) -> Result<usize, usize> {
@@ -444,7 +485,6 @@ mod tests {
     use super::*;
     use crate::crypto::Hashable;
     use assert_matches::assert_matches;
-    use rand::Rng;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn create_new_root_node() {
@@ -499,7 +539,7 @@ mod tests {
 
         let parent = rand::random::<u64>().hash();
         let hash = rand::random::<u64>().hash();
-        let bucket = rand::thread_rng().gen_range(0..MAX_INNER_NODE_CHILD_COUNT);
+        let bucket = rand::random();
 
         let mut tx = pool.begin().await.unwrap();
 
@@ -508,13 +548,9 @@ mod tests {
 
         let nodes = InnerNode::load_children(&mut tx, &parent).await.unwrap();
 
-        assert_eq!(nodes[bucket], node);
-        assert!(nodes[0..bucket]
-            .iter()
-            .all(|node| *node == InnerNode::empty()));
-        assert!(nodes[bucket + 1..]
-            .iter()
-            .all(|node| *node == InnerNode::empty()));
+        assert_eq!(nodes.get(bucket), Some(&node));
+        assert!((0..bucket).all(|b| !nodes.contains(b)));
+        assert!((bucket + 1..).all(|b| !nodes.contains(b)));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -523,7 +559,7 @@ mod tests {
 
         let parent = rand::random::<u64>().hash();
         let hash = rand::random::<u64>().hash();
-        let bucket = rand::thread_rng().gen_range(0..MAX_INNER_NODE_CHILD_COUNT);
+        let bucket = rand::random();
 
         let mut tx = pool.begin().await.unwrap();
 
@@ -535,13 +571,9 @@ mod tests {
 
         let nodes = InnerNode::load_children(&mut tx, &parent).await.unwrap();
 
-        assert_eq!(nodes[bucket], node0);
-        assert!(nodes[0..bucket]
-            .iter()
-            .all(|node| *node == InnerNode::empty()));
-        assert!(nodes[bucket + 1..]
-            .iter()
-            .all(|node| *node == InnerNode::empty()));
+        assert_eq!(nodes.get(bucket), Some(&node0));
+        assert!((0..bucket).all(|b| !nodes.contains(b)));
+        assert!((bucket + 1..).all(|b| !nodes.contains(b)));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -549,7 +581,7 @@ mod tests {
         let pool = setup().await;
 
         let parent = rand::random::<u64>().hash();
-        let bucket = rand::thread_rng().gen_range(0..MAX_INNER_NODE_CHILD_COUNT);
+        let bucket = rand::random();
 
         let hash0 = rand::random::<u64>().hash();
         let hash1 = loop {

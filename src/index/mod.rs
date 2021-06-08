@@ -4,7 +4,7 @@ mod path;
 
 pub use self::{
     branch::Branch,
-    node::{InnerNode, LeafNode, LeafNodeSet, RootNode},
+    node::{InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, RootNode},
 };
 
 use crate::{
@@ -22,7 +22,6 @@ use tokio::sync::Mutex;
 
 /// Number of layers in the tree excluding the layer with root and the layer with leaf nodes.
 const INNER_LAYER_COUNT: usize = 3;
-const MAX_INNER_NODE_CHILD_COUNT: usize = 256; // = sizeof(u8)
 
 type SnapshotId = u32;
 

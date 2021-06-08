@@ -50,11 +50,10 @@ impl Server {
                 let mut tx = self.index.pool.begin().await?;
 
                 let nodes = InnerNode::load_children(&mut tx, &parent_hash).await?;
-                if !nodes.iter().all(InnerNode::is_empty) {
-                    let _ = self.stream.send(Response::InnerNodes {
-                        parent_hash,
-                        nodes: nodes.to_vec(),
-                    });
+                if !nodes.is_empty() {
+                    let _ = self
+                        .stream
+                        .send(Response::InnerNodes { parent_hash, nodes });
                 }
 
                 let nodes = LeafNode::load_children(&mut tx, &parent_hash).await?;

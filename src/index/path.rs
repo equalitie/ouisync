@@ -1,11 +1,9 @@
 use super::{
-    node::{InnerNode, LeafNode, LeafNodeSet, ModifyStatus},
-    INNER_LAYER_COUNT, MAX_INNER_NODE_CHILD_COUNT,
+    node::{InnerNode, InnerNodeMap, LeafNodeSet, ModifyStatus},
+    INNER_LAYER_COUNT,
 };
 use crate::{block::BlockId, crypto::Hash};
 use sha3::{Digest, Sha3_256};
-
-type InnerChildren = [InnerNode; MAX_INNER_NODE_CHILD_COUNT];
 
 ///
 /// Path represents a (possibly incomplete) path in a snapshot from the root to the leaf.
@@ -32,7 +30,7 @@ pub struct Path {
     /// layers were found; ...)
     pub layers_found: usize,
     pub root: Hash,
-    pub inner: Vec<InnerChildren>,
+    pub inner: Vec<InnerNodeMap>,
     pub leaves: LeafNodeSet,
 }
 
@@ -40,7 +38,7 @@ impl Path {
     pub fn new(locator: Hash) -> Self {
         let null_hash = Hash::null();
 
-        let inner = vec![[InnerNode::empty(); MAX_INNER_NODE_CHILD_COUNT]; INNER_LAYER_COUNT];
+        let inner = vec![InnerNodeMap::default(); INNER_LAYER_COUNT];
 
         Self {
             locator,
@@ -59,7 +57,7 @@ impl Path {
         self.leaves.iter().any(|l| &l.block_id == block_id)
     }
 
-    pub fn total_layer_count() -> usize {
+    pub const fn total_layer_count() -> usize {
         1 /* root */ + INNER_LAYER_COUNT + 1 /* leaves */
     }
 
@@ -68,7 +66,10 @@ impl Path {
             return self.root;
         }
         let inner_layer = layer - 1;
-        self.inner[inner_layer][self.get_bucket(inner_layer)].hash
+        self.inner[inner_layer]
+            .get(self.get_bucket(inner_layer))
+            .map(|node| node.hash)
+            .unwrap_or(Hash::null())
     }
 
     // Sets the leaf node to the given block id. Returns the previous block id, if any.
@@ -100,19 +101,16 @@ impl Path {
         Some(block_id)
     }
 
-    pub fn get_bucket(&self, inner_layer: usize) -> usize {
-        self.locator.as_ref()[inner_layer] as usize
+    pub fn get_bucket(&self, inner_layer: usize) -> u8 {
+        self.locator.as_ref()[inner_layer]
     }
 
     fn remove_from_inner_layer(&mut self, inner_layer: usize) {
-        let null = Hash::null();
         let bucket = self.get_bucket(inner_layer);
 
-        self.inner[inner_layer][bucket] = InnerNode::empty();
+        self.inner[inner_layer].remove(bucket);
 
-        let is_empty = self.inner[inner_layer].iter().all(|x| x.hash == null);
-
-        if !is_empty {
+        if !self.inner[inner_layer].is_empty() {
             self.recalculate(inner_layer);
             return;
         }
@@ -133,7 +131,7 @@ impl Path {
         for inner_layer in (0..start_layer).rev() {
             let hash = self.compute_hash_for_layer(inner_layer + 1);
             let bucket = self.get_bucket(inner_layer);
-            self.inner[inner_layer][bucket] = InnerNode { hash };
+            self.inner[inner_layer].insert(bucket, InnerNode { hash });
         }
 
         let hash = self.compute_hash_for_layer(0);
@@ -144,14 +142,14 @@ impl Path {
     // computed/assigned.
     fn compute_hash_for_layer(&self, layer: usize) -> Hash {
         if layer == INNER_LAYER_COUNT {
-            hash_leaves(self.leaves.as_slice())
+            hash_leaves(&self.leaves)
         } else {
             hash_inner(&self.inner[layer])
         }
     }
 }
 
-fn hash_leaves(leaves: &[LeafNode]) -> Hash {
+fn hash_leaves(leaves: &LeafNodeSet) -> Hash {
     let mut hash = Sha3_256::new();
     // XXX: Is updating with length enough to prevent attaks?
     hash.update((leaves.len() as u32).to_le_bytes());
@@ -162,14 +160,12 @@ fn hash_leaves(leaves: &[LeafNode]) -> Hash {
     hash.finalize().into()
 }
 
-fn hash_inner(siblings: &[InnerNode]) -> Hash {
+fn hash_inner(siblings: &InnerNodeMap) -> Hash {
     // XXX: Have some cryptographer check this whether there are no attacks.
     let mut hash = Sha3_256::new();
-    for (k, s) in siblings.iter().enumerate() {
-        if !s.hash.is_null() {
-            hash.update((k as u16).to_le_bytes());
-            hash.update(s.hash);
-        }
+    for (bucket, node) in siblings.iter() {
+        hash.update(bucket.to_le_bytes());
+        hash.update(node.hash);
     }
     hash.finalize().into()
 }

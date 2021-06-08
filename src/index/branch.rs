@@ -110,11 +110,12 @@ impl Branch {
 
         for level in 0..INNER_LAYER_COUNT {
             path.inner[level] = InnerNode::load_children(tx, &parent).await?;
-            parent = path.inner[level][path.get_bucket(level)].hash;
 
-            if parent.is_null() {
+            if let Some(node) = path.inner[level].get(path.get_bucket(level)) {
+                parent = node.hash
+            } else {
                 return Ok(path);
-            }
+            };
 
             path.layers_found += 1;
         }
@@ -141,11 +142,7 @@ impl Branch {
         for (i, inner_layer) in path.inner.iter().enumerate() {
             let parent_hash = path.hash_at_layer(i);
 
-            for (bucket, node) in inner_layer.iter().enumerate() {
-                if node.hash.is_null() {
-                    continue;
-                }
-
+            for (bucket, node) in inner_layer.iter() {
                 node.save(tx, &parent_hash, bucket).await?;
             }
         }

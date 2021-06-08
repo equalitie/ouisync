@@ -63,7 +63,7 @@ impl Client {
             Response::InnerNodes { parent_hash, nodes } => {
                 let mut tx = self.index.pool.begin().await?;
 
-                for (index, node) in nodes.into_iter().enumerate() {
+                for (index, node) in nodes.into_iter() {
                     if node.save(&mut tx, &parent_hash, index).await? {
                         let _ = self.stream.send(Request::ChildNodes(node.hash)).await;
                     }

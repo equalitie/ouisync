@@ -1,6 +1,6 @@
 use crate::{
     crypto::Hash,
-    index::{InnerNode, LeafNodeSet},
+    index::{InnerNodeMap, LeafNodeSet},
 };
 use serde::{Deserialize, Serialize};
 
@@ -21,7 +21,7 @@ pub enum Response {
     /// Send inner nodes with the given parent hash.
     InnerNodes {
         parent_hash: Hash,
-        nodes: Vec<InnerNode>,
+        nodes: InnerNodeMap,
     },
     /// Send leaf nodes with the given parent hash.
     LeafNodes {
