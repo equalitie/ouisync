@@ -117,7 +117,7 @@ impl RootNode {
     /// Check whether all the constituent nodes of this snapshot have been downloaded and stored
     /// locally.
     pub async fn check_complete(&self, tx: &mut db::Transaction) -> Result<bool> {
-        todo!()
+        check_subtree_complete(tx, &self.hash, 0).await
     }
 
     pub async fn remove_recursive(&self, tx: &mut db::Transaction) -> Result<()> {
@@ -126,6 +126,30 @@ impl RootNode {
 
     fn as_link(&self) -> Link {
         Link::ToRoot { node: self.clone() }
+    }
+}
+
+// TODO: find a way to avoid the recursion
+#[async_recursion]
+async fn check_subtree_complete(
+    tx: &mut db::Transaction,
+    parent_hash: &Hash,
+    layer: usize,
+) -> Result<bool> {
+    if layer < INNER_LAYER_COUNT {
+        let nodes = InnerNode::load_children(tx, parent_hash).await?;
+        let mut complete_children_count = 0usize;
+
+        for (_, node) in &nodes {
+            if check_subtree_complete(tx, &node.hash, layer + 1).await? {
+                complete_children_count += 1;
+            }
+        }
+
+        Ok(nodes.hash() == *parent_hash && complete_children_count == nodes.len())
+    } else {
+        let nodes = LeafNode::load_children(tx, parent_hash).await?;
+        Ok(nodes.hash() == *parent_hash)
     }
 }
 
@@ -168,6 +192,7 @@ impl InnerNode {
         })
         .fetch(tx)
         .try_filter_map(|(bucket, node)| {
+            // TODO: consider reporting out-of-range buckets as errors
             future::ready(Ok(bucket.try_into().ok().map(|bucket| (bucket, node))))
         })
         .try_collect()
@@ -182,6 +207,10 @@ pub struct InnerNodeMap(BTreeMap<u8, InnerNode>);
 impl InnerNodeMap {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
     }
 
     pub fn get(&self, bucket: u8) -> Option<&InnerNode> {
@@ -298,6 +327,22 @@ impl LeafNode {
 pub struct LeafNodeSet(Vec<LeafNode>);
 
 impl LeafNodeSet {
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn get(&self, locator: &Hash) -> Option<&LeafNode> {
+        self.lookup(locator).ok().map(|index| &self.0[index])
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &LeafNode> {
+        self.0.iter()
+    }
+
     /// Inserts a new node or updates it if already exists.
     pub fn modify(&mut self, locator: &Hash, block_id: &BlockId) -> ModifyStatus {
         match self.lookup(locator) {
@@ -326,22 +371,6 @@ impl LeafNodeSet {
     pub fn remove(&mut self, locator: &Hash) -> Option<LeafNode> {
         let index = self.lookup(locator).ok()?;
         Some(self.0.remove(index))
-    }
-
-    pub fn get(&self, locator: &Hash) -> Option<&LeafNode> {
-        self.lookup(locator).ok().map(|index| &self.0[index])
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = &LeafNode> {
-        self.0.iter()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
-    pub fn len(&self) -> usize {
-        self.0.len()
     }
 
     fn lookup(&self, locator: &Hash) -> Result<usize, usize> {
@@ -542,10 +571,11 @@ pub fn get_bucket(locator: &Hash, inner_layer: usize) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crypto::Hashable;
+    use crate::{crypto::Hashable, test_utils};
     use assert_matches::assert_matches;
-    use rand::Rng;
+    use rand::prelude::*;
     use std::collections::HashMap;
+    use test_strategy::proptest;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn create_new_root_node() {
@@ -662,21 +692,59 @@ mod tests {
         assert_matches!(node1.save(&mut tx, &parent, bucket).await, Err(_)); // TODO: match concrete error type
     }
 
-    #[ignore]
-    #[tokio::test(flavor = "multi_thread")]
-    async fn check_complete() {
+    #[proptest]
+    fn check_complete(
+        #[strategy(0usize..=32)] leaf_count: usize,
+        #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
+    ) {
+        test_utils::run(check_complete_case(leaf_count, rng_seed))
+    }
+
+    async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
+        let mut rng = StdRng::seed_from_u64(rng_seed);
+
         let pool = setup().await;
         let mut tx = pool.begin().await.unwrap();
 
-        let mut rng = rand::thread_rng();
-        let snapshot = Snapshot::generate(&mut rng, 100);
+        let snapshot = Snapshot::generate(&mut rng, leaf_count);
 
         let (root_node, _) = RootNode::create(&mut tx, &snapshot.replica_id, snapshot.root_hash)
             .await
             .unwrap();
-        assert!(!root_node.check_complete(&mut tx).await.unwrap());
 
-        // for layer in snapshot.inners
+        if leaf_count > 0 {
+            assert!(!root_node.check_complete(&mut tx).await.unwrap());
+        }
+
+        // TODO: consider randomizing the order the nodes are saved so it's not always
+        // breadth-first.
+
+        for (inner_layer, maps) in snapshot.inners.iter().enumerate() {
+            for (path, nodes) in maps {
+                let parent_hash = snapshot.parent_hash(inner_layer, path);
+
+                for (bucket, node) in nodes {
+                    node.save(&mut tx, parent_hash, bucket).await.unwrap();
+                    assert!(!root_node.check_complete(&mut tx).await.unwrap());
+                }
+            }
+        }
+
+        let mut unsaved_leaves: usize = snapshot.leaves.values().map(|nodes| nodes.len()).sum();
+
+        for (path, nodes) in &snapshot.leaves {
+            let parent_hash = snapshot.parent_hash(INNER_LAYER_COUNT, path);
+
+            for node in nodes {
+                node.save(&mut tx, parent_hash).await.unwrap();
+                unsaved_leaves -= 1;
+                if unsaved_leaves > 0 {
+                    assert!(!root_node.check_complete(&mut tx).await.unwrap());
+                }
+            }
+        }
+
+        assert!(root_node.check_complete(&mut tx).await.unwrap());
     }
 
     async fn setup() -> db::Pool {
@@ -685,6 +753,7 @@ mod tests {
         pool
     }
 
+    // In-memory snapshot for testing purposes.
     struct Snapshot {
         replica_id: ReplicaId,
         root_hash: Hash,
@@ -693,9 +762,9 @@ mod tests {
     }
 
     impl Snapshot {
-        fn generate<R: Rng>(rng: &mut R, max_leaf_count: usize) -> Self {
+        // Generate a random snapshot with the given maximum number of leaf nodes.
+        fn generate<R: Rng>(rng: &mut R, leaf_count: usize) -> Self {
             let replica_id = rng.gen();
-            let leaf_count = rng.gen_range(0..max_leaf_count);
             let leaves = (0..leaf_count)
                 .map(|_| {
                     let locator = rng.gen::<u64>().hash();
@@ -712,7 +781,7 @@ mod tests {
                 leaves
                     .into_iter()
                     .fold(HashMap::<_, LeafNodeSet>::new(), |mut map, leaf| {
-                        map.entry(BucketPath::new(&leaf.locator, INNER_LAYER_COUNT))
+                        map.entry(BucketPath::new(&leaf.locator, INNER_LAYER_COUNT - 1))
                             .or_default()
                             .modify(&leaf.locator, &leaf.block_id);
                         map
@@ -737,7 +806,10 @@ mod tests {
                 }
             }
 
-            let root_hash = inners[0][&BucketPath::default()].hash();
+            let root_hash = inners[0]
+                .get(&BucketPath::default())
+                .unwrap_or(&InnerNodeMap::default())
+                .hash();
 
             Self {
                 replica_id,
@@ -746,40 +818,51 @@ mod tests {
                 leaves,
             }
         }
+
+        // Returns the parent hash of inner nodes at `inner_layer` with the specified bucket path.
+        fn parent_hash(&self, inner_layer: usize, path: &BucketPath) -> &Hash {
+            if inner_layer == 0 {
+                &self.root_hash
+            } else {
+                let (bucket, parent_path) = path.pop(inner_layer - 1);
+                &self.inners[inner_layer - 1]
+                    .get(&parent_path)
+                    .unwrap()
+                    .get(bucket)
+                    .unwrap()
+                    .hash
+            }
+        }
     }
 
     fn add_inner_node(
-        layer: usize,
+        inner_layer: usize,
         maps: &mut HashMap<BucketPath, InnerNodeMap>,
         path: &BucketPath,
         hash: Hash,
     ) {
-        let (bucket, path) = path.pop(layer);
-        maps.entry(path)
+        let (bucket, parent_path) = path.pop(inner_layer);
+        maps.entry(parent_path)
             .or_default()
             .insert(bucket, InnerNode { hash });
     }
 
-    #[derive(Default, Clone, Copy, Eq, PartialEq, Hash)]
+    #[derive(Default, Clone, Copy, Eq, PartialEq, Hash, Debug)]
     struct BucketPath([u8; INNER_LAYER_COUNT]);
 
     impl BucketPath {
-        fn new(locator: &Hash, layer_count: usize) -> Self {
+        fn new(locator: &Hash, inner_layer: usize) -> Self {
             let mut path = Self(Default::default());
-            for (layer, bucket) in path.0.iter_mut().enumerate().take(layer_count) {
+            for (layer, bucket) in path.0.iter_mut().enumerate().take(inner_layer + 1) {
                 *bucket = get_bucket(locator, layer)
             }
             path
         }
 
-        fn pop(&self, layer: usize) -> (u8, Self) {
+        fn pop(&self, inner_layer: usize) -> (u8, Self) {
             let mut popped = *self;
-            let bucket = mem::replace(&mut popped.0[layer], 0);
+            let bucket = mem::replace(&mut popped.0[inner_layer], 0);
             (bucket, popped)
-        }
-
-        fn bucket(&self, layer: usize) -> u8 {
-            self.0[layer]
         }
     }
 }
