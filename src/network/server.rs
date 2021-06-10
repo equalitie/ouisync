@@ -6,7 +6,6 @@ use crate::{
     error::Result,
     index::{Index, InnerNode, LeafNode, RootNode},
 };
-use futures::future;
 
 pub struct Server {
     index: Index,
@@ -32,11 +31,14 @@ impl Server {
     }
 
     async fn push_snapshot(&mut self) -> Result<bool> {
-        let request = match self.stream.recv().await {
-            Some(request) => request,
-            None => return Ok(false),
-        };
+        while let Some(request) = self.stream.recv().await {
+            self.handle_request(request).await?;
+        }
 
+        Ok(false)
+    }
+
+    async fn handle_request(&mut self, request: Request) -> Result<()> {
         match request {
             Request::RootNode => {
                 let mut tx = self.index.pool.begin().await?;
@@ -54,6 +56,7 @@ impl Server {
                     let _ = self
                         .stream
                         .send(Response::InnerNodes { parent_hash, nodes });
+                    return Ok(());
                 }
 
                 let nodes = LeafNode::load_children(&mut tx, &parent_hash).await?;
@@ -63,9 +66,6 @@ impl Server {
             }
         }
 
-        // TODO:
-        future::pending().await
-
-        // Ok(true)
+        Ok(())
     }
 }

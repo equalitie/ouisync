@@ -11,7 +11,12 @@ use futures::{future, Stream, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_256};
 use sqlx::Row;
-use std::{collections::BTreeMap, convert::TryInto, iter::FromIterator, mem, slice};
+use std::{
+    collections::{btree_map, BTreeMap},
+    convert::TryInto,
+    iter::FromIterator,
+    mem, slice, vec,
+};
 
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct RootNode {
@@ -109,6 +114,12 @@ impl RootNode {
         Ok(Self { snapshot_id, hash })
     }
 
+    /// Check whether all the constituent nodes of this snapshot have been downloaded and stored
+    /// locally.
+    pub async fn check_complete(&self, tx: &mut db::Transaction) -> Result<bool> {
+        todo!()
+    }
+
     pub async fn remove_recursive(&self, tx: &mut db::Transaction) -> Result<()> {
         self.as_link().remove_recursive(0, tx).await
     }
@@ -173,24 +184,20 @@ impl InnerNodeMap {
         self.0.is_empty()
     }
 
-    pub fn get(&self, index: u8) -> Option<&InnerNode> {
-        self.0.get(&index)
+    pub fn get(&self, bucket: u8) -> Option<&InnerNode> {
+        self.0.get(&bucket)
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (u8, &InnerNode)> {
-        self.0.iter().map(|(index, node)| (*index, node))
+    pub fn iter(&self) -> InnerNodeMapIter {
+        InnerNodeMapIter(self.0.iter())
     }
 
-    pub fn into_iter(self) -> impl Iterator<Item = (u8, InnerNode)> {
-        self.0.into_iter()
+    pub fn insert(&mut self, bucket: u8, node: InnerNode) -> Option<InnerNode> {
+        self.0.insert(bucket, node)
     }
 
-    pub fn insert(&mut self, index: u8, node: InnerNode) -> Option<InnerNode> {
-        self.0.insert(index, node)
-    }
-
-    pub fn remove(&mut self, index: u8) -> Option<InnerNode> {
-        self.0.remove(&index)
+    pub fn remove(&mut self, bucket: u8) -> Option<InnerNode> {
+        self.0.remove(&bucket)
     }
 }
 
@@ -200,6 +207,24 @@ impl Extend<(u8, InnerNode)> for InnerNodeMap {
         T: IntoIterator<Item = (u8, InnerNode)>,
     {
         self.0.extend(iter)
+    }
+}
+
+impl IntoIterator for InnerNodeMap {
+    type Item = (u8, InnerNode);
+    type IntoIter = btree_map::IntoIter<u8, InnerNode>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a InnerNodeMap {
+    type Item = (u8, &'a InnerNode);
+    type IntoIter = InnerNodeMapIter<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
     }
 }
 
@@ -215,6 +240,16 @@ impl Hashable for InnerNodeMap {
     }
 }
 
+pub struct InnerNodeMapIter<'a>(btree_map::Iter<'a, u8, InnerNode>);
+
+impl<'a> Iterator for InnerNodeMapIter<'a> {
+    type Item = (u8, &'a InnerNode);
+
+    fn next(&mut self) -> Option<(u8, &'a InnerNode)> {
+        self.0.next().map(|(bucket, node)| (*bucket, node))
+    }
+}
+
 #[derive(Clone, Copy, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub struct LeafNode {
     locator: Hash,
@@ -226,7 +261,7 @@ impl LeafNode {
         &self.locator
     }
 
-    pub async fn insert(&self, parent: &Hash, tx: &mut db::Transaction) -> Result<()> {
+    pub async fn save(&self, tx: &mut db::Transaction, parent: &Hash) -> Result<()> {
         sqlx::query(
             "INSERT INTO snapshot_leaf_nodes (parent, locator, block_id)
              VALUES (?, ?, ?)",
@@ -234,7 +269,7 @@ impl LeafNode {
         .bind(parent)
         .bind(&self.locator)
         .bind(&self.block_id)
-        .execute(&mut *tx)
+        .execute(tx)
         .await?;
 
         Ok(())
@@ -297,7 +332,7 @@ impl LeafNodeSet {
         self.lookup(locator).ok().map(|index| &self.0[index])
     }
 
-    pub fn iter(&self) -> slice::Iter<LeafNode> {
+    pub fn iter(&self) -> impl Iterator<Item = &LeafNode> {
         self.0.iter()
     }
 
@@ -332,6 +367,15 @@ impl<'a> IntoIterator for &'a LeafNodeSet {
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.iter()
+    }
+}
+
+impl IntoIterator for LeafNodeSet {
+    type Item = LeafNode;
+    type IntoIter = vec::IntoIter<LeafNode>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
     }
 }
 
@@ -490,11 +534,18 @@ impl Link {
     }
 }
 
+/// Get the bucket for `locator` at the specified `inner_layer`.
+pub fn get_bucket(locator: &Hash, inner_layer: usize) -> u8 {
+    locator.as_ref()[inner_layer]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::crypto::Hashable;
     use assert_matches::assert_matches;
+    use rand::Rng;
+    use std::collections::HashMap;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn create_new_root_node() {
@@ -611,11 +662,124 @@ mod tests {
         assert_matches!(node1.save(&mut tx, &parent, bucket).await, Err(_)); // TODO: match concrete error type
     }
 
-    // TODO: test saving InnerNode requires parent to exists
+    #[ignore]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn check_complete() {
+        let pool = setup().await;
+        let mut tx = pool.begin().await.unwrap();
+
+        let mut rng = rand::thread_rng();
+        let snapshot = Snapshot::generate(&mut rng, 100);
+
+        let (root_node, _) = RootNode::create(&mut tx, &snapshot.replica_id, snapshot.root_hash)
+            .await
+            .unwrap();
+        assert!(!root_node.check_complete(&mut tx).await.unwrap());
+
+        // for layer in snapshot.inners
+    }
 
     async fn setup() -> db::Pool {
         let pool = db::Pool::connect(":memory:").await.unwrap();
         super::super::init(&pool).await.unwrap();
         pool
+    }
+
+    struct Snapshot {
+        replica_id: ReplicaId,
+        root_hash: Hash,
+        inners: [HashMap<BucketPath, InnerNodeMap>; INNER_LAYER_COUNT],
+        leaves: HashMap<BucketPath, LeafNodeSet>,
+    }
+
+    impl Snapshot {
+        fn generate<R: Rng>(rng: &mut R, max_leaf_count: usize) -> Self {
+            let replica_id = rng.gen();
+            let leaf_count = rng.gen_range(0..max_leaf_count);
+            let leaves = (0..leaf_count)
+                .map(|_| {
+                    let locator = rng.gen::<u64>().hash();
+                    let block_id = rng.gen();
+                    LeafNode { locator, block_id }
+                })
+                .collect();
+
+            Self::build(replica_id, leaves)
+        }
+
+        fn build(replica_id: ReplicaId, leaves: Vec<LeafNode>) -> Self {
+            let leaves =
+                leaves
+                    .into_iter()
+                    .fold(HashMap::<_, LeafNodeSet>::new(), |mut map, leaf| {
+                        map.entry(BucketPath::new(&leaf.locator, INNER_LAYER_COUNT))
+                            .or_default()
+                            .modify(&leaf.locator, &leaf.block_id);
+                        map
+                    });
+
+            let mut inners: [HashMap<_, InnerNodeMap>; INNER_LAYER_COUNT] = Default::default();
+
+            for (path, set) in &leaves {
+                add_inner_node(
+                    INNER_LAYER_COUNT - 1,
+                    &mut inners[INNER_LAYER_COUNT - 1],
+                    path,
+                    set.hash(),
+                );
+            }
+
+            for layer in (0..INNER_LAYER_COUNT - 1).rev() {
+                let (lo, hi) = inners.split_at_mut(layer + 1);
+
+                for (path, map) in &hi[0] {
+                    add_inner_node(layer, lo.last_mut().unwrap(), path, map.hash());
+                }
+            }
+
+            let root_hash = inners[0][&BucketPath::default()].hash();
+
+            Self {
+                replica_id,
+                root_hash,
+                inners,
+                leaves,
+            }
+        }
+    }
+
+    fn add_inner_node(
+        layer: usize,
+        maps: &mut HashMap<BucketPath, InnerNodeMap>,
+        path: &BucketPath,
+        hash: Hash,
+    ) {
+        let (bucket, path) = path.pop(layer);
+        maps.entry(path)
+            .or_default()
+            .insert(bucket, InnerNode { hash });
+    }
+
+    #[derive(Default, Clone, Copy, Eq, PartialEq, Hash)]
+    struct BucketPath([u8; INNER_LAYER_COUNT]);
+
+    impl BucketPath {
+        fn new(locator: &Hash, layer_count: usize) -> Self {
+            let mut path = Self(Default::default());
+            for (layer, bucket) in path.0.iter_mut().enumerate().take(layer_count) {
+                *bucket = get_bucket(locator, layer)
+            }
+            path
+        }
+
+        fn pop(&self, layer: usize) -> (u8, Self) {
+            let mut popped = *self;
+            let bucket = mem::replace(&mut popped.0[layer], 0);
+            (bucket, popped)
+        }
+
+        fn bucket(&self, layer: usize) -> u8 {
+            self.0[layer]
+        }
     }
 }

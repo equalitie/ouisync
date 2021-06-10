@@ -1,5 +1,5 @@
 use super::{
-    node::{InnerNode, InnerNodeMap, LeafNodeSet, ModifyStatus},
+    node::{self, InnerNode, InnerNodeMap, LeafNodeSet, ModifyStatus},
     INNER_LAYER_COUNT,
 };
 use crate::{
@@ -112,7 +112,7 @@ impl Path {
     }
 
     pub fn get_bucket(&self, inner_layer: usize) -> u8 {
-        self.locator.as_ref()[inner_layer]
+        node::get_bucket(&self.locator, inner_layer)
     }
 
     /// Recalculate layers from start_layer all the way to the root.

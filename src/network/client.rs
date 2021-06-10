@@ -63,15 +63,25 @@ impl Client {
             Response::InnerNodes { parent_hash, nodes } => {
                 let mut tx = self.index.pool.begin().await?;
 
-                for (index, node) in nodes.into_iter() {
-                    if node.save(&mut tx, &parent_hash, index).await? {
+                for (bucket, node) in nodes {
+                    if node.save(&mut tx, &parent_hash, bucket).await? {
                         let _ = self.stream.send(Request::ChildNodes(node.hash)).await;
                     }
                 }
 
                 tx.commit().await?;
             }
-            Response::LeafNodes { .. } => todo!(),
+            Response::LeafNodes { parent_hash, nodes } => {
+                let mut tx = self.index.pool.begin().await?;
+
+                for node in nodes {
+                    node.save(&mut tx, &parent_hash).await?;
+                }
+
+                // TODO: set the parent node(s) to complete
+
+                tx.commit().await?;
+            }
         }
 
         Ok(())

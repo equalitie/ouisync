@@ -127,7 +127,7 @@ impl Branch {
     ) -> Result<RootNode> {
         for (i, inner_layer) in path.inner.iter().enumerate() {
             if let Some(parent_hash) = path.hash_at_layer(i) {
-                for (bucket, node) in inner_layer.iter() {
+                for (bucket, node) in inner_layer {
                     node.save(tx, &parent_hash, bucket).await?;
                 }
             }
@@ -136,7 +136,7 @@ impl Branch {
         let layer = Path::total_layer_count() - 1;
         if let Some(parent_hash) = path.hash_at_layer(layer - 1) {
             for leaf in &path.leaves {
-                leaf.insert(&parent_hash, tx).await?;
+                leaf.save(tx, &parent_hash).await?;
             }
         }
 
