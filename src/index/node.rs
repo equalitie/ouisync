@@ -32,7 +32,7 @@ impl RootNode {
         tx: &mut db::Transaction,
         replica_id: &ReplicaId,
     ) -> Result<Self> {
-        let node = Self::load_all(&mut *tx, replica_id, 1).try_next().await?;
+        let node = Self::load_latest(&mut *tx, replica_id).await?;
 
         if let Some(node) = node {
             Ok(node)
@@ -41,6 +41,15 @@ impl RootNode {
                 .await?
                 .0)
         }
+    }
+
+    /// Returns the latest root node of the specified replica or `None` no snapshot of that replica
+    /// exists.
+    pub async fn load_latest(
+        tx: &mut db::Transaction,
+        replica_id: &ReplicaId,
+    ) -> Result<Option<Self>> {
+        Self::load_all(tx, replica_id, 1).try_next().await
     }
 
     /// Creates a root node of the specified replica. Returns the node itself and a flag indicating

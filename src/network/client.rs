@@ -42,7 +42,9 @@ impl Client {
         while let Some(response) = self.stream.recv().await {
             self.handle_response(response).await?;
 
-            // TODO: if snapshot complete, return true
+            if self.is_complete().await? {
+                return Ok(true);
+            }
         }
 
         Ok(false)
@@ -78,12 +80,25 @@ impl Client {
                     node.save(&mut tx, &parent_hash).await?;
                 }
 
-                // TODO: set the parent node(s) to complete
-
                 tx.commit().await?;
             }
         }
 
         Ok(())
+    }
+
+    async fn is_complete(&self) -> Result<bool> {
+        let mut tx = self.index.pool.begin().await?;
+
+        let is_complete =
+            if let Some(mut node) = RootNode::load_latest(&mut tx, &self.their_replica_id).await? {
+                node.check_complete(&mut tx).await?
+            } else {
+                false
+            };
+
+        tx.commit().await?;
+
+        Ok(is_complete)
     }
 }
