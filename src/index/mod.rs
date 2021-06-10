@@ -90,6 +90,9 @@ pub async fn init(pool: &db::Pool) -> Result<(), Error> {
              -- Hash of the children
              hash        BLOB NOT NULL,
 
+             -- Is this snapshot completely downloaded?
+             is_complete INTEGER NOT NULL,
+
              UNIQUE(replica_id, hash)
          );
 
@@ -102,6 +105,9 @@ pub async fn init(pool: &db::Pool) -> Result<(), Error> {
 
              -- Hash of the children
              hash        BLOB NOT NULL,
+
+             -- Is this subree completely downloaded?
+             is_complete INTEGER NOT NULL,
 
              UNIQUE(parent, bucket)
          );

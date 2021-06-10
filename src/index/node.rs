@@ -22,6 +22,7 @@ use std::{
 pub struct RootNode {
     pub snapshot_id: SnapshotId,
     pub hash: Hash,
+    is_complete: bool,
 }
 
 impl RootNode {
@@ -50,10 +51,10 @@ impl RootNode {
         hash: Hash,
     ) -> Result<(Self, bool)> {
         let row = sqlx::query(
-            "INSERT INTO snapshot_root_nodes (replica_id, hash)
-             VALUES (?, ?)
+            "INSERT INTO snapshot_root_nodes (replica_id, hash, is_complete)
+             VALUES (?, ?, 0)
              ON CONFLICT (replica_id, hash) DO NOTHING;
-             SELECT snapshot_id, CHANGES()
+             SELECT snapshot_id, is_complete, CHANGES()
              FROM snapshot_root_nodes
              WHERE replica_id = ? AND hash = ?",
         )
@@ -68,8 +69,9 @@ impl RootNode {
             RootNode {
                 snapshot_id: row.get(0),
                 hash,
+                is_complete: row.get(1),
             },
-            row.get::<u32, _>(1) > 0,
+            row.get::<u32, _>(2) > 0,
         ))
     }
 
@@ -81,7 +83,7 @@ impl RootNode {
         limit: u32,
     ) -> impl Stream<Item = Result<Self>> + 'a {
         sqlx::query(
-            "SELECT snapshot_id, hash
+            "SELECT snapshot_id, hash, is_complete
              FROM snapshot_root_nodes
              WHERE replica_id = ?
              ORDER BY snapshot_id DESC
@@ -92,6 +94,7 @@ impl RootNode {
         .map(|row| Self {
             snapshot_id: row.get(0),
             hash: row.get(1),
+            is_complete: row.get(2),
         })
         .fetch(tx)
         .err_into()
@@ -99,25 +102,55 @@ impl RootNode {
 
     pub async fn clone_with_new_hash(&self, tx: &mut db::Transaction, hash: Hash) -> Result<Self> {
         let snapshot_id = sqlx::query(
-            "INSERT INTO snapshot_root_nodes (replica_id, hash)
-             SELECT replica_id, ?
+            "INSERT INTO snapshot_root_nodes (replica_id, hash, is_complete)
+             SELECT replica_id, ?, ?
              FROM snapshot_root_nodes
              WHERE snapshot_id = ?
-             RETURNING snapshot_id;",
+             RETURNING snapshot_id",
         )
         .bind(&hash)
+        .bind(self.is_complete)
         .bind(self.snapshot_id)
         .fetch_one(tx)
         .await?
         .get(0);
 
-        Ok(Self { snapshot_id, hash })
+        Ok(Self {
+            snapshot_id,
+            hash,
+            is_complete: self.is_complete,
+        })
+    }
+
+    pub async fn update(&self, tx: &mut db::Transaction) -> Result<()> {
+        if !self.is_complete {
+            return Ok(());
+        }
+
+        sqlx::query(
+            "UPDATE snapshot_root_nodes
+             SET is_complete = 1
+             WHERE snapshot_id = ? AND is_complete = 0",
+        )
+        .bind(self.snapshot_id)
+        .execute(tx)
+        .await?;
+
+        Ok(())
     }
 
     /// Check whether all the constituent nodes of this snapshot have been downloaded and stored
     /// locally.
-    pub async fn check_complete(&self, tx: &mut db::Transaction) -> Result<bool> {
-        check_subtree_complete(tx, &self.hash, 0).await
+    pub async fn check_complete(&mut self, tx: &mut db::Transaction) -> Result<bool> {
+        if self.is_complete {
+            Ok(true)
+        } else if check_subtree_complete(tx, &self.hash, 0).await? {
+            self.is_complete = true;
+            self.update(tx).await?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
 
     pub async fn remove_recursive(&self, tx: &mut db::Transaction) -> Result<()> {
@@ -140,8 +173,16 @@ async fn check_subtree_complete(
         let nodes = InnerNode::load_children(tx, parent_hash).await?;
         let mut complete_children_count = 0usize;
 
-        for (_, node) in &nodes {
-            if check_subtree_complete(tx, &node.hash, layer + 1).await? {
+        for (bucket, node) in &nodes {
+            if node.is_complete {
+                complete_children_count += 1;
+            } else if check_subtree_complete(tx, &node.hash, layer + 1).await? {
+                let node = InnerNode {
+                    hash: node.hash,
+                    is_complete: true,
+                };
+                node.save(tx, parent_hash, bucket).await?;
+
                 complete_children_count += 1;
             }
         }
@@ -156,20 +197,37 @@ async fn check_subtree_complete(
 #[derive(Clone, Copy, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub struct InnerNode {
     pub hash: Hash,
+    /// Has the whole subree rooted at this node been completely downloaded?
+    ///
+    /// Note this is local-only information and is not transmitted to other replicas which is why
+    /// it is not serialized.
+    #[serde(skip)]
+    pub is_complete: bool,
 }
 
 impl InnerNode {
+    /// Creates new unsaved inner node with the specified hash.
+    pub fn new(hash: Hash) -> Self {
+        Self {
+            hash,
+            is_complete: false,
+        }
+    }
+
     /// Saves this inner node into the db. Returns whether a new node was created (`true`) or the
     /// node already existed (`false`).
     pub async fn save(&self, tx: &mut db::Transaction, parent: &Hash, bucket: u8) -> Result<bool> {
         let changes = sqlx::query(
-            "INSERT INTO snapshot_inner_nodes (parent, bucket, hash)
-             VALUES (?, ?, ?)
-             ON CONFLICT (parent, bucket) DO NOTHING",
+            "INSERT INTO snapshot_inner_nodes (parent, bucket, hash, is_complete)
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT (parent, bucket) DO UPDATE
+                 SET is_complete = 1
+                 WHERE is_complete = 0 AND excluded.is_complete = 1",
         )
         .bind(parent)
         .bind(bucket)
         .bind(&self.hash)
+        .bind(&self.is_complete)
         .execute(tx)
         .await?
         .rows_affected();
@@ -179,14 +237,17 @@ impl InnerNode {
 
     pub async fn load_children(tx: &mut db::Transaction, parent: &Hash) -> Result<InnerNodeMap> {
         sqlx::query(
-            "SELECT bucket, hash
+            "SELECT bucket, hash, is_complete
              FROM snapshot_inner_nodes
              WHERE parent = ?",
         )
         .bind(parent)
         .map(|row| {
             let bucket: u32 = row.get(0);
-            let node = Self { hash: row.get(1) };
+            let node = Self {
+                hash: row.get(1),
+                is_complete: row.get(2),
+            };
 
             (bucket, node)
         })
@@ -527,14 +588,17 @@ impl Link {
 
     async fn inner_children(&self, tx: &mut db::Transaction, parent: &Hash) -> Result<Vec<Link>> {
         sqlx::query(
-            "SELECT parent, hash
+            "SELECT parent, hash, is_complete
              FROM snapshot_inner_nodes
              WHERE parent = ?;",
         )
         .bind(parent)
         .map(|row| Link::ToInner {
             parent: row.get(0),
-            node: InnerNode { hash: row.get(1) },
+            node: InnerNode {
+                hash: row.get(1),
+                is_complete: row.get(2),
+            },
         })
         .fetch(tx)
         .try_collect()
@@ -634,7 +698,7 @@ mod tests {
 
         let mut tx = pool.begin().await.unwrap();
 
-        let node = InnerNode { hash };
+        let node = InnerNode::new(hash);
         assert!(node.save(&mut tx, &parent, bucket).await.unwrap());
 
         let nodes = InnerNode::load_children(&mut tx, &parent).await.unwrap();
@@ -655,10 +719,13 @@ mod tests {
 
         let mut tx = pool.begin().await.unwrap();
 
-        let node0 = InnerNode { hash };
+        let node0 = InnerNode::new(hash);
         node0.save(&mut tx, &parent, bucket).await.unwrap();
 
-        let node1 = InnerNode { hash };
+        let node1 = InnerNode {
+            hash,
+            is_complete: false,
+        };
         assert!(!node1.save(&mut tx, &parent, bucket).await.unwrap());
 
         let nodes = InnerNode::load_children(&mut tx, &parent).await.unwrap();
@@ -669,7 +736,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn create_conflicting_existing_inner_node() {
+    async fn attempt_to_create_conflicting_inner_node() {
         let pool = setup().await;
 
         let parent = rand::random::<u64>().hash();
@@ -685,11 +752,33 @@ mod tests {
 
         let mut tx = pool.begin().await.unwrap();
 
-        let node0 = InnerNode { hash: hash0 };
+        let node0 = InnerNode::new(hash0);
         node0.save(&mut tx, &parent, bucket).await.unwrap();
 
-        let node1 = InnerNode { hash: hash1 };
+        let node1 = InnerNode::new(hash1);
         assert_matches!(node1.save(&mut tx, &parent, bucket).await, Err(_)); // TODO: match concrete error type
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn update_inner_node_to_complete() {
+        let pool = setup().await;
+        let mut tx = pool.begin().await.unwrap();
+
+        let parent = rand::random::<u64>().hash();
+        let bucket = rand::random();
+        let hash = rand::random::<u64>().hash();
+
+        let mut node = InnerNode::new(hash);
+        node.save(&mut tx, &parent, bucket).await.unwrap();
+
+        let nodes = InnerNode::load_children(&mut tx, &parent).await.unwrap();
+        assert!(!nodes.get(bucket).unwrap().is_complete);
+
+        node.is_complete = true;
+        node.save(&mut tx, &parent, bucket).await.unwrap();
+
+        let nodes = InnerNode::load_children(&mut tx, &parent).await.unwrap();
+        assert!(nodes.get(bucket).unwrap().is_complete);
     }
 
     #[proptest]
@@ -708,9 +797,10 @@ mod tests {
 
         let snapshot = Snapshot::generate(&mut rng, leaf_count);
 
-        let (root_node, _) = RootNode::create(&mut tx, &snapshot.replica_id, snapshot.root_hash)
-            .await
-            .unwrap();
+        let (mut root_node, _) =
+            RootNode::create(&mut tx, &snapshot.replica_id, snapshot.root_hash)
+                .await
+                .unwrap();
 
         if leaf_count > 0 {
             assert!(!root_node.check_complete(&mut tx).await.unwrap());
@@ -844,7 +934,7 @@ mod tests {
         let (bucket, parent_path) = path.pop(inner_layer);
         maps.entry(parent_path)
             .or_default()
-            .insert(bucket, InnerNode { hash });
+            .insert(bucket, InnerNode::new(hash));
     }
 
     #[derive(Default, Clone, Copy, Eq, PartialEq, Hash, Debug)]
