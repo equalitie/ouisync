@@ -3,6 +3,7 @@ use super::{
     message_broker::ClientStream,
 };
 use crate::{
+    crypto::Hashable,
     error::Result,
     index::{Index, RootNode},
     replica_id::ReplicaId,
@@ -63,6 +64,11 @@ impl Client {
                 }
             }
             Response::InnerNodes { parent_hash, nodes } => {
+                if parent_hash != nodes.hash() {
+                    log::warn!("inner nodes parent hash mismatch");
+                    return Ok(());
+                }
+
                 let mut tx = self.index.pool.begin().await?;
 
                 for (bucket, node) in nodes {
@@ -74,6 +80,11 @@ impl Client {
                 tx.commit().await?;
             }
             Response::LeafNodes { parent_hash, nodes } => {
+                if parent_hash != nodes.hash() {
+                    log::warn!("leaf nodes parent hash mismatch");
+                    return Ok(());
+                }
+
                 let mut tx = self.index.pool.begin().await?;
 
                 for node in nodes {

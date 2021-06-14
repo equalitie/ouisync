@@ -1,7 +1,7 @@
 use super::{
     super::{SnapshotId, INNER_LAYER_COUNT},
     inner::{InnerNode, InnerNodeMap},
-    leaf::LeafNode,
+    leaf::{LeafNode, LeafNodeSet},
     link::Link,
 };
 use crate::{
@@ -192,9 +192,28 @@ async fn check_subtree_complete(
             }
         }
 
-        Ok(nodes.hash() == *parent_hash && complete_children_count == nodes.len())
+        if nodes.is_empty() {
+            // If the child nodes are empty, there are two possibilities: either there are no
+            // children or they haven't been downloaded yet. We distinguish between them by checking
+            // whether the parent hash is equal to the hash of empty child node collection.
+            Ok(*parent_hash == InnerNodeMap::default().hash())
+            // If the child nodes are not empty, we assume we already have all of them because we
+            // check their hash against the parent hash when we download them and accept them only
+            // when they match. This assumptions allows us to skip the potentially expensive hash
+            // calculation here.
+        } else {
+            Ok(complete_children_count == nodes.len())
+        }
     } else {
         let nodes = LeafNode::load_children(tx, parent_hash).await?;
-        Ok(nodes.hash() == *parent_hash)
+
+        if nodes.is_empty() {
+            // Same as in the inner nodes case, we need to distinguish between the case of not
+            // having the child nodes and them not being downloaded yet.
+            Ok(*parent_hash == LeafNodeSet::default().hash())
+        } else {
+            // Same here - if we have at least one, we have them all.
+            Ok(true)
+        }
     }
 }

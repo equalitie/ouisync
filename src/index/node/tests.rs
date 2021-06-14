@@ -179,8 +179,9 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
 
             for (bucket, node) in nodes {
                 node.save(&mut tx, parent_hash, bucket).await.unwrap();
-                assert!(!root_node.check_complete(&mut tx).await.unwrap());
             }
+
+            assert!(!root_node.check_complete(&mut tx).await.unwrap());
         }
     }
 
@@ -192,9 +193,10 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
         for node in nodes {
             node.save(&mut tx, parent_hash).await.unwrap();
             unsaved_leaves -= 1;
-            if unsaved_leaves > 0 {
-                assert!(!root_node.check_complete(&mut tx).await.unwrap());
-            }
+        }
+
+        if unsaved_leaves > 0 {
+            assert!(!root_node.check_complete(&mut tx).await.unwrap());
         }
     }
 
