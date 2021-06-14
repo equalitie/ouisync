@@ -133,14 +133,13 @@ async fn update_inner_node_to_complete() {
     let bucket = rand::random();
     let hash = rand::random::<u64>().hash();
 
-    let mut node = InnerNode::new(hash);
+    let node = InnerNode::new(hash);
     node.save(&mut tx, &parent, bucket).await.unwrap();
 
     let nodes = InnerNode::load_children(&mut tx, &parent).await.unwrap();
     assert!(!nodes.get(bucket).unwrap().is_complete);
 
-    node.is_complete = true;
-    node.save(&mut tx, &parent, bucket).await.unwrap();
+    InnerNode::set_complete(&mut tx, &hash).await.unwrap();
 
     let nodes = InnerNode::load_children(&mut tx, &parent).await.unwrap();
     assert!(nodes.get(bucket).unwrap().is_complete);
@@ -167,7 +166,11 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
         .unwrap();
 
     if leaf_count > 0 {
-        assert!(!root_node.check_complete(&mut tx).await.unwrap());
+        super::detect_complete_snapshots(&mut tx, root_node.hash)
+            .await
+            .unwrap();
+        root_node.reload(&mut tx).await.unwrap();
+        assert!(!root_node.is_complete);
     }
 
     // TODO: consider randomizing the order the nodes are saved so it's not always
@@ -181,7 +184,11 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
                 node.save(&mut tx, parent_hash, bucket).await.unwrap();
             }
 
-            assert!(!root_node.check_complete(&mut tx).await.unwrap());
+            super::detect_complete_snapshots(&mut tx, *parent_hash)
+                .await
+                .unwrap();
+            root_node.reload(&mut tx).await.unwrap();
+            assert!(!root_node.is_complete);
         }
     }
 
@@ -195,12 +202,17 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
             unsaved_leaves -= 1;
         }
 
+        super::detect_complete_snapshots(&mut tx, *parent_hash)
+            .await
+            .unwrap();
+        root_node.reload(&mut tx).await.unwrap();
+
         if unsaved_leaves > 0 {
-            assert!(!root_node.check_complete(&mut tx).await.unwrap());
+            assert!(!root_node.is_complete);
         }
     }
 
-    assert!(root_node.check_complete(&mut tx).await.unwrap());
+    assert!(root_node.is_complete);
 }
 
 async fn setup() -> db::Pool {

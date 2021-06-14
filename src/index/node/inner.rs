@@ -3,7 +3,7 @@ use crate::{
     db,
     error::Result,
 };
-use futures::{future, TryStreamExt};
+use futures::{future, Stream, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_256};
 use sqlx::Row;
@@ -32,27 +32,7 @@ impl InnerNode {
         }
     }
 
-    /// Saves this inner node into the db. Returns whether a new node was created (`true`) or the
-    /// node already existed (`false`).
-    pub async fn save(&self, tx: &mut db::Transaction, parent: &Hash, bucket: u8) -> Result<bool> {
-        let changes = sqlx::query(
-            "INSERT INTO snapshot_inner_nodes (parent, bucket, hash, is_complete)
-             VALUES (?, ?, ?, ?)
-             ON CONFLICT (parent, bucket) DO UPDATE
-                 SET is_complete = 1
-                 WHERE is_complete = 0 AND excluded.is_complete = 1",
-        )
-        .bind(parent)
-        .bind(bucket)
-        .bind(&self.hash)
-        .bind(&self.is_complete)
-        .execute(tx)
-        .await?
-        .rows_affected();
-
-        Ok(changes > 0)
-    }
-
+    /// Load all inner nodes with the specified parent hash.
     pub async fn load_children(tx: &mut db::Transaction, parent: &Hash) -> Result<InnerNodeMap> {
         sqlx::query(
             "SELECT bucket, hash, is_complete
@@ -77,6 +57,46 @@ impl InnerNode {
         .try_collect()
         .await
         .map_err(From::from)
+    }
+
+    /// Load parent hashes of all inner nodes with the specifed hash.
+    pub fn load_parent_hashes<'a>(
+        tx: &'a mut db::Transaction,
+        hash: &'a Hash,
+    ) -> impl Stream<Item = Result<Hash>> + 'a {
+        sqlx::query("SELECT parent FROM snapshot_inner_nodes WHERE hash = ?")
+            .bind(hash)
+            .map(|row| row.get(0))
+            .fetch(tx)
+            .err_into()
+    }
+
+    /// Set all inner nodes with the specified hash as complete.
+    pub async fn set_complete(tx: &mut db::Transaction, hash: &Hash) -> Result<()> {
+        sqlx::query("UPDATE snapshot_inner_nodes SET is_complete = 1 WHERE hash = ?")
+            .bind(hash)
+            .execute(tx)
+            .await?;
+
+        Ok(())
+    }
+
+    /// Saves this inner node into the db. Returns whether a new node was created (`true`) or the
+    /// node already existed (`false`).
+    pub async fn save(&self, tx: &mut db::Transaction, parent: &Hash, bucket: u8) -> Result<bool> {
+        let changes = sqlx::query(
+            "INSERT INTO snapshot_inner_nodes (parent, bucket, hash, is_complete)
+             VALUES (?, ?, ?, 0)
+             ON CONFLICT (parent, bucket) DO NOTHING",
+        )
+        .bind(parent)
+        .bind(bucket)
+        .bind(&self.hash)
+        .execute(tx)
+        .await?
+        .rows_affected();
+
+        Ok(changes > 0)
     }
 }
 
@@ -140,6 +160,7 @@ impl Hashable for InnerNodeMap {
     fn hash(&self) -> Hash {
         // XXX: Have some cryptographer check this whether there are no attacks.
         let mut hasher = Sha3_256::new();
+        hasher.update(&[self.len() as u8]);
         for (bucket, node) in self.iter() {
             hasher.update(bucket.to_le_bytes());
             hasher.update(node.hash);

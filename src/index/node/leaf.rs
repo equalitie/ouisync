@@ -54,6 +54,16 @@ impl LeafNode {
         .into_iter()
         .collect())
     }
+
+    pub async fn has_children(tx: &mut db::Transaction, parent: &Hash) -> Result<bool> {
+        Ok(
+            sqlx::query("SELECT 1 FROM snapshot_leaf_nodes WHERE parent = ?")
+                .bind(parent)
+                .fetch_optional(tx)
+                .await?
+                .is_some(),
+        )
+    }
 }
 
 /// Collection that acts as a ordered set of `LeafNode`s
@@ -146,7 +156,7 @@ impl Hashable for LeafNodeSet {
     fn hash(&self) -> Hash {
         let mut hasher = Sha3_256::new();
         // XXX: Is updating with length enough to prevent attacks?
-        hasher.update((self.len() as u32).to_le_bytes());
+        hasher.update((self.len() as u64).to_le_bytes());
         for node in self.iter() {
             hasher.update(node.locator());
             hasher.update(node.block_id);

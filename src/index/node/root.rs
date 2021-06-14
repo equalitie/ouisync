@@ -1,16 +1,10 @@
-use super::{
-    super::{SnapshotId, INNER_LAYER_COUNT},
-    inner::{InnerNode, InnerNodeMap},
-    leaf::{LeafNode, LeafNodeSet},
-    link::Link,
-};
+use super::{super::SnapshotId, inner::InnerNodeMap, link::Link};
 use crate::{
     crypto::{Hash, Hashable},
     db,
     error::Result,
     replica_id::ReplicaId,
 };
-use async_recursion::async_recursion;
 use futures::{Stream, TryStreamExt};
 use sqlx::Row;
 
@@ -18,7 +12,7 @@ use sqlx::Row;
 pub struct RootNode {
     pub snapshot_id: SnapshotId,
     pub hash: Hash,
-    is_complete: bool,
+    pub is_complete: bool,
 }
 
 impl RootNode {
@@ -55,9 +49,11 @@ impl RootNode {
         replica_id: &ReplicaId,
         hash: Hash,
     ) -> Result<(Self, bool)> {
+        let is_complete = hash == InnerNodeMap::default().hash();
+
         let row = sqlx::query(
             "INSERT INTO snapshot_root_nodes (replica_id, hash, is_complete)
-             VALUES (?, ?, 0)
+             VALUES (?, ?, ?)
              ON CONFLICT (replica_id, hash) DO NOTHING;
              SELECT snapshot_id, is_complete, CHANGES()
              FROM snapshot_root_nodes
@@ -65,6 +61,7 @@ impl RootNode {
         )
         .bind(replica_id)
         .bind(&hash)
+        .bind(is_complete)
         .bind(replica_id)
         .bind(&hash)
         .fetch_one(tx)
@@ -105,16 +102,24 @@ impl RootNode {
         .err_into()
     }
 
+    pub async fn set_complete(tx: &mut db::Transaction, hash: &Hash) -> Result<()> {
+        sqlx::query("UPDATE snapshot_root_nodes SET is_complete = 1 WHERE hash = ?")
+            .bind(hash)
+            .execute(tx)
+            .await?;
+
+        Ok(())
+    }
+
     pub async fn clone_with_new_hash(&self, tx: &mut db::Transaction, hash: Hash) -> Result<Self> {
         let snapshot_id = sqlx::query(
             "INSERT INTO snapshot_root_nodes (replica_id, hash, is_complete)
-             SELECT replica_id, ?, ?
+             SELECT replica_id, ?, is_complete
              FROM snapshot_root_nodes
              WHERE snapshot_id = ?
              RETURNING snapshot_id",
         )
         .bind(&hash)
-        .bind(self.is_complete)
         .bind(self.snapshot_id)
         .fetch_one(tx)
         .await?
@@ -127,35 +132,17 @@ impl RootNode {
         })
     }
 
-    pub async fn update(&self, tx: &mut db::Transaction) -> Result<()> {
-        if !self.is_complete {
-            return Ok(());
-        }
+    /// Reload this root node from the db. Currently used only in tests.
+    #[cfg(test)]
+    pub async fn reload(&mut self, tx: &mut db::Transaction) -> Result<()> {
+        let row = sqlx::query("SELECT is_complete FROM snapshot_root_nodes WHERE snapshot_id = ?")
+            .bind(self.snapshot_id)
+            .fetch_one(tx)
+            .await?;
 
-        sqlx::query(
-            "UPDATE snapshot_root_nodes
-             SET is_complete = 1
-             WHERE snapshot_id = ? AND is_complete = 0",
-        )
-        .bind(self.snapshot_id)
-        .execute(tx)
-        .await?;
+        self.is_complete = row.get(0);
 
         Ok(())
-    }
-
-    /// Check whether all the constituent nodes of this snapshot have been downloaded and stored
-    /// locally.
-    pub async fn check_complete(&mut self, tx: &mut db::Transaction) -> Result<bool> {
-        if self.is_complete {
-            Ok(true)
-        } else if check_subtree_complete(tx, &self.hash, 0).await? {
-            self.is_complete = true;
-            self.update(tx).await?;
-            Ok(true)
-        } else {
-            Ok(false)
-        }
     }
 
     pub async fn remove_recursive(&self, tx: &mut db::Transaction) -> Result<()> {
@@ -164,56 +151,5 @@ impl RootNode {
 
     fn as_link(&self) -> Link {
         Link::ToRoot { node: self.clone() }
-    }
-}
-
-// TODO: find a way to avoid the recursion
-#[async_recursion]
-async fn check_subtree_complete(
-    tx: &mut db::Transaction,
-    parent_hash: &Hash,
-    layer: usize,
-) -> Result<bool> {
-    if layer < INNER_LAYER_COUNT {
-        let nodes = InnerNode::load_children(tx, parent_hash).await?;
-        let mut complete_children_count = 0usize;
-
-        for (bucket, node) in &nodes {
-            if node.is_complete {
-                complete_children_count += 1;
-            } else if check_subtree_complete(tx, &node.hash, layer + 1).await? {
-                let node = InnerNode {
-                    hash: node.hash,
-                    is_complete: true,
-                };
-                node.save(tx, parent_hash, bucket).await?;
-
-                complete_children_count += 1;
-            }
-        }
-
-        if nodes.is_empty() {
-            // If the child nodes are empty, there are two possibilities: either there are no
-            // children or they haven't been downloaded yet. We distinguish between them by checking
-            // whether the parent hash is equal to the hash of empty child node collection.
-            Ok(*parent_hash == InnerNodeMap::default().hash())
-            // If the child nodes are not empty, we assume we already have all of them because we
-            // check their hash against the parent hash when we download them and accept them only
-            // when they match. This assumptions allows us to skip the potentially expensive hash
-            // calculation here.
-        } else {
-            Ok(complete_children_count == nodes.len())
-        }
-    } else {
-        let nodes = LeafNode::load_children(tx, parent_hash).await?;
-
-        if nodes.is_empty() {
-            // Same as in the inner nodes case, we need to distinguish between the case of not
-            // having the child nodes and them not being downloaded yet.
-            Ok(*parent_hash == LeafNodeSet::default().hash())
-        } else {
-            // Same here - if we have at least one, we have them all.
-            Ok(true)
-        }
     }
 }

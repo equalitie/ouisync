@@ -5,7 +5,7 @@ use super::{
 use crate::{
     crypto::Hashable,
     error::Result,
-    index::{Index, RootNode},
+    index::{self, Index, RootNode},
     replica_id::ReplicaId,
 };
 
@@ -52,16 +52,20 @@ impl Client {
     }
 
     async fn handle_response(&mut self, response: Response) -> Result<()> {
-        match response {
+        let mut tx = self.index.pool.begin().await?;
+
+        // TODO: have the `InnerNodes` response contain the layer number to simplify things
+
+        let parent_hash = match response {
             Response::RootNode(hash) => {
-                let mut tx = self.index.pool.begin().await?;
                 let (node, changed) =
                     RootNode::create(&mut tx, &self.their_replica_id, hash).await?;
-                tx.commit().await?;
 
                 if changed {
                     let _ = self.stream.send(Request::ChildNodes(node.hash)).await;
                 }
+
+                hash
             }
             Response::InnerNodes { parent_hash, nodes } => {
                 if parent_hash != nodes.hash() {
@@ -69,15 +73,13 @@ impl Client {
                     return Ok(());
                 }
 
-                let mut tx = self.index.pool.begin().await?;
-
                 for (bucket, node) in nodes {
                     if node.save(&mut tx, &parent_hash, bucket).await? {
                         let _ = self.stream.send(Request::ChildNodes(node.hash)).await;
                     }
                 }
 
-                tx.commit().await?;
+                parent_hash
             }
             Response::LeafNodes { parent_hash, nodes } => {
                 if parent_hash != nodes.hash() {
@@ -85,31 +87,26 @@ impl Client {
                     return Ok(());
                 }
 
-                let mut tx = self.index.pool.begin().await?;
-
                 for node in nodes {
                     node.save(&mut tx, &parent_hash).await?;
                 }
 
-                tx.commit().await?;
+                parent_hash
             }
-        }
+        };
+
+        index::detect_complete_snapshots(&mut tx, parent_hash).await?;
+
+        tx.commit().await?;
 
         Ok(())
     }
 
     async fn is_complete(&self) -> Result<bool> {
         let mut tx = self.index.pool.begin().await?;
-
-        let is_complete =
-            if let Some(mut node) = RootNode::load_latest(&mut tx, &self.their_replica_id).await? {
-                node.check_complete(&mut tx).await?
-            } else {
-                false
-            };
-
-        tx.commit().await?;
-
-        Ok(is_complete)
+        Ok(RootNode::load_latest(&mut tx, &self.their_replica_id)
+            .await?
+            .map(|node| node.is_complete)
+            .unwrap_or(false))
     }
 }
