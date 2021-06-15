@@ -2,6 +2,8 @@ mod branch;
 mod node;
 mod path;
 
+#[cfg(test)]
+pub use self::node::test_utils as node_test_utils;
 pub use self::{
     branch::Branch,
     node::{

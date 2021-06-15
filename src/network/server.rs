@@ -56,11 +56,12 @@ impl Server {
 
                 let nodes = InnerNode::load_children(&mut tx, &parent_hash).await?;
                 if !nodes.is_empty() {
-                    let _ = self.stream.send(Response::InnerNodes {
+                    let response = Response::InnerNodes {
                         parent_hash,
                         inner_layer,
                         nodes,
-                    });
+                    };
+                    let _ = self.stream.send(response).await;
                 }
             }
             Request::LeafNodes { parent_hash } => {
@@ -68,7 +69,10 @@ impl Server {
 
                 let nodes = LeafNode::load_children(&mut tx, &parent_hash).await?;
                 if !nodes.is_empty() {
-                    let _ = self.stream.send(Response::LeafNodes { parent_hash, nodes });
+                    let _ = self
+                        .stream
+                        .send(Response::LeafNodes { parent_hash, nodes })
+                        .await;
                 }
             }
         }

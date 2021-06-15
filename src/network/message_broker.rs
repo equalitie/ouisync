@@ -17,8 +17,8 @@ use tokio::{
 
 /// A stream for receiving Requests and sending Responses
 pub struct ServerStream {
-    tx: mpsc::Sender<Command>,
-    rx: mpsc::Receiver<Request>,
+    pub(super) tx: mpsc::Sender<Command>,
+    pub(super) rx: mpsc::Receiver<Request>,
 }
 
 impl ServerStream {
@@ -39,8 +39,8 @@ impl ServerStream {
 
 /// A stream for sending Requests and receiving Responses
 pub struct ClientStream {
-    tx: mpsc::Sender<Command>,
-    rx: mpsc::Receiver<Response>,
+    pub(super) tx: mpsc::Sender<Command>,
+    pub(super) rx: mpsc::Receiver<Response>,
 }
 
 impl ClientStream {
@@ -232,14 +232,14 @@ async fn read(
     }
 }
 
-enum Command {
+pub(super) enum Command {
     AddConnection(TcpObjectStream),
     SendMessage(Message),
     CloseReader,
 }
 
 impl Command {
-    fn into_send_message(self) -> Message {
+    pub(super) fn into_send_message(self) -> Message {
         match self {
             Self::SendMessage(message) => message,
             _ => panic!("Command is not SendMessage"),
