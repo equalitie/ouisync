@@ -48,16 +48,23 @@ impl Server {
 
                 let _ = self.stream.send(Response::RootNode(node.hash)).await;
             }
-            Request::ChildNodes(parent_hash) => {
+            Request::InnerNodes {
+                parent_hash,
+                inner_layer,
+            } => {
                 let mut tx = self.index.pool.begin().await?;
 
                 let nodes = InnerNode::load_children(&mut tx, &parent_hash).await?;
                 if !nodes.is_empty() {
-                    let _ = self
-                        .stream
-                        .send(Response::InnerNodes { parent_hash, nodes });
-                    return Ok(());
+                    let _ = self.stream.send(Response::InnerNodes {
+                        parent_hash,
+                        inner_layer,
+                        nodes,
+                    });
                 }
+            }
+            Request::LeafNodes { parent_hash } => {
+                let mut tx = self.index.pool.begin().await?;
 
                 let nodes = LeafNode::load_children(&mut tx, &parent_hash).await?;
                 if !nodes.is_empty() {

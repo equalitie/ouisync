@@ -5,7 +5,7 @@ use super::{
 use crate::{
     crypto::Hashable,
     error::Result,
-    index::{self, Index, RootNode},
+    index::{self, Index, RootNode, INNER_LAYER_COUNT},
     replica_id::ReplicaId,
 };
 
@@ -56,18 +56,28 @@ impl Client {
 
         // TODO: have the `InnerNodes` response contain the layer number to simplify things
 
-        let parent_hash = match response {
+        let (parent_hash, layer) = match response {
             Response::RootNode(hash) => {
                 let (node, changed) =
                     RootNode::create(&mut tx, &self.their_replica_id, hash).await?;
 
                 if changed {
-                    let _ = self.stream.send(Request::ChildNodes(node.hash)).await;
+                    let _ = self
+                        .stream
+                        .send(Request::InnerNodes {
+                            parent_hash: node.hash,
+                            inner_layer: 0,
+                        })
+                        .await;
                 }
 
-                hash
+                (hash, 0)
             }
-            Response::InnerNodes { parent_hash, nodes } => {
+            Response::InnerNodes {
+                parent_hash,
+                inner_layer,
+                nodes,
+            } => {
                 if parent_hash != nodes.hash() {
                     log::warn!("inner nodes parent hash mismatch");
                     return Ok(());
@@ -75,11 +85,22 @@ impl Client {
 
                 for (bucket, node) in nodes {
                     if node.save(&mut tx, &parent_hash, bucket).await? {
-                        let _ = self.stream.send(Request::ChildNodes(node.hash)).await;
+                        let message = if inner_layer < INNER_LAYER_COUNT - 1 {
+                            Request::InnerNodes {
+                                parent_hash: node.hash,
+                                inner_layer: inner_layer + 1,
+                            }
+                        } else {
+                            Request::LeafNodes {
+                                parent_hash: node.hash,
+                            }
+                        };
+
+                        let _ = self.stream.send(message).await;
                     }
                 }
 
-                parent_hash
+                (parent_hash, inner_layer)
             }
             Response::LeafNodes { parent_hash, nodes } => {
                 if parent_hash != nodes.hash() {
@@ -91,11 +112,11 @@ impl Client {
                     node.save(&mut tx, &parent_hash).await?;
                 }
 
-                parent_hash
+                (parent_hash, INNER_LAYER_COUNT)
             }
         };
 
-        index::detect_complete_snapshots(&mut tx, parent_hash).await?;
+        index::detect_complete_snapshots(&mut tx, parent_hash, layer).await?;
 
         tx.commit().await?;
 

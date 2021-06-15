@@ -4,7 +4,10 @@ mod path;
 
 pub use self::{
     branch::Branch,
-    node::{detect_complete_snapshots, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, RootNode},
+    node::{
+        detect_complete_snapshots, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, RootNode,
+        INNER_LAYER_COUNT,
+    },
 };
 
 use crate::{
@@ -19,9 +22,6 @@ use std::{
     sync::Arc,
 };
 use tokio::sync::Mutex;
-
-/// Number of layers in the tree excluding the layer with root and the layer with leaf nodes.
-const INNER_LAYER_COUNT: usize = 3;
 
 type SnapshotId = u32;
 

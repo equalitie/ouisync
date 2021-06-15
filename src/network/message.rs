@@ -10,17 +10,23 @@ pub enum Request {
     // TODO: include version vector so the recipient sends the reply only when
     //       they have anything new.
     RootNode,
-    /// Request child nodes with the given parent hash.
-    ChildNodes(Hash),
+    /// Request inner nodes with the given parent hash and inner layer.
+    InnerNodes {
+        parent_hash: Hash,
+        inner_layer: usize,
+    },
+    /// Request leaf nodes with the given parent hash.
+    LeafNodes { parent_hash: Hash },
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Response {
     /// Send the latest root node of this replica to another replica.
     RootNode(Hash),
-    /// Send inner nodes with the given parent hash.
+    /// Send inner nodes with the given parent hash and inner layer.
     InnerNodes {
         parent_hash: Hash,
+        inner_layer: usize,
         nodes: InnerNodeMap,
     },
     /// Send leaf nodes with the given parent hash.

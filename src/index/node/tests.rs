@@ -1,4 +1,4 @@
-use super::{super::INNER_LAYER_COUNT, *};
+use super::{inner::INNER_LAYER_COUNT, *};
 use crate::{crypto::Hashable, db, replica_id::ReplicaId, test_utils};
 use assert_matches::assert_matches;
 use futures::TryStreamExt;
@@ -166,7 +166,7 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
         .unwrap();
 
     if leaf_count > 0 {
-        super::detect_complete_snapshots(&mut tx, root_node.hash)
+        super::detect_complete_snapshots(&mut tx, root_node.hash, 0)
             .await
             .unwrap();
         root_node.reload(&mut tx).await.unwrap();
@@ -184,7 +184,7 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
                 node.save(&mut tx, parent_hash, bucket).await.unwrap();
             }
 
-            super::detect_complete_snapshots(&mut tx, *parent_hash)
+            super::detect_complete_snapshots(&mut tx, *parent_hash, inner_layer)
                 .await
                 .unwrap();
             root_node.reload(&mut tx).await.unwrap();
@@ -202,7 +202,7 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
             unsaved_leaves -= 1;
         }
 
-        super::detect_complete_snapshots(&mut tx, *parent_hash)
+        super::detect_complete_snapshots(&mut tx, *parent_hash, INNER_LAYER_COUNT)
             .await
             .unwrap();
         root_node.reload(&mut tx).await.unwrap();

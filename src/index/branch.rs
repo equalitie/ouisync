@@ -4,9 +4,8 @@
 #![allow(arithmetic_overflow)]
 
 use super::{
-    node::{InnerNode, LeafNode, RootNode},
+    node::{InnerNode, LeafNode, RootNode, INNER_LAYER_COUNT},
     path::Path,
-    INNER_LAYER_COUNT,
 };
 use crate::{
     block::BlockId,

@@ -1,4 +1,8 @@
-use super::{super::INNER_LAYER_COUNT, inner::InnerNode, leaf::LeafNode, root::RootNode};
+use super::{
+    inner::{InnerNode, INNER_LAYER_COUNT},
+    leaf::LeafNode,
+    root::RootNode,
+};
 use crate::{crypto::Hash, db, error::Result};
 use async_recursion::async_recursion;
 use futures::TryStreamExt;

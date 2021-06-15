@@ -12,6 +12,9 @@ use std::{
     convert::TryInto,
 };
 
+/// Number of layers in the tree excluding the layer with root and the layer with leaf nodes.
+pub const INNER_LAYER_COUNT: usize = 3;
+
 #[derive(Clone, Copy, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub struct InnerNode {
     pub hash: Hash,

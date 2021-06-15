@@ -1,7 +1,4 @@
-use super::{
-    node::{self, InnerNode, InnerNodeMap, LeafNodeSet, ModifyStatus},
-    INNER_LAYER_COUNT,
-};
+use super::node::{self, InnerNode, InnerNodeMap, LeafNodeSet, ModifyStatus, INNER_LAYER_COUNT};
 use crate::{
     block::BlockId,
     crypto::{Hash, Hashable},
