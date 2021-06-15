@@ -4,6 +4,8 @@ mod message_broker;
 mod object_stream;
 mod replica_discovery;
 mod server;
+#[cfg(test)]
+mod tests;
 
 use self::{
     message_broker::MessageBroker,
