@@ -85,7 +85,7 @@ pub unsafe extern "C" fn directory_remove(
 
 #[no_mangle]
 pub unsafe extern "C" fn directory_close(handle: UniqueHandle<Directory>) {
-    let _ = handle.release();
+    handle.release();
 }
 
 #[no_mangle]

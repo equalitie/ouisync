@@ -146,7 +146,7 @@ impl Inner {
             }
 
             let replica_addr = SocketAddr::new(addr.ip(), listener_port);
-            let _ = tx.send((id, replica_addr)).await;
+            tx.send((id, replica_addr)).await.unwrap_or(());
         }
     }
 

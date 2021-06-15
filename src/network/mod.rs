@@ -204,7 +204,7 @@ impl Inner {
         self.message_brokers.lock().await.remove(&replica_id);
 
         if let Some(discovery_id) = discovery_id {
-            let _ = self.forget_tx.send(discovery_id).await;
+            self.forget_tx.send(discovery_id).await.unwrap_or(())
         }
     }
 }

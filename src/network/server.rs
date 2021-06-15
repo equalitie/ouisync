@@ -46,7 +46,10 @@ impl Server {
                     RootNode::load_latest_or_create(&mut tx, &self.index.this_replica_id).await?;
                 tx.commit().await?;
 
-                let _ = self.stream.send(Response::RootNode(node.hash)).await;
+                self.stream
+                    .send(Response::RootNode(node.hash))
+                    .await
+                    .unwrap_or(())
             }
             Request::InnerNodes {
                 parent_hash,
@@ -61,7 +64,7 @@ impl Server {
                         inner_layer,
                         nodes,
                     };
-                    let _ = self.stream.send(response).await;
+                    self.stream.send(response).await.unwrap_or(())
                 }
             }
             Request::LeafNodes { parent_hash } => {
@@ -69,10 +72,10 @@ impl Server {
 
                 let nodes = LeafNode::load_children(&mut tx, &parent_hash).await?;
                 if !nodes.is_empty() {
-                    let _ = self
-                        .stream
+                    self.stream
                         .send(Response::LeafNodes { parent_hash, nodes })
-                        .await;
+                        .await
+                        .unwrap_or(())
                 }
             }
         }

@@ -38,7 +38,7 @@ impl Client {
     }
 
     async fn pull_snapshot(&mut self) -> Result<bool> {
-        let _ = self.stream.send(Request::RootNode).await;
+        self.stream.send(Request::RootNode).await.unwrap_or(());
 
         while let Some(response) = self.stream.recv().await {
             self.handle_response(response).await?;
@@ -62,13 +62,13 @@ impl Client {
                     RootNode::create(&mut tx, &self.their_replica_id, hash).await?;
 
                 if changed {
-                    let _ = self
-                        .stream
+                    self.stream
                         .send(Request::InnerNodes {
                             parent_hash: node.hash,
                             inner_layer: 0,
                         })
-                        .await;
+                        .await
+                        .unwrap_or(())
                 }
 
                 (hash, 0)
@@ -96,7 +96,7 @@ impl Client {
                             }
                         };
 
-                        let _ = self.stream.send(message).await;
+                        self.stream.send(message).await.unwrap_or(())
                     }
                 }
 

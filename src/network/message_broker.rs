@@ -216,13 +216,13 @@ async fn read(
             result = reader.read() => {
                 match result {
                     Ok(Message::Request(request)) => {
-                        let _ = request_tx.send(request).await;
+                        request_tx.send(request).await.unwrap_or(())
                     }
                     Ok(Message::Response(response)) => {
-                        let _ = response_tx.send(response).await;
+                        response_tx.send(response).await.unwrap_or(())
                     }
                     Err(_) => {
-                        let _ = command_tx.send(Command::CloseReader).await;
+                        command_tx.send(Command::CloseReader).await.unwrap_or(());
                         break;
                     }
                 }

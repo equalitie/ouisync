@@ -451,7 +451,7 @@ mod tests {
         let mut dir = Directory::open(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root)
             .await
             .unwrap();
-        let _ = dir.create_file("none.txt".into()).unwrap();
+        dir.create_file("none.txt".into()).unwrap();
         dir.flush().await.unwrap();
 
         // Reopen it again and check the file is still there.

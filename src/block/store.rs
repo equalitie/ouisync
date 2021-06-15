@@ -117,7 +117,7 @@ mod tests {
         write(&mut tx, &id, &content, &auth_tag).await.unwrap();
 
         let mut buffer = vec![0; BLOCK_SIZE];
-        let _ = read(&mut tx, &id, &mut buffer).await.unwrap();
+        read(&mut tx, &id, &mut buffer).await.unwrap();
 
         tx.commit().await.unwrap();
 
