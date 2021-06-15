@@ -7,20 +7,29 @@ use super::{
 use crate::{
     db,
     index::{self, node_test_utils::Snapshot, Index, RootNode, INNER_LAYER_COUNT},
+    test_utils,
 };
-use rand::Rng;
+use rand::prelude::*;
+use test_strategy::proptest;
 use tokio::{select, sync::mpsc};
 
 // test complete transfer of one snapshot from one replica to another.
-#[tokio::test(flavor = "multi_thread")]
-async fn transfer_snapshot_between_two_replicas() {
-    let mut rng = rand::thread_rng();
+#[proptest]
+fn transfer_snapshot_between_two_replicas(
+    #[strategy(0usize..=32)] leaf_count: usize,
+    #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
+) {
+    test_utils::run(transfer_snapshot_between_two_replicas_case(
+        leaf_count, rng_seed,
+    ))
+}
+
+async fn transfer_snapshot_between_two_replicas_case(leaf_count: usize, rng_seed: u64) {
+    let mut rng = StdRng::seed_from_u64(rng_seed);
 
     let a_index = create_index(&mut rng).await;
     let b_index = create_index(&mut rng).await;
 
-    // let leaf_count = 10; // TODO: randomize this
-    let leaf_count = 1; // TODO: randomize this
     let snapshot = Snapshot::generate(&mut rng, leaf_count);
     save_snapshot(&a_index, &snapshot).await;
 
@@ -32,8 +41,12 @@ async fn transfer_snapshot_between_two_replicas() {
             .is_none());
     }
 
+    // Enough capacity to prevent deadlocks.
+    // TODO: find the actual minimum necessary capacity.
+    let capacity = 256;
+
     let (a_send_tx, a_send_rx) = mpsc::channel(1);
-    let (a_recv_tx, a_recv_rx) = mpsc::channel(1);
+    let (a_recv_tx, a_recv_rx) = mpsc::channel(capacity);
     let server_stream = ServerStream {
         tx: a_send_tx,
         rx: a_recv_rx,
@@ -41,7 +54,7 @@ async fn transfer_snapshot_between_two_replicas() {
     let mut server = Server::new(a_index.clone(), server_stream);
 
     let (b_send_tx, b_send_rx) = mpsc::channel(1);
-    let (b_recv_tx, b_recv_rx) = mpsc::channel(1);
+    let (b_recv_tx, b_recv_rx) = mpsc::channel(capacity);
     let client_stream = ClientStream {
         tx: b_send_tx,
         rx: b_recv_rx,
