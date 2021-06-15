@@ -83,7 +83,7 @@ pub unsafe extern "C" fn session_open(
 pub unsafe extern "C" fn session_close() {
     let session = mem::replace(&mut SESSION, ptr::null_mut());
     if !session.is_null() {
-        let _ = Box::from_raw(session);
+        Box::from_raw(session);
     }
 }
 

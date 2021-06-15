@@ -3,16 +3,15 @@
 #![allow(clippy::absurd_extreme_comparisons)]
 #![allow(arithmetic_overflow)]
 
+use super::{
+    node::{InnerNode, LeafNode, RootNode, INNER_LAYER_COUNT},
+    path::Path,
+};
 use crate::{
     block::BlockId,
     crypto::Hash,
     db,
     error::{Error, Result},
-    index::{
-        node::{inner_children, leaf_children, RootNode},
-        path::Path,
-        INNER_LAYER_COUNT,
-    },
     replica_id::ReplicaId,
 };
 use std::{mem, sync::Arc};
@@ -26,8 +25,8 @@ pub struct Branch {
 }
 
 impl Branch {
-    pub async fn new(pool: db::Pool, replica_id: ReplicaId) -> Result<Self> {
-        let root_node = RootNode::get_latest_or_create(pool, &replica_id).await?;
+    pub async fn new(tx: &mut db::Transaction, replica_id: ReplicaId) -> Result<Self> {
+        let root_node = RootNode::load_latest_or_create(tx, &replica_id).await?;
 
         Ok(Self {
             root_node: Arc::new(Mutex::new(root_node)),
@@ -59,13 +58,8 @@ impl Branch {
 
     /// Retrieve `BlockId` of a block with the given encoded `Locator`.
     pub async fn get(&self, tx: &mut db::Transaction, encoded_locator: &Hash) -> Result<BlockId> {
-        let lock = self.root_node.lock().await;
-
-        if lock.hash.is_null() {
-            return Err(Error::EntryNotFound);
-        }
-
-        let path = self.get_path(tx, &lock.hash, &encoded_locator).await?;
+        let root_node = self.root_node.lock().await;
+        let path = self.get_path(tx, &root_node.hash, &encoded_locator).await?;
 
         match path.get_leaf() {
             Some(block_id) => Ok(block_id),
@@ -97,29 +91,25 @@ impl Branch {
         root_hash: &Hash,
         encoded_locator: &LocatorHash,
     ) -> Result<Path> {
-        let mut path = Path::new(*encoded_locator);
+        let mut path = Path::new(*root_hash, *encoded_locator);
 
-        if root_hash.is_null() {
-            return Ok(path);
-        }
-
-        path.root = *root_hash;
         path.layers_found += 1;
 
-        let mut parent = path.root;
+        let mut parent = path.root_hash;
 
         for level in 0..INNER_LAYER_COUNT {
-            path.inner[level] = inner_children(&parent, tx).await?;
-            parent = path.inner[level][path.get_bucket(level)].hash;
+            path.inner[level] = InnerNode::load_children(tx, &parent).await?;
 
-            if parent.is_null() {
+            if let Some(node) = path.inner[level].get(path.get_bucket(level)) {
+                parent = node.hash
+            } else {
                 return Ok(path);
-            }
+            };
 
             path.layers_found += 1;
         }
 
-        path.leaves = leaf_children(&parent, tx).await?;
+        path.leaves = LeafNode::load_children(tx, &parent).await?;
 
         if path.leaves.get(encoded_locator).is_some() {
             path.layers_found += 1;
@@ -134,39 +124,31 @@ impl Branch {
         root_node: &mut RootNode,
         path: &Path,
     ) -> Result<RootNode> {
-        if path.root.is_null() {
-            return self.write_branch_root(tx, root_node, &path.root).await;
-        }
-
         for (i, inner_layer) in path.inner.iter().enumerate() {
-            let parent_hash = path.hash_at_layer(i);
-
-            for (bucket, ref node) in inner_layer.iter().enumerate() {
-                if node.hash.is_null() {
-                    continue;
+            if let Some(parent_hash) = path.hash_at_layer(i) {
+                for (bucket, node) in inner_layer {
+                    node.save(tx, &parent_hash, bucket).await?;
                 }
-
-                node.insert(bucket, &parent_hash, tx).await?;
             }
         }
 
         let layer = Path::total_layer_count() - 1;
-        let parent_hash = path.hash_at_layer(layer - 1);
-
-        for leaf in &path.leaves {
-            leaf.insert(&parent_hash, tx).await?;
+        if let Some(parent_hash) = path.hash_at_layer(layer - 1) {
+            for leaf in &path.leaves {
+                leaf.save(tx, &parent_hash).await?;
+            }
         }
 
-        self.write_branch_root(tx, root_node, &path.root).await
+        self.write_branch_root(tx, root_node, path.root_hash).await
     }
 
     async fn write_branch_root(
         &self,
         tx: &mut db::Transaction,
         node: &mut RootNode,
-        hash: &Hash,
+        hash: Hash,
     ) -> Result<RootNode> {
-        let new_root = node.clone_with_new_root(tx, hash).await?;
+        let new_root = node.clone_with_new_hash(tx, hash).await?;
         Ok(mem::replace(node, new_root))
     }
 
@@ -197,9 +179,11 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn insert_and_read() {
         let pool = init_db().await;
-        let branch = Branch::new(pool.clone(), ReplicaId::random())
-            .await
-            .unwrap();
+
+        let mut tx = pool.begin().await.unwrap();
+        let branch = Branch::new(&mut tx, ReplicaId::random()).await.unwrap();
+        tx.commit().await.unwrap();
+
         let block_id = BlockId::random();
         let locator = random_head_locator(0);
         let encoded_locator = locator.encode(&Cryptor::Null);
@@ -220,16 +204,15 @@ mod tests {
     async fn rewrite_locator() {
         for _ in 0..32 {
             let pool = init_db().await;
-            let branch = Branch::new(pool.clone(), ReplicaId::random())
-                .await
-                .unwrap();
+            let mut tx = pool.begin().await.unwrap();
+
+            let branch = Branch::new(&mut tx, ReplicaId::random()).await.unwrap();
 
             let b1 = BlockId::random();
             let b2 = BlockId::random();
 
             let locator = random_head_locator(0);
             let encoded_locator = locator.encode(&Cryptor::Null);
-            let mut tx = pool.begin().await.unwrap();
 
             branch.insert(&mut tx, &b1, &encoded_locator).await.unwrap();
             branch.insert(&mut tx, &b2, &encoded_locator).await.unwrap();
@@ -248,14 +231,13 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn remove_locator() {
         let pool = init_db().await;
-        let branch = Branch::new(pool.clone(), ReplicaId::random())
-            .await
-            .unwrap();
+        let mut tx = pool.begin().await.unwrap();
+
+        let branch = Branch::new(&mut tx, ReplicaId::random()).await.unwrap();
 
         let b = BlockId::random();
         let locator = random_head_locator(0);
         let encoded_locator = locator.encode(&Cryptor::Null);
-        let mut tx = pool.begin().await.unwrap();
 
         assert_eq!(0, count_branch_forest_entries(&mut tx).await);
 
@@ -289,7 +271,7 @@ mod tests {
                  (SELECT COUNT(*) FROM snapshot_inner_nodes) +
                  (SELECT COUNT(*) FROM snapshot_leaf_nodes)",
         )
-        .fetch_one(&mut *tx)
+        .fetch_one(tx)
         .await
         .unwrap()
         .get::<u32, _>(0) as usize

@@ -451,7 +451,7 @@ mod tests {
         let mut dir = Directory::open(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root)
             .await
             .unwrap();
-        let _ = dir.create_file("none.txt".into()).unwrap();
+        dir.create_file("none.txt".into()).unwrap();
         dir.flush().await.unwrap();
 
         // Reopen it again and check the file is still there.
@@ -717,9 +717,10 @@ mod tests {
 
     async fn setup() -> (db::Pool, Branch) {
         let pool = db::init(db::Store::Memory).await.unwrap();
-        let branch = Branch::new(pool.clone(), ReplicaId::random())
-            .await
-            .unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let branch = Branch::new(&mut tx, ReplicaId::random()).await.unwrap();
+        tx.commit().await.unwrap();
+
         (pool, branch)
     }
 

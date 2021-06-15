@@ -1,12 +1,8 @@
-use super::{
-    node::{InnerNode, LeafNode, LeafNodeSet, ModifyStatus},
-    Crc, INNER_LAYER_COUNT, MAX_INNER_NODE_CHILD_COUNT,
+use super::node::{self, InnerNode, InnerNodeMap, LeafNodeSet, ModifyStatus, INNER_LAYER_COUNT};
+use crate::{
+    block::BlockId,
+    crypto::{Hash, Hashable},
 };
-use crate::{block::BlockId, crypto::Hash};
-use crc::{crc32, Hasher32};
-use sha3::{Digest, Sha3_256};
-
-type InnerChildren = [InnerNode; MAX_INNER_NODE_CHILD_COUNT];
 
 ///
 /// Path represents a (possibly incomplete) path in a snapshot from the root to the leaf.
@@ -32,25 +28,19 @@ pub struct Path {
     /// nor leaf layers was; 2 -> root and one inner (possibly leaf if INNER_LAYER_COUNT == 0)
     /// layers were found; ...)
     pub layers_found: usize,
-    pub root: Hash,
-    pub missing_blocks_crc: Crc,
-    pub missing_blocks_count: usize,
-    pub inner: Vec<InnerChildren>,
+    pub root_hash: Hash,
+    pub inner: Vec<InnerNodeMap>,
     pub leaves: LeafNodeSet,
 }
 
 impl Path {
-    pub fn new(locator: Hash) -> Self {
-        let null_hash = Hash::null();
-
-        let inner = vec![[InnerNode::empty(); MAX_INNER_NODE_CHILD_COUNT]; INNER_LAYER_COUNT];
+    pub fn new(root_hash: Hash, locator: Hash) -> Self {
+        let inner = vec![InnerNodeMap::default(); INNER_LAYER_COUNT];
 
         Self {
             locator,
             layers_found: 0,
-            root: null_hash,
-            missing_blocks_crc: 0,
-            missing_blocks_count: 0,
+            root_hash,
             inner,
             leaves: LeafNodeSet::default(),
         }
@@ -64,16 +54,19 @@ impl Path {
         self.leaves.iter().any(|l| &l.block_id == block_id)
     }
 
-    pub fn total_layer_count() -> usize {
+    pub const fn total_layer_count() -> usize {
         1 /* root */ + INNER_LAYER_COUNT + 1 /* leaves */
     }
 
-    pub fn hash_at_layer(&self, layer: usize) -> Hash {
+    pub fn hash_at_layer(&self, layer: usize) -> Option<Hash> {
         if layer == 0 {
-            return self.root;
+            return Some(self.root_hash);
         }
+
         let inner_layer = layer - 1;
-        self.inner[inner_layer][self.get_bucket(inner_layer)].hash
+        self.inner[inner_layer]
+            .get(self.get_bucket(inner_layer))
+            .map(|node| node.hash)
     }
 
     // Sets the leaf node to the given block id. Returns the previous block id, if any.
@@ -93,135 +86,50 @@ impl Path {
 
     pub fn remove_leaf(&mut self, locator: &Hash) -> Option<BlockId> {
         let block_id = self.leaves.remove(locator)?.block_id;
+        let mut start_layer = INNER_LAYER_COUNT;
 
-        if !self.leaves.is_empty() {
-            self.recalculate(INNER_LAYER_COUNT);
-        } else if INNER_LAYER_COUNT > 0 {
-            self.remove_from_inner_layer(INNER_LAYER_COUNT - 1);
-        } else {
-            self.remove_root_layer();
+        if self.leaves.is_empty() {
+            for layer in (0..INNER_LAYER_COUNT).rev() {
+                let bucket = self.get_bucket(layer);
+                let nodes = &mut self.inner[layer];
+
+                nodes.remove(bucket);
+
+                if nodes.is_empty() {
+                    start_layer = layer;
+                } else {
+                    break;
+                }
+            }
         }
+
+        self.recalculate(start_layer);
 
         Some(block_id)
     }
 
-    pub fn get_bucket(&self, inner_layer: usize) -> usize {
-        self.locator.as_ref()[inner_layer] as usize
-    }
-
-    fn remove_from_inner_layer(&mut self, inner_layer: usize) {
-        let null = Hash::null();
-        let bucket = self.get_bucket(inner_layer);
-
-        self.inner[inner_layer][bucket] = InnerNode::empty();
-
-        let is_empty = self.inner[inner_layer].iter().all(|x| x.hash == null);
-
-        if !is_empty {
-            self.recalculate(inner_layer);
-            return;
-        }
-
-        if inner_layer > 0 {
-            self.remove_from_inner_layer(inner_layer - 1);
-        } else {
-            self.remove_root_layer();
-        }
-    }
-
-    fn remove_root_layer(&mut self) {
-        self.root = Hash::null();
+    pub fn get_bucket(&self, inner_layer: usize) -> u8 {
+        node::get_bucket(&self.locator, inner_layer)
     }
 
     /// Recalculate layers from start_layer all the way to the root.
     fn recalculate(&mut self, start_layer: usize) {
         for inner_layer in (0..start_layer).rev() {
-            let (hash, crc, cnt) = self.compute_hash_for_layer(inner_layer + 1);
+            let hash = self.compute_hash_for_layer(inner_layer + 1);
             let bucket = self.get_bucket(inner_layer);
-            self.inner[inner_layer][bucket] = InnerNode {
-                hash,
-                is_complete: true,
-                missing_blocks_crc: crc,
-                missing_blocks_count: cnt,
-            };
+            self.inner[inner_layer].insert(bucket, InnerNode::new(hash));
         }
 
-        let (hash, crc, cnt) = self.compute_hash_for_layer(0);
-        self.root = hash;
-        self.missing_blocks_crc = crc;
-        self.missing_blocks_count = cnt;
+        self.root_hash = self.compute_hash_for_layer(0);
     }
 
     // Assumes layers higher than `layer` have their hashes/BlockVersions already
     // computed/assigned.
-    fn compute_hash_for_layer(&self, layer: usize) -> (Hash, Crc, usize) {
+    fn compute_hash_for_layer(&self, layer: usize) -> Hash {
         if layer == INNER_LAYER_COUNT {
-            let (crc, cnt) = calculate_missing_blocks_crc_from_leaves(self.leaves.as_slice());
-            (hash_leaves(self.leaves.as_slice()), crc, cnt)
+            self.leaves.hash()
         } else {
-            let (crc, cnt) = calculate_missing_blocks_crc_from_inner(&self.inner[layer]);
-            (hash_inner(&self.inner[layer]), crc, cnt)
+            self.inner[layer].hash()
         }
     }
-}
-
-fn hash_leaves(leaves: &[LeafNode]) -> Hash {
-    let mut hash = Sha3_256::new();
-    // XXX: Is updating with length enough to prevent attaks?
-    hash.update((leaves.len() as u32).to_le_bytes());
-    for l in leaves {
-        hash.update(l.locator());
-        hash.update(l.block_id);
-    }
-    hash.finalize().into()
-}
-
-fn hash_inner(siblings: &[InnerNode]) -> Hash {
-    // XXX: Have some cryptographer check this whether there are no attacks.
-    let mut hash = Sha3_256::new();
-    for (k, s) in siblings.iter().enumerate() {
-        if !s.hash.is_null() {
-            hash.update((k as u16).to_le_bytes());
-            hash.update(s.hash);
-        }
-    }
-    hash.finalize().into()
-}
-
-fn calculate_missing_blocks_crc_from_leaves(leaves: &[LeafNode]) -> (Crc, usize) {
-    let mut cnt = 0;
-
-    if leaves.is_empty() {
-        return (0, cnt);
-    }
-
-    let mut digest = crc32::Digest::new(crc32::IEEE);
-
-    for l in leaves {
-        if l.is_block_missing {
-            cnt += 1;
-            digest.write(&[1]);
-        }
-    }
-
-    (digest.sum32(), cnt)
-}
-
-fn calculate_missing_blocks_crc_from_inner(inner: &[InnerNode]) -> (Crc, usize) {
-    let mut cnt = 0;
-
-    if inner.is_empty() {
-        return (0, cnt);
-    }
-
-    let mut digest = crc32::Digest::new(crc32::IEEE);
-
-    for n in inner {
-        if n.missing_blocks_crc != 0 {
-            cnt += 1;
-            digest.write(n.missing_blocks_crc.to_le_bytes().as_ref());
-        }
-    }
-
-    (digest.sum32(), cnt)
 }

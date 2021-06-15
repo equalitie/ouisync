@@ -2,7 +2,15 @@ mod branch;
 mod node;
 mod path;
 
-pub use self::branch::Branch;
+#[cfg(test)]
+pub use self::node::test_utils as node_test_utils;
+pub use self::{
+    branch::Branch,
+    node::{
+        detect_complete_snapshots, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, RootNode,
+        INNER_LAYER_COUNT,
+    },
+};
 
 use crate::{
     block::BlockId,
@@ -17,14 +25,7 @@ use std::{
 };
 use tokio::sync::Mutex;
 
-/// Number of layers in the tree excluding the layer with root and the layer with leaf nodes.
-const INNER_LAYER_COUNT: usize = 3;
-const MAX_INNER_NODE_CHILD_COUNT: usize = 256; // = sizeof(u8)
-
-type Crc = u32;
 type SnapshotId = u32;
-// u64 doesn't seem to implement Decode<'_, Sqlite>
-type MissingBlocksCount = i64;
 
 #[derive(Clone)]
 pub struct Index {
@@ -68,11 +69,14 @@ impl Index {
 
     async fn read_branches(&self, replica_ids: &HashSet<ReplicaId>) -> Result<()> {
         let mut branches = self.branches.lock().await;
+        let mut tx = self.pool.begin().await?;
 
         for id in replica_ids {
-            let branch = Branch::new(self.pool.clone(), *id).await?;
+            let branch = Branch::new(&mut tx, *id).await?;
             branches.insert(*id, branch);
         }
+
+        tx.commit().await?;
 
         Ok(())
     }
@@ -82,51 +86,55 @@ impl Index {
 pub async fn init(pool: &db::Pool) -> Result<(), Error> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS snapshot_root_nodes (
-             snapshot_id          INTEGER PRIMARY KEY,
-             replica_id           BLOB NOT NULL,
+             snapshot_id INTEGER PRIMARY KEY,
+             replica_id  BLOB NOT NULL,
 
              -- Hash of the children
-             hash                 BLOB NOT NULL,
+             hash        BLOB NOT NULL,
 
-             -- Boolean indicating whether the subtree has been completely downloaded
-             -- (excluding blocks)
-             is_complete          INTEGER NOT NULL,
+             -- Is this snapshot completely downloaded?
+             is_complete INTEGER NOT NULL,
 
-             -- XXX: Should be NOT NULL
-             missing_blocks_crc   INTEGER,
-             missing_blocks_count INTEGER NOT NULL
+             UNIQUE(replica_id, hash)
          );
 
          CREATE TABLE IF NOT EXISTS snapshot_inner_nodes (
              -- Parent's `hash`
-             parent               BLOB NOT NULL,
-
-             -- Hash of the children
-             hash                 BLOB NOT NULL,
+             parent      BLOB NOT NULL,
 
              -- Index of this node within its siblings
-             -- XXX: Should be NOT NULL
-             bucket               INTEGER,
+             bucket      INTEGER NOT NULL,
 
-             -- Boolean indicating whether the subtree has been completely downloaded
-             -- (excluding blocks)
-             is_complete          INTEGER NOT NULL,
+             -- Hash of the children
+             hash        BLOB NOT NULL,
 
-             -- XXX: Should be NOT NULL
-             missing_blocks_crc   INTEGER,
-             missing_blocks_count INTEGER NOT NULL
+             -- Is this subree completely downloaded?
+             is_complete INTEGER NOT NULL,
+
+             UNIQUE(parent, bucket)
          );
 
          CREATE TABLE IF NOT EXISTS snapshot_leaf_nodes (
              -- Parent's `hash`
-             parent               BLOB NOT NULL,
+             parent      BLOB NOT NULL,
+             locator     BLOB NOT NULL,
+             block_id    BLOB NOT NULL
+         );
 
-             locator              BLOB NOT NULL,
-             block_id             BLOB NOT NULL,
-
-             -- Is the block pointed to by this node missing?
-             is_block_missing     INTEGER NOT NULL
-         );",
+         -- Prevents creating multiple inner nodes with the same parent and bucket but different
+         -- hash.
+         CREATE TRIGGER IF NOT EXISTS snapshot_inner_nodes_conflict_check
+         BEFORE INSERT ON snapshot_inner_nodes
+         WHEN EXISTS(
+             SELECT 0
+             FROM snapshot_inner_nodes
+             WHERE parent = new.parent
+               AND bucket = new.bucket
+               AND hash <> new.hash
+         )
+         BEGIN
+             SELECT RAISE (ABORT, 'inner node conflict');
+         END;",
     )
     .execute(pool)
     .await
@@ -164,16 +172,12 @@ mod tests {
         init(&pool).await.unwrap();
         block::init(&pool).await.unwrap();
 
+        let mut tx = pool.begin().await.unwrap();
+
         let cryptor = Cryptor::Null;
 
-        let branch0 = Branch::new(pool.clone(), ReplicaId::random())
-            .await
-            .unwrap();
-        let branch1 = Branch::new(pool.clone(), ReplicaId::random())
-            .await
-            .unwrap();
-
-        let mut tx = pool.begin().await.unwrap();
+        let branch0 = Branch::new(&mut tx, ReplicaId::random()).await.unwrap();
+        let branch1 = Branch::new(&mut tx, ReplicaId::random()).await.unwrap();
 
         let block_id = BlockId::random();
         let buffer = vec![0; BLOCK_SIZE];

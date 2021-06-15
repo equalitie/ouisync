@@ -1,12 +1,10 @@
 use super::{BlockId, BLOCK_SIZE};
 use crate::{
-    crypto::{
-        generic_array::{sequence::GenericSequence, typenum::Unsigned},
-        AuthTag,
-    },
+    crypto::AuthTag,
     db,
     error::{Error, Result},
 };
+use generic_array::{sequence::GenericSequence, typenum::Unsigned};
 use sqlx::Row;
 
 /// Initializes the block store. Creates the required database schema unless already exists.
@@ -119,7 +117,7 @@ mod tests {
         write(&mut tx, &id, &content, &auth_tag).await.unwrap();
 
         let mut buffer = vec![0; BLOCK_SIZE];
-        let _ = read(&mut tx, &id, &mut buffer).await.unwrap();
+        read(&mut tx, &id, &mut buffer).await.unwrap();
 
         tx.commit().await.unwrap();
 

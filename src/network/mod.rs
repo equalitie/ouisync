@@ -4,10 +4,12 @@ mod message_broker;
 mod object_stream;
 mod replica_discovery;
 mod server;
+#[cfg(test)]
+mod tests;
 
 use self::{
     message_broker::MessageBroker,
-    object_stream::ObjectStream,
+    object_stream::TcpObjectStream,
     replica_discovery::{ReplicaDiscovery, RuntimeId},
 };
 use crate::{
@@ -15,8 +17,9 @@ use crate::{
     scoped_task_set::{ScopedTaskHandle, ScopedTaskSet},
     Index,
 };
+use futures::future;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{hash_map::Entry, HashMap},
     io,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::Arc,
@@ -24,7 +27,10 @@ use std::{
 use structopt::StructOpt;
 use tokio::{
     net::{TcpListener, TcpStream},
-    sync::Mutex,
+    sync::{
+        mpsc::{self, Receiver, Sender},
+        Mutex,
+    },
 };
 
 pub const DEFAULT_PORT: u16 = 65535;
@@ -67,140 +73,146 @@ pub struct Network {
 impl Network {
     pub async fn new(index: Index, options: NetworkOptions) -> io::Result<Self> {
         let tasks = ScopedTaskSet::default();
-        let task_handle = tasks.handle().clone();
 
-        let inner = Arc::new(Inner {
-            this_replica_id: ReplicaId::random(),
+        let listener = TcpListener::bind(options.listen_addr()).await?;
+        let local_addr = listener.local_addr()?;
+        let (forget_tx, forget_rx) = mpsc::channel(1);
+
+        let inner = Inner {
             message_brokers: Mutex::new(HashMap::new()),
-            to_forget: Mutable::new(HashSet::new()),
-            task_handle,
+            forget_tx,
+            task_handle: tasks.handle().clone(),
             index,
-        });
+        };
 
-        inner.start(options.listen_addr()).await?;
+        let inner = Arc::new(inner);
+        tasks.spawn(inner.clone().run_discovery(local_addr.port(), forget_rx));
+        tasks.spawn(inner.run_listener(listener));
 
         Ok(Self { _tasks: tasks })
     }
 }
 
 struct Inner {
-    this_replica_id: ReplicaId,
     message_brokers: Mutex<HashMap<ReplicaId, MessageBroker>>,
-    to_forget: Mutable<HashSet<RuntimeId>>,
+    forget_tx: Sender<RuntimeId>,
     task_handle: ScopedTaskHandle,
     index: Index,
 }
 
 impl Inner {
-    async fn start(self: Arc<Self>, addr: SocketAddr) -> io::Result<()> {
-        let listener = TcpListener::bind(addr).await?;
-
-        self.task_handle.spawn(
-            self.clone()
-                .run_discovery(listener.local_addr().unwrap().port()),
-        );
-        self.task_handle.spawn(self.clone().run_listener(listener));
-
-        Ok(())
-    }
-
-    async fn run_discovery(self: Arc<Self>, listener_port: u16) {
-        let discovery =
-            ReplicaDiscovery::new(listener_port).expect("Failed to create ReplicaDiscovery");
-
-        loop {
-            tokio::select! {
-                found = discovery.wait_for_activity() => {
-
-                    for (id, addr) in found {
-                        let s = self.clone();
-                        self.task_handle.spawn(async move {
-                            let socket = match TcpStream::connect(addr).await {
-                                Ok(socket) => socket,
-                                Err(_) => return,
-                            };
-                            s.handle_new_connection(socket, Some(id)).await.ok();
-                        });
-                    }
-                }
-                _ = self.to_forget.changed() => {
-                    let mut set = self.to_forget.value.lock().await;
-                    for id in set.drain() {
-                        discovery.forget(&id);
-                    }
-                }
+    async fn run_discovery(
+        self: Arc<Self>,
+        listener_port: u16,
+        mut forget_rx: Receiver<RuntimeId>,
+    ) {
+        let (tx, mut rx) = mpsc::channel(1);
+        let discovery = match ReplicaDiscovery::new(listener_port, tx) {
+            Ok(discovery) => discovery,
+            Err(error) => {
+                log::error!("Failed to create ReplicaDiscovery: {}", error);
+                return;
             }
-        }
+        };
+
+        let discover_task = async {
+            while let Some((id, addr)) = rx.recv().await {
+                self.task_handle
+                    .spawn(self.clone().establish_outgoing_connection(addr, Some(id)))
+            }
+        };
+
+        let forget_task = async {
+            while let Some(id) = forget_rx.recv().await {
+                discovery.forget(&id).await;
+            }
+        };
+
+        future::join(discover_task, forget_task).await;
     }
 
     async fn run_listener(self: Arc<Self>, listener: TcpListener) {
         loop {
-            let (socket, _addr) = listener
-                .accept()
-                .await
-                .expect("Failed to start TcpListener");
+            let (socket, addr) = match listener.accept().await {
+                Ok(pair) => pair,
+                Err(error) => {
+                    log::error!("Failed to accept incoming TCP connection: {}", error);
+                    break;
+                }
+            };
 
-            let s = self.clone();
-            self.task_handle.spawn(async move {
-                s.handle_new_connection(socket, None).await.ok();
-            });
+            log::debug!("New incoming TCP connection: {}", addr);
+
+            self.task_handle
+                .spawn(self.clone().handle_new_connection(socket, None));
         }
+    }
+
+    async fn establish_outgoing_connection(
+        self: Arc<Self>,
+        addr: SocketAddr,
+        discovery_id: Option<RuntimeId>,
+    ) {
+        let socket = match TcpStream::connect(addr).await {
+            Ok(socket) => socket,
+            Err(error) => {
+                log::error!("Failed to create outgoing TCP connection: {}", error);
+                return;
+            }
+        };
+
+        log::debug!("New outgoing TCP connection: {}", addr);
+
+        self.handle_new_connection(socket, discovery_id).await
     }
 
     async fn handle_new_connection(
         self: Arc<Self>,
         socket: TcpStream,
         discovery_id: Option<RuntimeId>,
-    ) -> io::Result<()> {
-        let mut os = ObjectStream::new(socket);
-        os.write(&self.this_replica_id).await?;
-        let their_replica_id = os.read::<ReplicaId>().await?;
+    ) {
+        let mut stream = TcpObjectStream::new(socket);
+        let their_replica_id =
+            match perform_handshake(&mut stream, &self.index.this_replica_id).await {
+                Ok(replica_id) => replica_id,
+                Err(error) => {
+                    log::error!("Failed to perform handshake: {}", error);
+                    return;
+                }
+            };
 
-        let s = self.clone();
         let mut brokers = self.message_brokers.lock().await;
-        let index = self.index.clone();
 
-        let broker = brokers.entry(their_replica_id).or_insert_with(|| {
-            MessageBroker::new(
-                index,
-                Box::pin(async move {
-                    s.message_brokers.lock().await.remove(&their_replica_id);
-                    if let Some(discovery_id) = discovery_id {
-                        s.to_forget.modify(|set| set.insert(discovery_id)).await;
-                    }
-                }),
-            )
-        });
+        match brokers.entry(their_replica_id) {
+            Entry::Occupied(entry) => entry.get().add_connection(stream).await,
+            Entry::Vacant(entry) => {
+                log::info!("Connected to replica {:?}", their_replica_id);
 
-        broker.add_connection(os);
-
-        Ok(())
-    }
-}
-
-struct Mutable<T> {
-    notify: tokio::sync::Notify,
-    value: Mutex<T>,
-}
-
-impl<T> Mutable<T> {
-    pub fn new(value: T) -> Mutable<T> {
-        Mutable {
-            notify: tokio::sync::Notify::new(),
-            value: Mutex::new(value),
+                entry.insert(MessageBroker::new(
+                    self.index.clone(),
+                    their_replica_id,
+                    stream,
+                    Box::pin(self.clone().on_finish(their_replica_id, discovery_id)),
+                ));
+            }
         }
     }
 
-    pub async fn modify<F, R>(&self, f: F)
-    where
-        F: FnOnce(&mut T) -> R + Sized,
-    {
-        let mut v = self.value.lock().await;
-        f(&mut v);
-        self.notify.notify_one();
-    }
+    async fn on_finish(self: Arc<Self>, replica_id: ReplicaId, discovery_id: Option<RuntimeId>) {
+        log::info!("Disconnected from replica {:?}", replica_id);
 
-    pub async fn changed(&self) {
-        self.notify.notified().await
+        self.message_brokers.lock().await.remove(&replica_id);
+
+        if let Some(discovery_id) = discovery_id {
+            self.forget_tx.send(discovery_id).await.unwrap_or(())
+        }
     }
+}
+
+async fn perform_handshake(
+    stream: &mut TcpObjectStream,
+    this_replica_id: &ReplicaId,
+) -> io::Result<ReplicaId> {
+    stream.write(this_replica_id).await?;
+    stream.read().await
 }

@@ -9,6 +9,7 @@ use rand::{
     distributions::{Distribution, Standard},
     Rng,
 };
+use serde::{Deserialize, Serialize};
 use std::{
     array::TryFromSliceError,
     convert::{TryFrom, TryInto},
@@ -21,7 +22,7 @@ pub const BLOCK_SIZE: usize = 32 * 1024;
 pub const BLOCK_ID_SIZE: usize = 32;
 
 /// Unique id of a block.
-#[derive(Copy, Clone, Eq, PartialEq, Hash, PartialOrd, Ord)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[repr(transparent)]
 pub struct BlockId([u8; BLOCK_ID_SIZE]);
 

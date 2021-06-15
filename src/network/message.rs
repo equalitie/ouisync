@@ -1,13 +1,39 @@
+use crate::{
+    crypto::Hash,
+    index::{InnerNodeMap, LeafNodeSet},
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Request {
-    Hello,
+    /// Request the latest root node from another replica.
+    // TODO: include version vector so the recipient sends the reply only when
+    //       they have anything new.
+    RootNode,
+    /// Request inner nodes with the given parent hash and inner layer.
+    InnerNodes {
+        parent_hash: Hash,
+        inner_layer: usize,
+    },
+    /// Request leaf nodes with the given parent hash.
+    LeafNodes { parent_hash: Hash },
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Response {
-    Hello,
+    /// Send the latest root node of this replica to another replica.
+    RootNode(Hash),
+    /// Send inner nodes with the given parent hash and inner layer.
+    InnerNodes {
+        parent_hash: Hash,
+        inner_layer: usize,
+        nodes: InnerNodeMap,
+    },
+    /// Send leaf nodes with the given parent hash.
+    LeafNodes {
+        parent_hash: Hash,
+        nodes: LeafNodeSet,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -16,18 +42,20 @@ pub enum Message {
     Response(Response),
 }
 
-impl Message {
-    pub fn into_response(self) -> Response {
-        match self {
-            Message::Request(_) => panic!("Message is not a response"),
-            Message::Response(rs) => rs,
+impl From<Message> for Request {
+    fn from(msg: Message) -> Self {
+        match msg {
+            Message::Request(rq) => rq,
+            Message::Response(_) => panic!("Message is not Request"),
         }
     }
+}
 
-    pub fn into_request(self) -> Request {
-        match self {
-            Message::Request(rq) => rq,
-            Message::Response(_) => panic!("Message is not a request"),
+impl From<Message> for Response {
+    fn from(msg: Message) -> Self {
+        match msg {
+            Message::Request(_) => panic!("Message is not Response"),
+            Message::Response(rs) => rs,
         }
     }
 }

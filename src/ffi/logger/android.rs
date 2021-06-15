@@ -68,13 +68,13 @@ impl StdRedirect {
 impl Drop for StdRedirect {
     fn drop(&mut self) {
         // Write empty line to the pipe to wake up the reader
-        let _ = self.writer.write_all(b"\n");
-        let _ = self.writer.flush();
+        self.writer.write_all(b"\n");
+        self.writer.flush();
 
         self.active.store(false, Ordering::Release);
 
         if let Some(handle) = self.handle.take() {
-            let _ = handle.join();
+            handle.join();
         }
     }
 }

@@ -1,11 +1,7 @@
 use crate::format;
-use sha3::{
-    digest::{
-        generic_array::{sequence::GenericSequence, typenum::Unsigned, GenericArray},
-        Digest,
-    },
-    Sha3_256,
-};
+use generic_array::{sequence::GenericSequence, typenum::Unsigned, GenericArray};
+use serde::{Deserialize, Serialize};
+use sha3::{digest::Digest, Sha3_256};
 use std::{
     array::TryFromSliceError,
     convert::{TryFrom, TryInto},
@@ -13,20 +9,12 @@ use std::{
 };
 
 /// Wrapper for a 256-bit hash digest, for convenience. Also implements friendly formatting.
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
 #[repr(transparent)]
 pub struct Hash(Inner);
 
 impl Hash {
     pub const SIZE: usize = <Inner as GenericSequence<_>>::Length::USIZE;
-
-    pub fn null() -> Self {
-        Self(Inner::default())
-    }
-
-    pub fn is_null(&self) -> bool {
-        self.0.iter().all(|&byte| byte == 0)
-    }
 }
 
 impl From<Inner> for Hash {

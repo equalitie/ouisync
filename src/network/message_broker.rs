@@ -1,63 +1,69 @@
 use super::{
     client::Client,
     message::{Message, Request, Response},
-    object_stream::{ObjectReader, ObjectStream, ObjectWriter},
+    object_stream::{TcpObjectReader, TcpObjectStream, TcpObjectWriter},
     server::Server,
 };
-use crate::{
-    scoped_task_set::{ScopedTaskHandle, ScopedTaskSet},
-    Index,
-};
-use std::{future::Future, pin::Pin, sync::Arc};
-use tokio::sync::{
-    mpsc::{error::SendError, Receiver, Sender},
-    Mutex,
+use crate::{index::Index, replica_id::ReplicaId};
+use std::{future::Future, pin::Pin};
+use tokio::{
+    select,
+    sync::{
+        mpsc::{self, error::SendError},
+        oneshot,
+    },
+    task,
 };
 
 /// A stream for receiving Requests and sending Responses
 pub struct ServerStream {
-    sender: Sender<Command>,
-    receiver: Receiver<Request>,
+    pub(super) tx: mpsc::Sender<Command>,
+    pub(super) rx: mpsc::Receiver<Request>,
 }
 
 impl ServerStream {
-    pub async fn read(&mut self) -> Option<Request> {
-        self.receiver.recv().await
+    pub async fn recv(&mut self) -> Option<Request> {
+        let rq = self.rx.recv().await?;
+        log::trace!("server: recv {:?}", rq);
+        Some(rq)
     }
 
-    pub async fn write(&mut self, rs: Response) -> Result<(), SendError<Response>> {
-        self.sender
+    pub async fn send(&mut self, rs: Response) -> Result<(), SendError<Response>> {
+        log::trace!("server: send {:?}", rs);
+        self.tx
             .send(Command::SendMessage(Message::Response(rs)))
             .await
-            .map_err(|e| SendError(e.0.into_send_message().into_response()))
+            .map_err(|e| SendError(into_message(e.0)))
     }
 }
 
 /// A stream for sending Requests and receiving Responses
 pub struct ClientStream {
-    sender: Sender<Command>,
-    receiver: Receiver<Response>,
+    pub(super) tx: mpsc::Sender<Command>,
+    pub(super) rx: mpsc::Receiver<Response>,
 }
 
 impl ClientStream {
-    pub async fn read(&mut self) -> Option<Response> {
-        self.receiver.recv().await
+    pub async fn recv(&mut self) -> Option<Response> {
+        let rs = self.rx.recv().await?;
+        log::trace!("client: recv {:?}", rs);
+        Some(rs)
     }
 
-    pub async fn write(&mut self, rq: Request) -> Result<(), SendError<Request>> {
-        self.sender
+    pub async fn send(&mut self, rq: Request) -> Result<(), SendError<Request>> {
+        log::trace!("client: send {:?}", rq);
+        self.tx
             .send(Command::SendMessage(Message::Request(rq)))
             .await
-            .map_err(|e| SendError(e.0.into_send_message().into_request()))
+            .map_err(|e| SendError(into_message(e.0)))
     }
+}
+
+fn into_message<T: From<Message>>(command: Command) -> T {
+    command.into_send_message().into()
 }
 
 type OnFinish = Pin<Box<dyn Future<Output = ()> + Send>>;
-
-struct State {
-    on_finish: Option<OnFinish>,
-    receiver_count: u32,
-}
 
 /// Maintains one or more connections to a peer, listening on all of them at the same time. Note
 /// that at the present all the connections are TCP based and so dropping some of them would make
@@ -68,188 +74,174 @@ struct State {
 /// that it either goes to the ClientStream or ServerStream for processing by the Client and Server
 /// structures respectively.
 pub struct MessageBroker {
-    inner: Arc<Inner>,
-    tasks: ScopedTaskSet,
+    command_tx: mpsc::Sender<Command>,
+    _finish_tx: oneshot::Sender<()>,
 }
 
 impl MessageBroker {
-    pub fn new(index: Index, on_finish: OnFinish) -> Self {
-        let (command_tx, command_rx) = tokio::sync::mpsc::channel(1);
-        let (request_tx, request_rx) = tokio::sync::mpsc::channel(1);
-        let (response_tx, response_rx) = tokio::sync::mpsc::channel(1);
+    pub fn new(
+        index: Index,
+        their_replica_id: ReplicaId,
+        stream: TcpObjectStream,
+        on_finish: OnFinish,
+    ) -> Self {
+        // Channel party!
+        let (command_tx, command_rx) = mpsc::channel(1);
+        let (request_tx, request_rx) = mpsc::channel(1);
+        let (response_tx, response_rx) = mpsc::channel(1);
+        let (finish_tx, finish_rx) = oneshot::channel();
 
-        let tasks = ScopedTaskSet::default();
-        let task_handle = tasks.handle().clone();
-
-        let inner = Arc::new(Inner {
-            send_channel: command_tx,
+        let mut inner = Inner {
+            command_tx: command_tx.clone(),
             request_tx,
             response_tx,
-            state: Mutex::new(State {
-                on_finish: Some(on_finish),
-                receiver_count: 0,
-            }),
-            task_handle,
-            index,
-        });
+            writers: Vec::new(),
+            reader_count: 0,
+            on_finish,
+        };
 
-        tasks.spawn(
-            inner
-                .clone()
-                .run_command_handler(command_rx, request_rx, response_rx),
+        inner.handle_add_connection(stream);
+
+        let client = Client::new(
+            index.clone(),
+            their_replica_id,
+            ClientStream {
+                tx: command_tx.clone(),
+                rx: response_rx,
+            },
         );
 
-        Self { inner, tasks }
+        let server = Server::new(
+            index,
+            ServerStream {
+                tx: command_tx.clone(),
+                rx: request_rx,
+            },
+        );
+
+        task::spawn(inner.run(client, server, command_rx, finish_rx));
+
+        Self {
+            command_tx,
+            _finish_tx: finish_tx,
+        }
     }
 
-    pub fn add_connection(&self, con: ObjectStream) {
-        let inner = self.inner.clone();
-        let send_channel = inner.send_channel.clone();
-
-        self.tasks.spawn(async move {
-            let (r, w) = con.into_split();
-
-            if send_channel.send(Command::AddWriter(w)).await.is_err() {
-                println!("Failed to activate writer");
-                // XXX: Tell self to abort
-                return;
-            }
-
-            inner.run_message_receiver(r).await;
-        });
+    pub async fn add_connection(&self, stream: TcpObjectStream) {
+        if self
+            .command_tx
+            .send(Command::AddConnection(stream))
+            .await
+            .is_err()
+        {
+            log::error!("Failed to add connection - broker already finished");
+        }
     }
 }
 
 struct Inner {
-    send_channel: Sender<Command>,
-    request_tx: Sender<Request>,
-    response_tx: Sender<Response>,
-    state: Mutex<State>,
-    task_handle: ScopedTaskHandle,
-    index: Index,
+    command_tx: mpsc::Sender<Command>,
+    request_tx: mpsc::Sender<Request>,
+    response_tx: mpsc::Sender<Response>,
+    writers: Vec<TcpObjectWriter>,
+    reader_count: usize,
+    on_finish: OnFinish,
 }
 
 impl Inner {
-    fn create_state(
-        self: Arc<Self>,
-        request_rx: Receiver<Request>,
-        response_rx: Receiver<Response>,
+    async fn run(
+        mut self,
+        mut client: Client,
+        mut server: Server,
+        command_rx: mpsc::Receiver<Command>,
+        finish_rx: oneshot::Receiver<()>,
     ) {
-        let s1 = self.clone();
-        let s2 = self.clone();
-
-        self.task_handle.spawn(async move {
-            let mut client = Client {};
-            let stream = ClientStream {
-                sender: s1.send_channel.clone(),
-                receiver: response_rx,
-            };
-            client.run(stream, &s1.index).await;
-            s1.finish().await;
-        });
-
-        self.task_handle.spawn(async move {
-            let mut server = Server {};
-            let stream = ServerStream {
-                sender: s2.send_channel.clone(),
-                receiver: request_rx,
-            };
-            server.run(stream, &s2.index).await;
-            s2.finish().await;
-        });
-    }
-
-    async fn run_command_handler(
-        self: Arc<Self>,
-        mut rx: Receiver<Command>,
-        request_rx: Receiver<Request>,
-        response_rx: Receiver<Response>,
-    ) {
-        let mut ws = Vec::new();
-
-        let mut rxs = Some((request_rx, response_rx));
-
-        while let Some(command) = rx.recv().await {
-            match command {
-                Command::AddWriter(w) => {
-                    ws.push(w);
-
-                    if let Some(rxs) = rxs.take() {
-                        self.clone().create_state(rxs.0, rxs.1);
-                    }
-                }
-                Command::SendMessage(m) => {
-                    assert!(!ws.is_empty());
-
-                    while !ws.is_empty() {
-                        if ws[0].write(&m).await.is_ok() {
-                            break;
-                        }
-                        ws.remove(0);
-                    }
-
-                    if ws.is_empty() {
-                        self.finish().await;
-                    }
-                }
-            }
+        select! {
+            _ = self.handle_commands(command_rx) => (),
+            _ = client.run() => (),
+            _ = server.run() => (),
+            _ = finish_rx => (),
         }
+
+        self.on_finish.await
     }
 
-    async fn run_message_receiver(&self, mut r: ObjectReader) {
-        self.state.lock().await.receiver_count += 1;
-
+    async fn handle_commands(&mut self, mut command_rx: mpsc::Receiver<Command>) {
         loop {
-            match r.read::<Message>().await {
-                Ok(msg) => {
-                    self.handle_message(msg).await;
-                }
-                Err(_) => {
-                    let rc = {
-                        let mut state = self.state.lock().await;
-                        state.receiver_count -= 1;
-                        state.receiver_count
-                    };
-
-                    if rc == 0 {
-                        self.finish().await;
-                    }
-                    break;
-                }
-            };
-        }
-    }
-
-    async fn handle_message(&self, msg: Message) {
-        match msg {
-            Message::Request(rq) => {
-                self.request_tx.send(rq).await.unwrap();
+            if self.writers.is_empty() || self.reader_count == 0 {
+                break;
             }
-            Message::Response(rs) => {
-                self.response_tx.send(rs).await.unwrap();
+
+            match command_rx.recv().await {
+                Some(Command::AddConnection(stream)) => self.handle_add_connection(stream),
+                Some(Command::SendMessage(message)) => self.handle_send_message(message).await,
+                Some(Command::CloseReader) => self.reader_count -= 1,
+                None => break,
             }
         }
     }
 
-    async fn finish(&self) {
-        self.task_handle.abort_all();
+    fn handle_add_connection(&mut self, stream: TcpObjectStream) {
+        let (reader, writer) = stream.into_split();
+        self.writers.push(writer);
+        self.reader_count += 1;
 
-        let on_finish = self.state.lock().await.on_finish.take();
-        if let Some(on_finish) = on_finish {
-            on_finish.await
+        task::spawn(read(
+            reader,
+            self.command_tx.clone(),
+            self.request_tx.clone(),
+            self.response_tx.clone(),
+        ));
+    }
+
+    async fn handle_send_message(&mut self, message: Message) {
+        while !self.writers.is_empty() {
+            if self.writers[0].write(&message).await.is_ok() {
+                break;
+            }
+
+            self.writers.remove(0);
         }
     }
 }
 
-enum Command {
-    AddWriter(ObjectWriter),
+async fn read(
+    mut reader: TcpObjectReader,
+    command_tx: mpsc::Sender<Command>,
+    request_tx: mpsc::Sender<Request>,
+    response_tx: mpsc::Sender<Response>,
+) {
+    loop {
+        select! {
+            result = reader.read() => {
+                match result {
+                    Ok(Message::Request(request)) => {
+                        request_tx.send(request).await.unwrap_or(())
+                    }
+                    Ok(Message::Response(response)) => {
+                        response_tx.send(response).await.unwrap_or(())
+                    }
+                    Err(_) => {
+                        command_tx.send(Command::CloseReader).await.unwrap_or(());
+                        break;
+                    }
+                }
+            }
+            _ = command_tx.closed() => break,
+        }
+    }
+}
+
+pub(super) enum Command {
+    AddConnection(TcpObjectStream),
     SendMessage(Message),
+    CloseReader,
 }
 
 impl Command {
-    fn into_send_message(self) -> Message {
+    pub(super) fn into_send_message(self) -> Message {
         match self {
-            Command::SendMessage(m) => m,
+            Self::SendMessage(message) => message,
             _ => panic!("Command is not SendMessage"),
         }
     }
