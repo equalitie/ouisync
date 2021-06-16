@@ -1,5 +1,3 @@
-use std::cmp::Ordering;
-
 use super::{
     message::{Request, Response},
     message_broker::ServerStream,
@@ -10,36 +8,34 @@ use crate::{
     index::{Index, InnerNode, LeafNode, RootNode},
     version_vector::VersionVector,
 };
+use std::{cmp::Ordering, sync::Arc};
+use tokio::{select, sync::Notify};
 
 pub struct Server {
     index: Index,
+    notify: Arc<Notify>,
     stream: ServerStream,
 }
 
 impl Server {
-    pub fn new(index: Index, stream: ServerStream) -> Self {
-        Self { index, stream }
-    }
+    pub async fn new(index: Index, stream: ServerStream) -> Self {
+        // subscribe to branch change notifications
+        let branch = index.this_branch().await;
+        let notify = branch.subscribe();
 
-    pub async fn run(&mut self) {
-        loop {
-            match self.push_snapshot().await {
-                Ok(true) => {}
-                Ok(false) => break, // finished
-                Err(error) => {
-                    log::error!("Server failed: {}", error.verbose());
-                    break;
-                }
-            }
+        Self {
+            index,
+            notify,
+            stream,
         }
     }
 
-    async fn push_snapshot(&mut self) -> Result<bool> {
+    pub async fn run(&mut self) -> Result<()> {
         while let Some(request) = self.stream.recv().await {
             self.handle_request(request).await?;
         }
 
-        Ok(false)
+        Ok(())
     }
 
     async fn handle_request(&mut self, request: Request) -> Result<()> {
@@ -54,16 +50,27 @@ impl Server {
     }
 
     async fn handle_root_node(&mut self, their_versions: VersionVector) -> Result<()> {
-        let mut tx = self.index.pool.begin().await?;
-        let node = RootNode::load_latest(&mut tx, &self.index.this_replica_id).await?;
-        drop(tx);
+        loop {
+            let mut tx = self.index.pool.begin().await?;
+            let node = RootNode::load_latest(&mut tx, &self.index.this_replica_id).await?;
+            drop(tx);
 
-        if let Some(node) = node {
-            if let Some(Ordering::Greater) | None = node.versions.partial_cmp(&their_versions) {
-                self.stream
-                    .send(Response::RootNode(node.hash))
-                    .await
-                    .unwrap_or(());
+            // Check whether we have a snapshot that is newer or concurrent to the one they have.
+            if let Some(node) = node {
+                if let Some(Ordering::Greater) | None = node.versions.partial_cmp(&their_versions) {
+                    // We do have one - send the response.
+                    self.stream
+                        .send(Response::RootNode(node.hash))
+                        .await
+                        .unwrap_or(());
+                    break;
+                }
+            }
+
+            // We don't have one yet - wait until our branch changes or we get another request.
+            select! {
+                _ = self.notify.notified() => (),
+                _ = self.stream.peek() => break,
             }
         }
 

@@ -24,17 +24,9 @@ impl Client {
         }
     }
 
-    pub async fn run(&mut self) {
-        loop {
-            match self.pull_snapshot().await {
-                Ok(true) => {}
-                Ok(false) => break, // broker finished
-                Err(error) => {
-                    log::error!("Client failed: {}", error.verbose());
-                    break;
-                }
-            }
-        }
+    pub async fn run(&mut self) -> Result<()> {
+        while self.pull_snapshot().await? {}
+        Ok(())
     }
 
     async fn pull_snapshot(&mut self) -> Result<bool> {

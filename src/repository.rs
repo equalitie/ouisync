@@ -179,10 +179,7 @@ impl Repository {
     }
 
     async fn own_branch(&self) -> Branch {
-        self.index
-            .branch(&self.index.this_replica_id)
-            .await
-            .unwrap()
+        self.index.this_branch().await
     }
 
     async fn lookup_by_path(&self, path: &Path) -> Result<(Locator, EntryType)> {

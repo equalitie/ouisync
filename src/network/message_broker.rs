@@ -4,7 +4,7 @@ use super::{
     object_stream::{TcpObjectReader, TcpObjectStream, TcpObjectWriter},
     server::Server,
 };
-use crate::{index::Index, replica_id::ReplicaId};
+use crate::{error::Result, index::Index, replica_id::ReplicaId};
 use std::{future::Future, pin::Pin};
 use tokio::{
     select,
@@ -17,15 +17,38 @@ use tokio::{
 
 /// A stream for receiving Requests and sending Responses
 pub struct ServerStream {
-    pub(super) tx: mpsc::Sender<Command>,
-    pub(super) rx: mpsc::Receiver<Request>,
+    tx: mpsc::Sender<Command>,
+    rx: mpsc::Receiver<Request>,
+    peeked: Option<Request>,
 }
 
 impl ServerStream {
+    pub(super) fn new(tx: mpsc::Sender<Command>, rx: mpsc::Receiver<Request>) -> Self {
+        Self {
+            tx,
+            rx,
+            peeked: None,
+        }
+    }
+
     pub async fn recv(&mut self) -> Option<Request> {
-        let rq = self.rx.recv().await?;
+        let rq = if let Some(rq) = self.peeked.take() {
+            rq
+        } else {
+            self.rx.recv().await?
+        };
+
         log::trace!("server: recv {:?}", rq);
+
         Some(rq)
+    }
+
+    /// Wait for a request, but do not remove it from the stream. Subsequent call to `recv` returns
+    /// immediatelly.
+    pub async fn peek(&mut self) {
+        if self.peeked.is_none() {
+            self.peeked = self.rx.recv().await;
+        }
     }
 
     pub async fn send(&mut self, rs: Response) -> Result<(), SendError<Response>> {
@@ -39,11 +62,15 @@ impl ServerStream {
 
 /// A stream for sending Requests and receiving Responses
 pub struct ClientStream {
-    pub(super) tx: mpsc::Sender<Command>,
-    pub(super) rx: mpsc::Receiver<Response>,
+    tx: mpsc::Sender<Command>,
+    rx: mpsc::Receiver<Response>,
 }
 
 impl ClientStream {
+    pub(super) fn new(tx: mpsc::Sender<Command>, rx: mpsc::Receiver<Response>) -> Self {
+        Self { tx, rx }
+    }
+
     pub async fn recv(&mut self) -> Option<Response> {
         let rs = self.rx.recv().await?;
         log::trace!("client: recv {:?}", rs);
@@ -79,7 +106,7 @@ pub struct MessageBroker {
 }
 
 impl MessageBroker {
-    pub fn new(
+    pub async fn new(
         index: Index,
         their_replica_id: ReplicaId,
         stream: TcpObjectStream,
@@ -105,19 +132,11 @@ impl MessageBroker {
         let client = Client::new(
             index.clone(),
             their_replica_id,
-            ClientStream {
-                tx: command_tx.clone(),
-                rx: response_rx,
-            },
+            ClientStream::new(command_tx.clone(), response_rx),
         );
 
-        let server = Server::new(
-            index,
-            ServerStream {
-                tx: command_tx.clone(),
-                rx: request_rx,
-            },
-        );
+        let server_stream = ServerStream::new(command_tx.clone(), request_rx);
+        let server = Server::new(index, server_stream).await;
 
         task::spawn(inner.run(client, server, command_rx, finish_rx));
 
@@ -158,8 +177,8 @@ impl Inner {
     ) {
         select! {
             _ = self.handle_commands(command_rx) => (),
-            _ = client.run() => (),
-            _ = server.run() => (),
+            _ = log_error(client.run(), "client failed: ") => (),
+            _ = log_error(server.run(), "server failed: ") => (),
             _ = finish_rx => (),
         }
 
@@ -244,5 +263,14 @@ impl Command {
             Self::SendMessage(message) => message,
             _ => panic!("Command is not SendMessage"),
         }
+    }
+}
+
+async fn log_error<F>(fut: F, prefix: &'static str)
+where
+    F: Future<Output = Result<()>>,
+{
+    if let Err(error) = fut.await {
+        log::error!("{}{}", prefix, error.verbose())
     }
 }

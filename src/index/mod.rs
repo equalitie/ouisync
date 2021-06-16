@@ -19,10 +19,7 @@ use crate::{
     ReplicaId,
 };
 use sqlx::Row;
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
+use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
 
 type SnapshotId = u32;
@@ -31,55 +28,71 @@ type SnapshotId = u32;
 pub struct Index {
     pub pool: db::Pool,
     pub this_replica_id: ReplicaId,
-    branches: Arc<Mutex<HashMap<ReplicaId, Branch>>>,
+    branches: Arc<Mutex<Branches>>,
 }
 
 impl Index {
     pub async fn load(pool: db::Pool, this_replica_id: ReplicaId) -> Result<Self> {
-        let mut conn = pool.acquire().await?;
-        let mut replica_ids = Self::replicas(&mut conn).await?;
+        let mut tx = pool.begin().await?;
 
-        replica_ids.insert(this_replica_id);
-
-        let index = Self {
-            pool: pool.clone(),
-            this_replica_id,
-            branches: Arc::new(Mutex::new(HashMap::new())),
-        };
-
-        index.read_branches(&replica_ids).await?;
-
-        Ok(index)
-    }
-
-    pub async fn branch(&self, replica_id: &ReplicaId) -> Option<Branch> {
-        self.branches.lock().await.get(replica_id).cloned()
-    }
-
-    async fn replicas(conn: &mut db::Connection) -> Result<HashSet<ReplicaId>> {
-        Ok(
-            sqlx::query("SELECT DISTINCT replica_id FROM snapshot_root_nodes")
-                .fetch_all(&mut *conn)
-                .await?
-                .iter()
-                .map(|row| row.get(0))
-                .collect(),
-        )
-    }
-
-    async fn read_branches(&self, replica_ids: &HashSet<ReplicaId>) -> Result<()> {
-        let mut branches = self.branches.lock().await;
-        let mut tx = self.pool.begin().await?;
-
-        for id in replica_ids {
-            let branch = Branch::new(&mut tx, *id).await?;
-            branches.insert(*id, branch);
-        }
+        let this_branch = Branch::new(&mut tx, this_replica_id).await?;
+        let other_branches = load_other_branches(&mut tx, &this_replica_id).await?;
 
         tx.commit().await?;
 
-        Ok(())
+        let branches = Branches {
+            this: this_branch,
+            other: other_branches,
+        };
+
+        Ok(Self {
+            pool,
+            this_replica_id,
+            branches: Arc::new(Mutex::new(branches)),
+        })
     }
+
+    pub async fn other_branch(&self, replica_id: &ReplicaId) -> Option<Branch> {
+        self.branches.lock().await.other.get(replica_id).cloned()
+    }
+
+    pub async fn this_branch(&self) -> Branch {
+        self.branches.lock().await.this.clone()
+    }
+}
+
+struct Branches {
+    this: Branch,
+    other: HashMap<ReplicaId, Branch>,
+}
+
+/// Returns all replica ids we know of except ours.
+async fn load_other_replica_ids(
+    tx: &mut db::Transaction,
+    this_replica_id: &ReplicaId,
+) -> Result<Vec<ReplicaId>> {
+    Ok(
+        sqlx::query("SELECT DISTINCT replica_id FROM snapshot_root_nodes WHERE replica_id <> ?")
+            .bind(this_replica_id)
+            .map(|row| row.get(0))
+            .fetch_all(tx)
+            .await?,
+    )
+}
+
+async fn load_other_branches(
+    tx: &mut db::Transaction,
+    this_replica_id: &ReplicaId,
+) -> Result<HashMap<ReplicaId, Branch>> {
+    let ids = load_other_replica_ids(tx, this_replica_id).await?;
+    let mut map = HashMap::new();
+
+    for id in ids {
+        let branch = Branch::new(tx, id).await?;
+        map.insert(id, branch);
+    }
+
+    Ok(map)
 }
 
 /// Initializes the index. Creates the required database schema unless already exists.
@@ -174,7 +187,6 @@ mod tests {
         block::init(&pool).await.unwrap();
 
         let mut tx = pool.begin().await.unwrap();
-
         let cryptor = Cryptor::Null;
 
         let branch0 = Branch::new(&mut tx, ReplicaId::random()).await.unwrap();

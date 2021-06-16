@@ -47,23 +47,17 @@ async fn transfer_snapshot_between_two_replicas_case(leaf_count: usize, rng_seed
 
     let (a_send_tx, a_send_rx) = mpsc::channel(1);
     let (a_recv_tx, a_recv_rx) = mpsc::channel(capacity);
-    let server_stream = ServerStream {
-        tx: a_send_tx,
-        rx: a_recv_rx,
-    };
-    let mut server = Server::new(a_index.clone(), server_stream);
+    let server_stream = ServerStream::new(a_send_tx, a_recv_rx);
+    let mut server = Server::new(a_index.clone(), server_stream).await;
 
     let (b_send_tx, b_send_rx) = mpsc::channel(1);
     let (b_recv_tx, b_recv_rx) = mpsc::channel(capacity);
-    let client_stream = ClientStream {
-        tx: b_send_tx,
-        rx: b_recv_rx,
-    };
+    let client_stream = ClientStream::new(b_send_tx, b_recv_rx);
     let mut client = Client::new(b_index.clone(), a_index.this_replica_id, client_stream);
 
     select! {
-        _ = server.run() => {},
-        _ = client.run() => {},
+        result = server.run() => result.unwrap(),
+        result = client.run() => result.unwrap(),
         _ = simulate_connection(b_send_rx, b_recv_tx, a_send_rx, a_recv_tx) => {},
     }
 

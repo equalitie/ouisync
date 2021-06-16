@@ -188,12 +188,15 @@ impl Inner {
             Entry::Vacant(entry) => {
                 log::info!("Connected to replica {:?}", their_replica_id);
 
-                entry.insert(MessageBroker::new(
+                let broker = MessageBroker::new(
                     self.index.clone(),
                     their_replica_id,
                     stream,
                     Box::pin(self.clone().on_finish(their_replica_id, discovery_id)),
-                ));
+                )
+                .await;
+
+                entry.insert(broker);
             }
         }
     }

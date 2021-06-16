@@ -9,6 +9,7 @@ use test_strategy::proptest;
 async fn empty_blob() {
     let pool = init_db().await;
     let mut tx = pool.begin().await.unwrap();
+
     let branch = Branch::new(&mut tx, ReplicaId::random()).await.unwrap();
     tx.commit().await.unwrap();
 
