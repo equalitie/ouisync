@@ -1,5 +1,11 @@
 use crate::replica_id::ReplicaId;
 use serde::{Deserialize, Serialize};
+use sqlx::{
+    encode::IsNull,
+    error::BoxDynError,
+    sqlite::{SqliteArgumentValue, SqliteTypeInfo, SqliteValueRef},
+    Decode, Encode, Sqlite, Type,
+};
 use std::{cmp::Ordering, collections::HashMap};
 
 /// [Version vector](https://en.wikipedia.org/wiki/Version_vector).
@@ -64,6 +70,29 @@ impl PartialEq for VersionVector {
 }
 
 impl Eq for VersionVector {}
+
+// Support reading/writing `VersionVector` directly from/to the db:
+
+impl Type<Sqlite> for VersionVector {
+    fn type_info() -> SqliteTypeInfo {
+        Vec::<u8>::type_info()
+    }
+}
+
+impl<'q> Encode<'q, Sqlite> for VersionVector {
+    fn encode_by_ref(&self, args: &mut Vec<SqliteArgumentValue<'q>>) -> IsNull {
+        bincode::serialize(self)
+            .expect("failed to serialize VersionVector for db")
+            .encode_by_ref(args)
+    }
+}
+
+impl<'r> Decode<'r, Sqlite> for VersionVector {
+    fn decode(value: SqliteValueRef<'r>) -> Result<Self, BoxDynError> {
+        let slice = <&[u8]>::decode(value)?;
+        Ok(bincode::deserialize(slice)?)
+    }
+}
 
 #[cfg(test)]
 mod tests {
