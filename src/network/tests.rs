@@ -128,7 +128,7 @@ async fn simulate_connection(
             command = client_send_rx.recv() => {
                 let request = command.unwrap().into_send_message().into();
 
-                if matches!(request, Request::RootNode) {
+                if matches!(request, Request::RootNode(_)) {
                     root_request_count += 1;
                 }
 

@@ -1,15 +1,14 @@
 use crate::{
     crypto::Hash,
     index::{InnerNodeMap, LeafNodeSet},
+    version_vector::VersionVector,
 };
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Request {
-    /// Request the latest root node from another replica.
-    // TODO: include version vector so the recipient sends the reply only when
-    //       they have anything new.
-    RootNode,
+    /// Request a root node that is newer or concurrent to the specified version.
+    RootNode(VersionVector),
     /// Request inner nodes with the given parent hash and inner layer.
     InnerNodes {
         parent_hash: Hash,

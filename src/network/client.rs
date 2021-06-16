@@ -3,9 +3,9 @@ use super::{
     message_broker::ClientStream,
 };
 use crate::{
-    crypto::Hashable,
+    crypto::{Hash, Hashable},
     error::Result,
-    index::{self, Index, RootNode, INNER_LAYER_COUNT},
+    index::{self, Index, InnerNodeMap, LeafNodeSet, RootNode, INNER_LAYER_COUNT},
     replica_id::ReplicaId,
 };
 
@@ -38,7 +38,17 @@ impl Client {
     }
 
     async fn pull_snapshot(&mut self) -> Result<bool> {
-        self.stream.send(Request::RootNode).await.unwrap_or(());
+        let mut tx = self.index.pool.begin().await?;
+        let this_versions = RootNode::load_latest(&mut tx, &self.index.this_replica_id)
+            .await?
+            .map(|node| node.versions)
+            .unwrap_or_default();
+        drop(tx);
+
+        self.stream
+            .send(Request::RootNode(this_versions))
+            .await
+            .unwrap_or(());
 
         while let Some(response) = self.stream.recv().await {
             self.handle_response(response).await?;
@@ -52,72 +62,95 @@ impl Client {
     }
 
     async fn handle_response(&mut self, response: Response) -> Result<()> {
-        let mut tx = self.index.pool.begin().await?;
-
-        // TODO: have the `InnerNodes` response contain the layer number to simplify things
-
-        let (parent_hash, layer) = match response {
-            Response::RootNode(hash) => {
-                let (node, changed) =
-                    RootNode::create(&mut tx, &self.their_replica_id, hash).await?;
-
-                if changed {
-                    self.stream
-                        .send(Request::InnerNodes {
-                            parent_hash: node.hash,
-                            inner_layer: 0,
-                        })
-                        .await
-                        .unwrap_or(())
-                }
-
-                (hash, 0)
-            }
+        match response {
+            Response::RootNode(hash) => self.handle_root_node(hash).await,
             Response::InnerNodes {
                 parent_hash,
                 inner_layer,
                 nodes,
             } => {
-                if parent_hash != nodes.hash() {
-                    log::warn!("inner nodes parent hash mismatch");
-                    return Ok(());
-                }
-
-                for (bucket, node) in nodes {
-                    if node.save(&mut tx, &parent_hash, bucket).await? {
-                        let message = if inner_layer < INNER_LAYER_COUNT - 1 {
-                            Request::InnerNodes {
-                                parent_hash: node.hash,
-                                inner_layer: inner_layer + 1,
-                            }
-                        } else {
-                            Request::LeafNodes {
-                                parent_hash: node.hash,
-                            }
-                        };
-
-                        self.stream.send(message).await.unwrap_or(())
-                    }
-                }
-
-                (parent_hash, inner_layer)
+                self.handle_inner_nodes(parent_hash, inner_layer, nodes)
+                    .await
             }
             Response::LeafNodes { parent_hash, nodes } => {
-                if parent_hash != nodes.hash() {
-                    log::warn!("leaf nodes parent hash mismatch");
-                    return Ok(());
-                }
-
-                for node in nodes {
-                    node.save(&mut tx, &parent_hash).await?;
-                }
-
-                (parent_hash, INNER_LAYER_COUNT)
+                self.handle_leaf_nodes(parent_hash, nodes).await
             }
-        };
+        }
+    }
 
-        index::detect_complete_snapshots(&mut tx, parent_hash, layer).await?;
+    async fn handle_root_node(&mut self, hash: Hash) -> Result<()> {
+        let mut tx = self.index.pool.begin().await?;
+        let (node, changed) = RootNode::create(&mut tx, &self.their_replica_id, hash).await?;
+        index::detect_complete_snapshots(&mut tx, hash, 0).await?;
+        tx.commit().await?;
 
+        if changed {
+            self.stream
+                .send(Request::InnerNodes {
+                    parent_hash: node.hash,
+                    inner_layer: 0,
+                })
+                .await
+                .unwrap_or(())
+        }
+
+        Ok(())
+    }
+
+    async fn handle_inner_nodes(
+        &mut self,
+        parent_hash: Hash,
+        inner_layer: usize,
+        nodes: InnerNodeMap,
+    ) -> Result<()> {
+        if parent_hash != nodes.hash() {
+            log::warn!("inner nodes parent hash mismatch");
+            return Ok(());
+        }
+
+        let mut tx = self.index.pool.begin().await?;
+        let mut changed = vec![];
+        for (bucket, node) in nodes {
+            if node.save(&mut tx, &parent_hash, bucket).await? {
+                changed.push(node.hash);
+            }
+        }
+        index::detect_complete_snapshots(&mut tx, parent_hash, inner_layer).await?;
+        tx.commit().await?;
+
+        if inner_layer < INNER_LAYER_COUNT - 1 {
+            for parent_hash in changed {
+                self.stream
+                    .send(Request::InnerNodes {
+                        parent_hash,
+                        inner_layer: inner_layer + 1,
+                    })
+                    .await
+                    .unwrap_or(())
+            }
+        } else {
+            for parent_hash in changed {
+                self.stream
+                    .send(Request::LeafNodes { parent_hash })
+                    .await
+                    .unwrap_or(())
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn handle_leaf_nodes(&mut self, parent_hash: Hash, nodes: LeafNodeSet) -> Result<()> {
+        if parent_hash != nodes.hash() {
+            log::warn!("leaf nodes parent hash mismatch");
+            return Ok(());
+        }
+
+        let mut tx = self.index.pool.begin().await?;
+        for node in nodes {
+            node.save(&mut tx, &parent_hash).await?;
+        }
+        index::detect_complete_snapshots(&mut tx, parent_hash, INNER_LAYER_COUNT).await?;
         tx.commit().await?;
 
         Ok(())
