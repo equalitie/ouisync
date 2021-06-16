@@ -86,10 +86,7 @@ async fn create_existing_inner_node() {
     let node0 = InnerNode::new(hash);
     node0.save(&mut tx, &parent, bucket).await.unwrap();
 
-    let node1 = InnerNode {
-        hash,
-        is_complete: false,
-    };
+    let node1 = InnerNode::new(hash);
     assert!(!node1.save(&mut tx, &parent, bucket).await.unwrap());
 
     let nodes = InnerNode::load_children(&mut tx, &parent).await.unwrap();

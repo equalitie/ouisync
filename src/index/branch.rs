@@ -118,6 +118,7 @@ impl Branch {
         Ok(path)
     }
 
+    // TODO: make sure nodes are saved as complete.
     async fn write_path(
         &self,
         tx: &mut db::Transaction,
@@ -148,7 +149,7 @@ impl Branch {
         node: &mut RootNode,
         hash: Hash,
     ) -> Result<RootNode> {
-        let new_root = node.clone_with_new_hash(tx, hash).await?;
+        let new_root = node.next_version(tx, hash).await?;
         Ok(mem::replace(node, new_root))
     }
 

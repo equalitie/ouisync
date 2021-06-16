@@ -25,16 +25,23 @@ impl VersionVector {
         Self::default()
     }
 
-    /// Insert an entry into this version vector. If the entry already exists, it's overwritten
+    /// Inserts an entry into this version vector. If the entry already exists, it's overwritten
     /// only if the new version is higher than the existing version.
     pub fn insert(&mut self, replica_id: ReplicaId, version: u64) {
         let old = self.0.entry(replica_id).or_insert(0);
         *old = (*old).max(version);
     }
 
-    /// Retrieve the version corresponding to the given replica id.
+    /// Retrieves the version corresponding to the given replica id.
     pub fn get(&self, replica_id: &ReplicaId) -> u64 {
         self.0.get(replica_id).copied().unwrap_or(0)
+    }
+
+    /// Increments the version corresponding to the given replica id and returns it.
+    pub fn increment(&mut self, replica_id: ReplicaId) -> u64 {
+        let version = self.0.entry(replica_id).or_insert(0);
+        *version += 1;
+        *version
     }
 }
 
@@ -231,5 +238,16 @@ mod tests {
 
         vv.insert(id, 1);
         assert_eq!(vv.get(&id), 2);
+    }
+
+    #[test]
+    fn increment() {
+        let id = rand::random();
+
+        let mut vv = vv![];
+        assert_eq!(vv.get(&id), 0);
+
+        assert_eq!(vv.increment(id), 1);
+        assert_eq!(vv.get(&id), 1);
     }
 }

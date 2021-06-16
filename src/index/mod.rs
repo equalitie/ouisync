@@ -88,6 +88,7 @@ pub async fn init(pool: &db::Pool) -> Result<(), Error> {
         "CREATE TABLE IF NOT EXISTS snapshot_root_nodes (
              snapshot_id INTEGER PRIMARY KEY,
              replica_id  BLOB NOT NULL,
+             versions    BLOB NOT NULL,
 
              -- Hash of the children
              hash        BLOB NOT NULL,

@@ -4,6 +4,7 @@ use crate::{
     db,
     error::Result,
     replica_id::ReplicaId,
+    version_vector::VersionVector,
 };
 use futures::{Stream, TryStreamExt};
 use sqlx::Row;
@@ -11,6 +12,7 @@ use sqlx::Row;
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct RootNode {
     pub snapshot_id: SnapshotId,
+    pub versions: VersionVector,
     pub hash: Hash,
     pub is_complete: bool,
 }
@@ -44,22 +46,27 @@ impl RootNode {
 
     /// Creates a root node of the specified replica. Returns the node itself and a flag indicating
     /// whether a new node was created (`true`) or the node already existed (`false`).
+    /// When a new node is created, it is asigned an empty version vector.
     pub async fn create(
         tx: &mut db::Transaction,
         replica_id: &ReplicaId,
         hash: Hash,
     ) -> Result<(Self, bool)> {
         let is_complete = hash == InnerNodeMap::default().hash();
+        let versions = VersionVector::new();
 
         let row = sqlx::query(
-            "INSERT INTO snapshot_root_nodes (replica_id, hash, is_complete)
-             VALUES (?, ?, ?)
+            "INSERT INTO snapshot_root_nodes (
+                 replica_id, versions, hash, is_complete
+             )
+             VALUES (?, ?, ?, ?)
              ON CONFLICT (replica_id, hash) DO NOTHING;
-             SELECT snapshot_id, is_complete, CHANGES()
+             SELECT snapshot_id, versions, is_complete, CHANGES()
              FROM snapshot_root_nodes
              WHERE replica_id = ? AND hash = ?",
         )
         .bind(replica_id)
+        .bind(&versions)
         .bind(&hash)
         .bind(is_complete)
         .bind(replica_id)
@@ -70,10 +77,11 @@ impl RootNode {
         Ok((
             RootNode {
                 snapshot_id: row.get(0),
+                versions: row.get(1),
                 hash,
-                is_complete: row.get(1),
+                is_complete: row.get(2),
             },
-            row.get::<u32, _>(2) > 0,
+            row.get::<u32, _>(3) > 0,
         ))
     }
 
@@ -85,7 +93,7 @@ impl RootNode {
         limit: u32,
     ) -> impl Stream<Item = Result<Self>> + 'a {
         sqlx::query(
-            "SELECT snapshot_id, hash, is_complete
+            "SELECT snapshot_id, versions, hash, is_complete
              FROM snapshot_root_nodes
              WHERE replica_id = ?
              ORDER BY snapshot_id DESC
@@ -95,13 +103,15 @@ impl RootNode {
         .bind(limit)
         .map(|row| Self {
             snapshot_id: row.get(0),
-            hash: row.get(1),
-            is_complete: row.get(2),
+            versions: row.get(1),
+            hash: row.get(2),
+            is_complete: row.get(3),
         })
         .fetch(tx)
         .err_into()
     }
 
+    /// Mark all root nodes with the specified hash as complete.
     pub async fn set_complete(tx: &mut db::Transaction, hash: &Hash) -> Result<()> {
         sqlx::query("UPDATE snapshot_root_nodes SET is_complete = 1 WHERE hash = ?")
             .bind(hash)
@@ -111,14 +121,28 @@ impl RootNode {
         Ok(())
     }
 
-    pub async fn clone_with_new_hash(&self, tx: &mut db::Transaction, hash: Hash) -> Result<Self> {
+    /// Creates the next version of this root node with the specified hash.
+    pub async fn next_version(&self, tx: &mut db::Transaction, hash: Hash) -> Result<Self> {
+        let replica_id =
+            sqlx::query("SELECT replica_id FROM snapshot_root_nodes WHERE snapshot_id = ?")
+                .bind(&self.snapshot_id)
+                .fetch_one(&mut *tx)
+                .await?
+                .get(0);
+
+        let mut versions = self.versions.clone();
+        versions.increment(replica_id);
+
         let snapshot_id = sqlx::query(
-            "INSERT INTO snapshot_root_nodes (replica_id, hash, is_complete)
-             SELECT replica_id, ?, is_complete
+            "INSERT INTO snapshot_root_nodes (
+                 replica_id, versions, hash, is_complete
+             )
+             SELECT replica_id, ?, ?, is_complete
              FROM snapshot_root_nodes
              WHERE snapshot_id = ?
              RETURNING snapshot_id",
         )
+        .bind(&versions)
         .bind(&hash)
         .bind(self.snapshot_id)
         .fetch_one(tx)
@@ -127,6 +151,7 @@ impl RootNode {
 
         Ok(Self {
             snapshot_id,
+            versions,
             hash,
             is_complete: self.is_complete,
         })
