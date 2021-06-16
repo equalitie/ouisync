@@ -46,14 +46,15 @@ impl RootNode {
 
     /// Creates a root node of the specified replica. Returns the node itself and a flag indicating
     /// whether a new node was created (`true`) or the node already existed (`false`).
-    /// When a new node is created, it is asigned an empty version vector.
     pub async fn create(
         tx: &mut db::Transaction,
         replica_id: &ReplicaId,
         hash: Hash,
     ) -> Result<(Self, bool)> {
         let is_complete = hash == InnerNodeMap::default().hash();
-        let versions = VersionVector::new();
+
+        let mut versions = VersionVector::new();
+        versions.increment(*replica_id);
 
         let row = sqlx::query(
             "INSERT INTO snapshot_root_nodes (
