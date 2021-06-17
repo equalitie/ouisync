@@ -19,36 +19,17 @@ use tokio::{
 pub struct ServerStream {
     tx: mpsc::Sender<Command>,
     rx: mpsc::Receiver<Request>,
-    peeked: Option<Request>,
 }
 
 impl ServerStream {
     pub(super) fn new(tx: mpsc::Sender<Command>, rx: mpsc::Receiver<Request>) -> Self {
-        Self {
-            tx,
-            rx,
-            peeked: None,
-        }
+        Self { tx, rx }
     }
 
     pub async fn recv(&mut self) -> Option<Request> {
-        let rq = if let Some(rq) = self.peeked.take() {
-            rq
-        } else {
-            self.rx.recv().await?
-        };
-
+        let rq = self.rx.recv().await?;
         log::trace!("server: recv {:?}", rq);
-
         Some(rq)
-    }
-
-    /// Wait for a request, but do not remove it from the stream. Subsequent call to `recv` returns
-    /// immediatelly.
-    pub async fn peek(&mut self) {
-        if self.peeked.is_none() {
-            self.peeked = self.rx.recv().await;
-        }
     }
 
     pub async fn send(&mut self, rs: Response) -> Result<(), SendError<Response>> {

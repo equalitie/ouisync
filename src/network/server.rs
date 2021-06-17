@@ -15,6 +15,10 @@ pub struct Server {
     index: Index,
     notify: Arc<Notify>,
     stream: ServerStream,
+    // `RootNode` requests which we can't fulfil because their version vector is strictly newer
+    // than our latest. We backlog them here until we detect local branch change, then attempt to
+    // handle them again.
+    backlog: Vec<VersionVector>,
 }
 
 impl Server {
@@ -27,12 +31,32 @@ impl Server {
             index,
             notify,
             stream,
+            backlog: vec![],
         }
     }
 
     pub async fn run(&mut self) -> Result<()> {
-        while let Some(request) = self.stream.recv().await {
-            self.handle_request(request).await?;
+        loop {
+            select! {
+                request = self.stream.recv() => {
+                    let request = if let Some(request) = request {
+                        request
+                    } else {
+                        break;
+                    };
+
+                    self.handle_request(request).await?
+                }
+                _ = self.notify.notified() => self.handle_local_change().await?
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn handle_local_change(&mut self) -> Result<()> {
+        while let Some(versions) = self.backlog.pop() {
+            self.handle_root_node(versions).await?
         }
 
         Ok(())
@@ -50,29 +74,25 @@ impl Server {
     }
 
     async fn handle_root_node(&mut self, their_versions: VersionVector) -> Result<()> {
-        loop {
-            let mut tx = self.index.pool.begin().await?;
-            let node = RootNode::load_latest(&mut tx, &self.index.this_replica_id).await?;
-            drop(tx);
+        let mut tx = self.index.pool.begin().await?;
+        let node = RootNode::load_latest(&mut tx, &self.index.this_replica_id).await?;
+        drop(tx);
 
-            // Check whether we have a snapshot that is newer or concurrent to the one they have.
-            if let Some(node) = node {
-                if let Some(Ordering::Greater) | None = node.versions.partial_cmp(&their_versions) {
-                    // We do have one - send the response.
-                    self.stream
-                        .send(Response::RootNode(node.hash))
-                        .await
-                        .unwrap_or(());
-                    break;
-                }
-            }
-
-            // We don't have one yet - wait until our branch changes or we get another request.
-            select! {
-                _ = self.notify.notified() => (),
-                _ = self.stream.peek() => break,
+        // Check whether we have a snapshot that is newer or concurrent to the one they have.
+        if let Some(node) = node {
+            if let Some(Ordering::Greater) | None = node.versions.partial_cmp(&their_versions) {
+                // We do have one - send the response.
+                self.stream
+                    .send(Response::RootNode(node.hash))
+                    .await
+                    .unwrap_or(());
+                return Ok(());
             }
         }
+
+        // We don't have one yet - backlog the request and try to fulfil it next time when the
+        // local branch changes.
+        self.backlog.push(their_versions);
 
         Ok(())
     }
