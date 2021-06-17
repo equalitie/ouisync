@@ -35,15 +35,12 @@ impl Index {
     pub async fn load(pool: db::Pool, this_replica_id: ReplicaId) -> Result<Self> {
         let mut tx = pool.begin().await?;
 
-        let this_branch = Branch::new(&mut tx, this_replica_id).await?;
-        let other_branches = load_other_branches(&mut tx, &this_replica_id).await?;
+        let local = Branch::new(&mut tx, this_replica_id).await?;
+        let remote = load_remote_branches(&mut tx, &this_replica_id).await?;
 
         tx.commit().await?;
 
-        let branches = Branches {
-            this: this_branch,
-            other: other_branches,
-        };
+        let branches = Branches { local, remote };
 
         Ok(Self {
             pool,
@@ -52,18 +49,18 @@ impl Index {
         })
     }
 
-    pub async fn other_branch(&self, replica_id: &ReplicaId) -> Option<Branch> {
-        self.branches.lock().await.other.get(replica_id).cloned()
+    pub async fn remote_branch(&self, replica_id: &ReplicaId) -> Option<Branch> {
+        self.branches.lock().await.remote.get(replica_id).cloned()
     }
 
-    pub async fn this_branch(&self) -> Branch {
-        self.branches.lock().await.this.clone()
+    pub async fn local_branch(&self) -> Branch {
+        self.branches.lock().await.local.clone()
     }
 }
 
 struct Branches {
-    this: Branch,
-    other: HashMap<ReplicaId, Branch>,
+    local: Branch,
+    remote: HashMap<ReplicaId, Branch>,
 }
 
 /// Returns all replica ids we know of except ours.
@@ -80,7 +77,7 @@ async fn load_other_replica_ids(
     )
 }
 
-async fn load_other_branches(
+async fn load_remote_branches(
     tx: &mut db::Transaction,
     this_replica_id: &ReplicaId,
 ) -> Result<HashMap<ReplicaId, Branch>> {

@@ -142,7 +142,7 @@ impl Repository {
     }
 
     pub async fn open_file_by_locator(&self, locator: Locator) -> Result<File> {
-        let branch = self.own_branch().await;
+        let branch = self.local_branch().await;
 
         File::open(
             self.index.pool.clone(),
@@ -154,7 +154,7 @@ impl Repository {
     }
 
     pub async fn open_directory_by_locator(&self, locator: Locator) -> Result<Directory> {
-        let branch = self.own_branch().await;
+        let branch = self.local_branch().await;
 
         match Directory::open(
             self.index.pool.clone(),
@@ -178,8 +178,8 @@ impl Repository {
         }
     }
 
-    async fn own_branch(&self) -> Branch {
-        self.index.this_branch().await
+    async fn local_branch(&self) -> Branch {
+        self.index.local_branch().await
     }
 
     async fn lookup_by_path(&self, path: &Path) -> Result<(Locator, EntryType)> {
