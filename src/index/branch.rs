@@ -15,22 +15,26 @@ use crate::{
     replica_id::ReplicaId,
 };
 use std::{mem, sync::Arc};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Notify};
 
 type LocatorHash = Hash;
 
+#[derive(Clone)]
 pub struct Branch {
     root_node: Arc<Mutex<RootNode>>,
     replica_id: ReplicaId,
+    notify: Arc<Notify>,
 }
 
 impl Branch {
     pub async fn new(tx: &mut db::Transaction, replica_id: ReplicaId) -> Result<Self> {
         let root_node = RootNode::load_latest_or_create(tx, &replica_id).await?;
+        let notify = Arc::new(Notify::new());
 
         Ok(Self {
             root_node: Arc::new(Mutex::new(root_node)),
             replica_id,
+            notify,
         })
     }
 
@@ -85,6 +89,12 @@ impl Branch {
         Ok(block_id)
     }
 
+    /// Subscribe to notifications of changes in this branch. A notification is emitted every time
+    /// a new snapshot of this branch is created.
+    pub fn subscribe(&self) -> Arc<Notify> {
+        self.notify.clone()
+    }
+
     async fn get_path(
         &self,
         tx: &mut db::Transaction,
@@ -118,6 +128,7 @@ impl Branch {
         Ok(path)
     }
 
+    // TODO: make sure nodes are saved as complete.
     async fn write_path(
         &self,
         tx: &mut db::Transaction,
@@ -148,21 +159,16 @@ impl Branch {
         node: &mut RootNode,
         hash: Hash,
     ) -> Result<RootNode> {
-        let new_root = node.clone_with_new_hash(tx, hash).await?;
-        Ok(mem::replace(node, new_root))
+        let new_root = node.next_version(tx, hash).await?;
+        let old_root = mem::replace(node, new_root);
+
+        self.notify.notify_waiters();
+
+        Ok(old_root)
     }
 
     async fn remove_snapshot(&self, root_node: &RootNode, tx: &mut db::Transaction) -> Result<()> {
         root_node.remove_recursive(tx).await
-    }
-}
-
-impl Clone for Branch {
-    fn clone(&self) -> Self {
-        Self {
-            root_node: self.root_node.clone(),
-            replica_id: self.replica_id,
-        }
     }
 }
 
@@ -232,7 +238,6 @@ mod tests {
     async fn remove_locator() {
         let pool = init_db().await;
         let mut tx = pool.begin().await.unwrap();
-
         let branch = Branch::new(&mut tx, ReplicaId::random()).await.unwrap();
 
         let b = BlockId::random();

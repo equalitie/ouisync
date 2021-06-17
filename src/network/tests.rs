@@ -5,26 +5,38 @@ use super::{
     server::Server,
 };
 use crate::{
+    crypto::Hashable,
     db,
     index::{self, node_test_utils::Snapshot, Index, RootNode, INNER_LAYER_COUNT},
+    replica_id::ReplicaId,
     test_utils,
+    version_vector::VersionVector,
 };
 use rand::prelude::*;
 use test_strategy::proptest;
 use tokio::{select, sync::mpsc};
 
-// test complete transfer of one snapshot from one replica to another.
+// Test complete transfer of one snapshot from one replica to another
+// Also test a new snapshot transfer is performed after every local branch
+// change.
 #[proptest]
 fn transfer_snapshot_between_two_replicas(
-    #[strategy(0usize..=32)] leaf_count: usize,
+    #[strategy(0usize..32)] leaf_count: usize,
+    #[strategy(0usize..2)] change_count: usize,
     #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
 ) {
     test_utils::run(transfer_snapshot_between_two_replicas_case(
-        leaf_count, rng_seed,
+        leaf_count,
+        change_count,
+        rng_seed,
     ))
 }
 
-async fn transfer_snapshot_between_two_replicas_case(leaf_count: usize, rng_seed: u64) {
+async fn transfer_snapshot_between_two_replicas_case(
+    leaf_count: usize,
+    change_count: usize,
+    rng_seed: u64,
+) {
     let mut rng = StdRng::seed_from_u64(rng_seed);
 
     let a_index = create_index(&mut rng).await;
@@ -33,47 +45,46 @@ async fn transfer_snapshot_between_two_replicas_case(leaf_count: usize, rng_seed
     let snapshot = Snapshot::generate(&mut rng, leaf_count);
     save_snapshot(&a_index, &snapshot).await;
 
-    {
-        let mut tx = b_index.pool.begin().await.unwrap();
-        assert!(RootNode::load_latest(&mut tx, &a_index.this_replica_id)
-            .await
-            .unwrap()
-            .is_none());
-    }
+    assert!(load_latest_root_node(&b_index, &a_index.this_replica_id)
+        .await
+        .is_none());
 
-    // Enough capacity to prevent deadlocks.
-    // TODO: find the actual minimum necessary capacity.
-    let capacity = 256;
+    let (mut server, a_send_rx, a_recv_tx) = create_server(a_index.clone()).await;
+    let (mut client, b_send_rx, b_recv_tx) =
+        create_client(b_index.clone(), a_index.this_replica_id);
 
-    let (a_send_tx, a_send_rx) = mpsc::channel(1);
-    let (a_recv_tx, a_recv_rx) = mpsc::channel(capacity);
-    let server_stream = ServerStream {
-        tx: a_send_tx,
-        rx: a_recv_rx,
+    let drive = async {
+        let mut simulator = ConnectionSimulator::new(b_send_rx, b_recv_tx, a_send_rx, a_recv_tx);
+        let mut remaining_changes = change_count;
+
+        loop {
+            simulator.step().await;
+
+            if remaining_changes > 0 {
+                insert_random_block(&mut rng, &a_index).await;
+                remaining_changes -= 1;
+            } else {
+                break;
+            }
+        }
     };
-    let mut server = Server::new(a_index.clone(), server_stream);
-
-    let (b_send_tx, b_send_rx) = mpsc::channel(1);
-    let (b_recv_tx, b_recv_rx) = mpsc::channel(capacity);
-    let client_stream = ClientStream {
-        tx: b_send_tx,
-        rx: b_recv_rx,
-    };
-    let mut client = Client::new(b_index.clone(), a_index.this_replica_id, client_stream);
 
     select! {
-        _ = server.run() => {},
-        _ = client.run() => {},
-        _ = simulate_connection(b_send_rx, b_recv_tx, a_send_rx, a_recv_tx) => {},
+        result = server.run() => result.unwrap(),
+        result = client.run() => result.unwrap(),
+        _ = drive => (),
     }
 
-    let mut tx = b_index.pool.begin().await.unwrap();
-    let root = RootNode::load_latest(&mut tx, &a_index.this_replica_id)
+    let root_per_b = load_latest_root_node(&b_index, &a_index.this_replica_id)
         .await
-        .unwrap()
+        .unwrap();
+    let root_per_a = load_latest_root_node(&a_index, &a_index.this_replica_id)
+        .await
         .unwrap();
 
-    assert!(root.is_complete);
+    assert!(root_per_b.is_complete);
+    assert_eq!(root_per_b.hash, root_per_a.hash);
+    assert_eq!(root_per_b.versions, root_per_a.versions);
 }
 
 async fn create_index<R: Rng>(rng: &mut R) -> Index {
@@ -83,12 +94,42 @@ async fn create_index<R: Rng>(rng: &mut R) -> Index {
     Index::load(db, id).await.unwrap()
 }
 
+// Enough capacity to prevent deadlocks.
+// TODO: find the actual minimum necessary capacity.
+const CAPACITY: usize = 256;
+
+async fn create_server(index: Index) -> (Server, mpsc::Receiver<Command>, mpsc::Sender<Request>) {
+    let (send_tx, send_rx) = mpsc::channel(1);
+    let (recv_tx, recv_rx) = mpsc::channel(CAPACITY);
+    let stream = ServerStream::new(send_tx, recv_rx);
+    let server = Server::new(index, stream).await;
+
+    (server, send_rx, recv_tx)
+}
+
+fn create_client(
+    index: Index,
+    their_replica_id: ReplicaId,
+) -> (Client, mpsc::Receiver<Command>, mpsc::Sender<Response>) {
+    let (send_tx, send_rx) = mpsc::channel(1);
+    let (recv_tx, recv_rx) = mpsc::channel(CAPACITY);
+    let stream = ClientStream::new(send_tx, recv_rx);
+    let client = Client::new(index, their_replica_id, stream);
+
+    (client, send_rx, recv_tx)
+}
+
 async fn save_snapshot(index: &Index, snapshot: &Snapshot) {
     let mut tx = index.pool.begin().await.unwrap();
 
-    RootNode::create(&mut tx, &index.this_replica_id, *snapshot.root_hash())
-        .await
-        .unwrap();
+    RootNode::create(
+        &mut tx,
+        &index.this_replica_id,
+        VersionVector::new(),
+        *snapshot.root_hash(),
+    )
+    .await
+    .unwrap();
 
     for layer in snapshot.inner_layers() {
         for (parent_hash, nodes) in layer.inner_maps() {
@@ -111,32 +152,68 @@ async fn save_snapshot(index: &Index, snapshot: &Snapshot) {
     tx.commit().await.unwrap()
 }
 
+async fn insert_random_block(rng: &mut impl Rng, index: &Index) {
+    let branch = index.local_branch().await;
+    let encoded_locator = rng.gen::<u64>().hash();
+    let block_id = rng.gen();
+
+    let mut tx = index.pool.begin().await.unwrap();
+    branch
+        .insert(&mut tx, &block_id, &encoded_locator)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+}
+
+async fn load_latest_root_node(index: &Index, replica_id: &ReplicaId) -> Option<RootNode> {
+    let mut tx = index.pool.begin().await.unwrap();
+    RootNode::load_latest(&mut tx, replica_id).await.unwrap()
+}
+
 // Simulate connection between `Client` and `Server` by forwarding the messages between the
 // corresponding streams.
-async fn simulate_connection(
-    mut client_send_rx: mpsc::Receiver<Command>,
+struct ConnectionSimulator {
+    client_send_rx: mpsc::Receiver<Command>,
     client_recv_tx: mpsc::Sender<Response>,
-    mut server_send_rx: mpsc::Receiver<Command>,
+    server_send_rx: mpsc::Receiver<Command>,
     server_recv_tx: mpsc::Sender<Request>,
-) {
-    // If the client sends second `RootNode` request that means it's done fetching the whole
-    // snapshot.
-    let mut root_request_count = 0usize;
+}
 
-    while root_request_count < 2 {
-        select! {
-            command = client_send_rx.recv() => {
-                let request = command.unwrap().into_send_message().into();
+impl ConnectionSimulator {
+    fn new(
+        client_send_rx: mpsc::Receiver<Command>,
+        client_recv_tx: mpsc::Sender<Response>,
+        server_send_rx: mpsc::Receiver<Command>,
+        server_recv_tx: mpsc::Sender<Request>,
+    ) -> Self {
+        Self {
+            client_send_rx,
+            client_recv_tx,
+            server_send_rx,
+            server_recv_tx,
+        }
+    }
 
-                if matches!(request, Request::RootNode) {
-                    root_request_count += 1;
+    // Simulate the connection until two `RootNode` requests sent because when the client sends
+    // the second `RootNode` request that means it's done fetching the whole snapshot.
+    async fn step(&mut self) {
+        let mut root_node_requests = 0;
+
+        while root_node_requests < 2 {
+            select! {
+                command = self.client_send_rx.recv() => {
+                    let request = command.unwrap().into_send_message().into();
+
+                    if matches!(request, Request::RootNode(_)) {
+                        root_node_requests += 1;
+                    }
+
+                    self.server_recv_tx.send(request).await.unwrap();
                 }
-
-                server_recv_tx.send(request).await.unwrap();
-            }
-            command = server_send_rx.recv() => {
-                let response = command.unwrap().into_send_message().into();
-                client_recv_tx.send(response).await.unwrap();
+                command = self.server_send_rx.recv() => {
+                    let response = command.unwrap().into_send_message().into();
+                    self.client_recv_tx.send(response).await.unwrap();
+                }
             }
         }
     }

@@ -1,5 +1,11 @@
 use crate::replica_id::ReplicaId;
 use serde::{Deserialize, Serialize};
+use sqlx::{
+    encode::IsNull,
+    error::BoxDynError,
+    sqlite::{SqliteArgumentValue, SqliteTypeInfo, SqliteValueRef},
+    Decode, Encode, Sqlite, Type,
+};
 use std::{cmp::Ordering, collections::HashMap};
 
 /// [Version vector](https://en.wikipedia.org/wiki/Version_vector).
@@ -19,16 +25,23 @@ impl VersionVector {
         Self::default()
     }
 
-    /// Insert an entry into this version vector. If the entry already exists, it's overwritten
+    /// Inserts an entry into this version vector. If the entry already exists, it's overwritten
     /// only if the new version is higher than the existing version.
     pub fn insert(&mut self, replica_id: ReplicaId, version: u64) {
         let old = self.0.entry(replica_id).or_insert(0);
         *old = (*old).max(version);
     }
 
-    /// Retrieve the version corresponding to the given replica id.
+    /// Retrieves the version corresponding to the given replica id.
     pub fn get(&self, replica_id: &ReplicaId) -> u64 {
         self.0.get(replica_id).copied().unwrap_or(0)
+    }
+
+    /// Increments the version corresponding to the given replica id and returns it.
+    pub fn increment(&mut self, replica_id: ReplicaId) -> u64 {
+        let version = self.0.entry(replica_id).or_insert(0);
+        *version += 1;
+        *version
     }
 }
 
@@ -64,6 +77,29 @@ impl PartialEq for VersionVector {
 }
 
 impl Eq for VersionVector {}
+
+// Support reading/writing `VersionVector` directly from/to the db:
+
+impl Type<Sqlite> for VersionVector {
+    fn type_info() -> SqliteTypeInfo {
+        Vec::<u8>::type_info()
+    }
+}
+
+impl<'q> Encode<'q, Sqlite> for VersionVector {
+    fn encode_by_ref(&self, args: &mut Vec<SqliteArgumentValue<'q>>) -> IsNull {
+        bincode::serialize(self)
+            .expect("failed to serialize VersionVector for db")
+            .encode_by_ref(args)
+    }
+}
+
+impl<'r> Decode<'r, Sqlite> for VersionVector {
+    fn decode(value: SqliteValueRef<'r>) -> Result<Self, BoxDynError> {
+        let slice = <&[u8]>::decode(value)?;
+        Ok(bincode::deserialize(slice)?)
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -202,5 +238,16 @@ mod tests {
 
         vv.insert(id, 1);
         assert_eq!(vv.get(&id), 2);
+    }
+
+    #[test]
+    fn increment() {
+        let id = rand::random();
+
+        let mut vv = vv![];
+        assert_eq!(vv.get(&id), 0);
+
+        assert_eq!(vv.increment(id), 1);
+        assert_eq!(vv.get(&id), 1);
     }
 }
