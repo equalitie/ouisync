@@ -21,7 +21,7 @@ pub enum Request {
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Response {
     /// Send the latest root node of this replica to another replica.
-    RootNode(Hash),
+    RootNode { versions: VersionVector, hash: Hash },
     /// Send inner nodes with the given parent hash and inner layer.
     InnerNodes {
         parent_hash: Hash,

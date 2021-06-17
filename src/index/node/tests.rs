@@ -1,5 +1,5 @@
 use super::{inner::INNER_LAYER_COUNT, test_utils::Snapshot, *};
-use crate::{crypto::Hashable, db, test_utils};
+use crate::{crypto::Hashable, db, test_utils, version_vector::VersionVector};
 use assert_matches::assert_matches;
 use futures::TryStreamExt;
 use rand::prelude::*;
@@ -13,7 +13,9 @@ async fn create_new_root_node() {
     let hash = rand::random::<u64>().hash();
 
     let mut tx = pool.begin().await.unwrap();
-    let (node0, changed) = RootNode::create(&mut tx, &replica_id, hash).await.unwrap();
+    let (node0, changed) = RootNode::create(&mut tx, &replica_id, VersionVector::new(), hash)
+        .await
+        .unwrap();
     assert!(changed);
     assert_eq!(node0.hash, hash);
 
@@ -38,9 +40,13 @@ async fn create_existing_root_node() {
     let hash = rand::random::<u64>().hash();
 
     let mut tx = pool.begin().await.unwrap();
-    let (node0, _) = RootNode::create(&mut tx, &replica_id, hash).await.unwrap();
+    let (node0, _) = RootNode::create(&mut tx, &replica_id, VersionVector::new(), hash)
+        .await
+        .unwrap();
 
-    let (node1, changed) = RootNode::create(&mut tx, &replica_id, hash).await.unwrap();
+    let (node1, changed) = RootNode::create(&mut tx, &replica_id, VersionVector::new(), hash)
+        .await
+        .unwrap();
     assert_eq!(node0, node1);
     assert!(!changed);
 
@@ -158,9 +164,14 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
     let replica_id = rng.gen();
     let snapshot = Snapshot::generate(&mut rng, leaf_count);
 
-    let (mut root_node, _) = RootNode::create(&mut tx, &replica_id, *snapshot.root_hash())
-        .await
-        .unwrap();
+    let (mut root_node, _) = RootNode::create(
+        &mut tx,
+        &replica_id,
+        VersionVector::new(),
+        *snapshot.root_hash(),
+    )
+    .await
+    .unwrap();
 
     if leaf_count > 0 {
         super::detect_complete_snapshots(&mut tx, root_node.hash, 0)

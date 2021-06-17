@@ -29,9 +29,14 @@ impl RootNode {
         if let Some(node) = node {
             Ok(node)
         } else {
-            Ok(Self::create(tx, replica_id, InnerNodeMap::default().hash())
-                .await?
-                .0)
+            Ok(Self::create(
+                tx,
+                replica_id,
+                VersionVector::new(),
+                InnerNodeMap::default().hash(),
+            )
+            .await?
+            .0)
         }
     }
 
@@ -49,12 +54,12 @@ impl RootNode {
     pub async fn create(
         tx: &mut db::Transaction,
         replica_id: &ReplicaId,
+        mut versions: VersionVector,
         hash: Hash,
     ) -> Result<(Self, bool)> {
         let is_complete = hash == InnerNodeMap::default().hash();
 
-        let mut versions = VersionVector::new();
-        versions.increment(*replica_id);
+        versions.insert(*replica_id, 1);
 
         let row = sqlx::query(
             "INSERT INTO snapshot_root_nodes (

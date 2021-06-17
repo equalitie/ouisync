@@ -7,6 +7,7 @@ use crate::{
     error::Result,
     index::{self, Index, InnerNodeMap, LeafNodeSet, RootNode, INNER_LAYER_COUNT},
     replica_id::ReplicaId,
+    version_vector::VersionVector,
 };
 
 pub struct Client {
@@ -55,7 +56,7 @@ impl Client {
 
     async fn handle_response(&mut self, response: Response) -> Result<()> {
         match response {
-            Response::RootNode(hash) => self.handle_root_node(hash).await,
+            Response::RootNode { versions, hash } => self.handle_root_node(versions, hash).await,
             Response::InnerNodes {
                 parent_hash,
                 inner_layer,
@@ -70,9 +71,10 @@ impl Client {
         }
     }
 
-    async fn handle_root_node(&mut self, hash: Hash) -> Result<()> {
+    async fn handle_root_node(&mut self, versions: VersionVector, hash: Hash) -> Result<()> {
         let mut tx = self.index.pool.begin().await?;
-        let (node, changed) = RootNode::create(&mut tx, &self.their_replica_id, hash).await?;
+        let (node, changed) =
+            RootNode::create(&mut tx, &self.their_replica_id, versions, hash).await?;
         index::detect_complete_snapshots(&mut tx, hash, 0).await?;
         tx.commit().await?;
 

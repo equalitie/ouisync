@@ -83,7 +83,10 @@ impl Server {
             if let Some(Ordering::Greater) | None = node.versions.partial_cmp(&their_versions) {
                 // We do have one - send the response.
                 self.stream
-                    .send(Response::RootNode(node.hash))
+                    .send(Response::RootNode {
+                        versions: node.versions,
+                        hash: node.hash,
+                    })
                     .await
                     .unwrap_or(());
                 return Ok(());

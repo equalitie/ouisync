@@ -5,27 +5,38 @@ use super::{
     server::Server,
 };
 use crate::{
+    crypto::Hashable,
     db,
     index::{self, node_test_utils::Snapshot, Index, RootNode, INNER_LAYER_COUNT},
     replica_id::ReplicaId,
     test_utils,
+    version_vector::VersionVector,
 };
 use rand::prelude::*;
 use test_strategy::proptest;
 use tokio::{select, sync::mpsc};
 
-// test complete transfer of one snapshot from one replica to another.
+// Test complete transfer of one snapshot from one replica to another
+// Also test a new snapshot transfer is performed after every local branch
+// change.
 #[proptest]
 fn transfer_snapshot_between_two_replicas(
-    #[strategy(0usize..=32)] leaf_count: usize,
+    #[strategy(0usize..32)] leaf_count: usize,
+    #[strategy(0usize..2)] change_count: usize,
     #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
 ) {
     test_utils::run(transfer_snapshot_between_two_replicas_case(
-        leaf_count, rng_seed,
+        leaf_count,
+        change_count,
+        rng_seed,
     ))
 }
 
-async fn transfer_snapshot_between_two_replicas_case(leaf_count: usize, rng_seed: u64) {
+async fn transfer_snapshot_between_two_replicas_case(
+    leaf_count: usize,
+    change_count: usize,
+    rng_seed: u64,
+) {
     let mut rng = StdRng::seed_from_u64(rng_seed);
 
     let a_index = create_index(&mut rng).await;
@@ -34,24 +45,28 @@ async fn transfer_snapshot_between_two_replicas_case(leaf_count: usize, rng_seed
     let snapshot = Snapshot::generate(&mut rng, leaf_count);
     save_snapshot(&a_index, &snapshot).await;
 
-    {
-        let mut tx = b_index.pool.begin().await.unwrap();
-        assert!(RootNode::load_latest(&mut tx, &a_index.this_replica_id)
-            .await
-            .unwrap()
-            .is_none());
-    }
+    assert!(load_latest_root_node(&b_index, &a_index.this_replica_id)
+        .await
+        .is_none());
 
     let (mut server, a_send_rx, a_recv_tx) = create_server(a_index.clone()).await;
     let (mut client, b_send_rx, b_recv_tx) =
         create_client(b_index.clone(), a_index.this_replica_id);
 
     let drive = async {
-        // Stop after two steps because when the client sends the second `RootNode` request that
-        // means it's done fetching the whole snapshot.
         let mut simulator = ConnectionSimulator::new(b_send_rx, b_recv_tx, a_send_rx, a_recv_tx);
-        simulator.step().await;
-        simulator.step().await;
+        let mut remaining_changes = change_count;
+
+        loop {
+            simulator.step().await;
+
+            if remaining_changes > 0 {
+                insert_random_block(&mut rng, &a_index).await;
+                remaining_changes -= 1;
+            } else {
+                break;
+            }
+        }
     };
 
     select! {
@@ -60,21 +75,12 @@ async fn transfer_snapshot_between_two_replicas_case(leaf_count: usize, rng_seed
         _ = drive => (),
     }
 
-    let root_per_b = {
-        let mut tx = b_index.pool.begin().await.unwrap();
-        RootNode::load_latest(&mut tx, &a_index.this_replica_id)
-            .await
-            .unwrap()
-            .unwrap()
-    };
-
-    let root_per_a = {
-        let mut tx = a_index.pool.begin().await.unwrap();
-        RootNode::load_latest(&mut tx, &a_index.this_replica_id)
-            .await
-            .unwrap()
-            .unwrap()
-    };
+    let root_per_b = load_latest_root_node(&b_index, &a_index.this_replica_id)
+        .await
+        .unwrap();
+    let root_per_a = load_latest_root_node(&a_index, &a_index.this_replica_id)
+        .await
+        .unwrap();
 
     assert!(root_per_b.is_complete);
     assert_eq!(root_per_b.hash, root_per_a.hash);
@@ -116,9 +122,14 @@ fn create_client(
 async fn save_snapshot(index: &Index, snapshot: &Snapshot) {
     let mut tx = index.pool.begin().await.unwrap();
 
-    RootNode::create(&mut tx, &index.this_replica_id, *snapshot.root_hash())
-        .await
-        .unwrap();
+    RootNode::create(
+        &mut tx,
+        &index.this_replica_id,
+        VersionVector::new(),
+        *snapshot.root_hash(),
+    )
+    .await
+    .unwrap();
 
     for layer in snapshot.inner_layers() {
         for (parent_hash, nodes) in layer.inner_maps() {
@@ -139,6 +150,24 @@ async fn save_snapshot(index: &Index, snapshot: &Snapshot) {
     }
 
     tx.commit().await.unwrap()
+}
+
+async fn insert_random_block(rng: &mut impl Rng, index: &Index) {
+    let branch = index.local_branch().await;
+    let encoded_locator = rng.gen::<u64>().hash();
+    let block_id = rng.gen();
+
+    let mut tx = index.pool.begin().await.unwrap();
+    branch
+        .insert(&mut tx, &block_id, &encoded_locator)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+}
+
+async fn load_latest_root_node(index: &Index, replica_id: &ReplicaId) -> Option<RootNode> {
+    let mut tx = index.pool.begin().await.unwrap();
+    RootNode::load_latest(&mut tx, replica_id).await.unwrap()
 }
 
 // Simulate connection between `Client` and `Server` by forwarding the messages between the
@@ -165,18 +194,21 @@ impl ConnectionSimulator {
         }
     }
 
-    // Simulate the connection until a `RootNode` request is sent.
+    // Simulate the connection until two `RootNode` requests sent because when the client sends
+    // the second `RootNode` request that means it's done fetching the whole snapshot.
     async fn step(&mut self) {
-        loop {
+        let mut root_node_requests = 0;
+
+        while root_node_requests < 2 {
             select! {
                 command = self.client_send_rx.recv() => {
                     let request = command.unwrap().into_send_message().into();
-                    let root_node = matches!(request, Request::RootNode(_));
-                    self.server_recv_tx.send(request).await.unwrap();
 
-                    if root_node {
-                        break;
+                    if matches!(request, Request::RootNode(_)) {
+                        root_node_requests += 1;
                     }
+
+                    self.server_recv_tx.send(request).await.unwrap();
                 }
                 command = self.server_send_rx.recv() => {
                     let response = command.unwrap().into_send_message().into();
