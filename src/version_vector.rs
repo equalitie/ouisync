@@ -43,6 +43,14 @@ impl VersionVector {
         *version += 1;
         *version
     }
+
+    /// Merge two versio vectors into one. The version of each entry in the resulting vector is
+    /// the maximum of the corresponding entries of the input vectors.
+    pub fn merge(&mut self, other: Self) {
+        for (replica_id, version) in other.0 {
+            self.insert(replica_id, version)
+        }
+    }
 }
 
 impl PartialOrd for VersionVector {
@@ -249,5 +257,39 @@ mod tests {
 
         assert_eq!(vv.increment(id), 1);
         assert_eq!(vv.get(&id), 1);
+    }
+
+    #[test]
+    fn merge() {
+        let id0 = rand::random();
+        let id1 = rand::random();
+
+        let mut vv = vv![];
+        vv.merge(vv![]);
+        assert_eq!(vv, vv![]);
+
+        let mut vv = vv![];
+        vv.merge(vv![id0 => 1]);
+        assert_eq!(vv, vv![id0 => 1]);
+
+        let mut vv = vv![id0 => 1];
+        vv.merge(vv![]);
+        assert_eq!(vv, vv![id0 => 1]);
+
+        let mut vv = vv![id0 => 1];
+        vv.merge(vv![id0 => 2]);
+        assert_eq!(vv, vv![id0 => 2]);
+
+        let mut vv = vv![id0 => 2];
+        vv.merge(vv![id0 => 1]);
+        assert_eq!(vv, vv![id0 => 2]);
+
+        let mut vv = vv![id0 => 1];
+        vv.merge(vv![id1 => 2]);
+        assert_eq!(vv, vv![id0 => 1, id1 => 2]);
+
+        let mut vv = vv![id0 => 1, id1 => 2];
+        vv.merge(vv![id0 => 2, id1 => 1]);
+        assert_eq!(vv, vv![id0 => 2, id1 => 2]);
     }
 }
