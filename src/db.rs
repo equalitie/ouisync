@@ -4,10 +4,11 @@ use crate::{
     index, this_replica,
 };
 use sqlx::{
+    pool::PoolOptions,
     sqlite::{Sqlite, SqliteConnectOptions},
     SqlitePool,
 };
-use std::path::PathBuf;
+use std::{path::PathBuf, str::FromStr};
 use tokio::fs;
 
 /// Database connection pool.
@@ -30,7 +31,7 @@ pub enum Store {
 
 /// Creates the database unless it already exsits and establish a connection to it.
 pub async fn init(store: Store) -> Result<Pool> {
-    let pool = match store {
+    let options = match store {
         Store::File(path) => {
             if let Some(dir) = path.parent() {
                 fs::create_dir_all(dir)
@@ -38,16 +39,24 @@ pub async fn init(store: Store) -> Result<Pool> {
                     .map_err(Error::CreateDbDirectory)?;
             }
 
-            Pool::connect_with(
-                SqliteConnectOptions::new()
-                    .filename(path)
-                    .create_if_missing(true),
-            )
-            .await
+            SqliteConnectOptions::new()
+                .filename(path)
+                .create_if_missing(true)
         }
-        Store::Memory => Pool::connect(":memory:").await,
-    }
-    .map_err(Error::ConnectToDb)?;
+        Store::Memory => SqliteConnectOptions::from_str(":memory:").expect("invalid db uri"),
+    };
+
+    let pool = PoolOptions::new()
+        // HACK: Using only one connection turns the pool effectively into a mutex over a single
+        // connection. This is a heavy-handed fix that prevents the "table is locked" errors that
+        // sometimes happen when multiple tasks try to access the same table and at least one of
+        // them mutably. The downside is that this means only one task can access the database at
+        // any given time which might affect performance.
+        // TODO: find a more fine-grained way to solve this issue.
+        .max_connections(1)
+        .connect_with(options)
+        .await
+        .map_err(Error::ConnectToDb)?;
 
     create_schema(&pool).await?;
 
