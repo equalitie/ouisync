@@ -36,7 +36,7 @@ impl Client {
             .await?
             .map(|node| node.versions)
             .unwrap_or_default();
-        drop(tx);
+        tx.rollback().await?; // no need to commit - we are only reading here.
 
         self.stream
             .send(Request::RootNode(this_versions))

@@ -76,7 +76,7 @@ impl Server {
     async fn handle_root_node(&mut self, their_versions: VersionVector) -> Result<()> {
         let mut tx = self.index.pool.begin().await?;
         let node = RootNode::load_latest(&mut tx, &self.index.this_replica_id).await?;
-        drop(tx);
+        tx.rollback().await?; // no need to commit - we are only reading here.
 
         // Check whether we have a snapshot that is newer or concurrent to the one they have.
         if let Some(node) = node {
@@ -103,7 +103,7 @@ impl Server {
     async fn handle_inner_nodes(&mut self, parent_hash: Hash, inner_layer: usize) -> Result<()> {
         let mut tx = self.index.pool.begin().await?;
         let nodes = InnerNode::load_children(&mut tx, &parent_hash).await?;
-        drop(tx);
+        tx.rollback().await?; // no need to commit - we are only reading here.
 
         if !nodes.is_empty() {
             self.stream
@@ -122,7 +122,7 @@ impl Server {
     async fn handle_leaf_nodes(&mut self, parent_hash: Hash) -> Result<()> {
         let mut tx = self.index.pool.begin().await?;
         let nodes = LeafNode::load_children(&mut tx, &parent_hash).await?;
-        drop(tx);
+        tx.rollback().await?; // no need to commit - we are only reading here.
 
         if !nodes.is_empty() {
             self.stream
