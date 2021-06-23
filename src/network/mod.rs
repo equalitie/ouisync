@@ -17,7 +17,7 @@ use crate::{
     scoped_task_set::{ScopedTaskHandle, ScopedTaskSet},
     Index,
 };
-use futures::future;
+use futures_util::future;
 use std::{
     collections::{hash_map::Entry, HashMap},
     io,

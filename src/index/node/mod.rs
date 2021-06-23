@@ -19,7 +19,7 @@ use crate::{
     db,
     error::Result,
 };
-use futures::{future, TryStreamExt};
+use futures_util::{future, TryStreamExt};
 
 /// Get the bucket for `locator` at the specified `inner_layer`.
 pub fn get_bucket(locator: &Hash, inner_layer: usize) -> u8 {

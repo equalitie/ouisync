@@ -6,7 +6,7 @@ use crate::{
     replica_id::ReplicaId,
     version_vector::VersionVector,
 };
-use futures::{Stream, TryStreamExt};
+use futures_util::{Stream, TryStreamExt};
 use sqlx::Row;
 
 #[derive(Clone, Eq, PartialEq, Debug)]

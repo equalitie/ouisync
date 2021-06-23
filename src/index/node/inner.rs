@@ -3,7 +3,7 @@ use crate::{
     db,
     error::Result,
 };
-use futures::{future, Stream, TryStreamExt};
+use futures_util::{future, Stream, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_256};
 use sqlx::Row;

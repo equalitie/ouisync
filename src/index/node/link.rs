@@ -5,7 +5,7 @@ use super::{
 };
 use crate::{crypto::Hash, db, error::Result};
 use async_recursion::async_recursion;
-use futures::TryStreamExt;
+use futures_util::TryStreamExt;
 use sqlx::Row;
 
 // We're not repeating enumeration name
