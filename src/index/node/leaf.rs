@@ -117,6 +117,17 @@ impl LeafNodeSet {
         Some(self.0.remove(index))
     }
 
+    /// Atomically saves all nodes in this set into the db.
+    pub async fn save(&self, pool: &db::Pool, parent: &Hash) -> Result<()> {
+        let mut tx = pool.begin().await?;
+        for node in self {
+            node.save(&mut tx, parent).await?;
+        }
+        tx.commit().await?;
+
+        Ok(())
+    }
+
     fn lookup(&self, locator: &Hash) -> Result<usize, usize> {
         self.0.binary_search_by(|node| node.locator.cmp(locator))
     }

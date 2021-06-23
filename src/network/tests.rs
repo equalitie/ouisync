@@ -136,21 +136,12 @@ async fn save_snapshot(index: &Index, snapshot: &Snapshot) {
 
     for layer in snapshot.inner_layers() {
         for (parent_hash, nodes) in layer.inner_maps() {
-            let mut tx = index.pool.begin().await.unwrap();
-            for (bucket, node) in nodes {
-                node.save(&mut tx, parent_hash, bucket).await.unwrap();
-            }
-            tx.commit().await.unwrap()
+            nodes.save(&index.pool, &parent_hash).await.unwrap();
         }
     }
 
     for (parent_hash, nodes) in snapshot.leaf_sets() {
-        let mut tx = index.pool.begin().await.unwrap();
-        for node in nodes {
-            node.save(&mut tx, parent_hash).await.unwrap();
-        }
-        tx.commit().await.unwrap();
-
+        nodes.save(&index.pool, &parent_hash).await.unwrap();
         index::detect_complete_snapshots(&index.pool, *parent_hash, INNER_LAYER_COUNT)
             .await
             .unwrap();

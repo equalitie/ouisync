@@ -98,15 +98,7 @@ impl Client {
             return Ok(());
         }
 
-        let mut changed = vec![];
-        let mut tx = self.index.pool.begin().await?;
-        for (bucket, node) in nodes {
-            if node.save(&mut tx, &parent_hash, bucket).await? {
-                changed.push(node.hash);
-            }
-        }
-        tx.commit().await?;
-
+        let changed = nodes.save(&self.index.pool, &parent_hash).await?;
         index::detect_complete_snapshots(&self.index.pool, parent_hash, inner_layer).await?;
 
         if inner_layer < INNER_LAYER_COUNT - 1 {
@@ -137,12 +129,7 @@ impl Client {
             return Ok(());
         }
 
-        let mut tx = self.index.pool.begin().await?;
-        for node in nodes {
-            node.save(&mut tx, &parent_hash).await?;
-        }
-        tx.commit().await?;
-
+        nodes.save(&self.index.pool, &parent_hash).await?;
         index::detect_complete_snapshots(&self.index.pool, parent_hash, INNER_LAYER_COUNT).await?;
 
         Ok(())

@@ -130,6 +130,20 @@ impl InnerNodeMap {
     pub fn remove(&mut self, bucket: u8) -> Option<InnerNode> {
         self.0.remove(&bucket)
     }
+
+    /// Atomically saves all nodes in this map to the db. Returns hashes of the nodes that changed.
+    pub async fn save(&self, pool: &db::Pool, parent: &Hash) -> Result<Vec<Hash>> {
+        let mut changed = Vec::with_capacity(self.len());
+        let mut tx = pool.begin().await?;
+        for (bucket, node) in self {
+            if node.save(&mut tx, parent, bucket).await? {
+                changed.push(node.hash);
+            }
+        }
+        tx.commit().await?;
+
+        Ok(changed)
+    }
 }
 
 impl Extend<(u8, InnerNode)> for InnerNodeMap {
