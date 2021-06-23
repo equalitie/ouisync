@@ -32,6 +32,11 @@ fn transfer_snapshot_between_two_replicas(
     ))
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn debug() {
+    transfer_snapshot_between_two_replicas_case(32, 1, 0).await
+}
+
 async fn transfer_snapshot_between_two_replicas_case(
     leaf_count: usize,
     change_count: usize,
@@ -120,10 +125,8 @@ fn create_client(
 }
 
 async fn save_snapshot(index: &Index, snapshot: &Snapshot) {
-    let mut tx = index.pool.begin().await.unwrap();
-
     RootNode::create(
-        &mut tx,
+        &index.pool,
         &index.this_replica_id,
         VersionVector::new(),
         *snapshot.root_hash(),
@@ -133,23 +136,25 @@ async fn save_snapshot(index: &Index, snapshot: &Snapshot) {
 
     for layer in snapshot.inner_layers() {
         for (parent_hash, nodes) in layer.inner_maps() {
+            let mut tx = index.pool.begin().await.unwrap();
             for (bucket, node) in nodes {
                 node.save(&mut tx, parent_hash, bucket).await.unwrap();
             }
+            tx.commit().await.unwrap()
         }
     }
 
     for (parent_hash, nodes) in snapshot.leaf_sets() {
+        let mut tx = index.pool.begin().await.unwrap();
         for node in nodes {
             node.save(&mut tx, parent_hash).await.unwrap();
         }
+        tx.commit().await.unwrap();
 
-        index::detect_complete_snapshots(&mut tx, *parent_hash, INNER_LAYER_COUNT)
+        index::detect_complete_snapshots(&index.pool, *parent_hash, INNER_LAYER_COUNT)
             .await
             .unwrap();
     }
-
-    tx.commit().await.unwrap()
 }
 
 async fn insert_random_block(rng: &mut impl Rng, index: &Index) {
@@ -166,8 +171,9 @@ async fn insert_random_block(rng: &mut impl Rng, index: &Index) {
 }
 
 async fn load_latest_root_node(index: &Index, replica_id: &ReplicaId) -> Option<RootNode> {
-    let mut tx = index.pool.begin().await.unwrap();
-    RootNode::load_latest(&mut tx, replica_id).await.unwrap()
+    RootNode::load_latest(&index.pool, replica_id)
+        .await
+        .unwrap()
 }
 
 // Simulate connection between `Client` and `Server` by forwarding the messages between the

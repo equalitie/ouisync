@@ -33,12 +33,8 @@ pub struct Index {
 
 impl Index {
     pub async fn load(pool: db::Pool, this_replica_id: ReplicaId) -> Result<Self> {
-        let mut tx = pool.begin().await?;
-
-        let local = Branch::new(&mut tx, this_replica_id).await?;
-        let remote = load_remote_branches(&mut tx, &this_replica_id).await?;
-
-        tx.commit().await?;
+        let local = Branch::new(&pool, this_replica_id).await?;
+        let remote = load_remote_branches(&pool, &this_replica_id).await?;
 
         let branches = Branches { local, remote };
 
@@ -65,27 +61,27 @@ struct Branches {
 
 /// Returns all replica ids we know of except ours.
 async fn load_other_replica_ids(
-    tx: &mut db::Transaction,
+    pool: &db::Pool,
     this_replica_id: &ReplicaId,
 ) -> Result<Vec<ReplicaId>> {
     Ok(
         sqlx::query("SELECT DISTINCT replica_id FROM snapshot_root_nodes WHERE replica_id <> ?")
             .bind(this_replica_id)
             .map(|row| row.get(0))
-            .fetch_all(tx)
+            .fetch_all(pool)
             .await?,
     )
 }
 
 async fn load_remote_branches(
-    tx: &mut db::Transaction,
+    pool: &db::Pool,
     this_replica_id: &ReplicaId,
 ) -> Result<HashMap<ReplicaId, Branch>> {
-    let ids = load_other_replica_ids(tx, this_replica_id).await?;
+    let ids = load_other_replica_ids(pool, this_replica_id).await?;
     let mut map = HashMap::new();
 
     for id in ids {
-        let branch = Branch::new(tx, id).await?;
+        let branch = Branch::new(pool, id).await?;
         map.insert(id, branch);
     }
 
@@ -183,14 +179,15 @@ mod tests {
         init(&pool).await.unwrap();
         block::init(&pool).await.unwrap();
 
-        let mut tx = pool.begin().await.unwrap();
         let cryptor = Cryptor::Null;
 
-        let branch0 = Branch::new(&mut tx, ReplicaId::random()).await.unwrap();
-        let branch1 = Branch::new(&mut tx, ReplicaId::random()).await.unwrap();
+        let branch0 = Branch::new(&pool, ReplicaId::random()).await.unwrap();
+        let branch1 = Branch::new(&pool, ReplicaId::random()).await.unwrap();
 
         let block_id = BlockId::random();
         let buffer = vec![0; BLOCK_SIZE];
+
+        let mut tx = pool.begin().await.unwrap();
 
         block::write(&mut tx, &block_id, &buffer, &AuthTag::default())
             .await

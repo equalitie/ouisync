@@ -31,12 +31,10 @@ impl Client {
     }
 
     async fn pull_snapshot(&mut self) -> Result<bool> {
-        let mut tx = self.index.pool.begin().await?;
-        let this_versions = RootNode::load_latest(&mut tx, &self.index.this_replica_id)
+        let this_versions = RootNode::load_latest(&self.index.pool, &self.index.this_replica_id)
             .await?
             .map(|node| node.versions)
             .unwrap_or_default();
-        tx.rollback().await?; // no need to commit - we are only reading here.
 
         self.stream
             .send(Request::RootNode(this_versions))
@@ -72,11 +70,9 @@ impl Client {
     }
 
     async fn handle_root_node(&mut self, versions: VersionVector, hash: Hash) -> Result<()> {
-        let mut tx = self.index.pool.begin().await?;
         let (node, changed) =
-            RootNode::create(&mut tx, &self.their_replica_id, versions, hash).await?;
-        index::detect_complete_snapshots(&mut tx, hash, 0).await?;
-        tx.commit().await?;
+            RootNode::create(&self.index.pool, &self.their_replica_id, versions, hash).await?;
+        index::detect_complete_snapshots(&self.index.pool, hash, 0).await?;
 
         if changed {
             self.stream
@@ -102,15 +98,16 @@ impl Client {
             return Ok(());
         }
 
-        let mut tx = self.index.pool.begin().await?;
         let mut changed = vec![];
+        let mut tx = self.index.pool.begin().await?;
         for (bucket, node) in nodes {
             if node.save(&mut tx, &parent_hash, bucket).await? {
                 changed.push(node.hash);
             }
         }
-        index::detect_complete_snapshots(&mut tx, parent_hash, inner_layer).await?;
         tx.commit().await?;
+
+        index::detect_complete_snapshots(&self.index.pool, parent_hash, inner_layer).await?;
 
         if inner_layer < INNER_LAYER_COUNT - 1 {
             for parent_hash in changed {
@@ -144,17 +141,19 @@ impl Client {
         for node in nodes {
             node.save(&mut tx, &parent_hash).await?;
         }
-        index::detect_complete_snapshots(&mut tx, parent_hash, INNER_LAYER_COUNT).await?;
         tx.commit().await?;
+
+        index::detect_complete_snapshots(&self.index.pool, parent_hash, INNER_LAYER_COUNT).await?;
 
         Ok(())
     }
 
     async fn is_complete(&self) -> Result<bool> {
-        let mut tx = self.index.pool.begin().await?;
-        Ok(RootNode::load_latest(&mut tx, &self.their_replica_id)
-            .await?
-            .map(|node| node.is_complete)
-            .unwrap_or(false))
+        Ok(
+            RootNode::load_latest(&self.index.pool, &self.their_replica_id)
+                .await?
+                .map(|node| node.is_complete)
+                .unwrap_or(false),
+        )
     }
 }

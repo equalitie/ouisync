@@ -12,19 +12,18 @@ async fn create_new_root_node() {
     let replica_id = rand::random();
     let hash = rand::random::<u64>().hash();
 
-    let mut tx = pool.begin().await.unwrap();
-    let (node0, changed) = RootNode::create(&mut tx, &replica_id, VersionVector::new(), hash)
+    let (node0, changed) = RootNode::create(&pool, &replica_id, VersionVector::new(), hash)
         .await
         .unwrap();
     assert!(changed);
     assert_eq!(node0.hash, hash);
 
-    let node1 = RootNode::load_latest_or_create(&mut tx, &replica_id)
+    let node1 = RootNode::load_latest_or_create(&pool, &replica_id)
         .await
         .unwrap();
     assert_eq!(node1, node0);
 
-    let nodes: Vec<_> = RootNode::load_all(&mut tx, &replica_id, 2)
+    let nodes: Vec<_> = RootNode::load_all(&pool, &replica_id, 2)
         .try_collect()
         .await
         .unwrap();
@@ -39,18 +38,17 @@ async fn create_existing_root_node() {
     let replica_id = rand::random();
     let hash = rand::random::<u64>().hash();
 
-    let mut tx = pool.begin().await.unwrap();
-    let (node0, _) = RootNode::create(&mut tx, &replica_id, VersionVector::new(), hash)
+    let (node0, _) = RootNode::create(&pool, &replica_id, VersionVector::new(), hash)
         .await
         .unwrap();
 
-    let (node1, changed) = RootNode::create(&mut tx, &replica_id, VersionVector::new(), hash)
+    let (node1, changed) = RootNode::create(&pool, &replica_id, VersionVector::new(), hash)
         .await
         .unwrap();
     assert_eq!(node0, node1);
     assert!(!changed);
 
-    let nodes: Vec<_> = RootNode::load_all(&mut tx, &replica_id, 2)
+    let nodes: Vec<_> = RootNode::load_all(&pool, &replica_id, 2)
         .try_collect()
         .await
         .unwrap();
@@ -129,21 +127,22 @@ async fn attempt_to_create_conflicting_inner_node() {
 #[tokio::test(flavor = "multi_thread")]
 async fn update_inner_node_to_complete() {
     let pool = setup().await;
-    let mut tx = pool.begin().await.unwrap();
 
     let parent = rand::random::<u64>().hash();
     let bucket = rand::random();
     let hash = rand::random::<u64>().hash();
 
     let node = InnerNode::new(hash);
+    let mut tx = pool.begin().await.unwrap();
     node.save(&mut tx, &parent, bucket).await.unwrap();
+    tx.commit().await.unwrap();
 
-    let nodes = InnerNode::load_children(&mut tx, &parent).await.unwrap();
+    let nodes = InnerNode::load_children(&pool, &parent).await.unwrap();
     assert!(!nodes.get(bucket).unwrap().is_complete);
 
-    InnerNode::set_complete(&mut tx, &hash).await.unwrap();
+    InnerNode::set_complete(&pool, &hash).await.unwrap();
 
-    let nodes = InnerNode::load_children(&mut tx, &parent).await.unwrap();
+    let nodes = InnerNode::load_children(&pool, &parent).await.unwrap();
     assert!(nodes.get(bucket).unwrap().is_complete);
 }
 
@@ -159,13 +158,12 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
     let mut rng = StdRng::seed_from_u64(rng_seed);
 
     let pool = setup().await;
-    let mut tx = pool.begin().await.unwrap();
 
     let replica_id = rng.gen();
     let snapshot = Snapshot::generate(&mut rng, leaf_count);
 
     let (mut root_node, _) = RootNode::create(
-        &mut tx,
+        &pool,
         &replica_id,
         VersionVector::new(),
         *snapshot.root_hash(),
@@ -174,10 +172,10 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
     .unwrap();
 
     if leaf_count > 0 {
-        super::detect_complete_snapshots(&mut tx, root_node.hash, 0)
+        super::detect_complete_snapshots(&pool, root_node.hash, 0)
             .await
             .unwrap();
-        root_node.reload(&mut tx).await.unwrap();
+        root_node.reload(&pool).await.unwrap();
         assert!(!root_node.is_complete);
     }
 
@@ -186,14 +184,16 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
 
     for layer in snapshot.inner_layers() {
         for (parent_hash, nodes) in layer.inner_maps() {
+            let mut tx = pool.begin().await.unwrap();
             for (bucket, node) in nodes {
                 node.save(&mut tx, parent_hash, bucket).await.unwrap();
             }
+            tx.commit().await.unwrap();
 
-            super::detect_complete_snapshots(&mut tx, *parent_hash, layer.number())
+            super::detect_complete_snapshots(&pool, *parent_hash, layer.number())
                 .await
                 .unwrap();
-            root_node.reload(&mut tx).await.unwrap();
+            root_node.reload(&pool).await.unwrap();
             assert!(!root_node.is_complete);
         }
     }
@@ -201,15 +201,17 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
     let mut unsaved_leaves = snapshot.leaf_count();
 
     for (parent_hash, nodes) in snapshot.leaf_sets() {
+        let mut tx = pool.begin().await.unwrap();
         for node in nodes {
             node.save(&mut tx, parent_hash).await.unwrap();
             unsaved_leaves -= 1;
         }
+        tx.commit().await.unwrap();
 
-        super::detect_complete_snapshots(&mut tx, *parent_hash, INNER_LAYER_COUNT)
+        super::detect_complete_snapshots(&pool, *parent_hash, INNER_LAYER_COUNT)
             .await
             .unwrap();
-        root_node.reload(&mut tx).await.unwrap();
+        root_node.reload(&pool).await.unwrap();
 
         if unsaved_leaves > 0 {
             assert!(!root_node.is_complete);

@@ -20,6 +20,11 @@ pub type Transaction = sqlx::Transaction<'static, Sqlite>;
 /// Database connection
 pub type Connection = sqlx::pool::PoolConnection<Sqlite>;
 
+/// This trait allows to write functions that work with any of `Pool`, `Connection` or
+/// `Transaction`. It's an alias for `sqlx::Executor<Database = Sqlite>` for convenience.
+pub trait Executor<'a>: sqlx::Executor<'a, Database = Sqlite> {}
+impl<'a, T> Executor<'a> for T where T: sqlx::Executor<'a, Database = Sqlite> {}
+
 /// Database store.
 #[derive(Debug)]
 pub enum Store {

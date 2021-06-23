@@ -20,17 +20,14 @@ pub struct RootNode {
 impl RootNode {
     /// Returns the latest root node of the specified replica. If no such node exists yet, creates
     /// it first.
-    pub async fn load_latest_or_create(
-        tx: &mut db::Transaction,
-        replica_id: &ReplicaId,
-    ) -> Result<Self> {
-        let node = Self::load_latest(&mut *tx, replica_id).await?;
+    pub async fn load_latest_or_create(pool: &db::Pool, replica_id: &ReplicaId) -> Result<Self> {
+        let node = Self::load_latest(pool, replica_id).await?;
 
         if let Some(node) = node {
             Ok(node)
         } else {
             Ok(Self::create(
-                tx,
+                pool,
                 replica_id,
                 VersionVector::new(),
                 InnerNodeMap::default().hash(),
@@ -42,17 +39,14 @@ impl RootNode {
 
     /// Returns the latest root node of the specified replica or `None` no snapshot of that replica
     /// exists.
-    pub async fn load_latest(
-        tx: &mut db::Transaction,
-        replica_id: &ReplicaId,
-    ) -> Result<Option<Self>> {
-        Self::load_all(tx, replica_id, 1).try_next().await
+    pub async fn load_latest(pool: &db::Pool, replica_id: &ReplicaId) -> Result<Option<Self>> {
+        Self::load_all(pool, replica_id, 1).try_next().await
     }
 
     /// Creates a root node of the specified replica. Returns the node itself and a flag indicating
     /// whether a new node was created (`true`) or the node already existed (`false`).
     pub async fn create(
-        tx: &mut db::Transaction,
+        pool: &db::Pool,
         replica_id: &ReplicaId,
         mut versions: VersionVector,
         hash: Hash,
@@ -77,7 +71,7 @@ impl RootNode {
         .bind(is_complete)
         .bind(replica_id)
         .bind(&hash)
-        .fetch_one(tx)
+        .fetch_one(pool)
         .await?;
 
         Ok((
@@ -94,7 +88,7 @@ impl RootNode {
     /// Returns a stream of all (but at most `limit`) root nodes corresponding to the specified
     /// replica ordered from the most recent to the least recent.
     pub fn load_all<'a>(
-        tx: &'a mut db::Transaction,
+        pool: &'a db::Pool,
         replica_id: &'a ReplicaId,
         limit: u32,
     ) -> impl Stream<Item = Result<Self>> + 'a {
@@ -113,15 +107,15 @@ impl RootNode {
             hash: row.get(2),
             is_complete: row.get(3),
         })
-        .fetch(tx)
+        .fetch(pool)
         .err_into()
     }
 
     /// Mark all root nodes with the specified hash as complete.
-    pub async fn set_complete(tx: &mut db::Transaction, hash: &Hash) -> Result<()> {
+    pub async fn set_complete(pool: &db::Pool, hash: &Hash) -> Result<()> {
         sqlx::query("UPDATE snapshot_root_nodes SET is_complete = 1 WHERE hash = ?")
             .bind(hash)
-            .execute(tx)
+            .execute(pool)
             .await?;
 
         Ok(())
@@ -165,10 +159,10 @@ impl RootNode {
 
     /// Reload this root node from the db. Currently used only in tests.
     #[cfg(test)]
-    pub async fn reload(&mut self, tx: &mut db::Transaction) -> Result<()> {
+    pub async fn reload(&mut self, pool: &db::Pool) -> Result<()> {
         let row = sqlx::query("SELECT is_complete FROM snapshot_root_nodes WHERE snapshot_id = ?")
             .bind(self.snapshot_id)
-            .fetch_one(tx)
+            .fetch_one(pool)
             .await?;
 
         self.is_complete = row.get(0);
