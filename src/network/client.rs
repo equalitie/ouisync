@@ -39,11 +39,10 @@ impl Client {
             .map(|node| node.versions)
             .unwrap_or_default();
 
-        // TODO: use `load_latest_complete`
-        if let Some(node) = RootNode::load_latest(&self.index.pool, &self.their_replica_id).await? {
-            if node.is_complete {
-                versions.merge(node.versions);
-            }
+        if let Some(node) =
+            RootNode::load_latest_complete(&self.index.pool, &self.their_replica_id).await?
+        {
+            versions.merge(node.versions);
         }
 
         self.stream

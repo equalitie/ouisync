@@ -37,10 +37,35 @@ impl RootNode {
         }
     }
 
-    /// Returns the latest root node of the specified replica or `None` no snapshot of that replica
-    /// exists.
+    /// Returns the latest root node of the specified replica or `None` if no snapshot of that
+    /// replica exists.
     pub async fn load_latest(pool: &db::Pool, replica_id: &ReplicaId) -> Result<Option<Self>> {
         Self::load_all(pool, replica_id, 1).try_next().await
+    }
+
+    /// Returns the latest complete root node of the specified replica or `None` if no snapshot of
+    /// that replica exists.
+    pub async fn load_latest_complete(
+        pool: &db::Pool,
+        replica_id: &ReplicaId,
+    ) -> Result<Option<Self>> {
+        sqlx::query(
+            "SELECT snapshot_id, versions, hash
+             FROM snapshot_root_nodes
+             WHERE replica_id = ? AND is_complete = 1
+             ORDER BY snapshot_id DESC
+             LIMIT 1",
+        )
+        .bind(replica_id)
+        .map(|row| Self {
+            snapshot_id: row.get(0),
+            versions: row.get(1),
+            hash: row.get(2),
+            is_complete: true,
+        })
+        .fetch_optional(pool)
+        .await
+        .map_err(Into::into)
     }
 
     /// Creates a root node of the specified replica. Returns the node itself and a flag indicating
