@@ -120,10 +120,8 @@ fn create_client(
 }
 
 async fn save_snapshot(index: &Index, snapshot: &Snapshot) {
-    let mut tx = index.pool.begin().await.unwrap();
-
     RootNode::create(
-        &mut tx,
+        &index.pool,
         &index.this_replica_id,
         VersionVector::new(),
         *snapshot.root_hash(),
@@ -133,23 +131,16 @@ async fn save_snapshot(index: &Index, snapshot: &Snapshot) {
 
     for layer in snapshot.inner_layers() {
         for (parent_hash, nodes) in layer.inner_maps() {
-            for (bucket, node) in nodes {
-                node.save(&mut tx, parent_hash, bucket).await.unwrap();
-            }
+            nodes.save(&index.pool, &parent_hash).await.unwrap();
         }
     }
 
     for (parent_hash, nodes) in snapshot.leaf_sets() {
-        for node in nodes {
-            node.save(&mut tx, parent_hash).await.unwrap();
-        }
-
-        index::detect_complete_snapshots(&mut tx, *parent_hash, INNER_LAYER_COUNT)
+        nodes.save(&index.pool, &parent_hash).await.unwrap();
+        index::detect_complete_snapshots(&index.pool, *parent_hash, INNER_LAYER_COUNT)
             .await
             .unwrap();
     }
-
-    tx.commit().await.unwrap()
 }
 
 async fn insert_random_block(rng: &mut impl Rng, index: &Index) {
@@ -166,8 +157,9 @@ async fn insert_random_block(rng: &mut impl Rng, index: &Index) {
 }
 
 async fn load_latest_root_node(index: &Index, replica_id: &ReplicaId) -> Option<RootNode> {
-    let mut tx = index.pool.begin().await.unwrap();
-    RootNode::load_latest(&mut tx, replica_id).await.unwrap()
+    RootNode::load_latest(&index.pool, replica_id)
+        .await
+        .unwrap()
 }
 
 // Simulate connection between `Client` and `Server` by forwarding the messages between the
@@ -177,6 +169,7 @@ struct ConnectionSimulator {
     client_recv_tx: mpsc::Sender<Response>,
     server_send_rx: mpsc::Receiver<Command>,
     server_recv_tx: mpsc::Sender<Request>,
+    steps: usize,
 }
 
 impl ConnectionSimulator {
@@ -191,21 +184,22 @@ impl ConnectionSimulator {
             client_recv_tx,
             server_send_rx,
             server_recv_tx,
+            steps: 0,
         }
     }
 
-    // Simulate the connection until two `RootNode` requests sent because when the client sends
-    // the second `RootNode` request that means it's done fetching the whole snapshot.
+    // Simulate the connection until the client send a `RootNode` requests which indicates they are
+    // done fetching the previously requested snapshot.
     async fn step(&mut self) {
-        let mut root_node_requests = 0;
+        let mut remaining_node_requests = if self.steps == 0 { 2 } else { 1 };
 
-        while root_node_requests < 2 {
+        while remaining_node_requests > 0 {
             select! {
                 command = self.client_send_rx.recv() => {
                     let request = command.unwrap().into_send_message().into();
 
                     if matches!(request, Request::RootNode(_)) {
-                        root_node_requests += 1;
+                        remaining_node_requests -= 1;
                     }
 
                     self.server_recv_tx.send(request).await.unwrap();
@@ -216,5 +210,7 @@ impl ConnectionSimulator {
                 }
             }
         }
+
+        self.steps += 1;
     }
 }

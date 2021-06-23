@@ -38,7 +38,7 @@ impl LeafNode {
         Ok(())
     }
 
-    pub async fn load_children(tx: &mut db::Transaction, parent: &Hash) -> Result<LeafNodeSet> {
+    pub async fn load_children(db: impl db::Executor<'_>, parent: &Hash) -> Result<LeafNodeSet> {
         Ok(sqlx::query(
             "SELECT locator, block_id
              FROM snapshot_leaf_nodes
@@ -49,17 +49,17 @@ impl LeafNode {
             locator: row.get(0),
             block_id: row.get(1),
         })
-        .fetch_all(tx)
+        .fetch_all(db)
         .await?
         .into_iter()
         .collect())
     }
 
-    pub async fn has_children(tx: &mut db::Transaction, parent: &Hash) -> Result<bool> {
+    pub async fn has_children(pool: &db::Pool, parent: &Hash) -> Result<bool> {
         Ok(
             sqlx::query("SELECT 1 FROM snapshot_leaf_nodes WHERE parent = ?")
                 .bind(parent)
-                .fetch_optional(tx)
+                .fetch_optional(pool)
                 .await?
                 .is_some(),
         )
@@ -115,6 +115,17 @@ impl LeafNodeSet {
     pub fn remove(&mut self, locator: &Hash) -> Option<LeafNode> {
         let index = self.lookup(locator).ok()?;
         Some(self.0.remove(index))
+    }
+
+    /// Atomically saves all nodes in this set into the db.
+    pub async fn save(&self, pool: &db::Pool, parent: &Hash) -> Result<()> {
+        let mut tx = pool.begin().await?;
+        for node in self {
+            node.save(&mut tx, parent).await?;
+        }
+        tx.commit().await?;
+
+        Ok(())
     }
 
     fn lookup(&self, locator: &Hash) -> Result<usize, usize> {

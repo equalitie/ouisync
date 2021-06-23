@@ -3,7 +3,7 @@ use crate::{
     db,
     error::Result,
 };
-use futures::{future, Stream, TryStreamExt};
+use futures_util::{future, Stream, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_256};
 use sqlx::Row;
@@ -36,7 +36,7 @@ impl InnerNode {
     }
 
     /// Load all inner nodes with the specified parent hash.
-    pub async fn load_children(tx: &mut db::Transaction, parent: &Hash) -> Result<InnerNodeMap> {
+    pub async fn load_children(db: impl db::Executor<'_>, parent: &Hash) -> Result<InnerNodeMap> {
         sqlx::query(
             "SELECT bucket, hash, is_complete
              FROM snapshot_inner_nodes
@@ -52,7 +52,7 @@ impl InnerNode {
 
             (bucket, node)
         })
-        .fetch(tx)
+        .fetch(db)
         .try_filter_map(|(bucket, node)| {
             // TODO: consider reporting out-of-range buckets as errors
             future::ready(Ok(bucket.try_into().ok().map(|bucket| (bucket, node))))
@@ -64,21 +64,21 @@ impl InnerNode {
 
     /// Load parent hashes of all inner nodes with the specifed hash.
     pub fn load_parent_hashes<'a>(
-        tx: &'a mut db::Transaction,
+        pool: &'a db::Pool,
         hash: &'a Hash,
     ) -> impl Stream<Item = Result<Hash>> + 'a {
         sqlx::query("SELECT parent FROM snapshot_inner_nodes WHERE hash = ?")
             .bind(hash)
             .map(|row| row.get(0))
-            .fetch(tx)
+            .fetch(pool)
             .err_into()
     }
 
     /// Set all inner nodes with the specified hash as complete.
-    pub async fn set_complete(tx: &mut db::Transaction, hash: &Hash) -> Result<()> {
+    pub async fn set_complete(pool: &db::Pool, hash: &Hash) -> Result<()> {
         sqlx::query("UPDATE snapshot_inner_nodes SET is_complete = 1 WHERE hash = ?")
             .bind(hash)
-            .execute(tx)
+            .execute(pool)
             .await?;
 
         Ok(())
@@ -129,6 +129,20 @@ impl InnerNodeMap {
 
     pub fn remove(&mut self, bucket: u8) -> Option<InnerNode> {
         self.0.remove(&bucket)
+    }
+
+    /// Atomically saves all nodes in this map to the db. Returns hashes of the nodes that changed.
+    pub async fn save(&self, pool: &db::Pool, parent: &Hash) -> Result<Vec<Hash>> {
+        let mut changed = Vec::with_capacity(self.len());
+        let mut tx = pool.begin().await?;
+        for (bucket, node) in self {
+            if node.save(&mut tx, parent, bucket).await? {
+                changed.push(node.hash);
+            }
+        }
+        tx.commit().await?;
+
+        Ok(changed)
     }
 }
 
