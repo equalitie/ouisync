@@ -31,13 +31,23 @@ impl Client {
     }
 
     async fn pull_snapshot(&mut self) -> Result<bool> {
-        let this_versions = RootNode::load_latest(&self.index.pool, &self.index.this_replica_id)
+        // Send version vector that is a combination of the versions of our latest snapshot and
+        // their latest complete snapshot that we have. This way they respond only when they have
+        // something we don't.
+        let mut versions = RootNode::load_latest(&self.index.pool, &self.index.this_replica_id)
             .await?
             .map(|node| node.versions)
             .unwrap_or_default();
 
+        // TODO: use `load_latest_complete`
+        if let Some(node) = RootNode::load_latest(&self.index.pool, &self.their_replica_id).await? {
+            if node.is_complete {
+                versions.merge(node.versions);
+            }
+        }
+
         self.stream
-            .send(Request::RootNode(this_versions))
+            .send(Request::RootNode(versions))
             .await
             .unwrap_or(());
 
