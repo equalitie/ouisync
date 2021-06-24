@@ -13,11 +13,16 @@ use std::{iter::FromIterator, mem, slice, vec};
 pub struct LeafNode {
     locator: Hash,
     pub block_id: BlockId,
+    pub is_missing: bool,
 }
 
 impl LeafNode {
     pub fn new(locator: Hash, block_id: BlockId) -> Self {
-        Self { locator, block_id }
+        Self {
+            locator,
+            block_id,
+            is_missing: false,
+        }
     }
 
     pub fn locator(&self) -> &Hash {
@@ -26,12 +31,13 @@ impl LeafNode {
 
     pub async fn save(&self, tx: &mut db::Transaction, parent: &Hash) -> Result<()> {
         sqlx::query(
-            "INSERT INTO snapshot_leaf_nodes (parent, locator, block_id)
-             VALUES (?, ?, ?)",
+            "INSERT INTO snapshot_leaf_nodes (parent, locator, block_id, is_missing)
+             VALUES (?, ?, ?, ?)",
         )
         .bind(parent)
         .bind(&self.locator)
         .bind(&self.block_id)
+        .bind(&self.is_missing)
         .execute(tx)
         .await?;
 
@@ -40,7 +46,7 @@ impl LeafNode {
 
     pub async fn load_children(db: impl db::Executor<'_>, parent: &Hash) -> Result<LeafNodeSet> {
         Ok(sqlx::query(
-            "SELECT locator, block_id
+            "SELECT locator, block_id, is_missing
              FROM snapshot_leaf_nodes
              WHERE parent = ?",
         )
@@ -48,6 +54,7 @@ impl LeafNode {
         .map(|row| LeafNode {
             locator: row.get(0),
             block_id: row.get(1),
+            is_missing: row.get(2),
         })
         .fetch_all(db)
         .await?
@@ -105,6 +112,7 @@ impl LeafNodeSet {
                     LeafNode {
                         locator: *locator,
                         block_id: *block_id,
+                        is_missing: false,
                     },
                 );
                 ModifyStatus::Inserted

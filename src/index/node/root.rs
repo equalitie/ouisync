@@ -1,4 +1,6 @@
-use super::{super::SnapshotId, inner::InnerNodeMap, link::Link};
+use super::{
+    super::SnapshotId, inner::InnerNodeMap, link::Link, missing_blocks::MissingBlocksSummary,
+};
 use crate::{
     crypto::{Hash, Hashable},
     db,
@@ -15,6 +17,7 @@ pub struct RootNode {
     pub versions: VersionVector,
     pub hash: Hash,
     pub is_complete: bool,
+    pub missing_blocks: MissingBlocksSummary,
 }
 
 impl RootNode {
@@ -31,6 +34,7 @@ impl RootNode {
                 replica_id,
                 VersionVector::new(),
                 InnerNodeMap::default().hash(),
+                MissingBlocksSummary::default(),
             )
             .await?
             .0)
@@ -50,7 +54,12 @@ impl RootNode {
         replica_id: &ReplicaId,
     ) -> Result<Option<Self>> {
         sqlx::query(
-            "SELECT snapshot_id, versions, hash
+            "SELECT
+                 snapshot_id,
+                 versions,
+                 hash,
+                 missing_blocks_count,
+                 missing_blocks_checksum
              FROM snapshot_root_nodes
              WHERE replica_id = ? AND is_complete = 1
              ORDER BY snapshot_id DESC
@@ -62,6 +71,10 @@ impl RootNode {
             versions: row.get(1),
             hash: row.get(2),
             is_complete: true,
+            missing_blocks: MissingBlocksSummary {
+                count: db::decode_u64(row.get(3)),
+                checksum: db::decode_u64(row.get(4)),
+            },
         })
         .fetch_optional(pool)
         .await
@@ -75,6 +88,7 @@ impl RootNode {
         replica_id: &ReplicaId,
         mut versions: VersionVector,
         hash: Hash,
+        missing_blocks: MissingBlocksSummary,
     ) -> Result<(Self, bool)> {
         let is_complete = hash == InnerNodeMap::default().hash();
 
@@ -82,11 +96,22 @@ impl RootNode {
 
         let row = sqlx::query(
             "INSERT INTO snapshot_root_nodes (
-                 replica_id, versions, hash, is_complete
+                 replica_id,
+                 versions,
+                 hash,
+                 is_complete,
+                 missing_blocks_count,
+                 missing_blocks_checksum
              )
-             VALUES (?, ?, ?, ?)
+             VALUES (?, ?, ?, ?, ?, ?)
              ON CONFLICT (replica_id, hash) DO NOTHING;
-             SELECT snapshot_id, versions, is_complete, CHANGES()
+             SELECT
+                 snapshot_id,
+                 versions,
+                 is_complete,
+                 missing_blocks_count,
+                 missing_blocks_checksum,
+                 CHANGES()
              FROM snapshot_root_nodes
              WHERE replica_id = ? AND hash = ?",
         )
@@ -94,6 +119,8 @@ impl RootNode {
         .bind(&versions)
         .bind(&hash)
         .bind(is_complete)
+        .bind(db::encode_u64(missing_blocks.count))
+        .bind(db::encode_u64(missing_blocks.checksum))
         .bind(replica_id)
         .bind(&hash)
         .fetch_one(pool)
@@ -105,8 +132,12 @@ impl RootNode {
                 versions: row.get(1),
                 hash,
                 is_complete: row.get(2),
+                missing_blocks: MissingBlocksSummary {
+                    count: db::decode_u64(row.get(3)),
+                    checksum: db::decode_u64(row.get(4)),
+                },
             },
-            row.get::<u32, _>(3) > 0,
+            row.get::<u32, _>(5) > 0,
         ))
     }
 
@@ -118,7 +149,13 @@ impl RootNode {
         limit: u32,
     ) -> impl Stream<Item = Result<Self>> + 'a {
         sqlx::query(
-            "SELECT snapshot_id, versions, hash, is_complete
+            "SELECT
+                 snapshot_id,
+                 versions,
+                 hash,
+                 is_complete,
+                 missing_blocks_count,
+                 missing_blocks_checksum
              FROM snapshot_root_nodes
              WHERE replica_id = ?
              ORDER BY snapshot_id DESC
@@ -131,6 +168,10 @@ impl RootNode {
             versions: row.get(1),
             hash: row.get(2),
             is_complete: row.get(3),
+            missing_blocks: MissingBlocksSummary {
+                count: db::decode_u64(row.get(4)),
+                checksum: db::decode_u64(row.get(5)),
+            },
         })
         .fetch(pool)
         .err_into()
@@ -160,9 +201,14 @@ impl RootNode {
 
         let snapshot_id = sqlx::query(
             "INSERT INTO snapshot_root_nodes (
-                 replica_id, versions, hash, is_complete
+                 replica_id,
+                 versions,
+                 hash,
+                 is_complete,
+                 missing_blocks_count,
+                 missing_blocks_checksum
              )
-             SELECT replica_id, ?, ?, is_complete
+             SELECT replica_id, ?, ?, is_complete, 0, 0
              FROM snapshot_root_nodes
              WHERE snapshot_id = ?
              RETURNING snapshot_id",
@@ -179,6 +225,7 @@ impl RootNode {
             versions,
             hash,
             is_complete: self.is_complete,
+            missing_blocks: MissingBlocksSummary::default(),
         })
     }
 

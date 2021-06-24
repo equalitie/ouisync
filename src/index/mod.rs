@@ -7,8 +7,8 @@ pub use self::node::test_utils as node_test_utils;
 pub use self::{
     branch::Branch,
     node::{
-        detect_complete_snapshots, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, RootNode,
-        INNER_LAYER_COUNT,
+        detect_complete_snapshots, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet,
+        MissingBlocksSummary, RootNode, INNER_LAYER_COUNT,
     },
 };
 
@@ -92,31 +92,39 @@ async fn load_remote_branches(
 pub async fn init(pool: &db::Pool) -> Result<(), Error> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS snapshot_root_nodes (
-             snapshot_id INTEGER PRIMARY KEY,
-             replica_id  BLOB NOT NULL,
-             versions    BLOB NOT NULL,
+             snapshot_id             INTEGER PRIMARY KEY,
+             replica_id              BLOB NOT NULL,
+             versions                BLOB NOT NULL,
 
              -- Hash of the children
-             hash        BLOB NOT NULL,
+             hash                    BLOB NOT NULL,
 
              -- Is this snapshot completely downloaded?
-             is_complete INTEGER NOT NULL,
+             is_complete             INTEGER NOT NULL,
+
+             -- Summary of the missing blocks in this subree
+             missing_blocks_count    INTEGER NOT NULL,
+             missing_blocks_checksum INTEGER NOT NULL,
 
              UNIQUE(replica_id, hash)
          );
 
          CREATE TABLE IF NOT EXISTS snapshot_inner_nodes (
              -- Parent's `hash`
-             parent      BLOB NOT NULL,
+             parent                  BLOB NOT NULL,
 
              -- Index of this node within its siblings
-             bucket      INTEGER NOT NULL,
+             bucket                  INTEGER NOT NULL,
 
              -- Hash of the children
-             hash        BLOB NOT NULL,
+             hash                    BLOB NOT NULL,
 
              -- Is this subree completely downloaded?
-             is_complete INTEGER NOT NULL,
+             is_complete             INTEGER NOT NULL,
+
+             -- Summary of the missing blocks in this subree
+             missing_blocks_count    INTEGER NOT NULL,
+             missing_blocks_checksum INTEGER NOT NULL,
 
              UNIQUE(parent, bucket)
          );
@@ -125,7 +133,10 @@ pub async fn init(pool: &db::Pool) -> Result<(), Error> {
              -- Parent's `hash`
              parent      BLOB NOT NULL,
              locator     BLOB NOT NULL,
-             block_id    BLOB NOT NULL
+             block_id    BLOB NOT NULL,
+
+             -- Is the block pointed to by this node missing?
+             is_missing  INTEGER NOT NULL
          );
 
          -- Prevents creating multiple inner nodes with the same parent and bucket but different

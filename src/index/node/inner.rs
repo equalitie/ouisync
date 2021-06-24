@@ -1,3 +1,4 @@
+use super::missing_blocks::MissingBlocksSummary;
 use crate::{
     crypto::{Hash, Hashable},
     db,
@@ -24,6 +25,7 @@ pub struct InnerNode {
     /// it is not serialized.
     #[serde(skip)]
     pub is_complete: bool,
+    pub missing_blocks: MissingBlocksSummary,
 }
 
 impl InnerNode {
@@ -32,13 +34,19 @@ impl InnerNode {
         Self {
             hash,
             is_complete: false,
+            missing_blocks: MissingBlocksSummary::default(),
         }
     }
 
     /// Load all inner nodes with the specified parent hash.
     pub async fn load_children(db: impl db::Executor<'_>, parent: &Hash) -> Result<InnerNodeMap> {
         sqlx::query(
-            "SELECT bucket, hash, is_complete
+            "SELECT
+                 bucket,
+                 hash,
+                 is_complete,
+                 missing_blocks_count,
+                 missing_blocks_checksum
              FROM snapshot_inner_nodes
              WHERE parent = ?",
         )
@@ -48,6 +56,10 @@ impl InnerNode {
             let node = Self {
                 hash: row.get(1),
                 is_complete: row.get(2),
+                missing_blocks: MissingBlocksSummary {
+                    count: db::decode_u64(row.get(3)),
+                    checksum: db::decode_u64(row.get(4)),
+                },
             };
 
             (bucket, node)
@@ -88,13 +100,22 @@ impl InnerNode {
     /// node already existed (`false`).
     pub async fn save(&self, tx: &mut db::Transaction, parent: &Hash, bucket: u8) -> Result<bool> {
         let changes = sqlx::query(
-            "INSERT INTO snapshot_inner_nodes (parent, bucket, hash, is_complete)
-             VALUES (?, ?, ?, 0)
+            "INSERT INTO snapshot_inner_nodes (
+                 parent,
+                 bucket,
+                 hash,
+                 is_complete,
+                 missing_blocks_count,
+                 missing_blocks_checksum
+             )
+             VALUES (?, ?, ?, 0, ?, ?)
              ON CONFLICT (parent, bucket) DO NOTHING",
         )
         .bind(parent)
         .bind(bucket)
         .bind(&self.hash)
+        .bind(db::encode_u64(self.missing_blocks.count))
+        .bind(db::encode_u64(self.missing_blocks.checksum))
         .execute(tx)
         .await?
         .rows_affected();

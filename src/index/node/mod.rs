@@ -4,6 +4,7 @@ pub mod test_utils;
 mod inner;
 mod leaf;
 mod link;
+mod missing_blocks;
 mod root;
 #[cfg(test)]
 mod tests;
@@ -11,6 +12,7 @@ mod tests;
 pub use self::{
     inner::{InnerNode, InnerNodeMap, INNER_LAYER_COUNT},
     leaf::{LeafNode, LeafNodeSet, ModifyStatus},
+    missing_blocks::MissingBlocksSummary,
     root::RootNode,
 };
 

@@ -1,5 +1,3 @@
-use std::cmp::Ordering;
-
 use super::{
     message::{Request, Response},
     message_broker::ClientStream,
@@ -7,10 +5,13 @@ use super::{
 use crate::{
     crypto::{Hash, Hashable},
     error::Result,
-    index::{self, Index, InnerNodeMap, LeafNodeSet, RootNode, INNER_LAYER_COUNT},
+    index::{
+        self, Index, InnerNodeMap, LeafNodeSet, MissingBlocksSummary, RootNode, INNER_LAYER_COUNT,
+    },
     replica_id::ReplicaId,
     version_vector::VersionVector,
 };
+use std::cmp::Ordering;
 
 pub struct Client {
     index: Index,
@@ -87,8 +88,15 @@ impl Client {
             return Ok(());
         }
 
-        let (node, changed) =
-            RootNode::create(&self.index.pool, &self.their_replica_id, versions, hash).await?;
+        // TODO: take missing blocks from the request.
+        let (node, changed) = RootNode::create(
+            &self.index.pool,
+            &self.their_replica_id,
+            versions,
+            hash,
+            MissingBlocksSummary::default(),
+        )
+        .await?;
         index::detect_complete_snapshots(&self.index.pool, hash, 0).await?;
 
         if changed {

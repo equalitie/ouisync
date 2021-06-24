@@ -1,12 +1,15 @@
 use super::{
     inner::{InnerNode, INNER_LAYER_COUNT},
     leaf::LeafNode,
+    missing_blocks::MissingBlocksSummary,
     root::RootNode,
 };
 use crate::{crypto::Hash, db, error::Result};
 use async_recursion::async_recursion;
 use futures_util::TryStreamExt;
 use sqlx::Row;
+
+// TODO: this can probably be all done with database triggers.
 
 // We're not repeating enumeration name
 // https://rust-lang.github.io/rust-clippy/master/index.html#enum_variant_names
@@ -118,6 +121,7 @@ impl Link {
             node: InnerNode {
                 hash: row.get(1),
                 is_complete: row.get(2),
+                missing_blocks: MissingBlocksSummary::default(),
             },
         })
         .fetch(tx)

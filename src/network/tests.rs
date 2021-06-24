@@ -7,7 +7,9 @@ use super::{
 use crate::{
     crypto::Hashable,
     db,
-    index::{self, node_test_utils::Snapshot, Index, RootNode, INNER_LAYER_COUNT},
+    index::{
+        self, node_test_utils::Snapshot, Index, MissingBlocksSummary, RootNode, INNER_LAYER_COUNT,
+    },
     replica_id::ReplicaId,
     test_utils,
     version_vector::VersionVector,
@@ -125,6 +127,7 @@ async fn save_snapshot(index: &Index, snapshot: &Snapshot) {
         &index.this_replica_id,
         VersionVector::new(),
         *snapshot.root_hash(),
+        MissingBlocksSummary::default(),
     )
     .await
     .unwrap();
