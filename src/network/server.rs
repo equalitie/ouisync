@@ -18,6 +18,7 @@ pub struct Server {
     // `RootNode` requests which we can't fulfil because their version vector is strictly newer
     // than our latest. We backlog them here until we detect local branch change, then attempt to
     // handle them again.
+    // TODO: change this to LruCache
     backlog: Vec<VersionVector>,
 }
 
@@ -78,7 +79,12 @@ impl Server {
 
         // Check whether we have a snapshot that is newer or concurrent to the one they have.
         if let Some(node) = node {
-            if let Some(Ordering::Greater) | None = node.versions.partial_cmp(&their_versions) {
+            if node
+                .versions
+                .partial_cmp(&their_versions)
+                .map(Ordering::is_gt)
+                .unwrap_or(true)
+            {
                 // We do have one - send the response.
                 self.stream
                     .send(Response::RootNode {
