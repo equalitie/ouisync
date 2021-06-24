@@ -1,3 +1,5 @@
+use std::cmp::Ordering;
+
 use super::{
     message::{Request, Response},
     message_broker::ClientStream,
@@ -34,10 +36,7 @@ impl Client {
         // Send version vector that is a combination of the versions of our latest snapshot and
         // their latest complete snapshot that we have. This way they respond only when they have
         // something we don't.
-        let mut versions = RootNode::load_latest(&self.index.pool, &self.index.this_replica_id)
-            .await?
-            .map(|node| node.versions)
-            .unwrap_or_default();
+        let mut versions = self.latest_local_versions().await?;
 
         if let Some(node) =
             RootNode::load_latest_complete(&self.index.pool, &self.their_replica_id).await?
@@ -79,6 +78,15 @@ impl Client {
     }
 
     async fn handle_root_node(&mut self, versions: VersionVector, hash: Hash) -> Result<()> {
+        let this_versions = self.latest_local_versions().await?;
+        if versions
+            .partial_cmp(&this_versions)
+            .map(Ordering::is_le)
+            .unwrap_or(false)
+        {
+            return Ok(());
+        }
+
         let (node, changed) =
             RootNode::create(&self.index.pool, &self.their_replica_id, versions, hash).await?;
         index::detect_complete_snapshots(&self.index.pool, hash, 0).await?;
@@ -150,6 +158,16 @@ impl Client {
                 .await?
                 .map(|node| node.is_complete)
                 .unwrap_or(false),
+        )
+    }
+
+    // Returns the versions of the latest snapshot belonging to the local replica.
+    async fn latest_local_versions(&self) -> Result<VersionVector> {
+        Ok(
+            RootNode::load_latest(&self.index.pool, &self.index.this_replica_id)
+                .await?
+                .map(|node| node.versions)
+                .unwrap_or_default(),
         )
     }
 }

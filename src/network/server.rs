@@ -8,8 +8,10 @@ use crate::{
     index::{Index, InnerNode, LeafNode, RootNode},
     version_vector::VersionVector,
 };
-use std::{cmp::Ordering, sync::Arc};
+use std::{cmp::Ordering, collections::VecDeque, sync::Arc};
 use tokio::{select, sync::Notify};
+
+const BACKLOG_CAPACITY: usize = 32;
 
 pub struct Server {
     index: Index,
@@ -18,7 +20,7 @@ pub struct Server {
     // `RootNode` requests which we can't fulfil because their version vector is strictly newer
     // than our latest. We backlog them here until we detect local branch change, then attempt to
     // handle them again.
-    backlog: Vec<VersionVector>,
+    backlog: VecDeque<VersionVector>,
 }
 
 impl Server {
@@ -31,7 +33,7 @@ impl Server {
             index,
             notify,
             stream,
-            backlog: vec![],
+            backlog: VecDeque::with_capacity(BACKLOG_CAPACITY),
         }
     }
 
@@ -55,7 +57,7 @@ impl Server {
     }
 
     async fn handle_local_change(&mut self) -> Result<()> {
-        while let Some(versions) = self.backlog.pop() {
+        while let Some(versions) = self.backlog.pop_front() {
             self.handle_root_node(versions).await?
         }
 
@@ -78,7 +80,12 @@ impl Server {
 
         // Check whether we have a snapshot that is newer or concurrent to the one they have.
         if let Some(node) = node {
-            if let Some(Ordering::Greater) | None = node.versions.partial_cmp(&their_versions) {
+            if node
+                .versions
+                .partial_cmp(&their_versions)
+                .map(Ordering::is_gt)
+                .unwrap_or(true)
+            {
                 // We do have one - send the response.
                 self.stream
                     .send(Response::RootNode {
@@ -93,7 +100,13 @@ impl Server {
 
         // We don't have one yet - backlog the request and try to fulfil it next time when the
         // local branch changes.
-        self.backlog.push(their_versions);
+
+        // If the backlog is at capacity, evict the oldest entries.
+        while self.backlog.len() >= BACKLOG_CAPACITY {
+            self.backlog.pop_front();
+        }
+
+        self.backlog.push_back(their_versions);
 
         Ok(())
     }
