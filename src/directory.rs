@@ -77,30 +77,72 @@ impl Directory {
         self.content
             .entries
             .iter()
-            .filter_map(move |(name, variants)| {
-                // XXX: For now only this replica's variants.
-                variants
-                    .get(self.blob.branch().replica_id())
-                    .map(move |data| EntryInfo {
+            .flat_map(move |(name, variants)| {
+                assert!(!variants.is_empty());
+
+                let needs_disambiguator = variants.len() > 1;
+
+                variants.iter().map(move |(replica_id, data)| {
+                    let disambiguator = if needs_disambiguator {
+                        Some(replica_id)
+                    } else {
+                        None
+                    };
+
+                    EntryInfo {
                         parent_blob: &self.blob,
+                        disambiguator,
                         name,
                         data,
-                    })
+                    }
+                })
             })
     }
 
     /// Lookup an entry of this directory by name.
     pub fn lookup(&self, name: &'_ OsStr) -> Result<EntryInfo> {
-        self.content
-            .entries
-            .get_key_value(name)
-            .and_then(|(name, variants)| {
-                // XXX: For now only this replica's variants.
-                variants.get(self.replica_id()).map(|data| EntryInfo {
-                    parent_blob: &self.blob,
-                    name,
-                    data,
+        if let Some(entry) =
+            self.content
+                .entries
+                .get_key_value(name)
+                .and_then(|(name, variants)| {
+                    assert!(!variants.is_empty());
+
+                    if variants.len() > 1 {
+                        // Ambiguous
+                        return None;
+                    }
+
+                    variants.values().next().map(|data| EntryInfo {
+                        parent_blob: &self.blob,
+                        disambiguator: None,
+                        name,
+                        data,
+                    })
                 })
+        {
+            return Ok(entry);
+        }
+
+        Self::remove_label(name)
+            .and_then(|(name, label)| {
+                self.content
+                    .entries
+                    .get_key_value(&name)
+                    .and_then(|(name, variants)| {
+                        for (replica_id, data) in variants {
+                            if label == Self::replica_id_to_label(replica_id) {
+                                return Some(EntryInfo {
+                                    parent_blob: &self.blob,
+                                    disambiguator: Some(replica_id),
+                                    name,
+                                    data,
+                                });
+                            }
+                        }
+
+                        None
+                    })
             })
             .ok_or(Error::EntryNotFound)
     }
@@ -237,11 +279,42 @@ impl Directory {
     pub fn replica_id(&self) -> &ReplicaId {
         self.blob.branch().replica_id()
     }
+
+    fn replica_id_to_label(replica_id: &ReplicaId) -> OsString {
+        OsString::from(format!("{:16x}", replica_id))
+    }
+
+    fn add_label(name: &OsStr, replica_id: &ReplicaId) -> OsString {
+        let mut s = name.to_os_string();
+        s.push('-');
+        s.push(Self::replica_id_to_label(replica_id));
+        s
+    }
+
+    fn remove_label(name: &OsStr) -> Option<(OsString, OsString)> {
+        // TODO: Don't convert to str once OsStr or OsString get needed string manipulation
+        // functions.
+        name.to_str().and_then(|name| {
+            const SUFFIX_LEN: usize = 17;
+            if name.len() < SUFFIX_LEN {
+                return None;
+            }
+
+            let (name, suffix) = name.split_at(name.len() - SUFFIX_LEN);
+
+            if !suffix.starts_with('-') {
+                return None;
+            }
+
+            Some((OsString::from(name), OsString::from(&suffix[1..])))
+        })
+    }
 }
 
 /// Info about a directory entry.
 pub struct EntryInfo<'a> {
     parent_blob: &'a Blob,
+    disambiguator: Option<&'a ReplicaId>,
     name: &'a OsStr,
     data: &'a EntryData,
 }
@@ -249,6 +322,14 @@ pub struct EntryInfo<'a> {
 impl<'a> EntryInfo<'a> {
     pub fn name(&self) -> &'a OsStr {
         self.name
+    }
+
+    pub fn unique_name(&self) -> OsString {
+        if let Some(replica_id) = self.disambiguator {
+            Directory::add_label(self.name, replica_id)
+        } else {
+            self.name.to_os_string()
+        }
     }
 
     pub fn entry_type(&self) -> EntryType {
