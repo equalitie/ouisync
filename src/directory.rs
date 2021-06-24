@@ -7,6 +7,7 @@ use crate::{
     file::File,
     index::Branch,
     locator::Locator,
+    replica_id::ReplicaId,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -72,16 +73,19 @@ impl Directory {
     }
 
     /// Returns iterator over the entries of this directory.
-    pub fn entries(
-        &self,
-    ) -> impl Iterator<Item = EntryInfo> + DoubleEndedIterator + ExactSizeIterator + Clone {
+    pub fn entries(&self) -> impl Iterator<Item = EntryInfo> + DoubleEndedIterator + Clone {
         self.content
             .entries
             .iter()
-            .map(move |(name, data)| EntryInfo {
-                parent_blob: &self.blob,
-                name,
-                data,
+            .filter_map(move |(name, variants)| {
+                // XXX: For now only this replica's variants.
+                variants
+                    .get(self.blob.branch().replica_id())
+                    .map(move |data| EntryInfo {
+                        parent_blob: &self.blob,
+                        name,
+                        data,
+                    })
             })
     }
 
@@ -90,17 +94,21 @@ impl Directory {
         self.content
             .entries
             .get_key_value(name)
-            .map(|(name, data)| EntryInfo {
-                parent_blob: &self.blob,
-                name,
-                data,
+            .and_then(|(name, variants)| {
+                // XXX: For now only this replica's variants.
+                variants.get(self.replica_id()).map(|data| EntryInfo {
+                    parent_blob: &self.blob,
+                    name,
+                    data,
+                })
             })
             .ok_or(Error::EntryNotFound)
     }
 
     /// Creates a new file inside this directory.
     pub fn create_file(&mut self, name: OsString) -> Result<File> {
-        let seq = self.content.insert(name, EntryType::File)?;
+        let replica_id = *self.replica_id();
+        let seq = self.content.insert(name, &replica_id, EntryType::File)?;
 
         Ok(File::create(
             self.blob.db_pool().clone(),
@@ -112,7 +120,10 @@ impl Directory {
 
     /// Creates a new subdirectory of this directory.
     pub fn create_directory(&mut self, name: OsString) -> Result<Self> {
-        let seq = self.content.insert(name, EntryType::Directory)?;
+        let replica_id = *self.replica_id();
+        let seq = self
+            .content
+            .insert(name, &replica_id, EntryType::Directory)?;
 
         Ok(Self::create(
             self.blob.db_pool().clone(),
@@ -160,6 +171,7 @@ impl Directory {
             .get(&mut tx, &src_locator.encode(self.blob.cryptor()))
             .await?;
 
+        let replica_id = *self.replica_id();
         let dst_dir = dst_dir.get(self);
 
         // Can't move over an existing directory.
@@ -189,7 +201,7 @@ impl Directory {
 
         // TODO: remove the previous dst entry from the db, if it existed.
 
-        dst_entry.insert_or_replace(dst_name.to_owned(), src_entry_type);
+        dst_entry.insert_or_replace(dst_name.to_owned(), &replica_id, src_entry_type);
 
         match self.content.remove(src_name) {
             Ok(_) | Err(Error::EntryNotFound) => (),
@@ -219,6 +231,11 @@ impl Directory {
     /// Locator of this directory
     pub fn locator(&self) -> &Locator {
         self.blob.locator()
+    }
+
+    /// ReplicaID of the replica that created this blob.
+    pub fn replica_id(&self) -> &ReplicaId {
+        self.blob.branch().replica_id()
     }
 }
 
@@ -310,14 +327,19 @@ impl MoveDstDirectory {
 
 #[derive(Default, Deserialize, Serialize)]
 struct Content {
-    entries: BTreeMap<OsString, EntryData>,
+    entries: BTreeMap<OsString, BTreeMap<ReplicaId, EntryData>>,
     #[serde(skip)]
     dirty: bool,
 }
 
 impl Content {
-    fn insert(&mut self, name: OsString, entry_type: EntryType) -> Result<u32> {
-        self.vacant_entry().insert(name, entry_type)
+    fn insert(
+        &mut self,
+        name: OsString,
+        replica_id: &ReplicaId,
+        entry_type: EntryType,
+    ) -> Result<u32> {
+        self.vacant_entry().insert(name, replica_id, entry_type)
     }
 
     // Reserve an entry to be inserted into later. Useful when the `seq` number is needed before
@@ -328,10 +350,8 @@ impl Content {
     }
 
     fn remove(&mut self, name: &OsStr) -> Result<()> {
-        self.entries
-            .remove(name)
-            .map(|data| data.seq)
-            .ok_or(Error::EntryNotFound)?;
+        self.entries.remove(name).ok_or(Error::EntryNotFound)?;
+
         self.dirty = true;
 
         Ok(())
@@ -341,7 +361,12 @@ impl Content {
     fn next_seq(&self) -> u32 {
         // TODO: reuse previously deleted entries
 
-        match self.entries.values().map(|data| data.seq).max() {
+        match self
+            .entries
+            .values()
+            .filter_map(|vs| vs.values().map(|data| data.seq).max())
+            .max()
+        {
             Some(seq) => seq.checked_add(1).expect("directory entry limit exceeded"), // TODO: return error instead
             None => 0,
         }
@@ -358,29 +383,60 @@ impl VacantEntry<'_> {
         self.seq
     }
 
-    fn insert(self, name: OsString, entry_type: EntryType) -> Result<u32> {
-        match self.content.entries.entry(name) {
-            btree_map::Entry::Vacant(entry) => {
-                entry.insert(EntryData {
-                    entry_type,
-                    seq: self.seq,
-                });
-                self.content.dirty = true;
+    fn insert(self, name: OsString, replica_id: &ReplicaId, entry_type: EntryType) -> Result<u32> {
+        use btree_map::Entry::{Occupied, Vacant};
 
+        let entry_data = EntryData {
+            entry_type,
+            seq: self.seq,
+        };
+
+        match self.content.entries.entry(name) {
+            Vacant(entry) => {
+                let mut variants = BTreeMap::new();
+                variants.insert(*replica_id, entry_data);
+                entry.insert(variants);
+                self.content.dirty = true;
                 Ok(self.seq)
             }
-            btree_map::Entry::Occupied(_) => Err(Error::EntryExists),
+            Occupied(mut entry) => {
+                let variants = entry.get_mut();
+                match variants.entry(*replica_id) {
+                    Vacant(entry) => {
+                        entry.insert(entry_data);
+                        Ok(self.seq)
+                    }
+                    Occupied(_) => Err(Error::EntryExists),
+                }
+            }
         }
     }
 
-    fn insert_or_replace(self, name: OsString, entry_type: EntryType) -> u32 {
-        self.content.entries.insert(
-            name,
-            EntryData {
-                entry_type,
-                seq: self.seq,
-            },
-        );
+    fn insert_or_replace(
+        self,
+        name: OsString,
+        replica_id: &ReplicaId,
+        entry_type: EntryType,
+    ) -> u32 {
+        use btree_map::Entry::{Occupied, Vacant};
+
+        let entry_data = EntryData {
+            entry_type,
+            seq: self.seq,
+        };
+
+        match self.content.entries.entry(name) {
+            Vacant(entry) => {
+                let mut variants = BTreeMap::new();
+                variants.insert(*replica_id, entry_data);
+                entry.insert(variants);
+                self.content.dirty = true;
+            }
+            Occupied(mut entry) => {
+                entry.get_mut().insert(*replica_id, entry_data);
+            }
+        }
+
         self.content.dirty = true;
         self.seq
     }
@@ -495,7 +551,7 @@ mod tests {
             Ok(_) => panic!("entry should not exists but it does"),
         }
 
-        assert_eq!(parent_dir.entries().len(), 0);
+        assert_eq!(parent_dir.entries().count(), 0);
 
         // Check the file itself was removed as well.
         match File::open(pool, branch.clone(), Cryptor::Null, file_locator).await {

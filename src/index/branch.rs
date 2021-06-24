@@ -60,6 +60,10 @@ impl Branch {
         Ok(old_block_id)
     }
 
+    pub fn replica_id(&self) -> &ReplicaId {
+        &self.replica_id
+    }
+
     /// Retrieve `BlockId` of a block with the given encoded `Locator`.
     pub async fn get(&self, tx: &mut db::Transaction, encoded_locator: &Hash) -> Result<BlockId> {
         let root_node = self.root_node.lock().await;
