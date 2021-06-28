@@ -126,25 +126,11 @@ impl Client {
         let changed = nodes.save(&self.index.pool, &parent_hash).await?;
         index::detect_complete_snapshots(&self.index.pool, parent_hash, inner_layer).await?;
 
-        if inner_layer < INNER_LAYER_COUNT - 1 {
-            for node in changed {
-                self.stream
-                    .send(Request::InnerNodes {
-                        parent_hash: node.hash,
-                        inner_layer: inner_layer + 1,
-                    })
-                    .await
-                    .unwrap_or(())
-            }
-        } else {
-            for node in changed {
-                self.stream
-                    .send(Request::LeafNodes {
-                        parent_hash: node.hash,
-                    })
-                    .await
-                    .unwrap_or(())
-            }
+        for node in changed {
+            self.stream
+                .send(child_request(node.hash, inner_layer))
+                .await
+                .unwrap_or(())
         }
 
         Ok(())
@@ -156,7 +142,10 @@ impl Client {
             return Ok(());
         }
 
-        nodes.save(&self.index.pool, &parent_hash).await?;
+        nodes
+            .into_missing()
+            .save(&self.index.pool, &parent_hash)
+            .await?;
         index::detect_complete_snapshots(&self.index.pool, parent_hash, INNER_LAYER_COUNT).await?;
 
         Ok(())
@@ -179,5 +168,16 @@ impl Client {
                 .map(|node| node.versions)
                 .unwrap_or_default(),
         )
+    }
+}
+
+fn child_request(parent_hash: Hash, inner_layer: usize) -> Request {
+    if inner_layer < INNER_LAYER_COUNT - 1 {
+        Request::InnerNodes {
+            parent_hash,
+            inner_layer: inner_layer + 1,
+        }
+    } else {
+        Request::LeafNodes { parent_hash }
     }
 }

@@ -156,6 +156,17 @@ impl LeafNodeSet {
         Ok(())
     }
 
+    /// Returns the same nodes but with the `is_missing` flag set to `true`.
+    /// Equivalent to `self.into_iter().map(LeafNode::into_missing()).collect()` but without
+    /// involving reallocation.
+    pub fn into_missing(mut self) -> Self {
+        for node in &mut self.0 {
+            node.is_missing = true;
+        }
+
+        self
+    }
+
     fn lookup(&self, locator: &Hash) -> Result<usize, usize> {
         self.0.binary_search_by(|node| node.locator.cmp(locator))
     }
