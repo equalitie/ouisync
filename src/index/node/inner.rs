@@ -152,13 +152,13 @@ impl InnerNodeMap {
         self.0.remove(&bucket)
     }
 
-    /// Atomically saves all nodes in this map to the db. Returns hashes of the nodes that changed.
-    pub async fn save(&self, pool: &db::Pool, parent: &Hash) -> Result<Vec<Hash>> {
+    /// Atomically saves all nodes in this map to the db. Returns nodes that changed.
+    pub async fn save(&self, pool: &'_ db::Pool, parent: &'_ Hash) -> Result<Vec<&InnerNode>> {
         let mut changed = Vec::with_capacity(self.len());
         let mut tx = pool.begin().await?;
         for (bucket, node) in self {
             if node.save(&mut tx, parent, bucket).await? {
-                changed.push(node.hash);
+                changed.push(node);
             }
         }
         tx.commit().await?;

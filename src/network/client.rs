@@ -127,19 +127,21 @@ impl Client {
         index::detect_complete_snapshots(&self.index.pool, parent_hash, inner_layer).await?;
 
         if inner_layer < INNER_LAYER_COUNT - 1 {
-            for parent_hash in changed {
+            for node in changed {
                 self.stream
                     .send(Request::InnerNodes {
-                        parent_hash,
+                        parent_hash: node.hash,
                         inner_layer: inner_layer + 1,
                     })
                     .await
                     .unwrap_or(())
             }
         } else {
-            for parent_hash in changed {
+            for node in changed {
                 self.stream
-                    .send(Request::LeafNodes { parent_hash })
+                    .send(Request::LeafNodes {
+                        parent_hash: node.hash,
+                    })
                     .await
                     .unwrap_or(())
             }
