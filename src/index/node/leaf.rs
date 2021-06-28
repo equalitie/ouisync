@@ -17,7 +17,8 @@ pub struct LeafNode {
 }
 
 impl LeafNode {
-    pub fn new(locator: Hash, block_id: BlockId) -> Self {
+    /// Creates a leaf node whose block is assumed to be present (not missing) in this replica.
+    pub fn present(locator: Hash, block_id: BlockId) -> Self {
         Self {
             locator,
             block_id,
@@ -25,14 +26,34 @@ impl LeafNode {
         }
     }
 
+    /// Creates a leaf node whose block is assumed to be missing in this replica.
+    pub fn missing(locator: Hash, block_id: BlockId) -> Self {
+        Self {
+            locator,
+            block_id,
+            is_missing: true,
+        }
+    }
+
+    /// Returns a leaf node representing the same block as `self`, but which is assumed to be
+    /// missing.
+    pub fn into_missing(self) -> Self {
+        Self {
+            is_missing: true,
+            ..self
+        }
+    }
+
     pub fn locator(&self) -> &Hash {
         &self.locator
     }
 
+    /// Saves the node to the db unless it already exists.
     pub async fn save(&self, tx: &mut db::Transaction, parent: &Hash) -> Result<()> {
         sqlx::query(
             "INSERT INTO snapshot_leaf_nodes (parent, locator, block_id, is_missing)
-             VALUES (?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT (parent, locator, block_id) DO NOTHING",
         )
         .bind(parent)
         .bind(&self.locator)
@@ -125,7 +146,6 @@ impl LeafNodeSet {
         Some(self.0.remove(index))
     }
 
-    /// Atomically saves all nodes in this set into the db.
     pub async fn save(&self, pool: &db::Pool, parent: &Hash) -> Result<()> {
         let mut tx = pool.begin().await?;
         for node in self {

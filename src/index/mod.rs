@@ -136,8 +136,13 @@ pub async fn init(pool: &db::Pool) -> Result<(), Error> {
              block_id    BLOB NOT NULL,
 
              -- Is the block pointed to by this node missing?
-             is_missing  INTEGER NOT NULL
+             is_missing  INTEGER NOT NULL,
+
+             UNIQUE(parent, locator, block_id)
          );
+
+         CREATE INDEX index_snapshot_leaf_nodes_on_block_id
+             ON snapshot_leaf_nodes (block_id);
 
          -- Prevents creating multiple inner nodes with the same parent and bucket but different
          -- hash.

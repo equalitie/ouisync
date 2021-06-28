@@ -139,7 +139,7 @@ impl Link {
         .bind(parent)
         .map(|row| Link::ToLeaf {
             parent: row.get(0),
-            node: LeafNode::new(row.get(1), row.get(2)),
+            node: LeafNode::present(row.get(1), row.get(2)),
         })
         .fetch(tx)
         .try_collect()

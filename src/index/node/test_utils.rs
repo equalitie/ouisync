@@ -17,7 +17,7 @@ impl Snapshot {
             .map(|_| {
                 let locator = rng.gen::<u64>().hash();
                 let block_id = rng.gen();
-                LeafNode::new(locator, block_id)
+                LeafNode::present(locator, block_id)
             })
             .collect();
 
