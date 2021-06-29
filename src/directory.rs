@@ -286,7 +286,7 @@ impl Directory {
 
     fn add_label(name: &OsStr, replica_id: &ReplicaId) -> OsString {
         let mut s = name.to_os_string();
-        s.push('-');
+        s.push("-");
         s.push(Self::replica_id_to_label(replica_id));
         s
     }
