@@ -15,6 +15,7 @@ mod file;
 mod format;
 mod index;
 mod iterator;
+mod joint_directory;
 mod locator;
 mod network;
 mod replica_id;
