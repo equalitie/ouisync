@@ -1,2 +1,2 @@
 pub mod accumulate;
-pub mod union;
+pub mod sorted_union;

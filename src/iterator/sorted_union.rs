@@ -1,9 +1,9 @@
 use std::iter::Peekable;
 
 //--------------------------------------------------------------------
-// Union
+// SortedUnion
 //--------------------------------------------------------------------
-pub struct Union<L, R, GetKey>
+pub struct SortedUnion<L, R, GetKey>
 where
     L: Iterator,
     R: Iterator,
@@ -13,7 +13,7 @@ where
     get_key: GetKey,
 }
 
-impl<L, R, GetKey> Union<L, R, GetKey>
+impl<L, R, GetKey> SortedUnion<L, R, GetKey>
 where
     L: Iterator,
     R: Iterator,
@@ -42,7 +42,7 @@ where
         let mut u: Box<dyn Iterator<Item = T> + 'a> = Box::new(first);
 
         for n in iter {
-            u = Box::new(Union::new(u, n, get_key));
+            u = Box::new(SortedUnion::new(u, n, get_key));
         }
 
         u
@@ -51,7 +51,7 @@ where
     }
 }
 
-impl<L, R, T, Key, GetKey> Iterator for Union<L, R, GetKey>
+impl<L, R, T, Key, GetKey> Iterator for SortedUnion<L, R, GetKey>
 where
     T: Copy,
     L: Iterator<Item = T>,
@@ -86,7 +86,7 @@ mod tests {
     fn test_union() {
         let l = &[(1, "l0"), (3, "l1"), (4, "l2"), (4, "l3")];
         let r = &[(1, "r0"), (2, "r1"), (2, "r2"), (3, "r3")];
-        let u = Union::new(l.iter(), r.iter(), |p: &(i32, &str)| p.0);
+        let u = SortedUnion::new(l.iter(), r.iter(), |p: &(i32, &str)| p.0);
         assert_eq!(
             u.collect::<Vec<_>>(),
             [
