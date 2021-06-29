@@ -281,7 +281,8 @@ impl Directory {
     }
 
     fn replica_id_to_label(replica_id: &ReplicaId) -> OsString {
-        OsString::from(format!("{:16x}", replica_id))
+        let r = replica_id.as_ref();
+        OsString::from(format!("{:02x}{:02x}{:02x}{:02x}", r[0], r[1], r[2], r[3]))
     }
 
     fn add_label(name: &OsStr, replica_id: &ReplicaId) -> OsString {
@@ -295,7 +296,7 @@ impl Directory {
         // TODO: Don't convert to str once OsStr or OsString get needed string manipulation
         // functions.
         name.to_str().and_then(|name| {
-            const SUFFIX_LEN: usize = 17;
+            const SUFFIX_LEN: usize = 9;
             if name.len() < SUFFIX_LEN {
                 return None;
             }
@@ -312,6 +313,7 @@ impl Directory {
 }
 
 /// Info about a directory entry.
+#[derive(Copy, Clone)]
 pub struct EntryInfo<'a> {
     parent_blob: &'a Blob,
     disambiguator: Option<&'a ReplicaId>,
@@ -326,10 +328,14 @@ impl<'a> EntryInfo<'a> {
 
     pub fn unique_name(&self) -> OsString {
         if let Some(replica_id) = self.disambiguator {
-            Directory::add_label(self.name, replica_id)
+            self.name_with_label(replica_id)
         } else {
             self.name.to_os_string()
         }
+    }
+
+    pub fn name_with_label(&self, label: &ReplicaId) -> OsString {
+        Directory::add_label(self.name, label)
     }
 
     pub fn entry_type(&self) -> EntryType {
