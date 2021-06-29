@@ -5,7 +5,7 @@ use crate::{
     error::{Error, Result},
 };
 use generic_array::{sequence::GenericSequence, typenum::Unsigned};
-use sqlx::Row;
+use sqlx::{sqlite::SqliteRow, Row};
 
 /// Initializes the block store. Creates the required database schema unless already exists.
 pub async fn init(pool: &db::Pool) -> Result<()> {
@@ -28,20 +28,21 @@ pub async fn init(pool: &db::Pool) -> Result<()> {
 /// # Panics
 ///
 /// Panics if `buffer` length is less than [`BLOCK_SIZE`].
-pub async fn read(tx: &mut db::Transaction, id: &BlockId, buffer: &mut [u8]) -> Result<AuthTag> {
+pub async fn read(db: impl db::Executor<'_>, id: &BlockId, buffer: &mut [u8]) -> Result<AuthTag> {
+    let row = sqlx::query("SELECT auth_tag, content FROM blocks WHERE id = ?")
+        .bind(id)
+        .fetch_optional(db)
+        .await?
+        .ok_or_else(|| Error::BlockNotFound(*id))?;
+
+    from_row(row, buffer)
+}
+
+fn from_row(row: SqliteRow, buffer: &mut [u8]) -> Result<AuthTag> {
     assert!(
         buffer.len() >= BLOCK_SIZE,
         "insufficient buffer length for block read"
     );
-
-    let row = sqlx::query("SELECT auth_tag, content FROM blocks WHERE id = ?")
-        .bind(id)
-        .fetch_optional(tx)
-        .await?;
-    let row = match row {
-        Some(row) => row,
-        None => return Err(Error::BlockNotFound(*id)),
-    };
 
     let auth_tag: &[u8] = row.get(0);
     if auth_tag.len() != <AuthTag as GenericSequence<_>>::Length::USIZE {

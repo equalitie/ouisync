@@ -144,10 +144,8 @@ impl Server {
     }
 
     async fn handle_block(&self, id: BlockId) -> Result<()> {
-        let mut tx = self.index.pool.begin().await?;
         let mut content = vec![0; BLOCK_SIZE].into_boxed_slice();
-        let auth_tag = block::read(&mut tx, &id, &mut content).await?;
-        tx.commit().await?;
+        let auth_tag = block::read(&self.index.pool, &id, &mut content).await?;
 
         self.stream
             .send(Response::Block {
