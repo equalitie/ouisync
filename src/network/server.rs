@@ -113,7 +113,7 @@ impl Server {
         Ok(())
     }
 
-    async fn handle_inner_nodes(&mut self, parent_hash: Hash, inner_layer: usize) -> Result<()> {
+    async fn handle_inner_nodes(&self, parent_hash: Hash, inner_layer: usize) -> Result<()> {
         let nodes = InnerNode::load_children(&self.index.pool, &parent_hash).await?;
 
         if !nodes.is_empty() {
@@ -130,7 +130,7 @@ impl Server {
         Ok(())
     }
 
-    async fn handle_leaf_nodes(&mut self, parent_hash: Hash) -> Result<()> {
+    async fn handle_leaf_nodes(&self, parent_hash: Hash) -> Result<()> {
         let nodes = LeafNode::load_children(&self.index.pool, &parent_hash).await?;
 
         if !nodes.is_empty() {
@@ -143,7 +143,7 @@ impl Server {
         Ok(())
     }
 
-    async fn handle_block(&mut self, id: BlockId) -> Result<()> {
+    async fn handle_block(&self, id: BlockId) -> Result<()> {
         let mut tx = self.index.pool.begin().await?;
         let mut content = vec![0; BLOCK_SIZE].into_boxed_slice();
         let auth_tag = block::read(&mut tx, &id, &mut content).await?;

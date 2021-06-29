@@ -67,7 +67,7 @@ impl Client {
         Ok(false)
     }
 
-    async fn handle_response(&mut self, response: Response) -> Result<()> {
+    async fn handle_response(&self, response: Response) -> Result<()> {
         match response {
             Response::RootNode { versions, hash } => self.handle_root_node(versions, hash).await,
             Response::InnerNodes {
@@ -89,7 +89,7 @@ impl Client {
         }
     }
 
-    async fn handle_root_node(&mut self, versions: VersionVector, hash: Hash) -> Result<()> {
+    async fn handle_root_node(&self, versions: VersionVector, hash: Hash) -> Result<()> {
         let this_versions = self.latest_local_versions().await?;
         if versions
             .partial_cmp(&this_versions)
@@ -124,7 +124,7 @@ impl Client {
     }
 
     async fn handle_inner_nodes(
-        &mut self,
+        &self,
         parent_hash: Hash,
         inner_layer: usize,
         nodes: InnerNodeMap,
@@ -147,7 +147,7 @@ impl Client {
         Ok(())
     }
 
-    async fn handle_leaf_nodes(&mut self, parent_hash: Hash, nodes: LeafNodeSet) -> Result<()> {
+    async fn handle_leaf_nodes(&self, parent_hash: Hash, nodes: LeafNodeSet) -> Result<()> {
         if parent_hash != nodes.hash() {
             log::warn!("leaf nodes parent hash mismatch");
             return Ok(());
@@ -164,12 +164,7 @@ impl Client {
         Ok(())
     }
 
-    async fn handle_block(
-        &mut self,
-        id: BlockId,
-        content: Box<[u8]>,
-        auth_tag: AuthTag,
-    ) -> Result<()> {
+    async fn handle_block(&self, id: BlockId, content: Box<[u8]>, auth_tag: AuthTag) -> Result<()> {
         // TODO: how to validate the block?
 
         let mut tx = self.index.pool.begin().await?;
@@ -201,7 +196,7 @@ impl Client {
 
     // Download blocks that are missing by us but present in the remote replica.
     async fn pull_missing_blocks(
-        &mut self,
+        &self,
         parent_hash: &Hash,
         remote_nodes: &LeafNodeSet,
     ) -> Result<()> {

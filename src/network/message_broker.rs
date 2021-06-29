@@ -32,7 +32,7 @@ impl ServerStream {
         Some(rq)
     }
 
-    pub async fn send(&mut self, rs: Response) -> Result<(), SendError<Response>> {
+    pub async fn send(&self, rs: Response) -> Result<(), SendError<Response>> {
         log::trace!("server: send {:?}", rs);
         self.tx
             .send(Command::SendMessage(Message::Response(rs)))
@@ -58,7 +58,7 @@ impl ClientStream {
         Some(rs)
     }
 
-    pub async fn send(&mut self, rq: Request) -> Result<(), SendError<Request>> {
+    pub async fn send(&self, rq: Request) -> Result<(), SendError<Request>> {
         log::trace!("client: send {:?}", rq);
         self.tx
             .send(Command::SendMessage(Message::Request(rq)))
