@@ -80,18 +80,13 @@ impl Directory {
             .flat_map(move |(name, variants)| {
                 assert!(!variants.is_empty());
 
-                let needs_disambiguator = variants.len() > 1;
+                let disambiguate = variants.len() > 1;
 
                 variants.iter().map(move |(replica_id, data)| {
-                    let disambiguator = if needs_disambiguator {
-                        Some(replica_id)
-                    } else {
-                        None
-                    };
-
                     EntryInfo {
                         parent_blob: &self.blob,
-                        disambiguator,
+                        replica_id,
+                        disambiguate,
                         name,
                         data,
                     }
@@ -113,9 +108,10 @@ impl Directory {
                         return None;
                     }
 
-                    variants.values().next().map(|data| EntryInfo {
+                    variants.iter().next().map(|(replica_id, data)| EntryInfo {
                         parent_blob: &self.blob,
-                        disambiguator: None,
+                        replica_id,
+                        disambiguate: false,
                         name,
                         data,
                     })
@@ -134,7 +130,8 @@ impl Directory {
                             if label == Self::replica_id_to_label(replica_id) {
                                 return Some(EntryInfo {
                                     parent_blob: &self.blob,
-                                    disambiguator: Some(replica_id),
+                                    replica_id,
+                                    disambiguate: true,
                                     name,
                                     data,
                                 });
@@ -316,7 +313,8 @@ impl Directory {
 #[derive(Copy, Clone)]
 pub struct EntryInfo<'a> {
     parent_blob: &'a Blob,
-    disambiguator: Option<&'a ReplicaId>,
+    replica_id: &'a ReplicaId,
+    disambiguate: bool,
     name: &'a OsStr,
     data: &'a EntryData,
 }
@@ -327,8 +325,8 @@ impl<'a> EntryInfo<'a> {
     }
 
     pub fn unique_name(&self) -> OsString {
-        if let Some(replica_id) = self.disambiguator {
-            self.name_with_label(replica_id)
+        if self.disambiguate {
+            self.name_with_label(self.replica_id)
         } else {
             self.name.to_os_string()
         }
