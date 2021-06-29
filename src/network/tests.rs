@@ -17,7 +17,7 @@ use crate::{
 };
 use rand::prelude::*;
 use test_strategy::proptest;
-use tokio::{select, sync::mpsc};
+use tokio::{join, select, sync::mpsc};
 
 // Test complete transfer of one snapshot from one replica to another
 // Also test a new snapshot transfer is performed after every local branch
@@ -72,11 +72,13 @@ async fn transfer_snapshot_between_two_replicas_case(
         }
     };
 
-    select! {
-        result = server.run() => result.unwrap(),
-        result = client.run() => result.unwrap(),
-        _ = drive => (),
-    }
+    // NOTE: using `join` instead of `select` to make sure all tasks run to completion even after
+    // one of them finishes. This seems to prevent a memory corruption issue which is triggered by
+    // (what seems to be) a bug in sqlx and which happens when a future that contains a sqlx query
+    // is interrupted mid query instead of being let to run to completion.
+    let (server_result, client_result, _) = join!(server.run(), client.run(), drive);
+    server_result.unwrap();
+    client_result.unwrap();
 
     let root_per_b = load_latest_root_node(&b_index, &a_index.this_replica_id)
         .await
