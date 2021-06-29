@@ -35,18 +35,16 @@ impl JointDirectory {
     }
 
     pub fn entries(&self) -> impl Iterator<Item = OsString> + '_ {
-        // Map<ReplicaId, Directory> -> [[(ReplicaId, EntryInfo)]]
-        let entries = self.dirs.iter().map(|(replica_id, directory)| {
-            let r_id = replica_id;
-            directory.entries().map(move |e| (r_id, e))
+        // Map<ReplicaId, Directory> -> [[EntryInfo]]
+        let entries = self.dirs.iter().map(|(_replica_id, directory)| {
+            directory.entries()
         });
 
-        // [[(ReplicaId, EntryInfo)]] -> [(ReplicaId, EntryInfo)]
-        let flat_entries =
-            sorted_union::new_from_many(entries, |(_replica_id, entry)| entry.name());
+        // [[EntryInfo]] -> [EntryInfo]
+        let flat_entries = sorted_union::new_from_many(entries, |entry| entry.name());
 
-        // [(ReplicaId, EntryInfo)] -> [(entry-name, [(ReplicaId, EntryInfo)]]
-        let grouped_entries = Accumulate::new(flat_entries, |(_replica_id, entry)| entry.name());
+        // [EntryInfo] -> [(entry-name, [EntryInfo]]
+        let grouped_entries = Accumulate::new(flat_entries, |entry| entry.name());
 
         grouped_entries.flat_map(|(name, entries)| {
             if entries.len() == 1 {
@@ -54,7 +52,7 @@ impl JointDirectory {
             } else {
                 entries
                     .iter()
-                    .map(|(replica_id, entry)| entry.name_with_label(replica_id))
+                    .map(|entry| entry.name_with_label())
                     .collect()
             }
         })

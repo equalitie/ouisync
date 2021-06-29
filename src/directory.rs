@@ -326,14 +326,14 @@ impl<'a> EntryInfo<'a> {
 
     pub fn unique_name(&self) -> OsString {
         if self.disambiguate {
-            self.name_with_label(self.replica_id)
+            self.name_with_label()
         } else {
             self.name.to_os_string()
         }
     }
 
-    pub fn name_with_label(&self, label: &ReplicaId) -> OsString {
-        Directory::add_label(self.name, label)
+    pub fn name_with_label(&self) -> OsString {
+        Directory::add_label(self.name, self.replica_id)
     }
 
     pub fn entry_type(&self) -> EntryType {
