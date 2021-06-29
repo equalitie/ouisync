@@ -27,6 +27,30 @@ where
     }
 }
 
+pub fn new_from_many<'a, Iter, T, Key, GetKey>(
+    mut iter: Iter,
+    get_key: GetKey,
+) -> Box<dyn Iterator<Item = T> + 'a>
+where
+    Iter: Iterator,
+    Iter::Item: Iterator<Item = T> + 'a,
+    T: Copy + 'a,
+    Key: Copy + Ord,
+    GetKey: FnMut(T) -> Key + 'a + Copy,
+{
+    if let Some(first) = iter.next() {
+        let mut u: Box<dyn Iterator<Item = T> + 'a> = Box::new(first);
+
+        for n in iter {
+            u = Box::new(Union::new(u, n, get_key));
+        }
+
+        u
+    } else {
+        Box::new(std::iter::empty())
+    }
+}
+
 impl<L, R, T, Key, GetKey> Iterator for Union<L, R, GetKey>
 where
     T: Copy,
@@ -56,6 +80,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::array::IntoIter;
 
     #[test]
     fn test_union() {
@@ -73,6 +98,31 @@ mod tests {
                 &(3, "r3"),
                 &(4, "l2"),
                 &(4, "l3")
+            ]
+        );
+    }
+
+    #[test]
+    fn test_union_many() {
+        let v0 = &[(1, "00"), (3, "01"), (4, "02")];
+        let v1 = &[(1, "10"), (2, "11"), (2, "12")];
+        let v2 = &[(2, "20"), (2, "21"), (5, "22")];
+        let u = new_from_many(
+            IntoIter::new([v0.iter(), v1.iter(), v2.iter()]),
+            |p: &(i32, &str)| p.0,
+        );
+        assert_eq!(
+            u.collect::<Vec<_>>(),
+            [
+                &(1, "00"),
+                &(1, "10"),
+                &(2, "11"),
+                &(2, "12"),
+                &(2, "20"),
+                &(2, "21"),
+                &(3, "01"),
+                &(4, "02"),
+                &(5, "22")
             ]
         );
     }

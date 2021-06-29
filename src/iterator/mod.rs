@@ -1,2 +1,2 @@
-pub mod union;
 pub mod accumulate;
+pub mod union;
