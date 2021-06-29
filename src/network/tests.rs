@@ -5,7 +5,8 @@ use super::{
     server::Server,
 };
 use crate::{
-    crypto::Hashable,
+    block::{self, BlockId, BLOCK_SIZE},
+    crypto::{AuthTag, Hashable},
     db,
     index::{
         self, node_test_utils::Snapshot, Index, MissingBlocksSummary, RootNode, INNER_LAYER_COUNT,
@@ -143,6 +144,12 @@ async fn save_snapshot(index: &Index, snapshot: &Snapshot) {
         index::detect_complete_snapshots(&index.pool, *parent_hash, INNER_LAYER_COUNT)
             .await
             .unwrap();
+
+        let mut tx = index.pool.begin().await.unwrap();
+        for node in nodes {
+            write_zero_block(&mut tx, &node.block_id).await;
+        }
+        tx.commit().await.unwrap();
     }
 }
 
@@ -156,7 +163,14 @@ async fn insert_random_block(rng: &mut impl Rng, index: &Index) {
         .insert(&mut tx, &block_id, &encoded_locator)
         .await
         .unwrap();
+    write_zero_block(&mut tx, &block_id).await;
     tx.commit().await.unwrap();
+}
+
+async fn write_zero_block(tx: &mut db::Transaction, id: &BlockId) {
+    let content = vec![0; BLOCK_SIZE];
+    let auth_tag = AuthTag::default(); // don't care about encryption here
+    block::write(tx, &id, &content, &auth_tag).await.unwrap();
 }
 
 async fn load_latest_root_node(index: &Index, replica_id: &ReplicaId) -> Option<RootNode> {

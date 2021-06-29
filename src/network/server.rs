@@ -3,6 +3,7 @@ use super::{
     message_broker::ServerStream,
 };
 use crate::{
+    block::{self, BlockId, BLOCK_SIZE},
     crypto::Hash,
     error::Result,
     index::{Index, InnerNode, LeafNode, RootNode},
@@ -72,6 +73,7 @@ impl Server {
                 inner_layer,
             } => self.handle_inner_nodes(parent_hash, inner_layer).await,
             Request::LeafNodes { parent_hash } => self.handle_leaf_nodes(parent_hash).await,
+            Request::Block(id) => self.handle_block(id).await,
         }
     }
 
@@ -137,6 +139,24 @@ impl Server {
                 .await
                 .unwrap_or(())
         }
+
+        Ok(())
+    }
+
+    async fn handle_block(&mut self, id: BlockId) -> Result<()> {
+        let mut tx = self.index.pool.begin().await?;
+        let mut content = vec![0; BLOCK_SIZE].into_boxed_slice();
+        let auth_tag = block::read(&mut tx, &id, &mut content).await?;
+        tx.commit().await?;
+
+        self.stream
+            .send(Response::Block {
+                id,
+                content,
+                auth_tag,
+            })
+            .await
+            .unwrap_or(());
 
         Ok(())
     }

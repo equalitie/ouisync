@@ -167,6 +167,19 @@ impl LeafNodeSet {
         self
     }
 
+    /// Returns all nodes from this set whose `is_missing` flag is `false`.
+    pub fn present(&self) -> impl Iterator<Item = &LeafNode> {
+        self.iter().filter(|node| !node.is_missing)
+    }
+
+    /// Returns whether node at `locator` has `is_missing` set to `true` or if there is no such
+    /// node in this set.
+    pub fn is_missing(&self, locator: &Hash) -> bool {
+        self.get(locator)
+            .map(|node| node.is_missing)
+            .unwrap_or(true)
+    }
+
     fn lookup(&self, locator: &Hash) -> Result<usize, usize> {
         self.0.binary_search_by(|node| node.locator.cmp(locator))
     }

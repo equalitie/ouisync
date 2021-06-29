@@ -3,10 +3,12 @@ use super::{
     message_broker::ClientStream,
 };
 use crate::{
-    crypto::{Hash, Hashable},
+    block::{self, BlockId},
+    crypto::{AuthTag, Hash, Hashable},
     error::Result,
     index::{
-        self, Index, InnerNodeMap, LeafNodeSet, MissingBlocksSummary, RootNode, INNER_LAYER_COUNT,
+        self, Index, InnerNodeMap, LeafNode, LeafNodeSet, MissingBlocksSummary, RootNode,
+        INNER_LAYER_COUNT,
     },
     replica_id::ReplicaId,
     version_vector::VersionVector,
@@ -51,9 +53,13 @@ impl Client {
             .unwrap_or(());
 
         while let Some(response) = self.stream.recv().await {
+            // Check competion only if the response affects the index (that is, it is not `Block`)
+            // to avoid sending unnecessary duplicate `RootNode` requests.
+            let check_complete = !matches!(response, Response::Block { .. });
+
             self.handle_response(response).await?;
 
-            if self.is_complete().await? {
+            if check_complete && self.is_complete().await? {
                 return Ok(true);
             }
         }
@@ -75,6 +81,11 @@ impl Client {
             Response::LeafNodes { parent_hash, nodes } => {
                 self.handle_leaf_nodes(parent_hash, nodes).await
             }
+            Response::Block {
+                id,
+                content,
+                auth_tag,
+            } => self.handle_block(id, content, auth_tag).await,
         }
     }
 
@@ -142,11 +153,29 @@ impl Client {
             return Ok(());
         }
 
+        self.pull_missing_blocks(&parent_hash, &nodes).await?;
+
         nodes
             .into_missing()
             .save(&self.index.pool, &parent_hash)
             .await?;
         index::detect_complete_snapshots(&self.index.pool, parent_hash, INNER_LAYER_COUNT).await?;
+
+        Ok(())
+    }
+
+    async fn handle_block(
+        &mut self,
+        id: BlockId,
+        content: Box<[u8]>,
+        auth_tag: AuthTag,
+    ) -> Result<()> {
+        // TODO: how to validate the block?
+
+        let mut tx = self.index.pool.begin().await?;
+        block::write(&mut tx, &id, &content, &auth_tag).await?;
+        index::mark_block_as_present(&mut tx, &id).await?;
+        tx.commit().await?;
 
         Ok(())
     }
@@ -168,6 +197,28 @@ impl Client {
                 .map(|node| node.versions)
                 .unwrap_or_default(),
         )
+    }
+
+    // Download blocks that are missing by us but present in the remote replica.
+    async fn pull_missing_blocks(
+        &mut self,
+        parent_hash: &Hash,
+        remote_nodes: &LeafNodeSet,
+    ) -> Result<()> {
+        let local_nodes = LeafNode::load_children(&self.index.pool, parent_hash).await?;
+
+        for node in remote_nodes.present() {
+            if local_nodes.is_missing(node.locator()) {
+                // TODO: avoid multiple clients downloading the same block
+
+                self.stream
+                    .send(Request::Block(node.block_id))
+                    .await
+                    .unwrap_or(());
+            }
+        }
+
+        Ok(())
     }
 }
 

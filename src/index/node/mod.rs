@@ -17,6 +17,7 @@ pub use self::{
 };
 
 use crate::{
+    block::BlockId,
     crypto::{Hash, Hashable},
     db,
     error::Result,
@@ -89,4 +90,10 @@ async fn leaf_children_complete(pool: &db::Pool, parent_hash: &Hash) -> Result<b
     // Similarly as in `are_inner_children_complete`, we only need to check that we have at least
     // one leaf node child and that already tells us that we have them all.
     LeafNode::has_children(pool, &parent_hash).await
+}
+
+/// Modify the index to mark the specified block as present (not missing) in the local replica.
+pub async fn mark_block_as_present(_tx: &mut db::Transaction, _block_id: &BlockId) -> Result<()> {
+    // TODO: implement this
+    Ok(())
 }
