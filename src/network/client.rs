@@ -7,8 +7,7 @@ use crate::{
     crypto::{AuthTag, Hash, Hashable},
     error::Result,
     index::{
-        self, Index, InnerNodeMap, LeafNode, LeafNodeSet, MissingBlocksSummary, RootNode,
-        INNER_LAYER_COUNT,
+        self, Index, InnerNodeMap, LeafNodeSet, MissingBlocksSummary, RootNode, INNER_LAYER_COUNT,
     },
     replica_id::ReplicaId,
     version_vector::VersionVector,
@@ -134,12 +133,22 @@ impl Client {
             return Ok(());
         }
 
-        let changed = nodes.save(&self.index.pool, &parent_hash).await?;
+        let updated: Vec<_> = self
+            .index
+            .find_inner_nodes_with_new_blocks(&parent_hash, &nodes)
+            .await?
+            .map(|node| node.hash)
+            .collect();
+
+        nodes
+            .into_missing()
+            .save(&self.index.pool, &parent_hash)
+            .await?;
         index::detect_complete_snapshots(&self.index.pool, parent_hash, inner_layer).await?;
 
-        for node in changed {
+        for hash in updated {
             self.stream
-                .send(child_request(node.hash, inner_layer))
+                .send(child_request(hash, inner_layer))
                 .await
                 .unwrap_or(())
         }
@@ -200,17 +209,17 @@ impl Client {
         parent_hash: &Hash,
         remote_nodes: &LeafNodeSet,
     ) -> Result<()> {
-        let local_nodes = LeafNode::load_children(&self.index.pool, parent_hash).await?;
+        let updated = self
+            .index
+            .find_leaf_nodes_with_new_blocks(parent_hash, remote_nodes)
+            .await?;
+        for node in updated {
+            // TODO: avoid multiple clients downloading the same block
 
-        for node in remote_nodes.present() {
-            if local_nodes.is_missing(node.locator()) {
-                // TODO: avoid multiple clients downloading the same block
-
-                self.stream
-                    .send(Request::Block(node.block_id))
-                    .await
-                    .unwrap_or(());
-            }
+            self.stream
+                .send(Request::Block(node.block_id))
+                .await
+                .unwrap_or(());
         }
 
         Ok(())

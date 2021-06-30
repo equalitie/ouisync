@@ -14,6 +14,7 @@ pub use self::{
 
 use crate::{
     block::BlockId,
+    crypto::Hash,
     db,
     error::{Error, Result},
     ReplicaId,
@@ -51,6 +52,52 @@ impl Index {
 
     pub async fn local_branch(&self) -> Branch {
         self.branches.lock().await.local.clone()
+    }
+
+    /// Filter inner nodes that the remote replica has some blocks in that the local one is missing.
+    ///
+    /// Assumes (but does not enforce) that `parent_hash` is the parent hash of all nodes in
+    /// `remote_nodes`.
+    pub async fn find_inner_nodes_with_new_blocks<'a, 'b, 'c>(
+        &'a self,
+        parent_hash: &'b Hash,
+        remote_nodes: &'c InnerNodeMap,
+    ) -> Result<impl Iterator<Item = &'c InnerNode>> {
+        let local_nodes = InnerNode::load_children(&self.pool, parent_hash).await?;
+
+        Ok(remote_nodes
+            .iter()
+            .filter(move |(bucket, remote_node)| {
+                let local_node = if let Some(node) = local_nodes.get(*bucket) {
+                    node
+                } else {
+                    // node not present locally - we implicitly treat this as if the local replica
+                    // had zero blocks under this node.
+                    return true;
+                };
+
+                !local_node
+                    .missing_blocks
+                    .is_up_to_date_with(&remote_node.missing_blocks)
+                    .unwrap_or(true)
+            })
+            .map(|(_, node)| node))
+    }
+
+    /// Filter leaf nodes that the remote replica has a block for but the local one is missing it.
+    ///
+    /// Assumes (but does not enforce) that `parent_hash` is the parent hash of all nodes in
+    /// `remote_nodes`.
+    pub async fn find_leaf_nodes_with_new_blocks<'a, 'b, 'c>(
+        &'a self,
+        parent_hash: &'b Hash,
+        remote_nodes: &'c LeafNodeSet,
+    ) -> Result<impl Iterator<Item = &'c LeafNode>> {
+        let local_nodes = LeafNode::load_children(&self.pool, parent_hash).await?;
+
+        Ok(remote_nodes
+            .present()
+            .filter(move |node| local_nodes.is_missing(node.locator())))
     }
 }
 

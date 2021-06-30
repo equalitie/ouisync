@@ -19,7 +19,7 @@ pub const INNER_LAYER_COUNT: usize = 3;
 #[derive(Clone, Copy, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub struct InnerNode {
     pub hash: Hash,
-    /// Has the whole subree rooted at this node been completely downloaded?
+    /// Has the whole subtree rooted at this node been completely downloaded?
     ///
     /// Note this is local-only information and is not transmitted to other replicas which is why
     /// it is not serialized.
@@ -164,6 +164,16 @@ impl InnerNodeMap {
         tx.commit().await?;
 
         Ok(changed)
+    }
+
+    /// Returns the same nodes but with the `missing_block` changed to indicate that all blocks are
+    /// missing.
+    pub fn into_missing(mut self) -> Self {
+        for node in self.0.values_mut() {
+            node.missing_blocks = MissingBlocksSummary::ALL;
+        }
+
+        self
     }
 }
 
