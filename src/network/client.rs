@@ -187,10 +187,9 @@ impl Client {
 
     async fn handle_block(&self, id: BlockId, content: Box<[u8]>, auth_tag: AuthTag) -> Result<()> {
         // TODO: how to validate the block?
-
         let mut tx = self.index.pool.begin().await?;
         block::write(&mut tx, &id, &content, &auth_tag).await?;
-        index::mark_block_as_present(&mut tx, &id).await?;
+        index::receive_block(&mut tx, &id).await?;
         tx.commit().await?;
 
         Ok(())

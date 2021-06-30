@@ -1,5 +1,8 @@
 use super::{
-    super::SnapshotId, inner::InnerNodeMap, link::Link, missing_blocks::MissingBlocksSummary,
+    super::SnapshotId,
+    inner::{InnerNode, InnerNodeMap},
+    link::Link,
+    missing_blocks::MissingBlocksSummary,
 };
 use crate::{
     crypto::{Hash, Hashable},
@@ -267,6 +270,25 @@ impl RootNode {
             .await?;
 
         self.is_complete = row.get(0);
+
+        Ok(())
+    }
+
+    /// Updates missing block summaries of all nodes with the specified hash.
+    pub async fn update_missing_blocks(tx: &mut db::Transaction, hash: &Hash) -> Result<()> {
+        let children = InnerNode::load_children(&mut *tx, hash).await?;
+        let missing_blocks = MissingBlocksSummary::from_inners(&children);
+
+        sqlx::query(
+            "UPDATE snapshot_root_nodes
+             SET missing_blocks_count = ?, missing_blocks_checksum = ?
+             WHERE hash = ?",
+        )
+        .bind(db::encode_u64(missing_blocks.count))
+        .bind(db::encode_u64(missing_blocks.checksum))
+        .bind(hash)
+        .execute(tx)
+        .await?;
 
         Ok(())
     }

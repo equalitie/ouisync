@@ -92,8 +92,29 @@ async fn leaf_children_complete(pool: &db::Pool, parent_hash: &Hash) -> Result<b
     LeafNode::has_children(pool, &parent_hash).await
 }
 
-/// Modify the index to mark the specified block as present (not missing) in the local replica.
-pub async fn mark_block_as_present(_tx: &mut db::Transaction, _block_id: &BlockId) -> Result<()> {
-    // TODO: implement this
+/// Receive a block from other replica. This marks the block as not missing by the local replica.
+// TODO: return replica_ids of affected branches
+pub async fn receive_block(tx: &mut db::Transaction, id: &BlockId) -> Result<()> {
+    LeafNode::set_present(tx, id).await?;
+
+    let mut stack: Vec<_> = LeafNode::load_parent_hashes(tx, id)
+        .map_ok(|hash| (hash, INNER_LAYER_COUNT))
+        .try_collect()
+        .await?;
+
+    while let Some((hash, layer)) = stack.pop() {
+        if layer > 0 {
+            InnerNode::update_missing_blocks(tx, &hash, layer - 1).await?;
+            InnerNode::load_parent_hashes(&mut *tx, &hash)
+                .try_for_each(|parent_hash| {
+                    stack.push((parent_hash, layer - 1));
+                    future::ready(Ok(()))
+                })
+                .await?;
+        } else {
+            RootNode::update_missing_blocks(tx, &hash).await?
+        }
+    }
+
     Ok(())
 }

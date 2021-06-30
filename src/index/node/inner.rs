@@ -1,4 +1,4 @@
-use super::missing_blocks::MissingBlocksSummary;
+use super::{leaf::LeafNode, missing_blocks::MissingBlocksSummary};
 use crate::{
     crypto::{Hash, Hashable},
     db,
@@ -74,15 +74,15 @@ impl InnerNode {
         .map_err(From::from)
     }
 
-    /// Load parent hashes of all inner nodes with the specifed hash.
+    /// Loads parent hashes of all inner nodes with the specifed hash.
     pub fn load_parent_hashes<'a>(
-        pool: &'a db::Pool,
+        db: impl db::Executor<'a> + 'a,
         hash: &'a Hash,
     ) -> impl Stream<Item = Result<Hash>> + 'a {
         sqlx::query("SELECT parent FROM snapshot_inner_nodes WHERE hash = ?")
             .bind(hash)
             .map(|row| row.get(0))
-            .fetch(pool)
+            .fetch(db)
             .err_into()
     }
 
@@ -121,6 +121,35 @@ impl InnerNode {
         .rows_affected();
 
         Ok(changes > 0)
+    }
+
+    /// Updates missing block summaries of all nodes with the specified hash at the specified inner
+    /// layer.
+    pub async fn update_missing_blocks(
+        tx: &mut db::Transaction,
+        hash: &Hash,
+        inner_layer: usize,
+    ) -> Result<()> {
+        let missing_blocks = if inner_layer < INNER_LAYER_COUNT - 1 {
+            let children = LeafNode::load_children(&mut *tx, hash).await?;
+            MissingBlocksSummary::from_leaves(&children)
+        } else {
+            let children = InnerNode::load_children(&mut *tx, hash).await?;
+            MissingBlocksSummary::from_inners(&children)
+        };
+
+        sqlx::query(
+            "UPDATE snapshot_inner_nodes
+             SET missing_blocks_count = ?, missing_blocks_checksum = ?
+             WHERE hash = ?",
+        )
+        .bind(db::encode_u64(missing_blocks.count))
+        .bind(db::encode_u64(missing_blocks.checksum))
+        .bind(hash)
+        .execute(tx)
+        .await?;
+
+        Ok(())
     }
 }
 

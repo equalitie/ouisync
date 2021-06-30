@@ -7,8 +7,8 @@ pub use self::node::test_utils as node_test_utils;
 pub use self::{
     branch::Branch,
     node::{
-        detect_complete_snapshots, mark_block_as_present, InnerNode, InnerNodeMap, LeafNode,
-        LeafNodeSet, MissingBlocksSummary, RootNode, INNER_LAYER_COUNT,
+        detect_complete_snapshots, receive_block, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet,
+        MissingBlocksSummary, RootNode, INNER_LAYER_COUNT,
     },
 };
 
@@ -193,6 +193,9 @@ pub async fn init(pool: &db::Pool) -> Result<(), Error> {
 
              UNIQUE(parent, bucket)
          );
+
+         CREATE INDEX index_snapshot_inner_nodes_on_hash
+             ON snapshot_inner_nodes (hash);
 
          CREATE TABLE IF NOT EXISTS snapshot_leaf_nodes (
              -- Parent's `hash`

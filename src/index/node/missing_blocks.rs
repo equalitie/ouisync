@@ -39,12 +39,12 @@ impl MissingBlocksSummary {
     pub fn from_inners(nodes: &InnerNodeMap) -> Self {
         let crc = Crc::<u64>::new(&CRC_64_XZ);
         let mut digest = crc.digest();
-        let mut count = 0;
+        let mut count = 0u64;
 
         for (_, node) in nodes {
             digest.update(&node.missing_blocks.count.to_le_bytes());
             digest.update(&node.missing_blocks.checksum.to_le_bytes());
-            count += node.missing_blocks.count;
+            count = count.saturating_add(node.missing_blocks.count);
         }
 
         Self {

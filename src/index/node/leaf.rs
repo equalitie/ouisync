@@ -4,6 +4,7 @@ use crate::{
     db,
     error::Result,
 };
+use futures_util::{Stream, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_256};
 use sqlx::Row;
@@ -91,6 +92,28 @@ impl LeafNode {
                 .await?
                 .is_some(),
         )
+    }
+
+    /// Loads all parent hashes of nodes with the specified block id.
+    pub fn load_parent_hashes<'a>(
+        tx: &'a mut db::Transaction,
+        block_id: &'a BlockId,
+    ) -> impl Stream<Item = Result<Hash>> + 'a {
+        sqlx::query("SELECT parent FROM snapshot_leaf_nodes WHERE block_id = ?")
+            .bind(block_id)
+            .map(|row| row.get(0))
+            .fetch(tx)
+            .err_into()
+    }
+
+    /// Marks all leaf ndoes that point to the specified block as present (not missing).
+    pub async fn set_present(tx: &mut db::Transaction, block_id: &BlockId) -> Result<()> {
+        sqlx::query("UPDATE snapshot_leaf_nodes SET is_missing = 0 WHERE block_id = ?")
+            .bind(block_id)
+            .execute(tx)
+            .await?;
+
+        Ok(())
     }
 }
 
