@@ -36,25 +36,32 @@ impl JointDirectory {
 
     pub fn entries(&self) -> impl Iterator<Item = OsString> + '_ {
         // Map<ReplicaId, Directory> -> [[EntryInfo]]
-        let entries = self.dirs.iter().map(|(_replica_id, directory)| {
-            directory.entries()
-        });
+        let entries = self
+            .dirs
+            .iter()
+            .map(|(_replica_id, directory)| directory.entries());
 
         // [[EntryInfo]] -> [EntryInfo]
         let flat_entries = sorted_union::new_from_many(entries, |entry| entry.name());
 
-        // [EntryInfo] -> [(entry-name, [EntryInfo]]
+        // [EntryInfo] -> [(entry.name, [EntryInfo]]
         let grouped_entries = Accumulate::new(flat_entries, |entry| entry.name());
 
+        // [(entry.name, [EntryInfo]] -> [(entry.name, Map<ReplicaId, Entry>]
         grouped_entries.flat_map(|(name, entries)| {
-            if entries.len() == 1 {
-                vec![name.to_os_string()]
-            } else {
-                entries
-                    .iter()
-                    .map(|entry| entry.name_with_label())
-                    .collect()
+            let m = entries
+                .iter()
+                .map(|entry_info| (entry_info.replica_id(), entry_info.name()))
+                // Make unique
+                .collect::<BTreeMap<_, _>>();
+
+            if m.len() == 1 {
+                return vec![name.to_os_string()];
             }
+
+            m.iter()
+                .map(|(replica_id, name)| Directory::add_label(name, replica_id))
+                .collect()
         })
     }
 }

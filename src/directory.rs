@@ -82,14 +82,12 @@ impl Directory {
 
                 let disambiguate = variants.len() > 1;
 
-                variants.iter().map(move |(replica_id, data)| {
-                    EntryInfo {
-                        parent_blob: &self.blob,
-                        replica_id,
-                        disambiguate,
-                        name,
-                        data,
-                    }
+                variants.iter().map(move |(replica_id, data)| EntryInfo {
+                    parent_blob: &self.blob,
+                    replica_id,
+                    disambiguate,
+                    name,
+                    data,
                 })
             })
     }
@@ -282,7 +280,7 @@ impl Directory {
         OsString::from(format!("{:02x}{:02x}{:02x}{:02x}", r[0], r[1], r[2], r[3]))
     }
 
-    fn add_label(name: &OsStr, replica_id: &ReplicaId) -> OsString {
+    pub fn add_label(name: &OsStr, replica_id: &ReplicaId) -> OsString {
         let mut s = name.to_os_string();
         s.push("-");
         s.push(Self::replica_id_to_label(replica_id));
@@ -338,6 +336,10 @@ impl<'a> EntryInfo<'a> {
 
     pub fn entry_type(&self) -> EntryType {
         self.data.entry_type
+    }
+
+    pub fn replica_id(&self) -> &'a ReplicaId {
+        self.replica_id
     }
 
     pub fn locator(&self) -> Locator {
