@@ -14,7 +14,7 @@ async fn create_new_root_node() {
     let replica_id = rand::random();
     let hash = rand::random::<u64>().hash();
 
-    let (node0, changed) = RootNode::create(
+    let node0 = RootNode::create(
         &pool,
         &replica_id,
         VersionVector::new(),
@@ -23,7 +23,6 @@ async fn create_new_root_node() {
     )
     .await
     .unwrap();
-    assert!(changed);
     assert_eq!(node0.hash, hash);
 
     let node1 = RootNode::load_latest_or_create(&pool, &replica_id)
@@ -46,7 +45,7 @@ async fn create_existing_root_node() {
     let replica_id = rand::random();
     let hash = rand::random::<u64>().hash();
 
-    let (node0, _) = RootNode::create(
+    let node0 = RootNode::create(
         &pool,
         &replica_id,
         VersionVector::new(),
@@ -56,7 +55,7 @@ async fn create_existing_root_node() {
     .await
     .unwrap();
 
-    let (node1, changed) = RootNode::create(
+    let node1 = RootNode::create(
         &pool,
         &replica_id,
         VersionVector::new(),
@@ -66,7 +65,6 @@ async fn create_existing_root_node() {
     .await
     .unwrap();
     assert_eq!(node0, node1);
-    assert!(!changed);
 
     let nodes: Vec<_> = RootNode::load_all(&pool, &replica_id, 2)
         .try_collect()
@@ -276,7 +274,7 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
     let replica_id = rng.gen();
     let snapshot = Snapshot::generate(&mut rng, leaf_count);
 
-    let (mut root_node, _) = RootNode::create(
+    let mut root_node = RootNode::create(
         &pool,
         &replica_id,
         VersionVector::new(),

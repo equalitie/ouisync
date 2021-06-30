@@ -3,7 +3,7 @@ use std::fmt;
 use crate::{
     block::BlockId,
     crypto::{AuthTag, Hash},
-    index::{InnerNodeMap, LeafNodeSet},
+    index::{InnerNodeMap, LeafNodeSet, MissingBlocksSummary},
     version_vector::VersionVector,
 };
 use serde::{Deserialize, Serialize};
@@ -26,7 +26,11 @@ pub enum Request {
 #[derive(Serialize, Deserialize)]
 pub enum Response {
     /// Send the latest root node of this replica to another replica.
-    RootNode { versions: VersionVector, hash: Hash },
+    RootNode {
+        versions: VersionVector,
+        hash: Hash,
+        missing_blocks: MissingBlocksSummary,
+    },
     /// Send inner nodes with the given parent hash and inner layer.
     InnerNodes {
         parent_hash: Hash,
@@ -50,10 +54,15 @@ pub enum Response {
 impl fmt::Debug for Response {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::RootNode { versions, hash } => f
+            Self::RootNode {
+                versions,
+                hash,
+                missing_blocks,
+            } => f
                 .debug_struct("RootNode")
                 .field("versions", versions)
                 .field("hash", hash)
+                .field("missing_blocks", missing_blocks)
                 .finish(),
             Self::InnerNodes {
                 parent_hash,

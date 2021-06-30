@@ -21,6 +21,40 @@ pub struct RootNode {
 }
 
 impl RootNode {
+    /// Returns the root node of the specified replica with the specified hash if it exists.
+    pub async fn load(
+        pool: &db::Pool,
+        replica_id: &ReplicaId,
+        hash: &Hash,
+    ) -> Result<Option<Self>> {
+        sqlx::query(
+            "SELECT
+                 snapshot_id,
+                 versions,
+                 hash,
+                 is_complete,
+                 missing_blocks_count,
+                 missing_blocks_checksum
+             FROM snapshot_root_nodes
+             WHERE replica_id = ? AND hash = ?",
+        )
+        .bind(replica_id)
+        .bind(hash)
+        .map(|row| Self {
+            snapshot_id: row.get(0),
+            versions: row.get(1),
+            hash: row.get(2),
+            is_complete: row.get(3),
+            missing_blocks: MissingBlocksSummary {
+                count: db::decode_u64(row.get(4)),
+                checksum: db::decode_u64(row.get(5)),
+            },
+        })
+        .fetch_optional(pool)
+        .await
+        .map_err(Into::into)
+    }
+
     /// Returns the latest root node of the specified replica. If no such node exists yet, creates
     /// it first.
     pub async fn load_latest_or_create(pool: &db::Pool, replica_id: &ReplicaId) -> Result<Self> {
@@ -36,8 +70,7 @@ impl RootNode {
                 InnerNodeMap::default().hash(),
                 MissingBlocksSummary::default(),
             )
-            .await?
-            .0)
+            .await?)
         }
     }
 
@@ -81,20 +114,20 @@ impl RootNode {
         .map_err(Into::into)
     }
 
-    /// Creates a root node of the specified replica. Returns the node itself and a flag indicating
-    /// whether a new node was created (`true`) or the node already existed (`false`).
+    /// Creates a root node of the specified replica unless it already exists. Returns the newly
+    /// created or the existing node.
     pub async fn create(
         pool: &db::Pool,
         replica_id: &ReplicaId,
         mut versions: VersionVector,
         hash: Hash,
         missing_blocks: MissingBlocksSummary,
-    ) -> Result<(Self, bool)> {
+    ) -> Result<Self> {
         let is_complete = hash == InnerNodeMap::default().hash();
 
         versions.insert(*replica_id, 1);
 
-        let row = sqlx::query(
+        sqlx::query(
             "INSERT INTO snapshot_root_nodes (
                  replica_id,
                  versions,
@@ -110,8 +143,7 @@ impl RootNode {
                  versions,
                  is_complete,
                  missing_blocks_count,
-                 missing_blocks_checksum,
-                 CHANGES()
+                 missing_blocks_checksum
              FROM snapshot_root_nodes
              WHERE replica_id = ? AND hash = ?",
         )
@@ -123,22 +155,19 @@ impl RootNode {
         .bind(db::encode_u64(missing_blocks.checksum))
         .bind(replica_id)
         .bind(&hash)
-        .fetch_one(pool)
-        .await?;
-
-        Ok((
-            RootNode {
-                snapshot_id: row.get(0),
-                versions: row.get(1),
-                hash,
-                is_complete: row.get(2),
-                missing_blocks: MissingBlocksSummary {
-                    count: db::decode_u64(row.get(3)),
-                    checksum: db::decode_u64(row.get(4)),
-                },
+        .map(|row| RootNode {
+            snapshot_id: row.get(0),
+            versions: row.get(1),
+            hash,
+            is_complete: row.get(2),
+            missing_blocks: MissingBlocksSummary {
+                count: db::decode_u64(row.get(3)),
+                checksum: db::decode_u64(row.get(4)),
             },
-            row.get::<u32, _>(5) > 0,
-        ))
+        })
+        .fetch_one(pool)
+        .await
+        .map_err(Into::into)
     }
 
     /// Returns a stream of all (but at most `limit`) root nodes corresponding to the specified

@@ -54,6 +54,24 @@ impl Index {
         self.branches.lock().await.local.clone()
     }
 
+    /// Check whether the remote replica has some blocks under the specified root node that the
+    /// local one is missing.
+    pub async fn has_root_node_new_blocks(
+        &self,
+        replica_id: &ReplicaId,
+        hash: &Hash,
+        remote_missing_blocks: &MissingBlocksSummary,
+    ) -> Result<bool> {
+        if let Some(local_node) = RootNode::load(&self.pool, replica_id, hash).await? {
+            Ok(!local_node
+                .missing_blocks
+                .is_up_to_date_with(&remote_missing_blocks)
+                .unwrap_or(true))
+        } else {
+            Ok(true)
+        }
+    }
+
     /// Filter inner nodes that the remote replica has some blocks in that the local one is missing.
     ///
     /// Assumes (but does not enforce) that `parent_hash` is the parent hash of all nodes in

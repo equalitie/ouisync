@@ -93,6 +93,7 @@ impl Server {
                     .send(Response::RootNode {
                         versions: node.versions,
                         hash: node.hash,
+                        missing_blocks: node.missing_blocks,
                     })
                     .await
                     .unwrap_or(());

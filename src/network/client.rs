@@ -68,7 +68,11 @@ impl Client {
 
     async fn handle_response(&self, response: Response) -> Result<()> {
         match response {
-            Response::RootNode { versions, hash } => self.handle_root_node(versions, hash).await,
+            Response::RootNode {
+                versions,
+                hash,
+                missing_blocks,
+            } => self.handle_root_node(versions, hash, missing_blocks).await,
             Response::InnerNodes {
                 parent_hash,
                 inner_layer,
@@ -88,7 +92,12 @@ impl Client {
         }
     }
 
-    async fn handle_root_node(&self, versions: VersionVector, hash: Hash) -> Result<()> {
+    async fn handle_root_node(
+        &self,
+        versions: VersionVector,
+        hash: Hash,
+        missing_blocks: MissingBlocksSummary,
+    ) -> Result<()> {
         let this_versions = self.latest_local_versions().await?;
         if versions
             .partial_cmp(&this_versions)
@@ -98,18 +107,21 @@ impl Client {
             return Ok(());
         }
 
-        // TODO: take missing blocks from the request.
-        let (node, changed) = RootNode::create(
+        let updated = self
+            .index
+            .has_root_node_new_blocks(&self.their_replica_id, &hash, &missing_blocks)
+            .await?;
+        let node = RootNode::create(
             &self.index.pool,
             &self.their_replica_id,
             versions,
             hash,
-            MissingBlocksSummary::default(),
+            MissingBlocksSummary::ALL,
         )
         .await?;
         index::detect_complete_snapshots(&self.index.pool, hash, 0).await?;
 
-        if changed {
+        if updated {
             self.stream
                 .send(Request::InnerNodes {
                     parent_hash: node.hash,
