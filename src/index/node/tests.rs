@@ -4,7 +4,7 @@ use super::{
 use crate::{crypto::Hashable, db, test_utils, version_vector::VersionVector};
 use assert_matches::assert_matches;
 use futures_util::TryStreamExt;
-use rand::prelude::*;
+use rand::{distributions::Standard, prelude::*};
 use test_strategy::proptest;
 
 #[tokio::test(flavor = "multi_thread")]
@@ -92,7 +92,10 @@ async fn create_new_inner_node() {
     assert_eq!(nodes.get(bucket), Some(&node));
 
     assert!((0..bucket).all(|b| nodes.get(b).is_none()));
-    assert!((bucket + 1..=u8::MAX).all(|b| nodes.get(b).is_none()));
+
+    if bucket < u8::MAX {
+        assert!((bucket + 1..=u8::MAX).all(|b| nodes.get(b).is_none()));
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -268,7 +271,6 @@ fn check_complete(
 
 async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
     let mut rng = StdRng::seed_from_u64(rng_seed);
-
     let pool = setup().await;
 
     let replica_id = rng.gen();
@@ -323,6 +325,92 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
     }
 
     assert!(root_node.is_complete);
+}
+
+#[ignore]
+#[proptest]
+fn missing_blocks(
+    #[strategy(0usize..=32)] leaf_count: usize,
+    #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
+) {
+    test_utils::run(missing_blocks_case(leaf_count, rng_seed))
+}
+
+async fn missing_blocks_case(leaf_count: usize, rng_seed: u64) {
+    let mut rng = StdRng::seed_from_u64(rng_seed);
+    let pool = setup().await;
+
+    let replica_id = rng.gen();
+    let block_ids: Vec<_> = (&mut rng).sample_iter(Standard).take(leaf_count).collect();
+    let leaves = block_ids
+        .iter()
+        .map(|block_id| {
+            let locator = rng.gen::<u64>().hash();
+            LeafNode::missing(locator, *block_id)
+        })
+        .collect();
+    let snapshot = Snapshot::from_leaves(leaves);
+
+    // Save the snapshot initially with all nodes missing.
+    let mut root_node = RootNode::create(
+        &pool,
+        &replica_id,
+        VersionVector::new(),
+        *snapshot.root_hash(),
+        MissingBlocksSummary::ALL,
+    )
+    .await
+    .unwrap();
+
+    for layer in snapshot.inner_layers() {
+        for (parent_hash, nodes) in layer.inner_maps() {
+            nodes
+                .clone()
+                .into_missing()
+                .save(&pool, &parent_hash)
+                .await
+                .unwrap();
+        }
+    }
+
+    for (parent_hash, nodes) in snapshot.leaf_sets() {
+        nodes
+            .clone()
+            .into_missing()
+            .save(&pool, &parent_hash)
+            .await
+            .unwrap();
+
+        // This also updates missing blocks
+        super::detect_complete_snapshots(&pool, *parent_hash, INNER_LAYER_COUNT)
+            .await
+            .unwrap();
+    }
+
+    let mut expected_missing_blocks_count = block_ids.len() as u64;
+
+    // Check that initially all blocks are missing
+    root_node.reload(&pool).await.unwrap();
+    assert_eq!(
+        root_node.missing_blocks.count,
+        expected_missing_blocks_count
+    );
+
+    for block_id in block_ids {
+        let mut tx = pool.begin().await.unwrap();
+        super::receive_block(&mut tx, &block_id).await.unwrap();
+        tx.commit().await.unwrap();
+
+        expected_missing_blocks_count -= 1;
+
+        root_node.reload(&pool).await.unwrap();
+        assert_eq!(
+            root_node.missing_blocks.count,
+            expected_missing_blocks_count
+        );
+
+        // TODO: check also inner and leaf nodes
+    }
 }
 
 async fn setup() -> db::Pool {

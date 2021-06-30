@@ -118,7 +118,7 @@ impl LeafNode {
 }
 
 /// Collection that acts as a ordered set of `LeafNode`s
-#[derive(Default, Debug, Serialize, Deserialize)]
+#[derive(Default, Clone, Debug, Serialize, Deserialize)]
 pub struct LeafNodeSet(Vec<LeafNode>);
 
 impl LeafNodeSet {

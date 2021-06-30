@@ -21,29 +21,10 @@ impl Snapshot {
             })
             .collect();
 
-        Self::build(leaves)
+        Self::from_leaves(leaves)
     }
 
-    pub fn root_hash(&self) -> &Hash {
-        &self.root_hash
-    }
-
-    pub fn leaf_sets(&self) -> impl Iterator<Item = (&Hash, &LeafNodeSet)> {
-        self.leaves.iter().map(move |(path, nodes)| {
-            let parent_hash = self.parent_hash(INNER_LAYER_COUNT, path);
-            (parent_hash, nodes)
-        })
-    }
-
-    pub fn leaf_count(&self) -> usize {
-        self.leaves.values().map(|nodes| nodes.len()).sum()
-    }
-
-    pub fn inner_layers(&self) -> impl Iterator<Item = InnerLayer> {
-        (0..self.inners.len()).map(move |inner_layer| InnerLayer(self, inner_layer))
-    }
-
-    fn build(leaves: Vec<LeafNode>) -> Self {
+    pub fn from_leaves(leaves: Vec<LeafNode>) -> Self {
         let leaves = leaves
             .into_iter()
             .fold(HashMap::<_, LeafNodeSet>::new(), |mut map, leaf| {
@@ -82,6 +63,25 @@ impl Snapshot {
             inners,
             leaves,
         }
+    }
+
+    pub fn root_hash(&self) -> &Hash {
+        &self.root_hash
+    }
+
+    pub fn leaf_sets(&self) -> impl Iterator<Item = (&Hash, &LeafNodeSet)> {
+        self.leaves.iter().map(move |(path, nodes)| {
+            let parent_hash = self.parent_hash(INNER_LAYER_COUNT, path);
+            (parent_hash, nodes)
+        })
+    }
+
+    pub fn leaf_count(&self) -> usize {
+        self.leaves.values().map(|nodes| nodes.len()).sum()
+    }
+
+    pub fn inner_layers(&self) -> impl Iterator<Item = InnerLayer> {
+        (0..self.inners.len()).map(move |inner_layer| InnerLayer(self, inner_layer))
     }
 
     // Returns the parent hash of inner nodes at `inner_layer` with the specified bucket path.
