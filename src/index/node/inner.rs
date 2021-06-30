@@ -96,10 +96,9 @@ impl InnerNode {
         Ok(())
     }
 
-    /// Saves this inner node into the db. Returns whether a new node was created (`true`) or the
-    /// node already existed (`false`).
-    pub async fn save(&self, tx: &mut db::Transaction, parent: &Hash, bucket: u8) -> Result<bool> {
-        let changes = sqlx::query(
+    /// Saves this inner node into the db unless it already exists.
+    pub async fn save(&self, tx: &mut db::Transaction, parent: &Hash, bucket: u8) -> Result<()> {
+        sqlx::query(
             "INSERT INTO snapshot_inner_nodes (
                  parent,
                  bucket,
@@ -117,10 +116,9 @@ impl InnerNode {
         .bind(db::encode_u64(self.missing_blocks.count))
         .bind(db::encode_u64(self.missing_blocks.checksum))
         .execute(tx)
-        .await?
-        .rows_affected();
+        .await?;
 
-        Ok(changes > 0)
+        Ok(())
     }
 
     /// Updates missing block summaries of all nodes with the specified hash at the specified inner
@@ -181,18 +179,15 @@ impl InnerNodeMap {
         self.0.remove(&bucket)
     }
 
-    /// Atomically saves all nodes in this map to the db. Returns nodes that changed.
-    pub async fn save(&self, pool: &'_ db::Pool, parent: &'_ Hash) -> Result<Vec<&InnerNode>> {
-        let mut changed = Vec::with_capacity(self.len());
+    /// Atomically saves all nodes in this map to the db.
+    pub async fn save(&self, pool: &'_ db::Pool, parent: &'_ Hash) -> Result<()> {
         let mut tx = pool.begin().await?;
         for (bucket, node) in self {
-            if node.save(&mut tx, parent, bucket).await? {
-                changed.push(node);
-            }
+            node.save(&mut tx, parent, bucket).await?;
         }
         tx.commit().await?;
 
-        Ok(changed)
+        Ok(())
     }
 
     /// Returns the same nodes but with the `missing_block` changed to indicate that all blocks are

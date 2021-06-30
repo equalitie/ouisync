@@ -85,7 +85,7 @@ async fn create_new_inner_node() {
     let mut tx = pool.begin().await.unwrap();
 
     let node = InnerNode::new(hash);
-    assert!(node.save(&mut tx, &parent, bucket).await.unwrap());
+    node.save(&mut tx, &parent, bucket).await.unwrap();
 
     let nodes = InnerNode::load_children(&mut tx, &parent).await.unwrap();
 
@@ -109,7 +109,7 @@ async fn create_existing_inner_node() {
     node0.save(&mut tx, &parent, bucket).await.unwrap();
 
     let node1 = InnerNode::new(hash);
-    assert!(!node1.save(&mut tx, &parent, bucket).await.unwrap());
+    node1.save(&mut tx, &parent, bucket).await.unwrap();
 
     let nodes = InnerNode::load_children(&mut tx, &parent).await.unwrap();
 
