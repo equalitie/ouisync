@@ -1,6 +1,6 @@
 use super::{
     client::Client,
-    message::{Request, Response},
+    message::{Message, Request, Response},
     message_broker::{ClientStream, Command, ServerStream},
     server::Server,
 };
@@ -14,8 +14,9 @@ use crate::{
     version_vector::VersionVector,
 };
 use rand::prelude::*;
+use std::time::Duration;
 use test_strategy::proptest;
-use tokio::{join, select, sync::mpsc};
+use tokio::{join, select, sync::mpsc, time};
 
 // Test complete transfer of one snapshot from one replica to another
 // Also test a new snapshot transfer is performed after every local branch
@@ -45,24 +46,28 @@ async fn transfer_snapshot_between_two_replicas_case(
 
     let snapshot = Snapshot::generate(&mut rng, leaf_count);
     save_snapshot(&a_index, &snapshot).await;
+    write_all_blocks(&a_index.pool, &snapshot).await;
 
     assert!(load_latest_root_node(&b_index, &a_index.this_replica_id)
         .await
         .is_none());
 
-    let (mut server, a_send_rx, a_recv_tx) = create_server(a_index.clone()).await;
-    let (mut client, b_send_rx, b_recv_tx) =
-        create_client(b_index.clone(), a_index.this_replica_id);
+    let (mut server, mut client, mut simulator) =
+        create_network(a_index.clone(), b_index.clone()).await;
 
     let drive = async {
-        let mut simulator = ConnectionSimulator::new(b_send_rx, b_recv_tx, a_send_rx, a_recv_tx);
         let mut remaining_changes = change_count;
+        let mut first_root_request = false;
 
         loop {
-            simulator.step().await;
+            simulator
+                .run_until(|message| matches!(message, Message::Request(Request::RootNode { .. })))
+                .await;
 
-            if remaining_changes > 0 {
-                insert_random_block(&mut rng, &a_index).await;
+            if !first_root_request {
+                first_root_request = true;
+            } else if remaining_changes > 0 {
+                insert_missing_block(&mut rng, &a_index).await;
                 remaining_changes -= 1;
             } else {
                 break;
@@ -90,6 +95,62 @@ async fn transfer_snapshot_between_two_replicas_case(
     assert_eq!(root_per_b.versions, root_per_a.versions);
 }
 
+#[proptest]
+fn transfer_blocks_between_two_replicas(
+    #[strategy(1usize..32)] block_count: usize,
+    #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
+) {
+    test_utils::run(transfer_blocks_between_two_replicas_case(
+        block_count,
+        rng_seed,
+    ))
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn debug() {
+    env_logger::init();
+    transfer_blocks_between_two_replicas_case(1, 0).await
+}
+
+async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed: u64) {
+    let mut rng = StdRng::seed_from_u64(rng_seed);
+
+    let a_index = create_index(&mut rng).await;
+    let b_index = create_index(&mut rng).await;
+
+    // Initially both replicas have the whole snapshot but no blocks.
+    let snapshot = Snapshot::generate(&mut rng, block_count);
+    save_snapshot(&a_index, &snapshot).await;
+    save_snapshot(&b_index, &snapshot).await;
+
+    let (mut server, mut client, mut simulator) =
+        create_network(a_index.clone(), b_index.clone()).await;
+
+    let drive = async {
+        for block_id in snapshot.block_ids() {
+            // Write the block by replica A.
+            let mut tx = a_index.pool.begin().await.unwrap();
+            write_block(&mut tx, block_id).await;
+            index::receive_block(&mut tx, block_id).await.unwrap();
+            tx.commit().await.unwrap();
+
+            // Wait until replica B receives and writes the block too.
+            simulator
+                .run_until(|message| matches!(message, Message::Response(Response::Block { .. })))
+                .await;
+
+            // HACK: Find a better way to do this.
+            while !block::exists(&b_index.pool, block_id).await.unwrap() {
+                time::sleep(Duration::from_millis(25)).await;
+            }
+        }
+    };
+
+    let (server_result, client_result, _) = join!(server.run(), client.run(), drive);
+    server_result.unwrap();
+    client_result.unwrap();
+}
+
 async fn create_index<R: Rng>(rng: &mut R) -> Index {
     let db = db::init(db::Store::Memory).await.unwrap();
     let id = rng.gen();
@@ -100,6 +161,24 @@ async fn create_index<R: Rng>(rng: &mut R) -> Index {
 // Enough capacity to prevent deadlocks.
 // TODO: find the actual minimum necessary capacity.
 const CAPACITY: usize = 256;
+
+async fn create_network(
+    server_index: Index,
+    client_index: Index,
+) -> (Server, Client, ConnectionSimulator) {
+    let server_replica_id = server_index.this_replica_id;
+    let (server, server_send_rx, server_recv_tx) = create_server(server_index).await;
+    let (client, client_send_rx, client_recv_tx) = create_client(client_index, server_replica_id);
+
+    let simulator = ConnectionSimulator::new(
+        client_send_rx,
+        client_recv_tx,
+        server_send_rx,
+        server_recv_tx,
+    );
+
+    (server, client, simulator)
+}
 
 async fn create_server(index: Index) -> (Server, mpsc::Receiver<Command>, mpsc::Sender<Request>) {
     let (send_tx, send_rx) = mpsc::channel(1);
@@ -128,7 +207,7 @@ async fn save_snapshot(index: &Index, snapshot: &Snapshot) {
         &index.this_replica_id,
         VersionVector::new(),
         *snapshot.root_hash(),
-        Summary::FULL,
+        Summary::INCOMPLETE,
     )
     .await
     .unwrap();
@@ -144,16 +223,10 @@ async fn save_snapshot(index: &Index, snapshot: &Snapshot) {
         index::detect_complete_snapshots(&index.pool, *parent_hash, INNER_LAYER_COUNT)
             .await
             .unwrap();
-
-        let mut tx = index.pool.begin().await.unwrap();
-        for node in nodes {
-            write_zero_block(&mut tx, &node.block_id).await;
-        }
-        tx.commit().await.unwrap();
     }
 }
 
-async fn insert_random_block(rng: &mut impl Rng, index: &Index) {
+async fn insert_missing_block(rng: &mut impl Rng, index: &Index) {
     let branch = index.local_branch().await;
     let encoded_locator = rng.gen::<u64>().hash();
     let block_id = rng.gen();
@@ -163,11 +236,25 @@ async fn insert_random_block(rng: &mut impl Rng, index: &Index) {
         .insert(&mut tx, &block_id, &encoded_locator)
         .await
         .unwrap();
-    write_zero_block(&mut tx, &block_id).await;
+    write_block(&mut tx, &block_id).await;
     tx.commit().await.unwrap();
 }
 
-async fn write_zero_block(tx: &mut db::Transaction, id: &BlockId) {
+async fn write_all_blocks(pool: &db::Pool, snapshot: &Snapshot) {
+    let mut tx = pool.begin().await.unwrap();
+    for (_, nodes) in snapshot.leaf_sets() {
+        for node in nodes {
+            write_block(&mut tx, &node.block_id).await;
+
+            // TODO: find a way to do this once after all blocks are writen, to avoid traversing
+            // the tree for each leaf node separately.
+            index::receive_block(&mut tx, &node.block_id).await.unwrap();
+        }
+    }
+    tx.commit().await.unwrap();
+}
+
+async fn write_block(tx: &mut db::Transaction, id: &BlockId) {
     let content = vec![0; BLOCK_SIZE];
     let auth_tag = AuthTag::default(); // don't care about encryption here
     block::write(tx, &id, &content, &auth_tag).await.unwrap();
@@ -186,7 +273,6 @@ struct ConnectionSimulator {
     client_recv_tx: mpsc::Sender<Response>,
     server_send_rx: mpsc::Receiver<Command>,
     server_recv_tx: mpsc::Sender<Request>,
-    steps: usize,
 }
 
 impl ConnectionSimulator {
@@ -201,33 +287,31 @@ impl ConnectionSimulator {
             client_recv_tx,
             server_send_rx,
             server_recv_tx,
-            steps: 0,
         }
     }
 
-    // Simulate the connection until the client send a `RootNode` requests which indicates they are
-    // done fetching the previously requested snapshot.
-    async fn step(&mut self) {
-        let mut remaining_node_requests = if self.steps == 0 { 2 } else { 1 };
-
-        while remaining_node_requests > 0 {
+    // Keep simulating the network until a message is sent for which `pred` returns `true`.
+    async fn run_until<F>(&mut self, pred: F)
+    where
+        F: Fn(&Message) -> bool,
+    {
+        loop {
             select! {
                 command = self.client_send_rx.recv() => {
-                    let request = command.unwrap().into_send_message().into();
-
-                    if matches!(request, Request::RootNode(_)) {
-                        remaining_node_requests -= 1;
-                    }
-
+                    let message = command.unwrap().into_send_message();
+                    let stop = pred(&message);
+                    let request = message.into();
                     self.server_recv_tx.send(request).await.unwrap();
+                    if stop { break }
                 }
                 command = self.server_send_rx.recv() => {
-                    let response = command.unwrap().into_send_message().into();
+                    let message = command.unwrap().into_send_message();
+                    let stop = pred(&message);
+                    let response = message.into();
                     self.client_recv_tx.send(response).await.unwrap();
+                    if stop { break }
                 }
             }
         }
-
-        self.steps += 1;
     }
 }

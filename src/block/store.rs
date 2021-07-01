@@ -91,10 +91,10 @@ pub async fn write(
 /// Checks whether a block exists in the store.
 /// (Currently used only in tests)
 #[cfg(test)]
-pub async fn exists(tx: &mut db::Transaction, id: &BlockId) -> Result<bool> {
+pub async fn exists(db: impl db::Executor<'_>, id: &BlockId) -> Result<bool> {
     Ok(sqlx::query("SELECT 0 FROM blocks WHERE id = ?")
         .bind(id)
-        .fetch_optional(tx)
+        .fetch_optional(db)
         .await?
         .is_some())
 }

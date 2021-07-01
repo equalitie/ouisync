@@ -4,7 +4,7 @@ use super::{inner::INNER_LAYER_COUNT, summary::Summary, test_utils::Snapshot, *}
 use crate::{crypto::Hashable, db, test_utils, version_vector::VersionVector};
 use assert_matches::assert_matches;
 use futures_util::TryStreamExt;
-use rand::{distributions::Standard, prelude::*};
+use rand::prelude::*;
 use test_strategy::proptest;
 
 #[tokio::test(flavor = "multi_thread")]
@@ -554,15 +554,7 @@ async fn missing_blocks_case(leaf_count: usize, rng_seed: u64) {
     let pool = setup().await;
 
     let replica_id = rng.gen();
-    let block_ids: Vec<_> = (&mut rng).sample_iter(Standard).take(leaf_count).collect();
-    let leaves = block_ids
-        .iter()
-        .map(|block_id| {
-            let locator = rng.gen::<u64>().hash();
-            LeafNode::missing(locator, *block_id)
-        })
-        .collect();
-    let snapshot = Snapshot::from_leaves(leaves);
+    let snapshot = Snapshot::generate(&mut rng, leaf_count);
 
     // Save the snapshot initially with all nodes missing.
     let mut root_node = RootNode::create(
@@ -575,7 +567,7 @@ async fn missing_blocks_case(leaf_count: usize, rng_seed: u64) {
     .await
     .unwrap();
 
-    if block_ids.is_empty() {
+    if snapshot.leaf_count() == 0 {
         super::detect_complete_snapshots(&pool, root_node.hash, 0)
             .await
             .unwrap();
@@ -606,7 +598,7 @@ async fn missing_blocks_case(leaf_count: usize, rng_seed: u64) {
             .unwrap();
     }
 
-    let mut expected_missing_blocks_count = block_ids.len() as u64;
+    let mut expected_missing_blocks_count = snapshot.leaf_count() as u64;
 
     // Check that initially all blocks are missing
     root_node.reload(&pool).await.unwrap();
@@ -617,9 +609,9 @@ async fn missing_blocks_case(leaf_count: usize, rng_seed: u64) {
 
     // Keep receiving the blocks one by one and verify the missing blocks summaries get updated
     // accordingly.
-    for block_id in block_ids {
+    for block_id in snapshot.block_ids() {
         let mut tx = pool.begin().await.unwrap();
-        super::receive_block(&mut tx, &block_id).await.unwrap();
+        super::receive_block(&mut tx, block_id).await.unwrap();
         tx.commit().await.unwrap();
 
         expected_missing_blocks_count -= 1;

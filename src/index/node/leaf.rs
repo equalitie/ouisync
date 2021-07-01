@@ -106,7 +106,7 @@ impl LeafNode {
             .err_into()
     }
 
-    /// Marks all leaf ndoes that point to the specified block as present (not missing).
+    /// Marks all leaf nodes that point to the specified block as present (not missing).
     pub async fn set_present(tx: &mut db::Transaction, block_id: &BlockId) -> Result<()> {
         sqlx::query("UPDATE snapshot_leaf_nodes SET is_missing = 0 WHERE block_id = ?")
             .bind(block_id)
@@ -139,7 +139,16 @@ impl LeafNodeSet {
     }
 
     /// Inserts a new node or updates it if already exists.
-    pub fn modify(&mut self, locator: &Hash, block_id: &BlockId) -> ModifyStatus {
+    ///
+    /// When a new node is created, it's `is_missing` flag is set to `initial_is_missing`. When an
+    /// existing node is update, its `is_missing` flag is left unchanged and `initial_is_missing`
+    /// is ignored.
+    pub fn modify(
+        &mut self,
+        locator: &Hash,
+        block_id: &BlockId,
+        initial_is_missing: bool,
+    ) -> ModifyStatus {
         match self.lookup(locator) {
             Ok(index) => {
                 let node = &mut self.0[index];
@@ -156,7 +165,7 @@ impl LeafNodeSet {
                     LeafNode {
                         locator: *locator,
                         block_id: *block_id,
-                        is_missing: false,
+                        is_missing: initial_is_missing,
                     },
                 );
                 ModifyStatus::Inserted

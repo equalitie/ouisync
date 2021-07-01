@@ -29,7 +29,7 @@ pub fn get_bucket(locator: &Hash, inner_layer: usize) -> u8 {
 pub async fn detect_complete_snapshots(pool: &db::Pool, hash: Hash, layer: usize) -> Result<()> {
     let stack = vec![(hash, layer)];
     let mut tx = pool.begin().await?;
-    update_summaries(&mut tx, stack).await?;
+    update_summaries_for_all(&mut tx, stack).await?;
     tx.commit().await?;
 
     Ok(())
@@ -45,10 +45,13 @@ pub async fn receive_block(tx: &mut db::Transaction, id: &BlockId) -> Result<()>
         .try_collect()
         .await?;
 
-    update_summaries(tx, stack).await
+    update_summaries_for_all(tx, stack).await
 }
 
-async fn update_summaries(tx: &mut db::Transaction, mut stack: Vec<(Hash, usize)>) -> Result<()> {
+async fn update_summaries_for_all(
+    tx: &mut db::Transaction,
+    mut stack: Vec<(Hash, usize)>,
+) -> Result<()> {
     while let Some((hash, layer)) = stack.pop() {
         if layer > 0 {
             InnerNode::update_summaries(tx, &hash, layer - 1).await?;
