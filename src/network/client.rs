@@ -116,7 +116,7 @@ impl Client {
             &self.their_replica_id,
             versions,
             hash,
-            MissingBlocksSummary::ALL,
+            MissingBlocksSummary::UNKNOWN,
         )
         .await?;
         index::detect_complete_snapshots(&self.index.pool, hash, 0).await?;

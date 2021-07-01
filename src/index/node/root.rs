@@ -209,16 +209,6 @@ impl RootNode {
         .err_into()
     }
 
-    /// Mark all root nodes with the specified hash as complete.
-    pub async fn set_complete(pool: &db::Pool, hash: &Hash) -> Result<()> {
-        sqlx::query("UPDATE snapshot_root_nodes SET is_complete = 1 WHERE hash = ?")
-            .bind(hash)
-            .execute(pool)
-            .await?;
-
-        Ok(())
-    }
-
     /// Creates the next version of this root node with the specified hash.
     pub async fn next_version(&self, tx: &mut db::Transaction, hash: Hash) -> Result<Self> {
         let replica_id =
@@ -274,16 +264,20 @@ impl RootNode {
         Ok(())
     }
 
-    /// Updates missing block summaries of all nodes with the specified hash.
-    pub async fn update_missing_blocks(tx: &mut db::Transaction, hash: &Hash) -> Result<()> {
-        let children = InnerNode::load_children(&mut *tx, hash).await?;
-        let missing_blocks = MissingBlocksSummary::from_inners(&children);
+    /// Updates the is_complete flag and the missing block summaries of all nodes with the
+    /// specified hash.
+    pub async fn update_statuses(tx: &mut db::Transaction, hash: &Hash) -> Result<()> {
+        let (complete, missing_blocks) = InnerNode::compute_status(tx, hash, 0).await?;
 
         sqlx::query(
             "UPDATE snapshot_root_nodes
-             SET missing_blocks_count = ?, missing_blocks_checksum = ?
+             SET
+                 is_complete = ?,
+                 missing_blocks_count = ?,
+                 missing_blocks_checksum = ?
              WHERE hash = ?",
         )
+        .bind(complete)
         .bind(db::encode_u64(missing_blocks.count))
         .bind(db::encode_u64(missing_blocks.checksum))
         .bind(hash)

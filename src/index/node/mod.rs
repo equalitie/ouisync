@@ -16,12 +16,7 @@ pub use self::{
     root::RootNode,
 };
 
-use crate::{
-    block::BlockId,
-    crypto::{Hash, Hashable},
-    db,
-    error::Result,
-};
+use crate::{block::BlockId, crypto::Hash, db, error::Result};
 use futures_util::{future, TryStreamExt};
 
 /// Get the bucket for `locator` at the specified `inner_layer`.
@@ -32,64 +27,12 @@ pub fn get_bucket(locator: &Hash, inner_layer: usize) -> u8 {
 /// Detect snapshots that have been completely downloaded. Start the detection from the node(s)
 /// with the specified hash at the specified layer and walk the tree(s) towards the root(s).
 pub async fn detect_complete_snapshots(pool: &db::Pool, hash: Hash, layer: usize) -> Result<()> {
-    let mut stack = vec![(hash, layer)];
-
-    while let Some((hash, layer)) = stack.pop() {
-        if layer < INNER_LAYER_COUNT && !inner_children_complete(pool, &hash).await? {
-            continue;
-        }
-
-        if layer == INNER_LAYER_COUNT && !leaf_children_complete(pool, &hash).await? {
-            continue;
-        }
-
-        if layer > INNER_LAYER_COUNT {
-            continue;
-        }
-
-        if layer == 0 {
-            RootNode::set_complete(pool, &hash).await?;
-        } else if layer <= INNER_LAYER_COUNT {
-            InnerNode::set_complete(pool, &hash).await?;
-        }
-
-        if layer > 0 {
-            InnerNode::load_parent_hashes(pool, &hash)
-                .try_for_each(|parent_hash| {
-                    stack.push((parent_hash, layer - 1));
-                    future::ready(Ok(()))
-                })
-                .await?;
-        }
-    }
+    let stack = vec![(hash, layer)];
+    let mut tx = pool.begin().await?;
+    update_statuses(&mut tx, stack).await?;
+    tx.commit().await?;
 
     Ok(())
-}
-
-async fn inner_children_complete(pool: &db::Pool, parent_hash: &Hash) -> Result<bool> {
-    // If the parent hash is equal to the hash of empty node collection it means the node has no
-    // children and we can cut this short.
-    if *parent_hash == InnerNodeMap::default().hash() {
-        return Ok(true);
-    }
-
-    // We download all children nodes of a given parent together so when we know that we have
-    // at least one we also know we have them all. Thus it's enough to check that all of them are
-    // complete.
-    let children = InnerNode::load_children(pool, parent_hash).await?;
-    Ok(!children.is_empty() && children.into_iter().all(|(_, node)| node.is_complete))
-}
-
-async fn leaf_children_complete(pool: &db::Pool, parent_hash: &Hash) -> Result<bool> {
-    // If the parent hash is equal to the hash of empty node collection it means the node has no
-    // children and we can cut this short.
-    if *parent_hash == LeafNodeSet::default().hash() {
-        return Ok(true);
-    }
-
-    // Similarly as in `are_inner_children_complete`, we only need to check that we have at least
-    // one leaf node child and that already tells us that we have them all.
-    LeafNode::has_children(pool, &parent_hash).await
 }
 
 /// Receive a block from other replica. This marks the block as not missing by the local replica.
@@ -97,14 +40,18 @@ async fn leaf_children_complete(pool: &db::Pool, parent_hash: &Hash) -> Result<b
 pub async fn receive_block(tx: &mut db::Transaction, id: &BlockId) -> Result<()> {
     LeafNode::set_present(tx, id).await?;
 
-    let mut stack: Vec<_> = LeafNode::load_parent_hashes(tx, id)
+    let stack = LeafNode::load_parent_hashes(tx, id)
         .map_ok(|hash| (hash, INNER_LAYER_COUNT))
         .try_collect()
         .await?;
 
+    update_statuses(tx, stack).await
+}
+
+async fn update_statuses(tx: &mut db::Transaction, mut stack: Vec<(Hash, usize)>) -> Result<()> {
     while let Some((hash, layer)) = stack.pop() {
         if layer > 0 {
-            InnerNode::update_missing_blocks(tx, &hash, layer - 1).await?;
+            InnerNode::update_statuses(tx, &hash, layer - 1).await?;
             InnerNode::load_parent_hashes(&mut *tx, &hash)
                 .try_for_each(|parent_hash| {
                     stack.push((parent_hash, layer - 1));
@@ -112,7 +59,7 @@ pub async fn receive_block(tx: &mut db::Transaction, id: &BlockId) -> Result<()>
                 })
                 .await?;
         } else {
-            RootNode::update_missing_blocks(tx, &hash).await?
+            RootNode::update_statuses(tx, &hash).await?
         }
     }
 

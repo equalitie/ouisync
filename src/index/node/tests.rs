@@ -146,28 +146,6 @@ async fn attempt_to_create_conflicting_inner_node() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn update_inner_node_to_complete() {
-    let pool = setup().await;
-
-    let parent = rand::random::<u64>().hash();
-    let bucket = rand::random();
-    let hash = rand::random::<u64>().hash();
-
-    let node = InnerNode::new(hash);
-    let mut tx = pool.begin().await.unwrap();
-    node.save(&mut tx, &parent, bucket).await.unwrap();
-    tx.commit().await.unwrap();
-
-    let nodes = InnerNode::load_children(&pool, &parent).await.unwrap();
-    assert!(!nodes.get(bucket).unwrap().is_complete);
-
-    InnerNode::set_complete(&pool, &hash).await.unwrap();
-
-    let nodes = InnerNode::load_children(&pool, &parent).await.unwrap();
-    assert!(nodes.get(bucket).unwrap().is_complete);
-}
-
-#[tokio::test(flavor = "multi_thread")]
 async fn save_new_present_leaf_node() {
     let pool = setup().await;
 
@@ -357,7 +335,7 @@ async fn missing_blocks_case(leaf_count: usize, rng_seed: u64) {
         &replica_id,
         VersionVector::new(),
         *snapshot.root_hash(),
-        MissingBlocksSummary::ALL,
+        MissingBlocksSummary::UNKNOWN,
     )
     .await
     .unwrap();
@@ -396,6 +374,8 @@ async fn missing_blocks_case(leaf_count: usize, rng_seed: u64) {
         expected_missing_blocks_count
     );
 
+    // Keep receiving the blocks one by one and verify the missing blocks summaries get updated
+    // accordingly.
     for block_id in block_ids {
         let mut tx = pool.begin().await.unwrap();
         super::receive_block(&mut tx, &block_id).await.unwrap();

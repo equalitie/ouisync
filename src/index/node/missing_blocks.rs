@@ -10,8 +10,9 @@ pub struct MissingBlocksSummary {
 }
 
 impl MissingBlocksSummary {
-    /// Placeholder value indicating that all blocks are missing.
-    pub const ALL: Self = Self {
+    /// Placeholder value indicating that the number of missing blocks is not known because the
+    /// subtree hasn't beent fully downloaded yet.
+    pub const UNKNOWN: Self = Self {
         count: u64::MAX,
         checksum: 0,
     };

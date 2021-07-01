@@ -1,4 +1,7 @@
-use super::{leaf::LeafNode, missing_blocks::MissingBlocksSummary};
+use super::{
+    leaf::{LeafNode, LeafNodeSet},
+    missing_blocks::MissingBlocksSummary,
+};
 use crate::{
     crypto::{Hash, Hashable},
     db,
@@ -86,16 +89,6 @@ impl InnerNode {
             .err_into()
     }
 
-    /// Set all inner nodes with the specified hash as complete.
-    pub async fn set_complete(pool: &db::Pool, hash: &Hash) -> Result<()> {
-        sqlx::query("UPDATE snapshot_inner_nodes SET is_complete = 1 WHERE hash = ?")
-            .bind(hash)
-            .execute(pool)
-            .await?;
-
-        Ok(())
-    }
-
     /// Saves this inner node into the db unless it already exists.
     pub async fn save(&self, tx: &mut db::Transaction, parent: &Hash, bucket: u8) -> Result<()> {
         sqlx::query(
@@ -121,26 +114,24 @@ impl InnerNode {
         Ok(())
     }
 
-    /// Updates missing block summaries of all nodes with the specified hash at the specified inner
-    /// layer.
-    pub async fn update_missing_blocks(
+    /// Updates the is_complete flag and the missing block summaries of all nodes with the
+    /// specified hash at the specified inner layer.
+    pub async fn update_statuses(
         tx: &mut db::Transaction,
         hash: &Hash,
         inner_layer: usize,
     ) -> Result<()> {
-        let missing_blocks = if inner_layer < INNER_LAYER_COUNT - 1 {
-            let children = LeafNode::load_children(&mut *tx, hash).await?;
-            MissingBlocksSummary::from_leaves(&children)
-        } else {
-            let children = InnerNode::load_children(&mut *tx, hash).await?;
-            MissingBlocksSummary::from_inners(&children)
-        };
+        let (complete, missing_blocks) = Self::compute_status(tx, hash, inner_layer + 1).await?;
 
         sqlx::query(
             "UPDATE snapshot_inner_nodes
-             SET missing_blocks_count = ?, missing_blocks_checksum = ?
+             SET
+                 is_complete = ?,
+                 missing_blocks_count = ?,
+                 missing_blocks_checksum = ?
              WHERE hash = ?",
         )
+        .bind(complete)
         .bind(db::encode_u64(missing_blocks.count))
         .bind(db::encode_u64(missing_blocks.checksum))
         .bind(hash)
@@ -148,6 +139,53 @@ impl InnerNode {
         .await?;
 
         Ok(())
+    }
+
+    /// Compute the is_complete flags and the missing blocks summaries from the children nodes of
+    /// the specified parent nodes.
+    pub async fn compute_status(
+        tx: &mut db::Transaction,
+        parent_hash: &Hash,
+        parent_layer: usize,
+    ) -> Result<(bool, MissingBlocksSummary)> {
+        let complete;
+        let missing_blocks;
+
+        if parent_layer < INNER_LAYER_COUNT {
+            let empty_children = InnerNodeMap::default();
+            // If the parent hash is equal to the hash of empty node collection it means the node
+            // has no children and we can cut this short.
+            if *parent_hash == empty_children.hash() {
+                complete = true;
+                missing_blocks = MissingBlocksSummary::from_inners(&empty_children);
+            } else {
+                let children = InnerNode::load_children(&mut *tx, parent_hash).await?;
+
+                // We download all children nodes of a given parent together so when we know that
+                // we have at least one we also know we have them all. Thus it's enough to check
+                // that all of them are complete.
+                complete = !children.is_empty() && children.all_complete();
+                missing_blocks = MissingBlocksSummary::from_inners(&children);
+            }
+        } else {
+            let empty_children = LeafNodeSet::default();
+
+            // If the parent hash is equal to the hash of empty node collection it means the node
+            // has no children and we can cut this short.
+            if *parent_hash == empty_children.hash() {
+                complete = true;
+                missing_blocks = MissingBlocksSummary::from_leaves(&empty_children);
+            } else {
+                let children = LeafNode::load_children(&mut *tx, parent_hash).await?;
+
+                // Similarly as in the inner nodes case, we only need to check that we have at
+                // least one leaf node child and that already tells us that we have them all.
+                complete = !children.is_empty();
+                missing_blocks = MissingBlocksSummary::from_leaves(&children);
+            }
+        }
+
+        Ok((complete, missing_blocks))
     }
 }
 
@@ -194,10 +232,15 @@ impl InnerNodeMap {
     /// missing.
     pub fn into_missing(mut self) -> Self {
         for node in self.0.values_mut() {
-            node.missing_blocks = MissingBlocksSummary::ALL;
+            node.missing_blocks = MissingBlocksSummary::UNKNOWN;
         }
 
         self
+    }
+
+    /// Returns whether all nodes in this map are complete.
+    pub fn all_complete(&self) -> bool {
+        self.0.values().all(|node| node.is_complete)
     }
 }
 
