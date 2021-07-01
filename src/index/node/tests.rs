@@ -1,8 +1,6 @@
 use std::iter;
 
-use super::{
-    inner::INNER_LAYER_COUNT, missing_blocks::MissingBlocksSummary, test_utils::Snapshot, *,
-};
+use super::{inner::INNER_LAYER_COUNT, summary::Summary, test_utils::Snapshot, *};
 use crate::{crypto::Hashable, db, test_utils, version_vector::VersionVector};
 use assert_matches::assert_matches;
 use futures_util::TryStreamExt;
@@ -21,7 +19,7 @@ async fn create_new_root_node() {
         &replica_id,
         VersionVector::new(),
         hash,
-        MissingBlocksSummary::default(),
+        Summary::FULL,
     )
     .await
     .unwrap();
@@ -52,7 +50,7 @@ async fn create_existing_root_node() {
         &replica_id,
         VersionVector::new(),
         hash,
-        MissingBlocksSummary::default(),
+        Summary::FULL,
     )
     .await
     .unwrap();
@@ -62,7 +60,7 @@ async fn create_existing_root_node() {
         &replica_id,
         VersionVector::new(),
         hash,
-        MissingBlocksSummary::default(),
+        Summary::FULL,
     )
     .await
     .unwrap();
@@ -247,13 +245,12 @@ async fn compute_status_from_empty_leaf_nodes() {
     let hash = LeafNodeSet::default().hash();
 
     let mut tx = pool.begin().await.unwrap();
-    let (is_complete, missing_blocks) =
-        InnerNode::compute_status(&mut tx, &hash, INNER_LAYER_COUNT)
-            .await
-            .unwrap();
+    let summary = InnerNode::compute_summary(&mut tx, &hash, INNER_LAYER_COUNT)
+        .await
+        .unwrap();
 
-    assert!(is_complete);
-    assert_eq!(missing_blocks.count, 0);
+    assert!(summary.is_complete);
+    assert_eq!(summary.missing_blocks_count, 0);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -265,13 +262,11 @@ async fn compute_status_from_incomplete_leaf_nodes() {
     let hash = nodes.hash();
 
     let mut tx = pool.begin().await.unwrap();
-    let (is_complete, missing_blocks) =
-        InnerNode::compute_status(&mut tx, &hash, INNER_LAYER_COUNT)
-            .await
-            .unwrap();
+    let summary = InnerNode::compute_summary(&mut tx, &hash, INNER_LAYER_COUNT)
+        .await
+        .unwrap();
 
-    assert!(!is_complete);
-    assert_eq!(missing_blocks, MissingBlocksSummary::UNKNOWN);
+    assert_eq!(summary, Summary::INCOMPLETE);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -284,13 +279,12 @@ async fn compute_status_from_complete_leaf_nodes_with_all_missing_blocks() {
     nodes.save(&pool, &hash).await.unwrap();
 
     let mut tx = pool.begin().await.unwrap();
-    let (is_complete, missing_blocks) =
-        InnerNode::compute_status(&mut tx, &hash, INNER_LAYER_COUNT)
-            .await
-            .unwrap();
+    let summary = InnerNode::compute_summary(&mut tx, &hash, INNER_LAYER_COUNT)
+        .await
+        .unwrap();
 
-    assert!(is_complete);
-    assert_eq!(missing_blocks.count, 1);
+    assert!(summary.is_complete);
+    assert_eq!(summary.missing_blocks_count, 1);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -305,13 +299,12 @@ async fn compute_status_from_complete_leaf_nodes_with_some_present_blocks() {
     nodes.save(&pool, &hash).await.unwrap();
 
     let mut tx = pool.begin().await.unwrap();
-    let (is_complete, missing_blocks) =
-        InnerNode::compute_status(&mut tx, &hash, INNER_LAYER_COUNT)
-            .await
-            .unwrap();
+    let summary = InnerNode::compute_summary(&mut tx, &hash, INNER_LAYER_COUNT)
+        .await
+        .unwrap();
 
-    assert!(is_complete);
-    assert_eq!(missing_blocks.count, 2);
+    assert!(summary.is_complete);
+    assert_eq!(summary.missing_blocks_count, 2);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -325,13 +318,12 @@ async fn compute_status_from_complete_leaf_nodes_with_all_present_blocks() {
     nodes.save(&pool, &hash).await.unwrap();
 
     let mut tx = pool.begin().await.unwrap();
-    let (is_complete, missing_blocks) =
-        InnerNode::compute_status(&mut tx, &hash, INNER_LAYER_COUNT)
-            .await
-            .unwrap();
+    let summary = InnerNode::compute_summary(&mut tx, &hash, INNER_LAYER_COUNT)
+        .await
+        .unwrap();
 
-    assert!(is_complete);
-    assert_eq!(missing_blocks.count, 0);
+    assert!(summary.is_complete);
+    assert_eq!(summary.missing_blocks_count, 0);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -340,13 +332,12 @@ async fn compute_status_from_empty_inner_nodes() {
     let hash = InnerNodeMap::default().hash();
 
     let mut tx = pool.begin().await.unwrap();
-    let (is_complete, missing_blocks) =
-        InnerNode::compute_status(&mut tx, &hash, INNER_LAYER_COUNT - 1)
-            .await
-            .unwrap();
+    let summary = InnerNode::compute_summary(&mut tx, &hash, INNER_LAYER_COUNT - 1)
+        .await
+        .unwrap();
 
-    assert!(is_complete);
-    assert_eq!(missing_blocks.count, 0);
+    assert!(summary.is_complete);
+    assert_eq!(summary.missing_blocks_count, 0);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -358,13 +349,11 @@ async fn compute_status_from_incomplete_inner_nodes() {
     let hash = nodes.hash();
 
     let mut tx = pool.begin().await.unwrap();
-    let (is_complete, missing_blocks) =
-        InnerNode::compute_status(&mut tx, &hash, INNER_LAYER_COUNT - 1)
-            .await
-            .unwrap();
+    let summary = InnerNode::compute_summary(&mut tx, &hash, INNER_LAYER_COUNT - 1)
+        .await
+        .unwrap();
 
-    assert!(!is_complete);
-    assert_eq!(missing_blocks, MissingBlocksSummary::UNKNOWN);
+    assert_eq!(summary, Summary::INCOMPLETE);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -380,8 +369,7 @@ async fn compute_status_from_complete_inner_nodes_with_all_missing_blocks() {
                 bucket,
                 InnerNode {
                     hash: leaf_nodes.hash(),
-                    is_complete: true,
-                    missing_blocks: MissingBlocksSummary::from_leaves(&leaf_nodes),
+                    summary: Summary::from_leaves(&leaf_nodes),
                 },
             )
         })
@@ -391,13 +379,12 @@ async fn compute_status_from_complete_inner_nodes_with_all_missing_blocks() {
     inners.save(&pool, &hash).await.unwrap();
 
     let mut tx = pool.begin().await.unwrap();
-    let (is_complete, missing_blocks) =
-        InnerNode::compute_status(&mut tx, &hash, INNER_LAYER_COUNT - 1)
-            .await
-            .unwrap();
+    let summary = InnerNode::compute_summary(&mut tx, &hash, INNER_LAYER_COUNT - 1)
+        .await
+        .unwrap();
 
-    assert!(is_complete);
-    assert_eq!(missing_blocks.count, 2);
+    assert!(summary.is_complete);
+    assert_eq!(summary.missing_blocks_count, 2);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -412,8 +399,7 @@ async fn compute_status_from_complete_inner_nodes_with_some_present_blocks() {
 
         InnerNode {
             hash: leaf_nodes.hash(),
-            is_complete: true,
-            missing_blocks: MissingBlocksSummary::from_leaves(&leaf_nodes),
+            summary: Summary::from_leaves(&leaf_nodes),
         }
     };
 
@@ -428,8 +414,7 @@ async fn compute_status_from_complete_inner_nodes_with_some_present_blocks() {
 
         InnerNode {
             hash: leaf_nodes.hash(),
-            is_complete: true,
-            missing_blocks: MissingBlocksSummary::from_leaves(&leaf_nodes),
+            summary: Summary::from_leaves(&leaf_nodes),
         }
     };
 
@@ -441,8 +426,7 @@ async fn compute_status_from_complete_inner_nodes_with_some_present_blocks() {
 
         InnerNode {
             hash: leaf_nodes.hash(),
-            is_complete: true,
-            missing_blocks: MissingBlocksSummary::from_leaves(&leaf_nodes),
+            summary: Summary::from_leaves(&leaf_nodes),
         }
     };
 
@@ -453,13 +437,12 @@ async fn compute_status_from_complete_inner_nodes_with_some_present_blocks() {
     inners.save(&pool, &hash).await.unwrap();
 
     let mut tx = pool.begin().await.unwrap();
-    let (is_complete, missing_blocks) =
-        InnerNode::compute_status(&mut tx, &hash, INNER_LAYER_COUNT - 1)
-            .await
-            .unwrap();
+    let summary = InnerNode::compute_summary(&mut tx, &hash, INNER_LAYER_COUNT - 1)
+        .await
+        .unwrap();
 
-    assert!(is_complete);
-    assert_eq!(missing_blocks.count, 3);
+    assert!(summary.is_complete);
+    assert_eq!(summary.missing_blocks_count, 3);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -476,8 +459,7 @@ async fn compute_status_from_complete_inner_nodes_with_all_present_blocks() {
                 bucket,
                 InnerNode {
                     hash: leaf_nodes.hash(),
-                    is_complete: true,
-                    missing_blocks: MissingBlocksSummary::from_leaves(&leaf_nodes),
+                    summary: Summary::from_leaves(&leaf_nodes),
                 },
             )
         })
@@ -487,13 +469,12 @@ async fn compute_status_from_complete_inner_nodes_with_all_present_blocks() {
     inners.save(&pool, &hash).await.unwrap();
 
     let mut tx = pool.begin().await.unwrap();
-    let (is_complete, missing_blocks) =
-        InnerNode::compute_status(&mut tx, &hash, INNER_LAYER_COUNT - 1)
-            .await
-            .unwrap();
+    let summary = InnerNode::compute_summary(&mut tx, &hash, INNER_LAYER_COUNT - 1)
+        .await
+        .unwrap();
 
-    assert!(is_complete);
-    assert_eq!(missing_blocks.count, 0);
+    assert!(summary.is_complete);
+    assert_eq!(summary.missing_blocks_count, 0);
 }
 
 #[proptest]
@@ -516,7 +497,7 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
         &replica_id,
         VersionVector::new(),
         *snapshot.root_hash(),
-        MissingBlocksSummary::default(),
+        Summary::FULL,
     )
     .await
     .unwrap();
@@ -525,7 +506,7 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
         .await
         .unwrap();
     root_node.reload(&pool).await.unwrap();
-    assert_eq!(root_node.is_complete, leaf_count == 0);
+    assert_eq!(root_node.summary.is_complete(), leaf_count == 0);
 
     // TODO: consider randomizing the order the nodes are saved so it's not always
     // breadth-first.
@@ -537,7 +518,7 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
                 .await
                 .unwrap();
             root_node.reload(&pool).await.unwrap();
-            assert!(!root_node.is_complete);
+            assert!(!root_node.summary.is_complete());
         }
     }
 
@@ -553,15 +534,15 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
         root_node.reload(&pool).await.unwrap();
 
         if unsaved_leaves > 0 {
-            assert!(!root_node.is_complete);
+            assert!(!root_node.summary.is_complete());
         }
     }
 
-    assert!(root_node.is_complete);
+    assert!(root_node.summary.is_complete());
 }
 
 #[proptest]
-fn missing_blocks(
+fn summary(
     #[strategy(0usize..=32)] leaf_count: usize,
     #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
 ) {
@@ -589,7 +570,7 @@ async fn missing_blocks_case(leaf_count: usize, rng_seed: u64) {
         &replica_id,
         VersionVector::new(),
         *snapshot.root_hash(),
-        MissingBlocksSummary::UNKNOWN,
+        Summary::INCOMPLETE,
     )
     .await
     .unwrap();
@@ -630,7 +611,7 @@ async fn missing_blocks_case(leaf_count: usize, rng_seed: u64) {
     // Check that initially all blocks are missing
     root_node.reload(&pool).await.unwrap();
     assert_eq!(
-        root_node.missing_blocks.count,
+        root_node.summary.missing_blocks_count,
         expected_missing_blocks_count
     );
 
@@ -645,7 +626,7 @@ async fn missing_blocks_case(leaf_count: usize, rng_seed: u64) {
 
         root_node.reload(&pool).await.unwrap();
         assert_eq!(
-            root_node.missing_blocks.count,
+            root_node.summary.missing_blocks_count,
             expected_missing_blocks_count
         );
 

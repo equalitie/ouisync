@@ -2,7 +2,7 @@ use super::{
     super::SnapshotId,
     inner::{InnerNode, InnerNodeMap},
     link::Link,
-    missing_blocks::MissingBlocksSummary,
+    summary::Summary,
 };
 use crate::{
     crypto::{Hash, Hashable},
@@ -19,8 +19,7 @@ pub struct RootNode {
     pub snapshot_id: SnapshotId,
     pub versions: VersionVector,
     pub hash: Hash,
-    pub is_complete: bool,
-    pub missing_blocks: MissingBlocksSummary,
+    pub summary: Summary,
 }
 
 impl RootNode {
@@ -47,10 +46,10 @@ impl RootNode {
             snapshot_id: row.get(0),
             versions: row.get(1),
             hash: row.get(2),
-            is_complete: row.get(3),
-            missing_blocks: MissingBlocksSummary {
-                count: db::decode_u64(row.get(4)),
-                checksum: db::decode_u64(row.get(5)),
+            summary: Summary {
+                is_complete: row.get(3),
+                missing_blocks_count: db::decode_u64(row.get(4)),
+                missing_blocks_checksum: db::decode_u64(row.get(5)),
             },
         })
         .fetch_optional(pool)
@@ -71,7 +70,7 @@ impl RootNode {
                 replica_id,
                 VersionVector::new(),
                 InnerNodeMap::default().hash(),
-                MissingBlocksSummary::default(),
+                Summary::FULL,
             )
             .await?)
         }
@@ -106,10 +105,10 @@ impl RootNode {
             snapshot_id: row.get(0),
             versions: row.get(1),
             hash: row.get(2),
-            is_complete: true,
-            missing_blocks: MissingBlocksSummary {
-                count: db::decode_u64(row.get(3)),
-                checksum: db::decode_u64(row.get(4)),
+            summary: Summary {
+                is_complete: true,
+                missing_blocks_count: db::decode_u64(row.get(3)),
+                missing_blocks_checksum: db::decode_u64(row.get(4)),
             },
         })
         .fetch_optional(pool)
@@ -124,7 +123,7 @@ impl RootNode {
         replica_id: &ReplicaId,
         mut versions: VersionVector,
         hash: Hash,
-        missing_blocks: MissingBlocksSummary,
+        summary: Summary,
     ) -> Result<Self> {
         let is_complete = hash == InnerNodeMap::default().hash();
 
@@ -154,18 +153,18 @@ impl RootNode {
         .bind(&versions)
         .bind(&hash)
         .bind(is_complete)
-        .bind(db::encode_u64(missing_blocks.count))
-        .bind(db::encode_u64(missing_blocks.checksum))
+        .bind(db::encode_u64(summary.missing_blocks_count))
+        .bind(db::encode_u64(summary.missing_blocks_checksum))
         .bind(replica_id)
         .bind(&hash)
         .map(|row| RootNode {
             snapshot_id: row.get(0),
             versions: row.get(1),
             hash,
-            is_complete: row.get(2),
-            missing_blocks: MissingBlocksSummary {
-                count: db::decode_u64(row.get(3)),
-                checksum: db::decode_u64(row.get(4)),
+            summary: Summary {
+                is_complete: row.get(2),
+                missing_blocks_count: db::decode_u64(row.get(3)),
+                missing_blocks_checksum: db::decode_u64(row.get(4)),
             },
         })
         .fetch_one(pool)
@@ -199,10 +198,10 @@ impl RootNode {
             snapshot_id: row.get(0),
             versions: row.get(1),
             hash: row.get(2),
-            is_complete: row.get(3),
-            missing_blocks: MissingBlocksSummary {
-                count: db::decode_u64(row.get(4)),
-                checksum: db::decode_u64(row.get(5)),
+            summary: Summary {
+                is_complete: row.get(3),
+                missing_blocks_count: db::decode_u64(row.get(4)),
+                missing_blocks_checksum: db::decode_u64(row.get(5)),
             },
         })
         .fetch(pool)
@@ -230,7 +229,7 @@ impl RootNode {
                  missing_blocks_count,
                  missing_blocks_checksum
              )
-             SELECT replica_id, ?, ?, is_complete, 0, 0
+             SELECT replica_id, ?, ?, 1, 0, 0
              FROM snapshot_root_nodes
              WHERE snapshot_id = ?
              RETURNING snapshot_id",
@@ -246,8 +245,7 @@ impl RootNode {
             snapshot_id,
             versions,
             hash,
-            is_complete: self.is_complete,
-            missing_blocks: MissingBlocksSummary::default(),
+            summary: Summary::FULL,
         })
     }
 
@@ -263,17 +261,16 @@ impl RootNode {
         .fetch_one(pool)
         .await?;
 
-        self.is_complete = row.get(0);
-        self.missing_blocks.count = db::decode_u64(row.get(1));
-        self.missing_blocks.checksum = db::decode_u64(row.get(2));
+        self.summary.is_complete = row.get(0);
+        self.summary.missing_blocks_count = db::decode_u64(row.get(1));
+        self.summary.missing_blocks_checksum = db::decode_u64(row.get(2));
 
         Ok(())
     }
 
-    /// Updates the is_complete flag and the missing block summaries of all nodes with the
-    /// specified hash.
-    pub async fn update_statuses(tx: &mut db::Transaction, hash: &Hash) -> Result<()> {
-        let (complete, missing_blocks) = InnerNode::compute_status(tx, hash, 0).await?;
+    /// Updates the summaries of all nodes with the specified hash.
+    pub async fn update_summaries(tx: &mut db::Transaction, hash: &Hash) -> Result<()> {
+        let summary = InnerNode::compute_summary(tx, hash, 0).await?;
 
         sqlx::query(
             "UPDATE snapshot_root_nodes
@@ -283,9 +280,9 @@ impl RootNode {
                  missing_blocks_checksum = ?
              WHERE hash = ?",
         )
-        .bind(complete)
-        .bind(db::encode_u64(missing_blocks.count))
-        .bind(db::encode_u64(missing_blocks.checksum))
+        .bind(summary.is_complete)
+        .bind(db::encode_u64(summary.missing_blocks_count))
+        .bind(db::encode_u64(summary.missing_blocks_checksum))
         .bind(hash)
         .execute(tx)
         .await?;

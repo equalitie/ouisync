@@ -3,7 +3,7 @@ use std::fmt;
 use crate::{
     block::BlockId,
     crypto::{AuthTag, Hash},
-    index::{InnerNodeMap, LeafNodeSet, MissingBlocksSummary},
+    index::{InnerNodeMap, LeafNodeSet, Summary},
     version_vector::VersionVector,
 };
 use serde::{Deserialize, Serialize};
@@ -29,7 +29,7 @@ pub enum Response {
     RootNode {
         versions: VersionVector,
         hash: Hash,
-        missing_blocks: MissingBlocksSummary,
+        summary: Summary,
     },
     /// Send inner nodes with the given parent hash and inner layer.
     InnerNodes {
@@ -57,12 +57,12 @@ impl fmt::Debug for Response {
             Self::RootNode {
                 versions,
                 hash,
-                missing_blocks,
+                summary,
             } => f
                 .debug_struct("RootNode")
                 .field("versions", versions)
                 .field("hash", hash)
-                .field("missing_blocks", missing_blocks)
+                .field("summary", summary)
                 .finish(),
             Self::InnerNodes {
                 parent_hash,

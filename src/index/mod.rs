@@ -8,7 +8,7 @@ pub use self::{
     branch::Branch,
     node::{
         detect_complete_snapshots, receive_block, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet,
-        MissingBlocksSummary, RootNode, INNER_LAYER_COUNT,
+        RootNode, Summary, INNER_LAYER_COUNT,
     },
 };
 
@@ -60,12 +60,12 @@ impl Index {
         &self,
         replica_id: &ReplicaId,
         hash: &Hash,
-        remote_missing_blocks: &MissingBlocksSummary,
+        remote_summary: &Summary,
     ) -> Result<bool> {
         if let Some(local_node) = RootNode::load(&self.pool, replica_id, hash).await? {
             Ok(!local_node
-                .missing_blocks
-                .is_up_to_date_with(&remote_missing_blocks)
+                .summary
+                .is_up_to_date_with(&remote_summary)
                 .unwrap_or(true))
         } else {
             Ok(true)
@@ -95,8 +95,8 @@ impl Index {
                 };
 
                 !local_node
-                    .missing_blocks
-                    .is_up_to_date_with(&remote_node.missing_blocks)
+                    .summary
+                    .is_up_to_date_with(&remote_node.summary)
                     .unwrap_or(true)
             })
             .map(|(_, node)| node))

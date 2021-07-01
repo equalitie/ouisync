@@ -6,9 +6,7 @@ use crate::{
     block::{self, BlockId},
     crypto::{AuthTag, Hash, Hashable},
     error::Result,
-    index::{
-        self, Index, InnerNodeMap, LeafNodeSet, MissingBlocksSummary, RootNode, INNER_LAYER_COUNT,
-    },
+    index::{self, Index, InnerNodeMap, LeafNodeSet, RootNode, Summary, INNER_LAYER_COUNT},
     replica_id::ReplicaId,
     version_vector::VersionVector,
 };
@@ -71,8 +69,8 @@ impl Client {
             Response::RootNode {
                 versions,
                 hash,
-                missing_blocks,
-            } => self.handle_root_node(versions, hash, missing_blocks).await,
+                summary,
+            } => self.handle_root_node(versions, hash, summary).await,
             Response::InnerNodes {
                 parent_hash,
                 inner_layer,
@@ -96,7 +94,7 @@ impl Client {
         &self,
         versions: VersionVector,
         hash: Hash,
-        missing_blocks: MissingBlocksSummary,
+        summary: Summary,
     ) -> Result<()> {
         let this_versions = self.latest_local_versions().await?;
         if versions
@@ -109,14 +107,14 @@ impl Client {
 
         let updated = self
             .index
-            .has_root_node_new_blocks(&self.their_replica_id, &hash, &missing_blocks)
+            .has_root_node_new_blocks(&self.their_replica_id, &hash, &summary)
             .await?;
         let node = RootNode::create(
             &self.index.pool,
             &self.their_replica_id,
             versions,
             hash,
-            MissingBlocksSummary::UNKNOWN,
+            Summary::INCOMPLETE,
         )
         .await?;
         index::detect_complete_snapshots(&self.index.pool, hash, 0).await?;
@@ -199,7 +197,7 @@ impl Client {
         Ok(
             RootNode::load_latest(&self.index.pool, &self.their_replica_id)
                 .await?
-                .map(|node| node.is_complete)
+                .map(|node| node.summary.is_complete())
                 .unwrap_or(false),
         )
     }

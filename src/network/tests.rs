@@ -8,9 +8,7 @@ use crate::{
     block::{self, BlockId, BLOCK_SIZE},
     crypto::{AuthTag, Hashable},
     db,
-    index::{
-        self, node_test_utils::Snapshot, Index, MissingBlocksSummary, RootNode, INNER_LAYER_COUNT,
-    },
+    index::{self, node_test_utils::Snapshot, Index, RootNode, Summary, INNER_LAYER_COUNT},
     replica_id::ReplicaId,
     test_utils,
     version_vector::VersionVector,
@@ -87,7 +85,7 @@ async fn transfer_snapshot_between_two_replicas_case(
         .await
         .unwrap();
 
-    assert!(root_per_b.is_complete);
+    assert!(root_per_b.summary.is_complete());
     assert_eq!(root_per_b.hash, root_per_a.hash);
     assert_eq!(root_per_b.versions, root_per_a.versions);
 }
@@ -130,7 +128,7 @@ async fn save_snapshot(index: &Index, snapshot: &Snapshot) {
         &index.this_replica_id,
         VersionVector::new(),
         *snapshot.root_hash(),
-        MissingBlocksSummary::default(),
+        Summary::FULL,
     )
     .await
     .unwrap();

@@ -4,16 +4,16 @@ pub mod test_utils;
 mod inner;
 mod leaf;
 mod link;
-mod missing_blocks;
 mod root;
+mod summary;
 #[cfg(test)]
 mod tests;
 
 pub use self::{
     inner::{InnerNode, InnerNodeMap, INNER_LAYER_COUNT},
     leaf::{LeafNode, LeafNodeSet, ModifyStatus},
-    missing_blocks::MissingBlocksSummary,
     root::RootNode,
+    summary::Summary,
 };
 
 use crate::{block::BlockId, crypto::Hash, db, error::Result};
@@ -29,7 +29,7 @@ pub fn get_bucket(locator: &Hash, inner_layer: usize) -> u8 {
 pub async fn detect_complete_snapshots(pool: &db::Pool, hash: Hash, layer: usize) -> Result<()> {
     let stack = vec![(hash, layer)];
     let mut tx = pool.begin().await?;
-    update_statuses(&mut tx, stack).await?;
+    update_summaries(&mut tx, stack).await?;
     tx.commit().await?;
 
     Ok(())
@@ -45,13 +45,13 @@ pub async fn receive_block(tx: &mut db::Transaction, id: &BlockId) -> Result<()>
         .try_collect()
         .await?;
 
-    update_statuses(tx, stack).await
+    update_summaries(tx, stack).await
 }
 
-async fn update_statuses(tx: &mut db::Transaction, mut stack: Vec<(Hash, usize)>) -> Result<()> {
+async fn update_summaries(tx: &mut db::Transaction, mut stack: Vec<(Hash, usize)>) -> Result<()> {
     while let Some((hash, layer)) = stack.pop() {
         if layer > 0 {
-            InnerNode::update_statuses(tx, &hash, layer - 1).await?;
+            InnerNode::update_summaries(tx, &hash, layer - 1).await?;
             InnerNode::load_parent_hashes(&mut *tx, &hash)
                 .try_for_each(|parent_hash| {
                     stack.push((parent_hash, layer - 1));
@@ -59,7 +59,7 @@ async fn update_statuses(tx: &mut db::Transaction, mut stack: Vec<(Hash, usize)>
                 })
                 .await?;
         } else {
-            RootNode::update_statuses(tx, &hash).await?
+            RootNode::update_summaries(tx, &hash).await?
         }
     }
 

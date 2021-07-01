@@ -1,8 +1,8 @@
 use super::{
     inner::{InnerNode, INNER_LAYER_COUNT},
     leaf::LeafNode,
-    missing_blocks::MissingBlocksSummary,
     root::RootNode,
+    summary::Summary,
 };
 use crate::{crypto::Hash, db, error::Result};
 use async_recursion::async_recursion;
@@ -120,8 +120,10 @@ impl Link {
             parent: row.get(0),
             node: InnerNode {
                 hash: row.get(1),
-                is_complete: row.get(2),
-                missing_blocks: MissingBlocksSummary::default(),
+                summary: Summary {
+                    is_complete: row.get(2),
+                    ..Summary::FULL
+                },
             },
         })
         .fetch(tx)

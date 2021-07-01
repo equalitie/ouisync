@@ -3,28 +3,42 @@ use crc::{Crc, CRC_64_XZ};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 
-#[derive(Default, Copy, Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
-pub struct MissingBlocksSummary {
-    pub(super) count: u64,
-    pub(super) checksum: u64,
+/// Summary info of a snapshot subtree. Contains whether the subtree has been completely downloaded
+/// and the number of missing blocks in the subtree.
+#[derive(Copy, Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
+pub struct Summary {
+    pub(super) is_complete: bool,
+    pub(super) missing_blocks_count: u64,
+    // Checksum is used to disambiguate the situation where two replicas have exactly the same
+    // missing blocks (both count and checksum would be the same) or they just happen to have the
+    // same number of missing blocks, but those blocks are different (counts would be the same but
+    // checksums would differ (unless there is a collision which should be rare)).
+    pub(super) missing_blocks_checksum: u64,
 }
 
-impl MissingBlocksSummary {
-    /// Placeholder value indicating that the number of missing blocks is not known because the
-    /// subtree hasn't beent fully downloaded yet.
-    pub const UNKNOWN: Self = Self {
-        count: u64::MAX,
-        checksum: 0,
+impl Summary {
+    /// Summary indicating the subtree hasn't been completely downloaded yet.
+    pub const INCOMPLETE: Self = Self {
+        is_complete: false,
+        missing_blocks_count: u64::MAX,
+        missing_blocks_checksum: 0,
+    };
+
+    /// Summary indicating that the whole subtree is complete and all its blocks present.
+    pub const FULL: Self = Self {
+        is_complete: true,
+        missing_blocks_count: 0,
+        missing_blocks_checksum: 0,
     };
 
     pub fn from_leaves(nodes: &LeafNodeSet) -> Self {
         let crc = Crc::<u64>::new(&CRC_64_XZ);
         let mut digest = crc.digest();
-        let mut count = 0;
+        let mut missing_blocks_count = 0;
 
         for node in nodes {
             if node.is_missing {
-                count += 1;
+                missing_blocks_count += 1;
                 digest.update(&[1])
             } else {
                 digest.update(&[0])
@@ -32,25 +46,30 @@ impl MissingBlocksSummary {
         }
 
         Self {
-            count,
-            checksum: digest.finalize(),
+            is_complete: true,
+            missing_blocks_count,
+            missing_blocks_checksum: digest.finalize(),
         }
     }
 
     pub fn from_inners(nodes: &InnerNodeMap) -> Self {
         let crc = Crc::<u64>::new(&CRC_64_XZ);
         let mut digest = crc.digest();
-        let mut count = 0u64;
+        let mut missing_blocks_count = 0u64;
+        let mut is_complete = true;
 
         for (_, node) in nodes {
-            digest.update(&node.missing_blocks.count.to_le_bytes());
-            digest.update(&node.missing_blocks.checksum.to_le_bytes());
-            count = count.saturating_add(node.missing_blocks.count);
+            is_complete = is_complete && node.summary.is_complete;
+            missing_blocks_count =
+                missing_blocks_count.saturating_add(node.summary.missing_blocks_count);
+            digest.update(&node.summary.missing_blocks_count.to_le_bytes());
+            digest.update(&node.summary.missing_blocks_checksum.to_le_bytes());
         }
 
         Self {
-            count,
-            checksum: digest.finalize(),
+            is_complete,
+            missing_blocks_count,
+            missing_blocks_checksum: digest.finalize(),
         }
     }
 
@@ -68,6 +87,8 @@ impl MissingBlocksSummary {
     /// guaranteed to return `Some` which means that at least one replica is always able to make
     /// progress.
     pub fn is_up_to_date_with(&self, other: &Self) -> Option<bool> {
+        use Ordering::*;
+
         // | checksum   | count      | outcome     |
         // +------------+------------+-------------+
         // | lhs == rhs | lhs == rhs | Some(true)  |
@@ -77,15 +98,21 @@ impl MissingBlocksSummary {
         // | lhs != rhs | lhs >  rhs | Some(false) |
         // | lhs != rhs | lhs <  rhs | None        |
 
-        use Ordering::*;
+        if self.missing_blocks_count == 0 {
+            return Some(true);
+        }
 
         match (
-            self.checksum == other.checksum,
-            self.count.cmp(&other.count),
+            self.missing_blocks_checksum == other.missing_blocks_checksum,
+            self.missing_blocks_count.cmp(&other.missing_blocks_count),
         ) {
             (true, Equal) => Some(true),
             (_, Greater) | (false, Equal) => Some(false),
             (_, Less) => None,
         }
+    }
+
+    pub fn is_complete(&self) -> bool {
+        self.is_complete
     }
 }
