@@ -254,12 +254,18 @@ impl RootNode {
     /// Reload this root node from the db. Currently used only in tests.
     #[cfg(test)]
     pub async fn reload(&mut self, pool: &db::Pool) -> Result<()> {
-        let row = sqlx::query("SELECT is_complete FROM snapshot_root_nodes WHERE snapshot_id = ?")
-            .bind(self.snapshot_id)
-            .fetch_one(pool)
-            .await?;
+        let row = sqlx::query(
+            "SELECT is_complete, missing_blocks_count, missing_blocks_checksum
+             FROM snapshot_root_nodes
+             WHERE snapshot_id = ?",
+        )
+        .bind(self.snapshot_id)
+        .fetch_one(pool)
+        .await?;
 
         self.is_complete = row.get(0);
+        self.missing_blocks.count = db::decode_u64(row.get(1));
+        self.missing_blocks.checksum = db::decode_u64(row.get(2));
 
         Ok(())
     }

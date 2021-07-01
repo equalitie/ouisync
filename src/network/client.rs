@@ -153,7 +153,7 @@ impl Client {
             .collect();
 
         nodes
-            .into_missing()
+            .into_incomplete()
             .save(&self.index.pool, &parent_hash)
             .await?;
         index::detect_complete_snapshots(&self.index.pool, parent_hash, inner_layer).await?;

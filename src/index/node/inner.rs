@@ -14,6 +14,7 @@ use sqlx::Row;
 use std::{
     collections::{btree_map, BTreeMap},
     convert::TryInto,
+    iter::FromIterator,
 };
 
 /// Number of layers in the tree excluding the layer with root and the layer with leaf nodes.
@@ -37,7 +38,7 @@ impl InnerNode {
         Self {
             hash,
             is_complete: false,
-            missing_blocks: MissingBlocksSummary::default(),
+            missing_blocks: MissingBlocksSummary::UNKNOWN,
         }
     }
 
@@ -100,12 +101,13 @@ impl InnerNode {
                  missing_blocks_count,
                  missing_blocks_checksum
              )
-             VALUES (?, ?, ?, 0, ?, ?)
+             VALUES (?, ?, ?, ?, ?, ?)
              ON CONFLICT (parent, bucket) DO NOTHING",
         )
         .bind(parent)
         .bind(bucket)
         .bind(&self.hash)
+        .bind(self.is_complete)
         .bind(db::encode_u64(self.missing_blocks.count))
         .bind(db::encode_u64(self.missing_blocks.checksum))
         .execute(tx)
@@ -148,24 +150,23 @@ impl InnerNode {
         parent_hash: &Hash,
         parent_layer: usize,
     ) -> Result<(bool, MissingBlocksSummary)> {
-        let complete;
-        let missing_blocks;
-
-        if parent_layer < INNER_LAYER_COUNT {
+        let status = if parent_layer < INNER_LAYER_COUNT {
             let empty_children = InnerNodeMap::default();
             // If the parent hash is equal to the hash of empty node collection it means the node
             // has no children and we can cut this short.
             if *parent_hash == empty_children.hash() {
-                complete = true;
-                missing_blocks = MissingBlocksSummary::from_inners(&empty_children);
+                (true, MissingBlocksSummary::from_inners(&empty_children))
             } else {
                 let children = InnerNode::load_children(&mut *tx, parent_hash).await?;
 
                 // We download all children nodes of a given parent together so when we know that
                 // we have at least one we also know we have them all. Thus it's enough to check
                 // that all of them are complete.
-                complete = !children.is_empty() && children.all_complete();
-                missing_blocks = MissingBlocksSummary::from_inners(&children);
+                if !children.is_empty() && children.all_complete() {
+                    (true, MissingBlocksSummary::from_inners(&children))
+                } else {
+                    (false, MissingBlocksSummary::UNKNOWN)
+                }
             }
         } else {
             let empty_children = LeafNodeSet::default();
@@ -173,19 +174,21 @@ impl InnerNode {
             // If the parent hash is equal to the hash of empty node collection it means the node
             // has no children and we can cut this short.
             if *parent_hash == empty_children.hash() {
-                complete = true;
-                missing_blocks = MissingBlocksSummary::from_leaves(&empty_children);
+                (true, MissingBlocksSummary::from_leaves(&empty_children))
             } else {
                 let children = LeafNode::load_children(&mut *tx, parent_hash).await?;
 
                 // Similarly as in the inner nodes case, we only need to check that we have at
                 // least one leaf node child and that already tells us that we have them all.
-                complete = !children.is_empty();
-                missing_blocks = MissingBlocksSummary::from_leaves(&children);
+                if !children.is_empty() {
+                    (true, MissingBlocksSummary::from_leaves(&children))
+                } else {
+                    (false, MissingBlocksSummary::UNKNOWN)
+                }
             }
-        }
+        };
 
-        Ok((complete, missing_blocks))
+        Ok(status)
     }
 }
 
@@ -228,10 +231,11 @@ impl InnerNodeMap {
         Ok(())
     }
 
-    /// Returns the same nodes but with the `missing_block` changed to indicate that all blocks are
-    /// missing.
-    pub fn into_missing(mut self) -> Self {
+    /// Returns the same nodes but with the `is_complete` and `missing_block` fields changed to
+    /// indicate that these nodes are not complete yet.
+    pub fn into_incomplete(mut self) -> Self {
         for node in self.0.values_mut() {
+            node.is_complete = false;
             node.missing_blocks = MissingBlocksSummary::UNKNOWN;
         }
 
@@ -241,6 +245,15 @@ impl InnerNodeMap {
     /// Returns whether all nodes in this map are complete.
     pub fn all_complete(&self) -> bool {
         self.0.values().all(|node| node.is_complete)
+    }
+}
+
+impl FromIterator<(u8, InnerNode)> for InnerNodeMap {
+    fn from_iter<T>(iter: T) -> Self
+    where
+        T: IntoIterator<Item = (u8, InnerNode)>,
+    {
+        Self(iter.into_iter().collect())
     }
 }
 
