@@ -141,7 +141,6 @@ impl InodeMap {
     }
 }
 
-#[derive(Clone)]
 pub enum Representation {
     // Because a single directory may be present in multiple branches, we can't simply store a
     // single locator to a directory. We could - in principle - store a set of locators here, but
@@ -172,7 +171,7 @@ impl Representation {
     }
 }
 
-#[derive(Clone)]
+//#[derive(Clone)]
 pub struct InodeDetails {
     pub representation: Representation,
     pub parent: Inode,

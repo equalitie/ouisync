@@ -14,6 +14,7 @@ mod ffi;
 mod file;
 mod format;
 mod index;
+mod joint_entry;
 mod locator;
 mod network;
 mod replica_id;

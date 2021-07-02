@@ -18,18 +18,6 @@ impl EntryMap {
         self.0.remove(handle_to_index(handle))
     }
 
-    pub fn get(&self, handle: FileHandle) -> Result<&Entry> {
-        self.0
-            .get(handle_to_index(handle))
-            .ok_or(Error::EntryNotFound)
-    }
-
-    pub fn get_mut(&mut self, handle: FileHandle) -> Result<&mut Entry> {
-        self.0
-            .get_mut(handle_to_index(handle))
-            .ok_or(Error::EntryNotFound)
-    }
-
     pub fn get_file_mut(&mut self, handle: FileHandle) -> Result<&mut File> {
         match self.get_mut(handle) {
             Ok(Entry::File(file)) => Ok(file),
@@ -52,6 +40,18 @@ impl EntryMap {
             Ok(_) => Err(Error::EntryNotDirectory),
             Err(error) => Err(error),
         }
+    }
+
+    fn get(&self, handle: FileHandle) -> Result<&Entry> {
+        self.0
+            .get(handle_to_index(handle))
+            .ok_or(Error::EntryNotFound)
+    }
+
+    fn get_mut(&mut self, handle: FileHandle) -> Result<&mut Entry> {
+        self.0
+            .get_mut(handle_to_index(handle))
+            .ok_or(Error::EntryNotFound)
     }
 }
 
