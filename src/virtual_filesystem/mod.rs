@@ -8,7 +8,7 @@ mod tests;
 
 use self::{
     entry_map::{EntryMap, FileHandle},
-    inode::{Inode, InodeDetails, InodeMap},
+    inode::{Inode, InodeDetails, InodeMap, Representation},
     open_flags::OpenFlags,
     utils::{FormatOptionScope, MaybeOwnedMut},
 };
@@ -16,7 +16,9 @@ use fuser::{
     BackgroundSession, FileAttr, FileType, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory,
     ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow,
 };
-use ouisync::{Directory, Entry, EntryType, Error, File, MoveDstDirectory, Repository, Result};
+use ouisync::{
+    Directory, Entry, EntryType, Error, File, Locator, MoveDstDirectory, Repository, Result,
+};
 use std::{
     convert::TryInto,
     ffi::OsStr,
@@ -368,14 +370,12 @@ impl Inner {
     async fn lookup(&mut self, parent: Inode, name: &OsStr) -> Result<FileAttr> {
         log::debug!("lookup {}", self.inodes.path_display(parent, Some(name)));
 
-        let parent_dir = self.open_directory_by_inode(parent).await?;
-        let entry_info = parent_dir.lookup(name)?;
+        let InodeDetails { representation, .. } = self.inodes.get(parent);
 
-        let entry = entry_info.open().await?;
+        let child = representation.child_directory(name)?;
+        let entry = self.open_entry_by_representation(&child).await?;
 
-        let inode = self
-            .inodes
-            .lookup(parent, name, entry_info.locator(), entry_info.entry_type());
+        let inode = self.inodes.lookup(parent, name, child);
 
         Ok(make_file_attr_for_entry(&entry, inode))
     }
@@ -383,15 +383,13 @@ impl Inner {
     async fn getattr(&mut self, inode: Inode) -> Result<FileAttr> {
         log::debug!("getattr {}", self.inodes.path_display(inode, None));
 
-        let &InodeDetails {
-            locator,
-            entry_type,
-            ..
-        } = self.inodes.get(inode);
+        let InodeDetails { representation, .. } = self.inodes.get(inode);
+
+        let locator = self.get_locator_by_representation(representation).await?;
 
         let entry = self
             .repository
-            .open_entry_by_locator(locator, entry_type)
+            .open_entry_by_locator(locator, representation.entry_type())
             .await?;
         Ok(make_file_attr_for_entry(&entry, inode))
     }
@@ -577,16 +575,22 @@ impl Inner {
             umask
         );
 
-        let mut parent_dir = self.open_directory_by_inode(parent).await?;
+        let parent_repr = &self.inodes.get(parent).representation;
+        let parent_locator = self.get_locator_by_representation(&parent_repr).await?;
+        let mut parent_dir = self
+            .repository
+            .open_directory_by_locator(parent_locator)
+            .await?;
+
         let mut dir = parent_dir.create_directory(name.to_owned())?;
 
         // TODO: should these two happen atomically (in a transaction)?
         dir.flush().await?;
         parent_dir.flush().await?;
 
-        let inode = self
-            .inodes
-            .lookup(parent, name, *dir.locator(), EntryType::Directory);
+        let child_repr = parent_repr.child_directory(name)?;
+
+        let inode = self.inodes.lookup(parent, name, child_repr);
 
         let entry = Entry::Directory(dir);
         Ok(make_file_attr_for_entry(&entry, inode))
@@ -630,7 +634,12 @@ impl Inner {
             flags
         );
 
-        let mut parent_dir = self.open_directory_by_inode(parent).await?;
+        let parent_repr = &self.inodes.get(parent).representation;
+        let parent_locator = self.get_locator_by_representation(parent_repr).await?;
+        let mut parent_dir = self
+            .repository
+            .open_directory_by_locator(parent_locator)
+            .await?;
         let mut file = parent_dir.create_file(name.to_owned())?;
 
         file.flush().await?;
@@ -639,7 +648,7 @@ impl Inner {
         let entry = Entry::File(file);
         let inode = self
             .inodes
-            .lookup(parent, name, *entry.locator(), entry.entry_type());
+            .lookup(parent, name, Representation::File(*entry.locator()));
         let attr = make_file_attr_for_entry(&entry, inode);
         let handle = self.entries.insert(entry);
 
@@ -819,23 +828,41 @@ impl Inner {
     }
 
     async fn open_file_by_inode(&self, inode: Inode) -> Result<File> {
-        let &InodeDetails {
-            locator,
-            entry_type,
-            ..
-        } = self.inodes.get(inode);
-        entry_type.check_is_file()?;
+        let InodeDetails { representation, .. } = self.inodes.get(inode);
+        representation.entry_type().check_is_file()?;
+        let locator = self.get_locator_by_representation(representation).await?;
         self.repository.open_file_by_locator(locator).await
     }
 
     async fn open_directory_by_inode(&self, inode: Inode) -> Result<Directory> {
-        let &InodeDetails {
-            locator,
-            entry_type,
-            ..
-        } = self.inodes.get(inode);
-        entry_type.check_is_directory()?;
+        let InodeDetails { representation, .. } = self.inodes.get(inode);
+        let locator = self.get_locator_by_representation(&representation).await?;
         self.repository.open_directory_by_locator(locator).await
+    }
+
+    async fn get_locator_by_representation(&self, repr: &Representation) -> Result<Locator> {
+        match repr {
+            Representation::Directory(path) => {
+                let (locator, entry_type) = self.repository.lookup(path).await?;
+                entry_type.check_is_directory()?;
+                Ok(locator)
+            }
+            Representation::File(locator) => Ok(*locator),
+        }
+    }
+
+    async fn open_entry_by_representation(&self, repr: &Representation) -> Result<Entry> {
+        match repr {
+            Representation::Directory(path) => {
+                let (locator, _entry_type) = self.repository.lookup(path).await?;
+                let dir = self.repository.open_directory_by_locator(locator).await?;
+                Ok(Entry::Directory(dir))
+            }
+            Representation::File(locator) => {
+                let file = self.repository.open_file_by_locator(*locator).await?;
+                Ok(Entry::File(file))
+            }
+        }
     }
 }
 

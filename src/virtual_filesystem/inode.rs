@@ -1,11 +1,12 @@
 use fuser::FUSE_ROOT_ID;
-use ouisync::{EntryType, Locator};
+use ouisync::{EntryType, Error, Locator, Result};
 use slab::Slab;
 use std::{
     collections::{hash_map::Entry, HashMap},
     convert::TryInto,
     ffi::{OsStr, OsString},
     fmt,
+    path::PathBuf,
 };
 
 /// Inode handle
@@ -23,8 +24,7 @@ impl InodeMap {
 
         let index = forward.insert(InodeData {
             details: InodeDetails {
-                locator: Locator::Root,
-                entry_type: EntryType::Directory,
+                representation: Representation::Directory(PathBuf::new()),
                 parent: 0,
             },
             name: OsString::new(),
@@ -46,13 +46,7 @@ impl InodeMap {
     // # Panics
     //
     // Panics if the parent inode doesn't exists.
-    pub fn lookup(
-        &mut self,
-        parent: Inode,
-        name: &OsStr,
-        locator: Locator,
-        entry_type: EntryType,
-    ) -> Inode {
+    pub fn lookup(&mut self, parent: Inode, name: &OsStr, representation: Representation) -> Inode {
         // TODO: consider using `Arc` to avoid the double clone of `name`.
 
         let key = Key {
@@ -64,8 +58,7 @@ impl InodeMap {
             Entry::Vacant(entry) => {
                 let index = self.forward.insert(InodeData {
                     details: InodeDetails {
-                        locator,
-                        entry_type,
+                        representation,
                         parent,
                     },
                     name: name.to_owned(),
@@ -148,10 +141,40 @@ impl InodeMap {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
+pub enum Representation {
+    // Because a single directory may be present in multiple branches, we can't simply store a
+    // single locator to a directory. We could - in principle - store a set of locators here, but
+    // then we would need to update the Representation each time a new branch with the given
+    // directory is added. For now, we'll just store the path and each time the set of locators
+    // corresponding to the path is requested, it'll be determined dynamically.
+    Directory(PathBuf),
+    File(Locator),
+}
+
+impl Representation {
+    pub fn child_directory(&self, name: &OsStr) -> Result<Representation> {
+        match self {
+            Self::Directory(path) => {
+                let mut path = path.clone();
+                path.push(name);
+                Ok(Self::Directory(path))
+            }
+            Self::File(_) => Err(Error::EntryNotDirectory),
+        }
+    }
+
+    pub fn entry_type(&self) -> EntryType {
+        match self {
+            Self::Directory(_) => EntryType::Directory,
+            Self::File(_) => EntryType::File,
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct InodeDetails {
-    pub locator: Locator,
-    pub entry_type: EntryType,
+    pub representation: Representation,
     pub parent: Inode,
 }
 
