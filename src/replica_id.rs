@@ -14,7 +14,7 @@ use std::{
 pub const REPLICA_ID_SIZE: usize = 16;
 
 /// Unique id of a replica.
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 #[repr(transparent)]
 pub struct ReplicaId([u8; REPLICA_ID_SIZE]);
 

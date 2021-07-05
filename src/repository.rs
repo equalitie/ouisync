@@ -11,6 +11,7 @@ use crate::{
     file::File,
     index::{Branch, Index},
     locator::Locator,
+    ReplicaId,
 };
 
 pub struct Repository {
@@ -21,6 +22,10 @@ pub struct Repository {
 impl Repository {
     pub fn new(index: Index, cryptor: Cryptor) -> Self {
         Self { index, cryptor }
+    }
+
+    pub fn this_replica_id(&self) -> &ReplicaId {
+        self.index.this_replica_id()
     }
 
     /// Opens the root directory.

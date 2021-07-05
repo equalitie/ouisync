@@ -14,6 +14,7 @@ mod ffi;
 mod file;
 mod format;
 mod index;
+mod joint_directory;
 mod joint_entry;
 mod locator;
 mod network;
@@ -33,6 +34,8 @@ pub use self::{
     error::{Error, Result},
     file::File,
     index::Index,
+    joint_directory::JointDirectory,
+    joint_entry::JointEntry,
     locator::Locator,
     network::{Network, NetworkOptions},
     replica_id::ReplicaId,

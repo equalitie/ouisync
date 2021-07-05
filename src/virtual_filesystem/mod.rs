@@ -17,7 +17,8 @@ use fuser::{
     ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow,
 };
 use ouisync::{
-    Directory, Entry, EntryType, Error, File, Locator, MoveDstDirectory, Repository, Result,
+    Directory, Entry, EntryType, Error, File, JointDirectory, JointEntry, Locator,
+    MoveDstDirectory, Repository, Result,
 };
 use std::{
     convert::TryInto,
@@ -370,9 +371,9 @@ impl Inner {
     async fn lookup(&mut self, parent: Inode, name: &OsStr) -> Result<FileAttr> {
         log::debug!("lookup {}", self.inodes.path_display(parent, Some(name)));
 
-        let InodeDetails { representation, .. } = self.inodes.get(parent);
+        let parent_repr = &self.inodes.get(parent).representation;
 
-        let child = representation.child_directory(name)?;
+        let child = parent_repr.child_directory(name)?;
         let entry = self.open_entry_by_representation(&child).await?;
 
         let inode = self.inodes.lookup(parent, name, child);
@@ -383,14 +384,10 @@ impl Inner {
     async fn getattr(&mut self, inode: Inode) -> Result<FileAttr> {
         log::debug!("getattr {}", self.inodes.path_display(inode, None));
 
-        let InodeDetails { representation, .. } = self.inodes.get(inode);
+        let repr = &self.inodes.get(inode).representation;
 
-        let locator = self.get_locator_by_representation(representation).await?;
+        let entry = self.open_entry_by_representation(repr).await?;
 
-        let entry = self
-            .repository
-            .open_entry_by_locator(locator, representation.entry_type())
-            .await?;
         Ok(make_file_attr_for_entry(&entry, inode))
     }
 
@@ -470,7 +467,7 @@ impl Inner {
         );
 
         let dir = self.open_directory_by_inode(inode).await?;
-        let handle = self.entries.insert(Entry::Directory(dir));
+        let handle = self.entries.insert(JointEntry::Directory(dir));
 
         Ok(handle)
     }
@@ -532,7 +529,7 @@ impl Inner {
         let first = if parent == 0 { 1 } else { 2 };
 
         for (index, entry) in dir
-            .entries()
+            .entries(self.repository.this_replica_id())
             .enumerate()
             .skip((offset as usize).saturating_sub(first))
         {
@@ -576,13 +573,12 @@ impl Inner {
         );
 
         let parent_repr = &self.inodes.get(parent).representation;
-        let parent_locator = self.get_locator_by_representation(&parent_repr).await?;
-        let mut parent_dir = self
-            .repository
-            .open_directory_by_locator(parent_locator)
-            .await?;
+        let mut parent_dir = self.open_directory_by_representation(&parent_repr).await?;
 
-        let mut dir = parent_dir.create_directory(name.to_owned())?;
+        // TODO: Ensure parent_dir[this_replica_id] exists.
+        let mut dir = parent_dir
+            .create_directory(self.repository.this_replica_id(), name)
+            .await?;
 
         // TODO: should these two happen atomically (in a transaction)?
         dir.flush().await?;
@@ -592,15 +588,21 @@ impl Inner {
 
         let inode = self.inodes.lookup(parent, name, child_repr);
 
-        let entry = Entry::Directory(dir);
+        let entry = JointEntry::Directory(dir);
         Ok(make_file_attr_for_entry(&entry, inode))
     }
 
     async fn rmdir(&mut self, parent: Inode, name: &OsStr) -> Result<()> {
         log::debug!("rmdir {}", self.inodes.path_display(parent, Some(name)));
 
-        let mut parent_dir = self.open_directory_by_inode(parent).await?;
-        parent_dir.remove_directory(name).await?;
+        let parent_repr = &self.inodes.get(parent).representation;
+        // TODO: A tomb stone should be created as well.
+        // TODO: Remove from other branches as well.
+        let mut parent_dir = self.open_directory_by_representation(parent_repr).await?;
+
+        parent_dir
+            .remove_directory(self.repository.this_replica_id(), name)
+            .await?;
         parent_dir.flush().await
     }
 
@@ -614,8 +616,8 @@ impl Inner {
 
         // TODO: what about `datasync`?
 
-        let dir = self.entries.get_directory_mut(handle)?;
-        dir.flush().await
+        let dirs = self.entries.get_directory_mut(handle)?;
+        dirs.flush().await
     }
 
     async fn create(
@@ -635,20 +637,22 @@ impl Inner {
         );
 
         let parent_repr = &self.inodes.get(parent).representation;
-        let parent_locator = self.get_locator_by_representation(parent_repr).await?;
-        let mut parent_dir = self
-            .repository
-            .open_directory_by_locator(parent_locator)
-            .await?;
-        let mut file = parent_dir.create_file(name.to_owned())?;
+        let mut parent_dir = self.open_directory_by_representation(parent_repr).await?;
+        //let mut parent_dir = self
+        //    .repository
+        //    .open_directory_by_locator(parent_locator)
+        //    .await?;
+        let mut file =
+            parent_dir.create_file(self.repository.this_replica_id(), name.to_owned())?;
 
         file.flush().await?;
         parent_dir.flush().await?;
 
-        let entry = Entry::File(file);
+        let locator = *file.locator();
+        let entry = JointEntry::File(file);
         let inode = self
             .inodes
-            .lookup(parent, name, Representation::File(*entry.locator()));
+            .lookup(parent, name, Representation::File(locator));
         let attr = make_file_attr_for_entry(&entry, inode);
         let handle = self.entries.insert(entry);
 
@@ -665,7 +669,7 @@ impl Inner {
         // TODO: what about flags (parameter)?
 
         let file = self.open_file_by_inode(inode).await?;
-        let handle = self.entries.insert(Entry::File(file));
+        let handle = self.entries.insert(JointEntry::File(file));
 
         // TODO: what about flags (return value)?
 
@@ -783,7 +787,9 @@ impl Inner {
         log::debug!("unlink {}", self.inodes.path_display(parent, Some(name)));
 
         let mut parent_dir = self.open_directory_by_inode(parent).await?;
-        parent_dir.remove_file(name).await?;
+        parent_dir
+            .remove_file(self.repository.this_replica_id(), name)
+            .await?;
         parent_dir.flush().await
     }
 
@@ -810,11 +816,14 @@ impl Inner {
             return Err(Error::OperationNotSupported);
         }
 
-        let mut src_dir = self.open_directory_by_inode(src_parent).await?;
+        // TODO: The code below only supports moving from/to local branch.
+
+        let mut src_dir = self.open_local_directory_by_inode(src_parent).await?;
+
         let mut dst_dir = if src_parent == dst_parent {
             MoveDstDirectory::Src
         } else {
-            MoveDstDirectory::Other(self.open_directory_by_inode(dst_parent).await?)
+            MoveDstDirectory::Other(self.open_local_directory_by_inode(dst_parent).await?)
         };
 
         src_dir.move_entry(src_name, &mut dst_dir, dst_name).await?;
@@ -828,15 +837,29 @@ impl Inner {
     }
 
     async fn open_file_by_inode(&self, inode: Inode) -> Result<File> {
-        let InodeDetails { representation, .. } = self.inodes.get(inode);
-        representation.entry_type().check_is_file()?;
-        let locator = self.get_locator_by_representation(representation).await?;
+        let repr = &self.inodes.get(inode).representation;
+        repr.entry_type().check_is_file()?;
+        let locator = self.get_locator_by_representation(repr).await?;
         self.repository.open_file_by_locator(locator).await
     }
 
-    async fn open_directory_by_inode(&self, inode: Inode) -> Result<Directory> {
-        let InodeDetails { representation, .. } = self.inodes.get(inode);
-        let locator = self.get_locator_by_representation(&representation).await?;
+    async fn open_directory_by_inode(&self, inode: Inode) -> Result<JointDirectory> {
+        let repr = &self.inodes.get(inode).representation;
+        repr.entry_type().check_is_directory()?;
+        let locator = self.get_locator_by_representation(&repr).await?;
+        // TODO: Return dir from each branch
+        let mut dir = JointDirectory::new();
+        dir.insert(
+            *self.repository.this_replica_id(),
+            self.repository.open_directory_by_locator(locator).await?,
+        );
+        Ok(dir)
+    }
+
+    async fn open_local_directory_by_inode(&self, inode: Inode) -> Result<Directory> {
+        let repr = &self.inodes.get(inode).representation;
+        repr.entry_type().check_is_directory()?;
+        let locator = self.get_locator_by_representation(&repr).await?;
         self.repository.open_directory_by_locator(locator).await
     }
 
@@ -851,22 +874,45 @@ impl Inner {
         }
     }
 
-    async fn open_entry_by_representation(&self, repr: &Representation) -> Result<Entry> {
+    async fn open_directory_by_representation(
+        &self,
+        repr: &Representation,
+    ) -> Result<JointDirectory> {
+        match repr {
+            Representation::Directory(path) => {
+                let (locator, entry_type) = self.repository.lookup(path).await?;
+                entry_type.check_is_directory()?;
+                let mut dir = JointDirectory::new();
+                dir.insert(
+                    *self.repository.this_replica_id(),
+                    self.repository.open_directory_by_locator(locator).await?,
+                );
+                Ok(dir)
+            }
+            Representation::File(_) => Err(Error::EntryNotDirectory),
+        }
+    }
+
+    async fn open_entry_by_representation(&self, repr: &Representation) -> Result<JointEntry> {
         match repr {
             Representation::Directory(path) => {
                 let (locator, _entry_type) = self.repository.lookup(path).await?;
-                let dir = self.repository.open_directory_by_locator(locator).await?;
-                Ok(Entry::Directory(dir))
+                let mut dir = JointDirectory::new();
+                dir.insert(
+                    *self.repository.this_replica_id(),
+                    self.repository.open_directory_by_locator(locator).await?,
+                );
+                Ok(JointEntry::Directory(dir))
             }
             Representation::File(locator) => {
                 let file = self.repository.open_file_by_locator(*locator).await?;
-                Ok(Entry::File(file))
+                Ok(JointEntry::File(file))
             }
         }
     }
 }
 
-fn make_file_attr_for_entry(entry: &Entry, inode: Inode) -> FileAttr {
+fn make_file_attr_for_entry(entry: &JointEntry, inode: Inode) -> FileAttr {
     make_file_attr(inode, entry.entry_type(), entry.len())
 }
 

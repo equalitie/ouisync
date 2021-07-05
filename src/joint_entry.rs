@@ -1,15 +1,13 @@
 use crate::{
-    directory::Directory,
     entry::EntryType,
     error::{Error, Result},
-    replica_id::ReplicaId,
     file::File,
+    JointDirectory,
 };
-use std::collections::BTreeMap;
 
 pub enum JointEntry {
     File(File),
-    Directory(BTreeMap<ReplicaId, Directory>),
+    Directory(JointDirectory),
 }
 
 #[allow(clippy::len_without_is_empty)]
@@ -24,14 +22,28 @@ impl JointEntry {
     pub fn as_file(&self) -> Result<&File> {
         match self {
             Self::File(file) => Ok(file),
-            Self::Directory(_) => Err(Error::EntryNotDirectory)
+            Self::Directory(_) => Err(Error::EntryNotDirectory),
         }
     }
 
-    pub fn as_directories(&self) -> Result<&BTreeMap<ReplicaId, Directory>> {
+    pub fn as_file_mut(&mut self) -> Result<&mut File> {
+        match self {
+            Self::File(file) => Ok(file),
+            Self::Directory(_) => Err(Error::EntryNotDirectory),
+        }
+    }
+
+    pub fn as_directory(&self) -> Result<&JointDirectory> {
         match self {
             Self::File(_) => Err(Error::EntryIsDirectory),
-            Self::Directory(dirs) => Ok(dirs)
+            Self::Directory(dirs) => Ok(dirs),
+        }
+    }
+
+    pub fn as_directory_mut(&mut self) -> Result<&mut JointDirectory> {
+        match self {
+            Self::File(_) => Err(Error::EntryIsDirectory),
+            Self::Directory(dirs) => Ok(dirs),
         }
     }
 
@@ -39,9 +51,7 @@ impl JointEntry {
     pub fn len(&self) -> u64 {
         match self {
             Self::File(file) => file.len(),
-            Self::Directory(dirs) => {
-                dirs.values().fold(0, |l, dir| l + dir.len())
-            },
+            Self::Directory(dirs) => dirs.values().fold(0, |l, dir| l + dir.len()),
         }
     }
 }
