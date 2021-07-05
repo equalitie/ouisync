@@ -1,4 +1,4 @@
-use ouisync::{Error, File, JointDirectory, JointEntry, ReplicaId, Result};
+use ouisync::{Error, File, JointDirectory, JointEntry, Result};
 use slab::Slab;
 use std::convert::TryInto;
 
