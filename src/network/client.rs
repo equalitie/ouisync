@@ -117,7 +117,7 @@ impl Client {
             Summary::INCOMPLETE,
         )
         .await?;
-        self.detect_complete_snapshots(hash, 0).await?;
+        index::update_summaries(&self.index.pool, hash, 0).await?;
 
         if updated {
             self.stream
@@ -154,8 +154,7 @@ impl Client {
             .into_incomplete()
             .save(&self.index.pool, &parent_hash)
             .await?;
-        self.detect_complete_snapshots(parent_hash, inner_layer)
-            .await?;
+        index::update_summaries(&self.index.pool, parent_hash, inner_layer).await?;
 
         for hash in updated {
             self.stream
@@ -179,8 +178,7 @@ impl Client {
             .into_missing()
             .save(&self.index.pool, &parent_hash)
             .await?;
-        self.detect_complete_snapshots(parent_hash, INNER_LAYER_COUNT)
-            .await?;
+        index::update_summaries(&self.index.pool, parent_hash, INNER_LAYER_COUNT).await?;
 
         Ok(())
     }
@@ -189,15 +187,10 @@ impl Client {
         // TODO: how to validate the block?
         let mut tx = self.index.pool.begin().await?;
         block::write(&mut tx, &id, &content, &auth_tag).await?;
-        index::receive_block(&mut tx, &id).await?;
+        let replica_ids = index::receive_block(&mut tx, &id).await?;
         tx.commit().await?;
 
-        Ok(())
-    }
-
-    async fn detect_complete_snapshots(&self, hash: Hash, layer: usize) -> Result<()> {
-        let nodes = vec![(hash, layer)];
-        index::update_summaries(&self.index.pool, nodes).await?;
+        self.index.notify_branches_changed(&replica_ids).await;
 
         Ok(())
     }

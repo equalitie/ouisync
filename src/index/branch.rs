@@ -22,8 +22,8 @@ type LocatorHash = Hash;
 #[derive(Clone)]
 pub struct Branch {
     root_node: Arc<Mutex<RootNode>>,
-    replica_id: ReplicaId,
-    notify: Arc<Notify>,
+    pub(super) replica_id: ReplicaId,
+    pub(super) notify: Arc<Notify>,
 }
 
 impl Branch {
@@ -94,7 +94,7 @@ impl Branch {
     }
 
     /// Subscribe to notifications of changes in this branch. A notification is emitted every time
-    /// a new snapshot of this branch is created.
+    /// a new snapshot of this branch is created or a previously missing block is downloaded.
     pub fn subscribe(&self) -> Arc<Notify> {
         self.notify.clone()
     }

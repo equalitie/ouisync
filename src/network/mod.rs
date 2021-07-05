@@ -13,9 +13,9 @@ use self::{
     replica_discovery::{ReplicaDiscovery, RuntimeId},
 };
 use crate::{
+    index::Index,
     replica_id::ReplicaId,
     scoped_task_set::{ScopedTaskHandle, ScopedTaskSet},
-    Index,
 };
 use futures_util::future;
 use std::{

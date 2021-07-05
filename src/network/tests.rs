@@ -126,7 +126,7 @@ async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed:
     let (mut server, mut client, mut simulator) =
         create_network(a_index.clone(), b_index.clone()).await;
 
-    let drive = async {
+    let drive = async move {
         for block_id in snapshot.block_ids() {
             // Write the block by replica A.
             let mut tx = a_index.pool.begin().await.unwrap();
@@ -220,7 +220,7 @@ async fn save_snapshot(index: &Index, snapshot: &Snapshot) {
 
     for (parent_hash, nodes) in snapshot.leaf_sets() {
         nodes.save(&index.pool, &parent_hash).await.unwrap();
-        index::update_summaries(&index.pool, [(*parent_hash, INNER_LAYER_COUNT)])
+        index::update_summaries(&index.pool, *parent_hash, INNER_LAYER_COUNT)
             .await
             .unwrap();
     }

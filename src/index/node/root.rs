@@ -208,6 +208,18 @@ impl RootNode {
         .err_into()
     }
 
+    /// Returns the replica ids of the nodes with the specified hash.
+    pub fn load_replica_ids<'a>(
+        tx: &'a mut db::Transaction<'_>,
+        hash: &'a Hash,
+    ) -> impl Stream<Item = Result<ReplicaId>> + 'a {
+        sqlx::query("SELECT replica_id FROM snapshot_root_nodes WHERE hash = ?")
+            .bind(hash)
+            .map(|row| row.get(0))
+            .fetch(tx)
+            .err_into()
+    }
+
     /// Creates the next version of this root node with the specified hash.
     pub async fn next_version(&self, tx: &mut db::Transaction<'_>, hash: Hash) -> Result<Self> {
         let replica_id =

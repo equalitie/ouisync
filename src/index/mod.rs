@@ -20,7 +20,10 @@ use crate::{
     ReplicaId,
 };
 use sqlx::Row;
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 use tokio::sync::Mutex;
 
 type SnapshotId = u32;
@@ -46,17 +49,24 @@ impl Index {
         })
     }
 
-    pub async fn remote_branch(&self, replica_id: &ReplicaId) -> Option<Branch> {
-        self.branches.lock().await.remote.get(replica_id).cloned()
+    pub(crate) async fn local_branch(&self) -> Branch {
+        self.branches.lock().await.local.clone()
     }
 
-    pub async fn local_branch(&self) -> Branch {
-        self.branches.lock().await.local.clone()
+    /// Notify all tasks waiting for changes on the specified branches.
+    /// See also [`Branch::subscribe`].
+    pub(crate) async fn notify_branches_changed(&self, replica_ids: &HashSet<ReplicaId>) {
+        let branches = self.branches.lock().await;
+        for replica_id in replica_ids {
+            if let Some(branch) = branches.get(replica_id) {
+                branch.notify.notify_waiters()
+            }
+        }
     }
 
     /// Check whether the remote replica has some blocks under the specified root node that the
     /// local one is missing.
-    pub async fn has_root_node_new_blocks(
+    pub(crate) async fn has_root_node_new_blocks(
         &self,
         replica_id: &ReplicaId,
         hash: &Hash,
@@ -76,7 +86,7 @@ impl Index {
     ///
     /// Assumes (but does not enforce) that `parent_hash` is the parent hash of all nodes in
     /// `remote_nodes`.
-    pub async fn find_inner_nodes_with_new_blocks<'a, 'b, 'c>(
+    pub(crate) async fn find_inner_nodes_with_new_blocks<'a, 'b, 'c>(
         &'a self,
         parent_hash: &'b Hash,
         remote_nodes: &'c InnerNodeMap,
@@ -106,7 +116,7 @@ impl Index {
     ///
     /// Assumes (but does not enforce) that `parent_hash` is the parent hash of all nodes in
     /// `remote_nodes`.
-    pub async fn find_leaf_nodes_with_new_blocks<'a, 'b, 'c>(
+    pub(crate) async fn find_leaf_nodes_with_new_blocks<'a, 'b, 'c>(
         &'a self,
         parent_hash: &'b Hash,
         remote_nodes: &'c LeafNodeSet,
@@ -122,6 +132,16 @@ impl Index {
 struct Branches {
     local: Branch,
     remote: HashMap<ReplicaId, Branch>,
+}
+
+impl Branches {
+    fn get(&self, replica_id: &ReplicaId) -> Option<&Branch> {
+        if self.local.replica_id == *replica_id {
+            Some(&self.local)
+        } else {
+            self.remote.get(replica_id)
+        }
+    }
 }
 
 /// Returns all replica ids we know of except ours.
@@ -173,6 +193,9 @@ pub async fn init(pool: &db::Pool) -> Result<(), Error> {
 
              UNIQUE(replica_id, hash)
          );
+
+         CREATE INDEX index_snapshot_root_nodes_on_hash
+             ON snapshot_root_nodes (hash);
 
          CREATE TABLE IF NOT EXISTS snapshot_inner_nodes (
              -- Parent's `hash`
@@ -247,6 +270,8 @@ pub async fn remove_orphaned_block(tx: &mut db::Transaction<'_>, id: &BlockId) -
 
     Ok(result.rows_affected() > 0)
 }
+
+// pub async fn receive_block()
 
 #[cfg(test)]
 mod tests {
