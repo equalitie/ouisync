@@ -50,7 +50,7 @@ impl LeafNode {
     }
 
     /// Saves the node to the db unless it already exists.
-    pub async fn save(&self, tx: &mut db::Transaction, parent: &Hash) -> Result<()> {
+    pub async fn save(&self, tx: &mut db::Transaction<'_>, parent: &Hash) -> Result<()> {
         sqlx::query(
             "INSERT INTO snapshot_leaf_nodes (parent, locator, block_id, is_missing)
              VALUES (?, ?, ?, ?)
@@ -96,7 +96,7 @@ impl LeafNode {
 
     /// Loads all parent hashes of nodes with the specified block id.
     pub fn load_parent_hashes<'a>(
-        tx: &'a mut db::Transaction,
+        tx: &'a mut db::Transaction<'_>,
         block_id: &'a BlockId,
     ) -> impl Stream<Item = Result<Hash>> + 'a {
         sqlx::query("SELECT parent FROM snapshot_leaf_nodes WHERE block_id = ?")
@@ -107,7 +107,7 @@ impl LeafNode {
     }
 
     /// Marks all leaf nodes that point to the specified block as present (not missing).
-    pub async fn set_present(tx: &mut db::Transaction, block_id: &BlockId) -> Result<()> {
+    pub async fn set_present(tx: &mut db::Transaction<'_>, block_id: &BlockId) -> Result<()> {
         sqlx::query("UPDATE snapshot_leaf_nodes SET is_missing = 0 WHERE block_id = ?")
             .bind(block_id)
             .execute(tx)

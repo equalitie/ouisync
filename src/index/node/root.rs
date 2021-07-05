@@ -209,7 +209,7 @@ impl RootNode {
     }
 
     /// Creates the next version of this root node with the specified hash.
-    pub async fn next_version(&self, tx: &mut db::Transaction, hash: Hash) -> Result<Self> {
+    pub async fn next_version(&self, tx: &mut db::Transaction<'_>, hash: Hash) -> Result<Self> {
         let replica_id =
             sqlx::query("SELECT replica_id FROM snapshot_root_nodes WHERE snapshot_id = ?")
                 .bind(&self.snapshot_id)
@@ -269,7 +269,7 @@ impl RootNode {
     }
 
     /// Updates the summaries of all nodes with the specified hash.
-    pub async fn update_summaries(tx: &mut db::Transaction, hash: &Hash) -> Result<()> {
+    pub async fn update_summaries(tx: &mut db::Transaction<'_>, hash: &Hash) -> Result<()> {
         let summary = InnerNode::compute_summary(tx, hash, 0).await?;
 
         sqlx::query(
@@ -290,7 +290,7 @@ impl RootNode {
         Ok(())
     }
 
-    pub async fn remove_recursive(&self, tx: &mut db::Transaction) -> Result<()> {
+    pub async fn remove_recursive(&self, tx: &mut db::Transaction<'_>) -> Result<()> {
         self.as_link().remove_recursive(0, tx).await
     }
 

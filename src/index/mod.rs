@@ -7,8 +7,8 @@ pub use self::node::test_utils as node_test_utils;
 pub use self::{
     branch::Branch,
     node::{
-        detect_complete_snapshots, receive_block, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet,
-        RootNode, Summary, INNER_LAYER_COUNT,
+        receive_block, update_summaries, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, RootNode,
+        Summary, INNER_LAYER_COUNT,
     },
 };
 
@@ -236,7 +236,7 @@ pub async fn init(pool: &db::Pool) -> Result<(), Error> {
 
 /// Removes the block if it's orphaned (not referenced by any branch), otherwise does nothing.
 /// Returns whether the block was removed.
-pub async fn remove_orphaned_block(tx: &mut db::Transaction, id: &BlockId) -> Result<bool> {
+pub async fn remove_orphaned_block(tx: &mut db::Transaction<'_>, id: &BlockId) -> Result<bool> {
     let result = sqlx::query(
         "DELETE FROM blocks
          WHERE id = ? AND (SELECT 0 FROM snapshot_leaf_nodes WHERE block_id = id) IS NULL",

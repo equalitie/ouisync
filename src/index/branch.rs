@@ -41,7 +41,7 @@ impl Branch {
     /// Inserts a new block into the index. Returns the previous id at the same locator, if any.
     pub async fn insert(
         &self,
-        tx: &mut db::Transaction,
+        tx: &mut db::Transaction<'_>,
         block_id: &BlockId,
         encoded_locator: &LocatorHash,
     ) -> Result<Option<BlockId>> {
@@ -61,7 +61,11 @@ impl Branch {
     }
 
     /// Retrieve `BlockId` of a block with the given encoded `Locator`.
-    pub async fn get(&self, tx: &mut db::Transaction, encoded_locator: &Hash) -> Result<BlockId> {
+    pub async fn get(
+        &self,
+        tx: &mut db::Transaction<'_>,
+        encoded_locator: &Hash,
+    ) -> Result<BlockId> {
         let root_node = self.root_node.lock().await;
         let path = self.get_path(tx, &root_node.hash, &encoded_locator).await?;
 
@@ -75,7 +79,7 @@ impl Branch {
     /// removed block.
     pub async fn remove(
         &self,
-        tx: &mut db::Transaction,
+        tx: &mut db::Transaction<'_>,
         encoded_locator: &Hash,
     ) -> Result<BlockId> {
         let mut lock = self.root_node.lock().await;
@@ -97,7 +101,7 @@ impl Branch {
 
     async fn get_path(
         &self,
-        tx: &mut db::Transaction,
+        tx: &mut db::Transaction<'_>,
         root_hash: &Hash,
         encoded_locator: &LocatorHash,
     ) -> Result<Path> {
@@ -131,7 +135,7 @@ impl Branch {
     // TODO: make sure nodes are saved as complete.
     async fn write_path(
         &self,
-        tx: &mut db::Transaction,
+        tx: &mut db::Transaction<'_>,
         root_node: &mut RootNode,
         path: &Path,
     ) -> Result<RootNode> {
@@ -155,7 +159,7 @@ impl Branch {
 
     async fn write_branch_root(
         &self,
-        tx: &mut db::Transaction,
+        tx: &mut db::Transaction<'_>,
         node: &mut RootNode,
         hash: Hash,
     ) -> Result<RootNode> {
@@ -167,7 +171,11 @@ impl Branch {
         Ok(old_root)
     }
 
-    async fn remove_snapshot(&self, root_node: &RootNode, tx: &mut db::Transaction) -> Result<()> {
+    async fn remove_snapshot(
+        &self,
+        root_node: &RootNode,
+        tx: &mut db::Transaction<'_>,
+    ) -> Result<()> {
         root_node.remove_recursive(tx).await
     }
 }
@@ -268,7 +276,7 @@ mod tests {
         assert_eq!(0, count_branch_forest_entries(&mut tx).await);
     }
 
-    async fn count_branch_forest_entries(tx: &mut db::Transaction) -> usize {
+    async fn count_branch_forest_entries(tx: &mut db::Transaction<'_>) -> usize {
         sqlx::query(
             "SELECT
                  (SELECT COUNT(*) FROM snapshot_inner_nodes) +

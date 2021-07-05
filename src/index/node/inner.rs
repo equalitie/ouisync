@@ -84,7 +84,12 @@ impl InnerNode {
     }
 
     /// Saves this inner node into the db unless it already exists.
-    pub async fn save(&self, tx: &mut db::Transaction, parent: &Hash, bucket: u8) -> Result<()> {
+    pub async fn save(
+        &self,
+        tx: &mut db::Transaction<'_>,
+        parent: &Hash,
+        bucket: u8,
+    ) -> Result<()> {
         sqlx::query(
             "INSERT INTO snapshot_inner_nodes (
                  parent,
@@ -111,7 +116,7 @@ impl InnerNode {
 
     /// Updates summaries of all nodes with the specified hash at the specified inner layer.
     pub async fn update_summaries(
-        tx: &mut db::Transaction,
+        tx: &mut db::Transaction<'_>,
         hash: &Hash,
         inner_layer: usize,
     ) -> Result<()> {
@@ -137,7 +142,7 @@ impl InnerNode {
 
     /// Compute summaries from the children nodes of the specified parent nodes.
     pub async fn compute_summary(
-        tx: &mut db::Transaction,
+        tx: &mut db::Transaction<'_>,
         parent_hash: &Hash,
         parent_layer: usize,
     ) -> Result<Summary> {

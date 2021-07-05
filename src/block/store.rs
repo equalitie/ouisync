@@ -67,7 +67,7 @@ fn from_row(row: SqliteRow, buffer: &mut [u8]) -> Result<AuthTag> {
 /// Panics if buffer length is not equal to [`BLOCK_SIZE`].
 ///
 pub async fn write(
-    tx: &mut db::Transaction,
+    tx: &mut db::Transaction<'_>,
     id: &BlockId,
     buffer: &[u8],
     auth_tag: &AuthTag,

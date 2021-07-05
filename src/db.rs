@@ -15,7 +15,7 @@ use tokio::fs;
 pub type Pool = SqlitePool;
 
 /// Database transaction
-pub type Transaction = sqlx::Transaction<'static, Sqlite>;
+pub type Transaction<'a> = sqlx::Transaction<'a, Sqlite>;
 
 /// Database connection
 pub type Connection = sqlx::pool::PoolConnection<Sqlite>;

@@ -502,7 +502,7 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
     .await
     .unwrap();
 
-    super::detect_complete_snapshots(&pool, root_node.hash, 0)
+    super::update_summaries(&pool, [(root_node.hash, 0)])
         .await
         .unwrap();
     root_node.reload(&pool).await.unwrap();
@@ -514,7 +514,7 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
     for layer in snapshot.inner_layers() {
         for (parent_hash, nodes) in layer.inner_maps() {
             nodes.save(&pool, &parent_hash).await.unwrap();
-            super::detect_complete_snapshots(&pool, *parent_hash, layer.number())
+            super::update_summaries(&pool, [(*parent_hash, layer.number())])
                 .await
                 .unwrap();
             root_node.reload(&pool).await.unwrap();
@@ -528,7 +528,7 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
         nodes.save(&pool, &parent_hash).await.unwrap();
         unsaved_leaves -= nodes.len();
 
-        super::detect_complete_snapshots(&pool, *parent_hash, INNER_LAYER_COUNT)
+        super::update_summaries(&pool, [(*parent_hash, INNER_LAYER_COUNT)])
             .await
             .unwrap();
         root_node.reload(&pool).await.unwrap();
@@ -568,7 +568,7 @@ async fn missing_blocks_case(leaf_count: usize, rng_seed: u64) {
     .unwrap();
 
     if snapshot.leaf_count() == 0 {
-        super::detect_complete_snapshots(&pool, root_node.hash, 0)
+        super::update_summaries(&pool, [(root_node.hash, 0)])
             .await
             .unwrap();
     }
@@ -593,7 +593,7 @@ async fn missing_blocks_case(leaf_count: usize, rng_seed: u64) {
             .unwrap();
 
         // This also updates missing blocks
-        super::detect_complete_snapshots(&pool, *parent_hash, INNER_LAYER_COUNT)
+        super::update_summaries(&pool, [(*parent_hash, INNER_LAYER_COUNT)])
             .await
             .unwrap();
     }

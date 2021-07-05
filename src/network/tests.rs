@@ -220,7 +220,7 @@ async fn save_snapshot(index: &Index, snapshot: &Snapshot) {
 
     for (parent_hash, nodes) in snapshot.leaf_sets() {
         nodes.save(&index.pool, &parent_hash).await.unwrap();
-        index::detect_complete_snapshots(&index.pool, *parent_hash, INNER_LAYER_COUNT)
+        index::update_summaries(&index.pool, [(*parent_hash, INNER_LAYER_COUNT)])
             .await
             .unwrap();
     }
@@ -254,7 +254,7 @@ async fn write_all_blocks(pool: &db::Pool, snapshot: &Snapshot) {
     tx.commit().await.unwrap();
 }
 
-async fn write_block(tx: &mut db::Transaction, id: &BlockId) {
+async fn write_block(tx: &mut db::Transaction<'_>, id: &BlockId) {
     let content = vec![0; BLOCK_SIZE];
     let auth_tag = AuthTag::default(); // don't care about encryption here
     block::write(tx, &id, &content, &auth_tag).await.unwrap();

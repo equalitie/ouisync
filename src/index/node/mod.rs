@@ -18,46 +18,35 @@ pub use self::{
 
 use crate::{block::BlockId, crypto::Hash, db, error::Result};
 use futures_util::{future, TryStreamExt};
+use sqlx::Sqlite;
 
 /// Get the bucket for `locator` at the specified `inner_layer`.
 pub fn get_bucket(locator: &Hash, inner_layer: usize) -> u8 {
     locator.as_ref()[inner_layer]
 }
 
-/// Detect snapshots that have been completely downloaded. Start the detection from the node(s)
-/// with the specified hash at the specified layer and walk the tree(s) towards the root(s).
-pub async fn detect_complete_snapshots(pool: &db::Pool, hash: Hash, layer: usize) -> Result<()> {
-    let stack = vec![(hash, layer)];
-    let mut tx = pool.begin().await?;
-    update_summaries_for_all(&mut tx, stack).await?;
+/// Update summaries of the specified nodes (layer + hash) and all their ancestor nodes.
+pub async fn update_summaries<'a, E, I>(db: E, nodes: I) -> Result<()>
+where
+    E: sqlx::Acquire<'a, Database = Sqlite>,
+    I: IntoIterator<Item = (Hash, usize)>,
+{
+    let mut tx = db.begin().await?;
+    update_summaries_in_transaction(&mut tx, nodes.into_iter().collect()).await?;
     tx.commit().await?;
-
     Ok(())
 }
 
-/// Receive a block from other replica. This marks the block as not missing by the local replica.
-// TODO: return replica_ids of affected branches
-pub async fn receive_block(tx: &mut db::Transaction, id: &BlockId) -> Result<()> {
-    LeafNode::set_present(tx, id).await?;
-
-    let stack = LeafNode::load_parent_hashes(tx, id)
-        .map_ok(|hash| (hash, INNER_LAYER_COUNT))
-        .try_collect()
-        .await?;
-
-    update_summaries_for_all(tx, stack).await
-}
-
-async fn update_summaries_for_all(
-    tx: &mut db::Transaction,
-    mut stack: Vec<(Hash, usize)>,
+async fn update_summaries_in_transaction(
+    tx: &mut sqlx::Transaction<'_, Sqlite>,
+    mut nodes: Vec<(Hash, usize)>,
 ) -> Result<()> {
-    while let Some((hash, layer)) = stack.pop() {
+    while let Some((hash, layer)) = nodes.pop() {
         if layer > 0 {
             InnerNode::update_summaries(tx, &hash, layer - 1).await?;
             InnerNode::load_parent_hashes(&mut *tx, &hash)
                 .try_for_each(|parent_hash| {
-                    stack.push((parent_hash, layer - 1));
+                    nodes.push((parent_hash, layer - 1));
                     future::ready(Ok(()))
                 })
                 .await?;
@@ -67,4 +56,17 @@ async fn update_summaries_for_all(
     }
 
     Ok(())
+}
+
+/// Receive a block from other replica. This marks the block as not missing by the local replica.
+pub async fn receive_block(tx: &mut db::Transaction<'_>, id: &BlockId) -> Result<()> {
+    // TODO: notify affected branches
+    LeafNode::set_present(tx, id).await?;
+
+    let nodes = LeafNode::load_parent_hashes(tx, id)
+        .map_ok(|hash| (hash, INNER_LAYER_COUNT))
+        .try_collect()
+        .await?;
+
+    update_summaries_in_transaction(tx, nodes).await
 }
