@@ -5,12 +5,12 @@ use super::{
     server::Server,
 };
 use crate::{
-    block::{self, BlockId, BLOCK_SIZE},
+    block::{self, BLOCK_SIZE},
     crypto::{AuthTag, Hashable},
     db,
     index::{self, node_test_utils::Snapshot, Index, RootNode, Summary, INNER_LAYER_COUNT},
     replica_id::ReplicaId,
-    test_utils,
+    store, test_utils,
     version_vector::VersionVector,
 };
 use rand::prelude::*;
@@ -46,7 +46,7 @@ async fn transfer_snapshot_between_two_replicas_case(
 
     let snapshot = Snapshot::generate(&mut rng, leaf_count);
     save_snapshot(&a_index, &snapshot).await;
-    write_all_blocks(&a_index.pool, &snapshot).await;
+    write_all_blocks(&a_index, &snapshot).await;
 
     assert!(load_latest_root_node(&b_index, &a_index.this_replica_id)
         .await
@@ -67,7 +67,7 @@ async fn transfer_snapshot_between_two_replicas_case(
             if !first_root_request {
                 first_root_request = true;
             } else if remaining_changes > 0 {
-                insert_missing_block(&mut rng, &a_index).await;
+                create_block(&mut rng, &a_index).await;
                 remaining_changes -= 1;
             } else {
                 break;
@@ -127,12 +127,13 @@ async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed:
         create_network(a_index.clone(), b_index.clone()).await;
 
     let drive = async move {
+        let content = vec![0; BLOCK_SIZE];
+
         for block_id in snapshot.block_ids() {
             // Write the block by replica A.
-            let mut tx = a_index.pool.begin().await.unwrap();
-            write_block(&mut tx, block_id).await;
-            index::receive_block(&mut tx, block_id).await.unwrap();
-            tx.commit().await.unwrap();
+            store::write_received_block(&a_index, block_id, &content, &AuthTag::default())
+                .await
+                .unwrap();
 
             // Wait until replica B receives and writes the block too.
             simulator
@@ -226,38 +227,33 @@ async fn save_snapshot(index: &Index, snapshot: &Snapshot) {
     }
 }
 
-async fn insert_missing_block(rng: &mut impl Rng, index: &Index) {
+async fn create_block(rng: &mut impl Rng, index: &Index) {
     let branch = index.local_branch().await;
     let encoded_locator = rng.gen::<u64>().hash();
     let block_id = rng.gen();
+    let content = vec![0; BLOCK_SIZE];
 
     let mut tx = index.pool.begin().await.unwrap();
     branch
         .insert(&mut tx, &block_id, &encoded_locator)
         .await
         .unwrap();
-    write_block(&mut tx, &block_id).await;
+    block::write(&mut tx, &block_id, &content, &AuthTag::default())
+        .await
+        .unwrap();
     tx.commit().await.unwrap();
 }
 
-async fn write_all_blocks(pool: &db::Pool, snapshot: &Snapshot) {
-    let mut tx = pool.begin().await.unwrap();
+async fn write_all_blocks(index: &Index, snapshot: &Snapshot) {
+    let content = vec![0; BLOCK_SIZE];
+
     for (_, nodes) in snapshot.leaf_sets() {
         for node in nodes {
-            write_block(&mut tx, &node.block_id).await;
-
-            // TODO: find a way to do this once after all blocks are writen, to avoid traversing
-            // the tree for each leaf node separately.
-            index::receive_block(&mut tx, &node.block_id).await.unwrap();
+            store::write_received_block(index, &node.block_id, &content, &AuthTag::default())
+                .await
+                .unwrap();
         }
     }
-    tx.commit().await.unwrap();
-}
-
-async fn write_block(tx: &mut db::Transaction<'_>, id: &BlockId) {
-    let content = vec![0; BLOCK_SIZE];
-    let auth_tag = AuthTag::default(); // don't care about encryption here
-    block::write(tx, &id, &content, &auth_tag).await.unwrap();
 }
 
 async fn load_latest_root_node(index: &Index, replica_id: &ReplicaId) -> Option<RootNode> {

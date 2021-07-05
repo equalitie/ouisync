@@ -3,11 +3,12 @@ use super::{
     message_broker::ClientStream,
 };
 use crate::{
-    block::{self, BlockId},
+    block::BlockId,
     crypto::{AuthTag, Hash, Hashable},
     error::Result,
     index::{self, Index, InnerNodeMap, LeafNodeSet, RootNode, Summary, INNER_LAYER_COUNT},
     replica_id::ReplicaId,
+    store,
     version_vector::VersionVector,
 };
 use std::cmp::Ordering;
@@ -185,14 +186,7 @@ impl Client {
 
     async fn handle_block(&self, id: BlockId, content: Box<[u8]>, auth_tag: AuthTag) -> Result<()> {
         // TODO: how to validate the block?
-        let mut tx = self.index.pool.begin().await?;
-        block::write(&mut tx, &id, &content, &auth_tag).await?;
-        let replica_ids = index::receive_block(&mut tx, &id).await?;
-        tx.commit().await?;
-
-        self.index.notify_branches_changed(&replica_ids).await;
-
-        Ok(())
+        store::write_received_block(&self.index, &id, &content, &auth_tag).await
     }
 
     async fn is_complete(&self) -> Result<bool> {

@@ -13,7 +13,6 @@ pub use self::{
 };
 
 use crate::{
-    block::BlockId,
     crypto::Hash,
     db,
     error::{Error, Result},
@@ -255,72 +254,4 @@ pub async fn init(pool: &db::Pool) -> Result<(), Error> {
     .map_err(Error::CreateDbSchema)?;
 
     Ok(())
-}
-
-/// Removes the block if it's orphaned (not referenced by any branch), otherwise does nothing.
-/// Returns whether the block was removed.
-pub async fn remove_orphaned_block(tx: &mut db::Transaction<'_>, id: &BlockId) -> Result<bool> {
-    let result = sqlx::query(
-        "DELETE FROM blocks
-         WHERE id = ? AND (SELECT 0 FROM snapshot_leaf_nodes WHERE block_id = id) IS NULL",
-    )
-    .bind(id)
-    .execute(tx)
-    .await?;
-
-    Ok(result.rows_affected() > 0)
-}
-
-// pub async fn receive_block()
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{
-        block::{self, BLOCK_SIZE},
-        crypto::{AuthTag, Cryptor, Hashable},
-        locator::Locator,
-    };
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn remove_block() {
-        let pool = db::Pool::connect(":memory:").await.unwrap();
-        init(&pool).await.unwrap();
-        block::init(&pool).await.unwrap();
-
-        let cryptor = Cryptor::Null;
-
-        let branch0 = Branch::new(&pool, ReplicaId::random()).await.unwrap();
-        let branch1 = Branch::new(&pool, ReplicaId::random()).await.unwrap();
-
-        let block_id = BlockId::random();
-        let buffer = vec![0; BLOCK_SIZE];
-
-        let mut tx = pool.begin().await.unwrap();
-
-        block::write(&mut tx, &block_id, &buffer, &AuthTag::default())
-            .await
-            .unwrap();
-
-        let locator0 = Locator::Head(rand::random::<u64>().hash(), 0);
-        let locator0 = locator0.encode(&cryptor);
-        branch0.insert(&mut tx, &block_id, &locator0).await.unwrap();
-
-        let locator1 = Locator::Head(rand::random::<u64>().hash(), 0);
-        let locator1 = locator1.encode(&cryptor);
-        branch1.insert(&mut tx, &block_id, &locator1).await.unwrap();
-
-        assert!(!remove_orphaned_block(&mut tx, &block_id).await.unwrap());
-        assert!(block::exists(&mut tx, &block_id).await.unwrap());
-
-        branch0.remove(&mut tx, &locator0).await.unwrap();
-
-        assert!(!remove_orphaned_block(&mut tx, &block_id).await.unwrap());
-        assert!(block::exists(&mut tx, &block_id).await.unwrap());
-
-        branch1.remove(&mut tx, &locator1).await.unwrap();
-
-        assert!(remove_orphaned_block(&mut tx, &block_id).await.unwrap());
-        assert!(!block::exists(&mut tx, &block_id).await.unwrap(),);
-    }
 }

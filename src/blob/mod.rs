@@ -6,8 +6,9 @@ use crate::{
     crypto::{AuthTag, Cryptor, Hashable, NonceSequence},
     db,
     error::{Error, Result},
-    index::{self, Branch},
+    index::Branch,
     locator::Locator,
+    store,
 };
 use std::{
     convert::TryInto,
@@ -443,7 +444,7 @@ impl Blob {
                 .branch
                 .remove(&mut tx, &locator.encode(&self.cryptor))
                 .await?;
-            index::remove_orphaned_block(&mut tx, &block_id).await?;
+            store::remove_orphaned_block(&mut tx, &block_id).await?;
         }
 
         tx.commit().await?;
@@ -542,7 +543,7 @@ async fn write_block(
         .insert(tx, block_id, &locator.encode(cryptor))
         .await?
     {
-        index::remove_orphaned_block(tx, &old_block_id).await?;
+        store::remove_orphaned_block(tx, &old_block_id).await?;
     }
 
     Ok(())
