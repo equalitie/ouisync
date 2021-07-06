@@ -71,7 +71,7 @@ impl Path {
 
     // Sets the leaf node to the given block id. Returns the previous block id, if any.
     pub fn set_leaf(&mut self, block_id: &BlockId) -> Option<BlockId> {
-        match self.leaves.modify(&self.locator, block_id) {
+        match self.leaves.modify(&self.locator, block_id, false) {
             ModifyStatus::Updated(old_block_id) => {
                 self.recalculate(INNER_LAYER_COUNT);
                 Some(old_block_id)

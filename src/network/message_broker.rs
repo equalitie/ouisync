@@ -32,7 +32,7 @@ impl ServerStream {
         Some(rq)
     }
 
-    pub async fn send(&mut self, rs: Response) -> Result<(), SendError<Response>> {
+    pub async fn send(&self, rs: Response) -> Result<(), SendError<Response>> {
         log::trace!("server: send {:?}", rs);
         self.tx
             .send(Command::SendMessage(Message::Response(rs)))
@@ -58,7 +58,7 @@ impl ClientStream {
         Some(rs)
     }
 
-    pub async fn send(&mut self, rq: Request) -> Result<(), SendError<Request>> {
+    pub async fn send(&self, rq: Request) -> Result<(), SendError<Request>> {
         log::trace!("client: send {:?}", rq);
         self.tx
             .send(Command::SendMessage(Message::Request(rq)))
@@ -156,6 +156,10 @@ impl Inner {
         command_rx: mpsc::Receiver<Command>,
         finish_rx: oneshot::Receiver<()>,
     ) {
+        // FIXME: there seems to be a bug in sqlx which sometimes causes a memory corruption when a
+        // future that contains a sqlx query is interrupted instead of being let to run to
+        // completion. For this reason we should make sure that `client.run` and `server.run` both
+        // run to completion even when one of the other tasks finishes first.
         select! {
             _ = self.handle_commands(command_rx) => (),
             _ = log_error(client.run(), "client failed: ") => (),

@@ -1,21 +1,26 @@
-use std::cmp::Ordering;
-
 use super::{
     message::{Request, Response},
     message_broker::ClientStream,
 };
 use crate::{
-    crypto::{Hash, Hashable},
+    block::BlockId,
+    crypto::{AuthTag, Hash, Hashable},
     error::Result,
-    index::{self, Index, InnerNodeMap, LeafNodeSet, RootNode, INNER_LAYER_COUNT},
+    index::{self, Index, InnerNodeMap, LeafNodeSet, RootNode, Summary, INNER_LAYER_COUNT},
     replica_id::ReplicaId,
+    store,
     version_vector::VersionVector,
 };
+use std::cmp::Ordering;
 
 pub struct Client {
     index: Index,
     their_replica_id: ReplicaId,
     stream: ClientStream,
+    // "Cookie" number of the last received `RootNode` response or zero if we haven't received one
+    // yet. To be included in the next sent `RootNode` request. The server uses this to decide
+    // whether the client is up to date.
+    cookie: u64,
 }
 
 impl Client {
@@ -24,6 +29,7 @@ impl Client {
             index,
             their_replica_id,
             stream,
+            cookie: 0,
         }
     }
 
@@ -33,26 +39,21 @@ impl Client {
     }
 
     async fn pull_snapshot(&mut self) -> Result<bool> {
-        // Send version vector that is a combination of the versions of our latest snapshot and
-        // their latest complete snapshot that we have. This way they respond only when they have
-        // something we don't.
-        let mut versions = self.latest_local_versions().await?;
-
-        if let Some(node) =
-            RootNode::load_latest_complete(&self.index.pool, &self.their_replica_id).await?
-        {
-            versions.merge(node.versions);
-        }
-
         self.stream
-            .send(Request::RootNode(versions))
+            .send(Request::RootNode {
+                cookie: self.cookie,
+            })
             .await
             .unwrap_or(());
 
         while let Some(response) = self.stream.recv().await {
+            // Check competion only if the response affects the index (that is, it is not `Block`)
+            // to avoid sending unnecessary duplicate `RootNode` requests.
+            let check_complete = !matches!(response, Response::Block { .. });
+
             self.handle_response(response).await?;
 
-            if self.is_complete().await? {
+            if check_complete && self.is_complete().await? {
                 return Ok(true);
             }
         }
@@ -62,7 +63,12 @@ impl Client {
 
     async fn handle_response(&mut self, response: Response) -> Result<()> {
         match response {
-            Response::RootNode { versions, hash } => self.handle_root_node(versions, hash).await,
+            Response::RootNode {
+                cookie,
+                versions,
+                hash,
+                summary,
+            } => self.handle_root_node(cookie, versions, hash, summary).await,
             Response::InnerNodes {
                 parent_hash,
                 inner_layer,
@@ -74,10 +80,23 @@ impl Client {
             Response::LeafNodes { parent_hash, nodes } => {
                 self.handle_leaf_nodes(parent_hash, nodes).await
             }
+            Response::Block {
+                id,
+                content,
+                auth_tag,
+            } => self.handle_block(id, content, auth_tag).await,
         }
     }
 
-    async fn handle_root_node(&mut self, versions: VersionVector, hash: Hash) -> Result<()> {
+    async fn handle_root_node(
+        &mut self,
+        cookie: u64,
+        versions: VersionVector,
+        hash: Hash,
+        summary: Summary,
+    ) -> Result<()> {
+        self.cookie = cookie;
+
         let this_versions = self.latest_local_versions().await?;
         if versions
             .partial_cmp(&this_versions)
@@ -87,25 +106,35 @@ impl Client {
             return Ok(());
         }
 
-        let (node, changed) =
-            RootNode::create(&self.index.pool, &self.their_replica_id, versions, hash).await?;
-        index::detect_complete_snapshots(&self.index.pool, hash, 0).await?;
+        let updated = self
+            .index
+            .has_root_node_new_blocks(&self.their_replica_id, &hash, &summary)
+            .await?;
+        let node = RootNode::create(
+            &self.index.pool,
+            &self.their_replica_id,
+            versions,
+            hash,
+            Summary::INCOMPLETE,
+        )
+        .await?;
+        index::update_summaries(&self.index.pool, hash, 0).await?;
 
-        if changed {
+        if updated {
             self.stream
                 .send(Request::InnerNodes {
                     parent_hash: node.hash,
                     inner_layer: 0,
                 })
                 .await
-                .unwrap_or(())
+                .unwrap_or(());
         }
 
         Ok(())
     }
 
     async fn handle_inner_nodes(
-        &mut self,
+        &self,
         parent_hash: Hash,
         inner_layer: usize,
         nodes: InnerNodeMap,
@@ -115,48 +144,56 @@ impl Client {
             return Ok(());
         }
 
-        let changed = nodes.save(&self.index.pool, &parent_hash).await?;
-        index::detect_complete_snapshots(&self.index.pool, parent_hash, inner_layer).await?;
+        let updated: Vec<_> = self
+            .index
+            .find_inner_nodes_with_new_blocks(&parent_hash, &nodes)
+            .await?
+            .map(|node| node.hash)
+            .collect();
 
-        if inner_layer < INNER_LAYER_COUNT - 1 {
-            for parent_hash in changed {
-                self.stream
-                    .send(Request::InnerNodes {
-                        parent_hash,
-                        inner_layer: inner_layer + 1,
-                    })
-                    .await
-                    .unwrap_or(())
-            }
-        } else {
-            for parent_hash in changed {
-                self.stream
-                    .send(Request::LeafNodes { parent_hash })
-                    .await
-                    .unwrap_or(())
-            }
+        nodes
+            .into_incomplete()
+            .save(&self.index.pool, &parent_hash)
+            .await?;
+        index::update_summaries(&self.index.pool, parent_hash, inner_layer).await?;
+
+        for hash in updated {
+            self.stream
+                .send(child_request(hash, inner_layer))
+                .await
+                .unwrap_or(())
         }
 
         Ok(())
     }
 
-    async fn handle_leaf_nodes(&mut self, parent_hash: Hash, nodes: LeafNodeSet) -> Result<()> {
+    async fn handle_leaf_nodes(&self, parent_hash: Hash, nodes: LeafNodeSet) -> Result<()> {
         if parent_hash != nodes.hash() {
             log::warn!("leaf nodes parent hash mismatch");
             return Ok(());
         }
 
-        nodes.save(&self.index.pool, &parent_hash).await?;
-        index::detect_complete_snapshots(&self.index.pool, parent_hash, INNER_LAYER_COUNT).await?;
+        self.pull_missing_blocks(&parent_hash, &nodes).await?;
+
+        nodes
+            .into_missing()
+            .save(&self.index.pool, &parent_hash)
+            .await?;
+        index::update_summaries(&self.index.pool, parent_hash, INNER_LAYER_COUNT).await?;
 
         Ok(())
+    }
+
+    async fn handle_block(&self, id: BlockId, content: Box<[u8]>, auth_tag: AuthTag) -> Result<()> {
+        // TODO: how to validate the block?
+        store::write_received_block(&self.index, &id, &content, &auth_tag).await
     }
 
     async fn is_complete(&self) -> Result<bool> {
         Ok(
             RootNode::load_latest(&self.index.pool, &self.their_replica_id)
                 .await?
-                .map(|node| node.is_complete)
+                .map(|node| node.summary.is_complete())
                 .unwrap_or(false),
         )
     }
@@ -169,5 +206,38 @@ impl Client {
                 .map(|node| node.versions)
                 .unwrap_or_default(),
         )
+    }
+
+    // Download blocks that are missing by us but present in the remote replica.
+    async fn pull_missing_blocks(
+        &self,
+        parent_hash: &Hash,
+        remote_nodes: &LeafNodeSet,
+    ) -> Result<()> {
+        let updated = self
+            .index
+            .find_leaf_nodes_with_new_blocks(parent_hash, remote_nodes)
+            .await?;
+        for node in updated {
+            // TODO: avoid multiple clients downloading the same block
+
+            self.stream
+                .send(Request::Block(node.block_id))
+                .await
+                .unwrap_or(());
+        }
+
+        Ok(())
+    }
+}
+
+fn child_request(parent_hash: Hash, inner_layer: usize) -> Request {
+    if inner_layer < INNER_LAYER_COUNT - 1 {
+        Request::InnerNodes {
+            parent_hash,
+            inner_layer: inner_layer + 1,
+        }
+    } else {
+        Request::LeafNodes { parent_hash }
     }
 }

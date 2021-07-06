@@ -2,11 +2,14 @@ use super::{
     inner::{InnerNode, INNER_LAYER_COUNT},
     leaf::LeafNode,
     root::RootNode,
+    summary::Summary,
 };
 use crate::{crypto::Hash, db, error::Result};
 use async_recursion::async_recursion;
 use futures_util::TryStreamExt;
 use sqlx::Row;
+
+// TODO: this can probably be all done with database triggers.
 
 // We're not repeating enumeration name
 // https://rust-lang.github.io/rust-clippy/master/index.html#enum_variant_names
@@ -34,7 +37,7 @@ impl Link {
         Ok(())
     }
 
-    async fn remove_single(&self, tx: &mut db::Transaction) -> Result<()> {
+    async fn remove_single(&self, tx: &mut db::Transaction<'_>) -> Result<()> {
         match self {
             Link::ToRoot { node } => {
                 sqlx::query("DELETE FROM snapshot_root_nodes WHERE snapshot_id = ?")
@@ -63,7 +66,7 @@ impl Link {
     }
 
     /// Return true if there is nothing that references this node
-    async fn is_dangling(&self, tx: &mut db::Transaction) -> Result<bool> {
+    async fn is_dangling(&self, tx: &mut db::Transaction<'_>) -> Result<bool> {
         let has_parent = match self {
             Link::ToRoot { node: root } => {
                 sqlx::query("SELECT 0 FROM snapshot_root_nodes WHERE hash = ? LIMIT 1")
@@ -95,7 +98,7 @@ impl Link {
         Ok(!has_parent)
     }
 
-    async fn children(&self, layer: usize, tx: &mut db::Transaction) -> Result<Vec<Link>> {
+    async fn children(&self, layer: usize, tx: &mut db::Transaction<'_>) -> Result<Vec<Link>> {
         match self {
             Link::ToRoot { node: root } => self.inner_children(tx, &root.hash).await,
             Link::ToInner { node, .. } if layer < INNER_LAYER_COUNT => {
@@ -106,7 +109,11 @@ impl Link {
         }
     }
 
-    async fn inner_children(&self, tx: &mut db::Transaction, parent: &Hash) -> Result<Vec<Link>> {
+    async fn inner_children(
+        &self,
+        tx: &mut db::Transaction<'_>,
+        parent: &Hash,
+    ) -> Result<Vec<Link>> {
         sqlx::query(
             "SELECT parent, hash, is_complete
              FROM snapshot_inner_nodes
@@ -117,7 +124,10 @@ impl Link {
             parent: row.get(0),
             node: InnerNode {
                 hash: row.get(1),
-                is_complete: row.get(2),
+                summary: Summary {
+                    is_complete: row.get(2),
+                    ..Summary::FULL
+                },
             },
         })
         .fetch(tx)
@@ -126,7 +136,11 @@ impl Link {
         .map_err(From::from)
     }
 
-    async fn leaf_children(&self, tx: &mut db::Transaction, parent: &Hash) -> Result<Vec<Link>> {
+    async fn leaf_children(
+        &self,
+        tx: &mut db::Transaction<'_>,
+        parent: &Hash,
+    ) -> Result<Vec<Link>> {
         sqlx::query(
             "SELECT parent, locator, block_id
              FROM snapshot_leaf_nodes
@@ -135,7 +149,7 @@ impl Link {
         .bind(parent)
         .map(|row| Link::ToLeaf {
             parent: row.get(0),
-            node: LeafNode::new(row.get(1), row.get(2)),
+            node: LeafNode::present(row.get(1), row.get(2)),
         })
         .fetch(tx)
         .try_collect()

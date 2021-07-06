@@ -15,7 +15,7 @@ use tokio::fs;
 pub type Pool = SqlitePool;
 
 /// Database transaction
-pub type Transaction = sqlx::Transaction<'static, Sqlite>;
+pub type Transaction<'a> = sqlx::Transaction<'a, Sqlite>;
 
 /// Database connection
 pub type Connection = sqlx::pool::PoolConnection<Sqlite>;
@@ -74,4 +74,44 @@ pub async fn create_schema(pool: &Pool) -> Result<()> {
     index::init(&pool).await?;
     this_replica::init(&pool).await?;
     Ok(())
+}
+
+// Explicit cast from `i64` to `u64` to work around the lack of native `u64` support in the sqlx
+// crate.
+pub const fn decode_u64(i: i64) -> u64 {
+    i as u64
+}
+
+// Explicit cast from `u64` to `i64` to work around the lack of native `u64` support in the sqlx
+// crate.
+pub const fn encode_u64(u: u64) -> i64 {
+    u as i64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Check the casts are lossless
+
+    #[test]
+    fn decode_u64_sanity_check() {
+        // [0i64,     i64::MAX] -> [0u64,             u64::MAX / 2]
+        // [i64::MIN,    -1i64] -> [u64::MAX / 2 + 1,     u64::MAX]
+
+        assert_eq!(decode_u64(0), 0);
+        assert_eq!(decode_u64(1), 1);
+        assert_eq!(decode_u64(-1), u64::MAX);
+        assert_eq!(decode_u64(i64::MIN), u64::MAX / 2 + 1);
+        assert_eq!(decode_u64(i64::MAX), u64::MAX / 2);
+    }
+
+    #[test]
+    fn encode_u64_sanity_check() {
+        assert_eq!(encode_u64(0), 0);
+        assert_eq!(encode_u64(1), 1);
+        assert_eq!(encode_u64(u64::MAX / 2), i64::MAX);
+        assert_eq!(encode_u64(u64::MAX / 2 + 1), i64::MIN);
+        assert_eq!(encode_u64(u64::MAX), -1);
+    }
 }

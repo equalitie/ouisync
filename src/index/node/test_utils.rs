@@ -1,5 +1,8 @@
 use super::{get_bucket, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, INNER_LAYER_COUNT};
-use crate::crypto::{Hash, Hashable};
+use crate::{
+    block::BlockId,
+    crypto::{Hash, Hashable},
+};
 use rand::Rng;
 use std::{collections::HashMap, mem};
 
@@ -17,39 +20,20 @@ impl Snapshot {
             .map(|_| {
                 let locator = rng.gen::<u64>().hash();
                 let block_id = rng.gen();
-                LeafNode::new(locator, block_id)
+                LeafNode::present(locator, block_id)
             })
             .collect();
 
-        Self::build(leaves)
+        Self::from_leaves(leaves)
     }
 
-    pub fn root_hash(&self) -> &Hash {
-        &self.root_hash
-    }
-
-    pub fn leaf_sets(&self) -> impl Iterator<Item = (&Hash, &LeafNodeSet)> {
-        self.leaves.iter().map(move |(path, nodes)| {
-            let parent_hash = self.parent_hash(INNER_LAYER_COUNT, path);
-            (parent_hash, nodes)
-        })
-    }
-
-    pub fn leaf_count(&self) -> usize {
-        self.leaves.values().map(|nodes| nodes.len()).sum()
-    }
-
-    pub fn inner_layers(&self) -> impl Iterator<Item = InnerLayer> {
-        (0..self.inners.len()).map(move |inner_layer| InnerLayer(self, inner_layer))
-    }
-
-    fn build(leaves: Vec<LeafNode>) -> Self {
+    pub fn from_leaves(leaves: Vec<LeafNode>) -> Self {
         let leaves = leaves
             .into_iter()
             .fold(HashMap::<_, LeafNodeSet>::new(), |mut map, leaf| {
                 map.entry(BucketPath::new(leaf.locator(), INNER_LAYER_COUNT - 1))
                     .or_default()
-                    .modify(leaf.locator(), &leaf.block_id);
+                    .modify(leaf.locator(), &leaf.block_id, true);
                 map
             });
 
@@ -82,6 +66,31 @@ impl Snapshot {
             inners,
             leaves,
         }
+    }
+
+    pub fn root_hash(&self) -> &Hash {
+        &self.root_hash
+    }
+
+    pub fn leaf_sets(&self) -> impl Iterator<Item = (&Hash, &LeafNodeSet)> {
+        self.leaves.iter().map(move |(path, nodes)| {
+            let parent_hash = self.parent_hash(INNER_LAYER_COUNT, path);
+            (parent_hash, nodes)
+        })
+    }
+
+    pub fn leaf_count(&self) -> usize {
+        self.leaves.values().map(|nodes| nodes.len()).sum()
+    }
+
+    pub fn inner_layers(&self) -> impl Iterator<Item = InnerLayer> {
+        (0..self.inners.len()).map(move |inner_layer| InnerLayer(self, inner_layer))
+    }
+
+    pub fn block_ids(&self) -> impl Iterator<Item = &BlockId> {
+        self.leaves
+            .values()
+            .flat_map(|nodes| nodes.iter().map(|node| &node.block_id))
     }
 
     // Returns the parent hash of inner nodes at `inner_layer` with the specified bucket path.

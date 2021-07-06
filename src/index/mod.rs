@@ -7,19 +7,22 @@ pub use self::node::test_utils as node_test_utils;
 pub use self::{
     branch::Branch,
     node::{
-        detect_complete_snapshots, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, RootNode,
-        INNER_LAYER_COUNT,
+        receive_block, update_summaries, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, RootNode,
+        Summary, INNER_LAYER_COUNT,
     },
 };
 
 use crate::{
-    block::BlockId,
+    crypto::Hash,
     db,
     error::{Error, Result},
     ReplicaId,
 };
 use sqlx::Row;
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 use tokio::sync::Mutex;
 
 type SnapshotId = u32;
@@ -45,18 +48,100 @@ impl Index {
         })
     }
 
-    pub async fn remote_branch(&self, replica_id: &ReplicaId) -> Option<Branch> {
-        self.branches.lock().await.remote.get(replica_id).cloned()
+    pub(crate) async fn local_branch(&self) -> Branch {
+        self.branches.lock().await.local.clone()
     }
 
-    pub async fn local_branch(&self) -> Branch {
-        self.branches.lock().await.local.clone()
+    /// Notify all tasks waiting for changes on the specified branches.
+    /// See also [`Branch::subscribe`].
+    pub(crate) async fn notify_branches_changed(&self, replica_ids: &HashSet<ReplicaId>) {
+        let branches = self.branches.lock().await;
+        for replica_id in replica_ids {
+            if let Some(branch) = branches.get(replica_id) {
+                branch.notify_changed()
+            }
+        }
+    }
+
+    /// Check whether the remote replica has some blocks under the specified root node that the
+    /// local one is missing.
+    pub(crate) async fn has_root_node_new_blocks(
+        &self,
+        replica_id: &ReplicaId,
+        hash: &Hash,
+        remote_summary: &Summary,
+    ) -> Result<bool> {
+        if let Some(local_node) = RootNode::load(&self.pool, replica_id, hash).await? {
+            Ok(!local_node
+                .summary
+                .is_up_to_date_with(&remote_summary)
+                .unwrap_or(true))
+        } else {
+            // TODO: if hash is of empty nodes collection, return false
+            Ok(true)
+        }
+    }
+
+    /// Filter inner nodes that the remote replica has some blocks in that the local one is missing.
+    ///
+    /// Assumes (but does not enforce) that `parent_hash` is the parent hash of all nodes in
+    /// `remote_nodes`.
+    pub(crate) async fn find_inner_nodes_with_new_blocks<'a, 'b, 'c>(
+        &'a self,
+        parent_hash: &'b Hash,
+        remote_nodes: &'c InnerNodeMap,
+    ) -> Result<impl Iterator<Item = &'c InnerNode>> {
+        let local_nodes = InnerNode::load_children(&self.pool, parent_hash).await?;
+
+        Ok(remote_nodes
+            .iter()
+            .filter(move |(bucket, remote_node)| {
+                let local_node = if let Some(node) = local_nodes.get(*bucket) {
+                    node
+                } else {
+                    // node not present locally - we implicitly treat this as if the local replica
+                    // had zero blocks under this node.
+                    return true;
+                };
+
+                !local_node
+                    .summary
+                    .is_up_to_date_with(&remote_node.summary)
+                    .unwrap_or(true)
+            })
+            .map(|(_, node)| node))
+    }
+
+    /// Filter leaf nodes that the remote replica has a block for but the local one is missing it.
+    ///
+    /// Assumes (but does not enforce) that `parent_hash` is the parent hash of all nodes in
+    /// `remote_nodes`.
+    pub(crate) async fn find_leaf_nodes_with_new_blocks<'a, 'b, 'c>(
+        &'a self,
+        parent_hash: &'b Hash,
+        remote_nodes: &'c LeafNodeSet,
+    ) -> Result<impl Iterator<Item = &'c LeafNode>> {
+        let local_nodes = LeafNode::load_children(&self.pool, parent_hash).await?;
+
+        Ok(remote_nodes
+            .present()
+            .filter(move |node| local_nodes.is_missing(node.locator())))
     }
 }
 
 struct Branches {
     local: Branch,
     remote: HashMap<ReplicaId, Branch>,
+}
+
+impl Branches {
+    fn get(&self, replica_id: &ReplicaId) -> Option<&Branch> {
+        if self.local.replica_id() == replica_id {
+            Some(&self.local)
+        } else {
+            self.remote.get(replica_id)
+        }
+    }
 }
 
 /// Returns all replica ids we know of except ours.
@@ -92,41 +177,63 @@ async fn load_remote_branches(
 pub async fn init(pool: &db::Pool) -> Result<(), Error> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS snapshot_root_nodes (
-             snapshot_id INTEGER PRIMARY KEY,
-             replica_id  BLOB NOT NULL,
-             versions    BLOB NOT NULL,
+             snapshot_id             INTEGER PRIMARY KEY,
+             replica_id              BLOB NOT NULL,
+             versions                BLOB NOT NULL,
 
              -- Hash of the children
-             hash        BLOB NOT NULL,
+             hash                    BLOB NOT NULL,
 
              -- Is this snapshot completely downloaded?
-             is_complete INTEGER NOT NULL,
+             is_complete             INTEGER NOT NULL,
+
+             -- Summary of the missing blocks in this subree
+             missing_blocks_count    INTEGER NOT NULL,
+             missing_blocks_checksum INTEGER NOT NULL,
 
              UNIQUE(replica_id, hash)
          );
 
+         CREATE INDEX index_snapshot_root_nodes_on_hash
+             ON snapshot_root_nodes (hash);
+
          CREATE TABLE IF NOT EXISTS snapshot_inner_nodes (
              -- Parent's `hash`
-             parent      BLOB NOT NULL,
+             parent                  BLOB NOT NULL,
 
              -- Index of this node within its siblings
-             bucket      INTEGER NOT NULL,
+             bucket                  INTEGER NOT NULL,
 
              -- Hash of the children
-             hash        BLOB NOT NULL,
+             hash                    BLOB NOT NULL,
 
              -- Is this subree completely downloaded?
-             is_complete INTEGER NOT NULL,
+             is_complete             INTEGER NOT NULL,
+
+             -- Summary of the missing blocks in this subree
+             missing_blocks_count    INTEGER NOT NULL,
+             missing_blocks_checksum INTEGER NOT NULL,
 
              UNIQUE(parent, bucket)
          );
+
+         CREATE INDEX index_snapshot_inner_nodes_on_hash
+             ON snapshot_inner_nodes (hash);
 
          CREATE TABLE IF NOT EXISTS snapshot_leaf_nodes (
              -- Parent's `hash`
              parent      BLOB NOT NULL,
              locator     BLOB NOT NULL,
-             block_id    BLOB NOT NULL
+             block_id    BLOB NOT NULL,
+
+             -- Is the block pointed to by this node missing?
+             is_missing  INTEGER NOT NULL,
+
+             UNIQUE(parent, locator, block_id)
          );
+
+         CREATE INDEX index_snapshot_leaf_nodes_on_block_id
+             ON snapshot_leaf_nodes (block_id);
 
          -- Prevents creating multiple inner nodes with the same parent and bucket but different
          -- hash.
@@ -148,70 +255,4 @@ pub async fn init(pool: &db::Pool) -> Result<(), Error> {
     .map_err(Error::CreateDbSchema)?;
 
     Ok(())
-}
-
-/// Removes the block if it's orphaned (not referenced by any branch), otherwise does nothing.
-/// Returns whether the block was removed.
-pub async fn remove_orphaned_block(tx: &mut db::Transaction, id: &BlockId) -> Result<bool> {
-    let result = sqlx::query(
-        "DELETE FROM blocks
-         WHERE id = ? AND (SELECT 0 FROM snapshot_leaf_nodes WHERE block_id = id) IS NULL",
-    )
-    .bind(id)
-    .execute(tx)
-    .await?;
-
-    Ok(result.rows_affected() > 0)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{
-        block::{self, BLOCK_SIZE},
-        crypto::{AuthTag, Cryptor, Hashable},
-        locator::Locator,
-    };
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn remove_block() {
-        let pool = db::Pool::connect(":memory:").await.unwrap();
-        init(&pool).await.unwrap();
-        block::init(&pool).await.unwrap();
-
-        let cryptor = Cryptor::Null;
-
-        let branch0 = Branch::new(&pool, ReplicaId::random()).await.unwrap();
-        let branch1 = Branch::new(&pool, ReplicaId::random()).await.unwrap();
-
-        let block_id = BlockId::random();
-        let buffer = vec![0; BLOCK_SIZE];
-
-        let mut tx = pool.begin().await.unwrap();
-
-        block::write(&mut tx, &block_id, &buffer, &AuthTag::default())
-            .await
-            .unwrap();
-
-        let locator0 = Locator::Head(rand::random::<u64>().hash(), 0);
-        let locator0 = locator0.encode(&cryptor);
-        branch0.insert(&mut tx, &block_id, &locator0).await.unwrap();
-
-        let locator1 = Locator::Head(rand::random::<u64>().hash(), 0);
-        let locator1 = locator1.encode(&cryptor);
-        branch1.insert(&mut tx, &block_id, &locator1).await.unwrap();
-
-        assert!(!remove_orphaned_block(&mut tx, &block_id).await.unwrap());
-        assert!(block::exists(&mut tx, &block_id).await.unwrap());
-
-        branch0.remove(&mut tx, &locator0).await.unwrap();
-
-        assert!(!remove_orphaned_block(&mut tx, &block_id).await.unwrap());
-        assert!(block::exists(&mut tx, &block_id).await.unwrap());
-
-        branch1.remove(&mut tx, &locator1).await.unwrap();
-
-        assert!(remove_orphaned_block(&mut tx, &block_id).await.unwrap());
-        assert!(!block::exists(&mut tx, &block_id).await.unwrap(),);
-    }
 }

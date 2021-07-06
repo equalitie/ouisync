@@ -1,3 +1,7 @@
+use super::{
+    leaf::{LeafNode, LeafNodeSet},
+    summary::Summary,
+};
 use crate::{
     crypto::{Hash, Hashable},
     db,
@@ -10,6 +14,7 @@ use sqlx::Row;
 use std::{
     collections::{btree_map, BTreeMap},
     convert::TryInto,
+    iter::FromIterator,
 };
 
 /// Number of layers in the tree excluding the layer with root and the layer with leaf nodes.
@@ -18,12 +23,7 @@ pub const INNER_LAYER_COUNT: usize = 3;
 #[derive(Clone, Copy, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub struct InnerNode {
     pub hash: Hash,
-    /// Has the whole subree rooted at this node been completely downloaded?
-    ///
-    /// Note this is local-only information and is not transmitted to other replicas which is why
-    /// it is not serialized.
-    #[serde(skip)]
-    pub is_complete: bool,
+    pub summary: Summary,
 }
 
 impl InnerNode {
@@ -31,14 +31,19 @@ impl InnerNode {
     pub fn new(hash: Hash) -> Self {
         Self {
             hash,
-            is_complete: false,
+            summary: Summary::INCOMPLETE,
         }
     }
 
     /// Load all inner nodes with the specified parent hash.
     pub async fn load_children(db: impl db::Executor<'_>, parent: &Hash) -> Result<InnerNodeMap> {
         sqlx::query(
-            "SELECT bucket, hash, is_complete
+            "SELECT
+                 bucket,
+                 hash,
+                 is_complete,
+                 missing_blocks_count,
+                 missing_blocks_checksum
              FROM snapshot_inner_nodes
              WHERE parent = ?",
         )
@@ -47,7 +52,11 @@ impl InnerNode {
             let bucket: u32 = row.get(0);
             let node = Self {
                 hash: row.get(1),
-                is_complete: row.get(2),
+                summary: Summary {
+                    is_complete: row.get(2),
+                    missing_blocks_count: db::decode_u64(row.get(3)),
+                    missing_blocks_checksum: db::decode_u64(row.get(4)),
+                },
             };
 
             (bucket, node)
@@ -62,44 +71,118 @@ impl InnerNode {
         .map_err(From::from)
     }
 
-    /// Load parent hashes of all inner nodes with the specifed hash.
+    /// Loads parent hashes of all inner nodes with the specifed hash.
     pub fn load_parent_hashes<'a>(
-        pool: &'a db::Pool,
+        db: impl db::Executor<'a> + 'a,
         hash: &'a Hash,
     ) -> impl Stream<Item = Result<Hash>> + 'a {
         sqlx::query("SELECT parent FROM snapshot_inner_nodes WHERE hash = ?")
             .bind(hash)
             .map(|row| row.get(0))
-            .fetch(pool)
+            .fetch(db)
             .err_into()
     }
 
-    /// Set all inner nodes with the specified hash as complete.
-    pub async fn set_complete(pool: &db::Pool, hash: &Hash) -> Result<()> {
-        sqlx::query("UPDATE snapshot_inner_nodes SET is_complete = 1 WHERE hash = ?")
-            .bind(hash)
-            .execute(pool)
-            .await?;
-
-        Ok(())
-    }
-
-    /// Saves this inner node into the db. Returns whether a new node was created (`true`) or the
-    /// node already existed (`false`).
-    pub async fn save(&self, tx: &mut db::Transaction, parent: &Hash, bucket: u8) -> Result<bool> {
-        let changes = sqlx::query(
-            "INSERT INTO snapshot_inner_nodes (parent, bucket, hash, is_complete)
-             VALUES (?, ?, ?, 0)
+    /// Saves this inner node into the db unless it already exists.
+    pub async fn save(
+        &self,
+        tx: &mut db::Transaction<'_>,
+        parent: &Hash,
+        bucket: u8,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO snapshot_inner_nodes (
+                 parent,
+                 bucket,
+                 hash,
+                 is_complete,
+                 missing_blocks_count,
+                 missing_blocks_checksum
+             )
+             VALUES (?, ?, ?, ?, ?, ?)
              ON CONFLICT (parent, bucket) DO NOTHING",
         )
         .bind(parent)
         .bind(bucket)
         .bind(&self.hash)
+        .bind(self.summary.is_complete)
+        .bind(db::encode_u64(self.summary.missing_blocks_count))
+        .bind(db::encode_u64(self.summary.missing_blocks_checksum))
         .execute(tx)
-        .await?
-        .rows_affected();
+        .await?;
 
-        Ok(changes > 0)
+        Ok(())
+    }
+
+    /// Updates summaries of all nodes with the specified hash at the specified inner layer.
+    pub async fn update_summaries(
+        tx: &mut db::Transaction<'_>,
+        hash: &Hash,
+        inner_layer: usize,
+    ) -> Result<()> {
+        let summary = Self::compute_summary(tx, hash, inner_layer + 1).await?;
+
+        sqlx::query(
+            "UPDATE snapshot_inner_nodes
+             SET
+                 is_complete = ?,
+                 missing_blocks_count = ?,
+                 missing_blocks_checksum = ?
+             WHERE hash = ?",
+        )
+        .bind(summary.is_complete)
+        .bind(db::encode_u64(summary.missing_blocks_count))
+        .bind(db::encode_u64(summary.missing_blocks_checksum))
+        .bind(hash)
+        .execute(tx)
+        .await?;
+
+        Ok(())
+    }
+
+    /// Compute summaries from the children nodes of the specified parent nodes.
+    pub async fn compute_summary(
+        tx: &mut db::Transaction<'_>,
+        parent_hash: &Hash,
+        parent_layer: usize,
+    ) -> Result<Summary> {
+        if parent_layer < INNER_LAYER_COUNT {
+            let empty_children = InnerNodeMap::default();
+            // If the parent hash is equal to the hash of empty node collection it means the node
+            // has no children and we can cut this short.
+            if *parent_hash == empty_children.hash() {
+                Ok(Summary::from_inners(&empty_children))
+            } else {
+                let children = InnerNode::load_children(&mut *tx, parent_hash).await?;
+
+                // We download all children nodes of a given parent together so when we know that
+                // we have at least one we also know we have them all. Thus it's enough to check
+                // that all of them are complete.
+                if !children.is_empty() {
+                    Ok(Summary::from_inners(&children))
+                } else {
+                    Ok(Summary::INCOMPLETE)
+                }
+            }
+        } else {
+            let empty_children = LeafNodeSet::default();
+
+            // If the parent hash is equal to the hash of empty node collection it means the node
+            // has no children and we can cut this short.
+            if *parent_hash == empty_children.hash() {
+                Ok(Summary::from_leaves(&empty_children))
+            } else {
+                let children = LeafNode::load_children(&mut *tx, parent_hash).await?;
+
+                // Similarly as in the inner nodes case, we only need to check that we have at
+                // least one leaf node child and that already tells us that we have them all.
+                if !children.is_empty() {
+                    Ok(Summary::from_leaves(&children))
+                } else {
+                    Ok(Summary::INCOMPLETE)
+                }
+            }
+        }
     }
 }
 
@@ -131,18 +214,34 @@ impl InnerNodeMap {
         self.0.remove(&bucket)
     }
 
-    /// Atomically saves all nodes in this map to the db. Returns hashes of the nodes that changed.
-    pub async fn save(&self, pool: &db::Pool, parent: &Hash) -> Result<Vec<Hash>> {
-        let mut changed = Vec::with_capacity(self.len());
+    /// Atomically saves all nodes in this map to the db.
+    pub async fn save(&self, pool: &'_ db::Pool, parent: &'_ Hash) -> Result<()> {
         let mut tx = pool.begin().await?;
         for (bucket, node) in self {
-            if node.save(&mut tx, parent, bucket).await? {
-                changed.push(node.hash);
-            }
+            node.save(&mut tx, parent, bucket).await?;
         }
         tx.commit().await?;
 
-        Ok(changed)
+        Ok(())
+    }
+
+    /// Returns the same nodes but with the `is_complete` and `missing_block` fields changed to
+    /// indicate that these nodes are not complete yet.
+    pub fn into_incomplete(mut self) -> Self {
+        for node in self.0.values_mut() {
+            node.summary = Summary::INCOMPLETE;
+        }
+
+        self
+    }
+}
+
+impl FromIterator<(u8, InnerNode)> for InnerNodeMap {
+    fn from_iter<T>(iter: T) -> Self
+    where
+        T: IntoIterator<Item = (u8, InnerNode)>,
+    {
+        Self(iter.into_iter().collect())
     }
 }
 

@@ -6,8 +6,9 @@ use crate::{
     crypto::{AuthTag, Cryptor, Hashable, NonceSequence},
     db,
     error::{Error, Result},
-    index::{self, Branch},
+    index::Branch,
     locator::Locator,
+    store,
 };
 use std::{
     convert::TryInto,
@@ -339,7 +340,7 @@ impl Blob {
 
     async fn replace_current_block(
         &mut self,
-        tx: &mut db::Transaction,
+        tx: &mut db::Transaction<'_>,
         locator: Locator,
         id: BlockId,
         content: Buffer,
@@ -365,7 +366,7 @@ impl Blob {
     }
 
     // Write the current block into the store.
-    async fn write_current_block(&mut self, tx: &mut db::Transaction) -> Result<()> {
+    async fn write_current_block(&mut self, tx: &mut db::Transaction<'_>) -> Result<()> {
         if !self.current_block.dirty {
             return Ok(());
         }
@@ -389,7 +390,7 @@ impl Blob {
     }
 
     // Write the current blob length into the blob header in the head block.
-    async fn write_len(&mut self, tx: &mut db::Transaction) -> Result<()> {
+    async fn write_len(&mut self, tx: &mut db::Transaction<'_>) -> Result<()> {
         if !self.len_dirty {
             return Ok(());
         }
@@ -443,7 +444,7 @@ impl Blob {
                 .branch
                 .remove(&mut tx, &locator.encode(&self.cryptor))
                 .await?;
-            index::remove_orphaned_block(&mut tx, &block_id).await?;
+            store::remove_orphaned_block(&mut tx, &block_id).await?;
         }
 
         tx.commit().await?;
@@ -481,7 +482,7 @@ impl Blob {
 
 async fn read_block(
     branch: &Branch,
-    tx: &mut db::Transaction,
+    tx: &mut db::Transaction<'_>,
     cryptor: &Cryptor,
     nonce_sequence: &NonceSequence,
     locator: &Locator,
@@ -505,7 +506,7 @@ async fn read_block(
 
 async fn load_block(
     branch: &Branch,
-    tx: &mut db::Transaction,
+    tx: &mut db::Transaction<'_>,
     cryptor: &Cryptor,
     locator: &Locator,
 ) -> Result<(BlockId, Buffer, AuthTag)> {
@@ -518,7 +519,7 @@ async fn load_block(
 
 async fn write_block(
     branch: &Branch,
-    tx: &mut db::Transaction,
+    tx: &mut db::Transaction<'_>,
     cryptor: &Cryptor,
     nonce_sequence: &NonceSequence,
     locator: &Locator,
@@ -542,7 +543,7 @@ async fn write_block(
         .insert(tx, block_id, &locator.encode(cryptor))
         .await?
     {
-        index::remove_orphaned_block(tx, &old_block_id).await?;
+        store::remove_orphaned_block(tx, &old_block_id).await?;
     }
 
     Ok(())

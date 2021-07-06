@@ -2,8 +2,10 @@ use crate::{
     block::BlockId,
     crypto::{Hash, Hashable},
     db,
+    error::Error,
     error::Result,
 };
+use futures_util::{Stream, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_256};
 use sqlx::Row;
@@ -13,25 +15,52 @@ use std::{iter::FromIterator, mem, slice, vec};
 pub struct LeafNode {
     locator: Hash,
     pub block_id: BlockId,
+    pub is_missing: bool,
 }
 
 impl LeafNode {
-    pub fn new(locator: Hash, block_id: BlockId) -> Self {
-        Self { locator, block_id }
+    /// Creates a leaf node whose block is assumed to be present (not missing) in this replica.
+    pub fn present(locator: Hash, block_id: BlockId) -> Self {
+        Self {
+            locator,
+            block_id,
+            is_missing: false,
+        }
+    }
+
+    /// Creates a leaf node whose block is assumed to be missing in this replica.
+    pub fn missing(locator: Hash, block_id: BlockId) -> Self {
+        Self {
+            locator,
+            block_id,
+            is_missing: true,
+        }
+    }
+
+    /// Returns a leaf node representing the same block as `self`, but which is assumed to be
+    /// missing.
+    pub fn into_missing(self) -> Self {
+        Self {
+            is_missing: true,
+            ..self
+        }
     }
 
     pub fn locator(&self) -> &Hash {
         &self.locator
     }
 
-    pub async fn save(&self, tx: &mut db::Transaction, parent: &Hash) -> Result<()> {
+    /// Saves the node to the db unless it already exists.
+    pub async fn save(&self, tx: &mut db::Transaction<'_>, parent: &Hash) -> Result<()> {
         sqlx::query(
-            "INSERT INTO snapshot_leaf_nodes (parent, locator, block_id)
-             VALUES (?, ?, ?)",
+            "INSERT INTO snapshot_leaf_nodes (parent, locator, block_id, is_missing)
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT (parent, locator, block_id) DO NOTHING",
         )
         .bind(parent)
         .bind(&self.locator)
         .bind(&self.block_id)
+        .bind(&self.is_missing)
         .execute(tx)
         .await?;
 
@@ -40,7 +69,7 @@ impl LeafNode {
 
     pub async fn load_children(db: impl db::Executor<'_>, parent: &Hash) -> Result<LeafNodeSet> {
         Ok(sqlx::query(
-            "SELECT locator, block_id
+            "SELECT locator, block_id, is_missing
              FROM snapshot_leaf_nodes
              WHERE parent = ?",
         )
@@ -48,6 +77,7 @@ impl LeafNode {
         .map(|row| LeafNode {
             locator: row.get(0),
             block_id: row.get(1),
+            is_missing: row.get(2),
         })
         .fetch_all(db)
         .await?
@@ -64,10 +94,46 @@ impl LeafNode {
                 .is_some(),
         )
     }
+
+    /// Loads all parent hashes of nodes with the specified block id.
+    pub fn load_parent_hashes<'a>(
+        tx: &'a mut db::Transaction<'_>,
+        block_id: &'a BlockId,
+    ) -> impl Stream<Item = Result<Hash>> + 'a {
+        sqlx::query("SELECT parent FROM snapshot_leaf_nodes WHERE block_id = ?")
+            .bind(block_id)
+            .map(|row| row.get(0))
+            .fetch(tx)
+            .err_into()
+    }
+
+    /// Marks all leaf nodes that point to the specified block as present (not missing). Returns
+    /// whether at least one node was modified.
+    pub async fn set_present(tx: &mut db::Transaction<'_>, block_id: &BlockId) -> Result<bool> {
+        // Check whether there is at least one node that references the given block.
+        if sqlx::query("SELECT 1 FROM snapshot_leaf_nodes WHERE block_id = ? LIMIT 1")
+            .bind(block_id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .is_none()
+        {
+            return Err(Error::BlockNotReferenced);
+        }
+
+        // Update only those nodes that have is_missing set to true.
+        let result = sqlx::query(
+            "UPDATE snapshot_leaf_nodes SET is_missing = 0 WHERE block_id = ? AND is_missing = 1",
+        )
+        .bind(block_id)
+        .execute(tx)
+        .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
 }
 
 /// Collection that acts as a ordered set of `LeafNode`s
-#[derive(Default, Debug, Serialize, Deserialize)]
+#[derive(Default, Clone, Debug, Serialize, Deserialize)]
 pub struct LeafNodeSet(Vec<LeafNode>);
 
 impl LeafNodeSet {
@@ -88,7 +154,16 @@ impl LeafNodeSet {
     }
 
     /// Inserts a new node or updates it if already exists.
-    pub fn modify(&mut self, locator: &Hash, block_id: &BlockId) -> ModifyStatus {
+    ///
+    /// When a new node is created, it's `is_missing` flag is set to `initial_is_missing`. When an
+    /// existing node is update, its `is_missing` flag is left unchanged and `initial_is_missing`
+    /// is ignored.
+    pub fn modify(
+        &mut self,
+        locator: &Hash,
+        block_id: &BlockId,
+        initial_is_missing: bool,
+    ) -> ModifyStatus {
         match self.lookup(locator) {
             Ok(index) => {
                 let node = &mut self.0[index];
@@ -105,6 +180,7 @@ impl LeafNodeSet {
                     LeafNode {
                         locator: *locator,
                         block_id: *block_id,
+                        is_missing: initial_is_missing,
                     },
                 );
                 ModifyStatus::Inserted
@@ -117,7 +193,6 @@ impl LeafNodeSet {
         Some(self.0.remove(index))
     }
 
-    /// Atomically saves all nodes in this set into the db.
     pub async fn save(&self, pool: &db::Pool, parent: &Hash) -> Result<()> {
         let mut tx = pool.begin().await?;
         for node in self {
@@ -126,6 +201,30 @@ impl LeafNodeSet {
         tx.commit().await?;
 
         Ok(())
+    }
+
+    /// Returns the same nodes but with the `is_missing` flag set to `true`.
+    /// Equivalent to `self.into_iter().map(LeafNode::into_missing()).collect()` but without
+    /// involving reallocation.
+    pub fn into_missing(mut self) -> Self {
+        for node in &mut self.0 {
+            node.is_missing = true;
+        }
+
+        self
+    }
+
+    /// Returns all nodes from this set whose `is_missing` flag is `false`.
+    pub fn present(&self) -> impl Iterator<Item = &LeafNode> {
+        self.iter().filter(|node| !node.is_missing)
+    }
+
+    /// Returns whether node at `locator` has `is_missing` set to `true` or if there is no such
+    /// node in this set.
+    pub fn is_missing(&self, locator: &Hash) -> bool {
+        self.get(locator)
+            .map(|node| node.is_missing)
+            .unwrap_or(true)
     }
 
     fn lookup(&self, locator: &Hash) -> Result<usize, usize> {

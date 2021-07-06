@@ -15,37 +15,54 @@ use crate::{
     replica_id::ReplicaId,
 };
 use std::{mem, sync::Arc};
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::{watch, Mutex};
 
 type LocatorHash = Hash;
 
 #[derive(Clone)]
 pub struct Branch {
-    root_node: Arc<Mutex<RootNode>>,
+    shared: Arc<Shared>,
+}
+
+struct Shared {
     replica_id: ReplicaId,
-    notify: Arc<Notify>,
+    root_node: Mutex<RootNode>,
+    changed_tx: watch::Sender<()>,
+    // Currently it's necessary to keep a received around so we can hand out subscriptions by
+    // cloning it. However, if/when [this PR](https://github.com/tokio-rs/tokio/pull/3800) gets
+    // merged it won't be necessary because it would be possible to subscribe directly to to the
+    // sender.
+    changed_rx: watch::Receiver<()>,
 }
 
 impl Branch {
     pub async fn new(pool: &db::Pool, replica_id: ReplicaId) -> Result<Self> {
         let root_node = RootNode::load_latest_or_create(pool, &replica_id).await?;
-        let notify = Arc::new(Notify::new());
+        let (changed_tx, changed_rx) = watch::channel(());
 
         Ok(Self {
-            root_node: Arc::new(Mutex::new(root_node)),
-            replica_id,
-            notify,
+            shared: Arc::new(Shared {
+                replica_id,
+                root_node: Mutex::new(root_node),
+                changed_tx,
+                changed_rx,
+            }),
         })
+    }
+
+    /// Returns the id of the replica that owns this branch.
+    pub fn replica_id(&self) -> &ReplicaId {
+        &self.shared.replica_id
     }
 
     /// Inserts a new block into the index. Returns the previous id at the same locator, if any.
     pub async fn insert(
         &self,
-        tx: &mut db::Transaction,
+        tx: &mut db::Transaction<'_>,
         block_id: &BlockId,
         encoded_locator: &LocatorHash,
     ) -> Result<Option<BlockId>> {
-        let mut lock = self.root_node.lock().await;
+        let mut lock = self.shared.root_node.lock().await;
         let mut path = self.get_path(tx, &lock.hash, &encoded_locator).await?;
 
         // We shouldn't be inserting a block to a branch twice. If we do, the assumption is that we
@@ -61,8 +78,12 @@ impl Branch {
     }
 
     /// Retrieve `BlockId` of a block with the given encoded `Locator`.
-    pub async fn get(&self, tx: &mut db::Transaction, encoded_locator: &Hash) -> Result<BlockId> {
-        let root_node = self.root_node.lock().await;
+    pub async fn get(
+        &self,
+        tx: &mut db::Transaction<'_>,
+        encoded_locator: &Hash,
+    ) -> Result<BlockId> {
+        let root_node = self.shared.root_node.lock().await;
         let path = self.get_path(tx, &root_node.hash, &encoded_locator).await?;
 
         match path.get_leaf() {
@@ -75,10 +96,10 @@ impl Branch {
     /// removed block.
     pub async fn remove(
         &self,
-        tx: &mut db::Transaction,
+        tx: &mut db::Transaction<'_>,
         encoded_locator: &Hash,
     ) -> Result<BlockId> {
-        let mut lock = self.root_node.lock().await;
+        let mut lock = self.shared.root_node.lock().await;
         let mut path = self.get_path(tx, &lock.hash, encoded_locator).await?;
         let block_id = path
             .remove_leaf(encoded_locator)
@@ -90,14 +111,18 @@ impl Branch {
     }
 
     /// Subscribe to notifications of changes in this branch. A notification is emitted every time
-    /// a new snapshot of this branch is created.
-    pub fn subscribe(&self) -> Arc<Notify> {
-        self.notify.clone()
+    /// a new snapshot of this branch is created or a previously missing block is downloaded.
+    pub fn subscribe(&self) -> watch::Receiver<()> {
+        self.shared.changed_rx.clone()
+    }
+
+    pub(super) fn notify_changed(&self) {
+        self.shared.changed_tx.send(()).unwrap_or(())
     }
 
     async fn get_path(
         &self,
-        tx: &mut db::Transaction,
+        tx: &mut db::Transaction<'_>,
         root_hash: &Hash,
         encoded_locator: &LocatorHash,
     ) -> Result<Path> {
@@ -131,7 +156,7 @@ impl Branch {
     // TODO: make sure nodes are saved as complete.
     async fn write_path(
         &self,
-        tx: &mut db::Transaction,
+        tx: &mut db::Transaction<'_>,
         root_node: &mut RootNode,
         path: &Path,
     ) -> Result<RootNode> {
@@ -155,19 +180,23 @@ impl Branch {
 
     async fn write_branch_root(
         &self,
-        tx: &mut db::Transaction,
+        tx: &mut db::Transaction<'_>,
         node: &mut RootNode,
         hash: Hash,
     ) -> Result<RootNode> {
         let new_root = node.next_version(tx, hash).await?;
         let old_root = mem::replace(node, new_root);
 
-        self.notify.notify_waiters();
+        self.notify_changed();
 
         Ok(old_root)
     }
 
-    async fn remove_snapshot(&self, root_node: &RootNode, tx: &mut db::Transaction) -> Result<()> {
+    async fn remove_snapshot(
+        &self,
+        root_node: &RootNode,
+        tx: &mut db::Transaction<'_>,
+    ) -> Result<()> {
         root_node.remove_recursive(tx).await
     }
 }
@@ -268,7 +297,7 @@ mod tests {
         assert_eq!(0, count_branch_forest_entries(&mut tx).await);
     }
 
-    async fn count_branch_forest_entries(tx: &mut db::Transaction) -> usize {
+    async fn count_branch_forest_entries(tx: &mut db::Transaction<'_>) -> usize {
         sqlx::query(
             "SELECT
                  (SELECT COUNT(*) FROM snapshot_inner_nodes) +
