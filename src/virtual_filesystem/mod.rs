@@ -528,7 +528,7 @@ impl Inner {
         // Index of the first "real" entry (excluding . and ..)
         let first = if parent == 0 { 1 } else { 2 };
 
-        for (index, entry) in dir
+        for (index, (entry_name, entry_type)) in dir
             .entries()
             .enumerate()
             .skip((offset as usize).saturating_sub(first))
@@ -548,8 +548,8 @@ impl Inner {
             if reply.add(
                 u64::MAX, // invalid inode, see above.
                 (index + first + 1) as i64,
-                to_file_type(entry.entry_type()),
-                entry.name(),
+                to_file_type(entry_type),
+                entry_name,
             ) {
                 break;
             }

@@ -1,6 +1,8 @@
 use crate::{
-    directory::{Directory, EntryInfo},
+    directory::Directory,
+    entry::EntryType,
     file::File,
+    iterator::sorted_union,
     replica_id::ReplicaId,
     Error, Result,
 };
@@ -100,10 +102,82 @@ impl JointDirectory {
         Ok(())
     }
 
-    pub fn entries(&self) -> impl Iterator<Item = EntryInfo> {
-        self.versions
-            .get(&self.this_replica_id)
-            .into_iter()
-            .flat_map(|dir| dir.entries())
+    pub fn entries(&self) -> impl Iterator<Item = (OsString, EntryType)> + '_ {
+        // Map<ReplicaId, Directory> -> [[EntryInfo]]
+        let entries = self
+            .versions
+            .values()
+            .map(|directory| directory.entries());
+
+        // [[EntryInfo]] -> [EntryInfo]
+        let flat_entries = sorted_union::new_from_many(entries, |entry| entry.name());
+
+        flat_entries.map(|entry_info|
+                         (entry_info.name().to_os_string(), entry_info.entry_type()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        db,
+        index::Branch,
+        Cryptor, Locator
+    };
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_no_conflict() {
+        let (pool, branches) = setup(2).await;
+
+        let mut r0 = Directory::create(
+            pool.clone(),
+            branches[0].clone(),
+            Cryptor::Null,
+            Locator::Root,
+        );
+        let mut r1 = Directory::create(
+            pool.clone(),
+            branches[1].clone(),
+            Cryptor::Null,
+            Locator::Root,
+        );
+
+        r0.create_file("file0.txt".into())
+            .unwrap()
+            .flush()
+            .await
+            .unwrap();
+        r1.create_file("file1.txt".into())
+            .unwrap()
+            .flush()
+            .await
+            .unwrap();
+
+        r0.flush().await.unwrap();
+        r1.flush().await.unwrap();
+
+        let mut root = JointDirectory::new(*branches[0].replica_id());
+
+        root.insert(r0).unwrap();
+        root.insert(r1).unwrap();
+
+        assert_eq!(
+            root.entries().collect::<Vec<_>>(),
+            vec![("file0.txt".into(), EntryType::File), ("file1.txt".into(), EntryType::File)]
+        );
+    }
+
+    async fn setup(branch_count: usize) -> (db::Pool, Vec<Branch>) {
+        let pool = db::init(db::Store::Memory).await.unwrap();
+
+        let mut branches = Vec::new();
+
+        for _ in 0..branch_count {
+            let branch = Branch::new(&pool, ReplicaId::random()).await.unwrap();
+            branches.push(branch);
+        }
+
+        (pool, branches)
     }
 }

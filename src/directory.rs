@@ -229,6 +229,7 @@ impl Directory {
 }
 
 /// Info about a directory entry.
+#[derive(Copy, Clone)]
 pub struct EntryInfo<'a> {
     parent_blob: &'a Blob,
     name: &'a OsStr,

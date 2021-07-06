@@ -15,6 +15,7 @@ mod file;
 mod format;
 mod global_locator;
 mod index;
+mod iterator;
 mod joint_directory;
 mod joint_entry;
 mod locator;
