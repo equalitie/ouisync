@@ -22,6 +22,8 @@ pub enum Error {
     MalformedData,
     #[error("block not found: {0}")]
     BlockNotFound(BlockId),
+    #[error("block already exists")]
+    BlockExists,
     #[error("block has wrong length (expected: {}, actual: {0})", BLOCK_SIZE)]
     WrongBlockLength(usize),
     #[error("encryption / decryption failed")]

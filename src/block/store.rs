@@ -78,14 +78,22 @@ pub async fn write(
         "incorrect buffer length for block write"
     );
 
-    sqlx::query("INSERT INTO blocks (id, auth_tag, content) VALUES (?, ?, ?)")
-        .bind(id)
-        .bind(auth_tag.as_slice())
-        .bind(buffer)
-        .execute(tx)
-        .await?;
+    let result = sqlx::query(
+        "INSERT INTO blocks (id, auth_tag, content)
+         VALUES (?, ?, ?)
+         ON CONFLICT (id) DO NOTHING",
+    )
+    .bind(id)
+    .bind(auth_tag.as_slice())
+    .bind(buffer)
+    .execute(tx)
+    .await?;
 
-    Ok(())
+    if result.rows_affected() > 0 {
+        Ok(())
+    } else {
+        Err(Error::BlockExists)
+    }
 }
 
 /// Checks whether a block exists in the store.
@@ -159,7 +167,7 @@ mod tests {
 
         let mut tx = pool.begin().await.unwrap();
         match write(&mut tx, &id, &content1, &auth_tag).await {
-            Err(Error::QueryDb(_)) => (),
+            Err(Error::BlockExists) => (),
             Err(error) => panic!("unexpected error: {:?}", error),
             Ok(_) => panic!("unexpected success"),
         }

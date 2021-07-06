@@ -40,11 +40,13 @@ where
 }
 
 /// Receive a block from other replica. This marks the block as not missing by the local replica.
-/// Returns the replica ids whose branches reference the received block.
+/// Returns the replica ids whose branches reference the received block (if any).
 pub async fn receive_block(
     tx: &mut db::Transaction<'_>,
     id: &BlockId,
 ) -> Result<HashSet<ReplicaId>> {
+    // TODO: return error when no node referencing the block exists.
+    // TODO: return whether anything changed, bail early if not.
     LeafNode::set_present(tx, id).await?;
 
     let nodes = LeafNode::load_parent_hashes(tx, id)

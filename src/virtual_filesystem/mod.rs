@@ -875,6 +875,7 @@ fn to_error_code(error: &Error) -> libc::c_int {
         | Error::CreateDbSchema(_)
         | Error::QueryDb(_)
         | Error::BlockNotFound(_)
+        | Error::BlockExists
         | Error::MalformedData
         | Error::MalformedDirectory(_)
         | Error::WrongBlockLength(_)

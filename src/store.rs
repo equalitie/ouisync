@@ -31,8 +31,10 @@ pub async fn write_received_block(
     auth_tag: &AuthTag,
 ) -> Result<()> {
     let mut tx = index.pool.begin().await?;
+
     let replica_ids = index::receive_block(&mut tx, id).await?;
 
+    // TODO: move this check to `receive_block`
     if replica_ids.is_empty() {
         return Err(Error::EntryNotFound);
     }
