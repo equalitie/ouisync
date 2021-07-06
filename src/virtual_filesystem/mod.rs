@@ -886,7 +886,7 @@ impl Inner {
                 let (locator, _entry_type) = self.repository.lookup(path).await?;
                 let this_replica_id = self.repository.this_replica_id();
                 let mut dir = JointDirectory::new(*this_replica_id);
-                dir.insert( self.repository.open_directory_by_locator(locator).await?)?;
+                dir.insert(self.repository.open_directory_by_locator(locator).await?)?;
                 Ok(JointEntry::Directory(dir))
             }
             Representation::File(locator) => {

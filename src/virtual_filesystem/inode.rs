@@ -171,7 +171,6 @@ impl Representation {
     }
 }
 
-//#[derive(Clone)]
 pub struct InodeDetails {
     pub representation: Representation,
     pub parent: Inode,

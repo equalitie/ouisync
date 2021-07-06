@@ -24,7 +24,7 @@ impl JointDirectory {
     }
 
     pub fn insert(&mut self, directory: Directory) -> Result<()> {
-        match self.versions.entry(self.this_replica_id) {
+        match self.versions.entry(directory.global_locator().branch) {
             Entry::Vacant(entry) => {
                 entry.insert(directory);
                 Ok(())
