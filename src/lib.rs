@@ -13,6 +13,7 @@ mod error;
 mod ffi;
 mod file;
 mod format;
+mod global_locator;
 mod index;
 mod joint_directory;
 mod joint_entry;
@@ -37,6 +38,7 @@ pub use self::{
     joint_directory::JointDirectory,
     joint_entry::JointEntry,
     locator::Locator,
+    global_locator::GlobalLocator,
     network::{Network, NetworkOptions},
     replica_id::ReplicaId,
     repository::Repository,

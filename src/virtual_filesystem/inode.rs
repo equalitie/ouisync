@@ -1,5 +1,5 @@
 use fuser::FUSE_ROOT_ID;
-use ouisync::{EntryType, Error, Locator, Result};
+use ouisync::{EntryType, Error, GlobalLocator, Result};
 use slab::Slab;
 use std::{
     collections::{hash_map::Entry, HashMap},
@@ -148,7 +148,7 @@ pub enum Representation {
     // directory is added. For now, we'll just store the path and each time the set of locators
     // corresponding to the path is requested, it'll be determined dynamically.
     Directory(PathBuf),
-    File(Locator),
+    File(GlobalLocator),
 }
 
 impl Representation {

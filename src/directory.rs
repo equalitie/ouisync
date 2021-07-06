@@ -4,6 +4,7 @@ use crate::{
     db,
     entry::{Entry, EntryType},
     error::{Error, Result},
+    global_locator::GlobalLocator,
     file::File,
     index::Branch,
     locator::Locator,
@@ -219,6 +220,11 @@ impl Directory {
     /// Locator of this directory
     pub fn locator(&self) -> &Locator {
         self.blob.locator()
+    }
+
+    /// Locator of this directory
+    pub fn global_locator(&self) -> &GlobalLocator {
+        self.blob.global_locator()
     }
 }
 

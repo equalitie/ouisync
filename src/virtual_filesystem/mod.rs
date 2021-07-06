@@ -17,7 +17,7 @@ use fuser::{
     ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow,
 };
 use ouisync::{
-    Directory, EntryType, Error, File, JointDirectory, JointEntry, Locator,
+    Directory, EntryType, Error, File, GlobalLocator, JointDirectory, JointEntry,
     MoveDstDirectory, Repository, Result,
 };
 use std::{
@@ -641,7 +641,7 @@ impl Inner {
         file.flush().await?;
         parent_dir.flush().await?;
 
-        let locator = *file.locator();
+        let locator = *file.global_locator();
         let entry = JointEntry::File(file);
         let inode = self
             .inodes
@@ -852,7 +852,7 @@ impl Inner {
         self.repository.open_directory_by_locator(locator).await
     }
 
-    async fn get_locator_by_representation(&self, repr: &Representation) -> Result<Locator> {
+    async fn get_locator_by_representation(&self, repr: &Representation) -> Result<GlobalLocator> {
         match repr {
             Representation::Directory(path) => {
                 let (locator, entry_type) = self.repository.lookup(path).await?;
