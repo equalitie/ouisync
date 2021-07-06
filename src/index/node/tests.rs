@@ -118,7 +118,10 @@ async fn create_existing_inner_node() {
 
     assert_eq!(nodes.get(bucket), Some(&node0));
     assert!((0..bucket).all(|b| nodes.get(b).is_none()));
-    assert!((bucket + 1..=u8::MAX).all(|b| nodes.get(b).is_none()));
+
+    if bucket < u8::MAX {
+        assert!((bucket + 1..=u8::MAX).all(|b| nodes.get(b).is_none()));
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
