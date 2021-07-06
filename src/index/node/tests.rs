@@ -1,7 +1,7 @@
 use std::iter;
 
 use super::{inner::INNER_LAYER_COUNT, summary::Summary, test_utils::Snapshot, *};
-use crate::{crypto::Hashable, db, test_utils, version_vector::VersionVector};
+use crate::{crypto::Hashable, db, error::Error, test_utils, version_vector::VersionVector};
 use assert_matches::assert_matches;
 use futures_util::TryStreamExt;
 use rand::prelude::*;
@@ -477,6 +477,52 @@ async fn compute_status_from_complete_inner_nodes_with_all_present_blocks() {
     assert_eq!(summary.missing_blocks_count, 0);
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn set_present_on_leaf_node_with_missing_block() {
+    let pool = setup().await;
+    let mut tx = pool.begin().await.unwrap();
+
+    let parent = rand::random::<u64>().hash();
+    let encoded_locator = rand::random::<u64>().hash();
+    let block_id = rand::random();
+
+    let node = LeafNode::missing(encoded_locator, block_id);
+    node.save(&mut tx, &parent).await.unwrap();
+
+    assert!(LeafNode::set_present(&mut tx, &block_id).await.unwrap());
+
+    let nodes = LeafNode::load_children(&mut tx, &parent).await.unwrap();
+    assert!(!nodes.get(&encoded_locator).unwrap().is_missing);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn set_present_on_leaf_node_with_present_block() {
+    let pool = setup().await;
+    let mut tx = pool.begin().await.unwrap();
+
+    let parent = rand::random::<u64>().hash();
+    let encoded_locator = rand::random::<u64>().hash();
+    let block_id = rand::random();
+
+    let node = LeafNode::present(encoded_locator, block_id);
+    node.save(&mut tx, &parent).await.unwrap();
+
+    assert!(!LeafNode::set_present(&mut tx, &block_id).await.unwrap());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn set_present_on_leaf_node_that_does_not_exist() {
+    let pool = setup().await;
+    let mut tx = pool.begin().await.unwrap();
+
+    let block_id = rand::random();
+
+    assert_matches!(
+        LeafNode::set_present(&mut tx, &block_id).await,
+        Err(Error::BlockNotReferenced)
+    )
+}
+
 #[proptest]
 fn check_complete(
     #[strategy(0usize..=32)] leaf_count: usize,
@@ -546,10 +592,10 @@ fn summary(
     #[strategy(0usize..=32)] leaf_count: usize,
     #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
 ) {
-    test_utils::run(missing_blocks_case(leaf_count, rng_seed))
+    test_utils::run(summary_case(leaf_count, rng_seed))
 }
 
-async fn missing_blocks_case(leaf_count: usize, rng_seed: u64) {
+async fn summary_case(leaf_count: usize, rng_seed: u64) {
     let mut rng = StdRng::seed_from_u64(rng_seed);
     let pool = setup().await;
 

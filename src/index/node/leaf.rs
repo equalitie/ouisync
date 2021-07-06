@@ -2,6 +2,7 @@ use crate::{
     block::BlockId,
     crypto::{Hash, Hashable},
     db,
+    error::Error,
     error::Result,
 };
 use futures_util::{Stream, TryStreamExt};
@@ -106,14 +107,28 @@ impl LeafNode {
             .err_into()
     }
 
-    /// Marks all leaf nodes that point to the specified block as present (not missing).
-    pub async fn set_present(tx: &mut db::Transaction<'_>, block_id: &BlockId) -> Result<()> {
-        sqlx::query("UPDATE snapshot_leaf_nodes SET is_missing = 0 WHERE block_id = ?")
+    /// Marks all leaf nodes that point to the specified block as present (not missing). Returns
+    /// whether at least one node was modified.
+    pub async fn set_present(tx: &mut db::Transaction<'_>, block_id: &BlockId) -> Result<bool> {
+        // Check whether there is at least one node that references the given block.
+        if sqlx::query("SELECT 1 FROM snapshot_leaf_nodes WHERE block_id = ? LIMIT 1")
             .bind(block_id)
-            .execute(tx)
-            .await?;
+            .fetch_optional(&mut *tx)
+            .await?
+            .is_none()
+        {
+            return Err(Error::BlockNotReferenced);
+        }
 
-        Ok(())
+        // Update only those nodes that have is_missing set to true.
+        let result = sqlx::query(
+            "UPDATE snapshot_leaf_nodes SET is_missing = 0 WHERE block_id = ? AND is_missing = 1",
+        )
+        .bind(block_id)
+        .execute(tx)
+        .await?;
+
+        Ok(result.rows_affected() > 0)
     }
 }
 

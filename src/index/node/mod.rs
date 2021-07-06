@@ -45,9 +45,9 @@ pub async fn receive_block(
     tx: &mut db::Transaction<'_>,
     id: &BlockId,
 ) -> Result<HashSet<ReplicaId>> {
-    // TODO: return error when no node referencing the block exists.
-    // TODO: return whether anything changed, bail early if not.
-    LeafNode::set_present(tx, id).await?;
+    if !LeafNode::set_present(tx, id).await? {
+        return Ok(HashSet::new());
+    }
 
     let nodes = LeafNode::load_parent_hashes(tx, id)
         .map_ok(|hash| (hash, INNER_LAYER_COUNT))
