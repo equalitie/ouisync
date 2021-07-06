@@ -62,6 +62,10 @@ fn from_row(row: SqliteRow, buffer: &mut [u8]) -> Result<AuthTag> {
 
 /// Writes a block into the store.
 ///
+/// This function is idempotent, that is, writing the same block (same id, same content) multiple
+/// times has the same effect as writing it only once. However, attempt to write a block with the
+/// same id as an existing block but with a different content or auth_tag is an error.
+///
 /// # Panics
 ///
 /// Panics if buffer length is not equal to [`BLOCK_SIZE`].
@@ -86,13 +90,26 @@ pub async fn write(
     .bind(id)
     .bind(auth_tag.as_slice())
     .bind(buffer)
-    .execute(tx)
+    .execute(&mut *tx)
     .await?;
 
     if result.rows_affected() > 0 {
         Ok(())
     } else {
-        Err(Error::BlockExists)
+        // Block with the same id already exists. If it also has the same content, treat it as a
+        // success (to make this function idempotent), otherwise error.
+        if sqlx::query("SELECT content = ? AND auth_tag = ? FROM blocks WHERE id = ?")
+            .bind(buffer)
+            .bind(auth_tag.as_slice())
+            .bind(id)
+            .fetch_one(tx)
+            .await?
+            .get(0)
+        {
+            Ok(())
+        } else {
+            Err(Error::BlockExists)
+        }
     }
 }
 
@@ -163,13 +180,21 @@ mod tests {
         write(&mut tx, &id, &content0, &auth_tag).await.unwrap();
         tx.commit().await.unwrap();
 
-        let content1 = random_block_content();
+        // Try to overwrite it with the same content -> no-op.
+        {
+            let mut tx = pool.begin().await.unwrap();
+            write(&mut tx, &id, &content0, &auth_tag).await.unwrap();
+        }
 
-        let mut tx = pool.begin().await.unwrap();
-        match write(&mut tx, &id, &content1, &auth_tag).await {
-            Err(Error::BlockExists) => (),
-            Err(error) => panic!("unexpected error: {:?}", error),
-            Ok(_) => panic!("unexpected success"),
+        // Try to overwrite it with a different content -> error
+        {
+            let content1 = random_block_content();
+            let mut tx = pool.begin().await.unwrap();
+            match write(&mut tx, &id, &content1, &auth_tag).await {
+                Err(Error::BlockExists) => (),
+                Err(error) => panic!("unexpected error: {:?}", error),
+                Ok(_) => panic!("unexpected success"),
+            }
         }
     }
 
