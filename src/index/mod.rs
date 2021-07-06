@@ -77,6 +77,7 @@ impl Index {
                 .is_up_to_date_with(&remote_summary)
                 .unwrap_or(true))
         } else {
+            // TODO: if hash is of empty nodes collection, return false
             Ok(true)
         }
     }

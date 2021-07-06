@@ -127,7 +127,7 @@ impl Client {
                     inner_layer: 0,
                 })
                 .await
-                .unwrap_or(())
+                .unwrap_or(());
         }
 
         Ok(())

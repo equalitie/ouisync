@@ -56,22 +56,27 @@ async fn transfer_snapshot_between_two_replicas_case(
     let (mut server, mut client, mut simulator) =
         create_network(a_index.clone(), b_index.clone()).await;
 
-    let drive = async {
-        let mut remaining_changes = change_count;
-        let mut first_root_request = false;
+    let drive = {
+        let a_index = a_index.clone();
+        async move {
+            let mut remaining_changes = change_count;
+            let mut first_root_request = false;
 
-        loop {
-            simulator
-                .run_until(|message| matches!(message, Message::Request(Request::RootNode { .. })))
-                .await;
+            loop {
+                simulator
+                    .run_until(|message| {
+                        matches!(message, Message::Request(Request::RootNode { .. }))
+                    })
+                    .await;
 
-            if !first_root_request {
-                first_root_request = true;
-            } else if remaining_changes > 0 {
-                create_block(&mut rng, &a_index).await;
-                remaining_changes -= 1;
-            } else {
-                break;
+                if !first_root_request {
+                    first_root_request = true;
+                } else if remaining_changes > 0 {
+                    create_block(&mut rng, &a_index).await;
+                    remaining_changes -= 1;
+                } else {
+                    break;
+                }
             }
         }
     };
@@ -105,12 +110,6 @@ fn transfer_blocks_between_two_replicas(
         block_count,
         rng_seed,
     ))
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn debug() {
-    env_logger::init();
-    transfer_blocks_between_two_replicas_case(2, 0).await
 }
 
 async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed: u64) {
