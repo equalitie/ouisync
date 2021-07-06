@@ -58,7 +58,7 @@ impl Index {
         let branches = self.branches.lock().await;
         for replica_id in replica_ids {
             if let Some(branch) = branches.get(replica_id) {
-                branch.notify.notify_waiters()
+                branch.notify_changed()
             }
         }
     }
@@ -135,7 +135,7 @@ struct Branches {
 
 impl Branches {
     fn get(&self, replica_id: &ReplicaId) -> Option<&Branch> {
-        if self.local.replica_id == *replica_id {
+        if self.local.replica_id() == replica_id {
             Some(&self.local)
         } else {
             self.remote.get(replica_id)

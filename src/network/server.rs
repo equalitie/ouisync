@@ -7,21 +7,24 @@ use crate::{
     crypto::Hash,
     error::Result,
     index::{Index, InnerNode, LeafNode, RootNode},
-    version_vector::VersionVector,
 };
-use std::{cmp::Ordering, collections::VecDeque, sync::Arc};
-use tokio::{select, sync::Notify};
-
-const BACKLOG_CAPACITY: usize = 32;
+use tokio::{select, sync::watch};
 
 pub struct Server {
     index: Index,
-    notify: Arc<Notify>,
+    notify: watch::Receiver<()>,
     stream: ServerStream,
-    // `RootNode` requests which we can't fulfil because their version vector is strictly newer
-    // than our latest. We backlog them here until we detect local branch change, then attempt to
-    // handle them again.
-    backlog: VecDeque<VersionVector>,
+    // "Cookie" number that gets included in the next sent `RootNode` response. The client stores
+    // it and sends it back in their next `RootNode` request. This is then used by the server to
+    // decide whether the client is up to date (if their cookie is equal (or greater) to ours, they
+    // are up to date, otherwise they are not). The server increments this every time there is a
+    // change to the local branch.
+    cookie: u64,
+    // Flag indicating whether the server is waiting for a local change before sending a `RootNode`
+    // response to the client. This gets set to true when the client send us a `RootNode` request
+    // whose cookie is equal (or greater) than ours which indicates that they are up to date with
+    // us.
+    waiting: bool,
 }
 
 impl Server {
@@ -34,7 +37,8 @@ impl Server {
             index,
             notify,
             stream,
-            backlog: VecDeque::with_capacity(BACKLOG_CAPACITY),
+            cookie: 1,
+            waiting: false,
         }
     }
 
@@ -50,7 +54,7 @@ impl Server {
 
                     self.handle_request(request).await?
                 }
-                _ = self.notify.notified() => self.handle_local_change().await?
+                _ = self.notify.changed() => self.handle_local_change().await?
             }
         }
 
@@ -58,8 +62,14 @@ impl Server {
     }
 
     async fn handle_local_change(&mut self) -> Result<()> {
-        while let Some(versions) = self.backlog.pop_front() {
-            self.handle_root_node(versions).await?
+        let old_cookie = self.cookie;
+        let old_waiting = self.waiting;
+
+        self.cookie = self.cookie.wrapping_add(1);
+        self.waiting = false;
+
+        if old_waiting {
+            self.handle_root_node(old_cookie).await?;
         }
 
         Ok(())
@@ -67,7 +77,7 @@ impl Server {
 
     async fn handle_request(&mut self, request: Request) -> Result<()> {
         match request {
-            Request::RootNode(versions) => self.handle_root_node(versions).await,
+            Request::RootNode { cookie } => self.handle_root_node(cookie).await,
             Request::InnerNodes {
                 parent_hash,
                 inner_layer,
@@ -77,20 +87,17 @@ impl Server {
         }
     }
 
-    async fn handle_root_node(&mut self, their_versions: VersionVector) -> Result<()> {
-        let node = RootNode::load_latest(&self.index.pool, &self.index.this_replica_id).await?;
+    async fn handle_root_node(&mut self, cookie: u64) -> Result<()> {
+        log::trace!("cookies: server={}, client={}", self.cookie, cookie);
 
-        // Check whether we have a snapshot that is newer or concurrent to the one they have.
-        if let Some(node) = node {
-            if node
-                .versions
-                .partial_cmp(&their_versions)
-                .map(Ordering::is_gt)
-                .unwrap_or(true)
+        // Note: the comparison with zero is there to handle the case when the cookie wraps around.
+        if cookie < self.cookie || self.cookie == 0 {
+            if let Some(node) =
+                RootNode::load_latest(&self.index.pool, &self.index.this_replica_id).await?
             {
-                // We do have one - send the response.
                 self.stream
                     .send(Response::RootNode {
+                        cookie: self.cookie,
                         versions: node.versions,
                         hash: node.hash,
                         summary: node.summary,
@@ -101,15 +108,7 @@ impl Server {
             }
         }
 
-        // We don't have one yet - backlog the request and try to fulfil it next time when the
-        // local branch changes.
-
-        // If the backlog is at capacity, evict the oldest entries.
-        while self.backlog.len() >= BACKLOG_CAPACITY {
-            self.backlog.pop_front();
-        }
-
-        self.backlog.push_back(their_versions);
+        self.waiting = true;
 
         Ok(())
     }

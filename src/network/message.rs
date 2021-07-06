@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Request {
-    /// Request a root node that is newer or concurrent to the specified version.
-    RootNode(VersionVector),
+    /// Request a root node.
+    RootNode { cookie: u64 },
     /// Request inner nodes with the given parent hash and inner layer.
     InnerNodes {
         parent_hash: Hash,
@@ -27,6 +27,7 @@ pub enum Request {
 pub enum Response {
     /// Send the latest root node of this replica to another replica.
     RootNode {
+        cookie: u64,
         versions: VersionVector,
         hash: Hash,
         summary: Summary,
@@ -55,11 +56,13 @@ impl fmt::Debug for Response {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::RootNode {
+                cookie,
                 versions,
                 hash,
                 summary,
             } => f
                 .debug_struct("RootNode")
+                .field("cookie", cookie)
                 .field("versions", versions)
                 .field("hash", hash)
                 .field("summary", summary)

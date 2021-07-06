@@ -17,6 +17,10 @@ pub struct Client {
     index: Index,
     their_replica_id: ReplicaId,
     stream: ClientStream,
+    // "Cookie" number of the last received `RootNode` response or zero if we haven't received one
+    // yet. To be included in the next sent `RootNode` request. The server uses this to decide
+    // whether the client is up to date.
+    cookie: u64,
 }
 
 impl Client {
@@ -25,6 +29,7 @@ impl Client {
             index,
             their_replica_id,
             stream,
+            cookie: 0,
         }
     }
 
@@ -34,19 +39,10 @@ impl Client {
     }
 
     async fn pull_snapshot(&mut self) -> Result<bool> {
-        // Send version vector that is a combination of the versions of our latest snapshot and
-        // their latest complete snapshot that we have. This way they respond only when they have
-        // something we don't.
-        let mut versions = self.latest_local_versions().await?;
-
-        if let Some(node) =
-            RootNode::load_latest_complete(&self.index.pool, &self.their_replica_id).await?
-        {
-            versions.merge(node.versions);
-        }
-
         self.stream
-            .send(Request::RootNode(versions))
+            .send(Request::RootNode {
+                cookie: self.cookie,
+            })
             .await
             .unwrap_or(());
 
@@ -65,13 +61,14 @@ impl Client {
         Ok(false)
     }
 
-    async fn handle_response(&self, response: Response) -> Result<()> {
+    async fn handle_response(&mut self, response: Response) -> Result<()> {
         match response {
             Response::RootNode {
+                cookie,
                 versions,
                 hash,
                 summary,
-            } => self.handle_root_node(versions, hash, summary).await,
+            } => self.handle_root_node(cookie, versions, hash, summary).await,
             Response::InnerNodes {
                 parent_hash,
                 inner_layer,
@@ -92,11 +89,14 @@ impl Client {
     }
 
     async fn handle_root_node(
-        &self,
+        &mut self,
+        cookie: u64,
         versions: VersionVector,
         hash: Hash,
         summary: Summary,
     ) -> Result<()> {
+        self.cookie = cookie;
+
         let this_versions = self.latest_local_versions().await?;
         if versions
             .partial_cmp(&this_versions)

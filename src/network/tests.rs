@@ -13,6 +13,7 @@ use crate::{
     store, test_utils,
     version_vector::VersionVector,
 };
+use futures_util::future;
 use rand::prelude::*;
 use std::time::Duration;
 use test_strategy::proptest;
@@ -109,7 +110,7 @@ fn transfer_blocks_between_two_replicas(
 #[tokio::test(flavor = "multi_thread")]
 async fn debug() {
     env_logger::init();
-    transfer_blocks_between_two_replicas_case(1, 0).await
+    transfer_blocks_between_two_replicas_case(2, 0).await
 }
 
 async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed: u64) {
@@ -123,9 +124,14 @@ async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed:
     save_snapshot(&a_index, &snapshot).await;
     save_snapshot(&b_index, &snapshot).await;
 
-    let (mut server, mut client, mut simulator) =
+    let (mut server, mut client, simulator) =
         create_network(a_index.clone(), b_index.clone()).await;
 
+    // Simulate the network connection between the two replicas.
+    let (simulate, abort_simulator) = future::abortable(simulator.run_owned());
+
+    // Drive the test - keep adding the blocks to replica A and verify they get received by
+    // replica B as well.
     let drive = async move {
         let content = vec![0; BLOCK_SIZE];
 
@@ -135,19 +141,18 @@ async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed:
                 .await
                 .unwrap();
 
-            // Wait until replica B receives and writes the block too.
-            simulator
-                .run_until(|message| matches!(message, Message::Response(Response::Block { .. })))
-                .await;
-
-            // HACK: Find a better way to do this.
+            // Then wait until replica B receives and writes the block.
+            // TODO: find a better way to do this than `sleep`.
             while !block::exists(&b_index.pool, block_id).await.unwrap() {
                 time::sleep(Duration::from_millis(25)).await;
             }
         }
+
+        // Stop the network simulator
+        abort_simulator.abort();
     };
 
-    let (server_result, client_result, _) = join!(server.run(), client.run(), drive);
+    let (server_result, client_result, ..) = join!(server.run(), client.run(), simulate, drive);
     server_result.unwrap();
     client_result.unwrap();
 }
@@ -284,6 +289,16 @@ impl ConnectionSimulator {
             server_send_rx,
             server_recv_tx,
         }
+    }
+
+    // Keep simulating the network forewer.
+    async fn run(&mut self) {
+        self.run_until(|_| false).await
+    }
+
+    // Like `run` but also moves the ownership of the simulator into the returned future.
+    async fn run_owned(mut self) {
+        self.run().await
     }
 
     // Keep simulating the network until a message is sent for which `pred` returns `true`.

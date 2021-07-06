@@ -15,27 +15,44 @@ use crate::{
     replica_id::ReplicaId,
 };
 use std::{mem, sync::Arc};
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::{watch, Mutex};
 
 type LocatorHash = Hash;
 
 #[derive(Clone)]
 pub struct Branch {
-    root_node: Arc<Mutex<RootNode>>,
-    pub(super) replica_id: ReplicaId,
-    pub(super) notify: Arc<Notify>,
+    shared: Arc<Shared>,
+}
+
+struct Shared {
+    replica_id: ReplicaId,
+    root_node: Mutex<RootNode>,
+    changed_tx: watch::Sender<()>,
+    // Currently it's necessary to keep a received around so we can hand out subscriptions by
+    // cloning it. However, if/when [this PR](https://github.com/tokio-rs/tokio/pull/3800) gets
+    // merged it won't be necessary because it would be possible to subscribe directly to to the
+    // sender.
+    changed_rx: watch::Receiver<()>,
 }
 
 impl Branch {
     pub async fn new(pool: &db::Pool, replica_id: ReplicaId) -> Result<Self> {
         let root_node = RootNode::load_latest_or_create(pool, &replica_id).await?;
-        let notify = Arc::new(Notify::new());
+        let (changed_tx, changed_rx) = watch::channel(());
 
         Ok(Self {
-            root_node: Arc::new(Mutex::new(root_node)),
-            replica_id,
-            notify,
+            shared: Arc::new(Shared {
+                replica_id,
+                root_node: Mutex::new(root_node),
+                changed_tx,
+                changed_rx,
+            }),
         })
+    }
+
+    /// Returns the id of the replica that owns this branch.
+    pub fn replica_id(&self) -> &ReplicaId {
+        &self.shared.replica_id
     }
 
     /// Inserts a new block into the index. Returns the previous id at the same locator, if any.
@@ -45,7 +62,7 @@ impl Branch {
         block_id: &BlockId,
         encoded_locator: &LocatorHash,
     ) -> Result<Option<BlockId>> {
-        let mut lock = self.root_node.lock().await;
+        let mut lock = self.shared.root_node.lock().await;
         let mut path = self.get_path(tx, &lock.hash, &encoded_locator).await?;
 
         // We shouldn't be inserting a block to a branch twice. If we do, the assumption is that we
@@ -66,7 +83,7 @@ impl Branch {
         tx: &mut db::Transaction<'_>,
         encoded_locator: &Hash,
     ) -> Result<BlockId> {
-        let root_node = self.root_node.lock().await;
+        let root_node = self.shared.root_node.lock().await;
         let path = self.get_path(tx, &root_node.hash, &encoded_locator).await?;
 
         match path.get_leaf() {
@@ -82,7 +99,7 @@ impl Branch {
         tx: &mut db::Transaction<'_>,
         encoded_locator: &Hash,
     ) -> Result<BlockId> {
-        let mut lock = self.root_node.lock().await;
+        let mut lock = self.shared.root_node.lock().await;
         let mut path = self.get_path(tx, &lock.hash, encoded_locator).await?;
         let block_id = path
             .remove_leaf(encoded_locator)
@@ -95,8 +112,12 @@ impl Branch {
 
     /// Subscribe to notifications of changes in this branch. A notification is emitted every time
     /// a new snapshot of this branch is created or a previously missing block is downloaded.
-    pub fn subscribe(&self) -> Arc<Notify> {
-        self.notify.clone()
+    pub fn subscribe(&self) -> watch::Receiver<()> {
+        self.shared.changed_rx.clone()
+    }
+
+    pub(super) fn notify_changed(&self) {
+        self.shared.changed_tx.send(()).unwrap_or(())
     }
 
     async fn get_path(
@@ -166,7 +187,7 @@ impl Branch {
         let new_root = node.next_version(tx, hash).await?;
         let old_root = mem::replace(node, new_root);
 
-        self.notify.notify_waiters();
+        self.notify_changed();
 
         Ok(old_root)
     }

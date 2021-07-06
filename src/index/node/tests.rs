@@ -215,7 +215,7 @@ async fn save_missing_leaf_node_over_existing_missing_one() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn save_missing_leaf_node_over_exists_present_one() {
+async fn save_missing_leaf_node_over_existing_present_one() {
     let pool = setup().await;
 
     let parent = rand::random::<u64>().hash();
