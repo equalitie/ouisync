@@ -7,20 +7,23 @@ pub use self::node::test_utils as node_test_utils;
 pub use self::{
     branch::Branch,
     node::{
-        receive_block, update_summaries, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, RootNode,
-        Summary, INNER_LAYER_COUNT,
+        receive_block, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, RootNode, Summary,
+        INNER_LAYER_COUNT,
     },
 };
 
 use crate::{
+    block::BlockId,
     crypto::Hash,
     db,
     error::{Error, Result},
+    version_vector::VersionVector,
     ReplicaId,
 };
 use sqlx::Row;
 use std::{
-    collections::{HashMap, HashSet},
+    cmp::Ordering,
+    collections::{hash_map::Entry, HashMap, HashSet},
     sync::Arc,
 };
 use tokio::sync::Mutex;
@@ -63,9 +66,100 @@ impl Index {
         }
     }
 
-    /// Check whether the remote replica has some blocks under the specified root node that the
-    /// local one is missing.
-    pub(crate) async fn has_root_node_new_blocks(
+    /// Receive `RootNode` from other replica and store it into the db. Returns whether the
+    /// received node was more up-to-date than the corresponding branch stored by this replica.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `replica_id` identifies this replica instead of a remote one.
+    pub(crate) async fn receive_root_node(
+        &self,
+        replica_id: &ReplicaId,
+        versions: VersionVector,
+        hash: Hash,
+        summary: Summary,
+    ) -> Result<bool> {
+        assert_ne!(replica_id, &self.this_replica_id);
+
+        // Only accept it if newer or concurrent with our versions.
+        let this_versions = RootNode::load_latest(&self.pool, &self.this_replica_id)
+            .await?
+            .map(|node| node.versions)
+            .unwrap_or_default();
+
+        if versions
+            .partial_cmp(&this_versions)
+            .map(Ordering::is_le)
+            .unwrap_or(false)
+        {
+            return Ok(false);
+        }
+
+        // Write the root node to the db.
+        let updated = self
+            .has_root_node_new_blocks(replica_id, &hash, &summary)
+            .await?;
+        let node =
+            RootNode::create(&self.pool, replica_id, versions, hash, Summary::INCOMPLETE).await?;
+        node::update_summaries(&self.pool, hash, 0).await?;
+
+        // Update the remote branch with the new root.
+        let mut branches = self.branches.lock().await;
+        match branches.remote.entry(*replica_id) {
+            Entry::Vacant(entry) => {
+                entry.insert(Branch::with_root_node(*replica_id, node));
+            }
+            Entry::Occupied(entry) => entry.get().update_root(node).await,
+        }
+
+        Ok(updated)
+    }
+
+    /// Receive inner nodes from other replica and store them into the db.
+    /// Returns hashes of those nodes that were more up to date than the locally stored ones.
+    pub(crate) async fn receive_inner_nodes(
+        &self,
+        parent_hash: Hash,
+        inner_layer: usize,
+        nodes: InnerNodeMap,
+    ) -> Result<Vec<Hash>> {
+        let updated: Vec<_> = self
+            .find_inner_nodes_with_new_blocks(&parent_hash, &nodes)
+            .await?
+            .map(|node| node.hash)
+            .collect();
+
+        nodes
+            .into_incomplete()
+            .save(&self.pool, &parent_hash)
+            .await?;
+        node::update_summaries(&self.pool, parent_hash, inner_layer).await?;
+
+        Ok(updated)
+    }
+
+    /// Receive leaf nodes from other replica and store them into the db.
+    /// Returns the ids of the blocks that the remote replica has but the local one has not.
+    pub(crate) async fn receive_leaf_nodes(
+        &self,
+        parent_hash: Hash,
+        nodes: LeafNodeSet,
+    ) -> Result<Vec<BlockId>> {
+        let updated: Vec<_> = self
+            .find_leaf_nodes_with_new_blocks(&parent_hash, &nodes)
+            .await?
+            .map(|node| node.block_id)
+            .collect();
+
+        nodes.into_missing().save(&self.pool, &parent_hash).await?;
+        node::update_summaries(&self.pool, parent_hash, INNER_LAYER_COUNT).await?;
+
+        Ok(updated)
+    }
+
+    // Check whether the remote replica has some blocks under the specified root node that the
+    // local one is missing.
+    async fn has_root_node_new_blocks(
         &self,
         replica_id: &ReplicaId,
         hash: &Hash,
@@ -82,11 +176,11 @@ impl Index {
         }
     }
 
-    /// Filter inner nodes that the remote replica has some blocks in that the local one is missing.
-    ///
-    /// Assumes (but does not enforce) that `parent_hash` is the parent hash of all nodes in
-    /// `remote_nodes`.
-    pub(crate) async fn find_inner_nodes_with_new_blocks<'a, 'b, 'c>(
+    // Filter inner nodes that the remote replica has some blocks in that the local one is missing.
+    //
+    // Assumes (but does not enforce) that `parent_hash` is the parent hash of all nodes in
+    // `remote_nodes`.
+    async fn find_inner_nodes_with_new_blocks<'a, 'b, 'c>(
         &'a self,
         parent_hash: &'b Hash,
         remote_nodes: &'c InnerNodeMap,
@@ -112,11 +206,11 @@ impl Index {
             .map(|(_, node)| node))
     }
 
-    /// Filter leaf nodes that the remote replica has a block for but the local one is missing it.
-    ///
-    /// Assumes (but does not enforce) that `parent_hash` is the parent hash of all nodes in
-    /// `remote_nodes`.
-    pub(crate) async fn find_leaf_nodes_with_new_blocks<'a, 'b, 'c>(
+    // Filter leaf nodes that the remote replica has a block for but the local one is missing it.
+    //
+    // Assumes (but does not enforce) that `parent_hash` is the parent hash of all nodes in
+    // `remote_nodes`.
+    async fn find_leaf_nodes_with_new_blocks<'a, 'b, 'c>(
         &'a self,
         parent_hash: &'b Hash,
         remote_nodes: &'c LeafNodeSet,

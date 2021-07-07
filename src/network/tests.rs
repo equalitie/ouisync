@@ -1,20 +1,20 @@
 use super::{
     client::Client,
-    message::{Message, Request, Response},
+    message::{Request, Response},
     message_broker::{ClientStream, Command, ServerStream},
     server::Server,
 };
 use crate::{
-    block::{self, BLOCK_SIZE},
+    block::{self, BlockId, BLOCK_SIZE},
     crypto::{AuthTag, Hashable},
     db,
-    index::{self, node_test_utils::Snapshot, Index, RootNode, Summary, INNER_LAYER_COUNT},
+    index::{node_test_utils::Snapshot, Index, RootNode, Summary},
     replica_id::ReplicaId,
     store, test_utils,
     version_vector::VersionVector,
 };
 use rand::prelude::*;
-use std::time::Duration;
+use std::{future::Future, time::Duration};
 use test_strategy::proptest;
 use tokio::{select, sync::mpsc, time};
 
@@ -52,21 +52,15 @@ async fn transfer_snapshot_between_two_replicas_case(
         .await
         .is_none());
 
-    let (mut server, mut client, mut simulator) =
-        create_network(a_index.clone(), b_index.clone()).await;
-
+    // Wait until replica B catches up to replica A, then have replica A perform a local change
+    // (create one new block) and repeat.
     let drive = async {
         let mut remaining_changes = change_count;
-        let mut first_root_request = false;
 
         loop {
-            simulator
-                .run_until(|message| matches!(message, Message::Request(Request::RootNode { .. })))
-                .await;
+            wait_until_snapshots_in_sync(&a_index, &b_index).await;
 
-            if !first_root_request {
-                first_root_request = true;
-            } else if remaining_changes > 0 {
+            if remaining_changes > 0 {
                 create_block(&mut rng, &a_index).await;
                 remaining_changes -= 1;
             } else {
@@ -75,22 +69,7 @@ async fn transfer_snapshot_between_two_replicas_case(
         }
     };
 
-    select! {
-        result = server.run() => result.unwrap(),
-        result = client.run() => result.unwrap(),
-        _ = drive => (),
-    }
-
-    let root_per_b = load_latest_root_node(&b_index, &a_index.this_replica_id)
-        .await
-        .unwrap();
-    let root_per_a = load_latest_root_node(&a_index, &a_index.this_replica_id)
-        .await
-        .unwrap();
-
-    assert!(root_per_b.summary.is_complete());
-    assert_eq!(root_per_b.hash, root_per_a.hash);
-    assert_eq!(root_per_b.versions, root_per_a.versions);
+    simulate_connection_until(a_index.clone(), b_index.clone(), drive).await
 }
 
 #[proptest]
@@ -115,11 +94,7 @@ async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed:
     save_snapshot(&a_index, &snapshot).await;
     save_snapshot(&b_index, &snapshot).await;
 
-    let (mut server, mut client, mut simulator) =
-        create_network(a_index.clone(), b_index.clone()).await;
-
-    // Drive the test - keep adding the blocks to replica A and verify they get received by
-    // replica B as well.
+    // Keep adding the blocks to replica A and verify they get received by replica B as well.
     let drive = async {
         let content = vec![0; BLOCK_SIZE];
 
@@ -129,20 +104,12 @@ async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed:
                 .await
                 .unwrap();
 
-            // Then wait until replica B receives and writes the block.
-            // TODO: find a better way to do this than `sleep`.
-            while !block::exists(&b_index.pool, block_id).await.unwrap() {
-                time::sleep(Duration::from_millis(25)).await;
-            }
+            // Then wait until replica B receives and writes it too.
+            wait_until_block_exists(&b_index, block_id).await;
         }
     };
 
-    select! {
-        result = server.run() => result.unwrap(),
-        result = client.run() => result.unwrap(),
-        _ = simulator.run() => (),
-        _ = drive => (),
-    }
+    simulate_connection_until(a_index.clone(), b_index.clone(), drive).await
 }
 
 async fn create_index<R: Rng>(rng: &mut R) -> Index {
@@ -155,45 +122,6 @@ async fn create_index<R: Rng>(rng: &mut R) -> Index {
 // Enough capacity to prevent deadlocks.
 // TODO: find the actual minimum necessary capacity.
 const CAPACITY: usize = 256;
-
-async fn create_network(
-    server_index: Index,
-    client_index: Index,
-) -> (Server, Client, ConnectionSimulator) {
-    let server_replica_id = server_index.this_replica_id;
-    let (server, server_send_rx, server_recv_tx) = create_server(server_index).await;
-    let (client, client_send_rx, client_recv_tx) = create_client(client_index, server_replica_id);
-
-    let simulator = ConnectionSimulator::new(
-        client_send_rx,
-        client_recv_tx,
-        server_send_rx,
-        server_recv_tx,
-    );
-
-    (server, client, simulator)
-}
-
-async fn create_server(index: Index) -> (Server, mpsc::Receiver<Command>, mpsc::Sender<Request>) {
-    let (send_tx, send_rx) = mpsc::channel(1);
-    let (recv_tx, recv_rx) = mpsc::channel(CAPACITY);
-    let stream = ServerStream::new(send_tx, recv_rx);
-    let server = Server::new(index, stream).await;
-
-    (server, send_rx, recv_tx)
-}
-
-fn create_client(
-    index: Index,
-    their_replica_id: ReplicaId,
-) -> (Client, mpsc::Receiver<Command>, mpsc::Sender<Response>) {
-    let (send_tx, send_rx) = mpsc::channel(1);
-    let (recv_tx, recv_rx) = mpsc::channel(CAPACITY);
-    let stream = ClientStream::new(send_tx, recv_rx);
-    let client = Client::new(index, their_replica_id, stream);
-
-    (client, send_rx, recv_tx)
-}
 
 async fn save_snapshot(index: &Index, snapshot: &Snapshot) {
     RootNode::create(
@@ -213,10 +141,38 @@ async fn save_snapshot(index: &Index, snapshot: &Snapshot) {
     }
 
     for (parent_hash, nodes) in snapshot.leaf_sets() {
-        nodes.save(&index.pool, &parent_hash).await.unwrap();
-        index::update_summaries(&index.pool, *parent_hash, INNER_LAYER_COUNT)
+        index
+            .receive_leaf_nodes(*parent_hash, nodes.clone())
             .await
             .unwrap();
+    }
+}
+
+async fn wait_until_snapshots_in_sync(server_index: &Index, client_index: &Index) {
+    let server_root = load_latest_root_node(server_index, &server_index.this_replica_id)
+        .await
+        .unwrap();
+
+    loop {
+        if let Some(client_root) =
+            load_latest_root_node(client_index, &server_index.this_replica_id).await
+        {
+            if client_root.summary.is_complete() && client_root.hash == server_root.hash {
+                // client has now fully downloaded server's latest snapshot.
+                assert_eq!(client_root.versions, server_root.versions);
+                break;
+            }
+        }
+
+        // TODO: find a better way to do this than `sleep`.
+        time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
+async fn wait_until_block_exists(index: &Index, block_id: &BlockId) {
+    while !block::exists(&index.pool, block_id).await.unwrap() {
+        // TODO: find a better way to do this than `sleep`.
+        time::sleep(Duration::from_millis(25)).await;
     }
 }
 
@@ -255,6 +211,52 @@ async fn load_latest_root_node(index: &Index, replica_id: &ReplicaId) -> Option<
         .unwrap()
 }
 
+// Simulate connection between two replicas until the given future completes.
+async fn simulate_connection_until<F>(server_index: Index, client_index: Index, until: F)
+where
+    F: Future<Output = ()>,
+{
+    let server_replica_id = server_index.this_replica_id;
+    let (mut server, server_send_rx, server_recv_tx) = create_server(server_index).await;
+    let (mut client, client_send_rx, client_recv_tx) =
+        create_client(client_index, server_replica_id);
+
+    let mut simulator = ConnectionSimulator::new(
+        client_send_rx,
+        client_recv_tx,
+        server_send_rx,
+        server_recv_tx,
+    );
+
+    select! {
+        result = server.run() => result.unwrap(),
+        result = client.run() => result.unwrap(),
+        _ = simulator.run() => (),
+        _ = until => (),
+    }
+}
+
+async fn create_server(index: Index) -> (Server, mpsc::Receiver<Command>, mpsc::Sender<Request>) {
+    let (send_tx, send_rx) = mpsc::channel(1);
+    let (recv_tx, recv_rx) = mpsc::channel(CAPACITY);
+    let stream = ServerStream::new(send_tx, recv_rx);
+    let server = Server::new(index, stream).await;
+
+    (server, send_rx, recv_tx)
+}
+
+fn create_client(
+    index: Index,
+    their_replica_id: ReplicaId,
+) -> (Client, mpsc::Receiver<Command>, mpsc::Sender<Response>) {
+    let (send_tx, send_rx) = mpsc::channel(1);
+    let (recv_tx, recv_rx) = mpsc::channel(CAPACITY);
+    let stream = ClientStream::new(send_tx, recv_rx);
+    let client = Client::new(index, their_replica_id, stream);
+
+    (client, send_rx, recv_tx)
+}
+
 // Simulate connection between `Client` and `Server` by forwarding the messages between the
 // corresponding streams.
 struct ConnectionSimulator {
@@ -279,31 +281,16 @@ impl ConnectionSimulator {
         }
     }
 
-    // Keep simulating the network forewer.
     async fn run(&mut self) {
-        self.run_until(|_| false).await
-    }
-
-    // Keep simulating the network until a message is sent for which `pred` returns `true`.
-    async fn run_until<F>(&mut self, pred: F)
-    where
-        F: Fn(&Message) -> bool,
-    {
         loop {
             select! {
                 command = self.client_send_rx.recv() => {
-                    let message = command.unwrap().into_send_message();
-                    let stop = pred(&message);
-                    let request = message.into();
+                    let request = command.unwrap().into_send_message().into();
                     self.server_recv_tx.send(request).await.unwrap();
-                    if stop { break }
                 }
                 command = self.server_send_rx.recv() => {
-                    let message = command.unwrap().into_send_message();
-                    let stop = pred(&message);
-                    let response = message.into();
+                    let response = command.unwrap().into_send_message().into();
                     self.client_recv_tx.send(response).await.unwrap();
-                    if stop { break }
                 }
             }
         }

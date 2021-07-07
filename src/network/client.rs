@@ -6,12 +6,11 @@ use crate::{
     block::BlockId,
     crypto::{AuthTag, Hash, Hashable},
     error::Result,
-    index::{self, Index, InnerNodeMap, LeafNodeSet, RootNode, Summary, INNER_LAYER_COUNT},
+    index::{Index, InnerNodeMap, LeafNodeSet, RootNode, Summary, INNER_LAYER_COUNT},
     replica_id::ReplicaId,
     store,
     version_vector::VersionVector,
 };
-use std::cmp::Ordering;
 
 pub struct Client {
     index: Index,
@@ -97,33 +96,14 @@ impl Client {
     ) -> Result<()> {
         self.cookie = cookie;
 
-        let this_versions = self.latest_local_versions().await?;
-        if versions
-            .partial_cmp(&this_versions)
-            .map(Ordering::is_le)
-            .unwrap_or(false)
-        {
-            return Ok(());
-        }
-
-        let updated = self
+        if self
             .index
-            .has_root_node_new_blocks(&self.their_replica_id, &hash, &summary)
-            .await?;
-        let node = RootNode::create(
-            &self.index.pool,
-            &self.their_replica_id,
-            versions,
-            hash,
-            Summary::INCOMPLETE,
-        )
-        .await?;
-        index::update_summaries(&self.index.pool, hash, 0).await?;
-
-        if updated {
+            .receive_root_node(&self.their_replica_id, versions, hash, summary)
+            .await?
+        {
             self.stream
                 .send(Request::InnerNodes {
-                    parent_hash: node.hash,
+                    parent_hash: hash,
                     inner_layer: 0,
                 })
                 .await
@@ -144,20 +124,11 @@ impl Client {
             return Ok(());
         }
 
-        let updated: Vec<_> = self
+        for hash in self
             .index
-            .find_inner_nodes_with_new_blocks(&parent_hash, &nodes)
+            .receive_inner_nodes(parent_hash, inner_layer, nodes)
             .await?
-            .map(|node| node.hash)
-            .collect();
-
-        nodes
-            .into_incomplete()
-            .save(&self.index.pool, &parent_hash)
-            .await?;
-        index::update_summaries(&self.index.pool, parent_hash, inner_layer).await?;
-
-        for hash in updated {
+        {
             self.stream
                 .send(child_request(hash, inner_layer))
                 .await
@@ -173,13 +144,13 @@ impl Client {
             return Ok(());
         }
 
-        self.pull_missing_blocks(&parent_hash, &nodes).await?;
-
-        nodes
-            .into_missing()
-            .save(&self.index.pool, &parent_hash)
-            .await?;
-        index::update_summaries(&self.index.pool, parent_hash, INNER_LAYER_COUNT).await?;
+        for block_id in self.index.receive_leaf_nodes(parent_hash, nodes).await? {
+            // TODO: avoid multiple clients downloading the same block
+            self.stream
+                .send(Request::Block(block_id))
+                .await
+                .unwrap_or(());
+        }
 
         Ok(())
     }
@@ -196,38 +167,6 @@ impl Client {
                 .map(|node| node.summary.is_complete())
                 .unwrap_or(false),
         )
-    }
-
-    // Returns the versions of the latest snapshot belonging to the local replica.
-    async fn latest_local_versions(&self) -> Result<VersionVector> {
-        Ok(
-            RootNode::load_latest(&self.index.pool, &self.index.this_replica_id)
-                .await?
-                .map(|node| node.versions)
-                .unwrap_or_default(),
-        )
-    }
-
-    // Download blocks that are missing by us but present in the remote replica.
-    async fn pull_missing_blocks(
-        &self,
-        parent_hash: &Hash,
-        remote_nodes: &LeafNodeSet,
-    ) -> Result<()> {
-        let updated = self
-            .index
-            .find_leaf_nodes_with_new_blocks(parent_hash, remote_nodes)
-            .await?;
-        for node in updated {
-            // TODO: avoid multiple clients downloading the same block
-
-            self.stream
-                .send(Request::Block(node.block_id))
-                .await
-                .unwrap_or(());
-        }
-
-        Ok(())
     }
 }
 
