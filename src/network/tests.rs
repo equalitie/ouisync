@@ -13,11 +13,10 @@ use crate::{
     store, test_utils,
     version_vector::VersionVector,
 };
-use futures_util::future;
 use rand::prelude::*;
 use std::time::Duration;
 use test_strategy::proptest;
-use tokio::{join, select, sync::mpsc, time};
+use tokio::{select, sync::mpsc, time};
 
 // Test complete transfer of one snapshot from one replica to another
 // Also test a new snapshot transfer is performed after every local branch
@@ -56,38 +55,31 @@ async fn transfer_snapshot_between_two_replicas_case(
     let (mut server, mut client, mut simulator) =
         create_network(a_index.clone(), b_index.clone()).await;
 
-    let drive = {
-        let a_index = a_index.clone();
-        async move {
-            let mut remaining_changes = change_count;
-            let mut first_root_request = false;
+    let drive = async {
+        let mut remaining_changes = change_count;
+        let mut first_root_request = false;
 
-            loop {
-                simulator
-                    .run_until(|message| {
-                        matches!(message, Message::Request(Request::RootNode { .. }))
-                    })
-                    .await;
+        loop {
+            simulator
+                .run_until(|message| matches!(message, Message::Request(Request::RootNode { .. })))
+                .await;
 
-                if !first_root_request {
-                    first_root_request = true;
-                } else if remaining_changes > 0 {
-                    create_block(&mut rng, &a_index).await;
-                    remaining_changes -= 1;
-                } else {
-                    break;
-                }
+            if !first_root_request {
+                first_root_request = true;
+            } else if remaining_changes > 0 {
+                create_block(&mut rng, &a_index).await;
+                remaining_changes -= 1;
+            } else {
+                break;
             }
         }
     };
 
-    // NOTE: using `join` instead of `select` to make sure all tasks run to completion even after
-    // one of them finishes. This seems to prevent a memory corruption issue which is triggered by
-    // (what seems to be) a bug in sqlx and which happens when a future that contains a sqlx query
-    // is interrupted mid query instead of being let to run to completion.
-    let (server_result, client_result, _) = join!(server.run(), client.run(), drive);
-    server_result.unwrap();
-    client_result.unwrap();
+    select! {
+        result = server.run() => result.unwrap(),
+        result = client.run() => result.unwrap(),
+        _ = drive => (),
+    }
 
     let root_per_b = load_latest_root_node(&b_index, &a_index.this_replica_id)
         .await
@@ -123,15 +115,12 @@ async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed:
     save_snapshot(&a_index, &snapshot).await;
     save_snapshot(&b_index, &snapshot).await;
 
-    let (mut server, mut client, simulator) =
+    let (mut server, mut client, mut simulator) =
         create_network(a_index.clone(), b_index.clone()).await;
-
-    // Simulate the network connection between the two replicas.
-    let (simulate, abort_simulator) = future::abortable(simulator.run_owned());
 
     // Drive the test - keep adding the blocks to replica A and verify they get received by
     // replica B as well.
-    let drive = async move {
+    let drive = async {
         let content = vec![0; BLOCK_SIZE];
 
         for block_id in snapshot.block_ids() {
@@ -146,14 +135,14 @@ async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed:
                 time::sleep(Duration::from_millis(25)).await;
             }
         }
-
-        // Stop the network simulator
-        abort_simulator.abort();
     };
 
-    let (server_result, client_result, ..) = join!(server.run(), client.run(), simulate, drive);
-    server_result.unwrap();
-    client_result.unwrap();
+    select! {
+        result = server.run() => result.unwrap(),
+        result = client.run() => result.unwrap(),
+        _ = simulator.run() => (),
+        _ = drive => (),
+    }
 }
 
 async fn create_index<R: Rng>(rng: &mut R) -> Index {
@@ -293,11 +282,6 @@ impl ConnectionSimulator {
     // Keep simulating the network forewer.
     async fn run(&mut self) {
         self.run_until(|_| false).await
-    }
-
-    // Like `run` but also moves the ownership of the simulator into the returned future.
-    async fn run_owned(mut self) {
-        self.run().await
     }
 
     // Keep simulating the network until a message is sent for which `pred` returns `true`.
