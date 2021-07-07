@@ -9,9 +9,9 @@ use crate::{
     entry::{Entry, EntryType},
     error::{Error, Result},
     file::File,
+    global_locator::GlobalLocator,
     index::{Branch, Index},
     locator::Locator,
-    global_locator::GlobalLocator,
     ReplicaId,
 };
 
@@ -31,7 +31,10 @@ impl Repository {
 
     /// Opens the root directory.
     pub async fn root(&self) -> Result<Directory> {
-        let locator = GlobalLocator { branch: *self.this_replica_id(), local: Locator::Root };
+        let locator = GlobalLocator {
+            branch: *self.this_replica_id(),
+            local: Locator::Root,
+        };
         self.open_directory_by_locator(locator).await
     }
 
@@ -186,12 +189,18 @@ impl Repository {
     }
 
     async fn branch(&self, replica_id: &ReplicaId) -> Result<Branch> {
-        self.index.branch(replica_id).await.ok_or(Error::EntryNotFound)
+        self.index
+            .branch(replica_id)
+            .await
+            .ok_or(Error::EntryNotFound)
     }
 
     async fn lookup_by_path(&self, path: &Path) -> Result<(GlobalLocator, EntryType)> {
         let branch = *self.this_replica_id();
-        let mut stack = vec![GlobalLocator { branch, local: Locator::Root }];
+        let mut stack = vec![GlobalLocator {
+            branch,
+            local: Locator::Root,
+        }];
         let mut last_type = EntryType::Directory;
 
         for component in path.components() {
@@ -213,7 +222,10 @@ impl Repository {
                         .await?;
                     let next_entry = parent_dir.lookup(name)?;
 
-                    stack.push(GlobalLocator { branch, local: next_entry.locator()});
+                    stack.push(GlobalLocator {
+                        branch,
+                        local: next_entry.locator(),
+                    });
                     last_type = next_entry.entry_type();
                 }
             }
@@ -243,11 +255,15 @@ mod tests {
         let index = Index::load(pool, ReplicaId::random()).await.unwrap();
         let repo = Repository::new(index, Cryptor::Null);
 
-        let global = |local: Locator| {
-            GlobalLocator { branch: *repo.this_replica_id(), local }
+        let global = |local: Locator| GlobalLocator {
+            branch: *repo.this_replica_id(),
+            local,
         };
 
-        let mut root_dir = repo.open_directory_by_locator(global(Locator::Root)).await.unwrap();
+        let mut root_dir = repo
+            .open_directory_by_locator(global(Locator::Root))
+            .await
+            .unwrap();
         let mut file_a = root_dir.create_file("a.txt".into()).unwrap();
         file_a.flush().await.unwrap();
 
@@ -280,20 +296,44 @@ mod tests {
         assert_eq!(repo.lookup(".").await.unwrap().0, global(Locator::Root));
         assert_eq!(repo.lookup("/.").await.unwrap().0, global(Locator::Root));
         assert_eq!(repo.lookup("./").await.unwrap().0, global(Locator::Root));
-        assert_eq!(repo.lookup("/sub").await.unwrap().0, global(*subdir.locator()));
-        assert_eq!(repo.lookup("sub/").await.unwrap().0, global(*subdir.locator()));
-        assert_eq!(repo.lookup("/sub/").await.unwrap().0, global(*subdir.locator()));
-        assert_eq!(repo.lookup("./sub").await.unwrap().0, global(*subdir.locator()));
-        assert_eq!(repo.lookup("././sub").await.unwrap().0, global(*subdir.locator()));
-        assert_eq!(repo.lookup("sub/.").await.unwrap().0, global(*subdir.locator()));
+        assert_eq!(
+            repo.lookup("/sub").await.unwrap().0,
+            global(*subdir.locator())
+        );
+        assert_eq!(
+            repo.lookup("sub/").await.unwrap().0,
+            global(*subdir.locator())
+        );
+        assert_eq!(
+            repo.lookup("/sub/").await.unwrap().0,
+            global(*subdir.locator())
+        );
+        assert_eq!(
+            repo.lookup("./sub").await.unwrap().0,
+            global(*subdir.locator())
+        );
+        assert_eq!(
+            repo.lookup("././sub").await.unwrap().0,
+            global(*subdir.locator())
+        );
+        assert_eq!(
+            repo.lookup("sub/.").await.unwrap().0,
+            global(*subdir.locator())
+        );
 
-        assert_eq!(repo.lookup("sub/..").await.unwrap().0, global(Locator::Root));
+        assert_eq!(
+            repo.lookup("sub/..").await.unwrap().0,
+            global(Locator::Root)
+        );
         assert_eq!(
             repo.lookup("sub/../a.txt").await.unwrap().0,
             global(*file_a.locator())
         );
         assert_eq!(repo.lookup("..").await.unwrap().0, global(Locator::Root));
         assert_eq!(repo.lookup("../..").await.unwrap().0, global(Locator::Root));
-        assert_eq!(repo.lookup("sub/../..").await.unwrap().0, global(Locator::Root));
+        assert_eq!(
+            repo.lookup("sub/../..").await.unwrap().0,
+            global(Locator::Root)
+        );
     }
 }

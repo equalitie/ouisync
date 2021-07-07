@@ -47,10 +47,7 @@ impl JointDirectory {
         self.versions.values()
     }
 
-    pub async fn create_directory(
-        &mut self,
-        name: &OsStr,
-    ) -> Result<JointDirectory> {
+    pub async fn create_directory(&mut self, name: &OsStr) -> Result<JointDirectory> {
         self.versions
             .get_mut(&self.this_replica_id)
             .ok_or(Error::OperationNotSupported)

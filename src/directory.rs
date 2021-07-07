@@ -4,8 +4,8 @@ use crate::{
     db,
     entry::{Entry, EntryType},
     error::{Error, Result},
-    global_locator::GlobalLocator,
     file::File,
+    global_locator::GlobalLocator,
     index::Branch,
     locator::Locator,
 };

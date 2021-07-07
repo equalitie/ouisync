@@ -68,8 +68,7 @@ impl Index {
 
         if replica_id == &self.this_replica_id {
             Some(branches.local.clone())
-        }
-        else {
+        } else {
             branches.remote.get(replica_id).cloned()
         }
     }

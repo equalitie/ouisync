@@ -17,8 +17,8 @@ use fuser::{
     ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow,
 };
 use ouisync::{
-    Directory, EntryType, Error, File, GlobalLocator, JointDirectory, JointEntry,
-    MoveDstDirectory, Repository, Result,
+    Directory, EntryType, Error, File, GlobalLocator, JointDirectory, JointEntry, MoveDstDirectory,
+    Repository, Result,
 };
 use std::{
     convert::TryInto,
@@ -598,9 +598,7 @@ impl Inner {
         // TODO: Remove from other branches as well.
         let mut parent_dir = self.open_directory_by_representation(parent_repr).await?;
 
-        parent_dir
-            .remove_directory(name)
-            .await?;
+        parent_dir.remove_directory(name).await?;
         parent_dir.flush().await
     }
 
