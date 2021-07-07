@@ -13,6 +13,7 @@ pub use self::{
 };
 
 use crate::{
+    block::BlockId,
     crypto::Hash,
     db,
     error::{Error, Result},
@@ -114,6 +115,48 @@ impl Index {
         Ok(updated)
     }
 
+    /// Receive inner nodes from other replica and store them into the db.
+    /// Returns hashes of those nodes that were more up to date than the locally stored ones.
+    pub(crate) async fn receive_inner_nodes(
+        &self,
+        parent_hash: Hash,
+        inner_layer: usize,
+        nodes: InnerNodeMap,
+    ) -> Result<Vec<Hash>> {
+        let updated: Vec<_> = self
+            .find_inner_nodes_with_new_blocks(&parent_hash, &nodes)
+            .await?
+            .map(|node| node.hash)
+            .collect();
+
+        nodes
+            .into_incomplete()
+            .save(&self.pool, &parent_hash)
+            .await?;
+        node::update_summaries(&self.pool, parent_hash, inner_layer).await?;
+
+        Ok(updated)
+    }
+
+    /// Receive leaf nodes from other replica and store them into the db.
+    /// Returns the ids of the blocks that the remote replica has but the local one has not.
+    pub(crate) async fn receive_leaf_nodes(
+        &self,
+        parent_hash: Hash,
+        nodes: LeafNodeSet,
+    ) -> Result<Vec<BlockId>> {
+        let updated: Vec<_> = self
+            .find_leaf_nodes_with_new_blocks(&parent_hash, &nodes)
+            .await?
+            .map(|node| node.block_id)
+            .collect();
+
+        nodes.into_missing().save(&self.pool, &parent_hash).await?;
+        node::update_summaries(&self.pool, parent_hash, INNER_LAYER_COUNT).await?;
+
+        Ok(updated)
+    }
+
     // Check whether the remote replica has some blocks under the specified root node that the
     // local one is missing.
     async fn has_root_node_new_blocks(
@@ -133,11 +176,11 @@ impl Index {
         }
     }
 
-    /// Filter inner nodes that the remote replica has some blocks in that the local one is missing.
-    ///
-    /// Assumes (but does not enforce) that `parent_hash` is the parent hash of all nodes in
-    /// `remote_nodes`.
-    pub(crate) async fn find_inner_nodes_with_new_blocks<'a, 'b, 'c>(
+    // Filter inner nodes that the remote replica has some blocks in that the local one is missing.
+    //
+    // Assumes (but does not enforce) that `parent_hash` is the parent hash of all nodes in
+    // `remote_nodes`.
+    async fn find_inner_nodes_with_new_blocks<'a, 'b, 'c>(
         &'a self,
         parent_hash: &'b Hash,
         remote_nodes: &'c InnerNodeMap,
@@ -163,11 +206,11 @@ impl Index {
             .map(|(_, node)| node))
     }
 
-    /// Filter leaf nodes that the remote replica has a block for but the local one is missing it.
-    ///
-    /// Assumes (but does not enforce) that `parent_hash` is the parent hash of all nodes in
-    /// `remote_nodes`.
-    pub(crate) async fn find_leaf_nodes_with_new_blocks<'a, 'b, 'c>(
+    // Filter leaf nodes that the remote replica has a block for but the local one is missing it.
+    //
+    // Assumes (but does not enforce) that `parent_hash` is the parent hash of all nodes in
+    // `remote_nodes`.
+    async fn find_leaf_nodes_with_new_blocks<'a, 'b, 'c>(
         &'a self,
         parent_hash: &'b Hash,
         remote_nodes: &'c LeafNodeSet,
