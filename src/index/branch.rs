@@ -38,16 +38,20 @@ struct Shared {
 impl Branch {
     pub async fn new(pool: &db::Pool, replica_id: ReplicaId) -> Result<Self> {
         let root_node = RootNode::load_latest_or_create(pool, &replica_id).await?;
+        Ok(Self::with_root_node(replica_id, root_node))
+    }
+
+    pub fn with_root_node(replica_id: ReplicaId, root_node: RootNode) -> Self {
         let (changed_tx, changed_rx) = watch::channel(());
 
-        Ok(Self {
+        Self {
             shared: Arc::new(Shared {
                 replica_id,
                 root_node: Mutex::new(root_node),
                 changed_tx,
                 changed_rx,
             }),
-        })
+        }
     }
 
     /// Returns the id of the replica that owns this branch.
@@ -118,6 +122,22 @@ impl Branch {
 
     pub(super) fn notify_changed(&self) {
         self.shared.changed_tx.send(()).unwrap_or(())
+    }
+
+    /// Update the root node of this branch. Does nothing if the version of `new_root` is not
+    /// greater than the version of the current root.
+    pub async fn update_root(&self, new_root: RootNode) {
+        let mut old_root = self.shared.root_node.lock().await;
+
+        if new_root.versions.get(&self.shared.replica_id)
+            <= old_root.versions.get(&self.shared.replica_id)
+        {
+            return;
+        }
+
+        *old_root = new_root;
+
+        self.notify_changed();
     }
 
     async fn get_path(

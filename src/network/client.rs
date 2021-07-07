@@ -11,7 +11,6 @@ use crate::{
     store,
     version_vector::VersionVector,
 };
-use std::cmp::Ordering;
 
 pub struct Client {
     index: Index,
@@ -97,33 +96,14 @@ impl Client {
     ) -> Result<()> {
         self.cookie = cookie;
 
-        let this_versions = self.latest_local_versions().await?;
-        if versions
-            .partial_cmp(&this_versions)
-            .map(Ordering::is_le)
-            .unwrap_or(false)
-        {
-            return Ok(());
-        }
-
-        let updated = self
+        if self
             .index
-            .has_root_node_new_blocks(&self.their_replica_id, &hash, &summary)
-            .await?;
-        let node = RootNode::create(
-            &self.index.pool,
-            &self.their_replica_id,
-            versions,
-            hash,
-            Summary::INCOMPLETE,
-        )
-        .await?;
-        index::update_summaries(&self.index.pool, hash, 0).await?;
-
-        if updated {
+            .receive_root_node(&self.their_replica_id, versions, hash, summary)
+            .await?
+        {
             self.stream
                 .send(Request::InnerNodes {
-                    parent_hash: node.hash,
+                    parent_hash: hash,
                     inner_layer: 0,
                 })
                 .await
@@ -195,16 +175,6 @@ impl Client {
                 .await?
                 .map(|node| node.summary.is_complete())
                 .unwrap_or(false),
-        )
-    }
-
-    // Returns the versions of the latest snapshot belonging to the local replica.
-    async fn latest_local_versions(&self) -> Result<VersionVector> {
-        Ok(
-            RootNode::load_latest(&self.index.pool, &self.index.this_replica_id)
-                .await?
-                .map(|node| node.versions)
-                .unwrap_or_default(),
         )
     }
 

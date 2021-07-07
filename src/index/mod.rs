@@ -16,11 +16,13 @@ use crate::{
     crypto::Hash,
     db,
     error::{Error, Result},
+    version_vector::VersionVector,
     ReplicaId,
 };
 use sqlx::Row;
 use std::{
-    collections::{HashMap, HashSet},
+    cmp::Ordering,
+    collections::{hash_map::Entry, HashMap, HashSet},
     sync::Arc,
 };
 use tokio::sync::Mutex;
@@ -63,9 +65,58 @@ impl Index {
         }
     }
 
-    /// Check whether the remote replica has some blocks under the specified root node that the
-    /// local one is missing.
-    pub(crate) async fn has_root_node_new_blocks(
+    /// Receive `RootNode` from other replica and store it into the db. Returns whether the
+    /// received node was more up-to-date than the corresponding branch stored by this replica.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `replica_id` identifies this replica instead of a remote one.
+    pub(crate) async fn receive_root_node(
+        &self,
+        replica_id: &ReplicaId,
+        versions: VersionVector,
+        hash: Hash,
+        summary: Summary,
+    ) -> Result<bool> {
+        assert_ne!(replica_id, &self.this_replica_id);
+
+        // Only accept it if newer or concurrent with our versions.
+        let this_versions = RootNode::load_latest(&self.pool, &self.this_replica_id)
+            .await?
+            .map(|node| node.versions)
+            .unwrap_or_default();
+
+        if versions
+            .partial_cmp(&this_versions)
+            .map(Ordering::is_le)
+            .unwrap_or(false)
+        {
+            return Ok(false);
+        }
+
+        // Write the root node to the db.
+        let updated = self
+            .has_root_node_new_blocks(replica_id, &hash, &summary)
+            .await?;
+        let node =
+            RootNode::create(&self.pool, replica_id, versions, hash, Summary::INCOMPLETE).await?;
+        node::update_summaries(&self.pool, hash, 0).await?;
+
+        // Update the remote branch with the new root.
+        let mut branches = self.branches.lock().await;
+        match branches.remote.entry(*replica_id) {
+            Entry::Vacant(entry) => {
+                entry.insert(Branch::with_root_node(*replica_id, node));
+            }
+            Entry::Occupied(entry) => entry.get().update_root(node).await,
+        }
+
+        Ok(updated)
+    }
+
+    // Check whether the remote replica has some blocks under the specified root node that the
+    // local one is missing.
+    async fn has_root_node_new_blocks(
         &self,
         replica_id: &ReplicaId,
         hash: &Hash,
