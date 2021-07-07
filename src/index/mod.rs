@@ -7,8 +7,8 @@ pub use self::node::test_utils as node_test_utils;
 pub use self::{
     branch::Branch,
     node::{
-        receive_block, update_summaries, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, RootNode,
-        Summary, INNER_LAYER_COUNT,
+        receive_block, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, RootNode, Summary,
+        INNER_LAYER_COUNT,
     },
 };
 
