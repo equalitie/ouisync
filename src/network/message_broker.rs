@@ -156,10 +156,6 @@ impl Inner {
         command_rx: mpsc::Receiver<Command>,
         finish_rx: oneshot::Receiver<()>,
     ) {
-        // FIXME: there seems to be a bug in sqlx which sometimes causes a memory corruption when a
-        // future that contains a sqlx query is interrupted instead of being let to run to
-        // completion. For this reason we should make sure that `client.run` and `server.run` both
-        // run to completion even when one of the other tasks finishes first.
         select! {
             _ = self.handle_commands(command_rx) => (),
             _ = log_error(client.run(), "client failed: ") => (),
