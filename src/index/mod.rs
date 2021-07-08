@@ -288,7 +288,7 @@ pub async fn init(pool: &db::Pool) -> Result<(), Error> {
              UNIQUE(replica_id, hash)
          );
 
-         CREATE INDEX index_snapshot_root_nodes_on_hash
+         CREATE INDEX IF NOT EXISTS index_snapshot_root_nodes_on_hash
              ON snapshot_root_nodes (hash);
 
          CREATE TABLE IF NOT EXISTS snapshot_inner_nodes (
@@ -311,7 +311,7 @@ pub async fn init(pool: &db::Pool) -> Result<(), Error> {
              UNIQUE(parent, bucket)
          );
 
-         CREATE INDEX index_snapshot_inner_nodes_on_hash
+         CREATE INDEX IF NOT EXISTS index_snapshot_inner_nodes_on_hash
              ON snapshot_inner_nodes (hash);
 
          CREATE TABLE IF NOT EXISTS snapshot_leaf_nodes (
@@ -326,7 +326,7 @@ pub async fn init(pool: &db::Pool) -> Result<(), Error> {
              UNIQUE(parent, locator, block_id)
          );
 
-         CREATE INDEX index_snapshot_leaf_nodes_on_block_id
+         CREATE INDEX IF NOT EXISTS index_snapshot_leaf_nodes_on_block_id
              ON snapshot_leaf_nodes (block_id);
 
          -- Prevents creating multiple inner nodes with the same parent and bucket but different
