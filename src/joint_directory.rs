@@ -12,6 +12,7 @@ use std::{
     ffi::{OsStr, OsString},
 };
 
+#[derive(Clone)]
 pub struct JointDirectory {
     versions: BTreeMap<ReplicaId, Directory>,
 }

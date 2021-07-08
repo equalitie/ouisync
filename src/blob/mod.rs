@@ -19,6 +19,7 @@ use std::{
 };
 use zeroize::Zeroize;
 
+#[derive(Clone)]
 pub struct Blob {
     branch: Branch,
     global_locator: GlobalLocator,
@@ -566,6 +567,7 @@ async fn write_block(
 }
 
 // Data for a block that's been loaded into memory and decrypted.
+#[derive(Clone)]
 struct OpenBlock {
     // Locator of the block.
     locator: Locator,
@@ -611,6 +613,7 @@ impl DerefMut for Buffer {
 
 // Wrapper for `Buffer` with an internal position which advances when data is read from or
 // written to the buffer.
+#[derive(Clone)]
 struct Cursor {
     buffer: Buffer,
     pos: usize,

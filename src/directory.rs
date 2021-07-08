@@ -15,6 +15,7 @@ use std::{
     ffi::{OsStr, OsString},
 };
 
+#[derive(Clone)]
 pub struct Directory {
     blob: Blob,
     content: Content,
@@ -315,7 +316,7 @@ impl MoveDstDirectory {
     }
 }
 
-#[derive(Default, Deserialize, Serialize)]
+#[derive(Default, Clone, Deserialize, Serialize)]
 struct Content {
     entries: BTreeMap<OsString, EntryData>,
     #[serde(skip)]
@@ -393,7 +394,7 @@ impl VacantEntry<'_> {
     }
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 struct EntryData {
     entry_type: EntryType,
     seq: u32,
