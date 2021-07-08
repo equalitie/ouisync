@@ -13,14 +13,12 @@ use std::{
 };
 
 pub struct JointDirectory {
-    this_replica_id: ReplicaId,
     versions: BTreeMap<ReplicaId, Directory>,
 }
 
 impl JointDirectory {
-    pub fn new(this_replica_id: ReplicaId) -> Self {
+    pub fn new() -> Self {
         Self {
-            this_replica_id,
             versions: BTreeMap::new(),
         }
     }
@@ -47,16 +45,16 @@ impl JointDirectory {
         self.versions.values()
     }
 
-    pub async fn create_directory(&mut self, name: &OsStr) -> Result<JointDirectory> {
+    pub async fn create_directory(&mut self, branch: &ReplicaId, name: &OsStr) -> Result<JointDirectory> {
         self.versions
-            .get_mut(&self.this_replica_id)
+            .get_mut(branch)
             .ok_or(Error::OperationNotSupported)
             .and_then(|dir| dir.create_directory(name.to_owned()))?;
 
-        let mut result = JointDirectory::new(self.this_replica_id);
+        let mut result = JointDirectory::new();
 
         for (r_id, dir) in self.versions.iter() {
-            // TODO: When r_id == this_replica_id, we can avoid one (the most likely) async call to
+            // TODO: When r_id == branch, we can avoid one (the most likely) async call to
             // open_directory() by reusing the directory we created above.
             if let Ok(entry_info) = dir.lookup(name) {
                 // Ignore if it's a file
@@ -69,24 +67,24 @@ impl JointDirectory {
         Ok(result)
     }
 
-    pub fn create_file(&mut self, name: OsString) -> Result<File> {
+    pub fn create_file(&mut self, branch: &ReplicaId, name: OsString) -> Result<File> {
         self.versions
-            .get_mut(&self.this_replica_id)
+            .get_mut(branch)
             .ok_or(Error::OperationNotSupported)?
             .create_file(name)
     }
 
-    pub async fn remove_file(&mut self, name: &OsStr) -> Result<()> {
+    pub async fn remove_file(&mut self, branch: &ReplicaId, name: &OsStr) -> Result<()> {
         self.versions
-            .get_mut(&self.this_replica_id)
+            .get_mut(branch)
             .ok_or(Error::OperationNotSupported)?
             .remove_file(name)
             .await
     }
 
-    pub async fn remove_directory(&mut self, name: &OsStr) -> Result<()> {
+    pub async fn remove_directory(&mut self, branch: &ReplicaId, name: &OsStr) -> Result<()> {
         self.versions
-            .get_mut(&self.this_replica_id)
+            .get_mut(branch)
             .ok_or(Error::OperationNotSupported)?
             .remove_directory(name)
             .await
@@ -189,7 +187,7 @@ mod tests {
         r0.flush().await.unwrap();
         r1.flush().await.unwrap();
 
-        let mut root = JointDirectory::new(*branches[0].replica_id());
+        let mut root = JointDirectory::new();
 
         root.insert(r0).unwrap();
         root.insert(r1).unwrap();
@@ -234,7 +232,7 @@ mod tests {
         r0.flush().await.unwrap();
         r1.flush().await.unwrap();
 
-        let mut root = JointDirectory::new(*branches[0].replica_id());
+        let mut root = JointDirectory::new();
 
         root.insert(r0).unwrap();
         root.insert(r1).unwrap();

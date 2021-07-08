@@ -576,7 +576,7 @@ impl Inner {
         let mut parent_dir = self.open_directory_by_representation(&parent_repr).await?;
 
         // TODO: Ensure parent_dir[this_replica_id] exists.
-        let mut dir = parent_dir.create_directory(name).await?;
+        let mut dir = parent_dir.create_directory(self.this_replica_id(), name).await?;
 
         // TODO: should these two happen atomically (in a transaction)?
         dir.flush().await?;
@@ -598,7 +598,7 @@ impl Inner {
         // TODO: Remove from other branches as well.
         let mut parent_dir = self.open_directory_by_representation(parent_repr).await?;
 
-        parent_dir.remove_directory(name).await?;
+        parent_dir.remove_directory(self.this_replica_id(), name).await?;
         parent_dir.flush().await
     }
 
@@ -634,7 +634,7 @@ impl Inner {
 
         let parent_repr = &self.inodes.get(parent).representation;
         let mut parent_dir = self.open_directory_by_representation(parent_repr).await?;
-        let mut file = parent_dir.create_file(name.to_owned())?;
+        let mut file = parent_dir.create_file(self.this_replica_id(), name.to_owned())?;
 
         file.flush().await?;
         parent_dir.flush().await?;
@@ -778,7 +778,7 @@ impl Inner {
         log::debug!("unlink {}", self.inodes.path_display(parent, Some(name)));
 
         let mut parent_dir = self.open_directory_by_inode(parent).await?;
-        parent_dir.remove_file(name).await?;
+        parent_dir.remove_file(self.this_replica_id(), name).await?;
         parent_dir.flush().await
     }
 
@@ -837,8 +837,7 @@ impl Inner {
         repr.entry_type().check_is_directory()?;
         let locator = self.get_locator_by_representation(&repr).await?;
         // TODO: Return dir from each branch
-        let this_replica_id = self.repository.this_replica_id();
-        let mut dir = JointDirectory::new(*this_replica_id);
+        let mut dir = JointDirectory::new();
         dir.insert(self.repository.open_directory_by_locator(locator).await?)?;
         Ok(dir)
     }
@@ -869,8 +868,7 @@ impl Inner {
             Representation::Directory(path) => {
                 let (locator, entry_type) = self.repository.lookup(path).await?;
                 entry_type.check_is_directory()?;
-                let this_replica_id = self.repository.this_replica_id();
-                let mut dir = JointDirectory::new(*this_replica_id);
+                let mut dir = JointDirectory::new();
                 dir.insert(self.repository.open_directory_by_locator(locator).await?)?;
                 Ok(dir)
             }
@@ -882,8 +880,7 @@ impl Inner {
         match repr {
             Representation::Directory(path) => {
                 let (locator, _entry_type) = self.repository.lookup(path).await?;
-                let this_replica_id = self.repository.this_replica_id();
-                let mut dir = JointDirectory::new(*this_replica_id);
+                let mut dir = JointDirectory::new();
                 dir.insert(self.repository.open_directory_by_locator(locator).await?)?;
                 Ok(JointEntry::Directory(dir))
             }
@@ -892,6 +889,10 @@ impl Inner {
                 Ok(JointEntry::File(file))
             }
         }
+    }
+
+    fn this_replica_id(&self) -> &ReplicaId {
+        self.repository.this_replica_id()
     }
 }
 
