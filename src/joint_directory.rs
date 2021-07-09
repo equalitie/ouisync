@@ -121,8 +121,11 @@ impl JointDirectory {
         // [[(EntryInfo, ReplicaId)]] -> [(EntryInfo, ReplicaId)]
         let entries = sorted_union::new_from_many(entries, |(entry, _)| entry.name());
 
-        // [(EntryInfo, ReplicaId)] -> [(name, [(EntryInfo, ReplicaId)])]
-        let entries = Accumulate::new(entries, |(entry, _)| entry.name());
+        // [(EntryInfo, ReplicaId)] -> [Version]
+        let entries = entries.map(|(info, branch)| Version { info, branch });
+
+        // [Version] -> [(name, [Version])]
+        let entries = Accumulate::new(entries, |version| version.info.name());
 
         entries.map(|(name, versions)| JointEntryView { name, versions })
     }
@@ -131,8 +134,8 @@ impl JointDirectory {
         let mut retval = JointDirectory::new();
         let mut count = 0;
 
-        for (dir, branch) in self.lookup(directory)?.directories() {
-            match dir.open_directory().await {
+        for Version { info, branch } in self.lookup(directory)?.directories() {
+            match info.open_directory().await {
                 Ok(dir) => {
                     retval.insert(dir);
                     count += 1;
@@ -174,8 +177,8 @@ impl JointDirectory {
         // TODO:
         let first = versions.versions[0];
 
-        match first.0.entry_type() {
-            EntryType::File => Ok(Lookup::File(first.0, &first.1)),
+        match first.info.entry_type() {
+            EntryType::File => Ok(Lookup::File(first.info, &first.branch)),
             EntryType::Directory => Ok(Lookup::Directory(versions)),
         }
     }
@@ -186,14 +189,14 @@ impl JointDirectory {
         if entry.versions.len() == 1 {
             return entry.versions
                 .iter()
-                .map(|(entry_info, _)| (entry.name.to_os_string(), entry_info.entry_type()))
+                .map(|v| (v.info.name().to_os_string(), v.info.entry_type()))
                 .collect();
         }
 
         entry.versions
             .iter()
-            .map(|(entry_info, replica_id)| {
-                (Self::add_label(entry.name, replica_id), entry_info.entry_type())
+            .map(|v| {
+                (Self::add_label(v.info.name(), v.branch), v.info.entry_type())
             })
             .collect()
     }
@@ -211,7 +214,11 @@ impl JointDirectory {
     }
 }
 
-type Version<'a> = (EntryInfo<'a>, &'a ReplicaId);
+#[derive(Copy, Clone)]
+pub struct Version<'a> {
+    info: EntryInfo<'a>,
+    branch: &'a ReplicaId,
+}
 
 pub enum Lookup<'a> {
     Directory(JointEntryView<'a>),
@@ -224,8 +231,8 @@ impl<'a> Lookup<'a> {
             Self::Directory(versions) => {
                 let mut joint_dir = JointDirectory::new();
 
-                for (entry_info, branch) in versions.directories() {
-                    match entry_info.open_directory().await {
+                for Version { info, branch } in versions.directories() {
+                    match info.open_directory().await {
                         Ok(dir) => {
                             joint_dir.insert(dir);
                         }
@@ -264,9 +271,9 @@ impl<'a> Iterator for DirectoryVersions<'a> {
     type Item = Version<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        while let Some(r) = self.mix.next() {
-            if r.0.entry_type() == EntryType::Directory {
-                return Some(*r);
+        while let Some(v) = self.mix.next() {
+            if v.info.entry_type() == EntryType::Directory {
+                return Some(*v);
             }
         }
         None
