@@ -112,7 +112,7 @@ impl JointDirectory {
         let entries = self.versions.iter().map(|(replica_id, directory)| {
             directory
                 .entries()
-                .map(move |entry_info| (entry_info, *replica_id))
+                .map(move |entry_info| (entry_info, replica_id))
         });
 
         // [[(EntryInfo, ReplicaId)]] -> [(EntryInfo, ReplicaId)]
@@ -172,7 +172,7 @@ impl JointDirectory {
         let first = versions.versions[0];
 
         match first.0.entry_type() {
-            EntryType::File => Ok(Lookup::File(first.0, first.1)),
+            EntryType::File => Ok(Lookup::File(first.0, &first.1)),
             EntryType::Directory => Ok(Lookup::Directory(versions)),
         }
     }
@@ -211,9 +211,11 @@ impl JointDirectory {
     }
 }
 
+type Version<'a> = (EntryInfo<'a>, &'a ReplicaId);
+
 pub enum Lookup<'a> {
     Directory(Versions<'a>),
-    File(EntryInfo<'a>, ReplicaId),
+    File(EntryInfo<'a>, &'a ReplicaId),
 }
 
 impl<'a> Lookup<'a> {
@@ -258,12 +260,11 @@ impl<'a> Lookup<'a> {
 
 pub enum DirectoryVersions<'a> {
     Empty,
-    MixedVersions(slice::Iter<'a, (EntryInfo<'a>, ReplicaId)>),
+    MixedVersions(slice::Iter<'a, Version<'a>>),
 }
 
 impl<'a> Iterator for DirectoryVersions<'a> {
-    // TODO: Reference to ReplicaId
-    type Item = (EntryInfo<'a>, ReplicaId);
+    type Item = Version<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
         match self {
@@ -282,7 +283,7 @@ impl<'a> Iterator for DirectoryVersions<'a> {
 
 pub struct Versions<'a> {
     name: &'a OsStr,
-    versions: Vec<(EntryInfo<'a>, ReplicaId)>,
+    versions: Vec<Version<'a>>,
 }
 
 impl<'a> Versions<'a> {
@@ -290,7 +291,7 @@ impl<'a> Versions<'a> {
         self.directories().next().is_some()
     }
 
-    fn directories(&'a self) -> impl Iterator<Item = &'a (EntryInfo<'a>, ReplicaId)> {
+    fn directories(&'a self) -> impl Iterator<Item = &'a Version<'a>> {
         self.versions
             .iter()
             .filter(|(entry, _)| entry.entry_type() == EntryType::Directory)

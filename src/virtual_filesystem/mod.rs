@@ -377,8 +377,8 @@ impl Inner {
         let entry = lookup.open().await?;
 
         let repr = match lookup {
-            Lookup::File(entry_info, replica_id) => Representation::File(GlobalLocator {
-                branch: replica_id,
+            Lookup::File(entry_info, branch) => Representation::File(GlobalLocator {
+                branch: *branch,
                 local: entry_info.locator(),
             }),
             Lookup::Directory(_) => {
