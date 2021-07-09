@@ -2,7 +2,7 @@ use crate::{
     directory::{Directory, EntryInfo},
     entry::EntryType,
     file::File,
-    iterator::{accumulate::Accumulate, sorted_union},
+    iterator::{sorted_union, Accumulate, MaybeIterator},
     joint_entry::JointEntry,
     replica_id::ReplicaId,
     Error, Result,
@@ -29,7 +29,10 @@ impl JointDirectory {
 
     pub fn insert(&mut self, directory: Directory) {
         match self.versions.entry(directory.global_locator().branch) {
-            Entry::Vacant(entry) => { entry.insert(directory); () },
+            Entry::Vacant(entry) => {
+                entry.insert(directory);
+                ()
+            }
             Entry::Occupied(_) => panic!("Double insert into JointDirectory"),
         }
     }
@@ -228,7 +231,7 @@ impl<'a> Lookup<'a> {
                     match entry_info.open_directory().await {
                         Ok(dir) => {
                             joint_dir.insert(dir);
-                        },
+                        }
                         Err(e) => {
                             log::warn!(
                                 "Failed to open directory {:?} on branch {:?}: {:?}",
@@ -248,36 +251,28 @@ impl<'a> Lookup<'a> {
         }
     }
 
-    pub fn directories(&'a self) -> DirectoryVersions<'a> {
+    pub fn directories(&'a self) -> MaybeIterator<DirectoryVersions<'a>> {
         match self {
-            Self::Directory(versions) => {
-                DirectoryVersions::MixedVersions::<'a>(versions.versions.iter())
-            }
-            Self::File(_, _) => DirectoryVersions::Empty,
+            Self::Directory(versions) => MaybeIterator::SomeIterator(versions.directories()),
+            Self::File(_, _) => MaybeIterator::NoIterator,
         }
     }
 }
 
-pub enum DirectoryVersions<'a> {
-    Empty,
-    MixedVersions(slice::Iter<'a, Version<'a>>),
+pub struct DirectoryVersions<'a> {
+    mix: slice::Iter<'a, Version<'a>>,
 }
 
 impl<'a> Iterator for DirectoryVersions<'a> {
     type Item = Version<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        match self {
-            Self::Empty => None,
-            Self::MixedVersions(iter) => {
-                while let Some(r) = iter.next() {
-                    if r.0.entry_type() == EntryType::Directory {
-                        return Some(*r);
-                    }
-                }
-                None
+        while let Some(r) = self.mix.next() {
+            if r.0.entry_type() == EntryType::Directory {
+                return Some(*r);
             }
         }
+        None
     }
 }
 
@@ -287,14 +282,10 @@ pub struct Versions<'a> {
 }
 
 impl<'a> Versions<'a> {
-    fn has_directory(&self) -> bool {
-        self.directories().next().is_some()
-    }
-
-    fn directories(&'a self) -> impl Iterator<Item = &'a Version<'a>> {
-        self.versions
-            .iter()
-            .filter(|(entry, _)| entry.entry_type() == EntryType::Directory)
+    fn directories(&'a self) -> DirectoryVersions<'a> {
+        DirectoryVersions {
+            mix: self.versions.iter(),
+        }
     }
 }
 

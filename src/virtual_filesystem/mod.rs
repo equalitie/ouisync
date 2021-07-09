@@ -381,9 +381,7 @@ impl Inner {
                 branch: *branch,
                 local: entry_info.locator(),
             }),
-            Lookup::Directory(_) => {
-                Representation::Directory(parent_path.join(name))
-            }
+            Lookup::Directory(_) => Representation::Directory(parent_path.join(name)),
         };
 
         let inode = self.inodes.lookup(parent, name, repr);
@@ -583,7 +581,9 @@ impl Inner {
         );
 
         let parent_repr = &self.inodes.get(parent).representation;
-        let mut parent_dir = self.open_joint_dir(parent_repr.as_directory_path()?).await?;
+        let mut parent_dir = self
+            .open_joint_dir(parent_repr.as_directory_path()?)
+            .await?;
 
         // TODO: Ensure parent_dir[this_replica_id] exists.
         let mut dir = parent_dir
