@@ -11,7 +11,7 @@ use std::{
     collections::btree_map::{Entry as MapEntry, Values},
     collections::{BTreeMap, BTreeSet},
     ffi::{OsStr, OsString},
-    path::PathBuf,
+    path::Path,
     slice,
 };
 
@@ -31,7 +31,6 @@ impl JointDirectory {
         match self.versions.entry(directory.global_locator().branch) {
             MapEntry::Vacant(entry) => {
                 entry.insert(directory);
-                ()
             }
             MapEntry::Occupied(_) => panic!("Double insert into JointDirectory"),
         }
@@ -158,59 +157,91 @@ impl JointDirectory {
         Ok(retval)
     }
 
-    pub async fn cd_into_path(&self, path: &'_ PathBuf) -> Result<JointDirectory> {
+    pub async fn cd_into_path(&self, path: &Path) -> Result<JointDirectory> {
         let mut retval = self.clone();
-
         for name in path {
             retval = retval.cd_into(name).await?;
         }
-
         Ok(retval)
     }
 
     pub fn lookup<'a>(&'a self, target_name: &'a OsStr) -> Result<Lookup<'a>> {
-        let versions = self
-            .joint_entries()
-            .find(|v| v.name == target_name)
-            .ok_or(Error::EntryNotFound)?;
+        // TODO: This function currently doens't handle one (important) case where there exists a
+        // file "file-<branch>" as well as two or more concurrent files with base name "file". This
+        // could result in there being two files with the same name "file-<branch>".
 
-        // TODO:
-        let first = versions.versions[0];
+        // Look for exact matches first as that is the most likely case.
+        for joint_entry in self.joint_entries() {
+            if joint_entry.name == target_name {
+                if joint_entry.has_directories() {
+                    return Ok(Lookup::Directory(joint_entry));
+                }
 
-        match first.info.entry_type() {
-            EntryType::File => Ok(Lookup::File(first.info, &first.branch)),
-            EntryType::Directory => Ok(Lookup::Directory(versions)),
+                let len = joint_entry.versions.len();
+
+                assert!(len > 0);
+
+                if len > 1 {
+                    // Ambiguous
+                    return Err(Error::EntryNotFound);
+                }
+
+                let first = joint_entry.versions[0];
+                return Ok(Lookup::File(first.info, &first.branch));
+            }
         }
+
+        if let Some((target_base, target_label)) = Version::remove_label(target_name) {
+            for joint_entry in self.joint_entries() {
+                if joint_entry.name == target_base {
+                    // NOTE: Directories don't have labels, so they should have been found with
+                    // the above exact search.
+                    let opt_version = joint_entry
+                        .versions
+                        .into_iter()
+                        .find(|v| v.is_file() && v.matches(&target_base, &target_label));
+
+                    if let Some(version) = opt_version {
+                        return Ok(Lookup::File(version.info, &version.branch));
+                    }
+                    else {
+                        // Early exit
+                        return Err(Error::EntryNotFound);
+                    }
+                }
+            }
+        }
+
+        Err(Error::EntryNotFound)
     }
 
     fn unique_names(entry: &JointEntryView) -> BTreeSet<(OsString, EntryType)> {
         assert!(!entry.versions.is_empty());
 
         if entry.versions.len() == 1 {
-            return entry.versions
+            return entry
+                .versions
                 .iter()
                 .map(|v| (v.info.name().to_os_string(), v.info.entry_type()))
                 .collect();
         }
 
-        entry.versions
+        entry
+            .versions
             .iter()
             .map(|v| {
-                (Self::add_label(v.info.name(), v.branch), v.info.entry_type())
+                (
+                    v.name_with_label(),
+                    v.info.entry_type(),
+                )
             })
             .collect()
     }
+}
 
-    fn add_label(name: &OsStr, replica_id: &ReplicaId) -> OsString {
-        let mut s = name.to_os_string();
-        s.push("-");
-        s.push(Self::replica_id_to_label(replica_id));
-        s
-    }
-
-    fn replica_id_to_label(replica_id: &ReplicaId) -> OsString {
-        let r = replica_id.as_ref();
-        OsString::from(format!("{:02x}{:02x}{:02x}{:02x}", r[0], r[1], r[2], r[3]))
+impl Default for JointDirectory {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -218,6 +249,62 @@ impl JointDirectory {
 pub struct Version<'a> {
     info: EntryInfo<'a>,
     branch: &'a ReplicaId,
+}
+
+impl<'a> Version<'a> {
+    fn is_file(&self) -> bool {
+        self.info.entry_type() == EntryType::File
+    }
+
+    fn matches(&self, name: &OsStr, label: &OsStr) -> bool {
+        // TODO: Check the label without heap allocation
+        name == self.info.name() && label == Self::replica_id_to_label(self.branch)
+    }
+
+    fn replica_id_to_label(replica_id: &ReplicaId) -> OsString {
+        let r = replica_id.as_ref();
+        OsString::from(format!("{:02x}{:02x}{:02x}{:02x}", r[0], r[1], r[2], r[3]))
+    }
+
+    fn name_with_label(&self) -> OsString {
+        let mut s = self.info.name().to_os_string();
+        s.push("-");
+        s.push(Version::replica_id_to_label(self.branch));
+        s
+    }
+
+    fn remove_label_utf8(name: &str) -> Option<(&str, &str)> {
+        let hex_len = 4 * 2;
+        let label_len = hex_len + 1; // +1 is the dash
+
+        if name.len() <= label_len {
+            return None;
+        }
+
+        let label_start = name.len() - label_len;
+        let base = &name[0..label_start];
+        let label = &name[label_start..];
+
+        if !label.starts_with('-') {
+            return None;
+        }
+
+        let label = &label[1..]; // Get rid of the dash
+
+        for c in label.chars() {
+            if !c.is_ascii_hexdigit() {
+                return None;
+            }
+        }
+
+        Some((base, label))
+    }
+
+    fn remove_label(name: &OsStr) -> Option<(OsString, OsString)> {
+        // XXX: Eventually, we should only work with UTF-8 strings.
+        Self::remove_label_utf8(name.to_str().unwrap())
+            .map(|(base, label)| (OsString::from(base), OsString::from(label)))
+    }
 }
 
 pub enum Lookup<'a> {
@@ -290,6 +377,10 @@ impl<'a> JointEntryView<'a> {
         DirectoryVersions {
             mix: self.versions.iter(),
         }
+    }
+
+    fn has_directories(&self) -> bool {
+        self.directories().next().is_some()
     }
 }
 

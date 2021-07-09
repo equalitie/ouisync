@@ -24,7 +24,7 @@ use std::{
     convert::TryInto,
     ffi::OsStr,
     io::{self, SeekFrom},
-    path::{Path, PathBuf},
+    path::Path,
     time::{Duration, SystemTime},
 };
 
@@ -866,7 +866,7 @@ impl Inner {
         }
     }
 
-    async fn open_joint_dir(&self, path: &PathBuf) -> Result<JointDirectory> {
+    async fn open_joint_dir(&self, path: &Path) -> Result<JointDirectory> {
         self.repository.joint_root().await?.cd_into_path(path).await
     }
 
