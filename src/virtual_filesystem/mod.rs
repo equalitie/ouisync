@@ -17,14 +17,14 @@ use fuser::{
     ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow,
 };
 use ouisync::{
-    Directory, EntryType, Error, File, GlobalLocator, JointDirectory, JointEntry, MoveDstDirectory,
-    Repository, Result,
+    joint_directory::Lookup, Directory, EntryType, Error, File, GlobalLocator, JointDirectory,
+    JointEntry, MoveDstDirectory, ReplicaId, Repository, Result,
 };
 use std::{
     convert::TryInto,
     ffi::OsStr,
     io::{self, SeekFrom},
-    path::Path,
+    path::{Path, PathBuf},
     time::{Duration, SystemTime},
 };
 
@@ -371,12 +371,22 @@ impl Inner {
     async fn lookup(&mut self, parent: Inode, name: &OsStr) -> Result<FileAttr> {
         log::debug!("lookup {}", self.inodes.path_display(parent, Some(name)));
 
-        let parent_repr = &self.inodes.get(parent).representation;
+        let parent_path = &self.inodes.get(parent).representation.as_directory_path()?;
+        let parent_dir = self.open_joint_dir(parent_path).await?;
+        let lookup = parent_dir.lookup(name)?;
+        let entry = lookup.open().await?;
 
-        let child = parent_repr.child_directory(name)?;
-        let entry = self.open_entry_by_representation(&child).await?;
+        let repr = match lookup {
+            Lookup::File(entry_info, replica_id) => Representation::File(GlobalLocator {
+                branch: replica_id,
+                local: entry_info.locator(),
+            }),
+            Lookup::Directory(_) => {
+                Representation::Directory(parent_path.join(name))
+            }
+        };
 
-        let inode = self.inodes.lookup(parent, name, child);
+        let inode = self.inodes.lookup(parent, name, repr);
 
         Ok(make_file_attr_for_entry(&entry, inode))
     }
@@ -573,10 +583,12 @@ impl Inner {
         );
 
         let parent_repr = &self.inodes.get(parent).representation;
-        let mut parent_dir = self.open_directory_by_representation(&parent_repr).await?;
+        let mut parent_dir = self.open_joint_dir(parent_repr.as_directory_path()?).await?;
 
         // TODO: Ensure parent_dir[this_replica_id] exists.
-        let mut dir = parent_dir.create_directory(self.this_replica_id(), name).await?;
+        let mut dir = parent_dir
+            .create_directory(self.this_replica_id(), name)
+            .await?;
 
         // TODO: should these two happen atomically (in a transaction)?
         dir.flush().await?;
@@ -593,12 +605,13 @@ impl Inner {
     async fn rmdir(&mut self, parent: Inode, name: &OsStr) -> Result<()> {
         log::debug!("rmdir {}", self.inodes.path_display(parent, Some(name)));
 
-        let parent_repr = &self.inodes.get(parent).representation;
+        let mut parent_dir = self.open_directory_by_inode(parent).await?;
+
         // TODO: A tomb stone should be created as well.
         // TODO: Remove from other branches as well.
-        let mut parent_dir = self.open_directory_by_representation(parent_repr).await?;
-
-        parent_dir.remove_directory(self.this_replica_id(), name).await?;
+        parent_dir
+            .remove_directory(self.this_replica_id(), name)
+            .await?;
         parent_dir.flush().await
     }
 
@@ -632,8 +645,7 @@ impl Inner {
             flags
         );
 
-        let parent_repr = &self.inodes.get(parent).representation;
-        let mut parent_dir = self.open_directory_by_representation(parent_repr).await?;
+        let mut parent_dir = self.open_directory_by_inode(parent).await?;
         let mut file = parent_dir.create_file(self.this_replica_id(), name.to_owned())?;
 
         file.flush().await?;
@@ -826,69 +838,36 @@ impl Inner {
     }
 
     async fn open_file_by_inode(&self, inode: Inode) -> Result<File> {
-        let repr = &self.inodes.get(inode).representation;
-        repr.entry_type().check_is_file()?;
-        let locator = self.get_locator_by_representation(repr).await?;
+        let locator = self.inodes.get(inode).representation.as_file_locator()?;
         self.repository.open_file_by_locator(locator).await
     }
 
     async fn open_directory_by_inode(&self, inode: Inode) -> Result<JointDirectory> {
-        let repr = &self.inodes.get(inode).representation;
-        repr.entry_type().check_is_directory()?;
-        let locator = self.get_locator_by_representation(&repr).await?;
-        // TODO: Return dir from each branch
-        let mut dir = JointDirectory::new();
-        dir.insert(self.repository.open_directory_by_locator(locator).await?)?;
-        Ok(dir)
+        let path = self.inodes.get(inode).representation.as_directory_path()?;
+        self.open_joint_dir(path).await
     }
 
     async fn open_local_directory_by_inode(&self, inode: Inode) -> Result<Directory> {
-        let repr = &self.inodes.get(inode).representation;
-        repr.entry_type().check_is_directory()?;
-        let locator = self.get_locator_by_representation(&repr).await?;
+        let path = &self.inodes.get(inode).representation.as_directory_path()?;
+        let (locator, _entry_type) = self.repository.lookup(path).await?;
         self.repository.open_directory_by_locator(locator).await
-    }
-
-    async fn get_locator_by_representation(&self, repr: &Representation) -> Result<GlobalLocator> {
-        match repr {
-            Representation::Directory(path) => {
-                let (locator, entry_type) = self.repository.lookup(path).await?;
-                entry_type.check_is_directory()?;
-                Ok(locator)
-            }
-            Representation::File(locator) => Ok(*locator),
-        }
-    }
-
-    async fn open_directory_by_representation(
-        &self,
-        repr: &Representation,
-    ) -> Result<JointDirectory> {
-        match repr {
-            Representation::Directory(path) => {
-                let (locator, entry_type) = self.repository.lookup(path).await?;
-                entry_type.check_is_directory()?;
-                let mut dir = JointDirectory::new();
-                dir.insert(self.repository.open_directory_by_locator(locator).await?)?;
-                Ok(dir)
-            }
-            Representation::File(_) => Err(Error::EntryNotDirectory),
-        }
     }
 
     async fn open_entry_by_representation(&self, repr: &Representation) -> Result<JointEntry> {
         match repr {
             Representation::Directory(path) => {
-                let (locator, _entry_type) = self.repository.lookup(path).await?;
-                let mut dir = JointDirectory::new();
-                dir.insert(self.repository.open_directory_by_locator(locator).await?)?;
+                let dir = self.open_joint_dir(path).await?;
                 Ok(JointEntry::Directory(dir))
             }
             Representation::File(locator) => {
-                let file = self.repository.open_file_by_locator(*locator).await?;
+                let file = self.repository.open_file_by_locator(locator).await?;
                 Ok(JointEntry::File(file))
             }
         }
+    }
+
+    async fn open_joint_dir(&self, path: &PathBuf) -> Result<JointDirectory> {
+        self.repository.joint_root().await?.cd_into_path(path).await
     }
 
     fn this_replica_id(&self) -> &ReplicaId {

@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     ffi::OsStr,
     path::{Component, Path},
 };
@@ -11,6 +12,7 @@ use crate::{
     file::File,
     global_locator::GlobalLocator,
     index::{Branch, Index},
+    joint_directory::JointDirectory,
     locator::Locator,
     ReplicaId,
 };
@@ -25,17 +27,30 @@ impl Repository {
         Self { index, cryptor }
     }
 
+    pub async fn branches(&self) -> HashSet<ReplicaId> {
+        self.index.branch_ids().await
+    }
+
     pub fn this_replica_id(&self) -> &ReplicaId {
         self.index.this_replica_id()
     }
 
     /// Opens the root directory.
-    pub async fn root(&self) -> Result<Directory> {
-        let locator = GlobalLocator {
-            branch: *self.this_replica_id(),
-            local: Locator::Root,
-        };
-        self.open_directory_by_locator(locator).await
+    pub async fn joint_root(&self) -> Result<JointDirectory> {
+        let mut root = JointDirectory::new();
+
+        for branch in self.branches().await.into_iter() {
+            let locator = GlobalLocator {
+                branch,
+                local: Locator::Root,
+            };
+            if let Ok(dir) = self.open_directory_by_locator(locator).await {
+                root.insert(dir);
+            } else {
+            }
+        }
+
+        Ok(root)
     }
 
     /// Looks up an entry by its path. The path must be relative to the repository root.
@@ -49,7 +64,7 @@ impl Repository {
     pub async fn open_file<P: AsRef<Path>>(&self, path: P) -> Result<File> {
         let (locator, entry_type) = self.lookup(path).await?;
         entry_type.check_is_file()?;
-        self.open_file_by_locator(locator).await
+        self.open_file_by_locator(&locator).await
     }
 
     /// Opens a directory at the given path (relative to the repository root)
@@ -144,14 +159,14 @@ impl Repository {
         entry_type: EntryType,
     ) -> Result<Entry> {
         match entry_type {
-            EntryType::File => Ok(Entry::File(self.open_file_by_locator(locator).await?)),
+            EntryType::File => Ok(Entry::File(self.open_file_by_locator(&locator).await?)),
             EntryType::Directory => Ok(Entry::Directory(
                 self.open_directory_by_locator(locator).await?,
             )),
         }
     }
 
-    pub async fn open_file_by_locator(&self, locator: GlobalLocator) -> Result<File> {
+    pub async fn open_file_by_locator(&self, locator: &GlobalLocator) -> Result<File> {
         let branch = self.branch(&locator.branch).await?;
 
         File::open(

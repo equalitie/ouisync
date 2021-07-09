@@ -3,6 +3,7 @@ mod macros;
 
 pub mod crypto;
 pub mod db;
+pub mod joint_directory;
 pub mod this_replica;
 
 mod blob;
@@ -16,7 +17,6 @@ mod format;
 mod global_locator;
 mod index;
 mod iterator;
-mod joint_directory;
 mod joint_entry;
 mod locator;
 mod network;

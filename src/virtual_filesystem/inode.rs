@@ -169,6 +169,20 @@ impl Representation {
             Self::File(_) => EntryType::File,
         }
     }
+
+    pub fn as_directory_path(&self) -> Result<&PathBuf> {
+        match self {
+            Self::Directory(path) => Ok(path),
+            Self::File(_) => Err(Error::EntryNotDirectory),
+        }
+    }
+
+    pub fn as_file_locator(&self) -> Result<&GlobalLocator> {
+        match self {
+            Self::Directory(_) => Err(Error::EntryIsDirectory),
+            Self::File(locator) => Ok(locator),
+        }
+    }
 }
 
 pub struct InodeDetails {
