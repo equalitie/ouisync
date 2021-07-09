@@ -8,7 +8,7 @@ use crate::{
     Error, Result,
 };
 use std::{
-    collections::btree_map::{Entry, Values},
+    collections::btree_map::{Entry as MapEntry, Values},
     collections::{BTreeMap, BTreeSet},
     ffi::{OsStr, OsString},
     path::PathBuf,
@@ -29,11 +29,11 @@ impl JointDirectory {
 
     pub fn insert(&mut self, directory: Directory) {
         match self.versions.entry(directory.global_locator().branch) {
-            Entry::Vacant(entry) => {
+            MapEntry::Vacant(entry) => {
                 entry.insert(directory);
                 ()
             }
-            Entry::Occupied(_) => panic!("Double insert into JointDirectory"),
+            MapEntry::Occupied(_) => panic!("Double insert into JointDirectory"),
         }
     }
 
@@ -107,10 +107,10 @@ impl JointDirectory {
     }
 
     pub fn entries(&self) -> impl Iterator<Item = (OsString, EntryType)> + '_ {
-        self.named_versions().flat_map(|vs| Self::unique_names(&vs))
+        self.joint_entries().flat_map(|vs| Self::unique_names(&vs))
     }
 
-    fn named_versions(&self) -> impl Iterator<Item = Versions> + '_ {
+    fn joint_entries(&self) -> impl Iterator<Item = JointEntryView> + '_ {
         // Map<ReplicaId, Directory> -> [[(EntryInfo, ReplicaId)]]
         let entries = self.versions.iter().map(|(replica_id, directory)| {
             directory
@@ -124,7 +124,7 @@ impl JointDirectory {
         // [(EntryInfo, ReplicaId)] -> [(name, [(EntryInfo, ReplicaId)])]
         let entries = Accumulate::new(entries, |(entry, _)| entry.name());
 
-        entries.map(|(name, versions)| Versions { name, versions })
+        entries.map(|(name, versions)| JointEntryView { name, versions })
     }
 
     pub async fn cd_into(&self, directory: &'_ OsStr) -> Result<JointDirectory> {
@@ -165,10 +165,10 @@ impl JointDirectory {
         Ok(retval)
     }
 
-    pub fn lookup<'a>(&'a self, name: &'a OsStr) -> Result<Lookup<'a>> {
+    pub fn lookup<'a>(&'a self, target_name: &'a OsStr) -> Result<Lookup<'a>> {
         let versions = self
-            .named_versions()
-            .find(|v| v.name == name)
+            .joint_entries()
+            .find(|v| v.name == target_name)
             .ok_or(Error::EntryNotFound)?;
 
         // TODO:
@@ -180,23 +180,20 @@ impl JointDirectory {
         }
     }
 
-    fn unique_names(named_versions: &Versions) -> BTreeSet<(OsString, EntryType)> {
-        assert!(!named_versions.versions.is_empty());
+    fn unique_names(entry: &JointEntryView) -> BTreeSet<(OsString, EntryType)> {
+        assert!(!entry.versions.is_empty());
 
-        let name = &named_versions.name;
-        let versions = &named_versions.versions;
-
-        if versions.len() == 1 {
-            return versions
+        if entry.versions.len() == 1 {
+            return entry.versions
                 .iter()
-                .map(|(entry_info, _)| (name.to_os_string(), entry_info.entry_type()))
+                .map(|(entry_info, _)| (entry.name.to_os_string(), entry_info.entry_type()))
                 .collect();
         }
 
-        versions
+        entry.versions
             .iter()
             .map(|(entry_info, replica_id)| {
-                (Self::add_label(name, replica_id), entry_info.entry_type())
+                (Self::add_label(entry.name, replica_id), entry_info.entry_type())
             })
             .collect()
     }
@@ -217,7 +214,7 @@ impl JointDirectory {
 type Version<'a> = (EntryInfo<'a>, &'a ReplicaId);
 
 pub enum Lookup<'a> {
-    Directory(Versions<'a>),
+    Directory(JointEntryView<'a>),
     File(EntryInfo<'a>, &'a ReplicaId),
 }
 
@@ -276,12 +273,12 @@ impl<'a> Iterator for DirectoryVersions<'a> {
     }
 }
 
-pub struct Versions<'a> {
+pub struct JointEntryView<'a> {
     name: &'a OsStr,
     versions: Vec<Version<'a>>,
 }
 
-impl<'a> Versions<'a> {
+impl<'a> JointEntryView<'a> {
     fn directories(&'a self) -> DirectoryVersions<'a> {
         DirectoryVersions {
             mix: self.versions.iter(),
