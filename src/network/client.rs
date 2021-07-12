@@ -46,13 +46,7 @@ impl Client {
             .unwrap_or(());
 
         while let Some(response) = self.stream.recv().await {
-            // Check competion only if the response affects the index (that is, it is not `Block`)
-            // to avoid sending unnecessary duplicate `RootNode` requests.
-            let check_complete = !matches!(response, Response::Block { .. });
-
-            self.handle_response(response).await?;
-
-            if check_complete && self.is_complete().await? {
+            if self.handle_response(response).await? {
                 return Ok(true);
             }
         }
@@ -60,7 +54,7 @@ impl Client {
         Ok(false)
     }
 
-    async fn handle_response(&mut self, response: Response) -> Result<()> {
+    async fn handle_response(&mut self, response: Response) -> Result<bool> {
         match response {
             Response::RootNode {
                 cookie,
@@ -83,7 +77,10 @@ impl Client {
                 id,
                 content,
                 auth_tag,
-            } => self.handle_block(id, content, auth_tag).await,
+            } => {
+                self.handle_block(id, content, auth_tag).await?;
+                Ok(false)
+            }
         }
     }
 
@@ -93,7 +90,7 @@ impl Client {
         versions: VersionVector,
         hash: Hash,
         summary: Summary,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         self.cookie = cookie;
 
         if self
@@ -110,7 +107,7 @@ impl Client {
                 .unwrap_or(());
         }
 
-        Ok(())
+        self.is_complete().await
     }
 
     async fn handle_inner_nodes(
@@ -118,10 +115,10 @@ impl Client {
         parent_hash: Hash,
         inner_layer: usize,
         nodes: InnerNodeMap,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         if parent_hash != nodes.hash() {
             log::warn!("inner nodes parent hash mismatch");
-            return Ok(());
+            return Ok(true);
         }
 
         for hash in self
@@ -135,13 +132,13 @@ impl Client {
                 .unwrap_or(())
         }
 
-        Ok(())
+        self.is_complete().await
     }
 
-    async fn handle_leaf_nodes(&self, parent_hash: Hash, nodes: LeafNodeSet) -> Result<()> {
+    async fn handle_leaf_nodes(&self, parent_hash: Hash, nodes: LeafNodeSet) -> Result<bool> {
         if parent_hash != nodes.hash() {
             log::warn!("leaf nodes parent hash mismatch");
-            return Ok(());
+            return Ok(true);
         }
 
         for block_id in self.index.receive_leaf_nodes(parent_hash, nodes).await? {
@@ -152,7 +149,7 @@ impl Client {
                 .unwrap_or(());
         }
 
-        Ok(())
+        self.is_complete().await
     }
 
     async fn handle_block(&self, id: BlockId, content: Box<[u8]>, auth_tag: AuthTag) -> Result<()> {

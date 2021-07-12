@@ -14,7 +14,7 @@ pub use self::{
 
 use crate::{
     block::BlockId,
-    crypto::Hash,
+    crypto::{Hash, Hashable},
     db,
     error::{Error, Result},
     version_vector::VersionVector,
@@ -189,8 +189,7 @@ impl Index {
                 .is_up_to_date_with(&remote_summary)
                 .unwrap_or(true))
         } else {
-            // TODO: if hash is of empty nodes collection, return false
-            Ok(true)
+            Ok(*hash != InnerNodeMap::default().hash())
         }
     }
 

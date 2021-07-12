@@ -18,25 +18,33 @@ use std::{future::Future, time::Duration};
 use test_strategy::proptest;
 use tokio::{select, sync::mpsc, time};
 
+const TIMEOUT: Duration = Duration::from_secs(30);
+
+// FIXME: make these tests deterministic (repeatable) otherwise proptest is not as useful as it
+// could be.
+
 // Test complete transfer of one snapshot from one replica to another
 // Also test a new snapshot transfer is performed after every local branch
 // change.
 #[proptest]
 fn transfer_snapshot_between_two_replicas(
     #[strategy(0usize..32)] leaf_count: usize,
-    #[strategy(0usize..2)] change_count: usize,
+    #[strategy(0usize..2)] changeset_count: usize,
+    #[strategy(1usize..4)] changeset_size: usize,
     #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
 ) {
     test_utils::run(transfer_snapshot_between_two_replicas_case(
         leaf_count,
-        change_count,
+        changeset_count,
+        changeset_size,
         rng_seed,
     ))
 }
 
 async fn transfer_snapshot_between_two_replicas_case(
     leaf_count: usize,
-    change_count: usize,
+    changeset_count: usize,
+    changeset_size: usize,
     rng_seed: u64,
 ) {
     let mut rng = StdRng::seed_from_u64(rng_seed);
@@ -55,14 +63,17 @@ async fn transfer_snapshot_between_two_replicas_case(
     // Wait until replica B catches up to replica A, then have replica A perform a local change
     // (create one new block) and repeat.
     let drive = async {
-        let mut remaining_changes = change_count;
+        let mut remaining_changesets = changeset_count;
 
         loop {
             wait_until_snapshots_in_sync(&a_index, &b_index).await;
 
-            if remaining_changes > 0 {
-                create_block(&mut rng, &a_index).await;
-                remaining_changes -= 1;
+            if remaining_changesets > 0 {
+                for _ in 0..changeset_size {
+                    create_block(&mut rng, &a_index).await;
+                }
+
+                remaining_changesets -= 1;
             } else {
                 break;
             }
@@ -233,6 +244,7 @@ where
         result = client.run() => result.unwrap(),
         _ = simulator.run() => (),
         _ = until => (),
+        _ = time::sleep(TIMEOUT) => panic!("test timed out"),
     }
 }
 

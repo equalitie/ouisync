@@ -62,14 +62,19 @@ impl Server {
     }
 
     async fn handle_local_change(&mut self) -> Result<()> {
-        let old_cookie = self.cookie;
-        let old_waiting = self.waiting;
+        // DEBUG
+        log::trace!(
+            "local change: {} -> {} (waiting: {})",
+            self.cookie,
+            self.cookie.wrapping_add(1),
+            self.waiting
+        );
 
         self.cookie = self.cookie.wrapping_add(1);
-        self.waiting = false;
 
-        if old_waiting {
-            self.handle_root_node(old_cookie).await?;
+        if self.waiting {
+            self.waiting = false;
+            self.handle_root_node(0).await?;
         }
 
         Ok(())
@@ -116,16 +121,14 @@ impl Server {
     async fn handle_inner_nodes(&self, parent_hash: Hash, inner_layer: usize) -> Result<()> {
         let nodes = InnerNode::load_children(&self.index.pool, &parent_hash).await?;
 
-        if !nodes.is_empty() {
-            self.stream
-                .send(Response::InnerNodes {
-                    parent_hash,
-                    inner_layer,
-                    nodes,
-                })
-                .await
-                .unwrap_or(())
-        }
+        self.stream
+            .send(Response::InnerNodes {
+                parent_hash,
+                inner_layer,
+                nodes,
+            })
+            .await
+            .unwrap_or(());
 
         Ok(())
     }
@@ -133,12 +136,10 @@ impl Server {
     async fn handle_leaf_nodes(&self, parent_hash: Hash) -> Result<()> {
         let nodes = LeafNode::load_children(&self.index.pool, &parent_hash).await?;
 
-        if !nodes.is_empty() {
-            self.stream
-                .send(Response::LeafNodes { parent_hash, nodes })
-                .await
-                .unwrap_or(())
-        }
+        self.stream
+            .send(Response::LeafNodes { parent_hash, nodes })
+            .await
+            .unwrap_or(());
 
         Ok(())
     }
