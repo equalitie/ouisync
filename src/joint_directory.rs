@@ -53,16 +53,21 @@ impl JointDirectory {
         branch: &ReplicaId,
         name: &OsStr,
     ) -> Result<JointDirectory> {
-        self.versions
+        let new_dir = self
+            .versions
             .get_mut(branch)
             .ok_or(Error::OperationNotSupported)
             .and_then(|dir| dir.create_directory(name.to_owned()))?;
 
         let mut result = JointDirectory::new();
 
+        result.versions.insert(*branch, new_dir);
+
         for (r_id, dir) in self.versions.iter() {
-            // TODO: When r_id == branch, we can avoid one (the most likely) async call to
-            // open_directory() by reusing the directory we created above.
+            if r_id == branch {
+                // This is the one we already inserted above.
+                continue;
+            }
             if let Ok(entry_info) = dir.lookup(name) {
                 // Ignore if it's a file
                 if let Ok(subdir) = entry_info.open_directory().await {
