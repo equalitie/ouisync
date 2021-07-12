@@ -53,7 +53,7 @@ pub unsafe extern "C" fn directory_open(
             let entries = dir
                 .entries()
                 .map(|info| DirEntry {
-                    name: utils::os_str_to_c_string(info.name()).unwrap_or_else(|_| {
+                    name: utils::str_to_c_string(info.name()).unwrap_or_else(|_| {
                         CString::new(char::REPLACEMENT_CHARACTER.to_string()).unwrap()
                     }),
                     entry_type: info.entry_type(),

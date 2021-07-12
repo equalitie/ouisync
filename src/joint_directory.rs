@@ -10,7 +10,6 @@ use crate::{
 use std::{
     collections::btree_map::{Entry as MapEntry, Values},
     collections::{BTreeMap, BTreeSet},
-    ffi::{OsStr, OsString},
     path::Path,
     slice,
 };
@@ -51,7 +50,7 @@ impl JointDirectory {
     pub async fn create_directory(
         &mut self,
         branch: &ReplicaId,
-        name: &OsStr,
+        name: &str,
     ) -> Result<JointDirectory> {
         let new_dir = self
             .versions
@@ -79,14 +78,14 @@ impl JointDirectory {
         Ok(result)
     }
 
-    pub fn create_file(&mut self, branch: &ReplicaId, name: OsString) -> Result<File> {
+    pub fn create_file(&mut self, branch: &ReplicaId, name: String) -> Result<File> {
         self.versions
             .get_mut(branch)
             .ok_or(Error::OperationNotSupported)?
             .create_file(name)
     }
 
-    pub async fn remove_file(&mut self, branch: &ReplicaId, name: &OsStr) -> Result<()> {
+    pub async fn remove_file(&mut self, branch: &ReplicaId, name: &str) -> Result<()> {
         self.versions
             .get_mut(branch)
             .ok_or(Error::OperationNotSupported)?
@@ -94,7 +93,7 @@ impl JointDirectory {
             .await
     }
 
-    pub async fn remove_directory(&mut self, branch: &ReplicaId, name: &OsStr) -> Result<()> {
+    pub async fn remove_directory(&mut self, branch: &ReplicaId, name: &str) -> Result<()> {
         self.versions
             .get_mut(branch)
             .ok_or(Error::OperationNotSupported)?
@@ -110,7 +109,7 @@ impl JointDirectory {
         Ok(())
     }
 
-    pub fn entries(&self) -> impl Iterator<Item = (OsString, EntryType)> + '_ {
+    pub fn entries(&self) -> impl Iterator<Item = (String, EntryType)> + '_ {
         self.joint_entries().flat_map(|vs| Self::unique_names(&vs))
     }
 
@@ -134,7 +133,7 @@ impl JointDirectory {
         entries.map(|(name, versions)| JointEntryView { name, versions })
     }
 
-    pub async fn cd_into(&self, directory: &'_ OsStr) -> Result<JointDirectory> {
+    pub async fn cd_into(&self, directory: &'_ str) -> Result<JointDirectory> {
         let mut retval = JointDirectory::new();
         let mut count = 0;
 
@@ -165,12 +164,14 @@ impl JointDirectory {
     pub async fn cd_into_path(&self, path: &Path) -> Result<JointDirectory> {
         let mut retval = self.clone();
         for name in path {
-            retval = retval.cd_into(name).await?;
+            // Using unwrap here because all names should be UTP-8 as they arrive from
+            // VirtualFilesystem.
+            retval = retval.cd_into(name.to_str().unwrap()).await?;
         }
         Ok(retval)
     }
 
-    pub fn lookup<'a>(&'a self, target_name: &'a OsStr) -> Result<Lookup<'a>> {
+    pub fn lookup<'a>(&'a self, target_name: &'a str) -> Result<Lookup<'a>> {
         // TODO: This function currently doens't handle one (important) case where there exists a
         // file "file-<branch>" as well as two or more concurrent files with base name "file". This
         // could result in there being two files with the same name "file-<branch>".
@@ -220,14 +221,14 @@ impl JointDirectory {
         Err(Error::EntryNotFound)
     }
 
-    fn unique_names(entry: &JointEntryView) -> BTreeSet<(OsString, EntryType)> {
+    fn unique_names(entry: &JointEntryView) -> BTreeSet<(String, EntryType)> {
         assert!(!entry.versions.is_empty());
 
         if entry.versions.len() == 1 {
             return entry
                 .versions
                 .iter()
-                .map(|v| (v.info.name().to_os_string(), v.info.entry_type()))
+                .map(|v| (v.info.name().to_string(), v.info.entry_type()))
                 .collect();
         }
 
@@ -261,24 +262,24 @@ impl<'a> Version<'a> {
         self.info.entry_type() == EntryType::File
     }
 
-    fn matches(&self, name: &OsStr, label: &OsStr) -> bool {
+    fn matches(&self, name: &str, label: &str) -> bool {
         // TODO: Check the label without heap allocation
         name == self.info.name() && label == Self::replica_id_to_label(self.branch)
     }
 
-    fn replica_id_to_label(replica_id: &ReplicaId) -> OsString {
+    fn replica_id_to_label(replica_id: &ReplicaId) -> String {
         let r = replica_id.as_ref();
-        OsString::from(format!("{:02x}{:02x}{:02x}{:02x}", r[0], r[1], r[2], r[3]))
+        format!("{:02x}{:02x}{:02x}{:02x}", r[0], r[1], r[2], r[3])
     }
 
-    fn name_with_label(&self) -> OsString {
-        let mut s = self.info.name().to_os_string();
-        s.push("-");
-        s.push(Version::replica_id_to_label(self.branch));
+    fn name_with_label(&self) -> String {
+        let mut s = self.info.name().to_string();
+        s.push('-');
+        s.push_str(&Version::replica_id_to_label(self.branch));
         s
     }
 
-    fn remove_label_utf8(name: &str) -> Option<(&str, &str)> {
+    fn remove_label(name: &str) -> Option<(&str, &str)> {
         let hex_len = 4 * 2;
         let label_len = hex_len + 1; // +1 is the dash
 
@@ -303,12 +304,6 @@ impl<'a> Version<'a> {
         }
 
         Some((base, label))
-    }
-
-    fn remove_label(name: &OsStr) -> Option<(OsString, OsString)> {
-        // XXX: Eventually, we should only work with UTF-8 strings.
-        Self::remove_label_utf8(name.to_str().unwrap())
-            .map(|(base, label)| (OsString::from(base), OsString::from(label)))
     }
 }
 
@@ -373,7 +368,7 @@ impl<'a> Iterator for DirectoryVersions<'a> {
 }
 
 pub struct JointEntryView<'a> {
-    name: &'a OsStr,
+    name: &'a str,
     versions: Vec<Version<'a>>,
 }
 

@@ -369,7 +369,7 @@ struct Inner {
 
 impl Inner {
     async fn lookup(&mut self, parent: Inode, name: &OsStr) -> Result<FileAttr> {
-        let _name_utf8 = name.to_str().ok_or(Error::NonUtf8FileName)?;
+        let name = name.to_str().ok_or(Error::NonUtf8FileName)?;
 
         log::debug!("lookup {}", self.inodes.path_display(parent, Some(name)));
 
@@ -575,7 +575,7 @@ impl Inner {
         mode: u32,
         umask: u32,
     ) -> Result<FileAttr> {
-        let _name_utf8 = name.to_str().ok_or(Error::NonUtf8FileName)?;
+        let name = name.to_str().ok_or(Error::NonUtf8FileName)?;
 
         log::debug!(
             "mkdir {} (mode={:#o}, umask={:#o})",
@@ -607,7 +607,7 @@ impl Inner {
     }
 
     async fn rmdir(&mut self, parent: Inode, name: &OsStr) -> Result<()> {
-        let _name_utf8 = name.to_str().ok_or(Error::NonUtf8FileName)?;
+        let name = name.to_str().ok_or(Error::NonUtf8FileName)?;
 
         log::debug!("rmdir {}", self.inodes.path_display(parent, Some(name)));
 
@@ -643,7 +643,7 @@ impl Inner {
         umask: u32,
         flags: OpenFlags,
     ) -> Result<(FileAttr, FileHandle, u32)> {
-        let _name_utf8 = name.to_str().ok_or(Error::NonUtf8FileName)?;
+        let name = name.to_str().ok_or(Error::NonUtf8FileName)?;
 
         log::debug!(
             "create {} (mode={:#o}, umask={:#o}, flags={})",
@@ -795,7 +795,7 @@ impl Inner {
     }
 
     async fn unlink(&mut self, parent: Inode, name: &OsStr) -> Result<()> {
-        let _name_utf8 = name.to_str().ok_or(Error::NonUtf8FileName)?;
+        let name = name.to_str().ok_or(Error::NonUtf8FileName)?;
 
         log::debug!("unlink {}", self.inodes.path_display(parent, Some(name)));
 
@@ -812,8 +812,8 @@ impl Inner {
         dst_name: &OsStr,
         flags: u32,
     ) -> Result<()> {
-        let _src_name_utf8 = src_name.to_str().ok_or(Error::NonUtf8FileName)?;
-        let _dst_name_utf8 = dst_name.to_str().ok_or(Error::NonUtf8FileName)?;
+        let src_name = src_name.to_str().ok_or(Error::NonUtf8FileName)?;
+        let dst_name = dst_name.to_str().ok_or(Error::NonUtf8FileName)?;
 
         log::debug!(
             "rename {} -> {} (flags={:#x})",

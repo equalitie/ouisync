@@ -124,6 +124,10 @@ pub fn os_str_to_c_string(os: &OsStr) -> Result<CString> {
     CString::new(os_str_as_bytes(os)?).map_err(|_| Error::MalformedData)
 }
 
+pub fn str_to_c_string(s: &str) -> Result<CString> {
+    CString::new(s.as_bytes()).map_err(|_| Error::MalformedData)
+}
+
 #[cfg(unix)]
 fn os_str_as_bytes(os: &OsStr) -> Result<&[u8]> {
     use std::os::unix::ffi::OsStrExt;

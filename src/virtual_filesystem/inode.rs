@@ -4,7 +4,6 @@ use slab::Slab;
 use std::{
     collections::{hash_map::Entry, HashMap},
     convert::TryInto,
-    ffi::{OsStr, OsString},
     fmt,
     path::PathBuf,
 };
@@ -27,7 +26,7 @@ impl InodeMap {
                 representation: Representation::Directory(PathBuf::new()),
                 parent: 0,
             },
-            name: OsString::new(),
+            name: String::new(),
             lookups: 1,
         });
         let inode = index_to_inode(index);
@@ -46,7 +45,7 @@ impl InodeMap {
     // # Panics
     //
     // Panics if the parent inode doesn't exists.
-    pub fn lookup(&mut self, parent: Inode, name: &OsStr, representation: Representation) -> Inode {
+    pub fn lookup(&mut self, parent: Inode, name: &str, representation: Representation) -> Inode {
         // TODO: consider using `Arc` to avoid the double clone of `name`.
 
         let key = Key {
@@ -135,7 +134,7 @@ impl InodeMap {
     pub fn path_display<'a>(
         &'a self,
         inode: Inode,
-        last: Option<&'a OsStr>,
+        last: Option<&'a str>,
     ) -> impl fmt::Display + 'a {
         PathDisplay(&self.forward, inode, last)
     }
@@ -152,7 +151,7 @@ pub enum Representation {
 }
 
 impl Representation {
-    pub fn child_directory(&self, name: &OsStr) -> Result<Representation> {
+    pub fn child_directory(&self, name: &str) -> Result<Representation> {
         match self {
             Self::Directory(path) => {
                 let mut path = path.clone();
@@ -192,14 +191,14 @@ pub struct InodeDetails {
 
 struct InodeData {
     details: InodeDetails,
-    name: OsString,
+    name: String,
     lookups: u64,
 }
 
 #[derive(Eq, PartialEq, Hash)]
 struct Key {
     parent: Inode,
-    name: OsString,
+    name: String,
 }
 
 fn index_to_inode(index: usize) -> Inode {
@@ -219,7 +218,7 @@ fn inode_to_index(inode: Inode) -> usize {
 }
 
 // Helper to display the full path of an inode. See `InodeMap::path_display` for more info.
-struct PathDisplay<'a>(&'a Slab<InodeData>, Inode, Option<&'a OsStr>);
+struct PathDisplay<'a>(&'a Slab<InodeData>, Inode, Option<&'a str>);
 
 impl fmt::Display for PathDisplay<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -230,7 +229,7 @@ impl fmt::Display for PathDisplay<'_> {
                 write!(f, "/")?;
             }
 
-            write!(f, "{}", last.to_string_lossy())
+            write!(f, "{}", last)
         } else {
             Ok(())
         }
@@ -244,5 +243,5 @@ fn fmt_inode_path(f: &mut fmt::Formatter, map: &Slab<InodeData>, inode: Inode) -
         fmt_inode_path(f, map, data.details.parent)?;
     }
 
-    write!(f, "/{}", data.name.to_string_lossy())
+    write!(f, "/{}", data.name)
 }
