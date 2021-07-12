@@ -9,6 +9,7 @@ pub type NoncePrefix = [u8; NONCE_PREFIX_SIZE];
 
 /// Ordered sequence of nonces. Useful when encrypting multiple messages whose order need
 /// to be maintained.
+#[derive(Clone)]
 pub struct NonceSequence {
     prefix: NoncePrefix,
 }

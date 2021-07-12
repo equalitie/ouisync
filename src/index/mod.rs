@@ -55,6 +55,24 @@ impl Index {
         self.branches.lock().await.local.clone()
     }
 
+    pub fn this_replica_id(&self) -> &ReplicaId {
+        &self.this_replica_id
+    }
+
+    pub(crate) async fn remote_branch(&self, replica_id: &ReplicaId) -> Option<Branch> {
+        self.branches.lock().await.remote.get(replica_id).cloned()
+    }
+
+    pub async fn branch(&self, replica_id: &ReplicaId) -> Option<Branch> {
+        let branches = self.branches.lock().await;
+
+        if replica_id == &self.this_replica_id {
+            Some(branches.local.clone())
+        } else {
+            branches.remote.get(replica_id).cloned()
+        }
+    }
+
     /// Notify all tasks waiting for changes on the specified branches.
     /// See also [`Branch::subscribe`].
     pub(crate) async fn notify_branches_changed(&self, replica_ids: &HashSet<ReplicaId>) {
@@ -220,6 +238,16 @@ impl Index {
         Ok(remote_nodes
             .present()
             .filter(move |node| local_nodes.is_missing(node.locator())))
+    }
+
+    pub async fn branch_ids(&self) -> HashSet<ReplicaId> {
+        let mut retval = HashSet::new();
+        let branches = self.branches.lock().await;
+        retval.insert(*branches.local.replica_id());
+        for remote in branches.remote.keys() {
+            retval.insert(*remote);
+        }
+        retval
     }
 }
 

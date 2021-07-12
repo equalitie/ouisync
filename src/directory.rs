@@ -5,6 +5,7 @@ use crate::{
     entry::{Entry, EntryType},
     error::{Error, Result},
     file::File,
+    global_locator::GlobalLocator,
     index::Branch,
     locator::Locator,
 };
@@ -14,6 +15,7 @@ use std::{
     ffi::{OsStr, OsString},
 };
 
+#[derive(Clone)]
 pub struct Directory {
     blob: Blob,
     content: Content,
@@ -220,9 +222,15 @@ impl Directory {
     pub fn locator(&self) -> &Locator {
         self.blob.locator()
     }
+
+    /// Locator of this directory
+    pub fn global_locator(&self) -> &GlobalLocator {
+        self.blob.global_locator()
+    }
 }
 
 /// Info about a directory entry.
+#[derive(Copy, Clone)]
 pub struct EntryInfo<'a> {
     parent_blob: &'a Blob,
     name: &'a OsStr,
@@ -308,7 +316,7 @@ impl MoveDstDirectory {
     }
 }
 
-#[derive(Default, Deserialize, Serialize)]
+#[derive(Default, Clone, Deserialize, Serialize)]
 struct Content {
     entries: BTreeMap<OsString, EntryData>,
     #[serde(skip)]
@@ -386,7 +394,7 @@ impl VacantEntry<'_> {
     }
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 struct EntryData {
     entry_type: EntryType,
     seq: u32,

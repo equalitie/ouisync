@@ -6,6 +6,7 @@ use crate::{
     crypto::{AuthTag, Cryptor, Hashable, NonceSequence},
     db,
     error::{Error, Result},
+    global_locator::GlobalLocator,
     index::Branch,
     locator::Locator,
     store,
@@ -18,10 +19,11 @@ use std::{
 };
 use zeroize::Zeroize;
 
+#[derive(Clone)]
 pub struct Blob {
     branch: Branch,
+    global_locator: GlobalLocator,
     pool: db::Pool,
-    locator: Locator,
     cryptor: Cryptor,
     nonce_sequence: NonceSequence,
     current_block: OpenBlock,
@@ -60,10 +62,15 @@ impl Blob {
             dirty: false,
         };
 
+        let global_locator = GlobalLocator {
+            branch: *branch.replica_id(),
+            local: locator,
+        };
+
         Ok(Self {
             branch,
+            global_locator,
             pool,
-            locator,
             cryptor,
             nonce_sequence,
             current_block,
@@ -88,10 +95,15 @@ impl Blob {
             dirty: true,
         };
 
+        let global_locator = GlobalLocator {
+            branch: *branch.replica_id(),
+            local: locator,
+        };
+
         Self {
             branch,
+            global_locator,
             pool,
-            locator,
             cryptor,
             nonce_sequence,
             current_block,
@@ -111,7 +123,12 @@ impl Blob {
 
     /// Locator of this blob.
     pub fn locator(&self) -> &Locator {
-        &self.locator
+        &self.global_locator.local
+    }
+
+    /// GlobalLocator of this blob.
+    pub fn global_locator(&self) -> &GlobalLocator {
+        &self.global_locator
     }
 
     /// Reads data from this blob into `buffer`, advancing the internal cursor. Returns the
@@ -305,7 +322,7 @@ impl Blob {
         }
 
         self.remove_blocks(
-            self.locator
+            self.locator()
                 .sequence()
                 .skip(new_block_count as usize)
                 .take((old_block_count - new_block_count) as usize),
@@ -326,7 +343,7 @@ impl Blob {
 
     /// Removes this blob.
     pub async fn remove(self) -> Result<()> {
-        self.remove_blocks(self.locator.sequence().take(self.block_count() as usize))
+        self.remove_blocks(self.locator().sequence().take(self.block_count() as usize))
             .await
     }
 
@@ -473,9 +490,9 @@ impl Blob {
 
     fn locator_at(&self, number: u32) -> Locator {
         if number == 0 {
-            self.locator
+            *self.locator()
         } else {
-            Locator::Trunk(self.locator.hash(), number)
+            Locator::Trunk(self.locator().hash(), number)
         }
     }
 }
@@ -550,6 +567,7 @@ async fn write_block(
 }
 
 // Data for a block that's been loaded into memory and decrypted.
+#[derive(Clone)]
 struct OpenBlock {
     // Locator of the block.
     locator: Locator,
@@ -595,6 +613,7 @@ impl DerefMut for Buffer {
 
 // Wrapper for `Buffer` with an internal position which advances when data is read from or
 // written to the buffer.
+#[derive(Clone)]
 struct Cursor {
     buffer: Buffer,
     pos: usize,
