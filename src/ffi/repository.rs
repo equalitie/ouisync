@@ -45,7 +45,7 @@ pub unsafe extern "C" fn repository_entry_type(
 ) {
     session::with(port, error, |ctx| {
         let repo = handle.get();
-        let path = utils::ptr_to_path_buf(path)?;
+        let path = utils::ptr_to_utf8_path_buf(path)?;
 
         ctx.spawn(async move {
             match repo.lookup(path).await {
@@ -68,8 +68,8 @@ pub unsafe extern "C" fn repository_move_entry(
 ) {
     session::with(port, error, |ctx| {
         let repo = handle.get();
-        let src = utils::ptr_to_path_buf(src)?;
-        let dst = utils::ptr_to_path_buf(dst)?;
+        let src = utils::ptr_to_utf8_path_buf(src)?;
+        let dst = utils::ptr_to_utf8_path_buf(dst)?;
 
         ctx.spawn(async move {
             let (mut src_parent, mut dst_parent) = repo.move_entry(src, dst).await?;
