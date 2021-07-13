@@ -59,10 +59,6 @@ impl Index {
         &self.this_replica_id
     }
 
-    pub(crate) async fn remote_branch(&self, replica_id: &ReplicaId) -> Option<Branch> {
-        self.branches.lock().await.remote.get(replica_id).cloned()
-    }
-
     pub async fn branch(&self, replica_id: &ReplicaId) -> Option<Branch> {
         let branches = self.branches.lock().await;
 

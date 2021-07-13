@@ -13,7 +13,6 @@ const BASE_PORT: u16 = 20000;
 
 /// Wrapper for the ouisync binary.
 pub struct Bin {
-    port: u16,
     work_dir: TempDir,
     process: Child,
 }
@@ -46,19 +45,11 @@ impl Bin {
         // TODO: find a better way to do this than sleep.
         thread::sleep(Duration::from_millis(100));
 
-        Self {
-            port,
-            work_dir,
-            process,
-        }
+        Self { work_dir, process }
     }
 
     pub fn root(&self) -> PathBuf {
         root(&self.work_dir)
-    }
-
-    pub fn port(&self) -> u16 {
-        self.port
     }
 
     fn kill(&mut self) {
