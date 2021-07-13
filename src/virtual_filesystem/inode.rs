@@ -1,5 +1,5 @@
 use fuser::FUSE_ROOT_ID;
-use ouisync::{EntryType, Error, GlobalLocator, Result};
+use ouisync::{Error, GlobalLocator, Result};
 use slab::Slab;
 use std::{
     collections::{hash_map::Entry, HashMap},
@@ -159,13 +159,6 @@ impl Representation {
                 Ok(Self::Directory(path))
             }
             Self::File(_) => Err(Error::EntryNotDirectory),
-        }
-    }
-
-    pub fn entry_type(&self) -> EntryType {
-        match self {
-            Self::Directory(_) => EntryType::Directory,
-            Self::File(_) => EntryType::File,
         }
     }
 
