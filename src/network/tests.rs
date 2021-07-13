@@ -1,6 +1,6 @@
 use super::{
     client::Client,
-    message::{Request, Response},
+    message::{Message, Request, Response},
     message_broker::{ClientStream, Command, ServerStream},
     server::Server,
 };
@@ -14,14 +14,11 @@ use crate::{
     version_vector::VersionVector,
 };
 use rand::prelude::*;
-use std::{future::Future, time::Duration};
+use std::{fmt, future::Future, time::Duration};
 use test_strategy::proptest;
 use tokio::{select, sync::mpsc, time};
 
 const TIMEOUT: Duration = Duration::from_secs(30);
-
-// FIXME: make these tests deterministic (repeatable) otherwise proptest is not as useful as it
-// could be.
 
 // Test complete transfer of one snapshot from one replica to another
 // Also test a new snapshot transfer is performed after every local branch
@@ -232,17 +229,23 @@ where
     let (mut client, client_send_rx, client_recv_tx) =
         create_client(client_index, server_replica_id);
 
-    let mut simulator = ConnectionSimulator::new(
-        client_send_rx,
-        client_recv_tx,
-        server_send_rx,
-        server_recv_tx,
-    );
+    let mut server_conn = Connection {
+        send_rx: server_send_rx,
+        recv_tx: client_recv_tx,
+    };
+
+    let mut client_conn = Connection {
+        send_rx: client_send_rx,
+        recv_tx: server_recv_tx,
+    };
 
     select! {
+        biased; // deterministic poll order for repeatable tests
+
         result = server.run() => result.unwrap(),
         result = client.run() => result.unwrap(),
-        _ = simulator.run() => (),
+        _ = server_conn.run() => (),
+        _ = client_conn.run() => (),
         _ = until => (),
         _ = time::sleep(TIMEOUT) => panic!("test timed out"),
     }
@@ -269,42 +272,20 @@ fn create_client(
     (client, send_rx, recv_tx)
 }
 
-// Simulate connection between `Client` and `Server` by forwarding the messages between the
-// corresponding streams.
-struct ConnectionSimulator {
-    client_send_rx: mpsc::Receiver<Command>,
-    client_recv_tx: mpsc::Sender<Response>,
-    server_send_rx: mpsc::Receiver<Command>,
-    server_recv_tx: mpsc::Sender<Request>,
+// Simulated connection between a server and a client.
+struct Connection<T> {
+    send_rx: mpsc::Receiver<Command>,
+    recv_tx: mpsc::Sender<T>,
 }
 
-impl ConnectionSimulator {
-    fn new(
-        client_send_rx: mpsc::Receiver<Command>,
-        client_recv_tx: mpsc::Sender<Response>,
-        server_send_rx: mpsc::Receiver<Command>,
-        server_recv_tx: mpsc::Sender<Request>,
-    ) -> Self {
-        Self {
-            client_send_rx,
-            client_recv_tx,
-            server_send_rx,
-            server_recv_tx,
-        }
-    }
-
+impl<T> Connection<T>
+where
+    T: From<Message> + fmt::Debug,
+{
     async fn run(&mut self) {
-        loop {
-            select! {
-                command = self.client_send_rx.recv() => {
-                    let request = command.unwrap().into_send_message().into();
-                    self.server_recv_tx.send(request).await.unwrap();
-                }
-                command = self.server_send_rx.recv() => {
-                    let response = command.unwrap().into_send_message().into();
-                    self.client_recv_tx.send(response).await.unwrap();
-                }
-            }
+        while let Some(command) = self.send_rx.recv().await {
+            let message = command.into_send_message().into();
+            self.recv_tx.send(message).await.unwrap();
         }
     }
 }
