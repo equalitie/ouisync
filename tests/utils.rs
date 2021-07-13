@@ -19,8 +19,8 @@ pub struct Bin {
 }
 
 impl Bin {
-    pub fn start(id: u16) -> Self {
-        let port = BASE_PORT.checked_add(id).expect("id out of range");
+    pub fn start(id: u32) -> Self {
+        let port = next_port();
         let work_dir = TempDir::new().unwrap();
 
         // Create the repository root directory
@@ -77,9 +77,18 @@ fn root(work_dir: &TempDir) -> PathBuf {
     work_dir.path().join("root")
 }
 
+fn next_port() -> u16 {
+    use std::sync::atomic::{AtomicU16, Ordering};
+
+    static COUNTER: AtomicU16 = AtomicU16::new(0);
+    BASE_PORT
+        .checked_add(COUNTER.fetch_add(1, Ordering::Relaxed))
+        .expect("port out of range")
+}
+
 // Spawns a thread that reads lines from `reader`, prefixes them with `id` and then writes them to
 // `writer`.
-fn copy_lines_prefixed<R, W>(reader: R, mut writer: W, id: u16)
+fn copy_lines_prefixed<R, W>(reader: R, mut writer: W, id: u32)
 where
     R: Read + Send + 'static,
     W: Write + Send + 'static,
@@ -105,8 +114,8 @@ pub fn eventually<F>(mut f: F)
 where
     F: FnMut(),
 {
-    const ATTEMPTS: usize = 10;
-    const DELAY: Duration = Duration::from_millis(100);
+    const ATTEMPTS: u32 = 10;
+    const INITIAL_DELAY: Duration = Duration::from_millis(10);
 
     let mut last_panic_payload = None;
 
@@ -118,7 +127,7 @@ where
     // which is not very useful. We should try to figure out a way to have the panic message printed
     // only once.
 
-    for _ in 0..ATTEMPTS {
+    for i in 0..ATTEMPTS {
         match panic::catch_unwind(AssertUnwindSafe(|| f())) {
             Ok(()) => return,
             Err(payload) => {
@@ -126,7 +135,7 @@ where
             }
         }
 
-        thread::sleep(DELAY);
+        thread::sleep(INITIAL_DELAY * 2u32.pow(i));
     }
 
     if let Some(panic_payload) = last_panic_payload {
