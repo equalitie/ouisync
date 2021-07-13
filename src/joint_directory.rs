@@ -209,8 +209,7 @@ impl JointDirectory {
 
                     if let Some(version) = opt_version {
                         return Ok(Lookup::File(version.info, &version.branch));
-                    }
-                    else {
+                    } else {
                         // Early exit
                         return Err(Error::EntryNotFound);
                     }
@@ -235,12 +234,7 @@ impl JointDirectory {
         entry
             .versions
             .iter()
-            .map(|v| {
-                (
-                    v.name_with_label(),
-                    v.info.entry_type(),
-                )
-            })
+            .map(|v| (v.name_with_label(), v.info.entry_type()))
             .collect()
     }
 }

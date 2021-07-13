@@ -10,9 +10,7 @@ use crate::{
     locator::Locator,
 };
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::{btree_map, BTreeMap},
-};
+use std::collections::{btree_map, BTreeMap};
 
 #[derive(Clone)]
 pub struct Directory {
@@ -429,16 +427,11 @@ mod tests {
             .await
             .unwrap();
 
-        let expected_names: BTreeSet<_> = vec!["dog.txt", "cat.txt"]
-            .into_iter()
-            .collect();
+        let expected_names: BTreeSet<_> = vec!["dog.txt", "cat.txt"].into_iter().collect();
         let actual_names: BTreeSet<_> = dir.entries().map(|entry| entry.name()).collect();
         assert_eq!(actual_names, expected_names);
 
-        for &(file_name, expected_content) in &[
-            ("dog.txt", b"woof"),
-            ("cat.txt", b"meow"),
-        ] {
+        for &(file_name, expected_content) in &[("dog.txt", b"woof"), ("cat.txt", b"meow")] {
             let mut file = dir.lookup(file_name).unwrap().open_file().await.unwrap();
             let actual_content = file.read_to_end().await.unwrap();
             assert_eq!(actual_content, expected_content);
