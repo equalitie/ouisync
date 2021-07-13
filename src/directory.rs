@@ -12,7 +12,6 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{btree_map, BTreeMap},
-    ffi::{OsStr, OsString},
 };
 
 #[derive(Clone)]
@@ -88,7 +87,7 @@ impl Directory {
     }
 
     /// Lookup an entry of this directory by name.
-    pub fn lookup(&self, name: &'_ OsStr) -> Result<EntryInfo> {
+    pub fn lookup(&self, name: &'_ str) -> Result<EntryInfo> {
         self.content
             .entries
             .get_key_value(name)
@@ -101,7 +100,7 @@ impl Directory {
     }
 
     /// Creates a new file inside this directory.
-    pub fn create_file(&mut self, name: OsString) -> Result<File> {
+    pub fn create_file(&mut self, name: String) -> Result<File> {
         let seq = self.content.insert(name, EntryType::File)?;
 
         Ok(File::create(
@@ -113,7 +112,7 @@ impl Directory {
     }
 
     /// Creates a new subdirectory of this directory.
-    pub fn create_directory(&mut self, name: OsString) -> Result<Self> {
+    pub fn create_directory(&mut self, name: String) -> Result<Self> {
         let seq = self.content.insert(name, EntryType::Directory)?;
 
         Ok(Self::create(
@@ -124,12 +123,12 @@ impl Directory {
         ))
     }
 
-    pub async fn remove_file(&mut self, name: &OsStr) -> Result<()> {
+    pub async fn remove_file(&mut self, name: &str) -> Result<()> {
         self.lookup(name)?.open_file().await?.remove().await?;
         self.content.remove(name)
     }
 
-    pub async fn remove_directory(&mut self, name: &OsStr) -> Result<()> {
+    pub async fn remove_directory(&mut self, name: &str) -> Result<()> {
         self.lookup(name)?.open_directory().await?.remove().await?;
         self.content.remove(name)
     }
@@ -139,9 +138,9 @@ impl Directory {
     /// directory, no change is performed and an error is returned instead.
     pub async fn move_entry(
         &mut self,
-        src_name: &OsStr,
+        src_name: &str,
         dst_dir: &mut MoveDstDirectory,
-        dst_name: &OsStr,
+        dst_name: &str,
     ) -> Result<()> {
         // Check we are moving entry to itself and if so, do nothing to prevent data loss.
         if let MoveDstDirectory::Src = dst_dir {
@@ -233,12 +232,12 @@ impl Directory {
 #[derive(Copy, Clone)]
 pub struct EntryInfo<'a> {
     parent_blob: &'a Blob,
-    name: &'a OsStr,
+    name: &'a str,
     data: &'a EntryData,
 }
 
 impl<'a> EntryInfo<'a> {
-    pub fn name(&self) -> &'a OsStr {
+    pub fn name(&self) -> &'a str {
         self.name
     }
 
@@ -318,13 +317,13 @@ impl MoveDstDirectory {
 
 #[derive(Default, Clone, Deserialize, Serialize)]
 struct Content {
-    entries: BTreeMap<OsString, EntryData>,
+    entries: BTreeMap<String, EntryData>,
     #[serde(skip)]
     dirty: bool,
 }
 
 impl Content {
-    fn insert(&mut self, name: OsString, entry_type: EntryType) -> Result<u32> {
+    fn insert(&mut self, name: String, entry_type: EntryType) -> Result<u32> {
         self.vacant_entry().insert(name, entry_type)
     }
 
@@ -335,7 +334,7 @@ impl Content {
         VacantEntry { seq, content: self }
     }
 
-    fn remove(&mut self, name: &OsStr) -> Result<()> {
+    fn remove(&mut self, name: &str) -> Result<()> {
         self.entries
             .remove(name)
             .map(|data| data.seq)
@@ -366,7 +365,7 @@ impl VacantEntry<'_> {
         self.seq
     }
 
-    fn insert(self, name: OsString, entry_type: EntryType) -> Result<u32> {
+    fn insert(self, name: String, entry_type: EntryType) -> Result<u32> {
         match self.content.entries.entry(name) {
             btree_map::Entry::Vacant(entry) => {
                 entry.insert(EntryData {
@@ -381,7 +380,7 @@ impl VacantEntry<'_> {
         }
     }
 
-    fn insert_or_replace(self, name: OsString, entry_type: EntryType) -> u32 {
+    fn insert_or_replace(self, name: String, entry_type: EntryType) -> u32 {
         self.content.entries.insert(
             name,
             EntryData {
@@ -430,15 +429,15 @@ mod tests {
             .await
             .unwrap();
 
-        let expected_names: BTreeSet<_> = vec![OsStr::new("dog.txt"), OsStr::new("cat.txt")]
+        let expected_names: BTreeSet<_> = vec!["dog.txt", "cat.txt"]
             .into_iter()
             .collect();
         let actual_names: BTreeSet<_> = dir.entries().map(|entry| entry.name()).collect();
         assert_eq!(actual_names, expected_names);
 
         for &(file_name, expected_content) in &[
-            (OsStr::new("dog.txt"), b"woof"),
-            (OsStr::new("cat.txt"), b"meow"),
+            ("dog.txt", b"woof"),
+            ("cat.txt", b"meow"),
         ] {
             let mut file = dir.lookup(file_name).unwrap().open_file().await.unwrap();
             let actual_content = file.read_to_end().await.unwrap();
@@ -466,14 +465,14 @@ mod tests {
         let dir = Directory::open(pool, branch.clone(), Cryptor::Null, Locator::Root)
             .await
             .unwrap();
-        assert!(dir.lookup(OsStr::new("none.txt")).is_ok());
+        assert!(dir.lookup("none.txt").is_ok());
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn remove_file() {
         let (pool, branch) = setup().await;
 
-        let name = OsStr::new("monkey.txt");
+        let name = "monkey.txt";
 
         // Create a directory with a single file.
         let mut parent_dir =
@@ -517,7 +516,7 @@ mod tests {
     async fn remove_subdirectory() {
         let (pool, branch) = setup().await;
 
-        let name = OsStr::new("dir");
+        let name = "dir";
 
         // Create a directory with a single subdirectory.
         let mut parent_dir =
@@ -559,8 +558,8 @@ mod tests {
     async fn move_entry_to_same_directory() {
         let (pool, branch) = setup().await;
 
-        let src_name = OsStr::new("src.txt");
-        let dst_name = OsStr::new("dst.txt");
+        let src_name = "src.txt";
+        let dst_name = "dst.txt";
 
         let mut dir = Directory::create(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root);
 
@@ -596,8 +595,8 @@ mod tests {
         let mut src_dir = root_dir.create_directory("src".into()).unwrap();
         let mut dst_dir = root_dir.create_directory("dst".into()).unwrap();
 
-        let src_name = OsStr::new("src.txt");
-        let dst_name = OsStr::new("dst.txt");
+        let src_name = "src.txt";
+        let dst_name = "dst.txt";
 
         let mut file = src_dir.create_file(src_name.to_owned()).unwrap();
         let content = random_content(1024);
@@ -633,7 +632,7 @@ mod tests {
     async fn move_entry_to_itself() {
         let (pool, branch) = setup().await;
 
-        let name = OsStr::new("src.txt");
+        let name = "src.txt";
 
         let mut dir = Directory::create(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root);
 
@@ -658,8 +657,8 @@ mod tests {
     async fn move_entry_over_existing_file() {
         let (pool, branch) = setup().await;
 
-        let src_name = OsStr::new("src.txt");
-        let dst_name = OsStr::new("dst.txt");
+        let src_name = "src.txt";
+        let dst_name = "dst.txt";
 
         let mut dir = Directory::create(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root);
 
@@ -698,8 +697,8 @@ mod tests {
     async fn attempt_to_move_entry_over_existing_directory() {
         let (pool, branch) = setup().await;
 
-        let src_name = OsStr::new("src.txt");
-        let dst_name = OsStr::new("dst");
+        let src_name = "src.txt";
+        let dst_name = "dst";
 
         let mut dir = Directory::create(pool.clone(), branch, Cryptor::Null, Locator::Root);
 

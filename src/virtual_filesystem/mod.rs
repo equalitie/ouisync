@@ -369,6 +369,8 @@ struct Inner {
 
 impl Inner {
     async fn lookup(&mut self, parent: Inode, name: &OsStr) -> Result<FileAttr> {
+        let name = name.to_str().ok_or(Error::NonUtf8FileName)?;
+
         log::debug!("lookup {}", self.inodes.path_display(parent, Some(name)));
 
         let parent_path = &self.inodes.get(parent).representation.as_directory_path()?;
@@ -573,6 +575,8 @@ impl Inner {
         mode: u32,
         umask: u32,
     ) -> Result<FileAttr> {
+        let name = name.to_str().ok_or(Error::NonUtf8FileName)?;
+
         log::debug!(
             "mkdir {} (mode={:#o}, umask={:#o})",
             self.inodes.path_display(parent, Some(name)),
@@ -603,6 +607,8 @@ impl Inner {
     }
 
     async fn rmdir(&mut self, parent: Inode, name: &OsStr) -> Result<()> {
+        let name = name.to_str().ok_or(Error::NonUtf8FileName)?;
+
         log::debug!("rmdir {}", self.inodes.path_display(parent, Some(name)));
 
         let mut parent_dir = self.open_directory_by_inode(parent).await?;
@@ -637,6 +643,8 @@ impl Inner {
         umask: u32,
         flags: OpenFlags,
     ) -> Result<(FileAttr, FileHandle, u32)> {
+        let name = name.to_str().ok_or(Error::NonUtf8FileName)?;
+
         log::debug!(
             "create {} (mode={:#o}, umask={:#o}, flags={})",
             self.inodes.path_display(parent, Some(name)),
@@ -787,6 +795,8 @@ impl Inner {
     }
 
     async fn unlink(&mut self, parent: Inode, name: &OsStr) -> Result<()> {
+        let name = name.to_str().ok_or(Error::NonUtf8FileName)?;
+
         log::debug!("unlink {}", self.inodes.path_display(parent, Some(name)));
 
         let mut parent_dir = self.open_directory_by_inode(parent).await?;
@@ -802,6 +812,9 @@ impl Inner {
         dst_name: &OsStr,
         flags: u32,
     ) -> Result<()> {
+        let src_name = src_name.to_str().ok_or(Error::NonUtf8FileName)?;
+        let dst_name = dst_name.to_str().ok_or(Error::NonUtf8FileName)?;
+
         log::debug!(
             "rename {} -> {} (flags={:#x})",
             self.inodes.path_display(src_parent, Some(src_name)),
@@ -922,6 +935,7 @@ fn to_error_code(error: &Error) -> libc::c_int {
         Error::EntryExists => libc::EEXIST,
         Error::EntryNotDirectory => libc::ENOTDIR,
         Error::EntryIsDirectory => libc::EISDIR,
+        Error::NonUtf8FileName => libc::EINVAL,
         Error::OffsetOutOfRange => libc::EINVAL,
         Error::DirectoryNotEmpty => libc::ENOTEMPTY,
         Error::OperationNotSupported => libc::ENOSYS,

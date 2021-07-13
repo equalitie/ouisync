@@ -40,6 +40,8 @@ pub enum Error {
     EntryNotDirectory,
     #[error("entry is a directory")]
     EntryIsDirectory,
+    #[error("File name is not a valid UTF-8 string")]
+    NonUtf8FileName,
     #[error("offset is out of range")]
     OffsetOutOfRange,
     #[error("directory is not empty")]

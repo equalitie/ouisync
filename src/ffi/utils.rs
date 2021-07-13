@@ -105,6 +105,16 @@ impl<T> RefHandle<T> {
 pub(super) struct AssumeSend<T>(pub T);
 unsafe impl<T> Send for AssumeSend<T> {}
 
+// TODO: Consider a special Utf8PathBuf type to ensure the rest of the code is
+// doesn't use non UTF-8 paths.
+pub unsafe fn ptr_to_utf8_path_buf(ptr: *const c_char) -> Result<PathBuf> {
+    let utf8_str = CStr::from_ptr(ptr)
+        .to_str()
+        .map_err(|_| Error::MalformedData)?;
+
+    Ok(PathBuf::from(utf8_str))
+}
+
 pub unsafe fn ptr_to_path_buf(ptr: *const c_char) -> Result<PathBuf> {
     Ok(PathBuf::from(c_str_to_os_str(CStr::from_ptr(ptr))?))
 }
@@ -120,17 +130,6 @@ pub fn c_str_to_os_str(c: &CStr) -> Result<&OsStr> {
     Ok(c.to_str().map_err(|_| Error::MalformedData)?.into())
 }
 
-pub fn os_str_to_c_string(os: &OsStr) -> Result<CString> {
-    CString::new(os_str_as_bytes(os)?).map_err(|_| Error::MalformedData)
-}
-
-#[cfg(unix)]
-fn os_str_as_bytes(os: &OsStr) -> Result<&[u8]> {
-    use std::os::unix::ffi::OsStrExt;
-    Ok(os.as_bytes())
-}
-
-#[cfg(not(unix))]
-fn os_str_to_bytes(os: &OsStr) -> Result<&[u8]> {
-    os.to_str().ok_or(Error::MalfomedData).as_bytes()
+pub fn str_to_c_string(s: &str) -> Result<CString> {
+    CString::new(s.as_bytes()).map_err(|_| Error::MalformedData)
 }

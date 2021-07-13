@@ -1,6 +1,5 @@
 use std::{
     collections::HashSet,
-    ffi::OsStr,
     path::{Component, Path},
 };
 
@@ -235,7 +234,7 @@ impl Repository {
                     let parent_dir = self
                         .open_directory_by_locator(*stack.last().unwrap())
                         .await?;
-                    let next_entry = parent_dir.lookup(name)?;
+                    let next_entry = parent_dir.lookup(name.to_str().unwrap())?;
 
                     stack.push(GlobalLocator {
                         branch,
@@ -252,9 +251,11 @@ impl Repository {
 
 // Decomposes `Path` into parent and filename. Returns `None` if `path` doesn't have parent
 // (it's the root).
-fn decompose_path(path: &Path) -> Option<(&Path, &OsStr)> {
+fn decompose_path(path: &Path) -> Option<(&Path, &str)> {
     match (path.parent(), path.file_name()) {
-        (Some(parent), Some(name)) => Some((parent, name)),
+        // It's OK to use unwrap here because all file names are assumed to be UTF-8 (checks are
+        // made in VirtualFilesystem).
+        (Some(parent), Some(name)) => Some((parent, name.to_str().unwrap())),
         _ => None,
     }
 }
