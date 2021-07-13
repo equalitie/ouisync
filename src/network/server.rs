@@ -62,14 +62,6 @@ impl Server {
     }
 
     async fn handle_local_change(&mut self) -> Result<()> {
-        // DEBUG
-        log::trace!(
-            "local change: {} -> {} (waiting: {})",
-            self.cookie,
-            self.cookie.wrapping_add(1),
-            self.waiting
-        );
-
         self.cookie = self.cookie.wrapping_add(1);
 
         if self.waiting {
