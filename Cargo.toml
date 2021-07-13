@@ -9,6 +9,10 @@ edition = "2018"
 [lib]
 crate-type = ["lib", "cdylib"] # TODO: we might also need `staticlib` for ios
 
+[[test]]
+name = "integration"
+path = "tests/tests.rs"
+
 [dependencies]
 anyhow = "1.0.40"
 async-recursion = "0.3.2"
