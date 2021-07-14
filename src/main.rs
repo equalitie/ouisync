@@ -26,6 +26,10 @@ async fn main() -> Result<()> {
         options.mount_dir,
     )?;
 
+    if options.print_ready_message {
+        println!("Listening on port {}", session.local_addr().port());
+    }
+
     signal::ctrl_c().await?;
 
     Ok(())

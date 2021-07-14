@@ -9,8 +9,6 @@ use std::{
 };
 use tempfile::TempDir;
 
-const BASE_PORT: u16 = 20000;
-
 /// Wrapper for the ouisync binary.
 pub struct Bin {
     work_dir: TempDir,
@@ -19,7 +17,6 @@ pub struct Bin {
 
 impl Bin {
     pub fn start(id: u32) -> Self {
-        let port = next_port();
         let work_dir = TempDir::new().unwrap();
 
         // Create the repository root directory
@@ -31,19 +28,19 @@ impl Bin {
             .arg(work_dir.path())
             .arg("--mount-dir")
             .arg(mount_dir)
-            .arg("--port")
-            .arg(port.to_string())
+            .arg("--print-ready-message")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
             .unwrap();
 
-        copy_lines_prefixed(process.stdout.take().unwrap(), io::stdout(), id);
-        copy_lines_prefixed(process.stderr.take().unwrap(), io::stderr(), id);
+        let mut stdout = process.stdout.take().unwrap();
 
-        // HACK: wait until the filesystem is mounted.
-        // TODO: find a better way to do this than sleep.
-        thread::sleep(Duration::from_millis(100));
+        let port = wait_for_ready_message(&mut stdout);
+        println!("replica {} ready on port {}", id, port);
+
+        copy_lines_prefixed(stdout, io::stdout(), id);
+        copy_lines_prefixed(process.stderr.take().unwrap(), io::stderr(), id);
 
         Self { work_dir, process }
     }
@@ -68,15 +65,6 @@ fn root(work_dir: &TempDir) -> PathBuf {
     work_dir.path().join("root")
 }
 
-fn next_port() -> u16 {
-    use std::sync::atomic::{AtomicU16, Ordering};
-
-    static COUNTER: AtomicU16 = AtomicU16::new(0);
-    BASE_PORT
-        .checked_add(COUNTER.fetch_add(1, Ordering::Relaxed))
-        .expect("port out of range")
-}
-
 // Spawns a thread that reads lines from `reader`, prefixes them with `id` and then writes them to
 // `writer`.
 fn copy_lines_prefixed<R, W>(reader: R, mut writer: W, id: u32)
@@ -95,6 +83,18 @@ where
             break;
         }
     });
+}
+
+fn wait_for_ready_message<R: Read>(reader: &mut R) -> u16 {
+    const PREFIX: &str = "Listening on port ";
+
+    let line = BufReader::new(reader)
+        .lines()
+        .filter_map(|line| line.ok())
+        .find(|line| line.starts_with(PREFIX))
+        .unwrap();
+
+    line[PREFIX.len()..].parse().unwrap()
 }
 
 /// Runs the given closure a couple of times until it succeeds (does not panic) with a short delay

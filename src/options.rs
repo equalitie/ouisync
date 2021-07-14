@@ -20,6 +20,11 @@ pub(crate) struct Options {
 
     #[structopt(flatten)]
     pub network: NetworkOptions,
+
+    /// Print the listening address to the stdout when the replica becomes ready.
+    /// Note this flag is unstable and experimental.
+    #[structopt(long)]
+    pub print_ready_message: bool,
 }
 
 impl Options {

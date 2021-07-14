@@ -7,13 +7,14 @@ use crate::{
     repository::Repository,
     this_replica,
 };
+use std::net::SocketAddr;
 
 /// Entry point to this library.
 pub struct Session {
     // TODO: cryptor should probably be per repository
     cryptor: Cryptor,
     index: Index,
-    _network: Network,
+    network: Network,
 }
 
 impl Session {
@@ -33,7 +34,7 @@ impl Session {
         Ok(Self {
             cryptor,
             index,
-            _network: network,
+            network,
         })
     }
 
@@ -43,5 +44,10 @@ impl Session {
     /// an argument to specify which repository to open.
     pub fn open_repository(&self) -> Repository {
         Repository::new(self.index.clone(), self.cryptor.clone())
+    }
+
+    /// Returns the local socket address the network listener is bound to.
+    pub fn local_addr(&self) -> &SocketAddr {
+        self.network.local_addr()
     }
 }

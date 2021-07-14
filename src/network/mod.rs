@@ -33,12 +33,10 @@ use tokio::{
     },
 };
 
-pub const DEFAULT_PORT: u16 = 65535;
-
 #[derive(StructOpt)]
 pub struct NetworkOptions {
-    /// Port to listen on
-    #[structopt(short, long, default_value = "65535")]
+    /// Port to listen on (0 for random)
+    #[structopt(short, long, default_value = "0")]
     pub port: u16,
 
     /// IP address to bind to
@@ -59,7 +57,7 @@ impl NetworkOptions {
 impl Default for NetworkOptions {
     fn default() -> Self {
         Self {
-            port: DEFAULT_PORT,
+            port: 0,
             bind: Ipv4Addr::UNSPECIFIED.into(),
             enable_local_discovery: true,
         }
@@ -68,6 +66,7 @@ impl Default for NetworkOptions {
 
 pub struct Network {
     _tasks: ScopedTaskSet,
+    local_addr: SocketAddr,
 }
 
 impl Network {
@@ -89,7 +88,14 @@ impl Network {
         tasks.spawn(inner.clone().run_discovery(local_addr.port(), forget_rx));
         tasks.spawn(inner.run_listener(listener));
 
-        Ok(Self { _tasks: tasks })
+        Ok(Self {
+            _tasks: tasks,
+            local_addr,
+        })
+    }
+
+    pub fn local_addr(&self) -> &SocketAddr {
+        &self.local_addr
     }
 }
 
