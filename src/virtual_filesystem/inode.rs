@@ -22,10 +22,8 @@ impl InodeMap {
         let mut forward = Slab::with_capacity(1);
 
         let index = forward.insert(InodeData {
-            details: InodeDetails {
-                representation: Representation::Directory(Utf8PathBuf::new()),
-                parent: 0,
-            },
+            representation: Representation::Directory(Utf8PathBuf::new()),
+            parent: 0,
             name: String::new(),
             lookups: 1,
         });
@@ -56,10 +54,8 @@ impl InodeMap {
         match self.reverse.entry(key) {
             Entry::Vacant(entry) => {
                 let index = self.forward.insert(InodeData {
-                    details: InodeDetails {
-                        representation,
-                        parent,
-                    },
+                    representation,
+                    parent,
                     name: name.to_owned(),
                     lookups: 1,
                 });
@@ -96,7 +92,7 @@ impl InodeMap {
         if data.lookups <= lookups {
             let data = self.forward.remove(index);
             let key = Key {
-                parent: data.details.parent,
+                parent: data.parent,
                 name: data.name,
             };
 
@@ -112,15 +108,14 @@ impl InodeMap {
         }
     }
 
-    // Retrieve the details for the given inode.
+    // Retrieve the data for the given inode.
     //
     // # Panics
     //
     // Panics if the inode doesn't exist.
-    pub fn get(&self, inode: Inode) -> &InodeDetails {
+    pub fn get(&self, inode: Inode) -> &InodeData {
         self.forward
             .get(inode_to_index(inode))
-            .map(|data| &data.details)
             .expect("inode not found")
     }
 
@@ -177,13 +172,9 @@ impl Representation {
     }
 }
 
-pub struct InodeDetails {
+pub struct InodeData {
     pub representation: Representation,
     pub parent: Inode,
-}
-
-struct InodeData {
-    details: InodeDetails,
     name: String,
     lookups: u64,
 }
@@ -232,8 +223,8 @@ impl fmt::Display for PathDisplay<'_> {
 fn fmt_inode_path(f: &mut fmt::Formatter, map: &Slab<InodeData>, inode: Inode) -> fmt::Result {
     let data = &map[inode_to_index(inode)];
 
-    if data.details.parent > FUSE_ROOT_ID {
-        fmt_inode_path(f, map, data.details.parent)?;
+    if data.parent > FUSE_ROOT_ID {
+        fmt_inode_path(f, map, data.parent)?;
     }
 
     write!(f, "/{}", data.name)
