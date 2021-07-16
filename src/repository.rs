@@ -1,7 +1,4 @@
-use std::{
-    collections::HashSet,
-    path::{Component, Path},
-};
+use std::collections::HashSet;
 
 use crate::{
     crypto::Cryptor,
@@ -15,6 +12,8 @@ use crate::{
     locator::Locator,
     ReplicaId,
 };
+
+use camino::{Utf8Component, Utf8Path};
 
 pub struct Repository {
     index: Index,
@@ -55,26 +54,26 @@ impl Repository {
     /// Looks up an entry by its path. The path must be relative to the repository root.
     /// If the entry exists, returns its `Locator` and `EntryType`, otherwise returns
     /// `EntryNotFound`.
-    pub async fn lookup<P: AsRef<Path>>(&self, path: P) -> Result<(GlobalLocator, EntryType)> {
+    pub async fn lookup<P: AsRef<Utf8Path>>(&self, path: P) -> Result<(GlobalLocator, EntryType)> {
         self.lookup_by_path(path.as_ref()).await
     }
 
     /// Opens a file at the given path (relative to the repository root)
-    pub async fn open_file<P: AsRef<Path>>(&self, path: P) -> Result<File> {
+    pub async fn open_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<File> {
         let (locator, entry_type) = self.lookup(path).await?;
         entry_type.check_is_file()?;
         self.open_file_by_locator(&locator).await
     }
 
     /// Opens a directory at the given path (relative to the repository root)
-    pub async fn open_directory<P: AsRef<Path>>(&self, path: P) -> Result<Directory> {
+    pub async fn open_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<Directory> {
         let (locator, entry_type) = self.lookup(path).await?;
         entry_type.check_is_directory()?;
         self.open_directory_by_locator(locator).await
     }
 
     /// Creates a new file at the given path. Returns both the new file and its parent directory.
-    pub async fn create_file<P: AsRef<Path>>(&self, path: P) -> Result<(File, Directory)> {
+    pub async fn create_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<(File, Directory)> {
         let (parent, name) = decompose_path(path.as_ref()).ok_or(Error::EntryExists)?;
 
         let mut parent = self.open_directory(parent).await?;
@@ -85,7 +84,7 @@ impl Repository {
 
     /// Creates a new directory at the given path. Returns both the new directory and its parent
     /// directory.
-    pub async fn create_directory<P: AsRef<Path>>(
+    pub async fn create_directory<P: AsRef<Utf8Path>>(
         &self,
         path: P,
     ) -> Result<(Directory, Directory)> {
@@ -98,7 +97,7 @@ impl Repository {
     }
 
     /// Removes (delete) the file at the given path. Returns the parent directory.
-    pub async fn remove_file<P: AsRef<Path>>(&self, path: P) -> Result<Directory> {
+    pub async fn remove_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<Directory> {
         let (parent, name) = decompose_path(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
         let mut parent = self.open_directory(parent).await?;
         parent.remove_file(name).await?;
@@ -108,7 +107,7 @@ impl Repository {
 
     /// Removes the directory at the given path. The directory must be empty. Returns the parent
     /// directory.
-    pub async fn remove_directory<P: AsRef<Path>>(&self, path: P) -> Result<Directory> {
+    pub async fn remove_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<Directory> {
         let (parent, name) = decompose_path(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
         let mut parent = self.open_directory(parent).await?;
         parent.remove_directory(name).await?;
@@ -119,7 +118,7 @@ impl Repository {
     /// Moves (renames) an entry from the source path to the destination path.
     /// If both source and destination refer to the same entry, this is a no-op.
     /// Returns the parent directories of both `src` and `dst`.
-    pub async fn move_entry<S: AsRef<Path>, D: AsRef<Path>>(
+    pub async fn move_entry<S: AsRef<Utf8Path>, D: AsRef<Utf8Path>>(
         &self,
         src: S,
         dst: D,
@@ -209,7 +208,7 @@ impl Repository {
             .ok_or(Error::EntryNotFound)
     }
 
-    async fn lookup_by_path(&self, path: &Path) -> Result<(GlobalLocator, EntryType)> {
+    async fn lookup_by_path(&self, path: &Utf8Path) -> Result<(GlobalLocator, EntryType)> {
         let branch = *self.this_replica_id();
         let mut stack = vec![GlobalLocator {
             branch,
@@ -219,22 +218,22 @@ impl Repository {
 
         for component in path.components() {
             match component {
-                Component::Prefix(_) => return Err(Error::OperationNotSupported),
-                Component::RootDir | Component::CurDir => (),
-                Component::ParentDir => {
+                Utf8Component::Prefix(_) => return Err(Error::OperationNotSupported),
+                Utf8Component::RootDir | Utf8Component::CurDir => (),
+                Utf8Component::ParentDir => {
                     if stack.len() > 1 {
                         stack.pop();
                     }
 
                     last_type = EntryType::Directory;
                 }
-                Component::Normal(name) => {
+                Utf8Component::Normal(name) => {
                     last_type.check_is_directory()?;
 
                     let parent_dir = self
                         .open_directory_by_locator(*stack.last().unwrap())
                         .await?;
-                    let next_entry = parent_dir.lookup(name.to_str().unwrap())?;
+                    let next_entry = parent_dir.lookup(name)?;
 
                     stack.push(GlobalLocator {
                         branch,
@@ -251,11 +250,11 @@ impl Repository {
 
 // Decomposes `Path` into parent and filename. Returns `None` if `path` doesn't have parent
 // (it's the root).
-fn decompose_path(path: &Path) -> Option<(&Path, &str)> {
+fn decompose_path(path: &Utf8Path) -> Option<(&Utf8Path, &str)> {
     match (path.parent(), path.file_name()) {
         // It's OK to use unwrap here because all file names are assumed to be UTF-8 (checks are
         // made in VirtualFilesystem).
-        (Some(parent), Some(name)) => Some((parent, name.to_str().unwrap())),
+        (Some(parent), Some(name)) => Some((parent, name)),
         _ => None,
     }
 }

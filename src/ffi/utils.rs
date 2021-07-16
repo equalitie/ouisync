@@ -1,11 +1,11 @@
 use super::dart::{self, DartCObject};
 use crate::error::{Error, Result};
+use camino::Utf8PathBuf;
 use std::{
     ffi::{CStr, CString, OsStr},
     marker::PhantomData,
     mem,
     os::raw::c_char,
-    path::PathBuf,
     sync::Arc,
 };
 
@@ -105,14 +105,12 @@ impl<T> RefHandle<T> {
 pub(super) struct AssumeSend<T>(pub T);
 unsafe impl<T> Send for AssumeSend<T> {}
 
-// TODO: Consider a special Utf8PathBuf type to ensure the rest of the code is
-// doesn't use non UTF-8 paths.
-pub unsafe fn ptr_to_utf8_path_buf(ptr: *const c_char) -> Result<PathBuf> {
+pub unsafe fn ptr_to_utf8_path_buf(ptr: *const c_char) -> Result<Utf8PathBuf> {
     let utf8_str = CStr::from_ptr(ptr)
         .to_str()
         .map_err(|_| Error::MalformedData)?;
 
-    Ok(PathBuf::from(utf8_str))
+    Ok(Utf8PathBuf::from(utf8_str))
 }
 
 #[cfg(unix)]

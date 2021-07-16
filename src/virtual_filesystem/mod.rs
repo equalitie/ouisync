@@ -12,6 +12,7 @@ use self::{
     open_flags::OpenFlags,
     utils::{FormatOptionScope, MaybeOwnedMut},
 };
+use camino::Utf8Path;
 use fuser::{
     BackgroundSession, FileAttr, FileType, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory,
     ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow,
@@ -879,7 +880,7 @@ impl Inner {
         }
     }
 
-    async fn open_joint_dir(&self, path: &Path) -> Result<JointDirectory> {
+    async fn open_joint_dir(&self, path: &Utf8Path) -> Result<JointDirectory> {
         self.repository.joint_root().await?.cd_into_path(path).await
     }
 

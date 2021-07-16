@@ -1,3 +1,4 @@
+use camino::Utf8PathBuf;
 use fuser::FUSE_ROOT_ID;
 use ouisync::{Error, GlobalLocator, Result};
 use slab::Slab;
@@ -5,7 +6,6 @@ use std::{
     collections::{hash_map::Entry, HashMap},
     convert::TryInto,
     fmt,
-    path::PathBuf,
 };
 
 /// Inode handle
@@ -23,7 +23,7 @@ impl InodeMap {
 
         let index = forward.insert(InodeData {
             details: InodeDetails {
-                representation: Representation::Directory(PathBuf::new()),
+                representation: Representation::Directory(Utf8PathBuf::new()),
                 parent: 0,
             },
             name: String::new(),
@@ -146,7 +146,7 @@ pub enum Representation {
     // then we would need to update the Representation each time a new branch with the given
     // directory is added. For now, we'll just store the path and each time the set of locators
     // corresponding to the path is requested, it'll be determined dynamically.
-    Directory(PathBuf),
+    Directory(Utf8PathBuf),
     File(GlobalLocator),
 }
 
@@ -162,7 +162,7 @@ impl Representation {
         }
     }
 
-    pub fn as_directory_path(&self) -> Result<&PathBuf> {
+    pub fn as_directory_path(&self) -> Result<&Utf8PathBuf> {
         match self {
             Self::Directory(path) => Ok(path),
             Self::File(_) => Err(Error::EntryNotDirectory),

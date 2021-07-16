@@ -7,10 +7,10 @@ use crate::{
     replica_id::ReplicaId,
     Error, Result,
 };
+use camino::Utf8Path;
 use std::{
     collections::btree_map::{Entry as MapEntry, Values},
     collections::{BTreeMap, BTreeSet},
-    path::Path,
     slice,
 };
 
@@ -161,12 +161,12 @@ impl JointDirectory {
         Ok(retval)
     }
 
-    pub async fn cd_into_path(&self, path: &Path) -> Result<JointDirectory> {
+    pub async fn cd_into_path(&self, path: &Utf8Path) -> Result<JointDirectory> {
         let mut retval = self.clone();
         for name in path {
             // Using unwrap here because all names should be UTP-8 as they arrive from
             // VirtualFilesystem.
-            retval = retval.cd_into(name.to_str().unwrap()).await?;
+            retval = retval.cd_into(name).await?;
         }
         Ok(retval)
     }
