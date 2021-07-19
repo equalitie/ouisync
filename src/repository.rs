@@ -8,7 +8,7 @@ use crate::{
     error::{Error, Result},
     file::File,
     global_locator::GlobalLocator,
-    index::{BranchData, Index},
+    index::Index,
     joint_directory::JointDirectory,
     locator::Locator,
     ReplicaId,
@@ -167,45 +167,30 @@ impl Repository {
 
     pub async fn open_file_by_locator(&self, locator: &GlobalLocator) -> Result<File> {
         let branch = self.branch(&locator.branch_id).await?;
-
-        File::open(
-            self.index.pool.clone(),
-            branch,
-            self.cryptor.clone(),
-            locator.local,
-        )
-        .await
+        branch.open_file_by_locator(locator.local).await
     }
 
     pub async fn open_directory_by_locator(&self, locator: GlobalLocator) -> Result<Directory> {
         let branch = self.branch(&locator.branch_id).await?;
 
-        match Directory::open(
-            self.index.pool.clone(),
-            branch.clone(),
-            self.cryptor.clone(),
-            locator.local,
-        )
-        .await
-        {
-            Ok(dir) => Ok(dir),
-            Err(Error::EntryNotFound) if locator.local == Locator::Root => {
-                // Lazily Create the root directory
-                Ok(Directory::create(
-                    self.index.pool.clone(),
-                    branch,
-                    self.cryptor.clone(),
-                    Locator::Root,
-                ))
-            }
-            Err(error) => Err(error),
+        if locator.local == Locator::Root && &locator.branch_id == self.this_replica_id() {
+            branch.ensure_root_exists().await
+        }
+        else {
+            branch.open_directory_by_locator(locator.local).await
         }
     }
 
-    async fn branch(&self, replica_id: &ReplicaId) -> Result<BranchData> {
+    async fn branch(&self, replica_id: &ReplicaId) -> Result<Branch> {
         self.index
             .branch(replica_id)
             .await
+            .map(|branch_data|
+                 Branch::new(
+                     self.index.pool.clone(),
+                     branch_data,
+                     self.cryptor.clone()
+                 ))
             .ok_or(Error::EntryNotFound)
     }
 

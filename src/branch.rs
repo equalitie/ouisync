@@ -7,7 +7,6 @@ use crate::{
     file::File,
     index::BranchData,
     locator::Locator,
-    ReplicaId,
 };
 
 use camino::{Utf8Component, Utf8Path};
@@ -21,6 +20,10 @@ pub struct Branch {
 impl Branch {
     pub fn new(pool: db::Pool, branch_data: BranchData, cryptor: Cryptor) -> Self {
         Self { pool, branch_data, cryptor }
+    }
+
+    pub fn data(&self) -> &BranchData {
+        &self.branch_data
     }
 
     /// Looks up an entry by its path. The path must be relative to the repository root.
