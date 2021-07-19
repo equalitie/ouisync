@@ -7,7 +7,7 @@ use crate::{
     db,
     error::{Error, Result},
     global_locator::GlobalLocator,
-    index::Branch,
+    index::BranchData,
     locator::Locator,
     store,
 };
@@ -21,7 +21,7 @@ use zeroize::Zeroize;
 
 #[derive(Clone)]
 pub struct Blob {
-    branch: Branch,
+    branch: BranchData,
     global_locator: GlobalLocator,
     pool: db::Pool,
     cryptor: Cryptor,
@@ -37,7 +37,7 @@ impl Blob {
     /// Opens an existing blob.
     pub(crate) async fn open(
         pool: db::Pool,
-        branch: Branch,
+        branch: BranchData,
         cryptor: Cryptor,
         locator: Locator,
     ) -> Result<Self> {
@@ -80,7 +80,7 @@ impl Blob {
     }
 
     /// Creates a new blob.
-    pub fn create(pool: db::Pool, branch: Branch, cryptor: Cryptor, locator: Locator) -> Self {
+    pub fn create(pool: db::Pool, branch: BranchData, cryptor: Cryptor, locator: Locator) -> Self {
         let nonce_sequence = NonceSequence::new(rand::random());
         let mut content = Cursor::new(Buffer::new());
 
@@ -112,7 +112,7 @@ impl Blob {
         }
     }
 
-    pub fn branch(&self) -> &Branch {
+    pub fn branch(&self) -> &BranchData {
         &self.branch
     }
 
@@ -498,7 +498,7 @@ impl Blob {
 }
 
 async fn read_block(
-    branch: &Branch,
+    branch: &BranchData,
     tx: &mut db::Transaction<'_>,
     cryptor: &Cryptor,
     nonce_sequence: &NonceSequence,
@@ -522,7 +522,7 @@ async fn read_block(
 }
 
 async fn load_block(
-    branch: &Branch,
+    branch: &BranchData,
     tx: &mut db::Transaction<'_>,
     cryptor: &Cryptor,
     locator: &Locator,
@@ -535,7 +535,7 @@ async fn load_block(
 }
 
 async fn write_block(
-    branch: &Branch,
+    branch: &BranchData,
     tx: &mut db::Transaction<'_>,
     cryptor: &Cryptor,
     nonce_sequence: &NonceSequence,

@@ -6,7 +6,7 @@ use crate::{
     error::{Error, Result},
     file::File,
     global_locator::GlobalLocator,
-    index::Branch,
+    index::BranchData,
     locator::Locator,
 };
 use serde::{Deserialize, Serialize};
@@ -23,7 +23,7 @@ impl Directory {
     /// Opens existing directory.
     pub(crate) async fn open(
         pool: db::Pool,
-        branch: Branch,
+        branch: BranchData,
         cryptor: Cryptor,
         locator: Locator,
     ) -> Result<Self> {
@@ -37,7 +37,7 @@ impl Directory {
     /// Creates new directory.
     pub(crate) fn create(
         pool: db::Pool,
-        branch: Branch,
+        branch: BranchData,
         cryptor: Cryptor,
         locator: Locator,
     ) -> Self {
@@ -401,7 +401,7 @@ struct EntryData {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{index::Branch, replica_id::ReplicaId};
+    use crate::{index::BranchData, replica_id::ReplicaId};
     use rand::{distributions::Standard, Rng};
     use std::collections::BTreeSet;
 
@@ -715,9 +715,9 @@ mod tests {
         }
     }
 
-    async fn setup() -> (db::Pool, Branch) {
+    async fn setup() -> (db::Pool, BranchData) {
         let pool = db::init(db::Store::Memory).await.unwrap();
-        let branch = Branch::new(&pool, ReplicaId::random()).await.unwrap();
+        let branch = BranchData::new(&pool, ReplicaId::random()).await.unwrap();
 
         (pool, branch)
     }

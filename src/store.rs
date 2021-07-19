@@ -47,7 +47,7 @@ mod tests {
     use crate::{
         block::{self, BLOCK_SIZE},
         crypto::{AuthTag, Cryptor, Hashable},
-        index::{self, Branch},
+        index::{self, BranchData},
         locator::Locator,
         replica_id::ReplicaId,
     };
@@ -60,8 +60,8 @@ mod tests {
 
         let cryptor = Cryptor::Null;
 
-        let branch0 = Branch::new(&pool, ReplicaId::random()).await.unwrap();
-        let branch1 = Branch::new(&pool, ReplicaId::random()).await.unwrap();
+        let branch0 = BranchData::new(&pool, ReplicaId::random()).await.unwrap();
+        let branch1 = BranchData::new(&pool, ReplicaId::random()).await.unwrap();
 
         let block_id = BlockId::random();
         let buffer = vec![0; BLOCK_SIZE];

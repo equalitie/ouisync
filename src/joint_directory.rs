@@ -382,7 +382,7 @@ impl<'a> JointEntryView<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{db, index::Branch, Cryptor, Locator};
+    use crate::{db, index::BranchData, Cryptor, Locator};
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_no_conflict() {
@@ -475,13 +475,13 @@ mod tests {
         assert_eq!(entries[1].1, EntryType::File);
     }
 
-    async fn setup(branch_count: usize) -> (db::Pool, Vec<Branch>) {
+    async fn setup(branch_count: usize) -> (db::Pool, Vec<BranchData>) {
         let pool = db::init(db::Store::Memory).await.unwrap();
 
         let mut branches = Vec::new();
 
         for _ in 0..branch_count {
-            let branch = Branch::new(&pool, ReplicaId::random()).await.unwrap();
+            let branch = BranchData::new(&pool, ReplicaId::random()).await.unwrap();
             branches.push(branch);
         }
 

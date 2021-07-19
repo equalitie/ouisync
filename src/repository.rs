@@ -7,7 +7,7 @@ use crate::{
     error::{Error, Result},
     file::File,
     global_locator::GlobalLocator,
-    index::{Branch, Index},
+    index::{BranchData, Index},
     joint_directory::JointDirectory,
     locator::Locator,
     ReplicaId,
@@ -201,7 +201,7 @@ impl Repository {
         }
     }
 
-    async fn branch(&self, replica_id: &ReplicaId) -> Result<Branch> {
+    async fn branch(&self, replica_id: &ReplicaId) -> Result<BranchData> {
         self.index
             .branch(replica_id)
             .await

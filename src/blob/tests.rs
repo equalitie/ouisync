@@ -8,7 +8,7 @@ use test_strategy::proptest;
 #[tokio::test(flavor = "multi_thread")]
 async fn empty_blob() {
     let pool = init_db().await;
-    let branch = Branch::new(&pool, ReplicaId::random()).await.unwrap();
+    let branch = BranchData::new(&pool, ReplicaId::random()).await.unwrap();
 
     let mut blob = Blob::create(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root);
     blob.flush().await.unwrap();
@@ -399,13 +399,13 @@ async fn modify_blob() {
     }
 }
 
-async fn setup(rng_seed: u64) -> (StdRng, Cryptor, db::Pool, Branch) {
+async fn setup(rng_seed: u64) -> (StdRng, Cryptor, db::Pool, BranchData) {
     let mut rng = StdRng::seed_from_u64(rng_seed);
     let secret_key = SecretKey::generate(&mut rng);
     let cryptor = Cryptor::ChaCha20Poly1305(secret_key);
     let pool = init_db().await;
 
-    let branch = Branch::new(&pool, rng.gen()).await.unwrap();
+    let branch = BranchData::new(&pool, rng.gen()).await.unwrap();
 
     (rng, cryptor, pool, branch)
 }

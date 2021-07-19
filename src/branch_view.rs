@@ -5,7 +5,7 @@ use crate::{
     entry::{Entry, EntryType},
     error::{Error, Result},
     file::File,
-    index::Branch,
+    index::BranchData,
     locator::Locator,
     ReplicaId,
 };
@@ -14,17 +14,17 @@ use camino::{Utf8Component, Utf8Path};
 
 pub struct BranchView {
     pool: db::Pool,
-    branch: Branch,
+    branch_data: BranchData,
     cryptor: Cryptor,
 }
 
 impl BranchView {
-    pub fn new(pool: db::Pool, branch: Branch, cryptor: Cryptor) -> Self {
-        Self { pool, branch, cryptor }
+    pub fn new(pool: db::Pool, branch_data: BranchData, cryptor: Cryptor) -> Self {
+        Self { pool, branch_data, cryptor }
     }
 
     pub fn branch_id(&self) -> &ReplicaId {
-        self.branch.replica_id()
+        self.branch_data.replica_id()
     }
 
     /// Looks up an entry by its path. The path must be relative to the repository root.
@@ -143,7 +143,7 @@ impl BranchView {
     pub async fn open_file_by_locator(&self, locator: Locator) -> Result<File> {
         File::open(
             self.pool.clone(),
-            self.branch.clone(),
+            self.branch_data.clone(),
             self.cryptor.clone(),
             locator,
         )
@@ -153,7 +153,7 @@ impl BranchView {
     pub async fn open_directory_by_locator(&self, locator: Locator) -> Result<Directory> {
         Directory::open(
             self.pool.clone(),
-            self.branch.clone(),
+            self.branch_data.clone(),
             self.cryptor.clone(),
             locator,
         )
@@ -166,7 +166,7 @@ impl BranchView {
             Err(Error::EntryNotFound) => {
                 Ok(Directory::create(
                     self.pool.clone(),
-                    self.branch.clone(),
+                    self.branch_data.clone(),
                     self.cryptor.clone(),
                     Locator::Root,
                 ))
