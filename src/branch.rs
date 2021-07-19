@@ -12,19 +12,15 @@ use crate::{
 
 use camino::{Utf8Component, Utf8Path};
 
-pub struct BranchView {
+pub struct Branch {
     pool: db::Pool,
     branch_data: BranchData,
     cryptor: Cryptor,
 }
 
-impl BranchView {
+impl Branch {
     pub fn new(pool: db::Pool, branch_data: BranchData, cryptor: Cryptor) -> Self {
         Self { pool, branch_data, cryptor }
-    }
-
-    pub fn branch_id(&self) -> &ReplicaId {
-        self.branch_data.replica_id()
     }
 
     /// Looks up an entry by its path. The path must be relative to the repository root.
@@ -229,7 +225,7 @@ mod tests {
         let pool = db::init(db::Store::Memory).await.unwrap();
         let branch_id = ReplicaId::random();
         let index = Index::load(pool.clone(), branch_id).await.unwrap();
-        let branch = BranchView::new(pool, index.branch(&branch_id).await.unwrap(), Cryptor::Null);
+        let branch = Branch::new(pool, index.branch(&branch_id).await.unwrap(), Cryptor::Null);
 
         let mut root_dir = branch.ensure_root_exists().await.unwrap();
         let mut file_a = root_dir.create_file("a.txt".into()).unwrap();

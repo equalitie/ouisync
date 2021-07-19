@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use crate::{
+    branch::Branch,
     crypto::Cryptor,
     directory::{Directory, MoveDstDirectory},
     entry::{Entry, EntryType},
