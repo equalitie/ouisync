@@ -73,28 +73,18 @@ impl Repository {
         self.open_directory_by_locator(locator).await
     }
 
-    /// Creates a new file at the given path. Returns both the new file and its parent directory.
-    pub async fn create_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<(File, Directory)> {
-        let (parent, name) = decompose_path(path.as_ref()).ok_or(Error::EntryExists)?;
-
-        let mut parent = self.open_directory(parent).await?;
-        let file = parent.create_file(name.to_owned())?;
-
-        Ok((file, parent))
+    /// Creates a new file at the given path. Returns the new file and its directory ancestors.
+    pub async fn create_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<(File, Vec<Directory>)> {
+        self.local_branch().await.ensure_file_exists(path.as_ref()).await
     }
 
-    /// Creates a new directory at the given path. Returns both the new directory and its parent
-    /// directory.
+    /// Creates a new directory at the given path. Returs a vector of directories corresponding to
+    /// the path (starting with the root).
     pub async fn create_directory<P: AsRef<Utf8Path>>(
         &self,
         path: P,
-    ) -> Result<(Directory, Directory)> {
-        let (parent, name) = decompose_path(path.as_ref()).ok_or(Error::EntryExists)?;
-
-        let mut parent = self.open_directory(parent).await?;
-        let dir = parent.create_directory(name.to_owned())?;
-
-        Ok((dir, parent))
+    ) -> Result<Vec<Directory>> {
+        Ok(self.local_branch().await.ensure_directory_exists(path.as_ref()).await?)
     }
 
     /// Removes (delete) the file at the given path. Returns the parent directory.
@@ -192,6 +182,10 @@ impl Repository {
                      self.cryptor.clone()
                  ))
             .ok_or(Error::EntryNotFound)
+    }
+
+    async fn local_branch(&self) -> Branch {
+        self.branch(self.this_replica_id()).await.unwrap()
     }
 
     async fn lookup_by_path(&self, path: &Utf8Path) -> Result<(GlobalLocator, EntryType)> {

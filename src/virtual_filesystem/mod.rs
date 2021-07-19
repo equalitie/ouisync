@@ -649,11 +649,15 @@ impl Inner {
             flags
         );
 
-        let mut parent_dir = self.open_directory_by_inode(parent).await?;
-        let mut file = parent_dir.create_file(self.this_replica_id(), name.to_owned())?;
+
+        let path = self.inodes.get(parent).calculate_directory_path()?.join(name);
+        let (mut file, mut dirs) = self.repository.create_file(path).await?;
 
         file.flush().await?;
-        parent_dir.flush().await?;
+
+        for dir in dirs.iter_mut().rev() {
+            dir.flush().await?;
+        }
 
         let locator = *file.global_locator();
         let entry = JointEntry::File(file);

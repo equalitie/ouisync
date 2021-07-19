@@ -27,11 +27,10 @@ pub unsafe extern "C" fn directory_create(
         let repo = repo.get();
 
         ctx.spawn(async move {
-            let (mut dir, mut parent) = repo.create_directory(path).await?;
-
-            dir.flush().await?;
-            parent.flush().await?;
-
+            let mut dirs = repo.create_directory(path).await?;
+            for dir in dirs.iter_mut().rev() {
+                dir.flush().await?;
+            }
             Ok(())
         })
     })

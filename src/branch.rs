@@ -174,6 +174,38 @@ impl Branch {
         }
     }
 
+    pub async fn ensure_directory_exists(&self, path: &Utf8Path) -> Result<Vec<Directory>> {
+        let mut dirs = vec![self.ensure_root_exists().await?];
+
+        for component in path.components() {
+            match component {
+                Utf8Component::Normal(name) => {
+                    let last = dirs.last_mut().unwrap();
+
+                    let next = if let Ok(entry) = last.lookup(name) {
+                        entry.open_directory().await?
+                    } else {
+                        last.create_directory(name.to_string())?
+                    };
+
+                    dirs.push(next);
+                },
+                // I believe we can assume that FUSE and FFI will give us normalized paths.
+                // TODO: Consider wrapping Utf8Path to ensure normalized components.
+                _ => panic!("Received non \"normal\" path")
+            }
+        }
+
+        Ok(dirs)
+    }
+
+    pub async fn ensure_file_exists(&self, path: &Utf8Path) -> Result<(File, Vec<Directory>)> {
+        let (parent, name) = decompose_path(path).ok_or(Error::EntryIsDirectory)?;
+        let mut dirs = self.ensure_directory_exists(parent).await?;
+        let file = dirs.last_mut().unwrap().create_file(name.to_string())?;
+        Ok((file, dirs))
+    }
+
     async fn lookup_by_path(&self, path: &Utf8Path) -> Result<(Locator, EntryType)> {
         let mut stack = vec![Locator::Root];
         let mut last_type = EntryType::Directory;
