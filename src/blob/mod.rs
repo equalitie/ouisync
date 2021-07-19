@@ -63,7 +63,7 @@ impl Blob {
         };
 
         let global_locator = GlobalLocator {
-            branch: *branch.replica_id(),
+            branch_id: *branch.replica_id(),
             local: locator,
         };
 
@@ -96,7 +96,7 @@ impl Blob {
         };
 
         let global_locator = GlobalLocator {
-            branch: *branch.replica_id(),
+            branch_id: *branch.replica_id(),
             local: locator,
         };
 

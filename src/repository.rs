@@ -37,9 +37,9 @@ impl Repository {
     pub async fn joint_root(&self) -> Result<JointDirectory> {
         let mut root = JointDirectory::new();
 
-        for branch in self.branches().await.into_iter() {
+        for branch_id in self.branches().await.into_iter() {
             let locator = GlobalLocator {
-                branch,
+                branch_id,
                 local: Locator::Root,
             };
             if let Ok(dir) = self.open_directory_by_locator(locator).await {
@@ -165,7 +165,7 @@ impl Repository {
     }
 
     pub async fn open_file_by_locator(&self, locator: &GlobalLocator) -> Result<File> {
-        let branch = self.branch(&locator.branch).await?;
+        let branch = self.branch(&locator.branch_id).await?;
 
         File::open(
             self.index.pool.clone(),
@@ -177,7 +177,7 @@ impl Repository {
     }
 
     pub async fn open_directory_by_locator(&self, locator: GlobalLocator) -> Result<Directory> {
-        let branch = self.branch(&locator.branch).await?;
+        let branch = self.branch(&locator.branch_id).await?;
 
         match Directory::open(
             self.index.pool.clone(),
@@ -209,9 +209,9 @@ impl Repository {
     }
 
     async fn lookup_by_path(&self, path: &Utf8Path) -> Result<(GlobalLocator, EntryType)> {
-        let branch = *self.this_replica_id();
+        let branch_id = *self.this_replica_id();
         let mut stack = vec![GlobalLocator {
-            branch,
+            branch_id,
             local: Locator::Root,
         }];
         let mut last_type = EntryType::Directory;
@@ -236,7 +236,7 @@ impl Repository {
                     let next_entry = parent_dir.lookup(name)?;
 
                     stack.push(GlobalLocator {
-                        branch,
+                        branch_id,
                         local: next_entry.locator(),
                     });
                     last_type = next_entry.entry_type();
@@ -271,7 +271,7 @@ mod tests {
         let repo = Repository::new(index, Cryptor::Null);
 
         let global = |local: Locator| GlobalLocator {
-            branch: *repo.this_replica_id(),
+            branch_id: *repo.this_replica_id(),
             local,
         };
 

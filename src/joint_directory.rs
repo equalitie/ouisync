@@ -28,7 +28,7 @@ impl JointDirectory {
     }
 
     pub fn insert(&mut self, directory: Directory) {
-        match self.versions.entry(directory.global_locator().branch) {
+        match self.versions.entry(directory.global_locator().branch_id) {
             MapEntry::Vacant(entry) => {
                 entry.insert(directory);
             }
