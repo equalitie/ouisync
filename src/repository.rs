@@ -37,13 +37,14 @@ impl Repository {
     /// Looks up an entry by its path. The path must be relative to the repository root.
     /// If the entry exists, returns its `GlobalLocator` and `EntryType`, otherwise returns
     /// `EntryNotFound`.
-    pub async fn lookup<P: AsRef<Utf8Path>>(&self, path: P) -> Result<(GlobalLocator, EntryType)> {
-        let branch_id = *self.this_replica_id();
-        self.local_branch()
-            .await
-            .lookup(path)
-            .await
-            .map(|(local, entry_type)| (GlobalLocator { branch_id, local }, entry_type))
+    pub async fn lookup_type<P: AsRef<Utf8Path>>(&self, path: P) -> Result<EntryType> {
+        match decompose_path(path.as_ref()) {
+            Some((parent, name)) => {
+                let parent = self.open_directory(parent).await?;
+                Ok(parent.lookup(name)?.entry_type())
+            }
+            None => Ok(EntryType::Directory),
+        }
     }
 
     /// Opens a file at the given path (relative to the repository root)
@@ -76,6 +77,7 @@ impl Repository {
 
     /// Removes (delete) the file at the given path. Returns the parent directory.
     pub async fn remove_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<Directory> {
+        // TODO: Currently only in local branch.
         self.local_branch().await.remove_file(path).await
     }
 
@@ -118,6 +120,7 @@ impl Repository {
         }
     }
 
+    /// Open a file given the GlobalLocator.
     pub async fn open_file_by_locator(&self, locator: &GlobalLocator) -> Result<File> {
         self.branch(&locator.branch_id)
             .await?
@@ -125,6 +128,7 @@ impl Repository {
             .await
     }
 
+    /// Open a directory given the GlobalLocator.
     pub async fn open_directory_by_locator(&self, locator: GlobalLocator) -> Result<Directory> {
         let branch = self.branch(&locator.branch_id).await?;
 
@@ -135,6 +139,11 @@ impl Repository {
         }
     }
 
+    /// Returns the local branch
+    pub async fn local_branch(&self) -> Branch {
+        self.branch(self.this_replica_id()).await.unwrap()
+    }
+
     async fn branch(&self, replica_id: &ReplicaId) -> Result<Branch> {
         self.index
             .branch(replica_id)
@@ -143,10 +152,6 @@ impl Repository {
                 Branch::new(self.index.pool.clone(), branch_data, self.cryptor.clone())
             })
             .ok_or(Error::EntryNotFound)
-    }
-
-    async fn local_branch(&self) -> Branch {
-        self.branch(self.this_replica_id()).await.unwrap()
     }
 
     // Opens the root directory across all branches as JointDirectory.

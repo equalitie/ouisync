@@ -863,7 +863,11 @@ impl Inner {
 
     async fn open_local_directory_by_inode(&self, inode: Inode) -> Result<Directory> {
         let path = &self.inodes.get(inode).calculate_directory_path()?;
-        let (locator, _entry_type) = self.repository.lookup(path).await?;
+        let (locator, _entry_type) = self.repository.local_branch().await.lookup(path).await?;
+        let locator = GlobalLocator {
+            branch_id: *self.this_replica_id(),
+            local: locator,
+        };
         self.repository.open_directory_by_locator(locator).await
     }
 

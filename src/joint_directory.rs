@@ -343,6 +343,13 @@ impl<'a> Lookup<'a> {
             Self::File(_, _) => MaybeIterator::NoIterator,
         }
     }
+
+    pub fn entry_type(&self) -> EntryType {
+        match self {
+            Self::Directory(_) => EntryType::Directory,
+            Self::File(_, _) => EntryType::File,
+        }
+    }
 }
 
 pub struct DirectoryVersions<'a> {

@@ -48,8 +48,8 @@ pub unsafe extern "C" fn repository_entry_type(
         let path = utils::ptr_to_utf8_path_buf(path)?;
 
         ctx.spawn(async move {
-            match repo.lookup(path).await {
-                Ok((_, entry_type)) => Ok(entry_type_to_num(entry_type)),
+            match repo.lookup_type(path).await {
+                Ok(entry_type) => Ok(entry_type_to_num(entry_type)),
                 Err(Error::EntryNotFound) => Ok(ENTRY_TYPE_INVALID),
                 Err(error) => Err(error),
             }
