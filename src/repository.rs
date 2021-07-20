@@ -34,24 +34,6 @@ impl Repository {
         self.index.this_replica_id()
     }
 
-    /// Opens the root directory.
-    pub async fn joint_root(&self) -> Result<JointDirectory> {
-        let mut root = JointDirectory::new();
-
-        for branch_id in self.branches().await.into_iter() {
-            let locator = GlobalLocator {
-                branch_id,
-                local: Locator::Root,
-            };
-            if let Ok(dir) = self.open_directory_by_locator(locator).await {
-                root.insert(dir);
-            } else {
-            }
-        }
-
-        Ok(root)
-    }
-
     /// Looks up an entry by its path. The path must be relative to the repository root.
     /// If the entry exists, returns its `GlobalLocator` and `EntryType`, otherwise returns
     /// `EntryNotFound`.
@@ -71,7 +53,7 @@ impl Repository {
 
     /// Opens a directory at the given path (relative to the repository root)
     pub async fn open_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<JointDirectory> {
-        self.joint_root().await?.cd_into_path(path.as_ref()).await
+        self.joint_root().await.cd_into_path(path.as_ref()).await
     }
 
     /// Creates a new file at the given path. Returns the new file and its directory ancestors.
@@ -101,14 +83,13 @@ impl Repository {
     /// directory.
     pub async fn remove_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<JointDirectory> {
         let (parent, name) = decompose_path(path.as_ref()).ok_or(Error::OperationNotSupported)?;
-        let mut parent = self.joint_root().await?.cd_into_path(parent).await?;
+        let mut parent = self.open_directory(parent).await?;
         // TODO: Currently only removing directories from the local branch is supported. To
         // implement removing a directory from another branches we need to introduce tombstones.
         parent
             .remove_directory(self.this_replica_id(), name)
             .await?;
         Ok(parent)
-        //self.local_branch().await.remove_directory(path).await
     }
 
     /// Moves (renames) an entry from the source path to the destination path.
@@ -166,6 +147,26 @@ impl Repository {
 
     async fn local_branch(&self) -> Branch {
         self.branch(self.this_replica_id()).await.unwrap()
+    }
+
+    // Opens the root directory across all branches as JointDirectory.
+    async fn joint_root(&self) -> JointDirectory {
+        let mut root = JointDirectory::new();
+
+        for branch_id in self.branches().await.into_iter() {
+            let locator = GlobalLocator {
+                branch_id,
+                local: Locator::Root,
+            };
+            if let Ok(dir) = self.open_directory_by_locator(locator).await {
+                root.insert(dir);
+            } else {
+                // Some branch roots may not have been loaded across the network yet. We'll ignore
+                // those.
+            }
+        }
+
+        root
     }
 }
 
