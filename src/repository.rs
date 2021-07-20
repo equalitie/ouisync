@@ -99,8 +99,14 @@ impl Repository {
 
     /// Removes the directory at the given path. The directory must be empty. Returns the parent
     /// directory.
-    pub async fn remove_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<Directory> {
-        self.local_branch().await.remove_directory(path).await
+    pub async fn remove_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<JointDirectory> {
+        let (parent, name) = decompose_path(path.as_ref()).ok_or(Error::OperationNotSupported)?;
+        let mut parent = self.joint_root().await?.cd_into_path(parent).await?;
+        // TODO: Currently only removing directories from the local branch is supported. To
+        // implement removing a directory from another branches we need to introduce tombstones.
+        parent.remove_directory(self.this_replica_id(), name).await?;
+        Ok(parent)
+        //self.local_branch().await.remove_directory(path).await
     }
 
     /// Moves (renames) an entry from the source path to the destination path.
@@ -158,5 +164,16 @@ impl Repository {
 
     async fn local_branch(&self) -> Branch {
         self.branch(self.this_replica_id()).await.unwrap()
+    }
+}
+
+// Decomposes `Path` into parent and filename. Returns `None` if `path` doesn't have parent
+// (it's the root).
+fn decompose_path(path: &Utf8Path) -> Option<(&Utf8Path, &str)> {
+    match (path.parent(), path.file_name()) {
+        // It's OK to use unwrap here because all file names are assumed to be UTF-8 (checks are
+        // made in VirtualFilesystem).
+        (Some(parent), Some(name)) => Some((parent, name)),
+        _ => None,
     }
 }

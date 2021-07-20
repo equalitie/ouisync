@@ -607,14 +607,8 @@ impl Inner {
 
         log::debug!("rmdir {}", self.inodes.path_display(parent, Some(name)));
 
-        let mut parent_dir = self.open_directory_by_inode(parent).await?;
-
-        // TODO: A tomb stone should be created as well.
-        // TODO: Remove from other branches as well.
-        parent_dir
-            .remove_directory(self.this_replica_id(), name)
-            .await?;
-        parent_dir.flush().await
+        let parent_path = self.inodes.get(parent).calculate_directory_path()?;
+        self.repository.remove_directory(parent_path.join(name)).await?.flush().await
     }
 
     async fn fsyncdir(&mut self, inode: Inode, handle: FileHandle, datasync: bool) -> Result<()> {
