@@ -607,7 +607,11 @@ impl Inner {
         log::debug!("rmdir {}", self.inodes.path_display(parent, Some(name)));
 
         let parent_path = self.inodes.get(parent).calculate_directory_path()?;
-        self.repository.remove_directory(parent_path.join(name)).await?.flush().await
+        self.repository
+            .remove_directory(parent_path.join(name))
+            .await?
+            .flush()
+            .await
     }
 
     async fn fsyncdir(&mut self, inode: Inode, handle: FileHandle, datasync: bool) -> Result<()> {
@@ -867,7 +871,9 @@ impl Inner {
         match inode.representation() {
             Representation::Directory => {
                 let path = inode.calculate_directory_path()?;
-                Ok(JointEntry::Directory(self.repository.open_directory(&path).await?))
+                Ok(JointEntry::Directory(
+                    self.repository.open_directory(&path).await?,
+                ))
             }
             Representation::File(file_locator) => {
                 let file = self.repository.open_file_by_locator(file_locator).await?;

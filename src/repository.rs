@@ -104,7 +104,9 @@ impl Repository {
         let mut parent = self.joint_root().await?.cd_into_path(parent).await?;
         // TODO: Currently only removing directories from the local branch is supported. To
         // implement removing a directory from another branches we need to introduce tombstones.
-        parent.remove_directory(self.this_replica_id(), name).await?;
+        parent
+            .remove_directory(self.this_replica_id(), name)
+            .await?;
         Ok(parent)
         //self.local_branch().await.remove_directory(path).await
     }
