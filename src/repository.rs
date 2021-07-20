@@ -70,8 +70,8 @@ impl Repository {
     }
 
     /// Opens a directory at the given path (relative to the repository root)
-    pub async fn open_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<Directory> {
-        self.local_branch().await.open_directory(path).await
+    pub async fn open_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<JointDirectory> {
+        self.joint_root().await?.cd_into_path(path.as_ref()).await
     }
 
     /// Creates a new file at the given path. Returns the new file and its directory ancestors.

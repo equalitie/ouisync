@@ -12,7 +12,6 @@ use self::{
     open_flags::OpenFlags,
     utils::{FormatOptionScope, MaybeOwnedMut},
 };
-use camino::Utf8Path;
 use fuser::{
     BackgroundSession, FileAttr, FileType, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory,
     ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow,
@@ -375,7 +374,7 @@ impl Inner {
         log::debug!("lookup {}", self.inodes.path_display(parent, Some(name)));
 
         let parent_path = &self.inodes.get(parent).calculate_directory_path()?;
-        let parent_dir = self.open_joint_dir(parent_path).await?;
+        let parent_dir = self.repository.open_directory(parent_path).await?;
         let lookup = parent_dir.lookup(name)?;
         let entry = lookup.open().await?;
 
@@ -584,7 +583,7 @@ impl Inner {
         );
 
         let parent_path = self.inodes.get(parent).calculate_directory_path()?;
-        let mut parent_dir = self.open_joint_dir(&parent_path).await?;
+        let mut parent_dir = self.repository.open_directory(&parent_path).await?;
 
         // TODO: Ensure parent_dir[this_replica_id] exists.
         let mut dir = parent_dir
@@ -855,7 +854,7 @@ impl Inner {
 
     async fn open_directory_by_inode(&self, inode: Inode) -> Result<JointDirectory> {
         let path = self.inodes.get(inode).calculate_directory_path()?;
-        self.open_joint_dir(&path).await
+        self.repository.open_directory(&path).await
     }
 
     async fn open_local_directory_by_inode(&self, inode: Inode) -> Result<Directory> {
@@ -868,17 +867,13 @@ impl Inner {
         match inode.representation() {
             Representation::Directory => {
                 let path = inode.calculate_directory_path()?;
-                Ok(JointEntry::Directory(self.open_joint_dir(&path).await?))
+                Ok(JointEntry::Directory(self.repository.open_directory(&path).await?))
             }
             Representation::File(file_locator) => {
                 let file = self.repository.open_file_by_locator(file_locator).await?;
                 Ok(JointEntry::File(file))
             }
         }
-    }
-
-    async fn open_joint_dir(&self, path: &Utf8Path) -> Result<JointDirectory> {
-        self.repository.joint_root().await?.cd_into_path(path).await
     }
 
     fn this_replica_id(&self) -> &ReplicaId {
