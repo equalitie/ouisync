@@ -19,7 +19,11 @@ pub struct Branch {
 
 impl Branch {
     pub fn new(pool: db::Pool, branch_data: BranchData, cryptor: Cryptor) -> Self {
-        Self { pool, branch_data, cryptor }
+        Self {
+            pool,
+            branch_data,
+            cryptor,
+        }
     }
 
     pub fn data(&self) -> &BranchData {
@@ -162,14 +166,12 @@ impl Branch {
     pub async fn ensure_root_exists(&self) -> Result<Directory> {
         match self.open_directory_by_locator(Locator::Root).await {
             Ok(dir) => Ok(dir),
-            Err(Error::EntryNotFound) => {
-                Ok(Directory::create(
-                    self.pool.clone(),
-                    self.branch_data.clone(),
-                    self.cryptor.clone(),
-                    Locator::Root,
-                ))
-            }
+            Err(Error::EntryNotFound) => Ok(Directory::create(
+                self.pool.clone(),
+                self.branch_data.clone(),
+                self.cryptor.clone(),
+                Locator::Root,
+            )),
             Err(error) => Err(error),
         }
     }
@@ -189,10 +191,10 @@ impl Branch {
                     };
 
                     dirs.push(next);
-                },
+                }
                 // I believe we can assume that FUSE and FFI will give us normalized paths.
                 // TODO: Consider wrapping Utf8Path to ensure normalized components.
-                _ => panic!("Received non \"normal\" path")
+                _ => panic!("Received non \"normal\" path"),
             }
         }
 
@@ -253,7 +255,7 @@ fn decompose_path(path: &Utf8Path) -> Option<(&Utf8Path, &str)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{db, replica_id::ReplicaId, index::Index};
+    use crate::{db, index::Index, replica_id::ReplicaId};
 
     #[tokio::test(flavor = "multi_thread")]
     async fn lookup() {
@@ -295,44 +297,20 @@ mod tests {
         assert_eq!(branch.lookup(".").await.unwrap().0, Locator::Root);
         assert_eq!(branch.lookup("/.").await.unwrap().0, Locator::Root);
         assert_eq!(branch.lookup("./").await.unwrap().0, Locator::Root);
-        assert_eq!(
-            branch.lookup("/sub").await.unwrap().0,
-            *subdir.locator()
-        );
-        assert_eq!(
-            branch.lookup("sub/").await.unwrap().0,
-            *subdir.locator()
-        );
-        assert_eq!(
-            branch.lookup("/sub/").await.unwrap().0,
-            *subdir.locator()
-        );
-        assert_eq!(
-            branch.lookup("./sub").await.unwrap().0,
-            *subdir.locator()
-        );
-        assert_eq!(
-            branch.lookup("././sub").await.unwrap().0,
-            *subdir.locator()
-        );
-        assert_eq!(
-            branch.lookup("sub/.").await.unwrap().0,
-            *subdir.locator()
-        );
+        assert_eq!(branch.lookup("/sub").await.unwrap().0, *subdir.locator());
+        assert_eq!(branch.lookup("sub/").await.unwrap().0, *subdir.locator());
+        assert_eq!(branch.lookup("/sub/").await.unwrap().0, *subdir.locator());
+        assert_eq!(branch.lookup("./sub").await.unwrap().0, *subdir.locator());
+        assert_eq!(branch.lookup("././sub").await.unwrap().0, *subdir.locator());
+        assert_eq!(branch.lookup("sub/.").await.unwrap().0, *subdir.locator());
 
-        assert_eq!(
-            branch.lookup("sub/..").await.unwrap().0,
-            Locator::Root
-        );
+        assert_eq!(branch.lookup("sub/..").await.unwrap().0, Locator::Root);
         assert_eq!(
             branch.lookup("sub/../a.txt").await.unwrap().0,
             *file_a.locator()
         );
         assert_eq!(branch.lookup("..").await.unwrap().0, Locator::Root);
         assert_eq!(branch.lookup("../..").await.unwrap().0, Locator::Root);
-        assert_eq!(
-            branch.lookup("sub/../..").await.unwrap().0,
-            Locator::Root
-        );
+        assert_eq!(branch.lookup("sub/../..").await.unwrap().0, Locator::Root);
     }
 }

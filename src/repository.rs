@@ -14,7 +14,7 @@ use crate::{
     ReplicaId,
 };
 
-use camino::{Utf8Component, Utf8Path};
+use camino::Utf8Path;
 
 pub struct Repository {
     index: Index,
@@ -53,38 +53,43 @@ impl Repository {
     }
 
     /// Looks up an entry by its path. The path must be relative to the repository root.
-    /// If the entry exists, returns its `Locator` and `EntryType`, otherwise returns
+    /// If the entry exists, returns its `GlobalLocator` and `EntryType`, otherwise returns
     /// `EntryNotFound`.
     pub async fn lookup<P: AsRef<Utf8Path>>(&self, path: P) -> Result<(GlobalLocator, EntryType)> {
-        self.lookup_by_path(path.as_ref()).await
+        let branch_id = *self.this_replica_id();
+        self.local_branch()
+            .await
+            .lookup(path)
+            .await
+            .map(|(local, entry_type)| (GlobalLocator { branch_id, local }, entry_type))
     }
 
     /// Opens a file at the given path (relative to the repository root)
     pub async fn open_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<File> {
-        let (locator, entry_type) = self.lookup(path).await?;
-        entry_type.check_is_file()?;
-        self.open_file_by_locator(&locator).await
+        self.local_branch().await.open_file(path).await
     }
 
     /// Opens a directory at the given path (relative to the repository root)
     pub async fn open_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<Directory> {
-        let (locator, entry_type) = self.lookup(path).await?;
-        entry_type.check_is_directory()?;
-        self.open_directory_by_locator(locator).await
+        self.local_branch().await.open_directory(path).await
     }
 
     /// Creates a new file at the given path. Returns the new file and its directory ancestors.
     pub async fn create_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<(File, Vec<Directory>)> {
-        self.local_branch().await.ensure_file_exists(path.as_ref()).await
+        self.local_branch()
+            .await
+            .ensure_file_exists(path.as_ref())
+            .await
     }
 
     /// Creates a new directory at the given path. Returs a vector of directories corresponding to
     /// the path (starting with the root).
-    pub async fn create_directory<P: AsRef<Utf8Path>>(
-        &self,
-        path: P,
-    ) -> Result<Vec<Directory>> {
-        Ok(self.local_branch().await.ensure_directory_exists(path.as_ref()).await?)
+    pub async fn create_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<Vec<Directory>> {
+        Ok(self
+            .local_branch()
+            .await
+            .ensure_directory_exists(path.as_ref())
+            .await?)
     }
 
     /// Removes (delete) the file at the given path. Returns the parent directory.
@@ -165,8 +170,7 @@ impl Repository {
 
         if locator.local == Locator::Root && &locator.branch_id == self.this_replica_id() {
             branch.ensure_root_exists().await
-        }
-        else {
+        } else {
             branch.open_directory_by_locator(locator.local).await
         }
     }
@@ -175,56 +179,14 @@ impl Repository {
         self.index
             .branch(replica_id)
             .await
-            .map(|branch_data|
-                 Branch::new(
-                     self.index.pool.clone(),
-                     branch_data,
-                     self.cryptor.clone()
-                 ))
+            .map(|branch_data| {
+                Branch::new(self.index.pool.clone(), branch_data, self.cryptor.clone())
+            })
             .ok_or(Error::EntryNotFound)
     }
 
     async fn local_branch(&self) -> Branch {
         self.branch(self.this_replica_id()).await.unwrap()
-    }
-
-    async fn lookup_by_path(&self, path: &Utf8Path) -> Result<(GlobalLocator, EntryType)> {
-        let branch_id = *self.this_replica_id();
-        let mut stack = vec![GlobalLocator {
-            branch_id,
-            local: Locator::Root,
-        }];
-        let mut last_type = EntryType::Directory;
-
-        for component in path.components() {
-            match component {
-                Utf8Component::Prefix(_) => return Err(Error::OperationNotSupported),
-                Utf8Component::RootDir | Utf8Component::CurDir => (),
-                Utf8Component::ParentDir => {
-                    if stack.len() > 1 {
-                        stack.pop();
-                    }
-
-                    last_type = EntryType::Directory;
-                }
-                Utf8Component::Normal(name) => {
-                    last_type.check_is_directory()?;
-
-                    let parent_dir = self
-                        .open_directory_by_locator(*stack.last().unwrap())
-                        .await?;
-                    let next_entry = parent_dir.lookup(name)?;
-
-                    stack.push(GlobalLocator {
-                        branch_id,
-                        local: next_entry.locator(),
-                    });
-                    last_type = next_entry.entry_type();
-                }
-            }
-        }
-
-        Ok((stack.pop().unwrap(), last_type))
     }
 }
 
