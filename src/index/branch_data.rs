@@ -20,7 +20,7 @@ use tokio::sync::{watch, Mutex};
 type LocatorHash = Hash;
 
 #[derive(Clone)]
-pub struct Branch {
+pub struct BranchData {
     shared: Arc<Shared>,
 }
 
@@ -35,7 +35,7 @@ struct Shared {
     changed_rx: watch::Receiver<()>,
 }
 
-impl Branch {
+impl BranchData {
     pub async fn new(pool: &db::Pool, replica_id: ReplicaId) -> Result<Self> {
         let root_node = RootNode::load_latest_or_create(pool, &replica_id).await?;
         Ok(Self::with_root_node(replica_id, root_node))
@@ -234,7 +234,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn insert_and_read() {
         let pool = init_db().await;
-        let branch = Branch::new(&pool, ReplicaId::random()).await.unwrap();
+        let branch = BranchData::new(&pool, ReplicaId::random()).await.unwrap();
 
         let block_id = BlockId::random();
         let locator = random_head_locator(0);
@@ -256,7 +256,7 @@ mod tests {
     async fn rewrite_locator() {
         for _ in 0..32 {
             let pool = init_db().await;
-            let branch = Branch::new(&pool, ReplicaId::random()).await.unwrap();
+            let branch = BranchData::new(&pool, ReplicaId::random()).await.unwrap();
 
             let b1 = BlockId::random();
             let b2 = BlockId::random();
@@ -283,7 +283,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn remove_locator() {
         let pool = init_db().await;
-        let branch = Branch::new(&pool, ReplicaId::random()).await.unwrap();
+        let branch = BranchData::new(&pool, ReplicaId::random()).await.unwrap();
 
         let b = BlockId::random();
         let locator = random_head_locator(0);
@@ -310,7 +310,7 @@ mod tests {
             match branch.get(&mut tx, &encoded_locator).await {
                 Err(Error::EntryNotFound) => { /* OK */ }
                 Err(_) => panic!("Error should have been EntryNotFound"),
-                Ok(_) => panic!("Branch shouldn't have contained the block ID"),
+                Ok(_) => panic!("BranchData shouldn't have contained the block ID"),
             }
         }
 

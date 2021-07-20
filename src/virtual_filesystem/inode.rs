@@ -22,10 +22,8 @@ impl InodeMap {
         let mut forward = Slab::with_capacity(1);
 
         let index = forward.insert(InodeData {
-            details: InodeDetails {
-                representation: Representation::Directory(Utf8PathBuf::new()),
-                parent: 0,
-            },
+            representation: Representation::Directory,
+            parent: 0,
             name: String::new(),
             lookups: 1,
         });
@@ -56,10 +54,8 @@ impl InodeMap {
         match self.reverse.entry(key) {
             Entry::Vacant(entry) => {
                 let index = self.forward.insert(InodeData {
-                    details: InodeDetails {
-                        representation,
-                        parent,
-                    },
+                    representation,
+                    parent,
                     name: name.to_owned(),
                     lookups: 1,
                 });
@@ -96,7 +92,7 @@ impl InodeMap {
         if data.lookups <= lookups {
             let data = self.forward.remove(index);
             let key = Key {
-                parent: data.details.parent,
+                parent: data.parent,
                 name: data.name,
             };
 
@@ -112,15 +108,15 @@ impl InodeMap {
         }
     }
 
-    // Retrieve the details for the given inode.
+    // Retrieve the data for the given inode.
     //
     // # Panics
     //
     // Panics if the inode doesn't exist.
-    pub fn get(&self, inode: Inode) -> &InodeDetails {
+    pub fn get(&self, inode: Inode) -> InodeView {
         self.forward
             .get(inode_to_index(inode))
-            .map(|data| &data.details)
+            .map(|data| InodeView { inodes: self, data })
             .expect("inode not found")
     }
 
@@ -138,6 +134,15 @@ impl InodeMap {
     ) -> impl fmt::Display + 'a {
         PathDisplay(&self.forward, inode, last)
     }
+
+    fn calculate_path(&self, inode_data: &InodeData) -> Utf8PathBuf {
+        if inode_data.parent == 0 {
+            return Utf8PathBuf::new();
+        }
+
+        self.calculate_path(self.get(inode_data.parent).data)
+            .join(&inode_data.name)
+    }
 }
 
 pub enum Representation {
@@ -146,46 +151,67 @@ pub enum Representation {
     // then we would need to update the Representation each time a new branch with the given
     // directory is added. For now, we'll just store the path and each time the set of locators
     // corresponding to the path is requested, it'll be determined dynamically.
-    Directory(Utf8PathBuf),
+    Directory,
     File(GlobalLocator),
 }
 
 impl Representation {
-    pub fn child_directory(&self, name: &str) -> Result<Representation> {
-        match self {
-            Self::Directory(path) => {
-                let mut path = path.clone();
-                path.push(name);
-                Ok(Self::Directory(path))
-            }
-            Self::File(_) => Err(Error::EntryNotDirectory),
-        }
-    }
-
-    pub fn as_directory_path(&self) -> Result<&Utf8PathBuf> {
-        match self {
-            Self::Directory(path) => Ok(path),
-            Self::File(_) => Err(Error::EntryNotDirectory),
-        }
-    }
-
     pub fn as_file_locator(&self) -> Result<&GlobalLocator> {
         match self {
-            Self::Directory(_) => Err(Error::EntryIsDirectory),
+            Self::Directory => Err(Error::EntryIsDirectory),
             Self::File(locator) => Ok(locator),
         }
     }
 }
 
-pub struct InodeDetails {
-    pub representation: Representation,
-    pub parent: Inode,
-}
-
 struct InodeData {
-    details: InodeDetails,
+    representation: Representation,
+    parent: Inode,
     name: String,
     lookups: u64,
+}
+
+pub struct InodeView<'a> {
+    inodes: &'a InodeMap,
+    data: &'a InodeData,
+}
+
+impl<'a> InodeView<'a> {
+    pub fn check_is_file(&self) -> Result<()> {
+        match self.data.representation {
+            Representation::Directory => Err(Error::EntryIsDirectory),
+            Representation::File(_) => Ok(()),
+        }
+    }
+
+    pub fn check_is_directory(&self) -> Result<()> {
+        match self.data.representation {
+            Representation::Directory => Ok(()),
+            Representation::File(_) => Err(Error::EntryNotDirectory),
+        }
+    }
+
+    pub fn calculate_path(&self) -> Utf8PathBuf {
+        self.inodes.calculate_path(self.data)
+    }
+
+    pub fn calculate_file_path(&self) -> Result<Utf8PathBuf> {
+        self.check_is_file()?;
+        Ok(self.inodes.calculate_path(self.data))
+    }
+
+    pub fn calculate_directory_path(&self) -> Result<Utf8PathBuf> {
+        self.check_is_directory()?;
+        Ok(self.inodes.calculate_path(self.data))
+    }
+
+    pub fn representation(&self) -> &'a Representation {
+        &self.data.representation
+    }
+
+    pub fn parent(&self) -> Inode {
+        self.data.parent
+    }
 }
 
 #[derive(Eq, PartialEq, Hash)]
@@ -232,8 +258,8 @@ impl fmt::Display for PathDisplay<'_> {
 fn fmt_inode_path(f: &mut fmt::Formatter, map: &Slab<InodeData>, inode: Inode) -> fmt::Result {
     let data = &map[inode_to_index(inode)];
 
-    if data.details.parent > FUSE_ROOT_ID {
-        fmt_inode_path(f, map, data.details.parent)?;
+    if data.parent > FUSE_ROOT_ID {
+        fmt_inode_path(f, map, data.parent)?;
     }
 
     write!(f, "/{}", data.name)

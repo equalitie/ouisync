@@ -1,19 +1,20 @@
 use std::collections::HashSet;
 
 use crate::{
+    branch::Branch,
     crypto::Cryptor,
     directory::{Directory, MoveDstDirectory},
     entry::{Entry, EntryType},
     error::{Error, Result},
     file::File,
     global_locator::GlobalLocator,
-    index::{Branch, Index},
+    index::Index,
     joint_directory::JointDirectory,
     locator::Locator,
     ReplicaId,
 };
 
-use camino::{Utf8Component, Utf8Path};
+use camino::Utf8Path;
 
 pub struct Repository {
     index: Index,
@@ -33,85 +34,68 @@ impl Repository {
         self.index.this_replica_id()
     }
 
-    /// Opens the root directory.
-    pub async fn joint_root(&self) -> Result<JointDirectory> {
-        let mut root = JointDirectory::new();
-
-        for branch in self.branches().await.into_iter() {
-            let locator = GlobalLocator {
-                branch,
-                local: Locator::Root,
-            };
-            if let Ok(dir) = self.open_directory_by_locator(locator).await {
-                root.insert(dir);
-            } else {
-            }
-        }
-
-        Ok(root)
-    }
-
     /// Looks up an entry by its path. The path must be relative to the repository root.
-    /// If the entry exists, returns its `Locator` and `EntryType`, otherwise returns
+    /// If the entry exists, returns its `GlobalLocator` and `EntryType`, otherwise returns
     /// `EntryNotFound`.
-    pub async fn lookup<P: AsRef<Utf8Path>>(&self, path: P) -> Result<(GlobalLocator, EntryType)> {
-        self.lookup_by_path(path.as_ref()).await
+    pub async fn lookup_type<P: AsRef<Utf8Path>>(&self, path: P) -> Result<EntryType> {
+        match decompose_path(path.as_ref()) {
+            Some((parent, name)) => {
+                let parent = self.open_directory(parent).await?;
+                Ok(parent.lookup(name)?.entry_type())
+            }
+            None => Ok(EntryType::Directory),
+        }
     }
 
     /// Opens a file at the given path (relative to the repository root)
     pub async fn open_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<File> {
-        let (locator, entry_type) = self.lookup(path).await?;
-        entry_type.check_is_file()?;
-        self.open_file_by_locator(&locator).await
+        let (parent, name) = decompose_path(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
+        self.open_directory(parent)
+            .await?
+            .lookup(name)?
+            .open_file()
+            .await
     }
 
     /// Opens a directory at the given path (relative to the repository root)
-    pub async fn open_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<Directory> {
-        let (locator, entry_type) = self.lookup(path).await?;
-        entry_type.check_is_directory()?;
-        self.open_directory_by_locator(locator).await
+    pub async fn open_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<JointDirectory> {
+        self.joint_root().await.cd_into_path(path.as_ref()).await
     }
 
-    /// Creates a new file at the given path. Returns both the new file and its parent directory.
-    pub async fn create_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<(File, Directory)> {
-        let (parent, name) = decompose_path(path.as_ref()).ok_or(Error::EntryExists)?;
-
-        let mut parent = self.open_directory(parent).await?;
-        let file = parent.create_file(name.to_owned())?;
-
-        Ok((file, parent))
+    /// Creates a new file at the given path. Returns the new file and its directory ancestors.
+    pub async fn create_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<(File, Vec<Directory>)> {
+        self.local_branch()
+            .await
+            .ensure_file_exists(path.as_ref())
+            .await
     }
 
-    /// Creates a new directory at the given path. Returns both the new directory and its parent
-    /// directory.
-    pub async fn create_directory<P: AsRef<Utf8Path>>(
-        &self,
-        path: P,
-    ) -> Result<(Directory, Directory)> {
-        let (parent, name) = decompose_path(path.as_ref()).ok_or(Error::EntryExists)?;
-
-        let mut parent = self.open_directory(parent).await?;
-        let dir = parent.create_directory(name.to_owned())?;
-
-        Ok((dir, parent))
+    /// Creates a new directory at the given path. Returs a vector of directories corresponding to
+    /// the path (starting with the root).
+    pub async fn create_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<Vec<Directory>> {
+        Ok(self
+            .local_branch()
+            .await
+            .ensure_directory_exists(path.as_ref())
+            .await?)
     }
 
     /// Removes (delete) the file at the given path. Returns the parent directory.
     pub async fn remove_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<Directory> {
-        let (parent, name) = decompose_path(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
-        let mut parent = self.open_directory(parent).await?;
-        parent.remove_file(name).await?;
-
-        Ok(parent)
+        // TODO: Currently only in local branch.
+        self.local_branch().await.remove_file(path).await
     }
 
     /// Removes the directory at the given path. The directory must be empty. Returns the parent
     /// directory.
-    pub async fn remove_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<Directory> {
-        let (parent, name) = decompose_path(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
+    pub async fn remove_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<JointDirectory> {
+        let (parent, name) = decompose_path(path.as_ref()).ok_or(Error::OperationNotSupported)?;
         let mut parent = self.open_directory(parent).await?;
-        parent.remove_directory(name).await?;
-
+        // TODO: Currently only removing directories from the local branch is supported. To
+        // implement removing a directory from another branches we need to introduce tombstones.
+        parent
+            .remove_directory(self.this_replica_id(), name)
+            .await?;
         Ok(parent)
     }
 
@@ -123,31 +107,8 @@ impl Repository {
         src: S,
         dst: D,
     ) -> Result<(Directory, MoveDstDirectory)> {
-        // `None` here means we are trying to move the root which is not supported.
-        let (src_parent, src_name) =
-            decompose_path(src.as_ref()).ok_or(Error::OperationNotSupported)?;
-        // `None` here means we are trying to move over the root which is a special case of moving
-        // over existing directory which is not allowed.
-        let (dst_parent, dst_name) = decompose_path(dst.as_ref()).ok_or(Error::EntryIsDirectory)?;
-
-        // TODO: check that dst is not in a subdirectory of src
-
-        let mut src_parent = self.open_directory(src_parent).await?;
-
-        let (dst_parent_locator, dst_parent_type) = self.lookup(dst_parent).await?;
-        dst_parent_type.check_is_directory()?;
-
-        let mut dst_parent = if &dst_parent_locator == src_parent.global_locator() {
-            MoveDstDirectory::Src
-        } else {
-            MoveDstDirectory::Other(self.open_directory_by_locator(dst_parent_locator).await?)
-        };
-
-        src_parent
-            .move_entry(src_name, &mut dst_parent, dst_name)
-            .await?;
-
-        Ok((src_parent, dst_parent))
+        // TODO: Move entries across branches
+        self.local_branch().await.move_entry(src, dst).await
     }
 
     /// Open an entry (file or directory) at the given locator.
@@ -164,87 +125,58 @@ impl Repository {
         }
     }
 
+    /// Open a file given the GlobalLocator.
     pub async fn open_file_by_locator(&self, locator: &GlobalLocator) -> Result<File> {
-        let branch = self.branch(&locator.branch).await?;
-
-        File::open(
-            self.index.pool.clone(),
-            branch,
-            self.cryptor.clone(),
-            locator.local,
-        )
-        .await
+        self.branch(&locator.branch_id)
+            .await?
+            .open_file_by_locator(locator.local)
+            .await
     }
 
+    /// Open a directory given the GlobalLocator.
     pub async fn open_directory_by_locator(&self, locator: GlobalLocator) -> Result<Directory> {
-        let branch = self.branch(&locator.branch).await?;
+        let branch = self.branch(&locator.branch_id).await?;
 
-        match Directory::open(
-            self.index.pool.clone(),
-            branch.clone(),
-            self.cryptor.clone(),
-            locator.local,
-        )
-        .await
-        {
-            Ok(dir) => Ok(dir),
-            Err(Error::EntryNotFound) if locator.local == Locator::Root => {
-                // Lazily Create the root directory
-                Ok(Directory::create(
-                    self.index.pool.clone(),
-                    branch,
-                    self.cryptor.clone(),
-                    Locator::Root,
-                ))
-            }
-            Err(error) => Err(error),
+        if locator.local == Locator::Root && &locator.branch_id == self.this_replica_id() {
+            branch.ensure_root_exists().await
+        } else {
+            branch.open_directory_by_locator(locator.local).await
         }
+    }
+
+    /// Returns the local branch
+    pub async fn local_branch(&self) -> Branch {
+        self.branch(self.this_replica_id()).await.unwrap()
     }
 
     async fn branch(&self, replica_id: &ReplicaId) -> Result<Branch> {
         self.index
             .branch(replica_id)
             .await
+            .map(|branch_data| {
+                Branch::new(self.index.pool.clone(), branch_data, self.cryptor.clone())
+            })
             .ok_or(Error::EntryNotFound)
     }
 
-    async fn lookup_by_path(&self, path: &Utf8Path) -> Result<(GlobalLocator, EntryType)> {
-        let branch = *self.this_replica_id();
-        let mut stack = vec![GlobalLocator {
-            branch,
-            local: Locator::Root,
-        }];
-        let mut last_type = EntryType::Directory;
+    // Opens the root directory across all branches as JointDirectory.
+    async fn joint_root(&self) -> JointDirectory {
+        let mut root = JointDirectory::new();
 
-        for component in path.components() {
-            match component {
-                Utf8Component::Prefix(_) => return Err(Error::OperationNotSupported),
-                Utf8Component::RootDir | Utf8Component::CurDir => (),
-                Utf8Component::ParentDir => {
-                    if stack.len() > 1 {
-                        stack.pop();
-                    }
-
-                    last_type = EntryType::Directory;
-                }
-                Utf8Component::Normal(name) => {
-                    last_type.check_is_directory()?;
-
-                    let parent_dir = self
-                        .open_directory_by_locator(*stack.last().unwrap())
-                        .await?;
-                    let next_entry = parent_dir.lookup(name)?;
-
-                    stack.push(GlobalLocator {
-                        branch,
-                        local: next_entry.locator(),
-                    });
-                    last_type = next_entry.entry_type();
-                }
+        for branch_id in self.branches().await.into_iter() {
+            let locator = GlobalLocator {
+                branch_id,
+                local: Locator::Root,
+            };
+            if let Ok(dir) = self.open_directory_by_locator(locator).await {
+                root.insert(dir);
+            } else {
+                // Some branch roots may not have been loaded across the network yet. We'll ignore
+                // those.
             }
         }
 
-        Ok((stack.pop().unwrap(), last_type))
+        root
     }
 }
 
@@ -256,99 +188,5 @@ fn decompose_path(path: &Utf8Path) -> Option<(&Utf8Path, &str)> {
         // made in VirtualFilesystem).
         (Some(parent), Some(name)) => Some((parent, name)),
         _ => None,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{db, replica_id::ReplicaId};
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn lookup() {
-        let pool = db::init(db::Store::Memory).await.unwrap();
-        let index = Index::load(pool, ReplicaId::random()).await.unwrap();
-        let repo = Repository::new(index, Cryptor::Null);
-
-        let global = |local: Locator| GlobalLocator {
-            branch: *repo.this_replica_id(),
-            local,
-        };
-
-        let mut root_dir = repo
-            .open_directory_by_locator(global(Locator::Root))
-            .await
-            .unwrap();
-        let mut file_a = root_dir.create_file("a.txt".into()).unwrap();
-        file_a.flush().await.unwrap();
-
-        let mut subdir = root_dir.create_directory("sub".into()).unwrap();
-        let mut file_b = subdir.create_file("b.txt".into()).unwrap();
-        file_b.flush().await.unwrap();
-        subdir.flush().await.unwrap();
-
-        root_dir.flush().await.unwrap();
-
-        assert_eq!(
-            repo.lookup("").await.unwrap(),
-            (global(Locator::Root), EntryType::Directory)
-        );
-        assert_eq!(
-            repo.lookup("sub").await.unwrap(),
-            (global(*subdir.locator()), EntryType::Directory)
-        );
-        assert_eq!(
-            repo.lookup("a.txt").await.unwrap(),
-            (global(*file_a.locator()), EntryType::File)
-        );
-        assert_eq!(
-            repo.lookup("sub/b.txt").await.unwrap(),
-            (global(*file_b.locator()), EntryType::File)
-        );
-
-        assert_eq!(repo.lookup("/").await.unwrap().0, global(Locator::Root));
-        assert_eq!(repo.lookup("//").await.unwrap().0, global(Locator::Root));
-        assert_eq!(repo.lookup(".").await.unwrap().0, global(Locator::Root));
-        assert_eq!(repo.lookup("/.").await.unwrap().0, global(Locator::Root));
-        assert_eq!(repo.lookup("./").await.unwrap().0, global(Locator::Root));
-        assert_eq!(
-            repo.lookup("/sub").await.unwrap().0,
-            global(*subdir.locator())
-        );
-        assert_eq!(
-            repo.lookup("sub/").await.unwrap().0,
-            global(*subdir.locator())
-        );
-        assert_eq!(
-            repo.lookup("/sub/").await.unwrap().0,
-            global(*subdir.locator())
-        );
-        assert_eq!(
-            repo.lookup("./sub").await.unwrap().0,
-            global(*subdir.locator())
-        );
-        assert_eq!(
-            repo.lookup("././sub").await.unwrap().0,
-            global(*subdir.locator())
-        );
-        assert_eq!(
-            repo.lookup("sub/.").await.unwrap().0,
-            global(*subdir.locator())
-        );
-
-        assert_eq!(
-            repo.lookup("sub/..").await.unwrap().0,
-            global(Locator::Root)
-        );
-        assert_eq!(
-            repo.lookup("sub/../a.txt").await.unwrap().0,
-            global(*file_a.locator())
-        );
-        assert_eq!(repo.lookup("..").await.unwrap().0, global(Locator::Root));
-        assert_eq!(repo.lookup("../..").await.unwrap().0, global(Locator::Root));
-        assert_eq!(
-            repo.lookup("sub/../..").await.unwrap().0,
-            global(Locator::Root)
-        );
     }
 }

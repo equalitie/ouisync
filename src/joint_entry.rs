@@ -19,13 +19,6 @@ impl JointEntry {
         }
     }
 
-    pub fn as_file(&self) -> Result<&File> {
-        match self {
-            Self::File(file) => Ok(file),
-            Self::Directory(_) => Err(Error::EntryNotDirectory),
-        }
-    }
-
     pub fn as_file_mut(&mut self) -> Result<&mut File> {
         match self {
             Self::File(file) => Ok(file),

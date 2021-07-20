@@ -8,6 +8,7 @@ pub mod this_replica;
 
 mod blob;
 mod block;
+mod branch;
 mod directory;
 mod entry;
 mod error;

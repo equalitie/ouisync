@@ -8,6 +8,7 @@ use crate::{
     Error, Result,
 };
 use camino::Utf8Path;
+
 use std::{
     collections::btree_map::{Entry as MapEntry, Values},
     collections::{BTreeMap, BTreeSet},
@@ -27,7 +28,7 @@ impl JointDirectory {
     }
 
     pub fn insert(&mut self, directory: Directory) {
-        match self.versions.entry(directory.global_locator().branch) {
+        match self.versions.entry(directory.global_locator().branch_id) {
             MapEntry::Vacant(entry) => {
                 entry.insert(directory);
             }
@@ -336,10 +337,24 @@ impl<'a> Lookup<'a> {
         }
     }
 
+    pub async fn open_file(&self) -> Result<File> {
+        match self {
+            Self::File(entry_info, _replica_id) => Ok(entry_info.open_file().await?),
+            Self::Directory(_) => Err(Error::EntryIsDirectory),
+        }
+    }
+
     pub fn directories(&'a self) -> MaybeIterator<DirectoryVersions<'a>> {
         match self {
             Self::Directory(versions) => MaybeIterator::SomeIterator(versions.directories()),
             Self::File(_, _) => MaybeIterator::NoIterator,
+        }
+    }
+
+    pub fn entry_type(&self) -> EntryType {
+        match self {
+            Self::Directory(_) => EntryType::Directory,
+            Self::File(_, _) => EntryType::File,
         }
     }
 }
@@ -381,7 +396,7 @@ impl<'a> JointEntryView<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{db, index::Branch, Cryptor, Locator};
+    use crate::{db, index::BranchData, Cryptor, Locator};
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_no_conflict() {
@@ -474,13 +489,13 @@ mod tests {
         assert_eq!(entries[1].1, EntryType::File);
     }
 
-    async fn setup(branch_count: usize) -> (db::Pool, Vec<Branch>) {
+    async fn setup(branch_count: usize) -> (db::Pool, Vec<BranchData>) {
         let pool = db::init(db::Store::Memory).await.unwrap();
 
         let mut branches = Vec::new();
 
         for _ in 0..branch_count {
-            let branch = Branch::new(&pool, ReplicaId::random()).await.unwrap();
+            let branch = BranchData::new(&pool, ReplicaId::random()).await.unwrap();
             branches.push(branch);
         }
 

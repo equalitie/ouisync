@@ -27,11 +27,10 @@ pub unsafe extern "C" fn directory_create(
         let repo = repo.get();
 
         ctx.spawn(async move {
-            let (mut dir, mut parent) = repo.create_directory(path).await?;
-
-            dir.flush().await?;
-            parent.flush().await?;
-
+            let mut dirs = repo.create_directory(path).await?;
+            for dir in dirs.iter_mut().rev() {
+                dir.flush().await?;
+            }
             Ok(())
         })
     })
@@ -52,11 +51,11 @@ pub unsafe extern "C" fn directory_open(
             let dir = repo.open_directory(path).await?;
             let entries = dir
                 .entries()
-                .map(|info| DirEntry {
-                    name: utils::str_to_c_string(info.name()).unwrap_or_else(|_| {
+                .map(|(entry_name, entry_type)| DirEntry {
+                    name: utils::str_to_c_string(&entry_name).unwrap_or_else(|_| {
                         CString::new(char::REPLACEMENT_CHARACTER.to_string()).unwrap()
                     }),
-                    entry_type: info.entry_type(),
+                    entry_type,
                 })
                 .collect();
             let entries = Directory(entries);
