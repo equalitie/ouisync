@@ -49,7 +49,12 @@ impl Repository {
 
     /// Opens a file at the given path (relative to the repository root)
     pub async fn open_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<File> {
-        self.local_branch().await.open_file(path).await
+        let (parent, name) = decompose_path(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
+        self.open_directory(parent)
+            .await?
+            .lookup(name)?
+            .open_file()
+            .await
     }
 
     /// Opens a directory at the given path (relative to the repository root)

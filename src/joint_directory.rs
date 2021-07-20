@@ -337,6 +337,13 @@ impl<'a> Lookup<'a> {
         }
     }
 
+    pub async fn open_file(&self) -> Result<File> {
+        match self {
+            Self::File(entry_info, _replica_id) => Ok(entry_info.open_file().await?),
+            Self::Directory(_) => Err(Error::EntryIsDirectory),
+        }
+    }
+
     pub fn directories(&'a self) -> MaybeIterator<DirectoryVersions<'a>> {
         match self {
             Self::Directory(versions) => MaybeIterator::SomeIterator(versions.directories()),
