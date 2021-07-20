@@ -94,21 +94,13 @@ impl Repository {
 
     /// Removes (delete) the file at the given path. Returns the parent directory.
     pub async fn remove_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<Directory> {
-        let (parent, name) = decompose_path(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
-        let mut parent = self.open_directory(parent).await?;
-        parent.remove_file(name).await?;
-
-        Ok(parent)
+        self.local_branch().await.remove_file(path).await
     }
 
     /// Removes the directory at the given path. The directory must be empty. Returns the parent
     /// directory.
     pub async fn remove_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<Directory> {
-        let (parent, name) = decompose_path(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
-        let mut parent = self.open_directory(parent).await?;
-        parent.remove_directory(name).await?;
-
-        Ok(parent)
+        self.local_branch().await.remove_directory(path).await
     }
 
     /// Moves (renames) an entry from the source path to the destination path.
@@ -119,31 +111,8 @@ impl Repository {
         src: S,
         dst: D,
     ) -> Result<(Directory, MoveDstDirectory)> {
-        // `None` here means we are trying to move the root which is not supported.
-        let (src_parent, src_name) =
-            decompose_path(src.as_ref()).ok_or(Error::OperationNotSupported)?;
-        // `None` here means we are trying to move over the root which is a special case of moving
-        // over existing directory which is not allowed.
-        let (dst_parent, dst_name) = decompose_path(dst.as_ref()).ok_or(Error::EntryIsDirectory)?;
-
-        // TODO: check that dst is not in a subdirectory of src
-
-        let mut src_parent = self.open_directory(src_parent).await?;
-
-        let (dst_parent_locator, dst_parent_type) = self.lookup(dst_parent).await?;
-        dst_parent_type.check_is_directory()?;
-
-        let mut dst_parent = if &dst_parent_locator == src_parent.global_locator() {
-            MoveDstDirectory::Src
-        } else {
-            MoveDstDirectory::Other(self.open_directory_by_locator(dst_parent_locator).await?)
-        };
-
-        src_parent
-            .move_entry(src_name, &mut dst_parent, dst_name)
-            .await?;
-
-        Ok((src_parent, dst_parent))
+        // TODO: Move entries across branches
+        self.local_branch().await.move_entry(src, dst).await
     }
 
     /// Open an entry (file or directory) at the given locator.
@@ -161,8 +130,10 @@ impl Repository {
     }
 
     pub async fn open_file_by_locator(&self, locator: &GlobalLocator) -> Result<File> {
-        let branch = self.branch(&locator.branch_id).await?;
-        branch.open_file_by_locator(locator.local).await
+        self.branch(&locator.branch_id)
+            .await?
+            .open_file_by_locator(locator.local)
+            .await
     }
 
     pub async fn open_directory_by_locator(&self, locator: GlobalLocator) -> Result<Directory> {
@@ -187,16 +158,5 @@ impl Repository {
 
     async fn local_branch(&self) -> Branch {
         self.branch(self.this_replica_id()).await.unwrap()
-    }
-}
-
-// Decomposes `Path` into parent and filename. Returns `None` if `path` doesn't have parent
-// (it's the root).
-fn decompose_path(path: &Utf8Path) -> Option<(&Utf8Path, &str)> {
-    match (path.parent(), path.file_name()) {
-        // It's OK to use unwrap here because all file names are assumed to be UTF-8 (checks are
-        // made in VirtualFilesystem).
-        (Some(parent), Some(name)) => Some((parent, name)),
-        _ => None,
     }
 }
