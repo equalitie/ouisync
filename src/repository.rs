@@ -1,4 +1,7 @@
-use std::collections::HashSet;
+use std::{
+    collections::HashSet,
+    io::SeekFrom,
+};
 
 use crate::{
     branch::Branch,
@@ -97,6 +100,14 @@ impl Repository {
             .remove_directory(self.this_replica_id(), name)
             .await?;
         Ok(parent)
+    }
+
+    pub async fn write_to_file(&self, file: &mut File, offset: u64, buffer: &[u8]) -> Result<()> {
+        // TODO: When the file is on "remote" branch, we need to create a copy on the local branch
+        // (if such one doesn't yet exist) and write the change there. Also have `file` "point" to
+        // the local version afterwards.
+        file.seek(SeekFrom::Start(offset)).await?;
+        file.write(buffer).await
     }
 
     /// Moves (renames) an entry from the source path to the destination path.

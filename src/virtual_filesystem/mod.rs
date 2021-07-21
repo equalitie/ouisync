@@ -766,10 +766,9 @@ impl Inner {
 
         let offset: u64 = offset.try_into().map_err(|_| Error::OffsetOutOfRange)?;
 
-        let file = self.entries.get_file_mut(handle)?;
+        let mut file = self.entries.get_file_mut(handle)?;
 
-        file.seek(SeekFrom::Start(offset)).await?;
-        file.write(data).await?;
+        self.repository.write_to_file(&mut file, offset, data).await?;
 
         Ok(data.len().try_into().unwrap_or(u32::MAX))
     }
