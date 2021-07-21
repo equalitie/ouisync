@@ -651,7 +651,7 @@ impl Inner {
             .get(parent)
             .calculate_directory_path()?
             .join(name);
-        let (mut file, mut dirs) = self.repository.create_file(path).await?;
+        let (mut file, mut dirs) = self.repository.create_file(&path).await?;
 
         file.flush().await?;
 
@@ -766,9 +766,12 @@ impl Inner {
 
         let offset: u64 = offset.try_into().map_err(|_| Error::OffsetOutOfRange)?;
 
+        let path = self.inodes.get(inode).calculate_file_path()?;
         let mut file = self.entries.get_file_mut(handle)?;
 
-        self.repository.write_to_file(&mut file, offset, data).await?;
+        self.repository
+            .write_to_file(&path, &mut file, offset, data)
+            .await?;
 
         Ok(data.len().try_into().unwrap_or(u32::MAX))
     }

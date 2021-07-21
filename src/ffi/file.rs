@@ -3,11 +3,13 @@ use super::{
     utils::{self, AssumeSend, Port, SharedHandle},
 };
 use crate::{error::Error, file::File, repository::Repository};
+use camino::Utf8PathBuf;
 use std::{convert::TryInto, io::SeekFrom, os::raw::c_char, slice, sync::Arc};
 use tokio::sync::Mutex;
 
 pub struct HandleData {
     file: File,
+    path: Utf8PathBuf,
     repo: Arc<Repository>,
 }
 
@@ -23,8 +25,12 @@ pub unsafe extern "C" fn file_open(
         let repo = repo.get();
 
         ctx.spawn(async move {
-            let file = repo.open_file(path).await?;
-            Ok(SharedHandle::new(Arc::new(Mutex::new(HandleData { file, repo }))))
+            let file = repo.open_file(&path).await?;
+            Ok(SharedHandle::new(Arc::new(Mutex::new(HandleData {
+                file,
+                path,
+                repo,
+            }))))
         })
     })
 }
@@ -41,14 +47,18 @@ pub unsafe extern "C" fn file_create(
         let repo = repo.get();
 
         ctx.spawn(async move {
-            let (mut file, mut parents) = repo.create_file(path).await?;
+            let (mut file, mut parents) = repo.create_file(&path).await?;
 
             file.flush().await?;
             for dir in parents.iter_mut().rev() {
                 dir.flush().await?;
             }
 
-            Ok(SharedHandle::new(Arc::new(Mutex::new(HandleData { file, repo }))))
+            Ok(SharedHandle::new(Arc::new(Mutex::new(HandleData {
+                file,
+                path,
+                repo,
+            }))))
         })
     })
 }
@@ -146,10 +156,11 @@ pub unsafe extern "C" fn file_write(
 
             let file = &mut handle_data.file;
             let repo = &handle_data.repo;
+            let path = &handle_data.path;
 
             let buffer = slice::from_raw_parts(buffer.0, len);
 
-            repo.write_to_file(file, offset, buffer).await?;
+            repo.write_to_file(path, file, offset, buffer).await?;
 
             Ok(())
         })
