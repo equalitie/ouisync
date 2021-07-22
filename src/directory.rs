@@ -121,6 +121,43 @@ impl Directory {
         ))
     }
 
+    pub async fn copy_file<I>(
+        &mut self,
+        dst_name: &str,
+        src_locators: I,
+        src_branch: &BranchData,
+    ) -> Result<Locator>
+    where
+        I: Iterator<Item = Locator>,
+    {
+        let seq = self.content.insert(dst_name.to_string(), EntryType::File)?;
+
+        let mut tx = self.blob.db_pool().begin().await?;
+        let cryptor = self.blob.cryptor();
+
+        let dst_head = Locator::Head(self.locator().hash(), seq);
+
+        let mut dst_locator = dst_head;
+        let dst_branch = self.blob.branch();
+
+        for src_locator in src_locators {
+            let src_locator = src_locator.encode(cryptor);
+            let block_id = src_branch.get(&mut tx, &src_locator).await?;
+
+            dst_branch
+                .insert(&mut tx, &block_id, &dst_locator.encode(cryptor))
+                .await?;
+
+            dst_locator = dst_locator.next();
+        }
+
+        // TODO: Maybe commit on each N copied colators to avoid running out of memory on large
+        // files?
+        tx.commit().await?;
+
+        Ok(dst_head)
+    }
+
     pub async fn remove_file(&mut self, name: &str) -> Result<()> {
         self.lookup(name)?.open_file().await?.remove().await?;
         self.content.remove(name)
