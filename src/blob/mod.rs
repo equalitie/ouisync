@@ -355,11 +355,8 @@ impl Blob {
         &self.cryptor
     }
 
-    pub fn locators(&self) -> BlobLocators {
-        BlobLocators {
-            current_locator: *self.locator(),
-            block_count: self.block_count(),
-        }
+    pub fn locators(&self) -> impl Iterator<Item = Locator> {
+        self.locator().sequence().take(self.block_count() as usize)
     }
 
     async fn replace_current_block(
@@ -501,25 +498,6 @@ impl Blob {
         } else {
             Locator::Trunk(self.locator().hash(), number)
         }
-    }
-}
-
-pub struct BlobLocators {
-    current_locator: Locator,
-    block_count: u32,
-}
-
-impl Iterator for BlobLocators {
-    type Item = Locator;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.current_locator.number() >= self.block_count {
-            return None;
-        }
-
-        let retval = self.current_locator;
-        self.current_locator = self.current_locator.next();
-        Some(retval)
     }
 }
 
