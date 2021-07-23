@@ -1,5 +1,5 @@
 use super::*;
-use crate::{crypto::SecretKey, error::Error, replica_id::ReplicaId, test_utils};
+use crate::{blob_id::BlobId, crypto::SecretKey, error::Error, replica_id::ReplicaId, test_utils};
 use assert_matches::assert_matches;
 use proptest::collection::vec;
 use rand::{distributions::Standard, prelude::*};
@@ -47,7 +47,7 @@ async fn write_and_read_case(
     let locator = if is_root {
         Locator::Root
     } else {
-        random_head_locator(&mut rng, 0)
+        random_head_locator(&mut rng)
     };
 
     // Create the blob and write to it in chunks of `write_len` bytes.
@@ -226,7 +226,7 @@ async fn seek_before_start() {
 async fn remove_blob() {
     let (mut rng, cryptor, pool, branch) = setup(0).await;
 
-    let locator0 = random_head_locator(&mut rng, 0);
+    let locator0 = random_head_locator(&mut rng);
     let locator1 = locator0.next();
 
     let content: Vec<_> = (&mut rng)
@@ -272,7 +272,7 @@ async fn remove_blob() {
 async fn truncate_to_empty() {
     let (mut rng, cryptor, pool, branch) = setup(0).await;
 
-    let locator0 = random_head_locator(&mut rng, 0);
+    let locator0 = random_head_locator(&mut rng);
     let locator1 = locator0.next();
 
     let content: Vec<_> = (&mut rng)
@@ -325,7 +325,7 @@ async fn truncate_to_empty() {
 async fn truncate_to_shorter() {
     let (mut rng, cryptor, pool, branch) = setup(0).await;
 
-    let locator0 = random_head_locator(&mut rng, 0);
+    let locator0 = random_head_locator(&mut rng);
     let locator1 = locator0.next();
     let locator2 = locator1.next();
 
@@ -362,7 +362,7 @@ async fn truncate_to_shorter() {
 async fn modify_blob() {
     let (mut rng, cryptor, pool, branch) = setup(0).await;
 
-    let locator0 = random_head_locator(&mut rng, 0);
+    let locator0 = random_head_locator(&mut rng);
     let locator1 = locator0.next();
 
     let content = vec![0; 2 * BLOCK_SIZE];
@@ -410,8 +410,8 @@ async fn setup(rng_seed: u64) -> (StdRng, Cryptor, db::Pool, BranchData) {
     (rng, cryptor, pool, branch)
 }
 
-fn random_head_locator<R: Rng>(rng: &mut R, seq: u32) -> Locator {
-    Locator::Head(rng.gen::<u64>().hash(), seq)
+fn random_head_locator<R: Rng>(rng: &mut R) -> Locator {
+    Locator::Head(BlobId::random_with_rng(rng))
 }
 
 async fn init_db() -> db::Pool {

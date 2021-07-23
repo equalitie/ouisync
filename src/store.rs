@@ -45,8 +45,9 @@ pub async fn write_received_block(
 mod tests {
     use super::*;
     use crate::{
+        blob_id::BlobId,
         block::{self, BLOCK_SIZE},
-        crypto::{AuthTag, Cryptor, Hashable},
+        crypto::{AuthTag, Cryptor},
         index::{self, BranchData},
         locator::Locator,
         replica_id::ReplicaId,
@@ -72,11 +73,11 @@ mod tests {
             .await
             .unwrap();
 
-        let locator0 = Locator::Head(rand::random::<u64>().hash(), 0);
+        let locator0 = Locator::Head(BlobId::random());
         let locator0 = locator0.encode(&cryptor);
         branch0.insert(&mut tx, &block_id, &locator0).await.unwrap();
 
-        let locator1 = Locator::Head(rand::random::<u64>().hash(), 0);
+        let locator1 = Locator::Head(BlobId::random());
         let locator1 = locator1.encode(&cryptor);
         branch1.insert(&mut tx, &block_id, &locator1).await.unwrap();
 

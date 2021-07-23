@@ -1,6 +1,9 @@
 use std::iter;
+use crate::{
+    blob_id::BlobId,
+    crypto::{ Cryptor, Hash, Hashable }
+};
 
-use crate::crypto::{Cryptor, Hash, Hashable};
 use sha3::{Digest, Sha3_256};
 
 /// A type of block identifier similar to `BlockId` but serving a different purpose. While
@@ -16,7 +19,7 @@ pub enum Locator {
     /// of the directory which contain the blob (more precisely, it is the locator of the head block
     /// of that directory) and the second element is the sequence number (position) of the blob
     /// within that directory.
-    Head(Hash, u32),
+    Head(BlobId),
     /// Locator of a trunk (other than first) block of a blob. The first element is the hash of the
     /// locator of the blob (the locator of the head block of the blob) and the second element is
     /// the sequence number (position) of the block within its blob.
@@ -33,6 +36,14 @@ impl Locator {
         }
     }
 
+    // Temporary
+    pub fn blob_id(&self) -> BlobId {
+        match self {
+            Self::Root => unreachable!(),
+            Self::Head(blob_id) => *blob_id,
+            Self::Trunk(_, _) => unreachable!(),
+        }
+    }
     /// Secure encoding of this locator for the use in the index.
     pub fn encode(&self, cryptor: &Cryptor) -> Hash {
         let mut hasher = Sha3_256::new();
@@ -78,15 +89,12 @@ impl Hashable for Locator {
 
         match self {
             Self::Root => (),
-            Self::Head(parent, seq) => {
-                hasher.update(parent.as_ref());
-                hasher.update(seq.to_le_bytes());
-                hasher.update(&[0]);
+            Self::Head(blob_id) => {
+                hasher.update(blob_id.as_ref());
             }
             Self::Trunk(parent, seq) => {
                 hasher.update(parent.as_ref());
                 hasher.update(seq.to_le_bytes());
-                hasher.update(&[1]);
             }
         }
 
