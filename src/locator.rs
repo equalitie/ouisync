@@ -36,14 +36,6 @@ impl Locator {
         }
     }
 
-    // Temporary
-    pub fn blob_id(&self) -> BlobId {
-        match self {
-            Self::Root => unreachable!(),
-            Self::Head(blob_id) => *blob_id,
-            Self::Trunk(_, _) => unreachable!(),
-        }
-    }
     /// Secure encoding of this locator for the use in the index.
     pub fn encode(&self, cryptor: &Cryptor) -> Hash {
         let mut hasher = Sha3_256::new();

@@ -187,9 +187,9 @@ impl Directory {
             }
         }
 
-        let (src_locator, src_entry_type) = {
+        let (src_blob_id, src_entry_type) = {
             let info = self.lookup(src_name)?;
-            (info.locator(), info.entry_type())
+            (*info.blob_id(), info.entry_type())
         };
 
         let dst_dir = dst_dir.get(self);
@@ -210,7 +210,7 @@ impl Directory {
 
         dst_dir.content.insert_or_replace(
             dst_name.to_owned(),
-            src_locator.blob_id(),
+            src_blob_id,
             src_entry_type,
         );
 
@@ -263,6 +263,10 @@ impl<'a> EntryInfo<'a> {
 
     pub fn entry_type(&self) -> EntryType {
         self.data.entry_type
+    }
+
+    pub fn blob_id(&self) -> &BlobId {
+        &self.data.blob_id
     }
 
     pub fn locator(&self) -> Locator {
