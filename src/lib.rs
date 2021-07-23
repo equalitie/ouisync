@@ -7,6 +7,7 @@ pub mod joint_directory;
 pub mod this_replica;
 
 mod blob;
+mod blob_id;
 mod block;
 mod branch;
 mod directory;

@@ -1,6 +1,7 @@
 use crate::{
     blob::Blob,
-    crypto::{Cryptor, Hashable},
+    blob_id::BlobId,
+    crypto::Cryptor,
     db,
     entry::{Entry, EntryType},
     error::{Error, Result},
@@ -99,28 +100,30 @@ impl Directory {
 
     /// Creates a new file inside this directory.
     pub fn create_file(&mut self, name: String) -> Result<File> {
-        let seq = self.content.insert(name, EntryType::File)?;
+        let tag = self.content.insert(name, EntryType::File)?;
 
         Ok(File::create(
             self.blob.db_pool().clone(),
             self.blob.branch().clone(),
             self.blob.cryptor().clone(),
-            Locator::Head(self.locator().hash(), seq),
+            Locator::Head(tag),
         ))
     }
 
     /// Creates a new subdirectory of this directory.
     pub fn create_directory(&mut self, name: String) -> Result<Self> {
-        let seq = self.content.insert(name, EntryType::Directory)?;
+        let tag = self.content.insert(name, EntryType::Directory)?;
 
         Ok(Self::create(
             self.blob.db_pool().clone(),
             self.blob.branch().clone(),
             self.blob.cryptor().clone(),
-            Locator::Head(self.locator().hash(), seq),
+            Locator::Head(tag),
         ))
     }
 
+    /// Creates a file with locators pointing to the same blocks that the src_locators point to.
+    /// Blocks themselves are not being duplicated. Return the locator to the newly created file.
     pub async fn copy_file<I>(
         &mut self,
         dst_name: &str,
@@ -130,12 +133,12 @@ impl Directory {
     where
         I: Iterator<Item = Locator>,
     {
-        let seq = self.content.insert(dst_name.to_string(), EntryType::File)?;
+        let tag = self.content.insert(dst_name.to_string(), EntryType::File)?;
 
         let mut tx = self.blob.db_pool().begin().await?;
         let cryptor = self.blob.cryptor();
 
-        let dst_head = Locator::Head(self.locator().hash(), seq);
+        let dst_head = Locator::Head(tag);
 
         let mut dst_locator = dst_head;
         let dst_branch = self.blob.branch();
@@ -184,17 +187,10 @@ impl Directory {
             }
         }
 
-        let mut tx = self.blob.db_pool().begin().await?;
-
-        let (src_locator, src_entry_type) = {
+        let (src_blob_id, src_entry_type) = {
             let info = self.lookup(src_name)?;
-            (info.locator(), info.entry_type())
+            (*info.blob_id(), info.entry_type())
         };
-        let src_head_block_id = self
-            .blob
-            .branch()
-            .get(&mut tx, &src_locator.encode(self.blob.cryptor()))
-            .await?;
 
         let dst_dir = dst_dir.get(self);
 
@@ -210,29 +206,18 @@ impl Directory {
             return Err(Error::EntryIsDirectory);
         }
 
-        let dst_entry = dst_dir.content.vacant_entry();
-        let new_dst_locator = Locator::Head(dst_dir.blob.locator().hash(), dst_entry.seq());
-
-        dst_dir
-            .blob
-            .branch()
-            .insert(
-                &mut tx,
-                &src_head_block_id,
-                &new_dst_locator.encode(dst_dir.blob.cryptor()),
-            )
-            .await?;
-
         // TODO: remove the previous dst entry from the db, if it existed.
 
-        dst_entry.insert_or_replace(dst_name.to_owned(), src_entry_type);
+        dst_dir.content.insert_or_replace(
+            dst_name.to_owned(),
+            src_blob_id,
+            src_entry_type,
+        );
 
         match self.content.remove(src_name) {
             Ok(_) | Err(Error::EntryNotFound) => (),
             Err(_) => unreachable!(),
         }
-
-        tx.commit().await?;
 
         Ok(())
     }
@@ -280,8 +265,12 @@ impl<'a> EntryInfo<'a> {
         self.data.entry_type
     }
 
+    pub fn blob_id(&self) -> &BlobId {
+        &self.data.blob_id
+    }
+
     pub fn locator(&self) -> Locator {
-        Locator::Head(self.parent_blob.locator().hash(), self.data.seq)
+        Locator::Head(self.data.blob_id)
     }
 
     /// Opens this entry.
@@ -358,80 +347,46 @@ struct Content {
 }
 
 impl Content {
-    fn insert(&mut self, name: String, entry_type: EntryType) -> Result<u32> {
-        self.vacant_entry().insert(name, entry_type)
-    }
+    fn insert(&mut self, name: String, entry_type: EntryType) -> Result<BlobId> {
+        let blob_id = BlobId::random();
 
-    // Reserve an entry to be inserted into later. Useful when the `seq` number is needed before
-    // creating the entry.
-    fn vacant_entry(&mut self) -> VacantEntry {
-        let seq = self.next_seq();
-        VacantEntry { seq, content: self }
-    }
-
-    fn remove(&mut self, name: &str) -> Result<()> {
-        self.entries
-            .remove(name)
-            .map(|data| data.seq)
-            .ok_or(Error::EntryNotFound)?;
-        self.dirty = true;
-
-        Ok(())
-    }
-
-    // Returns next available seq number.
-    fn next_seq(&self) -> u32 {
-        // TODO: reuse previously deleted entries
-
-        match self.entries.values().map(|data| data.seq).max() {
-            Some(seq) => seq.checked_add(1).expect("directory entry limit exceeded"), // TODO: return error instead
-            None => 0,
-        }
-    }
-}
-
-struct VacantEntry<'a> {
-    content: &'a mut Content,
-    seq: u32,
-}
-
-impl VacantEntry<'_> {
-    fn seq(&self) -> u32 {
-        self.seq
-    }
-
-    fn insert(self, name: String, entry_type: EntryType) -> Result<u32> {
-        match self.content.entries.entry(name) {
+        match self.entries.entry(name) {
             btree_map::Entry::Vacant(entry) => {
                 entry.insert(EntryData {
                     entry_type,
-                    seq: self.seq,
+                    blob_id,
                 });
-                self.content.dirty = true;
+                self.dirty = true;
 
-                Ok(self.seq)
+                Ok(blob_id)
             }
             btree_map::Entry::Occupied(_) => Err(Error::EntryExists),
         }
     }
 
-    fn insert_or_replace(self, name: String, entry_type: EntryType) -> u32 {
-        self.content.entries.insert(
+    fn insert_or_replace(&mut self, name: String, blob_id: BlobId, entry_type: EntryType) {
+        self.entries.insert(
             name,
             EntryData {
                 entry_type,
-                seq: self.seq,
+                blob_id,
             },
         );
-        self.content.dirty = true;
-        self.seq
+        self.dirty = true;
+    }
+
+    fn remove(&mut self, name: &str) -> Result<()> {
+        self.entries.remove(name).ok_or(Error::EntryNotFound)?;
+        self.dirty = true;
+
+        Ok(())
     }
 }
 
 #[derive(Clone, Deserialize, Serialize)]
 struct EntryData {
     entry_type: EntryType,
-    seq: u32,
+    blob_id: BlobId,
     // TODO: metadata
 }
 
@@ -653,6 +608,7 @@ mod tests {
             Ok(_) => panic!("src entry should not exists, but it does"),
         }
 
+        // XXX
         let mut file = dst_dir.lookup(dst_name).unwrap().open_file().await.unwrap();
         let read_content = file.read_to_end().await.unwrap();
         assert_eq!(read_content, content);
