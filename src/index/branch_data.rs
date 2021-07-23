@@ -224,12 +224,7 @@ impl BranchData {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        blob_id::BlobId,
-        crypto::Cryptor,
-        index,
-        locator::Locator,
-    };
+    use crate::{blob_id::BlobId, crypto::Cryptor, index, locator::Locator};
     use sqlx::Row;
 
     #[tokio::test(flavor = "multi_thread")]

@@ -1,7 +1,6 @@
-/// BlobId is used to identify a blob in a directory
-
-use serde::{Deserialize, Serialize};
 use crate::format;
+/// BlobId is used to identify a blob in a directory
+use serde::{Deserialize, Serialize};
 
 use rand::{
     distributions::{Distribution, Standard},

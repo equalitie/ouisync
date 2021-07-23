@@ -1,8 +1,8 @@
-use std::iter;
 use crate::{
     blob_id::BlobId,
-    crypto::{ Cryptor, Hash, Hashable }
+    crypto::{Cryptor, Hash, Hashable},
 };
+use std::iter;
 
 use sha3::{Digest, Sha3_256};
 

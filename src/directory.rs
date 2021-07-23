@@ -352,9 +352,7 @@ impl Content {
     }
 
     fn remove(&mut self, name: &str) -> Result<()> {
-        self.entries
-            .remove(name)
-            .ok_or(Error::EntryNotFound)?;
+        self.entries.remove(name).ok_or(Error::EntryNotFound)?;
         self.dirty = true;
 
         Ok(())
@@ -372,7 +370,12 @@ impl VacantEntry<'_> {
         Ok(blob_id)
     }
 
-    fn insert_with_blob_id(self, name: String, entry_type: EntryType, blob_id: &BlobId) -> Result<()> {
+    fn insert_with_blob_id(
+        self,
+        name: String,
+        entry_type: EntryType,
+        blob_id: &BlobId,
+    ) -> Result<()> {
         match self.content.entries.entry(name) {
             btree_map::Entry::Vacant(entry) => {
                 entry.insert(EntryData {
