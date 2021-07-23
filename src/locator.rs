@@ -15,10 +15,7 @@ use sha3::{Digest, Sha3_256};
 pub enum Locator {
     /// Locator of the root block, that is, the head block of the root blob.
     Root,
-    /// Locator of the head (first) block of a blob. The first element is the hash of the locator
-    /// of the directory which contain the blob (more precisely, it is the locator of the head block
-    /// of that directory) and the second element is the sequence number (position) of the blob
-    /// within that directory.
+    /// Locator of the head (first) block of a blob.
     Head(BlobId),
     /// Locator of a trunk (other than first) block of a blob. The first element is the hash of the
     /// locator of the blob (the locator of the head block of the blob) and the second element is
