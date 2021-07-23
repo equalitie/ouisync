@@ -206,11 +206,13 @@ impl Directory {
             return Err(Error::EntryIsDirectory);
         }
 
-        let dst_entry = dst_dir.content.vacant_entry();
-
         // TODO: remove the previous dst entry from the db, if it existed.
 
-        dst_entry.insert_or_replace(dst_name.to_owned(), src_locator.blob_id(), src_entry_type);
+        dst_dir.content.insert_or_replace(
+            dst_name.to_owned(),
+            src_locator.blob_id(),
+            src_entry_type,
+        );
 
         match self.content.remove(src_name) {
             Ok(_) | Err(Error::EntryNotFound) => (),
@@ -342,13 +344,31 @@ struct Content {
 
 impl Content {
     fn insert(&mut self, name: String, entry_type: EntryType) -> Result<BlobId> {
-        self.vacant_entry().insert(name, entry_type)
+        let blob_id = BlobId::random();
+
+        match self.entries.entry(name) {
+            btree_map::Entry::Vacant(entry) => {
+                entry.insert(EntryData {
+                    entry_type,
+                    blob_id,
+                });
+                self.dirty = true;
+
+                Ok(blob_id)
+            }
+            btree_map::Entry::Occupied(_) => Err(Error::EntryExists),
+        }
     }
 
-    // Reserve an entry to be inserted into later. Useful when the `seq` number is needed before
-    // creating the entry.
-    fn vacant_entry(&mut self) -> VacantEntry {
-        VacantEntry { content: self }
+    fn insert_or_replace(&mut self, name: String, blob_id: BlobId, entry_type: EntryType) {
+        self.entries.insert(
+            name,
+            EntryData {
+                entry_type,
+                blob_id,
+            },
+        );
+        self.dirty = true;
     }
 
     fn remove(&mut self, name: &str) -> Result<()> {
@@ -356,49 +376,6 @@ impl Content {
         self.dirty = true;
 
         Ok(())
-    }
-}
-
-struct VacantEntry<'a> {
-    content: &'a mut Content,
-}
-
-impl VacantEntry<'_> {
-    fn insert(self, name: String, entry_type: EntryType) -> Result<BlobId> {
-        let blob_id = BlobId::random();
-        self.insert_with_blob_id(name, entry_type, &blob_id)?;
-        Ok(blob_id)
-    }
-
-    fn insert_with_blob_id(
-        self,
-        name: String,
-        entry_type: EntryType,
-        blob_id: &BlobId,
-    ) -> Result<()> {
-        match self.content.entries.entry(name) {
-            btree_map::Entry::Vacant(entry) => {
-                entry.insert(EntryData {
-                    entry_type,
-                    blob_id: *blob_id,
-                });
-                self.content.dirty = true;
-
-                Ok(())
-            }
-            btree_map::Entry::Occupied(_) => Err(Error::EntryExists),
-        }
-    }
-
-    fn insert_or_replace(self, name: String, blob_id: BlobId, entry_type: EntryType) {
-        self.content.entries.insert(
-            name,
-            EntryData {
-                entry_type,
-                blob_id,
-            },
-        );
-        self.content.dirty = true;
     }
 }
 
