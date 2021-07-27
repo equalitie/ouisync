@@ -44,7 +44,7 @@ pub unsafe extern "C" fn session_open(
         }
     };
 
-    let runtime = match runtime::Builder::new_multi_thread().enable_time().build() {
+    let runtime = match runtime::Builder::new_multi_thread().enable_all().build() {
         Ok(runtime) => runtime,
         Err(error) => {
             sender.send_err(port, error_ptr, error);
