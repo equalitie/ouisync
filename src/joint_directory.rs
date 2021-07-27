@@ -165,8 +165,6 @@ impl JointDirectory {
     pub async fn cd_into_path(&self, path: &Utf8Path) -> Result<JointDirectory> {
         let mut retval = self.clone();
         for name in path {
-            // Using unwrap here because all names should be UTP-8 as they arrive from
-            // VirtualFilesystem.
             retval = retval.cd_into(name).await?;
         }
         Ok(retval)

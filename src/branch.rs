@@ -245,8 +245,6 @@ impl Branch {
 // (it's the root).
 fn decompose_path(path: &Utf8Path) -> Option<(&Utf8Path, &str)> {
     match (path.parent(), path.file_name()) {
-        // It's OK to use unwrap here because all file names are assumed to be UTF-8 (checks are
-        // made in VirtualFilesystem).
         (Some(parent), Some(name)) => Some((parent, name)),
         _ => None,
     }
