@@ -2,7 +2,7 @@ use crate::{
     directory::{Directory, EntryInfo},
     entry::EntryType,
     file::File,
-    iterator::{sorted_union, Accumulate, MaybeIterator},
+    iterator::{sorted_union, Accumulate},
     joint_entry::JointEntry,
     replica_id::ReplicaId,
     Error, Result,
@@ -138,7 +138,7 @@ impl JointDirectory {
         let mut retval = JointDirectory::new();
         let mut count = 0;
 
-        for Version { info, branch } in self.lookup(directory)?.directories() {
+        for Version { info, branch } in self.lookup(directory)?.directories()? {
             match info.open_directory().await {
                 Ok(dir) => {
                     retval.insert(dir);
@@ -356,10 +356,10 @@ impl<'a> Lookup<'a> {
         }
     }
 
-    pub fn directories(&'a self) -> MaybeIterator<DirectoryVersions<'a>> {
+    pub fn directories(&'a self) -> Result<DirectoryVersions<'a>> {
         match self {
-            Self::Directory(versions) => MaybeIterator::SomeIterator(versions.directories()),
-            Self::File(_, _) => MaybeIterator::NoIterator,
+            Self::Directory(versions) => Ok(versions.directories()),
+            Self::File(_, _) => Err(Error::EntryNotDirectory),
         }
     }
 
