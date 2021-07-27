@@ -176,11 +176,15 @@ impl Branch {
         }
     }
 
+    /// Ensures that the directory at the specified path exists including all its ancestors.
+    /// Note: non-normalized paths (i.e. containing "..") or Windows-style drive prefixes
+    /// (e.g. "C:") are not supported.
     pub async fn ensure_directory_exists(&self, path: &Utf8Path) -> Result<Vec<Directory>> {
         let mut dirs = vec![self.ensure_root_exists().await?];
 
         for component in path.components() {
             match component {
+                Utf8Component::RootDir | Utf8Component::CurDir => (),
                 Utf8Component::Normal(name) => {
                     let last = dirs.last_mut().unwrap();
 
@@ -192,9 +196,9 @@ impl Branch {
 
                     dirs.push(next);
                 }
-                // I believe we can assume that FUSE and FFI will give us normalized paths.
-                // TODO: Consider wrapping Utf8Path to ensure normalized components.
-                _ => panic!("Received non \"normal\" path"),
+                Utf8Component::Prefix(_) | Utf8Component::ParentDir => {
+                    return Err(Error::OperationNotSupported)
+                }
             }
         }
 
@@ -258,9 +262,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn lookup() {
         let pool = db::init(db::Store::Memory).await.unwrap();
-        let branch_id = ReplicaId::random();
-        let index = Index::load(pool.clone(), branch_id).await.unwrap();
-        let branch = Branch::new(pool, index.branch(&branch_id).await.unwrap(), Cryptor::Null);
+        let replica_id = ReplicaId::random();
+        let index = Index::load(pool.clone(), replica_id).await.unwrap();
+        let branch = Branch::new(pool, index.local_branch().await, Cryptor::Null);
 
         let mut root_dir = branch.ensure_root_exists().await.unwrap();
         let mut file_a = root_dir.create_file("a.txt".into()).unwrap();
@@ -310,5 +314,17 @@ mod tests {
         assert_eq!(branch.lookup("..").await.unwrap().0, Locator::Root);
         assert_eq!(branch.lookup("../..").await.unwrap().0, Locator::Root);
         assert_eq!(branch.lookup("sub/../..").await.unwrap().0, Locator::Root);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn ensure_root_directory_exists() {
+        let pool = db::init(db::Store::Memory).await.unwrap();
+        let replica_id = ReplicaId::random();
+        let index = Index::load(pool.clone(), replica_id).await.unwrap();
+        let branch = Branch::new(pool, index.local_branch().await, Cryptor::Null);
+
+        let dirs = branch.ensure_directory_exists("/".into()).await.unwrap();
+        assert_eq!(dirs.len(), 1);
+        assert_eq!(dirs[0].locator(), &Locator::Root);
     }
 }

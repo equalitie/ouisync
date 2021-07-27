@@ -231,3 +231,19 @@ fn decompose_path(path: &Utf8Path) -> Option<(&Utf8Path, &str)> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn root_directory_always_exists() {
+        let pool = db::init(db::Store::Memory).await.unwrap();
+        let replica_id = ReplicaId::random();
+        let index = Index::load(pool, replica_id).await.unwrap();
+        let repo = Repository::new(index, Cryptor::Null);
+
+        let _ = repo.open_directory("/").await.unwrap();
+    }
+}
