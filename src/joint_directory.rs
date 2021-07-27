@@ -7,8 +7,7 @@ use crate::{
     replica_id::ReplicaId,
     Error, Result,
 };
-use camino::Utf8Path;
-
+use camino::{Utf8Component, Utf8Path};
 use std::{
     collections::btree_map::{Entry as MapEntry, Values},
     collections::{BTreeMap, BTreeSet},
@@ -134,6 +133,7 @@ impl JointDirectory {
         entries.map(|(name, versions)| JointEntryView { name, versions })
     }
 
+    /// Returns a direct subdirectory of this directory with the specified name.
     pub async fn cd_into(&self, directory: &'_ str) -> Result<JointDirectory> {
         let mut retval = JointDirectory::new();
         let mut count = 0;
@@ -162,16 +162,30 @@ impl JointDirectory {
         Ok(retval)
     }
 
+    /// Returns a descendant directory of this directory at the specified path (relative to `self`).
+    /// Note: non-normalized paths (i.e. containing "..") or Windows-style drive prefixes
+    /// (e.g. "C:") are not supported.
     pub async fn cd_into_path(&self, path: &Utf8Path) -> Result<JointDirectory> {
         let mut retval = self.clone();
-        for name in path {
-            retval = retval.cd_into(name).await?;
+
+        for component in path.components() {
+            match component {
+                Utf8Component::RootDir | Utf8Component::CurDir => (),
+                Utf8Component::Normal(name) => {
+                    retval = retval.cd_into(name).await?;
+                }
+                // TODO: consider supporting ".." if we never cd above `self`.
+                Utf8Component::ParentDir | Utf8Component::Prefix(_) => {
+                    return Err(Error::OperationNotSupported)
+                }
+            }
         }
+
         Ok(retval)
     }
 
     pub fn lookup<'a>(&'a self, target_name: &'a str) -> Result<Lookup<'a>> {
-        // TODO: This function currently doens't handle one (important) case where there exists a
+        // TODO: This function currently doesn't handle one (important) case where there exists a
         // file "file-<branch>" as well as two or more concurrent files with base name "file". This
         // could result in there being two files with the same name "file-<branch>".
 
