@@ -56,7 +56,7 @@ impl Directory {
         }
     }
 
-    /// Flushed this directory ensuring that any pending changes are written to the store.
+    /// Flushes this directory ensuring that any pending changes are written to the store.
     pub async fn flush(&mut self) -> Result<()> {
         if !self.content.dirty {
             return Ok(());
@@ -361,7 +361,6 @@ struct EntryData {
 mod tests {
     use super::*;
     use crate::index::BranchData;
-    use rand::{distributions::Standard, Rng};
     use std::collections::BTreeSet;
 
     #[tokio::test(flavor = "multi_thread")]
@@ -513,9 +512,5 @@ mod tests {
         let branch = BranchData::new(&pool, rand::random()).await.unwrap();
 
         (pool, branch)
-    }
-
-    fn random_content(len: usize) -> Vec<u8> {
-        rand::thread_rng().sample_iter(Standard).take(len).collect()
     }
 }

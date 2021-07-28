@@ -562,7 +562,7 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
 
     for layer in snapshot.inner_layers() {
         for (parent_hash, nodes) in layer.inner_maps() {
-            nodes.save(&pool, &parent_hash).await.unwrap();
+            nodes.save(&pool, parent_hash).await.unwrap();
             super::update_summaries(&pool, *parent_hash, layer.number())
                 .await
                 .unwrap();
@@ -574,7 +574,7 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
     let mut unsaved_leaves = snapshot.leaf_count();
 
     for (parent_hash, nodes) in snapshot.leaf_sets() {
-        nodes.save(&pool, &parent_hash).await.unwrap();
+        nodes.save(&pool, parent_hash).await.unwrap();
         unsaved_leaves -= nodes.len();
 
         super::update_summaries(&pool, *parent_hash, INNER_LAYER_COUNT)
@@ -627,7 +627,7 @@ async fn summary_case(leaf_count: usize, rng_seed: u64) {
             nodes
                 .clone()
                 .into_incomplete()
-                .save(&pool, &parent_hash)
+                .save(&pool, parent_hash)
                 .await
                 .unwrap();
         }
@@ -637,7 +637,7 @@ async fn summary_case(leaf_count: usize, rng_seed: u64) {
         nodes
             .clone()
             .into_missing()
-            .save(&pool, &parent_hash)
+            .save(&pool, parent_hash)
             .await
             .unwrap();
 

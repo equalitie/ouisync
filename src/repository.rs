@@ -1,5 +1,3 @@
-use std::{collections::HashSet, io::SeekFrom};
-
 use crate::{
     branch::Branch,
     crypto::Cryptor,
@@ -13,8 +11,8 @@ use crate::{
     locator::Locator,
     ReplicaId,
 };
-
 use camino::Utf8Path;
+use std::{collections::HashSet, io::SeekFrom};
 
 pub struct Repository {
     index: Index,
@@ -159,12 +157,10 @@ impl Repository {
         locator: GlobalLocator,
         entry_type: EntryType,
     ) -> Result<Entry> {
-        match entry_type {
-            EntryType::File => Ok(Entry::File(self.open_file_by_locator(&locator).await?)),
-            EntryType::Directory => Ok(Entry::Directory(
-                self.open_directory_by_locator(locator).await?,
-            )),
-        }
+        self.branch(&locator.branch_id)
+            .await?
+            .open_entry_by_locator(locator.local, entry_type)
+            .await
     }
 
     /// Open a file given the GlobalLocator.
