@@ -507,7 +507,7 @@ mod tests {
         let mut branches = Vec::new();
 
         for _ in 0..branch_count {
-            let branch = BranchData::new(&pool, ReplicaId::random()).await.unwrap();
+            let branch = BranchData::new(&pool, rand::random()).await.unwrap();
             branches.push(branch);
         }
 

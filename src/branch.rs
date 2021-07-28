@@ -8,7 +8,6 @@ use crate::{
     index::BranchData,
     locator::Locator,
 };
-
 use camino::{Utf8Component, Utf8Path};
 
 pub struct Branch {
@@ -257,12 +256,12 @@ fn decompose_path(path: &Utf8Path) -> Option<(&Utf8Path, &str)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{db, index::Index, replica_id::ReplicaId};
+    use crate::{db, index::Index};
 
     #[tokio::test(flavor = "multi_thread")]
     async fn lookup() {
         let pool = db::init(db::Store::Memory).await.unwrap();
-        let replica_id = ReplicaId::random();
+        let replica_id = rand::random();
         let index = Index::load(pool.clone(), replica_id).await.unwrap();
         let branch = Branch::new(pool, index.local_branch().await, Cryptor::Null);
 
@@ -319,7 +318,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn ensure_root_directory_exists() {
         let pool = db::init(db::Store::Memory).await.unwrap();
-        let replica_id = ReplicaId::random();
+        let replica_id = rand::random();
         let index = Index::load(pool.clone(), replica_id).await.unwrap();
         let branch = Branch::new(pool, index.local_branch().await, Cryptor::Null);
 

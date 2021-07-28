@@ -45,12 +45,10 @@ pub async fn write_received_block(
 mod tests {
     use super::*;
     use crate::{
-        blob_id::BlobId,
         block::{self, BLOCK_SIZE},
         crypto::{AuthTag, Cryptor},
         index::{self, BranchData},
         locator::Locator,
-        replica_id::ReplicaId,
     };
 
     #[tokio::test(flavor = "multi_thread")]
@@ -61,10 +59,10 @@ mod tests {
 
         let cryptor = Cryptor::Null;
 
-        let branch0 = BranchData::new(&pool, ReplicaId::random()).await.unwrap();
-        let branch1 = BranchData::new(&pool, ReplicaId::random()).await.unwrap();
+        let branch0 = BranchData::new(&pool, rand::random()).await.unwrap();
+        let branch1 = BranchData::new(&pool, rand::random()).await.unwrap();
 
-        let block_id = BlockId::random();
+        let block_id = rand::random();
         let buffer = vec![0; BLOCK_SIZE];
 
         let mut tx = pool.begin().await.unwrap();
@@ -73,11 +71,11 @@ mod tests {
             .await
             .unwrap();
 
-        let locator0 = Locator::Head(BlobId::random());
+        let locator0 = Locator::Head(rand::random());
         let locator0 = locator0.encode(&cryptor);
         branch0.insert(&mut tx, &block_id, &locator0).await.unwrap();
 
-        let locator1 = Locator::Head(BlobId::random());
+        let locator1 = Locator::Head(rand::random());
         let locator1 = locator1.encode(&cryptor);
         branch1.insert(&mut tx, &block_id, &locator1).await.unwrap();
 

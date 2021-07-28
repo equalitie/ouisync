@@ -224,15 +224,15 @@ impl BranchData {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{blob_id::BlobId, crypto::Cryptor, index, locator::Locator};
+    use crate::{crypto::Cryptor, index, locator::Locator};
     use sqlx::Row;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn insert_and_read() {
         let pool = init_db().await;
-        let branch = BranchData::new(&pool, ReplicaId::random()).await.unwrap();
+        let branch = BranchData::new(&pool, rand::random()).await.unwrap();
 
-        let block_id = BlockId::random();
+        let block_id = rand::random();
         let locator = random_head_locator();
         let encoded_locator = locator.encode(&Cryptor::Null);
 
@@ -252,10 +252,10 @@ mod tests {
     async fn rewrite_locator() {
         for _ in 0..32 {
             let pool = init_db().await;
-            let branch = BranchData::new(&pool, ReplicaId::random()).await.unwrap();
+            let branch = BranchData::new(&pool, rand::random()).await.unwrap();
 
-            let b1 = BlockId::random();
-            let b2 = BlockId::random();
+            let b1 = rand::random();
+            let b2 = rand::random();
 
             let locator = random_head_locator();
             let encoded_locator = locator.encode(&Cryptor::Null);
@@ -279,9 +279,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn remove_locator() {
         let pool = init_db().await;
-        let branch = BranchData::new(&pool, ReplicaId::random()).await.unwrap();
+        let branch = BranchData::new(&pool, rand::random()).await.unwrap();
 
-        let b = BlockId::random();
+        let b = rand::random();
         let locator = random_head_locator();
         let encoded_locator = locator.encode(&Cryptor::Null);
 
@@ -332,6 +332,6 @@ mod tests {
     }
 
     fn random_head_locator() -> Locator {
-        Locator::Head(BlobId::random())
+        Locator::Head(rand::random())
     }
 }

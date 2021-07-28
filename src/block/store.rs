@@ -134,7 +134,7 @@ mod tests {
         let pool = make_pool().await;
         init(&pool).await.unwrap();
 
-        let id = BlockId::random();
+        let id = rand::random();
         let content = random_block_content();
         let auth_tag = AuthTag::default();
 
@@ -155,7 +155,7 @@ mod tests {
         let pool = make_pool().await;
         init(&pool).await.unwrap();
 
-        let id = BlockId::random();
+        let id = rand::random();
         let mut buffer = vec![0; BLOCK_SIZE];
 
         let mut tx = pool.begin().await.unwrap();
@@ -172,7 +172,7 @@ mod tests {
         let pool = make_pool().await;
         init(&pool).await.unwrap();
 
-        let id = BlockId::random();
+        let id = rand::random();
         let content0 = random_block_content();
         let auth_tag = AuthTag::default();
 
