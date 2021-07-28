@@ -87,7 +87,7 @@ impl Blob {
         content.write(&nonce_sequence.prefix()[..]);
         content.write_u64(0); // blob length
 
-        let id = BlockId::random();
+        let id = rand::random();
         let current_block = OpenBlock {
             locator,
             id,
@@ -234,7 +234,7 @@ impl Blob {
                 )
                 .await?
             } else {
-                (BlockId::random(), Buffer::new())
+                (rand::random(), Buffer::new())
             };
 
             self.replace_current_block(&mut tx, locator, id, content)
@@ -392,7 +392,7 @@ impl Blob {
             return Ok(());
         }
 
-        self.current_block.id = BlockId::random();
+        self.current_block.id = rand::random();
 
         write_block(
             &self.branch,
@@ -443,7 +443,7 @@ impl Blob {
                 &self.cryptor,
                 &self.nonce_sequence,
                 &locator,
-                &BlockId::random(),
+                &rand::random(),
                 cursor.buffer,
             )
             .await?;

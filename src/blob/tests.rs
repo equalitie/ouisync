@@ -1,5 +1,5 @@
 use super::*;
-use crate::{blob_id::BlobId, crypto::SecretKey, error::Error, replica_id::ReplicaId, test_utils};
+use crate::{crypto::SecretKey, error::Error, test_utils};
 use assert_matches::assert_matches;
 use proptest::collection::vec;
 use rand::{distributions::Standard, prelude::*};
@@ -8,7 +8,7 @@ use test_strategy::proptest;
 #[tokio::test(flavor = "multi_thread")]
 async fn empty_blob() {
     let pool = init_db().await;
-    let branch = BranchData::new(&pool, ReplicaId::random()).await.unwrap();
+    let branch = BranchData::new(&pool, rand::random()).await.unwrap();
 
     let mut blob = Blob::create(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root);
     blob.flush().await.unwrap();
@@ -411,7 +411,7 @@ async fn setup(rng_seed: u64) -> (StdRng, Cryptor, db::Pool, BranchData) {
 }
 
 fn random_head_locator<R: Rng>(rng: &mut R) -> Locator {
-    Locator::Head(BlobId::random_with_rng(rng))
+    Locator::Head(rng.gen())
 }
 
 async fn init_db() -> db::Pool {

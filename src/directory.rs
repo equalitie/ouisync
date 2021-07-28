@@ -208,11 +208,9 @@ impl Directory {
 
         // TODO: remove the previous dst entry from the db, if it existed.
 
-        dst_dir.content.insert_or_replace(
-            dst_name.to_owned(),
-            src_blob_id,
-            src_entry_type,
-        );
+        dst_dir
+            .content
+            .insert_or_replace(dst_name.to_owned(), src_blob_id, src_entry_type);
 
         match self.content.remove(src_name) {
             Ok(_) | Err(Error::EntryNotFound) => (),
@@ -348,7 +346,7 @@ struct Content {
 
 impl Content {
     fn insert(&mut self, name: String, entry_type: EntryType) -> Result<BlobId> {
-        let blob_id = BlobId::random();
+        let blob_id = rand::random();
 
         match self.entries.entry(name) {
             btree_map::Entry::Vacant(entry) => {
@@ -393,7 +391,7 @@ struct EntryData {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{index::BranchData, replica_id::ReplicaId};
+    use crate::index::BranchData;
     use rand::{distributions::Standard, Rng};
     use std::collections::BTreeSet;
 
@@ -710,7 +708,7 @@ mod tests {
 
     async fn setup() -> (db::Pool, BranchData) {
         let pool = db::init(db::Store::Memory).await.unwrap();
-        let branch = BranchData::new(&pool, ReplicaId::random()).await.unwrap();
+        let branch = BranchData::new(&pool, rand::random()).await.unwrap();
 
         (pool, branch)
     }

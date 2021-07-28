@@ -240,7 +240,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn root_directory_always_exists() {
         let pool = db::init(db::Store::Memory).await.unwrap();
-        let replica_id = ReplicaId::random();
+        let replica_id = rand::random();
         let index = Index::load(pool, replica_id).await.unwrap();
         let repo = Repository::new(index, Cryptor::Null);
 

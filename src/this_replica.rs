@@ -59,7 +59,7 @@ pub async fn get_or_create_id(pool: &db::Pool) -> Result<ReplicaId> {
     match get_id(pool).await? {
         Some(id) => Ok(id),
         None => {
-            let id = ReplicaId::random();
+            let id = rand::random();
             set_id(pool, &id).await?;
             Ok(id)
         }
