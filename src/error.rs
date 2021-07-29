@@ -1,8 +1,9 @@
 use crate::{
     block::{BlockId, BLOCK_SIZE},
     crypto::aead,
+    replica_id::ReplicaId,
 };
-use std::{array::TryFromSliceError, fmt, io};
+use std::{array::TryFromSliceError, collections::HashSet, fmt, io};
 use thiserror::Error;
 
 /// A specialized `Result` type for convenience.
@@ -40,6 +41,8 @@ pub enum Error {
     EntryNotDirectory,
     #[error("entry is a directory")]
     EntryIsDirectory,
+    #[error("entry has multiple concurrent versions")]
+    AmbiguousEntry(HashSet<ReplicaId>),
     #[error("File name is not a valid UTF-8 string")]
     NonUtf8FileName,
     #[error("offset is out of range")]
