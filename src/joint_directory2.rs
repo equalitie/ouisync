@@ -8,8 +8,8 @@ use crate::{
     index::Index,
     locator::Locator,
     replica_id::ReplicaId,
+    versioned_file_name::{self, VersionedFileName},
 };
-use either::Either;
 use std::{
     collections::{BTreeMap, HashMap},
     fmt, iter,
@@ -18,12 +18,12 @@ use std::{
 pub struct JointDirectory {
     index: Index,
     cryptor: Cryptor,
-    entries: BTreeMap<EntryKey, EntryData>,
+    entries: BTreeMap<String, EntryVersions>,
 }
 
 impl JointDirectory {
     pub async fn open(index: Index, cryptor: Cryptor, locators: Vec<Locator>) -> Result<Self> {
-        let mut entries: BTreeMap<EntryKey, EntryData> = BTreeMap::new();
+        let mut entries: BTreeMap<_, EntryVersions> = BTreeMap::new();
 
         for branch in index.branches().await {
             for locator in &locators {
@@ -41,15 +41,14 @@ impl JointDirectory {
                 };
 
                 for entry in dir.entries() {
-                    let key = EntryKey {
-                        name: entry.name().to_owned(),
-                        entry_type: entry.entry_type(),
-                    };
+                    let versions = entries.entry(entry.name().to_owned()).or_default();
 
-                    entries
-                        .entry(key)
-                        .or_default()
-                        .insert(*branch.replica_id(), *locator);
+                    match entry.entry_type() {
+                        EntryType::File => {
+                            versions.files.insert(*branch.replica_id(), *locator);
+                        }
+                        EntryType::Directory => versions.directories.push(*locator),
+                    }
                 }
             }
         }
@@ -64,23 +63,84 @@ impl JointDirectory {
     pub fn entries(&self) -> impl Iterator<Item = EntryInfo> {
         self.entries
             .iter()
-            .map(|(key, data)| match key.entry_type {
-                EntryType::File => {
-                    Either::Left(data.iter().map(move |(branch_id, locator)| EntryInfo {
-                        name: &key.name,
-                        data: EntryDataView::File { branch_id, locator },
-                    }))
-                }
-                EntryType::Directory => Either::Right(iter::once(EntryInfo {
-                    name: &key.name,
-                    data: EntryDataView::Directory(data),
-                })),
+            .map(|(name, versions)| {
+                let directories = if versions.directories.is_empty() {
+                    None
+                } else {
+                    Some(EntryInfo {
+                        name,
+                        version: EntryVersion::Directory(&versions.directories),
+                    })
+                };
+
+                let files = versions
+                    .files
+                    .iter()
+                    .map(move |(branch_id, locator)| EntryInfo {
+                        name,
+                        version: EntryVersion::File { branch_id, locator },
+                    });
+
+                directories.into_iter().chain(files)
             })
             .flatten()
     }
 
-    pub fn lookup(&self, name: &str) -> Result<EntryInfo> {
-        todo!()
+    pub fn lookup(&self, name: &'_ str) -> Result<EntryInfo> {
+        // Look for exact match first as that is the most likely case.
+        if let Some((name, versions)) = self.entries.get_key_value(name) {
+            if !versions.directories.is_empty() {
+                return Ok(EntryInfo {
+                    name,
+                    version: EntryVersion::Directory(&versions.directories),
+                });
+            }
+
+            if versions.files.len() > 1 {
+                return Err(Error::AmbiguousEntry(
+                    versions.files.keys().copied().collect(),
+                ));
+            }
+
+            if let Some((branch_id, locator)) = versions.files.iter().next() {
+                return Ok(EntryInfo {
+                    name,
+                    version: EntryVersion::File { branch_id, locator },
+                });
+            }
+
+            unreachable!("joint directory entry must contain at least one file or directory")
+        }
+
+        // Now try to strip the branch suffix and lookup the versioned entry
+        let (name, branch_id_prefix) = versioned_file_name::partial_parse(name);
+        let branch_id_prefix = branch_id_prefix.ok_or(Error::EntryNotFound)?;
+        let (name, versions) = self
+            .entries
+            .get_key_value(name)
+            .ok_or(Error::EntryNotFound)?;
+
+        let mut matches = versions
+            .files
+            .iter()
+            .filter(|(branch_id, _)| branch_id.starts_with(&branch_id_prefix))
+            .peekable();
+
+        let (branch_id, locator) = matches.next().ok_or(Error::EntryNotFound)?;
+
+        if matches.peek().is_some() {
+            return Err(Error::AmbiguousEntry(
+                iter::once(branch_id)
+                    .chain(matches.map(|(branch_id, _)| branch_id))
+                    .copied()
+                    .collect(),
+            ));
+        }
+
+        Ok(EntryInfo {
+            name,
+            version: EntryVersion::File { branch_id, locator },
+        })
     }
 }
 
@@ -88,7 +148,7 @@ impl JointDirectory {
 pub struct EntryInfo<'a> {
     // index: &'a Index,
     name: &'a str,
-    data: EntryDataView<'a>,
+    version: EntryVersion<'a>,
 }
 
 impl<'a> EntryInfo<'a> {
@@ -97,13 +157,13 @@ impl<'a> EntryInfo<'a> {
     }
 
     pub fn entry_type(&self) -> EntryType {
-        self.data.entry_type()
+        self.version.entry_type()
     }
 
     pub fn branch_id(&self) -> Option<&'a ReplicaId> {
-        match &self.data {
-            EntryDataView::File { branch_id, .. } => Some(branch_id),
-            EntryDataView::Directory(_) => None,
+        match &self.version {
+            EntryVersion::File { branch_id, .. } => Some(branch_id),
+            EntryVersion::Directory(_) => None,
         }
     }
 }
@@ -112,29 +172,27 @@ impl<'a> fmt::Debug for EntryInfo<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("EntryInfo")
             .field("name", &self.name)
-            .field("type", &self.data.entry_type())
+            .field("type", &self.version.entry_type())
             .finish()
     }
 }
 
-#[derive(Eq, PartialEq, Ord, PartialOrd)]
-struct EntryKey {
-    name: String,
-    entry_type: EntryType,
+#[derive(Default)]
+struct EntryVersions {
+    files: HashMap<ReplicaId, Locator>,
+    directories: Vec<Locator>,
 }
 
-type EntryData = HashMap<ReplicaId, Locator>;
-
 #[derive(Eq, PartialEq)]
-enum EntryDataView<'a> {
+enum EntryVersion<'a> {
     File {
         branch_id: &'a ReplicaId,
         locator: &'a Locator,
     },
-    Directory(&'a EntryData),
+    Directory(&'a [Locator]),
 }
 
-impl<'a> EntryDataView<'a> {
+impl<'a> EntryVersion<'a> {
     fn entry_type(&self) -> EntryType {
         match self {
             Self::File { .. } => EntryType::File,
@@ -199,8 +257,8 @@ mod tests {
         assert_eq!(entries[1].name(), "file1.txt");
         assert_eq!(entries[1].entry_type(), EntryType::File);
 
-        // assert_eq!(root.lookup("file0.txt").unwrap(), entries[0]);
-        // assert_eq!(root.lookup("file1.txt").unwrap(), entries[1]);
+        assert_eq!(root.lookup("file0.txt").unwrap(), entries[0]);
+        assert_eq!(root.lookup("file1.txt").unwrap(), entries[1]);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -256,18 +314,18 @@ mod tests {
             assert_eq!(entry.name(), "file.txt");
             assert_eq!(entry.entry_type(), EntryType::File);
 
-            // assert_eq!(
-            //     root.lookup(&format!("file.txt.{:8x}", branch.replica_id()))
-            //         .unwrap(),
-            //     *entry
-            // );
+            assert_eq!(
+                root.lookup(&format!("file.txt.v{:8x}", branch.replica_id()))
+                    .unwrap(),
+                *entry
+            );
         }
 
-        // assert_matches!(root.lookup("file.txt"), Err(Error::AmbiguousEntry(branch_ids)) => {
-        //     assert_eq!(branch_ids.len(), 2);
-        //     assert!(branch_ids.contains(branches[0].replica_id()));
-        //     assert!(branch_ids.contains(branches[1].replica_id()));
-        // });
+        assert_matches!(root.lookup("file.txt"), Err(Error::AmbiguousEntry(branch_ids)) => {
+            assert_eq!(branch_ids.len(), 2);
+            assert!(branch_ids.contains(branches[0].replica_id()));
+            assert!(branch_ids.contains(branches[1].replica_id()));
+        });
     }
 
     #[tokio::test(flavor = "multi_thread")]

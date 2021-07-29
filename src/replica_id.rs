@@ -7,3 +7,9 @@ define_random_id! {
 }
 
 derive_sqlx_traits_for_u8_array_wrapper!(ReplicaId);
+
+impl ReplicaId {
+    pub fn starts_with(&self, needle: &[u8]) -> bool {
+        self.0.starts_with(needle)
+    }
+}

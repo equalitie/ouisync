@@ -19,6 +19,7 @@ mod format;
 mod global_locator;
 mod index;
 mod iterator;
+mod versioned_file_name;
 // TODO: this will eventually replace `join_directory`
 mod joint_directory2;
 mod joint_entry;
