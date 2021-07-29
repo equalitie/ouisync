@@ -8,7 +8,7 @@ use crate::{
     index::Index,
     locator::Locator,
     replica_id::ReplicaId,
-    versioned_file_name::{self, VersionedFileName},
+    versioned_file_name,
 };
 use std::{
     collections::{BTreeMap, HashMap},
@@ -113,7 +113,7 @@ impl JointDirectory {
         }
 
         // Now try to strip the branch suffix and lookup the versioned entry
-        let (name, branch_id_prefix) = versioned_file_name::partial_parse(name);
+        let (name, branch_id_prefix) = versioned_file_name::parse(name);
         let branch_id_prefix = branch_id_prefix.ok_or(Error::EntryNotFound)?;
         let (name, versions) = self
             .entries

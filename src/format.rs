@@ -9,10 +9,11 @@ pub(crate) fn hex(f: &mut fmt::Formatter, bytes: &[u8]) -> fmt::Result {
         .unwrap_or(bytes.len())
         .min(bytes.len());
 
-    let (len, ellipsis) = match len {
-        0 => (0, false),
-        len if len == bytes.len() => (len, false),
-        len => (len - 1, true),
+    let (len, ellipsis) = match (len, f.sign_minus()) {
+        (0, _) => (0, false),
+        (len, _) if len == bytes.len() => (len, false),
+        (len, true) => (len, false),
+        (len, false) => (len - 1, true),
     };
 
     for byte in &bytes[..len] {
