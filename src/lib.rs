@@ -19,6 +19,8 @@ mod format;
 mod global_locator;
 mod index;
 mod iterator;
+// TODO: this will eventually replace `join_directory`
+mod joint_directory2;
 mod joint_entry;
 mod locator;
 mod network;
