@@ -1,5 +1,7 @@
 use std::iter::Peekable;
 
+/// Iterator adaptor that groups elements from the input iterator such that all consecutive elements
+/// for which the given closure returns the same key are put into the same group.
 pub struct Accumulate<Iter, GetKey>
 where
     Iter: Iterator,
