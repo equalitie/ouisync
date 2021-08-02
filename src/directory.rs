@@ -3,7 +3,7 @@ use crate::{
     blob_id::BlobId,
     crypto::Cryptor,
     db,
-    entry::{Entry, EntryType},
+    entry::EntryType,
     error::{Error, Result},
     file::File,
     global_locator::GlobalLocator,
@@ -184,7 +184,7 @@ impl Directory {
 
     pub async fn remove_file(&mut self, name: &str) -> Result<()> {
         for entry in self.lookup(name)? {
-            entry.open_file().await?.remove().await?;
+            entry.as_file()?.open().await?.remove().await?;
         }
         self.content.remove(name)
         // TODO: Add tombstone
@@ -192,7 +192,7 @@ impl Directory {
 
     pub async fn remove_directory(&mut self, name: &str) -> Result<()> {
         for entry in self.lookup(name)? {
-            entry.open_directory().await?.remove().await?;
+            entry.as_directory()?.open().await?.remove().await?;
         }
         self.content.remove(name)
         // TODO: Add tombstone
@@ -249,27 +249,42 @@ impl<'a> EntryInfo<'a> {
         Locator::Head(self.data.blob_id)
     }
 
-    /// Opens this entry.
-    pub async fn open(&self) -> Result<Entry> {
-        match self.entry_type() {
-            EntryType::File => Ok(Entry::File(self.open_file_unchecked().await?)),
-            EntryType::Directory => Ok(Entry::Directory(self.open_directory_unchecked().await?)),
-        }
-    }
-
-    /// Opens this entry if it's a file.
-    pub async fn open_file(&self) -> Result<File> {
+    pub fn as_file(&self) -> Result<FileRef<'a>> {
         self.entry_type().check_is_file()?;
-        self.open_file_unchecked().await
+        Ok(FileRef {
+            parent_blob: self.parent_blob,
+            name: self.name,
+            blob_id: &self.data.blob_id,
+        })
     }
 
-    /// Opens this entry if it is a directory.
-    pub async fn open_directory(&self) -> Result<Directory> {
+    pub fn as_directory(&self) -> Result<DirectoryRef<'a>> {
         self.entry_type().check_is_directory()?;
-        self.open_directory_unchecked().await
+        Ok(DirectoryRef {
+            parent_blob: self.parent_blob,
+            name: self.name,
+            blob_id: &self.data.blob_id,
+        })
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct FileRef<'a> {
+    parent_blob: &'a Blob,
+    name: &'a str,
+    blob_id: &'a BlobId,
+}
+
+impl<'a> FileRef<'a> {
+    pub fn name(&self) -> &'a str {
+        self.name
     }
 
-    async fn open_file_unchecked(&self) -> Result<File> {
+    pub fn locator(&self) -> Locator {
+        Locator::Head(*self.blob_id)
+    }
+
+    pub async fn open(&self) -> Result<File> {
         File::open(
             self.parent_blob.db_pool().clone(),
             self.parent_blob.branch().clone(),
@@ -278,8 +293,25 @@ impl<'a> EntryInfo<'a> {
         )
         .await
     }
+}
 
-    async fn open_directory_unchecked(&self) -> Result<Directory> {
+#[derive(Copy, Clone)]
+pub struct DirectoryRef<'a> {
+    parent_blob: &'a Blob,
+    name: &'a str,
+    blob_id: &'a BlobId,
+}
+
+impl<'a> DirectoryRef<'a> {
+    pub fn name(&self) -> &'a str {
+        self.name
+    }
+
+    pub fn locator(&self) -> Locator {
+        Locator::Head(*self.blob_id)
+    }
+
+    pub async fn open(&self) -> Result<Directory> {
         Directory::open(
             self.parent_blob.db_pool().clone(),
             self.parent_blob.branch().clone(),
@@ -392,7 +424,7 @@ mod tests {
         for &(file_name, expected_content) in &[("dog.txt", b"woof"), ("cat.txt", b"meow")] {
             let mut versions = dir.lookup(file_name).unwrap().collect::<Vec<_>>();
             assert_eq!(versions.len(), 1);
-            let mut file = versions.first_mut().unwrap().open_file().await.unwrap();
+            let mut file = versions.first_mut().unwrap().as_file().unwrap().open().await.unwrap();
             let actual_content = file.read_to_end().await.unwrap();
             assert_eq!(actual_content, expected_content);
         }

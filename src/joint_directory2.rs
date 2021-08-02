@@ -1,11 +1,10 @@
 //! Overhaul of `JoinDirectory` with improved API and functionality. Will eventually replace it.
 
 use crate::{
-    crypto::Cryptor,
-    directory::Directory,
+    directory::{Directory, EntryInfo},
     entry::EntryType,
     error::{Error, Result},
-    index::Index,
+    iterator::{Accumulate, SortedUnion},
     locator::Locator,
     replica_id::ReplicaId,
     versioned_file_name,
@@ -16,195 +15,188 @@ use std::{
 };
 
 pub struct JointDirectory {
-    index: Index,
-    cryptor: Cryptor,
-    entries: BTreeMap<String, EntryVersions>,
+    versions: BTreeMap<ReplicaId, Directory>,
 }
 
 impl JointDirectory {
-    pub async fn open(index: Index, cryptor: Cryptor, locators: Vec<Locator>) -> Result<Self> {
-        let mut entries: BTreeMap<_, EntryVersions> = BTreeMap::new();
-
-        for branch in index.branches().await {
-            for locator in &locators {
-                let dir = match Directory::open(
-                    index.pool.clone(),
-                    branch.clone(),
-                    cryptor.clone(),
-                    *locator,
-                )
-                .await
-                {
-                    Ok(dir) => dir,
-                    Err(Error::EntryNotFound) => continue,
-                    Err(error) => return Err(error),
-                };
-
-                for entry in dir.entries() {
-                    let versions = entries.entry(entry.name().to_owned()).or_default();
-
-                    match entry.entry_type() {
-                        EntryType::File => {
-                            versions.files.insert(*branch.replica_id(), *locator);
-                        }
-                        EntryType::Directory => versions.directories.push(*locator),
-                    }
-                }
-            }
-        }
-
-        Ok(Self {
-            index,
-            cryptor,
-            entries,
-        })
-    }
-
-    pub fn entries(&self) -> impl Iterator<Item = EntryInfo> {
-        self.entries
-            .iter()
-            .map(|(name, versions)| {
-                let directories = if versions.directories.is_empty() {
-                    None
-                } else {
-                    Some(EntryInfo {
-                        name,
-                        version: EntryVersion::Directory(&versions.directories),
-                    })
-                };
-
-                let files = versions
-                    .files
-                    .iter()
-                    .map(move |(branch_id, locator)| EntryInfo {
-                        name,
-                        version: EntryVersion::File { branch_id, locator },
-                    });
-
-                directories.into_iter().chain(files)
-            })
-            .flatten()
-    }
-
-    pub fn lookup(&self, name: &'_ str) -> Result<EntryInfo> {
-        // Look for exact match first as that is the most likely case.
-        if let Some((name, versions)) = self.entries.get_key_value(name) {
-            if !versions.directories.is_empty() {
-                return Ok(EntryInfo {
-                    name,
-                    version: EntryVersion::Directory(&versions.directories),
-                });
-            }
-
-            if versions.files.len() > 1 {
-                return Err(Error::AmbiguousEntry(
-                    versions.files.keys().copied().collect(),
-                ));
-            }
-
-            if let Some((branch_id, locator)) = versions.files.iter().next() {
-                return Ok(EntryInfo {
-                    name,
-                    version: EntryVersion::File { branch_id, locator },
-                });
-            }
-
-            unreachable!("joint directory entry must contain at least one file or directory")
-        }
-
-        // Now try to strip the branch suffix and lookup the versioned entry
-        let (name, branch_id_prefix) = versioned_file_name::parse(name);
-        let branch_id_prefix = branch_id_prefix.ok_or(Error::EntryNotFound)?;
-        let (name, versions) = self
-            .entries
-            .get_key_value(name)
-            .ok_or(Error::EntryNotFound)?;
-
-        let mut matches = versions
-            .files
-            .iter()
-            .filter(|(branch_id, _)| branch_id.starts_with(&branch_id_prefix))
-            .peekable();
-
-        let (branch_id, locator) = matches.next().ok_or(Error::EntryNotFound)?;
-
-        if matches.peek().is_some() {
-            return Err(Error::AmbiguousEntry(
-                iter::once(branch_id)
-                    .chain(matches.map(|(branch_id, _)| branch_id))
-                    .copied()
-                    .collect(),
-            ));
-        }
-
-        Ok(EntryInfo {
-            name,
-            version: EntryVersion::File { branch_id, locator },
-        })
-    }
-}
-
-#[derive(Eq, PartialEq)]
-pub struct EntryInfo<'a> {
-    // index: &'a Index,
-    name: &'a str,
-    version: EntryVersion<'a>,
-}
-
-impl<'a> EntryInfo<'a> {
-    pub fn name(&self) -> &'a str {
-        self.name
-    }
-
-    pub fn entry_type(&self) -> EntryType {
-        self.version.entry_type()
-    }
-
-    pub fn branch_id(&self) -> Option<&'a ReplicaId> {
-        match &self.version {
-            EntryVersion::File { branch_id, .. } => Some(branch_id),
-            EntryVersion::Directory(_) => None,
+    pub fn new<I>(versions: I) -> Self
+    where
+        I: IntoIterator<Item = Directory>,
+    {
+        Self {
+            versions: versions
+                .into_iter()
+                .map(|dir| (dir.global_locator().branch_id, dir))
+                .collect(),
         }
     }
+
+    pub fn entries(&self) -> impl Iterator<Item = EntryVersions> {
+        let entries = self.versions.values().map(|directory| directory.entries());
+        let entries = SortedUnion::new(entries, |entry| entry.name());
+        let entries = Accumulate::new(entries, |entry| entry.name());
+
+        entries.map(|(_, entries)| EntryVersions(entries))
+    }
+
+    // pub fn entries(&self) -> impl Iterator<Item = EntryInfo> {
+    //     self.entries
+    //         .iter()
+    //         .map(|(name, versions)| {
+    //             let directories = if versions.directories.is_empty() {
+    //                 None
+    //             } else {
+    //                 Some(EntryInfo {
+    //                     name,
+    //                     version: EntryVersion::Directory(&versions.directories),
+    //                 })
+    //             };
+
+    //             let files = versions
+    //                 .files
+    //                 .iter()
+    //                 .map(move |(branch_id, locator)| EntryInfo {
+    //                     name,
+    //                     version: EntryVersion::File { branch_id, locator },
+    //                 });
+
+    //             directories.into_iter().chain(files)
+    //         })
+    //         .flatten()
+    // }
+
+    // pub fn lookup(&self, name: &'_ str) -> Result<EntryInfo> {
+    //     // Look for exact match first as that is the most likely case.
+    //     if let Some((name, versions)) = self.entries.get_key_value(name) {
+    //         if !versions.directories.is_empty() {
+    //             return Ok(EntryInfo {
+    //                 name,
+    //                 version: EntryVersion::Directory(&versions.directories),
+    //             });
+    //         }
+
+    //         if versions.files.len() > 1 {
+    //             return Err(Error::AmbiguousEntry(
+    //                 versions.files.keys().copied().collect(),
+    //             ));
+    //         }
+
+    //         if let Some((branch_id, locator)) = versions.files.iter().next() {
+    //             return Ok(EntryInfo {
+    //                 name,
+    //                 version: EntryVersion::File { branch_id, locator },
+    //             });
+    //         }
+
+    //         unreachable!("joint directory entry must contain at least one file or directory")
+    //     }
+
+    //     // Now try to strip the branch suffix and lookup the versioned entry
+    //     let (name, branch_id_prefix) = versioned_file_name::parse(name);
+    //     let branch_id_prefix = branch_id_prefix.ok_or(Error::EntryNotFound)?;
+    //     let (name, versions) = self
+    //         .entries
+    //         .get_key_value(name)
+    //         .ok_or(Error::EntryNotFound)?;
+
+    //     let mut matches = versions
+    //         .files
+    //         .iter()
+    //         .filter(|(branch_id, _)| branch_id.starts_with(&branch_id_prefix))
+    //         .peekable();
+
+    //     let (branch_id, locator) = matches.next().ok_or(Error::EntryNotFound)?;
+
+    //     if matches.peek().is_some() {
+    //         return Err(Error::AmbiguousEntry(
+    //             iter::once(branch_id)
+    //                 .chain(matches.map(|(branch_id, _)| branch_id))
+    //                 .copied()
+    //                 .collect(),
+    //         ));
+    //     }
+
+    //     Ok(EntryInfo {
+    //         name,
+    //         version: EntryVersion::File { branch_id, locator },
+    //     })
+    // }
 }
 
-impl<'a> fmt::Debug for EntryInfo<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_struct("EntryInfo")
-            .field("name", &self.name)
-            .field("type", &self.version.entry_type())
-            .finish()
-    }
-}
+// #[derive(Eq, PartialEq)]
+// pub struct EntryInfo<'a> {
+//     // index: &'a Index,
+//     name: &'a str,
+//     version: EntryVersion<'a>,
+// }
+
+// impl<'a> EntryInfo<'a> {
+//     pub fn name(&self) -> &'a str {
+//         self.name
+//     }
+
+//     pub fn entry_type(&self) -> EntryType {
+//         self.version.entry_type()
+//     }
+
+//     pub fn branch_id(&self) -> Option<&'a ReplicaId> {
+//         match &self.version {
+//             EntryVersion::File { branch_id, .. } => Some(branch_id),
+//             EntryVersion::Directory(_) => None,
+//         }
+//     }
+// }
+
+// impl<'a> fmt::Debug for EntryInfo<'a> {
+//     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+//         f.debug_struct("EntryInfo")
+//             .field("name", &self.name)
+//             .field("type", &self.version.entry_type())
+//             .finish()
+//     }
+// }
 
 #[derive(Default)]
-struct EntryVersions {
-    files: HashMap<ReplicaId, Locator>,
-    directories: Vec<Locator>,
-}
+pub struct EntryVersions<'a>(Vec<EntryInfo<'a>>);
 
-#[derive(Eq, PartialEq)]
-enum EntryVersion<'a> {
-    File {
-        branch_id: &'a ReplicaId,
-        locator: &'a Locator,
-    },
-    Directory(&'a [Locator]),
-}
-
-impl<'a> EntryVersion<'a> {
-    fn entry_type(&self) -> EntryType {
-        match self {
-            Self::File { .. } => EntryType::File,
-            Self::Directory(_) => EntryType::Directory,
-        }
+impl<'a> EntryVersions<'a> {
+    pub fn name(&self) -> &'a str {
+        self.0
+            .first()
+            .expect("EntryVersions must contain at least one entry")
+            .name()
     }
 }
+
+// #[derive(Eq, PartialEq)]
+// enum EntryVersion<'a> {
+//     File {
+//         branch_id: &'a ReplicaId,
+//         locator: &'a Locator,
+//     },
+//     Directory(&'a [Locator]),
+// }
+
+// impl<'a> EntryVersion<'a> {
+//     fn entry_type(&self) -> EntryType {
+//         match self {
+//             Self::File { .. } => EntryType::File,
+//             Self::Directory(_) => EntryType::Directory,
+//         }
+//     }
+// }
+
+/*
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{db, directory::Directory, index::BranchData};
+    use crate::{
+        crypto::Cryptor,
+        db,
+        directory::Directory,
+        index::{BranchData, Index},
+    };
     use assert_matches::assert_matches;
     use futures_util::future;
 
@@ -241,13 +233,7 @@ mod tests {
             .unwrap();
         root1.flush().await.unwrap();
 
-        let root = JointDirectory::open(
-            index,
-            Cryptor::Null,
-            vec![*root0.locator(), *root1.locator()],
-        )
-        .await
-        .unwrap();
+        let root = JointDirectory::new(vec![root0, root1]);
 
         let entries: Vec<_> = root.entries().collect();
 
@@ -294,13 +280,7 @@ mod tests {
             .unwrap();
         root1.flush().await.unwrap();
 
-        let root = JointDirectory::open(
-            index,
-            Cryptor::Null,
-            vec![*root0.locator(), *root1.locator()],
-        )
-        .await
-        .unwrap();
+        let root = JointDirectory::new(vec![root0, root1]);
 
         let entries: Vec<_> = root.entries().collect();
 
@@ -355,13 +335,7 @@ mod tests {
             .unwrap();
         root1.flush().await.unwrap();
 
-        let root = JointDirectory::open(
-            index,
-            Cryptor::Null,
-            vec![*root0.locator(), *root1.locator()],
-        )
-        .await
-        .unwrap();
+        let root = JointDirectory::new(vec![root0, root1]);
 
         let entries: Vec<_> = root.entries().collect();
 
@@ -404,13 +378,7 @@ mod tests {
         dir1.flush().await.unwrap();
         root1.flush().await.unwrap();
 
-        let root = JointDirectory::open(
-            index,
-            Cryptor::Null,
-            vec![*root0.locator(), *root1.locator()],
-        )
-        .await
-        .unwrap();
+        let root = JointDirectory::new(vec![root0, root1]);
 
         let entries: Vec<_> = root.entries().collect();
         assert_eq!(entries.len(), 1);
@@ -433,3 +401,5 @@ mod tests {
         Index::load(pool, *branches[0].replica_id()).await.unwrap()
     }
 }
+
+*/
