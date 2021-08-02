@@ -2,7 +2,7 @@ use crate::{
     directory::{Directory, EntryInfo},
     entry::EntryType,
     file::File,
-    iterator::{sorted_union, Accumulate},
+    iterator::{Accumulate, SortedUnion},
     joint_entry::JointEntry,
     replica_id::ReplicaId,
     Error, Result,
@@ -128,7 +128,7 @@ impl JointDirectory {
         });
 
         // [[(EntryInfo, ReplicaId)]] -> [(EntryInfo, ReplicaId)]
-        let entries = sorted_union::new_from_many(entries, |(entry, _)| entry.name());
+        let entries = SortedUnion::new(entries, |(entry, _)| entry.name());
 
         // [(EntryInfo, ReplicaId)] -> [Version]
         let entries = entries.map(|(info, branch)| Version { info, branch });
