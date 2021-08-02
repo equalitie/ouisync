@@ -116,7 +116,7 @@ impl Repository {
     ) -> Result<()> {
         if &file.global_locator().branch_id != self.this_replica_id() {
             // Perform copy-on-write
-            let (parent, name) = decompose_path(&path).ok_or(Error::EntryIsDirectory)?;
+            let (parent, name) = decompose_path(path).ok_or(Error::EntryIsDirectory)?;
 
             let local_branch = self.local_branch().await;
             let mut local_dirs = local_branch.ensure_directory_exists(parent).await?;

@@ -17,8 +17,8 @@ use fuser::{
     ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow,
 };
 use ouisync::{
-    joint_directory::Lookup, Directory, EntryType, Error, File, GlobalLocator, JointDirectory,
-    JointEntry, MoveDstDirectory, ReplicaId, Repository, Result,
+    joint_directory::Lookup, EntryType, Error, File, GlobalLocator, JointDirectory,
+    JointEntry, ReplicaId, Repository, Result,
 };
 use std::{
     convert::TryInto,

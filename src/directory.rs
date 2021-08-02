@@ -365,7 +365,7 @@ impl Content {
     fn insert_or_replace(&mut self, name: String, blob_id: BlobId, entry_type: EntryType) {
         self.entries
             .entry(name)
-            .or_insert(Default::default())
+            .or_insert_with(Default::default)
             .insert(
                 self.local_branch_id,
                 EntryData {

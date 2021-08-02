@@ -67,14 +67,14 @@ impl BranchData {
         encoded_locator: &LocatorHash,
     ) -> Result<Option<BlockId>> {
         let mut lock = self.shared.root_node.lock().await;
-        let mut path = self.get_path(tx, &lock.hash, &encoded_locator).await?;
+        let mut path = self.get_path(tx, &lock.hash, encoded_locator).await?;
 
         // We shouldn't be inserting a block to a branch twice. If we do, the assumption is that we
         // hit one in 2^sizeof(BlockVersion) chance that we randomly generated the same
         // BlockVersion twice.
         assert!(!path.has_leaf(block_id));
 
-        let old_block_id = path.set_leaf(&block_id);
+        let old_block_id = path.set_leaf(block_id);
         let old_root = self.write_path(tx, &mut lock, &path).await?;
         self.remove_snapshot(&old_root, tx).await?;
 
@@ -88,7 +88,7 @@ impl BranchData {
         encoded_locator: &Hash,
     ) -> Result<BlockId> {
         let root_node = self.shared.root_node.lock().await;
-        let path = self.get_path(tx, &root_node.hash, &encoded_locator).await?;
+        let path = self.get_path(tx, &root_node.hash, encoded_locator).await?;
 
         match path.get_leaf() {
             Some(block_id) => Ok(block_id),
