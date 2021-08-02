@@ -34,15 +34,15 @@ pub fn new_from_many<'a, Iter, T, Key, GetKey>(
 where
     Iter: Iterator,
     Iter::Item: Iterator<Item = T> + 'a,
-    T: Copy + 'a,
-    Key: Copy + Ord,
-    GetKey: FnMut(T) -> Key + 'a + Copy,
+    T: 'a,
+    Key: Ord,
+    GetKey: FnMut(&T) -> Key + Clone + 'a,
 {
     if let Some(first) = iter.next() {
-        let mut u: Box<dyn Iterator<Item = T> + 'a> = Box::new(first);
+        let mut u: Box<dyn Iterator<Item = T>> = Box::new(first);
 
         for n in iter {
-            u = Box::new(SortedUnion::new(u, n, get_key));
+            u = Box::new(SortedUnion::new(u, n, get_key.clone()));
         }
 
         u
@@ -53,11 +53,10 @@ where
 
 impl<L, R, T, Key, GetKey> Iterator for SortedUnion<L, R, GetKey>
 where
-    T: Copy,
     L: Iterator<Item = T>,
     R: Iterator<Item = T>,
-    GetKey: FnMut(T) -> Key,
-    Key: Ord + Copy,
+    GetKey: FnMut(&T) -> Key,
+    Key: Ord,
 {
     type Item = T;
 
@@ -65,7 +64,7 @@ where
         use core::cmp::Ordering;
 
         match (self.lhs.peek(), self.rhs.peek()) {
-            (Some(l), Some(r)) => match (self.get_key)(*l).cmp(&(self.get_key)(*r)) {
+            (Some(l), Some(r)) => match (self.get_key)(l).cmp(&(self.get_key)(r)) {
                 Ordering::Less => self.lhs.next(),
                 Ordering::Equal => self.lhs.next(),
                 Ordering::Greater => self.rhs.next(),
@@ -86,7 +85,7 @@ mod tests {
     fn test_union() {
         let l = &[(1, "l0"), (3, "l1"), (4, "l2"), (4, "l3")];
         let r = &[(1, "r0"), (2, "r1"), (2, "r2"), (3, "r3")];
-        let u = SortedUnion::new(l.iter(), r.iter(), |p: &(i32, &str)| p.0);
+        let u = SortedUnion::new(l.iter(), r.iter(), |p: &&(i32, &str)| p.0);
         assert_eq!(
             u.collect::<Vec<_>>(),
             [
@@ -109,7 +108,7 @@ mod tests {
         let v2 = &[(2, "20"), (2, "21"), (5, "22")];
         let u = new_from_many(
             IntoIter::new([v0.iter(), v1.iter(), v2.iter()]),
-            |p: &(i32, &str)| p.0,
+            |p: &&(i32, &str)| p.0,
         );
         assert_eq!(
             u.collect::<Vec<_>>(),
