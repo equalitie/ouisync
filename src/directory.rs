@@ -362,20 +362,6 @@ impl Content {
         }
     }
 
-    fn insert_or_replace(&mut self, name: String, blob_id: BlobId, entry_type: EntryType) {
-        self.entries
-            .entry(name)
-            .or_insert_with(Default::default)
-            .insert(
-                self.local_branch_id,
-                EntryData {
-                    entry_type,
-                    blob_id,
-                },
-            );
-        self.dirty = true;
-    }
-
     fn remove(&mut self, name: &str) -> Result<()> {
         self.entries.remove(name).ok_or(Error::EntryNotFound)?;
         self.dirty = true;
