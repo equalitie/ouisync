@@ -67,10 +67,16 @@ impl JointDirectory {
                 // This is the one we already inserted above.
                 continue;
             }
-            if let Ok(entry_info) = dir.lookup(name) {
-                // Ignore if it's a file
-                if let Ok(subdir) = entry_info.open_directory().await {
-                    result.versions.insert(*r_id, subdir).unwrap();
+            if let Ok(versions) = dir.lookup(name) {
+                for entry_info in versions {
+                    // Ignore if it's a file
+                    if let Ok(subdir) = entry_info.open_directory().await {
+                        // TODO: Once we have version vectors in place, ensure here that we only
+                        // replace existing versions if the new one "happened after".  NOTE: that
+                        // they won't be concurrent as one replica can't create concurrent versions
+                        // of the same directory (where that replica is the author).
+                        result.versions.insert(*r_id, subdir).unwrap();
+                    }
                 }
             }
         }
@@ -206,7 +212,7 @@ impl JointDirectory {
                 }
 
                 let first = joint_entry.versions[0];
-                return Ok(Lookup::File(first.info, &first.branch));
+                return Ok(Lookup::File(first.info, first.branch));
             }
         }
 
@@ -218,10 +224,10 @@ impl JointDirectory {
                     let opt_version = joint_entry
                         .versions
                         .into_iter()
-                        .find(|v| v.is_file() && v.matches(&target_base, &target_label));
+                        .find(|v| v.is_file() && v.matches(target_base, target_label));
 
                     if let Some(version) = opt_version {
-                        return Ok(Lookup::File(version.info, &version.branch));
+                        return Ok(Lookup::File(version.info, version.branch));
                     } else {
                         // Early exit
                         return Err(Error::EntryNotFound);
@@ -379,7 +385,7 @@ impl<'a> Iterator for DirectoryVersions<'a> {
     type Item = Version<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        while let Some(v) = self.mix.next() {
+        for v in &mut self.mix {
             if v.info.entry_type() == EntryType::Directory {
                 return Some(*v);
             }
