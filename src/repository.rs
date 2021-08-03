@@ -84,26 +84,22 @@ impl Repository {
     /// Removes (delete) the file at the given path. Returns the parent directory.
     pub async fn remove_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<JointDirectory> {
         let (parent, name) = decompose_path(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
-        let dir = self.open_directory(parent).await?;
-
-        todo!();
-        // dir.remove_file(self.this_replica_id(), name).await?;
-        // Ok(dir)
+        let mut dir = self.open_directory(parent).await?;
+        dir.remove_file(self.this_replica_id(), name).await?;
+        Ok(dir)
     }
 
     /// Removes the directory at the given path. The directory must be empty. Returns the parent
     /// directory.
     pub async fn remove_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<JointDirectory> {
         let (parent, name) = decompose_path(path.as_ref()).ok_or(Error::OperationNotSupported)?;
-        let parent = self.open_directory(parent).await?;
+        let mut parent = self.open_directory(parent).await?;
         // TODO: Currently only removing directories from the local branch is supported. To
         // implement removing a directory from another branches we need to introduce tombstones.
-
-        todo!()
-        // parent
-        //     .remove_directory(self.this_replica_id(), name)
-        //     .await?;
-        // Ok(parent)
+        parent
+            .remove_directory(self.this_replica_id(), name)
+            .await?;
+        Ok(parent)
     }
 
     /// Write to a file. If the file is on local branch, it writes to it directly. If it's on a

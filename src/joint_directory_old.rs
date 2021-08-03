@@ -1,5 +1,5 @@
-use crate::{directory::Directory, file::File, replica_id::ReplicaId, Error, Result};
-use std::{collections::btree_map::Values, collections::BTreeMap};
+use crate::{directory::Directory, replica_id::ReplicaId, Error, Result};
+use std::collections::BTreeMap;
 
 #[derive(Clone)]
 pub struct JointDirectory {
@@ -9,18 +9,6 @@ pub struct JointDirectory {
 impl JointDirectory {
     pub fn new() -> Self {
         todo!()
-    }
-
-    pub fn get(&self, replica_id: &ReplicaId) -> Option<&Directory> {
-        self.versions.get(replica_id)
-    }
-
-    pub fn get_mut(&mut self, replica_id: &ReplicaId) -> Option<&mut Directory> {
-        self.versions.get_mut(replica_id)
-    }
-
-    pub fn values(&self) -> Values<'_, ReplicaId, Directory> {
-        self.versions.values()
     }
 
     pub async fn create_directory(
@@ -58,42 +46,5 @@ impl JointDirectory {
         }
 
         Ok(result)
-    }
-
-    pub fn create_file(&mut self, branch: &ReplicaId, name: String) -> Result<File> {
-        self.versions
-            .get_mut(branch)
-            .ok_or(Error::OperationNotSupported)?
-            .create_file(name)
-    }
-
-    pub async fn remove_file(&mut self, branch: &ReplicaId, name: &str) -> Result<()> {
-        self.versions
-            .get_mut(branch)
-            .ok_or(Error::OperationNotSupported)?
-            .remove_file(name)
-            .await
-    }
-
-    pub async fn remove_directory(&mut self, branch: &ReplicaId, name: &str) -> Result<()> {
-        self.versions
-            .get_mut(branch)
-            .ok_or(Error::OperationNotSupported)?
-            .remove_directory(name)
-            .await
-    }
-
-    pub async fn flush(&mut self) -> Result<()> {
-        for dir in self.versions.values_mut() {
-            // TODO: Continue with the rest if any fails?
-            dir.flush().await?;
-        }
-        Ok(())
-    }
-}
-
-impl Default for JointDirectory {
-    fn default() -> Self {
-        Self::new()
     }
 }

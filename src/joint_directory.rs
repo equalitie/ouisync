@@ -1,5 +1,3 @@
-//! Overhaul of `JoinDirectory` with improved API and functionality. Will eventually replace it.
-
 use crate::{
     directory::{Directory, DirectoryRef, EntryRef, FileRef},
     entry::EntryType,
@@ -12,6 +10,7 @@ use camino::{Utf8Component, Utf8Path};
 use futures_util::future;
 use std::{collections::BTreeMap, fmt, mem};
 
+/// Unified view over all concurrent versions of a directory.
 pub struct JointDirectory {
     versions: BTreeMap<ReplicaId, Directory>,
 }
@@ -40,60 +39,63 @@ impl JointDirectory {
         entries.flat_map(|(_, entries)| Merge::new(entries.into_iter()))
     }
 
-    /// Looks up entry with the specified name and returns all concurrent versions of the entry.
+    /// Returns all versions of an entry with the given name. Concurrent file versions are returned
+    /// separately but concurrent directory versions are merged into a single `JointDirectory`.
     pub fn lookup<'a>(&'a self, name: &'a str) -> impl Iterator<Item = JointEntryRef<'a>> {
-        let exact = Merge::new(
+        Merge::new(
             self.versions
                 .values()
                 .flat_map(move |dir| dir.lookup(name).ok().into_iter().flatten()),
-        );
-
-        let (name, branch_id_prefix) = versioned_file_name::parse(name);
-        let versioned = branch_id_prefix
-            .map(|branch_id_prefix| {
-                self.versions
-                    .values()
-                    .flat_map(move |dir| dir.lookup(name).ok().into_iter().flatten())
-                    .filter_map(|entry| entry.file().ok())
-                    .filter(move |file| file.branch_id().starts_with(&branch_id_prefix))
-                    .map(JointEntryRef::File)
-            })
-            .into_iter()
-            .flatten();
-
-        exact.chain(versioned)
+        )
     }
 
-    /// Looks up entry with the specified name.
-    /// - If there is only one version of the entry and it is a file, returns it as
-    ///   `JointEntryRef::File`.
-    /// - If there are multiple versions, but all are directories, returns them in a single
-    ///   `JointEntryRef::Directory`.
-    /// - If there are mutliple file versions or at least one directory and one file version,
-    ///   returns `AmbiguousEntry` error.
-    /// - If there are no versions, returns `EntryNotFound`.
+    /// Looks up single entry with the specified name if it is unique.
+    ///
+    /// - If there is only one version of a entry with the specified name, it is returned.
+    /// - If there are multiple versions and all of them are files, an `AmbiguousEntry` error is
+    ///   returned. To lookup a single version, include a disambiguator in the `name`.
+    /// - If there are multiple versiond and all of them are directories, they are merged into a
+    ///   single `JointEntryRef::Directory` and returned.
+    /// - Finally, if there are both files and directories, only the directories are retured (merged
+    ///   into a `JointEntryRef::Directory`) and the files are discarded. This is so it's possible
+    ///   to unambiguously lookup a directory even in the presence of conflicting files.
     pub fn lookup_unique<'a>(&'a self, name: &'a str) -> Result<JointEntryRef<'a>> {
-        let mut entries = self.lookup(name);
+        // First try exact match as it is more common.
+        let mut last_file = None;
+
+        for entry in self.lookup(name) {
+            match entry {
+                JointEntryRef::Directory(_) => return Ok(entry),
+                JointEntryRef::File(_) if last_file.is_none() => {
+                    last_file = Some(entry);
+                }
+                JointEntryRef::File(_) => return Err(Error::AmbiguousEntry),
+            }
+        }
+
+        if let Some(entry) = last_file {
+            return Ok(entry);
+        }
+
+        // If not found, extract the disambiguator and try to lookup an entry whose branch id
+        // matches it.
+        let (name, branch_id_prefix) = versioned_file_name::parse(name);
+        let branch_id_prefix = branch_id_prefix.ok_or(Error::EntryNotFound)?;
+
+        let mut entries = self
+            .versions
+            .values()
+            .flat_map(|dir| dir.lookup(name).ok().into_iter().flatten())
+            .filter_map(|entry| entry.file().ok())
+            .filter(|entry| entry.branch_id().starts_with(&branch_id_prefix));
+
         let first = entries.next().ok_or(Error::EntryNotFound)?;
 
         if entries.next().is_none() {
-            Ok(first)
+            Ok(JointEntryRef::File(first))
         } else {
             Err(Error::AmbiguousEntry)
         }
-    }
-
-    /// Looks up a subdirectory with the specified name. Useful in case of a conflict between
-    /// a file and a directory with the same names.
-    pub fn lookup_directory(&self, name: &'_ str) -> Result<JointDirectoryRef> {
-        JointDirectoryRef::new(
-            self.versions
-                .values()
-                .flat_map(|dir| dir.lookup(name).ok().into_iter().flatten())
-                .filter_map(|entry| entry.directory().ok())
-                .collect(),
-        )
-        .ok_or(Error::EntryNotFound)
     }
 
     /// Descends into an arbitrarily nested subdirectory of this directory at the specified path.
@@ -107,7 +109,13 @@ impl JointDirectory {
             match component {
                 Utf8Component::RootDir | Utf8Component::CurDir => (),
                 Utf8Component::Normal(name) => {
-                    curr = curr.lookup_directory(name)?.open().await?;
+                    let next = curr
+                        .lookup(name)
+                        .find_map(|entry| entry.directory().ok())
+                        .ok_or(Error::EntryNotFound)?
+                        .open()
+                        .await?;
+                    curr = next;
                 }
                 Utf8Component::ParentDir | Utf8Component::Prefix(_) => {
                     return Err(Error::OperationNotSupported)
@@ -120,8 +128,30 @@ impl JointDirectory {
 
     /// Length of the directory in bytes. If there are multiple versions, returns the sum of their
     /// lengths.
+    #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> u64 {
         self.versions.values().map(|dir| dir.len()).sum()
+    }
+
+    pub async fn remove_file(&mut self, branch: &ReplicaId, name: &str) -> Result<()> {
+        self.versions
+            .get_mut(branch)
+            .ok_or(Error::EntryNotFound)?
+            .remove_file(name)
+            .await
+    }
+
+    pub async fn remove_directory(&mut self, branch: &ReplicaId, name: &str) -> Result<()> {
+        self.versions
+            .get_mut(branch)
+            .ok_or(Error::EntryNotFound)?
+            .remove_directory(name)
+            .await
+    }
+
+    pub async fn flush(&mut self) -> Result<()> {
+        future::try_join_all(self.versions.values_mut().map(|dir| dir.flush())).await?;
+        Ok(())
     }
 }
 

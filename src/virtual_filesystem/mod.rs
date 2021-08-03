@@ -613,12 +613,11 @@ impl Inner {
         log::debug!("rmdir {}", self.inodes.path_display(parent, Some(name)));
 
         let parent_path = self.inodes.get(parent).calculate_directory_path()?;
-        todo!()
-        // self.repository
-        //     .remove_directory(parent_path.join(name))
-        //     .await?
-        //     .flush()
-        //     .await
+        self.repository
+            .remove_directory(parent_path.join(name))
+            .await?
+            .flush()
+            .await
     }
 
     async fn fsyncdir(&mut self, inode: Inode, handle: FileHandle, datasync: bool) -> Result<()> {
@@ -631,9 +630,7 @@ impl Inner {
 
         // TODO: what about `datasync`?
 
-        let dirs = self.entries.get_directory_mut(handle)?;
-        todo!();
-        // dirs.flush().await
+        self.entries.get_directory_mut(handle)?.flush().await
     }
 
     async fn create(
@@ -811,9 +808,8 @@ impl Inner {
         log::debug!("unlink {}", self.inodes.path_display(parent, Some(name)));
 
         let mut parent_dir = self.open_directory_by_inode(parent).await?;
-        todo!()
-        // parent_dir.remove_file(self.this_replica_id(), name).await?;
-        // parent_dir.flush().await
+        parent_dir.remove_file(self.this_replica_id(), name).await?;
+        parent_dir.flush().await
     }
 
     async fn rename(
