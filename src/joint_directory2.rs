@@ -7,14 +7,10 @@ use crate::{
     entry::EntryType,
     error::{Error, Result},
     iterator::{Accumulate, DrainFilter, SortedUnion},
-    locator::Locator,
     replica_id::ReplicaId,
     versioned_file_name,
 };
-use std::{
-    collections::{BTreeMap, HashMap},
-    fmt, iter,
-};
+use std::collections::BTreeMap;
 
 pub struct JointDirectory {
     versions: BTreeMap<ReplicaId, Directory>,
@@ -171,8 +167,6 @@ fn merge(mut entries: Vec<EntryRef>) -> impl Iterator<Item = JointEntryRef> {
     directories.into_iter().chain(files)
 }
 
-/*
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,6 +175,7 @@ mod tests {
         db,
         directory::Directory,
         index::{BranchData, Index},
+        locator::Locator,
     };
     use assert_matches::assert_matches;
     use futures_util::future;
@@ -228,10 +223,11 @@ mod tests {
         assert_eq!(entries[1].name(), "file1.txt");
         assert_eq!(entries[1].entry_type(), EntryType::File);
 
-        assert_eq!(root.lookup("file0.txt").unwrap(), entries[0]);
-        assert_eq!(root.lookup("file1.txt").unwrap(), entries[1]);
+        // assert_eq!(root.lookup("file0.txt").unwrap(), entries[0]);
+        // assert_eq!(root.lookup("file1.txt").unwrap(), entries[1]);
     }
 
+    /*
     #[tokio::test(flavor = "multi_thread")]
     async fn conflict_independent_files() {
         let index = setup(2).await;
@@ -372,6 +368,7 @@ mod tests {
 
         // TODO: verify locators
     }
+    */
 
     // TODO: test conflict_forked_directories
     // TODO: test conflict_file_and_directory
@@ -386,5 +383,3 @@ mod tests {
         Index::load(pool, *branches[0].replica_id()).await.unwrap()
     }
 }
-
-*/
