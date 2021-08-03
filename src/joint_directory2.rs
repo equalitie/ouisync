@@ -1,7 +1,5 @@
 //! Overhaul of `JoinDirectory` with improved API and functionality. Will eventually replace it.
 
-use futures_util::future;
-
 use crate::{
     directory::{Directory, DirectoryRef, EntryRef, FileRef},
     entry::EntryType,
@@ -10,6 +8,8 @@ use crate::{
     replica_id::ReplicaId,
     versioned_file_name,
 };
+use camino::{Utf8Component, Utf8Path};
+use futures_util::future;
 use std::{collections::BTreeMap, fmt, mem};
 
 pub struct JointDirectory {
@@ -40,6 +40,7 @@ impl JointDirectory {
         entries.flat_map(|(_, entries)| Merge::new(entries.into_iter()))
     }
 
+    /// Looks up entry with the specified name and returnins all concurrent versions of the entry.
     pub fn lookup<'a>(&'a self, name: &'a str) -> impl Iterator<Item = JointEntryRef<'a>> {
         let exact = Merge::new(
             self.versions
@@ -61,6 +62,41 @@ impl JointDirectory {
             .flatten();
 
         exact.chain(versioned)
+    }
+
+    /// Looks up a subdirectory with the specified name. Useful in case of a conflict between
+    /// a file and a directory with the same names.
+    pub fn lookup_directory(&self, name: &'_ str) -> Result<JointDirectoryRef> {
+        JointDirectoryRef::new(
+            self.versions
+                .values()
+                .flat_map(|dir| dir.lookup(name).ok().into_iter().flatten())
+                .filter_map(|entry| entry.directory().ok())
+                .collect(),
+        )
+        .ok_or(Error::EntryNotFound)
+    }
+
+    /// Descends into an arbitrarily nested subdirectory of this directory at the specified path.
+    /// Note: non-normalized paths (i.e. containing "..") or Windows-style drive prefixes
+    /// (e.g. "C:") are not supported.
+    // TODO: as this consumes `self`, we should return `self` back in case of an error.
+    pub async fn cd(self, path: impl AsRef<Utf8Path>) -> Result<Self> {
+        let mut curr = self;
+
+        for component in path.as_ref().components() {
+            match component {
+                Utf8Component::RootDir | Utf8Component::CurDir => (),
+                Utf8Component::Normal(name) => {
+                    curr = curr.lookup_directory(name)?.open().await?;
+                }
+                Utf8Component::ParentDir | Utf8Component::Prefix(_) => {
+                    return Err(Error::OperationNotSupported)
+                }
+            }
+        }
+
+        Ok(curr)
     }
 }
 
@@ -104,6 +140,14 @@ impl<'a> JointEntryRef<'a> {
 pub struct JointDirectoryRef<'a>(Vec<DirectoryRef<'a>>);
 
 impl<'a> JointDirectoryRef<'a> {
+    fn new(versions: Vec<DirectoryRef<'a>>) -> Option<Self> {
+        if versions.is_empty() {
+            None
+        } else {
+            Some(Self(versions))
+        }
+    }
+
     pub fn name(&self) -> &'a str {
         self.0
             .first()
@@ -160,13 +204,7 @@ where
             }
         }
 
-        if self.directories.is_empty() {
-            None
-        } else {
-            Some(JointEntryRef::Directory(JointDirectoryRef(mem::take(
-                &mut self.directories,
-            ))))
-        }
+        JointDirectoryRef::new(mem::take(&mut self.directories)).map(JointEntryRef::Directory)
     }
 }
 
@@ -378,8 +416,6 @@ mod tests {
         assert_eq!(directories[0].name(), "dir");
     }
 
-    // TODO: test conflict_forked_directories
-
     #[tokio::test(flavor = "multi_thread")]
     async fn conflict_file_and_directory() {
         let index = setup(2).await;
@@ -436,7 +472,51 @@ mod tests {
         );
     }
 
+    // TODO: test conflict_forked_directories
     // TODO: test conflict_multiple_files_and_directories
+    // TODO: test conflict_file_with_name_containing_branch_prefix
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cd_into_concurrent_directory() {
+        let index = setup(2).await;
+        let branches = index.branches().await;
+
+        let mut root0 = Directory::create(
+            index.pool.clone(),
+            branches[0].clone(),
+            Cryptor::Null,
+            Locator::Root,
+        );
+
+        let mut dir0 = root0.create_directory("pics".to_owned()).unwrap();
+        let mut file0 = dir0.create_file("dog.jpg".to_owned()).unwrap();
+
+        file0.flush().await.unwrap();
+        dir0.flush().await.unwrap();
+        root0.flush().await.unwrap();
+
+        let mut root1 = Directory::create(
+            index.pool.clone(),
+            branches[1].clone(),
+            Cryptor::Null,
+            Locator::Root,
+        );
+
+        let mut dir1 = root1.create_directory("pics".to_owned()).unwrap();
+        let mut file1 = dir1.create_file("cat.jpg".to_owned()).unwrap();
+
+        file1.flush().await.unwrap();
+        dir1.flush().await.unwrap();
+        root1.flush().await.unwrap();
+
+        let root = JointDirectory::new(vec![root0, root1]);
+        let dir = root.cd("pics").await.unwrap();
+
+        let entries: Vec<_> = dir.entries().collect();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].name(), "cat.jpg");
+        assert_eq!(entries[1].name(), "dog.jpg");
+    }
 
     async fn setup(branch_count: usize) -> Index {
         let pool = db::init(db::Store::Memory).await.unwrap();
