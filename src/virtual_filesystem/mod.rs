@@ -17,8 +17,8 @@ use fuser::{
     ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow,
 };
 use ouisync::{
-    joint_directory::Lookup, EntryType, Error, File, GlobalLocator, JointDirectory, JointEntry,
-    ReplicaId, Repository, Result,
+    EntryType, Error, File, GlobalLocator, JointDirectory, JointEntry, ReplicaId, Repository,
+    Result,
 };
 use std::{
     convert::TryInto,
@@ -375,20 +375,23 @@ impl Inner {
 
         let parent_path = &self.inodes.get(parent).calculate_directory_path()?;
         let parent_dir = self.repository.open_directory(parent_path).await?;
-        let lookup = parent_dir.lookup(name)?;
-        let entry = lookup.open().await?;
 
-        let repr = match lookup {
-            Lookup::File(entry_info, branch_id) => Representation::File(GlobalLocator {
-                branch_id: *branch_id,
-                local: entry_info.locator(),
-            }),
-            Lookup::Directory(_) => Representation::Directory,
-        };
+        todo!()
 
-        let inode = self.inodes.lookup(parent, name, repr);
+        // let lookup = parent_dir.lookup(name)?;
+        // let entry = lookup.open().await?;
 
-        Ok(make_file_attr_for_entry(&entry, inode))
+        // let repr = match lookup {
+        //     Lookup::File(entry_info, branch_id) => Representation::File(GlobalLocator {
+        //         branch_id: *branch_id,
+        //         local: entry_info.locator(),
+        //     }),
+        //     Lookup::Directory(_) => Representation::Directory,
+        // };
+
+        // let inode = self.inodes.lookup(parent, name, repr);
+
+        // Ok(make_file_attr_for_entry(&entry, inode))
     }
 
     async fn getattr(&mut self, inode: Inode) -> Result<FileAttr> {
@@ -536,7 +539,7 @@ impl Inner {
         // Index of the first "real" entry (excluding . and ..)
         let first = if parent == 0 { 1 } else { 2 };
 
-        for (index, (entry_name, entry_type)) in dir
+        for (index, entry) in dir
             .entries()
             .enumerate()
             .skip((offset as usize).saturating_sub(first))
@@ -556,8 +559,8 @@ impl Inner {
             if reply.add(
                 u64::MAX, // invalid inode, see above.
                 (index + first + 1) as i64,
-                to_file_type(entry_type),
-                entry_name,
+                to_file_type(entry.entry_type()),
+                entry.name(), // TODO: use the disambiguated name here
             ) {
                 break;
             }
@@ -586,6 +589,8 @@ impl Inner {
         let mut parent_dir = self.repository.open_directory(&parent_path).await?;
 
         // TODO: Ensure parent_dir[this_replica_id] exists.
+        todo!();
+        /*
         let mut dir = parent_dir
             .create_directory(self.this_replica_id(), name)
             .await?;
@@ -595,10 +600,10 @@ impl Inner {
         parent_dir.flush().await?;
 
         let inode = self.inodes.lookup(parent, name, Representation::Directory);
-
         let entry = JointEntry::Directory(dir);
 
         Ok(make_file_attr_for_entry(&entry, inode))
+        */
     }
 
     async fn rmdir(&mut self, parent: Inode, name: &OsStr) -> Result<()> {
@@ -607,11 +612,12 @@ impl Inner {
         log::debug!("rmdir {}", self.inodes.path_display(parent, Some(name)));
 
         let parent_path = self.inodes.get(parent).calculate_directory_path()?;
-        self.repository
-            .remove_directory(parent_path.join(name))
-            .await?
-            .flush()
-            .await
+        todo!()
+        // self.repository
+        //     .remove_directory(parent_path.join(name))
+        //     .await?
+        //     .flush()
+        //     .await
     }
 
     async fn fsyncdir(&mut self, inode: Inode, handle: FileHandle, datasync: bool) -> Result<()> {
@@ -625,7 +631,8 @@ impl Inner {
         // TODO: what about `datasync`?
 
         let dirs = self.entries.get_directory_mut(handle)?;
-        dirs.flush().await
+        todo!();
+        // dirs.flush().await
     }
 
     async fn create(
@@ -803,8 +810,9 @@ impl Inner {
         log::debug!("unlink {}", self.inodes.path_display(parent, Some(name)));
 
         let mut parent_dir = self.open_directory_by_inode(parent).await?;
-        parent_dir.remove_file(self.this_replica_id(), name).await?;
-        parent_dir.flush().await
+        todo!()
+        // parent_dir.remove_file(self.this_replica_id(), name).await?;
+        // parent_dir.flush().await
     }
 
     async fn rename(

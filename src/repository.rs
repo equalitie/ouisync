@@ -36,28 +36,30 @@ impl Repository {
     /// If the entry exists, returns its `GlobalLocator` and `EntryType`, otherwise returns
     /// `EntryNotFound`.
     pub async fn lookup_type<P: AsRef<Utf8Path>>(&self, path: P) -> Result<EntryType> {
-        match decompose_path(path.as_ref()) {
-            Some((parent, name)) => {
-                let parent = self.open_directory(parent).await?;
-                Ok(parent.lookup(name)?.entry_type())
-            }
-            None => Ok(EntryType::Directory),
-        }
+        todo!()
+        // match decompose_path(path.as_ref()) {
+        //     Some((parent, name)) => {
+        //         let parent = self.open_directory(parent).await?;
+        //         Ok(parent.lookup(name)?.entry_type())
+        //     }
+        //     None => Ok(EntryType::Directory),
+        // }
     }
 
     /// Opens a file at the given path (relative to the repository root)
     pub async fn open_file<P: AsRef<Utf8Path>>(&self, path: &P) -> Result<File> {
-        let (parent, name) = decompose_path(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
-        self.open_directory(parent)
-            .await?
-            .lookup(name)?
-            .open_file()
-            .await
+        todo!()
+        // let (parent, name) = decompose_path(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
+        // self.open_directory(parent)
+        //     .await?
+        //     .lookup(name)?
+        //     .open_file()
+        //     .await
     }
 
     /// Opens a directory at the given path (relative to the repository root)
     pub async fn open_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<JointDirectory> {
-        self.joint_root().await.cd_into_path(path.as_ref()).await
+        self.joint_root().await?.cd(path).await
     }
 
     /// Creates a new file at the given path. Returns the new file and its directory ancestors.
@@ -84,22 +86,26 @@ impl Repository {
     /// Removes (delete) the file at the given path. Returns the parent directory.
     pub async fn remove_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<JointDirectory> {
         let (parent, name) = decompose_path(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
-        let mut dir = self.open_directory(parent).await?;
-        dir.remove_file(self.this_replica_id(), name).await?;
-        Ok(dir)
+        let dir = self.open_directory(parent).await?;
+
+        todo!();
+        // dir.remove_file(self.this_replica_id(), name).await?;
+        // Ok(dir)
     }
 
     /// Removes the directory at the given path. The directory must be empty. Returns the parent
     /// directory.
     pub async fn remove_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<JointDirectory> {
         let (parent, name) = decompose_path(path.as_ref()).ok_or(Error::OperationNotSupported)?;
-        let mut parent = self.open_directory(parent).await?;
+        let parent = self.open_directory(parent).await?;
         // TODO: Currently only removing directories from the local branch is supported. To
         // implement removing a directory from another branches we need to introduce tombstones.
-        parent
-            .remove_directory(self.this_replica_id(), name)
-            .await?;
-        Ok(parent)
+
+        todo!()
+        // parent
+        //     .remove_directory(self.this_replica_id(), name)
+        //     .await?;
+        // Ok(parent)
     }
 
     /// Write to a file. If the file is on local branch, it writes to it directly. If it's on a
@@ -198,23 +204,27 @@ impl Repository {
     }
 
     // Opens the root directory across all branches as JointDirectory.
-    async fn joint_root(&self) -> JointDirectory {
-        let mut root = JointDirectory::new();
+    async fn joint_root(&self) -> Result<JointDirectory> {
+        let mut dirs = Vec::new();
 
-        for branch_id in self.branches().await.into_iter() {
+        for branch_id in self.branches().await {
             let locator = GlobalLocator {
                 branch_id,
                 local: Locator::Root,
             };
-            if let Ok(dir) = self.open_directory_by_locator(locator).await {
-                root.insert(dir);
-            } else {
-                // Some branch roots may not have been loaded across the network yet. We'll ignore
-                // those.
+
+            match self.open_directory_by_locator(locator).await {
+                Ok(dir) => dirs.push(dir),
+                Err(Error::EntryNotFound) => {
+                    // Some branch roots may not have been loaded across the network yet. We'll
+                    // ignore those.
+                    continue;
+                }
+                Err(error) => return Err(error),
             }
         }
 
-        root
+        Ok(JointDirectory::new(dirs))
     }
 }
 
