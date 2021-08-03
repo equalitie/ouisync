@@ -1,5 +1,7 @@
 //! Overhaul of `JoinDirectory` with improved API and functionality. Will eventually replace it.
 
+use futures_util::future;
+
 use crate::{
     directory::{Directory, DirectoryRef, EntryRef, FileRef},
     entry::EntryType,
@@ -32,18 +34,14 @@ impl JointDirectory {
     }
 
     /// Returns iterator over the entries of this directory. Multiple concurrent versions of the
-    /// same entry are returned in a single `JoinEntryRef`. To obtain each version as a separate
-    /// entry, use [`JointEntryRef::split`]:
-    ///
-    /// ```ignore
-    /// dir.entries().flat_map(|entry| entry.split())
-    /// ```
+    /// same file are returned as separate `JointEntryRef::File` entries. Multiple concurrent
+    /// versions of the same directory are returned as a single `JointEntryRef::Directory` entry.
     pub fn entries(&self) -> impl Iterator<Item = JointEntryRef> {
         let entries = self.versions.values().map(|directory| directory.entries());
         let entries = SortedUnion::new(entries, |entry| entry.name());
         let entries = Accumulate::new(entries, |entry| entry.name());
 
-        entries.map(|(_, entries)| JointEntryRef(entries))
+        entries.flat_map(|(_, entries)| merge(entries))
     }
 
     // pub fn lookup(&self, name: &'_ str) -> Result<EntryInfo> {
@@ -104,43 +102,19 @@ impl JointDirectory {
     // }
 }
 
-#[derive(Default)]
-pub struct JointEntryRef<'a>(Vec<EntryRef<'a>>);
-
-impl<'a> JointEntryRef<'a> {
-    pub fn name(&self) -> &'a str {
-        self.0
-            .first()
-            .expect("EntryVersions must contain at least one entry")
-            .name()
-    }
-
-    pub fn split(mut self) -> impl Iterator<Item = UniqueEntryRef<'a>> {
-        let directories: Vec<_> = DrainFilter::new(&mut self.0, |entry| entry.is_directory())
-            .map(|entry| entry.directory().unwrap())
-            .collect();
-        let directories = if directories.is_empty() {
-            None
-        } else {
-            Some(UniqueEntryRef::Directory(JointDirectoryRef(directories)))
-        };
-
-        let files = self
-            .0
-            .into_iter()
-            .filter_map(|entry| entry.file().ok())
-            .map(UniqueEntryRef::File);
-
-        directories.into_iter().chain(files)
-    }
-}
-
-pub enum UniqueEntryRef<'a> {
+pub enum JointEntryRef<'a> {
     File(FileRef<'a>),
     Directory(JointDirectoryRef<'a>),
 }
 
-impl<'a> UniqueEntryRef<'a> {
+impl<'a> JointEntryRef<'a> {
+    pub fn name(&self) -> &'a str {
+        match self {
+            Self::File(r) => r.name(),
+            Self::Directory(r) => r.name(),
+        }
+    }
+
     pub fn entry_type(&self) -> EntryType {
         match self {
             Self::File { .. } => EntryType::File,
@@ -164,6 +138,38 @@ impl<'a> UniqueEntryRef<'a> {
 }
 
 pub struct JointDirectoryRef<'a>(Vec<DirectoryRef<'a>>);
+
+impl<'a> JointDirectoryRef<'a> {
+    pub fn name(&self) -> &'a str {
+        self.0
+            .first()
+            .expect("joint directory must contain at least one directory")
+            .name()
+    }
+
+    pub async fn open(&self) -> Result<JointDirectory> {
+        let directories = future::try_join_all(self.0.iter().map(|dir| dir.open())).await?;
+        Ok(JointDirectory::new(directories))
+    }
+}
+
+fn merge(mut entries: Vec<EntryRef>) -> impl Iterator<Item = JointEntryRef> {
+    let directories: Vec<_> = DrainFilter::new(&mut entries, |entry| entry.is_directory())
+        .map(|entry| entry.directory().unwrap())
+        .collect();
+    let directories = if directories.is_empty() {
+        None
+    } else {
+        Some(JointEntryRef::Directory(JointDirectoryRef(directories)))
+    };
+
+    let files = entries
+        .into_iter()
+        .filter_map(|entry| entry.file().ok())
+        .map(JointEntryRef::File);
+
+    directories.into_iter().chain(files)
+}
 
 /*
 
