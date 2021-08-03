@@ -329,8 +329,6 @@ mod tests {
         }
     }
 
-    /*
-
     #[tokio::test(flavor = "multi_thread")]
     async fn conflict_directories() {
         let index = setup(2).await;
@@ -360,14 +358,13 @@ mod tests {
 
         let root = JointDirectory::new(vec![root0, root1]);
 
-        let entries: Vec<_> = root.entries().collect();
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].name(), "dir");
-        assert_eq!(entries[0].entry_type(), EntryType::Directory);
-
-        // TODO: verify locators
+        let directories: Vec<_> = root
+            .entries()
+            .map(|entry| entry.directory().unwrap())
+            .collect();
+        assert_eq!(directories.len(), 1);
+        assert_eq!(directories[0].name(), "dir");
     }
-    */
 
     // TODO: test conflict_forked_directories
     // TODO: test conflict_file_and_directory
