@@ -1,7 +1,7 @@
 //! Overhaul of `JoinDirectory` with improved API and functionality. Will eventually replace it.
 
 use crate::{
-    directory::{Directory, EntryInfo},
+    directory::{Directory, EntryRef},
     entry::EntryType,
     error::{Error, Result},
     iterator::{Accumulate, SortedUnion},
@@ -157,7 +157,7 @@ impl JointDirectory {
 // }
 
 #[derive(Default)]
-pub struct EntryVersions<'a>(Vec<EntryInfo<'a>>);
+pub struct EntryVersions<'a>(Vec<EntryRef<'a>>);
 
 impl<'a> EntryVersions<'a> {
     pub fn name(&self) -> &'a str {

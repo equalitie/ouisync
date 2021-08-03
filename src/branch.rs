@@ -94,7 +94,7 @@ impl Branch {
                     let last = dirs.last_mut().unwrap();
 
                     let next = if let Ok(entry) = last.lookup_version(name, self.id()) {
-                        entry.as_directory()?.open().await?
+                        entry.directory()?.open().await?
                     } else {
                         last.create_directory(name.to_string())?
                     };

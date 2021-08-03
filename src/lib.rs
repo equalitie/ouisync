@@ -36,7 +36,7 @@ mod version_vector;
 
 pub use self::{
     crypto::Cryptor,
-    directory::{Directory, EntryInfo, MoveDstDirectory},
+    directory::{Directory, EntryRef, MoveDstDirectory},
     entry::{Entry, EntryType},
     error::{Error, Result},
     file::File,

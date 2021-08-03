@@ -1,5 +1,5 @@
 use crate::{
-    directory::{Directory, EntryInfo},
+    directory::{Directory, EntryRef},
     entry::EntryType,
     file::File,
     iterator::{Accumulate, SortedUnion},
@@ -70,7 +70,7 @@ impl JointDirectory {
             if let Ok(versions) = dir.lookup(name) {
                 for entry_info in versions {
                     // Ignore if it's a file
-                    if let Ok(subdir) = entry_info.as_directory()?.open().await {
+                    if let Ok(subdir) = entry_info.directory()?.open().await {
                         // TODO: Once we have version vectors in place, ensure here that we only
                         // replace existing versions if the new one "happened after".  NOTE: that
                         // they won't be concurrent as one replica can't create concurrent versions
@@ -145,7 +145,7 @@ impl JointDirectory {
         let mut count = 0;
 
         for Version { info, branch } in self.lookup(directory)?.directories()? {
-            match info.as_directory().unwrap().open().await {
+            match info.directory().unwrap().open().await {
                 Ok(dir) => {
                     retval.insert(dir);
                     count += 1;
@@ -266,7 +266,7 @@ impl Default for JointDirectory {
 
 #[derive(Copy, Clone)]
 pub struct Version<'a> {
-    info: EntryInfo<'a>,
+    info: EntryRef<'a>,
     branch: &'a ReplicaId,
 }
 
@@ -322,7 +322,7 @@ impl<'a> Version<'a> {
 
 pub enum Lookup<'a> {
     Directory(JointEntryView<'a>),
-    File(EntryInfo<'a>, &'a ReplicaId),
+    File(EntryRef<'a>, &'a ReplicaId),
 }
 
 impl<'a> Lookup<'a> {
@@ -332,7 +332,7 @@ impl<'a> Lookup<'a> {
                 let mut joint_dir = JointDirectory::new();
 
                 for Version { info, branch } in versions.directories() {
-                    match info.as_directory().unwrap().open().await {
+                    match info.directory().unwrap().open().await {
                         Ok(dir) => {
                             joint_dir.insert(dir);
                         }
@@ -349,15 +349,15 @@ impl<'a> Lookup<'a> {
 
                 Ok(JointEntry::Directory(joint_dir))
             }
-            Self::File(entry_info, _replica_id) => Ok(JointEntry::File(
-                entry_info.as_file().unwrap().open().await?,
-            )),
+            Self::File(entry_info, _replica_id) => {
+                Ok(JointEntry::File(entry_info.file().unwrap().open().await?))
+            }
         }
     }
 
     pub async fn open_file(&self) -> Result<File> {
         match self {
-            Self::File(entry_info, _replica_id) => Ok(entry_info.as_file().unwrap().open().await?),
+            Self::File(entry_info, _replica_id) => Ok(entry_info.file().unwrap().open().await?),
             Self::Directory(_) => Err(Error::EntryIsDirectory),
         }
     }

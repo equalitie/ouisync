@@ -75,46 +75,38 @@ impl Directory {
     }
 
     /// Returns iterator over the entries of this directory.
-    pub fn entries(&self) -> impl Iterator<Item = EntryInfo> + DoubleEndedIterator + Clone {
+    pub fn entries(&self) -> impl Iterator<Item = EntryRef> + DoubleEndedIterator + Clone {
         self.content
             .entries
             .iter()
             .flat_map(move |(name, versions)| {
-                versions.iter().map(move |(_author_id, data)| EntryInfo {
-                    parent_blob: &self.blob,
-                    name,
-                    data,
-                })
+                versions
+                    .iter()
+                    .map(move |(_author_id, data)| EntryRef::new(&self.blob, name, data))
             })
     }
 
     /// Lookup an entry of this directory by name.
-    pub fn lookup(&self, name: &'_ str) -> Result<impl Iterator<Item = EntryInfo>> {
+    pub fn lookup(&self, name: &'_ str) -> Result<impl Iterator<Item = EntryRef>> {
         self.content
             .entries
             .get_key_value(name)
             .map(|(name, versions)| {
-                versions.iter().map(move |(_author_id, data)| EntryInfo {
-                    parent_blob: &self.blob,
-                    name,
-                    data,
-                })
+                versions
+                    .iter()
+                    .map(move |(_author_id, data)| EntryRef::new(&self.blob, name, data))
             })
             .ok_or(Error::EntryNotFound)
     }
 
-    pub fn lookup_version(&self, name: &'_ str, author: &ReplicaId) -> Result<EntryInfo> {
+    pub fn lookup_version(&self, name: &'_ str, author: &ReplicaId) -> Result<EntryRef> {
         self.content
             .entries
             .get_key_value(name)
             .and_then(|(name, versions)| {
                 versions
                     .get_key_value(author)
-                    .map(|(_author_id, data)| EntryInfo {
-                        parent_blob: &self.blob,
-                        name,
-                        data,
-                    })
+                    .map(|(_author_id, data)| EntryRef::new(&self.blob, name, data))
             })
             .ok_or(Error::EntryNotFound)
     }
@@ -184,7 +176,7 @@ impl Directory {
 
     pub async fn remove_file(&mut self, name: &str) -> Result<()> {
         for entry in self.lookup(name)? {
-            entry.as_file()?.open().await?.remove().await?;
+            entry.file()?.open().await?.remove().await?;
         }
         self.content.remove(name)
         // TODO: Add tombstone
@@ -192,7 +184,7 @@ impl Directory {
 
     pub async fn remove_directory(&mut self, name: &str) -> Result<()> {
         for entry in self.lookup(name)? {
-            entry.as_directory()?.open().await?.remove().await?;
+            entry.directory()?.open().await?.remove().await?;
         }
         self.content.remove(name)
         // TODO: Add tombstone
@@ -226,45 +218,64 @@ impl Directory {
 
 /// Info about a directory entry.
 #[derive(Copy, Clone)]
-pub struct EntryInfo<'a> {
-    parent_blob: &'a Blob,
-    name: &'a str,
-    data: &'a EntryData,
+pub enum EntryRef<'a> {
+    File(FileRef<'a>),
+    Directory(DirectoryRef<'a>),
 }
 
-impl<'a> EntryInfo<'a> {
+impl<'a> EntryRef<'a> {
+    fn new(parent_blob: &'a Blob, name: &'a str, data: &'a EntryData) -> Self {
+        match data.entry_type {
+            EntryType::File => Self::File(FileRef {
+                parent_blob,
+                name,
+                blob_id: &data.blob_id,
+            }),
+            EntryType::Directory => Self::Directory(DirectoryRef {
+                parent_blob,
+                name,
+                blob_id: &data.blob_id,
+            }),
+        }
+    }
+
     pub fn name(&self) -> &'a str {
-        self.name
+        match self {
+            Self::File(r) => r.name,
+            Self::Directory(r) => r.name,
+        }
     }
 
     pub fn entry_type(&self) -> EntryType {
-        self.data.entry_type
+        match self {
+            Self::File(_) => EntryType::File,
+            Self::Directory(_) => EntryType::Directory,
+        }
     }
 
     pub fn blob_id(&self) -> &BlobId {
-        &self.data.blob_id
+        match self {
+            Self::File(r) => r.blob_id,
+            Self::Directory(r) => r.blob_id,
+        }
     }
 
     pub fn locator(&self) -> Locator {
-        Locator::Head(self.data.blob_id)
+        Locator::Head(*self.blob_id())
     }
 
-    pub fn as_file(&self) -> Result<FileRef<'a>> {
-        self.entry_type().check_is_file()?;
-        Ok(FileRef {
-            parent_blob: self.parent_blob,
-            name: self.name,
-            blob_id: &self.data.blob_id,
-        })
+    pub fn file(&self) -> Result<FileRef<'a>> {
+        match self {
+            Self::File(r) => Ok(*r),
+            Self::Directory(_) => Err(Error::EntryIsDirectory),
+        }
     }
 
-    pub fn as_directory(&self) -> Result<DirectoryRef<'a>> {
-        self.entry_type().check_is_directory()?;
-        Ok(DirectoryRef {
-            parent_blob: self.parent_blob,
-            name: self.name,
-            blob_id: &self.data.blob_id,
-        })
+    pub fn directory(&self) -> Result<DirectoryRef<'a>> {
+        match self {
+            Self::Directory(r) => Ok(*r),
+            Self::File(_) => Err(Error::EntryNotDirectory),
+        }
     }
 }
 
@@ -424,7 +435,14 @@ mod tests {
         for &(file_name, expected_content) in &[("dog.txt", b"woof"), ("cat.txt", b"meow")] {
             let mut versions = dir.lookup(file_name).unwrap().collect::<Vec<_>>();
             assert_eq!(versions.len(), 1);
-            let mut file = versions.first_mut().unwrap().as_file().unwrap().open().await.unwrap();
+            let mut file = versions
+                .first_mut()
+                .unwrap()
+                .file()
+                .unwrap()
+                .open()
+                .await
+                .unwrap();
             let actual_content = file.read_to_end().await.unwrap();
             assert_eq!(actual_content, expected_content);
         }
