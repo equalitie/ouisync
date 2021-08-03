@@ -9,7 +9,7 @@ use crate::{
     global_locator::GlobalLocator,
     index::BranchData,
     locator::Locator,
-    ReplicaId,
+    replica_id::ReplicaId,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{btree_map, BTreeMap};
@@ -264,18 +264,26 @@ impl<'a> EntryRef<'a> {
         Locator::Head(*self.blob_id())
     }
 
-    pub fn file(&self) -> Result<FileRef<'a>> {
+    pub fn file(self) -> Result<FileRef<'a>> {
         match self {
-            Self::File(r) => Ok(*r),
+            Self::File(r) => Ok(r),
             Self::Directory(_) => Err(Error::EntryIsDirectory),
         }
     }
 
-    pub fn directory(&self) -> Result<DirectoryRef<'a>> {
+    pub fn directory(self) -> Result<DirectoryRef<'a>> {
         match self {
-            Self::Directory(r) => Ok(*r),
+            Self::Directory(r) => Ok(r),
             Self::File(_) => Err(Error::EntryNotDirectory),
         }
+    }
+
+    pub fn is_file(&self) -> bool {
+        matches!(self, Self::File(_))
+    }
+
+    pub fn is_directory(&self) -> bool {
+        matches!(self, Self::Directory(_))
     }
 }
 
@@ -293,6 +301,10 @@ impl<'a> FileRef<'a> {
 
     pub fn locator(&self) -> Locator {
         Locator::Head(*self.blob_id)
+    }
+
+    pub fn branch_id(&self) -> &ReplicaId {
+        self.parent_blob.branch().replica_id()
     }
 
     pub async fn open(&self) -> Result<File> {

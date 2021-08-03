@@ -1,7 +1,7 @@
 //! Overhaul of `JoinDirectory` with improved API and functionality. Will eventually replace it.
 
 use crate::{
-    directory::{Directory, EntryRef},
+    directory::{Directory, DirectoryRef, EntryRef, FileRef},
     entry::EntryType,
     error::{Error, Result},
     iterator::{Accumulate, SortedUnion},
@@ -31,39 +31,13 @@ impl JointDirectory {
         }
     }
 
-    pub fn entries(&self) -> impl Iterator<Item = EntryVersions> {
+    pub fn entries(&self) -> impl Iterator<Item = JointEntryRef> {
         let entries = self.versions.values().map(|directory| directory.entries());
         let entries = SortedUnion::new(entries, |entry| entry.name());
         let entries = Accumulate::new(entries, |entry| entry.name());
 
-        entries.map(|(_, entries)| EntryVersions(entries))
+        entries.map(|(_, entries)| JointEntryRef(entries))
     }
-
-    // pub fn entries(&self) -> impl Iterator<Item = EntryInfo> {
-    //     self.entries
-    //         .iter()
-    //         .map(|(name, versions)| {
-    //             let directories = if versions.directories.is_empty() {
-    //                 None
-    //             } else {
-    //                 Some(EntryInfo {
-    //                     name,
-    //                     version: EntryVersion::Directory(&versions.directories),
-    //                 })
-    //             };
-
-    //             let files = versions
-    //                 .files
-    //                 .iter()
-    //                 .map(move |(branch_id, locator)| EntryInfo {
-    //                     name,
-    //                     version: EntryVersion::File { branch_id, locator },
-    //                 });
-
-    //             directories.into_iter().chain(files)
-    //         })
-    //         .flatten()
-    // }
 
     // pub fn lookup(&self, name: &'_ str) -> Result<EntryInfo> {
     //     // Look for exact match first as that is the most likely case.
@@ -123,68 +97,70 @@ impl JointDirectory {
     // }
 }
 
-// #[derive(Eq, PartialEq)]
-// pub struct EntryInfo<'a> {
-//     // index: &'a Index,
-//     name: &'a str,
-//     version: EntryVersion<'a>,
-// }
-
-// impl<'a> EntryInfo<'a> {
-//     pub fn name(&self) -> &'a str {
-//         self.name
-//     }
-
-//     pub fn entry_type(&self) -> EntryType {
-//         self.version.entry_type()
-//     }
-
-//     pub fn branch_id(&self) -> Option<&'a ReplicaId> {
-//         match &self.version {
-//             EntryVersion::File { branch_id, .. } => Some(branch_id),
-//             EntryVersion::Directory(_) => None,
-//         }
-//     }
-// }
-
-// impl<'a> fmt::Debug for EntryInfo<'a> {
-//     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-//         f.debug_struct("EntryInfo")
-//             .field("name", &self.name)
-//             .field("type", &self.version.entry_type())
-//             .finish()
-//     }
-// }
-
 #[derive(Default)]
-pub struct EntryVersions<'a>(Vec<EntryRef<'a>>);
+pub struct JointEntryRef<'a>(Vec<EntryRef<'a>>);
 
-impl<'a> EntryVersions<'a> {
+impl<'a> JointEntryRef<'a> {
     pub fn name(&self) -> &'a str {
         self.0
             .first()
             .expect("EntryVersions must contain at least one entry")
             .name()
     }
+
+    pub fn split(self) -> impl Iterator<Item = UniqueEntryRef<'a>> {
+        let (files, directories): (Vec<_>, _) =
+            self.0.into_iter().partition(|entry| entry.is_file());
+
+        let files = files
+            .into_iter()
+            .filter_map(|entry| entry.file().ok())
+            .map(UniqueEntryRef::File);
+
+        let directories = if directories.is_empty() {
+            None
+        } else {
+            Some(UniqueEntryRef::Directory(JointDirectoryRef(
+                directories
+                    .into_iter()
+                    .filter_map(|entry| entry.directory().ok())
+                    .collect(),
+            )))
+        };
+
+        directories.into_iter().chain(files)
+    }
 }
 
-// #[derive(Eq, PartialEq)]
-// enum EntryVersion<'a> {
-//     File {
-//         branch_id: &'a ReplicaId,
-//         locator: &'a Locator,
-//     },
-//     Directory(&'a [Locator]),
-// }
+pub enum UniqueEntryRef<'a> {
+    File(FileRef<'a>),
+    Directory(JointDirectoryRef<'a>),
+}
 
-// impl<'a> EntryVersion<'a> {
-//     fn entry_type(&self) -> EntryType {
-//         match self {
-//             Self::File { .. } => EntryType::File,
-//             Self::Directory(_) => EntryType::Directory,
-//         }
-//     }
-// }
+impl<'a> UniqueEntryRef<'a> {
+    pub fn entry_type(&self) -> EntryType {
+        match self {
+            Self::File { .. } => EntryType::File,
+            Self::Directory(_) => EntryType::Directory,
+        }
+    }
+
+    pub fn file(self) -> Result<FileRef<'a>> {
+        match self {
+            Self::File(r) => Ok(r),
+            Self::Directory(_) => Err(Error::EntryIsDirectory),
+        }
+    }
+
+    pub fn directory(self) -> Result<JointDirectoryRef<'a>> {
+        match self {
+            Self::Directory(r) => Ok(r),
+            Self::File(_) => Err(Error::EntryNotDirectory),
+        }
+    }
+}
+
+pub struct JointDirectoryRef<'a>(Vec<DirectoryRef<'a>>);
 
 /*
 
