@@ -82,7 +82,7 @@ impl Directory {
             .flat_map(move |(name, versions)| {
                 versions
                     .iter()
-                    .map(move |(_author_id, data)| EntryRef::new(&self.blob, name, data))
+                    .map(move |(branch_id, data)| EntryRef::new(&self.blob, name, data, branch_id))
             })
     }
 
@@ -94,7 +94,7 @@ impl Directory {
             .map(|(name, versions)| {
                 versions
                     .iter()
-                    .map(move |(_author_id, data)| EntryRef::new(&self.blob, name, data))
+                    .map(move |(branch_id, data)| EntryRef::new(&self.blob, name, data, branch_id))
             })
             .ok_or(Error::EntryNotFound)
     }
@@ -106,7 +106,7 @@ impl Directory {
             .and_then(|(name, versions)| {
                 versions
                     .get_key_value(author)
-                    .map(|(_author_id, data)| EntryRef::new(&self.blob, name, data))
+                    .map(|(branch_id, data)| EntryRef::new(&self.blob, name, data, branch_id))
             })
             .ok_or(Error::EntryNotFound)
     }
@@ -224,12 +224,18 @@ pub enum EntryRef<'a> {
 }
 
 impl<'a> EntryRef<'a> {
-    fn new(parent_blob: &'a Blob, name: &'a str, data: &'a EntryData) -> Self {
+    fn new(
+        parent_blob: &'a Blob,
+        name: &'a str,
+        data: &'a EntryData,
+        branch_id: &'a ReplicaId,
+    ) -> Self {
         match data.entry_type {
             EntryType::File => Self::File(FileRef {
                 parent_blob,
                 name,
                 blob_id: &data.blob_id,
+                branch_id,
             }),
             EntryType::Directory => Self::Directory(DirectoryRef {
                 parent_blob,
@@ -292,6 +298,7 @@ pub struct FileRef<'a> {
     parent_blob: &'a Blob,
     name: &'a str,
     blob_id: &'a BlobId,
+    branch_id: &'a ReplicaId,
 }
 
 impl<'a> FileRef<'a> {
@@ -303,8 +310,8 @@ impl<'a> FileRef<'a> {
         Locator::Head(*self.blob_id)
     }
 
-    pub fn branch_id(&self) -> &ReplicaId {
-        self.parent_blob.branch().replica_id()
+    pub fn branch_id(&self) -> &'a ReplicaId {
+        self.branch_id
     }
 
     pub async fn open(&self) -> Result<File> {

@@ -227,7 +227,6 @@ mod tests {
         // assert_eq!(root.lookup("file1.txt").unwrap(), entries[1]);
     }
 
-    /*
     #[tokio::test(flavor = "multi_thread")]
     async fn conflict_independent_files() {
         let index = setup(2).await;
@@ -263,30 +262,29 @@ mod tests {
 
         let root = JointDirectory::new(vec![root0, root1]);
 
-        let entries: Vec<_> = root.entries().collect();
+        let files: Vec<_> = root.entries().map(|entry| entry.file().unwrap()).collect();
 
-        assert_eq!(entries.len(), 2);
+        assert_eq!(files.len(), 2);
 
         for branch in &branches {
-            let entry = entries
+            let file = files
                 .iter()
-                .find(|entry| entry.branch_id() == Some(branch.replica_id()))
+                .find(|file| file.branch_id() == branch.replica_id())
                 .unwrap();
-            assert_eq!(entry.name(), "file.txt");
-            assert_eq!(entry.entry_type(), EntryType::File);
+            assert_eq!(file.name(), "file.txt");
 
-            assert_eq!(
-                root.lookup(&format!("file.txt.v{:8x}", branch.replica_id()))
-                    .unwrap(),
-                *entry
-            );
+            // assert_eq!(
+            //     root.lookup(&format!("file.txt.v{:8x}", branch.replica_id()))
+            //         .unwrap(),
+            //     *entry
+            // );
         }
 
-        assert_matches!(root.lookup("file.txt"), Err(Error::AmbiguousEntry(branch_ids)) => {
-            assert_eq!(branch_ids.len(), 2);
-            assert!(branch_ids.contains(branches[0].replica_id()));
-            assert!(branch_ids.contains(branches[1].replica_id()));
-        });
+        // assert_matches!(root.lookup("file.txt"), Err(Error::AmbiguousEntry(branch_ids)) => {
+        //     assert_eq!(branch_ids.len(), 2);
+        //     assert!(branch_ids.contains(branches[0].replica_id()));
+        //     assert!(branch_ids.contains(branches[1].replica_id()));
+        // });
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -318,19 +316,20 @@ mod tests {
 
         let root = JointDirectory::new(vec![root0, root1]);
 
-        let entries: Vec<_> = root.entries().collect();
+        let files: Vec<_> = root.entries().map(|entry| entry.file().unwrap()).collect();
 
-        assert_eq!(entries.len(), 2);
+        assert_eq!(files.len(), 2);
 
         for branch in &branches {
-            let entry = entries
+            let file = files
                 .iter()
-                .find(|entry| entry.branch_id() == Some(branch.replica_id()))
+                .find(|file| file.branch_id() == branch.replica_id())
                 .unwrap();
-            assert_eq!(entry.name(), "file.txt");
-            assert_eq!(entry.entry_type(), EntryType::File);
+            assert_eq!(file.name(), "file.txt");
         }
     }
+
+    /*
 
     #[tokio::test(flavor = "multi_thread")]
     async fn conflict_directories() {
