@@ -4,7 +4,7 @@ use crate::{
     directory::{Directory, DirectoryRef, EntryRef, FileRef},
     entry::EntryType,
     error::{Error, Result},
-    iterator::{Accumulate, SortedUnion},
+    iterator::{Accumulate, DrainFilter, SortedUnion},
     locator::Locator,
     replica_id::ReplicaId,
     versioned_file_name,
@@ -31,6 +31,13 @@ impl JointDirectory {
         }
     }
 
+    /// Returns iterator over the entries of this directory. Multiple concurrent versions of the
+    /// same entry are returned in a single `JoinEntryRef`. To obtain each version as a separate
+    /// entry, use [`JointEntryRef::split`]:
+    ///
+    /// ```ignore
+    /// dir.entries().flat_map(|entry| entry.split())
+    /// ```
     pub fn entries(&self) -> impl Iterator<Item = JointEntryRef> {
         let entries = self.versions.values().map(|directory| directory.entries());
         let entries = SortedUnion::new(entries, |entry| entry.name());
@@ -108,25 +115,21 @@ impl<'a> JointEntryRef<'a> {
             .name()
     }
 
-    pub fn split(self) -> impl Iterator<Item = UniqueEntryRef<'a>> {
-        let (files, directories): (Vec<_>, _) =
-            self.0.into_iter().partition(|entry| entry.is_file());
-
-        let files = files
-            .into_iter()
-            .filter_map(|entry| entry.file().ok())
-            .map(UniqueEntryRef::File);
-
+    pub fn split(mut self) -> impl Iterator<Item = UniqueEntryRef<'a>> {
+        let directories: Vec<_> = DrainFilter::new(&mut self.0, |entry| entry.is_directory())
+            .map(|entry| entry.directory().unwrap())
+            .collect();
         let directories = if directories.is_empty() {
             None
         } else {
-            Some(UniqueEntryRef::Directory(JointDirectoryRef(
-                directories
-                    .into_iter()
-                    .filter_map(|entry| entry.directory().ok())
-                    .collect(),
-            )))
+            Some(UniqueEntryRef::Directory(JointDirectoryRef(directories)))
         };
+
+        let files = self
+            .0
+            .into_iter()
+            .filter_map(|entry| entry.file().ok())
+            .map(UniqueEntryRef::File);
 
         directories.into_iter().chain(files)
     }
