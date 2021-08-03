@@ -117,6 +117,12 @@ impl JointDirectory {
 
         Ok(curr)
     }
+
+    /// Length of the directory in bytes. If there are multiple versions, returns the sum of their
+    /// lengths.
+    pub fn len(&self) -> u64 {
+        self.versions.values().map(|dir| dir.len()).sum()
+    }
 }
 
 #[derive(Eq, PartialEq, Debug)]

@@ -42,10 +42,9 @@ impl JointEntry {
 
     /// Length of the entry in bytes.
     pub fn len(&self) -> u64 {
-        todo!()
-        // match self {
-        //     Self::File(file) => file.len(),
-        //     Self::Directory(dirs) => dirs.values().fold(0, |l, dir| l + dir.len()),
-        // }
+        match self {
+            Self::File(file) => file.len(),
+            Self::Directory(dir) => dir.len(),
+        }
     }
 }

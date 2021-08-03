@@ -17,8 +17,8 @@ use fuser::{
     ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow,
 };
 use ouisync::{
-    EntryType, Error, File, GlobalLocator, JointDirectory, JointEntry, ReplicaId, Repository,
-    Result,
+    EntryType, Error, File, GlobalLocator, JointDirectory, JointEntry, JointEntryRef, ReplicaId,
+    Repository, Result,
 };
 use std::{
     convert::TryInto,
@@ -376,22 +376,23 @@ impl Inner {
         let parent_path = &self.inodes.get(parent).calculate_directory_path()?;
         let parent_dir = self.repository.open_directory(parent_path).await?;
 
-        todo!()
+        let entry = parent_dir.lookup_unique(name)?;
+        let (len, repr) = match &entry {
+            JointEntryRef::File(entry) => (
+                entry.open().await?.len(),
+                Representation::File(GlobalLocator {
+                    branch_id: *entry.branch_id(),
+                    local: entry.locator(),
+                }),
+            ),
+            JointEntryRef::Directory(entry) => {
+                (entry.open().await?.len(), Representation::Directory)
+            }
+        };
 
-        // let lookup = parent_dir.lookup(name)?;
-        // let entry = lookup.open().await?;
+        let inode = self.inodes.lookup(parent, name, repr);
 
-        // let repr = match lookup {
-        //     Lookup::File(entry_info, branch_id) => Representation::File(GlobalLocator {
-        //         branch_id: *branch_id,
-        //         local: entry_info.locator(),
-        //     }),
-        //     Lookup::Directory(_) => Representation::Directory,
-        // };
-
-        // let inode = self.inodes.lookup(parent, name, repr);
-
-        // Ok(make_file_attr_for_entry(&entry, inode))
+        Ok(make_file_attr(inode, entry.entry_type(), len))
     }
 
     async fn getattr(&mut self, inode: Inode) -> Result<FileAttr> {

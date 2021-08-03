@@ -42,7 +42,7 @@ pub use self::{
     file::File,
     global_locator::GlobalLocator,
     index::Index,
-    joint_directory::JointDirectory,
+    joint_directory::{JointDirectory, JointEntryRef},
     joint_entry::JointEntry,
     locator::Locator,
     network::{Network, NetworkOptions},
