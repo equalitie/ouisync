@@ -70,9 +70,9 @@ pub async fn init(store: Store) -> Result<Pool> {
 
 // Create the database schema
 pub async fn create_schema(pool: &Pool) -> Result<()> {
-    block::init(&pool).await?;
-    index::init(&pool).await?;
-    this_replica::init(&pool).await?;
+    block::init(pool).await?;
+    index::init(pool).await?;
+    this_replica::init(pool).await?;
     Ok(())
 }
 

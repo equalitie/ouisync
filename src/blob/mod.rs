@@ -508,7 +508,7 @@ async fn read_block(
     nonce_sequence: &NonceSequence,
     locator: &Locator,
 ) -> Result<(BlockId, Buffer)> {
-    let (id, mut buffer, auth_tag) = load_block(&branch, tx, cryptor, locator).await?;
+    let (id, mut buffer, auth_tag) = load_block(branch, tx, cryptor, locator).await?;
 
     let number = locator.number();
     let nonce = nonce_sequence.get(number);

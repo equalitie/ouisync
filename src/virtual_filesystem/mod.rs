@@ -17,8 +17,8 @@ use fuser::{
     ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow,
 };
 use ouisync::{
-    joint_directory::Lookup, Directory, EntryType, Error, File, GlobalLocator, JointDirectory,
-    JointEntry, MoveDstDirectory, ReplicaId, Repository, Result,
+    joint_directory::Lookup, EntryType, Error, File, GlobalLocator, JointDirectory, JointEntry,
+    ReplicaId, Repository, Result,
 };
 use std::{
     convert::TryInto,
@@ -825,32 +825,7 @@ impl Inner {
             flags,
         );
 
-        if flags & libc::RENAME_NOREPLACE != 0 {
-            return Err(Error::OperationNotSupported);
-        }
-
-        if flags & libc::RENAME_EXCHANGE != 0 {
-            return Err(Error::OperationNotSupported);
-        }
-
-        // TODO: The code below only supports moving from/to local branch.
-
-        let mut src_dir = self.open_local_directory_by_inode(src_parent).await?;
-
-        let mut dst_dir = if src_parent == dst_parent {
-            MoveDstDirectory::Src
-        } else {
-            MoveDstDirectory::Other(self.open_local_directory_by_inode(dst_parent).await?)
-        };
-
-        src_dir.move_entry(src_name, &mut dst_dir, dst_name).await?;
-        src_dir.flush().await?;
-
-        if let Some(dir) = dst_dir.get_other() {
-            dir.flush().await?;
-        }
-
-        Ok(())
+        todo!()
     }
 
     async fn open_file_by_inode(&self, inode: Inode) -> Result<File> {
@@ -861,16 +836,6 @@ impl Inner {
     async fn open_directory_by_inode(&self, inode: Inode) -> Result<JointDirectory> {
         let path = self.inodes.get(inode).calculate_directory_path()?;
         self.repository.open_directory(&path).await
-    }
-
-    async fn open_local_directory_by_inode(&self, inode: Inode) -> Result<Directory> {
-        let path = &self.inodes.get(inode).calculate_directory_path()?;
-        let (locator, _entry_type) = self.repository.local_branch().await.lookup(path).await?;
-        let locator = GlobalLocator {
-            branch_id: *self.this_replica_id(),
-            local: locator,
-        };
-        self.repository.open_directory_by_locator(locator).await
     }
 
     async fn open_entry_by_inode(&self, inode: InodeView<'_>) -> Result<JointEntry> {

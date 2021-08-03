@@ -182,7 +182,7 @@ impl Index {
         if let Some(local_node) = RootNode::load(&self.pool, replica_id, hash).await? {
             Ok(!local_node
                 .summary
-                .is_up_to_date_with(&remote_summary)
+                .is_up_to_date_with(remote_summary)
                 .unwrap_or(true))
         } else {
             Ok(*hash != InnerNodeMap::default().hash())

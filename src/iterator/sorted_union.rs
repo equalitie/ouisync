@@ -65,7 +65,7 @@ where
         use core::cmp::Ordering;
 
         match (self.lhs.peek(), self.rhs.peek()) {
-            (Some(ref l), Some(ref r)) => match (self.get_key)(**l).cmp(&(self.get_key)(**r)) {
+            (Some(l), Some(r)) => match (self.get_key)(*l).cmp(&(self.get_key)(*r)) {
                 Ordering::Less => self.lhs.next(),
                 Ordering::Equal => self.lhs.next(),
                 Ordering::Greater => self.rhs.next(),

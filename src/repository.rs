@@ -84,9 +84,11 @@ impl Repository {
     }
 
     /// Removes (delete) the file at the given path. Returns the parent directory.
-    pub async fn remove_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<Directory> {
-        // TODO: Currently only in local branch.
-        self.local_branch().await.remove_file(path).await
+    pub async fn remove_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<JointDirectory> {
+        let (parent, name) = decompose_path(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
+        let mut dir = self.open_directory(parent).await?;
+        dir.remove_file(self.this_replica_id(), name).await?;
+        Ok(dir)
     }
 
     /// Removes the directory at the given path. The directory must be empty. Returns the parent
@@ -114,7 +116,7 @@ impl Repository {
     ) -> Result<()> {
         if &file.global_locator().branch_id != self.this_replica_id() {
             // Perform copy-on-write
-            let (parent, name) = decompose_path(&path).ok_or(Error::EntryIsDirectory)?;
+            let (parent, name) = decompose_path(path).ok_or(Error::EntryIsDirectory)?;
 
             let local_branch = self.local_branch().await;
             let mut local_dirs = local_branch.ensure_directory_exists(parent).await?;
@@ -145,11 +147,10 @@ impl Repository {
     /// Returns the parent directories of both `src` and `dst`.
     pub async fn move_entry<S: AsRef<Utf8Path>, D: AsRef<Utf8Path>>(
         &self,
-        src: S,
-        dst: D,
+        _src: S,
+        _dst: D,
     ) -> Result<(Directory, MoveDstDirectory)> {
-        // TODO: Move entries across branches
-        self.local_branch().await.move_entry(src, dst).await
+        todo!()
     }
 
     /// Open an entry (file or directory) at the given locator.

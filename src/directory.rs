@@ -9,6 +9,7 @@ use crate::{
     global_locator::GlobalLocator,
     index::BranchData,
     locator::Locator,
+    ReplicaId,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{btree_map, BTreeMap};
@@ -42,13 +43,15 @@ impl Directory {
         cryptor: Cryptor,
         locator: Locator,
     ) -> Self {
+        let local_branch_id = *branch.replica_id();
         let blob = Blob::create(pool, branch, cryptor, locator);
 
         Self {
             blob,
             content: Content {
+                entries: Default::default(),
                 dirty: true,
-                ..Default::default()
+                local_branch_id,
             },
         }
     }
@@ -72,28 +75,46 @@ impl Directory {
     }
 
     /// Returns iterator over the entries of this directory.
-    pub fn entries(
-        &self,
-    ) -> impl Iterator<Item = EntryInfo> + DoubleEndedIterator + ExactSizeIterator + Clone {
+    pub fn entries(&self) -> impl Iterator<Item = EntryInfo> + DoubleEndedIterator + Clone {
         self.content
             .entries
             .iter()
-            .map(move |(name, data)| EntryInfo {
-                parent_blob: &self.blob,
-                name,
-                data,
+            .flat_map(move |(name, versions)| {
+                versions.iter().map(move |(_author_id, data)| EntryInfo {
+                    parent_blob: &self.blob,
+                    name,
+                    data,
+                })
             })
     }
 
     /// Lookup an entry of this directory by name.
-    pub fn lookup(&self, name: &'_ str) -> Result<EntryInfo> {
+    pub fn lookup(&self, name: &'_ str) -> Result<impl Iterator<Item = EntryInfo>> {
         self.content
             .entries
             .get_key_value(name)
-            .map(|(name, data)| EntryInfo {
-                parent_blob: &self.blob,
-                name,
-                data,
+            .map(|(name, versions)| {
+                versions.iter().map(move |(_author_id, data)| EntryInfo {
+                    parent_blob: &self.blob,
+                    name,
+                    data,
+                })
+            })
+            .ok_or(Error::EntryNotFound)
+    }
+
+    pub fn lookup_version(&self, name: &'_ str, author: &ReplicaId) -> Result<EntryInfo> {
+        self.content
+            .entries
+            .get_key_value(name)
+            .and_then(|(name, versions)| {
+                versions
+                    .get_key_value(author)
+                    .map(|(_author_id, data)| EntryInfo {
+                        parent_blob: &self.blob,
+                        name,
+                        data,
+                    })
             })
             .ok_or(Error::EntryNotFound)
     }
@@ -162,62 +183,19 @@ impl Directory {
     }
 
     pub async fn remove_file(&mut self, name: &str) -> Result<()> {
-        self.lookup(name)?.open_file().await?.remove().await?;
+        for entry in self.lookup(name)? {
+            entry.open_file().await?.remove().await?;
+        }
         self.content.remove(name)
+        // TODO: Add tombstone
     }
 
     pub async fn remove_directory(&mut self, name: &str) -> Result<()> {
-        self.lookup(name)?.open_directory().await?.remove().await?;
+        for entry in self.lookup(name)? {
+            entry.open_directory().await?.remove().await?;
+        }
         self.content.remove(name)
-    }
-
-    /// Renames or moves an entry.
-    /// If the destination entry already exists and is a file, it is overwritten. If it is a
-    /// directory, no change is performed and an error is returned instead.
-    pub async fn move_entry(
-        &mut self,
-        src_name: &str,
-        dst_dir: &mut MoveDstDirectory,
-        dst_name: &str,
-    ) -> Result<()> {
-        // Check we are moving entry to itself and if so, do nothing to prevent data loss.
-        if let MoveDstDirectory::Src = dst_dir {
-            if src_name == dst_name {
-                return Ok(());
-            }
-        }
-
-        let (src_blob_id, src_entry_type) = {
-            let info = self.lookup(src_name)?;
-            (*info.blob_id(), info.entry_type())
-        };
-
-        let dst_dir = dst_dir.get(self);
-
-        // Can't move over an existing directory.
-        // NOTE: we could move *into* the directory instead, but there would still be edge cases
-        // e.g. the dst entry being an existing directory there which we would still have to deal
-        // with. Keeping things simple for now.
-        if dst_dir
-            .lookup(dst_name)
-            .map(|info| info.entry_type() == EntryType::Directory)
-            .unwrap_or(false)
-        {
-            return Err(Error::EntryIsDirectory);
-        }
-
-        // TODO: remove the previous dst entry from the db, if it existed.
-
-        dst_dir
-            .content
-            .insert_or_replace(dst_name.to_owned(), src_blob_id, src_entry_type);
-
-        match self.content.remove(src_name) {
-            Ok(_) | Err(Error::EntryNotFound) => (),
-            Err(_) => unreachable!(),
-        }
-
-        Ok(())
+        // TODO: Add tombstone
     }
 
     /// Removes this directory if its empty, otherwise fails.
@@ -337,40 +315,31 @@ impl MoveDstDirectory {
     }
 }
 
-#[derive(Default, Clone, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 struct Content {
-    entries: BTreeMap<String, EntryData>,
+    entries: BTreeMap<String, BTreeMap<ReplicaId, EntryData>>,
     #[serde(skip)]
     dirty: bool,
+    local_branch_id: ReplicaId,
 }
 
 impl Content {
     fn insert(&mut self, name: String, entry_type: EntryType) -> Result<BlobId> {
         let blob_id = rand::random();
 
-        match self.entries.entry(name) {
+        let versions = self.entries.entry(name).or_insert_with(Default::default);
+
+        match versions.entry(self.local_branch_id) {
             btree_map::Entry::Vacant(entry) => {
                 entry.insert(EntryData {
                     entry_type,
                     blob_id,
                 });
                 self.dirty = true;
-
                 Ok(blob_id)
             }
             btree_map::Entry::Occupied(_) => Err(Error::EntryExists),
         }
-    }
-
-    fn insert_or_replace(&mut self, name: String, blob_id: BlobId, entry_type: EntryType) {
-        self.entries.insert(
-            name,
-            EntryData {
-                entry_type,
-                blob_id,
-            },
-        );
-        self.dirty = true;
     }
 
     fn remove(&mut self, name: &str) -> Result<()> {
@@ -422,7 +391,9 @@ mod tests {
         assert_eq!(actual_names, expected_names);
 
         for &(file_name, expected_content) in &[("dog.txt", b"woof"), ("cat.txt", b"meow")] {
-            let mut file = dir.lookup(file_name).unwrap().open_file().await.unwrap();
+            let mut versions = dir.lookup(file_name).unwrap().collect::<Vec<_>>();
+            assert_eq!(versions.len(), 1);
+            let mut file = versions.first_mut().unwrap().open_file().await.unwrap();
             let actual_content = file.read_to_end().await.unwrap();
             assert_eq!(actual_content, expected_content);
         }
@@ -485,7 +456,7 @@ mod tests {
             Ok(_) => panic!("entry should not exists but it does"),
         }
 
-        assert_eq!(parent_dir.entries().len(), 0);
+        assert_eq!(parent_dir.entries().count(), 0);
 
         // Check the file itself was removed as well.
         match File::open(pool, branch.clone(), Cryptor::Null, file_locator).await {
@@ -534,175 +505,6 @@ mod tests {
             Err(Error::EntryNotFound) => (),
             Err(error) => panic!("unexpected error {:?}", error),
             Ok(_) => panic!("directory should not exists but it does"),
-        }
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn move_entry_to_same_directory() {
-        let (pool, branch) = setup().await;
-
-        let src_name = "src.txt";
-        let dst_name = "dst.txt";
-
-        let mut dir = Directory::create(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root);
-
-        let mut file = dir.create_file(src_name.to_owned()).unwrap();
-        let content = random_content(1024);
-        file.write(&content).await.unwrap();
-        file.flush().await.unwrap();
-
-        dir.flush().await.unwrap();
-
-        dir.move_entry(src_name, &mut MoveDstDirectory::Src, dst_name)
-            .await
-            .unwrap();
-        dir.flush().await.unwrap();
-
-        match dir.lookup(src_name) {
-            Err(Error::EntryNotFound) => (),
-            Err(error) => panic!("unexpected error {}", error),
-            Ok(_) => panic!("src entry should not exists, but it does"),
-        }
-
-        let mut file = dir.lookup(dst_name).unwrap().open_file().await.unwrap();
-        let read_content = file.read_to_end().await.unwrap();
-        assert_eq!(read_content, content);
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn move_entry_to_other_directory() {
-        let (pool, branch) = setup().await;
-
-        let mut root_dir =
-            Directory::create(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root);
-        let mut src_dir = root_dir.create_directory("src".into()).unwrap();
-        let mut dst_dir = root_dir.create_directory("dst".into()).unwrap();
-
-        let src_name = "src.txt";
-        let dst_name = "dst.txt";
-
-        let mut file = src_dir.create_file(src_name.to_owned()).unwrap();
-        let content = random_content(1024);
-        file.write(&content).await.unwrap();
-        file.flush().await.unwrap();
-
-        src_dir.flush().await.unwrap();
-        dst_dir.flush().await.unwrap();
-
-        let mut dst_dir = MoveDstDirectory::Other(dst_dir);
-        src_dir
-            .move_entry(src_name, &mut dst_dir, dst_name)
-            .await
-            .unwrap();
-
-        let dst_dir = dst_dir.get_other().unwrap();
-
-        src_dir.flush().await.unwrap();
-        dst_dir.flush().await.unwrap();
-
-        match src_dir.lookup(src_name) {
-            Err(Error::EntryNotFound) => (),
-            Err(error) => panic!("unexpected error {}", error),
-            Ok(_) => panic!("src entry should not exists, but it does"),
-        }
-
-        // XXX
-        let mut file = dst_dir.lookup(dst_name).unwrap().open_file().await.unwrap();
-        let read_content = file.read_to_end().await.unwrap();
-        assert_eq!(read_content, content);
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn move_entry_to_itself() {
-        let (pool, branch) = setup().await;
-
-        let name = "src.txt";
-
-        let mut dir = Directory::create(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root);
-
-        let mut file = dir.create_file(name.to_owned()).unwrap();
-        let content = random_content(1024);
-        file.write(&content).await.unwrap();
-        file.flush().await.unwrap();
-
-        dir.flush().await.unwrap();
-
-        dir.move_entry(name, &mut MoveDstDirectory::Src, name)
-            .await
-            .unwrap();
-        dir.flush().await.unwrap();
-
-        let mut file = dir.lookup(name).unwrap().open_file().await.unwrap();
-        let read_content = file.read_to_end().await.unwrap();
-        assert_eq!(read_content, content);
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn move_entry_over_existing_file() {
-        let (pool, branch) = setup().await;
-
-        let src_name = "src.txt";
-        let dst_name = "dst.txt";
-
-        let mut dir = Directory::create(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root);
-
-        let mut file = dir.create_file(src_name.to_owned()).unwrap();
-        let src_content = random_content(1024);
-        file.write(&src_content).await.unwrap();
-        file.flush().await.unwrap();
-
-        let mut file = dir.create_file(dst_name.to_owned()).unwrap();
-        let dst_content = random_content(1024);
-        file.write(&dst_content).await.unwrap();
-        file.flush().await.unwrap();
-
-        dir.flush().await.unwrap();
-
-        dir.move_entry(src_name, &mut MoveDstDirectory::Src, dst_name)
-            .await
-            .unwrap();
-        dir.flush().await.unwrap();
-
-        match dir.lookup(src_name) {
-            Err(Error::EntryNotFound) => (),
-            Err(error) => panic!("unexpected error {}", error),
-            Ok(_) => panic!("src entry should not exists, but it does"),
-        }
-
-        let mut file = dir.lookup(dst_name).unwrap().open_file().await.unwrap();
-        let read_content = file.read_to_end().await.unwrap();
-        assert_eq!(read_content, src_content);
-        assert_ne!(read_content, dst_content);
-
-        // TODO: assert the original dst file has been deleted
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn attempt_to_move_entry_over_existing_directory() {
-        let (pool, branch) = setup().await;
-
-        let src_name = "src.txt";
-        let dst_name = "dst";
-
-        let mut dir = Directory::create(pool.clone(), branch, Cryptor::Null, Locator::Root);
-
-        let mut src_file = dir.create_file(src_name.to_owned()).unwrap();
-        let src_content = random_content(1024);
-        src_file.write(&src_content).await.unwrap();
-        src_file.flush().await.unwrap();
-
-        let mut dst_dir = dir.create_directory(dst_name.to_owned()).unwrap();
-        dst_dir.flush().await.unwrap();
-
-        dir.flush().await.unwrap();
-
-        match dir
-            .move_entry(src_name, &mut MoveDstDirectory::Src, dst_name)
-            .await
-        {
-            Err(Error::EntryIsDirectory) => (),
-            Err(error) => panic!("unexpected error {}", error),
-            Ok(_) => panic!("the move should not have succeeded but it did"),
         }
     }
 
