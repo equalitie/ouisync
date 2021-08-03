@@ -325,40 +325,20 @@ struct Content {
 
 impl Content {
     fn insert(&mut self, name: String, entry_type: EntryType) -> Result<BlobId> {
-        type MapEntry<'a, K, V> = btree_map::Entry<'a, K, V>;
-
         let blob_id = rand::random();
 
-        match self.entries.entry(name) {
-            MapEntry::Vacant(entry) => {
-                entry.insert(
-                    std::iter::once((
-                        self.local_branch_id,
-                        EntryData {
-                            entry_type,
-                            blob_id,
-                        },
-                    ))
-                    .collect(),
-                );
+        let versions = self.entries.entry(name).or_insert_with(Default::default);
 
+        match versions.entry(self.local_branch_id) {
+            btree_map::Entry::Vacant(entry) => {
+                entry.insert(EntryData {
+                    entry_type,
+                    blob_id,
+                });
                 self.dirty = true;
-
                 Ok(blob_id)
             }
-            MapEntry::Occupied(mut versions) => {
-                match versions.get_mut().entry(self.local_branch_id) {
-                    MapEntry::Vacant(entry) => {
-                        entry.insert(EntryData {
-                            entry_type,
-                            blob_id,
-                        });
-                        self.dirty = true;
-                        Ok(blob_id)
-                    }
-                    MapEntry::Occupied(_) => Err(Error::EntryExists),
-                }
-            }
+            btree_map::Entry::Occupied(_) => Err(Error::EntryExists),
         }
     }
 
