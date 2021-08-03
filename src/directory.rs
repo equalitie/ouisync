@@ -12,7 +12,10 @@ use crate::{
     replica_id::ReplicaId,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::{btree_map, BTreeMap};
+use std::{
+    collections::{btree_map, BTreeMap},
+    fmt,
+};
 
 #[derive(Clone)]
 pub struct Directory {
@@ -230,25 +233,22 @@ impl<'a> EntryRef<'a> {
         data: &'a EntryData,
         branch_id: &'a ReplicaId,
     ) -> Self {
+        let inner = RefInner {
+            parent_blob,
+            name,
+            blob_id: &data.blob_id,
+        };
+
         match data.entry_type {
-            EntryType::File => Self::File(FileRef {
-                parent_blob,
-                name,
-                blob_id: &data.blob_id,
-                branch_id,
-            }),
-            EntryType::Directory => Self::Directory(DirectoryRef {
-                parent_blob,
-                name,
-                blob_id: &data.blob_id,
-            }),
+            EntryType::File => Self::File(FileRef { inner, branch_id }),
+            EntryType::Directory => Self::Directory(DirectoryRef { inner }),
         }
     }
 
     pub fn name(&self) -> &'a str {
         match self {
-            Self::File(r) => r.name,
-            Self::Directory(r) => r.name,
+            Self::File(r) => r.name(),
+            Self::Directory(r) => r.name(),
         }
     }
 
@@ -259,10 +259,10 @@ impl<'a> EntryRef<'a> {
         }
     }
 
-    pub fn blob_id(&self) -> &BlobId {
+    pub fn blob_id(&self) -> &'a BlobId {
         match self {
-            Self::File(r) => r.blob_id,
-            Self::Directory(r) => r.blob_id,
+            Self::File(r) => r.inner.blob_id,
+            Self::Directory(r) => r.inner.blob_id,
         }
     }
 
@@ -293,21 +293,19 @@ impl<'a> EntryRef<'a> {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Eq, PartialEq)]
 pub struct FileRef<'a> {
-    parent_blob: &'a Blob,
-    name: &'a str,
-    blob_id: &'a BlobId,
+    inner: RefInner<'a>,
     branch_id: &'a ReplicaId,
 }
 
 impl<'a> FileRef<'a> {
     pub fn name(&self) -> &'a str {
-        self.name
+        self.inner.name
     }
 
     pub fn locator(&self) -> Locator {
-        Locator::Head(*self.blob_id)
+        Locator::Head(*self.inner.blob_id)
     }
 
     pub fn branch_id(&self) -> &'a ReplicaId {
@@ -316,9 +314,42 @@ impl<'a> FileRef<'a> {
 
     pub async fn open(&self) -> Result<File> {
         File::open(
-            self.parent_blob.db_pool().clone(),
-            self.parent_blob.branch().clone(),
-            self.parent_blob.cryptor().clone(),
+            self.inner.parent_blob.db_pool().clone(),
+            self.inner.parent_blob.branch().clone(),
+            self.inner.parent_blob.cryptor().clone(),
+            self.locator(),
+        )
+        .await
+    }
+}
+
+impl fmt::Debug for FileRef<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("FileRef")
+            .field("name", &self.inner.name)
+            .finish()
+    }
+}
+
+#[derive(Copy, Clone, Eq, PartialEq)]
+pub struct DirectoryRef<'a> {
+    inner: RefInner<'a>,
+}
+
+impl<'a> DirectoryRef<'a> {
+    pub fn name(&self) -> &'a str {
+        self.inner.name
+    }
+
+    pub fn locator(&self) -> Locator {
+        Locator::Head(*self.inner.blob_id)
+    }
+
+    pub async fn open(&self) -> Result<Directory> {
+        Directory::open(
+            self.inner.parent_blob.db_pool().clone(),
+            self.inner.parent_blob.branch().clone(),
+            self.inner.parent_blob.cryptor().clone(),
             self.locator(),
         )
         .await
@@ -326,31 +357,21 @@ impl<'a> FileRef<'a> {
 }
 
 #[derive(Copy, Clone)]
-pub struct DirectoryRef<'a> {
+struct RefInner<'a> {
     parent_blob: &'a Blob,
     name: &'a str,
     blob_id: &'a BlobId,
 }
 
-impl<'a> DirectoryRef<'a> {
-    pub fn name(&self) -> &'a str {
-        self.name
-    }
-
-    pub fn locator(&self) -> Locator {
-        Locator::Head(*self.blob_id)
-    }
-
-    pub async fn open(&self) -> Result<Directory> {
-        Directory::open(
-            self.parent_blob.db_pool().clone(),
-            self.parent_blob.branch().clone(),
-            self.parent_blob.cryptor().clone(),
-            self.locator(),
-        )
-        .await
+impl PartialEq for RefInner<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.parent_blob.global_locator() == other.parent_blob.global_locator()
+            && self.name == other.name
+            && self.blob_id == other.blob_id
     }
 }
+
+impl Eq for RefInner<'_> {}
 
 /// Destination directory of a move operation.
 #[allow(clippy::large_enum_variant)]

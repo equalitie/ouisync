@@ -6,11 +6,11 @@ use crate::{
     directory::{Directory, DirectoryRef, EntryRef, FileRef},
     entry::EntryType,
     error::{Error, Result},
-    iterator::{Accumulate, DrainFilter, SortedUnion},
+    iterator::{Accumulate, SortedUnion},
     replica_id::ReplicaId,
     versioned_file_name,
 };
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, fmt, mem};
 
 pub struct JointDirectory {
     versions: BTreeMap<ReplicaId, Directory>,
@@ -37,67 +37,34 @@ impl JointDirectory {
         let entries = SortedUnion::new(entries, |entry| entry.name());
         let entries = Accumulate::new(entries, |entry| entry.name());
 
-        entries.flat_map(|(_, entries)| merge(entries))
+        entries.flat_map(|(_, entries)| Merge::new(entries.into_iter()))
     }
 
-    // pub fn lookup(&self, name: &'_ str) -> Result<EntryInfo> {
-    //     // Look for exact match first as that is the most likely case.
-    //     if let Some((name, versions)) = self.entries.get_key_value(name) {
-    //         if !versions.directories.is_empty() {
-    //             return Ok(EntryInfo {
-    //                 name,
-    //                 version: EntryVersion::Directory(&versions.directories),
-    //             });
-    //         }
+    pub fn lookup<'a>(&'a self, name: &'a str) -> impl Iterator<Item = JointEntryRef<'a>> {
+        let exact = Merge::new(
+            self.versions
+                .values()
+                .flat_map(move |dir| dir.lookup(name).ok().into_iter().flatten()),
+        );
 
-    //         if versions.files.len() > 1 {
-    //             return Err(Error::AmbiguousEntry(
-    //                 versions.files.keys().copied().collect(),
-    //             ));
-    //         }
+        let (name, branch_id_prefix) = versioned_file_name::parse(name);
+        let versioned = branch_id_prefix
+            .map(|branch_id_prefix| {
+                self.versions
+                    .values()
+                    .flat_map(move |dir| dir.lookup(name).ok().into_iter().flatten())
+                    .filter_map(|entry| entry.file().ok())
+                    .filter(move |file| file.branch_id().starts_with(&branch_id_prefix))
+                    .map(JointEntryRef::File)
+            })
+            .into_iter()
+            .flatten();
 
-    //         if let Some((branch_id, locator)) = versions.files.iter().next() {
-    //             return Ok(EntryInfo {
-    //                 name,
-    //                 version: EntryVersion::File { branch_id, locator },
-    //             });
-    //         }
-
-    //         unreachable!("joint directory entry must contain at least one file or directory")
-    //     }
-
-    //     // Now try to strip the branch suffix and lookup the versioned entry
-    //     let (name, branch_id_prefix) = versioned_file_name::parse(name);
-    //     let branch_id_prefix = branch_id_prefix.ok_or(Error::EntryNotFound)?;
-    //     let (name, versions) = self
-    //         .entries
-    //         .get_key_value(name)
-    //         .ok_or(Error::EntryNotFound)?;
-
-    //     let mut matches = versions
-    //         .files
-    //         .iter()
-    //         .filter(|(branch_id, _)| branch_id.starts_with(&branch_id_prefix))
-    //         .peekable();
-
-    //     let (branch_id, locator) = matches.next().ok_or(Error::EntryNotFound)?;
-
-    //     if matches.peek().is_some() {
-    //         return Err(Error::AmbiguousEntry(
-    //             iter::once(branch_id)
-    //                 .chain(matches.map(|(branch_id, _)| branch_id))
-    //                 .copied()
-    //                 .collect(),
-    //         ));
-    //     }
-
-    //     Ok(EntryInfo {
-    //         name,
-    //         version: EntryVersion::File { branch_id, locator },
-    //     })
-    // }
+        exact.chain(versioned)
+    }
 }
 
+#[derive(Eq, PartialEq, Debug)]
 pub enum JointEntryRef<'a> {
     File(FileRef<'a>),
     Directory(JointDirectoryRef<'a>),
@@ -133,6 +100,7 @@ impl<'a> JointEntryRef<'a> {
     }
 }
 
+#[derive(Eq, PartialEq)]
 pub struct JointDirectoryRef<'a>(Vec<DirectoryRef<'a>>);
 
 impl<'a> JointDirectoryRef<'a> {
@@ -149,22 +117,57 @@ impl<'a> JointDirectoryRef<'a> {
     }
 }
 
-fn merge(mut entries: Vec<EntryRef>) -> impl Iterator<Item = JointEntryRef> {
-    let directories: Vec<_> = DrainFilter::new(&mut entries, |entry| entry.is_directory())
-        .map(|entry| entry.directory().unwrap())
-        .collect();
-    let directories = if directories.is_empty() {
-        None
-    } else {
-        Some(JointEntryRef::Directory(JointDirectoryRef(directories)))
-    };
+impl fmt::Debug for JointDirectoryRef<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("JointDirectoryRef")
+            .field("name", &self.name())
+            .finish()
+    }
+}
 
-    let files = entries
-        .into_iter()
-        .filter_map(|entry| entry.file().ok())
-        .map(JointEntryRef::File);
+// Iterator adaptor that maps iterator of `EntryRef` to iterator of `JointEntryRef` by mering all
+// `EntryRef::Directory` items into a single `JointDirectoryRef` item.
+struct Merge<'a, I> {
+    entries: I,
+    directories: Vec<DirectoryRef<'a>>,
+}
 
-    directories.into_iter().chain(files)
+impl<'a, I> Merge<'a, I>
+where
+    I: Iterator<Item = EntryRef<'a>>,
+{
+    fn new(entries: I) -> Self {
+        Self {
+            entries,
+            directories: vec![],
+        }
+    }
+}
+
+impl<'a, I> Iterator for Merge<'a, I>
+where
+    I: Iterator<Item = EntryRef<'a>>,
+{
+    type Item = JointEntryRef<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        for entry in &mut self.entries {
+            match entry {
+                EntryRef::File(file) => return Some(JointEntryRef::File(file)),
+                EntryRef::Directory(dir) => {
+                    self.directories.push(dir);
+                }
+            }
+        }
+
+        if self.directories.is_empty() {
+            None
+        } else {
+            Some(JointEntryRef::Directory(JointDirectoryRef(mem::take(
+                &mut self.directories,
+            ))))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -223,8 +226,8 @@ mod tests {
         assert_eq!(entries[1].name(), "file1.txt");
         assert_eq!(entries[1].entry_type(), EntryType::File);
 
-        // assert_eq!(root.lookup("file0.txt").unwrap(), entries[0]);
-        // assert_eq!(root.lookup("file1.txt").unwrap(), entries[1]);
+        assert_eq!(root.lookup("file0.txt").collect::<Vec<_>>(), entries[0..1]);
+        assert_eq!(root.lookup("file1.txt").collect::<Vec<_>>(), entries[1..2]);
     }
 
     #[tokio::test(flavor = "multi_thread")]
