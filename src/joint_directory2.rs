@@ -180,7 +180,6 @@ mod tests {
         index::{BranchData, Index},
         locator::Locator,
     };
-    use assert_matches::assert_matches;
     use futures_util::future;
 
     #[tokio::test(flavor = "multi_thread")]
@@ -266,7 +265,6 @@ mod tests {
         let root = JointDirectory::new(vec![root0, root1]);
 
         let files: Vec<_> = root.entries().map(|entry| entry.file().unwrap()).collect();
-
         assert_eq!(files.len(), 2);
 
         for branch in &branches {
@@ -276,18 +274,29 @@ mod tests {
                 .unwrap();
             assert_eq!(file.name(), "file.txt");
 
-            // assert_eq!(
-            //     root.lookup(&format!("file.txt.v{:8x}", branch.replica_id()))
-            //         .unwrap(),
-            //     *entry
-            // );
+            assert_eq!(
+                root.lookup(&versioned_file_name::create(
+                    "file.txt",
+                    branch.replica_id()
+                ))
+                .collect::<Vec<_>>(),
+                vec![JointEntryRef::File(*file)]
+            );
         }
 
-        // assert_matches!(root.lookup("file.txt"), Err(Error::AmbiguousEntry(branch_ids)) => {
-        //     assert_eq!(branch_ids.len(), 2);
-        //     assert!(branch_ids.contains(branches[0].replica_id()));
-        //     assert!(branch_ids.contains(branches[1].replica_id()));
-        // });
+        let files: Vec<_> = root
+            .lookup("file.txt")
+            .map(|entry| entry.file().unwrap())
+            .collect();
+        assert_eq!(files.len(), 2);
+
+        for branch in &branches {
+            let file = files
+                .iter()
+                .find(|file| file.branch_id() == branch.replica_id())
+                .unwrap();
+            assert_eq!(file.name(), "file.txt");
+        }
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -370,7 +379,64 @@ mod tests {
     }
 
     // TODO: test conflict_forked_directories
-    // TODO: test conflict_file_and_directory
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn conflict_file_and_directory() {
+        let index = setup(2).await;
+        let branches = index.branches().await;
+
+        let mut root0 = Directory::create(
+            index.pool.clone(),
+            branches[0].clone(),
+            Cryptor::Null,
+            Locator::Root,
+        );
+
+        let mut file0 = root0.create_file("config".to_owned()).unwrap();
+        file0.flush().await.unwrap();
+        root0.flush().await.unwrap();
+
+        let mut root1 = Directory::create(
+            index.pool.clone(),
+            branches[1].clone(),
+            Cryptor::Null,
+            Locator::Root,
+        );
+
+        let mut dir1 = root1.create_directory("config".to_owned()).unwrap();
+        dir1.flush().await.unwrap();
+        root1.flush().await.unwrap();
+
+        let root = JointDirectory::new(vec![root0, root1]);
+
+        let entries: Vec<_> = root.entries().collect();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(
+            entries.iter().map(|entry| entry.name()).collect::<Vec<_>>(),
+            ["config", "config"]
+        );
+        assert!(entries.iter().any(|entry| match entry {
+            JointEntryRef::File(file) => file.branch_id() == branches[0].replica_id(),
+            JointEntryRef::Directory(_) => false,
+        }));
+        assert!(entries
+            .iter()
+            .any(|entry| entry.entry_type() == EntryType::Directory));
+
+        let entries: Vec<_> = root.lookup("config").collect();
+        assert_eq!(entries.len(), 2);
+
+        let name = versioned_file_name::create("config", branches[0].replica_id());
+        let mut entries: Vec<_> = root.lookup(&name).collect();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].entry_type(), EntryType::File);
+        assert_eq!(
+            entries.remove(0).file().unwrap().branch_id(),
+            branches[0].replica_id()
+        );
+    }
+
+    // TODO: test conflict_multiple_files_and_directories
 
     async fn setup(branch_count: usize) -> Index {
         let pool = db::init(db::Store::Memory).await.unwrap();

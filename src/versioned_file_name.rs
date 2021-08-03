@@ -32,7 +32,19 @@ mod tests {
     use super::*;
     use crate::test_utils;
     use rand::{rngs::StdRng, Rng, SeedableRng};
+    use std::convert::TryFrom;
     use test_strategy::proptest;
+
+    #[test]
+    fn create_versioned_file_name() {
+        let mut replica_id = [
+            0xde, 0xad, 0xbe, 0xef, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00,
+        ];
+        let replica_id = ReplicaId::try_from(&replica_id[..]).unwrap();
+
+        assert_eq!(create("file.txt", &replica_id), "file.txt.vdeadbeef");
+    }
 
     #[proptest]
     fn parse_versioned_file_name(
