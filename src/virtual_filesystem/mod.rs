@@ -909,7 +909,7 @@ fn to_error_code(error: &Error) -> libc::c_int {
         | Error::WrongBlockLength(_)
         | Error::Crypto
         | Error::Network(_) => libc::EIO,
-        Error::EntryNotFound => libc::ENOENT,
+        Error::EntryNotFound | Error::AmbiguousEntry => libc::ENOENT,
         Error::EntryExists => libc::EEXIST,
         Error::EntryNotDirectory => libc::ENOTDIR,
         Error::EntryIsDirectory => libc::EISDIR,

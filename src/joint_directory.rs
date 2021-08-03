@@ -40,7 +40,7 @@ impl JointDirectory {
         entries.flat_map(|(_, entries)| Merge::new(entries.into_iter()))
     }
 
-    /// Looks up entry with the specified name and returnins all concurrent versions of the entry.
+    /// Looks up entry with the specified name and returns all concurrent versions of the entry.
     pub fn lookup<'a>(&'a self, name: &'a str) -> impl Iterator<Item = JointEntryRef<'a>> {
         let exact = Merge::new(
             self.versions
@@ -62,6 +62,25 @@ impl JointDirectory {
             .flatten();
 
         exact.chain(versioned)
+    }
+
+    /// Looks up entry with the specified name.
+    /// - If there is only one version of the entry and it is a file, returns it as
+    ///   `JointEntryRef::File`.
+    /// - If there are multiple versions, but all are directories, returns them in a single
+    ///   `JointEntryRef::Directory`.
+    /// - If there are mutliple file versions or at least one directory and one file version,
+    ///   returns `AmbiguousEntry` error.
+    /// - If there are no versions, returns `EntryNotFound`.
+    pub fn lookup_unique<'a>(&'a self, name: &'a str) -> Result<JointEntryRef<'a>> {
+        let mut entries = self.lookup(name);
+        let first = entries.next().ok_or(Error::EntryNotFound)?;
+
+        if entries.next().is_none() {
+            Ok(first)
+        } else {
+            Err(Error::AmbiguousEntry)
+        }
     }
 
     /// Looks up a subdirectory with the specified name. Useful in case of a conflict between

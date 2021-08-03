@@ -36,6 +36,8 @@ pub enum Error {
     EntryExists,
     #[error("entry not found")]
     EntryNotFound,
+    #[error("entry has multiple concurrent versions")]
+    AmbiguousEntry,
     #[error("entry is not a directory")]
     EntryNotDirectory,
     #[error("entry is a directory")]

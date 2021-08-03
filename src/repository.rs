@@ -33,28 +33,26 @@ impl Repository {
     }
 
     /// Looks up an entry by its path. The path must be relative to the repository root.
-    /// If the entry exists, returns its `GlobalLocator` and `EntryType`, otherwise returns
-    /// `EntryNotFound`.
+    /// If the entry exists, returns its `EntryType`, otherwise returns `EntryNotFound`.
     pub async fn lookup_type<P: AsRef<Utf8Path>>(&self, path: P) -> Result<EntryType> {
-        todo!()
-        // match decompose_path(path.as_ref()) {
-        //     Some((parent, name)) => {
-        //         let parent = self.open_directory(parent).await?;
-        //         Ok(parent.lookup(name)?.entry_type())
-        //     }
-        //     None => Ok(EntryType::Directory),
-        // }
+        match decompose_path(path.as_ref()) {
+            Some((parent, name)) => {
+                let parent = self.open_directory(parent).await?;
+                Ok(parent.lookup_unique(name)?.entry_type())
+            }
+            None => Ok(EntryType::Directory),
+        }
     }
 
     /// Opens a file at the given path (relative to the repository root)
     pub async fn open_file<P: AsRef<Utf8Path>>(&self, path: &P) -> Result<File> {
-        todo!()
-        // let (parent, name) = decompose_path(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
-        // self.open_directory(parent)
-        //     .await?
-        //     .lookup(name)?
-        //     .open_file()
-        //     .await
+        let (parent, name) = decompose_path(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
+        self.open_directory(parent)
+            .await?
+            .lookup_unique(name)?
+            .file()?
+            .open()
+            .await
     }
 
     /// Opens a directory at the given path (relative to the repository root)
