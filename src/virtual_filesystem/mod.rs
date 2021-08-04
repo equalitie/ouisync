@@ -661,7 +661,7 @@ impl Inner {
             dir.flush().await?;
         }
 
-        let locator = *file.global_locator();
+        let locator = file.global_locator();
         let entry = JointEntry::File(file);
         let inode = self
             .inodes

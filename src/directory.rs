@@ -236,7 +236,7 @@ impl Directory {
     }
 
     /// Locator of this directory
-    pub fn global_locator(&self) -> &GlobalLocator {
+    pub fn global_locator(&self) -> GlobalLocator {
         self.blob.global_locator()
     }
 }

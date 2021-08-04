@@ -21,7 +21,7 @@ use zeroize::Zeroize;
 
 pub struct Blob {
     branch: BranchData,
-    global_locator: GlobalLocator,
+    locator: Locator,
     pool: db::Pool,
     cryptor: Cryptor,
     nonce_sequence: NonceSequence,
@@ -61,14 +61,9 @@ impl Blob {
             dirty: false,
         };
 
-        let global_locator = GlobalLocator {
-            branch_id: *branch.replica_id(),
-            local: locator,
-        };
-
         Ok(Self {
             branch,
-            global_locator,
+            locator,
             pool,
             cryptor,
             nonce_sequence,
@@ -94,14 +89,9 @@ impl Blob {
             dirty: true,
         };
 
-        let global_locator = GlobalLocator {
-            branch_id: *branch.replica_id(),
-            local: locator,
-        };
-
         Self {
             branch,
-            global_locator,
+            locator,
             pool,
             cryptor,
             nonce_sequence,
@@ -122,12 +112,15 @@ impl Blob {
 
     /// Locator of this blob.
     pub fn locator(&self) -> &Locator {
-        &self.global_locator.local
+        &self.locator
     }
 
     /// GlobalLocator of this blob.
-    pub fn global_locator(&self) -> &GlobalLocator {
-        &self.global_locator
+    pub fn global_locator(&self) -> GlobalLocator {
+        GlobalLocator {
+            branch_id: *self.branch.replica_id(),
+            local: self.locator,
+        }
     }
 
     /// Reads data from this blob into `buffer`, advancing the internal cursor. Returns the
@@ -349,9 +342,7 @@ impl Blob {
     /// Creates a shallow copy (only the index nodes are copied, not blocks) of this blob into the
     /// specified destination branch and locator.
     pub async fn fork(&mut self, dst_branch: BranchData, dst_head_locator: Locator) -> Result<()> {
-        if self.branch.replica_id() == dst_branch.replica_id()
-            && self.global_locator.local == dst_head_locator
-        {
+        if self.branch.replica_id() == dst_branch.replica_id() && self.locator == dst_head_locator {
             // This blob is already in the dst, nothing to do.
             return Ok(());
         }
@@ -374,10 +365,7 @@ impl Blob {
         // currently no reason why they wouldn't, but to be super extra sure, consider wrapping
         // them in `catch_unwind`.
         self.branch = dst_branch;
-        self.global_locator = GlobalLocator {
-            branch_id: *self.branch.replica_id(),
-            local: dst_head_locator,
-        };
+        self.locator = dst_head_locator;
         self.current_block.locator = self.locator_at(self.current_block.locator.number());
 
         Ok(())
