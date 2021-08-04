@@ -477,9 +477,6 @@ struct EntryData {
 
 #[cfg(test)]
 mod tests {
-    // TODO: re-enable these tests
-    /*
-
     use super::*;
     use crate::index::BranchData;
     use std::collections::BTreeSet;
@@ -489,7 +486,7 @@ mod tests {
         let (pool, branch) = setup().await;
 
         // Create the root directory and put some file in it.
-        let mut dir = Directory::create(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root);
+        let mut dir = Directory::create_root(pool.clone(), branch.clone(), Cryptor::Null);
 
         let mut file_dog = dir.create_file("dog.txt".into()).unwrap();
         file_dog.write(b"woof").await.unwrap();
@@ -501,10 +498,18 @@ mod tests {
 
         dir.flush().await.unwrap();
 
+        let write_context = dir.write_context.clone();
+
         // Reopen the dir and try to read the files.
-        let dir = Directory::open(pool, branch.clone(), Cryptor::Null, Locator::Root)
-            .await
-            .unwrap();
+        let dir = Directory::open(
+            pool,
+            branch.clone(),
+            Cryptor::Null,
+            Locator::Root,
+            write_context,
+        )
+        .await
+        .unwrap();
 
         let expected_names: BTreeSet<_> = vec!["dog.txt", "cat.txt"].into_iter().collect();
         let actual_names: BTreeSet<_> = dir.entries().map(|entry| entry.name()).collect();
@@ -532,20 +537,34 @@ mod tests {
         let (pool, branch) = setup().await;
 
         // Create empty directory
-        let mut dir = Directory::create(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root);
+        let mut dir = Directory::create_root(pool.clone(), branch.clone(), Cryptor::Null);
         dir.flush().await.unwrap();
 
+        let write_context = dir.write_context.clone();
+
         // Reopen it and add a file to it.
-        let mut dir = Directory::open(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root)
-            .await
-            .unwrap();
+        let mut dir = Directory::open(
+            pool.clone(),
+            branch.clone(),
+            Cryptor::Null,
+            Locator::Root,
+            write_context.clone(),
+        )
+        .await
+        .unwrap();
         dir.create_file("none.txt".into()).unwrap();
         dir.flush().await.unwrap();
 
         // Reopen it again and check the file is still there.
-        let dir = Directory::open(pool, branch.clone(), Cryptor::Null, Locator::Root)
-            .await
-            .unwrap();
+        let dir = Directory::open(
+            pool,
+            branch.clone(),
+            Cryptor::Null,
+            Locator::Root,
+            write_context,
+        )
+        .await
+        .unwrap();
         assert!(dir.lookup("none.txt").is_ok());
     }
 
@@ -556,27 +575,37 @@ mod tests {
         let name = "monkey.txt";
 
         // Create a directory with a single file.
-        let mut parent_dir =
-            Directory::create(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root);
+        let mut parent_dir = Directory::create_root(pool.clone(), branch.clone(), Cryptor::Null);
         let mut file = parent_dir.create_file(name.into()).unwrap();
         file.flush().await.unwrap();
         parent_dir.flush().await.unwrap();
 
         let file_locator = *file.locator();
+        let write_context = parent_dir.write_context.clone();
 
         // Reopen and remove the file
-        let mut parent_dir =
-            Directory::open(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root)
-                .await
-                .unwrap();
+        let mut parent_dir = Directory::open(
+            pool.clone(),
+            branch.clone(),
+            Cryptor::Null,
+            Locator::Root,
+            write_context.clone(),
+        )
+        .await
+        .unwrap();
         parent_dir.remove_file(name).await.unwrap();
         parent_dir.flush().await.unwrap();
 
         // Reopen again and check the file entry was removed.
-        let parent_dir =
-            Directory::open(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root)
-                .await
-                .unwrap();
+        let parent_dir = Directory::open(
+            pool.clone(),
+            branch.clone(),
+            Cryptor::Null,
+            Locator::Root,
+            write_context,
+        )
+        .await
+        .unwrap();
         match parent_dir.lookup(name) {
             Err(Error::EntryNotFound) => (),
             Err(error) => panic!("unexpected error {:?}", error),
@@ -600,27 +629,38 @@ mod tests {
         let name = "dir";
 
         // Create a directory with a single subdirectory.
-        let mut parent_dir =
-            Directory::create(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root);
+        let mut parent_dir = Directory::create_root(pool.clone(), branch.clone(), Cryptor::Null);
         let mut dir = parent_dir.create_directory(name.into()).unwrap();
         dir.flush().await.unwrap();
         parent_dir.flush().await.unwrap();
 
+        let parent_dir_write_context = parent_dir.write_context.clone();
+        let dir_write_context = dir.write_context.clone();
         let dir_locator = *dir.locator();
 
         // Reopen and remove the subdirectory
-        let mut parent_dir =
-            Directory::open(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root)
-                .await
-                .unwrap();
+        let mut parent_dir = Directory::open(
+            pool.clone(),
+            branch.clone(),
+            Cryptor::Null,
+            Locator::Root,
+            parent_dir_write_context.clone(),
+        )
+        .await
+        .unwrap();
         parent_dir.remove_directory(name).await.unwrap();
         parent_dir.flush().await.unwrap();
 
         // Reopen again and check the subdiretory entry was removed.
-        let parent_dir =
-            Directory::open(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root)
-                .await
-                .unwrap();
+        let parent_dir = Directory::open(
+            pool.clone(),
+            branch.clone(),
+            Cryptor::Null,
+            Locator::Root,
+            parent_dir_write_context,
+        )
+        .await
+        .unwrap();
         match parent_dir.lookup(name) {
             Err(Error::EntryNotFound) => (),
             Err(error) => panic!("unexpected error {:?}", error),
@@ -628,7 +668,15 @@ mod tests {
         }
 
         // Check the directory itself was removed as well.
-        match Directory::open(pool, branch.clone(), Cryptor::Null, dir_locator).await {
+        match Directory::open(
+            pool,
+            branch.clone(),
+            Cryptor::Null,
+            dir_locator,
+            dir_write_context,
+        )
+        .await
+        {
             Err(Error::EntryNotFound) => (),
             Err(error) => panic!("unexpected error {:?}", error),
             Ok(_) => panic!("directory should not exists but it does"),
@@ -641,5 +689,4 @@ mod tests {
 
         (pool, branch)
     }
-    */
 }
