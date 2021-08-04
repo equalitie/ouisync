@@ -12,7 +12,6 @@ use crate::{
     replica_id::ReplicaId,
     write_context::WriteContext,
 };
-use camino::Utf8PathBuf;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{btree_map, BTreeMap},
@@ -46,26 +45,15 @@ impl Directory {
         })
     }
 
-    /// Creates new directory.
-    pub(crate) fn create(
-        pool: db::Pool,
-        branch: BranchData,
-        cryptor: Cryptor,
-        locator: Locator,
-        path: Utf8PathBuf,
-    ) -> Self {
-        let local_branch_id = *branch.replica_id();
-        let blob = Blob::create(pool, branch.clone(), cryptor, locator);
+    /// Creates the root directory.
+    pub(crate) fn create_root(pool: db::Pool, branch: BranchData, cryptor: Cryptor) -> Self {
+        let blob = Blob::create(pool, branch.clone(), cryptor, Locator::Root);
 
         Self {
             blob,
-            content: Content {
-                entries: Default::default(),
-                dirty: true,
-                local_branch_id,
-            },
+            content: Content::new(),
             write_context: WriteContext {
-                path,
+                path: "/".into(),
                 local_branch: branch,
             },
         }
@@ -128,28 +116,44 @@ impl Directory {
 
     /// Creates a new file inside this directory.
     pub fn create_file(&mut self, name: String) -> Result<File> {
-        let tag = self.content.insert(name, EntryType::File)?;
+        // TODO: fork self
+
+        let blob_id =
+            self.content
+                .insert(*self.blob.branch().replica_id(), name, EntryType::File)?;
 
         Ok(File::create(
             self.blob.db_pool().clone(),
             self.blob.branch().clone(),
             self.blob.cryptor().clone(),
-            Locator::Head(tag),
+            Locator::Head(blob_id),
         ))
     }
 
     /// Creates a new subdirectory of this directory.
     pub fn create_directory(&mut self, name: String) -> Result<Self> {
-        let path = self.write_context.path.join(&name);
-        let blob_id = self.content.insert(name, EntryType::Directory)?;
+        // TODO: fork self
 
-        Ok(Self::create(
+        let path = self.write_context.path.join(&name);
+        let blob_id =
+            self.content
+                .insert(*self.blob.branch().replica_id(), name, EntryType::Directory)?;
+
+        let blob = Blob::create(
             self.blob.db_pool().clone(),
             self.blob.branch().clone(),
             self.blob.cryptor().clone(),
             Locator::Head(blob_id),
-            path,
-        ))
+        );
+
+        Ok(Self {
+            blob,
+            content: Content::new(),
+            write_context: WriteContext {
+                path,
+                local_branch: self.blob.branch().clone(),
+            },
+        })
     }
 
     /// Creates a file with locators pointing to the same blocks that the src_locators point to.
@@ -163,7 +167,11 @@ impl Directory {
     where
         I: Iterator<Item = Locator>,
     {
-        let tag = self.content.insert(dst_name.to_string(), EntryType::File)?;
+        let tag = self.content.insert(
+            *self.write_context.local_branch.replica_id(),
+            dst_name.to_string(),
+            EntryType::File,
+        )?;
 
         let mut tx = self.blob.db_pool().begin().await?;
         let cryptor = self.blob.cryptor();
@@ -420,16 +428,26 @@ struct Content {
     entries: BTreeMap<String, BTreeMap<ReplicaId, EntryData>>,
     #[serde(skip)]
     dirty: bool,
-    local_branch_id: ReplicaId,
 }
 
 impl Content {
-    fn insert(&mut self, name: String, entry_type: EntryType) -> Result<BlobId> {
-        let blob_id = rand::random();
+    fn new() -> Self {
+        Self {
+            entries: Default::default(),
+            dirty: true,
+        }
+    }
 
+    fn insert(
+        &mut self,
+        branch_id: ReplicaId,
+        name: String,
+        entry_type: EntryType,
+    ) -> Result<BlobId> {
+        let blob_id = rand::random();
         let versions = self.entries.entry(name).or_insert_with(Default::default);
 
-        match versions.entry(self.local_branch_id) {
+        match versions.entry(branch_id) {
             btree_map::Entry::Vacant(entry) => {
                 entry.insert(EntryData {
                     entry_type,

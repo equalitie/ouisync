@@ -308,7 +308,6 @@ mod tests {
         db,
         directory::Directory,
         index::{BranchData, Index},
-        locator::Locator,
     };
     use assert_matches::assert_matches;
     use futures_util::future;
@@ -318,13 +317,8 @@ mod tests {
         let index = setup(2).await;
         let branches = index.branches().await;
 
-        let mut root0 = Directory::create(
-            index.pool.clone(),
-            branches[0].clone(),
-            Cryptor::Null,
-            Locator::Root,
-            "/".into(),
-        );
+        let mut root0 =
+            Directory::create_root(index.pool.clone(), branches[0].clone(), Cryptor::Null);
         root0
             .create_file("file0.txt".to_owned())
             .unwrap()
@@ -333,13 +327,8 @@ mod tests {
             .unwrap();
         root0.flush().await.unwrap();
 
-        let mut root1 = Directory::create(
-            index.pool.clone(),
-            branches[1].clone(),
-            Cryptor::Null,
-            Locator::Root,
-            "/".into(),
-        );
+        let mut root1 =
+            Directory::create_root(index.pool.clone(), branches[1].clone(), Cryptor::Null);
         root1
             .create_file("file1.txt".to_owned())
             .unwrap()
@@ -370,13 +359,8 @@ mod tests {
         let index = setup(2).await;
         let branches = index.branches().await;
 
-        let mut root0 = Directory::create(
-            index.pool.clone(),
-            branches[0].clone(),
-            Cryptor::Null,
-            Locator::Root,
-            "/".into(),
-        );
+        let mut root0 =
+            Directory::create_root(index.pool.clone(), branches[0].clone(), Cryptor::Null);
         root0
             .create_file("file.txt".to_owned())
             .unwrap()
@@ -385,13 +369,8 @@ mod tests {
             .unwrap();
         root0.flush().await.unwrap();
 
-        let mut root1 = Directory::create(
-            index.pool.clone(),
-            branches[1].clone(),
-            Cryptor::Null,
-            Locator::Root,
-            "/".into(),
-        );
+        let mut root1 =
+            Directory::create_root(index.pool.clone(), branches[1].clone(), Cryptor::Null);
         root1
             .create_file("file.txt".to_owned())
             .unwrap()
@@ -444,24 +423,14 @@ mod tests {
         let index = setup(2).await;
         let branches = index.branches().await;
 
-        let mut root0 = Directory::create(
-            index.pool.clone(),
-            branches[0].clone(),
-            Cryptor::Null,
-            Locator::Root,
-            "/".into(),
-        );
+        let mut root0 =
+            Directory::create_root(index.pool.clone(), branches[0].clone(), Cryptor::Null);
         let mut file0 = root0.create_file("file.txt".to_owned()).unwrap();
         file0.flush().await.unwrap();
         root0.flush().await.unwrap();
 
-        let mut root1 = Directory::create(
-            index.pool.clone(),
-            branches[1].clone(),
-            Cryptor::Null,
-            Locator::Root,
-            "/".into(),
-        );
+        let mut root1 =
+            Directory::create_root(index.pool.clone(), branches[1].clone(), Cryptor::Null);
         root1
             .copy_file("file.txt", file0.locators(), &branches[0])
             .await
@@ -488,25 +457,15 @@ mod tests {
         let index = setup(2).await;
         let branches = index.branches().await;
 
-        let mut root0 = Directory::create(
-            index.pool.clone(),
-            branches[0].clone(),
-            Cryptor::Null,
-            Locator::Root,
-            "/".into(),
-        );
+        let mut root0 =
+            Directory::create_root(index.pool.clone(), branches[0].clone(), Cryptor::Null);
 
         let mut dir0 = root0.create_directory("dir".to_owned()).unwrap();
         dir0.flush().await.unwrap();
         root0.flush().await.unwrap();
 
-        let mut root1 = Directory::create(
-            index.pool.clone(),
-            branches[1].clone(),
-            Cryptor::Null,
-            Locator::Root,
-            "/".into(),
-        );
+        let mut root1 =
+            Directory::create_root(index.pool.clone(), branches[1].clone(), Cryptor::Null);
 
         let mut dir1 = root1.create_directory("dir".to_owned()).unwrap();
         dir1.flush().await.unwrap();
@@ -527,25 +486,15 @@ mod tests {
         let index = setup(2).await;
         let branches = index.branches().await;
 
-        let mut root0 = Directory::create(
-            index.pool.clone(),
-            branches[0].clone(),
-            Cryptor::Null,
-            Locator::Root,
-            "/".into(),
-        );
+        let mut root0 =
+            Directory::create_root(index.pool.clone(), branches[0].clone(), Cryptor::Null);
 
         let mut file0 = root0.create_file("config".to_owned()).unwrap();
         file0.flush().await.unwrap();
         root0.flush().await.unwrap();
 
-        let mut root1 = Directory::create(
-            index.pool.clone(),
-            branches[1].clone(),
-            Cryptor::Null,
-            Locator::Root,
-            "/".into(),
-        );
+        let mut root1 =
+            Directory::create_root(index.pool.clone(), branches[1].clone(), Cryptor::Null);
 
         let mut dir1 = root1.create_directory("config".to_owned()).unwrap();
         dir1.flush().await.unwrap();
@@ -588,13 +537,8 @@ mod tests {
         let index = setup(2).await;
         let branches = index.branches().await;
 
-        let mut root0 = Directory::create(
-            index.pool.clone(),
-            branches[0].clone(),
-            Cryptor::Null,
-            Locator::Root,
-            "/".into(),
-        );
+        let mut root0 =
+            Directory::create_root(index.pool.clone(), branches[0].clone(), Cryptor::Null);
 
         let mut dir0 = root0.create_directory("pics".to_owned()).unwrap();
         let mut file0 = dir0.create_file("dog.jpg".to_owned()).unwrap();
@@ -603,13 +547,8 @@ mod tests {
         dir0.flush().await.unwrap();
         root0.flush().await.unwrap();
 
-        let mut root1 = Directory::create(
-            index.pool.clone(),
-            branches[1].clone(),
-            Cryptor::Null,
-            Locator::Root,
-            "/".into(),
-        );
+        let mut root1 =
+            Directory::create_root(index.pool.clone(), branches[1].clone(), Cryptor::Null);
 
         let mut dir1 = root1.create_directory("pics".to_owned()).unwrap();
         let mut file1 = dir1.create_file("cat.jpg".to_owned()).unwrap();
@@ -632,13 +571,8 @@ mod tests {
         let index = setup(2).await;
         let branches = index.branches().await;
 
-        let mut root0 = Directory::create(
-            index.pool.clone(),
-            branches[0].clone(),
-            Cryptor::Null,
-            Locator::Root,
-            "/".into(),
-        );
+        let mut root0 =
+            Directory::create_root(index.pool.clone(), branches[0].clone(), Cryptor::Null);
 
         let mut dir0 = root0.create_directory("pics".to_owned()).unwrap();
         let mut file0 = dir0.create_file("dog.jpg".to_owned()).unwrap();
@@ -647,13 +581,7 @@ mod tests {
         dir0.flush().await.unwrap();
         root0.flush().await.unwrap();
 
-        let root1 = Directory::create(
-            index.pool.clone(),
-            branches[1].clone(),
-            Cryptor::Null,
-            Locator::Root,
-            "/".into(),
-        );
+        let root1 = Directory::create_root(index.pool.clone(), branches[1].clone(), Cryptor::Null);
 
         let mut root = JointDirectory::new(vec![root0, root1]);
 
@@ -672,13 +600,7 @@ mod tests {
         let index = setup(1).await;
         let branches = index.branches().await;
 
-        let root0 = Directory::create(
-            index.pool.clone(),
-            branches[0].clone(),
-            Cryptor::Null,
-            Locator::Root,
-            "/".into(),
-        );
+        let root0 = Directory::create_root(index.pool.clone(), branches[0].clone(), Cryptor::Null);
 
         let mut root = JointDirectory::new(vec![root0]);
 
@@ -695,13 +617,8 @@ mod tests {
         let index = setup(2).await;
         let branches = index.branches().await;
 
-        let mut root0 = Directory::create(
-            index.pool.clone(),
-            branches[0].clone(),
-            Cryptor::Null,
-            Locator::Root,
-            "/".into(),
-        );
+        let mut root0 =
+            Directory::create_root(index.pool.clone(), branches[0].clone(), Cryptor::Null);
 
         let mut dir0 = root0.create_directory("pics".to_owned()).unwrap();
 

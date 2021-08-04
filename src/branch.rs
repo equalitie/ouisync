@@ -9,7 +9,7 @@ use crate::{
     write_context::WriteContext,
     ReplicaId,
 };
-use camino::{Utf8Component, Utf8Path, Utf8PathBuf};
+use camino::{Utf8Component, Utf8Path};
 
 pub struct Branch {
     pool: db::Pool,
@@ -60,9 +60,8 @@ impl Branch {
     }
 
     pub async fn ensure_root_exists(&self) -> Result<Directory> {
-        let path = Utf8PathBuf::from("/");
         let write_context = WriteContext {
-            path: path.clone(),
+            path: "/".into(),
             local_branch: self.branch_data.clone(),
         };
 
@@ -71,12 +70,10 @@ impl Branch {
             .await
         {
             Ok(dir) => Ok(dir),
-            Err(Error::EntryNotFound) => Ok(Directory::create(
+            Err(Error::EntryNotFound) => Ok(Directory::create_root(
                 self.pool.clone(),
                 self.branch_data.clone(),
                 self.cryptor.clone(),
-                Locator::Root,
-                path,
             )),
             Err(error) => Err(error),
         }
