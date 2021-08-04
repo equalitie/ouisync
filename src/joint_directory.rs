@@ -10,7 +10,7 @@ use camino::{Utf8Component, Utf8Path};
 use futures_util::future;
 use std::{collections::BTreeMap, fmt, mem};
 
-/// Unified view over all concurrent versions of a directory.
+/// Unified view over multiple concurrent versions of a directory.
 pub struct JointDirectory {
     versions: BTreeMap<ReplicaId, Directory>,
 }
@@ -41,6 +41,8 @@ impl JointDirectory {
 
     /// Returns all versions of an entry with the given name. Concurrent file versions are returned
     /// separately but concurrent directory versions are merged into a single `JointDirectory`.
+    // TODO: try to find a way to avoid needing `name` to outlive the return value as this prevents
+    //       us to pass in a temporary which hurts ergonomy.
     pub fn lookup<'a>(&'a self, name: &'a str) -> impl Iterator<Item = JointEntryRef<'a>> {
         Merge::new(
             self.versions
@@ -225,7 +227,8 @@ impl fmt::Debug for JointDirectoryRef<'_> {
 }
 
 // Iterator adaptor that maps iterator of `EntryRef` to iterator of `JointEntryRef` by mering all
-// `EntryRef::Directory` items into a single `JointDirectoryRef` item.
+// `EntryRef::Directory` items into a single `JointDirectoryRef` item but keeping `EntryRef::File`
+// items separate.
 struct Merge<'a, I> {
     entries: I,
     directories: Vec<DirectoryRef<'a>>,
@@ -273,6 +276,7 @@ mod tests {
         index::{BranchData, Index},
         locator::Locator,
     };
+    use assert_matches::assert_matches;
     use futures_util::future;
 
     #[tokio::test(flavor = "multi_thread")]
@@ -320,6 +324,9 @@ mod tests {
 
         assert_eq!(root.lookup("file0.txt").collect::<Vec<_>>(), entries[0..1]);
         assert_eq!(root.lookup("file1.txt").collect::<Vec<_>>(), entries[1..2]);
+
+        assert_eq!(root.lookup_unique("file0.txt").unwrap(), entries[0]);
+        assert_eq!(root.lookup_unique("file1.txt").unwrap(), entries[1]);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -368,12 +375,12 @@ mod tests {
             assert_eq!(file.name(), "file.txt");
 
             assert_eq!(
-                root.lookup(&versioned_file_name::create(
+                root.lookup_unique(&versioned_file_name::create(
                     "file.txt",
                     branch.replica_id()
                 ))
-                .collect::<Vec<_>>(),
-                vec![JointEntryRef::File(*file)]
+                .unwrap(),
+                JointEntryRef::File(*file)
             );
         }
 
@@ -390,6 +397,8 @@ mod tests {
                 .unwrap();
             assert_eq!(file.name(), "file.txt");
         }
+
+        assert_matches!(root.lookup_unique("file.txt"), Err(Error::AmbiguousEntry));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -517,14 +526,13 @@ mod tests {
         let entries: Vec<_> = root.lookup("config").collect();
         assert_eq!(entries.len(), 2);
 
+        let entry = root.lookup_unique("config").unwrap();
+        assert_eq!(entry.entry_type(), EntryType::Directory);
+
         let name = versioned_file_name::create("config", branches[0].replica_id());
-        let mut entries: Vec<_> = root.lookup(&name).collect();
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].entry_type(), EntryType::File);
-        assert_eq!(
-            entries.remove(0).file().unwrap().branch_id(),
-            branches[0].replica_id()
-        );
+        let entry = root.lookup_unique(&name).unwrap();
+        assert_eq!(entry.entry_type(), EntryType::File);
+        assert_eq!(entry.file().unwrap().branch_id(), branches[0].replica_id());
     }
 
     // TODO: test conflict_forked_directories
