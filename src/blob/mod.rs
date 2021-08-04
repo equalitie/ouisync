@@ -346,6 +346,43 @@ impl Blob {
             .await
     }
 
+    /// Creates a shallow copy (only the index nodes are copied, not blocks) of this blob into the
+    /// specified destination branch and locator.
+    pub async fn fork(&mut self, dst_branch: BranchData, dst_head_locator: Locator) -> Result<()> {
+        if self.branch.replica_id() == dst_branch.replica_id()
+            && self.global_locator.local == dst_head_locator
+        {
+            // This blob is already in the dst, nothing to do.
+            return Ok(());
+        }
+
+        let mut tx = self.pool.begin().await?;
+
+        for (src_locator, dst_locator) in self.locators().zip(dst_head_locator.sequence()) {
+            let encoded_src_locator = src_locator.encode(&self.cryptor);
+            let encoded_dst_locator = dst_locator.encode(&self.cryptor);
+
+            let block_id = self.branch.get(&mut tx, &encoded_src_locator).await?;
+            dst_branch
+                .insert(&mut tx, &block_id, &encoded_dst_locator)
+                .await?;
+        }
+
+        tx.commit().await?;
+
+        // TODO: the following lines must happen atomically (either all succeed or none). There is
+        // currently no reason why they wouldn't, but to be super extra sure, consider wrapping
+        // them in `catch_unwind`.
+        self.branch = dst_branch;
+        self.global_locator = GlobalLocator {
+            branch_id: *self.branch.replica_id(),
+            local: dst_head_locator,
+        };
+        self.current_block.locator = self.locator_at(self.current_block.locator.number());
+
+        Ok(())
+    }
+
     pub fn db_pool(&self) -> &db::Pool {
         &self.pool
     }
