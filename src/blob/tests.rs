@@ -399,6 +399,94 @@ async fn modify_blob() {
     }
 }
 
+#[proptest]
+fn fork(
+    #[strategy(0..2 * BLOCK_SIZE)] src_len: usize,
+    #[strategy(0..=#src_len)] seek_pos: usize,
+    #[strategy(1..BLOCK_SIZE)] write_len: usize,
+    src_locator_is_root: bool,
+    dst_locator_same_as_src: bool,
+    #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
+) {
+    test_utils::run(fork_case(
+        src_len,
+        seek_pos,
+        write_len,
+        src_locator_is_root,
+        dst_locator_same_as_src,
+        rng_seed,
+    ))
+}
+
+async fn fork_case(
+    src_len: usize,
+    seek_pos: usize,
+    write_len: usize,
+    src_locator_is_root: bool,
+    dst_locator_same_as_src: bool,
+    rng_seed: u64,
+) {
+    let (mut rng, cryptor, pool, src_branch) = setup(rng_seed).await;
+    let dst_branch = BranchData::new(&pool, rng.gen()).await.unwrap();
+
+    let src_locator = if src_locator_is_root {
+        Locator::Root
+    } else {
+        Locator::Head(rng.gen())
+    };
+
+    let dst_locator = if dst_locator_same_as_src {
+        src_locator
+    } else {
+        Locator::Head(rng.gen())
+    };
+
+    let src_content: Vec<u8> = (&mut rng).sample_iter(Standard).take(src_len).collect();
+
+    let mut blob = Blob::create(
+        pool.clone(),
+        src_branch.clone(),
+        cryptor.clone(),
+        src_locator,
+    );
+    blob.write(&src_content[..]).await.unwrap();
+    blob.flush().await.unwrap();
+    blob.seek(SeekFrom::Start(seek_pos as u64)).await.unwrap();
+
+    blob.fork(dst_branch.clone(), dst_locator).await.unwrap();
+
+    let write_content: Vec<u8> = rng.sample_iter(Standard).take(write_len).collect();
+
+    blob.write(&write_content[..]).await.unwrap();
+    blob.flush().await.unwrap();
+
+    // Re-open the orig and verify the content is unchanged
+    let mut orig = Blob::open(pool.clone(), src_branch, cryptor.clone(), src_locator)
+        .await
+        .unwrap();
+
+    let buffer = orig.read_to_end().await.unwrap();
+    assert_eq!(buffer.len(), src_content.len());
+    assert!(buffer == src_content);
+
+    // Re-open the fork and verify the content is changed
+    let mut fork = Blob::open(pool.clone(), dst_branch, cryptor, dst_locator)
+        .await
+        .unwrap();
+
+    let mut buffer = vec![0; seek_pos];
+    let len = fork.read(&mut buffer[..]).await.unwrap();
+    assert_eq!(len, buffer.len());
+    assert!(buffer == src_content[..seek_pos]);
+
+    let mut buffer = vec![0; write_len];
+    let len = fork.read(&mut buffer[..]).await.unwrap();
+    assert_eq!(len, buffer.len());
+    assert!(buffer == write_content);
+}
+
+// TODO: test that fork() doesn't create new blocks
+
 async fn setup(rng_seed: u64) -> (StdRng, Cryptor, db::Pool, BranchData) {
     let mut rng = StdRng::seed_from_u64(rng_seed);
     let secret_key = SecretKey::generate(&mut rng);
