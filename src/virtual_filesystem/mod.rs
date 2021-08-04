@@ -590,8 +590,6 @@ impl Inner {
         let mut parent_dir = self.repository.open_directory(&parent_path).await?;
 
         // TODO: Ensure parent_dir[this_replica_id] exists.
-        todo!();
-        /*
         let mut dir = parent_dir
             .create_directory(self.this_replica_id(), name)
             .await?;
@@ -604,7 +602,6 @@ impl Inner {
         let entry = JointEntry::Directory(dir);
 
         Ok(make_file_attr_for_entry(&entry, inode))
-        */
     }
 
     async fn rmdir(&mut self, parent: Inode, name: &OsStr) -> Result<()> {

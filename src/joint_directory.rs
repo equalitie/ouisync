@@ -8,7 +8,10 @@ use crate::{
 };
 use camino::{Utf8Component, Utf8Path};
 use futures_util::future;
-use std::{collections::BTreeMap, fmt, mem};
+use std::{
+    collections::{btree_map::Entry, BTreeMap},
+    fmt, iter, mem,
+};
 
 /// Unified view over multiple concurrent versions of a directory.
 pub struct JointDirectory {
@@ -135,6 +138,31 @@ impl JointDirectory {
         self.versions.values().map(|dir| dir.len()).sum()
     }
 
+    /// Creates a subdirectory of this directory owned by `branch` and returns it as
+    /// `JointDirectory` which would already include all previousy existing versions.
+    pub async fn create_directory(&mut self, branch: &ReplicaId, name: &str) -> Result<Self> {
+        let mut old_dir =
+            if let Some(entry) = self.lookup(name).find_map(|entry| entry.directory().ok()) {
+                entry.open().await?
+            } else {
+                Self::new(iter::empty())
+            };
+
+        match old_dir.versions.entry(*branch) {
+            Entry::Vacant(entry) => {
+                let new_version = self
+                    .versions
+                    .get_mut(branch)
+                    .ok_or(Error::EntryNotFound)?
+                    .create_directory(name.to_owned())?;
+                entry.insert(new_version);
+            }
+            Entry::Occupied(_) => return Err(Error::EntryExists),
+        }
+
+        Ok(old_dir)
+    }
+
     pub async fn remove_file(&mut self, branch: &ReplicaId, name: &str) -> Result<()> {
         self.versions
             .get_mut(branch)
@@ -154,6 +182,12 @@ impl JointDirectory {
     pub async fn flush(&mut self) -> Result<()> {
         future::try_join_all(self.versions.values_mut().map(|dir| dir.flush())).await?;
         Ok(())
+    }
+}
+
+impl fmt::Debug for JointDirectory {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("JointDirectory").finish()
     }
 }
 
@@ -579,6 +613,92 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].name(), "cat.jpg");
         assert_eq!(entries[1].name(), "dog.jpg");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn create_directory_with_existing_versions() {
+        let index = setup(2).await;
+        let branches = index.branches().await;
+
+        let mut root0 = Directory::create(
+            index.pool.clone(),
+            branches[0].clone(),
+            Cryptor::Null,
+            Locator::Root,
+        );
+
+        let mut dir0 = root0.create_directory("pics".to_owned()).unwrap();
+        let mut file0 = dir0.create_file("dog.jpg".to_owned()).unwrap();
+
+        file0.flush().await.unwrap();
+        dir0.flush().await.unwrap();
+        root0.flush().await.unwrap();
+
+        let root1 = Directory::create(
+            index.pool.clone(),
+            branches[1].clone(),
+            Cryptor::Null,
+            Locator::Root,
+        );
+
+        let mut root = JointDirectory::new(vec![root0, root1]);
+
+        let dir = root
+            .create_directory(branches[1].replica_id(), "pics")
+            .await
+            .unwrap();
+
+        let entries: Vec<_> = dir.entries().collect();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name(), "dog.jpg");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn create_directory_without_existing_versions() {
+        let index = setup(1).await;
+        let branches = index.branches().await;
+
+        let root0 = Directory::create(
+            index.pool.clone(),
+            branches[0].clone(),
+            Cryptor::Null,
+            Locator::Root,
+        );
+
+        let mut root = JointDirectory::new(vec![root0]);
+
+        let dir = root
+            .create_directory(branches[0].replica_id(), "pics")
+            .await
+            .unwrap();
+
+        assert_eq!(dir.entries().count(), 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn attempt_to_create_directory_whose_local_version_already_exists() {
+        let index = setup(2).await;
+        let branches = index.branches().await;
+
+        let mut root0 = Directory::create(
+            index.pool.clone(),
+            branches[0].clone(),
+            Cryptor::Null,
+            Locator::Root,
+        );
+
+        let mut dir0 = root0.create_directory("pics".to_owned()).unwrap();
+
+        dir0.flush().await.unwrap();
+        root0.flush().await.unwrap();
+
+        let mut root = JointDirectory::new(vec![root0]);
+
+        assert_matches!(
+            root.create_directory(branches[0].replica_id(), "pics")
+                .await,
+            Err(Error::EntryExists)
+        );
     }
 
     async fn setup(branch_count: usize) -> Index {
