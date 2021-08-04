@@ -166,7 +166,8 @@ impl Repository {
         if locator.local == Locator::Root && &locator.branch_id == self.this_replica_id() {
             branch.ensure_root_exists().await
         } else {
-            branch.open_directory_by_locator(locator.local).await
+            todo!()
+            // branch.open_directory_by_locator(locator.local).await
         }
     }
 

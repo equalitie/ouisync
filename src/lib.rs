@@ -31,6 +31,7 @@ mod store;
 mod test_utils;
 mod version_vector;
 mod versioned_file_name;
+mod write_context;
 
 pub use self::{
     crypto::Cryptor,

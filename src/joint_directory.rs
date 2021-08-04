@@ -323,6 +323,7 @@ mod tests {
             branches[0].clone(),
             Cryptor::Null,
             Locator::Root,
+            "/".into(),
         );
         root0
             .create_file("file0.txt".to_owned())
@@ -337,6 +338,7 @@ mod tests {
             branches[1].clone(),
             Cryptor::Null,
             Locator::Root,
+            "/".into(),
         );
         root1
             .create_file("file1.txt".to_owned())
@@ -373,6 +375,7 @@ mod tests {
             branches[0].clone(),
             Cryptor::Null,
             Locator::Root,
+            "/".into(),
         );
         root0
             .create_file("file.txt".to_owned())
@@ -387,6 +390,7 @@ mod tests {
             branches[1].clone(),
             Cryptor::Null,
             Locator::Root,
+            "/".into(),
         );
         root1
             .create_file("file.txt".to_owned())
@@ -445,6 +449,7 @@ mod tests {
             branches[0].clone(),
             Cryptor::Null,
             Locator::Root,
+            "/".into(),
         );
         let mut file0 = root0.create_file("file.txt".to_owned()).unwrap();
         file0.flush().await.unwrap();
@@ -455,6 +460,7 @@ mod tests {
             branches[1].clone(),
             Cryptor::Null,
             Locator::Root,
+            "/".into(),
         );
         root1
             .copy_file("file.txt", file0.locators(), &branches[0])
@@ -487,6 +493,7 @@ mod tests {
             branches[0].clone(),
             Cryptor::Null,
             Locator::Root,
+            "/".into(),
         );
 
         let mut dir0 = root0.create_directory("dir".to_owned()).unwrap();
@@ -498,6 +505,7 @@ mod tests {
             branches[1].clone(),
             Cryptor::Null,
             Locator::Root,
+            "/".into(),
         );
 
         let mut dir1 = root1.create_directory("dir".to_owned()).unwrap();
@@ -524,6 +532,7 @@ mod tests {
             branches[0].clone(),
             Cryptor::Null,
             Locator::Root,
+            "/".into(),
         );
 
         let mut file0 = root0.create_file("config".to_owned()).unwrap();
@@ -535,6 +544,7 @@ mod tests {
             branches[1].clone(),
             Cryptor::Null,
             Locator::Root,
+            "/".into(),
         );
 
         let mut dir1 = root1.create_directory("config".to_owned()).unwrap();
@@ -583,6 +593,7 @@ mod tests {
             branches[0].clone(),
             Cryptor::Null,
             Locator::Root,
+            "/".into(),
         );
 
         let mut dir0 = root0.create_directory("pics".to_owned()).unwrap();
@@ -597,6 +608,7 @@ mod tests {
             branches[1].clone(),
             Cryptor::Null,
             Locator::Root,
+            "/".into(),
         );
 
         let mut dir1 = root1.create_directory("pics".to_owned()).unwrap();
@@ -625,6 +637,7 @@ mod tests {
             branches[0].clone(),
             Cryptor::Null,
             Locator::Root,
+            "/".into(),
         );
 
         let mut dir0 = root0.create_directory("pics".to_owned()).unwrap();
@@ -639,6 +652,7 @@ mod tests {
             branches[1].clone(),
             Cryptor::Null,
             Locator::Root,
+            "/".into(),
         );
 
         let mut root = JointDirectory::new(vec![root0, root1]);
@@ -663,6 +677,7 @@ mod tests {
             branches[0].clone(),
             Cryptor::Null,
             Locator::Root,
+            "/".into(),
         );
 
         let mut root = JointDirectory::new(vec![root0]);
@@ -685,6 +700,7 @@ mod tests {
             branches[0].clone(),
             Cryptor::Null,
             Locator::Root,
+            "/".into(),
         );
 
         let mut dir0 = root0.create_directory("pics".to_owned()).unwrap();

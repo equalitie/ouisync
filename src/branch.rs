@@ -6,9 +6,10 @@ use crate::{
     file::File,
     index::BranchData,
     locator::Locator,
+    write_context::WriteContext,
     ReplicaId,
 };
-use camino::{Utf8Component, Utf8Path};
+use camino::{Utf8Component, Utf8Path, Utf8PathBuf};
 
 pub struct Branch {
     pool: db::Pool,
@@ -43,24 +44,39 @@ impl Branch {
         .await
     }
 
-    pub async fn open_directory_by_locator(&self, locator: Locator) -> Result<Directory> {
+    pub async fn open_directory_by_locator(
+        &self,
+        locator: Locator,
+        write_context: WriteContext,
+    ) -> Result<Directory> {
         Directory::open(
             self.pool.clone(),
             self.branch_data.clone(),
             self.cryptor.clone(),
             locator,
+            write_context,
         )
         .await
     }
 
     pub async fn ensure_root_exists(&self) -> Result<Directory> {
-        match self.open_directory_by_locator(Locator::Root).await {
+        let path = Utf8PathBuf::from("/");
+        let write_context = WriteContext {
+            path: path.clone(),
+            local_branch: self.branch_data.clone(),
+        };
+
+        match self
+            .open_directory_by_locator(Locator::Root, write_context)
+            .await
+        {
             Ok(dir) => Ok(dir),
             Err(Error::EntryNotFound) => Ok(Directory::create(
                 self.pool.clone(),
                 self.branch_data.clone(),
                 self.cryptor.clone(),
                 Locator::Root,
+                path,
             )),
             Err(error) => Err(error),
         }
