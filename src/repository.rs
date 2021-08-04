@@ -6,13 +6,12 @@ use crate::{
     error::{Error, Result},
     file::File,
     global_locator::GlobalLocator,
-    index::Index,
+    index::{BranchData, Index},
     joint_directory::JointDirectory,
-    locator::Locator,
     ReplicaId,
 };
 use camino::Utf8Path;
-use std::{collections::HashSet, io::SeekFrom};
+use std::io::SeekFrom;
 
 pub struct Repository {
     index: Index,
@@ -22,10 +21,6 @@ pub struct Repository {
 impl Repository {
     pub fn new(index: Index, cryptor: Cryptor) -> Self {
         Self { index, cryptor }
-    }
-
-    pub async fn branches(&self) -> HashSet<ReplicaId> {
-        self.index.branch_ids().await
     }
 
     pub fn this_replica_id(&self) -> &ReplicaId {
@@ -154,57 +149,56 @@ impl Repository {
     /// Open a file given the GlobalLocator.
     pub async fn open_file_by_locator(&self, locator: &GlobalLocator) -> Result<File> {
         self.branch(&locator.branch_id)
-            .await?
+            .await
+            .ok_or(Error::EntryNotFound)?
             .open_file_by_locator(locator.local)
             .await
     }
 
-    /// Open a directory given the GlobalLocator.
-    pub async fn open_directory_by_locator(&self, locator: GlobalLocator) -> Result<Directory> {
-        let branch = self.branch(&locator.branch_id).await?;
-
-        if locator.local == Locator::Root && &locator.branch_id == self.this_replica_id() {
-            branch.ensure_root_exists().await
-        } else {
-            todo!()
-            // branch.open_directory_by_locator(locator.local).await
-        }
-    }
-
     /// Returns the local branch
     pub async fn local_branch(&self) -> Branch {
-        self.branch(self.this_replica_id()).await.unwrap()
+        self.inflate(self.index.local_branch().await)
     }
 
-    async fn branch(&self, replica_id: &ReplicaId) -> Result<Branch> {
+    /// Return the branch with the specified id.
+    pub async fn branch(&self, id: &ReplicaId) -> Option<Branch> {
+        self.index.branch(id).await.map(|data| self.inflate(data))
+    }
+
+    /// Returns all branches
+    pub async fn branches(&self) -> Vec<Branch> {
         self.index
-            .branch(replica_id)
+            .branches()
             .await
-            .map(|branch_data| {
-                Branch::new(self.index.pool.clone(), branch_data, self.cryptor.clone())
-            })
-            .ok_or(Error::EntryNotFound)
+            .into_iter()
+            .map(|data| self.inflate(data))
+            .collect()
+    }
+
+    fn inflate(&self, data: BranchData) -> Branch {
+        Branch::new(self.index.pool.clone(), data, self.cryptor.clone())
     }
 
     // Opens the root directory across all branches as JointDirectory.
     async fn joint_root(&self) -> Result<JointDirectory> {
         let mut dirs = Vec::new();
 
-        for branch_id in self.branches().await {
-            let locator = GlobalLocator {
-                branch_id,
-                local: Locator::Root,
+        for branch in self.branches().await {
+            let dir = if branch.id() == self.this_replica_id() {
+                branch.open_or_create_root().await?
+            } else {
+                match branch.open_root().await {
+                    Ok(dir) => dir,
+                    Err(Error::EntryNotFound) => {
+                        // Some branch roots may not have been loaded across the network yet. We'll
+                        // ignore those.
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                }
             };
 
-            match self.open_directory_by_locator(locator).await {
-                Ok(dir) => dirs.push(dir),
-                Err(Error::EntryNotFound) => {
-                    // Some branch roots may not have been loaded across the network yet. We'll
-                    // ignore those.
-                    continue;
-                }
-                Err(error) => return Err(error),
-            }
+            dirs.push(dir);
         }
 
         Ok(JointDirectory::new(dirs))

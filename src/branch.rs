@@ -44,31 +44,22 @@ impl Branch {
         .await
     }
 
-    pub async fn open_directory_by_locator(
-        &self,
-        locator: Locator,
-        write_context: WriteContext,
-    ) -> Result<Directory> {
+    pub async fn open_root(&self) -> Result<Directory> {
         Directory::open(
             self.pool.clone(),
             self.branch_data.clone(),
             self.cryptor.clone(),
-            locator,
-            write_context,
+            Locator::Root,
+            WriteContext {
+                path: "/".into(),
+                local_branch: self.branch_data.clone(),
+            },
         )
         .await
     }
 
-    pub async fn ensure_root_exists(&self) -> Result<Directory> {
-        let write_context = WriteContext {
-            path: "/".into(),
-            local_branch: self.branch_data.clone(),
-        };
-
-        match self
-            .open_directory_by_locator(Locator::Root, write_context)
-            .await
-        {
+    pub async fn open_or_create_root(&self) -> Result<Directory> {
+        match self.open_root().await {
             Ok(dir) => Ok(dir),
             Err(Error::EntryNotFound) => Ok(Directory::create_root(
                 self.pool.clone(),
@@ -83,7 +74,7 @@ impl Branch {
     /// Note: non-normalized paths (i.e. containing "..") or Windows-style drive prefixes
     /// (e.g. "C:") are not supported.
     pub async fn ensure_directory_exists(&self, path: &Utf8Path) -> Result<Vec<Directory>> {
-        let mut dirs = vec![self.ensure_root_exists().await?];
+        let mut dirs = vec![self.open_or_create_root().await?];
 
         for component in path.components() {
             match component {
