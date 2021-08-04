@@ -1,4 +1,4 @@
-pub mod accumulate;
-pub mod sorted_union;
+mod accumulate;
+mod sorted_union;
 
-pub use accumulate::Accumulate;
+pub use self::{accumulate::Accumulate, sorted_union::SortedUnion};

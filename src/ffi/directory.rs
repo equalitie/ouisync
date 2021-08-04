@@ -51,11 +51,12 @@ pub unsafe extern "C" fn directory_open(
             let dir = repo.open_directory(path).await?;
             let entries = dir
                 .entries()
-                .map(|(entry_name, entry_type)| DirEntry {
-                    name: utils::str_to_c_string(&entry_name).unwrap_or_else(|_| {
+                .map(|entry| DirEntry {
+                    // TODO: use the dismbiguated name here
+                    name: utils::str_to_c_string(entry.name()).unwrap_or_else(|_| {
                         CString::new(char::REPLACEMENT_CHARACTER.to_string()).unwrap()
                     }),
-                    entry_type,
+                    entry_type: entry.entry_type(),
                 })
                 .collect();
             let entries = Directory(entries);

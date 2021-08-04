@@ -3,16 +3,19 @@ use crate::{
     blob_id::BlobId,
     crypto::Cryptor,
     db,
-    entry::{Entry, EntryType},
+    entry::EntryType,
     error::{Error, Result},
     file::File,
     global_locator::GlobalLocator,
     index::BranchData,
     locator::Locator,
-    ReplicaId,
+    replica_id::ReplicaId,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::{btree_map, BTreeMap};
+use std::{
+    collections::{btree_map, BTreeMap},
+    fmt,
+};
 
 #[derive(Clone)]
 pub struct Directory {
@@ -56,7 +59,7 @@ impl Directory {
         }
     }
 
-    /// Flushed this directory ensuring that any pending changes are written to the store.
+    /// Flushes this directory ensuring that any pending changes are written to the store.
     pub async fn flush(&mut self) -> Result<()> {
         if !self.content.dirty {
             return Ok(());
@@ -75,46 +78,38 @@ impl Directory {
     }
 
     /// Returns iterator over the entries of this directory.
-    pub fn entries(&self) -> impl Iterator<Item = EntryInfo> + DoubleEndedIterator + Clone {
+    pub fn entries(&self) -> impl Iterator<Item = EntryRef> + DoubleEndedIterator + Clone {
         self.content
             .entries
             .iter()
             .flat_map(move |(name, versions)| {
-                versions.iter().map(move |(_author_id, data)| EntryInfo {
-                    parent_blob: &self.blob,
-                    name,
-                    data,
-                })
+                versions
+                    .iter()
+                    .map(move |(branch_id, data)| EntryRef::new(&self.blob, name, data, branch_id))
             })
     }
 
     /// Lookup an entry of this directory by name.
-    pub fn lookup(&self, name: &'_ str) -> Result<impl Iterator<Item = EntryInfo>> {
+    pub fn lookup(&self, name: &'_ str) -> Result<impl Iterator<Item = EntryRef>> {
         self.content
             .entries
             .get_key_value(name)
             .map(|(name, versions)| {
-                versions.iter().map(move |(_author_id, data)| EntryInfo {
-                    parent_blob: &self.blob,
-                    name,
-                    data,
-                })
+                versions
+                    .iter()
+                    .map(move |(branch_id, data)| EntryRef::new(&self.blob, name, data, branch_id))
             })
             .ok_or(Error::EntryNotFound)
     }
 
-    pub fn lookup_version(&self, name: &'_ str, author: &ReplicaId) -> Result<EntryInfo> {
+    pub fn lookup_version(&self, name: &'_ str, author: &ReplicaId) -> Result<EntryRef> {
         self.content
             .entries
             .get_key_value(name)
             .and_then(|(name, versions)| {
                 versions
                     .get_key_value(author)
-                    .map(|(_author_id, data)| EntryInfo {
-                        parent_blob: &self.blob,
-                        name,
-                        data,
-                    })
+                    .map(|(branch_id, data)| EntryRef::new(&self.blob, name, data, branch_id))
             })
             .ok_or(Error::EntryNotFound)
     }
@@ -184,7 +179,7 @@ impl Directory {
 
     pub async fn remove_file(&mut self, name: &str) -> Result<()> {
         for entry in self.lookup(name)? {
-            entry.open_file().await?.remove().await?;
+            entry.file()?.open().await?.remove().await?;
         }
         self.content.remove(name)
         // TODO: Add tombstone
@@ -192,7 +187,7 @@ impl Directory {
 
     pub async fn remove_directory(&mut self, name: &str) -> Result<()> {
         for entry in self.lookup(name)? {
-            entry.open_directory().await?.remove().await?;
+            entry.directory()?.open().await?.remove().await?;
         }
         self.content.remove(name)
         // TODO: Add tombstone
@@ -226,69 +221,157 @@ impl Directory {
 
 /// Info about a directory entry.
 #[derive(Copy, Clone)]
-pub struct EntryInfo<'a> {
-    parent_blob: &'a Blob,
-    name: &'a str,
-    data: &'a EntryData,
+pub enum EntryRef<'a> {
+    File(FileRef<'a>),
+    Directory(DirectoryRef<'a>),
 }
 
-impl<'a> EntryInfo<'a> {
-    pub fn name(&self) -> &'a str {
-        self.name
-    }
+impl<'a> EntryRef<'a> {
+    fn new(
+        parent_blob: &'a Blob,
+        name: &'a str,
+        data: &'a EntryData,
+        branch_id: &'a ReplicaId,
+    ) -> Self {
+        let inner = RefInner {
+            parent_blob,
+            name,
+            blob_id: &data.blob_id,
+        };
 
-    pub fn entry_type(&self) -> EntryType {
-        self.data.entry_type
-    }
-
-    pub fn blob_id(&self) -> &BlobId {
-        &self.data.blob_id
-    }
-
-    pub fn locator(&self) -> Locator {
-        Locator::Head(self.data.blob_id)
-    }
-
-    /// Opens this entry.
-    pub async fn open(&self) -> Result<Entry> {
-        match self.entry_type() {
-            EntryType::File => Ok(Entry::File(self.open_file_unchecked().await?)),
-            EntryType::Directory => Ok(Entry::Directory(self.open_directory_unchecked().await?)),
+        match data.entry_type {
+            EntryType::File => Self::File(FileRef { inner, branch_id }),
+            EntryType::Directory => Self::Directory(DirectoryRef { inner }),
         }
     }
 
-    /// Opens this entry if it's a file.
-    pub async fn open_file(&self) -> Result<File> {
-        self.entry_type().check_is_file()?;
-        self.open_file_unchecked().await
+    pub fn name(&self) -> &'a str {
+        match self {
+            Self::File(r) => r.name(),
+            Self::Directory(r) => r.name(),
+        }
     }
 
-    /// Opens this entry if it is a directory.
-    pub async fn open_directory(&self) -> Result<Directory> {
-        self.entry_type().check_is_directory()?;
-        self.open_directory_unchecked().await
+    pub fn entry_type(&self) -> EntryType {
+        match self {
+            Self::File(_) => EntryType::File,
+            Self::Directory(_) => EntryType::Directory,
+        }
     }
 
-    async fn open_file_unchecked(&self) -> Result<File> {
+    pub fn blob_id(&self) -> &'a BlobId {
+        match self {
+            Self::File(r) => r.inner.blob_id,
+            Self::Directory(r) => r.inner.blob_id,
+        }
+    }
+
+    pub fn locator(&self) -> Locator {
+        Locator::Head(*self.blob_id())
+    }
+
+    pub fn file(self) -> Result<FileRef<'a>> {
+        match self {
+            Self::File(r) => Ok(r),
+            Self::Directory(_) => Err(Error::EntryIsDirectory),
+        }
+    }
+
+    pub fn directory(self) -> Result<DirectoryRef<'a>> {
+        match self {
+            Self::Directory(r) => Ok(r),
+            Self::File(_) => Err(Error::EntryNotDirectory),
+        }
+    }
+
+    pub fn is_file(&self) -> bool {
+        matches!(self, Self::File(_))
+    }
+
+    pub fn is_directory(&self) -> bool {
+        matches!(self, Self::Directory(_))
+    }
+}
+
+#[derive(Copy, Clone, Eq, PartialEq)]
+pub struct FileRef<'a> {
+    inner: RefInner<'a>,
+    branch_id: &'a ReplicaId,
+}
+
+impl<'a> FileRef<'a> {
+    pub fn name(&self) -> &'a str {
+        self.inner.name
+    }
+
+    pub fn locator(&self) -> Locator {
+        Locator::Head(*self.inner.blob_id)
+    }
+
+    pub fn branch_id(&self) -> &'a ReplicaId {
+        self.branch_id
+    }
+
+    pub async fn open(&self) -> Result<File> {
         File::open(
-            self.parent_blob.db_pool().clone(),
-            self.parent_blob.branch().clone(),
-            self.parent_blob.cryptor().clone(),
-            self.locator(),
-        )
-        .await
-    }
-
-    async fn open_directory_unchecked(&self) -> Result<Directory> {
-        Directory::open(
-            self.parent_blob.db_pool().clone(),
-            self.parent_blob.branch().clone(),
-            self.parent_blob.cryptor().clone(),
+            self.inner.parent_blob.db_pool().clone(),
+            self.inner.parent_blob.branch().clone(),
+            self.inner.parent_blob.cryptor().clone(),
             self.locator(),
         )
         .await
     }
 }
+
+impl fmt::Debug for FileRef<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("FileRef")
+            .field("name", &self.inner.name)
+            .finish()
+    }
+}
+
+#[derive(Copy, Clone, Eq, PartialEq)]
+pub struct DirectoryRef<'a> {
+    inner: RefInner<'a>,
+}
+
+impl<'a> DirectoryRef<'a> {
+    pub fn name(&self) -> &'a str {
+        self.inner.name
+    }
+
+    pub fn locator(&self) -> Locator {
+        Locator::Head(*self.inner.blob_id)
+    }
+
+    pub async fn open(&self) -> Result<Directory> {
+        Directory::open(
+            self.inner.parent_blob.db_pool().clone(),
+            self.inner.parent_blob.branch().clone(),
+            self.inner.parent_blob.cryptor().clone(),
+            self.locator(),
+        )
+        .await
+    }
+}
+
+#[derive(Copy, Clone)]
+struct RefInner<'a> {
+    parent_blob: &'a Blob,
+    name: &'a str,
+    blob_id: &'a BlobId,
+}
+
+impl PartialEq for RefInner<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.parent_blob.global_locator() == other.parent_blob.global_locator()
+            && self.name == other.name
+            && self.blob_id == other.blob_id
+    }
+}
+
+impl Eq for RefInner<'_> {}
 
 /// Destination directory of a move operation.
 #[allow(clippy::large_enum_variant)]
@@ -361,7 +444,6 @@ struct EntryData {
 mod tests {
     use super::*;
     use crate::index::BranchData;
-    use rand::{distributions::Standard, Rng};
     use std::collections::BTreeSet;
 
     #[tokio::test(flavor = "multi_thread")]
@@ -393,7 +475,14 @@ mod tests {
         for &(file_name, expected_content) in &[("dog.txt", b"woof"), ("cat.txt", b"meow")] {
             let mut versions = dir.lookup(file_name).unwrap().collect::<Vec<_>>();
             assert_eq!(versions.len(), 1);
-            let mut file = versions.first_mut().unwrap().open_file().await.unwrap();
+            let mut file = versions
+                .first_mut()
+                .unwrap()
+                .file()
+                .unwrap()
+                .open()
+                .await
+                .unwrap();
             let actual_content = file.read_to_end().await.unwrap();
             assert_eq!(actual_content, expected_content);
         }
@@ -513,9 +602,5 @@ mod tests {
         let branch = BranchData::new(&pool, rand::random()).await.unwrap();
 
         (pool, branch)
-    }
-
-    fn random_content(len: usize) -> Vec<u8> {
-        rand::thread_rng().sample_iter(Standard).take(len).collect()
     }
 }

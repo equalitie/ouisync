@@ -2,7 +2,7 @@ use crate::{
     entry::EntryType,
     error::{Error, Result},
     file::File,
-    JointDirectory,
+    joint_directory::JointDirectory,
 };
 
 pub enum JointEntry {
@@ -44,7 +44,7 @@ impl JointEntry {
     pub fn len(&self) -> u64 {
         match self {
             Self::File(file) => file.len(),
-            Self::Directory(dirs) => dirs.values().fold(0, |l, dir| l + dir.len()),
+            Self::Directory(dir) => dir.len(),
         }
     }
 }

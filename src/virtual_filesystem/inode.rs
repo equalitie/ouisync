@@ -191,10 +191,6 @@ impl<'a> InodeView<'a> {
         }
     }
 
-    pub fn calculate_path(&self) -> Utf8PathBuf {
-        self.inodes.calculate_path(self.data)
-    }
-
     pub fn calculate_file_path(&self) -> Result<Utf8PathBuf> {
         self.check_is_file()?;
         Ok(self.inodes.calculate_path(self.data))

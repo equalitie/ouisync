@@ -1,5 +1,3 @@
-use std::{collections::HashSet, io::SeekFrom};
-
 use crate::{
     branch::Branch,
     crypto::Cryptor,
@@ -13,8 +11,8 @@ use crate::{
     locator::Locator,
     ReplicaId,
 };
-
 use camino::Utf8Path;
+use std::{collections::HashSet, io::SeekFrom};
 
 pub struct Repository {
     index: Index,
@@ -35,13 +33,12 @@ impl Repository {
     }
 
     /// Looks up an entry by its path. The path must be relative to the repository root.
-    /// If the entry exists, returns its `GlobalLocator` and `EntryType`, otherwise returns
-    /// `EntryNotFound`.
+    /// If the entry exists, returns its `EntryType`, otherwise returns `EntryNotFound`.
     pub async fn lookup_type<P: AsRef<Utf8Path>>(&self, path: P) -> Result<EntryType> {
         match decompose_path(path.as_ref()) {
             Some((parent, name)) => {
                 let parent = self.open_directory(parent).await?;
-                Ok(parent.lookup(name)?.entry_type())
+                Ok(parent.lookup_unique(name)?.entry_type())
             }
             None => Ok(EntryType::Directory),
         }
@@ -52,14 +49,15 @@ impl Repository {
         let (parent, name) = decompose_path(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
         self.open_directory(parent)
             .await?
-            .lookup(name)?
-            .open_file()
+            .lookup_unique(name)?
+            .file()?
+            .open()
             .await
     }
 
     /// Opens a directory at the given path (relative to the repository root)
     pub async fn open_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<JointDirectory> {
-        self.joint_root().await.cd_into_path(path.as_ref()).await
+        self.joint_root().await?.cd(path).await
     }
 
     /// Creates a new file at the given path. Returns the new file and its directory ancestors.
@@ -159,12 +157,10 @@ impl Repository {
         locator: GlobalLocator,
         entry_type: EntryType,
     ) -> Result<Entry> {
-        match entry_type {
-            EntryType::File => Ok(Entry::File(self.open_file_by_locator(&locator).await?)),
-            EntryType::Directory => Ok(Entry::Directory(
-                self.open_directory_by_locator(locator).await?,
-            )),
-        }
+        self.branch(&locator.branch_id)
+            .await?
+            .open_entry_by_locator(locator.local, entry_type)
+            .await
     }
 
     /// Open a file given the GlobalLocator.
@@ -202,23 +198,27 @@ impl Repository {
     }
 
     // Opens the root directory across all branches as JointDirectory.
-    async fn joint_root(&self) -> JointDirectory {
-        let mut root = JointDirectory::new();
+    async fn joint_root(&self) -> Result<JointDirectory> {
+        let mut dirs = Vec::new();
 
-        for branch_id in self.branches().await.into_iter() {
+        for branch_id in self.branches().await {
             let locator = GlobalLocator {
                 branch_id,
                 local: Locator::Root,
             };
-            if let Ok(dir) = self.open_directory_by_locator(locator).await {
-                root.insert(dir);
-            } else {
-                // Some branch roots may not have been loaded across the network yet. We'll ignore
-                // those.
+
+            match self.open_directory_by_locator(locator).await {
+                Ok(dir) => dirs.push(dir),
+                Err(Error::EntryNotFound) => {
+                    // Some branch roots may not have been loaded across the network yet. We'll
+                    // ignore those.
+                    continue;
+                }
+                Err(error) => return Err(error),
             }
         }
 
-        root
+        Ok(JointDirectory::new(dirs))
     }
 }
 

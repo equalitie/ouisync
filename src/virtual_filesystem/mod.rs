@@ -17,8 +17,8 @@ use fuser::{
     ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow,
 };
 use ouisync::{
-    joint_directory::Lookup, EntryType, Error, File, GlobalLocator, JointDirectory, JointEntry,
-    ReplicaId, Repository, Result,
+    EntryType, Error, File, GlobalLocator, JointDirectory, JointEntry, JointEntryRef, ReplicaId,
+    Repository, Result,
 };
 use std::{
     convert::TryInto,
@@ -375,20 +375,24 @@ impl Inner {
 
         let parent_path = &self.inodes.get(parent).calculate_directory_path()?;
         let parent_dir = self.repository.open_directory(parent_path).await?;
-        let lookup = parent_dir.lookup(name)?;
-        let entry = lookup.open().await?;
 
-        let repr = match lookup {
-            Lookup::File(entry_info, branch_id) => Representation::File(GlobalLocator {
-                branch_id: *branch_id,
-                local: entry_info.locator(),
-            }),
-            Lookup::Directory(_) => Representation::Directory,
+        let entry = parent_dir.lookup_unique(name)?;
+        let (len, repr) = match &entry {
+            JointEntryRef::File(entry) => (
+                entry.open().await?.len(),
+                Representation::File(GlobalLocator {
+                    branch_id: *entry.branch_id(),
+                    local: entry.locator(),
+                }),
+            ),
+            JointEntryRef::Directory(entry) => {
+                (entry.open().await?.len(), Representation::Directory)
+            }
         };
 
         let inode = self.inodes.lookup(parent, name, repr);
 
-        Ok(make_file_attr_for_entry(&entry, inode))
+        Ok(make_file_attr(inode, entry.entry_type(), len))
     }
 
     async fn getattr(&mut self, inode: Inode) -> Result<FileAttr> {
@@ -536,7 +540,7 @@ impl Inner {
         // Index of the first "real" entry (excluding . and ..)
         let first = if parent == 0 { 1 } else { 2 };
 
-        for (index, (entry_name, entry_type)) in dir
+        for (index, entry) in dir
             .entries()
             .enumerate()
             .skip((offset as usize).saturating_sub(first))
@@ -556,8 +560,8 @@ impl Inner {
             if reply.add(
                 u64::MAX, // invalid inode, see above.
                 (index + first + 1) as i64,
-                to_file_type(entry_type),
-                entry_name,
+                to_file_type(entry.entry_type()),
+                entry.name(), // TODO: use the disambiguated name here
             ) {
                 break;
             }
@@ -595,7 +599,6 @@ impl Inner {
         parent_dir.flush().await?;
 
         let inode = self.inodes.lookup(parent, name, Representation::Directory);
-
         let entry = JointEntry::Directory(dir);
 
         Ok(make_file_attr_for_entry(&entry, inode))
@@ -624,8 +627,7 @@ impl Inner {
 
         // TODO: what about `datasync`?
 
-        let dirs = self.entries.get_directory_mut(handle)?;
-        dirs.flush().await
+        self.entries.get_directory_mut(handle)?.flush().await
     }
 
     async fn create(
@@ -901,7 +903,7 @@ fn to_error_code(error: &Error) -> libc::c_int {
         | Error::WrongBlockLength(_)
         | Error::Crypto
         | Error::Network(_) => libc::EIO,
-        Error::EntryNotFound => libc::ENOENT,
+        Error::EntryNotFound | Error::AmbiguousEntry => libc::ENOENT,
         Error::EntryExists => libc::EEXIST,
         Error::EntryNotDirectory => libc::ENOTDIR,
         Error::EntryIsDirectory => libc::EISDIR,

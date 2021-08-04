@@ -1,20 +1,19 @@
 use std::iter::Peekable;
 
-pub struct Accumulate<Iter, Key, GetKey>
+/// Iterator adaptor that groups elements from the input iterator such that all consecutive elements
+/// for which the given closure returns the same key are put into the same group.
+pub struct Accumulate<Iter, GetKey>
 where
     Iter: Iterator,
-    GetKey: FnMut(Iter::Item) -> Key,
-    Key: Copy,
 {
     iter: Peekable<Iter>,
     get_key: GetKey,
 }
 
-impl<Iter, Key, GetKey> Accumulate<Iter, Key, GetKey>
+impl<Iter, Key, GetKey> Accumulate<Iter, GetKey>
 where
     Iter: Iterator,
-    GetKey: FnMut(Iter::Item) -> Key,
-    Key: Copy,
+    GetKey: FnMut(&Iter::Item) -> Key,
 {
     pub fn new(iter: Iter, get_key: GetKey) -> Self {
         Self {
@@ -24,11 +23,10 @@ where
     }
 }
 
-impl<Iter: Iterator, Key, GetKey> Iterator for Accumulate<Iter, Key, GetKey>
+impl<Iter: Iterator, Key, GetKey> Iterator for Accumulate<Iter, GetKey>
 where
-    GetKey: FnMut(Iter::Item) -> Key,
-    Key: PartialEq + Copy,
-    Iter::Item: Copy,
+    GetKey: FnMut(&Iter::Item) -> Key,
+    Key: PartialEq,
 {
     type Item = (Key, Vec<Iter::Item>);
 
@@ -40,10 +38,10 @@ where
 
         if let Some(first) = first {
             let get_key = &mut self.get_key;
-            let key = (get_key)(first);
+            let key = (get_key)(&first);
             let mut buf = vec![first];
 
-            while let Some(v) = self.iter.next_if(|&e| (get_key)(e) == key) {
+            while let Some(v) = self.iter.next_if(|e| (get_key)(e) == key) {
                 buf.push(v);
             }
 
@@ -61,7 +59,7 @@ mod tests {
     #[test]
     fn test_accumulate() {
         let v = &[1, 2, 2, 3, 4, 4, 4];
-        let a = Accumulate::new(v.iter(), |i| i);
+        let a = Accumulate::new(v.iter(), |&i| i);
         assert_eq!(
             a.map(|(k, t)| (k, t)).collect::<Vec<_>>(),
             [

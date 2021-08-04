@@ -3,7 +3,6 @@ mod macros;
 
 pub mod crypto;
 pub mod db;
-pub mod joint_directory;
 pub mod this_replica;
 
 mod blob;
@@ -19,6 +18,7 @@ mod format;
 mod global_locator;
 mod index;
 mod iterator;
+mod joint_directory;
 mod joint_entry;
 mod locator;
 mod network;
@@ -30,16 +30,17 @@ mod store;
 #[cfg(test)]
 mod test_utils;
 mod version_vector;
+mod versioned_file_name;
 
 pub use self::{
     crypto::Cryptor,
-    directory::{Directory, EntryInfo, MoveDstDirectory},
+    directory::{Directory, EntryRef, MoveDstDirectory},
     entry::{Entry, EntryType},
     error::{Error, Result},
     file::File,
     global_locator::GlobalLocator,
     index::Index,
-    joint_directory::JointDirectory,
+    joint_directory::{JointDirectory, JointEntryRef},
     joint_entry::JointEntry,
     locator::Locator,
     network::{Network, NetworkOptions},

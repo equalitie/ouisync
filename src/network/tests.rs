@@ -144,7 +144,7 @@ async fn save_snapshot(index: &Index, snapshot: &Snapshot) {
 
     for layer in snapshot.inner_layers() {
         for (parent_hash, nodes) in layer.inner_maps() {
-            nodes.save(&index.pool, &parent_hash).await.unwrap();
+            nodes.save(&index.pool, parent_hash).await.unwrap();
         }
     }
 

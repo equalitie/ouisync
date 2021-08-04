@@ -1,100 +1,172 @@
 use crate::{
-    directory::{Directory, EntryInfo},
+    directory::{Directory, DirectoryRef, EntryRef, FileRef},
     entry::EntryType,
-    file::File,
-    iterator::{sorted_union, Accumulate},
-    joint_entry::JointEntry,
+    error::{Error, Result},
+    iterator::{Accumulate, SortedUnion},
     replica_id::ReplicaId,
-    Error, Result,
+    versioned_file_name,
 };
 use camino::{Utf8Component, Utf8Path};
+use futures_util::future;
 use std::{
-    collections::btree_map::{Entry as MapEntry, Values},
-    collections::{BTreeMap, BTreeSet},
-    slice,
+    collections::{btree_map::Entry, BTreeMap},
+    fmt, iter, mem,
 };
 
-#[derive(Clone)]
+/// Unified view over multiple concurrent versions of a directory.
 pub struct JointDirectory {
     versions: BTreeMap<ReplicaId, Directory>,
 }
 
 impl JointDirectory {
-    pub fn new() -> Self {
+    pub fn new<I>(versions: I) -> Self
+    where
+        I: IntoIterator<Item = Directory>,
+    {
         Self {
-            versions: BTreeMap::new(),
+            versions: versions
+                .into_iter()
+                .map(|dir| (dir.global_locator().branch_id, dir))
+                .collect(),
         }
     }
 
-    pub fn insert(&mut self, directory: Directory) {
-        match self.versions.entry(directory.global_locator().branch_id) {
-            MapEntry::Vacant(entry) => {
-                entry.insert(directory);
+    /// Returns iterator over the entries of this directory. Multiple concurrent versions of the
+    /// same file are returned as separate `JointEntryRef::File` entries. Multiple concurrent
+    /// versions of the same directory are returned as a single `JointEntryRef::Directory` entry.
+    pub fn entries(&self) -> impl Iterator<Item = JointEntryRef> {
+        let entries = self.versions.values().map(|directory| directory.entries());
+        let entries = SortedUnion::new(entries, |entry| entry.name());
+        let entries = Accumulate::new(entries, |entry| entry.name());
+
+        entries.flat_map(|(_, entries)| Merge::new(entries.into_iter()))
+    }
+
+    /// Returns all versions of an entry with the given name. Concurrent file versions are returned
+    /// separately but concurrent directory versions are merged into a single `JointDirectory`.
+    // TODO: try to find a way to avoid needing `name` to outlive the return value as this prevents
+    //       us to pass in a temporary which hurts ergonomy.
+    pub fn lookup<'a>(&'a self, name: &'a str) -> impl Iterator<Item = JointEntryRef<'a>> {
+        Merge::new(
+            self.versions
+                .values()
+                .flat_map(move |dir| dir.lookup(name).ok().into_iter().flatten()),
+        )
+    }
+
+    /// Looks up single entry with the specified name if it is unique.
+    ///
+    /// - If there is only one version of a entry with the specified name, it is returned.
+    /// - If there are multiple versions and all of them are files, an `AmbiguousEntry` error is
+    ///   returned. To lookup a single version, include a disambiguator in the `name`.
+    /// - If there are multiple versiond and all of them are directories, they are merged into a
+    ///   single `JointEntryRef::Directory` and returned.
+    /// - Finally, if there are both files and directories, only the directories are retured (merged
+    ///   into a `JointEntryRef::Directory`) and the files are discarded. This is so it's possible
+    ///   to unambiguously lookup a directory even in the presence of conflicting files.
+    pub fn lookup_unique<'a>(&'a self, name: &'a str) -> Result<JointEntryRef<'a>> {
+        // First try exact match as it is more common.
+        let mut last_file = None;
+
+        for entry in self.lookup(name) {
+            match entry {
+                JointEntryRef::Directory(_) => return Ok(entry),
+                JointEntryRef::File(_) if last_file.is_none() => {
+                    last_file = Some(entry);
+                }
+                JointEntryRef::File(_) => return Err(Error::AmbiguousEntry),
             }
-            MapEntry::Occupied(_) => panic!("Double insert into JointDirectory"),
         }
-    }
 
-    pub fn get(&self, replica_id: &ReplicaId) -> Option<&Directory> {
-        self.versions.get(replica_id)
-    }
+        if let Some(entry) = last_file {
+            return Ok(entry);
+        }
 
-    pub fn get_mut(&mut self, replica_id: &ReplicaId) -> Option<&mut Directory> {
-        self.versions.get_mut(replica_id)
-    }
+        // If not found, extract the disambiguator and try to lookup an entry whose branch id
+        // matches it.
+        let (name, branch_id_prefix) = versioned_file_name::parse(name);
+        let branch_id_prefix = branch_id_prefix.ok_or(Error::EntryNotFound)?;
 
-    pub fn values(&self) -> Values<'_, ReplicaId, Directory> {
-        self.versions.values()
-    }
-
-    pub async fn create_directory(
-        &mut self,
-        branch: &ReplicaId,
-        name: &str,
-    ) -> Result<JointDirectory> {
-        let new_dir = self
+        let mut entries = self
             .versions
-            .get_mut(branch)
-            .ok_or(Error::OperationNotSupported)
-            .and_then(|dir| dir.create_directory(name.to_owned()))?;
+            .values()
+            .flat_map(|dir| dir.lookup(name).ok().into_iter().flatten())
+            .filter_map(|entry| entry.file().ok())
+            .filter(|entry| entry.branch_id().starts_with(&branch_id_prefix));
 
-        let mut result = JointDirectory::new();
+        let first = entries.next().ok_or(Error::EntryNotFound)?;
 
-        result.versions.insert(*branch, new_dir);
+        if entries.next().is_none() {
+            Ok(JointEntryRef::File(first))
+        } else {
+            Err(Error::AmbiguousEntry)
+        }
+    }
 
-        for (r_id, dir) in self.versions.iter() {
-            if r_id == branch {
-                // This is the one we already inserted above.
-                continue;
-            }
-            if let Ok(versions) = dir.lookup(name) {
-                for entry_info in versions {
-                    // Ignore if it's a file
-                    if let Ok(subdir) = entry_info.open_directory().await {
-                        // TODO: Once we have version vectors in place, ensure here that we only
-                        // replace existing versions if the new one "happened after".  NOTE: that
-                        // they won't be concurrent as one replica can't create concurrent versions
-                        // of the same directory (where that replica is the author).
-                        result.versions.insert(*r_id, subdir).unwrap();
-                    }
+    /// Descends into an arbitrarily nested subdirectory of this directory at the specified path.
+    /// Note: non-normalized paths (i.e. containing "..") or Windows-style drive prefixes
+    /// (e.g. "C:") are not supported.
+    // TODO: as this consumes `self`, we should return `self` back in case of an error.
+    pub async fn cd(self, path: impl AsRef<Utf8Path>) -> Result<Self> {
+        let mut curr = self;
+
+        for component in path.as_ref().components() {
+            match component {
+                Utf8Component::RootDir | Utf8Component::CurDir => (),
+                Utf8Component::Normal(name) => {
+                    let next = curr
+                        .lookup(name)
+                        .find_map(|entry| entry.directory().ok())
+                        .ok_or(Error::EntryNotFound)?
+                        .open()
+                        .await?;
+                    curr = next;
+                }
+                Utf8Component::ParentDir | Utf8Component::Prefix(_) => {
+                    return Err(Error::OperationNotSupported)
                 }
             }
         }
 
-        Ok(result)
+        Ok(curr)
     }
 
-    pub fn create_file(&mut self, branch: &ReplicaId, name: String) -> Result<File> {
-        self.versions
-            .get_mut(branch)
-            .ok_or(Error::OperationNotSupported)?
-            .create_file(name)
+    /// Length of the directory in bytes. If there are multiple versions, returns the sum of their
+    /// lengths.
+    #[allow(clippy::len_without_is_empty)]
+    pub fn len(&self) -> u64 {
+        self.versions.values().map(|dir| dir.len()).sum()
+    }
+
+    /// Creates a subdirectory of this directory owned by `branch` and returns it as
+    /// `JointDirectory` which would already include all previousy existing versions.
+    pub async fn create_directory(&mut self, branch: &ReplicaId, name: &str) -> Result<Self> {
+        let mut old_dir =
+            if let Some(entry) = self.lookup(name).find_map(|entry| entry.directory().ok()) {
+                entry.open().await?
+            } else {
+                Self::new(iter::empty())
+            };
+
+        match old_dir.versions.entry(*branch) {
+            Entry::Vacant(entry) => {
+                let new_version = self
+                    .versions
+                    .get_mut(branch)
+                    .ok_or(Error::EntryNotFound)?
+                    .create_directory(name.to_owned())?;
+                entry.insert(new_version);
+            }
+            Entry::Occupied(_) => return Err(Error::EntryExists),
+        }
+
+        Ok(old_dir)
     }
 
     pub async fn remove_file(&mut self, branch: &ReplicaId, name: &str) -> Result<()> {
         self.versions
             .get_mut(branch)
-            .ok_or(Error::OperationNotSupported)?
+            .ok_or(Error::EntryNotFound)?
             .remove_file(name)
             .await
     }
@@ -102,421 +174,540 @@ impl JointDirectory {
     pub async fn remove_directory(&mut self, branch: &ReplicaId, name: &str) -> Result<()> {
         self.versions
             .get_mut(branch)
-            .ok_or(Error::OperationNotSupported)?
+            .ok_or(Error::EntryNotFound)?
             .remove_directory(name)
             .await
     }
 
     pub async fn flush(&mut self) -> Result<()> {
-        for dir in self.versions.values_mut() {
-            // TODO: Continue with the rest if any fails?
-            dir.flush().await?;
-        }
+        future::try_join_all(self.versions.values_mut().map(|dir| dir.flush())).await?;
         Ok(())
     }
+}
 
-    pub fn entries(&self) -> impl Iterator<Item = (String, EntryType)> + '_ {
-        self.joint_entries().flat_map(|vs| Self::unique_names(&vs))
-    }
-
-    fn joint_entries(&self) -> impl Iterator<Item = JointEntryView> + '_ {
-        // Map<ReplicaId, Directory> -> [[(EntryInfo, ReplicaId)]]
-        let entries = self.versions.iter().map(|(replica_id, directory)| {
-            directory
-                .entries()
-                .map(move |entry_info| (entry_info, replica_id))
-        });
-
-        // [[(EntryInfo, ReplicaId)]] -> [(EntryInfo, ReplicaId)]
-        let entries = sorted_union::new_from_many(entries, |(entry, _)| entry.name());
-
-        // [(EntryInfo, ReplicaId)] -> [Version]
-        let entries = entries.map(|(info, branch)| Version { info, branch });
-
-        // [Version] -> [(name, [Version])]
-        let entries = Accumulate::new(entries, |version| version.info.name());
-
-        entries.map(|(name, versions)| JointEntryView { name, versions })
-    }
-
-    /// Returns a direct subdirectory of this directory with the specified name.
-    pub async fn cd_into(&self, directory: &'_ str) -> Result<JointDirectory> {
-        let mut retval = JointDirectory::new();
-        let mut count = 0;
-
-        for Version { info, branch } in self.lookup(directory)?.directories()? {
-            match info.open_directory().await {
-                Ok(dir) => {
-                    retval.insert(dir);
-                    count += 1;
-                }
-                Err(e) => {
-                    log::warn!(
-                        "Failed to load directory {:?} on branch {:?}: {:?}",
-                        directory,
-                        branch,
-                        e
-                    );
-                }
-            }
-        }
-
-        if count == 0 {
-            return Err(Error::EntryNotDirectory);
-        }
-
-        Ok(retval)
-    }
-
-    /// Returns a descendant directory of this directory at the specified path (relative to `self`).
-    /// Note: non-normalized paths (i.e. containing "..") or Windows-style drive prefixes
-    /// (e.g. "C:") are not supported.
-    pub async fn cd_into_path(&self, path: &Utf8Path) -> Result<JointDirectory> {
-        let mut retval = self.clone();
-
-        for component in path.components() {
-            match component {
-                Utf8Component::RootDir | Utf8Component::CurDir => (),
-                Utf8Component::Normal(name) => {
-                    retval = retval.cd_into(name).await?;
-                }
-                // TODO: consider supporting ".." if we never cd above `self`.
-                Utf8Component::ParentDir | Utf8Component::Prefix(_) => {
-                    return Err(Error::OperationNotSupported)
-                }
-            }
-        }
-
-        Ok(retval)
-    }
-
-    pub fn lookup<'a>(&'a self, target_name: &'a str) -> Result<Lookup<'a>> {
-        // TODO: This function currently doesn't handle one (important) case where there exists a
-        // file "file-<branch>" as well as two or more concurrent files with base name "file". This
-        // could result in there being two files with the same name "file-<branch>".
-
-        // Look for exact matches first as that is the most likely case.
-        for joint_entry in self.joint_entries() {
-            if joint_entry.name == target_name {
-                if joint_entry.has_directories() {
-                    return Ok(Lookup::Directory(joint_entry));
-                }
-
-                let len = joint_entry.versions.len();
-
-                assert!(len > 0);
-
-                if len > 1 {
-                    // Ambiguous
-                    return Err(Error::EntryNotFound);
-                }
-
-                let first = joint_entry.versions[0];
-                return Ok(Lookup::File(first.info, first.branch));
-            }
-        }
-
-        if let Some((target_base, target_label)) = Version::remove_label(target_name) {
-            for joint_entry in self.joint_entries() {
-                if joint_entry.name == target_base {
-                    // NOTE: Directories don't have labels, so they should have been found with
-                    // the above exact search.
-                    let opt_version = joint_entry
-                        .versions
-                        .into_iter()
-                        .find(|v| v.is_file() && v.matches(target_base, target_label));
-
-                    if let Some(version) = opt_version {
-                        return Ok(Lookup::File(version.info, version.branch));
-                    } else {
-                        // Early exit
-                        return Err(Error::EntryNotFound);
-                    }
-                }
-            }
-        }
-
-        Err(Error::EntryNotFound)
-    }
-
-    fn unique_names(entry: &JointEntryView) -> BTreeSet<(String, EntryType)> {
-        assert!(!entry.versions.is_empty());
-
-        if entry.versions.len() == 1 {
-            return entry
-                .versions
-                .iter()
-                .map(|v| (v.info.name().to_string(), v.info.entry_type()))
-                .collect();
-        }
-
-        entry
-            .versions
-            .iter()
-            .map(|v| (v.name_with_label(), v.info.entry_type()))
-            .collect()
+impl fmt::Debug for JointDirectory {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("JointDirectory").finish()
     }
 }
 
-impl Default for JointDirectory {
-    fn default() -> Self {
-        Self::new()
-    }
+#[derive(Eq, PartialEq, Debug)]
+pub enum JointEntryRef<'a> {
+    File(FileRef<'a>),
+    Directory(JointDirectoryRef<'a>),
 }
 
-#[derive(Copy, Clone)]
-pub struct Version<'a> {
-    info: EntryInfo<'a>,
-    branch: &'a ReplicaId,
-}
-
-impl<'a> Version<'a> {
-    fn is_file(&self) -> bool {
-        self.info.entry_type() == EntryType::File
-    }
-
-    fn matches(&self, name: &str, label: &str) -> bool {
-        // TODO: Check the label without heap allocation
-        name == self.info.name() && label == Self::replica_id_to_label(self.branch)
-    }
-
-    fn replica_id_to_label(replica_id: &ReplicaId) -> String {
-        let r = replica_id.as_ref();
-        format!("{:02x}{:02x}{:02x}{:02x}", r[0], r[1], r[2], r[3])
-    }
-
-    fn name_with_label(&self) -> String {
-        let mut s = self.info.name().to_string();
-        s.push('-');
-        s.push_str(&Version::replica_id_to_label(self.branch));
-        s
-    }
-
-    fn remove_label(name: &str) -> Option<(&str, &str)> {
-        let hex_len = 4 * 2;
-        let label_len = hex_len + 1; // +1 is the dash
-
-        if name.len() <= label_len {
-            return None;
-        }
-
-        let label_start = name.len() - label_len;
-        let base = &name[0..label_start];
-        let label = &name[label_start..];
-
-        if !label.starts_with('-') {
-            return None;
-        }
-
-        let label = &label[1..]; // Get rid of the dash
-
-        for c in label.chars() {
-            if !c.is_ascii_hexdigit() {
-                return None;
-            }
-        }
-
-        Some((base, label))
-    }
-}
-
-pub enum Lookup<'a> {
-    Directory(JointEntryView<'a>),
-    File(EntryInfo<'a>, &'a ReplicaId),
-}
-
-impl<'a> Lookup<'a> {
-    pub async fn open(&self) -> Result<JointEntry> {
+impl<'a> JointEntryRef<'a> {
+    pub fn name(&self) -> &'a str {
         match self {
-            Self::Directory(versions) => {
-                let mut joint_dir = JointDirectory::new();
-
-                for Version { info, branch } in versions.directories() {
-                    match info.open_directory().await {
-                        Ok(dir) => {
-                            joint_dir.insert(dir);
-                        }
-                        Err(e) => {
-                            log::warn!(
-                                "Failed to open directory {:?} on branch {:?}: {:?}",
-                                versions.name,
-                                branch,
-                                e
-                            );
-                        }
-                    }
-                }
-
-                Ok(JointEntry::Directory(joint_dir))
-            }
-            Self::File(entry_info, _replica_id) => {
-                Ok(JointEntry::File(entry_info.open_file().await?))
-            }
-        }
-    }
-
-    pub async fn open_file(&self) -> Result<File> {
-        match self {
-            Self::File(entry_info, _replica_id) => Ok(entry_info.open_file().await?),
-            Self::Directory(_) => Err(Error::EntryIsDirectory),
-        }
-    }
-
-    pub fn directories(&'a self) -> Result<DirectoryVersions<'a>> {
-        match self {
-            Self::Directory(versions) => Ok(versions.directories()),
-            Self::File(_, _) => Err(Error::EntryNotDirectory),
+            Self::File(r) => r.name(),
+            Self::Directory(r) => r.name(),
         }
     }
 
     pub fn entry_type(&self) -> EntryType {
         match self {
+            Self::File { .. } => EntryType::File,
             Self::Directory(_) => EntryType::Directory,
-            Self::File(_, _) => EntryType::File,
+        }
+    }
+
+    pub fn file(self) -> Result<FileRef<'a>> {
+        match self {
+            Self::File(r) => Ok(r),
+            Self::Directory(_) => Err(Error::EntryIsDirectory),
+        }
+    }
+
+    pub fn directory(self) -> Result<JointDirectoryRef<'a>> {
+        match self {
+            Self::Directory(r) => Ok(r),
+            Self::File(_) => Err(Error::EntryNotDirectory),
         }
     }
 }
 
-pub struct DirectoryVersions<'a> {
-    mix: slice::Iter<'a, Version<'a>>,
+#[derive(Eq, PartialEq)]
+pub struct JointDirectoryRef<'a>(Vec<DirectoryRef<'a>>);
+
+impl<'a> JointDirectoryRef<'a> {
+    fn new(versions: Vec<DirectoryRef<'a>>) -> Option<Self> {
+        if versions.is_empty() {
+            None
+        } else {
+            Some(Self(versions))
+        }
+    }
+
+    pub fn name(&self) -> &'a str {
+        self.0
+            .first()
+            .expect("joint directory must contain at least one directory")
+            .name()
+    }
+
+    pub async fn open(&self) -> Result<JointDirectory> {
+        let directories = future::try_join_all(self.0.iter().map(|dir| dir.open())).await?;
+        Ok(JointDirectory::new(directories))
+    }
 }
 
-impl<'a> Iterator for DirectoryVersions<'a> {
-    type Item = Version<'a>;
+impl fmt::Debug for JointDirectoryRef<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("JointDirectoryRef")
+            .field("name", &self.name())
+            .finish()
+    }
+}
+
+// Iterator adaptor that maps iterator of `EntryRef` to iterator of `JointEntryRef` by mering all
+// `EntryRef::Directory` items into a single `JointDirectoryRef` item but keeping `EntryRef::File`
+// items separate.
+struct Merge<'a, I> {
+    entries: I,
+    directories: Vec<DirectoryRef<'a>>,
+}
+
+impl<'a, I> Merge<'a, I>
+where
+    I: Iterator<Item = EntryRef<'a>>,
+{
+    fn new(entries: I) -> Self {
+        Self {
+            entries,
+            directories: vec![],
+        }
+    }
+}
+
+impl<'a, I> Iterator for Merge<'a, I>
+where
+    I: Iterator<Item = EntryRef<'a>>,
+{
+    type Item = JointEntryRef<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        for v in &mut self.mix {
-            if v.info.entry_type() == EntryType::Directory {
-                return Some(*v);
+        for entry in &mut self.entries {
+            match entry {
+                EntryRef::File(file) => return Some(JointEntryRef::File(file)),
+                EntryRef::Directory(dir) => {
+                    self.directories.push(dir);
+                }
             }
         }
-        None
-    }
-}
 
-pub struct JointEntryView<'a> {
-    name: &'a str,
-    versions: Vec<Version<'a>>,
-}
-
-impl<'a> JointEntryView<'a> {
-    fn directories(&'a self) -> DirectoryVersions<'a> {
-        DirectoryVersions {
-            mix: self.versions.iter(),
-        }
-    }
-
-    fn has_directories(&self) -> bool {
-        self.directories().next().is_some()
+        JointDirectoryRef::new(mem::take(&mut self.directories)).map(JointEntryRef::Directory)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{db, index::BranchData, Cryptor, Locator};
+    use crate::{
+        crypto::Cryptor,
+        db,
+        directory::Directory,
+        index::{BranchData, Index},
+        locator::Locator,
+    };
+    use assert_matches::assert_matches;
+    use futures_util::future;
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_no_conflict() {
-        let (pool, branches) = setup(2).await;
+    async fn no_conflict() {
+        let index = setup(2).await;
+        let branches = index.branches().await;
 
-        let mut r0 = Directory::create(
-            pool.clone(),
+        let mut root0 = Directory::create(
+            index.pool.clone(),
             branches[0].clone(),
             Cryptor::Null,
             Locator::Root,
         );
-        let mut r1 = Directory::create(
-            pool.clone(),
+        root0
+            .create_file("file0.txt".to_owned())
+            .unwrap()
+            .flush()
+            .await
+            .unwrap();
+        root0.flush().await.unwrap();
+
+        let mut root1 = Directory::create(
+            index.pool.clone(),
             branches[1].clone(),
             Cryptor::Null,
             Locator::Root,
         );
-
-        r0.create_file("file0.txt".into())
+        root1
+            .create_file("file1.txt".to_owned())
             .unwrap()
             .flush()
             .await
             .unwrap();
-        r1.create_file("file1.txt".into())
-            .unwrap()
-            .flush()
-            .await
-            .unwrap();
+        root1.flush().await.unwrap();
 
-        r0.flush().await.unwrap();
-        r1.flush().await.unwrap();
+        let root = JointDirectory::new(vec![root0, root1]);
 
-        let mut root = JointDirectory::new();
-
-        root.insert(r0);
-        root.insert(r1);
-
-        assert_eq!(
-            root.entries().collect::<Vec<_>>(),
-            vec![
-                ("file0.txt".into(), EntryType::File),
-                ("file1.txt".into(), EntryType::File)
-            ]
-        );
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_conflict() {
-        let (pool, branches) = setup(2).await;
-
-        let mut r0 = Directory::create(
-            pool.clone(),
-            branches[0].clone(),
-            Cryptor::Null,
-            Locator::Root,
-        );
-        let mut r1 = Directory::create(
-            pool.clone(),
-            branches[1].clone(),
-            Cryptor::Null,
-            Locator::Root,
-        );
-
-        r0.create_file("file.txt".into())
-            .unwrap()
-            .flush()
-            .await
-            .unwrap();
-        r1.create_file("file.txt".into())
-            .unwrap()
-            .flush()
-            .await
-            .unwrap();
-
-        r0.flush().await.unwrap();
-        r1.flush().await.unwrap();
-
-        let mut root = JointDirectory::new();
-
-        root.insert(r0);
-        root.insert(r1);
-
-        let entries = root.entries().collect::<Vec<_>>();
+        let entries: Vec<_> = root.entries().collect();
 
         assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].name(), "file0.txt");
+        assert_eq!(entries[0].entry_type(), EntryType::File);
+        assert_eq!(entries[1].name(), "file1.txt");
+        assert_eq!(entries[1].entry_type(), EntryType::File);
 
-        assert!(entries[0].0 < entries[1].0); // Unique and ordered alphabetically
+        assert_eq!(root.lookup("file0.txt").collect::<Vec<_>>(), entries[0..1]);
+        assert_eq!(root.lookup("file1.txt").collect::<Vec<_>>(), entries[1..2]);
 
-        assert_eq!(entries[0].1, EntryType::File);
-        assert_eq!(entries[1].1, EntryType::File);
+        assert_eq!(root.lookup_unique("file0.txt").unwrap(), entries[0]);
+        assert_eq!(root.lookup_unique("file1.txt").unwrap(), entries[1]);
     }
 
-    async fn setup(branch_count: usize) -> (db::Pool, Vec<BranchData>) {
-        let pool = db::init(db::Store::Memory).await.unwrap();
+    #[tokio::test(flavor = "multi_thread")]
+    async fn conflict_independent_files() {
+        let index = setup(2).await;
+        let branches = index.branches().await;
 
-        let mut branches = Vec::new();
+        let mut root0 = Directory::create(
+            index.pool.clone(),
+            branches[0].clone(),
+            Cryptor::Null,
+            Locator::Root,
+        );
+        root0
+            .create_file("file.txt".to_owned())
+            .unwrap()
+            .flush()
+            .await
+            .unwrap();
+        root0.flush().await.unwrap();
 
-        for _ in 0..branch_count {
-            let branch = BranchData::new(&pool, rand::random()).await.unwrap();
-            branches.push(branch);
+        let mut root1 = Directory::create(
+            index.pool.clone(),
+            branches[1].clone(),
+            Cryptor::Null,
+            Locator::Root,
+        );
+        root1
+            .create_file("file.txt".to_owned())
+            .unwrap()
+            .flush()
+            .await
+            .unwrap();
+        root1.flush().await.unwrap();
+
+        let root = JointDirectory::new(vec![root0, root1]);
+
+        let files: Vec<_> = root.entries().map(|entry| entry.file().unwrap()).collect();
+        assert_eq!(files.len(), 2);
+
+        for branch in &branches {
+            let file = files
+                .iter()
+                .find(|file| file.branch_id() == branch.replica_id())
+                .unwrap();
+            assert_eq!(file.name(), "file.txt");
+
+            assert_eq!(
+                root.lookup_unique(&versioned_file_name::create(
+                    "file.txt",
+                    branch.replica_id()
+                ))
+                .unwrap(),
+                JointEntryRef::File(*file)
+            );
         }
 
-        (pool, branches)
+        let files: Vec<_> = root
+            .lookup("file.txt")
+            .map(|entry| entry.file().unwrap())
+            .collect();
+        assert_eq!(files.len(), 2);
+
+        for branch in &branches {
+            let file = files
+                .iter()
+                .find(|file| file.branch_id() == branch.replica_id())
+                .unwrap();
+            assert_eq!(file.name(), "file.txt");
+        }
+
+        assert_matches!(root.lookup_unique("file.txt"), Err(Error::AmbiguousEntry));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn conflict_forked_files() {
+        let index = setup(2).await;
+        let branches = index.branches().await;
+
+        let mut root0 = Directory::create(
+            index.pool.clone(),
+            branches[0].clone(),
+            Cryptor::Null,
+            Locator::Root,
+        );
+        let mut file0 = root0.create_file("file.txt".to_owned()).unwrap();
+        file0.flush().await.unwrap();
+        root0.flush().await.unwrap();
+
+        let mut root1 = Directory::create(
+            index.pool.clone(),
+            branches[1].clone(),
+            Cryptor::Null,
+            Locator::Root,
+        );
+        root1
+            .copy_file("file.txt", file0.locators(), &branches[0])
+            .await
+            .unwrap();
+        root1.flush().await.unwrap();
+
+        let root = JointDirectory::new(vec![root0, root1]);
+
+        let files: Vec<_> = root.entries().map(|entry| entry.file().unwrap()).collect();
+
+        assert_eq!(files.len(), 2);
+
+        for branch in &branches {
+            let file = files
+                .iter()
+                .find(|file| file.branch_id() == branch.replica_id())
+                .unwrap();
+            assert_eq!(file.name(), "file.txt");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn conflict_directories() {
+        let index = setup(2).await;
+        let branches = index.branches().await;
+
+        let mut root0 = Directory::create(
+            index.pool.clone(),
+            branches[0].clone(),
+            Cryptor::Null,
+            Locator::Root,
+        );
+
+        let mut dir0 = root0.create_directory("dir".to_owned()).unwrap();
+        dir0.flush().await.unwrap();
+        root0.flush().await.unwrap();
+
+        let mut root1 = Directory::create(
+            index.pool.clone(),
+            branches[1].clone(),
+            Cryptor::Null,
+            Locator::Root,
+        );
+
+        let mut dir1 = root1.create_directory("dir".to_owned()).unwrap();
+        dir1.flush().await.unwrap();
+        root1.flush().await.unwrap();
+
+        let root = JointDirectory::new(vec![root0, root1]);
+
+        let directories: Vec<_> = root
+            .entries()
+            .map(|entry| entry.directory().unwrap())
+            .collect();
+        assert_eq!(directories.len(), 1);
+        assert_eq!(directories[0].name(), "dir");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn conflict_file_and_directory() {
+        let index = setup(2).await;
+        let branches = index.branches().await;
+
+        let mut root0 = Directory::create(
+            index.pool.clone(),
+            branches[0].clone(),
+            Cryptor::Null,
+            Locator::Root,
+        );
+
+        let mut file0 = root0.create_file("config".to_owned()).unwrap();
+        file0.flush().await.unwrap();
+        root0.flush().await.unwrap();
+
+        let mut root1 = Directory::create(
+            index.pool.clone(),
+            branches[1].clone(),
+            Cryptor::Null,
+            Locator::Root,
+        );
+
+        let mut dir1 = root1.create_directory("config".to_owned()).unwrap();
+        dir1.flush().await.unwrap();
+        root1.flush().await.unwrap();
+
+        let root = JointDirectory::new(vec![root0, root1]);
+
+        let entries: Vec<_> = root.entries().collect();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(
+            entries.iter().map(|entry| entry.name()).collect::<Vec<_>>(),
+            ["config", "config"]
+        );
+        assert!(entries.iter().any(|entry| match entry {
+            JointEntryRef::File(file) => file.branch_id() == branches[0].replica_id(),
+            JointEntryRef::Directory(_) => false,
+        }));
+        assert!(entries
+            .iter()
+            .any(|entry| entry.entry_type() == EntryType::Directory));
+
+        let entries: Vec<_> = root.lookup("config").collect();
+        assert_eq!(entries.len(), 2);
+
+        let entry = root.lookup_unique("config").unwrap();
+        assert_eq!(entry.entry_type(), EntryType::Directory);
+
+        let name = versioned_file_name::create("config", branches[0].replica_id());
+        let entry = root.lookup_unique(&name).unwrap();
+        assert_eq!(entry.entry_type(), EntryType::File);
+        assert_eq!(entry.file().unwrap().branch_id(), branches[0].replica_id());
+    }
+
+    // TODO: test conflict_forked_directories
+    // TODO: test conflict_multiple_files_and_directories
+    // TODO: test conflict_file_with_name_containing_branch_prefix
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cd_into_concurrent_directory() {
+        let index = setup(2).await;
+        let branches = index.branches().await;
+
+        let mut root0 = Directory::create(
+            index.pool.clone(),
+            branches[0].clone(),
+            Cryptor::Null,
+            Locator::Root,
+        );
+
+        let mut dir0 = root0.create_directory("pics".to_owned()).unwrap();
+        let mut file0 = dir0.create_file("dog.jpg".to_owned()).unwrap();
+
+        file0.flush().await.unwrap();
+        dir0.flush().await.unwrap();
+        root0.flush().await.unwrap();
+
+        let mut root1 = Directory::create(
+            index.pool.clone(),
+            branches[1].clone(),
+            Cryptor::Null,
+            Locator::Root,
+        );
+
+        let mut dir1 = root1.create_directory("pics".to_owned()).unwrap();
+        let mut file1 = dir1.create_file("cat.jpg".to_owned()).unwrap();
+
+        file1.flush().await.unwrap();
+        dir1.flush().await.unwrap();
+        root1.flush().await.unwrap();
+
+        let root = JointDirectory::new(vec![root0, root1]);
+        let dir = root.cd("pics").await.unwrap();
+
+        let entries: Vec<_> = dir.entries().collect();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].name(), "cat.jpg");
+        assert_eq!(entries[1].name(), "dog.jpg");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn create_directory_with_existing_versions() {
+        let index = setup(2).await;
+        let branches = index.branches().await;
+
+        let mut root0 = Directory::create(
+            index.pool.clone(),
+            branches[0].clone(),
+            Cryptor::Null,
+            Locator::Root,
+        );
+
+        let mut dir0 = root0.create_directory("pics".to_owned()).unwrap();
+        let mut file0 = dir0.create_file("dog.jpg".to_owned()).unwrap();
+
+        file0.flush().await.unwrap();
+        dir0.flush().await.unwrap();
+        root0.flush().await.unwrap();
+
+        let root1 = Directory::create(
+            index.pool.clone(),
+            branches[1].clone(),
+            Cryptor::Null,
+            Locator::Root,
+        );
+
+        let mut root = JointDirectory::new(vec![root0, root1]);
+
+        let dir = root
+            .create_directory(branches[1].replica_id(), "pics")
+            .await
+            .unwrap();
+
+        let entries: Vec<_> = dir.entries().collect();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name(), "dog.jpg");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn create_directory_without_existing_versions() {
+        let index = setup(1).await;
+        let branches = index.branches().await;
+
+        let root0 = Directory::create(
+            index.pool.clone(),
+            branches[0].clone(),
+            Cryptor::Null,
+            Locator::Root,
+        );
+
+        let mut root = JointDirectory::new(vec![root0]);
+
+        let dir = root
+            .create_directory(branches[0].replica_id(), "pics")
+            .await
+            .unwrap();
+
+        assert_eq!(dir.entries().count(), 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn attempt_to_create_directory_whose_local_version_already_exists() {
+        let index = setup(2).await;
+        let branches = index.branches().await;
+
+        let mut root0 = Directory::create(
+            index.pool.clone(),
+            branches[0].clone(),
+            Cryptor::Null,
+            Locator::Root,
+        );
+
+        let mut dir0 = root0.create_directory("pics".to_owned()).unwrap();
+
+        dir0.flush().await.unwrap();
+        root0.flush().await.unwrap();
+
+        let mut root = JointDirectory::new(vec![root0]);
+
+        assert_matches!(
+            root.create_directory(branches[0].replica_id(), "pics")
+                .await,
+            Err(Error::EntryExists)
+        );
+    }
+
+    async fn setup(branch_count: usize) -> Index {
+        let pool = db::init(db::Store::Memory).await.unwrap();
+        let branches =
+            future::try_join_all((0..branch_count).map(|_| BranchData::new(&pool, rand::random())))
+                .await
+                .unwrap();
+
+        Index::load(pool, *branches[0].replica_id()).await.unwrap()
     }
 }

@@ -24,6 +24,7 @@ use sqlx::Row;
 use std::{
     cmp::Ordering,
     collections::{hash_map::Entry, HashMap, HashSet},
+    iter,
     sync::Arc,
 };
 use tokio::sync::Mutex;
@@ -236,13 +237,11 @@ impl Index {
     }
 
     pub async fn branch_ids(&self) -> HashSet<ReplicaId> {
-        let mut retval = HashSet::new();
-        let branches = self.branches.lock().await;
-        retval.insert(*branches.local.replica_id());
-        for remote in branches.remote.keys() {
-            retval.insert(*remote);
-        }
-        retval
+        self.branches.lock().await.ids().copied().collect()
+    }
+
+    pub async fn branches(&self) -> Vec<BranchData> {
+        self.branches.lock().await.values().cloned().collect()
     }
 }
 
@@ -258,6 +257,14 @@ impl Branches {
         } else {
             self.remote.get(replica_id)
         }
+    }
+
+    fn ids(&self) -> impl Iterator<Item = &ReplicaId> {
+        iter::once(self.local.replica_id()).chain(self.remote.keys())
+    }
+
+    fn values(&self) -> impl Iterator<Item = &BranchData> {
+        iter::once(&self.local).chain(self.remote.values())
     }
 }
 
