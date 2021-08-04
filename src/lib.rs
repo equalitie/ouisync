@@ -18,9 +18,6 @@ mod format;
 mod global_locator;
 mod index;
 mod iterator;
-mod joint_directory_old;
-mod versioned_file_name;
-// TODO: this will eventually replace `join_directory`
 mod joint_directory;
 mod joint_entry;
 mod locator;
@@ -33,6 +30,7 @@ mod store;
 #[cfg(test)]
 mod test_utils;
 mod version_vector;
+mod versioned_file_name;
 
 pub use self::{
     crypto::Cryptor,
