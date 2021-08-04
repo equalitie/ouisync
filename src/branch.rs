@@ -2,7 +2,6 @@ use crate::{
     crypto::Cryptor,
     db,
     directory::Directory,
-    entry::{Entry, EntryType},
     error::{Error, Result},
     file::File,
     index::BranchData,
@@ -32,20 +31,6 @@ impl Branch {
 
     pub fn data(&self) -> &BranchData {
         &self.branch_data
-    }
-
-    /// Open an entry (file or directory) at the given locator.
-    pub async fn open_entry_by_locator(
-        &self,
-        locator: Locator,
-        entry_type: EntryType,
-    ) -> Result<Entry> {
-        match entry_type {
-            EntryType::File => Ok(Entry::File(self.open_file_by_locator(locator).await?)),
-            EntryType::Directory => Ok(Entry::Directory(
-                self.open_directory_by_locator(locator).await?,
-            )),
-        }
     }
 
     pub async fn open_file_by_locator(&self, locator: Locator) -> Result<File> {

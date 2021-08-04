@@ -2,7 +2,7 @@ use crate::{
     branch::Branch,
     crypto::Cryptor,
     directory::{Directory, MoveDstDirectory},
-    entry::{Entry, EntryType},
+    entry::EntryType,
     error::{Error, Result},
     file::File,
     global_locator::GlobalLocator,
@@ -149,18 +149,6 @@ impl Repository {
         _dst: D,
     ) -> Result<(Directory, MoveDstDirectory)> {
         todo!()
-    }
-
-    /// Open an entry (file or directory) at the given locator.
-    pub async fn open_entry_by_locator(
-        &self,
-        locator: GlobalLocator,
-        entry_type: EntryType,
-    ) -> Result<Entry> {
-        self.branch(&locator.branch_id)
-            .await?
-            .open_entry_by_locator(locator.local, entry_type)
-            .await
     }
 
     /// Open a file given the GlobalLocator.

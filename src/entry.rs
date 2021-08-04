@@ -1,9 +1,4 @@
-use crate::{
-    directory::Directory,
-    error::{Error, Result},
-    file::File,
-    locator::Locator,
-};
+use crate::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 
 /// Type of filesystem entry.
@@ -25,37 +20,6 @@ impl EntryType {
         match self {
             EntryType::Directory => Ok(()),
             _ => Err(Error::EntryNotDirectory),
-        }
-    }
-}
-
-/// Filesystem entry.
-pub enum Entry {
-    File(File),
-    Directory(Directory),
-}
-
-#[allow(clippy::len_without_is_empty)]
-impl Entry {
-    pub fn entry_type(&self) -> EntryType {
-        match self {
-            Self::File(_) => EntryType::File,
-            Self::Directory(_) => EntryType::Directory,
-        }
-    }
-
-    pub fn locator(&self) -> &Locator {
-        match self {
-            Self::File(file) => file.locator(),
-            Self::Directory(dir) => dir.locator(),
-        }
-    }
-
-    /// Length of the entry in bytes.
-    pub fn len(&self) -> u64 {
-        match self {
-            Self::File(file) => file.len(),
-            Self::Directory(dir) => dir.len(),
         }
     }
 }
