@@ -10,7 +10,7 @@ mod blob_id;
 mod block;
 mod branch;
 mod directory;
-mod entry;
+mod entry_type;
 mod error;
 mod ffi;
 mod file;
@@ -35,7 +35,7 @@ mod versioned_file_name;
 pub use self::{
     crypto::Cryptor,
     directory::{Directory, EntryRef, MoveDstDirectory},
-    entry::EntryType,
+    entry_type::EntryType,
     error::{Error, Result},
     file::File,
     global_locator::GlobalLocator,

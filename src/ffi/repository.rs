@@ -2,7 +2,7 @@ use super::{
     session,
     utils::{self, Port, SharedHandle},
 };
-use crate::{entry::EntryType, error::Error, repository::Repository};
+use crate::{entry_type::EntryType, error::Error, repository::Repository};
 use std::{os::raw::c_char, sync::Arc};
 
 pub const ENTRY_TYPE_INVALID: u8 = 0;

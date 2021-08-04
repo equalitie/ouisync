@@ -1,6 +1,6 @@
 use crate::{
     directory::{Directory, DirectoryRef, EntryRef, FileRef},
-    entry::EntryType,
+    entry_type::EntryType,
     error::{Error, Result},
     iterator::{Accumulate, SortedUnion},
     replica_id::ReplicaId,

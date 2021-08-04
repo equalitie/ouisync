@@ -2,7 +2,7 @@ use crate::{
     branch::Branch,
     crypto::Cryptor,
     directory::{Directory, MoveDstDirectory},
-    entry::EntryType,
+    entry_type::EntryType,
     error::{Error, Result},
     file::File,
     global_locator::GlobalLocator,

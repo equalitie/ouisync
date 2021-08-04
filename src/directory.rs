@@ -3,7 +3,7 @@ use crate::{
     blob_id::BlobId,
     crypto::Cryptor,
     db,
-    entry::EntryType,
+    entry_type::EntryType,
     error::{Error, Result},
     file::File,
     global_locator::GlobalLocator,
