@@ -17,7 +17,6 @@ use std::{
     fmt,
 };
 
-#[derive(Clone)]
 pub struct Directory {
     blob: Blob,
     content: Content,

@@ -19,7 +19,6 @@ use std::{
 };
 use zeroize::Zeroize;
 
-#[derive(Clone)]
 pub struct Blob {
     branch: BranchData,
     global_locator: GlobalLocator,
