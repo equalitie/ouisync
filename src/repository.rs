@@ -8,9 +8,11 @@ use crate::{
     global_locator::GlobalLocator,
     index::{BranchData, Index},
     joint_directory::JointDirectory,
-    path, ReplicaId,
+    path,
+    write_context::WriteContext,
+    ReplicaId,
 };
-use camino::Utf8Path;
+use camino::{Utf8Path, Utf8PathBuf};
 
 pub struct Repository {
     index: Index,
@@ -108,12 +110,24 @@ impl Repository {
     }
 
     /// Open a file given the GlobalLocator.
-    pub async fn open_file_by_locator(&self, locator: &GlobalLocator) -> Result<File> {
-        self.branch(&locator.branch_id)
+    // TODO: replace this with `open_file_version(path, branch_id)`
+    pub async fn open_file_by_locator(
+        &self,
+        locator: &GlobalLocator,
+        path: Utf8PathBuf,
+    ) -> Result<File> {
+        let owner_branch = self
+            .branch(&locator.branch_id)
             .await
-            .ok_or(Error::EntryNotFound)?
-            .open_file_by_locator(locator.local)
-            .await
+            .ok_or(Error::EntryNotFound)?;
+        let local_branch = self.local_branch().await;
+
+        File::open(
+            owner_branch,
+            locator.local,
+            WriteContext::new(path, local_branch),
+        )
+        .await
     }
 
     /// Returns the local branch

@@ -44,11 +44,6 @@ impl Branch {
         &self.cryptor
     }
 
-    pub async fn open_file_by_locator(&self, _locator: Locator) -> Result<File> {
-        todo!()
-        // File::open(self.clone(), locator).await
-    }
-
     pub async fn open_root(&self) -> Result<Directory> {
         Directory::open(
             self.clone(),

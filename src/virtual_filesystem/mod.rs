@@ -373,7 +373,7 @@ impl Inner {
 
         log::debug!("lookup {}", self.inodes.path_display(parent, Some(name)));
 
-        let parent_path = &self.inodes.get(parent).calculate_directory_path()?;
+        let parent_path = self.inodes.get(parent).calculate_path();
         let parent_dir = self.repository.open_directory(parent_path).await?;
 
         let entry = parent_dir.lookup_unique(name)?;
@@ -586,8 +586,8 @@ impl Inner {
             umask
         );
 
-        let parent_path = self.inodes.get(parent).calculate_directory_path()?;
-        let mut parent_dir = self.repository.open_directory(&parent_path).await?;
+        let parent_path = self.inodes.get(parent).calculate_path();
+        let mut parent_dir = self.repository.open_directory(parent_path).await?;
 
         // TODO: Ensure parent_dir[this_replica_id] exists.
         let mut dir = parent_dir
@@ -609,7 +609,7 @@ impl Inner {
 
         log::debug!("rmdir {}", self.inodes.path_display(parent, Some(name)));
 
-        let parent_path = self.inodes.get(parent).calculate_directory_path()?;
+        let parent_path = self.inodes.get(parent).calculate_path();
         self.repository
             .remove_directory(parent_path.join(name))
             .await?
@@ -648,11 +648,7 @@ impl Inner {
             flags
         );
 
-        let path = self
-            .inodes
-            .get(parent)
-            .calculate_directory_path()?
-            .join(name);
+        let path = self.inodes.get(parent).calculate_path().join(name);
         let (mut file, dirs) = self.repository.create_file(&path).await?;
 
         file.flush().await?;
@@ -828,25 +824,30 @@ impl Inner {
     }
 
     async fn open_file_by_inode(&self, inode: Inode) -> Result<File> {
-        let locator = self.inodes.get(inode).representation().as_file_locator()?;
-        self.repository.open_file_by_locator(locator).await
+        let inode = self.inodes.get(inode);
+        let locator = inode.representation().file_locator()?;
+        let path = inode.calculate_path();
+
+        self.repository.open_file_by_locator(locator, path).await
     }
 
     async fn open_directory_by_inode(&self, inode: Inode) -> Result<JointDirectory> {
-        let path = self.inodes.get(inode).calculate_directory_path()?;
-        self.repository.open_directory(&path).await
+        let path = self.inodes.get(inode).calculate_path();
+        self.repository.open_directory(path).await
     }
 
     async fn open_entry_by_inode(&self, inode: InodeView<'_>) -> Result<JointEntry> {
+        let path = inode.calculate_path();
+
         match inode.representation() {
-            Representation::Directory => {
-                let path = inode.calculate_directory_path()?;
-                Ok(JointEntry::Directory(
-                    self.repository.open_directory(&path).await?,
-                ))
-            }
+            Representation::Directory => Ok(JointEntry::Directory(
+                self.repository.open_directory(path).await?,
+            )),
             Representation::File(file_locator) => {
-                let file = self.repository.open_file_by_locator(file_locator).await?;
+                let file = self
+                    .repository
+                    .open_file_by_locator(file_locator, path)
+                    .await?;
                 Ok(JointEntry::File(file))
             }
         }

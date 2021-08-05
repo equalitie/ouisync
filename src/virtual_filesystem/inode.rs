@@ -156,7 +156,7 @@ pub enum Representation {
 }
 
 impl Representation {
-    pub fn as_file_locator(&self) -> Result<&GlobalLocator> {
+    pub fn file_locator(&self) -> Result<&GlobalLocator> {
         match self {
             Self::Directory => Err(Error::EntryIsDirectory),
             Self::File(locator) => Ok(locator),
@@ -177,16 +177,8 @@ pub struct InodeView<'a> {
 }
 
 impl<'a> InodeView<'a> {
-    pub fn check_is_directory(&self) -> Result<()> {
-        match self.data.representation {
-            Representation::Directory => Ok(()),
-            Representation::File(_) => Err(Error::EntryNotDirectory),
-        }
-    }
-
-    pub fn calculate_directory_path(&self) -> Result<Utf8PathBuf> {
-        self.check_is_directory()?;
-        Ok(self.inodes.calculate_path(self.data))
+    pub fn calculate_path(&self) -> Utf8PathBuf {
+        self.inodes.calculate_path(self.data)
     }
 
     pub fn representation(&self) -> &'a Representation {
