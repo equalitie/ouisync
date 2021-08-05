@@ -5,7 +5,6 @@ use crate::{
     entry_type::EntryType,
     error::{Error, Result},
     file::File,
-    index::BranchData,
     locator::Locator,
     replica_id::ReplicaId,
     write_context::WriteContext,
@@ -154,49 +153,6 @@ impl Directory {
             self.content
                 .insert(*self.write_context.local_branch().id(), name, entry_type)?;
         Ok(Locator::Head(blob_id))
-    }
-
-    /// Creates a file with locators pointing to the same blocks that the src_locators point to.
-    /// Blocks themselves are not being duplicated. Return the locator to the newly created file.
-    pub async fn copy_file<I>(
-        &mut self,
-        dst_name: &str,
-        src_locators: I,
-        src_branch: &BranchData,
-    ) -> Result<Locator>
-    where
-        I: Iterator<Item = Locator>,
-    {
-        let tag = self.content.insert(
-            *self.write_context.local_branch().id(),
-            dst_name.to_string(),
-            EntryType::File,
-        )?;
-
-        let mut tx = self.blob.db_pool().begin().await?;
-        let cryptor = self.blob.cryptor();
-
-        let dst_head = Locator::Head(tag);
-
-        let mut dst_locator = dst_head;
-        let dst_branch = self.blob.branch().data();
-
-        for src_locator in src_locators {
-            let src_locator = src_locator.encode(cryptor);
-            let block_id = src_branch.get(&mut tx, &src_locator).await?;
-
-            dst_branch
-                .insert(&mut tx, &block_id, &dst_locator.encode(cryptor))
-                .await?;
-
-            dst_locator = dst_locator.next();
-        }
-
-        // TODO: Maybe commit on each N copied colators to avoid running out of memory on large
-        // files?
-        tx.commit().await?;
-
-        Ok(dst_head)
     }
 
     pub async fn remove_file(&mut self, name: &str) -> Result<()> {
