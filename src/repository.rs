@@ -8,7 +8,7 @@ use crate::{
     global_locator::GlobalLocator,
     index::{BranchData, Index},
     joint_directory::JointDirectory,
-    ReplicaId,
+    path, ReplicaId,
 };
 use camino::Utf8Path;
 use std::io::SeekFrom;
@@ -30,7 +30,7 @@ impl Repository {
     /// Looks up an entry by its path. The path must be relative to the repository root.
     /// If the entry exists, returns its `EntryType`, otherwise returns `EntryNotFound`.
     pub async fn lookup_type<P: AsRef<Utf8Path>>(&self, path: P) -> Result<EntryType> {
-        match decompose_path(path.as_ref()) {
+        match path::decompose(path.as_ref()) {
             Some((parent, name)) => {
                 let parent = self.open_directory(parent).await?;
                 Ok(parent.lookup_unique(name)?.entry_type())
@@ -41,7 +41,7 @@ impl Repository {
 
     /// Opens a file at the given path (relative to the repository root)
     pub async fn open_file<P: AsRef<Utf8Path>>(&self, path: &P) -> Result<File> {
-        let (parent, name) = decompose_path(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
+        let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
         self.open_directory(parent)
             .await?
             .lookup_unique(name)?
@@ -78,7 +78,7 @@ impl Repository {
 
     /// Removes (delete) the file at the given path. Returns the parent directory.
     pub async fn remove_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<JointDirectory> {
-        let (parent, name) = decompose_path(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
+        let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
         let mut dir = self.open_directory(parent).await?;
         dir.remove_file(self.this_replica_id(), name).await?;
         Ok(dir)
@@ -87,7 +87,7 @@ impl Repository {
     /// Removes the directory at the given path. The directory must be empty. Returns the parent
     /// directory.
     pub async fn remove_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<JointDirectory> {
-        let (parent, name) = decompose_path(path.as_ref()).ok_or(Error::OperationNotSupported)?;
+        let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::OperationNotSupported)?;
         let mut parent = self.open_directory(parent).await?;
         // TODO: Currently only removing directories from the local branch is supported. To
         // implement removing a directory from another branches we need to introduce tombstones.
@@ -109,7 +109,7 @@ impl Repository {
     ) -> Result<()> {
         if &file.global_locator().branch_id != self.this_replica_id() {
             // Perform copy-on-write
-            let (parent, name) = decompose_path(path).ok_or(Error::EntryIsDirectory)?;
+            let (parent, name) = path::decompose(path).ok_or(Error::EntryIsDirectory)?;
 
             let local_branch = self.local_branch().await;
             let mut local_dirs = local_branch.ensure_directory_exists(parent).await?;
@@ -202,17 +202,6 @@ impl Repository {
         }
 
         Ok(JointDirectory::new(dirs))
-    }
-}
-
-// Decomposes `Path` into parent and filename. Returns `None` if `path` doesn't have parent
-// (it's the root).
-fn decompose_path(path: &Utf8Path) -> Option<(&Utf8Path, &str)> {
-    match (path.parent(), path.file_name()) {
-        // It's OK to use unwrap here because all file names are assumed to be UTF-8 (checks are
-        // made in VirtualFilesystem).
-        (Some(parent), Some(name)) => Some((parent, name)),
-        _ => None,
     }
 }
 

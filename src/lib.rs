@@ -22,6 +22,7 @@ mod joint_directory;
 mod joint_entry;
 mod locator;
 mod network;
+mod path;
 mod replica_id;
 mod repository;
 mod scoped_task_set;

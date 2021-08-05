@@ -6,6 +6,7 @@ use crate::{
     file::File,
     index::BranchData,
     locator::Locator,
+    path,
     write_context::WriteContext,
     ReplicaId,
 };
@@ -100,19 +101,10 @@ impl Branch {
     }
 
     pub async fn ensure_file_exists(&self, path: &Utf8Path) -> Result<(File, Vec<Directory>)> {
-        let (parent, name) = decompose_path(path).ok_or(Error::EntryIsDirectory)?;
+        let (parent, name) = path::decompose(path).ok_or(Error::EntryIsDirectory)?;
         let mut dirs = self.ensure_directory_exists(parent).await?;
         let file = dirs.last_mut().unwrap().create_file(name.to_string())?;
         Ok((file, dirs))
-    }
-}
-
-// Decomposes `Path` into parent and filename. Returns `None` if `path` doesn't have parent
-// (it's the root).
-fn decompose_path(path: &Utf8Path) -> Option<(&Utf8Path, &str)> {
-    match (path.parent(), path.file_name()) {
-        (Some(parent), Some(name)) => Some((parent, name)),
-        _ => None,
     }
 }
 
