@@ -44,13 +44,12 @@ impl Directory {
 
     /// Creates the root directory.
     pub(crate) fn create_root(branch: Branch) -> Self {
-        let branch_data = branch.data().clone();
-        let blob = Blob::create(branch, Locator::Root);
+        let blob = Blob::create(branch.clone(), Locator::Root);
 
         Self {
             blob,
             content: Content::new(),
-            write_context: WriteContext::new("/".into(), branch_data),
+            write_context: WriteContext::new("/".into(), branch),
         }
     }
 

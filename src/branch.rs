@@ -52,7 +52,7 @@ impl Branch {
         Directory::open(
             self.clone(),
             Locator::Root,
-            WriteContext::new("/".into(), self.branch_data.clone()),
+            WriteContext::new("/".into(), self.clone()),
         )
         .await
     }
