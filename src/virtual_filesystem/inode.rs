@@ -177,23 +177,11 @@ pub struct InodeView<'a> {
 }
 
 impl<'a> InodeView<'a> {
-    pub fn check_is_file(&self) -> Result<()> {
-        match self.data.representation {
-            Representation::Directory => Err(Error::EntryIsDirectory),
-            Representation::File(_) => Ok(()),
-        }
-    }
-
     pub fn check_is_directory(&self) -> Result<()> {
         match self.data.representation {
             Representation::Directory => Ok(()),
             Representation::File(_) => Err(Error::EntryNotDirectory),
         }
-    }
-
-    pub fn calculate_file_path(&self) -> Result<Utf8PathBuf> {
-        self.check_is_file()?;
-        Ok(self.inodes.calculate_path(self.data))
     }
 
     pub fn calculate_directory_path(&self) -> Result<Utf8PathBuf> {

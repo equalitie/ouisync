@@ -11,7 +11,6 @@ use crate::{
     path, ReplicaId,
 };
 use camino::Utf8Path;
-use std::io::SeekFrom;
 
 pub struct Repository {
     index: Index,
@@ -95,44 +94,6 @@ impl Repository {
             .remove_directory(self.this_replica_id(), name)
             .await?;
         Ok(parent)
-    }
-
-    /// Write to a file. If the file is on local branch, it writes to it directly. If it's on a
-    /// remote branch, a "copy" of the file is created (blocks are not duplicated, but locators
-    /// are) locally and the write then happens to the copy.
-    pub async fn write_to_file(
-        &self,
-        path: &Utf8Path,
-        file: &mut File,
-        offset: u64,
-        buffer: &[u8],
-    ) -> Result<()> {
-        if &file.global_locator().branch_id != self.this_replica_id() {
-            // Perform copy-on-write
-            let (parent, name) = path::decompose(path).ok_or(Error::EntryIsDirectory)?;
-
-            let local_branch = self.local_branch().await;
-            let mut local_dirs = local_branch.ensure_directory_exists(parent).await?;
-
-            let local_file_locator = local_dirs
-                .last_mut()
-                .unwrap() // Always contains root
-                .copy_file(name, file.locators(), file.branch().data())
-                .await?;
-
-            let mut new_file = local_branch
-                .open_file_by_locator(local_file_locator)
-                .await?;
-
-            for dir in local_dirs.iter_mut().rev() {
-                dir.flush().await?;
-            }
-
-            std::mem::swap(file, &mut new_file);
-        }
-
-        file.seek(SeekFrom::Start(offset)).await?;
-        file.write(buffer).await
     }
 
     /// Moves (renames) an entry from the source path to the destination path.

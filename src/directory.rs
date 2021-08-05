@@ -130,8 +130,9 @@ impl Directory {
 
     /// Creates a new file inside this directory.
     pub fn create_file(&mut self, name: String) -> Result<File> {
+        let path = self.write_context.path().join(&name);
         let locator = self.insert_entry(name, EntryType::File)?;
-        Ok(File::create(self.blob.branch().clone(), locator))
+        Ok(File::create(self.blob.branch().clone(), locator, path))
     }
 
     /// Creates a new subdirectory of this directory.
@@ -341,7 +342,12 @@ impl<'a> FileRef<'a> {
     }
 
     pub async fn open(&self) -> Result<File> {
-        File::open(self.inner.parent.blob.branch().clone(), self.locator()).await
+        File::open(
+            self.inner.parent.blob.branch().clone(),
+            self.locator(),
+            self.inner.write_context(),
+        )
+        .await
     }
 }
 
@@ -368,12 +374,10 @@ impl<'a> DirectoryRef<'a> {
     }
 
     pub async fn open(&self) -> Result<Directory> {
-        let write_context = self.inner.parent.write_context.child(self.inner.name);
-
         Directory::open(
             self.inner.parent.blob.branch().clone(),
             self.locator(),
-            write_context,
+            self.inner.write_context(),
         )
         .await
     }
@@ -384,6 +388,12 @@ struct RefInner<'a> {
     parent: &'a Directory,
     name: &'a str,
     blob_id: &'a BlobId,
+}
+
+impl RefInner<'_> {
+    fn write_context(&self) -> WriteContext {
+        self.parent.write_context.child(self.name)
+    }
 }
 
 impl PartialEq for RefInner<'_> {
@@ -477,6 +487,7 @@ struct EntryData {
 mod tests {
     use super::*;
     use crate::{crypto::Cryptor, db, index::BranchData};
+    use camino::Utf8Path;
     use std::collections::BTreeSet;
 
     #[tokio::test(flavor = "multi_thread")]
@@ -583,7 +594,13 @@ mod tests {
         assert_eq!(parent_dir.entries().count(), 0);
 
         // Check the file itself was removed as well.
-        match File::open(branch, file_locator).await {
+        match File::open(
+            branch.clone(),
+            file_locator,
+            WriteContext::new(Utf8Path::new("/").join(name), branch),
+        )
+        .await
+        {
             Err(Error::EntryNotFound) => (),
             Err(error) => panic!("unexpected error {:?}", error),
             Ok(_) => panic!("file should not exists but it does"),

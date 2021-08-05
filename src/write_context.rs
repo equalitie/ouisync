@@ -2,7 +2,7 @@ use crate::{
     blob::Blob, branch::Branch, directory::Directory, entry_type::EntryType, error::Result,
     locator::Locator, path,
 };
-use camino::{Utf8Component, Utf8PathBuf};
+use camino::{Utf8Component, Utf8Path, Utf8PathBuf};
 
 /// Context needed for updating all necessary info when writing to a file or directory.
 pub struct WriteContext {
@@ -28,6 +28,10 @@ impl WriteContext {
         }
     }
 
+    pub fn path(&self) -> &Utf8Path {
+        &self.path
+    }
+
     pub fn local_branch(&self) -> &Branch {
         &self.local_branch
     }
@@ -35,12 +39,8 @@ impl WriteContext {
     /// Begin writing to the given blob. This ensures the blob lives in the local branch and all
     /// its ancestor directories exist and live in the local branch as well.
     /// Call `commit` to finalize the write.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `begin` was already called without being folowed by `commit`.
     pub async fn begin(&mut self, entry_type: EntryType, blob: &mut Blob) -> Result<()> {
-        assert!(self.ancestors.is_empty(), "write already begun");
+        // TODO: load the directories always
 
         if blob.branch().id() == self.local_branch.id() {
             // Blob already lives in the local branch. We assume the ancestor directories have been

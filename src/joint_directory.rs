@@ -303,7 +303,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{branch::Branch, crypto::Cryptor, db, directory::Directory, index::BranchData};
+    use crate::{
+        branch::Branch, crypto::Cryptor, db, directory::Directory, file::File, index::BranchData,
+        write_context::WriteContext,
+    };
     use assert_matches::assert_matches;
     use futures_util::future;
 
@@ -414,11 +417,19 @@ mod tests {
         root0.flush().await.unwrap();
 
         let mut root1 = Directory::create_root(branches[1].clone());
-        root1
-            .copy_file("file.txt", file0.locators(), branches[0].data())
-            .await
-            .unwrap();
         root1.flush().await.unwrap();
+
+        // Open the file with branch 1 as the local brach and then modify it which copies (forks) it
+        // into that branch.
+        let mut file1 = File::open(
+            branches[0].clone(),
+            *file0.locator(),
+            WriteContext::new("/file.txt".into(), branches[1].clone()),
+        )
+        .await
+        .unwrap();
+        file1.write(&[0]).await.unwrap();
+        file1.flush().await.unwrap();
 
         let root = JointDirectory::new(vec![root0, root1]);
 
