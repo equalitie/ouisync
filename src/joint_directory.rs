@@ -103,6 +103,24 @@ impl JointDirectory {
         }
     }
 
+    /// Looks up a specific version of a file.
+    pub fn lookup_version(&self, name: &'_ str, branch_id: &'_ ReplicaId) -> Result<FileRef> {
+        let mut entries = self
+            .versions
+            .values()
+            .filter_map(|dir| dir.lookup_version(name, branch_id).ok())
+            .filter_map(|entry| entry.file().ok());
+
+        let first = entries.next().ok_or(Error::EntryNotFound)?;
+
+        if entries.next().is_none() {
+            Ok(first)
+        } else {
+            // TODO: fetch the most recent one instead
+            Err(Error::AmbiguousEntry)
+        }
+    }
+
     /// Descends into an arbitrarily nested subdirectory of this directory at the specified path.
     /// Note: non-normalized paths (i.e. containing "..") or Windows-style drive prefixes
     /// (e.g. "C:") are not supported.

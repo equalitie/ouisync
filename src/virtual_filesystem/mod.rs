@@ -17,8 +17,8 @@ use fuser::{
     ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow,
 };
 use ouisync::{
-    EntryType, Error, File, GlobalLocator, JointDirectory, JointEntry, JointEntryRef, ReplicaId,
-    Repository, Result,
+    EntryType, Error, File, JointDirectory, JointEntry, JointEntryRef, ReplicaId, Repository,
+    Result,
 };
 use std::{
     convert::TryInto,
@@ -380,10 +380,7 @@ impl Inner {
         let (len, repr) = match &entry {
             JointEntryRef::File(entry) => (
                 entry.open().await?.len(),
-                Representation::File(GlobalLocator {
-                    branch_id: *entry.branch_id(),
-                    local: entry.locator(),
-                }),
+                Representation::File(*entry.branch_id()),
             ),
             JointEntryRef::Directory(entry) => {
                 (entry.open().await?.len(), Representation::Directory)
@@ -657,11 +654,11 @@ impl Inner {
             dir.flush().await?;
         }
 
-        let locator = file.global_locator();
+        let branch_id = *file.branch().id();
         let entry = JointEntry::File(file);
         let inode = self
             .inodes
-            .lookup(parent, name, Representation::File(locator));
+            .lookup(parent, name, Representation::File(branch_id));
         let attr = make_file_attr_for_entry(&entry, inode);
         let handle = self.entries.insert(entry);
 
@@ -825,10 +822,10 @@ impl Inner {
 
     async fn open_file_by_inode(&self, inode: Inode) -> Result<File> {
         let inode = self.inodes.get(inode);
-        let locator = inode.representation().file_locator()?;
+        let branch_id = inode.representation().file_version()?;
         let path = inode.calculate_path();
 
-        self.repository.open_file_by_locator(locator, path).await
+        self.repository.open_file_version(path, branch_id).await
     }
 
     async fn open_directory_by_inode(&self, inode: Inode) -> Result<JointDirectory> {
@@ -843,11 +840,8 @@ impl Inner {
             Representation::Directory => Ok(JointEntry::Directory(
                 self.repository.open_directory(path).await?,
             )),
-            Representation::File(file_locator) => {
-                let file = self
-                    .repository
-                    .open_file_by_locator(file_locator, path)
-                    .await?;
+            Representation::File(branch_id) => {
+                let file = self.repository.open_file_version(path, branch_id).await?;
                 Ok(JointEntry::File(file))
             }
         }

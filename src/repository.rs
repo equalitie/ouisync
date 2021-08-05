@@ -5,14 +5,11 @@ use crate::{
     entry_type::EntryType,
     error::{Error, Result},
     file::File,
-    global_locator::GlobalLocator,
     index::{BranchData, Index},
     joint_directory::JointDirectory,
-    path,
-    write_context::WriteContext,
-    ReplicaId,
+    path, ReplicaId,
 };
-use camino::{Utf8Path, Utf8PathBuf};
+use camino::Utf8Path;
 
 pub struct Repository {
     index: Index,
@@ -41,12 +38,26 @@ impl Repository {
     }
 
     /// Opens a file at the given path (relative to the repository root)
-    pub async fn open_file<P: AsRef<Utf8Path>>(&self, path: &P) -> Result<File> {
+    pub async fn open_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<File> {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
         self.open_directory(parent)
             .await?
             .lookup_unique(name)?
             .file()?
+            .open()
+            .await
+    }
+
+    /// Open a specific version of the file at the given path.
+    pub async fn open_file_version<P: AsRef<Utf8Path>>(
+        &self,
+        path: P,
+        branch_id: &ReplicaId,
+    ) -> Result<File> {
+        let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
+        self.open_directory(parent)
+            .await?
+            .lookup_version(name, branch_id)?
             .open()
             .await
     }
@@ -107,27 +118,6 @@ impl Repository {
         _dst: D,
     ) -> Result<(Directory, MoveDstDirectory)> {
         todo!()
-    }
-
-    /// Open a file given the GlobalLocator.
-    // TODO: replace this with `open_file_version(path, branch_id)`
-    pub async fn open_file_by_locator(
-        &self,
-        locator: &GlobalLocator,
-        path: Utf8PathBuf,
-    ) -> Result<File> {
-        let owner_branch = self
-            .branch(&locator.branch_id)
-            .await
-            .ok_or(Error::EntryNotFound)?;
-        let local_branch = self.local_branch().await;
-
-        File::open(
-            owner_branch,
-            locator.local,
-            WriteContext::new(path, local_branch),
-        )
-        .await
     }
 
     /// Returns the local branch

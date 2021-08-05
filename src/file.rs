@@ -31,6 +31,10 @@ impl File {
         }
     }
 
+    pub fn branch(&self) -> &Branch {
+        self.blob.branch()
+    }
+
     /// Length of this file in bytes.
     #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> u64 {
