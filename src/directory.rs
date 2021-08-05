@@ -53,18 +53,34 @@ impl Directory {
         }
     }
 
-    /// Flushes this directory ensuring that any pending changes are written to the store.
+    /// Flushes this directory ensuring that any pending changes are written to the store and the
+    /// version vectors of this and the ancestor directories are properly incremented.
     pub async fn flush(&mut self) -> Result<()> {
         if !self.content.dirty {
             return Ok(());
         }
 
+        self.write_context
+            .begin(EntryType::Directory, &mut self.blob)
+            .await?;
+        self.write().await?;
+        self.write_context.commit().await?;
+
+        Ok(())
+    }
+
+    /// Writes the pending changes to the store without incrementing the version vectors.
+    /// For internal use only!
+    ///
+    /// # Panics
+    ///
+    /// Panics if not dirty or not in the local branch.
+    pub async fn write(&mut self) -> Result<()> {
+        assert!(self.content.dirty);
+        assert!(self.blob.branch().id() == self.write_context.local_branch().id());
+
         let buffer =
             bincode::serialize(&self.content).expect("failed to serialize directory content");
-
-        // TODO:
-        // self.write_context.begin(&mut self.blob).await?;
-        // self.write_context.commit().await?;
 
         self.blob.truncate(0).await?;
         self.blob.write(&buffer).await?;
@@ -114,36 +130,30 @@ impl Directory {
 
     /// Creates a new file inside this directory.
     pub fn create_file(&mut self, name: String) -> Result<File> {
-        // TODO: fork self
-
-        let blob_id = self
-            .content
-            .insert(*self.blob.branch().id(), name, EntryType::File)?;
-
-        Ok(File::create(
-            self.blob.branch().clone(),
-            Locator::Head(blob_id),
-        ))
+        let locator = self.insert_entry(name, EntryType::File)?;
+        Ok(File::create(self.blob.branch().clone(), locator))
     }
 
     /// Creates a new subdirectory of this directory.
     pub fn create_directory(&mut self, name: String) -> Result<Self> {
-        // TODO: fork self
-
         let write_context = self.write_context.child(&name);
-        let blob_id = self.content.insert(
-            *write_context.local_branch().id(),
-            name,
-            EntryType::Directory,
-        )?;
-
-        let blob = Blob::create(self.blob.branch().clone(), Locator::Head(blob_id));
+        let locator = self.insert_entry(name, EntryType::Directory)?;
+        let blob = Blob::create(self.blob.branch().clone(), locator);
 
         Ok(Self {
             blob,
             content: Content::new(),
             write_context,
         })
+    }
+
+    /// Inserts a dangling entry into this directory. It's the responsibility of the caller to make
+    /// sure the returned locator eventually points to an actual file or directory.
+    pub(crate) fn insert_entry(&mut self, name: String, entry_type: EntryType) -> Result<Locator> {
+        let blob_id =
+            self.content
+                .insert(*self.write_context.local_branch().id(), name, entry_type)?;
+        Ok(Locator::Head(blob_id))
     }
 
     /// Creates a file with locators pointing to the same blocks that the src_locators point to.
@@ -203,6 +213,12 @@ impl Directory {
         }
         self.content.remove(name)
         // TODO: Add tombstone
+    }
+
+    /// Increment version of the specified entry.
+    pub fn increment_entry_version(&mut self, _name: &str) -> Result<()> {
+        // TODO
+        Ok(())
     }
 
     /// Removes this directory if its empty, otherwise fails.
