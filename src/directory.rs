@@ -50,10 +50,7 @@ impl Directory {
         Self {
             blob,
             content: Content::new(),
-            write_context: WriteContext {
-                path: "/".into(),
-                local_branch: branch_data,
-            },
+            write_context: WriteContext::new("/".into(), branch_data),
         }
     }
 
@@ -65,6 +62,10 @@ impl Directory {
 
         let buffer =
             bincode::serialize(&self.content).expect("failed to serialize directory content");
+
+        // TODO:
+        // self.write_context.begin(&mut self.blob).await?;
+        // self.write_context.commit().await?;
 
         self.blob.truncate(0).await?;
         self.blob.write(&buffer).await?;
@@ -130,20 +131,19 @@ impl Directory {
     pub fn create_directory(&mut self, name: String) -> Result<Self> {
         // TODO: fork self
 
-        let path = self.write_context.path.join(&name);
-        let blob_id = self
-            .content
-            .insert(*self.blob.branch().id(), name, EntryType::Directory)?;
+        let write_context = self.write_context.child(&name);
+        let blob_id = self.content.insert(
+            *write_context.local_branch().id(),
+            name,
+            EntryType::Directory,
+        )?;
 
         let blob = Blob::create(self.blob.branch().clone(), Locator::Head(blob_id));
 
         Ok(Self {
             blob,
             content: Content::new(),
-            write_context: WriteContext {
-                path,
-                local_branch: self.blob.branch().data().clone(),
-            },
+            write_context,
         })
     }
 
@@ -159,7 +159,7 @@ impl Directory {
         I: Iterator<Item = Locator>,
     {
         let tag = self.content.insert(
-            *self.write_context.local_branch.id(),
+            *self.write_context.local_branch().id(),
             dst_name.to_string(),
             EntryType::File,
         )?;
