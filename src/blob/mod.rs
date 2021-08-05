@@ -335,7 +335,7 @@ impl Blob {
     /// Creates a shallow copy (only the index nodes are copied, not blocks) of this blob into the
     /// specified destination branch and locator.
     pub async fn fork(&mut self, dst_branch: BranchData, dst_head_locator: Locator) -> Result<()> {
-        if self.branch.id() == dst_branch.replica_id() && self.locator == dst_head_locator {
+        if self.branch.id() == dst_branch.id() && self.locator == dst_head_locator {
             // This blob is already in the dst, nothing to do.
             return Ok(());
         }

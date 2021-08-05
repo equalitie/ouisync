@@ -29,7 +29,7 @@ impl Branch {
     }
 
     pub fn id(&self) -> &ReplicaId {
-        self.branch_data.replica_id()
+        self.branch_data.id()
     }
 
     pub fn data(&self) -> &BranchData {

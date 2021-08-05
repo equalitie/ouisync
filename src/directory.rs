@@ -159,7 +159,7 @@ impl Directory {
         I: Iterator<Item = Locator>,
     {
         let tag = self.content.insert(
-            *self.write_context.local_branch.replica_id(),
+            *self.write_context.local_branch.id(),
             dst_name.to_string(),
             EntryType::File,
         )?;

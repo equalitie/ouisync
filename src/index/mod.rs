@@ -252,7 +252,7 @@ struct Branches {
 
 impl Branches {
     fn get(&self, replica_id: &ReplicaId) -> Option<&BranchData> {
-        if self.local.replica_id() == replica_id {
+        if self.local.id() == replica_id {
             Some(&self.local)
         } else {
             self.remote.get(replica_id)
@@ -260,7 +260,7 @@ impl Branches {
     }
 
     fn ids(&self) -> impl Iterator<Item = &ReplicaId> {
-        iter::once(self.local.replica_id()).chain(self.remote.keys())
+        iter::once(self.local.id()).chain(self.remote.keys())
     }
 
     fn values(&self) -> impl Iterator<Item = &BranchData> {

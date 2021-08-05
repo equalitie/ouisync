@@ -55,7 +55,7 @@ impl BranchData {
     }
 
     /// Returns the id of the replica that owns this branch.
-    pub fn replica_id(&self) -> &ReplicaId {
+    pub fn id(&self) -> &ReplicaId {
         &self.shared.replica_id
     }
 
