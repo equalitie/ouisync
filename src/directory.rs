@@ -652,10 +652,74 @@ mod tests {
         }
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn fork() {
+        let branch0 = setup().await;
+        let branch1 = create_branch(branch0.db_pool().clone()).await;
+
+        // Create a nested directory by branch 0
+        let mut root0 = Directory::create_root(branch0.clone());
+        root0.flush().await.unwrap();
+
+        let mut dir0 = root0.create_directory("dir".into()).unwrap();
+        dir0.flush().await.unwrap();
+        root0.flush().await.unwrap();
+
+        // Open it by branch 1 and modify it
+        let mut dir1 = Directory::open(
+            branch0.clone(),
+            *dir0.locator(),
+            WriteContext::new("/dir".into(), branch1.clone()),
+        )
+        .await
+        .unwrap();
+
+        dir1.create_file("dog.jpg".into()).unwrap();
+        dir1.flush().await.unwrap();
+
+        assert_eq!(dir1.branch().id(), branch1.id());
+
+        // Reopen orig dir and verify it's unchanged
+        let dir = Directory::open(
+            branch0.clone(),
+            *dir0.locator(),
+            WriteContext::new("/dir".into(), branch0),
+        )
+        .await
+        .unwrap();
+        assert_eq!(dir.entries().count(), 0);
+
+        // Reopen forked dir and verify it contains the new file
+        let dir = Directory::open(
+            branch1.clone(),
+            *dir1.locator(),
+            WriteContext::new("/dir".into(), branch1.clone()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            dir.entries().map(|entry| entry.name()).next(),
+            Some("dog.jpg")
+        );
+
+        // Verify the root dir got forked as well
+        Directory::open(
+            branch1.clone(),
+            Locator::Root,
+            WriteContext::new("/".into(), branch1),
+        )
+        .await
+        .unwrap();
+    }
+
     async fn setup() -> Branch {
         let pool = db::init(db::Store::Memory).await.unwrap();
-        let branch_data = BranchData::new(&pool, rand::random()).await.unwrap();
+        create_branch(pool).await
+    }
 
+    async fn create_branch(pool: db::Pool) -> Branch {
+        let branch_data = BranchData::new(&pool, rand::random()).await.unwrap();
         Branch::new(pool, branch_data, Cryptor::Null)
     }
 }

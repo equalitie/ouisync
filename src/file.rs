@@ -59,12 +59,9 @@ impl File {
 
     /// Writes `buffer` into this file.
     pub async fn write(&mut self, buffer: &[u8]) -> Result<()> {
-        if !buffer.is_empty() {
-            self.write_context
-                .begin(EntryType::File, &mut self.blob)
-                .await?;
-        }
-
+        self.write_context
+            .begin(EntryType::File, &mut self.blob)
+            .await?;
         self.blob.write(buffer).await
     }
 
@@ -75,12 +72,9 @@ impl File {
 
     /// Truncates the file to the given length.
     pub async fn truncate(&mut self, len: u64) -> Result<()> {
-        if len != self.blob.len() {
-            self.write_context
-                .begin(EntryType::File, &mut self.blob)
-                .await?;
-        }
-
+        self.write_context
+            .begin(EntryType::File, &mut self.blob)
+            .await?;
         self.blob.truncate(len).await
     }
 
@@ -95,5 +89,69 @@ impl File {
     pub async fn remove(self) -> Result<()> {
         // TODO: consider only allowing this if file is in the local branch.
         self.blob.remove().await
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::{crypto::Cryptor, db, index::BranchData};
+
+    use super::*;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn fork() {
+        let branch0 = setup().await;
+        let branch1 = create_branch(branch0.db_pool().clone()).await;
+
+        // Create a file owned by branch 0
+        let mut file0 = File::create(
+            branch0.clone(),
+            Locator::Head(rand::random()),
+            "/dog.jpg".into(),
+        );
+        file0.write(b"small").await.unwrap();
+        file0.flush().await.unwrap();
+
+        // Write to the file by branch 1
+        let mut file1 = File::open(
+            branch0.clone(),
+            *file0.locator(),
+            WriteContext::new("/dog.jpg".into(), branch1.clone()),
+        )
+        .await
+        .unwrap();
+        file1.write(b"large").await.unwrap();
+        file1.flush().await.unwrap();
+
+        // Reopen orig file and verify it's unchanged
+        let mut file = File::open(
+            branch0.clone(),
+            *file0.locator(),
+            WriteContext::new("/dog.jpg".into(), branch0),
+        )
+        .await
+        .unwrap();
+        assert_eq!(file.read_to_end().await.unwrap(), b"small");
+
+        // Reopen forked file and verify it's modified
+        let mut file = File::open(
+            branch1.clone(),
+            *file1.locator(),
+            WriteContext::new("/dog.jpg".into(), branch1),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(file.read_to_end().await.unwrap(), b"large");
+    }
+
+    async fn setup() -> Branch {
+        let pool = db::init(db::Store::Memory).await.unwrap();
+        create_branch(pool).await
+    }
+
+    async fn create_branch(pool: db::Pool) -> Branch {
+        let branch_data = BranchData::new(&pool, rand::random()).await.unwrap();
+        Branch::new(pool, branch_data, Cryptor::Null)
     }
 }

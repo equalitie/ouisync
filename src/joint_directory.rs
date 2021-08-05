@@ -323,7 +323,7 @@ mod tests {
     use super::*;
     use crate::{
         branch::Branch, crypto::Cryptor, db, directory::Directory, file::File, index::BranchData,
-        write_context::WriteContext,
+        locator::Locator, write_context::WriteContext,
     };
     use assert_matches::assert_matches;
     use futures_util::future;
@@ -434,11 +434,8 @@ mod tests {
         file0.flush().await.unwrap();
         root0.flush().await.unwrap();
 
-        let mut root1 = Directory::create_root(branches[1].clone());
-        root1.flush().await.unwrap();
-
-        // Open the file with branch 1 as the local brach and then modify it which copies (forks) it
-        // into that branch.
+        // Open the file with branch 1 as the local branch and then modify it which copies (forks)
+        // it into branch 1.
         let mut file1 = File::open(
             branches[0].clone(),
             *file0.locator(),
@@ -446,8 +443,17 @@ mod tests {
         )
         .await
         .unwrap();
-        file1.write(&[0]).await.unwrap();
+        file1.write(&[]).await.unwrap();
         file1.flush().await.unwrap();
+
+        // Open branch 1's root dir which should have been created in the process.
+        let root1 = Directory::open(
+            branches[1].clone(),
+            Locator::Root,
+            WriteContext::new("/".into(), branches[1].clone()),
+        )
+        .await
+        .unwrap();
 
         let root = JointDirectory::new(vec![root0, root1]);
 
