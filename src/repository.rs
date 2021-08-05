@@ -117,7 +117,7 @@ impl Repository {
             let local_file_locator = local_dirs
                 .last_mut()
                 .unwrap() // Always contains root
-                .copy_file(name, file.locators(), file.branch())
+                .copy_file(name, file.locators(), file.branch().data())
                 .await?;
 
             let mut new_file = local_branch

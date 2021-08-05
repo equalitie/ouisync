@@ -12,6 +12,7 @@ use crate::{
 };
 use camino::{Utf8Component, Utf8Path};
 
+#[derive(Clone)]
 pub struct Branch {
     pool: db::Pool,
     branch_data: BranchData,
@@ -35,21 +36,21 @@ impl Branch {
         &self.branch_data
     }
 
+    pub fn db_pool(&self) -> &db::Pool {
+        &self.pool
+    }
+
+    pub fn cryptor(&self) -> &Cryptor {
+        &self.cryptor
+    }
+
     pub async fn open_file_by_locator(&self, locator: Locator) -> Result<File> {
-        File::open(
-            self.pool.clone(),
-            self.branch_data.clone(),
-            self.cryptor.clone(),
-            locator,
-        )
-        .await
+        File::open(self.clone(), locator).await
     }
 
     pub async fn open_root(&self) -> Result<Directory> {
         Directory::open(
-            self.pool.clone(),
-            self.branch_data.clone(),
-            self.cryptor.clone(),
+            self.clone(),
             Locator::Root,
             WriteContext {
                 path: "/".into(),
@@ -62,11 +63,7 @@ impl Branch {
     pub async fn open_or_create_root(&self) -> Result<Directory> {
         match self.open_root().await {
             Ok(dir) => Ok(dir),
-            Err(Error::EntryNotFound) => Ok(Directory::create_root(
-                self.pool.clone(),
-                self.branch_data.clone(),
-                self.cryptor.clone(),
-            )),
+            Err(Error::EntryNotFound) => Ok(Directory::create_root(self.clone())),
             Err(error) => Err(error),
         }
     }

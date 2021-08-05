@@ -303,22 +303,15 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        crypto::Cryptor,
-        db,
-        directory::Directory,
-        index::{BranchData, Index},
-    };
+    use crate::{branch::Branch, crypto::Cryptor, db, directory::Directory, index::BranchData};
     use assert_matches::assert_matches;
     use futures_util::future;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn no_conflict() {
-        let index = setup(2).await;
-        let branches = index.branches().await;
+        let branches = setup(2).await;
 
-        let mut root0 =
-            Directory::create_root(index.pool.clone(), branches[0].clone(), Cryptor::Null);
+        let mut root0 = Directory::create_root(branches[0].clone());
         root0
             .create_file("file0.txt".to_owned())
             .unwrap()
@@ -327,8 +320,7 @@ mod tests {
             .unwrap();
         root0.flush().await.unwrap();
 
-        let mut root1 =
-            Directory::create_root(index.pool.clone(), branches[1].clone(), Cryptor::Null);
+        let mut root1 = Directory::create_root(branches[1].clone());
         root1
             .create_file("file1.txt".to_owned())
             .unwrap()
@@ -356,11 +348,9 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn conflict_independent_files() {
-        let index = setup(2).await;
-        let branches = index.branches().await;
+        let branches = setup(2).await;
 
-        let mut root0 =
-            Directory::create_root(index.pool.clone(), branches[0].clone(), Cryptor::Null);
+        let mut root0 = Directory::create_root(branches[0].clone());
         root0
             .create_file("file.txt".to_owned())
             .unwrap()
@@ -369,8 +359,7 @@ mod tests {
             .unwrap();
         root0.flush().await.unwrap();
 
-        let mut root1 =
-            Directory::create_root(index.pool.clone(), branches[1].clone(), Cryptor::Null);
+        let mut root1 = Directory::create_root(branches[1].clone());
         root1
             .create_file("file.txt".to_owned())
             .unwrap()
@@ -387,16 +376,13 @@ mod tests {
         for branch in &branches {
             let file = files
                 .iter()
-                .find(|file| file.branch_id() == branch.replica_id())
+                .find(|file| file.branch_id() == branch.id())
                 .unwrap();
             assert_eq!(file.name(), "file.txt");
 
             assert_eq!(
-                root.lookup_unique(&versioned_file_name::create(
-                    "file.txt",
-                    branch.replica_id()
-                ))
-                .unwrap(),
+                root.lookup_unique(&versioned_file_name::create("file.txt", branch.id()))
+                    .unwrap(),
                 JointEntryRef::File(*file)
             );
         }
@@ -410,7 +396,7 @@ mod tests {
         for branch in &branches {
             let file = files
                 .iter()
-                .find(|file| file.branch_id() == branch.replica_id())
+                .find(|file| file.branch_id() == branch.id())
                 .unwrap();
             assert_eq!(file.name(), "file.txt");
         }
@@ -420,19 +406,16 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn conflict_forked_files() {
-        let index = setup(2).await;
-        let branches = index.branches().await;
+        let branches = setup(2).await;
 
-        let mut root0 =
-            Directory::create_root(index.pool.clone(), branches[0].clone(), Cryptor::Null);
+        let mut root0 = Directory::create_root(branches[0].clone());
         let mut file0 = root0.create_file("file.txt".to_owned()).unwrap();
         file0.flush().await.unwrap();
         root0.flush().await.unwrap();
 
-        let mut root1 =
-            Directory::create_root(index.pool.clone(), branches[1].clone(), Cryptor::Null);
+        let mut root1 = Directory::create_root(branches[1].clone());
         root1
-            .copy_file("file.txt", file0.locators(), &branches[0])
+            .copy_file("file.txt", file0.locators(), branches[0].data())
             .await
             .unwrap();
         root1.flush().await.unwrap();
@@ -446,7 +429,7 @@ mod tests {
         for branch in &branches {
             let file = files
                 .iter()
-                .find(|file| file.branch_id() == branch.replica_id())
+                .find(|file| file.branch_id() == branch.id())
                 .unwrap();
             assert_eq!(file.name(), "file.txt");
         }
@@ -454,18 +437,15 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn conflict_directories() {
-        let index = setup(2).await;
-        let branches = index.branches().await;
+        let branches = setup(2).await;
 
-        let mut root0 =
-            Directory::create_root(index.pool.clone(), branches[0].clone(), Cryptor::Null);
+        let mut root0 = Directory::create_root(branches[0].clone());
 
         let mut dir0 = root0.create_directory("dir".to_owned()).unwrap();
         dir0.flush().await.unwrap();
         root0.flush().await.unwrap();
 
-        let mut root1 =
-            Directory::create_root(index.pool.clone(), branches[1].clone(), Cryptor::Null);
+        let mut root1 = Directory::create_root(branches[1].clone());
 
         let mut dir1 = root1.create_directory("dir".to_owned()).unwrap();
         dir1.flush().await.unwrap();
@@ -483,18 +463,15 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn conflict_file_and_directory() {
-        let index = setup(2).await;
-        let branches = index.branches().await;
+        let branches = setup(2).await;
 
-        let mut root0 =
-            Directory::create_root(index.pool.clone(), branches[0].clone(), Cryptor::Null);
+        let mut root0 = Directory::create_root(branches[0].clone());
 
         let mut file0 = root0.create_file("config".to_owned()).unwrap();
         file0.flush().await.unwrap();
         root0.flush().await.unwrap();
 
-        let mut root1 =
-            Directory::create_root(index.pool.clone(), branches[1].clone(), Cryptor::Null);
+        let mut root1 = Directory::create_root(branches[1].clone());
 
         let mut dir1 = root1.create_directory("config".to_owned()).unwrap();
         dir1.flush().await.unwrap();
@@ -509,7 +486,7 @@ mod tests {
             ["config", "config"]
         );
         assert!(entries.iter().any(|entry| match entry {
-            JointEntryRef::File(file) => file.branch_id() == branches[0].replica_id(),
+            JointEntryRef::File(file) => file.branch_id() == branches[0].id(),
             JointEntryRef::Directory(_) => false,
         }));
         assert!(entries
@@ -522,10 +499,10 @@ mod tests {
         let entry = root.lookup_unique("config").unwrap();
         assert_eq!(entry.entry_type(), EntryType::Directory);
 
-        let name = versioned_file_name::create("config", branches[0].replica_id());
+        let name = versioned_file_name::create("config", branches[0].id());
         let entry = root.lookup_unique(&name).unwrap();
         assert_eq!(entry.entry_type(), EntryType::File);
-        assert_eq!(entry.file().unwrap().branch_id(), branches[0].replica_id());
+        assert_eq!(entry.file().unwrap().branch_id(), branches[0].id());
     }
 
     // TODO: test conflict_forked_directories
@@ -534,11 +511,9 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn cd_into_concurrent_directory() {
-        let index = setup(2).await;
-        let branches = index.branches().await;
+        let branches = setup(2).await;
 
-        let mut root0 =
-            Directory::create_root(index.pool.clone(), branches[0].clone(), Cryptor::Null);
+        let mut root0 = Directory::create_root(branches[0].clone());
 
         let mut dir0 = root0.create_directory("pics".to_owned()).unwrap();
         let mut file0 = dir0.create_file("dog.jpg".to_owned()).unwrap();
@@ -547,8 +522,7 @@ mod tests {
         dir0.flush().await.unwrap();
         root0.flush().await.unwrap();
 
-        let mut root1 =
-            Directory::create_root(index.pool.clone(), branches[1].clone(), Cryptor::Null);
+        let mut root1 = Directory::create_root(branches[1].clone());
 
         let mut dir1 = root1.create_directory("pics".to_owned()).unwrap();
         let mut file1 = dir1.create_file("cat.jpg".to_owned()).unwrap();
@@ -568,11 +542,9 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn create_directory_with_existing_versions() {
-        let index = setup(2).await;
-        let branches = index.branches().await;
+        let branches = setup(2).await;
 
-        let mut root0 =
-            Directory::create_root(index.pool.clone(), branches[0].clone(), Cryptor::Null);
+        let mut root0 = Directory::create_root(branches[0].clone());
 
         let mut dir0 = root0.create_directory("pics".to_owned()).unwrap();
         let mut file0 = dir0.create_file("dog.jpg".to_owned()).unwrap();
@@ -581,12 +553,12 @@ mod tests {
         dir0.flush().await.unwrap();
         root0.flush().await.unwrap();
 
-        let root1 = Directory::create_root(index.pool.clone(), branches[1].clone(), Cryptor::Null);
+        let root1 = Directory::create_root(branches[1].clone());
 
         let mut root = JointDirectory::new(vec![root0, root1]);
 
         let dir = root
-            .create_directory(branches[1].replica_id(), "pics")
+            .create_directory(branches[1].id(), "pics")
             .await
             .unwrap();
 
@@ -597,15 +569,14 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn create_directory_without_existing_versions() {
-        let index = setup(1).await;
-        let branches = index.branches().await;
+        let branches = setup(1).await;
 
-        let root0 = Directory::create_root(index.pool.clone(), branches[0].clone(), Cryptor::Null);
+        let root0 = Directory::create_root(branches[0].clone());
 
         let mut root = JointDirectory::new(vec![root0]);
 
         let dir = root
-            .create_directory(branches[0].replica_id(), "pics")
+            .create_directory(branches[0].id(), "pics")
             .await
             .unwrap();
 
@@ -614,11 +585,9 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn attempt_to_create_directory_whose_local_version_already_exists() {
-        let index = setup(2).await;
-        let branches = index.branches().await;
+        let branches = setup(2).await;
 
-        let mut root0 =
-            Directory::create_root(index.pool.clone(), branches[0].clone(), Cryptor::Null);
+        let mut root0 = Directory::create_root(branches[0].clone());
 
         let mut dir0 = root0.create_directory("pics".to_owned()).unwrap();
 
@@ -628,19 +597,18 @@ mod tests {
         let mut root = JointDirectory::new(vec![root0]);
 
         assert_matches!(
-            root.create_directory(branches[0].replica_id(), "pics")
-                .await,
+            root.create_directory(branches[0].id(), "pics").await,
             Err(Error::EntryExists)
         );
     }
 
-    async fn setup(branch_count: usize) -> Index {
+    async fn setup(branch_count: usize) -> Vec<Branch> {
         let pool = db::init(db::Store::Memory).await.unwrap();
-        let branches =
-            future::try_join_all((0..branch_count).map(|_| BranchData::new(&pool, rand::random())))
-                .await
-                .unwrap();
 
-        Index::load(pool, *branches[0].replica_id()).await.unwrap()
+        future::join_all((0..branch_count).map(|_| async {
+            let data = BranchData::new(&pool, rand::random()).await.unwrap();
+            Branch::new(pool.clone(), data, Cryptor::Null)
+        }))
+        .await
     }
 }
