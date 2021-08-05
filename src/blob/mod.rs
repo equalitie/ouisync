@@ -38,7 +38,7 @@ impl Blob {
         let mut tx = branch.db_pool().begin().await?;
 
         let (id, buffer, auth_tag) =
-            load_block(branch.data(), &mut tx, branch.cryptor(), &locator).await?;
+            load_block(&mut tx, branch.data(), branch.cryptor(), &locator).await?;
 
         let mut content = Cursor::new(buffer);
 
@@ -149,8 +149,8 @@ impl Blob {
             let mut tx = self.db_pool().begin().await?;
 
             let (id, content) = read_block(
-                self.branch.data(),
                 &mut tx,
+                self.branch.data(),
                 self.cryptor(),
                 &self.nonce_sequence,
                 &locator,
@@ -211,8 +211,8 @@ impl Blob {
             let locator = self.current_block.locator.next();
             let (id, content) = if locator.number() < self.block_count() {
                 read_block(
-                    self.branch.data(),
                     &mut tx,
+                    self.branch.data(),
                     self.cryptor(),
                     &self.nonce_sequence,
                     &locator,
@@ -265,8 +265,8 @@ impl Blob {
 
             let mut tx = self.db_pool().begin().await?;
             let (id, content) = read_block(
-                self.branch.data(),
                 &mut tx,
+                self.branch.data(),
                 self.cryptor(),
                 &self.nonce_sequence,
                 &locator,
@@ -416,8 +416,8 @@ impl Blob {
         self.current_block.id = rand::random();
 
         write_block(
-            self.branch.data(),
             tx,
+            self.branch.data(),
             self.cryptor(),
             &self.nonce_sequence,
             &self.current_block.locator,
@@ -446,8 +446,8 @@ impl Blob {
         } else {
             let locator = self.locator_at(0);
             let (_, buffer) = read_block(
-                self.branch.data(),
                 tx,
+                self.branch.data(),
                 self.cryptor(),
                 &self.nonce_sequence,
                 &locator,
@@ -459,8 +459,8 @@ impl Blob {
             cursor.write_u64(self.len);
 
             write_block(
-                self.branch.data(),
                 tx,
+                self.branch.data(),
                 self.cryptor(),
                 &self.nonce_sequence,
                 &locator,
@@ -524,13 +524,13 @@ impl Blob {
 }
 
 async fn read_block(
-    branch: &BranchData,
     tx: &mut db::Transaction<'_>,
+    branch: &BranchData,
     cryptor: &Cryptor,
     nonce_sequence: &NonceSequence,
     locator: &Locator,
 ) -> Result<(BlockId, Buffer)> {
-    let (id, mut buffer, auth_tag) = load_block(branch, tx, cryptor, locator).await?;
+    let (id, mut buffer, auth_tag) = load_block(tx, branch, cryptor, locator).await?;
 
     let number = locator.number();
     let nonce = nonce_sequence.get(number);
@@ -548,8 +548,8 @@ async fn read_block(
 }
 
 async fn load_block(
-    branch: &BranchData,
     tx: &mut db::Transaction<'_>,
+    branch: &BranchData,
     cryptor: &Cryptor,
     locator: &Locator,
 ) -> Result<(BlockId, Buffer, AuthTag)> {
@@ -561,8 +561,8 @@ async fn load_block(
 }
 
 async fn write_block(
-    branch: &BranchData,
     tx: &mut db::Transaction<'_>,
+    branch: &BranchData,
     cryptor: &Cryptor,
     nonce_sequence: &NonceSequence,
     locator: &Locator,
