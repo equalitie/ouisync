@@ -26,7 +26,7 @@ impl JointDirectory {
         Self {
             versions: versions
                 .into_iter()
-                .map(|dir| (dir.global_locator().branch_id, dir))
+                .map(|dir| (*dir.branch().id(), dir))
                 .collect(),
         }
     }

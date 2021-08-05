@@ -1,6 +1,6 @@
 use crate::{
-    blob::Blob, branch::Branch, entry_type::EntryType, error::Result,
-    global_locator::GlobalLocator, locator::Locator, write_context::WriteContext,
+    blob::Blob, branch::Branch, entry_type::EntryType, error::Result, locator::Locator,
+    write_context::WriteContext,
 };
 use camino::Utf8PathBuf;
 use std::io::SeekFrom;
@@ -44,11 +44,6 @@ impl File {
     /// Locator of this file.
     pub fn locator(&self) -> &Locator {
         self.blob.locator()
-    }
-
-    /// GlobalLocator of this file.
-    pub fn global_locator(&self) -> GlobalLocator {
-        self.blob.global_locator()
     }
 
     /// Reads data from this file. See [`Blob::read`] for more info.

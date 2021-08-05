@@ -15,7 +15,6 @@ mod error;
 mod ffi;
 mod file;
 mod format;
-mod global_locator;
 mod index;
 mod iterator;
 mod joint_directory;
@@ -40,7 +39,6 @@ pub use self::{
     entry_type::EntryType,
     error::{Error, Result},
     file::File,
-    global_locator::GlobalLocator,
     index::Index,
     joint_directory::{JointDirectory, JointEntryRef},
     joint_entry::JointEntry,

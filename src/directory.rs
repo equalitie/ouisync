@@ -5,7 +5,6 @@ use crate::{
     entry_type::EntryType,
     error::{Error, Result},
     file::File,
-    global_locator::GlobalLocator,
     index::BranchData,
     locator::Locator,
     replica_id::ReplicaId,
@@ -242,9 +241,9 @@ impl Directory {
         self.blob.locator()
     }
 
-    /// Locator of this directory
-    pub fn global_locator(&self) -> GlobalLocator {
-        self.blob.global_locator()
+    /// Branch of this directory
+    pub fn branch(&self) -> &Branch {
+        self.blob.branch()
     }
 }
 
@@ -398,7 +397,8 @@ impl RefInner<'_> {
 
 impl PartialEq for RefInner<'_> {
     fn eq(&self, other: &Self) -> bool {
-        self.parent.global_locator() == other.parent.global_locator()
+        self.parent.branch().id() == other.parent.branch().id()
+            && self.parent.locator() == other.parent.locator()
             && self.name == other.name
             && self.blob_id == other.blob_id
     }

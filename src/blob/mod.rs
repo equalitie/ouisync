@@ -7,7 +7,6 @@ use crate::{
     crypto::{AuthTag, Cryptor, Hashable, NonceSequence},
     db,
     error::{Error, Result},
-    global_locator::GlobalLocator,
     index::BranchData,
     locator::Locator,
     store,
@@ -106,14 +105,6 @@ impl Blob {
     /// Locator of this blob.
     pub fn locator(&self) -> &Locator {
         &self.locator
-    }
-
-    /// GlobalLocator of this blob.
-    pub fn global_locator(&self) -> GlobalLocator {
-        GlobalLocator {
-            branch_id: *self.branch.id(),
-            local: self.locator,
-        }
     }
 
     /// Reads data from this blob into `buffer`, advancing the internal cursor. Returns the
