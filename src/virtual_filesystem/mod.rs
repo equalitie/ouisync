@@ -558,7 +558,7 @@ impl Inner {
                 u64::MAX, // invalid inode, see above.
                 (index + first + 1) as i64,
                 to_file_type(entry.entry_type()),
-                entry.name(), // TODO: use the disambiguated name here
+                entry.unique_name().as_ref(),
             ) {
                 break;
             }

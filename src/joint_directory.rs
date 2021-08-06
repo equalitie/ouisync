@@ -2,13 +2,16 @@ use crate::{
     directory::{Directory, DirectoryRef, EntryRef, FileRef},
     entry_type::EntryType,
     error::{Error, Result},
+    file::File,
     iterator::{Accumulate, SortedUnion},
+    locator::Locator,
     replica_id::ReplicaId,
     versioned_file_name,
 };
 use camino::{Utf8Component, Utf8Path};
 use futures_util::future;
 use std::{
+    borrow::Cow,
     collections::{btree_map::Entry, BTreeMap},
     fmt, iter, mem,
 };
@@ -97,7 +100,10 @@ impl JointDirectory {
         let first = entries.next().ok_or(Error::EntryNotFound)?;
 
         if entries.next().is_none() {
-            Ok(JointEntryRef::File(first))
+            Ok(JointEntryRef::File(JointFileRef {
+                file: first,
+                needs_disambiguation: true,
+            }))
         } else {
             Err(Error::AmbiguousEntry)
         }
@@ -211,7 +217,7 @@ impl fmt::Debug for JointDirectory {
 
 #[derive(Eq, PartialEq, Debug)]
 pub enum JointEntryRef<'a> {
-    File(FileRef<'a>),
+    File(JointFileRef<'a>),
     Directory(JointDirectoryRef<'a>),
 }
 
@@ -220,6 +226,13 @@ impl<'a> JointEntryRef<'a> {
         match self {
             Self::File(r) => r.name(),
             Self::Directory(r) => r.name(),
+        }
+    }
+
+    pub fn unique_name(&self) -> Cow<'a, str> {
+        match self {
+            Self::File(r) => r.unique_name(),
+            Self::Directory(r) => Cow::from(r.name()),
         }
     }
 
@@ -232,7 +245,7 @@ impl<'a> JointEntryRef<'a> {
 
     pub fn file(self) -> Result<FileRef<'a>> {
         match self {
-            Self::File(r) => Ok(r),
+            Self::File(r) => Ok(r.file),
             Self::Directory(_) => Err(Error::EntryIsDirectory),
         }
     }
@@ -242,6 +255,38 @@ impl<'a> JointEntryRef<'a> {
             Self::Directory(r) => Ok(r),
             Self::File(_) => Err(Error::EntryNotDirectory),
         }
+    }
+}
+
+#[derive(Eq, PartialEq, Debug)]
+pub struct JointFileRef<'a> {
+    file: FileRef<'a>,
+    needs_disambiguation: bool,
+}
+
+impl<'a> JointFileRef<'a> {
+    pub fn name(&self) -> &'a str {
+        self.file.name()
+    }
+
+    pub fn unique_name(&self) -> Cow<'a, str> {
+        if self.needs_disambiguation {
+            Cow::from(versioned_file_name::create(self.name(), self.branch_id()))
+        } else {
+            Cow::from(self.name())
+        }
+    }
+
+    pub async fn open(&self) -> Result<File> {
+        self.file.open().await
+    }
+
+    pub fn locator(&self) -> Locator {
+        self.file.locator()
+    }
+
+    pub fn branch_id(&self) -> &'a ReplicaId {
+        self.file.branch_id()
     }
 }
 
@@ -281,40 +326,61 @@ impl fmt::Debug for JointDirectoryRef<'_> {
 // Iterator adaptor that maps iterator of `EntryRef` to iterator of `JointEntryRef` by mering all
 // `EntryRef::Directory` items into a single `JointDirectoryRef` item but keeping `EntryRef::File`
 // items separate.
-struct Merge<'a, I> {
-    entries: I,
+#[derive(Clone)]
+struct Merge<'a> {
+    // TODO: The most common case for files shall be that there will be only one version of it.
+    // Thus it might make sense to have one place holder for the first file to avoid Vec allocation
+    // when not needed.
+    files: Vec<FileRef<'a>>,
+    next_file: usize,
     directories: Vec<DirectoryRef<'a>>,
 }
 
-impl<'a, I> Merge<'a, I>
-where
-    I: Iterator<Item = EntryRef<'a>>,
-{
-    fn new(entries: I) -> Self {
+impl<'a> Merge<'a> {
+    // All these entries are expected to have the same name. They can be either files, directories
+    // or a mix of the two.
+    fn new<I>(entries: I) -> Self
+    where
+        I: Iterator<Item = EntryRef<'a>>,
+    {
+        let mut files = vec![];
+        let mut directories = vec![];
+
+        for entry in entries {
+            match entry {
+                EntryRef::File(file) => files.push(file),
+                EntryRef::Directory(dir) => directories.push(dir),
+            }
+        }
+
         Self {
-            entries,
-            directories: vec![],
+            files,
+            next_file: 0,
+            directories,
         }
     }
 }
 
-impl<'a, I> Iterator for Merge<'a, I>
-where
-    I: Iterator<Item = EntryRef<'a>>,
-{
+impl<'a> Iterator for Merge<'a> {
     type Item = JointEntryRef<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        for entry in &mut self.entries {
-            match entry {
-                EntryRef::File(file) => return Some(JointEntryRef::File(file)),
-                EntryRef::Directory(dir) => {
-                    self.directories.push(dir);
-                }
-            }
+        if !self.directories.is_empty() {
+            return JointDirectoryRef::new(mem::take(&mut self.directories))
+                .map(JointEntryRef::Directory);
         }
 
-        JointDirectoryRef::new(mem::take(&mut self.directories)).map(JointEntryRef::Directory)
+        if self.next_file < self.files.len() {
+            let i = self.next_file;
+            self.next_file += 1;
+
+            return Some(JointEntryRef::File(JointFileRef {
+                file: self.files[i],
+                needs_disambiguation: self.files.len() > 1,
+            }));
+        }
+
+        None
     }
 }
 
@@ -404,7 +470,10 @@ mod tests {
             assert_eq!(
                 root.lookup_unique(&versioned_file_name::create("file.txt", branch.id()))
                     .unwrap(),
-                JointEntryRef::File(*file)
+                JointEntryRef::File(JointFileRef {
+                    file: *file,
+                    needs_disambiguation: true
+                })
             );
         }
 
@@ -423,6 +492,8 @@ mod tests {
         }
 
         assert_matches!(root.lookup_unique("file.txt"), Err(Error::AmbiguousEntry));
+
+        assert_unique_and_ordered(2, root.entries());
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -468,6 +539,8 @@ mod tests {
                 .unwrap();
             assert_eq!(file.name(), "file.txt");
         }
+
+        assert_unique_and_ordered(2, root.entries());
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -645,5 +718,28 @@ mod tests {
             Branch::new(pool.clone(), data, Cryptor::Null)
         }))
         .await
+    }
+
+    fn assert_unique_and_ordered<'a, I>(count: usize, mut entries: I)
+    where
+        I: Iterator<Item = JointEntryRef<'a>>,
+    {
+        let prev = entries.next();
+
+        if prev.is_none() {
+            assert!(count == 0);
+            return;
+        }
+
+        let mut prev = prev.unwrap();
+        let mut prev_i = 1;
+
+        for entry in entries {
+            assert!(prev.unique_name() < entry.unique_name());
+            prev_i += 1;
+            prev = entry;
+        }
+
+        assert_eq!(prev_i, count);
     }
 }
