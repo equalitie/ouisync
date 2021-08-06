@@ -90,7 +90,10 @@ impl Directory {
     }
 
     /// Lookup an entry of this directory by name.
-    pub fn lookup(&self, name: &'_ str) -> Result<impl Iterator<Item = EntryRef>> {
+    pub fn lookup(
+        &self,
+        name: &'_ str,
+    ) -> Result<impl Iterator<Item = EntryRef> + ExactSizeIterator> {
         self.content
             .entries
             .get_key_value(name)
