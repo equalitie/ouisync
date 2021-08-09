@@ -24,7 +24,8 @@ impl InodeMap {
         let index = forward.insert(InodeData {
             representation: Representation::Directory,
             parent: 0,
-            name: String::new(),
+            base_name: String::new(),
+            unique_name: String::new(),
             lookups: 1,
         });
         let inode = index_to_inode(index);
@@ -43,12 +44,12 @@ impl InodeMap {
     // # Panics
     //
     // Panics if the parent inode doesn't exists.
-    pub fn lookup(&mut self, parent: Inode, name: &str, representation: Representation) -> Inode {
+    pub fn lookup(&mut self, parent: Inode, base_name: &str, unique_name: &str, representation: Representation) -> Inode {
         // TODO: consider using `Arc` to avoid the double clone of `name`.
 
         let key = Key {
             parent,
-            name: name.to_owned(),
+            unique_name: unique_name.to_owned(),
         };
 
         match self.reverse.entry(key) {
@@ -56,7 +57,8 @@ impl InodeMap {
                 let index = self.forward.insert(InodeData {
                     representation,
                     parent,
-                    name: name.to_owned(),
+                    base_name: base_name.to_owned(),
+                    unique_name: unique_name.to_owned(),
                     lookups: 1,
                 });
                 let inode = index_to_inode(index);
@@ -93,16 +95,18 @@ impl InodeMap {
             let data = self.forward.remove(index);
             let key = Key {
                 parent: data.parent,
-                name: data.name,
+                unique_name: data.unique_name,
             };
 
-            self.reverse.remove(&key);
+            let fwd_removed = self.reverse.remove(&key);
 
             log::trace!(
                 "Remove inode {} for {}",
                 inode,
-                PathDisplay(&self.forward, key.parent, Some(&key.name))
+                PathDisplay(&self.forward, key.parent, Some(&key.unique_name))
             );
+
+            debug_assert!(fwd_removed.is_some());
         } else {
             data.lookups -= lookups;
         }
@@ -141,7 +145,7 @@ impl InodeMap {
         }
 
         self.calculate_path(self.get(inode_data.parent).data)
-            .join(&inode_data.name)
+            .join(&inode_data.base_name)
     }
 }
 
@@ -167,7 +171,8 @@ impl Representation {
 struct InodeData {
     representation: Representation,
     parent: Inode,
-    name: String,
+    base_name: String,
+    unique_name: String,
     lookups: u64,
 }
 
@@ -193,7 +198,7 @@ impl<'a> InodeView<'a> {
 #[derive(Eq, PartialEq, Hash)]
 struct Key {
     parent: Inode,
-    name: String,
+    unique_name: String,
 }
 
 fn index_to_inode(index: usize) -> Inode {
@@ -238,5 +243,5 @@ fn fmt_inode_path(f: &mut fmt::Formatter, map: &Slab<InodeData>, inode: Inode) -
         fmt_inode_path(f, map, data.parent)?;
     }
 
-    write!(f, "/{}", data.name)
+    write!(f, "/{}", data.unique_name)
 }
