@@ -44,17 +44,17 @@ impl Branch {
         &self.cryptor
     }
 
-    pub async fn open_root(&self) -> Result<Directory> {
+    pub async fn open_root(&self, local_branch: Branch) -> Result<Directory> {
         Directory::open(
             self.clone(),
             Locator::Root,
-            WriteContext::new("/".into(), self.clone()),
+            WriteContext::new("/".into(), local_branch),
         )
         .await
     }
 
     pub async fn open_or_create_root(&self) -> Result<Directory> {
-        match self.open_root().await {
+        match self.open_root(self.clone()).await {
             Ok(dir) => Ok(dir),
             Err(Error::EntryNotFound) => Ok(Directory::create_root(self.clone())),
             Err(error) => Err(error),
