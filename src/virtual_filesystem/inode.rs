@@ -1,6 +1,6 @@
 use camino::Utf8PathBuf;
 use fuser::FUSE_ROOT_ID;
-use ouisync::{Error, GlobalLocator, Result};
+use ouisync::{Error, ReplicaId, Result};
 use slab::Slab;
 use std::{
     collections::{hash_map::Entry, HashMap},
@@ -152,14 +152,14 @@ pub enum Representation {
     // directory is added. For now, we'll just store the path and each time the set of locators
     // corresponding to the path is requested, it'll be determined dynamically.
     Directory,
-    File(GlobalLocator),
+    File(ReplicaId),
 }
 
 impl Representation {
-    pub fn as_file_locator(&self) -> Result<&GlobalLocator> {
+    pub fn file_version(&self) -> Result<&ReplicaId> {
         match self {
             Self::Directory => Err(Error::EntryIsDirectory),
-            Self::File(locator) => Ok(locator),
+            Self::File(branch_id) => Ok(branch_id),
         }
     }
 }
@@ -177,28 +177,8 @@ pub struct InodeView<'a> {
 }
 
 impl<'a> InodeView<'a> {
-    pub fn check_is_file(&self) -> Result<()> {
-        match self.data.representation {
-            Representation::Directory => Err(Error::EntryIsDirectory),
-            Representation::File(_) => Ok(()),
-        }
-    }
-
-    pub fn check_is_directory(&self) -> Result<()> {
-        match self.data.representation {
-            Representation::Directory => Ok(()),
-            Representation::File(_) => Err(Error::EntryNotDirectory),
-        }
-    }
-
-    pub fn calculate_file_path(&self) -> Result<Utf8PathBuf> {
-        self.check_is_file()?;
-        Ok(self.inodes.calculate_path(self.data))
-    }
-
-    pub fn calculate_directory_path(&self) -> Result<Utf8PathBuf> {
-        self.check_is_directory()?;
-        Ok(self.inodes.calculate_path(self.data))
+    pub fn calculate_path(&self) -> Utf8PathBuf {
+        self.inodes.calculate_path(self.data)
     }
 
     pub fn representation(&self) -> &'a Representation {

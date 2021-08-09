@@ -1,15 +1,13 @@
 use crate::{
     blob::Blob,
     blob_id::BlobId,
-    crypto::Cryptor,
-    db,
-    entry::EntryType,
+    branch::Branch,
+    entry_type::EntryType,
     error::{Error, Result},
     file::File,
-    global_locator::GlobalLocator,
-    index::BranchData,
     locator::Locator,
     replica_id::ReplicaId,
+    write_context::WriteContext,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -17,53 +15,67 @@ use std::{
     fmt,
 };
 
-#[derive(Clone)]
 pub struct Directory {
     blob: Blob,
     content: Content,
+    write_context: WriteContext,
 }
 
 #[allow(clippy::len_without_is_empty)]
 impl Directory {
     /// Opens existing directory.
     pub(crate) async fn open(
-        pool: db::Pool,
-        branch: BranchData,
-        cryptor: Cryptor,
+        branch: Branch,
         locator: Locator,
+        write_context: WriteContext,
     ) -> Result<Self> {
-        let mut blob = Blob::open(pool, branch, cryptor, locator).await?;
+        let mut blob = Blob::open(branch, locator).await?;
         let buffer = blob.read_to_end().await?;
         let content = bincode::deserialize(&buffer).map_err(Error::MalformedDirectory)?;
 
-        Ok(Self { blob, content })
+        Ok(Self {
+            blob,
+            content,
+            write_context,
+        })
     }
 
-    /// Creates new directory.
-    pub(crate) fn create(
-        pool: db::Pool,
-        branch: BranchData,
-        cryptor: Cryptor,
-        locator: Locator,
-    ) -> Self {
-        let local_branch_id = *branch.replica_id();
-        let blob = Blob::create(pool, branch, cryptor, locator);
+    /// Creates the root directory.
+    pub(crate) fn create_root(branch: Branch) -> Self {
+        let blob = Blob::create(branch.clone(), Locator::Root);
 
         Self {
             blob,
-            content: Content {
-                entries: Default::default(),
-                dirty: true,
-                local_branch_id,
-            },
+            content: Content::new(),
+            write_context: WriteContext::new("/".into(), branch),
         }
     }
 
-    /// Flushes this directory ensuring that any pending changes are written to the store.
+    /// Flushes this directory ensuring that any pending changes are written to the store and the
+    /// version vectors of this and the ancestor directories are properly incremented.
     pub async fn flush(&mut self) -> Result<()> {
         if !self.content.dirty {
             return Ok(());
         }
+
+        self.write_context
+            .begin(EntryType::Directory, &mut self.blob)
+            .await?;
+        self.write().await?;
+        self.write_context.commit().await?;
+
+        Ok(())
+    }
+
+    /// Writes the pending changes to the store without incrementing the version vectors.
+    /// For internal use only!
+    ///
+    /// # Panics
+    ///
+    /// Panics if not dirty or not in the local branch.
+    pub async fn write(&mut self) -> Result<()> {
+        assert!(self.content.dirty);
+        assert!(self.blob.branch().id() == self.write_context.local_branch().id());
 
         let buffer =
             bincode::serialize(&self.content).expect("failed to serialize directory content");
@@ -85,7 +97,7 @@ impl Directory {
             .flat_map(move |(name, versions)| {
                 versions
                     .iter()
-                    .map(move |(branch_id, data)| EntryRef::new(&self.blob, name, data, branch_id))
+                    .map(move |(branch_id, data)| EntryRef::new(self, name, data, branch_id))
             })
     }
 
@@ -97,7 +109,7 @@ impl Directory {
             .map(|(name, versions)| {
                 versions
                     .iter()
-                    .map(move |(branch_id, data)| EntryRef::new(&self.blob, name, data, branch_id))
+                    .map(move |(branch_id, data)| EntryRef::new(self, name, data, branch_id))
             })
             .ok_or(Error::EntryNotFound)
     }
@@ -109,72 +121,38 @@ impl Directory {
             .and_then(|(name, versions)| {
                 versions
                     .get_key_value(author)
-                    .map(|(branch_id, data)| EntryRef::new(&self.blob, name, data, branch_id))
+                    .map(|(branch_id, data)| EntryRef::new(self, name, data, branch_id))
             })
             .ok_or(Error::EntryNotFound)
     }
 
     /// Creates a new file inside this directory.
     pub fn create_file(&mut self, name: String) -> Result<File> {
-        let tag = self.content.insert(name, EntryType::File)?;
-
-        Ok(File::create(
-            self.blob.db_pool().clone(),
-            self.blob.branch().clone(),
-            self.blob.cryptor().clone(),
-            Locator::Head(tag),
-        ))
+        let path = self.write_context.path().join(&name);
+        let locator = self.insert_entry(name, EntryType::File)?;
+        Ok(File::create(self.blob.branch().clone(), locator, path))
     }
 
     /// Creates a new subdirectory of this directory.
     pub fn create_directory(&mut self, name: String) -> Result<Self> {
-        let tag = self.content.insert(name, EntryType::Directory)?;
+        let write_context = self.write_context.child(&name);
+        let locator = self.insert_entry(name, EntryType::Directory)?;
+        let blob = Blob::create(self.blob.branch().clone(), locator);
 
-        Ok(Self::create(
-            self.blob.db_pool().clone(),
-            self.blob.branch().clone(),
-            self.blob.cryptor().clone(),
-            Locator::Head(tag),
-        ))
+        Ok(Self {
+            blob,
+            content: Content::new(),
+            write_context,
+        })
     }
 
-    /// Creates a file with locators pointing to the same blocks that the src_locators point to.
-    /// Blocks themselves are not being duplicated. Return the locator to the newly created file.
-    pub async fn copy_file<I>(
-        &mut self,
-        dst_name: &str,
-        src_locators: I,
-        src_branch: &BranchData,
-    ) -> Result<Locator>
-    where
-        I: Iterator<Item = Locator>,
-    {
-        let tag = self.content.insert(dst_name.to_string(), EntryType::File)?;
-
-        let mut tx = self.blob.db_pool().begin().await?;
-        let cryptor = self.blob.cryptor();
-
-        let dst_head = Locator::Head(tag);
-
-        let mut dst_locator = dst_head;
-        let dst_branch = self.blob.branch();
-
-        for src_locator in src_locators {
-            let src_locator = src_locator.encode(cryptor);
-            let block_id = src_branch.get(&mut tx, &src_locator).await?;
-
-            dst_branch
-                .insert(&mut tx, &block_id, &dst_locator.encode(cryptor))
-                .await?;
-
-            dst_locator = dst_locator.next();
-        }
-
-        // TODO: Maybe commit on each N copied colators to avoid running out of memory on large
-        // files?
-        tx.commit().await?;
-
-        Ok(dst_head)
+    /// Inserts a dangling entry into this directory. It's the responsibility of the caller to make
+    /// sure the returned locator eventually points to an actual file or directory.
+    pub(crate) fn insert_entry(&mut self, name: String, entry_type: EntryType) -> Result<Locator> {
+        let blob_id =
+            self.content
+                .insert(*self.write_context.local_branch().id(), name, entry_type)?;
+        Ok(Locator::Head(blob_id))
     }
 
     pub async fn remove_file(&mut self, name: &str) -> Result<()> {
@@ -191,6 +169,12 @@ impl Directory {
         }
         self.content.remove(name)
         // TODO: Add tombstone
+    }
+
+    /// Increment version of the specified entry.
+    pub fn increment_entry_version(&mut self, _name: &str) -> Result<()> {
+        // TODO
+        Ok(())
     }
 
     /// Removes this directory if its empty, otherwise fails.
@@ -213,9 +197,9 @@ impl Directory {
         self.blob.locator()
     }
 
-    /// Locator of this directory
-    pub fn global_locator(&self) -> &GlobalLocator {
-        self.blob.global_locator()
+    /// Branch of this directory
+    pub fn branch(&self) -> &Branch {
+        self.blob.branch()
     }
 }
 
@@ -228,13 +212,13 @@ pub enum EntryRef<'a> {
 
 impl<'a> EntryRef<'a> {
     fn new(
-        parent_blob: &'a Blob,
+        parent: &'a Directory,
         name: &'a str,
         data: &'a EntryData,
         branch_id: &'a ReplicaId,
     ) -> Self {
         let inner = RefInner {
-            parent_blob,
+            parent,
             name,
             blob_id: &data.blob_id,
         };
@@ -314,10 +298,9 @@ impl<'a> FileRef<'a> {
 
     pub async fn open(&self) -> Result<File> {
         File::open(
-            self.inner.parent_blob.db_pool().clone(),
-            self.inner.parent_blob.branch().clone(),
-            self.inner.parent_blob.cryptor().clone(),
+            self.inner.parent.blob.branch().clone(),
             self.locator(),
+            self.inner.write_context(),
         )
         .await
     }
@@ -347,10 +330,9 @@ impl<'a> DirectoryRef<'a> {
 
     pub async fn open(&self) -> Result<Directory> {
         Directory::open(
-            self.inner.parent_blob.db_pool().clone(),
-            self.inner.parent_blob.branch().clone(),
-            self.inner.parent_blob.cryptor().clone(),
+            self.inner.parent.blob.branch().clone(),
             self.locator(),
+            self.inner.write_context(),
         )
         .await
     }
@@ -358,14 +340,21 @@ impl<'a> DirectoryRef<'a> {
 
 #[derive(Copy, Clone)]
 struct RefInner<'a> {
-    parent_blob: &'a Blob,
+    parent: &'a Directory,
     name: &'a str,
     blob_id: &'a BlobId,
 }
 
+impl RefInner<'_> {
+    fn write_context(&self) -> WriteContext {
+        self.parent.write_context.child(self.name)
+    }
+}
+
 impl PartialEq for RefInner<'_> {
     fn eq(&self, other: &Self) -> bool {
-        self.parent_blob.global_locator() == other.parent_blob.global_locator()
+        self.parent.branch().id() == other.parent.branch().id()
+            && self.parent.locator() == other.parent.locator()
             && self.name == other.name
             && self.blob_id == other.blob_id
     }
@@ -403,16 +392,26 @@ struct Content {
     entries: BTreeMap<String, BTreeMap<ReplicaId, EntryData>>,
     #[serde(skip)]
     dirty: bool,
-    local_branch_id: ReplicaId,
 }
 
 impl Content {
-    fn insert(&mut self, name: String, entry_type: EntryType) -> Result<BlobId> {
-        let blob_id = rand::random();
+    fn new() -> Self {
+        Self {
+            entries: Default::default(),
+            dirty: true,
+        }
+    }
 
+    fn insert(
+        &mut self,
+        branch_id: ReplicaId,
+        name: String,
+        entry_type: EntryType,
+    ) -> Result<BlobId> {
+        let blob_id = rand::random();
         let versions = self.entries.entry(name).or_insert_with(Default::default);
 
-        match versions.entry(self.local_branch_id) {
+        match versions.entry(branch_id) {
             btree_map::Entry::Vacant(entry) => {
                 entry.insert(EntryData {
                     entry_type,
@@ -443,15 +442,16 @@ struct EntryData {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::index::BranchData;
+    use crate::{crypto::Cryptor, db, index::BranchData};
+    use camino::Utf8Path;
     use std::collections::BTreeSet;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn create_and_list_entries() {
-        let (pool, branch) = setup().await;
+        let branch = setup().await;
 
         // Create the root directory and put some file in it.
-        let mut dir = Directory::create(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root);
+        let mut dir = Directory::create_root(branch.clone());
 
         let mut file_dog = dir.create_file("dog.txt".into()).unwrap();
         file_dog.write(b"woof").await.unwrap();
@@ -463,8 +463,10 @@ mod tests {
 
         dir.flush().await.unwrap();
 
+        let write_context = dir.write_context.clone();
+
         // Reopen the dir and try to read the files.
-        let dir = Directory::open(pool, branch.clone(), Cryptor::Null, Locator::Root)
+        let dir = Directory::open(branch.clone(), Locator::Root, write_context)
             .await
             .unwrap();
 
@@ -491,21 +493,23 @@ mod tests {
     // TODO: test update existing directory
     #[tokio::test(flavor = "multi_thread")]
     async fn add_entry_to_existing_directory() {
-        let (pool, branch) = setup().await;
+        let branch = setup().await;
 
         // Create empty directory
-        let mut dir = Directory::create(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root);
+        let mut dir = Directory::create_root(branch.clone());
         dir.flush().await.unwrap();
 
+        let write_context = dir.write_context.clone();
+
         // Reopen it and add a file to it.
-        let mut dir = Directory::open(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root)
+        let mut dir = Directory::open(branch.clone(), Locator::Root, write_context.clone())
             .await
             .unwrap();
         dir.create_file("none.txt".into()).unwrap();
         dir.flush().await.unwrap();
 
         // Reopen it again and check the file is still there.
-        let dir = Directory::open(pool, branch.clone(), Cryptor::Null, Locator::Root)
+        let dir = Directory::open(branch, Locator::Root, write_context)
             .await
             .unwrap();
         assert!(dir.lookup("none.txt").is_ok());
@@ -513,32 +517,30 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn remove_file() {
-        let (pool, branch) = setup().await;
+        let branch = setup().await;
 
         let name = "monkey.txt";
 
         // Create a directory with a single file.
-        let mut parent_dir =
-            Directory::create(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root);
+        let mut parent_dir = Directory::create_root(branch.clone());
         let mut file = parent_dir.create_file(name.into()).unwrap();
         file.flush().await.unwrap();
         parent_dir.flush().await.unwrap();
 
         let file_locator = *file.locator();
+        let write_context = parent_dir.write_context.clone();
 
         // Reopen and remove the file
-        let mut parent_dir =
-            Directory::open(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root)
-                .await
-                .unwrap();
+        let mut parent_dir = Directory::open(branch.clone(), Locator::Root, write_context.clone())
+            .await
+            .unwrap();
         parent_dir.remove_file(name).await.unwrap();
         parent_dir.flush().await.unwrap();
 
         // Reopen again and check the file entry was removed.
-        let parent_dir =
-            Directory::open(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root)
-                .await
-                .unwrap();
+        let parent_dir = Directory::open(branch.clone(), Locator::Root, write_context)
+            .await
+            .unwrap();
         match parent_dir.lookup(name) {
             Err(Error::EntryNotFound) => (),
             Err(error) => panic!("unexpected error {:?}", error),
@@ -548,7 +550,13 @@ mod tests {
         assert_eq!(parent_dir.entries().count(), 0);
 
         // Check the file itself was removed as well.
-        match File::open(pool, branch.clone(), Cryptor::Null, file_locator).await {
+        match File::open(
+            branch.clone(),
+            file_locator,
+            WriteContext::new(Utf8Path::new("/").join(name), branch),
+        )
+        .await
+        {
             Err(Error::EntryNotFound) => (),
             Err(error) => panic!("unexpected error {:?}", error),
             Ok(_) => panic!("file should not exists but it does"),
@@ -557,32 +565,35 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn remove_subdirectory() {
-        let (pool, branch) = setup().await;
+        let branch = setup().await;
 
         let name = "dir";
 
         // Create a directory with a single subdirectory.
-        let mut parent_dir =
-            Directory::create(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root);
+        let mut parent_dir = Directory::create_root(branch.clone());
         let mut dir = parent_dir.create_directory(name.into()).unwrap();
         dir.flush().await.unwrap();
         parent_dir.flush().await.unwrap();
 
+        let parent_dir_write_context = parent_dir.write_context.clone();
+        let dir_write_context = dir.write_context.clone();
         let dir_locator = *dir.locator();
 
         // Reopen and remove the subdirectory
-        let mut parent_dir =
-            Directory::open(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root)
-                .await
-                .unwrap();
+        let mut parent_dir = Directory::open(
+            branch.clone(),
+            Locator::Root,
+            parent_dir_write_context.clone(),
+        )
+        .await
+        .unwrap();
         parent_dir.remove_directory(name).await.unwrap();
         parent_dir.flush().await.unwrap();
 
         // Reopen again and check the subdiretory entry was removed.
-        let parent_dir =
-            Directory::open(pool.clone(), branch.clone(), Cryptor::Null, Locator::Root)
-                .await
-                .unwrap();
+        let parent_dir = Directory::open(branch.clone(), Locator::Root, parent_dir_write_context)
+            .await
+            .unwrap();
         match parent_dir.lookup(name) {
             Err(Error::EntryNotFound) => (),
             Err(error) => panic!("unexpected error {:?}", error),
@@ -590,17 +601,81 @@ mod tests {
         }
 
         // Check the directory itself was removed as well.
-        match Directory::open(pool, branch.clone(), Cryptor::Null, dir_locator).await {
+        match Directory::open(branch, dir_locator, dir_write_context).await {
             Err(Error::EntryNotFound) => (),
             Err(error) => panic!("unexpected error {:?}", error),
             Ok(_) => panic!("directory should not exists but it does"),
         }
     }
 
-    async fn setup() -> (db::Pool, BranchData) {
-        let pool = db::init(db::Store::Memory).await.unwrap();
-        let branch = BranchData::new(&pool, rand::random()).await.unwrap();
+    #[tokio::test(flavor = "multi_thread")]
+    async fn fork() {
+        let branch0 = setup().await;
+        let branch1 = create_branch(branch0.db_pool().clone()).await;
 
-        (pool, branch)
+        // Create a nested directory by branch 0
+        let mut root0 = Directory::create_root(branch0.clone());
+        root0.flush().await.unwrap();
+
+        let mut dir0 = root0.create_directory("dir".into()).unwrap();
+        dir0.flush().await.unwrap();
+        root0.flush().await.unwrap();
+
+        // Open it by branch 1 and modify it
+        let mut dir1 = Directory::open(
+            branch0.clone(),
+            *dir0.locator(),
+            WriteContext::new("/dir".into(), branch1.clone()),
+        )
+        .await
+        .unwrap();
+
+        dir1.create_file("dog.jpg".into()).unwrap();
+        dir1.flush().await.unwrap();
+
+        assert_eq!(dir1.branch().id(), branch1.id());
+
+        // Reopen orig dir and verify it's unchanged
+        let dir = Directory::open(
+            branch0.clone(),
+            *dir0.locator(),
+            WriteContext::new("/dir".into(), branch0),
+        )
+        .await
+        .unwrap();
+        assert_eq!(dir.entries().count(), 0);
+
+        // Reopen forked dir and verify it contains the new file
+        let dir = Directory::open(
+            branch1.clone(),
+            *dir1.locator(),
+            WriteContext::new("/dir".into(), branch1.clone()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            dir.entries().map(|entry| entry.name()).next(),
+            Some("dog.jpg")
+        );
+
+        // Verify the root dir got forked as well
+        Directory::open(
+            branch1.clone(),
+            Locator::Root,
+            WriteContext::new("/".into(), branch1),
+        )
+        .await
+        .unwrap();
+    }
+
+    async fn setup() -> Branch {
+        let pool = db::init(db::Store::Memory).await.unwrap();
+        create_branch(pool).await
+    }
+
+    async fn create_branch(pool: db::Pool) -> Branch {
+        let branch_data = BranchData::new(&pool, rand::random()).await.unwrap();
+        Branch::new(pool, branch_data, Cryptor::Null)
     }
 }

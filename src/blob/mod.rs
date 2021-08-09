@@ -3,10 +3,10 @@ mod tests;
 
 use crate::{
     block::{self, BlockId, BLOCK_SIZE},
+    branch::Branch,
     crypto::{AuthTag, Cryptor, Hashable, NonceSequence},
     db,
     error::{Error, Result},
-    global_locator::GlobalLocator,
     index::BranchData,
     locator::Locator,
     store,
@@ -19,12 +19,9 @@ use std::{
 };
 use zeroize::Zeroize;
 
-#[derive(Clone)]
 pub struct Blob {
-    branch: BranchData,
-    global_locator: GlobalLocator,
-    pool: db::Pool,
-    cryptor: Cryptor,
+    branch: Branch,
+    locator: Locator,
     nonce_sequence: NonceSequence,
     current_block: OpenBlock,
     len: u64,
@@ -35,23 +32,21 @@ pub struct Blob {
 
 impl Blob {
     /// Opens an existing blob.
-    pub(crate) async fn open(
-        pool: db::Pool,
-        branch: BranchData,
-        cryptor: Cryptor,
-        locator: Locator,
-    ) -> Result<Self> {
+    pub(crate) async fn open(branch: Branch, locator: Locator) -> Result<Self> {
         // NOTE: no need to commit this transaction because we are only reading here.
-        let mut tx = pool.begin().await?;
+        let mut tx = branch.db_pool().begin().await?;
 
-        let (id, buffer, auth_tag) = load_block(&branch, &mut tx, &cryptor, &locator).await?;
+        let (id, buffer, auth_tag) =
+            load_block(&mut tx, branch.data(), branch.cryptor(), &locator).await?;
 
         let mut content = Cursor::new(buffer);
 
         let nonce_sequence = NonceSequence::new(content.read_array());
         let nonce = nonce_sequence.get(0);
 
-        cryptor.decrypt(&nonce, id.as_ref(), &mut content, &auth_tag)?;
+        branch
+            .cryptor()
+            .decrypt(&nonce, id.as_ref(), &mut content, &auth_tag)?;
 
         let len = content.read_u64();
 
@@ -62,16 +57,9 @@ impl Blob {
             dirty: false,
         };
 
-        let global_locator = GlobalLocator {
-            branch_id: *branch.replica_id(),
-            local: locator,
-        };
-
         Ok(Self {
             branch,
-            global_locator,
-            pool,
-            cryptor,
+            locator,
             nonce_sequence,
             current_block,
             len,
@@ -80,7 +68,7 @@ impl Blob {
     }
 
     /// Creates a new blob.
-    pub fn create(pool: db::Pool, branch: BranchData, cryptor: Cryptor, locator: Locator) -> Self {
+    pub fn create(branch: Branch, locator: Locator) -> Self {
         let nonce_sequence = NonceSequence::new(rand::random());
         let mut content = Cursor::new(Buffer::new());
 
@@ -95,16 +83,9 @@ impl Blob {
             dirty: true,
         };
 
-        let global_locator = GlobalLocator {
-            branch_id: *branch.replica_id(),
-            local: locator,
-        };
-
         Self {
             branch,
-            global_locator,
-            pool,
-            cryptor,
+            locator,
             nonce_sequence,
             current_block,
             len: 0,
@@ -112,7 +93,7 @@ impl Blob {
         }
     }
 
-    pub fn branch(&self) -> &BranchData {
+    pub fn branch(&self) -> &Branch {
         &self.branch
     }
 
@@ -123,12 +104,7 @@ impl Blob {
 
     /// Locator of this blob.
     pub fn locator(&self) -> &Locator {
-        &self.global_locator.local
-    }
-
-    /// GlobalLocator of this blob.
-    pub fn global_locator(&self) -> &GlobalLocator {
-        &self.global_locator
+        &self.locator
     }
 
     /// Reads data from this blob into `buffer`, advancing the internal cursor. Returns the
@@ -161,12 +137,12 @@ impl Blob {
             // read could rollback the changes made in a previous iteration which would then be
             // lost. This is fine because there is going to be at most one dirty block within
             // a single `read` invocation anyway.
-            let mut tx = self.pool.begin().await?;
+            let mut tx = self.db_pool().begin().await?;
 
             let (id, content) = read_block(
-                &self.branch,
                 &mut tx,
-                &self.cryptor,
+                self.branch.data(),
+                self.cryptor(),
                 &self.nonce_sequence,
                 &locator,
             )
@@ -200,7 +176,7 @@ impl Blob {
     /// Writes `buffer` into this blob, advancing the blob's internal cursor.
     pub async fn write(&mut self, mut buffer: &[u8]) -> Result<()> {
         // Wrap the whole `write` in a transaction to make it atomic.
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.db_pool().begin().await?;
 
         loop {
             let len = self.current_block.content.write(buffer);
@@ -226,9 +202,9 @@ impl Blob {
             let locator = self.current_block.locator.next();
             let (id, content) = if locator.number() < self.block_count() {
                 read_block(
-                    &self.branch,
                     &mut tx,
-                    &self.cryptor,
+                    self.branch.data(),
+                    self.cryptor(),
                     &self.nonce_sequence,
                     &locator,
                 )
@@ -278,11 +254,11 @@ impl Blob {
         if block_number != self.current_block.locator.number() {
             let locator = self.locator_at(block_number);
 
-            let mut tx = self.pool.begin().await?;
+            let mut tx = self.db_pool().begin().await?;
             let (id, content) = read_block(
-                &self.branch,
                 &mut tx,
-                &self.cryptor,
+                self.branch.data(),
+                self.cryptor(),
                 &self.nonce_sequence,
                 &locator,
             )
@@ -333,7 +309,7 @@ impl Blob {
     /// Flushes this blob, ensuring that all intermediately buffered contents gets written to the
     /// store.
     pub async fn flush(&mut self) -> Result<()> {
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.db_pool().begin().await?;
         self.write_len(&mut tx).await?;
         self.write_current_block(&mut tx).await?;
         tx.commit().await?;
@@ -347,12 +323,48 @@ impl Blob {
             .await
     }
 
+    /// Creates a shallow copy (only the index nodes are copied, not blocks) of this blob into the
+    /// specified destination branch and locator.
+    pub async fn fork(&mut self, dst_branch: BranchData, dst_head_locator: Locator) -> Result<()> {
+        if self.branch.id() == dst_branch.id() && self.locator == dst_head_locator {
+            // This blob is already in the dst, nothing to do.
+            return Ok(());
+        }
+
+        let mut tx = self.db_pool().begin().await?;
+
+        for (src_locator, dst_locator) in self.locators().zip(dst_head_locator.sequence()) {
+            let encoded_src_locator = src_locator.encode(self.cryptor());
+            let encoded_dst_locator = dst_locator.encode(self.cryptor());
+
+            let block_id = self
+                .branch
+                .data()
+                .get(&mut tx, &encoded_src_locator)
+                .await?;
+            dst_branch
+                .insert(&mut tx, &block_id, &encoded_dst_locator)
+                .await?;
+        }
+
+        tx.commit().await?;
+
+        // TODO: the following lines must happen atomically (either all succeed or none). There is
+        // currently no reason why they wouldn't, but to be super extra sure, consider wrapping
+        // them in `catch_unwind`.
+        self.branch = Branch::new(self.db_pool().clone(), dst_branch, self.cryptor().clone());
+        self.locator = dst_head_locator;
+        self.current_block.locator = self.locator_at(self.current_block.locator.number());
+
+        Ok(())
+    }
+
     pub fn db_pool(&self) -> &db::Pool {
-        &self.pool
+        self.branch.db_pool()
     }
 
     pub fn cryptor(&self) -> &Cryptor {
-        &self.cryptor
+        self.branch.cryptor()
     }
 
     pub fn locators(&self) -> impl Iterator<Item = Locator> {
@@ -395,9 +407,9 @@ impl Blob {
         self.current_block.id = rand::random();
 
         write_block(
-            &self.branch,
             tx,
-            &self.cryptor,
+            self.branch.data(),
+            self.cryptor(),
             &self.nonce_sequence,
             &self.current_block.locator,
             &self.current_block.id,
@@ -425,9 +437,9 @@ impl Blob {
         } else {
             let locator = self.locator_at(0);
             let (_, buffer) = read_block(
-                &self.branch,
                 tx,
-                &self.cryptor,
+                self.branch.data(),
+                self.cryptor(),
                 &self.nonce_sequence,
                 &locator,
             )
@@ -438,9 +450,9 @@ impl Blob {
             cursor.write_u64(self.len);
 
             write_block(
-                &self.branch,
                 tx,
-                &self.cryptor,
+                self.branch.data(),
+                self.cryptor(),
                 &self.nonce_sequence,
                 &locator,
                 &rand::random(),
@@ -458,12 +470,13 @@ impl Blob {
     where
         T: IntoIterator<Item = Locator>,
     {
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.db_pool().begin().await?;
 
         for locator in locators {
             let block_id = self
                 .branch
-                .remove(&mut tx, &locator.encode(&self.cryptor))
+                .data()
+                .remove(&mut tx, &locator.encode(self.cryptor()))
                 .await?;
             store::remove_orphaned_block(&mut tx, &block_id).await?;
         }
@@ -502,13 +515,13 @@ impl Blob {
 }
 
 async fn read_block(
-    branch: &BranchData,
     tx: &mut db::Transaction<'_>,
+    branch: &BranchData,
     cryptor: &Cryptor,
     nonce_sequence: &NonceSequence,
     locator: &Locator,
 ) -> Result<(BlockId, Buffer)> {
-    let (id, mut buffer, auth_tag) = load_block(branch, tx, cryptor, locator).await?;
+    let (id, mut buffer, auth_tag) = load_block(tx, branch, cryptor, locator).await?;
 
     let number = locator.number();
     let nonce = nonce_sequence.get(number);
@@ -526,8 +539,8 @@ async fn read_block(
 }
 
 async fn load_block(
-    branch: &BranchData,
     tx: &mut db::Transaction<'_>,
+    branch: &BranchData,
     cryptor: &Cryptor,
     locator: &Locator,
 ) -> Result<(BlockId, Buffer, AuthTag)> {
@@ -539,8 +552,8 @@ async fn load_block(
 }
 
 async fn write_block(
-    branch: &BranchData,
     tx: &mut db::Transaction<'_>,
+    branch: &BranchData,
     cryptor: &Cryptor,
     nonce_sequence: &NonceSequence,
     locator: &Locator,

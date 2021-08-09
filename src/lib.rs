@@ -10,18 +10,18 @@ mod blob_id;
 mod block;
 mod branch;
 mod directory;
-mod entry;
+mod entry_type;
 mod error;
 mod ffi;
 mod file;
 mod format;
-mod global_locator;
 mod index;
 mod iterator;
 mod joint_directory;
 mod joint_entry;
 mod locator;
 mod network;
+mod path;
 mod replica_id;
 mod repository;
 mod scoped_task_set;
@@ -31,14 +31,14 @@ mod store;
 mod test_utils;
 mod version_vector;
 mod versioned_file_name;
+mod write_context;
 
 pub use self::{
     crypto::Cryptor,
     directory::{Directory, EntryRef, MoveDstDirectory},
-    entry::{Entry, EntryType},
+    entry_type::EntryType,
     error::{Error, Result},
     file::File,
-    global_locator::GlobalLocator,
     index::Index,
     joint_directory::{JointDirectory, JointEntryRef},
     joint_entry::JointEntry,

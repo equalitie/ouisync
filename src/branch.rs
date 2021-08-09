@@ -2,15 +2,17 @@ use crate::{
     crypto::Cryptor,
     db,
     directory::Directory,
-    entry::{Entry, EntryType},
     error::{Error, Result},
     file::File,
     index::BranchData,
     locator::Locator,
+    path,
+    write_context::WriteContext,
     ReplicaId,
 };
 use camino::{Utf8Component, Utf8Path};
 
+#[derive(Clone)]
 pub struct Branch {
     pool: db::Pool,
     branch_data: BranchData,
@@ -27,56 +29,34 @@ impl Branch {
     }
 
     pub fn id(&self) -> &ReplicaId {
-        self.branch_data.replica_id()
+        self.branch_data.id()
     }
 
     pub fn data(&self) -> &BranchData {
         &self.branch_data
     }
 
-    /// Open an entry (file or directory) at the given locator.
-    pub async fn open_entry_by_locator(
-        &self,
-        locator: Locator,
-        entry_type: EntryType,
-    ) -> Result<Entry> {
-        match entry_type {
-            EntryType::File => Ok(Entry::File(self.open_file_by_locator(locator).await?)),
-            EntryType::Directory => Ok(Entry::Directory(
-                self.open_directory_by_locator(locator).await?,
-            )),
-        }
+    pub fn db_pool(&self) -> &db::Pool {
+        &self.pool
     }
 
-    pub async fn open_file_by_locator(&self, locator: Locator) -> Result<File> {
-        File::open(
-            self.pool.clone(),
-            self.branch_data.clone(),
-            self.cryptor.clone(),
-            locator,
-        )
-        .await
+    pub fn cryptor(&self) -> &Cryptor {
+        &self.cryptor
     }
 
-    pub async fn open_directory_by_locator(&self, locator: Locator) -> Result<Directory> {
+    pub async fn open_root(&self, local_branch: Branch) -> Result<Directory> {
         Directory::open(
-            self.pool.clone(),
-            self.branch_data.clone(),
-            self.cryptor.clone(),
-            locator,
+            self.clone(),
+            Locator::Root,
+            WriteContext::new("/".into(), local_branch),
         )
         .await
     }
 
-    pub async fn ensure_root_exists(&self) -> Result<Directory> {
-        match self.open_directory_by_locator(Locator::Root).await {
+    pub async fn open_or_create_root(&self) -> Result<Directory> {
+        match self.open_root(self.clone()).await {
             Ok(dir) => Ok(dir),
-            Err(Error::EntryNotFound) => Ok(Directory::create(
-                self.pool.clone(),
-                self.branch_data.clone(),
-                self.cryptor.clone(),
-                Locator::Root,
-            )),
+            Err(Error::EntryNotFound) => Ok(Directory::create_root(self.clone())),
             Err(error) => Err(error),
         }
     }
@@ -85,7 +65,7 @@ impl Branch {
     /// Note: non-normalized paths (i.e. containing "..") or Windows-style drive prefixes
     /// (e.g. "C:") are not supported.
     pub async fn ensure_directory_exists(&self, path: &Utf8Path) -> Result<Vec<Directory>> {
-        let mut dirs = vec![self.ensure_root_exists().await?];
+        let mut dirs = vec![self.open_or_create_root().await?];
 
         for component in path.components() {
             match component {
@@ -111,19 +91,10 @@ impl Branch {
     }
 
     pub async fn ensure_file_exists(&self, path: &Utf8Path) -> Result<(File, Vec<Directory>)> {
-        let (parent, name) = decompose_path(path).ok_or(Error::EntryIsDirectory)?;
+        let (parent, name) = path::decompose(path).ok_or(Error::EntryIsDirectory)?;
         let mut dirs = self.ensure_directory_exists(parent).await?;
         let file = dirs.last_mut().unwrap().create_file(name.to_string())?;
         Ok((file, dirs))
-    }
-}
-
-// Decomposes `Path` into parent and filename. Returns `None` if `path` doesn't have parent
-// (it's the root).
-fn decompose_path(path: &Utf8Path) -> Option<(&Utf8Path, &str)> {
-    match (path.parent(), path.file_name()) {
-        (Some(parent), Some(name)) => Some((parent, name)),
-        _ => None,
     }
 }
 

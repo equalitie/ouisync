@@ -1,5 +1,5 @@
 use crate::{
-    entry::EntryType,
+    entry_type::EntryType,
     error::{Error, Result},
     file::File,
     joint_directory::JointDirectory,
