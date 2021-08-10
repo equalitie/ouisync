@@ -1,6 +1,7 @@
 use crate::{
     blob::Blob, branch::Branch, entry_type::EntryType, error::Result, locator::Locator,
     write_context::WriteContext,
+    blob_id::BlobId,
 };
 use camino::Utf8PathBuf;
 use std::io::SeekFrom;
@@ -89,6 +90,10 @@ impl File {
     pub async fn remove(self) -> Result<()> {
         // TODO: consider only allowing this if file is in the local branch.
         self.blob.remove().await
+    }
+
+    pub fn blob_id(&self) -> &BlobId {
+        self.blob.blob_id()
     }
 }
 

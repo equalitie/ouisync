@@ -387,7 +387,7 @@ impl Inner {
             }
         };
 
-        let inode = self.inodes.lookup(parent, name, repr);
+        let inode = self.inodes.lookup(parent, entry.name(), name, repr);
 
         Ok(make_file_attr(inode, entry.entry_type(), len))
     }
@@ -558,7 +558,7 @@ impl Inner {
                 u64::MAX, // invalid inode, see above.
                 (index + first + 1) as i64,
                 to_file_type(entry.entry_type()),
-                entry.name(), // TODO: use the disambiguated name here
+                entry.unique_name().as_ref(),
             ) {
                 break;
             }
@@ -595,7 +595,7 @@ impl Inner {
         dir.flush().await?;
         parent_dir.flush().await?;
 
-        let inode = self.inodes.lookup(parent, name, Representation::Directory);
+        let inode = self.inodes.lookup(parent, name, name, Representation::Directory);
         let entry = JointEntry::Directory(dir);
 
         Ok(make_file_attr_for_entry(&entry, inode))
@@ -658,7 +658,7 @@ impl Inner {
         let entry = JointEntry::File(file);
         let inode = self
             .inodes
-            .lookup(parent, name, Representation::File(branch_id));
+            .lookup(parent, name, name, Representation::File(branch_id));
         let attr = make_file_attr_for_entry(&entry, inode);
         let handle = self.entries.insert(entry);
 
