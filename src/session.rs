@@ -4,6 +4,7 @@ use crate::{
     error::{Error, Result},
     index::Index,
     network::{Network, NetworkOptions},
+    replica_id::ReplicaId,
     repository::Repository,
     this_replica,
 };
@@ -49,5 +50,9 @@ impl Session {
     /// Returns the local socket address the network listener is bound to.
     pub fn local_addr(&self) -> &SocketAddr {
         self.network.local_addr()
+    }
+
+    pub fn this_replica_id(&self) -> &ReplicaId {
+        self.index.this_replica_id()
     }
 }
