@@ -2,6 +2,7 @@
 mod tests;
 
 use crate::{
+    blob_id::BlobId,
     block::{self, BlockId, BLOCK_SIZE},
     branch::Branch,
     crypto::{AuthTag, Cryptor, Hashable, NonceSequence},
@@ -105,6 +106,13 @@ impl Blob {
     /// Locator of this blob.
     pub fn locator(&self) -> &Locator {
         &self.locator
+    }
+
+    pub fn blob_id(&self) -> &BlobId {
+        match &self.locator {
+            Locator::Head(blob_id) => blob_id,
+            _ => unreachable!()
+        }
     }
 
     /// Reads data from this blob into `buffer`, advancing the internal cursor. Returns the
