@@ -1,7 +1,6 @@
 use crate::{
-    blob::Blob, branch::Branch, entry_type::EntryType, error::Result, locator::Locator,
-    write_context::WriteContext,
-    blob_id::BlobId,
+    blob::Blob, blob_id::BlobId, branch::Branch, entry_type::EntryType, error::Result,
+    locator::Locator, write_context::WriteContext,
 };
 use camino::Utf8PathBuf;
 use std::io::SeekFrom;

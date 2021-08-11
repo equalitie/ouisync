@@ -44,7 +44,13 @@ impl InodeMap {
     // # Panics
     //
     // Panics if the parent inode doesn't exists.
-    pub fn lookup(&mut self, parent: Inode, base_name: &str, unique_name: &str, representation: Representation) -> Inode {
+    pub fn lookup(
+        &mut self,
+        parent: Inode,
+        base_name: &str,
+        unique_name: &str,
+        representation: Representation,
+    ) -> Inode {
         // TODO: consider using `Arc` to avoid the double clone of `name`.
 
         let key = Key {

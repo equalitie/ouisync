@@ -595,7 +595,9 @@ impl Inner {
         dir.flush().await?;
         parent_dir.flush().await?;
 
-        let inode = self.inodes.lookup(parent, name, name, Representation::Directory);
+        let inode = self
+            .inodes
+            .lookup(parent, name, name, Representation::Directory);
         let entry = JointEntry::Directory(dir);
 
         Ok(make_file_attr_for_entry(&entry, inode))

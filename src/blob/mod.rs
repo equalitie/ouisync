@@ -111,7 +111,7 @@ impl Blob {
     pub fn blob_id(&self) -> &BlobId {
         match &self.locator {
             Locator::Head(blob_id) => blob_id,
-            _ => unreachable!()
+            _ => unreachable!(),
         }
     }
 
