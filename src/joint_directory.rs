@@ -178,7 +178,7 @@ impl JointDirectory {
                     .versions
                     .get_mut(branch)
                     .ok_or(Error::EntryNotFound)?
-                    .create_directory(name.to_owned())?;
+                    .create_directory(name.to_owned()).await?;
                 entry.insert(new_version);
             }
             Entry::Occupied(_) => return Err(Error::EntryExists),

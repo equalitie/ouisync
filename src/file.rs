@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 pub struct File {
     blob: Blob,
-    write_context: WriteContext,
+    write_context: Arc<WriteContext>,
     parent_entry: Arc<EntryData>,
 }
 
@@ -18,7 +18,7 @@ impl File {
     pub async fn open(
         branch: Branch,
         locator: Locator,
-        write_context: WriteContext,
+        write_context: Arc<WriteContext>,
         parent_entry: Arc<EntryData>,
     ) -> Result<Self> {
         Ok(Self {

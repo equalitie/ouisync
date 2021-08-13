@@ -19,7 +19,7 @@ use std::{
 pub struct Directory {
     blob: Blob,
     content: Content,
-    write_context: WriteContext,
+    write_context: Arc<WriteContext>,
     // Entry to this at the parent.
     parent_entry: Option<Arc<EntryData>>,
 }
@@ -30,7 +30,7 @@ impl Directory {
     pub(crate) async fn open(
         branch: Branch,
         locator: Locator,
-        write_context: WriteContext,
+        write_context: Arc<WriteContext>,
         // None if this Directory is the root.
         parent_entry: Option<Arc<EntryData>>,
     ) -> Result<Self> {
@@ -65,10 +65,8 @@ impl Directory {
             return Ok(());
         }
 
-        self.write_context
-            .begin(EntryType::Directory, &mut self.blob)
-            .await?;
-        self.write().await?;
+        self.write_context.begin(EntryType::Directory, &mut self.blob).await?;
+        Self::write_(&mut self.content, &mut self.blob).await?;
         self.write_context.commit().await?;
 
         Ok(())
@@ -80,20 +78,24 @@ impl Directory {
     /// # Panics
     ///
     /// Panics if not dirty or not in the local branch.
-    pub async fn write(&mut self) -> Result<()> {
-        assert!(self.content.dirty);
-        assert!(self.blob.branch().id() == self.write_context.local_branch().id());
+    async fn write_(content: &mut Content, blob: &mut Blob) -> Result<()> {
+        assert!(content.dirty);
 
         let buffer =
-            bincode::serialize(&self.content).expect("failed to serialize directory content");
+            bincode::serialize(&content).expect("failed to serialize directory content");
 
-        self.blob.truncate(0).await?;
-        self.blob.write(&buffer).await?;
-        self.blob.flush().await?;
+        blob.truncate(0).await?;
+        blob.write(&buffer).await?;
+        blob.flush().await?;
 
-        self.content.dirty = false;
+        content.dirty = false;
 
         Ok(())
+    }
+
+    pub async fn write(&mut self) -> Result<()> {
+        //assert!(self.blob.branch().id() == self.write_context.local_branch().id());
+        Self::write_(&mut self.content, &mut self.blob).await
     }
 
     /// Returns iterator over the entries of this directory.
@@ -137,16 +139,16 @@ impl Directory {
     }
 
     /// Creates a new file inside this directory.
-    pub fn create_file(&mut self, name: String) -> Result<File> {
-        let path = self.write_context.path().join(&name);
-        let entry = self.insert_entry_(name, EntryType::File)?;
+    pub async fn create_file(&mut self, name: String) -> Result<File> {
+        let path = self.write_context.path().await.join(&name);
+        let entry = self.insert_entry_(name, EntryType::File).await?;
         Ok(File::create(self.blob.branch().clone(), entry.locator(), path, entry))
     }
 
     /// Creates a new subdirectory of this directory.
-    pub fn create_directory(&mut self, name: String) -> Result<Self> {
-        let write_context = self.write_context.child(&name);
-        let entry = self.insert_entry_(name, EntryType::Directory)?;
+    pub async fn create_directory(&mut self, name: String) -> Result<Self> {
+        let write_context = self.write_context.child(&name).await;
+        let entry = self.insert_entry_(name, EntryType::Directory).await?;
         let blob = Blob::create(self.blob.branch().clone(), entry.locator());
 
         Ok(Self {
@@ -159,18 +161,18 @@ impl Directory {
 
     /// Inserts a dangling entry into this directory. It's the responsibility of the caller to make
     /// sure the returned locator eventually points to an actual file or directory.
-    pub(crate) fn insert_entry(&mut self, name: String, entry_type: EntryType) -> Result<Locator> {
+    pub(crate) async fn insert_entry(&mut self, name: String, entry_type: EntryType) -> Result<Locator> {
         let blob_id =
             self.content
-                .insert(*self.write_context.local_branch().id(), name, entry_type)?;
+                .insert(*self.write_context.local_branch_id(), name, entry_type)?;
         Ok(Locator::Head(blob_id))
     }
 
     /// Inserts a dangling entry into this directory. It's the responsibility of the caller to make
     /// sure the returned locator eventually points to an actual file or directory.
-    pub(crate) fn insert_entry_(&mut self, name: String, entry_type: EntryType) -> Result<Arc<EntryData>> {
+    pub(crate) async fn insert_entry_(&mut self, name: String, entry_type: EntryType) -> Result<Arc<EntryData>> {
         self.content
-            .insert_(*self.write_context.local_branch().id(), name, entry_type)
+            .insert_(*self.write_context.local_branch_id(), name, entry_type)
     }
 
     pub async fn remove_file(&mut self, name: &str) -> Result<()> {
@@ -318,7 +320,7 @@ impl<'a> FileRef<'a> {
         File::open(
             self.inner.parent.blob.branch().clone(),
             self.locator(),
-            self.inner.write_context(),
+            self.inner.write_context().await,
             self.inner.parent_entry.clone(),
         )
         .await
@@ -351,7 +353,7 @@ impl<'a> DirectoryRef<'a> {
         Directory::open(
             self.inner.parent.blob.branch().clone(),
             self.locator(),
-            self.inner.write_context(),
+            self.inner.write_context().await,
             Some(self.inner.parent_entry.clone()),
         )
         .await
@@ -366,8 +368,8 @@ struct RefInner<'a> {
 }
 
 impl RefInner<'_> {
-    fn write_context(&self) -> WriteContext {
-        self.parent.write_context.child(self.name)
+    async fn write_context(&self) -> Arc<WriteContext> {
+        self.parent.write_context.child(self.name).await
     }
 }
 
