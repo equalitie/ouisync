@@ -136,7 +136,7 @@ impl Directory {
     pub async fn create_file(&mut self, name: String) -> Result<File> {
         let entry = self.insert_entry_(name.clone(), EntryType::File).await?;
         let locator = entry.locator();
-        let write_context = self.write_context.child(&name, entry).await;
+        let write_context = self.write_context.child(name, entry).await;
         Ok(File::create(self.blob.branch().clone(), locator, write_context))
     }
 
@@ -144,7 +144,7 @@ impl Directory {
     pub async fn create_directory(&mut self, name: String) -> Result<Self> {
         let entry = self.insert_entry_(name.clone(), EntryType::Directory).await?;
         let locator = entry.locator();
-        let write_context = self.write_context.child(&name, entry).await;
+        let write_context = self.write_context.child(name, entry).await;
         let blob = Blob::create(self.blob.branch().clone(), locator);
 
         Ok(Self {
@@ -362,7 +362,7 @@ struct RefInner<'a> {
 
 impl RefInner<'_> {
     async fn write_context(&self) -> Arc<WriteContext> {
-        self.parent.write_context.child(self.name, self.parent_entry.clone()).await
+        self.parent.write_context.child(self.name.into(), self.parent_entry.clone()).await
     }
 }
 

@@ -17,13 +17,13 @@ pub struct WriteContext {
 }
 
 struct Parent {
+    name: String,
     write_context: Arc<WriteContext>,
     // TODO: Should this be std::sync::Weak?
     entry: Arc<EntryData>,
 }
 
 struct Inner {
-    path: Utf8PathBuf,
     local_branch: Branch,
     ancestors: Vec<Directory>,
 }
@@ -34,32 +34,27 @@ impl WriteContext {
             local_branch_id: *local_branch.id(),
             parent: None,
             inner: Mutex::new(Inner {
-                path: "/".into(),
                 local_branch,
                 ancestors: Vec::new(),
             })
         })
     }
 
-    pub async fn child(self: &Arc<Self>, name: &str, parent_entry: Arc<EntryData>) -> Arc<Self> {
+    pub async fn child(self: &Arc<Self>, name: String, parent_entry: Arc<EntryData>) -> Arc<Self> {
         let inner = self.inner.lock().await;
 
         Arc::new(Self {
             local_branch_id: self.local_branch_id,
             parent: Some(Parent {
+                name,
                 write_context: self.clone(),
                 entry: parent_entry,
             }),
             inner: Mutex::new(Inner {
-                path: inner.path.join(name),
                 local_branch: inner.local_branch.clone(),
                 ancestors: Vec::new(),
             })
         })
-    }
-
-    pub async fn path(&self) -> Utf8PathBuf {
-        self.inner.lock().await.path.clone()
     }
 
     pub fn local_branch_id(&self) -> &ReplicaId {
@@ -85,7 +80,7 @@ impl WriteContext {
             return Ok(());
         }
 
-        let dst_locator = if let Some((parent, name)) = path::decompose(&inner.path) {
+        let dst_locator = if let Some((parent, name)) = path::decompose(&self.calculate_path()) {
             inner.ancestors = inner.local_branch.ensure_directory_exists(parent).await?;
             inner.ancestors
                 .last_mut()
@@ -108,7 +103,7 @@ impl WriteContext {
 
         let mut dirs = inner.ancestors.drain(..).rev();
 
-        for component in inner.path.components().rev() {
+        for component in self.calculate_path().components().rev() {
             match component {
                 Utf8Component::Normal(name) => {
                     if let Some(mut dir) = dirs.next() {
@@ -125,6 +120,13 @@ impl WriteContext {
         }
 
         Ok(())
+    }
+
+    fn calculate_path(&self) -> Utf8PathBuf {
+        match &self.parent {
+            None => "/".into(),
+            Some(parent) => parent.write_context.calculate_path().join(&parent.name)
+        }
     }
 }
 
