@@ -49,6 +49,7 @@ impl Branch {
             self.clone(),
             Locator::Root,
             WriteContext::new("/".into(), local_branch),
+            None,
         )
         .await
     }

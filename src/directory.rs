@@ -11,6 +11,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
+    sync::Arc,
     collections::{btree_map, BTreeMap},
     fmt,
 };
@@ -19,6 +20,8 @@ pub struct Directory {
     blob: Blob,
     content: Content,
     write_context: WriteContext,
+    // Entry to this at the parent.
+    parent_entry: Option<Arc<EntryData>>,
 }
 
 #[allow(clippy::len_without_is_empty)]
@@ -28,6 +31,8 @@ impl Directory {
         branch: Branch,
         locator: Locator,
         write_context: WriteContext,
+        // None if this Directory is the root.
+        parent_entry: Option<Arc<EntryData>>,
     ) -> Result<Self> {
         let mut blob = Blob::open(branch, locator).await?;
         let buffer = blob.read_to_end().await?;
@@ -37,6 +42,7 @@ impl Directory {
             blob,
             content,
             write_context,
+            parent_entry,
         })
     }
 
@@ -48,6 +54,7 @@ impl Directory {
             blob,
             content: Content::new(),
             write_context: WriteContext::new("/".into(), branch),
+            parent_entry: None,
         }
     }
 
@@ -132,20 +139,21 @@ impl Directory {
     /// Creates a new file inside this directory.
     pub fn create_file(&mut self, name: String) -> Result<File> {
         let path = self.write_context.path().join(&name);
-        let locator = self.insert_entry(name, EntryType::File)?;
-        Ok(File::create(self.blob.branch().clone(), locator, path))
+        let entry = self.insert_entry_(name, EntryType::File)?;
+        Ok(File::create(self.blob.branch().clone(), entry.locator(), path, entry))
     }
 
     /// Creates a new subdirectory of this directory.
     pub fn create_directory(&mut self, name: String) -> Result<Self> {
         let write_context = self.write_context.child(&name);
-        let locator = self.insert_entry(name, EntryType::Directory)?;
-        let blob = Blob::create(self.blob.branch().clone(), locator);
+        let entry = self.insert_entry_(name, EntryType::Directory)?;
+        let blob = Blob::create(self.blob.branch().clone(), entry.locator());
 
         Ok(Self {
             blob,
             content: Content::new(),
             write_context,
+            parent_entry: Some(entry),
         })
     }
 
@@ -156,6 +164,13 @@ impl Directory {
             self.content
                 .insert(*self.write_context.local_branch().id(), name, entry_type)?;
         Ok(Locator::Head(blob_id))
+    }
+
+    /// Inserts a dangling entry into this directory. It's the responsibility of the caller to make
+    /// sure the returned locator eventually points to an actual file or directory.
+    pub(crate) fn insert_entry_(&mut self, name: String, entry_type: EntryType) -> Result<Arc<EntryData>> {
+        self.content
+            .insert_(*self.write_context.local_branch().id(), name, entry_type)
     }
 
     pub async fn remove_file(&mut self, name: &str) -> Result<()> {
@@ -217,16 +232,16 @@ impl<'a> EntryRef<'a> {
     fn new(
         parent: &'a Directory,
         name: &'a str,
-        data: &'a EntryData,
+        parent_entry: &'a Arc<EntryData>,
         branch_id: &'a ReplicaId,
     ) -> Self {
         let inner = RefInner {
             parent,
+            parent_entry,
             name,
-            blob_id: &data.blob_id,
         };
 
-        match data.entry_type {
+        match parent_entry.entry_type {
             EntryType::File => Self::File(FileRef { inner, branch_id }),
             EntryType::Directory => Self::Directory(DirectoryRef { inner }),
         }
@@ -248,8 +263,8 @@ impl<'a> EntryRef<'a> {
 
     pub fn blob_id(&self) -> &'a BlobId {
         match self {
-            Self::File(r) => r.inner.blob_id,
-            Self::Directory(r) => r.inner.blob_id,
+            Self::File(r) => &r.inner.parent_entry.blob_id,
+            Self::Directory(r) => &r.inner.parent_entry.blob_id,
         }
     }
 
@@ -292,7 +307,7 @@ impl<'a> FileRef<'a> {
     }
 
     pub fn locator(&self) -> Locator {
-        Locator::Head(*self.inner.blob_id)
+        Locator::Head(self.inner.parent_entry.blob_id)
     }
 
     pub fn branch_id(&self) -> &'a ReplicaId {
@@ -304,6 +319,7 @@ impl<'a> FileRef<'a> {
             self.inner.parent.blob.branch().clone(),
             self.locator(),
             self.inner.write_context(),
+            self.inner.parent_entry.clone(),
         )
         .await
     }
@@ -328,7 +344,7 @@ impl<'a> DirectoryRef<'a> {
     }
 
     pub fn locator(&self) -> Locator {
-        Locator::Head(*self.inner.blob_id)
+        Locator::Head(self.inner.parent_entry.blob_id)
     }
 
     pub async fn open(&self) -> Result<Directory> {
@@ -336,6 +352,7 @@ impl<'a> DirectoryRef<'a> {
             self.inner.parent.blob.branch().clone(),
             self.locator(),
             self.inner.write_context(),
+            Some(self.inner.parent_entry.clone()),
         )
         .await
     }
@@ -344,8 +361,8 @@ impl<'a> DirectoryRef<'a> {
 #[derive(Copy, Clone)]
 struct RefInner<'a> {
     parent: &'a Directory,
+    parent_entry: &'a Arc<EntryData>,
     name: &'a str,
-    blob_id: &'a BlobId,
 }
 
 impl RefInner<'_> {
@@ -358,8 +375,8 @@ impl PartialEq for RefInner<'_> {
     fn eq(&self, other: &Self) -> bool {
         self.parent.branch().id() == other.parent.branch().id()
             && self.parent.locator() == other.parent.locator()
+            && self.parent_entry == other.parent_entry
             && self.name == other.name
-            && self.blob_id == other.blob_id
     }
 }
 
@@ -392,7 +409,7 @@ impl MoveDstDirectory {
 
 #[derive(Clone, Deserialize, Serialize)]
 struct Content {
-    entries: BTreeMap<String, BTreeMap<ReplicaId, EntryData>>,
+    entries: BTreeMap<String, BTreeMap<ReplicaId, Arc<EntryData>>>,
     #[serde(skip)]
     dirty: bool,
 }
@@ -416,12 +433,35 @@ impl Content {
 
         match versions.entry(branch_id) {
             btree_map::Entry::Vacant(entry) => {
-                entry.insert(EntryData {
+                entry.insert(Arc::new(EntryData {
+                    entry_type,
+                    blob_id,
+                }));
+                self.dirty = true;
+                Ok(blob_id)
+            }
+            btree_map::Entry::Occupied(_) => Err(Error::EntryExists),
+        }
+    }
+
+    fn insert_(
+        &mut self,
+        branch_id: ReplicaId,
+        name: String,
+        entry_type: EntryType,
+    ) -> Result<Arc<EntryData>> {
+        let blob_id = rand::random();
+        let versions = self.entries.entry(name).or_insert_with(Default::default);
+
+        match versions.entry(branch_id) {
+            btree_map::Entry::Vacant(entry) => {
+                let data = Arc::new(EntryData {
                     entry_type,
                     blob_id,
                 });
+                entry.insert(data.clone());
                 self.dirty = true;
-                Ok(blob_id)
+                Ok(data)
             }
             btree_map::Entry::Occupied(_) => Err(Error::EntryExists),
         }
@@ -435,11 +475,17 @@ impl Content {
     }
 }
 
-#[derive(Clone, Deserialize, Serialize)]
-struct EntryData {
+#[derive(Clone, Deserialize, Serialize, Eq, PartialEq)]
+pub struct EntryData {
     entry_type: EntryType,
     blob_id: BlobId,
     // TODO: metadata
+}
+
+impl EntryData {
+    pub fn locator(&self) -> Locator {
+        Locator::Head(self.blob_id)
+    }
 }
 
 #[cfg(test)]

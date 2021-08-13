@@ -1,13 +1,16 @@
 use crate::{
     blob::Blob, blob_id::BlobId, branch::Branch, entry_type::EntryType, error::Result,
     locator::Locator, write_context::WriteContext,
+    directory::EntryData,
 };
 use camino::Utf8PathBuf;
 use std::io::SeekFrom;
+use std::sync::Arc;
 
 pub struct File {
     blob: Blob,
     write_context: WriteContext,
+    parent_entry: Arc<EntryData>,
 }
 
 impl File {
@@ -16,18 +19,21 @@ impl File {
         branch: Branch,
         locator: Locator,
         write_context: WriteContext,
+        parent_entry: Arc<EntryData>,
     ) -> Result<Self> {
         Ok(Self {
             blob: Blob::open(branch, locator).await?,
             write_context,
+            parent_entry,
         })
     }
 
     /// Creates a new file.
-    pub fn create(branch: Branch, locator: Locator, path: Utf8PathBuf) -> Self {
+    pub fn create(branch: Branch, locator: Locator, path: Utf8PathBuf, parent_entry: Arc<EntryData>) -> Self {
         Self {
             blob: Blob::create(branch.clone(), locator),
             write_context: WriteContext::new(path, branch),
+            parent_entry,
         }
     }
 
