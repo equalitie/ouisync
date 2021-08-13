@@ -11,8 +11,15 @@ use std::ops::DerefMut;
 /// Context needed for updating all necessary info when writing to a file or directory.
 pub struct WriteContext {
     local_branch_id: ReplicaId,
-    parent_entry: Option<Arc<EntryData>>,
+    // None iff this WriteContext corresponds to the root directory.
+    parent: Option<Parent>,
     inner: Mutex<Inner>,
+}
+
+struct Parent {
+    write_context: Arc<WriteContext>,
+    // TODO: Should this be std::sync::Weak?
+    entry: Arc<EntryData>,
 }
 
 struct Inner {
@@ -22,24 +29,27 @@ struct Inner {
 }
 
 impl WriteContext {
-    pub fn new(path: Utf8PathBuf, local_branch: Branch, parent_entry: Option<Arc<EntryData>>) -> Arc<Self> {
+    pub fn new_for_root(local_branch: Branch) -> Arc<Self> {
         Arc::new(Self {
             local_branch_id: *local_branch.id(),
-            parent_entry,
+            parent: None,
             inner: Mutex::new(Inner {
-                path,
+                path: "/".into(),
                 local_branch,
                 ancestors: Vec::new(),
             })
         })
     }
 
-    pub async fn child(&self, name: &str, parent_entry: Option<Arc<EntryData>>) -> Arc<Self> {
+    pub async fn child(self: &Arc<Self>, name: &str, parent_entry: Arc<EntryData>) -> Arc<Self> {
         let inner = self.inner.lock().await;
 
         Arc::new(Self {
             local_branch_id: self.local_branch_id,
-            parent_entry,
+            parent: Some(Parent {
+                write_context: self.clone(),
+                entry: parent_entry,
+            }),
             inner: Mutex::new(Inner {
                 path: inner.path.join(name),
                 local_branch: inner.local_branch.clone(),
@@ -56,8 +66,8 @@ impl WriteContext {
         &self.local_branch_id
     }
 
-    pub fn parent_entry(&self) -> &Option<Arc<EntryData>> {
-        &self.parent_entry
+    pub fn parent_entry(&self) -> Option<&Arc<EntryData>> {
+        self.parent.as_ref().map(|parent| &parent.entry)
     }
 
     /// Begin writing to the given blob. This ensures the blob lives in the local branch and all

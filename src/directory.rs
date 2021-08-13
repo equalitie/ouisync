@@ -48,7 +48,7 @@ impl Directory {
         Self {
             blob,
             content: Content::new(),
-            write_context: WriteContext::new("/".into(), branch, None),
+            write_context: WriteContext::new_for_root(branch),
         }
     }
 
@@ -134,16 +134,17 @@ impl Directory {
 
     /// Creates a new file inside this directory.
     pub async fn create_file(&mut self, name: String) -> Result<File> {
-        let path = self.write_context.path().await.join(&name);
-        let entry = self.insert_entry_(name, EntryType::File).await?;
-        Ok(File::create(self.blob.branch().clone(), entry.locator(), path, entry))
+        let entry = self.insert_entry_(name.clone(), EntryType::File).await?;
+        let locator = entry.locator();
+        let write_context = self.write_context.child(&name, entry).await;
+        Ok(File::create(self.blob.branch().clone(), locator, write_context))
     }
 
     /// Creates a new subdirectory of this directory.
     pub async fn create_directory(&mut self, name: String) -> Result<Self> {
         let entry = self.insert_entry_(name.clone(), EntryType::Directory).await?;
         let locator = entry.locator();
-        let write_context = self.write_context.child(&name, Some(entry)).await;
+        let write_context = self.write_context.child(&name, entry).await;
         let blob = Blob::create(self.blob.branch().clone(), locator);
 
         Ok(Self {
@@ -361,7 +362,7 @@ struct RefInner<'a> {
 
 impl RefInner<'_> {
     async fn write_context(&self) -> Arc<WriteContext> {
-        self.parent.write_context.child(self.name, Some(self.parent_entry.clone())).await
+        self.parent.write_context.child(self.name, self.parent_entry.clone()).await
     }
 }
 
