@@ -48,8 +48,7 @@ impl Branch {
         Directory::open(
             self.clone(),
             Locator::Root,
-            WriteContext::new("/".into(), local_branch),
-            None,
+            WriteContext::new("/".into(), local_branch, None),
         )
         .await
     }

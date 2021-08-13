@@ -1,5 +1,5 @@
 use crate::{
-    blob::Blob, branch::Branch, directory::Directory, entry_type::EntryType, error::Result,
+    blob::Blob, branch::Branch, directory::{EntryData, Directory}, entry_type::EntryType, error::Result,
     replica_id::ReplicaId,
     locator::Locator, path,
 };
@@ -11,6 +11,7 @@ use std::ops::DerefMut;
 /// Context needed for updating all necessary info when writing to a file or directory.
 pub struct WriteContext {
     local_branch_id: ReplicaId,
+    parent_entry: Option<Arc<EntryData>>,
     inner: Mutex<Inner>,
 }
 
@@ -21,9 +22,10 @@ struct Inner {
 }
 
 impl WriteContext {
-    pub fn new(path: Utf8PathBuf, local_branch: Branch) -> Arc<Self> {
+    pub fn new(path: Utf8PathBuf, local_branch: Branch, parent_entry: Option<Arc<EntryData>>) -> Arc<Self> {
         Arc::new(Self {
             local_branch_id: *local_branch.id(),
+            parent_entry,
             inner: Mutex::new(Inner {
                 path,
                 local_branch,
@@ -32,11 +34,12 @@ impl WriteContext {
         })
     }
 
-    pub async fn child(&self, name: &str) -> Arc<Self> {
+    pub async fn child(&self, name: &str, parent_entry: Option<Arc<EntryData>>) -> Arc<Self> {
         let inner = self.inner.lock().await;
 
         Arc::new(Self {
             local_branch_id: self.local_branch_id,
+            parent_entry,
             inner: Mutex::new(Inner {
                 path: inner.path.join(name),
                 local_branch: inner.local_branch.clone(),
@@ -51,6 +54,10 @@ impl WriteContext {
 
     pub fn local_branch_id(&self) -> &ReplicaId {
         &self.local_branch_id
+    }
+
+    pub fn parent_entry(&self) -> &Option<Arc<EntryData>> {
+        &self.parent_entry
     }
 
     /// Begin writing to the given blob. This ensures the blob lives in the local branch and all
@@ -88,6 +95,7 @@ impl WriteContext {
     pub async fn commit(&self) -> Result<()> {
         let mut guard = self.inner.lock().await;
         let inner = guard.deref_mut(); 
+
         let mut dirs = inner.ancestors.drain(..).rev();
 
         for component in inner.path.components().rev() {

@@ -20,8 +20,6 @@ pub struct Directory {
     blob: Blob,
     content: Content,
     write_context: Arc<WriteContext>,
-    // Entry to this at the parent.
-    parent_entry: Option<Arc<EntryData>>,
 }
 
 #[allow(clippy::len_without_is_empty)]
@@ -31,8 +29,6 @@ impl Directory {
         branch: Branch,
         locator: Locator,
         write_context: Arc<WriteContext>,
-        // None if this Directory is the root.
-        parent_entry: Option<Arc<EntryData>>,
     ) -> Result<Self> {
         let mut blob = Blob::open(branch, locator).await?;
         let buffer = blob.read_to_end().await?;
@@ -42,7 +38,6 @@ impl Directory {
             blob,
             content,
             write_context,
-            parent_entry,
         })
     }
 
@@ -53,8 +48,7 @@ impl Directory {
         Self {
             blob,
             content: Content::new(),
-            write_context: WriteContext::new("/".into(), branch),
-            parent_entry: None,
+            write_context: WriteContext::new("/".into(), branch, None),
         }
     }
 
@@ -147,15 +141,15 @@ impl Directory {
 
     /// Creates a new subdirectory of this directory.
     pub async fn create_directory(&mut self, name: String) -> Result<Self> {
-        let write_context = self.write_context.child(&name).await;
-        let entry = self.insert_entry_(name, EntryType::Directory).await?;
-        let blob = Blob::create(self.blob.branch().clone(), entry.locator());
+        let entry = self.insert_entry_(name.clone(), EntryType::Directory).await?;
+        let locator = entry.locator();
+        let write_context = self.write_context.child(&name, Some(entry)).await;
+        let blob = Blob::create(self.blob.branch().clone(), locator);
 
         Ok(Self {
             blob,
             content: Content::new(),
             write_context,
-            parent_entry: Some(entry),
         })
     }
 
@@ -321,7 +315,6 @@ impl<'a> FileRef<'a> {
             self.inner.parent.blob.branch().clone(),
             self.locator(),
             self.inner.write_context().await,
-            self.inner.parent_entry.clone(),
         )
         .await
     }
@@ -354,7 +347,6 @@ impl<'a> DirectoryRef<'a> {
             self.inner.parent.blob.branch().clone(),
             self.locator(),
             self.inner.write_context().await,
-            Some(self.inner.parent_entry.clone()),
         )
         .await
     }
@@ -369,7 +361,7 @@ struct RefInner<'a> {
 
 impl RefInner<'_> {
     async fn write_context(&self) -> Arc<WriteContext> {
-        self.parent.write_context.child(self.name).await
+        self.parent.write_context.child(self.name, Some(self.parent_entry.clone())).await
     }
 }
 
