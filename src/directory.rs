@@ -62,7 +62,7 @@ impl Directory {
         self.write_context
             .begin(EntryType::Directory, &mut self.blob)
             .await?;
-        Self::write_(&mut self.content, &mut self.blob).await?;
+        self.write().await?;
         self.write_context.commit().await?;
 
         Ok(())
@@ -74,23 +74,19 @@ impl Directory {
     /// # Panics
     ///
     /// Panics if not dirty or not in the local branch.
-    async fn write_(content: &mut Content, blob: &mut Blob) -> Result<()> {
-        assert!(content.dirty);
+    pub(crate) async fn write(&mut self) -> Result<()> {
+        assert!(self.content.dirty);
 
-        let buffer = bincode::serialize(&content).expect("failed to serialize directory content");
+        let buffer =
+            bincode::serialize(&self.content).expect("failed to serialize directory content");
 
-        blob.truncate(0).await?;
-        blob.write(&buffer).await?;
-        blob.flush().await?;
+        self.blob.truncate(0).await?;
+        self.blob.write(&buffer).await?;
+        self.blob.flush().await?;
 
-        content.dirty = false;
+        self.content.dirty = false;
 
         Ok(())
-    }
-
-    pub async fn write(&mut self) -> Result<()> {
-        //assert!(self.blob.branch().id() == self.write_context.local_branch().id());
-        Self::write_(&mut self.content, &mut self.blob).await
     }
 
     /// Returns iterator over the entries of this directory.

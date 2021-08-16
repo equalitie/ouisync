@@ -509,6 +509,7 @@ mod tests {
 
         // Open the file with branch 1 as the local branch and then modify it which copies (forks)
         // it into branch 1.
+        let root0 = branches[0].open_root(branches[1].clone()).await.unwrap();
         let mut file1 = root0
             .lookup_version("file.txt", branches[0].id())
             .unwrap()
@@ -518,7 +519,6 @@ mod tests {
             .await
             .unwrap();
 
-        file1.set_local_branch(branches[1].clone()).await;
         file1.write(&[]).await.unwrap();
         file1.flush().await.unwrap();
 
