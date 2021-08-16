@@ -178,7 +178,8 @@ impl JointDirectory {
                     .versions
                     .get_mut(branch)
                     .ok_or(Error::EntryNotFound)?
-                    .create_directory(name.to_owned()).await?;
+                    .create_directory(name.to_owned())
+                    .await?;
                 entry.insert(new_version);
             }
             Entry::Occupied(_) => return Err(Error::EntryExists),
@@ -387,10 +388,7 @@ impl<'a> Iterator for Merge<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        branch::Branch, crypto::Cryptor, db, directory::Directory, file::File, index::BranchData,
-        locator::Locator, write_context::WriteContext,
-    };
+    use crate::{branch::Branch, crypto::Cryptor, db, directory::Directory, index::BranchData};
     use assert_matches::assert_matches;
     use futures_util::future;
 
@@ -500,52 +498,49 @@ mod tests {
         assert_unique_and_ordered(2, root.entries());
     }
 
-    //#[tokio::test(flavor = "multi_thread")]
-    //async fn conflict_forked_files() {
-    //    let branches = setup(2).await;
+    #[tokio::test(flavor = "multi_thread")]
+    async fn conflict_forked_files() {
+        let branches = setup(2).await;
 
-    //    let mut root0 = Directory::create_root(branches[0].clone());
-    //    let mut file0 = root0.create_file("file.txt".to_owned()).await.unwrap();
-    //    file0.flush().await.unwrap();
-    //    root0.flush().await.unwrap();
+        let mut root0 = Directory::create_root(branches[0].clone());
+        let mut file0 = root0.create_file("file.txt".to_owned()).await.unwrap();
+        file0.flush().await.unwrap();
+        root0.flush().await.unwrap();
 
-    //    // Open the file with branch 1 as the local branch and then modify it which copies (forks)
-    //    // it into branch 1.
-    //    let mut file1 = File::open(
-    //        branches[0].clone(),
-    //        *file0.locator(),
-    //        WriteContext::new("/file.txt".into(), branches[1].clone()),
-    //    )
-    //    .await
-    //    .unwrap();
-    //    file1.write(&[]).await.unwrap();
-    //    file1.flush().await.unwrap();
+        // Open the file with branch 1 as the local branch and then modify it which copies (forks)
+        // it into branch 1.
+        let mut file1 = root0
+            .lookup_version("file.txt", branches[0].id())
+            .unwrap()
+            .file()
+            .unwrap()
+            .open()
+            .await
+            .unwrap();
 
-    //    // Open branch 1's root dir which should have been created in the process.
-    //    let root1 = Directory::open(
-    //        branches[1].clone(),
-    //        Locator::Root,
-    //        WriteContext::new("/".into(), branches[1].clone()),
-    //    )
-    //    .await
-    //    .unwrap();
+        file1.set_local_branch(branches[1].clone()).await;
+        file1.write(&[]).await.unwrap();
+        file1.flush().await.unwrap();
 
-    //    let root = JointDirectory::new(vec![root0, root1]);
+        // Open branch 1's root dir which should have been created in the process.
+        let root1 = branches[1].open_root(branches[1].clone()).await.unwrap();
 
-    //    let files: Vec<_> = root.entries().map(|entry| entry.file().unwrap()).collect();
+        let root = JointDirectory::new(vec![root0, root1]);
 
-    //    assert_eq!(files.len(), 2);
+        let files: Vec<_> = root.entries().map(|entry| entry.file().unwrap()).collect();
 
-    //    for branch in &branches {
-    //        let file = files
-    //            .iter()
-    //            .find(|file| file.branch_id() == branch.id())
-    //            .unwrap();
-    //        assert_eq!(file.name(), "file.txt");
-    //    }
+        assert_eq!(files.len(), 2);
 
-    //    assert_unique_and_ordered(2, root.entries());
-    //}
+        for branch in &branches {
+            let file = files
+                .iter()
+                .find(|file| file.branch_id() == branch.id())
+                .unwrap();
+            assert_eq!(file.name(), "file.txt");
+        }
+
+        assert_unique_and_ordered(2, root.entries());
+    }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn conflict_directories() {
@@ -617,9 +612,9 @@ mod tests {
         assert_eq!(entry.file().unwrap().branch_id(), branches[0].id());
     }
 
-    // TODO: test conflict_forked_directories
-    // TODO: test conflict_multiple_files_and_directories
-    // TODO: test conflict_file_with_name_containing_branch_prefix
+    //// TODO: test conflict_forked_directories
+    //// TODO: test conflict_multiple_files_and_directories
+    //// TODO: test conflict_file_with_name_containing_branch_prefix
 
     #[tokio::test(flavor = "multi_thread")]
     async fn cd_into_concurrent_directory() {

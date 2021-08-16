@@ -24,8 +24,6 @@ impl File {
     }
 
     /// Creates a new file.
-    // TODO: Branch is redundant as local branch is inside the write_context and we can't create
-    // files in other (non local) branches.
     pub fn create(branch: Branch, locator: Locator, write_context: Arc<WriteContext>) -> Self {
         Self {
             blob: Blob::create(branch, locator),
@@ -96,6 +94,11 @@ impl File {
     pub fn blob_id(&self) -> &BlobId {
         self.blob.blob_id()
     }
+
+    // This was created for debugging/testing.
+    pub(crate) async fn set_local_branch(&self, local_branch: Branch) {
+        self.write_context.set_local_branch(local_branch).await
+    }
 }
 
 #[cfg(test)]
@@ -104,52 +107,68 @@ mod test {
 
     use super::*;
 
-    //#[tokio::test(flavor = "multi_thread")]
-    //async fn fork() {
-    //    let branch0 = setup().await;
-    //    let branch1 = create_branch(branch0.db_pool().clone()).await;
+    #[tokio::test(flavor = "multi_thread")]
+    async fn fork() {
+        let branch0 = setup().await;
+        let branch1 = create_branch(branch0.db_pool().clone()).await;
 
-    //    // Create a file owned by branch 0
-    //    let mut file0 = File::create(
-    //        branch0.clone(),
-    //        Locator::Head(rand::random()),
-    //        "/dog.jpg".into(),
-    //    );
-    //    file0.write(b"small").await.unwrap();
-    //    file0.flush().await.unwrap();
+        // Create a file owned by branch 0
+        let (mut file0, dirs) = branch0.ensure_file_exists("/dog.jpg".into()).await.unwrap();
 
-    //    // Write to the file by branch 1
-    //    let mut file1 = File::open(
-    //        branch0.clone(),
-    //        *file0.locator(),
-    //        WriteContext::new("/dog.jpg".into(), branch1.clone()),
-    //    )
-    //    .await
-    //    .unwrap();
-    //    file1.write(b"large").await.unwrap();
-    //    file1.flush().await.unwrap();
+        file0.write(b"small").await.unwrap();
+        file0.flush().await.unwrap();
+        for mut dir in dirs {
+            dir.flush().await.unwrap();
+        }
 
-    //    // Reopen orig file and verify it's unchanged
-    //    let mut file = File::open(
-    //        branch0.clone(),
-    //        *file0.locator(),
-    //        WriteContext::new("/dog.jpg".into(), branch0),
-    //    )
-    //    .await
-    //    .unwrap();
-    //    assert_eq!(file.read_to_end().await.unwrap(), b"small");
+        // Write to the file by branch 1
+        let mut file1 = branch0
+            .open_root(branch0.clone())
+            .await
+            .unwrap()
+            .lookup_version("dog.jpg", branch0.id())
+            .unwrap()
+            .file()
+            .unwrap()
+            .open()
+            .await
+            .unwrap();
 
-    //    // Reopen forked file and verify it's modified
-    //    let mut file = File::open(
-    //        branch1.clone(),
-    //        *file1.locator(),
-    //        WriteContext::new("/dog.jpg".into(), branch1),
-    //    )
-    //    .await
-    //    .unwrap();
+        file1.set_local_branch(branch1.clone()).await;
 
-    //    assert_eq!(file.read_to_end().await.unwrap(), b"large");
-    //}
+        file1.write(b"large").await.unwrap();
+        file1.flush().await.unwrap();
+
+        // Reopen orig file and verify it's unchanged
+        let mut file = branch0
+            .open_root(branch0.clone())
+            .await
+            .unwrap()
+            .lookup_version("dog.jpg", branch0.id())
+            .unwrap()
+            .file()
+            .unwrap()
+            .open()
+            .await
+            .unwrap();
+
+        assert_eq!(file.read_to_end().await.unwrap(), b"small");
+
+        // Reopen forked file and verify it's modified
+        let mut file = branch1
+            .open_root(branch1.clone())
+            .await
+            .unwrap()
+            .lookup_version("dog.jpg", branch1.id())
+            .unwrap()
+            .file()
+            .unwrap()
+            .open()
+            .await
+            .unwrap();
+
+        assert_eq!(file.read_to_end().await.unwrap(), b"large");
+    }
 
     async fn setup() -> Branch {
         let pool = db::init(db::Store::Memory).await.unwrap();

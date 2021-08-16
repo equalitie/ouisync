@@ -93,7 +93,11 @@ impl Branch {
     pub async fn ensure_file_exists(&self, path: &Utf8Path) -> Result<(File, Vec<Directory>)> {
         let (parent, name) = path::decompose(path).ok_or(Error::EntryIsDirectory)?;
         let mut dirs = self.ensure_directory_exists(parent).await?;
-        let file = dirs.last_mut().unwrap().create_file(name.to_string()).await?;
+        let file = dirs
+            .last_mut()
+            .unwrap()
+            .create_file(name.to_string())
+            .await?;
         Ok((file, dirs))
     }
 }

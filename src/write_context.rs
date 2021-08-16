@@ -1,12 +1,17 @@
 use crate::{
-    blob::Blob, branch::Branch, directory::{EntryData, Directory}, entry_type::EntryType, error::Result,
+    blob::Blob,
+    branch::Branch,
+    directory::{Directory, EntryData},
+    entry_type::EntryType,
+    error::Result,
+    locator::Locator,
+    path,
     replica_id::ReplicaId,
-    locator::Locator, path,
 };
 use camino::{Utf8Component, Utf8PathBuf};
+use std::ops::DerefMut;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use std::ops::DerefMut;
 
 /// Context needed for updating all necessary info when writing to a file or directory.
 pub struct WriteContext {
@@ -36,7 +41,7 @@ impl WriteContext {
             inner: Mutex::new(Inner {
                 local_branch,
                 ancestors: Vec::new(),
-            })
+            }),
         })
     }
 
@@ -53,7 +58,7 @@ impl WriteContext {
             inner: Mutex::new(Inner {
                 local_branch: inner.local_branch.clone(),
                 ancestors: Vec::new(),
-            })
+            }),
         })
     }
 
@@ -82,10 +87,12 @@ impl WriteContext {
 
         let dst_locator = if let Some((parent, name)) = path::decompose(&self.calculate_path()) {
             inner.ancestors = inner.local_branch.ensure_directory_exists(parent).await?;
-            inner.ancestors
+            inner
+                .ancestors
                 .last_mut()
                 .unwrap()
-                .insert_entry(name.to_owned(), entry_type).await?
+                .insert_entry(name.to_owned(), entry_type)
+                .await?
         } else {
             // `blob` is the root directory.
             Locator::Root
@@ -99,7 +106,7 @@ impl WriteContext {
     /// was not called.
     pub async fn commit(&self) -> Result<()> {
         let mut guard = self.inner.lock().await;
-        let inner = guard.deref_mut(); 
+        let inner = guard.deref_mut();
 
         let mut dirs = inner.ancestors.drain(..).rev();
 
@@ -108,8 +115,7 @@ impl WriteContext {
                 Utf8Component::Normal(name) => {
                     if let Some(mut dir) = dirs.next() {
                         dir.increment_entry_version(name)?;
-                        todo!();
-                        //dir.write().await?;
+                        dir.write().await?;
                     } else {
                         break;
                     }
@@ -125,8 +131,13 @@ impl WriteContext {
     fn calculate_path(&self) -> Utf8PathBuf {
         match &self.parent {
             None => "/".into(),
-            Some(parent) => parent.write_context.calculate_path().join(&parent.name)
+            Some(parent) => parent.write_context.calculate_path().join(&parent.name),
         }
+    }
+
+    // For debugging
+    pub async fn set_local_branch(&self, local_branch: Branch) {
+        self.inner.lock().await.local_branch = local_branch
     }
 }
 
