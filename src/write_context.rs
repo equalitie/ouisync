@@ -93,6 +93,7 @@ impl WriteContext {
                 .unwrap()
                 .insert_entry(name.to_owned(), entry_type)
                 .await?
+                .locator()
         } else {
             // `blob` is the root directory.
             Locator::Root
@@ -140,13 +141,3 @@ impl WriteContext {
         self.inner.lock().await.local_branch = local_branch
     }
 }
-
-//impl Clone for WriteContext {
-//    fn clone(&self) -> Self {
-//        Self {
-//            path: self.path.clone(),
-//            local_branch: self.local_branch.clone(),
-//            ancestors: Vec::new(), // The clone is produced in non-begun state.
-//        }
-//    }
-//}

@@ -135,7 +135,7 @@ impl Directory {
 
     /// Creates a new file inside this directory.
     pub async fn create_file(&mut self, name: String) -> Result<File> {
-        let entry = self.insert_entry_(name.clone(), EntryType::File).await?;
+        let entry = self.insert_entry(name.clone(), EntryType::File).await?;
         let locator = entry.locator();
         let write_context = self.write_context.child(name, entry).await;
         Ok(File::create(
@@ -148,7 +148,7 @@ impl Directory {
     /// Creates a new subdirectory of this directory.
     pub async fn create_directory(&mut self, name: String) -> Result<Self> {
         let entry = self
-            .insert_entry_(name.clone(), EntryType::Directory)
+            .insert_entry(name.clone(), EntryType::Directory)
             .await?;
         let locator = entry.locator();
         let write_context = self.write_context.child(name, entry).await;
@@ -167,22 +167,9 @@ impl Directory {
         &mut self,
         name: String,
         entry_type: EntryType,
-    ) -> Result<Locator> {
-        let blob_id =
-            self.content
-                .insert(*self.write_context.local_branch_id(), name, entry_type)?;
-        Ok(Locator::Head(blob_id))
-    }
-
-    /// Inserts a dangling entry into this directory. It's the responsibility of the caller to make
-    /// sure the returned locator eventually points to an actual file or directory.
-    pub(crate) async fn insert_entry_(
-        &mut self,
-        name: String,
-        entry_type: EntryType,
     ) -> Result<Arc<EntryData>> {
         self.content
-            .insert_(*self.write_context.local_branch_id(), name, entry_type)
+            .insert(*self.write_context.local_branch_id(), name, entry_type)
     }
 
     pub async fn remove_file(&mut self, name: &str) -> Result<()> {
@@ -436,28 +423,6 @@ impl Content {
     }
 
     fn insert(
-        &mut self,
-        branch_id: ReplicaId,
-        name: String,
-        entry_type: EntryType,
-    ) -> Result<BlobId> {
-        let blob_id = rand::random();
-        let versions = self.entries.entry(name).or_insert_with(Default::default);
-
-        match versions.entry(branch_id) {
-            btree_map::Entry::Vacant(entry) => {
-                entry.insert(Arc::new(EntryData {
-                    entry_type,
-                    blob_id,
-                }));
-                self.dirty = true;
-                Ok(blob_id)
-            }
-            btree_map::Entry::Occupied(_) => Err(Error::EntryExists),
-        }
-    }
-
-    fn insert_(
         &mut self,
         branch_id: ReplicaId,
         name: String,
