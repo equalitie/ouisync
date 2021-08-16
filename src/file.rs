@@ -94,11 +94,6 @@ impl File {
     pub fn blob_id(&self) -> &BlobId {
         self.blob.blob_id()
     }
-
-    // This was created for debugging/testing.
-    pub(crate) async fn set_local_branch(&self, local_branch: Branch) {
-        self.write_context.set_local_branch(local_branch).await
-    }
 }
 
 #[cfg(test)]
@@ -123,7 +118,7 @@ mod test {
 
         // Write to the file by branch 1
         let mut file1 = branch0
-            .open_root(branch0.clone())
+            .open_root(branch1.clone())
             .await
             .unwrap()
             .lookup_version("dog.jpg", branch0.id())
@@ -133,8 +128,6 @@ mod test {
             .open()
             .await
             .unwrap();
-
-        file1.set_local_branch(branch1.clone()).await;
 
         file1.write(b"large").await.unwrap();
         file1.flush().await.unwrap();
