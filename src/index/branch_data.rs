@@ -15,7 +15,7 @@ use crate::{
     replica_id::ReplicaId,
 };
 use std::{mem, sync::Arc};
-use tokio::sync::{watch, Mutex};
+use tokio::sync::{watch, Mutex, MutexGuard};
 
 type LocatorHash = Hash;
 
@@ -57,6 +57,11 @@ impl BranchData {
     /// Returns the id of the replica that owns this branch.
     pub fn id(&self) -> &ReplicaId {
         &self.shared.replica_id
+    }
+
+    /// Expose the RootNode
+    pub async fn lock_root(&self) -> MutexGuard<'_, RootNode> {
+        self.shared.root_node.lock().await
     }
 
     /// Inserts a new block into the index. Returns the previous id at the same locator, if any.

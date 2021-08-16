@@ -48,7 +48,7 @@ impl Branch {
         Directory::open(
             self.clone(),
             Locator::Root,
-            WriteContext::new("/".into(), local_branch),
+            WriteContext::new_for_root(local_branch),
         )
         .await
     }
@@ -76,7 +76,7 @@ impl Branch {
                     let next = if let Ok(entry) = last.lookup_version(name, self.id()) {
                         entry.directory()?.open().await?
                     } else {
-                        last.create_directory(name.to_string())?
+                        last.create_directory(name.to_string()).await?
                     };
 
                     dirs.push(next);
@@ -93,7 +93,11 @@ impl Branch {
     pub async fn ensure_file_exists(&self, path: &Utf8Path) -> Result<(File, Vec<Directory>)> {
         let (parent, name) = path::decompose(path).ok_or(Error::EntryIsDirectory)?;
         let mut dirs = self.ensure_directory_exists(parent).await?;
-        let file = dirs.last_mut().unwrap().create_file(name.to_string())?;
+        let file = dirs
+            .last_mut()
+            .unwrap()
+            .create_file(name.to_string())
+            .await?;
         Ok((file, dirs))
     }
 }
