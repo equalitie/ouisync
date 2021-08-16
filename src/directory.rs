@@ -218,6 +218,11 @@ impl Directory {
     pub fn branch(&self) -> &Branch {
         self.blob.branch()
     }
+
+    // This was created for debugging/testing.
+    pub(crate) async fn set_local_branch(&self, local_branch: Branch) {
+        self.write_context.set_local_branch(local_branch).await
+    }
 }
 
 /// Info about a directory entry.
@@ -634,66 +639,74 @@ mod tests {
         }
     }
 
-    //#[tokio::test(flavor = "multi_thread")]
-    //async fn fork() {
-    //    let branch0 = setup().await;
-    //    let branch1 = create_branch(branch0.db_pool().clone()).await;
+    #[tokio::test(flavor = "multi_thread")]
+    async fn fork() {
+        let branch0 = setup().await;
+        let branch1 = create_branch(branch0.db_pool().clone()).await;
 
-    //    // Create a nested directory by branch 0
-    //    let mut root0 = Directory::create_root(branch0.clone());
-    //    root0.flush().await.unwrap();
+        // Create a nested directory by branch 0
+        let mut root0 = Directory::create_root(branch0.clone());
+        root0.flush().await.unwrap();
 
-    //    let mut dir0 = root0.create_directory("dir".into()).await.unwrap();
-    //    dir0.flush().await.unwrap();
-    //    root0.flush().await.unwrap();
+        let mut dir0 = root0.create_directory("dir".into()).await.unwrap();
+        dir0.flush().await.unwrap();
+        root0.flush().await.unwrap();
 
-    //    // Open it by branch 1 and modify it
-    //    let mut dir1 = Directory::open(
-    //        branch0.clone(),
-    //        *dir0.locator(),
-    //        WriteContext::new("/dir".into(), branch1.clone()),
-    //    )
-    //    .await
-    //    .unwrap();
+        // Open it by branch 1 and modify it
+        let mut dir1 = branch0
+            .open_root(branch0.clone())
+            .await
+            .unwrap()
+            .lookup_version("dir", branch0.id())
+            .unwrap()
+            .directory()
+            .unwrap()
+            .open()
+            .await
+            .unwrap();
 
-    //    dir1.create_file("dog.jpg".into()).await.unwrap();
-    //    dir1.flush().await.unwrap();
+        dir1.set_local_branch(branch1.clone()).await;
+        dir1.create_file("dog.jpg".into()).await.unwrap();
+        dir1.flush().await.unwrap();
 
-    //    assert_eq!(dir1.branch().id(), branch1.id());
+        assert_eq!(dir1.branch().id(), branch1.id());
 
-    //    // Reopen orig dir and verify it's unchanged
-    //    let dir = Directory::open(
-    //        branch0.clone(),
-    //        *dir0.locator(),
-    //        WriteContext::new("/dir".into(), branch0),
-    //    )
-    //    .await
-    //    .unwrap();
-    //    assert_eq!(dir.entries().count(), 0);
+        // Reopen orig dir and verify it's unchanged
+        let dir = branch0
+            .open_root(branch0.clone())
+            .await
+            .unwrap()
+            .lookup_version("dir", branch0.id())
+            .unwrap()
+            .directory()
+            .unwrap()
+            .open()
+            .await
+            .unwrap();
 
-    //    // Reopen forked dir and verify it contains the new file
-    //    let dir = Directory::open(
-    //        branch1.clone(),
-    //        *dir1.locator(),
-    //        WriteContext::new("/dir".into(), branch1.clone()),
-    //    )
-    //    .await
-    //    .unwrap();
+        assert_eq!(dir.entries().count(), 0);
 
-    //    assert_eq!(
-    //        dir.entries().map(|entry| entry.name()).next(),
-    //        Some("dog.jpg")
-    //    );
+        // Reopen forked dir and verify it contains the new file
+        let dir = branch1
+            .open_root(branch1.clone())
+            .await
+            .unwrap()
+            .lookup_version("dir", branch1.id())
+            .unwrap()
+            .directory()
+            .unwrap()
+            .open()
+            .await
+            .unwrap();
 
-    //    // Verify the root dir got forked as well
-    //    Directory::open(
-    //        branch1.clone(),
-    //        Locator::Root,
-    //        WriteContext::new("/".into(), branch1),
-    //    )
-    //    .await
-    //    .unwrap();
-    //}
+        assert_eq!(
+            dir.entries().map(|entry| entry.name()).next(),
+            Some("dog.jpg")
+        );
+
+        // Verify the root dir got forked as well
+        branch1.open_root(branch1.clone()).await.unwrap();
+    }
 
     async fn setup() -> Branch {
         let pool = db::init(db::Store::Memory).await.unwrap();
