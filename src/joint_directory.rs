@@ -14,17 +14,18 @@ use std::{
     borrow::Cow,
     collections::{btree_map::Entry, BTreeMap},
     fmt, iter, mem,
+    sync::Arc,
 };
 
 /// Unified view over multiple concurrent versions of a directory.
 pub struct JointDirectory {
-    versions: BTreeMap<ReplicaId, Directory>,
+    versions: BTreeMap<ReplicaId, Arc<Directory>>,
 }
 
 impl JointDirectory {
     pub async fn new<I>(versions: I) -> Self
     where
-        I: IntoIterator<Item = Directory>,
+        I: IntoIterator<Item = Arc<Directory>>,
     {
         let versions = future::join_all(versions.into_iter().map(|dir| async move {
             let branch_id = *dir.read().await.branch().id();
@@ -417,7 +418,7 @@ mod tests {
     async fn no_conflict() {
         let branches = setup(2).await;
 
-        let root0 = Directory::create_root(branches[0].clone());
+        let root0 = branches[0].open_or_create_root().await.unwrap();
         root0
             .create_file("file0.txt".to_owned())
             .await
@@ -427,7 +428,7 @@ mod tests {
             .unwrap();
         root0.flush().await.unwrap();
 
-        let root1 = Directory::create_root(branches[1].clone());
+        let root1 = branches[1].open_or_create_root().await.unwrap();
         root1
             .create_file("file1.txt".to_owned())
             .await
@@ -459,7 +460,7 @@ mod tests {
     async fn conflict_independent_files() {
         let branches = setup(2).await;
 
-        let root0 = Directory::create_root(branches[0].clone());
+        let root0 = branches[0].open_or_create_root().await.unwrap();
         root0
             .create_file("file.txt".to_owned())
             .await
@@ -469,7 +470,7 @@ mod tests {
             .unwrap();
         root0.flush().await.unwrap();
 
-        let root1 = Directory::create_root(branches[1].clone());
+        let root1 = branches[1].open_or_create_root().await.unwrap();
         root1
             .create_file("file.txt".to_owned())
             .await
@@ -572,13 +573,13 @@ mod tests {
     async fn conflict_directories() {
         let branches = setup(2).await;
 
-        let root0 = Directory::create_root(branches[0].clone());
+        let root0 = branches[0].open_or_create_root().await.unwrap();
 
         let dir0 = root0.create_directory("dir".to_owned()).await.unwrap();
         dir0.flush().await.unwrap();
         root0.flush().await.unwrap();
 
-        let root1 = Directory::create_root(branches[1].clone());
+        let root1 = branches[1].open_or_create_root().await.unwrap();
 
         let dir1 = root1.create_directory("dir".to_owned()).await.unwrap();
         dir1.flush().await.unwrap();
@@ -599,13 +600,13 @@ mod tests {
     async fn conflict_file_and_directory() {
         let branches = setup(2).await;
 
-        let root0 = Directory::create_root(branches[0].clone());
+        let root0 = branches[0].open_or_create_root().await.unwrap();
 
         let mut file0 = root0.create_file("config".to_owned()).await.unwrap();
         file0.flush().await.unwrap();
         root0.flush().await.unwrap();
 
-        let root1 = Directory::create_root(branches[1].clone());
+        let root1 = branches[1].open_or_create_root().await.unwrap();
 
         let dir1 = root1.create_directory("config".to_owned()).await.unwrap();
         dir1.flush().await.unwrap();
@@ -648,7 +649,7 @@ mod tests {
     async fn cd_into_concurrent_directory() {
         let branches = setup(2).await;
 
-        let root0 = Directory::create_root(branches[0].clone());
+        let root0 = branches[0].open_or_create_root().await.unwrap();
 
         let dir0 = root0.create_directory("pics".to_owned()).await.unwrap();
         let mut file0 = dir0.create_file("dog.jpg".to_owned()).await.unwrap();
@@ -657,7 +658,7 @@ mod tests {
         dir0.flush().await.unwrap();
         root0.flush().await.unwrap();
 
-        let root1 = Directory::create_root(branches[1].clone());
+        let root1 = branches[1].open_or_create_root().await.unwrap();
 
         let dir1 = root1.create_directory("pics".to_owned()).await.unwrap();
         let mut file1 = dir1.create_file("cat.jpg".to_owned()).await.unwrap();
@@ -680,7 +681,7 @@ mod tests {
     async fn create_directory_with_existing_versions() {
         let branches = setup(2).await;
 
-        let root0 = Directory::create_root(branches[0].clone());
+        let root0 = branches[0].open_or_create_root().await.unwrap();
 
         let dir0 = root0.create_directory("pics".to_owned()).await.unwrap();
         let mut file0 = dir0.create_file("dog.jpg".to_owned()).await.unwrap();
@@ -689,7 +690,7 @@ mod tests {
         dir0.flush().await.unwrap();
         root0.flush().await.unwrap();
 
-        let root1 = Directory::create_root(branches[1].clone());
+        let root1 = branches[1].open_or_create_root().await.unwrap();
 
         let root = JointDirectory::new(vec![root0, root1]).await;
 
@@ -708,7 +709,7 @@ mod tests {
     async fn create_directory_without_existing_versions() {
         let branches = setup(1).await;
 
-        let root0 = Directory::create_root(branches[0].clone());
+        let root0 = branches[0].open_or_create_root().await.unwrap();
 
         let root = JointDirectory::new(vec![root0]).await;
 
@@ -724,7 +725,7 @@ mod tests {
     async fn attempt_to_create_directory_whose_local_version_already_exists() {
         let branches = setup(2).await;
 
-        let root0 = Directory::create_root(branches[0].clone());
+        let root0 = branches[0].open_or_create_root().await.unwrap();
 
         let dir0 = root0.create_directory("pics".to_owned()).await.unwrap();
 

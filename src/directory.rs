@@ -12,11 +12,11 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{btree_map, BTreeMap},
+    collections::{btree_map, BTreeMap, HashMap},
     fmt,
-    sync::Arc,
+    sync::{Arc, Weak},
 };
-use tokio::sync::{RwLock, RwLockReadGuard};
+use tokio::sync::{Mutex, RwLock, RwLockReadGuard};
 
 pub struct Directory {
     inner: RwLock<Inner>,
@@ -39,6 +39,7 @@ impl Directory {
                 blob,
                 content,
                 write_context,
+                open_directories: Mutex::new(HashMap::new()),
             }),
         })
     }
@@ -52,6 +53,7 @@ impl Directory {
                 blob,
                 content: Content::new(),
                 write_context: WriteContext::new_for_root(branch),
+                open_directories: Mutex::new(HashMap::new()),
             }),
         }
     }
@@ -83,7 +85,7 @@ impl Directory {
     }
 
     /// Creates a new subdirectory of this directory.
-    pub async fn create_directory(&self, name: String) -> Result<Self> {
+    pub async fn create_directory(&self, name: String) -> Result<Arc<Self>> {
         self.inner.write().await.create_directory(name).await
     }
 
@@ -95,7 +97,10 @@ impl Directory {
         entry_type: EntryType,
         version_vector: VersionVector,
     ) -> Result<Arc<EntryData>> {
-        self.inner.write().await.insert_entry(name, entry_type, version_vector)
+        self.inner
+            .write()
+            .await
+            .insert_entry(name, entry_type, version_vector)
     }
 
     pub async fn remove_file(&self, name: &str) -> Result<()> {
@@ -123,14 +128,16 @@ impl Directory {
     }
 
     /// Removes this directory if its empty, otherwise fails.
-    pub async fn remove(self) -> Result<()> {
-        let inner = self.inner.into_inner();
+    pub async fn remove(self: Arc<Self>) -> Result<()> {
+        todo!()
 
-        if !inner.content.entries.is_empty() {
-            return Err(Error::DirectoryNotEmpty);
-        }
+        // let inner = self.inner.into_inner();
 
-        inner.blob.remove().await
+        // if !inner.content.entries.is_empty() {
+        //     return Err(Error::DirectoryNotEmpty);
+        // }
+
+        // inner.blob.remove().await
     }
 }
 
@@ -141,6 +148,9 @@ pub struct Inner {
     blob: Blob,
     content: Content,
     write_context: Arc<WriteContext>,
+    // Cache of open subdirectories. Used to make sure that multiple instances of the same directory
+    // all share the same internal state.
+    open_directories: Mutex<HashMap<BlobId, Weak<Directory>>>,
 }
 
 impl Inner {
@@ -243,20 +253,23 @@ impl Inner {
         ))
     }
 
-    async fn create_directory(&mut self, name: String) -> Result<Directory> {
+    async fn create_directory(&mut self, name: String) -> Result<Arc<Directory>> {
         let vv = VersionVector::first(*self.local_branch_id());
         let entry = self.insert_entry(name.clone(), EntryType::Directory, vv)?;
         let locator = entry.locator();
         let write_context = self.write_context.child(name, entry).await;
         let blob = Blob::create(self.blob.branch().clone(), locator);
 
-        Ok(Directory {
+        let directory = Directory {
             inner: RwLock::new(Self {
                 blob,
                 content: Content::new(),
                 write_context,
+                open_directories: Mutex::new(HashMap::new()),
             }),
-        })
+        };
+
+        Ok(Arc::new(directory))
     }
 
     fn insert_entry(
@@ -399,13 +412,15 @@ impl<'a> DirectoryRef<'a> {
         Locator::Head(self.inner.parent_entry.blob_id)
     }
 
-    pub async fn open(&self) -> Result<Directory> {
-        Directory::open(
+    pub async fn open(&self) -> Result<Arc<Directory>> {
+        let directory = Directory::open(
             self.inner.parent.blob.branch().clone(),
             self.locator(),
             self.inner.write_context().await,
         )
-        .await
+        .await?;
+
+        Ok(Arc::new(directory))
     }
 }
 
@@ -747,6 +762,47 @@ mod tests {
 
         // Verify the root dir got forked as well
         branch1.open_root(branch1.clone()).await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn modify_directory_concurrently() {
+        let branch = setup().await;
+        let root = branch.open_or_create_root().await.unwrap();
+
+        // Obtain two instances of the same directory, create a new file in one of them and verify
+        // the file immediately exists in the other one as well.
+
+        let dir0 = root.create_directory("dir".to_owned()).await.unwrap();
+        let dir1 = root
+            .read()
+            .await
+            .lookup("dir")
+            .unwrap()
+            .next()
+            .unwrap()
+            .directory()
+            .unwrap()
+            .open()
+            .await
+            .unwrap();
+
+        let mut file0 = dir0.create_file("file.txt".to_owned()).await.unwrap();
+        file0.write(b"hello").await.unwrap();
+        file0.flush().await.unwrap();
+
+        let mut file1 = dir1
+            .read()
+            .await
+            .lookup("file.txt")
+            .unwrap()
+            .next()
+            .unwrap()
+            .file()
+            .unwrap()
+            .open()
+            .await
+            .unwrap();
+        assert_eq!(file1.read_to_end().await.unwrap(), b"hello");
     }
 
     async fn setup() -> Branch {

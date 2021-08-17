@@ -45,19 +45,21 @@ impl Branch {
         &self.cryptor
     }
 
-    pub async fn open_root(&self, local_branch: Branch) -> Result<Directory> {
-        Directory::open(
+    pub async fn open_root(&self, local_branch: Branch) -> Result<Arc<Directory>> {
+        let directory = Directory::open(
             self.clone(),
             Locator::Root,
             WriteContext::new_for_root(local_branch),
         )
-        .await
+        .await?;
+
+        Ok(Arc::new(directory))
     }
 
-    pub async fn open_or_create_root(&self) -> Result<Directory> {
+    pub async fn open_or_create_root(&self) -> Result<Arc<Directory>> {
         match self.open_root(self.clone()).await {
             Ok(dir) => Ok(dir),
-            Err(Error::EntryNotFound) => Ok(Directory::create_root(self.clone())),
+            Err(Error::EntryNotFound) => Ok(Arc::new(Directory::create_root(self.clone()))),
             Err(error) => Err(error),
         }
     }
@@ -65,7 +67,7 @@ impl Branch {
     /// Ensures that the directory at the specified path exists including all its ancestors.
     /// Note: non-normalized paths (i.e. containing "..") or Windows-style drive prefixes
     /// (e.g. "C:") are not supported.
-    pub async fn ensure_directory_exists(&self, path: &Utf8Path) -> Result<Vec<Directory>> {
+    pub async fn ensure_directory_exists(&self, path: &Utf8Path) -> Result<Vec<Arc<Directory>>> {
         let mut dirs = vec![self.open_or_create_root().await?];
 
         for component in path.components() {
@@ -92,7 +94,7 @@ impl Branch {
         Ok(dirs)
     }
 
-    pub async fn ensure_file_exists(&self, path: &Utf8Path) -> Result<(File, Vec<Directory>)> {
+    pub async fn ensure_file_exists(&self, path: &Utf8Path) -> Result<(File, Vec<Arc<Directory>>)> {
         let (parent, name) = path::decompose(path).ok_or(Error::EntryIsDirectory)?;
         let mut dirs = self.ensure_directory_exists(parent).await?;
         let file = dirs
