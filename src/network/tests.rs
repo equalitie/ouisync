@@ -185,7 +185,7 @@ async fn wait_until_block_exists(index: &Index, block_id: &BlockId) {
 }
 
 async fn create_block(rng: &mut impl Rng, index: &Index) {
-    let branch = index.local_branch().await;
+    let branch = index.branches().await.local().clone();
     let encoded_locator = rng.gen::<u64>().hash();
     let block_id = rng.gen();
     let content = vec![0; BLOCK_SIZE];

@@ -132,12 +132,16 @@ impl Repository {
 
     /// Returns the local branch
     pub async fn local_branch(&self) -> Branch {
-        self.inflate(self.index.local_branch().await)
+        self.inflate(self.index.branches().await.local().clone())
     }
 
     /// Return the branch with the specified id.
     pub async fn branch(&self, id: &ReplicaId) -> Option<Branch> {
-        self.index.branch(id).await.map(|data| self.inflate(data))
+        self.index
+            .branches()
+            .await
+            .get(id)
+            .map(|data| self.inflate(data.clone()))
     }
 
     /// Returns all branches
@@ -145,8 +149,8 @@ impl Repository {
         self.index
             .branches()
             .await
-            .into_iter()
-            .map(|data| self.inflate(data))
+            .all()
+            .map(|data| self.inflate(data.clone()))
             .collect()
     }
 

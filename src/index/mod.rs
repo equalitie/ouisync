@@ -27,7 +27,7 @@ use std::{
     iter,
     sync::Arc,
 };
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, RwLockReadGuard};
 
 type SnapshotId = u32;
 
@@ -52,22 +52,12 @@ impl Index {
         })
     }
 
-    pub(crate) async fn local_branch(&self) -> Arc<BranchData> {
-        self.branches.read().await.local.clone()
-    }
-
     pub fn this_replica_id(&self) -> &ReplicaId {
         &self.this_replica_id
     }
 
-    pub async fn branch(&self, replica_id: &ReplicaId) -> Option<Arc<BranchData>> {
-        let branches = self.branches.read().await;
-
-        if replica_id == &self.this_replica_id {
-            Some(branches.local.clone())
-        } else {
-            branches.remote.get(replica_id).cloned()
-        }
+    pub async fn branches(&self) -> RwLockReadGuard<'_, Branches> {
+        self.branches.read().await
     }
 
     /// Notify all tasks waiting for changes on the specified branches.
@@ -235,23 +225,17 @@ impl Index {
             .present()
             .filter(move |node| local_nodes.is_missing(node.locator())))
     }
-
-    pub async fn branch_ids(&self) -> HashSet<ReplicaId> {
-        self.branches.read().await.ids().copied().collect()
-    }
-
-    pub async fn branches(&self) -> Vec<Arc<BranchData>> {
-        self.branches.read().await.values().cloned().collect()
-    }
 }
 
-struct Branches {
+/// Container for all known branches (local and remote)
+pub struct Branches {
     local: Arc<BranchData>,
     remote: HashMap<ReplicaId, Arc<BranchData>>,
 }
 
 impl Branches {
-    fn get(&self, replica_id: &ReplicaId) -> Option<&Arc<BranchData>> {
+    /// Returns a branch with the given id, if it exists.
+    pub fn get(&self, replica_id: &ReplicaId) -> Option<&Arc<BranchData>> {
         if self.local.id() == replica_id {
             Some(&self.local)
         } else {
@@ -259,12 +243,19 @@ impl Branches {
         }
     }
 
-    fn ids(&self) -> impl Iterator<Item = &ReplicaId> {
+    /// Returns an iterator over the ids of all branches in this container.
+    pub fn ids(&self) -> impl Iterator<Item = &ReplicaId> {
         iter::once(self.local.id()).chain(self.remote.keys())
     }
 
-    fn values(&self) -> impl Iterator<Item = &Arc<BranchData>> {
+    /// Returns an iterator over all branches in this container.
+    pub fn all(&self) -> impl Iterator<Item = &Arc<BranchData>> {
         iter::once(&self.local).chain(self.remote.values())
+    }
+
+    /// Returns the local branch.
+    pub fn local(&self) -> &Arc<BranchData> {
+        &self.local
     }
 }
 

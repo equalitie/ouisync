@@ -102,7 +102,7 @@ mod tests {
         let pool = db::init(db::Store::Memory).await.unwrap();
         let replica_id = rand::random();
         let index = Index::load(pool.clone(), replica_id).await.unwrap();
-        let branch = Branch::new(pool, index.local_branch().await, Cryptor::Null);
+        let branch = Branch::new(pool, index.branches().await.local().clone(), Cryptor::Null);
 
         let dirs = branch.ensure_directory_exists("/".into()).await.unwrap();
         assert_eq!(dirs.len(), 1);
