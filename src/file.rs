@@ -176,6 +176,6 @@ mod test {
 
     async fn create_branch(pool: db::Pool) -> Branch {
         let branch_data = BranchData::new(&pool, rand::random()).await.unwrap();
-        Branch::new(pool, branch_data, Cryptor::Null)
+        Branch::new(pool, Arc::new(branch_data), Cryptor::Null)
     }
 }

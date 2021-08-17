@@ -406,6 +406,8 @@ impl<'a> Iterator for Merge<'a> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use crate::{branch::Branch, crypto::Cryptor, db, directory::Directory, index::BranchData};
     use assert_matches::assert_matches;
@@ -742,7 +744,7 @@ mod tests {
 
         future::join_all((0..branch_count).map(|_| async {
             let data = BranchData::new(&pool, rand::random()).await.unwrap();
-            Branch::new(pool.clone(), data, Cryptor::Null)
+            Branch::new(pool.clone(), Arc::new(data), Cryptor::Null)
         }))
         .await
     }

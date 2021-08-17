@@ -101,8 +101,7 @@ impl WriteContext {
             Locator::Root
         };
 
-        blob.fork(inner.local_branch.data().clone(), dst_locator)
-            .await
+        blob.fork(inner.local_branch.clone(), dst_locator).await
     }
 
     /// Commit writing to the blob started by a previous call to `begin`. Does nothing if `begin`

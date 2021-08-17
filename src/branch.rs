@@ -11,16 +11,17 @@ use crate::{
     ReplicaId,
 };
 use camino::{Utf8Component, Utf8Path};
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct Branch {
     pool: db::Pool,
-    branch_data: BranchData,
+    branch_data: Arc<BranchData>,
     cryptor: Cryptor,
 }
 
 impl Branch {
-    pub fn new(pool: db::Pool, branch_data: BranchData, cryptor: Cryptor) -> Self {
+    pub fn new(pool: db::Pool, branch_data: Arc<BranchData>, cryptor: Cryptor) -> Self {
         Self {
             pool,
             branch_data,

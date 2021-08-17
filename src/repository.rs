@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::{
     branch::Branch,
     crypto::Cryptor,
@@ -145,7 +147,7 @@ impl Repository {
             .collect()
     }
 
-    fn inflate(&self, data: BranchData) -> Branch {
+    fn inflate(&self, data: Arc<BranchData>) -> Branch {
         Branch::new(self.index.pool.clone(), data, self.cryptor.clone())
     }
 

@@ -40,7 +40,7 @@ pub struct Index {
 
 impl Index {
     pub async fn load(pool: db::Pool, this_replica_id: ReplicaId) -> Result<Self> {
-        let local = BranchData::new(&pool, this_replica_id).await?;
+        let local = Arc::new(BranchData::new(&pool, this_replica_id).await?);
         let remote = load_remote_branches(&pool, &this_replica_id).await?;
 
         let branches = Branches { local, remote };
@@ -52,7 +52,7 @@ impl Index {
         })
     }
 
-    pub(crate) async fn local_branch(&self) -> BranchData {
+    pub(crate) async fn local_branch(&self) -> Arc<BranchData> {
         self.branches.lock().await.local.clone()
     }
 
@@ -60,7 +60,7 @@ impl Index {
         &self.this_replica_id
     }
 
-    pub async fn branch(&self, replica_id: &ReplicaId) -> Option<BranchData> {
+    pub async fn branch(&self, replica_id: &ReplicaId) -> Option<Arc<BranchData>> {
         let branches = self.branches.lock().await;
 
         if replica_id == &self.this_replica_id {
@@ -122,7 +122,7 @@ impl Index {
         let mut branches = self.branches.lock().await;
         match branches.remote.entry(*replica_id) {
             Entry::Vacant(entry) => {
-                entry.insert(BranchData::with_root_node(*replica_id, node));
+                entry.insert(Arc::new(BranchData::with_root_node(*replica_id, node)));
             }
             Entry::Occupied(entry) => entry.get().update_root(node).await,
         }
@@ -240,18 +240,18 @@ impl Index {
         self.branches.lock().await.ids().copied().collect()
     }
 
-    pub async fn branches(&self) -> Vec<BranchData> {
+    pub async fn branches(&self) -> Vec<Arc<BranchData>> {
         self.branches.lock().await.values().cloned().collect()
     }
 }
 
 struct Branches {
-    local: BranchData,
-    remote: HashMap<ReplicaId, BranchData>,
+    local: Arc<BranchData>,
+    remote: HashMap<ReplicaId, Arc<BranchData>>,
 }
 
 impl Branches {
-    fn get(&self, replica_id: &ReplicaId) -> Option<&BranchData> {
+    fn get(&self, replica_id: &ReplicaId) -> Option<&Arc<BranchData>> {
         if self.local.id() == replica_id {
             Some(&self.local)
         } else {
@@ -263,7 +263,7 @@ impl Branches {
         iter::once(self.local.id()).chain(self.remote.keys())
     }
 
-    fn values(&self) -> impl Iterator<Item = &BranchData> {
+    fn values(&self) -> impl Iterator<Item = &Arc<BranchData>> {
         iter::once(&self.local).chain(self.remote.values())
     }
 }
@@ -285,12 +285,12 @@ async fn load_other_replica_ids(
 async fn load_remote_branches(
     pool: &db::Pool,
     this_replica_id: &ReplicaId,
-) -> Result<HashMap<ReplicaId, BranchData>> {
+) -> Result<HashMap<ReplicaId, Arc<BranchData>>> {
     let ids = load_other_replica_ids(pool, this_replica_id).await?;
     let mut map = HashMap::new();
 
     for id in ids {
-        let branch = BranchData::new(pool, id).await?;
+        let branch = Arc::new(BranchData::new(pool, id).await?);
         map.insert(id, branch);
     }
 

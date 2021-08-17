@@ -333,7 +333,7 @@ impl Blob {
 
     /// Creates a shallow copy (only the index nodes are copied, not blocks) of this blob into the
     /// specified destination branch and locator.
-    pub async fn fork(&mut self, dst_branch: BranchData, dst_head_locator: Locator) -> Result<()> {
+    pub async fn fork(&mut self, dst_branch: Branch, dst_head_locator: Locator) -> Result<()> {
         if self.branch.id() == dst_branch.id() && self.locator == dst_head_locator {
             // This blob is already in the dst, nothing to do.
             return Ok(());
@@ -351,6 +351,7 @@ impl Blob {
                 .get(&mut tx, &encoded_src_locator)
                 .await?;
             dst_branch
+                .data()
                 .insert(&mut tx, &block_id, &encoded_dst_locator)
                 .await?;
         }
@@ -360,7 +361,7 @@ impl Blob {
         // TODO: the following lines must happen atomically (either all succeed or none). There is
         // currently no reason why they wouldn't, but to be super extra sure, consider wrapping
         // them in `catch_unwind`.
-        self.branch = Branch::new(self.db_pool().clone(), dst_branch, self.cryptor().clone());
+        self.branch = dst_branch;
         self.locator = dst_head_locator;
         self.current_block.locator = self.locator_at(self.current_block.locator.number());
 
