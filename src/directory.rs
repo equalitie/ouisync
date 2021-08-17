@@ -214,11 +214,6 @@ impl Directory {
     pub fn branch(&self) -> &Branch {
         self.blob.branch()
     }
-
-    // This was created for debugging/testing.
-    pub(crate) async fn set_local_branch(&self, local_branch: Branch) {
-        self.write_context.set_local_branch(local_branch).await
-    }
 }
 
 /// Info about a directory entry.
@@ -650,7 +645,7 @@ mod tests {
 
         // Open it by branch 1 and modify it
         let mut dir1 = branch0
-            .open_root(branch0.clone())
+            .open_root(branch1.clone())
             .await
             .unwrap()
             .lookup_version("dir", branch0.id())
@@ -661,7 +656,6 @@ mod tests {
             .await
             .unwrap();
 
-        dir1.set_local_branch(branch1.clone()).await;
         dir1.create_file("dog.jpg".into()).await.unwrap();
         dir1.flush().await.unwrap();
 
