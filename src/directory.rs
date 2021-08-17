@@ -12,7 +12,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{btree_map, BTreeMap, HashMap},
+    collections::{btree_map, hash_map, BTreeMap, HashMap},
     fmt,
     sync::{Arc, Weak},
 };
@@ -36,19 +36,16 @@ impl Directory {
         ))
     }
 
-    /// Creates the root directory.
-    pub(crate) fn create_root(branch: Branch) -> Arc<Self> {
-        let blob = Blob::create(branch.clone(), Locator::Root);
-        let directory = Self {
-            inner: RwLock::new(Inner {
-                blob,
-                content: Content::new(),
-                write_context: WriteContext::new_for_root(branch),
-                open_directories: Mutex::new(HashMap::new()),
-            }),
-        };
-
-        Arc::new(directory)
+    /// Opens the root directory or creates it if it doesn't exist.
+    pub(crate) async fn open_or_create_root(branch: Branch) -> Result<Arc<Self>> {
+        Ok(Arc::new(
+            Self::open_or_create(
+                branch.clone(),
+                Locator::Root,
+                WriteContext::new_for_root(branch),
+            )
+            .await?,
+        ))
     }
 
     /// Lock this directory for reading.
@@ -145,9 +142,36 @@ impl Directory {
                 blob,
                 content,
                 write_context,
-                open_directories: Mutex::new(HashMap::new()),
+                open_directories: Cache::new(),
             }),
         })
+    }
+
+    fn create(branch: Branch, locator: Locator, write_context: Arc<WriteContext>) -> Self {
+        let blob = Blob::create(branch, locator);
+
+        Directory {
+            inner: RwLock::new(Inner {
+                blob,
+                content: Content::new(),
+                write_context,
+                open_directories: Cache::new(),
+            }),
+        }
+    }
+
+    async fn open_or_create(
+        branch: Branch,
+        locator: Locator,
+        write_context: Arc<WriteContext>,
+    ) -> Result<Self> {
+        // TODO: make sure this is atomic
+
+        match Self::open(branch.clone(), locator, write_context.clone()).await {
+            Ok(dir) => Ok(dir),
+            Err(Error::EntryNotFound) => Ok(Self::create(branch, locator, write_context)),
+            Err(error) => Err(error),
+        }
     }
 }
 
@@ -160,7 +184,7 @@ pub struct Inner {
     write_context: Arc<WriteContext>,
     // Cache of open subdirectories. Used to make sure that multiple instances of the same directory
     // all share the same internal state.
-    open_directories: Mutex<HashMap<BlobId, Weak<Directory>>>,
+    open_directories: Cache,
 }
 
 impl Inner {
@@ -268,18 +292,10 @@ impl Inner {
         let entry = self.insert_entry(name.clone(), EntryType::Directory, vv)?;
         let locator = entry.locator();
         let write_context = self.write_context.child(name, entry).await;
-        let blob = Blob::create(self.blob.branch().clone(), locator);
 
-        let directory = Directory {
-            inner: RwLock::new(Self {
-                blob,
-                content: Content::new(),
-                write_context,
-                open_directories: Mutex::new(HashMap::new()),
-            }),
-        };
-
-        Ok(Arc::new(directory))
+        self.open_directories
+            .create(self.blob.branch().clone(), locator, write_context)
+            .await
     }
 
     fn insert_entry(
@@ -423,14 +439,15 @@ impl<'a> DirectoryRef<'a> {
     }
 
     pub async fn open(&self) -> Result<Arc<Directory>> {
-        let directory = Directory::open(
-            self.inner.parent.blob.branch().clone(),
-            self.locator(),
-            self.inner.write_context().await,
-        )
-        .await?;
-
-        Ok(Arc::new(directory))
+        self.inner
+            .parent
+            .open_directories
+            .open(
+                self.inner.parent.blob.branch().clone(),
+                self.locator(),
+                self.inner.write_context().await,
+            )
+            .await
     }
 }
 
@@ -548,6 +565,103 @@ impl EntryData {
 
     pub fn version_vector(&self) -> &VersionVector {
         &self.version_vector
+    }
+}
+
+// Cache of open directories.
+struct Cache(Mutex<HashMap<Locator, Weak<Directory>>>);
+
+impl Cache {
+    fn new() -> Self {
+        Self(Mutex::new(HashMap::new()))
+    }
+
+    async fn open(
+        &self,
+        branch: Branch,
+        locator: Locator,
+        write_context: Arc<WriteContext>,
+    ) -> Result<Arc<Directory>> {
+        let mut map = self.0.lock().await;
+
+        let dir = match map.entry(locator) {
+            hash_map::Entry::Occupied(mut entry) => {
+                if let Some(dir) = entry.get().upgrade() {
+                    dir
+                } else {
+                    let dir = Directory::open(branch, locator, write_context).await?;
+                    let dir = Arc::new(dir);
+                    entry.insert(Arc::downgrade(&dir));
+                    dir
+                }
+            }
+            hash_map::Entry::Vacant(entry) => {
+                let dir = Directory::open(branch, locator, write_context).await?;
+                let dir = Arc::new(dir);
+                entry.insert(Arc::downgrade(&dir));
+                dir
+            }
+        };
+
+        // Cleanup dead entries.
+        map.retain(|_, dir| dir.upgrade().is_some());
+
+        Ok(dir)
+    }
+
+    async fn create(
+        &self,
+        branch: Branch,
+        locator: Locator,
+        write_context: Arc<WriteContext>,
+    ) -> Result<Arc<Directory>> {
+        let mut map = self.0.lock().await;
+
+        let dir = match map.entry(locator) {
+            hash_map::Entry::Occupied(_) => return Err(Error::EntryExists),
+            hash_map::Entry::Vacant(entry) => {
+                let dir = Directory::create(branch, locator, write_context);
+                let dir = Arc::new(dir);
+                entry.insert(Arc::downgrade(&dir));
+                dir
+            }
+        };
+
+        map.retain(|_, dir| dir.upgrade().is_some());
+
+        Ok(dir)
+    }
+
+    async fn open_or_create(
+        &self,
+        branch: Branch,
+        locator: Locator,
+        write_context: Arc<WriteContext>,
+    ) -> Result<Arc<Directory>> {
+        let mut map = self.0.lock().await;
+
+        let dir = match map.entry(locator) {
+            hash_map::Entry::Occupied(mut entry) => {
+                if let Some(dir) = entry.get().upgrade() {
+                    dir
+                } else {
+                    let dir = Directory::open_or_create(branch, locator, write_context).await?;
+                    let dir = Arc::new(dir);
+                    entry.insert(Arc::downgrade(&dir));
+                    dir
+                }
+            }
+            hash_map::Entry::Vacant(entry) => {
+                let dir = Directory::open_or_create(branch, locator, write_context).await?;
+                let dir = Arc::new(dir);
+                entry.insert(Arc::downgrade(&dir));
+                dir
+            }
+        };
+
+        map.retain(|_, dir| dir.upgrade().is_some());
+
+        Ok(dir)
     }
 }
 

@@ -11,7 +11,7 @@ use sha3::{Digest, Sha3_256};
 /// the block "location" within the filesystem. `Locator`'s purpose is to answer the question
 /// "what is the n-th block of a given blob?".
 /// `Locator` is unique only within a branch while `BlockId` is globally unique.
-#[derive(Clone, Copy, Eq, PartialEq, Debug)]
+#[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]
 pub enum Locator {
     /// Locator of the root block, that is, the head block of the root blob.
     Root,

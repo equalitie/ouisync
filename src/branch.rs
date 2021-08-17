@@ -43,15 +43,11 @@ impl Branch {
     }
 
     pub async fn open_root(&self, local_branch: Branch) -> Result<Arc<Directory>> {
-        Ok(Directory::open_root(self.clone(), local_branch).await?)
+        Directory::open_root(self.clone(), local_branch).await
     }
 
     pub async fn open_or_create_root(&self) -> Result<Arc<Directory>> {
-        match self.open_root(self.clone()).await {
-            Ok(dir) => Ok(dir),
-            Err(Error::EntryNotFound) => Ok(Directory::create_root(self.clone())),
-            Err(error) => Err(error),
-        }
+        Directory::open_or_create_root(self.clone()).await
     }
 
     /// Ensures that the directory at the specified path exists including all its ancestors.
