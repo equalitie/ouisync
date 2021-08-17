@@ -29,8 +29,6 @@ pub struct Blob {
     len_dirty: bool,
 }
 
-// TODO: figure out how to implement `flush` on `Drop`.
-
 impl Blob {
     /// Opens an existing blob.
     pub(crate) async fn open(branch: Branch, locator: Locator) -> Result<Self> {
@@ -71,18 +69,7 @@ impl Blob {
     /// Creates a new blob.
     pub fn create(branch: Branch, locator: Locator) -> Self {
         let nonce_sequence = NonceSequence::new(rand::random());
-        let mut content = Cursor::new(Buffer::new());
-
-        content.write(&nonce_sequence.prefix()[..]);
-        content.write_u64(0); // blob length
-
-        let id = rand::random();
-        let current_block = OpenBlock {
-            locator,
-            id,
-            content,
-            dirty: true,
-        };
+        let current_block = OpenBlock::new_head(locator, &nonce_sequence);
 
         Self {
             branch,
@@ -326,9 +313,14 @@ impl Blob {
     }
 
     /// Removes this blob.
-    pub async fn remove(self) -> Result<()> {
+    pub async fn remove(&mut self) -> Result<()> {
         self.remove_blocks(self.locator().sequence().take(self.block_count() as usize))
-            .await
+            .await?;
+        self.current_block = OpenBlock::new_head(self.locator, &self.nonce_sequence);
+        self.len = 0;
+        self.len_dirty = true;
+
+        Ok(())
     }
 
     /// Creates a shallow copy (only the index nodes are copied, not blocks) of this blob into the
@@ -603,6 +595,21 @@ struct OpenBlock {
     content: Cursor,
     // Was this block modified since the last time it was loaded from/saved to the store?
     dirty: bool,
+}
+
+impl OpenBlock {
+    fn new_head(locator: Locator, nonce_sequence: &NonceSequence) -> Self {
+        let mut content = Cursor::new(Buffer::new());
+        content.write(&nonce_sequence.prefix()[..]);
+        content.write_u64(0); // blob length (initially zero)
+
+        Self {
+            locator,
+            id: rand::random(),
+            content,
+            dirty: true,
+        }
+    }
 }
 
 // Buffer for keeping loaded block content and also for in-place encryption and decryption.

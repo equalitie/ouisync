@@ -118,16 +118,14 @@ impl Directory {
     }
 
     /// Removes this directory if its empty, otherwise fails.
-    pub async fn remove(self: Arc<Self>) -> Result<()> {
-        todo!()
+    pub async fn remove(&self) -> Result<()> {
+        let mut inner = self.inner.write().await;
 
-        // let inner = self.inner.into_inner();
+        if !inner.content.entries.is_empty() {
+            return Err(Error::DirectoryNotEmpty);
+        }
 
-        // if !inner.content.entries.is_empty() {
-        //     return Err(Error::DirectoryNotEmpty);
-        // }
-
-        // inner.blob.remove().await
+        inner.blob.remove().await
     }
 
     async fn open(

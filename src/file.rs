@@ -86,7 +86,7 @@ impl File {
     }
 
     /// Removes this file.
-    pub async fn remove(self) -> Result<()> {
+    pub async fn remove(&mut self) -> Result<()> {
         // TODO: consider only allowing this if file is in the local branch.
         self.blob.remove().await
     }
