@@ -41,10 +41,10 @@ impl JointEntry {
     }
 
     /// Length of the entry in bytes.
-    pub fn len(&self) -> u64 {
+    pub async fn len(&self) -> u64 {
         match self {
             Self::File(file) => file.len(),
-            Self::Directory(dir) => dir.len(),
+            Self::Directory(dir) => dir.read().await.len(),
         }
     }
 }

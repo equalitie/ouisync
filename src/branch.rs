@@ -73,7 +73,8 @@ impl Branch {
                 Utf8Component::Normal(name) => {
                     let last = dirs.last_mut().unwrap();
 
-                    let next = if let Ok(entry) = last.lookup_version(name, self.id()) {
+                    let next = if let Ok(entry) = last.read().await.lookup_version(name, self.id())
+                    {
                         entry.directory()?.open().await?
                     } else {
                         last.create_directory(name.to_string()).await?
@@ -116,6 +117,6 @@ mod tests {
 
         let dirs = branch.ensure_directory_exists("/".into()).await.unwrap();
         assert_eq!(dirs.len(), 1);
-        assert_eq!(dirs[0].locator(), &Locator::Root);
+        assert_eq!(dirs[0].read().await.locator(), &Locator::Root);
     }
 }

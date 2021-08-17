@@ -112,7 +112,7 @@ mod test {
 
         file0.write(b"small").await.unwrap();
         file0.flush().await.unwrap();
-        for mut dir in dirs {
+        for dir in dirs {
             dir.flush().await.unwrap();
         }
 
@@ -121,6 +121,8 @@ mod test {
             .open_root(branch1.clone())
             .await
             .unwrap()
+            .read()
+            .await
             .lookup_version("dog.jpg", branch0.id())
             .unwrap()
             .file()
@@ -137,6 +139,8 @@ mod test {
             .open_root(branch0.clone())
             .await
             .unwrap()
+            .read()
+            .await
             .lookup_version("dog.jpg", branch0.id())
             .unwrap()
             .file()
@@ -152,6 +156,8 @@ mod test {
             .open_root(branch1.clone())
             .await
             .unwrap()
+            .read()
+            .await
             .lookup_version("dog.jpg", branch1.id())
             .unwrap()
             .file()

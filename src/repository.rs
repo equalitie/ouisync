@@ -31,6 +31,7 @@ impl Repository {
         match path::decompose(path.as_ref()) {
             Some((parent, name)) => {
                 let parent = self.open_directory(parent).await?;
+                let parent = parent.read().await;
                 Ok(parent.lookup_unique(name)?.entry_type())
             }
             None => Ok(EntryType::Directory),
@@ -42,6 +43,8 @@ impl Repository {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
         self.open_directory(parent)
             .await?
+            .read()
+            .await
             .lookup_unique(name)?
             .file()?
             .open()
@@ -57,6 +60,8 @@ impl Repository {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
         self.open_directory(parent)
             .await?
+            .read()
+            .await
             .lookup_version(name, branch_id)?
             .open()
             .await
@@ -91,7 +96,7 @@ impl Repository {
     /// Removes (delete) the file at the given path. Returns the parent directory.
     pub async fn remove_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<JointDirectory> {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
-        let mut dir = self.open_directory(parent).await?;
+        let dir = self.open_directory(parent).await?;
         dir.remove_file(self.this_replica_id(), name).await?;
         Ok(dir)
     }
@@ -100,7 +105,7 @@ impl Repository {
     /// directory.
     pub async fn remove_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<JointDirectory> {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::OperationNotSupported)?;
-        let mut parent = self.open_directory(parent).await?;
+        let parent = self.open_directory(parent).await?;
         // TODO: Currently only removing directories from the local branch is supported. To
         // implement removing a directory from another branches we need to introduce tombstones.
         parent
@@ -168,7 +173,7 @@ impl Repository {
             dirs.push(dir);
         }
 
-        Ok(JointDirectory::new(dirs))
+        Ok(JointDirectory::new(dirs).await)
     }
 }
 
