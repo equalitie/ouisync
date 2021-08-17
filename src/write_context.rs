@@ -114,9 +114,9 @@ impl WriteContext {
         for component in self.calculate_path().components().rev() {
             match component {
                 Utf8Component::Normal(name) => {
-                    if let Some(mut dir) = dirs.next() {
-                        dir.increment_entry_version(name)?;
-                        dir.write().await?;
+                    if let Some(dir) = dirs.next() {
+                        dir.increment_entry_version(name).await?;
+                        dir.apply().await?;
                     } else {
                         break;
                     }

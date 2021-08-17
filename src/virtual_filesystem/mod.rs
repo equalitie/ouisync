@@ -172,7 +172,11 @@ impl fuser::Filesystem for VirtualFilesystem {
         offset: i64,
         mut reply: ReplyDirectory,
     ) {
-        try_request!(self.inner.readdir(inode, handle, offset, &mut reply), reply);
+        try_request!(
+            self.rt
+                .block_on(self.inner.readdir(inode, handle, offset, &mut reply)),
+            reply
+        );
         reply.ok();
     }
 
@@ -375,6 +379,7 @@ impl Inner {
 
         let parent_path = self.inodes.get(parent).calculate_path();
         let parent_dir = self.repository.open_directory(parent_path).await?;
+        let parent_dir = parent_dir.read().await;
 
         let entry = parent_dir.lookup_unique(name)?;
         let (len, repr) = match &entry {
@@ -382,9 +387,10 @@ impl Inner {
                 entry.open().await?.len(),
                 Representation::File(*entry.branch_id()),
             ),
-            JointEntryRef::Directory(entry) => {
-                (entry.open().await?.len(), Representation::Directory)
-            }
+            JointEntryRef::Directory(entry) => (
+                entry.open().await?.read().await.len(),
+                Representation::Directory,
+            ),
         };
 
         let inode = self.inodes.lookup(parent, entry.name(), name, repr);
@@ -397,7 +403,7 @@ impl Inner {
 
         let entry = self.open_entry_by_inode(self.inodes.get(inode)).await?;
 
-        Ok(make_file_attr_for_entry(&entry, inode))
+        Ok(make_file_attr_for_entry(&entry, inode).await)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -497,7 +503,7 @@ impl Inner {
         Ok(())
     }
 
-    fn readdir(
+    async fn readdir(
         &mut self,
         inode: Inode,
         handle: FileHandle,
@@ -520,6 +526,7 @@ impl Inner {
 
         let parent = self.inodes.get(inode).parent();
         let dir = self.entries.get_directory(handle)?;
+        let dir = dir.read().await;
 
         // Handle . and ..
         if offset <= 0 {
@@ -584,10 +591,10 @@ impl Inner {
         );
 
         let parent_path = self.inodes.get(parent).calculate_path();
-        let mut parent_dir = self.repository.open_directory(parent_path).await?;
+        let parent_dir = self.repository.open_directory(parent_path).await?;
 
         // TODO: Ensure parent_dir[this_replica_id] exists.
-        let mut dir = parent_dir
+        let dir = parent_dir
             .create_directory(self.this_replica_id(), name)
             .await?;
 
@@ -600,7 +607,7 @@ impl Inner {
             .lookup(parent, name, name, Representation::Directory);
         let entry = JointEntry::Directory(dir);
 
-        Ok(make_file_attr_for_entry(&entry, inode))
+        Ok(make_file_attr_for_entry(&entry, inode).await)
     }
 
     async fn rmdir(&mut self, parent: Inode, name: &OsStr) -> Result<()> {
@@ -652,7 +659,7 @@ impl Inner {
 
         file.flush().await?;
 
-        for mut dir in dirs.into_iter().rev() {
+        for dir in dirs.into_iter().rev() {
             dir.flush().await?;
         }
 
@@ -661,7 +668,7 @@ impl Inner {
         let inode = self
             .inodes
             .lookup(parent, name, name, Representation::File(branch_id));
-        let attr = make_file_attr_for_entry(&entry, inode);
+        let attr = make_file_attr_for_entry(&entry, inode).await;
         let handle = self.entries.insert(entry);
 
         Ok((attr, handle, 0))
@@ -796,7 +803,7 @@ impl Inner {
 
         log::debug!("unlink {}", self.inodes.path_display(parent, Some(name)));
 
-        let mut parent_dir = self.open_directory_by_inode(parent).await?;
+        let parent_dir = self.open_directory_by_inode(parent).await?;
         parent_dir.remove_file(self.this_replica_id(), name).await?;
         parent_dir.flush().await
     }
@@ -854,8 +861,8 @@ impl Inner {
     }
 }
 
-fn make_file_attr_for_entry(entry: &JointEntry, inode: Inode) -> FileAttr {
-    make_file_attr(inode, entry.entry_type(), entry.len())
+async fn make_file_attr_for_entry(entry: &JointEntry, inode: Inode) -> FileAttr {
+    make_file_attr(inode, entry.entry_type(), entry.len().await)
 }
 
 fn make_file_attr(inode: Inode, entry_type: EntryType, len: u64) -> FileAttr {

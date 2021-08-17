@@ -50,6 +50,8 @@ pub unsafe extern "C" fn directory_open(
         ctx.spawn(async move {
             let dir = repo.open_directory(path).await?;
             let entries = dir
+                .read()
+                .await
                 .entries()
                 .map(|entry| DirEntry {
                     // TODO: use the dismbiguated name here
