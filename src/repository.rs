@@ -156,15 +156,14 @@ impl Repository {
 
     // Opens the root directory across all branches as JointDirectory.
     async fn joint_root(&self) -> Result<JointDirectory> {
-        let mut dirs = Vec::new();
+        let branches = self.branches().await;
+        let mut dirs = Vec::with_capacity(branches.len());
 
-        let local_branch = self.local_branch().await;
-
-        for branch in self.branches().await {
+        for branch in branches {
             let dir = if branch.id() == self.this_replica_id() {
                 branch.open_or_create_root().await?
             } else {
-                match branch.open_root(local_branch.clone()).await {
+                match branch.open_root(self.local_branch().await).await {
                     Ok(dir) => dir,
                     Err(Error::EntryNotFound) => {
                         // Some branch roots may not have been loaded across the network yet. We'll
