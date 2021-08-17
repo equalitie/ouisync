@@ -5,10 +5,7 @@ use crate::{
     error::{Error, Result},
     file::File,
     index::BranchData,
-    locator::Locator,
-    path,
-    write_context::WriteContext,
-    ReplicaId,
+    path, ReplicaId,
 };
 use camino::{Utf8Component, Utf8Path};
 use std::sync::Arc;
@@ -46,14 +43,9 @@ impl Branch {
     }
 
     pub async fn open_root(&self, local_branch: Branch) -> Result<Arc<Directory>> {
-        let directory = Directory::open(
-            self.clone(),
-            Locator::Root,
-            WriteContext::new_for_root(local_branch),
-        )
-        .await?;
-
-        Ok(Arc::new(directory))
+        Ok(Arc::new(
+            Directory::open_root(self.clone(), local_branch).await?,
+        ))
     }
 
     pub async fn open_or_create_root(&self) -> Result<Arc<Directory>> {
@@ -109,7 +101,7 @@ impl Branch {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{db, index::Index};
+    use crate::{db, index::Index, locator::Locator};
 
     #[tokio::test(flavor = "multi_thread")]
     async fn ensure_root_directory_exists() {

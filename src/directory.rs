@@ -24,24 +24,14 @@ pub struct Directory {
 
 #[allow(clippy::len_without_is_empty)]
 impl Directory {
-    /// Opens existing directory.
-    pub(crate) async fn open(
-        branch: Branch,
-        locator: Locator,
-        write_context: Arc<WriteContext>,
-    ) -> Result<Self> {
-        let mut blob = Blob::open(branch, locator).await?;
-        let buffer = blob.read_to_end().await?;
-        let content = bincode::deserialize(&buffer).map_err(Error::MalformedDirectory)?;
-
-        Ok(Self {
-            inner: RwLock::new(Inner {
-                blob,
-                content,
-                write_context,
-                open_directories: Mutex::new(HashMap::new()),
-            }),
-        })
+    /// Opens the root directory.
+    pub(crate) async fn open_root(owner_branch: Branch, local_branch: Branch) -> Result<Self> {
+        Self::open(
+            owner_branch,
+            Locator::Root,
+            WriteContext::new_for_root(local_branch),
+        )
+        .await
     }
 
     /// Creates the root directory.
@@ -138,6 +128,25 @@ impl Directory {
         // }
 
         // inner.blob.remove().await
+    }
+
+    async fn open(
+        branch: Branch,
+        locator: Locator,
+        write_context: Arc<WriteContext>,
+    ) -> Result<Self> {
+        let mut blob = Blob::open(branch, locator).await?;
+        let buffer = blob.read_to_end().await?;
+        let content = bincode::deserialize(&buffer).map_err(Error::MalformedDirectory)?;
+
+        Ok(Self {
+            inner: RwLock::new(Inner {
+                blob,
+                content,
+                write_context,
+                open_directories: Mutex::new(HashMap::new()),
+            }),
+        })
     }
 }
 
@@ -664,16 +673,14 @@ mod tests {
         dir.flush().await.unwrap();
         parent_dir.flush().await.unwrap();
 
-        let dir = dir.read().await;
-        let dir_write_context = dir.write_context.clone();
-        let dir_locator = *dir.locator();
+        let dir_locator = *dir.read().await.locator();
 
         // Reopen and remove the subdirectory
         let parent_dir = branch.open_root(branch.clone()).await.unwrap();
         parent_dir.remove_directory(name).await.unwrap();
         parent_dir.flush().await.unwrap();
 
-        // Reopen again and check the subdiretory entry was removed.
+        // Reopen again and check the subdirectory entry was removed.
         let parent_dir = branch.open_root(branch.clone()).await.unwrap();
         let parent_dir = parent_dir.read().await;
         match parent_dir.lookup(name) {
@@ -682,11 +689,11 @@ mod tests {
             Ok(_) => panic!("entry should not exists but it does"),
         }
 
-        // Check the directory itself was removed as well.
-        match Directory::open(branch, dir_locator, dir_write_context).await {
+        // Check the directory blob itself was removed as well.
+        match Blob::open(branch, dir_locator).await {
             Err(Error::EntryNotFound) => (),
             Err(error) => panic!("unexpected error {:?}", error),
-            Ok(_) => panic!("directory should not exists but it does"),
+            Ok(_) => panic!("directory blob should not exists but it does"),
         }
     }
 
