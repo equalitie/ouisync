@@ -410,7 +410,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::{branch::Branch, crypto::Cryptor, db, directory::Directory, index::BranchData};
+    use crate::{branch::Branch, crypto::Cryptor, db, index::BranchData};
     use assert_matches::assert_matches;
     use futures_util::future;
 
@@ -526,7 +526,7 @@ mod tests {
     async fn conflict_forked_files() {
         let branches = setup(2).await;
 
-        let root0 = Directory::create_root(branches[0].clone());
+        let root0 = branches[0].open_or_create_root().await.unwrap();
         let mut file0 = root0.create_file("file.txt".to_owned()).await.unwrap();
         file0.flush().await.unwrap();
         root0.flush().await.unwrap();

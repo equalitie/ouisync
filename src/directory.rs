@@ -25,27 +25,30 @@ pub struct Directory {
 #[allow(clippy::len_without_is_empty)]
 impl Directory {
     /// Opens the root directory.
-    pub(crate) async fn open_root(owner_branch: Branch, local_branch: Branch) -> Result<Self> {
-        Self::open(
-            owner_branch,
-            Locator::Root,
-            WriteContext::new_for_root(local_branch),
-        )
-        .await
+    pub(crate) async fn open_root(owner_branch: Branch, local_branch: Branch) -> Result<Arc<Self>> {
+        Ok(Arc::new(
+            Self::open(
+                owner_branch,
+                Locator::Root,
+                WriteContext::new_for_root(local_branch),
+            )
+            .await?,
+        ))
     }
 
     /// Creates the root directory.
-    pub(crate) fn create_root(branch: Branch) -> Self {
+    pub(crate) fn create_root(branch: Branch) -> Arc<Self> {
         let blob = Blob::create(branch.clone(), Locator::Root);
-
-        Self {
+        let directory = Self {
             inner: RwLock::new(Inner {
                 blob,
                 content: Content::new(),
                 write_context: WriteContext::new_for_root(branch),
                 open_directories: Mutex::new(HashMap::new()),
             }),
-        }
+        };
+
+        Arc::new(directory)
     }
 
     /// Lock this directory for reading.
@@ -559,7 +562,7 @@ mod tests {
         let branch = setup().await;
 
         // Create the root directory and put some file in it.
-        let dir = Directory::create_root(branch.clone());
+        let dir = branch.open_or_create_root().await.unwrap();
 
         let mut file_dog = dir.create_file("dog.txt".into()).await.unwrap();
         file_dog.write(b"woof").await.unwrap();
@@ -601,7 +604,7 @@ mod tests {
         let branch = setup().await;
 
         // Create empty directory
-        let dir = Directory::create_root(branch.clone());
+        let dir = branch.open_or_create_root().await.unwrap();
         dir.flush().await.unwrap();
 
         // Reopen it and add a file to it.
@@ -621,7 +624,7 @@ mod tests {
         let name = "monkey.txt";
 
         // Create a directory with a single file.
-        let parent_dir = Directory::create_root(branch.clone());
+        let parent_dir = branch.open_or_create_root().await.unwrap();
         let mut file = parent_dir.create_file(name.into()).await.unwrap();
         file.flush().await.unwrap();
         parent_dir.flush().await.unwrap();
@@ -666,7 +669,7 @@ mod tests {
         let name = "dir";
 
         // Create a directory with a single subdirectory.
-        let parent_dir = Directory::create_root(branch.clone());
+        let parent_dir = branch.open_or_create_root().await.unwrap();
         let dir = parent_dir.create_directory(name.into()).await.unwrap();
         dir.flush().await.unwrap();
         parent_dir.flush().await.unwrap();
@@ -701,7 +704,7 @@ mod tests {
         let branch1 = create_branch(branch0.db_pool().clone()).await;
 
         // Create a nested directory by branch 0
-        let root0 = Directory::create_root(branch0.clone());
+        let root0 = branch0.open_or_create_root().await.unwrap();
         root0.flush().await.unwrap();
 
         let dir0 = root0.create_directory("dir".into()).await.unwrap();
