@@ -7,6 +7,7 @@ use crate::{
     file::File,
     locator::Locator,
     replica_id::ReplicaId,
+    version_vector::VersionVector,
     write_context::WriteContext,
 };
 use serde::{Deserialize, Serialize};
@@ -92,8 +93,9 @@ impl Directory {
         &self,
         name: String,
         entry_type: EntryType,
+        version_vector: VersionVector,
     ) -> Result<Arc<EntryData>> {
-        self.inner.write().await.insert_entry(name, entry_type)
+        self.inner.write().await.insert_entry(name, entry_type, version_vector)
     }
 
     pub async fn remove_file(&self, name: &str) -> Result<()> {
@@ -214,7 +216,7 @@ impl Inner {
 
     async fn apply(&mut self) -> Result<()> {
         assert!(self.content.dirty);
-        assert_eq!(self.branch().id(), self.write_context.local_branch_id());
+        assert_eq!(self.branch().id(), self.local_branch_id());
 
         let buffer =
             bincode::serialize(&self.content).expect("failed to serialize directory content");
@@ -229,7 +231,8 @@ impl Inner {
     }
 
     async fn create_file(&mut self, name: String) -> Result<File> {
-        let entry = self.insert_entry(name.clone(), EntryType::File)?;
+        let vv = VersionVector::first(*self.local_branch_id());
+        let entry = self.insert_entry(name.clone(), EntryType::File, vv)?;
         let locator = entry.locator();
         let write_context = self.write_context.child(name, entry).await;
 
@@ -241,7 +244,8 @@ impl Inner {
     }
 
     async fn create_directory(&mut self, name: String) -> Result<Directory> {
-        let entry = self.insert_entry(name.clone(), EntryType::Directory)?;
+        let vv = VersionVector::first(*self.local_branch_id());
+        let entry = self.insert_entry(name.clone(), EntryType::Directory, vv)?;
         let locator = entry.locator();
         let write_context = self.write_context.child(name, entry).await;
         let blob = Blob::create(self.blob.branch().clone(), locator);
@@ -255,9 +259,18 @@ impl Inner {
         })
     }
 
-    fn insert_entry(&mut self, name: String, entry_type: EntryType) -> Result<Arc<EntryData>> {
+    fn insert_entry(
+        &mut self,
+        name: String,
+        entry_type: EntryType,
+        version_vector: VersionVector,
+    ) -> Result<Arc<EntryData>> {
         self.content
-            .insert(*self.write_context.local_branch_id(), name, entry_type)
+            .insert(*self.local_branch_id(), name, entry_type, version_vector)
+    }
+
+    fn local_branch_id(&self) -> &ReplicaId {
+        self.write_context.local_branch_id()
     }
 }
 
@@ -468,6 +481,7 @@ impl Content {
         branch_id: ReplicaId,
         name: String,
         entry_type: EntryType,
+        version_vector: VersionVector,
     ) -> Result<Arc<EntryData>> {
         let blob_id = rand::random();
         let versions = self.entries.entry(name).or_insert_with(Default::default);
@@ -477,6 +491,7 @@ impl Content {
                 let data = Arc::new(EntryData {
                     entry_type,
                     blob_id,
+                    version_vector,
                 });
                 entry.insert(data.clone());
                 self.dirty = true;
@@ -498,12 +513,16 @@ impl Content {
 pub struct EntryData {
     entry_type: EntryType,
     blob_id: BlobId,
-    // TODO: metadata
+    version_vector: VersionVector,
 }
 
 impl EntryData {
     pub fn locator(&self) -> Locator {
         Locator::Head(self.blob_id)
+    }
+
+    pub fn version_vector(&self) -> &VersionVector {
+        &self.version_vector
     }
 }
 

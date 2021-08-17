@@ -25,6 +25,12 @@ impl VersionVector {
         Self::default()
     }
 
+    pub fn first(replica_id: ReplicaId) -> Self {
+        let mut vv = Self::new();
+        vv.increment(replica_id);
+        vv
+    }
+
     /// Inserts an entry into this version vector. If the entry already exists, it's overwritten
     /// only if the new version is higher than the existing version.
     pub fn insert(&mut self, replica_id: ReplicaId, version: u64) {
@@ -46,9 +52,9 @@ impl VersionVector {
 
     /// Merge two versio vectors into one. The version of each entry in the resulting vector is
     /// the maximum of the corresponding entries of the input vectors.
-    pub fn merge(&mut self, other: Self) {
-        for (replica_id, version) in other.0 {
-            self.insert(replica_id, version)
+    pub fn merge(&mut self, other: &Self) {
+        for (replica_id, version) in &other.0 {
+            self.insert(*replica_id, *version)
         }
     }
 }
@@ -265,31 +271,31 @@ mod tests {
         let id1 = rand::random();
 
         let mut vv = vv![];
-        vv.merge(vv![]);
+        vv.merge(&vv![]);
         assert_eq!(vv, vv![]);
 
         let mut vv = vv![];
-        vv.merge(vv![id0 => 1]);
+        vv.merge(&vv![id0 => 1]);
         assert_eq!(vv, vv![id0 => 1]);
 
         let mut vv = vv![id0 => 1];
-        vv.merge(vv![]);
+        vv.merge(&vv![]);
         assert_eq!(vv, vv![id0 => 1]);
 
         let mut vv = vv![id0 => 1];
-        vv.merge(vv![id0 => 2]);
+        vv.merge(&vv![id0 => 2]);
         assert_eq!(vv, vv![id0 => 2]);
 
         let mut vv = vv![id0 => 2];
-        vv.merge(vv![id0 => 1]);
+        vv.merge(&vv![id0 => 1]);
         assert_eq!(vv, vv![id0 => 2]);
 
         let mut vv = vv![id0 => 1];
-        vv.merge(vv![id1 => 2]);
+        vv.merge(&vv![id1 => 2]);
         assert_eq!(vv, vv![id0 => 1, id1 => 2]);
 
         let mut vv = vv![id0 => 1, id1 => 2];
-        vv.merge(vv![id0 => 2, id1 => 1]);
+        vv.merge(&vv![id0 => 2, id1 => 1]);
         assert_eq!(vv, vv![id0 => 2, id1 => 2]);
     }
 }

@@ -7,6 +7,7 @@ use crate::{
     locator::Locator,
     path,
     replica_id::ReplicaId,
+    version_vector::VersionVector,
 };
 use camino::{Utf8Component, Utf8PathBuf};
 use std::ops::DerefMut;
@@ -87,11 +88,12 @@ impl WriteContext {
 
         let dst_locator = if let Some((parent, name)) = path::decompose(&self.calculate_path()) {
             inner.ancestors = inner.local_branch.ensure_directory_exists(parent).await?;
+            let vv = self.version_vector().clone();
             inner
                 .ancestors
                 .last_mut()
                 .unwrap()
-                .insert_entry(name.to_owned(), entry_type)
+                .insert_entry(name.to_owned(), entry_type, vv)
                 .await?
                 .locator()
         } else {
@@ -134,6 +136,11 @@ impl WriteContext {
             None => "/".into(),
             Some(parent) => parent.write_context.calculate_path().join(&parent.name),
         }
+    }
+
+    fn version_vector(&self) -> &VersionVector {
+        // TODO: How do we get the VV when this WriteContext corresponds to the root directory?
+        self.parent.as_ref().unwrap().entry.version_vector()
     }
 
     // For debugging
