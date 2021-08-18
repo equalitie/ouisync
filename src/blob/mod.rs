@@ -102,6 +102,11 @@ impl Blob {
         }
     }
 
+    /// Was this blob modified and not flushed yet?
+    pub fn is_dirty(&self) -> bool {
+        self.current_block.dirty || self.len_dirty
+    }
+
     /// Reads data from this blob into `buffer`, advancing the internal cursor. Returns the
     /// number of bytes actually read which might be less than `buffer.len()` if the portion of the
     /// blob past the internal cursor is smaller than `buffer.len()`.

@@ -80,9 +80,11 @@ impl File {
     /// Flushes this file, ensuring that all intermediately buffered contents gets written to the
     /// store.
     pub async fn flush(&mut self) -> Result<()> {
-        self.blob.flush().await?;
+        if !self.blob.is_dirty() {
+            return Ok(());
+        }
 
-        // TODO: proceed only if dirty
+        self.blob.flush().await?;
         self.parent.increment_version().await?;
         self.parent.directory.flush().await
     }
