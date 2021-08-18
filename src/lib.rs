@@ -21,6 +21,7 @@ mod joint_directory;
 mod joint_entry;
 mod locator;
 mod network;
+mod parent_context;
 mod path;
 mod replica_id;
 mod repository;
@@ -31,7 +32,6 @@ mod store;
 mod test_utils;
 mod version_vector;
 mod versioned_file_name;
-mod write_context;
 
 pub use self::{
     crypto::Cryptor,
