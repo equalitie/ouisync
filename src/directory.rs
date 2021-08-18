@@ -103,27 +103,26 @@ impl Directory {
             .await
     }
 
-    pub async fn remove_file(&self, _name: &str) -> Result<()> {
-        todo!()
-        // for entry in self.read().await.lookup(name)? {
-        //     entry.file()?.open().await?.remove().await?;
-        // }
+    pub async fn remove_file(&self, name: &str) -> Result<()> {
+        let mut inner = self.write().await;
 
-        // self.ensure_local().await?;
-        // self.inner.write().await.content.remove(name)
-        // // TODO: Add tombstone
+        for entry in lookup(self, &*inner, name)? {
+            entry.file()?.open().await?.remove().await?;
+        }
+
+        inner.content.remove(name)
+        // TODO: Add tombstone
     }
 
-    pub async fn remove_directory(&self, _name: &str) -> Result<()> {
-        todo!()
+    pub async fn remove_directory(&self, name: &str) -> Result<()> {
+        let mut inner = self.write().await;
 
-        // for entry in self.read().await.lookup(name)? {
-        //     entry.directory()?.open().await?.remove().await?;
-        // }
+        for entry in lookup(self, &*inner, name)? {
+            entry.directory()?.open().await?.remove().await?;
+        }
 
-        // self.ensure_local().await?;
-        // self.inner.write().await.content.remove(name)
-        // // TODO: Add tombstone
+        inner.content.remove(name)
+        // TODO: Add tombstone
     }
 
     /// Removes this directory if its empty, otherwise fails.
@@ -255,16 +254,7 @@ impl Reader<'_> {
         &self,
         name: &'_ str,
     ) -> Result<impl Iterator<Item = EntryRef> + ExactSizeIterator> {
-        self.inner
-            .content
-            .entries
-            .get_key_value(name)
-            .map(|(name, versions)| {
-                versions.iter().map(move |(branch_id, data)| {
-                    EntryRef::new(self.outer, &*self.inner, name, data, branch_id)
-                })
-            })
-            .ok_or(Error::EntryNotFound)
+        lookup(self.outer, &*self.inner, name)
     }
 
     pub fn lookup_version(&self, name: &'_ str, author: &ReplicaId) -> Result<EntryRef> {
@@ -345,6 +335,23 @@ impl Inner {
         self.content
             .insert(local_branch_id, name, entry_type, version_vector)
     }
+}
+
+fn lookup<'a>(
+    outer: &'a Directory,
+    inner: &'a Inner,
+    name: &'_ str,
+) -> Result<impl Iterator<Item = EntryRef<'a>> + ExactSizeIterator> {
+    inner
+        .content
+        .entries
+        .get_key_value(name)
+        .map(|(name, versions)| {
+            versions
+                .iter()
+                .map(move |(branch_id, data)| EntryRef::new(outer, inner, name, data, branch_id))
+        })
+        .ok_or(Error::EntryNotFound)
 }
 
 /// Info about a directory entry.
