@@ -25,27 +25,29 @@ pub struct Directory {
 #[allow(clippy::len_without_is_empty)]
 impl Directory {
     /// Opens the root directory.
+    /// For internal use only. Use [`Branch::open_root`] instead.
     pub(crate) async fn open_root(owner_branch: Branch, local_branch: Branch) -> Result<Arc<Self>> {
-        Ok(Arc::new(
-            Self::open(
-                owner_branch,
-                Locator::Root,
-                WriteContext::new_for_root(local_branch),
-            )
-            .await?,
-        ))
+        Self::open(
+            owner_branch,
+            Locator::Root,
+            WriteContext::new_for_root(local_branch),
+        )
+        .await
     }
 
     /// Opens the root directory or creates it if it doesn't exist.
+    /// For internal use only. Use [`Branch::open_or_create_root`] instead.
     pub(crate) async fn open_or_create_root(branch: Branch) -> Result<Arc<Self>> {
-        Ok(Arc::new(
-            Self::open_or_create(
-                branch.clone(),
-                Locator::Root,
-                WriteContext::new_for_root(branch),
-            )
-            .await?,
-        ))
+        // TODO: make sure this is atomic
+
+        let locator = Locator::Root;
+        let write_context = WriteContext::new_for_root(branch.clone());
+
+        match Self::open(branch.clone(), locator, write_context.clone()).await {
+            Ok(dir) => Ok(dir),
+            Err(Error::EntryNotFound) => Ok(Self::create(branch, locator, write_context)),
+            Err(error) => Err(error),
+        }
     }
 
     /// Lock this directory for reading.
@@ -132,46 +134,32 @@ impl Directory {
         branch: Branch,
         locator: Locator,
         write_context: Arc<WriteContext>,
-    ) -> Result<Self> {
+    ) -> Result<Arc<Self>> {
         let mut blob = Blob::open(branch, locator).await?;
         let buffer = blob.read_to_end().await?;
         let content = bincode::deserialize(&buffer).map_err(Error::MalformedDirectory)?;
 
-        Ok(Self {
+        Ok(Arc::new(Self {
             inner: RwLock::new(Inner {
                 blob,
                 content,
                 write_context,
                 open_directories: Cache::new(),
             }),
-        })
+        }))
     }
 
-    fn create(branch: Branch, locator: Locator, write_context: Arc<WriteContext>) -> Self {
+    fn create(branch: Branch, locator: Locator, write_context: Arc<WriteContext>) -> Arc<Self> {
         let blob = Blob::create(branch, locator);
 
-        Directory {
+        Arc::new(Directory {
             inner: RwLock::new(Inner {
                 blob,
                 content: Content::new(),
                 write_context,
                 open_directories: Cache::new(),
             }),
-        }
-    }
-
-    async fn open_or_create(
-        branch: Branch,
-        locator: Locator,
-        write_context: Arc<WriteContext>,
-    ) -> Result<Self> {
-        // TODO: make sure this is atomic
-
-        match Self::open(branch.clone(), locator, write_context.clone()).await {
-            Ok(dir) => Ok(dir),
-            Err(Error::EntryNotFound) => Ok(Self::create(branch, locator, write_context)),
-            Err(error) => Err(error),
-        }
+        })
     }
 }
 
@@ -590,14 +578,12 @@ impl Cache {
                     dir
                 } else {
                     let dir = Directory::open(branch, locator, write_context).await?;
-                    let dir = Arc::new(dir);
                     entry.insert(Arc::downgrade(&dir));
                     dir
                 }
             }
             hash_map::Entry::Vacant(entry) => {
                 let dir = Directory::open(branch, locator, write_context).await?;
-                let dir = Arc::new(dir);
                 entry.insert(Arc::downgrade(&dir));
                 dir
             }
@@ -621,39 +607,6 @@ impl Cache {
             hash_map::Entry::Occupied(_) => return Err(Error::EntryExists),
             hash_map::Entry::Vacant(entry) => {
                 let dir = Directory::create(branch, locator, write_context);
-                let dir = Arc::new(dir);
-                entry.insert(Arc::downgrade(&dir));
-                dir
-            }
-        };
-
-        map.retain(|_, dir| dir.upgrade().is_some());
-
-        Ok(dir)
-    }
-
-    async fn open_or_create(
-        &self,
-        branch: Branch,
-        locator: Locator,
-        write_context: Arc<WriteContext>,
-    ) -> Result<Arc<Directory>> {
-        let mut map = self.0.lock().await;
-
-        let dir = match map.entry(locator) {
-            hash_map::Entry::Occupied(mut entry) => {
-                if let Some(dir) = entry.get().upgrade() {
-                    dir
-                } else {
-                    let dir = Directory::open_or_create(branch, locator, write_context).await?;
-                    let dir = Arc::new(dir);
-                    entry.insert(Arc::downgrade(&dir));
-                    dir
-                }
-            }
-            hash_map::Entry::Vacant(entry) => {
-                let dir = Directory::open_or_create(branch, locator, write_context).await?;
-                let dir = Arc::new(dir);
                 entry.insert(Arc::downgrade(&dir));
                 dir
             }
