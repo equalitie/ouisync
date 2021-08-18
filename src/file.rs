@@ -14,14 +14,13 @@ pub struct File {
 impl File {
     /// Opens an existing file.
     pub async fn open(
-        branch: Branch,
+        owner_branch: Branch,
+        local_branch: Branch,
         locator: Locator,
         write_context: Arc<WriteContext>,
     ) -> Result<Self> {
-        let local_branch = write_context.local_branch().await;
-
         Ok(Self {
-            blob: Blob::open(branch, locator).await?,
+            blob: Blob::open(owner_branch, locator).await?,
             write_context,
             local_branch,
         })
@@ -33,12 +32,10 @@ impl File {
         locator: Locator,
         write_context: Arc<WriteContext>,
     ) -> Self {
-        let local_branch = write_context.local_branch().await;
-
         Self {
-            blob: Blob::create(branch, locator),
+            blob: Blob::create(branch.clone(), locator),
             write_context,
-            local_branch,
+            local_branch: branch,
         }
     }
 
@@ -71,7 +68,7 @@ impl File {
     /// Writes `buffer` into this file.
     pub async fn write(&mut self, buffer: &[u8]) -> Result<()> {
         self.write_context
-            .begin(EntryType::File, &mut self.blob)
+            .begin(&self.local_branch, EntryType::File, &mut self.blob)
             .await?;
         self.blob.write(buffer).await
     }
@@ -84,7 +81,7 @@ impl File {
     /// Truncates the file to the given length.
     pub async fn truncate(&mut self, len: u64) -> Result<()> {
         self.write_context
-            .begin(EntryType::File, &mut self.blob)
+            .begin(&self.local_branch, EntryType::File, &mut self.blob)
             .await?;
         self.blob.truncate(len).await
     }

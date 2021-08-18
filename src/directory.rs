@@ -31,8 +31,9 @@ impl Directory {
     pub(crate) async fn open_root(owner_branch: Branch, local_branch: Branch) -> Result<Self> {
         Self::open(
             owner_branch,
+            local_branch,
             Locator::Root,
-            WriteContext::new_for_root(local_branch),
+            WriteContext::new_for_root(),
         )
         .await
     }
@@ -43,24 +44,34 @@ impl Directory {
         // TODO: make sure this is atomic
 
         let locator = Locator::Root;
-        let write_context = WriteContext::new_for_root(branch.clone());
+        let write_context = WriteContext::new_for_root();
 
-        match Self::open(branch.clone(), locator, write_context.clone()).await {
+        match Self::open(
+            branch.clone(),
+            branch.clone(),
+            locator,
+            write_context.clone(),
+        )
+        .await
+        {
             Ok(dir) => Ok(dir),
-            Err(Error::EntryNotFound) => Ok(Self::create(branch, locator, write_context).await),
+            Err(Error::EntryNotFound) => Ok(Self::create(branch, locator, write_context)),
             Err(error) => Err(error),
         }
     }
 
     /// Lock this directory for reading.
     pub async fn read(&self) -> Reader<'_> {
-        self.inner.read().await
+        Reader {
+            guard: self.inner.read().await,
+            local_branch: &self.local_branch,
+        }
     }
 
     /// Flushes this directory ensuring that any pending changes are written to the store and the
     /// version vectors of this and the ancestor directories are properly incremented.
     pub async fn flush(&self) -> Result<()> {
-        self.inner.write().await.flush().await
+        self.inner.write().await.flush(&self.local_branch).await
     }
 
     /// Writes the pending changes to the store without incrementing the version vectors.
@@ -75,12 +86,20 @@ impl Directory {
 
     /// Creates a new file inside this directory.
     pub async fn create_file(&self, name: String) -> Result<File> {
-        self.inner.write().await.create_file(name).await
+        self.inner
+            .write()
+            .await
+            .create_file(self.local_branch.clone(), name)
+            .await
     }
 
     /// Creates a new subdirectory of this directory.
     pub async fn create_directory(&self, name: String) -> Result<Self> {
-        self.inner.write().await.create_directory(name).await
+        self.inner
+            .write()
+            .await
+            .create_directory(self.local_branch.clone(), name)
+            .await
     }
 
     /// Inserts a dangling entry into this directory. It's the responsibility of the caller to make
@@ -91,10 +110,12 @@ impl Directory {
         entry_type: EntryType,
         version_vector: VersionVector,
     ) -> Result<Arc<EntryData>> {
-        self.inner
-            .write()
-            .await
-            .insert_entry(name, entry_type, version_vector)
+        self.inner.write().await.insert_entry(
+            *self.local_branch.id(),
+            name,
+            entry_type,
+            version_vector,
+        )
     }
 
     pub async fn remove_file(&self, name: &str) -> Result<()> {
@@ -133,15 +154,14 @@ impl Directory {
     }
 
     async fn open(
-        branch: Branch,
+        owner_branch: Branch,
+        local_branch: Branch,
         locator: Locator,
         write_context: Arc<WriteContext>,
     ) -> Result<Self> {
-        let mut blob = Blob::open(branch, locator).await?;
+        let mut blob = Blob::open(owner_branch, locator).await?;
         let buffer = blob.read_to_end().await?;
         let content = bincode::deserialize(&buffer).map_err(Error::MalformedDirectory)?;
-
-        let local_branch = write_context.local_branch().await;
 
         Ok(Self {
             inner: Arc::new(RwLock::new(Inner {
@@ -154,9 +174,8 @@ impl Directory {
         })
     }
 
-    async fn create(branch: Branch, locator: Locator, write_context: Arc<WriteContext>) -> Self {
-        let blob = Blob::create(branch, locator);
-        let local_branch = write_context.local_branch().await;
+    fn create(owner_branch: Branch, locator: Locator, write_context: Arc<WriteContext>) -> Self {
+        let blob = Blob::create(owner_branch.clone(), locator);
 
         Directory {
             inner: Arc::new(RwLock::new(Inner {
@@ -165,15 +184,79 @@ impl Directory {
                 write_context,
                 open_directories: SubdirectoryCache::new(),
             })),
-            local_branch,
+            local_branch: owner_branch,
         }
     }
 }
 
 /// View of a `Directory` for performing read-only queries.
-pub type Reader<'a> = RwLockReadGuard<'a, Inner>;
+pub struct Reader<'a> {
+    guard: RwLockReadGuard<'a, Inner>,
+    local_branch: &'a Branch,
+}
 
-pub struct Inner {
+impl Reader<'_> {
+    /// Returns iterator over the entries of this directory.
+    pub fn entries(&self) -> impl Iterator<Item = EntryRef> + DoubleEndedIterator + Clone {
+        self.guard
+            .content
+            .entries
+            .iter()
+            .flat_map(move |(name, versions)| {
+                versions.iter().map(move |(branch_id, data)| {
+                    EntryRef::new(&*self.guard, self.local_branch, name, data, branch_id)
+                })
+            })
+    }
+
+    /// Lookup an entry of this directory by name.
+    pub fn lookup(
+        &self,
+        name: &'_ str,
+    ) -> Result<impl Iterator<Item = EntryRef> + ExactSizeIterator> {
+        self.guard
+            .content
+            .entries
+            .get_key_value(name)
+            .map(|(name, versions)| {
+                versions.iter().map(move |(branch_id, data)| {
+                    EntryRef::new(&*self.guard, self.local_branch, name, data, branch_id)
+                })
+            })
+            .ok_or(Error::EntryNotFound)
+    }
+
+    pub fn lookup_version(&self, name: &'_ str, author: &ReplicaId) -> Result<EntryRef> {
+        self.guard
+            .content
+            .entries
+            .get_key_value(name)
+            .and_then(|(name, versions)| {
+                versions.get_key_value(author).map(|(branch_id, data)| {
+                    EntryRef::new(&*self.guard, self.local_branch, name, data, branch_id)
+                })
+            })
+            .ok_or(Error::EntryNotFound)
+    }
+
+    /// Length of this directory in bytes. Does not include the content, only the size of directory
+    /// itself.
+    pub fn len(&self) -> u64 {
+        self.guard.blob.len()
+    }
+
+    /// Locator of this directory
+    pub fn locator(&self) -> &Locator {
+        self.guard.blob.locator()
+    }
+
+    /// Branch of this directory
+    pub fn branch(&self) -> &Branch {
+        self.guard.blob.branch()
+    }
+}
+
+struct Inner {
     blob: Blob,
     content: Content,
     write_context: Arc<WriteContext>,
@@ -183,69 +266,13 @@ pub struct Inner {
 }
 
 impl Inner {
-    /// Returns iterator over the entries of this directory.
-    pub fn entries(&self) -> impl Iterator<Item = EntryRef> + DoubleEndedIterator + Clone {
-        self.content
-            .entries
-            .iter()
-            .flat_map(move |(name, versions)| {
-                versions
-                    .iter()
-                    .map(move |(branch_id, data)| EntryRef::new(self, name, data, branch_id))
-            })
-    }
-
-    /// Lookup an entry of this directory by name.
-    pub fn lookup(
-        &self,
-        name: &'_ str,
-    ) -> Result<impl Iterator<Item = EntryRef> + ExactSizeIterator> {
-        self.content
-            .entries
-            .get_key_value(name)
-            .map(|(name, versions)| {
-                versions
-                    .iter()
-                    .map(move |(branch_id, data)| EntryRef::new(self, name, data, branch_id))
-            })
-            .ok_or(Error::EntryNotFound)
-    }
-
-    pub fn lookup_version(&self, name: &'_ str, author: &ReplicaId) -> Result<EntryRef> {
-        self.content
-            .entries
-            .get_key_value(name)
-            .and_then(|(name, versions)| {
-                versions
-                    .get_key_value(author)
-                    .map(|(branch_id, data)| EntryRef::new(self, name, data, branch_id))
-            })
-            .ok_or(Error::EntryNotFound)
-    }
-
-    /// Length of this directory in bytes. Does not include the content, only the size of directory
-    /// itself.
-    pub fn len(&self) -> u64 {
-        self.blob.len()
-    }
-
-    /// Locator of this directory
-    pub fn locator(&self) -> &Locator {
-        self.blob.locator()
-    }
-
-    /// Branch of this directory
-    pub fn branch(&self) -> &Branch {
-        self.blob.branch()
-    }
-
-    async fn flush(&mut self) -> Result<()> {
+    async fn flush(&mut self, local_branch: &Branch) -> Result<()> {
         if !self.content.dirty {
             return Ok(());
         }
 
         self.write_context
-            .begin(EntryType::Directory, &mut self.blob)
+            .begin(local_branch, EntryType::Directory, &mut self.blob)
             .await?;
         self.apply().await?;
         self.write_context.commit().await?;
@@ -255,7 +282,6 @@ impl Inner {
 
     async fn apply(&mut self) -> Result<()> {
         assert!(self.content.dirty);
-        assert_eq!(self.branch().id(), self.local_branch_id());
 
         let buffer =
             bincode::serialize(&self.content).expect("failed to serialize directory content");
@@ -269,38 +295,36 @@ impl Inner {
         Ok(())
     }
 
-    async fn create_file(&mut self, name: String) -> Result<File> {
-        let vv = VersionVector::first(*self.local_branch_id());
-        let entry = self.insert_entry(name.clone(), EntryType::File, vv)?;
+    async fn create_file(&mut self, local_branch: Branch, name: String) -> Result<File> {
+        let vv = VersionVector::first(*local_branch.id());
+        let entry = self.insert_entry(*local_branch.id(), name.clone(), EntryType::File, vv)?;
         let locator = entry.locator();
         let write_context = self.write_context.child(name, entry).await;
 
-        Ok(File::create(self.blob.branch().clone(), locator, write_context).await)
+        Ok(File::create(local_branch, locator, write_context).await)
     }
 
-    async fn create_directory(&mut self, name: String) -> Result<Directory> {
-        let vv = VersionVector::first(*self.local_branch_id());
-        let entry = self.insert_entry(name.clone(), EntryType::Directory, vv)?;
+    async fn create_directory(&mut self, local_branch: Branch, name: String) -> Result<Directory> {
+        let vv = VersionVector::first(*local_branch.id());
+        let entry =
+            self.insert_entry(*local_branch.id(), name.clone(), EntryType::Directory, vv)?;
         let locator = entry.locator();
         let write_context = self.write_context.child(name, entry).await;
 
         self.open_directories
-            .create(self.blob.branch().clone(), locator, write_context)
+            .create(local_branch, locator, write_context)
             .await
     }
 
     fn insert_entry(
         &mut self,
+        local_branch_id: ReplicaId,
         name: String,
         entry_type: EntryType,
         version_vector: VersionVector,
     ) -> Result<Arc<EntryData>> {
         self.content
-            .insert(*self.local_branch_id(), name, entry_type, version_vector)
-    }
-
-    fn local_branch_id(&self) -> &ReplicaId {
-        self.write_context.local_branch_id()
+            .insert(local_branch_id, name, entry_type, version_vector)
     }
 }
 
@@ -314,12 +338,14 @@ pub enum EntryRef<'a> {
 impl<'a> EntryRef<'a> {
     fn new(
         parent: &'a Inner,
+        local_branch: &'a Branch,
         name: &'a str,
         parent_entry: &'a Arc<EntryData>,
         branch_id: &'a ReplicaId,
     ) -> Self {
         let inner = RefInner {
             parent,
+            local_branch,
             parent_entry,
             name,
         };
@@ -400,6 +426,7 @@ impl<'a> FileRef<'a> {
     pub async fn open(&self) -> Result<File> {
         File::open(
             self.inner.parent.blob.branch().clone(),
+            self.inner.local_branch.clone(),
             self.locator(),
             self.inner.write_context().await,
         )
@@ -435,6 +462,7 @@ impl<'a> DirectoryRef<'a> {
             .open_directories
             .open(
                 self.inner.parent.blob.branch().clone(),
+                self.inner.local_branch.clone(),
                 self.locator(),
                 self.inner.write_context().await,
             )
@@ -445,6 +473,7 @@ impl<'a> DirectoryRef<'a> {
 #[derive(Copy, Clone)]
 struct RefInner<'a> {
     parent: &'a Inner,
+    local_branch: &'a Branch,
     parent_entry: &'a Arc<EntryData>,
     name: &'a str,
 }
@@ -460,8 +489,8 @@ impl RefInner<'_> {
 
 impl PartialEq for RefInner<'_> {
     fn eq(&self, other: &Self) -> bool {
-        self.parent.branch().id() == other.parent.branch().id()
-            && self.parent.locator() == other.parent.locator()
+        self.parent.blob.branch().id() == other.parent.blob.branch().id()
+            && self.parent.blob.locator() == other.parent.blob.locator()
             && self.parent_entry == other.parent_entry
             && self.name == other.name
     }
@@ -583,16 +612,16 @@ impl RootDirectoryCache {
         }
     }
 
-    pub async fn open_or_create(&self, owner_branch: Branch) -> Result<Directory> {
+    pub async fn open_or_create(&self, branch: Branch) -> Result<Directory> {
         let mut slot = self.0.lock().await;
 
         if let Some(inner) = slot.as_mut().and_then(|inner| inner.upgrade()) {
             Ok(Directory {
                 inner,
-                local_branch: owner_branch,
+                local_branch: branch,
             })
         } else {
-            let dir = Directory::open_or_create_root(owner_branch).await?;
+            let dir = Directory::open_or_create_root(branch).await?;
             *slot = Some(Arc::downgrade(&dir.inner));
             Ok(dir)
         }
@@ -609,7 +638,8 @@ impl SubdirectoryCache {
 
     async fn open(
         &self,
-        branch: Branch,
+        owner_branch: Branch,
+        local_branch: Branch,
         locator: Locator,
         write_context: Arc<WriteContext>,
     ) -> Result<Directory> {
@@ -620,16 +650,18 @@ impl SubdirectoryCache {
                 if let Some(inner) = entry.get().upgrade() {
                     Directory {
                         inner,
-                        local_branch: write_context.local_branch().await,
+                        local_branch,
                     }
                 } else {
-                    let dir = Directory::open(branch, locator, write_context).await?;
+                    let dir =
+                        Directory::open(owner_branch, local_branch, locator, write_context).await?;
                     entry.insert(Arc::downgrade(&dir.inner));
                     dir
                 }
             }
             hash_map::Entry::Vacant(entry) => {
-                let dir = Directory::open(branch, locator, write_context).await?;
+                let dir =
+                    Directory::open(owner_branch, local_branch, locator, write_context).await?;
                 entry.insert(Arc::downgrade(&dir.inner));
                 dir
             }
@@ -652,7 +684,7 @@ impl SubdirectoryCache {
         let dir = match map.entry(locator) {
             hash_map::Entry::Occupied(_) => return Err(Error::EntryExists),
             hash_map::Entry::Vacant(entry) => {
-                let dir = Directory::create(branch, locator, write_context).await;
+                let dir = Directory::create(branch, locator, write_context);
                 entry.insert(Arc::downgrade(&dir.inner));
                 dir
             }
@@ -764,8 +796,9 @@ mod tests {
         // Check the file itself was removed as well.
         match File::open(
             branch.clone(),
+            branch,
             file_locator,
-            WriteContext::new_for_root(branch),
+            WriteContext::new_for_root(),
         )
         .await
         {
