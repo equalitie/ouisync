@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use crate::{
     branch::Branch,
     crypto::Cryptor,
@@ -12,15 +10,24 @@ use crate::{
     path, ReplicaId,
 };
 use camino::Utf8Path;
+use futures_util::future;
+use std::{collections::HashMap, sync::Arc};
+use tokio::sync::Mutex;
 
 pub struct Repository {
     index: Index,
     cryptor: Cryptor,
+    // Cache for `Branch` instances to make them persistent over the lifetime of the program.
+    branches: Mutex<HashMap<ReplicaId, Branch>>,
 }
 
 impl Repository {
     pub fn new(index: Index, cryptor: Cryptor) -> Self {
-        Self { index, cryptor }
+        Self {
+            index,
+            cryptor,
+            branches: Mutex::new(HashMap::new()),
+        }
     }
 
     pub fn this_replica_id(&self) -> &ReplicaId {
@@ -132,30 +139,37 @@ impl Repository {
 
     /// Returns the local branch
     pub async fn local_branch(&self) -> Branch {
-        self.inflate(self.index.branches().await.local().clone())
+        self.inflate(self.index.branches().await.local()).await
     }
 
     /// Return the branch with the specified id.
     pub async fn branch(&self, id: &ReplicaId) -> Option<Branch> {
-        self.index
-            .branches()
-            .await
-            .get(id)
-            .map(|data| self.inflate(data.clone()))
+        Some(self.inflate(self.index.branches().await.get(id)?).await)
     }
 
     /// Returns all branches
     pub async fn branches(&self) -> Vec<Branch> {
-        self.index
-            .branches()
-            .await
-            .all()
-            .map(|data| self.inflate(data.clone()))
-            .collect()
+        future::join_all(
+            self.index
+                .branches()
+                .await
+                .all()
+                .map(|data| self.inflate(data)),
+        )
+        .await
     }
 
-    fn inflate(&self, data: Arc<BranchData>) -> Branch {
-        Branch::new(self.index.pool.clone(), data, self.cryptor.clone())
+    // Create `Branch` wrapping the given `data`, reusing a previously cached one if it exists,
+    // and putting it into the cache it it does not.
+    async fn inflate(&self, data: &Arc<BranchData>) -> Branch {
+        self.branches
+            .lock()
+            .await
+            .entry(*data.id())
+            .or_insert_with(|| {
+                Branch::new(self.index.pool.clone(), data.clone(), self.cryptor.clone())
+            })
+            .clone()
     }
 
     // Opens the root directory across all branches as JointDirectory.
