@@ -15,9 +15,9 @@ pub struct WriteContext {
 }
 
 #[derive(Clone)]
-struct Parent {
-    directory: Directory,
-    entry_name: String,
+pub struct Parent {
+    pub directory: Directory,
+    pub entry_name: String,
     entry_data: Arc<EntryData>,
     // TODO: Should this be std::sync::Weak?
 }
@@ -51,7 +51,7 @@ impl WriteContext {
         }
 
         let dst_locator = if let Some(parent) = &mut self.parent {
-            parent.directory = fork_directory(&parent.directory, local_branch).await?;
+            parent.directory = parent.directory.fork().await?;
             parent.entry_data = parent
                 .directory
                 .insert_entry(
@@ -97,26 +97,11 @@ impl WriteContext {
         Ok(())
     }
 
+    pub fn parent(&self) -> Option<&Parent> {
+        self.parent.as_ref()
+    }
+
     pub fn parent_directory(&self) -> Option<&Directory> {
         self.parent.as_ref().map(|parent| &parent.directory)
-    }
-}
-
-// TODO: consider rewriting this to not use recursion.
-#[async_recursion]
-async fn fork_directory(dir: &Directory, local_branch: &Branch) -> Result<Directory> {
-    if let Some(parent) = &dir.read().await.write_context().parent {
-        let parent_dir = fork_directory(&parent.directory, local_branch).await?;
-        let parent_dir_reader = parent_dir.read().await;
-
-        if let Ok(entry) = parent_dir_reader.lookup_version(&parent.entry_name, local_branch.id()) {
-            entry.directory()?.open().await
-        } else {
-            parent_dir
-                .create_directory(parent.entry_name.to_string())
-                .await
-        }
-    } else {
-        local_branch.open_or_create_root().await
     }
 }

@@ -10,13 +10,14 @@ use crate::{
     version_vector::VersionVector,
     write_context::WriteContext,
 };
+use async_recursion::async_recursion;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{btree_map, hash_map, BTreeMap, HashMap},
     fmt,
     sync::{Arc, Weak},
 };
-use tokio::sync::{Mutex, RwLock, RwLockReadGuard};
+use tokio::sync::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 #[derive(Clone)]
 pub struct Directory {
@@ -63,7 +64,7 @@ impl Directory {
     /// Flushes this directory ensuring that any pending changes are written to the store and the
     /// version vectors of this and the ancestor directories are properly incremented.
     pub async fn flush(&self) -> Result<()> {
-        self.inner.write().await.flush(&self.local_branch).await
+        self.inner.write().await.flush().await
     }
 
     /// Flushes this directory and all its ancestors all the way to the root.
@@ -78,19 +79,9 @@ impl Directory {
         Ok(())
     }
 
-    /// Writes the pending changes to the store without incrementing the version vectors.
-    /// For internal use only!
-    ///
-    /// # Panics
-    ///
-    /// Panics if not dirty or not in the local branch.
-    pub(crate) async fn apply(&self) -> Result<()> {
-        self.inner.write().await.apply(&self.local_branch).await
-    }
-
     /// Creates a new file inside this directory.
     pub async fn create_file(&self, name: String) -> Result<File> {
-        let mut inner = self.inner.write().await;
+        let mut inner = self.write().await;
 
         let vv = VersionVector::first(*self.local_branch.id());
         let entry =
@@ -103,7 +94,7 @@ impl Directory {
 
     /// Creates a new subdirectory of this directory.
     pub async fn create_directory(&self, name: String) -> Result<Self> {
-        let mut inner = self.inner.write().await;
+        let mut inner = self.write().await;
 
         let vv = VersionVector::first(*self.local_branch.id());
         let entry = inner.insert_entry(
@@ -121,55 +112,105 @@ impl Directory {
             .await
     }
 
-    /// Inserts a dangling entry into this directory. It's the responsibility of the caller to make
-    /// sure the returned locator eventually points to an actual file or directory.
-    pub(crate) async fn insert_entry(
-        &self,
-        name: String,
-        entry_type: EntryType,
-        version_vector: VersionVector,
-    ) -> Result<Arc<EntryData>> {
-        self.inner.write().await.insert_entry(
-            *self.local_branch.id(),
-            name,
-            entry_type,
-            version_vector,
-        )
-    }
+    pub async fn remove_file(&self, _name: &str) -> Result<()> {
+        todo!()
+        // for entry in self.read().await.lookup(name)? {
+        //     entry.file()?.open().await?.remove().await?;
+        // }
 
-    pub async fn remove_file(&self, name: &str) -> Result<()> {
-        for entry in self.read().await.lookup(name)? {
-            entry.file()?.open().await?.remove().await?;
-        }
-
-        self.inner.write().await.content.remove(name)
-        // TODO: Add tombstone
-    }
-
-    pub async fn remove_directory(&self, name: &str) -> Result<()> {
-        for entry in self.read().await.lookup(name)? {
-            entry.directory()?.open().await?.remove().await?;
-        }
-
-        self.inner.write().await.content.remove(name)
+        // self.ensure_local().await?;
+        // self.inner.write().await.content.remove(name)
         // // TODO: Add tombstone
     }
 
-    /// Increment version of the specified entry.
-    pub async fn increment_entry_version(&self, _name: &str) -> Result<()> {
-        // TODO
-        Ok(())
+    pub async fn remove_directory(&self, _name: &str) -> Result<()> {
+        todo!()
+
+        // for entry in self.read().await.lookup(name)? {
+        //     entry.directory()?.open().await?.remove().await?;
+        // }
+
+        // self.ensure_local().await?;
+        // self.inner.write().await.content.remove(name)
+        // // TODO: Add tombstone
     }
 
     /// Removes this directory if its empty, otherwise fails.
     pub async fn remove(&self) -> Result<()> {
-        let mut inner = self.inner.write().await;
+        let mut inner = self.write().await;
 
         if !inner.content.entries.is_empty() {
             return Err(Error::DirectoryNotEmpty);
         }
 
         inner.blob.remove().await
+    }
+
+    // Forks this directory into the local branch.
+    #[async_recursion]
+    pub async fn fork(&self) -> Result<Directory> {
+        if let Some(parent) = &self.read().await.write_context().parent() {
+            let parent_dir = parent.directory.fork().await?;
+            let parent_dir_reader = parent_dir.read().await;
+
+            if let Ok(entry) =
+                parent_dir_reader.lookup_version(&parent.entry_name, self.local_branch.id())
+            {
+                entry.directory()?.open().await
+            } else {
+                parent_dir
+                    .create_directory(parent.entry_name.to_string())
+                    .await
+            }
+        } else {
+            self.local_branch.open_or_create_root().await
+        }
+    }
+
+    /// Writes the pending changes to the store without incrementing the version vectors.
+    /// For internal use only!
+    ///
+    /// # Panics
+    ///
+    /// Panics if not dirty or not in the local branch.
+    pub(crate) async fn apply(&self) -> Result<()> {
+        self.write().await.apply().await
+    }
+
+    /// Inserts a dangling entry into this directory. It's the responsibility of the caller to make
+    /// sure the returned locator eventually points to an actual file or directory.
+    /// For internal use only!
+    ///
+    /// # Panics
+    ///
+    /// Panics if not in the local branch.
+    pub(crate) async fn insert_entry(
+        &self,
+        name: String,
+        entry_type: EntryType,
+        version_vector: VersionVector,
+    ) -> Result<Arc<EntryData>> {
+        let mut inner = self.write().await;
+        inner.insert_entry(*self.local_branch.id(), name, entry_type, version_vector)
+    }
+
+    /// Increment version of the specified entry.
+    /// For internal use only!
+    pub(crate) async fn increment_entry_version(&self, _name: &str) -> Result<()> {
+        // TODO
+        // TODO: assert we are in the local branch
+        Ok(())
+    }
+
+    // Lock this directory for writing.
+    //
+    // # Panics
+    //
+    // Panics if not in the local branch.
+    async fn write(&self) -> RwLockWriteGuard<'_, Inner> {
+        let inner = self.inner.write().await;
+        assert_eq!(inner.blob.branch().id(), self.local_branch.id());
+        inner
     }
 
     async fn open(
@@ -294,23 +335,19 @@ struct Inner {
 }
 
 impl Inner {
-    async fn flush(&mut self, local_branch: &Branch) -> Result<()> {
+    async fn flush(&mut self) -> Result<()> {
         if !self.content.dirty {
             return Ok(());
         }
 
-        self.write_context
-            .ensure_local(local_branch, &mut self.blob)
-            .await?;
-        self.apply(local_branch).await?;
+        self.apply().await?;
         self.write_context.increment_version().await?;
 
         Ok(())
     }
 
-    async fn apply(&mut self, local_branch: &Branch) -> Result<()> {
+    async fn apply(&mut self) -> Result<()> {
         assert!(self.content.dirty);
-        assert_eq!(self.blob.branch().id(), local_branch.id());
 
         let buffer =
             bincode::serialize(&self.content).expect("failed to serialize directory content");
