@@ -269,6 +269,10 @@ impl Reader<'_> {
     pub fn branch(&self) -> &Branch {
         self.inner.blob.branch()
     }
+
+    pub(crate) fn write_context(&self) -> &WriteContext {
+        &self.inner.write_context
+    }
 }
 
 struct Inner {

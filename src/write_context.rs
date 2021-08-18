@@ -20,11 +20,11 @@ pub struct WriteContext {
     inner: Mutex<Inner>,
 }
 
+#[derive(Clone)]
 struct Parent {
     directory: Directory,
     entry_name: String,
     entry_data: Arc<EntryData>,
-    write_context: Arc<WriteContext>,
     // TODO: Should this be std::sync::Weak?
 }
 
@@ -53,7 +53,6 @@ impl WriteContext {
                 directory: parent_directory,
                 entry_name,
                 entry_data,
-                write_context: self.clone(),
             }),
             inner: Mutex::new(Inner {
                 ancestors: Vec::new(),
@@ -70,6 +69,17 @@ impl WriteContext {
         entry_type: EntryType,
         blob: &mut Blob,
     ) -> Result<()> {
+        // let mut ancestors = vec![];
+        // let mut current = self.parent.cloned();
+
+        // while let Some(current) = current {
+        //     let next = current.directory.write_context
+        //     ancestors.push(current);
+        //     current = current.read().await.parent().clone();
+        // }
+
+        // todo!()
+
         // TODO: load the directories always
 
         let mut guard = self.inner.lock().await;
@@ -81,20 +91,21 @@ impl WriteContext {
             return Ok(());
         }
 
-        let dst_locator = if let Some((parent, name)) = path::decompose(&self.calculate_path()) {
-            inner.ancestors = local_branch.ensure_directory_exists(parent).await?;
-            let vv = self.version_vector().clone();
-            inner
-                .ancestors
-                .last_mut()
-                .unwrap()
-                .insert_entry(name.to_owned(), entry_type, vv)
-                .await?
-                .locator()
-        } else {
-            // `blob` is the root directory.
-            Locator::Root
-        };
+        let dst_locator =
+            if let Some((parent, name)) = path::decompose(&self.calculate_path().await) {
+                inner.ancestors = local_branch.ensure_directory_exists(parent).await?;
+                let vv = self.version_vector().clone();
+                inner
+                    .ancestors
+                    .last_mut()
+                    .unwrap()
+                    .insert_entry(name.to_owned(), entry_type, vv)
+                    .await?
+                    .locator()
+            } else {
+                // `blob` is the root directory.
+                Locator::Root
+            };
 
         blob.fork(local_branch.clone(), dst_locator).await
     }
@@ -107,7 +118,7 @@ impl WriteContext {
 
         let mut dirs = inner.ancestors.drain(..).rev();
 
-        for component in self.calculate_path().components().rev() {
+        for component in self.calculate_path().await.components().rev() {
             match component {
                 Utf8Component::Normal(name) => {
                     if let Some(dir) = dirs.next() {
@@ -125,14 +136,22 @@ impl WriteContext {
         Ok(())
     }
 
-    fn calculate_path(&self) -> Utf8PathBuf {
-        match &self.parent {
-            None => "/".into(),
-            Some(parent) => parent
-                .write_context
-                .calculate_path()
-                .join(&parent.entry_name),
+    async fn calculate_path(&self) -> Utf8PathBuf {
+        let mut next = self.parent.clone();
+        let mut path = Utf8PathBuf::from("/");
+
+        while let Some(current) = next {
+            path = path.join(&current.entry_name);
+            next = current
+                .directory
+                .read()
+                .await
+                .write_context()
+                .parent
+                .clone();
         }
+
+        path
     }
 
     fn version_vector(&self) -> &VersionVector {
