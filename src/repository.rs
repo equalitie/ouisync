@@ -85,7 +85,7 @@ impl Repository {
     pub async fn create_file<P: AsRef<Utf8Path>>(
         &self,
         path: &P,
-    ) -> Result<(File, Vec<Arc<Directory>>)> {
+    ) -> Result<(File, Vec<Directory>)> {
         self.local_branch()
             .await
             .ensure_file_exists(path.as_ref())
@@ -94,10 +94,7 @@ impl Repository {
 
     /// Creates a new directory at the given path. Returs a vector of directories corresponding to
     /// the path (starting with the root).
-    pub async fn create_directory<P: AsRef<Utf8Path>>(
-        &self,
-        path: P,
-    ) -> Result<Vec<Arc<Directory>>> {
+    pub async fn create_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<Vec<Directory>> {
         Ok(self
             .local_branch()
             .await

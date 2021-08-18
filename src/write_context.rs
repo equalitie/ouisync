@@ -31,7 +31,7 @@ struct Parent {
 
 struct Inner {
     local_branch: Branch,
-    ancestors: Vec<Arc<Directory>>,
+    ancestors: Vec<Directory>,
 }
 
 impl WriteContext {

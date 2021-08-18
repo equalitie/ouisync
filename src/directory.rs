@@ -18,15 +18,16 @@ use std::{
 };
 use tokio::sync::{Mutex, RwLock, RwLockReadGuard};
 
+#[derive(Clone)]
 pub struct Directory {
-    inner: RwLock<Inner>,
+    inner: Arc<RwLock<Inner>>,
 }
 
 #[allow(clippy::len_without_is_empty)]
 impl Directory {
     /// Opens the root directory.
     /// For internal use only. Use [`Branch::open_root`] instead.
-    pub(crate) async fn open_root(owner_branch: Branch, local_branch: Branch) -> Result<Arc<Self>> {
+    pub(crate) async fn open_root(owner_branch: Branch, local_branch: Branch) -> Result<Self> {
         Self::open(
             owner_branch,
             Locator::Root,
@@ -37,7 +38,7 @@ impl Directory {
 
     /// Opens the root directory or creates it if it doesn't exist.
     /// For internal use only. Use [`Branch::open_or_create_root`] instead.
-    pub(crate) async fn open_or_create_root(branch: Branch) -> Result<Arc<Self>> {
+    pub(crate) async fn open_or_create_root(branch: Branch) -> Result<Self> {
         // TODO: make sure this is atomic
 
         let locator = Locator::Root;
@@ -77,7 +78,7 @@ impl Directory {
     }
 
     /// Creates a new subdirectory of this directory.
-    pub async fn create_directory(&self, name: String) -> Result<Arc<Self>> {
+    pub async fn create_directory(&self, name: String) -> Result<Self> {
         self.inner.write().await.create_directory(name).await
     }
 
@@ -134,32 +135,32 @@ impl Directory {
         branch: Branch,
         locator: Locator,
         write_context: Arc<WriteContext>,
-    ) -> Result<Arc<Self>> {
+    ) -> Result<Self> {
         let mut blob = Blob::open(branch, locator).await?;
         let buffer = blob.read_to_end().await?;
         let content = bincode::deserialize(&buffer).map_err(Error::MalformedDirectory)?;
 
-        Ok(Arc::new(Self {
-            inner: RwLock::new(Inner {
+        Ok(Self {
+            inner: Arc::new(RwLock::new(Inner {
                 blob,
                 content,
                 write_context,
                 open_directories: SubdirectoryCache::new(),
-            }),
-        }))
+            })),
+        })
     }
 
-    fn create(branch: Branch, locator: Locator, write_context: Arc<WriteContext>) -> Arc<Self> {
+    fn create(branch: Branch, locator: Locator, write_context: Arc<WriteContext>) -> Self {
         let blob = Blob::create(branch, locator);
 
-        Arc::new(Directory {
-            inner: RwLock::new(Inner {
+        Directory {
+            inner: Arc::new(RwLock::new(Inner {
                 blob,
                 content: Content::new(),
                 write_context,
                 open_directories: SubdirectoryCache::new(),
-            }),
-        })
+            })),
+        }
     }
 }
 
@@ -275,7 +276,7 @@ impl Inner {
         ))
     }
 
-    async fn create_directory(&mut self, name: String) -> Result<Arc<Directory>> {
+    async fn create_directory(&mut self, name: String) -> Result<Directory> {
         let vv = VersionVector::first(*self.local_branch_id());
         let entry = self.insert_entry(name.clone(), EntryType::Directory, vv)?;
         let locator = entry.locator();
@@ -426,7 +427,7 @@ impl<'a> DirectoryRef<'a> {
         Locator::Head(self.inner.parent_entry.blob_id)
     }
 
-    pub async fn open(&self) -> Result<Arc<Directory>> {
+    pub async fn open(&self) -> Result<Directory> {
         self.inner
             .parent
             .open_directories
@@ -558,40 +559,40 @@ impl EntryData {
 
 // Cache for open root directory
 // TODO: consider using the `ArcSwap` crate here.
-pub struct RootDirectoryCache(Mutex<Option<Weak<Directory>>>);
+pub struct RootDirectoryCache(Mutex<Option<Weak<RwLock<Inner>>>>);
 
 impl RootDirectoryCache {
     pub fn new() -> Self {
         Self(Mutex::new(None))
     }
 
-    pub async fn open(&self, owner_branch: Branch, local_branch: Branch) -> Result<Arc<Directory>> {
+    pub async fn open(&self, owner_branch: Branch, local_branch: Branch) -> Result<Directory> {
         let mut slot = self.0.lock().await;
 
-        if let Some(dir) = slot.as_mut().and_then(|dir| dir.upgrade()) {
-            Ok(dir)
+        if let Some(inner) = slot.as_mut().and_then(|inner| inner.upgrade()) {
+            Ok(Directory { inner })
         } else {
             let dir = Directory::open_root(owner_branch, local_branch).await?;
-            *slot = Some(Arc::downgrade(&dir));
+            *slot = Some(Arc::downgrade(&dir.inner));
             Ok(dir)
         }
     }
 
-    pub async fn open_or_create(&self, owner_branch: Branch) -> Result<Arc<Directory>> {
+    pub async fn open_or_create(&self, owner_branch: Branch) -> Result<Directory> {
         let mut slot = self.0.lock().await;
 
-        if let Some(dir) = slot.as_mut().and_then(|dir| dir.upgrade()) {
-            Ok(dir)
+        if let Some(inner) = slot.as_mut().and_then(|inner| inner.upgrade()) {
+            Ok(Directory { inner })
         } else {
             let dir = Directory::open_or_create_root(owner_branch).await?;
-            *slot = Some(Arc::downgrade(&dir));
+            *slot = Some(Arc::downgrade(&dir.inner));
             Ok(dir)
         }
     }
 }
 
 // Cache of open subdirectories.
-struct SubdirectoryCache(Mutex<HashMap<Locator, Weak<Directory>>>);
+struct SubdirectoryCache(Mutex<HashMap<Locator, Weak<RwLock<Inner>>>>);
 
 impl SubdirectoryCache {
     fn new() -> Self {
@@ -603,22 +604,22 @@ impl SubdirectoryCache {
         branch: Branch,
         locator: Locator,
         write_context: Arc<WriteContext>,
-    ) -> Result<Arc<Directory>> {
+    ) -> Result<Directory> {
         let mut map = self.0.lock().await;
 
         let dir = match map.entry(locator) {
             hash_map::Entry::Occupied(mut entry) => {
-                if let Some(dir) = entry.get().upgrade() {
-                    dir
+                if let Some(inner) = entry.get().upgrade() {
+                    Directory { inner }
                 } else {
                     let dir = Directory::open(branch, locator, write_context).await?;
-                    entry.insert(Arc::downgrade(&dir));
+                    entry.insert(Arc::downgrade(&dir.inner));
                     dir
                 }
             }
             hash_map::Entry::Vacant(entry) => {
                 let dir = Directory::open(branch, locator, write_context).await?;
-                entry.insert(Arc::downgrade(&dir));
+                entry.insert(Arc::downgrade(&dir.inner));
                 dir
             }
         };
@@ -634,14 +635,14 @@ impl SubdirectoryCache {
         branch: Branch,
         locator: Locator,
         write_context: Arc<WriteContext>,
-    ) -> Result<Arc<Directory>> {
+    ) -> Result<Directory> {
         let mut map = self.0.lock().await;
 
         let dir = match map.entry(locator) {
             hash_map::Entry::Occupied(_) => return Err(Error::EntryExists),
             hash_map::Entry::Vacant(entry) => {
                 let dir = Directory::create(branch, locator, write_context);
-                entry.insert(Arc::downgrade(&dir));
+                entry.insert(Arc::downgrade(&dir.inner));
                 dir
             }
         };

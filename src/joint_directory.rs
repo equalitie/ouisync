@@ -14,18 +14,17 @@ use std::{
     borrow::Cow,
     collections::{btree_map::Entry, BTreeMap},
     fmt, iter, mem,
-    sync::Arc,
 };
 
 /// Unified view over multiple concurrent versions of a directory.
 pub struct JointDirectory {
-    versions: BTreeMap<ReplicaId, Arc<Directory>>,
+    versions: BTreeMap<ReplicaId, Directory>,
 }
 
 impl JointDirectory {
     pub async fn new<I>(versions: I) -> Self
     where
-        I: IntoIterator<Item = Arc<Directory>>,
+        I: IntoIterator<Item = Directory>,
     {
         let versions = future::join_all(versions.into_iter().map(|dir| async move {
             let branch_id = *dir.read().await.branch().id();
