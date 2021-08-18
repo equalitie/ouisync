@@ -9,15 +9,13 @@ use crate::{
     version_vector::VersionVector,
 };
 use camino::{Utf8Component, Utf8PathBuf};
-use std::ops::DerefMut;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 
 /// Context needed for updating all necessary info when writing to a file or directory.
 pub struct WriteContext {
     // None iff this WriteContext corresponds to the root directory.
     parent: Option<Parent>,
-    inner: Mutex<Inner>,
+    ancestors: Vec<Directory>,
 }
 
 #[derive(Clone)]
@@ -28,17 +26,11 @@ struct Parent {
     // TODO: Should this be std::sync::Weak?
 }
 
-struct Inner {
-    ancestors: Vec<Directory>,
-}
-
 impl WriteContext {
     pub fn root() -> Self {
         Self {
             parent: None,
-            inner: Mutex::new(Inner {
-                ancestors: Vec::new(),
-            }),
+            ancestors: Vec::new(),
         }
     }
 
@@ -54,9 +46,7 @@ impl WriteContext {
                 entry_name,
                 entry_data,
             }),
-            inner: Mutex::new(Inner {
-                ancestors: Vec::new(),
-            }),
+            ancestors: Vec::new(),
         }
     }
 
@@ -64,7 +54,7 @@ impl WriteContext {
     /// its ancestor directories exist and live in the local branch as well.
     /// Call `commit` to finalize the write.
     pub async fn begin(
-        &self,
+        &mut self,
         local_branch: &Branch,
         entry_type: EntryType,
         blob: &mut Blob,
@@ -82,9 +72,6 @@ impl WriteContext {
 
         // TODO: load the directories always
 
-        let mut guard = self.inner.lock().await;
-        let inner = guard.deref_mut();
-
         if blob.branch().id() == local_branch.id() {
             // Blob already lives in the local branch. We assume the ancestor directories have been
             // already created as well so there is nothing else to do.
@@ -93,10 +80,9 @@ impl WriteContext {
 
         let dst_locator =
             if let Some((parent, name)) = path::decompose(&self.calculate_path().await) {
-                inner.ancestors = local_branch.ensure_directory_exists(parent).await?;
+                self.ancestors = local_branch.ensure_directory_exists(parent).await?;
                 let vv = self.version_vector().clone();
-                inner
-                    .ancestors
+                self.ancestors
                     .last_mut()
                     .unwrap()
                     .insert_entry(name.to_owned(), entry_type, vv)
@@ -112,13 +98,11 @@ impl WriteContext {
 
     /// Commit writing to the blob started by a previous call to `begin`. Does nothing if `begin`
     /// was not called.
-    pub async fn commit(&self) -> Result<()> {
-        let mut guard = self.inner.lock().await;
-        let inner = guard.deref_mut();
+    pub async fn commit(&mut self) -> Result<()> {
+        let path = self.calculate_path().await;
+        let mut dirs = self.ancestors.drain(..).rev();
 
-        let mut dirs = inner.ancestors.drain(..).rev();
-
-        for component in self.calculate_path().await.components().rev() {
+        for component in path.components().rev() {
             match component {
                 Utf8Component::Normal(name) => {
                     if let Some(dir) = dirs.next() {
