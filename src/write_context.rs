@@ -2,20 +2,16 @@ use crate::{
     blob::Blob,
     branch::Branch,
     directory::{Directory, EntryData},
-    entry_type::EntryType,
     error::Result,
     locator::Locator,
-    path,
-    version_vector::VersionVector,
 };
-use camino::{Utf8Component, Utf8PathBuf};
+use async_recursion::async_recursion;
 use std::sync::Arc;
 
 /// Context needed for updating all necessary info when writing to a file or directory.
 pub struct WriteContext {
     // None iff this WriteContext corresponds to the root directory.
     parent: Option<Parent>,
-    ancestors: Vec<Directory>,
 }
 
 #[derive(Clone)]
@@ -28,10 +24,7 @@ struct Parent {
 
 impl WriteContext {
     pub fn root() -> Self {
-        Self {
-            parent: None,
-            ancestors: Vec::new(),
-        }
+        Self { parent: None }
     }
 
     pub async fn child(
@@ -46,100 +39,80 @@ impl WriteContext {
                 entry_name,
                 entry_data,
             }),
-            ancestors: Vec::new(),
         }
     }
 
-    /// Begin writing to the given blob. This ensures the blob lives in the local branch and all
-    /// its ancestor directories exist and live in the local branch as well.
-    /// Call `commit` to finalize the write.
-    pub async fn begin(
-        &mut self,
-        local_branch: &Branch,
-        entry_type: EntryType,
-        blob: &mut Blob,
-    ) -> Result<()> {
-        // let mut ancestors = vec![];
-        // let mut current = self.parent.cloned();
-
-        // while let Some(current) = current {
-        //     let next = current.directory.write_context
-        //     ancestors.push(current);
-        //     current = current.read().await.parent().clone();
-        // }
-
-        // todo!()
-
-        // TODO: load the directories always
-
+    /// Ensure the blob lives in the local branch and all its ancestor directories exist and live
+    /// in the local branch as well. Should be called before
+    pub async fn begin(&mut self, local_branch: &Branch, blob: &mut Blob) -> Result<()> {
         if blob.branch().id() == local_branch.id() {
             // Blob already lives in the local branch. We assume the ancestor directories have been
             // already created as well so there is nothing else to do.
             return Ok(());
         }
 
-        let dst_locator =
-            if let Some((parent, name)) = path::decompose(&self.calculate_path().await) {
-                self.ancestors = local_branch.ensure_directory_exists(parent).await?;
-                let vv = self.version_vector().clone();
-                self.ancestors
-                    .last_mut()
-                    .unwrap()
-                    .insert_entry(name.to_owned(), entry_type, vv)
-                    .await?
-                    .locator()
-            } else {
-                // `blob` is the root directory.
-                Locator::Root
-            };
+        let dst_locator = if let Some(parent) = &mut self.parent {
+            parent.directory = fork_directory(&parent.directory, local_branch).await?;
+            parent.entry_data = parent
+                .directory
+                .insert_entry(
+                    parent.entry_name.clone(),
+                    parent.entry_data.entry_type(),
+                    parent.entry_data.version_vector().clone(),
+                )
+                .await?;
+
+            parent.entry_data.locator()
+        } else {
+            // `blob` is the root directory.
+            Locator::Root
+        };
 
         blob.fork(local_branch.clone(), dst_locator).await
     }
 
-    /// Commit writing to the blob started by a previous call to `begin`. Does nothing if `begin`
-    /// was not called.
-    pub async fn commit(&mut self) -> Result<()> {
-        let path = self.calculate_path().await;
-        let mut dirs = self.ancestors.drain(..).rev();
-
-        for component in path.components().rev() {
-            match component {
-                Utf8Component::Normal(name) => {
-                    if let Some(dir) = dirs.next() {
-                        dir.increment_entry_version(name).await?;
-                        dir.apply().await?;
-                    } else {
-                        break;
-                    }
-                }
-                Utf8Component::Prefix(_) | Utf8Component::RootDir | Utf8Component::CurDir => (),
-                Utf8Component::ParentDir => panic!("non-normalized paths not supported"),
-            }
-        }
-
-        Ok(())
-    }
-
-    async fn calculate_path(&self) -> Utf8PathBuf {
-        let mut next = self.parent.clone();
-        let mut path = Utf8PathBuf::from("/");
-
-        while let Some(current) = next {
-            path = path.join(&current.entry_name);
-            next = current
+    /// Commit writing to the blob started by a previous call to `begin`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called without `begin` being called first.
+    // TODO: consider rewriting this to not use recursion.
+    #[async_recursion]
+    pub async fn commit(&self) -> Result<()> {
+        if let Some(parent) = &self.parent {
+            parent
+                .directory
+                .increment_entry_version(&parent.entry_name)
+                .await?;
+            parent.directory.apply().await?;
+            parent
                 .directory
                 .read()
                 .await
                 .write_context()
-                .parent
-                .clone();
+                .commit()
+                .await?;
         }
 
-        path
+        Ok(())
     }
+}
 
-    fn version_vector(&self) -> &VersionVector {
-        // TODO: How do we get the VV when this WriteContext corresponds to the root directory?
-        self.parent.as_ref().unwrap().entry_data.version_vector()
+// TODO: consider rewriting this to not use recursion.
+#[async_recursion]
+async fn fork_directory(dir: &Directory, local_branch: &Branch) -> Result<Directory> {
+    if let Some(parent) = &dir.read().await.write_context().parent {
+        let parent_dir = fork_directory(&parent.directory, local_branch).await?;
+        let parent_dir_reader = parent_dir.read().await;
+
+        if let Ok(entry) = parent_dir_reader.lookup_version(&parent.entry_name, local_branch.id()) {
+            entry.directory()?.open().await
+        } else {
+            parent_dir
+                .create_directory(parent.entry_name.to_string())
+                .await
+        }
+    } else {
+        local_branch.open_or_create_root().await
     }
 }

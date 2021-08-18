@@ -80,7 +80,7 @@ impl Directory {
     ///
     /// Panics if not dirty or not in the local branch.
     pub(crate) async fn apply(&self) -> Result<()> {
-        self.inner.write().await.apply().await
+        self.inner.write().await.apply(&self.local_branch).await
     }
 
     /// Creates a new file inside this directory.
@@ -290,16 +290,17 @@ impl Inner {
         }
 
         self.write_context
-            .begin(local_branch, EntryType::Directory, &mut self.blob)
+            .begin(local_branch, &mut self.blob)
             .await?;
-        self.apply().await?;
+        self.apply(local_branch).await?;
         self.write_context.commit().await?;
 
         Ok(())
     }
 
-    async fn apply(&mut self) -> Result<()> {
+    async fn apply(&mut self, local_branch: &Branch) -> Result<()> {
         assert!(self.content.dirty);
+        assert_eq!(self.blob.branch().id(), local_branch.id());
 
         let buffer =
             bincode::serialize(&self.content).expect("failed to serialize directory content");
@@ -582,6 +583,10 @@ pub struct EntryData {
 impl EntryData {
     pub fn locator(&self) -> Locator {
         Locator::Head(self.blob_id)
+    }
+
+    pub fn entry_type(&self) -> EntryType {
+        self.entry_type
     }
 
     pub fn version_vector(&self) -> &VersionVector {
