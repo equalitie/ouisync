@@ -33,7 +33,7 @@ impl Directory {
             owner_branch,
             local_branch,
             Locator::Root,
-            WriteContext::root(),
+            WriteContext::ROOT,
         )
         .await
     }
@@ -45,16 +45,9 @@ impl Directory {
 
         let locator = Locator::Root;
 
-        match Self::open(
-            branch.clone(),
-            branch.clone(),
-            locator,
-            WriteContext::root(),
-        )
-        .await
-        {
+        match Self::open(branch.clone(), branch.clone(), locator, WriteContext::ROOT).await {
             Ok(dir) => Ok(dir),
-            Err(Error::EntryNotFound) => Ok(Self::create(branch, locator, WriteContext::root())),
+            Err(Error::EntryNotFound) => Ok(Self::create(branch, locator, WriteContext::ROOT)),
             Err(error) => Err(error),
         }
     }
@@ -103,7 +96,7 @@ impl Directory {
         let entry =
             inner.insert_entry(*self.local_branch.id(), name.clone(), EntryType::File, vv)?;
         let locator = entry.locator();
-        let write_context = inner.write_context.child(self.clone(), name, entry).await;
+        let write_context = WriteContext::child(self.clone(), name, entry);
 
         Ok(File::create(self.local_branch.clone(), locator, write_context).await)
     }
@@ -120,7 +113,7 @@ impl Directory {
             vv,
         )?;
         let locator = entry.locator();
-        let write_context = inner.write_context.child(self.clone(), name, entry).await;
+        let write_context = WriteContext::child(self.clone(), name, entry);
 
         inner
             .open_directories
@@ -307,10 +300,10 @@ impl Inner {
         }
 
         self.write_context
-            .begin(local_branch, &mut self.blob)
+            .ensure_local(local_branch, &mut self.blob)
             .await?;
         self.apply(local_branch).await?;
-        self.write_context.commit().await?;
+        self.write_context.increment_version().await?;
 
         Ok(())
     }
@@ -443,7 +436,7 @@ impl<'a> FileRef<'a> {
             self.inner.parent_inner.blob.branch().clone(),
             self.inner.parent_outer.local_branch.clone(),
             self.locator(),
-            self.inner.write_context().await,
+            self.inner.write_context(),
         )
         .await
     }
@@ -479,7 +472,7 @@ impl<'a> DirectoryRef<'a> {
                 self.inner.parent_inner.blob.branch().clone(),
                 self.inner.parent_outer.local_branch.clone(),
                 self.locator(),
-                self.inner.write_context().await,
+                self.inner.write_context(),
             )
             .await
     }
@@ -494,15 +487,12 @@ struct RefInner<'a> {
 }
 
 impl RefInner<'_> {
-    async fn write_context(&self) -> WriteContext {
-        self.parent_inner
-            .write_context
-            .child(
-                self.parent_outer.clone(),
-                self.name.into(),
-                self.entry_data.clone(),
-            )
-            .await
+    fn write_context(&self) -> WriteContext {
+        WriteContext::child(
+            self.parent_outer.clone(),
+            self.name.into(),
+            self.entry_data.clone(),
+        )
     }
 }
 
@@ -817,7 +807,7 @@ mod tests {
         assert_eq!(parent_dir.entries().count(), 0);
 
         // Check the file itself was removed as well.
-        match File::open(branch.clone(), branch, file_locator, WriteContext::root()).await {
+        match File::open(branch.clone(), branch, file_locator, WriteContext::ROOT).await {
             Err(Error::EntryNotFound) => (),
             Err(error) => panic!("unexpected error {:?}", error),
             Ok(_) => panic!("file should not exists but it does"),

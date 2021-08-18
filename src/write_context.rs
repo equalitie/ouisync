@@ -23,12 +23,11 @@ struct Parent {
 }
 
 impl WriteContext {
-    pub fn root() -> Self {
-        Self { parent: None }
-    }
+    /// Write context for the root directory.
+    pub const ROOT: Self = Self { parent: None };
 
-    pub async fn child(
-        &self,
+    /// Write context for a child entry of the given parent directory.
+    pub fn child(
         parent_directory: Directory,
         entry_name: String,
         entry_data: Arc<EntryData>,
@@ -44,7 +43,7 @@ impl WriteContext {
 
     /// Ensure the blob lives in the local branch and all its ancestor directories exist and live
     /// in the local branch as well. Should be called before
-    pub async fn begin(&mut self, local_branch: &Branch, blob: &mut Blob) -> Result<()> {
+    pub async fn ensure_local(&mut self, local_branch: &Branch, blob: &mut Blob) -> Result<()> {
         if blob.branch().id() == local_branch.id() {
             // Blob already lives in the local branch. We assume the ancestor directories have been
             // already created as well so there is nothing else to do.
@@ -71,14 +70,15 @@ impl WriteContext {
         blob.fork(local_branch.clone(), dst_locator).await
     }
 
-    /// Commit writing to the blob started by a previous call to `begin`.
+    /// Increment the version of the blob and all its ancestor directories.
     ///
     /// # Panics
     ///
-    /// Panics if called without `begin` being called first.
+    /// Panics if the ancestor directories are not in the local branch (call `ensure_local` first
+    /// to avoid)
     // TODO: consider rewriting this to not use recursion.
     #[async_recursion]
-    pub async fn commit(&self) -> Result<()> {
+    pub async fn increment_version(&self) -> Result<()> {
         if let Some(parent) = &self.parent {
             parent
                 .directory
@@ -90,7 +90,7 @@ impl WriteContext {
                 .read()
                 .await
                 .write_context()
-                .commit()
+                .increment_version()
                 .await?;
         }
 

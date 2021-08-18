@@ -63,7 +63,7 @@ impl File {
     /// Writes `buffer` into this file.
     pub async fn write(&mut self, buffer: &[u8]) -> Result<()> {
         self.write_context
-            .begin(&self.local_branch, &mut self.blob)
+            .ensure_local(&self.local_branch, &mut self.blob)
             .await?;
         self.blob.write(buffer).await
     }
@@ -76,7 +76,7 @@ impl File {
     /// Truncates the file to the given length.
     pub async fn truncate(&mut self, len: u64) -> Result<()> {
         self.write_context
-            .begin(&self.local_branch, &mut self.blob)
+            .ensure_local(&self.local_branch, &mut self.blob)
             .await?;
         self.blob.truncate(len).await
     }
@@ -85,7 +85,7 @@ impl File {
     /// store.
     pub async fn flush(&mut self) -> Result<()> {
         self.blob.flush().await?;
-        self.write_context.commit().await
+        self.write_context.increment_version().await
     }
 
     /// Removes this file.
