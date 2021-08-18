@@ -8,7 +8,7 @@ use crate::{
     locator::Locator,
     replica_id::ReplicaId,
     version_vector::VersionVector,
-    write_context::{ParentContext, WriteContext},
+    write_context::ParentContext,
 };
 use async_recursion::async_recursion;
 use serde::{Deserialize, Serialize};
@@ -30,13 +30,7 @@ impl Directory {
     /// Opens the root directory.
     /// For internal use only. Use [`Branch::open_root`] instead.
     pub(crate) async fn open_root(owner_branch: Branch, local_branch: Branch) -> Result<Self> {
-        Self::open(
-            owner_branch,
-            local_branch,
-            Locator::Root,
-            WriteContext::ROOT,
-        )
-        .await
+        Self::open(owner_branch, local_branch, Locator::Root, None).await
     }
 
     /// Opens the root directory or creates it if it doesn't exist.
@@ -46,9 +40,9 @@ impl Directory {
 
         let locator = Locator::Root;
 
-        match Self::open(branch.clone(), branch.clone(), locator, WriteContext::ROOT).await {
+        match Self::open(branch.clone(), branch.clone(), locator, None).await {
             Ok(dir) => Ok(dir),
-            Err(Error::EntryNotFound) => Ok(Self::create(branch, locator, WriteContext::ROOT)),
+            Err(Error::EntryNotFound) => Ok(Self::create(branch, locator, None)),
             Err(error) => Err(error),
         }
     }
@@ -90,18 +84,22 @@ impl Directory {
         let mut inner = self.write().await;
 
         let vv = VersionVector::first(*self.local_branch.id());
-        let entry = inner.insert_entry(
+        let entry_data = inner.insert_entry(
             *self.local_branch.id(),
             name.clone(),
             EntryType::Directory,
             vv,
         )?;
-        let locator = entry.locator();
-        let write_context = WriteContext::child(self.clone(), name, entry);
+        let locator = entry_data.locator();
+        let parent = ParentContext {
+            directory: self.clone(),
+            entry_name: name,
+            entry_data,
+        };
 
         inner
             .open_directories
-            .create(self.local_branch.clone(), locator, write_context)
+            .create(self.local_branch.clone(), locator, parent)
             .await
     }
 
@@ -142,7 +140,7 @@ impl Directory {
     // Forks this directory into the local branch.
     #[async_recursion]
     pub async fn fork(&self) -> Result<Directory> {
-        if let Some(parent) = &self.read().await.write_context().parent() {
+        if let Some(parent) = &self.read().await.parent() {
             let parent_dir = parent.directory.fork().await?;
             let parent_dir_reader = parent_dir.read().await;
 
@@ -200,7 +198,7 @@ impl Directory {
         owner_branch: Branch,
         local_branch: Branch,
         locator: Locator,
-        write_context: WriteContext,
+        parent: Option<ParentContext>,
     ) -> Result<Self> {
         let mut blob = Blob::open(owner_branch, locator).await?;
         let buffer = blob.read_to_end().await?;
@@ -210,21 +208,21 @@ impl Directory {
             inner: Arc::new(RwLock::new(Inner {
                 blob,
                 content,
-                write_context,
+                parent,
                 open_directories: SubdirectoryCache::new(),
             })),
             local_branch,
         })
     }
 
-    fn create(owner_branch: Branch, locator: Locator, write_context: WriteContext) -> Self {
+    fn create(owner_branch: Branch, locator: Locator, parent: Option<ParentContext>) -> Self {
         let blob = Blob::create(owner_branch.clone(), locator);
 
         Directory {
             inner: Arc::new(RwLock::new(Inner {
                 blob,
                 content: Content::new(),
-                write_context,
+                parent,
                 open_directories: SubdirectoryCache::new(),
             })),
             local_branch: owner_branch,
@@ -300,18 +298,14 @@ impl Reader<'_> {
 
     /// Returns the parent directory, if any.
     pub fn parent(&self) -> Option<&ParentContext> {
-        self.inner.write_context.parent()
-    }
-
-    pub(crate) fn write_context(&self) -> &WriteContext {
-        &self.inner.write_context
+        self.inner.parent.as_ref()
     }
 }
 
 struct Inner {
     blob: Blob,
     content: Content,
-    write_context: WriteContext,
+    parent: Option<ParentContext>,
     // Cache of open subdirectories. Used to make sure that multiple instances of the same directory
     // all share the same internal state.
     open_directories: SubdirectoryCache,
@@ -333,7 +327,7 @@ impl Inner {
 
         self.content.dirty = false;
 
-        if let Some(parent) = self.write_context.parent() {
+        if let Some(parent) = &self.parent {
             parent.increment_version().await?;
             parent.directory.flush().await?;
         }
@@ -489,7 +483,7 @@ impl<'a> DirectoryRef<'a> {
                 self.inner.parent_inner.blob.branch().clone(),
                 self.inner.parent_outer.local_branch.clone(),
                 self.locator(),
-                self.inner.write_context(),
+                self.inner.parent_context(),
             )
             .await
     }
@@ -504,14 +498,6 @@ struct RefInner<'a> {
 }
 
 impl RefInner<'_> {
-    fn write_context(&self) -> WriteContext {
-        WriteContext::child(
-            self.parent_outer.clone(),
-            self.name.into(),
-            self.entry_data.clone(),
-        )
-    }
-
     fn parent_context(&self) -> ParentContext {
         ParentContext {
             directory: self.parent_outer.clone(),
@@ -679,7 +665,7 @@ impl SubdirectoryCache {
         owner_branch: Branch,
         local_branch: Branch,
         locator: Locator,
-        write_context: WriteContext,
+        parent: ParentContext,
     ) -> Result<Directory> {
         let mut map = self.0.lock().await;
 
@@ -692,14 +678,14 @@ impl SubdirectoryCache {
                     }
                 } else {
                     let dir =
-                        Directory::open(owner_branch, local_branch, locator, write_context).await?;
+                        Directory::open(owner_branch, local_branch, locator, Some(parent)).await?;
                     entry.insert(Arc::downgrade(&dir.inner));
                     dir
                 }
             }
             hash_map::Entry::Vacant(entry) => {
                 let dir =
-                    Directory::open(owner_branch, local_branch, locator, write_context).await?;
+                    Directory::open(owner_branch, local_branch, locator, Some(parent)).await?;
                 entry.insert(Arc::downgrade(&dir.inner));
                 dir
             }
@@ -715,14 +701,14 @@ impl SubdirectoryCache {
         &self,
         branch: Branch,
         locator: Locator,
-        write_context: WriteContext,
+        parent: ParentContext,
     ) -> Result<Directory> {
         let mut map = self.0.lock().await;
 
         let dir = match map.entry(locator) {
             hash_map::Entry::Occupied(_) => return Err(Error::EntryExists),
             hash_map::Entry::Vacant(entry) => {
-                let dir = Directory::create(branch, locator, write_context);
+                let dir = Directory::create(branch, locator, Some(parent));
                 entry.insert(Arc::downgrade(&dir.inner));
                 dir
             }

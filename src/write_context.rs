@@ -4,16 +4,14 @@ use crate::{
 };
 use std::sync::Arc;
 
-/// Context needed for updating all necessary info when writing to a file or directory.
-pub struct WriteContext {
-    // None iff this WriteContext corresponds to the root directory.
-    parent: Option<ParentContext>,
-}
-
+/// Info about an entry in the context of its parent directory.
 #[derive(Clone)]
 pub struct ParentContext {
+    /// The parent directory of the entry.
     pub directory: Directory,
+    /// The name of the entry in its parent directory.
     pub entry_name: String,
+    /// The entry data in its parent directory.
     pub entry_data: Arc<EntryData>,
     // TODO: Should this be std::sync::Weak?
 }
@@ -24,29 +22,5 @@ impl ParentContext {
         self.directory
             .increment_entry_version(&self.entry_name)
             .await
-    }
-}
-
-impl WriteContext {
-    /// Write context for the root directory.
-    pub const ROOT: Self = Self { parent: None };
-
-    /// Write context for a child entry of the given parent directory.
-    pub fn child(
-        parent_directory: Directory,
-        entry_name: String,
-        entry_data: Arc<EntryData>,
-    ) -> Self {
-        Self {
-            parent: Some(ParentContext {
-                directory: parent_directory,
-                entry_name,
-                entry_data,
-            }),
-        }
-    }
-
-    pub fn parent(&self) -> Option<&ParentContext> {
-        self.parent.as_ref()
     }
 }
