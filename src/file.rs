@@ -1,12 +1,12 @@
 use crate::{
-    blob::Blob, blob_id::BlobId, branch::Branch, directory::Directory, error::Result,
-    locator::Locator, write_context::WriteContext,
+    blob::Blob, blob_id::BlobId, branch::Branch, error::Result, locator::Locator,
+    write_context::ParentContext,
 };
 use std::io::SeekFrom;
 
 pub struct File {
     blob: Blob,
-    write_context: WriteContext,
+    parent: ParentContext,
     local_branch: Branch,
 }
 
@@ -16,20 +16,20 @@ impl File {
         owner_branch: Branch,
         local_branch: Branch,
         locator: Locator,
-        write_context: WriteContext,
+        parent: ParentContext,
     ) -> Result<Self> {
         Ok(Self {
             blob: Blob::open(owner_branch, locator).await?,
-            write_context,
+            parent,
             local_branch,
         })
     }
 
     /// Creates a new file.
-    pub async fn create(branch: Branch, locator: Locator, write_context: WriteContext) -> Self {
+    pub async fn create(branch: Branch, locator: Locator, parent: ParentContext) -> Self {
         Self {
             blob: Blob::create(branch.clone(), locator),
-            write_context,
+            parent,
             local_branch: branch,
         }
     }
@@ -62,9 +62,7 @@ impl File {
 
     /// Writes `buffer` into this file.
     pub async fn write(&mut self, buffer: &[u8]) -> Result<()> {
-        self.write_context
-            .ensure_local(&self.local_branch, &mut self.blob)
-            .await?;
+        self.ensure_local().await?;
         self.blob.write(buffer).await
     }
 
@@ -75,9 +73,7 @@ impl File {
 
     /// Truncates the file to the given length.
     pub async fn truncate(&mut self, len: u64) -> Result<()> {
-        self.write_context
-            .ensure_local(&self.local_branch, &mut self.blob)
-            .await?;
+        self.ensure_local().await?;
         self.blob.truncate(len).await
     }
 
@@ -85,7 +81,10 @@ impl File {
     /// store.
     pub async fn flush(&mut self) -> Result<()> {
         self.blob.flush().await?;
-        self.write_context.increment_version().await
+
+        // TODO: proceed only if dirty
+        self.parent.increment_version().await?;
+        self.parent.directory.flush().await
     }
 
     /// Removes this file.
@@ -98,10 +97,33 @@ impl File {
         self.blob.blob_id()
     }
 
-    pub fn parent(&self) -> &Directory {
-        self.write_context
-            .parent_directory()
-            .expect("file should always have a parent directory")
+    pub fn parent(&self) -> &ParentContext {
+        &self.parent
+    }
+
+    /// Ensure this file lives in the local branch and all its ancestor directories exist and live
+    /// in the local branch as well. Should be called before any mutable operation.
+    async fn ensure_local(&mut self) -> Result<()> {
+        if self.blob.branch().id() == self.local_branch.id() {
+            // File already lives in the local branch. We assume the ancestor directories have been
+            // already created as well so there is nothing else to do.
+            return Ok(());
+        }
+
+        self.parent.directory = self.parent.directory.fork().await?;
+        self.parent.entry_data = self
+            .parent
+            .directory
+            .insert_entry(
+                self.parent.entry_name.clone(),
+                self.parent.entry_data.entry_type(),
+                self.parent.entry_data.version_vector().clone(),
+            )
+            .await?;
+
+        self.blob
+            .fork(self.local_branch.clone(), self.parent.entry_data.locator())
+            .await
     }
 }
 
@@ -121,7 +143,6 @@ mod test {
 
         file0.write(b"small").await.unwrap();
         file0.flush().await.unwrap();
-        file0.parent().flush_recursively().await.unwrap();
 
         // Write to the file by branch 1
         let mut file1 = branch0

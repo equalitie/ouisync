@@ -8,7 +8,7 @@ use crate::{
     locator::Locator,
     replica_id::ReplicaId,
     version_vector::VersionVector,
-    write_context::WriteContext,
+    write_context::{ParentContext, WriteContext},
 };
 use async_recursion::async_recursion;
 use serde::{Deserialize, Serialize};
@@ -63,20 +63,9 @@ impl Directory {
 
     /// Flushes this directory ensuring that any pending changes are written to the store and the
     /// version vectors of this and the ancestor directories are properly incremented.
+    /// Also flushes all ancestor directories.
     pub async fn flush(&self) -> Result<()> {
         self.inner.write().await.flush().await
-    }
-
-    /// Flushes this directory and all its ancestors all the way to the root.
-    pub async fn flush_recursively(&self) -> Result<()> {
-        let mut curr = Some(self.clone());
-
-        while let Some(next) = curr {
-            next.flush().await?;
-            curr = next.read().await.parent().cloned();
-        }
-
-        Ok(())
     }
 
     /// Creates a new file inside this directory.
@@ -84,12 +73,16 @@ impl Directory {
         let mut inner = self.write().await;
 
         let vv = VersionVector::first(*self.local_branch.id());
-        let entry =
+        let entry_data =
             inner.insert_entry(*self.local_branch.id(), name.clone(), EntryType::File, vv)?;
-        let locator = entry.locator();
-        let write_context = WriteContext::child(self.clone(), name, entry);
+        let locator = entry_data.locator();
+        let parent = ParentContext {
+            directory: self.clone(),
+            entry_name: name,
+            entry_data,
+        };
 
-        Ok(File::create(self.local_branch.clone(), locator, write_context).await)
+        Ok(File::create(self.local_branch.clone(), locator, parent).await)
     }
 
     /// Creates a new subdirectory of this directory.
@@ -165,16 +158,6 @@ impl Directory {
         } else {
             self.local_branch.open_or_create_root().await
         }
-    }
-
-    /// Writes the pending changes to the store without incrementing the version vectors.
-    /// For internal use only!
-    ///
-    /// # Panics
-    ///
-    /// Panics if not dirty or not in the local branch.
-    pub(crate) async fn apply(&self) -> Result<()> {
-        self.write().await.apply().await
     }
 
     /// Inserts a dangling entry into this directory. It's the responsibility of the caller to make
@@ -316,8 +299,8 @@ impl Reader<'_> {
     }
 
     /// Returns the parent directory, if any.
-    pub fn parent(&self) -> Option<&Directory> {
-        self.inner.write_context.parent_directory()
+    pub fn parent(&self) -> Option<&ParentContext> {
+        self.inner.write_context.parent()
     }
 
     pub(crate) fn write_context(&self) -> &WriteContext {
@@ -335,19 +318,11 @@ struct Inner {
 }
 
 impl Inner {
+    #[async_recursion]
     async fn flush(&mut self) -> Result<()> {
         if !self.content.dirty {
             return Ok(());
         }
-
-        self.apply().await?;
-        self.write_context.increment_version().await?;
-
-        Ok(())
-    }
-
-    async fn apply(&mut self) -> Result<()> {
-        assert!(self.content.dirty);
 
         let buffer =
             bincode::serialize(&self.content).expect("failed to serialize directory content");
@@ -357,6 +332,11 @@ impl Inner {
         self.blob.flush().await?;
 
         self.content.dirty = false;
+
+        if let Some(parent) = self.write_context.parent() {
+            parent.increment_version().await?;
+            parent.directory.flush().await?;
+        }
 
         Ok(())
     }
@@ -473,7 +453,7 @@ impl<'a> FileRef<'a> {
             self.inner.parent_inner.blob.branch().clone(),
             self.inner.parent_outer.local_branch.clone(),
             self.locator(),
-            self.inner.write_context(),
+            self.inner.parent_context(),
         )
         .await
     }
@@ -530,6 +510,14 @@ impl RefInner<'_> {
             self.name.into(),
             self.entry_data.clone(),
         )
+    }
+
+    fn parent_context(&self) -> ParentContext {
+        ParentContext {
+            directory: self.parent_outer.clone(),
+            entry_name: self.name.into(),
+            entry_data: self.entry_data.clone(),
+        }
     }
 }
 
@@ -843,11 +831,11 @@ mod tests {
 
         assert_eq!(parent_dir.entries().count(), 0);
 
-        // Check the file itself was removed as well.
-        match File::open(branch.clone(), branch, file_locator, WriteContext::ROOT).await {
+        // Check the file blob itself was removed as well.
+        match Blob::open(branch, file_locator).await {
             Err(Error::EntryNotFound) => (),
             Err(error) => panic!("unexpected error {:?}", error),
-            Ok(_) => panic!("file should not exists but it does"),
+            Ok(_) => panic!("file blob should not exists but it does"),
         }
     }
 

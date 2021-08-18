@@ -658,7 +658,6 @@ impl Inner {
         let mut file = self.repository.create_file(&path).await?;
 
         file.flush().await?;
-        file.parent().flush_recursively().await?;
 
         let branch_id = *file.branch().id();
         let entry = JointEntry::File(file);
