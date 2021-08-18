@@ -33,22 +33,22 @@ struct Inner {
 }
 
 impl WriteContext {
-    pub fn root() -> Arc<Self> {
-        Arc::new(Self {
+    pub fn root() -> Self {
+        Self {
             parent: None,
             inner: Mutex::new(Inner {
                 ancestors: Vec::new(),
             }),
-        })
+        }
     }
 
     pub async fn child(
-        self: &Arc<Self>,
+        &self,
         parent_directory: Directory,
         entry_name: String,
         entry_data: Arc<EntryData>,
-    ) -> Arc<Self> {
-        Arc::new(Self {
+    ) -> Self {
+        Self {
             parent: Some(Parent {
                 directory: parent_directory,
                 entry_name,
@@ -57,7 +57,7 @@ impl WriteContext {
             inner: Mutex::new(Inner {
                 ancestors: Vec::new(),
             }),
-        })
+        }
     }
 
     /// Begin writing to the given blob. This ensures the blob lives in the local branch and all

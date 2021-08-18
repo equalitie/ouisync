@@ -44,18 +44,17 @@ impl Directory {
         // TODO: make sure this is atomic
 
         let locator = Locator::Root;
-        let write_context = WriteContext::root();
 
         match Self::open(
             branch.clone(),
             branch.clone(),
             locator,
-            write_context.clone(),
+            WriteContext::root(),
         )
         .await
         {
             Ok(dir) => Ok(dir),
-            Err(Error::EntryNotFound) => Ok(Self::create(branch, locator, write_context)),
+            Err(Error::EntryNotFound) => Ok(Self::create(branch, locator, WriteContext::root())),
             Err(error) => Err(error),
         }
     }
@@ -172,7 +171,7 @@ impl Directory {
         owner_branch: Branch,
         local_branch: Branch,
         locator: Locator,
-        write_context: Arc<WriteContext>,
+        write_context: WriteContext,
     ) -> Result<Self> {
         let mut blob = Blob::open(owner_branch, locator).await?;
         let buffer = blob.read_to_end().await?;
@@ -189,7 +188,7 @@ impl Directory {
         })
     }
 
-    fn create(owner_branch: Branch, locator: Locator, write_context: Arc<WriteContext>) -> Self {
+    fn create(owner_branch: Branch, locator: Locator, write_context: WriteContext) -> Self {
         let blob = Blob::create(owner_branch.clone(), locator);
 
         Directory {
@@ -278,7 +277,7 @@ impl Reader<'_> {
 struct Inner {
     blob: Blob,
     content: Content,
-    write_context: Arc<WriteContext>,
+    write_context: WriteContext,
     // Cache of open subdirectories. Used to make sure that multiple instances of the same directory
     // all share the same internal state.
     open_directories: SubdirectoryCache,
@@ -477,7 +476,7 @@ struct RefInner<'a> {
 }
 
 impl RefInner<'_> {
-    async fn write_context(&self) -> Arc<WriteContext> {
+    async fn write_context(&self) -> WriteContext {
         self.parent_inner
             .write_context
             .child(
@@ -643,7 +642,7 @@ impl SubdirectoryCache {
         owner_branch: Branch,
         local_branch: Branch,
         locator: Locator,
-        write_context: Arc<WriteContext>,
+        write_context: WriteContext,
     ) -> Result<Directory> {
         let mut map = self.0.lock().await;
 
@@ -679,7 +678,7 @@ impl SubdirectoryCache {
         &self,
         branch: Branch,
         locator: Locator,
-        write_context: Arc<WriteContext>,
+        write_context: WriteContext,
     ) -> Result<Directory> {
         let mut map = self.0.lock().await;
 

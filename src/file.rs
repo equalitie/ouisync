@@ -3,11 +3,10 @@ use crate::{
     locator::Locator, write_context::WriteContext,
 };
 use std::io::SeekFrom;
-use std::sync::Arc;
 
 pub struct File {
     blob: Blob,
-    write_context: Arc<WriteContext>,
+    write_context: WriteContext,
     local_branch: Branch,
 }
 
@@ -17,7 +16,7 @@ impl File {
         owner_branch: Branch,
         local_branch: Branch,
         locator: Locator,
-        write_context: Arc<WriteContext>,
+        write_context: WriteContext,
     ) -> Result<Self> {
         Ok(Self {
             blob: Blob::open(owner_branch, locator).await?,
@@ -27,11 +26,7 @@ impl File {
     }
 
     /// Creates a new file.
-    pub async fn create(
-        branch: Branch,
-        locator: Locator,
-        write_context: Arc<WriteContext>,
-    ) -> Self {
+    pub async fn create(branch: Branch, locator: Locator, write_context: WriteContext) -> Self {
         Self {
             blob: Blob::create(branch.clone(), locator),
             write_context,
@@ -106,9 +101,9 @@ impl File {
 
 #[cfg(test)]
 mod test {
-    use crate::{crypto::Cryptor, db, index::BranchData};
-
     use super::*;
+    use crate::{crypto::Cryptor, db, index::BranchData};
+    use std::sync::Arc;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn fork() {
