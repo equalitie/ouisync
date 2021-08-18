@@ -144,7 +144,7 @@ impl Directory {
                 blob,
                 content,
                 write_context,
-                open_directories: Cache::new(),
+                open_directories: SubdirectoryCache::new(),
             }),
         }))
     }
@@ -157,7 +157,7 @@ impl Directory {
                 blob,
                 content: Content::new(),
                 write_context,
-                open_directories: Cache::new(),
+                open_directories: SubdirectoryCache::new(),
             }),
         })
     }
@@ -172,7 +172,7 @@ pub struct Inner {
     write_context: Arc<WriteContext>,
     // Cache of open subdirectories. Used to make sure that multiple instances of the same directory
     // all share the same internal state.
-    open_directories: Cache,
+    open_directories: SubdirectoryCache,
 }
 
 impl Inner {
@@ -556,10 +556,44 @@ impl EntryData {
     }
 }
 
-// Cache of open directories.
-struct Cache(Mutex<HashMap<Locator, Weak<Directory>>>);
+// Cache for open root directory
+// TODO: consider using the `ArcSwap` crate here.
+pub struct RootDirectoryCache(Mutex<Option<Weak<Directory>>>);
 
-impl Cache {
+impl RootDirectoryCache {
+    pub fn new() -> Self {
+        Self(Mutex::new(None))
+    }
+
+    pub async fn open(&self, owner_branch: Branch, local_branch: Branch) -> Result<Arc<Directory>> {
+        let mut slot = self.0.lock().await;
+
+        if let Some(dir) = slot.as_mut().and_then(|dir| dir.upgrade()) {
+            Ok(dir)
+        } else {
+            let dir = Directory::open_root(owner_branch, local_branch).await?;
+            *slot = Some(Arc::downgrade(&dir));
+            Ok(dir)
+        }
+    }
+
+    pub async fn open_or_create(&self, owner_branch: Branch) -> Result<Arc<Directory>> {
+        let mut slot = self.0.lock().await;
+
+        if let Some(dir) = slot.as_mut().and_then(|dir| dir.upgrade()) {
+            Ok(dir)
+        } else {
+            let dir = Directory::open_or_create_root(owner_branch).await?;
+            *slot = Some(Arc::downgrade(&dir));
+            Ok(dir)
+        }
+    }
+}
+
+// Cache of open subdirectories.
+struct SubdirectoryCache(Mutex<HashMap<Locator, Weak<Directory>>>);
+
+impl SubdirectoryCache {
     fn new() -> Self {
         Self(Mutex::new(HashMap::new()))
     }

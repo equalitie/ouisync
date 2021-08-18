@@ -1,22 +1,21 @@
 use crate::{
     crypto::Cryptor,
     db,
-    directory::Directory,
+    directory::{Directory, RootDirectoryCache},
     error::{Error, Result},
     file::File,
     index::BranchData,
     path, ReplicaId,
 };
 use camino::{Utf8Component, Utf8Path};
-use std::sync::{Arc, Weak};
-use tokio::sync::Mutex;
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct Branch {
     pool: db::Pool,
     branch_data: Arc<BranchData>,
     cryptor: Cryptor,
-    root_directory: RootDirectoryCache,
+    root_directory: Arc<RootDirectoryCache>,
 }
 
 impl Branch {
@@ -25,7 +24,7 @@ impl Branch {
             pool,
             branch_data,
             cryptor,
-            root_directory: RootDirectoryCache::empty(),
+            root_directory: Arc::new(RootDirectoryCache::new()),
         }
     }
 
@@ -92,40 +91,6 @@ impl Branch {
             .create_file(name.to_string())
             .await?;
         Ok((file, dirs))
-    }
-}
-
-#[derive(Clone)]
-// TODO: consider using the `ArcSwap` crate here.
-struct RootDirectoryCache(Arc<Mutex<Option<Weak<Directory>>>>);
-
-impl RootDirectoryCache {
-    fn empty() -> Self {
-        Self(Arc::new(Mutex::new(None)))
-    }
-
-    async fn open(&self, owner_branch: Branch, local_branch: Branch) -> Result<Arc<Directory>> {
-        let mut slot = self.0.lock().await;
-
-        if let Some(dir) = slot.as_mut().and_then(|dir| dir.upgrade()) {
-            Ok(dir)
-        } else {
-            let dir = Directory::open_root(owner_branch, local_branch).await?;
-            *slot = Some(Arc::downgrade(&dir));
-            Ok(dir)
-        }
-    }
-
-    async fn open_or_create(&self, owner_branch: Branch) -> Result<Arc<Directory>> {
-        let mut slot = self.0.lock().await;
-
-        if let Some(dir) = slot.as_mut().and_then(|dir| dir.upgrade()) {
-            Ok(dir)
-        } else {
-            let dir = Directory::open_or_create_root(owner_branch).await?;
-            *slot = Some(Arc::downgrade(&dir));
-            Ok(dir)
-        }
     }
 }
 
