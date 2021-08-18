@@ -21,10 +21,11 @@ pub struct WriteContext {
 }
 
 struct Parent {
-    name: String,
+    directory: Directory,
+    entry_name: String,
+    entry_data: Arc<EntryData>,
     write_context: Arc<WriteContext>,
     // TODO: Should this be std::sync::Weak?
-    entry: Arc<EntryData>,
 }
 
 struct Inner {
@@ -32,7 +33,7 @@ struct Inner {
 }
 
 impl WriteContext {
-    pub fn new_for_root() -> Arc<Self> {
+    pub fn root() -> Arc<Self> {
         Arc::new(Self {
             parent: None,
             inner: Mutex::new(Inner {
@@ -41,21 +42,23 @@ impl WriteContext {
         })
     }
 
-    pub async fn child(self: &Arc<Self>, name: String, parent_entry: Arc<EntryData>) -> Arc<Self> {
+    pub async fn child(
+        self: &Arc<Self>,
+        parent_directory: Directory,
+        entry_name: String,
+        entry_data: Arc<EntryData>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             parent: Some(Parent {
-                name,
+                directory: parent_directory,
+                entry_name,
+                entry_data,
                 write_context: self.clone(),
-                entry: parent_entry,
             }),
             inner: Mutex::new(Inner {
                 ancestors: Vec::new(),
             }),
         })
-    }
-
-    pub fn parent_entry(&self) -> Option<&Arc<EntryData>> {
-        self.parent.as_ref().map(|parent| &parent.entry)
     }
 
     /// Begin writing to the given blob. This ensures the blob lives in the local branch and all
@@ -125,12 +128,15 @@ impl WriteContext {
     fn calculate_path(&self) -> Utf8PathBuf {
         match &self.parent {
             None => "/".into(),
-            Some(parent) => parent.write_context.calculate_path().join(&parent.name),
+            Some(parent) => parent
+                .write_context
+                .calculate_path()
+                .join(&parent.entry_name),
         }
     }
 
     fn version_vector(&self) -> &VersionVector {
         // TODO: How do we get the VV when this WriteContext corresponds to the root directory?
-        self.parent.as_ref().unwrap().entry.version_vector()
+        self.parent.as_ref().unwrap().entry_data.version_vector()
     }
 }
