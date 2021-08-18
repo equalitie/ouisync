@@ -655,13 +655,10 @@ impl Inner {
         );
 
         let path = self.inodes.get(parent).calculate_path().join(name);
-        let (mut file, dirs) = self.repository.create_file(&path).await?;
+        let mut file = self.repository.create_file(&path).await?;
 
         file.flush().await?;
-
-        for dir in dirs.into_iter().rev() {
-            dir.flush().await?;
-        }
+        file.parent().flush_recursively().await?;
 
         let branch_id = *file.branch().id();
         let entry = JointEntry::File(file);

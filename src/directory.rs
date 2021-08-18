@@ -73,6 +73,18 @@ impl Directory {
         self.inner.write().await.flush(&self.local_branch).await
     }
 
+    /// Flushes this directory and all its ancestors all the way to the root.
+    pub async fn flush_recursively(&self) -> Result<()> {
+        let mut curr = Some(self.clone());
+
+        while let Some(next) = curr {
+            next.flush().await?;
+            curr = next.read().await.parent().cloned();
+        }
+
+        Ok(())
+    }
+
     /// Writes the pending changes to the store without incrementing the version vectors.
     /// For internal use only!
     ///
@@ -267,6 +279,11 @@ impl Reader<'_> {
     /// Branch of this directory
     pub fn branch(&self) -> &Branch {
         self.inner.blob.branch()
+    }
+
+    /// Returns the parent directory, if any.
+    pub fn parent(&self) -> Option<&Directory> {
+        self.inner.write_context.parent_directory()
     }
 
     pub(crate) fn write_context(&self) -> &WriteContext {

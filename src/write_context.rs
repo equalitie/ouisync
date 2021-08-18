@@ -96,6 +96,10 @@ impl WriteContext {
 
         Ok(())
     }
+
+    pub fn parent_directory(&self) -> Option<&Directory> {
+        self.parent.as_ref().map(|parent| &parent.directory)
+    }
 }
 
 // TODO: consider rewriting this to not use recursion.

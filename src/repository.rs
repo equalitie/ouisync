@@ -81,25 +81,20 @@ impl Repository {
         self.joint_root().await?.cd(path).await
     }
 
-    /// Creates a new file at the given path. Returns the new file and its directory ancestors.
-    pub async fn create_file<P: AsRef<Utf8Path>>(
-        &self,
-        path: &P,
-    ) -> Result<(File, Vec<Directory>)> {
+    /// Creates a new file at the given path.
+    pub async fn create_file<P: AsRef<Utf8Path>>(&self, path: &P) -> Result<File> {
         self.local_branch()
             .await
             .ensure_file_exists(path.as_ref())
             .await
     }
 
-    /// Creates a new directory at the given path. Returs a vector of directories corresponding to
-    /// the path (starting with the root).
-    pub async fn create_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<Vec<Directory>> {
-        Ok(self
-            .local_branch()
+    /// Creates a new directory at the given path.
+    pub async fn create_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<Directory> {
+        self.local_branch()
             .await
             .ensure_directory_exists(path.as_ref())
-            .await?)
+            .await
     }
 
     /// Removes (delete) the file at the given path. Returns the parent directory.

@@ -1,6 +1,6 @@
 use crate::{
-    blob::Blob, blob_id::BlobId, branch::Branch, error::Result, locator::Locator,
-    write_context::WriteContext,
+    blob::Blob, blob_id::BlobId, branch::Branch, directory::Directory, error::Result,
+    locator::Locator, write_context::WriteContext,
 };
 use std::io::SeekFrom;
 
@@ -97,6 +97,12 @@ impl File {
     pub fn blob_id(&self) -> &BlobId {
         self.blob.blob_id()
     }
+
+    pub fn parent(&self) -> &Directory {
+        self.write_context
+            .parent_directory()
+            .expect("file should always have a parent directory")
+    }
 }
 
 #[cfg(test)]
@@ -111,13 +117,11 @@ mod test {
         let branch1 = create_branch(branch0.db_pool().clone()).await;
 
         // Create a file owned by branch 0
-        let (mut file0, dirs) = branch0.ensure_file_exists("/dog.jpg".into()).await.unwrap();
+        let mut file0 = branch0.ensure_file_exists("/dog.jpg".into()).await.unwrap();
 
         file0.write(b"small").await.unwrap();
         file0.flush().await.unwrap();
-        for dir in dirs {
-            dir.flush().await.unwrap();
-        }
+        file0.parent().flush_recursively().await.unwrap();
 
         // Write to the file by branch 1
         let mut file1 = branch0

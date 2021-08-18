@@ -55,23 +55,21 @@ impl Branch {
     /// Ensures that the directory at the specified path exists including all its ancestors.
     /// Note: non-normalized paths (i.e. containing "..") or Windows-style drive prefixes
     /// (e.g. "C:") are not supported.
-    pub async fn ensure_directory_exists(&self, path: &Utf8Path) -> Result<Vec<Directory>> {
-        let mut dirs = vec![self.open_or_create_root().await?];
+    pub async fn ensure_directory_exists(&self, path: &Utf8Path) -> Result<Directory> {
+        let mut curr = self.open_or_create_root().await?;
 
         for component in path.components() {
             match component {
                 Utf8Component::RootDir | Utf8Component::CurDir => (),
                 Utf8Component::Normal(name) => {
-                    let last = dirs.last_mut().unwrap();
-
-                    let next = if let Ok(entry) = last.read().await.lookup_version(name, self.id())
+                    let next = if let Ok(entry) = curr.read().await.lookup_version(name, self.id())
                     {
                         entry.directory()?.open().await?
                     } else {
-                        last.create_directory(name.to_string()).await?
+                        curr.create_directory(name.to_string()).await?
                     };
 
-                    dirs.push(next);
+                    curr = next;
                 }
                 Utf8Component::Prefix(_) | Utf8Component::ParentDir => {
                     return Err(Error::OperationNotSupported)
@@ -79,18 +77,13 @@ impl Branch {
             }
         }
 
-        Ok(dirs)
+        Ok(curr)
     }
 
-    pub async fn ensure_file_exists(&self, path: &Utf8Path) -> Result<(File, Vec<Directory>)> {
+    pub async fn ensure_file_exists(&self, path: &Utf8Path) -> Result<File> {
         let (parent, name) = path::decompose(path).ok_or(Error::EntryIsDirectory)?;
-        let mut dirs = self.ensure_directory_exists(parent).await?;
-        let file = dirs
-            .last_mut()
-            .unwrap()
-            .create_file(name.to_string())
-            .await?;
-        Ok((file, dirs))
+        let dir = self.ensure_directory_exists(parent).await?;
+        dir.create_file(name.to_string()).await
     }
 }
 
@@ -106,8 +99,7 @@ mod tests {
         let index = Index::load(pool.clone(), replica_id).await.unwrap();
         let branch = Branch::new(pool, index.branches().await.local().clone(), Cryptor::Null);
 
-        let dirs = branch.ensure_directory_exists("/".into()).await.unwrap();
-        assert_eq!(dirs.len(), 1);
-        assert_eq!(dirs[0].read().await.locator(), &Locator::Root);
+        let dir = branch.ensure_directory_exists("/".into()).await.unwrap();
+        assert_eq!(dir.read().await.locator(), &Locator::Root);
     }
 }
