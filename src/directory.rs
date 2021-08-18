@@ -63,6 +63,10 @@ impl Directory {
     }
 
     /// Creates a new file inside this directory.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this directory is not in the local branch.
     pub async fn create_file(&self, name: String) -> Result<File> {
         let mut inner = self.write().await;
 
@@ -80,6 +84,10 @@ impl Directory {
     }
 
     /// Creates a new subdirectory of this directory.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this directory is not in the local branch.
     pub async fn create_directory(&self, name: String) -> Result<Self> {
         let mut inner = self.write().await;
 
@@ -103,6 +111,11 @@ impl Directory {
             .await
     }
 
+    /// Removes a file from this directory.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this directory is not in the local branch.
     pub async fn remove_file(&self, name: &str) -> Result<()> {
         let mut inner = self.write().await;
 
@@ -114,6 +127,11 @@ impl Directory {
         // TODO: Add tombstone
     }
 
+    /// Removes a subdirectory from this directory.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this directory is not in the local branch.
     pub async fn remove_directory(&self, name: &str) -> Result<()> {
         let mut inner = self.write().await;
 
@@ -139,19 +157,22 @@ impl Directory {
     // Forks this directory into the local branch.
     #[async_recursion]
     pub async fn fork(&self) -> Result<Directory> {
-        if let Some(parent) = &self.read().await.parent() {
-            let parent_dir = parent.directory.fork().await?;
-            let parent_dir_reader = parent_dir.read().await;
+        let inner = self.read().await;
 
-            if let Ok(entry) =
-                parent_dir_reader.lookup_version(&parent.entry_name, self.local_branch.id())
+        if let Some(parent) = inner.parent() {
+            let parent_dir = parent.directory.fork().await?;
+
+            if let Ok(entry) = parent_dir
+                .read()
+                .await
+                .lookup_version(&parent.entry_name, self.local_branch.id())
             {
-                entry.directory()?.open().await
-            } else {
-                parent_dir
-                    .create_directory(parent.entry_name.to_string())
-                    .await
+                return entry.directory()?.open().await;
             }
+
+            parent_dir
+                .create_directory(parent.entry_name.to_string())
+                .await
         } else {
             self.local_branch.open_or_create_root().await
         }
@@ -163,7 +184,7 @@ impl Directory {
     ///
     /// # Panics
     ///
-    /// Panics if not in the local branch.
+    /// Panics if this directory is not in the local branch.
     pub(crate) async fn insert_entry(
         &self,
         name: String,
@@ -175,22 +196,10 @@ impl Directory {
     }
 
     /// Increment version of the specified entry.
-    /// For internal use only!
     pub(crate) async fn increment_entry_version(&self, _name: &str) -> Result<()> {
         // TODO
         // TODO: assert we are in the local branch
         Ok(())
-    }
-
-    // Lock this directory for writing.
-    //
-    // # Panics
-    //
-    // Panics if not in the local branch.
-    async fn write(&self) -> RwLockWriteGuard<'_, Inner> {
-        let inner = self.inner.write().await;
-        assert_eq!(inner.blob.branch().id(), self.local_branch.id());
-        inner
     }
 
     async fn open(
@@ -226,6 +235,21 @@ impl Directory {
             })),
             local_branch: owner_branch,
         }
+    }
+
+    // Lock this directory for writing.
+    //
+    // # Panics
+    //
+    // Panics if not in the local branch.
+    async fn write(&self) -> RwLockWriteGuard<'_, Inner> {
+        let inner = self.inner.write().await;
+        assert_eq!(
+            inner.blob.branch().id(),
+            self.local_branch.id(),
+            "mutable operations not allowed - directory is not in the local branch"
+        );
+        inner
     }
 }
 
@@ -881,8 +905,8 @@ mod tests {
         dir0.flush().await.unwrap();
         root0.flush().await.unwrap();
 
-        // Open it by branch 1 and modify it
-        let dir1 = branch0
+        // Fork it by branch 1 and modify it
+        let dir0 = branch0
             .open_root(branch1.clone())
             .await
             .unwrap()
@@ -895,6 +919,7 @@ mod tests {
             .open()
             .await
             .unwrap();
+        let dir1 = dir0.fork().await.unwrap();
 
         dir1.create_file("dog.jpg".into()).await.unwrap();
         dir1.flush().await.unwrap();
