@@ -8,6 +8,7 @@ use std::sync::Arc;
 pub struct File {
     blob: Blob,
     write_context: Arc<WriteContext>,
+    local_branch: Branch,
 }
 
 impl File {
@@ -17,17 +18,27 @@ impl File {
         locator: Locator,
         write_context: Arc<WriteContext>,
     ) -> Result<Self> {
+        let local_branch = write_context.local_branch().await;
+
         Ok(Self {
             blob: Blob::open(branch, locator).await?,
             write_context,
+            local_branch,
         })
     }
 
     /// Creates a new file.
-    pub fn create(branch: Branch, locator: Locator, write_context: Arc<WriteContext>) -> Self {
+    pub async fn create(
+        branch: Branch,
+        locator: Locator,
+        write_context: Arc<WriteContext>,
+    ) -> Self {
+        let local_branch = write_context.local_branch().await;
+
         Self {
             blob: Blob::create(branch, locator),
             write_context,
+            local_branch,
         }
     }
 

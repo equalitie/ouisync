@@ -21,6 +21,7 @@ use tokio::sync::{Mutex, RwLock, RwLockReadGuard};
 #[derive(Clone)]
 pub struct Directory {
     inner: Arc<RwLock<Inner>>,
+    local_branch: Branch,
 }
 
 #[allow(clippy::len_without_is_empty)]
@@ -46,7 +47,7 @@ impl Directory {
 
         match Self::open(branch.clone(), locator, write_context.clone()).await {
             Ok(dir) => Ok(dir),
-            Err(Error::EntryNotFound) => Ok(Self::create(branch, locator, write_context)),
+            Err(Error::EntryNotFound) => Ok(Self::create(branch, locator, write_context).await),
             Err(error) => Err(error),
         }
     }
@@ -140,6 +141,8 @@ impl Directory {
         let buffer = blob.read_to_end().await?;
         let content = bincode::deserialize(&buffer).map_err(Error::MalformedDirectory)?;
 
+        let local_branch = write_context.local_branch().await;
+
         Ok(Self {
             inner: Arc::new(RwLock::new(Inner {
                 blob,
@@ -147,11 +150,13 @@ impl Directory {
                 write_context,
                 open_directories: SubdirectoryCache::new(),
             })),
+            local_branch,
         })
     }
 
-    fn create(branch: Branch, locator: Locator, write_context: Arc<WriteContext>) -> Self {
+    async fn create(branch: Branch, locator: Locator, write_context: Arc<WriteContext>) -> Self {
         let blob = Blob::create(branch, locator);
+        let local_branch = write_context.local_branch().await;
 
         Directory {
             inner: Arc::new(RwLock::new(Inner {
@@ -160,6 +165,7 @@ impl Directory {
                 write_context,
                 open_directories: SubdirectoryCache::new(),
             })),
+            local_branch,
         }
     }
 }
@@ -269,11 +275,7 @@ impl Inner {
         let locator = entry.locator();
         let write_context = self.write_context.child(name, entry).await;
 
-        Ok(File::create(
-            self.blob.branch().clone(),
-            locator,
-            write_context,
-        ))
+        Ok(File::create(self.blob.branch().clone(), locator, write_context).await)
     }
 
     async fn create_directory(&mut self, name: String) -> Result<Directory> {
@@ -570,7 +572,10 @@ impl RootDirectoryCache {
         let mut slot = self.0.lock().await;
 
         if let Some(inner) = slot.as_mut().and_then(|inner| inner.upgrade()) {
-            Ok(Directory { inner })
+            Ok(Directory {
+                inner,
+                local_branch,
+            })
         } else {
             let dir = Directory::open_root(owner_branch, local_branch).await?;
             *slot = Some(Arc::downgrade(&dir.inner));
@@ -582,7 +587,10 @@ impl RootDirectoryCache {
         let mut slot = self.0.lock().await;
 
         if let Some(inner) = slot.as_mut().and_then(|inner| inner.upgrade()) {
-            Ok(Directory { inner })
+            Ok(Directory {
+                inner,
+                local_branch: owner_branch,
+            })
         } else {
             let dir = Directory::open_or_create_root(owner_branch).await?;
             *slot = Some(Arc::downgrade(&dir.inner));
@@ -610,7 +618,10 @@ impl SubdirectoryCache {
         let dir = match map.entry(locator) {
             hash_map::Entry::Occupied(mut entry) => {
                 if let Some(inner) = entry.get().upgrade() {
-                    Directory { inner }
+                    Directory {
+                        inner,
+                        local_branch: write_context.local_branch().await,
+                    }
                 } else {
                     let dir = Directory::open(branch, locator, write_context).await?;
                     entry.insert(Arc::downgrade(&dir.inner));
@@ -641,7 +652,7 @@ impl SubdirectoryCache {
         let dir = match map.entry(locator) {
             hash_map::Entry::Occupied(_) => return Err(Error::EntryExists),
             hash_map::Entry::Vacant(entry) => {
-                let dir = Directory::create(branch, locator, write_context);
+                let dir = Directory::create(branch, locator, write_context).await;
                 entry.insert(Arc::downgrade(&dir.inner));
                 dir
             }

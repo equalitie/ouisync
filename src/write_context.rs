@@ -63,6 +63,10 @@ impl WriteContext {
         })
     }
 
+    pub async fn local_branch(&self) -> Branch {
+        self.inner.lock().await.local_branch.clone()
+    }
+
     pub fn local_branch_id(&self) -> &ReplicaId {
         &self.local_branch_id
     }
