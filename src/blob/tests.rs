@@ -3,6 +3,7 @@ use crate::{crypto::SecretKey, error::Error, test_utils};
 use assert_matches::assert_matches;
 use proptest::collection::vec;
 use rand::{distributions::Standard, prelude::*};
+use std::sync::Arc;
 use test_strategy::proptest;
 
 #[tokio::test(flavor = "multi_thread")]
@@ -424,9 +425,11 @@ async fn fork_case(
 ) {
     let (mut rng, src_branch) = setup(rng_seed).await;
 
-    let dst_branch = BranchData::new(src_branch.db_pool(), rng.gen())
-        .await
-        .unwrap();
+    let dst_branch = Arc::new(
+        BranchData::new(src_branch.db_pool(), rng.gen())
+            .await
+            .unwrap(),
+    );
     let dst_branch = Branch::new(
         src_branch.db_pool().clone(),
         dst_branch,
@@ -452,9 +455,7 @@ async fn fork_case(
     blob.flush().await.unwrap();
     blob.seek(SeekFrom::Start(seek_pos as u64)).await.unwrap();
 
-    blob.fork(dst_branch.data().clone(), dst_locator)
-        .await
-        .unwrap();
+    blob.fork(dst_branch.clone(), dst_locator).await.unwrap();
 
     let write_content: Vec<u8> = rng.sample_iter(Standard).take(write_len).collect();
 
@@ -491,7 +492,7 @@ async fn setup(rng_seed: u64) -> (StdRng, Branch) {
     let pool = init_db().await;
 
     let branch = BranchData::new(&pool, rng.gen()).await.unwrap();
-    let branch = Branch::new(pool, branch, cryptor);
+    let branch = Branch::new(pool, Arc::new(branch), cryptor);
 
     (rng, branch)
 }

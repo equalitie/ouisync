@@ -10,15 +10,24 @@ use crate::{
     path, ReplicaId,
 };
 use camino::Utf8Path;
+use futures_util::future;
+use std::{collections::HashMap, sync::Arc};
+use tokio::sync::Mutex;
 
 pub struct Repository {
     index: Index,
     cryptor: Cryptor,
+    // Cache for `Branch` instances to make them persistent over the lifetime of the program.
+    branches: Mutex<HashMap<ReplicaId, Branch>>,
 }
 
 impl Repository {
     pub fn new(index: Index, cryptor: Cryptor) -> Self {
-        Self { index, cryptor }
+        Self {
+            index,
+            cryptor,
+            branches: Mutex::new(HashMap::new()),
+        }
     }
 
     pub fn this_replica_id(&self) -> &ReplicaId {
@@ -72,25 +81,20 @@ impl Repository {
         self.joint_root().await?.cd(path).await
     }
 
-    /// Creates a new file at the given path. Returns the new file and its directory ancestors.
-    pub async fn create_file<P: AsRef<Utf8Path>>(
-        &self,
-        path: &P,
-    ) -> Result<(File, Vec<Directory>)> {
+    /// Creates a new file at the given path.
+    pub async fn create_file<P: AsRef<Utf8Path>>(&self, path: &P) -> Result<File> {
         self.local_branch()
             .await
             .ensure_file_exists(path.as_ref())
             .await
     }
 
-    /// Creates a new directory at the given path. Returs a vector of directories corresponding to
-    /// the path (starting with the root).
-    pub async fn create_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<Vec<Directory>> {
-        Ok(self
-            .local_branch()
+    /// Creates a new directory at the given path.
+    pub async fn create_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<Directory> {
+        self.local_branch()
             .await
             .ensure_directory_exists(path.as_ref())
-            .await?)
+            .await
     }
 
     /// Removes (delete) the file at the given path. Returns the parent directory.
@@ -127,39 +131,49 @@ impl Repository {
 
     /// Returns the local branch
     pub async fn local_branch(&self) -> Branch {
-        self.inflate(self.index.local_branch().await)
+        self.inflate(self.index.branches().await.local()).await
     }
 
     /// Return the branch with the specified id.
     pub async fn branch(&self, id: &ReplicaId) -> Option<Branch> {
-        self.index.branch(id).await.map(|data| self.inflate(data))
+        Some(self.inflate(self.index.branches().await.get(id)?).await)
     }
 
     /// Returns all branches
     pub async fn branches(&self) -> Vec<Branch> {
-        self.index
-            .branches()
-            .await
-            .into_iter()
-            .map(|data| self.inflate(data))
-            .collect()
+        future::join_all(
+            self.index
+                .branches()
+                .await
+                .all()
+                .map(|data| self.inflate(data)),
+        )
+        .await
     }
 
-    fn inflate(&self, data: BranchData) -> Branch {
-        Branch::new(self.index.pool.clone(), data, self.cryptor.clone())
+    // Create `Branch` wrapping the given `data`, reusing a previously cached one if it exists,
+    // and putting it into the cache it it does not.
+    async fn inflate(&self, data: &Arc<BranchData>) -> Branch {
+        self.branches
+            .lock()
+            .await
+            .entry(*data.id())
+            .or_insert_with(|| {
+                Branch::new(self.index.pool.clone(), data.clone(), self.cryptor.clone())
+            })
+            .clone()
     }
 
     // Opens the root directory across all branches as JointDirectory.
     async fn joint_root(&self) -> Result<JointDirectory> {
-        let mut dirs = Vec::new();
+        let branches = self.branches().await;
+        let mut dirs = Vec::with_capacity(branches.len());
 
-        let local_branch = self.local_branch().await;
-
-        for branch in self.branches().await {
+        for branch in branches {
             let dir = if branch.id() == self.this_replica_id() {
                 branch.open_or_create_root().await?
             } else {
-                match branch.open_root(local_branch.clone()).await {
+                match branch.open_root(self.local_branch().await).await {
                     Ok(dir) => dir,
                     Err(Error::EntryNotFound) => {
                         // Some branch roots may not have been loaded across the network yet. We'll

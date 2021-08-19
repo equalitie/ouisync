@@ -36,12 +36,8 @@ pub unsafe extern "C" fn file_create(
         let repo = repo.get();
 
         ctx.spawn(async move {
-            let (mut file, mut parents) = repo.create_file(&path).await?;
-
+            let mut file = repo.create_file(&path).await?;
             file.flush().await?;
-            for dir in parents.iter_mut().rev() {
-                dir.flush().await?;
-            }
 
             Ok(SharedHandle::new(Arc::new(Mutex::new(file))))
         })

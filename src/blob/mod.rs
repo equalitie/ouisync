@@ -29,8 +29,6 @@ pub struct Blob {
     len_dirty: bool,
 }
 
-// TODO: figure out how to implement `flush` on `Drop`.
-
 impl Blob {
     /// Opens an existing blob.
     pub(crate) async fn open(branch: Branch, locator: Locator) -> Result<Self> {
@@ -71,18 +69,7 @@ impl Blob {
     /// Creates a new blob.
     pub fn create(branch: Branch, locator: Locator) -> Self {
         let nonce_sequence = NonceSequence::new(rand::random());
-        let mut content = Cursor::new(Buffer::new());
-
-        content.write(&nonce_sequence.prefix()[..]);
-        content.write_u64(0); // blob length
-
-        let id = rand::random();
-        let current_block = OpenBlock {
-            locator,
-            id,
-            content,
-            dirty: true,
-        };
+        let current_block = OpenBlock::new_head(locator, &nonce_sequence);
 
         Self {
             branch,
@@ -113,6 +100,11 @@ impl Blob {
             Locator::Head(blob_id) => blob_id,
             _ => unreachable!(),
         }
+    }
+
+    /// Was this blob modified and not flushed yet?
+    pub fn is_dirty(&self) -> bool {
+        self.current_block.dirty || self.len_dirty
     }
 
     /// Reads data from this blob into `buffer`, advancing the internal cursor. Returns the
@@ -326,14 +318,19 @@ impl Blob {
     }
 
     /// Removes this blob.
-    pub async fn remove(self) -> Result<()> {
+    pub async fn remove(&mut self) -> Result<()> {
         self.remove_blocks(self.locator().sequence().take(self.block_count() as usize))
-            .await
+            .await?;
+        self.current_block = OpenBlock::new_head(self.locator, &self.nonce_sequence);
+        self.len = 0;
+        self.len_dirty = true;
+
+        Ok(())
     }
 
     /// Creates a shallow copy (only the index nodes are copied, not blocks) of this blob into the
     /// specified destination branch and locator.
-    pub async fn fork(&mut self, dst_branch: BranchData, dst_head_locator: Locator) -> Result<()> {
+    pub async fn fork(&mut self, dst_branch: Branch, dst_head_locator: Locator) -> Result<()> {
         if self.branch.id() == dst_branch.id() && self.locator == dst_head_locator {
             // This blob is already in the dst, nothing to do.
             return Ok(());
@@ -351,6 +348,7 @@ impl Blob {
                 .get(&mut tx, &encoded_src_locator)
                 .await?;
             dst_branch
+                .data()
                 .insert(&mut tx, &block_id, &encoded_dst_locator)
                 .await?;
         }
@@ -360,7 +358,7 @@ impl Blob {
         // TODO: the following lines must happen atomically (either all succeed or none). There is
         // currently no reason why they wouldn't, but to be super extra sure, consider wrapping
         // them in `catch_unwind`.
-        self.branch = Branch::new(self.db_pool().clone(), dst_branch, self.cryptor().clone());
+        self.branch = dst_branch;
         self.locator = dst_head_locator;
         self.current_block.locator = self.locator_at(self.current_block.locator.number());
 
@@ -602,6 +600,21 @@ struct OpenBlock {
     content: Cursor,
     // Was this block modified since the last time it was loaded from/saved to the store?
     dirty: bool,
+}
+
+impl OpenBlock {
+    fn new_head(locator: Locator, nonce_sequence: &NonceSequence) -> Self {
+        let mut content = Cursor::new(Buffer::new());
+        content.write(&nonce_sequence.prefix()[..]);
+        content.write_u64(0); // blob length (initially zero)
+
+        Self {
+            locator,
+            id: rand::random(),
+            content,
+            dirty: true,
+        }
+    }
 }
 
 // Buffer for keeping loaded block content and also for in-place encryption and decryption.

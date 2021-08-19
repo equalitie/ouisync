@@ -1,33 +1,36 @@
 use crate::{
-    blob::Blob, blob_id::BlobId, branch::Branch, entry_type::EntryType, error::Result,
-    locator::Locator, write_context::WriteContext,
+    blob::Blob, blob_id::BlobId, branch::Branch, error::Result, locator::Locator,
+    parent_context::ParentContext,
 };
 use std::io::SeekFrom;
-use std::sync::Arc;
 
 pub struct File {
     blob: Blob,
-    write_context: Arc<WriteContext>,
+    parent: ParentContext,
+    local_branch: Branch,
 }
 
 impl File {
     /// Opens an existing file.
     pub async fn open(
-        branch: Branch,
+        owner_branch: Branch,
+        local_branch: Branch,
         locator: Locator,
-        write_context: Arc<WriteContext>,
+        parent: ParentContext,
     ) -> Result<Self> {
         Ok(Self {
-            blob: Blob::open(branch, locator).await?,
-            write_context,
+            blob: Blob::open(owner_branch, locator).await?,
+            parent,
+            local_branch,
         })
     }
 
     /// Creates a new file.
-    pub fn create(branch: Branch, locator: Locator, write_context: Arc<WriteContext>) -> Self {
+    pub async fn create(branch: Branch, locator: Locator, parent: ParentContext) -> Self {
         Self {
-            blob: Blob::create(branch, locator),
-            write_context,
+            blob: Blob::create(branch.clone(), locator),
+            parent,
+            local_branch: branch,
         }
     }
 
@@ -59,9 +62,7 @@ impl File {
 
     /// Writes `buffer` into this file.
     pub async fn write(&mut self, buffer: &[u8]) -> Result<()> {
-        self.write_context
-            .begin(EntryType::File, &mut self.blob)
-            .await?;
+        self.ensure_local().await?;
         self.blob.write(buffer).await
     }
 
@@ -72,21 +73,24 @@ impl File {
 
     /// Truncates the file to the given length.
     pub async fn truncate(&mut self, len: u64) -> Result<()> {
-        self.write_context
-            .begin(EntryType::File, &mut self.blob)
-            .await?;
+        self.ensure_local().await?;
         self.blob.truncate(len).await
     }
 
     /// Flushes this file, ensuring that all intermediately buffered contents gets written to the
     /// store.
     pub async fn flush(&mut self) -> Result<()> {
+        if !self.blob.is_dirty() {
+            return Ok(());
+        }
+
         self.blob.flush().await?;
-        self.write_context.commit().await
+        self.parent.increment_version().await?;
+        self.parent.directory.flush().await
     }
 
     /// Removes this file.
-    pub async fn remove(self) -> Result<()> {
+    pub async fn remove(&mut self) -> Result<()> {
         // TODO: consider only allowing this if file is in the local branch.
         self.blob.remove().await
     }
@@ -94,13 +98,42 @@ impl File {
     pub fn blob_id(&self) -> &BlobId {
         self.blob.blob_id()
     }
+
+    pub fn parent(&self) -> &ParentContext {
+        &self.parent
+    }
+
+    /// Ensure this file lives in the local branch and all its ancestor directories exist and live
+    /// in the local branch as well. Should be called before any mutable operation.
+    async fn ensure_local(&mut self) -> Result<()> {
+        if self.blob.branch().id() == self.local_branch.id() {
+            // File already lives in the local branch. We assume the ancestor directories have been
+            // already created as well so there is nothing else to do.
+            return Ok(());
+        }
+
+        self.parent.directory = self.parent.directory.fork().await?;
+        self.parent.entry_data = self
+            .parent
+            .directory
+            .insert_entry(
+                self.parent.entry_name.clone(),
+                self.parent.entry_data.entry_type(),
+                self.parent.entry_data.version_vector().clone(),
+            )
+            .await?;
+
+        self.blob
+            .fork(self.local_branch.clone(), self.parent.entry_data.locator())
+            .await
+    }
 }
 
 #[cfg(test)]
 mod test {
-    use crate::{crypto::Cryptor, db, index::BranchData};
-
     use super::*;
+    use crate::{crypto::Cryptor, db, index::BranchData};
+    use std::sync::Arc;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn fork() {
@@ -108,13 +141,10 @@ mod test {
         let branch1 = create_branch(branch0.db_pool().clone()).await;
 
         // Create a file owned by branch 0
-        let (mut file0, dirs) = branch0.ensure_file_exists("/dog.jpg".into()).await.unwrap();
+        let mut file0 = branch0.ensure_file_exists("/dog.jpg".into()).await.unwrap();
 
         file0.write(b"small").await.unwrap();
         file0.flush().await.unwrap();
-        for dir in dirs {
-            dir.flush().await.unwrap();
-        }
 
         // Write to the file by branch 1
         let mut file1 = branch0
@@ -176,6 +206,6 @@ mod test {
 
     async fn create_branch(pool: db::Pool) -> Branch {
         let branch_data = BranchData::new(&pool, rand::random()).await.unwrap();
-        Branch::new(pool, branch_data, Cryptor::Null)
+        Branch::new(pool, Arc::new(branch_data), Cryptor::Null)
     }
 }

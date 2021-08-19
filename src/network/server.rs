@@ -30,8 +30,7 @@ pub struct Server {
 impl Server {
     pub async fn new(index: Index, stream: ServerStream) -> Self {
         // subscribe to branch change notifications
-        let branch = index.local_branch().await;
-        let notify = branch.subscribe();
+        let notify = index.branches().await.local().subscribe();
 
         Self {
             index,
