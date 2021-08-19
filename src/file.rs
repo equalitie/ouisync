@@ -116,7 +116,7 @@ impl File {
 
         self.parent.directory = self.parent.directory.fork().await?;
 
-        let entry_data = self
+        let blob_id = self
             .parent
             .directory
             .insert_entry(
@@ -127,7 +127,7 @@ impl File {
             .await?;
 
         self.blob
-            .fork(self.local_branch.clone(), entry_data.locator())
+            .fork(self.local_branch.clone(), Locator::Head(blob_id))
             .await
     }
 }

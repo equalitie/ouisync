@@ -82,9 +82,8 @@ impl Directory {
 
         let author = *self.local_branch.id();
         let vv = VersionVector::first(author);
-        let entry_data =
-            inner.insert_entry(author, name.clone(), EntryType::File, vv)?;
-        let locator = entry_data.locator();
+        let blob_id = inner.insert_entry(author, name.clone(), EntryType::File, vv)?;
+        let locator = Locator::Head(blob_id);
         let parent = ParentContext {
             directory: self.clone(),
             entry_name: name,
@@ -104,13 +103,13 @@ impl Directory {
 
         let author = *self.local_branch.id();
         let vv = VersionVector::first(author);
-        let entry_data = inner.insert_entry(
+        let blob_id = inner.insert_entry(
             author,
             name.clone(),
             EntryType::Directory,
             vv,
         )?;
-        let locator = entry_data.locator();
+        let locator = Locator::Head(blob_id);
         let parent = ParentContext {
             directory: self.clone(),
             entry_name: name,
@@ -210,7 +209,7 @@ impl Directory {
         name: String,
         entry_type: EntryType,
         version_vector: VersionVector,
-    ) -> Result<Arc<EntryData>> {
+    ) -> Result<BlobId> {
         let mut inner = self.write().await;
         inner.insert_entry(*self.local_branch.id(), name, entry_type, version_vector)
     }
@@ -368,7 +367,7 @@ impl Inner {
         name: String,
         entry_type: EntryType,
         version_vector: VersionVector,
-    ) -> Result<Arc<EntryData>> {
+    ) -> Result<BlobId> {
         self.content
             .insert(author, name, entry_type, version_vector)
     }
@@ -613,7 +612,7 @@ impl Content {
         name: String,
         entry_type: EntryType,
         version_vector: VersionVector,
-    ) -> Result<Arc<EntryData>> {
+    ) -> Result<BlobId> {
         let blob_id = rand::random();
         let versions = self.entries.entry(name).or_insert_with(Default::default);
 
@@ -624,9 +623,9 @@ impl Content {
                     blob_id,
                     version_vector,
                 });
-                entry.insert(data.clone());
+                entry.insert(data);
                 self.dirty = true;
-                Ok(data)
+                Ok(blob_id)
             }
             btree_map::Entry::Occupied(_) => Err(Error::EntryExists),
         }
