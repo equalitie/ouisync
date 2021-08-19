@@ -195,7 +195,7 @@ impl Reader<'_> {
             .iter()
             .flat_map(|dir| dir.lookup(name).ok().into_iter().flatten())
             .filter_map(|entry| entry.file().ok())
-            .filter(|entry| entry.branch_id().starts_with(&branch_id_prefix));
+            .filter(|entry| entry.author().starts_with(&branch_id_prefix));
 
         let first = entries.next().ok_or(Error::EntryNotFound)?;
 
@@ -306,7 +306,7 @@ impl<'a> JointFileRef<'a> {
     }
 
     pub fn branch_id(&self) -> &'a ReplicaId {
-        self.file.branch_id()
+        self.file.author()
     }
 }
 
@@ -488,7 +488,7 @@ mod tests {
         for branch in &branches {
             let file = files
                 .iter()
-                .find(|file| file.branch_id() == branch.id())
+                .find(|file| file.author() == branch.id())
                 .unwrap();
             assert_eq!(file.name(), "file.txt");
 
@@ -511,7 +511,7 @@ mod tests {
         for branch in &branches {
             let file = files
                 .iter()
-                .find(|file| file.branch_id() == branch.id())
+                .find(|file| file.author() == branch.id())
                 .unwrap();
             assert_eq!(file.name(), "file.txt");
         }
@@ -560,7 +560,7 @@ mod tests {
         for branch in &branches {
             let file = files
                 .iter()
-                .find(|file| file.branch_id() == branch.id())
+                .find(|file| file.author() == branch.id())
                 .unwrap();
             assert_eq!(file.name(), "file.txt");
         }
@@ -637,7 +637,7 @@ mod tests {
         let name = versioned_file_name::create("config", branches[0].id());
         let entry = root.lookup_unique(&name).unwrap();
         assert_eq!(entry.entry_type(), EntryType::File);
-        assert_eq!(entry.file().unwrap().branch_id(), branches[0].id());
+        assert_eq!(entry.file().unwrap().author(), branches[0].id());
     }
 
     //// TODO: test conflict_forked_directories

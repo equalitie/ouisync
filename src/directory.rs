@@ -80,14 +80,15 @@ impl Directory {
     pub async fn create_file(&self, name: String) -> Result<File> {
         let mut inner = self.write().await;
 
-        let vv = VersionVector::first(*self.local_branch.id());
+        let author = *self.local_branch.id();
+        let vv = VersionVector::first(author);
         let entry_data =
-            inner.insert_entry(*self.local_branch.id(), name.clone(), EntryType::File, vv)?;
+            inner.insert_entry(author, name.clone(), EntryType::File, vv)?;
         let locator = entry_data.locator();
         let parent = ParentContext {
             directory: self.clone(),
             entry_name: name,
-            entry_data,
+            entry_author: author,
         };
 
         Ok(File::create(self.local_branch.clone(), locator, parent).await)
@@ -101,9 +102,10 @@ impl Directory {
     pub async fn create_directory(&self, name: String) -> Result<Self> {
         let mut inner = self.write().await;
 
-        let vv = VersionVector::first(*self.local_branch.id());
+        let author = *self.local_branch.id();
+        let vv = VersionVector::first(author);
         let entry_data = inner.insert_entry(
-            *self.local_branch.id(),
+            author,
             name.clone(),
             EntryType::Directory,
             vv,
@@ -112,7 +114,7 @@ impl Directory {
         let parent = ParentContext {
             directory: self.clone(),
             entry_name: name,
-            entry_data,
+            entry_author: author,
         };
 
         inner
@@ -269,6 +271,11 @@ impl Directory {
         );
         inner
     }
+
+    pub async fn get_entry(&self, name: &str, author: &ReplicaId) -> Option<Arc<EntryData>> {
+        let inner = self.inner.read().await;
+        inner.get_entry(name, author) 
+    }
 }
 
 /// View of a `Directory` for performing read-only queries.
@@ -285,8 +292,8 @@ impl Reader<'_> {
             .entries
             .iter()
             .flat_map(move |(name, versions)| {
-                versions.iter().map(move |(branch_id, data)| {
-                    EntryRef::new(self.outer, &*self.inner, name, data, branch_id)
+                versions.iter().map(move |(author, data)| {
+                    EntryRef::new(self.outer, &*self.inner, name, data, author)
                 })
             })
     }
@@ -305,8 +312,8 @@ impl Reader<'_> {
             .entries
             .get_key_value(name)
             .and_then(|(name, versions)| {
-                versions.get_key_value(author).map(|(branch_id, data)| {
-                    EntryRef::new(self.outer, &*self.inner, name, data, branch_id)
+                versions.get_key_value(author).map(|(author, data)| {
+                    EntryRef::new(self.outer, &*self.inner, name, data, author)
                 })
             })
             .ok_or(Error::EntryNotFound)
@@ -357,13 +364,17 @@ impl Inner {
 
     fn insert_entry(
         &mut self,
-        local_branch_id: ReplicaId,
+        author: ReplicaId,
         name: String,
         entry_type: EntryType,
         version_vector: VersionVector,
     ) -> Result<Arc<EntryData>> {
         self.content
-            .insert(local_branch_id, name, entry_type, version_vector)
+            .insert(author, name, entry_type, version_vector)
+    }
+
+    fn get_entry(&self, name: &str, author: &ReplicaId) -> Option<Arc<EntryData>> {
+        self.content.entries.get(name).and_then(|versions| versions.get(author).cloned())
     }
 }
 
@@ -379,7 +390,7 @@ fn lookup<'a>(
         .map(|(name, versions)| {
             versions
                 .iter()
-                .map(move |(branch_id, data)| EntryRef::new(outer, inner, name, data, branch_id))
+                .map(move |(author, data)| EntryRef::new(outer, inner, name, data, author))
         })
         .ok_or(Error::EntryNotFound)
 }
@@ -397,17 +408,18 @@ impl<'a> EntryRef<'a> {
         parent_inner: &'a Inner,
         name: &'a str,
         entry_data: &'a Arc<EntryData>,
-        branch_id: &'a ReplicaId,
+        author: &'a ReplicaId,
     ) -> Self {
         let inner = RefInner {
             parent_outer,
             parent_inner,
             entry_data,
             name,
+            author,
         };
 
         match entry_data.entry_type {
-            EntryType::File => Self::File(FileRef { inner, branch_id }),
+            EntryType::File => Self::File(FileRef { inner }),
             EntryType::Directory => Self::Directory(DirectoryRef { inner }),
         }
     }
@@ -463,7 +475,6 @@ impl<'a> EntryRef<'a> {
 #[derive(Copy, Clone, Eq, PartialEq)]
 pub struct FileRef<'a> {
     inner: RefInner<'a>,
-    branch_id: &'a ReplicaId,
 }
 
 impl<'a> FileRef<'a> {
@@ -475,8 +486,8 @@ impl<'a> FileRef<'a> {
         Locator::Head(self.inner.entry_data.blob_id)
     }
 
-    pub fn branch_id(&self) -> &'a ReplicaId {
-        self.branch_id
+    pub fn author(&self) -> &'a ReplicaId {
+        self.inner.author
     }
 
     pub async fn open(&self) -> Result<File> {
@@ -532,6 +543,7 @@ struct RefInner<'a> {
     parent_inner: &'a Inner,
     entry_data: &'a Arc<EntryData>,
     name: &'a str,
+    author: &'a ReplicaId,
 }
 
 impl RefInner<'_> {
@@ -539,7 +551,7 @@ impl RefInner<'_> {
         ParentContext {
             directory: self.parent_outer.clone(),
             entry_name: self.name.into(),
-            entry_data: self.entry_data.clone(),
+            entry_author: *self.author,
         }
     }
 }
@@ -597,7 +609,7 @@ impl Content {
 
     fn insert(
         &mut self,
-        branch_id: ReplicaId,
+        author: ReplicaId,
         name: String,
         entry_type: EntryType,
         version_vector: VersionVector,
@@ -605,7 +617,7 @@ impl Content {
         let blob_id = rand::random();
         let versions = self.entries.entry(name).or_insert_with(Default::default);
 
-        match versions.entry(branch_id) {
+        match versions.entry(author) {
             btree_map::Entry::Vacant(entry) => {
                 let data = Arc::new(EntryData {
                     entry_type,

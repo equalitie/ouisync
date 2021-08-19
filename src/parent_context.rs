@@ -1,6 +1,7 @@
 use crate::{
     directory::{Directory, EntryData},
     error::Result,
+    replica_id::ReplicaId
 };
 use std::sync::Arc;
 
@@ -11,9 +12,9 @@ pub struct ParentContext {
     pub directory: Directory,
     /// The name of the entry in its parent directory.
     pub entry_name: String,
-    /// The entry data in its parent directory.
-    pub entry_data: Arc<EntryData>,
-    // TODO: Should this be std::sync::Weak?
+    /// Author of the particular version of entry, i.e. the ID of the replica last to have
+    /// incremented the version vector.
+    pub entry_author: ReplicaId,
 }
 
 impl ParentContext {
@@ -22,5 +23,9 @@ impl ParentContext {
         self.directory
             .increment_entry_version(&self.entry_name)
             .await
+    }
+
+    pub async fn entry_data(&self) -> Arc<EntryData> {
+        self.directory.get_entry(&self.entry_name, &self.entry_author).await.unwrap()
     }
 }
