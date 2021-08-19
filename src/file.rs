@@ -1,6 +1,6 @@
 use crate::{
-    blob::Blob, blob_id::BlobId, branch::Branch, error::Result, locator::Locator,
-    parent_context::ParentContext,
+    blob::Blob, blob_id::BlobId, branch::Branch, entry_type::EntryType, error::Result,
+    locator::Locator, parent_context::ParentContext,
 };
 use std::io::SeekFrom;
 
@@ -112,18 +112,14 @@ impl File {
             return Ok(());
         }
 
-        let old_entry = self.parent.entry_data().await;
+        let old_vv = self.parent.entry_version_vector().await;
 
         self.parent.directory = self.parent.directory.fork().await?;
 
         let blob_id = self
             .parent
             .directory
-            .insert_entry(
-                self.parent.entry_name.clone(),
-                old_entry.entry_type(),
-                old_entry.version_vector().clone(),
-            )
+            .insert_entry(self.parent.entry_name.clone(), EntryType::File, old_vv)
             .await?;
 
         self.blob

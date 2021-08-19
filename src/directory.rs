@@ -103,12 +103,7 @@ impl Directory {
 
         let author = *self.local_branch.id();
         let vv = VersionVector::first(author);
-        let blob_id = inner.insert_entry(
-            author,
-            name.clone(),
-            EntryType::Directory,
-            vv,
-        )?;
+        let blob_id = inner.insert_entry(author, name.clone(), EntryType::Directory, vv)?;
         let locator = Locator::Head(blob_id);
         let parent = ParentContext {
             directory: self.clone(),
@@ -270,11 +265,6 @@ impl Directory {
         );
         inner
     }
-
-    pub async fn get_entry(&self, name: &str, author: &ReplicaId) -> Option<Arc<EntryData>> {
-        let inner = self.inner.read().await;
-        inner.get_entry(name, author) 
-    }
 }
 
 /// View of a `Directory` for performing read-only queries.
@@ -371,10 +361,6 @@ impl Inner {
         self.content
             .insert(author, name, entry_type, version_vector)
     }
-
-    fn get_entry(&self, name: &str, author: &ReplicaId) -> Option<Arc<EntryData>> {
-        self.content.entries.get(name).and_then(|versions| versions.get(author).cloned())
-    }
 }
 
 fn lookup<'a>(
@@ -406,7 +392,7 @@ impl<'a> EntryRef<'a> {
         parent_outer: &'a Directory,
         parent_inner: &'a Inner,
         name: &'a str,
-        entry_data: &'a Arc<EntryData>,
+        entry_data: &'a EntryData,
         author: &'a ReplicaId,
     ) -> Self {
         let inner = RefInner {
@@ -437,11 +423,12 @@ impl<'a> EntryRef<'a> {
         }
     }
 
-    pub fn blob_id(&self) -> &'a BlobId {
-        match self {
-            Self::File(r) => &r.inner.entry_data.blob_id,
-            Self::Directory(r) => &r.inner.entry_data.blob_id,
-        }
+    pub fn blob_id(&self) -> &BlobId {
+        &self.inner().entry_data.blob_id
+    }
+
+    pub fn version_vector(&self) -> &VersionVector {
+        &self.inner().entry_data.version_vector
     }
 
     pub fn locator(&self) -> Locator {
@@ -468,6 +455,13 @@ impl<'a> EntryRef<'a> {
 
     pub fn is_directory(&self) -> bool {
         matches!(self, Self::Directory(_))
+    }
+
+    fn inner(&self) -> &RefInner {
+        match self {
+            Self::File(r) => &r.inner,
+            Self::Directory(r) => &r.inner,
+        }
     }
 }
 
@@ -540,7 +534,7 @@ impl<'a> DirectoryRef<'a> {
 struct RefInner<'a> {
     parent_outer: &'a Directory,
     parent_inner: &'a Inner,
-    entry_data: &'a Arc<EntryData>,
+    entry_data: &'a EntryData,
     name: &'a str,
     author: &'a ReplicaId,
 }
@@ -593,7 +587,7 @@ impl MoveDstDirectory {
 
 #[derive(Clone, Deserialize, Serialize)]
 struct Content {
-    entries: BTreeMap<String, BTreeMap<ReplicaId, Arc<EntryData>>>,
+    entries: BTreeMap<String, BTreeMap<ReplicaId, EntryData>>,
     #[serde(skip)]
     dirty: bool,
 }
@@ -618,12 +612,11 @@ impl Content {
 
         match versions.entry(author) {
             btree_map::Entry::Vacant(entry) => {
-                let data = Arc::new(EntryData {
+                entry.insert(EntryData {
                     entry_type,
                     blob_id,
                     version_vector,
                 });
-                entry.insert(data);
                 self.dirty = true;
                 Ok(blob_id)
             }

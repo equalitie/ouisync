@@ -1,9 +1,6 @@
 use crate::{
-    directory::{Directory, EntryData},
-    error::Result,
-    replica_id::ReplicaId
+    directory::Directory, error::Result, replica_id::ReplicaId, version_vector::VersionVector,
 };
-use std::sync::Arc;
 
 /// Info about an entry in the context of its parent directory.
 #[derive(Clone)]
@@ -25,7 +22,13 @@ impl ParentContext {
             .await
     }
 
-    pub async fn entry_data(&self) -> Arc<EntryData> {
-        self.directory.get_entry(&self.entry_name, &self.entry_author).await.unwrap()
+    pub async fn entry_version_vector(&self) -> VersionVector {
+        self.directory
+            .read()
+            .await
+            .lookup_version(&self.entry_name, &self.entry_author)
+            .unwrap()
+            .version_vector()
+            .clone()
     }
 }
