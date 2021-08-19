@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{btree_map, hash_map, BTreeMap, HashMap},
     fmt, iter,
+    ops::DerefMut,
     sync::{Arc, Weak},
 };
 use tokio::sync::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -210,10 +211,24 @@ impl Directory {
     }
 
     /// Increment version of the specified entry.
-    pub(crate) async fn increment_entry_version(&self, _name: &str) -> Result<()> {
-        // TODO
-        // TODO: assert we are in the local branch
-        Ok(())
+    pub(crate) async fn increment_entry_version(&self, name: &str) -> Result<()> {
+        let mut inner_guard = self.write().await;
+        let inner = inner_guard.deref_mut();
+
+        let author = self.local_branch.id();
+
+        // Asserting we are in the local branch
+        assert_eq!(author, inner.blob.branch().id());
+
+        inner
+            .content
+            .entries
+            .get_mut(name)
+            .and_then(|versions| versions.get_mut(author))
+            .map(|entry| {
+                entry.version_vector.increment(*author);
+            })
+            .ok_or(Error::EntryNotFound)
     }
 
     async fn open(
@@ -498,6 +513,8 @@ impl fmt::Debug for FileRef<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("FileRef")
             .field("name", &self.inner.name)
+            .field("author", &self.inner.author)
+            .field("vv", &self.inner.entry_data.version_vector)
             .finish()
     }
 }
