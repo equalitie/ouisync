@@ -23,6 +23,7 @@ use tokio::sync::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 pub struct Directory {
     inner: Arc<RwLock<Inner>>,
     local_branch: Branch,
+    parent: Option<Box<ParentContext>>, // box needed to avoid infinite type recursion
 }
 
 #[allow(clippy::len_without_is_empty)]
@@ -58,8 +59,16 @@ impl Directory {
     /// Flushes this directory ensuring that any pending changes are written to the store and the
     /// version vectors of this and the ancestor directories are properly incremented.
     /// Also flushes all ancestor directories.
+    #[async_recursion]
     pub async fn flush(&self) -> Result<()> {
-        self.inner.write().await.flush().await
+        self.inner.write().await.flush().await?;
+
+        if let Some(parent) = &self.parent {
+            parent.increment_version().await?;
+            parent.directory.flush().await?;
+        }
+
+        Ok(())
     }
 
     /// Creates a new file inside this directory.
@@ -157,9 +166,7 @@ impl Directory {
     // Forks this directory into the local branch.
     #[async_recursion]
     pub async fn fork(&self) -> Result<Directory> {
-        let inner = self.read().await;
-
-        if let Some(parent) = inner.parent() {
+        if let Some(parent) = &self.parent {
             let parent_dir = parent.directory.fork().await?;
 
             if let Ok(entry) = parent_dir
@@ -176,6 +183,11 @@ impl Directory {
         } else {
             self.local_branch.open_or_create_root().await
         }
+    }
+
+    /// Returns the parent directory, if any.
+    pub fn parent(&self) -> Option<&ParentContext> {
+        self.parent.as_deref()
     }
 
     /// Inserts a dangling entry into this directory. It's the responsibility of the caller to make
@@ -216,10 +228,10 @@ impl Directory {
             inner: Arc::new(RwLock::new(Inner {
                 blob,
                 content,
-                parent,
                 open_directories: SubdirectoryCache::new(),
             })),
             local_branch,
+            parent: parent.map(Box::new),
         })
     }
 
@@ -230,10 +242,10 @@ impl Directory {
             inner: Arc::new(RwLock::new(Inner {
                 blob,
                 content: Content::new(),
-                parent,
                 open_directories: SubdirectoryCache::new(),
             })),
             local_branch: owner_branch,
+            parent: parent.map(Box::new),
         }
     }
 
@@ -309,24 +321,17 @@ impl Reader<'_> {
     pub fn branch(&self) -> &Branch {
         self.inner.blob.branch()
     }
-
-    /// Returns the parent directory, if any.
-    pub fn parent(&self) -> Option<&ParentContext> {
-        self.inner.parent.as_ref()
-    }
 }
 
 struct Inner {
     blob: Blob,
     content: Content,
-    parent: Option<ParentContext>,
     // Cache of open subdirectories. Used to make sure that multiple instances of the same directory
     // all share the same internal state.
     open_directories: SubdirectoryCache,
 }
 
 impl Inner {
-    #[async_recursion]
     async fn flush(&mut self) -> Result<()> {
         if !self.content.dirty {
             return Ok(());
@@ -340,11 +345,6 @@ impl Inner {
         self.blob.flush().await?;
 
         self.content.dirty = false;
-
-        if let Some(parent) = &self.parent {
-            parent.increment_version().await?;
-            parent.directory.flush().await?;
-        }
 
         Ok(())
     }
@@ -659,6 +659,7 @@ impl RootDirectoryCache {
             Ok(Directory {
                 inner,
                 local_branch,
+                parent: None,
             })
         } else {
             let dir = Directory::open_root(owner_branch, local_branch).await?;
@@ -674,6 +675,7 @@ impl RootDirectoryCache {
             Ok(Directory {
                 inner,
                 local_branch: branch,
+                parent: None,
             })
         } else {
             let dir = Directory::open_or_create_root(branch).await?;
@@ -706,6 +708,7 @@ impl SubdirectoryCache {
                     Directory {
                         inner,
                         local_branch,
+                        parent: Some(Box::new(parent)),
                     }
                 } else {
                     let dir =
