@@ -14,7 +14,7 @@ use async_recursion::async_recursion;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{btree_map, hash_map, BTreeMap, HashMap},
-    fmt,
+    fmt, iter,
     sync::{Arc, Weak},
 };
 use tokio::sync::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -59,13 +59,14 @@ impl Directory {
     /// Flushes this directory ensuring that any pending changes are written to the store and the
     /// version vectors of this and the ancestor directories are properly incremented.
     /// Also flushes all ancestor directories.
-    #[async_recursion]
     pub async fn flush(&self) -> Result<()> {
-        self.inner.write().await.flush().await?;
+        if !self.inner.write().await.flush().await? {
+            return Ok(());
+        }
 
-        if let Some(parent) = &self.parent {
-            parent.increment_version().await?;
-            parent.directory.flush().await?;
+        for ctx in self.ancestors() {
+            ctx.increment_version().await?;
+            ctx.directory.inner.write().await.flush().await?;
         }
 
         Ok(())
@@ -164,7 +165,7 @@ impl Directory {
     }
 
     // Forks this directory into the local branch.
-    #[async_recursion]
+    #[async_recursion] // TODO: consider rewriting this to avoid recursion
     pub async fn fork(&self) -> Result<Directory> {
         if let Some(parent) = &self.parent {
             let parent_dir = parent.directory.fork().await?;
@@ -185,9 +186,14 @@ impl Directory {
         }
     }
 
-    /// Returns the parent directory, if any.
+    /// Returns the parent context, if any.
     pub fn parent(&self) -> Option<&ParentContext> {
         self.parent.as_deref()
+    }
+
+    /// Returns iterator of ancestor parent contexts from the current directory to the root.
+    pub fn ancestors(&self) -> impl Iterator<Item = &ParentContext> {
+        iter::successors(self.parent(), |prev| prev.directory.parent())
     }
 
     /// Inserts a dangling entry into this directory. It's the responsibility of the caller to make
@@ -332,9 +338,9 @@ struct Inner {
 }
 
 impl Inner {
-    async fn flush(&mut self) -> Result<()> {
+    async fn flush(&mut self) -> Result<bool> {
         if !self.content.dirty {
-            return Ok(());
+            return Ok(false);
         }
 
         let buffer =
@@ -346,7 +352,7 @@ impl Inner {
 
         self.content.dirty = false;
 
-        Ok(())
+        Ok(true)
     }
 
     fn insert_entry(
