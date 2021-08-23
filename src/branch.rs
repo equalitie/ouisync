@@ -64,7 +64,13 @@ impl Branch {
                 Utf8Component::Normal(name) => {
                     let next = if let Ok(entry) = curr.read().await.lookup_version(name, self.id())
                     {
-                        entry.directory()?.open().await?
+                        Some(entry.directory()?.open().await?)
+                    } else {
+                        None
+                    };
+
+                    let next = if let Some(next) = next {
+                        next
                     } else {
                         curr.create_directory(name.to_string()).await?
                     };
@@ -94,12 +100,36 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn ensure_root_directory_exists() {
+        let branch = setup().await;
+        let dir = branch.ensure_directory_exists("/".into()).await.unwrap();
+        assert_eq!(dir.read().await.locator(), &Locator::Root);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn ensure_subdirectory_exists() {
+        let branch = setup().await;
+        let root = branch.open_or_create_root().await.unwrap();
+        root.flush().await.unwrap();
+
+        let dir = branch
+            .ensure_directory_exists(Utf8Path::new("/dir"))
+            .await
+            .unwrap();
+        dir.flush().await.unwrap();
+
+        let _ = root
+            .read()
+            .await
+            .lookup_version("dir", branch.id())
+            .unwrap();
+    }
+
+    async fn setup() -> Branch {
         let pool = db::init(db::Store::Memory).await.unwrap();
         let replica_id = rand::random();
         let index = Index::load(pool.clone(), replica_id).await.unwrap();
         let branch = Branch::new(pool, index.branches().await.local().clone(), Cryptor::Null);
 
-        let dir = branch.ensure_directory_exists("/".into()).await.unwrap();
-        assert_eq!(dir.read().await.locator(), &Locator::Root);
+        branch
     }
 }

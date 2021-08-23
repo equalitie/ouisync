@@ -656,20 +656,6 @@ pub struct EntryData {
     version_vector: VersionVector,
 }
 
-impl EntryData {
-    pub fn locator(&self) -> Locator {
-        Locator::Head(self.blob_id)
-    }
-
-    pub fn entry_type(&self) -> EntryType {
-        self.entry_type
-    }
-
-    pub fn version_vector(&self) -> &VersionVector {
-        &self.version_vector
-    }
-}
-
 // Cache for open root directory
 // TODO: consider using the `ArcSwap` crate here.
 pub struct RootDirectoryCache(Mutex<Option<Weak<RwLock<Inner>>>>);
