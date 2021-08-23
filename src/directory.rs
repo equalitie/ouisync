@@ -396,7 +396,7 @@ fn lookup<'a>(
 }
 
 /// Info about a directory entry.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub enum EntryRef<'a> {
     File(FileRef<'a>),
     Directory(DirectoryRef<'a>),
@@ -515,6 +515,7 @@ impl fmt::Debug for FileRef<'_> {
             .field("name", &self.inner.name)
             .field("author", &self.inner.author)
             .field("vv", &self.inner.entry_data.version_vector)
+            .field("locator", &self.locator())
             .finish()
     }
 }
@@ -544,6 +545,14 @@ impl<'a> DirectoryRef<'a> {
                 self.inner.parent_context(),
             )
             .await
+    }
+}
+
+impl fmt::Debug for DirectoryRef<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("DirectoryRef")
+            .field("name", &self.inner.name)
+            .finish()
     }
 }
 

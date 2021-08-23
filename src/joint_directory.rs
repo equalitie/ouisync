@@ -366,6 +366,8 @@ impl<'a> Merge<'a> {
         let mut files = vec![];
         let mut directories = vec![];
 
+        let entries = Self::keep_concurrent(entries.collect());
+
         for entry in entries {
             match entry {
                 EntryRef::File(file) => files.push(file),
@@ -378,6 +380,34 @@ impl<'a> Merge<'a> {
             next_file: 0,
             directories,
         }
+    }
+
+    fn keep_concurrent(entries: Vec<EntryRef<'a>>) -> Vec<EntryRef<'a>> {
+        // TODO: This is O(n^3) where n is number of branches (bubble sort * VV comparison).  Can
+        // we do better?
+        let len = entries.len();
+
+        let is_before_any_other = |candidate: usize| -> bool {
+            for i in 0..len {
+                if i != candidate
+                    && entries[candidate].version_vector() < entries[i].version_vector()
+                {
+                    return true;
+                }
+            }
+
+            false
+        };
+
+        let mut retval = vec![];
+
+        for (i, entry) in entries.iter().enumerate() {
+            if !is_before_any_other(i) {
+                retval.push(*entry);
+            }
+        }
+
+        retval
     }
 }
 

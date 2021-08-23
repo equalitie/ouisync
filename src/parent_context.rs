@@ -22,6 +22,8 @@ impl ParentContext {
             .await
     }
 
+    // TODO: Can this be done without cloning the VersionVector? E.g. by returning some kind of
+    // read lock.
     pub async fn entry_version_vector(&self) -> VersionVector {
         self.directory
             .read()
