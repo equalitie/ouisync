@@ -21,7 +21,7 @@ use crate::{
 /// and/or remove the leaf) and then recalculate all hashes.
 ///
 #[derive(Debug)]
-pub struct Path {
+pub(super) struct Path {
     locator: Hash,
     /// Count of the number of layers found where a locator has a corresponding bucket. Including
     /// the root and leaf layers.  (e.g. 0 -> root wasn't found; 1 -> root was found but no inner

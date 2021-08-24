@@ -10,7 +10,7 @@ use crate::{
 };
 use tokio::{select, sync::watch};
 
-pub struct Server {
+pub(crate) struct Server {
     index: Index,
     notify: watch::Receiver<()>,
     stream: ServerStream,

@@ -19,7 +19,7 @@ pub struct Branch {
 }
 
 impl Branch {
-    pub fn new(pool: db::Pool, branch_data: Arc<BranchData>, cryptor: Cryptor) -> Self {
+    pub(crate) fn new(pool: db::Pool, branch_data: Arc<BranchData>, cryptor: Cryptor) -> Self {
         Self {
             pool,
             branch_data,
@@ -32,30 +32,30 @@ impl Branch {
         self.branch_data.id()
     }
 
-    pub fn data(&self) -> &BranchData {
+    pub(crate) fn data(&self) -> &BranchData {
         &self.branch_data
     }
 
-    pub fn db_pool(&self) -> &db::Pool {
+    pub(crate) fn db_pool(&self) -> &db::Pool {
         &self.pool
     }
 
-    pub fn cryptor(&self) -> &Cryptor {
+    pub(crate) fn cryptor(&self) -> &Cryptor {
         &self.cryptor
     }
 
-    pub async fn open_root(&self, local_branch: Branch) -> Result<Directory> {
+    pub(crate) async fn open_root(&self, local_branch: Branch) -> Result<Directory> {
         self.root_directory.open(self.clone(), local_branch).await
     }
 
-    pub async fn open_or_create_root(&self) -> Result<Directory> {
+    pub(crate) async fn open_or_create_root(&self) -> Result<Directory> {
         self.root_directory.open_or_create(self.clone()).await
     }
 
     /// Ensures that the directory at the specified path exists including all its ancestors.
     /// Note: non-normalized paths (i.e. containing "..") or Windows-style drive prefixes
     /// (e.g. "C:") are not supported.
-    pub async fn ensure_directory_exists(&self, path: &Utf8Path) -> Result<Directory> {
+    pub(crate) async fn ensure_directory_exists(&self, path: &Utf8Path) -> Result<Directory> {
         let mut curr = self.open_or_create_root().await?;
 
         for component in path.components() {
@@ -86,7 +86,7 @@ impl Branch {
         Ok(curr)
     }
 
-    pub async fn ensure_file_exists(&self, path: &Utf8Path) -> Result<File> {
+    pub(crate) async fn ensure_file_exists(&self, path: &Utf8Path) -> Result<File> {
         let (parent, name) = path::decompose(path).ok_or(Error::EntryIsDirectory)?;
         let dir = self.ensure_directory_exists(parent).await?;
         dir.create_file(name.to_string()).await

@@ -12,7 +12,7 @@ pub struct File {
 
 impl File {
     /// Opens an existing file.
-    pub async fn open(
+    pub(crate) async fn open(
         owner_branch: Branch,
         local_branch: Branch,
         locator: Locator,
@@ -26,7 +26,7 @@ impl File {
     }
 
     /// Creates a new file.
-    pub async fn create(branch: Branch, locator: Locator, parent: ParentContext) -> Self {
+    pub(crate) async fn create(branch: Branch, locator: Locator, parent: ParentContext) -> Self {
         Self {
             blob: Blob::create(branch.clone(), locator),
             parent,
@@ -97,10 +97,6 @@ impl File {
 
     pub fn blob_id(&self) -> &BlobId {
         self.blob.blob_id()
-    }
-
-    pub fn parent(&self) -> &ParentContext {
-        &self.parent
     }
 
     /// Ensure this file lives in the local branch and all its ancestor directories exist and live

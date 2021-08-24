@@ -15,7 +15,7 @@ use futures_util::{Stream, TryStreamExt};
 use sqlx::Row;
 
 #[derive(Clone, Eq, PartialEq, Debug)]
-pub struct RootNode {
+pub(crate) struct RootNode {
     pub snapshot_id: SnapshotId,
     pub versions: VersionVector,
     pub hash: Hash,

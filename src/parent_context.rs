@@ -4,7 +4,7 @@ use crate::{
 
 /// Info about an entry in the context of its parent directory.
 #[derive(Clone)]
-pub struct ParentContext {
+pub(crate) struct ParentContext {
     /// The parent directory of the entry.
     pub directory: Directory,
     /// The name of the entry in its parent directory.

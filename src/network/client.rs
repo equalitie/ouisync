@@ -12,7 +12,7 @@ use crate::{
     version_vector::VersionVector,
 };
 
-pub struct Client {
+pub(crate) struct Client {
     index: Index,
     their_replica_id: ReplicaId,
     stream: ClientStream,

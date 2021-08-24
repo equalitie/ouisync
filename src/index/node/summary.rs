@@ -6,7 +6,7 @@ use std::cmp::Ordering;
 /// Summary info of a snapshot subtree. Contains whether the subtree has been completely downloaded
 /// and the number of missing blocks in the subtree.
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
-pub struct Summary {
+pub(crate) struct Summary {
     pub(super) is_complete: bool,
     pub(super) missing_blocks_count: u64,
     // Checksum is used to disambiguate the situation where two replicas have exactly the same

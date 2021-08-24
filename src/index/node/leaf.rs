@@ -12,7 +12,7 @@ use sqlx::Row;
 use std::{iter::FromIterator, mem, slice, vec};
 
 #[derive(Clone, Copy, Eq, PartialEq, Debug, Serialize, Deserialize)]
-pub struct LeafNode {
+pub(crate) struct LeafNode {
     locator: Hash,
     pub block_id: BlockId,
     pub is_missing: bool,
@@ -28,21 +28,14 @@ impl LeafNode {
         }
     }
 
-    /// Creates a leaf node whose block is assumed to be missing in this replica.
+    /// Creates a leaf node whose block is assumed to be missing in this replica
+    /// (currently test-only).
+    #[cfg(test)]
     pub fn missing(locator: Hash, block_id: BlockId) -> Self {
         Self {
             locator,
             block_id,
             is_missing: true,
-        }
-    }
-
-    /// Returns a leaf node representing the same block as `self`, but which is assumed to be
-    /// missing.
-    pub fn into_missing(self) -> Self {
-        Self {
-            is_missing: true,
-            ..self
         }
     }
 
@@ -85,16 +78,6 @@ impl LeafNode {
         .collect())
     }
 
-    pub async fn has_children(pool: &db::Pool, parent: &Hash) -> Result<bool> {
-        Ok(
-            sqlx::query("SELECT 1 FROM snapshot_leaf_nodes WHERE parent = ?")
-                .bind(parent)
-                .fetch_optional(pool)
-                .await?
-                .is_some(),
-        )
-    }
-
     /// Loads all parent hashes of nodes with the specified block id.
     pub fn load_parent_hashes<'a>(
         tx: &'a mut db::Transaction<'_>,
@@ -134,7 +117,7 @@ impl LeafNode {
 
 /// Collection that acts as a ordered set of `LeafNode`s
 #[derive(Default, Clone, Debug, Serialize, Deserialize)]
-pub struct LeafNodeSet(Vec<LeafNode>);
+pub(crate) struct LeafNodeSet(Vec<LeafNode>);
 
 impl LeafNodeSet {
     pub fn is_empty(&self) -> bool {

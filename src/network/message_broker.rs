@@ -16,7 +16,7 @@ use tokio::{
 };
 
 /// A stream for receiving Requests and sending Responses
-pub struct ServerStream {
+pub(crate) struct ServerStream {
     tx: mpsc::Sender<Command>,
     rx: mpsc::Receiver<Request>,
 }
@@ -42,7 +42,7 @@ impl ServerStream {
 }
 
 /// A stream for sending Requests and receiving Responses
-pub struct ClientStream {
+pub(crate) struct ClientStream {
     tx: mpsc::Sender<Command>,
     rx: mpsc::Receiver<Response>,
 }

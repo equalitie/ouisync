@@ -9,7 +9,7 @@ mod summary;
 #[cfg(test)]
 mod tests;
 
-pub use self::{
+pub(crate) use self::{
     inner::{InnerNode, InnerNodeMap, INNER_LAYER_COUNT},
     leaf::{LeafNode, LeafNodeSet, ModifyStatus},
     root::RootNode,
@@ -22,13 +22,17 @@ use sqlx::Sqlite;
 use std::collections::HashSet;
 
 /// Get the bucket for `locator` at the specified `inner_layer`.
-pub fn get_bucket(locator: &Hash, inner_layer: usize) -> u8 {
+pub(super) fn get_bucket(locator: &Hash, inner_layer: usize) -> u8 {
     locator.as_ref()[inner_layer]
 }
 
 /// Update summary of the nodes with the specified hash and layer and all their ancestor nodes.
 /// Returns the affected replica ids.
-pub async fn update_summaries<'a, T>(db: T, hash: Hash, layer: usize) -> Result<HashSet<ReplicaId>>
+pub(super) async fn update_summaries<'a, T>(
+    db: T,
+    hash: Hash,
+    layer: usize,
+) -> Result<HashSet<ReplicaId>>
 where
     T: sqlx::Acquire<'a, Database = Sqlite>,
 {
@@ -41,7 +45,7 @@ where
 
 /// Receive a block from other replica. This marks the block as not missing by the local replica.
 /// Returns the replica ids whose branches reference the received block (if any).
-pub async fn receive_block(
+pub(crate) async fn receive_block(
     tx: &mut db::Transaction<'_>,
     id: &BlockId,
 ) -> Result<HashSet<ReplicaId>> {

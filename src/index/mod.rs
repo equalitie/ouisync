@@ -3,8 +3,8 @@ mod node;
 mod path;
 
 #[cfg(test)]
-pub use self::node::test_utils as node_test_utils;
-pub use self::{
+pub(crate) use self::node::test_utils as node_test_utils;
+pub(crate) use self::{
     branch_data::BranchData,
     node::{
         receive_block, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, RootNode, Summary,
@@ -52,11 +52,11 @@ impl Index {
         })
     }
 
-    pub fn this_replica_id(&self) -> &ReplicaId {
+    pub(crate) fn this_replica_id(&self) -> &ReplicaId {
         &self.this_replica_id
     }
 
-    pub async fn branches(&self) -> RwLockReadGuard<'_, Branches> {
+    pub(crate) async fn branches(&self) -> RwLockReadGuard<'_, Branches> {
         self.branches.read().await
     }
 
@@ -228,7 +228,7 @@ impl Index {
 }
 
 /// Container for all known branches (local and remote)
-pub struct Branches {
+pub(crate) struct Branches {
     local: Arc<BranchData>,
     remote: HashMap<ReplicaId, Arc<BranchData>>,
 }
@@ -241,11 +241,6 @@ impl Branches {
         } else {
             self.remote.get(replica_id)
         }
-    }
-
-    /// Returns an iterator over the ids of all branches in this container.
-    pub fn ids(&self) -> impl Iterator<Item = &ReplicaId> {
-        iter::once(self.local.id()).chain(self.remote.keys())
     }
 
     /// Returns an iterator over all branches in this container.

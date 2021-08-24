@@ -20,7 +20,7 @@ use std::{
 };
 use zeroize::Zeroize;
 
-pub struct Blob {
+pub(crate) struct Blob {
     branch: Branch,
     locator: Locator,
     nonce_sequence: NonceSequence,

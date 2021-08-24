@@ -9,7 +9,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug)]
-pub enum Request {
+pub(crate) enum Request {
     /// Request a root node.
     RootNode { cookie: u64 },
     /// Request inner nodes with the given parent hash and inner layer.
@@ -24,7 +24,7 @@ pub enum Request {
 }
 
 #[derive(Serialize, Deserialize)]
-pub enum Response {
+pub(crate) enum Response {
     /// Send the latest root node of this replica to another replica.
     RootNode {
         cookie: u64,
@@ -88,7 +88,7 @@ impl fmt::Debug for Response {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub enum Message {
+pub(crate) enum Message {
     Request(Request),
     Response(Response),
 }

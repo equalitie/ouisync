@@ -18,10 +18,10 @@ use std::{
 };
 
 /// Number of layers in the tree excluding the layer with root and the layer with leaf nodes.
-pub const INNER_LAYER_COUNT: usize = 3;
+pub(crate) const INNER_LAYER_COUNT: usize = 3;
 
 #[derive(Clone, Copy, Eq, PartialEq, Debug, Serialize, Deserialize)]
-pub struct InnerNode {
+pub(crate) struct InnerNode {
     pub hash: Hash,
     pub summary: Summary,
 }
@@ -187,7 +187,7 @@ impl InnerNode {
 }
 
 #[derive(Default, Clone, Debug, Serialize, Deserialize)]
-pub struct InnerNodeMap(BTreeMap<u8, InnerNode>);
+pub(crate) struct InnerNodeMap(BTreeMap<u8, InnerNode>);
 
 impl InnerNodeMap {
     pub fn is_empty(&self) -> bool {
@@ -285,7 +285,7 @@ impl Hashable for InnerNodeMap {
     }
 }
 
-pub struct InnerNodeMapIter<'a>(btree_map::Iter<'a, u8, InnerNode>);
+pub(crate) struct InnerNodeMapIter<'a>(btree_map::Iter<'a, u8, InnerNode>);
 
 impl<'a> Iterator for InnerNodeMapIter<'a> {
     type Item = (u8, &'a InnerNode);
