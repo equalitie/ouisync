@@ -118,13 +118,28 @@ where
     }
 }
 
+pub(super) unsafe fn get<'a>() -> &'a SessionWrapper {
+    assert!(!SESSION.is_null(), "session is not initialized");
+    &*SESSION
+}
+
 static mut SESSION: *mut SessionWrapper = ptr::null_mut();
 
-struct SessionWrapper {
+pub(super) struct SessionWrapper {
     runtime: Runtime,
     session: Session,
     sender: Sender,
     _logger: Logger,
+}
+
+impl SessionWrapper {
+    pub(super) fn runtime(&self) -> &Runtime {
+        &self.runtime
+    }
+
+    pub(super) fn sender(&self) -> Sender {
+        self.sender
+    }
 }
 
 pub(super) struct Context<'a, T> {
@@ -154,7 +169,7 @@ where
 
 // Utility for sending values to dart.
 #[derive(Copy, Clone)]
-struct Sender {
+pub(super) struct Sender {
     post_c_object_fn: PostDartCObjectFn,
 }
 
@@ -180,6 +195,13 @@ impl Sender {
                 Err(error) => sender.send_err(port, error_ptr.0, error),
             }
         }
+    }
+
+    pub(super) unsafe fn send<T>(&self, port: Port<T>, value: T)
+    where
+        T: Into<DartCObject>,
+    {
+        (self.post_c_object_fn)(port.into(), &mut value.into());
     }
 
     unsafe fn send_ok<T>(&self, port: Port<T>, error_ptr: *mut *mut c_char, value: T)
