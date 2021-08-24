@@ -20,6 +20,7 @@ use crate::{
     version_vector::VersionVector,
     ReplicaId,
 };
+use futures_util::future;
 use sqlx::Row;
 use std::{
     cmp::Ordering,
@@ -27,7 +28,7 @@ use std::{
     iter,
     sync::Arc,
 };
-use tokio::sync::{RwLock, RwLockReadGuard};
+use tokio::sync::{watch, RwLock, RwLockReadGuard};
 
 type SnapshotId = u32;
 
@@ -58,6 +59,20 @@ impl Index {
 
     pub(crate) async fn branches(&self) -> RwLockReadGuard<'_, Branches> {
         self.branches.read().await
+    }
+
+    /// Subscribe to change notification from all current and future branches.
+    pub(crate) async fn subscribe(&self) -> Subscription {
+        // TODO: emit notification also when a new branch is added and also any subsequent
+        // notification from that branch.
+        Subscription {
+            branch_rxs: self
+                .branches()
+                .await
+                .all()
+                .map(|branch| branch.subscribe())
+                .collect(),
+        }
     }
 
     /// Notify all tasks waiting for changes on the specified branches.
@@ -251,6 +266,25 @@ impl Branches {
     /// Returns the local branch.
     pub fn local(&self) -> &Arc<BranchData> {
         &self.local
+    }
+}
+
+/// Handle to receive change notification from index.
+pub struct Subscription {
+    branch_rxs: Vec<watch::Receiver<()>>,
+}
+
+impl Subscription {
+    /// Receive the next change notification.
+    pub async fn recv(&mut self) {
+        // TODO: the futures passed to `select_all` need to be `Unpin`. The simplest way to do that
+        // is to `Box::pin` them. Is there a better way which doesn't involve boxing/allocations?
+        let (result, index, _) =
+            future::select_all(self.branch_rxs.iter_mut().map(|rx| Box::pin(rx.changed()))).await;
+
+        if result.is_err() {
+            self.branch_rxs.swap_remove(index);
+        }
     }
 }
 
