@@ -1,6 +1,8 @@
+use tokio::task::JoinHandle;
+
 use super::{
     session,
-    utils::{self, Port, SharedHandle},
+    utils::{self, Port, SharedHandle, UniqueHandle},
 };
 use crate::{entry_type::EntryType, error::Error, repository::Repository};
 use std::{os::raw::c_char, sync::Arc};
@@ -78,6 +80,34 @@ pub unsafe extern "C" fn repository_move_entry(
             Ok(())
         })
     })
+}
+
+/// Subscribe to change notifications from the repository.
+#[no_mangle]
+pub unsafe extern "C" fn repository_subscribe(
+    handle: SharedHandle<Repository>,
+    port: Port<()>,
+) -> UniqueHandle<JoinHandle<()>> {
+    let session = session::get();
+    let sender = session.sender();
+    let repo = handle.get();
+
+    let handle = session.runtime().spawn(async move {
+        let mut rx = repo.subscribe().await;
+
+        loop {
+            rx.recv().await;
+            sender.send(port, ());
+        }
+    });
+
+    UniqueHandle::new(Box::new(handle))
+}
+
+/// Cancel the repository change notifications subscription.
+#[no_mangle]
+pub unsafe extern "C" fn subscription_cancel(handle: UniqueHandle<JoinHandle<()>>) {
+    handle.release().abort();
 }
 
 pub(super) fn entry_type_to_num(entry_type: EntryType) -> u8 {

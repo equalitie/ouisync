@@ -5,7 +5,7 @@ use crate::{
     entry_type::EntryType,
     error::{Error, Result},
     file::File,
-    index::{BranchData, Index},
+    index::{BranchData, Index, Subscription},
     joint_directory::JointDirectory,
     path, ReplicaId,
 };
@@ -149,6 +149,11 @@ impl Repository {
                 .map(|data| self.inflate(data)),
         )
         .await
+    }
+
+    /// Subscribe to change notification from all current and future branches.
+    pub async fn subscribe(&self) -> Subscription {
+        self.index.subscribe().await
     }
 
     // Create `Branch` wrapping the given `data`, reusing a previously cached one if it exists,

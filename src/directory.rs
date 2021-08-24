@@ -184,12 +184,12 @@ impl Directory {
     }
 
     /// Returns the parent context, if any.
-    pub fn parent(&self) -> Option<&ParentContext> {
+    pub(crate) fn parent(&self) -> Option<&ParentContext> {
         self.parent.as_deref()
     }
 
     /// Returns iterator of ancestor parent contexts from the current directory to the root.
-    pub fn ancestors(&self) -> impl Iterator<Item = &ParentContext> {
+    pub(crate) fn ancestors(&self) -> impl Iterator<Item = &ParentContext> {
         iter::successors(self.parent(), |prev| prev.directory.parent())
     }
 

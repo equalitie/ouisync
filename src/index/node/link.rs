@@ -15,7 +15,7 @@ use sqlx::Row;
 // https://rust-lang.github.io/rust-clippy/master/index.html#enum_variant_names
 #[allow(clippy::enum_variant_names)]
 #[derive(Debug)]
-pub enum Link {
+pub(crate) enum Link {
     ToRoot { node: RootNode },
     ToInner { parent: Hash, node: InnerNode },
     ToLeaf { parent: Hash, node: LeafNode },

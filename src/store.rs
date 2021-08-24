@@ -10,7 +10,10 @@ use crate::{
 
 /// Removes the block if it's orphaned (not referenced by any branch), otherwise does nothing.
 /// Returns whether the block was removed.
-pub async fn remove_orphaned_block(tx: &mut db::Transaction<'_>, id: &BlockId) -> Result<bool> {
+pub(crate) async fn remove_orphaned_block(
+    tx: &mut db::Transaction<'_>,
+    id: &BlockId,
+) -> Result<bool> {
     let result = sqlx::query(
         "DELETE FROM blocks
          WHERE id = ? AND NOT EXISTS (SELECT 1 FROM snapshot_leaf_nodes WHERE block_id = id)",
@@ -24,7 +27,7 @@ pub async fn remove_orphaned_block(tx: &mut db::Transaction<'_>, id: &BlockId) -
 
 /// Write a block received from a remote replica to the block store. The block must already be
 /// referenced by the index, otherwise an `BlockNotReferenced` error is returned.
-pub async fn write_received_block(
+pub(crate) async fn write_received_block(
     index: &Index,
     id: &BlockId,
     content: &[u8],

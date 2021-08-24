@@ -7,7 +7,7 @@ use rand::Rng;
 use std::{collections::HashMap, mem};
 
 // In-memory snapshot for testing purposes.
-pub struct Snapshot {
+pub(crate) struct Snapshot {
     root_hash: Hash,
     inners: [HashMap<BucketPath, InnerNodeMap>; INNER_LAYER_COUNT],
     leaves: HashMap<BucketPath, LeafNodeSet>,
@@ -109,7 +109,7 @@ impl Snapshot {
     }
 }
 
-pub struct InnerLayer<'a>(&'a Snapshot, usize);
+pub(crate) struct InnerLayer<'a>(&'a Snapshot, usize);
 
 impl<'a> InnerLayer<'a> {
     pub fn inner_maps(&self) -> impl Iterator<Item = (&Hash, &InnerNodeMap)> {

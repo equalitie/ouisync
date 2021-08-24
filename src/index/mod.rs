@@ -3,8 +3,8 @@ mod node;
 mod path;
 
 #[cfg(test)]
-pub use self::node::test_utils as node_test_utils;
-pub use self::{
+pub(crate) use self::node::test_utils as node_test_utils;
+pub(crate) use self::{
     branch_data::BranchData,
     node::{
         receive_block, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, RootNode, Summary,
@@ -20,6 +20,7 @@ use crate::{
     version_vector::VersionVector,
     ReplicaId,
 };
+use futures_util::future;
 use sqlx::Row;
 use std::{
     cmp::Ordering,
@@ -27,7 +28,7 @@ use std::{
     iter,
     sync::Arc,
 };
-use tokio::sync::{RwLock, RwLockReadGuard};
+use tokio::sync::{watch, RwLock, RwLockReadGuard};
 
 type SnapshotId = u32;
 
@@ -52,12 +53,26 @@ impl Index {
         })
     }
 
-    pub fn this_replica_id(&self) -> &ReplicaId {
+    pub(crate) fn this_replica_id(&self) -> &ReplicaId {
         &self.this_replica_id
     }
 
-    pub async fn branches(&self) -> RwLockReadGuard<'_, Branches> {
+    pub(crate) async fn branches(&self) -> RwLockReadGuard<'_, Branches> {
         self.branches.read().await
+    }
+
+    /// Subscribe to change notification from all current and future branches.
+    pub(crate) async fn subscribe(&self) -> Subscription {
+        // TODO: emit notification also when a new branch is added and also any subsequent
+        // notification from that branch.
+        Subscription {
+            branch_rxs: self
+                .branches()
+                .await
+                .all()
+                .map(|branch| branch.subscribe())
+                .collect(),
+        }
     }
 
     /// Notify all tasks waiting for changes on the specified branches.
@@ -228,7 +243,7 @@ impl Index {
 }
 
 /// Container for all known branches (local and remote)
-pub struct Branches {
+pub(crate) struct Branches {
     local: Arc<BranchData>,
     remote: HashMap<ReplicaId, Arc<BranchData>>,
 }
@@ -243,11 +258,6 @@ impl Branches {
         }
     }
 
-    /// Returns an iterator over the ids of all branches in this container.
-    pub fn ids(&self) -> impl Iterator<Item = &ReplicaId> {
-        iter::once(self.local.id()).chain(self.remote.keys())
-    }
-
     /// Returns an iterator over all branches in this container.
     pub fn all(&self) -> impl Iterator<Item = &Arc<BranchData>> {
         iter::once(&self.local).chain(self.remote.values())
@@ -256,6 +266,25 @@ impl Branches {
     /// Returns the local branch.
     pub fn local(&self) -> &Arc<BranchData> {
         &self.local
+    }
+}
+
+/// Handle to receive change notification from index.
+pub struct Subscription {
+    branch_rxs: Vec<watch::Receiver<()>>,
+}
+
+impl Subscription {
+    /// Receive the next change notification.
+    pub async fn recv(&mut self) {
+        // TODO: the futures passed to `select_all` need to be `Unpin`. The simplest way to do that
+        // is to `Box::pin` them. Is there a better way which doesn't involve boxing/allocations?
+        let (result, index, _) =
+            future::select_all(self.branch_rxs.iter_mut().map(|rx| Box::pin(rx.changed()))).await;
+
+        if result.is_err() {
+            self.branch_rxs.swap_remove(index);
+        }
     }
 }
 
