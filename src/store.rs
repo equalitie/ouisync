@@ -39,7 +39,9 @@ pub(crate) async fn write_received_block(
     block::write(&mut tx, id, content, auth_tag).await?;
     tx.commit().await?;
 
-    index.notify_branches_changed(&replica_ids).await;
+    index
+        .notify_branches_changed(&replica_ids.into_keys().collect())
+        .await;
 
     Ok(())
 }
