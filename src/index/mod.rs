@@ -78,6 +78,11 @@ impl Index {
     /// Notify all tasks waiting for changes on the specified branches.
     /// See also [`BranchData::subscribe`].
     pub(crate) async fn notify_branches_changed(&self, replica_ids: &HashSet<ReplicaId>) {
+        // Avoid the read lock
+        if replica_ids.is_empty() {
+            return;
+        }
+
         let branches = self.branches.read().await;
         for replica_id in replica_ids {
             if let Some(branch) = branches.get(replica_id) {
@@ -121,7 +126,7 @@ impl Index {
             .await?;
         let node =
             RootNode::create(&self.pool, replica_id, versions, hash, Summary::INCOMPLETE).await?;
-        node::update_summaries(&self.pool, hash, 0).await?;
+        self.update_summaries(hash, 0).await?;
 
         // Update the remote branch with the new root.
         let mut branches = self.branches.write().await;
@@ -153,7 +158,7 @@ impl Index {
             .into_incomplete()
             .save(&self.pool, &parent_hash)
             .await?;
-        node::update_summaries(&self.pool, parent_hash, inner_layer).await?;
+        self.update_summaries(parent_hash, inner_layer).await?;
 
         Ok(updated)
     }
@@ -172,7 +177,8 @@ impl Index {
             .collect();
 
         nodes.into_missing().save(&self.pool, &parent_hash).await?;
-        node::update_summaries(&self.pool, parent_hash, INNER_LAYER_COUNT).await?;
+        self.update_summaries(parent_hash, INNER_LAYER_COUNT)
+            .await?;
 
         Ok(updated)
     }
@@ -239,6 +245,21 @@ impl Index {
         Ok(remote_nodes
             .present()
             .filter(move |node| local_nodes.is_missing(node.locator())))
+    }
+
+    async fn update_summaries(&self, hash: Hash, layer: usize) -> Result<()> {
+        // Find the replicas whose current snapshots became complete by this update.
+        let replica_ids = node::update_summaries(&self.pool, hash, layer)
+            .await?
+            .into_iter()
+            .filter(|(_, complete)| *complete)
+            .map(|(id, _)| id)
+            .collect();
+
+        // Then notify them.
+        self.notify_branches_changed(&replica_ids).await;
+
+        Ok(())
     }
 }
 

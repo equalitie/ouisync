@@ -19,7 +19,7 @@ pub(crate) use self::{
 use crate::{block::BlockId, crypto::Hash, db, error::Result, replica_id::ReplicaId};
 use futures_util::{future, TryStreamExt};
 use sqlx::Sqlite;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Get the bucket for `locator` at the specified `inner_layer`.
 pub(super) fn get_bucket(locator: &Hash, inner_layer: usize) -> u8 {
@@ -49,9 +49,9 @@ where
 pub(crate) async fn receive_block(
     tx: &mut db::Transaction<'_>,
     id: &BlockId,
-) -> Result<HashMap<ReplicaId, bool>> {
+) -> Result<HashSet<ReplicaId>> {
     if !LeafNode::set_present(tx, id).await? {
-        return Ok(HashMap::new());
+        return Ok(HashSet::new());
     }
 
     let nodes = LeafNode::load_parent_hashes(tx, id)
@@ -59,7 +59,10 @@ pub(crate) async fn receive_block(
         .try_collect()
         .await?;
 
-    update_summaries_in_transaction(tx, nodes).await
+    Ok(update_summaries_in_transaction(tx, nodes)
+        .await?
+        .into_keys()
+        .collect())
 }
 
 async fn update_summaries_in_transaction(
