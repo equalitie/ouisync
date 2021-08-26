@@ -45,7 +45,7 @@ pub struct Index {
 impl Index {
     pub async fn load(pool: db::Pool, this_replica_id: ReplicaId) -> Result<Self> {
         let branches = Branches::load(&pool, this_replica_id).await?;
-        let (branch_created_tx, branch_created_rx) = watch::channel(0);
+        let (branch_created_tx, branch_created_rx) = watch::channel(());
 
         Ok(Self {
             pool,
@@ -72,6 +72,7 @@ impl Index {
             shared: self.shared.clone(),
             branch_changed_rxs: vec![],
             branch_created_rx: self.shared.branch_created_rx.clone(),
+            version: 0,
         }
     }
 
@@ -257,22 +258,21 @@ impl Index {
     /// Update the root node of the remote branch.
     async fn update_remote_branch(&self, replica_id: ReplicaId, node: RootNode) {
         let mut branches = self.shared.branches.write().await;
+        let branches = &mut *branches;
 
         match branches.remote.entry(replica_id) {
             Entry::Vacant(entry) => {
-                let version = self
-                    .shared
-                    .branch_created_tx
-                    .borrow()
+                branches.version = branches
+                    .version
                     .checked_add(1)
                     .expect("branch limit exceeded");
 
                 entry.insert(BranchHolder {
                     branch: Arc::new(BranchData::with_root_node(replica_id, node)),
-                    version,
+                    version: branches.version,
                 });
 
-                self.shared.branch_created_tx.send(version).unwrap_or(());
+                self.shared.branch_created_tx.send(()).unwrap_or(());
             }
             Entry::Occupied(entry) => entry.get().branch.update_root(node).await,
         }
@@ -281,16 +281,18 @@ impl Index {
 
 struct Shared {
     branches: RwLock<Branches>,
-    branch_created_tx: watch::Sender<u64>,
+    branch_created_tx: watch::Sender<()>,
     // TODO: remove this when [this PR](https://github.com/tokio-rs/tokio/pull/3800) gets merged
     // and published.
-    branch_created_rx: watch::Receiver<u64>,
+    branch_created_rx: watch::Receiver<()>,
 }
 
 /// Container for all known branches (local and remote)
 pub(crate) struct Branches {
     local: Arc<BranchData>,
     remote: HashMap<ReplicaId, BranchHolder>,
+    // Number that gets incremented every time a new branch is created.
+    version: u64,
 }
 
 struct BranchHolder {
@@ -303,7 +305,11 @@ impl Branches {
         let local = Arc::new(BranchData::new(pool, this_replica_id).await?);
         let remote = load_remote_branches(pool, &this_replica_id).await?;
 
-        Ok(Self { local, remote })
+        Ok(Self {
+            local,
+            remote,
+            version: 0,
+        })
     }
 
     /// Returns a branch with the given id, if it exists.
@@ -325,11 +331,14 @@ impl Branches {
         &self.local
     }
 
-    /// Returns an iterator over the remote branches that were created at or after the given
-    /// version.
-    fn recent(&self, version: u64) -> impl Iterator<Item = &Arc<BranchData>> {
+    // Returns an iterator over the remote branches (together with their versions) that were
+    // created at or after the given version.
+    fn recent(&self, version: u64) -> impl Iterator<Item = (&Arc<BranchData>, u64)> {
+        // TODO: this method involves linear search which can be inefficient when there is a lot of
+        // branches. Consider optimizing it.
+
         let local = if version == 0 {
-            Some(&self.local)
+            Some((&self.local, 0))
         } else {
             None
         };
@@ -338,7 +347,7 @@ impl Branches {
             self.remote
                 .values()
                 .filter(move |holder| holder.version >= version)
-                .map(|holder| &holder.branch),
+                .map(|holder| (&holder.branch, holder.version)),
         )
     }
 }
@@ -346,40 +355,61 @@ impl Branches {
 /// Handle to receive change notification from index.
 pub struct Subscription {
     shared: Arc<Shared>,
-    branch_changed_rxs: Vec<watch::Receiver<()>>,
-    branch_created_rx: watch::Receiver<u64>,
+    branch_changed_rxs: Vec<(ReplicaId, watch::Receiver<()>)>,
+    branch_created_rx: watch::Receiver<()>,
+    version: u64,
 }
 
 impl Subscription {
-    /// Receive the next change notification.
-    pub async fn recv(&mut self) {
-        select! {
-            _ = watch_select(&mut self.branch_changed_rxs) => (),
-            _ = self.branch_created_rx.changed() => {
-                let version = *self.branch_created_rx.borrow();
-                for branch in self.shared.branches.read().await.recent(version) {
-                    self.branch_changed_rxs.push(branch.subscribe());
+    /// Receives the next change notification. Returns the id of the changed branch. Returns `None`
+    /// If `Index` was dropped.
+    pub async fn recv(&mut self) -> Option<ReplicaId> {
+        loop {
+            select! {
+                id = select_branch_changed(&mut self.branch_changed_rxs), if !self.branch_changed_rxs.is_empty() => {
+                    if let Some(id) = id {
+                        return Some(id);
+                    }
+                },
+                result = self.branch_created_rx.changed() => {
+                    if result.is_err() {
+                        return None;
+                    }
+
+                    for (branch, version) in self.shared.branches.read().await.recent(self.version) {
+                        self.branch_changed_rxs.push((*branch.id(), branch.subscribe()));
+                        self.version = self.version.max(version.saturating_add(1));
+                    }
                 }
             }
         }
     }
 }
 
-/// Waits for a change notification from any of the given receivers. If a sender is disconnected,
-/// automatically removes the corresponding receiver from the vector.
-async fn watch_select(watches: &mut Vec<watch::Receiver<()>>) {
-    if watches.is_empty() {
-        return;
-    }
+/// Waits for a change notification from any of the given watch receivers.
+/// Returns the id of the branch that triggered the watch, or `None` if a watch disconnected. The
+/// disconnected watch is then automatically removed from the vector.
+async fn select_branch_changed(
+    watches: &mut Vec<(ReplicaId, watch::Receiver<()>)>,
+) -> Option<ReplicaId> {
+    assert!(!watches.is_empty());
 
     // TODO: `select_all` requires the futures to be `Unpin`. The easiest way to achieve that
     // is to `Box::pin` them, but perhaps there is a more efficient way that doesn't incur N
     // allocations?
-    let (result, index, _) =
-        future::select_all(watches.iter_mut().map(|rx| Box::pin(rx.changed()))).await;
+    let (result, index, _) = future::select_all(
+        watches
+            .iter_mut()
+            .map(|(id, rx)| Box::pin(async move { rx.changed().await.map(|_| id) })),
+    )
+    .await;
 
-    if result.is_err() {
-        watches.swap_remove(index);
+    match result {
+        Ok(id) => Some(*id),
+        Err(_) => {
+            watches.swap_remove(index);
+            None
+        }
     }
 }
 

@@ -39,6 +39,10 @@ impl BranchData {
     pub fn with_root_node(replica_id: ReplicaId, root_node: RootNode) -> Self {
         let (changed_tx, changed_rx) = watch::channel(());
 
+        // This causes any subsequent subscriptions to receive one event immediatelly which is useful
+        // to notify about newly created branches.
+        changed_tx.send(()).unwrap_or(());
+
         Self {
             replica_id,
             root_node: Mutex::new(root_node),
