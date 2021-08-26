@@ -162,6 +162,8 @@ async fn save_snapshot(index: &Index, snapshot: &Snapshot) {
 }
 
 async fn wait_until_snapshots_in_sync(server_index: &Index, client_index: &Index) {
+    let mut rx = client_index.subscribe().await;
+
     let server_root = load_latest_root_node(server_index, &server_index.this_replica_id)
         .await
         .unwrap();
@@ -177,8 +179,7 @@ async fn wait_until_snapshots_in_sync(server_index: &Index, client_index: &Index
             }
         }
 
-        // TODO: find a better way to do this than `sleep`.
-        time::sleep(Duration::from_millis(25)).await;
+        rx.recv().await;
     }
 }
 
