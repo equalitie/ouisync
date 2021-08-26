@@ -101,6 +101,10 @@ impl Branch {
     }
 }
 
+pub(crate) async fn merge(_local: Branch, _remote: Branch) {
+    // TODO
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,5 +1,5 @@
 use crate::{
-    branch::Branch,
+    branch::{self, Branch},
     crypto::Cryptor,
     debug_printer::DebugPrinter,
     directory::{Directory, MoveDstDirectory},
@@ -13,26 +13,31 @@ use crate::{
 use camino::Utf8Path;
 use futures_util::future;
 use std::{collections::HashMap, sync::Arc};
-use tokio::sync::Mutex;
+use tokio::{sync::Mutex, task, task::JoinHandle};
 
 pub struct Repository {
-    index: Index,
-    cryptor: Cryptor,
-    // Cache for `Branch` instances to make them persistent over the lifetime of the program.
-    branches: Mutex<HashMap<ReplicaId, Branch>>,
+    shared: Arc<Shared>,
+    merge_handle: JoinHandle<()>,
 }
 
 impl Repository {
     pub fn new(index: Index, cryptor: Cryptor) -> Self {
-        Self {
+        let shared = Arc::new(Shared {
             index,
             cryptor,
             branches: Mutex::new(HashMap::new()),
+        });
+
+        let merge_handle = task::spawn(merge(shared.clone()));
+
+        Self {
+            shared,
+            merge_handle,
         }
     }
 
     pub fn this_replica_id(&self) -> &ReplicaId {
-        self.index.this_replica_id()
+        self.shared.index.this_replica_id()
     }
 
     /// Looks up an entry by its path. The path must be relative to the repository root.
@@ -133,42 +138,22 @@ impl Repository {
 
     /// Returns the local branch
     pub async fn local_branch(&self) -> Branch {
-        self.inflate(self.index.branches().await.local()).await
+        self.shared.local_branch().await
     }
 
     /// Return the branch with the specified id.
     pub async fn branch(&self, id: &ReplicaId) -> Option<Branch> {
-        Some(self.inflate(self.index.branches().await.get(id)?).await)
+        self.shared.branch(id).await
     }
 
     /// Returns all branches
     pub async fn branches(&self) -> Vec<Branch> {
-        future::join_all(
-            self.index
-                .branches()
-                .await
-                .all()
-                .map(|data| self.inflate(data)),
-        )
-        .await
+        self.shared.branches().await
     }
 
     /// Subscribe to change notification from all current and future branches.
     pub fn subscribe(&self) -> Subscription {
-        self.index.subscribe()
-    }
-
-    // Create `Branch` wrapping the given `data`, reusing a previously cached one if it exists,
-    // and putting it into the cache it it does not.
-    async fn inflate(&self, data: &Arc<BranchData>) -> Branch {
-        self.branches
-            .lock()
-            .await
-            .entry(*data.id())
-            .or_insert_with(|| {
-                Branch::new(self.index.pool.clone(), data.clone(), self.cryptor.clone())
-            })
-            .clone()
+        self.shared.index.subscribe()
     }
 
     // Opens the root directory across all branches as JointDirectory.
@@ -199,7 +184,7 @@ impl Repository {
 
     pub async fn debug_print(&self, print: DebugPrinter) {
         print.display(&"Repository");
-        let branches = self.branches.lock().await;
+        let branches = self.shared.branches.lock().await;
         for (replica_id, branch) in &*branches {
             let print = print.indent();
             let local = if replica_id == self.this_replica_id() {
@@ -211,6 +196,79 @@ impl Repository {
             print.display(&"/");
             branch.debug_print(print.indent()).await;
         }
+    }
+}
+
+impl Drop for Repository {
+    fn drop(&mut self) {
+        self.merge_handle.abort();
+    }
+}
+
+struct Shared {
+    index: Index,
+    cryptor: Cryptor,
+    // Cache for `Branch` instances to make them persistent over the lifetime of the program.
+    branches: Mutex<HashMap<ReplicaId, Branch>>,
+}
+
+impl Shared {
+    pub async fn local_branch(&self) -> Branch {
+        self.inflate(self.index.branches().await.local()).await
+    }
+
+    pub async fn branch(&self, id: &ReplicaId) -> Option<Branch> {
+        Some(self.inflate(self.index.branches().await.get(id)?).await)
+    }
+
+    pub async fn branches(&self) -> Vec<Branch> {
+        future::join_all(
+            self.index
+                .branches()
+                .await
+                .all()
+                .map(|data| self.inflate(data)),
+        )
+        .await
+    }
+
+    // Create `Branch` wrapping the given `data`, reusing a previously cached one if it exists,
+    // and putting it into the cache it it does not.
+    async fn inflate(&self, data: &Arc<BranchData>) -> Branch {
+        self.branches
+            .lock()
+            .await
+            .entry(*data.id())
+            .or_insert_with(|| {
+                Branch::new(self.index.pool.clone(), data.clone(), self.cryptor.clone())
+            })
+            .clone()
+    }
+}
+
+// Run the merge algorithm.
+async fn merge(shared: Arc<Shared>) {
+    let mut rx = shared.index.subscribe();
+
+    while let Some(branch_id) = rx.recv().await {
+        if branch_id == *shared.index.this_replica_id() {
+            // local branch change - ignore.
+            continue;
+        }
+
+        let remote = if let Some(remote) = shared.branch(&branch_id).await {
+            remote
+        } else {
+            // branch removed in the meantime - ignore.
+            continue;
+        };
+
+        // TODO: if a merge with this branch is already in progress, queue it.
+
+        let local = shared.local_branch().await;
+
+        // TODO: spawn a task for this to not block other branches
+        branch::merge(local, remote).await
     }
 }
 
