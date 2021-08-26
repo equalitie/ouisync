@@ -353,46 +353,33 @@ pub struct Subscription {
 impl Subscription {
     /// Receive the next change notification.
     pub async fn recv(&mut self) {
-        // This `Op` indirection is here just to satisfy the borrow checker.
-        enum Op {
-            None,
-            Insert(u64),
-            Remove(usize),
-        }
-
-        // TODO: `select_all` requires the futures to be `Unpin`. The easiest way to achieve that
-        // is to `Box::pin` them, but perhaps there is a more efficient way that doesn't incur N
-        // allocations?
-        let branch_changed = future::select_all(
-            self.branch_changed_rxs
-                .iter_mut()
-                .map(|rx| Box::pin(rx.changed())),
-        );
-
-        let op = select! {
-            (result, index, _) = branch_changed => {
-                if result.is_err() {
-                    Op::Remove(index)
-                } else {
-                    Op::None
-                }
-            }
+        select! {
+            _ = watch_select(&mut self.branch_changed_rxs) => (),
             _ = self.branch_created_rx.changed() => {
-                Op::Insert(*self.branch_created_rx.borrow())
-            }
-        };
-
-        match op {
-            Op::None => (),
-            Op::Insert(version) => {
+                let version = *self.branch_created_rx.borrow();
                 for branch in self.branches.read().await.recent(version) {
                     self.branch_changed_rxs.push(branch.subscribe());
                 }
             }
-            Op::Remove(index) => {
-                self.branch_changed_rxs.swap_remove(index);
-            }
         }
+    }
+}
+
+/// Waits for a change notification from any of the given receivers. If a sender is disconnected,
+/// automatically removes the corresponding receiver from the vector.
+async fn watch_select(watches: &mut Vec<watch::Receiver<()>>) {
+    if watches.is_empty() {
+        return;
+    }
+
+    // TODO: `select_all` requires the futures to be `Unpin`. The easiest way to achieve that
+    // is to `Box::pin` them, but perhaps there is a more efficient way that doesn't incur N
+    // allocations?
+    let (result, index, _) =
+        future::select_all(watches.iter_mut().map(|rx| Box::pin(rx.changed()))).await;
+
+    if result.is_err() {
+        watches.swap_remove(index);
     }
 }
 

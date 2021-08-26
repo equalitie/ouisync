@@ -91,6 +91,11 @@ fn transfer_blocks_between_two_replicas(
     ))
 }
 
+// #[tokio::test(flavor = "multi_thread")]
+// async fn debug() {
+//     transfer_blocks_between_two_replicas_case(1, 0).await
+// }
+
 async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed: u64) {
     let mut rng = StdRng::seed_from_u64(rng_seed);
 
@@ -178,9 +183,10 @@ async fn wait_until_snapshots_in_sync(server_index: &Index, client_index: &Index
 }
 
 async fn wait_until_block_exists(index: &Index, block_id: &BlockId) {
+    let mut rx = index.subscribe().await;
+
     while !block::exists(&index.pool, block_id).await.unwrap() {
-        // TODO: find a better way to do this than `sleep`.
-        time::sleep(Duration::from_millis(25)).await;
+        rx.recv().await;
     }
 }
 
