@@ -85,7 +85,9 @@ impl Directory {
 
         let author = *self.local_branch.id();
         let vv = VersionVector::first(author);
-        let blob_id = inner.insert_entry(author, name.clone(), EntryType::File, vv)?;
+        let blob_id = inner
+            .insert_entry(author, name.clone(), EntryType::File, vv)
+            .await?;
         let locator = Locator::Head(blob_id);
         let parent = ParentContext {
             directory: self.clone(),
@@ -106,7 +108,9 @@ impl Directory {
 
         let author = *self.local_branch.id();
         let vv = VersionVector::first(author);
-        let blob_id = inner.insert_entry(author, name.clone(), EntryType::Directory, vv)?;
+        let blob_id = inner
+            .insert_entry(author, name.clone(), EntryType::Directory, vv)
+            .await?;
         let locator = Locator::Head(blob_id);
         let parent = ParentContext {
             directory: self.clone(),
@@ -209,7 +213,9 @@ impl Directory {
         version_vector: VersionVector,
     ) -> Result<BlobId> {
         let mut inner = self.write().await;
-        inner.insert_entry(*self.local_branch.id(), name, entry_type, version_vector)
+        inner
+            .insert_entry(*self.local_branch.id(), name, entry_type, version_vector)
+            .await
     }
 
     /// Increment version of the specified entry.
@@ -368,15 +374,26 @@ impl Inner {
         Ok(true)
     }
 
-    fn insert_entry(
+    async fn insert_entry(
         &mut self,
         author: ReplicaId,
         name: String,
         entry_type: EntryType,
         version_vector: VersionVector,
     ) -> Result<BlobId> {
-        self.content
-            .insert(author, name, entry_type, version_vector)
+        let (new_blob_id, old_blob_id) =
+            self.content
+                .insert(author, name, entry_type, version_vector)?;
+
+        if let Some(old_blob_id) = old_blob_id {
+            // TODO: This should succeed/fail atomically with the above.
+            Blob::open(self.blob.branch().clone(), Locator::Head(old_blob_id))
+                .await?
+                .remove()
+                .await?;
+        }
+
+        Ok(new_blob_id)
     }
 }
 
@@ -628,13 +645,21 @@ impl Content {
         }
     }
 
+    /// Insert entry into the content.
+    ///
+    /// This operation succeeds if either there is no such entry in already
+    /// `self.entries[name][author]` or if the existing entry's version vector "happens before" the
+    /// newly inserted entry.
+    ///
+    /// In the latter case, the existing entry's BlobId is returned and it's the responsibility of
+    /// the caller to remove it from the index.
     fn insert(
         &mut self,
         author: ReplicaId,
         name: String,
         entry_type: EntryType,
         version_vector: VersionVector,
-    ) -> Result<BlobId> {
+    ) -> Result<(BlobId, Option<BlobId>)> {
         let blob_id = rand::random();
         let versions = self.entries.entry(name).or_insert_with(Default::default);
 
@@ -646,9 +671,25 @@ impl Content {
                     version_vector,
                 });
                 self.dirty = true;
-                Ok(blob_id)
+                Ok((blob_id, None))
             }
-            btree_map::Entry::Occupied(_) => Err(Error::EntryExists),
+            btree_map::Entry::Occupied(mut entry) => {
+                let data = entry.get_mut();
+                if data.entry_type != entry_type {
+                    return Err(Error::EntryExists);
+                }
+                if !(data.version_vector < version_vector) {
+                    return Err(Error::EntryExists);
+                }
+
+                let old_blob_id = data.blob_id;
+
+                data.blob_id = blob_id;
+                data.version_vector = version_vector;
+                self.dirty = true;
+
+                Ok((blob_id, Some(old_blob_id)))
+            }
         }
     }
 
