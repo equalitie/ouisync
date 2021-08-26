@@ -678,6 +678,14 @@ impl Content {
                 if data.entry_type != entry_type {
                     return Err(Error::EntryExists);
                 }
+
+                // If the existing entry is
+                //     1. "same", or
+                //     2. "happens after", or
+                //     3. "concurrent"
+                // then don't update it. Note that #3 should not happen because of the invariant
+                // that one replica (version author) must not create concurrent entries.
+                #[allow(clippy::neg_cmp_op_on_partial_ord)]
                 if !(data.version_vector < version_vector) {
                     return Err(Error::EntryExists);
                 }
@@ -825,7 +833,7 @@ impl AsyncDebug for Directory {
         let inner = self.inner.read().await;
 
         for (name, versions) in &inner.content.entries {
-            print.string(&name);
+            print.string(name);
             let print = print.indent();
 
             for (author, entry_data) in versions {
