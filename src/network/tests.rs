@@ -91,11 +91,6 @@ fn transfer_blocks_between_two_replicas(
     ))
 }
 
-// #[tokio::test(flavor = "multi_thread")]
-// async fn debug() {
-//     transfer_blocks_between_two_replicas_case(1, 0).await
-// }
-
 async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed: u64) {
     let mut rng = StdRng::seed_from_u64(rng_seed);
 
@@ -162,7 +157,7 @@ async fn save_snapshot(index: &Index, snapshot: &Snapshot) {
 }
 
 async fn wait_until_snapshots_in_sync(server_index: &Index, client_index: &Index) {
-    let mut rx = client_index.subscribe().await;
+    let mut rx = client_index.subscribe();
 
     let server_root = load_latest_root_node(server_index, &server_index.this_replica_id)
         .await
@@ -184,7 +179,7 @@ async fn wait_until_snapshots_in_sync(server_index: &Index, client_index: &Index
 }
 
 async fn wait_until_block_exists(index: &Index, block_id: &BlockId) {
-    let mut rx = index.subscribe().await;
+    let mut rx = index.subscribe();
 
     while !block::exists(&index.pool, block_id).await.unwrap() {
         rx.recv().await;

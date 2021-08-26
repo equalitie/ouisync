@@ -39,17 +39,22 @@ type SnapshotId = u32;
 pub struct Index {
     pub pool: db::Pool,
     pub this_replica_id: ReplicaId,
-    branches: Arc<RwLock<Branches>>,
+    shared: Arc<Shared>,
 }
 
 impl Index {
     pub async fn load(pool: db::Pool, this_replica_id: ReplicaId) -> Result<Self> {
         let branches = Branches::load(&pool, this_replica_id).await?;
+        let (branch_created_tx, branch_created_rx) = watch::channel(0);
 
         Ok(Self {
             pool,
             this_replica_id,
-            branches: Arc::new(RwLock::new(branches)),
+            shared: Arc::new(Shared {
+                branches: RwLock::new(branches),
+                branch_created_tx,
+                branch_created_rx,
+            }),
         })
     }
 
@@ -58,17 +63,15 @@ impl Index {
     }
 
     pub(crate) async fn branches(&self) -> RwLockReadGuard<'_, Branches> {
-        self.branches.read().await
+        self.shared.branches.read().await
     }
 
     /// Subscribe to change notification from all current and future branches.
-    pub(crate) async fn subscribe(&self) -> Subscription {
-        let branches = self.branches().await;
-
+    pub(crate) fn subscribe(&self) -> Subscription {
         Subscription {
+            shared: self.shared.clone(),
             branch_changed_rxs: vec![],
-            branch_created_rx: branches.remote_created_rx.clone(),
-            branches: self.branches.clone(),
+            branch_created_rx: self.shared.branch_created_rx.clone(),
         }
     }
 
@@ -80,7 +83,7 @@ impl Index {
             return;
         }
 
-        let branches = self.branches.read().await;
+        let branches = self.shared.branches.read().await;
         for replica_id in replica_ids {
             if let Some(branch) = branches.get(replica_id) {
                 branch.notify_changed()
@@ -124,11 +127,7 @@ impl Index {
         let node =
             RootNode::create(&self.pool, replica_id, versions, hash, Summary::INCOMPLETE).await?;
         self.update_summaries(hash, 0).await?;
-        self.branches
-            .write()
-            .await
-            .update_remote(*replica_id, node)
-            .await;
+        self.update_remote_branch(*replica_id, node).await;
 
         Ok(updated)
     }
@@ -254,16 +253,44 @@ impl Index {
 
         Ok(())
     }
+
+    /// Update the root node of the remote branch.
+    async fn update_remote_branch(&self, replica_id: ReplicaId, node: RootNode) {
+        let mut branches = self.shared.branches.write().await;
+
+        match branches.remote.entry(replica_id) {
+            Entry::Vacant(entry) => {
+                let version = self
+                    .shared
+                    .branch_created_tx
+                    .borrow()
+                    .checked_add(1)
+                    .expect("branch limit exceeded");
+
+                entry.insert(BranchHolder {
+                    branch: Arc::new(BranchData::with_root_node(replica_id, node)),
+                    version,
+                });
+
+                self.shared.branch_created_tx.send(version).unwrap_or(());
+            }
+            Entry::Occupied(entry) => entry.get().branch.update_root(node).await,
+        }
+    }
+}
+
+struct Shared {
+    branches: RwLock<Branches>,
+    branch_created_tx: watch::Sender<u64>,
+    // TODO: remove this when [this PR](https://github.com/tokio-rs/tokio/pull/3800) gets merged
+    // and published.
+    branch_created_rx: watch::Receiver<u64>,
 }
 
 /// Container for all known branches (local and remote)
 pub(crate) struct Branches {
     local: Arc<BranchData>,
     remote: HashMap<ReplicaId, BranchHolder>,
-    remote_created_tx: watch::Sender<u64>,
-    // TODO: remove this when [this PR](https://github.com/tokio-rs/tokio/pull/3800) gets merged
-    // and published.
-    remote_created_rx: watch::Receiver<u64>,
 }
 
 struct BranchHolder {
@@ -275,14 +302,8 @@ impl Branches {
     async fn load(pool: &db::Pool, this_replica_id: ReplicaId) -> Result<Self> {
         let local = Arc::new(BranchData::new(pool, this_replica_id).await?);
         let remote = load_remote_branches(pool, &this_replica_id).await?;
-        let (remote_created_tx, remote_created_rx) = watch::channel(0);
 
-        Ok(Self {
-            local,
-            remote,
-            remote_created_tx,
-            remote_created_rx,
-        })
+        Ok(Self { local, remote })
     }
 
     /// Returns a branch with the given id, if it exists.
@@ -302,27 +323,6 @@ impl Branches {
     /// Returns the local branch.
     pub fn local(&self) -> &Arc<BranchData> {
         &self.local
-    }
-
-    /// Update the root node of the remote branch.
-    async fn update_remote(&mut self, replica_id: ReplicaId, node: RootNode) {
-        match self.remote.entry(replica_id) {
-            Entry::Vacant(entry) => {
-                let version = self
-                    .remote_created_tx
-                    .borrow()
-                    .checked_add(1)
-                    .expect("branch limit exceeded");
-
-                entry.insert(BranchHolder {
-                    branch: Arc::new(BranchData::with_root_node(replica_id, node)),
-                    version,
-                });
-
-                self.remote_created_tx.send(version).unwrap_or(());
-            }
-            Entry::Occupied(entry) => entry.get().branch.update_root(node).await,
-        }
     }
 
     /// Returns an iterator over the remote branches that were created at or after the given
@@ -345,7 +345,7 @@ impl Branches {
 
 /// Handle to receive change notification from index.
 pub struct Subscription {
-    branches: Arc<RwLock<Branches>>,
+    shared: Arc<Shared>,
     branch_changed_rxs: Vec<watch::Receiver<()>>,
     branch_created_rx: watch::Receiver<u64>,
 }
@@ -357,7 +357,7 @@ impl Subscription {
             _ = watch_select(&mut self.branch_changed_rxs) => (),
             _ = self.branch_created_rx.changed() => {
                 let version = *self.branch_created_rx.borrow();
-                for branch in self.branches.read().await.recent(version) {
+                for branch in self.shared.branches.read().await.recent(version) {
                     self.branch_changed_rxs.push(branch.subscribe());
                 }
             }
