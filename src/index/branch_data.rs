@@ -113,6 +113,7 @@ impl BranchData {
         self.changed_rx.clone()
     }
 
+    /// Trigger a notification event from this branch.
     pub(super) fn notify_changed(&self) {
         self.changed_tx.send(()).unwrap_or(())
     }

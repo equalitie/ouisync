@@ -155,8 +155,8 @@ impl Repository {
     }
 
     /// Subscribe to change notification from all current and future branches.
-    pub async fn subscribe(&self) -> Subscription {
-        self.index.subscribe().await
+    pub fn subscribe(&self) -> Subscription {
+        self.index.subscribe()
     }
 
     // Create `Branch` wrapping the given `data`, reusing a previously cached one if it exists,

@@ -91,10 +91,9 @@ pub unsafe extern "C" fn repository_subscribe(
     let session = session::get();
     let sender = session.sender();
     let repo = handle.get();
+    let mut rx = repo.subscribe();
 
     let handle = session.runtime().spawn(async move {
-        let mut rx = repo.subscribe().await;
-
         loop {
             rx.recv().await;
             sender.send(port, ());

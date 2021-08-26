@@ -247,8 +247,16 @@ impl RootNode {
     }
 
     /// Updates the summaries of all nodes with the specified hash.
-    pub async fn update_summaries(tx: &mut db::Transaction<'_>, hash: &Hash) -> Result<()> {
+    /// Returns whether the `is_complete` flag changed from `false` to `true` in this update.
+    pub async fn update_summaries(tx: &mut db::Transaction<'_>, hash: &Hash) -> Result<bool> {
         let summary = InnerNode::compute_summary(tx, hash, 0).await?;
+
+        let was_complete =
+            sqlx::query("SELECT 0 FROM snapshot_root_nodes WHERE hash = ? AND is_complete = 1")
+                .bind(hash)
+                .fetch_optional(&mut *tx)
+                .await?
+                .is_some();
 
         sqlx::query(
             "UPDATE snapshot_root_nodes
@@ -265,7 +273,7 @@ impl RootNode {
         .execute(tx)
         .await?;
 
-        Ok(())
+        Ok(!was_complete && summary.is_complete)
     }
 
     pub async fn remove_recursive(&self, tx: &mut db::Transaction<'_>) -> Result<()> {
