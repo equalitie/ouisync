@@ -395,11 +395,11 @@ impl Inner {
         let entry = parent_dir.lookup_unique(name)?;
         let (len, repr) = match &entry {
             JointEntryRef::File(entry) => (
-                entry.open().await?.len(),
+                entry.open().await?.len().await,
                 Representation::File(*entry.branch_id()),
             ),
             JointEntryRef::Directory(entry) => (
-                entry.open().await?.read().await.len(),
+                entry.open().await?.read().await.len().await,
                 Representation::Directory,
             ),
         };
@@ -482,7 +482,7 @@ impl Inner {
             file.truncate(size).await?;
         }
 
-        Ok(make_file_attr(inode, EntryType::File, file.len()))
+        Ok(make_file_attr(inode, EntryType::File, file.len().await))
     }
 
     async fn opendir(&mut self, inode: Inode, flags: OpenFlags) -> Result<FileHandle> {

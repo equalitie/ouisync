@@ -41,8 +41,8 @@ impl File {
 
     /// Length of this file in bytes.
     #[allow(clippy::len_without_is_empty)]
-    pub fn len(&self) -> u64 {
-        self.blob.len()
+    pub async fn len(&self) -> u64 {
+        self.blob.len().await
     }
 
     /// Locator of this file.
@@ -81,13 +81,11 @@ impl File {
     /// Flushes this file, ensuring that all intermediately buffered contents gets written to the
     /// store.
     pub async fn flush(&mut self) -> Result<()> {
-        if !self.blob.is_dirty() {
-            return Ok(());
+        if self.blob.flush().await? {
+            self.parent.increment_version().await?;
+            self.parent.directory.flush().await?;
         }
-
-        self.blob.flush().await?;
-        self.parent.increment_version().await?;
-        self.parent.directory.flush().await
+        Ok(())
     }
 
     /// Removes this file.

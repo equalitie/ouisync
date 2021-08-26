@@ -164,6 +164,6 @@ pub unsafe extern "C" fn file_len(
 ) {
     session::with(port, error, |ctx| {
         let file = handle.get();
-        ctx.spawn(async move { Ok(file.lock().await.len()) })
+        ctx.spawn(async move { Ok(file.lock().await.len().await) })
     })
 }

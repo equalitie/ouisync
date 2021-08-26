@@ -333,8 +333,8 @@ impl Reader<'_> {
 
     /// Length of this directory in bytes. Does not include the content, only the size of directory
     /// itself.
-    pub fn len(&self) -> u64 {
-        self.inner.blob.len()
+    pub async fn len(&self) -> u64 {
+        self.inner.blob.len().await
     }
 
     /// Locator of this directory
