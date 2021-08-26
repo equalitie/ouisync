@@ -1,4 +1,8 @@
-use ouisync::{Error, File, JointDirectory, JointEntry, Result};
+use async_trait::async_trait;
+use ouisync::{
+    async_debug::{AsyncDebug, Printer},
+    Error, File, JointDirectory, JointEntry, Result,
+};
 use slab::Slab;
 use std::convert::TryInto;
 
@@ -50,4 +54,23 @@ fn index_to_handle(index: usize) -> FileHandle {
 
 fn handle_to_index(handle: FileHandle) -> usize {
     handle.try_into().expect("file handle out of bounds")
+}
+
+#[async_trait]
+impl AsyncDebug for EntryMap {
+    async fn print(&self, print: &Printer) {
+        print.string("EntryMap");
+        let print = print.indent();
+        for (i, entry) in &self.0 {
+            let h = index_to_handle(i);
+            match entry {
+                JointEntry::File(file) => {
+                    print.string(&format!("{}: {:?}", h, file));
+                }
+                JointEntry::Directory(dir) => {
+                    print.string(&format!("{}: {:?}", h, dir));
+                }
+            }
+        }
+    }
 }

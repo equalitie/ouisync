@@ -1,4 +1,5 @@
 use crate::{
+    async_debug::{AsyncDebug, Printer},
     blob::Blob,
     blob_id::BlobId,
     branch::Branch,
@@ -11,6 +12,7 @@ use crate::{
     version_vector::VersionVector,
 };
 use async_recursion::async_recursion;
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{btree_map, hash_map, BTreeMap, HashMap},
@@ -83,7 +85,9 @@ impl Directory {
 
         let author = *self.local_branch.id();
         let vv = VersionVector::first(author);
-        let blob_id = inner.insert_entry(author, name.clone(), EntryType::File, vv)?;
+        let blob_id = inner
+            .insert_entry(author, name.clone(), EntryType::File, vv)
+            .await?;
         let locator = Locator::Head(blob_id);
         let parent = ParentContext {
             directory: self.clone(),
@@ -104,7 +108,9 @@ impl Directory {
 
         let author = *self.local_branch.id();
         let vv = VersionVector::first(author);
-        let blob_id = inner.insert_entry(author, name.clone(), EntryType::Directory, vv)?;
+        let blob_id = inner
+            .insert_entry(author, name.clone(), EntryType::Directory, vv)
+            .await?;
         let locator = Locator::Head(blob_id);
         let parent = ParentContext {
             directory: self.clone(),
@@ -207,7 +213,9 @@ impl Directory {
         version_vector: VersionVector,
     ) -> Result<BlobId> {
         let mut inner = self.write().await;
-        inner.insert_entry(*self.local_branch.id(), name, entry_type, version_vector)
+        inner
+            .insert_entry(*self.local_branch.id(), name, entry_type, version_vector)
+            .await
     }
 
     /// Increment version of the specified entry.
@@ -366,15 +374,26 @@ impl Inner {
         Ok(true)
     }
 
-    fn insert_entry(
+    async fn insert_entry(
         &mut self,
         author: ReplicaId,
         name: String,
         entry_type: EntryType,
         version_vector: VersionVector,
     ) -> Result<BlobId> {
-        self.content
-            .insert(author, name, entry_type, version_vector)
+        let (new_blob_id, old_blob_id) =
+            self.content
+                .insert(author, name, entry_type, version_vector)?;
+
+        if let Some(old_blob_id) = old_blob_id {
+            // TODO: This should succeed/fail atomically with the above.
+            Blob::open(self.blob.branch().clone(), Locator::Head(old_blob_id))
+                .await?
+                .remove()
+                .await?;
+        }
+
+        Ok(new_blob_id)
     }
 }
 
@@ -396,7 +415,7 @@ fn lookup<'a>(
 }
 
 /// Info about a directory entry.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub enum EntryRef<'a> {
     File(FileRef<'a>),
     Directory(DirectoryRef<'a>),
@@ -515,6 +534,7 @@ impl fmt::Debug for FileRef<'_> {
             .field("name", &self.inner.name)
             .field("author", &self.inner.author)
             .field("vv", &self.inner.entry_data.version_vector)
+            .field("locator", &self.locator())
             .finish()
     }
 }
@@ -544,6 +564,14 @@ impl<'a> DirectoryRef<'a> {
                 self.inner.parent_context(),
             )
             .await
+    }
+}
+
+impl fmt::Debug for DirectoryRef<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("DirectoryRef")
+            .field("name", &self.inner.name)
+            .finish()
     }
 }
 
@@ -617,13 +645,21 @@ impl Content {
         }
     }
 
+    /// Insert entry into the content.
+    ///
+    /// This operation succeeds if either there is no such entry in already
+    /// `self.entries[name][author]` or if the existing entry's version vector "happens before" the
+    /// newly inserted entry.
+    ///
+    /// In the latter case, the existing entry's BlobId is returned and it's the responsibility of
+    /// the caller to remove it from the index.
     fn insert(
         &mut self,
         author: ReplicaId,
         name: String,
         entry_type: EntryType,
         version_vector: VersionVector,
-    ) -> Result<BlobId> {
+    ) -> Result<(BlobId, Option<BlobId>)> {
         let blob_id = rand::random();
         let versions = self.entries.entry(name).or_insert_with(Default::default);
 
@@ -635,9 +671,25 @@ impl Content {
                     version_vector,
                 });
                 self.dirty = true;
-                Ok(blob_id)
+                Ok((blob_id, None))
             }
-            btree_map::Entry::Occupied(_) => Err(Error::EntryExists),
+            btree_map::Entry::Occupied(mut entry) => {
+                let data = entry.get_mut();
+                if data.entry_type != entry_type {
+                    return Err(Error::EntryExists);
+                }
+                if !(data.version_vector < version_vector) {
+                    return Err(Error::EntryExists);
+                }
+
+                let old_blob_id = data.blob_id;
+
+                data.blob_id = blob_id;
+                data.version_vector = version_vector;
+                self.dirty = true;
+
+                Ok((blob_id, Some(old_blob_id)))
+            }
         }
     }
 
@@ -649,7 +701,7 @@ impl Content {
     }
 }
 
-#[derive(Clone, Deserialize, Serialize, Eq, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, Eq, PartialEq)]
 pub struct EntryData {
     entry_type: EntryType,
     blob_id: BlobId,
@@ -764,6 +816,63 @@ impl SubdirectoryCache {
         map.retain(|_, dir| dir.upgrade().is_some());
 
         Ok(dir)
+    }
+}
+
+#[async_trait]
+impl AsyncDebug for Directory {
+    async fn print(&self, print: &Printer) {
+        let inner = self.inner.read().await;
+
+        for (name, versions) in &inner.content.entries {
+            print.string(&name);
+            let print = print.indent();
+
+            for (author, entry_data) in versions {
+                print.string(&format!(
+                    "{:?}: {:?}, blob_id:{:?}, {:?}",
+                    author, entry_data.entry_type, entry_data.blob_id, entry_data.version_vector
+                ));
+
+                if entry_data.entry_type == EntryType::File {
+                    let print = print.indent();
+
+                    let parent_context = ParentContext {
+                        directory: self.clone(),
+                        entry_name: name.into(),
+                        entry_author: *author,
+                    };
+
+                    let file = File::open(
+                        inner.blob.branch().clone(),
+                        self.local_branch.clone(),
+                        Locator::Head(entry_data.blob_id),
+                        parent_context,
+                    )
+                    .await;
+
+                    match file {
+                        Ok(mut file) => {
+                            let content = file.read_to_end().await;
+                            match content {
+                                Ok(content) => {
+                                    print.string(&format!(
+                                        "Content: {:?}",
+                                        std::str::from_utf8(&content)
+                                    ));
+                                }
+                                Err(e) => {
+                                    print.string(&format!("Failed to read {:?}", e));
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            print.string(&format!("Failed to open {:?}", e));
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

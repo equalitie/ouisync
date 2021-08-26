@@ -85,6 +85,7 @@ impl InodeMap {
 
                 let data = &mut self.forward[index];
                 data.lookups = data.lookups.checked_add(1).expect("too many inode lookups");
+                data.representation = representation;
 
                 inode
             }

@@ -2,6 +2,7 @@ use crate::{
     blob::Blob, blob_id::BlobId, branch::Branch, entry_type::EntryType, error::Result,
     locator::Locator, parent_context::ParentContext,
 };
+use std::fmt;
 use std::io::SeekFrom;
 
 pub struct File {
@@ -202,5 +203,15 @@ mod test {
     async fn create_branch(pool: db::Pool) -> Branch {
         let branch_data = BranchData::new(&pool, rand::random()).await.unwrap();
         Branch::new(pool, Arc::new(branch_data), Cryptor::Null)
+    }
+}
+
+impl fmt::Debug for File {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("File")
+            .field("blob_id", &self.blob.blob_id())
+            .field("branch", &self.blob.branch().id())
+            .field("local_branch", &self.local_branch.id())
+            .finish()
     }
 }

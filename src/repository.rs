@@ -1,4 +1,5 @@
 use crate::{
+    async_debug::{AsyncDebug, Printer},
     branch::Branch,
     crypto::Cryptor,
     directory::{Directory, MoveDstDirectory},
@@ -9,6 +10,7 @@ use crate::{
     joint_directory::JointDirectory,
     path, ReplicaId,
 };
+use async_trait::async_trait;
 use camino::Utf8Path;
 use futures_util::future;
 use std::{collections::HashMap, sync::Arc};
@@ -50,6 +52,7 @@ impl Repository {
     /// Opens a file at the given path (relative to the repository root)
     pub async fn open_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<File> {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
+
         self.open_directory(parent)
             .await?
             .read()
@@ -193,6 +196,25 @@ impl Repository {
         }
 
         Ok(JointDirectory::new(dirs).await)
+    }
+}
+
+#[async_trait]
+impl AsyncDebug for Repository {
+    async fn print(&self, print: &Printer) {
+        print.string("Repository");
+        let branches = self.branches.lock().await;
+        for (replica_id, branch) in &*branches {
+            let print = print.indent();
+            let local = if replica_id == self.this_replica_id() {
+                " (local)"
+            } else {
+                ""
+            };
+            print.string(&format!("Branch {:?}{}", replica_id, local));
+            print.string("/");
+            branch.print(&print.indent()).await;
+        }
     }
 }
 

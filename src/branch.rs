@@ -1,4 +1,5 @@
 use crate::{
+    async_debug::{AsyncDebug, Printer},
     crypto::Cryptor,
     db,
     directory::{Directory, RootDirectoryCache},
@@ -7,6 +8,7 @@ use crate::{
     index::BranchData,
     path, ReplicaId,
 };
+use async_trait::async_trait;
 use camino::{Utf8Component, Utf8Path};
 use std::sync::Arc;
 
@@ -90,6 +92,16 @@ impl Branch {
         let (parent, name) = path::decompose(path).ok_or(Error::EntryIsDirectory)?;
         let dir = self.ensure_directory_exists(parent).await?;
         dir.create_file(name.to_string()).await
+    }
+}
+
+#[async_trait]
+impl AsyncDebug for Branch {
+    async fn print(&self, print: &Printer) {
+        // TODO: We're lying here about the local branch argument to open_root.
+        if let Ok(root) = self.open_root(self.clone()).await {
+            root.print(print).await;
+        }
     }
 }
 
