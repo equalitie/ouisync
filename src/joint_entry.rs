@@ -5,6 +5,7 @@ use crate::{
     joint_directory::JointDirectory,
 };
 
+#[derive(Debug)]
 pub enum JointEntry {
     File(File),
     Directory(JointDirectory),

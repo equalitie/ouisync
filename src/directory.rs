@@ -1,4 +1,5 @@
 use crate::{
+    async_debug::{AsyncDebug, Printer},
     blob::Blob,
     blob_id::BlobId,
     branch::Branch,
@@ -11,6 +12,7 @@ use crate::{
     version_vector::VersionVector,
 };
 use async_recursion::async_recursion;
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{btree_map, hash_map, BTreeMap, HashMap},
@@ -658,7 +660,7 @@ impl Content {
     }
 }
 
-#[derive(Clone, Deserialize, Serialize, Eq, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, Eq, PartialEq)]
 pub struct EntryData {
     entry_type: EntryType,
     blob_id: BlobId,
@@ -773,6 +775,63 @@ impl SubdirectoryCache {
         map.retain(|_, dir| dir.upgrade().is_some());
 
         Ok(dir)
+    }
+}
+
+#[async_trait]
+impl AsyncDebug for Directory {
+    async fn print(&self, print: &Printer) {
+        let inner = self.inner.read().await;
+
+        for (name, versions) in &inner.content.entries {
+            print.string(&name);
+            let print = print.indent();
+
+            for (author, entry_data) in versions {
+                print.string(&format!(
+                    "{:?}: {:?}, blob_id:{:?}, {:?}",
+                    author, entry_data.entry_type, entry_data.blob_id, entry_data.version_vector
+                ));
+
+                if entry_data.entry_type == EntryType::File {
+                    let print = print.indent();
+
+                    let parent_context = ParentContext {
+                        directory: self.clone(),
+                        entry_name: name.into(),
+                        entry_author: *author,
+                    };
+
+                    let file = File::open(
+                        inner.blob.branch().clone(),
+                        self.local_branch.clone(),
+                        Locator::Head(entry_data.blob_id),
+                        parent_context,
+                    )
+                    .await;
+
+                    match file {
+                        Ok(mut file) => {
+                            let content = file.read_to_end().await;
+                            match content {
+                                Ok(content) => {
+                                    print.string(&format!(
+                                        "Content: {:?}",
+                                        std::str::from_utf8(&content)
+                                    ));
+                                }
+                                Err(e) => {
+                                    print.string(&format!("Failed to read {:?}", e));
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            print.string(&format!("Failed to open {:?}", e));
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

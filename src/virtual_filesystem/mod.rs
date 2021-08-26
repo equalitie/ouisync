@@ -12,11 +12,13 @@ use self::{
     open_flags::OpenFlags,
     utils::{FormatOptionScope, MaybeOwnedMut},
 };
+use async_trait::async_trait;
 use fuser::{
     BackgroundSession, FileAttr, FileType, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory,
     ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow,
 };
 use ouisync::{
+    async_debug::{AsyncDebug, Printer},
     EntryType, Error, File, JointDirectory, JointEntry, JointEntryRef, ReplicaId, Repository,
     Result,
 };
@@ -369,6 +371,15 @@ struct Inner {
     repository: Repository,
     inodes: InodeMap,
     entries: EntryMap,
+}
+
+#[async_trait]
+impl AsyncDebug for Inner {
+    async fn print(&self, print: &Printer) {
+        print.string("VirtualFilesystem::Inner");
+        self.entries.print(&print.indent()).await;
+        self.repository.print(&print.indent()).await;
+    }
 }
 
 impl Inner {
