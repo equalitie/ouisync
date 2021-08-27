@@ -14,7 +14,7 @@ use std::{convert::TryInto, io::SeekFrom, mem};
 
 pub(crate) struct Operations<'a> {
     branch: &'a mut Branch,
-    locator: &'a mut Locator,
+    head_locator: &'a mut Locator,
     nonce_sequence: &'a mut NonceSequence,
     len: &'a mut u64,
     len_dirty: &'a mut bool,
@@ -24,7 +24,7 @@ pub(crate) struct Operations<'a> {
 impl<'a> Operations<'a> {
     pub fn new(
         branch: &'a mut Branch,
-        locator: &'a mut Locator,
+        head_locator: &'a mut Locator,
         nonce_sequence: &'a mut NonceSequence,
         len: &'a mut u64,
         len_dirty: &'a mut bool,
@@ -32,7 +32,7 @@ impl<'a> Operations<'a> {
     ) -> Self {
         Self {
             branch,
-            locator,
+            head_locator,
             nonce_sequence,
             len,
             len_dirty,
@@ -236,7 +236,7 @@ impl<'a> Operations<'a> {
         }
 
         self.remove_blocks(
-            self.locator
+            self.head_locator
                 .sequence()
                 .skip(new_block_count as usize)
                 .take((old_block_count - new_block_count) as usize),
@@ -263,9 +263,9 @@ impl<'a> Operations<'a> {
 
     /// Removes this blob.
     pub async fn remove(&mut self) -> Result<()> {
-        self.remove_blocks(self.locator.sequence().take(self.block_count() as usize))
+        self.remove_blocks(self.head_locator.sequence().take(self.block_count() as usize))
             .await?;
-        *self.current_block = OpenBlock::new_head(*self.locator, self.nonce_sequence);
+        *self.current_block = OpenBlock::new_head(*self.head_locator, self.nonce_sequence);
         *self.len = 0;
         *self.len_dirty = true;
 
@@ -275,7 +275,7 @@ impl<'a> Operations<'a> {
     /// Creates a shallow copy (only the index nodes are copied, not blocks) of this blob into the
     /// specified destination branch and locator.
     pub async fn fork(&mut self, dst_branch: Branch, dst_head_locator: Locator) -> Result<()> {
-        if self.branch.id() == dst_branch.id() && self.locator == &dst_head_locator {
+        if self.branch.id() == dst_branch.id() && self.head_locator == &dst_head_locator {
             // This blob is already in the dst, nothing to do.
             return Ok(());
         }
@@ -303,7 +303,7 @@ impl<'a> Operations<'a> {
         // currently no reason why they wouldn't, but to be super extra sure, consider wrapping
         // them in `catch_unwind`.
         *self.branch = dst_branch;
-        *self.locator = dst_head_locator;
+        *self.head_locator = dst_head_locator;
         self.current_block.locator = self.locator_at(self.current_block.locator.number());
 
         Ok(())
@@ -318,7 +318,7 @@ impl<'a> Operations<'a> {
     }
 
     pub fn locators(&self) -> impl Iterator<Item = Locator> {
-        self.locator.sequence().take(self.block_count() as usize)
+        self.head_locator.sequence().take(self.block_count() as usize)
     }
 
     async fn replace_current_block(
@@ -457,9 +457,9 @@ impl<'a> Operations<'a> {
 
     fn locator_at(&self, number: u32) -> Locator {
         if number == 0 {
-            *self.locator
+            *self.head_locator
         } else {
-            Locator::Trunk(self.locator.hash(), number)
+            Locator::Trunk(self.head_locator.hash(), number)
         }
     }
 }

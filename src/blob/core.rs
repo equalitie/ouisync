@@ -12,7 +12,7 @@ use std::fmt;
 
 pub struct Core {
     branch: Branch,
-    locator: Locator,
+    head_locator: Locator,
     nonce_sequence: NonceSequence,
     len: u64,
     len_dirty: bool,
@@ -20,31 +20,31 @@ pub struct Core {
 
 impl Core {
     /// Creates a new blob.
-    pub(crate) fn create_blob(branch: Branch, locator: Locator) -> Blob {
+    pub(crate) fn create_blob(branch: Branch, head_locator: Locator) -> Blob {
         let nonce_sequence = NonceSequence::new(rand::random());
-        let current_block = OpenBlock::new_head(locator, &nonce_sequence);
+        let current_block = OpenBlock::new_head(head_locator, &nonce_sequence);
 
         Blob::new(
             Arc::new(Mutex::new(Self {
                 branch: branch.clone(),
-                locator,
+                head_locator,
                 nonce_sequence,
                 len: 0,
                 len_dirty: false,
             })),
-            locator,
+            head_locator,
             branch,
             current_block,
         )
     }
 
     /// Opens an existing blob.
-    pub(crate) async fn open_blob(branch: Branch, locator: Locator) -> Result<Blob> {
+    pub(crate) async fn open_blob(branch: Branch, head_locator: Locator) -> Result<Blob> {
         // NOTE: no need to commit this transaction because we are only reading here.
         let mut tx = branch.db_pool().begin().await?;
 
         let (id, buffer, auth_tag) =
-            load_block(&mut tx, branch.data(), branch.cryptor(), &locator).await?;
+            load_block(&mut tx, branch.data(), branch.cryptor(), &head_locator).await?;
 
         let mut content = Cursor::new(buffer);
 
@@ -60,15 +60,15 @@ impl Core {
         Ok(Blob::new(
             Arc::new(Mutex::new(Self {
                 branch: branch.clone(),
-                locator,
+                head_locator,
                 nonce_sequence,
                 len,
                 len_dirty: false,
             })),
-            locator,
+            head_locator,
             branch,
             OpenBlock {
-                locator,
+                locator: head_locator,
                 id,
                 content,
                 dirty: false,
@@ -85,7 +85,7 @@ impl Core {
 
         Ok(Blob::new(
             ptr,
-            core.locator,
+            core.head_locator,
             core.branch.clone(),
             current_block,
         ))
@@ -93,7 +93,7 @@ impl Core {
 
     pub(crate) async fn open_first_block(&self) -> Result<OpenBlock> {
         if self.len == 0 {
-            return Ok(OpenBlock::new_head(self.locator, &self.nonce_sequence));
+            return Ok(OpenBlock::new_head(self.head_locator, &self.nonce_sequence));
         }
 
         // NOTE: no need to commit this transaction because we are only reading here.
@@ -103,7 +103,7 @@ impl Core {
             &mut tx,
             self.branch.data(),
             self.branch.cryptor(),
-            &self.locator,
+            &self.head_locator,
         )
         .await?;
 
@@ -115,7 +115,7 @@ impl Core {
             .decrypt(&nonce, id.as_ref(), &mut content, &auth_tag)?;
 
         Ok(OpenBlock {
-            locator: self.locator,
+            locator: self.head_locator,
             id,
             content,
             dirty: false,
@@ -133,11 +133,11 @@ impl Core {
 
     /// Locator of this blob.
     pub fn locator(&self) -> &Locator {
-        &self.locator
+        &self.head_locator
     }
 
     pub fn blob_id(&self) -> &BlobId {
-        match &self.locator {
+        match &self.head_locator {
             Locator::Head(blob_id) => blob_id,
             _ => unreachable!(),
         }
@@ -146,7 +146,7 @@ impl Core {
     pub(crate) fn operations<'a>(&'a mut self, current_block: &'a mut OpenBlock) -> Operations<'a> {
         Operations::new(
             &mut self.branch,
-            &mut self.locator,
+            &mut self.head_locator,
             &mut self.nonce_sequence,
             &mut self.len,
             &mut self.len_dirty,
@@ -158,7 +158,7 @@ impl Core {
 impl fmt::Debug for Core {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("blob::Core")
-            .field("locator", &self.locator)
+            .field("head_locator", &self.head_locator)
             .finish()
     }
 }

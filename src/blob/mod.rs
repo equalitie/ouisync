@@ -26,7 +26,7 @@ use zeroize::Zeroize;
 
 pub struct Blob {
     core: Arc<Mutex<Core>>,
-    locator: Locator,
+    head_locator: Locator,
     branch: Branch,
     current_block: OpenBlock,
 }
@@ -34,26 +34,26 @@ pub struct Blob {
 impl Blob {
     pub(crate) fn new(
         core: Arc<Mutex<Core>>,
-        locator: Locator,
+        head_locator: Locator,
         branch: Branch,
         current_block: OpenBlock,
     ) -> Self {
         Self {
             core,
-            locator,
+            head_locator,
             branch,
             current_block,
         }
     }
 
     /// Opens an existing blob.
-    pub async fn open(branch: Branch, locator: Locator) -> Result<Self> {
-        Core::open_blob(branch, locator).await
+    pub async fn open(branch: Branch, head_locator: Locator) -> Result<Self> {
+        Core::open_blob(branch, head_locator).await
     }
 
     /// Creates a new blob.
-    pub fn create(branch: Branch, locator: Locator) -> Self {
-        Core::create_blob(branch, locator)
+    pub fn create(branch: Branch, head_locator: Locator) -> Self {
+        Core::create_blob(branch, head_locator)
     }
 
     pub fn branch(&self) -> &Branch {
@@ -66,11 +66,11 @@ impl Blob {
 
     /// Locator of this blob.
     pub fn locator(&self) -> &Locator {
-        &self.locator
+        &self.head_locator
     }
 
     pub fn blob_id(&self) -> &BlobId {
-        match &self.locator {
+        match &self.head_locator {
             Locator::Head(blob_id) => blob_id,
             _ => unreachable!(),
         }
