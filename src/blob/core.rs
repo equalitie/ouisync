@@ -1,12 +1,15 @@
 use super::operations::{load_block, Operations};
 
-use super::{Cursor, OpenBlock};
+use super::{Cursor, OpenBlock, Blob};
 
 use crate::{
     blob_id::BlobId, branch::Branch, crypto::NonceSequence, error::Result, locator::Locator,
 };
 
-pub(crate) struct Core {
+use std::sync::Arc;
+use tokio::sync::Mutex;
+
+pub struct Core {
     branch: Branch,
     locator: Locator,
     nonce_sequence: NonceSequence,
@@ -16,24 +19,26 @@ pub(crate) struct Core {
 
 impl Core {
     /// Creates a new blob.
-    pub fn create(branch: Branch, locator: Locator) -> (Self, OpenBlock) {
+    pub(crate) fn create_blob(branch: Branch, locator: Locator) -> Blob {
         let nonce_sequence = NonceSequence::new(rand::random());
         let current_block = OpenBlock::new_head(locator, &nonce_sequence);
 
-        (
-            Self {
-                branch,
+        Blob::new(
+            Arc::new(Mutex::new(Self {
+                branch: branch.clone(),
                 locator,
                 nonce_sequence,
                 len: 0,
                 len_dirty: false,
-            },
+            })),
+            locator,
+            branch,
             current_block,
         )
     }
 
     /// Opens an existing blob.
-    pub(crate) async fn open(branch: Branch, locator: Locator) -> Result<(Self, OpenBlock)> {
+    pub(crate) async fn open_blob(branch: Branch, locator: Locator) -> Result<Blob> {
         // NOTE: no need to commit this transaction because we are only reading here.
         let mut tx = branch.db_pool().begin().await?;
 
@@ -51,14 +56,16 @@ impl Core {
 
         let len = content.read_u64();
 
-        Ok((
-            Self {
-                branch,
+        Ok(Blob::new(
+            Arc::new(Mutex::new(Self {
+                branch: branch.clone(),
                 locator,
                 nonce_sequence,
                 len,
                 len_dirty: false,
-            },
+            })),
+            locator,
+            branch,
             OpenBlock {
                 locator,
                 id,
@@ -76,8 +83,13 @@ impl Core {
         // NOTE: no need to commit this transaction because we are only reading here.
         let mut tx = self.branch.db_pool().begin().await?;
 
-        let (id, buffer, auth_tag) =
-            load_block(&mut tx, self.branch.data(), self.branch.cryptor(), &self.locator).await?;
+        let (id, buffer, auth_tag) = load_block(
+            &mut tx,
+            self.branch.data(),
+            self.branch.cryptor(),
+            &self.locator,
+        )
+        .await?;
 
         let mut content = Cursor::new(buffer);
         let nonce = self.nonce_sequence.get(0);
@@ -115,7 +127,7 @@ impl Core {
         }
     }
 
-    pub fn operations<'a>(&'a mut self, current_block: &'a mut OpenBlock) -> Operations<'a> {
+    pub(crate) fn operations<'a>(&'a mut self, current_block: &'a mut OpenBlock) -> Operations<'a> {
         Operations::new(
             &mut self.branch,
             &mut self.locator,

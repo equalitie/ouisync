@@ -32,28 +32,28 @@ pub struct Blob {
 }
 
 impl Blob {
-    /// Opens an existing blob.
-    pub(crate) async fn open(branch: Branch, locator: Locator) -> Result<Self> {
-        let (core, current_block) = Core::open(branch.clone(), locator).await?;
-
-        Ok(Blob {
-            core: Arc::new(Mutex::new(core)),
-            locator,
-            branch,
-            current_block,
-        })
-    }
-
-    /// Creates a new blob.
-    pub fn create(branch: Branch, locator: Locator) -> Self {
-        let (core, current_block) = Core::create(branch.clone(), locator);
-
-        Blob {
-            core: Arc::new(Mutex::new(core)),
+    pub(crate) fn new(
+        core: Arc<Mutex<Core>>,
+        locator: Locator,
+        branch: Branch,
+        current_block: OpenBlock,
+    ) -> Self {
+        Self {
+            core,
             locator,
             branch,
             current_block,
         }
+    }
+
+    /// Opens an existing blob.
+    pub async fn open(branch: Branch, locator: Locator) -> Result<Self> {
+        Core::open_blob(branch, locator).await
+    }
+
+    /// Creates a new blob.
+    pub fn create(branch: Branch, locator: Locator) -> Self {
+        Core::create_blob(branch, locator)
     }
 
     pub fn branch(&self) -> &Branch {
