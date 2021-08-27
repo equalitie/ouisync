@@ -1,6 +1,6 @@
 use crate::{
     async_debug::{AsyncDebug, Printer},
-    blob::Blob,
+    blob::{self, Blob},
     blob_id::BlobId,
     branch::Branch,
     entry_type::EntryType,
@@ -518,13 +518,30 @@ impl<'a> FileRef<'a> {
     }
 
     pub async fn open(&self) -> Result<File> {
-        File::open(
-            self.inner.parent_inner.blob.branch().clone(),
-            self.inner.parent_outer.local_branch.clone(),
-            self.locator(),
-            self.inner.parent_context(),
-        )
-        .await
+        let mut guard = self.inner.entry_data.blob_core.lock().await;
+        let blob_core = &mut *guard;
+
+        if let Some(blob_core) = blob_core.upgrade() {
+            File::reopen(
+                blob_core,
+                self.inner.parent_outer.local_branch.clone(),
+                self.inner.parent_context(),
+            )
+            .await
+        }
+        else {
+            let file = File::open(
+                self.inner.parent_inner.blob.branch().clone(),
+                self.inner.parent_outer.local_branch.clone(),
+                self.locator(),
+                self.inner.parent_context(),
+            )
+            .await?;
+
+            *blob_core = Arc::downgrade(file.blob_core());
+
+            Ok(file)
+        }
     }
 }
 
@@ -669,6 +686,7 @@ impl Content {
                     entry_type,
                     blob_id,
                     version_vector,
+                    blob_core: Arc::new(Mutex::new(Weak::new())),
                 });
                 self.dirty = true;
                 Ok((blob_id, None))
@@ -709,12 +727,24 @@ impl Content {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Eq, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct EntryData {
     entry_type: EntryType,
     blob_id: BlobId,
     version_vector: VersionVector,
+    #[serde(skip)]
+    blob_core: Arc<Mutex<Weak<Mutex<blob::Core>>>>,
 }
+
+impl PartialEq for EntryData {
+    fn eq(&self, other: &Self) -> bool {
+        self.entry_type == other.entry_type &&
+            self.blob_id == other.blob_id &&
+            self.version_vector == other.version_vector
+    }
+}
+
+impl Eq for EntryData {}
 
 // Cache for open root directory
 // TODO: consider using the `ArcSwap` crate here.

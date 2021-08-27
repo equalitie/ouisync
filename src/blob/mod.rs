@@ -4,7 +4,7 @@ mod tests;
 mod core;
 mod operations;
 
-use self::core::Core;
+pub use self::core::Core;
 use self::operations::Operations;
 use crate::{
     blob_id::BlobId,
@@ -58,6 +58,10 @@ impl Blob {
 
     pub fn branch(&self) -> &Branch {
         &self.branch
+    }
+
+    pub fn core(&self) -> &Arc<Mutex<Core>> {
+        &self.core
     }
 
     /// Locator of this blob.

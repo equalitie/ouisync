@@ -8,6 +8,7 @@ use crate::{
 
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use std::fmt;
 
 pub struct Core {
     branch: Branch,
@@ -153,3 +154,12 @@ impl Core {
         )
     }
 }
+
+impl fmt::Debug for Core {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("blob::Core")
+            .field("locator", &self.locator)
+            .finish()
+    }
+}
+

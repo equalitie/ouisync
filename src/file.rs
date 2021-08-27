@@ -1,9 +1,10 @@
 use crate::{
-    blob::Blob, blob_id::BlobId, branch::Branch, entry_type::EntryType, error::Result,
+    blob::{self, Blob}, blob_id::BlobId, branch::Branch, entry_type::EntryType, error::Result,
     locator::Locator, parent_context::ParentContext,
 };
-use std::fmt;
+use std::{fmt, sync::Arc};
 use std::io::SeekFrom;
+use tokio::sync::Mutex;
 
 pub struct File {
     blob: Blob,
@@ -21,6 +22,19 @@ impl File {
     ) -> Result<Self> {
         Ok(Self {
             blob: Blob::open(owner_branch, locator).await?,
+            parent,
+            local_branch,
+        })
+    }
+
+    /// Opens an existing file. Reuse the already opened blob::Core
+    pub(crate) async fn reopen(
+        blob_core: Arc<Mutex<blob::Core>>,
+        local_branch: Branch,
+        parent: ParentContext,
+    ) -> Result<Self> {
+        Ok(Self {
+            blob: blob::Core::reopen(blob_core).await?,
             parent,
             local_branch,
         })
@@ -96,6 +110,10 @@ impl File {
 
     pub fn blob_id(&self) -> &BlobId {
         self.blob.blob_id()
+    }
+
+    pub fn blob_core(&self) -> &Arc<Mutex<blob::Core>> {
+        self.blob.core()
     }
 
     /// Ensure this file lives in the local branch and all its ancestor directories exist and live
