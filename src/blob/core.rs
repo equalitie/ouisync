@@ -56,7 +56,6 @@ impl Core {
                 branch,
                 locator,
                 nonce_sequence,
-                //current_block,
                 len,
                 len_dirty: false,
             },
@@ -67,6 +66,32 @@ impl Core {
                 dirty: false,
             },
         ))
+    }
+
+    pub(crate) async fn open_first_block(&self) -> Result<OpenBlock> {
+        if self.len == 0 {
+            return Ok(OpenBlock::new_head(self.locator, &self.nonce_sequence));
+        }
+
+        // NOTE: no need to commit this transaction because we are only reading here.
+        let mut tx = self.branch.db_pool().begin().await?;
+
+        let (id, buffer, auth_tag) =
+            load_block(&mut tx, self.branch.data(), self.branch.cryptor(), &self.locator).await?;
+
+        let mut content = Cursor::new(buffer);
+        let nonce = self.nonce_sequence.get(0);
+
+        self.branch
+            .cryptor()
+            .decrypt(&nonce, id.as_ref(), &mut content, &auth_tag)?;
+
+        Ok(OpenBlock {
+            locator: self.locator,
+            id,
+            content,
+            dirty: false,
+        })
     }
 
     /// Length of this blob in bytes.
