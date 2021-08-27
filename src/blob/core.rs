@@ -75,6 +75,21 @@ impl Core {
         ))
     }
 
+    pub async fn reopen(core: Arc<Mutex<Core>>) -> Result<Blob> {
+        let ptr = core.clone();
+        let mut guard = core.lock().await;
+        let core = &mut *guard;
+
+        let current_block = core.open_first_block().await?;
+
+        Ok(Blob::new(
+            ptr,
+            core.locator,
+            core.branch.clone(),
+            current_block,
+        ))
+    }
+
     pub(crate) async fn open_first_block(&self) -> Result<OpenBlock> {
         if self.len == 0 {
             return Ok(OpenBlock::new_head(self.locator, &self.nonce_sequence));
