@@ -12,7 +12,7 @@ use camino::{Utf8Component, Utf8Path};
 use futures_util::future;
 use std::{
     borrow::Cow,
-    collections::{btree_map::Entry, BTreeMap},
+    collections::{btree_map::Entry, BTreeMap, VecDeque},
     fmt, iter, mem,
 };
 
@@ -121,6 +121,78 @@ impl JointDirectory {
     pub async fn flush(&self) -> Result<()> {
         future::try_join_all(self.versions.values().map(|dir| dir.flush())).await?;
         Ok(())
+    }
+
+    pub async fn merge(&mut self) -> Result<()> {
+        let mut queue = VecDeque::new();
+
+        self.merge_single(&mut queue).await?;
+
+        while let Some(mut dir) = queue.pop_back() {
+            dir.merge_single(&mut queue).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn merge_single(&mut self, queue: &mut VecDeque<Self>) -> Result<()> {
+        // We can't fork the files as we are iterating the entries because that would deadlock - we
+        // collect them here and fork them once done iterating instead.
+        let mut files_to_fork = Vec::new();
+
+        self.fork().await?;
+
+        for entry in self.read().await.entries() {
+            match entry {
+                JointEntryRef::File(entry) => files_to_fork.push(entry.open().await?),
+                JointEntryRef::Directory(entry) => queue.push_front(entry.open().await?),
+            }
+        }
+
+        future::try_join_all(files_to_fork.iter_mut().map(|file| file.fork())).await?;
+
+        self.remove_remote_versions().await;
+        self.flush().await?;
+
+        Ok(())
+    }
+
+    // Ensure this joint directory contains a local version.
+    async fn fork(&mut self) -> Result<()> {
+        if self.local_branch_id().await.is_some() {
+            // Already has local version
+            return Ok(());
+        }
+
+        // Grab any version and fork it to create the local one.
+        let local = if let Some(remote) = self.versions.values().next() {
+            let local = remote.clone();
+            local.fork().await?;
+            local
+        } else {
+            return Ok(());
+        };
+
+        let id = *local.read().await.branch().id();
+        self.versions.insert(id, local);
+
+        Ok(())
+    }
+
+    // Remove all versions except the local one.
+    async fn remove_remote_versions(&mut self) {
+        let local_id = self.local_branch_id().await.copied();
+        self.versions.retain(|id, _| Some(id) == local_id.as_ref())
+    }
+
+    async fn local_branch_id(&self) -> Option<&ReplicaId> {
+        for (id, version) in &self.versions {
+            if version.read().await.is_local() {
+                return Some(id);
+            }
+        }
+
+        None
     }
 }
 

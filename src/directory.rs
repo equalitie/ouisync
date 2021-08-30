@@ -169,6 +169,10 @@ impl Directory {
     // Forks this directory into the local branch.
     #[async_recursion] // TODO: consider rewriting this to avoid recursion
     pub async fn fork(&self) -> Result<Directory> {
+        if self.local_branch.id() == self.read().await.branch().id() {
+            return Ok(self.clone());
+        }
+
         if let Some(parent) = &self.parent {
             let parent_dir = parent.directory.fork().await?;
 
@@ -407,6 +411,11 @@ impl Reader<'_> {
     /// Branch of this directory
     pub fn branch(&self) -> &Branch {
         self.inner.blob.branch()
+    }
+
+    /// Is this directory in the local branch?
+    pub(crate) fn is_local(&self) -> bool {
+        self.branch().id() == self.outer.local_branch.id()
     }
 }
 

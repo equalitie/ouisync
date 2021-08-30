@@ -3,7 +3,6 @@ use crate::{
     crypto::Cryptor,
     debug_printer::DebugPrinter,
     directory::{Directory, MoveDstDirectory},
-    directory_merger::DirectoryMerger,
     entry_type::EntryType,
     error::{Error, Result},
     file::File,
@@ -15,7 +14,7 @@ use crate::{
 };
 use camino::Utf8Path;
 use futures_util::{future, stream::FuturesUnordered, StreamExt};
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, iter, sync::Arc};
 use tokio::{select, sync::Mutex, task};
 
 pub struct Repository {
@@ -344,11 +343,11 @@ async fn merge_branches(local: Branch, remote: Branch) -> Result<()> {
 
     log::info!("merge {:?}", remote.id());
 
-    let local_root = local.open_or_create_root().await?;
     let remote_root = remote.open_root(local.clone()).await?;
-    let mut merger = DirectoryMerger::new(local_root, remote_root);
-
-    while merger.step().await? {}
+    JointDirectory::new(iter::once(remote_root))
+        .await
+        .merge()
+        .await?;
 
     Ok(())
 }
