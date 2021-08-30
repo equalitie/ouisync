@@ -101,9 +101,15 @@ impl Branch {
     }
 }
 
-pub(crate) async fn merge(_local: Branch, _remote: Branch) {
-    // println!("merge {:?}", remote.id());
-    // TODO
+pub(crate) async fn merge(local: Branch, remote: Branch) {
+    assert_ne!(local.id(), remote.id());
+
+    if *local.branch_data.versions().await > *remote.branch_data.versions().await {
+        // Local newer than remote, nothing to merge
+        return;
+    }
+
+    log::info!("merge {:?}", remote.id());
 }
 
 #[cfg(test)]

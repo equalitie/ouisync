@@ -13,15 +13,16 @@ use crate::{
     db,
     error::{Error, Result},
     replica_id::ReplicaId,
+    version_vector::VersionVector,
 };
 use std::mem;
-use tokio::sync::{watch, Mutex};
+use tokio::sync::{watch, RwLock, RwLockReadGuard};
 
 type LocatorHash = Hash;
 
 pub(crate) struct BranchData {
     replica_id: ReplicaId,
-    root_node: Mutex<RootNode>,
+    root_node: RwLock<RootNode>,
     changed_tx: watch::Sender<()>,
     // Currently it's necessary to keep a received around so we can hand out subscriptions by
     // cloning it. However, if/when [this PR](https://github.com/tokio-rs/tokio/pull/3800) gets
@@ -45,7 +46,7 @@ impl BranchData {
 
         Self {
             replica_id,
-            root_node: Mutex::new(root_node),
+            root_node: RwLock::new(root_node),
             changed_tx,
             changed_rx,
         }
@@ -56,6 +57,11 @@ impl BranchData {
         &self.replica_id
     }
 
+    /// Returns the root version vector of this branch.
+    pub async fn versions(&self) -> RwLockReadGuard<'_, VersionVector> {
+        RwLockReadGuard::map(self.root_node.read().await, |root| &root.versions)
+    }
+
     /// Inserts a new block into the index. Returns the previous id at the same locator, if any.
     pub async fn insert(
         &self,
@@ -63,7 +69,7 @@ impl BranchData {
         block_id: &BlockId,
         encoded_locator: &LocatorHash,
     ) -> Result<Option<BlockId>> {
-        let mut lock = self.root_node.lock().await;
+        let mut lock = self.root_node.write().await;
         let mut path = self.get_path(tx, &lock.hash, encoded_locator).await?;
 
         // We shouldn't be inserting a block to a branch twice. If we do, the assumption is that we
@@ -84,7 +90,7 @@ impl BranchData {
         tx: &mut db::Transaction<'_>,
         encoded_locator: &Hash,
     ) -> Result<BlockId> {
-        let root_node = self.root_node.lock().await;
+        let root_node = self.root_node.read().await;
         let path = self.get_path(tx, &root_node.hash, encoded_locator).await?;
 
         match path.get_leaf() {
@@ -100,7 +106,7 @@ impl BranchData {
         tx: &mut db::Transaction<'_>,
         encoded_locator: &Hash,
     ) -> Result<BlockId> {
-        let mut lock = self.root_node.lock().await;
+        let mut lock = self.root_node.write().await;
         let mut path = self.get_path(tx, &lock.hash, encoded_locator).await?;
         let block_id = path
             .remove_leaf(encoded_locator)
@@ -125,7 +131,7 @@ impl BranchData {
     /// Update the root node of this branch. Does nothing if the version of `new_root` is not
     /// greater than the version of the current root.
     pub async fn update_root(&self, new_root: RootNode) {
-        let mut old_root = self.root_node.lock().await;
+        let mut old_root = self.root_node.write().await;
 
         if new_root.versions.get(&self.replica_id) <= old_root.versions.get(&self.replica_id) {
             return;

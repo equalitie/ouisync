@@ -322,7 +322,9 @@ impl Merger {
 }
 
 enum MergeState {
+    // A merge is ongoing
     Ongoing,
+    // A merge is ongoing and another one was already scheduled
     Pending,
 }
 
