@@ -64,6 +64,20 @@ impl Locator {
         )
     }
 
+    pub fn advance(&self, n: u32) -> Locator {
+        if n == 0 {
+            return *self;
+        }
+
+        match self {
+            Self::Root | Self::Head(..) => Self::Trunk(self.hash(), n),
+            Self::Trunk(parent_hash, seq) => Self::Trunk(
+                *parent_hash,
+                seq.checked_add(n).expect("locator sequence limit exceeded"),
+            ),
+        }
+    }
+
     fn parent_hash_and_number(&self) -> (Hash, u32) {
         match self {
             Self::Root | Self::Head(..) => (self.hash(), 0),

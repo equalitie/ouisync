@@ -1,4 +1,6 @@
 use super::*;
+use crate::block;
+use crate::index::BranchData;
 use crate::{crypto::SecretKey, error::Error, test_utils};
 use assert_matches::assert_matches;
 use proptest::collection::vec;
@@ -91,13 +93,13 @@ fn len(
 
         let mut blob = Blob::create(branch.clone(), Locator::Root);
         blob.write(&content[..]).await.unwrap();
-        assert_eq!(blob.len(), content_len as u64);
+        assert_eq!(blob.len().await, content_len as u64);
 
         blob.flush().await.unwrap();
-        assert_eq!(blob.len(), content_len as u64);
+        assert_eq!(blob.len().await, content_len as u64);
 
         let blob = Blob::open(branch, Locator::Root).await.unwrap();
-        assert_eq!(blob.len(), content_len as u64);
+        assert_eq!(blob.len().await, content_len as u64);
     })
 }
 
@@ -296,7 +298,7 @@ async fn truncate_to_empty() {
     let mut buffer = [0; 1];
     blob.seek(SeekFrom::Start(0)).await.unwrap();
     assert_eq!(blob.read(&mut buffer).await.unwrap(), 0);
-    assert_eq!(blob.len(), 0);
+    assert_eq!(blob.len().await, 0);
 
     // Check the second block entry was deleted from the index
     let mut tx = branch.db_pool().begin().await.unwrap();
@@ -341,7 +343,7 @@ async fn truncate_to_shorter() {
     blob.seek(SeekFrom::Start(0)).await.unwrap();
     assert_eq!(blob.read(&mut buffer).await.unwrap(), new_len);
     assert_eq!(buffer, content[..new_len]);
-    assert_eq!(blob.len(), new_len as u64);
+    assert_eq!(blob.len().await, new_len as u64);
 
     let mut tx = branch.db_pool().begin().await.unwrap();
     for locator in &[locator1, locator2] {

@@ -230,8 +230,12 @@ impl Reader<'_> {
     /// Length of the directory in bytes. If there are multiple versions, returns the sum of their
     /// lengths.
     #[allow(clippy::len_without_is_empty)]
-    pub fn len(&self) -> u64 {
-        self.0.iter().map(|dir| dir.len()).sum()
+    pub async fn len(&self) -> u64 {
+        let mut sum = 0;
+        for dir in self.0.iter() {
+            sum += dir.len().await;
+        }
+        sum
     }
 }
 

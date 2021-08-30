@@ -1,9 +1,15 @@
 use crate::{
-    blob::Blob, blob_id::BlobId, branch::Branch, entry_type::EntryType, error::Result,
-    locator::Locator, parent_context::ParentContext,
+    blob::{self, Blob},
+    blob_id::BlobId,
+    branch::Branch,
+    entry_type::EntryType,
+    error::Result,
+    locator::Locator,
+    parent_context::ParentContext,
 };
-use std::fmt;
 use std::io::SeekFrom;
+use std::{fmt, sync::Arc};
+use tokio::sync::Mutex;
 
 pub struct File {
     blob: Blob,
@@ -26,6 +32,19 @@ impl File {
         })
     }
 
+    /// Opens an existing file. Reuse the already opened blob::Core
+    pub(crate) async fn reopen(
+        blob_core: Arc<Mutex<blob::Core>>,
+        local_branch: Branch,
+        parent: ParentContext,
+    ) -> Result<Self> {
+        Ok(Self {
+            blob: blob::Core::reopen(blob_core).await?,
+            parent,
+            local_branch,
+        })
+    }
+
     /// Creates a new file.
     pub(crate) async fn create(branch: Branch, locator: Locator, parent: ParentContext) -> Self {
         Self {
@@ -41,8 +60,8 @@ impl File {
 
     /// Length of this file in bytes.
     #[allow(clippy::len_without_is_empty)]
-    pub fn len(&self) -> u64 {
-        self.blob.len()
+    pub async fn len(&self) -> u64 {
+        self.blob.len().await
     }
 
     /// Locator of this file.
@@ -81,13 +100,11 @@ impl File {
     /// Flushes this file, ensuring that all intermediately buffered contents gets written to the
     /// store.
     pub async fn flush(&mut self) -> Result<()> {
-        if !self.blob.is_dirty() {
-            return Ok(());
+        if self.blob.flush().await? {
+            self.parent.increment_version().await?;
+            self.parent.directory.flush().await?;
         }
-
-        self.blob.flush().await?;
-        self.parent.increment_version().await?;
-        self.parent.directory.flush().await
+        Ok(())
     }
 
     /// Removes this file.
@@ -98,6 +115,10 @@ impl File {
 
     pub fn blob_id(&self) -> &BlobId {
         self.blob.blob_id()
+    }
+
+    pub fn blob_core(&self) -> &Arc<Mutex<blob::Core>> {
+        self.blob.core()
     }
 
     /// Ensure this file lives in the local branch and all its ancestor directories exist and live
@@ -157,6 +178,7 @@ mod test {
             .await
             .unwrap();
 
+        // This will create a fork on branch 1
         file1.write(b"large").await.unwrap();
         file1.flush().await.unwrap();
 
