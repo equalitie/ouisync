@@ -82,7 +82,7 @@ impl File {
 
     /// Writes `buffer` into this file.
     pub async fn write(&mut self, buffer: &[u8]) -> Result<()> {
-        self.ensure_local().await?;
+        self.fork().await?;
         self.blob.write(buffer).await
     }
 
@@ -93,7 +93,7 @@ impl File {
 
     /// Truncates the file to the given length.
     pub async fn truncate(&mut self, len: u64) -> Result<()> {
-        self.ensure_local().await?;
+        self.fork().await?;
         self.blob.truncate(len).await
     }
 
@@ -121,9 +121,9 @@ impl File {
         self.blob.core()
     }
 
-    /// Ensure this file lives in the local branch and all its ancestor directories exist and live
+    /// Forks this file into the local branch. Ensure all its ancestor directories exist and live
     /// in the local branch as well. Should be called before any mutable operation.
-    async fn ensure_local(&mut self) -> Result<()> {
+    pub async fn fork(&mut self) -> Result<()> {
         if self.blob.branch().id() == self.local_branch.id() {
             // File already lives in the local branch. We assume the ancestor directories have been
             // already created as well so there is nothing else to do.

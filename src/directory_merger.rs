@@ -2,7 +2,6 @@ use crate::{
     directory::{self, Directory, EntryRef},
     error::{Error, Result},
     file::File,
-    replica_id::ReplicaId,
 };
 use futures_util::future;
 use std::{cmp::Ordering, collections::VecDeque, iter};
@@ -11,16 +10,16 @@ use std::{cmp::Ordering, collections::VecDeque, iter};
 pub(crate) struct DirectoryMerger {
     // queue of (loca, remote) directory pairs to merge.
     queue: VecDeque<(Directory, Directory)>,
-    files_to_insert: Vec<(ReplicaId, File)>,
-    directories_to_insert: Vec<String>,
+    fork_files: Vec<File>,
+    fork_directories: Vec<Directory>,
 }
 
 impl DirectoryMerger {
     pub fn new(local_root: Directory, remote_root: Directory) -> Self {
         Self {
             queue: iter::once((local_root, remote_root)).collect(),
-            files_to_insert: Vec::new(),
-            directories_to_insert: Vec::new(),
+            fork_files: Vec::new(),
+            fork_directories: Vec::new(),
         }
     }
 
@@ -32,7 +31,7 @@ impl DirectoryMerger {
         };
 
         self.scan(&local_dir, &remote_dir).await?;
-        self.apply(&local_dir).await?;
+        self.commit(&local_dir).await?;
 
         Ok(true)
     }
@@ -55,13 +54,13 @@ impl DirectoryMerger {
         let local_entries = match local.lookup(remote_entry.name()) {
             Ok(local_entries) => local_entries,
             Err(Error::EntryNotFound) => {
-                self.insert(remote_entry).await?;
+                self.schedule_fork(remote_entry).await?;
                 return Ok(());
             }
             Err(error) => return Err(error),
         };
 
-        let mut insert = false;
+        let mut fork = false;
 
         for local_entry in local_entries {
             match local_entry
@@ -69,36 +68,44 @@ impl DirectoryMerger {
                 .partial_cmp(remote_entry.version_vector())
             {
                 Some(Ordering::Less) => {
-                    insert = true;
+                    fork = true;
                 }
                 Some(Ordering::Equal) => unreachable!(),
                 Some(Ordering::Greater) => return Ok(()),
                 None => {
-                    insert = true;
+                    fork = true;
                 }
             }
         }
 
-        if insert {
-            self.insert(remote_entry).await?;
+        if fork {
+            self.schedule_fork(remote_entry).await?;
         }
 
         Ok(())
     }
 
-    async fn insert(&mut self, entry: EntryRef<'_>) -> Result<()> {
+    async fn schedule_fork(&mut self, entry: EntryRef<'_>) -> Result<()> {
         match entry {
-            EntryRef::File(entry) => self
-                .files_to_insert
-                .push((*entry.author(), entry.open().await?)),
-            EntryRef::Directory(entry) => self.directories_to_insert.push(entry.name().to_owned()),
+            EntryRef::File(entry) => self.fork_files.push(entry.open().await?),
+            EntryRef::Directory(entry) => self.fork_directories.push(entry.open().await?),
         }
 
         Ok(())
     }
 
-    async fn apply(&mut self, _local: &Directory) -> Result<()> {
-        // TODO
+    async fn commit(&mut self, local: &Directory) -> Result<()> {
+        for mut file in self.fork_files.drain(..) {
+            file.fork().await?;
+        }
+
+        for remote_directory in self.fork_directories.drain(..) {
+            let local_directory = remote_directory.fork().await?;
+            self.queue.push_front((local_directory, remote_directory));
+        }
+
+        local.flush().await?;
+
         Ok(())
     }
 }

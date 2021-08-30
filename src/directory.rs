@@ -177,6 +177,8 @@ impl Directory {
                 .await
                 .lookup_version(&parent.entry_name, self.local_branch.id())
             {
+                // TODO: if the local entry exists but is not a directory, we should still create
+                // the directory using its owner branch as the author.
                 return entry.directory()?.open().await;
             }
 
