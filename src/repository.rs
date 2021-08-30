@@ -1,7 +1,7 @@
 use crate::{
-    async_debug::{AsyncDebug, Printer},
     branch::Branch,
     crypto::Cryptor,
+    debug_printer::DebugPrinter,
     directory::{Directory, MoveDstDirectory},
     entry_type::EntryType,
     error::{Error, Result},
@@ -10,7 +10,6 @@ use crate::{
     joint_directory::JointDirectory,
     path, ReplicaId,
 };
-use async_trait::async_trait;
 use camino::Utf8Path;
 use futures_util::future;
 use std::{collections::HashMap, sync::Arc};
@@ -197,11 +196,8 @@ impl Repository {
 
         Ok(JointDirectory::new(dirs).await)
     }
-}
 
-#[async_trait]
-impl AsyncDebug for Repository {
-    async fn print(&self, print: &Printer) {
+    pub async fn debug_print(&self, print: DebugPrinter) {
         print.display(&"Repository");
         let branches = self.branches.lock().await;
         for (replica_id, branch) in &*branches {
@@ -213,7 +209,7 @@ impl AsyncDebug for Repository {
             };
             print.display(&format!("Branch {:?}{}", replica_id, local));
             print.display(&"/");
-            branch.print(&print.indent()).await;
+            branch.debug_print(print.indent()).await;
         }
     }
 }

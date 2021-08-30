@@ -1,8 +1,4 @@
-use async_trait::async_trait;
-use ouisync::{
-    async_debug::{AsyncDebug, Printer},
-    Error, File, JointDirectory, JointEntry, Result,
-};
+use ouisync::{debug_printer::DebugPrinter, Error, File, JointDirectory, JointEntry, Result};
 use slab::Slab;
 use std::convert::TryInto;
 
@@ -45,20 +41,8 @@ impl EntryMap {
             .get_mut(handle_to_index(handle))
             .ok_or(Error::EntryNotFound)
     }
-}
 
-fn index_to_handle(index: usize) -> FileHandle {
-    // `usize` to `u64` should never fail but for some reason there is no `impl From<usize> for u64`.
-    index.try_into().unwrap_or_else(|_| unreachable!())
-}
-
-fn handle_to_index(handle: FileHandle) -> usize {
-    handle.try_into().expect("file handle out of bounds")
-}
-
-#[async_trait]
-impl AsyncDebug for EntryMap {
-    async fn print(&self, print: &Printer) {
+    pub async fn debug_print(&self, print: DebugPrinter) {
         print.display(&"EntryMap");
         let print = print.indent();
         for (i, entry) in &self.0 {
@@ -73,4 +57,13 @@ impl AsyncDebug for EntryMap {
             }
         }
     }
+}
+
+fn index_to_handle(index: usize) -> FileHandle {
+    // `usize` to `u64` should never fail but for some reason there is no `impl From<usize> for u64`.
+    index.try_into().unwrap_or_else(|_| unreachable!())
+}
+
+fn handle_to_index(handle: FileHandle) -> usize {
+    handle.try_into().expect("file handle out of bounds")
 }

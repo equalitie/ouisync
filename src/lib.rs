@@ -1,9 +1,9 @@
 #[macro_use]
 mod macros;
 
-pub mod async_debug;
 pub mod crypto;
 pub mod db;
+pub mod debug_printer;
 pub mod this_replica;
 
 mod blob;
