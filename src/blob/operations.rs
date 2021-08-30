@@ -1,4 +1,4 @@
-use crate::blob::{Buffer, Cursor, OpenBlock};
+use crate::blob::{Blob, Buffer, Core, Cursor, OpenBlock};
 
 use crate::{
     block::{self, BlockId, BLOCK_SIZE},
@@ -10,7 +10,8 @@ use crate::{
     locator::Locator,
     store,
 };
-use std::{convert::TryInto, io::SeekFrom, mem};
+use std::{convert::TryInto, io::SeekFrom, mem, sync::Arc};
+use tokio::sync::Mutex;
 
 pub(crate) struct Operations<'a> {
     branch: &'a mut Branch,
@@ -263,8 +264,12 @@ impl<'a> Operations<'a> {
 
     /// Removes this blob.
     pub async fn remove(&mut self) -> Result<()> {
-        self.remove_blocks(self.head_locator.sequence().take(self.block_count() as usize))
-            .await?;
+        self.remove_blocks(
+            self.head_locator
+                .sequence()
+                .take(self.block_count() as usize),
+        )
+        .await?;
         *self.current_block = OpenBlock::new_head(*self.head_locator, self.nonce_sequence);
         *self.len = 0;
         *self.len_dirty = true;
@@ -274,11 +279,9 @@ impl<'a> Operations<'a> {
 
     /// Creates a shallow copy (only the index nodes are copied, not blocks) of this blob into the
     /// specified destination branch and locator.
-    pub async fn fork(&mut self, dst_branch: Branch, dst_head_locator: Locator) -> Result<()> {
-        if self.branch.id() == dst_branch.id() && self.head_locator == &dst_head_locator {
-            // This blob is already in the dst, nothing to do.
-            return Ok(());
-        }
+    pub async fn fork(&mut self, dst_branch: Branch, dst_head_locator: Locator) -> Result<Blob> {
+        // This should gracefuly handled in the Blob from where this function is invoked.
+        assert!(self.branch.id() != dst_branch.id() || self.head_locator != &dst_head_locator);
 
         let mut tx = self.db_pool().begin().await?;
 
@@ -291,6 +294,7 @@ impl<'a> Operations<'a> {
                 .data()
                 .get(&mut tx, &encoded_src_locator)
                 .await?;
+
             dst_branch
                 .data()
                 .insert(&mut tx, &block_id, &encoded_dst_locator)
@@ -299,14 +303,28 @@ impl<'a> Operations<'a> {
 
         tx.commit().await?;
 
-        // TODO: the following lines must happen atomically (either all succeed or none). There is
-        // currently no reason why they wouldn't, but to be super extra sure, consider wrapping
-        // them in `catch_unwind`.
-        *self.branch = dst_branch;
-        *self.head_locator = dst_head_locator;
-        self.current_block.locator = self.locator_at(self.current_block.locator.number());
+        let new_core = Core::new(
+            dst_branch.clone(),
+            dst_head_locator,
+            self.nonce_sequence.clone(),
+            *self.len,
+            *self.len_dirty,
+        );
 
-        Ok(())
+        let current_block = OpenBlock {
+            head_locator: dst_head_locator,
+            locator: dst_head_locator.advance(self.current_block.locator.number()),
+            id: self.current_block.id,
+            content: self.current_block.content.clone(),
+            dirty: self.current_block.dirty,
+        };
+
+        Ok(Blob::new(
+            Arc::new(Mutex::new(new_core)),
+            dst_head_locator,
+            dst_branch,
+            current_block,
+        ))
     }
 
     pub fn db_pool(&self) -> &db::Pool {
@@ -318,7 +336,9 @@ impl<'a> Operations<'a> {
     }
 
     pub fn locators(&self) -> impl Iterator<Item = Locator> {
-        self.head_locator.sequence().take(self.block_count() as usize)
+        self.head_locator
+            .sequence()
+            .take(self.block_count() as usize)
     }
 
     async fn replace_current_block(
@@ -339,6 +359,7 @@ impl<'a> Operations<'a> {
         }
 
         *self.current_block = OpenBlock {
+            head_locator: *self.head_locator,
             locator,
             id,
             content,

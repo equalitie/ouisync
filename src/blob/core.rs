@@ -1,14 +1,14 @@
 use super::operations::{load_block, Operations};
 
-use super::{Cursor, OpenBlock, Blob};
+use super::{Blob, Cursor, OpenBlock};
 
 use crate::{
     blob_id::BlobId, branch::Branch, crypto::NonceSequence, error::Result, locator::Locator,
 };
 
+use std::fmt;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use std::fmt;
 
 pub struct Core {
     branch: Branch,
@@ -19,6 +19,23 @@ pub struct Core {
 }
 
 impl Core {
+    /// Creates a new Core.
+    pub(crate) fn new(
+        branch: Branch,
+        head_locator: Locator,
+        nonce_sequence: NonceSequence,
+        len: u64,
+        len_dirty: bool,
+    ) -> Self {
+        Self {
+            branch,
+            head_locator,
+            nonce_sequence,
+            len,
+            len_dirty,
+        }
+    }
+
     /// Creates a new blob.
     pub(crate) fn create_blob(branch: Branch, head_locator: Locator) -> Blob {
         let nonce_sequence = NonceSequence::new(rand::random());
@@ -68,6 +85,7 @@ impl Core {
             head_locator,
             branch,
             OpenBlock {
+                head_locator,
                 locator: head_locator,
                 id,
                 content,
@@ -115,6 +133,7 @@ impl Core {
             .decrypt(&nonce, id.as_ref(), &mut content, &auth_tag)?;
 
         Ok(OpenBlock {
+            head_locator: self.head_locator,
             locator: self.head_locator,
             id,
             content,
@@ -162,4 +181,3 @@ impl fmt::Debug for Core {
             .finish()
     }
 }
-

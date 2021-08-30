@@ -1,9 +1,14 @@
 use crate::{
-    blob::{self, Blob}, blob_id::BlobId, branch::Branch, entry_type::EntryType, error::Result,
-    locator::Locator, parent_context::ParentContext,
+    blob::{self, Blob},
+    blob_id::BlobId,
+    branch::Branch,
+    entry_type::EntryType,
+    error::Result,
+    locator::Locator,
+    parent_context::ParentContext,
 };
-use std::{fmt, sync::Arc};
 use std::io::SeekFrom;
+use std::{fmt, sync::Arc};
 use tokio::sync::Mutex;
 
 pub struct File {
@@ -173,6 +178,7 @@ mod test {
             .await
             .unwrap();
 
+        // This will create a fork on branch 1
         file1.write(b"large").await.unwrap();
         file1.flush().await.unwrap();
 

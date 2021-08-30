@@ -528,8 +528,7 @@ impl<'a> FileRef<'a> {
                 self.inner.parent_context(),
             )
             .await
-        }
-        else {
+        } else {
             let file = File::open(
                 self.inner.parent_inner.blob.branch().clone(),
                 self.inner.parent_outer.local_branch.clone(),
@@ -738,9 +737,9 @@ pub struct EntryData {
 
 impl PartialEq for EntryData {
     fn eq(&self, other: &Self) -> bool {
-        self.entry_type == other.entry_type &&
-            self.blob_id == other.blob_id &&
-            self.version_vector == other.version_vector
+        self.entry_type == other.entry_type
+            && self.blob_id == other.blob_id
+            && self.version_vector == other.version_vector
     }
 }
 

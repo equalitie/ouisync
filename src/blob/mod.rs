@@ -127,11 +127,20 @@ impl Blob {
     /// Creates a shallow copy (only the index nodes are copied, not blocks) of this blob into the
     /// specified destination branch and locator.
     pub async fn fork(&mut self, dst_branch: Branch, dst_head_locator: Locator) -> Result<()> {
-        self.lock()
+        if self.branch.id() == dst_branch.id() && self.head_locator == dst_head_locator {
+            return Ok(());
+        }
+
+        let new_self = self
+            .lock()
             .await
             .ops()
             .fork(dst_branch, dst_head_locator)
-            .await
+            .await?;
+
+        *self = new_self;
+
+        Ok(())
     }
 
     pub fn db_pool(&self) -> &db::Pool {
@@ -165,6 +174,8 @@ impl<'a> OperationsLock<'a> {
 // Data for a block that's been loaded into memory and decrypted.
 #[derive(Clone)]
 pub(crate) struct OpenBlock {
+    // The locator to the head block of the blob.
+    pub head_locator: Locator,
     // Locator of the block.
     pub locator: Locator,
     // Id of the block.
@@ -182,6 +193,7 @@ impl OpenBlock {
         content.write_u64(0); // blob length (initially zero)
 
         Self {
+            head_locator: locator,
             locator,
             id: rand::random(),
             content,
