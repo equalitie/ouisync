@@ -3,7 +3,6 @@ use crate::{
     db,
     debug_printer::DebugPrinter,
     directory::{Directory, RootDirectoryCache},
-    directory_merger::DirectoryMerger,
     error::{Error, Result},
     file::File,
     index::BranchData,
@@ -100,25 +99,6 @@ impl Branch {
             root.debug_print(print).await;
         }
     }
-}
-
-pub(crate) async fn merge(local: Branch, remote: Branch) -> Result<()> {
-    assert_ne!(local.id(), remote.id());
-
-    if *local.branch_data.versions().await > *remote.branch_data.versions().await {
-        // Local newer than remote, nothing to merge
-        return Ok(());
-    }
-
-    log::info!("merge {:?}", remote.id());
-
-    let local_root = local.open_or_create_root().await?;
-    let remote_root = remote.open_root(local.clone()).await?;
-    let mut merger = DirectoryMerger::new(local_root, remote_root);
-
-    while merger.step().await? {}
-
-    Ok(())
 }
 
 #[cfg(test)]

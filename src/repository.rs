@@ -1,8 +1,9 @@
 use crate::{
-    branch::{self, Branch},
+    branch::Branch,
     crypto::Cryptor,
     debug_printer::DebugPrinter,
     directory::{Directory, MoveDstDirectory},
+    directory_merger::DirectoryMerger,
     entry_type::EntryType,
     error::{Error, Result},
     file::File,
@@ -312,7 +313,7 @@ impl Merger {
         let local = self.shared.local_branch().await;
 
         let handle = ScopedJoinHandle(task::spawn(async move {
-            if let Err(error) = branch::merge(local, remote).await {
+            if let Err(error) = merge_branches(local, remote).await {
                 log::error!(
                     "failed to merge branch {:?}: {}",
                     remote_id,
@@ -333,6 +334,23 @@ enum MergeState {
     Ongoing,
     // A merge is ongoing and another one was already scheduled
     Pending,
+}
+
+async fn merge_branches(local: Branch, remote: Branch) -> Result<()> {
+    if *local.data().versions().await > *remote.data().versions().await {
+        // Local newer than remote, nothing to merge
+        return Ok(());
+    }
+
+    log::info!("merge {:?}", remote.id());
+
+    let local_root = local.open_or_create_root().await?;
+    let remote_root = remote.open_root(local.clone()).await?;
+    let mut merger = DirectoryMerger::new(local_root, remote_root);
+
+    while merger.step().await? {}
+
+    Ok(())
 }
 
 #[cfg(test)]
