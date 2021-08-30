@@ -1,9 +1,11 @@
 use slab::Slab;
 use std::{
     future::Future,
+    pin::Pin,
     sync::{Arc, Mutex},
+    task::{Context, Poll},
 };
-use tokio::task::{self, JoinHandle};
+use tokio::task::{self, JoinError, JoinHandle};
 
 /// Set of tasks which are all automatically aborted when the set goes out of scope.
 #[derive(Default)]
@@ -74,5 +76,13 @@ pub struct ScopedJoinHandle<T>(pub JoinHandle<T>);
 impl<T> Drop for ScopedJoinHandle<T> {
     fn drop(&mut self) {
         self.0.abort()
+    }
+}
+
+impl<T> Future for ScopedJoinHandle<T> {
+    type Output = Result<T, JoinError>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        Pin::new(&mut self.0).poll(cx)
     }
 }
