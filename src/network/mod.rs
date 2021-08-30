@@ -15,7 +15,7 @@ use self::{
 use crate::{
     index::Index,
     replica_id::ReplicaId,
-    scoped_task_set::{ScopedTaskHandle, ScopedTaskSet},
+    scoped_task::{ScopedTaskHandle, ScopedTaskSet},
 };
 use futures_util::future;
 use std::{

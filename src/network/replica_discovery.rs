@@ -1,4 +1,4 @@
-use crate::scoped_task_set::ScopedTaskSet;
+use crate::scoped_task::ScopedTaskSet;
 use lru::LruCache;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
