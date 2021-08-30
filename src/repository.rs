@@ -312,7 +312,14 @@ impl Merger {
         let local = self.shared.local_branch().await;
 
         let handle = ScopedJoinHandle(task::spawn(async move {
-            branch::merge(local, remote).await;
+            if let Err(error) = branch::merge(local, remote).await {
+                log::error!(
+                    "failed to merge branch {:?}: {}",
+                    remote_id,
+                    error.verbose()
+                );
+            }
+
             remote_id
         }));
 
