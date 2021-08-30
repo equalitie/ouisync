@@ -320,12 +320,19 @@ impl Directory {
 
                     match file {
                         Ok(mut file) => {
-                            let content = file.read_to_end().await;
-                            match content {
-                                Ok(content) => {
+                            let mut buf = [0, 32];
+                            let lenght_result = file.read(&mut buf).await;
+                            match lenght_result {
+                                Ok(length) => {
+                                    let ellipsis = if file.len().await > length as u64 {
+                                        " ..."
+                                    } else {
+                                        ""
+                                    };
                                     print.display(&format!(
-                                        "Content: {:?}",
-                                        std::str::from_utf8(&content)
+                                        "Content: {:?}{}",
+                                        std::str::from_utf8(&buf[..length]),
+                                        ellipsis
                                     ));
                                 }
                                 Err(e) => {
