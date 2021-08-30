@@ -376,7 +376,7 @@ struct Inner {
 #[async_trait]
 impl AsyncDebug for Inner {
     async fn print(&self, print: &Printer) {
-        print.string("VirtualFilesystem::Inner");
+        print.display(&"VirtualFilesystem::Inner");
         self.entries.print(&print.indent()).await;
         self.repository.print(&print.indent()).await;
     }

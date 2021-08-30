@@ -862,11 +862,11 @@ impl AsyncDebug for Directory {
         let inner = self.inner.read().await;
 
         for (name, versions) in &inner.content.entries {
-            print.string(name);
+            print.display(name);
             let print = print.indent();
 
             for (author, entry_data) in versions {
-                print.string(&format!(
+                print.display(&format!(
                     "{:?}: {:?}, blob_id:{:?}, {:?}",
                     author, entry_data.entry_type, entry_data.blob_id, entry_data.version_vector
                 ));
@@ -893,18 +893,18 @@ impl AsyncDebug for Directory {
                             let content = file.read_to_end().await;
                             match content {
                                 Ok(content) => {
-                                    print.string(&format!(
+                                    print.display(&format!(
                                         "Content: {:?}",
                                         std::str::from_utf8(&content)
                                     ));
                                 }
                                 Err(e) => {
-                                    print.string(&format!("Failed to read {:?}", e));
+                                    print.display(&format!("Failed to read {:?}", e));
                                 }
                             }
                         }
                         Err(e) => {
-                            print.string(&format!("Failed to open {:?}", e));
+                            print.display(&format!("Failed to open {:?}", e));
                         }
                     }
                 }

@@ -202,7 +202,7 @@ impl Repository {
 #[async_trait]
 impl AsyncDebug for Repository {
     async fn print(&self, print: &Printer) {
-        print.string("Repository");
+        print.display(&"Repository");
         let branches = self.branches.lock().await;
         for (replica_id, branch) in &*branches {
             let print = print.indent();
@@ -211,8 +211,8 @@ impl AsyncDebug for Repository {
             } else {
                 ""
             };
-            print.string(&format!("Branch {:?}{}", replica_id, local));
-            print.string("/");
+            print.display(&format!("Branch {:?}{}", replica_id, local));
+            print.display(&"/");
             branch.print(&print.indent()).await;
         }
     }

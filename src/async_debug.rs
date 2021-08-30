@@ -17,8 +17,8 @@ impl Printer {
         println!("{:indent$}{:?}", "", v, indent = (2 * self.level));
     }
 
-    pub fn string(&self, s: &str) {
-        println!("{:indent$}{}", "", s, indent = (2 * self.level));
+    pub fn display<T: std::fmt::Display>(&self, v: &T) {
+        println!("{:indent$}{}", "", v, indent = (2 * self.level));
     }
 
     pub fn indent(&self) -> Printer {

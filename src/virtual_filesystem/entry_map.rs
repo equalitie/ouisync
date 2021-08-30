@@ -59,16 +59,16 @@ fn handle_to_index(handle: FileHandle) -> usize {
 #[async_trait]
 impl AsyncDebug for EntryMap {
     async fn print(&self, print: &Printer) {
-        print.string("EntryMap");
+        print.display(&"EntryMap");
         let print = print.indent();
         for (i, entry) in &self.0 {
             let h = index_to_handle(i);
             match entry {
                 JointEntry::File(file) => {
-                    print.string(&format!("{}: {:?}", h, file));
+                    print.display(&format!("{}: {:?}", h, file));
                 }
                 JointEntry::Directory(dir) => {
-                    print.string(&format!("{}: {:?}", h, dir));
+                    print.display(&format!("{}: {:?}", h, dir));
                 }
             }
         }
