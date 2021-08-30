@@ -13,9 +13,9 @@ use crate::{
     ReplicaId,
 };
 use camino::Utf8Path;
-use futures_util::future;
+use futures_util::{future, stream::FuturesUnordered, StreamExt};
 use std::{collections::HashMap, sync::Arc};
-use tokio::{sync::Mutex, task};
+use tokio::{select, sync::Mutex, task};
 
 pub struct Repository {
     shared: Arc<Shared>,
@@ -30,7 +30,7 @@ impl Repository {
             branches: Mutex::new(HashMap::new()),
         });
 
-        let merge_handle = ScopedJoinHandle(task::spawn(merge(shared.clone())));
+        let merge_handle = ScopedJoinHandle(task::spawn(Merger::new(shared.clone()).run()));
 
         Self {
             shared,
@@ -242,30 +242,88 @@ impl Shared {
     }
 }
 
-// Run the merge algorithm.
-async fn merge(shared: Arc<Shared>) {
-    let mut rx = shared.index.subscribe();
+// The merge algorithm.
+struct Merger {
+    shared: Arc<Shared>,
+    tasks: FuturesUnordered<ScopedJoinHandle<ReplicaId>>,
+    states: HashMap<ReplicaId, MergeState>,
+}
 
-    while let Some(branch_id) = rx.recv().await {
-        if branch_id == *shared.index.this_replica_id() {
+impl Merger {
+    fn new(shared: Arc<Shared>) -> Self {
+        Self {
+            shared,
+            tasks: FuturesUnordered::new(),
+            states: HashMap::new(),
+        }
+    }
+
+    async fn run(mut self) {
+        let mut rx = self.shared.index.subscribe();
+
+        loop {
+            select! {
+                branch_id = rx.recv() => {
+                    if let Some(branch_id) = branch_id {
+                        self.handle_branch_changed(branch_id).await
+                    } else {
+                        break;
+                    }
+                }
+                branch_id = self.tasks.next(), if !self.tasks.is_empty() => {
+                    if let Some(Ok(branch_id)) = branch_id {
+                        self.handle_task_finished(branch_id).await
+                    }
+                }
+            }
+        }
+    }
+
+    async fn handle_branch_changed(&mut self, branch_id: ReplicaId) {
+        if branch_id == *self.shared.index.this_replica_id() {
             // local branch change - ignore.
-            continue;
+            return;
         }
 
-        let remote = if let Some(remote) = shared.branch(&branch_id).await {
+        if let Some(state) = self.states.get_mut(&branch_id) {
+            // Merge of this branch is already ongoing - schedule to run it again after it's
+            // finished.
+            *state = MergeState::Pending;
+            return;
+        }
+
+        self.spawn_task(branch_id).await
+    }
+
+    async fn handle_task_finished(&mut self, branch_id: ReplicaId) {
+        if let Some(MergeState::Pending) = self.states.remove(&branch_id) {
+            self.spawn_task(branch_id).await
+        }
+    }
+
+    async fn spawn_task(&mut self, remote_id: ReplicaId) {
+        let remote = if let Some(remote) = self.shared.branch(&remote_id).await {
             remote
         } else {
             // branch removed in the meantime - ignore.
-            continue;
+            return;
         };
 
-        // TODO: if a merge with this branch is already in progress, queue it.
+        let local = self.shared.local_branch().await;
 
-        let local = shared.local_branch().await;
+        let handle = ScopedJoinHandle(task::spawn(async move {
+            branch::merge(local, remote).await;
+            remote_id
+        }));
 
-        // TODO: spawn a task for this to not block other branches
-        branch::merge(local, remote).await
+        self.tasks.push(handle);
+        self.states.insert(remote_id, MergeState::Ongoing);
     }
+}
+
+enum MergeState {
+    Ongoing,
+    Pending,
 }
 
 #[cfg(test)]

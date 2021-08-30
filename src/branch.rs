@@ -102,6 +102,7 @@ impl Branch {
 }
 
 pub(crate) async fn merge(_local: Branch, _remote: Branch) {
+    // println!("merge {:?}", remote.id());
     // TODO
 }
 
