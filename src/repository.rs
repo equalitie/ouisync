@@ -8,16 +8,18 @@ use crate::{
     file::File,
     index::{BranchData, Index, Subscription},
     joint_directory::JointDirectory,
-    path, ReplicaId,
+    path,
+    scoped_task::ScopedJoinHandle,
+    ReplicaId,
 };
 use camino::Utf8Path;
 use futures_util::future;
 use std::{collections::HashMap, sync::Arc};
-use tokio::{sync::Mutex, task, task::JoinHandle};
+use tokio::{sync::Mutex, task};
 
 pub struct Repository {
     shared: Arc<Shared>,
-    merge_handle: JoinHandle<()>,
+    _merge_handle: ScopedJoinHandle<()>,
 }
 
 impl Repository {
@@ -28,11 +30,11 @@ impl Repository {
             branches: Mutex::new(HashMap::new()),
         });
 
-        let merge_handle = task::spawn(merge(shared.clone()));
+        let merge_handle = ScopedJoinHandle(task::spawn(merge(shared.clone())));
 
         Self {
             shared,
-            merge_handle,
+            _merge_handle: merge_handle,
         }
     }
 
@@ -196,12 +198,6 @@ impl Repository {
             print.display(&"/");
             branch.debug_print(print.indent()).await;
         }
-    }
-}
-
-impl Drop for Repository {
-    fn drop(&mut self) {
-        self.merge_handle.abort();
     }
 }
 

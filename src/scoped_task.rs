@@ -67,3 +67,12 @@ impl ScopedTaskHandle {
         }
     }
 }
+
+/// Wrapper for a `JoinHandle` that auto-aborts on drop.
+pub struct ScopedJoinHandle<T>(pub JoinHandle<T>);
+
+impl<T> Drop for ScopedJoinHandle<T> {
+    fn drop(&mut self) {
+        self.0.abort()
+    }
+}
