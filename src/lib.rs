@@ -11,6 +11,7 @@ mod blob_id;
 mod block;
 mod branch;
 mod directory;
+mod directory_merger;
 mod entry_type;
 mod error;
 mod ffi;
