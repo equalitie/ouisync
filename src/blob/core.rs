@@ -130,6 +130,8 @@ impl Core {
         .await?;
 
         let mut content = Cursor::new(buffer);
+        content.pos = self.header_size();
+
         let nonce = self.nonce_sequence.get(0);
 
         self.branch
