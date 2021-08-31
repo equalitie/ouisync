@@ -6,16 +6,20 @@ use crate::{
     blob_id::BlobId, branch::Branch, crypto::NonceSequence, error::Result, locator::Locator,
 };
 
-use std::fmt;
-use std::sync::Arc;
+use std::{
+    fmt,
+    mem,
+    sync::Arc,
+};
+
 use tokio::sync::Mutex;
 
 pub struct Core {
-    branch: Branch,
-    head_locator: Locator,
-    nonce_sequence: NonceSequence,
-    len: u64,
-    len_dirty: bool,
+    pub(crate) branch: Branch,
+    pub(crate) head_locator: Locator,
+    pub(crate) nonce_sequence: NonceSequence,
+    pub(crate) len: u64,
+    pub(crate) len_dirty: bool,
 }
 
 impl Core {
@@ -126,6 +130,8 @@ impl Core {
         .await?;
 
         let mut content = Cursor::new(buffer);
+        content.pos = self.header_size();
+
         let nonce = self.nonce_sequence.get(0);
 
         self.branch
@@ -164,13 +170,13 @@ impl Core {
 
     pub(crate) fn operations<'a>(&'a mut self, current_block: &'a mut OpenBlock) -> Operations<'a> {
         Operations::new(
-            &mut self.branch,
-            &mut self.head_locator,
-            &mut self.nonce_sequence,
-            &mut self.len,
-            &mut self.len_dirty,
+            self,
             current_block,
         )
+    }
+
+    pub(crate) fn header_size(&self) -> usize {
+        self.nonce_sequence.prefix().len() + mem::size_of_val(&self.len)
     }
 }
 
