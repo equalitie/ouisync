@@ -604,29 +604,24 @@ mod tests {
         let branches = setup(2).await;
 
         let root0 = branches[0].open_or_create_root().await.unwrap();
-        create_file(&root0, "file.txt", &[]).await;
+        create_file(&root0, "file.txt", b"one").await;
 
         // Open the file with branch 1 as the local branch and then modify it which copies (forks)
         // it into branch 1.
-        let root0 = branches[0].open_root(branches[1].clone()).await.unwrap();
-        let mut file1 = root0
-            .read()
-            .await
-            .lookup_version("file.txt", branches[0].id())
-            .unwrap()
-            .file()
-            .unwrap()
-            .open()
-            .await
-            .unwrap();
-
-        file1.write(&[]).await.unwrap();
+        let root0_by_1 = branches[0].open_root(branches[1].clone()).await.unwrap();
+        let mut file1 = open_file_version(&root0_by_1, "file.txt", branches[0].id()).await;
+        file1.write(b"two").await.unwrap();
         file1.flush().await.unwrap();
+
+        // Modify the file by branch 0 as well, to create concurrent versions
+        let mut file0 = open_file_version(&root0, "file.txt", branches[0].id()).await;
+        file0.write(b"three").await.unwrap();
+        file0.flush().await.unwrap();
 
         // Open branch 1's root dir which should have been created in the process.
         let root1 = branches[1].open_root(branches[1].clone()).await.unwrap();
 
-        let root = JointDirectory::new(vec![root0, root1]).await;
+        let root = JointDirectory::new(vec![root0_by_1, root1]).await;
         let root = root.read().await;
 
         let files: Vec<_> = root.entries().map(|entry| entry.file().unwrap()).collect();
