@@ -312,12 +312,19 @@ impl Merger {
         let local = self.shared.local_branch().await;
 
         let handle = ScopedJoinHandle(task::spawn(async move {
-            if let Err(error) = merge_branches(local, remote).await {
-                log::error!(
-                    "failed to merge branch {:?}: {}",
-                    remote_id,
-                    error.verbose()
-                );
+            log::debug!("merge with branch {:?} started", remote_id);
+
+            match merge_branches(local, remote).await {
+                Ok(()) => {
+                    log::info!("merge with branch {:?} succeeded", remote_id)
+                }
+                Err(error) => {
+                    log::error!(
+                        "merge with branch {:?} failed: {}",
+                        remote_id,
+                        error.verbose()
+                    )
+                }
             }
 
             remote_id
@@ -340,8 +347,6 @@ async fn merge_branches(local: Branch, remote: Branch) -> Result<()> {
         // Local newer than remote, nothing to merge
         return Ok(());
     }
-
-    log::info!("merge {:?}", remote.id());
 
     let remote_root = remote.open_root(local.clone()).await?;
     JointDirectory::new(iter::once(remote_root))
