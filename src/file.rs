@@ -100,11 +100,14 @@ impl File {
     /// Flushes this file, ensuring that all intermediately buffered contents gets written to the
     /// store.
     pub async fn flush(&mut self) -> Result<()> {
-        if self.blob.flush().await? {
-            self.parent.increment_version().await?;
-            self.parent.directory.flush().await?;
+        if !self.blob.is_dirty().await {
+            return Ok(());
         }
-        Ok(())
+
+        let modify = self.parent.modify().await?;
+        self.blob.flush().await?;
+        modify.commit();
+        self.parent.directory.flush().await
     }
 
     /// Removes this file.
@@ -137,7 +140,12 @@ impl File {
         let blob_id = self
             .parent
             .directory
-            .insert_entry(self.parent.entry_name.clone(), EntryType::File, old_vv)
+            .insert_entry(
+                self.parent.entry_name.clone(),
+                *self.blob.branch().id(),
+                EntryType::File,
+                old_vv,
+            )
             .await?;
 
         self.blob

@@ -1,5 +1,8 @@
 use crate::{
-    directory::Directory, error::Result, replica_id::ReplicaId, version_vector::VersionVector,
+    directory::{Directory, ModifyEntry},
+    error::Result,
+    replica_id::ReplicaId,
+    version_vector::VersionVector,
 };
 
 /// Info about an entry in the context of its parent directory.
@@ -15,10 +18,10 @@ pub(crate) struct ParentContext {
 }
 
 impl ParentContext {
-    /// Increment the version of the entry.
-    pub async fn increment_version(&self) -> Result<()> {
+    /// Start modifying the entry.
+    pub async fn modify(&self) -> Result<ModifyEntry<'_>> {
         self.directory
-            .increment_entry_version(&self.entry_name)
+            .modify_entry(&self.entry_name, &self.entry_author)
             .await
     }
 

@@ -16,10 +16,9 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{btree_map, hash_map, BTreeMap, HashMap},
     fmt, iter,
-    ops::DerefMut,
     sync::{Arc, Weak},
 };
-use tokio::sync::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use tokio::sync::{Mutex, RwLock, RwLockMappedWriteGuard, RwLockReadGuard, RwLockWriteGuard};
 
 #[derive(Clone)]
 pub struct Directory {
@@ -67,7 +66,7 @@ impl Directory {
         }
 
         for ctx in self.ancestors() {
-            ctx.increment_version().await?;
+            ctx.modify().await?.commit();
             ctx.directory.inner.write().await.flush().await?;
         }
 
@@ -85,7 +84,7 @@ impl Directory {
         let author = *self.local_branch.id();
         let vv = VersionVector::first(author);
         let blob_id = inner
-            .insert_entry(author, name.clone(), EntryType::File, vv)
+            .insert_entry(name.clone(), author, EntryType::File, vv)
             .await?;
         let locator = Locator::Head(blob_id);
         let parent = ParentContext {
@@ -108,7 +107,7 @@ impl Directory {
         let author = *self.local_branch.id();
         let vv = VersionVector::first(author);
         let blob_id = inner
-            .insert_entry(author, name.clone(), EntryType::Directory, vv)
+            .insert_entry(name.clone(), author, EntryType::Directory, vv)
             .await?;
         let locator = Locator::Head(blob_id);
         let parent = ParentContext {
@@ -214,34 +213,52 @@ impl Directory {
     pub(crate) async fn insert_entry(
         &self,
         name: String,
+        author_id: ReplicaId,
         entry_type: EntryType,
         version_vector: VersionVector,
     ) -> Result<BlobId> {
         let mut inner = self.write().await;
         inner
-            .insert_entry(*self.local_branch.id(), name, entry_type, version_vector)
+            .insert_entry(name, author_id, entry_type, version_vector)
             .await
     }
 
-    /// Increment version of the specified entry.
-    pub(crate) async fn increment_entry_version(&self, name: &str) -> Result<()> {
-        let mut inner_guard = self.write().await;
-        let inner = inner_guard.deref_mut();
+    /// Prepares an entry for modification. When this returns `Ok`, the entry itself can be safely
+    /// modified. If that succeeds, the returned `ModifyEntry` object should be committed by calling
+    /// its [`commit`] method which updates the metadata (version vector and author id) of the entry
+    /// in this directory.
+    /// If the entry modification fails, the `ModifyEntry` object should be dropped instead, which
+    /// leaves the metadata intact.
+    pub(crate) async fn modify_entry<'a>(
+        &'a self,
+        name: &str,
+        author_id: &'a ReplicaId,
+    ) -> Result<ModifyEntry<'a>> {
+        let inner = self.write().await;
 
-        let author = self.local_branch.id();
+        let versions =
+            RwLockWriteGuard::try_map(inner, |inner| inner.content.entries.get_mut(name))
+                .map_err(|_| Error::EntryNotFound)?;
 
-        // Asserting we are in the local branch
-        assert_eq!(author, inner.blob.branch().id());
+        if !versions.contains_key(author_id) {
+            return Err(Error::EntryNotFound);
+        }
 
-        inner
-            .content
-            .entries
-            .get_mut(name)
-            .and_then(|versions| versions.get_mut(author))
-            .map(|entry| {
-                entry.version_vector.increment(*author);
-            })
-            .ok_or(Error::EntryNotFound)
+        let local_id = self.local_branch.id();
+
+        if author_id != local_id && versions.contains_key(local_id) {
+            // There already exists a local version of the entry and modifying the version by
+            // `author_id` would overwrite it. To avoid unexpected data loss, we currently
+            // disallow this.
+            // TODO: use a more descriptive error here.
+            return Err(Error::EntryExists);
+        }
+
+        Ok(ModifyEntry {
+            versions,
+            old_author_id: author_id,
+            new_author_id: *local_id,
+        })
     }
 
     async fn open(
@@ -447,14 +464,14 @@ impl Inner {
 
     async fn insert_entry(
         &mut self,
-        author: ReplicaId,
         name: String,
+        author: ReplicaId,
         entry_type: EntryType,
         version_vector: VersionVector,
     ) -> Result<BlobId> {
         let (new_blob_id, old_blob_id) =
             self.content
-                .insert(author, name, entry_type, version_vector)?;
+                .insert(name, author, entry_type, version_vector)?;
 
         if let Some(old_blob_id) = old_blob_id {
             // TODO: This should succeed/fail atomically with the above.
@@ -692,6 +709,22 @@ impl PartialEq for RefInner<'_> {
 
 impl Eq for RefInner<'_> {}
 
+/// Pending modification of a directory entry. See [`Directory::modify_entry`] for details.
+pub(crate) struct ModifyEntry<'a> {
+    versions: RwLockMappedWriteGuard<'a, BTreeMap<ReplicaId, EntryData>>,
+    old_author_id: &'a ReplicaId,
+    new_author_id: ReplicaId,
+}
+
+impl ModifyEntry<'_> {
+    /// Commit the entry modifications, updating the entry version vector and author id.
+    pub fn commit(mut self) {
+        let mut entry = self.versions.remove(self.old_author_id).unwrap();
+        entry.version_vector.increment(self.new_author_id);
+        self.versions.insert(self.new_author_id, entry);
+    }
+}
+
 /// Destination directory of a move operation.
 #[allow(clippy::large_enum_variant)]
 pub enum MoveDstDirectory {
@@ -742,8 +775,8 @@ impl Content {
     /// the caller to remove it from the index.
     fn insert(
         &mut self,
-        author: ReplicaId,
         name: String,
+        author: ReplicaId,
         entry_type: EntryType,
         version_vector: VersionVector,
     ) -> Result<(BlobId, Option<BlobId>)> {
