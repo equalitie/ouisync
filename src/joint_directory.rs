@@ -825,7 +825,11 @@ mod tests {
             .unwrap();
 
         // Verify the file now exists in the local branch.
-        let local_content = read_file(&local_root, "cat.jpg").await;
+        let local_content = open_file(&local_root, "cat.jpg")
+            .await
+            .read_to_end()
+            .await
+            .unwrap();
         assert_eq!(local_content, content);
     }
 
@@ -915,8 +919,66 @@ mod tests {
             1
         );
 
-        let local_content = read_file(&local_root, "cat.jpg").await;
+        let local_content = open_file(&local_root, "cat.jpg")
+            .await
+            .read_to_end()
+            .await
+            .unwrap();
         assert_eq!(local_content, content_v1);
+    }
+
+    // TODO: This fails because there is currently a bug in forking where the forked file/directory
+    // is inserted into the local directory using the local branch id as author, while it should be
+    // using the original pre-fork branch id instead.
+    #[ignore]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn merge_concurrent_file() {
+        let branches = setup(2).await;
+
+        let local_root = branches[0].open_or_create_root().await.unwrap();
+        local_root.flush().await.unwrap();
+
+        let remote_root = branches[1].open_or_create_root().await.unwrap();
+
+        create_file(&remote_root, "cat.jpg", b"v0").await;
+
+        let remote_root_on_local = branches[1].open_root(branches[0].clone()).await.unwrap();
+        let mut root =
+            JointDirectory::new(vec![local_root.clone(), remote_root_on_local.clone()]).await;
+        root.merge().await.unwrap();
+
+        // Modify the file by both branches concurrently
+        update_file(&local_root, "cat.jpg", b"v1").await;
+        update_file(&remote_root, "cat.jpg", b"v2").await;
+
+        JointDirectory::new(vec![local_root.clone(), remote_root_on_local])
+            .await
+            .merge()
+            .await
+            .unwrap();
+
+        // The versions are concurrent, so both are present in the local branch.
+        assert_eq!(
+            local_root.read().await.lookup("cat.jpg").unwrap().count(),
+            2
+        );
+
+        assert_eq!(
+            open_file_version(&local_root, "cat.jpg", branches[0].id())
+                .await
+                .read_to_end()
+                .await
+                .unwrap(),
+            b"v1"
+        );
+        assert_eq!(
+            open_file_version(&local_root, "cat.jpg", branches[1].id())
+                .await
+                .read_to_end()
+                .await
+                .unwrap(),
+            b"v2"
+        );
     }
 
     async fn setup(branch_count: usize) -> Vec<Branch> {
@@ -970,10 +1032,6 @@ mod tests {
         file.flush().await.unwrap();
     }
 
-    async fn read_file(parent: &Directory, name: &str) -> Vec<u8> {
-        open_file(parent, name).await.read_to_end().await.unwrap()
-    }
-
     async fn open_file(parent: &Directory, name: &str) -> File {
         parent
             .read()
@@ -981,6 +1039,19 @@ mod tests {
             .lookup(name)
             .unwrap()
             .next()
+            .unwrap()
+            .file()
+            .unwrap()
+            .open()
+            .await
+            .unwrap()
+    }
+
+    async fn open_file_version(parent: &Directory, name: &str, branch_id: &ReplicaId) -> File {
+        parent
+            .read()
+            .await
+            .lookup_version(name, branch_id)
             .unwrap()
             .file()
             .unwrap()
