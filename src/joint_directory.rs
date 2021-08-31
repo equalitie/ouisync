@@ -524,24 +524,10 @@ mod tests {
         let branches = setup(2).await;
 
         let root0 = branches[0].open_or_create_root().await.unwrap();
-        root0
-            .create_file("file0.txt".to_owned())
-            .await
-            .unwrap()
-            .flush()
-            .await
-            .unwrap();
-        root0.flush().await.unwrap();
+        create_file(&root0, "file0.txt", &[]).await;
 
         let root1 = branches[1].open_or_create_root().await.unwrap();
-        root1
-            .create_file("file1.txt".to_owned())
-            .await
-            .unwrap()
-            .flush()
-            .await
-            .unwrap();
-        root1.flush().await.unwrap();
+        create_file(&root1, "file1.txt", &[]).await;
 
         let root = JointDirectory::new(vec![root0, root1]).await;
         let root = root.read().await;
@@ -566,24 +552,10 @@ mod tests {
         let branches = setup(2).await;
 
         let root0 = branches[0].open_or_create_root().await.unwrap();
-        root0
-            .create_file("file.txt".to_owned())
-            .await
-            .unwrap()
-            .flush()
-            .await
-            .unwrap();
-        root0.flush().await.unwrap();
+        create_file(&root0, "file.txt", &[]).await;
 
         let root1 = branches[1].open_or_create_root().await.unwrap();
-        root1
-            .create_file("file.txt".to_owned())
-            .await
-            .unwrap()
-            .flush()
-            .await
-            .unwrap();
-        root1.flush().await.unwrap();
+        create_file(&root1, "file.txt", &[]).await;
 
         let root = JointDirectory::new(vec![root0, root1]).await;
         let root = root.read().await;
@@ -632,9 +604,7 @@ mod tests {
         let branches = setup(2).await;
 
         let root0 = branches[0].open_or_create_root().await.unwrap();
-        let mut file0 = root0.create_file("file.txt".to_owned()).await.unwrap();
-        file0.flush().await.unwrap();
-        root0.flush().await.unwrap();
+        create_file(&root0, "file.txt", &[]).await;
 
         // Open the file with branch 1 as the local branch and then modify it which copies (forks)
         // it into branch 1.
@@ -707,15 +677,12 @@ mod tests {
 
         let root0 = branches[0].open_or_create_root().await.unwrap();
 
-        let mut file0 = root0.create_file("config".to_owned()).await.unwrap();
-        file0.flush().await.unwrap();
-        root0.flush().await.unwrap();
+        create_file(&root0, "config", &[]).await;
 
         let root1 = branches[1].open_or_create_root().await.unwrap();
 
         let dir1 = root1.create_directory("config".to_owned()).await.unwrap();
         dir1.flush().await.unwrap();
-        root1.flush().await.unwrap();
 
         let root = JointDirectory::new(vec![root0, root1]).await;
         let root = root.read().await;
@@ -757,20 +724,11 @@ mod tests {
         let root0 = branches[0].open_or_create_root().await.unwrap();
 
         let dir0 = root0.create_directory("pics".to_owned()).await.unwrap();
-        let mut file0 = dir0.create_file("dog.jpg".to_owned()).await.unwrap();
-
-        file0.flush().await.unwrap();
-        dir0.flush().await.unwrap();
-        root0.flush().await.unwrap();
+        create_file(&dir0, "dog.jpg", &[]).await;
 
         let root1 = branches[1].open_or_create_root().await.unwrap();
-
         let dir1 = root1.create_directory("pics".to_owned()).await.unwrap();
-        let mut file1 = dir1.create_file("cat.jpg".to_owned()).await.unwrap();
-
-        file1.flush().await.unwrap();
-        dir1.flush().await.unwrap();
-        root1.flush().await.unwrap();
+        create_file(&dir1, "cat.jpg", &[]).await;
 
         let root = JointDirectory::new(vec![root0, root1]).await;
         let dir = root.cd("pics").await.unwrap();
@@ -789,11 +747,7 @@ mod tests {
         let root0 = branches[0].open_or_create_root().await.unwrap();
 
         let dir0 = root0.create_directory("pics".to_owned()).await.unwrap();
-        let mut file0 = dir0.create_file("dog.jpg".to_owned()).await.unwrap();
-
-        file0.flush().await.unwrap();
-        dir0.flush().await.unwrap();
-        root0.flush().await.unwrap();
+        create_file(&dir0, "dog.jpg", &[]).await;
 
         let root1 = branches[1].open_or_create_root().await.unwrap();
 
@@ -833,9 +787,7 @@ mod tests {
         let root0 = branches[0].open_or_create_root().await.unwrap();
 
         let dir0 = root0.create_directory("pics".to_owned()).await.unwrap();
-
         dir0.flush().await.unwrap();
-        root0.flush().await.unwrap();
 
         let root = JointDirectory::new(vec![root0]).await;
 
@@ -860,9 +812,7 @@ mod tests {
         let remote_root = branches[1].open_or_create_root().await.unwrap();
 
         // Create a file in the remote root
-        let mut file = remote_root.create_file("cat.jpg".to_owned()).await.unwrap();
-        file.write(content).await.unwrap();
-        file.flush().await.unwrap();
+        create_file(&remote_root, "cat.jpg", content).await;
 
         // Reopen the remote root locally.
         let remote_root_on_local = branches[1].open_root(branches[0].clone()).await.unwrap();
@@ -875,20 +825,7 @@ mod tests {
             .unwrap();
 
         // Verify the file now exists in the local branch.
-        let reader = local_root.read().await;
-        let mut file = reader
-            .lookup("cat.jpg")
-            .unwrap()
-            .next()
-            .unwrap()
-            .file()
-            .unwrap()
-            .open()
-            .await
-            .unwrap();
-
-        let local_content = file.read_to_end().await.unwrap();
-
+        let local_content = read_file(&local_root, "cat.jpg").await;
         assert_eq!(local_content, content);
     }
 
@@ -905,9 +842,7 @@ mod tests {
         let remote_root = branches[1].open_or_create_root().await.unwrap();
 
         // Create a file in the remote root
-        let mut file = remote_root.create_file("cat.jpg".to_owned()).await.unwrap();
-        file.write(content_v0).await.unwrap();
-        file.flush().await.unwrap();
+        create_file(&remote_root, "cat.jpg", content_v0).await;
 
         // Merge to transfer the file to the local branch
         let remote_root_on_local = branches[1].open_root(branches[0].clone()).await.unwrap();
@@ -916,21 +851,7 @@ mod tests {
         root.merge().await.unwrap();
 
         // Modify the file by the remote branch
-        let mut file = remote_root
-            .read()
-            .await
-            .lookup("cat.jpg")
-            .unwrap()
-            .next()
-            .unwrap()
-            .file()
-            .unwrap()
-            .open()
-            .await
-            .unwrap();
-        file.truncate(0).await.unwrap();
-        file.write(content_v1).await.unwrap();
-        file.flush().await.unwrap();
+        update_file(&remote_root, "cat.jpg", content_v1).await;
 
         JointDirectory::new(vec![local_root.clone(), remote_root_on_local])
             .await
@@ -972,9 +893,7 @@ mod tests {
 
         let remote_root = branches[1].open_or_create_root().await.unwrap();
 
-        let mut file = remote_root.create_file("cat.jpg".to_owned()).await.unwrap();
-        file.write(content_v0).await.unwrap();
-        file.flush().await.unwrap();
+        create_file(&remote_root, "cat.jpg", content_v0).await;
 
         let remote_root_on_local = branches[1].open_root(branches[0].clone()).await.unwrap();
         let mut root =
@@ -982,21 +901,7 @@ mod tests {
         root.merge().await.unwrap();
 
         // Modify the file by the local branch
-        let mut file = local_root
-            .read()
-            .await
-            .lookup("cat.jpg")
-            .unwrap()
-            .next()
-            .unwrap()
-            .file()
-            .unwrap()
-            .open()
-            .await
-            .unwrap();
-        file.truncate(0).await.unwrap();
-        file.write(content_v1).await.unwrap();
-        file.flush().await.unwrap();
+        update_file(&local_root, "cat.jpg", content_v1).await;
 
         JointDirectory::new(vec![local_root.clone(), remote_root_on_local])
             .await
@@ -1004,23 +909,13 @@ mod tests {
             .await
             .unwrap();
 
-        let reader = local_root.read().await;
-
         // The local version is newer, so there is only one version in the local branch.
-        assert_eq!(reader.lookup("cat.jpg").unwrap().count(), 1);
+        assert_eq!(
+            local_root.read().await.lookup("cat.jpg").unwrap().count(),
+            1
+        );
 
-        let mut file = reader
-            .lookup("cat.jpg")
-            .unwrap()
-            .next()
-            .unwrap()
-            .file()
-            .unwrap()
-            .open()
-            .await
-            .unwrap();
-        let local_content = file.read_to_end().await.unwrap();
-
+        let local_content = read_file(&local_root, "cat.jpg").await;
         assert_eq!(local_content, content_v1);
     }
 
@@ -1055,5 +950,42 @@ mod tests {
         }
 
         assert_eq!(prev_i, count);
+    }
+
+    async fn create_file(parent: &Directory, name: &str, content: &[u8]) {
+        let mut file = parent.create_file(name.to_owned()).await.unwrap();
+
+        if !content.is_empty() {
+            file.write(content).await.unwrap();
+        }
+
+        file.flush().await.unwrap();
+    }
+
+    async fn update_file(parent: &Directory, name: &str, content: &[u8]) {
+        let mut file = open_file(parent, name).await;
+
+        file.truncate(0).await.unwrap();
+        file.write(content).await.unwrap();
+        file.flush().await.unwrap();
+    }
+
+    async fn read_file(parent: &Directory, name: &str) -> Vec<u8> {
+        open_file(parent, name).await.read_to_end().await.unwrap()
+    }
+
+    async fn open_file(parent: &Directory, name: &str) -> File {
+        parent
+            .read()
+            .await
+            .lookup(name)
+            .unwrap()
+            .next()
+            .unwrap()
+            .file()
+            .unwrap()
+            .open()
+            .await
+            .unwrap()
     }
 }
