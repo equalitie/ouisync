@@ -10,40 +10,28 @@ use crate::{
     locator::Locator,
     store,
 };
-use std::{convert::TryInto, io::SeekFrom, mem, sync::Arc};
+use std::{convert::TryInto, io::SeekFrom, sync::Arc};
 use tokio::sync::Mutex;
 
 pub(crate) struct Operations<'a> {
-    branch: &'a mut Branch,
-    head_locator: &'a mut Locator,
-    nonce_sequence: &'a mut NonceSequence,
-    len: &'a mut u64,
-    len_dirty: &'a mut bool,
+    core: &'a mut Core,
     current_block: &'a mut OpenBlock,
 }
 
 impl<'a> Operations<'a> {
     pub fn new(
-        branch: &'a mut Branch,
-        head_locator: &'a mut Locator,
-        nonce_sequence: &'a mut NonceSequence,
-        len: &'a mut u64,
-        len_dirty: &'a mut bool,
+        core: &'a mut Core,
         current_block: &'a mut OpenBlock,
     ) -> Self {
         Self {
-            branch,
-            head_locator,
-            nonce_sequence,
-            len,
-            len_dirty,
+            core,
             current_block,
         }
     }
 
     /// Was this blob modified and not flushed yet?
     pub fn is_dirty(&self) -> bool {
-        self.current_block.dirty || *self.len_dirty
+        self.current_block.dirty || self.core.len_dirty
     }
 
     /// Reads data from this blob into `buffer`, advancing the internal cursor. Returns the
@@ -53,7 +41,7 @@ impl<'a> Operations<'a> {
         let mut total_len = 0;
 
         loop {
-            let remaining = (*self.len - self.seek_position())
+            let remaining = (self.core.len - self.seek_position())
                 .try_into()
                 .unwrap_or(usize::MAX);
             let len = buffer.len().min(remaining);
@@ -80,9 +68,9 @@ impl<'a> Operations<'a> {
 
             let (id, content) = read_block(
                 &mut tx,
-                self.branch.data(),
+                self.core.branch.data(),
                 self.cryptor(),
-                self.nonce_sequence,
+                &self.core.nonce_sequence,
                 &locator,
             )
             .await?;
@@ -101,7 +89,7 @@ impl<'a> Operations<'a> {
     pub async fn read_to_end(&mut self) -> Result<Vec<u8>> {
         let mut buffer = vec![
             0;
-            (*self.len - self.seek_position())
+            (self.core.len - self.seek_position())
                 .try_into()
                 .unwrap_or(usize::MAX)
         ];
@@ -129,9 +117,9 @@ impl<'a> Operations<'a> {
 
             buffer = &buffer[len..];
 
-            if self.seek_position() > *self.len {
-                *self.len = self.seek_position();
-                *self.len_dirty = true;
+            if self.seek_position() > self.core.len {
+                self.core.len = self.seek_position();
+                self.core.len_dirty = true;
             }
 
             if buffer.is_empty() {
@@ -142,9 +130,9 @@ impl<'a> Operations<'a> {
             let (id, content) = if locator.number() < self.block_count() {
                 read_block(
                     &mut tx,
-                    self.branch.data(),
+                    self.core.branch.data(),
                     self.cryptor(),
-                    self.nonce_sequence,
+                    &self.core.nonce_sequence,
                     &locator,
                 )
                 .await?
@@ -169,17 +157,17 @@ impl<'a> Operations<'a> {
     /// Returns the new seek position from the start of the blob.
     pub async fn seek(&mut self, pos: SeekFrom) -> Result<u64> {
         let offset = match pos {
-            SeekFrom::Start(n) => n.min(*self.len),
+            SeekFrom::Start(n) => n.min(self.core.len),
             SeekFrom::End(n) => {
                 if n >= 0 {
-                    *self.len
+                    self.core.len
                 } else {
-                    self.len.saturating_sub((-n) as u64)
+                    self.core.len.saturating_sub((-n) as u64)
                 }
             }
             SeekFrom::Current(n) => {
                 if n >= 0 {
-                    self.seek_position().saturating_add(n as u64).min(*self.len)
+                    self.seek_position().saturating_add(n as u64).min(self.core.len)
                 } else {
                     self.seek_position().saturating_sub((-n) as u64)
                 }
@@ -196,9 +184,9 @@ impl<'a> Operations<'a> {
             let mut tx = self.db_pool().begin().await?;
             let (id, content) = read_block(
                 &mut tx,
-                self.branch.data(),
+                self.core.branch.data(),
                 self.cryptor(),
-                self.nonce_sequence,
+                &self.core.nonce_sequence,
                 &locator,
             )
             .await?;
@@ -216,28 +204,28 @@ impl<'a> Operations<'a> {
     pub async fn truncate(&mut self, len: u64) -> Result<()> {
         // TODO: reuse the truncated blocks on subsequent writes if the content is identical
 
-        if len == *self.len {
+        if len == self.core.len {
             return Ok(());
         }
 
-        if len > *self.len {
+        if len > self.core.len {
             // TODO: consider supporting this
             return Err(Error::OperationNotSupported);
         }
 
         let old_block_count = self.block_count();
 
-        *self.len = len;
-        *self.len_dirty = true;
+        self.core.len = len;
+        self.core.len_dirty = true;
 
         let new_block_count = self.block_count();
 
-        if self.seek_position() > *self.len {
+        if self.seek_position() > self.core.len {
             self.seek(SeekFrom::End(0)).await?;
         }
 
         self.remove_blocks(
-            self.head_locator
+            self.core.head_locator
                 .sequence()
                 .skip(new_block_count as usize)
                 .take((old_block_count - new_block_count) as usize),
@@ -265,14 +253,15 @@ impl<'a> Operations<'a> {
     /// Removes this blob.
     pub async fn remove(&mut self) -> Result<()> {
         self.remove_blocks(
-            self.head_locator
+            self.core.head_locator
                 .sequence()
                 .take(self.block_count() as usize),
         )
         .await?;
-        *self.current_block = OpenBlock::new_head(*self.head_locator, self.nonce_sequence);
-        *self.len = 0;
-        *self.len_dirty = true;
+
+        *self.current_block = OpenBlock::new_head(self.core.head_locator, &self.core.nonce_sequence);
+        self.core.len = 0;
+        self.core.len_dirty = true;
 
         Ok(())
     }
@@ -281,7 +270,7 @@ impl<'a> Operations<'a> {
     /// specified destination branch and locator.
     pub async fn fork(&mut self, dst_branch: Branch, dst_head_locator: Locator) -> Result<Blob> {
         // This should gracefuly handled in the Blob from where this function is invoked.
-        assert!(self.branch.id() != dst_branch.id() || self.head_locator != &dst_head_locator);
+        assert!(self.core.branch.id() != dst_branch.id() || self.core.head_locator != dst_head_locator);
 
         let mut tx = self.db_pool().begin().await?;
 
@@ -290,6 +279,7 @@ impl<'a> Operations<'a> {
             let encoded_dst_locator = dst_locator.encode(self.cryptor());
 
             let block_id = self
+                .core
                 .branch
                 .data()
                 .get(&mut tx, &encoded_src_locator)
@@ -306,9 +296,9 @@ impl<'a> Operations<'a> {
         let new_core = Core::new(
             dst_branch.clone(),
             dst_head_locator,
-            self.nonce_sequence.clone(),
-            *self.len,
-            *self.len_dirty,
+            self.core.nonce_sequence.clone(),
+            self.core.len,
+            self.core.len_dirty,
         );
 
         let current_block = OpenBlock {
@@ -328,15 +318,15 @@ impl<'a> Operations<'a> {
     }
 
     pub fn db_pool(&self) -> &db::Pool {
-        self.branch.db_pool()
+        self.core.branch.db_pool()
     }
 
     pub fn cryptor(&self) -> &Cryptor {
-        self.branch.cryptor()
+        self.core.branch.cryptor()
     }
 
     pub fn locators(&self) -> impl Iterator<Item = Locator> {
-        self.head_locator
+        self.core.head_locator
             .sequence()
             .take(self.block_count() as usize)
     }
@@ -359,7 +349,7 @@ impl<'a> Operations<'a> {
         }
 
         *self.current_block = OpenBlock {
-            head_locator: *self.head_locator,
+            head_locator: self.core.head_locator,
             locator,
             id,
             content,
@@ -379,9 +369,9 @@ impl<'a> Operations<'a> {
 
         write_block(
             tx,
-            self.branch.data(),
+            self.core.branch.data(),
             self.cryptor(),
-            self.nonce_sequence,
+            &self.core.nonce_sequence,
             &self.current_block.locator,
             &self.current_block.id,
             self.current_block.content.buffer.clone(),
@@ -395,36 +385,36 @@ impl<'a> Operations<'a> {
 
     // Write the current blob length into the blob header in the head block.
     async fn write_len(&mut self, tx: &mut db::Transaction<'_>) -> Result<()> {
-        if !*self.len_dirty {
+        if !self.core.len_dirty {
             return Ok(());
         }
 
         if self.current_block.locator.number() == 0 {
             let old_pos = self.current_block.content.pos;
-            self.current_block.content.pos = self.nonce_sequence.prefix().len();
-            self.current_block.content.write_u64(*self.len);
+            self.current_block.content.pos = self.core.nonce_sequence.prefix().len();
+            self.current_block.content.write_u64(self.core.len);
             self.current_block.content.pos = old_pos;
             self.current_block.dirty = true;
         } else {
             let locator = self.locator_at(0);
             let (_, buffer) = read_block(
                 tx,
-                self.branch.data(),
+                self.core.branch.data(),
                 self.cryptor(),
-                self.nonce_sequence,
+                &self.core.nonce_sequence,
                 &locator,
             )
             .await?;
 
             let mut cursor = Cursor::new(buffer);
-            cursor.pos = self.nonce_sequence.prefix().len();
-            cursor.write_u64(*self.len);
+            cursor.pos = self.core.nonce_sequence.prefix().len();
+            cursor.write_u64(self.core.len);
 
             write_block(
                 tx,
-                self.branch.data(),
+                self.core.branch.data(),
                 self.cryptor(),
-                self.nonce_sequence,
+                &self.core.nonce_sequence,
                 &locator,
                 &rand::random(),
                 cursor.buffer,
@@ -432,7 +422,7 @@ impl<'a> Operations<'a> {
             .await?;
         }
 
-        *self.len_dirty = false;
+        self.core.len_dirty = false;
 
         Ok(())
     }
@@ -445,6 +435,7 @@ impl<'a> Operations<'a> {
 
         for locator in locators {
             let block_id = self
+                .core
                 .branch
                 .data()
                 .remove(&mut tx, &locator.encode(self.cryptor()))
@@ -460,27 +451,27 @@ impl<'a> Operations<'a> {
     // Total number of blocks in this blob including the possibly partially filled final block.
     fn block_count(&self) -> u32 {
         // https://stackoverflow.com/questions/2745074/fast-ceiling-of-an-integer-division-in-c-c
-        (1 + (*self.len + self.header_size() as u64 - 1) / BLOCK_SIZE as u64)
+        (1 + (self.core.len + self.header_size() as u64 - 1) / BLOCK_SIZE as u64)
             .try_into()
             .unwrap_or(u32::MAX)
     }
 
     // Returns the current seek position from the start of the blob.
-    fn seek_position(&self) -> u64 {
+    pub fn seek_position(&mut self) -> u64 {
         self.current_block.locator.number() as u64 * BLOCK_SIZE as u64
             + self.current_block.content.pos as u64
             - self.header_size() as u64
     }
 
     fn header_size(&self) -> usize {
-        self.nonce_sequence.prefix().len() + mem::size_of_val(&self.len)
+        self.core.header_size()
     }
 
     fn locator_at(&self, number: u32) -> Locator {
         if number == 0 {
-            *self.head_locator
+            self.core.head_locator
         } else {
-            Locator::Trunk(self.head_locator.hash(), number)
+            Locator::Trunk(self.core.head_locator.hash(), number)
         }
     }
 }
