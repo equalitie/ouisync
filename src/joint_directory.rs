@@ -149,7 +149,15 @@ impl JointDirectory {
             }
         }
 
-        future::try_join_all(files_to_fork.iter_mut().map(|file| file.fork())).await?;
+        // `EntryExists` error means the file already exists locally at the same or greater version
+        // than the remote file which is OK and expected, so we ignore it.
+        future::try_join_all(files_to_fork.iter_mut().map(|file| async move {
+            match file.fork().await {
+                Ok(()) | Err(Error::EntryExists) => Ok(()),
+                Err(error) => Err(error),
+            }
+        }))
+        .await?;
 
         self.remove_remote_versions().await;
         self.flush().await?;
@@ -160,11 +168,12 @@ impl JointDirectory {
     // Ensure this joint directory contains a local version.
     async fn fork(&mut self) -> Result<()> {
         if self.local_branch_id().await.is_some() {
-            // Already has local version
+            // TODO: we should still proceed with the fork, to update the version vector.
             return Ok(());
         }
 
         // Grab any version and fork it to create the local one.
+        // TODO: fork all versions, not just one, to properly update the version vector.
         let local = if let Some(remote) = self.versions.values().next() {
             let local = remote.clone();
             local.fork().await?;
@@ -970,6 +979,97 @@ mod tests {
                 .unwrap(),
             b"v2"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn local_merge_is_idempotent() {
+        let branches = setup(2).await;
+
+        let local_root = branches[0].open_or_create_root().await.unwrap();
+        local_root.flush().await.unwrap();
+
+        let vv0 = branches[0].data().versions().await.clone();
+
+        let remote_root = branches[1].open_or_create_root().await.unwrap();
+        let remote_root_on_local = branches[1].open_root(branches[0].clone()).await.unwrap();
+
+        // Merge after a remote modification - this causes local modification.
+        create_file(&remote_root, "cat.jpg", b"v0").await;
+        JointDirectory::new(vec![local_root.clone(), remote_root_on_local.clone()])
+            .await
+            .merge()
+            .await
+            .unwrap();
+
+        let vv1 = branches[0].data().versions().await.clone();
+        assert!(vv1 > vv0);
+
+        // Merge again. This time there is no local modification because there was no remote
+        // modification either.
+        JointDirectory::new(vec![local_root.clone(), remote_root_on_local.clone()])
+            .await
+            .merge()
+            .await
+            .unwrap();
+
+        let vv2 = branches[0].data().versions().await.clone();
+        assert_eq!(vv2, vv1);
+
+        // Perform another remote modification and merge again - this causes local modification
+        // again.
+        update_file(&remote_root, "cat.jpg", b"v1").await;
+        JointDirectory::new(vec![local_root.clone(), remote_root_on_local.clone()])
+            .await
+            .merge()
+            .await
+            .unwrap();
+
+        let vv3 = branches[0].data().versions().await.clone();
+        assert!(vv3 > vv2);
+
+        // Another idempotent merge which causes no local modification.
+        JointDirectory::new(vec![local_root, remote_root_on_local])
+            .await
+            .merge()
+            .await
+            .unwrap();
+
+        let vv4 = branches[0].data().versions().await.clone();
+        assert_eq!(vv4, vv3);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn remote_merge_is_idempotent() {
+        let branches = setup(2).await;
+
+        let local_root = branches[0].open_or_create_root().await.unwrap();
+        local_root.flush().await.unwrap();
+        let local_root_on_remote = branches[0].open_root(branches[1].clone()).await.unwrap();
+
+        let remote_root = branches[1].open_or_create_root().await.unwrap();
+        remote_root.flush().await.unwrap();
+        let remote_root_on_local = branches[1].open_root(branches[0].clone()).await.unwrap();
+
+        create_file(&remote_root, "cat.jpg", b"v0").await;
+
+        // First merge remote into local
+        JointDirectory::new(vec![local_root, remote_root_on_local])
+            .await
+            .merge()
+            .await
+            .unwrap();
+
+        let vv0 = branches[0].data().versions().await.clone();
+
+        // Then merge local back into remote. This has no effect.
+        JointDirectory::new(vec![remote_root, local_root_on_remote])
+            .await
+            .merge()
+            .await
+            .unwrap();
+
+        let vv1 = branches[0].data().versions().await.clone();
+        assert_eq!(vv1, vv0);
     }
 
     async fn setup(branch_count: usize) -> Vec<Branch> {
