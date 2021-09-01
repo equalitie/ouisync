@@ -47,6 +47,10 @@ impl Index {
         let branches = Branches::load(&pool, this_replica_id).await?;
         let (branch_created_tx, branch_created_rx) = watch::channel(());
 
+        // This causes any subsequent subscriptions to receive one `branch_created` event
+        // immediatelly which is needed to populate the subscription with the existing branches.
+        branch_created_tx.send(()).unwrap_or(());
+
         Ok(Self {
             pool,
             this_replica_id,

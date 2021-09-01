@@ -166,7 +166,10 @@ impl Directory {
     }
 
     // Forks this directory into the local branch.
-    #[async_recursion] // TODO: consider rewriting this to avoid recursion
+    // TODO: consider changing this to modify self instead of returning the forked dir, to be
+    //       consistent with `File::fork`.
+    // TODO: consider rewriting this to avoid recursion
+    #[async_recursion]
     pub async fn fork(&self) -> Result<Directory> {
         if self.local_branch.id() == self.read().await.branch().id() {
             return Ok(self.clone());

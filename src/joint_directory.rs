@@ -176,9 +176,7 @@ impl JointDirectory {
         // Grab any version and fork it to create the local one.
         // TODO: fork all versions, not just one, to properly update the version vector.
         let local = if let Some(remote) = self.versions.values().next() {
-            let local = remote.clone();
-            local.fork().await?;
-            local
+            remote.clone().fork().await?
         } else {
             return Ok(());
         };
@@ -1118,6 +1116,30 @@ mod tests {
 
         let vv1 = branches[0].data().versions().await.clone();
         assert_eq!(vv1, vv0);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn merge_remote_only() {
+        let branches = setup(2).await;
+
+        let remote_root = branches[1].open_or_create_root().await.unwrap();
+        let remote_root_on_local = branches[1].open_root(branches[0].clone()).await.unwrap();
+
+        create_file(&remote_root, "cat.jpg", b"v0").await;
+
+        // When passing only the remote dir to the joint directory the merge still works.
+        JointDirectory::new(iter::once(remote_root_on_local))
+            .await
+            .merge()
+            .await
+            .unwrap();
+
+        let local_root = branches[0].open_root(branches[0].clone()).await.unwrap();
+        local_root
+            .read()
+            .await
+            .lookup_version("cat.jpg", branches[1].id())
+            .unwrap();
     }
 
     async fn setup(branch_count: usize) -> Vec<Branch> {

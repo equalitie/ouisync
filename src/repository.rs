@@ -313,11 +313,19 @@ impl Merger {
         let local = self.shared.local_branch().await;
 
         let handle = ScopedJoinHandle(task::spawn(async move {
+            if *local.data().versions().await > *remote.data().versions().await {
+                log::debug!(
+                    "merge with branch {:?} suppressed - local branch already up to date",
+                    remote_id
+                );
+                return remote_id;
+            }
+
             log::debug!("merge with branch {:?} started", remote_id);
 
             match merge_branches(local, remote).await {
                 Ok(()) => {
-                    log::info!("merge with branch {:?} succeeded", remote_id)
+                    log::info!("merge with branch {:?} complete", remote_id)
                 }
                 Err(error) => {
                     // `EntryNotFound` most likely means the remote snapshot is not fully
@@ -356,11 +364,6 @@ enum MergeState {
 }
 
 async fn merge_branches(local: Branch, remote: Branch) -> Result<()> {
-    if *local.data().versions().await > *remote.data().versions().await {
-        // Local newer than remote, nothing to merge
-        return Ok(());
-    }
-
     let remote_root = remote.open_root(local.clone()).await?;
     JointDirectory::new(iter::once(remote_root))
         .await
