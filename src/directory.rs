@@ -582,6 +582,10 @@ impl<'a> EntryRef<'a> {
         matches!(self, Self::Directory(_))
     }
 
+    pub fn is_local(&self) -> bool {
+        self.inner().parent_inner.blob.branch().id() == self.inner().parent_outer.local_branch.id()
+    }
+
     fn inner(&self) -> &RefInner {
         match self {
             Self::File(r) => &r.inner,

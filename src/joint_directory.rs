@@ -12,6 +12,7 @@ use camino::{Utf8Component, Utf8Path};
 use futures_util::future;
 use std::{
     borrow::Cow,
+    cmp::Ordering,
     collections::{btree_map::Entry, BTreeMap, VecDeque},
     fmt, iter, mem,
 };
@@ -436,9 +437,9 @@ struct Merge<'a> {
     // TODO: The most common case for files shall be that there will be only one version of it.
     // Thus it might make sense to have one place holder for the first file to avoid Vec allocation
     // when not needed.
-    files: Vec<FileRef<'a>>,
-    next_file: usize,
+    files: VecDeque<FileRef<'a>>,
     directories: Vec<DirectoryRef<'a>>,
+    needs_disambiguation: bool,
 }
 
 impl<'a> Merge<'a> {
@@ -448,51 +449,68 @@ impl<'a> Merge<'a> {
     where
         I: Iterator<Item = EntryRef<'a>>,
     {
-        let mut files = vec![];
+        let mut files = VecDeque::new();
         let mut directories = vec![];
 
-        let entries = Self::keep_concurrent(entries.collect());
+        let entries = Self::keep_concurrent(entries);
 
         for entry in entries {
             match entry {
-                EntryRef::File(file) => files.push(file),
+                EntryRef::File(file) => files.push_back(file),
                 EntryRef::Directory(dir) => directories.push(dir),
             }
         }
 
+        let needs_disambiguation = files.len() > 1;
+
         Self {
             files,
-            next_file: 0,
             directories,
+            needs_disambiguation,
         }
     }
 
-    fn keep_concurrent(entries: Vec<EntryRef<'a>>) -> Vec<EntryRef<'a>> {
-        // TODO: This is O(n^3) where n is number of branches (bubble sort * VV comparison).  Can
-        // we do better?
-        let len = entries.len();
+    // Returns the entries with the maximal version vectors.
+    fn keep_concurrent(entries: impl Iterator<Item = EntryRef<'a>>) -> Vec<EntryRef<'a>> {
+        let mut max: Vec<EntryRef> = Vec::new();
 
-        let is_before_any_other = |candidate: usize| -> bool {
-            for i in 0..len {
-                if i != candidate
-                    && entries[candidate].version_vector() < entries[i].version_vector()
-                {
-                    return true;
+        for new in entries {
+            let mut insert = true;
+            let mut remove = None;
+
+            for (index, old) in max.iter().enumerate() {
+                match (
+                    old.version_vector().partial_cmp(new.version_vector()),
+                    new.is_local(),
+                ) {
+                    // If both have identical versions, prefer the local one
+                    (Some(Ordering::Less), _) | (Some(Ordering::Equal), true) => {
+                        insert = true;
+                        remove = Some(index);
+                        break;
+                    }
+                    (Some(Ordering::Greater), _) | (Some(Ordering::Equal), false) => {
+                        insert = false;
+                        break;
+                    }
+                    (None, _) => {
+                        insert = true;
+                    }
                 }
             }
 
-            false
-        };
+            // Note: using `Vec::remove` to maintain the original order. Is there a more efficient
+            // way?
+            if let Some(index) = remove {
+                max.remove(index);
+            }
 
-        let mut retval = vec![];
-
-        for (i, entry) in entries.iter().enumerate() {
-            if !is_before_any_other(i) {
-                retval.push(*entry);
+            if insert {
+                max.push(new)
             }
         }
 
-        retval
+        max
     }
 }
 
@@ -505,17 +523,12 @@ impl<'a> Iterator for Merge<'a> {
                 .map(JointEntryRef::Directory);
         }
 
-        if self.next_file < self.files.len() {
-            let i = self.next_file;
-            self.next_file += 1;
+        let file = self.files.pop_front()?;
 
-            return Some(JointEntryRef::File(JointFileRef {
-                file: self.files[i],
-                needs_disambiguation: self.files.len() > 1,
-            }));
-        }
-
-        None
+        Some(JointEntryRef::File(JointFileRef {
+            file,
+            needs_disambiguation: self.needs_disambiguation,
+        }))
     }
 }
 
@@ -715,6 +728,41 @@ mod tests {
         let entry = root.lookup_unique(&name).unwrap();
         assert_eq!(entry.entry_type(), EntryType::File);
         assert_eq!(entry.file().unwrap().author(), branches[0].id());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn conflict_identical_versions() {
+        let branches = setup(2).await;
+
+        // Create a file by one branch.
+        let root0 = branches[0].open_or_create_root().await.unwrap();
+        create_file(&root0, "file.txt", b"one").await;
+
+        // Fork it into the other branch, creating an identical version of it.
+        let root0_by_1 = branches[0].open_root(branches[1].clone()).await.unwrap();
+        let mut file1 = open_file_version(&root0_by_1, "file.txt", branches[0].id()).await;
+        file1.fork().await.unwrap();
+
+        let root1 = branches[1].open_root(branches[1].clone()).await.unwrap();
+
+        // Create joint directory using branch 1 as the local branch.
+        let root = JointDirectory::new(vec![root0_by_1, root1]).await;
+        let root = root.read().await;
+
+        // The file appears among the entries only once...
+        assert_eq!(root.entries().count(), 1);
+
+        // ...and it is the local version.
+        let file = root
+            .entries()
+            .next()
+            .unwrap()
+            .file()
+            .unwrap()
+            .open()
+            .await
+            .unwrap();
+        assert_eq!(file.branch().id(), branches[1].id());
     }
 
     //// TODO: test conflict_forked_directories
