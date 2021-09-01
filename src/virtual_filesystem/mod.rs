@@ -856,7 +856,9 @@ impl Inner {
         self.repository.this_replica_id()
     }
 
-    async fn debug_print(&self, print: &DebugPrinter) {
+    // For debugging, use when needed
+    #[allow(dead_code)]
+    async fn debug_print(&self, print: DebugPrinter) {
         print.display(&"VirtualFilesystem::Inner");
         self.entries.debug_print(print.indent()).await;
         self.repository.debug_print(print.indent()).await;

@@ -42,6 +42,8 @@ impl EntryMap {
             .ok_or(Error::EntryNotFound)
     }
 
+    // For debugging, use when needed
+    #[allow(dead_code)]
     pub async fn debug_print(&self, print: DebugPrinter) {
         print.display(&"EntryMap");
         let print = print.indent();
