@@ -6,11 +6,7 @@ use crate::{
     blob_id::BlobId, branch::Branch, crypto::NonceSequence, error::Result, locator::Locator,
 };
 
-use std::{
-    fmt,
-    mem,
-    sync::Arc,
-};
+use std::{fmt, mem, sync::Arc};
 
 use tokio::sync::Mutex;
 
@@ -169,10 +165,7 @@ impl Core {
     }
 
     pub(crate) fn operations<'a>(&'a mut self, current_block: &'a mut OpenBlock) -> Operations<'a> {
-        Operations::new(
-            self,
-            current_block,
-        )
+        Operations::new(self, current_block)
     }
 
     pub(crate) fn header_size(&self) -> usize {

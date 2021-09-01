@@ -19,10 +19,7 @@ pub(crate) struct Operations<'a> {
 }
 
 impl<'a> Operations<'a> {
-    pub fn new(
-        core: &'a mut Core,
-        current_block: &'a mut OpenBlock,
-    ) -> Self {
+    pub fn new(core: &'a mut Core, current_block: &'a mut OpenBlock) -> Self {
         Self {
             core,
             current_block,
@@ -167,7 +164,9 @@ impl<'a> Operations<'a> {
             }
             SeekFrom::Current(n) => {
                 if n >= 0 {
-                    self.seek_position().saturating_add(n as u64).min(self.core.len)
+                    self.seek_position()
+                        .saturating_add(n as u64)
+                        .min(self.core.len)
                 } else {
                     self.seek_position().saturating_sub((-n) as u64)
                 }
@@ -225,7 +224,8 @@ impl<'a> Operations<'a> {
         }
 
         self.remove_blocks(
-            self.core.head_locator
+            self.core
+                .head_locator
                 .sequence()
                 .skip(new_block_count as usize)
                 .take((old_block_count - new_block_count) as usize),
@@ -253,13 +253,15 @@ impl<'a> Operations<'a> {
     /// Removes this blob.
     pub async fn remove(&mut self) -> Result<()> {
         self.remove_blocks(
-            self.core.head_locator
+            self.core
+                .head_locator
                 .sequence()
                 .take(self.block_count() as usize),
         )
         .await?;
 
-        *self.current_block = OpenBlock::new_head(self.core.head_locator, &self.core.nonce_sequence);
+        *self.current_block =
+            OpenBlock::new_head(self.core.head_locator, &self.core.nonce_sequence);
         self.core.len = 0;
         self.core.len_dirty = true;
 
@@ -270,7 +272,9 @@ impl<'a> Operations<'a> {
     /// specified destination branch and locator.
     pub async fn fork(&mut self, dst_branch: Branch, dst_head_locator: Locator) -> Result<Blob> {
         // This should gracefuly handled in the Blob from where this function is invoked.
-        assert!(self.core.branch.id() != dst_branch.id() || self.core.head_locator != dst_head_locator);
+        assert!(
+            self.core.branch.id() != dst_branch.id() || self.core.head_locator != dst_head_locator
+        );
 
         let mut tx = self.db_pool().begin().await?;
 
@@ -326,7 +330,8 @@ impl<'a> Operations<'a> {
     }
 
     pub fn locators(&self) -> impl Iterator<Item = Locator> {
-        self.core.head_locator
+        self.core
+            .head_locator
             .sequence()
             .take(self.block_count() as usize)
     }
