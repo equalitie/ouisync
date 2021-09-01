@@ -142,7 +142,7 @@ impl File {
             .directory
             .insert_entry(
                 self.parent.entry_name.clone(),
-                *self.blob.branch().id(),
+                self.parent.entry_author,
                 EntryType::File,
                 old_vv,
             )
