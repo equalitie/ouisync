@@ -14,6 +14,7 @@ use crate::{
 };
 use camino::Utf8Path;
 use futures_util::{future, stream::FuturesUnordered, StreamExt};
+use log::Level;
 use std::{collections::HashMap, iter, sync::Arc};
 use tokio::{select, sync::Mutex, task};
 
@@ -319,7 +320,19 @@ impl Merger {
                     log::info!("merge with branch {:?} succeeded", remote_id)
                 }
                 Err(error) => {
-                    log::error!(
+                    // `EntryNotFound` most likely means the remote snapshot is not fully
+                    // downloaded yet and `BlockNotFound` means that a block is not downloaded yet.
+                    // Both error are harmless because the merge will be attempted again on the
+                    // next change notification. We reduce the log severity for them to avoid log
+                    // spam.
+                    let level = if matches!(error, Error::EntryNotFound | Error::BlockNotFound(_)) {
+                        Level::Trace
+                    } else {
+                        Level::Error
+                    };
+
+                    log::log!(
+                        level,
                         "merge with branch {:?} failed: {}",
                         remote_id,
                         error.verbose()
