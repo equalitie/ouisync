@@ -922,10 +922,6 @@ mod tests {
         assert_eq!(local_content, content_v1);
     }
 
-    // TODO: This fails because there is currently a bug in forking where the forked file/directory
-    // is inserted into the local directory using the local branch id as author, while it should be
-    // using the original pre-fork branch id instead.
-    #[ignore]
     #[tokio::test(flavor = "multi_thread")]
     async fn merge_concurrent_file() {
         let branches = setup(2).await;
