@@ -195,8 +195,8 @@ impl Repository {
             } else {
                 ""
             };
-            print.display(&format!("Branch {:?}{}", replica_id, local));
-            print.display(&"/");
+            print.display(&format_args!("Branch {:?}{}", replica_id, local));
+            print.display(&format_args!("/, {:?}", branch.data().versions().await));
             branch.debug_print(print.indent()).await;
         }
     }
