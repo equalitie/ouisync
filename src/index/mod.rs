@@ -256,7 +256,7 @@ impl Index {
     }
 
     /// Update the root node of the remote branch.
-    async fn update_remote_branch(&self, replica_id: ReplicaId, node: RootNode) {
+    pub(crate) async fn update_remote_branch(&self, replica_id: ReplicaId, node: RootNode) {
         let mut branches = self.shared.branches.write().await;
         let branches = &mut *branches;
 

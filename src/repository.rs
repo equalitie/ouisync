@@ -92,7 +92,7 @@ impl Repository {
     }
 
     /// Creates a new file at the given path.
-    pub async fn create_file<P: AsRef<Utf8Path>>(&self, path: &P) -> Result<File> {
+    pub async fn create_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<File> {
         self.local_branch()
             .await
             .ensure_file_exists(path.as_ref())
@@ -373,7 +373,7 @@ async fn merge_branches(local: Branch, remote: Branch) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db;
+    use crate::{db, index::RootNode};
 
     #[tokio::test(flavor = "multi_thread")]
     async fn root_directory_always_exists() {
@@ -383,5 +383,63 @@ mod tests {
         let repo = Repository::new(index, Cryptor::Null);
 
         let _ = repo.open_directory("/").await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn merge() {
+        let pool = db::init(db::Store::Memory).await.unwrap();
+        let local_id = rand::random();
+
+        let index = Index::load(pool.clone(), local_id).await.unwrap();
+
+        // Add another branch to the index. Eventually there might be a more high-level API for
+        // this but for now we have to resort to this.
+        let remote_id = rand::random();
+        let remote_node = RootNode::load_latest_or_create(&pool, &remote_id)
+            .await
+            .unwrap();
+        index.update_remote_branch(remote_id, remote_node).await;
+
+        let repo = Repository::new(index, Cryptor::Null);
+        let remote_branch = repo.branch(&remote_id).await.unwrap();
+        let remote_root = remote_branch.open_or_create_root().await.unwrap();
+
+        let local_branch = repo.local_branch().await;
+        let local_root = local_branch.open_or_create_root().await.unwrap();
+
+        let mut file = remote_root
+            .create_file("test.txt".to_owned())
+            .await
+            .unwrap();
+        file.write(b"hello").await.unwrap();
+        file.flush().await.unwrap();
+
+        let mut rx = local_branch.data().subscribe();
+
+        loop {
+            match local_root
+                .read()
+                .await
+                .lookup_version("test.txt", &remote_id)
+            {
+                Ok(entry) => {
+                    let content = entry
+                        .file()
+                        .unwrap()
+                        .open()
+                        .await
+                        .unwrap()
+                        .read_to_end()
+                        .await
+                        .unwrap();
+                    assert_eq!(content, b"hello");
+                    break;
+                }
+                Err(Error::EntryNotFound) => (),
+                Err(error) => panic!("unexpected error: {:?}", error),
+            }
+
+            rx.changed().await.unwrap()
+        }
     }
 }
