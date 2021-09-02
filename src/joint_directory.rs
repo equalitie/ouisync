@@ -536,7 +536,9 @@ impl<'a> Iterator for Merge<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{branch::Branch, crypto::Cryptor, db, index::BranchData};
+    use crate::{
+        branch::Branch, crypto::Cryptor, db, index::BranchData, version_vector::VersionVector,
+    };
     use assert_matches::assert_matches;
     use futures_util::future;
     use rand::{distributions::Standard, rngs::StdRng, Rng, SeedableRng};
@@ -1175,13 +1177,21 @@ mod tests {
 
         create_file(&local_root, "dog.jpg", b"v0").await;
 
+        let vv0 = read_version_vector(&local_root, "dog.jpg").await;
+
         JointDirectory::new(vec![remote_root.clone(), local_root_on_remote])
             .await
             .merge()
             .await
             .unwrap();
 
+        let vv1 = read_version_vector(&remote_root, "dog.jpg").await;
+        assert_eq!(vv1, vv0);
+
         update_file(&remote_root, "dog.jpg", b"v1").await;
+
+        let vv2 = read_version_vector(&remote_root, "dog.jpg").await;
+        assert!(vv2 > vv1);
 
         JointDirectory::new(vec![local_root.clone(), remote_root_on_local])
             .await
@@ -1189,11 +1199,16 @@ mod tests {
             .await
             .unwrap();
 
-        let content = open_file(&local_root, "dog.jpg")
-            .await
-            .read_to_end()
-            .await
+        let reader = local_root.read().await;
+        let entry = reader
+            .lookup_version("dog.jpg", branches[1].id())
+            .unwrap()
+            .file()
             .unwrap();
+
+        assert_eq!(entry.version_vector(), &vv2);
+
+        let content = entry.open().await.unwrap().read_to_end().await.unwrap();
         assert_eq!(content, b"v1");
     }
 
@@ -1282,5 +1297,19 @@ mod tests {
             .open()
             .await
             .unwrap()
+    }
+
+    async fn read_version_vector(parent: &Directory, name: &str) -> VersionVector {
+        parent
+            .read()
+            .await
+            .lookup(name)
+            .unwrap()
+            .next()
+            .unwrap()
+            .file()
+            .unwrap()
+            .version_vector()
+            .clone()
     }
 }
