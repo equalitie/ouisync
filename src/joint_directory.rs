@@ -119,8 +119,8 @@ impl JointDirectory {
             .await
     }
 
-    pub async fn flush(&self) -> Result<()> {
-        future::try_join_all(self.versions.values().map(|dir| dir.flush())).await?;
+    pub async fn flush(&mut self) -> Result<()> {
+        future::try_join_all(self.versions.values_mut().map(|dir| dir.flush())).await?;
         Ok(())
     }
 
@@ -666,15 +666,15 @@ mod tests {
     async fn conflict_directories() {
         let branches = setup(2).await;
 
-        let root0 = branches[0].open_or_create_root().await.unwrap();
+        let mut root0 = branches[0].open_or_create_root().await.unwrap();
 
-        let dir0 = root0.create_directory("dir".to_owned()).await.unwrap();
+        let mut dir0 = root0.create_directory("dir".to_owned()).await.unwrap();
         dir0.flush().await.unwrap();
         root0.flush().await.unwrap();
 
-        let root1 = branches[1].open_or_create_root().await.unwrap();
+        let mut root1 = branches[1].open_or_create_root().await.unwrap();
 
-        let dir1 = root1.create_directory("dir".to_owned()).await.unwrap();
+        let mut dir1 = root1.create_directory("dir".to_owned()).await.unwrap();
         dir1.flush().await.unwrap();
         root1.flush().await.unwrap();
 
@@ -699,7 +699,7 @@ mod tests {
 
         let root1 = branches[1].open_or_create_root().await.unwrap();
 
-        let dir1 = root1.create_directory("config".to_owned()).await.unwrap();
+        let mut dir1 = root1.create_directory("config".to_owned()).await.unwrap();
         dir1.flush().await.unwrap();
 
         let root = JointDirectory::new(vec![root0, root1]).await;
@@ -847,7 +847,7 @@ mod tests {
 
         let root0 = branches[0].open_or_create_root().await.unwrap();
 
-        let dir0 = root0.create_directory("pics".to_owned()).await.unwrap();
+        let mut dir0 = root0.create_directory("pics".to_owned()).await.unwrap();
         dir0.flush().await.unwrap();
 
         let root = JointDirectory::new(vec![root0]).await;
@@ -866,7 +866,7 @@ mod tests {
         let content = b"cat";
 
         // Create local root dir
-        let local_root = branches[0].open_or_create_root().await.unwrap();
+        let mut local_root = branches[0].open_or_create_root().await.unwrap();
         local_root.flush().await.unwrap();
 
         // Create remote root dir
@@ -901,7 +901,7 @@ mod tests {
         let content_v0 = b"version 0";
         let content_v1 = b"version 1";
 
-        let local_root = branches[0].open_or_create_root().await.unwrap();
+        let mut local_root = branches[0].open_or_create_root().await.unwrap();
         local_root.flush().await.unwrap();
 
         let remote_root = branches[1].open_or_create_root().await.unwrap();
@@ -952,7 +952,7 @@ mod tests {
         let content_v0 = b"version 0";
         let content_v1 = b"version 1";
 
-        let local_root = branches[0].open_or_create_root().await.unwrap();
+        let mut local_root = branches[0].open_or_create_root().await.unwrap();
         local_root.flush().await.unwrap();
 
         let remote_root = branches[1].open_or_create_root().await.unwrap();
@@ -997,7 +997,7 @@ mod tests {
     async fn merge_concurrent_file() {
         let branches = setup(2).await;
 
-        let local_root = branches[0].open_or_create_root().await.unwrap();
+        let mut local_root = branches[0].open_or_create_root().await.unwrap();
         local_root.flush().await.unwrap();
 
         let remote_root = branches[1].open_or_create_root().await.unwrap();
@@ -1047,7 +1047,7 @@ mod tests {
     async fn local_merge_is_idempotent() {
         let branches = setup(2).await;
 
-        let local_root = branches[0].open_or_create_root().await.unwrap();
+        let mut local_root = branches[0].open_or_create_root().await.unwrap();
         local_root.flush().await.unwrap();
 
         let vv0 = branches[0].data().versions().await.clone();
@@ -1104,11 +1104,11 @@ mod tests {
     async fn remote_merge_is_idempotent() {
         let branches = setup(2).await;
 
-        let local_root = branches[0].open_or_create_root().await.unwrap();
+        let mut local_root = branches[0].open_or_create_root().await.unwrap();
         local_root.flush().await.unwrap();
         let local_root_on_remote = branches[0].open_root(branches[1].clone()).await.unwrap();
 
-        let remote_root = branches[1].open_or_create_root().await.unwrap();
+        let mut remote_root = branches[1].open_or_create_root().await.unwrap();
         remote_root.flush().await.unwrap();
         let remote_root_on_local = branches[1].open_root(branches[0].clone()).await.unwrap();
 
@@ -1162,11 +1162,11 @@ mod tests {
     async fn merge_sequential_modifications() {
         let branches = setup_with_rng(StdRng::seed_from_u64(0), 2).await;
 
-        let local_root = branches[0].open_or_create_root().await.unwrap();
+        let mut local_root = branches[0].open_or_create_root().await.unwrap();
         local_root.flush().await.unwrap();
         let local_root_on_remote = branches[0].open_root(branches[1].clone()).await.unwrap();
 
-        let remote_root = branches[1].open_or_create_root().await.unwrap();
+        let mut remote_root = branches[1].open_or_create_root().await.unwrap();
         remote_root.flush().await.unwrap();
         let remote_root_on_local = branches[1].open_root(branches[0].clone()).await.unwrap();
 

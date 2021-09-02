@@ -16,7 +16,7 @@ use futures_util::future;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{btree_map, hash_map, BTreeMap, HashMap},
-    fmt, iter,
+    fmt,
     sync::{Arc, Weak},
 };
 use tokio::sync::{Mutex, RwLock, RwLockMappedWriteGuard, RwLockReadGuard, RwLockWriteGuard};
@@ -61,14 +61,17 @@ impl Directory {
     /// Flushes this directory ensuring that any pending changes are written to the store and the
     /// version vectors of this and the ancestor directories are properly incremented.
     /// Also flushes all ancestor directories.
-    pub async fn flush(&self) -> Result<()> {
+    pub async fn flush(&mut self) -> Result<()> {
         if !self.inner.write().await.flush().await? {
             return Ok(());
         }
 
-        for ctx in self.ancestors() {
+        let mut next = self.parent.as_mut();
+
+        while let Some(ctx) = next {
             ctx.modify().await?.commit();
             ctx.directory.inner.write().await.flush().await?;
+            next = ctx.directory.parent.as_mut();
         }
 
         Ok(())
@@ -200,16 +203,6 @@ impl Directory {
         }
     }
 
-    /// Returns the parent context, if any.
-    pub(crate) fn parent(&self) -> Option<&ParentContext> {
-        self.parent.as_deref()
-    }
-
-    /// Returns iterator of ancestor parent contexts from the current directory to the root.
-    pub(crate) fn ancestors(&self) -> impl Iterator<Item = &ParentContext> {
-        iter::successors(self.parent(), |prev| prev.directory.parent())
-    }
-
     /// Inserts a dangling entry into this directory. It's the responsibility of the caller to make
     /// sure the returned locator eventually points to an actual file or directory.
     /// For internal use only!
@@ -239,7 +232,7 @@ impl Directory {
     pub(crate) async fn modify_entry<'a>(
         &'a self,
         name: &str,
-        author_id: &'a ReplicaId,
+        author_id: &'a mut ReplicaId,
     ) -> Result<ModifyEntry<'a>> {
         let inner = self.write().await;
 
@@ -729,7 +722,7 @@ impl Eq for RefInner<'_> {}
 /// Pending modification of a directory entry. See [`Directory::modify_entry`] for details.
 pub(crate) struct ModifyEntry<'a> {
     versions: RwLockMappedWriteGuard<'a, BTreeMap<ReplicaId, EntryData>>,
-    old_author_id: &'a ReplicaId,
+    old_author_id: &'a mut ReplicaId,
     new_author_id: ReplicaId,
 }
 
@@ -739,6 +732,7 @@ impl ModifyEntry<'_> {
         let mut entry = self.versions.remove(self.old_author_id).unwrap();
         entry.version_vector.increment(self.new_author_id);
         self.versions.insert(self.new_author_id, entry);
+        *self.old_author_id = self.new_author_id;
     }
 }
 
@@ -1002,7 +996,7 @@ mod tests {
         let branch = setup().await;
 
         // Create the root directory and put some file in it.
-        let dir = branch.open_or_create_root().await.unwrap();
+        let mut dir = branch.open_or_create_root().await.unwrap();
 
         let mut file_dog = dir.create_file("dog.txt".into()).await.unwrap();
         file_dog.write(b"woof").await.unwrap();
@@ -1044,11 +1038,11 @@ mod tests {
         let branch = setup().await;
 
         // Create empty directory
-        let dir = branch.open_or_create_root().await.unwrap();
+        let mut dir = branch.open_or_create_root().await.unwrap();
         dir.flush().await.unwrap();
 
         // Reopen it and add a file to it.
-        let dir = branch.open_root(branch.clone()).await.unwrap();
+        let mut dir = branch.open_root(branch.clone()).await.unwrap();
         dir.create_file("none.txt".into()).await.unwrap();
         dir.flush().await.unwrap();
 
@@ -1064,7 +1058,7 @@ mod tests {
         let name = "monkey.txt";
 
         // Create a directory with a single file.
-        let parent_dir = branch.open_or_create_root().await.unwrap();
+        let mut parent_dir = branch.open_or_create_root().await.unwrap();
         let mut file = parent_dir.create_file(name.into()).await.unwrap();
         file.flush().await.unwrap();
         parent_dir.flush().await.unwrap();
@@ -1072,7 +1066,7 @@ mod tests {
         let file_locator = *file.locator();
 
         // Reopen and remove the file
-        let parent_dir = branch.open_root(branch.clone()).await.unwrap();
+        let mut parent_dir = branch.open_root(branch.clone()).await.unwrap();
         parent_dir.remove_file(name).await.unwrap();
         parent_dir.flush().await.unwrap();
 
@@ -1103,15 +1097,15 @@ mod tests {
         let name = "dir";
 
         // Create a directory with a single subdirectory.
-        let parent_dir = branch.open_or_create_root().await.unwrap();
-        let dir = parent_dir.create_directory(name.into()).await.unwrap();
+        let mut parent_dir = branch.open_or_create_root().await.unwrap();
+        let mut dir = parent_dir.create_directory(name.into()).await.unwrap();
         dir.flush().await.unwrap();
         parent_dir.flush().await.unwrap();
 
         let dir_locator = *dir.read().await.locator();
 
         // Reopen and remove the subdirectory
-        let parent_dir = branch.open_root(branch.clone()).await.unwrap();
+        let mut parent_dir = branch.open_root(branch.clone()).await.unwrap();
         parent_dir.remove_directory(name).await.unwrap();
         parent_dir.flush().await.unwrap();
 
@@ -1138,10 +1132,10 @@ mod tests {
         let branch1 = create_branch(branch0.db_pool().clone()).await;
 
         // Create a nested directory by branch 0
-        let root0 = branch0.open_or_create_root().await.unwrap();
+        let mut root0 = branch0.open_or_create_root().await.unwrap();
         root0.flush().await.unwrap();
 
-        let dir0 = root0.create_directory("dir".into()).await.unwrap();
+        let mut dir0 = root0.create_directory("dir".into()).await.unwrap();
         dir0.flush().await.unwrap();
         root0.flush().await.unwrap();
 
@@ -1159,7 +1153,7 @@ mod tests {
             .open()
             .await
             .unwrap();
-        let dir1 = dir0.fork().await.unwrap();
+        let mut dir1 = dir0.fork().await.unwrap();
 
         dir1.create_file("dog.jpg".into()).await.unwrap();
         dir1.flush().await.unwrap();

@@ -520,6 +520,8 @@ impl Inner {
             offset
         );
 
+        self.repository.debug_print(DebugPrinter::new()).await;
+
         if offset < 0 {
             return Err(Error::OffsetOutOfRange);
         }
@@ -591,10 +593,10 @@ impl Inner {
         );
 
         let parent_path = self.inodes.get(parent).calculate_path();
-        let parent_dir = self.repository.open_directory(parent_path).await?;
+        let mut parent_dir = self.repository.open_directory(parent_path).await?;
 
         // TODO: Ensure parent_dir[this_replica_id] exists.
-        let dir = parent_dir
+        let mut dir = parent_dir
             .create_directory(self.this_replica_id(), name)
             .await?;
 
@@ -799,7 +801,7 @@ impl Inner {
 
         log::debug!("unlink {}", self.inodes.path_display(parent, Some(name)));
 
-        let parent_dir = self.open_directory_by_inode(parent).await?;
+        let mut parent_dir = self.open_directory_by_inode(parent).await?;
         parent_dir.remove_file(self.this_replica_id(), name).await?;
         parent_dir.flush().await
     }
