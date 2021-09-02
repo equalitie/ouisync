@@ -240,25 +240,34 @@ impl Directory {
             RwLockWriteGuard::try_map(inner, |inner| inner.content.entries.get_mut(name))
                 .map_err(|_| Error::EntryNotFound)?;
 
-        if !versions.contains_key(author_id) {
-            return Err(Error::EntryNotFound);
+        if let Some(authors_version) = versions.get(author_id) {
+            let local_id = self.local_branch.id();
+            let local_version = versions.get(local_id);
+
+            if author_id != local_id {
+                // There may already exist a local version of the entry. If it does, we may
+                // overwrite it only if the existing version "happened before" this new one being
+                // modified.  Note that if there doesn't alreay exist a local version, that is
+                // essentially the same as if it did exist but it's version_vector was a zero
+                // vector.
+                let local_happened_before = local_version.map_or(true, |local_version| {
+                    local_version.version_vector < authors_version.version_vector
+                });
+
+                // TODO: use a more descriptive error here.
+                if !local_happened_before {
+                    return Err(Error::EntryExists);
+                }
+            }
+
+            Ok(ModifyEntry {
+                versions,
+                old_author_id: author_id,
+                new_author_id: *local_id,
+            })
+        } else {
+            Err(Error::EntryNotFound)
         }
-
-        let local_id = self.local_branch.id();
-
-        if author_id != local_id && versions.contains_key(local_id) {
-            // There already exists a local version of the entry and modifying the version by
-            // `author_id` would overwrite it. To avoid unexpected data loss, we currently
-            // disallow this.
-            // TODO: use a more descriptive error here.
-            return Err(Error::EntryExists);
-        }
-
-        Ok(ModifyEntry {
-            versions,
-            old_author_id: author_id,
-            new_author_id: *local_id,
-        })
     }
 
     async fn open(
