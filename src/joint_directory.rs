@@ -137,11 +137,13 @@ impl JointDirectory {
     }
 
     async fn merge_single(&mut self, queue: &mut VecDeque<Self>) -> Result<()> {
+        // TODO: only process this joint directory if at least one remote version is happens-after
+        // or concurrent with the local version, of if the local version doesn't exists.
+        self.fork().await?;
+
         // We can't fork the files as we are iterating the entries because that would deadlock - we
         // collect them here and fork them once done iterating instead.
         let mut files_to_fork = Vec::new();
-
-        self.fork().await?;
 
         for entry in self.read().await.entries() {
             match entry {
@@ -290,21 +292,21 @@ impl Reader<'_> {
     }
 
     /// Looks up a specific version of a file.
+    ///
+    /// NOTE: There can be multiple versions of the file with the same author, but due to the
+    /// invariant of there always being at most one version of a file per branch that is also
+    /// authored by that branch, there are only two possible outcomes for every pair of such
+    /// versions: either one is "happens after" the other, or they are identical. It's not possible
+    /// for them to be concurrent. Because of this, this function can never return `AmbiguousEntry`
+    /// error.
     pub fn lookup_version(&self, name: &'_ str, branch_id: &'_ ReplicaId) -> Result<FileRef> {
-        let mut entries = self
-            .0
-            .iter()
-            .filter_map(|dir| dir.lookup_version(name, branch_id).ok())
-            .filter_map(|entry| entry.file().ok());
-
-        let first = entries.next().ok_or(Error::EntryNotFound)?;
-
-        if entries.next().is_none() {
-            Ok(first)
-        } else {
-            // TODO: fetch the most recent one instead
-            Err(Error::AmbiguousEntry)
-        }
+        Merge::new(
+            self.0
+                .iter()
+                .filter_map(|dir| dir.lookup_version(name, branch_id).ok()),
+        )
+        .find_map(|entry| entry.file().ok())
+        .ok_or(Error::EntryNotFound)
     }
 
     /// Length of the directory in bytes. If there are multiple versions, returns the sum of their
@@ -427,7 +429,8 @@ impl fmt::Debug for JointDirectoryRef<'_> {
     }
 }
 
-// Iterator adaptor that maps iterator of `EntryRef` to iterator of `JointEntryRef` by mering all
+// Iterator adaptor that maps iterator of `EntryRef` to iterator of `JointEntryRef` by filtering
+// out the outdated (according the their version vectors) versions and then mering all
 // `EntryRef::Directory` items into a single `JointDirectoryRef` item but keeping `EntryRef::File`
 // items separate.
 #[derive(Clone)]
@@ -761,6 +764,14 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(file.branch().id(), branches[1].id());
+
+        // The file can also be retreived using `lookup`...
+        let mut versions = root.lookup("file.txt");
+        assert!(versions.next().is_some());
+        assert!(versions.next().is_none());
+
+        // ...and `lookup_version` using the author branch:
+        root.lookup_version("file.txt", branches[0].id()).unwrap();
     }
 
     //// TODO: test conflict_forked_directories
