@@ -26,7 +26,7 @@ mod parent_context;
 mod path;
 mod replica_id;
 mod repository;
-mod scoped_task_set;
+mod scoped_task;
 mod session;
 mod store;
 #[cfg(test)]

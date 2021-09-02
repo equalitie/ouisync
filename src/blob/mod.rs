@@ -143,6 +143,11 @@ impl Blob {
         Ok(())
     }
 
+    /// Was this blob modified and not flushed yet?
+    pub async fn is_dirty(&self) -> bool {
+        self.current_block.dirty || self.core.lock().await.len_dirty
+    }
+
     pub fn db_pool(&self) -> &db::Pool {
         self.branch.db_pool()
     }

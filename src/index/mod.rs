@@ -47,6 +47,10 @@ impl Index {
         let branches = Branches::load(&pool, this_replica_id).await?;
         let (branch_created_tx, branch_created_rx) = watch::channel(());
 
+        // This causes any subsequent subscriptions to receive one `branch_created` event
+        // immediatelly which is needed to populate the subscription with the existing branches.
+        branch_created_tx.send(()).unwrap_or(());
+
         Ok(Self {
             pool,
             this_replica_id,
@@ -256,7 +260,7 @@ impl Index {
     }
 
     /// Update the root node of the remote branch.
-    async fn update_remote_branch(&self, replica_id: ReplicaId, node: RootNode) {
+    pub(crate) async fn update_remote_branch(&self, replica_id: ReplicaId, node: RootNode) {
         let mut branches = self.shared.branches.write().await;
         let branches = &mut *branches;
 

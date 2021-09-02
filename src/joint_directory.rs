@@ -12,7 +12,8 @@ use camino::{Utf8Component, Utf8Path};
 use futures_util::future;
 use std::{
     borrow::Cow,
-    collections::{btree_map::Entry, BTreeMap},
+    cmp::Ordering,
+    collections::{btree_map::Entry, BTreeMap, VecDeque},
     fmt, iter, mem,
 };
 
@@ -122,6 +123,87 @@ impl JointDirectory {
         future::try_join_all(self.versions.values().map(|dir| dir.flush())).await?;
         Ok(())
     }
+
+    pub async fn merge(&mut self) -> Result<()> {
+        let mut queue = VecDeque::new();
+
+        self.merge_single(&mut queue).await?;
+
+        while let Some(mut dir) = queue.pop_back() {
+            dir.merge_single(&mut queue).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn merge_single(&mut self, queue: &mut VecDeque<Self>) -> Result<()> {
+        // TODO: only process this joint directory if at least one remote version is happens-after
+        // or concurrent with the local version, of if the local version doesn't exists.
+        self.fork().await?;
+
+        // We can't fork the files as we are iterating the entries because that would deadlock - we
+        // collect them here and fork them once done iterating instead.
+        let mut files_to_fork = Vec::new();
+
+        for entry in self.read().await.entries() {
+            match entry {
+                JointEntryRef::File(entry) => files_to_fork.push(entry.open().await?),
+                JointEntryRef::Directory(entry) => queue.push_front(entry.open().await?),
+            }
+        }
+
+        // `EntryExists` error means the file already exists locally at the same or greater version
+        // than the remote file which is OK and expected, so we ignore it.
+        future::try_join_all(files_to_fork.iter_mut().map(|file| async move {
+            match file.fork().await {
+                Ok(()) | Err(Error::EntryExists) => Ok(()),
+                Err(error) => Err(error),
+            }
+        }))
+        .await?;
+
+        self.remove_remote_versions().await;
+        self.flush().await?;
+
+        Ok(())
+    }
+
+    // Ensure this joint directory contains a local version.
+    async fn fork(&mut self) -> Result<()> {
+        if self.local_branch_id().await.is_some() {
+            // TODO: we should still proceed with the fork, to update the version vector.
+            return Ok(());
+        }
+
+        // Grab any version and fork it to create the local one.
+        // TODO: fork all versions, not just one, to properly update the version vector.
+        let local = if let Some(remote) = self.versions.values().next() {
+            remote.clone().fork().await?
+        } else {
+            return Ok(());
+        };
+
+        let id = *local.read().await.branch().id();
+        self.versions.insert(id, local);
+
+        Ok(())
+    }
+
+    // Remove all versions except the local one.
+    async fn remove_remote_versions(&mut self) {
+        let local_id = self.local_branch_id().await.copied();
+        self.versions.retain(|id, _| Some(id) == local_id.as_ref())
+    }
+
+    async fn local_branch_id(&self) -> Option<&ReplicaId> {
+        for (id, version) in &self.versions {
+            if version.read().await.is_local() {
+                return Some(id);
+            }
+        }
+
+        None
+    }
 }
 
 impl fmt::Debug for JointDirectory {
@@ -210,21 +292,21 @@ impl Reader<'_> {
     }
 
     /// Looks up a specific version of a file.
+    ///
+    /// NOTE: There can be multiple versions of the file with the same author, but due to the
+    /// invariant of there always being at most one version of a file per branch that is also
+    /// authored by that branch, there are only two possible outcomes for every pair of such
+    /// versions: either one is "happens after" the other, or they are identical. It's not possible
+    /// for them to be concurrent. Because of this, this function can never return `AmbiguousEntry`
+    /// error.
     pub fn lookup_version(&self, name: &'_ str, branch_id: &'_ ReplicaId) -> Result<FileRef> {
-        let mut entries = self
-            .0
-            .iter()
-            .filter_map(|dir| dir.lookup_version(name, branch_id).ok())
-            .filter_map(|entry| entry.file().ok());
-
-        let first = entries.next().ok_or(Error::EntryNotFound)?;
-
-        if entries.next().is_none() {
-            Ok(first)
-        } else {
-            // TODO: fetch the most recent one instead
-            Err(Error::AmbiguousEntry)
-        }
+        Merge::new(
+            self.0
+                .iter()
+                .filter_map(|dir| dir.lookup_version(name, branch_id).ok()),
+        )
+        .find_map(|entry| entry.file().ok())
+        .ok_or(Error::EntryNotFound)
     }
 
     /// Length of the directory in bytes. If there are multiple versions, returns the sum of their
@@ -347,7 +429,8 @@ impl fmt::Debug for JointDirectoryRef<'_> {
     }
 }
 
-// Iterator adaptor that maps iterator of `EntryRef` to iterator of `JointEntryRef` by mering all
+// Iterator adaptor that maps iterator of `EntryRef` to iterator of `JointEntryRef` by filtering
+// out the outdated (according the their version vectors) versions and then mering all
 // `EntryRef::Directory` items into a single `JointDirectoryRef` item but keeping `EntryRef::File`
 // items separate.
 #[derive(Clone)]
@@ -355,9 +438,9 @@ struct Merge<'a> {
     // TODO: The most common case for files shall be that there will be only one version of it.
     // Thus it might make sense to have one place holder for the first file to avoid Vec allocation
     // when not needed.
-    files: Vec<FileRef<'a>>,
-    next_file: usize,
+    files: VecDeque<FileRef<'a>>,
     directories: Vec<DirectoryRef<'a>>,
+    needs_disambiguation: bool,
 }
 
 impl<'a> Merge<'a> {
@@ -367,51 +450,68 @@ impl<'a> Merge<'a> {
     where
         I: Iterator<Item = EntryRef<'a>>,
     {
-        let mut files = vec![];
+        let mut files = VecDeque::new();
         let mut directories = vec![];
 
-        let entries = Self::keep_concurrent(entries.collect());
+        let entries = Self::keep_concurrent(entries);
 
         for entry in entries {
             match entry {
-                EntryRef::File(file) => files.push(file),
+                EntryRef::File(file) => files.push_back(file),
                 EntryRef::Directory(dir) => directories.push(dir),
             }
         }
 
+        let needs_disambiguation = files.len() > 1;
+
         Self {
             files,
-            next_file: 0,
             directories,
+            needs_disambiguation,
         }
     }
 
-    fn keep_concurrent(entries: Vec<EntryRef<'a>>) -> Vec<EntryRef<'a>> {
-        // TODO: This is O(n^3) where n is number of branches (bubble sort * VV comparison).  Can
-        // we do better?
-        let len = entries.len();
+    // Returns the entries with the maximal version vectors.
+    fn keep_concurrent(entries: impl Iterator<Item = EntryRef<'a>>) -> Vec<EntryRef<'a>> {
+        let mut max: Vec<EntryRef> = Vec::new();
 
-        let is_before_any_other = |candidate: usize| -> bool {
-            for i in 0..len {
-                if i != candidate
-                    && entries[candidate].version_vector() < entries[i].version_vector()
-                {
-                    return true;
+        for new in entries {
+            let mut insert = true;
+            let mut remove = None;
+
+            for (index, old) in max.iter().enumerate() {
+                match (
+                    old.version_vector().partial_cmp(new.version_vector()),
+                    new.is_local(),
+                ) {
+                    // If both have identical versions, prefer the local one
+                    (Some(Ordering::Less), _) | (Some(Ordering::Equal), true) => {
+                        insert = true;
+                        remove = Some(index);
+                        break;
+                    }
+                    (Some(Ordering::Greater), _) | (Some(Ordering::Equal), false) => {
+                        insert = false;
+                        break;
+                    }
+                    (None, _) => {
+                        insert = true;
+                    }
                 }
             }
 
-            false
-        };
+            // Note: using `Vec::remove` to maintain the original order. Is there a more efficient
+            // way?
+            if let Some(index) = remove {
+                max.remove(index);
+            }
 
-        let mut retval = vec![];
-
-        for (i, entry) in entries.iter().enumerate() {
-            if !is_before_any_other(i) {
-                retval.push(*entry);
+            if insert {
+                max.push(new)
             }
         }
 
-        retval
+        max
     }
 }
 
@@ -424,17 +524,12 @@ impl<'a> Iterator for Merge<'a> {
                 .map(JointEntryRef::Directory);
         }
 
-        if self.next_file < self.files.len() {
-            let i = self.next_file;
-            self.next_file += 1;
+        let file = self.files.pop_front()?;
 
-            return Some(JointEntryRef::File(JointFileRef {
-                file: self.files[i],
-                needs_disambiguation: self.files.len() > 1,
-            }));
-        }
-
-        None
+        Some(JointEntryRef::File(JointFileRef {
+            file,
+            needs_disambiguation: self.needs_disambiguation,
+        }))
     }
 }
 
@@ -452,24 +547,10 @@ mod tests {
         let branches = setup(2).await;
 
         let root0 = branches[0].open_or_create_root().await.unwrap();
-        root0
-            .create_file("file0.txt".to_owned())
-            .await
-            .unwrap()
-            .flush()
-            .await
-            .unwrap();
-        root0.flush().await.unwrap();
+        create_file(&root0, "file0.txt", &[]).await;
 
         let root1 = branches[1].open_or_create_root().await.unwrap();
-        root1
-            .create_file("file1.txt".to_owned())
-            .await
-            .unwrap()
-            .flush()
-            .await
-            .unwrap();
-        root1.flush().await.unwrap();
+        create_file(&root1, "file1.txt", &[]).await;
 
         let root = JointDirectory::new(vec![root0, root1]).await;
         let root = root.read().await;
@@ -494,24 +575,10 @@ mod tests {
         let branches = setup(2).await;
 
         let root0 = branches[0].open_or_create_root().await.unwrap();
-        root0
-            .create_file("file.txt".to_owned())
-            .await
-            .unwrap()
-            .flush()
-            .await
-            .unwrap();
-        root0.flush().await.unwrap();
+        create_file(&root0, "file.txt", &[]).await;
 
         let root1 = branches[1].open_or_create_root().await.unwrap();
-        root1
-            .create_file("file.txt".to_owned())
-            .await
-            .unwrap()
-            .flush()
-            .await
-            .unwrap();
-        root1.flush().await.unwrap();
+        create_file(&root1, "file.txt", &[]).await;
 
         let root = JointDirectory::new(vec![root0, root1]).await;
         let root = root.read().await;
@@ -560,31 +627,24 @@ mod tests {
         let branches = setup(2).await;
 
         let root0 = branches[0].open_or_create_root().await.unwrap();
-        let mut file0 = root0.create_file("file.txt".to_owned()).await.unwrap();
-        file0.flush().await.unwrap();
-        root0.flush().await.unwrap();
+        create_file(&root0, "file.txt", b"one").await;
 
         // Open the file with branch 1 as the local branch and then modify it which copies (forks)
         // it into branch 1.
-        let root0 = branches[0].open_root(branches[1].clone()).await.unwrap();
-        let mut file1 = root0
-            .read()
-            .await
-            .lookup_version("file.txt", branches[0].id())
-            .unwrap()
-            .file()
-            .unwrap()
-            .open()
-            .await
-            .unwrap();
-
-        file1.write(&[]).await.unwrap();
+        let root0_by_1 = branches[0].open_root(branches[1].clone()).await.unwrap();
+        let mut file1 = open_file_version(&root0_by_1, "file.txt", branches[0].id()).await;
+        file1.write(b"two").await.unwrap();
         file1.flush().await.unwrap();
+
+        // Modify the file by branch 0 as well, to create concurrent versions
+        let mut file0 = open_file_version(&root0, "file.txt", branches[0].id()).await;
+        file0.write(b"three").await.unwrap();
+        file0.flush().await.unwrap();
 
         // Open branch 1's root dir which should have been created in the process.
         let root1 = branches[1].open_root(branches[1].clone()).await.unwrap();
 
-        let root = JointDirectory::new(vec![root0, root1]).await;
+        let root = JointDirectory::new(vec![root0_by_1, root1]).await;
         let root = root.read().await;
 
         let files: Vec<_> = root.entries().map(|entry| entry.file().unwrap()).collect();
@@ -635,15 +695,12 @@ mod tests {
 
         let root0 = branches[0].open_or_create_root().await.unwrap();
 
-        let mut file0 = root0.create_file("config".to_owned()).await.unwrap();
-        file0.flush().await.unwrap();
-        root0.flush().await.unwrap();
+        create_file(&root0, "config", &[]).await;
 
         let root1 = branches[1].open_or_create_root().await.unwrap();
 
         let dir1 = root1.create_directory("config".to_owned()).await.unwrap();
         dir1.flush().await.unwrap();
-        root1.flush().await.unwrap();
 
         let root = JointDirectory::new(vec![root0, root1]).await;
         let root = root.read().await;
@@ -674,6 +731,49 @@ mod tests {
         assert_eq!(entry.file().unwrap().author(), branches[0].id());
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn conflict_identical_versions() {
+        let branches = setup(2).await;
+
+        // Create a file by one branch.
+        let root0 = branches[0].open_or_create_root().await.unwrap();
+        create_file(&root0, "file.txt", b"one").await;
+
+        // Fork it into the other branch, creating an identical version of it.
+        let root0_by_1 = branches[0].open_root(branches[1].clone()).await.unwrap();
+        let mut file1 = open_file_version(&root0_by_1, "file.txt", branches[0].id()).await;
+        file1.fork().await.unwrap();
+
+        let root1 = branches[1].open_root(branches[1].clone()).await.unwrap();
+
+        // Create joint directory using branch 1 as the local branch.
+        let root = JointDirectory::new(vec![root0_by_1, root1]).await;
+        let root = root.read().await;
+
+        // The file appears among the entries only once...
+        assert_eq!(root.entries().count(), 1);
+
+        // ...and it is the local version.
+        let file = root
+            .entries()
+            .next()
+            .unwrap()
+            .file()
+            .unwrap()
+            .open()
+            .await
+            .unwrap();
+        assert_eq!(file.branch().id(), branches[1].id());
+
+        // The file can also be retreived using `lookup`...
+        let mut versions = root.lookup("file.txt");
+        assert!(versions.next().is_some());
+        assert!(versions.next().is_none());
+
+        // ...and `lookup_version` using the author branch:
+        root.lookup_version("file.txt", branches[0].id()).unwrap();
+    }
+
     //// TODO: test conflict_forked_directories
     //// TODO: test conflict_multiple_files_and_directories
     //// TODO: test conflict_file_with_name_containing_branch_prefix
@@ -685,20 +785,11 @@ mod tests {
         let root0 = branches[0].open_or_create_root().await.unwrap();
 
         let dir0 = root0.create_directory("pics".to_owned()).await.unwrap();
-        let mut file0 = dir0.create_file("dog.jpg".to_owned()).await.unwrap();
-
-        file0.flush().await.unwrap();
-        dir0.flush().await.unwrap();
-        root0.flush().await.unwrap();
+        create_file(&dir0, "dog.jpg", &[]).await;
 
         let root1 = branches[1].open_or_create_root().await.unwrap();
-
         let dir1 = root1.create_directory("pics".to_owned()).await.unwrap();
-        let mut file1 = dir1.create_file("cat.jpg".to_owned()).await.unwrap();
-
-        file1.flush().await.unwrap();
-        dir1.flush().await.unwrap();
-        root1.flush().await.unwrap();
+        create_file(&dir1, "cat.jpg", &[]).await;
 
         let root = JointDirectory::new(vec![root0, root1]).await;
         let dir = root.cd("pics").await.unwrap();
@@ -717,11 +808,7 @@ mod tests {
         let root0 = branches[0].open_or_create_root().await.unwrap();
 
         let dir0 = root0.create_directory("pics".to_owned()).await.unwrap();
-        let mut file0 = dir0.create_file("dog.jpg".to_owned()).await.unwrap();
-
-        file0.flush().await.unwrap();
-        dir0.flush().await.unwrap();
-        root0.flush().await.unwrap();
+        create_file(&dir0, "dog.jpg", &[]).await;
 
         let root1 = branches[1].open_or_create_root().await.unwrap();
 
@@ -761,9 +848,7 @@ mod tests {
         let root0 = branches[0].open_or_create_root().await.unwrap();
 
         let dir0 = root0.create_directory("pics".to_owned()).await.unwrap();
-
         dir0.flush().await.unwrap();
-        root0.flush().await.unwrap();
 
         let root = JointDirectory::new(vec![root0]).await;
 
@@ -771,6 +856,346 @@ mod tests {
             root.create_directory(branches[0].id(), "pics").await,
             Err(Error::EntryExists)
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn merge_locally_non_existing_file() {
+        // 0 - local, 1 - remote
+        let branches = setup(2).await;
+
+        let content = b"cat";
+
+        // Create local root dir
+        let local_root = branches[0].open_or_create_root().await.unwrap();
+        local_root.flush().await.unwrap();
+
+        // Create remote root dir
+        let remote_root = branches[1].open_or_create_root().await.unwrap();
+
+        // Create a file in the remote root
+        create_file(&remote_root, "cat.jpg", content).await;
+
+        // Reopen the remote root locally.
+        let remote_root_on_local = branches[1].open_root(branches[0].clone()).await.unwrap();
+
+        // Construct a joint directory over both root dirs and merge it.
+        JointDirectory::new(vec![local_root.clone(), remote_root_on_local])
+            .await
+            .merge()
+            .await
+            .unwrap();
+
+        // Verify the file now exists in the local branch.
+        let local_content = open_file(&local_root, "cat.jpg")
+            .await
+            .read_to_end()
+            .await
+            .unwrap();
+        assert_eq!(local_content, content);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn merge_locally_older_file() {
+        let branches = setup(2).await;
+
+        let content_v0 = b"version 0";
+        let content_v1 = b"version 1";
+
+        let local_root = branches[0].open_or_create_root().await.unwrap();
+        local_root.flush().await.unwrap();
+
+        let remote_root = branches[1].open_or_create_root().await.unwrap();
+
+        // Create a file in the remote root
+        create_file(&remote_root, "cat.jpg", content_v0).await;
+
+        // Merge to transfer the file to the local branch
+        let remote_root_on_local = branches[1].open_root(branches[0].clone()).await.unwrap();
+        let mut root =
+            JointDirectory::new(vec![local_root.clone(), remote_root_on_local.clone()]).await;
+        root.merge().await.unwrap();
+
+        // Modify the file by the remote branch
+        update_file(&remote_root, "cat.jpg", content_v1).await;
+
+        JointDirectory::new(vec![local_root.clone(), remote_root_on_local])
+            .await
+            .merge()
+            .await
+            .unwrap();
+
+        let reader = local_root.read().await;
+
+        // The remote version is newer, so it overwrites the local version and we end up with only
+        // one version in the local branch.
+        assert_eq!(reader.lookup("cat.jpg").unwrap().count(), 1);
+
+        let entry = reader
+            .lookup("cat.jpg")
+            .unwrap()
+            .next()
+            .unwrap()
+            .file()
+            .unwrap();
+
+        assert_eq!(entry.author(), branches[1].id());
+
+        let mut file = entry.open().await.unwrap();
+        let local_content = file.read_to_end().await.unwrap();
+        assert_eq!(local_content, content_v1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn merge_locally_newer_file() {
+        let branches = setup(2).await;
+
+        let content_v0 = b"version 0";
+        let content_v1 = b"version 1";
+
+        let local_root = branches[0].open_or_create_root().await.unwrap();
+        local_root.flush().await.unwrap();
+
+        let remote_root = branches[1].open_or_create_root().await.unwrap();
+
+        create_file(&remote_root, "cat.jpg", content_v0).await;
+
+        let remote_root_on_local = branches[1].open_root(branches[0].clone()).await.unwrap();
+        let mut root =
+            JointDirectory::new(vec![local_root.clone(), remote_root_on_local.clone()]).await;
+        root.merge().await.unwrap();
+
+        // Modify the file by the local branch
+        update_file(&local_root, "cat.jpg", content_v1).await;
+
+        JointDirectory::new(vec![local_root.clone(), remote_root_on_local])
+            .await
+            .merge()
+            .await
+            .unwrap();
+
+        let reader = local_root.read().await;
+
+        // The local version is newer, so there is only one version in the local branch.
+        assert_eq!(reader.lookup("cat.jpg").unwrap().count(), 1);
+
+        let entry = reader
+            .lookup("cat.jpg")
+            .unwrap()
+            .next()
+            .unwrap()
+            .file()
+            .unwrap();
+
+        assert_eq!(entry.author(), branches[0].id());
+
+        let mut file = entry.open().await.unwrap();
+        let local_content = file.read_to_end().await.unwrap();
+        assert_eq!(local_content, content_v1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn merge_concurrent_file() {
+        let branches = setup(2).await;
+
+        let local_root = branches[0].open_or_create_root().await.unwrap();
+        local_root.flush().await.unwrap();
+
+        let remote_root = branches[1].open_or_create_root().await.unwrap();
+
+        create_file(&remote_root, "cat.jpg", b"v0").await;
+
+        let remote_root_on_local = branches[1].open_root(branches[0].clone()).await.unwrap();
+        let mut root =
+            JointDirectory::new(vec![local_root.clone(), remote_root_on_local.clone()]).await;
+        root.merge().await.unwrap();
+
+        // Modify the file by both branches concurrently
+        update_file(&local_root, "cat.jpg", b"v1").await;
+        update_file(&remote_root, "cat.jpg", b"v2").await;
+
+        JointDirectory::new(vec![local_root.clone(), remote_root_on_local])
+            .await
+            .merge()
+            .await
+            .unwrap();
+
+        // The versions are concurrent, so both are present in the local branch.
+        assert_eq!(
+            local_root.read().await.lookup("cat.jpg").unwrap().count(),
+            2
+        );
+
+        assert_eq!(
+            open_file_version(&local_root, "cat.jpg", branches[0].id())
+                .await
+                .read_to_end()
+                .await
+                .unwrap(),
+            b"v1"
+        );
+        assert_eq!(
+            open_file_version(&local_root, "cat.jpg", branches[1].id())
+                .await
+                .read_to_end()
+                .await
+                .unwrap(),
+            b"v2"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn local_merge_is_idempotent() {
+        let branches = setup(2).await;
+
+        let local_root = branches[0].open_or_create_root().await.unwrap();
+        local_root.flush().await.unwrap();
+
+        let vv0 = branches[0].data().versions().await.clone();
+
+        let remote_root = branches[1].open_or_create_root().await.unwrap();
+        let remote_root_on_local = branches[1].open_root(branches[0].clone()).await.unwrap();
+
+        // Merge after a remote modification - this causes local modification.
+        create_file(&remote_root, "cat.jpg", b"v0").await;
+        JointDirectory::new(vec![local_root.clone(), remote_root_on_local.clone()])
+            .await
+            .merge()
+            .await
+            .unwrap();
+
+        let vv1 = branches[0].data().versions().await.clone();
+        assert!(vv1 > vv0);
+
+        // Merge again. This time there is no local modification because there was no remote
+        // modification either.
+        JointDirectory::new(vec![local_root.clone(), remote_root_on_local.clone()])
+            .await
+            .merge()
+            .await
+            .unwrap();
+
+        let vv2 = branches[0].data().versions().await.clone();
+        assert_eq!(vv2, vv1);
+
+        // Perform another remote modification and merge again - this causes local modification
+        // again.
+        update_file(&remote_root, "cat.jpg", b"v1").await;
+        JointDirectory::new(vec![local_root.clone(), remote_root_on_local.clone()])
+            .await
+            .merge()
+            .await
+            .unwrap();
+
+        let vv3 = branches[0].data().versions().await.clone();
+        assert!(vv3 > vv2);
+
+        // Another idempotent merge which causes no local modification.
+        JointDirectory::new(vec![local_root, remote_root_on_local])
+            .await
+            .merge()
+            .await
+            .unwrap();
+
+        let vv4 = branches[0].data().versions().await.clone();
+        assert_eq!(vv4, vv3);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn remote_merge_is_idempotent() {
+        let branches = setup(2).await;
+
+        let local_root = branches[0].open_or_create_root().await.unwrap();
+        local_root.flush().await.unwrap();
+        let local_root_on_remote = branches[0].open_root(branches[1].clone()).await.unwrap();
+
+        let remote_root = branches[1].open_or_create_root().await.unwrap();
+        remote_root.flush().await.unwrap();
+        let remote_root_on_local = branches[1].open_root(branches[0].clone()).await.unwrap();
+
+        create_file(&remote_root, "cat.jpg", b"v0").await;
+
+        // First merge remote into local
+        JointDirectory::new(vec![local_root, remote_root_on_local])
+            .await
+            .merge()
+            .await
+            .unwrap();
+
+        let vv0 = branches[0].data().versions().await.clone();
+
+        // Then merge local back into remote. This has no effect.
+        JointDirectory::new(vec![remote_root, local_root_on_remote])
+            .await
+            .merge()
+            .await
+            .unwrap();
+
+        let vv1 = branches[0].data().versions().await.clone();
+        assert_eq!(vv1, vv0);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn merge_remote_only() {
+        let branches = setup(2).await;
+
+        let remote_root = branches[1].open_or_create_root().await.unwrap();
+        let remote_root_on_local = branches[1].open_root(branches[0].clone()).await.unwrap();
+
+        create_file(&remote_root, "cat.jpg", b"v0").await;
+
+        // When passing only the remote dir to the joint directory the merge still works.
+        JointDirectory::new(iter::once(remote_root_on_local))
+            .await
+            .merge()
+            .await
+            .unwrap();
+
+        let local_root = branches[0].open_root(branches[0].clone()).await.unwrap();
+        local_root
+            .read()
+            .await
+            .lookup_version("cat.jpg", branches[1].id())
+            .unwrap();
+    }
+
+    #[ignore] // FIXME: this tests sometimes fails
+    #[tokio::test(flavor = "multi_thread")]
+    async fn merge_sequential_modifications() {
+        let branches = setup(2).await;
+
+        let local_root = branches[0].open_or_create_root().await.unwrap();
+        local_root.flush().await.unwrap();
+        let local_root_on_remote = branches[0].open_root(branches[1].clone()).await.unwrap();
+
+        let remote_root = branches[1].open_or_create_root().await.unwrap();
+        remote_root.flush().await.unwrap();
+        let remote_root_on_local = branches[1].open_root(branches[0].clone()).await.unwrap();
+
+        // Create a file by local, then modify it by remote, then read it back by local verifying
+        // the modification by remote got through.
+
+        create_file(&local_root, "dog.jpg", b"v0").await;
+
+        JointDirectory::new(vec![remote_root.clone(), local_root_on_remote])
+            .await
+            .merge()
+            .await
+            .unwrap();
+
+        update_file(&remote_root, "dog.jpg", b"v1").await;
+
+        JointDirectory::new(vec![local_root.clone(), remote_root_on_local])
+            .await
+            .merge()
+            .await
+            .unwrap();
+
+        let content = open_file(&local_root, "dog.jpg")
+            .await
+            .read_to_end()
+            .await
+            .unwrap();
+        assert_eq!(content, b"v1");
     }
 
     async fn setup(branch_count: usize) -> Vec<Branch> {
@@ -804,5 +1229,51 @@ mod tests {
         }
 
         assert_eq!(prev_i, count);
+    }
+
+    async fn create_file(parent: &Directory, name: &str, content: &[u8]) {
+        let mut file = parent.create_file(name.to_owned()).await.unwrap();
+
+        if !content.is_empty() {
+            file.write(content).await.unwrap();
+        }
+
+        file.flush().await.unwrap();
+    }
+
+    async fn update_file(parent: &Directory, name: &str, content: &[u8]) {
+        let mut file = open_file(parent, name).await;
+
+        file.truncate(0).await.unwrap();
+        file.write(content).await.unwrap();
+        file.flush().await.unwrap();
+    }
+
+    async fn open_file(parent: &Directory, name: &str) -> File {
+        parent
+            .read()
+            .await
+            .lookup(name)
+            .unwrap()
+            .next()
+            .unwrap()
+            .file()
+            .unwrap()
+            .open()
+            .await
+            .unwrap()
+    }
+
+    async fn open_file_version(parent: &Directory, name: &str, branch_id: &ReplicaId) -> File {
+        parent
+            .read()
+            .await
+            .lookup_version(name, branch_id)
+            .unwrap()
+            .file()
+            .unwrap()
+            .open()
+            .await
+            .unwrap()
     }
 }

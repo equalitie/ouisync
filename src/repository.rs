@@ -8,31 +8,39 @@ use crate::{
     file::File,
     index::{BranchData, Index, Subscription},
     joint_directory::JointDirectory,
-    path, ReplicaId,
+    path,
+    scoped_task::ScopedJoinHandle,
+    ReplicaId,
 };
 use camino::Utf8Path;
-use futures_util::future;
-use std::{collections::HashMap, sync::Arc};
-use tokio::sync::Mutex;
+use futures_util::{future, stream::FuturesUnordered, StreamExt};
+use log::Level;
+use std::{collections::HashMap, iter, sync::Arc};
+use tokio::{select, sync::Mutex, task};
 
 pub struct Repository {
-    index: Index,
-    cryptor: Cryptor,
-    // Cache for `Branch` instances to make them persistent over the lifetime of the program.
-    branches: Mutex<HashMap<ReplicaId, Branch>>,
+    shared: Arc<Shared>,
+    _merge_handle: ScopedJoinHandle<()>,
 }
 
 impl Repository {
     pub fn new(index: Index, cryptor: Cryptor) -> Self {
-        Self {
+        let shared = Arc::new(Shared {
             index,
             cryptor,
             branches: Mutex::new(HashMap::new()),
+        });
+
+        let merge_handle = ScopedJoinHandle(task::spawn(Merger::new(shared.clone()).run()));
+
+        Self {
+            shared,
+            _merge_handle: merge_handle,
         }
     }
 
     pub fn this_replica_id(&self) -> &ReplicaId {
-        self.index.this_replica_id()
+        self.shared.index.this_replica_id()
     }
 
     /// Looks up an entry by its path. The path must be relative to the repository root.
@@ -84,7 +92,7 @@ impl Repository {
     }
 
     /// Creates a new file at the given path.
-    pub async fn create_file<P: AsRef<Utf8Path>>(&self, path: &P) -> Result<File> {
+    pub async fn create_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<File> {
         self.local_branch()
             .await
             .ensure_file_exists(path.as_ref())
@@ -133,42 +141,22 @@ impl Repository {
 
     /// Returns the local branch
     pub async fn local_branch(&self) -> Branch {
-        self.inflate(self.index.branches().await.local()).await
+        self.shared.local_branch().await
     }
 
     /// Return the branch with the specified id.
     pub async fn branch(&self, id: &ReplicaId) -> Option<Branch> {
-        Some(self.inflate(self.index.branches().await.get(id)?).await)
+        self.shared.branch(id).await
     }
 
     /// Returns all branches
     pub async fn branches(&self) -> Vec<Branch> {
-        future::join_all(
-            self.index
-                .branches()
-                .await
-                .all()
-                .map(|data| self.inflate(data)),
-        )
-        .await
+        self.shared.branches().await
     }
 
     /// Subscribe to change notification from all current and future branches.
     pub fn subscribe(&self) -> Subscription {
-        self.index.subscribe()
-    }
-
-    // Create `Branch` wrapping the given `data`, reusing a previously cached one if it exists,
-    // and putting it into the cache it it does not.
-    async fn inflate(&self, data: &Arc<BranchData>) -> Branch {
-        self.branches
-            .lock()
-            .await
-            .entry(*data.id())
-            .or_insert_with(|| {
-                Branch::new(self.index.pool.clone(), data.clone(), self.cryptor.clone())
-            })
-            .clone()
+        self.shared.index.subscribe()
     }
 
     // Opens the root directory across all branches as JointDirectory.
@@ -199,7 +187,7 @@ impl Repository {
 
     pub async fn debug_print(&self, print: DebugPrinter) {
         print.display(&"Repository");
-        let branches = self.branches.lock().await;
+        let branches = self.shared.branches.lock().await;
         for (replica_id, branch) in &*branches {
             let print = print.indent();
             let local = if replica_id == self.this_replica_id() {
@@ -207,17 +195,188 @@ impl Repository {
             } else {
                 ""
             };
-            print.display(&format!("Branch {:?}{}", replica_id, local));
-            print.display(&"/");
+            print.display(&format_args!("Branch {:?}{}", replica_id, local));
+            print.display(&format_args!("/, {:?}", branch.data().versions().await));
             branch.debug_print(print.indent()).await;
         }
     }
 }
 
+struct Shared {
+    index: Index,
+    cryptor: Cryptor,
+    // Cache for `Branch` instances to make them persistent over the lifetime of the program.
+    branches: Mutex<HashMap<ReplicaId, Branch>>,
+}
+
+impl Shared {
+    pub async fn local_branch(&self) -> Branch {
+        self.inflate(self.index.branches().await.local()).await
+    }
+
+    pub async fn branch(&self, id: &ReplicaId) -> Option<Branch> {
+        Some(self.inflate(self.index.branches().await.get(id)?).await)
+    }
+
+    pub async fn branches(&self) -> Vec<Branch> {
+        future::join_all(
+            self.index
+                .branches()
+                .await
+                .all()
+                .map(|data| self.inflate(data)),
+        )
+        .await
+    }
+
+    // Create `Branch` wrapping the given `data`, reusing a previously cached one if it exists,
+    // and putting it into the cache it it does not.
+    async fn inflate(&self, data: &Arc<BranchData>) -> Branch {
+        self.branches
+            .lock()
+            .await
+            .entry(*data.id())
+            .or_insert_with(|| {
+                Branch::new(self.index.pool.clone(), data.clone(), self.cryptor.clone())
+            })
+            .clone()
+    }
+}
+
+// The merge algorithm.
+struct Merger {
+    shared: Arc<Shared>,
+    tasks: FuturesUnordered<ScopedJoinHandle<ReplicaId>>,
+    states: HashMap<ReplicaId, MergeState>,
+}
+
+impl Merger {
+    fn new(shared: Arc<Shared>) -> Self {
+        Self {
+            shared,
+            tasks: FuturesUnordered::new(),
+            states: HashMap::new(),
+        }
+    }
+
+    async fn run(mut self) {
+        let mut rx = self.shared.index.subscribe();
+
+        loop {
+            select! {
+                branch_id = rx.recv() => {
+                    if let Some(branch_id) = branch_id {
+                        self.handle_branch_changed(branch_id).await
+                    } else {
+                        break;
+                    }
+                }
+                branch_id = self.tasks.next(), if !self.tasks.is_empty() => {
+                    if let Some(Ok(branch_id)) = branch_id {
+                        self.handle_task_finished(branch_id).await
+                    }
+                }
+            }
+        }
+    }
+
+    async fn handle_branch_changed(&mut self, branch_id: ReplicaId) {
+        if branch_id == *self.shared.index.this_replica_id() {
+            // local branch change - ignore.
+            return;
+        }
+
+        if let Some(state) = self.states.get_mut(&branch_id) {
+            // Merge of this branch is already ongoing - schedule to run it again after it's
+            // finished.
+            *state = MergeState::Pending;
+            return;
+        }
+
+        self.spawn_task(branch_id).await
+    }
+
+    async fn handle_task_finished(&mut self, branch_id: ReplicaId) {
+        if let Some(MergeState::Pending) = self.states.remove(&branch_id) {
+            self.spawn_task(branch_id).await
+        }
+    }
+
+    async fn spawn_task(&mut self, remote_id: ReplicaId) {
+        let remote = if let Some(remote) = self.shared.branch(&remote_id).await {
+            remote
+        } else {
+            // branch removed in the meantime - ignore.
+            return;
+        };
+
+        let local = self.shared.local_branch().await;
+
+        let handle = ScopedJoinHandle(task::spawn(async move {
+            if *local.data().versions().await > *remote.data().versions().await {
+                log::debug!(
+                    "merge with branch {:?} suppressed - local branch already up to date",
+                    remote_id
+                );
+                return remote_id;
+            }
+
+            log::debug!("merge with branch {:?} started", remote_id);
+
+            match merge_branches(local, remote).await {
+                Ok(()) => {
+                    log::info!("merge with branch {:?} complete", remote_id)
+                }
+                Err(error) => {
+                    // `EntryNotFound` most likely means the remote snapshot is not fully
+                    // downloaded yet and `BlockNotFound` means that a block is not downloaded yet.
+                    // Both error are harmless because the merge will be attempted again on the
+                    // next change notification. We reduce the log severity for them to avoid log
+                    // spam.
+                    let level = if matches!(error, Error::EntryNotFound | Error::BlockNotFound(_)) {
+                        Level::Trace
+                    } else {
+                        Level::Error
+                    };
+
+                    log::log!(
+                        level,
+                        "merge with branch {:?} failed: {}",
+                        remote_id,
+                        error.verbose()
+                    )
+                }
+            }
+
+            remote_id
+        }));
+
+        self.tasks.push(handle);
+        self.states.insert(remote_id, MergeState::Ongoing);
+    }
+}
+
+enum MergeState {
+    // A merge is ongoing
+    Ongoing,
+    // A merge is ongoing and another one was already scheduled
+    Pending,
+}
+
+async fn merge_branches(local: Branch, remote: Branch) -> Result<()> {
+    let remote_root = remote.open_root(local.clone()).await?;
+    JointDirectory::new(iter::once(remote_root))
+        .await
+        .merge()
+        .await?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db;
+    use crate::{db, index::RootNode};
 
     #[tokio::test(flavor = "multi_thread")]
     async fn root_directory_always_exists() {
@@ -227,5 +386,63 @@ mod tests {
         let repo = Repository::new(index, Cryptor::Null);
 
         let _ = repo.open_directory("/").await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn merge() {
+        let pool = db::init(db::Store::Memory).await.unwrap();
+        let local_id = rand::random();
+
+        let index = Index::load(pool.clone(), local_id).await.unwrap();
+
+        // Add another branch to the index. Eventually there might be a more high-level API for
+        // this but for now we have to resort to this.
+        let remote_id = rand::random();
+        let remote_node = RootNode::load_latest_or_create(&pool, &remote_id)
+            .await
+            .unwrap();
+        index.update_remote_branch(remote_id, remote_node).await;
+
+        let repo = Repository::new(index, Cryptor::Null);
+        let remote_branch = repo.branch(&remote_id).await.unwrap();
+        let remote_root = remote_branch.open_or_create_root().await.unwrap();
+
+        let local_branch = repo.local_branch().await;
+        let local_root = local_branch.open_or_create_root().await.unwrap();
+
+        let mut file = remote_root
+            .create_file("test.txt".to_owned())
+            .await
+            .unwrap();
+        file.write(b"hello").await.unwrap();
+        file.flush().await.unwrap();
+
+        let mut rx = local_branch.data().subscribe();
+
+        loop {
+            match local_root
+                .read()
+                .await
+                .lookup_version("test.txt", &remote_id)
+            {
+                Ok(entry) => {
+                    let content = entry
+                        .file()
+                        .unwrap()
+                        .open()
+                        .await
+                        .unwrap()
+                        .read_to_end()
+                        .await
+                        .unwrap();
+                    assert_eq!(content, b"hello");
+                    break;
+                }
+                Err(Error::EntryNotFound) => (),
+                Err(error) => panic!("unexpected error: {:?}", error),
+            }
+
+            rx.changed().await.unwrap()
+        }
     }
 }
