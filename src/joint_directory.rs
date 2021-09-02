@@ -938,11 +938,10 @@ mod tests {
             .file()
             .unwrap();
 
-        // TODO: check `author`
+        assert_eq!(entry.author(), branches[1].id());
 
         let mut file = entry.open().await.unwrap();
         let local_content = file.read_to_end().await.unwrap();
-
         assert_eq!(local_content, content_v1);
     }
 
@@ -974,17 +973,23 @@ mod tests {
             .await
             .unwrap();
 
-        // The local version is newer, so there is only one version in the local branch.
-        assert_eq!(
-            local_root.read().await.lookup("cat.jpg").unwrap().count(),
-            1
-        );
+        let reader = local_root.read().await;
 
-        let local_content = open_file(&local_root, "cat.jpg")
-            .await
-            .read_to_end()
-            .await
+        // The local version is newer, so there is only one version in the local branch.
+        assert_eq!(reader.lookup("cat.jpg").unwrap().count(), 1);
+
+        let entry = reader
+            .lookup("cat.jpg")
+            .unwrap()
+            .next()
+            .unwrap()
+            .file()
             .unwrap();
+
+        assert_eq!(entry.author(), branches[0].id());
+
+        let mut file = entry.open().await.unwrap();
+        let local_content = file.read_to_end().await.unwrap();
         assert_eq!(local_content, content_v1);
     }
 
