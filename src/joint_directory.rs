@@ -1158,6 +1158,46 @@ mod tests {
             .unwrap();
     }
 
+    #[ignore] // FIXME: this tests sometimes fails
+    #[tokio::test(flavor = "multi_thread")]
+    async fn merge_sequential_modifications() {
+        let branches = setup(2).await;
+
+        let local_root = branches[0].open_or_create_root().await.unwrap();
+        local_root.flush().await.unwrap();
+        let local_root_on_remote = branches[0].open_root(branches[1].clone()).await.unwrap();
+
+        let remote_root = branches[1].open_or_create_root().await.unwrap();
+        remote_root.flush().await.unwrap();
+        let remote_root_on_local = branches[1].open_root(branches[0].clone()).await.unwrap();
+
+        // Create a file by local, then modify it by remote, then read it back by local verifying
+        // the modification by remote got through.
+
+        create_file(&local_root, "dog.jpg", b"v0").await;
+
+        JointDirectory::new(vec![remote_root.clone(), local_root_on_remote])
+            .await
+            .merge()
+            .await
+            .unwrap();
+
+        update_file(&remote_root, "dog.jpg", b"v1").await;
+
+        JointDirectory::new(vec![local_root.clone(), remote_root_on_local])
+            .await
+            .merge()
+            .await
+            .unwrap();
+
+        let content = open_file(&local_root, "dog.jpg")
+            .await
+            .read_to_end()
+            .await
+            .unwrap();
+        assert_eq!(content, b"v1");
+    }
+
     async fn setup(branch_count: usize) -> Vec<Branch> {
         let pool = db::init(db::Store::Memory).await.unwrap();
 
