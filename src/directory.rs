@@ -12,6 +12,7 @@ use crate::{
     version_vector::VersionVector,
 };
 use async_recursion::async_recursion;
+use futures_util::future;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{btree_map, hash_map, BTreeMap, HashMap},
@@ -93,7 +94,7 @@ impl Directory {
             entry_author: author,
         };
 
-        Ok(File::create(self.local_branch.clone(), locator, parent).await)
+        Ok(File::create(self.local_branch.clone(), locator, parent))
     }
 
     /// Creates a new subdirectory of this directory.
@@ -475,17 +476,19 @@ impl Inner {
         entry_type: EntryType,
         version_vector: VersionVector,
     ) -> Result<BlobId> {
-        let (new_blob_id, old_blob_id) =
+        let (new_blob_id, old_blob_ids) =
             self.content
                 .insert(name, author, entry_type, version_vector)?;
 
-        if let Some(old_blob_id) = old_blob_id {
-            // TODO: This should succeed/fail atomically with the above.
-            Blob::open(self.blob.branch().clone(), Locator::Head(old_blob_id))
+        // TODO: This should succeed/fail atomically with the above.
+        let branch = self.blob.branch();
+        future::try_join_all(old_blob_ids.into_iter().map(|old_blob_id| async move {
+            Blob::open(branch.clone(), Locator::Head(old_blob_id))
                 .await?
                 .remove()
-                .await?;
-        }
+                .await
+        }))
+        .await?;
 
         Ok(new_blob_id)
     }
@@ -779,23 +782,32 @@ impl Content {
         }
     }
 
-    /// Insert entry into the content.
+    /// Inserts entry into the content and removes all previously existing versions whose version
+    /// vector "happens before" the new entry. If an entry with the same `author` already exists
+    /// and its version vector is not "happens before" the new entry, nothing is inserted or
+    /// removed and an error is returned instead.
     ///
-    /// This operation succeeds if either there is no such entry in already
-    /// `self.entries[name][author]` or if the existing entry's version vector "happens before" the
-    /// newly inserted entry.
-    ///
-    /// In the latter case, the existing entry's BlobId is returned and it's the responsibility of
-    /// the caller to remove it from the index.
+    /// Returns the blob id of the newly inserted entry and the blob ids of all the removed entries
+    /// (if any). It's the responsibility of the caller to remove the old blobs.
     fn insert(
         &mut self,
         name: String,
         author: ReplicaId,
         entry_type: EntryType,
         version_vector: VersionVector,
-    ) -> Result<(BlobId, Option<BlobId>)> {
+    ) -> Result<(BlobId, Vec<BlobId>)> {
         let blob_id = rand::random();
         let versions = self.entries.entry(name).or_insert_with(Default::default);
+
+        // Find outdated entries
+        // clippy: false positive - the iterator borrows a value that is subsequently mutated, so
+        // the `collect` is needed to work around that.
+        #[allow(clippy::needless_collect)]
+        let old_authors: Vec<_> = versions
+            .iter()
+            .filter(|(_, data)| data.version_vector < version_vector)
+            .map(|(id, _)| *id)
+            .collect();
 
         match versions.entry(author) {
             btree_map::Entry::Vacant(entry) => {
@@ -805,8 +817,6 @@ impl Content {
                     version_vector,
                     blob_core: Arc::new(Mutex::new(Weak::new())),
                 });
-                self.dirty = true;
-                Ok((blob_id, None))
             }
             btree_map::Entry::Occupied(mut entry) => {
                 let data = entry.get_mut();
@@ -825,15 +835,22 @@ impl Content {
                     return Err(Error::EntryExists);
                 }
 
-                let old_blob_id = data.blob_id;
-
                 data.blob_id = blob_id;
                 data.version_vector = version_vector;
-                self.dirty = true;
-
-                Ok((blob_id, Some(old_blob_id)))
             }
         }
+
+        // Remove the outdated entries and collect their blob ids.
+        let old_blob_ids = old_authors
+            .into_iter()
+            .filter(|old_author| *old_author != author)
+            .filter_map(|old_author| versions.remove(&old_author))
+            .map(|data| data.blob_id)
+            .collect();
+
+        self.dirty = true;
+
+        Ok((blob_id, old_blob_ids))
     }
 
     fn remove(&mut self, name: &str) -> Result<()> {
@@ -978,7 +995,7 @@ impl SubdirectoryCache {
 mod tests {
     use super::*;
     use crate::{crypto::Cryptor, db, index::BranchData};
-    use std::collections::BTreeSet;
+    use std::{array, collections::BTreeSet};
 
     #[tokio::test(flavor = "multi_thread")]
     async fn create_and_list_entries() {
@@ -1229,6 +1246,53 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(file1.read_to_end().await.unwrap(), b"hello");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn insert_entry_newer_than_existing() {
+        let name = "foo.txt";
+        let id0 = rand::random();
+        let id1 = rand::random();
+
+        // Test all permutations of the replica ids, to detect any unwanted dependency on their
+        // order.
+        for (a_author, b_author) in array::IntoIter::new([(id0, id1), (id1, id0)]) {
+            let branch = setup().await;
+            let root = branch.open_or_create_root().await.unwrap();
+
+            let a_vv = VersionVector::first(a_author);
+
+            let blob_id = root
+                .insert_entry(name.to_owned(), a_author, EntryType::File, a_vv.clone())
+                .await
+                .unwrap();
+
+            // Need to create this dummy blob here otherwise the subsequent `insert_entry` would
+            // fail when trying to delete it.
+            Blob::create(branch.clone(), Locator::Head(blob_id))
+                .flush()
+                .await
+                .unwrap();
+
+            let b_vv = {
+                let mut vv = a_vv;
+                vv.increment(b_author);
+                vv
+            };
+
+            root.insert_entry(name.to_owned(), b_author, EntryType::File, b_vv.clone())
+                .await
+                .unwrap();
+
+            let reader = root.read().await;
+            let mut entries = reader.entries();
+
+            let entry = entries.next().unwrap().file().unwrap();
+            assert_eq!(entry.author(), &b_author);
+            assert_eq!(entry.version_vector(), &b_vv);
+
+            assert!(entries.next().is_none());
+        }
     }
 
     async fn setup() -> Branch {

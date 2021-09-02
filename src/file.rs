@@ -46,7 +46,7 @@ impl File {
     }
 
     /// Creates a new file.
-    pub(crate) async fn create(branch: Branch, locator: Locator, parent: ParentContext) -> Self {
+    pub(crate) fn create(branch: Branch, locator: Locator, parent: ParentContext) -> Self {
         Self {
             blob: Blob::create(branch.clone(), locator),
             parent,

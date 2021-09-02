@@ -1158,7 +1158,6 @@ mod tests {
             .unwrap();
     }
 
-    #[ignore] // FIXME
     #[tokio::test(flavor = "multi_thread")]
     async fn merge_sequential_modifications() {
         let branches = setup_with_rng(StdRng::seed_from_u64(0), 2).await;
