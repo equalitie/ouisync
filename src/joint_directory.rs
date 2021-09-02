@@ -535,12 +535,12 @@ impl<'a> Iterator for Merge<'a> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use super::*;
     use crate::{branch::Branch, crypto::Cryptor, db, index::BranchData};
     use assert_matches::assert_matches;
     use futures_util::future;
+    use rand::{distributions::Standard, rngs::StdRng, Rng, SeedableRng};
+    use std::sync::Arc;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn no_conflict() {
@@ -1158,10 +1158,10 @@ mod tests {
             .unwrap();
     }
 
-    #[ignore] // FIXME: this tests sometimes fails
+    #[ignore] // FIXME
     #[tokio::test(flavor = "multi_thread")]
     async fn merge_sequential_modifications() {
-        let branches = setup(2).await;
+        let branches = setup_with_rng(StdRng::seed_from_u64(0), 2).await;
 
         let local_root = branches[0].open_or_create_root().await.unwrap();
         local_root.flush().await.unwrap();
@@ -1199,10 +1199,18 @@ mod tests {
     }
 
     async fn setup(branch_count: usize) -> Vec<Branch> {
-        let pool = db::init(db::Store::Memory).await.unwrap();
+        setup_with_rng(StdRng::from_entropy(), branch_count).await
+    }
 
-        future::join_all((0..branch_count).map(|_| async {
-            let data = BranchData::new(&pool, rand::random()).await.unwrap();
+    // Useful for debugging non-deterministic failures.
+    async fn setup_with_rng(rng: StdRng, branch_count: usize) -> Vec<Branch> {
+        let pool = db::init(db::Store::Memory).await.unwrap();
+        let pool = &pool;
+
+        let ids = rng.sample_iter(Standard).take(branch_count);
+
+        future::join_all(ids.map(|id| async move {
+            let data = BranchData::new(pool, id).await.unwrap();
             Branch::new(pool.clone(), Arc::new(data), Cryptor::Null)
         }))
         .await

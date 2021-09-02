@@ -615,6 +615,10 @@ impl<'a> FileRef<'a> {
         self.inner.author
     }
 
+    pub fn version_vector(&self) -> &VersionVector {
+        &self.inner.entry_data.version_vector
+    }
+
     pub async fn open(&self) -> Result<File> {
         let mut guard = self.inner.entry_data.blob_core.lock().await;
         let blob_core = &mut *guard;
