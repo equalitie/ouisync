@@ -343,15 +343,13 @@ impl Directory {
 
                     match file {
                         Ok(mut file) => {
-                            let mut buf = [0, 32];
+                            let mut buf = [0; 32];
                             let lenght_result = file.read(&mut buf).await;
                             match lenght_result {
                                 Ok(length) => {
-                                    let ellipsis = if file.len().await > length as u64 {
-                                        " ..."
-                                    } else {
-                                        ""
-                                    };
+                                    let file_len = file.len().await;
+                                    let ellipsis =
+                                        if file_len > length as u64 { ".." } else { "" };
                                     print.display(&format!(
                                         "Content: {:?}{}",
                                         std::str::from_utf8(&buf[..length]),
