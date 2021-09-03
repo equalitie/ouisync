@@ -46,7 +46,7 @@ impl File {
     }
 
     /// Creates a new file.
-    pub(crate) async fn create(branch: Branch, locator: Locator, parent: ParentContext) -> Self {
+    pub(crate) fn create(branch: Branch, locator: Locator, parent: ParentContext) -> Self {
         Self {
             blob: Blob::create(branch.clone(), locator),
             parent,
@@ -223,6 +223,39 @@ mod test {
             .unwrap();
 
         assert_eq!(file.read_to_end().await.unwrap(), b"large");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn multiple_consecutive_modifications_of_forked_file() {
+        // This test makes sure that modifying a forked file properly updates the file metadata so
+        // subsequent modifications work correclty.
+
+        let branch0 = setup().await;
+        let branch1 = create_branch(branch0.db_pool().clone()).await;
+
+        let mut file0 = branch0.ensure_file_exists("/pig.jpg".into()).await.unwrap();
+        file0.flush().await.unwrap();
+
+        let mut file1 = branch0
+            .open_root(branch1.clone())
+            .await
+            .unwrap()
+            .read()
+            .await
+            .lookup_version("pig.jpg", branch0.id())
+            .unwrap()
+            .file()
+            .unwrap()
+            .open()
+            .await
+            .unwrap();
+
+        file1.fork().await.unwrap();
+
+        for _ in 0..2 {
+            file1.write(b"oink").await.unwrap();
+            file1.flush().await.unwrap();
+        }
     }
 
     async fn setup() -> Branch {

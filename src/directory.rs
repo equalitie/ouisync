@@ -12,10 +12,11 @@ use crate::{
     version_vector::VersionVector,
 };
 use async_recursion::async_recursion;
+use futures_util::future;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{btree_map, hash_map, BTreeMap, HashMap},
-    fmt, iter,
+    fmt,
     sync::{Arc, Weak},
 };
 use tokio::sync::{Mutex, RwLock, RwLockMappedWriteGuard, RwLockReadGuard, RwLockWriteGuard};
@@ -60,14 +61,17 @@ impl Directory {
     /// Flushes this directory ensuring that any pending changes are written to the store and the
     /// version vectors of this and the ancestor directories are properly incremented.
     /// Also flushes all ancestor directories.
-    pub async fn flush(&self) -> Result<()> {
+    pub async fn flush(&mut self) -> Result<()> {
         if !self.inner.write().await.flush().await? {
             return Ok(());
         }
 
-        for ctx in self.ancestors() {
+        let mut next = self.parent.as_mut();
+
+        while let Some(ctx) = next {
             ctx.modify().await?.commit();
             ctx.directory.inner.write().await.flush().await?;
+            next = ctx.directory.parent.as_mut();
         }
 
         Ok(())
@@ -93,7 +97,7 @@ impl Directory {
             entry_author: author,
         };
 
-        Ok(File::create(self.local_branch.clone(), locator, parent).await)
+        Ok(File::create(self.local_branch.clone(), locator, parent))
     }
 
     /// Creates a new subdirectory of this directory.
@@ -199,16 +203,6 @@ impl Directory {
         }
     }
 
-    /// Returns the parent context, if any.
-    pub(crate) fn parent(&self) -> Option<&ParentContext> {
-        self.parent.as_deref()
-    }
-
-    /// Returns iterator of ancestor parent contexts from the current directory to the root.
-    pub(crate) fn ancestors(&self) -> impl Iterator<Item = &ParentContext> {
-        iter::successors(self.parent(), |prev| prev.directory.parent())
-    }
-
     /// Inserts a dangling entry into this directory. It's the responsibility of the caller to make
     /// sure the returned locator eventually points to an actual file or directory.
     /// For internal use only!
@@ -238,7 +232,7 @@ impl Directory {
     pub(crate) async fn modify_entry<'a>(
         &'a self,
         name: &str,
-        author_id: &'a ReplicaId,
+        author_id: &'a mut ReplicaId,
     ) -> Result<ModifyEntry<'a>> {
         let inner = self.write().await;
 
@@ -475,17 +469,19 @@ impl Inner {
         entry_type: EntryType,
         version_vector: VersionVector,
     ) -> Result<BlobId> {
-        let (new_blob_id, old_blob_id) =
+        let (new_blob_id, old_blob_ids) =
             self.content
                 .insert(name, author, entry_type, version_vector)?;
 
-        if let Some(old_blob_id) = old_blob_id {
-            // TODO: This should succeed/fail atomically with the above.
-            Blob::open(self.blob.branch().clone(), Locator::Head(old_blob_id))
+        // TODO: This should succeed/fail atomically with the above.
+        let branch = self.blob.branch();
+        future::try_join_all(old_blob_ids.into_iter().map(|old_blob_id| async move {
+            Blob::open(branch.clone(), Locator::Head(old_blob_id))
                 .await?
                 .remove()
-                .await?;
-        }
+                .await
+        }))
+        .await?;
 
         Ok(new_blob_id)
     }
@@ -615,6 +611,10 @@ impl<'a> FileRef<'a> {
         self.inner.author
     }
 
+    pub fn version_vector(&self) -> &VersionVector {
+        &self.inner.entry_data.version_vector
+    }
+
     pub async fn open(&self) -> Result<File> {
         let mut guard = self.inner.entry_data.blob_core.lock().await;
         let blob_core = &mut *guard;
@@ -722,7 +722,7 @@ impl Eq for RefInner<'_> {}
 /// Pending modification of a directory entry. See [`Directory::modify_entry`] for details.
 pub(crate) struct ModifyEntry<'a> {
     versions: RwLockMappedWriteGuard<'a, BTreeMap<ReplicaId, EntryData>>,
-    old_author_id: &'a ReplicaId,
+    old_author_id: &'a mut ReplicaId,
     new_author_id: ReplicaId,
 }
 
@@ -732,6 +732,7 @@ impl ModifyEntry<'_> {
         let mut entry = self.versions.remove(self.old_author_id).unwrap();
         entry.version_vector.increment(self.new_author_id);
         self.versions.insert(self.new_author_id, entry);
+        *self.old_author_id = self.new_author_id;
     }
 }
 
@@ -775,23 +776,32 @@ impl Content {
         }
     }
 
-    /// Insert entry into the content.
+    /// Inserts entry into the content and removes all previously existing versions whose version
+    /// vector "happens before" the new entry. If an entry with the same `author` already exists
+    /// and its version vector is not "happens before" the new entry, nothing is inserted or
+    /// removed and an error is returned instead.
     ///
-    /// This operation succeeds if either there is no such entry in already
-    /// `self.entries[name][author]` or if the existing entry's version vector "happens before" the
-    /// newly inserted entry.
-    ///
-    /// In the latter case, the existing entry's BlobId is returned and it's the responsibility of
-    /// the caller to remove it from the index.
+    /// Returns the blob id of the newly inserted entry and the blob ids of all the removed entries
+    /// (if any). It's the responsibility of the caller to remove the old blobs.
     fn insert(
         &mut self,
         name: String,
         author: ReplicaId,
         entry_type: EntryType,
         version_vector: VersionVector,
-    ) -> Result<(BlobId, Option<BlobId>)> {
+    ) -> Result<(BlobId, Vec<BlobId>)> {
         let blob_id = rand::random();
         let versions = self.entries.entry(name).or_insert_with(Default::default);
+
+        // Find outdated entries
+        // clippy: false positive - the iterator borrows a value that is subsequently mutated, so
+        // the `collect` is needed to work around that.
+        #[allow(clippy::needless_collect)]
+        let old_authors: Vec<_> = versions
+            .iter()
+            .filter(|(_, data)| data.version_vector < version_vector)
+            .map(|(id, _)| *id)
+            .collect();
 
         match versions.entry(author) {
             btree_map::Entry::Vacant(entry) => {
@@ -801,8 +811,6 @@ impl Content {
                     version_vector,
                     blob_core: Arc::new(Mutex::new(Weak::new())),
                 });
-                self.dirty = true;
-                Ok((blob_id, None))
             }
             btree_map::Entry::Occupied(mut entry) => {
                 let data = entry.get_mut();
@@ -821,15 +829,22 @@ impl Content {
                     return Err(Error::EntryExists);
                 }
 
-                let old_blob_id = data.blob_id;
-
                 data.blob_id = blob_id;
                 data.version_vector = version_vector;
-                self.dirty = true;
-
-                Ok((blob_id, Some(old_blob_id)))
             }
         }
+
+        // Remove the outdated entries and collect their blob ids.
+        let old_blob_ids = old_authors
+            .into_iter()
+            .filter(|old_author| *old_author != author)
+            .filter_map(|old_author| versions.remove(&old_author))
+            .map(|data| data.blob_id)
+            .collect();
+
+        self.dirty = true;
+
+        Ok((blob_id, old_blob_ids))
     }
 
     fn remove(&mut self, name: &str) -> Result<()> {
@@ -974,14 +989,14 @@ impl SubdirectoryCache {
 mod tests {
     use super::*;
     use crate::{crypto::Cryptor, db, index::BranchData};
-    use std::collections::BTreeSet;
+    use std::{array, collections::BTreeSet};
 
     #[tokio::test(flavor = "multi_thread")]
     async fn create_and_list_entries() {
         let branch = setup().await;
 
         // Create the root directory and put some file in it.
-        let dir = branch.open_or_create_root().await.unwrap();
+        let mut dir = branch.open_or_create_root().await.unwrap();
 
         let mut file_dog = dir.create_file("dog.txt".into()).await.unwrap();
         file_dog.write(b"woof").await.unwrap();
@@ -1023,11 +1038,11 @@ mod tests {
         let branch = setup().await;
 
         // Create empty directory
-        let dir = branch.open_or_create_root().await.unwrap();
+        let mut dir = branch.open_or_create_root().await.unwrap();
         dir.flush().await.unwrap();
 
         // Reopen it and add a file to it.
-        let dir = branch.open_root(branch.clone()).await.unwrap();
+        let mut dir = branch.open_root(branch.clone()).await.unwrap();
         dir.create_file("none.txt".into()).await.unwrap();
         dir.flush().await.unwrap();
 
@@ -1043,7 +1058,7 @@ mod tests {
         let name = "monkey.txt";
 
         // Create a directory with a single file.
-        let parent_dir = branch.open_or_create_root().await.unwrap();
+        let mut parent_dir = branch.open_or_create_root().await.unwrap();
         let mut file = parent_dir.create_file(name.into()).await.unwrap();
         file.flush().await.unwrap();
         parent_dir.flush().await.unwrap();
@@ -1051,7 +1066,7 @@ mod tests {
         let file_locator = *file.locator();
 
         // Reopen and remove the file
-        let parent_dir = branch.open_root(branch.clone()).await.unwrap();
+        let mut parent_dir = branch.open_root(branch.clone()).await.unwrap();
         parent_dir.remove_file(name).await.unwrap();
         parent_dir.flush().await.unwrap();
 
@@ -1082,15 +1097,15 @@ mod tests {
         let name = "dir";
 
         // Create a directory with a single subdirectory.
-        let parent_dir = branch.open_or_create_root().await.unwrap();
-        let dir = parent_dir.create_directory(name.into()).await.unwrap();
+        let mut parent_dir = branch.open_or_create_root().await.unwrap();
+        let mut dir = parent_dir.create_directory(name.into()).await.unwrap();
         dir.flush().await.unwrap();
         parent_dir.flush().await.unwrap();
 
         let dir_locator = *dir.read().await.locator();
 
         // Reopen and remove the subdirectory
-        let parent_dir = branch.open_root(branch.clone()).await.unwrap();
+        let mut parent_dir = branch.open_root(branch.clone()).await.unwrap();
         parent_dir.remove_directory(name).await.unwrap();
         parent_dir.flush().await.unwrap();
 
@@ -1117,10 +1132,10 @@ mod tests {
         let branch1 = create_branch(branch0.db_pool().clone()).await;
 
         // Create a nested directory by branch 0
-        let root0 = branch0.open_or_create_root().await.unwrap();
+        let mut root0 = branch0.open_or_create_root().await.unwrap();
         root0.flush().await.unwrap();
 
-        let dir0 = root0.create_directory("dir".into()).await.unwrap();
+        let mut dir0 = root0.create_directory("dir".into()).await.unwrap();
         dir0.flush().await.unwrap();
         root0.flush().await.unwrap();
 
@@ -1138,7 +1153,7 @@ mod tests {
             .open()
             .await
             .unwrap();
-        let dir1 = dir0.fork().await.unwrap();
+        let mut dir1 = dir0.fork().await.unwrap();
 
         dir1.create_file("dog.jpg".into()).await.unwrap();
         dir1.flush().await.unwrap();
@@ -1225,6 +1240,53 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(file1.read_to_end().await.unwrap(), b"hello");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn insert_entry_newer_than_existing() {
+        let name = "foo.txt";
+        let id0 = rand::random();
+        let id1 = rand::random();
+
+        // Test all permutations of the replica ids, to detect any unwanted dependency on their
+        // order.
+        for (a_author, b_author) in array::IntoIter::new([(id0, id1), (id1, id0)]) {
+            let branch = setup().await;
+            let root = branch.open_or_create_root().await.unwrap();
+
+            let a_vv = VersionVector::first(a_author);
+
+            let blob_id = root
+                .insert_entry(name.to_owned(), a_author, EntryType::File, a_vv.clone())
+                .await
+                .unwrap();
+
+            // Need to create this dummy blob here otherwise the subsequent `insert_entry` would
+            // fail when trying to delete it.
+            Blob::create(branch.clone(), Locator::Head(blob_id))
+                .flush()
+                .await
+                .unwrap();
+
+            let b_vv = {
+                let mut vv = a_vv;
+                vv.increment(b_author);
+                vv
+            };
+
+            root.insert_entry(name.to_owned(), b_author, EntryType::File, b_vv.clone())
+                .await
+                .unwrap();
+
+            let reader = root.read().await;
+            let mut entries = reader.entries();
+
+            let entry = entries.next().unwrap().file().unwrap();
+            assert_eq!(entry.author(), &b_author);
+            assert_eq!(entry.version_vector(), &b_vv);
+
+            assert!(entries.next().is_none());
+        }
     }
 
     async fn setup() -> Branch {

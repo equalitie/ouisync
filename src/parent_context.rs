@@ -19,9 +19,9 @@ pub(crate) struct ParentContext {
 
 impl ParentContext {
     /// Start modifying the entry.
-    pub async fn modify(&self) -> Result<ModifyEntry<'_>> {
+    pub async fn modify(&mut self) -> Result<ModifyEntry<'_>> {
         self.directory
-            .modify_entry(&self.entry_name, &self.entry_author)
+            .modify_entry(&self.entry_name, &mut self.entry_author)
             .await
     }
 
