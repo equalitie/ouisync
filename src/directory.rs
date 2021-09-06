@@ -2,6 +2,7 @@ use crate::{
     blob::{self, Blob},
     blob_id::BlobId,
     branch::Branch,
+    db,
     debug_printer::DebugPrinter,
     entry_type::EntryType,
     error::{Error, Result},
@@ -62,9 +63,15 @@ impl Directory {
     /// version vectors of this and the ancestor directories are properly incremented.
     /// Also flushes all ancestor directories.
     pub async fn flush(&mut self) -> Result<()> {
-        // TODO: this all needs to happen atomically.
+        let mut tx = self.local_branch.db_pool().begin().await?;
+        self.flush_in_transaction(&mut tx).await?;
+        tx.commit().await?;
+        Ok(())
+    }
 
-        if !self.inner.write().await.flush().await? {
+    /// Flushes this directory in a db transaction.
+    pub async fn flush_in_transaction(&mut self, tx: &mut db::Transaction<'_>) -> Result<()> {
+        if !self.inner.write().await.flush(tx).await? {
             return Ok(());
         }
 
@@ -72,7 +79,7 @@ impl Directory {
 
         while let Some(ctx) = next {
             ctx.modify_entry().await?;
-            ctx.directory.inner.write().await.flush().await?;
+            ctx.directory.inner.write().await.flush(tx).await?;
             next = ctx.directory.parent.as_mut();
         }
 
@@ -226,6 +233,8 @@ impl Directory {
     }
 
     /// Update the version vector and author of a modified entry.
+    // TODO: consider implemeting some way to revert the changes performed by this function to
+    // properly support atomic flushing.
     pub(crate) async fn modify_entry<'a>(
         &'a self,
         name: &str,
@@ -241,7 +250,6 @@ impl Directory {
         let authors_version = versions.get(author_id).ok_or(Error::EntryNotFound)?;
 
         let local_id = self.local_branch.id();
-        let local_version = versions.get(local_id);
 
         if author_id != local_id {
             // There may already exist a local version of the entry. If it does, we may
@@ -249,6 +257,7 @@ impl Directory {
             // modified.  Note that if there doesn't alreay exist a local version, that is
             // essentially the same as if it did exist but it's version_vector was a zero
             // vector.
+            let local_version = versions.get(local_id);
             let local_happened_before = local_version.map_or(true, |local_version| {
                 local_version.version_vector < authors_version.version_vector
             });
@@ -259,10 +268,10 @@ impl Directory {
             }
         }
 
-        // `unwrap` is OK because we already established the entry exists above.
-        let mut entry = versions.remove(author_id).unwrap();
-        entry.version_vector.increment(*local_id);
-        versions.insert(*local_id, entry);
+        // `unwrap` is OK because we already established the entry exists.
+        let mut version = versions.remove(author_id).unwrap();
+        version.version_vector.increment(*local_id);
+        versions.insert(*local_id, version);
 
         *author_id = *local_id;
         inner.content.dirty = true;
@@ -451,7 +460,7 @@ struct Inner {
 }
 
 impl Inner {
-    async fn flush(&mut self) -> Result<bool> {
+    async fn flush(&mut self, tx: &mut db::Transaction<'_>) -> Result<bool> {
         if !self.content.dirty {
             return Ok(false);
         }
@@ -459,9 +468,9 @@ impl Inner {
         let buffer =
             bincode::serialize(&self.content).expect("failed to serialize directory content");
 
-        self.blob.truncate(0).await?;
-        self.blob.write(&buffer).await?;
-        self.blob.flush().await?;
+        self.blob.truncate_in_transaction(tx, 0).await?;
+        self.blob.write_in_transaction(tx, &buffer).await?;
+        self.blob.flush_in_transaction(tx).await?;
 
         self.content.dirty = false;
 

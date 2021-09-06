@@ -104,10 +104,15 @@ impl File {
             return Ok(());
         }
 
-        // TODO: this all needs to happen atomically.
-        self.blob.flush().await?;
+        let mut tx = self.blob.db_pool().begin().await?;
+        self.blob.flush_in_transaction(&mut tx).await?;
+        // TODO: the following line performs a modification to the in-memory state of the directory
+        // which currently won't be rolled back when the `tx` rollbacks.
         self.parent.modify_entry().await?;
-        self.parent.directory.flush().await
+        self.parent.directory.flush_in_transaction(&mut tx).await?;
+        tx.commit().await?;
+
+        Ok(())
     }
 
     /// Removes this file.
