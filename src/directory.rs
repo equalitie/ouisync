@@ -19,7 +19,7 @@ use std::{
     fmt,
     sync::{Arc, Weak},
 };
-use tokio::sync::{Mutex, RwLock, RwLockMappedWriteGuard, RwLockReadGuard, RwLockWriteGuard};
+use tokio::sync::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 #[derive(Clone)]
 pub struct Directory {
@@ -62,6 +62,8 @@ impl Directory {
     /// version vectors of this and the ancestor directories are properly incremented.
     /// Also flushes all ancestor directories.
     pub async fn flush(&mut self) -> Result<()> {
+        // TODO: this all needs to happen atomically.
+
         if !self.inner.write().await.flush().await? {
             return Ok(());
         }
@@ -69,7 +71,7 @@ impl Directory {
         let mut next = self.parent.as_mut();
 
         while let Some(ctx) = next {
-            ctx.modify().await?.commit();
+            ctx.modify_entry().await?;
             ctx.directory.inner.write().await.flush().await?;
             next = ctx.directory.parent.as_mut();
         }
@@ -223,51 +225,49 @@ impl Directory {
             .await
     }
 
-    /// Prepares an entry for modification. When this returns `Ok`, the entry itself can be safely
-    /// modified. If that succeeds, the returned `ModifyEntry` object should be committed by calling
-    /// its [`commit`] method which updates the metadata (version vector and author id) of the entry
-    /// in this directory.
-    /// If the entry modification fails, the `ModifyEntry` object should be dropped instead, which
-    /// leaves the metadata intact.
+    /// Update the version vector and author of a modified entry.
     pub(crate) async fn modify_entry<'a>(
         &'a self,
         name: &str,
         author_id: &'a mut ReplicaId,
-    ) -> Result<ModifyEntry<'a>> {
-        let inner = self.write().await;
+    ) -> Result<()> {
+        let mut inner = self.write().await;
 
-        let versions =
-            RwLockWriteGuard::try_map(inner, |inner| inner.content.entries.get_mut(name))
-                .map_err(|_| Error::EntryNotFound)?;
+        let versions = inner
+            .content
+            .entries
+            .get_mut(name)
+            .ok_or(Error::EntryNotFound)?;
+        let authors_version = versions.get(author_id).ok_or(Error::EntryNotFound)?;
 
-        if let Some(authors_version) = versions.get(author_id) {
-            let local_id = self.local_branch.id();
-            let local_version = versions.get(local_id);
+        let local_id = self.local_branch.id();
+        let local_version = versions.get(local_id);
 
-            if author_id != local_id {
-                // There may already exist a local version of the entry. If it does, we may
-                // overwrite it only if the existing version "happened before" this new one being
-                // modified.  Note that if there doesn't alreay exist a local version, that is
-                // essentially the same as if it did exist but it's version_vector was a zero
-                // vector.
-                let local_happened_before = local_version.map_or(true, |local_version| {
-                    local_version.version_vector < authors_version.version_vector
-                });
+        if author_id != local_id {
+            // There may already exist a local version of the entry. If it does, we may
+            // overwrite it only if the existing version "happened before" this new one being
+            // modified.  Note that if there doesn't alreay exist a local version, that is
+            // essentially the same as if it did exist but it's version_vector was a zero
+            // vector.
+            let local_happened_before = local_version.map_or(true, |local_version| {
+                local_version.version_vector < authors_version.version_vector
+            });
 
-                // TODO: use a more descriptive error here.
-                if !local_happened_before {
-                    return Err(Error::EntryExists);
-                }
+            // TODO: use a more descriptive error here.
+            if !local_happened_before {
+                return Err(Error::EntryExists);
             }
-
-            Ok(ModifyEntry {
-                versions,
-                old_author_id: author_id,
-                new_author_id: *local_id,
-            })
-        } else {
-            Err(Error::EntryNotFound)
         }
+
+        // `unwrap` is OK because we already established the entry exists above.
+        let mut entry = versions.remove(author_id).unwrap();
+        entry.version_vector.increment(*local_id);
+        versions.insert(*local_id, entry);
+
+        *author_id = *local_id;
+        inner.content.dirty = true;
+
+        Ok(())
     }
 
     async fn open(
@@ -357,8 +357,7 @@ impl Directory {
                             match lenght_result {
                                 Ok(length) => {
                                     let file_len = file.len().await;
-                                    let ellipsis =
-                                        if file_len > length as u64 { ".." } else { "" };
+                                    let ellipsis = if file_len > length as u64 { ".." } else { "" };
                                     print.display(&format!(
                                         "Content: {:?}{}",
                                         std::str::from_utf8(&buf[..length]),
@@ -725,23 +724,6 @@ impl PartialEq for RefInner<'_> {
 }
 
 impl Eq for RefInner<'_> {}
-
-/// Pending modification of a directory entry. See [`Directory::modify_entry`] for details.
-pub(crate) struct ModifyEntry<'a> {
-    versions: RwLockMappedWriteGuard<'a, BTreeMap<ReplicaId, EntryData>>,
-    old_author_id: &'a mut ReplicaId,
-    new_author_id: ReplicaId,
-}
-
-impl ModifyEntry<'_> {
-    /// Commit the entry modifications, updating the entry version vector and author id.
-    pub fn commit(mut self) {
-        let mut entry = self.versions.remove(self.old_author_id).unwrap();
-        entry.version_vector.increment(self.new_author_id);
-        self.versions.insert(self.new_author_id, entry);
-        *self.old_author_id = self.new_author_id;
-    }
-}
 
 /// Destination directory of a move operation.
 #[allow(clippy::large_enum_variant)]

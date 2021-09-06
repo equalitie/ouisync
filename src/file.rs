@@ -104,9 +104,9 @@ impl File {
             return Ok(());
         }
 
-        let modify = self.parent.modify().await?;
+        // TODO: this all needs to happen atomically.
         self.blob.flush().await?;
-        modify.commit();
+        self.parent.modify_entry().await?;
         self.parent.directory.flush().await
     }
 

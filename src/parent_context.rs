@@ -1,8 +1,5 @@
 use crate::{
-    directory::{Directory, ModifyEntry},
-    error::Result,
-    replica_id::ReplicaId,
-    version_vector::VersionVector,
+    directory::Directory, error::Result, replica_id::ReplicaId, version_vector::VersionVector,
 };
 
 /// Info about an entry in the context of its parent directory.
@@ -18,8 +15,8 @@ pub(crate) struct ParentContext {
 }
 
 impl ParentContext {
-    /// Start modifying the entry.
-    pub async fn modify(&mut self) -> Result<ModifyEntry<'_>> {
+    /// Modifying the entry.
+    pub async fn modify_entry(&mut self) -> Result<()> {
         self.directory
             .modify_entry(&self.entry_name, &mut self.entry_author)
             .await
