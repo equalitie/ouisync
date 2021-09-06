@@ -520,7 +520,12 @@ impl Inner {
             offset
         );
 
-        self.repository.debug_print(DebugPrinter::new()).await;
+        // In debug mode, print state when the user does `ls <ouisync-mount-root>/`
+        if cfg!(debug_assertions) {
+            if inode == 1 && offset == 0 {
+                self.debug_print(DebugPrinter::new()).await;
+            }
+        }
 
         if offset < 0 {
             return Err(Error::OffsetOutOfRange);
