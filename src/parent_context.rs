@@ -1,6 +1,4 @@
-use crate::{
-    directory::Directory, error::Result, replica_id::ReplicaId, version_vector::VersionVector,
-};
+use crate::{directory::Directory, replica_id::ReplicaId, version_vector::VersionVector};
 
 /// Info about an entry in the context of its parent directory.
 #[derive(Clone)]
@@ -15,13 +13,6 @@ pub(crate) struct ParentContext {
 }
 
 impl ParentContext {
-    /// Modifying the entry.
-    pub async fn modify_entry(&mut self) -> Result<()> {
-        self.directory
-            .modify_entry(&self.entry_name, &mut self.entry_author)
-            .await
-    }
-
     // TODO: Can this be done without cloning the VersionVector? E.g. by returning some kind of
     // read lock.
     pub async fn entry_version_vector(&self) -> VersionVector {

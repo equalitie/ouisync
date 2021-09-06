@@ -105,12 +105,12 @@ impl File {
         }
 
         let mut tx = self.blob.db_pool().begin().await?;
+
         self.blob.flush_in_transaction(&mut tx).await?;
-        // TODO: the following line performs a modification to the in-memory state of the directory
-        // which currently won't be rolled back when the `tx` rollbacks.
-        self.parent.modify_entry().await?;
-        self.parent.directory.flush_in_transaction(&mut tx).await?;
-        tx.commit().await?;
+        self.parent
+            .directory
+            .modify_entry(tx, &self.parent.entry_name, &mut self.parent.entry_author)
+            .await?;
 
         Ok(())
     }

@@ -63,24 +63,22 @@ impl Directory {
     /// version vectors of this and the ancestor directories are properly incremented.
     /// Also flushes all ancestor directories.
     pub async fn flush(&mut self) -> Result<()> {
-        let mut tx = self.local_branch.db_pool().begin().await?;
-        self.flush_in_transaction(&mut tx).await?;
-        tx.commit().await?;
-        Ok(())
-    }
+        let mut inner = self.inner.write().await;
 
-    /// Flushes this directory in a db transaction.
-    pub async fn flush_in_transaction(&mut self, tx: &mut db::Transaction<'_>) -> Result<()> {
-        if !self.inner.write().await.flush(tx).await? {
+        if !inner.content.dirty {
             return Ok(());
         }
 
-        let mut next = self.parent.as_mut();
+        let mut tx = self.local_branch.db_pool().begin().await?;
 
-        while let Some(ctx) = next {
-            ctx.modify_entry().await?;
-            ctx.directory.inner.write().await.flush(tx).await?;
-            next = ctx.directory.parent.as_mut();
+        inner.flush(&mut tx).await?;
+
+        if let Some(ctx) = self.parent.as_mut() {
+            ctx.directory
+                .modify_entry(tx, &ctx.entry_name, &mut ctx.entry_author)
+                .await?;
+        } else {
+            tx.commit().await?;
         }
 
         Ok(())
@@ -232,49 +230,48 @@ impl Directory {
             .await
     }
 
-    /// Update the version vector and author of a modified entry.
-    // TODO: consider implemeting some way to revert the changes performed by this function to
-    // properly support atomic flushing.
-    pub(crate) async fn modify_entry<'a>(
-        &'a self,
+    /// Atomically updates metadata (version vector and author) of the specified entry, then the
+    /// metadata of this directory in its parent (and recursively for all ancestors), flushes the
+    /// changes to the db and finally commits the db transaction.
+    /// If an error occurs anywhere in the process, all intermediate changes are rolled back and all
+    /// the affected directories are reverted to their state before calling this function.
+    ///
+    /// Note: This function deliberately deviates from the established API conventions in this
+    /// project, namely it modifies the directory, flushes it and commits the db transaction all in
+    /// one call. The reason for this is that the correctness of this function depends on the
+    /// precise order the various sub-operations are executed and by wrapping it all in one function
+    /// we make it harder to misuse. So we decided to sacrifice API purity for corectness.
+    pub(crate) async fn modify_entry(
+        &mut self,
+        tx: db::Transaction<'_>,
         name: &str,
-        author_id: &'a mut ReplicaId,
+        author_id: &mut ReplicaId,
     ) -> Result<()> {
-        let mut inner = self.write().await;
+        let inner = self.inner.write().await;
+        inner.assert_local(self.local_branch.id());
 
-        let versions = inner
-            .content
-            .entries
-            .get_mut(name)
-            .ok_or(Error::EntryNotFound)?;
-        let authors_version = versions.get(author_id).ok_or(Error::EntryNotFound)?;
+        let step = ModifyEntryStep::new(inner, name, author_id);
+        let mut steps = vec![step];
+        let mut next = self.parent.as_mut();
 
-        let local_id = self.local_branch.id();
-
-        if author_id != local_id {
-            // There may already exist a local version of the entry. If it does, we may
-            // overwrite it only if the existing version "happened before" this new one being
-            // modified.  Note that if there doesn't alreay exist a local version, that is
-            // essentially the same as if it did exist but it's version_vector was a zero
-            // vector.
-            let local_version = versions.get(local_id);
-            let local_happened_before = local_version.map_or(true, |local_version| {
-                local_version.version_vector < authors_version.version_vector
-            });
-
-            // TODO: use a more descriptive error here.
-            if !local_happened_before {
-                return Err(Error::EntryExists);
-            }
+        while let Some(ctx) = next {
+            let step = ModifyEntryStep::new(
+                ctx.directory.inner.write().await,
+                &ctx.entry_name,
+                &mut ctx.entry_author,
+            );
+            next = ctx.directory.parent.as_mut();
+            steps.push(step);
         }
 
-        // `unwrap` is OK because we already established the entry exists.
-        let mut version = versions.remove(author_id).unwrap();
-        version.version_vector.increment(*local_id);
-        versions.insert(*local_id, version);
+        let mut tx = ModifyEntry {
+            steps,
+            local_id: self.local_branch.id(),
+            tx: Some(tx),
+        };
 
-        *author_id = *local_id;
-        inner.content.dirty = true;
+        tx.flush().await?;
+        tx.commit().await?;
 
         Ok(())
     }
@@ -321,11 +318,7 @@ impl Directory {
     // Panics if not in the local branch.
     async fn write(&self) -> RwLockWriteGuard<'_, Inner> {
         let inner = self.inner.write().await;
-        assert_eq!(
-            inner.blob.branch().id(),
-            self.local_branch.id(),
-            "mutable operations not allowed - directory is not in the local branch"
-        );
+        inner.assert_local(self.local_branch.id());
         inner
     }
 
@@ -460,9 +453,9 @@ struct Inner {
 }
 
 impl Inner {
-    async fn flush(&mut self, tx: &mut db::Transaction<'_>) -> Result<bool> {
+    async fn flush(&mut self, tx: &mut db::Transaction<'_>) -> Result<()> {
         if !self.content.dirty {
-            return Ok(false);
+            return Ok(());
         }
 
         let buffer =
@@ -474,7 +467,7 @@ impl Inner {
 
         self.content.dirty = false;
 
-        Ok(true)
+        Ok(())
     }
 
     async fn insert_entry(
@@ -499,6 +492,56 @@ impl Inner {
         .await?;
 
         Ok(new_blob_id)
+    }
+
+    fn modify_entry(
+        &mut self,
+        name: &str,
+        author_id: &mut ReplicaId,
+        local_id: ReplicaId,
+    ) -> Result<()> {
+        let versions = self
+            .content
+            .entries
+            .get_mut(name)
+            .ok_or(Error::EntryNotFound)?;
+        let authors_version = versions.get(author_id).ok_or(Error::EntryNotFound)?;
+
+        if *author_id != local_id {
+            // There may already exist a local version of the entry. If it does, we may
+            // overwrite it only if the existing version "happened before" this new one being
+            // modified.  Note that if there doesn't alreay exist a local version, that is
+            // essentially the same as if it did exist but it's version_vector was a zero
+            // vector.
+            let local_version = versions.get(&local_id);
+            let local_happened_before = local_version.map_or(true, |local_version| {
+                local_version.version_vector < authors_version.version_vector
+            });
+
+            // TODO: use a more descriptive error here.
+            if !local_happened_before {
+                return Err(Error::EntryExists);
+            }
+        }
+
+        // `unwrap` is OK because we already established the entry exists.
+        let mut version = versions.remove(author_id).unwrap();
+        version.version_vector.increment(local_id);
+        versions.insert(local_id, version);
+
+        *author_id = local_id;
+        self.content.dirty = true;
+
+        Ok(())
+    }
+
+    #[track_caller]
+    fn assert_local(&self, local_id: &ReplicaId) {
+        assert_eq!(
+            self.blob.branch().id(),
+            local_id,
+            "mutable operations not allowed - directory is not in the local branch"
+        )
     }
 }
 
@@ -980,6 +1023,93 @@ impl SubdirectoryCache {
         map.retain(|_, dir| dir.upgrade().is_some());
 
         Ok(dir)
+    }
+}
+
+struct ModifyEntry<'a, 'b> {
+    steps: Vec<ModifyEntryStep<'a>>,
+    local_id: &'a ReplicaId,
+    tx: Option<db::Transaction<'b>>,
+}
+
+impl ModifyEntry<'_, '_> {
+    async fn flush(&mut self) -> Result<()> {
+        // `unwrap` is OK because `self.tx` is `Some` initially and we only set it to `None` in
+        // `commit` which consumes `self` so this method cannot be called again.
+        let tx = &mut self.tx.as_mut().unwrap();
+
+        for step in &mut self.steps {
+            step.inner
+                .modify_entry(step.name, step.author_id, *self.local_id)?;
+            step.inner.flush(tx).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn commit(mut self) -> Result<()> {
+        if let Some(tx) = self.tx.take() {
+            tx.commit().await?;
+        }
+
+        Ok(())
+    }
+}
+
+impl Drop for ModifyEntry<'_, '_> {
+    fn drop(&mut self) {
+        if self.tx.is_none() {
+            return;
+        }
+
+        for step in self.steps.drain(..) {
+            step.rollback()
+        }
+    }
+}
+
+struct ModifyEntryStep<'a> {
+    inner: RwLockWriteGuard<'a, Inner>,
+    name: &'a str,
+    author_id: &'a mut ReplicaId,
+    author_id_backup: ReplicaId,
+    versions_backup: Option<BTreeMap<ReplicaId, EntryData>>,
+    dirty_backup: bool,
+}
+
+impl<'a> ModifyEntryStep<'a> {
+    fn new(
+        inner: RwLockWriteGuard<'a, Inner>,
+        name: &'a str,
+        author_id: &'a mut ReplicaId,
+    ) -> Self {
+        let author_id_backup = *author_id;
+        let versions_backup = inner.content.entries.get(name).cloned();
+        let dirty_backup = inner.content.dirty;
+
+        Self {
+            inner,
+            name,
+            author_id,
+            author_id_backup,
+            versions_backup,
+            dirty_backup,
+        }
+    }
+
+    fn rollback(mut self) {
+        *self.author_id = self.author_id_backup;
+        self.inner.content.dirty = self.dirty_backup;
+
+        if let Some(versions_backup) = self.versions_backup {
+            // `unwrap` is OK here because the existence of `versions_backup` implies that the
+            // entry for `name` exists because we never remove it during the `modify_entry` call.
+            // Also as the `ModifyEntry` struct is holding an exclusive lock (write lock) to the
+            // directory internals, it's impossible for someone to remove the entry in the meantime.
+            *self.inner.content.entries.get_mut(self.name).unwrap() = versions_backup;
+        } else {
+            self.inner.content.entries.remove(self.name);
+        }
     }
 }
 
