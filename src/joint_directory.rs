@@ -272,12 +272,20 @@ impl Reader<'_> {
         let (name, branch_id_prefix) = versioned_file_name::parse(name);
         let branch_id_prefix = branch_id_prefix.ok_or(Error::EntryNotFound)?;
 
-        let mut entries = self
+        let entries = self
             .0
             .iter()
             .flat_map(|dir| dir.lookup(name).ok().into_iter().flatten())
             .filter_map(|entry| entry.file().ok())
             .filter(|entry| entry.author().starts_with(&branch_id_prefix));
+
+        // At this point, `entries` contains files from only a single author. It may still be the
+        // case however that there are multiple versions of the entry because each branch may
+        // contain one.
+        // NOTE: Using keep_maximal may be an overkill in this case because of the invariant that
+        // no single author/replica can create concurrent versions of an entry.
+        let mut entries =
+            keep_maximal(entries, |e| e.version_vector(), |e| e.is_local()).into_iter();
 
         let first = entries.next().ok_or(Error::EntryNotFound)?;
 
@@ -430,7 +438,7 @@ impl fmt::Debug for JointDirectoryRef<'_> {
 }
 
 // Iterator adaptor that maps iterator of `EntryRef` to iterator of `JointEntryRef` by filtering
-// out the outdated (according the their version vectors) versions and then mering all
+// out the outdated (according the their version vectors) versions and then merging all
 // `EntryRef::Directory` items into a single `JointDirectoryRef` item but keeping `EntryRef::File`
 // items separate.
 #[derive(Clone)]
@@ -471,48 +479,57 @@ impl<'a> Merge<'a> {
         }
     }
 
-    // Returns the entries with the maximal version vectors.
     fn keep_concurrent(entries: impl Iterator<Item = EntryRef<'a>>) -> Vec<EntryRef<'a>> {
-        let mut max: Vec<EntryRef> = Vec::new();
+        keep_maximal(entries, |e| e.version_vector(), |e| e.is_local())
+    }
+}
 
-        for new in entries {
-            let mut insert = true;
-            let mut remove = None;
+// Returns the entries with the maximal version vectors.
+fn keep_maximal<E, GetVv, IsLocal>(
+    entries: impl Iterator<Item = E>,
+    mut get_vv: GetVv,
+    mut is_local: IsLocal,
+) -> Vec<E>
+where
+    GetVv: FnMut(&E) -> &super::version_vector::VersionVector,
+    IsLocal: FnMut(&E) -> bool,
+{
+    let mut max: Vec<E> = Vec::new();
 
-            for (index, old) in max.iter().enumerate() {
-                match (
-                    old.version_vector().partial_cmp(new.version_vector()),
-                    new.is_local(),
-                ) {
-                    // If both have identical versions, prefer the local one
-                    (Some(Ordering::Less), _) | (Some(Ordering::Equal), true) => {
-                        insert = true;
-                        remove = Some(index);
-                        break;
-                    }
-                    (Some(Ordering::Greater), _) | (Some(Ordering::Equal), false) => {
-                        insert = false;
-                        break;
-                    }
-                    (None, _) => {
-                        insert = true;
-                    }
+    for new in entries {
+        let mut insert = true;
+        let mut remove = None;
+
+        for (index, old) in max.iter().enumerate() {
+            match (get_vv(old).partial_cmp(get_vv(&new)), is_local(&new)) {
+                // If both have identical versions, prefer the local one
+                (Some(Ordering::Less), _) | (Some(Ordering::Equal), true) => {
+                    insert = true;
+                    remove = Some(index);
+                    break;
                 }
-            }
-
-            // Note: using `Vec::remove` to maintain the original order. Is there a more efficient
-            // way?
-            if let Some(index) = remove {
-                max.remove(index);
-            }
-
-            if insert {
-                max.push(new)
+                (Some(Ordering::Greater), _) | (Some(Ordering::Equal), false) => {
+                    insert = false;
+                    break;
+                }
+                (None, _) => {
+                    insert = true;
+                }
             }
         }
 
-        max
+        // Note: using `Vec::remove` to maintain the original order. Is there a more efficient
+        // way?
+        if let Some(index) = remove {
+            max.remove(index);
+        }
+
+        if insert {
+            max.push(new)
+        }
     }
+
+    max
 }
 
 impl<'a> Iterator for Merge<'a> {

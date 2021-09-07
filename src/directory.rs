@@ -640,7 +640,7 @@ impl<'a> EntryRef<'a> {
     }
 
     pub fn is_local(&self) -> bool {
-        self.inner().parent_inner.blob.branch().id() == self.inner().parent_outer.local_branch.id()
+        self.inner().is_local()
     }
 
     fn inner(&self) -> &RefInner {
@@ -698,6 +698,10 @@ impl<'a> FileRef<'a> {
             Ok(file)
         }
     }
+
+    pub fn is_local(&self) -> bool {
+        self.inner.is_local()
+    }
 }
 
 impl fmt::Debug for FileRef<'_> {
@@ -737,6 +741,10 @@ impl<'a> DirectoryRef<'a> {
             )
             .await
     }
+
+    pub fn is_local(&self) -> bool {
+        self.inner.is_local()
+    }
 }
 
 impl fmt::Debug for DirectoryRef<'_> {
@@ -763,6 +771,10 @@ impl RefInner<'_> {
             entry_name: self.name.into(),
             entry_author: *self.author,
         }
+    }
+
+    pub fn is_local(&self) -> bool {
+        self.parent_inner.blob.branch().id() == self.parent_outer.local_branch.id()
     }
 }
 
