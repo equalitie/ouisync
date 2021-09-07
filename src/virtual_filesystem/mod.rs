@@ -895,7 +895,6 @@ fn make_file_attr(inode: Inode, entry_type: EntryType, len: u64) -> FileAttr {
         gid: 0, // TODO
         rdev: 0,
         blksize: 0, // ?
-        padding: 0,
         flags: 0,
     }
 }
