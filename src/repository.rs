@@ -196,7 +196,10 @@ impl Repository {
                 ""
             };
             print.display(&format_args!("Branch {:?}{}", replica_id, local));
-            print.display(&format_args!("/, {:?}", branch.data().versions().await));
+            print.display(&format_args!(
+                "/, {:?}",
+                branch.data().root_version_vector().await
+            ));
             branch.debug_print(print.indent()).await;
         }
     }
@@ -313,7 +316,9 @@ impl Merger {
         let local = self.shared.local_branch().await;
 
         let handle = ScopedJoinHandle(task::spawn(async move {
-            if *local.data().versions().await > *remote.data().versions().await {
+            if *local.data().root_version_vector().await
+                > *remote.data().root_version_vector().await
+            {
                 log::debug!(
                     "merge with branch {:?} suppressed - local branch already up to date",
                     remote_id

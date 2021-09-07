@@ -1069,7 +1069,7 @@ mod tests {
         let mut local_root = branches[0].open_or_create_root().await.unwrap();
         local_root.flush().await.unwrap();
 
-        let vv0 = branches[0].data().versions().await.clone();
+        let vv0 = branches[0].data().root_version_vector().await.clone();
 
         let remote_root = branches[1].open_or_create_root().await.unwrap();
         let remote_root_on_local = branches[1].open_root(branches[0].clone()).await.unwrap();
@@ -1082,7 +1082,7 @@ mod tests {
             .await
             .unwrap();
 
-        let vv1 = branches[0].data().versions().await.clone();
+        let vv1 = branches[0].data().root_version_vector().await.clone();
         assert!(vv1 > vv0);
 
         // Merge again. This time there is no local modification because there was no remote
@@ -1093,7 +1093,7 @@ mod tests {
             .await
             .unwrap();
 
-        let vv2 = branches[0].data().versions().await.clone();
+        let vv2 = branches[0].data().root_version_vector().await.clone();
         assert_eq!(vv2, vv1);
 
         // Perform another remote modification and merge again - this causes local modification
@@ -1105,7 +1105,7 @@ mod tests {
             .await
             .unwrap();
 
-        let vv3 = branches[0].data().versions().await.clone();
+        let vv3 = branches[0].data().root_version_vector().await.clone();
         assert!(vv3 > vv2);
 
         // Another idempotent merge which causes no local modification.
@@ -1115,7 +1115,7 @@ mod tests {
             .await
             .unwrap();
 
-        let vv4 = branches[0].data().versions().await.clone();
+        let vv4 = branches[0].data().root_version_vector().await.clone();
         assert_eq!(vv4, vv3);
     }
 
@@ -1140,7 +1140,7 @@ mod tests {
             .await
             .unwrap();
 
-        let vv0 = branches[0].data().versions().await.clone();
+        let vv0 = branches[0].data().root_version_vector().await.clone();
 
         // Then merge local back into remote. This has no effect.
         JointDirectory::new(vec![remote_root, local_root_on_remote])
@@ -1149,7 +1149,7 @@ mod tests {
             .await
             .unwrap();
 
-        let vv1 = branches[0].data().versions().await.clone();
+        let vv1 = branches[0].data().root_version_vector().await.clone();
         assert_eq!(vv1, vv0);
     }
 
