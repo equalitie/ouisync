@@ -171,12 +171,10 @@ impl JointDirectory {
     // Ensure this joint directory contains a local version.
     async fn fork(&mut self) -> Result<()> {
         if self.local_branch_id().await.is_some() {
-            // TODO: we should still proceed with the fork, to update the version vector.
             return Ok(());
         }
 
         // Grab any version and fork it to create the local one.
-        // TODO: fork all versions, not just one, to properly update the version vector.
         let local = if let Some(remote) = self.versions.values().next() {
             remote.clone().fork().await?
         } else {

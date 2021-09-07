@@ -199,16 +199,13 @@ impl Directory {
             {
                 // TODO: if the local entry exists but is not a directory, we should still create
                 // the directory using its owner branch as the author.
-                // TODO: update the version vector to a merge of the local and remote ones.
                 return entry.directory()?.open().await;
             }
 
-            // TODO: set the version vector to a copy the remote one.
             parent_dir
                 .create_directory(parent.entry_name.to_string())
                 .await
         } else {
-            // TODO: properly update the root version vector
             self.local_branch.open_or_create_root().await
         }
     }
@@ -439,6 +436,15 @@ impl Reader<'_> {
     /// Branch of this directory
     pub fn branch(&self) -> &Branch {
         self.inner.blob.branch()
+    }
+
+    /// Version vector of this directory.
+    pub async fn version_vector(&self) -> VersionVector {
+        if let Some(parent) = &self.outer.parent {
+            parent.entry_version_vector().await
+        } else {
+            self.branch().data().root_version_vector().await.clone()
+        }
     }
 
     /// Is this directory in the local branch?
