@@ -104,10 +104,15 @@ impl File {
             return Ok(());
         }
 
-        let modify = self.parent.modify().await?;
-        self.blob.flush().await?;
-        modify.commit();
-        self.parent.directory.flush().await
+        let mut tx = self.blob.db_pool().begin().await?;
+
+        self.blob.flush_in_transaction(&mut tx).await?;
+        self.parent
+            .directory
+            .modify_entry(tx, &self.parent.entry_name, &mut self.parent.entry_author)
+            .await?;
+
+        Ok(())
     }
 
     /// Removes this file.

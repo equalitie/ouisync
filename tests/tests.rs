@@ -3,7 +3,15 @@ mod utils;
 use self::utils::{eventually, Bin};
 use std::fs;
 
+// HACK: run the integration tests sequentially, so they don't interfere with each other.
+// TODO: disable local discovery in these tests and establish explicit connections instead to avoid
+//       this interference. Then remove this wrapper.
 #[test]
+fn run_sequentially() {
+    transfer_single_file();
+    sequential_write_to_the_same_file();
+}
+
 fn transfer_single_file() {
     let a = Bin::start(0);
     let b = Bin::start(1);
@@ -19,9 +27,6 @@ fn transfer_single_file() {
     })
 }
 
-// FIXME: this test currently fails
-#[ignore]
-#[test]
 fn sequential_write_to_the_same_file() {
     let a = Bin::start(0);
     let b = Bin::start(1);

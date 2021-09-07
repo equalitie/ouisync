@@ -98,10 +98,19 @@ impl<'a> Operations<'a> {
     }
 
     /// Writes `buffer` into this blob, advancing the blob's internal cursor.
-    pub async fn write(&mut self, mut buffer: &[u8]) -> Result<()> {
-        // Wrap the whole `write` in a transaction to make it atomic.
+    pub async fn write(&mut self, buffer: &[u8]) -> Result<()> {
         let mut tx = self.db_pool().begin().await?;
+        self.write_in_transaction(&mut tx, buffer).await?;
+        tx.commit().await?;
+        Ok(())
+    }
 
+    /// Writes into the blob in db transaction.
+    pub async fn write_in_transaction(
+        &mut self,
+        tx: &mut db::Transaction<'_>,
+        mut buffer: &[u8],
+    ) -> Result<()> {
         loop {
             let len = self.current_block.content.write(buffer);
 
@@ -126,7 +135,7 @@ impl<'a> Operations<'a> {
             let locator = self.current_block.locator.next();
             let (id, content) = if locator.number() < self.block_count() {
                 read_block(
-                    &mut tx,
+                    tx,
                     self.core.branch.data(),
                     self.cryptor(),
                     &self.core.nonce_sequence,
@@ -137,11 +146,8 @@ impl<'a> Operations<'a> {
                 (rand::random(), Buffer::new())
             };
 
-            self.replace_current_block(&mut tx, locator, id, content)
-                .await?;
+            self.replace_current_block(tx, locator, id, content).await?;
         }
-
-        tx.commit().await?;
 
         Ok(())
     }
@@ -153,6 +159,18 @@ impl<'a> Operations<'a> {
     ///
     /// Returns the new seek position from the start of the blob.
     pub async fn seek(&mut self, pos: SeekFrom) -> Result<u64> {
+        let mut tx = self.db_pool().begin().await?;
+        let offset = self.seek_in_transaction(&mut tx, pos).await?;
+        tx.commit().await?;
+        Ok(offset)
+    }
+
+    /// Seek to an offset in the blob in a db transaction.
+    pub async fn seek_in_transaction(
+        &mut self,
+        tx: &mut db::Transaction<'_>,
+        pos: SeekFrom,
+    ) -> Result<u64> {
         let offset = match pos {
             SeekFrom::Start(n) => n.min(self.core.len),
             SeekFrom::End(n) => {
@@ -180,18 +198,15 @@ impl<'a> Operations<'a> {
         if block_number != self.current_block.locator.number() {
             let locator = self.locator_at(block_number);
 
-            let mut tx = self.db_pool().begin().await?;
             let (id, content) = read_block(
-                &mut tx,
+                tx,
                 self.core.branch.data(),
                 self.cryptor(),
                 &self.core.nonce_sequence,
                 &locator,
             )
             .await?;
-            self.replace_current_block(&mut tx, locator, id, content)
-                .await?;
-            tx.commit().await?;
+            self.replace_current_block(tx, locator, id, content).await?;
         }
 
         self.current_block.content.pos = block_offset;
@@ -201,6 +216,18 @@ impl<'a> Operations<'a> {
 
     /// Truncate the blob to the given length.
     pub async fn truncate(&mut self, len: u64) -> Result<()> {
+        let mut tx = self.db_pool().begin().await?;
+        self.truncate_in_transaction(&mut tx, len).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Truncate the blob to the given length in a db transaction.
+    pub async fn truncate_in_transaction(
+        &mut self,
+        tx: &mut db::Transaction<'_>,
+        len: u64,
+    ) -> Result<()> {
         // TODO: reuse the truncated blocks on subsequent writes if the content is identical
 
         if len == self.core.len {
@@ -220,10 +247,11 @@ impl<'a> Operations<'a> {
         let new_block_count = self.block_count();
 
         if self.seek_position() > self.core.len {
-            self.seek(SeekFrom::End(0)).await?;
+            self.seek_in_transaction(tx, SeekFrom::End(0)).await?;
         }
 
         self.remove_blocks(
+            tx,
             self.core
                 .head_locator
                 .sequence()
@@ -238,27 +266,37 @@ impl<'a> Operations<'a> {
     ///
     /// Return true if was dirty and the flush actually took place
     pub async fn flush(&mut self) -> Result<bool> {
+        let mut tx = self.db_pool().begin().await?;
+        let was_dirty = self.flush_in_transaction(&mut tx).await?;
+        tx.commit().await?;
+
+        Ok(was_dirty)
+    }
+
+    /// Flushes this blob in a db transaction.
+    pub async fn flush_in_transaction(&mut self, tx: &mut db::Transaction<'_>) -> Result<bool> {
         if !self.is_dirty() {
             return Ok(false);
         }
 
-        let mut tx = self.db_pool().begin().await?;
-        self.write_len(&mut tx).await?;
-        self.write_current_block(&mut tx).await?;
-        tx.commit().await?;
+        self.write_len(tx).await?;
+        self.write_current_block(tx).await?;
 
         Ok(true)
     }
 
     /// Removes this blob.
     pub async fn remove(&mut self) -> Result<()> {
+        let mut tx = self.db_pool().begin().await?;
         self.remove_blocks(
+            &mut tx,
             self.core
                 .head_locator
                 .sequence()
                 .take(self.block_count() as usize),
         )
         .await?;
+        tx.commit().await?;
 
         *self.current_block =
             OpenBlock::new_head(self.core.head_locator, &self.core.nonce_sequence);
@@ -432,23 +470,19 @@ impl<'a> Operations<'a> {
         Ok(())
     }
 
-    async fn remove_blocks<T>(&self, locators: T) -> Result<()>
+    async fn remove_blocks<T>(&self, tx: &mut db::Transaction<'_>, locators: T) -> Result<()>
     where
         T: IntoIterator<Item = Locator>,
     {
-        let mut tx = self.db_pool().begin().await?;
-
         for locator in locators {
             let block_id = self
                 .core
                 .branch
                 .data()
-                .remove(&mut tx, &locator.encode(self.cryptor()))
+                .remove(tx, &locator.encode(self.cryptor()))
                 .await?;
-            store::remove_orphaned_block(&mut tx, &block_id).await?;
+            store::remove_orphaned_block(tx, &block_id).await?;
         }
-
-        tx.commit().await?;
 
         Ok(())
     }

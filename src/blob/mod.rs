@@ -98,6 +98,19 @@ impl Blob {
         self.lock().await.ops().write(buffer).await
     }
 
+    /// Writes into this blob in a db transaction.
+    pub async fn write_in_transaction(
+        &mut self,
+        tx: &mut db::Transaction<'_>,
+        buffer: &[u8],
+    ) -> Result<()> {
+        self.lock()
+            .await
+            .ops()
+            .write_in_transaction(tx, buffer)
+            .await
+    }
+
     /// Seek to an offset in the blob.
     ///
     /// It is allowed to specify offset that is outside of the range of the blob but such offset
@@ -108,15 +121,42 @@ impl Blob {
         self.lock().await.ops().seek(pos).await
     }
 
+    /// Seek to an offset in the blob in a db transaction.
+    pub async fn seek_in_transaction(
+        &mut self,
+        tx: &mut db::Transaction<'_>,
+        pos: SeekFrom,
+    ) -> Result<u64> {
+        self.lock().await.ops().seek_in_transaction(tx, pos).await
+    }
+
     /// Truncate the blob to the given length.
     pub async fn truncate(&mut self, len: u64) -> Result<()> {
         self.lock().await.ops().truncate(len).await
+    }
+
+    /// Truncate the blob to the given length in a db transaction.
+    pub async fn truncate_in_transaction(
+        &mut self,
+        tx: &mut db::Transaction<'_>,
+        len: u64,
+    ) -> Result<()> {
+        self.lock()
+            .await
+            .ops()
+            .truncate_in_transaction(tx, len)
+            .await
     }
 
     /// Flushes this blob, ensuring that all intermediately buffered contents gets written to the
     /// store.
     pub async fn flush(&mut self) -> Result<bool> {
         self.lock().await.ops().flush().await
+    }
+
+    /// Flushes this blob in a db transaction.
+    pub async fn flush_in_transaction(&mut self, tx: &mut db::Transaction<'_>) -> Result<bool> {
+        self.lock().await.ops().flush_in_transaction(tx).await
     }
 
     /// Removes this blob.
