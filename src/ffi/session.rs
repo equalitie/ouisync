@@ -112,6 +112,8 @@ where
         error_ptr,
     };
 
+    let _runtime_guard = context.wrapper.runtime.enter();
+
     match f(context) {
         Ok(()) => (),
         Err(error) => wrapper.sender.send_err(port, error_ptr, error),
