@@ -26,6 +26,9 @@ use tokio::sync::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 pub struct Directory {
     inner: Arc<RwLock<Inner>>,
     local_branch: Branch,
+    // TODO: `parent` probably needs to be in `inner` as well, because when we modify a directory
+    //       the `entry_author` field might change and if it does, it should change in all the
+    //       instances of the directory.
     parent: Option<Box<ParentContext>>, // box needed to avoid infinite type recursion
 }
 

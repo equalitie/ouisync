@@ -1229,6 +1229,68 @@ mod tests {
         assert_eq!(content, b"v1");
     }
 
+    // FIXME:
+    #[ignore]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn merge_concurrent_directories() {
+        let branches = setup(2).await;
+
+        let local_root = branches[0].open_or_create_root().await.unwrap();
+        let local_dir = local_root.create_directory("dir".into()).await.unwrap();
+        create_file(&local_dir, "dog.jpg", &[]).await;
+
+        let remote_root = branches[1].open_or_create_root().await.unwrap();
+        let remote_dir = remote_root.create_directory("dir".into()).await.unwrap();
+        create_file(&remote_dir, "cat.jpg", &[]).await;
+
+        let remote_root_on_local = branches[1].open_root(branches[0].clone()).await.unwrap();
+
+        JointDirectory::new(vec![local_root.clone(), remote_root_on_local])
+            .await
+            .merge()
+            .await
+            .unwrap();
+
+        let local_root = local_root.read().await;
+
+        assert_eq!(local_root.entries().count(), 1);
+
+        let entry = local_root.entries().next().unwrap();
+        assert_eq!(entry.name(), "dir");
+        assert_eq!(entry.entry_type(), EntryType::Directory);
+
+        let expected_vv = {
+            let mut vv = VersionVector::new();
+            vv.insert(*branches[0].id(), 3); // 1: create, 2: add "dog.jpg" 3: add "cat.jpg"
+            vv.insert(*branches[1].id(), 2); // 1: create, 2: add "cat.jpg"
+            vv
+        };
+        assert_eq!(entry.version_vector(), &expected_vv);
+
+        let dir = entry.directory().unwrap().open().await.unwrap();
+        let dir = dir.read().await;
+
+        assert_eq!(dir.entries().count(), 2);
+
+        let entry = dir
+            .lookup("dog.jpg")
+            .unwrap()
+            .next()
+            .unwrap()
+            .file()
+            .unwrap();
+        assert_eq!(entry.author(), branches[0].id());
+
+        let entry = dir
+            .lookup("cat.jpg")
+            .unwrap()
+            .next()
+            .unwrap()
+            .file()
+            .unwrap();
+        assert_eq!(entry.author(), branches[1].id());
+    }
+
     async fn setup(branch_count: usize) -> Vec<Branch> {
         setup_with_rng(StdRng::from_entropy(), branch_count).await
     }
