@@ -62,6 +62,21 @@ impl BranchData {
         RwLockReadGuard::map(self.root_node.read().await, |root| &root.versions)
     }
 
+    /// Update the root version vector of this branch.
+    pub async fn update_root_version_vector(
+        &self,
+        tx: db::Transaction<'_>,
+        version_vector_override: Option<&VersionVector>,
+    ) -> Result<()> {
+        // TODO: should we emit a notification event here?
+
+        self.root_node
+            .write()
+            .await
+            .update_version_vector(tx, version_vector_override)
+            .await
+    }
+
     /// Inserts a new block into the index. Returns the previous id at the same locator, if any.
     pub async fn insert(
         &self,

@@ -188,13 +188,7 @@ impl RootNode {
 
     /// Creates the next version of this root node with the specified hash.
     pub async fn next_version(&self, tx: &mut db::Transaction<'_>, hash: Hash) -> Result<Self> {
-        let replica_id =
-            sqlx::query("SELECT replica_id FROM snapshot_root_nodes WHERE snapshot_id = ?")
-                .bind(&self.snapshot_id)
-                .fetch_one(&mut *tx)
-                .await?
-                .get(0);
-
+        let replica_id = self.load_replica_id(&mut *tx).await?;
         let mut versions = self.versions.clone();
         versions.increment(replica_id);
 
@@ -225,6 +219,40 @@ impl RootNode {
             hash,
             summary: Summary::FULL,
         })
+    }
+
+    /// Updates the version vector of this node.
+    /// If `version_vector_override` is `None`, the local counter of the current version vector is
+    /// incremented by one. If it is `Some`, the current version vector is merged with the
+    /// specified one.
+    ///
+    /// NOTE: this function take the transaction by value to make sure the version vector member
+    /// variable is updated only when the db query succeeds, to keep things in sync.
+    pub async fn update_version_vector(
+        &mut self,
+        mut tx: db::Transaction<'_>,
+        version_vector_override: Option<&VersionVector>,
+    ) -> Result<()> {
+        let mut new_version_vector = self.versions.clone();
+
+        if let Some(version_vector_override) = version_vector_override {
+            new_version_vector.merge(version_vector_override);
+        } else {
+            let replica_id = self.load_replica_id(&mut tx).await?;
+            new_version_vector.increment(replica_id);
+        }
+
+        sqlx::query("UPDATE snapshot_root_nodes SET versions = ? WHERE snapshot_id = ?")
+            .bind(&new_version_vector)
+            .bind(&self.snapshot_id)
+            .execute(&mut tx)
+            .await?;
+
+        tx.commit().await?;
+
+        self.versions = new_version_vector;
+
+        Ok(())
     }
 
     /// Reload this root node from the db. Currently used only in tests.
@@ -278,6 +306,17 @@ impl RootNode {
 
     pub async fn remove_recursive(&self, tx: &mut db::Transaction<'_>) -> Result<()> {
         self.as_link().remove_recursive(0, tx).await
+    }
+
+    /// Returns the replica id of this node
+    async fn load_replica_id(&self, tx: &mut db::Transaction<'_>) -> Result<ReplicaId> {
+        let replica_id =
+            sqlx::query("SELECT replica_id FROM snapshot_root_nodes WHERE snapshot_id = ?")
+                .bind(&self.snapshot_id)
+                .fetch_one(tx)
+                .await?
+                .get(0);
+        Ok(replica_id)
     }
 
     fn as_link(&self) -> Link {

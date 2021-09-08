@@ -90,9 +90,14 @@ impl Directory {
                     &mut ctx.entry_author,
                     version_vector_override,
                 )
-                .await?;
+                .await?
         } else {
-            tx.commit().await?;
+            inner
+                .blob
+                .branch()
+                .data()
+                .update_root_version_vector(tx, version_vector_override)
+                .await?
         }
 
         Ok(())
