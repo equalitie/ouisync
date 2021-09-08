@@ -464,11 +464,6 @@ impl Reader<'_> {
     pub(crate) fn is_local(&self) -> bool {
         self.branch().id() == self.outer.local_branch.id()
     }
-
-    /// Does this directory have any un-flushed changes?
-    pub(crate) fn is_dirty(&self) -> bool {
-        self.inner.content.dirty
-    }
 }
 
 struct Inner {

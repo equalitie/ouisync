@@ -144,11 +144,24 @@ impl JointDirectory {
     }
 
     async fn merge_single(&mut self, queue: &mut VecDeque<Self>) -> Result<()> {
-        // TODO: only process this joint directory if at least one remote version is happens-after
-        // or concurrent with the local version, of if the local version doesn't exists.
         self.fork().await?;
 
         let new_version_vector = self.merge_version_vectors().await;
+
+        if self
+            .local_version()
+            .await
+            .unwrap() // `unwrap` is OK because we called `fork` so the local verson exists,
+            .1
+            .read()
+            .await
+            .version_vector()
+            .await
+            >= new_version_vector
+        {
+            // Local version already up to date, nothing to do.
+            return Ok(());
+        }
 
         // We can't fork the files as we are iterating the entries because that would deadlock - we
         // collect them here and fork them once done iterating instead.
@@ -171,7 +184,7 @@ impl JointDirectory {
         }))
         .await?;
 
-        // `unwrap` is OK here because we called `fork` earlier so the local version exists.
+        // `unwrap` is OK here because we called `fork` so the local version exists.
         let (_, version) = self.local_version_mut().await.unwrap();
         version.flush(Some(&new_version_vector)).await?;
 
@@ -197,19 +210,12 @@ impl JointDirectory {
         Ok(())
     }
 
-    // Calculate what the version vector of the local version would be after a merge.
+    // Merge the version vectors of all the versions in this joint directory.
     async fn merge_version_vectors(&self) -> VersionVector {
         let mut outcome = VersionVector::new();
 
-        for (id, version) in &self.versions {
-            let version = version.read().await;
-            outcome.merge(&version.version_vector().await);
-
-            // If the local version is dirty we need to account for it in the resulting version
-            // vector.
-            if version.is_local() && version.is_dirty() {
-                outcome.increment(*id);
-            }
+        for version in self.versions.values() {
+            outcome.merge(&version.read().await.version_vector().await);
         }
 
         outcome
