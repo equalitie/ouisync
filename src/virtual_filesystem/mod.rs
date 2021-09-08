@@ -521,7 +521,7 @@ impl Inner {
         );
 
         // In debug mode, print state when the user does `ls <ouisync-mount-root>/`
-        if cfg!(debug_assertions) {
+        if cfg!(debug_assertions) && !cfg!(test) {
             if inode == 1 && offset == 0 {
                 self.debug_print(DebugPrinter::new()).await;
             }
