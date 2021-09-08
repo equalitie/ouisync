@@ -58,7 +58,7 @@ impl BranchData {
     }
 
     /// Returns the root version vector of this branch.
-    pub async fn versions(&self) -> RwLockReadGuard<'_, VersionVector> {
+    pub async fn root_version_vector(&self) -> RwLockReadGuard<'_, VersionVector> {
         RwLockReadGuard::map(self.root_node.read().await, |root| &root.versions)
     }
 

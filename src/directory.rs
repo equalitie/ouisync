@@ -26,6 +26,9 @@ use tokio::sync::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 pub struct Directory {
     inner: Arc<RwLock<Inner>>,
     local_branch: Branch,
+    // TODO: `parent` probably needs to be in `inner` as well, because when we modify a directory
+    //       the `entry_author` field might change and if it does, it should change in all the
+    //       instances of the directory.
     parent: Option<Box<ParentContext>>, // box needed to avoid infinite type recursion
 }
 
@@ -60,12 +63,18 @@ impl Directory {
     }
 
     /// Flushes this directory ensuring that any pending changes are written to the store and the
-    /// version vectors of this and the ancestor directories are properly incremented.
+    /// version vectors of this and the ancestor directories are properly updated.
     /// Also flushes all ancestor directories.
-    pub async fn flush(&mut self) -> Result<()> {
+    ///
+    /// The way the version vector is updated depends on the `version_vector_override` parameter.
+    /// When it is `None`, the local counter is incremented by one. When it is `Some`, the version
+    /// vector is merged with `version_vector_override`. This is useful to support merging
+    /// concurrent versions of a directory where the resulting version vector should be the merge
+    /// of the version vectors of the concurrent versions.
+    pub async fn flush(&mut self, version_vector_override: Option<&VersionVector>) -> Result<()> {
         let mut inner = self.inner.write().await;
 
-        if !inner.content.dirty {
+        if !inner.content.dirty && version_vector_override.is_none() {
             return Ok(());
         }
 
@@ -75,7 +84,12 @@ impl Directory {
 
         if let Some(ctx) = self.parent.as_mut() {
             ctx.directory
-                .modify_entry(tx, &ctx.entry_name, &mut ctx.entry_author)
+                .modify_entry(
+                    tx,
+                    &ctx.entry_name,
+                    &mut ctx.entry_author,
+                    version_vector_override,
+                )
                 .await?;
         } else {
             tx.commit().await?;
@@ -196,16 +210,13 @@ impl Directory {
             {
                 // TODO: if the local entry exists but is not a directory, we should still create
                 // the directory using its owner branch as the author.
-                // TODO: update the version vector to a merge of the local and remote ones.
                 return entry.directory()?.open().await;
             }
 
-            // TODO: set the version vector to a copy the remote one.
             parent_dir
                 .create_directory(parent.entry_name.to_string())
                 .await
         } else {
-            // TODO: properly update the root version vector
             self.local_branch.open_or_create_root().await
         }
     }
@@ -246,11 +257,12 @@ impl Directory {
         tx: db::Transaction<'_>,
         name: &str,
         author_id: &mut ReplicaId,
+        version_vector_override: Option<&VersionVector>,
     ) -> Result<()> {
         let inner = self.inner.write().await;
         inner.assert_local(self.local_branch.id());
 
-        let step = ModifyEntryStep::new(inner, name, author_id);
+        let step = ModifyEntryStep::new(inner, name, author_id, version_vector_override);
         let mut steps = vec![step];
         let mut next = self.parent.as_mut();
 
@@ -259,6 +271,7 @@ impl Directory {
                 ctx.directory.inner.write().await,
                 &ctx.entry_name,
                 &mut ctx.entry_author,
+                None,
             );
             next = ctx.directory.parent.as_mut();
             steps.push(step);
@@ -438,6 +451,15 @@ impl Reader<'_> {
         self.inner.blob.branch()
     }
 
+    /// Version vector of this directory.
+    pub async fn version_vector(&self) -> VersionVector {
+        if let Some(parent) = &self.outer.parent {
+            parent.entry_version_vector().await
+        } else {
+            self.branch().data().root_version_vector().await.clone()
+        }
+    }
+
     /// Is this directory in the local branch?
     pub(crate) fn is_local(&self) -> bool {
         self.branch().id() == self.outer.local_branch.id()
@@ -499,6 +521,7 @@ impl Inner {
         name: &str,
         author_id: &mut ReplicaId,
         local_id: ReplicaId,
+        version_vector_override: Option<&VersionVector>,
     ) -> Result<()> {
         let versions = self
             .content
@@ -526,7 +549,13 @@ impl Inner {
 
         // `unwrap` is OK because we already established the entry exists.
         let mut version = versions.remove(author_id).unwrap();
-        version.version_vector.increment(local_id);
+
+        if let Some(version_vector_override) = version_vector_override {
+            version.version_vector.merge(version_vector_override)
+        } else {
+            version.version_vector.increment(local_id);
+        }
+
         versions.insert(local_id, version);
 
         *author_id = local_id;
@@ -1051,8 +1080,12 @@ impl ModifyEntry<'_, '_> {
         let tx = &mut self.tx.as_mut().unwrap();
 
         for step in &mut self.steps {
-            step.inner
-                .modify_entry(step.name, step.author_id, *self.local_id)?;
+            step.inner.modify_entry(
+                step.name,
+                step.author_id,
+                *self.local_id,
+                step.version_vector_override,
+            )?;
             step.inner.flush(tx).await?;
         }
 
@@ -1084,6 +1117,7 @@ struct ModifyEntryStep<'a> {
     inner: RwLockWriteGuard<'a, Inner>,
     name: &'a str,
     author_id: &'a mut ReplicaId,
+    version_vector_override: Option<&'a VersionVector>,
     author_id_backup: ReplicaId,
     versions_backup: Option<BTreeMap<ReplicaId, EntryData>>,
     dirty_backup: bool,
@@ -1094,6 +1128,7 @@ impl<'a> ModifyEntryStep<'a> {
         inner: RwLockWriteGuard<'a, Inner>,
         name: &'a str,
         author_id: &'a mut ReplicaId,
+        version_vector_override: Option<&'a VersionVector>,
     ) -> Self {
         let author_id_backup = *author_id;
         let versions_backup = inner.content.entries.get(name).cloned();
@@ -1103,6 +1138,7 @@ impl<'a> ModifyEntryStep<'a> {
             inner,
             name,
             author_id,
+            version_vector_override,
             author_id_backup,
             versions_backup,
             dirty_backup,
@@ -1146,7 +1182,7 @@ mod tests {
         file_cat.write(b"meow").await.unwrap();
         file_cat.flush().await.unwrap();
 
-        dir.flush().await.unwrap();
+        dir.flush(None).await.unwrap();
 
         // Reopen the dir and try to read the files.
         let dir = branch.open_root(branch.clone()).await.unwrap();
@@ -1179,12 +1215,12 @@ mod tests {
 
         // Create empty directory
         let mut dir = branch.open_or_create_root().await.unwrap();
-        dir.flush().await.unwrap();
+        dir.flush(None).await.unwrap();
 
         // Reopen it and add a file to it.
         let mut dir = branch.open_root(branch.clone()).await.unwrap();
         dir.create_file("none.txt".into()).await.unwrap();
-        dir.flush().await.unwrap();
+        dir.flush(None).await.unwrap();
 
         // Reopen it again and check the file is still there.
         let dir = branch.open_root(branch.clone()).await.unwrap();
@@ -1198,17 +1234,16 @@ mod tests {
         let name = "monkey.txt";
 
         // Create a directory with a single file.
-        let mut parent_dir = branch.open_or_create_root().await.unwrap();
+        let parent_dir = branch.open_or_create_root().await.unwrap();
         let mut file = parent_dir.create_file(name.into()).await.unwrap();
         file.flush().await.unwrap();
-        parent_dir.flush().await.unwrap();
 
         let file_locator = *file.locator();
 
         // Reopen and remove the file
         let mut parent_dir = branch.open_root(branch.clone()).await.unwrap();
         parent_dir.remove_file(name).await.unwrap();
-        parent_dir.flush().await.unwrap();
+        parent_dir.flush(None).await.unwrap();
 
         // Reopen again and check the file entry was removed.
         let parent_dir = branch.open_root(branch.clone()).await.unwrap();
@@ -1237,17 +1272,16 @@ mod tests {
         let name = "dir";
 
         // Create a directory with a single subdirectory.
-        let mut parent_dir = branch.open_or_create_root().await.unwrap();
+        let parent_dir = branch.open_or_create_root().await.unwrap();
         let mut dir = parent_dir.create_directory(name.into()).await.unwrap();
-        dir.flush().await.unwrap();
-        parent_dir.flush().await.unwrap();
+        dir.flush(None).await.unwrap();
 
         let dir_locator = *dir.read().await.locator();
 
         // Reopen and remove the subdirectory
         let mut parent_dir = branch.open_root(branch.clone()).await.unwrap();
         parent_dir.remove_directory(name).await.unwrap();
-        parent_dir.flush().await.unwrap();
+        parent_dir.flush(None).await.unwrap();
 
         // Reopen again and check the subdirectory entry was removed.
         let parent_dir = branch.open_root(branch.clone()).await.unwrap();
@@ -1273,11 +1307,10 @@ mod tests {
 
         // Create a nested directory by branch 0
         let mut root0 = branch0.open_or_create_root().await.unwrap();
-        root0.flush().await.unwrap();
+        root0.flush(None).await.unwrap();
 
         let mut dir0 = root0.create_directory("dir".into()).await.unwrap();
-        dir0.flush().await.unwrap();
-        root0.flush().await.unwrap();
+        dir0.flush(None).await.unwrap();
 
         // Fork it by branch 1 and modify it
         let dir0 = branch0
@@ -1296,7 +1329,7 @@ mod tests {
         let mut dir1 = dir0.fork().await.unwrap();
 
         dir1.create_file("dog.jpg".into()).await.unwrap();
-        dir1.flush().await.unwrap();
+        dir1.flush(None).await.unwrap();
 
         assert_eq!(dir1.read().await.branch().id(), branch1.id());
 

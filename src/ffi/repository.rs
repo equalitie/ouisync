@@ -75,8 +75,8 @@ pub unsafe extern "C" fn repository_move_entry(
 
         ctx.spawn(async move {
             let (mut src_parent, mut dst_parent) = repo.move_entry(src, dst).await?;
-            src_parent.flush().await?;
-            dst_parent.get(&mut src_parent).flush().await?;
+            src_parent.flush(None).await?;
+            dst_parent.get(&mut src_parent).flush(None).await?;
             Ok(())
         })
     })

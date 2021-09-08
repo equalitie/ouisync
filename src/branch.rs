@@ -117,13 +117,13 @@ mod tests {
     async fn ensure_subdirectory_exists() {
         let branch = setup().await;
         let mut root = branch.open_or_create_root().await.unwrap();
-        root.flush().await.unwrap();
+        root.flush(None).await.unwrap();
 
         let mut dir = branch
             .ensure_directory_exists(Utf8Path::new("/dir"))
             .await
             .unwrap();
-        dir.flush().await.unwrap();
+        dir.flush(None).await.unwrap();
 
         let _ = root
             .read()
