@@ -109,7 +109,12 @@ impl File {
         self.blob.flush_in_transaction(&mut tx).await?;
         self.parent
             .directory
-            .modify_entry(tx, &self.parent.entry_name, &mut self.parent.entry_author)
+            .modify_entry(
+                tx,
+                &self.parent.entry_name,
+                &mut self.parent.entry_author,
+                None,
+            )
             .await?;
 
         Ok(())

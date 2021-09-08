@@ -6,6 +6,7 @@ use crate::{
     iterator::{Accumulate, SortedUnion},
     locator::Locator,
     replica_id::ReplicaId,
+    version_vector::VersionVector,
     versioned_file_name,
 };
 use camino::{Utf8Component, Utf8Path};
@@ -73,6 +74,9 @@ impl JointDirectory {
         Ok(curr)
     }
 
+    // TODO: all the mutable operations must operate on the local version only. If there is no local
+    //       version, we should fork it first.
+
     /// Creates a subdirectory of this directory owned by `branch` and returns it as
     /// `JointDirectory` which would already include all previousy existing versions.
     pub async fn create_directory(&self, branch: &ReplicaId, name: &str) -> Result<Self> {
@@ -120,7 +124,10 @@ impl JointDirectory {
     }
 
     pub async fn flush(&mut self) -> Result<()> {
-        future::try_join_all(self.versions.values_mut().map(|dir| dir.flush())).await?;
+        if let Some((_, version)) = self.local_version_mut().await {
+            version.flush(None).await?
+        }
+
         Ok(())
     }
 
@@ -141,6 +148,8 @@ impl JointDirectory {
         // or concurrent with the local version, of if the local version doesn't exists.
         self.fork().await?;
 
+        let new_version_vector = self.merge_version_vectors().await;
+
         // We can't fork the files as we are iterating the entries because that would deadlock - we
         // collect them here and fork them once done iterating instead.
         let mut files_to_fork = Vec::new();
@@ -152,25 +161,26 @@ impl JointDirectory {
             }
         }
 
-        // `EntryExists` error means the file already exists locally at the same or greater version
-        // than the remote file which is OK and expected, so we ignore it.
         future::try_join_all(files_to_fork.iter_mut().map(|file| async move {
             match file.fork().await {
+                // `EntryExists` error means the file already exists locally at the same or greater
+                // version than the remote file which is OK and expected, so we ignore it.
                 Ok(()) | Err(Error::EntryExists) => Ok(()),
                 Err(error) => Err(error),
             }
         }))
         .await?;
 
-        self.remove_remote_versions().await;
-        self.flush().await?;
+        // `unwrap` is OK here because we called `fork` earlier so the local version exists.
+        let (_, version) = self.local_version_mut().await.unwrap();
+        version.flush(Some(&new_version_vector)).await?;
 
         Ok(())
     }
 
     // Ensure this joint directory contains a local version.
     async fn fork(&mut self) -> Result<()> {
-        if self.local_branch_id().await.is_some() {
+        if self.local_version().await.is_some() {
             return Ok(());
         }
 
@@ -187,16 +197,42 @@ impl JointDirectory {
         Ok(())
     }
 
-    // Remove all versions except the local one.
-    async fn remove_remote_versions(&mut self) {
-        let local_id = self.local_branch_id().await.copied();
-        self.versions.retain(|id, _| Some(id) == local_id.as_ref())
+    // Calculate what the version vector of the local version would be after a merge.
+    async fn merge_version_vectors(&self) -> VersionVector {
+        let mut outcome = VersionVector::new();
+
+        for (id, version) in &self.versions {
+            let version = version.read().await;
+            outcome.merge(&version.version_vector().await);
+
+            // If the local version is dirty we need to account for it in the resulting version
+            // vector.
+            if version.is_local() && version.is_dirty() {
+                outcome.increment(*id);
+            }
+        }
+
+        outcome
     }
 
-    async fn local_branch_id(&self) -> Option<&ReplicaId> {
+    async fn local_version(&self) -> Option<(&ReplicaId, &Directory)> {
+        // TODO: Consider storing the local version separately, so accessing it is quicker (O(1)).
+
         for (id, version) in &self.versions {
             if version.read().await.is_local() {
-                return Some(id);
+                return Some((id, version));
+            }
+        }
+
+        None
+    }
+
+    async fn local_version_mut(&mut self) -> Option<(&ReplicaId, &mut Directory)> {
+        // TODO: Consider storing the local version separately, so accessing it is quicker (O(1)).
+
+        for (id, version) in &mut self.versions {
+            if version.read().await.is_local() {
+                return Some((id, version));
             }
         }
 
@@ -683,17 +719,13 @@ mod tests {
     async fn conflict_directories() {
         let branches = setup(2).await;
 
-        let mut root0 = branches[0].open_or_create_root().await.unwrap();
-
+        let root0 = branches[0].open_or_create_root().await.unwrap();
         let mut dir0 = root0.create_directory("dir".to_owned()).await.unwrap();
-        dir0.flush().await.unwrap();
-        root0.flush().await.unwrap();
+        dir0.flush(None).await.unwrap();
 
-        let mut root1 = branches[1].open_or_create_root().await.unwrap();
-
+        let root1 = branches[1].open_or_create_root().await.unwrap();
         let mut dir1 = root1.create_directory("dir".to_owned()).await.unwrap();
-        dir1.flush().await.unwrap();
-        root1.flush().await.unwrap();
+        dir1.flush(None).await.unwrap();
 
         let root = JointDirectory::new(vec![root0, root1]).await;
         let root = root.read().await;
@@ -717,7 +749,7 @@ mod tests {
         let root1 = branches[1].open_or_create_root().await.unwrap();
 
         let mut dir1 = root1.create_directory("config".to_owned()).await.unwrap();
-        dir1.flush().await.unwrap();
+        dir1.flush(None).await.unwrap();
 
         let root = JointDirectory::new(vec![root0, root1]).await;
         let root = root.read().await;
@@ -865,7 +897,7 @@ mod tests {
         let root0 = branches[0].open_or_create_root().await.unwrap();
 
         let mut dir0 = root0.create_directory("pics".to_owned()).await.unwrap();
-        dir0.flush().await.unwrap();
+        dir0.flush(None).await.unwrap();
 
         let root = JointDirectory::new(vec![root0]).await;
 
@@ -884,7 +916,7 @@ mod tests {
 
         // Create local root dir
         let mut local_root = branches[0].open_or_create_root().await.unwrap();
-        local_root.flush().await.unwrap();
+        local_root.flush(None).await.unwrap();
 
         // Create remote root dir
         let remote_root = branches[1].open_or_create_root().await.unwrap();
@@ -919,7 +951,7 @@ mod tests {
         let content_v1 = b"version 1";
 
         let mut local_root = branches[0].open_or_create_root().await.unwrap();
-        local_root.flush().await.unwrap();
+        local_root.flush(None).await.unwrap();
 
         let remote_root = branches[1].open_or_create_root().await.unwrap();
 
@@ -970,7 +1002,7 @@ mod tests {
         let content_v1 = b"version 1";
 
         let mut local_root = branches[0].open_or_create_root().await.unwrap();
-        local_root.flush().await.unwrap();
+        local_root.flush(None).await.unwrap();
 
         let remote_root = branches[1].open_or_create_root().await.unwrap();
 
@@ -1015,7 +1047,7 @@ mod tests {
         let branches = setup(2).await;
 
         let mut local_root = branches[0].open_or_create_root().await.unwrap();
-        local_root.flush().await.unwrap();
+        local_root.flush(None).await.unwrap();
 
         let remote_root = branches[1].open_or_create_root().await.unwrap();
 
@@ -1065,7 +1097,7 @@ mod tests {
         let branches = setup(2).await;
 
         let mut local_root = branches[0].open_or_create_root().await.unwrap();
-        local_root.flush().await.unwrap();
+        local_root.flush(None).await.unwrap();
 
         let vv0 = branches[0].data().root_version_vector().await.clone();
 
@@ -1122,11 +1154,11 @@ mod tests {
         let branches = setup(2).await;
 
         let mut local_root = branches[0].open_or_create_root().await.unwrap();
-        local_root.flush().await.unwrap();
+        local_root.flush(None).await.unwrap();
         let local_root_on_remote = branches[0].open_root(branches[1].clone()).await.unwrap();
 
         let mut remote_root = branches[1].open_or_create_root().await.unwrap();
-        remote_root.flush().await.unwrap();
+        remote_root.flush(None).await.unwrap();
         let remote_root_on_local = branches[1].open_root(branches[0].clone()).await.unwrap();
 
         create_file(&remote_root, "cat.jpg", b"v0").await;
@@ -1180,11 +1212,11 @@ mod tests {
         let branches = setup_with_rng(StdRng::seed_from_u64(0), 2).await;
 
         let mut local_root = branches[0].open_or_create_root().await.unwrap();
-        local_root.flush().await.unwrap();
+        local_root.flush(None).await.unwrap();
         let local_root_on_remote = branches[0].open_root(branches[1].clone()).await.unwrap();
 
         let mut remote_root = branches[1].open_or_create_root().await.unwrap();
-        remote_root.flush().await.unwrap();
+        remote_root.flush(None).await.unwrap();
         let remote_root_on_local = branches[1].open_root(branches[0].clone()).await.unwrap();
 
         // Create a file by local, then modify it by remote, then read it back by local verifying
@@ -1227,8 +1259,6 @@ mod tests {
         assert_eq!(content, b"v1");
     }
 
-    // FIXME:
-    #[ignore]
     #[tokio::test(flavor = "multi_thread")]
     async fn merge_concurrent_directories() {
         let branches = setup(2).await;
@@ -1259,7 +1289,7 @@ mod tests {
 
         let expected_vv = {
             let mut vv = VersionVector::new();
-            vv.insert(*branches[0].id(), 3); // 1: create, 2: add "dog.jpg" 3: add "cat.jpg"
+            vv.insert(*branches[0].id(), 2); // 1: create, 2: add "dog.jpg"
             vv.insert(*branches[1].id(), 2); // 1: create, 2: add "cat.jpg"
             vv
         };
