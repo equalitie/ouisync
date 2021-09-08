@@ -22,7 +22,6 @@ mod joint_directory;
 mod joint_entry;
 mod locator;
 mod network;
-mod parent_context;
 mod path;
 mod replica_id;
 mod repository;
