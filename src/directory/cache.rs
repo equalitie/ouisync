@@ -1,9 +1,8 @@
-use super::{inner::Inner, Directory};
+use super::{inner::Inner, parent_context::ParentContext, Directory};
 use crate::{
     branch::Branch,
     error::{Error, Result},
     locator::Locator,
-    parent_context::ParentContext,
 };
 use std::{
     collections::{hash_map, HashMap},

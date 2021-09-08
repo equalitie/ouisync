@@ -2,11 +2,12 @@ mod cache;
 mod entry;
 mod inner;
 mod modify_entry;
+mod parent_context;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use self::cache::RootDirectoryCache;
 pub use self::entry::{DirectoryRef, EntryRef, FileRef};
+pub(crate) use self::{cache::RootDirectoryCache, parent_context::ParentContext};
 
 use self::{
     cache::SubdirectoryCache,
@@ -23,7 +24,6 @@ use crate::{
     error::{Error, Result},
     file::File,
     locator::Locator,
-    parent_context::ParentContext,
     replica_id::ReplicaId,
     version_vector::VersionVector,
 };

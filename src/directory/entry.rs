@@ -1,5 +1,6 @@
 use super::{
     inner::{EntryData, Inner},
+    parent_context::ParentContext,
     Directory,
 };
 use crate::{
@@ -8,7 +9,6 @@ use crate::{
     error::{Error, Result},
     file::File,
     locator::Locator,
-    parent_context::ParentContext,
     replica_id::ReplicaId,
     version_vector::VersionVector,
 };

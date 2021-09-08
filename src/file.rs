@@ -2,10 +2,10 @@ use crate::{
     blob::{self, Blob},
     blob_id::BlobId,
     branch::Branch,
+    directory::ParentContext,
     entry_type::EntryType,
     error::Result,
     locator::Locator,
-    parent_context::ParentContext,
 };
 use std::io::SeekFrom;
 use std::{fmt, sync::Arc};
