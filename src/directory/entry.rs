@@ -1,11 +1,11 @@
 use super::{
+    entry_type::EntryType,
     inner::{EntryData, EntryDirectoryData, EntryFileData, Inner},
     parent_context::ParentContext,
     Directory,
 };
 use crate::{
     blob_id::BlobId,
-    entry_type::EntryType,
     error::{Error, Result},
     file::File,
     locator::Locator,

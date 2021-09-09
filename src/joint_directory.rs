@@ -1,9 +1,9 @@
 use crate::{
     directory::{self, Directory, DirectoryRef, EntryRef, FileRef},
-    entry_type::EntryType,
     error::{Error, Result},
     file::File,
     iterator::{Accumulate, SortedUnion},
+    joint_entry::JointEntryType,
     locator::Locator,
     replica_id::ReplicaId,
     version_vector::VersionVector,
@@ -391,10 +391,10 @@ impl<'a> JointEntryRef<'a> {
         }
     }
 
-    pub fn entry_type(&self) -> EntryType {
+    pub fn entry_type(&self) -> JointEntryType {
         match self {
-            Self::File { .. } => EntryType::File,
-            Self::Directory(_) => EntryType::Directory,
+            Self::File { .. } => JointEntryType::File,
+            Self::Directory(_) => JointEntryType::Directory,
         }
     }
 
@@ -638,9 +638,9 @@ mod tests {
 
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].name(), "file0.txt");
-        assert_eq!(entries[0].entry_type(), EntryType::File);
+        assert_eq!(entries[0].entry_type(), JointEntryType::File);
         assert_eq!(entries[1].name(), "file1.txt");
-        assert_eq!(entries[1].entry_type(), EntryType::File);
+        assert_eq!(entries[1].entry_type(), JointEntryType::File);
 
         assert_eq!(root.lookup("file0.txt").collect::<Vec<_>>(), entries[0..1]);
         assert_eq!(root.lookup("file1.txt").collect::<Vec<_>>(), entries[1..2]);
@@ -792,17 +792,17 @@ mod tests {
         }));
         assert!(entries
             .iter()
-            .any(|entry| entry.entry_type() == EntryType::Directory));
+            .any(|entry| entry.entry_type() == JointEntryType::Directory));
 
         let entries: Vec<_> = root.lookup("config").collect();
         assert_eq!(entries.len(), 2);
 
         let entry = root.lookup_unique("config").unwrap();
-        assert_eq!(entry.entry_type(), EntryType::Directory);
+        assert_eq!(entry.entry_type(), JointEntryType::Directory);
 
         let name = versioned_file_name::create("config", branches[0].id());
         let entry = root.lookup_unique(&name).unwrap();
-        assert_eq!(entry.entry_type(), EntryType::File);
+        assert_eq!(entry.entry_type(), JointEntryType::File);
         assert_eq!(entry.file().unwrap().author(), branches[0].id());
     }
 
@@ -1311,7 +1311,7 @@ mod tests {
 
         let entry = local_root.entries().next().unwrap();
         assert_eq!(entry.name(), "dir");
-        assert_eq!(entry.entry_type(), EntryType::Directory);
+        assert_eq!(entry.entry_type(), directory::EntryType::Directory);
 
         let expected_vv = {
             let mut vv = VersionVector::new();

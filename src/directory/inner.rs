@@ -1,9 +1,8 @@
-use super::{cache::SubdirectoryCache, parent_context::ParentContext};
+use super::{cache::SubdirectoryCache, entry_type::EntryType, parent_context::ParentContext};
 use crate::{
     blob::{self, Blob},
     blob_id::BlobId,
     db,
-    entry_type::EntryType,
     error::{Error, Result},
     locator::Locator,
     replica_id::ReplicaId,
@@ -190,7 +189,13 @@ impl Inner {
     }
 
     pub fn entry_version_vector(&self, name: &str, author: &ReplicaId) -> Option<&VersionVector> {
-        Some(self.content.entries.get(name)?.get(author)?.version_vector())
+        Some(
+            self.content
+                .entries
+                .get(name)?
+                .get(author)?
+                .version_vector(),
+        )
     }
 
     #[track_caller]

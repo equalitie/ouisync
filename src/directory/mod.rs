@@ -1,12 +1,16 @@
 mod cache;
 mod entry;
+mod entry_type;
 mod inner;
 mod parent_context;
 #[cfg(test)]
 mod tests;
 
-pub use self::entry::{DirectoryRef, EntryRef, FileRef};
 pub(crate) use self::{cache::RootDirectoryCache, parent_context::ParentContext};
+pub use self::{
+    entry::{DirectoryRef, EntryRef, FileRef},
+    entry_type::EntryType,
+};
 
 use self::{
     cache::SubdirectoryCache,
@@ -17,7 +21,6 @@ use crate::{
     blob_id::BlobId,
     branch::Branch,
     debug_printer::DebugPrinter,
-    entry_type::EntryType,
     error::{Error, Result},
     file::File,
     locator::Locator,
