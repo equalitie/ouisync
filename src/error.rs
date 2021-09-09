@@ -42,6 +42,8 @@ pub enum Error {
     EntryNotDirectory,
     #[error("entry is a directory")]
     EntryIsDirectory,
+    #[error("entry is a tombstone")]
+    EntryIsTombstone,
     #[error("File name is not a valid UTF-8 string")]
     NonUtf8FileName,
     #[error("offset is out of range")]

@@ -24,6 +24,7 @@ use tokio::sync::{Mutex, RwLockWriteGuard};
 pub(super) enum EntryData {
     File(EntryFileData),
     Directory(EntryDirectoryData),
+    Tombstone(EntryTombstoneData),
 }
 
 impl EntryData {
@@ -31,6 +32,7 @@ impl EntryData {
         match self {
             Self::File(_) => EntryType::File,
             Self::Directory(_) => EntryType::Directory,
+            Self::Tombstone(_) => EntryType::Tombstone,
         }
     }
 
@@ -38,6 +40,7 @@ impl EntryData {
         match self {
             Self::File(f) => &f.version_vector,
             Self::Directory(d) => &d.version_vector,
+            Self::Tombstone(t) => &t.version_vector,
         }
     }
 
@@ -45,6 +48,7 @@ impl EntryData {
         match self {
             Self::File(f) => &mut f.version_vector,
             Self::Directory(d) => &mut d.version_vector,
+            Self::Tombstone(t) => &mut t.version_vector,
         }
     }
 }
@@ -69,6 +73,11 @@ impl Eq for EntryFileData {}
 #[derive(Debug, Clone, Deserialize, Serialize, Eq, PartialEq)]
 pub(super) struct EntryDirectoryData {
     pub blob_id: BlobId,
+    pub version_vector: VersionVector,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Eq, PartialEq)]
+pub(super) struct EntryTombstoneData {
     pub version_vector: VersionVector,
 }
 
@@ -303,9 +312,11 @@ impl Content {
             .filter(|old_author| *old_author != author)
             .filter_map(|old_author| versions.remove(&old_author))
             .map(|data| match data {
-                EntryData::File(data) => data.blob_id,
-                EntryData::Directory(data) => data.blob_id,
+                EntryData::File(data) => Some(data.blob_id),
+                EntryData::Directory(data) => Some(data.blob_id),
+                EntryData::Tombstone(_) => None,
             })
+            .flatten()
             .collect();
 
         self.dirty = true;
