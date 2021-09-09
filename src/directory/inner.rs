@@ -1,4 +1,4 @@
-use super::cache::SubdirectoryCache;
+use super::{cache::SubdirectoryCache, parent_context::ParentContext};
 use crate::{
     blob::{self, Blob},
     blob_id::BlobId,
@@ -39,6 +39,7 @@ impl Eq for EntryData {}
 pub(super) struct Inner {
     pub blob: Blob,
     pub content: Content,
+    pub parent: Option<ParentContext>,
     // Cache of open subdirectories. Used to make sure that multiple instances of the same directory
     // all share the same internal state.
     pub open_directories: SubdirectoryCache,

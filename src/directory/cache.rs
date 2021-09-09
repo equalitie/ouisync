@@ -26,7 +26,6 @@ impl RootDirectoryCache {
             Ok(Directory {
                 inner,
                 local_branch,
-                parent: None,
             })
         } else {
             let dir = Directory::open_root(owner_branch, local_branch).await?;
@@ -42,7 +41,6 @@ impl RootDirectoryCache {
             Ok(Directory {
                 inner,
                 local_branch: branch,
-                parent: None,
             })
         } else {
             let dir = Directory::open_or_create_root(branch).await?;
@@ -75,7 +73,6 @@ impl SubdirectoryCache {
                     Directory {
                         inner,
                         local_branch,
-                        parent: Some(Box::new(parent)),
                     }
                 } else {
                     let dir =
