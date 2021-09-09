@@ -1,7 +1,6 @@
 mod cache;
 mod entry;
 mod inner;
-mod modify_entry;
 mod parent_context;
 #[cfg(test)]
 mod tests;
@@ -12,13 +11,11 @@ pub(crate) use self::{cache::RootDirectoryCache, parent_context::ParentContext};
 use self::{
     cache::SubdirectoryCache,
     inner::{Content, Inner},
-    modify_entry::{ModifyEntry, ModifyEntryStep},
 };
 use crate::{
     blob::Blob,
     blob_id::BlobId,
     branch::Branch,
-    db,
     debug_printer::DebugPrinter,
     entry_type::EntryType,
     error::{Error, Result},
@@ -35,10 +32,6 @@ use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 pub struct Directory {
     inner: Arc<RwLock<Inner>>,
     local_branch: Branch,
-    // TODO: `parent` probably needs to be in `inner` as well, because when we modify a directory
-    //       the `entry_author` field might change and if it does, it should change in all the
-    //       instances of the directory.
-    parent: Option<Box<ParentContext>>, // box needed to avoid infinite type recursion
 }
 
 #[allow(clippy::len_without_is_empty)]
@@ -80,7 +73,7 @@ impl Directory {
     /// vector is merged with `version_vector_override`. This is useful to support merging
     /// concurrent versions of a directory where the resulting version vector should be the merge
     /// of the version vectors of the concurrent versions.
-    pub async fn flush(&mut self, version_vector_override: Option<&VersionVector>) -> Result<()> {
+    pub async fn flush(&self, version_vector_override: Option<&VersionVector>) -> Result<()> {
         let mut inner = self.inner.write().await;
 
         if !inner.content.dirty && version_vector_override.is_none() {
@@ -90,24 +83,9 @@ impl Directory {
         let mut tx = self.local_branch.db_pool().begin().await?;
 
         inner.flush(&mut tx).await?;
-
-        if let Some(ctx) = self.parent.as_mut() {
-            ctx.directory
-                .modify_entry(
-                    tx,
-                    &ctx.entry_name,
-                    &mut ctx.entry_author,
-                    version_vector_override,
-                )
-                .await?
-        } else {
-            inner
-                .blob
-                .branch()
-                .data()
-                .update_root_version_vector(tx, version_vector_override)
-                .await?
-        }
+        inner
+            .modify_self_entry(tx, *self.local_branch.id(), version_vector_override)
+            .await?;
 
         Ok(())
     }
@@ -126,11 +104,7 @@ impl Directory {
             .insert_entry(name.clone(), author, EntryType::File, vv)
             .await?;
         let locator = Locator::Head(blob_id);
-        let parent = ParentContext {
-            directory: self.clone(),
-            entry_name: name,
-            entry_author: author,
-        };
+        let parent = ParentContext::new(self.inner.clone(), name, author);
 
         Ok(File::create(self.local_branch.clone(), locator, parent))
     }
@@ -149,11 +123,7 @@ impl Directory {
             .insert_entry(name.clone(), author, EntryType::Directory, vv)
             .await?;
         let locator = Locator::Head(blob_id);
-        let parent = ParentContext {
-            directory: self.clone(),
-            entry_name: name,
-            entry_author: author,
-        };
+        let parent = ParentContext::new(self.inner.clone(), name, author);
 
         inner
             .open_directories
@@ -210,17 +180,19 @@ impl Directory {
     // TODO: consider rewriting this to avoid recursion
     #[async_recursion]
     pub async fn fork(&self) -> Result<Directory> {
-        if self.local_branch.id() == self.read().await.branch().id() {
+        let inner = self.read().await;
+
+        if self.local_branch.id() == inner.branch().id() {
             return Ok(self.clone());
         }
 
-        if let Some(parent) = &self.parent {
-            let parent_dir = parent.directory.fork().await?;
+        if let Some(parent) = &inner.inner.parent {
+            let parent_dir = parent.directory(self.local_branch.clone()).fork().await?;
 
             if let Ok(entry) = parent_dir
                 .read()
                 .await
-                .lookup_version(&parent.entry_name, self.local_branch.id())
+                .lookup_version(parent.entry_name(), self.local_branch.id())
             {
                 // TODO: if the local entry exists but is not a directory, we should still create
                 // the directory using its owner branch as the author.
@@ -228,7 +200,7 @@ impl Directory {
             }
 
             parent_dir
-                .create_directory(parent.entry_name.to_string())
+                .create_directory(parent.entry_name().to_owned())
                 .await
         } else {
             self.local_branch.open_or_create_root().await
@@ -255,53 +227,6 @@ impl Directory {
             .await
     }
 
-    /// Atomically updates metadata (version vector and author) of the specified entry, then the
-    /// metadata of this directory in its parent (and recursively for all ancestors), flushes the
-    /// changes to the db and finally commits the db transaction.
-    /// If an error occurs anywhere in the process, all intermediate changes are rolled back and all
-    /// the affected directories are reverted to their state before calling this function.
-    ///
-    /// Note: This function deliberately deviates from the established API conventions in this
-    /// project, namely it modifies the directory, flushes it and commits the db transaction all in
-    /// one call. The reason for this is that the correctness of this function depends on the
-    /// precise order the various sub-operations are executed and by wrapping it all in one function
-    /// we make it harder to misuse. So we decided to sacrifice API purity for corectness.
-    pub(crate) async fn modify_entry(
-        &mut self,
-        tx: db::Transaction<'_>,
-        name: &str,
-        author_id: &mut ReplicaId,
-        version_vector_override: Option<&VersionVector>,
-    ) -> Result<()> {
-        let inner = self.inner.write().await;
-        inner.assert_local(self.local_branch.id());
-
-        let mut tx = ModifyEntry::new(tx, self.local_branch.id());
-
-        tx.add(ModifyEntryStep::new(
-            inner,
-            name,
-            author_id,
-            version_vector_override,
-        ));
-        let mut next = self.parent.as_mut();
-
-        while let Some(ctx) = next {
-            tx.add(ModifyEntryStep::new(
-                ctx.directory.inner.write().await,
-                &ctx.entry_name,
-                &mut ctx.entry_author,
-                None,
-            ));
-            next = ctx.directory.parent.as_mut();
-        }
-
-        tx.flush().await?;
-        tx.commit().await?;
-
-        Ok(())
-    }
-
     async fn open(
         owner_branch: Branch,
         local_branch: Branch,
@@ -316,10 +241,10 @@ impl Directory {
             inner: Arc::new(RwLock::new(Inner {
                 blob,
                 content,
+                parent,
                 open_directories: SubdirectoryCache::new(),
             })),
             local_branch,
-            parent: parent.map(Box::new),
         })
     }
 
@@ -330,10 +255,10 @@ impl Directory {
             inner: Arc::new(RwLock::new(Inner {
                 blob,
                 content: Content::new(),
+                parent,
                 open_directories: SubdirectoryCache::new(),
             })),
             local_branch: owner_branch,
-            parent: parent.map(Box::new),
         }
     }
 
@@ -364,11 +289,8 @@ impl Directory {
                 if entry_data.entry_type == EntryType::File {
                     let print = print.indent();
 
-                    let parent_context = ParentContext {
-                        directory: self.clone(),
-                        entry_name: name.into(),
-                        entry_author: *author,
-                    };
+                    let parent_context =
+                        ParentContext::new(self.inner.clone(), name.into(), *author);
 
                     let file = File::open(
                         inner.blob.branch().clone(),
@@ -466,7 +388,7 @@ impl Reader<'_> {
 
     /// Version vector of this directory.
     pub async fn version_vector(&self) -> VersionVector {
-        if let Some(parent) = &self.outer.parent {
+        if let Some(parent) = &self.inner.parent {
             parent.entry_version_vector().await
         } else {
             self.branch().data().root_version_vector().await.clone()

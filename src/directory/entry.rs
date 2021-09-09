@@ -218,11 +218,11 @@ struct RefInner<'a> {
 
 impl RefInner<'_> {
     fn parent_context(&self) -> ParentContext {
-        ParentContext {
-            directory: self.parent_outer.clone(),
-            entry_name: self.name.into(),
-            entry_author: *self.author,
-        }
+        ParentContext::new(
+            self.parent_outer.inner.clone(),
+            self.name.into(),
+            *self.author,
+        )
     }
 
     pub fn is_local(&self) -> bool {

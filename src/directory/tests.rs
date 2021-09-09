@@ -7,7 +7,7 @@ async fn create_and_list_entries() {
     let branch = setup().await;
 
     // Create the root directory and put some file in it.
-    let mut dir = branch.open_or_create_root().await.unwrap();
+    let dir = branch.open_or_create_root().await.unwrap();
 
     let mut file_dog = dir.create_file("dog.txt".into()).await.unwrap();
     file_dog.write(b"woof").await.unwrap();
@@ -49,11 +49,11 @@ async fn add_entry_to_existing_directory() {
     let branch = setup().await;
 
     // Create empty directory
-    let mut dir = branch.open_or_create_root().await.unwrap();
+    let dir = branch.open_or_create_root().await.unwrap();
     dir.flush(None).await.unwrap();
 
     // Reopen it and add a file to it.
-    let mut dir = branch.open_root(branch.clone()).await.unwrap();
+    let dir = branch.open_root(branch.clone()).await.unwrap();
     dir.create_file("none.txt".into()).await.unwrap();
     dir.flush(None).await.unwrap();
 
@@ -76,7 +76,7 @@ async fn remove_file() {
     let file_locator = *file.locator();
 
     // Reopen and remove the file
-    let mut parent_dir = branch.open_root(branch.clone()).await.unwrap();
+    let parent_dir = branch.open_root(branch.clone()).await.unwrap();
     parent_dir.remove_file(name).await.unwrap();
     parent_dir.flush(None).await.unwrap();
 
@@ -108,13 +108,13 @@ async fn remove_subdirectory() {
 
     // Create a directory with a single subdirectory.
     let parent_dir = branch.open_or_create_root().await.unwrap();
-    let mut dir = parent_dir.create_directory(name.into()).await.unwrap();
+    let dir = parent_dir.create_directory(name.into()).await.unwrap();
     dir.flush(None).await.unwrap();
 
     let dir_locator = *dir.read().await.locator();
 
     // Reopen and remove the subdirectory
-    let mut parent_dir = branch.open_root(branch.clone()).await.unwrap();
+    let parent_dir = branch.open_root(branch.clone()).await.unwrap();
     parent_dir.remove_directory(name).await.unwrap();
     parent_dir.flush(None).await.unwrap();
 
@@ -141,10 +141,10 @@ async fn fork() {
     let branch1 = create_branch(branch0.db_pool().clone()).await;
 
     // Create a nested directory by branch 0
-    let mut root0 = branch0.open_or_create_root().await.unwrap();
+    let root0 = branch0.open_or_create_root().await.unwrap();
     root0.flush(None).await.unwrap();
 
-    let mut dir0 = root0.create_directory("dir".into()).await.unwrap();
+    let dir0 = root0.create_directory("dir".into()).await.unwrap();
     dir0.flush(None).await.unwrap();
 
     // Fork it by branch 1 and modify it
@@ -161,7 +161,7 @@ async fn fork() {
         .open()
         .await
         .unwrap();
-    let mut dir1 = dir0.fork().await.unwrap();
+    let dir1 = dir0.fork().await.unwrap();
 
     dir1.create_file("dog.jpg".into()).await.unwrap();
     dir1.flush(None).await.unwrap();
