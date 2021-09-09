@@ -1,18 +1,21 @@
 mod utils;
 
 use self::utils::{eventually, Bin};
+use parking_lot::Mutex;
 use std::fs;
 
-// HACK: run the integration tests sequentially, so they don't interfere with each other.
+// HACK: mutex to make sure the integration tests run sequentially, so they don't interfere with
+//       each other.
 // TODO: disable local discovery in these tests and establish explicit connections instead to avoid
 //       this interference. Then remove this wrapper.
-#[test]
-fn run_sequentially() {
-    transfer_single_file();
-    sequential_write_to_the_same_file();
-}
+// NOTE: using `parking_lot::Mutex` instead of `std::Mutex` because it can be constructed with a
+//       `const` function which makes it easier to use in a `static` (no need for `unsafe`).
+static MUTEX: Mutex<()> = parking_lot::const_mutex(());
 
+#[test]
 fn transfer_single_file() {
+    let _guard = MUTEX.lock();
+
     let a = Bin::start(0);
     let b = Bin::start(1);
 
@@ -27,7 +30,10 @@ fn transfer_single_file() {
     })
 }
 
+#[test]
 fn sequential_write_to_the_same_file() {
+    let _guard = MUTEX.lock();
+
     let a = Bin::start(0);
     let b = Bin::start(1);
 
