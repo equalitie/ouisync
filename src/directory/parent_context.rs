@@ -1,6 +1,6 @@
 use super::{
+    entry_type::EntryTypeWithBlob,
     inner::{self, Inner},
-    EntryType,
 };
 use crate::{
     blob_id::BlobId, branch::Branch, db, directory::Directory, error::Result,
@@ -68,7 +68,7 @@ impl ParentContext {
             .insert_entry(
                 self.entry_name.clone(),
                 self.entry_author,
-                EntryType::File,
+                EntryTypeWithBlob::File,
                 old_vv,
             )
             .await?;

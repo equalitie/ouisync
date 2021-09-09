@@ -9,7 +9,7 @@ mod tests;
 pub(crate) use self::{cache::RootDirectoryCache, parent_context::ParentContext};
 pub use self::{
     entry::{DirectoryRef, EntryRef, FileRef},
-    entry_type::EntryType,
+    entry_type::{EntryType, EntryTypeWithBlob},
 };
 
 use self::{
@@ -104,7 +104,7 @@ impl Directory {
         let author = *self.local_branch.id();
         let vv = VersionVector::first(author);
         let blob_id = inner
-            .insert_entry(name.clone(), author, EntryType::File, vv)
+            .insert_entry(name.clone(), author, EntryTypeWithBlob::File, vv)
             .await?;
         let locator = Locator::Head(blob_id);
         let parent = ParentContext::new(self.inner.clone(), name, author);
@@ -123,7 +123,7 @@ impl Directory {
         let author = *self.local_branch.id();
         let vv = VersionVector::first(author);
         let blob_id = inner
-            .insert_entry(name.clone(), author, EntryType::Directory, vv)
+            .insert_entry(name.clone(), author, EntryTypeWithBlob::Directory, vv)
             .await?;
         let locator = Locator::Head(blob_id);
         let parent = ParentContext::new(self.inner.clone(), name, author);
@@ -221,7 +221,7 @@ impl Directory {
         &self,
         name: String,
         author_id: ReplicaId,
-        entry_type: EntryType,
+        entry_type: EntryTypeWithBlob,
         version_vector: VersionVector,
     ) -> Result<BlobId> {
         let mut inner = self.write().await;

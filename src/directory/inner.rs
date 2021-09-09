@@ -1,4 +1,7 @@
-use super::{cache::SubdirectoryCache, entry_type::EntryType, parent_context::ParentContext};
+use super::{
+    cache::SubdirectoryCache, entry_type::EntryTypeWithBlob, parent_context::ParentContext,
+    EntryType,
+};
 use crate::{
     blob::{self, Blob},
     blob_id::BlobId,
@@ -100,7 +103,7 @@ impl Inner {
         &mut self,
         name: String,
         author: ReplicaId,
-        entry_type: EntryType,
+        entry_type: EntryTypeWithBlob,
         version_vector: VersionVector,
     ) -> Result<BlobId> {
         let (new_blob_id, old_blob_ids) =
@@ -234,7 +237,7 @@ impl Content {
         &mut self,
         name: String,
         author: ReplicaId,
-        entry_type: EntryType,
+        entry_type: EntryTypeWithBlob,
         version_vector: VersionVector,
     ) -> Result<(BlobId, Vec<BlobId>)> {
         let blob_id = rand::random();
@@ -253,12 +256,12 @@ impl Content {
         match versions.entry(author) {
             btree_map::Entry::Vacant(entry) => {
                 let data = match entry_type {
-                    EntryType::File => EntryData::File(EntryFileData {
+                    EntryTypeWithBlob::File => EntryData::File(EntryFileData {
                         blob_id,
                         version_vector,
                         blob_core: Arc::new(Mutex::new(Weak::new())),
                     }),
-                    EntryType::Directory => EntryData::Directory(EntryDirectoryData {
+                    EntryTypeWithBlob::Directory => EntryData::Directory(EntryDirectoryData {
                         blob_id,
                         version_vector,
                     }),
@@ -281,11 +284,11 @@ impl Content {
                 }
 
                 match (data, entry_type) {
-                    (EntryData::File(data), EntryType::File) => {
+                    (EntryData::File(data), EntryTypeWithBlob::File) => {
                         data.blob_id = blob_id;
                         data.version_vector = version_vector;
                     }
-                    (EntryData::Directory(data), EntryType::Directory) => {
+                    (EntryData::Directory(data), EntryTypeWithBlob::Directory) => {
                         data.blob_id = blob_id;
                         data.version_vector = version_vector;
                     }

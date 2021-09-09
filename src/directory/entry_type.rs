@@ -5,4 +5,11 @@ use serde::{Deserialize, Serialize};
 pub enum EntryType {
     File,
     Directory,
+    Tombstone,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
+pub enum EntryTypeWithBlob {
+    File,
+    Directory,
 }
