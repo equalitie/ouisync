@@ -107,12 +107,8 @@ impl JointDirectory {
         Ok(old_dir)
     }
 
-    pub async fn remove_file(&self, branch: &ReplicaId, name: &str) -> Result<()> {
-        self.versions
-            .get(branch)
-            .ok_or(Error::EntryNotFound)?
-            .remove_file(name)
-            .await
+    pub async fn remove_file(&self, name: &str) -> Result<()> {
+        self.read().await.lookup_unique(name)?.file()?.remove().await
     }
 
     pub async fn remove_directory(&self, branch: &ReplicaId, name: &str) -> Result<()> {

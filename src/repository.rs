@@ -111,7 +111,7 @@ impl Repository {
     pub async fn remove_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<JointDirectory> {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
         let dir = self.open_directory(parent).await?;
-        dir.remove_file(self.this_replica_id(), name).await?;
+        dir.remove_file(name).await?;
         Ok(dir)
     }
 

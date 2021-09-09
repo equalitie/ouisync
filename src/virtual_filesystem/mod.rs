@@ -806,9 +806,9 @@ impl Inner {
 
         log::debug!("unlink {}", self.inodes.path_display(parent, Some(name)));
 
-        let mut parent_dir = self.open_directory_by_inode(parent).await?;
-        parent_dir.remove_file(self.this_replica_id(), name).await?;
-        parent_dir.flush().await
+        let path = self.inodes.get(parent).calculate_path().join(name);
+        self.repository.remove_file(path).await?;
+        Ok(())
     }
 
     async fn rename(
