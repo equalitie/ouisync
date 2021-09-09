@@ -262,6 +262,8 @@ impl Content {
             .map(|(id, _)| *id)
             .collect();
 
+        let mut old_blob_id = None;
+
         match versions.entry(author) {
             btree_map::Entry::Vacant(entry) => {
                 let data = match entry_type {
@@ -294,10 +296,12 @@ impl Content {
 
                 match (data, entry_type) {
                     (EntryData::File(data), EntryTypeWithBlob::File) => {
+                        old_blob_id = Some(data.blob_id);
                         data.blob_id = blob_id;
                         data.version_vector = version_vector;
                     }
                     (EntryData::Directory(data), EntryTypeWithBlob::Directory) => {
+                        old_blob_id = Some(data.blob_id);
                         data.blob_id = blob_id;
                         data.version_vector = version_vector;
                     }
@@ -317,6 +321,8 @@ impl Content {
                 EntryData::Tombstone(_) => None,
             })
             .flatten()
+            // Because we filtered out *old_author != author above.
+            .chain(old_blob_id)
             .collect();
 
         self.dirty = true;
