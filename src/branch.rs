@@ -116,10 +116,10 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn ensure_subdirectory_exists() {
         let branch = setup().await;
-        let mut root = branch.open_or_create_root().await.unwrap();
+        let root = branch.open_or_create_root().await.unwrap();
         root.flush(None).await.unwrap();
 
-        let mut dir = branch
+        let dir = branch
             .ensure_directory_exists(Utf8Path::new("/dir"))
             .await
             .unwrap();

@@ -10,13 +10,12 @@ pub(crate) use self::{cache::RootDirectoryCache, parent_context::ParentContext};
 
 use self::{
     cache::SubdirectoryCache,
-    inner::{Content, EntryData, Inner},
+    inner::{Content, Inner},
 };
 use crate::{
     blob::Blob,
     blob_id::BlobId,
     branch::Branch,
-    db,
     debug_printer::DebugPrinter,
     entry_type::EntryType,
     error::{Error, Result},
@@ -26,7 +25,7 @@ use crate::{
     version_vector::VersionVector,
 };
 use async_recursion::async_recursion;
-use std::{collections::BTreeMap, sync::Arc};
+use std::sync::Arc;
 use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 #[derive(Clone)]
@@ -74,7 +73,7 @@ impl Directory {
     /// vector is merged with `version_vector_override`. This is useful to support merging
     /// concurrent versions of a directory where the resulting version vector should be the merge
     /// of the version vectors of the concurrent versions.
-    pub async fn flush(&mut self, version_vector_override: Option<&VersionVector>) -> Result<()> {
+    pub async fn flush(&self, version_vector_override: Option<&VersionVector>) -> Result<()> {
         let mut inner = self.inner.write().await;
 
         if !inner.content.dirty && version_vector_override.is_none() {
@@ -84,24 +83,9 @@ impl Directory {
         let mut tx = self.local_branch.db_pool().begin().await?;
 
         inner.flush(&mut tx).await?;
-
-        if let Some(ctx) = inner.parent.as_mut() {
-            ctx.directory
-                .modify_entry(
-                    tx,
-                    &ctx.entry_name,
-                    &mut ctx.entry_author,
-                    version_vector_override,
-                )
-                .await?
-        } else {
-            inner
-                .blob
-                .branch()
-                .data()
-                .update_root_version_vector(tx, version_vector_override)
-                .await?
-        }
+        inner
+            .modify_self_entry(tx, *self.local_branch.id(), version_vector_override)
+            .await?;
 
         Ok(())
     }
@@ -120,11 +104,7 @@ impl Directory {
             .insert_entry(name.clone(), author, EntryType::File, vv)
             .await?;
         let locator = Locator::Head(blob_id);
-        let parent = ParentContext {
-            directory: self.clone(),
-            entry_name: name,
-            entry_author: author,
-        };
+        let parent = ParentContext::new(self.inner.clone(), name, author);
 
         Ok(File::create(self.local_branch.clone(), locator, parent))
     }
@@ -143,11 +123,7 @@ impl Directory {
             .insert_entry(name.clone(), author, EntryType::Directory, vv)
             .await?;
         let locator = Locator::Head(blob_id);
-        let parent = ParentContext {
-            directory: self.clone(),
-            entry_name: name,
-            entry_author: author,
-        };
+        let parent = ParentContext::new(self.inner.clone(), name, author);
 
         inner
             .open_directories
@@ -211,12 +187,12 @@ impl Directory {
         }
 
         if let Some(parent) = &inner.inner.parent {
-            let parent_dir = parent.directory.fork().await?;
+            let parent_dir = parent.directory(self.local_branch.clone()).fork().await?;
 
             if let Ok(entry) = parent_dir
                 .read()
                 .await
-                .lookup_version(&parent.entry_name, self.local_branch.id())
+                .lookup_version(parent.entry_name(), self.local_branch.id())
             {
                 // TODO: if the local entry exists but is not a directory, we should still create
                 // the directory using its owner branch as the author.
@@ -224,7 +200,7 @@ impl Directory {
             }
 
             parent_dir
-                .create_directory(parent.entry_name.to_string())
+                .create_directory(parent.entry_name().to_owned())
                 .await
         } else {
             self.local_branch.open_or_create_root().await
@@ -249,50 +225,6 @@ impl Directory {
         inner
             .insert_entry(name, author_id, entry_type, version_vector)
             .await
-    }
-
-    /// Atomically updates metadata (version vector and author) of the specified entry, then the
-    /// metadata of this directory in its parent (and recursively for all ancestors), flushes the
-    /// changes to the db and finally commits the db transaction.
-    /// If an error occurs anywhere in the process, all intermediate changes are rolled back and all
-    /// the affected directories are reverted to their state before calling this function.
-    ///
-    /// NOTE: This function deliberately deviates from the established API conventions in this
-    /// project, namely it modifies the directory, flushes it and commits the db transaction all in
-    /// one call. The reason for this is that the correctness of this function depends on the
-    /// precise order the various sub-operations are executed and by wrapping it all in one function
-    /// we make it harder to misuse. So we decided to sacrifice API purity for corectness.
-    #[async_recursion]
-    pub(crate) async fn modify_entry<'a>(
-        &'a self,
-        tx: db::Transaction<'a>,
-        name: &'a str,
-        author_id: &'a mut ReplicaId,
-        version_vector_override: Option<&'a VersionVector>,
-    ) -> Result<()> {
-        let inner = self.inner.write().await;
-        inner.assert_local(self.local_branch.id());
-
-        let mut op = ModifyEntry::new(inner, name, author_id);
-        op.apply(*self.local_branch.id(), version_vector_override)?;
-
-        if let Some(parent) = op.inner.parent.as_mut() {
-            parent
-                .directory
-                .modify_entry(tx, &parent.entry_name, &mut parent.entry_author, None)
-                .await?;
-        } else {
-            // This is the last iteration of the recursion. If we reached this it means all the
-            // previous operation have suceeded. All that remain is to commit the transaction.
-            // If that succeeds, we commit the inidividual `ModifyEntry` operations one by one as
-            // we are poping the stack. Becuase those `commit` calls are infallible (it just sets a
-            // `bool` flag), it's guaranteed that the whole operation succeeeds after this point.
-            tx.commit().await?;
-        }
-
-        op.commit();
-
-        Ok(())
     }
 
     async fn open(
@@ -357,11 +289,8 @@ impl Directory {
                 if entry_data.entry_type == EntryType::File {
                     let print = print.indent();
 
-                    let parent_context = ParentContext {
-                        directory: self.clone(),
-                        entry_name: name.into(),
-                        entry_author: *author,
-                    };
+                    let parent_context =
+                        ParentContext::new(self.inner.clone(), name.into(), *author);
 
                     let file = File::open(
                         inner.blob.branch().clone(),
@@ -512,73 +441,4 @@ fn lookup<'a>(
                 .map(move |(author, data)| EntryRef::new(outer, inner, name, data, author))
         })
         .ok_or(Error::EntryNotFound)
-}
-
-/// Helper for the `modify_entry` that allows to undo the operation in case of error.
-struct ModifyEntry<'a> {
-    inner: RwLockWriteGuard<'a, Inner>,
-    name: &'a str,
-    author_id: &'a mut ReplicaId,
-    orig_author_id: ReplicaId,
-    orig_versions: Option<BTreeMap<ReplicaId, EntryData>>,
-    orig_dirty: bool,
-    committed: bool,
-}
-
-impl<'a> ModifyEntry<'a> {
-    fn new(
-        inner: RwLockWriteGuard<'a, Inner>,
-        name: &'a str,
-        author_id: &'a mut ReplicaId,
-    ) -> Self {
-        let orig_author_id = *author_id;
-        let orig_versions = inner.content.entries.get(name).cloned();
-        let orig_dirty = inner.content.dirty;
-
-        Self {
-            inner,
-            name,
-            author_id,
-            orig_author_id,
-            orig_versions,
-            orig_dirty,
-            committed: false,
-        }
-    }
-
-    // Apply the operation. The operation can still be undone after this by dropping `self`.
-    fn apply(
-        &mut self,
-        local_id: ReplicaId,
-        version_vector_override: Option<&VersionVector>,
-    ) -> Result<()> {
-        self.inner
-            .modify_entry(self.name, self.author_id, local_id, version_vector_override)
-    }
-
-    // Commit the operation. After this is called the operation cannot be undone.
-    fn commit(mut self) {
-        self.committed = true;
-    }
-}
-
-impl Drop for ModifyEntry<'_> {
-    fn drop(&mut self) {
-        if self.committed {
-            return;
-        }
-
-        *self.author_id = self.orig_author_id;
-        self.inner.content.dirty = self.orig_dirty;
-
-        if let Some(versions) = self.orig_versions.take() {
-            // `unwrap` is OK here because the existence of `versions_backup` implies that the
-            // entry for `name` exists because we never remove it during the `modify_entry` call.
-            // Also as the `ModifyEntry` struct is holding an exclusive lock (write lock) to the
-            // directory internals, it's impossible for someone to remove the entry in the meantime.
-            *self.inner.content.entries.get_mut(self.name).unwrap() = versions;
-        } else {
-            self.inner.content.entries.remove(self.name);
-        }
-    }
 }

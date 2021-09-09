@@ -3,7 +3,6 @@ use crate::{
     blob_id::BlobId,
     branch::Branch,
     directory::ParentContext,
-    entry_type::EntryType,
     error::Result,
     locator::Locator,
 };
@@ -108,13 +107,7 @@ impl File {
 
         self.blob.flush_in_transaction(&mut tx).await?;
         self.parent
-            .directory
-            .modify_entry(
-                tx,
-                &self.parent.entry_name,
-                &mut self.parent.entry_author,
-                None,
-            )
+            .modify_entry(tx, *self.local_branch.id(), None)
             .await?;
 
         Ok(())
@@ -143,21 +136,8 @@ impl File {
             return Ok(());
         }
 
-        let old_vv = self.parent.entry_version_vector().await;
-
-        self.parent.directory = self.parent.directory.fork().await?;
-
-        let blob_id = self
-            .parent
-            .directory
-            .insert_entry(
-                self.parent.entry_name.clone(),
-                self.parent.entry_author,
-                EntryType::File,
-                old_vv,
-            )
-            .await?;
-
+        // TODO: this should be atomic
+        let blob_id = self.parent.fork_file(self.local_branch.clone()).await?;
         self.blob
             .fork(self.local_branch.clone(), Locator::Head(blob_id))
             .await

@@ -9,13 +9,14 @@ use crate::{
     replica_id::ReplicaId,
     version_vector::VersionVector,
 };
+use async_recursion::async_recursion;
 use futures_util::future;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{btree_map, BTreeMap},
     sync::{Arc, Weak},
 };
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLockWriteGuard};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub(super) struct EntryData {
@@ -87,6 +88,7 @@ impl Inner {
         Ok(new_blob_id)
     }
 
+    // Modify an entry in this directory with the specified name and author.
     pub fn modify_entry(
         &mut self,
         name: &str,
@@ -133,6 +135,29 @@ impl Inner {
         self.content.dirty = true;
 
         Ok(())
+    }
+
+    // Modify the entry of this directory in its parent.
+    pub async fn modify_self_entry(
+        &mut self,
+        tx: db::Transaction<'_>,
+        local_id: ReplicaId,
+        version_vector_override: Option<&VersionVector>,
+    ) -> Result<()> {
+        if let Some(ctx) = self.parent.as_mut() {
+            ctx.modify_entry(tx, local_id, version_vector_override)
+                .await
+        } else {
+            self.blob
+                .branch()
+                .data()
+                .update_root_version_vector(tx, version_vector_override)
+                .await
+        }
+    }
+
+    pub fn entry_version_vector(&self, name: &str, author: &ReplicaId) -> Option<&VersionVector> {
+        Some(&self.content.entries.get(name)?.get(author)?.version_vector)
     }
 
     #[track_caller]
@@ -236,5 +261,96 @@ impl Content {
         self.dirty = true;
 
         Ok(())
+    }
+}
+
+#[async_recursion]
+pub(super) async fn modify_entry<'a>(
+    mut tx: db::Transaction<'a>,
+    inner: RwLockWriteGuard<'a, Inner>,
+    local_id: ReplicaId,
+    name: &'a str,
+    author_id: &'a mut ReplicaId,
+    version_vector_override: Option<&'a VersionVector>,
+) -> Result<()> {
+    inner.assert_local(&local_id);
+
+    let mut op = ModifyEntry::new(inner, name, author_id);
+    op.apply(local_id, version_vector_override)?;
+    op.inner.flush(&mut tx).await?;
+    op.inner
+        .modify_self_entry(tx, local_id, version_vector_override)
+        .await?;
+    op.commit();
+
+    Ok(())
+}
+
+/// Helper for the `modify_entry` that allows to undo the operation in case of error.
+struct ModifyEntry<'a> {
+    inner: RwLockWriteGuard<'a, Inner>,
+    name: &'a str,
+    author_id: &'a mut ReplicaId,
+    orig_author_id: ReplicaId,
+    orig_versions: Option<BTreeMap<ReplicaId, EntryData>>,
+    orig_dirty: bool,
+    committed: bool,
+}
+
+impl<'a> ModifyEntry<'a> {
+    fn new(
+        inner: RwLockWriteGuard<'a, Inner>,
+        name: &'a str,
+        author_id: &'a mut ReplicaId,
+    ) -> Self {
+        let orig_author_id = *author_id;
+        let orig_versions = inner.content.entries.get(name).cloned();
+        let orig_dirty = inner.content.dirty;
+
+        Self {
+            inner,
+            name,
+            author_id,
+            orig_author_id,
+            orig_versions,
+            orig_dirty,
+            committed: false,
+        }
+    }
+
+    // Apply the operation. The operation can still be undone after this by dropping `self`.
+    fn apply(
+        &mut self,
+        local_id: ReplicaId,
+        version_vector_override: Option<&VersionVector>,
+    ) -> Result<()> {
+        self.inner
+            .modify_entry(self.name, self.author_id, local_id, version_vector_override)
+    }
+
+    // Commit the operation. After this is called the operation cannot be undone.
+    fn commit(mut self) {
+        self.committed = true;
+    }
+}
+
+impl Drop for ModifyEntry<'_> {
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+
+        *self.author_id = self.orig_author_id;
+        self.inner.content.dirty = self.orig_dirty;
+
+        if let Some(versions) = self.orig_versions.take() {
+            // `unwrap` is OK here because the existence of `versions_backup` implies that the
+            // entry for `name` exists because we never remove it during the `modify_entry` call.
+            // Also as the `ModifyEntry` struct is holding an exclusive lock (write lock) to the
+            // directory internals, it's impossible for someone to remove the entry in the meantime.
+            *self.inner.content.entries.get_mut(self.name).unwrap() = versions;
+        } else {
+            self.inner.content.entries.remove(self.name);
+        }
     }
 }
