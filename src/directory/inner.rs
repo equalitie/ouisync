@@ -18,24 +18,57 @@ use std::{
 };
 use tokio::sync::{Mutex, RwLockWriteGuard};
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub(super) struct EntryData {
-    pub entry_type: EntryType,
-    pub blob_id: BlobId,
-    pub version_vector: VersionVector,
-    #[serde(skip)]
-    pub blob_core: Arc<Mutex<Weak<Mutex<blob::Core>>>>,
+#[derive(Debug, Clone, Deserialize, Serialize, Eq, PartialEq)]
+pub(super) enum EntryData {
+    File(EntryFileData),
+    Directory(EntryDirectoryData),
 }
 
-impl PartialEq for EntryData {
-    fn eq(&self, other: &Self) -> bool {
-        self.entry_type == other.entry_type
-            && self.blob_id == other.blob_id
-            && self.version_vector == other.version_vector
+impl EntryData {
+    pub fn entry_type(&self) -> EntryType {
+        match self {
+            Self::File(_) => EntryType::File,
+            Self::Directory(_) => EntryType::Directory,
+        }
+    }
+
+    pub fn version_vector(&self) -> &VersionVector {
+        match self {
+            Self::File(f) => &f.version_vector,
+            Self::Directory(d) => &d.version_vector,
+        }
+    }
+
+    pub fn version_vector_mut(&mut self) -> &mut VersionVector {
+        match self {
+            Self::File(f) => &mut f.version_vector,
+            Self::Directory(d) => &mut d.version_vector,
+        }
     }
 }
 
-impl Eq for EntryData {}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub(super) struct EntryFileData {
+    pub blob_id: BlobId,
+    pub version_vector: VersionVector,
+    #[serde(skip)]
+    // The Arc here is so that Self is Clone.
+    pub blob_core: Arc<Mutex<Weak<Mutex<blob::Core>>>>,
+}
+
+impl PartialEq for EntryFileData {
+    fn eq(&self, other: &Self) -> bool {
+        self.blob_id == other.blob_id && self.version_vector == other.version_vector
+    }
+}
+
+impl Eq for EntryFileData {}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Eq, PartialEq)]
+pub(super) struct EntryDirectoryData {
+    pub blob_id: BlobId,
+    pub version_vector: VersionVector,
+}
 
 pub(super) struct Inner {
     pub blob: Blob,
@@ -111,7 +144,7 @@ impl Inner {
             // vector.
             let local_version = versions.get(&local_id);
             let local_happened_before = local_version.map_or(true, |local_version| {
-                local_version.version_vector < authors_version.version_vector
+                local_version.version_vector() < authors_version.version_vector()
             });
 
             // TODO: use a more descriptive error here.
@@ -124,9 +157,9 @@ impl Inner {
         let mut version = versions.remove(author_id).unwrap();
 
         if let Some(version_vector_override) = version_vector_override {
-            version.version_vector.merge(version_vector_override)
+            version.version_vector_mut().merge(version_vector_override)
         } else {
-            version.version_vector.increment(local_id);
+            version.version_vector_mut().increment(local_id);
         }
 
         versions.insert(local_id, version);
@@ -157,7 +190,7 @@ impl Inner {
     }
 
     pub fn entry_version_vector(&self, name: &str, author: &ReplicaId) -> Option<&VersionVector> {
-        Some(&self.content.entries.get(name)?.get(author)?.version_vector)
+        Some(self.content.entries.get(name)?.get(author)?.version_vector())
     }
 
     #[track_caller]
@@ -208,24 +241,28 @@ impl Content {
         #[allow(clippy::needless_collect)]
         let old_authors: Vec<_> = versions
             .iter()
-            .filter(|(_, data)| data.version_vector < version_vector)
+            .filter(|(_, data)| data.version_vector() < &version_vector)
             .map(|(id, _)| *id)
             .collect();
 
         match versions.entry(author) {
             btree_map::Entry::Vacant(entry) => {
-                entry.insert(EntryData {
-                    entry_type,
-                    blob_id,
-                    version_vector,
-                    blob_core: Arc::new(Mutex::new(Weak::new())),
-                });
+                let data = match entry_type {
+                    EntryType::File => EntryData::File(EntryFileData {
+                        blob_id,
+                        version_vector,
+                        blob_core: Arc::new(Mutex::new(Weak::new())),
+                    }),
+                    EntryType::Directory => EntryData::Directory(EntryDirectoryData {
+                        blob_id,
+                        version_vector,
+                    }),
+                };
+
+                entry.insert(data);
             }
             btree_map::Entry::Occupied(mut entry) => {
                 let data = entry.get_mut();
-                if data.entry_type != entry_type {
-                    return Err(Error::EntryExists);
-                }
 
                 // If the existing entry is
                 //     1. "same", or
@@ -234,12 +271,21 @@ impl Content {
                 // then don't update it. Note that #3 should not happen because of the invariant
                 // that one replica (version author) must not create concurrent entries.
                 #[allow(clippy::neg_cmp_op_on_partial_ord)]
-                if !(data.version_vector < version_vector) {
+                if !(data.version_vector() < &version_vector) {
                     return Err(Error::EntryExists);
                 }
 
-                data.blob_id = blob_id;
-                data.version_vector = version_vector;
+                match (data, entry_type) {
+                    (EntryData::File(data), EntryType::File) => {
+                        data.blob_id = blob_id;
+                        data.version_vector = version_vector;
+                    }
+                    (EntryData::Directory(data), EntryType::Directory) => {
+                        data.blob_id = blob_id;
+                        data.version_vector = version_vector;
+                    }
+                    (_, _) => return Err(Error::EntryExists),
+                }
             }
         }
 
@@ -248,7 +294,10 @@ impl Content {
             .into_iter()
             .filter(|old_author| *old_author != author)
             .filter_map(|old_author| versions.remove(&old_author))
-            .map(|data| data.blob_id)
+            .map(|data| match data {
+                EntryData::File(data) => data.blob_id,
+                EntryData::Directory(data) => data.blob_id,
+            })
             .collect();
 
         self.dirty = true;

@@ -10,7 +10,7 @@ pub(crate) use self::{cache::RootDirectoryCache, parent_context::ParentContext};
 
 use self::{
     cache::SubdirectoryCache,
-    inner::{Content, Inner},
+    inner::{Content, EntryData, Inner},
 };
 use crate::{
     blob::Blob,
@@ -281,12 +281,9 @@ impl Directory {
             let print = print.indent();
 
             for (author, entry_data) in versions {
-                print.display(&format!(
-                    "{:?}: {:?}, blob_id:{:?}, {:?}",
-                    author, entry_data.entry_type, entry_data.blob_id, entry_data.version_vector
-                ));
+                print.display(&format!("{:?}: {:?}", author, entry_data));
 
-                if entry_data.entry_type == EntryType::File {
+                if let EntryData::File(file_data) = entry_data {
                     let print = print.indent();
 
                     let parent_context =
@@ -295,7 +292,7 @@ impl Directory {
                     let file = File::open(
                         inner.blob.branch().clone(),
                         self.local_branch.clone(),
-                        Locator::Head(entry_data.blob_id),
+                        Locator::Head(file_data.blob_id),
                         parent_context,
                     )
                     .await;
