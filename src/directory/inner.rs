@@ -241,7 +241,7 @@ impl Inner {
     }
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize, Debug)]
 pub(super) struct Content {
     pub entries: BTreeMap<String, BTreeMap<ReplicaId, EntryData>>,
     #[serde(skip)]

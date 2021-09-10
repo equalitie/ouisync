@@ -91,7 +91,7 @@ async fn remove_file() {
             let entries: Vec<_> = entries.collect();
             assert_eq!(entries.len(), 1);
             assert_eq!(entries[0].entry_type(), EntryType::Tombstone);
-        },
+        }
     }
 
     assert_eq!(parent_dir.entries().count(), 1);

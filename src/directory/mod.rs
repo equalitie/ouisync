@@ -77,20 +77,7 @@ impl Directory {
     /// concurrent versions of a directory where the resulting version vector should be the merge
     /// of the version vectors of the concurrent versions.
     pub async fn flush(&self, version_vector_override: Option<&VersionVector>) -> Result<()> {
-        let mut inner = self.inner.write().await;
-
-        if !inner.content.dirty && version_vector_override.is_none() {
-            return Ok(());
-        }
-
-        let mut tx = self.local_branch.db_pool().begin().await?;
-
-        inner.flush(&mut tx).await?;
-        inner
-            .modify_self_entry(tx, *self.local_branch.id(), version_vector_override)
-            .await?;
-
-        Ok(())
+        self.write().await.flush(version_vector_override).await
     }
 
     /// Creates a new file inside this directory.
@@ -140,19 +127,7 @@ impl Directory {
     ///
     /// Panics if this directory is not in the local branch.
     pub async fn remove_file(&self, name: &str, author: &ReplicaId) -> Result<()> {
-        let mut writer = self.write().await;
-        let this_replica_id = *self.local_branch.id();
-
-        let tombstone_vv = writer
-            .lookup_version(name, author)?
-            .version_vector()
-            .clone()
-            .increment(this_replica_id);
-
-        writer
-            .inner
-            .remove_entry(name.into(), this_replica_id, tombstone_vv)
-            .await
+        self.write().await.remove_file(name, author).await
     }
 
     /// Removes a subdirectory from this directory.
@@ -275,7 +250,7 @@ impl Directory {
     // # Panics
     //
     // Panics if not in the local branch.
-    async fn write(&self) -> Writer<'_> {
+    pub async fn write(&self) -> Writer<'_> {
         let inner = self.inner.write().await;
         inner.assert_local(self.local_branch.id());
         Writer { outer: self, inner }
@@ -334,14 +309,52 @@ impl Directory {
     }
 }
 
+/// View of a `Directory` for performing read and write queries.
 pub struct Writer<'a> {
     outer: &'a Directory,
     inner: RwLockWriteGuard<'a, Inner>,
 }
 
 impl Writer<'_> {
+    pub fn read_operations(&self) -> ReadOperations<'_> {
+        ReadOperations {
+            outer: self.outer,
+            inner: &*self.inner,
+        }
+    }
+
     pub fn lookup_version(&self, name: &'_ str, author: &ReplicaId) -> Result<EntryRef> {
         lookup_version(&*self.inner, self.outer, name, author)
+    }
+
+    pub async fn flush(&mut self, version_vector_override: Option<&VersionVector>) -> Result<()> {
+        if !self.inner.content.dirty && version_vector_override.is_none() {
+            return Ok(());
+        }
+
+        let mut tx = self.outer.local_branch.db_pool().begin().await?;
+
+        self.inner.flush(&mut tx).await?;
+
+        self.inner
+            .modify_self_entry(tx, *self.outer.local_branch.id(), version_vector_override)
+            .await?;
+
+        Ok(())
+    }
+
+    pub async fn remove_file(&mut self, name: &str, author: &ReplicaId) -> Result<()> {
+        let this_replica_id = *self.outer.local_branch.id();
+
+        let tombstone_vv = self
+            .lookup_version(name, author)?
+            .version_vector()
+            .clone()
+            .increment(this_replica_id);
+
+        self.inner
+            .remove_entry(name.into(), this_replica_id, tombstone_vv)
+            .await
     }
 }
 
@@ -352,6 +365,13 @@ pub struct Reader<'a> {
 }
 
 impl Reader<'_> {
+    pub fn read_operations(&self) -> ReadOperations<'_> {
+        ReadOperations {
+            outer: self.outer,
+            inner: &*self.inner,
+        }
+    }
+
     /// Returns iterator over the entries of this directory.
     pub fn entries(&self) -> impl Iterator<Item = EntryRef> + DoubleEndedIterator + Clone {
         self.inner
@@ -408,15 +428,36 @@ impl Reader<'_> {
     }
 }
 
-fn lookup_version<'a>(inner: &'a Inner, outer: &'a Directory, name: &str, author: &ReplicaId) -> Result<EntryRef<'a>> {
+#[derive(Clone)]
+pub struct ReadOperations<'a> {
+    outer: &'a Directory,
+    inner: &'a Inner,
+}
+
+impl<'a> ReadOperations<'a> {
+    /// Lookup an entry of this directory by name.
+    pub fn lookup(
+        &self,
+        name: &'_ str,
+    ) -> Result<impl Iterator<Item = EntryRef<'a>> + ExactSizeIterator + 'a> {
+        lookup(self.outer, self.inner, name)
+    }
+}
+
+fn lookup_version<'a>(
+    inner: &'a Inner,
+    outer: &'a Directory,
+    name: &str,
+    author: &ReplicaId,
+) -> Result<EntryRef<'a>> {
     inner
         .content
         .entries
         .get_key_value(name)
         .and_then(|(name, versions)| {
-            versions.get_key_value(author).map(|(author, data)| {
-                EntryRef::new(outer, &*inner, name, data, author)
-            })
+            versions
+                .get_key_value(author)
+                .map(|(author, data)| EntryRef::new(outer, &*inner, name, data, author))
         })
         .ok_or(Error::EntryNotFound)
 }

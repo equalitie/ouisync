@@ -110,7 +110,7 @@ impl Repository {
     /// Removes (delete) the file at the given path. Returns the parent directory.
     pub async fn remove_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<JointDirectory> {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
-        let dir = self.open_directory(parent).await?;
+        let mut dir = self.open_directory(parent).await?;
         dir.remove_file(name).await?;
         Ok(dir)
     }
