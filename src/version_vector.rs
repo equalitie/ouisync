@@ -6,7 +6,7 @@ use sqlx::{
     sqlite::{SqliteArgumentValue, SqliteTypeInfo, SqliteValueRef},
     Decode, Encode, Sqlite, Type,
 };
-use std::{cmp::Ordering, collections::HashMap};
+use std::{cmp::Ordering, collections::HashMap, fmt};
 
 /// [Version vector](https://en.wikipedia.org/wiki/Version_vector).
 ///
@@ -16,7 +16,7 @@ use std::{cmp::Ordering, collections::HashMap};
 /// - `Some(Ordering::Less)`    -> the lhs vector happened-before the rhs vector
 /// - `Some(Ordering::Greater)` -> the rhs vector happened-before the lhs vector
 /// - `None`                    -> the version vectors are concurrent
-#[derive(Default, Clone, Debug, Serialize, Deserialize)]
+#[derive(Default, Clone, Serialize, Deserialize)]
 pub struct VersionVector(HashMap<ReplicaId, u64>);
 
 impl VersionVector {
@@ -63,6 +63,16 @@ impl VersionVector {
         for (replica_id, version) in &other.0 {
             self.insert(*replica_id, *version)
         }
+    }
+}
+
+// Less clutter in the debug output this way (as opposed to deriving).
+// e.g.:
+//   with deriving: Foo { version_vector: VersionVector({...}) }
+//   without:       Foo { version_vector: {...} }
+impl fmt::Debug for VersionVector {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self.0)
     }
 }
 

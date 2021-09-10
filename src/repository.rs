@@ -195,9 +195,10 @@ impl Repository {
             } else {
                 ""
             };
-            print.display(&format_args!("Branch {:?}{}", replica_id, local));
+            print.display(&format_args!("Branch ID: {:?}{}", replica_id, local));
+            let print = print.indent();
             print.display(&format_args!(
-                "/, {:?}",
+                "/, vv: {:?}",
                 branch.data().root_version_vector().await
             ));
             branch.debug_print(print.indent()).await;
