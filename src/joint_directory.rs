@@ -527,7 +527,7 @@ impl<'a> Merge<'a> {
             match entry {
                 EntryRef::File(file) => files.push_back(file),
                 EntryRef::Directory(dir) => directories.push(dir),
-                EntryRef::Tombstone(_) => {},
+                EntryRef::Tombstone(_) => {}
             }
         }
 

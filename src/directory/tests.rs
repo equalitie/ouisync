@@ -77,7 +77,7 @@ async fn remove_file() {
 
     // Reopen and remove the file
     let parent_dir = branch.open_root(branch.clone()).await.unwrap();
-    parent_dir.remove_file(name).await.unwrap();
+    parent_dir.remove_file(name, branch.id()).await.unwrap();
     parent_dir.flush(None).await.unwrap();
 
     // Reopen again and check the file entry was removed.
@@ -85,12 +85,16 @@ async fn remove_file() {
     let parent_dir = parent_dir.read().await;
 
     match parent_dir.lookup(name) {
-        Err(Error::EntryNotFound) => (),
+        Err(Error::EntryNotFound) => panic!("expected to find a tombstone, but found nothing"),
         Err(error) => panic!("unexpected error {:?}", error),
-        Ok(_) => panic!("entry should not exists but it does"),
+        Ok(entries) => {
+            let entries: Vec<_> = entries.collect();
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].entry_type(), EntryType::Tombstone);
+        },
     }
 
-    assert_eq!(parent_dir.entries().count(), 0);
+    assert_eq!(parent_dir.entries().count(), 1);
 
     // Check the file blob itself was removed as well.
     match Blob::open(branch, file_locator).await {
