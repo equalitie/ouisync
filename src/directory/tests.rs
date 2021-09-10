@@ -281,11 +281,7 @@ async fn insert_entry_newer_than_existing() {
             .await
             .unwrap();
 
-        let b_vv = {
-            let mut vv = a_vv;
-            vv.increment(b_author);
-            vv
-        };
+        let b_vv = a_vv.increment(b_author);
 
         root.insert_entry(
             name.to_owned(),

@@ -189,8 +189,7 @@ impl RootNode {
     /// Creates the next version of this root node with the specified hash.
     pub async fn next_version(&self, tx: &mut db::Transaction<'_>, hash: Hash) -> Result<Self> {
         let replica_id = self.load_replica_id(&mut *tx).await?;
-        let mut versions = self.versions.clone();
-        versions.increment(replica_id);
+        let versions = self.versions.clone().increment(replica_id);
 
         let snapshot_id = sqlx::query(
             "INSERT INTO snapshot_root_nodes (
@@ -239,7 +238,7 @@ impl RootNode {
             new_version_vector.merge(version_vector_override);
         } else {
             let replica_id = self.load_replica_id(&mut tx).await?;
-            new_version_vector.increment(replica_id);
+            new_version_vector.increment_in_place(replica_id);
         }
 
         sqlx::query("UPDATE snapshot_root_nodes SET versions = ? WHERE snapshot_id = ?")
