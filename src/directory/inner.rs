@@ -1,9 +1,11 @@
 use super::{
-    cache::SubdirectoryCache, entry_type::EntryTypeWithBlob, parent_context::ParentContext,
-    EntryType,
+    cache::SubdirectoryCache,
+    entry_data::{EntryData, EntryDirectoryData, EntryFileData, EntryTombstoneData},
+    entry_type::EntryTypeWithBlob,
+    parent_context::ParentContext,
 };
 use crate::{
-    blob::{self, Blob},
+    blob::Blob,
     blob_id::BlobId,
     db,
     error::{Error, Result},
@@ -19,67 +21,6 @@ use std::{
     sync::{Arc, Weak},
 };
 use tokio::sync::{Mutex, RwLockWriteGuard};
-
-#[derive(Debug, Clone, Deserialize, Serialize, Eq, PartialEq)]
-pub(super) enum EntryData {
-    File(EntryFileData),
-    Directory(EntryDirectoryData),
-    Tombstone(EntryTombstoneData),
-}
-
-impl EntryData {
-    pub fn entry_type(&self) -> EntryType {
-        match self {
-            Self::File(_) => EntryType::File,
-            Self::Directory(_) => EntryType::Directory,
-            Self::Tombstone(_) => EntryType::Tombstone,
-        }
-    }
-
-    pub fn version_vector(&self) -> &VersionVector {
-        match self {
-            Self::File(f) => &f.version_vector,
-            Self::Directory(d) => &d.version_vector,
-            Self::Tombstone(t) => &t.version_vector,
-        }
-    }
-
-    pub fn version_vector_mut(&mut self) -> &mut VersionVector {
-        match self {
-            Self::File(f) => &mut f.version_vector,
-            Self::Directory(d) => &mut d.version_vector,
-            Self::Tombstone(t) => &mut t.version_vector,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub(super) struct EntryFileData {
-    pub blob_id: BlobId,
-    pub version_vector: VersionVector,
-    #[serde(skip)]
-    // The Arc here is so that Self is Clone.
-    pub blob_core: Arc<Mutex<Weak<Mutex<blob::Core>>>>,
-}
-
-impl PartialEq for EntryFileData {
-    fn eq(&self, other: &Self) -> bool {
-        self.blob_id == other.blob_id && self.version_vector == other.version_vector
-    }
-}
-
-impl Eq for EntryFileData {}
-
-#[derive(Debug, Clone, Deserialize, Serialize, Eq, PartialEq)]
-pub(super) struct EntryDirectoryData {
-    pub blob_id: BlobId,
-    pub version_vector: VersionVector,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, Eq, PartialEq)]
-pub(super) struct EntryTombstoneData {
-    pub version_vector: VersionVector,
-}
 
 pub(super) struct Inner {
     pub blob: Blob,

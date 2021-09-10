@@ -1,6 +1,7 @@
 use super::{
+    entry_data::{EntryData, EntryDirectoryData, EntryFileData, EntryTombstoneData},
     entry_type::EntryType,
-    inner::{EntryData, EntryDirectoryData, EntryFileData, EntryTombstoneData, Inner},
+    inner::Inner,
     parent_context::ParentContext,
     Directory,
 };

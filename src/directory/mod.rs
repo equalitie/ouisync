@@ -1,5 +1,6 @@
 mod cache;
 mod entry;
+mod entry_data;
 mod entry_type;
 mod inner;
 mod parent_context;
@@ -14,7 +15,8 @@ pub use self::{
 
 use self::{
     cache::SubdirectoryCache,
-    inner::{Content, EntryData, Inner},
+    entry_data::EntryData,
+    inner::{Content, Inner},
 };
 use crate::{
     blob::Blob,
