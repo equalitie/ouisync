@@ -11,7 +11,6 @@ mod blob_id;
 mod block;
 mod branch;
 mod directory;
-mod entry_type;
 mod error;
 mod ffi;
 mod file;
@@ -36,12 +35,11 @@ mod versioned_file_name;
 pub use self::{
     crypto::Cryptor,
     directory::{Directory, EntryRef, MoveDstDirectory},
-    entry_type::EntryType,
     error::{Error, Result},
     file::File,
     index::Index,
     joint_directory::{JointDirectory, JointEntryRef},
-    joint_entry::JointEntry,
+    joint_entry::{JointEntry, JointEntryType},
     locator::Locator,
     network::{Network, NetworkOptions},
     replica_id::ReplicaId,

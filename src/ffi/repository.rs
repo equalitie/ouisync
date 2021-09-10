@@ -4,7 +4,7 @@ use super::{
     session,
     utils::{self, Port, SharedHandle, UniqueHandle},
 };
-use crate::{entry_type::EntryType, error::Error, repository::Repository};
+use crate::{error::Error, joint_entry::JointEntryType, repository::Repository};
 use std::{os::raw::c_char, sync::Arc};
 
 pub const ENTRY_TYPE_INVALID: u8 = 0;
@@ -109,9 +109,9 @@ pub unsafe extern "C" fn subscription_cancel(handle: UniqueHandle<JoinHandle<()>
     handle.release().abort();
 }
 
-pub(super) fn entry_type_to_num(entry_type: EntryType) -> u8 {
+pub(super) fn entry_type_to_num(entry_type: JointEntryType) -> u8 {
     match entry_type {
-        EntryType::File => ENTRY_TYPE_FILE,
-        EntryType::Directory => ENTRY_TYPE_DIRECTORY,
+        JointEntryType::File => ENTRY_TYPE_FILE,
+        JointEntryType::Directory => ENTRY_TYPE_DIRECTORY,
     }
 }

@@ -17,8 +17,8 @@ use fuser::{
     ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow,
 };
 use ouisync::{
-    debug_printer::DebugPrinter, EntryType, Error, File, JointDirectory, JointEntry, JointEntryRef,
-    ReplicaId, Repository, Result,
+    debug_printer::DebugPrinter, Error, File, JointDirectory, JointEntry, JointEntryRef,
+    JointEntryType, ReplicaId, Repository, Result,
 };
 use std::{
     convert::TryInto,
@@ -385,7 +385,7 @@ impl Inner {
         let (len, repr) = match &entry {
             JointEntryRef::File(entry) => (
                 entry.open().await?.len().await,
-                Representation::File(*entry.branch_id()),
+                Representation::File(*entry.author()),
             ),
             JointEntryRef::Directory(entry) => (
                 entry.open().await?.read().await.len().await,
@@ -471,7 +471,11 @@ impl Inner {
             file.truncate(size).await?;
         }
 
-        Ok(make_file_attr(inode, EntryType::File, file.len().await))
+        Ok(make_file_attr(
+            inode,
+            JointEntryType::File,
+            file.len().await,
+        ))
     }
 
     async fn opendir(&mut self, inode: Inode, flags: OpenFlags) -> Result<FileHandle> {
@@ -806,9 +810,9 @@ impl Inner {
 
         log::debug!("unlink {}", self.inodes.path_display(parent, Some(name)));
 
-        let mut parent_dir = self.open_directory_by_inode(parent).await?;
-        parent_dir.remove_file(self.this_replica_id(), name).await?;
-        parent_dir.flush().await
+        let path = self.inodes.get(parent).calculate_path().join(name);
+        self.repository.remove_file(path).await?;
+        Ok(())
     }
 
     async fn rename(
@@ -876,7 +880,7 @@ async fn make_file_attr_for_entry(entry: &JointEntry, inode: Inode) -> FileAttr 
     make_file_attr(inode, entry.entry_type(), entry.len().await)
 }
 
-fn make_file_attr(inode: Inode, entry_type: EntryType, len: u64) -> FileAttr {
+fn make_file_attr(inode: Inode, entry_type: JointEntryType, len: u64) -> FileAttr {
     FileAttr {
         ino: inode,
         size: len,
@@ -887,8 +891,8 @@ fn make_file_attr(inode: Inode, entry_type: EntryType, len: u64) -> FileAttr {
         crtime: SystemTime::UNIX_EPOCH, // TODO
         kind: to_file_type(entry_type),
         perm: match entry_type {
-            EntryType::File => 0o444,      // TODO
-            EntryType::Directory => 0o555, // TODO
+            JointEntryType::File => 0o444,      // TODO
+            JointEntryType::Directory => 0o555, // TODO
         },
         nlink: 1,
         uid: 0, // TODO
@@ -905,6 +909,7 @@ fn to_error_code(error: &Error) -> libc::c_int {
         Error::CreateDbDirectory(_)
         | Error::ConnectToDb(_)
         | Error::CreateDbSchema(_)
+        | Error::EntryIsTombstone
         | Error::QueryDb(_)
         | Error::BlockNotFound(_)
         | Error::BlockExists
@@ -925,9 +930,9 @@ fn to_error_code(error: &Error) -> libc::c_int {
     }
 }
 
-fn to_file_type(entry_type: EntryType) -> FileType {
+fn to_file_type(entry_type: JointEntryType) -> FileType {
     match entry_type {
-        EntryType::File => FileType::RegularFile,
-        EntryType::Directory => FileType::Directory,
+        JointEntryType::File => FileType::RegularFile,
+        JointEntryType::Directory => FileType::Directory,
     }
 }

@@ -1,7 +1,10 @@
-use super::inner::{self, Inner};
+use super::{
+    entry_type::EntryTypeWithBlob,
+    inner::{self, Inner},
+};
 use crate::{
-    blob_id::BlobId, branch::Branch, db, directory::Directory, entry_type::EntryType,
-    error::Result, replica_id::ReplicaId, version_vector::VersionVector,
+    blob_id::BlobId, branch::Branch, db, directory::Directory, error::Result,
+    replica_id::ReplicaId, version_vector::VersionVector,
 };
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -65,7 +68,7 @@ impl ParentContext {
             .insert_entry(
                 self.entry_name.clone(),
                 self.entry_author,
-                EntryType::File,
+                EntryTypeWithBlob::File,
                 old_vv,
             )
             .await?;

@@ -1,23 +1,26 @@
 mod cache;
 mod entry;
+mod entry_type;
 mod inner;
 mod parent_context;
 #[cfg(test)]
 mod tests;
 
-pub use self::entry::{DirectoryRef, EntryRef, FileRef};
 pub(crate) use self::{cache::RootDirectoryCache, parent_context::ParentContext};
+pub use self::{
+    entry::{DirectoryRef, EntryRef, FileRef},
+    entry_type::{EntryType, EntryTypeWithBlob},
+};
 
 use self::{
     cache::SubdirectoryCache,
-    inner::{Content, Inner},
+    inner::{Content, EntryData, Inner},
 };
 use crate::{
     blob::Blob,
     blob_id::BlobId,
     branch::Branch,
     debug_printer::DebugPrinter,
-    entry_type::EntryType,
     error::{Error, Result},
     file::File,
     locator::Locator,
@@ -74,20 +77,7 @@ impl Directory {
     /// concurrent versions of a directory where the resulting version vector should be the merge
     /// of the version vectors of the concurrent versions.
     pub async fn flush(&self, version_vector_override: Option<&VersionVector>) -> Result<()> {
-        let mut inner = self.inner.write().await;
-
-        if !inner.content.dirty && version_vector_override.is_none() {
-            return Ok(());
-        }
-
-        let mut tx = self.local_branch.db_pool().begin().await?;
-
-        inner.flush(&mut tx).await?;
-        inner
-            .modify_self_entry(tx, *self.local_branch.id(), version_vector_override)
-            .await?;
-
-        Ok(())
+        self.write().await.flush(version_vector_override).await
     }
 
     /// Creates a new file inside this directory.
@@ -96,12 +86,12 @@ impl Directory {
     ///
     /// Panics if this directory is not in the local branch.
     pub async fn create_file(&self, name: String) -> Result<File> {
-        let mut inner = self.write().await;
+        let mut inner = self.write().await.inner;
 
         let author = *self.local_branch.id();
         let vv = VersionVector::first(author);
         let blob_id = inner
-            .insert_entry(name.clone(), author, EntryType::File, vv)
+            .insert_entry(name.clone(), author, EntryTypeWithBlob::File, vv)
             .await?;
         let locator = Locator::Head(blob_id);
         let parent = ParentContext::new(self.inner.clone(), name, author);
@@ -115,12 +105,12 @@ impl Directory {
     ///
     /// Panics if this directory is not in the local branch.
     pub async fn create_directory(&self, name: String) -> Result<Self> {
-        let mut inner = self.write().await;
+        let mut inner = self.write().await.inner;
 
         let author = *self.local_branch.id();
         let vv = VersionVector::first(author);
         let blob_id = inner
-            .insert_entry(name.clone(), author, EntryType::Directory, vv)
+            .insert_entry(name.clone(), author, EntryTypeWithBlob::Directory, vv)
             .await?;
         let locator = Locator::Head(blob_id);
         let parent = ParentContext::new(self.inner.clone(), name, author);
@@ -136,15 +126,8 @@ impl Directory {
     /// # Panics
     ///
     /// Panics if this directory is not in the local branch.
-    pub async fn remove_file(&self, name: &str) -> Result<()> {
-        let mut inner = self.write().await;
-
-        for entry in lookup(self, &*inner, name)? {
-            entry.file()?.open().await?.remove().await?;
-        }
-
-        inner.content.remove(name)
-        // TODO: Add tombstone
+    pub async fn remove_file(&self, name: &str, author: &ReplicaId) -> Result<()> {
+        self.write().await.remove_file(name, author).await
     }
 
     /// Removes a subdirectory from this directory.
@@ -153,19 +136,19 @@ impl Directory {
     ///
     /// Panics if this directory is not in the local branch.
     pub async fn remove_directory(&self, name: &str) -> Result<()> {
-        let mut inner = self.write().await;
+        let mut inner = self.write().await.inner;
 
         for entry in lookup(self, &*inner, name)? {
             entry.directory()?.open().await?.remove().await?;
         }
 
-        inner.content.remove(name)
+        inner.content.remove_deprecated(name)
         // TODO: Add tombstone
     }
 
     /// Removes this directory if its empty, otherwise fails.
     pub async fn remove(&self) -> Result<()> {
-        let mut inner = self.write().await;
+        let mut inner = self.write().await.inner;
 
         if !inner.content.entries.is_empty() {
             return Err(Error::DirectoryNotEmpty);
@@ -218,10 +201,10 @@ impl Directory {
         &self,
         name: String,
         author_id: ReplicaId,
-        entry_type: EntryType,
+        entry_type: EntryTypeWithBlob,
         version_vector: VersionVector,
     ) -> Result<BlobId> {
-        let mut inner = self.write().await;
+        let mut inner = self.write().await.inner;
         inner
             .insert_entry(name, author_id, entry_type, version_vector)
             .await
@@ -267,10 +250,10 @@ impl Directory {
     // # Panics
     //
     // Panics if not in the local branch.
-    async fn write(&self) -> RwLockWriteGuard<'_, Inner> {
+    pub async fn write(&self) -> Writer<'_> {
         let inner = self.inner.write().await;
         inner.assert_local(self.local_branch.id());
-        inner
+        Writer { outer: self, inner }
     }
 
     pub async fn debug_print(&self, print: DebugPrinter) {
@@ -281,12 +264,9 @@ impl Directory {
             let print = print.indent();
 
             for (author, entry_data) in versions {
-                print.display(&format!(
-                    "{:?}: {:?}, blob_id:{:?}, {:?}",
-                    author, entry_data.entry_type, entry_data.blob_id, entry_data.version_vector
-                ));
+                print.display(&format!("{:?}: {:?}", author, entry_data));
 
-                if entry_data.entry_type == EntryType::File {
+                if let EntryData::File(file_data) = entry_data {
                     let print = print.indent();
 
                     let parent_context =
@@ -295,7 +275,7 @@ impl Directory {
                     let file = File::open(
                         inner.blob.branch().clone(),
                         self.local_branch.clone(),
-                        Locator::Head(entry_data.blob_id),
+                        Locator::Head(file_data.blob_id),
                         parent_context,
                     )
                     .await;
@@ -329,6 +309,55 @@ impl Directory {
     }
 }
 
+/// View of a `Directory` for performing read and write queries.
+pub struct Writer<'a> {
+    outer: &'a Directory,
+    inner: RwLockWriteGuard<'a, Inner>,
+}
+
+impl Writer<'_> {
+    pub fn read_operations(&self) -> ReadOperations<'_> {
+        ReadOperations {
+            outer: self.outer,
+            inner: &*self.inner,
+        }
+    }
+
+    pub fn lookup_version(&self, name: &'_ str, author: &ReplicaId) -> Result<EntryRef> {
+        lookup_version(&*self.inner, self.outer, name, author)
+    }
+
+    pub async fn flush(&mut self, version_vector_override: Option<&VersionVector>) -> Result<()> {
+        if !self.inner.content.dirty && version_vector_override.is_none() {
+            return Ok(());
+        }
+
+        let mut tx = self.outer.local_branch.db_pool().begin().await?;
+
+        self.inner.flush(&mut tx).await?;
+
+        self.inner
+            .modify_self_entry(tx, *self.outer.local_branch.id(), version_vector_override)
+            .await?;
+
+        Ok(())
+    }
+
+    pub async fn remove_file(&mut self, name: &str, author: &ReplicaId) -> Result<()> {
+        let this_replica_id = *self.outer.local_branch.id();
+
+        let tombstone_vv = self
+            .lookup_version(name, author)?
+            .version_vector()
+            .clone()
+            .increment(this_replica_id);
+
+        self.inner
+            .remove_entry(name.into(), this_replica_id, tombstone_vv)
+            .await
+    }
+}
+
 /// View of a `Directory` for performing read-only queries.
 pub struct Reader<'a> {
     outer: &'a Directory,
@@ -336,6 +365,13 @@ pub struct Reader<'a> {
 }
 
 impl Reader<'_> {
+    pub fn read_operations(&self) -> ReadOperations<'_> {
+        ReadOperations {
+            outer: self.outer,
+            inner: &*self.inner,
+        }
+    }
+
     /// Returns iterator over the entries of this directory.
     pub fn entries(&self) -> impl Iterator<Item = EntryRef> + DoubleEndedIterator + Clone {
         self.inner
@@ -358,16 +394,7 @@ impl Reader<'_> {
     }
 
     pub fn lookup_version(&self, name: &'_ str, author: &ReplicaId) -> Result<EntryRef> {
-        self.inner
-            .content
-            .entries
-            .get_key_value(name)
-            .and_then(|(name, versions)| {
-                versions.get_key_value(author).map(|(author, data)| {
-                    EntryRef::new(self.outer, &*self.inner, name, data, author)
-                })
-            })
-            .ok_or(Error::EntryNotFound)
+        lookup_version(&*self.inner, self.outer, name, author)
     }
 
     /// Length of this directory in bytes. Does not include the content, only the size of directory
@@ -399,6 +426,40 @@ impl Reader<'_> {
     pub(crate) fn is_local(&self) -> bool {
         self.branch().id() == self.outer.local_branch.id()
     }
+}
+
+#[derive(Clone)]
+pub struct ReadOperations<'a> {
+    outer: &'a Directory,
+    inner: &'a Inner,
+}
+
+impl<'a> ReadOperations<'a> {
+    /// Lookup an entry of this directory by name.
+    pub fn lookup(
+        &self,
+        name: &'_ str,
+    ) -> Result<impl Iterator<Item = EntryRef<'a>> + ExactSizeIterator + 'a> {
+        lookup(self.outer, self.inner, name)
+    }
+}
+
+fn lookup_version<'a>(
+    inner: &'a Inner,
+    outer: &'a Directory,
+    name: &str,
+    author: &ReplicaId,
+) -> Result<EntryRef<'a>> {
+    inner
+        .content
+        .entries
+        .get_key_value(name)
+        .and_then(|(name, versions)| {
+            versions
+                .get_key_value(author)
+                .map(|(author, data)| EntryRef::new(outer, &*inner, name, data, author))
+        })
+        .ok_or(Error::EntryNotFound)
 }
 
 /// Destination directory of a move operation.
