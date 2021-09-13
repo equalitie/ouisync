@@ -1,7 +1,10 @@
 use super::EntryType;
 use crate::{blob, blob_id::BlobId, version_vector::VersionVector};
 use serde::{Deserialize, Serialize};
-use std::{fmt, sync::{Arc, Weak}};
+use std::{
+    fmt,
+    sync::{Arc, Weak},
+};
 use tokio::sync::Mutex;
 
 //--------------------------------------------------------------------

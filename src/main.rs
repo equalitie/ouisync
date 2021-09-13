@@ -22,7 +22,7 @@ async fn main() -> Result<()> {
 
     let _mount_guard = virtual_filesystem::mount(
         tokio::runtime::Handle::current(),
-        session.open_repository(),
+        session.open_repository(!options.disable_merger),
         options.mount_dir,
     )?;
 

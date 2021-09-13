@@ -20,18 +20,24 @@ use tokio::{select, sync::Mutex, task};
 
 pub struct Repository {
     shared: Arc<Shared>,
-    _merge_handle: ScopedJoinHandle<()>,
+    _merge_handle: Option<ScopedJoinHandle<()>>,
 }
 
 impl Repository {
-    pub fn new(index: Index, cryptor: Cryptor) -> Self {
+    pub fn new(index: Index, cryptor: Cryptor, enable_merger: bool) -> Self {
         let shared = Arc::new(Shared {
             index,
             cryptor,
             branches: Mutex::new(HashMap::new()),
         });
 
-        let merge_handle = ScopedJoinHandle(task::spawn(Merger::new(shared.clone()).run()));
+        let merge_handle = if enable_merger {
+            Some(ScopedJoinHandle(task::spawn(
+                Merger::new(shared.clone()).run(),
+            )))
+        } else {
+            None
+        };
 
         Self {
             shared,
@@ -389,7 +395,7 @@ mod tests {
         let pool = db::init(db::Store::Memory).await.unwrap();
         let replica_id = rand::random();
         let index = Index::load(pool, replica_id).await.unwrap();
-        let repo = Repository::new(index, Cryptor::Null);
+        let repo = Repository::new(index, Cryptor::Null, false);
 
         let _ = repo.open_directory("/").await.unwrap();
     }
@@ -409,7 +415,7 @@ mod tests {
             .unwrap();
         index.update_remote_branch(remote_id, remote_node).await;
 
-        let repo = Repository::new(index, Cryptor::Null);
+        let repo = Repository::new(index, Cryptor::Null, true);
         let remote_branch = repo.branch(&remote_id).await.unwrap();
         let remote_root = remote_branch.open_or_create_root().await.unwrap();
 

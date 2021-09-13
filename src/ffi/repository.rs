@@ -21,7 +21,7 @@ pub unsafe extern "C" fn repository_open(
     error: *mut *mut c_char,
 ) {
     session::with(port, error, |ctx| {
-        let repo = ctx.session().open_repository();
+        let repo = ctx.session().open_repository(true);
 
         ctx.spawn(async move {
             let repo = Arc::new(repo);

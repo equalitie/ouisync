@@ -220,7 +220,7 @@ async fn setup() -> (MountGuard, TempDir) {
     let pool = db::init(db::Store::Memory).await.unwrap();
     let index = Index::load(pool, rand::random()).await.unwrap();
 
-    let repo = Repository::new(index, Cryptor::Null);
+    let repo = Repository::new(index, Cryptor::Null, true);
     let mount_dir = tempdir().unwrap();
     let guard = super::mount(tokio::runtime::Handle::current(), repo, mount_dir.path()).unwrap();
 

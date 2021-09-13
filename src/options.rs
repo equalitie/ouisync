@@ -18,6 +18,10 @@ pub(crate) struct Options {
     #[structopt(short, long)]
     pub mount_dir: PathBuf,
 
+    /// Disable Merger
+    #[structopt(long)]
+    pub disable_merger: bool,
+
     #[structopt(flatten)]
     pub network: NetworkOptions,
 

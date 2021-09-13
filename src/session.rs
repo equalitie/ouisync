@@ -43,8 +43,8 @@ impl Session {
     ///
     /// NOTE: Currently only one repository is supported but in the future this function will take
     /// an argument to specify which repository to open.
-    pub fn open_repository(&self) -> Repository {
-        Repository::new(self.index.clone(), self.cryptor.clone())
+    pub fn open_repository(&self, enable_merger: bool) -> Repository {
+        Repository::new(self.index.clone(), self.cryptor.clone(), enable_merger)
     }
 
     /// Returns the local socket address the network listener is bound to.
