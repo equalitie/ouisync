@@ -91,10 +91,17 @@ impl Directory {
         let mut inner = self.write().await.inner;
 
         let author = *self.local_branch.id();
-        let vv = VersionVector::first(author);
+
+        let vv = inner
+            .entry_version_vector(&name, &author)
+            .cloned()
+            .unwrap_or_default()
+            .increment(author);
+
         let blob_id = inner
             .insert_entry(name.clone(), author, EntryTypeWithBlob::File, vv)
             .await?;
+
         let locator = Locator::Head(blob_id);
         let parent = ParentContext::new(self.inner.clone(), name, author);
 
@@ -110,10 +117,17 @@ impl Directory {
         let mut inner = self.write().await.inner;
 
         let author = *self.local_branch.id();
-        let vv = VersionVector::first(author);
+
+        let vv = inner
+            .entry_version_vector(&name, &author)
+            .cloned()
+            .unwrap_or_default()
+            .increment(author);
+
         let blob_id = inner
             .insert_entry(name.clone(), author, EntryTypeWithBlob::Directory, vv)
             .await?;
+
         let locator = Locator::Head(blob_id);
         let parent = ParentContext::new(self.inner.clone(), name, author);
 
@@ -348,14 +362,8 @@ impl Writer<'_> {
     pub async fn remove_file(&mut self, name: &str, author: &ReplicaId) -> Result<()> {
         let this_replica_id = *self.outer.local_branch.id();
 
-        let tombstone_vv = self
-            .lookup_version(name, author)?
-            .version_vector()
-            .clone()
-            .increment(this_replica_id);
-
         self.inner
-            .remove_entry(name.into(), this_replica_id, tombstone_vv)
+            .remove_entry(name.into(), author, this_replica_id)
             .await
     }
 }

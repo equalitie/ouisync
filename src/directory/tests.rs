@@ -97,11 +97,17 @@ async fn remove_file() {
     assert_eq!(parent_dir.entries().count(), 1);
 
     // Check the file blob itself was removed as well.
-    match Blob::open(branch, file_locator).await {
+    match Blob::open(branch.clone(), file_locator).await {
         Err(Error::EntryNotFound) => (),
         Err(error) => panic!("unexpected error {:?}", error),
         Ok(_) => panic!("file blob should not exists but it does"),
     }
+
+    // Try re-creating the file again
+    drop(parent_dir); // Drop the previous handle to avoid deadlock.
+    let parent_dir = branch.open_root(branch.clone()).await.unwrap();
+    let mut file = parent_dir.create_file(name.into()).await.unwrap();
+    file.flush().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -76,10 +76,16 @@ impl Inner {
     pub async fn remove_entry(
         &mut self,
         name: String,
-        author: ReplicaId,
-        version_vector: VersionVector,
+        old_author: &ReplicaId,
+        new_author: ReplicaId,
     ) -> Result<()> {
-        let old_blob_ids = self.content.remove(name, author, version_vector)?;
+        let vv = self
+            .entry_version_vector(&name, old_author)
+            .cloned()
+            .unwrap_or_default()
+            .increment(new_author);
+
+        let old_blob_ids = self.content.remove(name, new_author, vv)?;
 
         // TODO: This should succeed/fail atomically with the above.
         let branch = self.blob.branch();
@@ -228,19 +234,7 @@ impl Content {
 
         let old_blob_id = match versions.entry(author) {
             btree_map::Entry::Vacant(entry) => {
-                let data = match entry_type {
-                    EntryTypeWithBlob::File => EntryData::File(EntryFileData {
-                        blob_id,
-                        version_vector,
-                        blob_core: Arc::new(Mutex::new(Weak::new())),
-                    }),
-                    EntryTypeWithBlob::Directory => EntryData::Directory(EntryDirectoryData {
-                        blob_id,
-                        version_vector,
-                    }),
-                };
-
-                entry.insert(data);
+                entry.insert(Self::create_new_entry(entry_type, blob_id, version_vector));
                 None
             }
             btree_map::Entry::Occupied(mut entry) => {
@@ -257,20 +251,25 @@ impl Content {
                     return Err(Error::EntryExists);
                 }
 
-                match (data, entry_type) {
-                    (EntryData::File(data), EntryTypeWithBlob::File) => {
-                        let old_blob_id = data.blob_id;
-                        data.blob_id = blob_id;
-                        data.version_vector = version_vector;
-                        Some(old_blob_id)
+                if let EntryData::Tombstone(_) = data {
+                    *data = Self::create_new_entry(entry_type, blob_id, version_vector);
+                    None
+                } else {
+                    match (data, entry_type) {
+                        (EntryData::File(data), EntryTypeWithBlob::File) => {
+                            let old_blob_id = data.blob_id;
+                            data.blob_id = blob_id;
+                            data.version_vector = version_vector;
+                            Some(old_blob_id)
+                        }
+                        (EntryData::Directory(data), EntryTypeWithBlob::Directory) => {
+                            let old_blob_id = data.blob_id;
+                            data.blob_id = blob_id;
+                            data.version_vector = version_vector;
+                            Some(old_blob_id)
+                        }
+                        (_, _) => return Err(Error::EntryExists),
                     }
-                    (EntryData::Directory(data), EntryTypeWithBlob::Directory) => {
-                        let old_blob_id = data.blob_id;
-                        data.blob_id = blob_id;
-                        data.version_vector = version_vector;
-                        Some(old_blob_id)
-                    }
-                    (_, _) => return Err(Error::EntryExists),
                 }
             }
         };
@@ -373,6 +372,24 @@ impl Content {
         self.dirty = true;
 
         Ok(old_blob_ids)
+    }
+
+    fn create_new_entry(
+        entry_type: EntryTypeWithBlob,
+        blob_id: BlobId,
+        version_vector: VersionVector,
+    ) -> EntryData {
+        match entry_type {
+            EntryTypeWithBlob::File => EntryData::File(EntryFileData {
+                blob_id,
+                version_vector,
+                blob_core: Arc::new(Mutex::new(Weak::new())),
+            }),
+            EntryTypeWithBlob::Directory => EntryData::Directory(EntryDirectoryData {
+                blob_id,
+                version_vector,
+            }),
+        }
     }
 }
 
