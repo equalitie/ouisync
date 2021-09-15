@@ -53,8 +53,7 @@ pub unsafe extern "C" fn directory_open(
                 .await
                 .entries()
                 .map(|entry| DirEntry {
-                    // TODO: use the dismbiguated name here
-                    name: utils::str_to_c_string(entry.name()).unwrap_or_else(|_| {
+                    name: utils::str_to_c_string(&entry.unique_name()).unwrap_or_else(|_| {
                         CString::new(char::REPLACEMENT_CHARACTER.to_string()).unwrap()
                     }),
                     entry_type: entry.entry_type(),
