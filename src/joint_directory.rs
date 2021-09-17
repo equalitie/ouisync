@@ -153,15 +153,6 @@ impl JointDirectory {
         Ok(())
     }
 
-    pub async fn move_entry(
-        &self,
-        _src_name: &str,
-        _dst_dir: MoveDstDirectory,
-        _dst_name: &str,
-    ) -> Result<()> {
-        todo!()
-    }
-
     async fn merge_single(&mut self, queue: &mut VecDeque<Self>) -> Result<()> {
         self.fork().await?;
 
@@ -269,31 +260,6 @@ impl fmt::Debug for JointDirectory {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("JointDirectory").finish()
     }
-}
-
-/// Destination directory of a move operation.
-#[allow(clippy::large_enum_variant)]
-pub enum MoveDstDirectory {
-    /// Same as src
-    Src,
-    /// Other than src
-    Other(JointDirectory),
-}
-
-impl MoveDstDirectory {
-    pub fn get<'a>(&'a mut self, src: &'a mut JointDirectory) -> &'a mut JointDirectory {
-        match self {
-            Self::Src => src,
-            Self::Other(other) => other,
-        }
-    }
-
-    //pub fn get_other(&mut self) -> Option<&mut Directory> {
-    //    match self {
-    //        Self::Src => None,
-    //        Self::Other(other) => Some(other),
-    //    }
-    //}
 }
 
 /// View of a `JointDirectory` for performing read-only queries.
@@ -493,6 +459,10 @@ impl<'a> JointFileRef<'a> {
 
     pub fn author(&self) -> &'a ReplicaId {
         self.file.author()
+    }
+
+    pub fn parent(&self) -> &Directory {
+        self.file.parent()
     }
 }
 

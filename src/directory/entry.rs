@@ -96,6 +96,10 @@ impl<'a> EntryRef<'a> {
         self.inner().is_local()
     }
 
+    pub fn parent(&self) -> &Directory {
+        self.inner().parent_outer
+    }
+
     fn inner(&self) -> &RefInner {
         match self {
             Self::File(r) => &r.inner,
@@ -156,6 +160,10 @@ impl<'a> FileRef<'a> {
 
     pub fn is_local(&self) -> bool {
         self.inner.is_local()
+    }
+
+    pub fn parent(&self) -> &Directory {
+        self.inner.parent_outer
     }
 }
 

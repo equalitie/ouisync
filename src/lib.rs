@@ -38,7 +38,7 @@ pub use self::{
     error::{Error, Result},
     file::File,
     index::Index,
-    joint_directory::{JointDirectory, JointEntryRef, MoveDstDirectory},
+    joint_directory::{JointDirectory, JointEntryRef},
     joint_entry::{JointEntry, JointEntryType},
     locator::Locator,
     network::{Network, NetworkOptions},

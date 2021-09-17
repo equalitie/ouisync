@@ -182,7 +182,7 @@ impl Directory {
         dst_dir: &Directory,
         dst_name: &str,
     ) -> Result<()> {
-        if Arc::ptr_eq(&self.inner, &dst_dir.inner) {
+        if self.represents_same_directory_as(dst_dir) {
             // Note: checking for whether the src and dst are the same is postponed for later
             // because if the source doesn't exist we need to return an error.
 
@@ -274,6 +274,12 @@ impl Directory {
         inner.insert_entry(name, author_id, entry_data).await?;
 
         Ok(blob_id)
+    }
+
+    pub(crate) fn represents_same_directory_as(&self, other: &Self) -> bool {
+        // We can do this because we have the assurance that if a /foo/bar/ directory is opened
+        // more than once, all the opened instances must share the same `.inner`.
+        Arc::ptr_eq(&self.inner, &other.inner)
     }
 
     async fn open(

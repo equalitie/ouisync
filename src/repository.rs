@@ -6,7 +6,7 @@ use crate::{
     error::{Error, Result},
     file::File,
     index::{BranchData, Index, Subscription},
-    joint_directory::{JointDirectory, MoveDstDirectory},
+    joint_directory::{JointDirectory, JointEntryRef},
     joint_entry::JointEntryType,
     path,
     scoped_task::ScopedJoinHandle,
@@ -144,21 +144,37 @@ impl Repository {
         dst_dir_path: D,
         dst_name: &str,
     ) -> Result<()> {
-        let dst_is_src = src_dir_path.as_ref() == dst_dir_path.as_ref();
+        let src_joint_dir = self.open_directory(src_dir_path).await?;
+        let src_joint_reader = src_joint_dir.read().await;
+        let src_entry = src_joint_reader.lookup_unique(src_name)?;
 
-        let src_dir = self.open_directory(src_dir_path).await?;
+        match src_entry {
+            JointEntryRef::File(file_ref) => {
+                let src_name = file_ref.name().to_string();
+                let src_author = *file_ref.author();
+                let src_dir = file_ref.parent().clone();
 
-        let dst_dir = if dst_is_src {
-            MoveDstDirectory::Src
-        } else {
-            MoveDstDirectory::Other(self.open_directory(dst_dir_path).await?)
-        };
+                let dst_dir = self.create_directory(dst_dir_path).await?;
 
-        src_dir.move_entry(src_name, dst_dir, dst_name).await
+                // src_joint_reader holds a read lock to the src_dir. The next step then tries to
+                // get a write lock to it, so we must release the former to avoid deadlock.
+                drop(src_joint_reader);
+                src_dir
+                    .move_entry(&src_name, &src_author, &dst_dir, dst_name)
+                    .await?;
 
-        //src_dir.flush(None).await?;
-        //dst_dir.get(&mut src_parent).flush(None).await?;
-        //Ok(())
+                src_dir.flush(None).await?;
+
+                if !src_dir.represents_same_directory_as(&dst_dir) {
+                    dst_dir.flush(None).await?;
+                }
+            }
+            JointEntryRef::Directory(_) => {
+                todo!()
+            }
+        }
+
+        Ok(())
     }
 
     /// Returns the local branch
