@@ -2,11 +2,11 @@ use crate::{
     branch::Branch,
     crypto::Cryptor,
     debug_printer::DebugPrinter,
-    directory::{Directory, MoveDstDirectory},
+    directory::Directory,
     error::{Error, Result},
     file::File,
     index::{BranchData, Index, Subscription},
-    joint_directory::JointDirectory,
+    joint_directory::{JointDirectory, MoveDstDirectory},
     joint_entry::JointEntryType,
     path,
     scoped_task::ScopedJoinHandle,
@@ -139,10 +139,26 @@ impl Repository {
     /// Returns the parent directories of both `src` and `dst`.
     pub async fn move_entry<S: AsRef<Utf8Path>, D: AsRef<Utf8Path>>(
         &self,
-        _src: S,
-        _dst: D,
-    ) -> Result<(Directory, MoveDstDirectory)> {
-        todo!()
+        src_dir_path: S,
+        src_name: &str,
+        dst_dir_path: D,
+        dst_name: &str,
+    ) -> Result<()> {
+        let dst_is_src = src_dir_path.as_ref() == dst_dir_path.as_ref();
+
+        let src_dir = self.open_directory(src_dir_path).await?;
+
+        let dst_dir = if dst_is_src {
+            MoveDstDirectory::Src
+        } else {
+            MoveDstDirectory::Other(self.open_directory(dst_dir_path).await?)
+        };
+
+        src_dir.move_entry(src_name, dst_dir, dst_name).await
+
+        //src_dir.flush(None).await?;
+        //dst_dir.get(&mut src_parent).flush(None).await?;
+        //Ok(())
     }
 
     /// Returns the local branch

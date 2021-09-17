@@ -833,7 +833,18 @@ impl Inner {
             flags,
         );
 
-        todo!()
+        let src_dir = self.inodes.get(src_parent).calculate_path();
+
+        let dst_dir = if src_parent == dst_parent {
+            // TODO: Maybe we could use something like Cow?
+            src_dir.clone()
+        } else {
+            self.inodes.get(dst_parent).calculate_path()
+        };
+
+        self.repository
+            .move_entry(src_dir, src_name, dst_dir, dst_name)
+            .await
     }
 
     async fn open_file_by_inode(&self, inode: Inode) -> Result<File> {

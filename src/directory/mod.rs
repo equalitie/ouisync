@@ -528,31 +528,6 @@ fn lookup_version<'a>(
         .ok_or(Error::EntryNotFound)
 }
 
-/// Destination directory of a move operation.
-#[allow(clippy::large_enum_variant)]
-pub enum MoveDstDirectory {
-    /// Same as src
-    Src,
-    /// Other than src
-    Other(Directory),
-}
-
-impl MoveDstDirectory {
-    pub fn get<'a>(&'a mut self, src: &'a mut Directory) -> &'a mut Directory {
-        match self {
-            Self::Src => src,
-            Self::Other(other) => other,
-        }
-    }
-
-    pub fn get_other(&mut self) -> Option<&mut Directory> {
-        match self {
-            Self::Src => None,
-            Self::Other(other) => Some(other),
-        }
-    }
-}
-
 fn lookup<'a>(
     outer: &'a Directory,
     inner: &'a Inner,
