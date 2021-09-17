@@ -112,6 +112,54 @@ async fn remove_file() {
     file.flush().await.unwrap();
 }
 
+// Rename a file without moving it to another directory.
+#[tokio::test(flavor = "multi_thread")]
+async fn rename_file() {
+    let branch = setup().await;
+
+    let src_name = "zebra.txt";
+    let dst_name = "donkey.txt";
+    let content = b"hee-haw";
+
+    // Create a directory with a single file.
+    let parent_dir = branch.open_or_create_root().await.unwrap();
+    let mut file = parent_dir.create_file(src_name.into()).await.unwrap();
+    file.write(content).await.unwrap();
+    file.flush().await.unwrap();
+
+    let file_locator = *file.locator();
+
+    // Reopen and move the file
+    let parent_dir = branch.open_root(branch.clone()).await.unwrap();
+
+    parent_dir
+        .move_entry(src_name, branch.id(), &parent_dir, dst_name)
+        .await
+        .unwrap();
+
+    parent_dir.flush(None).await.unwrap();
+
+    // Reopen again and check the file entry was removed.
+    let parent_dir = branch.open_root(branch.clone()).await.unwrap();
+    let parent_dir = parent_dir.read().await;
+
+    let mut dst_file = parent_dir
+        .lookup_version(dst_name, branch.id())
+        .unwrap()
+        .file()
+        .unwrap()
+        .open()
+        .await
+        .unwrap();
+
+    assert_eq!(&file_locator, dst_file.locator());
+    assert_eq!(&content[..], &dst_file.read_to_end().await.unwrap()[..]);
+
+    let src_entry = parent_dir.lookup_version(src_name, branch.id()).unwrap();
+
+    assert_eq!(src_entry.entry_type(), EntryType::Tombstone);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn remove_subdirectory() {
     let branch = setup().await;

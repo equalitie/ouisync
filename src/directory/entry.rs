@@ -154,11 +154,6 @@ impl<'a> FileRef<'a> {
         }
     }
 
-    pub async fn remove(&self) -> Result<()> {
-        self.open().await?.remove().await
-        // TODO: Create a local tombstone and update parents
-    }
-
     pub fn is_local(&self) -> bool {
         self.inner.is_local()
     }

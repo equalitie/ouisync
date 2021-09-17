@@ -175,6 +175,51 @@ impl Directory {
         inner.blob.remove().await
     }
 
+    pub async fn move_entry(
+        &self,
+        src_name: &str,
+        src_author: &ReplicaId,
+        dst_dir: &Directory,
+        dst_name: &str,
+    ) -> Result<()> {
+        if Arc::ptr_eq(&self.inner, &dst_dir.inner) {
+            // Note: checking for whether the src and dst are the same is postponed for later
+            // because if the source doesn't exist we need to return an error.
+
+            self.write().await.inner.change_name_or_author(
+                src_name,
+                src_author,
+                dst_name,
+                self.local_branch.id(),
+            )
+        } else {
+            let src_reader = self.read().await;
+            let src_entry = src_reader.lookup_version(src_name, src_author)?;
+
+            let src_is_on_same_branch =
+                self.local_branch.id() == src_reader.inner.blob.branch().id();
+
+            match src_entry {
+                EntryRef::File(_) => {
+                    if !src_is_on_same_branch {
+                        todo!()
+                    }
+                    todo!()
+                }
+                EntryRef::Directory(_) => {
+                    if !src_is_on_same_branch {
+                        todo!()
+                    }
+                    todo!()
+                }
+                EntryRef::Tombstone(_) => {
+                    // Same as if the source entry did not exist.
+                    Err(Error::EntryNotFound)
+                }
+            }
+        }
+    }
+
     // Forks this directory into the local branch.
     // TODO: consider changing this to modify self instead of returning the forked dir, to be
     //       consistent with `File::fork`.

@@ -64,6 +64,10 @@ impl VersionVector {
             self.insert(*replica_id, *version)
         }
     }
+
+    pub fn clear_in_place(&mut self) {
+        self.0.clear();
+    }
 }
 
 // Less clutter in the debug output this way (as opposed to deriving).
