@@ -1,4 +1,3 @@
-use super::EntryType;
 use crate::{blob, blob_id::BlobId, version_vector::VersionVector};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -17,12 +16,23 @@ pub(super) enum EntryData {
 }
 
 impl EntryData {
-    pub fn entry_type(&self) -> EntryType {
-        match self {
-            Self::File(_) => EntryType::File,
-            Self::Directory(_) => EntryType::Directory,
-            Self::Tombstone(_) => EntryType::Tombstone,
-        }
+    pub(super) fn file(blob_id: BlobId, version_vector: VersionVector) -> Self {
+        Self::File(EntryFileData {
+            blob_id,
+            version_vector,
+            blob_core: Arc::new(Mutex::new(Weak::new())),
+        })
+    }
+
+    pub(super) fn directory(blob_id: BlobId, version_vector: VersionVector) -> Self {
+        Self::Directory(EntryDirectoryData {
+            blob_id,
+            version_vector,
+        })
+    }
+
+    pub(super) fn tombstone(version_vector: VersionVector) -> Self {
+        Self::Tombstone(EntryTombstoneData { version_vector })
     }
 
     pub fn version_vector(&self) -> &VersionVector {
