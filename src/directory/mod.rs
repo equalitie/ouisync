@@ -10,7 +10,7 @@ mod tests;
 pub(crate) use self::{cache::RootDirectoryCache, parent_context::ParentContext};
 pub use self::{
     entry::{DirectoryRef, EntryRef, FileRef},
-    entry_type::{EntryType, EntryTypeWithBlob},
+    entry_type::EntryType,
 };
 
 use self::{
@@ -92,14 +92,15 @@ impl Directory {
 
         let author = *self.local_branch.id();
 
+        let blob_id = rand::random();
         let vv = inner
             .entry_version_vector(&name, &author)
             .cloned()
             .unwrap_or_default()
             .increment(author);
 
-        let blob_id = inner
-            .insert_entry(name.clone(), author, EntryTypeWithBlob::File, vv)
+        inner
+            .insert_entry(name.clone(), author, EntryData::file(blob_id, vv))
             .await?;
 
         let locator = Locator::Head(blob_id);
@@ -118,14 +119,15 @@ impl Directory {
 
         let author = *self.local_branch.id();
 
+        let blob_id = rand::random();
         let vv = inner
             .entry_version_vector(&name, &author)
             .cloned()
             .unwrap_or_default()
             .increment(author);
 
-        let blob_id = inner
-            .insert_entry(name.clone(), author, EntryTypeWithBlob::Directory, vv)
+        inner
+            .insert_entry(name.clone(), author, EntryData::directory(blob_id, vv))
             .await?;
 
         let locator = Locator::Head(blob_id);
@@ -206,24 +208,27 @@ impl Directory {
         }
     }
 
-    /// Inserts a dangling entry into this directory. It's the responsibility of the caller to make
-    /// sure the returned locator eventually points to an actual file or directory.
+    /// Inserts a dangling file entry into this directory. It's the responsibility of the caller to
+    /// make sure the returned locator eventually points to an actual file.
     /// For internal use only!
     ///
     /// # Panics
     ///
     /// Panics if this directory is not in the local branch.
-    pub(crate) async fn insert_entry(
+    pub(crate) async fn insert_file_entry(
         &self,
         name: String,
         author_id: ReplicaId,
-        entry_type: EntryTypeWithBlob,
         version_vector: VersionVector,
     ) -> Result<BlobId> {
         let mut inner = self.write().await.inner;
-        inner
-            .insert_entry(name, author_id, entry_type, version_vector)
-            .await
+
+        let blob_id = rand::random();
+        let entry_data = EntryData::file(blob_id, version_vector);
+
+        inner.insert_entry(name, author_id, entry_data).await?;
+
+        Ok(blob_id)
     }
 
     async fn open(
@@ -361,9 +366,15 @@ impl Writer<'_> {
 
     pub async fn remove_file(&mut self, name: &str, author: &ReplicaId) -> Result<()> {
         let this_replica_id = *self.outer.local_branch.id();
+        let vv = self
+            .inner
+            .entry_version_vector(name, author)
+            .cloned()
+            .unwrap_or_default()
+            .increment(this_replica_id);
 
         self.inner
-            .remove_entry(name.into(), author, this_replica_id)
+            .insert_entry(name.into(), *author, EntryData::tombstone(vv))
             .await
     }
 }

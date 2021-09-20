@@ -1,7 +1,4 @@
-use super::{
-    entry_type::EntryTypeWithBlob,
-    inner::{self, Inner},
-};
+use super::inner::{self, Inner};
 use crate::{
     blob_id::BlobId, branch::Branch, db, directory::Directory, error::Result,
     replica_id::ReplicaId, version_vector::VersionVector,
@@ -65,12 +62,7 @@ impl ParentContext {
         let outer = outer.fork().await?;
 
         let blob_id = outer
-            .insert_entry(
-                self.entry_name.clone(),
-                self.entry_author,
-                EntryTypeWithBlob::File,
-                old_vv,
-            )
+            .insert_file_entry(self.entry_name.clone(), self.entry_author, old_vv)
             .await?;
 
         self.directory_inner = outer.inner;

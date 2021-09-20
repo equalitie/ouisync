@@ -1,9 +1,4 @@
-use super::{
-    cache::SubdirectoryCache,
-    entry_data::{EntryData, EntryDirectoryData, EntryFileData, EntryTombstoneData},
-    entry_type::EntryTypeWithBlob,
-    parent_context::ParentContext,
-};
+use super::{cache::SubdirectoryCache, entry_data::EntryData, parent_context::ParentContext};
 use crate::{
     blob::Blob,
     blob_id::BlobId,
@@ -16,11 +11,8 @@ use crate::{
 use async_recursion::async_recursion;
 use futures_util::future;
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::{btree_map, BTreeMap},
-    sync::{Arc, Weak},
-};
-use tokio::sync::{Mutex, RwLockWriteGuard};
+use std::collections::{btree_map, BTreeMap};
+use tokio::sync::RwLockWriteGuard;
 
 pub(super) struct Inner {
     pub blob: Blob,
@@ -53,39 +45,9 @@ impl Inner {
         &mut self,
         name: String,
         author: ReplicaId,
-        entry_type: EntryTypeWithBlob,
-        version_vector: VersionVector,
-    ) -> Result<BlobId> {
-        let (new_blob_id, old_blob_ids) =
-            self.content
-                .insert(name, author, entry_type, version_vector)?;
-
-        // TODO: This should succeed/fail atomically with the above.
-        let branch = self.blob.branch();
-        future::try_join_all(old_blob_ids.into_iter().map(|old_blob_id| async move {
-            Blob::open(branch.clone(), Locator::Head(old_blob_id))
-                .await?
-                .remove()
-                .await
-        }))
-        .await?;
-
-        Ok(new_blob_id)
-    }
-
-    pub async fn remove_entry(
-        &mut self,
-        name: String,
-        old_author: &ReplicaId,
-        new_author: ReplicaId,
+        entry_data: EntryData,
     ) -> Result<()> {
-        let vv = self
-            .entry_version_vector(&name, old_author)
-            .cloned()
-            .unwrap_or_default()
-            .increment(new_author);
-
-        let old_blob_ids = self.content.remove(name, new_author, vv)?;
+        let old_blob_ids = self.content.insert(name, author, entry_data)?;
 
         // TODO: This should succeed/fail atomically with the above.
         let branch = self.blob.branch();
@@ -208,106 +170,13 @@ impl Content {
     /// and its version vector is not "happens before" the new entry, nothing is inserted or
     /// removed and an error is returned instead.
     ///
-    /// Returns the blob id of the newly inserted entry and the blob ids of all the removed entries
-    /// (if any). It's the responsibility of the caller to remove the old blobs.
+    /// Returns the blob ids of all the removed entries (if any). It's the responsibility of the
+    /// caller to remove the old blobs.
     fn insert(
         &mut self,
         name: String,
         author: ReplicaId,
-        entry_type: EntryTypeWithBlob,
-        version_vector: VersionVector,
-    ) -> Result<(BlobId, Vec<BlobId>)> {
-        let blob_id = rand::random();
-        let versions = self.entries.entry(name).or_insert_with(Default::default);
-
-        // Find outdated entries
-        // clippy: false positive - the iterator borrows a value that is subsequently mutated, so
-        // the `collect` is needed to work around that.
-        #[allow(clippy::needless_collect)]
-        let old_authors: Vec<_> = versions
-            .iter()
-            // We'll check `author`'s VersionVector below, so no need to do it twice
-            .filter(|(id, _)| *id != &author)
-            .filter(|(_, data)| data.version_vector() < &version_vector)
-            .map(|(id, _)| *id)
-            .collect();
-
-        let old_blob_id = match versions.entry(author) {
-            btree_map::Entry::Vacant(entry) => {
-                entry.insert(Self::create_new_entry(entry_type, blob_id, version_vector));
-                None
-            }
-            btree_map::Entry::Occupied(mut entry) => {
-                let data = entry.get_mut();
-
-                // If the existing entry is
-                //     1. "same", or
-                //     2. "happens after", or
-                //     3. "concurrent"
-                // then don't update it. Note that #3 should not happen because of the invariant
-                // that one replica (version author) must not create concurrent entries.
-                #[allow(clippy::neg_cmp_op_on_partial_ord)]
-                if !(data.version_vector() < &version_vector) {
-                    return Err(Error::EntryExists);
-                }
-
-                if let EntryData::Tombstone(_) = data {
-                    *data = Self::create_new_entry(entry_type, blob_id, version_vector);
-                    None
-                } else {
-                    match (data, entry_type) {
-                        (EntryData::File(data), EntryTypeWithBlob::File) => {
-                            let old_blob_id = data.blob_id;
-                            data.blob_id = blob_id;
-                            data.version_vector = version_vector;
-                            Some(old_blob_id)
-                        }
-                        (EntryData::Directory(data), EntryTypeWithBlob::Directory) => {
-                            let old_blob_id = data.blob_id;
-                            data.blob_id = blob_id;
-                            data.version_vector = version_vector;
-                            Some(old_blob_id)
-                        }
-                        (_, _) => return Err(Error::EntryExists),
-                    }
-                }
-            }
-        };
-
-        // Remove the outdated entries and collect their blob ids.
-        let old_blob_ids = old_authors
-            .into_iter()
-            .filter(|old_author| *old_author != author)
-            .filter_map(|old_author| versions.remove(&old_author))
-            .map(|data| match data {
-                EntryData::File(data) => Some(data.blob_id),
-                EntryData::Directory(data) => Some(data.blob_id),
-                EntryData::Tombstone(_) => None,
-            })
-            .flatten()
-            // Because we filtered out *old_author != author above.
-            .chain(old_blob_id)
-            .collect();
-
-        self.dirty = true;
-
-        Ok((blob_id, old_blob_ids))
-    }
-
-    // TODO: We shouldn't use this one, keeping it for now so that I can solve one problem at a
-    // time.
-    pub fn remove_deprecated(&mut self, name: &str) -> Result<()> {
-        self.entries.remove(name).ok_or(Error::EntryNotFound)?;
-        self.dirty = true;
-
-        Ok(())
-    }
-
-    pub fn remove(
-        &mut self,
-        name: String,
-        author: ReplicaId,
-        version_vector: VersionVector,
+        new_data: EntryData,
     ) -> Result<Vec<BlobId>> {
         let versions = self.entries.entry(name).or_insert_with(Default::default);
 
@@ -319,17 +188,17 @@ impl Content {
             .iter()
             // We'll check `author`'s VersionVector below, so no need to do it twice
             .filter(|(id, _)| *id != &author)
-            .filter(|(_, data)| data.version_vector() < &version_vector)
+            .filter(|(_, old_data)| old_data.version_vector() < new_data.version_vector())
             .map(|(id, _)| *id)
             .collect();
 
         let old_blob_id = match versions.entry(author) {
             btree_map::Entry::Vacant(entry) => {
-                entry.insert(EntryData::Tombstone(EntryTombstoneData { version_vector }));
+                entry.insert(new_data);
                 None
             }
             btree_map::Entry::Occupied(mut entry) => {
-                let data = entry.get_mut();
+                let old_data = entry.get_mut();
 
                 // If the existing entry is
                 //     1. "same", or
@@ -338,18 +207,25 @@ impl Content {
                 // then don't update it. Note that #3 should not happen because of the invariant
                 // that one replica (version author) must not create concurrent entries.
                 #[allow(clippy::neg_cmp_op_on_partial_ord)]
-                if !(data.version_vector() < &version_vector) {
+                if !(old_data.version_vector() < new_data.version_vector()) {
                     return Err(Error::EntryExists);
                 }
 
-                let old_blob_id = match data {
+                match (&*old_data, &new_data) {
+                    (EntryData::File(_), EntryData::Directory(_))
+                    | (EntryData::Directory(_), EntryData::File(_)) => {
+                        return Err(Error::EntryExists)
+                    }
+                    _ => (),
+                }
+
+                let old_blob_id = match old_data {
                     EntryData::File(data) => Some(data.blob_id),
                     EntryData::Directory(data) => Some(data.blob_id),
                     EntryData::Tombstone(_) => None,
                 };
 
-                *data = EntryData::Tombstone(EntryTombstoneData { version_vector });
-
+                *old_data = new_data;
                 old_blob_id
             }
         };
@@ -374,22 +250,13 @@ impl Content {
         Ok(old_blob_ids)
     }
 
-    fn create_new_entry(
-        entry_type: EntryTypeWithBlob,
-        blob_id: BlobId,
-        version_vector: VersionVector,
-    ) -> EntryData {
-        match entry_type {
-            EntryTypeWithBlob::File => EntryData::File(EntryFileData {
-                blob_id,
-                version_vector,
-                blob_core: Arc::new(Mutex::new(Weak::new())),
-            }),
-            EntryTypeWithBlob::Directory => EntryData::Directory(EntryDirectoryData {
-                blob_id,
-                version_vector,
-            }),
-        }
+    // TODO: We shouldn't use this one, keeping it for now so that I can solve one problem at a
+    // time.
+    pub fn remove_deprecated(&mut self, name: &str) -> Result<()> {
+        self.entries.remove(name).ok_or(Error::EntryNotFound)?;
+        self.dirty = true;
+
+        Ok(())
     }
 }
 
