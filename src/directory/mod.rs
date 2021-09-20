@@ -10,7 +10,7 @@ mod tests;
 pub(crate) use self::{cache::RootDirectoryCache, parent_context::ParentContext};
 pub use self::{
     entry::{DirectoryRef, EntryRef, FileRef},
-    entry_type::{EntryType, EntryTypeWithBlob},
+    entry_type::EntryType,
 };
 
 use self::{
@@ -208,27 +208,23 @@ impl Directory {
         }
     }
 
-    /// Inserts a dangling entry into this directory. It's the responsibility of the caller to make
-    /// sure the returned locator eventually points to an actual file or directory.
+    /// Inserts a dangling file entry into this directory. It's the responsibility of the caller to
+    /// make sure the returned locator eventually points to an actual file.
     /// For internal use only!
     ///
     /// # Panics
     ///
     /// Panics if this directory is not in the local branch.
-    pub(crate) async fn insert_entry(
+    pub(crate) async fn insert_file_entry(
         &self,
         name: String,
         author_id: ReplicaId,
-        entry_type: EntryTypeWithBlob,
         version_vector: VersionVector,
     ) -> Result<BlobId> {
         let mut inner = self.write().await.inner;
 
         let blob_id = rand::random();
-        let entry_data = match entry_type {
-            EntryTypeWithBlob::File => EntryData::file(blob_id, version_vector),
-            EntryTypeWithBlob::Directory => EntryData::directory(blob_id, version_vector),
-        };
+        let entry_data = EntryData::file(blob_id, version_vector);
 
         inner.insert_entry(name, author_id, entry_data).await?;
 

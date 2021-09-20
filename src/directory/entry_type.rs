@@ -7,9 +7,3 @@ pub enum EntryType {
     Directory,
     Tombstone,
 }
-
-#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
-pub enum EntryTypeWithBlob {
-    File,
-    Directory,
-}

@@ -275,12 +275,7 @@ async fn insert_entry_newer_than_existing() {
         let a_vv = VersionVector::first(a_author);
 
         let blob_id = root
-            .insert_entry(
-                name.to_owned(),
-                a_author,
-                EntryTypeWithBlob::File,
-                a_vv.clone(),
-            )
+            .insert_file_entry(name.to_owned(), a_author, a_vv.clone())
             .await
             .unwrap();
 
@@ -293,14 +288,9 @@ async fn insert_entry_newer_than_existing() {
 
         let b_vv = a_vv.increment(b_author);
 
-        root.insert_entry(
-            name.to_owned(),
-            b_author,
-            EntryTypeWithBlob::File,
-            b_vv.clone(),
-        )
-        .await
-        .unwrap();
+        root.insert_file_entry(name.to_owned(), b_author, b_vv.clone())
+            .await
+            .unwrap();
 
         let reader = root.read().await;
         let mut entries = reader.entries();

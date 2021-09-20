@@ -170,8 +170,8 @@ impl Content {
     /// and its version vector is not "happens before" the new entry, nothing is inserted or
     /// removed and an error is returned instead.
     ///
-    /// Returns the blob id of the newly inserted entry and the blob ids of all the removed entries
-    /// (if any). It's the responsibility of the caller to remove the old blobs.
+    /// Returns the blob ids of all the removed entries (if any). It's the responsibility of the
+    /// caller to remove the old blobs.
     fn insert(
         &mut self,
         name: String,
