@@ -1,6 +1,8 @@
 use super::*;
 use crate::{crypto::Cryptor, db, index::BranchData};
-use std::{array, collections::BTreeSet};
+use assert_matches::assert_matches;
+use futures_util::future;
+use std::{array, collections::BTreeSet, convert::TryInto};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn create_and_list_entries() {
@@ -147,24 +149,23 @@ async fn remove_subdirectory() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn fork() {
-    let branch0 = setup().await;
-    let branch1 = create_branch(branch0.db_pool().clone()).await;
+    let branches: [_; 2] = setup_multiple().await;
 
     // Create a nested directory by branch 0
-    let root0 = branch0.open_or_create_root().await.unwrap();
+    let root0 = branches[0].open_or_create_root().await.unwrap();
     root0.flush(None).await.unwrap();
 
     let dir0 = root0.create_directory("dir".into()).await.unwrap();
     dir0.flush(None).await.unwrap();
 
     // Fork it by branch 1 and modify it
-    let dir0 = branch0
-        .open_root(branch1.clone())
+    let dir0 = branches[0]
+        .open_root(branches[1].clone())
         .await
         .unwrap()
         .read()
         .await
-        .lookup_version("dir", branch0.id())
+        .lookup_version("dir", branches[0].id())
         .unwrap()
         .directory()
         .unwrap()
@@ -176,16 +177,16 @@ async fn fork() {
     dir1.create_file("dog.jpg".into()).await.unwrap();
     dir1.flush(None).await.unwrap();
 
-    assert_eq!(dir1.read().await.branch().id(), branch1.id());
+    assert_eq!(dir1.read().await.branch().id(), branches[1].id());
 
     // Reopen orig dir and verify it's unchanged
-    let dir = branch0
-        .open_root(branch0.clone())
+    let dir = branches[0]
+        .open_root(branches[0].clone())
         .await
         .unwrap()
         .read()
         .await
-        .lookup_version("dir", branch0.id())
+        .lookup_version("dir", branches[0].id())
         .unwrap()
         .directory()
         .unwrap()
@@ -196,13 +197,13 @@ async fn fork() {
     assert_eq!(dir.read().await.entries().count(), 0);
 
     // Reopen forked dir and verify it contains the new file
-    let dir = branch1
-        .open_root(branch1.clone())
+    let dir = branches[1]
+        .open_root(branches[1].clone())
         .await
         .unwrap()
         .read()
         .await
-        .lookup_version("dir", branch1.id())
+        .lookup_version("dir", branches[1].id())
         .unwrap()
         .directory()
         .unwrap()
@@ -216,7 +217,7 @@ async fn fork() {
     );
 
     // Verify the root dir got forked as well
-    branch1.open_root(branch1.clone()).await.unwrap();
+    branches[1].open_root(branches[1].clone()).await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -303,9 +304,60 @@ async fn insert_entry_newer_than_existing() {
     }
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn remove_concurrent_file_version() {
+    let name = "foo.txt";
+
+    // Test both cases - removing the local version and removing the remote version.
+    for index_to_remove in 0..2 {
+        let branches: [_; 2] = setup_multiple().await;
+        let root = branches[0].open_or_create_root().await.unwrap();
+
+        // Create the concurrent versions
+        for branch_id in branches.iter().map(|branch| *branch.id()) {
+            let vv = VersionVector::first(branch_id);
+            let blob_id = root
+                .insert_file_entry(name.into(), branch_id, vv)
+                .await
+                .unwrap();
+            Blob::create(branches[0].clone(), Locator::Head(blob_id))
+                .flush()
+                .await
+                .unwrap();
+        }
+
+        let author_to_remove = branches[index_to_remove].id();
+        let author_to_retain = branches[1 - index_to_remove].id();
+
+        // Remove one of the versions
+        {
+            let mut writer = root.write().await;
+            writer.remove_file(name, author_to_remove).await.unwrap();
+            writer.flush(None).await.unwrap();
+        }
+
+        // Verify the removed version is gone but the other version remains
+        let reader = root.read().await;
+        assert_matches!(
+            reader.lookup_version(name, author_to_remove),
+            Ok(EntryRef::Tombstone(_))
+        );
+        assert_matches!(
+            reader.lookup_version(name, author_to_retain),
+            Ok(EntryRef::File(_))
+        );
+    }
+}
+
 async fn setup() -> Branch {
     let pool = db::init(db::Store::Memory).await.unwrap();
     create_branch(pool).await
+}
+
+async fn setup_multiple<const N: usize>() -> [Branch; N] {
+    let pool = db::init(db::Store::Memory).await.unwrap();
+    let branches: Vec<_> = future::join_all((0..N).map(|_| create_branch(pool.clone()))).await;
+    branches.try_into().ok().unwrap()
 }
 
 async fn create_branch(pool: db::Pool) -> Branch {

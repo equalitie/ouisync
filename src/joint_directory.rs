@@ -811,8 +811,8 @@ mod tests {
             .iter()
             .any(|entry| entry.entry_type() == JointEntryType::Directory));
 
-        let entries: Vec<_> = root.lookup("config").collect();
-        assert_eq!(entries.len(), 2);
+        let entries = root.lookup("config");
+        assert_eq!(entries.count(), 2);
 
         let entry = root.lookup_unique("config").unwrap();
         assert_eq!(entry.entry_type(), JointEntryType::Directory);
