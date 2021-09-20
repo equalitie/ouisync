@@ -1,7 +1,4 @@
-use super::{
-    cache::SubdirectoryCache, entry_data::EntryData, entry_type::EntryTypeWithBlob,
-    parent_context::ParentContext,
-};
+use super::{cache::SubdirectoryCache, entry_data::EntryData, parent_context::ParentContext};
 use crate::{
     blob::Blob,
     blob_id::BlobId,
@@ -48,45 +45,9 @@ impl Inner {
         &mut self,
         name: String,
         author: ReplicaId,
-        entry_type: EntryTypeWithBlob,
-        version_vector: VersionVector,
-    ) -> Result<BlobId> {
-        let new_blob_id = rand::random();
-        let entry_data = match entry_type {
-            EntryTypeWithBlob::File => EntryData::file(new_blob_id, version_vector),
-            EntryTypeWithBlob::Directory => EntryData::directory(new_blob_id, version_vector),
-        };
-
-        let old_blob_ids = self.content.insert(name, author, entry_data)?;
-
-        // TODO: This should succeed/fail atomically with the above.
-        let branch = self.blob.branch();
-        future::try_join_all(old_blob_ids.into_iter().map(|old_blob_id| async move {
-            Blob::open(branch.clone(), Locator::Head(old_blob_id))
-                .await?
-                .remove()
-                .await
-        }))
-        .await?;
-
-        Ok(new_blob_id)
-    }
-
-    pub async fn remove_entry(
-        &mut self,
-        name: String,
-        old_author: &ReplicaId,
-        new_author: ReplicaId,
+        entry_data: EntryData,
     ) -> Result<()> {
-        let vv = self
-            .entry_version_vector(&name, old_author)
-            .cloned()
-            .unwrap_or_default()
-            .increment(new_author);
-
-        let old_blob_ids = self
-            .content
-            .insert(name, new_author, EntryData::tombstone(vv))?;
+        let old_blob_ids = self.content.insert(name, author, entry_data)?;
 
         // TODO: This should succeed/fail atomically with the above.
         let branch = self.blob.branch();
