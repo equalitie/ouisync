@@ -1,4 +1,8 @@
-use super::{cache::SubdirectoryCache, entry_data::EntryData, parent_context::ParentContext};
+use super::{
+    cache::SubdirectoryCache,
+    entry_data::{EntryData, EntryTombstoneData},
+    parent_context::ParentContext,
+};
 use crate::{
     blob::Blob,
     blob_id::BlobId,
