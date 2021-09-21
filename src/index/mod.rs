@@ -45,11 +45,7 @@ pub struct Index {
 impl Index {
     pub async fn load(pool: db::Pool, this_replica_id: ReplicaId) -> Result<Self> {
         let branches = Branches::load(&pool, this_replica_id).await?;
-        let (branch_created_tx, branch_created_rx) = watch::channel(());
-
-        // This causes any subsequent subscriptions to receive one `branch_created` event
-        // immediatelly which is needed to populate the subscription with the existing branches.
-        branch_created_tx.send(()).unwrap_or(());
+        let (branch_created_tx, _) = watch::channel(());
 
         Ok(Self {
             pool,
@@ -57,7 +53,6 @@ impl Index {
             shared: Arc::new(Shared {
                 branches: RwLock::new(branches),
                 branch_created_tx,
-                branch_created_rx,
             }),
         })
     }
@@ -75,7 +70,7 @@ impl Index {
         Subscription {
             shared: self.shared.clone(),
             branch_changed_rxs: vec![],
-            branch_created_rx: self.shared.branch_created_rx.clone(),
+            branch_created_rx: self.shared.branch_created_tx.subscribe(),
             version: 0,
         }
     }
@@ -286,9 +281,6 @@ impl Index {
 struct Shared {
     branches: RwLock<Branches>,
     branch_created_tx: watch::Sender<()>,
-    // TODO: remove this when [this PR](https://github.com/tokio-rs/tokio/pull/3800) gets merged
-    // and published.
-    branch_created_rx: watch::Receiver<()>,
 }
 
 /// Container for all known branches (local and remote)
@@ -368,6 +360,12 @@ impl Subscription {
     /// Receives the next change notification. Returns the id of the changed branch. Returns `None`
     /// If `Index` was dropped.
     pub async fn recv(&mut self) -> Option<ReplicaId> {
+        if self.version == 0 {
+            // First subscribe to the branches that already existed before this subscription was
+            // created.
+            self.subscribe_to_recent().await;
+        }
+
         loop {
             select! {
                 id = select_branch_changed(&mut self.branch_changed_rxs), if !self.branch_changed_rxs.is_empty() => {
@@ -376,16 +374,21 @@ impl Subscription {
                     }
                 },
                 result = self.branch_created_rx.changed() => {
-                    if result.is_err() {
+                    if result.is_ok() {
+                        self.subscribe_to_recent().await;
+                    } else {
                         return None;
-                    }
-
-                    for (branch, version) in self.shared.branches.read().await.recent(self.version) {
-                        self.branch_changed_rxs.push((*branch.id(), branch.subscribe()));
-                        self.version = self.version.max(version.saturating_add(1));
                     }
                 }
             }
+        }
+    }
+
+    async fn subscribe_to_recent(&mut self) {
+        for (branch, version) in self.shared.branches.read().await.recent(self.version) {
+            self.branch_changed_rxs
+                .push((*branch.id(), branch.subscribe()));
+            self.version = self.version.max(version.saturating_add(1));
         }
     }
 }
