@@ -360,6 +360,10 @@ async fn remove_concurrent_file_version() {
     // Test both cases - removing the local version and removing the remote version.
     for index_to_remove in 0..2 {
         let branches: [_; 2] = setup_multiple().await;
+
+        let local_id = branches[0].id();
+        let remote_id = branches[1].id();
+
         let root = branches[0].open_or_create_root().await.unwrap();
 
         // Create the concurrent versions
@@ -376,7 +380,6 @@ async fn remove_concurrent_file_version() {
         }
 
         let author_to_remove = branches[index_to_remove].id();
-        let author_to_retain = branches[1 - index_to_remove].id();
 
         // Remove one of the versions
         {
@@ -387,14 +390,30 @@ async fn remove_concurrent_file_version() {
 
         // Verify the removed version is gone but the other version remains
         let reader = root.read().await;
-        assert_matches!(
-            reader.lookup_version(name, author_to_remove),
-            Ok(EntryRef::Tombstone(_))
-        );
-        assert_matches!(
-            reader.lookup_version(name, author_to_retain),
-            Ok(EntryRef::File(_))
-        );
+
+        if author_to_remove == local_id {
+            // If we're removing a local version, then we replace the file with a tombstone.
+            assert_matches!(
+                reader.lookup_version(name, local_id),
+                Ok(EntryRef::Tombstone(_))
+            );
+            assert_matches!(
+                reader.lookup_version(name, remote_id),
+                Ok(EntryRef::File(_))
+            );
+        } else {
+            // If we're removing a remote version, then the VV of our version needs to be updated
+            // to "happen after" the remote version being removed, and the remote version should
+            // be removed together with its blob.
+            assert_matches!(
+                reader.lookup_version(name, local_id),
+                Ok(EntryRef::File(_))
+            );
+            assert_matches!(
+                reader.lookup_version(name, remote_id),
+                Err(Error::EntryNotFound)
+            );
+        }
     }
 }
 
