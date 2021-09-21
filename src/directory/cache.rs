@@ -11,40 +11,39 @@ use std::{
 use tokio::sync::{Mutex, RwLock};
 
 // Cache for open root directory
-// TODO: consider using the `ArcSwap` crate here.
-pub(crate) struct RootDirectoryCache(Mutex<Option<Weak<RwLock<Inner>>>>);
+pub(crate) struct RootDirectoryCache(Mutex<Weak<RwLock<Inner>>>);
 
 impl RootDirectoryCache {
     pub fn new() -> Self {
-        Self(Mutex::new(None))
+        Self(Mutex::new(Weak::new()))
     }
 
     pub async fn open(&self, owner_branch: Branch, local_branch: Branch) -> Result<Directory> {
-        let mut slot = self.0.lock().await;
+        let mut inner = self.0.lock().await;
 
-        if let Some(inner) = slot.as_mut().and_then(|inner| inner.upgrade()) {
+        if let Some(inner) = inner.upgrade() {
             Ok(Directory {
                 inner,
                 local_branch,
             })
         } else {
             let dir = Directory::open_root(owner_branch, local_branch).await?;
-            *slot = Some(Arc::downgrade(&dir.inner));
+            *inner = Arc::downgrade(&dir.inner);
             Ok(dir)
         }
     }
 
     pub async fn open_or_create(&self, branch: Branch) -> Result<Directory> {
-        let mut slot = self.0.lock().await;
+        let mut inner = self.0.lock().await;
 
-        if let Some(inner) = slot.as_mut().and_then(|inner| inner.upgrade()) {
+        if let Some(inner) = inner.upgrade() {
             Ok(Directory {
                 inner,
                 local_branch: branch,
             })
         } else {
             let dir = Directory::open_or_create_root(branch).await?;
-            *slot = Some(Arc::downgrade(&dir.inner));
+            *inner = Arc::downgrade(&dir.inner);
             Ok(dir)
         }
     }
