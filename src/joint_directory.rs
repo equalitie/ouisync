@@ -460,6 +460,10 @@ impl<'a> JointFileRef<'a> {
     pub fn author(&self) -> &'a ReplicaId {
         self.file.author()
     }
+
+    pub fn parent(&self) -> &Directory {
+        self.file.parent()
+    }
 }
 
 #[derive(Eq, PartialEq)]

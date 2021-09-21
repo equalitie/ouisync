@@ -1,4 +1,8 @@
-use super::{cache::SubdirectoryCache, entry_data::EntryData, parent_context::ParentContext};
+use super::{
+    cache::SubdirectoryCache,
+    entry_data::{EntryData, EntryTombstoneData},
+    parent_context::ParentContext,
+};
 use crate::{
     blob::Blob,
     blob_id::BlobId,
@@ -148,6 +152,18 @@ impl Inner {
             "mutable operations not allowed - directory is not in the local branch"
         )
     }
+
+    // Used for moving within the same directory
+    pub fn change_name_or_author(
+        &mut self,
+        src_name: &str,
+        src_author: &ReplicaId,
+        dst_name: &str,
+        dst_author: &ReplicaId,
+    ) -> Result<()> {
+        self.content
+            .change_name_or_author(src_name, src_author, dst_name, dst_author)
+    }
 }
 
 #[derive(Clone, Deserialize, Serialize, Debug)]
@@ -257,6 +273,65 @@ impl Content {
         self.dirty = true;
 
         Ok(())
+    }
+
+    pub fn change_name_or_author(
+        &mut self,
+        src_name: &str,
+        src_author: &ReplicaId,
+        dst_name: &str,
+        dst_author: &ReplicaId,
+    ) -> Result<()> {
+        let src_versions = self.entries.get_mut(src_name).ok_or(Error::EntryNotFound)?;
+
+        let mut old_data = match src_versions.entry(*src_author) {
+            btree_map::Entry::Vacant(_) => {
+                return Err(Error::EntryNotFound);
+            }
+            btree_map::Entry::Occupied(mut src_entry) => {
+                let data = src_entry.get_mut();
+
+                if matches!(data, EntryData::Tombstone(_)) {
+                    return Err(Error::EntryNotFound);
+                }
+
+                // Note that we can't do this check earlier because we need to fail if the source
+                // name or author doesn't exist.
+                if src_author == dst_author && src_name == dst_name {
+                    return Ok(());
+                }
+
+                let old_data = data.clone();
+
+                *data = EntryData::Tombstone(EntryTombstoneData {
+                    version_vector: old_data.version_vector().clone().increment(*dst_author),
+                });
+
+                self.dirty = true;
+
+                old_data
+            }
+        };
+
+        match self
+            .entries
+            .entry(dst_name.into())
+            .or_default()
+            .entry(*dst_author)
+        {
+            btree_map::Entry::Vacant(dst_entry) => {
+                let vv = old_data.version_vector_mut();
+
+                vv.clear_in_place();
+                vv.increment_in_place(*dst_author);
+
+                dst_entry.insert(old_data);
+                Ok(())
+            }
+            btree_map::Entry::Occupied(_) => {
+                todo!();
+            }
+        }
     }
 }
 

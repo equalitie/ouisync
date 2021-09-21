@@ -34,7 +34,7 @@ mod versioned_file_name;
 
 pub use self::{
     crypto::Cryptor,
-    directory::{Directory, EntryRef, MoveDstDirectory},
+    directory::{Directory, EntryRef},
     error::{Error, Result},
     file::File,
     index::Index,

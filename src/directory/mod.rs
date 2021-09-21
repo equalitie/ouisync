@@ -175,6 +175,51 @@ impl Directory {
         inner.blob.remove().await
     }
 
+    pub async fn move_entry(
+        &self,
+        src_name: &str,
+        src_author: &ReplicaId,
+        dst_dir: &Directory,
+        dst_name: &str,
+    ) -> Result<()> {
+        if self.represents_same_directory_as(dst_dir) {
+            // Note: checking for whether the src and dst are the same is postponed for later
+            // because if the source doesn't exist we need to return an error.
+
+            self.write().await.inner.change_name_or_author(
+                src_name,
+                src_author,
+                dst_name,
+                self.local_branch.id(),
+            )
+        } else {
+            let src_reader = self.read().await;
+            let src_entry = src_reader.lookup_version(src_name, src_author)?;
+
+            let src_is_on_same_branch =
+                self.local_branch.id() == src_reader.inner.blob.branch().id();
+
+            match src_entry {
+                EntryRef::File(_) => {
+                    if !src_is_on_same_branch {
+                        todo!()
+                    }
+                    todo!()
+                }
+                EntryRef::Directory(_) => {
+                    if !src_is_on_same_branch {
+                        todo!()
+                    }
+                    todo!()
+                }
+                EntryRef::Tombstone(_) => {
+                    // Same as if the source entry did not exist.
+                    Err(Error::EntryNotFound)
+                }
+            }
+        }
+    }
+
     // Forks this directory into the local branch.
     // TODO: consider changing this to modify self instead of returning the forked dir, to be
     //       consistent with `File::fork`.
@@ -229,6 +274,12 @@ impl Directory {
         inner.insert_entry(name, author_id, entry_data).await?;
 
         Ok(blob_id)
+    }
+
+    pub(crate) fn represents_same_directory_as(&self, other: &Self) -> bool {
+        // We can do this because we have the assurance that if a /foo/bar/ directory is opened
+        // more than once, all the opened instances must share the same `.inner`.
+        Arc::ptr_eq(&self.inner, &other.inner)
     }
 
     async fn open(
@@ -481,31 +532,6 @@ fn lookup_version<'a>(
                 .map(|(author, data)| EntryRef::new(outer, &*inner, name, data, author))
         })
         .ok_or(Error::EntryNotFound)
-}
-
-/// Destination directory of a move operation.
-#[allow(clippy::large_enum_variant)]
-pub enum MoveDstDirectory {
-    /// Same as src
-    Src,
-    /// Other than src
-    Other(Directory),
-}
-
-impl MoveDstDirectory {
-    pub fn get<'a>(&'a mut self, src: &'a mut Directory) -> &'a mut Directory {
-        match self {
-            Self::Src => src,
-            Self::Other(other) => other,
-        }
-    }
-
-    pub fn get_other(&mut self) -> Option<&mut Directory> {
-        match self {
-            Self::Src => None,
-            Self::Other(other) => Some(other),
-        }
-    }
 }
 
 fn lookup<'a>(

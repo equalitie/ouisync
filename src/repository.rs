@@ -2,11 +2,11 @@ use crate::{
     branch::Branch,
     crypto::Cryptor,
     debug_printer::DebugPrinter,
-    directory::{Directory, MoveDstDirectory},
+    directory::Directory,
     error::{Error, Result},
     file::File,
     index::{BranchData, Index, Subscription},
-    joint_directory::JointDirectory,
+    joint_directory::{JointDirectory, JointEntryRef},
     joint_entry::JointEntryType,
     path,
     scoped_task::ScopedJoinHandle,
@@ -139,10 +139,42 @@ impl Repository {
     /// Returns the parent directories of both `src` and `dst`.
     pub async fn move_entry<S: AsRef<Utf8Path>, D: AsRef<Utf8Path>>(
         &self,
-        _src: S,
-        _dst: D,
-    ) -> Result<(Directory, MoveDstDirectory)> {
-        todo!()
+        src_dir_path: S,
+        src_name: &str,
+        dst_dir_path: D,
+        dst_name: &str,
+    ) -> Result<()> {
+        let src_joint_dir = self.open_directory(src_dir_path).await?;
+        let src_joint_reader = src_joint_dir.read().await;
+        let src_entry = src_joint_reader.lookup_unique(src_name)?;
+
+        match src_entry {
+            JointEntryRef::File(file_ref) => {
+                let src_name = file_ref.name().to_string();
+                let src_author = *file_ref.author();
+                let src_dir = file_ref.parent().clone();
+
+                let dst_dir = self.create_directory(dst_dir_path).await?;
+
+                // src_joint_reader holds a read lock to the src_dir. The next step then tries to
+                // get a write lock to it, so we must release the former to avoid deadlock.
+                drop(src_joint_reader);
+                src_dir
+                    .move_entry(&src_name, &src_author, &dst_dir, dst_name)
+                    .await?;
+
+                src_dir.flush(None).await?;
+
+                if !src_dir.represents_same_directory_as(&dst_dir) {
+                    dst_dir.flush(None).await?;
+                }
+            }
+            JointEntryRef::Directory(_) => {
+                todo!()
+            }
+        }
+
+        Ok(())
     }
 
     /// Returns the local branch
