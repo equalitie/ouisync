@@ -323,7 +323,7 @@ fn lookup<'a, Dirs>(dirs: Dirs, name: &str) -> impl Iterator<Item = JointEntryRe
 where
     Dirs: Iterator<Item = directory::ReadOperations<'a>>,
 {
-    Merge::new(dirs.flat_map(move |dir| dir.lookup(name).ok().into_iter().flatten()))
+    Merge::new(dirs.filter_map(move |dir| dir.lookup(name).ok()).flatten())
 }
 
 /// Looks up single entry with the specified name if it is unique.
@@ -363,7 +363,8 @@ where
     let branch_id_prefix = branch_id_prefix.ok_or(Error::EntryNotFound)?;
 
     let entries = dirs
-        .flat_map(|dir| dir.lookup(name).ok().into_iter().flatten())
+        .filter_map(|dir| dir.lookup(name).ok())
+        .flatten()
         .filter_map(|entry| entry.file().ok())
         .filter(|entry| entry.author().starts_with(&branch_id_prefix));
 
