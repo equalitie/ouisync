@@ -352,6 +352,7 @@ async fn insert_entry_newer_than_existing() {
     }
 }
 
+#[ignore]
 #[tokio::test(flavor = "multi_thread")]
 async fn remove_concurrent_file_version() {
     let name = "foo.txt";
