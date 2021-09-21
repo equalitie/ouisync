@@ -1,6 +1,6 @@
 mod cache;
 mod entry;
-mod entry_data;
+pub mod entry_data;
 mod entry_type;
 mod inner;
 mod parent_context;
@@ -428,6 +428,15 @@ impl Writer<'_> {
             .insert_entry(name.into(), *author, EntryData::tombstone(vv))
             .await
     }
+
+    pub async fn insert_entry(
+        &mut self,
+        name: &str,
+        author: &ReplicaId,
+        entry: EntryData,
+    ) -> Result<()> {
+        self.inner.insert_entry(name.into(), *author, entry).await
+    }
 }
 
 /// View of a `Directory` for performing read-only queries.
@@ -511,7 +520,7 @@ impl<'a> ReadOperations<'a> {
     pub fn lookup(
         &self,
         name: &'_ str,
-    ) -> Result<impl Iterator<Item = EntryRef<'a>> + ExactSizeIterator + 'a> {
+    ) -> Result<impl Iterator<Item = EntryRef<'a>> + ExactSizeIterator + Clone + 'a> {
         lookup(self.outer, self.inner, name)
     }
 }
@@ -538,7 +547,7 @@ fn lookup<'a>(
     outer: &'a Directory,
     inner: &'a Inner,
     name: &'_ str,
-) -> Result<impl Iterator<Item = EntryRef<'a>> + ExactSizeIterator> {
+) -> Result<impl Iterator<Item = EntryRef<'a>> + Clone + ExactSizeIterator> {
     inner
         .content
         .entries

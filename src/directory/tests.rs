@@ -405,10 +405,7 @@ async fn remove_concurrent_file_version() {
             // If we're removing a remote version, then the VV of our version needs to be updated
             // to "happen after" the remote version being removed, and the remote version should
             // be removed together with its blob.
-            assert_matches!(
-                reader.lookup_version(name, local_id),
-                Ok(EntryRef::File(_))
-            );
+            assert_matches!(reader.lookup_version(name, local_id), Ok(EntryRef::File(_)));
             assert_matches!(
                 reader.lookup_version(name, remote_id),
                 Err(Error::EntryNotFound)
