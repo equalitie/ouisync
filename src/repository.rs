@@ -204,7 +204,13 @@ impl Repository {
 
         for branch in branches {
             let dir = if branch.id() == self.this_replica_id() {
-                branch.open_or_create_root().await?
+                branch.open_or_create_root().await.map_err(|error| {
+                    log::error!(
+                        "failed to open root directory on the local branch: {:?}",
+                        error
+                    );
+                    error
+                })?
             } else {
                 match branch.open_root(self.local_branch().await).await {
                     Ok(dir) => dir,
@@ -213,7 +219,14 @@ impl Repository {
                         // ignore those.
                         continue;
                     }
-                    Err(error) => return Err(error),
+                    Err(error) => {
+                        log::error!(
+                            "failed to open root directory on a remote branch {:?}: {:?}",
+                            branch.id(),
+                            error
+                        );
+                        return Err(error);
+                    }
                 }
             };
 

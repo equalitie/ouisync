@@ -489,16 +489,32 @@ impl<'a> JointDirectoryRef<'a> {
         let directories = future::try_join_all(self.0.iter().map(|dir| async move {
             match dir.open().await {
                 Ok(open_dir) => Ok(Some(open_dir)),
-                Err(e) => {
+                Err(e) if dir.is_local() => {
+                    log::error!(
+                        "failed to open directory '{}' on the local branch: {:?}",
+                        self.name(),
+                        e
+                    );
+                    Err(e)
+                }
+                Err(e @ Error::EntryNotFound | e @ Error::BlockNotFound(_)) => {
                     // Some of the directories on remote branches may fail due to them not yet
                     // being fully downloaded from remote peers. This is OK and we'll treat such
                     // cases as if this replica doesn't know about those directories.
-                    if dir.is_local() {
-                        Err(e)
-                    } else {
-                        log::warn!("Failed to open directory on a remote branch: {:?}", e);
-                        Ok(None)
-                    }
+                    log::warn!(
+                        "failed to open directory '{}' on a remote branch: {:?}",
+                        self.name(),
+                        e
+                    );
+                    Ok(None)
+                }
+                Err(e) => {
+                    log::error!(
+                        "failed to open directory '{}' on a remote branch: {:?}",
+                        self.name(),
+                        e
+                    );
+                    Err(e)
                 }
             }
         }))
