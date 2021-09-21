@@ -497,15 +497,10 @@ impl<'a> JointDirectoryRef<'a> {
                     );
                     Err(e)
                 }
-                Err(e @ Error::EntryNotFound | e @ Error::BlockNotFound(_)) => {
+                Err(Error::EntryNotFound | Error::BlockNotFound(_)) => {
                     // Some of the directories on remote branches may fail due to them not yet
                     // being fully downloaded from remote peers. This is OK and we'll treat such
                     // cases as if this replica doesn't know about those directories.
-                    log::warn!(
-                        "failed to open directory '{}' on a remote branch: {:?}",
-                        self.name(),
-                        e
-                    );
                     Ok(None)
                 }
                 Err(e) => {

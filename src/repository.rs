@@ -214,7 +214,7 @@ impl Repository {
             } else {
                 match branch.open_root(self.local_branch().await).await {
                     Ok(dir) => dir,
-                    Err(Error::EntryNotFound) => {
+                    Err(Error::EntryNotFound | Error::BlockNotFound(_)) => {
                         // Some branch roots may not have been loaded across the network yet. We'll
                         // ignore those.
                         continue;
