@@ -1,12 +1,12 @@
-use std::fmt;
-
 use crate::{
     block::BlockId,
     crypto::{AuthTag, Hash},
     index::{InnerNodeMap, LeafNodeSet, Summary},
+    repository::RepositoryId,
     version_vector::VersionVector,
 };
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub(crate) enum Request {
@@ -89,15 +89,31 @@ impl fmt::Debug for Response {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub(crate) enum Message {
-    Request(Request),
-    Response(Response),
+    // Request by the sender to establish a link between their repository with id `src_id` and
+    // the recipient's repository named `dst_name`.
+    CreateLink {
+        src_id: RepositoryId,
+        dst_name: String,
+    },
+    // Request to a recipient's repository with id `dst_id`.
+    Request {
+        dst_id: RepositoryId,
+        request: Request,
+    },
+    // Response to a recipient's repository with id `dst_id`.
+    Response {
+        dst_id: RepositoryId,
+        response: Response,
+    },
 }
 
 impl From<Message> for Request {
     fn from(msg: Message) -> Self {
         match msg {
-            Message::Request(rq) => rq,
-            Message::Response(_) => panic!("Message is not Request"),
+            Message::Request { request, .. } => request,
+            Message::CreateLink { .. } | Message::Response { .. } => {
+                panic!("Message is not Request")
+            }
         }
     }
 }
@@ -105,8 +121,10 @@ impl From<Message> for Request {
 impl From<Message> for Response {
     fn from(msg: Message) -> Self {
         match msg {
-            Message::Request(_) => panic!("Message is not Response"),
-            Message::Response(rs) => rs,
+            Message::CreateLink { .. } | Message::Request { .. } => {
+                panic!("Message is not Response")
+            }
+            Message::Response { response, .. } => response,
         }
     }
 }

@@ -27,6 +27,7 @@ mod repository;
 mod scoped_task;
 mod session;
 mod store;
+mod tagged;
 #[cfg(test)]
 mod test_utils;
 mod version_vector;

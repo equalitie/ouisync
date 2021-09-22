@@ -15,7 +15,9 @@ use self::{
 use crate::{
     index::Index,
     replica_id::ReplicaId,
+    repository::RepositoryId,
     scoped_task::{ScopedTaskHandle, ScopedTaskSet},
+    tagged::{Local, Remote},
 };
 use futures_util::future;
 use std::{
@@ -195,12 +197,22 @@ impl Inner {
                 log::info!("Connected to replica {:?}", their_replica_id);
 
                 let broker = MessageBroker::new(
-                    self.index.clone(),
                     their_replica_id,
                     stream,
                     Box::pin(self.clone().on_finish(their_replica_id, discovery_id)),
                 )
                 .await;
+
+                // TODO: Using dummy repository ids and names for now. Will use real ones when
+                // multiple repositories are implemented.
+                broker
+                    .create_link(
+                        self.index.clone(),
+                        Local::new(RepositoryId::default()),
+                        Local::new("default".to_owned()),
+                        Remote::new("default".to_owned()),
+                    )
+                    .await;
 
                 entry.insert(broker);
             }
