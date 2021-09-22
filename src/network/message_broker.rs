@@ -100,12 +100,10 @@ impl MessageBroker {
         let (finish_tx, finish_rx) = oneshot::channel();
 
         let mut inner = Inner {
-            command_tx: command_tx.clone(),
             request_tx,
             response_tx,
-            writers: Vec::new(),
-            reader_count: 0,
-            on_finish,
+            reader: MultiReader::new(),
+            writer: MultiWriter::new(),
         };
 
         inner.handle_add_connection(stream);
@@ -119,7 +117,7 @@ impl MessageBroker {
         let server_stream = ServerStream::new(command_tx.clone(), request_rx);
         let server = Server::new(index, server_stream).await;
 
-        task::spawn(inner.run(client, server, command_rx, finish_rx));
+        task::spawn(inner.run(client, server, command_rx, finish_rx, on_finish));
 
         Self {
             command_tx,
@@ -140,12 +138,10 @@ impl MessageBroker {
 }
 
 struct Inner {
-    command_tx: mpsc::Sender<Command>,
     request_tx: mpsc::Sender<Request>,
     response_tx: mpsc::Sender<Response>,
-    writers: Vec<TcpObjectWriter>,
-    reader_count: usize,
-    on_finish: OnFinish,
+    reader: MultiReader,
+    writer: MultiWriter,
 }
 
 impl Inner {
@@ -155,79 +151,65 @@ impl Inner {
         mut server: Server,
         command_rx: mpsc::Receiver<Command>,
         finish_rx: oneshot::Receiver<()>,
+        on_finish: OnFinish,
     ) {
         select! {
-            _ = self.handle_commands(command_rx) => (),
+            _ = self.handle_input(command_rx) => (),
             _ = log_error(client.run(), "client failed: ") => (),
             _ = log_error(server.run(), "server failed: ") => (),
             _ = finish_rx => (),
         }
 
-        self.on_finish.await
+        on_finish.await
     }
 
-    async fn handle_commands(&mut self, mut command_rx: mpsc::Receiver<Command>) {
-        loop {
-            if self.writers.is_empty() || self.reader_count == 0 {
-                break;
-            }
+    async fn handle_input(&mut self, mut command_rx: mpsc::Receiver<Command>) {
+        let mut run = true;
 
-            match command_rx.recv().await {
-                Some(Command::AddConnection(stream)) => self.handle_add_connection(stream),
-                Some(Command::SendMessage(message)) => self.handle_send_message(message).await,
-                Some(Command::CloseReader) => self.reader_count -= 1,
-                None => break,
+        while run {
+            run = select! {
+                command = command_rx.recv() => {
+                    if let Some(command) = command {
+                        self.handle_command(command).await
+                    } else {
+                        false
+                    }
+                }
+                message = self.reader.read() => {
+                    if let Some(message) = message {
+                        self.handle_recv_message(message).await
+                    } else {
+                        false
+                    }
+                }
             }
+        }
+    }
+
+    async fn handle_command(&mut self, command: Command) -> bool {
+        match command {
+            Command::AddConnection(stream) => {
+                self.handle_add_connection(stream);
+                true
+            }
+            Command::SendMessage(message) => self.handle_send_message(message).await,
         }
     }
 
     fn handle_add_connection(&mut self, stream: TcpObjectStream) {
         let (reader, writer) = stream.into_split();
-        self.writers.push(writer);
-        self.reader_count += 1;
-
-        task::spawn(read(
-            reader,
-            self.command_tx.clone(),
-            self.request_tx.clone(),
-            self.response_tx.clone(),
-        ));
+        self.reader.add(reader);
+        self.writer.add(writer);
     }
 
-    async fn handle_send_message(&mut self, message: Message) {
-        while !self.writers.is_empty() {
-            if self.writers[0].write(&message).await.is_ok() {
-                break;
-            }
-
-            self.writers.remove(0);
-        }
+    async fn handle_send_message(&mut self, message: Message) -> bool {
+        self.writer.write(&message).await
     }
-}
 
-async fn read(
-    mut reader: TcpObjectReader,
-    command_tx: mpsc::Sender<Command>,
-    request_tx: mpsc::Sender<Request>,
-    response_tx: mpsc::Sender<Response>,
-) {
-    loop {
-        select! {
-            result = reader.read() => {
-                match result {
-                    Ok(Message::Request(request)) => {
-                        request_tx.send(request).await.unwrap_or(())
-                    }
-                    Ok(Message::Response(response)) => {
-                        response_tx.send(response).await.unwrap_or(())
-                    }
-                    Err(_) => {
-                        command_tx.send(Command::CloseReader).await.unwrap_or(());
-                        break;
-                    }
-                }
-            }
-            _ = command_tx.closed() => break,
+    async fn handle_recv_message(&self, message: Message) -> bool {
+        match message {
+            Message::Request(request) => self.request_tx.send(request).await.is_ok(),
+            Message::Response(response) => self.response_tx.send(response).await.is_ok(),
         }
     }
 }
@@ -235,7 +217,6 @@ async fn read(
 pub(super) enum Command {
     AddConnection(TcpObjectStream),
     SendMessage(Message),
-    CloseReader,
 }
 
 impl Command {
@@ -253,5 +234,89 @@ where
 {
     if let Err(error) = fut.await {
         log::error!("{}{}", prefix, error.verbose())
+    }
+}
+
+/// Wrapper for arbitrary number of `TcpObjectReader`s which reads from all of them simultaneously.
+struct MultiReader {
+    tx: mpsc::Sender<Option<Message>>,
+    rx: mpsc::Receiver<Option<Message>>,
+    count: usize,
+}
+
+impl MultiReader {
+    fn new() -> Self {
+        let (tx, rx) = mpsc::channel(1);
+        Self { tx, rx, count: 0 }
+    }
+
+    fn add(&mut self, mut reader: TcpObjectReader) {
+        let tx = self.tx.clone();
+        self.count += 1;
+
+        task::spawn(async move {
+            loop {
+                select! {
+                    result = reader.read() => {
+                        if let Ok(message) = result {
+                            tx.send(Some(message)).await.unwrap_or(())
+                        } else {
+                            tx.send(None).await.unwrap_or(());
+                            break;
+                        }
+                    },
+                    _ = tx.closed() => break,
+                }
+            }
+        });
+    }
+
+    async fn read(&mut self) -> Option<Message> {
+        loop {
+            if self.count == 0 {
+                return None;
+            }
+
+            match self.rx.recv().await {
+                Some(Some(message)) => return Some(message),
+                Some(None) => {
+                    self.count -= 1;
+                }
+                None => {
+                    // This would mean that all senders were closed, but that can't happen because
+                    // `self.tx` still exists.
+                    unreachable!()
+                }
+            }
+        }
+    }
+}
+
+/// Wrapper for arbitrary number of `TcpObjectWriter`s which writes to the first available one.
+struct MultiWriter {
+    writers: Vec<TcpObjectWriter>,
+}
+
+impl MultiWriter {
+    fn new() -> Self {
+        Self {
+            writers: Vec::new(),
+        }
+    }
+
+    fn add(&mut self, writer: TcpObjectWriter) {
+        self.writers.push(writer)
+    }
+
+    async fn write(&mut self, message: &Message) -> bool {
+        while let Some(writer) = self.writers.last_mut() {
+            if writer.write(message).await.is_ok() {
+                return true;
+            }
+
+            self.writers.pop();
+        }
+
+        false
     }
 }
