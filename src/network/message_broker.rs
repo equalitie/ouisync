@@ -9,6 +9,7 @@ use crate::{
     index::Index,
     replica_id::ReplicaId,
     repository::RepositoryId,
+    scoped_task::ScopedJoinHandle,
     tagged::{Local, Remote},
 };
 use std::{
@@ -19,10 +20,7 @@ use std::{
 };
 use tokio::{
     select,
-    sync::{
-        mpsc::{self, error::SendError},
-        oneshot,
-    },
+    sync::mpsc::{self, error::SendError},
     task,
 };
 
@@ -110,7 +108,7 @@ type OnFinish = Pin<Box<dyn Future<Output = ()> + Send>>;
 /// structures respectively.
 pub(crate) struct MessageBroker {
     command_tx: mpsc::Sender<Command>,
-    _finish_tx: oneshot::Sender<()>,
+    _join_handle: ScopedJoinHandle<()>,
 }
 
 impl MessageBroker {
@@ -120,7 +118,6 @@ impl MessageBroker {
         on_finish: OnFinish,
     ) -> Self {
         let (command_tx, command_rx) = mpsc::channel(1);
-        let (finish_tx, finish_rx) = oneshot::channel();
 
         let mut inner = Inner {
             their_replica_id,
@@ -134,11 +131,11 @@ impl MessageBroker {
 
         inner.add_connection(stream);
 
-        task::spawn(inner.run(command_rx, finish_rx, on_finish));
+        let handle = task::spawn(inner.run(command_rx, on_finish));
 
         Self {
             command_tx,
-            _finish_tx: finish_tx,
+            _join_handle: ScopedJoinHandle(handle),
         }
     }
 
@@ -195,21 +192,7 @@ struct Inner {
 }
 
 impl Inner {
-    async fn run(
-        mut self,
-        command_rx: mpsc::Receiver<Command>,
-        finish_rx: oneshot::Receiver<()>,
-        on_finish: OnFinish,
-    ) {
-        select! {
-            _ = self.handle_input(command_rx) => (),
-            _ = finish_rx => (),
-        }
-
-        on_finish.await
-    }
-
-    async fn handle_input(&mut self, mut command_rx: mpsc::Receiver<Command>) {
+    async fn run(mut self, mut command_rx: mpsc::Receiver<Command>, on_finish: OnFinish) {
         let mut run = true;
 
         while run {
@@ -230,6 +213,8 @@ impl Inner {
                 }
             }
         }
+
+        on_finish.await
     }
 
     async fn handle_command(&mut self, command: Command) -> bool {
