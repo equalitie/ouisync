@@ -100,6 +100,14 @@ impl<'a> EntryRef<'a> {
         self.inner().parent_outer
     }
 
+    pub fn data(&self) -> EntryData {
+        match self {
+            Self::File(e) => EntryData::File(e.data().clone()),
+            Self::Directory(e) => EntryData::Directory(e.data().clone()),
+            Self::Tombstone(e) => EntryData::Tombstone(e.data().clone()),
+        }
+    }
+
     fn inner(&self) -> &RefInner {
         match self {
             Self::File(r) => &r.inner,
@@ -165,6 +173,10 @@ impl<'a> FileRef<'a> {
     pub fn parent(&self) -> &Directory {
         self.inner.parent_outer
     }
+
+    pub fn data(&self) -> &EntryFileData {
+        self.entry_data
+    }
 }
 
 impl fmt::Debug for FileRef<'_> {
@@ -209,6 +221,10 @@ impl<'a> DirectoryRef<'a> {
     pub fn is_local(&self) -> bool {
         self.inner.is_local()
     }
+
+    pub fn data(&self) -> &EntryDirectoryData {
+        self.entry_data
+    }
 }
 
 impl fmt::Debug for DirectoryRef<'_> {
@@ -232,6 +248,10 @@ impl<'a> TombstoneRef<'a> {
 
     pub fn is_local(&self) -> bool {
         self.inner.is_local()
+    }
+
+    pub fn data(&self) -> &EntryTombstoneData {
+        self.entry_data
     }
 }
 

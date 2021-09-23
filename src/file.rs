@@ -5,6 +5,7 @@ use crate::{
     directory::ParentContext,
     error::Result,
     locator::Locator,
+    version_vector::VersionVector,
 };
 use std::io::SeekFrom;
 use std::{fmt, sync::Arc};
@@ -141,6 +142,10 @@ impl File {
         self.blob
             .fork(self.local_branch.clone(), Locator::Head(blob_id))
             .await
+    }
+
+    pub async fn version_vector(&self) -> VersionVector {
+        self.parent.entry_version_vector().await
     }
 }
 

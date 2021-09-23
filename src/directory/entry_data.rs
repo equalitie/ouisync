@@ -9,7 +9,7 @@ use tokio::sync::Mutex;
 //--------------------------------------------------------------------
 
 #[derive(Debug, Clone, Deserialize, Serialize, Eq, PartialEq)]
-pub(super) enum EntryData {
+pub enum EntryData {
     File(EntryFileData),
     Directory(EntryDirectoryData),
     Tombstone(EntryTombstoneData),
@@ -55,7 +55,7 @@ impl EntryData {
 //--------------------------------------------------------------------
 
 #[derive(Clone, Deserialize, Serialize)]
-pub(super) struct EntryFileData {
+pub struct EntryFileData {
     pub blob_id: BlobId,
     pub version_vector: VersionVector,
     #[serde(skip)]
@@ -83,7 +83,7 @@ impl Eq for EntryFileData {}
 //--------------------------------------------------------------------
 
 #[derive(Clone, Deserialize, Serialize, Eq, PartialEq)]
-pub(super) struct EntryDirectoryData {
+pub struct EntryDirectoryData {
     pub blob_id: BlobId,
     pub version_vector: VersionVector,
 }
@@ -100,7 +100,7 @@ impl fmt::Debug for EntryDirectoryData {
 //--------------------------------------------------------------------
 
 #[derive(Clone, Deserialize, Serialize, Eq, PartialEq)]
-pub(super) struct EntryTombstoneData {
+pub struct EntryTombstoneData {
     pub version_vector: VersionVector,
 }
 

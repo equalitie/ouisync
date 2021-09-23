@@ -108,21 +108,26 @@ impl JointDirectory {
     }
 
     pub async fn remove_file(&mut self, name: &str) -> Result<()> {
-        self.merge().await?;
+        self.fork().await?;
 
-        // Unwrap is OK because we just did `merge`.
-        let local_dir = self.local_version_mut().await.unwrap().1;
+        let reader = self.read().await;
 
-        let mut dir_writer = local_dir.write().await;
+        let file_to_remove = reader.lookup_unique(name)?.file()?;
 
-        let (name, author) = {
-            use std::iter::once;
-            let file = lookup_unique(once(dir_writer.read_operations()), name)?.file()?;
-            (file.name().to_string(), *file.author())
-        };
+        let to_remove_author = *file_to_remove.author();
+        let to_remove_vv = file_to_remove.version_vector().clone();
 
-        dir_writer.remove_file(&name, &author).await?;
-        dir_writer.flush(None).await
+        drop(reader);
+
+        // Local directory exists because we forked above.
+        let (_local_id, local_dir) = self.local_version().await.unwrap();
+        let mut local_dir = local_dir.write().await;
+
+        local_dir
+            .remove_file(name, &to_remove_author, to_remove_vv)
+            .await?;
+
+        local_dir.flush(None).await
     }
 
     pub async fn remove_directory(&self, branch: &ReplicaId, name: &str) -> Result<()> {
@@ -279,12 +284,13 @@ impl Reader<'_> {
 
     // Documentation can be found at the underlying function.
     pub fn lookup<'a>(&'a self, name: &'a str) -> impl Iterator<Item = JointEntryRef<'a>> + 'a {
-        lookup(self.0.iter().map(|r| r.read_operations()), name)
+        lookup(self.readers(), name)
     }
 
     // Documentation can be found at the underlying function
     pub fn lookup_unique<'a>(&'a self, name: &'a str) -> Result<JointEntryRef<'a>> {
-        lookup_unique(self.0.iter().map(|r| r.read_operations()), name)
+        //lookup_unique(self.readers(), name)
+        lookup_unique_(|n| self.entry_versions(n), name)
     }
 
     /// Looks up a specific version of a file.
@@ -315,6 +321,19 @@ impl Reader<'_> {
         }
         sum
     }
+
+    pub fn entry_versions<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> impl Iterator<Item = EntryRef<'a>> + Clone + 'a {
+        self.readers()
+            .filter_map(move |r| r.lookup(name).ok())
+            .flatten()
+    }
+
+    pub fn readers(&self) -> impl Iterator<Item = directory::ReadOperations> + Clone {
+        self.0.iter().map(|reader| reader.read_operations())
+    }
 }
 
 /// Returns all versions of an entry with the given name. Concurrent file versions are returned
@@ -324,6 +343,13 @@ where
     Dirs: Iterator<Item = directory::ReadOperations<'a>>,
 {
     Merge::new(dirs.filter_map(move |dir| dir.lookup(name).ok()).flatten())
+}
+
+fn lookup_<'a, Versions>(versions: Versions) -> impl Iterator<Item = JointEntryRef<'a>>
+where
+    Versions: Iterator<Item = EntryRef<'a>>,
+{
+    Merge::new(versions)
 }
 
 /// Looks up single entry with the specified name if it is unique.
@@ -336,14 +362,18 @@ where
 /// - Finally, if there are both files and directories, only the directories are retured (merged
 ///   into a `JointEntryRef::Directory`) and the files are discarded. This is so it's possible
 ///   to unambiguously lookup a directory even in the presence of conflicting files.
-pub fn lookup_unique<'a, Dirs>(dirs: Dirs, name: &'a str) -> Result<JointEntryRef<'a>>
+pub fn lookup_unique_<'a, GetVersions, Versions>(
+    get_versions: GetVersions,
+    name: &'a str,
+) -> Result<JointEntryRef<'a>>
 where
-    Dirs: Iterator<Item = directory::ReadOperations<'a>> + Clone,
+    GetVersions: Fn(&'a str) -> Versions,
+    Versions: Iterator<Item = EntryRef<'a>> + Clone,
 {
     // First try exact match as it is more common.
     let mut last_file = None;
 
-    for entry in lookup(dirs.clone(), name) {
+    for entry in lookup_(get_versions(name)) {
         match entry {
             JointEntryRef::Directory(_) => return Ok(entry),
             JointEntryRef::File(_) if last_file.is_none() => {
@@ -362,9 +392,7 @@ where
     let (name, branch_id_prefix) = versioned_file_name::parse(name);
     let branch_id_prefix = branch_id_prefix.ok_or(Error::EntryNotFound)?;
 
-    let entries = dirs
-        .filter_map(|dir| dir.lookup(name).ok())
-        .flatten()
+    let entries = get_versions(name)
         .filter_map(|entry| entry.file().ok())
         .filter(|entry| entry.author().starts_with(&branch_id_prefix));
 

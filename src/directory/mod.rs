@@ -1,6 +1,6 @@
 mod cache;
 mod entry;
-mod entry_data;
+pub mod entry_data;
 mod entry_type;
 mod inner;
 mod parent_context;
@@ -15,7 +15,7 @@ pub use self::{
 
 use self::{
     cache::SubdirectoryCache,
-    entry_data::EntryData,
+    entry_data::{EntryData, EntryTombstoneData},
     inner::{Content, Inner},
 };
 use crate::{
@@ -139,13 +139,19 @@ impl Directory {
             .await
     }
 
-    /// Removes a file from this directory.
+    /// Effectively removes a file from this directory.
     ///
-    /// # Panics
-    ///
-    /// Panics if this directory is not in the local branch.
-    pub async fn remove_file(&self, name: &str, author: &ReplicaId) -> Result<()> {
-        self.write().await.remove_file(name, author).await
+    /// Note: This operation does not simply remove the entry, instead, version vector of the local
+    /// entry with the same name is increased to be "happens after" `vv`. If the local version does
+    /// not exist, or if it is the one being removed (author == this_replica_id), then a tombstone
+    /// is created.
+    pub async fn remove_file(
+        &self,
+        name: &str,
+        author: &ReplicaId,
+        vv: VersionVector,
+    ) -> Result<()> {
+        self.write().await.remove_file(name, author, vv).await
     }
 
     /// Removes a subdirectory from this directory.
@@ -415,18 +421,41 @@ impl Writer<'_> {
         Ok(())
     }
 
-    pub async fn remove_file(&mut self, name: &str, author: &ReplicaId) -> Result<()> {
-        let this_replica_id = *self.outer.local_branch.id();
-        let vv = self
-            .inner
-            .entry_version_vector(name, author)
-            .cloned()
-            .unwrap_or_default()
-            .increment(this_replica_id);
+    pub async fn remove_file(
+        &mut self,
+        name: &str,
+        author: &ReplicaId,
+        vv: VersionVector,
+    ) -> Result<()> {
+        let this_replica_id = *self.this_replica_id();
+
+        let local_entry = match self.lookup_version(name, &this_replica_id) {
+            Ok(file) => Some(file),
+            Err(Error::EntryNotFound) => None,
+            Err(e) => return Err(e),
+        };
+
+        let new_entry = if author == &this_replica_id {
+            EntryData::Tombstone(EntryTombstoneData {
+                version_vector: vv.increment(this_replica_id),
+            })
+        } else if let Some(local_entry) = local_entry {
+            let mut new_entry = local_entry.data();
+            new_entry.version_vector_mut().merge(&vv);
+            new_entry
+        } else {
+            EntryData::Tombstone(EntryTombstoneData {
+                version_vector: vv.increment(this_replica_id),
+            })
+        };
 
         self.inner
-            .insert_entry(name.into(), *author, EntryData::tombstone(vv))
+            .insert_entry(name.into(), this_replica_id, new_entry)
             .await
+    }
+
+    pub fn this_replica_id(&self) -> &ReplicaId {
+        self.outer.local_branch.id()
     }
 }
 
@@ -511,7 +540,7 @@ impl<'a> ReadOperations<'a> {
     pub fn lookup(
         &self,
         name: &'_ str,
-    ) -> Result<impl Iterator<Item = EntryRef<'a>> + ExactSizeIterator + 'a> {
+    ) -> Result<impl Iterator<Item = EntryRef<'a>> + ExactSizeIterator + Clone + 'a> {
         lookup(self.outer, self.inner, name)
     }
 }
@@ -538,7 +567,7 @@ fn lookup<'a>(
     outer: &'a Directory,
     inner: &'a Inner,
     name: &'_ str,
-) -> Result<impl Iterator<Item = EntryRef<'a>> + ExactSizeIterator> {
+) -> Result<impl Iterator<Item = EntryRef<'a>> + Clone + ExactSizeIterator> {
     inner
         .content
         .entries
