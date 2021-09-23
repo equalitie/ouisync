@@ -1,3 +1,8 @@
+mod index_map;
+mod manager;
+
+pub(crate) use self::manager::{RepositoryId, RepositoryManager};
+
 use crate::{
     branch::Branch,
     crypto::Cryptor,
@@ -15,15 +20,8 @@ use crate::{
 use camino::Utf8Path;
 use futures_util::{future, stream::FuturesUnordered, StreamExt};
 use log::Level;
-use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, iter, sync::Arc};
 use tokio::{select, sync::Mutex, task};
-
-/// Identifier of a repository unique only within a single replica. To obtain a globally unique
-/// identifier, it needs to be paired with a `ReplicaId`.
-#[derive(Default, Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize, Debug)]
-#[repr(transparent)]
-pub(crate) struct RepositoryId(u32);
 
 pub struct Repository {
     shared: Arc<Shared>,
