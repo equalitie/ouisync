@@ -8,7 +8,7 @@ use sqlx::{
     sqlite::{Sqlite, SqliteConnectOptions},
     SqlitePool,
 };
-use std::{path::PathBuf, str::FromStr};
+use std::{convert::Infallible, path::PathBuf, str::FromStr};
 use tokio::fs;
 
 /// Database connection pool.
@@ -32,6 +32,18 @@ pub enum Store {
     File(PathBuf),
     /// Temporary database stored in memory.
     Memory,
+}
+
+impl FromStr for Store {
+    type Err = Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s == ":memory:" {
+            Ok(Self::Memory)
+        } else {
+            Ok(Self::File(s.into()))
+        }
+    }
 }
 
 /// Creates the database unless it already exsits and establish a connection to it.
