@@ -75,11 +75,15 @@ async fn remove_file() {
     let mut file = parent_dir.create_file(name.into()).await.unwrap();
     file.flush().await.unwrap();
 
+    let file_vv = file.version_vector().await;
     let file_locator = *file.locator();
 
     // Reopen and remove the file
     let parent_dir = branch.open_root(branch.clone()).await.unwrap();
-    parent_dir.remove_file(name, branch.id()).await.unwrap();
+    parent_dir
+        .remove_file(name, branch.id(), file_vv)
+        .await
+        .unwrap();
     parent_dir.flush(None).await.unwrap();
 
     // Reopen again and check the file entry was removed.
@@ -352,7 +356,6 @@ async fn insert_entry_newer_than_existing() {
     }
 }
 
-#[ignore]
 #[tokio::test(flavor = "multi_thread")]
 async fn remove_concurrent_file_version() {
     let name = "foo.txt";
@@ -366,13 +369,19 @@ async fn remove_concurrent_file_version() {
 
         let root = branches[0].open_or_create_root().await.unwrap();
 
+        let mut vvs = Vec::new();
+
         // Create the concurrent versions
         for branch_id in branches.iter().map(|branch| *branch.id()) {
             let vv = VersionVector::first(branch_id);
+
+            vvs.push(vv.clone());
+
             let blob_id = root
                 .insert_file_entry(name.into(), branch_id, vv)
                 .await
                 .unwrap();
+
             Blob::create(branches[0].clone(), Locator::Head(blob_id))
                 .flush()
                 .await
@@ -380,11 +389,15 @@ async fn remove_concurrent_file_version() {
         }
 
         let author_to_remove = branches[index_to_remove].id();
+        let vv_to_remove = &vvs[index_to_remove];
 
         // Remove one of the versions
         {
             let mut writer = root.write().await;
-            writer.remove_file(name, author_to_remove).await.unwrap();
+            writer
+                .remove_file(name, author_to_remove, vv_to_remove.clone())
+                .await
+                .unwrap();
             writer.flush(None).await.unwrap();
         }
 

@@ -1,9 +1,5 @@
 use crate::{
-    directory::{
-        self,
-        entry_data::{EntryData, EntryTombstoneData},
-        Directory, DirectoryRef, EntryRef, FileRef,
-    },
+    directory::{self, Directory, DirectoryRef, EntryRef, FileRef},
     error::{Error, Result},
     file::File,
     iterator::{Accumulate, SortedUnion},
@@ -118,39 +114,18 @@ impl JointDirectory {
 
         let file_to_remove = reader.lookup_unique(name)?.file()?;
 
-        // Local directory exists because we forked above.
-        let (local_id, local_dir) = self.local_version().await.unwrap();
-        let local_dir_reader = local_dir.read().await;
+        let to_remove_author = *file_to_remove.author();
+        let to_remove_vv = file_to_remove.version_vector().clone();
 
-        let local_entry = match local_dir_reader.lookup_version(name, local_id) {
-            Ok(file) => Some(file),
-            Err(Error::EntryNotFound) => None,
-            Err(e) => return Err(e),
-        };
-
-        let new_entry = if file_to_remove.author() == local_id {
-            EntryData::Tombstone(EntryTombstoneData {
-                version_vector: file_to_remove.version_vector().clone().increment(*local_id),
-            })
-        } else if let Some(local_entry) = local_entry {
-            let mut new_entry = local_entry.data();
-            new_entry
-                .version_vector_mut()
-                .merge(file_to_remove.version_vector());
-            new_entry
-        } else {
-            EntryData::Tombstone(EntryTombstoneData {
-                version_vector: file_to_remove.version_vector().clone().increment(*local_id),
-            })
-        };
-
-        // TODO: Can we do this atomically? That is, get a writer from the start and use that
-        // instead of first getting a reader, then dropping it and then getting another writer.
         drop(reader);
-        drop(local_dir_reader);
+
+        // Local directory exists because we forked above.
+        let (_local_id, local_dir) = self.local_version().await.unwrap();
         let mut local_dir = local_dir.write().await;
 
-        local_dir.insert_entry(name, local_id, new_entry).await?;
+        local_dir
+            .remove_file(name, &to_remove_author, to_remove_vv)
+            .await?;
 
         local_dir.flush(None).await
     }
