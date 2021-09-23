@@ -4,9 +4,11 @@ use crate::{
     index, this_replica,
 };
 use sqlx::{
+    encode::IsNull,
+    error::BoxDynError,
     pool::PoolOptions,
-    sqlite::{Sqlite, SqliteConnectOptions},
-    SqlitePool,
+    sqlite::{Sqlite, SqliteArgumentValue, SqliteConnectOptions, SqliteTypeInfo, SqliteValueRef},
+    Decode, Encode, SqlitePool, Type,
 };
 use std::{convert::Infallible, path::PathBuf, str::FromStr};
 use tokio::fs;
@@ -42,6 +44,34 @@ impl FromStr for Store {
             Ok(Self::Memory)
         } else {
             Ok(Self::File(s.into()))
+        }
+    }
+}
+
+impl Type<Sqlite> for Store {
+    fn type_info() -> SqliteTypeInfo {
+        str::type_info()
+    }
+}
+
+impl<'r> Decode<'r, Sqlite> for Store {
+    fn decode(value: SqliteValueRef<'r>) -> Result<Self, BoxDynError> {
+        let s = <&str>::decode(value)?;
+        Ok(s.parse()?)
+    }
+}
+
+impl<'q> Encode<'q, Sqlite> for &'q Store {
+    fn encode_by_ref(&self, args: &mut Vec<SqliteArgumentValue<'q>>) -> IsNull {
+        match self {
+            Store::File(path) => {
+                if let Some(s) = path.to_str() {
+                    s.encode_by_ref(args)
+                } else {
+                    IsNull::Yes
+                }
+            }
+            Store::Memory => ":memory".encode_by_ref(args),
         }
     }
 }

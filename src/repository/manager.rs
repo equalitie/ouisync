@@ -16,7 +16,7 @@ use sqlx::{
 // TODO: remove the `Default` impl, instead provide a test-only `dummy` constructor.
 #[derive(Default, Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize, Debug)]
 #[repr(transparent)]
-pub(crate) struct RepositoryId(u32);
+pub(crate) struct RepositoryId(pub(super) u32);
 
 impl Type<Sqlite> for RepositoryId {
     fn type_info() -> SqliteTypeInfo {
