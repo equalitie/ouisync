@@ -1,4 +1,5 @@
 use crate::{
+    config,
     crypto::Cryptor,
     db,
     error::{Error, Result},
@@ -21,12 +22,11 @@ pub struct Session {
 impl Session {
     /// Creates a new session.
     pub async fn new(
-        db_store: db::Store,
+        config_db_store: db::Store,
         cryptor: Cryptor,
         network_options: NetworkOptions,
     ) -> Result<Self> {
-        let pool = db::open(db_store).await?;
-        this_replica::init(&pool).await?;
+        let pool = config::open_db(config_db_store).await?;
 
         let this_replica_id = this_replica::get_or_create_id(&pool).await?;
         let index = Index::load(pool.clone(), this_replica_id).await?;

@@ -11,19 +11,19 @@ use std::collections::{hash_map, HashMap};
 
 /// Map of repository indices.
 pub(crate) struct IndexMap {
-    main_pool: db::Pool,
+    pool: db::Pool,
     this_replica_id: ReplicaId,
     values: HashMap<RepositoryId, Value>,
     ids: HashMap<RepositoryName, RepositoryId>,
 }
 
 impl IndexMap {
-    pub async fn new(main_pool: db::Pool, this_replica_id: ReplicaId) -> Result<Self> {
+    pub async fn new(pool: db::Pool, this_replica_id: ReplicaId) -> Result<Self> {
         let mut values = HashMap::new();
         let mut ids = HashMap::new();
 
         sqlx::query("SELECT rowid, name, db_path FROM repositories")
-            .fetch(&main_pool)
+            .fetch(&pool)
             .err_into()
             .and_then(|row| async move {
                 let id: RepositoryId = row.get(0);
@@ -50,7 +50,7 @@ impl IndexMap {
             .await?;
 
         Ok(Self {
-            main_pool,
+            pool,
             this_replica_id,
             values,
             ids,
@@ -67,7 +67,7 @@ impl IndexMap {
             return Err(Error::EntryExists);
         }
 
-        let mut tx = self.main_pool.begin().await?;
+        let mut tx = self.pool.begin().await?;
         let query_result = sqlx::query("INSERT INTO repositories (name, db_path) VALUES (?, ?)")
             .bind(&name)
             .bind(&store)
@@ -98,7 +98,7 @@ impl IndexMap {
     }
 
     pub async fn destroy(&mut self, id: RepositoryId) -> Result<()> {
-        let mut tx = self.main_pool.begin().await?;
+        let mut tx = self.pool.begin().await?;
 
         let store = sqlx::query("SELECT db_path FROM repositories WHERE rowid = ?")
             .bind(id)
@@ -170,4 +170,19 @@ impl<'a> IntoIterator for &'a IndexMap {
 struct Value {
     index: Index,
     name: RepositoryName,
+}
+
+/// Initialize the database schema for the index map.
+pub(crate) async fn init(pool: &db::Pool) -> Result<()> {
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS repositories (
+             name    TEXT NOT NULL UNIQUE,
+             db_path TEXT NOT NULL,
+         )",
+    )
+    .execute(pool)
+    .await
+    .map_err(Error::CreateDbSchema)?;
+
+    Ok(())
 }

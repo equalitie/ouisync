@@ -18,9 +18,6 @@ pub type Pool = SqlitePool;
 /// Database transaction
 pub type Transaction<'a> = sqlx::Transaction<'a, Sqlite>;
 
-/// Database connection
-pub type Connection = sqlx::pool::PoolConnection<Sqlite>;
-
 /// This trait allows to write functions that work with any of `Pool`, `Connection` or
 /// `Transaction`. It's an alias for `sqlx::Executor<Database = Sqlite>` for convenience.
 pub trait Executor<'a>: sqlx::Executor<'a, Database = Sqlite> {}
@@ -132,14 +129,6 @@ pub(crate) async fn delete(store: Store) -> Result<()> {
 
     Ok(())
 }
-
-// // Create the database schema
-// pub async fn create_schema(pool: &Pool) -> Result<()> {
-//     block::init(pool).await?;
-//     index::init(pool).await?;
-//     this_replica::init(pool).await?;
-//     Ok(())
-// }
 
 // Explicit cast from `i64` to `u64` to work around the lack of native `u64` support in the sqlx
 // crate.

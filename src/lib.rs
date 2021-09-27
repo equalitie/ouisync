@@ -9,6 +9,7 @@ mod blob;
 mod blob_id;
 mod block;
 mod branch;
+mod config;
 mod db;
 mod directory;
 mod error;
