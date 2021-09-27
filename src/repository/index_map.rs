@@ -1,4 +1,4 @@
-use super::manager::RepositoryId;
+use super::meta::{RepositoryId, RepositoryName};
 use crate::{
     db,
     error::{Error, Result},
@@ -13,13 +13,13 @@ use std::collections::{hash_map, HashMap};
 pub(crate) struct IndexMap {
     main_pool: db::Pool,
     this_replica_id: ReplicaId,
-    indices: HashMap<RepositoryId, Index>,
-    ids: HashMap<String, RepositoryId>,
+    values: HashMap<RepositoryId, Index>,
+    ids: HashMap<RepositoryName, RepositoryId>,
 }
 
 impl IndexMap {
     pub async fn new(main_pool: db::Pool, this_replica_id: ReplicaId) -> Result<Self> {
-        let mut indices = HashMap::new();
+        let mut values = HashMap::new();
         let mut ids = HashMap::new();
 
         sqlx::query("SELECT rowid, name, db_path FROM repositories")
@@ -33,7 +33,7 @@ impl IndexMap {
                 Ok::<_, Error>((row.get(0), row.get(1), index))
             })
             .try_for_each(|(id, name, index)| {
-                indices.insert(id, index);
+                values.insert(id, index);
                 ids.insert(name, id);
 
                 future::ready(Ok(()))
@@ -43,14 +43,14 @@ impl IndexMap {
         Ok(Self {
             main_pool,
             this_replica_id,
-            indices,
+            values,
             ids,
         })
     }
 
     pub async fn create(
         &mut self,
-        name: String,
+        name: RepositoryName,
         store: db::Store,
     ) -> Result<(RepositoryId, &Index)> {
         if self.ids.contains_key(&name) {
@@ -71,7 +71,7 @@ impl IndexMap {
         let index = Index::load(pool, self.this_replica_id).await?;
 
         let index = self
-            .indices
+            .values
             .entry(id)
             .and_modify(|_| unreachable!())
             .or_insert(index);
@@ -84,16 +84,32 @@ impl IndexMap {
     }
 
     pub async fn destroy(&mut self, id: RepositoryId) -> Result<()> {
+        // let
+
+        // let mut conn = self.main_pool.acquire().await?;
+
+        // let store = sqlx::query("SELECT db_path FROM repositories WHERE rowid = ?")
+        //     .bind(id)
+        //     .fetch_one(&mut conn)
+        //     .await?
+        //     .get(0);
+
+        // sqlx::query("DELETE FROM repositories WHERE rowid = ? LIMIT 1")
+        //     .bind(id)
+        //     .execute(&mut conn)
+        //     .await?;
+
+        // Ok(store)
         todo!()
     }
 
     pub fn get(&self, id: RepositoryId) -> Option<&Index> {
-        self.indices.get(&id)
+        self.values.get(&id)
     }
 
     pub fn lookup(&self, name: &str) -> Option<(RepositoryId, &Index)> {
         let id = self.ids.get(name)?;
-        let index = self.indices.get(id)?;
+        let index = self.values.get(id)?;
 
         Some((*id, index))
     }
@@ -101,22 +117,22 @@ impl IndexMap {
     pub fn iter(&self) -> Iter {
         Iter {
             ids: self.ids.iter(),
-            indices: &self.indices,
+            values: &self.values,
         }
     }
 }
 
 pub(crate) struct Iter<'a> {
-    ids: hash_map::Iter<'a, String, RepositoryId>,
-    indices: &'a HashMap<RepositoryId, Index>,
+    ids: hash_map::Iter<'a, RepositoryName, RepositoryId>,
+    values: &'a HashMap<RepositoryId, Index>,
 }
 
 impl<'a> Iterator for Iter<'a> {
-    type Item = (RepositoryId, &'a str, &'a Index);
+    type Item = (RepositoryId, &'a RepositoryName, &'a Index);
 
     fn next(&mut self) -> Option<Self::Item> {
         let (name, id) = self.ids.next()?;
-        let index = self.indices.get(id)?;
+        let index = self.values.get(id)?;
 
         Some((*id, name, index))
     }

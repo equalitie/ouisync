@@ -209,8 +209,8 @@ impl Inner {
                     .create_link(
                         self.index.clone(),
                         Local::new(RepositoryId::default()),
-                        Local::new("default".to_owned()),
-                        Remote::new("default".to_owned()),
+                        Local::new("default".into()),
+                        Remote::new("default".into()),
                     )
                     .await;
 

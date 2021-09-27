@@ -1,7 +1,11 @@
 mod index_map;
 mod manager;
+mod meta;
 
-pub(crate) use self::manager::{RepositoryId, RepositoryManager};
+pub(crate) use self::{
+    manager::RepositoryManager,
+    meta::{RepositoryId, RepositoryName},
+};
 
 use crate::{
     branch::Branch,

@@ -8,7 +8,7 @@ use crate::{
     error::Result,
     index::Index,
     replica_id::ReplicaId,
-    repository::RepositoryId,
+    repository::{RepositoryId, RepositoryName},
     scoped_task::ScopedJoinHandle,
     tagged::{Local, Remote},
 };
@@ -150,8 +150,8 @@ impl MessageBroker {
         &self,
         index: Index,
         local_id: Local<RepositoryId>,
-        local_name: Local<String>,
-        remote_name: Remote<String>,
+        local_name: Local<RepositoryName>,
+        remote_name: Remote<RepositoryName>,
     ) {
         self.send_command(Command::CreateLink {
             index,
@@ -187,8 +187,8 @@ struct Inner {
 
     // TODO: consider using LruCache instead of HashMap for these, to expire unrequited link
     //       requests.
-    pending_outgoing_links: HashMap<Local<String>, PendingOutgoingLink>,
-    pending_incoming_links: HashMap<Local<String>, PendingIncomingLink>,
+    pending_outgoing_links: HashMap<Local<RepositoryName>, PendingOutgoingLink>,
+    pending_incoming_links: HashMap<Local<RepositoryName>, PendingIncomingLink>,
 }
 
 impl Inner {
@@ -270,8 +270,8 @@ impl Inner {
         &mut self,
         index: Index,
         local_id: Local<RepositoryId>,
-        local_name: Local<String>,
-        remote_name: Remote<String>,
+        local_name: Local<RepositoryName>,
+        remote_name: Remote<RepositoryName>,
     ) -> bool {
         if self.links.contains_key(&local_id) {
             log::warn!(
@@ -320,7 +320,7 @@ impl Inner {
 
     async fn create_incoming_link(
         &mut self,
-        local_name: Local<String>,
+        local_name: Local<RepositoryName>,
         remote_id: Remote<RepositoryId>,
     ) {
         if let Some(pending) = self.pending_outgoing_links.remove(&local_name) {
@@ -427,8 +427,8 @@ pub(super) enum Command {
     CreateLink {
         index: Index,
         local_id: Local<RepositoryId>,
-        local_name: Local<String>,
-        remote_name: Remote<String>,
+        local_name: Local<RepositoryName>,
+        remote_name: Remote<RepositoryName>,
     },
     DestroyLink {
         local_id: Local<RepositoryId>,
