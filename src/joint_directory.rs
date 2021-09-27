@@ -697,7 +697,8 @@ impl<'a> Iterator for Merge<'a> {
 mod tests {
     use super::*;
     use crate::{
-        branch::Branch, crypto::Cryptor, db, index::BranchData, version_vector::VersionVector,
+        branch::Branch, crypto::Cryptor, db, index::BranchData, repository,
+        version_vector::VersionVector,
     };
     use assert_matches::assert_matches;
     use futures_util::future;
@@ -1434,7 +1435,7 @@ mod tests {
 
     // Useful for debugging non-deterministic failures.
     async fn setup_with_rng(rng: StdRng, branch_count: usize) -> Vec<Branch> {
-        let pool = db::init(db::Store::Memory).await.unwrap();
+        let pool = repository::init(db::Store::Memory).await.unwrap();
         let pool = &pool;
 
         let ids = rng.sample_iter(Standard).take(branch_count);

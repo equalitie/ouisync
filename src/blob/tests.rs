@@ -1,6 +1,6 @@
 use super::*;
-use crate::block;
 use crate::index::BranchData;
+use crate::{block, repository};
 use crate::{crypto::SecretKey, error::Error, test_utils};
 use assert_matches::assert_matches;
 use proptest::collection::vec;
@@ -504,5 +504,5 @@ fn random_head_locator<R: Rng>(rng: &mut R) -> Locator {
 }
 
 async fn init_db() -> db::Pool {
-    db::init(db::Store::Memory).await.unwrap()
+    repository::init(db::Store::Memory).await.unwrap()
 }

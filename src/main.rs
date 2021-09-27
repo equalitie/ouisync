@@ -3,7 +3,7 @@ mod virtual_filesystem;
 
 use self::options::Options;
 use anyhow::Result;
-use ouisync::{db, Cryptor, Session};
+use ouisync::{Cryptor, Session, Store};
 use structopt::StructOpt;
 use tokio::signal;
 
@@ -14,7 +14,7 @@ async fn main() -> Result<()> {
     env_logger::init();
 
     let session = Session::new(
-        db::Store::File(options.db_path()?),
+        Store::File(options.db_path()?),
         Cryptor::Null,
         options.network,
     )

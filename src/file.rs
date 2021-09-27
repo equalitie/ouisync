@@ -150,7 +150,7 @@ impl File {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{crypto::Cryptor, db, index::BranchData};
+    use crate::{crypto::Cryptor, db, index::BranchData, repository};
     use std::sync::Arc;
 
     #[tokio::test(flavor = "multi_thread")]
@@ -252,7 +252,7 @@ mod test {
     }
 
     async fn setup() -> Branch {
-        let pool = db::init(db::Store::Memory).await.unwrap();
+        let pool = repository::init(db::Store::Memory).await.unwrap();
         create_branch(pool).await
     }
 

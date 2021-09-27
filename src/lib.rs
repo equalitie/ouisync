@@ -2,7 +2,6 @@
 mod macros;
 
 pub mod crypto;
-pub mod db;
 pub mod debug_printer;
 pub mod this_replica;
 
@@ -10,6 +9,7 @@ mod blob;
 mod blob_id;
 mod block;
 mod branch;
+mod db;
 mod directory;
 mod error;
 mod ffi;
@@ -35,6 +35,7 @@ mod versioned_file_name;
 
 pub use self::{
     crypto::Cryptor,
+    db::Store,
     directory::{Directory, EntryRef},
     error::{Error, Result},
     file::File,
@@ -44,6 +45,6 @@ pub use self::{
     locator::Locator,
     network::{Network, NetworkOptions},
     replica_id::ReplicaId,
-    repository::Repository,
+    repository::{init as init_repository, Repository},
     session::Session,
 };

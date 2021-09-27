@@ -25,7 +25,9 @@ impl Session {
         cryptor: Cryptor,
         network_options: NetworkOptions,
     ) -> Result<Self> {
-        let pool = db::init(db_store).await?;
+        let pool = db::open(db_store).await?;
+        this_replica::init(&pool).await?;
+
         let this_replica_id = this_replica::get_or_create_id(&pool).await?;
         let index = Index::load(pool.clone(), this_replica_id).await?;
         let network = Network::new(index.clone(), network_options)

@@ -1,7 +1,6 @@
 use crate::{
-    block,
     error::{Error, Result},
-    index, path, this_replica,
+    path,
 };
 use sqlx::{
     encode::IsNull,
@@ -79,8 +78,8 @@ impl<'q> Encode<'q, Sqlite> for &'q Store {
     }
 }
 
-/// Creates the database unless it already exsits and establish a connection to it.
-pub async fn init(store: Store) -> Result<Pool> {
+/// Opens a connection to the specified database. Creates the database if it doesn't already exist.
+pub(crate) async fn open(store: Store) -> Result<Pool> {
     let options = match store {
         Store::File(path) => {
             if let Some(dir) = path.parent() {
@@ -96,7 +95,7 @@ pub async fn init(store: Store) -> Result<Pool> {
         Store::Memory => SqliteConnectOptions::from_str(MEMORY).expect("invalid db uri"),
     };
 
-    let pool = PoolOptions::new()
+    PoolOptions::new()
         // HACK: Using only one connection turns the pool effectively into a mutex over a single
         // connection. This is a heavy-handed fix that prevents the "table is locked" errors that
         // sometimes happen when multiple tasks try to access the same table and at least one of
@@ -106,17 +105,13 @@ pub async fn init(store: Store) -> Result<Pool> {
         .max_connections(1)
         .connect_with(options)
         .await
-        .map_err(Error::ConnectToDb)?;
-
-    create_schema(&pool).await?;
-
-    Ok(pool)
+        .map_err(Error::ConnectToDb)
 }
 
 /// Delete the database identified by the given `store`. It's unspecified what happens when there
 /// are still open connection to the database (it might be OS-dependent) so it's best to make sure
 /// they are all closed before this function is called.
-pub async fn delete(store: Store) -> Result<()> {
+pub(crate) async fn delete(store: Store) -> Result<()> {
     match store {
         Store::File(path) => {
             fs::remove_file(&path).await.map_err(Error::DeleteDb)?;
@@ -138,23 +133,23 @@ pub async fn delete(store: Store) -> Result<()> {
     Ok(())
 }
 
-// Create the database schema
-pub async fn create_schema(pool: &Pool) -> Result<()> {
-    block::init(pool).await?;
-    index::init(pool).await?;
-    this_replica::init(pool).await?;
-    Ok(())
-}
+// // Create the database schema
+// pub async fn create_schema(pool: &Pool) -> Result<()> {
+//     block::init(pool).await?;
+//     index::init(pool).await?;
+//     this_replica::init(pool).await?;
+//     Ok(())
+// }
 
 // Explicit cast from `i64` to `u64` to work around the lack of native `u64` support in the sqlx
 // crate.
-pub const fn decode_u64(i: i64) -> u64 {
+pub(crate) const fn decode_u64(i: i64) -> u64 {
     i as u64
 }
 
 // Explicit cast from `u64` to `i64` to work around the lack of native `u64` support in the sqlx
 // crate.
-pub const fn encode_u64(u: u64) -> i64 {
+pub(crate) const fn encode_u64(u: u64) -> i64 {
     u as i64
 }
 

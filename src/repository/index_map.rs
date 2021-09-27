@@ -30,8 +30,8 @@ impl IndexMap {
                 let name: RepositoryName = row.get(1);
 
                 let store = row.get(2);
-                let pool = db::init(store).await?;
-                let index = Index::load(pool, this_replica_id).await?;
+                let repo_pool = super::init(store).await?;
+                let index = Index::load(repo_pool, this_replica_id).await?;
 
                 Ok::<_, Error>((id, name, index))
             })
@@ -76,8 +76,8 @@ impl IndexMap {
 
         let id = RepositoryId(query_result.last_insert_rowid() as _);
 
-        let pool = db::init(store).await?;
-        let index = Index::load(pool, self.this_replica_id).await?;
+        let repo_pool = super::init(store).await?;
+        let index = Index::load(repo_pool, self.this_replica_id).await?;
         let value = Value {
             index,
             name: name.clone(),

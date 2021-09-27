@@ -10,7 +10,7 @@ use crate::{
     db,
     index::{node_test_utils::Snapshot, Index, RootNode, Summary},
     replica_id::ReplicaId,
-    repository::RepositoryId,
+    repository::{self, RepositoryId},
     store,
     tagged::Remote,
     test_utils,
@@ -124,7 +124,7 @@ async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed:
 }
 
 async fn create_index<R: Rng>(rng: &mut R) -> Index {
-    let db = db::init(db::Store::Memory).await.unwrap();
+    let db = repository::init(db::Store::Memory).await.unwrap();
     let id = rng.gen();
 
     Index::load(db, id).await.unwrap()

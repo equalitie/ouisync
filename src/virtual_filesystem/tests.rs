@@ -1,5 +1,5 @@
 use super::*;
-use ouisync::{db, Cryptor, Index};
+use ouisync::{init_repository, Cryptor, Index, Store};
 use proptest::prelude::*;
 use rand::{self, distributions::Standard, rngs::StdRng, Rng, SeedableRng};
 use std::{collections::HashMap, ffi::OsString, fs::Metadata, future::Future, io::ErrorKind};
@@ -217,7 +217,7 @@ async fn setup() -> (MountGuard, TempDir) {
     // static LOG_INIT: Once = Once::new();
     // LOG_INIT.call_once(env_logger::init);
 
-    let pool = db::init(db::Store::Memory).await.unwrap();
+    let pool = init_repository(Store::Memory).await.unwrap();
     let index = Index::load(pool, rand::random()).await.unwrap();
 
     let repo = Repository::new(index, Cryptor::Null, true);

@@ -8,13 +8,15 @@ pub(crate) use self::{
 };
 
 use crate::{
+    block,
     branch::Branch,
     crypto::Cryptor,
+    db,
     debug_printer::DebugPrinter,
     directory::Directory,
     error::{Error, Result},
     file::File,
-    index::{BranchData, Index, Subscription},
+    index::{self, BranchData, Index, Subscription},
     joint_directory::{JointDirectory, JointEntryRef},
     joint_entry::JointEntryType,
     path,
@@ -26,6 +28,16 @@ use futures_util::{future, stream::FuturesUnordered, StreamExt};
 use log::Level;
 use std::{collections::HashMap, iter, sync::Arc};
 use tokio::{select, sync::Mutex, task};
+
+/// Initialize the repository database.
+pub async fn init(store: db::Store) -> Result<db::Pool> {
+    let pool = db::open(store).await?;
+
+    block::init(&pool).await?;
+    index::init(&pool).await?;
+
+    Ok(pool)
+}
 
 pub struct Repository {
     shared: Arc<Shared>,
@@ -455,11 +467,12 @@ async fn merge_branches(local: Branch, remote: Branch) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{db, index::RootNode};
+    use crate::{db, index::RootNode, repository};
 
     #[tokio::test(flavor = "multi_thread")]
     async fn root_directory_always_exists() {
-        let pool = db::init(db::Store::Memory).await.unwrap();
+        let pool = repository::init(db::Store::Memory).await.unwrap();
+
         let replica_id = rand::random();
         let index = Index::load(pool, replica_id).await.unwrap();
         let repo = Repository::new(index, Cryptor::Null, false);
@@ -469,7 +482,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn merge() {
-        let pool = db::init(db::Store::Memory).await.unwrap();
+        let pool = repository::init(db::Store::Memory).await.unwrap();
         let local_id = rand::random();
 
         let index = Index::load(pool.clone(), local_id).await.unwrap();

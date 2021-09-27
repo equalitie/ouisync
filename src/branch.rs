@@ -104,7 +104,7 @@ impl Branch {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{db, index::Index, locator::Locator};
+    use crate::{db, index::Index, locator::Locator, repository};
 
     #[tokio::test(flavor = "multi_thread")]
     async fn ensure_root_directory_exists() {
@@ -133,7 +133,8 @@ mod tests {
     }
 
     async fn setup() -> Branch {
-        let pool = db::init(db::Store::Memory).await.unwrap();
+        let pool = repository::init(db::Store::Memory).await.unwrap();
+
         let replica_id = rand::random();
         let index = Index::load(pool.clone(), replica_id).await.unwrap();
         let branch = Branch::new(pool, index.branches().await.local().clone(), Cryptor::Null);
