@@ -5,31 +5,14 @@ use crate::{
     replica_id::ReplicaId,
 };
 use serde::{Deserialize, Serialize};
-use sqlx::{
-    error::BoxDynError,
-    sqlite::{Sqlite, SqliteTypeInfo, SqliteValueRef},
-    Decode, Type,
-};
 
 /// Identifier of a repository unique only within a single replica. To obtain a globally unique
 /// identifier, it needs to be paired with a `ReplicaId`.
 // TODO: remove the `Default` impl, instead provide a test-only `dummy` constructor.
-#[derive(Default, Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize, Debug)]
-#[repr(transparent)]
+#[derive(Default, Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize, Debug, sqlx::Type)]
+#[serde(transparent)]
+#[sqlx(transparent)]
 pub(crate) struct RepositoryId(pub(super) u32);
-
-impl Type<Sqlite> for RepositoryId {
-    fn type_info() -> SqliteTypeInfo {
-        u32::type_info()
-    }
-}
-
-impl<'r> Decode<'r, Sqlite> for RepositoryId {
-    fn decode(value: SqliteValueRef<'r>) -> Result<Self, BoxDynError> {
-        let num = u32::decode(value)?;
-        Ok(Self(num))
-    }
-}
 
 pub(crate) struct RepositoryManager {}
 
