@@ -4,7 +4,7 @@ use super::{
     session,
     utils::{self, Port, SharedHandle, UniqueHandle},
 };
-use crate::{error::Error, joint_entry::JointEntryType, path::*, repository::Repository};
+use crate::{error::Error, joint_entry::JointEntryType, path, repository::Repository};
 use std::{os::raw::c_char, sync::Arc};
 
 pub const ENTRY_TYPE_INVALID: u8 = 0;
@@ -74,8 +74,8 @@ pub unsafe extern "C" fn repository_move_entry(
         let dst = utils::ptr_to_utf8_path_buf(dst)?;
 
         ctx.spawn(async move {
-            let (src_dir, src_name) = src.decompose().ok_or(Error::EntryNotFound)?;
-            let (dst_dir, dst_name) = dst.decompose().ok_or(Error::EntryNotFound)?;
+            let (src_dir, src_name) = path::utf8::decompose(&src).ok_or(Error::EntryNotFound)?;
+            let (dst_dir, dst_name) = path::utf8::decompose(&dst).ok_or(Error::EntryNotFound)?;
 
             repo.move_entry(src_dir, src_name, dst_dir, dst_name).await
         })

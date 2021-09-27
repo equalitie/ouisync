@@ -1,9 +1,7 @@
 use crate::{
     block,
     error::{Error, Result},
-    index,
-    path::*,
-    this_replica,
+    index, path, this_replica,
 };
 use sqlx::{
     encode::IsNull,
@@ -125,7 +123,7 @@ pub async fn delete(store: Store) -> Result<()> {
 
             // Also remove the write-ahead log and shared memory files if they exist.
             for suffix in &["-wal", "-shm"] {
-                match fs::remove_file(path.append(suffix)).await {
+                match fs::remove_file(path::os::append(&path, suffix)).await {
                     Ok(()) => {}
                     Err(error) if error.kind() == io::ErrorKind::NotFound => {}
                     Err(error) => return Err(Error::DeleteDb(error)),

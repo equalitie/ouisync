@@ -17,7 +17,7 @@ use crate::{
     index::{BranchData, Index, Subscription},
     joint_directory::{JointDirectory, JointEntryRef},
     joint_entry::JointEntryType,
-    path::*,
+    path,
     scoped_task::ScopedJoinHandle,
     ReplicaId,
 };
@@ -61,7 +61,7 @@ impl Repository {
     /// Looks up an entry by its path. The path must be relative to the repository root.
     /// If the entry exists, returns its `JointEntryType`, otherwise returns `EntryNotFound`.
     pub async fn lookup_type<P: AsRef<Utf8Path>>(&self, path: P) -> Result<JointEntryType> {
-        match path.as_ref().decompose() {
+        match path::utf8::decompose(path.as_ref()) {
             Some((parent, name)) => {
                 let parent = self.open_directory(parent).await?;
                 let parent = parent.read().await;
@@ -73,7 +73,7 @@ impl Repository {
 
     /// Opens a file at the given path (relative to the repository root)
     pub async fn open_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<File> {
-        let (parent, name) = path.as_ref().decompose().ok_or(Error::EntryIsDirectory)?;
+        let (parent, name) = path::utf8::decompose(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
 
         self.open_directory(parent)
             .await?
@@ -91,7 +91,7 @@ impl Repository {
         path: P,
         branch_id: &ReplicaId,
     ) -> Result<File> {
-        let (parent, name) = path.as_ref().decompose().ok_or(Error::EntryIsDirectory)?;
+        let (parent, name) = path::utf8::decompose(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
         self.open_directory(parent)
             .await?
             .read()
@@ -124,7 +124,7 @@ impl Repository {
 
     /// Removes (delete) the file at the given path. Returns the parent directory.
     pub async fn remove_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<JointDirectory> {
-        let (parent, name) = path.as_ref().decompose().ok_or(Error::EntryIsDirectory)?;
+        let (parent, name) = path::utf8::decompose(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
         let mut dir = self.open_directory(parent).await?;
         dir.remove_file(name).await?;
         Ok(dir)
@@ -133,10 +133,8 @@ impl Repository {
     /// Removes the directory at the given path. The directory must be empty. Returns the parent
     /// directory.
     pub async fn remove_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<JointDirectory> {
-        let (parent, name) = path
-            .as_ref()
-            .decompose()
-            .ok_or(Error::OperationNotSupported)?;
+        let (parent, name) =
+            path::utf8::decompose(path.as_ref()).ok_or(Error::OperationNotSupported)?;
         let parent = self.open_directory(parent).await?;
         // TODO: Currently only removing directories from the local branch is supported. To
         // implement removing a directory from another branches we need to introduce tombstones.

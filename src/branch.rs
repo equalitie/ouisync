@@ -6,8 +6,7 @@ use crate::{
     error::{Error, Result},
     file::File,
     index::BranchData,
-    path::*,
-    ReplicaId,
+    path, ReplicaId,
 };
 use camino::{Utf8Component, Utf8Path};
 use std::sync::Arc;
@@ -89,7 +88,7 @@ impl Branch {
     }
 
     pub(crate) async fn ensure_file_exists(&self, path: &Utf8Path) -> Result<File> {
-        let (parent, name) = path.decompose().ok_or(Error::EntryIsDirectory)?;
+        let (parent, name) = path::utf8::decompose(path).ok_or(Error::EntryIsDirectory)?;
         let dir = self.ensure_directory_exists(parent).await?;
         dir.create_file(name.to_string()).await
     }
