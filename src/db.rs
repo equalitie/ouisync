@@ -27,6 +27,9 @@ pub type Connection = sqlx::pool::PoolConnection<Sqlite>;
 pub trait Executor<'a>: sqlx::Executor<'a, Database = Sqlite> {}
 impl<'a, T> Executor<'a> for T where T: sqlx::Executor<'a, Database = Sqlite> {}
 
+// URI of a memory-only db.
+const MEMORY: &str = ":memory:";
+
 /// Database store.
 #[derive(Debug)]
 pub enum Store {
@@ -40,7 +43,7 @@ impl FromStr for Store {
     type Err = Infallible;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s == ":memory:" {
+        if s == MEMORY {
             Ok(Self::Memory)
         } else {
             Ok(Self::File(s.into()))
@@ -71,7 +74,7 @@ impl<'q> Encode<'q, Sqlite> for &'q Store {
                     IsNull::Yes
                 }
             }
-            Store::Memory => ":memory".encode_by_ref(args),
+            Store::Memory => MEMORY.encode_by_ref(args),
         }
     }
 }
@@ -90,7 +93,7 @@ pub async fn init(store: Store) -> Result<Pool> {
                 .filename(path)
                 .create_if_missing(true)
         }
-        Store::Memory => SqliteConnectOptions::from_str(":memory:").expect("invalid db uri"),
+        Store::Memory => SqliteConnectOptions::from_str(MEMORY).expect("invalid db uri"),
     };
 
     let pool = PoolOptions::new()
@@ -108,6 +111,25 @@ pub async fn init(store: Store) -> Result<Pool> {
     create_schema(&pool).await?;
 
     Ok(pool)
+}
+
+/// Delete the database identified by the given `store`. It's unspecified what happens when there
+/// are still open connection to the database (it might be OS-dependent) so it's best to make sure
+/// they are all closed before this function is called.
+pub async fn delete(store: Store) -> Result<()> {
+    match store {
+        Store::File(path) => {
+            fs::remove_file(&path).await.map_err(Error::DeleteDb)?;
+
+            // Also remove the write-ahead log and shared memory files
+            // fs::remove_file(append)
+        }
+        Store::Memory => {
+            // memory db should be automatically dropped when the last connection is closed.
+        }
+    }
+
+    Ok(())
 }
 
 // Create the database schema

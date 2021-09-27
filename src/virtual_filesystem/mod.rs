@@ -918,6 +918,7 @@ fn make_file_attr(inode: Inode, entry_type: JointEntryType, len: u64) -> FileAtt
 fn to_error_code(error: &Error) -> libc::c_int {
     match error {
         Error::CreateDbDirectory(_)
+        | Error::DeleteDb(_)
         | Error::ConnectToDb(_)
         | Error::CreateDbSchema(_)
         | Error::EntryIsTombstone

@@ -13,7 +13,7 @@ use std::collections::{hash_map, HashMap};
 pub(crate) struct IndexMap {
     main_pool: db::Pool,
     this_replica_id: ReplicaId,
-    values: HashMap<RepositoryId, Index>,
+    values: HashMap<RepositoryId, Value>,
     ids: HashMap<RepositoryName, RepositoryId>,
 }
 
@@ -26,14 +26,23 @@ impl IndexMap {
             .fetch(&main_pool)
             .err_into()
             .and_then(|row| async move {
+                let id: RepositoryId = row.get(0);
+                let name: RepositoryName = row.get(1);
+
                 let store = row.get(2);
                 let pool = db::init(store).await?;
                 let index = Index::load(pool, this_replica_id).await?;
 
-                Ok::<_, Error>((row.get(0), row.get(1), index))
+                Ok::<_, Error>((id, name, index))
             })
             .try_for_each(|(id, name, index)| {
-                values.insert(id, index);
+                values.insert(
+                    id,
+                    Value {
+                        index,
+                        name: name.clone(),
+                    },
+                );
                 ids.insert(name, id);
 
                 future::ready(Ok(()))
@@ -69,12 +78,17 @@ impl IndexMap {
 
         let pool = db::init(store).await?;
         let index = Index::load(pool, self.this_replica_id).await?;
+        let value = Value {
+            index,
+            name: name.clone(),
+        };
 
-        let index = self
+        let index = &self
             .values
             .entry(id)
             .and_modify(|_| unreachable!())
-            .or_insert(index);
+            .or_insert(value)
+            .index;
 
         self.ids.insert(name, id);
 
@@ -84,34 +98,40 @@ impl IndexMap {
     }
 
     pub async fn destroy(&mut self, id: RepositoryId) -> Result<()> {
-        // let
+        let mut tx = self.main_pool.begin().await?;
 
-        // let mut conn = self.main_pool.acquire().await?;
+        let store = sqlx::query("SELECT db_path FROM repositories WHERE rowid = ?")
+            .bind(id)
+            .fetch_one(&mut tx)
+            .await?
+            .get(0);
 
-        // let store = sqlx::query("SELECT db_path FROM repositories WHERE rowid = ?")
-        //     .bind(id)
-        //     .fetch_one(&mut conn)
-        //     .await?
-        //     .get(0);
+        sqlx::query("DELETE FROM repositories WHERE rowid = ? LIMIT 1")
+            .bind(id)
+            .execute(&mut tx)
+            .await?;
 
-        // sqlx::query("DELETE FROM repositories WHERE rowid = ? LIMIT 1")
-        //     .bind(id)
-        //     .execute(&mut conn)
-        //     .await?;
+        let value = self.values.remove(&id).ok_or(Error::EntryNotFound)?;
+        self.ids.remove(&value.name);
 
-        // Ok(store)
-        todo!()
+        value.index.pool.close().await;
+
+        db::delete(store).await?;
+
+        tx.commit().await?;
+
+        Ok(())
     }
 
     pub fn get(&self, id: RepositoryId) -> Option<&Index> {
-        self.values.get(&id)
+        self.values.get(&id).map(|value| &value.index)
     }
 
-    pub fn lookup(&self, name: &str) -> Option<(RepositoryId, &Index)> {
+    pub fn lookup(&self, name: &str) -> Option<(RepositoryId, &RepositoryName, &Index)> {
         let id = self.ids.get(name)?;
-        let index = self.values.get(id)?;
+        let value = &self.values.get(id)?;
 
-        Some((*id, index))
+        Some((*id, &value.name, &value.index))
     }
 
     pub fn iter(&self) -> Iter {
@@ -124,7 +144,7 @@ impl IndexMap {
 
 pub(crate) struct Iter<'a> {
     ids: hash_map::Iter<'a, RepositoryName, RepositoryId>,
-    values: &'a HashMap<RepositoryId, Index>,
+    values: &'a HashMap<RepositoryId, Value>,
 }
 
 impl<'a> Iterator for Iter<'a> {
@@ -132,7 +152,7 @@ impl<'a> Iterator for Iter<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         let (name, id) = self.ids.next()?;
-        let index = self.values.get(id)?;
+        let index = &self.values.get(id)?.index;
 
         Some((*id, name, index))
     }
@@ -145,4 +165,9 @@ impl<'a> IntoIterator for &'a IndexMap {
     fn into_iter(self) -> Self::IntoIter {
         self.iter()
     }
+}
+
+struct Value {
+    index: Index,
+    name: RepositoryName,
 }
