@@ -39,6 +39,26 @@ pub enum Store {
     Memory,
 }
 
+impl From<String> for Store {
+    fn from(string: String) -> Self {
+        if string == MEMORY {
+            Self::Memory
+        } else {
+            Self::File(PathBuf::from(string))
+        }
+    }
+}
+
+impl From<PathBuf> for Store {
+    fn from(path: PathBuf) -> Self {
+        if path.to_str() == Some(MEMORY) {
+            Self::Memory
+        } else {
+            Self::File(path)
+        }
+    }
+}
+
 impl FromStr for Store {
     type Err = Infallible;
 

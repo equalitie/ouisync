@@ -14,17 +14,17 @@ async fn main() -> Result<()> {
     env_logger::init();
 
     let session = Session::new(
-        Store::File(options.db_path()?),
+        Store::from(options.config_path()?),
         Cryptor::Null,
         options.network,
     )
     .await?;
 
-    let _mount_guard = virtual_filesystem::mount(
-        tokio::runtime::Handle::current(),
-        session.open_repository(!options.disable_merger),
-        options.mount_dir,
-    )?;
+    // let _mount_guard = virtual_filesystem::mount(
+    //     tokio::runtime::Handle::current(),
+    //     session.open_repository(!options.disable_merger),
+    //     options.mount_dir,
+    // )?;
 
     if options.print_ready_message {
         println!("Listening on port {}", session.local_addr().port());
