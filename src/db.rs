@@ -1,7 +1,9 @@
 use crate::{
     block,
     error::{Error, Result},
-    index, this_replica,
+    index,
+    path::*,
+    this_replica,
 };
 use sqlx::{
     encode::IsNull,
@@ -10,7 +12,7 @@ use sqlx::{
     sqlite::{Sqlite, SqliteArgumentValue, SqliteConnectOptions, SqliteTypeInfo, SqliteValueRef},
     Decode, Encode, SqlitePool, Type,
 };
-use std::{convert::Infallible, path::PathBuf, str::FromStr};
+use std::{convert::Infallible, io, path::PathBuf, str::FromStr};
 use tokio::fs;
 
 /// Database connection pool.
@@ -121,11 +123,17 @@ pub async fn delete(store: Store) -> Result<()> {
         Store::File(path) => {
             fs::remove_file(&path).await.map_err(Error::DeleteDb)?;
 
-            // Also remove the write-ahead log and shared memory files
-            // fs::remove_file(append)
+            // Also remove the write-ahead log and shared memory files if they exist.
+            for suffix in &["-wal", "-shm"] {
+                match fs::remove_file(path.append(suffix)).await {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(Error::DeleteDb(error)),
+                }
+            }
         }
         Store::Memory => {
-            // memory db should be automatically dropped when the last connection is closed.
+            // memory db is automatically dropped when the last connection is closed.
         }
     }
 
