@@ -45,6 +45,8 @@ pub use self::{
     locator::Locator,
     network::{Network, NetworkOptions},
     replica_id::ReplicaId,
-    repository::{init as init_repository, Repository},
+    // This is currently exposed only for tests.
+    repository::open_db as open_repository_db,
+    repository::Repository,
     session::Session,
 };

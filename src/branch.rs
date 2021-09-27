@@ -133,7 +133,7 @@ mod tests {
     }
 
     async fn setup() -> Branch {
-        let pool = repository::init(db::Store::Memory).await.unwrap();
+        let pool = repository::open_db(db::Store::Memory).await.unwrap();
 
         let replica_id = rand::random();
         let index = Index::load(pool.clone(), replica_id).await.unwrap();

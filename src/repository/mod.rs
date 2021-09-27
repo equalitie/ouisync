@@ -29,8 +29,8 @@ use log::Level;
 use std::{collections::HashMap, iter, sync::Arc};
 use tokio::{select, sync::Mutex, task};
 
-/// Initialize the repository database.
-pub async fn init(store: db::Store) -> Result<db::Pool> {
+/// Opens the repository database.
+pub async fn open_db(store: db::Store) -> Result<db::Pool> {
     let pool = db::open(store).await?;
 
     block::init(&pool).await?;
@@ -471,7 +471,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn root_directory_always_exists() {
-        let pool = repository::init(db::Store::Memory).await.unwrap();
+        let pool = repository::open_db(db::Store::Memory).await.unwrap();
 
         let replica_id = rand::random();
         let index = Index::load(pool, replica_id).await.unwrap();
@@ -482,7 +482,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn merge() {
-        let pool = repository::init(db::Store::Memory).await.unwrap();
+        let pool = repository::open_db(db::Store::Memory).await.unwrap();
         let local_id = rand::random();
 
         let index = Index::load(pool.clone(), local_id).await.unwrap();
