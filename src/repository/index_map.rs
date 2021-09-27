@@ -3,7 +3,7 @@ use crate::{
     db,
     error::{Error, Result},
     index::Index,
-    replica_id::ReplicaId,
+    this_replica,
 };
 use futures_util::{future, TryStreamExt};
 use sqlx::Row;
@@ -12,13 +12,14 @@ use std::collections::{hash_map, HashMap};
 /// Map of repository indices.
 pub(crate) struct IndexMap {
     pool: db::Pool,
-    this_replica_id: ReplicaId,
     values: HashMap<RepositoryId, Value>,
     ids: HashMap<RepositoryName, RepositoryId>,
 }
 
 impl IndexMap {
-    pub async fn new(pool: db::Pool, this_replica_id: ReplicaId) -> Result<Self> {
+    pub async fn new(pool: db::Pool) -> Result<Self> {
+        let this_replica_id = this_replica::get_or_create_id(&pool).await?;
+
         let mut values = HashMap::new();
         let mut ids = HashMap::new();
 
@@ -49,12 +50,7 @@ impl IndexMap {
             })
             .await?;
 
-        Ok(Self {
-            pool,
-            this_replica_id,
-            values,
-            ids,
-        })
+        Ok(Self { pool, values, ids })
     }
 
     pub async fn create(
@@ -75,9 +71,10 @@ impl IndexMap {
             .await?;
 
         let id = RepositoryId(query_result.last_insert_rowid() as _);
+        let this_replica_id = this_replica::get_or_create_id(&mut tx).await?;
 
         let repo_pool = super::open_db(store).await?;
-        let index = Index::load(repo_pool, self.this_replica_id).await?;
+        let index = Index::load(repo_pool, this_replica_id).await?;
         let value = Value {
             index,
             name: name.clone(),
