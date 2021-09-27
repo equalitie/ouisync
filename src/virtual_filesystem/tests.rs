@@ -1,5 +1,5 @@
 use super::*;
-use ouisync::{open_repository_db, Cryptor, Index, Store};
+use ouisync::{Cryptor, Repository, Store};
 use proptest::prelude::*;
 use rand::{self, distributions::Standard, rngs::StdRng, Rng, SeedableRng};
 use std::{collections::HashMap, ffi::OsString, fs::Metadata, future::Future, io::ErrorKind};
@@ -217,10 +217,9 @@ async fn setup() -> (MountGuard, TempDir) {
     // static LOG_INIT: Once = Once::new();
     // LOG_INIT.call_once(env_logger::init);
 
-    let pool = open_repository_db(Store::Memory).await.unwrap();
-    let index = Index::load(pool, rand::random()).await.unwrap();
-
-    let repo = Repository::new(index, Cryptor::Null, true);
+    let repo = Repository::create(Store::Memory, rand::random(), Cryptor::Null, true)
+        .await
+        .unwrap();
     let mount_dir = tempdir().unwrap();
     let guard = super::mount(tokio::runtime::Handle::current(), repo, mount_dir.path()).unwrap();
 

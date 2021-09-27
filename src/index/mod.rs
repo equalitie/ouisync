@@ -36,7 +36,7 @@ use tokio::{
 type SnapshotId = u32;
 
 #[derive(Clone)]
-pub struct Index {
+pub(crate) struct Index {
     pub pool: db::Pool,
     pub this_replica_id: ReplicaId,
     shared: Arc<Shared>,
@@ -57,16 +57,16 @@ impl Index {
         })
     }
 
-    pub(crate) fn this_replica_id(&self) -> &ReplicaId {
+    pub fn this_replica_id(&self) -> &ReplicaId {
         &self.this_replica_id
     }
 
-    pub(crate) async fn branches(&self) -> RwLockReadGuard<'_, Branches> {
+    pub async fn branches(&self) -> RwLockReadGuard<'_, Branches> {
         self.shared.branches.read().await
     }
 
     /// Subscribe to change notification from all current and future branches.
-    pub(crate) fn subscribe(&self) -> Subscription {
+    pub fn subscribe(&self) -> Subscription {
         Subscription {
             shared: self.shared.clone(),
             branch_changed_rxs: vec![],
@@ -77,7 +77,7 @@ impl Index {
 
     /// Notify all tasks waiting for changes on the specified branches.
     /// See also [`BranchData::subscribe`].
-    pub(crate) async fn notify_branches_changed(&self, replica_ids: &HashSet<ReplicaId>) {
+    pub async fn notify_branches_changed(&self, replica_ids: &HashSet<ReplicaId>) {
         // Avoid the read lock
         if replica_ids.is_empty() {
             return;
@@ -97,7 +97,7 @@ impl Index {
     /// # Panics
     ///
     /// Panics if `replica_id` identifies this replica instead of a remote one.
-    pub(crate) async fn receive_root_node(
+    pub async fn receive_root_node(
         &self,
         replica_id: &ReplicaId,
         versions: VersionVector,
@@ -134,7 +134,7 @@ impl Index {
 
     /// Receive inner nodes from other replica and store them into the db.
     /// Returns hashes of those nodes that were more up to date than the locally stored ones.
-    pub(crate) async fn receive_inner_nodes(
+    pub async fn receive_inner_nodes(
         &self,
         parent_hash: Hash,
         inner_layer: usize,
@@ -157,7 +157,7 @@ impl Index {
 
     /// Receive leaf nodes from other replica and store them into the db.
     /// Returns the ids of the blocks that the remote replica has but the local one has not.
-    pub(crate) async fn receive_leaf_nodes(
+    pub async fn receive_leaf_nodes(
         &self,
         parent_hash: Hash,
         nodes: LeafNodeSet,
@@ -349,7 +349,7 @@ impl Branches {
 }
 
 /// Handle to receive change notification from index.
-pub struct Subscription {
+pub(crate) struct Subscription {
     shared: Arc<Shared>,
     branch_changed_rxs: Vec<(ReplicaId, watch::Receiver<()>)>,
     branch_created_rx: watch::Receiver<()>,
@@ -450,7 +450,7 @@ async fn load_remote_branches(
 }
 
 /// Initializes the index. Creates the required database schema unless already exists.
-pub async fn init(pool: &db::Pool) -> Result<(), Error> {
+pub(crate) async fn init(pool: &db::Pool) -> Result<(), Error> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS snapshot_root_nodes (
              snapshot_id             INTEGER PRIMARY KEY,

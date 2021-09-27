@@ -39,14 +39,11 @@ pub use self::{
     directory::{Directory, EntryRef},
     error::{Error, Result},
     file::File,
-    index::Index,
     joint_directory::{JointDirectory, JointEntryRef},
     joint_entry::{JointEntry, JointEntryType},
     locator::Locator,
-    network::{Network, NetworkOptions},
+    network::NetworkOptions,
     replica_id::ReplicaId,
-    // This is currently exposed only for tests.
-    repository::open_db as open_repository_db,
     repository::Repository,
     session::Session,
 };

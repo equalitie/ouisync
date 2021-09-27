@@ -66,13 +66,13 @@ impl Default for NetworkOptions {
     }
 }
 
-pub struct Network {
+pub(crate) struct Network {
     _tasks: ScopedTaskSet,
     local_addr: SocketAddr,
 }
 
 impl Network {
-    pub async fn new(index: Index, options: NetworkOptions) -> io::Result<Self> {
+    pub(crate) async fn new(index: Index, options: NetworkOptions) -> io::Result<Self> {
         let tasks = ScopedTaskSet::default();
 
         let listener = TcpListener::bind(options.listen_addr()).await?;

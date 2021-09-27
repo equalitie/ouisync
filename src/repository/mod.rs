@@ -45,7 +45,7 @@ pub struct Repository {
 }
 
 impl Repository {
-    pub fn new(index: Index, cryptor: Cryptor, enable_merger: bool) -> Self {
+    pub(crate) fn new(index: Index, cryptor: Cryptor, enable_merger: bool) -> Self {
         let shared = Arc::new(Shared {
             index,
             cryptor,
@@ -64,6 +64,19 @@ impl Repository {
             shared,
             _merge_handle: merge_handle,
         }
+    }
+
+    /// Create new repository with the given database store.
+    pub async fn create(
+        store: db::Store,
+        this_replica_id: ReplicaId,
+        cryptor: Cryptor,
+        enable_merger: bool,
+    ) -> Result<Self> {
+        let pool = open_db(store).await?;
+        let index = Index::load(pool, this_replica_id).await?;
+
+        Ok(Self::new(index, cryptor, enable_merger))
     }
 
     pub fn this_replica_id(&self) -> &ReplicaId {
@@ -227,7 +240,7 @@ impl Repository {
     }
 
     /// Subscribe to change notification from all current and future branches.
-    pub fn subscribe(&self) -> Subscription {
+    pub(crate) fn subscribe(&self) -> Subscription {
         self.shared.index.subscribe()
     }
 
