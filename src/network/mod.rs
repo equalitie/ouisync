@@ -35,7 +35,7 @@ use tokio::{
     },
 };
 
-#[derive(StructOpt)]
+#[derive(StructOpt, Debug)]
 pub struct NetworkOptions {
     /// Port to listen on (0 for random)
     #[structopt(short, long, default_value = "0")]

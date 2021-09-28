@@ -11,6 +11,11 @@ use tokio::signal;
 async fn main() -> Result<()> {
     let options = Options::from_args();
 
+    if options.print_data_dir {
+        println!("{}", options.data_dir()?.display());
+        return Ok(());
+    }
+
     env_logger::init();
 
     let session = Session::new(
