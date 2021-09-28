@@ -14,7 +14,7 @@ pub unsafe extern "C" fn file_open(
     error: *mut *mut c_char,
 ) {
     session::with(port, error, |ctx| {
-        let path = utils::ptr_to_utf8_path_buf(path)?;
+        let path = utils::ptr_to_path_buf(path)?;
         let repo = repo.get();
 
         ctx.spawn(async move {
@@ -32,7 +32,7 @@ pub unsafe extern "C" fn file_create(
     error: *mut *mut c_char,
 ) {
     session::with(port, error, |ctx| {
-        let path = utils::ptr_to_utf8_path_buf(path)?;
+        let path = utils::ptr_to_path_buf(path)?;
         let repo = repo.get();
 
         ctx.spawn(async move {
@@ -54,7 +54,7 @@ pub unsafe extern "C" fn file_remove(
 ) {
     session::with(port, error, |ctx| {
         let repo = repo.get();
-        let path = utils::ptr_to_utf8_path_buf(path)?;
+        let path = utils::ptr_to_path_buf(path)?;
 
         ctx.spawn(async move { repo.remove_file(&path).await?.flush().await })
     })

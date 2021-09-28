@@ -166,6 +166,7 @@ impl MessageBroker {
 
     /// Destroy the link between a local repository with the specified id and its remote
     /// counterpart (if one exists).
+    #[allow(unused)] // TODO: remove this attr when this is used
     pub async fn destroy_link(&self, local_name: Local<RepositoryName>) {
         self.send_command(Command::DestroyLink { local_name }).await
     }

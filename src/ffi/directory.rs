@@ -23,7 +23,7 @@ pub unsafe extern "C" fn directory_create(
     error: *mut *mut c_char,
 ) {
     session::with(port, error, |ctx| {
-        let path = utils::ptr_to_utf8_path_buf(path)?;
+        let path = utils::ptr_to_path_buf(path)?;
         let repo = repo.get();
 
         ctx.spawn(async move {
@@ -43,7 +43,7 @@ pub unsafe extern "C" fn directory_open(
     error: *mut *mut c_char,
 ) {
     session::with(port, error, |ctx| {
-        let path = utils::ptr_to_utf8_path_buf(path)?;
+        let path = utils::ptr_to_path_buf(path)?;
         let repo = repo.get();
 
         ctx.spawn(async move {
@@ -77,7 +77,7 @@ pub unsafe extern "C" fn directory_remove(
 ) {
     session::with(port, error, |ctx| {
         let repo = repo.get();
-        let path = utils::ptr_to_utf8_path_buf(path)?;
+        let path = utils::ptr_to_path_buf(path)?;
 
         ctx.spawn(async move { repo.remove_directory(&path).await?.flush().await })
     })

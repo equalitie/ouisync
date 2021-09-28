@@ -10,12 +10,11 @@ use crate::{
     repository::RepositoryManager,
 };
 use std::{
-    ffi::{CStr, CString},
+    ffi::CString,
     fmt,
     future::Future,
     mem,
     os::raw::{c_char, c_void},
-    path::PathBuf,
     ptr,
 };
 use tokio::runtime::{self, Runtime};
@@ -57,7 +56,7 @@ pub unsafe extern "C" fn session_open(
         }
     };
 
-    let store = match store_from_raw(store) {
+    let store = match utils::ptr_to_store(store) {
         Ok(store) => store,
         Err(error) => {
             sender.send_err(port, error_ptr, error);
@@ -84,18 +83,6 @@ pub unsafe extern "C" fn session_close() {
     let session = mem::replace(&mut SESSION, ptr::null_mut());
     if !session.is_null() {
         Box::from_raw(session);
-    }
-}
-
-unsafe fn store_from_raw(store: *const c_char) -> Result<db::Store> {
-    let store = CStr::from_ptr(store);
-
-    if store.to_bytes() == b":memory:" {
-        Ok(db::Store::Memory)
-    } else {
-        Ok(db::Store::File(PathBuf::from(utils::c_str_to_os_str(
-            store,
-        )?)))
     }
 }
 

@@ -1,33 +1,56 @@
-use tokio::task::JoinHandle;
-
 use super::{
     session,
     utils::{self, Port, SharedHandle, UniqueHandle},
 };
 use crate::{error::Error, joint_entry::JointEntryType, path, repository::Repository};
 use std::{os::raw::c_char, sync::Arc};
+use tokio::task::JoinHandle;
 
 pub const ENTRY_TYPE_INVALID: u8 = 0;
 pub const ENTRY_TYPE_FILE: u8 = 1;
 pub const ENTRY_TYPE_DIRECTORY: u8 = 2;
 
-/// Opens a repository.
-///
-/// NOTE: eventually this function will allow to specify which repository to open, but currently
-/// only one repository is supported.
+/// Creates a new repository.
+#[no_mangle]
+pub unsafe extern "C" fn repository_create(
+    _name: *const c_char,
+    _store: *const c_char,
+    port: Port<()>,
+    error: *mut *mut c_char,
+) {
+    session::with(port, error, |_ctx| {
+        todo!()
+
+        // let name = utils::ptr_to_str(name)?.to_owned();
+        // let store = utils::ptr_to_store(store)?;
+
+        // ctx.spawn(async move {
+        //     ctx.repositories_mut()
+        //         .create(name, store, Cryptor::Null)
+        //         .await
+        // })
+    })
+}
+
+/// Opens an existing repository.
 #[no_mangle]
 pub unsafe extern "C" fn repository_open(
+    name: *const c_char,
     port: Port<SharedHandle<Repository>>,
     error: *mut *mut c_char,
 ) {
     session::with(port, error, |ctx| {
-        todo!();
-        // let repo = ctx.repositories_mut().open_repository();
+        let name = utils::ptr_to_str(name)?;
+        let repo = ctx
+            .repositories()
+            .get(name)
+            .ok_or(Error::EntryNotFound)?
+            .clone();
 
-        // ctx.spawn(async move {
-        //     let repo = Arc::new(repo);
-        //     Ok(SharedHandle::new(repo))
-        // })
+        ctx.spawn(async move {
+            let repo = Arc::new(repo);
+            Ok(SharedHandle::new(repo))
+        })
     })
 }
 
@@ -48,7 +71,7 @@ pub unsafe extern "C" fn repository_entry_type(
 ) {
     session::with(port, error, |ctx| {
         let repo = handle.get();
-        let path = utils::ptr_to_utf8_path_buf(path)?;
+        let path = utils::ptr_to_path_buf(path)?;
 
         ctx.spawn(async move {
             match repo.lookup_type(path).await {
@@ -71,8 +94,8 @@ pub unsafe extern "C" fn repository_move_entry(
 ) {
     session::with(port, error, |ctx| {
         let repo = handle.get();
-        let src = utils::ptr_to_utf8_path_buf(src)?;
-        let dst = utils::ptr_to_utf8_path_buf(dst)?;
+        let src = utils::ptr_to_path_buf(src)?;
+        let dst = utils::ptr_to_path_buf(dst)?;
 
         ctx.spawn(async move {
             let (src_dir, src_name) = path::utf8::decompose(&src).ok_or(Error::EntryNotFound)?;
