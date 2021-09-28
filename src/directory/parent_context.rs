@@ -75,7 +75,7 @@ impl ParentContext {
     }
 
     /// Returns the parent directory of the entry bound to the given local branch.
-    pub(super) fn directory(&self, local_branch: Branch) -> Directory {
+    pub fn directory(&self, local_branch: Branch) -> Directory {
         Directory {
             inner: self.directory_inner.clone(),
             local_branch,

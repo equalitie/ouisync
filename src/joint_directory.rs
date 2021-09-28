@@ -1,5 +1,5 @@
 use crate::{
-    directory::{self, Directory, DirectoryRef, EntryRef, FileRef},
+    directory::{self, Directory, DirectoryRef, EntryFileData, EntryRef, FileRef},
     error::{Error, Result},
     file::File,
     iterator::{Accumulate, SortedUnion},
@@ -124,7 +124,7 @@ impl JointDirectory {
         let mut local_dir = local_dir.write().await;
 
         local_dir
-            .remove_file(name, &to_remove_author, to_remove_vv)
+            .remove_file(name, &to_remove_author, to_remove_vv, false)
             .await?;
 
         local_dir.flush(None).await
@@ -311,6 +311,16 @@ impl Reader<'_> {
         .ok_or(Error::EntryNotFound)
     }
 
+    pub fn merge_version_vectors(&self, name: &str) -> VersionVector {
+        let mut vv = VersionVector::new();
+
+        for entry in self.entry_versions(name) {
+            vv.merge(entry.version_vector());
+        }
+
+        vv
+    }
+
     /// Length of the directory in bytes. If there are multiple versions, returns the sum of their
     /// lengths.
     #[allow(clippy::len_without_is_empty)]
@@ -489,8 +499,20 @@ impl<'a> JointFileRef<'a> {
         self.file.author()
     }
 
+    pub fn version_vector(&'a self) -> &'a VersionVector {
+        self.file.version_vector()
+    }
+
     pub fn parent(&self) -> &Directory {
         self.file.parent()
+    }
+
+    pub fn entry_data(&self) -> &EntryFileData {
+        self.file.data()
+    }
+
+    pub fn inner(&self) -> FileRef<'a> {
+        self.file
     }
 }
 

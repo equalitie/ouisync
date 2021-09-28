@@ -52,6 +52,10 @@ impl<'a> EntryRef<'a> {
         }
     }
 
+    pub fn author(&self) -> &ReplicaId {
+        self.inner().author
+    }
+
     pub fn entry_type(&self) -> EntryType {
         match self {
             Self::File(_) => EntryType::File,
@@ -100,7 +104,7 @@ impl<'a> EntryRef<'a> {
         self.inner().parent_outer
     }
 
-    pub fn data(&self) -> EntryData {
+    pub fn clone_data(&self) -> EntryData {
         match self {
             Self::File(e) => EntryData::File(e.data().clone()),
             Self::Directory(e) => EntryData::Directory(e.data().clone()),
@@ -205,6 +209,10 @@ impl<'a> DirectoryRef<'a> {
         Locator::Head(self.entry_data.blob_id)
     }
 
+    pub fn author(&self) -> &'a ReplicaId {
+        self.inner.author
+    }
+
     pub async fn open(&self) -> Result<Directory> {
         self.inner
             .parent_inner
@@ -252,6 +260,10 @@ impl<'a> TombstoneRef<'a> {
 
     pub fn data(&self) -> &EntryTombstoneData {
         self.entry_data
+    }
+
+    pub fn author(&self) -> &'a ReplicaId {
+        self.inner.author
     }
 }
 

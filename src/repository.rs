@@ -137,41 +137,85 @@ impl Repository {
     /// Moves (renames) an entry from the source path to the destination path.
     /// If both source and destination refer to the same entry, this is a no-op.
     /// Returns the parent directories of both `src` and `dst`.
-    pub async fn move_entry<S: AsRef<Utf8Path>, D: AsRef<Utf8Path>>(
+    pub async fn move_entry<
+        S: AsRef<Utf8Path> + Clone + std::fmt::Debug,
+        D: AsRef<Utf8Path> + Clone + std::fmt::Debug,
+    >(
         &self,
         src_dir_path: S,
         src_name: &str,
         dst_dir_path: D,
         dst_name: &str,
     ) -> Result<()> {
-        let src_joint_dir = self.open_directory(src_dir_path).await?;
+        let this_replica_id = *self.this_replica_id();
+
+        let src_joint_dir = self.open_directory(src_dir_path.clone()).await?;
         let src_joint_reader = src_joint_dir.read().await;
-        let src_entry = src_joint_reader.lookup_unique(src_name)?;
 
-        match src_entry {
-            JointEntryRef::File(file_ref) => {
-                let src_name = file_ref.name().to_string();
-                let src_author = *file_ref.author();
-                let src_dir = file_ref.parent().clone();
-
-                let dst_dir = self.create_directory(dst_dir_path).await?;
-
-                // src_joint_reader holds a read lock to the src_dir. The next step then tries to
-                // get a write lock to it, so we must release the former to avoid deadlock.
-                drop(src_joint_reader);
-                src_dir
-                    .move_entry(&src_name, &src_author, &dst_dir, dst_name)
-                    .await?;
-
-                src_dir.flush(None).await?;
-
-                if !src_dir.represents_same_directory_as(&dst_dir) {
-                    dst_dir.flush(None).await?;
-                }
+        let src_dir = match src_joint_reader.lookup_unique(src_name)? {
+            JointEntryRef::File(file) => {
+                let mut file = file.open().await?;
+                file.fork().await?;
+                file.parent()
             }
-            JointEntryRef::Directory(_) => {
-                todo!()
+            JointEntryRef::Directory(_) => todo!(),
+        };
+
+        // src_joint_reader holds a read lock to the src_dir. The next step then tries to
+        // get a write lock to it, so we must release the former to avoid deadlock.
+        drop(src_joint_reader);
+        drop(src_joint_dir);
+
+        let src_dir_reader = src_dir.read().await;
+
+        // Unwrap is OK because we just forked the entry above.
+        let src_entry = src_dir_reader
+            .lookup_version(src_name, &this_replica_id)
+            .unwrap();
+
+        let dst_joint_dir = self.open_directory(dst_dir_path.clone()).await?;
+        let dst_joint_reader = dst_joint_dir.read().await;
+
+        let dst_entry = match dst_joint_reader.lookup_unique(dst_name) {
+            Ok(_) => {
+                return Err(Error::EntryExists);
             }
+            Err(Error::EntryNotFound) => {
+                // TODO: vv is needlessly created twice here.
+                let mut dst_entry = src_entry.clone_data();
+                *dst_entry.version_vector_mut() = dst_joint_reader
+                    .merge_version_vectors(dst_name)
+                    .increment(this_replica_id);
+                dst_entry
+            }
+            Err(e) => return Err(e),
+        };
+
+        let src_name = src_entry.name().to_string();
+        let src_author = *src_entry.author();
+        let src_vv = src_entry.version_vector().clone();
+
+        drop(src_dir_reader);
+        drop(dst_joint_reader);
+
+        src_dir
+            .write()
+            .await
+            .remove_file(&src_name, &src_author, src_vv, true)
+            .await?;
+
+        let dst_dir = self.create_directory(dst_dir_path).await?;
+
+        dst_dir
+            .write()
+            .await
+            .insert_entry(dst_name.into(), this_replica_id, dst_entry, true)
+            .await?;
+
+        src_dir.flush(None).await?;
+
+        if !src_dir.represents_same_directory_as(&dst_dir) {
+            dst_dir.flush(None).await?;
         }
 
         Ok(())

@@ -50,12 +50,22 @@ impl Inner {
         name: String,
         author: ReplicaId,
         entry_data: EntryData,
-    ) -> Result<()> {
-        let old_blob_ids = self.content.insert(name, author, entry_data)?;
+        keep_blob: bool,
+    ) -> Result<Option<BlobId>> {
+        let (old_blob, collateral) = self.content.insert(name.clone(), author, entry_data)?;
 
         // TODO: This should succeed/fail atomically with the above.
         let branch = self.blob.branch();
-        future::try_join_all(old_blob_ids.into_iter().map(|old_blob_id| async move {
+
+        let to_delete = collateral.into_iter().chain(old_blob.and_then(|b| {
+            if !keep_blob {
+                Some(b)
+            } else {
+                None
+            }
+        }));
+
+        future::try_join_all(to_delete.map(|old_blob_id| async move {
             Blob::open(branch.clone(), Locator::Head(old_blob_id))
                 .await?
                 .remove()
@@ -63,7 +73,7 @@ impl Inner {
         }))
         .await?;
 
-        Ok(())
+        Ok(old_blob)
     }
 
     // Modify an entry in this directory with the specified name and author.
@@ -193,7 +203,7 @@ impl Content {
         name: String,
         author: ReplicaId,
         new_data: EntryData,
-    ) -> Result<Vec<BlobId>> {
+    ) -> Result<(Option<BlobId>, Vec<BlobId>)> {
         let versions = self.entries.entry(name).or_insert_with(Default::default);
 
         // Find outdated entries
@@ -258,12 +268,12 @@ impl Content {
             })
             .flatten()
             // Because we filtered out *old_author != author above.
-            .chain(old_blob_id)
+            //.chain(old_blob_id)
             .collect();
 
         self.dirty = true;
 
-        Ok(old_blob_ids)
+        Ok((old_blob_id, old_blob_ids))
     }
 
     // TODO: We shouldn't use this one, keeping it for now so that I can solve one problem at a

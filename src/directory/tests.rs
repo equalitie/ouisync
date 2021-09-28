@@ -395,7 +395,7 @@ async fn remove_concurrent_file_version() {
         {
             let mut writer = root.write().await;
             writer
-                .remove_file(name, author_to_remove, vv_to_remove.clone())
+                .remove_file(name, author_to_remove, vv_to_remove.clone(), false)
                 .await
                 .unwrap();
             writer.flush(None).await.unwrap();
