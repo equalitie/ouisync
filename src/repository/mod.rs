@@ -1,10 +1,8 @@
 mod manager;
 mod name;
 
-pub(crate) use self::{
-    manager::{init as init_manager, RepositoryManager, RepositorySubscription},
-    name::RepositoryName,
-};
+pub use self::manager::{RepositoryManager, RepositorySubscription};
+pub(crate) use self::{manager::init as init_manager, name::RepositoryName};
 
 use crate::{
     block,
@@ -38,9 +36,10 @@ pub async fn open_db(store: db::Store) -> Result<db::Pool> {
     Ok(pool)
 }
 
+#[derive(Clone)]
 pub struct Repository {
     shared: Arc<Shared>,
-    _merge_handle: Option<ScopedJoinHandle<()>>,
+    _merge_handle: Arc<Option<ScopedJoinHandle<()>>>,
 }
 
 impl Repository {
@@ -61,7 +60,7 @@ impl Repository {
 
         Self {
             shared,
-            _merge_handle: merge_handle,
+            _merge_handle: Arc::new(merge_handle),
         }
     }
 

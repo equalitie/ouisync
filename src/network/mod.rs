@@ -13,6 +13,7 @@ use self::{
     replica_discovery::{ReplicaDiscovery, RuntimeId},
 };
 use crate::{
+    error::{Error, Result},
     replica_id::ReplicaId,
     repository::RepositorySubscription,
     scoped_task::{ScopedTaskHandle, ScopedTaskSet},
@@ -65,20 +66,22 @@ impl Default for NetworkOptions {
     }
 }
 
-pub(crate) struct Network {
+pub struct Network {
     _tasks: ScopedTaskSet,
     local_addr: SocketAddr,
 }
 
 impl Network {
-    pub(crate) async fn new(
+    pub async fn new(
         subscription: RepositorySubscription,
         options: NetworkOptions,
-    ) -> io::Result<Self> {
+    ) -> Result<Self> {
         let tasks = ScopedTaskSet::default();
 
-        let listener = TcpListener::bind(options.listen_addr()).await?;
-        let local_addr = listener.local_addr()?;
+        let listener = TcpListener::bind(options.listen_addr())
+            .await
+            .map_err(Error::Network)?;
+        let local_addr = listener.local_addr().map_err(Error::Network)?;
         let (forget_tx, forget_rx) = mpsc::channel(1);
 
         let inner = Inner {

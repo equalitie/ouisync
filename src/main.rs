@@ -2,8 +2,8 @@ mod options;
 mod virtual_filesystem;
 
 use self::options::Options;
-use anyhow::Result;
-use ouisync::{Session, Store};
+use anyhow::{Context, Result};
+use ouisync::{config, Cryptor, Network, RepositoryManager};
 use structopt::StructOpt;
 use tokio::signal;
 
@@ -18,25 +18,52 @@ async fn main() -> Result<()> {
 
     env_logger::init();
 
-    let session = Session::new(
-        Store::from(options.config_path()?),
-        !options.disable_merger,
-        options.network,
-    )
-    .await?;
+    let pool = config::open_db(options.config_path()?.into()).await?;
+    let mut repositories = RepositoryManager::load(pool, !options.disable_merger).await?;
 
-    // let _mount_guard = virtual_filesystem::mount(
-    //     tokio::runtime::Handle::current(),
-    //     session.open_repository(!options.disable_merger),
-    //     options.mount_dir,
-    // )?;
+    // Create repositories
+    for create in &options.create_repository {
+        let path = if let Some(path) = &create.path {
+            path.clone()
+        } else {
+            options.default_repository_path(&create.name)?
+        };
+
+        repositories
+            .create(create.name.clone(), path.into(), Cryptor::Null)
+            .await?;
+    }
+
+    // Delete repositories
+    for name in &options.delete_repository {
+        repositories.delete(name).await?
+    }
+
+    // Mount repositories
+    let mut mount_guards = Vec::new();
+    for mount_point in &options.mount {
+        let repository = repositories.get(&mount_point.name).with_context(|| {
+            format!(
+                "can't mount repository {:?} - no such repository",
+                mount_point.name
+            )
+        })?;
+
+        let guard = virtual_filesystem::mount(
+            tokio::runtime::Handle::current(),
+            repository.clone(),
+            mount_point.path.clone(),
+        )?;
+
+        mount_guards.push(guard);
+    }
+
+    // Start the network
+    let network = Network::new(repositories.subscribe(), options.network).await?;
 
     if options.print_ready_message {
-        println!("Listening on port {}", session.local_addr().port());
-        println!(
-            "This replica ID is {}",
-            session.repositories().this_replica_id()
-        );
+        println!("Listening on port {}", network.local_addr().port());
+        println!("This replica ID is {}", repositories.this_replica_id());
     }
 
     signal::ctrl_c().await?;

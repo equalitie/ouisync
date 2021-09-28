@@ -19,7 +19,7 @@ pub struct RepositoryManager {
 }
 
 impl RepositoryManager {
-    pub(crate) async fn load(pool: db::Pool, enable_merger: bool) -> Result<Self> {
+    pub async fn load(pool: db::Pool, enable_merger: bool) -> Result<Self> {
         let this_replica_id = this_replica::get_or_create_id(&pool).await?;
 
         let repositories = sqlx::query("SELECT name, path FROM repositories")
@@ -45,11 +45,31 @@ impl RepositoryManager {
         })
     }
 
+    /// Creates a new repository.
+    pub async fn create(
+        &mut self,
+        _name: String,
+        store: db::Store,
+        cryptor: Cryptor,
+    ) -> Result<()> {
+        todo!()
+    }
+
+    /// Deletes an existing repository.
+    pub async fn delete(&mut self, _name: &str) -> Result<()> {
+        todo!()
+    }
+
+    /// Gets a repository with the specified name or `None` if no such repository exists.
+    pub fn get(&self, name: &str) -> Option<&Repository> {
+        self.repositories.get(name)
+    }
+
     pub fn this_replica_id(&self) -> &ReplicaId {
         &self.this_replica_id
     }
 
-    pub(crate) fn subscribe(&self) -> RepositorySubscription {
+    pub fn subscribe(&self) -> RepositorySubscription {
         RepositorySubscription {
             this_replica_id: self.this_replica_id,
             indices: self
@@ -61,17 +81,17 @@ impl RepositoryManager {
     }
 }
 
-pub(crate) struct RepositorySubscription {
+pub struct RepositorySubscription {
     this_replica_id: ReplicaId,
     indices: BTreeMap<RepositoryName, Index>,
 }
 
 impl RepositorySubscription {
-    pub fn this_replica_id(&self) -> &ReplicaId {
+    pub(crate) fn this_replica_id(&self) -> &ReplicaId {
         &self.this_replica_id
     }
 
-    pub fn current(&self) -> impl Iterator<Item = (&RepositoryName, &Index)> {
+    pub(crate) fn current(&self) -> impl Iterator<Item = (&RepositoryName, &Index)> {
         self.indices.iter()
     }
 }

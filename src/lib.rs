@@ -1,15 +1,14 @@
 #[macro_use]
 mod macros;
 
+pub mod config;
 pub mod crypto;
 pub mod debug_printer;
-pub mod this_replica;
 
 mod blob;
 mod blob_id;
 mod block;
 mod branch;
-mod config;
 mod db;
 mod directory;
 mod error;
@@ -31,6 +30,7 @@ mod store;
 mod tagged;
 #[cfg(test)]
 mod test_utils;
+mod this_replica;
 mod version_vector;
 mod versioned_file_name;
 
@@ -43,8 +43,8 @@ pub use self::{
     joint_directory::{JointDirectory, JointEntryRef},
     joint_entry::{JointEntry, JointEntryType},
     locator::Locator,
-    network::NetworkOptions,
+    network::{Network, NetworkOptions},
     replica_id::ReplicaId,
-    repository::Repository,
+    repository::{Repository, RepositoryManager},
     session::Session,
 };

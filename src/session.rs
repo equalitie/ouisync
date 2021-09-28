@@ -6,6 +6,8 @@ use crate::{
 };
 use std::net::SocketAddr;
 
+// TODO: this is not needed, remove it.
+
 /// Entry point to this library.
 pub struct Session {
     repositories: RepositoryManager,
@@ -23,9 +25,7 @@ impl Session {
         let repositories = RepositoryManager::load(pool, enable_merger).await?;
 
         let subscription = repositories.subscribe();
-        let network = Network::new(subscription, network_options)
-            .await
-            .map_err(Error::Network)?;
+        let network = Network::new(subscription, network_options).await?;
 
         Ok(Self {
             repositories,
@@ -35,6 +35,10 @@ impl Session {
 
     pub fn repositories(&self) -> &RepositoryManager {
         &self.repositories
+    }
+
+    pub fn repositories_mut(&mut self) -> &mut RepositoryManager {
+        &mut self.repositories
     }
 
     /// Opens a repository.
