@@ -124,7 +124,7 @@ impl JointDirectory {
         let mut local_dir = local_dir.write().await;
 
         local_dir
-            .remove_file(name, &to_remove_author, to_remove_vv, false)
+            .remove_file(name, &to_remove_author, to_remove_vv, None)
             .await?;
 
         local_dir.flush(None).await

@@ -6,6 +6,7 @@ use super::{
     Directory,
 };
 use crate::{
+    blob_id::BlobId,
     error::{Error, Result},
     file::File,
     locator::Locator,
@@ -133,7 +134,11 @@ impl<'a> FileRef<'a> {
     }
 
     pub fn locator(&self) -> Locator {
-        Locator::Head(self.entry_data.blob_id)
+        Locator::Head(*self.blob_id())
+    }
+
+    pub fn blob_id(&self) -> &BlobId {
+        &self.entry_data.blob_id
     }
 
     pub fn author(&self) -> &'a ReplicaId {

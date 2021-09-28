@@ -147,78 +147,49 @@ impl Repository {
         dst_dir_path: D,
         dst_name: &str,
     ) -> Result<()> {
-        let this_replica_id = *self.this_replica_id();
-
         let src_joint_dir = self.open_directory(src_dir_path.clone()).await?;
         let src_joint_reader = src_joint_dir.read().await;
 
-        let src_dir = match src_joint_reader.lookup_unique(src_name)? {
-            JointEntryRef::File(file) => {
-                let mut file = file.open().await?;
+        let (src_dir, src_name, src_author) = match src_joint_reader.lookup_unique(src_name)? {
+            JointEntryRef::File(entry) => {
+                let src_name = entry.name().to_string();
+                let src_author = *entry.author();
+
+                let mut file = entry.open().await?;
+
+                drop(src_joint_reader);
+                drop(src_joint_dir);
+
                 file.fork().await?;
-                file.parent()
+
+                (file.parent(), src_name, src_author)
             }
             JointEntryRef::Directory(_) => todo!(),
         };
 
-        // src_joint_reader holds a read lock to the src_dir. The next step then tries to
-        // get a write lock to it, so we must release the former to avoid deadlock.
-        drop(src_joint_reader);
-        drop(src_joint_dir);
-
-        let src_dir_reader = src_dir.read().await;
-
-        // Unwrap is OK because we just forked the entry above.
-        let src_entry = src_dir_reader
-            .lookup_version(src_name, &this_replica_id)
-            .unwrap();
-
         let dst_joint_dir = self.open_directory(dst_dir_path.clone()).await?;
         let dst_joint_reader = dst_joint_dir.read().await;
 
-        let dst_entry = match dst_joint_reader.lookup_unique(dst_name) {
-            Ok(_) => {
-                return Err(Error::EntryExists);
-            }
+        let dst_vv = match dst_joint_reader.lookup_unique(dst_name) {
             Err(Error::EntryNotFound) => {
-                // TODO: vv is needlessly created twice here.
-                let mut dst_entry = src_entry.clone_data();
-                *dst_entry.version_vector_mut() = dst_joint_reader
+                // Even if there is no regular entry, there still may be tombstones and so the
+                // destination version vector must be "happened after" those.
+                dst_joint_reader
                     .merge_version_vectors(dst_name)
-                    .increment(this_replica_id);
-                dst_entry
+                    .increment(*self.this_replica_id())
             }
+            Ok(_) => return Err(Error::EntryExists),
             Err(e) => return Err(e),
         };
 
-        let src_name = src_entry.name().to_string();
-        let src_author = *src_entry.author();
-        let src_vv = src_entry.version_vector().clone();
-
-        drop(src_dir_reader);
         drop(dst_joint_reader);
-
-        src_dir
-            .write()
-            .await
-            .remove_file(&src_name, &src_author, src_vv, true)
-            .await?;
+        drop(dst_joint_dir);
 
         let dst_dir = self.create_directory(dst_dir_path).await?;
 
-        dst_dir
-            .write()
+        src_dir
+            .move_entry(&src_name, &src_author, &dst_dir, dst_name, dst_vv)
             .await
-            .insert_entry(dst_name.into(), this_replica_id, dst_entry, true)
-            .await?;
-
-        src_dir.flush(None).await?;
-
-        if !src_dir.represents_same_directory_as(&dst_dir) {
-            dst_dir.flush(None).await?;
-        }
-
-        Ok(())
     }
 
     /// Returns the local branch

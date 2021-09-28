@@ -114,7 +114,7 @@ impl Directory {
                 name.clone(),
                 author,
                 EntryData::directory(blob_id, vv),
-                false,
+                None,
             )
             .await?;
 
@@ -139,10 +139,7 @@ impl Directory {
         author: &ReplicaId,
         vv: VersionVector,
     ) -> Result<()> {
-        self.write()
-            .await
-            .remove_file(name, author, vv, false)
-            .await
+        self.write().await.remove_file(name, author, vv, None).await
     }
 
     /// Removes a subdirectory from this directory.
@@ -172,74 +169,53 @@ impl Directory {
         inner.blob.remove().await
     }
 
+    /// Preconditions: self, dst_dir and the file referred to src_name are all local.
     pub async fn move_entry(
         &self,
         src_name: &str,
         src_author: &ReplicaId,
         dst_dir: &Directory,
         dst_name: &str,
+        dst_vv: VersionVector,
     ) -> Result<()> {
-        if self.represents_same_directory_as(dst_dir) {
-            // Note: checking for whether the src and dst are the same is postponed for later
-            // because if the source doesn't exist we need to return an error.
+        let this_replica_id = *self.this_replica_id();
 
-            let mut writer = self.write().await;
+        let src_dir_reader = self.read().await;
 
-            assert!(writer.is_local());
+        // Unwrap is OK because we just forked the entry above.
+        let src_entry = src_dir_reader.lookup_version(src_name, src_author).unwrap();
+        let src_blob_id = *src_entry.file()?.blob_id();
 
-            writer.inner.change_name_or_author(
-                src_name,
-                src_author,
-                dst_name,
-                self.local_branch.id(),
-            )
-        } else {
-            // When locking the self and dst_dir Directories for writing, we must ensure it is
-            // always done in the same order. Otherwise, user doing something like this:
-            //
-            // $ mv A/foo to B/foo & # Using `&` to perform moving in the background
-            // $ mv B/bar A/bar
-            //
-            // simultaneously, could result in a deadlock.
+        let dst_entry = {
+            // TODO: vv is needlessly created twice here.
+            let mut dst_entry = src_entry.clone_data();
+            *dst_entry.version_vector_mut() = dst_vv;
+            dst_entry
+        };
 
-            let (src, dst) = if Arc::as_ptr(&self.inner) < Arc::as_ptr(&dst_dir.inner) {
-                let src = self.write().await;
-                let dst = dst_dir.write().await;
-                (src, dst)
-            } else {
-                let dst = dst_dir.write().await;
-                let src = self.write().await;
-                (src, dst)
-            };
+        let src_name = src_entry.name().to_string();
+        let src_vv = src_entry.version_vector().clone();
 
-            assert!(src.is_local());
-            assert!(dst.is_local());
+        drop(src_dir_reader);
 
-            let src_entry = src.lookup_version(src_name, src_author)?;
+        self.write()
+            .await
+            .remove_file(&src_name, src_author, src_vv, Some(src_blob_id))
+            .await?;
 
-            if matches!(src_entry, EntryRef::Tombstone(_)) {
-                return Err(Error::EntryNotFound);
-            }
+        dst_dir
+            .write()
+            .await
+            .insert_entry(dst_name.into(), this_replica_id, dst_entry, None)
+            .await?;
 
-            let dst_entry = match dst.lookup_version(dst_name, self.this_replica_id()) {
-                Ok(entry) => Some(entry),
-                Err(Error::EntryNotFound) => None,
-                Err(error) => return Err(error),
-            };
+        self.flush(None).await?;
 
-            match src_entry {
-                EntryRef::File(_) => {
-                    todo!()
-                }
-                EntryRef::Directory(_) => {
-                    todo!()
-                }
-                EntryRef::Tombstone(_) => {
-                    // Same as if the source entry did not exist.
-                    Err(Error::EntryNotFound)
-                }
-            }
+        if !self.represents_same_directory_as(dst_dir) {
+            dst_dir.flush(None).await?;
         }
+
+        Ok(())
     }
 
     // Forks this directory into the local branch.
@@ -294,7 +270,7 @@ impl Directory {
         let entry_data = EntryData::file(blob_id, version_vector);
 
         inner
-            .insert_entry(name, author_id, entry_data, false)
+            .insert_entry(name, author_id, entry_data, None)
             .await?;
 
         Ok(blob_id)
@@ -435,7 +411,7 @@ impl Writer<'_> {
             .increment(author);
 
         self.inner
-            .insert_entry(name.clone(), author, EntryData::file(blob_id, vv), false)
+            .insert_entry(name.clone(), author, EntryData::file(blob_id, vv), None)
             .await?;
 
         let locator = Locator::Head(blob_id);
@@ -473,7 +449,7 @@ impl Writer<'_> {
         name: &str,
         author: &ReplicaId,
         vv: VersionVector,
-        keep_blob: bool,
+        keep: Option<BlobId>,
     ) -> Result<()> {
         let this_replica_id = *self.this_replica_id();
 
@@ -487,21 +463,17 @@ impl Writer<'_> {
                     let mut new_entry = local_entry.clone_data();
                     new_entry.version_vector_mut().merge(&vv);
                     new_entry
-                },
-                Err(Error::EntryNotFound) => {
-                    EntryData::Tombstone(EntryTombstoneData {
-                        version_vector: vv.increment(this_replica_id),
-                    })
-                },
+                }
+                Err(Error::EntryNotFound) => EntryData::Tombstone(EntryTombstoneData {
+                    version_vector: vv.increment(this_replica_id),
+                }),
                 Err(e) => return Err(e),
             }
         };
 
         self.inner
-            .insert_entry(name.into(), this_replica_id, new_entry, keep_blob)
-            .await?;
-
-        Ok(())
+            .insert_entry(name.into(), this_replica_id, new_entry, keep)
+            .await
     }
 
     pub async fn insert_entry(
@@ -509,11 +481,9 @@ impl Writer<'_> {
         name: String,
         author: ReplicaId,
         entry: EntryData,
-        keep_blob: bool,
-    ) -> Result<Option<BlobId>> {
-        self.inner
-            .insert_entry(name, author, entry, keep_blob)
-            .await
+        keep: Option<BlobId>,
+    ) -> Result<()> {
+        self.inner.insert_entry(name, author, entry, keep).await
     }
 
     pub fn this_replica_id(&self) -> &ReplicaId {

@@ -137,7 +137,13 @@ async fn rename_file() {
     let parent_dir = branch.open_root(branch.clone()).await.unwrap();
 
     parent_dir
-        .move_entry(src_name, branch.id(), &parent_dir, dst_name)
+        .move_entry(
+            src_name,
+            branch.id(),
+            &parent_dir,
+            dst_name,
+            VersionVector::first(*branch.id()),
+        )
         .await
         .unwrap();
 
@@ -395,7 +401,7 @@ async fn remove_concurrent_file_version() {
         {
             let mut writer = root.write().await;
             writer
-                .remove_file(name, author_to_remove, vv_to_remove.clone(), false)
+                .remove_file(name, author_to_remove, vv_to_remove.clone(), None)
                 .await
                 .unwrap();
             writer.flush(None).await.unwrap();
