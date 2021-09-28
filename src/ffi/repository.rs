@@ -41,13 +41,15 @@ pub unsafe extern "C" fn repository_open(
 ) {
     session::with(port, error, |ctx| {
         let name = utils::ptr_to_str(name)?;
-        let repo = ctx
-            .repositories()
-            .get(name)
-            .ok_or(Error::EntryNotFound)?
-            .clone();
+        let repos = ctx.repositories().clone();
 
         ctx.spawn(async move {
+            let repo = repos
+                .read()
+                .await
+                .get(name)
+                .ok_or(Error::EntryNotFound)?
+                .clone();
             let repo = Arc::new(repo);
             Ok(SharedHandle::new(repo))
         })

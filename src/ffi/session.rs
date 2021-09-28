@@ -16,8 +16,12 @@ use std::{
     mem,
     os::raw::{c_char, c_void},
     ptr,
+    sync::Arc,
 };
-use tokio::runtime::{self, Runtime};
+use tokio::{
+    runtime::{self, Runtime},
+    sync::RwLock,
+};
 
 /// Opens the ouisync session. `post_c_object_fn` should be a pointer to the dart's
 /// `NativeApi.postCObject` function cast to `Pointer<Void>` (the casting is necessary to work
@@ -92,7 +96,7 @@ where
 {
     assert!(!SESSION.is_null(), "session is not initialized");
 
-    let session = &mut *SESSION;
+    let session = &*SESSION;
     let context = Context {
         session,
         port,
@@ -116,8 +120,8 @@ static mut SESSION: *mut Session = ptr::null_mut();
 
 pub(super) struct Session {
     runtime: Runtime,
-    repositories: RepositoryManager,
-    network: Network,
+    repositories: Arc<RwLock<RepositoryManager>>,
+    _network: Network,
     sender: Sender,
     _logger: Logger,
 }
@@ -135,8 +139,8 @@ impl Session {
 
         Ok(Self {
             runtime,
-            repositories,
-            network,
+            repositories: Arc::new(RwLock::new(repositories)),
+            _network: network,
             sender,
             _logger: logger,
         })
@@ -152,7 +156,7 @@ impl Session {
 }
 
 pub(super) struct Context<'a, T> {
-    session: &'a mut Session,
+    session: &'a Session,
     port: Port<T>,
     error_ptr: *mut *mut c_char,
 }
@@ -171,12 +175,8 @@ where
         Ok(())
     }
 
-    pub(super) fn repositories(&self) -> &RepositoryManager {
+    pub(super) fn repositories(&self) -> &Arc<RwLock<RepositoryManager>> {
         &self.session.repositories
-    }
-
-    pub(super) fn repositories_mut(&mut self) -> &mut RepositoryManager {
-        &mut self.session.repositories
     }
 }
 
