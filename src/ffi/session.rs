@@ -4,7 +4,9 @@ use super::{
     utils::{self, AssumeSend, Port},
 };
 use crate::{
-    config, db,
+    config,
+    crypto::Cryptor,
+    db,
     error::Result,
     network::{Network, NetworkOptions},
     repository::RepositoryManager,
@@ -88,6 +90,38 @@ pub unsafe extern "C" fn session_close() {
     if !session.is_null() {
         Box::from_raw(session);
     }
+}
+
+/// Creates a new repository.
+#[no_mangle]
+pub unsafe extern "C" fn session_create_repository(
+    name: *const c_char,
+    store: *const c_char,
+    port: Port<()>,
+    error: *mut *mut c_char,
+) {
+    with(port, error, |ctx| {
+        let name = utils::ptr_to_str(name)?.to_owned();
+        let store = utils::ptr_to_store(store)?;
+        let repos = ctx.repositories().clone();
+
+        ctx.spawn(async move { repos.write().await.create(name, store, Cryptor::Null).await })
+    })
+}
+
+/// Deletes a repository.
+#[no_mangle]
+pub unsafe extern "C" fn session_delete_repository(
+    name: *const c_char,
+    port: Port<()>,
+    error: *mut *mut c_char,
+) {
+    with(port, error, |ctx| {
+        let name = utils::ptr_to_str(name)?.to_owned();
+        let repos = ctx.repositories().clone();
+
+        ctx.spawn(async move { repos.write().await.delete(&name).await })
+    })
 }
 
 pub(super) unsafe fn with<T, F>(port: Port<T>, error_ptr: *mut *mut c_char, f: F)

@@ -10,29 +10,7 @@ pub const ENTRY_TYPE_INVALID: u8 = 0;
 pub const ENTRY_TYPE_FILE: u8 = 1;
 pub const ENTRY_TYPE_DIRECTORY: u8 = 2;
 
-/// Creates a new repository.
-#[no_mangle]
-pub unsafe extern "C" fn repository_create(
-    _name: *const c_char,
-    _store: *const c_char,
-    port: Port<()>,
-    error: *mut *mut c_char,
-) {
-    session::with(port, error, |_ctx| {
-        todo!()
-
-        // let name = utils::ptr_to_str(name)?.to_owned();
-        // let store = utils::ptr_to_store(store)?;
-
-        // ctx.spawn(async move {
-        //     ctx.repositories_mut()
-        //         .create(name, store, Cryptor::Null)
-        //         .await
-        // })
-    })
-}
-
-/// Opens an existing repository.
+/// Opens a repository.
 #[no_mangle]
 pub unsafe extern "C" fn repository_open(
     name: *const c_char,
