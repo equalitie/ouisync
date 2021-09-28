@@ -9,7 +9,7 @@ use crate::{
 };
 use futures_util::TryStreamExt;
 use sqlx::Row;
-use std::collections::BTreeMap;
+use std::collections::{btree_map::Entry, BTreeMap};
 
 pub struct RepositoryManager {
     pool: db::Pool,
@@ -48,11 +48,36 @@ impl RepositoryManager {
     /// Creates a new repository.
     pub async fn create(
         &mut self,
-        _name: String,
-        _store: db::Store,
-        _cryptor: Cryptor,
+        name: String,
+        store: db::Store,
+        _cryptor: Cryptor, // TODO: cryptor is currently ignored
     ) -> Result<()> {
-        todo!()
+        let name = RepositoryName::from(name);
+        let mut tx = self.pool.begin().await?;
+
+        sqlx::query("INSERT INTO repositories (name, path) VALUES (?, ?)")
+            .bind(&name)
+            .bind(&store)
+            .execute(&mut tx)
+            .await?;
+
+        let pool = super::open_db(store).await?;
+        let index = Index::load(pool, self.this_replica_id).await?;
+        let repository = Repository::new(index, Cryptor::Null, self.enable_merger);
+
+        match self.repositories.entry(name) {
+            Entry::Vacant(entry) => {
+                entry.insert(repository);
+            }
+            Entry::Occupied(_) => {
+                // TODO: should we have a separate error variant (e.g. `RepositoryExists`) for this?
+                return Err(Error::EntryExists);
+            }
+        }
+
+        tx.commit().await?;
+
+        Ok(())
     }
 
     /// Deletes an existing repository.
@@ -142,45 +167,6 @@ impl IndexMap {
         }
     }
 
-    // pub async fn create(
-    //     &mut self,
-    //     name: RepositoryName,
-    //     store: db::Store,
-    // ) -> Result<(RepositoryId, &Index)> {
-    //     if self.ids.contains_key(&name) {
-    //         // TODO: should we have a separate error variant (e.g. `RepositoryExists`) for this?
-    //         return Err(Error::EntryExists);
-    //     }
-
-    //     let mut tx = self.pool.begin().await?;
-    //     let query_result = sqlx::query("INSERT INTO repositories (name, db_path) VALUES (?, ?)")
-    //         .bind(&name)
-    //         .bind(&store)
-    //         .execute(&mut tx)
-    //         .await?;
-
-    //     let id = RepositoryId(query_result.last_insert_rowid() as _);
-
-    //     let repo_pool = super::open_db(store).await?;
-    //     let index = Index::load(repo_pool, self.this_replica_id).await?;
-    //     let value = Value {
-    //         index,
-    //         name: name.clone(),
-    //     };
-
-    //     let index = &self
-    //         .values
-    //         .entry(id)
-    //         .and_modify(|_| unreachable!())
-    //         .or_insert(value)
-    //         .index;
-
-    //     self.ids.insert(name, id);
-
-    //     tx.commit().await?;
-
-    //     Ok((id, index))
-    // }
 
     // pub async fn destroy(&mut self, id: RepositoryId) -> Result<()> {
     //     let mut tx = self.pool.begin().await?;
