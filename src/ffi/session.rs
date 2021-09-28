@@ -3,7 +3,12 @@ use super::{
     logger::Logger,
     utils::{self, AssumeSend, Port},
 };
-use crate::{db, error::Result, network::NetworkOptions, session::Session};
+use crate::{
+    config, db,
+    error::Result,
+    network::{Network, NetworkOptions},
+    repository::RepositoryManager,
+};
 use std::{
     ffi::{CStr, CString},
     fmt,
@@ -63,12 +68,7 @@ pub unsafe extern "C" fn session_open(
     let handle = runtime.handle().clone();
 
     handle.spawn(sender.invoke(port, error_ptr, async move {
-        let session = SessionWrapper {
-            runtime,
-            session: Session::new(store, true, NetworkOptions::default()).await?,
-            sender,
-            _logger: logger,
-        };
+        let session = Session::new(runtime, store, sender, logger).await?;
 
         assert!(SESSION.is_null());
 
@@ -105,36 +105,56 @@ where
 {
     assert!(!SESSION.is_null(), "session is not initialized");
 
-    let wrapper = &*SESSION;
+    let session = &mut *SESSION;
     let context = Context {
-        wrapper,
+        session,
         port,
         error_ptr,
     };
 
-    let _runtime_guard = context.wrapper.runtime.enter();
+    let _runtime_guard = context.session.runtime.enter();
 
     match f(context) {
         Ok(()) => (),
-        Err(error) => wrapper.sender.send_err(port, error_ptr, error),
+        Err(error) => session.sender.send_err(port, error_ptr, error),
     }
 }
 
-pub(super) unsafe fn get<'a>() -> &'a SessionWrapper {
+pub(super) unsafe fn get<'a>() -> &'a Session {
     assert!(!SESSION.is_null(), "session is not initialized");
     &*SESSION
 }
 
-static mut SESSION: *mut SessionWrapper = ptr::null_mut();
+static mut SESSION: *mut Session = ptr::null_mut();
 
-pub(super) struct SessionWrapper {
+pub(super) struct Session {
     runtime: Runtime,
-    session: Session,
+    repositories: RepositoryManager,
+    network: Network,
     sender: Sender,
     _logger: Logger,
 }
 
-impl SessionWrapper {
+impl Session {
+    async fn new(
+        runtime: Runtime,
+        store: db::Store,
+        sender: Sender,
+        logger: Logger,
+    ) -> Result<Self> {
+        let pool = config::open_db(store).await?;
+        let repositories = RepositoryManager::load(pool, true).await?;
+        let network = Network::new(repositories.subscribe(), NetworkOptions::default()).await?;
+
+        Ok(Self {
+            runtime,
+            repositories,
+            network,
+            sender,
+            _logger: logger,
+        })
+    }
+
     pub(super) fn runtime(&self) -> &Runtime {
         &self.runtime
     }
@@ -145,7 +165,7 @@ impl SessionWrapper {
 }
 
 pub(super) struct Context<'a, T> {
-    wrapper: &'a SessionWrapper,
+    session: &'a mut Session,
     port: Port<T>,
     error_ptr: *mut *mut c_char,
 }
@@ -158,14 +178,18 @@ where
     where
         F: Future<Output = Result<T>> + Send + 'static,
     {
-        self.wrapper
+        self.session
             .runtime
-            .spawn(self.wrapper.sender.invoke(self.port, self.error_ptr, f));
+            .spawn(self.session.sender.invoke(self.port, self.error_ptr, f));
         Ok(())
     }
 
-    pub(super) fn session(&self) -> &Session {
-        &self.wrapper.session
+    pub(super) fn repositories(&self) -> &RepositoryManager {
+        &self.session.repositories
+    }
+
+    pub(super) fn repositories_mut(&mut self) -> &mut RepositoryManager {
+        &mut self.session.repositories
     }
 }
 

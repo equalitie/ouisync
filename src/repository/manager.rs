@@ -49,8 +49,8 @@ impl RepositoryManager {
     pub async fn create(
         &mut self,
         _name: String,
-        store: db::Store,
-        cryptor: Cryptor,
+        _store: db::Store,
+        _cryptor: Cryptor,
     ) -> Result<()> {
         todo!()
     }
