@@ -489,11 +489,6 @@ impl Writer<'_> {
     pub fn this_replica_id(&self) -> &ReplicaId {
         self.outer.this_replica_id()
     }
-
-    /// Is this directory in the local branch?
-    pub(crate) fn is_local(&self) -> bool {
-        self.inner.blob.branch().id() == self.this_replica_id()
-    }
 }
 
 /// View of a `Directory` for performing read-only queries.
