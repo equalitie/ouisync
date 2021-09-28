@@ -3,7 +3,7 @@ mod virtual_filesystem;
 
 use self::options::Options;
 use anyhow::Result;
-use ouisync::{Cryptor, Session, Store};
+use ouisync::{Session, Store};
 use structopt::StructOpt;
 use tokio::signal;
 

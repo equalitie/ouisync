@@ -7,14 +7,6 @@ use sqlx::{
 };
 use std::{borrow::Borrow, ops::Deref, sync::Arc};
 
-/// Identifier of a repository unique only within a single replica. To obtain a globally unique
-/// identifier, it needs to be paired with a `ReplicaId`.
-// TODO: remove the `Default` impl, instead provide a test-only `dummy` constructor.
-#[derive(Default, Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize, Debug, sqlx::Type)]
-#[serde(transparent)]
-#[sqlx(transparent)]
-pub(crate) struct RepositoryId(pub(super) u32);
-
 /// Friendly, human-readable name of a repository.
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, Debug)]
 pub(crate) struct RepositoryName(Arc<str>);

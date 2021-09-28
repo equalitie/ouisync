@@ -207,13 +207,12 @@ impl Inner {
 
                 // TODO: creating implicit link if the local and remote repository names are the
                 // same. Eventually the links will be explicit.
-                for (id, name, index) in self.subscription.current() {
-                    let local_id = Local::new(id);
+                for (name, index) in self.subscription.current() {
                     let local_name = Local::new(name.clone());
                     let remote_name = Remote::new(name.clone());
 
                     broker
-                        .create_link(index.clone(), local_id, local_name, remote_name)
+                        .create_link(index.clone(), local_name, remote_name)
                         .await;
                 }
 

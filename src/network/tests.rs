@@ -10,8 +10,7 @@ use crate::{
     db,
     index::{node_test_utils::Snapshot, Index, RootNode, Summary},
     replica_id::ReplicaId,
-    repository::{self, RepositoryId},
-    store,
+    repository, store,
     tagged::Remote,
     test_utils,
     version_vector::VersionVector,
@@ -259,7 +258,7 @@ where
 async fn create_server(index: Index) -> (Server, mpsc::Receiver<Command>, mpsc::Sender<Request>) {
     let (send_tx, send_rx) = mpsc::channel(1);
     let (recv_tx, recv_rx) = mpsc::channel(CAPACITY);
-    let stream = ServerStream::new(send_tx, recv_rx, Remote::new(RepositoryId::default()));
+    let stream = ServerStream::new(send_tx, recv_rx, Remote::new(0));
     let server = Server::new(index, stream).await;
 
     (server, send_rx, recv_tx)
@@ -271,7 +270,7 @@ fn create_client(
 ) -> (Client, mpsc::Receiver<Command>, mpsc::Sender<Response>) {
     let (send_tx, send_rx) = mpsc::channel(1);
     let (recv_tx, recv_rx) = mpsc::channel(CAPACITY);
-    let stream = ClientStream::new(send_tx, recv_rx, Remote::new(RepositoryId::default()));
+    let stream = ClientStream::new(send_tx, recv_rx, Remote::new(0));
     let client = Client::new(index, their_replica_id, stream);
 
     (client, send_rx, recv_tx)

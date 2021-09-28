@@ -1,6 +1,6 @@
 use super::{
     client::Client,
-    message::{Message, Request, Response},
+    message::{Message, RepositoryId, Request, Response},
     object_stream::{TcpObjectReader, TcpObjectStream, TcpObjectWriter},
     server::Server,
 };
@@ -8,12 +8,15 @@ use crate::{
     error::Result,
     index::Index,
     replica_id::ReplicaId,
-    repository::{RepositoryId, RepositoryName},
+    repository::RepositoryName,
     scoped_task::ScopedJoinHandle,
     tagged::{Local, Remote},
 };
 use std::{
-    collections::{hash_map::Entry, HashMap},
+    collections::{
+        hash_map::{Entry, OccupiedEntry},
+        HashMap,
+    },
     fmt,
     future::Future,
     pin::Pin,
@@ -124,9 +127,10 @@ impl MessageBroker {
             command_tx: command_tx.clone(),
             reader: MultiReader::new(),
             writer: MultiWriter::new(),
-            links: HashMap::new(),
+            links: LinkMap::default(),
             pending_outgoing_links: HashMap::new(),
             pending_incoming_links: HashMap::new(),
+            next_local_id: 0,
         };
 
         inner.add_connection(stream);
@@ -149,13 +153,11 @@ impl MessageBroker {
     pub async fn create_link(
         &self,
         index: Index,
-        local_id: Local<RepositoryId>,
         local_name: Local<RepositoryName>,
         remote_name: Remote<RepositoryName>,
     ) {
         self.send_command(Command::CreateLink {
             index,
-            local_id,
             local_name,
             remote_name,
         })
@@ -164,8 +166,8 @@ impl MessageBroker {
 
     /// Destroy the link between a local repository with the specified id and its remote
     /// counterpart (if one exists).
-    pub async fn destroy_link(&self, local_id: Local<RepositoryId>) {
-        self.send_command(Command::DestroyLink { local_id }).await
+    pub async fn destroy_link(&self, local_name: Local<RepositoryName>) {
+        self.send_command(Command::DestroyLink { local_name }).await
     }
 
     async fn send_command(&self, command: Command) {
@@ -183,12 +185,14 @@ struct Inner {
     command_tx: mpsc::Sender<Command>,
     reader: MultiReader,
     writer: MultiWriter,
-    links: HashMap<Local<RepositoryId>, Link>,
+    links: LinkMap,
 
     // TODO: consider using LruCache instead of HashMap for these, to expire unrequited link
     //       requests.
     pending_outgoing_links: HashMap<Local<RepositoryName>, PendingOutgoingLink>,
     pending_incoming_links: HashMap<Local<RepositoryName>, PendingIncomingLink>,
+
+    next_local_id: u64,
 }
 
 impl Inner {
@@ -226,15 +230,14 @@ impl Inner {
             Command::SendMessage(message) => self.send_message(message).await,
             Command::CreateLink {
                 index,
-                local_id,
                 local_name,
                 remote_name,
             } => {
-                self.create_outgoing_link(index, local_id, local_name, remote_name)
+                self.create_outgoing_link(index, local_name, remote_name)
                     .await
             }
-            Command::DestroyLink { local_id } => {
-                self.destroy_link(local_id);
+            Command::DestroyLink { local_name } => {
+                self.destroy_link(local_name);
                 true
             }
         }
@@ -269,30 +272,24 @@ impl Inner {
     async fn create_outgoing_link(
         &mut self,
         index: Index,
-        local_id: Local<RepositoryId>,
         local_name: Local<RepositoryName>,
         remote_name: Remote<RepositoryName>,
     ) -> bool {
-        if self.links.contains_key(&local_id) {
-            log::warn!(
-                "not creating link from {:?} ({:?}) - already created",
-                local_id,
-                local_name,
-            );
+        if self.links.contains_name(&local_name) {
+            log::warn!("not creating link from {:?} - already exists", local_name);
             return true;
         }
 
         if self.pending_outgoing_links.contains_key(&local_name) {
-            log::warn!(
-                "not creating link from {:?} ({:?}) - already pending",
-                local_id,
-                local_name,
-            );
+            log::warn!("not creating link from {:?} - already pending", local_name);
             return true;
         }
 
+        let local_id = self.new_local_id();
+
         if let Some(pending) = self.pending_incoming_links.remove(&local_name) {
-            self.create_link(index, local_id, pending.remote_id).await
+            self.create_link(index, local_name, local_id, pending.remote_id)
+                .await
         } else {
             if !self
                 .writer
@@ -303,9 +300,8 @@ impl Inner {
                 .await
             {
                 log::warn!(
-                    "not creating link from {:?} ({:?}) - \
+                    "not creating link from {:?} - \
                      failed to send CreateLink message - all writers closed",
-                    local_id,
                     local_name,
                 );
                 return false;
@@ -324,7 +320,7 @@ impl Inner {
         remote_id: Remote<RepositoryId>,
     ) {
         if let Some(pending) = self.pending_outgoing_links.remove(&local_name) {
-            self.create_link(pending.index, pending.local_id, remote_id)
+            self.create_link(pending.index, local_name, pending.local_id, remote_id)
                 .await
         } else {
             self.pending_incoming_links
@@ -335,15 +331,17 @@ impl Inner {
     async fn create_link(
         &mut self,
         index: Index,
+        local_name: Local<RepositoryName>,
         local_id: Local<RepositoryId>,
         remote_id: Remote<RepositoryId>,
     ) {
-        log::debug!("creating link from {:?} to {:?}", local_id, remote_id);
+        log::debug!("creating link from {:?}", local_name);
 
         let (request_tx, request_rx) = mpsc::channel(1);
         let (response_tx, response_rx) = mpsc::channel(1);
 
         self.links.insert(
+            local_name,
             local_id,
             Link {
                 request_tx,
@@ -365,50 +363,53 @@ impl Inner {
         task::spawn(async move { log_error(server.run(), "server failed: ").await });
     }
 
-    fn destroy_link(&mut self, local_id: Local<RepositoryId>) {
+    fn destroy_link(&mut self, local_name: Local<RepositoryName>) {
         // NOTE: this dropps the `request_tx` / `response_tx` senders which causes the
         // corresponding receivers to be closed which terminates the client/server tasks.
-        self.links.remove(&local_id);
+        self.links.remove(&local_name);
     }
 
     async fn handle_request(&mut self, local_id: Local<RepositoryId>, request: Request) -> bool {
-        match self.links.entry(local_id) {
-            Entry::Occupied(entry) => {
-                if entry.get().request_tx.send(request).await.is_err() {
-                    log::warn!("server unexpectedly terminated - destroying the link");
-                    entry.remove();
-                }
+        if let Some(entry) = self.links.occupied_entry(local_id) {
+            if entry.get().request_tx.send(request).await.is_err() {
+                log::warn!("server unexpectedly terminated - destroying the link");
+                entry.remove();
             }
-            Entry::Vacant(_) => {
-                log::warn!(
-                    "received request {:?} for unlinked repository {:?}",
-                    request,
-                    local_id
-                );
-            }
+        } else {
+            log::warn!(
+                "received request {:?} for unlinked repository {:?}",
+                request,
+                local_id
+            );
         }
 
         !self.links.is_empty()
     }
 
     async fn handle_response(&mut self, local_id: Local<RepositoryId>, response: Response) -> bool {
-        match self.links.entry(local_id) {
-            Entry::Occupied(entry) => {
-                if entry.get().response_tx.send(response).await.is_err() {
-                    log::warn!("client unexpectedly terminated - destroying the link");
-                    entry.remove();
-                }
+        if let Some(entry) = self.links.occupied_entry(local_id) {
+            if entry.get().response_tx.send(response).await.is_err() {
+                log::warn!("client unexpectedly terminated - destroying the link");
+                entry.remove();
             }
-            Entry::Vacant(_) => {
-                log::warn!(
-                    "received response {:?} for unlinked repository {:?}",
-                    response,
-                    local_id
-                );
-            }
+        } else {
+            log::warn!(
+                "received response {:?} for unlinked repository {:?}",
+                response,
+                local_id
+            );
         }
 
         !self.links.is_empty()
+    }
+
+    fn new_local_id(&mut self) -> Local<RepositoryId> {
+        let new = self.next_local_id;
+        self.next_local_id = self
+            .next_local_id
+            .checked_add(1)
+            .expect("link limit exceeded");
+        Local::new(new)
     }
 }
 
@@ -426,12 +427,11 @@ pub(super) enum Command {
     SendMessage(Message),
     CreateLink {
         index: Index,
-        local_id: Local<RepositoryId>,
         local_name: Local<RepositoryName>,
         remote_name: Remote<RepositoryName>,
     },
     DestroyLink {
-        local_id: Local<RepositoryId>,
+        local_name: Local<RepositoryName>,
     },
 }
 
@@ -450,19 +450,17 @@ impl fmt::Debug for Command {
             Self::AddConnection(_) => f.debug_tuple("AddConnection").field(&"_").finish(),
             Self::SendMessage(message) => f.debug_tuple("SendMessage").field(message).finish(),
             Self::CreateLink {
-                local_id,
                 local_name,
                 remote_name,
                 ..
             } => f
                 .debug_struct("CreateLink")
-                .field("local_id", local_id)
                 .field("local_name", local_name)
                 .field("remote_name", remote_name)
                 .finish_non_exhaustive(),
-            Self::DestroyLink { local_id } => f
+            Self::DestroyLink { local_name } => f
                 .debug_struct("DestroyLink")
-                .field("local_id", local_id)
+                .field("local_name", local_name)
                 .finish(),
         }
     }
@@ -567,4 +565,42 @@ struct PendingOutgoingLink {
 // Pending link initiated by the remote repository.
 struct PendingIncomingLink {
     remote_id: Remote<RepositoryId>,
+}
+
+#[derive(Default)]
+struct LinkMap {
+    values: HashMap<Local<RepositoryId>, Link>,
+    ids: HashMap<Local<RepositoryName>, Local<RepositoryId>>,
+}
+
+impl LinkMap {
+    fn contains_name(&self, name: &Local<RepositoryName>) -> bool {
+        self.ids.contains_key(name)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.values.is_empty()
+    }
+
+    fn insert(&mut self, name: Local<RepositoryName>, id: Local<RepositoryId>, link: Link) {
+        self.values.insert(id, link);
+        self.ids.insert(name, id);
+    }
+
+    fn remove(&mut self, name: &Local<RepositoryName>) {
+        if let Some(id) = self.ids.remove(name) {
+            self.values.remove(&id);
+        }
+    }
+
+    fn occupied_entry(
+        &mut self,
+        id: Local<RepositoryId>,
+    ) -> Option<OccupiedEntry<Local<RepositoryId>, Link>> {
+        if let Entry::Occupied(entry) = self.values.entry(id) {
+            Some(entry)
+        } else {
+            None
+        }
+    }
 }

@@ -3,7 +3,7 @@ mod meta;
 
 pub(crate) use self::{
     manager::{init as init_manager, RepositoryManager, RepositorySubscription},
-    meta::{RepositoryId, RepositoryName},
+    meta::RepositoryName,
 };
 
 use crate::{

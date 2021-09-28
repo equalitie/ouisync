@@ -2,7 +2,7 @@ use crate::{
     block::BlockId,
     crypto::{AuthTag, Hash},
     index::{InnerNodeMap, LeafNodeSet, Summary},
-    repository::{RepositoryId, RepositoryName},
+    repository::RepositoryName,
     version_vector::VersionVector,
 };
 use serde::{Deserialize, Serialize};
@@ -128,3 +128,5 @@ impl From<Message> for Response {
         }
     }
 }
+
+pub(crate) type RepositoryId = u64;

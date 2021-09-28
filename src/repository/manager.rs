@@ -1,7 +1,4 @@
-use super::{
-    meta::{RepositoryId, RepositoryName},
-    Repository,
-};
+use super::{meta::RepositoryName, Repository};
 use crate::{
     crypto::Cryptor,
     db,
@@ -74,10 +71,8 @@ impl RepositorySubscription {
         &self.this_replica_id
     }
 
-    pub fn current(&self) -> impl Iterator<Item = (RepositoryId, &RepositoryName, &Index)> {
-        self.indices
-            .iter()
-            .map(|(name, index)| (RepositoryId::default(), name, index))
+    pub fn current(&self) -> impl Iterator<Item = (&RepositoryName, &Index)> {
+        self.indices.iter()
     }
 }
 
