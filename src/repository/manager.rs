@@ -1,4 +1,4 @@
-use super::{meta::RepositoryName, Repository};
+use super::{name::RepositoryName, Repository};
 use crate::{
     crypto::Cryptor,
     db,

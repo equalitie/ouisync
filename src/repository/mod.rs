@@ -1,9 +1,9 @@
 mod manager;
-mod meta;
+mod name;
 
 pub(crate) use self::{
     manager::{init as init_manager, RepositoryManager, RepositorySubscription},
-    meta::RepositoryName,
+    name::RepositoryName,
 };
 
 use crate::{
