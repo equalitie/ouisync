@@ -14,7 +14,7 @@ use self::{
 };
 use crate::{
     replica_id::ReplicaId,
-    repository::IndexMap,
+    repository::RepositorySubscription,
     scoped_task::{ScopedTaskHandle, ScopedTaskSet},
     tagged::{Local, Remote},
 };
@@ -30,7 +30,7 @@ use tokio::{
     net::{TcpListener, TcpStream},
     sync::{
         mpsc::{self, Receiver, Sender},
-        Mutex, RwLock,
+        Mutex,
     },
 };
 
@@ -72,7 +72,7 @@ pub(crate) struct Network {
 
 impl Network {
     pub(crate) async fn new(
-        index_map: Arc<RwLock<IndexMap>>,
+        subscription: RepositorySubscription,
         options: NetworkOptions,
     ) -> io::Result<Self> {
         let tasks = ScopedTaskSet::default();
@@ -85,7 +85,7 @@ impl Network {
             message_brokers: Mutex::new(HashMap::new()),
             forget_tx,
             task_handle: tasks.handle().clone(),
-            index_map,
+            subscription,
         };
 
         let inner = Arc::new(inner);
@@ -107,7 +107,7 @@ struct Inner {
     message_brokers: Mutex<HashMap<ReplicaId, MessageBroker>>,
     forget_tx: Sender<RuntimeId>,
     task_handle: ScopedTaskHandle,
-    index_map: Arc<RwLock<IndexMap>>,
+    subscription: RepositorySubscription,
 }
 
 impl Inner {
@@ -183,9 +183,7 @@ impl Inner {
     ) {
         let mut stream = TcpObjectStream::new(socket);
         let their_replica_id =
-            match perform_handshake(&mut stream, self.index_map.read().await.this_replica_id())
-                .await
-            {
+            match perform_handshake(&mut stream, self.subscription.this_replica_id()).await {
                 Ok(replica_id) => replica_id,
                 Err(error) => {
                     log::error!("Failed to perform handshake: {}", error);
@@ -209,7 +207,7 @@ impl Inner {
 
                 // TODO: creating implicit link if the local and remote repository names are the
                 // same. Eventually the links will be explicit.
-                for (id, name, index) in self.index_map.read().await.iter() {
+                for (id, name, index) in self.subscription.current() {
                     let local_id = Local::new(id);
                     let local_name = Local::new(name.clone());
                     let remote_name = Remote::new(name.clone());

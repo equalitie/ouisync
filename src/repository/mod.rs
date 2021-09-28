@@ -1,10 +1,8 @@
-mod index_map;
 mod manager;
 mod meta;
 
 pub(crate) use self::{
-    index_map::{init as init_index_map, IndexMap},
-    manager::RepositoryManager,
+    manager::{init as init_manager, RepositoryManager, RepositorySubscription},
     meta::{RepositoryId, RepositoryName},
 };
 
@@ -17,7 +15,7 @@ use crate::{
     directory::Directory,
     error::{Error, Result},
     file::File,
-    index::{self, BranchData, Index, Subscription},
+    index::{self, BranchData, BranchSubscription, Index},
     joint_directory::{JointDirectory, JointEntryRef},
     joint_entry::JointEntryType,
     path,
@@ -241,7 +239,7 @@ impl Repository {
     }
 
     /// Subscribe to change notification from all current and future branches.
-    pub(crate) fn subscribe(&self) -> Subscription {
+    pub(crate) fn subscribe(&self) -> BranchSubscription {
         self.shared.index.subscribe()
     }
 
@@ -282,6 +280,10 @@ impl Repository {
         }
 
         Ok(JointDirectory::new(dirs).await)
+    }
+
+    pub(crate) fn index(&self) -> &Index {
+        &self.shared.index
     }
 
     pub async fn debug_print(&self, print: DebugPrinter) {

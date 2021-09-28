@@ -66,8 +66,8 @@ impl Index {
     }
 
     /// Subscribe to change notification from all current and future branches.
-    pub fn subscribe(&self) -> Subscription {
-        Subscription {
+    pub fn subscribe(&self) -> BranchSubscription {
+        BranchSubscription {
             shared: self.shared.clone(),
             branch_changed_rxs: vec![],
             branch_created_rx: self.shared.branch_created_tx.subscribe(),
@@ -349,14 +349,14 @@ impl Branches {
 }
 
 /// Handle to receive change notification from index.
-pub(crate) struct Subscription {
+pub(crate) struct BranchSubscription {
     shared: Arc<Shared>,
     branch_changed_rxs: Vec<(ReplicaId, watch::Receiver<()>)>,
     branch_created_rx: watch::Receiver<()>,
     version: u64,
 }
 
-impl Subscription {
+impl BranchSubscription {
     /// Receives the next change notification. Returns the id of the changed branch. Returns `None`
     /// If `Index` was dropped.
     pub async fn recv(&mut self) -> Option<ReplicaId> {

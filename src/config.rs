@@ -5,7 +5,7 @@ pub(crate) async fn open_db(store: db::Store) -> Result<db::Pool> {
     let pool = db::open(store).await?;
 
     this_replica::init(&pool).await?;
-    repository::init_index_map(&pool).await?;
+    repository::init_manager(&pool).await?;
 
     Ok(pool)
 }

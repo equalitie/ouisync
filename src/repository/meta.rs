@@ -16,7 +16,7 @@ use std::{borrow::Borrow, ops::Deref, sync::Arc};
 pub(crate) struct RepositoryId(pub(super) u32);
 
 /// Friendly, human-readable name of a repository.
-#[derive(Clone, Eq, PartialEq, Hash, Serialize, Deserialize, Debug)]
+#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, Debug)]
 pub(crate) struct RepositoryName(Arc<str>);
 
 impl AsRef<str> for RepositoryName {

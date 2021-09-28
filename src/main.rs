@@ -20,7 +20,7 @@ async fn main() -> Result<()> {
 
     let session = Session::new(
         Store::from(options.config_path()?),
-        Cryptor::Null,
+        !options.disable_merger,
         options.network,
     )
     .await?;
@@ -35,7 +35,7 @@ async fn main() -> Result<()> {
         println!("Listening on port {}", session.local_addr().port());
         println!(
             "This replica ID is {}",
-            session.repositories().read().await.this_replica_id()
+            session.repositories().this_replica_id()
         );
     }
 

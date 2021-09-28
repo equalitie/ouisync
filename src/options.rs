@@ -1,4 +1,4 @@
-use anyhow::{Context, Error, Result};
+use anyhow::{Context, Result};
 use ouisync::NetworkOptions;
 use std::{convert::Infallible, path::PathBuf, str::FromStr};
 use structopt::StructOpt;

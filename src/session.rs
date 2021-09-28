@@ -1,13 +1,10 @@
 use crate::{
-    config,
-    crypto::Cryptor,
-    db,
+    config, db,
     error::{Error, Result},
     network::{Network, NetworkOptions},
-    repository::{IndexMap, Repository, RepositoryManager},
+    repository::{Repository, RepositoryManager},
 };
-use std::{net::SocketAddr, sync::Arc};
-use tokio::sync::RwLock;
+use std::net::SocketAddr;
 
 /// Entry point to this library.
 pub struct Session {
@@ -19,16 +16,14 @@ impl Session {
     /// Creates a new session.
     pub async fn new(
         config_db_store: db::Store,
-        cryptor: Cryptor,
+        enable_merger: bool,
         network_options: NetworkOptions,
     ) -> Result<Self> {
         let pool = config::open_db(config_db_store).await?;
+        let repositories = RepositoryManager::load(pool, enable_merger).await?;
 
-        let index_map = IndexMap::new(pool).await?;
-        let index_map = Arc::new(RwLock::new(index_map));
-
-        let repositories = RepositoryManager::new(index_map.clone(), cryptor);
-        let network = Network::new(index_map, network_options)
+        let subscription = repositories.subscribe();
+        let network = Network::new(subscription, network_options)
             .await
             .map_err(Error::Network)?;
 
@@ -46,7 +41,7 @@ impl Session {
     ///
     /// NOTE: Currently only one repository is supported but in the future this function will take
     /// an argument to specify which repository to open.
-    pub fn open_repository(&self, enable_merger: bool) -> Repository {
+    pub fn open_repository(&self) -> Repository {
         todo!()
         // Repository::new(self.index.clone(), self.cryptor.clone(), enable_merger)
     }
