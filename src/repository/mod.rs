@@ -3,7 +3,7 @@ mod manager;
 mod meta;
 
 pub(crate) use self::{
-    index_map::init as init_index_map,
+    index_map::{init as init_index_map, IndexMap},
     manager::RepositoryManager,
     meta::{RepositoryId, RepositoryName},
 };

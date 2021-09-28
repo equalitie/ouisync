@@ -3,19 +3,15 @@ use crate::{
     crypto::Cryptor,
     db,
     error::{Error, Result},
-    index::Index,
     network::{Network, NetworkOptions},
-    replica_id::ReplicaId,
-    repository::Repository,
-    this_replica,
+    repository::{IndexMap, Repository, RepositoryManager},
 };
-use std::net::SocketAddr;
+use std::{net::SocketAddr, sync::Arc};
+use tokio::sync::RwLock;
 
 /// Entry point to this library.
 pub struct Session {
-    // TODO: cryptor should probably be per repository
-    cryptor: Cryptor,
-    index: Index,
+    repositories: RepositoryManager,
     network: Network,
 }
 
@@ -28,17 +24,22 @@ impl Session {
     ) -> Result<Self> {
         let pool = config::open_db(config_db_store).await?;
 
-        let this_replica_id = this_replica::get_or_create_id(&pool).await?;
-        let index = Index::load(pool.clone(), this_replica_id).await?;
-        let network = Network::new(index.clone(), network_options)
+        let index_map = IndexMap::new(pool).await?;
+        let index_map = Arc::new(RwLock::new(index_map));
+
+        let repositories = RepositoryManager::new(index_map.clone(), cryptor);
+        let network = Network::new(index_map, network_options)
             .await
             .map_err(Error::Network)?;
 
         Ok(Self {
-            cryptor,
-            index,
+            repositories,
             network,
         })
+    }
+
+    pub fn repositories(&self) -> &RepositoryManager {
+        &self.repositories
     }
 
     /// Opens a repository.
@@ -46,15 +47,12 @@ impl Session {
     /// NOTE: Currently only one repository is supported but in the future this function will take
     /// an argument to specify which repository to open.
     pub fn open_repository(&self, enable_merger: bool) -> Repository {
-        Repository::new(self.index.clone(), self.cryptor.clone(), enable_merger)
+        todo!()
+        // Repository::new(self.index.clone(), self.cryptor.clone(), enable_merger)
     }
 
     /// Returns the local socket address the network listener is bound to.
     pub fn local_addr(&self) -> &SocketAddr {
         self.network.local_addr()
-    }
-
-    pub fn this_replica_id(&self) -> &ReplicaId {
-        self.index.this_replica_id()
     }
 }

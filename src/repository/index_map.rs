@@ -3,6 +3,7 @@ use crate::{
     db,
     error::{Error, Result},
     index::Index,
+    replica_id::ReplicaId,
     this_replica,
 };
 use futures_util::{future, TryStreamExt};
@@ -12,6 +13,7 @@ use std::collections::{hash_map, HashMap};
 /// Map of repository indices.
 pub(crate) struct IndexMap {
     pool: db::Pool,
+    this_replica_id: ReplicaId,
     values: HashMap<RepositoryId, Value>,
     ids: HashMap<RepositoryName, RepositoryId>,
 }
@@ -23,7 +25,7 @@ impl IndexMap {
         let mut values = HashMap::new();
         let mut ids = HashMap::new();
 
-        sqlx::query("SELECT rowid, name, db_path FROM repositories")
+        sqlx::query("SELECT id, name, db_path FROM repositories")
             .fetch(&pool)
             .err_into()
             .and_then(|row| async move {
@@ -50,7 +52,12 @@ impl IndexMap {
             })
             .await?;
 
-        Ok(Self { pool, values, ids })
+        Ok(Self {
+            pool,
+            this_replica_id,
+            values,
+            ids,
+        })
     }
 
     pub async fn create(
@@ -71,10 +78,9 @@ impl IndexMap {
             .await?;
 
         let id = RepositoryId(query_result.last_insert_rowid() as _);
-        let this_replica_id = this_replica::get_or_create_id(&mut tx).await?;
 
         let repo_pool = super::open_db(store).await?;
-        let index = Index::load(repo_pool, this_replica_id).await?;
+        let index = Index::load(repo_pool, self.this_replica_id).await?;
         let value = Value {
             index,
             name: name.clone(),
@@ -97,13 +103,13 @@ impl IndexMap {
     pub async fn destroy(&mut self, id: RepositoryId) -> Result<()> {
         let mut tx = self.pool.begin().await?;
 
-        let store = sqlx::query("SELECT db_path FROM repositories WHERE rowid = ?")
+        let store = sqlx::query("SELECT db_path FROM repositories WHERE id = ?")
             .bind(id)
             .fetch_one(&mut tx)
             .await?
             .get(0);
 
-        sqlx::query("DELETE FROM repositories WHERE rowid = ? LIMIT 1")
+        sqlx::query("DELETE FROM repositories WHERE id = ? LIMIT 1")
             .bind(id)
             .execute(&mut tx)
             .await?;
@@ -131,36 +137,14 @@ impl IndexMap {
         Some((*id, &value.name, &value.index))
     }
 
-    pub fn iter(&self) -> Iter {
-        Iter {
-            ids: self.ids.iter(),
-            values: &self.values,
-        }
+    pub fn iter(&self) -> impl Iterator<Item = (RepositoryId, &RepositoryName, &Index)> {
+        self.ids.iter().filter_map(move |(name, id)| {
+            self.values.get(id).map(|value| (*id, name, &value.index))
+        })
     }
-}
 
-pub(crate) struct Iter<'a> {
-    ids: hash_map::Iter<'a, RepositoryName, RepositoryId>,
-    values: &'a HashMap<RepositoryId, Value>,
-}
-
-impl<'a> Iterator for Iter<'a> {
-    type Item = (RepositoryId, &'a RepositoryName, &'a Index);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let (name, id) = self.ids.next()?;
-        let index = &self.values.get(id)?.index;
-
-        Some((*id, name, index))
-    }
-}
-
-impl<'a> IntoIterator for &'a IndexMap {
-    type Item = <Self::IntoIter as Iterator>::Item;
-    type IntoIter = Iter<'a>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.iter()
+    pub fn this_replica_id(&self) -> &ReplicaId {
+        &self.this_replica_id
     }
 }
 
@@ -173,8 +157,9 @@ struct Value {
 pub(crate) async fn init(pool: &db::Pool) -> Result<()> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS repositories (
+             id      INTEGER PRIMARY KEY,
              name    TEXT NOT NULL UNIQUE,
-             db_path TEXT NOT NULL,
+             db_path TEXT NOT NULL
          )",
     )
     .execute(pool)

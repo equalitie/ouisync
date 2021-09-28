@@ -33,7 +33,10 @@ async fn main() -> Result<()> {
 
     if options.print_ready_message {
         println!("Listening on port {}", session.local_addr().port());
-        println!("This replica ID is {}", session.this_replica_id());
+        println!(
+            "This replica ID is {}",
+            session.repositories().read().await.this_replica_id()
+        );
     }
 
     signal::ctrl_c().await?;

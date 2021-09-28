@@ -13,9 +13,8 @@ use self::{
     replica_discovery::{ReplicaDiscovery, RuntimeId},
 };
 use crate::{
-    index::Index,
     replica_id::ReplicaId,
-    repository::RepositoryId,
+    repository::IndexMap,
     scoped_task::{ScopedTaskHandle, ScopedTaskSet},
     tagged::{Local, Remote},
 };
@@ -31,7 +30,7 @@ use tokio::{
     net::{TcpListener, TcpStream},
     sync::{
         mpsc::{self, Receiver, Sender},
-        Mutex,
+        Mutex, RwLock,
     },
 };
 
@@ -72,7 +71,10 @@ pub(crate) struct Network {
 }
 
 impl Network {
-    pub(crate) async fn new(index: Index, options: NetworkOptions) -> io::Result<Self> {
+    pub(crate) async fn new(
+        index_map: Arc<RwLock<IndexMap>>,
+        options: NetworkOptions,
+    ) -> io::Result<Self> {
         let tasks = ScopedTaskSet::default();
 
         let listener = TcpListener::bind(options.listen_addr()).await?;
@@ -83,7 +85,7 @@ impl Network {
             message_brokers: Mutex::new(HashMap::new()),
             forget_tx,
             task_handle: tasks.handle().clone(),
-            index,
+            index_map,
         };
 
         let inner = Arc::new(inner);
@@ -105,7 +107,7 @@ struct Inner {
     message_brokers: Mutex<HashMap<ReplicaId, MessageBroker>>,
     forget_tx: Sender<RuntimeId>,
     task_handle: ScopedTaskHandle,
-    index: Index,
+    index_map: Arc<RwLock<IndexMap>>,
 }
 
 impl Inner {
@@ -181,7 +183,9 @@ impl Inner {
     ) {
         let mut stream = TcpObjectStream::new(socket);
         let their_replica_id =
-            match perform_handshake(&mut stream, &self.index.this_replica_id).await {
+            match perform_handshake(&mut stream, self.index_map.read().await.this_replica_id())
+                .await
+            {
                 Ok(replica_id) => replica_id,
                 Err(error) => {
                     log::error!("Failed to perform handshake: {}", error);
@@ -203,16 +207,17 @@ impl Inner {
                 )
                 .await;
 
-                // TODO: Using dummy repository ids and names for now. Will use real ones when
-                // multiple repositories are implemented.
-                broker
-                    .create_link(
-                        self.index.clone(),
-                        Local::new(RepositoryId::default()),
-                        Local::new("default".into()),
-                        Remote::new("default".into()),
-                    )
-                    .await;
+                // TODO: creating implicit link if the local and remote repository names are the
+                // same. Eventually the links will be explicit.
+                for (id, name, index) in self.index_map.read().await.iter() {
+                    let local_id = Local::new(id);
+                    let local_name = Local::new(name.clone());
+                    let remote_name = Remote::new(name.clone());
+
+                    broker
+                        .create_link(index.clone(), local_id, local_name, remote_name)
+                        .await;
+                }
 
                 entry.insert(broker);
             }
