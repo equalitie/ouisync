@@ -171,6 +171,100 @@ async fn rename_file() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn move_file_within_branch() {
+    let branch = setup().await;
+
+    let file_name = "cow.txt";
+    let content = b"moo";
+
+    // Create a directory with a single file.
+    let root_dir = branch.open_or_create_root().await.unwrap();
+    let aux_dir = root_dir.create_directory("aux".into()).await.unwrap();
+
+    let mut file = root_dir.create_file(file_name.into()).await.unwrap();
+    file.write(content).await.unwrap();
+    file.flush().await.unwrap();
+
+    let file_locator = *file.locator();
+
+    //
+    // Move the file from ./ to ./aux/
+    //
+
+    root_dir
+        .move_entry(
+            file_name,
+            branch.id(),
+            &aux_dir,
+            file_name,
+            VersionVector::first(*branch.id()),
+        )
+        .await
+        .unwrap();
+
+    let root_dir = branch.open_root(branch.clone()).await.unwrap();
+
+    let aux_dir = root_dir.read().await
+        .lookup_version("aux".into(), branch.id())
+        .unwrap()
+        .directory()
+        .unwrap()
+        .open()
+        .await
+        .unwrap();
+
+    let mut file = aux_dir
+        .read()
+        .await
+        .lookup_version(file_name, branch.id())
+        .unwrap()
+        .file()
+        .unwrap()
+        .open()
+        .await
+        .unwrap();
+
+    assert_eq!(&file_locator, file.locator());
+    assert_eq!(&content[..], &file.read_to_end().await.unwrap()[..]);
+
+    //
+    // Now move it back from ./aux/ to ./
+    //
+
+    let tombstone_vv = root_dir.read().await//root_dir_r
+        .lookup_version(file_name, branch.id())
+        .unwrap()
+        .tombstone()
+        .unwrap()
+        .version_vector()
+        .clone();
+
+    aux_dir
+        .move_entry(
+            file_name,
+            branch.id(),
+            &root_dir,
+            file_name,
+            tombstone_vv.increment(*branch.id()),
+        )
+        .await
+        .unwrap();
+
+    let mut file = root_dir
+        .read()
+        .await
+        .lookup_version(file_name, branch.id())
+        .unwrap()
+        .file()
+        .unwrap()
+        .open()
+        .await
+        .unwrap();
+
+    assert_eq!(&content[..], &file.read_to_end().await.unwrap()[..]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn remove_subdirectory() {
     let branch = setup().await;
 

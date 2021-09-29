@@ -67,9 +67,9 @@ impl<'a> EntryRef<'a> {
 
     pub fn version_vector(&self) -> &VersionVector {
         match self {
-            Self::File(r) => &r.entry_data.version_vector,
-            Self::Directory(r) => &r.entry_data.version_vector,
-            Self::Tombstone(r) => &r.entry_data.version_vector,
+            Self::File(f) => f.version_vector(),
+            Self::Directory(d) => d.version_vector(),
+            Self::Tombstone(t) => t.version_vector(),
         }
     }
 
@@ -246,6 +246,10 @@ impl<'a> DirectoryRef<'a> {
     pub fn data(&self) -> &EntryDirectoryData {
         self.entry_data
     }
+
+    pub fn version_vector(&self) -> &VersionVector {
+        &self.entry_data.version_vector
+    }
 }
 
 impl fmt::Debug for DirectoryRef<'_> {
@@ -277,6 +281,10 @@ impl<'a> TombstoneRef<'a> {
 
     pub fn author(&self) -> &'a ReplicaId {
         self.inner.author
+    }
+
+    pub fn version_vector(&self) -> &VersionVector {
+        &self.entry_data.version_vector
     }
 }
 
