@@ -71,7 +71,7 @@ impl Default for NetworkOptions {
 pub struct Network {
     inner: Arc<Inner>,
     local_addr: SocketAddr,
-    tasks: ScopedTaskSet,
+    _tasks: ScopedTaskSet,
 }
 
 impl Network {
@@ -99,7 +99,7 @@ impl Network {
         Ok(Self {
             inner,
             local_addr,
-            tasks,
+            _tasks: tasks,
         })
     }
 
@@ -107,6 +107,20 @@ impl Network {
         &self.local_addr
     }
 
+    pub fn handle(&self) -> Handle {
+        Handle {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
+/// Handle for the network which can be cheaply cloned and sent to other threads.
+#[derive(Clone)]
+pub struct Handle {
+    inner: Arc<Inner>,
+}
+
+impl Handle {
     /// Register a local repository into the network. This links the repository with all matching
     /// repositories of currently connected remote replicas as well as any replicas connected in
     /// the future. The repository is automatically deregistered when dropped.
@@ -130,7 +144,7 @@ impl Network {
         }
 
         // Deregister the index when it gets closed.
-        self.tasks.spawn({
+        self.inner.task_handle.spawn({
             let closed = index.subscribe().closed();
             let inner = self.inner.clone();
 
@@ -146,6 +160,10 @@ impl Network {
         });
 
         true
+    }
+
+    pub fn this_replica_id(&self) -> &ReplicaId {
+        &self.inner.this_replica_id
     }
 }
 

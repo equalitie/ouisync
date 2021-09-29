@@ -116,7 +116,7 @@ static mut SESSION: *mut Session = ptr::null_mut();
 
 pub(super) struct Session {
     runtime: Runtime,
-    _network: Network,
+    network: Network,
     sender: Sender,
     _logger: Logger,
 }
@@ -134,7 +134,7 @@ impl Session {
 
         Ok(Self {
             runtime,
-            _network: network,
+            network,
             sender,
             _logger: logger,
         })
@@ -167,6 +167,10 @@ where
             .runtime
             .spawn(self.session.sender.invoke(self.port, self.error_ptr, f));
         Ok(())
+    }
+
+    pub(super) fn network(&self) -> &Network {
+        &self.session.network
     }
 }
 

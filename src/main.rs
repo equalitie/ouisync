@@ -23,6 +23,7 @@ async fn main() -> Result<()> {
 
     // Start the network
     let network = Network::new(this_replica_id, &options.network).await?;
+    let network_handle = network.handle();
 
     // Mount repositories
     let mut mount_guards = Vec::new();
@@ -35,7 +36,7 @@ async fn main() -> Result<()> {
         )
         .await?;
 
-        network.register(&mount_point.name, &repo).await;
+        network_handle.register(&mount_point.name, &repo).await;
 
         let guard = virtual_filesystem::mount(
             tokio::runtime::Handle::current(),
