@@ -137,44 +137,59 @@ impl Repository {
     /// Moves (renames) an entry from the source path to the destination path.
     /// If both source and destination refer to the same entry, this is a no-op.
     /// Returns the parent directories of both `src` and `dst`.
-    pub async fn move_entry<S: AsRef<Utf8Path>, D: AsRef<Utf8Path>>(
+    pub async fn move_entry<
+        S: AsRef<Utf8Path> + Clone + std::fmt::Debug,
+        D: AsRef<Utf8Path> + Clone + std::fmt::Debug,
+    >(
         &self,
         src_dir_path: S,
         src_name: &str,
         dst_dir_path: D,
         dst_name: &str,
     ) -> Result<()> {
-        let src_joint_dir = self.open_directory(src_dir_path).await?;
+        let src_joint_dir = self.open_directory(src_dir_path.clone()).await?;
         let src_joint_reader = src_joint_dir.read().await;
-        let src_entry = src_joint_reader.lookup_unique(src_name)?;
 
-        match src_entry {
-            JointEntryRef::File(file_ref) => {
-                let src_name = file_ref.name().to_string();
-                let src_author = *file_ref.author();
-                let src_dir = file_ref.parent().clone();
+        let (src_dir, src_name, src_author) = match src_joint_reader.lookup_unique(src_name)? {
+            JointEntryRef::File(entry) => {
+                let src_name = entry.name().to_string();
+                let src_author = *entry.author();
 
-                let dst_dir = self.create_directory(dst_dir_path).await?;
+                let mut file = entry.open().await?;
 
-                // src_joint_reader holds a read lock to the src_dir. The next step then tries to
-                // get a write lock to it, so we must release the former to avoid deadlock.
                 drop(src_joint_reader);
-                src_dir
-                    .move_entry(&src_name, &src_author, &dst_dir, dst_name)
-                    .await?;
+                drop(src_joint_dir);
 
-                src_dir.flush(None).await?;
+                file.fork().await?;
 
-                if !src_dir.represents_same_directory_as(&dst_dir) {
-                    dst_dir.flush(None).await?;
-                }
+                (file.parent(), src_name, src_author)
             }
-            JointEntryRef::Directory(_) => {
-                todo!()
-            }
-        }
+            JointEntryRef::Directory(_) => todo!(),
+        };
 
-        Ok(())
+        let dst_joint_dir = self.open_directory(dst_dir_path.clone()).await?;
+        let dst_joint_reader = dst_joint_dir.read().await;
+
+        let dst_vv = match dst_joint_reader.lookup_unique(dst_name) {
+            Err(Error::EntryNotFound) => {
+                // Even if there is no regular entry, there still may be tombstones and so the
+                // destination version vector must be "happened after" those.
+                dst_joint_reader
+                    .merge_version_vectors(dst_name)
+                    .increment(*self.this_replica_id())
+            }
+            Ok(_) => return Err(Error::EntryExists),
+            Err(e) => return Err(e),
+        };
+
+        drop(dst_joint_reader);
+        drop(dst_joint_dir);
+
+        let dst_dir = self.create_directory(dst_dir_path).await?;
+
+        src_dir
+            .move_entry(&src_name, &src_author, &dst_dir, dst_name, dst_vv)
+            .await
     }
 
     /// Returns the local branch

@@ -10,12 +10,13 @@ mod tests;
 pub(crate) use self::{cache::RootDirectoryCache, parent_context::ParentContext};
 pub use self::{
     entry::{DirectoryRef, EntryRef, FileRef},
+    entry_data::{EntryData, EntryFileData},
     entry_type::EntryType,
 };
 
 use self::{
     cache::SubdirectoryCache,
-    entry_data::{EntryData, EntryTombstoneData},
+    entry_data::EntryTombstoneData,
     inner::{Content, Inner},
 };
 use crate::{
@@ -88,25 +89,7 @@ impl Directory {
     ///
     /// Panics if this directory is not in the local branch.
     pub async fn create_file(&self, name: String) -> Result<File> {
-        let mut inner = self.write().await.inner;
-
-        let author = *self.local_branch.id();
-
-        let blob_id = rand::random();
-        let vv = inner
-            .entry_version_vector(&name, &author)
-            .cloned()
-            .unwrap_or_default()
-            .increment(author);
-
-        inner
-            .insert_entry(name.clone(), author, EntryData::file(blob_id, vv))
-            .await?;
-
-        let locator = Locator::Head(blob_id);
-        let parent = ParentContext::new(self.inner.clone(), name, author);
-
-        Ok(File::create(self.local_branch.clone(), locator, parent))
+        self.write().await.create_file(name).await
     }
 
     /// Creates a new subdirectory of this directory.
@@ -127,7 +110,12 @@ impl Directory {
             .increment(author);
 
         inner
-            .insert_entry(name.clone(), author, EntryData::directory(blob_id, vv))
+            .insert_entry(
+                name.clone(),
+                author,
+                EntryData::directory(blob_id, vv),
+                None,
+            )
             .await?;
 
         let locator = Locator::Head(blob_id);
@@ -151,7 +139,7 @@ impl Directory {
         author: &ReplicaId,
         vv: VersionVector,
     ) -> Result<()> {
-        self.write().await.remove_file(name, author, vv).await
+        self.write().await.remove_file(name, author, vv, None).await
     }
 
     /// Removes a subdirectory from this directory.
@@ -181,49 +169,53 @@ impl Directory {
         inner.blob.remove().await
     }
 
+    /// Preconditions: self, dst_dir and the file referred to src_name are all local.
     pub async fn move_entry(
         &self,
         src_name: &str,
         src_author: &ReplicaId,
         dst_dir: &Directory,
         dst_name: &str,
+        dst_vv: VersionVector,
     ) -> Result<()> {
-        if self.represents_same_directory_as(dst_dir) {
-            // Note: checking for whether the src and dst are the same is postponed for later
-            // because if the source doesn't exist we need to return an error.
+        let this_replica_id = *self.this_replica_id();
 
-            self.write().await.inner.change_name_or_author(
-                src_name,
-                src_author,
-                dst_name,
-                self.local_branch.id(),
-            )
-        } else {
-            let src_reader = self.read().await;
-            let src_entry = src_reader.lookup_version(src_name, src_author)?;
+        let src_dir_reader = self.read().await;
 
-            let src_is_on_same_branch =
-                self.local_branch.id() == src_reader.inner.blob.branch().id();
+        // Unwrap is OK because we just forked the entry above.
+        let src_entry = src_dir_reader.lookup_version(src_name, src_author).unwrap();
+        let src_blob_id = *src_entry.file()?.blob_id();
 
-            match src_entry {
-                EntryRef::File(_) => {
-                    if !src_is_on_same_branch {
-                        todo!()
-                    }
-                    todo!()
-                }
-                EntryRef::Directory(_) => {
-                    if !src_is_on_same_branch {
-                        todo!()
-                    }
-                    todo!()
-                }
-                EntryRef::Tombstone(_) => {
-                    // Same as if the source entry did not exist.
-                    Err(Error::EntryNotFound)
-                }
-            }
+        let dst_entry = {
+            // TODO: vv is needlessly created twice here.
+            let mut dst_entry = src_entry.clone_data();
+            *dst_entry.version_vector_mut() = dst_vv;
+            dst_entry
+        };
+
+        let src_name = src_entry.name().to_string();
+        let src_vv = src_entry.version_vector().clone();
+
+        drop(src_dir_reader);
+
+        self.write()
+            .await
+            .remove_file(&src_name, src_author, src_vv, Some(src_blob_id))
+            .await?;
+
+        dst_dir
+            .write()
+            .await
+            .insert_entry(dst_name.into(), this_replica_id, dst_entry, None)
+            .await?;
+
+        self.flush(None).await?;
+
+        if !self.represents_same_directory_as(dst_dir) {
+            dst_dir.flush(None).await?;
         }
+
+        Ok(())
     }
 
     // Forks this directory into the local branch.
@@ -277,7 +269,9 @@ impl Directory {
         let blob_id = rand::random();
         let entry_data = EntryData::file(blob_id, version_vector);
 
-        inner.insert_entry(name, author_id, entry_data).await?;
+        inner
+            .insert_entry(name, author_id, entry_data, None)
+            .await?;
 
         Ok(blob_id)
     }
@@ -332,6 +326,10 @@ impl Directory {
         let inner = self.inner.write().await;
         inner.assert_local(self.local_branch.id());
         Writer { outer: self, inner }
+    }
+
+    pub fn this_replica_id(&self) -> &ReplicaId {
+        self.local_branch.id()
     }
 
     pub async fn debug_print(&self, print: DebugPrinter) {
@@ -401,6 +399,31 @@ impl Writer<'_> {
         }
     }
 
+    pub async fn create_file(&mut self, name: String) -> Result<File> {
+        let author = *self.this_replica_id();
+
+        let blob_id = rand::random();
+        let vv = self
+            .inner
+            .entry_version_vector(&name, &author)
+            .cloned()
+            .unwrap_or_default()
+            .increment(author);
+
+        self.inner
+            .insert_entry(name.clone(), author, EntryData::file(blob_id, vv), None)
+            .await?;
+
+        let locator = Locator::Head(blob_id);
+        let parent = ParentContext::new(self.outer.inner.clone(), name, author);
+
+        Ok(File::create(
+            self.outer.local_branch.clone(),
+            locator,
+            parent,
+        ))
+    }
+
     pub fn lookup_version(&self, name: &'_ str, author: &ReplicaId) -> Result<EntryRef> {
         lookup_version(&*self.inner, self.outer, name, author)
     }
@@ -426,36 +449,45 @@ impl Writer<'_> {
         name: &str,
         author: &ReplicaId,
         vv: VersionVector,
+        keep: Option<BlobId>,
     ) -> Result<()> {
         let this_replica_id = *self.this_replica_id();
-
-        let local_entry = match self.lookup_version(name, &this_replica_id) {
-            Ok(file) => Some(file),
-            Err(Error::EntryNotFound) => None,
-            Err(e) => return Err(e),
-        };
 
         let new_entry = if author == &this_replica_id {
             EntryData::Tombstone(EntryTombstoneData {
                 version_vector: vv.increment(this_replica_id),
             })
-        } else if let Some(local_entry) = local_entry {
-            let mut new_entry = local_entry.data();
-            new_entry.version_vector_mut().merge(&vv);
-            new_entry
         } else {
-            EntryData::Tombstone(EntryTombstoneData {
-                version_vector: vv.increment(this_replica_id),
-            })
+            match self.lookup_version(name, &this_replica_id) {
+                Ok(local_entry) => {
+                    let mut new_entry = local_entry.clone_data();
+                    new_entry.version_vector_mut().merge(&vv);
+                    new_entry
+                }
+                Err(Error::EntryNotFound) => EntryData::Tombstone(EntryTombstoneData {
+                    version_vector: vv.increment(this_replica_id),
+                }),
+                Err(e) => return Err(e),
+            }
         };
 
         self.inner
-            .insert_entry(name.into(), this_replica_id, new_entry)
+            .insert_entry(name.into(), this_replica_id, new_entry, keep)
             .await
     }
 
+    pub async fn insert_entry(
+        &mut self,
+        name: String,
+        author: ReplicaId,
+        entry: EntryData,
+        keep: Option<BlobId>,
+    ) -> Result<()> {
+        self.inner.insert_entry(name, author, entry, keep).await
+    }
+
     pub fn this_replica_id(&self) -> &ReplicaId {
-        self.outer.local_branch.id()
+        self.outer.this_replica_id()
     }
 }
 

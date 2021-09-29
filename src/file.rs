@@ -2,7 +2,7 @@ use crate::{
     blob::{self, Blob},
     blob_id::BlobId,
     branch::Branch,
-    directory::ParentContext,
+    directory::{Directory, ParentContext},
     error::Result,
     locator::Locator,
     version_vector::VersionVector,
@@ -56,6 +56,10 @@ impl File {
 
     pub fn branch(&self) -> &Branch {
         self.blob.branch()
+    }
+
+    pub fn parent(&self) -> Directory {
+        self.parent.directory(self.local_branch.clone())
     }
 
     /// Length of this file in bytes.
@@ -112,12 +116,6 @@ impl File {
             .await?;
 
         Ok(())
-    }
-
-    /// Removes this file.
-    pub async fn remove(&mut self) -> Result<()> {
-        // TODO: consider only allowing this if file is in the local branch.
-        self.blob.remove().await
     }
 
     pub fn blob_id(&self) -> &BlobId {

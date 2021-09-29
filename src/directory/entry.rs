@@ -6,6 +6,7 @@ use super::{
     Directory,
 };
 use crate::{
+    blob_id::BlobId,
     error::{Error, Result},
     file::File,
     locator::Locator,
@@ -52,6 +53,10 @@ impl<'a> EntryRef<'a> {
         }
     }
 
+    pub fn author(&self) -> &ReplicaId {
+        self.inner().author
+    }
+
     pub fn entry_type(&self) -> EntryType {
         match self {
             Self::File(_) => EntryType::File,
@@ -62,9 +67,9 @@ impl<'a> EntryRef<'a> {
 
     pub fn version_vector(&self) -> &VersionVector {
         match self {
-            Self::File(r) => &r.entry_data.version_vector,
-            Self::Directory(r) => &r.entry_data.version_vector,
-            Self::Tombstone(r) => &r.entry_data.version_vector,
+            Self::File(f) => f.version_vector(),
+            Self::Directory(d) => d.version_vector(),
+            Self::Tombstone(t) => t.version_vector(),
         }
     }
 
@@ -78,9 +83,17 @@ impl<'a> EntryRef<'a> {
 
     pub fn directory(self) -> Result<DirectoryRef<'a>> {
         match self {
-            Self::File(_) => Err(Error::EntryNotDirectory),
+            Self::File(_) => Err(Error::EntryIsFile),
             Self::Directory(r) => Ok(r),
-            Self::Tombstone(_) => Err(Error::EntryNotDirectory),
+            Self::Tombstone(_) => Err(Error::EntryIsTombstone),
+        }
+    }
+
+    pub fn tombstone(self) -> Result<TombstoneRef<'a>> {
+        match self {
+            Self::File(_) => Err(Error::EntryIsFile),
+            Self::Directory(_) => Err(Error::EntryIsDirectory),
+            Self::Tombstone(t) => Ok(t),
         }
     }
 
@@ -100,7 +113,7 @@ impl<'a> EntryRef<'a> {
         self.inner().parent_outer
     }
 
-    pub fn data(&self) -> EntryData {
+    pub fn clone_data(&self) -> EntryData {
         match self {
             Self::File(e) => EntryData::File(e.data().clone()),
             Self::Directory(e) => EntryData::Directory(e.data().clone()),
@@ -129,7 +142,11 @@ impl<'a> FileRef<'a> {
     }
 
     pub fn locator(&self) -> Locator {
-        Locator::Head(self.entry_data.blob_id)
+        Locator::Head(*self.blob_id())
+    }
+
+    pub fn blob_id(&self) -> &BlobId {
+        &self.entry_data.blob_id
     }
 
     pub fn author(&self) -> &'a ReplicaId {
@@ -205,6 +222,10 @@ impl<'a> DirectoryRef<'a> {
         Locator::Head(self.entry_data.blob_id)
     }
 
+    pub fn author(&self) -> &'a ReplicaId {
+        self.inner.author
+    }
+
     pub async fn open(&self) -> Result<Directory> {
         self.inner
             .parent_inner
@@ -224,6 +245,10 @@ impl<'a> DirectoryRef<'a> {
 
     pub fn data(&self) -> &EntryDirectoryData {
         self.entry_data
+    }
+
+    pub fn version_vector(&self) -> &VersionVector {
+        &self.entry_data.version_vector
     }
 }
 
@@ -252,6 +277,14 @@ impl<'a> TombstoneRef<'a> {
 
     pub fn data(&self) -> &EntryTombstoneData {
         self.entry_data
+    }
+
+    pub fn author(&self) -> &'a ReplicaId {
+        self.inner.author
+    }
+
+    pub fn version_vector(&self) -> &VersionVector {
+        &self.entry_data.version_vector
     }
 }
 

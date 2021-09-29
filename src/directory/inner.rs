@@ -1,8 +1,4 @@
-use super::{
-    cache::SubdirectoryCache,
-    entry_data::{EntryData, EntryTombstoneData},
-    parent_context::ParentContext,
-};
+use super::{cache::SubdirectoryCache, entry_data::EntryData, parent_context::ParentContext};
 use crate::{
     blob::Blob,
     blob_id::BlobId,
@@ -45,17 +41,23 @@ impl Inner {
         Ok(())
     }
 
+    // If `keep` is set to Some(some_blob_id), than that blob won't be removed from the store. This
+    // is useful when we want to move or rename a an entry.
     pub async fn insert_entry(
         &mut self,
         name: String,
         author: ReplicaId,
         entry_data: EntryData,
+        keep: Option<BlobId>,
     ) -> Result<()> {
-        let old_blob_ids = self.content.insert(name, author, entry_data)?;
+        let old_blobs = self.content.insert(name.clone(), author, entry_data)?;
 
         // TODO: This should succeed/fail atomically with the above.
         let branch = self.blob.branch();
-        future::try_join_all(old_blob_ids.into_iter().map(|old_blob_id| async move {
+
+        let to_delete = old_blobs.into_iter().filter(|b| keep != Some(*b));
+
+        future::try_join_all(to_delete.map(|old_blob_id| async move {
             Blob::open(branch.clone(), Locator::Head(old_blob_id))
                 .await?
                 .remove()
@@ -152,18 +154,6 @@ impl Inner {
             "mutable operations not allowed - directory is not in the local branch"
         )
     }
-
-    // Used for moving within the same directory
-    pub fn change_name_or_author(
-        &mut self,
-        src_name: &str,
-        src_author: &ReplicaId,
-        dst_name: &str,
-        dst_author: &ReplicaId,
-    ) -> Result<()> {
-        self.content
-            .change_name_or_author(src_name, src_author, dst_name, dst_author)
-    }
 }
 
 #[derive(Clone, Deserialize, Serialize, Debug)]
@@ -247,7 +237,7 @@ impl Content {
         };
 
         // Remove the outdated entries and collect their blob ids.
-        let old_blob_ids = old_authors
+        let old_blobs = old_authors
             .into_iter()
             .filter(|old_author| *old_author != author)
             .filter_map(|old_author| versions.remove(&old_author))
@@ -263,7 +253,7 @@ impl Content {
 
         self.dirty = true;
 
-        Ok(old_blob_ids)
+        Ok(old_blobs)
     }
 
     // TODO: We shouldn't use this one, keeping it for now so that I can solve one problem at a
@@ -273,65 +263,6 @@ impl Content {
         self.dirty = true;
 
         Ok(())
-    }
-
-    pub fn change_name_or_author(
-        &mut self,
-        src_name: &str,
-        src_author: &ReplicaId,
-        dst_name: &str,
-        dst_author: &ReplicaId,
-    ) -> Result<()> {
-        let src_versions = self.entries.get_mut(src_name).ok_or(Error::EntryNotFound)?;
-
-        let mut old_data = match src_versions.entry(*src_author) {
-            btree_map::Entry::Vacant(_) => {
-                return Err(Error::EntryNotFound);
-            }
-            btree_map::Entry::Occupied(mut src_entry) => {
-                let data = src_entry.get_mut();
-
-                if matches!(data, EntryData::Tombstone(_)) {
-                    return Err(Error::EntryNotFound);
-                }
-
-                // Note that we can't do this check earlier because we need to fail if the source
-                // name or author doesn't exist.
-                if src_author == dst_author && src_name == dst_name {
-                    return Ok(());
-                }
-
-                let old_data = data.clone();
-
-                *data = EntryData::Tombstone(EntryTombstoneData {
-                    version_vector: old_data.version_vector().clone().increment(*dst_author),
-                });
-
-                self.dirty = true;
-
-                old_data
-            }
-        };
-
-        match self
-            .entries
-            .entry(dst_name.into())
-            .or_default()
-            .entry(*dst_author)
-        {
-            btree_map::Entry::Vacant(dst_entry) => {
-                let vv = old_data.version_vector_mut();
-
-                vv.clear_in_place();
-                vv.increment_in_place(*dst_author);
-
-                dst_entry.insert(old_data);
-                Ok(())
-            }
-            btree_map::Entry::Occupied(_) => {
-                todo!();
-            }
-        }
     }
 }
 
