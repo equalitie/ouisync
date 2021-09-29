@@ -932,7 +932,7 @@ fn to_error_code(error: &Error) -> libc::c_int {
         | Error::Network(_) => libc::EIO,
         Error::EntryNotFound | Error::AmbiguousEntry => libc::ENOENT,
         Error::EntryExists => libc::EEXIST,
-        Error::EntryNotDirectory => libc::ENOTDIR,
+        Error::EntryIsFile => libc::ENOTDIR,
         Error::EntryIsDirectory => libc::EISDIR,
         Error::NonUtf8FileName => libc::EINVAL,
         Error::OffsetOutOfRange => libc::EINVAL,

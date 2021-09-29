@@ -463,7 +463,7 @@ impl<'a> JointEntryRef<'a> {
     pub fn directory(self) -> Result<JointDirectoryRef<'a>> {
         match self {
             Self::Directory(r) => Ok(r),
-            Self::File(_) => Err(Error::EntryNotDirectory),
+            Self::File(_) => Err(Error::EntryIsFile),
         }
     }
 }

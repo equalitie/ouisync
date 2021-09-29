@@ -29,20 +29,20 @@ impl JointEntry {
     pub fn as_file_mut(&mut self) -> Result<&mut File> {
         match self {
             Self::File(file) => Ok(file),
-            Self::Directory(_) => Err(Error::EntryNotDirectory),
+            Self::Directory(_) => Err(Error::EntryIsDirectory),
         }
     }
 
     pub fn as_directory(&self) -> Result<&JointDirectory> {
         match self {
-            Self::File(_) => Err(Error::EntryIsDirectory),
+            Self::File(_) => Err(Error::EntryIsFile),
             Self::Directory(dirs) => Ok(dirs),
         }
     }
 
     pub fn as_directory_mut(&mut self) -> Result<&mut JointDirectory> {
         match self {
-            Self::File(_) => Err(Error::EntryIsDirectory),
+            Self::File(_) => Err(Error::EntryIsFile),
             Self::Directory(dirs) => Ok(dirs),
         }
     }

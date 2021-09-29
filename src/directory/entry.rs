@@ -83,9 +83,17 @@ impl<'a> EntryRef<'a> {
 
     pub fn directory(self) -> Result<DirectoryRef<'a>> {
         match self {
-            Self::File(_) => Err(Error::EntryNotDirectory),
+            Self::File(_) => Err(Error::EntryIsFile),
             Self::Directory(r) => Ok(r),
-            Self::Tombstone(_) => Err(Error::EntryNotDirectory),
+            Self::Tombstone(_) => Err(Error::EntryIsTombstone),
+        }
+    }
+
+    pub fn tombstone(self) -> Result<TombstoneRef<'a>> {
+        match self {
+            Self::File(_) => Err(Error::EntryIsFile),
+            Self::Directory(_) => Err(Error::EntryIsDirectory),
+            Self::Tombstone(t) => Ok(t),
         }
     }
 
