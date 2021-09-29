@@ -106,7 +106,7 @@ impl Network {
         &self.local_addr
     }
 
-    /// Register a local repository to the network. This links the repository with all matching
+    /// Register a local repository into the network. This links the repository with all matching
     /// repositories of currently connected remote replicas as well as any replicas connected in
     /// the future. The repository is automatically deregistered when dropped.
     pub async fn register(&self, name: String, repository: &Repository) -> bool {

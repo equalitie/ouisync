@@ -21,8 +21,6 @@ impl Bin {
 
         let mut process = Command::new(env!("CARGO_BIN_EXE_ouisync"))
             .arg("--temp")
-            .arg("--create-repository")
-            .arg("test")
             .arg("--mount")
             .arg(format!("test:{}", mount_dir.path().display()))
             .arg("--print-ready-message")

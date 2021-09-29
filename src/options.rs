@@ -23,15 +23,9 @@ pub(crate) struct Options {
     pub network: NetworkOptions,
 
     /// Mount the named repository at the specified path. Can be specified multiple times to mount
-    /// multiple repositories.
+    /// multiple repositories. If no such repository exists yet, it will be created.
     #[structopt(short, long, value_name = "NAME:PATH")]
     pub mount: Vec<MountPoint>,
-
-    /// Create repository with the specified name. The repository database will be created in
-    /// "DATA_DIR/repositories/NAME.db". Can be specified multiple times to create multiple
-    /// repositories.
-    #[structopt(long, value_name = "NAME")]
-    pub create_repository: Vec<String>,
 
     /// Prints the path to the data directory and exits.
     #[structopt(long)]
@@ -43,7 +37,8 @@ pub(crate) struct Options {
     pub print_ready_message: bool,
 
     /// Use temporary, memory-only databases. All data will be wiped out when the program
-    /// exits. Use only for experimentation and testing.
+    /// exits. If this flag is set, the --data-dir and --config-path options are ignored.
+    /// Use only for experimentation and testing.
     #[structopt(long)]
     pub temp: bool,
 }

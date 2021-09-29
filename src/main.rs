@@ -4,7 +4,6 @@ mod virtual_filesystem;
 use self::options::Options;
 use anyhow::Result;
 use ouisync::{config, this_replica, Cryptor, Network, Repository};
-use std::collections::HashMap;
 use structopt::StructOpt;
 use tokio::signal;
 
@@ -22,37 +21,19 @@ async fn main() -> Result<()> {
     let pool = config::open_db(&options.config_store()?).await?;
     let this_replica_id = this_replica::get_or_create_id(&pool).await?;
 
-    let mut new_repositories = HashMap::new();
-
-    // Create repositories
-    for name in &options.create_repository {
-        let repo = Repository::open(
-            options.repository_store(name)?,
-            this_replica_id,
-            Cryptor::Null,
-            !options.disable_merger,
-        )
-        .await?;
-        new_repositories.insert(name.clone(), repo);
-    }
-
     // Start the network
     let network = Network::new(this_replica_id, &options.network).await?;
 
     // Mount repositories
     let mut mount_guards = Vec::new();
     for mount_point in &options.mount {
-        let repo = if let Some(repo) = new_repositories.remove(&mount_point.name) {
-            repo
-        } else {
-            Repository::open(
-                options.repository_store(&mount_point.name)?,
-                this_replica_id,
-                Cryptor::Null,
-                !options.disable_merger,
-            )
-            .await?
-        };
+        let repo = Repository::open(
+            options.repository_store(&mount_point.name)?,
+            this_replica_id,
+            Cryptor::Null,
+            !options.disable_merger,
+        )
+        .await?;
 
         network.register(mount_point.name.clone(), &repo).await;
 
