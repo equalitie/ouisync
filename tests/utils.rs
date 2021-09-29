@@ -20,10 +20,9 @@ impl Bin {
         let mount_dir = TempDir::new().unwrap();
 
         let mut process = Command::new(env!("CARGO_BIN_EXE_ouisync"))
-            .arg("--config-path")
-            .arg(":memory:")
+            .arg("--temp")
             .arg("--create-repository")
-            .arg("test::memory:")
+            .arg("test")
             .arg("--mount")
             .arg(format!("test:{}", mount_dir.path().display()))
             .arg("--print-ready-message")

@@ -14,8 +14,11 @@ use self::{
 };
 use crate::{
     error::{Error, Result},
+    index::Index,
     replica_id::ReplicaId,
+    repository::Repository,
     scoped_task::{ScopedTaskHandle, ScopedTaskSet},
+    tagged::{Local, Remote},
 };
 use futures_util::future;
 use std::{
@@ -29,7 +32,7 @@ use tokio::{
     net::{TcpListener, TcpStream},
     sync::{
         mpsc::{self, Receiver, Sender},
-        Mutex,
+        Mutex, RwLock,
     },
 };
 
@@ -65,8 +68,9 @@ impl Default for NetworkOptions {
 }
 
 pub struct Network {
-    _tasks: ScopedTaskSet,
+    inner: Arc<Inner>,
     local_addr: SocketAddr,
+    tasks: ScopedTaskSet,
 }
 
 impl Network {
@@ -82,28 +86,62 @@ impl Network {
         let inner = Inner {
             this_replica_id,
             message_brokers: Mutex::new(HashMap::new()),
+            indices: RwLock::new(HashMap::new()),
             forget_tx,
             task_handle: tasks.handle().clone(),
         };
 
         let inner = Arc::new(inner);
         tasks.spawn(inner.clone().run_discovery(local_addr.port(), forget_rx));
-        tasks.spawn(inner.run_listener(listener));
+        tasks.spawn(inner.clone().run_listener(listener));
 
         Ok(Self {
-            _tasks: tasks,
+            inner,
             local_addr,
+            tasks,
         })
     }
 
     pub fn local_addr(&self) -> &SocketAddr {
         &self.local_addr
     }
+
+    /// Register a local repository to the network. This links the repository with all matching
+    /// repositories of currently connected remote replicas as well as any replicas connected in
+    /// the future. The repository is automatically deregistered when dropped.
+    pub async fn register(&self, name: String, repository: &Repository) -> bool {
+        let index = repository.index();
+
+        match self.inner.indices.write().await.entry(name.to_owned()) {
+            Entry::Vacant(entry) => {
+                entry.insert(index.clone());
+            }
+            Entry::Occupied(_) => return false,
+        }
+
+        for broker in self.inner.message_brokers.lock().await.values() {
+            create_link(broker, name.to_owned(), index.clone()).await;
+        }
+
+        // Remove the index from the `indices` map when it gets closed.
+        self.tasks.spawn({
+            let closed = index.subscribe().closed();
+            let inner = self.inner.clone();
+
+            async move {
+                closed.await;
+                inner.indices.write().await.remove(&name);
+            }
+        });
+
+        true
+    }
 }
 
 struct Inner {
     this_replica_id: ReplicaId,
     message_brokers: Mutex<HashMap<ReplicaId, MessageBroker>>,
+    indices: RwLock<HashMap<String, Index>>,
     forget_tx: Sender<RuntimeId>,
     task_handle: ScopedTaskHandle,
 }
@@ -202,18 +240,9 @@ impl Inner {
                 )
                 .await;
 
-                // TODO:
-                //
-                // // TODO: creating implicit link if the local and remote repository names are the
-                // // same. Eventually the links will be explicit.
-                // for (name, index) in self.subscription.current() {
-                //     let local_name = Local::new(name.clone());
-                //     let remote_name = Remote::new(name.clone());
-
-                //     broker
-                //         .create_link(index.clone(), local_name, remote_name)
-                //         .await;
-                // }
+                for (name, index) in self.indices.read().await.iter() {
+                    create_link(&broker, name.to_owned(), index.clone()).await;
+                }
 
                 entry.insert(broker);
             }
@@ -237,4 +266,14 @@ async fn perform_handshake(
 ) -> io::Result<ReplicaId> {
     stream.write(this_replica_id).await?;
     stream.read().await
+}
+
+async fn create_link(broker: &MessageBroker, name: String, index: Index) {
+    // TODO: creating implicit link if the local and remote repository names are the same.
+    // Eventually the links will be explicit.
+
+    let local_name = Local::new(name.clone());
+    let remote_name = Remote::new(name);
+
+    broker.create_link(index, local_name, remote_name).await
 }

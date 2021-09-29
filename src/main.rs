@@ -19,21 +19,21 @@ async fn main() -> Result<()> {
 
     env_logger::init();
 
-    let pool = config::open_db(&options.config_path()?.into()).await?;
+    let pool = config::open_db(&options.config_store()?).await?;
     let this_replica_id = this_replica::get_or_create_id(&pool).await?;
 
-    let mut repositories = HashMap::new();
+    let mut new_repositories = HashMap::new();
 
     // Create repositories
     for name in &options.create_repository {
         let repo = Repository::open(
-            options.repository_path(name)?.into(),
+            options.repository_store(name)?,
             this_replica_id,
             Cryptor::Null,
             !options.disable_merger,
         )
         .await?;
-        repositories.insert(name.clone(), repo);
+        new_repositories.insert(name.clone(), repo);
     }
 
     // Start the network
@@ -42,17 +42,19 @@ async fn main() -> Result<()> {
     // Mount repositories
     let mut mount_guards = Vec::new();
     for mount_point in &options.mount {
-        let repo = if let Some(repo) = repositories.remove(&mount_point.name) {
+        let repo = if let Some(repo) = new_repositories.remove(&mount_point.name) {
             repo
         } else {
             Repository::open(
-                options.repository_path(&mount_point.name)?.into(),
+                options.repository_store(&mount_point.name)?,
                 this_replica_id,
                 Cryptor::Null,
                 !options.disable_merger,
             )
             .await?
         };
+
+        network.register(mount_point.name.clone(), &repo).await;
 
         let guard = virtual_filesystem::mount(
             tokio::runtime::Handle::current(),

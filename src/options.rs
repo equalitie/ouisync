@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use ouisync::NetworkOptions;
+use ouisync::{NetworkOptions, Store};
 use std::{path::PathBuf, str::FromStr};
 use structopt::StructOpt;
 use thiserror::Error;
@@ -41,6 +41,11 @@ pub(crate) struct Options {
     /// Note this flag is unstable and experimental.
     #[structopt(long)]
     pub print_ready_message: bool,
+
+    /// Use temporary, memory-only databases. All data will be wiped out when the program
+    /// exits. Use only for experimentation and testing.
+    #[structopt(long)]
+    pub temp: bool,
 }
 
 impl Options {
@@ -64,13 +69,31 @@ impl Options {
         }
     }
 
-    /// Path to the database of a repository with the specified name.
+    /// Store of the config database
+    pub fn config_store(&self) -> Result<Store> {
+        if self.temp {
+            Ok(Store::Memory)
+        } else {
+            Ok(Store::File(self.config_path()?))
+        }
+    }
+
+    /// Path to the database of the repository with the specified name.
     pub fn repository_path(&self, name: &str) -> Result<PathBuf> {
         Ok(self
             .data_dir()?
             .join("repositories")
             .join(name)
             .with_extension("db"))
+    }
+
+    /// Store of the database of the repository with the specified name.
+    pub fn repository_store(&self, name: &str) -> Result<Store> {
+        if self.temp {
+            Ok(Store::Memory)
+        } else {
+            Ok(Store::File(self.repository_path(name)?))
+        }
     }
 }
 
