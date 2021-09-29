@@ -8,6 +8,7 @@ mod server;
 mod tests;
 
 use self::{
+    message::RepositoryId,
     message_broker::MessageBroker,
     object_stream::TcpObjectStream,
     replica_discovery::{ReplicaDiscovery, RuntimeId},
@@ -86,7 +87,7 @@ impl Network {
         let inner = Inner {
             this_replica_id,
             message_brokers: Mutex::new(HashMap::new()),
-            indices: RwLock::new(HashMap::new()),
+            indices: RwLock::new(IndexMap::default()),
             forget_tx,
             task_handle: tasks.handle().clone(),
         };
@@ -109,28 +110,38 @@ impl Network {
     /// Register a local repository into the network. This links the repository with all matching
     /// repositories of currently connected remote replicas as well as any replicas connected in
     /// the future. The repository is automatically deregistered when dropped.
-    pub async fn register(&self, name: String, repository: &Repository) -> bool {
+    pub async fn register(&self, name: &str, repository: &Repository) -> bool {
         let index = repository.index();
 
-        match self.inner.indices.write().await.entry(name.to_owned()) {
-            Entry::Vacant(entry) => {
-                entry.insert(index.clone());
-            }
-            Entry::Occupied(_) => return false,
-        }
+        let id = if let Some(id) = self
+            .inner
+            .indices
+            .write()
+            .await
+            .insert(name.to_owned(), index.clone())
+        {
+            id
+        } else {
+            return false;
+        };
 
         for broker in self.inner.message_brokers.lock().await.values() {
-            create_link(broker, name.to_owned(), index.clone()).await;
+            create_link(broker, id, name.to_owned(), index.clone()).await;
         }
 
-        // Remove the index from the `indices` map when it gets closed.
+        // Deregister the index when it gets closed.
         self.tasks.spawn({
             let closed = index.subscribe().closed();
             let inner = self.inner.clone();
 
             async move {
                 closed.await;
-                inner.indices.write().await.remove(&name);
+
+                inner.indices.write().await.remove(id);
+
+                for broker in inner.message_brokers.lock().await.values() {
+                    broker.destroy_link(Local::new(id)).await;
+                }
             }
         });
 
@@ -141,7 +152,7 @@ impl Network {
 struct Inner {
     this_replica_id: ReplicaId,
     message_brokers: Mutex<HashMap<ReplicaId, MessageBroker>>,
-    indices: RwLock<HashMap<String, Index>>,
+    indices: RwLock<IndexMap>,
     forget_tx: Sender<RuntimeId>,
     task_handle: ScopedTaskHandle,
 }
@@ -240,8 +251,8 @@ impl Inner {
                 )
                 .await;
 
-                for (name, index) in self.indices.read().await.iter() {
-                    create_link(&broker, name.to_owned(), index.clone()).await;
+                for (id, holder) in &self.indices.read().await.map {
+                    create_link(&broker, *id, holder.name.clone(), holder.index.clone()).await;
                 }
 
                 entry.insert(broker);
@@ -260,6 +271,36 @@ impl Inner {
     }
 }
 
+#[derive(Default)]
+struct IndexMap {
+    map: HashMap<RepositoryId, IndexHolder>,
+    next_id: RepositoryId,
+}
+
+impl IndexMap {
+    fn insert(&mut self, name: String, index: Index) -> Option<RepositoryId> {
+        let id = self.next_id;
+
+        match self.map.entry(id) {
+            Entry::Vacant(entry) => {
+                entry.insert(IndexHolder { index, name });
+                self.next_id = self.next_id.wrapping_add(1);
+                Some(id)
+            }
+            Entry::Occupied(_) => None,
+        }
+    }
+
+    fn remove(&mut self, id: RepositoryId) {
+        self.map.remove(&id);
+    }
+}
+
+struct IndexHolder {
+    index: Index,
+    name: String,
+}
+
 async fn perform_handshake(
     stream: &mut TcpObjectStream,
     this_replica_id: &ReplicaId,
@@ -268,12 +309,15 @@ async fn perform_handshake(
     stream.read().await
 }
 
-async fn create_link(broker: &MessageBroker, name: String, index: Index) {
+async fn create_link(broker: &MessageBroker, id: RepositoryId, name: String, index: Index) {
     // TODO: creating implicit link if the local and remote repository names are the same.
     // Eventually the links will be explicit.
 
+    let local_id = Local::new(id);
     let local_name = Local::new(name.clone());
     let remote_name = Remote::new(name);
 
-    broker.create_link(index, local_name, remote_name).await
+    broker
+        .create_link(index, local_id, local_name, remote_name)
+        .await
 }

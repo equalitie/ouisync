@@ -35,7 +35,7 @@ async fn main() -> Result<()> {
         )
         .await?;
 
-        network.register(mount_point.name.clone(), &repo).await;
+        network.register(&mount_point.name, &repo).await;
 
         let guard = virtual_filesystem::mount(
             tokio::runtime::Handle::current(),
