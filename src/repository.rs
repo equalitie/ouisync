@@ -60,7 +60,7 @@ impl Repository {
     /// Permanently deletes this repository
     pub async fn delete(mut self) -> Result<()> {
         self.merge_handle.take();
-        // self.shared.index.unsubscribe_all();
+        self.shared.index.close();
         self.shared.index.pool.close().await;
         db::delete(&self.shared.store).await?;
 
@@ -293,6 +293,12 @@ impl Repository {
             ));
             branch.debug_print(print.indent()).await;
         }
+    }
+}
+
+impl Drop for Repository {
+    fn drop(&mut self) {
+        self.shared.index.close()
     }
 }
 

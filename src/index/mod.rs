@@ -45,7 +45,7 @@ pub(crate) struct Index {
 impl Index {
     pub async fn load(pool: db::Pool, this_replica_id: ReplicaId) -> Result<Self> {
         let branches = Branches::load(&pool, this_replica_id).await?;
-        let (index_tx, _) = watch::channel(());
+        let (index_tx, _) = watch::channel(true);
 
         Ok(Self {
             pool,
@@ -89,6 +89,11 @@ impl Index {
                 branch.notify_changed()
             }
         }
+    }
+
+    /// Signal to all subscribers of this index that it is about to be terminated.
+    pub fn close(&self) {
+        self.shared.index_tx.send(false).unwrap_or(())
     }
 
     /// Receive `RootNode` from other replica and store it into the db. Returns whether the
@@ -271,8 +276,8 @@ impl Index {
                     version: branches.version,
                 });
 
-                // If the state was set to `false` once (via `close_subscriptions`), it will remain
-                // `false` forever.
+                // If the state was set to `false` once (via `close`), it will remain `false`
+                // forever.
                 let state = *self.shared.index_tx.borrow();
                 self.shared.index_tx.send(state).unwrap_or(());
             }
@@ -283,7 +288,7 @@ impl Index {
 
 struct Shared {
     branches: RwLock<Branches>,
-    index_tx: watch::Sender<()>,
+    index_tx: watch::Sender<bool>,
 }
 
 /// Container for all known branches (local and remote)
@@ -356,14 +361,19 @@ pub(crate) struct Subscription {
     shared: Arc<Shared>,
     // Receivers of change notifications from individual branches.
     branch_rxs: Vec<(ReplicaId, watch::Receiver<()>)>,
-    // Receiver of change notification from the whole index.
-    index_rx: watch::Receiver<()>,
+    // Receiver of change notification from the whole index. The bool indicates whether `close` was
+    // called on the index.
+    index_rx: watch::Receiver<bool>,
     version: u64,
 }
 
 impl Subscription {
     /// Receives the next change notification. Returns the id of the changed branch. Returns `None`
-    /// if all instances of the corresponding `Index` were dropped.
+    /// if the index was closed (either by calling [`Index::close`] or when the last instance of it
+    /// gets dropped).
+    ///
+    /// If one is interested only in the close notification, it's more efficient to use
+    /// [`Self::closed`].
     pub async fn recv(&mut self) -> Option<ReplicaId> {
         if self.version == 0 {
             // First subscribe to the branches that already existed before this subscription was
@@ -371,7 +381,7 @@ impl Subscription {
             self.subscribe_to_recent().await;
         }
 
-        loop {
+        while *self.index_rx.borrow() {
             select! {
                 id = select_branch_changed(&mut self.branch_rxs), if !self.branch_rxs.is_empty() => {
                     if let Some(id) = id {
@@ -382,9 +392,24 @@ impl Subscription {
                     if result.is_ok() {
                         self.subscribe_to_recent().await;
                     } else {
-                        return None;
+                        break;
                     }
                 }
+            }
+        }
+
+        None
+    }
+
+    /// Completes when the index gets closed, either by callig [`Index::close`] or when the last
+    /// instance of it gets dropped. This is more efficient than using `recv` if one is interested
+    /// only in the close notification.
+    pub async fn closed(self) {
+        let Self { mut index_rx, .. } = self;
+
+        while *index_rx.borrow() {
+            if index_rx.changed().await.is_err() {
+                break;
             }
         }
     }
