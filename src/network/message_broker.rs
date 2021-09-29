@@ -205,7 +205,8 @@ impl Inner {
                 }
                 message = self.reader.read() => {
                     if let Some(message) = message {
-                        self.handle_message(message).await
+                        self.handle_message(message).await;
+                        true
                     } else {
                         false
                     }
@@ -239,7 +240,7 @@ impl Inner {
         }
     }
 
-    async fn handle_message(&mut self, message: Message) -> bool {
+    async fn handle_message(&mut self, message: Message) {
         match message {
             Message::Request { dst_id, request } => {
                 self.handle_request(Local::new(dst_id), request).await
@@ -248,8 +249,7 @@ impl Inner {
                 self.handle_response(Local::new(dst_id), response).await
             }
             Message::CreateLink { src_id, dst_name } => {
-                self.create_incoming_link(Local::new(dst_name), Remote::new(src_id));
-                true
+                self.create_incoming_link(Local::new(dst_name), Remote::new(src_id))
             }
         }
     }
@@ -337,7 +337,7 @@ impl Inner {
 
         // NOTE: we just fire-and-forget the tasks which should be OK because when this
         // `MessageBroker` instance is dropped, the associated senders (`request_tx`, `response_tx`)
-        // are dropped as well which closes the corresponding receivers which then teminates the
+        // are dropped as well which closes the corresponding receivers which then terminates the
         // tasks.
 
         let client_stream = ClientStream::new(self.command_tx.clone(), response_rx, remote_id);
@@ -355,7 +355,7 @@ impl Inner {
         self.links.remove(&local_id);
     }
 
-    async fn handle_request(&mut self, local_id: Local<RepositoryId>, request: Request) -> bool {
+    async fn handle_request(&mut self, local_id: Local<RepositoryId>, request: Request) {
         match self.links.entry(local_id) {
             Entry::Occupied(entry) => {
                 if entry.get().request_tx.send(request).await.is_err() {
@@ -371,11 +371,9 @@ impl Inner {
                 );
             }
         }
-
-        !self.links.is_empty()
     }
 
-    async fn handle_response(&mut self, local_id: Local<RepositoryId>, response: Response) -> bool {
+    async fn handle_response(&mut self, local_id: Local<RepositoryId>, response: Response) {
         match self.links.entry(local_id) {
             Entry::Occupied(entry) => {
                 if entry.get().response_tx.send(response).await.is_err() {
@@ -391,8 +389,6 @@ impl Inner {
                 );
             }
         }
-
-        !self.links.is_empty()
     }
 }
 
