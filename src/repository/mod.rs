@@ -1,7 +1,3 @@
-mod name;
-
-pub(crate) use self::name::RepositoryName;
-
 use crate::{
     block,
     branch::Branch,

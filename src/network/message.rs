@@ -2,7 +2,6 @@ use crate::{
     block::BlockId,
     crypto::{AuthTag, Hash},
     index::{InnerNodeMap, LeafNodeSet, Summary},
-    repository::RepositoryName,
     version_vector::VersionVector,
 };
 use serde::{Deserialize, Serialize};
@@ -93,7 +92,7 @@ pub(crate) enum Message {
     // the recipient's repository named `dst_name`.
     CreateLink {
         src_id: RepositoryId,
-        dst_name: RepositoryName,
+        dst_name: String,
     },
     // Request to a recipient's repository with id `dst_id`.
     Request {
