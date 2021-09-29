@@ -252,8 +252,7 @@ impl Inner {
                 self.handle_response(Local::new(dst_id), response).await
             }
             Message::CreateLink { src_id, dst_name } => {
-                self.create_incoming_link(Local::new(dst_name), Remote::new(src_id))
-                    .await;
+                self.create_incoming_link(Local::new(dst_name), Remote::new(src_id));
                 true
             }
         }
@@ -289,7 +288,6 @@ impl Inner {
 
         if let Some(pending) = self.pending_incoming_links.remove(&local_name) {
             self.create_link(index, local_name, local_id, pending.remote_id)
-                .await
         } else {
             if !self
                 .writer
@@ -314,21 +312,16 @@ impl Inner {
         true
     }
 
-    async fn create_incoming_link(
-        &mut self,
-        local_name: Local<String>,
-        remote_id: Remote<RepositoryId>,
-    ) {
+    fn create_incoming_link(&mut self, local_name: Local<String>, remote_id: Remote<RepositoryId>) {
         if let Some(pending) = self.pending_outgoing_links.remove(&local_name) {
             self.create_link(pending.index, local_name, pending.local_id, remote_id)
-                .await
         } else {
             self.pending_incoming_links
                 .insert(local_name, PendingIncomingLink { remote_id });
         }
     }
 
-    async fn create_link(
+    fn create_link(
         &mut self,
         index: Index,
         local_name: Local<String>,
@@ -359,7 +352,7 @@ impl Inner {
         task::spawn(async move { log_error(client.run(), "client failed: ").await });
 
         let server_stream = ServerStream::new(self.command_tx.clone(), request_rx, remote_id);
-        let mut server = Server::new(index, server_stream).await;
+        let mut server = Server::new(index, server_stream);
         task::spawn(async move { log_error(server.run(), "server failed: ").await });
     }
 

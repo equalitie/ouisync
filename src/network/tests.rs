@@ -229,7 +229,7 @@ where
     F: Future<Output = ()>,
 {
     let server_replica_id = server_index.this_replica_id;
-    let (mut server, server_send_rx, server_recv_tx) = create_server(server_index).await;
+    let (mut server, server_send_rx, server_recv_tx) = create_server(server_index);
     let (mut client, client_send_rx, client_recv_tx) =
         create_client(client_index, server_replica_id);
 
@@ -255,11 +255,11 @@ where
     }
 }
 
-async fn create_server(index: Index) -> (Server, mpsc::Receiver<Command>, mpsc::Sender<Request>) {
+fn create_server(index: Index) -> (Server, mpsc::Receiver<Command>, mpsc::Sender<Request>) {
     let (send_tx, send_rx) = mpsc::channel(1);
     let (recv_tx, recv_rx) = mpsc::channel(CAPACITY);
     let stream = ServerStream::new(send_tx, recv_rx, Remote::new(0));
-    let server = Server::new(index, stream).await;
+    let server = Server::new(index, stream);
 
     (server, send_rx, recv_tx)
 }
