@@ -22,7 +22,7 @@ use tokio::{select, sync::Mutex, task};
 
 pub struct Repository {
     shared: Arc<Shared>,
-    _merge_handle: Option<ScopedJoinHandle<()>>,
+    merge_handle: Option<ScopedJoinHandle<()>>,
 }
 
 impl Repository {
@@ -40,6 +40,7 @@ impl Repository {
             index,
             cryptor,
             branches: Mutex::new(HashMap::new()),
+            store,
         });
 
         let merge_handle = if enable_merger {
@@ -52,8 +53,18 @@ impl Repository {
 
         Ok(Self {
             shared,
-            _merge_handle: merge_handle,
+            merge_handle,
         })
+    }
+
+    /// Permanently deletes this repository
+    pub async fn delete(mut self) -> Result<()> {
+        self.merge_handle.take();
+        // self.shared.index.unsubscribe_all();
+        self.shared.index.pool.close().await;
+        db::delete(&self.shared.store).await?;
+
+        Ok(())
     }
 
     pub fn this_replica_id(&self) -> &ReplicaId {
@@ -300,6 +311,7 @@ struct Shared {
     cryptor: Cryptor,
     // Cache for `Branch` instances to make them persistent over the lifetime of the program.
     branches: Mutex<HashMap<ReplicaId, Branch>>,
+    store: db::Store,
 }
 
 impl Shared {
