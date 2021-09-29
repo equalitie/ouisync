@@ -532,12 +532,12 @@ async fn remove_concurrent_file_version() {
 }
 
 async fn setup() -> Branch {
-    let pool = repository::open_db(db::Store::Memory).await.unwrap();
+    let pool = repository::open_db(&db::Store::Memory).await.unwrap();
     create_branch(pool).await
 }
 
 async fn setup_multiple<const N: usize>() -> [Branch; N] {
-    let pool = repository::open_db(db::Store::Memory).await.unwrap();
+    let pool = repository::open_db(&db::Store::Memory).await.unwrap();
     let branches: Vec<_> = future::join_all((0..N).map(|_| create_branch(pool.clone()))).await;
     branches.try_into().ok().unwrap()
 }

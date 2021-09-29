@@ -128,7 +128,7 @@ impl Session {
         sender: Sender,
         logger: Logger,
     ) -> Result<Self> {
-        let pool = config::open_db(store).await?;
+        let pool = config::open_db(&store).await?;
         let this_replica_id = this_replica::get_or_create_id(&pool).await?;
         let network = Network::new(this_replica_id, &NetworkOptions::default()).await?;
 

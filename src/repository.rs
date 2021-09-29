@@ -33,7 +33,7 @@ impl Repository {
         cryptor: Cryptor,
         enable_merger: bool,
     ) -> Result<Self> {
-        let pool = open_db(store).await?;
+        let pool = open_db(&store).await?;
         let index = Index::load(pool, this_replica_id).await?;
 
         let shared = Arc::new(Shared {
@@ -286,7 +286,7 @@ impl Repository {
 }
 
 /// Opens or creates the repository database.
-pub(crate) async fn open_db(store: db::Store) -> Result<db::Pool> {
+pub(crate) async fn open_db(store: &db::Store) -> Result<db::Pool> {
     let pool = db::open(store).await?;
 
     block::init(&pool).await?;

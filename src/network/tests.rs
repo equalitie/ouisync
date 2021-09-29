@@ -123,7 +123,7 @@ async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed:
 }
 
 async fn create_index<R: Rng>(rng: &mut R) -> Index {
-    let db = repository::open_db(db::Store::Memory).await.unwrap();
+    let db = repository::open_db(&db::Store::Memory).await.unwrap();
     let id = rng.gen();
 
     Index::load(db, id).await.unwrap()

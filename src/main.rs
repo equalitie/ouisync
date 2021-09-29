@@ -19,7 +19,7 @@ async fn main() -> Result<()> {
 
     env_logger::init();
 
-    let pool = config::open_db(options.config_path()?.into()).await?;
+    let pool = config::open_db(&options.config_path()?.into()).await?;
     let this_replica_id = this_replica::get_or_create_id(&pool).await?;
 
     let mut repositories = HashMap::new();

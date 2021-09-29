@@ -100,7 +100,7 @@ impl<'q> Encode<'q, Sqlite> for &'q Store {
 }
 
 /// Opens a connection to the specified database. Creates the database if it doesn't already exist.
-pub(crate) async fn open(store: Store) -> Result<Pool> {
+pub(crate) async fn open(store: &Store) -> Result<Pool> {
     let options = match store {
         Store::File(path) => {
             if let Some(dir) = path.parent() {
@@ -132,14 +132,14 @@ pub(crate) async fn open(store: Store) -> Result<Pool> {
 /// Delete the database identified by the given `store`. It's unspecified what happens when there
 /// are still open connection to the database (it might be OS-dependent) so it's best to make sure
 /// they are all closed before this function is called.
-pub(crate) async fn delete(store: Store) -> Result<()> {
+pub(crate) async fn delete(store: &Store) -> Result<()> {
     match store {
         Store::File(path) => {
-            fs::remove_file(&path).await.map_err(Error::DeleteDb)?;
+            fs::remove_file(path).await.map_err(Error::DeleteDb)?;
 
             // Also remove the write-ahead log and shared memory files if they exist.
             for suffix in &["-wal", "-shm"] {
-                match fs::remove_file(path::os::append(&path, suffix)).await {
+                match fs::remove_file(path::os::append(path, suffix)).await {
                     Ok(()) => {}
                     Err(error) if error.kind() == io::ErrorKind::NotFound => {}
                     Err(error) => return Err(Error::DeleteDb(error)),
