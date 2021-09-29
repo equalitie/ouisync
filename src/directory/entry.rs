@@ -222,6 +222,10 @@ impl<'a> DirectoryRef<'a> {
         Locator::Head(self.entry_data.blob_id)
     }
 
+    pub fn blob_id(&self) -> &BlobId {
+        &self.entry_data.blob_id
+    }
+
     pub fn author(&self) -> &'a ReplicaId {
         self.inner.author
     }

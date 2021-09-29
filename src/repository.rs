@@ -155,26 +155,48 @@ impl Repository {
         dst_dir_path: D,
         dst_name: &str,
     ) -> Result<()> {
-        let src_joint_dir = self.open_directory(src_dir_path).await?;
-        let src_joint_reader = src_joint_dir.read().await;
+        use std::borrow::Cow;
 
-        let (src_dir, src_name, src_author) = match src_joint_reader.lookup_unique(src_name)? {
+        let src_joint_dir = self.open_directory(src_dir_path).await?;
+        let src_joint_dir_r = src_joint_dir.read().await;
+
+        let (src_dir, src_name, src_author) = match src_joint_dir_r.lookup_unique(src_name)? {
             JointEntryRef::File(entry) => {
                 let src_name = entry.name().to_string();
                 let src_author = *entry.author();
 
                 let mut file = entry.open().await?;
-
-                drop(src_joint_reader);
-                drop(src_joint_dir);
-
                 file.fork().await?;
 
-                (file.parent(), src_name, src_author)
+                (file.parent(), Cow::Owned(src_name), src_author)
             }
-            JointEntryRef::Directory(_) => todo!(),
+            JointEntryRef::Directory(entry) => {
+                let dir_to_move = entry.open().await?.merge().await?;
+
+                let src_dir = dir_to_move
+                    .parent()
+                    .await
+                    .ok_or(Error::OperationNotSupported /* can't move root */)?;
+
+                (src_dir, Cow::Borrowed(src_name), *self.this_replica_id())
+            }
         };
 
+        drop(src_joint_dir_r);
+        drop(src_joint_dir);
+
+        self.move_local_entry(&src_dir, &src_name, &src_author, dst_dir_path, dst_name)
+            .await
+    }
+
+    async fn move_local_entry<D: AsRef<Utf8Path>>(
+        &self,
+        src_dir: &Directory,
+        src_name: &str,
+        src_author: &ReplicaId,
+        dst_dir_path: D,
+        dst_name: &str,
+    ) -> Result<()> {
         let dst_joint_dir = self.open_directory(&dst_dir_path).await?;
         let dst_joint_reader = dst_joint_dir.read().await;
 
@@ -196,7 +218,7 @@ impl Repository {
         let dst_dir = self.create_directory(dst_dir_path).await?;
 
         src_dir
-            .move_entry(&src_name, &src_author, &dst_dir, dst_name, dst_vv)
+            .move_entry(src_name, src_author, &dst_dir, dst_name, dst_vv)
             .await
     }
 

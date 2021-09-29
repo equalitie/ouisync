@@ -184,7 +184,12 @@ impl Directory {
 
         // Unwrap is OK because we just forked the entry above.
         let src_entry = src_dir_reader.lookup_version(src_name, src_author).unwrap();
-        let src_blob_id = *src_entry.file()?.blob_id();
+
+        let src_blob_id = match src_entry {
+            EntryRef::File(file) => *file.blob_id(),
+            EntryRef::Directory(dir) => *dir.blob_id(),
+            EntryRef::Tombstone(_) => return Err(Error::EntryNotFound),
+        };
 
         let dst_entry = {
             // TODO: vv is needlessly created twice here.
@@ -249,6 +254,15 @@ impl Directory {
         } else {
             self.local_branch.open_or_create_root().await
         }
+    }
+
+    pub async fn parent(&self) -> Option<Directory> {
+        self.read()
+            .await
+            .inner
+            .parent
+            .as_ref()
+            .map(|parent_ctx| parent_ctx.directory(self.local_branch.clone()))
     }
 
     /// Inserts a dangling file entry into this directory. It's the responsibility of the caller to

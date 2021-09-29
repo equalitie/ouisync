@@ -146,36 +146,30 @@ impl JointDirectory {
         Ok(())
     }
 
-    pub async fn merge(&mut self) -> Result<()> {
+    pub async fn merge(&mut self) -> Result<Directory> {
         let mut queue = VecDeque::new();
 
-        self.merge_single(&mut queue).await?;
+        let local_version = self.merge_single(&mut queue).await?;
 
         while let Some(mut dir) = queue.pop_back() {
             dir.merge_single(&mut queue).await?;
         }
 
-        Ok(())
+        Ok(local_version)
     }
 
-    async fn merge_single(&mut self, queue: &mut VecDeque<Self>) -> Result<()> {
+    // Returns merged local version
+    async fn merge_single(&mut self, queue: &mut VecDeque<Self>) -> Result<Directory> {
         self.fork().await?;
 
         let new_version_vector = self.merge_version_vectors().await;
 
-        if self
-            .local_version()
-            .await
-            .unwrap() // `unwrap` is OK because we called `fork` so the local verson exists,
-            .1
-            .read()
-            .await
-            .version_vector()
-            .await
-            >= new_version_vector
-        {
+        // `unwrap` is OK because we called `fork` so the local verson exists,
+        let local_version = self.local_version().await.unwrap().1.clone();
+
+        if local_version.read().await.version_vector().await >= new_version_vector {
             // Local version already up to date, nothing to do.
-            return Ok(());
+            return Ok(local_version);
         }
 
         // We can't fork the files as we are iterating the entries because that would deadlock - we
@@ -199,11 +193,9 @@ impl JointDirectory {
         }))
         .await?;
 
-        // `unwrap` is OK here because we called `fork` so the local version exists.
-        let (_, version) = self.local_version_mut().await.unwrap();
-        version.flush(Some(&new_version_vector)).await?;
+        local_version.flush(Some(&new_version_vector)).await?;
 
-        Ok(())
+        Ok(local_version)
     }
 
     // Ensure this joint directory contains a local version.
