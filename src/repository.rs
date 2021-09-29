@@ -30,10 +30,9 @@ pub async fn open_db(store: db::Store) -> Result<db::Pool> {
     Ok(pool)
 }
 
-#[derive(Clone)]
 pub struct Repository {
     shared: Arc<Shared>,
-    _merge_handle: Arc<Option<ScopedJoinHandle<()>>>,
+    _merge_handle: Option<ScopedJoinHandle<()>>,
 }
 
 impl Repository {
@@ -67,7 +66,7 @@ impl Repository {
 
         Self {
             shared,
-            _merge_handle: Arc::new(merge_handle),
+            _merge_handle: merge_handle,
         }
     }
 
