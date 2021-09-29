@@ -46,6 +46,8 @@ impl Client {
                 .unwrap_or(());
 
             loop {
+                // TODO: add a timeout here and send the request again if it expires before we
+                // receive a response.
                 select! {
                     response = self.stream.recv() => {
                         if let Some(response) = response {

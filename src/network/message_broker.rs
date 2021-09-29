@@ -281,25 +281,25 @@ impl Inner {
             return true;
         }
 
+        if !self
+            .writer
+            .write(&Message::CreateLink {
+                src_id: local_id.into_inner(),
+                dst_name: remote_name.into_inner(),
+            })
+            .await
+        {
+            log::warn!(
+                "not creating link from {:?} - \
+                 failed to send CreateLink message - all writers closed",
+                local_name,
+            );
+            return false;
+        }
+
         if let Some(pending) = self.pending_incoming_links.remove(&local_name) {
             self.create_link(index, local_id, pending.remote_id)
         } else {
-            if !self
-                .writer
-                .write(&Message::CreateLink {
-                    src_id: local_id.into_inner(),
-                    dst_name: remote_name.into_inner(),
-                })
-                .await
-            {
-                log::warn!(
-                    "not creating link from {:?} - \
-                     failed to send CreateLink message - all writers closed",
-                    local_name,
-                );
-                return false;
-            }
-
             self.pending_outgoing_links
                 .insert(local_name, PendingOutgoingLink { index, local_id });
         }
