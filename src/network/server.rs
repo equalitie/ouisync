@@ -8,7 +8,7 @@ use crate::{
     error::Result,
     index::{Index, InnerNode, LeafNode, RootNode},
 };
-use tokio::select;
+use tokio::{pin, select};
 
 pub(crate) struct Server {
     index: Index,
@@ -39,6 +39,9 @@ impl Server {
     pub async fn run(&mut self) -> Result<()> {
         let mut local_branch_subscription = self.index.branches().await.local().subscribe();
 
+        let index_closed = self.index.subscribe().closed();
+        pin!(index_closed);
+
         loop {
             select! {
                 request = self.stream.recv() => {
@@ -50,7 +53,8 @@ impl Server {
 
                     self.handle_request(request).await?
                 }
-                _ = local_branch_subscription.changed() => self.handle_local_change().await?
+                _ = local_branch_subscription.changed() => self.handle_local_change().await?,
+                _ = &mut index_closed => break,
             }
         }
 

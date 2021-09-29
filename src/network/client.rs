@@ -11,6 +11,7 @@ use crate::{
     store,
     version_vector::VersionVector,
 };
+use tokio::{pin, select};
 
 pub(crate) struct Client {
     index: Index,
@@ -33,25 +34,32 @@ impl Client {
     }
 
     pub async fn run(&mut self) -> Result<()> {
-        while self.pull_snapshot().await? {}
-        Ok(())
-    }
+        let index_closed = self.index.subscribe().closed();
+        pin!(index_closed);
 
-    async fn pull_snapshot(&mut self) -> Result<bool> {
-        self.stream
-            .send(Request::RootNode {
-                cookie: self.cookie,
-            })
-            .await
-            .unwrap_or(());
+        loop {
+            self.stream
+                .send(Request::RootNode {
+                    cookie: self.cookie,
+                })
+                .await
+                .unwrap_or(());
 
-        while let Some(response) = self.stream.recv().await {
-            if self.handle_response(response).await? {
-                return Ok(true);
+            loop {
+                select! {
+                    response = self.stream.recv() => {
+                        if let Some(response) = response {
+                            if self.handle_response(response).await? {
+                                break;
+                            }
+                        } else {
+                            return Ok(());
+                        }
+                    }
+                    _ = &mut index_closed => return Ok(()),
+                }
             }
         }
-
-        Ok(false)
     }
 
     async fn handle_response(&mut self, response: Response) -> Result<bool> {
