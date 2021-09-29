@@ -204,7 +204,9 @@ async fn move_file_within_branch() {
 
     let root_dir = branch.open_root(branch.clone()).await.unwrap();
 
-    let aux_dir = root_dir.read().await
+    let aux_dir = root_dir
+        .read()
+        .await
         .lookup_version("aux".into(), branch.id())
         .unwrap()
         .directory()
@@ -231,7 +233,9 @@ async fn move_file_within_branch() {
     // Now move it back from ./aux/ to ./
     //
 
-    let tombstone_vv = root_dir.read().await//root_dir_r
+    let tombstone_vv = root_dir
+        .read()
+        .await
         .lookup_version(file_name, branch.id())
         .unwrap()
         .tombstone()

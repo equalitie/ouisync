@@ -137,17 +137,14 @@ impl Repository {
     /// Moves (renames) an entry from the source path to the destination path.
     /// If both source and destination refer to the same entry, this is a no-op.
     /// Returns the parent directories of both `src` and `dst`.
-    pub async fn move_entry<
-        S: AsRef<Utf8Path> + Clone + std::fmt::Debug,
-        D: AsRef<Utf8Path> + Clone + std::fmt::Debug,
-    >(
+    pub async fn move_entry<S: AsRef<Utf8Path>, D: AsRef<Utf8Path>>(
         &self,
         src_dir_path: S,
         src_name: &str,
         dst_dir_path: D,
         dst_name: &str,
     ) -> Result<()> {
-        let src_joint_dir = self.open_directory(src_dir_path.clone()).await?;
+        let src_joint_dir = self.open_directory(src_dir_path).await?;
         let src_joint_reader = src_joint_dir.read().await;
 
         let (src_dir, src_name, src_author) = match src_joint_reader.lookup_unique(src_name)? {
@@ -167,7 +164,7 @@ impl Repository {
             JointEntryRef::Directory(_) => todo!(),
         };
 
-        let dst_joint_dir = self.open_directory(dst_dir_path.clone()).await?;
+        let dst_joint_dir = self.open_directory(&dst_dir_path).await?;
         let dst_joint_reader = dst_joint_dir.read().await;
 
         let dst_vv = match dst_joint_reader.lookup_unique(dst_name) {
