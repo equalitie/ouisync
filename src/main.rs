@@ -2,8 +2,9 @@ mod options;
 mod virtual_filesystem;
 
 use self::options::Options;
-use anyhow::{Context, Result};
-use ouisync::{config, Cryptor, Network, RepositoryManager};
+use anyhow::Result;
+use ouisync::{config, this_replica, Cryptor, Network, Repository};
+use std::collections::HashMap;
 use structopt::StructOpt;
 use tokio::signal;
 
@@ -19,51 +20,52 @@ async fn main() -> Result<()> {
     env_logger::init();
 
     let pool = config::open_db(options.config_path()?.into()).await?;
-    let mut repositories = RepositoryManager::load(pool, !options.disable_merger).await?;
+    let this_replica_id = this_replica::get_or_create_id(&pool).await?;
+
+    let mut repositories = HashMap::new();
 
     // Create repositories
-    for create in &options.create_repository {
-        let path = if let Some(path) = &create.path {
-            path.clone()
-        } else {
-            options.default_repository_path(&create.name)?
-        };
-
-        repositories
-            .create(create.name.clone(), path.into(), Cryptor::Null)
-            .await?;
+    for name in &options.create_repository {
+        let repo = Repository::open(
+            options.repository_path(name)?.into(),
+            this_replica_id,
+            Cryptor::Null,
+            !options.disable_merger,
+        )
+        .await?;
+        repositories.insert(name.clone(), repo);
     }
 
-    // Delete repositories
-    for name in &options.delete_repository {
-        repositories.delete(name).await?
-    }
+    // Start the network
+    let network = Network::new(this_replica_id, &options.network).await?;
 
     // Mount repositories
     let mut mount_guards = Vec::new();
     for mount_point in &options.mount {
-        let repository = repositories.get(&mount_point.name).with_context(|| {
-            format!(
-                "can't mount repository {:?} - no such repository",
-                mount_point.name
+        let repo = if let Some(repo) = repositories.remove(&mount_point.name) {
+            repo
+        } else {
+            Repository::open(
+                options.repository_path(&mount_point.name)?.into(),
+                this_replica_id,
+                Cryptor::Null,
+                !options.disable_merger,
             )
-        })?;
+            .await?
+        };
 
         let guard = virtual_filesystem::mount(
             tokio::runtime::Handle::current(),
-            repository.clone(),
+            repo,
             mount_point.path.clone(),
         )?;
 
         mount_guards.push(guard);
     }
 
-    // Start the network
-    let network = Network::new(repositories.subscribe(), options.network).await?;
-
     if options.print_ready_message {
         println!("Listening on port {}", network.local_addr().port());
-        println!("This replica ID is {}", repositories.this_replica_id());
+        println!("This replica ID is {}", this_replica_id);
     }
 
     signal::ctrl_c().await?;

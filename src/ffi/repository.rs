@@ -3,7 +3,7 @@ use super::{
     utils::{self, Port, SharedHandle, UniqueHandle},
 };
 use crate::{error::Error, joint_entry::JointEntryType, path, repository::Repository};
-use std::{os::raw::c_char, sync::Arc};
+use std::os::raw::c_char;
 use tokio::task::JoinHandle;
 
 pub const ENTRY_TYPE_INVALID: u8 = 0;
@@ -13,24 +13,25 @@ pub const ENTRY_TYPE_DIRECTORY: u8 = 2;
 /// Opens a repository.
 #[no_mangle]
 pub unsafe extern "C" fn repository_open(
-    name: *const c_char,
+    _name: *const c_char,
     port: Port<SharedHandle<Repository>>,
     error: *mut *mut c_char,
 ) {
-    session::with(port, error, |ctx| {
-        let name = utils::ptr_to_str(name)?;
-        let repos = ctx.repositories().clone();
+    session::with(port, error, |_ctx| {
+        todo!()
+        // let name = utils::ptr_to_str(name)?;
+        // let repos = ctx.repositories().clone();
 
-        ctx.spawn(async move {
-            let repo = repos
-                .read()
-                .await
-                .get(name)
-                .ok_or(Error::EntryNotFound)?
-                .clone();
-            let repo = Arc::new(repo);
-            Ok(SharedHandle::new(repo))
-        })
+        // ctx.spawn(async move {
+        //     let repo = repos
+        //         .read()
+        //         .await
+        //         .get(name)
+        //         .ok_or(Error::EntryNotFound)?
+        //         .clone();
+        //     let repo = Arc::new(repo);
+        //     Ok(SharedHandle::new(repo))
+        // })
     })
 }
 

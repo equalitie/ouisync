@@ -6,7 +6,7 @@ use crate::{
 use sqlx::Row;
 
 /// Initializes the table that holds a single entry: the ReplicaId of this replica
-pub async fn init(pool: &db::Pool) -> Result<(), Error> {
+pub(crate) async fn init(pool: &db::Pool) -> Result<(), Error> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS this_replica_id (
              -- row_id is always zero and is used to rewrite the row if there is one already
@@ -22,7 +22,7 @@ pub async fn init(pool: &db::Pool) -> Result<(), Error> {
     Ok(())
 }
 
-pub async fn get_id(tx: &mut db::Transaction<'_>) -> Result<Option<ReplicaId>> {
+pub(crate) async fn get_id(tx: &mut db::Transaction<'_>) -> Result<Option<ReplicaId>> {
     let id = sqlx::query("SELECT replica_id FROM this_replica_id WHERE row_id=0")
         .fetch_optional(tx)
         .await?
@@ -31,7 +31,10 @@ pub async fn get_id(tx: &mut db::Transaction<'_>) -> Result<Option<ReplicaId>> {
     Ok(id)
 }
 
-pub async fn set_id(tx: &mut db::Transaction<'_>, replica_id: &ReplicaId) -> Result<(), Error> {
+pub(crate) async fn set_id(
+    tx: &mut db::Transaction<'_>,
+    replica_id: &ReplicaId,
+) -> Result<(), Error> {
     sqlx::query(
         "INSERT INTO this_replica_id(row_id, replica_id)
              VALUES (0, ?) ON CONFLICT(row_id) DO UPDATE SET replica_id=?",

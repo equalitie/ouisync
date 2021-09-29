@@ -15,9 +15,7 @@ use self::{
 use crate::{
     error::{Error, Result},
     replica_id::ReplicaId,
-    repository::RepositorySubscription,
     scoped_task::{ScopedTaskHandle, ScopedTaskSet},
-    tagged::{Local, Remote},
 };
 use futures_util::future;
 use std::{
@@ -72,10 +70,7 @@ pub struct Network {
 }
 
 impl Network {
-    pub async fn new(
-        subscription: RepositorySubscription,
-        options: NetworkOptions,
-    ) -> Result<Self> {
+    pub async fn new(this_replica_id: ReplicaId, options: &NetworkOptions) -> Result<Self> {
         let tasks = ScopedTaskSet::default();
 
         let listener = TcpListener::bind(options.listen_addr())
@@ -85,10 +80,10 @@ impl Network {
         let (forget_tx, forget_rx) = mpsc::channel(1);
 
         let inner = Inner {
+            this_replica_id,
             message_brokers: Mutex::new(HashMap::new()),
             forget_tx,
             task_handle: tasks.handle().clone(),
-            subscription,
         };
 
         let inner = Arc::new(inner);
@@ -107,10 +102,10 @@ impl Network {
 }
 
 struct Inner {
+    this_replica_id: ReplicaId,
     message_brokers: Mutex<HashMap<ReplicaId, MessageBroker>>,
     forget_tx: Sender<RuntimeId>,
     task_handle: ScopedTaskHandle,
-    subscription: RepositorySubscription,
 }
 
 impl Inner {
@@ -185,14 +180,13 @@ impl Inner {
         discovery_id: Option<RuntimeId>,
     ) {
         let mut stream = TcpObjectStream::new(socket);
-        let their_replica_id =
-            match perform_handshake(&mut stream, self.subscription.this_replica_id()).await {
-                Ok(replica_id) => replica_id,
-                Err(error) => {
-                    log::error!("Failed to perform handshake: {}", error);
-                    return;
-                }
-            };
+        let their_replica_id = match perform_handshake(&mut stream, &self.this_replica_id).await {
+            Ok(replica_id) => replica_id,
+            Err(error) => {
+                log::error!("Failed to perform handshake: {}", error);
+                return;
+            }
+        };
 
         let mut brokers = self.message_brokers.lock().await;
 
@@ -208,16 +202,18 @@ impl Inner {
                 )
                 .await;
 
-                // TODO: creating implicit link if the local and remote repository names are the
-                // same. Eventually the links will be explicit.
-                for (name, index) in self.subscription.current() {
-                    let local_name = Local::new(name.clone());
-                    let remote_name = Remote::new(name.clone());
+                // TODO:
+                //
+                // // TODO: creating implicit link if the local and remote repository names are the
+                // // same. Eventually the links will be explicit.
+                // for (name, index) in self.subscription.current() {
+                //     let local_name = Local::new(name.clone());
+                //     let remote_name = Remote::new(name.clone());
 
-                    broker
-                        .create_link(index.clone(), local_name, remote_name)
-                        .await;
-                }
+                //     broker
+                //         .create_link(index.clone(), local_name, remote_name)
+                //         .await;
+                // }
 
                 entry.insert(broker);
             }

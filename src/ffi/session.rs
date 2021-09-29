@@ -4,12 +4,10 @@ use super::{
     utils::{self, AssumeSend, Port},
 };
 use crate::{
-    config,
-    crypto::Cryptor,
-    db,
+    config, db,
     error::Result,
     network::{Network, NetworkOptions},
-    repository::RepositoryManager,
+    this_replica,
 };
 use std::{
     ffi::CString,
@@ -18,12 +16,8 @@ use std::{
     mem,
     os::raw::{c_char, c_void},
     ptr,
-    sync::Arc,
 };
-use tokio::{
-    runtime::{self, Runtime},
-    sync::RwLock,
-};
+use tokio::runtime::{self, Runtime};
 
 /// Opens the ouisync session. `post_c_object_fn` should be a pointer to the dart's
 /// `NativeApi.postCObject` function cast to `Pointer<Void>` (the casting is necessary to work
@@ -92,38 +86,6 @@ pub unsafe extern "C" fn session_close() {
     }
 }
 
-/// Creates a new repository.
-#[no_mangle]
-pub unsafe extern "C" fn session_create_repository(
-    name: *const c_char,
-    store: *const c_char,
-    port: Port<()>,
-    error: *mut *mut c_char,
-) {
-    with(port, error, |ctx| {
-        let name = utils::ptr_to_str(name)?.to_owned();
-        let store = utils::ptr_to_store(store)?;
-        let repos = ctx.repositories().clone();
-
-        ctx.spawn(async move { repos.write().await.create(name, store, Cryptor::Null).await })
-    })
-}
-
-/// Deletes a repository.
-#[no_mangle]
-pub unsafe extern "C" fn session_delete_repository(
-    name: *const c_char,
-    port: Port<()>,
-    error: *mut *mut c_char,
-) {
-    with(port, error, |ctx| {
-        let name = utils::ptr_to_str(name)?.to_owned();
-        let repos = ctx.repositories().clone();
-
-        ctx.spawn(async move { repos.write().await.delete(&name).await })
-    })
-}
-
 pub(super) unsafe fn with<T, F>(port: Port<T>, error_ptr: *mut *mut c_char, f: F)
 where
     F: FnOnce(Context<T>) -> Result<()>,
@@ -154,7 +116,6 @@ static mut SESSION: *mut Session = ptr::null_mut();
 
 pub(super) struct Session {
     runtime: Runtime,
-    repositories: Arc<RwLock<RepositoryManager>>,
     _network: Network,
     sender: Sender,
     _logger: Logger,
@@ -168,12 +129,11 @@ impl Session {
         logger: Logger,
     ) -> Result<Self> {
         let pool = config::open_db(store).await?;
-        let repositories = RepositoryManager::load(pool, true).await?;
-        let network = Network::new(repositories.subscribe(), NetworkOptions::default()).await?;
+        let this_replica_id = this_replica::get_or_create_id(&pool).await?;
+        let network = Network::new(this_replica_id, &NetworkOptions::default()).await?;
 
         Ok(Self {
             runtime,
-            repositories: Arc::new(RwLock::new(repositories)),
             _network: network,
             sender,
             _logger: logger,
@@ -207,10 +167,6 @@ where
             .runtime
             .spawn(self.session.sender.invoke(self.port, self.error_ptr, f));
         Ok(())
-    }
-
-    pub(super) fn repositories(&self) -> &Arc<RwLock<RepositoryManager>> {
-        &self.session.repositories
     }
 }
 

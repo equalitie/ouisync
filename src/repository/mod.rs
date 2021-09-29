@@ -1,8 +1,6 @@
-mod manager;
 mod name;
 
-pub use self::manager::{RepositoryManager, RepositorySubscription};
-pub(crate) use self::{manager::init as init_manager, name::RepositoryName};
+pub(crate) use self::name::RepositoryName;
 
 use crate::{
     block,
@@ -43,6 +41,19 @@ pub struct Repository {
 }
 
 impl Repository {
+    /// Opens an existing repository or creates a new one if it doesn't exists yet.
+    pub async fn open(
+        store: db::Store,
+        this_replica_id: ReplicaId,
+        cryptor: Cryptor,
+        enable_merger: bool,
+    ) -> Result<Self> {
+        let pool = open_db(store).await?;
+        let index = Index::load(pool, this_replica_id).await?;
+
+        Ok(Self::new(index, cryptor, enable_merger))
+    }
+
     pub(crate) fn new(index: Index, cryptor: Cryptor, enable_merger: bool) -> Self {
         let shared = Arc::new(Shared {
             index,
@@ -62,19 +73,6 @@ impl Repository {
             shared,
             _merge_handle: Arc::new(merge_handle),
         }
-    }
-
-    /// Create new repository with the given database store.
-    pub async fn create(
-        store: db::Store,
-        this_replica_id: ReplicaId,
-        cryptor: Cryptor,
-        enable_merger: bool,
-    ) -> Result<Self> {
-        let pool = open_db(store).await?;
-        let index = Index::load(pool, this_replica_id).await?;
-
-        Ok(Self::new(index, cryptor, enable_merger))
     }
 
     pub fn this_replica_id(&self) -> &ReplicaId {

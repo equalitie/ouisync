@@ -4,6 +4,7 @@ mod macros;
 pub mod config;
 pub mod crypto;
 pub mod debug_printer;
+pub mod this_replica;
 
 mod blob;
 mod blob_id;
@@ -29,7 +30,6 @@ mod store;
 mod tagged;
 #[cfg(test)]
 mod test_utils;
-mod this_replica;
 mod version_vector;
 mod versioned_file_name;
 
@@ -44,5 +44,5 @@ pub use self::{
     locator::Locator,
     network::{Network, NetworkOptions},
     replica_id::ReplicaId,
-    repository::{Repository, RepositoryManager},
+    repository::Repository,
 };

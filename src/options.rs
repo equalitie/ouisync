@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use ouisync::NetworkOptions;
-use std::{convert::Infallible, path::PathBuf, str::FromStr};
+use std::{path::PathBuf, str::FromStr};
 use structopt::StructOpt;
 use thiserror::Error;
 
@@ -27,16 +27,11 @@ pub(crate) struct Options {
     #[structopt(short, long, value_name = "NAME:PATH")]
     pub mount: Vec<MountPoint>,
 
-    /// Create repository. Can optionally specify the path to the repository database or leave it
-    /// out to use the default: "DATA_DIR/repositories/NAME.db". Can be specified multiple times to
-    /// create multiple repositories.
-    #[structopt(long, value_name = "NAME|NAME:PATH")]
-    pub create_repository: Vec<CreateRepository>,
-
-    /// Delete repository. WARNING: this is permanent and irreversible. Use with caution! Can be
-    /// specified multiple times to delete multiple repositories.
+    /// Create repository with the specified name. The repository database will be created in
+    /// "DATA_DIR/repositories/NAME.db". Can be specified multiple times to create multiple
+    /// repositories.
     #[structopt(long, value_name = "NAME")]
-    pub delete_repository: Vec<String>,
+    pub create_repository: Vec<String>,
 
     /// Prints the path to the data directory and exits.
     #[structopt(long)]
@@ -69,9 +64,8 @@ impl Options {
         }
     }
 
-    /// Default path to the repository databases.
-    pub fn default_repository_path(&self, name: &str) -> Result<PathBuf> {
-        // TODO: escape "/" in the name (possibly other characters too)
+    /// Path to the database of a repository with the specified name.
+    pub fn repository_path(&self, name: &str) -> Result<PathBuf> {
         Ok(self
             .data_dir()?
             .join("repositories")
@@ -105,31 +99,3 @@ impl FromStr for MountPoint {
 #[derive(Debug, Error)]
 #[error("invalid mount point specification")]
 pub(crate) struct MountPointParseError;
-
-/// Parameters to create new repository.
-#[derive(Debug)]
-pub(crate) struct CreateRepository {
-    /// Name of the repository to create.
-    pub name: String,
-    /// Path to store the repository database at or `None` to use the default one
-    /// ("$DATA_DIR/repositories/$NAME.db")
-    pub path: Option<PathBuf>,
-}
-
-impl FromStr for CreateRepository {
-    type Err = Infallible;
-
-    fn from_str(input: &str) -> Result<Self, Self::Err> {
-        if let Some(index) = input.find(':') {
-            Ok(Self {
-                name: input[..index].to_owned(),
-                path: Some(input[index + 1..].into()),
-            })
-        } else {
-            Ok(Self {
-                name: input.to_owned(),
-                path: None,
-            })
-        }
-    }
-}
