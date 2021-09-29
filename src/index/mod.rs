@@ -45,14 +45,14 @@ pub(crate) struct Index {
 impl Index {
     pub async fn load(pool: db::Pool, this_replica_id: ReplicaId) -> Result<Self> {
         let branches = Branches::load(&pool, this_replica_id).await?;
-        let (branch_created_tx, _) = watch::channel(());
+        let (index_tx, _) = watch::channel(());
 
         Ok(Self {
             pool,
             this_replica_id,
             shared: Arc::new(Shared {
                 branches: RwLock::new(branches),
-                branch_created_tx,
+                index_tx,
             }),
         })
     }
@@ -66,11 +66,11 @@ impl Index {
     }
 
     /// Subscribe to change notification from all current and future branches.
-    pub fn subscribe(&self) -> BranchSubscription {
-        BranchSubscription {
+    pub fn subscribe(&self) -> Subscription {
+        Subscription {
             shared: self.shared.clone(),
-            branch_changed_rxs: vec![],
-            branch_created_rx: self.shared.branch_created_tx.subscribe(),
+            branch_rxs: vec![],
+            index_rx: self.shared.index_tx.subscribe(),
             version: 0,
         }
     }
@@ -271,7 +271,10 @@ impl Index {
                     version: branches.version,
                 });
 
-                self.shared.branch_created_tx.send(()).unwrap_or(());
+                // If the state was set to `false` once (via `close_subscriptions`), it will remain
+                // `false` forever.
+                let state = *self.shared.index_tx.borrow();
+                self.shared.index_tx.send(state).unwrap_or(());
             }
             Entry::Occupied(entry) => entry.get().branch.update_root(node).await,
         }
@@ -280,7 +283,7 @@ impl Index {
 
 struct Shared {
     branches: RwLock<Branches>,
-    branch_created_tx: watch::Sender<()>,
+    index_tx: watch::Sender<()>,
 }
 
 /// Container for all known branches (local and remote)
@@ -349,16 +352,18 @@ impl Branches {
 }
 
 /// Handle to receive change notification from index.
-pub(crate) struct BranchSubscription {
+pub(crate) struct Subscription {
     shared: Arc<Shared>,
-    branch_changed_rxs: Vec<(ReplicaId, watch::Receiver<()>)>,
-    branch_created_rx: watch::Receiver<()>,
+    // Receivers of change notifications from individual branches.
+    branch_rxs: Vec<(ReplicaId, watch::Receiver<()>)>,
+    // Receiver of change notification from the whole index.
+    index_rx: watch::Receiver<()>,
     version: u64,
 }
 
-impl BranchSubscription {
+impl Subscription {
     /// Receives the next change notification. Returns the id of the changed branch. Returns `None`
-    /// If `Index` was dropped.
+    /// if all instances of the corresponding `Index` were dropped.
     pub async fn recv(&mut self) -> Option<ReplicaId> {
         if self.version == 0 {
             // First subscribe to the branches that already existed before this subscription was
@@ -368,12 +373,12 @@ impl BranchSubscription {
 
         loop {
             select! {
-                id = select_branch_changed(&mut self.branch_changed_rxs), if !self.branch_changed_rxs.is_empty() => {
+                id = select_branch_changed(&mut self.branch_rxs), if !self.branch_rxs.is_empty() => {
                     if let Some(id) = id {
                         return Some(id);
                     }
                 },
-                result = self.branch_created_rx.changed() => {
+                result = self.index_rx.changed() => {
                     if result.is_ok() {
                         self.subscribe_to_recent().await;
                     } else {
@@ -386,8 +391,7 @@ impl BranchSubscription {
 
     async fn subscribe_to_recent(&mut self) {
         for (branch, version) in self.shared.branches.read().await.recent(self.version) {
-            self.branch_changed_rxs
-                .push((*branch.id(), branch.subscribe()));
+            self.branch_rxs.push((*branch.id(), branch.subscribe()));
             self.version = self.version.max(version.saturating_add(1));
         }
     }

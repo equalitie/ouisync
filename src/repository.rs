@@ -7,7 +7,7 @@ use crate::{
     directory::Directory,
     error::{Error, Result},
     file::File,
-    index::{self, BranchData, BranchSubscription, Index},
+    index::{self, BranchData, Index, Subscription},
     joint_directory::{JointDirectory, JointEntryRef},
     joint_entry::JointEntryType,
     path,
@@ -19,16 +19,6 @@ use futures_util::{future, stream::FuturesUnordered, StreamExt};
 use log::Level;
 use std::{collections::HashMap, iter, sync::Arc};
 use tokio::{select, sync::Mutex, task};
-
-/// Opens the repository database.
-pub async fn open_db(store: db::Store) -> Result<db::Pool> {
-    let pool = db::open(store).await?;
-
-    block::init(&pool).await?;
-    index::init(&pool).await?;
-
-    Ok(pool)
-}
 
 pub struct Repository {
     shared: Arc<Shared>,
@@ -46,10 +36,6 @@ impl Repository {
         let pool = open_db(store).await?;
         let index = Index::load(pool, this_replica_id).await?;
 
-        Ok(Self::new(index, cryptor, enable_merger))
-    }
-
-    pub(crate) fn new(index: Index, cryptor: Cryptor, enable_merger: bool) -> Self {
         let shared = Arc::new(Shared {
             index,
             cryptor,
@@ -64,10 +50,10 @@ impl Repository {
             None
         };
 
-        Self {
+        Ok(Self {
             shared,
             _merge_handle: merge_handle,
-        }
+        })
     }
 
     pub fn this_replica_id(&self) -> &ReplicaId {
@@ -231,7 +217,7 @@ impl Repository {
     }
 
     /// Subscribe to change notification from all current and future branches.
-    pub(crate) fn subscribe(&self) -> BranchSubscription {
+    pub(crate) fn subscribe(&self) -> Subscription {
         self.shared.index.subscribe()
     }
 
@@ -297,6 +283,16 @@ impl Repository {
             branch.debug_print(print.indent()).await;
         }
     }
+}
+
+/// Opens or creates the repository database.
+pub(crate) async fn open_db(store: db::Store) -> Result<db::Pool> {
+    let pool = db::open(store).await?;
+
+    block::init(&pool).await?;
+    index::init(&pool).await?;
+
+    Ok(pool)
 }
 
 struct Shared {
@@ -475,35 +471,34 @@ async fn merge_branches(local: Branch, remote: Branch) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{db, index::RootNode, repository};
+    use crate::{db, index::RootNode};
 
     #[tokio::test(flavor = "multi_thread")]
     async fn root_directory_always_exists() {
-        let pool = repository::open_db(db::Store::Memory).await.unwrap();
-
         let replica_id = rand::random();
-        let index = Index::load(pool, replica_id).await.unwrap();
-        let repo = Repository::new(index, Cryptor::Null, false);
-
+        let repo = Repository::open(db::Store::Memory, replica_id, Cryptor::Null, false)
+            .await
+            .unwrap();
         let _ = repo.open_directory("/").await.unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn merge() {
-        let pool = repository::open_db(db::Store::Memory).await.unwrap();
         let local_id = rand::random();
-
-        let index = Index::load(pool.clone(), local_id).await.unwrap();
+        let repo = Repository::open(db::Store::Memory, local_id, Cryptor::Null, true)
+            .await
+            .unwrap();
 
         // Add another branch to the index. Eventually there might be a more high-level API for
         // this but for now we have to resort to this.
         let remote_id = rand::random();
-        let remote_node = RootNode::load_latest_or_create(&pool, &remote_id)
+        let remote_node = RootNode::load_latest_or_create(&repo.index().pool, &remote_id)
             .await
             .unwrap();
-        index.update_remote_branch(remote_id, remote_node).await;
+        repo.index()
+            .update_remote_branch(remote_id, remote_node)
+            .await;
 
-        let repo = Repository::new(index, Cryptor::Null, true);
         let remote_branch = repo.branch(&remote_id).await.unwrap();
         let remote_root = remote_branch.open_or_create_root().await.unwrap();
 
