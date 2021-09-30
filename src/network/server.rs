@@ -5,7 +5,7 @@ use super::{
 use crate::{
     block::{self, BlockId, BLOCK_SIZE},
     crypto::Hash,
-    error::Result,
+    error::{Error, Result},
     index::{Index, InnerNode, LeafNode, RootNode},
 };
 use tokio::{pin, select};
@@ -138,7 +138,17 @@ impl Server {
 
     async fn handle_block(&self, id: BlockId) -> Result<()> {
         let mut content = vec![0; BLOCK_SIZE].into_boxed_slice();
-        let auth_tag = block::read(&self.index.pool, &id, &mut content).await?;
+        let auth_tag = match block::read(&self.index.pool, &id, &mut content).await {
+            Ok(auth_tag) => auth_tag,
+            Err(Error::BlockNotFound(_)) => {
+                // This is probably a request to an already deleted orphaned block from an outdated
+                // branch. It should be safe to ingore this as the client will request the correct
+                // blocks when it becomes up to date to our latest branch.
+                log::warn!("requested block {:?} not found", id);
+                return Ok(());
+            }
+            Err(error) => return Err(error),
+        };
 
         self.stream
             .send(Response::Block {
