@@ -29,7 +29,7 @@ async fn main() -> Result<()> {
     let mut mount_guards = Vec::new();
     for mount_point in &options.mount {
         let repo = Repository::open(
-            options.repository_store(&mount_point.name)?,
+            &options.repository_store(&mount_point.name)?,
             this_replica_id,
             Cryptor::Null,
             !options.disable_merger,

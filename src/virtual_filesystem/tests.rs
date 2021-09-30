@@ -217,7 +217,7 @@ async fn setup() -> (MountGuard, TempDir) {
     // static LOG_INIT: Once = Once::new();
     // LOG_INIT.call_once(env_logger::init);
 
-    let repo = Repository::open(Store::Memory, rand::random(), Cryptor::Null, true)
+    let repo = Repository::open(&Store::Memory, rand::random(), Cryptor::Null, true)
         .await
         .unwrap();
     let mount_dir = tempdir().unwrap();

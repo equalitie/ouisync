@@ -22,13 +22,14 @@ pub unsafe extern "C" fn repository_open(
     session::with(port, error, |ctx| {
         let store = utils::ptr_to_path_buf(store)?;
         // Using the filename component of the store path (without the extension) as the repository
-        // name.
+        // name for now. This might change in the future.
+        // TODO: should we use more specific error here?
         let name = store.file_stem().ok_or(Error::MalformedData)?.to_owned();
         let network_handle = ctx.network().handle();
 
         ctx.spawn(async move {
             let repo = Repository::open(
-                store.into_std_path_buf().into(),
+                &store.into_std_path_buf().into(),
                 *network_handle.this_replica_id(),
                 Cryptor::Null,
                 true,
@@ -87,8 +88,8 @@ pub unsafe extern "C" fn repository_move_entry(
         let dst = utils::ptr_to_path_buf(dst)?;
 
         ctx.spawn(async move {
-            let (src_dir, src_name) = path::utf8::decompose(&src).ok_or(Error::EntryNotFound)?;
-            let (dst_dir, dst_name) = path::utf8::decompose(&dst).ok_or(Error::EntryNotFound)?;
+            let (src_dir, src_name) = path::decompose(&src).ok_or(Error::EntryNotFound)?;
+            let (dst_dir, dst_name) = path::decompose(&dst).ok_or(Error::EntryNotFound)?;
 
             repo.move_entry(src_dir, src_name, dst_dir, dst_name).await
         })

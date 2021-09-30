@@ -22,25 +22,24 @@ use tokio::{select, sync::Mutex, task};
 
 pub struct Repository {
     shared: Arc<Shared>,
-    merge_handle: Option<ScopedJoinHandle<()>>,
+    _merge_handle: Option<ScopedJoinHandle<()>>,
 }
 
 impl Repository {
     /// Opens an existing repository or creates a new one if it doesn't exists yet.
     pub async fn open(
-        store: db::Store,
+        store: &db::Store,
         this_replica_id: ReplicaId,
         cryptor: Cryptor,
         enable_merger: bool,
     ) -> Result<Self> {
-        let pool = open_db(&store).await?;
+        let pool = open_db(store).await?;
         let index = Index::load(pool, this_replica_id).await?;
 
         let shared = Arc::new(Shared {
             index,
             cryptor,
             branches: Mutex::new(HashMap::new()),
-            store,
         });
 
         let merge_handle = if enable_merger {
@@ -53,18 +52,8 @@ impl Repository {
 
         Ok(Self {
             shared,
-            merge_handle,
+            _merge_handle: merge_handle,
         })
-    }
-
-    /// Permanently deletes this repository
-    pub async fn delete(mut self) -> Result<()> {
-        self.merge_handle.take();
-        self.shared.index.close();
-        self.shared.index.pool.close().await;
-        db::delete(&self.shared.store).await?;
-
-        Ok(())
     }
 
     pub fn this_replica_id(&self) -> &ReplicaId {
@@ -74,7 +63,7 @@ impl Repository {
     /// Looks up an entry by its path. The path must be relative to the repository root.
     /// If the entry exists, returns its `JointEntryType`, otherwise returns `EntryNotFound`.
     pub async fn lookup_type<P: AsRef<Utf8Path>>(&self, path: P) -> Result<JointEntryType> {
-        match path::utf8::decompose(path.as_ref()) {
+        match path::decompose(path.as_ref()) {
             Some((parent, name)) => {
                 let parent = self.open_directory(parent).await?;
                 let parent = parent.read().await;
@@ -86,7 +75,7 @@ impl Repository {
 
     /// Opens a file at the given path (relative to the repository root)
     pub async fn open_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<File> {
-        let (parent, name) = path::utf8::decompose(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
+        let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
 
         self.open_directory(parent)
             .await?
@@ -104,7 +93,7 @@ impl Repository {
         path: P,
         branch_id: &ReplicaId,
     ) -> Result<File> {
-        let (parent, name) = path::utf8::decompose(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
+        let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
         self.open_directory(parent)
             .await?
             .read()
@@ -137,7 +126,7 @@ impl Repository {
 
     /// Removes (delete) the file at the given path. Returns the parent directory.
     pub async fn remove_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<JointDirectory> {
-        let (parent, name) = path::utf8::decompose(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
+        let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
         let mut dir = self.open_directory(parent).await?;
         dir.remove_file(name).await?;
         Ok(dir)
@@ -146,8 +135,7 @@ impl Repository {
     /// Removes the directory at the given path. The directory must be empty. Returns the parent
     /// directory.
     pub async fn remove_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<JointDirectory> {
-        let (parent, name) =
-            path::utf8::decompose(path.as_ref()).ok_or(Error::OperationNotSupported)?;
+        let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::OperationNotSupported)?;
         let parent = self.open_directory(parent).await?;
         // TODO: Currently only removing directories from the local branch is supported. To
         // implement removing a directory from another branches we need to introduce tombstones.
@@ -317,7 +305,6 @@ struct Shared {
     cryptor: Cryptor,
     // Cache for `Branch` instances to make them persistent over the lifetime of the program.
     branches: Mutex<HashMap<ReplicaId, Branch>>,
-    store: db::Store,
 }
 
 impl Shared {
@@ -494,7 +481,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn root_directory_always_exists() {
         let replica_id = rand::random();
-        let repo = Repository::open(db::Store::Memory, replica_id, Cryptor::Null, false)
+        let repo = Repository::open(&db::Store::Memory, replica_id, Cryptor::Null, false)
             .await
             .unwrap();
         let _ = repo.open_directory("/").await.unwrap();
@@ -503,7 +490,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn merge() {
         let local_id = rand::random();
-        let repo = Repository::open(db::Store::Memory, local_id, Cryptor::Null, true)
+        let repo = Repository::open(&db::Store::Memory, local_id, Cryptor::Null, true)
             .await
             .unwrap();
 

@@ -1,7 +1,4 @@
-use crate::{
-    error::{Error, Result},
-    path,
-};
+use crate::error::{Error, Result};
 use sqlx::{
     encode::IsNull,
     error::BoxDynError,
@@ -9,7 +6,7 @@ use sqlx::{
     sqlite::{Sqlite, SqliteArgumentValue, SqliteConnectOptions, SqliteTypeInfo, SqliteValueRef},
     Decode, Encode, SqlitePool, Type,
 };
-use std::{convert::Infallible, io, path::PathBuf, str::FromStr};
+use std::{convert::Infallible, path::PathBuf, str::FromStr};
 use tokio::fs;
 
 /// Database connection pool.
@@ -127,31 +124,6 @@ pub(crate) async fn open(store: &Store) -> Result<Pool> {
         .connect_with(options)
         .await
         .map_err(Error::ConnectToDb)
-}
-
-/// Delete the database identified by the given `store`. It's unspecified what happens when there
-/// are still open connection to the database (it might be OS-dependent) so it's best to make sure
-/// they are all closed before this function is called.
-pub(crate) async fn delete(store: &Store) -> Result<()> {
-    match store {
-        Store::File(path) => {
-            fs::remove_file(path).await.map_err(Error::DeleteDb)?;
-
-            // Also remove the write-ahead log and shared memory files if they exist.
-            for suffix in &["-wal", "-shm"] {
-                match fs::remove_file(path::os::append(path, suffix)).await {
-                    Ok(()) => {}
-                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-                    Err(error) => return Err(Error::DeleteDb(error)),
-                }
-            }
-        }
-        Store::Memory => {
-            // memory db is automatically dropped when the last connection is closed.
-        }
-    }
-
-    Ok(())
 }
 
 // Explicit cast from `i64` to `u64` to work around the lack of native `u64` support in the sqlx
