@@ -453,13 +453,15 @@ impl Inner {
         check_unsupported(mode)?;
         check_unsupported(uid)?;
         check_unsupported(gid)?;
-        check_unsupported(atime)?;
-        check_unsupported(mtime)?;
         check_unsupported(ctime)?;
         check_unsupported(crtime)?;
         check_unsupported(chgtime)?;
         check_unsupported(bkuptime)?;
         check_unsupported(flags)?;
+
+        // NOTE: ignoring these for now to make `touch` work
+        // check_unsupported(atime)?;
+        // check_unsupported(mtime)?;
 
         let mut file = if let Some(handle) = handle {
             MaybeOwnedMut::Borrowed(self.entries.get_file_mut(handle)?)
