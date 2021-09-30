@@ -8,11 +8,10 @@ use crate::{
     error::Result,
     index::{Index, InnerNode, LeafNode, RootNode},
 };
-use tokio::{select, sync::watch};
+use tokio::{pin, select};
 
 pub(crate) struct Server {
     index: Index,
-    notify: watch::Receiver<()>,
     stream: ServerStream,
     // "Cookie" number that gets included in the next sent `RootNode` response. The client stores
     // it and sends it back in their next `RootNode` request. This is then used by the server to
@@ -28,13 +27,9 @@ pub(crate) struct Server {
 }
 
 impl Server {
-    pub async fn new(index: Index, stream: ServerStream) -> Self {
-        // subscribe to branch change notifications
-        let notify = index.branches().await.local().subscribe();
-
+    pub fn new(index: Index, stream: ServerStream) -> Self {
         Self {
             index,
-            notify,
             stream,
             cookie: 1,
             waiting: false,
@@ -42,6 +37,11 @@ impl Server {
     }
 
     pub async fn run(&mut self) -> Result<()> {
+        let mut local_branch_subscription = self.index.branches().await.local().subscribe();
+
+        let index_closed = self.index.subscribe().closed();
+        pin!(index_closed);
+
         loop {
             select! {
                 request = self.stream.recv() => {
@@ -53,7 +53,8 @@ impl Server {
 
                     self.handle_request(request).await?
                 }
-                _ = self.notify.changed() => self.handle_local_change().await?
+                _ = local_branch_subscription.changed() => self.handle_local_change().await?,
+                _ = &mut index_closed => break,
             }
         }
 

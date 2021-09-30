@@ -3,14 +3,18 @@ use super::{
     logger::Logger,
     utils::{self, AssumeSend, Port},
 };
-use crate::{crypto::Cryptor, db, error::Result, network::NetworkOptions, session::Session};
+use crate::{
+    config, db,
+    error::Result,
+    network::{Network, NetworkOptions},
+    this_replica,
+};
 use std::{
-    ffi::{CStr, CString},
+    ffi::CString,
     fmt,
     future::Future,
     mem,
     os::raw::{c_char, c_void},
-    path::PathBuf,
     ptr,
 };
 use tokio::runtime::{self, Runtime};
@@ -52,7 +56,7 @@ pub unsafe extern "C" fn session_open(
         }
     };
 
-    let store = match store_from_raw(store) {
+    let store = match utils::ptr_to_store(store) {
         Ok(store) => store,
         Err(error) => {
             sender.send_err(port, error_ptr, error);
@@ -63,12 +67,7 @@ pub unsafe extern "C" fn session_open(
     let handle = runtime.handle().clone();
 
     handle.spawn(sender.invoke(port, error_ptr, async move {
-        let session = SessionWrapper {
-            runtime,
-            session: Session::new(store, Cryptor::Null, NetworkOptions::default()).await?,
-            sender,
-            _logger: logger,
-        };
+        let session = Session::new(runtime, store, sender, logger).await?;
 
         assert!(SESSION.is_null());
 
@@ -87,54 +86,60 @@ pub unsafe extern "C" fn session_close() {
     }
 }
 
-unsafe fn store_from_raw(store: *const c_char) -> Result<db::Store> {
-    let store = CStr::from_ptr(store);
-
-    if store.to_bytes() == b":memory:" {
-        Ok(db::Store::Memory)
-    } else {
-        Ok(db::Store::File(PathBuf::from(utils::c_str_to_os_str(
-            store,
-        )?)))
-    }
-}
-
 pub(super) unsafe fn with<T, F>(port: Port<T>, error_ptr: *mut *mut c_char, f: F)
 where
     F: FnOnce(Context<T>) -> Result<()>,
 {
     assert!(!SESSION.is_null(), "session is not initialized");
 
-    let wrapper = &*SESSION;
+    let session = &*SESSION;
     let context = Context {
-        wrapper,
+        session,
         port,
         error_ptr,
     };
 
-    let _runtime_guard = context.wrapper.runtime.enter();
+    let _runtime_guard = context.session.runtime.enter();
 
     match f(context) {
         Ok(()) => (),
-        Err(error) => wrapper.sender.send_err(port, error_ptr, error),
+        Err(error) => session.sender.send_err(port, error_ptr, error),
     }
 }
 
-pub(super) unsafe fn get<'a>() -> &'a SessionWrapper {
+pub(super) unsafe fn get<'a>() -> &'a Session {
     assert!(!SESSION.is_null(), "session is not initialized");
     &*SESSION
 }
 
-static mut SESSION: *mut SessionWrapper = ptr::null_mut();
+static mut SESSION: *mut Session = ptr::null_mut();
 
-pub(super) struct SessionWrapper {
+pub(super) struct Session {
     runtime: Runtime,
-    session: Session,
+    network: Network,
     sender: Sender,
     _logger: Logger,
 }
 
-impl SessionWrapper {
+impl Session {
+    async fn new(
+        runtime: Runtime,
+        store: db::Store,
+        sender: Sender,
+        logger: Logger,
+    ) -> Result<Self> {
+        let pool = config::open_db(&store).await?;
+        let this_replica_id = this_replica::get_or_create_id(&pool).await?;
+        let network = Network::new(this_replica_id, &NetworkOptions::default()).await?;
+
+        Ok(Self {
+            runtime,
+            network,
+            sender,
+            _logger: logger,
+        })
+    }
+
     pub(super) fn runtime(&self) -> &Runtime {
         &self.runtime
     }
@@ -145,7 +150,7 @@ impl SessionWrapper {
 }
 
 pub(super) struct Context<'a, T> {
-    wrapper: &'a SessionWrapper,
+    session: &'a Session,
     port: Port<T>,
     error_ptr: *mut *mut c_char,
 }
@@ -158,14 +163,14 @@ where
     where
         F: Future<Output = Result<T>> + Send + 'static,
     {
-        self.wrapper
+        self.session
             .runtime
-            .spawn(self.wrapper.sender.invoke(self.port, self.error_ptr, f));
+            .spawn(self.session.sender.invoke(self.port, self.error_ptr, f));
         Ok(())
     }
 
-    pub(super) fn session(&self) -> &Session {
-        &self.wrapper.session
+    pub(super) fn network(&self) -> &Network {
+        &self.session.network
     }
 }
 

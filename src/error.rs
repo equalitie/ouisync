@@ -2,7 +2,7 @@ use crate::{
     block::{BlockId, BLOCK_SIZE},
     crypto::aead,
 };
-use std::{array::TryFromSliceError, fmt, io};
+use std::{array::TryFromSliceError, convert::Infallible, fmt, io};
 use thiserror::Error;
 
 /// A specialized `Result` type for convenience.
@@ -12,6 +12,8 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 pub enum Error {
     #[error("failed to create database directory")]
     CreateDbDirectory(#[source] io::Error),
+    #[error("failed to delete database")]
+    DeleteDb(#[source] io::Error),
     #[error("failed to establish database connection")]
     ConnectToDb(#[source] sqlx::Error),
     #[error("failed to create database schema")]
@@ -92,5 +94,14 @@ impl fmt::Display for Verbose<'_> {
         }
 
         Ok(())
+    }
+}
+
+/// Extract the Ok variant from an infallible result. This is just a shim until
+/// [https://doc.rust-lang.org/std/result/enum.Result.html#method.into_ok] is stabilized.
+pub fn into_ok<T>(result: Result<T, Infallible>) -> T {
+    match result {
+        Ok(value) => value,
+        Err(error) => match error {},
     }
 }

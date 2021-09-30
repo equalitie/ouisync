@@ -1,29 +1,43 @@
-use tokio::task::JoinHandle;
-
 use super::{
     session,
     utils::{self, Port, SharedHandle, UniqueHandle},
 };
-use crate::{error::Error, joint_entry::JointEntryType, path, repository::Repository};
+use crate::{
+    crypto::Cryptor, error::Error, joint_entry::JointEntryType, path, repository::Repository,
+};
 use std::{os::raw::c_char, sync::Arc};
+use tokio::task::JoinHandle;
 
 pub const ENTRY_TYPE_INVALID: u8 = 0;
 pub const ENTRY_TYPE_FILE: u8 = 1;
 pub const ENTRY_TYPE_DIRECTORY: u8 = 2;
 
 /// Opens a repository.
-///
-/// NOTE: eventually this function will allow to specify which repository to open, but currently
-/// only one repository is supported.
 #[no_mangle]
 pub unsafe extern "C" fn repository_open(
+    store: *const c_char,
     port: Port<SharedHandle<Repository>>,
     error: *mut *mut c_char,
 ) {
     session::with(port, error, |ctx| {
-        let repo = ctx.session().open_repository(true);
+        let store = utils::ptr_to_path_buf(store)?;
+        // Using the filename component of the store path (without the extension) as the repository
+        // name for now. This might change in the future.
+        // TODO: should we use more specific error here?
+        let name = store.file_stem().ok_or(Error::MalformedData)?.to_owned();
+        let network_handle = ctx.network().handle();
 
         ctx.spawn(async move {
+            let repo = Repository::open(
+                &store.into_std_path_buf().into(),
+                *network_handle.this_replica_id(),
+                Cryptor::Null,
+                true,
+            )
+            .await?;
+
+            network_handle.register(&name, &repo).await;
+
             let repo = Arc::new(repo);
             Ok(SharedHandle::new(repo))
         })
@@ -47,7 +61,7 @@ pub unsafe extern "C" fn repository_entry_type(
 ) {
     session::with(port, error, |ctx| {
         let repo = handle.get();
-        let path = utils::ptr_to_utf8_path_buf(path)?;
+        let path = utils::ptr_to_path_buf(path)?;
 
         ctx.spawn(async move {
             match repo.lookup_type(path).await {
@@ -70,8 +84,8 @@ pub unsafe extern "C" fn repository_move_entry(
 ) {
     session::with(port, error, |ctx| {
         let repo = handle.get();
-        let src = utils::ptr_to_utf8_path_buf(src)?;
-        let dst = utils::ptr_to_utf8_path_buf(dst)?;
+        let src = utils::ptr_to_path_buf(src)?;
+        let dst = utils::ptr_to_path_buf(dst)?;
 
         ctx.spawn(async move {
             let (src_dir, src_name) = path::decompose(&src).ok_or(Error::EntryNotFound)?;

@@ -1,8 +1,8 @@
 use std::{
-    env, fs,
+    env,
     io::{self, BufRead, BufReader, Read, Write},
     panic::{self, AssertUnwindSafe},
-    path::PathBuf,
+    path::Path,
     process::{Child, Command, Stdio},
     thread,
     time::Duration,
@@ -11,23 +11,18 @@ use tempfile::TempDir;
 
 /// Wrapper for the ouisync binary.
 pub struct Bin {
-    work_dir: TempDir,
+    mount_dir: TempDir,
     process: Child,
 }
 
 impl Bin {
     pub fn start(id: u32) -> Self {
-        let work_dir = TempDir::new().unwrap();
-
-        // Create the repository root directory
-        let mount_dir = root(&work_dir);
-        fs::create_dir_all(&mount_dir).unwrap();
+        let mount_dir = TempDir::new().unwrap();
 
         let mut process = Command::new(env!("CARGO_BIN_EXE_ouisync"))
-            .arg("--data-dir")
-            .arg(work_dir.path())
-            .arg("--mount-dir")
-            .arg(mount_dir)
+            .arg("--temp")
+            .arg("--mount")
+            .arg(format!("test:{}", mount_dir.path().display()))
             .arg("--print-ready-message")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -42,11 +37,11 @@ impl Bin {
         copy_lines_prefixed(stdout, io::stdout(), id);
         copy_lines_prefixed(process.stderr.take().unwrap(), io::stderr(), id);
 
-        Self { work_dir, process }
+        Self { mount_dir, process }
     }
 
-    pub fn root(&self) -> PathBuf {
-        root(&self.work_dir)
+    pub fn root(&self) -> &Path {
+        self.mount_dir.path()
     }
 
     fn kill(&mut self) {
@@ -59,10 +54,6 @@ impl Drop for Bin {
     fn drop(&mut self) {
         self.kill();
     }
-}
-
-fn root(work_dir: &TempDir) -> PathBuf {
-    work_dir.path().join("root")
 }
 
 // Spawns a thread that reads lines from `reader`, prefixes them with `id` and then writes them to

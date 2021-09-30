@@ -1,8 +1,11 @@
 use super::dart::{self, DartCObject};
-use crate::error::{Error, Result};
+use crate::{
+    db,
+    error::{self, Error, Result},
+};
 use camino::Utf8PathBuf;
 use std::{
-    ffi::{CStr, CString, OsStr},
+    ffi::{CStr, CString},
     marker::PhantomData,
     mem,
     os::raw::c_char,
@@ -105,23 +108,18 @@ impl<T> RefHandle<T> {
 pub(super) struct AssumeSend<T>(pub T);
 unsafe impl<T> Send for AssumeSend<T> {}
 
-pub unsafe fn ptr_to_utf8_path_buf(ptr: *const c_char) -> Result<Utf8PathBuf> {
-    let utf8_str = CStr::from_ptr(ptr)
+pub unsafe fn ptr_to_str<'a>(ptr: *const c_char) -> Result<&'a str> {
+    CStr::from_ptr(ptr)
         .to_str()
-        .map_err(|_| Error::MalformedData)?;
-
-    Ok(Utf8PathBuf::from(utf8_str))
+        .map_err(|_| Error::MalformedData)
 }
 
-#[cfg(unix)]
-pub fn c_str_to_os_str(c: &CStr) -> Result<&OsStr> {
-    use std::os::unix::ffi::OsStrExt;
-    Ok(OsStr::from_bytes(c.to_bytes()))
+pub unsafe fn ptr_to_path_buf(ptr: *const c_char) -> Result<Utf8PathBuf> {
+    Ok(Utf8PathBuf::from(ptr_to_str(ptr)?))
 }
 
-#[cfg(not(unix))]
-pub fn c_str_to_os_str(c: &CStr) -> Result<&OsStr> {
-    Ok(c.to_str().map_err(|_| Error::MalformedData)?.into())
+pub unsafe fn ptr_to_store(ptr: *const c_char) -> Result<db::Store> {
+    Ok(error::into_ok(ptr_to_str(ptr)?.parse()))
 }
 
 pub fn str_to_c_string(s: &str) -> Result<CString> {

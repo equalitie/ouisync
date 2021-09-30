@@ -1,14 +1,12 @@
-use crate::{
-    block,
-    error::{Error, Result},
-    index, this_replica,
-};
+use crate::error::{Error, Result};
 use sqlx::{
+    encode::IsNull,
+    error::BoxDynError,
     pool::PoolOptions,
-    sqlite::{Sqlite, SqliteConnectOptions},
-    SqlitePool,
+    sqlite::{Sqlite, SqliteArgumentValue, SqliteConnectOptions, SqliteTypeInfo, SqliteValueRef},
+    Decode, Encode, SqlitePool, Type,
 };
-use std::{path::PathBuf, str::FromStr};
+use std::{convert::Infallible, path::PathBuf, str::FromStr};
 use tokio::fs;
 
 /// Database connection pool.
@@ -17,13 +15,17 @@ pub type Pool = SqlitePool;
 /// Database transaction
 pub type Transaction<'a> = sqlx::Transaction<'a, Sqlite>;
 
-/// Database connection
-pub type Connection = sqlx::pool::PoolConnection<Sqlite>;
-
 /// This trait allows to write functions that work with any of `Pool`, `Connection` or
 /// `Transaction`. It's an alias for `sqlx::Executor<Database = Sqlite>` for convenience.
 pub trait Executor<'a>: sqlx::Executor<'a, Database = Sqlite> {}
 impl<'a, T> Executor<'a> for T where T: sqlx::Executor<'a, Database = Sqlite> {}
+
+/// Alias for `sqlx::Acquire<Database = Sqlite>` for convenience.
+pub trait Acquire<'a>: sqlx::Acquire<'a, Database = Sqlite> {}
+impl<'a, T> Acquire<'a> for T where T: sqlx::Acquire<'a, Database = Sqlite> {}
+
+// URI of a memory-only db.
+const MEMORY: &str = ":memory:";
 
 /// Database store.
 #[derive(Debug)]
@@ -34,8 +36,68 @@ pub enum Store {
     Memory,
 }
 
-/// Creates the database unless it already exsits and establish a connection to it.
-pub async fn init(store: Store) -> Result<Pool> {
+impl From<String> for Store {
+    fn from(string: String) -> Self {
+        if string == MEMORY {
+            Self::Memory
+        } else {
+            Self::File(PathBuf::from(string))
+        }
+    }
+}
+
+impl From<PathBuf> for Store {
+    fn from(path: PathBuf) -> Self {
+        if path.to_str() == Some(MEMORY) {
+            Self::Memory
+        } else {
+            Self::File(path)
+        }
+    }
+}
+
+impl FromStr for Store {
+    type Err = Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s == MEMORY {
+            Ok(Self::Memory)
+        } else {
+            Ok(Self::File(s.into()))
+        }
+    }
+}
+
+impl Type<Sqlite> for Store {
+    fn type_info() -> SqliteTypeInfo {
+        str::type_info()
+    }
+}
+
+impl<'r> Decode<'r, Sqlite> for Store {
+    fn decode(value: SqliteValueRef<'r>) -> Result<Self, BoxDynError> {
+        let s = <&str>::decode(value)?;
+        Ok(s.parse()?)
+    }
+}
+
+impl<'q> Encode<'q, Sqlite> for &'q Store {
+    fn encode_by_ref(&self, args: &mut Vec<SqliteArgumentValue<'q>>) -> IsNull {
+        match self {
+            Store::File(path) => {
+                if let Some(s) = path.to_str() {
+                    s.encode_by_ref(args)
+                } else {
+                    IsNull::Yes
+                }
+            }
+            Store::Memory => MEMORY.encode_by_ref(args),
+        }
+    }
+}
+
+/// Opens a connection to the specified database. Creates the database if it doesn't already exist.
+pub(crate) async fn open(store: &Store) -> Result<Pool> {
     let options = match store {
         Store::File(path) => {
             if let Some(dir) = path.parent() {
@@ -48,10 +110,10 @@ pub async fn init(store: Store) -> Result<Pool> {
                 .filename(path)
                 .create_if_missing(true)
         }
-        Store::Memory => SqliteConnectOptions::from_str(":memory:").expect("invalid db uri"),
+        Store::Memory => SqliteConnectOptions::from_str(MEMORY).expect("invalid db uri"),
     };
 
-    let pool = PoolOptions::new()
+    PoolOptions::new()
         // HACK: Using only one connection turns the pool effectively into a mutex over a single
         // connection. This is a heavy-handed fix that prevents the "table is locked" errors that
         // sometimes happen when multiple tasks try to access the same table and at least one of
@@ -61,30 +123,18 @@ pub async fn init(store: Store) -> Result<Pool> {
         .max_connections(1)
         .connect_with(options)
         .await
-        .map_err(Error::ConnectToDb)?;
-
-    create_schema(&pool).await?;
-
-    Ok(pool)
-}
-
-// Create the database schema
-pub async fn create_schema(pool: &Pool) -> Result<()> {
-    block::init(pool).await?;
-    index::init(pool).await?;
-    this_replica::init(pool).await?;
-    Ok(())
+        .map_err(Error::ConnectToDb)
 }
 
 // Explicit cast from `i64` to `u64` to work around the lack of native `u64` support in the sqlx
 // crate.
-pub const fn decode_u64(i: i64) -> u64 {
+pub(crate) const fn decode_u64(i: i64) -> u64 {
     i as u64
 }
 
 // Explicit cast from `u64` to `i64` to work around the lack of native `u64` support in the sqlx
 // crate.
-pub const fn encode_u64(u: u64) -> i64 {
+pub(crate) const fn encode_u64(u: u64) -> i64 {
     u as i64
 }
 

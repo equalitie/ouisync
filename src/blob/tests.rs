@@ -1,6 +1,6 @@
 use super::*;
-use crate::block;
 use crate::index::BranchData;
+use crate::{block, repository};
 use crate::{crypto::SecretKey, error::Error, test_utils};
 use assert_matches::assert_matches;
 use proptest::collection::vec;
@@ -491,7 +491,7 @@ async fn setup(rng_seed: u64) -> (StdRng, Branch) {
     let mut rng = StdRng::seed_from_u64(rng_seed);
     let secret_key = SecretKey::generate(&mut rng);
     let cryptor = Cryptor::ChaCha20Poly1305(secret_key);
-    let pool = init_db().await;
+    let pool = repository::open_db(&db::Store::Memory).await.unwrap();
 
     let branch = BranchData::new(&pool, rng.gen()).await.unwrap();
     let branch = Branch::new(pool, Arc::new(branch), cryptor);
@@ -501,8 +501,4 @@ async fn setup(rng_seed: u64) -> (StdRng, Branch) {
 
 fn random_head_locator<R: Rng>(rng: &mut R) -> Locator {
     Locator::Head(rng.gen())
-}
-
-async fn init_db() -> db::Pool {
-    db::init(db::Store::Memory).await.unwrap()
 }

@@ -10,7 +10,9 @@ use crate::{
     db,
     index::{node_test_utils::Snapshot, Index, RootNode, Summary},
     replica_id::ReplicaId,
-    store, test_utils,
+    repository, store,
+    tagged::Remote,
+    test_utils,
     version_vector::VersionVector,
 };
 use rand::prelude::*;
@@ -121,7 +123,7 @@ async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed:
 }
 
 async fn create_index<R: Rng>(rng: &mut R) -> Index {
-    let db = db::init(db::Store::Memory).await.unwrap();
+    let db = repository::open_db(&db::Store::Memory).await.unwrap();
     let id = rng.gen();
 
     Index::load(db, id).await.unwrap()
@@ -227,7 +229,7 @@ where
     F: Future<Output = ()>,
 {
     let server_replica_id = server_index.this_replica_id;
-    let (mut server, server_send_rx, server_recv_tx) = create_server(server_index).await;
+    let (mut server, server_send_rx, server_recv_tx) = create_server(server_index);
     let (mut client, client_send_rx, client_recv_tx) =
         create_client(client_index, server_replica_id);
 
@@ -253,11 +255,11 @@ where
     }
 }
 
-async fn create_server(index: Index) -> (Server, mpsc::Receiver<Command>, mpsc::Sender<Request>) {
+fn create_server(index: Index) -> (Server, mpsc::Receiver<Command>, mpsc::Sender<Request>) {
     let (send_tx, send_rx) = mpsc::channel(1);
     let (recv_tx, recv_rx) = mpsc::channel(CAPACITY);
-    let stream = ServerStream::new(send_tx, recv_rx);
-    let server = Server::new(index, stream).await;
+    let stream = ServerStream::new(send_tx, recv_rx, Remote::new(0));
+    let server = Server::new(index, stream);
 
     (server, send_rx, recv_tx)
 }
@@ -268,7 +270,7 @@ fn create_client(
 ) -> (Client, mpsc::Receiver<Command>, mpsc::Sender<Response>) {
     let (send_tx, send_rx) = mpsc::channel(1);
     let (recv_tx, recv_rx) = mpsc::channel(CAPACITY);
-    let stream = ClientStream::new(send_tx, recv_rx);
+    let stream = ClientStream::new(send_tx, recv_rx, Remote::new(0));
     let client = Client::new(index, their_replica_id, stream);
 
     (client, send_rx, recv_tx)

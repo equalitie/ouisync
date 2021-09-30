@@ -8,14 +8,18 @@ mod server;
 mod tests;
 
 use self::{
+    message::RepositoryId,
     message_broker::MessageBroker,
     object_stream::TcpObjectStream,
     replica_discovery::{ReplicaDiscovery, RuntimeId},
 };
 use crate::{
+    error::{Error, Result},
     index::Index,
     replica_id::ReplicaId,
+    repository::Repository,
     scoped_task::{ScopedTaskHandle, ScopedTaskSet},
+    tagged::{Local, Remote},
 };
 use futures_util::future;
 use std::{
@@ -29,11 +33,11 @@ use tokio::{
     net::{TcpListener, TcpStream},
     sync::{
         mpsc::{self, Receiver, Sender},
-        Mutex,
+        Mutex, RwLock,
     },
 };
 
-#[derive(StructOpt)]
+#[derive(StructOpt, Debug)]
 pub struct NetworkOptions {
     /// Port to listen on (0 for random)
     #[structopt(short, long, default_value = "0")]
@@ -65,45 +69,110 @@ impl Default for NetworkOptions {
 }
 
 pub struct Network {
-    _tasks: ScopedTaskSet,
+    inner: Arc<Inner>,
     local_addr: SocketAddr,
+    _tasks: ScopedTaskSet,
 }
 
 impl Network {
-    pub async fn new(index: Index, options: NetworkOptions) -> io::Result<Self> {
+    pub async fn new(this_replica_id: ReplicaId, options: &NetworkOptions) -> Result<Self> {
         let tasks = ScopedTaskSet::default();
 
-        let listener = TcpListener::bind(options.listen_addr()).await?;
-        let local_addr = listener.local_addr()?;
+        let listener = TcpListener::bind(options.listen_addr())
+            .await
+            .map_err(Error::Network)?;
+        let local_addr = listener.local_addr().map_err(Error::Network)?;
         let (forget_tx, forget_rx) = mpsc::channel(1);
 
         let inner = Inner {
+            this_replica_id,
             message_brokers: Mutex::new(HashMap::new()),
+            indices: RwLock::new(IndexMap::default()),
             forget_tx,
             task_handle: tasks.handle().clone(),
-            index,
         };
 
         let inner = Arc::new(inner);
         tasks.spawn(inner.clone().run_discovery(local_addr.port(), forget_rx));
-        tasks.spawn(inner.run_listener(listener));
+        tasks.spawn(inner.clone().run_listener(listener));
 
         Ok(Self {
-            _tasks: tasks,
+            inner,
             local_addr,
+            _tasks: tasks,
         })
     }
 
     pub fn local_addr(&self) -> &SocketAddr {
         &self.local_addr
     }
+
+    pub fn handle(&self) -> Handle {
+        Handle {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
+/// Handle for the network which can be cheaply cloned and sent to other threads.
+#[derive(Clone)]
+pub struct Handle {
+    inner: Arc<Inner>,
+}
+
+impl Handle {
+    /// Register a local repository into the network. This links the repository with all matching
+    /// repositories of currently connected remote replicas as well as any replicas connected in
+    /// the future. The repository is automatically deregistered when dropped.
+    pub async fn register(&self, name: &str, repository: &Repository) -> bool {
+        let index = repository.index();
+
+        let id = if let Some(id) = self
+            .inner
+            .indices
+            .write()
+            .await
+            .insert(name.to_owned(), index.clone())
+        {
+            id
+        } else {
+            return false;
+        };
+
+        for broker in self.inner.message_brokers.lock().await.values() {
+            create_link(broker, id, name.to_owned(), index.clone()).await;
+        }
+
+        // Deregister the index when it gets closed.
+        self.inner.task_handle.spawn({
+            let closed = index.subscribe().closed();
+            let inner = self.inner.clone();
+
+            async move {
+                closed.await;
+
+                inner.indices.write().await.remove(id);
+
+                for broker in inner.message_brokers.lock().await.values() {
+                    broker.destroy_link(Local::new(id)).await;
+                }
+            }
+        });
+
+        true
+    }
+
+    pub fn this_replica_id(&self) -> &ReplicaId {
+        &self.inner.this_replica_id
+    }
 }
 
 struct Inner {
+    this_replica_id: ReplicaId,
     message_brokers: Mutex<HashMap<ReplicaId, MessageBroker>>,
+    indices: RwLock<IndexMap>,
     forget_tx: Sender<RuntimeId>,
     task_handle: ScopedTaskHandle,
-    index: Index,
 }
 
 impl Inner {
@@ -178,14 +247,13 @@ impl Inner {
         discovery_id: Option<RuntimeId>,
     ) {
         let mut stream = TcpObjectStream::new(socket);
-        let their_replica_id =
-            match perform_handshake(&mut stream, &self.index.this_replica_id).await {
-                Ok(replica_id) => replica_id,
-                Err(error) => {
-                    log::error!("Failed to perform handshake: {}", error);
-                    return;
-                }
-            };
+        let their_replica_id = match perform_handshake(&mut stream, &self.this_replica_id).await {
+            Ok(replica_id) => replica_id,
+            Err(error) => {
+                log::error!("Failed to perform handshake: {}", error);
+                return;
+            }
+        };
 
         let mut brokers = self.message_brokers.lock().await;
 
@@ -195,12 +263,15 @@ impl Inner {
                 log::info!("Connected to replica {:?}", their_replica_id);
 
                 let broker = MessageBroker::new(
-                    self.index.clone(),
                     their_replica_id,
                     stream,
                     Box::pin(self.clone().on_finish(their_replica_id, discovery_id)),
                 )
                 .await;
+
+                for (id, holder) in &self.indices.read().await.map {
+                    create_link(&broker, *id, holder.name.clone(), holder.index.clone()).await;
+                }
 
                 entry.insert(broker);
             }
@@ -218,10 +289,53 @@ impl Inner {
     }
 }
 
+#[derive(Default)]
+struct IndexMap {
+    map: HashMap<RepositoryId, IndexHolder>,
+    next_id: RepositoryId,
+}
+
+impl IndexMap {
+    fn insert(&mut self, name: String, index: Index) -> Option<RepositoryId> {
+        let id = self.next_id;
+
+        match self.map.entry(id) {
+            Entry::Vacant(entry) => {
+                entry.insert(IndexHolder { index, name });
+                self.next_id = self.next_id.wrapping_add(1);
+                Some(id)
+            }
+            Entry::Occupied(_) => None,
+        }
+    }
+
+    fn remove(&mut self, id: RepositoryId) {
+        self.map.remove(&id);
+    }
+}
+
+struct IndexHolder {
+    index: Index,
+    name: String,
+}
+
 async fn perform_handshake(
     stream: &mut TcpObjectStream,
     this_replica_id: &ReplicaId,
 ) -> io::Result<ReplicaId> {
     stream.write(this_replica_id).await?;
     stream.read().await
+}
+
+async fn create_link(broker: &MessageBroker, id: RepositoryId, name: String, index: Index) {
+    // TODO: creating implicit link if the local and remote repository names are the same.
+    // Eventually the links will be explicit.
+
+    let local_id = Local::new(id);
+    let local_name = Local::new(name.clone());
+    let remote_name = Remote::new(name);
+
+    broker
+        .create_link(index, local_id, local_name, remote_name)
+        .await
 }
