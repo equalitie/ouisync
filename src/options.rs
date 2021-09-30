@@ -11,10 +11,6 @@ pub(crate) struct Options {
     #[structopt(long, value_name = "PATH")]
     pub data_dir: Option<PathBuf>,
 
-    /// Path to the config database [default: "DATA_DIR/config.db"]
-    #[structopt(long, value_name = "PATH")]
-    pub config_path: Option<PathBuf>,
-
     /// Disable Merger
     #[structopt(long)]
     pub disable_merger: bool,
@@ -22,8 +18,8 @@ pub(crate) struct Options {
     #[structopt(flatten)]
     pub network: NetworkOptions,
 
-    /// Mount the named repository at the specified path. Can be specified multiple times to mount
-    /// multiple repositories. If no such repository exists yet, it will be created.
+    /// Mount the named repository at the specified path. If no such repository exists yet, it will
+    /// be created. Can be specified multiple times to mount multiple repositories.
     #[structopt(short, long, value_name = "NAME:PATH")]
     pub mount: Vec<MountPoint>,
 
@@ -37,8 +33,8 @@ pub(crate) struct Options {
     pub print_ready_message: bool,
 
     /// Use temporary, memory-only databases. All data will be wiped out when the program
-    /// exits. If this flag is set, the --data-dir and --config-path options are ignored.
-    /// Use only for experimentation and testing.
+    /// exits. If this flag is set, the --data-dir option is ignored. Use only for experimentation
+    /// and testing.
     #[structopt(long)]
     pub temp: bool,
 }
@@ -57,11 +53,7 @@ impl Options {
 
     /// Path to the config database.
     pub fn config_path(&self) -> Result<PathBuf> {
-        if let Some(path) = &self.config_path {
-            Ok(path.clone())
-        } else {
-            Ok(self.data_dir()?.join("config.db"))
-        }
+        Ok(self.data_dir()?.join("config.db"))
     }
 
     /// Store of the config database
