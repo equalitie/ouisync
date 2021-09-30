@@ -203,17 +203,23 @@ impl Directory {
 
         drop(src_dir_reader);
 
-        self.write()
-            .await
+        let (mut src_dir_writer, mut dst_dir_writer) = write_pair(self, dst_dir).await;
+
+        src_dir_writer
             .remove_file(&src_name, src_author, src_vv, Some(src_blob_id))
             .await?;
 
-        dst_dir
-            .write()
-            .await
+        dst_dir_writer
+            .as_mut()
+            .unwrap_or(&mut src_dir_writer)
             .insert_entry(dst_name.into(), this_replica_id, dst_entry, None)
             .await?;
 
+        drop(src_dir_writer);
+        drop(dst_dir_writer);
+
+        // NOTE: can't call `flush` on the above writers because one of the directories might be
+        // a subdirectory of the other which would cause deadlock. Have to relock then sequentially.
         self.flush(None).await?;
 
         if !self.represents_same_directory_as(dst_dir) {
@@ -396,6 +402,34 @@ impl Directory {
                 }
             }
         }
+    }
+}
+
+/// Obtain a write lock for two directories at the same time in a way that prevents deadlock.
+///
+/// 1. Prevents deadlock when the two directories are actually two instances of the same directory.
+///    Returns `(Writer, None)` in that case.
+/// 2. Prevents deadlock when two tasks try to lock the same pair of directories concurrently, i.e.
+///    one tasks does `write_pair(A, B)` and another does `write_pair(B, A)`. This is achieved by
+///    doing the locks in the same order regarless of the order of the arguments. The `Writer`s are
+///    always returned in the same order as the arguments however.
+///
+pub async fn write_pair<'a, 'b>(
+    a: &'a Directory,
+    b: &'b Directory,
+) -> (Writer<'a>, Option<Writer<'b>>) {
+    if a.represents_same_directory_as(b) {
+        (a.write().await, None)
+    } else if Arc::as_ptr(&a.inner) < Arc::as_ptr(&b.inner) {
+        let a = a.write().await;
+        let b = b.write().await;
+
+        (a, Some(b))
+    } else {
+        let b = b.write().await;
+        let a = a.write().await;
+
+        (a, Some(b))
     }
 }
 

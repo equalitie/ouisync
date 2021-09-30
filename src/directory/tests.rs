@@ -207,7 +207,7 @@ async fn move_file_within_branch() {
     let aux_dir = root_dir
         .read()
         .await
-        .lookup_version("aux".into(), branch.id())
+        .lookup_version("aux", branch.id())
         .unwrap()
         .directory()
         .unwrap()
