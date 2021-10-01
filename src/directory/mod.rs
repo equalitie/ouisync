@@ -182,8 +182,7 @@ impl Directory {
 
         let src_dir_reader = self.read().await;
 
-        // Unwrap is OK because we just forked the entry above.
-        let src_entry = src_dir_reader.lookup_version(src_name, src_author).unwrap();
+        let src_entry = src_dir_reader.lookup_version(src_name, src_author)?;
 
         let src_blob_id = match src_entry {
             EntryRef::File(file) => *file.blob_id(),
