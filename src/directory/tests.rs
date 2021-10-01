@@ -136,10 +136,18 @@ async fn rename_file() {
     // Reopen and move the file
     let parent_dir = branch.open_root(branch.clone()).await.unwrap();
 
+    let entry_to_move = parent_dir
+        .read()
+        .await
+        .lookup_version(src_name, branch.id())
+        .unwrap()
+        .clone_data();
+
     parent_dir
         .move_entry(
             src_name,
             branch.id(),
+            entry_to_move,
             &parent_dir,
             dst_name,
             VersionVector::first(*branch.id()),
@@ -191,10 +199,18 @@ async fn move_file_within_branch() {
     // Move the file from ./ to ./aux/
     //
 
+    let entry_to_move = root_dir
+        .read()
+        .await
+        .lookup_version(file_name, branch.id())
+        .unwrap()
+        .clone_data();
+
     root_dir
         .move_entry(
             file_name,
             branch.id(),
+            entry_to_move,
             &aux_dir,
             file_name,
             VersionVector::first(*branch.id()),
@@ -233,6 +249,13 @@ async fn move_file_within_branch() {
     // Now move it back from ./aux/ to ./
     //
 
+    let entry_to_move = aux_dir
+        .read()
+        .await
+        .lookup_version(file_name, branch.id())
+        .unwrap()
+        .clone_data();
+
     let tombstone_vv = root_dir
         .read()
         .await
@@ -247,6 +270,7 @@ async fn move_file_within_branch() {
         .move_entry(
             file_name,
             branch.id(),
+            entry_to_move,
             &root_dir,
             file_name,
             tombstone_vv.increment(*branch.id()),
