@@ -183,7 +183,6 @@ async fn seek_and_read_case(len: usize, offset: usize, rng_seed: u64) {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore]
 async fn move_file() {
     let (_guard, mount_dir) = setup().await;
 
