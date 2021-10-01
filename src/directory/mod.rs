@@ -169,7 +169,9 @@ impl Directory {
         inner.blob.remove().await
     }
 
-    /// Preconditions: self, dst_dir and the file referred to src_name are all local.
+    /// # Panics
+    ///
+    /// Panics when self, dst_dir or the file referred to by src_name are not local.
     pub async fn move_entry(
         &self,
         src_name: &str,
@@ -178,8 +180,6 @@ impl Directory {
         dst_name: &str,
         dst_vv: VersionVector,
     ) -> Result<()> {
-        let this_replica_id = *self.this_replica_id();
-
         let src_dir_reader = self.read().await;
 
         let src_entry = src_dir_reader.lookup_version(src_name, src_author)?;
@@ -197,7 +197,6 @@ impl Directory {
             dst_entry
         };
 
-        let src_name = src_entry.name().to_string();
         let src_vv = src_entry.version_vector().clone();
 
         drop(src_dir_reader);
@@ -205,13 +204,13 @@ impl Directory {
         let (mut src_dir_writer, mut dst_dir_writer) = write_pair(self, dst_dir).await;
 
         src_dir_writer
-            .remove_file(&src_name, src_author, src_vv, Some(src_blob_id))
+            .remove_file(src_name, src_author, src_vv, Some(src_blob_id))
             .await?;
 
         dst_dir_writer
             .as_mut()
             .unwrap_or(&mut src_dir_writer)
-            .insert_entry(dst_name.into(), this_replica_id, dst_entry, None)
+            .insert_entry(dst_name.into(), *self.this_replica_id(), dst_entry, None)
             .await?;
 
         drop(src_dir_writer);
