@@ -169,44 +169,49 @@ impl Directory {
         inner.blob.remove().await
     }
 
+    /// Adds a tombstone to where the entry is being moved from and creates a new entry at the
+    /// destination.
+    ///
+    /// Note on why we're passing the `src_entry` to the function instead of just looking it up
+    /// using `src_name` and `src_author`: it's because the version vector inside of the
+    /// `src_entry` is expected to be the one the caller of this function is trying to move. It
+    /// could, in theory, happen that the source entry has been modified between when the caller
+    /// last released the lock to the entry and when we would do the lookup.
+    ///
+    /// Thus using the "caller provided" version vector, we ensure that we don't accidentally
+    /// delete data.
+    ///
     /// # Panics
     ///
-    /// Panics when self, dst_dir or the file referred to by src_name are not local.
+    /// Panics when `self` (i.e. the source directory) or `dst_dir` are not local.
     pub async fn move_entry(
         &self,
         src_name: &str,
         src_author: &ReplicaId,
+        src_entry: EntryData,
         dst_dir: &Directory,
         dst_name: &str,
         dst_vv: VersionVector,
     ) -> Result<()> {
-        let src_dir_reader = self.read().await;
+        let (mut src_dir_writer, mut dst_dir_writer) = write_pair(self, dst_dir).await;
 
-        let src_entry = src_dir_reader.lookup_version(src_name, src_author)?;
-
-        let src_blob_id = match src_entry {
-            EntryRef::File(file) => *file.blob_id(),
-            EntryRef::Directory(dir) => *dir.blob_id(),
-            EntryRef::Tombstone(_) => return Err(Error::EntryNotFound),
-        };
+        src_dir_writer
+            .remove_file(
+                src_name,
+                src_author,
+                src_entry.version_vector().clone(),
+                src_entry.blob_id().cloned(),
+            )
+            .await?;
 
         let dst_entry = {
             // TODO: vv is needlessly created twice here.
-            let mut dst_entry = src_entry.clone_data();
+            let mut dst_entry = src_entry.clone();
             *dst_entry.version_vector_mut() = dst_vv;
             dst_entry
         };
 
-        let src_vv = src_entry.version_vector().clone();
-
-        drop(src_dir_reader);
-
-        let (mut src_dir_writer, mut dst_dir_writer) = write_pair(self, dst_dir).await;
-
-        src_dir_writer
-            .remove_file(src_name, src_author, src_vv, Some(src_blob_id))
-            .await?;
-
+        // TODO: We need to undo the `remove_file` action from above if this next one fails.
         dst_dir_writer
             .as_mut()
             .unwrap_or(&mut src_dir_writer)

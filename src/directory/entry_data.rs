@@ -46,6 +46,14 @@ impl EntryData {
             Self::Tombstone(t) => &mut t.version_vector,
         }
     }
+
+    pub fn blob_id(&self) -> Option<&BlobId> {
+        match self {
+            Self::File(f) => Some(&f.blob_id),
+            Self::Directory(d) => Some(&d.blob_id),
+            Self::Tombstone(_) => None,
+        }
+    }
 }
 
 //--------------------------------------------------------------------

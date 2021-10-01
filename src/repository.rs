@@ -182,21 +182,18 @@ impl Repository {
             }
         };
 
+        // Get the entry here before we release the lock to the directory. This way the entry shall
+        // contain version vector that we want to delete and if someone updates the entry between
+        // now and when the entry is actually to be removed, the concurrent updates shall remain.
+        let src_entry = src_dir
+            .read()
+            .await
+            .lookup_version(&src_name, &src_author)?
+            .clone_data();
+
         drop(src_joint_dir_r);
         drop(src_joint_dir);
 
-        self.move_local_entry(&src_dir, &src_name, &src_author, dst_dir_path, dst_name)
-            .await
-    }
-
-    async fn move_local_entry<D: AsRef<Utf8Path>>(
-        &self,
-        src_dir: &Directory,
-        src_name: &str,
-        src_author: &ReplicaId,
-        dst_dir_path: D,
-        dst_name: &str,
-    ) -> Result<()> {
         let dst_joint_dir = self.open_directory(&dst_dir_path).await?;
         let dst_joint_reader = dst_joint_dir.read().await;
 
@@ -218,7 +215,14 @@ impl Repository {
         let dst_dir = self.create_directory(dst_dir_path).await?;
 
         src_dir
-            .move_entry(src_name, src_author, &dst_dir, dst_name, dst_vv)
+            .move_entry(
+                &src_name,
+                &src_author,
+                src_entry,
+                &dst_dir,
+                dst_name,
+                dst_vv,
+            )
             .await
     }
 
