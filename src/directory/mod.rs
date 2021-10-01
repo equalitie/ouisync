@@ -204,32 +204,16 @@ impl Directory {
             )
             .await?;
 
-        let dst_entry = {
-            // TODO: vv is needlessly created twice here.
-            let mut dst_entry = src_entry.clone();
-            *dst_entry.version_vector_mut() = dst_vv;
-            dst_entry
-        };
+        // TODO: vv is needlessly created twice here.
+        let mut dst_entry = src_entry.clone();
+        *dst_entry.version_vector_mut() = dst_vv;
 
         // TODO: We need to undo the `remove_file` action from above if this next one fails.
         dst_dir_writer
             .as_mut()
             .unwrap_or(&mut src_dir_writer)
             .insert_entry(dst_name.into(), *self.this_replica_id(), dst_entry, None)
-            .await?;
-
-        drop(src_dir_writer);
-        drop(dst_dir_writer);
-
-        // NOTE: can't call `flush` on the above writers because one of the directories might be
-        // a subdirectory of the other which would cause deadlock. Have to relock then sequentially.
-        self.flush(None).await?;
-
-        if self != dst_dir {
-            dst_dir.flush(None).await?;
-        }
-
-        Ok(())
+            .await
     }
 
     // Forks this directory into the local branch.

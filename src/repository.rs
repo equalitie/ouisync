@@ -223,7 +223,15 @@ impl Repository {
                 dst_name,
                 dst_vv,
             )
-            .await
+            .await?;
+
+        src_dir.flush(None).await?;
+
+        if src_dir != dst_dir {
+            dst_dir.flush(None).await?;
+        }
+
+        Ok(())
     }
 
     /// Returns the local branch
