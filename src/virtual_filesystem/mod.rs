@@ -18,7 +18,7 @@ use fuser::{
 };
 use ouisync::{
     debug_printer::DebugPrinter, Error, File, JointDirectory, JointEntry, JointEntryRef,
-    JointEntryType, ReplicaId, Repository, Result,
+    JointEntryType, MissingVersionStrategy, ReplicaId, Repository, Result,
 };
 use std::{
     convert::TryInto,
@@ -388,7 +388,13 @@ impl Inner {
                 Representation::File(*entry.author()),
             ),
             JointEntryRef::Directory(entry) => (
-                entry.open().await?.read().await.len().await,
+                entry
+                    .open(MissingVersionStrategy::Skip)
+                    .await?
+                    .read()
+                    .await
+                    .len()
+                    .await,
                 Representation::Directory,
             ),
         };

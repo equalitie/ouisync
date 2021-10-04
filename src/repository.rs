@@ -8,7 +8,7 @@ use crate::{
     error::{Error, Result},
     file::File,
     index::{self, BranchData, Index, Subscription},
-    joint_directory::{JointDirectory, JointEntryRef},
+    joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     joint_entry::JointEntryType,
     path,
     scoped_task::ScopedJoinHandle,
@@ -171,7 +171,11 @@ impl Repository {
                 (file.parent(), Cow::Owned(src_name), src_author)
             }
             JointEntryRef::Directory(entry) => {
-                let dir_to_move = entry.open().await?.merge().await?;
+                let dir_to_move = entry
+                    .open(MissingVersionStrategy::Skip)
+                    .await?
+                    .merge()
+                    .await?;
 
                 let src_dir = dir_to_move
                     .parent()

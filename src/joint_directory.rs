@@ -61,7 +61,7 @@ impl JointDirectory {
                         .lookup(name)
                         .find_map(|entry| entry.directory().ok())
                         .ok_or(Error::EntryNotFound)?
-                        .open()
+                        .open(MissingVersionStrategy::Skip)
                         .await?;
                     curr = next;
                 }
@@ -86,7 +86,7 @@ impl JointDirectory {
             .lookup(name)
             .find_map(|entry| entry.directory().ok())
         {
-            entry.open().await?
+            entry.open(MissingVersionStrategy::Skip).await?
         } else {
             Self::new(iter::empty()).await
         };
@@ -179,7 +179,10 @@ impl JointDirectory {
         for entry in self.read().await.entries() {
             match entry {
                 JointEntryRef::File(entry) => files_to_fork.push(entry.open().await?),
-                JointEntryRef::Directory(entry) => queue.push_front(entry.open().await?),
+                JointEntryRef::Directory(entry) => {
+                    // TODO: use the `Fail` strategy here
+                    queue.push_front(entry.open(MissingVersionStrategy::Skip).await?)
+                }
             }
         }
 
@@ -515,7 +518,10 @@ impl<'a> JointDirectoryRef<'a> {
             .name()
     }
 
-    pub async fn open(&self) -> Result<JointDirectory> {
+    pub async fn open(
+        &self,
+        missing_version_strategy: MissingVersionStrategy,
+    ) -> Result<JointDirectory> {
         let directories = future::try_join_all(self.0.iter().map(|dir| async move {
             match dir.open().await {
                 Ok(open_dir) => Ok(Some(open_dir)),
@@ -527,7 +533,9 @@ impl<'a> JointDirectoryRef<'a> {
                     );
                     Err(e)
                 }
-                Err(Error::EntryNotFound | Error::BlockNotFound(_)) => {
+                Err(Error::EntryNotFound | Error::BlockNotFound(_))
+                    if matches!(missing_version_strategy, MissingVersionStrategy::Skip) =>
+                {
                     // Some of the directories on remote branches may fail due to them not yet
                     // being fully downloaded from remote peers. This is OK and we'll treat such
                     // cases as if this replica doesn't know about those directories.
@@ -557,6 +565,15 @@ impl fmt::Debug for JointDirectoryRef<'_> {
             .field("name", &self.name())
             .finish()
     }
+}
+
+/// How to handle opening a joint directory that has some versions that are not fully loaded yet.
+#[derive(Copy, Clone)]
+pub enum MissingVersionStrategy {
+    /// Ignore the missing versions
+    Skip,
+    /// Fail the whole open operation
+    Fail,
 }
 
 // Iterator adaptor that maps iterator of `EntryRef` to iterator of `JointEntryRef` by filtering

@@ -39,7 +39,7 @@ pub use self::{
     directory::{Directory, EntryRef},
     error::{Error, Result},
     file::File,
-    joint_directory::{JointDirectory, JointEntryRef},
+    joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     joint_entry::{JointEntry, JointEntryType},
     locator::Locator,
     network::{Network, NetworkOptions},
