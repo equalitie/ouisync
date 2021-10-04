@@ -9,6 +9,7 @@ use crate::{
     version_vector::VersionVector,
     versioned_file_name,
 };
+use async_recursion::async_recursion;
 use camino::{Utf8Component, Utf8Path};
 use futures_util::future;
 use std::{
@@ -144,51 +145,50 @@ impl JointDirectory {
         Ok(())
     }
 
+    #[async_recursion]
     pub async fn merge(&mut self) -> Result<Directory> {
-        let mut queue = VecDeque::new();
-
-        let local_version = self.merge_single(&mut queue).await?;
-
-        while let Some(mut dir) = queue.pop_back() {
-            dir.merge_single(&mut queue).await?;
-        }
-
-        Ok(local_version)
-    }
-
-    // Returns merged local version
-    async fn merge_single(&mut self, queue: &mut VecDeque<Self>) -> Result<Directory> {
         let local_version = self.fork().await?;
-        let new_version_vector = self.merge_version_vectors().await;
 
-        if local_version.read().await.version_vector().await >= new_version_vector {
+        let new_version_vector = self.merge_version_vectors().await;
+        let old_version_vector = local_version.read().await.version_vector().await;
+
+        if old_version_vector >= new_version_vector {
             // Local version already up to date, nothing to do.
             return Ok(local_version);
         }
 
-        // We can't fork the files as we are iterating the entries because that would deadlock - we
-        // collect them here and fork them once done iterating instead.
-        let mut files_to_fork = Vec::new();
+        // To avoid deadlock, collect the files and directories and only fork/merge them after
+        // releasing the read lock.
+        let mut files = vec![];
+        let mut subdirs = vec![];
 
         for entry in self.read().await.entries() {
             match entry {
-                JointEntryRef::File(entry) => files_to_fork.push(entry.open().await?),
+                JointEntryRef::File(entry) => files.push(entry.open().await?),
                 JointEntryRef::Directory(entry) => {
-                    // TODO: use the `Fail` strategy here
-                    queue.push_front(entry.open(MissingVersionStrategy::Skip).await?)
+                    subdirs.push(entry.open(MissingVersionStrategy::Fail).await?)
                 }
             }
         }
 
-        future::try_join_all(files_to_fork.iter_mut().map(|file| async move {
+        // NOTE: we might consider doing the following concurrently using `try_join` or similar,
+        // but as they all need to access the same database there would probably be no benefit in
+        // it. It might actually end up being slower due to overhead.
+
+        // Fork files
+        for mut file in files {
             match file.fork().await {
                 // `EntryExists` error means the file already exists locally at the same or greater
                 // version than the remote file which is OK and expected, so we ignore it.
-                Ok(()) | Err(Error::EntryExists) => Ok(()),
-                Err(error) => Err(error),
+                Ok(()) | Err(Error::EntryExists) => (),
+                Err(error) => return Err(error),
             }
-        }))
-        .await?;
+        }
+
+        // Merge subdirectories
+        for mut dir in subdirs {
+            dir.merge().await?;
+        }
 
         local_version.flush(Some(&new_version_vector)).await?;
 
