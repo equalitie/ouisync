@@ -16,7 +16,7 @@ pub enum EntryData {
 }
 
 impl EntryData {
-    pub(super) fn file(blob_id: BlobId, version_vector: VersionVector) -> Self {
+    pub(crate) fn file(blob_id: BlobId, version_vector: VersionVector) -> Self {
         Self::File(EntryFileData {
             blob_id,
             version_vector,
@@ -24,14 +24,14 @@ impl EntryData {
         })
     }
 
-    pub(super) fn directory(blob_id: BlobId, version_vector: VersionVector) -> Self {
+    pub(crate) fn directory(blob_id: BlobId, version_vector: VersionVector) -> Self {
         Self::Directory(EntryDirectoryData {
             blob_id,
             version_vector,
         })
     }
 
-    pub fn version_vector(&self) -> &VersionVector {
+    pub(crate) fn version_vector(&self) -> &VersionVector {
         match self {
             Self::File(f) => &f.version_vector,
             Self::Directory(d) => &d.version_vector,
@@ -39,7 +39,7 @@ impl EntryData {
         }
     }
 
-    pub fn version_vector_mut(&mut self) -> &mut VersionVector {
+    pub(crate) fn version_vector_mut(&mut self) -> &mut VersionVector {
         match self {
             Self::File(f) => &mut f.version_vector,
             Self::Directory(d) => &mut d.version_vector,
@@ -47,7 +47,7 @@ impl EntryData {
         }
     }
 
-    pub fn blob_id(&self) -> Option<&BlobId> {
+    pub(crate) fn blob_id(&self) -> Option<&BlobId> {
         match self {
             Self::File(f) => Some(&f.blob_id),
             Self::Directory(d) => Some(&d.blob_id),

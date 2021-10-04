@@ -1421,6 +1421,92 @@ mod tests {
         assert_eq!(entry.author(), branches[1].id());
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn merge_missing_file() {
+        let branches = setup(2).await;
+
+        let local_root = branches[0].open_or_create_root().await.unwrap();
+        local_root.flush(None).await.unwrap();
+
+        let remote_root = branches[1].open_or_create_root().await.unwrap();
+
+        let mut file = remote_root
+            .create_file("squirrel.jpg".into())
+            .await
+            .unwrap();
+
+        // Flush the parent directory, but not the file. This way the directory entry for the file
+        // is created but the file blob is not. This simulates missing file.
+        remote_root.flush(None).await.unwrap();
+
+        let remote_root_on_local = branches[1].open_root(branches[0].clone()).await.unwrap();
+
+        // First attempt to merge fails because the file blob doesn't exist yet.
+        match JointDirectory::new(vec![local_root.clone(), remote_root_on_local.clone()])
+            .await
+            .merge()
+            .await
+        {
+            Err(Error::EntryNotFound) => (),
+            Err(error) => panic!("unexpected error {:?}", error),
+            Ok(_) => panic!("unexpected success"),
+        }
+
+        // Flush the file to create the blob
+        file.flush().await.unwrap();
+
+        // Merge again. This time it succeeds.
+        JointDirectory::new(vec![local_root.clone(), remote_root_on_local])
+            .await
+            .merge()
+            .await
+            .unwrap();
+
+        assert_matches!(
+            local_root
+                .read()
+                .await
+                .lookup_version("squirrel.jpg", branches[1].id()),
+            Ok(_)
+        );
+    }
+
+    // TODO: this is currently failing due to flaw in the merge algorithm - we are merging a parent
+    // directory before we merge the children.
+    #[ignore]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn merge_missing_subdirectory() {
+        let branches = setup(2).await;
+
+        let local_root = branches[0].open_or_create_root().await.unwrap();
+        local_root.flush(None).await.unwrap();
+
+        let remote_root = branches[1].open_or_create_root().await.unwrap();
+
+        let dir = remote_root
+            .create_directory("animals".into())
+            .await
+            .unwrap();
+
+        // Flush the parent directory, but not the subdirectory. This way the directory entry for
+        // the subdirectory is created but the subdirectory blob is not. This simulates missing
+        // subdirectory.
+        remote_root.flush(None).await.unwrap();
+
+        let remote_root_on_local = branches[1].open_root(branches[0].clone()).await.unwrap();
+
+        // First attempt to merge fails because the subdirectory blob doesn't exist yet.
+        match JointDirectory::new(vec![local_root.clone(), remote_root_on_local.clone()])
+            .await
+            .merge()
+            .await
+        {
+            Err(Error::EntryNotFound) => (),
+            Err(error) => panic!("unexpected error {:?}", error),
+            Ok(_) => panic!("unexpected success"),
+        }
+    }
+
     async fn setup(branch_count: usize) -> Vec<Branch> {
         setup_with_rng(StdRng::from_entropy(), branch_count).await
     }
