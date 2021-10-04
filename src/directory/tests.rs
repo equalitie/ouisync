@@ -273,7 +273,7 @@ async fn move_file_within_branch() {
             entry_to_move,
             &root_dir,
             file_name,
-            tombstone_vv.increment(*branch.id()),
+            tombstone_vv.incremented(*branch.id()),
         )
         .await
         .unwrap();
@@ -467,7 +467,7 @@ async fn insert_entry_newer_than_existing() {
             .await
             .unwrap();
 
-        let b_vv = a_vv.increment(b_author);
+        let b_vv = a_vv.incremented(b_author);
 
         root.insert_file_entry(name.to_owned(), b_author, b_vv.clone())
             .await

@@ -207,7 +207,7 @@ impl Repository {
                 // destination version vector must be "happened after" those.
                 dst_joint_reader
                     .merge_version_vectors(dst_name)
-                    .increment(*self.this_replica_id())
+                    .incremented(*self.this_replica_id())
             }
             Ok(_) => return Err(Error::EntryExists),
             Err(e) => return Err(e),

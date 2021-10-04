@@ -286,13 +286,11 @@ impl Reader<'_> {
     }
 
     pub fn merge_version_vectors(&self, name: &str) -> VersionVector {
-        let mut vv = VersionVector::new();
-
-        for entry in self.entry_versions(name) {
-            vv.merge(entry.version_vector());
-        }
-
-        vv
+        self.entry_versions(name)
+            .fold(VersionVector::new(), |mut vv, entry| {
+                vv.merge(entry.version_vector());
+                vv
+            })
     }
 
     /// Length of the directory in bytes. If there are multiple versions, returns the sum of their
