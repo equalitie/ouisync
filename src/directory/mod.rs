@@ -531,6 +531,11 @@ impl Writer<'_> {
     pub fn this_replica_id(&self) -> &ReplicaId {
         self.outer.this_replica_id()
     }
+
+    #[cfg(test)]
+    pub(crate) fn branch(&self) -> &Branch {
+        self.inner.blob.branch()
+    }
 }
 
 /// View of a `Directory` for performing read-only queries.
