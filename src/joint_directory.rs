@@ -24,17 +24,19 @@ pub struct JointDirectory {
 }
 
 impl JointDirectory {
+    /// Creates a new `JointDirectory` over the specified directory versions.
     pub async fn new<I>(versions: I) -> Self
     where
         I: IntoIterator<Item = Directory>,
     {
-        let versions = future::join_all(versions.into_iter().map(|dir| async move {
-            let branch_id = *dir.read().await.branch().id();
-            (branch_id, dir)
-        }))
-        .await
-        .into_iter()
-        .collect();
+        let versions: BTreeMap<_, _> =
+            future::join_all(versions.into_iter().map(|dir| async move {
+                let branch_id = *dir.read().await.branch().id();
+                (branch_id, dir)
+            }))
+            .await
+            .into_iter()
+            .collect();
 
         Self { versions }
     }
@@ -108,8 +110,7 @@ impl JointDirectory {
     }
 
     pub async fn remove_file(&mut self, name: &str) -> Result<()> {
-        self.fork().await?;
-
+        let local = self.fork().await?;
         let reader = self.read().await;
 
         let file_to_remove = reader.lookup_unique(name)?.file()?;
@@ -119,15 +120,12 @@ impl JointDirectory {
 
         drop(reader);
 
-        // Local directory exists because we forked above.
-        let (_local_id, local_dir) = self.local_version().await.unwrap();
-        let mut local_dir = local_dir.write().await;
+        let mut local_writer = local.write().await;
 
-        local_dir
+        local_writer
             .remove_file(name, &to_remove_author, to_remove_vv, None)
             .await?;
-
-        local_dir.flush(None).await
+        local_writer.flush(None).await
     }
 
     pub async fn remove_directory(&self, branch: &ReplicaId, name: &str) -> Result<()> {
@@ -139,7 +137,7 @@ impl JointDirectory {
     }
 
     pub async fn flush(&mut self) -> Result<()> {
-        if let Some((_, version)) = self.local_version().await {
+        if let Some(version) = self.local_version().await {
             version.flush(None).await?
         }
 
@@ -160,12 +158,8 @@ impl JointDirectory {
 
     // Returns merged local version
     async fn merge_single(&mut self, queue: &mut VecDeque<Self>) -> Result<Directory> {
-        self.fork().await?;
-
+        let local_version = self.fork().await?;
         let new_version_vector = self.merge_version_vectors().await;
-
-        // `unwrap` is OK because we called `fork` so the local verson exists,
-        let local_version = self.local_version().await.unwrap().1.clone();
 
         if local_version.read().await.version_vector().await >= new_version_vector {
             // Local version already up to date, nothing to do.
@@ -201,23 +195,20 @@ impl JointDirectory {
         Ok(local_version)
     }
 
-    // Ensure this joint directory contains a local version.
-    async fn fork(&mut self) -> Result<()> {
-        if self.local_version().await.is_some() {
-            return Ok(());
+    // Ensures this joint directory contains a local version and returns it.
+    async fn fork(&mut self) -> Result<Directory> {
+        if let Some(local) = self.local_version().await {
+            return Ok(local.clone());
         }
 
         // Grab any version and fork it to create the local one.
-        let local = if let Some(remote) = self.versions.values().next() {
-            remote.clone().fork().await?
-        } else {
-            return Ok(());
-        };
+        let remote = self.versions.values().next().ok_or(Error::EntryNotFound)?;
+        let local = remote.clone().fork().await?;
 
         let id = *local.read().await.branch().id();
-        self.versions.insert(id, local);
+        self.versions.insert(id, local.clone());
 
-        Ok(())
+        Ok(local)
     }
 
     // Merge the version vectors of all the versions in this joint directory.
@@ -231,12 +222,12 @@ impl JointDirectory {
         outcome
     }
 
-    async fn local_version(&self) -> Option<(&ReplicaId, &Directory)> {
+    async fn local_version(&self) -> Option<&Directory> {
         // TODO: Consider storing the local version separately, so accessing it is quicker (O(1)).
 
-        for (id, version) in &self.versions {
+        for version in self.versions.values() {
             if version.read().await.is_local() {
-                return Some((id, version));
+                return Some(version);
             }
         }
 
