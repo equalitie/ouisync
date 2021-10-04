@@ -31,13 +31,30 @@ impl Bin {
 
         let mut stdout = process.stdout.take().unwrap();
 
-        let port = wait_for_ready_message(&mut stdout);
-        println!("replica {} ready on port {}", id, port);
+        if let Some(port) = wait_for_ready_message(&mut stdout) {
+            println!("replica {} ready on port {}", id, port);
 
-        copy_lines_prefixed(stdout, io::stdout(), id);
-        copy_lines_prefixed(process.stderr.take().unwrap(), io::stderr(), id);
+            copy_lines_prefixed(stdout, io::stdout(), id);
+            copy_lines_prefixed(process.stderr.take().unwrap(), io::stderr(), id);
 
-        Self { mount_dir, process }
+            Self { mount_dir, process }
+        } else {
+            println!("Failed to parse ready line.");
+            println!("Waiting for program to finish.");
+
+            let exit_status = process.wait();
+
+            println!("Program finished with exit status: {:?}", exit_status);
+            println!("stderr:");
+
+            let stderr = process.stderr.take().unwrap();
+
+            for line in BufReader::new(stderr).lines() {
+                println!("    {:?}", line);
+            }
+
+            panic!("Failed to run ouisync executable");
+        }
     }
 
     pub fn root(&self) -> &Path {
@@ -76,16 +93,14 @@ where
     });
 }
 
-fn wait_for_ready_message<R: Read>(reader: &mut R) -> u16 {
+fn wait_for_ready_message<R: Read>(reader: &mut R) -> Option<u16> {
     const PREFIX: &str = "Listening on port ";
 
-    let line = BufReader::new(reader)
+    BufReader::new(reader)
         .lines()
         .filter_map(|line| line.ok())
         .find(|line| line.starts_with(PREFIX))
-        .unwrap();
-
-    line[PREFIX.len()..].parse().unwrap()
+        .map(|line| line[PREFIX.len()..].parse().unwrap())
 }
 
 /// Runs the given closure a couple of times until it succeeds (does not panic) with a short delay
