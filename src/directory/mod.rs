@@ -107,7 +107,7 @@ impl Directory {
             .entry_version_vector(&name, &author)
             .cloned()
             .unwrap_or_default()
-            .increment(author);
+            .incremented(author);
 
         inner
             .insert_entry(
@@ -450,7 +450,7 @@ impl Writer<'_> {
             .entry_version_vector(&name, &author)
             .cloned()
             .unwrap_or_default()
-            .increment(author);
+            .incremented(author);
 
         self.inner
             .insert_entry(name.clone(), author, EntryData::file(blob_id, vv), None)
@@ -497,7 +497,7 @@ impl Writer<'_> {
 
         let new_entry = if author == &this_replica_id {
             EntryData::Tombstone(EntryTombstoneData {
-                version_vector: vv.increment(this_replica_id),
+                version_vector: vv.incremented(this_replica_id),
             })
         } else {
             match self.lookup_version(name, &this_replica_id) {
@@ -507,7 +507,7 @@ impl Writer<'_> {
                     new_entry
                 }
                 Err(Error::EntryNotFound) => EntryData::Tombstone(EntryTombstoneData {
-                    version_vector: vv.increment(this_replica_id),
+                    version_vector: vv.incremented(this_replica_id),
                 }),
                 Err(e) => return Err(e),
             }
@@ -530,6 +530,11 @@ impl Writer<'_> {
 
     pub fn this_replica_id(&self) -> &ReplicaId {
         self.outer.this_replica_id()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn branch(&self) -> &Branch {
+        self.inner.blob.branch()
     }
 }
 

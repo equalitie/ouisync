@@ -8,7 +8,7 @@ use crate::{
     error::{Error, Result},
     file::File,
     index::{self, BranchData, Index, Subscription},
-    joint_directory::{JointDirectory, JointEntryRef},
+    joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     joint_entry::JointEntryType,
     path,
     scoped_task::ScopedJoinHandle,
@@ -171,7 +171,11 @@ impl Repository {
                 (file.parent(), Cow::Owned(src_name), src_author)
             }
             JointEntryRef::Directory(entry) => {
-                let dir_to_move = entry.open().await?.merge().await?;
+                let dir_to_move = entry
+                    .open(MissingVersionStrategy::Skip)
+                    .await?
+                    .merge()
+                    .await?;
 
                 let src_dir = dir_to_move
                     .parent()
@@ -203,7 +207,7 @@ impl Repository {
                 // destination version vector must be "happened after" those.
                 dst_joint_reader
                     .merge_version_vectors(dst_name)
-                    .increment(*self.this_replica_id())
+                    .incremented(*self.this_replica_id())
             }
             Ok(_) => return Err(Error::EntryExists),
             Err(e) => return Err(e),

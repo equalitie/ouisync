@@ -27,7 +27,7 @@ impl VersionVector {
 
     pub fn first(replica_id: ReplicaId) -> Self {
         let mut vv = Self::new();
-        vv.increment_in_place(replica_id);
+        vv.increment(replica_id);
         vv
     }
 
@@ -44,14 +44,15 @@ impl VersionVector {
     }
 
     /// Increments the version corresponding to the given replica id and returns it.
-    pub fn increment_in_place(&mut self, replica_id: ReplicaId) -> u64 {
+    pub fn increment(&mut self, replica_id: ReplicaId) -> u64 {
         let version = self.0.entry(replica_id).or_insert(0);
         *version += 1;
         *version
     }
 
-    /// Increments the version corresponding to the given replica id.
-    pub fn increment(mut self, replica_id: ReplicaId) -> Self {
+    /// Returns a version vector that is a copy of self but with the version corresponding to
+    /// `replica_id` incremented.
+    pub fn incremented(mut self, replica_id: ReplicaId) -> Self {
         let version = self.0.entry(replica_id).or_insert(0);
         *version += 1;
         self
@@ -282,7 +283,7 @@ mod tests {
         let mut vv = vv![];
         assert_eq!(vv.get(&id), 0);
 
-        assert_eq!(vv.increment_in_place(id), 1);
+        assert_eq!(vv.increment(id), 1);
         assert_eq!(vv.get(&id), 1);
     }
 

@@ -106,7 +106,7 @@ impl Inner {
         if let Some(version_vector_override) = version_vector_override {
             version.version_vector_mut().merge(version_vector_override)
         } else {
-            version.version_vector_mut().increment_in_place(local_id);
+            version.version_vector_mut().increment(local_id);
         }
 
         versions.insert(local_id, version);

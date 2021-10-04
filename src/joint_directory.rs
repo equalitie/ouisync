@@ -9,6 +9,7 @@ use crate::{
     version_vector::VersionVector,
     versioned_file_name,
 };
+use async_recursion::async_recursion;
 use camino::{Utf8Component, Utf8Path};
 use futures_util::future;
 use std::{
@@ -24,17 +25,19 @@ pub struct JointDirectory {
 }
 
 impl JointDirectory {
+    /// Creates a new `JointDirectory` over the specified directory versions.
     pub async fn new<I>(versions: I) -> Self
     where
         I: IntoIterator<Item = Directory>,
     {
-        let versions = future::join_all(versions.into_iter().map(|dir| async move {
-            let branch_id = *dir.read().await.branch().id();
-            (branch_id, dir)
-        }))
-        .await
-        .into_iter()
-        .collect();
+        let versions: BTreeMap<_, _> =
+            future::join_all(versions.into_iter().map(|dir| async move {
+                let branch_id = *dir.read().await.branch().id();
+                (branch_id, dir)
+            }))
+            .await
+            .into_iter()
+            .collect();
 
         Self { versions }
     }
@@ -61,7 +64,7 @@ impl JointDirectory {
                         .lookup(name)
                         .find_map(|entry| entry.directory().ok())
                         .ok_or(Error::EntryNotFound)?
-                        .open()
+                        .open(MissingVersionStrategy::Skip)
                         .await?;
                     curr = next;
                 }
@@ -86,7 +89,7 @@ impl JointDirectory {
             .lookup(name)
             .find_map(|entry| entry.directory().ok())
         {
-            entry.open().await?
+            entry.open(MissingVersionStrategy::Skip).await?
         } else {
             Self::new(iter::empty()).await
         };
@@ -108,8 +111,7 @@ impl JointDirectory {
     }
 
     pub async fn remove_file(&mut self, name: &str) -> Result<()> {
-        self.fork().await?;
-
+        let local = self.fork().await?;
         let reader = self.read().await;
 
         let file_to_remove = reader.lookup_unique(name)?.file()?;
@@ -119,15 +121,12 @@ impl JointDirectory {
 
         drop(reader);
 
-        // Local directory exists because we forked above.
-        let (_local_id, local_dir) = self.local_version().await.unwrap();
-        let mut local_dir = local_dir.write().await;
+        let mut local_writer = local.write().await;
 
-        local_dir
+        local_writer
             .remove_file(name, &to_remove_author, to_remove_vv, None)
             .await?;
-
-        local_dir.flush(None).await
+        local_writer.flush(None).await
     }
 
     pub async fn remove_directory(&self, branch: &ReplicaId, name: &str) -> Result<()> {
@@ -139,82 +138,77 @@ impl JointDirectory {
     }
 
     pub async fn flush(&mut self) -> Result<()> {
-        if let Some((_, version)) = self.local_version_mut().await {
+        if let Some(version) = self.local_version().await {
             version.flush(None).await?
         }
 
         Ok(())
     }
 
+    #[async_recursion]
     pub async fn merge(&mut self) -> Result<Directory> {
-        let mut queue = VecDeque::new();
-
-        let local_version = self.merge_single(&mut queue).await?;
-
-        while let Some(mut dir) = queue.pop_back() {
-            dir.merge_single(&mut queue).await?;
-        }
-
-        Ok(local_version)
-    }
-
-    // Returns merged local version
-    async fn merge_single(&mut self, queue: &mut VecDeque<Self>) -> Result<Directory> {
-        self.fork().await?;
+        let local_version = self.fork().await?;
 
         let new_version_vector = self.merge_version_vectors().await;
+        let old_version_vector = local_version.read().await.version_vector().await;
 
-        // `unwrap` is OK because we called `fork` so the local verson exists,
-        let local_version = self.local_version().await.unwrap().1.clone();
-
-        if local_version.read().await.version_vector().await >= new_version_vector {
+        if old_version_vector >= new_version_vector {
             // Local version already up to date, nothing to do.
             return Ok(local_version);
         }
 
-        // We can't fork the files as we are iterating the entries because that would deadlock - we
-        // collect them here and fork them once done iterating instead.
-        let mut files_to_fork = Vec::new();
+        // To avoid deadlock, collect the files and directories and only fork/merge them after
+        // releasing the read lock.
+        let mut files = vec![];
+        let mut subdirs = vec![];
 
         for entry in self.read().await.entries() {
             match entry {
-                JointEntryRef::File(entry) => files_to_fork.push(entry.open().await?),
-                JointEntryRef::Directory(entry) => queue.push_front(entry.open().await?),
+                JointEntryRef::File(entry) => files.push(entry.open().await?),
+                JointEntryRef::Directory(entry) => {
+                    subdirs.push(entry.open(MissingVersionStrategy::Fail).await?)
+                }
             }
         }
 
-        future::try_join_all(files_to_fork.iter_mut().map(|file| async move {
+        // NOTE: we might consider doing the following concurrently using `try_join` or similar,
+        // but as they all need to access the same database there would probably be no benefit in
+        // it. It might actually end up being slower due to overhead.
+
+        // Fork files
+        for mut file in files {
             match file.fork().await {
                 // `EntryExists` error means the file already exists locally at the same or greater
                 // version than the remote file which is OK and expected, so we ignore it.
-                Ok(()) | Err(Error::EntryExists) => Ok(()),
-                Err(error) => Err(error),
+                Ok(()) | Err(Error::EntryExists) => (),
+                Err(error) => return Err(error),
             }
-        }))
-        .await?;
+        }
+
+        // Merge subdirectories
+        for mut dir in subdirs {
+            dir.merge().await?;
+        }
 
         local_version.flush(Some(&new_version_vector)).await?;
 
         Ok(local_version)
     }
 
-    // Ensure this joint directory contains a local version.
-    async fn fork(&mut self) -> Result<()> {
-        if self.local_version().await.is_some() {
-            return Ok(());
+    // Ensures this joint directory contains a local version and returns it.
+    async fn fork(&mut self) -> Result<Directory> {
+        if let Some(local) = self.local_version().await {
+            return Ok(local.clone());
         }
 
         // Grab any version and fork it to create the local one.
-        let local = if let Some(remote) = self.versions.values().next() {
-            remote.clone().fork().await?
-        } else {
-            return Ok(());
-        };
+        let remote = self.versions.values().next().ok_or(Error::EntryNotFound)?;
+        let local = remote.clone().fork().await?;
 
         let id = *local.read().await.branch().id();
-        self.versions.insert(id, local);
+        self.versions.insert(id, local.clone());
 
-        Ok(())
+        Ok(local)
     }
 
     // Merge the version vectors of all the versions in this joint directory.
@@ -228,24 +222,12 @@ impl JointDirectory {
         outcome
     }
 
-    async fn local_version(&self) -> Option<(&ReplicaId, &Directory)> {
+    async fn local_version(&self) -> Option<&Directory> {
         // TODO: Consider storing the local version separately, so accessing it is quicker (O(1)).
 
-        for (id, version) in &self.versions {
+        for version in self.versions.values() {
             if version.read().await.is_local() {
-                return Some((id, version));
-            }
-        }
-
-        None
-    }
-
-    async fn local_version_mut(&mut self) -> Option<(&ReplicaId, &mut Directory)> {
-        // TODO: Consider storing the local version separately, so accessing it is quicker (O(1)).
-
-        for (id, version) in &mut self.versions {
-            if version.read().await.is_local() {
-                return Some((id, version));
+                return Some(version);
             }
         }
 
@@ -304,13 +286,11 @@ impl Reader<'_> {
     }
 
     pub fn merge_version_vectors(&self, name: &str) -> VersionVector {
-        let mut vv = VersionVector::new();
-
-        for entry in self.entry_versions(name) {
-            vv.merge(entry.version_vector());
-        }
-
-        vv
+        self.entry_versions(name)
+            .fold(VersionVector::new(), |mut vv, entry| {
+                vv.merge(entry.version_vector());
+                vv
+            })
     }
 
     /// Length of the directory in bytes. If there are multiple versions, returns the sum of their
@@ -527,7 +507,10 @@ impl<'a> JointDirectoryRef<'a> {
             .name()
     }
 
-    pub async fn open(&self) -> Result<JointDirectory> {
+    pub async fn open(
+        &self,
+        missing_version_strategy: MissingVersionStrategy,
+    ) -> Result<JointDirectory> {
         let directories = future::try_join_all(self.0.iter().map(|dir| async move {
             match dir.open().await {
                 Ok(open_dir) => Ok(Some(open_dir)),
@@ -539,7 +522,9 @@ impl<'a> JointDirectoryRef<'a> {
                     );
                     Err(e)
                 }
-                Err(Error::EntryNotFound | Error::BlockNotFound(_)) => {
+                Err(Error::EntryNotFound | Error::BlockNotFound(_))
+                    if matches!(missing_version_strategy, MissingVersionStrategy::Skip) =>
+                {
                     // Some of the directories on remote branches may fail due to them not yet
                     // being fully downloaded from remote peers. This is OK and we'll treat such
                     // cases as if this replica doesn't know about those directories.
@@ -569,6 +554,15 @@ impl fmt::Debug for JointDirectoryRef<'_> {
             .field("name", &self.name())
             .finish()
     }
+}
+
+/// How to handle opening a joint directory that has some versions that are not fully loaded yet.
+#[derive(Copy, Clone)]
+pub enum MissingVersionStrategy {
+    /// Ignore the missing versions
+    Skip,
+    /// Fail the whole open operation
+    Fail,
 }
 
 // Iterator adaptor that maps iterator of `EntryRef` to iterator of `JointEntryRef` by filtering
@@ -689,8 +683,8 @@ impl<'a> Iterator for Merge<'a> {
 mod tests {
     use super::*;
     use crate::{
-        branch::Branch, crypto::Cryptor, db, index::BranchData, repository,
-        version_vector::VersionVector,
+        blob::Blob, branch::Branch, crypto::Cryptor, db, directory::EntryData, index::BranchData,
+        repository, version_vector::VersionVector,
     };
     use assert_matches::assert_matches;
     use futures_util::future;
@@ -1421,6 +1415,108 @@ mod tests {
         assert_eq!(entry.author(), branches[1].id());
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn merge_missing_file() {
+        let branches = setup(2).await;
+
+        let local_root = branches[0].open_or_create_root().await.unwrap();
+        local_root.flush(None).await.unwrap();
+
+        let remote_root = branches[1].open_or_create_root().await.unwrap();
+        create_dangling_file(&remote_root, "squirrel.jpg").await;
+
+        let remote_root_on_local = branches[1].open_root(branches[0].clone()).await.unwrap();
+
+        // First attempt to merge fails because the file blob doesn't exist yet.
+        match JointDirectory::new(vec![local_root.clone(), remote_root_on_local.clone()])
+            .await
+            .merge()
+            .await
+        {
+            Err(Error::EntryNotFound) => (),
+            Err(error) => panic!("unexpected error {:?}", error),
+            Ok(_) => panic!("unexpected success"),
+        }
+
+        assert_matches!(
+            local_root
+                .read()
+                .await
+                .lookup("squirrel.jpg")
+                .map(|mut entries| entries.next()),
+            Err(Error::EntryNotFound)
+        );
+
+        replace_dangling_file(&remote_root, "squirrel.jpg").await;
+
+        // Merge again. This time it succeeds.
+        JointDirectory::new(vec![local_root.clone(), remote_root_on_local])
+            .await
+            .merge()
+            .await
+            .unwrap();
+
+        assert_matches!(
+            local_root
+                .read()
+                .await
+                .lookup("squirrel.jpg")
+                .map(|mut entries| entries.next()),
+            Ok(Some(_))
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn merge_missing_subdirectory() {
+        let branches = setup(2).await;
+
+        let local_root = branches[0].open_or_create_root().await.unwrap();
+        local_root.flush(None).await.unwrap();
+
+        let remote_root = branches[1].open_or_create_root().await.unwrap();
+        create_dangling_directory(&remote_root, "animals").await;
+
+        let remote_root_on_local = branches[1].open_root(branches[0].clone()).await.unwrap();
+
+        // First attempt to merge fails because the subdirectory blob doesn't exist yet.
+        match JointDirectory::new(vec![local_root.clone(), remote_root_on_local.clone()])
+            .await
+            .merge()
+            .await
+        {
+            Err(Error::EntryNotFound) => (),
+            Err(error) => panic!("unexpected error {:?}", error),
+            Ok(_) => panic!("unexpected success"),
+        }
+
+        assert_matches!(
+            local_root
+                .read()
+                .await
+                .lookup("animals")
+                .map(|mut entries| entries.next()),
+            Err(Error::EntryNotFound)
+        );
+
+        replace_dangling_directory(&remote_root, "animals").await;
+
+        // Merge again. This time it succeeds.
+        JointDirectory::new(vec![local_root.clone(), remote_root_on_local.clone()])
+            .await
+            .merge()
+            .await
+            .unwrap();
+
+        assert_matches!(
+            local_root
+                .read()
+                .await
+                .lookup("animals")
+                .map(|mut entries| entries.next()),
+            Ok(Some(_))
+        );
+    }
+
     async fn setup(branch_count: usize) -> Vec<Branch> {
         setup_with_rng(StdRng::from_entropy(), branch_count).await
     }
@@ -1520,5 +1616,95 @@ mod tests {
             .unwrap()
             .version_vector()
             .clone()
+    }
+
+    // TODO: try to reduce the code duplication in the following functions.
+
+    async fn create_dangling_file(parent: &Directory, name: &str) {
+        let mut writer = parent.write().await;
+        let branch_id = *writer.branch().id();
+        let blob_id = rand::random();
+
+        writer
+            .insert_entry(
+                name.into(),
+                branch_id,
+                EntryData::file(blob_id, VersionVector::first(branch_id)),
+                None,
+            )
+            .await
+            .unwrap();
+        writer.flush(None).await.unwrap();
+    }
+
+    async fn replace_dangling_file(parent: &Directory, name: &str) {
+        let reader = parent.read().await;
+        let old_blob_id = *reader
+            .lookup_version(name, reader.branch().id())
+            .unwrap()
+            .file()
+            .unwrap()
+            .blob_id();
+
+        // Create a dummy blob so the `create_file` call doesn't fail when trying to delete the
+        // previous blob (which doesn't exists because the file was created as danling).
+        Blob::create(reader.branch().clone(), Locator::Head(old_blob_id))
+            .flush()
+            .await
+            .unwrap();
+
+        drop(reader);
+
+        parent
+            .create_file(name.into())
+            .await
+            .unwrap()
+            .flush()
+            .await
+            .unwrap();
+    }
+
+    async fn create_dangling_directory(parent: &Directory, name: &str) {
+        let mut writer = parent.write().await;
+        let branch_id = *writer.branch().id();
+        let blob_id = rand::random();
+
+        writer
+            .insert_entry(
+                name.into(),
+                branch_id,
+                EntryData::directory(blob_id, VersionVector::first(branch_id)),
+                None,
+            )
+            .await
+            .unwrap();
+        writer.flush(None).await.unwrap();
+    }
+
+    async fn replace_dangling_directory(parent: &Directory, name: &str) {
+        let reader = parent.read().await;
+        let old_blob_id = *reader
+            .lookup_version(name, reader.branch().id())
+            .unwrap()
+            .directory()
+            .unwrap()
+            .blob_id();
+
+        // Create a dummy blob so the `create_directory` call doesn't fail when trying to delete
+        // the previous blob (which doesn't exists because the file was created as danling).
+        Blob::create(reader.branch().clone(), Locator::Head(old_blob_id))
+            .flush()
+            .await
+            .unwrap();
+
+        drop(reader);
+
+        parent
+            .create_directory(name.into())
+            .await
+            .unwrap()
+            .flush(None)
+            .await
+            .unwrap();
     }
 }
