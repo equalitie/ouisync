@@ -139,7 +139,7 @@ impl JointDirectory {
     }
 
     pub async fn flush(&mut self) -> Result<()> {
-        if let Some((_, version)) = self.local_version_mut().await {
+        if let Some((_, version)) = self.local_version().await {
             version.flush(None).await?
         }
 
@@ -232,18 +232,6 @@ impl JointDirectory {
         // TODO: Consider storing the local version separately, so accessing it is quicker (O(1)).
 
         for (id, version) in &self.versions {
-            if version.read().await.is_local() {
-                return Some((id, version));
-            }
-        }
-
-        None
-    }
-
-    async fn local_version_mut(&mut self) -> Option<(&ReplicaId, &mut Directory)> {
-        // TODO: Consider storing the local version separately, so accessing it is quicker (O(1)).
-
-        for (id, version) in &mut self.versions {
             if version.read().await.is_local() {
                 return Some((id, version));
             }
@@ -1483,7 +1471,7 @@ mod tests {
 
         let remote_root = branches[1].open_or_create_root().await.unwrap();
 
-        let dir = remote_root
+        let _dir = remote_root
             .create_directory("animals".into())
             .await
             .unwrap();
