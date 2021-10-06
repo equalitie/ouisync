@@ -1620,6 +1620,14 @@ mod tests {
     // TODO: try to reduce the code duplication in the following functions.
 
     async fn create_dangling_file(parent: &Directory, name: &str) {
+        create_dangling_entry(parent, EntryType::File, name).await
+    }
+
+    async fn create_dangling_directory(parent: &Directory, name: &str) {
+        create_dangling_entry(parent, EntryType::Directory, name).await
+    }
+
+    async fn create_dangling_entry(parent: &Directory, entry_type: EntryType, name: &str) {
         let mut writer = parent.write().await;
         let branch_id = *writer.branch().id();
         let blob_id = rand::random();
@@ -1628,7 +1636,7 @@ mod tests {
             .insert_entry(
                 name.into(),
                 branch_id,
-                EntryData::file(blob_id, VersionVector::first(branch_id)),
+                EntryData::new(entry_type, blob_id, VersionVector::first(branch_id)),
                 None,
             )
             .await
@@ -1661,23 +1669,6 @@ mod tests {
             .flush()
             .await
             .unwrap();
-    }
-
-    async fn create_dangling_directory(parent: &Directory, name: &str) {
-        let mut writer = parent.write().await;
-        let branch_id = *writer.branch().id();
-        let blob_id = rand::random();
-
-        writer
-            .insert_entry(
-                name.into(),
-                branch_id,
-                EntryData::directory(blob_id, VersionVector::first(branch_id)),
-                None,
-            )
-            .await
-            .unwrap();
-        writer.flush(None).await.unwrap();
     }
 
     async fn replace_dangling_directory(parent: &Directory, name: &str) {

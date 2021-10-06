@@ -416,23 +416,7 @@ impl Writer<'_> {
     }
 
     pub async fn create_file(&mut self, name: String) -> Result<File> {
-        let author = *self.this_replica_id();
-
-        let blob_id = rand::random();
-        let vv = self
-            .inner
-            .entry_version_vector(&name, &author)
-            .cloned()
-            .unwrap_or_default()
-            .incremented(author);
-
-        self.inner
-            .insert_entry(name.clone(), author, EntryData::file(blob_id, vv), None)
-            .await?;
-
-        let locator = Locator::Head(blob_id);
-        let parent = ParentContext::new(self.outer.inner.clone(), name, author);
-
+        let (locator, parent) = self.create_entry(EntryType::File, name).await?;
         Ok(File::create(
             self.outer.local_branch.clone(),
             locator,
@@ -441,6 +425,18 @@ impl Writer<'_> {
     }
 
     pub async fn create_directory(&mut self, name: String) -> Result<Directory> {
+        let (locator, parent) = self.create_entry(EntryType::Directory, name).await?;
+        self.inner
+            .open_directories
+            .create(self.outer.local_branch.clone(), locator, parent)
+            .await
+    }
+
+    async fn create_entry(
+        &mut self,
+        entry_type: EntryType,
+        name: String,
+    ) -> Result<(Locator, ParentContext)> {
         let author = *self.this_replica_id();
 
         let blob_id = rand::random();
@@ -455,7 +451,7 @@ impl Writer<'_> {
             .insert_entry(
                 name.clone(),
                 author,
-                EntryData::directory(blob_id, vv),
+                EntryData::new(entry_type, blob_id, vv),
                 None,
             )
             .await?;
@@ -463,10 +459,7 @@ impl Writer<'_> {
         let locator = Locator::Head(blob_id);
         let parent = ParentContext::new(self.outer.inner.clone(), name, author);
 
-        self.inner
-            .open_directories
-            .create(self.outer.local_branch.clone(), locator, parent)
-            .await
+        Ok((locator, parent))
     }
 
     pub fn lookup_version(&self, name: &'_ str, author: &ReplicaId) -> Result<EntryRef> {
