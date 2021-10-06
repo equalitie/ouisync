@@ -10,7 +10,7 @@ use crate::{
     blob_id::BlobId,
     block::{BlockId, BLOCK_SIZE},
     branch::Branch,
-    crypto::{Cryptor, NonceSequence},
+    crypto::NonceSequence,
     db,
     error::Result,
     locator::Locator,
@@ -48,12 +48,75 @@ impl Blob {
 
     /// Opens an existing blob.
     pub async fn open(branch: Branch, head_locator: Locator) -> Result<Self> {
-        Core::open_blob(branch, head_locator).await
+        // NOTE: no need to commit this transaction because we are only reading here.
+        let mut tx = branch.db_pool().begin().await?;
+
+        let (id, buffer, auth_tag) =
+            operations::load_block(&mut tx, branch.data(), branch.cryptor(), &head_locator).await?;
+
+        let mut content = Cursor::new(buffer);
+
+        let nonce_sequence = NonceSequence::new(content.read_array());
+        let nonce = nonce_sequence.get(0);
+
+        branch
+            .cryptor()
+            .decrypt(&nonce, id.as_ref(), &mut content, &auth_tag)?;
+
+        let len = content.read_u64();
+
+        Ok(Self::new(
+            Arc::new(Mutex::new(Core {
+                branch: branch.clone(),
+                head_locator,
+                nonce_sequence,
+                len,
+                len_dirty: false,
+            })),
+            head_locator,
+            branch,
+            OpenBlock {
+                head_locator,
+                locator: head_locator,
+                id,
+                content,
+                dirty: false,
+            },
+        ))
     }
 
     /// Creates a new blob.
     pub fn create(branch: Branch, head_locator: Locator) -> Self {
-        Core::create_blob(branch, head_locator)
+        let nonce_sequence = NonceSequence::new(rand::random());
+        let current_block = OpenBlock::new_head(head_locator, &nonce_sequence);
+
+        Self::new(
+            Arc::new(Mutex::new(Core {
+                branch: branch.clone(),
+                head_locator,
+                nonce_sequence,
+                len: 0,
+                len_dirty: false,
+            })),
+            head_locator,
+            branch,
+            current_block,
+        )
+    }
+
+    pub async fn reopen(core: Arc<Mutex<Core>>) -> Result<Self> {
+        let ptr = core.clone();
+        let mut guard = core.lock().await;
+        let core = &mut *guard;
+
+        let current_block = core.open_first_block().await?;
+
+        Ok(Self::new(
+            ptr,
+            core.head_locator,
+            core.branch.clone(),
+            current_block,
+        ))
     }
 
     pub fn branch(&self) -> &Branch {
@@ -121,15 +184,6 @@ impl Blob {
         self.lock().await.ops().seek(pos).await
     }
 
-    /// Seek to an offset in the blob in a db transaction.
-    pub async fn seek_in_transaction(
-        &mut self,
-        tx: &mut db::Transaction<'_>,
-        pos: SeekFrom,
-    ) -> Result<u64> {
-        self.lock().await.ops().seek_in_transaction(tx, pos).await
-    }
-
     /// Truncate the blob to the given length.
     pub async fn truncate(&mut self, len: u64) -> Result<()> {
         self.lock().await.ops().truncate(len).await
@@ -150,8 +204,14 @@ impl Blob {
 
     /// Flushes this blob, ensuring that all intermediately buffered contents gets written to the
     /// store.
+    // NOTE: this is currently used only in tests. Everywhere else we use `flush_in_transaction`.
+    #[cfg(test)]
     pub async fn flush(&mut self) -> Result<bool> {
-        self.lock().await.ops().flush().await
+        let mut tx = self.db_pool().begin().await?;
+        let was_dirty = self.flush_in_transaction(&mut tx).await?;
+        tx.commit().await?;
+
+        Ok(was_dirty)
     }
 
     /// Flushes this blob in a db transaction.
@@ -192,9 +252,9 @@ impl Blob {
         self.branch.db_pool()
     }
 
-    pub fn cryptor(&self) -> &Cryptor {
-        self.branch.cryptor()
-    }
+    // pub fn cryptor(&self) -> &Cryptor {
+    //     self.branch.cryptor()
+    // }
 
     async fn lock(&mut self) -> OperationsLock<'_> {
         let core_guard = self.core.lock().await;

@@ -98,33 +98,7 @@ impl Directory {
     ///
     /// Panics if this directory is not in the local branch.
     pub async fn create_directory(&self, name: String) -> Result<Self> {
-        let mut inner = self.write().await.inner;
-
-        let author = *self.local_branch.id();
-
-        let blob_id = rand::random();
-        let vv = inner
-            .entry_version_vector(&name, &author)
-            .cloned()
-            .unwrap_or_default()
-            .incremented(author);
-
-        inner
-            .insert_entry(
-                name.clone(),
-                author,
-                EntryData::directory(blob_id, vv),
-                None,
-            )
-            .await?;
-
-        let locator = Locator::Head(blob_id);
-        let parent = ParentContext::new(self.inner.clone(), name, author);
-
-        inner
-            .open_directories
-            .create(self.local_branch.clone(), locator, parent)
-            .await
+        self.write().await.create_directory(name).await
     }
 
     /// Effectively removes a file from this directory.
@@ -323,7 +297,7 @@ impl Directory {
     // # Panics
     //
     // Panics if not in the local branch.
-    pub async fn write(&self) -> Writer<'_> {
+    pub(crate) async fn write(&self) -> Writer<'_> {
         let inner = self.inner.write().await;
         inner.assert_local(self.local_branch.id());
         Writer { outer: self, inner }
@@ -408,7 +382,7 @@ impl Eq for Directory {}
 /// # Panics
 ///
 /// Panics if any of the directories is not in the local branch.
-pub async fn write_pair<'a, 'b>(
+pub(crate) async fn write_pair<'a, 'b>(
     a: &'a Directory,
     b: &'b Directory,
 ) -> (Writer<'a>, Option<Writer<'b>>) {
@@ -428,20 +402,34 @@ pub async fn write_pair<'a, 'b>(
 }
 
 /// View of a `Directory` for performing read and write queries.
-pub struct Writer<'a> {
+pub(crate) struct Writer<'a> {
     outer: &'a Directory,
     inner: RwLockWriteGuard<'a, Inner>,
 }
 
 impl Writer<'_> {
-    pub fn read_operations(&self) -> ReadOperations<'_> {
-        ReadOperations {
-            outer: self.outer,
-            inner: &*self.inner,
-        }
+    pub async fn create_file(&mut self, name: String) -> Result<File> {
+        let (locator, parent) = self.create_entry(EntryType::File, name).await?;
+        Ok(File::create(
+            self.outer.local_branch.clone(),
+            locator,
+            parent,
+        ))
     }
 
-    pub async fn create_file(&mut self, name: String) -> Result<File> {
+    pub async fn create_directory(&mut self, name: String) -> Result<Directory> {
+        let (locator, parent) = self.create_entry(EntryType::Directory, name).await?;
+        self.inner
+            .open_directories
+            .create(self.outer.local_branch.clone(), locator, parent)
+            .await
+    }
+
+    async fn create_entry(
+        &mut self,
+        entry_type: EntryType,
+        name: String,
+    ) -> Result<(Locator, ParentContext)> {
         let author = *self.this_replica_id();
 
         let blob_id = rand::random();
@@ -453,17 +441,18 @@ impl Writer<'_> {
             .incremented(author);
 
         self.inner
-            .insert_entry(name.clone(), author, EntryData::file(blob_id, vv), None)
+            .insert_entry(
+                name.clone(),
+                author,
+                EntryData::new(entry_type, blob_id, vv),
+                None,
+            )
             .await?;
 
         let locator = Locator::Head(blob_id);
         let parent = ParentContext::new(self.outer.inner.clone(), name, author);
 
-        Ok(File::create(
-            self.outer.local_branch.clone(),
-            locator,
-            parent,
-        ))
+        Ok((locator, parent))
     }
 
     pub fn lookup_version(&self, name: &'_ str, author: &ReplicaId) -> Result<EntryRef> {
@@ -545,13 +534,6 @@ pub struct Reader<'a> {
 }
 
 impl Reader<'_> {
-    pub fn read_operations(&self) -> ReadOperations<'_> {
-        ReadOperations {
-            outer: self.outer,
-            inner: &*self.inner,
-        }
-    }
-
     /// Returns iterator over the entries of this directory.
     pub fn entries(&self) -> impl Iterator<Item = EntryRef> + DoubleEndedIterator + Clone {
         self.inner
@@ -605,22 +587,6 @@ impl Reader<'_> {
     /// Is this directory in the local branch?
     pub(crate) fn is_local(&self) -> bool {
         self.branch().id() == self.outer.local_branch.id()
-    }
-}
-
-#[derive(Clone)]
-pub struct ReadOperations<'a> {
-    outer: &'a Directory,
-    inner: &'a Inner,
-}
-
-impl<'a> ReadOperations<'a> {
-    /// Lookup an entry of this directory by name.
-    pub fn lookup(
-        &self,
-        name: &'_ str,
-    ) -> Result<impl Iterator<Item = EntryRef<'a>> + ExactSizeIterator + Clone + 'a> {
-        lookup(self.outer, self.inner, name)
     }
 }
 

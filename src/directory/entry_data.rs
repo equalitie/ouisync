@@ -1,3 +1,4 @@
+use super::entry_type::EntryType;
 use crate::{blob, blob_id::BlobId, version_vector::VersionVector};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -16,6 +17,17 @@ pub enum EntryData {
 }
 
 impl EntryData {
+    pub(crate) fn new(
+        entry_type: EntryType,
+        blob_id: BlobId,
+        version_vector: VersionVector,
+    ) -> Self {
+        match entry_type {
+            EntryType::File => Self::file(blob_id, version_vector),
+            EntryType::Directory => Self::directory(blob_id, version_vector),
+        }
+    }
+
     pub(crate) fn file(blob_id: BlobId, version_vector: VersionVector) -> Self {
         Self::File(EntryFileData {
             blob_id,

@@ -1,7 +1,11 @@
 use super::*;
 use crate::index::BranchData;
 use crate::{block, repository};
-use crate::{crypto::SecretKey, error::Error, test_utils};
+use crate::{
+    crypto::{Cryptor, SecretKey},
+    error::Error,
+    test_utils,
+};
 use assert_matches::assert_matches;
 use proptest::collection::vec;
 use rand::{distributions::Standard, prelude::*};

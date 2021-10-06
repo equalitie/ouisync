@@ -39,7 +39,7 @@ impl File {
         parent: ParentContext,
     ) -> Result<Self> {
         Ok(Self {
-            blob: blob::Core::reopen(blob_core).await?,
+            blob: Blob::reopen(blob_core).await?,
             parent,
             local_branch,
         })

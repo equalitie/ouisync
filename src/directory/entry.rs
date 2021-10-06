@@ -1,6 +1,5 @@
 use super::{
     entry_data::{EntryData, EntryDirectoryData, EntryFileData, EntryTombstoneData},
-    entry_type::EntryType,
     inner::Inner,
     parent_context::ParentContext,
     Directory,
@@ -55,14 +54,6 @@ impl<'a> EntryRef<'a> {
 
     pub fn author(&self) -> &ReplicaId {
         self.inner().author
-    }
-
-    pub fn entry_type(&self) -> EntryType {
-        match self {
-            Self::File(_) => EntryType::File,
-            Self::Directory(_) => EntryType::Directory,
-            Self::Tombstone(_) => EntryType::Tombstone,
-        }
     }
 
     pub fn version_vector(&self) -> &VersionVector {

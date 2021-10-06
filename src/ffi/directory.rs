@@ -2,7 +2,7 @@ use super::{
     repository, session,
     utils::{self, Port, RefHandle, SharedHandle, UniqueHandle},
 };
-use crate::{joint_entry::JointEntryType, repository::Repository};
+use crate::{directory::EntryType, repository::Repository};
 use std::{convert::TryInto, ffi::CString, os::raw::c_char};
 
 // Currently this is only a read-only snapshot of a directory.
@@ -106,7 +106,7 @@ pub unsafe extern "C" fn directory_get_entry(
 
 pub struct DirEntry {
     name: CString,
-    entry_type: JointEntryType,
+    entry_type: EntryType,
 }
 
 #[no_mangle]

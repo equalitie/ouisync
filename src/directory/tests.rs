@@ -96,7 +96,7 @@ async fn remove_file() {
         Ok(entries) => {
             let entries: Vec<_> = entries.collect();
             assert_eq!(entries.len(), 1);
-            assert_eq!(entries[0].entry_type(), EntryType::Tombstone);
+            assert_matches!(entries[0], EntryRef::Tombstone(_));
         }
     }
 
@@ -175,7 +175,7 @@ async fn rename_file() {
 
     let src_entry = parent_dir.lookup_version(src_name, branch.id()).unwrap();
 
-    assert_eq!(src_entry.entry_type(), EntryType::Tombstone);
+    assert_matches!(src_entry, EntryRef::Tombstone(_));
 }
 
 #[tokio::test(flavor = "multi_thread")]

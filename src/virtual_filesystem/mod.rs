@@ -17,8 +17,8 @@ use fuser::{
     ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow,
 };
 use ouisync::{
-    debug_printer::DebugPrinter, Error, File, JointDirectory, JointEntry, JointEntryRef,
-    JointEntryType, MissingVersionStrategy, ReplicaId, Repository, Result,
+    debug_printer::DebugPrinter, EntryType, Error, File, JointDirectory, JointEntry, JointEntryRef,
+    MissingVersionStrategy, Repository, Result,
 };
 use std::{
     convert::TryInto,
@@ -479,11 +479,7 @@ impl Inner {
             file.truncate(size).await?;
         }
 
-        Ok(make_file_attr(
-            inode,
-            JointEntryType::File,
-            file.len().await,
-        ))
+        Ok(make_file_attr(inode, EntryType::File, file.len().await))
     }
 
     async fn opendir(&mut self, inode: Inode, flags: OpenFlags) -> Result<FileHandle> {
@@ -609,24 +605,16 @@ impl Inner {
             umask
         );
 
-        let parent_path = self.inodes.get(parent).calculate_path();
-        let mut parent_dir = self.repository.open_directory(parent_path).await?;
-
-        // TODO: Ensure parent_dir[this_replica_id] exists.
-        let mut dir = parent_dir
-            .create_directory(self.this_replica_id(), name)
-            .await?;
-
-        // TODO: should these two happen atomically (in a transaction)?
-        dir.flush().await?;
-        parent_dir.flush().await?;
+        let path = self.inodes.get(parent).calculate_path().join(name);
+        let dir = self.repository.create_directory(path).await?;
+        dir.flush(None).await?;
 
         let inode = self
             .inodes
             .lookup(parent, name, name, Representation::Directory);
-        let entry = JointEntry::Directory(dir);
+        let len = dir.read().await.len().await;
 
-        Ok(make_file_attr_for_entry(&entry, inode).await)
+        Ok(make_file_attr(inode, EntryType::Directory, len))
     }
 
     async fn rmdir(&mut self, parent: Inode, name: &OsStr) -> Result<()> {
@@ -882,10 +870,6 @@ impl Inner {
         }
     }
 
-    fn this_replica_id(&self) -> &ReplicaId {
-        self.repository.this_replica_id()
-    }
-
     // For debugging, use when needed
     #[allow(dead_code)]
     async fn debug_print(&self, print: DebugPrinter) {
@@ -899,7 +883,7 @@ async fn make_file_attr_for_entry(entry: &JointEntry, inode: Inode) -> FileAttr 
     make_file_attr(inode, entry.entry_type(), entry.len().await)
 }
 
-fn make_file_attr(inode: Inode, entry_type: JointEntryType, len: u64) -> FileAttr {
+fn make_file_attr(inode: Inode, entry_type: EntryType, len: u64) -> FileAttr {
     FileAttr {
         ino: inode,
         size: len,
@@ -910,8 +894,8 @@ fn make_file_attr(inode: Inode, entry_type: JointEntryType, len: u64) -> FileAtt
         crtime: SystemTime::UNIX_EPOCH, // TODO
         kind: to_file_type(entry_type),
         perm: match entry_type {
-            JointEntryType::File => 0o444,      // TODO
-            JointEntryType::Directory => 0o555, // TODO
+            EntryType::File => 0o444,      // TODO
+            EntryType::Directory => 0o555, // TODO
         },
         nlink: 1,
         uid: 0, // TODO
@@ -950,9 +934,9 @@ fn to_error_code(error: &Error) -> libc::c_int {
     }
 }
 
-fn to_file_type(entry_type: JointEntryType) -> FileType {
+fn to_file_type(entry_type: EntryType) -> FileType {
     match entry_type {
-        JointEntryType::File => FileType::RegularFile,
-        JointEntryType::Directory => FileType::Directory,
+        EntryType::File => FileType::RegularFile,
+        EntryType::Directory => FileType::Directory,
     }
 }

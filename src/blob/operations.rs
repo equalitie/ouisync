@@ -261,19 +261,10 @@ impl<'a> Operations<'a> {
         .await
     }
 
-    /// Flushes this blob, ensuring that all intermediately buffered contents gets written to the
-    /// store.
+    /// Flushes this blob in a db transaction, ensuring that all intermediately buffered contents
+    /// gets written to the store.
     ///
     /// Return true if was dirty and the flush actually took place
-    pub async fn flush(&mut self) -> Result<bool> {
-        let mut tx = self.db_pool().begin().await?;
-        let was_dirty = self.flush_in_transaction(&mut tx).await?;
-        tx.commit().await?;
-
-        Ok(was_dirty)
-    }
-
-    /// Flushes this blob in a db transaction.
     pub async fn flush_in_transaction(&mut self, tx: &mut db::Transaction<'_>) -> Result<bool> {
         if !self.is_dirty() {
             return Ok(false);
@@ -335,13 +326,13 @@ impl<'a> Operations<'a> {
 
         tx.commit().await?;
 
-        let new_core = Core::new(
-            dst_branch.clone(),
-            dst_head_locator,
-            self.core.nonce_sequence.clone(),
-            self.core.len,
-            self.core.len_dirty,
-        );
+        let new_core = Core {
+            branch: dst_branch.clone(),
+            head_locator: dst_head_locator,
+            nonce_sequence: self.core.nonce_sequence.clone(),
+            len: self.core.len,
+            len_dirty: self.core.len_dirty,
+        };
 
         let current_block = OpenBlock {
             head_locator: dst_head_locator,

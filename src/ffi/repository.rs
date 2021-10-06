@@ -2,9 +2,7 @@ use super::{
     session,
     utils::{self, Port, SharedHandle, UniqueHandle},
 };
-use crate::{
-    crypto::Cryptor, error::Error, joint_entry::JointEntryType, path, repository::Repository,
-};
+use crate::{crypto::Cryptor, directory::EntryType, error::Error, path, repository::Repository};
 use std::{os::raw::c_char, sync::Arc};
 use tokio::task::JoinHandle;
 
@@ -123,9 +121,9 @@ pub unsafe extern "C" fn subscription_cancel(handle: UniqueHandle<JoinHandle<()>
     handle.release().abort();
 }
 
-pub(super) fn entry_type_to_num(entry_type: JointEntryType) -> u8 {
+pub(super) fn entry_type_to_num(entry_type: EntryType) -> u8 {
     match entry_type {
-        JointEntryType::File => ENTRY_TYPE_FILE,
-        JointEntryType::Directory => ENTRY_TYPE_DIRECTORY,
+        EntryType::File => ENTRY_TYPE_FILE,
+        EntryType::Directory => ENTRY_TYPE_DIRECTORY,
     }
 }

@@ -1,114 +1,21 @@
-use super::operations::{load_block, Operations};
-
-use super::{Blob, Cursor, OpenBlock};
-
+use super::{
+    operations::{load_block, Operations},
+    {Cursor, OpenBlock},
+};
 use crate::{
     blob_id::BlobId, branch::Branch, crypto::NonceSequence, error::Result, locator::Locator,
 };
-
-use std::{fmt, mem, sync::Arc};
-
-use tokio::sync::Mutex;
+use std::{fmt, mem};
 
 pub struct Core {
-    pub(crate) branch: Branch,
-    pub(crate) head_locator: Locator,
-    pub(crate) nonce_sequence: NonceSequence,
-    pub(crate) len: u64,
-    pub(crate) len_dirty: bool,
+    pub(super) branch: Branch,
+    pub(super) head_locator: Locator,
+    pub(super) nonce_sequence: NonceSequence,
+    pub(super) len: u64,
+    pub(super) len_dirty: bool,
 }
 
 impl Core {
-    /// Creates a new Core.
-    pub(crate) fn new(
-        branch: Branch,
-        head_locator: Locator,
-        nonce_sequence: NonceSequence,
-        len: u64,
-        len_dirty: bool,
-    ) -> Self {
-        Self {
-            branch,
-            head_locator,
-            nonce_sequence,
-            len,
-            len_dirty,
-        }
-    }
-
-    /// Creates a new blob.
-    pub(crate) fn create_blob(branch: Branch, head_locator: Locator) -> Blob {
-        let nonce_sequence = NonceSequence::new(rand::random());
-        let current_block = OpenBlock::new_head(head_locator, &nonce_sequence);
-
-        Blob::new(
-            Arc::new(Mutex::new(Self {
-                branch: branch.clone(),
-                head_locator,
-                nonce_sequence,
-                len: 0,
-                len_dirty: false,
-            })),
-            head_locator,
-            branch,
-            current_block,
-        )
-    }
-
-    /// Opens an existing blob.
-    pub(crate) async fn open_blob(branch: Branch, head_locator: Locator) -> Result<Blob> {
-        // NOTE: no need to commit this transaction because we are only reading here.
-        let mut tx = branch.db_pool().begin().await?;
-
-        let (id, buffer, auth_tag) =
-            load_block(&mut tx, branch.data(), branch.cryptor(), &head_locator).await?;
-
-        let mut content = Cursor::new(buffer);
-
-        let nonce_sequence = NonceSequence::new(content.read_array());
-        let nonce = nonce_sequence.get(0);
-
-        branch
-            .cryptor()
-            .decrypt(&nonce, id.as_ref(), &mut content, &auth_tag)?;
-
-        let len = content.read_u64();
-
-        Ok(Blob::new(
-            Arc::new(Mutex::new(Self {
-                branch: branch.clone(),
-                head_locator,
-                nonce_sequence,
-                len,
-                len_dirty: false,
-            })),
-            head_locator,
-            branch,
-            OpenBlock {
-                head_locator,
-                locator: head_locator,
-                id,
-                content,
-                dirty: false,
-            },
-        ))
-    }
-
-    pub async fn reopen(core: Arc<Mutex<Core>>) -> Result<Blob> {
-        let ptr = core.clone();
-        let mut guard = core.lock().await;
-        let core = &mut *guard;
-
-        let current_block = core.open_first_block().await?;
-
-        Ok(Blob::new(
-            ptr,
-            core.head_locator,
-            core.branch.clone(),
-            current_block,
-        ))
-    }
-
     pub(crate) async fn open_first_block(&self) -> Result<OpenBlock> {
         if self.len == 0 {
             return Ok(OpenBlock::new_head(self.head_locator, &self.nonce_sequence));
