@@ -253,6 +253,8 @@ impl Index {
             .map(|(id, _)| id)
             .collect();
 
+        // TODO: remove all but the latest snapshots of all completed branches.
+
         // Then notify them.
         self.notify_branches_changed(&replica_ids).await;
 

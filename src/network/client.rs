@@ -164,6 +164,8 @@ impl Client {
 
     async fn handle_block(&self, id: BlockId, content: Box<[u8]>, auth_tag: AuthTag) -> Result<()> {
         // TODO: how to validate the block?
+        // TODO: ignore `BlockNotReferenced` errors as they only mean that the block is no longer
+        //       needed.
         store::write_received_block(&self.index, &id, &content, &auth_tag).await
     }
 
