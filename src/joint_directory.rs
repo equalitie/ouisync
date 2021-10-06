@@ -225,15 +225,73 @@ impl Reader<'_> {
         entries.flat_map(|(_, entries)| Merge::new(entries.into_iter()))
     }
 
-    // Documentation can be found at the underlying function.
+    /// Returns all versions of an entry with the given name. Concurrent file versions are returned
+    /// separately but concurrent directory versions are merged into a single `JointDirectory`.
     pub fn lookup<'a>(&'a self, name: &'a str) -> impl Iterator<Item = JointEntryRef<'a>> + 'a {
-        lookup(self.readers(), name)
+        Merge::new(
+            self.0
+                .iter()
+                .filter_map(move |dir| dir.lookup(name).ok())
+                .flatten(),
+        )
     }
 
-    // Documentation can be found at the underlying function
+    /// Looks up single entry with the specified name if it is unique.
+    ///
+    /// - If there is only one version of a entry with the specified name, it is returned.
+    /// - If there are multiple versions and all of them are files, an `AmbiguousEntry` error is
+    ///   returned. To lookup a single version, include a disambiguator in the `name`.
+    /// - If there are multiple versiond and all of them are directories, they are merged into a
+    ///   single `JointEntryRef::Directory` and returned.
+    /// - Finally, if there are both files and directories, only the directories are retured (merged
+    ///   into a `JointEntryRef::Directory`) and the files are discarded. This is so it's possible
+    ///   to unambiguously lookup a directory even in the presence of conflicting files.
     pub fn lookup_unique<'a>(&'a self, name: &'a str) -> Result<JointEntryRef<'a>> {
-        //lookup_unique(self.readers(), name)
-        lookup_unique_(|n| self.entry_versions(n), name)
+        // First try exact match as it is more common.
+        let mut last_file = None;
+
+        for entry in Merge::new(self.entry_versions(name)) {
+            match entry {
+                JointEntryRef::Directory(_) => return Ok(entry),
+                JointEntryRef::File(_) if last_file.is_none() => {
+                    last_file = Some(entry);
+                }
+                JointEntryRef::File(_) => return Err(Error::AmbiguousEntry),
+            }
+        }
+
+        if let Some(entry) = last_file {
+            return Ok(entry);
+        }
+
+        // If not found, extract the disambiguator and try to lookup an entry whose branch id
+        // matches it.
+        let (name, branch_id_prefix) = versioned_file_name::parse(name);
+        let branch_id_prefix = branch_id_prefix.ok_or(Error::EntryNotFound)?;
+
+        let entries = self
+            .entry_versions(name)
+            .filter_map(|entry| entry.file().ok())
+            .filter(|entry| entry.author().starts_with(&branch_id_prefix));
+
+        // At this point, `entries` contains files from only a single author. It may still be the
+        // case however that there are multiple versions of the entry because each branch may
+        // contain one.
+        // NOTE: Using keep_maximal may be an overkill in this case because of the invariant that
+        // no single author/replica can create concurrent versions of an entry.
+        let mut entries =
+            keep_maximal(entries, |e| e.version_vector(), |e| e.is_local()).into_iter();
+
+        let first = entries.next().ok_or(Error::EntryNotFound)?;
+
+        if entries.next().is_none() {
+            Ok(JointEntryRef::File(JointFileRef {
+                file: first,
+                needs_disambiguation: true,
+            }))
+        } else {
+            Err(Error::AmbiguousEntry)
+        }
     }
 
     /// Looks up a specific version of a file.
@@ -254,14 +312,6 @@ impl Reader<'_> {
         .ok_or(Error::EntryNotFound)
     }
 
-    pub fn merge_version_vectors(&self, name: &str) -> VersionVector {
-        self.entry_versions(name)
-            .fold(VersionVector::new(), |mut vv, entry| {
-                vv.merge(entry.version_vector());
-                vv
-            })
-    }
-
     /// Length of the directory in bytes. If there are multiple versions, returns the sum of their
     /// lengths.
     #[allow(clippy::len_without_is_empty)]
@@ -273,96 +323,19 @@ impl Reader<'_> {
         sum
     }
 
-    pub fn entry_versions<'a>(
-        &'a self,
-        name: &'a str,
-    ) -> impl Iterator<Item = EntryRef<'a>> + Clone + 'a {
-        self.readers()
+    pub(crate) fn merge_version_vectors(&self, name: &str) -> VersionVector {
+        self.entry_versions(name)
+            .fold(VersionVector::new(), |mut vv, entry| {
+                vv.merge(entry.version_vector());
+                vv
+            })
+    }
+
+    fn entry_versions<'a>(&'a self, name: &'a str) -> impl Iterator<Item = EntryRef<'a>> {
+        self.0
+            .iter()
             .filter_map(move |r| r.lookup(name).ok())
             .flatten()
-    }
-
-    pub fn readers(&self) -> impl Iterator<Item = directory::ReadOperations> + Clone {
-        self.0.iter().map(|reader| reader.read_operations())
-    }
-}
-
-/// Returns all versions of an entry with the given name. Concurrent file versions are returned
-/// separately but concurrent directory versions are merged into a single `JointDirectory`.
-fn lookup<'a, Dirs>(dirs: Dirs, name: &str) -> impl Iterator<Item = JointEntryRef<'a>>
-where
-    Dirs: Iterator<Item = directory::ReadOperations<'a>>,
-{
-    Merge::new(dirs.filter_map(move |dir| dir.lookup(name).ok()).flatten())
-}
-
-fn lookup_<'a, Versions>(versions: Versions) -> impl Iterator<Item = JointEntryRef<'a>>
-where
-    Versions: Iterator<Item = EntryRef<'a>>,
-{
-    Merge::new(versions)
-}
-
-/// Looks up single entry with the specified name if it is unique.
-///
-/// - If there is only one version of a entry with the specified name, it is returned.
-/// - If there are multiple versions and all of them are files, an `AmbiguousEntry` error is
-///   returned. To lookup a single version, include a disambiguator in the `name`.
-/// - If there are multiple versiond and all of them are directories, they are merged into a
-///   single `JointEntryRef::Directory` and returned.
-/// - Finally, if there are both files and directories, only the directories are retured (merged
-///   into a `JointEntryRef::Directory`) and the files are discarded. This is so it's possible
-///   to unambiguously lookup a directory even in the presence of conflicting files.
-pub fn lookup_unique_<'a, GetVersions, Versions>(
-    get_versions: GetVersions,
-    name: &'a str,
-) -> Result<JointEntryRef<'a>>
-where
-    GetVersions: Fn(&'a str) -> Versions,
-    Versions: Iterator<Item = EntryRef<'a>> + Clone,
-{
-    // First try exact match as it is more common.
-    let mut last_file = None;
-
-    for entry in lookup_(get_versions(name)) {
-        match entry {
-            JointEntryRef::Directory(_) => return Ok(entry),
-            JointEntryRef::File(_) if last_file.is_none() => {
-                last_file = Some(entry);
-            }
-            JointEntryRef::File(_) => return Err(Error::AmbiguousEntry),
-        }
-    }
-
-    if let Some(entry) = last_file {
-        return Ok(entry);
-    }
-
-    // If not found, extract the disambiguator and try to lookup an entry whose branch id
-    // matches it.
-    let (name, branch_id_prefix) = versioned_file_name::parse(name);
-    let branch_id_prefix = branch_id_prefix.ok_or(Error::EntryNotFound)?;
-
-    let entries = get_versions(name)
-        .filter_map(|entry| entry.file().ok())
-        .filter(|entry| entry.author().starts_with(&branch_id_prefix));
-
-    // At this point, `entries` contains files from only a single author. It may still be the
-    // case however that there are multiple versions of the entry because each branch may
-    // contain one.
-    // NOTE: Using keep_maximal may be an overkill in this case because of the invariant that
-    // no single author/replica can create concurrent versions of an entry.
-    let mut entries = keep_maximal(entries, |e| e.version_vector(), |e| e.is_local()).into_iter();
-
-    let first = entries.next().ok_or(Error::EntryNotFound)?;
-
-    if entries.next().is_none() {
-        Ok(JointEntryRef::File(JointFileRef {
-            file: first,
-            needs_disambiguation: true,
-        }))
-    } else {
-        Err(Error::AmbiguousEntry)
     }
 }
 

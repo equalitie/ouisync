@@ -534,13 +534,6 @@ pub struct Reader<'a> {
 }
 
 impl Reader<'_> {
-    pub fn read_operations(&self) -> ReadOperations<'_> {
-        ReadOperations {
-            outer: self.outer,
-            inner: &*self.inner,
-        }
-    }
-
     /// Returns iterator over the entries of this directory.
     pub fn entries(&self) -> impl Iterator<Item = EntryRef> + DoubleEndedIterator + Clone {
         self.inner
@@ -594,22 +587,6 @@ impl Reader<'_> {
     /// Is this directory in the local branch?
     pub(crate) fn is_local(&self) -> bool {
         self.branch().id() == self.outer.local_branch.id()
-    }
-}
-
-#[derive(Clone)]
-pub struct ReadOperations<'a> {
-    outer: &'a Directory,
-    inner: &'a Inner,
-}
-
-impl<'a> ReadOperations<'a> {
-    /// Lookup an entry of this directory by name.
-    pub fn lookup(
-        &self,
-        name: &'_ str,
-    ) -> Result<impl Iterator<Item = EntryRef<'a>> + ExactSizeIterator + Clone + 'a> {
-        lookup(self.outer, self.inner, name)
     }
 }
 
