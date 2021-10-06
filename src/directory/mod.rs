@@ -297,7 +297,7 @@ impl Directory {
     // # Panics
     //
     // Panics if not in the local branch.
-    pub async fn write(&self) -> Writer<'_> {
+    pub(crate) async fn write(&self) -> Writer<'_> {
         let inner = self.inner.write().await;
         inner.assert_local(self.local_branch.id());
         Writer { outer: self, inner }
@@ -382,7 +382,7 @@ impl Eq for Directory {}
 /// # Panics
 ///
 /// Panics if any of the directories is not in the local branch.
-pub async fn write_pair<'a, 'b>(
+pub(crate) async fn write_pair<'a, 'b>(
     a: &'a Directory,
     b: &'b Directory,
 ) -> (Writer<'a>, Option<Writer<'b>>) {
@@ -402,19 +402,12 @@ pub async fn write_pair<'a, 'b>(
 }
 
 /// View of a `Directory` for performing read and write queries.
-pub struct Writer<'a> {
+pub(crate) struct Writer<'a> {
     outer: &'a Directory,
     inner: RwLockWriteGuard<'a, Inner>,
 }
 
 impl Writer<'_> {
-    pub fn read_operations(&self) -> ReadOperations<'_> {
-        ReadOperations {
-            outer: self.outer,
-            inner: &*self.inner,
-        }
-    }
-
     pub async fn create_file(&mut self, name: String) -> Result<File> {
         let (locator, parent) = self.create_entry(EntryType::File, name).await?;
         Ok(File::create(
