@@ -1,15 +1,9 @@
 use crate::{
+    directory::EntryType,
     error::{Error, Result},
     file::File,
     joint_directory::JointDirectory,
 };
-
-/// Type of filesystem entry.
-#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
-pub enum JointEntryType {
-    File,
-    Directory,
-}
 
 #[derive(Debug)]
 pub enum JointEntry {
@@ -19,10 +13,10 @@ pub enum JointEntry {
 
 #[allow(clippy::len_without_is_empty)]
 impl JointEntry {
-    pub fn entry_type(&self) -> JointEntryType {
+    pub fn entry_type(&self) -> EntryType {
         match self {
-            Self::File(_) => JointEntryType::File,
-            Self::Directory(_) => JointEntryType::Directory,
+            Self::File(_) => EntryType::File,
+            Self::Directory(_) => EntryType::Directory,
         }
     }
 

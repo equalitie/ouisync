@@ -36,11 +36,11 @@ mod versioned_file_name;
 pub use self::{
     crypto::Cryptor,
     db::Store,
-    directory::{Directory, EntryRef},
+    directory::{Directory, EntryRef, EntryType},
     error::{Error, Result},
     file::File,
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
-    joint_entry::{JointEntry, JointEntryType},
+    joint_entry::JointEntry,
     locator::Locator,
     network::{Network, NetworkOptions},
     replica_id::ReplicaId,

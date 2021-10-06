@@ -4,12 +4,11 @@ use crate::{
     crypto::Cryptor,
     db,
     debug_printer::DebugPrinter,
-    directory::Directory,
+    directory::{Directory, EntryType},
     error::{Error, Result},
     file::File,
     index::{self, BranchData, Index, Subscription},
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
-    joint_entry::JointEntryType,
     path,
     scoped_task::ScopedJoinHandle,
     ReplicaId,
@@ -62,14 +61,14 @@ impl Repository {
 
     /// Looks up an entry by its path. The path must be relative to the repository root.
     /// If the entry exists, returns its `JointEntryType`, otherwise returns `EntryNotFound`.
-    pub async fn lookup_type<P: AsRef<Utf8Path>>(&self, path: P) -> Result<JointEntryType> {
+    pub async fn lookup_type<P: AsRef<Utf8Path>>(&self, path: P) -> Result<EntryType> {
         match path::decompose(path.as_ref()) {
             Some((parent, name)) => {
                 let parent = self.open_directory(parent).await?;
                 let parent = parent.read().await;
                 Ok(parent.lookup_unique(name)?.entry_type())
             }
-            None => Ok(JointEntryType::Directory),
+            None => Ok(EntryType::Directory),
         }
     }
 

@@ -17,8 +17,8 @@ use fuser::{
     ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow,
 };
 use ouisync::{
-    debug_printer::DebugPrinter, Error, File, JointDirectory, JointEntry, JointEntryRef,
-    JointEntryType, MissingVersionStrategy, ReplicaId, Repository, Result,
+    debug_printer::DebugPrinter, EntryType, Error, File, JointDirectory, JointEntry, JointEntryRef,
+    MissingVersionStrategy, ReplicaId, Repository, Result,
 };
 use std::{
     convert::TryInto,
@@ -479,11 +479,7 @@ impl Inner {
             file.truncate(size).await?;
         }
 
-        Ok(make_file_attr(
-            inode,
-            JointEntryType::File,
-            file.len().await,
-        ))
+        Ok(make_file_attr(inode, EntryType::File, file.len().await))
     }
 
     async fn opendir(&mut self, inode: Inode, flags: OpenFlags) -> Result<FileHandle> {
@@ -899,7 +895,7 @@ async fn make_file_attr_for_entry(entry: &JointEntry, inode: Inode) -> FileAttr 
     make_file_attr(inode, entry.entry_type(), entry.len().await)
 }
 
-fn make_file_attr(inode: Inode, entry_type: JointEntryType, len: u64) -> FileAttr {
+fn make_file_attr(inode: Inode, entry_type: EntryType, len: u64) -> FileAttr {
     FileAttr {
         ino: inode,
         size: len,
@@ -910,8 +906,8 @@ fn make_file_attr(inode: Inode, entry_type: JointEntryType, len: u64) -> FileAtt
         crtime: SystemTime::UNIX_EPOCH, // TODO
         kind: to_file_type(entry_type),
         perm: match entry_type {
-            JointEntryType::File => 0o444,      // TODO
-            JointEntryType::Directory => 0o555, // TODO
+            EntryType::File => 0o444,      // TODO
+            EntryType::Directory => 0o555, // TODO
         },
         nlink: 1,
         uid: 0, // TODO
@@ -950,9 +946,9 @@ fn to_error_code(error: &Error) -> libc::c_int {
     }
 }
 
-fn to_file_type(entry_type: JointEntryType) -> FileType {
+fn to_file_type(entry_type: EntryType) -> FileType {
     match entry_type {
-        JointEntryType::File => FileType::RegularFile,
-        JointEntryType::Directory => FileType::Directory,
+        EntryType::File => FileType::RegularFile,
+        EntryType::Directory => FileType::Directory,
     }
 }
