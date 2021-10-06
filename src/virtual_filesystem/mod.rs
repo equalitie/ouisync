@@ -18,7 +18,7 @@ use fuser::{
 };
 use ouisync::{
     debug_printer::DebugPrinter, EntryType, Error, File, JointDirectory, JointEntry, JointEntryRef,
-    MissingVersionStrategy, ReplicaId, Repository, Result,
+    MissingVersionStrategy, Repository, Result,
 };
 use std::{
     convert::TryInto,
@@ -605,24 +605,16 @@ impl Inner {
             umask
         );
 
-        let parent_path = self.inodes.get(parent).calculate_path();
-        let mut parent_dir = self.repository.open_directory(parent_path).await?;
-
-        // TODO: Ensure parent_dir[this_replica_id] exists.
-        let mut dir = parent_dir
-            .create_directory(self.this_replica_id(), name)
-            .await?;
-
-        // TODO: should these two happen atomically (in a transaction)?
-        dir.flush().await?;
-        parent_dir.flush().await?;
+        let path = self.inodes.get(parent).calculate_path().join(name);
+        let dir = self.repository.create_directory(path).await?;
+        dir.flush(None).await?;
 
         let inode = self
             .inodes
             .lookup(parent, name, name, Representation::Directory);
-        let entry = JointEntry::Directory(dir);
+        let len = dir.read().await.len().await;
 
-        Ok(make_file_attr_for_entry(&entry, inode).await)
+        Ok(make_file_attr(inode, EntryType::Directory, len))
     }
 
     async fn rmdir(&mut self, parent: Inode, name: &OsStr) -> Result<()> {
@@ -876,10 +868,6 @@ impl Inner {
                 Ok(JointEntry::File(file))
             }
         }
-    }
-
-    fn this_replica_id(&self) -> &ReplicaId {
-        self.repository.this_replica_id()
     }
 
     // For debugging, use when needed

@@ -14,8 +14,8 @@ use futures_util::future;
 use std::{
     borrow::Cow,
     cmp::Ordering,
-    collections::{btree_map::Entry, BTreeMap, VecDeque},
-    fmt, iter, mem,
+    collections::{BTreeMap, VecDeque},
+    fmt, mem,
 };
 
 /// Unified view over multiple concurrent versions of a directory.
@@ -78,36 +78,6 @@ impl JointDirectory {
 
     // TODO: all the mutable operations must operate on the local version only. If there is no local
     //       version, we should fork it first.
-
-    /// Creates a subdirectory of this directory owned by `branch` and returns it as
-    /// `JointDirectory` which would already include all previousy existing versions.
-    pub async fn create_directory(&self, branch: &ReplicaId, name: &str) -> Result<Self> {
-        let mut old_dir = if let Some(entry) = self
-            .read()
-            .await
-            .lookup(name)
-            .find_map(|entry| entry.directory().ok())
-        {
-            entry.open(MissingVersionStrategy::Skip).await?
-        } else {
-            Self::new(iter::empty()).await
-        };
-
-        match old_dir.versions.entry(*branch) {
-            Entry::Vacant(entry) => {
-                let new_version = self
-                    .versions
-                    .get(branch)
-                    .ok_or(Error::EntryNotFound)?
-                    .create_directory(name.to_owned())
-                    .await?;
-                entry.insert(new_version);
-            }
-            Entry::Occupied(_) => return Err(Error::EntryExists),
-        }
-
-        Ok(old_dir)
-    }
 
     pub async fn remove_file(&mut self, name: &str) -> Result<()> {
         let local = self.fork().await?;
@@ -688,7 +658,7 @@ mod tests {
     use assert_matches::assert_matches;
     use futures_util::future;
     use rand::{distributions::Standard, rngs::StdRng, Rng, SeedableRng};
-    use std::sync::Arc;
+    use std::{iter, sync::Arc};
 
     #[tokio::test(flavor = "multi_thread")]
     async fn no_conflict() {
@@ -943,63 +913,6 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].name(), "cat.jpg");
         assert_eq!(entries[1].name(), "dog.jpg");
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn create_directory_with_existing_versions() {
-        let branches = setup(2).await;
-
-        let root0 = branches[0].open_or_create_root().await.unwrap();
-
-        let dir0 = root0.create_directory("pics".to_owned()).await.unwrap();
-        create_file(&dir0, "dog.jpg", &[]).await;
-
-        let root1 = branches[1].open_or_create_root().await.unwrap();
-
-        let root = JointDirectory::new(vec![root0, root1]).await;
-
-        let dir = root
-            .create_directory(branches[1].id(), "pics")
-            .await
-            .unwrap();
-        let dir = dir.read().await;
-
-        let entries: Vec<_> = dir.entries().collect();
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].name(), "dog.jpg");
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn create_directory_without_existing_versions() {
-        let branches = setup(1).await;
-
-        let root0 = branches[0].open_or_create_root().await.unwrap();
-
-        let root = JointDirectory::new(vec![root0]).await;
-
-        let dir = root
-            .create_directory(branches[0].id(), "pics")
-            .await
-            .unwrap();
-
-        assert_eq!(dir.read().await.entries().count(), 0);
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn attempt_to_create_directory_whose_local_version_already_exists() {
-        let branches = setup(2).await;
-
-        let root0 = branches[0].open_or_create_root().await.unwrap();
-
-        let dir0 = root0.create_directory("pics".to_owned()).await.unwrap();
-        dir0.flush(None).await.unwrap();
-
-        let root = JointDirectory::new(vec![root0]).await;
-
-        assert_matches!(
-            root.create_directory(branches[0].id(), "pics").await,
-            Err(Error::EntryExists)
-        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
