@@ -173,49 +173,6 @@ impl MessageBroker {
     }
 }
 
-struct Links {
-    active: HashMap<Local<RepositoryId>, Link>,
-
-    // TODO: consider using LruCache instead of HashMap for these, to expire unrequited link
-    //       requests.
-    pending_outgoing: HashMap<Local<String>, PendingOutgoingLink>,
-    pending_incoming: HashMap<Local<String>, PendingIncomingLink>,
-}
-
-impl Links {
-    pub fn new() -> Self {
-        Self {
-            active: HashMap::new(),
-            pending_outgoing: HashMap::new(),
-            pending_incoming: HashMap::new(),
-        }
-    }
-
-    pub fn get_request_link(
-        &self,
-        local_id: &Local<RepositoryId>,
-    ) -> Option<Arc<Mutex<mpsc::Sender<Request>>>> {
-        self.active
-            .get(local_id)
-            .map(|link| link.request_tx.clone())
-    }
-
-    pub fn get_response_link(
-        &self,
-        local_id: &Local<RepositoryId>,
-    ) -> Option<Arc<Mutex<mpsc::Sender<Response>>>> {
-        self.active
-            .get(local_id)
-            .map(|link| link.response_tx.clone())
-    }
-
-    fn destroy_one(&mut self, local_id: &Local<RepositoryId>) {
-        // NOTE: this drops the `request_tx` / `response_tx` senders which causes the
-        // corresponding receivers to be closed which terminates the client/server tasks.
-        self.active.remove(local_id);
-    }
-}
-
 struct Inner {
     their_replica_id: ReplicaId,
     command_tx: mpsc::Sender<Command>,
@@ -577,6 +534,49 @@ impl MultiWriter {
 struct Link {
     request_tx: Arc<Mutex<mpsc::Sender<Request>>>,
     response_tx: Arc<Mutex<mpsc::Sender<Response>>>,
+}
+
+struct Links {
+    active: HashMap<Local<RepositoryId>, Link>,
+
+    // TODO: consider using LruCache instead of HashMap for these, to expire unrequited link
+    //       requests.
+    pending_outgoing: HashMap<Local<String>, PendingOutgoingLink>,
+    pending_incoming: HashMap<Local<String>, PendingIncomingLink>,
+}
+
+impl Links {
+    pub fn new() -> Self {
+        Self {
+            active: HashMap::new(),
+            pending_outgoing: HashMap::new(),
+            pending_incoming: HashMap::new(),
+        }
+    }
+
+    pub fn get_request_link(
+        &self,
+        local_id: &Local<RepositoryId>,
+    ) -> Option<Arc<Mutex<mpsc::Sender<Request>>>> {
+        self.active
+            .get(local_id)
+            .map(|link| link.request_tx.clone())
+    }
+
+    pub fn get_response_link(
+        &self,
+        local_id: &Local<RepositoryId>,
+    ) -> Option<Arc<Mutex<mpsc::Sender<Response>>>> {
+        self.active
+            .get(local_id)
+            .map(|link| link.response_tx.clone())
+    }
+
+    fn destroy_one(&mut self, local_id: &Local<RepositoryId>) {
+        // NOTE: this drops the `request_tx` / `response_tx` senders which causes the
+        // corresponding receivers to be closed which terminates the client/server tasks.
+        self.active.remove(local_id);
+    }
 }
 
 // Pending link initiated by the local repository.
