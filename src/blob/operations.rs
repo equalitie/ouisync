@@ -8,7 +8,6 @@ use crate::{
     error::{Error, Result},
     index::BranchData,
     locator::Locator,
-    store,
 };
 use std::{convert::TryInto, io::SeekFrom, sync::Arc};
 use tokio::sync::Mutex;
@@ -466,13 +465,11 @@ impl<'a> Operations<'a> {
         T: IntoIterator<Item = Locator>,
     {
         for locator in locators {
-            let block_id = self
-                .core
+            self.core
                 .branch
                 .data()
                 .remove(tx, &locator.encode(self.cryptor()))
                 .await?;
-            store::remove_orphaned_block(tx, &block_id).await?;
         }
 
         Ok(())
@@ -565,12 +562,9 @@ async fn write_block(
     let auth_tag = cryptor.encrypt(&nonce, aad, &mut buffer[offset..])?;
 
     block::write(tx, block_id, &buffer, &auth_tag).await?;
-    if let Some(old_block_id) = branch
+    branch
         .insert(tx, block_id, &locator.encode(cryptor))
-        .await?
-    {
-        store::remove_orphaned_block(tx, &old_block_id).await?;
-    }
+        .await?;
 
     Ok(())
 }

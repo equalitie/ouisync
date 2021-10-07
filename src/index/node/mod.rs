@@ -3,7 +3,6 @@ pub mod test_utils;
 
 mod inner;
 mod leaf;
-mod link;
 mod root;
 mod summary;
 #[cfg(test)]
@@ -19,7 +18,6 @@ pub(crate) use self::{
 use crate::{block::BlockId, crypto::Hash, db, error::Result, replica_id::ReplicaId};
 use futures_util::{future, TryStreamExt};
 use sqlx::Sqlite;
-use std::collections::{HashMap, HashSet};
 
 /// Get the bucket for `locator` at the specified `inner_layer`.
 pub(super) fn get_bucket(locator: &Hash, inner_layer: usize) -> u8 {
@@ -33,7 +31,7 @@ pub(super) async fn update_summaries<'a, T>(
     db: T,
     hash: Hash,
     layer: usize,
-) -> Result<HashMap<ReplicaId, bool>>
+) -> Result<Vec<(ReplicaId, bool)>>
 where
     T: sqlx::Acquire<'a, Database = Sqlite>,
 {
@@ -49,9 +47,9 @@ where
 pub(crate) async fn receive_block(
     tx: &mut db::Transaction<'_>,
     id: &BlockId,
-) -> Result<HashSet<ReplicaId>> {
+) -> Result<Vec<ReplicaId>> {
     if !LeafNode::set_present(tx, id).await? {
-        return Ok(HashSet::new());
+        return Ok(Vec::new());
     }
 
     let nodes = LeafNode::load_parent_hashes(tx, id)
@@ -61,15 +59,16 @@ pub(crate) async fn receive_block(
 
     Ok(update_summaries_in_transaction(tx, nodes)
         .await?
-        .into_keys()
+        .into_iter()
+        .map(|(replica_id, _)| replica_id)
         .collect())
 }
 
 async fn update_summaries_in_transaction(
     tx: &mut sqlx::Transaction<'_, Sqlite>,
     mut nodes: Vec<(Hash, usize)>,
-) -> Result<HashMap<ReplicaId, bool>> {
-    let mut status = HashMap::new();
+) -> Result<Vec<(ReplicaId, bool)>> {
+    let mut status = Vec::new();
 
     while let Some((hash, layer)) = nodes.pop() {
         if layer > 0 {
@@ -84,7 +83,7 @@ async fn update_summaries_in_transaction(
             let complete = RootNode::update_summaries(tx, &hash).await?;
             RootNode::load_replica_ids(tx, &hash)
                 .try_for_each(|replica_id| {
-                    status.insert(replica_id, complete);
+                    status.push((replica_id, complete));
                     future::ready(Ok(()))
                 })
                 .await?;

@@ -24,7 +24,7 @@ use futures_util::future;
 use sqlx::Row;
 use std::{
     cmp::Ordering,
-    collections::{hash_map::Entry, HashMap, HashSet},
+    collections::{hash_map::Entry, HashMap},
     iter,
     sync::Arc,
 };
@@ -77,7 +77,7 @@ impl Index {
 
     /// Notify all tasks waiting for changes on the specified branches.
     /// See also [`BranchData::subscribe`].
-    pub async fn notify_branches_changed(&self, replica_ids: &HashSet<ReplicaId>) {
+    pub async fn notify_branches_changed(&self, replica_ids: &[ReplicaId]) {
         // Avoid the read lock
         if replica_ids.is_empty() {
             return;
@@ -132,7 +132,7 @@ impl Index {
         let node =
             RootNode::create(&self.pool, replica_id, versions, hash, Summary::INCOMPLETE).await?;
         self.update_summaries(hash, 0).await?;
-        self.update_remote_branch(*replica_id, node).await;
+        self.update_remote_branch(*replica_id, node).await?;
 
         Ok(updated)
     }
@@ -246,14 +246,12 @@ impl Index {
 
     async fn update_summaries(&self, hash: Hash, layer: usize) -> Result<()> {
         // Find the replicas whose current snapshots became complete by this update.
-        let replica_ids = node::update_summaries(&self.pool, hash, layer)
+        let replica_ids: Vec<_> = node::update_summaries(&self.pool, hash, layer)
             .await?
             .into_iter()
             .filter(|(_, complete)| *complete)
             .map(|(id, _)| id)
             .collect();
-
-        // TODO: remove all but the latest snapshots of all completed branches.
 
         // Then notify them.
         self.notify_branches_changed(&replica_ids).await;
@@ -262,7 +260,11 @@ impl Index {
     }
 
     /// Update the root node of the remote branch.
-    pub(crate) async fn update_remote_branch(&self, replica_id: ReplicaId, node: RootNode) {
+    pub(crate) async fn update_remote_branch(
+        &self,
+        replica_id: ReplicaId,
+        node: RootNode,
+    ) -> Result<()> {
         let mut branches = self.shared.branches.write().await;
         let branches = &mut *branches;
 
@@ -283,8 +285,14 @@ impl Index {
                 let state = *self.shared.index_tx.borrow();
                 self.shared.index_tx.send(state).unwrap_or(());
             }
-            Entry::Occupied(entry) => entry.get().branch.update_root(node).await,
+            Entry::Occupied(entry) => {
+                let mut tx = self.pool.begin().await?;
+                entry.get().branch.update_root(&mut tx, node).await?;
+                tx.commit().await?;
+            }
         }
+
+        Ok(())
     }
 }
 
@@ -546,7 +554,7 @@ pub(crate) async fn init(pool: &db::Pool) -> Result<(), Error> {
          -- hash.
          CREATE TRIGGER IF NOT EXISTS snapshot_inner_nodes_conflict_check
          BEFORE INSERT ON snapshot_inner_nodes
-         WHEN EXISTS(
+         WHEN EXISTS (
              SELECT 0
              FROM snapshot_inner_nodes
              WHERE parent = new.parent
@@ -555,7 +563,33 @@ pub(crate) async fn init(pool: &db::Pool) -> Result<(), Error> {
          )
          BEGIN
              SELECT RAISE (ABORT, 'inner node conflict');
-         END;",
+         END;
+
+         -- Delete whole subtree if a node is deleted and there are no more nodes at the same layer
+         -- with the same hash.
+         -- Note this needs `PRAGMA recursive_triggers = ON` to work.
+         CREATE TRIGGER IF NOT EXISTS snapshot_inner_nodes_delete_on_root_deleted
+         AFTER DELETE ON snapshot_root_nodes
+         WHEN NOT EXISTS (SELECT 0 FROM snapshot_root_nodes WHERE hash = old.hash)
+         BEGIN
+             DELETE FROM snapshot_inner_nodes WHERE parent = old.hash;
+         END;
+
+         CREATE TRIGGER IF NOT EXISTS snapshot_inner_nodes_delete_on_parent_deleted
+         AFTER DELETE ON snapshot_inner_nodes
+         WHEN NOT EXISTS (SELECT 0 FROM snapshot_inner_nodes WHERE hash = old.hash)
+         BEGIN
+             DELETE FROM snapshot_inner_nodes WHERE parent = old.hash;
+         END;
+
+         CREATE TRIGGER IF NOT EXISTS snapshot_leaf_nodes_delete_on_parent_deleted
+         AFTER DELETE ON snapshot_inner_nodes
+         WHEN NOT EXISTS (SELECT 0 FROM snapshot_inner_nodes WHERE hash = old.hash)
+         BEGIN
+             DELETE FROM snapshot_leaf_nodes WHERE parent = old.hash;
+         END;
+
+         ",
     )
     .execute(pool)
     .await

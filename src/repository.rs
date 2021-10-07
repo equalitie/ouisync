@@ -11,7 +11,7 @@ use crate::{
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     path,
     scoped_task::ScopedJoinHandle,
-    ReplicaId,
+    store, ReplicaId,
 };
 use camino::Utf8Path;
 use futures_util::{future, stream::FuturesUnordered, StreamExt};
@@ -333,6 +333,7 @@ pub(crate) async fn open_db(store: &db::Store) -> Result<db::Pool> {
 
     block::init(&pool).await?;
     index::init(&pool).await?;
+    store::init(&pool).await?;
 
     Ok(pool)
 }
@@ -539,7 +540,8 @@ mod tests {
             .unwrap();
         repo.index()
             .update_remote_branch(remote_id, remote_node)
-            .await;
+            .await
+            .unwrap();
 
         let remote_branch = repo.branch(&remote_id).await.unwrap();
         let remote_root = remote_branch.open_or_create_root().await.unwrap();
