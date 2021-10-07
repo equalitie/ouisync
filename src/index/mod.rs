@@ -24,7 +24,7 @@ use futures_util::future;
 use sqlx::Row;
 use std::{
     cmp::Ordering,
-    collections::{hash_map::Entry, HashMap, HashSet},
+    collections::{hash_map::Entry, HashMap},
     iter,
     sync::Arc,
 };
@@ -77,7 +77,7 @@ impl Index {
 
     /// Notify all tasks waiting for changes on the specified branches.
     /// See also [`BranchData::subscribe`].
-    pub async fn notify_branches_changed(&self, replica_ids: &HashSet<ReplicaId>) {
+    pub async fn notify_branches_changed(&self, replica_ids: &[ReplicaId]) {
         // Avoid the read lock
         if replica_ids.is_empty() {
             return;
@@ -246,7 +246,7 @@ impl Index {
 
     async fn update_summaries(&self, hash: Hash, layer: usize) -> Result<()> {
         // Find the replicas whose current snapshots became complete by this update.
-        let replica_ids = node::update_summaries(&self.pool, hash, layer)
+        let replica_ids: Vec<_> = node::update_summaries(&self.pool, hash, layer)
             .await?
             .into_iter()
             .filter(|(_, complete)| *complete)
