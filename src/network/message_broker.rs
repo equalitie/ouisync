@@ -511,30 +511,52 @@ impl MultiReader {
 
 /// Wrapper for arbitrary number of `TcpObjectWriter`s which writes to the first available one.
 struct MultiWriter {
-    writers: Vec<TcpObjectWriter>,
+    // Using Mutexes and RwLocks here because we want the `add` and `write` functions to be const.
+    // That will allow us to call them from two different coroutines. Note that we don't want this
+    // whole structure to wrap because we don't want the `add` function to be blocking.
+    next_id: std::sync::Mutex<usize>,
+    writers: std::sync::RwLock<HashMap<usize, Arc<Mutex<TcpObjectWriter>>>>,
 }
 
 impl MultiWriter {
     fn new() -> Self {
         Self {
-            writers: Vec::new(),
+            next_id: std::sync::Mutex::new(0),
+            writers: std::sync::RwLock::new(HashMap::new()),
         }
     }
 
-    fn add(&mut self, writer: TcpObjectWriter) {
-        self.writers.push(writer)
+    fn add(&self, writer: TcpObjectWriter) {
+        let mut next_id = self.next_id.lock().unwrap();
+        let id = *next_id;
+        *next_id += 1;
+        drop(next_id);
+
+        self.writers
+            .write()
+            .unwrap()
+            .insert(id, Arc::new(Mutex::new(writer)));
     }
 
-    async fn write(&mut self, message: &Message) -> bool {
-        while let Some(writer) = self.writers.last_mut() {
-            if writer.write(message).await.is_ok() {
+    async fn write(&self, message: &Message) -> bool {
+        while let Some((id, writer)) = self.pick_writer().await {
+            if writer.lock().await.write(message).await.is_ok() {
                 return true;
             }
 
-            self.writers.pop();
+            self.writers.write().unwrap().remove(&id);
         }
 
         false
+    }
+
+    async fn pick_writer(&self) -> Option<(usize, Arc<Mutex<TcpObjectWriter>>)> {
+        self.writers
+            .read()
+            .unwrap()
+            .iter()
+            .next()
+            .map(|(k, v)| (*k, v.clone()))
     }
 }
 
