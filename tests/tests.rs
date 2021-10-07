@@ -59,3 +59,26 @@ fn sequential_write_to_the_same_file() {
         assert_eq!(content, content_b);
     });
 }
+
+#[test]
+fn fast_write_twice() {
+    // There used to be a deadlock which would manifest whenever one of the connected replicas
+    // perfomed more than one write operation (mkdir, echo foo > bar,...) quickly one after another
+    // (e.g. "$ mkdir a; mkdir b").
+    for _ in 1..10 {
+        let _guard = MUTEX.lock();
+
+        let a = Bin::start(0);
+        let b = Bin::start(1);
+
+        let file_a = "file_a.txt";
+        let file_b = "file_b.txt";
+        let content_a = "hello A";
+        let content_b = "hello B";
+
+        fs::write(a.root().join(file_a), &content_a).unwrap();
+        fs::write(a.root().join(file_b), &content_b).unwrap();
+
+        eventually(|| assert_eq!(fs::read_dir(b.root()).unwrap().map(|e| e.unwrap()).count(), 2));
+    }
+}
