@@ -123,9 +123,7 @@ impl MessageBroker {
             command_tx: command_tx.clone(),
             reader: MultiReader::new(),
             writer: MultiWriter::new(),
-            links: HashMap::new(),
-            pending_outgoing_links: HashMap::new(),
-            pending_incoming_links: HashMap::new(),
+            links: Links::new(),
         };
 
         inner.add_connection(stream);
@@ -177,17 +175,38 @@ impl MessageBroker {
     }
 }
 
+struct Links {
+    active: HashMap<Local<RepositoryId>, Link>,
+
+    // TODO: consider using LruCache instead of HashMap for these, to expire unrequited link
+    //       requests.
+    pending_outgoing: HashMap<Local<String>, PendingOutgoingLink>,
+    pending_incoming: HashMap<Local<String>, PendingIncomingLink>,
+}
+
+impl Links {
+    pub fn new() -> Self {
+        Self {
+            active: HashMap::new(),
+            pending_outgoing: HashMap::new(),
+            pending_incoming: HashMap::new(),
+        }
+    }
+
+    fn destroy_one(&mut self, local_id: Local<RepositoryId>) {
+        // NOTE: this drops the `request_tx` / `response_tx` senders which causes the
+        // corresponding receivers to be closed which terminates the client/server tasks.
+        self.active.remove(&local_id);
+    }
+}
+
 struct Inner {
     their_replica_id: ReplicaId,
     command_tx: mpsc::Sender<Command>,
     reader: MultiReader,
     writer: MultiWriter,
-    links: HashMap<Local<RepositoryId>, Link>,
 
-    // TODO: consider using LruCache instead of HashMap for these, to expire unrequited link
-    //       requests.
-    pending_outgoing_links: HashMap<Local<String>, PendingOutgoingLink>,
-    pending_incoming_links: HashMap<Local<String>, PendingIncomingLink>,
+    links: Links,
 }
 
 impl Inner {
@@ -234,7 +253,7 @@ impl Inner {
                     .await
             }
             Command::DestroyLink { local_id } => {
-                self.destroy_link(local_id);
+                self.links.destroy_one(local_id);
                 true
             }
         }
@@ -271,12 +290,12 @@ impl Inner {
         local_name: Local<String>,
         remote_name: Remote<String>,
     ) -> bool {
-        if self.links.contains_key(&local_id) {
+        if self.links.active.contains_key(&local_id) {
             log::warn!("not creating link from {:?} - already exists", local_name);
             return true;
         }
 
-        if self.pending_outgoing_links.contains_key(&local_name) {
+        if self.links.pending_outgoing.contains_key(&local_name) {
             log::warn!("not creating link from {:?} - already pending", local_name);
             return true;
         }
@@ -297,10 +316,11 @@ impl Inner {
             return false;
         }
 
-        if let Some(pending) = self.pending_incoming_links.remove(&local_name) {
+        if let Some(pending) = self.links.pending_incoming.remove(&local_name) {
             self.create_link(index, local_id, pending.remote_id)
         } else {
-            self.pending_outgoing_links
+            self.links
+                .pending_outgoing
                 .insert(local_name, PendingOutgoingLink { index, local_id });
         }
 
@@ -308,10 +328,11 @@ impl Inner {
     }
 
     fn create_incoming_link(&mut self, local_name: Local<String>, remote_id: Remote<RepositoryId>) {
-        if let Some(pending) = self.pending_outgoing_links.remove(&local_name) {
+        if let Some(pending) = self.links.pending_outgoing.remove(&local_name) {
             self.create_link(pending.index, pending.local_id, remote_id)
         } else {
-            self.pending_incoming_links
+            self.links
+                .pending_incoming
                 .insert(local_name, PendingIncomingLink { remote_id });
         }
     }
@@ -327,7 +348,7 @@ impl Inner {
         let (request_tx, request_rx) = mpsc::channel(1);
         let (response_tx, response_rx) = mpsc::channel(1);
 
-        self.links.insert(
+        self.links.active.insert(
             local_id,
             Link {
                 request_tx,
@@ -349,14 +370,8 @@ impl Inner {
         task::spawn(async move { log_error(server.run(), "server failed: ").await });
     }
 
-    fn destroy_link(&mut self, local_id: Local<RepositoryId>) {
-        // NOTE: this drops the `request_tx` / `response_tx` senders which causes the
-        // corresponding receivers to be closed which terminates the client/server tasks.
-        self.links.remove(&local_id);
-    }
-
     async fn handle_request(&mut self, local_id: Local<RepositoryId>, request: Request) {
-        match self.links.entry(local_id) {
+        match self.links.active.entry(local_id) {
             Entry::Occupied(entry) => {
                 if entry.get().request_tx.send(request).await.is_err() {
                     log::warn!("server unexpectedly terminated - destroying the link");
@@ -374,7 +389,7 @@ impl Inner {
     }
 
     async fn handle_response(&mut self, local_id: Local<RepositoryId>, response: Response) {
-        match self.links.entry(local_id) {
+        match self.links.active.entry(local_id) {
             Entry::Occupied(entry) => {
                 if entry.get().response_tx.send(response).await.is_err() {
                     log::warn!("client unexpectedly terminated - destroying the link");
