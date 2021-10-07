@@ -116,7 +116,7 @@ impl MessageBroker {
     ) -> Self {
         let (command_tx, command_rx) = mpsc::channel(1);
 
-        let mut inner = Inner {
+        let inner = Inner {
             their_replica_id,
             command_tx: command_tx.clone(),
             reader: MultiReader::new(),
@@ -182,7 +182,7 @@ struct Inner {
 }
 
 impl Inner {
-    async fn run(mut self, mut command_rx: mpsc::Receiver<Command>, on_finish: OnFinish) {
+    async fn run(self, mut command_rx: mpsc::Receiver<Command>, on_finish: OnFinish) {
         let mut run = true;
 
         while run {
@@ -208,7 +208,7 @@ impl Inner {
         on_finish.await
     }
 
-    async fn handle_command(&mut self, command: Command) -> bool {
+    async fn handle_command(&self, command: Command) -> bool {
         match command {
             Command::AddConnection(stream) => {
                 self.add_connection(stream);
@@ -231,7 +231,7 @@ impl Inner {
         }
     }
 
-    async fn handle_message(&mut self, message: Message) {
+    async fn handle_message(&self, message: Message) {
         match message {
             Message::Request { dst_id, request } => {
                 self.handle_request(&Local::new(dst_id), request).await
@@ -246,18 +246,18 @@ impl Inner {
         }
     }
 
-    fn add_connection(&mut self, stream: TcpObjectStream) {
+    fn add_connection(&self, stream: TcpObjectStream) {
         let (reader, writer) = stream.into_split();
         self.reader.add(reader);
         self.writer.add(writer);
     }
 
-    async fn send_message(&mut self, message: Message) -> bool {
+    async fn send_message(&self, message: Message) -> bool {
         self.writer.write(&message).await
     }
 
     async fn create_outgoing_link(
-        &mut self,
+        &self,
         index: Index,
         local_id: Local<RepositoryId>,
         local_name: Local<String>,
@@ -303,7 +303,7 @@ impl Inner {
     }
 
     async fn create_incoming_link(
-        &mut self,
+        &self,
         local_name: Local<String>,
         remote_id: Remote<RepositoryId>,
     ) {
@@ -352,7 +352,7 @@ impl Inner {
         task::spawn(async move { log_error(server.run(), "server failed: ").await });
     }
 
-    async fn handle_request(&mut self, local_id: &Local<RepositoryId>, request: Request) {
+    async fn handle_request(&self, local_id: &Local<RepositoryId>, request: Request) {
         if let Some(request_tx) = self.links.read().await.get_request_link(local_id) {
             if request_tx.lock().await.send(request).await.is_err() {
                 log::warn!("server unexpectedly terminated - destroying the link");
@@ -370,7 +370,7 @@ impl Inner {
         }
     }
 
-    async fn handle_response(&mut self, local_id: &Local<RepositoryId>, response: Response) {
+    async fn handle_response(&self, local_id: &Local<RepositoryId>, response: Response) {
         if let Some(response_tx) = self.links.read().await.get_response_link(local_id) {
             if response_tx.lock().await.send(response).await.is_err() {
                 log::warn!("client unexpectedly terminated - destroying the link");
