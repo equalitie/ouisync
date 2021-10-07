@@ -1,7 +1,6 @@
 use super::{
     super::SnapshotId,
     inner::{InnerNode, InnerNodeMap},
-    link::Link,
     summary::Summary,
 };
 use crate::{
@@ -304,7 +303,17 @@ impl RootNode {
     }
 
     pub async fn remove_recursive(&self, tx: &mut db::Transaction<'_>) -> Result<()> {
-        self.as_link().remove_recursive(0, tx).await
+        // This uses db triggers to delete the whole snapshot.
+        sqlx::query(
+            "PRAGMA recursive_triggers = ON;
+             DELETE FROM snapshot_root_nodes WHERE snapshot_id = ?;
+             PRAGMA recursive_triggers = OFF;",
+        )
+        .bind(self.snapshot_id)
+        .execute(tx)
+        .await?;
+
+        Ok(())
     }
 
     /// Returns the replica id of this node
@@ -316,9 +325,5 @@ impl RootNode {
                 .await?
                 .get(0);
         Ok(replica_id)
-    }
-
-    fn as_link(&self) -> Link {
-        Link::ToRoot { node: self.clone() }
     }
 }

@@ -20,6 +20,8 @@ pub(crate) struct LeafNode {
 
 impl LeafNode {
     /// Creates a leaf node whose block is assumed to be present (not missing) in this replica.
+    /// (currently test-only).
+    #[cfg(test)]
     pub fn present(locator: Hash, block_id: BlockId) -> Self {
         Self {
             locator,

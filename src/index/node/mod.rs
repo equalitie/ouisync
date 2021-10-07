@@ -3,7 +3,6 @@ pub mod test_utils;
 
 mod inner;
 mod leaf;
-mod link;
 mod root;
 mod summary;
 #[cfg(test)]

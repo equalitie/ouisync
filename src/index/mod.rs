@@ -555,7 +555,33 @@ pub(crate) async fn init(pool: &db::Pool) -> Result<(), Error> {
          )
          BEGIN
              SELECT RAISE (ABORT, 'inner node conflict');
-         END;",
+         END;
+
+         -- Delete whole subtree if a node is deleted and there are no more nodes at the same layer
+         -- with the same hash.
+         -- Note this needs `PRAGMA recursive_triggers = ON` to work.
+         CREATE TRIGGER IF NOT EXISTS snapshot_inner_nodes_delete_on_root_deleted
+         AFTER DELETE ON snapshot_root_nodes
+         WHEN NOT EXISTS(SELECT 0 FROM snapshot_root_nodes WHERE hash = old.hash)
+         BEGIN
+             DELETE FROM snapshot_inner_nodes WHERE parent = old.hash;
+         END;
+
+         CREATE TRIGGER IF NOT EXISTS snapshot_inner_nodes_delete_on_parent_deleted
+         AFTER DELETE ON snapshot_inner_nodes
+         WHEN NOT EXISTS(SELECT 0 FROM snapshot_inner_nodes WHERE hash = old.hash)
+         BEGIN
+             DELETE FROM snapshot_inner_nodes WHERE parent = old.hash;
+         END;
+
+         CREATE TRIGGER IF NOT EXISTS snapshot_leaf_nodes_delete_on_parent_deleted
+         AFTER DELETE ON snapshot_inner_nodes
+         WHEN NOT EXISTS(SELECT 0 FROM snapshot_inner_nodes WHERE hash = old.hash)
+         BEGIN
+             DELETE FROM snapshot_leaf_nodes WHERE parent = old.hash;
+         END;
+
+         ",
     )
     .execute(pool)
     .await

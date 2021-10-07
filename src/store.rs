@@ -15,8 +15,7 @@ pub(crate) async fn remove_orphaned_block(
     id: &BlockId,
 ) -> Result<bool> {
     let result = sqlx::query(
-        "DELETE FROM blocks
-         WHERE id = ? AND NOT EXISTS (SELECT 1 FROM snapshot_leaf_nodes WHERE block_id = id)",
+        "DELETE FROM blocks WHERE id = ? AND id NOT IN (SELECT block_id FROM snapshot_leaf_nodes)",
     )
     .bind(id)
     .execute(tx)
