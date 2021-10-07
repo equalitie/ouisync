@@ -93,8 +93,7 @@ impl BranchData {
         assert!(!path.has_leaf(block_id));
 
         let old_block_id = path.set_leaf(block_id);
-        let old_root = self.write_path(tx, &mut lock, &path).await?;
-        self.remove_snapshot(&old_root, tx).await?;
+        self.write_path(tx, &mut lock, &path).await?;
 
         Ok(old_block_id)
     }
@@ -126,8 +125,7 @@ impl BranchData {
         let block_id = path
             .remove_leaf(encoded_locator)
             .ok_or(Error::EntryNotFound)?;
-        let old_root = self.write_path(tx, &mut lock, &path).await?;
-        self.remove_snapshot(&old_root, tx).await?;
+        self.write_path(tx, &mut lock, &path).await?;
 
         Ok(block_id)
     }
@@ -145,16 +143,18 @@ impl BranchData {
 
     /// Update the root node of this branch. Does nothing if the version of `new_root` is not
     /// greater than the version of the current root.
-    pub async fn update_root(&self, new_root: RootNode) {
+    pub async fn update_root(
+        &self,
+        tx: &mut db::Transaction<'_>,
+        new_root: RootNode,
+    ) -> Result<()> {
         let mut old_root = self.root_node.write().await;
 
         if new_root.versions.get(&self.replica_id) <= old_root.versions.get(&self.replica_id) {
-            return;
+            return Ok(());
         }
 
-        *old_root = new_root;
-
-        self.notify_changed();
+        self.replace_root(tx, &mut old_root, new_root).await
     }
 
     async fn get_path(
@@ -194,9 +194,9 @@ impl BranchData {
     async fn write_path(
         &self,
         tx: &mut db::Transaction<'_>,
-        root_node: &mut RootNode,
+        old_root: &mut RootNode,
         path: &Path,
-    ) -> Result<RootNode> {
+    ) -> Result<()> {
         for (i, inner_layer) in path.inner.iter().enumerate() {
             if let Some(parent_hash) = path.hash_at_layer(i) {
                 for (bucket, node) in inner_layer {
@@ -212,29 +212,20 @@ impl BranchData {
             }
         }
 
-        self.write_branch_root(tx, root_node, path.root_hash).await
+        let new_root = old_root.next_version(tx, path.root_hash).await?;
+        self.replace_root(tx, old_root, new_root).await
     }
 
-    async fn write_branch_root(
+    async fn replace_root(
         &self,
         tx: &mut db::Transaction<'_>,
-        node: &mut RootNode,
-        hash: Hash,
-    ) -> Result<RootNode> {
-        let new_root = node.next_version(tx, hash).await?;
-        let old_root = mem::replace(node, new_root);
-
-        self.notify_changed();
-
-        Ok(old_root)
-    }
-
-    async fn remove_snapshot(
-        &self,
-        root_node: &RootNode,
-        tx: &mut db::Transaction<'_>,
+        old_root: &mut RootNode,
+        new_root: RootNode,
     ) -> Result<()> {
-        root_node.remove_recursive(tx).await
+        let old_root = mem::replace(old_root, new_root);
+        old_root.remove_recursive(tx).await?;
+        self.notify_changed();
+        Ok(())
     }
 }
 

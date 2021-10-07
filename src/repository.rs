@@ -539,7 +539,8 @@ mod tests {
             .unwrap();
         repo.index()
             .update_remote_branch(remote_id, remote_node)
-            .await;
+            .await
+            .unwrap();
 
         let remote_branch = repo.branch(&remote_id).await.unwrap();
         let remote_root = remote_branch.open_or_create_root().await.unwrap();

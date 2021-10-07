@@ -132,7 +132,7 @@ impl Index {
         let node =
             RootNode::create(&self.pool, replica_id, versions, hash, Summary::INCOMPLETE).await?;
         self.update_summaries(hash, 0).await?;
-        self.update_remote_branch(*replica_id, node).await;
+        self.update_remote_branch(*replica_id, node).await?;
 
         Ok(updated)
     }
@@ -253,8 +253,6 @@ impl Index {
             .map(|(id, _)| id)
             .collect();
 
-        // TODO: remove all but the latest snapshots of all completed branches.
-
         // Then notify them.
         self.notify_branches_changed(&replica_ids).await;
 
@@ -262,7 +260,11 @@ impl Index {
     }
 
     /// Update the root node of the remote branch.
-    pub(crate) async fn update_remote_branch(&self, replica_id: ReplicaId, node: RootNode) {
+    pub(crate) async fn update_remote_branch(
+        &self,
+        replica_id: ReplicaId,
+        node: RootNode,
+    ) -> Result<()> {
         let mut branches = self.shared.branches.write().await;
         let branches = &mut *branches;
 
@@ -283,8 +285,14 @@ impl Index {
                 let state = *self.shared.index_tx.borrow();
                 self.shared.index_tx.send(state).unwrap_or(());
             }
-            Entry::Occupied(entry) => entry.get().branch.update_root(node).await,
+            Entry::Occupied(entry) => {
+                let mut tx = self.pool.begin().await?;
+                entry.get().branch.update_root(&mut tx, node).await?;
+                tx.commit().await?;
+            }
         }
+
+        Ok(())
     }
 }
 
