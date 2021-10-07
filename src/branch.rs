@@ -1,4 +1,6 @@
 use crate::{
+    blob::Blob,
+    block::BlockId,
     crypto::Cryptor,
     db,
     debug_printer::DebugPrinter,
@@ -6,6 +8,7 @@ use crate::{
     error::{Error, Result},
     file::File,
     index::BranchData,
+    locator::Locator,
     path, ReplicaId,
 };
 use camino::{Utf8Component, Utf8Path};
@@ -91,6 +94,11 @@ impl Branch {
         let (parent, name) = path::decompose(path).ok_or(Error::EntryIsDirectory)?;
         let dir = self.ensure_directory_exists(parent).await?;
         dir.create_file(name.to_string()).await
+    }
+
+    pub async fn root_block_id(&self) -> Result<BlockId> {
+        let blob = Blob::open(self.clone(), Locator::Root).await?;
+        blob.first_block_id().await
     }
 
     pub async fn debug_print(&self, print: DebugPrinter) {
