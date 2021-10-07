@@ -554,7 +554,7 @@ pub(crate) async fn init(pool: &db::Pool) -> Result<(), Error> {
          -- hash.
          CREATE TRIGGER IF NOT EXISTS snapshot_inner_nodes_conflict_check
          BEFORE INSERT ON snapshot_inner_nodes
-         WHEN EXISTS(
+         WHEN EXISTS (
              SELECT 0
              FROM snapshot_inner_nodes
              WHERE parent = new.parent
@@ -570,21 +570,21 @@ pub(crate) async fn init(pool: &db::Pool) -> Result<(), Error> {
          -- Note this needs `PRAGMA recursive_triggers = ON` to work.
          CREATE TRIGGER IF NOT EXISTS snapshot_inner_nodes_delete_on_root_deleted
          AFTER DELETE ON snapshot_root_nodes
-         WHEN NOT EXISTS(SELECT 0 FROM snapshot_root_nodes WHERE hash = old.hash)
+         WHEN NOT EXISTS (SELECT 0 FROM snapshot_root_nodes WHERE hash = old.hash)
          BEGIN
              DELETE FROM snapshot_inner_nodes WHERE parent = old.hash;
          END;
 
          CREATE TRIGGER IF NOT EXISTS snapshot_inner_nodes_delete_on_parent_deleted
          AFTER DELETE ON snapshot_inner_nodes
-         WHEN NOT EXISTS(SELECT 0 FROM snapshot_inner_nodes WHERE hash = old.hash)
+         WHEN NOT EXISTS (SELECT 0 FROM snapshot_inner_nodes WHERE hash = old.hash)
          BEGIN
              DELETE FROM snapshot_inner_nodes WHERE parent = old.hash;
          END;
 
          CREATE TRIGGER IF NOT EXISTS snapshot_leaf_nodes_delete_on_parent_deleted
          AFTER DELETE ON snapshot_inner_nodes
-         WHEN NOT EXISTS(SELECT 0 FROM snapshot_inner_nodes WHERE hash = old.hash)
+         WHEN NOT EXISTS (SELECT 0 FROM snapshot_inner_nodes WHERE hash = old.hash)
          BEGIN
              DELETE FROM snapshot_leaf_nodes WHERE parent = old.hash;
          END;

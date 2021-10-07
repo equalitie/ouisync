@@ -77,13 +77,13 @@ impl BranchData {
             .await
     }
 
-    /// Inserts a new block into the index. Returns the previous id at the same locator, if any.
+    /// Inserts a new block into the index.
     pub async fn insert(
         &self,
         tx: &mut db::Transaction<'_>,
         block_id: &BlockId,
         encoded_locator: &LocatorHash,
-    ) -> Result<Option<BlockId>> {
+    ) -> Result<()> {
         let mut lock = self.root_node.write().await;
         let mut path = self.get_path(tx, &lock.hash, encoded_locator).await?;
 
@@ -92,10 +92,8 @@ impl BranchData {
         // BlockVersion twice.
         assert!(!path.has_leaf(block_id));
 
-        let old_block_id = path.set_leaf(block_id);
-        self.write_path(tx, &mut lock, &path).await?;
-
-        Ok(old_block_id)
+        path.set_leaf(block_id);
+        self.write_path(tx, &mut lock, &path).await
     }
 
     /// Retrieve `BlockId` of a block with the given encoded `Locator`.
@@ -115,19 +113,12 @@ impl BranchData {
 
     /// Remove the block identified by encoded_locator from the index. Returns the id of the
     /// removed block.
-    pub async fn remove(
-        &self,
-        tx: &mut db::Transaction<'_>,
-        encoded_locator: &Hash,
-    ) -> Result<BlockId> {
+    pub async fn remove(&self, tx: &mut db::Transaction<'_>, encoded_locator: &Hash) -> Result<()> {
         let mut lock = self.root_node.write().await;
         let mut path = self.get_path(tx, &lock.hash, encoded_locator).await?;
-        let block_id = path
-            .remove_leaf(encoded_locator)
+        path.remove_leaf(encoded_locator)
             .ok_or(Error::EntryNotFound)?;
-        self.write_path(tx, &mut lock, &path).await?;
-
-        Ok(block_id)
+        self.write_path(tx, &mut lock, &path).await
     }
 
     /// Subscribe to notifications of changes in this branch. A notification is emitted every time
