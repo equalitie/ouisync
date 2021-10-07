@@ -449,19 +449,27 @@ impl fmt::Debug for Command {
 /// Wrapper for arbitrary number of `TcpObjectReader`s which reads from all of them simultaneously.
 struct MultiReader {
     tx: mpsc::Sender<Option<Message>>,
-    rx: mpsc::Receiver<Option<Message>>,
-    count: usize,
+    // Wrapping these in Mutex and RwLock to have the `add` and `read` methods non mutable.  That
+    // in turn is desirable to be able to call the two functions from different coroutines. Note
+    // that we don't want to wrap this whole struct in a Mutex/RwLock because we don't want the add
+    // function to be blocking.
+    rx: Mutex<mpsc::Receiver<Option<Message>>>,
+    count: std::sync::RwLock<usize>,
 }
 
 impl MultiReader {
     fn new() -> Self {
         let (tx, rx) = mpsc::channel(1);
-        Self { tx, rx, count: 0 }
+        Self {
+            tx,
+            rx: Mutex::new(rx),
+            count: std::sync::RwLock::new(0),
+        }
     }
 
-    fn add(&mut self, mut reader: TcpObjectReader) {
+    fn add(&self, mut reader: TcpObjectReader) {
         let tx = self.tx.clone();
-        self.count += 1;
+        *self.count.write().unwrap() += 1;
 
         task::spawn(async move {
             loop {
@@ -480,16 +488,16 @@ impl MultiReader {
         });
     }
 
-    async fn read(&mut self) -> Option<Message> {
+    async fn read(&self) -> Option<Message> {
         loop {
-            if self.count == 0 {
+            if *self.count.read().unwrap() == 0 {
                 return None;
             }
 
-            match self.rx.recv().await {
+            match self.rx.lock().await.recv().await {
                 Some(Some(message)) => return Some(message),
                 Some(None) => {
-                    self.count -= 1;
+                    *self.count.write().unwrap() -= 1;
                 }
                 None => {
                     // This would mean that all senders were closed, but that can't happen because
