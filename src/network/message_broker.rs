@@ -19,7 +19,10 @@ use std::{
 };
 use tokio::{
     select,
-    sync::mpsc::{self, error::SendError},
+    sync::{
+        mpsc::{self, error::SendError},
+        RwLock,
+    },
     task,
 };
 
@@ -123,7 +126,7 @@ impl MessageBroker {
             command_tx: command_tx.clone(),
             reader: MultiReader::new(),
             writer: MultiWriter::new(),
-            links: Links::new(),
+            links: RwLock::new(Links::new()),
         };
 
         inner.add_connection(stream);
@@ -205,8 +208,7 @@ struct Inner {
     command_tx: mpsc::Sender<Command>,
     reader: MultiReader,
     writer: MultiWriter,
-
-    links: Links,
+    links: RwLock<Links>,
 }
 
 impl Inner {
@@ -253,7 +255,7 @@ impl Inner {
                     .await
             }
             Command::DestroyLink { local_id } => {
-                self.links.destroy_one(local_id);
+                self.links.write().await.destroy_one(local_id);
                 true
             }
         }
@@ -269,6 +271,7 @@ impl Inner {
             }
             Message::CreateLink { src_id, dst_name } => {
                 self.create_incoming_link(Local::new(dst_name), Remote::new(src_id))
+                    .await
             }
         }
     }
@@ -290,12 +293,14 @@ impl Inner {
         local_name: Local<String>,
         remote_name: Remote<String>,
     ) -> bool {
-        if self.links.active.contains_key(&local_id) {
+        let mut links = self.links.write().await;
+
+        if links.active.contains_key(&local_id) {
             log::warn!("not creating link from {:?} - already exists", local_name);
             return true;
         }
 
-        if self.links.pending_outgoing.contains_key(&local_name) {
+        if links.pending_outgoing.contains_key(&local_name) {
             log::warn!("not creating link from {:?} - already pending", local_name);
             return true;
         }
@@ -316,10 +321,10 @@ impl Inner {
             return false;
         }
 
-        if let Some(pending) = self.links.pending_incoming.remove(&local_name) {
-            self.create_link(index, local_id, pending.remote_id)
+        if let Some(pending) = links.pending_incoming.remove(&local_name) {
+            self.create_link(&mut *links, index, local_id, pending.remote_id)
         } else {
-            self.links
+            links
                 .pending_outgoing
                 .insert(local_name, PendingOutgoingLink { index, local_id });
         }
@@ -327,18 +332,25 @@ impl Inner {
         true
     }
 
-    fn create_incoming_link(&mut self, local_name: Local<String>, remote_id: Remote<RepositoryId>) {
-        if let Some(pending) = self.links.pending_outgoing.remove(&local_name) {
-            self.create_link(pending.index, pending.local_id, remote_id)
+    async fn create_incoming_link(
+        &mut self,
+        local_name: Local<String>,
+        remote_id: Remote<RepositoryId>,
+    ) {
+        let mut links = self.links.write().await;
+
+        if let Some(pending) = links.pending_outgoing.remove(&local_name) {
+            self.create_link(&mut *links, pending.index, pending.local_id, remote_id)
         } else {
-            self.links
+            links
                 .pending_incoming
                 .insert(local_name, PendingIncomingLink { remote_id });
         }
     }
 
     fn create_link(
-        &mut self,
+        &self,
+        links: &mut Links,
         index: Index,
         local_id: Local<RepositoryId>,
         remote_id: Remote<RepositoryId>,
@@ -348,7 +360,7 @@ impl Inner {
         let (request_tx, request_rx) = mpsc::channel(1);
         let (response_tx, response_rx) = mpsc::channel(1);
 
-        self.links.active.insert(
+        links.active.insert(
             local_id,
             Link {
                 request_tx,
@@ -371,7 +383,9 @@ impl Inner {
     }
 
     async fn handle_request(&mut self, local_id: Local<RepositoryId>, request: Request) {
-        match self.links.active.entry(local_id) {
+        let mut links = self.links.write().await;
+
+        match links.active.entry(local_id) {
             Entry::Occupied(entry) => {
                 if entry.get().request_tx.send(request).await.is_err() {
                     log::warn!("server unexpectedly terminated - destroying the link");
@@ -389,7 +403,9 @@ impl Inner {
     }
 
     async fn handle_response(&mut self, local_id: Local<RepositoryId>, response: Response) {
-        match self.links.active.entry(local_id) {
+        let mut links = self.links.write().await;
+
+        match links.active.entry(local_id) {
             Entry::Occupied(entry) => {
                 if entry.get().response_tx.send(response).await.is_err() {
                     log::warn!("client unexpectedly terminated - destroying the link");
