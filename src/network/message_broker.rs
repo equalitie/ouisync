@@ -116,13 +116,13 @@ impl MessageBroker {
     ) -> Self {
         let (command_tx, command_rx) = mpsc::channel(1);
 
-        let inner = Inner {
+        let inner = Arc::new(Inner {
             their_replica_id,
             command_tx: command_tx.clone(),
             reader: MultiReader::new(),
             writer: MultiWriter::new(),
             links: RwLock::new(Links::new()),
-        };
+        });
 
         inner.add_connection(stream);
 
@@ -182,28 +182,42 @@ struct Inner {
 }
 
 impl Inner {
-    async fn run(self, mut command_rx: mpsc::Receiver<Command>, on_finish: OnFinish) {
-        let mut run = true;
+    async fn run(self: Arc<Self>, mut command_rx: mpsc::Receiver<Command>, on_finish: OnFinish) {
+        // Note that we need to spawn here (as opposed to doing a select), because selecting could
+        // result in a deadlock. The deadlock could happen this way:
+        //
+        // * We receive a Request from a peer and we send it to the Server.
+        // * We receive another Request, but because the queue to the server has size 1, we block.
+        // * Server processes the Request and sends the Response back to us.
+        // * We're unable to process the Response because we're waiting for the second Request to
+        //   go through.
 
-        while run {
-            run = select! {
-                command = command_rx.recv() => {
-                    if let Some(command) = command {
-                        self.handle_command(command).await
-                    } else {
-                        false
+        let this = self.clone();
+        let handle1 = task::spawn(async move {
+            loop {
+                if let Some(command) = command_rx.recv().await {
+                    if !this.handle_command(command).await {
+                        return;
                     }
-                }
-                message = self.reader.read() => {
-                    if let Some(message) = message {
-                        self.handle_message(message).await;
-                        true
-                    } else {
-                        false
-                    }
+                } else {
+                    return;
                 }
             }
-        }
+        });
+
+        let this = self.clone();
+        let handle2 = task::spawn(async move {
+            loop {
+                if let Some(message) = this.reader.read().await {
+                    this.handle_message(message).await;
+                } else {
+                    return;
+                }
+            }
+        });
+
+        handle1.await.expect("MessageBroker: command receiver has panicked");
+        handle2.await.expect("MessageBroker: peer receiver has panicked");
 
         on_finish.await
     }
