@@ -11,17 +11,12 @@ use crate::{
     scoped_task::ScopedJoinHandle,
     tagged::{Local, Remote},
 };
-use std::{
-    collections::{hash_map::Entry, HashMap},
-    fmt,
-    future::Future,
-    pin::Pin,
-};
+use std::{collections::HashMap, fmt, future::Future, pin::Pin, sync::Arc};
 use tokio::{
     select,
     sync::{
         mpsc::{self, error::SendError},
-        RwLock,
+        Mutex, RwLock,
     },
     task,
 };
@@ -196,10 +191,28 @@ impl Links {
         }
     }
 
-    fn destroy_one(&mut self, local_id: Local<RepositoryId>) {
+    pub fn get_request_link(
+        &self,
+        local_id: &Local<RepositoryId>,
+    ) -> Option<Arc<Mutex<mpsc::Sender<Request>>>> {
+        self.active
+            .get(local_id)
+            .map(|link| link.request_tx.clone())
+    }
+
+    pub fn get_response_link(
+        &self,
+        local_id: &Local<RepositoryId>,
+    ) -> Option<Arc<Mutex<mpsc::Sender<Response>>>> {
+        self.active
+            .get(local_id)
+            .map(|link| link.response_tx.clone())
+    }
+
+    fn destroy_one(&mut self, local_id: &Local<RepositoryId>) {
         // NOTE: this drops the `request_tx` / `response_tx` senders which causes the
         // corresponding receivers to be closed which terminates the client/server tasks.
-        self.active.remove(&local_id);
+        self.active.remove(local_id);
     }
 }
 
@@ -255,7 +268,7 @@ impl Inner {
                     .await
             }
             Command::DestroyLink { local_id } => {
-                self.links.write().await.destroy_one(local_id);
+                self.links.write().await.destroy_one(&local_id);
                 true
             }
         }
@@ -264,10 +277,10 @@ impl Inner {
     async fn handle_message(&mut self, message: Message) {
         match message {
             Message::Request { dst_id, request } => {
-                self.handle_request(Local::new(dst_id), request).await
+                self.handle_request(&Local::new(dst_id), request).await
             }
             Message::Response { dst_id, response } => {
-                self.handle_response(Local::new(dst_id), response).await
+                self.handle_response(&Local::new(dst_id), response).await
             }
             Message::CreateLink { src_id, dst_name } => {
                 self.create_incoming_link(Local::new(dst_name), Remote::new(src_id))
@@ -363,8 +376,8 @@ impl Inner {
         links.active.insert(
             local_id,
             Link {
-                request_tx,
-                response_tx,
+                request_tx: Arc::new(Mutex::new(request_tx)),
+                response_tx: Arc::new(Mutex::new(response_tx)),
             },
         );
 
@@ -382,43 +395,39 @@ impl Inner {
         task::spawn(async move { log_error(server.run(), "server failed: ").await });
     }
 
-    async fn handle_request(&mut self, local_id: Local<RepositoryId>, request: Request) {
-        let mut links = self.links.write().await;
-
-        match links.active.entry(local_id) {
-            Entry::Occupied(entry) => {
-                if entry.get().request_tx.send(request).await.is_err() {
-                    log::warn!("server unexpectedly terminated - destroying the link");
-                    entry.remove();
-                }
+    async fn handle_request(&mut self, local_id: &Local<RepositoryId>, request: Request) {
+        if let Some(request_tx) = self.links.read().await.get_request_link(local_id) {
+            if request_tx.lock().await.send(request).await.is_err() {
+                log::warn!("server unexpectedly terminated - destroying the link");
+                // TODO: It could be that while we were doing the send that failed, some other
+                // coroutine destroyed the link and re-added a new one. In which case we should NOT
+                // destroy it.
+                self.links.write().await.destroy_one(local_id);
             }
-            Entry::Vacant(_) => {
-                log::warn!(
-                    "received request {:?} for unlinked repository {:?}",
-                    request,
-                    local_id
-                );
-            }
+        } else {
+            log::warn!(
+                "received request {:?} for unlinked repository {:?}",
+                request,
+                local_id
+            );
         }
     }
 
-    async fn handle_response(&mut self, local_id: Local<RepositoryId>, response: Response) {
-        let mut links = self.links.write().await;
-
-        match links.active.entry(local_id) {
-            Entry::Occupied(entry) => {
-                if entry.get().response_tx.send(response).await.is_err() {
-                    log::warn!("client unexpectedly terminated - destroying the link");
-                    entry.remove();
-                }
+    async fn handle_response(&mut self, local_id: &Local<RepositoryId>, response: Response) {
+        if let Some(response_tx) = self.links.read().await.get_response_link(local_id) {
+            if response_tx.lock().await.send(response).await.is_err() {
+                log::warn!("client unexpectedly terminated - destroying the link");
+                // TODO: It could be that while we were doing the send that failed, some other
+                // coroutine destroyed the link and re-added a new one. In which case we should NOT
+                // destroy it.
+                self.links.write().await.destroy_one(local_id);
             }
-            Entry::Vacant(_) => {
-                log::warn!(
-                    "received response {:?} for unlinked repository {:?}",
-                    response,
-                    local_id
-                );
-            }
+        } else {
+            log::warn!(
+                "received response {:?} for unlinked repository {:?}",
+                response,
+                local_id
+            );
         }
     }
 }
@@ -566,8 +575,8 @@ impl MultiWriter {
 
 // Established link between local and remote repositories.
 struct Link {
-    request_tx: mpsc::Sender<Request>,
-    response_tx: mpsc::Sender<Response>,
+    request_tx: Arc<Mutex<mpsc::Sender<Request>>>,
+    response_tx: Arc<Mutex<mpsc::Sender<Response>>>,
 }
 
 // Pending link initiated by the local repository.
