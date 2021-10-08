@@ -142,3 +142,22 @@ where
         unreachable!()
     }
 }
+
+#[track_caller]
+pub fn eventually_true<F>(mut f: F)
+where
+    F: FnMut() -> bool,
+{
+    const ATTEMPTS: u32 = 10;
+    const INITIAL_DELAY: Duration = Duration::from_millis(10);
+
+    for i in 0..ATTEMPTS {
+        if f() {
+            return;
+        }
+
+        thread::sleep(INITIAL_DELAY * 2u32.pow(i));
+    }
+
+    assert!(false, "The test did not finish within the given timeout");
+}
