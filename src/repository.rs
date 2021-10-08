@@ -310,7 +310,12 @@ impl Repository {
             } else {
                 ""
             };
-            print.display(&format_args!("Branch ID: {:?}{}", replica_id, local));
+            print.display(&format_args!(
+                "Branch ID: {:?}{}, root block ID:{:?}",
+                replica_id,
+                local,
+                branch.root_block_id().await
+            ));
             let print = print.indent();
             print.display(&format_args!(
                 "/, vv: {:?}",

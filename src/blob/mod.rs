@@ -85,6 +85,10 @@ impl Blob {
         ))
     }
 
+    pub async fn first_block_id(&self) -> Result<BlockId> {
+        Core::first_block_id(&self.branch, self.head_locator).await
+    }
+
     /// Creates a new blob.
     pub fn create(branch: Branch, head_locator: Locator) -> Self {
         let nonce_sequence = NonceSequence::new(rand::random());

@@ -1,6 +1,6 @@
 mod utils;
 
-use self::utils::{eventually, Bin};
+use self::utils::{eventually, eventually_true, Bin};
 use parking_lot::Mutex;
 use std::fs;
 
@@ -58,4 +58,28 @@ fn sequential_write_to_the_same_file() {
         let content = fs::read_to_string(a.root().join(file_name)).unwrap();
         assert_eq!(content, content_b);
     });
+}
+
+#[test]
+fn fast_sequential_writes() {
+    // There used to be a deadlock which would manifest whenever one of the connected replicas
+    // perfomed more than one write operation (mkdir, echo foo > bar,...) quickly one after another
+    // (e.g. "$ mkdir a; mkdir b").
+    for _ in 0..5 {
+        let _guard = MUTEX.lock();
+
+        let a = Bin::start(0);
+        let b = Bin::start(1);
+
+        let count = 10;
+
+        for i in 0..count {
+            let file = format!("file-{}.txt", i);
+            let content = format!("Content of file-{}.txt", i);
+
+            fs::write(a.root().join(file), &content).unwrap();
+        }
+
+        eventually_true(|| fs::read_dir(b.root()).unwrap().map(|e| e.unwrap()).count() == count);
+    }
 }

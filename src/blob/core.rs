@@ -3,7 +3,8 @@ use super::{
     {Cursor, OpenBlock},
 };
 use crate::{
-    blob_id::BlobId, branch::Branch, crypto::NonceSequence, error::Result, locator::Locator,
+    blob_id::BlobId, block::BlockId, branch::Branch, crypto::NonceSequence, error::Result,
+    locator::Locator,
 };
 use std::{fmt, mem};
 
@@ -48,6 +49,15 @@ impl Core {
             content,
             dirty: false,
         })
+    }
+
+    pub(crate) async fn first_block_id(branch: &Branch, head_locator: Locator) -> Result<BlockId> {
+        // NOTE: no need to commit this transaction because we are only reading here.
+        let mut tx = branch.db_pool().begin().await?;
+        branch
+            .data()
+            .get(&mut tx, &head_locator.encode(branch.cryptor()))
+            .await
     }
 
     /// Length of this blob in bytes.

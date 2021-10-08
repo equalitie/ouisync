@@ -11,15 +11,13 @@ use crate::{
     scoped_task::ScopedJoinHandle,
     tagged::{Local, Remote},
 };
-use std::{
-    collections::{hash_map::Entry, HashMap},
-    fmt,
-    future::Future,
-    pin::Pin,
-};
+use std::{collections::HashMap, fmt, future::Future, pin::Pin, sync::Arc};
 use tokio::{
     select,
-    sync::mpsc::{self, error::SendError},
+    sync::{
+        mpsc::{self, error::SendError},
+        Mutex, RwLock,
+    },
     task,
 };
 
@@ -118,15 +116,13 @@ impl MessageBroker {
     ) -> Self {
         let (command_tx, command_rx) = mpsc::channel(1);
 
-        let mut inner = Inner {
+        let inner = Arc::new(Inner {
             their_replica_id,
             command_tx: command_tx.clone(),
             reader: MultiReader::new(),
             writer: MultiWriter::new(),
-            links: HashMap::new(),
-            pending_outgoing_links: HashMap::new(),
-            pending_incoming_links: HashMap::new(),
-        };
+            links: RwLock::new(Links::new()),
+        });
 
         inner.add_connection(stream);
 
@@ -182,42 +178,54 @@ struct Inner {
     command_tx: mpsc::Sender<Command>,
     reader: MultiReader,
     writer: MultiWriter,
-    links: HashMap<Local<RepositoryId>, Link>,
-
-    // TODO: consider using LruCache instead of HashMap for these, to expire unrequited link
-    //       requests.
-    pending_outgoing_links: HashMap<Local<String>, PendingOutgoingLink>,
-    pending_incoming_links: HashMap<Local<String>, PendingIncomingLink>,
+    links: RwLock<Links>,
 }
 
 impl Inner {
-    async fn run(mut self, mut command_rx: mpsc::Receiver<Command>, on_finish: OnFinish) {
-        let mut run = true;
+    async fn run(self: Arc<Self>, mut command_rx: mpsc::Receiver<Command>, on_finish: OnFinish) {
+        // Note that we need to spawn here (as opposed to doing a select), because selecting could
+        // result in a deadlock. The deadlock could happen this way:
+        //
+        // * We receive a Request from a peer and we send it to the Server.
+        // * We receive another Request, but because the queue to the server has size 1, we block.
+        // * Server processes the Request and sends the Response back to us.
+        // * We're unable to process the Response because we're waiting for the second Request to
+        //   go through.
 
-        while run {
-            run = select! {
-                command = command_rx.recv() => {
-                    if let Some(command) = command {
-                        self.handle_command(command).await
-                    } else {
-                        false
+        let this = self.clone();
+        let handle1 = task::spawn(async move {
+            loop {
+                if let Some(command) = command_rx.recv().await {
+                    if !this.handle_command(command).await {
+                        break;
                     }
-                }
-                message = self.reader.read() => {
-                    if let Some(message) = message {
-                        self.handle_message(message).await;
-                        true
-                    } else {
-                        false
-                    }
+                } else {
+                    break;
                 }
             }
-        }
+        });
+
+        let this = self.clone();
+        let handle2 = task::spawn(async move {
+            loop {
+                if let Some(message) = this.reader.read().await {
+                    this.handle_message(message).await;
+                } else {
+                    break;
+                }
+            }
+        });
+
+        // Wait for either to finish, then RIAA destroy the other.
+        select! {
+            _ = handle1 => {}
+            _ = handle2 => {}
+        };
 
         on_finish.await
     }
 
-    async fn handle_command(&mut self, command: Command) -> bool {
+    async fn handle_command(&self, command: Command) -> bool {
         match command {
             Command::AddConnection(stream) => {
                 self.add_connection(stream);
@@ -234,49 +242,52 @@ impl Inner {
                     .await
             }
             Command::DestroyLink { local_id } => {
-                self.destroy_link(local_id);
+                self.links.write().await.destroy_one(&local_id);
                 true
             }
         }
     }
 
-    async fn handle_message(&mut self, message: Message) {
+    async fn handle_message(&self, message: Message) {
         match message {
             Message::Request { dst_id, request } => {
-                self.handle_request(Local::new(dst_id), request).await
+                self.handle_request(&Local::new(dst_id), request).await
             }
             Message::Response { dst_id, response } => {
-                self.handle_response(Local::new(dst_id), response).await
+                self.handle_response(&Local::new(dst_id), response).await
             }
             Message::CreateLink { src_id, dst_name } => {
                 self.create_incoming_link(Local::new(dst_name), Remote::new(src_id))
+                    .await
             }
         }
     }
 
-    fn add_connection(&mut self, stream: TcpObjectStream) {
+    fn add_connection(&self, stream: TcpObjectStream) {
         let (reader, writer) = stream.into_split();
         self.reader.add(reader);
         self.writer.add(writer);
     }
 
-    async fn send_message(&mut self, message: Message) -> bool {
+    async fn send_message(&self, message: Message) -> bool {
         self.writer.write(&message).await
     }
 
     async fn create_outgoing_link(
-        &mut self,
+        &self,
         index: Index,
         local_id: Local<RepositoryId>,
         local_name: Local<String>,
         remote_name: Remote<String>,
     ) -> bool {
-        if self.links.contains_key(&local_id) {
+        let mut links = self.links.write().await;
+
+        if links.active.contains_key(&local_id) {
             log::warn!("not creating link from {:?} - already exists", local_name);
             return true;
         }
 
-        if self.pending_outgoing_links.contains_key(&local_name) {
+        if links.pending_outgoing.contains_key(&local_name) {
             log::warn!("not creating link from {:?} - already pending", local_name);
             return true;
         }
@@ -297,27 +308,36 @@ impl Inner {
             return false;
         }
 
-        if let Some(pending) = self.pending_incoming_links.remove(&local_name) {
-            self.create_link(index, local_id, pending.remote_id)
+        if let Some(pending) = links.pending_incoming.remove(&local_name) {
+            self.create_link(&mut *links, index, local_id, pending.remote_id)
         } else {
-            self.pending_outgoing_links
+            links
+                .pending_outgoing
                 .insert(local_name, PendingOutgoingLink { index, local_id });
         }
 
         true
     }
 
-    fn create_incoming_link(&mut self, local_name: Local<String>, remote_id: Remote<RepositoryId>) {
-        if let Some(pending) = self.pending_outgoing_links.remove(&local_name) {
-            self.create_link(pending.index, pending.local_id, remote_id)
+    async fn create_incoming_link(
+        &self,
+        local_name: Local<String>,
+        remote_id: Remote<RepositoryId>,
+    ) {
+        let mut links = self.links.write().await;
+
+        if let Some(pending) = links.pending_outgoing.remove(&local_name) {
+            self.create_link(&mut *links, pending.index, pending.local_id, remote_id)
         } else {
-            self.pending_incoming_links
+            links
+                .pending_incoming
                 .insert(local_name, PendingIncomingLink { remote_id });
         }
     }
 
     fn create_link(
-        &mut self,
+        &self,
+        links: &mut Links,
         index: Index,
         local_id: Local<RepositoryId>,
         remote_id: Remote<RepositoryId>,
@@ -327,11 +347,11 @@ impl Inner {
         let (request_tx, request_rx) = mpsc::channel(1);
         let (response_tx, response_rx) = mpsc::channel(1);
 
-        self.links.insert(
+        links.active.insert(
             local_id,
             Link {
-                request_tx,
-                response_tx,
+                request_tx: Arc::new(Mutex::new(request_tx)),
+                response_tx: Arc::new(Mutex::new(response_tx)),
             },
         );
 
@@ -349,45 +369,39 @@ impl Inner {
         task::spawn(async move { log_error(server.run(), "server failed: ").await });
     }
 
-    fn destroy_link(&mut self, local_id: Local<RepositoryId>) {
-        // NOTE: this drops the `request_tx` / `response_tx` senders which causes the
-        // corresponding receivers to be closed which terminates the client/server tasks.
-        self.links.remove(&local_id);
-    }
-
-    async fn handle_request(&mut self, local_id: Local<RepositoryId>, request: Request) {
-        match self.links.entry(local_id) {
-            Entry::Occupied(entry) => {
-                if entry.get().request_tx.send(request).await.is_err() {
-                    log::warn!("server unexpectedly terminated - destroying the link");
-                    entry.remove();
-                }
+    async fn handle_request(&self, local_id: &Local<RepositoryId>, request: Request) {
+        if let Some(request_tx) = self.links.read().await.get_request_link(local_id) {
+            if request_tx.lock().await.send(request).await.is_err() {
+                log::warn!("server unexpectedly terminated - destroying the link");
+                // TODO: It could be that while we were doing the send that failed, some other
+                // coroutine destroyed the link and re-added a new one. In which case we should NOT
+                // destroy it.
+                self.links.write().await.destroy_one(local_id);
             }
-            Entry::Vacant(_) => {
-                log::warn!(
-                    "received request {:?} for unlinked repository {:?}",
-                    request,
-                    local_id
-                );
-            }
+        } else {
+            log::warn!(
+                "received request {:?} for unlinked repository {:?}",
+                request,
+                local_id
+            );
         }
     }
 
-    async fn handle_response(&mut self, local_id: Local<RepositoryId>, response: Response) {
-        match self.links.entry(local_id) {
-            Entry::Occupied(entry) => {
-                if entry.get().response_tx.send(response).await.is_err() {
-                    log::warn!("client unexpectedly terminated - destroying the link");
-                    entry.remove();
-                }
+    async fn handle_response(&self, local_id: &Local<RepositoryId>, response: Response) {
+        if let Some(response_tx) = self.links.read().await.get_response_link(local_id) {
+            if response_tx.lock().await.send(response).await.is_err() {
+                log::warn!("client unexpectedly terminated - destroying the link");
+                // TODO: It could be that while we were doing the send that failed, some other
+                // coroutine destroyed the link and re-added a new one. In which case we should NOT
+                // destroy it.
+                self.links.write().await.destroy_one(local_id);
             }
-            Entry::Vacant(_) => {
-                log::warn!(
-                    "received response {:?} for unlinked repository {:?}",
-                    response,
-                    local_id
-                );
-            }
+        } else {
+            log::warn!(
+                "received response {:?} for unlinked repository {:?}",
+                response,
+                local_id
+            );
         }
     }
 }
@@ -452,19 +466,27 @@ impl fmt::Debug for Command {
 /// Wrapper for arbitrary number of `TcpObjectReader`s which reads from all of them simultaneously.
 struct MultiReader {
     tx: mpsc::Sender<Option<Message>>,
-    rx: mpsc::Receiver<Option<Message>>,
-    count: usize,
+    // Wrapping these in Mutex and RwLock to have the `add` and `read` methods non mutable.  That
+    // in turn is desirable to be able to call the two functions from different coroutines. Note
+    // that we don't want to wrap this whole struct in a Mutex/RwLock because we don't want the add
+    // function to be blocking.
+    rx: Mutex<mpsc::Receiver<Option<Message>>>,
+    count: std::sync::RwLock<usize>,
 }
 
 impl MultiReader {
     fn new() -> Self {
         let (tx, rx) = mpsc::channel(1);
-        Self { tx, rx, count: 0 }
+        Self {
+            tx,
+            rx: Mutex::new(rx),
+            count: std::sync::RwLock::new(0),
+        }
     }
 
-    fn add(&mut self, mut reader: TcpObjectReader) {
+    fn add(&self, mut reader: TcpObjectReader) {
         let tx = self.tx.clone();
-        self.count += 1;
+        *self.count.write().unwrap() += 1;
 
         task::spawn(async move {
             loop {
@@ -483,16 +505,16 @@ impl MultiReader {
         });
     }
 
-    async fn read(&mut self) -> Option<Message> {
+    async fn read(&self) -> Option<Message> {
         loop {
-            if self.count == 0 {
+            if *self.count.read().unwrap() == 0 {
                 return None;
             }
 
-            match self.rx.recv().await {
+            match self.rx.lock().await.recv().await {
                 Some(Some(message)) => return Some(message),
                 Some(None) => {
-                    self.count -= 1;
+                    *self.count.write().unwrap() -= 1;
                 }
                 None => {
                     // This would mean that all senders were closed, but that can't happen because
@@ -506,37 +528,102 @@ impl MultiReader {
 
 /// Wrapper for arbitrary number of `TcpObjectWriter`s which writes to the first available one.
 struct MultiWriter {
-    writers: Vec<TcpObjectWriter>,
+    // Using Mutexes and RwLocks here because we want the `add` and `write` functions to be const.
+    // That will allow us to call them from two different coroutines. Note that we don't want this
+    // whole structure to wrap because we don't want the `add` function to be blocking.
+    next_id: std::sync::Mutex<usize>,
+    writers: std::sync::RwLock<HashMap<usize, Arc<Mutex<TcpObjectWriter>>>>,
 }
 
 impl MultiWriter {
     fn new() -> Self {
         Self {
-            writers: Vec::new(),
+            next_id: std::sync::Mutex::new(0),
+            writers: std::sync::RwLock::new(HashMap::new()),
         }
     }
 
-    fn add(&mut self, writer: TcpObjectWriter) {
-        self.writers.push(writer)
+    fn add(&self, writer: TcpObjectWriter) {
+        let mut next_id = self.next_id.lock().unwrap();
+        let id = *next_id;
+        *next_id += 1;
+        drop(next_id);
+
+        self.writers
+            .write()
+            .unwrap()
+            .insert(id, Arc::new(Mutex::new(writer)));
     }
 
-    async fn write(&mut self, message: &Message) -> bool {
-        while let Some(writer) = self.writers.last_mut() {
-            if writer.write(message).await.is_ok() {
+    async fn write(&self, message: &Message) -> bool {
+        while let Some((id, writer)) = self.pick_writer().await {
+            if writer.lock().await.write(message).await.is_ok() {
                 return true;
             }
 
-            self.writers.pop();
+            self.writers.write().unwrap().remove(&id);
         }
 
         false
+    }
+
+    async fn pick_writer(&self) -> Option<(usize, Arc<Mutex<TcpObjectWriter>>)> {
+        self.writers
+            .read()
+            .unwrap()
+            .iter()
+            .next()
+            .map(|(k, v)| (*k, v.clone()))
     }
 }
 
 // Established link between local and remote repositories.
 struct Link {
-    request_tx: mpsc::Sender<Request>,
-    response_tx: mpsc::Sender<Response>,
+    request_tx: Arc<Mutex<mpsc::Sender<Request>>>,
+    response_tx: Arc<Mutex<mpsc::Sender<Response>>>,
+}
+
+struct Links {
+    active: HashMap<Local<RepositoryId>, Link>,
+
+    // TODO: consider using LruCache instead of HashMap for these, to expire unrequited link
+    //       requests.
+    pending_outgoing: HashMap<Local<String>, PendingOutgoingLink>,
+    pending_incoming: HashMap<Local<String>, PendingIncomingLink>,
+}
+
+impl Links {
+    pub fn new() -> Self {
+        Self {
+            active: HashMap::new(),
+            pending_outgoing: HashMap::new(),
+            pending_incoming: HashMap::new(),
+        }
+    }
+
+    pub fn get_request_link(
+        &self,
+        local_id: &Local<RepositoryId>,
+    ) -> Option<Arc<Mutex<mpsc::Sender<Request>>>> {
+        self.active
+            .get(local_id)
+            .map(|link| link.request_tx.clone())
+    }
+
+    pub fn get_response_link(
+        &self,
+        local_id: &Local<RepositoryId>,
+    ) -> Option<Arc<Mutex<mpsc::Sender<Response>>>> {
+        self.active
+            .get(local_id)
+            .map(|link| link.response_tx.clone())
+    }
+
+    fn destroy_one(&mut self, local_id: &Local<RepositoryId>) {
+        // NOTE: this drops the `request_tx` / `response_tx` senders which causes the
+        // corresponding receivers to be closed which terminates the client/server tasks.
+        self.active.remove(local_id);
+    }
 }
 
 // Pending link initiated by the local repository.
