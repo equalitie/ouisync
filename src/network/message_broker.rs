@@ -197,10 +197,10 @@ impl Inner {
             loop {
                 if let Some(command) = command_rx.recv().await {
                     if !this.handle_command(command).await {
-                        return;
+                        break;
                     }
                 } else {
-                    return;
+                    break;
                 }
             }
         });
@@ -211,13 +211,16 @@ impl Inner {
                 if let Some(message) = this.reader.read().await {
                     this.handle_message(message).await;
                 } else {
-                    return;
+                    break;
                 }
             }
         });
 
-        handle1.await.expect("MessageBroker: command receiver has panicked");
-        handle2.await.expect("MessageBroker: peer receiver has panicked");
+        // Wait for either to finish, then RIAA destroy the other.
+        select! {
+            _ = handle1 => {}
+            _ = handle2 => {}
+        };
 
         on_finish.await
     }
