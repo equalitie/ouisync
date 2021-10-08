@@ -5,7 +5,7 @@ use super::{
 use crate::{
     block::BlockId,
     crypto::{AuthTag, Hash, Hashable},
-    error::Result,
+    error::{Error, Result},
     index::{Index, InnerNodeMap, LeafNodeSet, RootNode, Summary, INNER_LAYER_COUNT},
     replica_id::ReplicaId,
     store,
@@ -164,9 +164,13 @@ impl Client {
 
     async fn handle_block(&self, id: BlockId, content: Box<[u8]>, auth_tag: AuthTag) -> Result<()> {
         // TODO: how to validate the block?
-        // TODO: ignore `BlockNotReferenced` errors as they only mean that the block is no longer
-        //       needed.
-        store::write_received_block(&self.index, &id, &content, &auth_tag).await
+        match store::write_received_block(&self.index, &id, &content, &auth_tag).await {
+            Ok(_) => Ok(()),
+            // Ignore `BlockNotReferenced` errors as they only mean that the block is no longer
+            // needed.
+            Err(Error::BlockNotReferenced) => Ok(()),
+            Err(e) => Err(e),
+        }
     }
 
     async fn is_complete(&self) -> Result<bool> {
