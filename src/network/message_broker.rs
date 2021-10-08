@@ -198,7 +198,10 @@ impl Inner {
         // * We're unable to process the Response because we're waiting for the second Request to
         //   go through.
 
+        let (done_tx, mut done_rx) = mpsc::channel(1);
+
         let this = self.clone();
+        let done = done_tx.clone();
         let handle1 = task::spawn(async move {
             loop {
                 if let Some(command) = command_rx.recv().await {
@@ -209,9 +212,11 @@ impl Inner {
                     break;
                 }
             }
+            done.send(1).await.unwrap_or_default();
         });
 
         let this = self.clone();
+        let done = done_tx.clone();
         let handle2 = task::spawn(async move {
             loop {
                 if let Some(message) = this.reader.read().await {
@@ -220,13 +225,15 @@ impl Inner {
                     break;
                 }
             }
+            done.send(2).await.unwrap_or_default();
         });
 
-        // Wait for either to finish, then RIAA destroy the other.
-        select! {
-            _ = handle1 => {}
-            _ = handle2 => {}
-        };
+        // Wait for either to finish, then destroy the other.
+        match done_rx.recv().await {
+            Some(1) => handle2.abort(),
+            Some(2) => handle1.abort(),
+            _ => unreachable!(),
+        }
 
         on_finish.await
     }
