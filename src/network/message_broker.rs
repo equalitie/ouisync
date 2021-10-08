@@ -11,7 +11,13 @@ use crate::{
     scoped_task::ScopedJoinHandle,
     tagged::{Local, Remote},
 };
-use std::{collections::HashMap, fmt, future::Future, pin::Pin, sync::Arc};
+use std::{
+    collections::{hash_map::Entry, HashMap},
+    fmt,
+    future::Future,
+    pin::Pin,
+    sync::Arc,
+};
 use tokio::{
     select,
     sync::{
@@ -242,7 +248,7 @@ impl Inner {
                     .await
             }
             Command::DestroyLink { local_id } => {
-                self.links.write().await.destroy_one(&local_id);
+                self.links.write().await.destroy_one(&local_id, None);
                 true
             }
         }
@@ -347,13 +353,7 @@ impl Inner {
         let (request_tx, request_rx) = mpsc::channel(1);
         let (response_tx, response_rx) = mpsc::channel(1);
 
-        links.active.insert(
-            local_id,
-            Link {
-                request_tx: Arc::new(Mutex::new(request_tx)),
-                response_tx: Arc::new(Mutex::new(response_tx)),
-            },
-        );
+        links.insert_active(local_id, request_tx, response_tx);
 
         // NOTE: we just fire-and-forget the tasks which should be OK because when this
         // `MessageBroker` instance is dropped, the associated senders (`request_tx`, `response_tx`)
@@ -370,13 +370,13 @@ impl Inner {
     }
 
     async fn handle_request(&self, local_id: &Local<RepositoryId>, request: Request) {
-        if let Some(request_tx) = self.links.read().await.get_request_link(local_id) {
+        if let Some((link_id, request_tx)) = self.links.read().await.get_request_link(local_id) {
             if request_tx.lock().await.send(request).await.is_err() {
                 log::warn!("server unexpectedly terminated - destroying the link");
-                // TODO: It could be that while we were doing the send that failed, some other
-                // coroutine destroyed the link and re-added a new one. In which case we should NOT
-                // destroy it.
-                self.links.write().await.destroy_one(local_id);
+                self.links
+                    .write()
+                    .await
+                    .destroy_one(local_id, Some(link_id));
             }
         } else {
             log::warn!(
@@ -388,13 +388,13 @@ impl Inner {
     }
 
     async fn handle_response(&self, local_id: &Local<RepositoryId>, response: Response) {
-        if let Some(response_tx) = self.links.read().await.get_response_link(local_id) {
+        if let Some((link_id, response_tx)) = self.links.read().await.get_response_link(local_id) {
             if response_tx.lock().await.send(response).await.is_err() {
                 log::warn!("client unexpectedly terminated - destroying the link");
-                // TODO: It could be that while we were doing the send that failed, some other
-                // coroutine destroyed the link and re-added a new one. In which case we should NOT
-                // destroy it.
-                self.links.write().await.destroy_one(local_id);
+                self.links
+                    .write()
+                    .await
+                    .destroy_one(local_id, Some(link_id));
             }
         } else {
             log::warn!(
@@ -577,8 +577,19 @@ impl MultiWriter {
     }
 }
 
+// LinkId is used for when we want to remove a particular link from Links::active, but keep it if
+// the link has been replaced with a new one in the mean time. For example, this could happen:
+//
+// 1. User clones a request_tx from one of the links in Links::active
+// 2. User attempts to send to a message using the above request_tx
+// 3. In the mean time, the original Link is replaced Links::active with a new one
+// 4. The step #2 from above fails and we attempt to remove the link where the request_tx is from,
+//    but instead we remove the newly replace link from step #3.
+type LinkId = u64;
+
 // Established link between local and remote repositories.
 struct Link {
+    id: LinkId,
     request_tx: Arc<Mutex<mpsc::Sender<Request>>>,
     response_tx: Arc<Mutex<mpsc::Sender<Response>>>,
 }
@@ -590,6 +601,8 @@ struct Links {
     //       requests.
     pending_outgoing: HashMap<Local<String>, PendingOutgoingLink>,
     pending_incoming: HashMap<Local<String>, PendingIncomingLink>,
+
+    next_link_id: LinkId,
 }
 
 impl Links {
@@ -598,31 +611,67 @@ impl Links {
             active: HashMap::new(),
             pending_outgoing: HashMap::new(),
             pending_incoming: HashMap::new(),
+            next_link_id: 0,
         }
+    }
+
+    pub fn insert_active(
+        &mut self,
+        local_id: Local<RepositoryId>,
+        request_tx: mpsc::Sender<Request>,
+        response_tx: mpsc::Sender<Response>,
+    ) {
+        let link_id = self.generate_link_id();
+
+        self.active.insert(
+            local_id,
+            Link {
+                id: link_id,
+                request_tx: Arc::new(Mutex::new(request_tx)),
+                response_tx: Arc::new(Mutex::new(response_tx)),
+            },
+        );
     }
 
     pub fn get_request_link(
         &self,
         local_id: &Local<RepositoryId>,
-    ) -> Option<Arc<Mutex<mpsc::Sender<Request>>>> {
+    ) -> Option<(LinkId, Arc<Mutex<mpsc::Sender<Request>>>)> {
         self.active
             .get(local_id)
-            .map(|link| link.request_tx.clone())
+            .map(|link| (link.id, link.request_tx.clone()))
     }
 
     pub fn get_response_link(
         &self,
         local_id: &Local<RepositoryId>,
-    ) -> Option<Arc<Mutex<mpsc::Sender<Response>>>> {
+    ) -> Option<(LinkId, Arc<Mutex<mpsc::Sender<Response>>>)> {
         self.active
             .get(local_id)
-            .map(|link| link.response_tx.clone())
+            .map(|link| (link.id, link.response_tx.clone()))
     }
 
-    fn destroy_one(&mut self, local_id: &Local<RepositoryId>) {
+    fn destroy_one(&mut self, local_id: &Local<RepositoryId>, link_id: Option<LinkId>) {
         // NOTE: this drops the `request_tx` / `response_tx` senders which causes the
         // corresponding receivers to be closed which terminates the client/server tasks.
-        self.active.remove(local_id);
+        match self.active.entry(*local_id) {
+            Entry::Occupied(entry) => {
+                if let Some(link_id) = link_id {
+                    if entry.get().id == link_id {
+                        entry.remove();
+                    }
+                } else {
+                    entry.remove();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn generate_link_id(&mut self) -> LinkId {
+        let id = self.next_link_id;
+        self.next_link_id += 1;
+        id
     }
 }
 
