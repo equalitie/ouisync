@@ -80,6 +80,10 @@ fn fast_sequential_writes() {
             fs::write(a.root().join(file), &content).unwrap();
         }
 
+        // Allowing this lint because even though the `map(|e| e.unwrap())` bit has no effect on the
+        // resulting count, it is still useful in that it catches any errors when reading the dir
+        // by panicking.
+        #[allow(clippy::suspicious_map)]
         eventually_true(|| fs::read_dir(b.root()).unwrap().map(|e| e.unwrap()).count() == count);
     }
 }

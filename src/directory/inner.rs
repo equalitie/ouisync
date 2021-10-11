@@ -41,10 +41,6 @@ impl Inner {
         Ok(())
     }
 
-    pub fn head_locator(&self) -> &Locator {
-        self.blob.locator()
-    }
-
     // If `keep` is set to Some(some_blob_id), than that blob won't be removed from the store. This
     // is useful when we want to move or rename a an entry.
     pub async fn insert_entry(

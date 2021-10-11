@@ -16,7 +16,10 @@ use std::{
     fmt,
     future::Future,
     pin::Pin,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
 };
 use tokio::{
     select,
@@ -203,12 +206,8 @@ impl Inner {
         let this = self.clone();
         let done = done_tx.clone();
         let handle1 = task::spawn(async move {
-            loop {
-                if let Some(command) = command_rx.recv().await {
-                    if !this.handle_command(command).await {
-                        break;
-                    }
-                } else {
+            while let Some(command) = command_rx.recv().await {
+                if !this.handle_command(command).await {
                     break;
                 }
             }
@@ -218,12 +217,8 @@ impl Inner {
         let this = self.clone();
         let done = done_tx.clone();
         let handle2 = task::spawn(async move {
-            loop {
-                if let Some(message) = this.reader.read().await {
-                    this.handle_message(message).await;
-                } else {
-                    break;
-                }
+            while let Some(message) = this.reader.read().await {
+                this.handle_message(message).await;
             }
             done.send(2).await.unwrap_or_default();
         });
@@ -538,23 +533,21 @@ struct MultiWriter {
     // Using Mutexes and RwLocks here because we want the `add` and `write` functions to be const.
     // That will allow us to call them from two different coroutines. Note that we don't want this
     // whole structure to wrap because we don't want the `add` function to be blocking.
-    next_id: std::sync::Mutex<usize>,
+    next_id: AtomicUsize,
     writers: std::sync::RwLock<HashMap<usize, Arc<Mutex<TcpObjectWriter>>>>,
 }
 
 impl MultiWriter {
     fn new() -> Self {
         Self {
-            next_id: std::sync::Mutex::new(0),
+            next_id: AtomicUsize::new(0),
             writers: std::sync::RwLock::new(HashMap::new()),
         }
     }
 
     fn add(&self, writer: TcpObjectWriter) {
-        let mut next_id = self.next_id.lock().unwrap();
-        let id = *next_id;
-        *next_id += 1;
-        drop(next_id);
+        // `Relaxed` ordering should be sufficient here because this is just a simple counter.
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
 
         self.writers
             .write()
@@ -661,17 +654,14 @@ impl Links {
     fn destroy_one(&mut self, local_id: &Local<RepositoryId>, link_id: Option<LinkId>) {
         // NOTE: this drops the `request_tx` / `response_tx` senders which causes the
         // corresponding receivers to be closed which terminates the client/server tasks.
-        match self.active.entry(*local_id) {
-            Entry::Occupied(entry) => {
-                if let Some(link_id) = link_id {
-                    if entry.get().id == link_id {
-                        entry.remove();
-                    }
-                } else {
+        if let Entry::Occupied(entry) = self.active.entry(*local_id) {
+            if let Some(link_id) = link_id {
+                if entry.get().id == link_id {
                     entry.remove();
                 }
+            } else {
+                entry.remove();
             }
-            _ => {}
         }
     }
 

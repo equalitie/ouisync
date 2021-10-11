@@ -159,5 +159,5 @@ where
         thread::sleep(INITIAL_DELAY * 2u32.pow(i));
     }
 
-    assert!(false, "The test did not finish within the given timeout");
+    panic!("The test did not finish within the given timeout");
 }
