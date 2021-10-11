@@ -76,34 +76,25 @@ impl JointDirectory {
         Ok(curr)
     }
 
-    // TODO: all the mutable operations must operate on the local version only. If there is no local
-    //       version, we should fork it first.
-
-    pub async fn remove_file(&mut self, name: &str) -> Result<()> {
+    pub async fn remove_entry(&mut self, name: &str) -> Result<()> {
         let local = self.fork().await?;
         let reader = self.read().await;
 
-        let file_to_remove = reader.lookup_unique(name)?.file()?;
+        let entry = reader.lookup_unique(name)?;
 
-        let to_remove_author = *file_to_remove.author();
-        let to_remove_vv = file_to_remove.version_vector().clone();
+        let author = match &entry {
+            JointEntryRef::File(entry) => *entry.author(),
+            JointEntryRef::Directory(_) => *local.this_replica_id(),
+        };
+
+        let vv = entry.version_vector().into_owned();
 
         drop(reader);
 
         let mut local_writer = local.write().await;
 
-        local_writer
-            .remove_file(name, &to_remove_author, to_remove_vv, None)
-            .await?;
+        local_writer.remove_entry(name, &author, vv, None).await?;
         local_writer.flush(None).await
-    }
-
-    pub async fn remove_directory(&self, branch: &ReplicaId, name: &str) -> Result<()> {
-        self.versions
-            .get(branch)
-            .ok_or(Error::EntryNotFound)?
-            .remove_directory(name)
-            .await
     }
 
     pub async fn flush(&mut self) -> Result<()> {
@@ -362,8 +353,15 @@ impl<'a> JointEntryRef<'a> {
 
     pub fn entry_type(&self) -> EntryType {
         match self {
-            Self::File { .. } => EntryType::File,
+            Self::File(_) => EntryType::File,
             Self::Directory(_) => EntryType::Directory,
+        }
+    }
+
+    pub fn version_vector(&'a self) -> Cow<'a, VersionVector> {
+        match self {
+            Self::File(r) => Cow::Borrowed(r.version_vector()),
+            Self::Directory(r) => Cow::Owned(r.version_vector()),
         }
     }
 
@@ -447,6 +445,13 @@ impl<'a> JointDirectoryRef<'a> {
             .first()
             .expect("joint directory must contain at least one directory")
             .name()
+    }
+
+    pub fn version_vector(&self) -> VersionVector {
+        self.0.iter().fold(VersionVector::new(), |mut vv, dir| {
+            vv.merge(dir.version_vector());
+            vv
+        })
     }
 
     pub async fn open(

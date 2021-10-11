@@ -96,6 +96,10 @@ impl<'a> EntryRef<'a> {
         matches!(self, Self::Directory(_))
     }
 
+    pub fn is_tombstone(&self) -> bool {
+        matches!(self, Self::Tombstone(_))
+    }
+
     pub fn is_local(&self) -> bool {
         self.inner().is_local()
     }
