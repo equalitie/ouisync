@@ -19,6 +19,7 @@ use std::{
 };
 
 /// Unified view over multiple concurrent versions of a directory.
+#[derive(Clone)]
 pub struct JointDirectory {
     versions: BTreeMap<ReplicaId, Directory>,
 }
@@ -49,9 +50,8 @@ impl JointDirectory {
     /// Descends into an arbitrarily nested subdirectory of this directory at the specified path.
     /// Note: non-normalized paths (i.e. containing "..") or Windows-style drive prefixes
     /// (e.g. "C:") are not supported.
-    // TODO: as this consumes `self`, we should return `self` back in case of an error.
-    pub async fn cd(self, path: impl AsRef<Utf8Path>) -> Result<Self> {
-        let mut curr = self;
+    pub async fn cd(&self, path: impl AsRef<Utf8Path>) -> Result<Self> {
+        let mut curr = Cow::Borrowed(self);
 
         for component in path.as_ref().components() {
             match component {
@@ -65,7 +65,7 @@ impl JointDirectory {
                         .ok_or(Error::EntryNotFound)?
                         .open(MissingVersionStrategy::Skip)
                         .await?;
-                    curr = next;
+                    curr = Cow::Owned(next);
                 }
                 Utf8Component::ParentDir | Utf8Component::Prefix(_) => {
                     return Err(Error::OperationNotSupported)
@@ -73,7 +73,7 @@ impl JointDirectory {
             }
         }
 
-        Ok(curr)
+        Ok(curr.into_owned())
     }
 
     pub async fn remove_entry(&mut self, name: &str) -> Result<()> {
