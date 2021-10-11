@@ -123,12 +123,12 @@ impl Repository {
             .await
     }
 
-    /// Removes (delete) the file or directory at the given path. Returns the parent directory.
-    pub async fn remove_entry<P: AsRef<Utf8Path>>(&self, path: P) -> Result<JointDirectory> {
+    /// Removes (delete) the file or directory and flushes its parent directory.
+    pub async fn remove_entry<P: AsRef<Utf8Path>>(&self, path: P) -> Result<()> {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
         let mut parent = self.open_directory(parent).await?;
         parent.remove_entry(name).await?;
-        Ok(parent)
+        parent.flush().await
     }
 
     /// Moves (renames) an entry from the source path to the destination path.
