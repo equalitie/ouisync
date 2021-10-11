@@ -476,7 +476,7 @@ struct MultiReader {
     // that we don't want to wrap this whole struct in a Mutex/RwLock because we don't want the add
     // function to be blocking.
     rx: Mutex<mpsc::Receiver<Option<Message>>>,
-    count: std::sync::RwLock<usize>,
+    count: AtomicUsize,
 }
 
 impl MultiReader {
@@ -485,13 +485,16 @@ impl MultiReader {
         Self {
             tx,
             rx: Mutex::new(rx),
-            count: std::sync::RwLock::new(0),
+            count: AtomicUsize::new(0),
         }
     }
 
     fn add(&self, mut reader: TcpObjectReader) {
         let tx = self.tx.clone();
-        *self.count.write().unwrap() += 1;
+
+        // Using `SeqCst` here to be on the safe side although a weaker ordering would probably
+        // suffice here (also in the `read` method).
+        self.count.fetch_add(1, Ordering::SeqCst);
 
         task::spawn(async move {
             loop {
@@ -512,14 +515,14 @@ impl MultiReader {
 
     async fn read(&self) -> Option<Message> {
         loop {
-            if *self.count.read().unwrap() == 0 {
+            if self.count.load(Ordering::SeqCst) == 0 {
                 return None;
             }
 
             match self.rx.lock().await.recv().await {
                 Some(Some(message)) => return Some(message),
                 Some(None) => {
-                    *self.count.write().unwrap() -= 1;
+                    self.count.fetch_sub(1, Ordering::SeqCst);
                 }
                 None => {
                     // This would mean that all senders were closed, but that can't happen because
