@@ -624,7 +624,7 @@ impl Inner {
 
         let parent_path = self.inodes.get(parent).calculate_path();
         self.repository
-            .remove_directory(parent_path.join(name))
+            .remove_entry(parent_path.join(name))
             .await?
             .flush()
             .await
@@ -807,7 +807,7 @@ impl Inner {
         log::debug!("unlink {}", self.inodes.path_display(parent, Some(name)));
 
         let path = self.inodes.get(parent).calculate_path().join(name);
-        self.repository.remove_file(path).await?;
+        self.repository.remove_entry(path).await?;
         Ok(())
     }
 
