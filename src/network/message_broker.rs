@@ -16,7 +16,10 @@ use std::{
     fmt,
     future::Future,
     pin::Pin,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
 };
 use tokio::{
     select,
@@ -122,13 +125,13 @@ impl MessageBroker {
     ) -> Self {
         let (command_tx, command_rx) = mpsc::channel(1);
 
-        let inner = Arc::new(Inner {
+        let inner = Inner {
             their_replica_id,
             command_tx: command_tx.clone(),
             reader: MultiReader::new(),
             writer: MultiWriter::new(),
             links: RwLock::new(Links::new()),
-        });
+        };
 
         inner.add_connection(stream);
 
@@ -188,51 +191,46 @@ struct Inner {
 }
 
 impl Inner {
-    async fn run(self: Arc<Self>, mut command_rx: mpsc::Receiver<Command>, on_finish: OnFinish) {
-        // Note that we need to spawn here (as opposed to doing a select), because selecting could
-        // result in a deadlock. The deadlock could happen this way:
+    async fn run(self, mut command_rx: mpsc::Receiver<Command>, on_finish: OnFinish) {
+        // NOTE: it might be tempting to rewrite this code to something like:
+        //
+        //     loop {
+        //         select! {
+        //             command = command_rx.recv() => self.handle_command(command),
+        //             message = self.reader.read() => self.handle_message(message),
+        //         }
+        //     }
+        //
+        // to avoid all the synchronization machinery. This, however could result in a deadlock.
+        // The deadlock could happen this way:
         //
         // * We receive a Request from a peer and we send it to the Server.
-        // * We receive another Request, but because the queue to the server has size 1, we block.
+        // * We receive another Request, but because the queue to the server has size 1*, we block.
         // * Server processes the Request and sends the Response back to us.
         // * We're unable to process the Response because we're waiting for the second Request to
         //   go through.
+        //
+        // *) In general, the problem happens when the number of received messages is higher than
+        //    the capacity of the channel, so just increasing the capacity won't help.
 
-        let (done_tx, mut done_rx) = mpsc::channel(1);
-
-        let this = self.clone();
-        let done = done_tx.clone();
-        let handle1 = task::spawn(async move {
-            loop {
-                if let Some(command) = command_rx.recv().await {
-                    if !this.handle_command(command).await {
-                        break;
-                    }
-                } else {
+        let command_task = async {
+            while let Some(command) = command_rx.recv().await {
+                if !self.handle_command(command).await {
                     break;
                 }
             }
-            done.send(1).await.unwrap_or_default();
-        });
+        };
 
-        let this = self.clone();
-        let done = done_tx.clone();
-        let handle2 = task::spawn(async move {
-            loop {
-                if let Some(message) = this.reader.read().await {
-                    this.handle_message(message).await;
-                } else {
-                    break;
-                }
+        let message_task = async {
+            while let Some(message) = self.reader.read().await {
+                self.handle_message(message).await;
             }
-            done.send(2).await.unwrap_or_default();
-        });
+        };
 
-        // Wait for either to finish, then destroy the other.
-        match done_rx.recv().await {
-            Some(1) => handle2.abort(),
-            Some(2) => handle1.abort(),
-            _ => unreachable!(),
+        // Wait for either to finish.
+        select! {
+            _ = command_task => (),
+            _ = message_task => (),
         }
 
         on_finish.await
@@ -378,7 +376,7 @@ impl Inner {
 
     async fn handle_request(&self, local_id: &Local<RepositoryId>, request: Request) {
         if let Some((link_id, request_tx)) = self.links.read().await.get_request_link(local_id) {
-            if request_tx.lock().await.send(request).await.is_err() {
+            if request_tx.send(request).await.is_err() {
                 log::warn!("server unexpectedly terminated - destroying the link");
                 self.links
                     .write()
@@ -396,7 +394,7 @@ impl Inner {
 
     async fn handle_response(&self, local_id: &Local<RepositoryId>, response: Response) {
         if let Some((link_id, response_tx)) = self.links.read().await.get_response_link(local_id) {
-            if response_tx.lock().await.send(response).await.is_err() {
+            if response_tx.send(response).await.is_err() {
                 log::warn!("client unexpectedly terminated - destroying the link");
                 self.links
                     .write()
@@ -478,7 +476,7 @@ struct MultiReader {
     // that we don't want to wrap this whole struct in a Mutex/RwLock because we don't want the add
     // function to be blocking.
     rx: Mutex<mpsc::Receiver<Option<Message>>>,
-    count: std::sync::RwLock<usize>,
+    count: AtomicUsize,
 }
 
 impl MultiReader {
@@ -487,13 +485,16 @@ impl MultiReader {
         Self {
             tx,
             rx: Mutex::new(rx),
-            count: std::sync::RwLock::new(0),
+            count: AtomicUsize::new(0),
         }
     }
 
     fn add(&self, mut reader: TcpObjectReader) {
         let tx = self.tx.clone();
-        *self.count.write().unwrap() += 1;
+
+        // Using `SeqCst` here to be on the safe side although a weaker ordering would probably
+        // suffice here (also in the `read` method).
+        self.count.fetch_add(1, Ordering::SeqCst);
 
         task::spawn(async move {
             loop {
@@ -514,14 +515,14 @@ impl MultiReader {
 
     async fn read(&self) -> Option<Message> {
         loop {
-            if *self.count.read().unwrap() == 0 {
+            if self.count.load(Ordering::SeqCst) == 0 {
                 return None;
             }
 
             match self.rx.lock().await.recv().await {
                 Some(Some(message)) => return Some(message),
                 Some(None) => {
-                    *self.count.write().unwrap() -= 1;
+                    self.count.fetch_sub(1, Ordering::SeqCst);
                 }
                 None => {
                     // This would mean that all senders were closed, but that can't happen because
@@ -538,23 +539,21 @@ struct MultiWriter {
     // Using Mutexes and RwLocks here because we want the `add` and `write` functions to be const.
     // That will allow us to call them from two different coroutines. Note that we don't want this
     // whole structure to wrap because we don't want the `add` function to be blocking.
-    next_id: std::sync::Mutex<usize>,
+    next_id: AtomicUsize,
     writers: std::sync::RwLock<HashMap<usize, Arc<Mutex<TcpObjectWriter>>>>,
 }
 
 impl MultiWriter {
     fn new() -> Self {
         Self {
-            next_id: std::sync::Mutex::new(0),
+            next_id: AtomicUsize::new(0),
             writers: std::sync::RwLock::new(HashMap::new()),
         }
     }
 
     fn add(&self, writer: TcpObjectWriter) {
-        let mut next_id = self.next_id.lock().unwrap();
-        let id = *next_id;
-        *next_id += 1;
-        drop(next_id);
+        // `Relaxed` ordering should be sufficient here because this is just a simple counter.
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
 
         self.writers
             .write()
@@ -597,8 +596,8 @@ type LinkId = u64;
 // Established link between local and remote repositories.
 struct Link {
     id: LinkId,
-    request_tx: Arc<Mutex<mpsc::Sender<Request>>>,
-    response_tx: Arc<Mutex<mpsc::Sender<Response>>>,
+    request_tx: mpsc::Sender<Request>,
+    response_tx: mpsc::Sender<Response>,
 }
 
 struct Links {
@@ -634,8 +633,8 @@ impl Links {
             local_id,
             Link {
                 id: link_id,
-                request_tx: Arc::new(Mutex::new(request_tx)),
-                response_tx: Arc::new(Mutex::new(response_tx)),
+                request_tx,
+                response_tx,
             },
         );
     }
@@ -643,7 +642,7 @@ impl Links {
     pub fn get_request_link(
         &self,
         local_id: &Local<RepositoryId>,
-    ) -> Option<(LinkId, Arc<Mutex<mpsc::Sender<Request>>>)> {
+    ) -> Option<(LinkId, mpsc::Sender<Request>)> {
         self.active
             .get(local_id)
             .map(|link| (link.id, link.request_tx.clone()))
@@ -652,7 +651,7 @@ impl Links {
     pub fn get_response_link(
         &self,
         local_id: &Local<RepositoryId>,
-    ) -> Option<(LinkId, Arc<Mutex<mpsc::Sender<Response>>>)> {
+    ) -> Option<(LinkId, mpsc::Sender<Response>)> {
         self.active
             .get(local_id)
             .map(|link| (link.id, link.response_tx.clone()))
@@ -661,17 +660,14 @@ impl Links {
     fn destroy_one(&mut self, local_id: &Local<RepositoryId>, link_id: Option<LinkId>) {
         // NOTE: this drops the `request_tx` / `response_tx` senders which causes the
         // corresponding receivers to be closed which terminates the client/server tasks.
-        match self.active.entry(*local_id) {
-            Entry::Occupied(entry) => {
-                if let Some(link_id) = link_id {
-                    if entry.get().id == link_id {
-                        entry.remove();
-                    }
-                } else {
+        if let Entry::Occupied(entry) = self.active.entry(*local_id) {
+            if let Some(link_id) = link_id {
+                if entry.get().id == link_id {
                     entry.remove();
                 }
+            } else {
+                entry.remove();
             }
-            _ => {}
         }
     }
 
