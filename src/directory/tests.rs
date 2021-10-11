@@ -81,7 +81,7 @@ async fn remove_file() {
     // Reopen and remove the file
     let parent_dir = branch.open_root(branch.clone()).await.unwrap();
     parent_dir
-        .remove_file(name, branch.id(), file_vv)
+        .remove_entry(name, branch.id(), file_vv)
         .await
         .unwrap();
     parent_dir.flush(None).await.unwrap();
@@ -303,21 +303,26 @@ async fn remove_subdirectory() {
     let dir = parent_dir.create_directory(name.into()).await.unwrap();
     dir.flush(None).await.unwrap();
 
-    let dir_locator = *dir.read().await.locator();
+    let (dir_locator, dir_vv) = {
+        let reader = dir.read().await;
+        (*reader.locator(), reader.version_vector().await)
+    };
 
     // Reopen and remove the subdirectory
     let parent_dir = branch.open_root(branch.clone()).await.unwrap();
-    parent_dir.remove_directory(name).await.unwrap();
+    parent_dir
+        .remove_entry(name, branch.id(), dir_vv)
+        .await
+        .unwrap();
     parent_dir.flush(None).await.unwrap();
 
     // Reopen again and check the subdirectory entry was removed.
     let parent_dir = branch.open_root(branch.clone()).await.unwrap();
     let parent_dir = parent_dir.read().await;
-    match parent_dir.lookup(name) {
-        Err(Error::EntryNotFound) => (),
-        Err(error) => panic!("unexpected error {:?}", error),
-        Ok(_) => panic!("entry should not exists but it does"),
-    }
+    assert_matches!(
+        parent_dir.lookup(name).unwrap().next(),
+        Some(EntryRef::Tombstone(_))
+    );
 
     // Check the directory blob itself was removed as well.
     match Blob::open(branch, dir_locator).await {
@@ -523,7 +528,7 @@ async fn remove_concurrent_file_version() {
         {
             let mut writer = root.write().await;
             writer
-                .remove_file(name, author_to_remove, vv_to_remove.clone(), None)
+                .remove_entry(name, author_to_remove, vv_to_remove.clone(), None)
                 .await
                 .unwrap();
             writer.flush(None).await.unwrap();

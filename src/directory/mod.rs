@@ -101,46 +101,23 @@ impl Directory {
         self.write().await.create_directory(name).await
     }
 
-    /// Effectively removes a file from this directory.
+    /// Removes a file or subdirectory from this directory. If the entry to be removed is a
+    /// directory, it needs to be empty or a `DirectoryNotEmpty` error is returned.
     ///
     /// Note: This operation does not simply remove the entry, instead, version vector of the local
     /// entry with the same name is increased to be "happens after" `vv`. If the local version does
     /// not exist, or if it is the one being removed (author == this_replica_id), then a tombstone
     /// is created.
-    pub async fn remove_file(
+    pub async fn remove_entry(
         &self,
         name: &str,
         author: &ReplicaId,
         vv: VersionVector,
     ) -> Result<()> {
-        self.write().await.remove_file(name, author, vv, None).await
-    }
-
-    /// Removes a subdirectory from this directory.
-    ///
-    /// # Panics
-    ///
-    /// Panics if this directory is not in the local branch.
-    pub async fn remove_directory(&self, name: &str) -> Result<()> {
-        let mut inner = self.write().await.inner;
-
-        for entry in lookup(self, &*inner, name)? {
-            entry.directory()?.open().await?.remove().await?;
-        }
-
-        inner.content.remove_deprecated(name)
-        // TODO: Add tombstone
-    }
-
-    /// Removes this directory if its empty, otherwise fails.
-    pub async fn remove(&self) -> Result<()> {
-        let mut inner = self.write().await.inner;
-
-        if !inner.content.entries.is_empty() {
-            return Err(Error::DirectoryNotEmpty);
-        }
-
-        inner.blob.remove().await
+        self.write()
+            .await
+            .remove_entry(name, author, vv, None)
+            .await
     }
 
     /// Adds a tombstone to where the entry is being moved from and creates a new entry at the
@@ -170,7 +147,7 @@ impl Directory {
         let (mut src_dir_writer, mut dst_dir_writer) = write_pair(self, dst_dir).await;
 
         src_dir_writer
-            .remove_file(
+            .remove_entry(
                 src_name,
                 src_author,
                 src_entry.version_vector().clone(),
@@ -475,13 +452,35 @@ impl Writer<'_> {
         Ok(())
     }
 
-    pub async fn remove_file(
+    pub async fn remove_entry(
         &mut self,
         name: &str,
         author: &ReplicaId,
         vv: VersionVector,
         keep: Option<BlobId>,
     ) -> Result<()> {
+        // If we are removing a directory, ensure it's empty (recursive removal can still be
+        // implemented at the upper layers).
+        let old_dir = match self.lookup_version(name, author) {
+            Ok(EntryRef::Directory(entry)) => Some(entry.open().await?),
+            Ok(_) | Err(Error::EntryNotFound) => None,
+            Err(error) => return Err(error),
+        };
+
+        // Keep the reader (and thus the read lock) around until the end of this function to make
+        // sure no new entry is created in the directory after this check in another thread.
+        let _old_dir_reader = if let Some(dir) = &old_dir {
+            let reader = dir.read().await;
+
+            if reader.entries().any(|entry| !entry.is_tombstone()) {
+                return Err(Error::DirectoryNotEmpty);
+            }
+
+            Some(reader)
+        } else {
+            None
+        };
+
         let this_replica_id = *self.this_replica_id();
 
         let new_entry = if author == &this_replica_id {

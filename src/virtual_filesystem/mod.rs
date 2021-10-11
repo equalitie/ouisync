@@ -623,11 +623,7 @@ impl Inner {
         log::debug!("rmdir {}", self.inodes.path_display(parent, Some(name)));
 
         let parent_path = self.inodes.get(parent).calculate_path();
-        self.repository
-            .remove_directory(parent_path.join(name))
-            .await?
-            .flush()
-            .await
+        self.repository.remove_entry(parent_path.join(name)).await
     }
 
     async fn fsyncdir(&mut self, inode: Inode, handle: FileHandle, datasync: bool) -> Result<()> {
@@ -807,7 +803,7 @@ impl Inner {
         log::debug!("unlink {}", self.inodes.path_display(parent, Some(name)));
 
         let path = self.inodes.get(parent).calculate_path().join(name);
-        self.repository.remove_file(path).await?;
+        self.repository.remove_entry(path).await?;
         Ok(())
     }
 

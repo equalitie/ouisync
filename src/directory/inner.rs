@@ -255,15 +255,6 @@ impl Content {
 
         Ok(old_blobs)
     }
-
-    // TODO: We shouldn't use this one, keeping it for now so that I can solve one problem at a
-    // time.
-    pub fn remove_deprecated(&mut self, name: &str) -> Result<()> {
-        self.entries.remove(name).ok_or(Error::EntryNotFound)?;
-        self.dirty = true;
-
-        Ok(())
-    }
 }
 
 #[async_recursion]
