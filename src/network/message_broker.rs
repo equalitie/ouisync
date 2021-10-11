@@ -125,13 +125,13 @@ impl MessageBroker {
     ) -> Self {
         let (command_tx, command_rx) = mpsc::channel(1);
 
-        let inner = Arc::new(Inner {
+        let inner = Inner {
             their_replica_id,
             command_tx: command_tx.clone(),
             reader: MultiReader::new(),
             writer: MultiWriter::new(),
             links: RwLock::new(Links::new()),
-        });
+        };
 
         inner.add_connection(stream);
 
@@ -191,43 +191,46 @@ struct Inner {
 }
 
 impl Inner {
-    async fn run(self: Arc<Self>, mut command_rx: mpsc::Receiver<Command>, on_finish: OnFinish) {
-        // Note that we need to spawn here (as opposed to doing a select), because selecting could
-        // result in a deadlock. The deadlock could happen this way:
+    async fn run(self, mut command_rx: mpsc::Receiver<Command>, on_finish: OnFinish) {
+        // NOTE: it might be tempting to rewrite this code to something like:
+        //
+        //     loop {
+        //         select! {
+        //             command = command_rx.recv() => self.handle_command(command),
+        //             message = self.reader.read() => self.handle_message(message),
+        //         }
+        //     }
+        //
+        // to avoid all the synchronization machinery. This, however could result in a deadlock.
+        // The deadlock could happen this way:
         //
         // * We receive a Request from a peer and we send it to the Server.
-        // * We receive another Request, but because the queue to the server has size 1, we block.
+        // * We receive another Request, but because the queue to the server has size 1*, we block.
         // * Server processes the Request and sends the Response back to us.
         // * We're unable to process the Response because we're waiting for the second Request to
         //   go through.
+        //
+        // *) In general, the problem happens when the number of received messages is higher than
+        //    the capacity of the channel, so just increasing the capacity won't help.
 
-        let (done_tx, mut done_rx) = mpsc::channel(1);
-
-        let this = self.clone();
-        let done = done_tx.clone();
-        let handle1 = task::spawn(async move {
+        let command_task = async {
             while let Some(command) = command_rx.recv().await {
-                if !this.handle_command(command).await {
+                if !self.handle_command(command).await {
                     break;
                 }
             }
-            done.send(1).await.unwrap_or_default();
-        });
+        };
 
-        let this = self.clone();
-        let done = done_tx.clone();
-        let handle2 = task::spawn(async move {
-            while let Some(message) = this.reader.read().await {
-                this.handle_message(message).await;
+        let message_task = async {
+            while let Some(message) = self.reader.read().await {
+                self.handle_message(message).await;
             }
-            done.send(2).await.unwrap_or_default();
-        });
+        };
 
-        // Wait for either to finish, then destroy the other.
-        match done_rx.recv().await {
-            Some(1) => handle2.abort(),
-            Some(2) => handle1.abort(),
-            _ => unreachable!(),
+        // Wait for either to finish.
+        select! {
+            _ = command_task => (),
+            _ = message_task => (),
         }
 
         on_finish.await
