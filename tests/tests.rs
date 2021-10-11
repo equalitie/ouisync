@@ -62,12 +62,12 @@ fn sequential_write_to_the_same_file() {
 
 #[test]
 fn fast_sequential_writes() {
+    let _guard = MUTEX.lock();
+
     // There used to be a deadlock which would manifest whenever one of the connected replicas
     // perfomed more than one write operation (mkdir, echo foo > bar,...) quickly one after another
     // (e.g. "$ mkdir a; mkdir b").
     for _ in 0..5 {
-        let _guard = MUTEX.lock();
-
         let a = Bin::start(0);
         let b = Bin::start(1);
 
