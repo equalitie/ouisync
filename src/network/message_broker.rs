@@ -378,7 +378,7 @@ impl Inner {
 
     async fn handle_request(&self, local_id: &Local<RepositoryId>, request: Request) {
         if let Some((link_id, request_tx)) = self.links.read().await.get_request_link(local_id) {
-            if request_tx.lock().await.send(request).await.is_err() {
+            if request_tx.send(request).await.is_err() {
                 log::warn!("server unexpectedly terminated - destroying the link");
                 self.links
                     .write()
@@ -396,7 +396,7 @@ impl Inner {
 
     async fn handle_response(&self, local_id: &Local<RepositoryId>, response: Response) {
         if let Some((link_id, response_tx)) = self.links.read().await.get_response_link(local_id) {
-            if response_tx.lock().await.send(response).await.is_err() {
+            if response_tx.send(response).await.is_err() {
                 log::warn!("client unexpectedly terminated - destroying the link");
                 self.links
                     .write()
@@ -597,8 +597,8 @@ type LinkId = u64;
 // Established link between local and remote repositories.
 struct Link {
     id: LinkId,
-    request_tx: Arc<Mutex<mpsc::Sender<Request>>>,
-    response_tx: Arc<Mutex<mpsc::Sender<Response>>>,
+    request_tx: mpsc::Sender<Request>,
+    response_tx: mpsc::Sender<Response>,
 }
 
 struct Links {
@@ -634,8 +634,8 @@ impl Links {
             local_id,
             Link {
                 id: link_id,
-                request_tx: Arc::new(Mutex::new(request_tx)),
-                response_tx: Arc::new(Mutex::new(response_tx)),
+                request_tx,
+                response_tx,
             },
         );
     }
@@ -643,7 +643,7 @@ impl Links {
     pub fn get_request_link(
         &self,
         local_id: &Local<RepositoryId>,
-    ) -> Option<(LinkId, Arc<Mutex<mpsc::Sender<Request>>>)> {
+    ) -> Option<(LinkId, mpsc::Sender<Request>)> {
         self.active
             .get(local_id)
             .map(|link| (link.id, link.request_tx.clone()))
@@ -652,7 +652,7 @@ impl Links {
     pub fn get_response_link(
         &self,
         local_id: &Local<RepositoryId>,
-    ) -> Option<(LinkId, Arc<Mutex<mpsc::Sender<Response>>>)> {
+    ) -> Option<(LinkId, mpsc::Sender<Response>)> {
         self.active
             .get(local_id)
             .map(|link| (link.id, link.response_tx.clone()))
