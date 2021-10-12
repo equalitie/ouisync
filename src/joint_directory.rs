@@ -270,8 +270,7 @@ impl Reader<'_> {
         // contain one.
         // NOTE: Using keep_maximal may be an overkill in this case because of the invariant that
         // no single author/replica can create concurrent versions of an entry.
-        let mut entries =
-            keep_maximal(entries, |e| e.version_vector(), |e| e.is_local()).into_iter();
+        let mut entries = keep_maximal(entries).into_iter();
 
         let first = entries.next().ok_or(Error::EntryNotFound)?;
 
@@ -536,7 +535,7 @@ impl<'a> Merge<'a> {
         let mut files = VecDeque::new();
         let mut directories = vec![];
 
-        let entries = Self::keep_concurrent(entries);
+        let entries = keep_maximal(entries);
 
         for entry in entries {
             match entry {
@@ -554,22 +553,53 @@ impl<'a> Merge<'a> {
             needs_disambiguation,
         }
     }
+}
 
-    fn keep_concurrent(entries: impl Iterator<Item = EntryRef<'a>>) -> Vec<EntryRef<'a>> {
-        keep_maximal(entries, |e| e.version_vector(), |e| e.is_local())
+impl<'a> Iterator for Merge<'a> {
+    type Item = JointEntryRef<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if !self.directories.is_empty() {
+            return JointDirectoryRef::new(mem::take(&mut self.directories))
+                .map(JointEntryRef::Directory);
+        }
+
+        let file = self.files.pop_front()?;
+
+        Some(JointEntryRef::File(JointFileRef {
+            file,
+            needs_disambiguation: self.needs_disambiguation,
+        }))
+    }
+}
+
+trait Versioned {
+    fn version_vector(&self) -> &VersionVector;
+    fn is_local(&self) -> bool;
+}
+
+impl Versioned for EntryRef<'_> {
+    fn version_vector(&self) -> &VersionVector {
+        EntryRef::version_vector(self)
+    }
+
+    fn is_local(&self) -> bool {
+        EntryRef::is_local(self)
+    }
+}
+
+impl Versioned for FileRef<'_> {
+    fn version_vector(&self) -> &VersionVector {
+        FileRef::version_vector(self)
+    }
+
+    fn is_local(&self) -> bool {
+        FileRef::is_local(self)
     }
 }
 
 // Returns the entries with the maximal version vectors.
-fn keep_maximal<E, GetVv, IsLocal>(
-    entries: impl Iterator<Item = E>,
-    mut get_vv: GetVv,
-    mut is_local: IsLocal,
-) -> Vec<E>
-where
-    GetVv: FnMut(&E) -> &super::version_vector::VersionVector,
-    IsLocal: FnMut(&E) -> bool,
-{
+fn keep_maximal<E: Versioned>(entries: impl Iterator<Item = E>) -> Vec<E> {
     let mut max: Vec<E> = Vec::new();
 
     for new in entries {
@@ -577,7 +607,10 @@ where
         let mut remove = None;
 
         for (index, old) in max.iter().enumerate() {
-            match (get_vv(old).partial_cmp(get_vv(&new)), is_local(&new)) {
+            match (
+                old.version_vector().partial_cmp(new.version_vector()),
+                new.is_local(),
+            ) {
                 // If both have identical versions, prefer the local one
                 (Some(Ordering::Less), _) | (Some(Ordering::Equal), true) => {
                     insert = true;
@@ -606,24 +639,6 @@ where
     }
 
     max
-}
-
-impl<'a> Iterator for Merge<'a> {
-    type Item = JointEntryRef<'a>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if !self.directories.is_empty() {
-            return JointDirectoryRef::new(mem::take(&mut self.directories))
-                .map(JointEntryRef::Directory);
-        }
-
-        let file = self.files.pop_front()?;
-
-        Some(JointEntryRef::File(JointFileRef {
-            file,
-            needs_disambiguation: self.needs_disambiguation,
-        }))
-    }
 }
 
 #[cfg(test)]
