@@ -777,6 +777,56 @@ async fn merge_missing_subdirectory() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn remove_non_empty_subdirectory() {
+    let branches = setup(2).await;
+
+    let local_root = branches[0].open_or_create_root().await.unwrap();
+    let local_dir = local_root.create_directory("dir0".into()).await.unwrap();
+    create_file(&local_dir, "foo.txt", &[]).await;
+
+    local_root
+        .create_directory("dir1".into())
+        .await
+        .unwrap()
+        .flush(None)
+        .await
+        .unwrap();
+
+    let remote_root = branches[1].open_or_create_root().await.unwrap();
+    let remote_dir = remote_root.create_directory("dir0".into()).await.unwrap();
+    create_file(&remote_dir, "bar.txt", &[]).await;
+
+    remote_root
+        .create_directory("dir2".into())
+        .await
+        .unwrap()
+        .flush(None)
+        .await
+        .unwrap();
+
+    let remote_root_on_local = branches[1].open_root(branches[0].clone()).await.unwrap();
+
+    let mut root = JointDirectory::new(vec![local_root.clone(), remote_root_on_local]).await;
+    root.remove_entry_recursively("dir0").await.unwrap();
+
+    let joint_reader = root.read().await;
+
+    assert_matches!(joint_reader.lookup("dir0").next(), None);
+    assert!(joint_reader.lookup("dir1").next().is_some());
+    assert!(joint_reader.lookup("dir2").next().is_some());
+
+    assert_matches!(
+        local_root.read().await.lookup("dir0").unwrap().next(),
+        Some(EntryRef::Tombstone(_))
+    );
+
+    assert_matches!(
+        local_root.read().await.lookup("dir1").unwrap().next(),
+        Some(EntryRef::Directory(_))
+    );
+}
+
 async fn setup(branch_count: usize) -> Vec<Branch> {
     setup_with_rng(StdRng::from_entropy(), branch_count).await
 }

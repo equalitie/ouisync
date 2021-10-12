@@ -129,7 +129,7 @@ impl JointDirectory {
             dir.remove_entries_recursively(Pattern::All).await?;
         }
 
-        self.remove_entries(Pattern::All).await
+        self.remove_entries(pattern).await
     }
 
     pub async fn flush(&mut self) -> Result<()> {
