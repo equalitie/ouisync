@@ -10,12 +10,13 @@ use crate::{
 };
 use async_recursion::async_recursion;
 use camino::{Utf8Component, Utf8Path};
+use either::Either;
 use futures_util::future;
 use std::{
     borrow::Cow,
     cmp::Ordering,
     collections::{BTreeMap, VecDeque},
-    fmt, mem,
+    fmt, iter, mem,
 };
 
 /// Unified view over multiple concurrent versions of a directory.
@@ -76,25 +77,56 @@ impl JointDirectory {
         Ok(curr.into_owned())
     }
 
+    /// Removes the specified entry from this directory. If the entry is a subdirectory, it has to
+    /// be empty. Use [Self::remove_entry_recursively] to remove non-empty subdirectories.
     pub async fn remove_entry(&mut self, name: &str) -> Result<()> {
+        self.remove_entries(Pattern::Unique(name)).await
+    }
+
+    /// Removes the specified entry from this directory, including all its content if it is a
+    /// subdirectory.
+    pub async fn remove_entry_recursively(&mut self, name: &str) -> Result<()> {
+        self.remove_entries_recursively(Pattern::Unique(name)).await
+    }
+
+    async fn remove_entries(&mut self, pattern: Pattern<'_>) -> Result<()> {
         let local = self.fork().await?;
-        let reader = self.read().await;
 
-        let entry = reader.lookup_unique(name)?;
+        let entries: Vec<_> = pattern
+            .apply(&self.read().await)?
+            .map(|entry| {
+                let name = entry.name().to_owned();
+                let author = *entry.author().unwrap_or_else(|| local.this_replica_id());
+                let vv = entry.version_vector().into_owned();
 
-        let author = match &entry {
-            JointEntryRef::File(entry) => *entry.author(),
-            JointEntryRef::Directory(_) => *local.this_replica_id(),
-        };
-
-        let vv = entry.version_vector().into_owned();
-
-        drop(reader);
+                (name, author, vv)
+            })
+            .collect();
 
         let mut local_writer = local.write().await;
 
-        local_writer.remove_entry(name, &author, vv, None).await?;
+        for (name, author, vv) in entries {
+            local_writer.remove_entry(&name, &author, vv, None).await?;
+        }
+
         local_writer.flush(None).await
+    }
+
+    #[async_recursion]
+    async fn remove_entries_recursively<'a>(&'a mut self, pattern: Pattern<'a>) -> Result<()> {
+        let dirs = future::try_join_all(
+            pattern
+                .apply(&self.read().await)?
+                .filter_map(|e| e.directory().ok())
+                .map(|e| async move { e.open(MissingVersionStrategy::Skip).await }),
+        )
+        .await?;
+
+        for mut dir in dirs {
+            dir.remove_entries_recursively(Pattern::All).await?;
+        }
+
+        self.remove_entries(Pattern::All).await
     }
 
     pub async fn flush(&mut self) -> Result<()> {
@@ -364,6 +396,14 @@ impl<'a> JointEntryRef<'a> {
         }
     }
 
+    // If this is `Directory`, returns `None` because a joint directory can have multiple authors.
+    pub fn author(&self) -> Option<&'a ReplicaId> {
+        match self {
+            Self::File(r) => Some(r.author()),
+            Self::Directory(_) => None,
+        }
+    }
+
     pub fn file(self) -> Result<FileRef<'a>> {
         match self {
             Self::File(r) => Ok(r.file),
@@ -410,7 +450,7 @@ impl<'a> JointFileRef<'a> {
         self.file.author()
     }
 
-    pub fn version_vector(&'a self) -> &'a VersionVector {
+    pub fn version_vector(&self) -> &'a VersionVector {
         self.file.version_vector()
     }
 
@@ -639,6 +679,24 @@ fn keep_maximal<E: Versioned>(entries: impl Iterator<Item = E>) -> Vec<E> {
     }
 
     max
+}
+
+enum Pattern<'a> {
+    // Fetch all entries
+    All,
+    // Fetch single entry that matches the given unique name
+    Unique(&'a str),
+}
+
+impl<'a> Pattern<'a> {
+    fn apply(&self, reader: &'a Reader) -> Result<impl Iterator<Item = JointEntryRef<'a>>> {
+        match self {
+            Self::All => Ok(Either::Left(reader.entries())),
+            Self::Unique(name) => reader
+                .lookup_unique(name)
+                .map(|entry| Either::Right(iter::once(entry))),
+        }
+    }
 }
 
 #[cfg(test)]
