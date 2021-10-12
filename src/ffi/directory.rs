@@ -67,7 +67,7 @@ pub unsafe extern "C" fn directory_open(
     })
 }
 
-/// Remove (delete) the directory at the given path from the repository.
+/// Removes the directory at the given path from the repository. The directory must be empty.
 #[no_mangle]
 pub unsafe extern "C" fn directory_remove(
     repo: SharedHandle<Repository>,
@@ -79,7 +79,23 @@ pub unsafe extern "C" fn directory_remove(
         let repo = repo.get();
         let path = utils::ptr_to_path_buf(path)?;
 
-        ctx.spawn(async move { repo.remove_entry(&path).await })
+        ctx.spawn(async move { repo.remove_entry(path).await })
+    })
+}
+
+/// Removes the directory at the given path including its content from the repository.
+#[no_mangle]
+pub unsafe extern "C" fn directory_remove_recursively(
+    repo: SharedHandle<Repository>,
+    path: *const c_char,
+    port: Port<()>,
+    error: *mut *mut c_char,
+) {
+    session::with(port, error, |ctx| {
+        let repo = repo.get();
+        let path = utils::ptr_to_path_buf(path)?;
+
+        ctx.spawn(async move { repo.remove_entry_recursively(path).await })
     })
 }
 

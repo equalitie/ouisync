@@ -148,7 +148,7 @@ impl<'a> FileRef<'a> {
         self.inner.author
     }
 
-    pub fn version_vector(&self) -> &VersionVector {
+    pub fn version_vector(&self) -> &'a VersionVector {
         &self.entry_data.version_vector
     }
 
