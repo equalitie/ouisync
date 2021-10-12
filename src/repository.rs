@@ -123,11 +123,19 @@ impl Repository {
             .await
     }
 
-    /// Removes (delete) the file or directory and flushes its parent directory.
+    /// Removes the file or directory (must be empty) and flushes its parent directory.
     pub async fn remove_entry<P: AsRef<Utf8Path>>(&self, path: P) -> Result<()> {
-        let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
+        let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::OperationNotSupported)?;
         let mut parent = self.open_directory(parent).await?;
         parent.remove_entry(name).await?;
+        parent.flush().await
+    }
+
+    /// Removes the file or directory (including its content) and flushes its parent directory.
+    pub async fn remove_entry_recursively<P: AsRef<Utf8Path>>(&self, path: P) -> Result<()> {
+        let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::OperationNotSupported)?;
+        let mut parent = self.open_directory(parent).await?;
+        parent.remove_entry_recursively(name).await?;
         parent.flush().await
     }
 
