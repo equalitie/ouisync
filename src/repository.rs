@@ -515,6 +515,7 @@ async fn merge_branches(local: Branch, remote: Branch) -> Result<()> {
 mod tests {
     use super::*;
     use crate::{db, index::RootNode};
+    use assert_matches::assert_matches;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn root_directory_always_exists() {
@@ -583,5 +584,80 @@ mod tests {
 
             rx.changed().await.unwrap()
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn recreate_previously_deleted_file() {
+        let local_id = rand::random();
+        let repo = Repository::open(&db::Store::Memory, local_id, Cryptor::Null, false)
+            .await
+            .unwrap();
+
+        // Create file
+        let mut file = repo.create_file("test.txt").await.unwrap();
+        file.write(b"foo").await.unwrap();
+        file.flush().await.unwrap();
+        drop(file);
+
+        // Read it back and check the content
+        let content = read_file(&repo, "test.txt").await;
+        assert_eq!(content, b"foo");
+
+        // Delete it and assert it's gone
+        repo.remove_entry("test.txt").await.unwrap();
+        assert_matches!(repo.open_file("test.txt").await, Err(Error::EntryNotFound));
+
+        // Create a file with the same name but different content
+        let mut file = repo.create_file("test.txt").await.unwrap();
+        file.write(b"bar").await.unwrap();
+        file.flush().await.unwrap();
+        drop(file);
+
+        // Read it back and check the content
+        let content = read_file(&repo, "test.txt").await;
+        assert_eq!(content, b"bar");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn recreate_previously_deleted_directory() {
+        let local_id = rand::random();
+        let repo = Repository::open(&db::Store::Memory, local_id, Cryptor::Null, false)
+            .await
+            .unwrap();
+
+        // Create dir
+        repo.create_directory("test")
+            .await
+            .unwrap()
+            .flush(None)
+            .await
+            .unwrap();
+
+        // Check it exists
+        assert_matches!(repo.open_directory("test").await, Ok(_));
+
+        // Delete it and assert it's gone
+        repo.remove_entry("test").await.unwrap();
+        assert_matches!(repo.open_directory("test").await, Err(Error::EntryNotFound));
+
+        // Create another directory with the same name
+        repo.create_directory("test")
+            .await
+            .unwrap()
+            .flush(None)
+            .await
+            .unwrap();
+
+        // Check it exists
+        assert_matches!(repo.open_directory("test").await, Ok(_))
+    }
+
+    async fn read_file(repo: &Repository, path: impl AsRef<Utf8Path>) -> Vec<u8> {
+        repo.open_file(path)
+            .await
+            .unwrap()
+            .read_to_end()
+            .await
+            .unwrap()
     }
 }
