@@ -618,7 +618,6 @@ mod tests {
         assert_eq!(content, b"bar");
     }
 
-    #[ignore] // FIXME
     #[tokio::test(flavor = "multi_thread")]
     async fn recreate_previously_deleted_directory() {
         let local_id = rand::random();

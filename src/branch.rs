@@ -4,7 +4,7 @@ use crate::{
     crypto::Cryptor,
     db,
     debug_printer::DebugPrinter,
-    directory::{Directory, RootDirectoryCache},
+    directory::{Directory, EntryRef, RootDirectoryCache},
     error::{Error, Result},
     file::File,
     index::BranchData,
@@ -66,11 +66,11 @@ impl Branch {
             match component {
                 Utf8Component::RootDir | Utf8Component::CurDir => (),
                 Utf8Component::Normal(name) => {
-                    let next = if let Ok(entry) = curr.read().await.lookup_version(name, self.id())
-                    {
-                        Some(entry.directory()?.open().await?)
-                    } else {
-                        None
+                    let next = match curr.read().await.lookup_version(name, self.id()) {
+                        Ok(EntryRef::Directory(entry)) => Some(entry.open().await?),
+                        Ok(EntryRef::File(_)) => return Err(Error::EntryIsFile),
+                        Ok(EntryRef::Tombstone(_)) | Err(Error::EntryNotFound) => None,
+                        Err(error) => return Err(error),
                     };
 
                     let next = if let Some(next) = next {
