@@ -182,14 +182,18 @@ impl Directory {
         if let Some(parent) = &inner.inner.parent {
             let parent_dir = parent.directory(self.local_branch.clone()).fork().await?;
 
-            if let Ok(entry) = parent_dir
+            match parent_dir
                 .read()
                 .await
                 .lookup_version(parent.entry_name(), self.local_branch.id())
             {
-                // TODO: if the local entry exists but is not a directory, we should still create
-                // the directory using its owner branch as the author.
-                return entry.directory()?.open().await;
+                Ok(EntryRef::Directory(entry)) => return entry.open().await,
+                Ok(EntryRef::File(_)) => {
+                    // FIXME: create the directory alongside the file somehow.
+                    return Err(Error::EntryIsFile);
+                }
+                Ok(EntryRef::Tombstone(_)) | Err(Error::EntryNotFound) => (),
+                Err(error) => return Err(error),
             }
 
             parent_dir

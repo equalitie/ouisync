@@ -406,6 +406,63 @@ async fn fork() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn fork_over_tombstone() {
+    let branches: [_; 2] = setup_multiple().await;
+
+    // Create a directory in branch 0 and delete it.
+    let root0 = branches[0].open_or_create_root().await.unwrap();
+    root0
+        .create_directory("dir".into())
+        .await
+        .unwrap()
+        .flush(None)
+        .await
+        .unwrap();
+    let vv = root0
+        .read()
+        .await
+        .lookup_version("dir", branches[0].id())
+        .unwrap()
+        .version_vector()
+        .clone();
+    root0
+        .remove_entry("dir", branches[0].id(), vv)
+        .await
+        .unwrap();
+
+    // Create a directory with the same name in branch 1.
+    let root1 = branches[1].open_or_create_root().await.unwrap();
+    root1
+        .create_directory("dir".into())
+        .await
+        .unwrap()
+        .flush(None)
+        .await
+        .unwrap();
+
+    // Open it by branch 0 and fork it.
+    let root1_on_0 = branches[1].open_root(branches[0].clone()).await.unwrap();
+    let dir1 = root1_on_0
+        .read()
+        .await
+        .lookup_version("dir", branches[1].id())
+        .unwrap()
+        .directory()
+        .unwrap()
+        .open()
+        .await
+        .unwrap();
+
+    dir1.fork().await.unwrap().flush(None).await.unwrap();
+
+    // Check the forked dir now exists in branch 0.
+    assert_matches!(
+        root0.read().await.lookup("dir").unwrap().next(),
+        Some(EntryRef::Directory(_))
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn modify_directory_concurrently() {
     let branch = setup().await;
     let root = branch.open_or_create_root().await.unwrap();
