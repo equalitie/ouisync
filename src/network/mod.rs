@@ -51,6 +51,10 @@ pub struct NetworkOptions {
     /// Enable local discovery
     #[structopt(short, long)]
     pub disable_local_discovery: bool,
+
+    /// Explicit list of IP:PORT pairs of peers to connect to
+    #[structopt(long)]
+    pub peers: Vec<SocketAddr>,
 }
 
 impl NetworkOptions {
@@ -65,6 +69,7 @@ impl Default for NetworkOptions {
             port: 0,
             bind: Ipv4Addr::UNSPECIFIED.into(),
             disable_local_discovery: false,
+            peers: Vec::new(),
         }
     }
 }
@@ -104,6 +109,10 @@ impl Network {
 
         if !options.disable_local_discovery {
             tasks.spawn(inner.clone().run_discovery(local_addr.port(), forget_rx));
+        }
+
+        for peer in &options.peers {
+            tasks.spawn(inner.clone().establish_outgoing_connection(*peer, None));
         }
 
         Ok(Self {
