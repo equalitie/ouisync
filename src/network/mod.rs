@@ -50,7 +50,7 @@ pub struct NetworkOptions {
 
     /// Enable local discovery
     #[structopt(short, long)]
-    pub enable_local_discovery: bool,
+    pub disable_local_discovery: bool,
 }
 
 impl NetworkOptions {
@@ -64,7 +64,7 @@ impl Default for NetworkOptions {
         Self {
             port: 0,
             bind: Ipv4Addr::UNSPECIFIED.into(),
-            enable_local_discovery: true,
+            disable_local_discovery: false,
         }
     }
 }
@@ -102,7 +102,7 @@ impl Network {
 
         tasks.spawn(inner.clone().run_listener(listener));
 
-        if options.enable_local_discovery {
+        if !options.disable_local_discovery {
             tasks.spawn(inner.clone().run_discovery(local_addr.port(), forget_rx));
         }
 
