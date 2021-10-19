@@ -99,8 +99,12 @@ impl Network {
         };
 
         let inner = Arc::new(inner);
-        tasks.spawn(inner.clone().run_discovery(local_addr.port(), forget_rx));
+
         tasks.spawn(inner.clone().run_listener(listener));
+
+        if options.enable_local_discovery {
+            tasks.spawn(inner.clone().run_discovery(local_addr.port(), forget_rx));
+        }
 
         Ok(Self {
             inner,
