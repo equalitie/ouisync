@@ -24,7 +24,7 @@ use crate::{
 };
 use futures_util::future;
 use std::{
-    collections::{hash_map::Entry, HashMap},
+    collections::{hash_map::Entry, HashMap, HashSet},
     io,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::Arc,
@@ -101,6 +101,7 @@ impl Network {
             indices: RwLock::new(IndexMap::default()),
             forget_tx,
             task_handle: tasks.handle().clone(),
+            user_provided_peers: RwLock::new(HashSet::new()),
         };
 
         let inner = Arc::new(inner);
@@ -112,7 +113,7 @@ impl Network {
         }
 
         for peer in &options.peers {
-            tasks.spawn(inner.clone().establish_outgoing_connection(*peer, None));
+            tasks.spawn(inner.clone().add_user_provided_peer(*peer));
         }
 
         Ok(Self {
@@ -193,6 +194,7 @@ struct Inner {
     indices: RwLock<IndexMap>,
     forget_tx: Sender<RuntimeId>,
     task_handle: ScopedTaskHandle,
+    user_provided_peers: RwLock<HashSet<SocketAddr>>,
 }
 
 impl Inner {
@@ -243,6 +245,39 @@ impl Inner {
         }
     }
 
+    async fn add_user_provided_peer(self: Arc<Self>, peer: SocketAddr) {
+        use std::time::Duration;
+
+        if !self.user_provided_peers.write().await.insert(peer) {
+            return;
+        }
+
+        let mut i: u32 = 0;
+
+        let socket = loop {
+            match TcpStream::connect(peer).await {
+                Ok(socket) => break socket,
+                Err(error) => {
+                    let sleep_duration = std::cmp::min(
+                        Duration::from_secs(5),
+                        Duration::from_millis(200 * 2u32.pow(i)),
+                    );
+                    log::debug!(
+                        "Failed to create outgoing TCP connection to {}: {}. Retrying in {:?}",
+                        peer,
+                        error,
+                        sleep_duration
+                    );
+                    tokio::time::sleep(sleep_duration).await;
+                    i += 1;
+                }
+            };
+        };
+
+        log::debug!("New outgoing TCP connection: {} (user provided)", peer);
+        self.handle_new_connection(socket, None).await
+    }
+
     async fn establish_outgoing_connection(
         self: Arc<Self>,
         addr: SocketAddr,
@@ -256,7 +291,7 @@ impl Inner {
             }
         };
 
-        log::debug!("New outgoing TCP connection: {}", addr);
+        log::debug!("New outgoing TCP connection: {} (local discovery)", addr);
 
         self.handle_new_connection(socket, discovery_id).await
     }
