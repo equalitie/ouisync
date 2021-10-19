@@ -20,6 +20,7 @@ use crate::{
     repository::Repository,
     scoped_task::{ScopedTaskHandle, ScopedTaskSet},
     tagged::{Local, Remote},
+    upnp,
 };
 use futures_util::future;
 use std::{
@@ -71,6 +72,7 @@ impl Default for NetworkOptions {
 pub struct Network {
     inner: Arc<Inner>,
     local_addr: SocketAddr,
+    port_forwarder: upnp::PortForwarder,
     _tasks: ScopedTaskSet,
 }
 
@@ -81,7 +83,11 @@ impl Network {
         let listener = TcpListener::bind(options.listen_addr())
             .await
             .map_err(Error::Network)?;
+
         let local_addr = listener.local_addr().map_err(Error::Network)?;
+
+        let port_forwarder = upnp::PortForwarder::new(local_addr.port());
+
         let (forget_tx, forget_rx) = mpsc::channel(1);
 
         let inner = Inner {
@@ -99,6 +105,7 @@ impl Network {
         Ok(Self {
             inner,
             local_addr,
+            port_forwarder,
             _tasks: tasks,
         })
     }
