@@ -30,12 +30,14 @@ impl PortForwarder {
     }
 
     async fn run(internal_port: u16, external_port: u16) -> Result<(), rupnp::Error> {
+        const DISCOVERY_DURATION: Duration = Duration::from_secs(3);
+
         // TODO: It would probably be better if we were specific here that we're looking for an IGD
         // device.
-        let devices = rupnp::discover(&SearchTarget::RootDevice, Duration::from_secs(3)).await?;
+        let devices = rupnp::discover(&SearchTarget::RootDevice, DISCOVERY_DURATION).await?;
         let mut devices = Box::pin(devices);
 
-        let mut tasks = Vec::new();
+        let mut handles = Vec::new();
 
         while let Some(device) = devices.try_next().await? {
             if let Some((service, version)) = find_connection_service(&device) {
@@ -47,14 +49,18 @@ impl PortForwarder {
                     version,
                 };
 
-                tasks.push(async move {
+                // NOTE: This `while` loop takes DISCOVERY_DURATION to finish no matter what. Thus
+                // if we spawn these tasks here they'll start right a way. As opposed to if we just
+                // created futures here and then they would start through the `join_all` call after
+                // the loop finishes.
+                handles.push(tokio::task::spawn(async move {
                     let r = per_igd_port_forwarder.run().await;
                     log::warn!("UPnP port forwarding on IGD ended ({:?})", r)
-                });
+                }));
             }
         }
 
-        futures::future::join_all(tasks).await;
+        futures::future::join_all(handles).await;
 
         Ok(())
     }
