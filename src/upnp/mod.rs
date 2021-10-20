@@ -5,7 +5,7 @@ use rupnp::{
     ssdp::{SearchTarget, URN},
     Service,
 };
-use std::{io, net, time::Duration};
+use std::{fmt, io, net, time::Duration};
 
 pub struct PortForwarder {
     tasks: ScopedTaskSet,
@@ -48,7 +48,6 @@ impl PortForwarder {
                 };
 
                 tasks.push(async move {
-                    //let r = keep_ports_open(&url, service, internal_port, external_port, version).await;
                     let r = per_igd_port_forwarder.run().await;
                     log::warn!("UPnP port forwarding on IGD ended ({:?})", r)
                 });
@@ -81,17 +80,30 @@ impl PerIGDPortForwarder {
         let lease_duration = Duration::from_secs(180);
         let sleep_duration = Duration::from_secs(170);
 
-        let mut user_informed = false;
+        let mut ext_port_reported = false;
+        let mut ext_addr_reported = false;
 
         loop {
             self.add_port_mapping(&local_ip, lease_duration).await?;
 
-            if !user_informed {
-                user_informed = true;
+            if !ext_port_reported {
+                ext_port_reported = true;
                 println!(
                     "UPnP port forwarding started on external port {}",
                     self.external_port
                 );
+            }
+
+            if !ext_addr_reported {
+                ext_addr_reported = true;
+                match self.get_external_ip_address().await {
+                    Ok(addr) => {
+                        println!("UPnP the external IP address is {}", addr);
+                    }
+                    Err(e) => {
+                        log::warn!("UPnP failed to retrieve external IP address: {:?}", e);
+                    }
+                }
             }
 
             tokio::time::sleep(sleep_duration).await;
@@ -141,6 +153,26 @@ impl PerIGDPortForwarder {
 
         Ok(())
     }
+
+    // For IGDv1 see Section 2.4.18 in
+    // https://openconnectivity.org/wp-content/uploads/2015/11/UPnP_IGD_WANIPConnection-1.0.pdf
+    //
+    // For IGDv2 see Section 2.5.20 in
+    // https://upnp.org/specs/gw/UPnP-gw-WANIPConnection-v2-Service.pdf
+    async fn get_external_ip_address(&self) -> Result<net::IpAddr, rupnp::Error> {
+        let result = self
+            .service
+            .action(&self.device_url, "GetExternalIPAddress", "")
+            .await?;
+
+        match result.get("NewExternalIPAddress") {
+            Some(addr) => match addr.parse::<net::IpAddr>() {
+                Ok(addr) => Ok(addr),
+                Err(_) => Err(InvalidResponse("failed to parse IP address").into()),
+            },
+            None => Err(InvalidResponse("response has no NewExternalIPAddress field").into()),
+        }
+    }
 }
 
 fn find_versioned_connection_service(
@@ -169,7 +201,17 @@ async fn local_address_to(url: &Uri) -> io::Result<net::IpAddr> {
     use std::net::SocketAddr;
 
     let remote_addr = {
-        if let Ok(addr) = url.host().unwrap().parse::<net::IpAddr>() {
+        let host = match url.host() {
+            Some(host) => host,
+            None => {
+                return Err(Error::new(
+                    ErrorKind::InvalidInput,
+                    format!("Failed to get the host part from URL {:?}", url),
+                ))
+            }
+        };
+
+        if let Ok(addr) = host.parse::<net::IpAddr>() {
             if let Some(port) = url.port_u16() {
                 SocketAddr::new(addr, port)
             } else {
@@ -197,4 +239,25 @@ async fn local_address_to(url: &Uri) -> io::Result<net::IpAddr> {
     let socket = tokio::net::UdpSocket::bind(any).await?;
     socket.connect(remote_addr).await?;
     socket.local_addr().map(|addr| addr.ip())
+}
+
+#[derive(Debug)]
+struct InvalidResponse(&'static str);
+
+impl From<InvalidResponse> for rupnp::Error {
+    fn from(err: InvalidResponse) -> Self {
+        rupnp::Error::invalid_response(err)
+    }
+}
+
+impl fmt::Display for InvalidResponse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl std::error::Error for InvalidResponse {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        None
+    }
 }

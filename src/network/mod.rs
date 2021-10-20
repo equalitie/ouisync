@@ -7,7 +7,6 @@ mod server;
 #[cfg(test)]
 mod tests;
 
-use async_recursion::async_recursion;
 use self::{
     message::RepositoryId,
     message_broker::MessageBroker,
@@ -23,13 +22,14 @@ use crate::{
     tagged::{Local, Remote},
     upnp,
 };
+use async_recursion::async_recursion;
 use futures_util::future;
 use std::{
     collections::{hash_map::Entry, HashMap, HashSet},
-    time::Duration,
     io,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::Arc,
+    time::Duration,
 };
 use structopt::StructOpt;
 use tokio::{
@@ -223,10 +223,8 @@ impl Inner {
 
         let discover_task = async {
             while let Some((id, addr)) = rx.recv().await {
-                self.task_handle.spawn(
-                    self.clone()
-                        .establish_discovered_connection(addr, id),
-                )
+                self.task_handle
+                    .spawn(self.clone().establish_discovered_connection(addr, id))
             }
         };
 
@@ -267,10 +265,7 @@ impl Inner {
     }
 
     #[async_recursion]
-    async fn establish_user_provided_connection(
-        self: Arc<Self>,
-        addr: SocketAddr,
-    ) {
+    async fn establish_user_provided_connection(self: Arc<Self>, addr: SocketAddr) {
         use std::cmp::min;
 
         let mut i: u32 = 0;
@@ -299,7 +294,8 @@ impl Inner {
         };
 
         log::info!("New outgoing TCP connection: {} (User provided)", addr);
-        self.handle_new_connection(socket, PeerSource::UserProvided(addr)).await
+        self.handle_new_connection(socket, PeerSource::UserProvided(addr))
+            .await
     }
 
     async fn establish_discovered_connection(
@@ -316,7 +312,8 @@ impl Inner {
         };
 
         log::info!("New outgoing TCP connection: {} (Locally discovered)", addr);
-        self.handle_new_connection(socket, PeerSource::LocalDiscovery(discovery_id)).await
+        self.handle_new_connection(socket, PeerSource::LocalDiscovery(discovery_id))
+            .await
     }
 
     async fn handle_new_connection(self: Arc<Self>, socket: TcpStream, peer_source: PeerSource) {
@@ -369,9 +366,9 @@ impl Inner {
                 //
                 // NOTE: For some reason if we don't spawn here (i.e. call the self.establish_...
                 // function directly), then the function halts on TcpStream::connect ¯\_(ツ)_/¯.
-                tokio::task::spawn(async move {
-                    self.establish_user_provided_connection(addr).await
-                });
+                tokio::task::spawn(
+                    async move { self.establish_user_provided_connection(addr).await },
+                );
             }
             PeerSource::Listener => {}
         }
