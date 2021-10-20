@@ -50,7 +50,7 @@ pub struct NetworkOptions {
     #[structopt(short, long, default_value = "0.0.0.0", value_name = "ip")]
     pub bind: IpAddr,
 
-    /// Enable local discovery
+    /// Disable local discovery
     #[structopt(short, long)]
     pub disable_local_discovery: bool,
 
