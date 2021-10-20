@@ -271,6 +271,8 @@ impl Inner {
         self: Arc<Self>,
         addr: SocketAddr,
     ) {
+        use std::cmp::min;
+
         let mut i: u32 = 0;
 
         let socket = loop {
@@ -280,9 +282,9 @@ impl Inner {
                 }
                 Err(error) => {
                     // TODO: Might be worth randomizing this somehow.
-                    let sleep_duration = std::cmp::min(
+                    let sleep_duration = min(
                         Duration::from_secs(5),
-                        Duration::from_millis(200 * 2u64.pow(i)),
+                        Duration::from_millis(200 * 2u64.pow(min(i, 10))),
                     );
                     log::debug!(
                         "Failed to create outgoing TCP connection to {}: {}. Retrying in {:?}",
