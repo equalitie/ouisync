@@ -54,6 +54,10 @@ pub struct NetworkOptions {
     #[structopt(short, long)]
     pub disable_local_discovery: bool,
 
+    /// Disable UPnP
+    #[structopt(long)]
+    pub disable_upnp: bool,
+
     /// Explicit list of IP:PORT pairs of peers to connect to
     #[structopt(long)]
     pub peers: Vec<SocketAddr>,
@@ -71,6 +75,7 @@ impl Default for NetworkOptions {
             port: 0,
             bind: Ipv4Addr::UNSPECIFIED.into(),
             disable_local_discovery: false,
+            disable_upnp: false,
             peers: Vec::new(),
         }
     }
@@ -79,7 +84,7 @@ impl Default for NetworkOptions {
 pub struct Network {
     inner: Arc<Inner>,
     local_addr: SocketAddr,
-    port_forwarder: upnp::PortForwarder,
+    port_forwarder: Option<upnp::PortForwarder>,
     _tasks: ScopedTaskSet,
 }
 
@@ -93,7 +98,11 @@ impl Network {
 
         let local_addr = listener.local_addr().map_err(Error::Network)?;
 
-        let port_forwarder = upnp::PortForwarder::new(local_addr.port());
+        let port_forwarder = if !options.disable_upnp {
+            Some(upnp::PortForwarder::new(local_addr.port()))
+        } else {
+            None
+        };
 
         let (forget_tx, forget_rx) = mpsc::channel(1);
 
