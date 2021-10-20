@@ -25,6 +25,7 @@ impl Bin {
             .arg("--mount")
             .arg(format!("test:{}", mount_dir.path().display()))
             .arg("--print-ready-message")
+            .arg("--disable-upnp")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
