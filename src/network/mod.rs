@@ -7,6 +7,7 @@ mod server;
 #[cfg(test)]
 mod tests;
 
+use async_recursion::async_recursion;
 use self::{
     message::RepositoryId,
     message_broker::MessageBroker,
@@ -25,6 +26,7 @@ use crate::{
 use futures_util::future;
 use std::{
     collections::{hash_map::Entry, HashMap, HashSet},
+    time::Duration,
     io,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::Arc,
@@ -188,6 +190,13 @@ impl Handle {
     }
 }
 
+#[derive(Debug)]
+enum PeerSource {
+    UserProvided(SocketAddr),
+    Listener,
+    LocalDiscovery(RuntimeId),
+}
+
 struct Inner {
     this_replica_id: ReplicaId,
     message_brokers: Mutex<HashMap<ReplicaId, MessageBroker>>,
@@ -214,8 +223,10 @@ impl Inner {
 
         let discover_task = async {
             while let Some((id, addr)) = rx.recv().await {
-                self.task_handle
-                    .spawn(self.clone().establish_outgoing_connection(addr, Some(id)))
+                self.task_handle.spawn(
+                    self.clone()
+                        .establish_discovered_connection(addr, id),
+                )
             }
         };
 
@@ -240,31 +251,42 @@ impl Inner {
 
             log::debug!("New incoming TCP connection: {}", addr);
 
-            self.task_handle
-                .spawn(self.clone().handle_new_connection(socket, None));
+            self.task_handle.spawn(
+                self.clone()
+                    .handle_new_connection(socket, PeerSource::Listener),
+            );
         }
     }
 
     async fn add_user_provided_peer(self: Arc<Self>, peer: SocketAddr) {
-        use std::time::Duration;
-
         if !self.user_provided_peers.write().await.insert(peer) {
             return;
         }
 
+        self.establish_user_provided_connection(peer).await
+    }
+
+    #[async_recursion]
+    async fn establish_user_provided_connection(
+        self: Arc<Self>,
+        addr: SocketAddr,
+    ) {
         let mut i: u32 = 0;
 
         let socket = loop {
-            match TcpStream::connect(peer).await {
-                Ok(socket) => break socket,
+            match TcpStream::connect(addr).await {
+                Ok(socket) => {
+                    break socket;
+                }
                 Err(error) => {
+                    // TODO: Might be worth randomizing this somehow.
                     let sleep_duration = std::cmp::min(
                         Duration::from_secs(5),
-                        Duration::from_millis(200 * 2u32.pow(i)),
+                        Duration::from_millis(200 * 2u64.pow(i)),
                     );
                     log::debug!(
                         "Failed to create outgoing TCP connection to {}: {}. Retrying in {:?}",
-                        peer,
+                        addr,
                         error,
                         sleep_duration
                     );
@@ -274,14 +296,14 @@ impl Inner {
             };
         };
 
-        log::debug!("New outgoing TCP connection: {} (user provided)", peer);
-        self.handle_new_connection(socket, None).await
+        log::info!("New outgoing TCP connection: {} (User provided)", addr);
+        self.handle_new_connection(socket, PeerSource::UserProvided(addr)).await
     }
 
-    async fn establish_outgoing_connection(
+    async fn establish_discovered_connection(
         self: Arc<Self>,
         addr: SocketAddr,
-        discovery_id: Option<RuntimeId>,
+        discovery_id: RuntimeId,
     ) {
         let socket = match TcpStream::connect(addr).await {
             Ok(socket) => socket,
@@ -291,16 +313,11 @@ impl Inner {
             }
         };
 
-        log::debug!("New outgoing TCP connection: {} (local discovery)", addr);
-
-        self.handle_new_connection(socket, discovery_id).await
+        log::info!("New outgoing TCP connection: {} (Locally discovered)", addr);
+        self.handle_new_connection(socket, PeerSource::LocalDiscovery(discovery_id)).await
     }
 
-    async fn handle_new_connection(
-        self: Arc<Self>,
-        socket: TcpStream,
-        discovery_id: Option<RuntimeId>,
-    ) {
+    async fn handle_new_connection(self: Arc<Self>, socket: TcpStream, peer_source: PeerSource) {
         let mut stream = TcpObjectStream::new(socket);
         let their_replica_id = match perform_handshake(&mut stream, &self.this_replica_id).await {
             Ok(replica_id) => replica_id,
@@ -320,7 +337,7 @@ impl Inner {
                 let broker = MessageBroker::new(
                     their_replica_id,
                     stream,
-                    Box::pin(self.clone().on_finish(their_replica_id, discovery_id)),
+                    Box::pin(self.clone().on_finish(their_replica_id, peer_source)),
                 )
                 .await;
 
@@ -333,13 +350,28 @@ impl Inner {
         }
     }
 
-    async fn on_finish(self: Arc<Self>, replica_id: ReplicaId, discovery_id: Option<RuntimeId>) {
+    async fn on_finish(self: Arc<Self>, replica_id: ReplicaId, peer_source: PeerSource) {
         log::info!("Disconnected from replica {:?}", replica_id);
 
         self.message_brokers.lock().await.remove(&replica_id);
 
-        if let Some(discovery_id) = discovery_id {
-            self.forget_tx.send(discovery_id).await.unwrap_or(())
+        match peer_source {
+            PeerSource::LocalDiscovery(discovery_id) => {
+                // LocalDiscovery keeps track of what peers it passed to us to avoid passing it
+                // multiple times. We now tell it to lose track of this particular peer so that
+                // next time it appears locally it'll let us know about it again.
+                self.forget_tx.send(discovery_id).await.unwrap_or(())
+            }
+            PeerSource::UserProvided(addr) => {
+                // We attempt to re-establish connections to user provided peers right a way.
+                //
+                // NOTE: For some reason if we don't spawn here (i.e. call the self.establish_...
+                // function directly), then the function halts on TcpStream::connect ¯\_(ツ)_/¯.
+                tokio::task::spawn(async move {
+                    self.establish_user_provided_connection(addr).await
+                });
+            }
+            PeerSource::Listener => {}
         }
     }
 }
