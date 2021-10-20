@@ -366,9 +366,7 @@ impl Inner {
                 //
                 // NOTE: For some reason if we don't spawn here (i.e. call the self.establish_...
                 // function directly), then the function halts on TcpStream::connect ¯\_(ツ)_/¯.
-                tokio::task::spawn(
-                    async move { self.establish_user_provided_connection(addr).await },
-                );
+                tokio::task::spawn(self.establish_user_provided_connection(addr));
             }
             PeerSource::Listener => {}
         }
