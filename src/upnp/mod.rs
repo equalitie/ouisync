@@ -188,9 +188,9 @@ async fn local_address_to(url: &Uri) -> io::Result<net::IpAddr> {
 
     let any: SocketAddr = {
         if remote_addr.ip().is_ipv4() {
-            ([0, 0, 0, 0], 0).into()
+            (net::Ipv4Addr::UNSPECIFIED, 0).into()
         } else {
-            ([0, 0, 0, 0, 0, 0, 0, 0], 0).into()
+            (net::Ipv6Addr::UNSPECIFIED, 0).into()
         }
     };
 
