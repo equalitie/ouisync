@@ -1,21 +1,24 @@
-use crate::scoped_task::ScopedTaskSet;
+use crate::scoped_task::ScopedJoinHandle;
 use futures::prelude::*;
 use http::Uri;
 use rupnp::{
     ssdp::{SearchTarget, URN},
     Service,
 };
-use std::{fmt, io, net, time::Duration};
+use std::{
+    collections::HashMap,
+    fmt, io, net,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 pub struct PortForwarder {
-    tasks: ScopedTaskSet,
+    task: ScopedJoinHandle<()>,
 }
 
 impl PortForwarder {
     pub fn new(port: u16) -> Self {
-        let tasks = ScopedTaskSet::default();
-
-        tasks.spawn(async move {
+        let task = ScopedJoinHandle(tokio::task::spawn(async move {
             log::info!(
                 "UPnP starting port forwarding: EXT:{} -> INT:{}",
                 port,
@@ -24,45 +27,58 @@ impl PortForwarder {
             let result = Self::run(port, port).await;
             // Warning, because we don't actually expect this to happen.
             log::warn!("UPnP port forwarding ended ({:?})", result)
-        });
+        }));
 
-        Self { tasks }
+        Self { task }
     }
 
     async fn run(internal_port: u16, external_port: u16) -> Result<(), rupnp::Error> {
         const DISCOVERY_DURATION: Duration = Duration::from_secs(3);
+        const SLEEP_DURATION: Duration = Duration::from_secs(10 * 60);
 
-        // TODO: It would probably be better if we were specific here that we're looking for an IGD
-        // device.
-        let devices = rupnp::discover(&SearchTarget::RootDevice, DISCOVERY_DURATION).await?;
-        let mut devices = Box::pin(devices);
+        let handles = Arc::new(Mutex::new(HashMap::new()));
 
-        let mut handles = Vec::new();
+        // Periodically check for new devices: maybe UPnP was enabled later after the app started,
+        // maybe the device was swapped for another one,...
+        loop {
+            // TODO: It would probably be better if we were specific here that we're looking for an IGD
+            // device.
+            let devices = rupnp::discover(&SearchTarget::RootDevice, DISCOVERY_DURATION).await?;
+            let mut devices = Box::pin(devices);
 
-        while let Some(device) = devices.try_next().await? {
-            if let Some((service, version)) = find_connection_service(&device) {
-                let per_igd_port_forwarder = PerIGDPortForwarder {
-                    device_url: device.url().clone(),
-                    service,
-                    internal_port,
-                    external_port,
-                    version,
-                };
+            while let Some(device) = devices.try_next().await? {
+                if let Some((service, version)) = find_connection_service(&device) {
+                    let url = device.url().clone();
 
-                // NOTE: This `while` loop takes DISCOVERY_DURATION to finish no matter what. Thus
-                // if we spawn these tasks here they'll start right a way. As opposed to if we just
-                // created futures here and then they would start through the `join_all` call after
-                // the loop finishes.
-                handles.push(tokio::task::spawn(async move {
-                    let r = per_igd_port_forwarder.run().await;
-                    log::warn!("UPnP port forwarding on IGD ended ({:?})", r)
-                }));
+                    let per_igd_port_forwarder = PerIGDPortForwarder {
+                        device_url: url.clone(),
+                        service,
+                        internal_port,
+                        external_port,
+                        version,
+                    };
+
+                    let weak_handles = Arc::downgrade(&handles);
+
+                    handles.lock().unwrap().entry(url).or_insert_with(|| {
+                        ScopedJoinHandle(tokio::task::spawn(async move {
+                            let r = per_igd_port_forwarder.run().await;
+
+                            log::warn!("UPnP port forwarding on IGD ended ({:?})", r);
+
+                            if let Some(handles) = weak_handles.upgrade() {
+                                handles
+                                    .lock()
+                                    .unwrap()
+                                    .remove(&per_igd_port_forwarder.device_url);
+                            }
+                        }))
+                    });
+                }
             }
+
+            tokio::time::sleep(SLEEP_DURATION).await;
         }
-
-        futures::future::join_all(handles).await;
-
-        Ok(())
     }
 }
 
@@ -80,7 +96,7 @@ struct PerIGDPortForwarder {
 }
 
 impl PerIGDPortForwarder {
-    async fn run(self) -> Result<(), rupnp::Error> {
+    async fn run(&self) -> Result<(), rupnp::Error> {
         let local_ip = local_address_to(&self.device_url).await?;
 
         let lease_duration = Duration::from_secs(180);
