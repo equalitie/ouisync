@@ -182,18 +182,15 @@ impl PerIGDPortForwarder {
     // For IGDv2 see Section 2.5.20 in
     // https://upnp.org/specs/gw/UPnP-gw-WANIPConnection-v2-Service.pdf
     async fn get_external_ip_address(&self) -> Result<net::IpAddr, rupnp::Error> {
-        let result = self
-            .service
+        self.service
             .action(&self.device_url, "GetExternalIPAddress", "")
-            .await?;
-
-        match result.get("NewExternalIPAddress") {
-            Some(addr) => match addr.parse::<net::IpAddr>() {
-                Ok(addr) => Ok(addr),
-                Err(_) => Err(InvalidResponse("failed to parse IP address").into()),
-            },
-            None => Err(InvalidResponse("response has no NewExternalIPAddress field").into()),
-        }
+            .await?
+            .get("NewExternalIPAddress")
+            .ok_or(InvalidResponse(
+                "response has no NewExternalIPAddress field",
+            ))?
+            .parse::<net::IpAddr>()
+            .map_err(|_| InvalidResponse("failed to parse IP address").into())
     }
 }
 
@@ -223,31 +220,28 @@ async fn local_address_to(url: &Uri) -> io::Result<net::IpAddr> {
     use std::net::SocketAddr;
 
     let remote_addr = {
-        let host = match url.host() {
-            Some(host) => host,
-            None => {
-                return Err(Error::new(
-                    ErrorKind::InvalidInput,
-                    format!("Failed to get the host part from URL {:?}", url),
-                ))
-            }
-        };
+        let host = url.host().ok_or_else(|| {
+            Error::new(
+                ErrorKind::InvalidInput,
+                format!("Failed to get the host part from URL {:?}", url),
+            )
+        })?;
 
-        if let Ok(addr) = host.parse::<net::IpAddr>() {
-            if let Some(port) = url.port_u16() {
-                SocketAddr::new(addr, port)
-            } else {
-                return Err(Error::new(
-                    ErrorKind::InvalidInput,
-                    format!("Failed to parse PORT from URL {:?}", url),
-                ));
-            }
-        } else {
-            return Err(Error::new(
+        let addr = host.parse::<net::IpAddr>().map_err(|_| {
+            Error::new(
                 ErrorKind::InvalidInput,
                 format!("Failed to parse IP from URL {:?}", url),
-            ));
-        }
+            )
+        })?;
+
+        let port = url.port_u16().ok_or_else(|| {
+            Error::new(
+                ErrorKind::InvalidInput,
+                format!("Failed to parse PORT from URL {:?}", url),
+            )
+        })?;
+
+        SocketAddr::new(addr, port)
     };
 
     let any: SocketAddr = {
