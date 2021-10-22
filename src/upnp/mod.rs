@@ -99,8 +99,9 @@ impl PerIGDPortForwarder {
     async fn run(&self) -> Result<(), rupnp::Error> {
         let local_ip = local_address_to(&self.device_url).await?;
 
-        let lease_duration = Duration::from_secs(180);
-        let sleep_duration = Duration::from_secs(170);
+        let lease_duration = Duration::from_secs(15 * 60);
+        let sleep_delta = Duration::from_secs(5);
+        let sleep_duration = lease_duration.saturating_sub(sleep_delta);
 
         let mut ext_port_reported = false;
         let mut ext_addr_reported = false;
@@ -129,6 +130,28 @@ impl PerIGDPortForwarder {
             }
 
             tokio::time::sleep(sleep_duration).await;
+
+            // We've seen IGD devices that refuse to update the lease if the previous lease has not
+            // yet ended. So what we're doing here is that we do attempt to do just that, but we
+            // also then wait until we know the previous lease ended and bump the lease again.
+            //
+            // This way, in the worst case, the buggy devices shall be unreachable with probability
+            //
+            // 2*sleep_delta/(lease_duration-sleep_delta)
+            //
+            // Hopefully that can be remedied by the client retrying the connection establishment.
+            //
+            // Note that there are two other possible workarounds for this problem, though neither
+            // of them is perfect:
+            //
+            // 1. If the lease_duration is zero, IGD devices _should_ interpret that as indefinite.
+            //    however we've seen devices which refuse to accept zero as the lease duration.
+            // 2. We could try to update the lease, and then confirm that the lease has indeed been
+            //    updated. Unfortunately, we've seen IGD devices which fail to report active
+            //    leases (or report only the first one in their list or some other random subset).
+            self.add_port_mapping(&local_ip, lease_duration).await?;
+
+            tokio::time::sleep(sleep_delta * 2).await;
         }
     }
 
