@@ -13,7 +13,7 @@ use std::{
 };
 
 pub struct PortForwarder {
-    task: ScopedJoinHandle<()>,
+    _task: ScopedJoinHandle<()>,
 }
 
 impl PortForwarder {
@@ -29,7 +29,7 @@ impl PortForwarder {
             log::warn!("UPnP port forwarding ended ({:?})", result)
         }));
 
-        Self { task }
+        Self { _task: task }
     }
 
     async fn run(internal_port: u16, external_port: u16) -> Result<(), rupnp::Error> {
@@ -55,7 +55,7 @@ impl PortForwarder {
                         service,
                         internal_port,
                         external_port,
-                        version,
+                        _version: version,
                     };
 
                     let weak_handles = Arc::downgrade(&handles);
@@ -92,7 +92,10 @@ struct PerIGDPortForwarder {
     service: Service,
     internal_port: u16,
     external_port: u16,
-    version: Version,
+    // Indicate whether we're talking to an IGDv1 or IGDv2 device. I though we might need it but
+    // currently we don't because the few calls we do are common for both versions. But keeping it
+    // here for posterity.
+    _version: Version,
 }
 
 impl PerIGDPortForwarder {

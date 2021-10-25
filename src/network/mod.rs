@@ -84,7 +84,7 @@ impl Default for NetworkOptions {
 pub struct Network {
     inner: Arc<Inner>,
     local_addr: SocketAddr,
-    port_forwarder: Option<upnp::PortForwarder>,
+    _port_forwarder: Option<upnp::PortForwarder>,
     _tasks: ScopedTaskSet,
 }
 
@@ -130,7 +130,7 @@ impl Network {
         Ok(Self {
             inner,
             local_addr,
-            port_forwarder,
+            _port_forwarder: port_forwarder,
             _tasks: tasks,
         })
     }
