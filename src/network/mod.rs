@@ -23,6 +23,7 @@ use crate::{
     upnp,
 };
 use async_recursion::async_recursion;
+use btdht::{DhtEvent, MainlineDht};
 use futures_util::future;
 use std::{
     collections::{hash_map::Entry, HashMap, HashSet},
@@ -33,12 +34,15 @@ use std::{
 };
 use structopt::StructOpt;
 use tokio::{
-    net::{TcpListener, TcpStream},
+    net::{self, TcpListener, TcpStream, UdpSocket},
     sync::{
         mpsc::{self, Receiver, Sender},
         Mutex, RwLock,
     },
 };
+
+// Hardcoded DHT routers to bootstrap the DHT against.
+const DHT_ROUTERS: &[&str] = &["router.bittorrent.com:6881", "dht.transmissionbt.com:6881"];
 
 #[derive(StructOpt, Debug)]
 pub struct NetworkOptions {
@@ -58,6 +62,10 @@ pub struct NetworkOptions {
     #[structopt(long)]
     pub disable_upnp: bool,
 
+    /// Disable DHT
+    #[structopt(long)]
+    pub disable_dht: bool,
+
     /// Explicit list of IP:PORT pairs of peers to connect to
     #[structopt(long)]
     pub peers: Vec<SocketAddr>,
@@ -76,6 +84,7 @@ impl Default for NetworkOptions {
             bind: Ipv4Addr::UNSPECIFIED.into(),
             disable_local_discovery: false,
             disable_upnp: false,
+            disable_dht: false,
             peers: Vec::new(),
         }
     }
@@ -120,12 +129,32 @@ impl Network {
         tasks.spawn(inner.clone().run_listener(listener));
 
         if !options.disable_local_discovery {
-            tasks.spawn(inner.clone().run_discovery(local_addr.port(), forget_rx));
+            tasks.spawn(
+                inner
+                    .clone()
+                    .run_local_discovery(local_addr.port(), forget_rx),
+            );
         }
 
         for peer in &options.peers {
             tasks.spawn(inner.clone().add_user_provided_peer(*peer));
         }
+
+        if !options.disable_dht {
+            // TODO: consider port-forward this socket as well.
+            let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))
+                .await
+                .map_err(Error::Network)?;
+
+            // TODO: load the DHT state from a previous save if it exists.
+            let (dht, event_rx) = MainlineDht::builder()
+                .add_routers(dht_router_addresses().await)
+                .set_read_only(false)
+                .set_announce_port(local_addr.port())
+                .start(socket);
+
+            tasks.spawn(inner.clone().run_dht(dht, event_rx));
+        };
 
         Ok(Self {
             inner,
@@ -216,7 +245,7 @@ struct Inner {
 }
 
 impl Inner {
-    async fn run_discovery(
+    async fn run_local_discovery(
         self: Arc<Self>,
         listener_port: u16,
         mut forget_rx: Receiver<RuntimeId>,
@@ -271,6 +300,14 @@ impl Inner {
         }
 
         self.establish_user_provided_connection(peer).await
+    }
+
+    async fn run_dht(
+        self: Arc<Self>,
+        _dht: MainlineDht,
+        _event_rx: mpsc::UnboundedReceiver<DhtEvent>,
+    ) {
+        // TODO
     }
 
     #[async_recursion]
@@ -431,4 +468,13 @@ async fn create_link(broker: &MessageBroker, id: RepositoryId, name: String, ind
     broker
         .create_link(index, local_id, local_name, remote_name)
         .await
+}
+
+async fn dht_router_addresses() -> Vec<SocketAddr> {
+    future::join_all(DHT_ROUTERS.iter().map(net::lookup_host))
+        .await
+        .into_iter()
+        .filter_map(|result| result.ok())
+        .flatten()
+        .collect()
 }

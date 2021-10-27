@@ -233,10 +233,10 @@ fn find_versioned_connection_service(
 }
 
 fn find_connection_service(device: &rupnp::DeviceSpec) -> Option<(rupnp::Service, Version)> {
-    find_versioned_connection_service(&device, 2)
+    find_versioned_connection_service(device, 2)
         .map(|service| (service.clone(), Version::V2))
         .or_else(|| {
-            find_versioned_connection_service(&device, 1)
+            find_versioned_connection_service(device, 1)
                 .map(|service| (service.clone(), Version::V1))
         })
 }
