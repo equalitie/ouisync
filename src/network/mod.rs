@@ -14,6 +14,7 @@ use self::{
     replica_discovery::{ReplicaDiscovery, RuntimeId},
 };
 use crate::{
+    crypto::Hashable,
     error::{Error, Result},
     index::Index,
     replica_id::ReplicaId,
@@ -23,10 +24,11 @@ use crate::{
     upnp,
 };
 use async_recursion::async_recursion;
-use btdht::{DhtEvent, MainlineDht};
+use btdht::{DhtEvent, InfoHash, MainlineDht, INFO_HASH_LEN};
 use futures_util::future;
 use std::{
-    collections::{hash_map::Entry, HashMap},
+    collections::{hash_map::Entry, HashMap, HashSet},
+    convert::TryFrom,
     io,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::Arc,
@@ -114,6 +116,24 @@ impl Network {
             None
         };
 
+        let (dht, dht_event_rx) = if !options.disable_dht {
+            // TODO: consider port-forward this socket as well.
+            let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))
+                .await
+                .map_err(Error::Network)?;
+
+            // TODO: load the DHT state from a previous save if it exists.
+            let (dht, event_rx) = MainlineDht::builder()
+                .add_routers(dht_router_addresses().await)
+                .set_read_only(false)
+                .set_announce_port(local_addr.port())
+                .start(socket);
+
+            (Some(dht), Some(event_rx))
+        } else {
+            (None, None)
+        };
+
         let (forget_tx, forget_rx) = mpsc::channel(1);
 
         let inner = Inner {
@@ -122,6 +142,7 @@ impl Network {
             indices: RwLock::new(IndexMap::default()),
             forget_tx,
             task_handle: tasks.handle().clone(),
+            dht,
         };
 
         let inner = Arc::new(inner);
@@ -140,21 +161,9 @@ impl Network {
             tasks.spawn(inner.clone().establish_user_provided_connection(*peer));
         }
 
-        if !options.disable_dht {
-            // TODO: consider port-forward this socket as well.
-            let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))
-                .await
-                .map_err(Error::Network)?;
-
-            // TODO: load the DHT state from a previous save if it exists.
-            let (dht, event_rx) = MainlineDht::builder()
-                .add_routers(dht_router_addresses().await)
-                .set_read_only(false)
-                .set_announce_port(local_addr.port())
-                .start(socket);
-
-            tasks.spawn(inner.clone().run_dht(dht, event_rx));
-        };
+        if let Some(event_rx) = dht_event_rx {
+            tasks.spawn(inner.clone().run_dht(event_rx));
+        }
 
         Ok(Self {
             inner,
@@ -220,6 +229,8 @@ impl Handle {
             }
         });
 
+        self.inner.find_peers_for_repository(name);
+
         true
     }
 
@@ -233,6 +244,7 @@ enum PeerSource {
     UserProvided(SocketAddr),
     Listener,
     LocalDiscovery(RuntimeId),
+    Dht,
 }
 
 struct Inner {
@@ -241,6 +253,7 @@ struct Inner {
     indices: RwLock<IndexMap>,
     forget_tx: Sender<RuntimeId>,
     task_handle: ScopedTaskHandle,
+    dht: Option<MainlineDht>,
 }
 
 impl Inner {
@@ -293,42 +306,57 @@ impl Inner {
         }
     }
 
-    async fn run_dht(
-        self: Arc<Self>,
-        _dht: MainlineDht,
-        _event_rx: mpsc::UnboundedReceiver<DhtEvent>,
-    ) {
-        // TODO
+    async fn run_dht(self: Arc<Self>, mut event_rx: mpsc::UnboundedReceiver<DhtEvent>) {
+        // To deduplicate found peers.
+        let mut lookups: HashMap<_, HashSet<_>> = HashMap::new();
+
+        while let Some(event) = event_rx.recv().await {
+            match event {
+                DhtEvent::BootstrapCompleted => log::info!("DHT bootstrap complete"),
+                DhtEvent::BootstrapFailed => {
+                    log::error!("DHT bootstrap failed");
+                    break;
+                }
+                DhtEvent::PeerFound(info_hash, addr) => {
+                    log::debug!("DHT found peer for {:?}: {}", info_hash, addr);
+                    lookups.entry(info_hash).or_default().insert(addr);
+                }
+                DhtEvent::LookupCompleted(info_hash) => {
+                    log::debug!("DHT lookup for {:?} complete", info_hash);
+
+                    for addr in lookups.remove(&info_hash).unwrap_or_default() {
+                        self.task_handle
+                            .spawn(self.clone().establish_dht_connection(addr));
+                    }
+                }
+            }
+        }
+    }
+
+    // Start DHT lookup for the peers that have the specified repository.
+    // TODO: use some unique id instead of name.
+    fn find_peers_for_repository(&self, name: &str) {
+        let dht = if let Some(dht) = &self.dht {
+            dht
+        } else {
+            return;
+        };
+
+        // Calculate the info hash by hashing the name with SHA-256 and taking the first 20 bytes.
+        // (bittorrent uses SHA-1 but that is less secure).
+        // `unwrap` is OK because the byte slice has the correct length.
+        let info_hash =
+            InfoHash::try_from(&name.as_bytes().hash().as_ref()[..INFO_HASH_LEN]).unwrap();
+
+        // find peers for the repo and also announce that we have it.
+        dht.search(info_hash, true);
+
+        // TODO: periodically re-announce the info-hash.
     }
 
     #[async_recursion]
     async fn establish_user_provided_connection(self: Arc<Self>, addr: SocketAddr) {
-        use std::cmp::min;
-
-        let mut i: u32 = 0;
-
-        let socket = loop {
-            match TcpStream::connect(addr).await {
-                Ok(socket) => {
-                    break socket;
-                }
-                Err(error) => {
-                    // TODO: Might be worth randomizing this somehow.
-                    let sleep_duration = min(
-                        Duration::from_secs(5),
-                        Duration::from_millis(200 * 2u64.pow(min(i, 10))),
-                    );
-                    log::debug!(
-                        "Failed to create outgoing TCP connection to {}: {}. Retrying in {:?}",
-                        addr,
-                        error,
-                        sleep_duration
-                    );
-                    time::sleep(sleep_duration).await;
-                    i += 1;
-                }
-            };
-        };
+        let socket = self.keep_connecting(addr).await;
 
         log::info!("New outgoing TCP connection: {} (User provided)", addr);
         self.handle_new_connection(socket, PeerSource::UserProvided(addr))
@@ -351,6 +379,39 @@ impl Inner {
         log::info!("New outgoing TCP connection: {} (Locally discovered)", addr);
         self.handle_new_connection(socket, PeerSource::LocalDiscovery(discovery_id))
             .await
+    }
+
+    async fn establish_dht_connection(self: Arc<Self>, addr: SocketAddr) {
+        // TODO: we should timeout this
+        let socket = self.keep_connecting(addr).await;
+
+        log::info!("New outgoing TCP connection: {} (Found via DHT)", addr);
+        self.handle_new_connection(socket, PeerSource::Dht).await
+    }
+
+    async fn keep_connecting(&self, addr: SocketAddr) -> TcpStream {
+        let mut i = 0;
+
+        loop {
+            match TcpStream::connect(addr).await {
+                Ok(socket) => {
+                    return socket;
+                }
+                Err(error) => {
+                    // TODO: Might be worth randomizing this somehow.
+                    let sleep_duration = Duration::from_secs(5)
+                        .min(Duration::from_millis(200 * 2u64.pow(i.min(10))));
+                    log::debug!(
+                        "Failed to create outgoing TCP connection to {}: {}. Retrying in {:?}",
+                        addr,
+                        error,
+                        sleep_duration
+                    );
+                    time::sleep(sleep_duration).await;
+                    i = i.saturating_add(1);
+                }
+            }
+        }
     }
 
     async fn handle_new_connection(self: Arc<Self>, socket: TcpStream, peer_source: PeerSource) {
@@ -405,7 +466,7 @@ impl Inner {
                 // function directly), then the function halts on TcpStream::connect ¯\_(ツ)_/¯.
                 task::spawn(self.establish_user_provided_connection(addr));
             }
-            PeerSource::Listener => {}
+            PeerSource::Listener | PeerSource::Dht => {}
         }
     }
 }
