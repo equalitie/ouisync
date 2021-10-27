@@ -26,7 +26,7 @@ use async_recursion::async_recursion;
 use btdht::{DhtEvent, MainlineDht};
 use futures_util::future;
 use std::{
-    collections::{hash_map::Entry, HashMap, HashSet},
+    collections::{hash_map::Entry, HashMap},
     io,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::Arc,
@@ -39,6 +39,7 @@ use tokio::{
         mpsc::{self, Receiver, Sender},
         Mutex, RwLock,
     },
+    task, time,
 };
 
 // Hardcoded DHT routers to bootstrap the DHT against.
@@ -121,7 +122,6 @@ impl Network {
             indices: RwLock::new(IndexMap::default()),
             forget_tx,
             task_handle: tasks.handle().clone(),
-            user_provided_peers: RwLock::new(HashSet::new()),
         };
 
         let inner = Arc::new(inner);
@@ -137,7 +137,7 @@ impl Network {
         }
 
         for peer in &options.peers {
-            tasks.spawn(inner.clone().add_user_provided_peer(*peer));
+            tasks.spawn(inner.clone().establish_user_provided_connection(*peer));
         }
 
         if !options.disable_dht {
@@ -241,7 +241,6 @@ struct Inner {
     indices: RwLock<IndexMap>,
     forget_tx: Sender<RuntimeId>,
     task_handle: ScopedTaskHandle,
-    user_provided_peers: RwLock<HashSet<SocketAddr>>,
 }
 
 impl Inner {
@@ -294,14 +293,6 @@ impl Inner {
         }
     }
 
-    async fn add_user_provided_peer(self: Arc<Self>, peer: SocketAddr) {
-        if !self.user_provided_peers.write().await.insert(peer) {
-            return;
-        }
-
-        self.establish_user_provided_connection(peer).await
-    }
-
     async fn run_dht(
         self: Arc<Self>,
         _dht: MainlineDht,
@@ -333,7 +324,7 @@ impl Inner {
                         error,
                         sleep_duration
                     );
-                    tokio::time::sleep(sleep_duration).await;
+                    time::sleep(sleep_duration).await;
                     i += 1;
                 }
             };
@@ -412,7 +403,7 @@ impl Inner {
                 //
                 // NOTE: For some reason if we don't spawn here (i.e. call the self.establish_...
                 // function directly), then the function halts on TcpStream::connect ¯\_(ツ)_/¯.
-                tokio::task::spawn(self.establish_user_provided_connection(addr));
+                task::spawn(self.establish_user_provided_connection(addr));
             }
             PeerSource::Listener => {}
         }
