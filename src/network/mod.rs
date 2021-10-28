@@ -1,4 +1,5 @@
 mod client;
+mod connection;
 mod message;
 mod message_broker;
 mod object_stream;
