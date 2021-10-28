@@ -237,7 +237,7 @@ enum PeerSource {
     UserProvided(SocketAddr),
     Listener,
     LocalDiscovery,
-    Dht,
+    Dht(InfoHash),
 }
 
 struct Inner {
@@ -310,7 +310,7 @@ impl Inner {
 
                     for addr in lookups.remove(&info_hash).unwrap_or_default() {
                         self.task_handle
-                            .spawn(self.clone().establish_dht_connection(addr));
+                            .spawn(self.clone().establish_dht_connection(addr, info_hash));
                     }
                 }
             }
@@ -326,11 +326,7 @@ impl Inner {
             return;
         };
 
-        // Calculate the info hash by hashing the name with SHA-256 and taking the first 20 bytes.
-        // (bittorrent uses SHA-1 but that is less secure).
-        // `unwrap` is OK because the byte slice has the correct length.
-        let info_hash =
-            InfoHash::try_from(&name.as_bytes().hash().as_ref()[..INFO_HASH_LEN]).unwrap();
+        let info_hash = repository_info_hash(name);
 
         // find peers for the repo and also announce that we have it.
         dht.search(info_hash, true);
@@ -381,7 +377,7 @@ impl Inner {
             .await
     }
 
-    async fn establish_dht_connection(self: Arc<Self>, addr: SocketAddr) {
+    async fn establish_dht_connection(self: Arc<Self>, addr: SocketAddr, info_hash: InfoHash) {
         let permit = if let Some(permit) = self
             .connection_deduplicator
             .reserve(addr, ConnectionDirection::Outgoing)
@@ -395,7 +391,7 @@ impl Inner {
         let socket = self.keep_connecting(addr).await;
 
         log::info!("New outgoing TCP connection: {} (Found via DHT)", addr);
-        self.handle_new_connection(socket, PeerSource::Dht, permit)
+        self.handle_new_connection(socket, PeerSource::Dht(info_hash), permit)
             .await
     }
 
@@ -427,7 +423,7 @@ impl Inner {
     async fn handle_new_connection(
         self: Arc<Self>,
         socket: TcpStream,
-        _peer_source: PeerSource,
+        peer_source: PeerSource,
         permit: ConnectionPermit,
     ) {
         let mut stream = TcpObjectStream::new(socket);
@@ -450,9 +446,18 @@ impl Inner {
 
                 let broker = MessageBroker::new(their_replica_id, stream, permit).await;
 
-                // TODO: if this is a DHT connection, only link the repository for which we did the
-                // DHT lookup.
                 for (id, holder) in &self.indices.read().await.map {
+                    // If this is a DHT connection, only link the repository for which we did the
+                    // DHT lookup.
+                    if let PeerSource::Dht(peer_info_hash) = &peer_source {
+                        // We might consider caching the info hashes so we don't have to recalculate
+                        // them every time. On the other hand, new connections are typically not
+                        // created very often, so it probably wouldn't make much difference.
+                        if *peer_info_hash != repository_info_hash(&holder.name) {
+                            continue;
+                        }
+                    }
+
                     create_link(&broker, *id, holder.name.clone(), holder.index.clone()).await;
                 }
 
@@ -520,4 +525,13 @@ async fn dht_router_addresses() -> Vec<SocketAddr> {
         .filter_map(|result| result.ok())
         .flatten()
         .collect()
+}
+
+// Calculate info hash for a repository name.
+// TODO: use some random unique id, not name.
+fn repository_info_hash(name: &str) -> InfoHash {
+    // Calculate the info hash by hashing the name with SHA-256 and taking the first 20 bytes.
+    // (bittorrent uses SHA-1 but that is less secure).
+    // `unwrap` is OK because the byte slice has the correct length.
+    InfoHash::try_from(&name.as_bytes().hash().as_ref()[..INFO_HASH_LEN]).unwrap()
 }
