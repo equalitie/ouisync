@@ -69,9 +69,11 @@ impl ReplicaDiscovery {
             };
 
             match message {
-                Message::ImHereYouAll { id, .. } if id == self.id => continue,
+                Message::ImHereYouAll { id, .. } | Message::Reply { id, .. } if id == self.id => {
+                    continue
+                }
                 Message::ImHereYouAll { port, .. } => break (port, true, addr),
-                Message::Reply { port } => break (port, false, addr),
+                Message::Reply { port, .. } => break (port, false, addr),
             }
         };
 
@@ -81,6 +83,7 @@ impl ReplicaDiscovery {
                 &self.socket,
                 &Message::Reply {
                     port: self.listener_port,
+                    id: self.id,
                 },
                 addr,
             )
@@ -142,5 +145,5 @@ async fn send(socket: &UdpSocket, message: &Message, addr: SocketAddr) -> io::Re
 #[derive(Serialize, Deserialize, Debug)]
 enum Message {
     ImHereYouAll { id: RuntimeId, port: u16 },
-    Reply { port: u16 },
+    Reply { id: RuntimeId, port: u16 },
 }
