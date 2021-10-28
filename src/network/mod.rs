@@ -251,8 +251,7 @@ struct Inner {
 
 impl Inner {
     async fn run_local_discovery(self: Arc<Self>, listener_port: u16) {
-        let (tx, mut rx) = mpsc::channel(1);
-        let _discovery = match ReplicaDiscovery::new(listener_port, tx) {
+        let discovery = match ReplicaDiscovery::new(listener_port) {
             Ok(discovery) => discovery,
             Err(error) => {
                 log::error!("Failed to create ReplicaDiscovery: {}", error);
@@ -260,7 +259,7 @@ impl Inner {
             }
         };
 
-        while let Some(addr) = rx.recv().await {
+        while let Some(addr) = discovery.recv().await {
             self.task_handle
                 .spawn(self.clone().establish_discovered_connection(addr))
         }
