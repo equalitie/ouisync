@@ -1,5 +1,4 @@
 use crate::scoped_task::ScopedTaskSet;
-use lru::LruCache;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -8,13 +7,8 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use tokio::sync::{mpsc::Sender, Mutex};
+use tokio::sync::mpsc::Sender;
 use tokio::time::sleep;
-
-/// ID of this replica runtime, it is different from the ReplicaId because it is generated randomly
-/// on each ReplicaDiscovery instantiation.
-const ID_LEN: usize = 16; // 128 bits
-pub type RuntimeId = [u8; ID_LEN];
 
 // Selected at random but to not clash with some reserved ones:
 // https://www.iana.org/assignments/multicast-addresses/multicast-addresses.xhtml
@@ -33,12 +27,10 @@ impl ReplicaDiscovery {
     /// LRU cache so as to not re-report it too frequently. Once the peer disconnects, the user of
     /// `ReplicaDiscovery` should call `forget` with the `RuntimeId` and the replica shall start
     /// reporting it again.
-    pub fn new(listener_port: u16, tx: Sender<(RuntimeId, SocketAddr)>) -> io::Result<Self> {
+    pub fn new(listener_port: u16, tx: Sender<SocketAddr>) -> io::Result<Self> {
         let inner = Arc::new(Inner {
-            id: rand::random(),
             listener_port,
             socket: Self::create_multicast_socket()?,
-            seen: Mutex::new(LruCache::new(256)),
         });
 
         let tasks = ScopedTaskSet::default();
@@ -70,10 +62,8 @@ impl ReplicaDiscovery {
 }
 
 struct Inner {
-    id: RuntimeId,
     listener_port: u16,
     socket: tokio::net::UdpSocket,
-    seen: Mutex<LruCache<RuntimeId, ()>>,
 }
 
 impl Inner {
@@ -91,7 +81,7 @@ impl Inner {
         }
     }
 
-    async fn run_receiver(self: Arc<Self>, tx: Sender<(RuntimeId, SocketAddr)>) {
+    async fn run_receiver(self: Arc<Self>, tx: Sender<SocketAddr>) {
         let mut recv_buffer = vec![0; 4096];
 
         loop {
@@ -111,24 +101,10 @@ impl Inner {
                 }
             };
 
-            let (is_rq, id, listener_port) = match r {
-                Message::ImHereYouAll { id, port } => (true, id, port),
-                Message::Reply { id, port } => (false, id, port),
+            let (is_rq, listener_port) = match r {
+                Message::ImHereYouAll { port } => (true, port),
+                Message::Reply { port } => (false, port),
             };
-
-            if id == self.id {
-                continue;
-            }
-
-            {
-                let mut seen = self.seen.lock().await;
-
-                if seen.get(&id).is_some() {
-                    continue;
-                }
-
-                seen.put(id, ());
-            }
 
             if is_rq {
                 if let Err(error) = self.send(&self.reply(), addr).await {
@@ -138,7 +114,7 @@ impl Inner {
             }
 
             let replica_addr = SocketAddr::new(addr.ip(), listener_port);
-            tx.send((id, replica_addr)).await.unwrap_or(());
+            tx.send(replica_addr).await.unwrap_or(());
         }
     }
 
@@ -150,14 +126,12 @@ impl Inner {
 
     fn query(&self) -> Message {
         Message::ImHereYouAll {
-            id: self.id,
             port: self.listener_port,
         }
     }
 
     fn reply(&self) -> Message {
         Message::Reply {
-            id: self.id,
             port: self.listener_port,
         }
     }
@@ -165,6 +139,6 @@ impl Inner {
 
 #[derive(Serialize, Deserialize, Debug)]
 enum Message {
-    ImHereYouAll { id: RuntimeId, port: u16 },
-    Reply { id: RuntimeId, port: u16 },
+    ImHereYouAll { port: u16 },
+    Reply { port: u16 },
 }

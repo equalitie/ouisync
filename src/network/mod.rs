@@ -13,7 +13,7 @@ use self::{
     message::RepositoryId,
     message_broker::MessageBroker,
     object_stream::TcpObjectStream,
-    replica_discovery::{ReplicaDiscovery, RuntimeId},
+    replica_discovery::ReplicaDiscovery,
 };
 use crate::{
     crypto::Hashable,
@@ -236,7 +236,7 @@ impl Handle {
 enum PeerSource {
     UserProvided(SocketAddr),
     Listener,
-    LocalDiscovery(RuntimeId),
+    LocalDiscovery,
     Dht,
 }
 
@@ -260,9 +260,9 @@ impl Inner {
             }
         };
 
-        while let Some((id, addr)) = rx.recv().await {
+        while let Some(addr) = rx.recv().await {
             self.task_handle
-                .spawn(self.clone().establish_discovered_connection(addr, id))
+                .spawn(self.clone().establish_discovered_connection(addr))
         }
     }
 
@@ -359,11 +359,7 @@ impl Inner {
             .await
     }
 
-    async fn establish_discovered_connection(
-        self: Arc<Self>,
-        addr: SocketAddr,
-        discovery_id: RuntimeId,
-    ) {
+    async fn establish_discovered_connection(self: Arc<Self>, addr: SocketAddr) {
         let permit = if let Some(permit) = self
             .connection_deduplicator
             .reserve(addr, ConnectionDirection::Outgoing)
@@ -382,7 +378,7 @@ impl Inner {
         };
 
         log::info!("New outgoing TCP connection: {} (Locally discovered)", addr);
-        self.handle_new_connection(socket, PeerSource::LocalDiscovery(discovery_id), permit)
+        self.handle_new_connection(socket, PeerSource::LocalDiscovery, permit)
             .await
     }
 
