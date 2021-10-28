@@ -477,6 +477,8 @@ impl Inner {
             }
         }
 
+        drop(brokers);
+
         released.notified().await;
         log::info!("{} TCP connection lost: {}", peer_source.display(), addr);
     }
