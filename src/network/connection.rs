@@ -12,7 +12,7 @@ use std::{
 };
 use tokio::{
     select,
-    sync::{mpsc, Mutex},
+    sync::{mpsc, Mutex, Notify},
     task,
 };
 
@@ -166,6 +166,7 @@ impl ConnectionDeduplicator {
             connections: self.connections.clone(),
             key,
             id,
+            drop_notify: Arc::new(Notify::new()),
         })
     }
 }
@@ -182,6 +183,7 @@ pub(super) struct ConnectionPermit {
     connections: Arc<SyncMutex<HashMap<ConnectionKey, u64>>>,
     key: ConnectionKey,
     id: u64,
+    drop_notify: Arc<Notify>,
 }
 
 impl ConnectionPermit {
@@ -196,9 +198,15 @@ impl ConnectionPermit {
                 connections: self.connections.clone(),
                 key: self.key,
                 id: self.id,
+                drop_notify: self.drop_notify.clone(),
             }),
             ConnectionPermitHalf(self),
         )
+    }
+
+    /// Returns a `Notify` that gets notified when this permit gets released.
+    pub fn released(&self) -> Arc<Notify> {
+        self.drop_notify.clone()
     }
 }
 
@@ -209,6 +217,8 @@ impl Drop for ConnectionPermit {
                 entry.remove();
             }
         }
+
+        self.drop_notify.notify_one()
     }
 }
 

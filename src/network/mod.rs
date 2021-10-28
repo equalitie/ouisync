@@ -25,7 +25,6 @@ use crate::{
     tagged::{Local, Remote},
     upnp,
 };
-use async_recursion::async_recursion;
 use btdht::{DhtEvent, InfoHash, MainlineDht, INFO_HASH_LEN};
 use futures_util::future;
 use std::{
@@ -334,24 +333,29 @@ impl Inner {
         // TODO: periodically re-announce the info-hash.
     }
 
-    #[async_recursion]
     async fn establish_user_provided_connection(self: Arc<Self>, addr: SocketAddr) {
-        // TODO: keep re-establishing the connection after it gets closed.
+        loop {
+            let permit = if let Some(permit) = self
+                .connection_deduplicator
+                .reserve(addr, ConnectionDirection::Outgoing)
+            {
+                permit
+            } else {
+                return;
+            };
 
-        let permit = if let Some(permit) = self
-            .connection_deduplicator
-            .reserve(addr, ConnectionDirection::Outgoing)
-        {
-            permit
-        } else {
-            return;
-        };
+            let socket = self.keep_connecting(addr).await;
+            let released = permit.released();
 
-        let socket = self.keep_connecting(addr).await;
+            log::info!("New outgoing TCP connection: {} (User provided)", addr);
+            self.clone()
+                .handle_new_connection(socket, PeerSource::UserProvided(addr), permit)
+                .await;
 
-        log::info!("New outgoing TCP connection: {} (User provided)", addr);
-        self.handle_new_connection(socket, PeerSource::UserProvided(addr), permit)
-            .await
+            // Wait for the permit to be released - which means the connection got dropped - and
+            // try to re-establish it again.
+            released.notified().await;
+        }
     }
 
     async fn establish_discovered_connection(self: Arc<Self>, addr: SocketAddr) {
