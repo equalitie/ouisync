@@ -3,10 +3,11 @@ use super::{
     object_stream::{TcpObjectReader, TcpObjectWriter},
 };
 use std::{
-    collections::HashMap,
+    collections::{hash_map::Entry, HashMap},
+    net::SocketAddr,
     sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc,
+        atomic::{AtomicU64, AtomicUsize, Ordering},
+        Arc, Mutex as SyncMutex,
     },
 };
 use tokio::{
@@ -127,5 +128,53 @@ impl MultiWriter {
             .iter()
             .next()
             .map(|(k, v)| (*k, v.clone()))
+    }
+}
+
+/// Prevents establishing duplicate connections.
+pub(super) struct ConnectionDeduplicator {
+    next_id: AtomicU64,
+    connections: Arc<SyncMutex<HashMap<SocketAddr, u64>>>,
+}
+
+impl ConnectionDeduplicator {
+    pub fn new() -> Self {
+        Self {
+            next_id: AtomicU64::new(0),
+            connections: Arc::new(SyncMutex::new(HashMap::new())),
+        }
+    }
+
+    pub fn claim(&self, addr: SocketAddr) -> Option<ConnectionClaim> {
+        let id = if let Entry::Vacant(entry) = self.connections.lock().unwrap().entry(addr) {
+            let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+            entry.insert(id);
+            id
+        } else {
+            return None;
+        };
+
+        Some(ConnectionClaim {
+            connections: self.connections.clone(),
+            addr,
+            id,
+        })
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct ConnectionClaim {
+    connections: Arc<SyncMutex<HashMap<SocketAddr, u64>>>,
+    addr: SocketAddr,
+    id: u64,
+}
+
+impl Drop for ConnectionClaim {
+    fn drop(&mut self) {
+        if let Entry::Occupied(entry) = self.connections.lock().unwrap().entry(self.addr) {
+            if *entry.get() == self.id {
+                entry.remove();
+            }
+        }
     }
 }
