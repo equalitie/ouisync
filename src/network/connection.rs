@@ -145,7 +145,10 @@ impl ConnectionDeduplicator {
         }
     }
 
-    pub fn claim(&self, addr: SocketAddr) -> Option<ConnectionClaim> {
+    /// Attempt to reserve a connection to the given peer. If the connection hasn't been reserved
+    /// yet, it returns a `ConnectionPermit` which keeps the connection reserved as long as it
+    /// lives. Otherwise it returns `None`. To release a connection the permit needs to be dropped.
+    pub fn reserve(&self, addr: SocketAddr) -> Option<ConnectionPermit> {
         let id = if let Entry::Vacant(entry) = self.connections.lock().unwrap().entry(addr) {
             let id = self.next_id.fetch_add(1, Ordering::Relaxed);
             entry.insert(id);
@@ -154,7 +157,7 @@ impl ConnectionDeduplicator {
             return None;
         };
 
-        Some(ConnectionClaim {
+        Some(ConnectionPermit {
             connections: self.connections.clone(),
             addr,
             id,
@@ -162,14 +165,33 @@ impl ConnectionDeduplicator {
     }
 }
 
-#[derive(Clone)]
-pub(super) struct ConnectionClaim {
+/// Connection permit that prevents another connection to the same peer (socket address) to be
+/// established as long as it remains in scope.
+pub(super) struct ConnectionPermit {
     connections: Arc<SyncMutex<HashMap<SocketAddr, u64>>>,
     addr: SocketAddr,
     id: u64,
 }
 
-impl Drop for ConnectionClaim {
+impl ConnectionPermit {
+    /// Split the permit into two halves where dropping any of them releases the whole permit.
+    /// This is useful when the connection needs to be split into a reader and a writer Then if any
+    /// of them closes, the whole connection closes. So both the reader and the writer should be
+    /// associated with one half of the permit so that when any of them closes, the permit is
+    /// released.
+    pub fn split(self) -> (ConnectionPermitHalf, ConnectionPermitHalf) {
+        (
+            ConnectionPermitHalf(Self {
+                connections: self.connections.clone(),
+                addr: self.addr,
+                id: self.id,
+            }),
+            ConnectionPermitHalf(self),
+        )
+    }
+}
+
+impl Drop for ConnectionPermit {
     fn drop(&mut self) {
         if let Entry::Occupied(entry) = self.connections.lock().unwrap().entry(self.addr) {
             if *entry.get() == self.id {
@@ -178,3 +200,7 @@ impl Drop for ConnectionClaim {
         }
     }
 }
+
+/// Half of a connection permit. Dropping it drops the whole permit.
+/// See [`ConnectionPermit::split`] for more details.
+pub(super) struct ConnectionPermitHalf(ConnectionPermit);
