@@ -26,6 +26,7 @@ impl Bin {
             .arg(format!("test:{}", mount_dir.path().display()))
             .arg("--print-ready-message")
             .arg("--disable-upnp")
+            .arg("--disable-dht")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()

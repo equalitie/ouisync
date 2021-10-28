@@ -450,6 +450,8 @@ impl Inner {
 
                 let broker = MessageBroker::new(their_replica_id, stream, permit).await;
 
+                // TODO: if this is a DHT connection, only link the repository for which we did the
+                // DHT lookup.
                 for (id, holder) in &self.indices.read().await.map {
                     create_link(&broker, *id, holder.name.clone(), holder.index.clone()).await;
                 }

@@ -14,12 +14,15 @@ use tokio::{net::UdpSocket, task, time::sleep};
 const MULTICAST_ADDR: Ipv4Addr = Ipv4Addr::new(224, 0, 0, 137);
 const MULTICAST_PORT: u16 = 9271;
 
+// Random ID sent with every message, used to prevent self-discovery.
+type RuntimeId = [u8; 16];
+
 // Poor man's local discovery using UDP multicast.
 // XXX: We should probably use mDNS, but so far all libraries I tried had some issues.
 pub struct ReplicaDiscovery {
+    id: RuntimeId,
     listener_port: u16,
     socket: Arc<UdpSocket>,
-    socket_addr: SocketAddr,
     _beacon_handle: ScopedJoinHandle<()>,
 }
 
@@ -29,17 +32,18 @@ impl ReplicaDiscovery {
     /// `ReplicaDiscovery` should call `forget` with the `RuntimeId` and the replica shall start
     /// reporting it again.
     pub fn new(listener_port: u16) -> io::Result<Self> {
+        let id = rand::random();
+
         let socket = create_multicast_socket()?;
         let socket = Arc::new(socket);
-        let socket_addr = socket.local_addr()?;
 
-        let beacon_handle = task::spawn(run_beacon(socket.clone(), listener_port));
+        let beacon_handle = task::spawn(run_beacon(socket.clone(), id, listener_port));
         let beacon_handle = ScopedJoinHandle(beacon_handle);
 
         Ok(Self {
+            id,
             listener_port,
             socket,
-            socket_addr,
             _beacon_handle: beacon_handle,
         })
     }
@@ -47,7 +51,7 @@ impl ReplicaDiscovery {
     pub async fn recv(&self) -> Option<SocketAddr> {
         let mut recv_buffer = [0; 64];
 
-        let (message, addr) = loop {
+        let (port, is_request, addr) = loop {
             let (size, addr) = match self.socket.recv_from(&mut recv_buffer).await {
                 Ok(pair) => pair,
                 Err(error) => {
@@ -56,26 +60,22 @@ impl ReplicaDiscovery {
                 }
             };
 
-            // This is us, ignore.
-            if addr == self.socket_addr {
-                continue;
-            }
-
-            match bincode::deserialize(&recv_buffer[..size]) {
-                Ok(message) => break (message, addr),
+            let message = match bincode::deserialize(&recv_buffer[..size]) {
+                Ok(message) => message,
                 Err(error) => {
                     log::error!("Malformed discovery message: {}", error);
                     continue;
                 }
+            };
+
+            match message {
+                Message::ImHereYouAll { id, .. } if id == self.id => continue,
+                Message::ImHereYouAll { port, .. } => break (port, true, addr),
+                Message::Reply { port } => break (port, false, addr),
             }
         };
 
-        let (is_rq, listener_port) = match message {
-            Message::ImHereYouAll { port } => (true, port),
-            Message::Reply { port } => (false, port),
-        };
-
-        if is_rq {
+        if is_request {
             // TODO: Consider `spawn`ing this, so it doesn't block this function.
             if let Err(error) = send(
                 &self.socket,
@@ -90,7 +90,7 @@ impl ReplicaDiscovery {
             }
         }
 
-        Some(SocketAddr::new(addr.ip(), listener_port))
+        Some(SocketAddr::new(addr.ip(), port))
     }
 }
 
@@ -110,13 +110,14 @@ fn create_multicast_socket() -> io::Result<tokio::net::UdpSocket> {
     tokio::net::UdpSocket::from_std(sync_socket)
 }
 
-async fn run_beacon(socket: Arc<UdpSocket>, listener_port: u16) {
+async fn run_beacon(socket: Arc<UdpSocket>, id: RuntimeId, listener_port: u16) {
     let multicast_endpoint = SocketAddr::new(MULTICAST_ADDR.into(), MULTICAST_PORT);
 
     loop {
         if let Err(error) = send(
             &socket,
             &Message::ImHereYouAll {
+                id,
                 port: listener_port,
             },
             multicast_endpoint,
@@ -140,6 +141,6 @@ async fn send(socket: &UdpSocket, message: &Message, addr: SocketAddr) -> io::Re
 
 #[derive(Serialize, Deserialize, Debug)]
 enum Message {
-    ImHereYouAll { port: u16 },
+    ImHereYouAll { id: RuntimeId, port: u16 },
     Reply { port: u16 },
 }
