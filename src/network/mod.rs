@@ -231,12 +231,24 @@ impl Handle {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 enum PeerSource {
-    UserProvided(SocketAddr),
+    UserProvided,
     Listener,
     LocalDiscovery,
     Dht(InfoHash),
+}
+
+impl PeerSource {
+    // TODO: consider `Display` impl instead
+    fn display(&self) -> &'static str {
+        match self {
+            PeerSource::Listener => "incoming",
+            PeerSource::UserProvided => "outgoing (user provided)",
+            PeerSource::LocalDiscovery => "outgoing (locally discovered)",
+            PeerSource::Dht(_) => "outgoing (found via DHT)",
+        }
+    }
 }
 
 struct Inner {
@@ -278,13 +290,11 @@ impl Inner {
                 .connection_deduplicator
                 .reserve(addr, ConnectionDirection::Incoming)
             {
-                log::debug!("New incoming TCP connection: {}", addr);
-
                 self.task_handle.spawn(self.clone().handle_new_connection(
                     socket,
                     PeerSource::Listener,
                     permit,
-                ));
+                ))
             }
         }
     }
@@ -345,16 +355,10 @@ impl Inner {
             };
 
             let socket = self.keep_connecting(addr).await;
-            let released = permit.released();
 
-            log::info!("New outgoing TCP connection: {} (User provided)", addr);
             self.clone()
-                .handle_new_connection(socket, PeerSource::UserProvided(addr), permit)
+                .handle_new_connection(socket, PeerSource::UserProvided, permit)
                 .await;
-
-            // Wait for the permit to be released - which means the connection got dropped - and
-            // try to re-establish it again.
-            released.notified().await;
         }
     }
 
@@ -376,9 +380,8 @@ impl Inner {
             }
         };
 
-        log::info!("New outgoing TCP connection: {} (Locally discovered)", addr);
         self.handle_new_connection(socket, PeerSource::LocalDiscovery, permit)
-            .await
+            .await;
     }
 
     async fn establish_dht_connection(self: Arc<Self>, addr: SocketAddr, info_hash: InfoHash) {
@@ -394,9 +397,8 @@ impl Inner {
         // TODO: we should give up after a timeout
         let socket = self.keep_connecting(addr).await;
 
-        log::info!("New outgoing TCP connection: {} (Found via DHT)", addr);
         self.handle_new_connection(socket, PeerSource::Dht(info_hash), permit)
-            .await
+            .await;
     }
 
     async fn keep_connecting(&self, addr: SocketAddr) -> TcpStream {
@@ -430,6 +432,10 @@ impl Inner {
         peer_source: PeerSource,
         permit: ConnectionPermit,
     ) {
+        let addr = permit.addr();
+
+        log::info!("new {} TCP connection: {}", peer_source.display(), addr);
+
         let mut stream = TcpObjectStream::new(socket);
         let their_replica_id = match perform_handshake(&mut stream, &self.this_replica_id).await {
             Ok(replica_id) => replica_id,
@@ -440,6 +446,8 @@ impl Inner {
         };
 
         // TODO: prevent self-connections.
+
+        let released = permit.released();
 
         let mut brokers = self.message_brokers.lock().await;
 
@@ -468,6 +476,9 @@ impl Inner {
                 entry.insert(broker);
             }
         }
+
+        released.notified().await;
+        log::info!("{} TCP connection lost: {}", peer_source.display(), addr);
     }
 }
 

@@ -152,6 +152,7 @@ impl ConnectionDeduplicator {
     /// Attempt to reserve an connection to the given peer. If the connection hasn't been reserved
     /// yet, it returns a `ConnectionPermit` which keeps the connection reserved as long as it
     /// lives. Otherwise it returns `None`. To release a connection the permit needs to be dropped.
+    /// Also returns a notification object that can be used to wait until the permit gets released.
     pub fn reserve(&self, addr: SocketAddr, dir: ConnectionDirection) -> Option<ConnectionPermit> {
         let key = ConnectionKey { addr, dir };
         let id = if let Entry::Vacant(entry) = self.connections.lock().unwrap().entry(key) {
@@ -166,7 +167,7 @@ impl ConnectionDeduplicator {
             connections: self.connections.clone(),
             key,
             id,
-            drop_notify: Arc::new(Notify::new()),
+            notify: Arc::new(Notify::new()),
         })
     }
 }
@@ -183,7 +184,7 @@ pub(super) struct ConnectionPermit {
     connections: Arc<SyncMutex<HashMap<ConnectionKey, u64>>>,
     key: ConnectionKey,
     id: u64,
-    drop_notify: Arc<Notify>,
+    notify: Arc<Notify>,
 }
 
 impl ConnectionPermit {
@@ -198,7 +199,7 @@ impl ConnectionPermit {
                 connections: self.connections.clone(),
                 key: self.key,
                 id: self.id,
-                drop_notify: self.drop_notify.clone(),
+                notify: self.notify.clone(),
             }),
             ConnectionPermitHalf(self),
         )
@@ -206,7 +207,11 @@ impl ConnectionPermit {
 
     /// Returns a `Notify` that gets notified when this permit gets released.
     pub fn released(&self) -> Arc<Notify> {
-        self.drop_notify.clone()
+        self.notify.clone()
+    }
+
+    pub fn addr(&self) -> SocketAddr {
+        self.key.addr
     }
 }
 
@@ -218,7 +223,7 @@ impl Drop for ConnectionPermit {
             }
         }
 
-        self.drop_notify.notify_one()
+        self.notify.notify_one()
     }
 }
 
