@@ -52,14 +52,6 @@ impl ReplicaDiscovery {
         })
     }
 
-    ///
-    /// Remove the id of the remote replica from the LRU cache so frequent announcment can start
-    /// happening again.
-    ///
-    pub async fn forget(&self, id: &RuntimeId) {
-        self.inner.seen.lock().await.pop(id);
-    }
-
     fn create_multicast_socket() -> io::Result<tokio::net::UdpSocket> {
         // Using net2 because, std::net, nor async_std::net nor tokio::net lets
         // one set reuse_address(true) before "binding" the socket.

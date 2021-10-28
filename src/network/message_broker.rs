@@ -1,6 +1,6 @@
 use super::{
     client::Client,
-    connection::{MultiReader, MultiWriter},
+    connection::{ConnectionPermit, MultiReader, MultiWriter},
     message::{Message, RepositoryId, Request, Response},
     object_stream::TcpObjectStream,
     server::Server,
@@ -16,7 +16,6 @@ use std::{
     collections::{hash_map::Entry, HashMap},
     fmt,
     future::Future,
-    pin::Pin,
 };
 use tokio::{
     select,
@@ -99,8 +98,6 @@ fn into_message<T: From<Message>>(command: Command) -> T {
     command.into_send_message().into()
 }
 
-type OnFinish = Pin<Box<dyn Future<Output = ()> + Send>>;
-
 /// Maintains one or more connections to a peer, listening on all of them at the same time. Note
 /// that at the present all the connections are TCP based and so dropping some of them would make
 /// sense. However, in the future we may also have other transports (e.g. Bluetooth) and thus
@@ -109,7 +106,7 @@ type OnFinish = Pin<Box<dyn Future<Output = ()> + Send>>;
 /// Once a message is received, it is determined whether it is a request or a response. Based on
 /// that it either goes to the ClientStream or ServerStream for processing by the Client and Server
 /// structures respectively.
-pub(crate) struct MessageBroker {
+pub(super) struct MessageBroker {
     command_tx: mpsc::Sender<Command>,
     _join_handle: ScopedJoinHandle<()>,
 }
@@ -118,7 +115,7 @@ impl MessageBroker {
     pub async fn new(
         their_replica_id: ReplicaId,
         stream: TcpObjectStream,
-        on_finish: OnFinish,
+        permit: ConnectionPermit,
     ) -> Self {
         let (command_tx, command_rx) = mpsc::channel(1);
 
@@ -130,9 +127,9 @@ impl MessageBroker {
             links: RwLock::new(Links::new()),
         };
 
-        inner.add_connection(stream);
+        inner.add_connection(stream, permit);
 
-        let handle = task::spawn(inner.run(command_rx, on_finish));
+        let handle = task::spawn(inner.run(command_rx));
 
         Self {
             command_tx,
@@ -140,8 +137,9 @@ impl MessageBroker {
         }
     }
 
-    pub async fn add_connection(&self, stream: TcpObjectStream) {
-        self.send_command(Command::AddConnection(stream)).await
+    pub async fn add_connection(&self, stream: TcpObjectStream, permit: ConnectionPermit) {
+        self.send_command(Command::AddConnection(stream, permit))
+            .await
     }
 
     /// Try to establish a link between a local repository and a remote repository. The remote
@@ -188,7 +186,7 @@ struct Inner {
 }
 
 impl Inner {
-    async fn run(self, mut command_rx: mpsc::Receiver<Command>, on_finish: OnFinish) {
+    async fn run(self, mut command_rx: mpsc::Receiver<Command>) {
         // NOTE: it might be tempting to rewrite this code to something like:
         //
         //     loop {
@@ -229,14 +227,12 @@ impl Inner {
             _ = command_task => (),
             _ = message_task => (),
         }
-
-        on_finish.await
     }
 
     async fn handle_command(&self, command: Command) -> bool {
         match command {
-            Command::AddConnection(stream) => {
-                self.add_connection(stream);
+            Command::AddConnection(stream, permit) => {
+                self.add_connection(stream, permit);
                 true
             }
             Command::SendMessage(message) => self.send_message(message).await,
@@ -271,10 +267,12 @@ impl Inner {
         }
     }
 
-    fn add_connection(&self, stream: TcpObjectStream) {
+    fn add_connection(&self, stream: TcpObjectStream, permit: ConnectionPermit) {
         let (reader, writer) = stream.into_split();
-        self.reader.add(reader);
-        self.writer.add(writer);
+        let (reader_permit, writer_permit) = permit.split();
+
+        self.reader.add(reader, reader_permit);
+        self.writer.add(writer, writer_permit);
     }
 
     async fn send_message(&self, message: Message) -> bool {
@@ -418,7 +416,7 @@ where
 }
 
 pub(super) enum Command {
-    AddConnection(TcpObjectStream),
+    AddConnection(TcpObjectStream, ConnectionPermit),
     SendMessage(Message),
     CreateLink {
         index: Index,
@@ -443,7 +441,7 @@ impl Command {
 impl fmt::Debug for Command {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::AddConnection(_) => f
+            Self::AddConnection(..) => f
                 .debug_tuple("AddConnection")
                 .field(&format_args!("_"))
                 .finish(),

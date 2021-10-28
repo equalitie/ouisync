@@ -9,6 +9,7 @@ mod server;
 mod tests;
 
 use self::{
+    connection::{ConnectionDeduplicator, ConnectionDirection, ConnectionPermit},
     message::RepositoryId,
     message_broker::MessageBroker,
     object_stream::TcpObjectStream,
@@ -38,11 +39,8 @@ use std::{
 use structopt::StructOpt;
 use tokio::{
     net::{self, TcpListener, TcpStream, UdpSocket},
-    sync::{
-        mpsc::{self, Receiver, Sender},
-        Mutex, RwLock,
-    },
-    task, time,
+    sync::{mpsc, Mutex, RwLock},
+    time,
 };
 
 // Hardcoded DHT routers to bootstrap the DHT against.
@@ -135,15 +133,13 @@ impl Network {
             (None, None)
         };
 
-        let (forget_tx, forget_rx) = mpsc::channel(1);
-
         let inner = Inner {
             this_replica_id,
             message_brokers: Mutex::new(HashMap::new()),
             indices: RwLock::new(IndexMap::default()),
-            forget_tx,
             task_handle: tasks.handle().clone(),
             dht,
+            connection_deduplicator: ConnectionDeduplicator::new(),
         };
 
         let inner = Arc::new(inner);
@@ -151,11 +147,7 @@ impl Network {
         tasks.spawn(inner.clone().run_listener(listener));
 
         if !options.disable_local_discovery {
-            tasks.spawn(
-                inner
-                    .clone()
-                    .run_local_discovery(local_addr.port(), forget_rx),
-            );
+            tasks.spawn(inner.clone().run_local_discovery(local_addr.port()));
         }
 
         for peer in &options.peers {
@@ -252,19 +244,15 @@ struct Inner {
     this_replica_id: ReplicaId,
     message_brokers: Mutex<HashMap<ReplicaId, MessageBroker>>,
     indices: RwLock<IndexMap>,
-    forget_tx: Sender<RuntimeId>,
     task_handle: ScopedTaskHandle,
     dht: Option<MainlineDht>,
+    connection_deduplicator: ConnectionDeduplicator,
 }
 
 impl Inner {
-    async fn run_local_discovery(
-        self: Arc<Self>,
-        listener_port: u16,
-        mut forget_rx: Receiver<RuntimeId>,
-    ) {
+    async fn run_local_discovery(self: Arc<Self>, listener_port: u16) {
         let (tx, mut rx) = mpsc::channel(1);
-        let discovery = match ReplicaDiscovery::new(listener_port, tx) {
+        let _discovery = match ReplicaDiscovery::new(listener_port, tx) {
             Ok(discovery) => discovery,
             Err(error) => {
                 log::error!("Failed to create ReplicaDiscovery: {}", error);
@@ -272,20 +260,10 @@ impl Inner {
             }
         };
 
-        let discover_task = async {
-            while let Some((id, addr)) = rx.recv().await {
-                self.task_handle
-                    .spawn(self.clone().establish_discovered_connection(addr, id))
-            }
-        };
-
-        let forget_task = async {
-            while let Some(id) = forget_rx.recv().await {
-                discovery.forget(&id).await;
-            }
-        };
-
-        future::join(discover_task, forget_task).await;
+        while let Some((id, addr)) = rx.recv().await {
+            self.task_handle
+                .spawn(self.clone().establish_discovered_connection(addr, id))
+        }
     }
 
     async fn run_listener(self: Arc<Self>, listener: TcpListener) {
@@ -298,12 +276,18 @@ impl Inner {
                 }
             };
 
-            log::debug!("New incoming TCP connection: {}", addr);
+            if let Some(permit) = self
+                .connection_deduplicator
+                .reserve(addr, ConnectionDirection::Incoming)
+            {
+                log::debug!("New incoming TCP connection: {}", addr);
 
-            self.task_handle.spawn(
-                self.clone()
-                    .handle_new_connection(socket, PeerSource::Listener),
-            );
+                self.task_handle.spawn(self.clone().handle_new_connection(
+                    socket,
+                    PeerSource::Listener,
+                    permit,
+                ));
+            }
         }
     }
 
@@ -357,10 +341,21 @@ impl Inner {
 
     #[async_recursion]
     async fn establish_user_provided_connection(self: Arc<Self>, addr: SocketAddr) {
+        // TODO: keep re-establishing the connection after it gets closed.
+
+        let permit = if let Some(permit) = self
+            .connection_deduplicator
+            .reserve(addr, ConnectionDirection::Outgoing)
+        {
+            permit
+        } else {
+            return;
+        };
+
         let socket = self.keep_connecting(addr).await;
 
         log::info!("New outgoing TCP connection: {} (User provided)", addr);
-        self.handle_new_connection(socket, PeerSource::UserProvided(addr))
+        self.handle_new_connection(socket, PeerSource::UserProvided(addr), permit)
             .await
     }
 
@@ -369,6 +364,15 @@ impl Inner {
         addr: SocketAddr,
         discovery_id: RuntimeId,
     ) {
+        let permit = if let Some(permit) = self
+            .connection_deduplicator
+            .reserve(addr, ConnectionDirection::Outgoing)
+        {
+            permit
+        } else {
+            return;
+        };
+
         let socket = match TcpStream::connect(addr).await {
             Ok(socket) => socket,
             Err(error) => {
@@ -378,16 +382,26 @@ impl Inner {
         };
 
         log::info!("New outgoing TCP connection: {} (Locally discovered)", addr);
-        self.handle_new_connection(socket, PeerSource::LocalDiscovery(discovery_id))
+        self.handle_new_connection(socket, PeerSource::LocalDiscovery(discovery_id), permit)
             .await
     }
 
     async fn establish_dht_connection(self: Arc<Self>, addr: SocketAddr) {
-        // TODO: we should timeout this
+        let permit = if let Some(permit) = self
+            .connection_deduplicator
+            .reserve(addr, ConnectionDirection::Outgoing)
+        {
+            permit
+        } else {
+            return;
+        };
+
+        // TODO: we should give up after a timeout
         let socket = self.keep_connecting(addr).await;
 
         log::info!("New outgoing TCP connection: {} (Found via DHT)", addr);
-        self.handle_new_connection(socket, PeerSource::Dht).await
+        self.handle_new_connection(socket, PeerSource::Dht, permit)
+            .await
     }
 
     async fn keep_connecting(&self, addr: SocketAddr) -> TcpStream {
@@ -415,7 +429,12 @@ impl Inner {
         }
     }
 
-    async fn handle_new_connection(self: Arc<Self>, socket: TcpStream, peer_source: PeerSource) {
+    async fn handle_new_connection(
+        self: Arc<Self>,
+        socket: TcpStream,
+        _peer_source: PeerSource,
+        permit: ConnectionPermit,
+    ) {
         let mut stream = TcpObjectStream::new(socket);
         let their_replica_id = match perform_handshake(&mut stream, &self.this_replica_id).await {
             Ok(replica_id) => replica_id,
@@ -425,19 +444,16 @@ impl Inner {
             }
         };
 
+        // TODO: prevent self-connections.
+
         let mut brokers = self.message_brokers.lock().await;
 
         match brokers.entry(their_replica_id) {
-            Entry::Occupied(entry) => entry.get().add_connection(stream).await,
+            Entry::Occupied(entry) => entry.get().add_connection(stream, permit).await,
             Entry::Vacant(entry) => {
                 log::info!("Connected to replica {:?}", their_replica_id);
 
-                let broker = MessageBroker::new(
-                    their_replica_id,
-                    stream,
-                    Box::pin(self.clone().on_finish(their_replica_id, peer_source)),
-                )
-                .await;
+                let broker = MessageBroker::new(their_replica_id, stream, permit).await;
 
                 for (id, holder) in &self.indices.read().await.map {
                     create_link(&broker, *id, holder.name.clone(), holder.index.clone()).await;
@@ -445,29 +461,6 @@ impl Inner {
 
                 entry.insert(broker);
             }
-        }
-    }
-
-    async fn on_finish(self: Arc<Self>, replica_id: ReplicaId, peer_source: PeerSource) {
-        log::info!("Disconnected from replica {:?}", replica_id);
-
-        self.message_brokers.lock().await.remove(&replica_id);
-
-        match peer_source {
-            PeerSource::LocalDiscovery(discovery_id) => {
-                // LocalDiscovery keeps track of what peers it passed to us to avoid passing it
-                // multiple times. We now tell it to lose track of this particular peer so that
-                // next time it appears locally it'll let us know about it again.
-                self.forget_tx.send(discovery_id).await.unwrap_or(())
-            }
-            PeerSource::UserProvided(addr) => {
-                // We attempt to re-establish connections to user provided peers right a way.
-                //
-                // NOTE: For some reason if we don't spawn here (i.e. call the self.establish_...
-                // function directly), then the function halts on TcpStream::connect ¯\_(ツ)_/¯.
-                task::spawn(self.establish_user_provided_connection(addr));
-            }
-            PeerSource::Listener | PeerSource::Dht => {}
         }
     }
 }

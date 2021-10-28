@@ -37,7 +37,7 @@ impl MultiReader {
         }
     }
 
-    pub fn add(&self, mut reader: TcpObjectReader) {
+    pub fn add(&self, mut reader: TcpObjectReader, permit: ConnectionPermitHalf) {
         let tx = self.tx.clone();
 
         // Using `SeqCst` here to be on the safe side although a weaker ordering would probably
@@ -45,6 +45,8 @@ impl MultiReader {
         self.count.fetch_add(1, Ordering::SeqCst);
 
         task::spawn(async move {
+            let _permit = permit; // make sure the permit is owned by this task.
+
             loop {
                 select! {
                     result = reader.read() => {
@@ -82,13 +84,15 @@ impl MultiReader {
     }
 }
 
+type WriterData = (Arc<Mutex<TcpObjectWriter>>, ConnectionPermitHalf);
+
 /// Wrapper for arbitrary number of `TcpObjectWriter`s which writes to the first available one.
 pub(super) struct MultiWriter {
     // Using Mutexes and RwLocks here because we want the `add` and `write` functions to be const.
     // That will allow us to call them from two different coroutines. Note that we don't want this
     // whole structure to wrap because we don't want the `add` function to be blocking.
     next_id: AtomicUsize,
-    writers: std::sync::RwLock<HashMap<usize, Arc<Mutex<TcpObjectWriter>>>>,
+    writers: std::sync::RwLock<HashMap<usize, WriterData>>,
 }
 
 impl MultiWriter {
@@ -99,14 +103,14 @@ impl MultiWriter {
         }
     }
 
-    pub fn add(&self, writer: TcpObjectWriter) {
+    pub fn add(&self, writer: TcpObjectWriter, permit: ConnectionPermitHalf) {
         // `Relaxed` ordering should be sufficient here because this is just a simple counter.
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
 
         self.writers
             .write()
             .unwrap()
-            .insert(id, Arc::new(Mutex::new(writer)));
+            .insert(id, (Arc::new(Mutex::new(writer)), permit));
     }
 
     pub async fn write(&self, message: &Message) -> bool {
@@ -127,14 +131,14 @@ impl MultiWriter {
             .unwrap()
             .iter()
             .next()
-            .map(|(k, v)| (*k, v.clone()))
+            .map(|(id, (writer, _))| (*id, writer.clone()))
     }
 }
 
 /// Prevents establishing duplicate connections.
 pub(super) struct ConnectionDeduplicator {
     next_id: AtomicU64,
-    connections: Arc<SyncMutex<HashMap<SocketAddr, u64>>>,
+    connections: Arc<SyncMutex<HashMap<ConnectionKey, u64>>>,
 }
 
 impl ConnectionDeduplicator {
@@ -145,11 +149,12 @@ impl ConnectionDeduplicator {
         }
     }
 
-    /// Attempt to reserve a connection to the given peer. If the connection hasn't been reserved
+    /// Attempt to reserve an connection to the given peer. If the connection hasn't been reserved
     /// yet, it returns a `ConnectionPermit` which keeps the connection reserved as long as it
     /// lives. Otherwise it returns `None`. To release a connection the permit needs to be dropped.
-    pub fn reserve(&self, addr: SocketAddr) -> Option<ConnectionPermit> {
-        let id = if let Entry::Vacant(entry) = self.connections.lock().unwrap().entry(addr) {
+    pub fn reserve(&self, addr: SocketAddr, dir: ConnectionDirection) -> Option<ConnectionPermit> {
+        let key = ConnectionKey { addr, dir };
+        let id = if let Entry::Vacant(entry) = self.connections.lock().unwrap().entry(key) {
             let id = self.next_id.fetch_add(1, Ordering::Relaxed);
             entry.insert(id);
             id
@@ -159,17 +164,23 @@ impl ConnectionDeduplicator {
 
         Some(ConnectionPermit {
             connections: self.connections.clone(),
-            addr,
+            key,
             id,
         })
     }
 }
 
+#[derive(Clone, Copy, Eq, PartialEq, Hash)]
+pub(super) enum ConnectionDirection {
+    Incoming,
+    Outgoing,
+}
+
 /// Connection permit that prevents another connection to the same peer (socket address) to be
 /// established as long as it remains in scope.
 pub(super) struct ConnectionPermit {
-    connections: Arc<SyncMutex<HashMap<SocketAddr, u64>>>,
-    addr: SocketAddr,
+    connections: Arc<SyncMutex<HashMap<ConnectionKey, u64>>>,
+    key: ConnectionKey,
     id: u64,
 }
 
@@ -183,7 +194,7 @@ impl ConnectionPermit {
         (
             ConnectionPermitHalf(Self {
                 connections: self.connections.clone(),
-                addr: self.addr,
+                key: self.key,
                 id: self.id,
             }),
             ConnectionPermitHalf(self),
@@ -193,7 +204,7 @@ impl ConnectionPermit {
 
 impl Drop for ConnectionPermit {
     fn drop(&mut self) {
-        if let Entry::Occupied(entry) = self.connections.lock().unwrap().entry(self.addr) {
+        if let Entry::Occupied(entry) = self.connections.lock().unwrap().entry(self.key) {
             if *entry.get() == self.id {
                 entry.remove();
             }
@@ -204,3 +215,9 @@ impl Drop for ConnectionPermit {
 /// Half of a connection permit. Dropping it drops the whole permit.
 /// See [`ConnectionPermit::split`] for more details.
 pub(super) struct ConnectionPermitHalf(ConnectionPermit);
+
+#[derive(Clone, Copy, Eq, PartialEq, Hash)]
+struct ConnectionKey {
+    dir: ConnectionDirection,
+    addr: SocketAddr,
+}
