@@ -30,7 +30,7 @@ use futures_util::future;
 use std::{
     collections::{hash_map::Entry, HashMap, HashSet},
     convert::TryFrom,
-    io,
+    fmt, io,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::Arc,
     time::Duration,
@@ -240,14 +240,13 @@ enum PeerSource {
     Dht,
 }
 
-impl PeerSource {
-    // TODO: consider `Display` impl instead
-    fn display(&self) -> &'static str {
+impl fmt::Display for PeerSource {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            PeerSource::Listener => "incoming",
-            PeerSource::UserProvided => "outgoing (user provided)",
-            PeerSource::LocalDiscovery => "outgoing (locally discovered)",
-            PeerSource::Dht => "outgoing (found via DHT)",
+            PeerSource::Listener => write!(f, "incoming"),
+            PeerSource::UserProvided => write!(f, "outgoing (user provided)"),
+            PeerSource::LocalDiscovery => write!(f, "outgoing (locally discovered)"),
+            PeerSource::Dht => write!(f, "outgoing (found via DHT)"),
         }
     }
 }
@@ -435,7 +434,7 @@ impl Inner {
     ) {
         let addr = permit.addr();
 
-        log::info!("new {} TCP connection: {}", peer_source.display(), addr);
+        log::info!("New {} TCP connection: {}", peer_source, addr);
 
         let mut stream = TcpObjectStream::new(socket);
         let their_replica_id = match perform_handshake(&mut stream, &self.this_replica_id).await {
@@ -473,7 +472,7 @@ impl Inner {
         drop(brokers);
 
         released.notified().await;
-        log::info!("{} TCP connection lost: {}", peer_source.display(), addr);
+        log::info!("Lost {} TCP connection: {}", peer_source, addr);
     }
 }
 
