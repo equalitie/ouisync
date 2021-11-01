@@ -27,6 +27,7 @@ use crate::{
 };
 use btdht::{DhtEvent, InfoHash, MainlineDht, INFO_HASH_LEN};
 use futures_util::future;
+use rand::Rng;
 use std::{
     collections::{hash_map::Entry, HashMap, HashSet},
     convert::TryFrom,
@@ -38,6 +39,7 @@ use std::{
 use structopt::StructOpt;
 use tokio::{
     net::{self, TcpListener, TcpStream, UdpSocket},
+    select,
     sync::{mpsc, Mutex, RwLock},
     time,
 };
@@ -45,6 +47,13 @@ use tokio::{
 // Hardcoded DHT routers to bootstrap the DHT against.
 // TODO: add this to `NetworkOptions` so it can be overriden by the user.
 const DHT_ROUTERS: &[&str] = &["router.bittorrent.com:6881", "dht.transmissionbt.com:6881"];
+
+// Interval for the delay before a repository is re-announced on the DHT. The actual delay is an
+// uniformly random value from this interval.
+// BEP5 indicatest that "After 15 minutes of inactivity, a node becomes questionable." so try not
+// to get too close to that value to avoid DHT churn.
+const MIN_DHT_ANNOUNCE_DELAY: Duration = Duration::from_secs(5 * 60);
+const MAX_DHT_ANNOUNCE_DELAY: Duration = Duration::from_secs(12 * 60);
 
 #[derive(StructOpt, Debug)]
 pub struct NetworkOptions {
@@ -222,7 +231,7 @@ impl Handle {
             }
         });
 
-        self.inner.find_peers_for_repository(name);
+        self.inner.find_peers_for_repository(name, index);
 
         true
     }
@@ -326,21 +335,37 @@ impl Inner {
         }
     }
 
-    // Start DHT lookup for the peers that have the specified repository.
+    // Periodically search for peers for the given repository and announce it on the DHT.
     // TODO: use some unique id instead of name.
-    fn find_peers_for_repository(&self, name: &str) {
+    fn find_peers_for_repository(&self, name: &str, index: &Index) {
         let dht = if let Some(dht) = &self.dht {
-            dht
+            dht.clone()
         } else {
             return;
         };
 
         let info_hash = repository_info_hash(name);
+        let closed = index.subscribe().closed();
 
-        // find peers for the repo and also announce that we have it.
-        dht.search(info_hash, true);
+        self.task_handle.spawn(async move {
+            let search = async {
+                loop {
+                    // find peers for the repo and also announce that we have it.
+                    dht.search(info_hash, true);
 
-        // TODO: periodically re-announce the info-hash.
+                    // sleep a random duration before the next search
+                    let duration = rand::thread_rng()
+                        .gen_range(MIN_DHT_ANNOUNCE_DELAY..MAX_DHT_ANNOUNCE_DELAY);
+                    time::sleep(duration).await;
+                }
+            };
+
+            // periodically re-announce the info-hash until the repository is closed.
+            select! {
+                _ = search => (),
+                _ = closed => (),
+            }
+        })
     }
 
     async fn establish_user_provided_connection(self: Arc<Self>, addr: SocketAddr) {
