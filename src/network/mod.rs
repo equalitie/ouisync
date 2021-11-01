@@ -43,6 +43,7 @@ use tokio::{
 };
 
 // Hardcoded DHT routers to bootstrap the DHT against.
+// TODO: add this to `NetworkOptions` so it can be overriden by the user.
 const DHT_ROUTERS: &[&str] = &["router.bittorrent.com:6881", "dht.transmissionbt.com:6881"];
 
 #[derive(StructOpt, Debug)]
@@ -236,7 +237,7 @@ enum PeerSource {
     UserProvided,
     Listener,
     LocalDiscovery,
-    Dht(InfoHash),
+    Dht,
 }
 
 impl PeerSource {
@@ -246,7 +247,7 @@ impl PeerSource {
             PeerSource::Listener => "incoming",
             PeerSource::UserProvided => "outgoing (user provided)",
             PeerSource::LocalDiscovery => "outgoing (locally discovered)",
-            PeerSource::Dht(_) => "outgoing (found via DHT)",
+            PeerSource::Dht => "outgoing (found via DHT)",
         }
     }
 }
@@ -319,7 +320,7 @@ impl Inner {
 
                     for addr in lookups.remove(&info_hash).unwrap_or_default() {
                         self.task_handle
-                            .spawn(self.clone().establish_dht_connection(addr, info_hash));
+                            .spawn(self.clone().establish_dht_connection(addr));
                     }
                 }
             }
@@ -384,7 +385,7 @@ impl Inner {
             .await;
     }
 
-    async fn establish_dht_connection(self: Arc<Self>, addr: SocketAddr, info_hash: InfoHash) {
+    async fn establish_dht_connection(self: Arc<Self>, addr: SocketAddr) {
         let permit = if let Some(permit) = self
             .connection_deduplicator
             .reserve(addr, ConnectionDirection::Outgoing)
@@ -397,7 +398,7 @@ impl Inner {
         // TODO: we should give up after a timeout
         let socket = self.keep_connecting(addr).await;
 
-        self.handle_new_connection(socket, PeerSource::Dht(info_hash), permit)
+        self.handle_new_connection(socket, PeerSource::Dht, permit)
             .await;
     }
 
@@ -458,18 +459,10 @@ impl Inner {
 
                 let broker = MessageBroker::new(their_replica_id, stream, permit).await;
 
+                // TODO: for DHT connection we should only link the repository for which we did the
+                // lookup but make sure we correctly handle edge cases, for example, when we have
+                // more than one repository shared with the peer.
                 for (id, holder) in &self.indices.read().await.map {
-                    // If this is a DHT connection, only link the repository for which we did the
-                    // DHT lookup.
-                    if let PeerSource::Dht(peer_info_hash) = &peer_source {
-                        // We might consider caching the info hashes so we don't have to recalculate
-                        // them every time. On the other hand, new connections are typically not
-                        // created very often, so it probably wouldn't make much difference.
-                        if *peer_info_hash != repository_info_hash(&holder.name) {
-                            continue;
-                        }
-                    }
-
                     create_link(&broker, *id, holder.name.clone(), holder.index.clone()).await;
                 }
 
