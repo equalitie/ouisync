@@ -1,7 +1,8 @@
 use super::{
     client::Client,
+    connection::{ConnectionPermit, MultiReader, MultiWriter},
     message::{Message, RepositoryId, Request, Response},
-    object_stream::{TcpObjectReader, TcpObjectStream, TcpObjectWriter},
+    object_stream::TcpObjectStream,
     server::Server,
 };
 use crate::{
@@ -15,17 +16,12 @@ use std::{
     collections::{hash_map::Entry, HashMap},
     fmt,
     future::Future,
-    pin::Pin,
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc,
-    },
 };
 use tokio::{
     select,
     sync::{
         mpsc::{self, error::SendError},
-        Mutex, RwLock,
+        RwLock,
     },
     task,
 };
@@ -102,8 +98,6 @@ fn into_message<T: From<Message>>(command: Command) -> T {
     command.into_send_message().into()
 }
 
-type OnFinish = Pin<Box<dyn Future<Output = ()> + Send>>;
-
 /// Maintains one or more connections to a peer, listening on all of them at the same time. Note
 /// that at the present all the connections are TCP based and so dropping some of them would make
 /// sense. However, in the future we may also have other transports (e.g. Bluetooth) and thus
@@ -112,7 +106,7 @@ type OnFinish = Pin<Box<dyn Future<Output = ()> + Send>>;
 /// Once a message is received, it is determined whether it is a request or a response. Based on
 /// that it either goes to the ClientStream or ServerStream for processing by the Client and Server
 /// structures respectively.
-pub(crate) struct MessageBroker {
+pub(super) struct MessageBroker {
     command_tx: mpsc::Sender<Command>,
     _join_handle: ScopedJoinHandle<()>,
 }
@@ -121,7 +115,7 @@ impl MessageBroker {
     pub async fn new(
         their_replica_id: ReplicaId,
         stream: TcpObjectStream,
-        on_finish: OnFinish,
+        permit: ConnectionPermit,
     ) -> Self {
         let (command_tx, command_rx) = mpsc::channel(1);
 
@@ -133,9 +127,9 @@ impl MessageBroker {
             links: RwLock::new(Links::new()),
         };
 
-        inner.add_connection(stream);
+        inner.add_connection(stream, permit);
 
-        let handle = task::spawn(inner.run(command_rx, on_finish));
+        let handle = task::spawn(inner.run(command_rx));
 
         Self {
             command_tx,
@@ -143,8 +137,14 @@ impl MessageBroker {
         }
     }
 
-    pub async fn add_connection(&self, stream: TcpObjectStream) {
-        self.send_command(Command::AddConnection(stream)).await
+    pub async fn add_connection(&self, stream: TcpObjectStream, permit: ConnectionPermit) {
+        self.send_command(Command::AddConnection(stream, permit))
+            .await
+    }
+
+    /// Has this broker at least one live connection?
+    pub fn has_connections(&self) -> bool {
+        !self.command_tx.is_closed()
     }
 
     /// Try to establish a link between a local repository and a remote repository. The remote
@@ -175,7 +175,7 @@ impl MessageBroker {
     async fn send_command(&self, command: Command) {
         if let Err(command) = self.command_tx.send(command).await {
             log::error!(
-                "failed to send command {:?} - broker already finished",
+                "failed to send command {:?} - message broker has no connections",
                 command
             );
         }
@@ -191,7 +191,7 @@ struct Inner {
 }
 
 impl Inner {
-    async fn run(self, mut command_rx: mpsc::Receiver<Command>, on_finish: OnFinish) {
+    async fn run(self, mut command_rx: mpsc::Receiver<Command>) {
         // NOTE: it might be tempting to rewrite this code to something like:
         //
         //     loop {
@@ -232,14 +232,12 @@ impl Inner {
             _ = command_task => (),
             _ = message_task => (),
         }
-
-        on_finish.await
     }
 
     async fn handle_command(&self, command: Command) -> bool {
         match command {
-            Command::AddConnection(stream) => {
-                self.add_connection(stream);
+            Command::AddConnection(stream, permit) => {
+                self.add_connection(stream, permit);
                 true
             }
             Command::SendMessage(message) => self.send_message(message).await,
@@ -274,10 +272,12 @@ impl Inner {
         }
     }
 
-    fn add_connection(&self, stream: TcpObjectStream) {
+    fn add_connection(&self, stream: TcpObjectStream, permit: ConnectionPermit) {
         let (reader, writer) = stream.into_split();
-        self.reader.add(reader);
-        self.writer.add(writer);
+        let (reader_permit, writer_permit) = permit.split();
+
+        self.reader.add(reader, reader_permit);
+        self.writer.add(writer, writer_permit);
     }
 
     async fn send_message(&self, message: Message) -> bool {
@@ -421,7 +421,7 @@ where
 }
 
 pub(super) enum Command {
-    AddConnection(TcpObjectStream),
+    AddConnection(TcpObjectStream, ConnectionPermit),
     SendMessage(Message),
     CreateLink {
         index: Index,
@@ -446,7 +446,7 @@ impl Command {
 impl fmt::Debug for Command {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::AddConnection(_) => f
+            Self::AddConnection(..) => f
                 .debug_tuple("AddConnection")
                 .field(&format_args!("_"))
                 .finish(),
@@ -465,121 +465,6 @@ impl fmt::Debug for Command {
                 .field("local_id", local_id)
                 .finish(),
         }
-    }
-}
-
-/// Wrapper for arbitrary number of `TcpObjectReader`s which reads from all of them simultaneously.
-struct MultiReader {
-    tx: mpsc::Sender<Option<Message>>,
-    // Wrapping these in Mutex and RwLock to have the `add` and `read` methods non mutable.  That
-    // in turn is desirable to be able to call the two functions from different coroutines. Note
-    // that we don't want to wrap this whole struct in a Mutex/RwLock because we don't want the add
-    // function to be blocking.
-    rx: Mutex<mpsc::Receiver<Option<Message>>>,
-    count: AtomicUsize,
-}
-
-impl MultiReader {
-    fn new() -> Self {
-        let (tx, rx) = mpsc::channel(1);
-        Self {
-            tx,
-            rx: Mutex::new(rx),
-            count: AtomicUsize::new(0),
-        }
-    }
-
-    fn add(&self, mut reader: TcpObjectReader) {
-        let tx = self.tx.clone();
-
-        // Using `SeqCst` here to be on the safe side although a weaker ordering would probably
-        // suffice here (also in the `read` method).
-        self.count.fetch_add(1, Ordering::SeqCst);
-
-        task::spawn(async move {
-            loop {
-                select! {
-                    result = reader.read() => {
-                        if let Ok(message) = result {
-                            tx.send(Some(message)).await.unwrap_or(())
-                        } else {
-                            tx.send(None).await.unwrap_or(());
-                            break;
-                        }
-                    },
-                    _ = tx.closed() => break,
-                }
-            }
-        });
-    }
-
-    async fn read(&self) -> Option<Message> {
-        loop {
-            if self.count.load(Ordering::SeqCst) == 0 {
-                return None;
-            }
-
-            match self.rx.lock().await.recv().await {
-                Some(Some(message)) => return Some(message),
-                Some(None) => {
-                    self.count.fetch_sub(1, Ordering::SeqCst);
-                }
-                None => {
-                    // This would mean that all senders were closed, but that can't happen because
-                    // `self.tx` still exists.
-                    unreachable!()
-                }
-            }
-        }
-    }
-}
-
-/// Wrapper for arbitrary number of `TcpObjectWriter`s which writes to the first available one.
-struct MultiWriter {
-    // Using Mutexes and RwLocks here because we want the `add` and `write` functions to be const.
-    // That will allow us to call them from two different coroutines. Note that we don't want this
-    // whole structure to wrap because we don't want the `add` function to be blocking.
-    next_id: AtomicUsize,
-    writers: std::sync::RwLock<HashMap<usize, Arc<Mutex<TcpObjectWriter>>>>,
-}
-
-impl MultiWriter {
-    fn new() -> Self {
-        Self {
-            next_id: AtomicUsize::new(0),
-            writers: std::sync::RwLock::new(HashMap::new()),
-        }
-    }
-
-    fn add(&self, writer: TcpObjectWriter) {
-        // `Relaxed` ordering should be sufficient here because this is just a simple counter.
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-
-        self.writers
-            .write()
-            .unwrap()
-            .insert(id, Arc::new(Mutex::new(writer)));
-    }
-
-    async fn write(&self, message: &Message) -> bool {
-        while let Some((id, writer)) = self.pick_writer().await {
-            if writer.lock().await.write(message).await.is_ok() {
-                return true;
-            }
-
-            self.writers.write().unwrap().remove(&id);
-        }
-
-        false
-    }
-
-    async fn pick_writer(&self) -> Option<(usize, Arc<Mutex<TcpObjectWriter>>)> {
-        self.writers
-            .read()
-            .unwrap()
-            .iter()
-            .next()
-            .map(|(k, v)| (*k, v.clone()))
     }
 }
 
