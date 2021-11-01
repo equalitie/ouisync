@@ -11,20 +11,51 @@ use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
+use tokio::task;
 
-pub struct PortForwarder {
+#[derive(Clone, Copy)]
+pub(crate) struct Mapping {
+    pub internal: u16,
+    pub external: u16,
+    pub protocol: Protocol,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum Protocol {
+    Tcp,
+    Udp,
+}
+
+impl fmt::Display for Protocol {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Tcp => write!(f, "TCP"),
+            Self::Udp => write!(f, "UDP"),
+        }
+    }
+}
+
+pub(crate) struct PortForwarder {
     _task: ScopedJoinHandle<()>,
 }
 
 impl PortForwarder {
-    pub fn new(port: u16) -> Self {
-        let task = ScopedJoinHandle(tokio::task::spawn(async move {
-            log::info!(
-                "UPnP starting port forwarding: EXT:{} -> INT:{}",
-                port,
-                port
-            );
-            let result = Self::run(port, port).await;
+    pub fn new<I>(mappings: I) -> Self
+    where
+        I: IntoIterator<Item = Mapping>,
+    {
+        let mappings: Vec<_> = mappings.into_iter().collect();
+        let task = ScopedJoinHandle(task::spawn(async move {
+            for mapping in &mappings {
+                log::info!(
+                    "UPnP starting port forwarding EXT:{} -> INT:{} ({})",
+                    mapping.external,
+                    mapping.internal,
+                    mapping.protocol,
+                );
+            }
+
+            let result = Self::run(mappings).await;
             // Warning, because we don't actually expect this to happen.
             log::warn!("UPnP port forwarding ended ({:?})", result)
         }));
@@ -32,7 +63,7 @@ impl PortForwarder {
         Self { _task: task }
     }
 
-    async fn run(internal_port: u16, external_port: u16) -> Result<(), rupnp::Error> {
+    async fn run(mappings: Vec<Mapping>) -> Result<(), rupnp::Error> {
         const DISCOVERY_DURATION: Duration = Duration::from_secs(3);
         const SLEEP_DURATION: Duration = Duration::from_secs(10 * 60);
 
@@ -53,15 +84,14 @@ impl PortForwarder {
                     let per_igd_port_forwarder = PerIGDPortForwarder {
                         device_url: url.clone(),
                         service,
-                        internal_port,
-                        external_port,
+                        mappings: mappings.clone(),
                         _version: version,
                     };
 
                     let weak_handles = Arc::downgrade(&handles);
 
                     handles.lock().unwrap().entry(url).or_insert_with(|| {
-                        ScopedJoinHandle(tokio::task::spawn(async move {
+                        ScopedJoinHandle(task::spawn(async move {
                             let r = per_igd_port_forwarder.run().await;
 
                             log::warn!("UPnP port forwarding on IGD ended ({:?})", r);
@@ -90,8 +120,7 @@ enum Version {
 struct PerIGDPortForwarder {
     device_url: Uri,
     service: Service,
-    internal_port: u16,
-    external_port: u16,
+    mappings: Vec<Mapping>,
     // Indicate whether we're talking to an IGDv1 or IGDv2 device. I though we might need it but
     // currently we don't because the few calls we do are common for both versions. But keeping it
     // here for posterity.
@@ -110,21 +139,24 @@ impl PerIGDPortForwarder {
         let mut ext_addr_reported = false;
 
         loop {
-            self.add_port_mapping(&local_ip, lease_duration).await?;
+            self.add_port_mappings(&local_ip, lease_duration).await?;
 
             if !ext_port_reported {
                 ext_port_reported = true;
-                println!(
-                    "UPnP port forwarding started on external port {}",
-                    self.external_port
-                );
+
+                for mapping in &self.mappings {
+                    log::info!(
+                        "UPnP port forwarding started on external port {}",
+                        mapping.external
+                    );
+                }
             }
 
             if !ext_addr_reported {
                 ext_addr_reported = true;
                 match self.get_external_ip_address().await {
                     Ok(addr) => {
-                        println!("UPnP the external IP address is {}", addr);
+                        log::info!("UPnP the external IP address is {}", addr);
                     }
                     Err(e) => {
                         log::warn!("UPnP failed to retrieve external IP address: {:?}", e);
@@ -152,7 +184,7 @@ impl PerIGDPortForwarder {
             // 2. We could try to update the lease, and then confirm that the lease has indeed been
             //    updated. Unfortunately, we've seen IGD devices which fail to report active
             //    leases (or report only the first one in their list or some other random subset).
-            self.add_port_mapping(&local_ip, lease_duration).await?;
+            self.add_port_mappings(&local_ip, lease_duration).await?;
 
             tokio::time::sleep(sleep_delta * 2).await;
         }
@@ -166,7 +198,7 @@ impl PerIGDPortForwarder {
     //
     // TODO: Consider also implementing AddAnyPortMapping when on IGDv2 for cases when the
     // requested external port is not free.
-    async fn add_port_mapping(
+    async fn add_port_mappings(
         &self,
         local_ip: &net::IpAddr,
         lease_duration: Duration,
@@ -179,25 +211,28 @@ impl PerIGDPortForwarder {
 
         const MAPPING_DESCRIPTION: &str = "OuiSync";
 
-        let args = format!(
-            "<NewRemoteHost></NewRemoteHost>\
-            <NewEnabled>1</NewEnabled>\
-            <NewExternalPort>{}</NewExternalPort>\
-            <NewProtocol>TCP</NewProtocol>\
-            <NewInternalPort>{}</NewInternalPort>\
-            <NewInternalClient>{}</NewInternalClient>\
-            <NewPortMappingDescription>{}</NewPortMappingDescription>\
-            <NewLeaseDuration>{}</NewLeaseDuration>",
-            self.external_port,
-            self.internal_port,
-            local_ip,
-            MAPPING_DESCRIPTION,
-            lease_duration.as_secs()
-        );
+        for mapping in &self.mappings {
+            let args = format!(
+                "<NewRemoteHost></NewRemoteHost>\
+                 <NewEnabled>1</NewEnabled>\
+                 <NewProtocol>{}</NewProtocol>\
+                 <NewExternalPort>{}</NewExternalPort>\
+                 <NewInternalPort>{}</NewInternalPort>\
+                 <NewInternalClient>{}</NewInternalClient>\
+                 <NewPortMappingDescription>{}</NewPortMappingDescription>\
+                 <NewLeaseDuration>{}</NewLeaseDuration>",
+                mapping.protocol,
+                mapping.external,
+                mapping.internal,
+                local_ip,
+                MAPPING_DESCRIPTION,
+                lease_duration.as_secs()
+            );
 
-        self.service
-            .action(&self.device_url, "AddPortMapping", &args)
-            .await?;
+            self.service
+                .action(&self.device_url, "AddPortMapping", &args)
+                .await?;
+        }
 
         Ok(())
     }

@@ -31,7 +31,7 @@ use rand::Rng;
 use std::{
     collections::{hash_map::Entry, HashMap, HashSet},
     convert::TryFrom,
-    fmt, io,
+    fmt, io, iter,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::Arc,
     time::Duration,
@@ -118,18 +118,40 @@ impl Network {
 
         let local_addr = listener.local_addr().map_err(Error::Network)?;
 
+        let dht_socket = if !options.disable_dht {
+            Some(
+                UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))
+                    .await
+                    .map_err(Error::Network)?,
+            )
+        } else {
+            None
+        };
+        let dht_port = dht_socket
+            .as_ref()
+            .map(|socket| socket.local_addr())
+            .transpose()
+            .map_err(Error::Network)?
+            .map(|addr| addr.port());
+
         let port_forwarder = if !options.disable_upnp {
-            Some(upnp::PortForwarder::new(local_addr.port()))
+            Some(upnp::PortForwarder::new(
+                iter::once(upnp::Mapping {
+                    external: local_addr.port(),
+                    internal: local_addr.port(),
+                    protocol: upnp::Protocol::Tcp,
+                })
+                .chain(dht_port.map(|port| upnp::Mapping {
+                    external: port,
+                    internal: port,
+                    protocol: upnp::Protocol::Udp,
+                })),
+            ))
         } else {
             None
         };
 
-        let (dht, dht_event_rx) = if !options.disable_dht {
-            // TODO: consider port-forward this socket as well.
-            let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))
-                .await
-                .map_err(Error::Network)?;
-
+        let (dht, dht_event_rx) = if let Some(socket) = dht_socket {
             // TODO: load the DHT state from a previous save if it exists.
             let (dht, event_rx) = MainlineDht::builder()
                 .add_routers(dht_router_addresses().await)
