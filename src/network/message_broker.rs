@@ -142,6 +142,11 @@ impl MessageBroker {
             .await
     }
 
+    /// Has this broker at least one live connection?
+    pub fn has_connections(&self) -> bool {
+        !self.command_tx.is_closed()
+    }
+
     /// Try to establish a link between a local repository and a remote repository. The remote
     /// counterpart needs to call this too with matching `local_name` and `remote_name` for the link
     /// to actually be created.
@@ -170,7 +175,7 @@ impl MessageBroker {
     async fn send_command(&self, command: Command) {
         if let Err(command) = self.command_tx.send(command).await {
             log::error!(
-                "failed to send command {:?} - broker already finished",
+                "failed to send command {:?} - message broker has no connections",
                 command
             );
         }

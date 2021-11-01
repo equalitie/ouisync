@@ -473,6 +473,14 @@ impl Inner {
 
         released.notified().await;
         log::info!("Lost {} TCP connection: {}", peer_source, addr);
+
+        // Remove the broker if it has no more connections.
+        let mut brokers = self.message_brokers.lock().await;
+        if let Entry::Occupied(entry) = brokers.entry(their_replica_id) {
+            if !entry.get().has_connections() {
+                entry.remove();
+            }
+        }
     }
 }
 
