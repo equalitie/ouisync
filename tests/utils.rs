@@ -1,6 +1,7 @@
 use std::{
     env,
     io::{self, BufRead, BufReader, Read, Write},
+    net::SocketAddr,
     panic::{self, AssertUnwindSafe},
     path::Path,
     process::{Child, Command, Stdio},
@@ -12,25 +13,32 @@ use tempfile::TempDir;
 /// Wrapper for the ouisync binary.
 pub struct Bin {
     mount_dir: TempDir,
+    port: u16,
     process: Child,
 }
 
 impl Bin {
-    pub fn start(id: u32) -> Self {
+    pub fn start(id: u32, peers: impl IntoIterator<Item = SocketAddr>) -> Self {
         let mount_dir = TempDir::new().unwrap();
 
-        let mut process = Command::new(env!("CARGO_BIN_EXE_ouisync"))
-            .arg("--temp")
-            //.arg("--disable-merger=true")
-            .arg("--mount")
-            .arg(format!("test:{}", mount_dir.path().display()))
-            .arg("--print-ready-message")
-            .arg("--disable-upnp")
-            .arg("--disable-dht")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
+        let mut command = Command::new(env!("CARGO_BIN_EXE_ouisync"));
+        command.arg("--temp");
+        command.arg("--mount");
+        command.arg(format!("test:{}", mount_dir.path().display()));
+        command.arg("--print-ready-message");
+        command.arg("--disable-upnp");
+        command.arg("--disable-dht");
+        command.arg("--disable-local-discovery");
+
+        for peer in peers {
+            command.arg("--peers");
+            command.arg(peer.to_string());
+        }
+
+        command.stdout(Stdio::piped());
+        command.stderr(Stdio::piped());
+
+        let mut process = command.spawn().unwrap();
 
         let mut stdout = process.stdout.take().unwrap();
 
@@ -40,7 +48,11 @@ impl Bin {
             copy_lines_prefixed(stdout, io::stdout(), id);
             copy_lines_prefixed(process.stderr.take().unwrap(), io::stderr(), id);
 
-            Self { mount_dir, process }
+            Self {
+                mount_dir,
+                port,
+                process,
+            }
         } else {
             println!("Failed to parse ready line.");
             println!("Waiting for program to finish.");
@@ -62,6 +74,10 @@ impl Bin {
 
     pub fn root(&self) -> &Path {
         self.mount_dir.path()
+    }
+
+    pub fn port(&self) -> u16 {
+        self.port
     }
 
     fn kill(&mut self) {

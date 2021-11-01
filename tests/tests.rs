@@ -1,23 +1,12 @@
 mod utils;
 
 use self::utils::{eventually, eventually_true, Bin};
-use parking_lot::Mutex;
-use std::fs;
-
-// HACK: mutex to make sure the integration tests run sequentially, so they don't interfere with
-//       each other.
-// TODO: disable local discovery in these tests and establish explicit connections instead to avoid
-//       this interference. Then remove this wrapper.
-// NOTE: using `parking_lot::Mutex` instead of `std::Mutex` because it can be constructed with a
-//       `const` function which makes it easier to use in a `static` (no need for `unsafe`).
-static MUTEX: Mutex<()> = parking_lot::const_mutex(());
+use std::{fs, net::Ipv4Addr};
 
 #[test]
 fn transfer_single_file() {
-    let _guard = MUTEX.lock();
-
-    let a = Bin::start(0);
-    let b = Bin::start(1);
+    let a = Bin::start(0, []);
+    let b = Bin::start(1, [(Ipv4Addr::LOCALHOST, a.port()).into()]);
 
     let file_name = "foo.txt";
     let orig_content = "hello";
@@ -32,10 +21,8 @@ fn transfer_single_file() {
 
 #[test]
 fn sequential_write_to_the_same_file() {
-    let _guard = MUTEX.lock();
-
-    let a = Bin::start(0);
-    let b = Bin::start(1);
+    let a = Bin::start(0, []);
+    let b = Bin::start(1, [(Ipv4Addr::LOCALHOST, a.port()).into()]);
 
     let file_name = "bar.txt";
     let content_a = "hello from A";
@@ -62,14 +49,12 @@ fn sequential_write_to_the_same_file() {
 
 #[test]
 fn fast_sequential_writes() {
-    let _guard = MUTEX.lock();
-
     // There used to be a deadlock which would manifest whenever one of the connected replicas
     // perfomed more than one write operation (mkdir, echo foo > bar,...) quickly one after another
     // (e.g. "$ mkdir a; mkdir b").
     for _ in 0..5 {
-        let a = Bin::start(0);
-        let b = Bin::start(1);
+        let a = Bin::start(0, []);
+        let b = Bin::start(1, [(Ipv4Addr::LOCALHOST, a.port()).into()]);
 
         let count = 10;
 
