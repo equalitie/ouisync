@@ -470,7 +470,11 @@ impl Inner {
             }
         };
 
-        // TODO: prevent self-connections.
+        // prevent self-connections.
+        if their_replica_id == self.this_replica_id {
+            log::debug!("Connection from self, discarding");
+            return;
+        }
 
         let released = permit.released();
 
