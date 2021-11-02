@@ -28,7 +28,6 @@ futures = "0.3.15"
 futures-util = { version = "0.3.15", default-features = false }
 generic-array = { version = "0.14.4", features = ["serde"] }
 hex = "0.4.3"
-http = "0.2.5" # rupnp uses this crate
 log = "0.4.14"
 lru = "0.6.5"
 net2 = "0.2" # To be able to setsockopts before a socket is bound
