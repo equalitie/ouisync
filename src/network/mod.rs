@@ -21,7 +21,7 @@ use crate::{
     index::Index,
     replica_id::ReplicaId,
     repository::Repository,
-    scoped_task::{ScopedTaskHandle, ScopedTaskSet},
+    scoped_task::{ScopedJoinHandle, ScopedTaskSet},
     tagged::{Local, Remote},
     upnp,
 };
@@ -33,7 +33,7 @@ use std::{
     convert::TryFrom,
     fmt, io, iter,
     net::{IpAddr, Ipv4Addr, SocketAddr},
-    sync::Arc,
+    sync::{Arc, Weak},
     time::Duration,
 };
 use structopt::StructOpt;
@@ -41,6 +41,7 @@ use tokio::{
     net::{self, TcpListener, TcpStream, UdpSocket},
     select,
     sync::{mpsc, Mutex, RwLock},
+    task,
     time,
 };
 
@@ -103,15 +104,14 @@ impl Default for NetworkOptions {
 
 pub struct Network {
     inner: Arc<Inner>,
-    local_addr: SocketAddr,
+    // We keep tasks here instead of in Inner because we want them to be
+    // destroyed when Network is Dropped.
+    _tasks: Arc<RwLock<Tasks>>,
     _port_forwarder: Option<upnp::PortForwarder>,
-    _tasks: ScopedTaskSet,
 }
 
 impl Network {
     pub async fn new(this_replica_id: ReplicaId, options: &NetworkOptions) -> Result<Self> {
-        let tasks = ScopedTaskSet::default();
-
         let listener = TcpListener::bind(options.listen_addr())
             .await
             .map_err(Error::Network)?;
@@ -164,41 +164,40 @@ impl Network {
             (None, None)
         };
 
+        let tasks = Arc::new(RwLock::new(Tasks::default()));
+
         let inner = Inner {
+            local_addr,
             this_replica_id,
             message_brokers: Mutex::new(HashMap::new()),
             indices: RwLock::new(IndexMap::default()),
-            task_handle: tasks.handle().clone(),
             dht,
             connection_deduplicator: ConnectionDeduplicator::new(),
+            tasks: Arc::downgrade(&tasks),
         };
 
-        let inner = Arc::new(inner);
+        let network = Self {
+            inner: Arc::new(inner),
+            _tasks: tasks,
+            _port_forwarder: port_forwarder,
+        };
 
-        tasks.spawn(inner.clone().run_listener(listener));
-
-        if !options.disable_local_discovery {
-            tasks.spawn(inner.clone().run_local_discovery(local_addr.port()));
-        }
+        network.inner.start_listener(listener).await;
+        network.inner.enable_local_discovery(!options.disable_local_discovery).await;
 
         for peer in &options.peers {
-            tasks.spawn(inner.clone().establish_user_provided_connection(*peer));
+            network.inner.clone().establish_user_provided_connection(*peer).await;
         }
 
         if let Some(event_rx) = dht_event_rx {
-            tasks.spawn(inner.clone().run_dht(event_rx));
+            network.inner.clone().start_dht(event_rx).await;
         }
 
-        Ok(Self {
-            inner,
-            local_addr,
-            _port_forwarder: port_forwarder,
-            _tasks: tasks,
-        })
+        Ok(network)
     }
 
     pub fn local_addr(&self) -> &SocketAddr {
-        &self.local_addr
+        &self.inner.local_addr
     }
 
     pub fn handle(&self) -> Handle {
@@ -237,8 +236,11 @@ impl Handle {
             create_link(broker, id, name.to_owned(), index.clone()).await;
         }
 
+        let tasks_arc = self.inner.tasks.upgrade().unwrap();
+        let tasks = tasks_arc.write().await;
+
         // Deregister the index when it gets closed.
-        self.inner.task_handle.spawn({
+        tasks.other.spawn({
             let closed = index.subscribe().closed();
             let inner = self.inner.clone();
 
@@ -253,13 +255,23 @@ impl Handle {
             }
         });
 
-        self.inner.find_peers_for_repository(name, index);
+        self.inner.find_peers_for_repository(name, index).await;
 
         true
     }
 
     pub fn this_replica_id(&self) -> &ReplicaId {
         &self.inner.this_replica_id
+    }
+
+    pub async fn is_local_discovery_enabled(&self) -> bool {
+        let tasks_arc = self.inner.tasks.upgrade().unwrap();
+        let tasks = tasks_arc.read().await;
+        tasks.local_discovery.is_some()
+    }
+
+    pub async fn enable_local_discovery(&self, enable: bool) {
+        self.inner.enable_local_discovery(enable).await;
     }
 }
 
@@ -282,16 +294,45 @@ impl fmt::Display for PeerSource {
     }
 }
 
+#[derive(Default)]
+struct Tasks {
+    local_discovery: Option<ScopedJoinHandle<()>>,
+    other: ScopedTaskSet,
+}
+
 struct Inner {
+    local_addr: SocketAddr,
     this_replica_id: ReplicaId,
     message_brokers: Mutex<HashMap<ReplicaId, MessageBroker>>,
     indices: RwLock<IndexMap>,
-    task_handle: ScopedTaskHandle,
     dht: Option<MainlineDht>,
     connection_deduplicator: ConnectionDeduplicator,
+    // Note that unwrapping the upgraded weak pointer should be fine because if the underlying Arc
+    // was Dropped, we would not be askinf ro the upgrade in the first place.
+    tasks: Weak<RwLock<Tasks>>,
 }
 
 impl Inner {
+    async fn enable_local_discovery(self: &Arc<Self>, enable: bool) {
+        let tasks_arc = self.tasks.upgrade().unwrap();
+        let mut tasks = tasks_arc.write().await;
+
+        if !enable {
+            tasks.local_discovery = None;
+            return;
+        }
+
+        if tasks.local_discovery.is_some() {
+            return;
+        }
+
+        let self_ = self.clone();
+        tasks.local_discovery = Some(ScopedJoinHandle(task::spawn(async move {
+            let port = self_.local_addr.port();
+            self_.run_local_discovery(port).await;
+        })));
+    }
+
     async fn run_local_discovery(self: Arc<Self>, listener_port: u16) {
         let discovery = match ReplicaDiscovery::new(listener_port) {
             Ok(discovery) => discovery,
@@ -302,9 +343,18 @@ impl Inner {
         };
 
         while let Some(addr) = discovery.recv().await {
-            self.task_handle
+            let tasks_arc = self.tasks.upgrade().unwrap();
+            let tasks = tasks_arc.write().await;
+
+            tasks.other
                 .spawn(self.clone().establish_discovered_connection(addr))
         }
+    }
+
+    async fn start_listener(self: &Arc<Self>, listener: TcpListener) {
+        let tasks_arc = self.tasks.upgrade().unwrap();
+        let tasks = tasks_arc.write().await;
+        tasks.other.spawn(self.clone().run_listener(listener));
     }
 
     async fn run_listener(self: Arc<Self>, listener: TcpListener) {
@@ -321,13 +371,22 @@ impl Inner {
                 .connection_deduplicator
                 .reserve(addr, ConnectionDirection::Incoming)
             {
-                self.task_handle.spawn(self.clone().handle_new_connection(
+                let tasks_arc = self.tasks.upgrade().unwrap();
+                let tasks = tasks_arc.write().await;
+
+                tasks.other.spawn(self.clone().handle_new_connection(
                     socket,
                     PeerSource::Listener,
                     permit,
                 ))
             }
         }
+    }
+
+    async fn start_dht(self: Arc<Self>, event_rx: mpsc::UnboundedReceiver<DhtEvent>) {
+        let tasks_arc = self.tasks.upgrade().unwrap();
+        let tasks = tasks_arc.write().await;
+        tasks.other.spawn(self.run_dht(event_rx));
     }
 
     async fn run_dht(self: Arc<Self>, mut event_rx: mpsc::UnboundedReceiver<DhtEvent>) {
@@ -348,9 +407,11 @@ impl Inner {
                 DhtEvent::LookupCompleted(info_hash) => {
                     log::debug!("DHT lookup for {:?} complete", info_hash);
 
+                    let tasks_arc = self.tasks.upgrade().unwrap();
+                    let tasks = tasks_arc.write().await;
+
                     for addr in lookups.remove(&info_hash).unwrap_or_default() {
-                        self.task_handle
-                            .spawn(self.clone().establish_dht_connection(addr));
+                        tasks.other.spawn(self.clone().establish_dht_connection(addr));
                     }
                 }
             }
@@ -359,7 +420,7 @@ impl Inner {
 
     // Periodically search for peers for the given repository and announce it on the DHT.
     // TODO: use some unique id instead of name.
-    fn find_peers_for_repository(&self, name: &str, index: &Index) {
+    async fn find_peers_for_repository(&self, name: &str, index: &Index) {
         let dht = if let Some(dht) = &self.dht {
             dht.clone()
         } else {
@@ -369,7 +430,10 @@ impl Inner {
         let info_hash = repository_info_hash(name);
         let closed = index.subscribe().closed();
 
-        self.task_handle.spawn(async move {
+        let tasks_arc = self.tasks.upgrade().unwrap();
+        let tasks = tasks_arc.write().await;
+
+        tasks.other.spawn(async move {
             let search = async {
                 loop {
                     // find peers for the repo and also announce that we have it.
@@ -391,22 +455,27 @@ impl Inner {
     }
 
     async fn establish_user_provided_connection(self: Arc<Self>, addr: SocketAddr) {
-        loop {
-            let permit = if let Some(permit) = self
-                .connection_deduplicator
-                .reserve(addr, ConnectionDirection::Outgoing)
-            {
-                permit
-            } else {
-                return;
-            };
+        let tasks_arc = self.tasks.upgrade().unwrap();
+        let tasks = tasks_arc.write().await;
 
-            let socket = self.keep_connecting(addr).await;
+        tasks.other.spawn(async move {
+            loop {
+                let permit = if let Some(permit) = self
+                    .connection_deduplicator
+                    .reserve(addr, ConnectionDirection::Outgoing)
+                {
+                    permit
+                } else {
+                    return;
+                };
 
-            self.clone()
-                .handle_new_connection(socket, PeerSource::UserProvided, permit)
-                .await;
-        }
+                let socket = self.keep_connecting(addr).await;
+
+                self.clone()
+                    .handle_new_connection(socket, PeerSource::UserProvided, permit)
+                    .await;
+            }
+        })
     }
 
     async fn establish_discovered_connection(self: Arc<Self>, addr: SocketAddr) {
