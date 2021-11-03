@@ -42,11 +42,20 @@ impl From<u8> for DartCObject {
     }
 }
 
+impl From<bool> for DartCObject {
+    fn from(value: bool) -> Self {
+        DartCObject {
+            type_: DartCObjectType::Bool,
+            value: DartCObjectValue { as_bool: value },
+        }
+    }
+}
+
 #[repr(i32)]
 #[derive(Copy, Clone)]
 pub enum DartCObjectType {
     Null = 0,
-    // Bool = 1,
+    Bool = 1,
     Int32 = 2,
     Int64 = 3,
     // Double = 4,
