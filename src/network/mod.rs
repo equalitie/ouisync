@@ -3,7 +3,7 @@ mod connection;
 mod message;
 mod message_broker;
 mod object_stream;
-mod replica_discovery;
+mod local_discovery;
 mod server;
 #[cfg(test)]
 mod tests;
@@ -13,7 +13,7 @@ use self::{
     message::RepositoryId,
     message_broker::MessageBroker,
     object_stream::TcpObjectStream,
-    replica_discovery::ReplicaDiscovery,
+    local_discovery::LocalDiscovery,
 };
 use crate::{
     crypto::Hashable,
@@ -334,10 +334,10 @@ impl Inner {
     }
 
     async fn run_local_discovery(self: Arc<Self>, listener_port: u16) {
-        let discovery = match ReplicaDiscovery::new(listener_port) {
+        let discovery = match LocalDiscovery::new(listener_port) {
             Ok(discovery) => discovery,
             Err(error) => {
-                log::error!("Failed to create ReplicaDiscovery: {}", error);
+                log::error!("Failed to create LocalDiscovery: {}", error);
                 return;
             }
         };
