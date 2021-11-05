@@ -23,7 +23,7 @@ use crate::{
     index::Index,
     replica_id::ReplicaId,
     repository::Repository,
-    scoped_task::{ScopedJoinHandle, ScopedTaskSet},
+    scoped_task::{self, ScopedJoinHandle, ScopedTaskSet},
     tagged::{Local, Remote},
     upnp,
 };
@@ -315,10 +315,10 @@ impl Inner {
         }
 
         let self_ = self.clone();
-        tasks.local_discovery = Some(ScopedJoinHandle(task::spawn(async move {
+        tasks.local_discovery = Some(scoped_task::spawn(async move {
             let port = self_.local_addr.port();
             self_.run_local_discovery(port).await;
-        })));
+        }));
     }
 
     async fn run_local_discovery(self: Arc<Self>, listener_port: u16) {

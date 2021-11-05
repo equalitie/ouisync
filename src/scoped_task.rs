@@ -81,3 +81,11 @@ impl<T> Future for ScopedJoinHandle<T> {
         Pin::new(&mut self.0).poll(cx)
     }
 }
+
+pub fn spawn<T>(task: T) -> ScopedJoinHandle<T::Output>
+where
+    T: Future + Send + 'static,
+    T::Output: Send + 'static,
+{
+    ScopedJoinHandle(task::spawn(task))
+}

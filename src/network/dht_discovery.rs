@@ -1,4 +1,4 @@
-use crate::scoped_task::ScopedJoinHandle;
+use crate::scoped_task::{self, ScopedJoinHandle};
 use btdht::{DhtEvent, InfoHash, MainlineDht};
 
 use futures_util::future;
@@ -16,7 +16,7 @@ use tokio::{
     net::{self, UdpSocket},
     select,
     sync::{mpsc, watch},
-    task, time,
+    time,
 };
 
 // Hardcoded DHT routers to bootstrap the DHT against.
@@ -48,12 +48,12 @@ impl DhtDiscovery {
 
         let lookups = Arc::new(Mutex::new(HashMap::default()));
 
-        let dht_event_handler_task = ScopedJoinHandle(task::spawn({
+        let dht_event_handler_task = scoped_task::spawn({
             let lookups = lookups.clone();
             async move {
                 Self::run_dht_event_handler(event_rx, lookups).await;
             }
-        }));
+        });
 
         Self {
             dht,
@@ -210,7 +210,7 @@ impl Lookup {
         mut wake_up: watch::Receiver<()>,
         mut iteration_finished: watch::Receiver<()>,
     ) -> ScopedJoinHandle<()> {
-        ScopedJoinHandle(task::spawn(async move {
+        scoped_task::spawn(async move {
             loop {
                 // find peers for the repo and also announce that we have it.
                 dht.search(info_hash, true);
@@ -235,7 +235,7 @@ impl Lookup {
                     },
                 }
             }
-        }))
+        })
     }
 }
 
