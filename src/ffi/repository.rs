@@ -27,6 +27,7 @@ pub unsafe extern "C" fn repository_open(
 
         ctx.spawn(async move {
             let repo = Repository::open(
+                name,
                 &store.into_std_path_buf().into(),
                 *network_handle.this_replica_id(),
                 Cryptor::Null,
@@ -34,7 +35,7 @@ pub unsafe extern "C" fn repository_open(
             )
             .await?;
 
-            network_handle.register(&name, &repo).await;
+            network_handle.register(&repo).await;
 
             let repo = Arc::new(repo);
             Ok(SharedHandle::new(repo))
@@ -119,6 +120,45 @@ pub unsafe extern "C" fn repository_subscribe(
 #[no_mangle]
 pub unsafe extern "C" fn subscription_cancel(handle: UniqueHandle<JoinHandle<()>>) {
     handle.release().abort();
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn repository_is_dht_enabled(
+    handle: UniqueHandle<Repository>,
+    port: Port<bool>,
+) {
+    let session = session::get();
+    let sender = session.sender();
+    let network = session.network().handle();
+
+    session.runtime().spawn(async move {
+        let is_dht_enabled = network.is_dht_for_repository_enabled(handle.get()).await;
+        sender.send(port, is_dht_enabled);
+    });
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn repository_enable_dht(handle: UniqueHandle<Repository>, port: Port<()>) {
+    let session = session::get();
+    let sender = session.sender();
+    let network = session.network().handle();
+
+    session.runtime().spawn(async move {
+        network.enable_dht_for_repository(handle.get()).await;
+        sender.send(port, ());
+    });
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn repository_disable_dht(handle: UniqueHandle<Repository>, port: Port<()>) {
+    let session = session::get();
+    let sender = session.sender();
+    let network = session.network().handle();
+
+    session.runtime().spawn(async move {
+        network.disable_dht_for_repository(handle.get()).await;
+        sender.send(port, ());
+    });
 }
 
 pub(super) fn entry_type_to_num(entry_type: EntryType) -> u8 {

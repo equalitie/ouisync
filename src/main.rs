@@ -29,6 +29,7 @@ async fn main() -> Result<()> {
     let mut mount_guards = Vec::new();
     for mount_point in &options.mount {
         let repo = Repository::open(
+            mount_point.name.to_owned(),
             &options.repository_store(&mount_point.name)?,
             this_replica_id,
             Cryptor::Null,
@@ -36,7 +37,7 @@ async fn main() -> Result<()> {
         )
         .await?;
 
-        network_handle.register(&mount_point.name, &repo).await;
+        network_handle.register(&repo).await;
 
         let guard = virtual_filesystem::mount(
             tokio::runtime::Handle::current(),
