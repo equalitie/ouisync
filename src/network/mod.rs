@@ -271,25 +271,26 @@ impl Handle {
     }
 
     pub async fn enable_dht_for_repository(&self, repository: &Repository) {
-        self.inner.clone().enable_dht_for_repository(repository.name()).await
+        self.inner
+            .clone()
+            .enable_dht_for_repository(repository.name())
+            .await
     }
 
     pub async fn disable_dht_for_repository(&self, repository: &Repository) {
-        self.inner.clone().disable_dht_for_repository(repository.name()).await
+        self.inner
+            .clone()
+            .disable_dht_for_repository(repository.name())
+            .await
     }
 
     pub async fn is_dht_for_repository_enabled(&self, repository: &Repository) -> bool {
-        self.inner.dht_lookups.lock().await.get(repository.name()).is_some()
-    }
-
-    pub async fn is_local_discovery_enabled(&self) -> bool {
-        let tasks_arc = self.inner.tasks.upgrade().unwrap();
-        let tasks = tasks_arc.read().await;
-        tasks.local_discovery.is_some()
-    }
-
-    pub async fn enable_local_discovery(&self, enable: bool) {
-        self.inner.enable_local_discovery(enable).await;
+        self.inner
+            .dht_lookups
+            .lock()
+            .await
+            .get(repository.name())
+            .is_some()
     }
 }
 
