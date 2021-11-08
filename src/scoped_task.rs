@@ -9,14 +9,9 @@ use tokio::task::{self, JoinError, JoinHandle};
 
 /// Set of tasks which are all automatically aborted when the set goes out of scope.
 #[derive(Default)]
-pub struct ScopedTaskSet(ScopedTaskHandle);
+pub struct ScopedTaskSet(ScopedTaskSetHandle);
 
 impl ScopedTaskSet {
-    /// Returns a handle for spawning tasks.
-    pub fn handle(&self) -> &ScopedTaskHandle {
-        &self.0
-    }
-
     /// Spawns a new task on the set. Shortcut for `self.handle().spawn()`.
     pub fn spawn<T>(&self, task: T)
     where
@@ -36,9 +31,9 @@ impl Drop for ScopedTaskSet {
 /// and send across threads. Dropping a handle *does not* abort the tasks in the set, only dropping
 /// the set itself.
 #[derive(Default, Clone)]
-pub struct ScopedTaskHandle(Arc<Mutex<Slab<JoinHandle<()>>>>);
+pub struct ScopedTaskSetHandle(Arc<Mutex<Slab<JoinHandle<()>>>>);
 
-impl ScopedTaskHandle {
+impl ScopedTaskSetHandle {
     /// Spawns a new task on the set.
     pub fn spawn<T>(&self, task: T)
     where
@@ -85,4 +80,12 @@ impl<T> Future for ScopedJoinHandle<T> {
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         Pin::new(&mut self.0).poll(cx)
     }
+}
+
+pub fn spawn<T>(task: T) -> ScopedJoinHandle<T::Output>
+where
+    T: Future + Send + 'static,
+    T::Output: Send + 'static,
+{
+    ScopedJoinHandle(task::spawn(task))
 }

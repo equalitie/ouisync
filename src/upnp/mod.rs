@@ -1,4 +1,4 @@
-use crate::scoped_task::ScopedJoinHandle;
+use crate::scoped_task::{self, ScopedJoinHandle};
 use futures::prelude::*;
 use http::Uri;
 use rupnp::{
@@ -11,7 +11,6 @@ use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
-use tokio::task;
 
 #[derive(Clone, Copy)]
 pub(crate) struct Mapping {
@@ -45,7 +44,7 @@ impl PortForwarder {
         I: IntoIterator<Item = Mapping>,
     {
         let mappings: Vec<_> = mappings.into_iter().collect();
-        let task = ScopedJoinHandle(task::spawn(async move {
+        let task = scoped_task::spawn(async move {
             for mapping in &mappings {
                 log::info!(
                     "UPnP starting port forwarding EXT:{} -> INT:{} ({})",
@@ -58,7 +57,7 @@ impl PortForwarder {
             let result = Self::run(mappings).await;
             // Warning, because we don't actually expect this to happen.
             log::warn!("UPnP port forwarding ended ({:?})", result)
-        }));
+        });
 
         Self { _task: task }
     }
@@ -91,7 +90,7 @@ impl PortForwarder {
                     let weak_handles = Arc::downgrade(&handles);
 
                     handles.lock().unwrap().entry(url).or_insert_with(|| {
-                        ScopedJoinHandle(task::spawn(async move {
+                        scoped_task::spawn(async move {
                             let r = per_igd_port_forwarder.run().await;
 
                             log::warn!("UPnP port forwarding on IGD ended ({:?})", r);
@@ -102,7 +101,7 @@ impl PortForwarder {
                                     .unwrap()
                                     .remove(&per_igd_port_forwarder.device_url);
                             }
-                        }))
+                        })
                     });
                 }
             }

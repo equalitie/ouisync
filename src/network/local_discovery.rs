@@ -19,17 +19,17 @@ type RuntimeId = [u8; 16];
 
 // Poor man's local discovery using UDP multicast.
 // XXX: We should probably use mDNS, but so far all libraries I tried had some issues.
-pub struct ReplicaDiscovery {
+pub struct LocalDiscovery {
     id: RuntimeId,
     listener_port: u16,
     socket: Arc<UdpSocket>,
     _beacon_handle: ScopedJoinHandle<()>,
 }
 
-impl ReplicaDiscovery {
+impl LocalDiscovery {
     /// Newly discovered replicas are reported on `tx` and their `RuntimeId` is placed into a
     /// LRU cache so as to not re-report it too frequently. Once the peer disconnects, the user of
-    /// `ReplicaDiscovery` should call `forget` with the `RuntimeId` and the replica shall start
+    /// `LocalDiscovery` should call `forget` with the `RuntimeId` and the replica shall start
     /// reporting it again.
     pub fn new(listener_port: u16) -> io::Result<Self> {
         let id = rand::random();

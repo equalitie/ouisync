@@ -10,14 +10,14 @@ use crate::{
     index::{self, BranchData, Index, Subscription},
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     path,
-    scoped_task::ScopedJoinHandle,
+    scoped_task::{self, ScopedJoinHandle},
     store, ReplicaId,
 };
 use camino::Utf8Path;
 use futures_util::{future, stream::FuturesUnordered, StreamExt};
 use log::Level;
 use std::{collections::HashMap, iter, sync::Arc};
-use tokio::{select, sync::Mutex, task};
+use tokio::{select, sync::Mutex};
 
 pub struct Repository {
     shared: Arc<Shared>,
@@ -42,9 +42,7 @@ impl Repository {
         });
 
         let merge_handle = if enable_merger {
-            Some(ScopedJoinHandle(task::spawn(
-                Merger::new(shared.clone()).run(),
-            )))
+            Some(scoped_task::spawn(Merger::new(shared.clone()).run()))
         } else {
             None
         };
@@ -448,7 +446,7 @@ impl Merger {
 
         let local = self.shared.local_branch().await;
 
-        let handle = ScopedJoinHandle(task::spawn(async move {
+        let handle = scoped_task::spawn(async move {
             if *local.data().root_version_vector().await
                 > *remote.data().root_version_vector().await
             {
@@ -487,7 +485,7 @@ impl Merger {
             }
 
             remote_id
-        }));
+        });
 
         self.tasks.push(handle);
         self.states.insert(remote_id, MergeState::Ongoing);
