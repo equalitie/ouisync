@@ -27,6 +27,7 @@ pub unsafe extern "C" fn repository_open(
 
         ctx.spawn(async move {
             let repo = Repository::open(
+                name,
                 &store.into_std_path_buf().into(),
                 *network_handle.this_replica_id(),
                 Cryptor::Null,
@@ -34,7 +35,7 @@ pub unsafe extern "C" fn repository_open(
             )
             .await?;
 
-            network_handle.register(&name, &repo).await;
+            network_handle.register(&repo).await;
 
             let repo = Arc::new(repo);
             Ok(SharedHandle::new(repo))

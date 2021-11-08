@@ -220,7 +220,8 @@ impl Handle {
     /// Register a local repository into the network. This links the repository with all matching
     /// repositories of currently connected remote replicas as well as any replicas connected in
     /// the future. The repository is automatically deregistered when dropped.
-    pub async fn register(&self, name: &str, repository: &Repository) -> bool {
+    pub async fn register(&self, repository: &Repository) -> bool {
+        let repo_name = repository.name().clone();
         let index = repository.index();
 
         let id = if let Some(id) = self
@@ -228,7 +229,7 @@ impl Handle {
             .indices
             .write()
             .await
-            .insert(name.to_owned(), index.clone())
+            .insert(repo_name.clone(), index.clone())
         {
             id
         } else {
@@ -236,7 +237,7 @@ impl Handle {
         };
 
         for broker in self.inner.message_brokers.lock().await.values() {
-            create_link(broker, id, name.to_owned(), index.clone()).await;
+            create_link(broker, id, repo_name.clone(), index.clone()).await;
         }
 
         // Deregister the index when it gets closed.
@@ -244,6 +245,7 @@ impl Handle {
             .spawn({
                 let closed = index.subscribe().closed();
                 let inner = self.inner.clone();
+                let repo_name = repo_name.clone();
 
                 async move {
                     closed.await;
@@ -253,20 +255,31 @@ impl Handle {
                     for broker in inner.message_brokers.lock().await.values() {
                         broker.destroy_link(Local::new(id)).await;
                     }
+
+                    inner.disable_dht_for_repository(&repo_name).await;
                 }
             })
             .await;
 
-        self.inner
-            .clone()
-            .find_peers_for_repository(name, index)
-            .await;
+        self.enable_dht_for_repository(repository).await;
 
         true
     }
 
     pub fn this_replica_id(&self) -> &ReplicaId {
         &self.inner.this_replica_id
+    }
+
+    pub async fn enable_dht_for_repository(&self, repository: &Repository) {
+        self.inner.clone().enable_dht_for_repository(repository.name()).await
+    }
+
+    pub async fn disable_dht_for_repository(&self, repository: &Repository) {
+        self.inner.clone().disable_dht_for_repository(repository.name()).await
+    }
+
+    pub async fn is_dht_for_repository_enabled(&self, repository: &Repository) -> bool {
+        self.inner.dht_lookups.lock().await.get(repository.name()).is_some()
     }
 
     pub async fn is_local_discovery_enabled(&self) -> bool {
@@ -296,7 +309,7 @@ struct Inner {
     connection_deduplicator: ConnectionDeduplicator,
     dht_peer_found_tx: mpsc::UnboundedSender<SocketAddr>,
     // Note that unwrapping the upgraded weak pointer should be fine because if the underlying Arc
-    // was Dropped, we would not be askinf ro the upgrade in the first place.
+    // was Dropped, we would not be asking for the upgrade in the first place.
     tasks: Weak<RwLock<Tasks>>,
 }
 
@@ -365,41 +378,24 @@ impl Inner {
 
     // Periodically search for peers for the given repository and announce it on the DHT.
     // TODO: use some unique id instead of name.
-    async fn find_peers_for_repository(self: Arc<Self>, name: &str, index: &Index) {
+    async fn enable_dht_for_repository(self: Arc<Self>, name: &str) {
         if let Some(dht_discovery) = &self.dht_discovery {
             let name = name.to_string();
 
             let mut dht_lookups = self.dht_lookups.lock().await;
 
             match dht_lookups.entry(name.clone()) {
-                Entry::Occupied(_) => return,
+                Entry::Occupied(_) => {}
                 Entry::Vacant(entry) => {
                     let info_hash = repository_info_hash(&name);
                     entry.insert(dht_discovery.lookup(info_hash, self.dht_peer_found_tx.clone()));
                 }
             };
-
-            // If inserted, make sure it's removed when the index is closed.
-            //
-            // TODO: Avoid this scenario:
-            //   1. repository is closed
-            //   2. user tries to subscribe a new repository, fails because the previous
-            //      one has not been removed yet
-            //   3. the closed.await fires and removes the closed repository
-            let weak = Arc::downgrade(&self);
-            let closed = index.subscribe().closed();
-
-            task::spawn(async move {
-                closed.await;
-
-                let inner = match weak.upgrade() {
-                    Some(inner) => inner,
-                    None => return,
-                };
-
-                inner.dht_lookups.lock().await.remove(&name);
-            });
         }
+    }
+
+    async fn disable_dht_for_repository(&self, name: &str) {
+        self.dht_lookups.lock().await.remove(name);
     }
 
     async fn establish_user_provided_connection(self: Arc<Self>, addr: SocketAddr) {

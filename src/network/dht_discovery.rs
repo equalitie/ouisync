@@ -74,7 +74,7 @@ impl DhtDiscovery {
             id,
             info_hash,
             lookups: Arc::downgrade(&self.lookups),
-            found_peers_tx: found_peers_tx,
+            found_peers_tx,
         });
 
         self.lookups
@@ -105,7 +105,9 @@ impl DhtDiscovery {
                     if let Some(lookup) = lookups.get_mut(&info_hash) {
                         if lookup.seen_peers.write().unwrap().insert(addr) {
                             for request in lookup.requests.values() {
-                                request.upgrade().map(|rq| rq.on_peer_found(addr));
+                                if let Some(rq) = request.upgrade() {
+                                    rq.on_peer_found(addr);
+                                }
                             }
                         }
                     }
@@ -194,7 +196,7 @@ impl Lookup {
     fn add_request(&mut self, id: RequestId, request: &Arc<LookupRequest>) {
         assert_eq!(self.info_hash, request.info_hash);
 
-        self.requests.insert(id, Arc::downgrade(&request));
+        self.requests.insert(id, Arc::downgrade(request));
 
         for peer in self.seen_peers.read().unwrap().iter() {
             request.on_peer_found(*peer);

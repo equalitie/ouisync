@@ -27,6 +27,7 @@ pub struct Repository {
 impl Repository {
     /// Opens an existing repository or creates a new one if it doesn't exists yet.
     pub async fn open(
+        name: String,
         store: &db::Store,
         this_replica_id: ReplicaId,
         cryptor: Cryptor,
@@ -36,6 +37,7 @@ impl Repository {
         let index = Index::load(pool, this_replica_id).await?;
 
         let shared = Arc::new(Shared {
+            name,
             index,
             cryptor,
             branches: Mutex::new(HashMap::new()),
@@ -51,6 +53,10 @@ impl Repository {
             shared,
             _merge_handle: merge_handle,
         })
+    }
+
+    pub fn name(&self) -> &String {
+        &self.shared.name
     }
 
     pub fn this_replica_id(&self) -> &ReplicaId {
@@ -337,6 +343,9 @@ pub(crate) async fn open_db(store: &db::Store) -> Result<db::Pool> {
 }
 
 struct Shared {
+    // This is expected to change. Right now it is being used to determine when two or more
+    // repositories are expected to "act" as one.
+    name: String,
     index: Index,
     cryptor: Cryptor,
     // Cache for `Branch` instances to make them persistent over the lifetime of the program.
@@ -518,18 +527,30 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn root_directory_always_exists() {
         let replica_id = rand::random();
-        let repo = Repository::open(&db::Store::Memory, replica_id, Cryptor::Null, false)
-            .await
-            .unwrap();
+        let repo = Repository::open(
+            "test".to_owned(),
+            &db::Store::Memory,
+            replica_id,
+            Cryptor::Null,
+            false,
+        )
+        .await
+        .unwrap();
         let _ = repo.open_directory("/").await.unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn merge() {
         let local_id = rand::random();
-        let repo = Repository::open(&db::Store::Memory, local_id, Cryptor::Null, true)
-            .await
-            .unwrap();
+        let repo = Repository::open(
+            "test".to_owned(),
+            &db::Store::Memory,
+            local_id,
+            Cryptor::Null,
+            true,
+        )
+        .await
+        .unwrap();
 
         // Add another branch to the index. Eventually there might be a more high-level API for
         // this but for now we have to resort to this.
@@ -587,9 +608,15 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn recreate_previously_deleted_file() {
         let local_id = rand::random();
-        let repo = Repository::open(&db::Store::Memory, local_id, Cryptor::Null, false)
-            .await
-            .unwrap();
+        let repo = Repository::open(
+            "test".to_owned(),
+            &db::Store::Memory,
+            local_id,
+            Cryptor::Null,
+            false,
+        )
+        .await
+        .unwrap();
 
         // Create file
         let mut file = repo.create_file("test.txt").await.unwrap();
@@ -619,9 +646,15 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn recreate_previously_deleted_directory() {
         let local_id = rand::random();
-        let repo = Repository::open(&db::Store::Memory, local_id, Cryptor::Null, false)
-            .await
-            .unwrap();
+        let repo = Repository::open(
+            "test".to_owned(),
+            &db::Store::Memory,
+            local_id,
+            Cryptor::Null,
+            false,
+        )
+        .await
+        .unwrap();
 
         // Create dir
         repo.create_directory("test")
