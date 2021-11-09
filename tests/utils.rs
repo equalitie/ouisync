@@ -81,7 +81,7 @@ impl Bin {
     }
 
     fn kill(&mut self) {
-        self.process.kill().unwrap();
+        terminate(&self.process);
         self.process.wait().unwrap();
     }
 }
@@ -178,4 +178,16 @@ where
     }
 
     panic!("The test did not finish within the given timeout");
+}
+
+// Gracefully terminate the process, unlike `Child::kill` which sends `SIGKILL` and thus doesn't
+// allow destructors to run.
+// TODO: windows version
+#[cfg(unix)]
+fn terminate(process: &Child) {
+    // SAFETY: we are just sending a `SIGTERM` signal to the process, there should be no reason for
+    // undefined behaviour here.
+    unsafe {
+        libc::kill(process.id() as libc::pid_t, libc::SIGTERM);
+    }
 }
