@@ -109,11 +109,12 @@ pub(crate) async fn open(store: &Store) -> Result<Pool> {
             SqliteConnectOptions::new()
                 .filename(path)
                 .create_if_missing(true)
-                // HACK: workaround for https://github.com/launchbadge/sqlx/issues/1467
-                .serialized(true)
         }
         Store::Memory => SqliteConnectOptions::from_str(MEMORY).expect("invalid db uri"),
     };
+
+    // HACK: workaround for https://github.com/launchbadge/sqlx/issues/1467
+    let options = options.serialized(true);
 
     PoolOptions::new()
         // HACK: Using only one connection turns the pool effectively into a mutex over a single
