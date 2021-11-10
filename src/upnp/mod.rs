@@ -1,7 +1,7 @@
 use crate::scoped_task::{self, ScopedJoinHandle};
 use futures::prelude::*;
-use http::Uri;
 use rupnp::{
+    http::Uri,
     ssdp::{SearchTarget, URN},
     Service,
 };
@@ -71,12 +71,15 @@ impl PortForwarder {
         // Periodically check for new devices: maybe UPnP was enabled later after the app started,
         // maybe the device was swapped for another one,...
         loop {
-            // TODO: It would probably be better if we were specific here that we're looking for an IGD
-            // device.
             let devices = rupnp::discover(&SearchTarget::RootDevice, DISCOVERY_DURATION).await?;
             let mut devices = Box::pin(devices);
 
             while let Some(device) = devices.try_next().await? {
+                // We are only interested in IGD.
+                if device.device_type().typ() != "InternetGatewayDevice" {
+                    continue;
+                }
+
                 if let Some((service, version)) = find_connection_service(&device) {
                     let url = device.url().clone();
 
@@ -103,6 +106,11 @@ impl PortForwarder {
                             }
                         })
                     });
+                } else {
+                    log::warn!(
+                        "UPnP port forwarding failed: non-compliant device '{}'",
+                        device.friendly_name()
+                    );
                 }
             }
 

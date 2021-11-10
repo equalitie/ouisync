@@ -1,6 +1,7 @@
 mod client;
 mod connection;
 mod dht_discovery;
+mod ip_stack;
 mod local_discovery;
 mod message;
 mod message_broker;
@@ -38,7 +39,7 @@ use std::{
 };
 use structopt::StructOpt;
 use tokio::{
-    net::{TcpListener, TcpStream, UdpSocket},
+    net::{TcpListener, TcpStream},
     sync::{mpsc, Mutex, RwLock},
     task, time,
 };
@@ -105,30 +106,31 @@ impl Network {
 
         let local_addr = listener.local_addr().map_err(Error::Network)?;
 
-        let dht_socket = if !options.disable_dht {
-            Some(
-                UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))
-                    .await
-                    .map_err(Error::Network)?,
-            )
+        let dht_sockets = if !options.disable_dht {
+            Some(dht_discovery::bind().await.map_err(Error::Network)?)
         } else {
             None
         };
-        let dht_port = dht_socket
-            .as_ref()
-            .map(|socket| socket.local_addr())
-            .transpose()
-            .map_err(Error::Network)?
-            .map(|addr| addr.port());
 
         let port_forwarder = if !options.disable_upnp {
+            let dht_port_v4 = dht_sockets
+                .as_ref()
+                .and_then(|sockets| sockets.v4())
+                .map(|socket| socket.local_addr())
+                .transpose()
+                .map_err(Error::Network)?
+                .map(|addr| addr.port());
+
+            // TODO: the ipv6 port typically doesn't need to be port-mappted but it might need to
+            // be opened in the firewall ("pinholed"). Consider using UPnP for that as well.
+
             Some(upnp::PortForwarder::new(
                 iter::once(upnp::Mapping {
                     external: local_addr.port(),
                     internal: local_addr.port(),
                     protocol: upnp::Protocol::Tcp,
                 })
-                .chain(dht_port.map(|port| upnp::Mapping {
+                .chain(dht_port_v4.map(|port| upnp::Mapping {
                     external: port,
                     internal: port,
                     protocol: upnp::Protocol::Udp,
@@ -138,8 +140,8 @@ impl Network {
             None
         };
 
-        let dht_discovery = if let Some(dht_socket) = dht_socket {
-            Some(DhtDiscovery::new(dht_socket, local_addr.port()).await)
+        let dht_discovery = if let Some(dht_sockets) = dht_sockets {
+            Some(DhtDiscovery::new(dht_sockets, local_addr.port()).await)
         } else {
             None
         };
@@ -155,8 +157,8 @@ impl Network {
             indices: RwLock::new(IndexMap::default()),
             dht_discovery,
             dht_lookups: Default::default(),
-            connection_deduplicator: ConnectionDeduplicator::new(),
             dht_peer_found_tx,
+            connection_deduplicator: ConnectionDeduplicator::new(),
             tasks: Arc::downgrade(&tasks),
         });
 
@@ -272,14 +274,12 @@ impl Handle {
 
     pub async fn enable_dht_for_repository(&self, repository: &Repository) {
         self.inner
-            .clone()
             .enable_dht_for_repository(repository.name())
             .await
     }
 
     pub async fn disable_dht_for_repository(&self, repository: &Repository) {
         self.inner
-            .clone()
             .disable_dht_for_repository(repository.name())
             .await
     }
@@ -307,8 +307,8 @@ struct Inner {
     indices: RwLock<IndexMap>,
     dht_discovery: Option<DhtDiscovery>,
     dht_lookups: Mutex<HashMap<String, Arc<dht_discovery::LookupRequest>>>,
-    connection_deduplicator: ConnectionDeduplicator,
     dht_peer_found_tx: mpsc::UnboundedSender<SocketAddr>,
+    connection_deduplicator: ConnectionDeduplicator,
     // Note that unwrapping the upgraded weak pointer should be fine because if the underlying Arc
     // was Dropped, we would not be asking for the upgrade in the first place.
     tasks: Weak<RwLock<Tasks>>,
@@ -379,16 +379,14 @@ impl Inner {
 
     // Periodically search for peers for the given repository and announce it on the DHT.
     // TODO: use some unique id instead of name.
-    async fn enable_dht_for_repository(self: Arc<Self>, name: &str) {
+    async fn enable_dht_for_repository(&self, name: &str) {
         if let Some(dht_discovery) = &self.dht_discovery {
-            let name = name.to_string();
-
             let mut dht_lookups = self.dht_lookups.lock().await;
 
-            match dht_lookups.entry(name.clone()) {
+            match dht_lookups.entry(name.to_owned()) {
                 Entry::Occupied(_) => {}
                 Entry::Vacant(entry) => {
-                    let info_hash = repository_info_hash(&name);
+                    let info_hash = repository_info_hash(name);
                     entry.insert(dht_discovery.lookup(info_hash, self.dht_peer_found_tx.clone()));
                 }
             };
