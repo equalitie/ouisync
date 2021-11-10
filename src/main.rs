@@ -4,8 +4,8 @@ mod virtual_filesystem;
 use self::options::Options;
 use anyhow::Result;
 use ouisync::{config, this_replica, Cryptor, Network, Repository};
+use std::io;
 use structopt::StructOpt;
-use tokio::signal;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -53,7 +53,32 @@ async fn main() -> Result<()> {
         println!("This replica ID is {}", this_replica_id);
     }
 
-    signal::ctrl_c().await?;
+    terminated().await?;
 
     Ok(())
+}
+
+// Wait until the program is terminated.
+#[cfg(unix)]
+async fn terminated() -> io::Result<()> {
+    use tokio::{
+        select,
+        signal::unix::{signal, SignalKind},
+    };
+
+    // Wait for SIGINT or SIGTERM
+    let mut interrupt = signal(SignalKind::interrupt())?;
+    let mut terminate = signal(SignalKind::terminate())?;
+
+    select! {
+        _ = interrupt.recv() => (),
+        _ = terminate.recv() => (),
+    }
+
+    Ok(())
+}
+
+#[cfg(not(unix))]
+async fn terminated() -> io::Result<()> {
+    tokio::signal::ctrl_c().await
 }

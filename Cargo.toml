@@ -36,8 +36,8 @@ rand = "0.8.4"
 rupnp = "1.0.0"
 serde = { version = "1.0", features = ["derive", "rc"] }
 sha3 = "0.9.1"
-slab = "0.4.3"
-sqlx = { version = "0.5.7", features = ["runtime-tokio-rustls", "sqlite"] }
+slab = "0.4.5"
+sqlx = { version = "0.5.9", features = ["runtime-tokio-rustls", "sqlite"] }
 structopt = "0.3.21"
 thiserror = "1.0.24"
 zeroize = "1.2.0"
@@ -63,6 +63,9 @@ proptest = "1.0"
 tempfile = "3.2"
 test-strategy = "0.1.1"
 
-
 [build-dependencies]
 cbindgen = "0.19.0"
+
+[patch.crates-io]
+# Workaround for https://github.com/launchbadge/sqlx/issues/1467
+sqlx = { git = "https://github.com/launchbadge/sqlx", rev = "b419bf529823241a7fd598628919ab451fd7d136" }

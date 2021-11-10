@@ -12,6 +12,7 @@ use tempfile::TempDir;
 
 /// Wrapper for the ouisync binary.
 pub struct Bin {
+    id: u32,
     mount_dir: TempDir,
     port: u16,
     process: Child,
@@ -43,32 +44,33 @@ impl Bin {
         let mut stdout = process.stdout.take().unwrap();
 
         if let Some(port) = wait_for_ready_message(&mut stdout) {
-            println!("replica {} ready on port {}", id, port);
+            println!("[{}] replica ready on port {}", id, port);
 
             copy_lines_prefixed(stdout, io::stdout(), id);
             copy_lines_prefixed(process.stderr.take().unwrap(), io::stderr(), id);
 
             Self {
+                id,
                 mount_dir,
                 port,
                 process,
             }
         } else {
-            println!("Failed to parse ready line.");
-            println!("Waiting for program to finish.");
+            println!("[{}] Failed to parse ready line.", id);
+            println!("[{}] Waiting for process to finish.", id);
 
-            let exit_status = process.wait();
+            let exit_status = process.wait().unwrap();
 
-            println!("Program finished with exit status: {:?}", exit_status);
-            println!("stderr:");
+            println!("[{}] Process finished with {}", id, exit_status);
+            println!("[{}] stderr:", id);
 
             let stderr = process.stderr.take().unwrap();
 
             for line in BufReader::new(stderr).lines() {
-                println!("    {:?}", line);
+                println!("[{}]     {:?}", id, line);
             }
 
-            panic!("Failed to run ouisync executable");
+            panic!("[{}] Failed to run ouisync executable", id);
         }
     }
 
@@ -81,8 +83,9 @@ impl Bin {
     }
 
     fn kill(&mut self) {
-        self.process.kill().unwrap();
-        self.process.wait().unwrap();
+        terminate(&self.process);
+        let exit_status = self.process.wait().unwrap();
+        println!("[{}] Process finished with {}", self.id, exit_status);
     }
 }
 
@@ -178,4 +181,16 @@ where
     }
 
     panic!("The test did not finish within the given timeout");
+}
+
+// Gracefully terminate the process, unlike `Child::kill` which sends `SIGKILL` and thus doesn't
+// allow destructors to run.
+// TODO: windows version
+#[cfg(unix)]
+fn terminate(process: &Child) {
+    // SAFETY: we are just sending a `SIGTERM` signal to the process, there should be no reason for
+    // undefined behaviour here.
+    unsafe {
+        libc::kill(process.id() as libc::pid_t, libc::SIGTERM);
+    }
 }
