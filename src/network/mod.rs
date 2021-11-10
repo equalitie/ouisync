@@ -272,14 +272,12 @@ impl Handle {
 
     pub async fn enable_dht_for_repository(&self, repository: &Repository) {
         self.inner
-            .clone()
             .enable_dht_for_repository(repository.name())
             .await
     }
 
     pub async fn disable_dht_for_repository(&self, repository: &Repository) {
         self.inner
-            .clone()
             .disable_dht_for_repository(repository.name())
             .await
     }
@@ -307,8 +305,8 @@ struct Inner {
     indices: RwLock<IndexMap>,
     dht_discovery: Option<DhtDiscovery>,
     dht_lookups: Mutex<HashMap<String, Arc<dht_discovery::LookupRequest>>>,
-    connection_deduplicator: ConnectionDeduplicator,
     dht_peer_found_tx: mpsc::UnboundedSender<SocketAddr>,
+    connection_deduplicator: ConnectionDeduplicator,
     // Note that unwrapping the upgraded weak pointer should be fine because if the underlying Arc
     // was Dropped, we would not be asking for the upgrade in the first place.
     tasks: Weak<RwLock<Tasks>>,
@@ -379,16 +377,14 @@ impl Inner {
 
     // Periodically search for peers for the given repository and announce it on the DHT.
     // TODO: use some unique id instead of name.
-    async fn enable_dht_for_repository(self: Arc<Self>, name: &str) {
+    async fn enable_dht_for_repository(&self, name: &str) {
         if let Some(dht_discovery) = &self.dht_discovery {
-            let name = name.to_string();
-
             let mut dht_lookups = self.dht_lookups.lock().await;
 
-            match dht_lookups.entry(name.clone()) {
+            match dht_lookups.entry(name.to_owned()) {
                 Entry::Occupied(_) => {}
                 Entry::Vacant(entry) => {
-                    let info_hash = repository_info_hash(&name);
+                    let info_hash = repository_info_hash(name);
                     entry.insert(dht_discovery.lookup(info_hash, self.dht_peer_found_tx.clone()));
                 }
             };

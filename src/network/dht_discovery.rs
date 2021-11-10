@@ -99,11 +99,12 @@ impl DhtDiscovery {
                     break;
                 }
                 DhtEvent::PeerFound(info_hash, addr) => {
-                    log::debug!("DHT found peer for {:?}: {}", info_hash, addr);
                     let mut lookups = lookups.lock().unwrap();
 
                     if let Some(lookup) = lookups.get_mut(&info_hash) {
                         if lookup.seen_peers.write().unwrap().insert(addr) {
+                            log::debug!("DHT found peer for {:?}: {}", info_hash, addr);
+
                             for request in lookup.requests.values() {
                                 if let Some(rq) = request.upgrade() {
                                     rq.on_peer_found(addr);
