@@ -138,8 +138,14 @@ impl MessageBroker {
     }
 
     pub async fn add_connection(&self, stream: TcpObjectStream, permit: ConnectionPermit) {
-        self.send_command(Command::AddConnection(stream, permit))
+        if self
+            .command_tx
+            .send(Command::AddConnection(stream, permit))
             .await
+            .is_err()
+        {
+            log::error!("failed to add connection - message broker is shutting down")
+        }
     }
 
     /// Has this broker at least one live connection?
@@ -157,28 +163,30 @@ impl MessageBroker {
         local_name: Local<String>,
         remote_name: Remote<String>,
     ) {
-        self.send_command(Command::CreateLink {
-            index,
-            local_id,
-            local_name,
-            remote_name,
-        })
-        .await
+        if self
+            .command_tx
+            .send(Command::CreateLink {
+                index,
+                local_id,
+                local_name,
+                remote_name,
+            })
+            .await
+            .is_err()
+        {
+            log::error!("failed to create link - message broker is shutting down")
+        }
     }
 
     /// Destroy the link between a local repository with the specified id and its remote
     /// counterpart (if one exists).
     pub async fn destroy_link(&self, local_id: Local<RepositoryId>) {
-        self.send_command(Command::DestroyLink { local_id }).await
-    }
-
-    async fn send_command(&self, command: Command) {
-        if let Err(command) = self.command_tx.send(command).await {
-            log::error!(
-                "failed to send command {:?} - message broker has no connections",
-                command
-            );
-        }
+        // We can safely ignore the error here because it only means the message broker is shutting
+        // down and so all existing links are going to be destroyed anyway.
+        self.command_tx
+            .send(Command::DestroyLink { local_id })
+            .await
+            .unwrap_or(())
     }
 }
 
