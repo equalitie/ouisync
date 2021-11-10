@@ -1,6 +1,7 @@
 mod client;
 mod connection;
 mod dht_discovery;
+mod ip_stack;
 mod local_discovery;
 mod message;
 mod message_broker;
@@ -38,7 +39,7 @@ use std::{
 };
 use structopt::StructOpt;
 use tokio::{
-    net::{TcpListener, TcpStream, UdpSocket},
+    net::{TcpListener, TcpStream},
     sync::{mpsc, Mutex, RwLock},
     task, time,
 };
@@ -105,30 +106,31 @@ impl Network {
 
         let local_addr = listener.local_addr().map_err(Error::Network)?;
 
-        let dht_socket = if !options.disable_dht {
-            Some(
-                UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))
-                    .await
-                    .map_err(Error::Network)?,
-            )
+        let dht_sockets = if !options.disable_dht {
+            Some(dht_discovery::bind().await.map_err(Error::Network)?)
         } else {
             None
         };
-        let dht_port = dht_socket
-            .as_ref()
-            .map(|socket| socket.local_addr())
-            .transpose()
-            .map_err(Error::Network)?
-            .map(|addr| addr.port());
 
         let port_forwarder = if !options.disable_upnp {
+            let dht_port_v4 = dht_sockets
+                .as_ref()
+                .and_then(|sockets| sockets.v4())
+                .map(|socket| socket.local_addr())
+                .transpose()
+                .map_err(Error::Network)?
+                .map(|addr| addr.port());
+
+            // TODO: the ipv6 port typically doesn't need to be port-mappted but it might need to
+            // be opened in the firewall ("pinholed"). Consider using UPnP for that as well.
+
             Some(upnp::PortForwarder::new(
                 iter::once(upnp::Mapping {
                     external: local_addr.port(),
                     internal: local_addr.port(),
                     protocol: upnp::Protocol::Tcp,
                 })
-                .chain(dht_port.map(|port| upnp::Mapping {
+                .chain(dht_port_v4.map(|port| upnp::Mapping {
                     external: port,
                     internal: port,
                     protocol: upnp::Protocol::Udp,
@@ -138,8 +140,8 @@ impl Network {
             None
         };
 
-        let dht_discovery = if let Some(dht_socket) = dht_socket {
-            Some(DhtDiscovery::new(dht_socket, local_addr.port()).await)
+        let dht_discovery = if let Some(dht_sockets) = dht_sockets {
+            Some(DhtDiscovery::new(dht_sockets, local_addr.port()).await)
         } else {
             None
         };
