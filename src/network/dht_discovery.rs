@@ -245,9 +245,7 @@ impl Lookup {
                     dht.search(info_hash, true)
                 }
 
-                // Shouldn't fail because if the Sender is Dropped, this task should have been
-                // Dropped as well.
-                iteration_finished.changed().await.unwrap();
+                iteration_finished.changed().await.unwrap_or(());
 
                 seen_peers.write().unwrap().clear();
 
@@ -258,11 +256,7 @@ impl Lookup {
 
                 select! {
                     _ = time::sleep(duration) => (),
-                    r = wake_up.changed() => {
-                        // Shouldn't fail because if the sender is Dropped, this task shold have
-                        // been Dropped as well.
-                        r.unwrap()
-                    },
+                    _ = wake_up.changed() => (),
                 }
             }
         })

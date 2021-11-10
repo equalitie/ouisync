@@ -157,8 +157,8 @@ impl Network {
             indices: RwLock::new(IndexMap::default()),
             dht_discovery,
             dht_lookups: Default::default(),
-            connection_deduplicator: ConnectionDeduplicator::new(),
             dht_peer_found_tx,
+            connection_deduplicator: ConnectionDeduplicator::new(),
             tasks: Arc::downgrade(&tasks),
         });
 
