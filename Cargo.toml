@@ -36,7 +36,7 @@ rand = "0.8.4"
 rupnp = "1.0.0"
 serde = { version = "1.0", features = ["derive", "rc"] }
 sha3 = "0.9.1"
-slab = "0.4.3"
+slab = "0.4.5"
 sqlx = { version = "0.5.9", features = ["runtime-tokio-rustls", "sqlite"] }
 structopt = "0.3.21"
 thiserror = "1.0.24"

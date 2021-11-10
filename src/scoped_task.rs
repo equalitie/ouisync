@@ -49,7 +49,9 @@ impl ScopedTaskSetHandle {
             async move {
                 task.await;
                 // remove the handle from the set when the task terminates by itself.
-                handles.lock().unwrap().remove(key);
+                // NOTE: Using `try_remove` to avoid panic in case `abort_all` was called before we
+                // reached this point.
+                handles.lock().unwrap().try_remove(key);
             }
         });
 
