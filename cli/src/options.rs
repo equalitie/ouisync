@@ -1,8 +1,7 @@
-use anyhow::{Context, Result};
-use ouisync::{NetworkOptions, Store};
+use anyhow::{Context, Error, Result};
+use ouisync_lib::{NetworkOptions, Store};
 use std::{path::PathBuf, str::FromStr};
 use structopt::StructOpt;
-use thiserror::Error;
 
 /// Command line options.
 #[derive(StructOpt, Debug)]
@@ -94,10 +93,12 @@ pub(crate) struct MountPoint {
 }
 
 impl FromStr for MountPoint {
-    type Err = MountPointParseError;
+    type Err = Error;
 
     fn from_str(input: &str) -> Result<Self, Self::Err> {
-        let index = input.find(':').ok_or(MountPointParseError)?;
+        let index = input
+            .find(':')
+            .context("invalid mount point specification")?;
 
         Ok(Self {
             name: input[..index].to_owned(),
@@ -105,7 +106,3 @@ impl FromStr for MountPoint {
         })
     }
 }
-
-#[derive(Debug, Error)]
-#[error("invalid mount point specification")]
-pub(crate) struct MountPointParseError;

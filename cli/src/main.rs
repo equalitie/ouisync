@@ -3,7 +3,7 @@ mod virtual_filesystem;
 
 use self::options::Options;
 use anyhow::Result;
-use ouisync::{config, this_replica, Cryptor, Network, Repository};
+use ouisync_lib::{config, this_replica, Cryptor, Network, Repository};
 use std::io;
 use structopt::StructOpt;
 

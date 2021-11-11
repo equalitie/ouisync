@@ -16,7 +16,7 @@ use fuser::{
     BackgroundSession, FileAttr, FileType, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory,
     ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow,
 };
-use ouisync::{
+use ouisync_lib::{
     debug_printer::DebugPrinter, EntryType, Error, File, JointDirectory, JointEntry, JointEntryRef,
     MissingVersionStrategy, Repository, Result,
 };

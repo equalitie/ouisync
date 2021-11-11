@@ -32,7 +32,9 @@ use btdht::{InfoHash, INFO_HASH_LEN};
 use std::{
     collections::{hash_map::Entry, HashMap},
     convert::TryFrom,
-    fmt, io, iter,
+    fmt,
+    future::Future,
+    io, iter,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::{Arc, Weak},
     time::Duration,
@@ -550,7 +552,7 @@ impl Inner {
 
     async fn spawn<Fut>(&self, f: Fut)
     where
-        Fut: futures::Future<Output = ()> + Send + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
     {
         let tasks_arc = self.tasks.upgrade().unwrap();
         let tasks = tasks_arc.write().await;

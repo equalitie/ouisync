@@ -1,4 +1,4 @@
-use ouisync::{debug_printer::DebugPrinter, Error, File, JointDirectory, JointEntry, Result};
+use ouisync_lib::{debug_printer::DebugPrinter, Error, File, JointDirectory, JointEntry, Result};
 use slab::Slab;
 use std::convert::TryInto;
 

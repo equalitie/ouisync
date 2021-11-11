@@ -1,6 +1,6 @@
 [workspace]
 
-members = ["lib"]
+members = ["cli", "lib"]
 
 [patch.crates-io]
 # Workaround for https://github.com/launchbadge/sqlx/issues/1467

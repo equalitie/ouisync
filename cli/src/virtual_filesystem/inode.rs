@@ -1,6 +1,6 @@
 use camino::Utf8PathBuf;
 use fuser::FUSE_ROOT_ID;
-use ouisync::{Error, ReplicaId, Result};
+use ouisync_lib::{Error, ReplicaId, Result};
 use slab::Slab;
 use std::{
     collections::{hash_map::Entry, HashMap},
