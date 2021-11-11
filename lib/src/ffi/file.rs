@@ -98,14 +98,14 @@ pub unsafe extern "C" fn file_read(
     session::with(port, error, |ctx| {
         let file = handle.get();
 
-        let buffer = AssumeSend(buffer);
+        let buffer = AssumeSend::new(buffer);
         let len: usize = len.try_into().map_err(|_| Error::OffsetOutOfRange)?;
 
         ctx.spawn(async move {
             let mut file = file.lock().await;
             file.seek(SeekFrom::Start(offset)).await?;
 
-            let buffer = slice::from_raw_parts_mut(buffer.0, len);
+            let buffer = slice::from_raw_parts_mut(buffer.into_inner(), len);
             let len = file.read(buffer).await? as u64;
 
             Ok(len)
@@ -126,11 +126,11 @@ pub unsafe extern "C" fn file_write(
     session::with(port, error, |ctx| {
         let file = handle.get();
 
-        let buffer = AssumeSend(buffer);
+        let buffer = AssumeSend::new(buffer);
         let len: usize = len.try_into().map_err(|_| Error::OffsetOutOfRange)?;
 
         ctx.spawn(async move {
-            let buffer = slice::from_raw_parts(buffer.0, len);
+            let buffer = slice::from_raw_parts(buffer.into_inner(), len);
 
             let mut file = file.lock().await;
             file.seek(SeekFrom::Start(offset)).await?;

@@ -32,7 +32,6 @@ mod tests {
     use super::*;
     use crate::test_utils;
     use rand::{rngs::StdRng, Rng, SeedableRng};
-    use std::convert::TryFrom;
     use test_strategy::proptest;
 
     #[test]

@@ -105,8 +105,20 @@ impl<T> RefHandle<T> {
 
 // Wrapper that bypasses the type-checker to allow sending non-Send types across threads.
 // Highly unsafe!
-pub(super) struct AssumeSend<T>(pub T);
+#[derive(Clone, Copy)]
+pub(super) struct AssumeSend<T>(T);
+
 unsafe impl<T> Send for AssumeSend<T> {}
+
+impl<T> AssumeSend<T> {
+    pub unsafe fn new(value: T) -> Self {
+        Self(value)
+    }
+
+    pub fn into_inner(self) -> T {
+        self.0
+    }
+}
 
 pub unsafe fn ptr_to_str<'a>(ptr: *const c_char) -> Result<&'a str> {
     CStr::from_ptr(ptr)

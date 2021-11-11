@@ -1,22 +1,23 @@
 use cbindgen::{Builder, Language};
-use std::{env, path::PathBuf};
+use std::path::Path;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Generate the C bindings header
 
-    let project_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
+    let lib_dir = Path::new("lib");
+    let output_path = Path::new("target").join("bindings.h");
 
     Builder::new()
         .with_config(cbindgen::Config {
             language: Language::C,
             ..Default::default()
         })
-        .with_src(project_dir.join("src").join("ffi").join("mod.rs"))
+        .with_src(lib_dir.join("src").join("ffi").join("mod.rs"))
         .exclude_item("DartCObject")
         .exclude_item("DartCObjectType")
         .exclude_item("DartCObjectValue")
         .generate()?
-        .write_to_file(project_dir.join("target").join("bindings.h"));
+        .write_to_file(output_path);
 
     Ok(())
 }

@@ -1,5 +1,5 @@
 use crate::scoped_task::{self, ScopedJoinHandle};
-use futures::prelude::*;
+use futures_util::TryStreamExt;
 use rupnp::{
     http::Uri,
     ssdp::{SearchTarget, URN},
