@@ -5,7 +5,7 @@ version = "0.1.0"
 authors = ["Adam Cigánek <adam@equalit.ie>", "Peter Jankuliak <peter@equalit.ie>"]
 license = "MPL-2.0"
 repository = "https://github.com/equalitie/ouisync"
-edition = "2018"
+edition = "2021"
 rust-version = "1.56.0"
 publish = false
 

@@ -211,13 +211,13 @@ impl Sender {
         F: Future<Output = Result<T>> + Send + 'static,
         T: Into<DartCObject> + 'static,
     {
-        let error_ptr = AssumeSend(error_ptr);
+        let error_ptr = AssumeSend::new(error_ptr);
         let sender = *self;
 
         async move {
             match f.await {
-                Ok(value) => sender.send_ok(port, error_ptr.0, value),
-                Err(error) => sender.send_err(port, error_ptr.0, error),
+                Ok(value) => sender.send_ok(port, error_ptr.into_inner(), value),
+                Err(error) => sender.send_err(port, error_ptr.into_inner(), error),
             }
         }
     }

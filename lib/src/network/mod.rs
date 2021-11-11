@@ -31,7 +31,6 @@ use crate::{
 use btdht::{InfoHash, INFO_HASH_LEN};
 use std::{
     collections::{hash_map::Entry, HashMap},
-    convert::TryFrom,
     fmt,
     future::Future,
     io, iter,

@@ -4,7 +4,7 @@ description = "Secure P2P file sharing (command-line interface)"
 version = "0.1.0"
 authors = ["Adam Cigánek <adam@equalit.ie>", "Peter Jankuliak <peter@equalit.ie>"]
 license = "MPL-2.0"
-edition = "2018"
+edition = "2021"
 publish = false
 
 [[bin]]

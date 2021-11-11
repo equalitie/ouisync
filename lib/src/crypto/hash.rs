@@ -2,11 +2,7 @@ use crate::format;
 use generic_array::{sequence::GenericSequence, typenum::Unsigned, GenericArray};
 use serde::{Deserialize, Serialize};
 use sha3::{digest::Digest, Sha3_256};
-use std::{
-    array::TryFromSliceError,
-    convert::{TryFrom, TryInto},
-    fmt,
-};
+use std::{array::TryFromSliceError, fmt};
 
 /// Wrapper for a 256-bit hash digest, for convenience. Also implements friendly formatting.
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
