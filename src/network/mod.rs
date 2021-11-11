@@ -306,7 +306,7 @@ struct Inner {
     message_brokers: Mutex<HashMap<ReplicaId, MessageBroker>>,
     indices: RwLock<IndexMap>,
     dht_discovery: Option<DhtDiscovery>,
-    dht_lookups: Mutex<HashMap<String, Arc<dht_discovery::LookupRequest>>>,
+    dht_lookups: Mutex<HashMap<String, dht_discovery::LookupRequest>>,
     dht_peer_found_tx: mpsc::UnboundedSender<SocketAddr>,
     connection_deduplicator: ConnectionDeduplicator,
     // Note that unwrapping the upgraded weak pointer should be fine because if the underlying Arc

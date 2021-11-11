@@ -1,8 +1,7 @@
 use super::ip_stack::IpStack;
 use crate::scoped_task::{self, ScopedJoinHandle};
-use btdht::{DhtEvent, InfoHash, MainlineDht};
-
-use futures_util::future;
+use btdht::{InfoHash, MainlineDht};
+use futures_util::{future, stream, StreamExt};
 use rand::Rng;
 use std::{
     collections::{HashMap, HashSet},
@@ -44,21 +43,11 @@ impl DhtDiscovery {
         let lookups = Arc::new(Mutex::new(HashMap::default()));
 
         let dhts = match sockets {
-            IpStack::V4(socket) => IpStack::V4(start_dht(
-                socket,
-                acceptor_port,
-                routers_v4,
-                lookups.clone(),
-            )),
-            IpStack::V6(socket) => IpStack::V6(start_dht(
-                socket,
-                acceptor_port,
-                routers_v6,
-                lookups.clone(),
-            )),
+            IpStack::V4(socket) => IpStack::V4(start_dht(socket, acceptor_port, routers_v4)),
+            IpStack::V6(socket) => IpStack::V6(start_dht(socket, acceptor_port, routers_v6)),
             IpStack::Dual { v4, v6 } => IpStack::Dual {
-                v4: start_dht(v4, acceptor_port, routers_v4, lookups.clone()),
-                v6: start_dht(v6, acceptor_port, routers_v6, lookups.clone()),
+                v4: start_dht(v4, acceptor_port, routers_v4),
+                v6: start_dht(v6, acceptor_port, routers_v6),
             },
         };
 
@@ -73,82 +62,47 @@ impl DhtDiscovery {
         &self,
         info_hash: InfoHash,
         found_peers_tx: mpsc::UnboundedSender<SocketAddr>,
-    ) -> Arc<LookupRequest> {
+    ) -> LookupRequest {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
 
-        let request = Arc::new(LookupRequest {
+        let request = LookupRequest {
             id,
             info_hash,
             lookups: Arc::downgrade(&self.lookups),
-            found_peers_tx,
-        });
+        };
 
         self.lookups
             .lock()
             .unwrap()
             .entry(info_hash)
             .or_insert_with(|| Lookup::new(self.dhts.clone(), info_hash))
-            .add_request(id, &request);
+            .add_request(id, found_peers_tx);
 
         request
     }
 }
 
-fn start_dht(
-    socket: UdpSocket,
-    acceptor_port: u16,
-    routers: Vec<SocketAddr>,
-    lookups: Arc<Mutex<Lookups>>,
-) -> MainlineDht {
+fn start_dht(socket: UdpSocket, acceptor_port: u16, routers: Vec<SocketAddr>) -> MainlineDht {
     // TODO: load the DHT state from a previous save if it exists.
-    let (dht, event_rx) = MainlineDht::builder()
+    let dht = MainlineDht::builder()
         .add_routers(routers)
         .set_read_only(false)
         .set_announce_port(acceptor_port)
         .start(socket);
 
-    // This task will terminate when `event_rx` gets closed which happens when the dht is dropped.
-    task::spawn(run_event_handler(event_rx, lookups));
-
-    dht
-}
-
-async fn run_event_handler(
-    mut event_rx: mpsc::UnboundedReceiver<DhtEvent>,
-    lookups: Arc<Mutex<Lookups>>,
-) {
-    while let Some(event) = event_rx.recv().await {
-        match event {
-            DhtEvent::BootstrapCompleted => log::info!("DHT bootstrap complete"),
-            DhtEvent::BootstrapFailed => {
-                log::error!("DHT bootstrap failed");
-                break;
-            }
-            DhtEvent::PeerFound(info_hash, addr) => {
-                let mut lookups = lookups.lock().unwrap();
-
-                if let Some(lookup) = lookups.get_mut(&info_hash) {
-                    if lookup.seen_peers.write().unwrap().insert(addr) {
-                        log::debug!("DHT found peer for {:?}: {}", info_hash, addr);
-
-                        for request in lookup.requests.values() {
-                            if let Some(rq) = request.upgrade() {
-                                rq.on_peer_found(addr);
-                            }
-                        }
-                    }
-                }
-            }
-            DhtEvent::LookupCompleted(info_hash) => {
-                log::debug!("DHT lookup for {:?} complete", info_hash);
-                let mut lookups = lookups.lock().unwrap();
-
-                if let Some(lookup) = lookups.get_mut(&info_hash) {
-                    let _ = lookup.iteration_finished_tx.send(());
-                }
+    // Spawn a task to log the DHT bootstrap status.
+    task::spawn({
+        let dht = dht.clone();
+        async move {
+            if dht.bootstrapped().await {
+                log::info!("DHT bootstrap complete")
+            } else {
+                log::error!("DHT bootstrap failed")
             }
         }
-    }
+    });
+
+    dht
 }
 
 type Lookups = HashMap<InfoHash, Lookup>;
@@ -159,13 +113,6 @@ pub struct LookupRequest {
     id: RequestId,
     info_hash: InfoHash,
     lookups: Weak<Mutex<Lookups>>,
-    found_peers_tx: mpsc::UnboundedSender<SocketAddr>,
-}
-
-impl LookupRequest {
-    fn on_peer_found(&self, addr: SocketAddr) {
-        let _ = self.found_peers_tx.send(addr);
-    }
 }
 
 impl Drop for LookupRequest {
@@ -174,8 +121,9 @@ impl Drop for LookupRequest {
             let mut lookups = lookups.lock().unwrap();
 
             let empty = if let Some(lookup) = lookups.get_mut(&self.info_hash) {
-                lookup.requests.remove(&self.id);
-                lookup.requests.is_empty()
+                let mut requests = lookup.requests.lock().unwrap();
+                requests.remove(&self.id);
+                requests.is_empty()
             } else {
                 false
             };
@@ -188,46 +136,40 @@ impl Drop for LookupRequest {
 }
 
 struct Lookup {
-    info_hash: InfoHash,
     seen_peers: Arc<RwLock<HashSet<SocketAddr>>>, // To avoid duplicates
-    requests: HashMap<RequestId, Weak<LookupRequest>>,
+    requests: Arc<Mutex<HashMap<RequestId, mpsc::UnboundedSender<SocketAddr>>>>,
     wake_up_tx: watch::Sender<()>,
-    iteration_finished_tx: watch::Sender<()>,
     _task: ScopedJoinHandle<()>,
 }
 
 impl Lookup {
     fn new(dhts: IpStack<MainlineDht>, info_hash: InfoHash) -> Self {
         let (wake_up_tx, wake_up_rx) = watch::channel(());
-        let (iteration_finished_tx, iteration_finished_rx) = watch::channel(());
-
         let seen_peers = Arc::new(RwLock::new(Default::default()));
+        let requests = Arc::new(Mutex::new(HashMap::new()));
+
+        let task = Self::start_task(
+            dhts,
+            info_hash,
+            seen_peers.clone(),
+            requests.clone(),
+            wake_up_rx,
+        );
 
         Lookup {
-            info_hash,
-            seen_peers: seen_peers.clone(),
-            requests: Default::default(),
+            seen_peers,
+            requests,
             wake_up_tx,
-            iteration_finished_tx,
-            _task: Self::start_task(
-                dhts,
-                info_hash,
-                seen_peers,
-                wake_up_rx,
-                iteration_finished_rx,
-            ),
+            _task: task,
         }
     }
 
-    fn add_request(&mut self, id: RequestId, request: &Arc<LookupRequest>) {
-        assert_eq!(self.info_hash, request.info_hash);
-
-        self.requests.insert(id, Arc::downgrade(request));
-
+    fn add_request(&mut self, id: RequestId, tx: mpsc::UnboundedSender<SocketAddr>) {
         for peer in self.seen_peers.read().unwrap().iter() {
-            request.on_peer_found(*peer);
+            tx.send(*peer).unwrap_or(());
         }
 
+        self.requests.lock().unwrap().insert(id, tx);
         self.wake_up_tx.send(()).unwrap();
     }
 
@@ -235,17 +177,24 @@ impl Lookup {
         dhts: IpStack<MainlineDht>,
         info_hash: InfoHash,
         seen_peers: Arc<RwLock<HashSet<SocketAddr>>>,
+        requests: Arc<Mutex<HashMap<RequestId, mpsc::UnboundedSender<SocketAddr>>>>,
         mut wake_up: watch::Receiver<()>,
-        mut iteration_finished: watch::Receiver<()>,
     ) -> ScopedJoinHandle<()> {
         scoped_task::spawn(async move {
             loop {
                 // find peers for the repo and also announce that we have it.
-                for dht in dhts.iter() {
-                    dht.search(info_hash, true)
-                }
+                let mut peers =
+                    stream::iter(dhts.iter()).flat_map(|dht| dht.search(info_hash, true));
 
-                iteration_finished.changed().await.unwrap_or(());
+                while let Some(peer) = peers.next().await {
+                    if seen_peers.write().unwrap().insert(peer) {
+                        log::debug!("DHT found peer for {:?}: {}", info_hash, peer);
+
+                        for tx in requests.lock().unwrap().values() {
+                            tx.send(peer).unwrap_or(());
+                        }
+                    }
+                }
 
                 seen_peers.write().unwrap().clear();
 
