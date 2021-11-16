@@ -11,13 +11,36 @@ use crate::{
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     path,
     scoped_task::{self, ScopedJoinHandle},
+    share_token::ShareToken,
     store, ReplicaId,
 };
 use camino::Utf8Path;
 use futures_util::{future, stream::FuturesUnordered, StreamExt};
 use log::Level;
-use std::{collections::HashMap, iter, sync::Arc};
+use sqlx::Row;
+use std::{collections::HashMap, iter, str::FromStr, sync::Arc};
 use tokio::{select, sync::Mutex};
+
+/// Size of repository ID in bytes.
+pub const REPOSITORY_ID_SIZE: usize = 16;
+
+define_random_id! {
+    /// Unique id of a repository.
+    pub struct RepositoryId([u8; REPOSITORY_ID_SIZE]);
+}
+
+derive_sqlx_traits_for_u8_array_wrapper!(RepositoryId);
+
+impl FromStr for RepositoryId {
+    type Err = hex::FromHexError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut bytes = [0; REPOSITORY_ID_SIZE];
+        hex::decode_to_slice(s, &mut bytes)?;
+
+        Ok(Self(bytes))
+    }
+}
 
 pub struct Repository {
     shared: Arc<Shared>,
@@ -53,6 +76,48 @@ impl Repository {
             shared,
             _merge_handle: merge_handle,
         })
+    }
+
+    /// Get the id of this repository or `None` if no id was assigned yet. A repository gets an id
+    /// the first time it is either shared ([`Self::share`]) or a accepts a share
+    /// ([`Self::accept`]).
+    pub async fn get_id(&self) -> Result<Option<RepositoryId>> {
+        get_id(self.db_pool()).await
+    }
+
+    /// Shares this repository with other replicas. The returned share token should be transmitted
+    /// to other replica who may choose to accept it by calling [`Self::accept`]. After the token
+    /// is accepted and the replicas connect, the repositories will start syncing.
+    ///
+    /// If neither `share` nor `accept` was called on this repository before, a random repository
+    /// id is created and assigned to this repository. Subsequent calls to `share` will then use
+    /// the same repository id.
+    pub async fn share(&self) -> Result<ShareToken> {
+        let mut tx = self.db_pool().begin().await?;
+        let id = if let Some(id) = get_id(&mut tx).await? {
+            id
+        } else {
+            let id = rand::random();
+            set_id(&mut tx, &id).await?;
+            id
+        };
+        tx.commit().await?;
+
+        Ok(ShareToken { id })
+    }
+
+    /// Accept a share token from other replica.
+    ///
+    /// If neither `accept` nor `share` was called on this repository before, the repository id
+    /// from the token is assigned to this repository. Subsequent calls to `accept` will fail with
+    /// [`Error::EntryExists`] unless the passed token has the same id as this repository in which
+    /// case they are no-op.
+    pub async fn accept(&self, token: ShareToken) -> Result<()> {
+        if set_id(self.db_pool(), &token.id).await? {
+            Ok(())
+        } else {
+            Err(Error::EntryExists)
+        }
     }
 
     pub fn name(&self) -> &String {
@@ -299,6 +364,10 @@ impl Repository {
         &self.shared.index
     }
 
+    fn db_pool(&self) -> &db::Pool {
+        &self.index().pool
+    }
+
     pub async fn debug_print(&self, print: DebugPrinter) {
         print.display(&"Repository");
         let branches = self.shared.branches.lock().await;
@@ -339,7 +408,42 @@ pub(crate) async fn open_db(store: &db::Store) -> Result<db::Pool> {
     index::init(&pool).await?;
     store::init(&pool).await?;
 
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS metadata (
+             name  BLOB NOT NULL PRIMARY KEY,
+             value BLOB NOT NULL
+         ) WITHOUT ROWID",
+    )
+    .execute(&pool)
+    .await
+    .map_err(Error::CreateDbSchema)?;
+
     Ok(pool)
+}
+
+async fn get_id(db: impl db::Executor<'_>) -> Result<Option<RepositoryId>> {
+    Ok(sqlx::query("SELECT value FROM metadata WHERE name = ?")
+        .bind(metadata::ID)
+        .map(|row| row.get(0))
+        .fetch_optional(db)
+        .await?)
+}
+
+async fn set_id(db: impl db::Executor<'_>, id: &RepositoryId) -> Result<bool> {
+    Ok(
+        sqlx::query("INSERT INTO metadata(name, value) SET (?, ?) ON CONFLICT DO NOTHING")
+            .bind(metadata::ID)
+            .bind(id)
+            .execute(db)
+            .await?
+            .rows_affected()
+            > 0,
+    )
+}
+
+// Metadata keys
+mod metadata {
+    pub(super) const ID: &[u8] = b"id";
 }
 
 struct Shared {
