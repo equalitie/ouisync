@@ -1,9 +1,9 @@
 mod options;
 mod virtual_filesystem;
 
-use self::options::Options;
+use self::options::{Named, Options};
 use anyhow::Result;
-use ouisync_lib::{config, this_replica, Cryptor, Network, Repository};
+use ouisync_lib::{config, this_replica, Cryptor, Network, Repository, ShareToken};
 use std::{collections::HashMap, io};
 use structopt::StructOpt;
 
@@ -25,17 +25,17 @@ async fn main() -> Result<()> {
 
     // Gather the repositories to be mounted.
     let mut mount_repos = HashMap::new();
-    for mount_point in &options.mount {
+    for Named { name, value } in &options.mount {
         let repo = Repository::open(
-            mount_point.name.to_owned(),
-            &options.repository_store(&mount_point.name)?,
+            name.to_owned(),
+            &options.repository_store(name)?,
             this_replica_id,
             Cryptor::Null,
             !options.disable_merger,
         )
         .await?;
 
-        mount_repos.insert(mount_point.name.as_str(), (repo, &mount_point.path));
+        mount_repos.insert(name.as_str(), (repo, value));
     }
 
     // Print repository share tokens
@@ -53,6 +53,26 @@ async fn main() -> Result<()> {
                 )
                 .await?,
                 name,
+            )
+            .await?
+        }
+    }
+
+    // Accept share tokens
+    for Named { name, value } in &options.accept {
+        if let Some((repo, _)) = mount_repos.get(name.as_str()) {
+            accept_share_token(repo, value).await?
+        } else {
+            accept_share_token(
+                &Repository::open(
+                    name.to_owned(),
+                    &options.repository_store(name)?,
+                    this_replica_id,
+                    Cryptor::Null,
+                    false,
+                )
+                .await?,
+                value,
             )
             .await?
         }
@@ -88,6 +108,12 @@ async fn main() -> Result<()> {
 
 async fn print_share_token(repo: &Repository, name: &str) -> Result<()> {
     println!("{}", repo.share().await?.with_name(name));
+    Ok(())
+}
+
+async fn accept_share_token(repo: &Repository, token: &ShareToken) -> Result<()> {
+    repo.accept(token).await?;
+    log::info!("share token accepted: {}", token);
     Ok(())
 }
 

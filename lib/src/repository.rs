@@ -112,7 +112,7 @@ impl Repository {
     /// from the token is assigned to this repository. Subsequent calls to `accept` will fail with
     /// [`Error::EntryExists`] unless the passed token has the same id as this repository in which
     /// case they are no-op.
-    pub async fn accept(&self, token: ShareToken) -> Result<()> {
+    pub async fn accept(&self, token: &ShareToken) -> Result<()> {
         if set_id(self.db_pool(), &token.id).await? {
             Ok(())
         } else {

@@ -1,6 +1,6 @@
 use crate::APP_NAME;
 use anyhow::{Context, Error, Result};
-use ouisync_lib::{NetworkOptions, Store};
+use ouisync_lib::{NetworkOptions, ShareToken, Store};
 use std::{path::PathBuf, str::FromStr};
 use structopt::StructOpt;
 
@@ -21,12 +21,17 @@ pub(crate) struct Options {
     /// Mount the named repository at the specified path. If no such repository exists yet, it will
     /// be created. Can be specified multiple times to mount multiple repositories.
     #[structopt(short, long, value_name = "NAME:PATH")]
-    pub mount: Vec<MountPoint>,
+    pub mount: Vec<Named<PathBuf>>,
 
-    /// Print the share token of a repository. Can be specified multiple times to share multiple
-    /// repositories.
+    /// Print share token for the named repository. Can be specified multiple times to share
+    /// multiple repositories.
     #[structopt(long, value_name = "NAME")]
     pub share: Vec<String>,
+
+    /// Accept a share token into the named repository. If the repository doesn't exist yet, it will
+    /// be created. Can be specified multiple times to accept multiple share tokens.
+    #[structopt(long, value_name = "NAME:TOKEN")]
+    pub accept: Vec<Named<ShareToken>>,
 
     /// Prints the path to the data directory and exits.
     #[structopt(long)]
@@ -89,26 +94,26 @@ impl Options {
     }
 }
 
-/// Specification of a repository mount point.
+/// Colon-separated name-value pair.
 #[derive(Debug)]
-pub(crate) struct MountPoint {
-    /// Name of the repository to be mounted.
+pub(crate) struct Named<T> {
     pub name: String,
-    /// Path to the directory to mount the repository to.
-    pub path: PathBuf,
+    pub value: T,
 }
 
-impl FromStr for MountPoint {
+impl<T> FromStr for Named<T>
+where
+    T: FromStr,
+    Error: From<T::Err>,
+{
     type Err = Error;
 
     fn from_str(input: &str) -> Result<Self, Self::Err> {
-        let index = input
-            .find(':')
-            .context("invalid mount point specification")?;
+        let index = input.find(':').context("missing ':'")?;
 
         Ok(Self {
             name: input[..index].to_owned(),
-            path: input[index + 1..].into(),
+            value: input[index + 1..].parse()?,
         })
     }
 }
