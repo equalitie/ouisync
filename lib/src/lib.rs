@@ -28,7 +28,6 @@ mod repository;
 mod scoped_task;
 mod share_token;
 mod store;
-mod tagged;
 #[cfg(test)]
 mod test_utils;
 mod upnp;

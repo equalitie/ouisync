@@ -14,7 +14,6 @@ use self::{
     connection::{ConnectionDeduplicator, ConnectionDirection, ConnectionPermit},
     dht_discovery::DhtDiscovery,
     local_discovery::LocalDiscovery,
-    message::RepositoryId,
     message_broker::MessageBroker,
     object_stream::TcpObjectStream,
 };
@@ -23,9 +22,8 @@ use crate::{
     error::{Error, Result},
     index::Index,
     replica_id::ReplicaId,
-    repository::Repository,
+    repository::{Repository, RepositoryId},
     scoped_task::{self, ScopedJoinHandle, ScopedTaskSet},
-    tagged::{Local, Remote},
     upnp,
 };
 use btdht::{InfoHash, INFO_HASH_LEN};
@@ -155,7 +153,7 @@ impl Network {
             local_addr,
             this_replica_id,
             message_brokers: Mutex::new(HashMap::new()),
-            indices: RwLock::new(IndexMap::default()),
+            indices: RwLock::new(HashMap::default()),
             dht_discovery,
             dht_lookups: Default::default(),
             dht_peer_found_tx,
@@ -224,42 +222,57 @@ impl Handle {
     /// repositories of currently connected remote replicas as well as any replicas connected in
     /// the future. The repository is automatically deregistered when dropped.
     pub async fn register(&self, repository: &Repository) -> bool {
-        let repo_name = repository.name().clone();
-        let index = repository.index();
-
-        let id = if let Some(id) = self
-            .inner
-            .indices
-            .write()
-            .await
-            .insert(repo_name.clone(), index.clone())
-        {
-            id
-        } else {
-            return false;
+        let id = match repository.get_id().await {
+            Ok(Some(id)) => id,
+            Ok(None) => {
+                log::warn!("not registering repository - missing id");
+                return false;
+            }
+            Err(error) => {
+                log::error!(
+                    "not registering repository - failed to retrieve id: {}",
+                    error
+                );
+                return false;
+            }
         };
 
+        let info_hash = repository_info_hash(&id);
+
+        match self.inner.indices.write().await.entry(info_hash) {
+            Entry::Occupied(_) => {
+                log::warn!("not registering repository - already registered");
+                return false;
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(IndexHolder {
+                    index: repository.index().clone(),
+                });
+            }
+        }
+
         for broker in self.inner.message_brokers.lock().await.values() {
-            create_link(broker, id, repo_name.clone(), index.clone()).await;
+            broker
+                .create_link(info_hash, repository.index().clone())
+                .await
         }
 
         // Deregister the index when it gets closed.
         self.inner
             .spawn({
-                let closed = index.subscribe().closed();
+                let closed = repository.index().subscribe().closed();
                 let inner = self.inner.clone();
-                let repo_name = repo_name.clone();
 
                 async move {
                     closed.await;
 
-                    inner.indices.write().await.remove(id);
+                    inner.indices.write().await.remove(&info_hash);
 
                     for broker in inner.message_brokers.lock().await.values() {
-                        broker.destroy_link(Local::new(id)).await;
+                        broker.destroy_link(info_hash).await;
                     }
 
-                    inner.disable_dht_for_repository(&repo_name).await;
+                    inner.disable_dht_for_repository(&info_hash).await;
                 }
             })
             .await;
@@ -274,24 +287,35 @@ impl Handle {
     }
 
     pub async fn enable_dht_for_repository(&self, repository: &Repository) {
-        self.inner
-            .enable_dht_for_repository(repository.name())
-            .await
+        let id = if let Ok(Some(id)) = repository.get_id().await {
+            repository_info_hash(&id)
+        } else {
+            log::warn!("can't enable DHT for repository - missing id");
+            return;
+        };
+
+        self.inner.enable_dht_for_repository(id).await
     }
 
     pub async fn disable_dht_for_repository(&self, repository: &Repository) {
-        self.inner
-            .disable_dht_for_repository(repository.name())
-            .await
+        let id = if let Ok(Some(id)) = repository.get_id().await {
+            repository_info_hash(&id)
+        } else {
+            log::warn!("can't disable DHT for repository - missing id");
+            return;
+        };
+
+        self.inner.disable_dht_for_repository(&id).await
     }
 
     pub async fn is_dht_for_repository_enabled(&self, repository: &Repository) -> bool {
-        self.inner
-            .dht_lookups
-            .lock()
-            .await
-            .get(repository.name())
-            .is_some()
+        let id = if let Ok(Some(id)) = repository.get_id().await {
+            repository_info_hash(&id)
+        } else {
+            return false;
+        };
+
+        self.inner.dht_lookups.lock().await.get(&id).is_some()
     }
 }
 
@@ -305,9 +329,9 @@ struct Inner {
     local_addr: SocketAddr,
     this_replica_id: ReplicaId,
     message_brokers: Mutex<HashMap<ReplicaId, MessageBroker>>,
-    indices: RwLock<IndexMap>,
+    indices: RwLock<HashMap<InfoHash, IndexHolder>>,
     dht_discovery: Option<DhtDiscovery>,
-    dht_lookups: Mutex<HashMap<String, dht_discovery::LookupRequest>>,
+    dht_lookups: Mutex<HashMap<InfoHash, dht_discovery::LookupRequest>>,
     dht_peer_found_tx: mpsc::UnboundedSender<SocketAddr>,
     connection_deduplicator: ConnectionDeduplicator,
     // Note that unwrapping the upgraded weak pointer should be fine because if the underlying Arc
@@ -379,23 +403,21 @@ impl Inner {
     }
 
     // Periodically search for peers for the given repository and announce it on the DHT.
-    // TODO: use some unique id instead of name.
-    async fn enable_dht_for_repository(&self, name: &str) {
+    async fn enable_dht_for_repository(&self, id: InfoHash) {
         if let Some(dht_discovery) = &self.dht_discovery {
             let mut dht_lookups = self.dht_lookups.lock().await;
 
-            match dht_lookups.entry(name.to_owned()) {
+            match dht_lookups.entry(id) {
                 Entry::Occupied(_) => {}
                 Entry::Vacant(entry) => {
-                    let info_hash = repository_info_hash(name);
-                    entry.insert(dht_discovery.lookup(info_hash, self.dht_peer_found_tx.clone()));
+                    entry.insert(dht_discovery.lookup(id, self.dht_peer_found_tx.clone()));
                 }
             };
         }
     }
 
-    async fn disable_dht_for_repository(&self, name: &str) {
-        self.dht_lookups.lock().await.remove(name);
+    async fn disable_dht_for_repository(&self, id: &InfoHash) {
+        self.dht_lookups.lock().await.remove(id);
     }
 
     async fn establish_user_provided_connection(self: Arc<Self>, addr: SocketAddr) {
@@ -527,8 +549,8 @@ impl Inner {
                 // TODO: for DHT connection we should only link the repository for which we did the
                 // lookup but make sure we correctly handle edge cases, for example, when we have
                 // more than one repository shared with the peer.
-                for (id, holder) in &self.indices.read().await.map {
-                    create_link(&broker, *id, holder.name.clone(), holder.index.clone()).await;
+                for (id, holder) in &*self.indices.read().await {
+                    broker.create_link(*id, holder.index.clone()).await;
                 }
 
                 entry.insert(broker);
@@ -559,34 +581,8 @@ impl Inner {
     }
 }
 
-#[derive(Default)]
-struct IndexMap {
-    map: HashMap<RepositoryId, IndexHolder>,
-    next_id: RepositoryId,
-}
-
-impl IndexMap {
-    fn insert(&mut self, name: String, index: Index) -> Option<RepositoryId> {
-        let id = self.next_id;
-
-        match self.map.entry(id) {
-            Entry::Vacant(entry) => {
-                entry.insert(IndexHolder { index, name });
-                self.next_id = self.next_id.wrapping_add(1);
-                Some(id)
-            }
-            Entry::Occupied(_) => None,
-        }
-    }
-
-    fn remove(&mut self, id: RepositoryId) {
-        self.map.remove(&id);
-    }
-}
-
 struct IndexHolder {
     index: Index,
-    name: String,
 }
 
 async fn perform_handshake(
@@ -597,26 +593,12 @@ async fn perform_handshake(
     stream.read().await
 }
 
-async fn create_link(broker: &MessageBroker, id: RepositoryId, name: String, index: Index) {
-    // TODO: creating implicit link if the local and remote repository names are the same.
-    // Eventually the links will be explicit.
-
-    let local_id = Local::new(id);
-    let local_name = Local::new(name.clone());
-    let remote_name = Remote::new(name);
-
-    broker
-        .create_link(index, local_id, local_name, remote_name)
-        .await
-}
-
-// Calculate info hash for a repository name.
-// TODO: use some random unique id, not name.
-fn repository_info_hash(name: &str) -> InfoHash {
-    // Calculate the info hash by hashing the name with SHA-256 and taking the first 20 bytes.
+// Calculate info hash for a repository id.
+fn repository_info_hash(id: &RepositoryId) -> InfoHash {
+    // Calculate the info hash by hashing the id with SHA3-256 and taking the first 20 bytes.
     // (bittorrent uses SHA-1 but that is less secure).
     // `unwrap` is OK because the byte slice has the correct length.
-    InfoHash::try_from(&name.as_bytes().hash().as_ref()[..INFO_HASH_LEN]).unwrap()
+    InfoHash::try_from(&id.as_ref().hash().as_ref()[..INFO_HASH_LEN]).unwrap()
 }
 
 #[derive(Clone, Copy, Debug)]

@@ -4,6 +4,7 @@ use crate::{
     index::{InnerNodeMap, LeafNodeSet, Summary},
     version_vector::VersionVector,
 };
+use btdht::InfoHash;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -88,22 +89,12 @@ impl fmt::Debug for Response {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub(crate) enum Message {
-    // Request by the sender to establish a link between their repository with id `src_id` and
-    // the recipient's repository named `dst_name`.
-    CreateLink {
-        src_id: RepositoryId,
-        dst_name: String,
-    },
-    // Request to a recipient's repository with id `dst_id`.
-    Request {
-        dst_id: RepositoryId,
-        request: Request,
-    },
-    // Response to a recipient's repository with id `dst_id`.
-    Response {
-        dst_id: RepositoryId,
-        response: Response,
-    },
+    // Request by the sender to establish a link between repositories with the given id hash.
+    CreateLink { id: InfoHash },
+    // Request to a recipient's repository with id hash `id`.
+    Request { id: InfoHash, request: Request },
+    // Response to a recipient's repository with id hash `id`.
+    Response { id: InfoHash, response: Response },
 }
 
 impl From<Message> for Request {
@@ -127,5 +118,3 @@ impl From<Message> for Response {
         }
     }
 }
-
-pub(crate) type RepositoryId = u64;
