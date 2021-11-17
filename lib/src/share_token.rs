@@ -10,11 +10,22 @@ pub const SCHEME: &str = "ouisync";
 #[derive(Eq, PartialEq, Debug)]
 pub struct ShareToken {
     pub(crate) id: RepositoryId,
+    pub(crate) name: String,
 }
 
 impl ShareToken {
     pub fn new(id: RepositoryId) -> Self {
-        Self { id }
+        Self {
+            id,
+            name: "".to_owned(),
+        }
+    }
+
+    pub fn with_name(self, name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            ..self
+        }
     }
 }
 
@@ -29,14 +40,25 @@ impl FromStr for ShareToken {
         }
 
         let id = url.path().parse()?;
+        let name = url
+            .query_pairs()
+            .find(|(name, _)| name == "name")
+            .map(|(_, value)| value.into_owned())
+            .unwrap_or_default();
 
-        Ok(Self { id })
+        Ok(Self { id, name })
     }
 }
 
 impl fmt::Display for ShareToken {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}:{:x}", SCHEME, self.id)
+        let mut url = Url::parse(&format!("{}:{:x}", SCHEME, self.id)).unwrap();
+
+        if !self.name.is_empty() {
+            url.query_pairs_mut().append_pair("name", &self.name);
+        }
+
+        write!(f, "{}", url)
     }
 }
 
@@ -66,16 +88,23 @@ mod tests {
         let id_bytes = hex::decode(id_hex).unwrap();
         let id = RepositoryId::try_from(id_bytes.as_ref()).unwrap();
 
-        let token = ShareToken { id };
+        let token = ShareToken::new(id);
+        assert_eq!(token.to_string(), format!("ouisync:{}", id_hex));
 
-        assert_eq!(token.to_string(), format!("ouisync:{}", id_hex))
+        let token = token.with_name("foo");
+        assert_eq!(token.to_string(), format!("ouisync:{}?name=foo", id_hex))
     }
 
     #[test]
     fn encode_and_decode() {
         let id: RepositoryId = rand::random();
-        let token = ShareToken { id };
 
+        let token = ShareToken::new(id);
+        let string = token.to_string();
+        let decoded: ShareToken = string.parse().unwrap();
+        assert_eq!(decoded, token);
+
+        let token = token.with_name("foo");
         let string = token.to_string();
         let decoded: ShareToken = string.parse().unwrap();
         assert_eq!(decoded, token);

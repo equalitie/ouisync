@@ -87,8 +87,7 @@ async fn main() -> Result<()> {
 }
 
 async fn print_share_token(repo: &Repository, name: &str) -> Result<()> {
-    // println!("{}", repo.share().await?.with_name(name));
-    println!("{}", repo.share().await?);
+    println!("{}", repo.share().await?.with_name(name));
     Ok(())
 }
 

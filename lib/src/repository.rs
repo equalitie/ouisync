@@ -103,7 +103,7 @@ impl Repository {
         };
         tx.commit().await?;
 
-        Ok(ShareToken { id })
+        Ok(ShareToken::new(id))
     }
 
     /// Accept a share token from other replica.
