@@ -4,7 +4,7 @@ mod virtual_filesystem;
 use self::options::Options;
 use anyhow::Result;
 use ouisync_lib::{config, this_replica, Cryptor, Network, Repository};
-use std::io;
+use std::{collections::HashMap, io};
 use structopt::StructOpt;
 
 pub(crate) const APP_NAME: &str = "ouisync";
@@ -23,12 +23,8 @@ async fn main() -> Result<()> {
     let pool = config::open_db(&options.config_store()?).await?;
     let this_replica_id = this_replica::get_or_create_id(&pool).await?;
 
-    // Start the network
-    let network = Network::new(this_replica_id, &options.network).await?;
-    let network_handle = network.handle();
-
-    // Mount repositories
-    let mut mount_guards = Vec::new();
+    // Gather the repositories to be mounted.
+    let mut mount_repos = HashMap::new();
     for mount_point in &options.mount {
         let repo = Repository::open(
             mount_point.name.to_owned(),
@@ -39,12 +35,42 @@ async fn main() -> Result<()> {
         )
         .await?;
 
+        mount_repos.insert(mount_point.name.as_str(), (repo, &mount_point.path));
+    }
+
+    // Print repository share tokens
+    for name in &options.share {
+        if let Some((repo, _)) = mount_repos.get(name.as_str()) {
+            print_share_token(repo, name).await?
+        } else {
+            print_share_token(
+                &Repository::open(
+                    name.to_owned(),
+                    &options.repository_store(name)?,
+                    this_replica_id,
+                    Cryptor::Null,
+                    false,
+                )
+                .await?,
+                name,
+            )
+            .await?
+        }
+    }
+
+    // Start the network
+    let network = Network::new(this_replica_id, &options.network).await?;
+    let network_handle = network.handle();
+
+    // Mount repositories
+    let mut mount_guards = Vec::new();
+    for (repo, mount_point) in mount_repos.into_values() {
         network_handle.register(&repo).await;
 
         let guard = virtual_filesystem::mount(
             tokio::runtime::Handle::current(),
             repo,
-            mount_point.path.clone(),
+            mount_point.clone(),
         )?;
 
         mount_guards.push(guard);
@@ -57,6 +83,12 @@ async fn main() -> Result<()> {
 
     terminated().await?;
 
+    Ok(())
+}
+
+async fn print_share_token(repo: &Repository, name: &str) -> Result<()> {
+    // println!("{}", repo.share().await?.with_name(name));
+    println!("{}", repo.share().await?);
     Ok(())
 }
 

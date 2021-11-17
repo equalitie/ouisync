@@ -23,6 +23,11 @@ pub(crate) struct Options {
     #[structopt(short, long, value_name = "NAME:PATH")]
     pub mount: Vec<MountPoint>,
 
+    /// Print the share token of a repository. Can be specified multiple times to share multiple
+    /// repositories.
+    #[structopt(long, value_name = "NAME")]
+    pub share: Vec<String>,
+
     /// Prints the path to the data directory and exits.
     #[structopt(long)]
     pub print_data_dir: bool,
