@@ -27,7 +27,6 @@ async fn main() -> Result<()> {
     let mut mount_repos = HashMap::new();
     for Named { name, value } in &options.mount {
         let repo = Repository::open(
-            name.to_owned(),
             &options.repository_store(name)?,
             this_replica_id,
             Cryptor::Null,
@@ -45,7 +44,6 @@ async fn main() -> Result<()> {
         } else {
             print_share_token(
                 &Repository::open(
-                    name.to_owned(),
                     &options.repository_store(name)?,
                     this_replica_id,
                     Cryptor::Null,
@@ -65,7 +63,6 @@ async fn main() -> Result<()> {
         } else {
             accept_share_token(
                 &Repository::open(
-                    name.to_owned(),
                     &options.repository_store(name)?,
                     this_replica_id,
                     Cryptor::Null,
