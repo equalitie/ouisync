@@ -288,6 +288,7 @@ impl Directory {
         self.local_branch.id()
     }
 
+    #[async_recursion]
     pub async fn debug_print(&self, print: DebugPrinter) {
         let inner = self.inner.read().await;
 
@@ -298,43 +299,71 @@ impl Directory {
             for (author, entry_data) in versions {
                 print.display(&format!("{:?}: {:?}", author, entry_data));
 
-                if let EntryData::File(file_data) = entry_data {
-                    let print = print.indent();
+                match entry_data {
+                    EntryData::File(file_data) => {
+                        let print = print.indent();
 
-                    let parent_context =
-                        ParentContext::new(self.inner.clone(), name.into(), *author);
+                        let parent_context =
+                            ParentContext::new(self.inner.clone(), name.into(), *author);
 
-                    let file = File::open(
-                        inner.blob.branch().clone(),
-                        self.local_branch.clone(),
-                        Locator::Head(file_data.blob_id),
-                        parent_context,
-                    )
-                    .await;
+                        let file = File::open(
+                            inner.blob.branch().clone(),
+                            self.local_branch.clone(),
+                            Locator::Head(file_data.blob_id),
+                            parent_context,
+                        )
+                        .await;
 
-                    match file {
-                        Ok(mut file) => {
-                            let mut buf = [0; 32];
-                            let lenght_result = file.read(&mut buf).await;
-                            match lenght_result {
-                                Ok(length) => {
-                                    let file_len = file.len().await;
-                                    let ellipsis = if file_len > length as u64 { ".." } else { "" };
-                                    print.display(&format!(
-                                        "Content: {:?}{}",
-                                        std::str::from_utf8(&buf[..length]),
-                                        ellipsis
-                                    ));
-                                }
-                                Err(e) => {
-                                    print.display(&format!("Failed to read {:?}", e));
+                        match file {
+                            Ok(mut file) => {
+                                let mut buf = [0; 32];
+                                let lenght_result = file.read(&mut buf).await;
+                                match lenght_result {
+                                    Ok(length) => {
+                                        let file_len = file.len().await;
+                                        let ellipsis = if file_len > length as u64 { ".." } else { "" };
+                                        print.display(&format!(
+                                            "Content: {:?}{}",
+                                            std::str::from_utf8(&buf[..length]),
+                                            ellipsis
+                                        ));
+                                    }
+                                    Err(e) => {
+                                        print.display(&format!("Failed to read {:?}", e));
+                                    }
                                 }
                             }
+                            Err(e) => {
+                                print.display(&format!("Failed to open {:?}", e));
+                            }
                         }
-                        Err(e) => {
-                            print.display(&format!("Failed to open {:?}", e));
+                    },
+                    EntryData::Directory(data) => {
+                        let print = print.indent();
+
+                        let parent_context =
+                            ParentContext::new(self.inner.clone(), name.into(), *author);
+
+                        let dir = inner
+                            .open_directories
+                            .open(
+                                inner.blob.branch().clone(),
+                                self.local_branch.clone(),
+                                Locator::Head(data.blob_id),
+                                parent_context,
+                            )
+                            .await;
+
+                        match dir {
+                            Ok(dir) => {
+                                dir.debug_print(print).await;
+                            },
+                            Err(e) => {
+                                print.display(&format!("Failed to open {:?}", e));
+                            },
                         }
-                    }
+                    },
+                    EntryData::Tombstone(_) => {},
                 }
             }
         }
