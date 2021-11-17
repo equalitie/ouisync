@@ -5,8 +5,10 @@ use super::{
     object_stream::TcpObjectStream,
     server::Server,
 };
-use crate::{error::Result, index::Index, replica_id::ReplicaId, scoped_task::ScopedJoinHandle};
-use btdht::InfoHash;
+use crate::{
+    error::Result, index::Index, replica_id::ReplicaId, repository::PublicRepositoryId,
+    scoped_task::ScopedJoinHandle,
+};
 use std::{
     collections::{hash_map::Entry, HashMap, HashSet},
     fmt,
@@ -25,14 +27,14 @@ use tokio::{
 pub(crate) struct ServerStream {
     tx: mpsc::Sender<Command>,
     rx: mpsc::Receiver<Request>,
-    id: InfoHash,
+    id: PublicRepositoryId,
 }
 
 impl ServerStream {
     pub(super) fn new(
         tx: mpsc::Sender<Command>,
         rx: mpsc::Receiver<Request>,
-        id: InfoHash,
+        id: PublicRepositoryId,
     ) -> Self {
         Self { tx, rx, id }
     }
@@ -59,14 +61,14 @@ impl ServerStream {
 pub(crate) struct ClientStream {
     tx: mpsc::Sender<Command>,
     rx: mpsc::Receiver<Response>,
-    id: InfoHash,
+    id: PublicRepositoryId,
 }
 
 impl ClientStream {
     pub(super) fn new(
         tx: mpsc::Sender<Command>,
         rx: mpsc::Receiver<Response>,
-        id: InfoHash,
+        id: PublicRepositoryId,
     ) -> Self {
         Self { tx, rx, id }
     }
@@ -151,7 +153,7 @@ impl MessageBroker {
     /// Try to establish a link between a local repository and a remote repository. The remote
     /// counterpart needs to call this too with matching `local_name` and `remote_name` for the link
     /// to actually be created.
-    pub async fn create_link(&self, id: InfoHash, index: Index) {
+    pub async fn create_link(&self, id: PublicRepositoryId, index: Index) {
         if self
             .command_tx
             .send(Command::CreateLink { id, index })
@@ -164,7 +166,7 @@ impl MessageBroker {
 
     /// Destroy the link between a local repository with the specified id hash and its remote
     /// counterpart (if one exists).
-    pub async fn destroy_link(&self, id: InfoHash) {
+    pub async fn destroy_link(&self, id: PublicRepositoryId) {
         // We can safely ignore the error here because it only means the message broker is shutting
         // down and so all existing links are going to be destroyed anyway.
         self.command_tx
@@ -261,7 +263,7 @@ impl Inner {
         self.writer.write(&message).await
     }
 
-    async fn create_outgoing_link(&self, id: InfoHash, index: Index) -> bool {
+    async fn create_outgoing_link(&self, id: PublicRepositoryId, index: Index) -> bool {
         let mut links = self.links.write().await;
 
         if links.active.contains_key(&id) {
@@ -292,7 +294,7 @@ impl Inner {
         true
     }
 
-    async fn create_incoming_link(&self, id: InfoHash) {
+    async fn create_incoming_link(&self, id: PublicRepositoryId) {
         let mut links = self.links.write().await;
 
         if let Some(index) = links.pending_outgoing.remove(&id) {
@@ -302,7 +304,7 @@ impl Inner {
         }
     }
 
-    fn create_link(&self, links: &mut Links, id: InfoHash, index: Index) {
+    fn create_link(&self, links: &mut Links, id: PublicRepositoryId, index: Index) {
         log::debug!("creating link for {:?}", id);
 
         let (request_tx, request_rx) = mpsc::channel(1);
@@ -324,7 +326,7 @@ impl Inner {
         task::spawn(async move { log_error(server.run(), "server failed: ").await });
     }
 
-    async fn handle_request(&self, id: &InfoHash, request: Request) {
+    async fn handle_request(&self, id: &PublicRepositoryId, request: Request) {
         if let Some((link_id, request_tx)) = self.links.read().await.get_request_link(id) {
             if request_tx.send(request).await.is_err() {
                 log::warn!("server unexpectedly terminated - destroying the link");
@@ -339,7 +341,7 @@ impl Inner {
         }
     }
 
-    async fn handle_response(&self, id: &InfoHash, response: Response) {
+    async fn handle_response(&self, id: &PublicRepositoryId, response: Response) {
         if let Some((link_id, response_tx)) = self.links.read().await.get_response_link(id) {
             if response_tx.send(response).await.is_err() {
                 log::warn!("client unexpectedly terminated - destroying the link");
@@ -367,8 +369,13 @@ where
 pub(super) enum Command {
     AddConnection(TcpObjectStream, ConnectionPermit),
     SendMessage(Message),
-    CreateLink { id: InfoHash, index: Index },
-    DestroyLink { id: InfoHash },
+    CreateLink {
+        id: PublicRepositoryId,
+        index: Index,
+    },
+    DestroyLink {
+        id: PublicRepositoryId,
+    },
 }
 
 impl Command {
@@ -415,9 +422,9 @@ struct Link {
 }
 
 struct Links {
-    active: HashMap<InfoHash, Link>,
-    pending_incoming: HashSet<InfoHash>,
-    pending_outgoing: HashMap<InfoHash, Index>,
+    active: HashMap<PublicRepositoryId, Link>,
+    pending_incoming: HashSet<PublicRepositoryId>,
+    pending_outgoing: HashMap<PublicRepositoryId, Index>,
     next_link_id: LinkId,
 }
 
@@ -433,7 +440,7 @@ impl Links {
 
     pub fn insert_active(
         &mut self,
-        repository_id: InfoHash,
+        repository_id: PublicRepositoryId,
         request_tx: mpsc::Sender<Request>,
         response_tx: mpsc::Sender<Response>,
     ) {
@@ -451,7 +458,7 @@ impl Links {
 
     pub fn get_request_link(
         &self,
-        repository_id: &InfoHash,
+        repository_id: &PublicRepositoryId,
     ) -> Option<(LinkId, mpsc::Sender<Request>)> {
         self.active
             .get(repository_id)
@@ -460,14 +467,14 @@ impl Links {
 
     pub fn get_response_link(
         &self,
-        repository_id: &InfoHash,
+        repository_id: &PublicRepositoryId,
     ) -> Option<(LinkId, mpsc::Sender<Response>)> {
         self.active
             .get(repository_id)
             .map(|link| (link.id, link.response_tx.clone()))
     }
 
-    fn destroy_one(&mut self, repository_id: &InfoHash, link_id: Option<LinkId>) {
+    fn destroy_one(&mut self, repository_id: &PublicRepositoryId, link_id: Option<LinkId>) {
         // NOTE: this drops the `request_tx` / `response_tx` senders which causes the
         // corresponding receivers to be closed which terminates the client/server tasks.
         if let Entry::Occupied(entry) = self.active.entry(*repository_id) {

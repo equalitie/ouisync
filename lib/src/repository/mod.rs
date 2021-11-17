@@ -1,3 +1,7 @@
+mod id;
+
+pub use self::id::{PublicRepositoryId, SecretRepositoryId, SECRET_REPOSITORY_ID_SIZE};
+
 use crate::{
     block,
     branch::Branch,
@@ -18,29 +22,8 @@ use camino::Utf8Path;
 use futures_util::{future, stream::FuturesUnordered, StreamExt};
 use log::Level;
 use sqlx::Row;
-use std::{collections::HashMap, iter, str::FromStr, sync::Arc};
+use std::{collections::HashMap, iter, sync::Arc};
 use tokio::{select, sync::Mutex};
-
-/// Size of repository ID in bytes.
-pub const REPOSITORY_ID_SIZE: usize = 16;
-
-define_random_id! {
-    /// Unique id of a repository.
-    pub struct RepositoryId([u8; REPOSITORY_ID_SIZE]);
-}
-
-derive_sqlx_traits_for_u8_array_wrapper!(RepositoryId);
-
-impl FromStr for RepositoryId {
-    type Err = hex::FromHexError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut bytes = [0; REPOSITORY_ID_SIZE];
-        hex::decode_to_slice(s, &mut bytes)?;
-
-        Ok(Self(bytes))
-    }
-}
 
 pub struct Repository {
     shared: Arc<Shared>,
@@ -79,7 +62,7 @@ impl Repository {
     /// Get the id of this repository or `None` if no id was assigned yet. A repository gets an id
     /// the first time it is either shared ([`Self::share`]) or a accepts a share
     /// ([`Self::accept`]).
-    pub async fn get_id(&self) -> Result<Option<RepositoryId>> {
+    pub async fn get_id(&self) -> Result<Option<SecretRepositoryId>> {
         get_id(self.db_pool()).await
     }
 
@@ -415,7 +398,7 @@ pub(crate) async fn open_db(store: &db::Store) -> Result<db::Pool> {
     Ok(pool)
 }
 
-async fn get_id(db: impl db::Executor<'_>) -> Result<Option<RepositoryId>> {
+async fn get_id(db: impl db::Executor<'_>) -> Result<Option<SecretRepositoryId>> {
     Ok(sqlx::query("SELECT value FROM metadata WHERE name = ?")
         .bind(metadata::ID)
         .map(|row| row.get(0))
@@ -423,7 +406,7 @@ async fn get_id(db: impl db::Executor<'_>) -> Result<Option<RepositoryId>> {
         .await?)
 }
 
-async fn set_id(db: impl db::Executor<'_>, id: &RepositoryId) -> Result<bool> {
+async fn set_id(db: impl db::Executor<'_>, id: &SecretRepositoryId) -> Result<bool> {
     Ok(
         sqlx::query("INSERT INTO metadata(name, value) VALUES (?, ?) ON CONFLICT DO NOTHING")
             .bind(metadata::ID)

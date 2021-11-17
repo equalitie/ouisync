@@ -2,9 +2,9 @@ use crate::{
     block::BlockId,
     crypto::{AuthTag, Hash},
     index::{InnerNodeMap, LeafNodeSet, Summary},
+    repository::PublicRepositoryId,
     version_vector::VersionVector,
 };
-use btdht::InfoHash;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -90,11 +90,19 @@ impl fmt::Debug for Response {
 #[derive(Serialize, Deserialize, Debug)]
 pub(crate) enum Message {
     // Request by the sender to establish a link between repositories with the given id hash.
-    CreateLink { id: InfoHash },
+    CreateLink {
+        id: PublicRepositoryId,
+    },
     // Request to a recipient's repository with id hash `id`.
-    Request { id: InfoHash, request: Request },
+    Request {
+        id: PublicRepositoryId,
+        request: Request,
+    },
     // Response to a recipient's repository with id hash `id`.
-    Response { id: InfoHash, response: Response },
+    Response {
+        id: PublicRepositoryId,
+        response: Response,
+    },
 }
 
 impl From<Message> for Request {

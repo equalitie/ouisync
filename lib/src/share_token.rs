@@ -1,4 +1,4 @@
-use crate::repository::RepositoryId;
+use crate::repository::SecretRepositoryId;
 use std::{fmt, str::FromStr};
 use thiserror::Error;
 use url::Url;
@@ -9,12 +9,12 @@ pub const SCHEME: &str = "ouisync";
 /// other replicas.
 #[derive(Eq, PartialEq, Debug)]
 pub struct ShareToken {
-    pub(crate) id: RepositoryId,
+    pub(crate) id: SecretRepositoryId,
     pub(crate) name: String,
 }
 
 impl ShareToken {
-    pub fn new(id: RepositoryId) -> Self {
+    pub fn new(id: SecretRepositoryId) -> Self {
         Self {
             id,
             name: "".to_owned(),
@@ -86,7 +86,7 @@ mod tests {
     fn encode() {
         let id_hex = "416d9c3fe32017f7b5c8e406630576ad";
         let id_bytes = hex::decode(id_hex).unwrap();
-        let id = RepositoryId::try_from(id_bytes.as_ref()).unwrap();
+        let id = SecretRepositoryId::try_from(id_bytes.as_ref()).unwrap();
 
         let token = ShareToken::new(id);
         assert_eq!(token.to_string(), format!("ouisync:{}", id_hex));
@@ -97,7 +97,7 @@ mod tests {
 
     #[test]
     fn encode_and_decode() {
-        let id: RepositoryId = rand::random();
+        let id: SecretRepositoryId = rand::random();
 
         let token = ShareToken::new(id);
         let string = token.to_string();
