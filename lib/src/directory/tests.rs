@@ -220,27 +220,8 @@ async fn move_file_within_branch() {
 
     let root_dir = branch.open_root(branch.clone()).await.unwrap();
 
-    let aux_dir = root_dir
-        .read()
-        .await
-        .lookup_version("aux", branch.id())
-        .unwrap()
-        .directory()
-        .unwrap()
-        .open()
-        .await
-        .unwrap();
-
-    let mut file = aux_dir
-        .read()
-        .await
-        .lookup_version(file_name, branch.id())
-        .unwrap()
-        .file()
-        .unwrap()
-        .open()
-        .await
-        .unwrap();
+    let aux_dir = open_dir(&root_dir, "aux", branch.id()).await;
+    let mut file = open_file(&aux_dir, file_name, branch.id()).await;
 
     assert_eq!(&file_locator, file.locator());
     assert_eq!(&content[..], &file.read_to_end().await.unwrap()[..]);
@@ -278,18 +259,88 @@ async fn move_file_within_branch() {
         .await
         .unwrap();
 
-    let mut file = root_dir
-        .read()
+    let mut file = open_file(&root_dir, file_name, branch.id()).await;
+
+    assert_eq!(&content[..], &file.read_to_end().await.unwrap()[..]);
+}
+
+async fn open_dir(from: &Directory, name: &str, branch_id: &ReplicaId) -> Directory {
+    from.read()
         .await
-        .lookup_version(file_name, branch.id())
+        .lookup_version(name, branch_id)
+        .unwrap()
+        .directory()
+        .unwrap()
+        .open()
+        .await
+        .unwrap()
+}
+
+async fn open_file(from: &Directory, name: &str, branch_id: &ReplicaId) -> File {
+    from.read()
+        .await
+        .lookup_version(name, branch_id)
         .unwrap()
         .file()
         .unwrap()
         .open()
         .await
+        .unwrap()
+}
+
+// Move directory "dir/" with content "cow.txt" to directory "dst/".
+//
+// Equivalent of:
+//     $ mkdir dir
+//     $ touch dir/cow.txt
+//     $ mkdir dst
+//     $ mv dir dst/
+#[ignore]
+#[tokio::test(flavor = "multi_thread")]
+async fn move_non_empty_directory() {
+    let branch = setup().await;
+
+    let dir_name = "dir";
+    let dst_dir_name = "dst";
+    let file_name = "cow.txt";
+    let content = b"moo";
+
+    // Create a directory with a single file.
+    let root_dir = branch.open_or_create_root().await.unwrap();
+    let dir = root_dir.create_directory(dir_name.into()).await.unwrap();
+
+    let mut file = dir.create_file(file_name.into()).await.unwrap();
+    file.write(content).await.unwrap();
+    file.flush().await.unwrap();
+    let file_locator = *file.locator();
+
+    let dst_dir = root_dir.create_directory(dst_dir_name.into()).await.unwrap();
+
+    let entry_to_move = root_dir
+        .read()
+        .await
+        .lookup_version(dir_name, branch.id())
+        .unwrap()
+        .clone_data();
+
+    root_dir
+        .move_entry(
+            dir_name,
+            branch.id(),
+            entry_to_move,
+            &dst_dir,
+            dir_name,
+            VersionVector::first(*branch.id()),
+        )
+        .await
         .unwrap();
 
-    assert_eq!(&content[..], &file.read_to_end().await.unwrap()[..]);
+    let root_dir = branch.open_root(branch.clone()).await.unwrap();
+    let dst_dir = open_dir(&root_dir, dst_dir_name, branch.id()).await;
+    let dir = open_dir(&dst_dir, dir_name, branch.id()).await;
+    let file = open_file(&dir, file_name, branch.id()).await;
+
+    assert_eq!(&file_locator, file.locator());
 }
 
 #[tokio::test(flavor = "multi_thread")]
