@@ -120,7 +120,7 @@ impl Network {
                 .map_err(Error::Network)?
                 .map(|addr| addr.port());
 
-            // TODO: the ipv6 port typically doesn't need to be port-mappted but it might need to
+            // TODO: the ipv6 port typically doesn't need to be port-mapped but it might need to
             // be opened in the firewall ("pinholed"). Consider using UPnP for that as well.
 
             Some(upnp::PortForwarder::new(
@@ -155,7 +155,6 @@ impl Network {
             message_brokers: Mutex::new(HashMap::new()),
             indices: RwLock::new(HashMap::default()),
             dht_discovery,
-            dht_lookups: Default::default(),
             dht_peer_found_tx,
             connection_deduplicator: ConnectionDeduplicator::new(),
             tasks: Arc::downgrade(&tasks),
@@ -247,6 +246,7 @@ impl Handle {
             Entry::Vacant(entry) => {
                 entry.insert(IndexHolder {
                     index: repository.index().clone(),
+                    dht_lookup: self.inner.start_dht_lookup(info_hash),
                 });
             }
         }
@@ -271,8 +271,6 @@ impl Handle {
                     for broker in inner.message_brokers.lock().await.values() {
                         broker.destroy_link(info_hash).await;
                     }
-
-                    inner.disable_dht_for_repository(&info_hash).await;
                 }
             })
             .await;
@@ -290,22 +288,36 @@ impl Handle {
         let id = if let Ok(Some(id)) = repository.get_id().await {
             repository_info_hash(&id)
         } else {
-            log::warn!("can't enable DHT for repository - missing id");
+            log::warn!("not enabling DHT for repository - missing id");
             return;
         };
 
-        self.inner.enable_dht_for_repository(id).await
+        let mut indices = self.inner.indices.write().await;
+        let holder = if let Some(holder) = indices.get_mut(&id) {
+            holder
+        } else {
+            log::warn!("not enabling DHT for repository - not registered");
+            return;
+        };
+
+        if holder.dht_lookup.is_none() {
+            holder.dht_lookup = self.inner.start_dht_lookup(id);
+        }
     }
 
     pub async fn disable_dht_for_repository(&self, repository: &Repository) {
         let id = if let Ok(Some(id)) = repository.get_id().await {
             repository_info_hash(&id)
         } else {
-            log::warn!("can't disable DHT for repository - missing id");
+            log::warn!("not disabling DHT for repository - missing id");
             return;
         };
 
-        self.inner.disable_dht_for_repository(&id).await
+        if let Some(holder) = self.inner.indices.write().await.get_mut(&id) {
+            holder.dht_lookup = None;
+        } else {
+            log::warn!("not disabling DHT for repository - not registered");
+        }
     }
 
     pub async fn is_dht_for_repository_enabled(&self, repository: &Repository) -> bool {
@@ -315,7 +327,11 @@ impl Handle {
             return false;
         };
 
-        self.inner.dht_lookups.lock().await.get(&id).is_some()
+        if let Some(holder) = self.inner.indices.read().await.get(&id) {
+            holder.dht_lookup.is_some()
+        } else {
+            false
+        }
     }
 }
 
@@ -331,7 +347,6 @@ struct Inner {
     message_brokers: Mutex<HashMap<ReplicaId, MessageBroker>>,
     indices: RwLock<HashMap<InfoHash, IndexHolder>>,
     dht_discovery: Option<DhtDiscovery>,
-    dht_lookups: Mutex<HashMap<InfoHash, dht_discovery::LookupRequest>>,
     dht_peer_found_tx: mpsc::UnboundedSender<SocketAddr>,
     connection_deduplicator: ConnectionDeduplicator,
     // Note that unwrapping the upgraded weak pointer should be fine because if the underlying Arc
@@ -402,22 +417,10 @@ impl Inner {
         }
     }
 
-    // Periodically search for peers for the given repository and announce it on the DHT.
-    async fn enable_dht_for_repository(&self, id: InfoHash) {
-        if let Some(dht_discovery) = &self.dht_discovery {
-            let mut dht_lookups = self.dht_lookups.lock().await;
-
-            match dht_lookups.entry(id) {
-                Entry::Occupied(_) => {}
-                Entry::Vacant(entry) => {
-                    entry.insert(dht_discovery.lookup(id, self.dht_peer_found_tx.clone()));
-                }
-            };
-        }
-    }
-
-    async fn disable_dht_for_repository(&self, id: &InfoHash) {
-        self.dht_lookups.lock().await.remove(id);
+    fn start_dht_lookup(&self, id: InfoHash) -> Option<dht_discovery::LookupRequest> {
+        self.dht_discovery
+            .as_ref()
+            .map(|dht| dht.lookup(id, self.dht_peer_found_tx.clone()))
     }
 
     async fn establish_user_provided_connection(self: Arc<Self>, addr: SocketAddr) {
@@ -583,6 +586,7 @@ impl Inner {
 
 struct IndexHolder {
     index: Index,
+    dht_lookup: Option<dht_discovery::LookupRequest>,
 }
 
 async fn perform_handshake(
