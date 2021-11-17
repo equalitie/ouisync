@@ -28,6 +28,10 @@ pub(crate) struct Options {
     #[structopt(long, value_name = "NAME")]
     pub share: Vec<String>,
 
+    /// Print (append) the share tokens to a file instead of standard output
+    #[structopt(long, value_name = "PATH")]
+    pub share_file: Option<PathBuf>,
+
     /// Accept a share token into the named repository. If the repository doesn't exist yet, it will
     /// be created. Can be specified multiple times to accept multiple share tokens.
     #[structopt(long, value_name = "NAME:TOKEN")]

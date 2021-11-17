@@ -3,9 +3,10 @@ mod virtual_filesystem;
 
 use self::options::{Named, Options};
 use anyhow::Result;
-use ouisync_lib::{config, this_replica, Cryptor, Network, Repository, ShareToken};
+use ouisync_lib::{config, this_replica, Cryptor, Network, Repository};
 use std::{collections::HashMap, io};
 use structopt::StructOpt;
+use tokio::{fs::File, io::AsyncWriteExt};
 
 pub(crate) const APP_NAME: &str = "ouisync";
 
@@ -38,41 +39,57 @@ async fn main() -> Result<()> {
     }
 
     // Print repository share tokens
+    let mut share_file = if let Some(path) = &options.share_file {
+        Some(File::create(path).await?)
+    } else {
+        None
+    };
+
     for name in &options.share {
-        if let Some((repo, _)) = mount_repos.get(name.as_str()) {
-            print_share_token(repo, name).await?
+        let token = if let Some((repo, _)) = mount_repos.get(name.as_str()) {
+            repo.share().await?
         } else {
-            print_share_token(
-                &Repository::open(
-                    &options.repository_store(name)?,
-                    this_replica_id,
-                    Cryptor::Null,
-                    false,
-                )
-                .await?,
-                name,
+            Repository::open(
+                &options.repository_store(name)?,
+                this_replica_id,
+                Cryptor::Null,
+                false,
             )
             .await?
+            .share()
+            .await?
+        };
+        let token = token.with_name(name);
+
+        if let Some(file) = &mut share_file {
+            file.write_all(token.to_string().as_bytes()).await?;
+            file.write(b"\n").await?;
+        } else {
+            println!("{}", token);
         }
+    }
+
+    if let Some(mut file) = share_file {
+        file.flush().await?;
     }
 
     // Accept share tokens
     for Named { name, value } in &options.accept {
         if let Some((repo, _)) = mount_repos.get(name.as_str()) {
-            accept_share_token(repo, value).await?
+            repo.accept(value).await?
         } else {
-            accept_share_token(
-                &Repository::open(
-                    &options.repository_store(name)?,
-                    this_replica_id,
-                    Cryptor::Null,
-                    false,
-                )
-                .await?,
-                value,
+            Repository::open(
+                &options.repository_store(name)?,
+                this_replica_id,
+                Cryptor::Null,
+                false,
             )
             .await?
+            .accept(value)
+            .await?
         }
+
+        log::info!("share token accepted: {}", value);
     }
 
     // Start the network
@@ -100,17 +117,6 @@ async fn main() -> Result<()> {
 
     terminated().await?;
 
-    Ok(())
-}
-
-async fn print_share_token(repo: &Repository, name: &str) -> Result<()> {
-    println!("{}", repo.share().await?.with_name(name));
-    Ok(())
-}
-
-async fn accept_share_token(repo: &Repository, token: &ShareToken) -> Result<()> {
-    repo.accept(token).await?;
-    log::info!("share token accepted: {}", token);
     Ok(())
 }
 
