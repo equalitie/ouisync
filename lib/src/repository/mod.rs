@@ -59,10 +59,10 @@ impl Repository {
         })
     }
 
-    /// Get the id of this repository or `None` if no id was assigned yet. A repository gets an id
-    /// the first time it is either shared ([`Self::share`]) or a accepts a share
-    /// ([`Self::accept`]).
-    pub async fn get_id(&self) -> Result<Option<SecretRepositoryId>> {
+    /// Get the id of this repository or `Error::EntryNotFound` if no id was assigned yet.
+    /// A repository gets an id the first time it is either shared ([`Self::share`]) or a accepts
+    /// a share ([`Self::accept`]).
+    pub async fn get_id(&self) -> Result<SecretRepositoryId> {
         get_id(self.db_pool()).await
     }
 
@@ -75,13 +75,17 @@ impl Repository {
     /// the same repository id.
     pub async fn share(&self) -> Result<ShareToken> {
         let mut tx = self.db_pool().begin().await?;
-        let id = if let Some(id) = get_id(&mut tx).await? {
-            id
-        } else {
-            let id = rand::random();
-            set_id(&mut tx, &id).await?;
-            id
+
+        let id = match get_id(&mut tx).await {
+            Ok(id) => id,
+            Err(Error::EntryNotFound) => {
+                let id = rand::random();
+                set_id(&mut tx, &id).await?;
+                id
+            }
+            Err(error) => return Err(error),
         };
+
         tx.commit().await?;
 
         Ok(ShareToken::new(id))
@@ -91,8 +95,7 @@ impl Repository {
     ///
     /// If neither `accept` nor `share` was called on this repository before, the repository id
     /// from the token is assigned to this repository. Subsequent calls to `accept` will fail with
-    /// [`Error::EntryExists`] unless the passed token has the same id as this repository in which
-    /// case they are no-op.
+    /// [`Error::EntryExists`].
     pub async fn accept(&self, token: &ShareToken) -> Result<()> {
         if set_id(self.db_pool(), &token.id).await? {
             Ok(())
@@ -398,12 +401,13 @@ pub(crate) async fn open_db(store: &db::Store) -> Result<db::Pool> {
     Ok(pool)
 }
 
-async fn get_id(db: impl db::Executor<'_>) -> Result<Option<SecretRepositoryId>> {
-    Ok(sqlx::query("SELECT value FROM metadata WHERE name = ?")
+async fn get_id(db: impl db::Executor<'_>) -> Result<SecretRepositoryId> {
+    sqlx::query("SELECT value FROM metadata WHERE name = ?")
         .bind(metadata::ID)
         .map(|row| row.get(0))
         .fetch_optional(db)
-        .await?)
+        .await?
+        .ok_or(Error::EntryNotFound)
 }
 
 async fn set_id(db: impl db::Executor<'_>, id: &SecretRepositoryId) -> Result<bool> {

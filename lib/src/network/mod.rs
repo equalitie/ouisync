@@ -220,16 +220,9 @@ impl Handle {
     /// the future. The repository is automatically deregistered when dropped.
     pub async fn register(&self, repository: &Repository) -> bool {
         let sid = match repository.get_id().await {
-            Ok(Some(id)) => id,
-            Ok(None) => {
-                log::warn!("not registering repository - missing id");
-                return false;
-            }
+            Ok(id) => id,
             Err(error) => {
-                log::error!(
-                    "not registering repository - failed to retrieve id: {}",
-                    error
-                );
+                log::warn!("not registering repository - missing id ({})", error);
                 return false;
             }
         };
@@ -279,7 +272,7 @@ impl Handle {
     }
 
     pub async fn enable_dht_for_repository(&self, repository: &Repository) {
-        let id = if let Ok(Some(id)) = repository.get_id().await {
+        let id = if let Ok(id) = repository.get_id().await {
             id.public()
         } else {
             log::warn!("not enabling DHT for repository - missing id");
@@ -300,7 +293,7 @@ impl Handle {
     }
 
     pub async fn disable_dht_for_repository(&self, repository: &Repository) {
-        let id = if let Ok(Some(id)) = repository.get_id().await {
+        let id = if let Ok(id) = repository.get_id().await {
             id.public()
         } else {
             log::warn!("not disabling DHT for repository - missing id");
@@ -315,7 +308,7 @@ impl Handle {
     }
 
     pub async fn is_dht_for_repository_enabled(&self, repository: &Repository) -> bool {
-        let id = if let Ok(Some(id)) = repository.get_id().await {
+        let id = if let Ok(id) = repository.get_id().await {
             id.public()
         } else {
             return false;
