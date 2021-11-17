@@ -7,6 +7,8 @@ use ouisync_lib::{config, this_replica, Cryptor, Network, Repository};
 use std::io;
 use structopt::StructOpt;
 
+pub(crate) const APP_NAME: &str = "ouisync";
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let options = Options::from_args();

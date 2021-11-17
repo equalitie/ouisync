@@ -1,3 +1,4 @@
+use crate::APP_NAME;
 use anyhow::{Context, Error, Result};
 use ouisync_lib::{NetworkOptions, Store};
 use std::{path::PathBuf, str::FromStr};
@@ -46,7 +47,7 @@ impl Options {
         } else {
             Ok(dirs::data_dir()
                 .context("failed to initialize default data directory")?
-                .join(env!("CARGO_PKG_NAME")))
+                .join(APP_NAME))
         }
     }
 

@@ -431,7 +431,7 @@ async fn get_id(db: impl db::Executor<'_>) -> Result<Option<RepositoryId>> {
 
 async fn set_id(db: impl db::Executor<'_>, id: &RepositoryId) -> Result<bool> {
     Ok(
-        sqlx::query("INSERT INTO metadata(name, value) SET (?, ?) ON CONFLICT DO NOTHING")
+        sqlx::query("INSERT INTO metadata(name, value) VALUES (?, ?) ON CONFLICT DO NOTHING")
             .bind(metadata::ID)
             .bind(id)
             .execute(db)
