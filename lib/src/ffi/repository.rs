@@ -6,7 +6,7 @@ use crate::{
     crypto::Cryptor, directory::EntryType, error::Error, path, repository::Repository,
     share_token::ShareToken,
 };
-use std::{os::raw::c_char, sync::Arc};
+use std::{os::raw::c_char, ptr, sync::Arc};
 use tokio::task::JoinHandle;
 
 pub const ENTRY_TYPE_INVALID: u8 = 0;
@@ -196,6 +196,30 @@ pub unsafe extern "C" fn repository_accept_share_token(
 
         ctx.spawn(async move { repo.set_id(*token.id()).await })
     })
+}
+
+/// IMPORTANT: the caller is responsible for deallocating the returned pointer unless it is `null`.
+#[no_mangle]
+pub unsafe extern "C" fn extract_suggested_name_from_share_token(
+    token: *const c_char,
+) -> *const c_char {
+    let token = if let Ok(token) = utils::ptr_to_str(token) {
+        token
+    } else {
+        return ptr::null();
+    };
+
+    let token: ShareToken = if let Ok(token) = token.parse() {
+        token
+    } else {
+        return ptr::null();
+    };
+
+    if let Ok(s) = utils::str_to_c_string(token.suggested_name().as_ref()) {
+        s.into_raw()
+    } else {
+        ptr::null()
+    }
 }
 
 pub(super) fn entry_type_to_num(entry_type: EntryType) -> u8 {
