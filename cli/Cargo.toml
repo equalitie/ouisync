@@ -6,6 +6,7 @@ authors = ["Adam Cigánek <adam@equalit.ie>", "Peter Jankuliak <peter@equalit.ie
 license = "MPL-2.0"
 edition = "2021"
 publish = false
+default-run = "ouisync"
 
 [[bin]]
 name = "ouisync"

@@ -1,3 +1,7 @@
+mod id;
+
+pub use self::id::{PublicRepositoryId, SecretRepositoryId, SECRET_REPOSITORY_ID_SIZE};
+
 use crate::{
     block,
     branch::Branch,
@@ -16,6 +20,7 @@ use crate::{
 use camino::Utf8Path;
 use futures_util::{future, stream::FuturesUnordered, StreamExt};
 use log::Level;
+use sqlx::Row;
 use std::{collections::HashMap, iter, sync::Arc};
 use tokio::{select, sync::Mutex};
 
@@ -27,7 +32,6 @@ pub struct Repository {
 impl Repository {
     /// Opens an existing repository or creates a new one if it doesn't exists yet.
     pub async fn open(
-        name: String,
         store: &db::Store,
         this_replica_id: ReplicaId,
         cryptor: Cryptor,
@@ -37,7 +41,6 @@ impl Repository {
         let index = Index::load(pool, this_replica_id).await?;
 
         let shared = Arc::new(Shared {
-            name,
             index,
             cryptor,
             branches: Mutex::new(HashMap::new()),
@@ -55,8 +58,34 @@ impl Repository {
         })
     }
 
-    pub fn name(&self) -> &String {
-        &self.shared.name
+    /// Get the id of this repository or `Error::EntryNotFound` if no id was assigned yet.
+    pub async fn get_id(&self) -> Result<SecretRepositoryId> {
+        get_id(self.db_pool()).await
+    }
+
+    /// Get the id of this repository or create it if it wasn't assigned yet.
+    pub async fn get_or_create_id(&self) -> Result<SecretRepositoryId> {
+        let mut tx = self.db_pool().begin().await?;
+
+        let id = match get_id(&mut tx).await {
+            Ok(id) => id,
+            Err(Error::EntryNotFound) => {
+                let id = rand::random();
+                set_id(&mut tx, &id).await?;
+                id
+            }
+            Err(error) => return Err(error),
+        };
+
+        tx.commit().await?;
+
+        Ok(id)
+    }
+
+    /// Assign the id to this repository. Fails with `Error::EntryExists` if id was already
+    /// assigned either by calling `set_id` or `get_or_create_id`.
+    pub async fn set_id(&self, id: SecretRepositoryId) -> Result<()> {
+        set_id(self.db_pool(), &id).await
     }
 
     pub fn this_replica_id(&self) -> &ReplicaId {
@@ -299,6 +328,10 @@ impl Repository {
         &self.shared.index
     }
 
+    fn db_pool(&self) -> &db::Pool {
+        &self.index().pool
+    }
+
     pub async fn debug_print(&self, print: DebugPrinter) {
         print.display(&"Repository");
         let branches = self.shared.branches.lock().await;
@@ -339,13 +372,49 @@ pub(crate) async fn open_db(store: &db::Store) -> Result<db::Pool> {
     index::init(&pool).await?;
     store::init(&pool).await?;
 
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS metadata (
+             name  BLOB NOT NULL PRIMARY KEY,
+             value BLOB NOT NULL
+         ) WITHOUT ROWID",
+    )
+    .execute(&pool)
+    .await
+    .map_err(Error::CreateDbSchema)?;
+
     Ok(pool)
 }
 
+async fn get_id(db: impl db::Executor<'_>) -> Result<SecretRepositoryId> {
+    sqlx::query("SELECT value FROM metadata WHERE name = ?")
+        .bind(metadata::ID)
+        .map(|row| row.get(0))
+        .fetch_optional(db)
+        .await?
+        .ok_or(Error::EntryNotFound)
+}
+
+async fn set_id(db: impl db::Executor<'_>, id: &SecretRepositoryId) -> Result<()> {
+    let result =
+        sqlx::query("INSERT INTO metadata(name, value) VALUES (?, ?) ON CONFLICT DO NOTHING")
+            .bind(metadata::ID)
+            .bind(id)
+            .execute(db)
+            .await?;
+
+    if result.rows_affected() > 0 {
+        Ok(())
+    } else {
+        Err(Error::EntryExists)
+    }
+}
+
+// Metadata keys
+mod metadata {
+    pub(super) const ID: &[u8] = b"id";
+}
+
 struct Shared {
-    // This is expected to change. Right now it is being used to determine when two or more
-    // repositories are expected to "act" as one.
-    name: String,
     index: Index,
     cryptor: Cryptor,
     // Cache for `Branch` instances to make them persistent over the lifetime of the program.
@@ -527,30 +596,18 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn root_directory_always_exists() {
         let replica_id = rand::random();
-        let repo = Repository::open(
-            "test".to_owned(),
-            &db::Store::Memory,
-            replica_id,
-            Cryptor::Null,
-            false,
-        )
-        .await
-        .unwrap();
+        let repo = Repository::open(&db::Store::Memory, replica_id, Cryptor::Null, false)
+            .await
+            .unwrap();
         let _ = repo.open_directory("/").await.unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn merge() {
         let local_id = rand::random();
-        let repo = Repository::open(
-            "test".to_owned(),
-            &db::Store::Memory,
-            local_id,
-            Cryptor::Null,
-            true,
-        )
-        .await
-        .unwrap();
+        let repo = Repository::open(&db::Store::Memory, local_id, Cryptor::Null, true)
+            .await
+            .unwrap();
 
         // Add another branch to the index. Eventually there might be a more high-level API for
         // this but for now we have to resort to this.
@@ -608,15 +665,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn recreate_previously_deleted_file() {
         let local_id = rand::random();
-        let repo = Repository::open(
-            "test".to_owned(),
-            &db::Store::Memory,
-            local_id,
-            Cryptor::Null,
-            false,
-        )
-        .await
-        .unwrap();
+        let repo = Repository::open(&db::Store::Memory, local_id, Cryptor::Null, false)
+            .await
+            .unwrap();
 
         // Create file
         let mut file = repo.create_file("test.txt").await.unwrap();
@@ -646,15 +697,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn recreate_previously_deleted_directory() {
         let local_id = rand::random();
-        let repo = Repository::open(
-            "test".to_owned(),
-            &db::Store::Memory,
-            local_id,
-            Cryptor::Null,
-            false,
-        )
-        .await
-        .unwrap();
+        let repo = Repository::open(&db::Store::Memory, local_id, Cryptor::Null, false)
+            .await
+            .unwrap();
 
         // Create dir
         repo.create_directory("test")

@@ -5,8 +5,12 @@ use std::{fs, net::Ipv4Addr};
 
 #[test]
 fn transfer_single_file() {
-    let a = Bin::start(0, []);
-    let b = Bin::start(1, [(Ipv4Addr::LOCALHOST, a.port()).into()]);
+    let a = Bin::start(0, [], None);
+    let b = Bin::start(
+        1,
+        [(Ipv4Addr::LOCALHOST, a.port()).into()],
+        Some(a.share_token()),
+    );
 
     let file_name = "foo.txt";
     let orig_content = "hello";
@@ -21,8 +25,12 @@ fn transfer_single_file() {
 
 #[test]
 fn sequential_write_to_the_same_file() {
-    let a = Bin::start(0, []);
-    let b = Bin::start(1, [(Ipv4Addr::LOCALHOST, a.port()).into()]);
+    let a = Bin::start(0, [], None);
+    let b = Bin::start(
+        1,
+        [(Ipv4Addr::LOCALHOST, a.port()).into()],
+        Some(a.share_token()),
+    );
 
     let file_name = "bar.txt";
     let content_a = "hello from A";
@@ -53,8 +61,12 @@ fn fast_sequential_writes() {
     // perfomed more than one write operation (mkdir, echo foo > bar,...) quickly one after another
     // (e.g. "$ mkdir a; mkdir b").
     for _ in 0..5 {
-        let a = Bin::start(0, []);
-        let b = Bin::start(1, [(Ipv4Addr::LOCALHOST, a.port()).into()]);
+        let a = Bin::start(0, [], None);
+        let b = Bin::start(
+            1,
+            [(Ipv4Addr::LOCALHOST, a.port()).into()],
+            Some(a.share_token()),
+        );
 
         let count = 10;
 

@@ -2,8 +2,11 @@ use super::{
     session,
     utils::{self, Port, SharedHandle, UniqueHandle},
 };
-use crate::{crypto::Cryptor, directory::EntryType, error::Error, path, repository::Repository};
-use std::{os::raw::c_char, sync::Arc};
+use crate::{
+    crypto::Cryptor, directory::EntryType, error::Error, path, repository::Repository,
+    share_token::ShareToken,
+};
+use std::{os::raw::c_char, ptr, sync::Arc};
 use tokio::task::JoinHandle;
 
 pub const ENTRY_TYPE_INVALID: u8 = 0;
@@ -19,15 +22,10 @@ pub unsafe extern "C" fn repository_open(
 ) {
     session::with(port, error, |ctx| {
         let store = utils::ptr_to_path_buf(store)?;
-        // Using the filename component of the store path (without the extension) as the repository
-        // name for now. This might change in the future.
-        // TODO: should we use more specific error here?
-        let name = store.file_stem().ok_or(Error::MalformedData)?.to_owned();
         let network_handle = ctx.network().handle();
 
         ctx.spawn(async move {
             let repo = Repository::open(
-                name,
                 &store.into_std_path_buf().into(),
                 *network_handle.this_replica_id(),
                 Cryptor::Null,
@@ -124,41 +122,104 @@ pub unsafe extern "C" fn subscription_cancel(handle: UniqueHandle<JoinHandle<()>
 
 #[no_mangle]
 pub unsafe extern "C" fn repository_is_dht_enabled(
-    handle: UniqueHandle<Repository>,
+    handle: SharedHandle<Repository>,
     port: Port<bool>,
 ) {
     let session = session::get();
-    let sender = session.sender();
     let network = session.network().handle();
+    let sender = session.sender();
+    let repo = handle.get();
 
     session.runtime().spawn(async move {
-        let is_dht_enabled = network.is_dht_for_repository_enabled(handle.get()).await;
-        sender.send(port, is_dht_enabled);
+        let value = network.is_dht_for_repository_enabled(&repo).await;
+        sender.send(port, value);
     });
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn repository_enable_dht(handle: UniqueHandle<Repository>, port: Port<()>) {
+pub unsafe extern "C" fn repository_enable_dht(handle: SharedHandle<Repository>, port: Port<()>) {
     let session = session::get();
-    let sender = session.sender();
     let network = session.network().handle();
+    let sender = session.sender();
+    let repo = handle.get();
 
     session.runtime().spawn(async move {
-        network.enable_dht_for_repository(handle.get()).await;
+        network.enable_dht_for_repository(&repo).await;
         sender.send(port, ());
     });
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn repository_disable_dht(handle: UniqueHandle<Repository>, port: Port<()>) {
+pub unsafe extern "C" fn repository_disable_dht(handle: SharedHandle<Repository>, port: Port<()>) {
     let session = session::get();
-    let sender = session.sender();
     let network = session.network().handle();
+    let sender = session.sender();
+    let repo = handle.get();
 
     session.runtime().spawn(async move {
-        network.disable_dht_for_repository(handle.get()).await;
+        network.disable_dht_for_repository(&repo).await;
         sender.send(port, ());
     });
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn repository_create_share_token(
+    handle: SharedHandle<Repository>,
+    name: *const c_char,
+    port: Port<String>,
+    error: *mut *mut c_char,
+) {
+    session::with(port, error, |ctx| {
+        let repo = handle.get();
+        let name = utils::ptr_to_str(name)?.to_owned();
+
+        ctx.spawn(async move {
+            let id = repo.get_or_create_id().await?;
+            let share_token = ShareToken::new(id).with_name(name);
+
+            Ok(share_token.to_string())
+        })
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn repository_accept_share_token(
+    handle: SharedHandle<Repository>,
+    token: *const c_char,
+    port: Port<()>,
+    error: *mut *mut c_char,
+) {
+    session::with(port, error, |ctx| {
+        let repo = handle.get();
+        let token = utils::ptr_to_str(token)?;
+        let token: ShareToken = token.parse()?;
+
+        ctx.spawn(async move { repo.set_id(*token.id()).await })
+    })
+}
+
+/// IMPORTANT: the caller is responsible for deallocating the returned pointer unless it is `null`.
+#[no_mangle]
+pub unsafe extern "C" fn extract_suggested_name_from_share_token(
+    token: *const c_char,
+) -> *const c_char {
+    let token = if let Ok(token) = utils::ptr_to_str(token) {
+        token
+    } else {
+        return ptr::null();
+    };
+
+    let token: ShareToken = if let Ok(token) = token.parse() {
+        token
+    } else {
+        return ptr::null();
+    };
+
+    if let Ok(s) = utils::str_to_c_string(token.suggested_name().as_ref()) {
+        s.into_raw()
+    } else {
+        ptr::null()
+    }
 }
 
 pub(super) fn entry_type_to_num(entry_type: EntryType) -> u8 {

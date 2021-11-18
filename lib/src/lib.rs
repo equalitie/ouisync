@@ -26,8 +26,8 @@ mod path;
 mod replica_id;
 mod repository;
 mod scoped_task;
+mod share_token;
 mod store;
-mod tagged;
 #[cfg(test)]
 mod test_utils;
 mod upnp;
@@ -46,4 +46,5 @@ pub use self::{
     network::{Network, NetworkOptions},
     replica_id::ReplicaId,
     repository::Repository,
+    share_token::ShareToken,
 };

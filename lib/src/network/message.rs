@@ -2,6 +2,7 @@ use crate::{
     block::BlockId,
     crypto::{AuthTag, Hash},
     index::{InnerNodeMap, LeafNodeSet, Summary},
+    repository::PublicRepositoryId,
     version_vector::VersionVector,
 };
 use serde::{Deserialize, Serialize};
@@ -88,20 +89,18 @@ impl fmt::Debug for Response {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub(crate) enum Message {
-    // Request by the sender to establish a link between their repository with id `src_id` and
-    // the recipient's repository named `dst_name`.
+    // Request by the sender to establish a link between repositories with the given id hash.
     CreateLink {
-        src_id: RepositoryId,
-        dst_name: String,
+        id: PublicRepositoryId,
     },
-    // Request to a recipient's repository with id `dst_id`.
+    // Request to a recipient's repository with id hash `id`.
     Request {
-        dst_id: RepositoryId,
+        id: PublicRepositoryId,
         request: Request,
     },
-    // Response to a recipient's repository with id `dst_id`.
+    // Response to a recipient's repository with id hash `id`.
     Response {
-        dst_id: RepositoryId,
+        id: PublicRepositoryId,
         response: Response,
     },
 }
@@ -127,5 +126,3 @@ impl From<Message> for Response {
         }
     }
 }
-
-pub(crate) type RepositoryId = u64;

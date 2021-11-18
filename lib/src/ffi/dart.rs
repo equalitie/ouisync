@@ -3,8 +3,9 @@
 // Most of this file is ripped from [dart-sys](https://crates.io/crates/dart-sys) and
 // [allo-isolate](https://crates.io/crates/allo-isolate)
 
+use std::{ffi::CString, os::raw::c_char};
+
 #[repr(C)]
-#[derive(Copy, Clone)]
 pub struct DartCObject {
     type_: DartCObjectType,
     value: DartCObjectValue,
@@ -51,6 +52,33 @@ impl From<bool> for DartCObject {
     }
 }
 
+impl From<String> for DartCObject {
+    fn from(value: String) -> Self {
+        DartCObject {
+            type_: DartCObjectType::String,
+            value: DartCObjectValue {
+                as_string: CString::new(value).unwrap_or_default().into_raw(),
+            },
+        }
+    }
+}
+
+impl Drop for DartCObject {
+    fn drop(&mut self) {
+        match self.type_ {
+            DartCObjectType::Null
+            | DartCObjectType::Bool
+            | DartCObjectType::Int32
+            | DartCObjectType::Int64 => (),
+            DartCObjectType::String => {
+                // SAFETY: When `type_` is `String` then `value` is a pointer to `CString`. This is
+                // guaranteed by construction.
+                let _ = unsafe { CString::from_raw(self.value.as_string) };
+            }
+        }
+    }
+}
+
 #[repr(i32)]
 #[derive(Copy, Clone)]
 pub enum DartCObjectType {
@@ -59,7 +87,7 @@ pub enum DartCObjectType {
     Int32 = 2,
     Int64 = 3,
     // Double = 4,
-    // String = 5,
+    String = 5,
     // Array = 6,
     // TypedData = 7,
     // ExternalTypedData = 8,
@@ -72,11 +100,11 @@ pub enum DartCObjectType {
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub union DartCObjectValue {
-    pub as_bool: bool,
-    pub as_int32: i32,
-    pub as_int64: i64,
-    // pub as_double: f64,
-    // pub as_string: *mut ::std::os::raw::c_char,
+    as_bool: bool,
+    as_int32: i32,
+    as_int64: i64,
+    // as_double: f64,
+    as_string: *mut c_char,
     // NOTE: some variants omitted because we don't currently need them.
     _align: [u64; 5usize],
 }

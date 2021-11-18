@@ -15,17 +15,30 @@ pub struct Bin {
     id: u32,
     mount_dir: TempDir,
     port: u16,
+    share_token: String,
     process: Child,
 }
 
 impl Bin {
-    pub fn start(id: u32, peers: impl IntoIterator<Item = SocketAddr>) -> Self {
+    pub fn start(
+        id: u32,
+        peers: impl IntoIterator<Item = SocketAddr>,
+        share_token: Option<&str>,
+    ) -> Self {
         let mount_dir = TempDir::new().unwrap();
 
         let mut command = Command::new(env!("CARGO_BIN_EXE_ouisync"));
         command.arg("--temp");
-        command.arg("--mount");
-        command.arg(format!("test:{}", mount_dir.path().display()));
+        command
+            .arg("--mount")
+            .arg(format!("test:{}", mount_dir.path().display()));
+
+        if let Some(share_token) = share_token {
+            command.arg("--accept").arg(share_token);
+        } else {
+            command.arg("--share").arg("test");
+        }
+
         command.arg("--print-ready-message");
         command.arg("--disable-upnp");
         command.arg("--disable-dht");
@@ -41,36 +54,23 @@ impl Bin {
 
         let mut process = command.spawn().unwrap();
 
-        let mut stdout = process.stdout.take().unwrap();
-
-        if let Some(port) = wait_for_ready_message(&mut stdout) {
-            println!("[{}] replica ready on port {}", id, port);
-
-            copy_lines_prefixed(stdout, io::stdout(), id);
-            copy_lines_prefixed(process.stderr.take().unwrap(), io::stderr(), id);
-
-            Self {
-                id,
-                mount_dir,
-                port,
-                process,
-            }
+        let share_token = if let Some(share_token) = share_token {
+            share_token.to_owned()
         } else {
-            println!("[{}] Failed to parse ready line.", id);
-            println!("[{}] Waiting for process to finish.", id);
+            wait_for_share_token(&mut process, id)
+        };
 
-            let exit_status = process.wait().unwrap();
+        let port = wait_for_ready_message(&mut process, id);
 
-            println!("[{}] Process finished with {}", id, exit_status);
-            println!("[{}] stderr:", id);
+        copy_lines_prefixed(process.stdout.take().unwrap(), io::stdout(), id);
+        copy_lines_prefixed(process.stderr.take().unwrap(), io::stderr(), id);
 
-            let stderr = process.stderr.take().unwrap();
-
-            for line in BufReader::new(stderr).lines() {
-                println!("[{}]     {:?}", id, line);
-            }
-
-            panic!("[{}] Failed to run ouisync executable", id);
+        Self {
+            id,
+            mount_dir,
+            port,
+            share_token,
+            process,
         }
     }
 
@@ -80,6 +80,10 @@ impl Bin {
 
     pub fn port(&self) -> u16 {
         self.port
+    }
+
+    pub fn share_token(&self) -> &str {
+        &self.share_token
     }
 
     fn kill(&mut self) {
@@ -115,14 +119,50 @@ where
     });
 }
 
-fn wait_for_ready_message<R: Read>(reader: &mut R) -> Option<u16> {
-    const PREFIX: &str = "Listening on port ";
+fn wait_for_share_token(process: &mut Child, id: u32) -> String {
+    if let Some(line) = wait_for_line(process.stdout.as_mut().unwrap(), "ouisync:", "?name=test") {
+        line
+    } else {
+        fail(process, id, "Failed to read share token");
+    }
+}
 
-    BufReader::new(reader)
+fn wait_for_ready_message(process: &mut Child, id: u32) -> u16 {
+    const PREFIX: &str = "Listening on port ";
+    if let Some(line) = wait_for_line(process.stdout.as_mut().unwrap(), PREFIX, "") {
+        line[PREFIX.len()..].parse().unwrap()
+    } else {
+        fail(process, id, "Failed to read listening port");
+    }
+}
+
+fn wait_for_line<R: Read>(reader: &mut R, prefix: &str, suffix: &str) -> Option<String> {
+    let mut line = BufReader::new(reader)
         .lines()
         .filter_map(|line| line.ok())
-        .find(|line| line.starts_with(PREFIX))
-        .map(|line| line[PREFIX.len()..].parse().unwrap())
+        .find(|line| line.starts_with(prefix) && line.ends_with(suffix))?;
+
+    let len = line.trim_end().len();
+    line.truncate(len);
+    Some(line)
+}
+
+fn fail(process: &mut Child, id: u32, message: &str) -> ! {
+    println!("[{}] {}", id, message);
+    println!("[{}] Waiting for process to finish", id);
+
+    let exit_status = process.wait().unwrap();
+
+    println!("[{}] Process finished with {}", id, exit_status);
+    println!("[{}] stderr:", id);
+
+    let stderr = process.stderr.take().unwrap();
+
+    for line in BufReader::new(stderr).lines() {
+        println!("[{}]     {}", id, line.unwrap());
+    }
+
+    panic!("[{}] Failed to run ouisync executable", id);
 }
 
 /// Runs the given closure a couple of times until it succeeds (does not panic) with a short delay

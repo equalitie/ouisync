@@ -1,12 +1,12 @@
 use super::{
     dart::{DartCObject, PostDartCObjectFn},
     logger::Logger,
-    utils::{self, AssumeSend, Port, SharedHandle},
+    utils::{self, AssumeSend, Port},
 };
 use crate::{
     config, db,
     error::Result,
-    network::{self, Network, NetworkOptions},
+    network::{Network, NetworkOptions},
     this_replica,
 };
 use std::{
@@ -151,20 +151,6 @@ impl Session {
     pub(super) fn network(&self) -> &Network {
         &self.network
     }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn session_get_network(
-    port: Port<SharedHandle<network::Handle>>,
-    error_ptr: *mut *mut c_char,
-) {
-    let session = get();
-    let network_handle = session.network.handle();
-    session.sender.send_ok(
-        port,
-        error_ptr,
-        SharedHandle::new(std::sync::Arc::new(network_handle)),
-    );
 }
 
 pub(super) struct Context<'a, T> {
