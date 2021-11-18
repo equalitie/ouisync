@@ -43,7 +43,6 @@ impl Core {
             .decrypt(&nonce, id.as_ref(), &mut content, &auth_tag)?;
 
         Ok(OpenBlock {
-            head_locator: self.head_locator,
             locator: self.head_locator,
             id,
             content,

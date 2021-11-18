@@ -76,7 +76,6 @@ impl Blob {
             head_locator,
             branch,
             OpenBlock {
-                head_locator,
                 locator: head_locator,
                 id,
                 content,
@@ -283,8 +282,6 @@ impl<'a> OperationsLock<'a> {
 // Data for a block that's been loaded into memory and decrypted.
 #[derive(Clone)]
 pub(crate) struct OpenBlock {
-    // The locator to the head block of the blob.
-    pub head_locator: Locator,
     // Locator of the block.
     pub locator: Locator,
     // Id of the block.
@@ -302,7 +299,6 @@ impl OpenBlock {
         content.write_u64(0); // blob length (initially zero)
 
         Self {
-            head_locator: locator,
             locator,
             id: rand::random(),
             content,
