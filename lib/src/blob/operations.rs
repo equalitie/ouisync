@@ -334,7 +334,6 @@ impl<'a> Operations<'a> {
         };
 
         let current_block = OpenBlock {
-            head_locator: dst_head_locator,
             locator: dst_head_locator.advance(self.current_block.locator.number()),
             id: self.current_block.id,
             content: self.current_block.content.clone(),
@@ -382,7 +381,6 @@ impl<'a> Operations<'a> {
         }
 
         *self.current_block = OpenBlock {
-            head_locator: self.core.head_locator,
             locator,
             id,
             content,
