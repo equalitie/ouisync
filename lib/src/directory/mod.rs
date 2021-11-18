@@ -508,6 +508,8 @@ impl Writer<'_> {
         name: &str,
         author: &ReplicaId,
         vv: VersionVector,
+        // `keep` is set when we're moving the entry and only want to remove it from the entries
+        // listed in `self` (as opposed to also remove its data).
         keep: Option<BlobId>,
     ) -> Result<()> {
         // If we are removing a directory, ensure it's empty (recursive removal can still be
@@ -523,7 +525,7 @@ impl Writer<'_> {
         let _old_dir_reader = if let Some(dir) = &old_dir {
             let reader = dir.read().await;
 
-            if reader.entries().any(|entry| !entry.is_tombstone()) {
+            if keep.is_none() && reader.entries().any(|entry| !entry.is_tombstone()) {
                 return Err(Error::DirectoryNotEmpty);
             }
 

@@ -271,7 +271,6 @@ async fn move_file_within_branch() {
 //     $ touch dir/cow.txt
 //     $ mkdir dst
 //     $ mv dir dst/
-#[ignore]
 #[tokio::test(flavor = "multi_thread")]
 async fn move_non_empty_directory() {
     let branch = setup().await;
