@@ -74,7 +74,13 @@ async fn main() -> Result<()> {
     }
 
     // Accept share tokens
-    for token in &options.accept {
+    let accept_file_tokens = if let Some(path) = &options.accept_file {
+        options::read_share_tokens_from_file(path).await?
+    } else {
+        vec![]
+    };
+
+    for token in options.accept.iter().chain(&accept_file_tokens) {
         let name = token.suggested_name();
 
         if let Some((repo, _)) = mount_repos.get(name.as_ref()) {

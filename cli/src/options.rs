@@ -1,8 +1,15 @@
 use crate::APP_NAME;
 use anyhow::{Context, Error, Result};
 use ouisync_lib::{NetworkOptions, ShareToken, Store};
-use std::{path::PathBuf, str::FromStr};
+use std::{
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 use structopt::StructOpt;
+use tokio::{
+    fs::File,
+    io::{AsyncBufReadExt, BufReader},
+};
 
 /// Command line options.
 #[derive(StructOpt, Debug)]
@@ -32,10 +39,13 @@ pub(crate) struct Options {
     #[structopt(long, value_name = "PATH")]
     pub share_file: Option<PathBuf>,
 
-    /// Accept a share token into the named repository. If the repository doesn't exist yet, it will
-    /// be created. Can be specified multiple times to accept multiple share tokens.
+    /// Accept a share token. Can be specified multiple times to accept multiple tokens.
     #[structopt(long, value_name = "TOKEN")]
     pub accept: Vec<ShareToken>,
+
+    /// Accept share tokens by reading them from a file, one token per line.
+    #[structopt(long, value_name = "PATH")]
+    pub accept_file: Option<PathBuf>,
 
     /// Prints the path to the data directory and exits.
     #[structopt(long)]
@@ -120,4 +130,19 @@ where
             value: input[index + 1..].parse()?,
         })
     }
+}
+
+pub(crate) async fn read_share_tokens_from_file(path: &Path) -> Result<Vec<ShareToken>> {
+    let file = File::open(path).await?;
+    let mut reader = BufReader::new(file);
+    let mut buffer = String::new();
+    let mut tokens = Vec::new();
+
+    while reader.read_line(&mut buffer).await? > 0 {
+        let token: ShareToken = buffer.parse()?;
+        tokens.push(token);
+        buffer.clear();
+    }
+
+    Ok(tokens)
 }
