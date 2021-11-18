@@ -219,9 +219,15 @@ async fn move_file_within_branch() {
         .unwrap();
 
     let mut file = branch
-        .open_root(branch.clone()).await.unwrap()
-        .open_directory("aux", branch.id()).await.unwrap()
-        .open_file(file_name, branch.id()).await.unwrap();
+        .open_root(branch.clone())
+        .await
+        .unwrap()
+        .open_directory("aux", branch.id())
+        .await
+        .unwrap()
+        .open_file(file_name, branch.id())
+        .await
+        .unwrap();
 
     assert_eq!(&file_locator, file.locator());
     assert_eq!(&content[..], &file.read_to_end().await.unwrap()[..]);
@@ -289,7 +295,10 @@ async fn move_non_empty_directory() {
     file.flush().await.unwrap();
     let file_locator = *file.locator();
 
-    let dst_dir = root_dir.create_directory(dst_dir_name.into()).await.unwrap();
+    let dst_dir = root_dir
+        .create_directory(dst_dir_name.into())
+        .await
+        .unwrap();
 
     let entry_to_move = root_dir
         .read()
@@ -311,10 +320,18 @@ async fn move_non_empty_directory() {
         .unwrap();
 
     let file = branch
-        .open_root(branch.clone()).await.unwrap()
-        .open_directory(dst_dir_name, branch.id()).await.unwrap()
-        .open_directory(dir_name, branch.id()).await.unwrap()
-        .open_file(file_name, branch.id()).await.unwrap();
+        .open_root(branch.clone())
+        .await
+        .unwrap()
+        .open_directory(dst_dir_name, branch.id())
+        .await
+        .unwrap()
+        .open_directory(dir_name, branch.id())
+        .await
+        .unwrap()
+        .open_file(file_name, branch.id())
+        .await
+        .unwrap();
 
     assert_eq!(&file_locator, file.locator());
 }
@@ -452,7 +469,10 @@ async fn fork_over_tombstone() {
 
     // Open it by branch 0 and fork it.
     let root1_on_0 = branches[1].open_root(branches[0].clone()).await.unwrap();
-    let dir1 = root1_on_0.open_directory("dir", branches[1].id()).await.unwrap();
+    let dir1 = root1_on_0
+        .open_directory("dir", branches[1].id())
+        .await
+        .unwrap();
 
     dir1.fork().await.unwrap().flush(None).await.unwrap();
 

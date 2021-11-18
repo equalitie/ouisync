@@ -339,7 +339,8 @@ impl Directory {
                                 match lenght_result {
                                     Ok(length) => {
                                         let file_len = file.len().await;
-                                        let ellipsis = if file_len > length as u64 { ".." } else { "" };
+                                        let ellipsis =
+                                            if file_len > length as u64 { ".." } else { "" };
                                         print.display(&format!(
                                             "Content: {:?}{}",
                                             std::str::from_utf8(&buf[..length]),
@@ -355,7 +356,7 @@ impl Directory {
                                 print.display(&format!("Failed to open {:?}", e));
                             }
                         }
-                    },
+                    }
                     EntryData::Directory(data) => {
                         let print = print.indent();
 
@@ -375,13 +376,13 @@ impl Directory {
                         match dir {
                             Ok(dir) => {
                                 dir.debug_print(print).await;
-                            },
+                            }
                             Err(e) => {
                                 print.display(&format!("Failed to open {:?}", e));
-                            },
+                            }
                         }
-                    },
-                    EntryData::Tombstone(_) => {},
+                    }
+                    EntryData::Tombstone(_) => {}
                 }
             }
         }
