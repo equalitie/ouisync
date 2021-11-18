@@ -218,10 +218,10 @@ async fn move_file_within_branch() {
         .await
         .unwrap();
 
-    let root_dir = branch.open_root(branch.clone()).await.unwrap();
-
-    let aux_dir = open_dir(&root_dir, "aux", branch.id()).await;
-    let mut file = open_file(&aux_dir, file_name, branch.id()).await;
+    let mut file = branch
+        .open_root(branch.clone()).await.unwrap()
+        .open_directory("aux", branch.id()).await.unwrap()
+        .open_file(file_name, branch.id()).await.unwrap();
 
     assert_eq!(&file_locator, file.locator());
     assert_eq!(&content[..], &file.read_to_end().await.unwrap()[..]);
@@ -259,33 +259,9 @@ async fn move_file_within_branch() {
         .await
         .unwrap();
 
-    let mut file = open_file(&root_dir, file_name, branch.id()).await;
+    let mut file = root_dir.open_file(file_name, branch.id()).await.unwrap();
 
     assert_eq!(&content[..], &file.read_to_end().await.unwrap()[..]);
-}
-
-async fn open_dir(from: &Directory, name: &str, branch_id: &ReplicaId) -> Directory {
-    from.read()
-        .await
-        .lookup_version(name, branch_id)
-        .unwrap()
-        .directory()
-        .unwrap()
-        .open()
-        .await
-        .unwrap()
-}
-
-async fn open_file(from: &Directory, name: &str, branch_id: &ReplicaId) -> File {
-    from.read()
-        .await
-        .lookup_version(name, branch_id)
-        .unwrap()
-        .file()
-        .unwrap()
-        .open()
-        .await
-        .unwrap()
 }
 
 // Move directory "dir/" with content "cow.txt" to directory "dst/".
@@ -335,10 +311,11 @@ async fn move_non_empty_directory() {
         .await
         .unwrap();
 
-    let root_dir = branch.open_root(branch.clone()).await.unwrap();
-    let dst_dir = open_dir(&root_dir, dst_dir_name, branch.id()).await;
-    let dir = open_dir(&dst_dir, dir_name, branch.id()).await;
-    let file = open_file(&dir, file_name, branch.id()).await;
+    let file = branch
+        .open_root(branch.clone()).await.unwrap()
+        .open_directory(dst_dir_name, branch.id()).await.unwrap()
+        .open_directory(dir_name, branch.id()).await.unwrap()
+        .open_file(file_name, branch.id()).await.unwrap();
 
     assert_eq!(&file_locator, file.locator());
 }
@@ -399,15 +376,10 @@ async fn fork() {
         .open_root(branches[1].clone())
         .await
         .unwrap()
-        .read()
-        .await
-        .lookup_version("dir", branches[0].id())
-        .unwrap()
-        .directory()
-        .unwrap()
-        .open()
+        .open_directory("dir", branches[0].id())
         .await
         .unwrap();
+
     let dir1 = dir0.fork().await.unwrap();
 
     dir1.create_file("dog.jpg".into()).await.unwrap();
@@ -420,13 +392,7 @@ async fn fork() {
         .open_root(branches[0].clone())
         .await
         .unwrap()
-        .read()
-        .await
-        .lookup_version("dir", branches[0].id())
-        .unwrap()
-        .directory()
-        .unwrap()
-        .open()
+        .open_directory("dir", branches[0].id())
         .await
         .unwrap();
 
@@ -437,13 +403,7 @@ async fn fork() {
         .open_root(branches[1].clone())
         .await
         .unwrap()
-        .read()
-        .await
-        .lookup_version("dir", branches[1].id())
-        .unwrap()
-        .directory()
-        .unwrap()
-        .open()
+        .open_directory("dir", branches[1].id())
         .await
         .unwrap();
 
@@ -493,16 +453,7 @@ async fn fork_over_tombstone() {
 
     // Open it by branch 0 and fork it.
     let root1_on_0 = branches[1].open_root(branches[0].clone()).await.unwrap();
-    let dir1 = root1_on_0
-        .read()
-        .await
-        .lookup_version("dir", branches[1].id())
-        .unwrap()
-        .directory()
-        .unwrap()
-        .open()
-        .await
-        .unwrap();
+    let dir1 = root1_on_0.open_directory("dir", branches[1].id()).await.unwrap();
 
     dir1.fork().await.unwrap().flush(None).await.unwrap();
 

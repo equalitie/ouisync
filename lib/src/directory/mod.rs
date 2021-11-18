@@ -273,6 +273,24 @@ impl Directory {
         }
     }
 
+    pub async fn open_file(&self, name: &str, author: &ReplicaId) -> Result<File> {
+        self.read()
+            .await
+            .lookup_version(name, author)?
+            .file()?
+            .open()
+            .await
+    }
+
+    pub async fn open_directory(&self, name: &str, author: &ReplicaId) -> Result<Directory> {
+        self.read()
+            .await
+            .lookup_version(name, author)?
+            .directory()?
+            .open()
+            .await
+    }
+
     // Lock this directory for writing.
     //
     // # Panics
