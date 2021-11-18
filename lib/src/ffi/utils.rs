@@ -121,6 +121,10 @@ impl<T> AssumeSend<T> {
 }
 
 pub unsafe fn ptr_to_str<'a>(ptr: *const c_char) -> Result<&'a str> {
+    if ptr.is_null() {
+        return Ok("");
+    }
+
     CStr::from_ptr(ptr)
         .to_str()
         .map_err(|_| Error::MalformedData)

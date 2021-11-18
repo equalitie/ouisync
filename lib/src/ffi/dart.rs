@@ -3,12 +3,16 @@
 // Most of this file is ripped from [dart-sys](https://crates.io/crates/dart-sys) and
 // [allo-isolate](https://crates.io/crates/allo-isolate)
 
+use std::{ffi::CString, os::raw::c_char};
+
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct DartCObject {
     type_: DartCObjectType,
     value: DartCObjectValue,
 }
+
+// FIXME: implement `Drop` and deallocate any allocated variants.
 
 impl From<()> for DartCObject {
     fn from(_: ()) -> Self {
@@ -51,6 +55,17 @@ impl From<bool> for DartCObject {
     }
 }
 
+impl From<String> for DartCObject {
+    fn from(value: String) -> Self {
+        DartCObject {
+            type_: DartCObjectType::String,
+            value: DartCObjectValue {
+                as_string: CString::new(value).unwrap_or_default().into_raw(),
+            },
+        }
+    }
+}
+
 #[repr(i32)]
 #[derive(Copy, Clone)]
 pub enum DartCObjectType {
@@ -59,7 +74,7 @@ pub enum DartCObjectType {
     Int32 = 2,
     Int64 = 3,
     // Double = 4,
-    // String = 5,
+    String = 5,
     // Array = 6,
     // TypedData = 7,
     // ExternalTypedData = 8,
@@ -76,7 +91,7 @@ pub union DartCObjectValue {
     pub as_int32: i32,
     pub as_int64: i64,
     // pub as_double: f64,
-    // pub as_string: *mut ::std::os::raw::c_char,
+    pub as_string: *mut c_char,
     // NOTE: some variants omitted because we don't currently need them.
     _align: [u64; 5usize],
 }

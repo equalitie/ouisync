@@ -2,7 +2,10 @@ use super::{
     session,
     utils::{self, Port, SharedHandle, UniqueHandle},
 };
-use crate::{crypto::Cryptor, directory::EntryType, error::Error, path, repository::Repository};
+use crate::{
+    crypto::Cryptor, directory::EntryType, error::Error, path, repository::Repository,
+    share_token::ShareToken,
+};
 use std::{os::raw::c_char, sync::Arc};
 use tokio::task::JoinHandle;
 
@@ -157,6 +160,42 @@ pub unsafe extern "C" fn repository_disable_dht(handle: SharedHandle<Repository>
         network.disable_dht_for_repository(&repo).await;
         sender.send(port, ());
     });
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn repository_create_share_token(
+    handle: SharedHandle<Repository>,
+    name: *const c_char,
+    port: Port<String>,
+    error: *mut *mut c_char,
+) {
+    session::with(port, error, |ctx| {
+        let repo = handle.get();
+        let name = utils::ptr_to_str(name)?.to_owned();
+
+        ctx.spawn(async move {
+            let id = repo.get_or_create_id().await?;
+            let share_token = ShareToken::new(id).with_name(name);
+
+            Ok(share_token.to_string())
+        })
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn repository_accept_share_token(
+    handle: SharedHandle<Repository>,
+    token: *const c_char,
+    port: Port<()>,
+    error: *mut *mut c_char,
+) {
+    session::with(port, error, |ctx| {
+        let repo = handle.get();
+        let token = utils::ptr_to_str(token)?;
+        let token: ShareToken = token.parse()?;
+
+        ctx.spawn(async move { repo.set_id(*token.id()).await })
+    })
 }
 
 pub(super) fn entry_type_to_num(entry_type: EntryType) -> u8 {

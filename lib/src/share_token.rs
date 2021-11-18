@@ -1,4 +1,4 @@
-use crate::repository::SecretRepositoryId;
+use crate::{error::Error, repository::SecretRepositoryId};
 use std::{borrow::Cow, fmt, str::FromStr};
 use thiserror::Error;
 use url::Url;
@@ -89,6 +89,12 @@ impl From<hex::FromHexError> for DecodeError {
 impl From<url::ParseError> for DecodeError {
     fn from(_: url::ParseError) -> Self {
         Self
+    }
+}
+
+impl From<DecodeError> for Error {
+    fn from(_: DecodeError) -> Self {
+        Self::MalformedData
     }
 }
 
