@@ -15,7 +15,6 @@ use crate::{
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     path,
     scoped_task::{self, ScopedJoinHandle},
-    share_token::ShareToken,
     store, ReplicaId,
 };
 use camino::Utf8Path;
@@ -60,20 +59,12 @@ impl Repository {
     }
 
     /// Get the id of this repository or `Error::EntryNotFound` if no id was assigned yet.
-    /// A repository gets an id the first time it is either shared ([`Self::share`]) or a accepts
-    /// a share ([`Self::accept`]).
     pub async fn get_id(&self) -> Result<SecretRepositoryId> {
         get_id(self.db_pool()).await
     }
 
-    /// Shares this repository with other replicas. The returned share token should be transmitted
-    /// to other replica who may choose to accept it by calling [`Self::accept`]. After the token
-    /// is accepted and the replicas connect, the repositories will start syncing.
-    ///
-    /// If neither `share` nor `accept` was called on this repository before, a random repository
-    /// id is created and assigned to this repository. Subsequent calls to `share` will then use
-    /// the same repository id.
-    pub async fn share(&self) -> Result<ShareToken> {
+    /// Get the id of this repository or create it if it wasn't assigned yet.
+    pub async fn get_or_create_id(&self) -> Result<SecretRepositoryId> {
         let mut tx = self.db_pool().begin().await?;
 
         let id = match get_id(&mut tx).await {
@@ -88,20 +79,13 @@ impl Repository {
 
         tx.commit().await?;
 
-        Ok(ShareToken::new(id))
+        Ok(id)
     }
 
-    /// Accept a share token from other replica.
-    ///
-    /// If neither `accept` nor `share` was called on this repository before, the repository id
-    /// from the token is assigned to this repository. Subsequent calls to `accept` will fail with
-    /// [`Error::EntryExists`].
-    pub async fn accept(&self, token: &ShareToken) -> Result<()> {
-        if set_id(self.db_pool(), &token.id).await? {
-            Ok(())
-        } else {
-            Err(Error::EntryExists)
-        }
+    /// Assign the id to this repository. Fails with `Error::EntryExists` if id was already
+    /// assigned either by calling `set_id` or `get_or_create_id`.
+    pub async fn set_id(&self, id: SecretRepositoryId) -> Result<()> {
+        set_id(self.db_pool(), &id).await
     }
 
     pub fn this_replica_id(&self) -> &ReplicaId {
@@ -410,16 +394,19 @@ async fn get_id(db: impl db::Executor<'_>) -> Result<SecretRepositoryId> {
         .ok_or(Error::EntryNotFound)
 }
 
-async fn set_id(db: impl db::Executor<'_>, id: &SecretRepositoryId) -> Result<bool> {
-    Ok(
+async fn set_id(db: impl db::Executor<'_>, id: &SecretRepositoryId) -> Result<()> {
+    let result =
         sqlx::query("INSERT INTO metadata(name, value) VALUES (?, ?) ON CONFLICT DO NOTHING")
             .bind(metadata::ID)
             .bind(id)
             .execute(db)
-            .await?
-            .rows_affected()
-            > 0,
-    )
+            .await?;
+
+    if result.rows_affected() > 0 {
+        Ok(())
+    } else {
+        Err(Error::EntryExists)
+    }
 }
 
 // Metadata keys

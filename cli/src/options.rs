@@ -35,7 +35,7 @@ pub(crate) struct Options {
     #[structopt(long, value_name = "NAME")]
     pub share: Vec<String>,
 
-    /// Print (append) the share tokens to a file instead of standard output
+    /// Print the share tokens to a file instead of standard output (one token per line)
     #[structopt(long, value_name = "PATH")]
     pub share_file: Option<PathBuf>,
 

@@ -34,7 +34,7 @@ impl Bin {
             .arg(format!("test:{}", mount_dir.path().display()));
 
         if let Some(share_token) = share_token {
-            command.arg("--accept").arg(format!("test:{}", share_token));
+            command.arg("--accept").arg(share_token);
         } else {
             command.arg("--share").arg("test");
         }

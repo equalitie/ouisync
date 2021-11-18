@@ -9,8 +9,8 @@ pub const SCHEME: &str = "ouisync";
 /// other replicas.
 #[derive(Eq, PartialEq, Debug)]
 pub struct ShareToken {
-    pub(crate) id: SecretRepositoryId,
-    pub(crate) name: String,
+    id: SecretRepositoryId,
+    name: String,
 }
 
 impl ShareToken {
@@ -26,6 +26,11 @@ impl ShareToken {
             name: name.into(),
             ..self
         }
+    }
+
+    /// Id of the repository to share.
+    pub fn id(&self) -> &SecretRepositoryId {
+        &self.id
     }
 
     /// Suggested name of the repository.
@@ -61,7 +66,7 @@ impl FromStr for ShareToken {
 
 impl fmt::Display for ShareToken {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let mut url = Url::parse(&format!("{}:{:x}", SCHEME, self.id)).unwrap();
+        let mut url = Url::parse(&format!("{}:{:x}", SCHEME, self.id)).map_err(|_| fmt::Error)?;
 
         if !self.name.is_empty() {
             url.query_pairs_mut().append_pair("name", &self.name);

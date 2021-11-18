@@ -3,7 +3,7 @@ mod virtual_filesystem;
 
 use self::options::{Named, Options};
 use anyhow::Result;
-use ouisync_lib::{config, this_replica, Cryptor, Network, Repository};
+use ouisync_lib::{config, this_replica, Cryptor, Network, Repository, ShareToken};
 use std::{collections::HashMap, io};
 use structopt::StructOpt;
 use tokio::{fs::File, io::AsyncWriteExt};
@@ -38,7 +38,7 @@ async fn main() -> Result<()> {
         mount_repos.insert(name.as_str(), (repo, value));
     }
 
-    // Print repository share tokens
+    // Print share tokens
     let mut share_file = if let Some(path) = &options.share_file {
         Some(File::create(path).await?)
     } else {
@@ -46,8 +46,8 @@ async fn main() -> Result<()> {
     };
 
     for name in &options.share {
-        let token = if let Some((repo, _)) = mount_repos.get(name.as_str()) {
-            repo.share().await?
+        let id = if let Some((repo, _)) = mount_repos.get(name.as_str()) {
+            repo.get_or_create_id().await?
         } else {
             Repository::open(
                 &options.repository_store(name)?,
@@ -56,10 +56,11 @@ async fn main() -> Result<()> {
                 false,
             )
             .await?
-            .share()
+            .get_or_create_id()
             .await?
         };
-        let token = token.with_name(name);
+
+        let token = ShareToken::new(id).with_name(name);
 
         if let Some(file) = &mut share_file {
             file.write_all(token.to_string().as_bytes()).await?;
@@ -84,7 +85,7 @@ async fn main() -> Result<()> {
         let name = token.suggested_name();
 
         if let Some((repo, _)) = mount_repos.get(name.as_ref()) {
-            repo.accept(token).await?
+            repo.set_id(*token.id()).await?
         } else {
             Repository::open(
                 &options.repository_store(name.as_ref())?,
@@ -93,7 +94,7 @@ async fn main() -> Result<()> {
                 false,
             )
             .await?
-            .accept(token)
+            .set_id(*token.id())
             .await?
         }
 
