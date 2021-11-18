@@ -37,7 +37,7 @@ impl<T> Copy for Port<T> {}
 
 /// FFI handle to a resource with shared ownership.
 #[repr(transparent)]
-pub struct SharedHandle<T>(u64, PhantomData<T>);
+pub struct SharedHandle<T>(u64, PhantomData<*const T>);
 
 impl<T> SharedHandle<T> {
     pub fn new(resource: Arc<T>) -> Self {
@@ -64,7 +64,7 @@ impl<T> From<SharedHandle<T>> for DartCObject {
 
 /// FFI handle to a resource with unique ownership.
 #[repr(transparent)]
-pub struct UniqueHandle<T>(u64, PhantomData<T>);
+pub struct UniqueHandle<T>(u64, PhantomData<*const T>);
 
 impl<T> UniqueHandle<T> {
     pub fn new(resource: Box<T>) -> Self {
@@ -88,7 +88,7 @@ impl<T> From<UniqueHandle<T>> for DartCObject {
 
 /// FFI handle to a borrowed resource.
 #[repr(transparent)]
-pub struct RefHandle<T>(u64, PhantomData<T>);
+pub struct RefHandle<T>(u64, PhantomData<*const T>);
 
 impl<T> RefHandle<T> {
     pub const NULL: Self = Self(0, PhantomData);

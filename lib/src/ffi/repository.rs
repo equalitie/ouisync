@@ -119,39 +119,42 @@ pub unsafe extern "C" fn subscription_cancel(handle: UniqueHandle<JoinHandle<()>
 
 #[no_mangle]
 pub unsafe extern "C" fn repository_is_dht_enabled(
-    handle: UniqueHandle<Repository>,
+    handle: SharedHandle<Repository>,
     port: Port<bool>,
 ) {
     let session = session::get();
-    let sender = session.sender();
     let network = session.network().handle();
+    let sender = session.sender();
+    let repo = handle.get();
 
     session.runtime().spawn(async move {
-        let is_dht_enabled = network.is_dht_for_repository_enabled(handle.get()).await;
-        sender.send(port, is_dht_enabled);
+        let value = network.is_dht_for_repository_enabled(&repo).await;
+        sender.send(port, value);
     });
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn repository_enable_dht(handle: UniqueHandle<Repository>, port: Port<()>) {
+pub unsafe extern "C" fn repository_enable_dht(handle: SharedHandle<Repository>, port: Port<()>) {
     let session = session::get();
-    let sender = session.sender();
     let network = session.network().handle();
+    let sender = session.sender();
+    let repo = handle.get();
 
     session.runtime().spawn(async move {
-        network.enable_dht_for_repository(handle.get()).await;
+        network.enable_dht_for_repository(&repo).await;
         sender.send(port, ());
     });
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn repository_disable_dht(handle: UniqueHandle<Repository>, port: Port<()>) {
+pub unsafe extern "C" fn repository_disable_dht(handle: SharedHandle<Repository>, port: Port<()>) {
     let session = session::get();
-    let sender = session.sender();
     let network = session.network().handle();
+    let sender = session.sender();
+    let repo = handle.get();
 
     session.runtime().spawn(async move {
-        network.disable_dht_for_repository(handle.get()).await;
+        network.disable_dht_for_repository(&repo).await;
         sender.send(port, ());
     });
 }
