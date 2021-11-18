@@ -1,7 +1,7 @@
-use crate::crypto::Hashable;
+use crate::{crypto::Hashable, format};
 use btdht::{InfoHash, INFO_HASH_LEN};
 use serde::{Deserialize, Serialize};
-use std::str::FromStr;
+use std::{fmt, str::FromStr};
 
 /// Size of SecretRepositoryId in bytes.
 pub const SECRET_REPOSITORY_ID_SIZE: usize = 16;
@@ -43,14 +43,24 @@ impl FromStr for SecretRepositoryId {
 pub struct PublicRepositoryId(InfoHash);
 
 impl PublicRepositoryId {
+    pub(crate) fn to_info_hash(self) -> InfoHash {
+        self.0
+    }
+
     #[cfg(test)]
     pub(crate) fn zero() -> Self {
         Self(InfoHash::from([0; INFO_HASH_LEN]))
     }
 }
 
-impl From<PublicRepositoryId> for InfoHash {
-    fn from(id: PublicRepositoryId) -> Self {
-        id.0
+impl fmt::Display for PublicRepositoryId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:x}", self)
+    }
+}
+
+impl fmt::LowerHex for PublicRepositoryId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        format::hex(f, self.0.as_ref())
     }
 }

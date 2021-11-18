@@ -74,22 +74,24 @@ async fn main() -> Result<()> {
     }
 
     // Accept share tokens
-    for Named { name, value } in &options.accept {
-        if let Some((repo, _)) = mount_repos.get(name.as_str()) {
-            repo.accept(value).await?
+    for token in &options.accept {
+        let name = token.suggested_name();
+
+        if let Some((repo, _)) = mount_repos.get(name.as_ref()) {
+            repo.accept(token).await?
         } else {
             Repository::open(
-                &options.repository_store(name)?,
+                &options.repository_store(name.as_ref())?,
                 this_replica_id,
                 Cryptor::Null,
                 false,
             )
             .await?
-            .accept(value)
+            .accept(token)
             .await?
         }
 
-        log::info!("share token accepted: {}", value);
+        log::info!("share token accepted: {}", token);
     }
 
     // Start the network

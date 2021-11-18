@@ -34,8 +34,8 @@ pub(crate) struct Options {
 
     /// Accept a share token into the named repository. If the repository doesn't exist yet, it will
     /// be created. Can be specified multiple times to accept multiple share tokens.
-    #[structopt(long, value_name = "NAME:TOKEN")]
-    pub accept: Vec<Named<ShareToken>>,
+    #[structopt(long, value_name = "TOKEN")]
+    pub accept: Vec<ShareToken>,
 
     /// Prints the path to the data directory and exits.
     #[structopt(long)]

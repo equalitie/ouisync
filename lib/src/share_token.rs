@@ -1,5 +1,5 @@
 use crate::repository::SecretRepositoryId;
-use std::{fmt, str::FromStr};
+use std::{borrow::Cow, fmt, str::FromStr};
 use thiserror::Error;
 use url::Url;
 
@@ -25,6 +25,15 @@ impl ShareToken {
         Self {
             name: name.into(),
             ..self
+        }
+    }
+
+    /// Suggested name of the repository.
+    pub fn suggested_name(&self) -> Cow<str> {
+        if self.name.is_empty() {
+            Cow::Owned(format!("{:x}", self.id.public()))
+        } else {
+            Cow::Borrowed(&self.name)
         }
     }
 }

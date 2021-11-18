@@ -407,7 +407,7 @@ impl Inner {
     fn start_dht_lookup(&self, id: PublicRepositoryId) -> Option<dht_discovery::LookupRequest> {
         self.dht_discovery
             .as_ref()
-            .map(|dht| dht.lookup(id.into(), self.dht_peer_found_tx.clone()))
+            .map(|dht| dht.lookup(id.to_info_hash(), self.dht_peer_found_tx.clone()))
     }
 
     async fn establish_user_provided_connection(self: Arc<Self>, addr: SocketAddr) {
