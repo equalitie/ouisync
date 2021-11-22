@@ -42,7 +42,6 @@ pub use self::{
     file::File,
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     joint_entry::JointEntry,
-    locator::Locator,
     network::{Network, NetworkOptions},
     replica_id::ReplicaId,
     repository::Repository,

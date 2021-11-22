@@ -618,11 +618,6 @@ impl Reader<'_> {
         self.inner.blob.len().await
     }
 
-    /// Locator of this directory
-    pub fn locator(&self) -> &Locator {
-        self.inner.blob.locator()
-    }
-
     /// Branch of this directory
     pub fn branch(&self) -> &Branch {
         self.inner.blob.branch()
@@ -640,6 +635,12 @@ impl Reader<'_> {
     /// Is this directory in the local branch?
     pub(crate) fn is_local(&self) -> bool {
         self.branch().id() == self.outer.local_branch.id()
+    }
+
+    /// Locator of this directory
+    #[cfg(test)]
+    pub(crate) fn locator(&self) -> &Locator {
+        self.inner.blob.locator()
     }
 }
 

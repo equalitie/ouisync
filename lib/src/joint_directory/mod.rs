@@ -6,7 +6,6 @@ use crate::{
     error::{Error, Result},
     file::File,
     iterator::{Accumulate, SortedUnion},
-    locator::Locator,
     replica_id::ReplicaId,
     version_vector::VersionVector,
     versioned_file_name,
@@ -443,10 +442,6 @@ impl<'a> JointFileRef<'a> {
 
     pub async fn open(&self) -> Result<File> {
         self.file.open().await
-    }
-
-    pub fn locator(&self) -> Locator {
-        self.file.locator()
     }
 
     pub fn author(&self) -> &'a ReplicaId {

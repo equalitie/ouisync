@@ -68,11 +68,6 @@ impl Core {
         &self.branch
     }
 
-    /// Locator of this blob.
-    pub fn locator(&self) -> &Locator {
-        &self.head_locator
-    }
-
     pub fn blob_id(&self) -> &BlobId {
         self.head_locator.blob_id()
     }

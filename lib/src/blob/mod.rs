@@ -47,7 +47,7 @@ impl Blob {
     }
 
     /// Opens an existing blob.
-    pub async fn open(branch: Branch, head_locator: Locator) -> Result<Self> {
+    pub(crate) async fn open(branch: Branch, head_locator: Locator) -> Result<Self> {
         // NOTE: no need to commit this transaction because we are only reading here.
         let mut tx = branch.db_pool().begin().await?;
 
@@ -89,7 +89,7 @@ impl Blob {
     }
 
     /// Creates a new blob.
-    pub fn create(branch: Branch, head_locator: Locator) -> Self {
+    pub(crate) fn create(branch: Branch, head_locator: Locator) -> Self {
         let nonce_sequence = NonceSequence::new(rand::random());
         let current_block = OpenBlock::new_head(head_locator, &nonce_sequence);
 
@@ -131,7 +131,7 @@ impl Blob {
     }
 
     /// Locator of this blob.
-    pub fn locator(&self) -> &Locator {
+    pub(crate) fn locator(&self) -> &Locator {
         &self.head_locator
     }
 
@@ -226,7 +226,11 @@ impl Blob {
 
     /// Creates a shallow copy (only the index nodes are copied, not blocks) of this blob into the
     /// specified destination branch and locator.
-    pub async fn fork(&mut self, dst_branch: Branch, dst_head_locator: Locator) -> Result<()> {
+    pub(crate) async fn fork(
+        &mut self,
+        dst_branch: Branch,
+        dst_head_locator: Locator,
+    ) -> Result<()> {
         if self.branch.id() == dst_branch.id() && self.head_locator == dst_head_locator {
             return Ok(());
         }

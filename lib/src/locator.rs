@@ -11,7 +11,7 @@ use sha3::{Digest, Sha3_256};
 /// "what is the n-th block of a given blob?".
 /// `Locator` is unique only within a branch while `BlockId` is globally unique.
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]
-pub struct Locator {
+pub(crate) struct Locator {
     blob: BlobId,
     block: u32,
 }

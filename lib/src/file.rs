@@ -68,11 +68,6 @@ impl File {
         self.blob.len().await
     }
 
-    /// Locator of this file.
-    pub fn locator(&self) -> &Locator {
-        self.blob.locator()
-    }
-
     /// Reads data from this file. See [`Blob::read`] for more info.
     pub async fn read(&mut self, buffer: &mut [u8]) -> Result<usize> {
         self.blob.read(buffer).await
@@ -144,6 +139,12 @@ impl File {
 
     pub async fn version_vector(&self) -> VersionVector {
         self.parent.entry_version_vector().await
+    }
+
+    /// Locator of this file.
+    #[cfg(test)]
+    pub(crate) fn locator(&self) -> &Locator {
+        self.blob.locator()
     }
 }
 
