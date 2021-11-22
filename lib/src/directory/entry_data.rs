@@ -10,25 +10,21 @@ use tokio::sync::Mutex;
 //--------------------------------------------------------------------
 
 #[derive(Debug, Clone, Deserialize, Serialize, Eq, PartialEq)]
-pub enum EntryData {
+pub(crate) enum EntryData {
     File(EntryFileData),
     Directory(EntryDirectoryData),
     Tombstone(EntryTombstoneData),
 }
 
 impl EntryData {
-    pub(crate) fn new(
-        entry_type: EntryType,
-        blob_id: BlobId,
-        version_vector: VersionVector,
-    ) -> Self {
+    pub fn new(entry_type: EntryType, blob_id: BlobId, version_vector: VersionVector) -> Self {
         match entry_type {
             EntryType::File => Self::file(blob_id, version_vector),
             EntryType::Directory => Self::directory(blob_id, version_vector),
         }
     }
 
-    pub(crate) fn file(blob_id: BlobId, version_vector: VersionVector) -> Self {
+    pub fn file(blob_id: BlobId, version_vector: VersionVector) -> Self {
         Self::File(EntryFileData {
             blob_id,
             version_vector,
@@ -36,14 +32,14 @@ impl EntryData {
         })
     }
 
-    pub(crate) fn directory(blob_id: BlobId, version_vector: VersionVector) -> Self {
+    pub fn directory(blob_id: BlobId, version_vector: VersionVector) -> Self {
         Self::Directory(EntryDirectoryData {
             blob_id,
             version_vector,
         })
     }
 
-    pub(crate) fn version_vector(&self) -> &VersionVector {
+    pub fn version_vector(&self) -> &VersionVector {
         match self {
             Self::File(f) => &f.version_vector,
             Self::Directory(d) => &d.version_vector,
@@ -51,7 +47,7 @@ impl EntryData {
         }
     }
 
-    pub(crate) fn version_vector_mut(&mut self) -> &mut VersionVector {
+    pub fn version_vector_mut(&mut self) -> &mut VersionVector {
         match self {
             Self::File(f) => &mut f.version_vector,
             Self::Directory(d) => &mut d.version_vector,
@@ -59,7 +55,7 @@ impl EntryData {
         }
     }
 
-    pub(crate) fn blob_id(&self) -> Option<&BlobId> {
+    pub fn blob_id(&self) -> Option<&BlobId> {
         match self {
             Self::File(f) => Some(&f.blob_id),
             Self::Directory(d) => Some(&d.blob_id),
@@ -71,8 +67,8 @@ impl EntryData {
 //--------------------------------------------------------------------
 
 #[derive(Clone, Deserialize, Serialize)]
-pub struct EntryFileData {
-    pub(crate) blob_id: BlobId,
+pub(crate) struct EntryFileData {
+    pub blob_id: BlobId,
     pub version_vector: VersionVector,
     #[serde(skip)]
     // The Arc here is so that Self is Clone.
@@ -99,8 +95,8 @@ impl Eq for EntryFileData {}
 //--------------------------------------------------------------------
 
 #[derive(Clone, Deserialize, Serialize, Eq, PartialEq)]
-pub struct EntryDirectoryData {
-    pub(crate) blob_id: BlobId,
+pub(crate) struct EntryDirectoryData {
+    pub blob_id: BlobId,
     pub version_vector: VersionVector,
 }
 

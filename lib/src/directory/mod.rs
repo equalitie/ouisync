@@ -1,16 +1,17 @@
 mod cache;
 mod entry;
-pub mod entry_data;
+mod entry_data;
 mod entry_type;
 mod inner;
 mod parent_context;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use self::{cache::RootDirectoryCache, parent_context::ParentContext};
+pub(crate) use self::{
+    cache::RootDirectoryCache, entry_data::EntryData, parent_context::ParentContext,
+};
 pub use self::{
     entry::{DirectoryRef, EntryRef, FileRef},
-    entry_data::{EntryData, EntryFileData},
     entry_type::EntryType,
 };
 
@@ -135,7 +136,7 @@ impl Directory {
     /// # Panics
     ///
     /// Panics when `self` (i.e. the source directory) or `dst_dir` are not local.
-    pub async fn move_entry(
+    pub(crate) async fn move_entry(
         &self,
         src_name: &str,
         src_author: &ReplicaId,

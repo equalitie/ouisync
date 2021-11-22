@@ -2,7 +2,7 @@
 mod tests;
 
 use crate::{
-    directory::{self, Directory, DirectoryRef, EntryFileData, EntryRef, EntryType, FileRef},
+    directory::{self, Directory, DirectoryRef, EntryRef, EntryType, FileRef},
     error::{Error, Result},
     file::File,
     iterator::{Accumulate, SortedUnion},
@@ -454,10 +454,6 @@ impl<'a> JointFileRef<'a> {
 
     pub fn parent(&self) -> &Directory {
         self.file.parent()
-    }
-
-    pub fn entry_data(&self) -> &EntryFileData {
-        self.file.data()
     }
 
     pub fn inner(&self) -> FileRef<'a> {
