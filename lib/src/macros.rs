@@ -1,13 +1,12 @@
-// Macro to create a strongly typed wrapper around a byte array with additional convenient API for
-// use as a random unique identifier.
+// Macro to create a strongly typed wrapper around a byte array with additional convenient API.
 //
 // # Example
 //
-//     define_random_id! {
+//     define_array_wrapper! {
 //         pub struct MyId([u8; 32]);
 //     }
 //
-macro_rules! define_random_id {
+macro_rules! define_array_wrapper {
     (
         $(#[$attrs:meta])*
         $vis:vis struct $name:ident ( [u8; $size:expr ] );
@@ -32,12 +31,6 @@ macro_rules! define_random_id {
             }
         }
 
-        impl rand::distributions::Distribution<$name> for rand::distributions::Standard {
-            fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> $name {
-                $name(self.sample(rng))
-            }
-        }
-
         impl std::fmt::Display for $name {
             fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
                 write!(f, "{:x}", self)
@@ -53,6 +46,23 @@ macro_rules! define_random_id {
         impl std::fmt::LowerHex for $name {
             fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
                 crate::format::hex(f, &self.0)
+            }
+        }
+    };
+}
+
+// Implement `Distribution<T> for Standard` for a wrapper type by delegating it to the inner type.
+//
+// # Example
+//
+//     struct Wrapper(u32);
+//     derive_rand_for_wrapper!(Wrapper);
+//
+macro_rules! derive_rand_for_wrapper {
+    ($name:ident) => {
+        impl rand::distributions::Distribution<$name> for rand::distributions::Standard {
+            fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> $name {
+                $name(self.sample(rng))
             }
         }
     };
@@ -94,7 +104,7 @@ macro_rules! derive_sqlx_traits_for_u8_array_wrapper {
 
 #[cfg(test)]
 mod tests {
-    define_random_id! {
+    define_array_wrapper! {
         struct TestId([u8; 32]);
     }
 
