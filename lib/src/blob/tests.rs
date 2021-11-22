@@ -16,11 +16,11 @@ use test_strategy::proptest;
 async fn empty_blob() {
     let (_, branch) = setup(0).await;
 
-    let mut blob = Blob::create(branch.clone(), Locator::Root);
+    let mut blob = Blob::create(branch.clone(), Locator::ROOT);
     blob.flush().await.unwrap();
 
     // Re-open the blob and read its contents.
-    let mut blob = Blob::open(branch, Locator::Root).await.unwrap();
+    let mut blob = Blob::open(branch, Locator::ROOT).await.unwrap();
 
     let mut buffer = [0; 1];
     assert_eq!(blob.read(&mut buffer[..]).await.unwrap(), 0);
@@ -49,7 +49,7 @@ async fn write_and_read_case(
     let (mut rng, branch) = setup(rng_seed).await;
 
     let locator = if is_root {
-        Locator::Root
+        Locator::ROOT
     } else {
         random_head_locator(&mut rng)
     };
@@ -95,14 +95,14 @@ fn len(
 
         let content: Vec<u8> = rng.sample_iter(Standard).take(content_len).collect();
 
-        let mut blob = Blob::create(branch.clone(), Locator::Root);
+        let mut blob = Blob::create(branch.clone(), Locator::ROOT);
         blob.write(&content[..]).await.unwrap();
         assert_eq!(blob.len().await, content_len as u64);
 
         blob.flush().await.unwrap();
         assert_eq!(blob.len().await, content_len as u64);
 
-        let blob = Blob::open(branch, Locator::Root).await.unwrap();
+        let blob = Blob::open(branch, Locator::ROOT).await.unwrap();
         assert_eq!(blob.len().await, content_len as u64);
     })
 }
@@ -140,7 +140,7 @@ async fn seek_from(content_len: usize, seek_from: SeekFrom, expected_pos: usize,
 
     let content: Vec<u8> = rng.sample_iter(Standard).take(content_len).collect();
 
-    let mut blob = Blob::create(branch, Locator::Root);
+    let mut blob = Blob::create(branch, Locator::ROOT);
     blob.write(&content[..]).await.unwrap();
     blob.flush().await.unwrap();
 
@@ -162,7 +162,7 @@ fn seek_from_current(
 
         let content: Vec<u8> = rng.sample_iter(Standard).take(content_len).collect();
 
-        let mut blob = Blob::create(branch, Locator::Root);
+        let mut blob = Blob::create(branch, Locator::ROOT);
         blob.write(&content[..]).await.unwrap();
         blob.flush().await.unwrap();
         blob.seek(SeekFrom::Start(0)).await.unwrap();
@@ -187,7 +187,7 @@ async fn seek_after_end() {
 
     let content = b"content";
 
-    let mut blob = Blob::create(branch, Locator::Root);
+    let mut blob = Blob::create(branch, Locator::ROOT);
     blob.write(&content[..]).await.unwrap();
     blob.flush().await.unwrap();
 
@@ -207,7 +207,7 @@ async fn seek_before_start() {
 
     let content = b"content";
 
-    let mut blob = Blob::create(branch, Locator::Root);
+    let mut blob = Blob::create(branch, Locator::ROOT);
     blob.write(&content[..]).await.unwrap();
     blob.flush().await.unwrap();
 
@@ -443,15 +443,15 @@ async fn fork_case(
     );
 
     let src_locator = if src_locator_is_root {
-        Locator::Root
+        Locator::ROOT
     } else {
-        Locator::Head(rng.gen())
+        Locator::head(rng.gen())
     };
 
     let dst_locator = if dst_locator_same_as_src {
         src_locator
     } else {
-        Locator::Head(rng.gen())
+        Locator::head(rng.gen())
     };
 
     let src_content: Vec<u8> = (&mut rng).sample_iter(Standard).take(src_len).collect();
@@ -504,5 +504,5 @@ async fn setup(rng_seed: u64) -> (StdRng, Branch) {
 }
 
 fn random_head_locator<R: Rng>(rng: &mut R) -> Locator {
-    Locator::Head(rng.gen())
+    Locator::head(rng.gen())
 }

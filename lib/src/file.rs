@@ -1,6 +1,5 @@
 use crate::{
     blob::{self, Blob},
-    blob_id::BlobId,
     branch::Branch,
     directory::{Directory, ParentContext},
     error::Result,
@@ -68,11 +67,6 @@ impl File {
         self.blob.len().await
     }
 
-    /// Locator of this file.
-    pub fn locator(&self) -> &Locator {
-        self.blob.locator()
-    }
-
     /// Reads data from this file. See [`Blob::read`] for more info.
     pub async fn read(&mut self, buffer: &mut [u8]) -> Result<usize> {
         self.blob.read(buffer).await
@@ -118,11 +112,7 @@ impl File {
         Ok(())
     }
 
-    pub fn blob_id(&self) -> &BlobId {
-        self.blob.blob_id()
-    }
-
-    pub fn blob_core(&self) -> &Arc<Mutex<blob::Core>> {
+    pub(crate) fn blob_core(&self) -> &Arc<Mutex<blob::Core>> {
         self.blob.core()
     }
 
@@ -138,12 +128,18 @@ impl File {
         // TODO: this should be atomic
         let blob_id = self.parent.fork_file(self.local_branch.clone()).await?;
         self.blob
-            .fork(self.local_branch.clone(), Locator::Head(blob_id))
+            .fork(self.local_branch.clone(), Locator::head(blob_id))
             .await
     }
 
     pub async fn version_vector(&self) -> VersionVector {
         self.parent.entry_version_vector().await
+    }
+
+    /// Locator of this file.
+    #[cfg(test)]
+    pub(crate) fn locator(&self) -> &Locator {
+        self.blob.locator()
     }
 }
 

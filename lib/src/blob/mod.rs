@@ -4,7 +4,7 @@ mod tests;
 mod core;
 mod operations;
 
-pub use self::core::Core;
+pub(crate) use self::core::Core;
 use self::operations::Operations;
 use crate::{
     blob_id::BlobId,
@@ -24,7 +24,7 @@ use std::{
 use tokio::sync::{Mutex, MutexGuard};
 use zeroize::Zeroize;
 
-pub struct Blob {
+pub(crate) struct Blob {
     core: Arc<Mutex<Core>>,
     head_locator: Locator,
     branch: Branch,
@@ -32,7 +32,7 @@ pub struct Blob {
 }
 
 impl Blob {
-    pub(crate) fn new(
+    pub fn new(
         core: Arc<Mutex<Core>>,
         head_locator: Locator,
         branch: Branch,
@@ -136,10 +136,7 @@ impl Blob {
     }
 
     pub fn blob_id(&self) -> &BlobId {
-        match &self.head_locator {
-            Locator::Head(blob_id) => blob_id,
-            _ => unreachable!(),
-        }
+        self.head_locator.blob_id()
     }
 
     pub async fn len(&self) -> u64 {
@@ -254,10 +251,6 @@ impl Blob {
     pub fn db_pool(&self) -> &db::Pool {
         self.branch.db_pool()
     }
-
-    // pub fn cryptor(&self) -> &Cryptor {
-    //     self.branch.cryptor()
-    // }
 
     async fn lock(&mut self) -> OperationsLock<'_> {
         let core_guard = self.core.lock().await;

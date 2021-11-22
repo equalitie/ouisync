@@ -428,6 +428,9 @@ impl Subscription {
         for (branch, version) in self.shared.branches.read().await.recent(self.version) {
             self.branch_rxs.push((*branch.id(), branch.subscribe()));
             self.version = self.version.max(version.saturating_add(1));
+
+            // Emit one event for each newly created branch.
+            branch.notify_changed();
         }
     }
 }

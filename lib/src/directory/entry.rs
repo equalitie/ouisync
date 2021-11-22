@@ -108,7 +108,7 @@ impl<'a> EntryRef<'a> {
         self.inner().parent_outer
     }
 
-    pub fn clone_data(&self) -> EntryData {
+    pub(crate) fn clone_data(&self) -> EntryData {
         match self {
             Self::File(e) => EntryData::File(e.data().clone()),
             Self::Directory(e) => EntryData::Directory(e.data().clone()),
@@ -136,11 +136,11 @@ impl<'a> FileRef<'a> {
         self.inner.name
     }
 
-    pub fn locator(&self) -> Locator {
-        Locator::Head(*self.blob_id())
+    pub(crate) fn locator(&self) -> Locator {
+        Locator::head(*self.blob_id())
     }
 
-    pub fn blob_id(&self) -> &BlobId {
+    pub(crate) fn blob_id(&self) -> &BlobId {
         &self.entry_data.blob_id
     }
 
@@ -186,7 +186,7 @@ impl<'a> FileRef<'a> {
         self.inner.parent_outer
     }
 
-    pub fn data(&self) -> &EntryFileData {
+    pub(crate) fn data(&self) -> &EntryFileData {
         self.entry_data
     }
 }
@@ -213,12 +213,8 @@ impl<'a> DirectoryRef<'a> {
         self.inner.name
     }
 
-    pub fn locator(&self) -> Locator {
-        Locator::Head(self.entry_data.blob_id)
-    }
-
-    pub fn blob_id(&self) -> &BlobId {
-        &self.entry_data.blob_id
+    pub(crate) fn locator(&self) -> Locator {
+        Locator::head(self.entry_data.blob_id)
     }
 
     pub fn author(&self) -> &'a ReplicaId {
@@ -242,7 +238,7 @@ impl<'a> DirectoryRef<'a> {
         self.inner.is_local()
     }
 
-    pub fn data(&self) -> &EntryDirectoryData {
+    pub(crate) fn data(&self) -> &EntryDirectoryData {
         self.entry_data
     }
 

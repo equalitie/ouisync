@@ -97,7 +97,7 @@ impl Branch {
     }
 
     pub async fn root_block_id(&self) -> Result<BlockId> {
-        let blob = Blob::open(self.clone(), Locator::Root).await?;
+        let blob = Blob::open(self.clone(), Locator::ROOT).await?;
         blob.first_block_id().await
     }
 
@@ -118,7 +118,7 @@ mod tests {
     async fn ensure_root_directory_exists() {
         let branch = setup().await;
         let dir = branch.ensure_directory_exists("/".into()).await.unwrap();
-        assert_eq!(dir.read().await.locator(), &Locator::Root);
+        assert_eq!(dir.read().await.locator(), &Locator::ROOT);
     }
 
     #[tokio::test(flavor = "multi_thread")]

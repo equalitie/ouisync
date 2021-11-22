@@ -1,10 +1,25 @@
-define_random_id! {
+use rand::{
+    distributions::{Distribution, Standard},
+    Rng,
+};
+
+define_array_wrapper! {
     /// BlobId is used to identify a blob in a directory
-    pub struct BlobId([u8; 32]);
+    pub(crate) struct BlobId([u8; 32]);
 }
 
 impl BlobId {
-    pub fn zero() -> Self {
-        BlobId([0; 32])
+    pub(crate) const ZERO: Self = Self([0; 32]);
+}
+
+// Never generates `ZERO`
+impl Distribution<BlobId> for Standard {
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> BlobId {
+        loop {
+            let sample = BlobId(self.sample(rng));
+            if sample != BlobId::ZERO {
+                return sample;
+            }
+        }
     }
 }

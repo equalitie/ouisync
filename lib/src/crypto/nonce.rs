@@ -1,6 +1,7 @@
+use generic_array::{sequence::GenericSequence, typenum::Unsigned};
 use std::mem;
 
-const NONCE_SIZE: usize = 12;
+const NONCE_SIZE: usize = <<Nonce as GenericSequence<_>>::Length as Unsigned>::USIZE;
 const NONCE_COUNTER_SIZE: usize = mem::size_of::<u32>();
 const NONCE_PREFIX_SIZE: usize = NONCE_SIZE - NONCE_COUNTER_SIZE;
 

@@ -24,11 +24,6 @@ pub(crate) struct BranchData {
     replica_id: ReplicaId,
     root_node: RwLock<RootNode>,
     changed_tx: watch::Sender<()>,
-    // Currently it's necessary to keep a received around so we can hand out subscriptions by
-    // cloning it. However, if/when [this PR](https://github.com/tokio-rs/tokio/pull/3800) gets
-    // merged it won't be necessary because it would be possible to subscribe directly to to the
-    // sender.
-    changed_rx: watch::Receiver<()>,
 }
 
 impl BranchData {
@@ -38,17 +33,12 @@ impl BranchData {
     }
 
     pub fn with_root_node(replica_id: ReplicaId, root_node: RootNode) -> Self {
-        let (changed_tx, changed_rx) = watch::channel(());
-
-        // This causes any subsequent subscriptions to receive one event immediatelly which is useful
-        // to notify about newly created branches.
-        changed_tx.send(()).unwrap_or(());
+        let (changed_tx, _) = watch::channel(());
 
         Self {
             replica_id,
             root_node: RwLock::new(root_node),
             changed_tx,
-            changed_rx,
         }
     }
 
@@ -124,7 +114,7 @@ impl BranchData {
     /// Subscribe to notifications of changes in this branch. A notification is emitted every time
     /// a new snapshot of this branch is created or a previously missing block is downloaded.
     pub fn subscribe(&self) -> watch::Receiver<()> {
-        self.changed_rx.clone()
+        self.changed_tx.subscribe()
     }
 
     /// Trigger a notification event from this branch.
@@ -331,6 +321,6 @@ mod tests {
     }
 
     fn random_head_locator() -> Locator {
-        Locator::Head(rand::random())
+        Locator::head(rand::random())
     }
 }

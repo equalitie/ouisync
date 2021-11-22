@@ -545,7 +545,7 @@ async fn insert_entry_newer_than_existing() {
 
         // Need to create this dummy blob here otherwise the subsequent `insert_entry` would
         // fail when trying to delete it.
-        Blob::create(branch.clone(), Locator::Head(blob_id))
+        Blob::create(branch.clone(), Locator::head(blob_id))
             .flush()
             .await
             .unwrap();
@@ -593,7 +593,7 @@ async fn remove_concurrent_file_version() {
                 .await
                 .unwrap();
 
-            Blob::create(branches[0].clone(), Locator::Head(blob_id))
+            Blob::create(branches[0].clone(), Locator::head(blob_id))
                 .flush()
                 .await
                 .unwrap();

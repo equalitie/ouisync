@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     blob::Blob, branch::Branch, crypto::Cryptor, db, directory::EntryData, index::BranchData,
-    repository, version_vector::VersionVector,
+    locator::Locator, repository, version_vector::VersionVector,
 };
 use assert_matches::assert_matches;
 use futures_util::future;
@@ -966,7 +966,7 @@ async fn replace_dangling_file(parent: &Directory, name: &str) {
 
     // Create a dummy blob so the `create_file` call doesn't fail when trying to delete the
     // previous blob (which doesn't exists because the file was created as danling).
-    Blob::create(reader.branch().clone(), Locator::Head(old_blob_id))
+    Blob::create(reader.branch().clone(), Locator::head(old_blob_id))
         .flush()
         .await
         .unwrap();
@@ -989,11 +989,12 @@ async fn replace_dangling_directory(parent: &Directory, name: &str) {
         .unwrap()
         .directory()
         .unwrap()
+        .locator()
         .blob_id();
 
     // Create a dummy blob so the `create_directory` call doesn't fail when trying to delete
     // the previous blob (which doesn't exists because the file was created as danling).
-    Blob::create(reader.branch().clone(), Locator::Head(old_blob_id))
+    Blob::create(reader.branch().clone(), Locator::head(old_blob_id))
         .flush()
         .await
         .unwrap();

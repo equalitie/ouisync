@@ -58,7 +58,7 @@ impl Inner {
         let to_delete = old_blobs.into_iter().filter(|b| keep != Some(*b));
 
         future::try_join_all(to_delete.map(|old_blob_id| async move {
-            Blob::open(branch.clone(), Locator::Head(old_blob_id))
+            Blob::open(branch.clone(), Locator::head(old_blob_id))
                 .await?
                 .remove()
                 .await

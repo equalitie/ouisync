@@ -1,16 +1,17 @@
 mod cache;
 mod entry;
-pub mod entry_data;
+mod entry_data;
 mod entry_type;
 mod inner;
 mod parent_context;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use self::{cache::RootDirectoryCache, parent_context::ParentContext};
+pub(crate) use self::{
+    cache::RootDirectoryCache, entry_data::EntryData, parent_context::ParentContext,
+};
 pub use self::{
     entry::{DirectoryRef, EntryRef, FileRef},
-    entry_data::{EntryData, EntryFileData},
     entry_type::EntryType,
 };
 
@@ -45,7 +46,7 @@ impl Directory {
     /// Opens the root directory.
     /// For internal use only. Use [`Branch::open_root`] instead.
     pub(crate) async fn open_root(owner_branch: Branch, local_branch: Branch) -> Result<Self> {
-        Self::open(owner_branch, local_branch, Locator::Root, None).await
+        Self::open(owner_branch, local_branch, Locator::ROOT, None).await
     }
 
     /// Opens the root directory or creates it if it doesn't exist.
@@ -53,7 +54,7 @@ impl Directory {
     pub(crate) async fn open_or_create_root(branch: Branch) -> Result<Self> {
         // TODO: make sure this is atomic
 
-        let locator = Locator::Root;
+        let locator = Locator::ROOT;
 
         match Self::open(branch.clone(), branch.clone(), locator, None).await {
             Ok(dir) => Ok(dir),
@@ -135,7 +136,7 @@ impl Directory {
     /// # Panics
     ///
     /// Panics when `self` (i.e. the source directory) or `dst_dir` are not local.
-    pub async fn move_entry(
+    pub(crate) async fn move_entry(
         &self,
         src_name: &str,
         src_author: &ReplicaId,
@@ -327,7 +328,7 @@ impl Directory {
                         let file = File::open(
                             inner.blob.branch().clone(),
                             self.local_branch.clone(),
-                            Locator::Head(file_data.blob_id),
+                            Locator::head(file_data.blob_id),
                             parent_context,
                         )
                         .await;
@@ -368,7 +369,7 @@ impl Directory {
                             .open(
                                 inner.blob.branch().clone(),
                                 self.local_branch.clone(),
-                                Locator::Head(data.blob_id),
+                                Locator::head(data.blob_id),
                                 parent_context,
                             )
                             .await;
@@ -478,7 +479,7 @@ impl Writer<'_> {
             )
             .await?;
 
-        let locator = Locator::Head(blob_id);
+        let locator = Locator::head(blob_id);
         let parent = ParentContext::new(self.outer.inner.clone(), name, author);
 
         Ok((locator, parent))
@@ -618,11 +619,6 @@ impl Reader<'_> {
         self.inner.blob.len().await
     }
 
-    /// Locator of this directory
-    pub fn locator(&self) -> &Locator {
-        self.inner.blob.locator()
-    }
-
     /// Branch of this directory
     pub fn branch(&self) -> &Branch {
         self.inner.blob.branch()
@@ -640,6 +636,12 @@ impl Reader<'_> {
     /// Is this directory in the local branch?
     pub(crate) fn is_local(&self) -> bool {
         self.branch().id() == self.outer.local_branch.id()
+    }
+
+    /// Locator of this directory
+    #[cfg(test)]
+    pub(crate) fn locator(&self) -> &Locator {
+        self.inner.blob.locator()
     }
 }
 

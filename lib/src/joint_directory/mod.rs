@@ -2,11 +2,10 @@
 mod tests;
 
 use crate::{
-    directory::{self, Directory, DirectoryRef, EntryFileData, EntryRef, EntryType, FileRef},
+    directory::{self, Directory, DirectoryRef, EntryRef, EntryType, FileRef},
     error::{Error, Result},
     file::File,
     iterator::{Accumulate, SortedUnion},
-    locator::Locator,
     replica_id::ReplicaId,
     version_vector::VersionVector,
     versioned_file_name,
@@ -445,10 +444,6 @@ impl<'a> JointFileRef<'a> {
         self.file.open().await
     }
 
-    pub fn locator(&self) -> Locator {
-        self.file.locator()
-    }
-
     pub fn author(&self) -> &'a ReplicaId {
         self.file.author()
     }
@@ -459,10 +454,6 @@ impl<'a> JointFileRef<'a> {
 
     pub fn parent(&self) -> &Directory {
         self.file.parent()
-    }
-
-    pub fn entry_data(&self) -> &EntryFileData {
-        self.file.data()
     }
 
     pub fn inner(&self) -> FileRef<'a> {

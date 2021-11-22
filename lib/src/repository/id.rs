@@ -6,11 +6,12 @@ use std::{fmt, str::FromStr};
 /// Size of SecretRepositoryId in bytes.
 pub const SECRET_REPOSITORY_ID_SIZE: usize = 16;
 
-define_random_id! {
+define_array_wrapper! {
     /// Unique secret id of a repository. Only known to replicas sharing the repository.
     pub struct SecretRepositoryId([u8; SECRET_REPOSITORY_ID_SIZE]);
 }
 
+derive_rand_for_wrapper!(SecretRepositoryId);
 derive_sqlx_traits_for_u8_array_wrapper!(SecretRepositoryId);
 
 impl SecretRepositoryId {
