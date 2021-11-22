@@ -112,7 +112,7 @@ impl File {
         Ok(())
     }
 
-    pub fn blob_core(&self) -> &Arc<Mutex<blob::Core>> {
+    pub(crate) fn blob_core(&self) -> &Arc<Mutex<blob::Core>> {
         self.blob.core()
     }
 

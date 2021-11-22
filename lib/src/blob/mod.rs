@@ -4,7 +4,7 @@ mod tests;
 mod core;
 mod operations;
 
-pub use self::core::Core;
+pub(crate) use self::core::Core;
 use self::operations::Operations;
 use crate::{
     blob_id::BlobId,
@@ -107,7 +107,7 @@ impl Blob {
         )
     }
 
-    pub async fn reopen(core: Arc<Mutex<Core>>) -> Result<Self> {
+    pub(crate) async fn reopen(core: Arc<Mutex<Core>>) -> Result<Self> {
         let ptr = core.clone();
         let mut guard = core.lock().await;
         let core = &mut *guard;
@@ -126,7 +126,7 @@ impl Blob {
         &self.branch
     }
 
-    pub fn core(&self) -> &Arc<Mutex<Core>> {
+    pub(crate) fn core(&self) -> &Arc<Mutex<Core>> {
         &self.core
     }
 
