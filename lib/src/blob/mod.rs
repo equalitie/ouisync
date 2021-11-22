@@ -24,7 +24,7 @@ use std::{
 use tokio::sync::{Mutex, MutexGuard};
 use zeroize::Zeroize;
 
-pub struct Blob {
+pub(crate) struct Blob {
     core: Arc<Mutex<Core>>,
     head_locator: Locator,
     branch: Branch,
@@ -32,7 +32,7 @@ pub struct Blob {
 }
 
 impl Blob {
-    pub(crate) fn new(
+    pub fn new(
         core: Arc<Mutex<Core>>,
         head_locator: Locator,
         branch: Branch,
@@ -47,7 +47,7 @@ impl Blob {
     }
 
     /// Opens an existing blob.
-    pub(crate) async fn open(branch: Branch, head_locator: Locator) -> Result<Self> {
+    pub async fn open(branch: Branch, head_locator: Locator) -> Result<Self> {
         // NOTE: no need to commit this transaction because we are only reading here.
         let mut tx = branch.db_pool().begin().await?;
 
@@ -89,7 +89,7 @@ impl Blob {
     }
 
     /// Creates a new blob.
-    pub(crate) fn create(branch: Branch, head_locator: Locator) -> Self {
+    pub fn create(branch: Branch, head_locator: Locator) -> Self {
         let nonce_sequence = NonceSequence::new(rand::random());
         let current_block = OpenBlock::new_head(head_locator, &nonce_sequence);
 
@@ -107,7 +107,7 @@ impl Blob {
         )
     }
 
-    pub(crate) async fn reopen(core: Arc<Mutex<Core>>) -> Result<Self> {
+    pub async fn reopen(core: Arc<Mutex<Core>>) -> Result<Self> {
         let ptr = core.clone();
         let mut guard = core.lock().await;
         let core = &mut *guard;
@@ -126,16 +126,16 @@ impl Blob {
         &self.branch
     }
 
-    pub(crate) fn core(&self) -> &Arc<Mutex<Core>> {
+    pub fn core(&self) -> &Arc<Mutex<Core>> {
         &self.core
     }
 
     /// Locator of this blob.
-    pub(crate) fn locator(&self) -> &Locator {
+    pub fn locator(&self) -> &Locator {
         &self.head_locator
     }
 
-    pub(crate) fn blob_id(&self) -> &BlobId {
+    pub fn blob_id(&self) -> &BlobId {
         self.head_locator.blob_id()
     }
 
@@ -226,11 +226,7 @@ impl Blob {
 
     /// Creates a shallow copy (only the index nodes are copied, not blocks) of this blob into the
     /// specified destination branch and locator.
-    pub(crate) async fn fork(
-        &mut self,
-        dst_branch: Branch,
-        dst_head_locator: Locator,
-    ) -> Result<()> {
+    pub async fn fork(&mut self, dst_branch: Branch, dst_head_locator: Locator) -> Result<()> {
         if self.branch.id() == dst_branch.id() && self.head_locator == dst_head_locator {
             return Ok(());
         }
@@ -255,10 +251,6 @@ impl Blob {
     pub fn db_pool(&self) -> &db::Pool {
         self.branch.db_pool()
     }
-
-    // pub fn cryptor(&self) -> &Cryptor {
-    //     self.branch.cryptor()
-    // }
 
     async fn lock(&mut self) -> OperationsLock<'_> {
         let core_guard = self.core.lock().await;
