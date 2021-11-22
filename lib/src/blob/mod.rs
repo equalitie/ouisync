@@ -135,7 +135,7 @@ impl Blob {
         &self.head_locator
     }
 
-    pub fn blob_id(&self) -> &BlobId {
+    pub(crate) fn blob_id(&self) -> &BlobId {
         self.head_locator.blob_id()
     }
 

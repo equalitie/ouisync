@@ -5,7 +5,7 @@ use rand::{
 
 define_array_wrapper! {
     /// BlobId is used to identify a blob in a directory
-    pub struct BlobId([u8; 32]);
+    pub(crate) struct BlobId([u8; 32]);
 }
 
 impl BlobId {

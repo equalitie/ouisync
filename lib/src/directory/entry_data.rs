@@ -72,7 +72,7 @@ impl EntryData {
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct EntryFileData {
-    pub blob_id: BlobId,
+    pub(crate) blob_id: BlobId,
     pub version_vector: VersionVector,
     #[serde(skip)]
     // The Arc here is so that Self is Clone.
@@ -100,7 +100,7 @@ impl Eq for EntryFileData {}
 
 #[derive(Clone, Deserialize, Serialize, Eq, PartialEq)]
 pub struct EntryDirectoryData {
-    pub blob_id: BlobId,
+    pub(crate) blob_id: BlobId,
     pub version_vector: VersionVector,
 }
 

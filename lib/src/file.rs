@@ -1,6 +1,5 @@
 use crate::{
     blob::{self, Blob},
-    blob_id::BlobId,
     branch::Branch,
     directory::{Directory, ParentContext},
     error::Result,
@@ -111,10 +110,6 @@ impl File {
             .await?;
 
         Ok(())
-    }
-
-    pub fn blob_id(&self) -> &BlobId {
-        self.blob.blob_id()
     }
 
     pub fn blob_core(&self) -> &Arc<Mutex<blob::Core>> {

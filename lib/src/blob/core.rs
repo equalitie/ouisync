@@ -3,8 +3,7 @@ use super::{
     {Cursor, OpenBlock},
 };
 use crate::{
-    blob_id::BlobId, block::BlockId, branch::Branch, crypto::NonceSequence, error::Result,
-    locator::Locator,
+    block::BlockId, branch::Branch, crypto::NonceSequence, error::Result, locator::Locator,
 };
 use std::{fmt, mem};
 
@@ -66,10 +65,6 @@ impl Core {
 
     pub fn branch(&self) -> &Branch {
         &self.branch
-    }
-
-    pub fn blob_id(&self) -> &BlobId {
-        self.head_locator.blob_id()
     }
 
     pub(crate) fn operations<'a>(&'a mut self, current_block: &'a mut OpenBlock) -> Operations<'a> {

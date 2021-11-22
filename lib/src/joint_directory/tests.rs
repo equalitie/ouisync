@@ -989,6 +989,7 @@ async fn replace_dangling_directory(parent: &Directory, name: &str) {
         .unwrap()
         .directory()
         .unwrap()
+        .locator()
         .blob_id();
 
     // Create a dummy blob so the `create_directory` call doesn't fail when trying to delete

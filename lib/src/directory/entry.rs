@@ -140,7 +140,7 @@ impl<'a> FileRef<'a> {
         Locator::head(*self.blob_id())
     }
 
-    pub fn blob_id(&self) -> &BlobId {
+    pub(crate) fn blob_id(&self) -> &BlobId {
         &self.entry_data.blob_id
     }
 
@@ -215,10 +215,6 @@ impl<'a> DirectoryRef<'a> {
 
     pub(crate) fn locator(&self) -> Locator {
         Locator::head(self.entry_data.blob_id)
-    }
-
-    pub fn blob_id(&self) -> &BlobId {
-        &self.entry_data.blob_id
     }
 
     pub fn author(&self) -> &'a ReplicaId {
