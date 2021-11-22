@@ -74,10 +74,7 @@ impl Core {
     }
 
     pub fn blob_id(&self) -> &BlobId {
-        match &self.head_locator {
-            Locator::Head(blob_id) => blob_id,
-            _ => unreachable!(),
-        }
+        self.head_locator.blob_id()
     }
 
     pub(crate) fn operations<'a>(&'a mut self, current_block: &'a mut OpenBlock) -> Operations<'a> {

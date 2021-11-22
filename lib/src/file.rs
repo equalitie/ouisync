@@ -138,7 +138,7 @@ impl File {
         // TODO: this should be atomic
         let blob_id = self.parent.fork_file(self.local_branch.clone()).await?;
         self.blob
-            .fork(self.local_branch.clone(), Locator::Head(blob_id))
+            .fork(self.local_branch.clone(), Locator::head(blob_id))
             .await
     }
 

@@ -45,7 +45,7 @@ impl Directory {
     /// Opens the root directory.
     /// For internal use only. Use [`Branch::open_root`] instead.
     pub(crate) async fn open_root(owner_branch: Branch, local_branch: Branch) -> Result<Self> {
-        Self::open(owner_branch, local_branch, Locator::Root, None).await
+        Self::open(owner_branch, local_branch, Locator::ROOT, None).await
     }
 
     /// Opens the root directory or creates it if it doesn't exist.
@@ -53,7 +53,7 @@ impl Directory {
     pub(crate) async fn open_or_create_root(branch: Branch) -> Result<Self> {
         // TODO: make sure this is atomic
 
-        let locator = Locator::Root;
+        let locator = Locator::ROOT;
 
         match Self::open(branch.clone(), branch.clone(), locator, None).await {
             Ok(dir) => Ok(dir),
@@ -327,7 +327,7 @@ impl Directory {
                         let file = File::open(
                             inner.blob.branch().clone(),
                             self.local_branch.clone(),
-                            Locator::Head(file_data.blob_id),
+                            Locator::head(file_data.blob_id),
                             parent_context,
                         )
                         .await;
@@ -368,7 +368,7 @@ impl Directory {
                             .open(
                                 inner.blob.branch().clone(),
                                 self.local_branch.clone(),
-                                Locator::Head(data.blob_id),
+                                Locator::head(data.blob_id),
                                 parent_context,
                             )
                             .await;
@@ -478,7 +478,7 @@ impl Writer<'_> {
             )
             .await?;
 
-        let locator = Locator::Head(blob_id);
+        let locator = Locator::head(blob_id);
         let parent = ParentContext::new(self.outer.inner.clone(), name, author);
 
         Ok((locator, parent))

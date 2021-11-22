@@ -3,7 +3,7 @@ use crate::blob::{Blob, Buffer, Core, Cursor, OpenBlock};
 use crate::{
     block::{self, BlockId, BLOCK_SIZE},
     branch::Branch,
-    crypto::{AuthTag, Cryptor, Hashable, NonceSequence},
+    crypto::{AuthTag, Cryptor, NonceSequence},
     db,
     error::{Error, Result},
     index::BranchData,
@@ -334,7 +334,7 @@ impl<'a> Operations<'a> {
         };
 
         let current_block = OpenBlock {
-            locator: dst_head_locator.advance(self.current_block.locator.number()),
+            locator: dst_head_locator.nth(self.current_block.locator.number()),
             id: self.current_block.id,
             content: self.current_block.content.clone(),
             dirty: self.current_block.dirty,
@@ -493,11 +493,7 @@ impl<'a> Operations<'a> {
     }
 
     fn locator_at(&self, number: u32) -> Locator {
-        if number == 0 {
-            self.core.head_locator
-        } else {
-            Locator::Trunk(self.core.head_locator.hash(), number)
-        }
+        self.core.head_locator.nth(number)
     }
 }
 

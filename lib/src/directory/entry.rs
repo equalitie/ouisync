@@ -137,7 +137,7 @@ impl<'a> FileRef<'a> {
     }
 
     pub fn locator(&self) -> Locator {
-        Locator::Head(*self.blob_id())
+        Locator::head(*self.blob_id())
     }
 
     pub fn blob_id(&self) -> &BlobId {
@@ -214,7 +214,7 @@ impl<'a> DirectoryRef<'a> {
     }
 
     pub fn locator(&self) -> Locator {
-        Locator::Head(self.entry_data.blob_id)
+        Locator::head(self.entry_data.blob_id)
     }
 
     pub fn blob_id(&self) -> &BlobId {

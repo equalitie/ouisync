@@ -321,6 +321,6 @@ mod tests {
     }
 
     fn random_head_locator() -> Locator {
-        Locator::Head(rand::random())
+        Locator::head(rand::random())
     }
 }

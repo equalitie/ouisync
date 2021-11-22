@@ -136,10 +136,7 @@ impl Blob {
     }
 
     pub fn blob_id(&self) -> &BlobId {
-        match &self.head_locator {
-            Locator::Head(blob_id) => blob_id,
-            _ => unreachable!(),
-        }
+        self.head_locator.blob_id()
     }
 
     pub async fn len(&self) -> u64 {

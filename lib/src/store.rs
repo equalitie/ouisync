@@ -76,11 +76,11 @@ mod tests {
             .await
             .unwrap();
 
-        let locator0 = Locator::Head(rand::random());
+        let locator0 = Locator::head(rand::random());
         let locator0 = locator0.encode(&cryptor);
         branch0.insert(&mut tx, &block_id, &locator0).await.unwrap();
 
-        let locator1 = Locator::Head(rand::random());
+        let locator1 = Locator::head(rand::random());
         let locator1 = locator1.encode(&cryptor);
         branch1.insert(&mut tx, &block_id, &locator1).await.unwrap();
 
