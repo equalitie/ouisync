@@ -2,11 +2,11 @@
 //
 // # Example
 //
-//     define_array_wrapper! {
+//     define_byte_array_wrapper! {
 //         pub struct MyId([u8; 32]);
 //     }
 //
-macro_rules! define_array_wrapper {
+macro_rules! define_byte_array_wrapper {
     (
         $(#[$attrs:meta])*
         $vis:vis struct $name:ident ( [u8; $size:expr ] );
@@ -73,7 +73,7 @@ macro_rules! derive_rand_for_wrapper {
 // that already implement those traits. `[u8; N]` doesn't so we need to do it manually.
 //
 // This macro can be used only on types that implement `AsRef<[u8]>` and `TryFrom<&[u8]>`.
-macro_rules! derive_sqlx_traits_for_u8_array_wrapper {
+macro_rules! derive_sqlx_traits_for_byte_array_wrapper {
     ($type:ty) => {
         impl sqlx::Type<sqlx::sqlite::Sqlite> for $type {
             fn type_info() -> sqlx::sqlite::SqliteTypeInfo {
@@ -104,7 +104,7 @@ macro_rules! derive_sqlx_traits_for_u8_array_wrapper {
 
 #[cfg(test)]
 mod tests {
-    define_array_wrapper! {
+    define_byte_array_wrapper! {
         struct TestId([u8; 32]);
     }
 

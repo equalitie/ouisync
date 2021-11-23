@@ -3,7 +3,7 @@ use rand::{
     Rng,
 };
 
-define_array_wrapper! {
+define_byte_array_wrapper! {
     /// BlobId is used to identify a blob in a directory
     pub(crate) struct BlobId([u8; 32]);
 }
