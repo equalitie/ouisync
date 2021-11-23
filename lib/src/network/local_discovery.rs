@@ -1,3 +1,4 @@
+use super::runtime_id::RuntimeId;
 use crate::scoped_task::ScopedJoinHandle;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -14,12 +15,9 @@ use tokio::{net::UdpSocket, task, time::sleep};
 const MULTICAST_ADDR: Ipv4Addr = Ipv4Addr::new(224, 0, 0, 137);
 const MULTICAST_PORT: u16 = 9271;
 
-// Random ID sent with every message, used to prevent self-discovery.
-type RuntimeId = [u8; 16];
-
 // Poor man's local discovery using UDP multicast.
 // XXX: We should probably use mDNS, but so far all libraries I tried had some issues.
-pub struct LocalDiscovery {
+pub(super) struct LocalDiscovery {
     id: RuntimeId,
     listener_port: u16,
     socket: Arc<UdpSocket>,
@@ -31,9 +29,7 @@ impl LocalDiscovery {
     /// LRU cache so as to not re-report it too frequently. Once the peer disconnects, the user of
     /// `LocalDiscovery` should call `forget` with the `RuntimeId` and the replica shall start
     /// reporting it again.
-    pub fn new(listener_port: u16) -> io::Result<Self> {
-        let id = rand::random();
-
+    pub fn new(id: RuntimeId, listener_port: u16) -> io::Result<Self> {
         let socket = create_multicast_socket()?;
         let socket = Arc::new(socket);
 

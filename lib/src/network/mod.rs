@@ -6,6 +6,7 @@ mod local_discovery;
 mod message;
 mod message_broker;
 mod object_stream;
+mod runtime_id;
 mod server;
 #[cfg(test)]
 mod tests;
@@ -16,6 +17,7 @@ use self::{
     local_discovery::LocalDiscovery,
     message_broker::MessageBroker,
     object_stream::TcpObjectStream,
+    runtime_id::RuntimeId,
 };
 use crate::{
     error::{Error, Result},
@@ -150,6 +152,7 @@ impl Network {
         let inner = Arc::new(Inner {
             local_addr,
             this_replica_id,
+            this_runtime_id: rand::random(),
             message_brokers: Mutex::new(HashMap::new()),
             indices: RwLock::new(HashMap::default()),
             dht_discovery,
@@ -331,7 +334,8 @@ struct Tasks {
 struct Inner {
     local_addr: SocketAddr,
     this_replica_id: ReplicaId,
-    message_brokers: Mutex<HashMap<ReplicaId, MessageBroker>>,
+    this_runtime_id: RuntimeId,
+    message_brokers: Mutex<HashMap<RuntimeId, MessageBroker>>,
     indices: RwLock<HashMap<PublicRepositoryId, IndexHolder>>,
     dht_discovery: Option<DhtDiscovery>,
     dht_peer_found_tx: mpsc::UnboundedSender<SocketAddr>,
@@ -363,7 +367,7 @@ impl Inner {
     }
 
     async fn run_local_discovery(self: Arc<Self>, listener_port: u16) {
-        let discovery = match LocalDiscovery::new(listener_port) {
+        let discovery = match LocalDiscovery::new(self.this_runtime_id, listener_port) {
             Ok(discovery) => discovery,
             Err(error) => {
                 log::error!("Failed to create LocalDiscovery: {}", error);
@@ -511,7 +515,7 @@ impl Inner {
         log::info!("New {} TCP connection: {}", peer_source, addr);
 
         let mut stream = TcpObjectStream::new(socket);
-        let their_replica_id = match perform_handshake(&mut stream, self.this_replica_id).await {
+        let their_runtime_id = match perform_handshake(&mut stream, self.this_runtime_id).await {
             Ok(replica_id) => replica_id,
             Err(error) => {
                 log::error!("Failed to perform handshake: {}", error);
@@ -520,7 +524,7 @@ impl Inner {
         };
 
         // prevent self-connections.
-        if their_replica_id == self.this_replica_id {
+        if their_runtime_id == self.this_runtime_id {
             log::debug!("Connection from self, discarding");
             return;
         }
@@ -529,10 +533,10 @@ impl Inner {
 
         let mut brokers = self.message_brokers.lock().await;
 
-        match brokers.entry(their_replica_id) {
+        match brokers.entry(their_runtime_id) {
             Entry::Occupied(entry) => entry.get().add_connection(stream, permit).await,
             Entry::Vacant(entry) => {
-                log::info!("Connected to replica {:?}", their_replica_id);
+                log::info!("Connected to replica {:?}", their_runtime_id);
 
                 let broker = MessageBroker::new(stream, permit).await;
 
@@ -554,7 +558,7 @@ impl Inner {
 
         // Remove the broker if it has no more connections.
         let mut brokers = self.message_brokers.lock().await;
-        if let Entry::Occupied(entry) = brokers.entry(their_replica_id) {
+        if let Entry::Occupied(entry) = brokers.entry(their_runtime_id) {
             if !entry.get().has_connections() {
                 entry.remove();
             }
@@ -576,11 +580,12 @@ struct IndexHolder {
     dht_lookup: Option<dht_discovery::LookupRequest>,
 }
 
+// Exchange runtime ids with the peer. Returns their runtime id.
 async fn perform_handshake(
     stream: &mut TcpObjectStream,
-    this_replica_id: ReplicaId,
-) -> io::Result<ReplicaId> {
-    stream.write(&this_replica_id).await?;
+    this_runtime_id: RuntimeId,
+) -> io::Result<RuntimeId> {
+    stream.write(&this_runtime_id).await?;
     stream.read().await
 }
 
