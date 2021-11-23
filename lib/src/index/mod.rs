@@ -108,7 +108,7 @@ impl Index {
         versions: VersionVector,
         hash: Hash,
         summary: Summary,
-    ) -> Result<bool> {
+    ) -> Result<ReceiveStatus<bool>> {
         assert_ne!(replica_id, &self.this_replica_id);
 
         // Only accept it if newer or concurrent with our versions.
@@ -122,7 +122,10 @@ impl Index {
             .map(Ordering::is_le)
             .unwrap_or(false)
         {
-            return Ok(false);
+            return Ok(ReceiveStatus {
+                updated: false,
+                complete: false,
+            });
         }
 
         // Write the root node to the db.
@@ -131,10 +134,10 @@ impl Index {
             .await?;
         let node =
             RootNode::create(&self.pool, replica_id, versions, hash, Summary::INCOMPLETE).await?;
-        self.update_summaries(hash, 0).await?;
+        let complete = self.update_summaries(hash, 0).await?;
         self.update_remote_branch(*replica_id, node).await?;
 
-        Ok(updated)
+        Ok(ReceiveStatus { updated, complete })
     }
 
     /// Receive inner nodes from other replica and store them into the db.
@@ -144,7 +147,7 @@ impl Index {
         parent_hash: Hash,
         inner_layer: usize,
         nodes: InnerNodeMap,
-    ) -> Result<Vec<Hash>> {
+    ) -> Result<ReceiveStatus<Vec<Hash>>> {
         let updated: Vec<_> = self
             .find_inner_nodes_with_new_blocks(&parent_hash, &nodes)
             .await?
@@ -155,9 +158,9 @@ impl Index {
             .into_incomplete()
             .save(&self.pool, &parent_hash)
             .await?;
-        self.update_summaries(parent_hash, inner_layer).await?;
+        let complete = self.update_summaries(parent_hash, inner_layer).await?;
 
-        Ok(updated)
+        Ok(ReceiveStatus { updated, complete })
     }
 
     /// Receive leaf nodes from other replica and store them into the db.
@@ -166,7 +169,7 @@ impl Index {
         &self,
         parent_hash: Hash,
         nodes: LeafNodeSet,
-    ) -> Result<Vec<BlockId>> {
+    ) -> Result<ReceiveStatus<Vec<BlockId>>> {
         let updated: Vec<_> = self
             .find_leaf_nodes_with_new_blocks(&parent_hash, &nodes)
             .await?
@@ -174,10 +177,11 @@ impl Index {
             .collect();
 
         nodes.into_missing().save(&self.pool, &parent_hash).await?;
-        self.update_summaries(parent_hash, INNER_LAYER_COUNT)
+        let complete = self
+            .update_summaries(parent_hash, INNER_LAYER_COUNT)
             .await?;
 
-        Ok(updated)
+        Ok(ReceiveStatus { updated, complete })
     }
 
     // Check whether the remote replica has some blocks under the specified root node that the
@@ -244,19 +248,24 @@ impl Index {
             .filter(move |node| local_nodes.is_missing(node.locator())))
     }
 
-    async fn update_summaries(&self, hash: Hash, layer: usize) -> Result<()> {
+    // Updates summaries of the specified nodes and all their ancestors, notifies the affected
+    // branches that became complete (wasn't before the update but became after it) and returns
+    // whether at least one affected branch is complete (either already was or became by
+    // the update).
+    async fn update_summaries(&self, hash: Hash, layer: usize) -> Result<bool> {
+        let statuses = node::update_summaries(&self.pool, hash, layer).await?;
+
         // Find the replicas whose current snapshots became complete by this update.
-        let replica_ids: Vec<_> = node::update_summaries(&self.pool, hash, layer)
-            .await?
-            .into_iter()
-            .filter(|(_, complete)| *complete)
-            .map(|(id, _)| id)
+        let replica_ids: Vec<_> = statuses
+            .iter()
+            .filter(|(_, status)| status.did_complete())
+            .map(|(id, _)| *id)
             .collect();
 
         // Then notify them.
         self.notify_branches_changed(&replica_ids).await;
 
-        Ok(())
+        Ok(statuses.iter().any(|(_, status)| status.is_complete))
     }
 
     /// Update the root node of the remote branch.
@@ -460,6 +469,13 @@ async fn select_branch_changed(
             None
         }
     }
+}
+
+pub(crate) struct ReceiveStatus<T> {
+    // Information about the nodes that got updated.
+    pub updated: T,
+    // Whether at least one branch became complete by the update.
+    pub complete: bool,
 }
 
 /// Returns all replica ids we know of except ours.

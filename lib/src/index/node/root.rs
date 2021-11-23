@@ -1,7 +1,7 @@
 use super::{
     super::SnapshotId,
     inner::{InnerNode, InnerNodeMap},
-    summary::Summary,
+    summary::{Summary, SummaryUpdateStatus},
 };
 use crate::{
     crypto::{Hash, Hashable},
@@ -273,8 +273,10 @@ impl RootNode {
     }
 
     /// Updates the summaries of all nodes with the specified hash.
-    /// Returns whether the `is_complete` flag changed from `false` to `true` in this update.
-    pub async fn update_summaries(tx: &mut db::Transaction<'_>, hash: &Hash) -> Result<bool> {
+    pub async fn update_summaries(
+        tx: &mut db::Transaction<'_>,
+        hash: &Hash,
+    ) -> Result<SummaryUpdateStatus> {
         let summary = InnerNode::compute_summary(tx, hash, 0).await?;
 
         let was_complete =
@@ -299,7 +301,10 @@ impl RootNode {
         .execute(tx)
         .await?;
 
-        Ok(!was_complete && summary.is_complete)
+        Ok(SummaryUpdateStatus {
+            is_complete: summary.is_complete,
+            was_complete,
+        })
     }
 
     pub async fn remove_recursive(&self, tx: &mut db::Transaction<'_>) -> Result<()> {
