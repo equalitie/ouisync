@@ -15,7 +15,6 @@ use tokio::{pin, select};
 
 pub(crate) struct Client {
     index: Index,
-    their_replica_id: ReplicaId,
     stream: ClientStream,
     // "Cookie" number of the last received `RootNode` response or zero if we haven't received one
     // yet. To be included in the next sent `RootNode` request. The server uses this to decide
@@ -24,10 +23,9 @@ pub(crate) struct Client {
 }
 
 impl Client {
-    pub fn new(index: Index, their_replica_id: ReplicaId, stream: ClientStream) -> Self {
+    pub fn new(index: Index, stream: ClientStream) -> Self {
         Self {
             index,
-            their_replica_id,
             stream,
             cookie: 0,
         }
@@ -68,10 +66,14 @@ impl Client {
         match response {
             Response::RootNode {
                 cookie,
+                replica_id,
                 versions,
                 hash,
                 summary,
-            } => self.handle_root_node(cookie, versions, hash, summary).await,
+            } => {
+                self.handle_root_node(cookie, replica_id, versions, hash, summary)
+                    .await
+            }
             Response::InnerNodes {
                 parent_hash,
                 inner_layer,
@@ -97,6 +99,7 @@ impl Client {
     async fn handle_root_node(
         &mut self,
         cookie: u64,
+        replica_id: ReplicaId,
         versions: VersionVector,
         hash: Hash,
         summary: Summary,
@@ -105,7 +108,7 @@ impl Client {
 
         let status = self
             .index
-            .receive_root_node(&self.their_replica_id, versions, hash, summary)
+            .receive_root_node(&replica_id, versions, hash, summary)
             .await?;
 
         if status.updated {

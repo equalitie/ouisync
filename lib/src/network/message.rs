@@ -2,6 +2,7 @@ use crate::{
     block::BlockId,
     crypto::{AuthTag, Hash},
     index::{InnerNodeMap, LeafNodeSet, Summary},
+    replica_id::ReplicaId,
     repository::PublicRepositoryId,
     version_vector::VersionVector,
 };
@@ -28,6 +29,7 @@ pub(crate) enum Response {
     /// Send the latest root node of this replica to another replica.
     RootNode {
         cookie: u64,
+        replica_id: ReplicaId,
         versions: VersionVector,
         hash: Hash,
         summary: Summary,
@@ -57,12 +59,14 @@ impl fmt::Debug for Response {
         match self {
             Self::RootNode {
                 cookie,
+                replica_id,
                 versions,
                 hash,
                 summary,
             } => f
                 .debug_struct("RootNode")
                 .field("cookie", cookie)
+                .field("replica_id", replica_id)
                 .field("versions", versions)
                 .field("hash", hash)
                 .field("summary", summary)

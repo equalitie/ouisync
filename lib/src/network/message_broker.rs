@@ -6,8 +6,7 @@ use super::{
     server::Server,
 };
 use crate::{
-    error::Result, index::Index, replica_id::ReplicaId, repository::PublicRepositoryId,
-    scoped_task::ScopedJoinHandle,
+    error::Result, index::Index, repository::PublicRepositoryId, scoped_task::ScopedJoinHandle,
 };
 use std::{
     collections::{hash_map::Entry, HashMap, HashSet},
@@ -109,15 +108,10 @@ pub(super) struct MessageBroker {
 }
 
 impl MessageBroker {
-    pub async fn new(
-        their_replica_id: ReplicaId,
-        stream: TcpObjectStream,
-        permit: ConnectionPermit,
-    ) -> Self {
+    pub async fn new(stream: TcpObjectStream, permit: ConnectionPermit) -> Self {
         let (command_tx, command_rx) = mpsc::channel(1);
 
         let inner = Inner {
-            their_replica_id,
             command_tx: command_tx.clone(),
             reader: MultiReader::new(),
             writer: MultiWriter::new(),
@@ -177,7 +171,6 @@ impl MessageBroker {
 }
 
 struct Inner {
-    their_replica_id: ReplicaId,
     command_tx: mpsc::Sender<Command>,
     reader: MultiReader,
     writer: MultiWriter,
@@ -318,7 +311,7 @@ impl Inner {
         // tasks.
 
         let client_stream = ClientStream::new(self.command_tx.clone(), response_rx, id);
-        let mut client = Client::new(index.clone(), self.their_replica_id, client_stream);
+        let mut client = Client::new(index.clone(), client_stream);
         task::spawn(async move { log_error(client.run(), "client failed: ").await });
 
         let server_stream = ServerStream::new(self.command_tx.clone(), request_rx, id);

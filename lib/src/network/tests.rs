@@ -227,10 +227,8 @@ async fn simulate_connection_until<F>(server_index: Index, client_index: Index, 
 where
     F: Future<Output = ()>,
 {
-    let server_replica_id = server_index.this_replica_id;
     let (mut server, server_send_rx, server_recv_tx) = create_server(server_index);
-    let (mut client, client_send_rx, client_recv_tx) =
-        create_client(client_index, server_replica_id);
+    let (mut client, client_send_rx, client_recv_tx) = create_client(client_index);
 
     let mut server_conn = Connection {
         send_rx: server_send_rx,
@@ -263,14 +261,11 @@ fn create_server(index: Index) -> (Server, mpsc::Receiver<Command>, mpsc::Sender
     (server, send_rx, recv_tx)
 }
 
-fn create_client(
-    index: Index,
-    their_replica_id: ReplicaId,
-) -> (Client, mpsc::Receiver<Command>, mpsc::Sender<Response>) {
+fn create_client(index: Index) -> (Client, mpsc::Receiver<Command>, mpsc::Sender<Response>) {
     let (send_tx, send_rx) = mpsc::channel(1);
     let (recv_tx, recv_rx) = mpsc::channel(CAPACITY);
     let stream = ClientStream::new(send_tx, recv_rx, PublicRepositoryId::zero());
-    let client = Client::new(index, their_replica_id, stream);
+    let client = Client::new(index, stream);
 
     (client, send_rx, recv_tx)
 }
