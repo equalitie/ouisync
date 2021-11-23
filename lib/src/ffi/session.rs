@@ -7,6 +7,7 @@ use crate::{
     config, db,
     error::Result,
     network::{Network, NetworkOptions},
+    replica_id::ReplicaId,
     this_replica,
 };
 use std::{
@@ -116,6 +117,7 @@ static mut SESSION: *mut Session = ptr::null_mut();
 
 pub(super) struct Session {
     runtime: Runtime,
+    this_replica_id: ReplicaId,
     network: Network,
     sender: Sender,
     _logger: Logger,
@@ -130,10 +132,11 @@ impl Session {
     ) -> Result<Self> {
         let pool = config::open_db(&store).await?;
         let this_replica_id = this_replica::get_or_create_id(&pool).await?;
-        let network = Network::new(this_replica_id, &NetworkOptions::default()).await?;
+        let network = Network::new(&NetworkOptions::default()).await?;
 
         Ok(Self {
             runtime,
+            this_replica_id,
             network,
             sender,
             _logger: logger,
@@ -175,6 +178,10 @@ where
 
     pub(super) fn network(&self) -> &Network {
         &self.session.network
+    }
+
+    pub(super) fn this_replica_id(&self) -> &ReplicaId {
+        &self.session.this_replica_id
     }
 }
 

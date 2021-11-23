@@ -102,7 +102,7 @@ async fn main() -> Result<()> {
     }
 
     // Start the network
-    let network = Network::new(this_replica_id, &options.network).await?;
+    let network = Network::new(&options.network).await?;
     let network_handle = network.handle();
 
     // Mount repositories

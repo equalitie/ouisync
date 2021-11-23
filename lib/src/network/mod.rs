@@ -22,7 +22,6 @@ use self::{
 use crate::{
     error::{Error, Result},
     index::Index,
-    replica_id::ReplicaId,
     repository::{PublicRepositoryId, Repository},
     scoped_task::{self, ScopedJoinHandle, ScopedTaskSet},
     upnp,
@@ -98,7 +97,7 @@ pub struct Network {
 }
 
 impl Network {
-    pub async fn new(this_replica_id: ReplicaId, options: &NetworkOptions) -> Result<Self> {
+    pub async fn new(options: &NetworkOptions) -> Result<Self> {
         let listener = TcpListener::bind(options.listen_addr())
             .await
             .map_err(Error::Network)?;
@@ -151,7 +150,6 @@ impl Network {
 
         let inner = Arc::new(Inner {
             local_addr,
-            this_replica_id,
             this_runtime_id: rand::random(),
             message_brokers: Mutex::new(HashMap::new()),
             indices: RwLock::new(HashMap::default()),
@@ -270,10 +268,6 @@ impl Handle {
         true
     }
 
-    pub fn this_replica_id(&self) -> &ReplicaId {
-        &self.inner.this_replica_id
-    }
-
     pub async fn enable_dht_for_repository(&self, repository: &Repository) {
         let id = if let Ok(id) = repository.get_id().await {
             id.public()
@@ -333,7 +327,6 @@ struct Tasks {
 
 struct Inner {
     local_addr: SocketAddr,
-    this_replica_id: ReplicaId,
     this_runtime_id: RuntimeId,
     message_brokers: Mutex<HashMap<RuntimeId, MessageBroker>>,
     indices: RwLock<HashMap<PublicRepositoryId, IndexHolder>>,

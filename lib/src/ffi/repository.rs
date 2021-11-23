@@ -22,12 +22,13 @@ pub unsafe extern "C" fn repository_open(
 ) {
     session::with(port, error, |ctx| {
         let store = utils::ptr_to_path_buf(store)?;
+        let this_replica_id = *ctx.this_replica_id();
         let network_handle = ctx.network().handle();
 
         ctx.spawn(async move {
             let repo = Repository::open(
                 &store.into_std_path_buf().into(),
-                *network_handle.this_replica_id(),
+                this_replica_id,
                 Cryptor::Null,
                 true,
             )
