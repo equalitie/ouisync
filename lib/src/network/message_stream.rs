@@ -1,23 +1,34 @@
-// use super::{
-//     message::{Content, Message},
-//     object_stream::TypedObjectRead,
-// };
-// use crate::repository::PublicRepositoryId;
-// use futures_util::stream::SelectAll;
-// use std::{
-//     collections::{HashMap, VecDeque},
-//     sync::Arc,
-// };
-// use tokio::{net::tcp, sync::Mutex};
+use super::{connection::ConnectionPermitHalf, message::Message, object_stream::ObjectRead};
+use futures_util::Stream;
+use std::{
+    pin::Pin,
+    task::{Context, Poll},
+};
+use tokio::net::tcp;
 
-// pub(super) struct MessageMultiplexer {
-//     stream: SelectAll<TypedObjectRead<Message, tcp::OwnedReadHalf>>,
-// }
+/// Stream of `Message` backed by a `TcpStream`. Closes on first error.
+pub(super) struct MessageStream {
+    inner: ObjectRead<Message, tcp::OwnedReadHalf>,
+    _permit: ConnectionPermitHalf,
+}
 
-// impl MessageMultiplexer {
-//     pub fn new() -> Self {
+impl MessageStream {
+    pub fn new(stream: tcp::OwnedReadHalf, permit: ConnectionPermitHalf) -> Self {
+        Self {
+            inner: ObjectRead::new(stream),
+            _permit: permit,
+        }
+    }
+}
 
-//     }
+impl Stream for MessageStream {
+    type Item = Message;
 
-//     pub fn add(&mut self, stream: )
-// }
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        match Pin::new(&mut self.inner).poll_next(cx) {
+            Poll::Ready(Some(Ok(message))) => Poll::Ready(Some(message)),
+            Poll::Ready(Some(Err(_)) | None) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}

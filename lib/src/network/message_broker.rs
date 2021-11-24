@@ -2,7 +2,6 @@ use super::{
     client::Client,
     connection::{ConnectionPermit, MultiReader, MultiWriter},
     message::{Content, Message, Request, Response},
-    object_stream::TcpObjectStream,
     server::Server,
 };
 use crate::{
@@ -14,6 +13,7 @@ use std::{
     future::Future,
 };
 use tokio::{
+    net::TcpStream,
     select,
     sync::{
         mpsc::{self, error::SendError},
@@ -108,7 +108,7 @@ pub(super) struct MessageBroker {
 }
 
 impl MessageBroker {
-    pub async fn new(stream: TcpObjectStream<Message>, permit: ConnectionPermit) -> Self {
+    pub async fn new(stream: TcpStream, permit: ConnectionPermit) -> Self {
         let (command_tx, command_rx) = mpsc::channel(1);
 
         let inner = Inner {
@@ -128,7 +128,7 @@ impl MessageBroker {
         }
     }
 
-    pub async fn add_connection(&self, stream: TcpObjectStream<Message>, permit: ConnectionPermit) {
+    pub async fn add_connection(&self, stream: TcpStream, permit: ConnectionPermit) {
         if self
             .command_tx
             .send(Command::AddConnection(stream, permit))
@@ -244,7 +244,7 @@ impl Inner {
         }
     }
 
-    fn add_connection(&self, stream: TcpObjectStream<Message>, permit: ConnectionPermit) {
+    fn add_connection(&self, stream: TcpStream, permit: ConnectionPermit) {
         let (reader, writer) = stream.into_split();
         let (reader_permit, writer_permit) = permit.split();
 
@@ -367,7 +367,7 @@ where
 }
 
 pub(super) enum Command {
-    AddConnection(TcpObjectStream<Message>, ConnectionPermit),
+    AddConnection(TcpStream, ConnectionPermit),
     SendMessage(Message),
     CreateLink {
         id: PublicRepositoryId,

@@ -41,7 +41,7 @@ impl FromStr for SecretRepositoryId {
 pub struct PublicRepositoryId(InfoHash);
 
 impl PublicRepositoryId {
-    pub(crate) const SIZE: usize = INFO_HASH_LEN;
+    // pub(crate) const SIZE: usize = INFO_HASH_LEN;
 
     pub(crate) fn to_info_hash(self) -> InfoHash {
         self.0

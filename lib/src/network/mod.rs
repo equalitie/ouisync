@@ -17,7 +17,6 @@ use self::{
     dht_discovery::DhtDiscovery,
     local_discovery::LocalDiscovery,
     message_broker::MessageBroker,
-    object_stream::TcpObjectStream,
     runtime_id::RuntimeId,
 };
 use crate::{
@@ -528,16 +527,11 @@ impl Inner {
         let mut brokers = self.message_brokers.lock().await;
 
         match brokers.entry(their_runtime_id) {
-            Entry::Occupied(entry) => {
-                entry
-                    .get()
-                    .add_connection(TcpObjectStream::new(stream), permit)
-                    .await
-            }
+            Entry::Occupied(entry) => entry.get().add_connection(stream, permit).await,
             Entry::Vacant(entry) => {
                 log::info!("Connected to replica {:?}", their_runtime_id);
 
-                let broker = MessageBroker::new(TcpObjectStream::new(stream), permit).await;
+                let broker = MessageBroker::new(stream, permit).await;
 
                 // TODO: for DHT connection we should only link the repository for which we did the
                 // lookup but make sure we correctly handle edge cases, for example, when we have

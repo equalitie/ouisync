@@ -1,6 +1,6 @@
 use super::{
     message::Message,
-    object_stream::{TcpObjectReader, TcpObjectWriter},
+    object_stream::{ObjectRead, ObjectWrite},
 };
 use futures_util::{SinkExt, StreamExt};
 use std::{
@@ -12,6 +12,7 @@ use std::{
     },
 };
 use tokio::{
+    net::tcp,
     select,
     sync::{mpsc, Mutex, Notify},
     task,
@@ -38,7 +39,7 @@ impl MultiReader {
         }
     }
 
-    pub fn add(&self, mut reader: TcpObjectReader<Message>, permit: ConnectionPermitHalf) {
+    pub fn add(&self, reader: tcp::OwnedReadHalf, permit: ConnectionPermitHalf) {
         let tx = self.tx.clone();
 
         // Using `SeqCst` here to be on the safe side although a weaker ordering would probably
@@ -46,6 +47,7 @@ impl MultiReader {
         self.count.fetch_add(1, Ordering::SeqCst);
 
         task::spawn(async move {
+            let mut reader = ObjectRead::new(reader);
             let _permit = permit; // make sure the permit is owned by this task.
 
             loop {
@@ -85,7 +87,10 @@ impl MultiReader {
     }
 }
 
-type WriterData = (Arc<Mutex<TcpObjectWriter<Message>>>, ConnectionPermitHalf);
+type WriterData = (
+    Arc<Mutex<ObjectWrite<Message, tcp::OwnedWriteHalf>>>,
+    ConnectionPermitHalf,
+);
 
 /// Wrapper for arbitrary number of `TcpObjectWriter`s which writes to the first available one.
 pub(super) struct MultiWriter {
@@ -104,14 +109,14 @@ impl MultiWriter {
         }
     }
 
-    pub fn add(&self, writer: TcpObjectWriter<Message>, permit: ConnectionPermitHalf) {
+    pub fn add(&self, writer: tcp::OwnedWriteHalf, permit: ConnectionPermitHalf) {
         // `Relaxed` ordering should be sufficient here because this is just a simple counter.
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
 
         self.writers
             .write()
             .unwrap()
-            .insert(id, (Arc::new(Mutex::new(writer)), permit));
+            .insert(id, (Arc::new(Mutex::new(ObjectWrite::new(writer))), permit));
     }
 
     pub async fn write(&self, message: &Message) -> bool {
@@ -126,7 +131,9 @@ impl MultiWriter {
         false
     }
 
-    async fn pick_writer(&self) -> Option<(usize, Arc<Mutex<TcpObjectWriter<Message>>>)> {
+    async fn pick_writer(
+        &self,
+    ) -> Option<(usize, Arc<Mutex<ObjectWrite<Message, tcp::OwnedWriteHalf>>>)> {
         self.writers
             .read()
             .unwrap()
