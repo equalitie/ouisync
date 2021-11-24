@@ -5,6 +5,7 @@ mod ip_stack;
 mod local_discovery;
 mod message;
 mod message_broker;
+mod message_stream;
 mod object_stream;
 mod runtime_id;
 mod server;
@@ -581,7 +582,7 @@ async fn perform_handshake(
 ) -> io::Result<RuntimeId> {
     stream.send(this_runtime_id).await?;
     stream
-        .as_read_ref()
+        .as_typed_read()
         .next()
         .await
         .unwrap_or_else(|| Err(io::ErrorKind::UnexpectedEof.into()))

@@ -47,7 +47,7 @@ impl MultiReader {
 
         task::spawn(async move {
             let _permit = permit; // make sure the permit is owned by this task.
-            let mut reader = reader.as_ref();
+            let mut reader = reader.as_typed();
 
             loop {
                 select! {

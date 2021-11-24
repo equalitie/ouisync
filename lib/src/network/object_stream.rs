@@ -38,10 +38,10 @@ impl<S> ObjectStream<S> {
         }
     }
 
-    /// Returns an object that implements `Stream` of `T`. This indirection is necessary because
-    /// it's not possible to implement `Stream` that is generic over the item type.
-    pub fn as_read_ref<T>(&mut self) -> ObjectReadRef<T, S> {
-        ObjectReadRef {
+    /// Returns a borrowed object that implements `Stream` of `T`. This indirection is necessary
+    /// because it's not possible to implement `Stream` that is generic over the item type.
+    pub fn as_typed_read<T>(&mut self) -> TypedObjectReadRef<T, S> {
+        TypedObjectReadRef {
             read: &mut self.io,
             decoder: &mut self.decoder,
             _ty: PhantomData,
@@ -109,23 +109,52 @@ impl<R> ObjectRead<R> {
         }
     }
 
-    /// See [`ObjectStream::as_read_ref`] for explanation of this method.
-    pub fn as_ref<T>(&mut self) -> ObjectReadRef<T, R> {
-        ObjectReadRef {
+    /// Returns a borrowed object that implements `Stream` of `T`.
+    /// See [`ObjectStream::as_typed_read`] for more details.
+    pub fn as_typed<T>(&mut self) -> TypedObjectReadRef<T, R> {
+        TypedObjectReadRef {
             read: &mut self.read,
             decoder: &mut self.decoder,
             _ty: PhantomData,
         }
     }
+
+    /// Convert this reader into an owned object that implements `Stream` of `T`.
+    pub fn into_typed<T>(self) -> TypedObjectRead<T, R> {
+        TypedObjectRead {
+            read: self.read,
+            decoder: self.decoder,
+            _ty: PhantomData,
+        }
+    }
 }
 
-pub(crate) struct ObjectReadRef<'a, T, R> {
+pub(crate) struct TypedObjectReadRef<'a, T, R> {
     read: &'a mut R,
     decoder: &'a mut Decoder,
     _ty: PhantomData<fn() -> T>,
 }
 
-impl<'a, T, R> Stream for ObjectReadRef<'a, T, R>
+impl<'a, T, R> Stream for TypedObjectReadRef<'a, T, R>
+where
+    T: DeserializeOwned,
+    R: AsyncRead + Unpin,
+{
+    type Item = io::Result<T>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        let this = &mut *self;
+        poll_next(Pin::new(&mut this.read), cx, &mut this.decoder)
+    }
+}
+
+pub(crate) struct TypedObjectRead<T, R> {
+    read: R,
+    decoder: Decoder,
+    _ty: PhantomData<fn() -> T>,
+}
+
+impl<T, R> Stream for TypedObjectRead<T, R>
 where
     T: DeserializeOwned,
     R: AsyncRead + Unpin,
