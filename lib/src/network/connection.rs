@@ -2,6 +2,7 @@ use super::{
     message::Message,
     object_stream::{TcpObjectReader, TcpObjectWriter},
 };
+use futures_util::{SinkExt, StreamExt};
 use std::{
     collections::{hash_map::Entry, HashMap},
     net::SocketAddr,
@@ -46,11 +47,12 @@ impl MultiReader {
 
         task::spawn(async move {
             let _permit = permit; // make sure the permit is owned by this task.
+            let mut reader = reader.as_ref();
 
             loop {
                 select! {
-                    result = reader.read() => {
-                        if let Ok(message) = result {
+                    result = reader.next() => {
+                        if let Some(Ok(message)) = result {
                             tx.send(Some(message)).await.unwrap_or(())
                         } else {
                             tx.send(None).await.unwrap_or(());
@@ -115,7 +117,7 @@ impl MultiWriter {
 
     pub async fn write(&self, message: &Message) -> bool {
         while let Some((id, writer)) = self.pick_writer().await {
-            if writer.lock().await.write(message).await.is_ok() {
+            if writer.lock().await.send(message).await.is_ok() {
                 return true;
             }
 

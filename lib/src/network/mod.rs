@@ -26,6 +26,7 @@ use crate::{
     scoped_task::{self, ScopedJoinHandle, ScopedTaskSet},
     upnp,
 };
+use futures_util::{SinkExt, StreamExt};
 use std::{
     collections::{hash_map::Entry, HashMap},
     fmt,
@@ -578,8 +579,12 @@ async fn perform_handshake(
     stream: &mut TcpObjectStream,
     this_runtime_id: RuntimeId,
 ) -> io::Result<RuntimeId> {
-    stream.write(&this_runtime_id).await?;
-    stream.read().await
+    stream.send(this_runtime_id).await?;
+    stream
+        .as_read_ref()
+        .next()
+        .await
+        .unwrap_or_else(|| Err(io::ErrorKind::UnexpectedEof.into()))
 }
 
 #[derive(Clone, Copy, Debug)]
