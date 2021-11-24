@@ -592,6 +592,7 @@ mod tests {
     use super::*;
     use crate::{db, index::RootNode};
     use assert_matches::assert_matches;
+    use tokio::time::{sleep, Duration};
 
     #[tokio::test(flavor = "multi_thread")]
     async fn root_directory_always_exists() {
@@ -726,6 +727,46 @@ mod tests {
 
         // Check it exists
         assert_matches!(repo.open_directory("test").await, Ok(_))
+    }
+
+    // This one used to deadlock
+    #[tokio::test(flavor = "multi_thread")]
+    async fn concurrent_read_and_create_dir() {
+        let replica_id = rand::random();
+        let repo = Repository::open(&db::Store::Memory, replica_id, Cryptor::Null, false)
+            .await
+            .unwrap();
+
+        let path = "/dir";
+        let repo = Arc::new(repo);
+
+        let _watch_dog = scoped_task::spawn(async {
+            sleep(Duration::from_millis(5 * 1000)).await;
+            assert!(false, "timed out");
+        });
+
+        // The deadlock here happened because the reader lock when opening the directory is
+        // acquired in the opposite order to the writer lock acqurired from flushing. I.e. the
+        // reader lock acquires `/` and then `/dir`, but flushing acquires `/dir` first and then
+        // `/`.
+        let create_dir = scoped_task::spawn({
+            let repo = repo.clone();
+            async move {
+                let dir = repo.create_directory(path).await.unwrap();
+                dir.flush(None).await.unwrap();
+            }
+        });
+
+        let open_dir = scoped_task::spawn({
+            let repo = repo.clone();
+            async move {
+                let dir = repo.open_directory(path).await.unwrap();
+                dir.read().await.entries().count();
+            }
+        });
+
+        create_dir.await.unwrap();
+        open_dir.await.unwrap();
     }
 
     async fn read_file(repo: &Repository, path: impl AsRef<Utf8Path>) -> Vec<u8> {
