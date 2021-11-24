@@ -92,28 +92,23 @@ impl fmt::Debug for Response {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub(crate) enum Message {
-    // Request by the sender to establish a link between repositories with the given id hash.
-    CreateLink {
-        id: PublicRepositoryId,
-    },
-    // Request to a recipient's repository with id hash `id`.
-    Request {
-        id: PublicRepositoryId,
-        request: Request,
-    },
-    // Response to a recipient's repository with id hash `id`.
-    Response {
-        id: PublicRepositoryId,
-        response: Response,
-    },
+pub(crate) struct Message {
+    pub id: PublicRepositoryId,
+    pub content: Content,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub(crate) enum Content {
+    CreateLink,
+    Request(Request),
+    Response(Response),
 }
 
 impl From<Message> for Request {
     fn from(msg: Message) -> Self {
-        match msg {
-            Message::Request { request, .. } => request,
-            Message::CreateLink { .. } | Message::Response { .. } => {
+        match msg.content {
+            Content::Request(request) => request,
+            Content::CreateLink | Content::Response(_) => {
                 panic!("Message is not Request")
             }
         }
@@ -122,11 +117,11 @@ impl From<Message> for Request {
 
 impl From<Message> for Response {
     fn from(msg: Message) -> Self {
-        match msg {
-            Message::CreateLink { .. } | Message::Request { .. } => {
+        match msg.content {
+            Content::CreateLink | Content::Request(_) => {
                 panic!("Message is not Response")
             }
-            Message::Response { response, .. } => response,
+            Content::Response(response) => response,
         }
     }
 }

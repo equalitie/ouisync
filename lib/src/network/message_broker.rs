@@ -1,7 +1,7 @@
 use super::{
     client::Client,
     connection::{ConnectionPermit, MultiReader, MultiWriter},
-    message::{Message, Request, Response},
+    message::{Content, Message, Request, Response},
     object_stream::TcpObjectStream,
     server::Server,
 };
@@ -47,9 +47,9 @@ impl ServerStream {
     pub async fn send(&self, response: Response) -> Result<(), SendError<Response>> {
         log::trace!("server: send {:?}", response);
         self.tx
-            .send(Command::SendMessage(Message::Response {
+            .send(Command::SendMessage(Message {
                 id: self.id,
-                response,
+                content: Content::Response(response),
             }))
             .await
             .map_err(|e| SendError(into_message(e.0)))
@@ -81,9 +81,9 @@ impl ClientStream {
     pub async fn send(&self, request: Request) -> Result<(), SendError<Request>> {
         log::trace!("client: send {:?}", request);
         self.tx
-            .send(Command::SendMessage(Message::Request {
+            .send(Command::SendMessage(Message {
                 id: self.id,
-                request,
+                content: Content::Request(request),
             }))
             .await
             .map_err(|e| SendError(into_message(e.0)))
@@ -237,10 +237,10 @@ impl Inner {
     }
 
     async fn handle_message(&self, message: Message) {
-        match message {
-            Message::Request { id, request } => self.handle_request(&id, request).await,
-            Message::Response { id, response } => self.handle_response(&id, response).await,
-            Message::CreateLink { id } => self.create_incoming_link(id).await,
+        match message.content {
+            Content::Request(request) => self.handle_request(&message.id, request).await,
+            Content::Response(response) => self.handle_response(&message.id, response).await,
+            Content::CreateLink => self.create_incoming_link(message.id).await,
         }
     }
 
@@ -269,7 +269,14 @@ impl Inner {
             return true;
         }
 
-        if !self.writer.write(&Message::CreateLink { id }).await {
+        if !self
+            .writer
+            .write(&Message {
+                id,
+                content: Content::CreateLink,
+            })
+            .await
+        {
             log::warn!(
                 "not creating link for {:?} - \
                  failed to send CreateLink message - all writers closed",
