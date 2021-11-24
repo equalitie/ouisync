@@ -1,12 +1,14 @@
 use super::{
     client::Client,
-    connection::{ConnectionPermit, MultiReader, MultiWriter},
+    connection::{ConnectionPermit, MultiWriter},
     message::{Content, Message, Request, Response},
+    message_stream::{MessageMultiplexer, MessageStream},
     server::Server,
 };
 use crate::{
     error::Result, index::Index, repository::PublicRepositoryId, scoped_task::ScopedJoinHandle,
 };
+use futures_util::StreamExt;
 use std::{
     collections::{hash_map::Entry, HashMap, HashSet},
     fmt,
@@ -17,7 +19,7 @@ use tokio::{
     select,
     sync::{
         mpsc::{self, error::SendError},
-        RwLock,
+        Mutex, RwLock,
     },
     task,
 };
@@ -108,17 +110,20 @@ pub(super) struct MessageBroker {
 }
 
 impl MessageBroker {
-    pub async fn new(stream: TcpStream, permit: ConnectionPermit) -> Self {
+    pub fn new(stream: TcpStream, permit: ConnectionPermit) -> Self {
         let (command_tx, command_rx) = mpsc::channel(1);
+
+        // unwrap is ok here because the channel is currently empty and one receiver exists.
+        command_tx
+            .try_send(Command::AddConnection(stream, permit))
+            .unwrap();
 
         let inner = Inner {
             command_tx: command_tx.clone(),
-            reader: MultiReader::new(),
+            reader: Mutex::new(MessageMultiplexer::new()),
             writer: MultiWriter::new(),
             links: RwLock::new(Links::new()),
         };
-
-        inner.add_connection(stream, permit);
 
         let handle = task::spawn(inner.run(command_rx));
 
@@ -172,7 +177,7 @@ impl MessageBroker {
 
 struct Inner {
     command_tx: mpsc::Sender<Command>,
-    reader: MultiReader,
+    reader: Mutex<MessageMultiplexer>,
     writer: MultiWriter,
     links: RwLock<Links>,
 }
@@ -209,7 +214,7 @@ impl Inner {
         };
 
         let message_task = async {
-            while let Some(message) = self.reader.read().await {
+            while let Some(message) = self.reader.lock().await.next().await {
                 self.handle_message(message).await;
             }
         };
@@ -224,7 +229,7 @@ impl Inner {
     async fn handle_command(&self, command: Command) -> bool {
         match command {
             Command::AddConnection(stream, permit) => {
-                self.add_connection(stream, permit);
+                self.add_connection(stream, permit).await;
                 true
             }
             Command::SendMessage(message) => self.send_message(message).await,
@@ -244,11 +249,14 @@ impl Inner {
         }
     }
 
-    fn add_connection(&self, stream: TcpStream, permit: ConnectionPermit) {
+    async fn add_connection(&self, stream: TcpStream, permit: ConnectionPermit) {
         let (reader, writer) = stream.into_split();
         let (reader_permit, writer_permit) = permit.split();
 
-        self.reader.add(reader, reader_permit);
+        self.reader
+            .lock()
+            .await
+            .push(MessageStream::new(reader, reader_permit));
         self.writer.add(writer, writer_permit);
     }
 

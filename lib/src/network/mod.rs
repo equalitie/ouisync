@@ -531,7 +531,7 @@ impl Inner {
             Entry::Vacant(entry) => {
                 log::info!("Connected to replica {:?}", their_runtime_id);
 
-                let broker = MessageBroker::new(stream, permit).await;
+                let broker = MessageBroker::new(stream, permit);
 
                 // TODO: for DHT connection we should only link the repository for which we did the
                 // lookup but make sure we correctly handle edge cases, for example, when we have

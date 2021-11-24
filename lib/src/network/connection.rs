@@ -1,8 +1,5 @@
-use super::{
-    message::Message,
-    object_stream::{ObjectRead, ObjectWrite},
-};
-use futures_util::{SinkExt, StreamExt};
+use super::{message::Message, object_stream::ObjectWrite};
+use futures_util::SinkExt;
 use std::{
     collections::{hash_map::Entry, HashMap},
     net::SocketAddr,
@@ -13,79 +10,8 @@ use std::{
 };
 use tokio::{
     net::tcp,
-    select,
-    sync::{mpsc, Mutex, Notify},
-    task,
+    sync::{Mutex, Notify},
 };
-
-/// Wrapper for arbitrary number of `TcpObjectReader`s which reads from all of them simultaneously.
-pub(super) struct MultiReader {
-    tx: mpsc::Sender<Option<Message>>,
-    // Wrapping these in Mutex and RwLock to have the `add` and `read` methods non mutable.  That
-    // in turn is desirable to be able to call the two functions from different coroutines. Note
-    // that we don't want to wrap this whole struct in a Mutex/RwLock because we don't want the add
-    // function to be blocking.
-    rx: Mutex<mpsc::Receiver<Option<Message>>>,
-    count: AtomicUsize,
-}
-
-impl MultiReader {
-    pub fn new() -> Self {
-        let (tx, rx) = mpsc::channel(1);
-        Self {
-            tx,
-            rx: Mutex::new(rx),
-            count: AtomicUsize::new(0),
-        }
-    }
-
-    pub fn add(&self, reader: tcp::OwnedReadHalf, permit: ConnectionPermitHalf) {
-        let tx = self.tx.clone();
-
-        // Using `SeqCst` here to be on the safe side although a weaker ordering would probably
-        // suffice here (also in the `read` method).
-        self.count.fetch_add(1, Ordering::SeqCst);
-
-        task::spawn(async move {
-            let mut reader = ObjectRead::new(reader);
-            let _permit = permit; // make sure the permit is owned by this task.
-
-            loop {
-                select! {
-                    result = reader.next() => {
-                        if let Some(Ok(message)) = result {
-                            tx.send(Some(message)).await.unwrap_or(())
-                        } else {
-                            tx.send(None).await.unwrap_or(());
-                            break;
-                        }
-                    },
-                    _ = tx.closed() => break,
-                }
-            }
-        });
-    }
-
-    pub async fn read(&self) -> Option<Message> {
-        loop {
-            if self.count.load(Ordering::SeqCst) == 0 {
-                return None;
-            }
-
-            match self.rx.lock().await.recv().await {
-                Some(Some(message)) => return Some(message),
-                Some(None) => {
-                    self.count.fetch_sub(1, Ordering::SeqCst);
-                }
-                None => {
-                    // This would mean that all senders were closed, but that can't happen because
-                    // `self.tx` still exists.
-                    unreachable!()
-                }
-            }
-        }
-    }
-}
 
 type WriterData = (
     Arc<Mutex<ObjectWrite<Message, tcp::OwnedWriteHalf>>>,

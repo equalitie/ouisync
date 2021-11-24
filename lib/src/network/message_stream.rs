@@ -1,5 +1,5 @@
 use super::{connection::ConnectionPermitHalf, message::Message, object_stream::ObjectRead};
-use futures_util::Stream;
+use futures_util::{stream::SelectAll, Stream};
 use std::{
     pin::Pin,
     task::{Context, Poll},
@@ -32,3 +32,6 @@ impl Stream for MessageStream {
         }
     }
 }
+
+/// Stream that reads `Message`s from multiple underlying TCP streams.
+pub(super) type MessageMultiplexer = SelectAll<MessageStream>;
