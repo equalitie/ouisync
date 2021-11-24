@@ -3,12 +3,9 @@ use btdht::{InfoHash, INFO_HASH_LEN};
 use serde::{Deserialize, Serialize};
 use std::{fmt, str::FromStr};
 
-/// Size of SecretRepositoryId in bytes.
-pub const SECRET_REPOSITORY_ID_SIZE: usize = 16;
-
 define_byte_array_wrapper! {
     /// Unique secret id of a repository. Only known to replicas sharing the repository.
-    pub struct SecretRepositoryId([u8; SECRET_REPOSITORY_ID_SIZE]);
+    pub struct SecretRepositoryId([u8; 16]);
 }
 
 derive_rand_for_wrapper!(SecretRepositoryId);
@@ -30,7 +27,7 @@ impl FromStr for SecretRepositoryId {
     type Err = hex::FromHexError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut bytes = [0; SECRET_REPOSITORY_ID_SIZE];
+        let mut bytes = [0; Self::SIZE];
         hex::decode_to_slice(s, &mut bytes)?;
 
         Ok(Self(bytes))
@@ -44,6 +41,8 @@ impl FromStr for SecretRepositoryId {
 pub struct PublicRepositoryId(InfoHash);
 
 impl PublicRepositoryId {
+    pub(crate) const SIZE: usize = INFO_HASH_LEN;
+
     pub(crate) fn to_info_hash(self) -> InfoHash {
         self.0
     }

@@ -1,9 +1,6 @@
-/// Size of replica ID in bytes.
-pub const REPLICA_ID_SIZE: usize = 16;
-
 define_byte_array_wrapper! {
     /// Unique id of a replica.
-    pub struct ReplicaId([u8; REPLICA_ID_SIZE]);
+    pub struct ReplicaId([u8; 16]);
 }
 
 derive_rand_for_wrapper!(ReplicaId);

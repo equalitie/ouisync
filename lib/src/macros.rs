@@ -16,6 +16,11 @@ macro_rules! define_byte_array_wrapper {
         #[derive(Copy, Clone, Eq, PartialEq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
         $vis struct $name([u8; $size]);
 
+        impl $name {
+            #[allow(dead_code)]
+            pub const SIZE: usize = $size;
+        }
+
         impl std::convert::TryFrom<&'_ [u8]> for $name {
             type Error = std::array::TryFromSliceError;
 

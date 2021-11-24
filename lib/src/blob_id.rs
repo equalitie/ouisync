@@ -9,7 +9,7 @@ define_byte_array_wrapper! {
 }
 
 impl BlobId {
-    pub(crate) const ZERO: Self = Self([0; 32]);
+    pub(crate) const ZERO: Self = Self([0; Self::SIZE]);
 }
 
 // Never generates `ZERO`
