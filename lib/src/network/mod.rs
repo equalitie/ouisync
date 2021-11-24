@@ -27,7 +27,6 @@ use crate::{
     scoped_task::{self, ScopedJoinHandle, ScopedTaskSet},
     upnp,
 };
-use futures_util::{SinkExt, StreamExt};
 use std::{
     collections::{hash_map::Entry, HashMap},
     fmt,
@@ -39,6 +38,7 @@ use std::{
 };
 use structopt::StructOpt;
 use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
     sync::{mpsc, Mutex, RwLock},
     task, time,
@@ -501,7 +501,7 @@ impl Inner {
 
     async fn handle_new_connection(
         self: Arc<Self>,
-        socket: TcpStream,
+        mut stream: TcpStream,
         peer_source: PeerSource,
         permit: ConnectionPermit,
     ) {
@@ -509,7 +509,6 @@ impl Inner {
 
         log::info!("New {} TCP connection: {}", peer_source, addr);
 
-        let mut stream = TcpObjectStream::new(socket);
         let their_runtime_id = match perform_handshake(&mut stream, self.this_runtime_id).await {
             Ok(replica_id) => replica_id,
             Err(error) => {
@@ -529,11 +528,16 @@ impl Inner {
         let mut brokers = self.message_brokers.lock().await;
 
         match brokers.entry(their_runtime_id) {
-            Entry::Occupied(entry) => entry.get().add_connection(stream, permit).await,
+            Entry::Occupied(entry) => {
+                entry
+                    .get()
+                    .add_connection(TcpObjectStream::new(stream), permit)
+                    .await
+            }
             Entry::Vacant(entry) => {
                 log::info!("Connected to replica {:?}", their_runtime_id);
 
-                let broker = MessageBroker::new(stream, permit).await;
+                let broker = MessageBroker::new(TcpObjectStream::new(stream), permit).await;
 
                 // TODO: for DHT connection we should only link the repository for which we did the
                 // lookup but make sure we correctly handle edge cases, for example, when we have
@@ -577,15 +581,15 @@ struct IndexHolder {
 
 // Exchange runtime ids with the peer. Returns their runtime id.
 async fn perform_handshake(
-    stream: &mut TcpObjectStream,
+    stream: &mut TcpStream,
     this_runtime_id: RuntimeId,
 ) -> io::Result<RuntimeId> {
-    stream.send(this_runtime_id).await?;
-    stream
-        .as_typed_read()
-        .next()
-        .await
-        .unwrap_or_else(|| Err(io::ErrorKind::UnexpectedEof.into()))
+    stream.write_all(this_runtime_id.as_ref()).await?;
+
+    let mut their_runtime_id = [0; RuntimeId::SIZE];
+    stream.read_exact(&mut their_runtime_id).await?;
+
+    Ok(their_runtime_id.into())
 }
 
 #[derive(Clone, Copy, Debug)]

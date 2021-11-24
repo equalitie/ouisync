@@ -21,6 +21,12 @@ macro_rules! define_byte_array_wrapper {
             pub const SIZE: usize = $size;
         }
 
+        impl From<[u8; $size]> for $name {
+            fn from(array: [u8; $size]) -> Self {
+                Self(array)
+            }
+        }
+
         impl std::convert::TryFrom<&'_ [u8]> for $name {
             type Error = std::array::TryFromSliceError;
 
