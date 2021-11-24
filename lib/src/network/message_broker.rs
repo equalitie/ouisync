@@ -8,7 +8,6 @@ use super::{
 use crate::{
     error::Result, index::Index, repository::PublicRepositoryId, scoped_task::ScopedJoinHandle,
 };
-use futures_util::StreamExt;
 use std::{
     collections::{hash_map::Entry, HashMap, HashSet},
     fmt,
@@ -19,7 +18,7 @@ use tokio::{
     select,
     sync::{
         mpsc::{self, error::SendError},
-        Mutex, RwLock,
+        RwLock,
     },
     task,
 };
@@ -120,7 +119,7 @@ impl MessageBroker {
 
         let inner = Inner {
             command_tx: command_tx.clone(),
-            reader: Mutex::new(MultiReader::new()),
+            reader: MultiReader::new(),
             writer: MultiWriter::new(),
             links: RwLock::new(Links::new()),
         };
@@ -177,7 +176,7 @@ impl MessageBroker {
 
 struct Inner {
     command_tx: mpsc::Sender<Command>,
-    reader: Mutex<MultiReader>,
+    reader: MultiReader,
     writer: MultiWriter,
     links: RwLock<Links>,
 }
@@ -214,7 +213,7 @@ impl Inner {
         };
 
         let message_task = async {
-            while let Some(message) = self.reader.lock().await.next().await {
+            while let Some(message) = self.reader.recv().await {
                 self.handle_message(message).await;
             }
         };
@@ -253,10 +252,7 @@ impl Inner {
         let (reader, writer) = stream.into_split();
         let (reader_permit, writer_permit) = permit.split();
 
-        self.reader
-            .lock()
-            .await
-            .push(MessageStream::new(reader, reader_permit));
+        self.reader.add(MessageStream::new(reader, reader_permit));
         self.writer.add(writer, writer_permit);
     }
 

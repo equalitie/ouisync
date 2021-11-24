@@ -3,13 +3,18 @@ use super::{
     message::Message,
     object_stream::{ObjectRead, ObjectWrite},
 };
-use futures_util::{stream::SelectAll, Sink, Stream};
+use futures_util::{stream::SelectAll, Sink, Stream, StreamExt};
 use std::{
     io,
     pin::Pin,
+    sync::Mutex as BlockingMutex,
     task::{Context, Poll},
 };
-use tokio::net::tcp;
+use tokio::{
+    net::tcp,
+    select,
+    sync::{Mutex as AsyncMutex, Notify},
+};
 
 /// Stream of `Message` backed by a `TcpStream`. Closes on first error.
 pub(super) struct MessageStream {
@@ -74,7 +79,39 @@ impl<'a> Sink<&'a Message> for MessageSink {
 }
 
 /// Stream that reads `Message`s from multiple underlying TCP streams.
-pub(super) type MultiReader = SelectAll<MessageStream>;
+pub(super) struct MultiReader {
+    active: AsyncMutex<SelectAll<MessageStream>>,
+    new: BlockingMutex<Vec<MessageStream>>,
+    new_notify: Notify,
+}
+
+impl MultiReader {
+    pub fn new() -> Self {
+        Self {
+            active: AsyncMutex::new(SelectAll::new()),
+            new: BlockingMutex::new(Vec::new()),
+            new_notify: Notify::new(),
+        }
+    }
+
+    pub fn add(&self, stream: MessageStream) {
+        self.new.lock().unwrap().push(stream);
+        self.new_notify.notify_one();
+    }
+
+    pub async fn recv(&self) -> Option<Message> {
+        let mut active = self.active.lock().await;
+
+        loop {
+            active.extend(self.new.lock().unwrap().drain(..));
+
+            select! {
+                item = active.next() => return item,
+                _ = self.new_notify.notified() => {}
+            }
+        }
+    }
+}
 
 // /// Sink that writes to the first available underlying TCP stream.
 // pub(super) struct MultiWriter {
