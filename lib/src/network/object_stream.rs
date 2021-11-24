@@ -15,48 +15,53 @@ use tokio::{
     },
 };
 
-pub(crate) type TcpObjectStream = ObjectStream<TcpStream>;
-pub(crate) type TcpObjectReader = ObjectRead<OwnedReadHalf>;
-pub(crate) type TcpObjectWriter = ObjectWrite<OwnedWriteHalf>;
+pub(crate) type TcpObjectStream<T> = ObjectStream<T, TcpStream>;
+pub(crate) type TcpObjectReader<T> = ObjectRead<T, OwnedReadHalf>;
+pub(crate) type TcpObjectWriter<T> = ObjectWrite<T, OwnedWriteHalf>;
 
 /// Max object size when serialized in bytes.
 const MAX_SERIALIZED_OBJECT_SIZE: u16 = u16::MAX - 1;
 
 /// Combined `ObjectRead` and `ObjectWrite`
-pub(crate) struct ObjectStream<S> {
+pub(crate) struct ObjectStream<T, S> {
     io: S,
     encoder: Encoder,
     decoder: Decoder,
+    _ty: PhantomData<fn() -> T>,
 }
 
-impl<S> ObjectStream<S> {
+impl<T, S> ObjectStream<T, S> {
     pub fn new(io: S) -> Self {
         Self {
             io,
             encoder: Encoder::default(),
             decoder: Decoder::default(),
-        }
-    }
-
-    /// Returns a borrowed object that implements `Stream` of `T`. This indirection is necessary
-    /// because it's not possible to implement `Stream` that is generic over the item type.
-    pub fn as_typed_read<T>(&mut self) -> TypedObjectReadRef<T, S> {
-        TypedObjectReadRef {
-            read: &mut self.io,
-            decoder: &mut self.decoder,
             _ty: PhantomData,
         }
     }
 }
 
-impl<T, S> Sink<T> for ObjectStream<S>
+impl<T, R> Stream for ObjectStream<T, R>
+where
+    T: DeserializeOwned,
+    R: AsyncRead + Unpin,
+{
+    type Item = io::Result<T>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        let this = &mut *self;
+        poll_next(Pin::new(&mut this.io), cx, &mut this.decoder)
+    }
+}
+
+impl<'a, T, S> Sink<&'a T> for ObjectStream<T, S>
 where
     T: Serialize,
     S: AsyncWrite + Unpin,
 {
     type Error = io::Error;
 
-    fn start_send(mut self: Pin<&mut Self>, item: T) -> Result<(), Self::Error> {
+    fn start_send(mut self: Pin<&mut Self>, item: &'a T) -> Result<(), Self::Error> {
         start_send(item, &mut self.encoder)
     }
 
@@ -76,18 +81,20 @@ where
     }
 }
 
-impl ObjectStream<TcpStream> {
+impl<T> ObjectStream<T, TcpStream> {
     /// Splits the stream into reader and writer to enable concurrent reading and writing.
-    pub fn into_split(self) -> (ObjectRead<OwnedReadHalf>, ObjectWrite<OwnedWriteHalf>) {
+    pub fn into_split(self) -> (ObjectRead<T, OwnedReadHalf>, ObjectWrite<T, OwnedWriteHalf>) {
         let (read, write) = self.io.into_split();
         (
             ObjectRead {
                 read,
                 decoder: self.decoder,
+                _ty: PhantomData,
             },
             ObjectWrite {
                 write,
                 encoder: self.encoder,
+                _ty: PhantomData,
             },
         )
     }
@@ -95,66 +102,24 @@ impl ObjectStream<TcpStream> {
 
 /// Wrapper that turns a reader (`AsyncRead`) into a `Stream` of `T` by deserializing the data read
 /// from the reader.
-pub(crate) struct ObjectRead<R> {
+pub(crate) struct ObjectRead<T, R> {
     read: R,
     decoder: Decoder,
+    _ty: PhantomData<fn() -> T>,
 }
 
-impl<R> ObjectRead<R> {
+impl<T, R> ObjectRead<T, R> {
     #[allow(unused)]
     pub fn new(read: R) -> Self {
         Self {
             read,
             decoder: Decoder::default(),
-        }
-    }
-
-    /// Returns a borrowed object that implements `Stream` of `T`.
-    /// See [`ObjectStream::as_typed_read`] for more details.
-    pub fn as_typed<T>(&mut self) -> TypedObjectReadRef<T, R> {
-        TypedObjectReadRef {
-            read: &mut self.read,
-            decoder: &mut self.decoder,
-            _ty: PhantomData,
-        }
-    }
-
-    /// Convert this reader into an owned object that implements `Stream` of `T`.
-    pub fn into_typed<T>(self) -> TypedObjectRead<T, R> {
-        TypedObjectRead {
-            read: self.read,
-            decoder: self.decoder,
             _ty: PhantomData,
         }
     }
 }
 
-pub(crate) struct TypedObjectReadRef<'a, T, R> {
-    read: &'a mut R,
-    decoder: &'a mut Decoder,
-    _ty: PhantomData<fn() -> T>,
-}
-
-impl<'a, T, R> Stream for TypedObjectReadRef<'a, T, R>
-where
-    T: DeserializeOwned,
-    R: AsyncRead + Unpin,
-{
-    type Item = io::Result<T>;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        let this = &mut *self;
-        poll_next(Pin::new(&mut this.read), cx, &mut this.decoder)
-    }
-}
-
-pub(crate) struct TypedObjectRead<T, R> {
-    read: R,
-    decoder: Decoder,
-    _ty: PhantomData<fn() -> T>,
-}
-
-impl<T, R> Stream for TypedObjectRead<T, R>
+impl<T, R> Stream for ObjectRead<T, R>
 where
     T: DeserializeOwned,
     R: AsyncRead + Unpin,
@@ -169,29 +134,31 @@ where
 
 /// Wrapper that turns a writer (`AsyncWrite`) into a `Sink` of `T` by serializing the items and
 /// writing them to the writer.
-pub(crate) struct ObjectWrite<W> {
+pub(crate) struct ObjectWrite<T, W> {
     write: W,
     encoder: Encoder,
+    _ty: PhantomData<fn() -> T>,
 }
 
-impl<W> ObjectWrite<W> {
+impl<T, W> ObjectWrite<T, W> {
     #[allow(unused)]
     pub fn new(write: W) -> Self {
         Self {
             write,
             encoder: Encoder::default(),
+            _ty: PhantomData,
         }
     }
 }
 
-impl<T, W> Sink<T> for ObjectWrite<W>
+impl<'a, T, W> Sink<&'a T> for ObjectWrite<T, W>
 where
     T: Serialize,
     W: AsyncWrite + Unpin,
 {
     type Error = io::Error;
 
-    fn start_send(mut self: Pin<&mut Self>, item: T) -> Result<(), Self::Error> {
+    fn start_send(mut self: Pin<&mut Self>, item: &'a T) -> Result<(), Self::Error> {
         start_send(item, &mut self.encoder)
     }
 
@@ -354,7 +321,7 @@ where
     }
 }
 
-fn start_send<T>(item: T, state: &mut Encoder) -> io::Result<()>
+fn start_send<T>(item: &T, state: &mut Encoder) -> io::Result<()>
 where
     T: Serialize,
 {
@@ -363,7 +330,7 @@ where
         "start_send called while not ready"
     );
 
-    let data = bincode::serialize(&item)
+    let data = bincode::serialize(item)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
 
     if data.len() > MAX_SERIALIZED_OBJECT_SIZE as usize {

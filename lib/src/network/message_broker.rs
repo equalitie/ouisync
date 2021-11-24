@@ -108,7 +108,7 @@ pub(super) struct MessageBroker {
 }
 
 impl MessageBroker {
-    pub async fn new(stream: TcpObjectStream, permit: ConnectionPermit) -> Self {
+    pub async fn new(stream: TcpObjectStream<Message>, permit: ConnectionPermit) -> Self {
         let (command_tx, command_rx) = mpsc::channel(1);
 
         let inner = Inner {
@@ -128,7 +128,7 @@ impl MessageBroker {
         }
     }
 
-    pub async fn add_connection(&self, stream: TcpObjectStream, permit: ConnectionPermit) {
+    pub async fn add_connection(&self, stream: TcpObjectStream<Message>, permit: ConnectionPermit) {
         if self
             .command_tx
             .send(Command::AddConnection(stream, permit))
@@ -244,7 +244,7 @@ impl Inner {
         }
     }
 
-    fn add_connection(&self, stream: TcpObjectStream, permit: ConnectionPermit) {
+    fn add_connection(&self, stream: TcpObjectStream<Message>, permit: ConnectionPermit) {
         let (reader, writer) = stream.into_split();
         let (reader_permit, writer_permit) = permit.split();
 
@@ -367,7 +367,7 @@ where
 }
 
 pub(super) enum Command {
-    AddConnection(TcpObjectStream, ConnectionPermit),
+    AddConnection(TcpObjectStream<Message>, ConnectionPermit),
     SendMessage(Message),
     CreateLink {
         id: PublicRepositoryId,

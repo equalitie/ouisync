@@ -38,7 +38,7 @@ impl MultiReader {
         }
     }
 
-    pub fn add(&self, mut reader: TcpObjectReader, permit: ConnectionPermitHalf) {
+    pub fn add(&self, mut reader: TcpObjectReader<Message>, permit: ConnectionPermitHalf) {
         let tx = self.tx.clone();
 
         // Using `SeqCst` here to be on the safe side although a weaker ordering would probably
@@ -47,7 +47,6 @@ impl MultiReader {
 
         task::spawn(async move {
             let _permit = permit; // make sure the permit is owned by this task.
-            let mut reader = reader.as_typed();
 
             loop {
                 select! {
@@ -86,7 +85,7 @@ impl MultiReader {
     }
 }
 
-type WriterData = (Arc<Mutex<TcpObjectWriter>>, ConnectionPermitHalf);
+type WriterData = (Arc<Mutex<TcpObjectWriter<Message>>>, ConnectionPermitHalf);
 
 /// Wrapper for arbitrary number of `TcpObjectWriter`s which writes to the first available one.
 pub(super) struct MultiWriter {
@@ -105,7 +104,7 @@ impl MultiWriter {
         }
     }
 
-    pub fn add(&self, writer: TcpObjectWriter, permit: ConnectionPermitHalf) {
+    pub fn add(&self, writer: TcpObjectWriter<Message>, permit: ConnectionPermitHalf) {
         // `Relaxed` ordering should be sufficient here because this is just a simple counter.
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
 
@@ -127,7 +126,7 @@ impl MultiWriter {
         false
     }
 
-    async fn pick_writer(&self) -> Option<(usize, Arc<Mutex<TcpObjectWriter>>)> {
+    async fn pick_writer(&self) -> Option<(usize, Arc<Mutex<TcpObjectWriter<Message>>>)> {
         self.writers
             .read()
             .unwrap()
