@@ -2,7 +2,7 @@ use super::{
     client::Client,
     connection::{ConnectionPermit, MultiWriter},
     message::{Content, Message, Request, Response},
-    message_stream::{MessageMultiplexer, MessageStream},
+    message_io::{MessageStream, MultiReader},
     server::Server,
 };
 use crate::{
@@ -120,7 +120,7 @@ impl MessageBroker {
 
         let inner = Inner {
             command_tx: command_tx.clone(),
-            reader: Mutex::new(MessageMultiplexer::new()),
+            reader: Mutex::new(MultiReader::new()),
             writer: MultiWriter::new(),
             links: RwLock::new(Links::new()),
         };
@@ -177,7 +177,7 @@ impl MessageBroker {
 
 struct Inner {
     command_tx: mpsc::Sender<Command>,
-    reader: Mutex<MessageMultiplexer>,
+    reader: Mutex<MultiReader>,
     writer: MultiWriter,
     links: RwLock<Links>,
 }

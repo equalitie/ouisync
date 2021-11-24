@@ -1,4 +1,4 @@
-use super::{message::Message, object_stream::ObjectWrite};
+use super::{message::Message, message_io::MessageSink};
 use futures_util::SinkExt;
 use std::{
     collections::{hash_map::Entry, HashMap},
@@ -13,10 +13,7 @@ use tokio::{
     sync::{Mutex, Notify},
 };
 
-type WriterData = (
-    Arc<Mutex<ObjectWrite<Message, tcp::OwnedWriteHalf>>>,
-    ConnectionPermitHalf,
-);
+type WriterData = Arc<Mutex<MessageSink>>;
 
 /// Wrapper for arbitrary number of `TcpObjectWriter`s which writes to the first available one.
 pub(super) struct MultiWriter {
@@ -42,7 +39,7 @@ impl MultiWriter {
         self.writers
             .write()
             .unwrap()
-            .insert(id, (Arc::new(Mutex::new(ObjectWrite::new(writer))), permit));
+            .insert(id, Arc::new(Mutex::new(MessageSink::new(writer, permit))));
     }
 
     pub async fn write(&self, message: &Message) -> bool {
@@ -57,15 +54,13 @@ impl MultiWriter {
         false
     }
 
-    async fn pick_writer(
-        &self,
-    ) -> Option<(usize, Arc<Mutex<ObjectWrite<Message, tcp::OwnedWriteHalf>>>)> {
+    async fn pick_writer(&self) -> Option<(usize, Arc<Mutex<MessageSink>>)> {
         self.writers
             .read()
             .unwrap()
             .iter()
             .next()
-            .map(|(id, (writer, _))| (*id, writer.clone()))
+            .map(|(id, writer)| (*id, writer.clone()))
     }
 }
 
