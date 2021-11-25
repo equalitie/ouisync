@@ -86,6 +86,22 @@ impl ConnectionPermit {
     pub fn addr(&self) -> SocketAddr {
         self.key.addr
     }
+
+    /// Dummy connection permit for tests.
+    #[cfg(test)]
+    pub fn dummy() -> Self {
+        use std::net::Ipv4Addr;
+
+        Self {
+            connections: Arc::new(SyncMutex::new(HashMap::new())),
+            key: ConnectionKey {
+                dir: ConnectionDirection::Incoming,
+                addr: (Ipv4Addr::UNSPECIFIED, 0).into(),
+            },
+            id: 0,
+            notify: Arc::new(Notify::new()),
+        }
+    }
 }
 
 impl Drop for ConnectionPermit {
@@ -103,6 +119,14 @@ impl Drop for ConnectionPermit {
 /// Half of a connection permit. Dropping it drops the whole permit.
 /// See [`ConnectionPermit::split`] for more details.
 pub(super) struct ConnectionPermitHalf(ConnectionPermit);
+
+impl ConnectionPermitHalf {
+    /// Dummy connection permit for tests.
+    #[cfg(test)]
+    pub fn dummy() -> Self {
+        Self(ConnectionPermit::dummy())
+    }
+}
 
 #[derive(Clone, Copy, Eq, PartialEq, Hash)]
 struct ConnectionKey {
