@@ -37,6 +37,9 @@ use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 #[derive(Clone)]
 pub struct Directory {
+    // `branch_id` is equivalent `inner.read().await.branch().id()`, but access to it doesn't
+    // require locking.
+    branch_id: ReplicaId,
     inner: Arc<RwLock<Inner>>,
     local_branch: Branch,
 }
@@ -245,11 +248,13 @@ impl Directory {
         locator: Locator,
         parent: Option<ParentContext>,
     ) -> Result<Self> {
+        let branch_id = *owner_branch.id();
         let mut blob = Blob::open(owner_branch, locator).await?;
         let buffer = blob.read_to_end().await?;
         let content = bincode::deserialize(&buffer).map_err(Error::MalformedDirectory)?;
 
         Ok(Self {
+            branch_id,
             inner: Arc::new(RwLock::new(Inner {
                 blob,
                 content,
@@ -261,9 +266,11 @@ impl Directory {
     }
 
     fn create(owner_branch: Branch, locator: Locator, parent: Option<ParentContext>) -> Self {
+        let branch_id = *owner_branch.id();
         let blob = Blob::create(owner_branch.clone(), locator);
 
         Directory {
+            branch_id,
             inner: Arc::new(RwLock::new(Inner {
                 blob,
                 content: Content::new(),
@@ -322,8 +329,12 @@ impl Directory {
                     EntryData::File(file_data) => {
                         let print = print.indent();
 
-                        let parent_context =
-                            ParentContext::new(self.inner.clone(), name.into(), *author);
+                        let parent_context = ParentContext::new(
+                            self.branch_id,
+                            self.inner.clone(),
+                            name.into(),
+                            *author,
+                        );
 
                         let file = File::open(
                             inner.blob.branch().clone(),
@@ -361,8 +372,12 @@ impl Directory {
                     EntryData::Directory(data) => {
                         let print = print.indent();
 
-                        let parent_context =
-                            ParentContext::new(self.inner.clone(), name.into(), *author);
+                        let parent_context = ParentContext::new(
+                            self.branch_id,
+                            self.inner.clone(),
+                            name.into(),
+                            *author,
+                        );
 
                         let dir = inner
                             .open_directories
@@ -387,6 +402,10 @@ impl Directory {
                 }
             }
         }
+    }
+
+    pub fn branch_id(&self) -> &ReplicaId {
+        &self.branch_id
     }
 }
 
@@ -480,7 +499,12 @@ impl Writer<'_> {
             .await?;
 
         let locator = Locator::head(blob_id);
-        let parent = ParentContext::new(self.outer.inner.clone(), name, author);
+        let parent = ParentContext::new(
+            *self.outer.branch_id(),
+            self.outer.inner.clone(),
+            name,
+            author,
+        );
 
         Ok((locator, parent))
     }

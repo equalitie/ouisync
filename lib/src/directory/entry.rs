@@ -302,6 +302,7 @@ struct RefInner<'a> {
 impl RefInner<'_> {
     fn parent_context(&self) -> ParentContext {
         ParentContext::new(
+            self.parent_outer.branch_id,
             self.parent_outer.inner.clone(),
             self.name.into(),
             *self.author,

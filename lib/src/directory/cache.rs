@@ -23,6 +23,7 @@ impl RootDirectoryCache {
 
         if let Some(inner) = inner.upgrade() {
             Ok(Directory {
+                branch_id: *owner_branch.id(),
                 inner,
                 local_branch,
             })
@@ -38,6 +39,7 @@ impl RootDirectoryCache {
 
         if let Some(inner) = inner.upgrade() {
             Ok(Directory {
+                branch_id: *branch.id(),
                 inner,
                 local_branch: branch,
             })
@@ -70,6 +72,7 @@ impl SubdirectoryCache {
             hash_map::Entry::Occupied(mut entry) => {
                 if let Some(inner) = entry.get().upgrade() {
                     Directory {
+                        branch_id: *owner_branch.id(),
                         inner,
                         local_branch,
                     }
