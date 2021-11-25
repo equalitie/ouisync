@@ -747,8 +747,8 @@ mod tests {
 
         // The deadlock here happened because the reader lock when opening the directory is
         // acquired in the opposite order to the writer lock acqurired from flushing. I.e. the
-        // reader lock acquires `/` and then `/dir`, but flushing acquires `/dir` first and then
-        // `/`.
+        // reader lock acquires `/` and then `/dir`, but flushing acquires `/dir` first and
+        // then `/`.
         let create_dir = scoped_task::spawn({
             let repo = repo.clone();
             async move {
@@ -760,8 +760,18 @@ mod tests {
         let open_dir = scoped_task::spawn({
             let repo = repo.clone();
             async move {
-                let dir = repo.open_directory(path).await.unwrap();
-                dir.read().await.entries().count();
+                for _ in 1..10 {
+                    if let Ok(dir) = repo.open_directory(path).await {
+                        dir.read().await.entries().count();
+                        return;
+                    }
+                    // Sometimes opening the directory may outrace its creation,
+                    // so continue to retry again.
+                }
+                assert!(
+                    false,
+                    "Failed to open the directory after multiple attempts"
+                );
             }
         });
 
