@@ -40,8 +40,7 @@ impl Client {
                 .send(Request::RootNode {
                     cookie: self.cookie,
                 })
-                .await
-                .unwrap_or(());
+                .await;
 
             loop {
                 // TODO: add a timeout here and send the request again if it expires before we
@@ -117,8 +116,7 @@ impl Client {
                     parent_hash: hash,
                     inner_layer: 0,
                 })
-                .await
-                .unwrap_or(());
+                .await;
         }
 
         Ok(status.complete)
@@ -141,10 +139,7 @@ impl Client {
             .await?;
 
         for hash in status.updated {
-            self.stream
-                .send(child_request(hash, inner_layer))
-                .await
-                .unwrap_or(())
+            self.stream.send(child_request(hash, inner_layer)).await;
         }
 
         Ok(status.complete)
@@ -160,10 +155,7 @@ impl Client {
 
         for block_id in status.updated {
             // TODO: avoid multiple clients downloading the same block
-            self.stream
-                .send(Request::Block(block_id))
-                .await
-                .unwrap_or(());
+            self.stream.send(Request::Block(block_id)).await;
         }
 
         Ok(status.complete)

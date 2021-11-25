@@ -212,6 +212,8 @@ impl MessageDispatcher {
     }
 }
 
+// TODO: implement Drop to close all streams/sink on drop
+
 pub(super) struct ContentStream {
     id: PublicRepositoryId,
     state: Arc<RecvState>,
@@ -227,6 +229,10 @@ impl ContentStream {
             state,
             queues_changed_rx,
         }
+    }
+
+    pub fn id(&self) -> &PublicRepositoryId {
+        &self.id
     }
 
     /// Receive the next message content.
@@ -267,6 +273,7 @@ impl Drop for ContentStream {
     }
 }
 
+#[derive(Clone)]
 pub(super) struct ContentSink {
     id: PublicRepositoryId,
     state: Arc<MessageMultiSink>,

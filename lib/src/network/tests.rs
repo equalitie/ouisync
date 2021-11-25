@@ -1,3 +1,5 @@
+/* FIXME: uncomment these tests
+
 use super::{
     client::Client,
     message::{Message, Request, Response},
@@ -287,3 +289,5 @@ where
         }
     }
 }
+
+*/

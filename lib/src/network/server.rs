@@ -101,8 +101,7 @@ impl Server {
                         hash: node.hash,
                         summary: node.summary,
                     })
-                    .await
-                    .unwrap_or(());
+                    .await;
                 return Ok(());
             }
         }
@@ -121,8 +120,7 @@ impl Server {
                 inner_layer,
                 nodes,
             })
-            .await
-            .unwrap_or(());
+            .await;
 
         Ok(())
     }
@@ -132,8 +130,7 @@ impl Server {
 
         self.stream
             .send(Response::LeafNodes { parent_hash, nodes })
-            .await
-            .unwrap_or(());
+            .await;
 
         Ok(())
     }
@@ -158,8 +155,7 @@ impl Server {
                 content,
                 auth_tag,
             })
-            .await
-            .unwrap_or(());
+            .await;
 
         Ok(())
     }

@@ -120,14 +120,6 @@ impl Drop for ConnectionPermit {
 /// See [`ConnectionPermit::split`] for more details.
 pub(super) struct ConnectionPermitHalf(ConnectionPermit);
 
-impl ConnectionPermitHalf {
-    /// Dummy connection permit for tests.
-    #[cfg(test)]
-    pub fn dummy() -> Self {
-        Self(ConnectionPermit::dummy())
-    }
-}
-
 #[derive(Clone, Copy, Eq, PartialEq, Hash)]
 struct ConnectionKey {
     dir: ConnectionDirection,
