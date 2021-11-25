@@ -1,68 +1,12 @@
-use super::{message::Message, message_io::MessageSink};
-use futures_util::SinkExt;
 use std::{
     collections::{hash_map::Entry, HashMap},
     net::SocketAddr,
     sync::{
-        atomic::{AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicU64, Ordering},
         Arc, Mutex as SyncMutex,
     },
 };
-use tokio::{
-    net::tcp,
-    sync::{Mutex, Notify},
-};
-
-type WriterData = Arc<Mutex<MessageSink>>;
-
-/// Wrapper for arbitrary number of `TcpObjectWriter`s which writes to the first available one.
-pub(super) struct MultiWriter {
-    // Using Mutexes and RwLocks here because we want the `add` and `write` functions to be const.
-    // That will allow us to call them from two different coroutines. Note that we don't want this
-    // whole structure to wrap because we don't want the `add` function to be blocking.
-    next_id: AtomicUsize,
-    writers: std::sync::RwLock<HashMap<usize, WriterData>>,
-}
-
-impl MultiWriter {
-    pub fn new() -> Self {
-        Self {
-            next_id: AtomicUsize::new(0),
-            writers: std::sync::RwLock::new(HashMap::new()),
-        }
-    }
-
-    pub fn add(&self, writer: tcp::OwnedWriteHalf, permit: ConnectionPermitHalf) {
-        // `Relaxed` ordering should be sufficient here because this is just a simple counter.
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-
-        self.writers
-            .write()
-            .unwrap()
-            .insert(id, Arc::new(Mutex::new(MessageSink::new(writer, permit))));
-    }
-
-    pub async fn write(&self, message: &Message) -> bool {
-        while let Some((id, writer)) = self.pick_writer().await {
-            if writer.lock().await.send(message).await.is_ok() {
-                return true;
-            }
-
-            self.writers.write().unwrap().remove(&id);
-        }
-
-        false
-    }
-
-    async fn pick_writer(&self) -> Option<(usize, Arc<Mutex<MessageSink>>)> {
-        self.writers
-            .read()
-            .unwrap()
-            .iter()
-            .next()
-            .map(|(id, writer)| (*id, writer.clone()))
-    }
-}
+use tokio::sync::Notify;
 
 /// Prevents establishing duplicate connections.
 pub(super) struct ConnectionDeduplicator {

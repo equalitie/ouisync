@@ -1,9 +1,11 @@
+//! Utilities for sending and receiving messages across the network.
+
 use super::{
     connection::ConnectionPermitHalf,
     message::Message,
     object_stream::{ObjectRead, ObjectWrite},
 };
-use futures_util::{stream::SelectAll, Sink, Stream, StreamExt};
+use futures_util::{stream::SelectAll, SinkExt, Stream, StreamExt};
 use std::{
     io,
     pin::Pin,
@@ -44,6 +46,9 @@ impl Stream for MessageStream {
 }
 
 /// Sink for `Message` backend by a `TcpStream`.
+///
+/// NOTE: We don't actually implement the `Sink` trait here because it's quite boilerplate-y and we
+/// don't need it. There is just a simple async `send` method instead.
 pub(super) struct MessageSink {
     inner: ObjectWrite<Message, tcp::OwnedWriteHalf>,
     _permit: ConnectionPermitHalf,
@@ -56,32 +61,23 @@ impl MessageSink {
             _permit: permit,
         }
     }
-}
 
-impl<'a> Sink<&'a Message> for MessageSink {
-    type Error = io::Error;
-
-    fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Pin::new(&mut self.inner).poll_ready(cx)
-    }
-
-    fn start_send(mut self: Pin<&mut Self>, item: &'a Message) -> Result<(), Self::Error> {
-        Pin::new(&mut self.inner).start_send(item)
-    }
-
-    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Pin::new(&mut self.inner).poll_flush(cx)
-    }
-
-    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Pin::new(&mut self.inner).poll_close(cx)
+    pub async fn send(&mut self, message: &Message) -> io::Result<()> {
+        self.inner.send(message).await
     }
 }
 
 /// Stream that reads `Message`s from multiple underlying TCP streams.
 pub(super) struct MultiReader {
+    // Streams that are being read from. Protected by an async mutex so we don't require &mut
+    // access to read them.
     active: AsyncMutex<SelectAll<MessageStream>>,
+    // Streams recently added but not yet being read from. Protected by a regular blocking mutex
+    // because we only ever lock it for very short time and never across await points.
     new: BlockingMutex<Vec<MessageStream>>,
+    // This notify gets signaled when we add new stream(s) to the `new` collection. It interrupts
+    // the currently ongoing `recv` (if any) which will then transfer the streams from `new` to
+    // `active` and resume the read.
     new_notify: Notify,
 }
 
@@ -113,7 +109,46 @@ impl MultiReader {
     }
 }
 
-// /// Sink that writes to the first available underlying TCP stream.
-// pub(super) struct MultiWriter {
-//     inner: Vec<ObjectWrite<Message, tcp::OwnedWriteHalf>>,
-// }
+/// Sink that writes to the first available underlying TCP stream.
+///
+/// NOTE: Doesn't actually implement the `Sink` trait currently because we don't need it.
+pub(super) struct MultiWriter {
+    // The sink currently used to write messages.
+    active: AsyncMutex<Option<MessageSink>>,
+    // Other sinks to replace the active sinks in case it fails.
+    backup: BlockingMutex<Vec<MessageSink>>,
+}
+
+impl MultiWriter {
+    pub fn new() -> Self {
+        Self {
+            active: AsyncMutex::new(None),
+            backup: BlockingMutex::new(Vec::new()),
+        }
+    }
+
+    pub fn add(&self, sink: MessageSink) {
+        self.backup.lock().unwrap().push(sink)
+    }
+
+    /// Returns whether the send succeeded.
+    pub async fn send(&self, message: &Message) -> bool {
+        let mut active = self.active.lock().await;
+
+        loop {
+            let sink = if let Some(sink) = &mut *active {
+                sink
+            } else if let Some(sink) = self.backup.lock().unwrap().pop() {
+                active.insert(sink)
+            } else {
+                return false;
+            };
+
+            if sink.send(message).await.is_ok() {
+                return true;
+            }
+
+            *active = None;
+        }
+    }
+}

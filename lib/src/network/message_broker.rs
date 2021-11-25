@@ -1,8 +1,8 @@
 use super::{
     client::Client,
-    connection::{ConnectionPermit, MultiWriter},
+    connection::ConnectionPermit,
     message::{Content, Message, Request, Response},
-    message_io::{MessageStream, MultiReader},
+    message_io::{MessageSink, MessageStream, MultiReader, MultiWriter},
     server::Server,
 };
 use crate::{
@@ -112,17 +112,14 @@ impl MessageBroker {
     pub fn new(stream: TcpStream, permit: ConnectionPermit) -> Self {
         let (command_tx, command_rx) = mpsc::channel(1);
 
-        // unwrap is ok here because the channel is currently empty and one receiver exists.
-        command_tx
-            .try_send(Command::AddConnection(stream, permit))
-            .unwrap();
-
         let inner = Inner {
             command_tx: command_tx.clone(),
             reader: MultiReader::new(),
             writer: MultiWriter::new(),
             links: RwLock::new(Links::new()),
         };
+
+        inner.add_connection(stream, permit);
 
         let handle = task::spawn(inner.run(command_rx));
 
@@ -228,7 +225,7 @@ impl Inner {
     async fn handle_command(&self, command: Command) -> bool {
         match command {
             Command::AddConnection(stream, permit) => {
-                self.add_connection(stream, permit).await;
+                self.add_connection(stream, permit);
                 true
             }
             Command::SendMessage(message) => self.send_message(message).await,
@@ -248,16 +245,16 @@ impl Inner {
         }
     }
 
-    async fn add_connection(&self, stream: TcpStream, permit: ConnectionPermit) {
+    fn add_connection(&self, stream: TcpStream, permit: ConnectionPermit) {
         let (reader, writer) = stream.into_split();
         let (reader_permit, writer_permit) = permit.split();
 
         self.reader.add(MessageStream::new(reader, reader_permit));
-        self.writer.add(writer, writer_permit);
+        self.writer.add(MessageSink::new(writer, writer_permit));
     }
 
     async fn send_message(&self, message: Message) -> bool {
-        self.writer.write(&message).await
+        self.writer.send(&message).await
     }
 
     async fn create_outgoing_link(&self, id: PublicRepositoryId, index: Index) -> bool {
@@ -275,7 +272,7 @@ impl Inner {
 
         if !self
             .writer
-            .write(&Message {
+            .send(&Message {
                 id,
                 content: Content::CreateLink,
             })
