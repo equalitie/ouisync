@@ -149,7 +149,7 @@ impl Inner {
                     self.handle_command(command)
                 }
                 Some(stream) = incoming.recv() => {
-                    self.insert_incoming_link(stream)
+                    self.insert_link(*stream.id(), HalfLink::Incoming(stream))
                 }
                 else => break,
             }
@@ -159,58 +159,44 @@ impl Inner {
     fn handle_command(&mut self, command: Command) {
         match command {
             Command::AddConnection(stream, permit) => self.add_connection(stream, permit),
-            Command::CreateLink { id, index } => self.insert_outgoing_link(id, index),
+            Command::CreateLink { id, index } => {
+                let sink = self.open_sink(id);
+                self.insert_link(id, HalfLink::Outgoing(index, sink));
+            }
             Command::DestroyLink { id } => {
                 self.links.remove(&id);
             }
         }
     }
 
-    fn insert_incoming_link(&mut self, stream: ContentStream) {
-        match self.links.remove_entry(stream.id()) {
-            Some((id, Link::Outgoing(index, sink))) => {
-                self.links.insert(id, create_full_link(index, stream, sink));
-            }
-            Some((id, Link::Incoming(..))) => {
-                self.links.insert(id, Link::Incoming(stream));
-            }
-            Some((id, Link::Full(abort_tx))) => {
-                if abort_tx.is_closed() {
-                    self.links.insert(id, Link::Incoming(stream));
-                } else {
-                    log::warn!("not creating incoming link for {:?} - already exists", id);
-                    self.links.insert(id, Link::Full(abort_tx));
-                }
-            }
-            None => {
-                self.links.insert(*stream.id(), Link::Incoming(stream));
-            }
-        }
-    }
+    fn insert_link(&mut self, id: PublicRepositoryId, new: HalfLink) {
+        use HalfLink::*;
+        use Link::*;
 
-    fn insert_outgoing_link(&mut self, id: PublicRepositoryId, index: Index) {
-        match self.links.remove(&id) {
-            Some(Link::Outgoing(index, sink)) => {
-                log::warn!("not creating outgoing link for {:?} - already exists", id);
-                self.links.insert(id, Link::Outgoing(index, sink));
+        let old = self.links.remove(&id);
+        let new = match (old, new) {
+            (Some(Half(Outgoing(index, sink))), Outgoing(..)) => {
+                log::warn!("not creating link for {:?} - already exists", id);
+                Half(Outgoing(index, sink))
             }
-            Some(Link::Incoming(stream)) => {
-                let sink = self.open_sink(id);
-                self.links.insert(id, create_full_link(index, stream, sink));
+            (Some(Half(Outgoing(index, sink))), Incoming(stream))
+            | (Some(Half(Incoming(stream))), Outgoing(index, sink)) => {
+                log::debug!("creating link for {:?}", stream.id());
+                create_full_link(index, stream, sink)
             }
-            Some(Link::Full(abort_tx)) => {
+            (Some(Half(Incoming(_))), Incoming(stream)) => Half(Incoming(stream)),
+            (Some(Full(abort_tx)), link) => {
                 if abort_tx.is_closed() {
-                    let sink = self.open_sink(id);
-                    self.links.insert(id, Link::Outgoing(index, sink));
+                    Half(link)
                 } else {
-                    log::warn!("not creating outgoing link for {:?} - already exists", id);
+                    log::warn!("not creating link for {:?} - already exists", id);
+                    Full(abort_tx)
                 }
             }
-            None => {
-                let sink = self.open_sink(id);
-                self.links.insert(id, Link::Outgoing(index, sink));
-            }
-        }
+            (None, link) => Half(link),
+        };
+
+        self.links.insert(id, new);
     }
 
     fn open_sink(&self, id: PublicRepositoryId) -> ContentSink {
@@ -258,12 +244,17 @@ impl fmt::Debug for Command {
 }
 
 enum Link {
+    // Link partially established by only one party.
+    Half(HalfLink),
+    // Link fully established by both parties.
+    Full(oneshot::Sender<()>),
+}
+
+enum HalfLink {
     // Link established by us but not by the peer.
     Outgoing(Index, ContentSink),
     // Link established by the peer but not by us.
     Incoming(ContentStream),
-    // Link fully established by both parties.
-    Full(oneshot::Sender<()>),
 }
 
 fn create_full_link(index: Index, stream: ContentStream, sink: ContentSink) -> Link {
@@ -280,8 +271,6 @@ fn create_full_link(index: Index, stream: ContentStream, sink: ContentSink) -> L
 }
 
 async fn run_link(index: Index, mut stream: ContentStream, sink: ContentSink) {
-    log::debug!("creating link for {:?}", stream.id());
-
     let (request_tx, request_rx) = mpsc::channel(1);
     let (response_tx, response_rx) = mpsc::channel(1);
     let (content_tx, mut content_rx) = mpsc::channel(1);
