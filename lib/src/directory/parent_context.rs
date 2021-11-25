@@ -9,6 +9,9 @@ use tokio::sync::RwLock;
 /// Info about an entry in the context of its parent directory.
 #[derive(Clone)]
 pub(crate) struct ParentContext {
+    /// Equivalent to `directory_inner.read().await.branch().id()` but access to it doesn't require
+    /// locking.
+    branch_id: ReplicaId,
     /// The shared part of the parent directory of the entry.
     directory_inner: Arc<RwLock<Inner>>,
     /// The name of the entry in its parent directory.
@@ -20,11 +23,13 @@ pub(crate) struct ParentContext {
 
 impl ParentContext {
     pub(super) fn new(
+        branch_id: ReplicaId,
         directory_inner: Arc<RwLock<Inner>>,
         entry_name: String,
         entry_author: ReplicaId,
     ) -> Self {
         Self {
+            branch_id,
             directory_inner,
             entry_name,
             entry_author,
@@ -77,6 +82,7 @@ impl ParentContext {
     /// Returns the parent directory of the entry bound to the given local branch.
     pub fn directory(&self, local_branch: Branch) -> Directory {
         Directory {
+            branch_id: self.branch_id,
             inner: self.directory_inner.clone(),
             local_branch,
         }

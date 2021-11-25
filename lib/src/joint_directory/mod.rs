@@ -33,13 +33,9 @@ impl JointDirectory {
     where
         I: IntoIterator<Item = Directory>,
     {
-        let versions: BTreeMap<_, _> =
-            future::join_all(versions.into_iter().map(|dir| async move {
-                let branch_id = *dir.read().await.branch().id();
-                (branch_id, dir)
-            }))
-            .await
+        let versions: BTreeMap<_, _> = versions
             .into_iter()
+            .map(|dir| (*dir.branch_id(), dir))
             .collect();
 
         Self { versions }
