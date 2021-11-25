@@ -1,7 +1,7 @@
 //! Utilities for sending and receiving messages across the network.
 
 use super::{
-    connection::ConnectionPermitHalf,
+    connection::{ConnectionPermit, ConnectionPermitHalf},
     message::{Content, Message},
     object_stream::{ObjectRead, ObjectWrite},
 };
@@ -15,7 +15,7 @@ use std::{
     task::{Context, Poll},
 };
 use tokio::{
-    net::tcp,
+    net::{tcp, TcpStream},
     select,
     sync::{watch, Mutex as AsyncMutex, Notify},
 };
@@ -70,7 +70,7 @@ impl MessageSink {
 }
 
 /// Stream that reads `Message`s from multiple underlying TCP streams.
-pub(super) struct MultiReader {
+pub(super) struct MessageMultiStream {
     // Streams that are being read from. Protected by an async mutex so we don't require &mut
     // access to read them.
     active: AsyncMutex<SelectAll<MessageStream>>,
@@ -83,7 +83,7 @@ pub(super) struct MultiReader {
     new_notify: Notify,
 }
 
-impl MultiReader {
+impl MessageMultiStream {
     pub fn new() -> Self {
         Self {
             active: AsyncMutex::new(SelectAll::new()),
@@ -111,18 +111,18 @@ impl MultiReader {
     }
 }
 
-/// Sink that writes to the first available underlying TCP stream.
+/// Sink that writes to the first available of multiple underlying TCP streams.
 ///
 /// NOTE: Doesn't actually implement the `Sink` trait currently because we don't need it, only
 /// provides a simple async `send` method.
-pub(super) struct MultiWriter {
+pub(super) struct MessageMultiSink {
     // The sink currently used to write messages.
     active: AsyncMutex<Option<MessageSink>>,
     // Other sinks to replace the active sinks in case it fails.
     backup: BlockingMutex<Vec<MessageSink>>,
 }
 
-impl MultiWriter {
+impl MessageMultiSink {
     pub fn new() -> Self {
         Self {
             active: AsyncMutex::new(None),
@@ -159,7 +159,8 @@ impl MultiWriter {
 /// Reads messages from the underlying TCP streams and dispatches them to individual streams based
 /// on their ids.
 pub(super) struct MessageDispatcher {
-    shared: Arc<Shared>,
+    recv: Arc<RecvState>,
+    send: Arc<MessageMultiSink>,
 }
 
 impl MessageDispatcher {
@@ -167,46 +168,63 @@ impl MessageDispatcher {
         let (queues_changed_tx, _) = watch::channel(());
 
         Self {
-            shared: Arc::new(Shared {
-                reader: MultiReader::new(),
+            recv: Arc::new(RecvState {
+                reader: MessageMultiStream::new(),
                 queues: BlockingMutex::new(Queues::default()),
                 queues_changed_tx,
             }),
+            send: Arc::new(MessageMultiSink::new()),
         }
     }
 
-    pub fn add_message_stream(&self, stream: MessageStream) {
-        self.shared.reader.add(stream);
+    /// Bind this dispatcher to the fiven TCP socket. Can be bound to multiple sockets and the
+    /// failed ones are automatically removed.
+    pub fn bind(&self, stream: TcpStream, permit: ConnectionPermit) {
+        let (reader, writer) = stream.into_split();
+        let (reader_permit, writer_permit) = permit.split();
+
+        self.recv
+            .reader
+            .add(MessageStream::new(reader, reader_permit));
+        self.send.add(MessageSink::new(writer, writer_permit));
     }
 
-    /// Creates a stream that will yield messages with the given id.
-    pub fn subscribe(&self, id: PublicRepositoryId) -> ContentStream {
-        self.shared.claim(id);
-        ContentStream::new(id, self.shared.clone())
+    /// Opens a stream for receiving messages with the given id.
+    pub fn open_recv(&self, id: PublicRepositoryId) -> ContentStream {
+        self.recv.claim(id);
+        ContentStream::new(id, self.recv.clone())
     }
 
-    /// Creates a stream that will yield `ContentStream`s that haven't been subscribed to yet.
+    /// Opens a sink for sending messages with the given id.
+    pub fn open_send(&self, id: PublicRepositoryId) -> ContentSink {
+        ContentSink {
+            id,
+            state: self.send.clone(),
+        }
+    }
+
+    /// Creates a stream that will yield `ContentStream`s that haven't been opened yet.
     pub fn incoming(&self) -> IncomingContentStreams {
         IncomingContentStreams {
-            shared: self.shared.clone(),
-            queues_changed_rx: self.shared.queues_changed_tx.subscribe(),
+            state: self.recv.clone(),
+            queues_changed_rx: self.recv.queues_changed_tx.subscribe(),
         }
     }
 }
 
 pub(super) struct ContentStream {
     id: PublicRepositoryId,
-    shared: Arc<Shared>,
+    state: Arc<RecvState>,
     queues_changed_rx: watch::Receiver<()>,
 }
 
 impl ContentStream {
-    fn new(id: PublicRepositoryId, shared: Arc<Shared>) -> Self {
-        let queues_changed_rx = shared.queues_changed_tx.subscribe();
+    fn new(id: PublicRepositoryId, state: Arc<RecvState>) -> Self {
+        let queues_changed_rx = state.queues_changed_tx.subscribe();
 
         Self {
             id,
-            shared,
+            state,
             queues_changed_rx,
         }
     }
@@ -216,7 +234,7 @@ impl ContentStream {
         let mut closed = false;
 
         loop {
-            if let Some(content) = self.shared.pop(&self.id) {
+            if let Some(content) = self.state.pop(&self.id) {
                 return Some(content);
             }
 
@@ -225,11 +243,11 @@ impl ContentStream {
             }
 
             select! {
-                Some(message) = self.shared.reader.recv() => {
+                Some(message) = self.state.reader.recv() => {
                     if message.id == self.id {
                         return Some(message.content);
                     } else {
-                        self.shared.push(message)
+                        self.state.push(message)
                     }
                 }
                 _ = self.queues_changed_rx.changed() => (),
@@ -245,12 +263,29 @@ impl ContentStream {
 
 impl Drop for ContentStream {
     fn drop(&mut self) {
-        self.shared.abandon(&self.id)
+        self.state.abandon(&self.id)
+    }
+}
+
+pub(super) struct ContentSink {
+    id: PublicRepositoryId,
+    state: Arc<MessageMultiSink>,
+}
+
+impl ContentSink {
+    /// Returns whether the send succeeded.
+    pub async fn send(&self, content: Content) -> bool {
+        self.state
+            .send(&Message {
+                id: self.id,
+                content,
+            })
+            .await
     }
 }
 
 pub(super) struct IncomingContentStreams {
-    shared: Arc<Shared>,
+    state: Arc<RecvState>,
     queues_changed_rx: watch::Receiver<()>,
 }
 
@@ -259,8 +294,8 @@ impl IncomingContentStreams {
         let mut closed = false;
 
         loop {
-            if let Some(id) = self.shared.claim_any() {
-                return Some(ContentStream::new(id, self.shared.clone()));
+            if let Some(id) = self.state.claim_any() {
+                return Some(ContentStream::new(id, self.state.clone()));
             }
 
             if closed {
@@ -268,8 +303,8 @@ impl IncomingContentStreams {
             }
 
             select! {
-                Some(message) = self.shared.reader.recv() => {
-                    self.shared.push(message)
+                Some(message) = self.state.reader.recv() => {
+                    self.state.push(message)
                 }
                 _ = self.queues_changed_rx.changed() => (),
                 else => {
@@ -280,13 +315,13 @@ impl IncomingContentStreams {
     }
 }
 
-struct Shared {
-    reader: MultiReader,
+struct RecvState {
+    reader: MessageMultiStream,
     queues: BlockingMutex<Queues>,
     queues_changed_tx: watch::Sender<()>,
 }
 
-impl Shared {
+impl RecvState {
     // Pops a message content from the given claimed queue.
     fn pop(&self, id: &PublicRepositoryId) -> Option<Content> {
         self.queues.lock().unwrap().claimed.get_mut(id)?.pop_back()
@@ -359,7 +394,7 @@ mod tests {
     use tokio::net::{TcpListener, TcpStream};
 
     #[tokio::test]
-    async fn message_dispatcher_recv_on_subscribed() {
+    async fn message_dispatcher_recv_on_stream() {
         let (mut client, server) = setup().await;
 
         let repo_id = PublicRepositoryId::random();
@@ -373,7 +408,7 @@ mod tests {
             .await
             .unwrap();
 
-        let mut server_stream = server.subscribe(repo_id);
+        let mut server_stream = server.open_recv(repo_id);
 
         let content = server_stream.recv().await.unwrap();
         assert_matches!(content, Content::Request(Request::Block(recv_block_id)) => {
@@ -406,7 +441,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn message_dispatcher_recv_on_two_subscribed() {
+    async fn message_dispatcher_recv_on_two_streams() {
         let (mut client, server) = setup().await;
 
         let repo_id0 = PublicRepositoryId::random();
@@ -425,8 +460,8 @@ mod tests {
                 .unwrap();
         }
 
-        let server_stream0 = server.subscribe(repo_id0);
-        let server_stream1 = server.subscribe(repo_id1);
+        let server_stream0 = server.open_recv(repo_id0);
+        let server_stream1 = server.open_recv(repo_id1);
 
         for (mut server_stream, send_block_id) in [
             (server_stream0, send_block_id0),
@@ -458,7 +493,7 @@ mod tests {
                 .unwrap();
         }
 
-        let mut server_stream = server.subscribe(repo_id);
+        let mut server_stream = server.open_recv(repo_id);
         let mut server_incoming = server.incoming();
 
         let content = server_stream.recv().await.unwrap();
@@ -481,15 +516,11 @@ mod tests {
             .await
             .unwrap();
         let (server, _) = listener.accept().await.unwrap();
-        let (server_reader, _) = server.into_split();
 
         let client_writer = ObjectWrite::new(client);
 
         let server_dispatcher = MessageDispatcher::new();
-        server_dispatcher.add_message_stream(MessageStream::new(
-            server_reader,
-            ConnectionPermitHalf::dummy(),
-        ));
+        server_dispatcher.bind(server, ConnectionPermit::dummy());
 
         (client_writer, server_dispatcher)
     }
