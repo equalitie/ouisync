@@ -6,19 +6,19 @@ use super::{
     object_stream::{ObjectRead, ObjectWrite},
 };
 use crate::repository::PublicRepositoryId;
-use futures_util::{stream::SelectAll, SinkExt, Stream, StreamExt};
+use futures_util::{stream::SelectAll, Sink, SinkExt, Stream, StreamExt};
 use std::{
     collections::{HashMap, VecDeque},
     future::Future,
     io,
     pin::Pin,
-    sync::{Arc, Mutex as BlockingMutex},
+    sync::{Arc, Mutex},
     task::{Context, Poll, Waker},
 };
 use tokio::{
     net::{tcp, TcpStream},
     select,
-    sync::{watch, Mutex as AsyncMutex},
+    sync::watch,
 };
 
 /// Stream of `Message` backed by a `TcpStream`. Closes on first error.
@@ -48,10 +48,7 @@ impl Stream for MessageStream {
     }
 }
 
-/// Sink for `Message` backend by a `TcpStream`.
-///
-/// NOTE: We don't actually implement the `Sink` trait here because it's quite boilerplate-y and we
-/// don't need it. There is just a simple async `send` method instead.
+/// Sink for `Message` backed by a `TcpStream`.
 pub(super) struct MessageSink {
     inner: ObjectWrite<Message, tcp::OwnedWriteHalf>,
     _permit: ConnectionPermitHalf,
@@ -64,21 +61,37 @@ impl MessageSink {
             _permit: permit,
         }
     }
+}
 
-    pub async fn send(&mut self, message: &Message) -> io::Result<()> {
-        self.inner.send(message).await
+impl<'a> Sink<&'a Message> for MessageSink {
+    type Error = io::Error;
+
+    fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready_unpin(cx)
+    }
+
+    fn start_send(mut self: Pin<&mut Self>, item: &'a Message) -> Result<(), Self::Error> {
+        self.inner.start_send_unpin(item)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_flush_unpin(cx)
+    }
+
+    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_close_unpin(cx)
     }
 }
 
 /// Stream that reads `Message`s from multiple underlying TCP streams concurrently.
 pub(super) struct MessageMultiStream {
-    inner: BlockingMutex<Inner>,
+    inner: Mutex<StreamInner>,
 }
 
 impl MessageMultiStream {
     pub fn new() -> Self {
         Self {
-            inner: BlockingMutex::new(Inner {
+            inner: Mutex::new(StreamInner {
                 streams: SelectAll::new(),
                 waker: None,
             }),
@@ -109,12 +122,12 @@ impl MessageMultiStream {
     }
 }
 
-struct Inner {
+struct StreamInner {
     streams: SelectAll<MessageStream>,
     waker: Option<Waker>,
 }
 
-impl Inner {
+impl StreamInner {
     fn wake(&mut self) {
         if let Some(waker) = self.waker.take() {
             waker.wake()
@@ -124,7 +137,7 @@ impl Inner {
 
 /// Future returned from [`MessageMultiStream::recv`].
 pub(super) struct Recv<'a> {
-    inner: &'a BlockingMutex<Inner>,
+    inner: &'a Mutex<StreamInner>,
 }
 
 impl Future for Recv<'_> {
@@ -149,44 +162,112 @@ impl Future for Recv<'_> {
 /// Sink that writes to the first available of multiple underlying TCP streams.
 ///
 /// NOTE: Doesn't actually implement the `Sink` trait currently because we don't need it, only
-/// provides a simple async `send` method.
+/// provides an async `send` method.
 pub(super) struct MessageMultiSink {
-    // The sink currently used to write messages.
-    active: AsyncMutex<Option<MessageSink>>,
-    // Other sinks to replace the active sinks in case it fails.
-    backup: BlockingMutex<Vec<MessageSink>>,
+    inner: Mutex<SinkInner>,
 }
 
 impl MessageMultiSink {
     pub fn new() -> Self {
         Self {
-            active: AsyncMutex::new(None),
-            backup: BlockingMutex::new(Vec::new()),
+            inner: Mutex::new(SinkInner {
+                sinks: Vec::new(),
+                waker: None,
+            }),
         }
     }
 
     pub fn add(&self, sink: MessageSink) {
-        self.backup.lock().unwrap().push(sink)
+        let mut inner = self.inner.lock().unwrap();
+        inner.sinks.push(sink);
+        inner.wake();
+    }
+
+    pub fn close(&self) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.sinks.clear();
+        inner.wake();
     }
 
     /// Returns whether the send succeeded.
-    pub async fn send(&self, message: &Message) -> bool {
-        let mut active = self.active.lock().await;
+    ///
+    /// Equivalent to
+    ///
+    /// ```ignore
+    /// async fn send(&self, message: &Message) -> bool;
+    /// ```
+    ///
+    pub fn send<'a>(&'a self, message: &'a Message) -> Send {
+        Send {
+            message,
+            pending: true,
+            inner: &self.inner,
+        }
+    }
+}
+
+struct SinkInner {
+    sinks: Vec<MessageSink>,
+    waker: Option<Waker>,
+}
+
+impl SinkInner {
+    fn wake(&mut self) {
+        if let Some(waker) = self.waker.take() {
+            waker.wake()
+        }
+    }
+}
+
+/// Future returned from [`MessageMultiSink::send`].
+pub(crate) struct Send<'a> {
+    message: &'a Message,
+    pending: bool,
+    inner: &'a Mutex<SinkInner>,
+}
+
+impl Future for Send<'_> {
+    type Output = bool;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let mut inner = self.inner.lock().unwrap();
 
         loop {
-            let sink = if let Some(sink) = &mut *active {
+            let sink = if let Some(sink) = inner.sinks.first_mut() {
                 sink
-            } else if let Some(sink) = self.backup.lock().unwrap().pop() {
-                active.insert(sink)
             } else {
-                return false;
+                return Poll::Ready(false);
             };
 
-            if sink.send(message).await.is_ok() {
-                return true;
+            match sink.poll_ready_unpin(cx) {
+                Poll::Ready(Ok(())) => {
+                    if !self.pending {
+                        return Poll::Ready(true);
+                    }
+                }
+                Poll::Ready(Err(_)) => {
+                    inner.sinks.swap_remove(0);
+                    self.pending = true;
+                    continue;
+                }
+                Poll::Pending => {
+                    if inner.waker.is_none() {
+                        inner.waker = Some(cx.waker().clone());
+                    }
+
+                    return Poll::Pending;
+                }
             }
 
-            *active = None;
+            match sink.start_send_unpin(self.message) {
+                Ok(()) => {
+                    self.pending = false;
+                }
+                Err(_) => {
+                    inner.sinks.swap_remove(0);
+                    self.pending = true;
+                }
+            }
         }
     }
 }
@@ -205,7 +286,7 @@ impl MessageDispatcher {
         Self {
             recv: Arc::new(RecvState {
                 reader: MessageMultiStream::new(),
-                queues: BlockingMutex::new(Queues::default()),
+                queues: Mutex::new(Queues::default()),
                 queues_changed_tx,
             }),
             send: Arc::new(MessageMultiSink::new()),
@@ -249,7 +330,8 @@ impl MessageDispatcher {
 
 impl Drop for MessageDispatcher {
     fn drop(&mut self) {
-        self.recv.reader.close()
+        self.recv.reader.close();
+        self.send.close();
     }
 }
 
@@ -365,7 +447,7 @@ impl IncomingContentStreams {
 
 struct RecvState {
     reader: MessageMultiStream,
-    queues: BlockingMutex<Queues>,
+    queues: Mutex<Queues>,
     queues_changed_tx: watch::Sender<()>,
 }
 
