@@ -48,11 +48,6 @@ impl PublicRepositoryId {
     }
 
     #[cfg(test)]
-    pub(crate) fn zero() -> Self {
-        Self(InfoHash::from([0; INFO_HASH_LEN]))
-    }
-
-    #[cfg(test)]
     pub(crate) fn random() -> Self {
         Self(rand::random())
     }

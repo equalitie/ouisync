@@ -1,9 +1,7 @@
-/* FIXME: uncomment these tests
-
 use super::{
     client::Client,
-    message::{Message, Request, Response},
-    message_broker::{ClientStream, Command, ServerStream},
+    message::{Content, Request, Response},
+    message_broker::{ClientStream, ServerStream},
     server::Server,
 };
 use crate::{
@@ -12,8 +10,7 @@ use crate::{
     db,
     index::{node_test_utils::Snapshot, Index, RootNode, Summary},
     replica_id::ReplicaId,
-    repository::{self, PublicRepositoryId},
-    store, test_utils,
+    repository, store, test_utils,
     version_vector::VersionVector,
 };
 use rand::prelude::*;
@@ -254,19 +251,19 @@ where
     }
 }
 
-fn create_server(index: Index) -> (Server, mpsc::Receiver<Command>, mpsc::Sender<Request>) {
+fn create_server(index: Index) -> (Server, mpsc::Receiver<Content>, mpsc::Sender<Request>) {
     let (send_tx, send_rx) = mpsc::channel(1);
     let (recv_tx, recv_rx) = mpsc::channel(CAPACITY);
-    let stream = ServerStream::new(send_tx, recv_rx, PublicRepositoryId::zero());
+    let stream = ServerStream::new(send_tx, recv_rx);
     let server = Server::new(index, stream);
 
     (server, send_rx, recv_tx)
 }
 
-fn create_client(index: Index) -> (Client, mpsc::Receiver<Command>, mpsc::Sender<Response>) {
+fn create_client(index: Index) -> (Client, mpsc::Receiver<Content>, mpsc::Sender<Response>) {
     let (send_tx, send_rx) = mpsc::channel(1);
     let (recv_tx, recv_rx) = mpsc::channel(CAPACITY);
-    let stream = ClientStream::new(send_tx, recv_rx, PublicRepositoryId::zero());
+    let stream = ClientStream::new(send_tx, recv_rx);
     let client = Client::new(index, stream);
 
     (client, send_rx, recv_tx)
@@ -274,20 +271,17 @@ fn create_client(index: Index) -> (Client, mpsc::Receiver<Command>, mpsc::Sender
 
 // Simulated connection between a server and a client.
 struct Connection<T> {
-    send_rx: mpsc::Receiver<Command>,
+    send_rx: mpsc::Receiver<Content>,
     recv_tx: mpsc::Sender<T>,
 }
 
 impl<T> Connection<T>
 where
-    T: From<Message> + fmt::Debug,
+    T: From<Content> + fmt::Debug,
 {
     async fn run(&mut self) {
-        while let Some(command) = self.send_rx.recv().await {
-            let message = command.into_send_message().into();
-            self.recv_tx.send(message).await.unwrap();
+        while let Some(content) = self.send_rx.recv().await {
+            self.recv_tx.send(content.into()).await.unwrap();
         }
     }
 }
-
-*/
