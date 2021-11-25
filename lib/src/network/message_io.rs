@@ -9,15 +9,16 @@ use crate::repository::PublicRepositoryId;
 use futures_util::{stream::SelectAll, SinkExt, Stream, StreamExt};
 use std::{
     collections::{HashMap, VecDeque},
+    future::Future,
     io,
     pin::Pin,
     sync::{Arc, Mutex as BlockingMutex},
-    task::{Context, Poll},
+    task::{Context, Poll, Waker},
 };
 use tokio::{
     net::{tcp, TcpStream},
     select,
-    sync::{watch, Mutex as AsyncMutex, Notify},
+    sync::{watch, Mutex as AsyncMutex},
 };
 
 /// Stream of `Message` backed by a `TcpStream`. Closes on first error.
@@ -69,43 +70,77 @@ impl MessageSink {
     }
 }
 
-/// Stream that reads `Message`s from multiple underlying TCP streams.
+/// Stream that reads `Message`s from multiple underlying TCP streams concurrently.
 pub(super) struct MessageMultiStream {
-    // Streams that are being read from. Protected by an async mutex so we don't require &mut
-    // access to read them.
-    active: AsyncMutex<SelectAll<MessageStream>>,
-    // Streams recently added but not yet being read from. Protected by a regular blocking mutex
-    // because we only ever lock it for very short time and never across await points.
-    new: BlockingMutex<Vec<MessageStream>>,
-    // This notify gets signaled when we add new stream(s) to the `new` collection. It interrupts
-    // the currently ongoing `recv` (if any) which will then transfer the streams from `new` to
-    // `active` and resume the read.
-    new_notify: Notify,
+    inner: BlockingMutex<Inner>,
 }
 
 impl MessageMultiStream {
     pub fn new() -> Self {
         Self {
-            active: AsyncMutex::new(SelectAll::new()),
-            new: BlockingMutex::new(Vec::new()),
-            new_notify: Notify::new(),
+            inner: BlockingMutex::new(Inner {
+                streams: SelectAll::new(),
+                waker: None,
+            }),
         }
     }
 
     pub fn add(&self, stream: MessageStream) {
-        self.new.lock().unwrap().push(stream);
-        self.new_notify.notify_one();
+        let mut inner = self.inner.lock().unwrap();
+        inner.streams.push(stream);
+        inner.wake();
     }
 
-    pub async fn recv(&self) -> Option<Message> {
-        let mut active = self.active.lock().await;
+    /// Receive next message from this stream. Equivalent to
+    ///
+    /// ```ignore
+    /// async fn recv(&self) -> Option<Message>;
+    /// ```
+    pub fn recv(&self) -> Recv {
+        Recv { inner: &self.inner }
+    }
 
-        loop {
-            active.extend(self.new.lock().unwrap().drain(..));
+    /// Closes this stream. Any subsequent `recv` will immediately return `None` unless new
+    /// streams are added first.
+    pub fn close(&self) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.streams.clear();
+        inner.wake();
+    }
+}
 
-            select! {
-                item = active.next() => return item,
-                _ = self.new_notify.notified() => {}
+struct Inner {
+    streams: SelectAll<MessageStream>,
+    waker: Option<Waker>,
+}
+
+impl Inner {
+    fn wake(&mut self) {
+        if let Some(waker) = self.waker.take() {
+            waker.wake()
+        }
+    }
+}
+
+/// Future returned from [`MessageMultiStream::recv`].
+pub(super) struct Recv<'a> {
+    inner: &'a BlockingMutex<Inner>,
+}
+
+impl Future for Recv<'_> {
+    type Output = Option<Message>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        let mut inner = self.inner.lock().unwrap();
+
+        match inner.streams.poll_next_unpin(cx) {
+            Poll::Ready(message) => Poll::Ready(message),
+            Poll::Pending => {
+                if inner.waker.is_none() {
+                    inner.waker = Some(cx.waker().clone());
+                }
+
+                Poll::Pending
             }
         }
     }
@@ -177,7 +212,7 @@ impl MessageDispatcher {
         }
     }
 
-    /// Bind this dispatcher to the fiven TCP socket. Can be bound to multiple sockets and the
+    /// Bind this dispatcher to the given TCP socket. Can be bound to multiple sockets and the
     /// failed ones are automatically removed.
     pub fn bind(&self, stream: TcpStream, permit: ConnectionPermit) {
         let (reader, writer) = stream.into_split();
@@ -212,7 +247,11 @@ impl MessageDispatcher {
     }
 }
 
-// TODO: implement Drop to close all streams/sink on drop
+impl Drop for MessageDispatcher {
+    fn drop(&mut self) {
+        self.recv.reader.close()
+    }
+}
 
 pub(super) struct ContentStream {
     id: PublicRepositoryId,
@@ -249,19 +288,20 @@ impl ContentStream {
             }
 
             select! {
-                Some(message) = self.state.reader.recv() => {
-                    if message.id == self.id {
-                        return Some(message.content);
+                message = self.state.reader.recv() => {
+                    if let Some(message) = message {
+                        if message.id == self.id {
+                            return Some(message.content);
+                        } else {
+                            self.state.push(message)
+                        }
                     } else {
-                        self.state.push(message)
+                        // If the reader closed we still want to check the queues one more time
+                        // before bailing out.
+                        closed = true;
                     }
                 }
-                _ = self.queues_changed_rx.changed() => (),
-                else => {
-                    // If the reader closed we still want to check the queues in case there are
-                    // messages for us before giving up.
-                    closed = true;
-                }
+                _ = self.queues_changed_rx.changed() => ()
             }
         }
     }
@@ -310,13 +350,14 @@ impl IncomingContentStreams {
             }
 
             select! {
-                Some(message) = self.state.reader.recv() => {
-                    self.state.push(message)
+                message = self.state.reader.recv() => {
+                    if let Some(message) = message {
+                        self.state.push(message)
+                    } else {
+                        closed = true;
+                    }
                 }
                 _ = self.queues_changed_rx.changed() => (),
-                else => {
-                    closed = true;
-                }
             }
         }
     }
@@ -517,18 +558,63 @@ mod tests {
         });
     }
 
-    async fn setup() -> (ObjectWrite<Message, TcpStream>, MessageDispatcher) {
-        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
-        let client = TcpStream::connect(listener.local_addr().unwrap())
+    #[tokio::test]
+    async fn message_dispatcher_drop_dispatcher() {
+        let (_client, server) = setup().await;
+
+        let repo_id = PublicRepositoryId::random();
+
+        let mut server_stream = server.open_recv(repo_id);
+        let mut server_incoming = server.incoming();
+
+        drop(server);
+
+        assert!(server_stream.recv().await.is_none());
+        assert!(server_incoming.recv().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn message_multi_stream_close() {
+        let (client, server) = create_connected_sockets().await;
+        let (server_reader, _server_writer) = server.into_split();
+
+        let stream = MessageMultiStream::new();
+        stream.add(MessageStream::new(
+            server_reader,
+            ConnectionPermit::dummy().split().0,
+        ));
+
+        let mut client = ObjectWrite::new(client);
+        client
+            .send(&Message {
+                id: PublicRepositoryId::random(),
+                content: Content::CreateLink,
+            })
             .await
             .unwrap();
-        let (server, _) = listener.accept().await.unwrap();
 
+        stream.close();
+
+        assert!(stream.recv().await.is_none());
+    }
+
+    async fn setup() -> (ObjectWrite<Message, TcpStream>, MessageDispatcher) {
+        let (client, server) = create_connected_sockets().await;
         let client_writer = ObjectWrite::new(client);
 
         let server_dispatcher = MessageDispatcher::new();
         server_dispatcher.bind(server, ConnectionPermit::dummy());
 
         (client_writer, server_dispatcher)
+    }
+
+    async fn create_connected_sockets() -> (TcpStream, TcpStream) {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (server, _) = listener.accept().await.unwrap();
+
+        (client, server)
     }
 }
