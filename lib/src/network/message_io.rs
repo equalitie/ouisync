@@ -286,7 +286,7 @@ impl MessageDispatcher {
         Self {
             recv: Arc::new(RecvState {
                 reader: MessageMultiStream::new(),
-                queues: Mutex::new(Queues::default()),
+                queues: Mutex::new(HashMap::default()),
                 queues_changed_tx,
             }),
             send: Arc::new(MessageMultiSink::new()),
@@ -307,7 +307,6 @@ impl MessageDispatcher {
 
     /// Opens a stream for receiving messages with the given id.
     pub fn open_recv(&self, id: PublicRepositoryId) -> ContentStream {
-        self.recv.claim(id);
         ContentStream::new(id, self.recv.clone())
     }
 
@@ -316,14 +315,6 @@ impl MessageDispatcher {
         ContentSink {
             id,
             state: self.send.clone(),
-        }
-    }
-
-    /// Creates a stream that will yield `ContentStream`s that haven't been opened yet.
-    pub fn incoming(&self) -> IncomingContentStreams {
-        IncomingContentStreams {
-            state: self.recv.clone(),
-            queues_changed_rx: self.recv.queues_changed_tx.subscribe(),
         }
     }
 }
@@ -379,19 +370,13 @@ impl ContentStream {
                         }
                     } else {
                         // If the reader closed we still want to check the queues one more time
-                        // before bailing out.
+                        // because other streams might have pushed a message in the meantime.
                         closed = true;
                     }
                 }
                 _ = self.queues_changed_rx.changed() => ()
             }
         }
-    }
-}
-
-impl Drop for ContentStream {
-    fn drop(&mut self) {
-        self.state.abandon(&self.id)
     }
 }
 
@@ -413,106 +398,29 @@ impl ContentSink {
     }
 }
 
-pub(super) struct IncomingContentStreams {
-    state: Arc<RecvState>,
-    queues_changed_rx: watch::Receiver<()>,
-}
-
-impl IncomingContentStreams {
-    pub async fn recv(&mut self) -> Option<ContentStream> {
-        let mut closed = false;
-
-        loop {
-            if let Some(id) = self.state.claim_any() {
-                return Some(ContentStream::new(id, self.state.clone()));
-            }
-
-            if closed {
-                return None;
-            }
-
-            select! {
-                message = self.state.reader.recv() => {
-                    if let Some(message) = message {
-                        self.state.push(message)
-                    } else {
-                        closed = true;
-                    }
-                }
-                _ = self.queues_changed_rx.changed() => (),
-            }
-        }
-    }
-}
-
 struct RecvState {
     reader: MessageMultiStream,
-    queues: Mutex<Queues>,
+    queues: Mutex<HashMap<PublicRepositoryId, VecDeque<Content>>>,
     queues_changed_tx: watch::Sender<()>,
 }
 
 impl RecvState {
-    // Pops a message content from the given claimed queue.
+    // Pops a message from the corresponding queue.
     fn pop(&self, id: &PublicRepositoryId) -> Option<Content> {
-        self.queues.lock().unwrap().claimed.get_mut(id)?.pop_back()
+        self.queues.lock().unwrap().get_mut(id)?.pop_back()
     }
 
-    // Pushes the message into the corresponding claimed queue if it exsits, otherwise puts it into
-    // backlog. Emits notification in either case.
+    // Pushes the message into the corresponding queue, creating it if it didn't exist. Wakes up any
+    // waiting streams so they can grab the message if it is for them.
     fn push(&self, message: Message) {
-        let mut queues = self.queues.lock().unwrap();
-        let queue = if let Some(queue) = queues.claimed.get_mut(&message.id) {
-            queue
-        } else {
-            queues.backlog.entry(message.id).or_default()
-        };
-
-        queue.push_front(message.content);
+        self.queues
+            .lock()
+            .unwrap()
+            .entry(message.id)
+            .or_default()
+            .push_front(message.content);
         self.queues_changed_tx.send(()).unwrap_or(());
     }
-
-    // Transfers the given queue from backlog into claimed. If it didn't exist in backlog, creates
-    // an empty one in claimed.
-    fn claim(&self, id: PublicRepositoryId) {
-        let mut queues = self.queues.lock().unwrap();
-
-        if let Some(queue) = queues.backlog.remove(&id) {
-            queues.claimed.insert(id, queue);
-        } else {
-            queues.claimed.insert(id, VecDeque::new());
-        }
-    }
-
-    // Transfers one queue from backlog into claimed and returns its id, if it exists.
-    fn claim_any(&self) -> Option<PublicRepositoryId> {
-        let mut queues = self.queues.lock().unwrap();
-
-        let id = *queues.backlog.keys().next()?;
-        // unwrap is ok because `id` is an existing key we just retrieved.
-        let queue = queues.backlog.remove(&id).unwrap();
-        queues.claimed.insert(id, queue);
-
-        Some(id)
-    }
-
-    // Removes the given queue from claimed and if it is not empty, puts it back into backlog and
-    // emits notification.
-    fn abandon(&self, id: &PublicRepositoryId) {
-        let mut queues = self.queues.lock().unwrap();
-
-        if let Some((id, queue)) = queues.claimed.remove_entry(id) {
-            if !queue.is_empty() {
-                queues.backlog.insert(id, queue);
-                self.queues_changed_tx.send(()).unwrap_or(());
-            }
-        }
-    }
-}
-
-#[derive(Default)]
-struct Queues {
-    claimed: HashMap<PublicRepositoryId, VecDeque<Content>>,
-    backlog: HashMap<PublicRepositoryId, VecDeque<Content>>,
 }
 
 #[cfg(test)]
@@ -539,30 +447,6 @@ mod tests {
             .unwrap();
 
         let mut server_stream = server.open_recv(repo_id);
-
-        let content = server_stream.recv().await.unwrap();
-        assert_matches!(content, Content::Request(Request::Block(recv_block_id)) => {
-            assert_eq!(recv_block_id, send_block_id) }
-        );
-    }
-
-    #[tokio::test]
-    async fn message_dispatcher_recv_on_incoming() {
-        let (mut client, server) = setup().await;
-
-        let repo_id = PublicRepositoryId::random();
-        let send_block_id: BlockId = rand::random();
-
-        client
-            .send(&Message {
-                id: repo_id,
-                content: Content::Request(Request::Block(send_block_id)),
-            })
-            .await
-            .unwrap();
-
-        let mut server_incoming = server.incoming();
-        let mut server_stream = server_incoming.recv().await.unwrap();
 
         let content = server_stream.recv().await.unwrap();
         assert_matches!(content, Content::Request(Request::Block(recv_block_id)) => {
@@ -623,18 +507,17 @@ mod tests {
                 .unwrap();
         }
 
-        let mut server_stream = server.open_recv(repo_id);
-        let mut server_incoming = server.incoming();
+        let mut server_stream0 = server.open_recv(repo_id);
+        let mut server_stream1 = server.open_recv(repo_id);
 
-        let content = server_stream.recv().await.unwrap();
+        let content = server_stream0.recv().await.unwrap();
         assert_matches!(content, Content::Request(Request::Block(recv_block_id)) => {
             assert_eq!(recv_block_id, send_block_id0)
         });
 
-        drop(server_stream);
+        drop(server_stream0);
 
-        let mut server_stream = server_incoming.recv().await.unwrap();
-        let content = server_stream.recv().await.unwrap();
+        let content = server_stream1.recv().await.unwrap();
         assert_matches!(content, Content::Request(Request::Block(recv_block_id)) => {
             assert_eq!(recv_block_id, send_block_id1)
         });
@@ -647,12 +530,10 @@ mod tests {
         let repo_id = PublicRepositoryId::random();
 
         let mut server_stream = server.open_recv(repo_id);
-        let mut server_incoming = server.incoming();
 
         drop(server);
 
         assert!(server_stream.recv().await.is_none());
-        assert!(server_incoming.recv().await.is_none());
     }
 
     #[tokio::test]
