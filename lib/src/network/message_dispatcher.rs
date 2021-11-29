@@ -21,264 +21,11 @@ use tokio::{
     sync::watch,
 };
 
-/// Stream of `Message` backed by a `TcpStream`. Closes on first error. Contains a connection
-/// permit which gets released on drop.
-pub(super) struct PermittedMessageStream {
-    inner: ObjectRead<Message, tcp::OwnedReadHalf>,
-    _permit: ConnectionPermitHalf,
-}
-
-impl PermittedMessageStream {
-    pub fn new(stream: tcp::OwnedReadHalf, permit: ConnectionPermitHalf) -> Self {
-        Self {
-            inner: ObjectRead::new(stream),
-            _permit: permit,
-        }
-    }
-}
-
-impl Stream for PermittedMessageStream {
-    type Item = Message;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        match ready!(self.inner.poll_next_unpin(cx)) {
-            Some(Ok(message)) => Poll::Ready(Some(message)),
-            Some(Err(_)) | None => Poll::Ready(None),
-        }
-    }
-}
-
-/// Sink for `Message` backed by a `TcpStream`.
-/// Contains a connection permit which gets released on drop.
-pub(super) struct PermittedMessageSink {
-    inner: ObjectWrite<Message, tcp::OwnedWriteHalf>,
-    _permit: ConnectionPermitHalf,
-}
-
-impl PermittedMessageSink {
-    pub fn new(stream: tcp::OwnedWriteHalf, permit: ConnectionPermitHalf) -> Self {
-        Self {
-            inner: ObjectWrite::new(stream),
-            _permit: permit,
-        }
-    }
-}
-
-// `Sink` impl just trivially delegates to the underlying sink.
-impl<'a> Sink<&'a Message> for PermittedMessageSink {
-    type Error = io::Error;
-
-    fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.inner.poll_ready_unpin(cx)
-    }
-
-    fn start_send(mut self: Pin<&mut Self>, item: &'a Message) -> Result<(), Self::Error> {
-        self.inner.start_send_unpin(item)
-    }
-
-    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.inner.poll_flush_unpin(cx)
-    }
-
-    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.inner.poll_close_unpin(cx)
-    }
-}
-
-/// Stream that reads `Message`s from multiple underlying TCP streams concurrently.
-pub(super) struct MessageMultiStream {
-    inner: Mutex<StreamInner>,
-}
-
-impl MessageMultiStream {
-    pub fn new() -> Self {
-        Self {
-            inner: Mutex::new(StreamInner {
-                streams: SelectAll::new(),
-                waker: None,
-            }),
-        }
-    }
-
-    pub fn add(&self, stream: PermittedMessageStream) {
-        let mut inner = self.inner.lock().unwrap();
-        inner.streams.push(stream);
-        inner.wake();
-    }
-
-    /// Receive next message from this stream. Equivalent to
-    ///
-    /// ```ignore
-    /// async fn recv(&self) -> Option<Message>;
-    /// ```
-    pub fn recv(&self) -> Recv {
-        Recv { inner: &self.inner }
-    }
-
-    /// Closes this stream. Any subsequent `recv` will immediately return `None` unless new
-    /// streams are added first.
-    pub fn close(&self) {
-        let mut inner = self.inner.lock().unwrap();
-        inner.streams.clear();
-        inner.wake();
-    }
-}
-
-struct StreamInner {
-    streams: SelectAll<PermittedMessageStream>,
-    waker: Option<Waker>,
-}
-
-impl StreamInner {
-    fn wake(&mut self) {
-        if let Some(waker) = self.waker.take() {
-            waker.wake()
-        }
-    }
-}
-
-/// Future returned from [`MessageMultiStream::recv`].
-pub(super) struct Recv<'a> {
-    inner: &'a Mutex<StreamInner>,
-}
-
-impl Future for Recv<'_> {
-    type Output = Option<Message>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        let mut inner = self.inner.lock().unwrap();
-
-        match inner.streams.poll_next_unpin(cx) {
-            Poll::Ready(message) => Poll::Ready(message),
-            Poll::Pending => {
-                if inner.waker.is_none() {
-                    inner.waker = Some(cx.waker().clone());
-                }
-
-                Poll::Pending
-            }
-        }
-    }
-}
-
-/// Sink that writes to the first available of multiple underlying TCP streams.
-///
-/// NOTE: Doesn't actually implement the `Sink` trait currently because we don't need it, only
-/// provides an async `send` method.
-pub(super) struct MessageMultiSink {
-    inner: Mutex<SinkInner>,
-}
-
-impl MessageMultiSink {
-    pub fn new() -> Self {
-        Self {
-            inner: Mutex::new(SinkInner {
-                sinks: Vec::new(),
-                waker: None,
-            }),
-        }
-    }
-
-    pub fn add(&self, sink: PermittedMessageSink) {
-        let mut inner = self.inner.lock().unwrap();
-        inner.sinks.push(sink);
-        inner.wake();
-    }
-
-    pub fn close(&self) {
-        let mut inner = self.inner.lock().unwrap();
-        inner.sinks.clear();
-        inner.wake();
-    }
-
-    /// Returns whether the send succeeded.
-    ///
-    /// Equivalent to
-    ///
-    /// ```ignore
-    /// async fn send(&self, message: &Message) -> bool;
-    /// ```
-    ///
-    pub fn send<'a>(&'a self, message: &'a Message) -> Send {
-        Send {
-            message,
-            pending: true,
-            inner: &self.inner,
-        }
-    }
-}
-
-struct SinkInner {
-    sinks: Vec<PermittedMessageSink>,
-    waker: Option<Waker>,
-}
-
-impl SinkInner {
-    fn wake(&mut self) {
-        if let Some(waker) = self.waker.take() {
-            waker.wake()
-        }
-    }
-}
-
-/// Future returned from [`MessageMultiSink::send`].
-pub(crate) struct Send<'a> {
-    message: &'a Message,
-    pending: bool,
-    inner: &'a Mutex<SinkInner>,
-}
-
-impl Future for Send<'_> {
-    type Output = bool;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut inner = self.inner.lock().unwrap();
-
-        loop {
-            let sink = if let Some(sink) = inner.sinks.first_mut() {
-                sink
-            } else {
-                return Poll::Ready(false);
-            };
-
-            match sink.poll_ready_unpin(cx) {
-                Poll::Ready(Ok(())) => {
-                    if !self.pending {
-                        return Poll::Ready(true);
-                    }
-                }
-                Poll::Ready(Err(_)) => {
-                    inner.sinks.swap_remove(0);
-                    self.pending = true;
-                    continue;
-                }
-                Poll::Pending => {
-                    if inner.waker.is_none() {
-                        inner.waker = Some(cx.waker().clone());
-                    }
-
-                    return Poll::Pending;
-                }
-            }
-
-            match sink.start_send_unpin(self.message) {
-                Ok(()) => {
-                    self.pending = false;
-                }
-                Err(_) => {
-                    inner.sinks.swap_remove(0);
-                    self.pending = true;
-                }
-            }
-        }
-    }
-}
-
-/// Reads messages from the underlying TCP streams and dispatches them to individual streams based
-/// on their ids.
+/// Reads/writes messages from/to the underlying TCP streams and dispatches them to individual
+/// streams/sinks based on their ids.
 pub(super) struct MessageDispatcher {
     recv: Arc<RecvState>,
-    send: Arc<MessageMultiSink>,
+    send: Arc<MultiSink>,
 }
 
 impl MessageDispatcher {
@@ -287,11 +34,11 @@ impl MessageDispatcher {
 
         Self {
             recv: Arc::new(RecvState {
-                reader: MessageMultiStream::new(),
+                reader: MultiStream::new(),
                 queues: Mutex::new(HashMap::default()),
                 queues_changed_tx,
             }),
-            send: Arc::new(MessageMultiSink::new()),
+            send: Arc::new(MultiSink::new()),
         }
     }
 
@@ -303,9 +50,8 @@ impl MessageDispatcher {
 
         self.recv
             .reader
-            .add(PermittedMessageStream::new(reader, reader_permit));
-        self.send
-            .add(PermittedMessageSink::new(writer, writer_permit));
+            .add(PermittedStream::new(reader, reader_permit));
+        self.send.add(PermittedSink::new(writer, writer_permit));
     }
 
     /// Opens a stream for receiving messages with the given id.
@@ -386,7 +132,7 @@ impl ContentStream {
 #[derive(Clone)]
 pub(super) struct ContentSink {
     id: PublicRepositoryId,
-    state: Arc<MessageMultiSink>,
+    state: Arc<MultiSink>,
 }
 
 impl ContentSink {
@@ -402,7 +148,7 @@ impl ContentSink {
 }
 
 struct RecvState {
-    reader: MessageMultiStream,
+    reader: MultiStream,
     queues: Mutex<HashMap<PublicRepositoryId, VecDeque<Content>>>,
     queues_changed_tx: watch::Sender<()>,
 }
@@ -426,6 +172,263 @@ impl RecvState {
     }
 }
 
+///////////////////////////////////////////////////////////////////////////////////////////////////
+// Internal
+
+// Stream of `Message` backed by a `TcpStream`. Closes on first error. Contains a connection
+// permit which gets released on drop.
+struct PermittedStream {
+    inner: ObjectRead<Message, tcp::OwnedReadHalf>,
+    _permit: ConnectionPermitHalf,
+}
+
+impl PermittedStream {
+    fn new(stream: tcp::OwnedReadHalf, permit: ConnectionPermitHalf) -> Self {
+        Self {
+            inner: ObjectRead::new(stream),
+            _permit: permit,
+        }
+    }
+}
+
+impl Stream for PermittedStream {
+    type Item = Message;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        match ready!(self.inner.poll_next_unpin(cx)) {
+            Some(Ok(message)) => Poll::Ready(Some(message)),
+            Some(Err(_)) | None => Poll::Ready(None),
+        }
+    }
+}
+
+// Sink for `Message` backed by a `TcpStream`.
+// Contains a connection permit which gets released on drop.
+struct PermittedSink {
+    inner: ObjectWrite<Message, tcp::OwnedWriteHalf>,
+    _permit: ConnectionPermitHalf,
+}
+
+impl PermittedSink {
+    fn new(stream: tcp::OwnedWriteHalf, permit: ConnectionPermitHalf) -> Self {
+        Self {
+            inner: ObjectWrite::new(stream),
+            _permit: permit,
+        }
+    }
+}
+
+// `Sink` impl just trivially delegates to the underlying sink.
+impl<'a> Sink<&'a Message> for PermittedSink {
+    type Error = io::Error;
+
+    fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready_unpin(cx)
+    }
+
+    fn start_send(mut self: Pin<&mut Self>, item: &'a Message) -> Result<(), Self::Error> {
+        self.inner.start_send_unpin(item)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_flush_unpin(cx)
+    }
+
+    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_close_unpin(cx)
+    }
+}
+
+// Stream that reads `Message`s from multiple underlying TCP streams concurrently.
+struct MultiStream {
+    inner: Mutex<MultiStreamInner>,
+}
+
+impl MultiStream {
+    fn new() -> Self {
+        Self {
+            inner: Mutex::new(MultiStreamInner {
+                streams: SelectAll::new(),
+                waker: None,
+            }),
+        }
+    }
+
+    fn add(&self, stream: PermittedStream) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.streams.push(stream);
+        inner.wake();
+    }
+
+    // Receive next message from this stream. Equivalent to
+    //
+    // ```ignore
+    // async fn recv(&self) -> Option<Message>;
+    // ```
+    fn recv(&self) -> Recv {
+        Recv { inner: &self.inner }
+    }
+
+    // Closes this stream. Any subsequent `recv` will immediately return `None` unless new
+    // streams are added first.
+    fn close(&self) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.streams.clear();
+        inner.wake();
+    }
+}
+
+struct MultiStreamInner {
+    streams: SelectAll<PermittedStream>,
+    waker: Option<Waker>,
+}
+
+impl MultiStreamInner {
+    fn wake(&mut self) {
+        if let Some(waker) = self.waker.take() {
+            waker.wake()
+        }
+    }
+}
+
+// Future returned from [`MultiStream::recv`].
+struct Recv<'a> {
+    inner: &'a Mutex<MultiStreamInner>,
+}
+
+impl Future for Recv<'_> {
+    type Output = Option<Message>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        let mut inner = self.inner.lock().unwrap();
+
+        match inner.streams.poll_next_unpin(cx) {
+            Poll::Ready(message) => Poll::Ready(message),
+            Poll::Pending => {
+                if inner.waker.is_none() {
+                    inner.waker = Some(cx.waker().clone());
+                }
+
+                Poll::Pending
+            }
+        }
+    }
+}
+
+// Sink that writes to the first available of multiple underlying TCP streams, automatically
+// removing the failed ones.
+//
+// NOTE: Doesn't actually implement the `Sink` trait currently because we don't need it, only
+// provides an async `send` method.
+struct MultiSink {
+    inner: Mutex<MultiSinkInner>,
+}
+
+impl MultiSink {
+    fn new() -> Self {
+        Self {
+            inner: Mutex::new(MultiSinkInner {
+                sinks: Vec::new(),
+                waker: None,
+            }),
+        }
+    }
+
+    fn add(&self, sink: PermittedSink) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.sinks.push(sink);
+        inner.wake();
+    }
+
+    fn close(&self) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.sinks.clear();
+        inner.wake();
+    }
+
+    // Returns whether the send succeeded.
+    //
+    // Equivalent to
+    //
+    // ```ignore
+    // async fn send(&self, message: &Message) -> bool;
+    // ```
+    //
+    fn send<'a>(&'a self, message: &'a Message) -> Send {
+        Send {
+            message,
+            pending: true,
+            inner: &self.inner,
+        }
+    }
+}
+
+struct MultiSinkInner {
+    sinks: Vec<PermittedSink>,
+    waker: Option<Waker>,
+}
+
+impl MultiSinkInner {
+    fn wake(&mut self) {
+        if let Some(waker) = self.waker.take() {
+            waker.wake()
+        }
+    }
+}
+
+// Future returned from [`MultiSink::send`].
+struct Send<'a> {
+    message: &'a Message,
+    pending: bool,
+    inner: &'a Mutex<MultiSinkInner>,
+}
+
+impl Future for Send<'_> {
+    type Output = bool;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let mut inner = self.inner.lock().unwrap();
+
+        loop {
+            let sink = if let Some(sink) = inner.sinks.first_mut() {
+                sink
+            } else {
+                return Poll::Ready(false);
+            };
+
+            match sink.poll_ready_unpin(cx) {
+                Poll::Ready(Ok(())) => {
+                    if !self.pending {
+                        return Poll::Ready(true);
+                    }
+                }
+                Poll::Ready(Err(_)) => {
+                    inner.sinks.swap_remove(0);
+                    self.pending = true;
+                    continue;
+                }
+                Poll::Pending => {
+                    if inner.waker.is_none() {
+                        inner.waker = Some(cx.waker().clone());
+                    }
+
+                    return Poll::Pending;
+                }
+            }
+
+            match sink.start_send_unpin(self.message) {
+                Ok(()) => {
+                    self.pending = false;
+                }
+                Err(_) => {
+                    inner.sinks.swap_remove(0);
+                    self.pending = true;
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{super::message::Request, *};
@@ -435,7 +438,7 @@ mod tests {
     use tokio::net::{TcpListener, TcpStream};
 
     #[tokio::test]
-    async fn message_dispatcher_recv_on_stream() {
+    async fn recv_on_stream() {
         let (mut client, server) = setup().await;
 
         let repo_id = PublicRepositoryId::random();
@@ -458,7 +461,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn message_dispatcher_recv_on_two_streams() {
+    async fn recv_on_two_streams() {
         let (mut client, server) = setup().await;
 
         let repo_id0 = PublicRepositoryId::random();
@@ -492,7 +495,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn message_dispatcher_drop_stream() {
+    async fn drop_stream() {
         let (mut client, server) = setup().await;
 
         let repo_id = PublicRepositoryId::random();
@@ -527,7 +530,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn message_dispatcher_drop_dispatcher() {
+    async fn drop_dispatcher() {
         let (_client, server) = setup().await;
 
         let repo_id = PublicRepositoryId::random();
@@ -540,12 +543,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn message_multi_stream_close() {
+    async fn multi_stream_close() {
         let (client, server) = create_connected_sockets().await;
         let (server_reader, _server_writer) = server.into_split();
 
-        let stream = MessageMultiStream::new();
-        stream.add(PermittedMessageStream::new(
+        let stream = MultiStream::new();
+        stream.add(PermittedStream::new(
             server_reader,
             ConnectionPermit::dummy().split().0,
         ));
