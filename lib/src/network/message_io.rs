@@ -6,7 +6,7 @@ use super::{
     object_stream::{ObjectRead, ObjectWrite},
 };
 use crate::repository::PublicRepositoryId;
-use futures_util::{stream::SelectAll, Sink, SinkExt, Stream, StreamExt};
+use futures_util::{ready, stream::SelectAll, Sink, SinkExt, Stream, StreamExt};
 use std::{
     collections::{HashMap, VecDeque},
     future::Future,
@@ -21,13 +21,14 @@ use tokio::{
     sync::watch,
 };
 
-/// Stream of `Message` backed by a `TcpStream`. Closes on first error.
-pub(super) struct MessageStream {
+/// Stream of `Message` backed by a `TcpStream`. Closes on first error. Contains a connection
+/// permit which gets released on drop.
+pub(super) struct PermittedMessageStream {
     inner: ObjectRead<Message, tcp::OwnedReadHalf>,
     _permit: ConnectionPermitHalf,
 }
 
-impl MessageStream {
+impl PermittedMessageStream {
     pub fn new(stream: tcp::OwnedReadHalf, permit: ConnectionPermitHalf) -> Self {
         Self {
             inner: ObjectRead::new(stream),
@@ -36,25 +37,25 @@ impl MessageStream {
     }
 }
 
-impl Stream for MessageStream {
+impl Stream for PermittedMessageStream {
     type Item = Message;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        match Pin::new(&mut self.inner).poll_next(cx) {
-            Poll::Ready(Some(Ok(message))) => Poll::Ready(Some(message)),
-            Poll::Ready(Some(Err(_)) | None) => Poll::Ready(None),
-            Poll::Pending => Poll::Pending,
+        match ready!(self.inner.poll_next_unpin(cx)) {
+            Some(Ok(message)) => Poll::Ready(Some(message)),
+            Some(Err(_)) | None => Poll::Ready(None),
         }
     }
 }
 
 /// Sink for `Message` backed by a `TcpStream`.
-pub(super) struct MessageSink {
+/// Contains a connection permit which gets released on drop.
+pub(super) struct PermittedMessageSink {
     inner: ObjectWrite<Message, tcp::OwnedWriteHalf>,
     _permit: ConnectionPermitHalf,
 }
 
-impl MessageSink {
+impl PermittedMessageSink {
     pub fn new(stream: tcp::OwnedWriteHalf, permit: ConnectionPermitHalf) -> Self {
         Self {
             inner: ObjectWrite::new(stream),
@@ -63,7 +64,8 @@ impl MessageSink {
     }
 }
 
-impl<'a> Sink<&'a Message> for MessageSink {
+// `Sink` impl just trivially delegates to the underlying sink.
+impl<'a> Sink<&'a Message> for PermittedMessageSink {
     type Error = io::Error;
 
     fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -98,7 +100,7 @@ impl MessageMultiStream {
         }
     }
 
-    pub fn add(&self, stream: MessageStream) {
+    pub fn add(&self, stream: PermittedMessageStream) {
         let mut inner = self.inner.lock().unwrap();
         inner.streams.push(stream);
         inner.wake();
@@ -123,7 +125,7 @@ impl MessageMultiStream {
 }
 
 struct StreamInner {
-    streams: SelectAll<MessageStream>,
+    streams: SelectAll<PermittedMessageStream>,
     waker: Option<Waker>,
 }
 
@@ -177,7 +179,7 @@ impl MessageMultiSink {
         }
     }
 
-    pub fn add(&self, sink: MessageSink) {
+    pub fn add(&self, sink: PermittedMessageSink) {
         let mut inner = self.inner.lock().unwrap();
         inner.sinks.push(sink);
         inner.wake();
@@ -207,7 +209,7 @@ impl MessageMultiSink {
 }
 
 struct SinkInner {
-    sinks: Vec<MessageSink>,
+    sinks: Vec<PermittedMessageSink>,
     waker: Option<Waker>,
 }
 
@@ -301,8 +303,9 @@ impl MessageDispatcher {
 
         self.recv
             .reader
-            .add(MessageStream::new(reader, reader_permit));
-        self.send.add(MessageSink::new(writer, writer_permit));
+            .add(PermittedMessageStream::new(reader, reader_permit));
+        self.send
+            .add(PermittedMessageSink::new(writer, writer_permit));
     }
 
     /// Opens a stream for receiving messages with the given id.
@@ -542,7 +545,7 @@ mod tests {
         let (server_reader, _server_writer) = server.into_split();
 
         let stream = MessageMultiStream::new();
-        stream.add(MessageStream::new(
+        stream.add(PermittedMessageStream::new(
             server_reader,
             ConnectionPermit::dummy().split().0,
         ));
