@@ -6,7 +6,7 @@ mod local_discovery;
 mod message;
 mod message_broker;
 mod message_dispatcher;
-mod object_stream;
+mod message_io;
 mod runtime_id;
 mod server;
 #[cfg(test)]

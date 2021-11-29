@@ -3,7 +3,7 @@
 use super::{
     connection::{ConnectionPermit, ConnectionPermitHalf},
     message::{Content, Message},
-    object_stream::{ObjectRead, ObjectWrite},
+    message_io::{ObjectRead, ObjectWrite},
 };
 use crate::repository::PublicRepositoryId;
 use futures_util::{ready, stream::SelectAll, Sink, SinkExt, Stream, StreamExt};
