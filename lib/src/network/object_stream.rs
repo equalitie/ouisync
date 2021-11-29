@@ -1,41 +1,37 @@
+use super::message::Message;
 use futures_util::{Sink, Stream};
-use serde::{de::DeserializeOwned, Serialize};
 use std::{
     io,
-    marker::PhantomData,
     pin::Pin,
     task::{Context, Poll},
 };
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
-/// Max object size when serialized in bytes.
-const MAX_SERIALIZED_OBJECT_SIZE: u16 = u16::MAX - 1;
+/// Max message size when serialized in bytes.
+const MAX_MESSAGE_SIZE: u16 = u16::MAX - 1;
 
-/// Wrapper that turns a reader (`AsyncRead`) into a `Stream` of `T` by deserializing the data read
-/// from the reader.
-pub(crate) struct ObjectRead<T, R> {
+/// Wrapper that turns a reader (`AsyncRead`) into a `Stream` of `Message` by deserializing the
+/// data read from the reader.
+pub(crate) struct ObjectRead<R> {
     read: R,
     decoder: Decoder,
-    _ty: PhantomData<fn() -> T>,
 }
 
-impl<T, R> ObjectRead<T, R> {
+impl<R> ObjectRead<R> {
     pub fn new(read: R) -> Self {
         Self {
             read,
             decoder: Decoder::default(),
-            _ty: PhantomData,
         }
     }
 }
 
-impl<T, R> Stream for ObjectRead<T, R>
+impl<R> Stream for ObjectRead<R>
 where
-    T: DeserializeOwned,
     R: AsyncRead + Unpin,
 {
-    type Item = io::Result<T>;
+    type Item = io::Result<Message>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         let this = &mut *self;
@@ -50,7 +46,7 @@ where
                                 this.decoder.buffer.filled().try_into().unwrap(),
                             );
 
-                            if len > MAX_SERIALIZED_OBJECT_SIZE {
+                            if len > MAX_MESSAGE_SIZE {
                                 return Poll::Ready(Some(Err(io::Error::new(
                                     io::ErrorKind::InvalidData,
                                     LengthError,
@@ -83,32 +79,29 @@ where
     }
 }
 
-/// Wrapper that turns a writer (`AsyncWrite`) into a `Sink` of `T` by serializing the items and
-/// writing them to the writer.
-pub(crate) struct ObjectWrite<T, W> {
+/// Wrapper that turns a writer (`AsyncWrite`) into a `Sink` of `Message` by serializing the items
+/// and writing them to the writer.
+pub(crate) struct ObjectWrite<W> {
     write: W,
     encoder: Encoder,
-    _ty: PhantomData<fn() -> T>,
 }
 
-impl<T, W> ObjectWrite<T, W> {
+impl<W> ObjectWrite<W> {
     pub fn new(write: W) -> Self {
         Self {
             write,
             encoder: Encoder::default(),
-            _ty: PhantomData,
         }
     }
 }
 
-impl<'a, T, W> Sink<&'a T> for ObjectWrite<T, W>
+impl<'a, W> Sink<&'a Message> for ObjectWrite<W>
 where
-    T: Serialize,
     W: AsyncWrite + Unpin,
 {
     type Error = io::Error;
 
-    fn start_send(mut self: Pin<&mut Self>, item: &'a T) -> Result<(), Self::Error> {
+    fn start_send(mut self: Pin<&mut Self>, item: &'a Message) -> Result<(), Self::Error> {
         assert!(
             matches!(self.encoder.phase, EncodePhase::Ready),
             "start_send called while not ready"
@@ -117,7 +110,7 @@ where
         let data = bincode::serialize(item)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
 
-        if data.len() > MAX_SERIALIZED_OBJECT_SIZE as usize {
+        if data.len() > MAX_MESSAGE_SIZE as usize {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, LengthError));
         }
 
@@ -298,5 +291,5 @@ where
 }
 
 #[derive(Debug, Error)]
-#[error("serialized object size too big")]
+#[error("message too big")]
 struct LengthError;

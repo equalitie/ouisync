@@ -178,7 +178,7 @@ impl RecvState {
 // Stream of `Message` backed by a `TcpStream`. Closes on first error. Contains a connection
 // permit which gets released on drop.
 struct PermittedStream {
-    inner: ObjectRead<Message, tcp::OwnedReadHalf>,
+    inner: ObjectRead<tcp::OwnedReadHalf>,
     _permit: ConnectionPermitHalf,
 }
 
@@ -205,7 +205,7 @@ impl Stream for PermittedStream {
 // Sink for `Message` backed by a `TcpStream`.
 // Contains a connection permit which gets released on drop.
 struct PermittedSink {
-    inner: ObjectWrite<Message, tcp::OwnedWriteHalf>,
+    inner: ObjectWrite<tcp::OwnedWriteHalf>,
     _permit: ConnectionPermitHalf,
 }
 
@@ -567,7 +567,7 @@ mod tests {
         assert!(stream.recv().await.is_none());
     }
 
-    async fn setup() -> (ObjectWrite<Message, TcpStream>, MessageDispatcher) {
+    async fn setup() -> (ObjectWrite<TcpStream>, MessageDispatcher) {
         let (client, server) = create_connected_sockets().await;
         let client_writer = ObjectWrite::new(client);
 
