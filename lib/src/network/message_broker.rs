@@ -253,6 +253,14 @@ async fn run_link(index: Index, mut stream: ContentStream, sink: ContentSink) {
     // Handle incoming messages
     let recv_task = async move {
         while let Some(content) = stream.recv().await {
+            let content: Content = match bincode::deserialize(&content) {
+                Ok(content) => content,
+                Err(error) => {
+                    log::warn!("failed to deserialize message for {:?}: {}", id, error);
+                    continue;
+                }
+            };
+
             match content {
                 Content::Request(request) => {
                     if request_tx.send(request).await.is_err() {
@@ -273,6 +281,10 @@ async fn run_link(index: Index, mut stream: ContentStream, sink: ContentSink) {
     // Handle outgoing messages
     let send_task = async move {
         while let Some(content) = content_rx.recv().await {
+            // unwrap is OK because serialization into a vec should never fail unless we have a bug
+            // somewhere.
+            let content = bincode::serialize(&content).unwrap();
+
             if !sink.send(content).await {
                 break;
             }

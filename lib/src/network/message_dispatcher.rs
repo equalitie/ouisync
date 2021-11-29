@@ -2,7 +2,7 @@
 
 use super::{
     connection::{ConnectionPermit, ConnectionPermitHalf},
-    message::{Content, Message},
+    message::Message,
     message_io::{MessageSink, MessageStream},
 };
 use crate::repository::PublicRepositoryId;
@@ -97,7 +97,7 @@ impl ContentStream {
     }
 
     /// Receive the next message content.
-    pub async fn recv(&mut self) -> Option<Content> {
+    pub async fn recv(&mut self) -> Option<Vec<u8>> {
         let mut closed = false;
 
         loop {
@@ -137,7 +137,7 @@ pub(super) struct ContentSink {
 
 impl ContentSink {
     /// Returns whether the send succeeded.
-    pub async fn send(&self, content: Content) -> bool {
+    pub async fn send(&self, content: Vec<u8>) -> bool {
         self.state
             .send(&Message {
                 id: self.id,
@@ -149,13 +149,13 @@ impl ContentSink {
 
 struct RecvState {
     reader: MultiStream,
-    queues: Mutex<HashMap<PublicRepositoryId, VecDeque<Content>>>,
+    queues: Mutex<HashMap<PublicRepositoryId, VecDeque<Vec<u8>>>>,
     queues_changed_tx: watch::Sender<()>,
 }
 
 impl RecvState {
     // Pops a message from the corresponding queue.
-    fn pop(&self, id: &PublicRepositoryId) -> Option<Content> {
+    fn pop(&self, id: &PublicRepositoryId) -> Option<Vec<u8>> {
         self.queues.lock().unwrap().get_mut(id)?.pop_back()
     }
 
@@ -431,9 +431,7 @@ impl Future for Send<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{super::message::Request, *};
-    use crate::block::BlockId;
-    use assert_matches::assert_matches;
+    use super::*;
     use std::net::Ipv4Addr;
     use tokio::net::{TcpListener, TcpStream};
 
@@ -442,22 +440,20 @@ mod tests {
         let (mut client, server) = setup().await;
 
         let repo_id = PublicRepositoryId::random();
-        let send_block_id: BlockId = rand::random();
+        let send_content = b"hello world";
 
         client
             .send(&Message {
                 id: repo_id,
-                content: Content::Request(Request::Block(send_block_id)),
+                content: send_content.to_vec(),
             })
             .await
             .unwrap();
 
         let mut server_stream = server.open_recv(repo_id);
 
-        let content = server_stream.recv().await.unwrap();
-        assert_matches!(content, Content::Request(Request::Block(recv_block_id)) => {
-            assert_eq!(recv_block_id, send_block_id) }
-        );
+        let recv_content = server_stream.recv().await.unwrap();
+        assert_eq!(recv_content, send_content);
     }
 
     #[tokio::test]
@@ -467,14 +463,14 @@ mod tests {
         let repo_id0 = PublicRepositoryId::random();
         let repo_id1 = PublicRepositoryId::random();
 
-        let send_block_id0: BlockId = rand::random();
-        let send_block_id1: BlockId = rand::random();
+        let send_content0 = b"one two three";
+        let send_content1 = b"four five six";
 
-        for (repo_id, block_id) in [(repo_id0, send_block_id0), (repo_id1, send_block_id1)] {
+        for (repo_id, content) in [(repo_id0, send_content0), (repo_id1, send_content1)] {
             client
                 .send(&Message {
                     id: repo_id,
-                    content: Content::Request(Request::Block(block_id)),
+                    content: content.to_vec(),
                 })
                 .await
                 .unwrap();
@@ -483,14 +479,12 @@ mod tests {
         let server_stream0 = server.open_recv(repo_id0);
         let server_stream1 = server.open_recv(repo_id1);
 
-        for (mut server_stream, send_block_id) in [
-            (server_stream0, send_block_id0),
-            (server_stream1, send_block_id1),
+        for (mut server_stream, send_content) in [
+            (server_stream0, send_content0),
+            (server_stream1, send_content1),
         ] {
-            let content = server_stream.recv().await.unwrap();
-            assert_matches!(content, Content::Request(Request::Block(recv_block_id)) => {
-                assert_eq!(recv_block_id, send_block_id)
-            });
+            let recv_content = server_stream.recv().await.unwrap();
+            assert_eq!(recv_content, send_content);
         }
     }
 
@@ -500,14 +494,14 @@ mod tests {
 
         let repo_id = PublicRepositoryId::random();
 
-        let send_block_id0: BlockId = rand::random();
-        let send_block_id1: BlockId = rand::random();
+        let send_content0 = b"one two three";
+        let send_content1 = b"four five six";
 
-        for block_id in [send_block_id0, send_block_id1] {
+        for content in [send_content0, send_content1] {
             client
                 .send(&Message {
                     id: repo_id,
-                    content: Content::Request(Request::Block(block_id)),
+                    content: content.to_vec(),
                 })
                 .await
                 .unwrap();
@@ -516,17 +510,13 @@ mod tests {
         let mut server_stream0 = server.open_recv(repo_id);
         let mut server_stream1 = server.open_recv(repo_id);
 
-        let content = server_stream0.recv().await.unwrap();
-        assert_matches!(content, Content::Request(Request::Block(recv_block_id)) => {
-            assert_eq!(recv_block_id, send_block_id0)
-        });
+        let recv_content = server_stream0.recv().await.unwrap();
+        assert_eq!(recv_content, send_content0);
 
         drop(server_stream0);
 
-        let content = server_stream1.recv().await.unwrap();
-        assert_matches!(content, Content::Request(Request::Block(recv_block_id)) => {
-            assert_eq!(recv_block_id, send_block_id1)
-        });
+        let recv_content = server_stream1.recv().await.unwrap();
+        assert_eq!(recv_content, send_content1)
     }
 
     #[tokio::test]
@@ -557,7 +547,7 @@ mod tests {
         client
             .send(&Message {
                 id: PublicRepositoryId::random(),
-                content: Content::Request(Request::Block(rand::random())),
+                content: b"hello world".to_vec(),
             })
             .await
             .unwrap();
