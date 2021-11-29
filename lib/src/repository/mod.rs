@@ -321,7 +321,7 @@ impl Repository {
             dirs.push(dir);
         }
 
-        Ok(JointDirectory::new(dirs).await)
+        Ok(JointDirectory::new(dirs))
     }
 
     pub(crate) fn index(&self) -> &Index {
@@ -579,10 +579,7 @@ enum MergeState {
 
 async fn merge_branches(local: Branch, remote: Branch) -> Result<()> {
     let remote_root = remote.open_root(local.clone()).await?;
-    JointDirectory::new(iter::once(remote_root))
-        .await
-        .merge()
-        .await?;
+    JointDirectory::new(iter::once(remote_root)).merge().await?;
 
     Ok(())
 }

@@ -29,7 +29,7 @@ pub struct JointDirectory {
 
 impl JointDirectory {
     /// Creates a new `JointDirectory` over the specified directory versions.
-    pub async fn new<I>(versions: I) -> Self
+    pub fn new<I>(versions: I) -> Self
     where
         I: IntoIterator<Item = Directory>,
     {
@@ -520,7 +520,7 @@ impl<'a> JointDirectoryRef<'a> {
         .into_iter()
         .flatten();
 
-        Ok(JointDirectory::new(directories).await)
+        Ok(JointDirectory::new(directories))
     }
 }
 
