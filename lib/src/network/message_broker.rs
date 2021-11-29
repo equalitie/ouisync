@@ -5,7 +5,11 @@ use super::{
     message_dispatcher::{ContentSink, ContentStream, MessageDispatcher},
     server::Server,
 };
-use crate::{index::Index, repository::PublicRepositoryId, scoped_task::ScopedJoinHandle};
+use crate::{
+    index::Index,
+    repository::{PublicRepositoryId, SecretRepositoryId},
+    scoped_task::ScopedJoinHandle,
+};
 use std::{
     collections::{hash_map::Entry, HashMap},
     fmt,
@@ -96,44 +100,44 @@ impl MessageBroker {
     }
 
     pub async fn add_connection(&self, stream: TcpStream, permit: ConnectionPermit) {
-        if self
-            .command_tx
+        // The unwrap is ok here because the receiver gets closed only when this sender closes
+        self.command_tx
             .send(Command::AddConnection(stream, permit))
             .await
-            .is_err()
-        {
-            log::error!("failed to add connection - message broker is shutting down")
-        }
+            .unwrap()
     }
 
     /// Has this broker at least one live connection?
-    pub fn has_connections(&self) -> bool {
-        !self.command_tx.is_closed()
+    pub async fn has_connections(&self) -> bool {
+        let (tx, rx) = oneshot::channel();
+
+        // unwrap is ok because the command receiver gets closed only when the sender gets closed.
+        self.command_tx
+            .send(Command::CheckHasConnections(tx))
+            .await
+            .unwrap();
+
+        // unwrap is ok because the oneshot sender is never dropped without being sent to.
+        rx.await.unwrap()
     }
 
     /// Try to establish a link between a local repository and a remote repository. The remote
     /// counterpart needs to call this too with matching `local_name` and `remote_name` for the link
     /// to actually be created.
-    pub async fn create_link(&self, id: PublicRepositoryId, index: Index) {
-        if self
-            .command_tx
+    pub async fn create_link(&self, id: SecretRepositoryId, index: Index) {
+        self.command_tx
             .send(Command::CreateLink { id, index })
             .await
-            .is_err()
-        {
-            log::error!("failed to create link - message broker is shutting down")
-        }
+            .unwrap()
     }
 
     /// Destroy the link between a local repository with the specified id hash and its remote
     /// counterpart (if one exists).
     pub async fn destroy_link(&self, id: PublicRepositoryId) {
-        // We can safely ignore the error here because it only means the message broker is shutting
-        // down and so all existing links are going to be destroyed anyway.
         self.command_tx
             .send(Command::DestroyLink { id })
             .await
-            .unwrap_or(())
+            .unwrap()
     }
 }
 
@@ -152,6 +156,7 @@ impl Inner {
     fn handle_command(&mut self, command: Command) {
         match command {
             Command::AddConnection(stream, permit) => self.add_connection(stream, permit),
+            Command::CheckHasConnections(tx) => tx.send(!self.dispatcher.is_closed()).unwrap_or(()),
             Command::CreateLink { id, index } => {
                 self.create_link(id, index);
             }
@@ -161,15 +166,17 @@ impl Inner {
         }
     }
 
-    fn create_link(&mut self, id: PublicRepositoryId, index: Index) {
+    fn create_link(&mut self, sid: SecretRepositoryId, index: Index) {
         let (abort_tx, abort_rx) = oneshot::channel();
 
-        match self.links.entry(id) {
+        let pid = sid.public();
+
+        match self.links.entry(pid) {
             Entry::Occupied(mut entry) => {
                 if entry.get().is_closed() {
                     entry.insert(abort_tx);
                 } else {
-                    log::warn!("not creating link for {:?} - already exists", id);
+                    log::warn!("not creating link for {:?} - already exists", pid);
                     return;
                 }
             }
@@ -178,14 +185,14 @@ impl Inner {
             }
         }
 
-        log::debug!("creating link for {:?}", id);
+        log::debug!("creating link for {:?}", pid);
 
-        let stream = self.dispatcher.open_recv(id);
-        let sink = self.dispatcher.open_send(id);
+        let stream = self.dispatcher.open_recv(pid);
+        let sink = self.dispatcher.open_send(pid);
 
         task::spawn(async move {
             select! {
-                _ = run_link(index, stream, sink) => (),
+                _ = run_link(sid, index, stream, sink) => (),
                 _ = abort_rx => (),
             }
         });
@@ -198,8 +205,9 @@ impl Inner {
 
 pub(super) enum Command {
     AddConnection(TcpStream, ConnectionPermit),
+    CheckHasConnections(oneshot::Sender<bool>),
     CreateLink {
-        id: PublicRepositoryId,
+        id: SecretRepositoryId,
         index: Index,
     },
     DestroyLink {
@@ -214,6 +222,10 @@ impl fmt::Debug for Command {
                 .debug_tuple("AddConnection")
                 .field(&format_args!("_"))
                 .finish(),
+            Self::CheckHasConnections(_) => f
+                .debug_tuple("CheckHasConnections")
+                .field(&format_args!("_"))
+                .finish(),
             Self::CreateLink { id, .. } => f
                 .debug_struct("CreateLink")
                 .field("id", id)
@@ -223,10 +235,10 @@ impl fmt::Debug for Command {
     }
 }
 
-async fn run_link(index: Index, mut stream: ContentStream, sink: ContentSink) {
+async fn run_link(_id: SecretRepositoryId, index: Index, stream: ContentStream, sink: ContentSink) {
     let (request_tx, request_rx) = mpsc::channel(1);
     let (response_tx, response_rx) = mpsc::channel(1);
-    let (content_tx, mut content_rx) = mpsc::channel(1);
+    let (content_tx, content_rx) = mpsc::channel(1);
 
     let id = *stream.id();
 
@@ -250,56 +262,64 @@ async fn run_link(index: Index, mut stream: ContentStream, sink: ContentSink) {
         }
     };
 
-    // Handle incoming messages
-    let recv_task = async move {
-        while let Some(content) = stream.recv().await {
-            let content: Content = match bincode::deserialize(&content) {
-                Ok(content) => content,
-                Err(error) => {
-                    log::warn!("failed to deserialize message for {:?}: {}", id, error);
-                    continue;
-                }
-            };
-
-            match content {
-                Content::Request(request) => {
-                    if request_tx.send(request).await.is_err() {
-                        break;
-                    }
-                }
-                Content::Response(response) => {
-                    if response_tx.send(response).await.is_err() {
-                        break;
-                    }
-                }
-            }
-        }
-
-        log::debug!("message stream for {:?} closed", id)
-    };
-
-    // Handle outgoing messages
-    let send_task = async move {
-        while let Some(content) = content_rx.recv().await {
-            // unwrap is OK because serialization into a vec should never fail unless we have a bug
-            // somewhere.
-            let content = bincode::serialize(&content).unwrap();
-
-            if !sink.send(content).await {
-                break;
-            }
-        }
-
-        log::debug!("message sink for {:?} closed", id)
-    };
-
     // Run everything in parallel:
     select! {
         _ = client_task => (),
         _ = server_task => (),
-        _ = recv_task => (),
-        _ = send_task => (),
+        _ = recv_messages(stream, request_tx, response_tx) => (),
+        _ = send_messages(content_rx, sink) => (),
     }
 
     log::debug!("link for {:?} terminated", id)
+}
+
+// Handle incoming messages
+async fn recv_messages(
+    mut stream: ContentStream,
+    request_tx: mpsc::Sender<Request>,
+    response_tx: mpsc::Sender<Response>,
+) {
+    while let Some(content) = stream.recv().await {
+        let content: Content = match bincode::deserialize(&content) {
+            Ok(content) => content,
+            Err(error) => {
+                log::warn!(
+                    "failed to deserialize message for {:?}: {}",
+                    stream.id(),
+                    error
+                );
+                continue;
+            }
+        };
+
+        match content {
+            Content::Request(request) => {
+                if request_tx.send(request).await.is_err() {
+                    break;
+                }
+            }
+            Content::Response(response) => {
+                if response_tx.send(response).await.is_err() {
+                    break;
+                }
+            }
+        }
+    }
+
+    log::debug!("message stream for {:?} closed", stream.id())
+}
+
+// Handle outgoing messages
+async fn send_messages(mut content_rx: mpsc::Receiver<Content>, sink: ContentSink) {
+    while let Some(content) = content_rx.recv().await {
+        // unwrap is OK because serialization into a vec should never fail unless we have a bug
+        // somewhere.
+        let content = bincode::serialize(&content).unwrap();
+
+        if !sink.send(content).await {
+            break;
+        }
+    }
+
+    log::debug!("message sink for {:?} closed", sink.id())
 }

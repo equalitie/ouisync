@@ -66,6 +66,10 @@ impl MessageDispatcher {
             state: self.send.clone(),
         }
     }
+
+    pub fn is_closed(&self) -> bool {
+        self.recv.reader.is_empty() || self.send.is_empty()
+    }
 }
 
 impl Drop for MessageDispatcher {
@@ -136,6 +140,10 @@ pub(super) struct ContentSink {
 }
 
 impl ContentSink {
+    pub fn id(&self) -> &PublicRepositoryId {
+        &self.id
+    }
+
     /// Returns whether the send succeeded.
     pub async fn send(&self, content: Vec<u8>) -> bool {
         self.state
@@ -276,6 +284,10 @@ impl MultiStream {
         inner.streams.clear();
         inner.wake();
     }
+
+    fn is_empty(&self) -> bool {
+        self.inner.lock().unwrap().streams.is_empty()
+    }
 }
 
 struct MultiStreamInner {
@@ -360,6 +372,10 @@ impl MultiSink {
             pending: true,
             inner: &self.inner,
         }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.inner.lock().unwrap().sinks.is_empty()
     }
 }
 

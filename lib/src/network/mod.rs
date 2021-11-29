@@ -22,7 +22,7 @@ use self::{
 use crate::{
     error::{Error, Result},
     index::Index,
-    repository::{PublicRepositoryId, Repository},
+    repository::{PublicRepositoryId, Repository, SecretRepositoryId},
     scoped_task::{self, ScopedJoinHandle, ScopedTaskSet},
     upnp,
 };
@@ -239,13 +239,14 @@ impl Handle {
             Entry::Vacant(entry) => {
                 entry.insert(IndexHolder {
                     index: repository.index().clone(),
+                    id: sid,
                     dht_lookup: self.inner.start_dht_lookup(pid),
                 });
             }
         }
 
         for broker in self.inner.message_brokers.lock().await.values() {
-            broker.create_link(pid, repository.index().clone()).await
+            broker.create_link(sid, repository.index().clone()).await
         }
 
         // Deregister the index when it gets closed.
@@ -536,13 +537,13 @@ impl Inner {
                 // TODO: for DHT connection we should only link the repository for which we did the
                 // lookup but make sure we correctly handle edge cases, for example, when we have
                 // more than one repository shared with the peer.
-                for (id, holder) in &*self.indices.read().await {
-                    broker.create_link(*id, holder.index.clone()).await;
+                for holder in self.indices.read().await.values() {
+                    broker.create_link(holder.id, holder.index.clone()).await;
                 }
 
                 entry.insert(broker);
             }
-        }
+        };
 
         drop(brokers);
 
@@ -552,7 +553,7 @@ impl Inner {
         // Remove the broker if it has no more connections.
         let mut brokers = self.message_brokers.lock().await;
         if let Entry::Occupied(entry) = brokers.entry(their_runtime_id) {
-            if !entry.get().has_connections() {
+            if !entry.get().has_connections().await {
                 entry.remove();
             }
         }
@@ -570,6 +571,7 @@ impl Inner {
 
 struct IndexHolder {
     index: Index,
+    id: SecretRepositoryId,
     dht_lookup: Option<dht_discovery::LookupRequest>,
 }
 
