@@ -1,7 +1,8 @@
 use super::message::Message;
-use futures_util::{Sink, Stream};
+use crate::repository::PublicRepositoryId;
+use futures_util::{ready, Sink, Stream};
 use std::{
-    io,
+    io, mem,
     pin::Pin,
     task::{Context, Poll},
 };
@@ -11,8 +12,12 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 /// Max message size when serialized in bytes.
 const MAX_MESSAGE_SIZE: u16 = u16::MAX - 1;
 
-/// Wrapper that turns a reader (`AsyncRead`) into a `Stream` of `Message` by deserializing the
-/// data read from the reader.
+// Messages are encoded like this:
+//
+// [ id: `PublicRepositoryId::SIZE` bytes ][ len: 2 bytes ][ content: `len` bytes ]
+//
+
+/// Wrapper that turns a reader (`AsyncRead`) into a `Stream` of `Message`.
 pub(crate) struct MessageStream<R> {
     read: R,
     decoder: Decoder,
@@ -36,51 +41,11 @@ where
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         let this = &mut *self;
         let mut read = Pin::new(&mut this.read);
-
-        loop {
-            match this.decoder.phase {
-                DecodePhase::Len => {
-                    match poll_read_exact(read.as_mut(), cx, &mut this.decoder.buffer) {
-                        Poll::Ready(Ok(())) => {
-                            let len = u16::from_be_bytes(
-                                this.decoder.buffer.filled().try_into().unwrap(),
-                            );
-
-                            if len > MAX_MESSAGE_SIZE {
-                                return Poll::Ready(Some(Err(io::Error::new(
-                                    io::ErrorKind::InvalidData,
-                                    LengthError,
-                                ))));
-                            }
-
-                            this.decoder.buffer.reset(len as usize);
-                            this.decoder.phase = DecodePhase::Data;
-                        }
-                        Poll::Ready(Err(error)) => return Poll::Ready(Some(Err(error))),
-                        Poll::Pending => return Poll::Pending,
-                    }
-                }
-                DecodePhase::Data => {
-                    match poll_read_exact(read.as_mut(), cx, &mut this.decoder.buffer) {
-                        Poll::Ready(Ok(())) => {
-                            let result = bincode::deserialize(this.decoder.buffer.filled())
-                                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error));
-                            this.decoder.buffer.reset(2);
-                            this.decoder.phase = DecodePhase::Len;
-
-                            return Poll::Ready(Some(result));
-                        }
-                        Poll::Ready(Err(error)) => return Poll::Ready(Some(Err(error))),
-                        Poll::Pending => return Poll::Pending,
-                    }
-                }
-            }
-        }
+        this.decoder.poll_next(read.as_mut(), cx).map(Some)
     }
 }
 
-/// Wrapper that turns a writer (`AsyncWrite`) into a `Sink` of `Message` by serializing the items
-/// and writing them to the writer.
+/// Wrapper that turns a writer (`AsyncWrite`) into a `Sink` of `Message`.
 pub(crate) struct MessageSink<W> {
     write: W,
     encoder: Encoder,
@@ -95,198 +60,244 @@ impl<W> MessageSink<W> {
     }
 }
 
-impl<'a, W> Sink<&'a Message> for MessageSink<W>
+impl<W> Sink<Message> for MessageSink<W>
 where
     W: AsyncWrite + Unpin,
 {
     type Error = io::Error;
 
-    fn start_send(mut self: Pin<&mut Self>, item: &'a Message) -> Result<(), Self::Error> {
-        assert!(
-            matches!(self.encoder.phase, EncodePhase::Ready),
-            "start_send called while not ready"
-        );
-
-        let data = bincode::serialize(item)
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
-
-        if data.len() > MAX_MESSAGE_SIZE as usize {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, LengthError));
-        }
-
-        self.encoder.phase = EncodePhase::Len { offset: 0 };
-        self.encoder.buffer = Buffer::new(data);
-
-        Ok(())
+    fn start_send(mut self: Pin<&mut Self>, item: Message) -> Result<(), Self::Error> {
+        self.encoder.start(item)
     }
 
     fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Self::Error>> {
         let this = &mut *self;
-        let mut write = Pin::new(&mut this.write);
-
-        loop {
-            match this.encoder.phase {
-                EncodePhase::Ready => return Poll::Ready(Ok(())),
-                EncodePhase::Len { offset } => {
-                    let buffer = (this.encoder.buffer.remaining().len() as u16).to_be_bytes();
-                    let buffer = &buffer[offset..];
-
-                    match write.as_mut().poll_write(cx, buffer) {
-                        Poll::Ready(Ok(len)) if len > 0 => {
-                            if offset + len >= 2 {
-                                this.encoder.phase = EncodePhase::Data;
-                            } else {
-                                this.encoder.phase = EncodePhase::Len {
-                                    offset: offset + len,
-                                };
-                            }
-                        }
-                        Poll::Ready(Ok(_)) => {
-                            return Poll::Ready(Err(io::ErrorKind::UnexpectedEof.into()))
-                        }
-                        Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
-                        Poll::Pending => return Poll::Pending,
-                    }
-                }
-                EncodePhase::Data => {
-                    match write
-                        .as_mut()
-                        .poll_write(cx, this.encoder.buffer.remaining())
-                    {
-                        Poll::Ready(Ok(len)) if len > 0 => {
-                            this.encoder.buffer.advance(len);
-
-                            if this.encoder.buffer.remaining().is_empty() {
-                                this.encoder.phase = EncodePhase::Ready;
-                                this.encoder.buffer.reset(0);
-
-                                return Poll::Ready(Ok(()));
-                            }
-                        }
-                        Poll::Ready(Ok(_)) => {
-                            return Poll::Ready(Err(io::ErrorKind::UnexpectedEof.into()))
-                        }
-                        Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
-                        Poll::Pending => return Poll::Pending,
-                    }
-                }
-            }
-        }
+        let write = Pin::new(&mut this.write);
+        this.encoder.poll_ready(write, cx)
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        match self.as_mut().poll_ready(cx) {
-            Poll::Ready(Ok(())) => Pin::new(&mut self.write).poll_flush(cx),
-            Poll::Ready(Err(error)) => Poll::Ready(Err(error)),
-            Poll::Pending => Poll::Pending,
-        }
+        ready!(self.as_mut().poll_ready(cx))?;
+        Pin::new(&mut self.write).poll_flush(cx)
     }
 
     fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Self::Error>> {
-        match self.as_mut().poll_ready(cx) {
-            Poll::Ready(Ok(())) => Pin::new(&mut self.write).poll_shutdown(cx),
-            Poll::Ready(Err(error)) => Poll::Ready(Err(error)),
-            Poll::Pending => Poll::Pending,
-        }
+        ready!(self.as_mut().poll_ready(cx))?;
+        Pin::new(&mut self.write).poll_shutdown(cx)
     }
 }
 
 struct Encoder {
-    phase: EncodePhase,
-    buffer: Buffer,
+    state: EncodeState,
+    offset: usize,
+}
+
+enum EncodeState {
+    Idle,
+    Sending {
+        message: Message,
+        phase: SendingPhase,
+    },
+}
+
+enum SendingPhase {
+    Id,
+    Len,
+    Content,
 }
 
 impl Default for Encoder {
     fn default() -> Self {
         Self {
-            phase: EncodePhase::Ready,
-            buffer: Buffer::new(vec![]),
+            state: EncodeState::Idle,
+            offset: 0,
         }
     }
 }
 
-enum EncodePhase {
-    Ready,
-    Len { offset: usize },
-    Data,
+impl Encoder {
+    fn start(&mut self, message: Message) -> io::Result<()> {
+        assert!(
+            matches!(self.state, EncodeState::Idle),
+            "start_send called while already sending"
+        );
+
+        if message.content.len() > MAX_MESSAGE_SIZE as usize {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, LengthError));
+        }
+
+        self.state = EncodeState::Sending {
+            message,
+            phase: SendingPhase::Id,
+        };
+        self.offset = 0;
+
+        Ok(())
+    }
+
+    fn poll_ready<W>(&mut self, mut io: Pin<&mut W>, cx: &mut Context) -> Poll<io::Result<()>>
+    where
+        W: AsyncWrite,
+    {
+        loop {
+            match &mut self.state {
+                EncodeState::Idle => return Poll::Ready(Ok(())),
+                EncodeState::Sending { message, phase } => match phase {
+                    SendingPhase::Id => {
+                        if ready!(poll_write_all(
+                            io.as_mut(),
+                            cx,
+                            message.id.as_ref(),
+                            &mut self.offset
+                        ))? {
+                            *phase = SendingPhase::Len;
+                            self.offset = 0;
+                        }
+                    }
+                    SendingPhase::Len => {
+                        let buffer = (message.content.len() as u16).to_be_bytes();
+
+                        if ready!(poll_write_all(io.as_mut(), cx, &buffer, &mut self.offset))? {
+                            *phase = SendingPhase::Content;
+                            self.offset = 0;
+                        }
+                    }
+                    SendingPhase::Content => {
+                        if ready!(poll_write_all(
+                            io.as_mut(),
+                            cx,
+                            &message.content,
+                            &mut self.offset
+                        ))? {
+                            self.state = EncodeState::Idle;
+                            self.offset = 0;
+
+                            return Poll::Ready(Ok(()));
+                        }
+                    }
+                },
+            }
+        }
+    }
+}
+
+fn poll_write_all<W>(
+    io: Pin<&mut W>,
+    cx: &mut Context,
+    buffer: &[u8],
+    offset: &mut usize,
+) -> Poll<io::Result<bool>>
+where
+    W: AsyncWrite,
+{
+    let len = ready!(io.poll_write(cx, &buffer[*offset..]))?;
+
+    if len == 0 {
+        return Poll::Ready(Err(io::ErrorKind::UnexpectedEof.into()));
+    }
+
+    *offset += len;
+
+    Poll::Ready(Ok(*offset >= buffer.len()))
 }
 
 struct Decoder {
     phase: DecodePhase,
-    buffer: Buffer,
+    buffer: Vec<u8>,
+    offset: usize,
+}
+
+#[derive(Clone, Copy)]
+enum DecodePhase {
+    Id,
+    Len { id: PublicRepositoryId },
+    Content { id: PublicRepositoryId },
 }
 
 impl Default for Decoder {
     fn default() -> Self {
         Self {
-            phase: DecodePhase::Len,
-            buffer: Buffer::new(vec![0; 2]),
+            phase: DecodePhase::Id,
+            buffer: vec![0; PublicRepositoryId::SIZE],
+            offset: 0,
         }
     }
 }
 
-#[derive(Clone, Copy)]
-enum DecodePhase {
-    Len,
-    Data,
-}
+impl Decoder {
+    fn poll_next<R>(&mut self, mut io: Pin<&mut R>, cx: &mut Context) -> Poll<io::Result<Message>>
+    where
+        R: AsyncRead,
+    {
+        loop {
+            ready!(self.poll_read_exact(io.as_mut(), cx))?;
 
-struct Buffer {
-    data: Vec<u8>,
-    offset: usize,
-}
+            match self.phase {
+                DecodePhase::Id => {
+                    let id: [u8; PublicRepositoryId::SIZE] = self
+                        .filled()
+                        .try_into()
+                        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+                    let id = PublicRepositoryId::from(id);
 
-impl Buffer {
-    fn new(data: Vec<u8>) -> Self {
-        Self { data, offset: 0 }
+                    self.phase = DecodePhase::Len { id };
+                    self.buffer.resize(2, 0);
+                    self.offset = 0;
+                }
+                DecodePhase::Len { id } => {
+                    let len = u16::from_be_bytes(
+                        self.filled()
+                            .try_into()
+                            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?,
+                    );
+
+                    if len > MAX_MESSAGE_SIZE {
+                        return Poll::Ready(Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            LengthError,
+                        )));
+                    }
+
+                    self.phase = DecodePhase::Content { id };
+                    self.buffer.resize(len as usize, 0);
+                    self.offset = 0;
+                }
+                DecodePhase::Content { id } => {
+                    let content = mem::take(&mut self.buffer);
+
+                    self.phase = DecodePhase::Id;
+                    self.buffer.resize(PublicRepositoryId::SIZE, 0);
+                    self.offset = 0;
+
+                    return Poll::Ready(Ok(Message { id, content }));
+                }
+            }
+        }
     }
 
-    fn reset(&mut self, size: usize) {
-        self.data.resize(size, 0);
-        self.offset = 0;
-    }
+    fn poll_read_exact<R>(&mut self, mut io: Pin<&mut R>, cx: &mut Context) -> Poll<io::Result<()>>
+    where
+        R: AsyncRead,
+    {
+        loop {
+            let mut buf = ReadBuf::new(&mut self.buffer[self.offset..]);
 
-    fn as_read_buf(&mut self) -> ReadBuf {
-        ReadBuf::new(&mut self.data[self.offset..])
+            match ready!(io.as_mut().poll_read(cx, &mut buf)) {
+                Ok(()) if !buf.filled().is_empty() => {
+                    self.offset += buf.filled().len();
+
+                    if self.offset >= self.buffer.len() {
+                        return Poll::Ready(Ok(()));
+                    }
+                }
+                Ok(()) => return Poll::Ready(Err(io::ErrorKind::UnexpectedEof.into())),
+                Err(error) => return Poll::Ready(Err(error)),
+            }
+        }
     }
 
     fn filled(&self) -> &[u8] {
-        &self.data[0..self.offset]
-    }
-
-    fn remaining(&self) -> &[u8] {
-        &self.data[self.offset..]
-    }
-
-    fn advance(&mut self, len: usize) {
-        self.offset += len;
-    }
-}
-
-fn poll_read_exact<S>(
-    mut io: Pin<&mut S>,
-    cx: &mut Context,
-    buffer: &mut Buffer,
-) -> Poll<io::Result<()>>
-where
-    S: AsyncRead,
-{
-    loop {
-        let mut buf = buffer.as_read_buf();
-
-        match io.as_mut().poll_read(cx, &mut buf) {
-            Poll::Ready(Ok(())) if !buf.filled().is_empty() => {
-                let filled = buf.filled().len();
-                buffer.advance(filled);
-
-                if buffer.remaining().is_empty() {
-                    return Poll::Ready(Ok(()));
-                }
-            }
-            Poll::Ready(Ok(())) => return Poll::Ready(Err(io::ErrorKind::UnexpectedEof.into())),
-            Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
-            Poll::Pending => return Poll::Pending,
-        }
+        &self.buffer[..self.offset]
     }
 }
 

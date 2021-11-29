@@ -41,7 +41,7 @@ impl FromStr for SecretRepositoryId {
 pub struct PublicRepositoryId(InfoHash);
 
 impl PublicRepositoryId {
-    // pub(crate) const SIZE: usize = INFO_HASH_LEN;
+    pub(crate) const SIZE: usize = INFO_HASH_LEN;
 
     pub(crate) fn to_info_hash(self) -> InfoHash {
         self.0
@@ -50,6 +50,18 @@ impl PublicRepositoryId {
     #[cfg(test)]
     pub(crate) fn random() -> Self {
         Self(rand::random())
+    }
+}
+
+impl From<[u8; Self::SIZE]> for PublicRepositoryId {
+    fn from(array: [u8; Self::SIZE]) -> Self {
+        Self(array.into())
+    }
+}
+
+impl AsRef<[u8]> for PublicRepositoryId {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_ref()
     }
 }
 

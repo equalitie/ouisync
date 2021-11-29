@@ -91,7 +91,7 @@ impl fmt::Debug for Response {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 pub(crate) struct Message {
     pub id: PublicRepositoryId,
     pub content: Vec<u8>,

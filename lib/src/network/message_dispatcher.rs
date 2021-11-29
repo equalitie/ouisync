@@ -139,7 +139,7 @@ impl ContentSink {
     /// Returns whether the send succeeded.
     pub async fn send(&self, content: Vec<u8>) -> bool {
         self.state
-            .send(&Message {
+            .send(Message {
                 id: self.id,
                 content,
             })
@@ -219,14 +219,14 @@ impl PermittedSink {
 }
 
 // `Sink` impl just trivially delegates to the underlying sink.
-impl<'a> Sink<&'a Message> for PermittedSink {
+impl Sink<Message> for PermittedSink {
     type Error = io::Error;
 
     fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.inner.poll_ready_unpin(cx)
     }
 
-    fn start_send(mut self: Pin<&mut Self>, item: &'a Message) -> Result<(), Self::Error> {
+    fn start_send(mut self: Pin<&mut Self>, item: Message) -> Result<(), Self::Error> {
         self.inner.start_send_unpin(item)
     }
 
@@ -315,8 +315,8 @@ impl Future for Recv<'_> {
     }
 }
 
-// Sink that writes to the first available of multiple underlying TCP streams, automatically
-// removing the failed ones.
+// Sink that writes to multiple underlying TCP streams sequentially until one of them succeeds,
+// automatically removing the failed ones.
 //
 // NOTE: Doesn't actually implement the `Sink` trait currently because we don't need it, only
 // provides an async `send` method.
@@ -351,10 +351,10 @@ impl MultiSink {
     // Equivalent to
     //
     // ```ignore
-    // async fn send(&self, message: &Message) -> bool;
+    // async fn send(&self, message: Message) -> bool;
     // ```
     //
-    fn send<'a>(&'a self, message: &'a Message) -> Send {
+    fn send(&self, message: Message) -> Send {
         Send {
             message,
             pending: true,
@@ -378,7 +378,7 @@ impl MultiSinkInner {
 
 // Future returned from [`MultiSink::send`].
 struct Send<'a> {
-    message: &'a Message,
+    message: Message,
     pending: bool,
     inner: &'a Mutex<MultiSinkInner>,
 }
@@ -416,7 +416,8 @@ impl Future for Send<'_> {
                 }
             }
 
-            match sink.start_send_unpin(self.message) {
+            // TODO: can we avoid the clone here?
+            match sink.start_send_unpin(self.message.clone()) {
                 Ok(()) => {
                     self.pending = false;
                 }
@@ -443,7 +444,7 @@ mod tests {
         let send_content = b"hello world";
 
         client
-            .send(&Message {
+            .send(Message {
                 id: repo_id,
                 content: send_content.to_vec(),
             })
@@ -468,7 +469,7 @@ mod tests {
 
         for (repo_id, content) in [(repo_id0, send_content0), (repo_id1, send_content1)] {
             client
-                .send(&Message {
+                .send(Message {
                     id: repo_id,
                     content: content.to_vec(),
                 })
@@ -499,7 +500,7 @@ mod tests {
 
         for content in [send_content0, send_content1] {
             client
-                .send(&Message {
+                .send(Message {
                     id: repo_id,
                     content: content.to_vec(),
                 })
@@ -545,7 +546,7 @@ mod tests {
 
         let mut client = MessageSink::new(client);
         client
-            .send(&Message {
+            .send(Message {
                 id: PublicRepositoryId::random(),
                 content: b"hello world".to_vec(),
             })
