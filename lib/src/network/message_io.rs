@@ -13,12 +13,12 @@ const MAX_MESSAGE_SIZE: u16 = u16::MAX - 1;
 
 /// Wrapper that turns a reader (`AsyncRead`) into a `Stream` of `Message` by deserializing the
 /// data read from the reader.
-pub(crate) struct ObjectRead<R> {
+pub(crate) struct MessageStream<R> {
     read: R,
     decoder: Decoder,
 }
 
-impl<R> ObjectRead<R> {
+impl<R> MessageStream<R> {
     pub fn new(read: R) -> Self {
         Self {
             read,
@@ -27,7 +27,7 @@ impl<R> ObjectRead<R> {
     }
 }
 
-impl<R> Stream for ObjectRead<R>
+impl<R> Stream for MessageStream<R>
 where
     R: AsyncRead + Unpin,
 {
@@ -81,12 +81,12 @@ where
 
 /// Wrapper that turns a writer (`AsyncWrite`) into a `Sink` of `Message` by serializing the items
 /// and writing them to the writer.
-pub(crate) struct ObjectWrite<W> {
+pub(crate) struct MessageSink<W> {
     write: W,
     encoder: Encoder,
 }
 
-impl<W> ObjectWrite<W> {
+impl<W> MessageSink<W> {
     pub fn new(write: W) -> Self {
         Self {
             write,
@@ -95,7 +95,7 @@ impl<W> ObjectWrite<W> {
     }
 }
 
-impl<'a, W> Sink<&'a Message> for ObjectWrite<W>
+impl<'a, W> Sink<&'a Message> for MessageSink<W>
 where
     W: AsyncWrite + Unpin,
 {

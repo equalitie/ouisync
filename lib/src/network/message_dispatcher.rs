@@ -3,7 +3,7 @@
 use super::{
     connection::{ConnectionPermit, ConnectionPermitHalf},
     message::{Content, Message},
-    message_io::{ObjectRead, ObjectWrite},
+    message_io::{MessageSink, MessageStream},
 };
 use crate::repository::PublicRepositoryId;
 use futures_util::{ready, stream::SelectAll, Sink, SinkExt, Stream, StreamExt};
@@ -178,14 +178,14 @@ impl RecvState {
 // Stream of `Message` backed by a `TcpStream`. Closes on first error. Contains a connection
 // permit which gets released on drop.
 struct PermittedStream {
-    inner: ObjectRead<tcp::OwnedReadHalf>,
+    inner: MessageStream<tcp::OwnedReadHalf>,
     _permit: ConnectionPermitHalf,
 }
 
 impl PermittedStream {
     fn new(stream: tcp::OwnedReadHalf, permit: ConnectionPermitHalf) -> Self {
         Self {
-            inner: ObjectRead::new(stream),
+            inner: MessageStream::new(stream),
             _permit: permit,
         }
     }
@@ -205,14 +205,14 @@ impl Stream for PermittedStream {
 // Sink for `Message` backed by a `TcpStream`.
 // Contains a connection permit which gets released on drop.
 struct PermittedSink {
-    inner: ObjectWrite<tcp::OwnedWriteHalf>,
+    inner: MessageSink<tcp::OwnedWriteHalf>,
     _permit: ConnectionPermitHalf,
 }
 
 impl PermittedSink {
     fn new(stream: tcp::OwnedWriteHalf, permit: ConnectionPermitHalf) -> Self {
         Self {
-            inner: ObjectWrite::new(stream),
+            inner: MessageSink::new(stream),
             _permit: permit,
         }
     }
@@ -553,7 +553,7 @@ mod tests {
             ConnectionPermit::dummy().split().0,
         ));
 
-        let mut client = ObjectWrite::new(client);
+        let mut client = MessageSink::new(client);
         client
             .send(&Message {
                 id: PublicRepositoryId::random(),
@@ -567,9 +567,9 @@ mod tests {
         assert!(stream.recv().await.is_none());
     }
 
-    async fn setup() -> (ObjectWrite<TcpStream>, MessageDispatcher) {
+    async fn setup() -> (MessageSink<TcpStream>, MessageDispatcher) {
         let (client, server) = create_connected_sockets().await;
-        let client_writer = ObjectWrite::new(client);
+        let client_writer = MessageSink::new(client);
 
         let server_dispatcher = MessageDispatcher::new();
         server_dispatcher.bind(server, ConnectionPermit::dummy());
