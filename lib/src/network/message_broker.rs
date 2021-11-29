@@ -6,7 +6,10 @@ use super::{
     server::Server,
 };
 use crate::{index::Index, repository::PublicRepositoryId, scoped_task::ScopedJoinHandle};
-use std::{collections::HashMap, fmt};
+use std::{
+    collections::{hash_map::Entry, HashMap},
+    fmt,
+};
 use tokio::{
     net::TcpStream,
     select,
@@ -136,23 +139,13 @@ impl MessageBroker {
 
 struct Inner {
     dispatcher: MessageDispatcher,
-    links: HashMap<PublicRepositoryId, Link>,
+    links: HashMap<PublicRepositoryId, oneshot::Sender<()>>,
 }
 
 impl Inner {
     async fn run(mut self, mut command_rx: mpsc::Receiver<Command>) {
-        let mut incoming = self.dispatcher.incoming();
-
-        loop {
-            select! {
-                Some(command) = command_rx.recv() => {
-                    self.handle_command(command)
-                }
-                Some(stream) = incoming.recv() => {
-                    self.insert_link(*stream.id(), HalfLink::Incoming(stream))
-                }
-                else => break,
-            }
+        while let Some(command) = command_rx.recv().await {
+            self.handle_command(command);
         }
     }
 
@@ -160,8 +153,7 @@ impl Inner {
         match command {
             Command::AddConnection(stream, permit) => self.add_connection(stream, permit),
             Command::CreateLink { id, index } => {
-                let sink = self.open_sink(id);
-                self.insert_link(id, HalfLink::Outgoing(index, sink));
+                self.create_link(id, index);
             }
             Command::DestroyLink { id } => {
                 self.links.remove(&id);
@@ -169,46 +161,34 @@ impl Inner {
         }
     }
 
-    fn insert_link(&mut self, id: PublicRepositoryId, new: HalfLink) {
-        use HalfLink::*;
-        use Link::*;
+    fn create_link(&mut self, id: PublicRepositoryId, index: Index) {
+        let (abort_tx, abort_rx) = oneshot::channel();
 
-        let old = self.links.remove(&id);
-        let new = match (old, new) {
-            (Some(Half(Outgoing(index, sink))), Outgoing(..)) => {
-                log::warn!("not creating link for {:?} - already exists", id);
-                Half(Outgoing(index, sink))
-            }
-            (Some(Half(Outgoing(index, sink))), Incoming(stream))
-            | (Some(Half(Incoming(stream))), Outgoing(index, sink)) => {
-                log::debug!("creating link for {:?}", stream.id());
-                create_full_link(index, stream, sink)
-            }
-            (Some(Half(Incoming(_))), Incoming(stream)) => Half(Incoming(stream)),
-            (Some(Full(abort_tx)), link) => {
-                if abort_tx.is_closed() {
-                    Half(link)
+        match self.links.entry(id) {
+            Entry::Occupied(mut entry) => {
+                if entry.get().is_closed() {
+                    entry.insert(abort_tx);
                 } else {
                     log::warn!("not creating link for {:?} - already exists", id);
-                    Full(abort_tx)
+                    return;
                 }
             }
-            (None, link) => Half(link),
-        };
+            Entry::Vacant(entry) => {
+                entry.insert(abort_tx);
+            }
+        }
 
-        self.links.insert(id, new);
-    }
+        log::debug!("creating link for {:?}", id);
 
-    fn open_sink(&self, id: PublicRepositoryId) -> ContentSink {
+        let stream = self.dispatcher.open_recv(id);
         let sink = self.dispatcher.open_send(id);
 
-        // spawn task to send the initial message
-        task::spawn({
-            let sink = sink.clone();
-            async move { sink.send(Content::CreateLink).await }
+        task::spawn(async move {
+            select! {
+                _ = run_link(index, stream, sink) => (),
+                _ = abort_rx => (),
+            }
         });
-
-        sink
     }
 
     fn add_connection(&self, stream: TcpStream, permit: ConnectionPermit) {
@@ -241,33 +221,6 @@ impl fmt::Debug for Command {
             Self::DestroyLink { id } => f.debug_struct("DestroyLink").field("id", id).finish(),
         }
     }
-}
-
-enum Link {
-    // Link partially established by only one party.
-    Half(HalfLink),
-    // Link fully established by both parties.
-    Full(oneshot::Sender<()>),
-}
-
-enum HalfLink {
-    // Link established by us but not by the peer.
-    Outgoing(Index, ContentSink),
-    // Link established by the peer but not by us.
-    Incoming(ContentStream),
-}
-
-fn create_full_link(index: Index, stream: ContentStream, sink: ContentSink) -> Link {
-    let (abort_tx, abort_rx) = oneshot::channel();
-
-    task::spawn(async move {
-        select! {
-            _ = run_link(index, stream, sink) => (),
-            _ = abort_rx => (),
-        }
-    });
-
-    Link::Full(abort_tx)
 }
 
 async fn run_link(index: Index, mut stream: ContentStream, sink: ContentSink) {
@@ -311,7 +264,6 @@ async fn run_link(index: Index, mut stream: ContentStream, sink: ContentSink) {
                         break;
                     }
                 }
-                Content::CreateLink => {}
             }
         }
 

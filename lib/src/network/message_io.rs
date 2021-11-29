@@ -670,7 +670,7 @@ mod tests {
         client
             .send(&Message {
                 id: PublicRepositoryId::random(),
-                content: Content::CreateLink,
+                content: Content::Request(Request::Block(rand::random())),
             })
             .await
             .unwrap();

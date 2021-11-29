@@ -99,7 +99,6 @@ pub(crate) struct Message {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub(crate) enum Content {
-    CreateLink,
     Request(Request),
     Response(Response),
 }
@@ -109,7 +108,7 @@ impl From<Content> for Request {
     fn from(content: Content) -> Self {
         match content {
             Content::Request(request) => request,
-            Content::CreateLink | Content::Response(_) => {
+            Content::Response(_) => {
                 panic!("not a request: {:?}", content)
             }
         }
@@ -120,7 +119,7 @@ impl From<Content> for Request {
 impl From<Content> for Response {
     fn from(content: Content) -> Self {
         match content {
-            Content::CreateLink | Content::Request(_) => {
+            Content::Request(_) => {
                 panic!("not a response: {:?}", content)
             }
             Content::Response(response) => response,
