@@ -5,7 +5,7 @@ mod ip_stack;
 mod local_discovery;
 mod message;
 mod message_broker;
-mod message_io;
+mod message_dispatcher;
 mod object_stream;
 mod runtime_id;
 mod server;

@@ -2,7 +2,7 @@ use super::{
     client::Client,
     connection::ConnectionPermit,
     message::{Content, Request, Response},
-    message_io::{ContentSink, ContentStream, MessageDispatcher},
+    message_dispatcher::{ContentSink, ContentStream, MessageDispatcher},
     server::Server,
 };
 use crate::{index::Index, repository::PublicRepositoryId, scoped_task::ScopedJoinHandle};
