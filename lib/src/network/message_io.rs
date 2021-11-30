@@ -356,9 +356,20 @@ impl Decoder {
                         )));
                     }
 
-                    self.phase = DecodePhase::Content { id };
-                    self.buffer.resize(len as usize, 0);
-                    self.offset = 0;
+                    if len > 0 {
+                        self.phase = DecodePhase::Content { id };
+                        self.buffer.resize(len as usize, 0);
+                        self.offset = 0;
+                    } else {
+                        self.phase = DecodePhase::Id;
+                        self.buffer.resize(PublicRepositoryId::SIZE, 0);
+                        self.offset = 0;
+
+                        return Poll::Ready(Ok(Message {
+                            id,
+                            content: vec![],
+                        }));
+                    }
                 }
                 DecodePhase::Content { id } => {
                     let content = mem::take(&mut self.buffer);

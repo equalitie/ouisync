@@ -367,8 +367,7 @@ impl MultiSink {
     //
     fn send(&self, message: Message) -> Send {
         Send {
-            message,
-            pending: true,
+            message: Some(message),
             inner: &self.inner,
         }
     }
@@ -393,8 +392,7 @@ impl MultiSinkInner {
 
 // Future returned from [`MultiSink::send`].
 struct Send<'a> {
-    message: Message,
-    pending: bool,
+    message: Option<Message>,
     inner: &'a Mutex<MultiSinkInner>,
 }
 
@@ -411,15 +409,17 @@ impl Future for Send<'_> {
                 return Poll::Ready(false);
             };
 
-            match sink.poll_ready_unpin(cx) {
+            let message = match sink.poll_ready_unpin(cx) {
                 Poll::Ready(Ok(())) => {
-                    if !self.pending {
+                    if let Some(message) = self.message.take() {
+                        message
+                    } else {
                         return Poll::Ready(true);
                     }
                 }
-                Poll::Ready(Err(_)) => {
+                Poll::Ready(Err(error)) => {
                     inner.sinks.swap_remove(0);
-                    self.pending = true;
+                    self.message = Some(error.message);
                     continue;
                 }
                 Poll::Pending => {
@@ -429,17 +429,11 @@ impl Future for Send<'_> {
 
                     return Poll::Pending;
                 }
-            }
+            };
 
-            // TODO: can we avoid the clone here?
-            match sink.start_send_unpin(self.message.clone()) {
-                Ok(()) => {
-                    self.pending = false;
-                }
-                Err(_) => {
-                    inner.sinks.swap_remove(0);
-                    self.pending = true;
-                }
+            if let Err(error) = sink.start_send_unpin(message) {
+                inner.sinks.swap_remove(0);
+                self.message = Some(error.message);
             }
         }
     }
