@@ -739,7 +739,7 @@ mod tests {
 
         let _watch_dog = scoped_task::spawn(async {
             sleep(Duration::from_millis(5 * 1000)).await;
-            assert!(false, "timed out");
+            panic!("timed out");
         });
 
         // The deadlock here happened because the reader lock when opening the directory is
@@ -765,10 +765,7 @@ mod tests {
                     // Sometimes opening the directory may outrace its creation,
                     // so continue to retry again.
                 }
-                assert!(
-                    false,
-                    "Failed to open the directory after multiple attempts"
-                );
+                panic!("Failed to open the directory after multiple attempts");
             }
         });
 
