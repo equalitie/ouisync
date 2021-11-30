@@ -242,30 +242,10 @@ async fn run_link(_id: SecretRepositoryId, index: Index, stream: ContentStream, 
 
     let id = *stream.id();
 
-    // Create client
-    let client_stream = ClientStream::new(content_tx.clone(), response_rx);
-    let mut client = Client::new(index.clone(), client_stream);
-    let client_task = async move {
-        match client.run().await {
-            Ok(()) => log::debug!("client for {:?} terminated", id),
-            Err(error) => log::error!("client for {:?} failed: {}", id, error),
-        }
-    };
-
-    // Create server
-    let server_stream = ServerStream::new(content_tx.clone(), request_rx);
-    let mut server = Server::new(index, server_stream);
-    let server_task = async move {
-        match server.run().await {
-            Ok(()) => log::debug!("server for {:?} terminated", id),
-            Err(error) => log::error!("server for {:?} failed: {}", id, error),
-        }
-    };
-
     // Run everything in parallel:
     select! {
-        _ = client_task => (),
-        _ = server_task => (),
+        _ = run_client(id, index.clone(), content_tx.clone(), response_rx) => (),
+        _ = run_server(id, index, content_tx, request_rx ) => (),
         _ = recv_messages(stream, request_tx, response_tx) => (),
         _ = send_messages(content_rx, sink) => (),
     }
@@ -322,4 +302,36 @@ async fn send_messages(mut content_rx: mpsc::Receiver<Content>, sink: ContentSin
     }
 
     log::debug!("message sink for {:?} closed", sink.id())
+}
+
+// Create and run client
+async fn run_client(
+    id: PublicRepositoryId,
+    index: Index,
+    content_tx: mpsc::Sender<Content>,
+    response_rx: mpsc::Receiver<Response>,
+) {
+    let client_stream = ClientStream::new(content_tx, response_rx);
+    let mut client = Client::new(index, client_stream);
+
+    match client.run().await {
+        Ok(()) => log::debug!("client for {:?} terminated", id),
+        Err(error) => log::error!("client for {:?} failed: {}", id, error),
+    }
+}
+
+// Create and run server
+async fn run_server(
+    id: PublicRepositoryId,
+    index: Index,
+    content_tx: mpsc::Sender<Content>,
+    request_rx: mpsc::Receiver<Request>,
+) {
+    let server_stream = ServerStream::new(content_tx, request_rx);
+    let mut server = Server::new(index, server_stream);
+
+    match server.run().await {
+        Ok(()) => log::debug!("server for {:?} terminated", id),
+        Err(error) => log::error!("server for {:?} failed: {}", id, error),
+    }
 }
