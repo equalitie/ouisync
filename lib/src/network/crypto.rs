@@ -12,8 +12,14 @@ use super::{
     runtime_id::RuntimeId,
 };
 use crate::repository::{PublicRepositoryId, SecretRepositoryId};
+use noise_protocol::Cipher as _;
 use noise_rust_crypto::{Blake2s, ChaCha20Poly1305, X25519};
+use std::mem;
 use thiserror::Error;
+
+type Cipher = ChaCha20Poly1305;
+type CipherState = noise_protocol::CipherState<Cipher>;
+type HandshakeState = noise_protocol::HandshakeState<X25519, Cipher, Blake2s>;
 
 /// Role of this replica in the communication protocol.
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -83,15 +89,19 @@ impl DecryptingStream {
 pub(super) struct EncryptingSink {
     inner: ContentSink,
     cipher: CipherState,
+    buffer: Vec<u8>,
 }
 
 impl EncryptingSink {
-    pub async fn send(&mut self, content: Vec<u8>) -> Result<(), Error> {
+    pub async fn send(&mut self, mut content: Vec<u8>) -> Result<(), Error> {
         if self.cipher.get_next_n() >= MAX_NONCE {
             return Err(Error::Exhausted);
         }
 
-        let content = self.cipher.encrypt_vec(&content);
+        self.buffer.resize(content.len() + Cipher::tag_len(), 0);
+        self.cipher.encrypt(&content, &mut self.buffer);
+
+        mem::swap(&mut content, &mut self.buffer);
 
         if self.inner.send(content).await {
             Ok(())
@@ -153,6 +163,7 @@ pub(super) async fn establish_channel(
     let sink = EncryptingSink {
         inner: sink,
         cipher: send_cipher,
+        buffer: vec![],
     };
 
     Ok((stream, sink))
@@ -174,8 +185,6 @@ impl From<noise_protocol::Error> for Error {
     }
 }
 
-type HandshakeState = noise_protocol::HandshakeState<X25519, ChaCha20Poly1305, Blake2s>;
-
 fn build_handshake_state(role: Role, repo_id: &SecretRepositoryId) -> HandshakeState {
     use noise_protocol::patterns;
 
@@ -191,5 +200,3 @@ fn build_handshake_state(role: Role, repo_id: &SecretRepositoryId) -> HandshakeS
     state.push_psk(repo_id.salted_hash(b"pre-shared-key").as_ref());
     state
 }
-
-type CipherState = noise_protocol::CipherState<ChaCha20Poly1305>;
