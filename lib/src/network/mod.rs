@@ -1,5 +1,6 @@
 mod client;
 mod connection;
+mod crypto;
 mod dht_discovery;
 mod ip_stack;
 mod local_discovery;
@@ -509,7 +510,7 @@ impl Inner {
 
         log::info!("New {} TCP connection: {}", peer_source, addr);
 
-        let their_runtime_id = match perform_handshake(&mut stream, self.this_runtime_id).await {
+        let that_runtime_id = match perform_handshake(&mut stream, self.this_runtime_id).await {
             Ok(replica_id) => replica_id,
             Err(error) => {
                 log::error!("Failed to perform handshake: {}", error);
@@ -518,7 +519,7 @@ impl Inner {
         };
 
         // prevent self-connections.
-        if their_runtime_id == self.this_runtime_id {
+        if that_runtime_id == self.this_runtime_id {
             log::debug!("Connection from self, discarding");
             return;
         }
@@ -527,12 +528,13 @@ impl Inner {
 
         let mut brokers = self.message_brokers.lock().await;
 
-        match brokers.entry(their_runtime_id) {
+        match brokers.entry(that_runtime_id) {
             Entry::Occupied(entry) => entry.get().add_connection(stream, permit).await,
             Entry::Vacant(entry) => {
-                log::info!("Connected to replica {:?}", their_runtime_id);
+                log::info!("Connected to replica {:?}", that_runtime_id);
 
-                let broker = MessageBroker::new(stream, permit);
+                let broker =
+                    MessageBroker::new(self.this_runtime_id, that_runtime_id, stream, permit);
 
                 // TODO: for DHT connection we should only link the repository for which we did the
                 // lookup but make sure we correctly handle edge cases, for example, when we have
@@ -552,7 +554,7 @@ impl Inner {
 
         // Remove the broker if it has no more connections.
         let mut brokers = self.message_brokers.lock().await;
-        if let Entry::Occupied(entry) = brokers.entry(their_runtime_id) {
+        if let Entry::Occupied(entry) = brokers.entry(that_runtime_id) {
             if !entry.get().has_connections().await {
                 entry.remove();
             }

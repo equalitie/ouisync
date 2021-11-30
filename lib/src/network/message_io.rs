@@ -10,6 +10,7 @@ use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 /// Max message size when serialized in bytes.
+/// This is also the maximum allowed message size in the Noise Protocol Framework.
 const MAX_MESSAGE_SIZE: u16 = u16::MAX - 1;
 
 // Messages are encoded like this:
@@ -193,7 +194,7 @@ where
     let len = ready!(io.poll_write(cx, &buffer[*offset..]))?;
 
     if len == 0 {
-        return Poll::Ready(Err(io::ErrorKind::UnexpectedEof.into()));
+        return Poll::Ready(Err(io::ErrorKind::WriteZero.into()));
     }
 
     *offset += len;

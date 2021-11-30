@@ -1,8 +1,10 @@
 use super::{
     client::Client,
     connection::ConnectionPermit,
+    crypto::{self, DecryptingStream, EncryptingSink, Role},
     message::{Content, Request, Response},
     message_dispatcher::{ContentSink, ContentStream, MessageDispatcher},
+    runtime_id::RuntimeId,
     server::Server,
 };
 use crate::{
@@ -76,12 +78,19 @@ impl ClientStream {
 /// that it either goes to the ClientStream or ServerStream for processing by the Client and Server
 /// structures respectively.
 pub(super) struct MessageBroker {
+    this_runtime_id: RuntimeId,
+    that_runtime_id: RuntimeId,
     command_tx: mpsc::Sender<Command>,
     _join_handle: ScopedJoinHandle<()>,
 }
 
 impl MessageBroker {
-    pub fn new(stream: TcpStream, permit: ConnectionPermit) -> Self {
+    pub fn new(
+        this_runtime_id: RuntimeId,
+        that_runtime_id: RuntimeId,
+        stream: TcpStream,
+        permit: ConnectionPermit,
+    ) -> Self {
         let (command_tx, command_rx) = mpsc::channel(1);
 
         let inner = Inner {
@@ -94,6 +103,8 @@ impl MessageBroker {
         let handle = task::spawn(inner.run(command_rx));
 
         Self {
+            this_runtime_id,
+            that_runtime_id,
             command_tx,
             _join_handle: ScopedJoinHandle(handle),
         }
@@ -125,8 +136,10 @@ impl MessageBroker {
     /// counterpart needs to call this too with matching `local_name` and `remote_name` for the link
     /// to actually be created.
     pub async fn create_link(&self, id: SecretRepositoryId, index: Index) {
+        let role = Role::determine(&id, &self.this_runtime_id, &self.that_runtime_id);
+
         self.command_tx
-            .send(Command::CreateLink { id, index })
+            .send(Command::CreateLink { id, index, role })
             .await
             .unwrap()
     }
@@ -157,8 +170,8 @@ impl Inner {
         match command {
             Command::AddConnection(stream, permit) => self.add_connection(stream, permit),
             Command::CheckHasConnections(tx) => tx.send(!self.dispatcher.is_closed()).unwrap_or(()),
-            Command::CreateLink { id, index } => {
-                self.create_link(id, index);
+            Command::CreateLink { role, id, index } => {
+                self.create_link(role, id, index);
             }
             Command::DestroyLink { id } => {
                 self.links.remove(&id);
@@ -166,7 +179,7 @@ impl Inner {
         }
     }
 
-    fn create_link(&mut self, sid: SecretRepositoryId, index: Index) {
+    fn create_link(&mut self, role: Role, sid: SecretRepositoryId, index: Index) {
         let (abort_tx, abort_rx) = oneshot::channel();
 
         let pid = sid.public();
@@ -192,7 +205,7 @@ impl Inner {
 
         task::spawn(async move {
             select! {
-                _ = run_link(sid, index, stream, sink) => (),
+                _ = run_link(role, &sid, stream, sink, index) => (),
                 _ = abort_rx => (),
             }
         });
@@ -203,10 +216,11 @@ impl Inner {
     }
 }
 
-pub(super) enum Command {
+enum Command {
     AddConnection(TcpStream, ConnectionPermit),
     CheckHasConnections(oneshot::Sender<bool>),
     CreateLink {
+        role: Role,
         id: SecretRepositoryId,
         index: Index,
     },
@@ -235,14 +249,33 @@ impl fmt::Debug for Command {
     }
 }
 
-async fn run_link(_id: SecretRepositoryId, index: Index, stream: ContentStream, sink: ContentSink) {
+async fn run_link(
+    role: Role,
+    repo_id: &SecretRepositoryId,
+    stream: ContentStream,
+    sink: ContentSink,
+    index: Index,
+) {
+    let id = *stream.id();
+
+    let (stream, sink) = match crypto::establish_channel(role, repo_id, stream, sink).await {
+        Ok(channel) => channel,
+        Err(error) => {
+            log::warn!(
+                "failed to establish encrypted channel for {:?}: {}",
+                id,
+                error
+            );
+            return;
+        }
+    };
+
     let (request_tx, request_rx) = mpsc::channel(1);
     let (response_tx, response_rx) = mpsc::channel(1);
     let (content_tx, content_rx) = mpsc::channel(1);
 
-    let id = *stream.id();
-
     // Run everything in parallel:
+    // TODO: restart when nonce exhausted
     select! {
         _ = run_client(id, index.clone(), content_tx.clone(), response_rx) => (),
         _ = run_server(id, index, content_tx, request_rx ) => (),
@@ -255,11 +288,11 @@ async fn run_link(_id: SecretRepositoryId, index: Index, stream: ContentStream, 
 
 // Handle incoming messages
 async fn recv_messages(
-    mut stream: ContentStream,
+    mut stream: DecryptingStream,
     request_tx: mpsc::Sender<Request>,
     response_tx: mpsc::Sender<Response>,
 ) {
-    while let Some(content) = stream.recv().await {
+    while let Ok(content) = stream.recv().await {
         let content: Content = match bincode::deserialize(&content) {
             Ok(content) => content,
             Err(error) => {
@@ -290,13 +323,13 @@ async fn recv_messages(
 }
 
 // Handle outgoing messages
-async fn send_messages(mut content_rx: mpsc::Receiver<Content>, sink: ContentSink) {
+async fn send_messages(mut content_rx: mpsc::Receiver<Content>, mut sink: EncryptingSink) {
     while let Some(content) = content_rx.recv().await {
         // unwrap is OK because serialization into a vec should never fail unless we have a bug
         // somewhere.
         let content = bincode::serialize(&content).unwrap();
 
-        if !sink.send(content).await {
+        if sink.send(content).await.is_err() {
             break;
         }
     }

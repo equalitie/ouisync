@@ -1,6 +1,7 @@
-use crate::{crypto::Hashable, format};
+use crate::{crypto::Hash, format};
 use btdht::{InfoHash, INFO_HASH_LEN};
 use serde::{Deserialize, Serialize};
+use sha3::{digest::Digest, Sha3_256};
 use std::{fmt, str::FromStr};
 
 define_byte_array_wrapper! {
@@ -18,8 +19,16 @@ impl SecretRepositoryId {
         // (bittorrent uses SHA-1 but that is less secure).
         // `unwrap` is OK because the byte slice has the correct length.
         PublicRepositoryId(
-            InfoHash::try_from(&self.as_ref().hash().as_ref()[..INFO_HASH_LEN]).unwrap(),
+            InfoHash::try_from(&self.salted_hash(b"public-id").as_ref()[..INFO_HASH_LEN]).unwrap(),
         )
+    }
+
+    /// Hash of this id using the given salt.
+    pub fn salted_hash(&self, salt: &[u8]) -> Hash {
+        let mut hasher = Sha3_256::new();
+        hasher.update(self.as_ref());
+        hasher.update(salt);
+        hasher.finalize().into()
     }
 }
 
