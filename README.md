@@ -1,4 +1,5 @@
 [![CI](https://github.com/equalitie/ouisync/actions/workflows/ci.yml/badge.svg)](https://github.com/equalitie/ouisync/actions/workflows/ci.yml)
+[![dependency status](https://deps.rs/repo/github/equalitie/ouisync/status.svg)](https://deps.rs/repo/github/equalitie/ouisync)
 
 # Dependencies
 
