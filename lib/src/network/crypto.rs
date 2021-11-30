@@ -63,6 +63,7 @@ const MAX_NONCE: u64 = u64::MAX - 1;
 pub(super) struct DecryptingStream {
     inner: ContentStream,
     cipher: CipherState,
+    buffer: Vec<u8>,
 }
 
 impl DecryptingStream {
@@ -71,11 +72,18 @@ impl DecryptingStream {
             return Err(Error::Exhausted);
         }
 
-        let content = self.inner.recv().await.ok_or(Error::Closed)?;
-        let content = self
-            .cipher
-            .decrypt_vec(&content)
+        let mut content = self.inner.recv().await.ok_or(Error::Closed)?;
+
+        let plain_len = content
+            .len()
+            .checked_sub(Cipher::tag_len())
+            .ok_or(Error::Crypto)?;
+        self.buffer.resize(plain_len, 0);
+        self.cipher
+            .decrypt(&content, &mut self.buffer)
             .map_err(|_| Error::Crypto)?;
+
+        mem::swap(&mut content, &mut self.buffer);
 
         Ok(content)
     }
@@ -158,6 +166,7 @@ pub(super) async fn establish_channel(
     let stream = DecryptingStream {
         inner: stream,
         cipher: recv_cipher,
+        buffer: vec![],
     };
 
     let sink = EncryptingSink {
