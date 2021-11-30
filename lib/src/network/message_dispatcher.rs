@@ -3,14 +3,13 @@
 use super::{
     connection::{ConnectionPermit, ConnectionPermitHalf},
     message::Message,
-    message_io::{MessageSink, MessageStream},
+    message_io::{MessageSink, MessageStream, SendError},
 };
 use crate::repository::PublicRepositoryId;
 use futures_util::{ready, stream::SelectAll, Sink, SinkExt, Stream, StreamExt};
 use std::{
     collections::{HashMap, VecDeque},
     future::Future,
-    io,
     pin::Pin,
     sync::{Arc, Mutex},
     task::{Context, Poll, Waker},
@@ -228,7 +227,7 @@ impl PermittedSink {
 
 // `Sink` impl just trivially delegates to the underlying sink.
 impl Sink<Message> for PermittedSink {
-    type Error = io::Error;
+    type Error = SendError;
 
     fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.inner.poll_ready_unpin(cx)
