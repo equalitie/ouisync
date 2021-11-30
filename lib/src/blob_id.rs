@@ -3,13 +3,13 @@ use rand::{
     Rng,
 };
 
-define_array_wrapper! {
+define_byte_array_wrapper! {
     /// BlobId is used to identify a blob in a directory
     pub(crate) struct BlobId([u8; 32]);
 }
 
 impl BlobId {
-    pub(crate) const ZERO: Self = Self([0; 32]);
+    pub(crate) const ZERO: Self = Self([0; Self::SIZE]);
 }
 
 // Never generates `ZERO`

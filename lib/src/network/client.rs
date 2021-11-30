@@ -6,7 +6,7 @@ use crate::{
     block::BlockId,
     crypto::{AuthTag, Hash, Hashable},
     error::{Error, Result},
-    index::{Index, InnerNodeMap, LeafNodeSet, RootNode, Summary, INNER_LAYER_COUNT},
+    index::{Index, InnerNodeMap, LeafNodeSet, Summary, INNER_LAYER_COUNT},
     replica_id::ReplicaId,
     store,
     version_vector::VersionVector,
@@ -15,7 +15,6 @@ use tokio::{pin, select};
 
 pub(crate) struct Client {
     index: Index,
-    their_replica_id: ReplicaId,
     stream: ClientStream,
     // "Cookie" number of the last received `RootNode` response or zero if we haven't received one
     // yet. To be included in the next sent `RootNode` request. The server uses this to decide
@@ -24,10 +23,9 @@ pub(crate) struct Client {
 }
 
 impl Client {
-    pub fn new(index: Index, their_replica_id: ReplicaId, stream: ClientStream) -> Self {
+    pub fn new(index: Index, stream: ClientStream) -> Self {
         Self {
             index,
-            their_replica_id,
             stream,
             cookie: 0,
         }
@@ -42,8 +40,7 @@ impl Client {
                 .send(Request::RootNode {
                     cookie: self.cookie,
                 })
-                .await
-                .unwrap_or(());
+                .await;
 
             loop {
                 // TODO: add a timeout here and send the request again if it expires before we
@@ -68,10 +65,14 @@ impl Client {
         match response {
             Response::RootNode {
                 cookie,
+                replica_id,
                 versions,
                 hash,
                 summary,
-            } => self.handle_root_node(cookie, versions, hash, summary).await,
+            } => {
+                self.handle_root_node(cookie, replica_id, versions, hash, summary)
+                    .await
+            }
             Response::InnerNodes {
                 parent_hash,
                 inner_layer,
@@ -97,27 +98,28 @@ impl Client {
     async fn handle_root_node(
         &mut self,
         cookie: u64,
+        replica_id: ReplicaId,
         versions: VersionVector,
         hash: Hash,
         summary: Summary,
     ) -> Result<bool> {
         self.cookie = cookie;
 
-        if self
+        let status = self
             .index
-            .receive_root_node(&self.their_replica_id, versions, hash, summary)
-            .await?
-        {
+            .receive_root_node(&replica_id, versions, hash, summary)
+            .await?;
+
+        if status.updated {
             self.stream
                 .send(Request::InnerNodes {
                     parent_hash: hash,
                     inner_layer: 0,
                 })
-                .await
-                .unwrap_or(());
+                .await;
         }
 
-        self.is_complete().await
+        Ok(status.complete)
     }
 
     async fn handle_inner_nodes(
@@ -131,18 +133,16 @@ impl Client {
             return Ok(true);
         }
 
-        for hash in self
+        let status = self
             .index
             .receive_inner_nodes(parent_hash, inner_layer, nodes)
-            .await?
-        {
-            self.stream
-                .send(child_request(hash, inner_layer))
-                .await
-                .unwrap_or(())
+            .await?;
+
+        for hash in status.updated {
+            self.stream.send(child_request(hash, inner_layer)).await;
         }
 
-        self.is_complete().await
+        Ok(status.complete)
     }
 
     async fn handle_leaf_nodes(&self, parent_hash: Hash, nodes: LeafNodeSet) -> Result<bool> {
@@ -151,15 +151,14 @@ impl Client {
             return Ok(true);
         }
 
-        for block_id in self.index.receive_leaf_nodes(parent_hash, nodes).await? {
+        let status = self.index.receive_leaf_nodes(parent_hash, nodes).await?;
+
+        for block_id in status.updated {
             // TODO: avoid multiple clients downloading the same block
-            self.stream
-                .send(Request::Block(block_id))
-                .await
-                .unwrap_or(());
+            self.stream.send(Request::Block(block_id)).await;
         }
 
-        self.is_complete().await
+        Ok(status.complete)
     }
 
     async fn handle_block(&self, id: BlockId, content: Box<[u8]>, auth_tag: AuthTag) -> Result<()> {
@@ -171,15 +170,6 @@ impl Client {
             Err(Error::BlockNotReferenced) => Ok(()),
             Err(e) => Err(e),
         }
-    }
-
-    async fn is_complete(&self) -> Result<bool> {
-        Ok(
-            RootNode::load_latest(&self.index.pool, &self.their_replica_id)
-                .await?
-                .map(|node| node.summary.is_complete())
-                .unwrap_or(false),
-        )
     }
 }
 

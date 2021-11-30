@@ -1,42 +1,37 @@
 use super::{
     client::Client,
-    connection::{ConnectionPermit, MultiReader, MultiWriter},
-    message::{Message, Request, Response},
-    object_stream::TcpObjectStream,
+    connection::ConnectionPermit,
+    crypto::{self, DecryptingStream, EncryptingSink, Role},
+    message::{Content, Request, Response},
+    message_dispatcher::{ContentSink, ContentStream, MessageDispatcher},
+    runtime_id::RuntimeId,
     server::Server,
 };
 use crate::{
-    error::Result, index::Index, replica_id::ReplicaId, repository::PublicRepositoryId,
+    index::Index,
+    repository::{PublicRepositoryId, SecretRepositoryId},
     scoped_task::ScopedJoinHandle,
 };
 use std::{
-    collections::{hash_map::Entry, HashMap, HashSet},
+    collections::{hash_map::Entry, HashMap},
     fmt,
-    future::Future,
 };
 use tokio::{
+    net::TcpStream,
     select,
-    sync::{
-        mpsc::{self, error::SendError},
-        RwLock,
-    },
+    sync::{mpsc, oneshot},
     task,
 };
 
 /// A stream for receiving Requests and sending Responses
 pub(crate) struct ServerStream {
-    tx: mpsc::Sender<Command>,
+    tx: mpsc::Sender<Content>,
     rx: mpsc::Receiver<Request>,
-    id: PublicRepositoryId,
 }
 
 impl ServerStream {
-    pub(super) fn new(
-        tx: mpsc::Sender<Command>,
-        rx: mpsc::Receiver<Request>,
-        id: PublicRepositoryId,
-    ) -> Self {
-        Self { tx, rx, id }
+    pub(super) fn new(tx: mpsc::Sender<Content>, rx: mpsc::Receiver<Request>) -> Self {
+        Self { tx, rx }
     }
 
     pub async fn recv(&mut self) -> Option<Request> {
@@ -45,32 +40,21 @@ impl ServerStream {
         Some(rq)
     }
 
-    pub async fn send(&self, response: Response) -> Result<(), SendError<Response>> {
+    pub async fn send(&self, response: Response) -> bool {
         log::trace!("server: send {:?}", response);
-        self.tx
-            .send(Command::SendMessage(Message::Response {
-                id: self.id,
-                response,
-            }))
-            .await
-            .map_err(|e| SendError(into_message(e.0)))
+        self.tx.send(Content::Response(response)).await.is_ok()
     }
 }
 
 /// A stream for sending Requests and receiving Responses
 pub(crate) struct ClientStream {
-    tx: mpsc::Sender<Command>,
+    tx: mpsc::Sender<Content>,
     rx: mpsc::Receiver<Response>,
-    id: PublicRepositoryId,
 }
 
 impl ClientStream {
-    pub(super) fn new(
-        tx: mpsc::Sender<Command>,
-        rx: mpsc::Receiver<Response>,
-        id: PublicRepositoryId,
-    ) -> Self {
-        Self { tx, rx, id }
+    pub(super) fn new(tx: mpsc::Sender<Content>, rx: mpsc::Receiver<Response>) -> Self {
+        Self { tx, rx }
     }
 
     pub async fn recv(&mut self) -> Option<Response> {
@@ -79,20 +63,10 @@ impl ClientStream {
         Some(rs)
     }
 
-    pub async fn send(&self, request: Request) -> Result<(), SendError<Request>> {
+    pub async fn send(&self, request: Request) -> bool {
         log::trace!("client: send {:?}", request);
-        self.tx
-            .send(Command::SendMessage(Message::Request {
-                id: self.id,
-                request,
-            }))
-            .await
-            .map_err(|e| SendError(into_message(e.0)))
+        self.tx.send(Content::Request(request)).await.is_ok()
     }
-}
-
-fn into_message<T: From<Message>>(command: Command) -> T {
-    command.into_send_message().into()
 }
 
 /// Maintains one or more connections to a peer, listening on all of them at the same time. Note
@@ -104,24 +78,24 @@ fn into_message<T: From<Message>>(command: Command) -> T {
 /// that it either goes to the ClientStream or ServerStream for processing by the Client and Server
 /// structures respectively.
 pub(super) struct MessageBroker {
+    this_runtime_id: RuntimeId,
+    that_runtime_id: RuntimeId,
     command_tx: mpsc::Sender<Command>,
     _join_handle: ScopedJoinHandle<()>,
 }
 
 impl MessageBroker {
-    pub async fn new(
-        their_replica_id: ReplicaId,
-        stream: TcpObjectStream,
+    pub fn new(
+        this_runtime_id: RuntimeId,
+        that_runtime_id: RuntimeId,
+        stream: TcpStream,
         permit: ConnectionPermit,
     ) -> Self {
         let (command_tx, command_rx) = mpsc::channel(1);
 
         let inner = Inner {
-            their_replica_id,
-            command_tx: command_tx.clone(),
-            reader: MultiReader::new(),
-            writer: MultiWriter::new(),
-            links: RwLock::new(Links::new()),
+            dispatcher: MessageDispatcher::new(),
+            links: HashMap::new(),
         };
 
         inner.add_connection(stream, permit);
@@ -129,262 +103,130 @@ impl MessageBroker {
         let handle = task::spawn(inner.run(command_rx));
 
         Self {
+            this_runtime_id,
+            that_runtime_id,
             command_tx,
             _join_handle: ScopedJoinHandle(handle),
         }
     }
 
-    pub async fn add_connection(&self, stream: TcpObjectStream, permit: ConnectionPermit) {
-        if self
-            .command_tx
+    pub async fn add_connection(&self, stream: TcpStream, permit: ConnectionPermit) {
+        // The unwrap is ok here because the receiver gets closed only when this sender closes
+        self.command_tx
             .send(Command::AddConnection(stream, permit))
             .await
-            .is_err()
-        {
-            log::error!("failed to add connection - message broker is shutting down")
-        }
+            .unwrap()
     }
 
     /// Has this broker at least one live connection?
-    pub fn has_connections(&self) -> bool {
-        !self.command_tx.is_closed()
+    pub async fn has_connections(&self) -> bool {
+        let (tx, rx) = oneshot::channel();
+
+        // unwrap is ok because the command receiver gets closed only when the sender gets closed.
+        self.command_tx
+            .send(Command::CheckHasConnections(tx))
+            .await
+            .unwrap();
+
+        // unwrap is ok because the oneshot sender is never dropped without being sent to.
+        rx.await.unwrap()
     }
 
     /// Try to establish a link between a local repository and a remote repository. The remote
     /// counterpart needs to call this too with matching `local_name` and `remote_name` for the link
     /// to actually be created.
-    pub async fn create_link(&self, id: PublicRepositoryId, index: Index) {
-        if self
-            .command_tx
-            .send(Command::CreateLink { id, index })
+    pub async fn create_link(&self, id: SecretRepositoryId, index: Index) {
+        let role = Role::determine(&id, &self.this_runtime_id, &self.that_runtime_id);
+
+        self.command_tx
+            .send(Command::CreateLink { id, index, role })
             .await
-            .is_err()
-        {
-            log::error!("failed to create link - message broker is shutting down")
-        }
+            .unwrap()
     }
 
     /// Destroy the link between a local repository with the specified id hash and its remote
     /// counterpart (if one exists).
     pub async fn destroy_link(&self, id: PublicRepositoryId) {
-        // We can safely ignore the error here because it only means the message broker is shutting
-        // down and so all existing links are going to be destroyed anyway.
         self.command_tx
             .send(Command::DestroyLink { id })
             .await
-            .unwrap_or(())
+            .unwrap()
     }
 }
 
 struct Inner {
-    their_replica_id: ReplicaId,
-    command_tx: mpsc::Sender<Command>,
-    reader: MultiReader,
-    writer: MultiWriter,
-    links: RwLock<Links>,
+    dispatcher: MessageDispatcher,
+    links: HashMap<PublicRepositoryId, oneshot::Sender<()>>,
 }
 
 impl Inner {
-    async fn run(self, mut command_rx: mpsc::Receiver<Command>) {
-        // NOTE: it might be tempting to rewrite this code to something like:
-        //
-        //     loop {
-        //         select! {
-        //             command = command_rx.recv() => self.handle_command(command),
-        //             message = self.reader.read() => self.handle_message(message),
-        //         }
-        //     }
-        //
-        // to avoid all the synchronization machinery. This, however could result in a deadlock.
-        // The deadlock could happen this way:
-        //
-        // * We receive a Request from a peer and we send it to the Server.
-        // * We receive another Request, but because the queue to the server has size 1*, we block.
-        // * Server processes the Request and sends the Response back to us.
-        // * We're unable to process the Response because we're waiting for the second Request to
-        //   go through.
-        //
-        // *) In general, the problem happens when the number of received messages is higher than
-        //    the capacity of the channel, so just increasing the capacity won't help.
+    async fn run(mut self, mut command_rx: mpsc::Receiver<Command>) {
+        while let Some(command) = command_rx.recv().await {
+            self.handle_command(command);
+        }
+    }
 
-        let command_task = async {
-            while let Some(command) = command_rx.recv().await {
-                if !self.handle_command(command).await {
-                    break;
+    fn handle_command(&mut self, command: Command) {
+        match command {
+            Command::AddConnection(stream, permit) => self.add_connection(stream, permit),
+            Command::CheckHasConnections(tx) => tx.send(!self.dispatcher.is_closed()).unwrap_or(()),
+            Command::CreateLink { role, id, index } => {
+                self.create_link(role, id, index);
+            }
+            Command::DestroyLink { id } => {
+                self.links.remove(&id);
+            }
+        }
+    }
+
+    fn create_link(&mut self, role: Role, sid: SecretRepositoryId, index: Index) {
+        let (abort_tx, abort_rx) = oneshot::channel();
+
+        let pid = sid.public();
+
+        match self.links.entry(pid) {
+            Entry::Occupied(mut entry) => {
+                if entry.get().is_closed() {
+                    entry.insert(abort_tx);
+                } else {
+                    log::warn!("not creating link for {:?} - already exists", pid);
+                    return;
                 }
             }
-        };
-
-        let message_task = async {
-            while let Some(message) = self.reader.read().await {
-                self.handle_message(message).await;
-            }
-        };
-
-        // Wait for either to finish.
-        select! {
-            _ = command_task => (),
-            _ = message_task => (),
-        }
-    }
-
-    async fn handle_command(&self, command: Command) -> bool {
-        match command {
-            Command::AddConnection(stream, permit) => {
-                self.add_connection(stream, permit);
-                true
-            }
-            Command::SendMessage(message) => self.send_message(message).await,
-            Command::CreateLink { id, index } => self.create_outgoing_link(id, index).await,
-            Command::DestroyLink { id } => {
-                self.links.write().await.destroy_one(&id, None);
-                true
+            Entry::Vacant(entry) => {
+                entry.insert(abort_tx);
             }
         }
-    }
 
-    async fn handle_message(&self, message: Message) {
-        match message {
-            Message::Request { id, request } => self.handle_request(&id, request).await,
-            Message::Response { id, response } => self.handle_response(&id, response).await,
-            Message::CreateLink { id } => self.create_incoming_link(id).await,
-        }
-    }
+        log::debug!("creating link for {:?}", pid);
 
-    fn add_connection(&self, stream: TcpObjectStream, permit: ConnectionPermit) {
-        let (reader, writer) = stream.into_split();
-        let (reader_permit, writer_permit) = permit.split();
+        let stream = self.dispatcher.open_recv(pid);
+        let sink = self.dispatcher.open_send(pid);
 
-        self.reader.add(reader, reader_permit);
-        self.writer.add(writer, writer_permit);
-    }
-
-    async fn send_message(&self, message: Message) -> bool {
-        self.writer.write(&message).await
-    }
-
-    async fn create_outgoing_link(&self, id: PublicRepositoryId, index: Index) -> bool {
-        let mut links = self.links.write().await;
-
-        if links.active.contains_key(&id) {
-            log::warn!("not creating link for {:?} - already exists", id);
-            return true;
-        }
-
-        if links.pending_outgoing.contains_key(&id) {
-            log::warn!("not creating link for {:?} - already pending", id);
-            return true;
-        }
-
-        if !self.writer.write(&Message::CreateLink { id }).await {
-            log::warn!(
-                "not creating link for {:?} - \
-                 failed to send CreateLink message - all writers closed",
-                id,
-            );
-            return false;
-        }
-
-        if links.pending_incoming.remove(&id) {
-            self.create_link(&mut *links, id, index)
-        } else {
-            links.pending_outgoing.insert(id, index);
-        }
-
-        true
-    }
-
-    async fn create_incoming_link(&self, id: PublicRepositoryId) {
-        let mut links = self.links.write().await;
-
-        if let Some(index) = links.pending_outgoing.remove(&id) {
-            self.create_link(&mut *links, id, index)
-        } else {
-            links.pending_incoming.insert(id);
-        }
-    }
-
-    fn create_link(&self, links: &mut Links, id: PublicRepositoryId, index: Index) {
-        log::debug!("creating link for {:?}", id);
-
-        let (request_tx, request_rx) = mpsc::channel(1);
-        let (response_tx, response_rx) = mpsc::channel(1);
-
-        links.insert_active(id, request_tx, response_tx);
-
-        // NOTE: we just fire-and-forget the tasks which should be OK because when this
-        // `MessageBroker` instance is dropped, the associated senders (`request_tx`, `response_tx`)
-        // are dropped as well which closes the corresponding receivers which then terminates the
-        // tasks.
-
-        let client_stream = ClientStream::new(self.command_tx.clone(), response_rx, id);
-        let mut client = Client::new(index.clone(), self.their_replica_id, client_stream);
-        task::spawn(async move { log_error(client.run(), "client failed: ").await });
-
-        let server_stream = ServerStream::new(self.command_tx.clone(), request_rx, id);
-        let mut server = Server::new(index, server_stream);
-        task::spawn(async move { log_error(server.run(), "server failed: ").await });
-    }
-
-    async fn handle_request(&self, id: &PublicRepositoryId, request: Request) {
-        if let Some((link_id, request_tx)) = self.links.read().await.get_request_link(id) {
-            if request_tx.send(request).await.is_err() {
-                log::warn!("server unexpectedly terminated - destroying the link");
-                self.links.write().await.destroy_one(id, Some(link_id));
+        task::spawn(async move {
+            select! {
+                _ = run_link(role, &sid, stream, sink, index) => (),
+                _ = abort_rx => (),
             }
-        } else {
-            log::warn!(
-                "received request {:?} for unlinked repository {:?}",
-                request,
-                id
-            );
-        }
+        });
     }
 
-    async fn handle_response(&self, id: &PublicRepositoryId, response: Response) {
-        if let Some((link_id, response_tx)) = self.links.read().await.get_response_link(id) {
-            if response_tx.send(response).await.is_err() {
-                log::warn!("client unexpectedly terminated - destroying the link");
-                self.links.write().await.destroy_one(id, Some(link_id));
-            }
-        } else {
-            log::warn!(
-                "received response {:?} for unlinked repository {:?}",
-                response,
-                id
-            );
-        }
+    fn add_connection(&self, stream: TcpStream, permit: ConnectionPermit) {
+        self.dispatcher.bind(stream, permit)
     }
 }
 
-async fn log_error<F>(fut: F, prefix: &'static str)
-where
-    F: Future<Output = Result<()>>,
-{
-    if let Err(error) = fut.await {
-        log::error!("{}{}", prefix, error.verbose())
-    }
-}
-
-pub(super) enum Command {
-    AddConnection(TcpObjectStream, ConnectionPermit),
-    SendMessage(Message),
+enum Command {
+    AddConnection(TcpStream, ConnectionPermit),
+    CheckHasConnections(oneshot::Sender<bool>),
     CreateLink {
-        id: PublicRepositoryId,
+        role: Role,
+        id: SecretRepositoryId,
         index: Index,
     },
     DestroyLink {
         id: PublicRepositoryId,
     },
-}
-
-impl Command {
-    pub(super) fn into_send_message(self) -> Message {
-        match self {
-            Self::SendMessage(message) => message,
-            _ => panic!("Command is not SendMessage"),
-        }
-    }
 }
 
 impl fmt::Debug for Command {
@@ -394,7 +236,10 @@ impl fmt::Debug for Command {
                 .debug_tuple("AddConnection")
                 .field(&format_args!("_"))
                 .finish(),
-            Self::SendMessage(message) => f.debug_tuple("SendMessage").field(message).finish(),
+            Self::CheckHasConnections(_) => f
+                .debug_tuple("CheckHasConnections")
+                .field(&format_args!("_"))
+                .finish(),
             Self::CreateLink { id, .. } => f
                 .debug_struct("CreateLink")
                 .field("id", id)
@@ -404,89 +249,122 @@ impl fmt::Debug for Command {
     }
 }
 
-// LinkId is used for when we want to remove a particular link from Links::active, but keep it if
-// the link has been replaced with a new one in the mean time. For example, this could happen:
-//
-// 1. User clones a request_tx from one of the links in Links::active
-// 2. User attempts to send to a message using the above request_tx
-// 3. In the mean time, the original Link is replaced Links::active with a new one
-// 4. The step #2 from above fails and we attempt to remove the link where the request_tx is from,
-//    but instead we remove the newly replace link from step #3.
-type LinkId = u64;
+async fn run_link(
+    role: Role,
+    repo_id: &SecretRepositoryId,
+    stream: ContentStream,
+    sink: ContentSink,
+    index: Index,
+) {
+    let id = *stream.id();
 
-// Established link between local and remote repositories.
-struct Link {
-    id: LinkId,
+    let (stream, sink) = match crypto::establish_channel(role, repo_id, stream, sink).await {
+        Ok(channel) => channel,
+        Err(error) => {
+            log::warn!(
+                "failed to establish encrypted channel for {:?}: {}",
+                id,
+                error
+            );
+            return;
+        }
+    };
+
+    let (request_tx, request_rx) = mpsc::channel(1);
+    let (response_tx, response_rx) = mpsc::channel(1);
+    let (content_tx, content_rx) = mpsc::channel(1);
+
+    // Run everything in parallel:
+    // TODO: restart when nonce exhausted
+    select! {
+        _ = run_client(id, index.clone(), content_tx.clone(), response_rx) => (),
+        _ = run_server(id, index, content_tx, request_rx ) => (),
+        _ = recv_messages(stream, request_tx, response_tx) => (),
+        _ = send_messages(content_rx, sink) => (),
+    }
+
+    log::debug!("link for {:?} terminated", id)
+}
+
+// Handle incoming messages
+async fn recv_messages(
+    mut stream: DecryptingStream,
     request_tx: mpsc::Sender<Request>,
     response_tx: mpsc::Sender<Response>,
-}
+) {
+    while let Ok(content) = stream.recv().await {
+        let content: Content = match bincode::deserialize(&content) {
+            Ok(content) => content,
+            Err(error) => {
+                log::warn!(
+                    "failed to deserialize message for {:?}: {}",
+                    stream.id(),
+                    error
+                );
+                continue;
+            }
+        };
 
-struct Links {
-    active: HashMap<PublicRepositoryId, Link>,
-    pending_incoming: HashSet<PublicRepositoryId>,
-    pending_outgoing: HashMap<PublicRepositoryId, Index>,
-    next_link_id: LinkId,
-}
-
-impl Links {
-    pub fn new() -> Self {
-        Self {
-            active: HashMap::new(),
-            pending_incoming: HashSet::new(),
-            pending_outgoing: HashMap::new(),
-            next_link_id: 0,
-        }
-    }
-
-    pub fn insert_active(
-        &mut self,
-        repository_id: PublicRepositoryId,
-        request_tx: mpsc::Sender<Request>,
-        response_tx: mpsc::Sender<Response>,
-    ) {
-        let link_id = self.generate_link_id();
-
-        self.active.insert(
-            repository_id,
-            Link {
-                id: link_id,
-                request_tx,
-                response_tx,
-            },
-        );
-    }
-
-    pub fn get_request_link(
-        &self,
-        repository_id: &PublicRepositoryId,
-    ) -> Option<(LinkId, mpsc::Sender<Request>)> {
-        self.active
-            .get(repository_id)
-            .map(|link| (link.id, link.request_tx.clone()))
-    }
-
-    pub fn get_response_link(
-        &self,
-        repository_id: &PublicRepositoryId,
-    ) -> Option<(LinkId, mpsc::Sender<Response>)> {
-        self.active
-            .get(repository_id)
-            .map(|link| (link.id, link.response_tx.clone()))
-    }
-
-    fn destroy_one(&mut self, repository_id: &PublicRepositoryId, link_id: Option<LinkId>) {
-        // NOTE: this drops the `request_tx` / `response_tx` senders which causes the
-        // corresponding receivers to be closed which terminates the client/server tasks.
-        if let Entry::Occupied(entry) = self.active.entry(*repository_id) {
-            if link_id.is_none() || link_id == Some(entry.get().id) {
-                entry.remove();
+        match content {
+            Content::Request(request) => {
+                if request_tx.send(request).await.is_err() {
+                    break;
+                }
+            }
+            Content::Response(response) => {
+                if response_tx.send(response).await.is_err() {
+                    break;
+                }
             }
         }
     }
 
-    fn generate_link_id(&mut self) -> LinkId {
-        let id = self.next_link_id;
-        self.next_link_id += 1;
-        id
+    log::debug!("message stream for {:?} closed", stream.id())
+}
+
+// Handle outgoing messages
+async fn send_messages(mut content_rx: mpsc::Receiver<Content>, mut sink: EncryptingSink) {
+    while let Some(content) = content_rx.recv().await {
+        // unwrap is OK because serialization into a vec should never fail unless we have a bug
+        // somewhere.
+        let content = bincode::serialize(&content).unwrap();
+
+        if sink.send(content).await.is_err() {
+            break;
+        }
+    }
+
+    log::debug!("message sink for {:?} closed", sink.id())
+}
+
+// Create and run client
+async fn run_client(
+    id: PublicRepositoryId,
+    index: Index,
+    content_tx: mpsc::Sender<Content>,
+    response_rx: mpsc::Receiver<Response>,
+) {
+    let client_stream = ClientStream::new(content_tx, response_rx);
+    let mut client = Client::new(index, client_stream);
+
+    match client.run().await {
+        Ok(()) => log::debug!("client for {:?} terminated", id),
+        Err(error) => log::error!("client for {:?} failed: {}", id, error),
+    }
+}
+
+// Create and run server
+async fn run_server(
+    id: PublicRepositoryId,
+    index: Index,
+    content_tx: mpsc::Sender<Content>,
+    request_rx: mpsc::Receiver<Request>,
+) {
+    let server_stream = ServerStream::new(content_tx, request_rx);
+    let mut server = Server::new(index, server_stream);
+
+    match server.run().await {
+        Ok(()) => log::debug!("server for {:?} terminated", id),
+        Err(error) => log::error!("server for {:?} failed: {}", id, error),
     }
 }

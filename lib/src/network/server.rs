@@ -89,18 +89,19 @@ impl Server {
 
         // Note: the comparison with zero is there to handle the case when the cookie wraps around.
         if cookie < self.cookie || self.cookie == 0 {
+            // TODO: send all branches, not just the local one.
             if let Some(node) =
                 RootNode::load_latest(&self.index.pool, &self.index.this_replica_id).await?
             {
                 self.stream
                     .send(Response::RootNode {
                         cookie: self.cookie,
+                        replica_id: self.index.this_replica_id,
                         versions: node.versions,
                         hash: node.hash,
                         summary: node.summary,
                     })
-                    .await
-                    .unwrap_or(());
+                    .await;
                 return Ok(());
             }
         }
@@ -119,8 +120,7 @@ impl Server {
                 inner_layer,
                 nodes,
             })
-            .await
-            .unwrap_or(());
+            .await;
 
         Ok(())
     }
@@ -130,8 +130,7 @@ impl Server {
 
         self.stream
             .send(Response::LeafNodes { parent_hash, nodes })
-            .await
-            .unwrap_or(());
+            .await;
 
         Ok(())
     }
@@ -156,8 +155,7 @@ impl Server {
                 content,
                 auth_tag,
             })
-            .await
-            .unwrap_or(());
+            .await;
 
         Ok(())
     }

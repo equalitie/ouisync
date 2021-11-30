@@ -1,7 +1,7 @@
 use super::{
     client::Client,
-    message::{Message, Request, Response},
-    message_broker::{ClientStream, Command, ServerStream},
+    message::{Content, Request, Response},
+    message_broker::{ClientStream, ServerStream},
     server::Server,
 };
 use crate::{
@@ -10,8 +10,7 @@ use crate::{
     db,
     index::{node_test_utils::Snapshot, Index, RootNode, Summary},
     replica_id::ReplicaId,
-    repository::{self, PublicRepositoryId},
-    store, test_utils,
+    repository, store, test_utils,
     version_vector::VersionVector,
 };
 use rand::prelude::*;
@@ -227,10 +226,8 @@ async fn simulate_connection_until<F>(server_index: Index, client_index: Index, 
 where
     F: Future<Output = ()>,
 {
-    let server_replica_id = server_index.this_replica_id;
     let (mut server, server_send_rx, server_recv_tx) = create_server(server_index);
-    let (mut client, client_send_rx, client_recv_tx) =
-        create_client(client_index, server_replica_id);
+    let (mut client, client_send_rx, client_recv_tx) = create_client(client_index);
 
     let mut server_conn = Connection {
         send_rx: server_send_rx,
@@ -254,41 +251,37 @@ where
     }
 }
 
-fn create_server(index: Index) -> (Server, mpsc::Receiver<Command>, mpsc::Sender<Request>) {
+fn create_server(index: Index) -> (Server, mpsc::Receiver<Content>, mpsc::Sender<Request>) {
     let (send_tx, send_rx) = mpsc::channel(1);
     let (recv_tx, recv_rx) = mpsc::channel(CAPACITY);
-    let stream = ServerStream::new(send_tx, recv_rx, PublicRepositoryId::zero());
+    let stream = ServerStream::new(send_tx, recv_rx);
     let server = Server::new(index, stream);
 
     (server, send_rx, recv_tx)
 }
 
-fn create_client(
-    index: Index,
-    their_replica_id: ReplicaId,
-) -> (Client, mpsc::Receiver<Command>, mpsc::Sender<Response>) {
+fn create_client(index: Index) -> (Client, mpsc::Receiver<Content>, mpsc::Sender<Response>) {
     let (send_tx, send_rx) = mpsc::channel(1);
     let (recv_tx, recv_rx) = mpsc::channel(CAPACITY);
-    let stream = ClientStream::new(send_tx, recv_rx, PublicRepositoryId::zero());
-    let client = Client::new(index, their_replica_id, stream);
+    let stream = ClientStream::new(send_tx, recv_rx);
+    let client = Client::new(index, stream);
 
     (client, send_rx, recv_tx)
 }
 
 // Simulated connection between a server and a client.
 struct Connection<T> {
-    send_rx: mpsc::Receiver<Command>,
+    send_rx: mpsc::Receiver<Content>,
     recv_tx: mpsc::Sender<T>,
 }
 
 impl<T> Connection<T>
 where
-    T: From<Message> + fmt::Debug,
+    T: From<Content> + fmt::Debug,
 {
     async fn run(&mut self) {
-        while let Some(command) = self.send_rx.recv().await {
-            let message = command.into_send_message().into();
-            self.recv_tx.send(message).await.unwrap();
+        while let Some(content) = self.send_rx.recv().await {
+            self.recv_tx.send(content.into()).await.unwrap();
         }
     }
 }

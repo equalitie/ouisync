@@ -2,6 +2,7 @@ use crate::{
     block::BlockId,
     crypto::{AuthTag, Hash},
     index::{InnerNodeMap, LeafNodeSet, Summary},
+    replica_id::ReplicaId,
     repository::PublicRepositoryId,
     version_vector::VersionVector,
 };
@@ -28,6 +29,7 @@ pub(crate) enum Response {
     /// Send the latest root node of this replica to another replica.
     RootNode {
         cookie: u64,
+        replica_id: ReplicaId,
         versions: VersionVector,
         hash: Hash,
         summary: Summary,
@@ -57,12 +59,14 @@ impl fmt::Debug for Response {
         match self {
             Self::RootNode {
                 cookie,
+                replica_id,
                 versions,
                 hash,
                 summary,
             } => f
                 .debug_struct("RootNode")
                 .field("cookie", cookie)
+                .field("replica_id", replica_id)
                 .field("versions", versions)
                 .field("hash", hash)
                 .field("summary", summary)
@@ -88,41 +92,37 @@ impl fmt::Debug for Response {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub(crate) enum Message {
-    // Request by the sender to establish a link between repositories with the given id hash.
-    CreateLink {
-        id: PublicRepositoryId,
-    },
-    // Request to a recipient's repository with id hash `id`.
-    Request {
-        id: PublicRepositoryId,
-        request: Request,
-    },
-    // Response to a recipient's repository with id hash `id`.
-    Response {
-        id: PublicRepositoryId,
-        response: Response,
-    },
+pub(crate) struct Message {
+    pub id: PublicRepositoryId,
+    pub content: Vec<u8>,
 }
 
-impl From<Message> for Request {
-    fn from(msg: Message) -> Self {
-        match msg {
-            Message::Request { request, .. } => request,
-            Message::CreateLink { .. } | Message::Response { .. } => {
-                panic!("Message is not Request")
+#[derive(Serialize, Deserialize, Debug)]
+pub(crate) enum Content {
+    Request(Request),
+    Response(Response),
+}
+
+#[cfg(test)]
+impl From<Content> for Request {
+    fn from(content: Content) -> Self {
+        match content {
+            Content::Request(request) => request,
+            Content::Response(_) => {
+                panic!("not a request: {:?}", content)
             }
         }
     }
 }
 
-impl From<Message> for Response {
-    fn from(msg: Message) -> Self {
-        match msg {
-            Message::CreateLink { .. } | Message::Request { .. } => {
-                panic!("Message is not Response")
+#[cfg(test)]
+impl From<Content> for Response {
+    fn from(content: Content) -> Self {
+        match content {
+            Content::Request(_) => {
+                panic!("not a response: {:?}", content)
             }
-            Message::Response { response, .. } => response,
+            Content::Response(response) => response,
         }
     }
 }

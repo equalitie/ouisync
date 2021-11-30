@@ -12,7 +12,7 @@ pub(crate) use self::{
     inner::{InnerNode, InnerNodeMap, INNER_LAYER_COUNT},
     leaf::{LeafNode, LeafNodeSet, ModifyStatus},
     root::RootNode,
-    summary::Summary,
+    summary::{Summary, SummaryUpdateStatus},
 };
 
 use crate::{block::BlockId, crypto::Hash, db, error::Result, replica_id::ReplicaId};
@@ -25,21 +25,21 @@ pub(super) fn get_bucket(locator: &Hash, inner_layer: usize) -> u8 {
 }
 
 /// Update summary of the nodes with the specified hash and layer and all their ancestor nodes.
-/// Returns a map `ReplicaId -> bool` indicating which branches were affected and whether they
-/// became complete by this update.
+/// Returns a map `ReplicaId -> SummaryUpdateStatus` indicating which branches were affected and
+/// whether they became complete by this update.
 pub(super) async fn update_summaries<'a, T>(
     db: T,
     hash: Hash,
     layer: usize,
-) -> Result<Vec<(ReplicaId, bool)>>
+) -> Result<Vec<(ReplicaId, SummaryUpdateStatus)>>
 where
     T: sqlx::Acquire<'a, Database = Sqlite>,
 {
     let mut tx = db.begin().await?;
-    let status = update_summaries_in_transaction(&mut tx, vec![(hash, layer)]).await?;
+    let statuses = update_summaries_in_transaction(&mut tx, vec![(hash, layer)]).await?;
     tx.commit().await?;
 
-    Ok(status)
+    Ok(statuses)
 }
 
 /// Receive a block from other replica. This marks the block as not missing by the local replica.
@@ -67,8 +67,8 @@ pub(crate) async fn receive_block(
 async fn update_summaries_in_transaction(
     tx: &mut sqlx::Transaction<'_, Sqlite>,
     mut nodes: Vec<(Hash, usize)>,
-) -> Result<Vec<(ReplicaId, bool)>> {
-    let mut status = Vec::new();
+) -> Result<Vec<(ReplicaId, SummaryUpdateStatus)>> {
+    let mut statuses = Vec::new();
 
     while let Some((hash, layer)) = nodes.pop() {
         if layer > 0 {
@@ -80,15 +80,15 @@ async fn update_summaries_in_transaction(
                 })
                 .await?;
         } else {
-            let complete = RootNode::update_summaries(tx, &hash).await?;
+            let status = RootNode::update_summaries(tx, &hash).await?;
             RootNode::load_replica_ids(tx, &hash)
                 .try_for_each(|replica_id| {
-                    status.push((replica_id, complete));
+                    statuses.push((replica_id, status));
                     future::ready(Ok(()))
                 })
                 .await?;
         }
     }
 
-    Ok(status)
+    Ok(statuses)
 }

@@ -1,11 +1,14 @@
 mod client;
 mod connection;
+mod crypto;
 mod dht_discovery;
 mod ip_stack;
 mod local_discovery;
 mod message;
 mod message_broker;
-mod object_stream;
+mod message_dispatcher;
+mod message_io;
+mod runtime_id;
 mod server;
 #[cfg(test)]
 mod tests;
@@ -15,13 +18,12 @@ use self::{
     dht_discovery::DhtDiscovery,
     local_discovery::LocalDiscovery,
     message_broker::MessageBroker,
-    object_stream::TcpObjectStream,
+    runtime_id::RuntimeId,
 };
 use crate::{
     error::{Error, Result},
     index::Index,
-    replica_id::ReplicaId,
-    repository::{PublicRepositoryId, Repository},
+    repository::{PublicRepositoryId, Repository, SecretRepositoryId},
     scoped_task::{self, ScopedJoinHandle, ScopedTaskSet},
     upnp,
 };
@@ -36,6 +38,7 @@ use std::{
 };
 use structopt::StructOpt;
 use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
     sync::{mpsc, Mutex, RwLock},
     task, time,
@@ -96,7 +99,7 @@ pub struct Network {
 }
 
 impl Network {
-    pub async fn new(this_replica_id: ReplicaId, options: &NetworkOptions) -> Result<Self> {
+    pub async fn new(options: &NetworkOptions) -> Result<Self> {
         let listener = TcpListener::bind(options.listen_addr())
             .await
             .map_err(Error::Network)?;
@@ -149,7 +152,7 @@ impl Network {
 
         let inner = Arc::new(Inner {
             local_addr,
-            this_replica_id,
+            this_runtime_id: rand::random(),
             message_brokers: Mutex::new(HashMap::new()),
             indices: RwLock::new(HashMap::default()),
             dht_discovery,
@@ -237,13 +240,14 @@ impl Handle {
             Entry::Vacant(entry) => {
                 entry.insert(IndexHolder {
                     index: repository.index().clone(),
+                    id: sid,
                     dht_lookup: self.inner.start_dht_lookup(pid),
                 });
             }
         }
 
         for broker in self.inner.message_brokers.lock().await.values() {
-            broker.create_link(pid, repository.index().clone()).await
+            broker.create_link(sid, repository.index().clone()).await
         }
 
         // Deregister the index when it gets closed.
@@ -265,10 +269,6 @@ impl Handle {
             .await;
 
         true
-    }
-
-    pub fn this_replica_id(&self) -> &ReplicaId {
-        &self.inner.this_replica_id
     }
 
     pub async fn enable_dht_for_repository(&self, repository: &Repository) {
@@ -330,8 +330,8 @@ struct Tasks {
 
 struct Inner {
     local_addr: SocketAddr,
-    this_replica_id: ReplicaId,
-    message_brokers: Mutex<HashMap<ReplicaId, MessageBroker>>,
+    this_runtime_id: RuntimeId,
+    message_brokers: Mutex<HashMap<RuntimeId, MessageBroker>>,
     indices: RwLock<HashMap<PublicRepositoryId, IndexHolder>>,
     dht_discovery: Option<DhtDiscovery>,
     dht_peer_found_tx: mpsc::UnboundedSender<SocketAddr>,
@@ -363,7 +363,7 @@ impl Inner {
     }
 
     async fn run_local_discovery(self: Arc<Self>, listener_port: u16) {
-        let discovery = match LocalDiscovery::new(listener_port) {
+        let discovery = match LocalDiscovery::new(self.this_runtime_id, listener_port) {
             Ok(discovery) => discovery,
             Err(error) => {
                 log::error!("Failed to create LocalDiscovery: {}", error);
@@ -502,7 +502,7 @@ impl Inner {
 
     async fn handle_new_connection(
         self: Arc<Self>,
-        socket: TcpStream,
+        mut stream: TcpStream,
         peer_source: PeerSource,
         permit: ConnectionPermit,
     ) {
@@ -510,8 +510,7 @@ impl Inner {
 
         log::info!("New {} TCP connection: {}", peer_source, addr);
 
-        let mut stream = TcpObjectStream::new(socket);
-        let their_replica_id = match perform_handshake(&mut stream, self.this_replica_id).await {
+        let that_runtime_id = match perform_handshake(&mut stream, self.this_runtime_id).await {
             Ok(replica_id) => replica_id,
             Err(error) => {
                 log::error!("Failed to perform handshake: {}", error);
@@ -520,7 +519,7 @@ impl Inner {
         };
 
         // prevent self-connections.
-        if their_replica_id == self.this_replica_id {
+        if that_runtime_id == self.this_runtime_id {
             log::debug!("Connection from self, discarding");
             return;
         }
@@ -529,23 +528,24 @@ impl Inner {
 
         let mut brokers = self.message_brokers.lock().await;
 
-        match brokers.entry(their_replica_id) {
+        match brokers.entry(that_runtime_id) {
             Entry::Occupied(entry) => entry.get().add_connection(stream, permit).await,
             Entry::Vacant(entry) => {
-                log::info!("Connected to replica {:?}", their_replica_id);
+                log::info!("Connected to replica {:?}", that_runtime_id);
 
-                let broker = MessageBroker::new(their_replica_id, stream, permit).await;
+                let broker =
+                    MessageBroker::new(self.this_runtime_id, that_runtime_id, stream, permit);
 
                 // TODO: for DHT connection we should only link the repository for which we did the
                 // lookup but make sure we correctly handle edge cases, for example, when we have
                 // more than one repository shared with the peer.
-                for (id, holder) in &*self.indices.read().await {
-                    broker.create_link(*id, holder.index.clone()).await;
+                for holder in self.indices.read().await.values() {
+                    broker.create_link(holder.id, holder.index.clone()).await;
                 }
 
                 entry.insert(broker);
             }
-        }
+        };
 
         drop(brokers);
 
@@ -554,8 +554,8 @@ impl Inner {
 
         // Remove the broker if it has no more connections.
         let mut brokers = self.message_brokers.lock().await;
-        if let Entry::Occupied(entry) = brokers.entry(their_replica_id) {
-            if !entry.get().has_connections() {
+        if let Entry::Occupied(entry) = brokers.entry(that_runtime_id) {
+            if !entry.get().has_connections().await {
                 entry.remove();
             }
         }
@@ -573,15 +573,21 @@ impl Inner {
 
 struct IndexHolder {
     index: Index,
+    id: SecretRepositoryId,
     dht_lookup: Option<dht_discovery::LookupRequest>,
 }
 
+// Exchange runtime ids with the peer. Returns their runtime id.
 async fn perform_handshake(
-    stream: &mut TcpObjectStream,
-    this_replica_id: ReplicaId,
-) -> io::Result<ReplicaId> {
-    stream.write(&this_replica_id).await?;
-    stream.read().await
+    stream: &mut TcpStream,
+    this_runtime_id: RuntimeId,
+) -> io::Result<RuntimeId> {
+    stream.write_all(this_runtime_id.as_ref()).await?;
+
+    let mut their_runtime_id = [0; RuntimeId::SIZE];
+    stream.read_exact(&mut their_runtime_id).await?;
+
+    Ok(their_runtime_id.into())
 }
 
 #[derive(Clone, Copy, Debug)]
