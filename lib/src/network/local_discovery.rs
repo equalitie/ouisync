@@ -94,11 +94,16 @@ impl LocalDiscovery {
 }
 
 fn create_multicast_socket() -> io::Result<tokio::net::UdpSocket> {
-    // Using net2 because, std::net, nor async_std::net nor tokio::net lets
+    use socket2::{Domain, Socket, Type};
+    use std::net::SocketAddrV4;
+
+    // Using socket2 because, std::net, nor async_std::net nor tokio::net lets
     // one set reuse_address(true) before "binding" the socket.
-    let sync_socket = net2::UdpBuilder::new_v4()?
-        .reuse_address(true)?
-        .bind((Ipv4Addr::UNSPECIFIED, MULTICAST_PORT))?;
+    let sync_socket = Socket::new(Domain::IPV4, Type::DGRAM, None)?;
+    sync_socket.set_reuse_address(true)?;
+    sync_socket.bind(&SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, MULTICAST_PORT).into())?;
+
+    let sync_socket: std::net::UdpSocket = sync_socket.into();
 
     sync_socket.join_multicast_v4(&MULTICAST_ADDR, &Ipv4Addr::UNSPECIFIED)?;
 
