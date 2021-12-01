@@ -33,6 +33,7 @@ mod test_utils;
 mod upnp;
 mod version_vector;
 mod versioned_file_name;
+mod writer_set;
 
 pub use self::{
     crypto::Cryptor,
