@@ -1,52 +1,58 @@
 use super::{
     operations::{load_block, Operations},
-    {Cursor, OpenBlock},
+    Cursor, Nonce, OpenBlock, NONCE_SIZE,
 };
 use crate::{
-    block::BlockId, branch::Branch, crypto::NonceSequence, error::Result, locator::Locator,
+    block::BlockId, branch::Branch, crypto::Cryptor, error::Result, locator::Locator, Error,
 };
 use std::{fmt, mem};
 
 pub(crate) struct Core {
     pub branch: Branch,
     pub head_locator: Locator,
-    pub nonce_sequence: NonceSequence,
+    pub blob_key: Cryptor,
     pub len: u64,
     pub len_dirty: bool,
 }
 
 impl Core {
-    pub async fn open_first_block(&self) -> Result<OpenBlock> {
-        if self.len == 0 {
-            return Ok(OpenBlock::new_head(self.head_locator, &self.nonce_sequence));
-        }
-
-        // NOTE: no need to commit this transaction because we are only reading here.
+    pub async fn open_first_block(&mut self) -> Result<OpenBlock> {
+        // No need to commit this as we are only reading here.
         let mut tx = self.branch.db_pool().begin().await?;
 
-        let (id, buffer, auth_tag) = load_block(
+        match load_block(
             &mut tx,
             self.branch.data(),
             self.branch.cryptor(),
             &self.head_locator,
         )
-        .await?;
+        .await
+        {
+            Ok((id, buffer, auth_tag)) => {
+                let mut content = Cursor::new(buffer);
+                content.pos = self.header_size();
 
-        let mut content = Cursor::new(buffer);
-        content.pos = self.header_size();
+                self.blob_key
+                    .decrypt(0, id.as_ref(), &mut content, &auth_tag)?;
 
-        let nonce = self.nonce_sequence.get(0);
+                Ok(OpenBlock {
+                    locator: self.head_locator,
+                    id,
+                    content,
+                    dirty: false,
+                })
+            }
+            Err(Error::EntryNotFound) if self.len == 0 => {
+                // create a new block but we need to also generate new blob key because we no longer
+                // have the original nonce.
 
-        self.branch
-            .cryptor()
-            .decrypt(&nonce, id.as_ref(), &mut content, &auth_tag)?;
+                let nonce: Nonce = rand::random();
+                self.blob_key = self.branch.cryptor().derive_subkey(&nonce);
 
-        Ok(OpenBlock {
-            locator: self.head_locator,
-            id,
-            content,
-            dirty: false,
-        })
+                Ok(OpenBlock::new_head(self.head_locator, &nonce))
+            }
+            Err(error) => Err(error),
+        }
     }
 
     pub async fn first_block_id(branch: &Branch, head_locator: Locator) -> Result<BlockId> {
@@ -68,7 +74,7 @@ impl Core {
     }
 
     pub fn header_size(&self) -> usize {
-        self.nonce_sequence.prefix().len() + mem::size_of_val(&self.len)
+        NONCE_SIZE + mem::size_of_val(&self.len)
     }
 }
 
