@@ -10,7 +10,6 @@ use crate::{
     blob_id::BlobId,
     block::{BlockId, BLOCK_SIZE},
     branch::Branch,
-    crypto::NonceSequence,
     db,
     error::Result,
     locator::Locator,
@@ -56,12 +55,10 @@ impl Blob {
 
         let mut content = Cursor::new(buffer);
 
-        let nonce_sequence = NonceSequence::new(content.read_array());
-        let nonce = nonce_sequence.get(0);
+        let nonce: Nonce = content.read_array();
+        let blob_key = branch.cryptor().derive_subkey(&nonce);
 
-        branch
-            .cryptor()
-            .decrypt(&nonce, id.as_ref(), &mut content, &auth_tag)?;
+        blob_key.decrypt(0, id.as_ref(), &mut content, &auth_tag)?;
 
         let len = content.read_u64();
 
@@ -69,7 +66,7 @@ impl Blob {
             Arc::new(Mutex::new(Core {
                 branch: branch.clone(),
                 head_locator,
-                nonce_sequence,
+                blob_key,
                 len,
                 len_dirty: false,
             })),
@@ -90,14 +87,16 @@ impl Blob {
 
     /// Creates a new blob.
     pub fn create(branch: Branch, head_locator: Locator) -> Self {
-        let nonce_sequence = NonceSequence::new(rand::random());
-        let current_block = OpenBlock::new_head(head_locator, &nonce_sequence);
+        let nonce: Nonce = rand::random();
+        let blob_key = branch.cryptor().derive_subkey(&nonce);
+
+        let current_block = OpenBlock::new_head(head_locator, &nonce);
 
         Self::new(
             Arc::new(Mutex::new(Core {
                 branch: branch.clone(),
                 head_locator,
-                nonce_sequence,
+                blob_key,
                 len: 0,
                 len_dirty: false,
             })),
@@ -272,6 +271,11 @@ impl<'a> OperationsLock<'a> {
     }
 }
 
+// Unique nonce per blob, used to derive the per-blob encryption key. Should be large enough so that
+// when it's randomly generated, the chance of collision is negligible.
+const NONCE_SIZE: usize = 32;
+type Nonce = [u8; NONCE_SIZE];
+
 // Data for a block that's been loaded into memory and decrypted.
 #[derive(Clone)]
 pub(crate) struct OpenBlock {
@@ -286,9 +290,9 @@ pub(crate) struct OpenBlock {
 }
 
 impl OpenBlock {
-    pub fn new_head(locator: Locator, nonce_sequence: &NonceSequence) -> Self {
+    pub fn new_head(locator: Locator, nonce: &Nonce) -> Self {
         let mut content = Cursor::new(Buffer::new());
-        content.write(&nonce_sequence.prefix()[..]);
+        content.write(nonce);
         content.write_u64(0); // blob length (initially zero)
 
         Self {

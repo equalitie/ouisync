@@ -1,4 +1,8 @@
 use rand::{CryptoRng, Rng};
+use sha3::{
+    digest::{Digest, FixedOutput},
+    Sha3_256,
+};
 use std::{fmt, sync::Arc};
 use zeroize::Zeroize;
 
@@ -18,17 +22,13 @@ impl SecretKey {
     /// Generate a random secret key using the given cryptographically secure random number
     /// generator.
     ///
-    /// Note: this is purposefully not implement as `impl Distribution<SecretKey> for Standard` to
-    /// enforce the additional `CryptoRng` bound.
+    /// Note: this is purposefully not implemented as `impl Distribution<SecretKey> for Standard`
+    /// to enforce the additional `CryptoRng` bound.
     pub fn generate<R: Rng + CryptoRng + ?Sized>(rng: &mut R) -> Self {
-        let mut array = Array::default();
-        rng.fill(array.as_mut_slice());
-
-        let key = Self(Arc::from(Inner(array)));
-
-        // scramble the original location to prevent leaving the sensitive data in the memory.
-        array.as_mut_slice().zeroize();
-
+        // Create all-zero array initially, then fill it with random bytes in place to avoid moving
+        // the array which could leave the sensitive data in memory.
+        let mut key = Self::zero();
+        rng.fill(key.as_array_mut().as_mut_slice());
         key
     }
 
@@ -37,7 +37,20 @@ impl SecretKey {
         Self::generate(&mut rand::thread_rng())
     }
 
-    // TODO: generate with KDF
+    /// Derive a secret key from another secret key and a nonce.
+    pub fn derive_from_key(master_key: &Self, nonce: &[u8]) -> Self {
+        let mut sub_key = Self::zero();
+
+        // TODO: verify this is actually secure!
+        let mut hasher = Sha3_256::new();
+        hasher.update(master_key.as_array());
+        hasher.update(nonce);
+        hasher.finalize_into(sub_key.as_array_mut());
+
+        sub_key
+    }
+
+    // TODO: derive_from_password
 
     /// Returns reference to the underlying array.
     ///
@@ -45,6 +58,16 @@ impl SecretKey {
     /// sensitive data can be copied or revealed.
     pub fn as_array(&self) -> &Array {
         &self.0 .0
+    }
+
+    // Use this only for initialization.
+    fn zero() -> Self {
+        Self(Arc::new(Inner(Array::default())))
+    }
+
+    // Use this only for initialization. Panics if this key has more than one clone.
+    fn as_array_mut(&mut self) -> &mut Array {
+        &mut Arc::get_mut(&mut self.0).unwrap().0
     }
 }
 

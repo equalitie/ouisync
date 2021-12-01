@@ -3,7 +3,7 @@ use crate::blob::{Blob, Buffer, Core, Cursor, OpenBlock};
 use crate::{
     block::{self, BlockId, BLOCK_SIZE},
     branch::Branch,
-    crypto::{AuthTag, Cryptor, NonceSequence},
+    crypto::{AuthTag, Cryptor},
     db,
     error::{Error, Result},
     index::BranchData,
@@ -11,6 +11,8 @@ use crate::{
 };
 use std::{convert::TryInto, io::SeekFrom, sync::Arc};
 use tokio::sync::Mutex;
+
+use super::{Nonce, NONCE_SIZE};
 
 pub(crate) struct Operations<'a> {
     core: &'a mut Core,
@@ -65,8 +67,8 @@ impl<'a> Operations<'a> {
             let (id, content) = read_block(
                 &mut tx,
                 self.core.branch.data(),
-                self.cryptor(),
-                &self.core.nonce_sequence,
+                self.core.branch.cryptor(),
+                &self.core.blob_key,
                 &locator,
             )
             .await?;
@@ -136,8 +138,8 @@ impl<'a> Operations<'a> {
                 read_block(
                     tx,
                     self.core.branch.data(),
-                    self.cryptor(),
-                    &self.core.nonce_sequence,
+                    self.core.branch.cryptor(),
+                    &self.core.blob_key,
                     &locator,
                 )
                 .await?
@@ -200,8 +202,8 @@ impl<'a> Operations<'a> {
             let (id, content) = read_block(
                 tx,
                 self.core.branch.data(),
-                self.cryptor(),
-                &self.core.nonce_sequence,
+                self.core.branch.cryptor(),
+                &self.core.blob_key,
                 &locator,
             )
             .await?;
@@ -288,8 +290,11 @@ impl<'a> Operations<'a> {
         .await?;
         tx.commit().await?;
 
-        *self.current_block =
-            OpenBlock::new_head(self.core.head_locator, &self.core.nonce_sequence);
+        let nonce: Nonce = rand::random();
+        let blob_key = self.core.branch.cryptor().derive_subkey(&nonce);
+
+        *self.current_block = OpenBlock::new_head(self.core.head_locator, &nonce);
+        self.core.blob_key = blob_key;
         self.core.len = 0;
         self.core.len_dirty = true;
 
@@ -307,8 +312,8 @@ impl<'a> Operations<'a> {
         let mut tx = self.db_pool().begin().await?;
 
         for (src_locator, dst_locator) in self.locators().zip(dst_head_locator.sequence()) {
-            let encoded_src_locator = src_locator.encode(self.cryptor());
-            let encoded_dst_locator = dst_locator.encode(self.cryptor());
+            let encoded_src_locator = src_locator.encode(self.core.branch.cryptor());
+            let encoded_dst_locator = dst_locator.encode(self.core.branch.cryptor());
 
             let block_id = self
                 .core
@@ -328,7 +333,7 @@ impl<'a> Operations<'a> {
         let new_core = Core {
             branch: dst_branch.clone(),
             head_locator: dst_head_locator,
-            nonce_sequence: self.core.nonce_sequence.clone(),
+            blob_key: self.core.blob_key.clone(),
             len: self.core.len,
             len_dirty: self.core.len_dirty,
         };
@@ -350,10 +355,6 @@ impl<'a> Operations<'a> {
 
     pub fn db_pool(&self) -> &db::Pool {
         self.core.branch.db_pool()
-    }
-
-    pub fn cryptor(&self) -> &Cryptor {
-        self.core.branch.cryptor()
     }
 
     pub fn locators(&self) -> impl Iterator<Item = Locator> {
@@ -401,8 +402,8 @@ impl<'a> Operations<'a> {
         write_block(
             tx,
             self.core.branch.data(),
-            self.cryptor(),
-            &self.core.nonce_sequence,
+            self.core.branch.cryptor(),
+            &self.core.blob_key,
             &self.current_block.locator,
             &self.current_block.id,
             self.current_block.content.buffer.clone(),
@@ -422,7 +423,7 @@ impl<'a> Operations<'a> {
 
         if self.current_block.locator.number() == 0 {
             let old_pos = self.current_block.content.pos;
-            self.current_block.content.pos = self.core.nonce_sequence.prefix().len();
+            self.current_block.content.pos = NONCE_SIZE;
             self.current_block.content.write_u64(self.core.len);
             self.current_block.content.pos = old_pos;
             self.current_block.dirty = true;
@@ -431,21 +432,21 @@ impl<'a> Operations<'a> {
             let (_, buffer) = read_block(
                 tx,
                 self.core.branch.data(),
-                self.cryptor(),
-                &self.core.nonce_sequence,
+                self.core.branch.cryptor(),
+                &self.core.blob_key,
                 &locator,
             )
             .await?;
 
             let mut cursor = Cursor::new(buffer);
-            cursor.pos = self.core.nonce_sequence.prefix().len();
+            cursor.pos = NONCE_SIZE;
             cursor.write_u64(self.core.len);
 
             write_block(
                 tx,
                 self.core.branch.data(),
-                self.cryptor(),
-                &self.core.nonce_sequence,
+                self.core.branch.cryptor(),
+                &self.core.blob_key,
                 &locator,
                 &rand::random(),
                 cursor.buffer,
@@ -466,7 +467,7 @@ impl<'a> Operations<'a> {
             self.core
                 .branch
                 .data()
-                .remove(tx, &locator.encode(self.cryptor()))
+                .remove(tx, &locator.encode(self.core.branch.cryptor()))
                 .await?;
         }
 
@@ -500,23 +501,18 @@ impl<'a> Operations<'a> {
 async fn read_block(
     tx: &mut db::Transaction<'_>,
     branch: &BranchData,
-    cryptor: &Cryptor,
-    nonce_sequence: &NonceSequence,
+    repo_key: &Cryptor,
+    blob_key: &Cryptor,
     locator: &Locator,
 ) -> Result<(BlockId, Buffer)> {
-    let (id, mut buffer, auth_tag) = load_block(tx, branch, cryptor, locator).await?;
+    let (id, mut buffer, auth_tag) = load_block(tx, branch, repo_key, locator).await?;
 
-    let number = locator.number();
-    let nonce = nonce_sequence.get(number);
+    let counter = locator.number().into();
     let aad = id.as_ref(); // "additional associated data"
 
-    let offset = if number == 0 {
-        nonce_sequence.prefix().len()
-    } else {
-        0
-    };
+    let offset = if counter == 0 { NONCE_SIZE } else { 0 };
 
-    cryptor.decrypt(&nonce, aad, &mut buffer[offset..], &auth_tag)?;
+    blob_key.decrypt(counter, aad, &mut buffer[offset..], &auth_tag)?;
 
     Ok((id, buffer))
 }
@@ -537,27 +533,22 @@ pub(crate) async fn load_block(
 async fn write_block(
     tx: &mut db::Transaction<'_>,
     branch: &BranchData,
-    cryptor: &Cryptor,
-    nonce_sequence: &NonceSequence,
+    repo_key: &Cryptor,
+    blob_key: &Cryptor,
     locator: &Locator,
     block_id: &BlockId,
     mut buffer: Buffer,
 ) -> Result<()> {
-    let number = locator.number();
-    let nonce = nonce_sequence.get(number);
+    let counter = locator.number().into();
     let aad = block_id.as_ref(); // "additional associated data"
 
-    let offset = if number == 0 {
-        nonce_sequence.prefix().len()
-    } else {
-        0
-    };
+    let offset = if counter == 0 { NONCE_SIZE } else { 0 };
 
-    let auth_tag = cryptor.encrypt(&nonce, aad, &mut buffer[offset..])?;
+    let auth_tag = blob_key.encrypt(counter, aad, &mut buffer[offset..])?;
 
     block::write(tx, block_id, &buffer, &auth_tag).await?;
     branch
-        .insert(tx, block_id, &locator.encode(cryptor))
+        .insert(tx, block_id, &locator.encode(repo_key))
         .await?;
 
     Ok(())
