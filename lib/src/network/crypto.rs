@@ -9,7 +9,7 @@
 
 use super::{
     message_dispatcher::{ContentSink, ContentStream},
-    runtime_id::RuntimeId,
+    protocol::RuntimeId,
 };
 use crate::repository::{PublicRepositoryId, SecretRepositoryId};
 use noise_protocol::Cipher as _;

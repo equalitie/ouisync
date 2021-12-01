@@ -4,7 +4,7 @@ use super::{
     crypto::{self, DecryptingStream, EncryptingSink, Role},
     message::{Content, Request, Response},
     message_dispatcher::{ContentSink, ContentStream, MessageDispatcher},
-    runtime_id::RuntimeId,
+    protocol::RuntimeId,
     server::Server,
 };
 use crate::{

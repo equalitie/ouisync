@@ -1,4 +1,4 @@
-use super::runtime_id::RuntimeId;
+use super::protocol::RuntimeId;
 use crate::scoped_task::ScopedJoinHandle;
 use rand::Rng;
 use serde::{Deserialize, Serialize};

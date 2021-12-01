@@ -8,7 +8,7 @@ mod message;
 mod message_broker;
 mod message_dispatcher;
 mod message_io;
-mod runtime_id;
+mod protocol;
 mod server;
 #[cfg(test)]
 mod tests;
@@ -18,7 +18,7 @@ use self::{
     dht_discovery::DhtDiscovery,
     local_discovery::LocalDiscovery,
     message_broker::MessageBroker,
-    runtime_id::RuntimeId,
+    protocol::{RuntimeId, Version, VERSION},
 };
 use crate::{
     error::{Error, Result},
@@ -38,7 +38,6 @@ use std::{
 };
 use structopt::StructOpt;
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
     sync::{mpsc, Mutex, RwLock},
     task, time,
@@ -510,13 +509,14 @@ impl Inner {
 
         log::info!("New {} TCP connection: {}", peer_source, addr);
 
-        let that_runtime_id = match perform_handshake(&mut stream, self.this_runtime_id).await {
-            Ok(replica_id) => replica_id,
-            Err(error) => {
-                log::error!("Failed to perform handshake: {}", error);
-                return;
-            }
-        };
+        let that_runtime_id =
+            match perform_handshake(&mut stream, VERSION, self.this_runtime_id).await {
+                Ok(replica_id) => replica_id,
+                Err(error) => {
+                    log::error!("Failed to perform handshake: {}", error);
+                    return;
+                }
+            };
 
         // prevent self-connections.
         if that_runtime_id == self.this_runtime_id {
@@ -580,14 +580,22 @@ struct IndexHolder {
 // Exchange runtime ids with the peer. Returns their runtime id.
 async fn perform_handshake(
     stream: &mut TcpStream,
+    this_version: Version,
     this_runtime_id: RuntimeId,
 ) -> io::Result<RuntimeId> {
-    stream.write_all(this_runtime_id.as_ref()).await?;
+    this_version.write_into(stream).await?;
+    this_runtime_id.write_into(stream).await?;
 
-    let mut their_runtime_id = [0; RuntimeId::SIZE];
-    stream.read_exact(&mut their_runtime_id).await?;
+    let that_version = Version::read_from(stream).await?;
 
-    Ok(their_runtime_id.into())
+    if that_version > this_version {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "unsupported protocol version",
+        ));
+    }
+
+    RuntimeId::read_from(stream).await
 }
 
 #[derive(Clone, Copy, Debug)]
