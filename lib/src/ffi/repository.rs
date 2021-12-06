@@ -3,8 +3,8 @@ use super::{
     utils::{self, Port, SharedHandle, UniqueHandle},
 };
 use crate::{
-    crypto::Cryptor, directory::EntryType, error::Error, path, repository::Repository,
-    share_token::ShareToken,
+    crypto::Cryptor, directory::EntryType, error::Error, network::Registration, path,
+    repository::Repository, share_token::ShareToken,
 };
 use std::{os::raw::c_char, ptr, sync::Arc};
 use tokio::task::JoinHandle;
@@ -13,11 +13,16 @@ pub const ENTRY_TYPE_INVALID: u8 = 0;
 pub const ENTRY_TYPE_FILE: u8 = 1;
 pub const ENTRY_TYPE_DIRECTORY: u8 = 2;
 
+pub struct RepositoryHolder {
+    repository: Repository,
+    registration: Registration,
+}
+
 /// Opens a repository.
 #[no_mangle]
 pub unsafe extern "C" fn repository_open(
     store: *const c_char,
-    port: Port<SharedHandle<Repository>>,
+    port: Port<SharedHandle<RepositoryHolder>>,
     error: *mut *mut c_char,
 ) {
     session::with(port, error, |ctx| {
@@ -26,7 +31,7 @@ pub unsafe extern "C" fn repository_open(
         let network_handle = ctx.network().handle();
 
         ctx.spawn(async move {
-            let repo = Repository::open(
+            let repository = Repository::open(
                 &store.into_std_path_buf().into(),
                 this_replica_id,
                 Cryptor::Null,
@@ -34,17 +39,21 @@ pub unsafe extern "C" fn repository_open(
             )
             .await?;
 
-            network_handle.register(&repo).await;
+            let registration = network_handle.register(&repository).await;
 
-            let repo = Arc::new(repo);
-            Ok(SharedHandle::new(repo))
+            let holder = Arc::new(RepositoryHolder {
+                repository,
+                registration,
+            });
+
+            Ok(SharedHandle::new(holder))
         })
     })
 }
 
 /// Closes a repository.
 #[no_mangle]
-pub unsafe extern "C" fn repository_close(handle: SharedHandle<Repository>) {
+pub unsafe extern "C" fn repository_close(handle: SharedHandle<RepositoryHolder>) {
     handle.release();
 }
 
@@ -52,17 +61,17 @@ pub unsafe extern "C" fn repository_close(handle: SharedHandle<Repository>) {
 /// If the entry doesn't exists, returns `ENTRY_TYPE_INVALID`, not an error.
 #[no_mangle]
 pub unsafe extern "C" fn repository_entry_type(
-    handle: SharedHandle<Repository>,
+    handle: SharedHandle<RepositoryHolder>,
     path: *const c_char,
     port: Port<u8>,
     error: *mut *mut c_char,
 ) {
     session::with(port, error, |ctx| {
-        let repo = handle.get();
+        let holder = handle.get();
         let path = utils::ptr_to_path_buf(path)?;
 
         ctx.spawn(async move {
-            match repo.lookup_type(path).await {
+            match holder.repository.lookup_type(path).await {
                 Ok(entry_type) => Ok(entry_type_to_num(entry_type)),
                 Err(Error::EntryNotFound) => Ok(ENTRY_TYPE_INVALID),
                 Err(error) => Err(error),
@@ -74,14 +83,14 @@ pub unsafe extern "C" fn repository_entry_type(
 /// Move/rename entry from src to dst.
 #[no_mangle]
 pub unsafe extern "C" fn repository_move_entry(
-    handle: SharedHandle<Repository>,
+    handle: SharedHandle<RepositoryHolder>,
     src: *const c_char,
     dst: *const c_char,
     port: Port<()>,
     error: *mut *mut c_char,
 ) {
     session::with(port, error, |ctx| {
-        let repo = handle.get();
+        let holder = handle.get();
         let src = utils::ptr_to_path_buf(src)?;
         let dst = utils::ptr_to_path_buf(dst)?;
 
@@ -89,7 +98,10 @@ pub unsafe extern "C" fn repository_move_entry(
             let (src_dir, src_name) = path::decompose(&src).ok_or(Error::EntryNotFound)?;
             let (dst_dir, dst_name) = path::decompose(&dst).ok_or(Error::EntryNotFound)?;
 
-            repo.move_entry(src_dir, src_name, dst_dir, dst_name).await
+            holder
+                .repository
+                .move_entry(src_dir, src_name, dst_dir, dst_name)
+                .await
         })
     })
 }
@@ -97,13 +109,13 @@ pub unsafe extern "C" fn repository_move_entry(
 /// Subscribe to change notifications from the repository.
 #[no_mangle]
 pub unsafe extern "C" fn repository_subscribe(
-    handle: SharedHandle<Repository>,
+    handle: SharedHandle<RepositoryHolder>,
     port: Port<()>,
 ) -> UniqueHandle<JoinHandle<()>> {
     let session = session::get();
     let sender = session.sender();
-    let repo = handle.get();
-    let mut rx = repo.subscribe();
+    let holder = handle.get();
+    let mut rx = holder.repository.subscribe();
 
     let handle = session.runtime().spawn(async move {
         loop {
@@ -123,59 +135,65 @@ pub unsafe extern "C" fn subscription_cancel(handle: UniqueHandle<JoinHandle<()>
 
 #[no_mangle]
 pub unsafe extern "C" fn repository_is_dht_enabled(
-    handle: SharedHandle<Repository>,
+    handle: SharedHandle<RepositoryHolder>,
     port: Port<bool>,
 ) {
     let session = session::get();
-    let network = session.network().handle();
     let sender = session.sender();
-    let repo = handle.get();
+    let holder = handle.get();
 
     session.runtime().spawn(async move {
-        let value = network.is_dht_for_repository_enabled(&repo).await;
+        let value = holder.registration.is_dht_enabled().await;
         sender.send(port, value);
     });
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn repository_enable_dht(handle: SharedHandle<Repository>, port: Port<()>) {
+pub unsafe extern "C" fn repository_enable_dht(
+    handle: SharedHandle<RepositoryHolder>,
+    port: Port<()>,
+) {
     let session = session::get();
-    let network = session.network().handle();
     let sender = session.sender();
-    let repo = handle.get();
+    let holder = handle.get();
 
     session.runtime().spawn(async move {
-        network.enable_dht_for_repository(&repo).await;
+        holder.registration.enable_dht().await;
         sender.send(port, ());
     });
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn repository_disable_dht(handle: SharedHandle<Repository>, port: Port<()>) {
+pub unsafe extern "C" fn repository_disable_dht(
+    handle: SharedHandle<RepositoryHolder>,
+    port: Port<()>,
+) {
     let session = session::get();
-    let network = session.network().handle();
     let sender = session.sender();
-    let repo = handle.get();
+    let holder = handle.get();
 
     session.runtime().spawn(async move {
-        network.disable_dht_for_repository(&repo).await;
+        holder.registration.disable_dht().await;
         sender.send(port, ());
     });
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn repository_create_share_token(
-    handle: SharedHandle<Repository>,
+    handle: SharedHandle<RepositoryHolder>,
     name: *const c_char,
     port: Port<String>,
     error: *mut *mut c_char,
 ) {
     session::with(port, error, |ctx| {
-        let repo = handle.get();
+        let holder = handle.get();
         let name = utils::ptr_to_str(name)?.to_owned();
 
         ctx.spawn(async move {
-            let id = repo.get_or_create_id().await?;
+            let id = holder
+                .registration
+                .get_or_create_id(&holder.repository)
+                .await?;
             let share_token = ShareToken::new(id).with_name(name);
 
             Ok(share_token.to_string())
@@ -185,17 +203,22 @@ pub unsafe extern "C" fn repository_create_share_token(
 
 #[no_mangle]
 pub unsafe extern "C" fn repository_accept_share_token(
-    handle: SharedHandle<Repository>,
+    handle: SharedHandle<RepositoryHolder>,
     token: *const c_char,
     port: Port<()>,
     error: *mut *mut c_char,
 ) {
     session::with(port, error, |ctx| {
-        let repo = handle.get();
+        let holder = handle.get();
         let token = utils::ptr_to_str(token)?;
         let token: ShareToken = token.parse()?;
 
-        ctx.spawn(async move { repo.set_id(*token.id()).await })
+        ctx.spawn(async move {
+            holder
+                .registration
+                .set_id(&holder.repository, *token.id())
+                .await
+        })
     })
 }
 

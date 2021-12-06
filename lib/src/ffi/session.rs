@@ -150,10 +150,6 @@ impl Session {
     pub(super) fn sender(&self) -> Sender {
         self.sender
     }
-
-    pub(super) fn network(&self) -> &Network {
-        &self.network
-    }
 }
 
 pub(super) struct Context<'a, T> {
