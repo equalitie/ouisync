@@ -1,17 +1,13 @@
-use rand::{Rng, rngs::OsRng};
-use ed25519_dalek::{
-    Keypair,
-    Signature,
-    Signer,
-    SECRET_KEY_LENGTH,
-    PublicKey,
-    SecretKey,
-    Verifier
+pub mod db;
+pub mod error;
+
+use crate::crypto::{
+    sign::{Keypair, PublicKey, Signature},
+    Hash,
 };
-use crate::crypto::Hash;
-use std::collections::{BTreeSet, HashMap};
 use sha3::{Digest, Sha3_256};
-use std::{fmt, iter::once};
+use std::collections::{hash_map, HashMap};
+use std::{cell::Cell, fmt, iter::once};
 
 //
 // We want to ensure:
@@ -28,30 +24,27 @@ pub struct WriterSet {
 
 impl WriterSet {
     pub fn generate() -> (Self, Keypair) {
-        let origin = generate_key_pair();
+        let origin = Keypair::generate();
 
-        let entry = Entry::new(&origin.public, &origin, BTreeSet::default());
+        let entry = Entry::new(&origin.public, &origin);
 
         let ret = Self {
             origin: entry.hash,
-            entries: once((entry.hash, entry)).collect::<HashMap<_,_>>(),
+            entries: once((entry.hash, entry)).collect::<HashMap<_, _>>(),
         };
 
         (ret, origin)
     }
 
-    pub fn calculate_hash(&self) -> Hash {
-        let maximals = self.find_maximal_entries();
-
-        let mut hasher = Sha3_256::new();
-
-        hasher.update((maximals.len() as u32).to_le_bytes());
-
-        for max in maximals {
-            hasher.update(max.as_ref());
+    pub fn new_from_existing(origin_entry: &Entry) -> Option<Self> {
+        if !origin_entry.is_origin() || !origin_entry.has_valid_signature() {
+            return None;
         }
 
-        hasher.finalize().into()
+        Some(Self {
+            origin: origin_entry.hash,
+            entries: once((origin_entry.hash, origin_entry.clone())).collect(),
+        })
     }
 
     pub fn is_writer(&self, w: &PublicKey) -> bool {
@@ -69,54 +62,46 @@ impl WriterSet {
         if !self.is_writer(&added_by.public) {
             return None;
         }
-        Some(Entry::new(writer, added_by, self.find_maximal_entries()))
+        Some(Entry::new(writer, added_by))
     }
 
     pub fn entries(&self) -> impl Iterator<Item = &Entry> {
         self.entries.values()
     }
 
-    pub fn add_entry(&mut self, entry: Entry) -> bool {
-        if self.entries.get(&entry.hash).is_some() {
-            return false;
+    /// Prepared entries can be added/inserted into the WriterSet. This machinery
+    /// exists to avoid removing entries from WriterSet if entries fail to get written
+    /// onto the disk.
+    pub fn prepare_entry<'a>(&'a mut self, entry: Entry) -> Option<PreparedEntry<'a>> {
+        if !self.is_writer((&entry.added_by).into()) {
+            return None;
         }
+
+        let vacant = match self.entries.entry(entry.hash) {
+            hash_map::Entry::Occupied(_) => return None,
+            hash_map::Entry::Vacant(vacant) => vacant,
+        };
 
         if !entry.has_valid_signature() {
-            return false;
+            return None;
         }
 
-        if !self.is_writer(&entry.added_by) {
-            return false;
-        }
+        Some(PreparedEntry { vacant, entry })
+    }
+}
 
-        for child in &entry.children {
-            if self.entries.get(&child).is_none() {
-                return false;
-            }
-        }
+pub struct PreparedEntry<'a> {
+    vacant: hash_map::VacantEntry<'a, Hash, Entry>,
+    entry: Entry,
+}
 
-        self.entries.insert(entry.hash, entry);
-
-        true
+impl<'a> PreparedEntry<'a> {
+    pub fn hash(&self) -> &Hash {
+        self.vacant.key()
     }
 
-    fn find_maximal_entries(&self) -> BTreeSet<Hash> {
-        // Using `as_bytes` because of this issue
-        // https://github.com/dalek-cryptography/ed25519-dalek/issues/183
-        let mut candidates = self.entries.iter().map(|(hash, entry)| {
-            (entry.writer.as_bytes(), *hash)
-        })
-        .collect::<HashMap<_, _>>();
-
-        for entry in self.entries.values() {
-            candidates.remove(entry.added_by.as_bytes());
-        }
-
-        if candidates.is_empty() {
-            once(self.origin).collect()
-        } else {
-            candidates.values().cloned().collect()
-        }
+    pub fn insert(self) {
+        self.vacant.insert(self.entry);
     }
 }
 
@@ -124,38 +109,70 @@ impl WriterSet {
 pub struct Entry {
     writer: PublicKey,
     added_by: PublicKey,
-    children: BTreeSet<Hash>,
     // Calculated from above.
     hash: Hash,
     // Calculated from the `hash` and the private key corresponding to `added_by`.
     signature: Signature,
+
+    has_valid_hash: Cell<Option<bool>>,
+    has_valid_signature: Cell<Option<bool>>,
 }
 
 impl Entry {
-    fn new(writer: &PublicKey, added_by: &Keypair, children: BTreeSet<Hash>) -> Self {
+    fn new(writer: &PublicKey, added_by: &Keypair) -> Self {
         // XXX This is kinda silly, we hash the Entry and then the sign function hashes the hash
         // which it then signs. If the API gave us a way to retrieve the signed hash we wouldn't
         // have to hash twice. There is an (`sign_prehashed`) API that takes Sha512 (hasher, not
         // digest) as an argument, but it doesn't let us look at the digest.
-        let hash = hash_entry(writer, &added_by.public, &children);
+        let hash = hash_entry(writer, &added_by.public);
         let signature = added_by.sign(hash.as_ref());
 
         let entry = Self {
-            writer: *writer,
-            added_by: added_by.public,
-            children,
+            writer: writer.clone(),
+            added_by: added_by.public.clone(),
             hash,
             signature,
+            has_valid_hash: Cell::new(Some(true)),
+            has_valid_signature: Cell::new(Some(true)),
         };
 
         entry
     }
 
-    fn has_valid_signature(&self) -> bool {
-        self.added_by.verify(self.hash.as_ref(), &self.signature).is_ok()
+    pub fn is_valid(&self) -> bool {
+        // This ensures hash is valid as well.
+        self.has_valid_signature()
     }
 
-    fn is_origin(&self) -> bool {
+    pub fn has_valid_hash(&self) -> bool {
+        let b = self.has_valid_hash.get();
+        match b {
+            Some(b) => b,
+            None => {
+                let v = self.hash == hash_entry(&self.writer, &self.added_by);
+                self.has_valid_hash.set(Some(v));
+                v
+            }
+        }
+    }
+
+    pub fn has_valid_signature(&self) -> bool {
+        if !self.has_valid_hash() {
+            return false;
+        }
+
+        let b = self.has_valid_signature.get();
+        match b {
+            Some(b) => b,
+            None => {
+                let v = self.added_by.verify(self.hash.as_ref(), &self.signature);
+                self.has_valid_signature.set(Some(v));
+                v
+            }
+        }
+    }
+
+    pub fn is_origin(&self) -> bool {
         return self.writer == self.added_by;
     }
 }
@@ -166,31 +183,14 @@ impl fmt::Debug for Entry {
     }
 }
 
-fn hash_entry(writer: &PublicKey, added_by: &PublicKey, children: &BTreeSet<Hash>) -> Hash {
+fn hash_entry(writer: &PublicKey, added_by: &PublicKey) -> Hash {
     let mut hasher = Sha3_256::new();
-    
-    hasher.update(b"OuiSync WriterSet Entry");
-    hasher.update(writer.as_bytes());
-    hasher.update(added_by.as_bytes());
-    hasher.update((children.len() as u32).to_le_bytes());
-    
-    for child in children.iter() {
-        hasher.update(child.as_ref());
-    }
-    
-    hasher.finalize().into()
-}
 
-fn generate_key_pair() -> Keypair {
-    // TODO: Not using Keypair::generate because `ed25519_dalek` uses an incompatible version
-    // of the `rand` dependency.
-    // https://stackoverflow.com/questions/65562447/the-trait-rand-corecryptorng-is-not-implemented-for-osrng
-    // https://github.com/dalek-cryptography/ed25519-dalek/issues/162
-    let mut bytes = [0u8; SECRET_KEY_LENGTH];
-    OsRng{}.fill(&mut bytes[..]);
-    let sk = SecretKey::from_bytes(&bytes).unwrap();
-    let pk = (&sk).into();
-    Keypair { secret: sk, public: pk }
+    hasher.update(b"OuiSync WriterSet Entry");
+    hasher.update(writer);
+    hasher.update(added_by);
+
+    hasher.finalize().into()
 }
 
 #[cfg(test)]
@@ -203,8 +203,8 @@ mod tests {
 
         assert!(ws.is_writer(&alice.public));
 
-        let bob = generate_key_pair();
-        let carol = generate_key_pair();
+        let bob = Keypair::generate();
+        let carol = Keypair::generate();
 
         assert!(!ws.is_writer(&bob.public));
         assert!(ws.add_writer(&carol.public, &bob).is_none());
@@ -217,23 +217,21 @@ mod tests {
         let (mut ws1, alice) = WriterSet::generate();
         let mut ws2 = ws1.clone();
 
-        let bob = generate_key_pair();
-        let carol = generate_key_pair();
+        let bob = Keypair::generate();
+        let carol = Keypair::generate();
 
         ws1.add_writer(&bob.public, &alice);
         ws2.add_writer(&carol.public, &alice);
 
         for ws2_entry in ws2.entries() {
-            ws1.add_entry(ws2_entry.clone());
+            ws1.prepare_entry(ws2_entry.clone()).map(|e| e.insert());
         }
 
         assert!(ws1.is_writer(&carol.public));
 
         for ws1_entry in ws1.entries() {
-            ws2.add_entry(ws1_entry.clone());
+            ws2.prepare_entry(ws1_entry.clone()).map(|e| e.insert());
         }
-
-        assert_eq!(ws1.calculate_hash(), ws2.calculate_hash());
     }
 
     #[test]
@@ -241,14 +239,14 @@ mod tests {
         let (mut ws1, alice) = WriterSet::generate();
         let (mut ws2, mallory) = WriterSet::generate();
 
-        let bob = generate_key_pair();
-        let carol = generate_key_pair();
+        let bob = Keypair::generate();
+        let carol = Keypair::generate();
 
         ws1.add_writer(&bob.public, &alice);
         ws2.add_writer(&carol.public, &mallory);
 
         for ws2_entry in ws2.entries() {
-            assert!(!ws1.add_entry(ws2_entry.clone()));
+            assert!(ws1.prepare_entry(ws2_entry.clone()).is_none());
         }
 
         assert!(!ws1.is_writer(&carol.public));
