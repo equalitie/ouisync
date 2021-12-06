@@ -56,6 +56,8 @@ pub enum Error {
     OperationNotSupported,
     #[error("network error")]
     Network(#[source] io::Error),
+    #[error("writer set error")]
+    WriterSet(crate::writer_set::error::Error),
 }
 
 impl Error {
@@ -69,6 +71,12 @@ impl Error {
 impl From<TryFromSliceError> for Error {
     fn from(_: TryFromSliceError) -> Self {
         Self::MalformedData
+    }
+}
+
+impl From<crate::writer_set::error::Error> for Error {
+    fn from(e: crate::writer_set::error::Error) -> Self {
+        Error::WriterSet(e)
     }
 }
 
