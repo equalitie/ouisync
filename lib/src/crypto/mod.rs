@@ -1,5 +1,6 @@
 mod hash;
 mod secret_key;
+pub mod sign;
 
 pub use self::{
     hash::{Hash, Hashable},
