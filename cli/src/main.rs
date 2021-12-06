@@ -106,17 +106,16 @@ async fn main() -> Result<()> {
     let network_handle = network.handle();
 
     // Mount repositories
-    let mut mount_guards = Vec::new();
+    let mut repo_guards = Vec::new();
     for (repo, mount_point) in mount_repos.into_values() {
-        network_handle.register(&repo).await;
-
-        let guard = virtual_filesystem::mount(
+        let registration = network_handle.register(&repo).await;
+        let mount_guard = virtual_filesystem::mount(
             tokio::runtime::Handle::current(),
             repo,
             mount_point.clone(),
         )?;
 
-        mount_guards.push(guard);
+        repo_guards.push((mount_guard, registration));
     }
 
     if options.print_ready_message {

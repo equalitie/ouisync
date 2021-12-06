@@ -146,7 +146,7 @@ impl MessageBroker {
 
     /// Destroy the link between a local repository with the specified id hash and its remote
     /// counterpart (if one exists).
-    pub async fn destroy_link(&self, id: PublicRepositoryId) {
+    pub async fn destroy_link(&self, id: SecretRepositoryId) {
         self.command_tx
             .send(Command::DestroyLink { id })
             .await
@@ -174,7 +174,7 @@ impl Inner {
                 self.create_link(role, id, index);
             }
             Command::DestroyLink { id } => {
-                self.links.remove(&id);
+                self.links.remove(&id.public());
             }
         }
     }
@@ -225,7 +225,7 @@ enum Command {
         index: Index,
     },
     DestroyLink {
-        id: PublicRepositoryId,
+        id: SecretRepositoryId,
     },
 }
 

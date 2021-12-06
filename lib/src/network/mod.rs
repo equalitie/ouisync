@@ -27,13 +27,14 @@ use crate::{
     scoped_task::{self, ScopedJoinHandle, ScopedTaskSet},
     upnp,
 };
+use slab::Slab;
 use std::{
     collections::{hash_map::Entry, HashMap},
     fmt,
     future::Future,
     io, iter,
     net::{IpAddr, Ipv4Addr, SocketAddr},
-    sync::{Arc, Weak},
+    sync::{Arc, Mutex as BlockingMutex, Weak},
     time::Duration,
 };
 use structopt::StructOpt;
@@ -93,7 +94,7 @@ pub struct Network {
     inner: Arc<Inner>,
     // We keep tasks here instead of in Inner because we want them to be
     // destroyed when Network is Dropped.
-    _tasks: Arc<RwLock<Tasks>>,
+    _tasks: Arc<Tasks>,
     _port_forwarder: Option<upnp::PortForwarder>,
 }
 
@@ -145,7 +146,7 @@ impl Network {
             None
         };
 
-        let tasks = Arc::new(RwLock::new(Tasks::default()));
+        let tasks = Arc::new(Tasks::default());
 
         let (dht_peer_found_tx, mut dht_peer_found_rx) = mpsc::unbounded_channel();
 
@@ -153,7 +154,7 @@ impl Network {
             local_addr,
             this_runtime_id: rand::random(),
             message_brokers: Mutex::new(HashMap::new()),
-            indices: RwLock::new(HashMap::default()),
+            indices: RwLock::new(Slab::new()),
             dht_discovery,
             dht_peer_found_tx,
             connection_deduplicator: ConnectionDeduplicator::new(),
@@ -176,24 +177,19 @@ impl Network {
                         None => return,
                     };
 
-                    inner
-                        .spawn(inner.clone().establish_dht_connection(peer_addr))
-                        .await;
+                    inner.spawn(inner.clone().establish_dht_connection(peer_addr));
                 }
             }
         });
 
-        inner.spawn(inner.clone().run_listener(listener)).await;
+        inner.spawn(inner.clone().run_listener(listener));
 
         inner
             .enable_local_discovery(!options.disable_local_discovery)
             .await;
 
         for peer in &options.peers {
-            inner
-                .clone()
-                .establish_user_provided_connection(*peer)
-                .await;
+            inner.clone().establish_user_provided_connection(*peer);
         }
 
         Ok(network)
@@ -219,70 +215,50 @@ pub struct Handle {
 impl Handle {
     /// Register a local repository into the network. This links the repository with all matching
     /// repositories of currently connected remote replicas as well as any replicas connected in
-    /// the future. The repository is automatically deregistered when dropped.
-    pub async fn register(&self, repository: &Repository) -> bool {
-        let sid = match repository.get_id().await {
-            Ok(id) => id,
-            Err(error) => {
-                log::warn!("not registering repository - missing id ({})", error);
-                return false;
-            }
+    /// the future. The repository is automatically deregistered when the returned handle is
+    /// dropped.
+    pub async fn register(&self, repository: &Repository) -> Registration {
+        let id = repository.get_id().await.ok();
+
+        let dht_lookup = if let Some(id) = id {
+            self.inner.start_dht_lookup(id.public())
+        } else {
+            None
         };
 
-        let pid = sid.public();
+        let key = self.inner.indices.write().await.insert(IndexHolder {
+            index: repository.index().clone(),
+            id,
+            dht_lookup,
+        });
 
-        match self.inner.indices.write().await.entry(pid) {
-            Entry::Occupied(_) => {
-                log::warn!("not registering repository - already registered");
-                return false;
-            }
-            Entry::Vacant(entry) => {
-                entry.insert(IndexHolder {
-                    index: repository.index().clone(),
-                    id: sid,
-                    dht_lookup: self.inner.start_dht_lookup(pid),
-                });
+        if let Some(id) = id {
+            for broker in self.inner.message_brokers.lock().await.values() {
+                broker.create_link(id, repository.index().clone()).await
             }
         }
 
-        for broker in self.inner.message_brokers.lock().await.values() {
-            broker.create_link(sid, repository.index().clone()).await
+        Registration {
+            inner: self.inner.clone(),
+            key,
         }
-
-        // Deregister the index when it gets closed.
-        self.inner
-            .spawn({
-                let closed = repository.index().subscribe().closed();
-                let inner = self.inner.clone();
-
-                async move {
-                    closed.await;
-
-                    inner.indices.write().await.remove(&pid);
-
-                    for broker in inner.message_brokers.lock().await.values() {
-                        broker.destroy_link(pid).await;
-                    }
-                }
-            })
-            .await;
-
-        true
     }
+}
 
-    pub async fn enable_dht_for_repository(&self, repository: &Repository) {
-        let id = if let Ok(id) = repository.get_id().await {
+pub struct Registration {
+    inner: Arc<Inner>,
+    key: usize,
+}
+
+impl Registration {
+    pub async fn enable_dht(&self) {
+        let mut indices = self.inner.indices.write().await;
+        let holder = &mut indices[self.key];
+
+        let id = if let Some(id) = holder.id {
             id.public()
         } else {
             log::warn!("not enabling DHT for repository - missing id");
-            return;
-        };
-
-        let mut indices = self.inner.indices.write().await;
-        let holder = if let Some(holder) = indices.get_mut(&id) {
-            holder
-        } else {
-            log::warn!("not enabling DHT for repository - not registered");
             return;
         };
 
@@ -291,39 +267,44 @@ impl Handle {
         }
     }
 
-    pub async fn disable_dht_for_repository(&self, repository: &Repository) {
-        let id = if let Ok(id) = repository.get_id().await {
-            id.public()
+    pub async fn disable_dht(&self) {
+        let mut indices = self.inner.indices.write().await;
+        indices[self.key].dht_lookup = None;
+    }
+
+    pub async fn is_dht_enabled(&self) -> bool {
+        let indices = self.inner.indices.read().await;
+        indices[self.key].dht_lookup.is_some()
+    }
+}
+
+impl Drop for Registration {
+    fn drop(&mut self) {
+        let tasks = if let Some(tasks) = self.inner.tasks.upgrade() {
+            tasks
         } else {
-            log::warn!("not disabling DHT for repository - missing id");
             return;
         };
 
-        if let Some(holder) = self.inner.indices.write().await.get_mut(&id) {
-            holder.dht_lookup = None;
-        } else {
-            log::warn!("not disabling DHT for repository - not registered");
-        }
-    }
+        let inner = self.inner.clone();
+        let key = self.key;
 
-    pub async fn is_dht_for_repository_enabled(&self, repository: &Repository) -> bool {
-        let id = if let Ok(id) = repository.get_id().await {
-            id.public()
-        } else {
-            return false;
-        };
+        // HACK: Can't run async code inside `drop`, spawning a task instead.
+        tasks.other.spawn(async move {
+            let holder = inner.indices.write().await.remove(key);
 
-        if let Some(holder) = self.inner.indices.read().await.get(&id) {
-            holder.dht_lookup.is_some()
-        } else {
-            false
-        }
+            if let Some(id) = holder.id {
+                for broker in inner.message_brokers.lock().await.values() {
+                    broker.destroy_link(id).await;
+                }
+            }
+        });
     }
 }
 
 #[derive(Default)]
 struct Tasks {
-    local_discovery: Option<ScopedJoinHandle<()>>,
+    local_discovery: BlockingMutex<Option<ScopedJoinHandle<()>>>,
     other: ScopedTaskSet,
 }
 
@@ -331,31 +312,31 @@ struct Inner {
     local_addr: SocketAddr,
     this_runtime_id: RuntimeId,
     message_brokers: Mutex<HashMap<RuntimeId, MessageBroker>>,
-    indices: RwLock<HashMap<PublicRepositoryId, IndexHolder>>,
+    indices: RwLock<Slab<IndexHolder>>,
     dht_discovery: Option<DhtDiscovery>,
     dht_peer_found_tx: mpsc::UnboundedSender<SocketAddr>,
     connection_deduplicator: ConnectionDeduplicator,
     // Note that unwrapping the upgraded weak pointer should be fine because if the underlying Arc
     // was Dropped, we would not be asking for the upgrade in the first place.
-    tasks: Weak<RwLock<Tasks>>,
+    tasks: Weak<Tasks>,
 }
 
 impl Inner {
     async fn enable_local_discovery(self: &Arc<Self>, enable: bool) {
-        let tasks_arc = self.tasks.upgrade().unwrap();
-        let mut tasks = tasks_arc.write().await;
+        let tasks = self.tasks.upgrade().unwrap();
+        let mut local_discovery = tasks.local_discovery.lock().unwrap();
 
         if !enable {
-            tasks.local_discovery = None;
+            *local_discovery = None;
             return;
         }
 
-        if tasks.local_discovery.is_some() {
+        if local_discovery.is_some() {
             return;
         }
 
         let self_ = self.clone();
-        tasks.local_discovery = Some(scoped_task::spawn(async move {
+        *local_discovery = Some(scoped_task::spawn(async move {
             let port = self_.local_addr.port();
             self_.run_local_discovery(port).await;
         }));
@@ -371,8 +352,7 @@ impl Inner {
         };
 
         while let Some(addr) = discovery.recv().await {
-            let tasks_arc = self.tasks.upgrade().unwrap();
-            let tasks = tasks_arc.write().await;
+            let tasks = self.tasks.upgrade().unwrap();
 
             tasks
                 .other
@@ -398,7 +378,6 @@ impl Inner {
                     self.clone()
                         .handle_new_connection(socket, PeerSource::Listener, permit),
                 )
-                .await
             }
         }
     }
@@ -409,7 +388,7 @@ impl Inner {
             .map(|dht| dht.lookup(id.to_info_hash(), self.dht_peer_found_tx.clone()))
     }
 
-    async fn establish_user_provided_connection(self: Arc<Self>, addr: SocketAddr) {
+    fn establish_user_provided_connection(self: Arc<Self>, addr: SocketAddr) {
         self.spawn({
             let inner = self.clone();
             async move {
@@ -432,7 +411,6 @@ impl Inner {
                 }
             }
         })
-        .await
     }
 
     async fn establish_discovered_connection(self: Arc<Self>, addr: SocketAddr) {
@@ -539,8 +517,10 @@ impl Inner {
                 // TODO: for DHT connection we should only link the repository for which we did the
                 // lookup but make sure we correctly handle edge cases, for example, when we have
                 // more than one repository shared with the peer.
-                for holder in self.indices.read().await.values() {
-                    broker.create_link(holder.id, holder.index.clone()).await;
+                for (_, holder) in &*self.indices.read().await {
+                    if let Some(id) = holder.id {
+                        broker.create_link(id, holder.index.clone()).await;
+                    }
                 }
 
                 entry.insert(broker);
@@ -561,19 +541,19 @@ impl Inner {
         }
     }
 
-    async fn spawn<Fut>(&self, f: Fut)
+    fn spawn<Fut>(&self, f: Fut)
     where
         Fut: Future<Output = ()> + Send + 'static,
     {
-        let tasks_arc = self.tasks.upgrade().unwrap();
-        let tasks = tasks_arc.write().await;
-        tasks.other.spawn(f);
+        // TODO: this `unwrap` is sketchy. Maybe we should simply not spawn if `tasks` can't be
+        // upgraded?
+        self.tasks.upgrade().unwrap().other.spawn(f)
     }
 }
 
 struct IndexHolder {
     index: Index,
-    id: SecretRepositoryId,
+    id: Option<SecretRepositoryId>,
     dht_lookup: Option<dht_discovery::LookupRequest>,
 }
 
