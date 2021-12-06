@@ -154,7 +154,7 @@ impl Network {
             local_addr,
             this_runtime_id: rand::random(),
             message_brokers: Mutex::new(HashMap::new()),
-            indices: RwLock::new(Slab::new()),
+            registry: RwLock::new(Slab::new()),
             dht_discovery,
             dht_peer_found_tx,
             connection_deduplicator: ConnectionDeduplicator::new(),
@@ -220,23 +220,23 @@ impl Handle {
     pub async fn register(&self, repository: &Repository) -> Registration {
         let id = repository.get_id().await.ok();
 
-        let dht_lookup = if let Some(id) = id {
-            self.inner.start_dht_lookup(id.public())
+        // TODO: consider disabling DHT by default, for privacy reasons.
+        let dht = true;
+        let state = if let Some(id) = id {
+            RegistrationState::create_shared(&self.inner, id, repository, dht).await
         } else {
-            None
+            RegistrationState::Unique { dht }
         };
 
-        let key = self.inner.indices.write().await.insert(IndexHolder {
-            index: repository.index().clone(),
-            id,
-            dht_lookup,
-        });
-
-        if let Some(id) = id {
-            for broker in self.inner.message_brokers.lock().await.values() {
-                broker.create_link(id, repository.index().clone()).await
-            }
-        }
+        let key = self
+            .inner
+            .registry
+            .write()
+            .await
+            .insert(RegistrationHolder {
+                index: repository.index().clone(),
+                state,
+            });
 
         Registration {
             inner: self.inner.clone(),
@@ -251,30 +251,69 @@ pub struct Registration {
 }
 
 impl Registration {
+    pub async fn get_or_create_id(&self, repo: &Repository) -> Result<SecretRepositoryId> {
+        let mut registry = self.inner.registry.write().await;
+        let holder = &mut registry[self.key];
+
+        match holder.state {
+            RegistrationState::Shared { id, .. } => Ok(id),
+            RegistrationState::Unique { dht } => {
+                let id = repo.get_or_create_id().await?;
+                holder.state = RegistrationState::create_shared(&self.inner, id, repo, dht).await;
+                Ok(id)
+            }
+        }
+    }
+
+    pub async fn set_id(&self, repo: &Repository, id: SecretRepositoryId) -> Result<()> {
+        let mut registry = self.inner.registry.write().await;
+        let holder = &mut registry[self.key];
+
+        match holder.state {
+            RegistrationState::Shared { id: current_id, .. } if id == current_id => Ok(()),
+            RegistrationState::Shared { .. } => Err(Error::EntryExists),
+            RegistrationState::Unique { dht } => {
+                repo.set_id(id).await?;
+                holder.state = RegistrationState::create_shared(&self.inner, id, repo, dht).await;
+                Ok(())
+            }
+        }
+    }
+
     pub async fn enable_dht(&self) {
-        let mut indices = self.inner.indices.write().await;
-        let holder = &mut indices[self.key];
+        let mut registry = self.inner.registry.write().await;
 
-        let id = if let Some(id) = holder.id {
-            id.public()
-        } else {
-            log::warn!("not enabling DHT for repository - missing id");
-            return;
-        };
-
-        if holder.dht_lookup.is_none() {
-            holder.dht_lookup = self.inner.start_dht_lookup(id);
+        match &mut registry[self.key].state {
+            RegistrationState::Shared { id, dht } if dht.is_none() => {
+                *dht = self.inner.start_dht_lookup(id.public());
+            }
+            RegistrationState::Shared { .. } => {}
+            RegistrationState::Unique { dht } => {
+                *dht = true;
+            }
         }
     }
 
     pub async fn disable_dht(&self) {
-        let mut indices = self.inner.indices.write().await;
-        indices[self.key].dht_lookup = None;
+        let mut registry = self.inner.registry.write().await;
+
+        match &mut registry[self.key].state {
+            RegistrationState::Shared { dht, .. } => {
+                *dht = None;
+            }
+            RegistrationState::Unique { dht, .. } => {
+                *dht = false;
+            }
+        }
     }
 
     pub async fn is_dht_enabled(&self) -> bool {
-        let indices = self.inner.indices.read().await;
-        indices[self.key].dht_lookup.is_some()
+        let registry = self.inner.registry.read().await;
+
+        match &registry[self.key].state {
+            RegistrationState::Shared { dht, .. } => dht.is_some(),
+            RegistrationState::Unique { dht, .. } => *dht,
+        }
     }
 }
 
@@ -291,14 +330,53 @@ impl Drop for Registration {
 
         // HACK: Can't run async code inside `drop`, spawning a task instead.
         tasks.other.spawn(async move {
-            let holder = inner.indices.write().await.remove(key);
+            let holder = inner.registry.write().await.remove(key);
 
-            if let Some(id) = holder.id {
+            if let RegistrationState::Shared { id, .. } = holder.state {
                 for broker in inner.message_brokers.lock().await.values() {
                     broker.destroy_link(id).await;
                 }
             }
         });
+    }
+}
+
+struct RegistrationHolder {
+    index: Index,
+    state: RegistrationState,
+}
+
+enum RegistrationState {
+    // Repository is shared with other replicas.
+    Shared {
+        id: SecretRepositoryId,
+        dht: Option<dht_discovery::LookupRequest>,
+    },
+    // Repository is not yet shared with any replica.
+    Unique {
+        // Whether dht should be enabled for this repository when it becomes shared.
+        dht: bool,
+    },
+}
+
+impl RegistrationState {
+    async fn create_shared(
+        inner: &Inner,
+        id: SecretRepositoryId,
+        repo: &Repository,
+        dht: bool,
+    ) -> Self {
+        for broker in inner.message_brokers.lock().await.values() {
+            broker.create_link(id, repo.index().clone()).await
+        }
+
+        let dht = if dht {
+            inner.start_dht_lookup(id.public())
+        } else {
+            None
+        };
+
+        Self::Shared { id, dht }
     }
 }
 
@@ -312,7 +390,7 @@ struct Inner {
     local_addr: SocketAddr,
     this_runtime_id: RuntimeId,
     message_brokers: Mutex<HashMap<RuntimeId, MessageBroker>>,
-    indices: RwLock<Slab<IndexHolder>>,
+    registry: RwLock<Slab<RegistrationHolder>>,
     dht_discovery: Option<DhtDiscovery>,
     dht_peer_found_tx: mpsc::UnboundedSender<SocketAddr>,
     connection_deduplicator: ConnectionDeduplicator,
@@ -517,8 +595,8 @@ impl Inner {
                 // TODO: for DHT connection we should only link the repository for which we did the
                 // lookup but make sure we correctly handle edge cases, for example, when we have
                 // more than one repository shared with the peer.
-                for (_, holder) in &*self.indices.read().await {
-                    if let Some(id) = holder.id {
+                for (_, holder) in &*self.registry.read().await {
+                    if let RegistrationState::Shared { id, .. } = holder.state {
                         broker.create_link(id, holder.index.clone()).await;
                     }
                 }
@@ -549,12 +627,6 @@ impl Inner {
         // upgraded?
         self.tasks.upgrade().unwrap().other.spawn(f)
     }
-}
-
-struct IndexHolder {
-    index: Index,
-    id: Option<SecretRepositoryId>,
-    dht_lookup: Option<dht_discovery::LookupRequest>,
 }
 
 // Exchange runtime ids with the peer. Returns their runtime id.

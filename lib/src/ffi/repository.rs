@@ -190,7 +190,10 @@ pub unsafe extern "C" fn repository_create_share_token(
         let name = utils::ptr_to_str(name)?.to_owned();
 
         ctx.spawn(async move {
-            let id = holder.repository.get_or_create_id().await?;
+            let id = holder
+                .registration
+                .get_or_create_id(&holder.repository)
+                .await?;
             let share_token = ShareToken::new(id).with_name(name);
 
             Ok(share_token.to_string())
@@ -210,7 +213,12 @@ pub unsafe extern "C" fn repository_accept_share_token(
         let token = utils::ptr_to_str(token)?;
         let token: ShareToken = token.parse()?;
 
-        ctx.spawn(async move { holder.repository.set_id(*token.id()).await })
+        ctx.spawn(async move {
+            holder
+                .registration
+                .set_id(&holder.repository, *token.id())
+                .await
+        })
     })
 }
 
