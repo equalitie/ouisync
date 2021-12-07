@@ -124,15 +124,17 @@ impl Db {
 /// Insert an entry which is known by this application to have valid entry.hash and
 /// entry.signature.
 async fn insert_valid_entry(entry: &Entry, tx: &mut db::Transaction<'_>) -> Result<()> {
-    sqlx::query(
-        "INSERT INTO writer_set_entries(writer, added_by, signature)
+    let e = sqlx::query(
+        "INSERT INTO writer_set_entries(writer, added_by, hash, signature)
             VALUES (?, ?, ?, ?)",
     )
     .bind(&entry.writer)
     .bind(&entry.added_by)
+    .bind(&entry.hash)
     .bind(&entry.signature)
     .execute(tx)
-    .await?;
+    .await;
+    e?;
 
     Ok(())
 }
@@ -185,7 +187,7 @@ async fn create_tables(tx: &mut db::Transaction<'_>) -> Result<()> {
              writer BLOB NOT NULL,
              added_by BLOB NOT NULL,
              hash BLOB NOT NULL,
-             signature BLOB NOT NULL,
+             signature BLOB NOT NULL
          );",
     )
     .execute(&mut (*tx))
@@ -196,7 +198,7 @@ async fn create_tables(tx: &mut db::Transaction<'_>) -> Result<()> {
         "CREATE TABLE IF NOT EXISTS writer_set_origin (
              -- Single row entry, represent the hash of the first writer which is 'self signed' in
              -- the writer_set_entries table.
-             origin_hash BLOB NOT NULL,
+             origin_hash BLOB NOT NULL
          );",
     )
     .execute(tx)
@@ -204,4 +206,31 @@ async fn create_tables(tx: &mut db::Transaction<'_>) -> Result<()> {
     .map_err(Error::CreateDbSchema)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        crypto::sign::Keypair,
+        db,
+    };
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn sanity() {
+        let pool = db::open(&db::Store::Memory).await.unwrap();
+        let (mut store, alice) = Db::create_new(&pool).await.unwrap();
+
+        let bob = Keypair::generate();
+
+        let entry = Entry::new(&bob.public, &alice);
+
+        assert!(store.try_add_entry(entry));
+
+        let malory = Keypair::generate();
+        let carol = Keypair::generate();
+
+        assert!(!store.try_add_entry(Entry::new(&malory.public, &malory)));
+        assert!(!store.try_add_entry(Entry::new(&carol.public, &malory)));
+    }
 }
