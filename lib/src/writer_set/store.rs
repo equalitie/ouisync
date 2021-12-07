@@ -10,14 +10,14 @@ use sqlx::Row;
 use std::collections::{HashMap, HashSet};
 
 /// Persistence layer for the WriterSet structure.
-pub struct Db {
+pub struct Store {
     pool: db::Pool,
     writer_set: WriterSet,
 }
 
-impl Db {
+impl Store {
     /// Create the database tables with a newly generated WriterSet.
-    pub async fn create_new(pool: &db::Pool) -> Result<(Db, Keypair)> {
+    pub async fn create_new(pool: &db::Pool) -> Result<(Store, Keypair)> {
         let mut tx = pool.begin().await?;
 
         create_tables(&mut tx).await?;
@@ -34,7 +34,7 @@ impl Db {
             insert_valid_entry(&entry, &mut tx).await?;
         }
 
-        let db = Db {
+        let db = Store {
             pool: pool.clone(),
             writer_set,
         };
@@ -45,7 +45,7 @@ impl Db {
     }
 
     /// Create the database tables and initialize it with the origin entry.
-    pub async fn create_existing(origin_entry: &Entry, pool: db::Pool) -> Result<Db> {
+    pub async fn create_existing(origin_entry: &Entry, pool: db::Pool) -> Result<Store> {
         let mut tx = pool.begin().await?;
 
         if load_origin_hash(&mut tx).await?.is_some() {
@@ -61,14 +61,14 @@ impl Db {
 
             tx.commit().await?;
 
-            Ok(Db { pool, writer_set })
+            Ok(Store { pool, writer_set })
         } else {
             Err(WsError::InvalidOriginEntry.into())
         }
     }
 
     /// Load existing database.
-    pub async fn load(pool: db::Pool) -> Result<Db> {
+    pub async fn load(pool: db::Pool) -> Result<Store> {
         // Only reading here, so no need to commit the transaction.
         let mut tx = pool.begin().await?;
 
@@ -221,7 +221,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn sanity() {
         let pool = db::open(&db::Store::Memory).await.unwrap();
-        let (mut store, alice) = Db::create_new(&pool).await.unwrap();
+        let (mut store, alice) = Store::create_new(&pool).await.unwrap();
 
         let bob = Keypair::generate();
 

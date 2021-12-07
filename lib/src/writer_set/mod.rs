@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-pub mod db;
+pub mod store;
 pub mod error;
 
 use crate::crypto::{
