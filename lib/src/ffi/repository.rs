@@ -54,6 +54,9 @@ pub unsafe extern "C" fn repository_open(
 /// Closes a repository.
 #[no_mangle]
 pub unsafe extern "C" fn repository_close(handle: SharedHandle<RepositoryHolder>) {
+    // NOTE: The `Drop` impl of `Registration` `spawn`s which means it must be called from within a
+    // runtime context.
+    let _runtime_guard = session::get().runtime().enter();
     handle.release();
 }
 
