@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use super::{error::Error as WsError, Entry, WriterSet};
 use crate::{
     crypto::{sign::Keypair, Hash},
@@ -67,7 +69,7 @@ impl Db {
 
     /// Load existing database.
     pub async fn load(pool: db::Pool) -> Result<Db> {
-        // Only reading here, no no need to commit the transaction.
+        // Only reading here, so no need to commit the transaction.
         let mut tx = pool.begin().await?;
 
         let origin_hash = match load_origin_hash(&mut tx).await? {

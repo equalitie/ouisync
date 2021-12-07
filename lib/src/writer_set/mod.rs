@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 pub mod db;
 pub mod error;
 
@@ -9,13 +11,10 @@ use sha3::{Digest, Sha3_256};
 use std::collections::{hash_map, HashMap};
 use std::{cell::Cell, fmt, iter::once};
 
-//
-// We want to ensure:
-//
-// 1. Entries can only be added by someone already in the set, or by the origin.
-// 2. Entries can't be removed
-// 3. Two sets with the same origin can be merged without write permissions
-//
+///
+/// A structure to keep track who who can sign modifications to the repository index.
+/// A new entry in the writer set can only be done by someone already in the set.
+///
 #[derive(Clone, Debug)]
 pub struct WriterSet {
     origin: Hash,
