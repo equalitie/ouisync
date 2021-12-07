@@ -918,7 +918,8 @@ fn to_error_code(error: &Error) -> libc::c_int {
         | Error::MalformedDirectory(_)
         | Error::WrongBlockLength(_)
         | Error::Crypto
-        | Error::Network(_) => libc::EIO,
+        | Error::Network(_)
+        | Error::WriterSet(_) => libc::EIO,
         Error::EntryNotFound | Error::AmbiguousEntry => libc::ENOENT,
         Error::EntryExists => libc::EEXIST,
         Error::EntryIsFile => libc::ENOTDIR,
