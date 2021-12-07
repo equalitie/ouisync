@@ -332,9 +332,9 @@ impl Drop for Registration {
         tasks.other.spawn(async move {
             let holder = inner.registry.write().await.remove(key);
 
-            if let RegistrationState::Shared { id, .. } = holder.state {
-                for broker in inner.message_brokers.lock().await.values() {
-                    broker.destroy_link(id).await;
+            if let RegistrationState::Shared { id, .. } = &holder.state {
+                for broker in inner.message_brokers.lock().await.values_mut() {
+                    broker.destroy_link(id);
                 }
             }
         });
@@ -366,8 +366,8 @@ impl RegistrationState {
         repo: &Repository,
         dht: bool,
     ) -> Self {
-        for broker in inner.message_brokers.lock().await.values() {
-            broker.create_link(id, repo.index().clone()).await
+        for broker in inner.message_brokers.lock().await.values_mut() {
+            broker.create_link(id, repo.index().clone())
         }
 
         let dht = if dht {
@@ -585,11 +585,11 @@ impl Inner {
         let mut brokers = self.message_brokers.lock().await;
 
         match brokers.entry(that_runtime_id) {
-            Entry::Occupied(entry) => entry.get().add_connection(stream, permit).await,
+            Entry::Occupied(entry) => entry.get().add_connection(stream, permit),
             Entry::Vacant(entry) => {
                 log::info!("Connected to replica {:?}", that_runtime_id);
 
-                let broker =
+                let mut broker =
                     MessageBroker::new(self.this_runtime_id, that_runtime_id, stream, permit);
 
                 // TODO: for DHT connection we should only link the repository for which we did the
@@ -597,7 +597,7 @@ impl Inner {
                 // more than one repository shared with the peer.
                 for (_, holder) in &*self.registry.read().await {
                     if let RegistrationState::Shared { id, .. } = holder.state {
-                        broker.create_link(id, holder.index.clone()).await;
+                        broker.create_link(id, holder.index.clone());
                     }
                 }
 
@@ -613,7 +613,7 @@ impl Inner {
         // Remove the broker if it has no more connections.
         let mut brokers = self.message_brokers.lock().await;
         if let Entry::Occupied(entry) = brokers.entry(that_runtime_id) {
-            if !entry.get().has_connections().await {
+            if !entry.get().has_connections() {
                 entry.remove();
             }
         }
