@@ -2,8 +2,13 @@ use core::hash::{Hash, Hasher};
 use ed25519_dalek as ext;
 use ed25519_dalek::Verifier;
 use rand::{rngs::OsRng, Rng};
+use std::fmt;
+use crate::format;
+use std::cmp::Ordering;
+use serde;
 
-#[derive(PartialEq, Eq, Clone)]
+#[derive(PartialEq, Eq, Clone, Copy, serde::Deserialize)]
+#[serde(try_from = "&[u8]")]
 pub struct PublicKey(ext::PublicKey);
 pub struct SecretKey(ext::SecretKey);
 pub struct Keypair {
@@ -12,6 +17,8 @@ pub struct Keypair {
 }
 #[derive(Clone)]
 pub struct Signature(ext::Signature);
+
+pub type SignatureError = ext::SignatureError;
 
 impl Keypair {
     pub fn generate() -> Self {
@@ -41,10 +48,37 @@ impl PublicKey {
     }
 }
 
+impl PartialOrd for PublicKey {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.0.as_bytes().partial_cmp(other.0.as_bytes())
+    }
+}
+
+impl Ord for PublicKey {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.0.as_bytes().cmp(other.0.as_bytes())
+    }
+}
+
+impl fmt::LowerHex for PublicKey {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        format::hex(f, self.0.as_bytes())
+    }
+}
+
 // https://github.com/dalek-cryptography/ed25519-dalek/issues/183
 impl Hash for PublicKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.0.as_bytes().hash(state);
+    }
+}
+
+impl serde::Serialize for PublicKey {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer
+    {
+        self.0.as_bytes().serialize(serializer)
     }
 }
 
@@ -60,6 +94,28 @@ impl TryFrom<&'_ [u8]> for PublicKey {
     fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
         let pk = ext::PublicKey::from_bytes(bytes)?;
         Ok(PublicKey(pk))
+    }
+}
+
+impl fmt::Display for PublicKey {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:x}", self)
+    }
+}
+
+impl fmt::Debug for PublicKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{:8x}", self)
+    }
+}
+
+// TODO: Temporarily enabling for non tests as well.
+//#[cfg(test)]
+impl rand::distributions::Distribution<PublicKey> for rand::distributions::Standard {
+    fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> PublicKey {
+        let bytes: [u8; ext::PUBLIC_KEY_LENGTH] = self.sample(rng);
+        let pk = ext::PublicKey::from_bytes(&bytes).unwrap();
+        PublicKey(pk)
     }
 }
 
