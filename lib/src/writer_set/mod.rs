@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
-pub mod store;
 pub mod error;
+pub mod store;
 
 use crate::crypto::{
     sign::{Keypair, PublicKey, Signature},

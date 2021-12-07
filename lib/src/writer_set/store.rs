@@ -144,23 +144,22 @@ async fn insert_valid_entry(entry: &Entry, tx: &mut db::Transaction<'_>) -> Resu
 async fn load_entries(tx: &mut db::Transaction<'_>) -> Result<HashMap<Hash, Entry>> {
     use std::cell::Cell;
 
-    let entries =
-        sqlx::query("SELECT writer,added_by,hash,signature FROM writer_set_entries")
-            .fetch_all(tx)
-            .await?
-            .into_iter()
-            .map(|row| {
-                let e = Entry {
-                    writer: row.get(0),
-                    added_by: row.get(1),
-                    hash: row.get(2),
-                    signature: row.get(3),
-                    has_valid_hash: Cell::new(None),
-                    has_valid_signature: Cell::new(None),
-                };
-                (e.hash, e)
-            })
-            .collect();
+    let entries = sqlx::query("SELECT writer,added_by,hash,signature FROM writer_set_entries")
+        .fetch_all(tx)
+        .await?
+        .into_iter()
+        .map(|row| {
+            let e = Entry {
+                writer: row.get(0),
+                added_by: row.get(1),
+                hash: row.get(2),
+                signature: row.get(3),
+                has_valid_hash: Cell::new(None),
+                has_valid_signature: Cell::new(None),
+            };
+            (e.hash, e)
+        })
+        .collect();
 
     Ok(entries)
 }
@@ -213,10 +212,7 @@ async fn create_tables(tx: &mut db::Transaction<'_>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        crypto::sign::Keypair,
-        db,
-    };
+    use crate::{crypto::sign::Keypair, db};
 
     #[tokio::test(flavor = "multi_thread")]
     async fn sanity() {

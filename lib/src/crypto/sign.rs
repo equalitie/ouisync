@@ -1,11 +1,11 @@
+use crate::format;
 use core::hash::{Hash, Hasher};
 use ed25519_dalek as ext;
 use ed25519_dalek::Verifier;
 use rand::{rngs::OsRng, Rng};
-use std::fmt;
-use crate::format;
-use std::cmp::Ordering;
 use serde;
+use std::cmp::Ordering;
+use std::fmt;
 
 #[derive(PartialEq, Eq, Clone, Copy, serde::Deserialize)]
 #[serde(try_from = "&[u8]")]
@@ -76,7 +76,7 @@ impl Hash for PublicKey {
 impl serde::Serialize for PublicKey {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
-        S: serde::Serializer
+        S: serde::Serializer,
     {
         self.0.as_bytes().serialize(serializer)
     }
