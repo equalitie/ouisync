@@ -7,8 +7,7 @@ use serde;
 use std::cmp::Ordering;
 use std::fmt;
 
-#[derive(PartialEq, Eq, Clone, Copy, serde::Deserialize)]
-#[serde(try_from = "&[u8]")]
+#[derive(PartialEq, Eq, Clone, Copy, serde::Deserialize, serde::Serialize)]
 pub struct PublicKey(ext::PublicKey);
 pub struct SecretKey(ext::SecretKey);
 pub struct Keypair {
@@ -73,15 +72,6 @@ impl Hash for PublicKey {
     }
 }
 
-impl serde::Serialize for PublicKey {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        self.0.as_bytes().serialize(serializer)
-    }
-}
-
 impl AsRef<[u8]> for PublicKey {
     fn as_ref(&self) -> &[u8] {
         self.0.as_bytes()
@@ -93,7 +83,7 @@ impl TryFrom<&'_ [u8]> for PublicKey {
 
     fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
         let pk = ext::PublicKey::from_bytes(bytes)?;
-        Ok(PublicKey(pk))
+        Ok(Self(pk))
     }
 }
 
