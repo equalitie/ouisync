@@ -40,7 +40,7 @@ use std::{
 use structopt::StructOpt;
 use tokio::{
     net::{TcpListener, TcpStream},
-    sync::{mpsc, Mutex, RwLock},
+    sync::{mpsc, Mutex},
     task, time,
 };
 
@@ -153,8 +153,10 @@ impl Network {
         let inner = Arc::new(Inner {
             local_addr,
             this_runtime_id: rand::random(),
-            message_brokers: Mutex::new(HashMap::new()),
-            registry: RwLock::new(Slab::new()),
+            state: Mutex::new(State {
+                message_brokers: HashMap::new(),
+                registry: Slab::new(),
+            }),
             dht_discovery,
             dht_peer_found_tx,
             connection_deduplicator: ConnectionDeduplicator::new(),
@@ -222,21 +224,29 @@ impl Handle {
 
         // TODO: consider disabling DHT by default, for privacy reasons.
         let dht = true;
-        let state = if let Some(id) = id {
-            RegistrationState::create_shared(&self.inner, id, repository, dht).await
+        let registration_state = if let Some(id) = id {
+            RegistrationState::Shared {
+                id,
+                dht: if dht {
+                    self.inner.start_dht_lookup(id.public())
+                } else {
+                    None
+                },
+            }
         } else {
             RegistrationState::Unique { dht }
         };
 
-        let key = self
-            .inner
-            .registry
-            .write()
-            .await
-            .insert(RegistrationHolder {
-                index: repository.index().clone(),
-                state,
-            });
+        let mut network_state = self.inner.state.lock().await;
+
+        let key = network_state.registry.insert(RegistrationHolder {
+            index: repository.index().clone(),
+            state: registration_state,
+        });
+
+        if let Some(id) = id {
+            network_state.create_link(id, repository.index());
+        }
 
         Registration {
             inner: self.inner.clone(),
@@ -252,38 +262,60 @@ pub struct Registration {
 
 impl Registration {
     pub async fn get_or_create_id(&self, repo: &Repository) -> Result<SecretRepositoryId> {
-        let mut registry = self.inner.registry.write().await;
-        let holder = &mut registry[self.key];
+        let mut state = self.inner.state.lock().await;
+        let holder = &mut state.registry[self.key];
 
         match holder.state {
             RegistrationState::Shared { id, .. } => Ok(id),
             RegistrationState::Unique { dht } => {
                 let id = repo.get_or_create_id().await?;
-                holder.state = RegistrationState::create_shared(&self.inner, id, repo, dht).await;
+
+                holder.state = RegistrationState::Shared {
+                    id,
+                    dht: if dht {
+                        self.inner.start_dht_lookup(id.public())
+                    } else {
+                        None
+                    },
+                };
+
+                state.create_link(id, repo.index());
+
                 Ok(id)
             }
         }
     }
 
     pub async fn set_id(&self, repo: &Repository, id: SecretRepositoryId) -> Result<()> {
-        let mut registry = self.inner.registry.write().await;
-        let holder = &mut registry[self.key];
+        let mut state = self.inner.state.lock().await;
+        let holder = &mut state.registry[self.key];
 
         match holder.state {
             RegistrationState::Shared { id: current_id, .. } if id == current_id => Ok(()),
             RegistrationState::Shared { .. } => Err(Error::EntryExists),
             RegistrationState::Unique { dht } => {
                 repo.set_id(id).await?;
-                holder.state = RegistrationState::create_shared(&self.inner, id, repo, dht).await;
+
+                holder.state = RegistrationState::Shared {
+                    id,
+                    dht: if dht {
+                        self.inner.start_dht_lookup(id.public())
+                    } else {
+                        None
+                    },
+                };
+
+                state.create_link(id, repo.index());
+
                 Ok(())
             }
         }
     }
 
     pub async fn enable_dht(&self) {
-        let mut registry = self.inner.registry.write().await;
+        let mut state = self.inner.state.lock().await;
 
-        match &mut registry[self.key].state {
+        match &mut state.registry[self.key].state {
             RegistrationState::Shared { id, dht } if dht.is_none() => {
                 *dht = self.inner.start_dht_lookup(id.public());
             }
@@ -295,9 +327,9 @@ impl Registration {
     }
 
     pub async fn disable_dht(&self) {
-        let mut registry = self.inner.registry.write().await;
+        let mut state = self.inner.state.lock().await;
 
-        match &mut registry[self.key].state {
+        match &mut state.registry[self.key].state {
             RegistrationState::Shared { dht, .. } => {
                 *dht = None;
             }
@@ -308,9 +340,9 @@ impl Registration {
     }
 
     pub async fn is_dht_enabled(&self) -> bool {
-        let registry = self.inner.registry.read().await;
+        let state = self.inner.state.lock().await;
 
-        match &registry[self.key].state {
+        match &state.registry[self.key].state {
             RegistrationState::Shared { dht, .. } => dht.is_some(),
             RegistrationState::Unique { dht, .. } => *dht,
         }
@@ -330,11 +362,12 @@ impl Drop for Registration {
 
         // HACK: Can't run async code inside `drop`, spawning a task instead.
         tasks.other.spawn(async move {
-            let holder = inner.registry.write().await.remove(key);
+            let mut state = inner.state.lock().await;
+            let holder = state.registry.remove(key);
 
-            if let RegistrationState::Shared { id, .. } = holder.state {
-                for broker in inner.message_brokers.lock().await.values() {
-                    broker.destroy_link(id).await;
+            if let RegistrationState::Shared { id, .. } = &holder.state {
+                for broker in state.message_brokers.values_mut() {
+                    broker.destroy_link(id);
                 }
             }
         });
@@ -359,27 +392,6 @@ enum RegistrationState {
     },
 }
 
-impl RegistrationState {
-    async fn create_shared(
-        inner: &Inner,
-        id: SecretRepositoryId,
-        repo: &Repository,
-        dht: bool,
-    ) -> Self {
-        for broker in inner.message_brokers.lock().await.values() {
-            broker.create_link(id, repo.index().clone()).await
-        }
-
-        let dht = if dht {
-            inner.start_dht_lookup(id.public())
-        } else {
-            None
-        };
-
-        Self::Shared { id, dht }
-    }
-}
-
 #[derive(Default)]
 struct Tasks {
     local_discovery: BlockingMutex<Option<ScopedJoinHandle<()>>>,
@@ -389,14 +401,26 @@ struct Tasks {
 struct Inner {
     local_addr: SocketAddr,
     this_runtime_id: RuntimeId,
-    message_brokers: Mutex<HashMap<RuntimeId, MessageBroker>>,
-    registry: RwLock<Slab<RegistrationHolder>>,
+    state: Mutex<State>,
     dht_discovery: Option<DhtDiscovery>,
     dht_peer_found_tx: mpsc::UnboundedSender<SocketAddr>,
     connection_deduplicator: ConnectionDeduplicator,
     // Note that unwrapping the upgraded weak pointer should be fine because if the underlying Arc
     // was Dropped, we would not be asking for the upgrade in the first place.
     tasks: Weak<Tasks>,
+}
+
+struct State {
+    message_brokers: HashMap<RuntimeId, MessageBroker>,
+    registry: Slab<RegistrationHolder>,
+}
+
+impl State {
+    fn create_link(&mut self, id: SecretRepositoryId, index: &Index) {
+        for broker in self.message_brokers.values_mut() {
+            broker.create_link(id, index.clone())
+        }
+    }
 }
 
 impl Inner {
@@ -582,22 +606,23 @@ impl Inner {
 
         let released = permit.released();
 
-        let mut brokers = self.message_brokers.lock().await;
+        let mut state_guard = self.state.lock().await;
+        let state = &mut *state_guard;
 
-        match brokers.entry(that_runtime_id) {
-            Entry::Occupied(entry) => entry.get().add_connection(stream, permit).await,
+        match state.message_brokers.entry(that_runtime_id) {
+            Entry::Occupied(entry) => entry.get().add_connection(stream, permit),
             Entry::Vacant(entry) => {
                 log::info!("Connected to replica {:?}", that_runtime_id);
 
-                let broker =
+                let mut broker =
                     MessageBroker::new(self.this_runtime_id, that_runtime_id, stream, permit);
 
                 // TODO: for DHT connection we should only link the repository for which we did the
                 // lookup but make sure we correctly handle edge cases, for example, when we have
                 // more than one repository shared with the peer.
-                for (_, holder) in &*self.registry.read().await {
+                for (_, holder) in &state.registry {
                     if let RegistrationState::Shared { id, .. } = holder.state {
-                        broker.create_link(id, holder.index.clone()).await;
+                        broker.create_link(id, holder.index.clone());
                     }
                 }
 
@@ -605,15 +630,15 @@ impl Inner {
             }
         };
 
-        drop(brokers);
+        drop(state_guard);
 
         released.notified().await;
         log::info!("Lost {} TCP connection: {}", peer_source, addr);
 
         // Remove the broker if it has no more connections.
-        let mut brokers = self.message_brokers.lock().await;
-        if let Entry::Occupied(entry) = brokers.entry(that_runtime_id) {
-            if !entry.get().has_connections().await {
+        let mut state = self.state.lock().await;
+        if let Entry::Occupied(entry) = state.message_brokers.entry(that_runtime_id) {
+            if !entry.get().has_connections() {
                 entry.remove();
             }
         }

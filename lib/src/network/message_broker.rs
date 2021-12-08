@@ -10,12 +10,8 @@ use super::{
 use crate::{
     index::Index,
     repository::{PublicRepositoryId, SecretRepositoryId},
-    scoped_task::ScopedJoinHandle,
 };
-use std::{
-    collections::{hash_map::Entry, HashMap},
-    fmt,
-};
+use std::collections::{hash_map::Entry, HashMap};
 use tokio::{
     net::TcpStream,
     select,
@@ -80,8 +76,8 @@ impl ClientStream {
 pub(super) struct MessageBroker {
     this_runtime_id: RuntimeId,
     that_runtime_id: RuntimeId,
-    command_tx: mpsc::Sender<Command>,
-    _join_handle: ScopedJoinHandle<()>,
+    dispatcher: MessageDispatcher,
+    links: HashMap<PublicRepositoryId, oneshot::Sender<()>>,
 }
 
 impl MessageBroker {
@@ -91,98 +87,32 @@ impl MessageBroker {
         stream: TcpStream,
         permit: ConnectionPermit,
     ) -> Self {
-        let (command_tx, command_rx) = mpsc::channel(1);
-
-        let inner = Inner {
+        let this = Self {
+            this_runtime_id,
+            that_runtime_id,
             dispatcher: MessageDispatcher::new(),
             links: HashMap::new(),
         };
 
-        inner.add_connection(stream, permit);
-
-        let handle = task::spawn(inner.run(command_rx));
-
-        Self {
-            this_runtime_id,
-            that_runtime_id,
-            command_tx,
-            _join_handle: ScopedJoinHandle(handle),
-        }
+        this.add_connection(stream, permit);
+        this
     }
 
-    pub async fn add_connection(&self, stream: TcpStream, permit: ConnectionPermit) {
-        // The unwrap is ok here because the receiver gets closed only when this sender closes
-        self.command_tx
-            .send(Command::AddConnection(stream, permit))
-            .await
-            .unwrap()
+    pub fn add_connection(&self, stream: TcpStream, permit: ConnectionPermit) {
+        self.dispatcher.bind(stream, permit)
     }
 
     /// Has this broker at least one live connection?
-    pub async fn has_connections(&self) -> bool {
-        let (tx, rx) = oneshot::channel();
-
-        // unwrap is ok because the command receiver gets closed only when the sender gets closed.
-        self.command_tx
-            .send(Command::CheckHasConnections(tx))
-            .await
-            .unwrap();
-
-        // unwrap is ok because the oneshot sender is never dropped without being sent to.
-        rx.await.unwrap()
+    pub fn has_connections(&self) -> bool {
+        !self.dispatcher.is_closed()
     }
 
     /// Try to establish a link between a local repository and a remote repository. The remote
     /// counterpart needs to call this too with matching `local_name` and `remote_name` for the link
     /// to actually be created.
-    pub async fn create_link(&self, id: SecretRepositoryId, index: Index) {
-        let role = Role::determine(&id, &self.this_runtime_id, &self.that_runtime_id);
-
-        self.command_tx
-            .send(Command::CreateLink { id, index, role })
-            .await
-            .unwrap()
-    }
-
-    /// Destroy the link between a local repository with the specified id hash and its remote
-    /// counterpart (if one exists).
-    pub async fn destroy_link(&self, id: SecretRepositoryId) {
-        self.command_tx
-            .send(Command::DestroyLink { id })
-            .await
-            .unwrap()
-    }
-}
-
-struct Inner {
-    dispatcher: MessageDispatcher,
-    links: HashMap<PublicRepositoryId, oneshot::Sender<()>>,
-}
-
-impl Inner {
-    async fn run(mut self, mut command_rx: mpsc::Receiver<Command>) {
-        while let Some(command) = command_rx.recv().await {
-            self.handle_command(command);
-        }
-    }
-
-    fn handle_command(&mut self, command: Command) {
-        match command {
-            Command::AddConnection(stream, permit) => self.add_connection(stream, permit),
-            Command::CheckHasConnections(tx) => tx.send(!self.dispatcher.is_closed()).unwrap_or(()),
-            Command::CreateLink { role, id, index } => {
-                self.create_link(role, id, index);
-            }
-            Command::DestroyLink { id } => {
-                self.links.remove(&id.public());
-            }
-        }
-    }
-
-    fn create_link(&mut self, role: Role, sid: SecretRepositoryId, index: Index) {
-        let (abort_tx, abort_rx) = oneshot::channel();
-
+    pub fn create_link(&mut self, sid: SecretRepositoryId, index: Index) {
         let pid = sid.public();
+        let (abort_tx, abort_rx) = oneshot::channel();
 
         match self.links.entry(pid) {
             Entry::Occupied(mut entry) => {
@@ -200,6 +130,7 @@ impl Inner {
 
         log::debug!("creating link for {:?}", pid);
 
+        let role = Role::determine(&sid, &self.this_runtime_id, &self.that_runtime_id);
         let stream = self.dispatcher.open_recv(pid);
         let sink = self.dispatcher.open_send(pid);
 
@@ -211,41 +142,10 @@ impl Inner {
         });
     }
 
-    fn add_connection(&self, stream: TcpStream, permit: ConnectionPermit) {
-        self.dispatcher.bind(stream, permit)
-    }
-}
-
-enum Command {
-    AddConnection(TcpStream, ConnectionPermit),
-    CheckHasConnections(oneshot::Sender<bool>),
-    CreateLink {
-        role: Role,
-        id: SecretRepositoryId,
-        index: Index,
-    },
-    DestroyLink {
-        id: SecretRepositoryId,
-    },
-}
-
-impl fmt::Debug for Command {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Self::AddConnection(..) => f
-                .debug_tuple("AddConnection")
-                .field(&format_args!("_"))
-                .finish(),
-            Self::CheckHasConnections(_) => f
-                .debug_tuple("CheckHasConnections")
-                .field(&format_args!("_"))
-                .finish(),
-            Self::CreateLink { id, .. } => f
-                .debug_struct("CreateLink")
-                .field("id", id)
-                .finish_non_exhaustive(),
-            Self::DestroyLink { id } => f.debug_struct("DestroyLink").field("id", id).finish(),
-        }
+    /// Destroy the link between a local repository with the specified id hash and its remote
+    /// counterpart (if one exists).
+    pub fn destroy_link(&mut self, id: &SecretRepositoryId) {
+        self.links.remove(&id.public());
     }
 }
 
