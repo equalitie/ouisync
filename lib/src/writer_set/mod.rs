@@ -75,8 +75,8 @@ impl WriterSet {
     /// Prepared entries can be added/inserted into the WriterSet. This machinery
     /// exists to avoid removing entries from WriterSet if entries fail to get written
     /// onto the disk.
-    pub fn prepare_entry<'a>(&'a mut self, entry: Entry) -> Option<PreparedEntry<'a>> {
-        if !self.is_writer((&entry.added_by).into()) {
+    pub fn prepare_entry(&mut self, entry: Entry) -> Option<PreparedEntry<'_>> {
+        if !self.is_writer(&entry.added_by) {
             return None;
         }
 
@@ -130,16 +130,14 @@ impl Entry {
         let hash = hash_entry(writer, &added_by.public);
         let signature = added_by.sign(hash.as_ref());
 
-        let entry = Self {
-            writer: writer.clone(),
-            added_by: added_by.public.clone(),
+        Self {
+            writer: *writer,
+            added_by: added_by.public,
             hash,
             signature,
             has_valid_hash: Cell::new(Some(true)),
             has_valid_signature: Cell::new(Some(true)),
-        };
-
-        entry
+        }
     }
 
     pub fn is_valid(&self) -> bool {
@@ -176,7 +174,7 @@ impl Entry {
     }
 
     pub fn is_origin(&self) -> bool {
-        return self.writer == self.added_by;
+        self.writer == self.added_by
     }
 }
 

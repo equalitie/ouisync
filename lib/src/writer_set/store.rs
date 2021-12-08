@@ -31,7 +31,7 @@ impl Store {
         write_origin_hash(&writer_set.origin, &mut tx).await?;
 
         for entry in writer_set.entries() {
-            insert_valid_entry(&entry, &mut tx).await?;
+            insert_valid_entry(entry, &mut tx).await?;
         }
 
         let db = Store {
