@@ -1,7 +1,14 @@
 use super::*;
 use crate::{
-    blob::Blob, branch::Branch, crypto::{Cryptor, sign::PublicKey}, db, directory::EntryData, index::BranchData,
-    locator::Locator, repository, version_vector::VersionVector,
+    blob::Blob,
+    branch::Branch,
+    crypto::{sign::PublicKey, Cryptor},
+    db,
+    directory::EntryData,
+    index::BranchData,
+    locator::Locator,
+    repository,
+    version_vector::VersionVector,
 };
 use assert_matches::assert_matches;
 use futures_util::future;

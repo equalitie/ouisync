@@ -4,7 +4,7 @@ use super::{
     summary::{Summary, SummaryUpdateStatus},
 };
 use crate::{
-    crypto::{Hash, Hashable, sign::PublicKey},
+    crypto::{sign::PublicKey, Hash, Hashable},
     db,
     error::Result,
     version_vector::VersionVector,

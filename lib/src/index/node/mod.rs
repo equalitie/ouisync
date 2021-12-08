@@ -15,7 +15,12 @@ pub(crate) use self::{
     summary::{Summary, SummaryUpdateStatus},
 };
 
-use crate::{block::BlockId, crypto::{Hash, sign::PublicKey}, db, error::Result};
+use crate::{
+    block::BlockId,
+    crypto::{sign::PublicKey, Hash},
+    db,
+    error::Result,
+};
 use futures_util::{future, TryStreamExt};
 use sqlx::Sqlite;
 

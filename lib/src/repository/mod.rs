@@ -5,7 +5,7 @@ pub use self::id::{PublicRepositoryId, SecretRepositoryId};
 use crate::{
     block,
     branch::Branch,
-    crypto::{Cryptor, sign::PublicKey},
+    crypto::{sign::PublicKey, Cryptor},
     db,
     debug_printer::DebugPrinter,
     directory::{Directory, EntryType},

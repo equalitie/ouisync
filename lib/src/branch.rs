@@ -9,7 +9,8 @@ use crate::{
     file::File,
     index::BranchData,
     locator::Locator,
-    path, sign::PublicKey,
+    path,
+    sign::PublicKey,
 };
 use camino::{Utf8Component, Utf8Path};
 use std::sync::Arc;

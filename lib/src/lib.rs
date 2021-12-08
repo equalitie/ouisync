@@ -35,7 +35,7 @@ mod versioned_file_name;
 mod writer_set;
 
 pub use self::{
-    crypto::{Cryptor, sign},
+    crypto::{sign, Cryptor},
     db::Store,
     directory::{Directory, EntryRef, EntryType},
     error::{Error, Result},

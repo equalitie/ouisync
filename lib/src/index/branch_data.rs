@@ -9,7 +9,7 @@ use super::{
 };
 use crate::{
     block::BlockId,
-    crypto::{Hash, sign::PublicKey},
+    crypto::{sign::PublicKey, Hash},
     db,
     error::{Error, Result},
     version_vector::VersionVector,

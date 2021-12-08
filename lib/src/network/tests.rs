@@ -6,7 +6,7 @@ use super::{
 };
 use crate::{
     block::{self, BlockId, BLOCK_SIZE},
-    crypto::{AuthTag, Hashable, sign::PublicKey},
+    crypto::{sign::PublicKey, AuthTag, Hashable},
     db,
     index::{node_test_utils::Snapshot, Index, RootNode, Summary},
     repository, store, test_utils,

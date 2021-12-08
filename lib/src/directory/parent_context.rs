@@ -1,9 +1,7 @@
 use super::inner::{self, Inner};
 use crate::{
-    blob_id::BlobId, branch::Branch,
-    crypto::sign::PublicKey,
-    db, directory::Directory, error::Result,
-    version_vector::VersionVector,
+    blob_id::BlobId, branch::Branch, crypto::sign::PublicKey, db, directory::Directory,
+    error::Result, version_vector::VersionVector,
 };
 use std::sync::Arc;
 use tokio::sync::RwLock;

@@ -236,12 +236,24 @@ mod tests {
         let malory = Keypair::generate();
         let carol = Keypair::generate();
 
-        assert!(!store.try_add_entry(Entry::new(&malory.public, &malory)).await.is_ok());
-        assert!(!store.try_add_entry(Entry::new(&carol.public, &malory)).await.is_ok());
+        assert!(!store
+            .try_add_entry(Entry::new(&malory.public, &malory))
+            .await
+            .is_ok());
+        assert!(!store
+            .try_add_entry(Entry::new(&carol.public, &malory))
+            .await
+            .is_ok());
 
         let mut store = Store::load(pool).await.unwrap();
 
-        assert!(store.try_add_entry(Entry::new(&carol.public, &alice)).await.is_ok());
-        assert!(!store.try_add_entry(Entry::new(&alice.public, &alice)).await.is_ok());
+        assert!(store
+            .try_add_entry(Entry::new(&carol.public, &alice))
+            .await
+            .is_ok());
+        assert!(!store
+            .try_add_entry(Entry::new(&alice.public, &alice))
+            .await
+            .is_ok());
     }
 }

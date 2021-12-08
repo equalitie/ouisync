@@ -4,7 +4,7 @@ use super::{
 };
 use crate::{
     block::BlockId,
-    crypto::{AuthTag, Hash, Hashable, sign::PublicKey},
+    crypto::{sign::PublicKey, AuthTag, Hash, Hashable},
     error::{Error, Result},
     index::{Index, InnerNodeMap, LeafNodeSet, Summary, INNER_LAYER_COUNT},
     store,

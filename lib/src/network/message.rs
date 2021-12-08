@@ -1,6 +1,6 @@
 use crate::{
     block::BlockId,
-    crypto::{AuthTag, Hash, sign::PublicKey},
+    crypto::{sign::PublicKey, AuthTag, Hash},
     index::{InnerNodeMap, LeafNodeSet, Summary},
     repository::PublicRepositoryId,
     version_vector::VersionVector,

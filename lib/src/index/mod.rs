@@ -14,7 +14,7 @@ pub(crate) use self::{
 
 use crate::{
     block::BlockId,
-    crypto::{Hash, Hashable, sign::PublicKey},
+    crypto::{sign::PublicKey, Hash, Hashable},
     db,
     error::{Error, Result},
     version_vector::VersionVector,

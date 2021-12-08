@@ -5,8 +5,8 @@ use super::{
     Directory,
 };
 use crate::{
-    crypto::sign::PublicKey,
     blob_id::BlobId,
+    crypto::sign::PublicKey,
     error::{Error, Result},
     file::File,
     locator::Locator,

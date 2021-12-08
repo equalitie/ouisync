@@ -1,6 +1,6 @@
 use camino::Utf8PathBuf;
 use fuser::FUSE_ROOT_ID;
-use ouisync_lib::{Error, crypto::sign::PublicKey, Result};
+use ouisync_lib::{crypto::sign::PublicKey, Error, Result};
 use slab::Slab;
 use std::{
     collections::{hash_map::Entry, HashMap},
