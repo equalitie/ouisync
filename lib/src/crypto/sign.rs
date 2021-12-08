@@ -102,10 +102,9 @@ impl fmt::Debug for PublicKey {
 // TODO: Temporarily enabling for non tests as well.
 //#[cfg(test)]
 impl rand::distributions::Distribution<PublicKey> for rand::distributions::Standard {
-    fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> PublicKey {
-        let bytes: [u8; ext::PUBLIC_KEY_LENGTH] = self.sample(rng);
-        let pk = ext::PublicKey::from_bytes(&bytes).unwrap();
-        PublicKey(pk)
+    fn sample<R: rand::Rng + ?Sized>(&self, _rng: &mut R) -> PublicKey {
+        let keypair = Keypair::generate();
+        keypair.public
     }
 }
 
