@@ -5,11 +5,11 @@ use super::{
     Directory,
 };
 use crate::{
+    crypto::sign::PublicKey,
     blob_id::BlobId,
     error::{Error, Result},
     file::File,
     locator::Locator,
-    replica_id::ReplicaId,
     version_vector::VersionVector,
 };
 use std::{fmt, sync::Arc};
@@ -28,7 +28,7 @@ impl<'a> EntryRef<'a> {
         parent_inner: &'a Inner,
         name: &'a str,
         entry_data: &'a EntryData,
-        author: &'a ReplicaId,
+        author: &'a PublicKey,
     ) -> Self {
         let inner = RefInner {
             parent_outer,
@@ -52,7 +52,7 @@ impl<'a> EntryRef<'a> {
         }
     }
 
-    pub fn author(&self) -> &ReplicaId {
+    pub fn author(&self) -> &PublicKey {
         self.inner().author
     }
 
@@ -144,7 +144,7 @@ impl<'a> FileRef<'a> {
         &self.entry_data.blob_id
     }
 
-    pub fn author(&self) -> &'a ReplicaId {
+    pub fn author(&self) -> &'a PublicKey {
         self.inner.author
     }
 
@@ -217,7 +217,7 @@ impl<'a> DirectoryRef<'a> {
         Locator::head(self.entry_data.blob_id)
     }
 
-    pub fn author(&self) -> &'a ReplicaId {
+    pub fn author(&self) -> &'a PublicKey {
         self.inner.author
     }
 
@@ -274,7 +274,7 @@ impl<'a> TombstoneRef<'a> {
         self.entry_data
     }
 
-    pub fn author(&self) -> &'a ReplicaId {
+    pub fn author(&self) -> &'a PublicKey {
         self.inner.author
     }
 
@@ -296,7 +296,7 @@ struct RefInner<'a> {
     parent_outer: &'a Directory,
     parent_inner: &'a Inner,
     name: &'a str,
-    author: &'a ReplicaId,
+    author: &'a PublicKey,
 }
 
 impl RefInner<'_> {

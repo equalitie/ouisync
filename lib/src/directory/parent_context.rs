@@ -1,7 +1,9 @@
 use super::inner::{self, Inner};
 use crate::{
-    blob_id::BlobId, branch::Branch, db, directory::Directory, error::Result,
-    replica_id::ReplicaId, version_vector::VersionVector,
+    blob_id::BlobId, branch::Branch,
+    crypto::sign::PublicKey,
+    db, directory::Directory, error::Result,
+    version_vector::VersionVector,
 };
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -11,22 +13,22 @@ use tokio::sync::RwLock;
 pub(crate) struct ParentContext {
     /// Equivalent to `directory_inner.read().await.branch().id()` but access to it doesn't require
     /// locking.
-    branch_id: ReplicaId,
+    branch_id: PublicKey,
     /// The shared part of the parent directory of the entry.
     directory_inner: Arc<RwLock<Inner>>,
     /// The name of the entry in its parent directory.
     entry_name: String,
     /// Author of the particular version of entry, i.e. the ID of the replica last to have
     /// incremented the version vector.
-    entry_author: ReplicaId,
+    entry_author: PublicKey,
 }
 
 impl ParentContext {
     pub(super) fn new(
-        branch_id: ReplicaId,
+        branch_id: PublicKey,
         directory_inner: Arc<RwLock<Inner>>,
         entry_name: String,
-        entry_author: ReplicaId,
+        entry_author: PublicKey,
     ) -> Self {
         Self {
             branch_id,
@@ -45,7 +47,7 @@ impl ParentContext {
     pub async fn modify_entry(
         &mut self,
         tx: db::Transaction<'_>,
-        local_id: ReplicaId,
+        local_id: PublicKey,
         version_vector_override: Option<&VersionVector>,
     ) -> Result<()> {
         inner::modify_entry(

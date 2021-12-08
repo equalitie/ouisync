@@ -9,10 +9,9 @@ use super::{
 };
 use crate::{
     block::BlockId,
-    crypto::Hash,
+    crypto::{Hash, sign::PublicKey},
     db,
     error::{Error, Result},
-    replica_id::ReplicaId,
     version_vector::VersionVector,
 };
 use std::mem;
@@ -21,18 +20,18 @@ use tokio::sync::{watch, RwLock, RwLockReadGuard};
 type LocatorHash = Hash;
 
 pub(crate) struct BranchData {
-    replica_id: ReplicaId,
+    replica_id: PublicKey,
     root_node: RwLock<RootNode>,
     changed_tx: watch::Sender<()>,
 }
 
 impl BranchData {
-    pub async fn new(pool: &db::Pool, replica_id: ReplicaId) -> Result<Self> {
+    pub async fn new(pool: &db::Pool, replica_id: PublicKey) -> Result<Self> {
         let root_node = RootNode::load_latest_or_create(pool, &replica_id).await?;
         Ok(Self::with_root_node(replica_id, root_node))
     }
 
-    pub fn with_root_node(replica_id: ReplicaId, root_node: RootNode) -> Self {
+    pub fn with_root_node(replica_id: PublicKey, root_node: RootNode) -> Self {
         let (changed_tx, _) = watch::channel(());
 
         Self {
@@ -43,7 +42,7 @@ impl BranchData {
     }
 
     /// Returns the id of the replica that owns this branch.
-    pub fn id(&self) -> &ReplicaId {
+    pub fn id(&self) -> &PublicKey {
         &self.replica_id
     }
 

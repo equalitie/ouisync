@@ -1,8 +1,7 @@
 use crate::{
     block::BlockId,
-    crypto::{AuthTag, Hash},
+    crypto::{AuthTag, Hash, sign::PublicKey},
     index::{InnerNodeMap, LeafNodeSet, Summary},
-    replica_id::ReplicaId,
     repository::PublicRepositoryId,
     version_vector::VersionVector,
 };
@@ -29,7 +28,7 @@ pub(crate) enum Response {
     /// Send the latest root node of this replica to another replica.
     RootNode {
         cookie: u64,
-        replica_id: ReplicaId,
+        replica_id: PublicKey,
         versions: VersionVector,
         hash: Hash,
         summary: Summary,

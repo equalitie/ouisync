@@ -6,10 +6,9 @@ use super::{
 };
 use crate::{
     block::{self, BlockId, BLOCK_SIZE},
-    crypto::{AuthTag, Hashable},
+    crypto::{AuthTag, Hashable, sign::PublicKey},
     db,
     index::{node_test_utils::Snapshot, Index, RootNode, Summary},
-    replica_id::ReplicaId,
     repository, store, test_utils,
     version_vector::VersionVector,
 };
@@ -215,7 +214,7 @@ async fn write_all_blocks(index: &Index, snapshot: &Snapshot) {
     }
 }
 
-async fn load_latest_root_node(index: &Index, replica_id: &ReplicaId) -> Option<RootNode> {
+async fn load_latest_root_node(index: &Index, replica_id: &PublicKey) -> Option<RootNode> {
     RootNode::load_latest(&index.pool, replica_id)
         .await
         .unwrap()

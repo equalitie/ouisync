@@ -112,14 +112,22 @@ impl Store {
         Ok(Self { pool, writer_set })
     }
 
-    pub fn try_add_entry(&mut self, entry: Entry) -> bool {
+    pub async fn try_add_entry(&mut self, entry: Entry) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+
         match self.writer_set.prepare_entry(entry) {
             Some(entry) => {
+                insert_valid_entry(&entry.entry, &mut tx).await?;
+                tx.commit().await?;
                 entry.insert();
-                true
+                Ok(())
             }
-            None => false,
+            None => Err(WsError::InvalidEntry.into()),
         }
+    }
+
+    pub fn origin_entry(&self) -> &Entry {
+        self.writer_set.origin_entry()
     }
 }
 
@@ -223,12 +231,17 @@ mod tests {
 
         let entry = Entry::new(&bob.public, &alice);
 
-        assert!(store.try_add_entry(entry));
+        assert!(store.try_add_entry(entry).await.is_ok());
 
         let malory = Keypair::generate();
         let carol = Keypair::generate();
 
-        assert!(!store.try_add_entry(Entry::new(&malory.public, &malory)));
-        assert!(!store.try_add_entry(Entry::new(&carol.public, &malory)));
+        assert!(!store.try_add_entry(Entry::new(&malory.public, &malory)).await.is_ok());
+        assert!(!store.try_add_entry(Entry::new(&carol.public, &malory)).await.is_ok());
+
+        let mut store = Store::load(pool).await.unwrap();
+
+        assert!(store.try_add_entry(Entry::new(&carol.public, &alice)).await.is_ok());
+        assert!(!store.try_add_entry(Entry::new(&alice.public, &alice)).await.is_ok());
     }
 }

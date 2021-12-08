@@ -4,10 +4,9 @@ use super::{
 };
 use crate::{
     block::BlockId,
-    crypto::{AuthTag, Hash, Hashable},
+    crypto::{AuthTag, Hash, Hashable, sign::PublicKey},
     error::{Error, Result},
     index::{Index, InnerNodeMap, LeafNodeSet, Summary, INNER_LAYER_COUNT},
-    replica_id::ReplicaId,
     store,
     version_vector::VersionVector,
 };
@@ -98,7 +97,7 @@ impl Client {
     async fn handle_root_node(
         &mut self,
         cookie: u64,
-        replica_id: ReplicaId,
+        replica_id: PublicKey,
         versions: VersionVector,
         hash: Hash,
         summary: Summary,

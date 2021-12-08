@@ -45,6 +45,10 @@ impl PublicKey {
     pub fn verify(&self, msg: &[u8], signature: &Signature) -> bool {
         self.0.verify(msg, &signature.0).is_ok()
     }
+
+    pub fn starts_with(&self, needle: &[u8]) -> bool {
+        self.0.as_ref().starts_with(needle)
+    }
 }
 
 impl PartialOrd for PublicKey {

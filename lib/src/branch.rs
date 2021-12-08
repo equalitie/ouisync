@@ -9,7 +9,7 @@ use crate::{
     file::File,
     index::BranchData,
     locator::Locator,
-    path, ReplicaId,
+    path, sign::PublicKey,
 };
 use camino::{Utf8Component, Utf8Path};
 use std::sync::Arc;
@@ -32,7 +32,7 @@ impl Branch {
         }
     }
 
-    pub fn id(&self) -> &ReplicaId {
+    pub fn id(&self) -> &PublicKey {
         self.branch_data.id()
     }
 
@@ -143,8 +143,8 @@ mod tests {
     async fn setup() -> Branch {
         let pool = repository::open_db(&db::Store::Memory).await.unwrap();
 
-        let replica_id = rand::random();
-        let index = Index::load(pool.clone(), replica_id).await.unwrap();
+        let writer_id = rand::random();
+        let index = Index::load(pool.clone(), writer_id).await.unwrap();
         let branch = Branch::new(pool, index.branches().await.local().clone(), Cryptor::Null);
 
         branch

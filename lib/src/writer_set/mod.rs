@@ -46,6 +46,10 @@ impl WriterSet {
         })
     }
 
+    pub fn origin_entry(&self) -> &Entry {
+        self.entries.get(&self.origin).expect("not found origin in WriterSet")
+    }
+
     pub fn is_writer(&self, w: &PublicKey) -> bool {
         self.entries.values().any(|e| &e.writer == w)
     }

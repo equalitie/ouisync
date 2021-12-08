@@ -4,10 +4,11 @@ use super::{
     utils::{self, AssumeSend, Port},
 };
 use crate::{
-    config, db,
+    config,
+    crypto::sign::PublicKey,
+    db,
     error::Result,
     network::{Network, NetworkOptions},
-    replica_id::ReplicaId,
     this_replica,
 };
 use std::{
@@ -117,7 +118,7 @@ static mut SESSION: *mut Session = ptr::null_mut();
 
 pub(super) struct Session {
     runtime: Runtime,
-    this_replica_id: ReplicaId,
+    this_replica_id: PublicKey,
     network: Network,
     sender: Sender,
     _logger: Logger,
@@ -176,7 +177,7 @@ where
         &self.session.network
     }
 
-    pub(super) fn this_replica_id(&self) -> &ReplicaId {
+    pub(super) fn this_replica_id(&self) -> &PublicKey {
         &self.session.this_replica_id
     }
 }
