@@ -23,7 +23,6 @@ mod joint_entry;
 mod locator;
 mod network;
 mod path;
-mod replica_id;
 mod repository;
 mod scoped_task;
 mod share_token;
@@ -36,7 +35,7 @@ mod versioned_file_name;
 mod writer_set;
 
 pub use self::{
-    crypto::Cryptor,
+    crypto::{sign, Cryptor},
     db::Store,
     directory::{Directory, EntryRef, EntryType},
     error::{Error, Result},
@@ -44,7 +43,6 @@ pub use self::{
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     joint_entry::JointEntry,
     network::{Network, NetworkOptions},
-    replica_id::ReplicaId,
     repository::Repository,
     share_token::ShareToken,
 };

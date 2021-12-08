@@ -15,7 +15,12 @@ pub(crate) use self::{
     summary::{Summary, SummaryUpdateStatus},
 };
 
-use crate::{block::BlockId, crypto::Hash, db, error::Result, replica_id::ReplicaId};
+use crate::{
+    block::BlockId,
+    crypto::{sign::PublicKey, Hash},
+    db,
+    error::Result,
+};
 use futures_util::{future, TryStreamExt};
 use sqlx::Sqlite;
 
@@ -25,13 +30,13 @@ pub(super) fn get_bucket(locator: &Hash, inner_layer: usize) -> u8 {
 }
 
 /// Update summary of the nodes with the specified hash and layer and all their ancestor nodes.
-/// Returns a map `ReplicaId -> SummaryUpdateStatus` indicating which branches were affected and
-/// whether they became complete by this update.
+/// Returns a map `PublicKey -> SummaryUpdateStatus` indicating which branches were affected
+/// and whether they became complete by this update.
 pub(super) async fn update_summaries<'a, T>(
     db: T,
     hash: Hash,
     layer: usize,
-) -> Result<Vec<(ReplicaId, SummaryUpdateStatus)>>
+) -> Result<Vec<(PublicKey, SummaryUpdateStatus)>>
 where
     T: sqlx::Acquire<'a, Database = Sqlite>,
 {
@@ -47,7 +52,7 @@ where
 pub(crate) async fn receive_block(
     tx: &mut db::Transaction<'_>,
     id: &BlockId,
-) -> Result<Vec<ReplicaId>> {
+) -> Result<Vec<PublicKey>> {
     if !LeafNode::set_present(tx, id).await? {
         return Ok(Vec::new());
     }
@@ -67,7 +72,7 @@ pub(crate) async fn receive_block(
 async fn update_summaries_in_transaction(
     tx: &mut sqlx::Transaction<'_, Sqlite>,
     mut nodes: Vec<(Hash, usize)>,
-) -> Result<Vec<(ReplicaId, SummaryUpdateStatus)>> {
+) -> Result<Vec<(PublicKey, SummaryUpdateStatus)>> {
     let mut statuses = Vec::new();
 
     while let Some((hash, layer)) = nodes.pop() {

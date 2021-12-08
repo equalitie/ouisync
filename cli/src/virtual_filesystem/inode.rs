@@ -1,6 +1,6 @@
 use camino::Utf8PathBuf;
 use fuser::FUSE_ROOT_ID;
-use ouisync_lib::{Error, ReplicaId, Result};
+use ouisync_lib::{crypto::sign::PublicKey, Error, Result};
 use slab::Slab;
 use std::{
     collections::{hash_map::Entry, HashMap},
@@ -163,11 +163,11 @@ pub enum Representation {
     // directory is added. For now, we'll just store the path and each time the set of locators
     // corresponding to the path is requested, it'll be determined dynamically.
     Directory,
-    File(ReplicaId),
+    File(PublicKey),
 }
 
 impl Representation {
-    pub fn file_version(&self) -> Result<&ReplicaId> {
+    pub fn file_version(&self) -> Result<&PublicKey> {
         match self {
             Self::Directory => Err(Error::EntryIsDirectory),
             Self::File(branch_id) => Ok(branch_id),

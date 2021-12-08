@@ -4,10 +4,9 @@ use super::{
     summary::{Summary, SummaryUpdateStatus},
 };
 use crate::{
-    crypto::{Hash, Hashable},
+    crypto::{sign::PublicKey, Hash, Hashable},
     db,
     error::Result,
-    replica_id::ReplicaId,
     version_vector::VersionVector,
 };
 use futures_util::{Stream, TryStreamExt};
@@ -25,7 +24,7 @@ impl RootNode {
     /// Returns the root node of the specified replica with the specified hash if it exists.
     pub async fn load(
         pool: &db::Pool,
-        replica_id: &ReplicaId,
+        replica_id: &PublicKey,
         hash: &Hash,
     ) -> Result<Option<Self>> {
         sqlx::query(
@@ -58,7 +57,7 @@ impl RootNode {
 
     /// Returns the latest root node of the specified replica. If no such node exists yet, creates
     /// it first.
-    pub async fn load_latest_or_create(pool: &db::Pool, replica_id: &ReplicaId) -> Result<Self> {
+    pub async fn load_latest_or_create(pool: &db::Pool, replica_id: &PublicKey) -> Result<Self> {
         let node = Self::load_latest(pool, replica_id).await?;
 
         if let Some(node) = node {
@@ -77,7 +76,7 @@ impl RootNode {
 
     /// Returns the latest root node of the specified replica or `None` if no snapshot of that
     /// replica exists.
-    pub async fn load_latest(pool: &db::Pool, replica_id: &ReplicaId) -> Result<Option<Self>> {
+    pub async fn load_latest(pool: &db::Pool, replica_id: &PublicKey) -> Result<Option<Self>> {
         Self::load_all(pool, replica_id, 1).try_next().await
     }
 
@@ -85,7 +84,7 @@ impl RootNode {
     /// created or the existing node.
     pub async fn create(
         pool: &db::Pool,
-        replica_id: &ReplicaId,
+        replica_id: &PublicKey,
         mut versions: VersionVector,
         hash: Hash,
         summary: Summary,
@@ -141,7 +140,7 @@ impl RootNode {
     /// replica ordered from the most recent to the least recent.
     pub fn load_all<'a>(
         pool: &'a db::Pool,
-        replica_id: &'a ReplicaId,
+        replica_id: &'a PublicKey,
         limit: u32,
     ) -> impl Stream<Item = Result<Self>> + 'a {
         sqlx::query(
@@ -177,7 +176,7 @@ impl RootNode {
     pub fn load_replica_ids<'a>(
         tx: &'a mut db::Transaction<'_>,
         hash: &'a Hash,
-    ) -> impl Stream<Item = Result<ReplicaId>> + 'a {
+    ) -> impl Stream<Item = Result<PublicKey>> + 'a {
         sqlx::query("SELECT replica_id FROM snapshot_root_nodes WHERE hash = ?")
             .bind(hash)
             .map(|row| row.get(0))
@@ -322,7 +321,7 @@ impl RootNode {
     }
 
     /// Returns the replica id of this node
-    async fn load_replica_id(&self, tx: &mut db::Transaction<'_>) -> Result<ReplicaId> {
+    async fn load_replica_id(&self, tx: &mut db::Transaction<'_>) -> Result<PublicKey> {
         let replica_id =
             sqlx::query("SELECT replica_id FROM snapshot_root_nodes WHERE snapshot_id = ?")
                 .bind(&self.snapshot_id)

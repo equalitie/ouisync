@@ -267,7 +267,7 @@ struct OperationsLock<'a> {
 
 impl<'a> OperationsLock<'a> {
     fn ops(&mut self) -> Operations {
-        self.core_guard.operations(&mut self.current_block)
+        self.core_guard.operations(self.current_block)
     }
 }
 

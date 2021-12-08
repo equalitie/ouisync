@@ -5,7 +5,7 @@ pub use self::id::{PublicRepositoryId, SecretRepositoryId};
 use crate::{
     block,
     branch::Branch,
-    crypto::Cryptor,
+    crypto::{sign::PublicKey, Cryptor},
     db,
     debug_printer::DebugPrinter,
     directory::{Directory, EntryType},
@@ -15,7 +15,7 @@ use crate::{
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     path,
     scoped_task::{self, ScopedJoinHandle},
-    store, ReplicaId,
+    store,
 };
 use camino::Utf8Path;
 use futures_util::{future, stream::FuturesUnordered, StreamExt};
@@ -33,7 +33,7 @@ impl Repository {
     /// Opens an existing repository or creates a new one if it doesn't exists yet.
     pub async fn open(
         store: &db::Store,
-        this_replica_id: ReplicaId,
+        this_replica_id: PublicKey,
         cryptor: Cryptor,
         enable_merger: bool,
     ) -> Result<Self> {
@@ -88,7 +88,7 @@ impl Repository {
         set_id(self.db_pool(), &id).await
     }
 
-    pub fn this_replica_id(&self) -> &ReplicaId {
+    pub fn this_replica_id(&self) -> &PublicKey {
         self.shared.index.this_replica_id()
     }
 
@@ -123,7 +123,7 @@ impl Repository {
     pub async fn open_file_version<P: AsRef<Utf8Path>>(
         &self,
         path: P,
-        branch_id: &ReplicaId,
+        branch_id: &PublicKey,
     ) -> Result<File> {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
         self.open_directory(parent)
@@ -271,7 +271,7 @@ impl Repository {
     }
 
     /// Return the branch with the specified id.
-    pub async fn branch(&self, id: &ReplicaId) -> Option<Branch> {
+    pub async fn branch(&self, id: &PublicKey) -> Option<Branch> {
         self.shared.branch(id).await
     }
 
@@ -418,7 +418,7 @@ struct Shared {
     index: Index,
     cryptor: Cryptor,
     // Cache for `Branch` instances to make them persistent over the lifetime of the program.
-    branches: Mutex<HashMap<ReplicaId, Branch>>,
+    branches: Mutex<HashMap<PublicKey, Branch>>,
 }
 
 impl Shared {
@@ -426,7 +426,7 @@ impl Shared {
         self.inflate(self.index.branches().await.local()).await
     }
 
-    pub async fn branch(&self, id: &ReplicaId) -> Option<Branch> {
+    pub async fn branch(&self, id: &PublicKey) -> Option<Branch> {
         Some(self.inflate(self.index.branches().await.get(id)?).await)
     }
 
@@ -458,8 +458,8 @@ impl Shared {
 // The merge algorithm.
 struct Merger {
     shared: Arc<Shared>,
-    tasks: FuturesUnordered<ScopedJoinHandle<ReplicaId>>,
-    states: HashMap<ReplicaId, MergeState>,
+    tasks: FuturesUnordered<ScopedJoinHandle<PublicKey>>,
+    states: HashMap<PublicKey, MergeState>,
 }
 
 impl Merger {
@@ -492,7 +492,7 @@ impl Merger {
         }
     }
 
-    async fn handle_branch_changed(&mut self, branch_id: ReplicaId) {
+    async fn handle_branch_changed(&mut self, branch_id: PublicKey) {
         if branch_id == *self.shared.index.this_replica_id() {
             // local branch change - ignore.
             return;
@@ -508,13 +508,13 @@ impl Merger {
         self.spawn_task(branch_id).await
     }
 
-    async fn handle_task_finished(&mut self, branch_id: ReplicaId) {
+    async fn handle_task_finished(&mut self, branch_id: PublicKey) {
         if let Some(MergeState::Pending) = self.states.remove(&branch_id) {
             self.spawn_task(branch_id).await
         }
     }
 
-    async fn spawn_task(&mut self, remote_id: ReplicaId) {
+    async fn spawn_task(&mut self, remote_id: PublicKey) {
         let remote = if let Some(remote) = self.shared.branch(&remote_id).await {
             remote
         } else {

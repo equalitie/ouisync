@@ -1,9 +1,9 @@
-use crate::replica_id::ReplicaId;
+use crate::crypto::sign::PublicKey;
 
 const SUFFIX_LEN: usize = 8;
 const SUFFIX_SEPARATOR: &str = ".v";
 
-pub fn create(name: &str, branch_id: &ReplicaId) -> String {
+pub fn create(name: &str, branch_id: &PublicKey) -> String {
     format!("{}{}{:-3$x}", name, SUFFIX_SEPARATOR, branch_id, SUFFIX_LEN)
 }
 
@@ -36,13 +36,14 @@ mod tests {
 
     #[test]
     fn create_versioned_file_name() {
-        let replica_id = [
+        let writer_id = [
             0xde, 0xad, 0xbe, 0xef, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
         ];
-        let replica_id = ReplicaId::try_from(&replica_id[..]).unwrap();
+        let writer_id = PublicKey::try_from(&writer_id[..]).unwrap();
 
-        assert_eq!(create("file.txt", &replica_id), "file.txt.vdeadbeef");
+        assert_eq!(create("file.txt", &writer_id), "file.txt.vdeadbeef");
     }
 
     #[proptest]
@@ -52,7 +53,7 @@ mod tests {
     ) {
         let mut rng = StdRng::seed_from_u64(rng_seed);
 
-        let branch_id: ReplicaId = rng.gen();
+        let branch_id: PublicKey = rng.gen();
         let versioned_name = create(&base_name, &branch_id);
 
         let (parsed_base_name, branch_id_prefix) = parse(&versioned_name);

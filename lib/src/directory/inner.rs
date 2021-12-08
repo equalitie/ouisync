@@ -2,10 +2,10 @@ use super::{cache::SubdirectoryCache, entry_data::EntryData, parent_context::Par
 use crate::{
     blob::Blob,
     blob_id::BlobId,
+    crypto::sign::PublicKey,
     db,
     error::{Error, Result},
     locator::Locator,
-    replica_id::ReplicaId,
     version_vector::VersionVector,
 };
 use async_recursion::async_recursion;
@@ -46,7 +46,7 @@ impl Inner {
     pub async fn insert_entry(
         &mut self,
         name: String,
-        author: ReplicaId,
+        author: PublicKey,
         entry_data: EntryData,
         keep: Option<BlobId>,
     ) -> Result<()> {
@@ -72,8 +72,8 @@ impl Inner {
     pub fn modify_entry(
         &mut self,
         name: &str,
-        author_id: &mut ReplicaId,
-        local_id: ReplicaId,
+        author_id: &mut PublicKey,
+        local_id: PublicKey,
         version_vector_override: Option<&VersionVector>,
     ) -> Result<()> {
         let versions = self
@@ -121,7 +121,7 @@ impl Inner {
     pub async fn modify_self_entry(
         &mut self,
         tx: db::Transaction<'_>,
-        local_id: ReplicaId,
+        local_id: PublicKey,
         version_vector_override: Option<&VersionVector>,
     ) -> Result<()> {
         if let Some(ctx) = self.parent.as_mut() {
@@ -136,7 +136,7 @@ impl Inner {
         }
     }
 
-    pub fn entry_version_vector(&self, name: &str, author: &ReplicaId) -> Option<&VersionVector> {
+    pub fn entry_version_vector(&self, name: &str, author: &PublicKey) -> Option<&VersionVector> {
         Some(
             self.content
                 .entries
@@ -147,7 +147,7 @@ impl Inner {
     }
 
     #[track_caller]
-    pub fn assert_local(&self, local_id: &ReplicaId) {
+    pub fn assert_local(&self, local_id: &PublicKey) {
         assert_eq!(
             self.blob.branch().id(),
             local_id,
@@ -158,7 +158,7 @@ impl Inner {
 
 #[derive(Clone, Deserialize, Serialize, Debug)]
 pub(super) struct Content {
-    pub entries: BTreeMap<String, BTreeMap<ReplicaId, EntryData>>,
+    pub entries: BTreeMap<String, BTreeMap<PublicKey, EntryData>>,
     #[serde(skip)]
     pub dirty: bool,
 }
@@ -181,7 +181,7 @@ impl Content {
     fn insert(
         &mut self,
         name: String,
-        author: ReplicaId,
+        author: PublicKey,
         new_data: EntryData,
     ) -> Result<Vec<BlobId>> {
         let versions = self.entries.entry(name).or_insert_with(Default::default);
@@ -261,9 +261,9 @@ impl Content {
 pub(super) async fn modify_entry<'a>(
     mut tx: db::Transaction<'a>,
     inner: RwLockWriteGuard<'a, Inner>,
-    local_id: ReplicaId,
+    local_id: PublicKey,
     name: &'a str,
-    author_id: &'a mut ReplicaId,
+    author_id: &'a mut PublicKey,
     version_vector_override: Option<&'a VersionVector>,
 ) -> Result<()> {
     inner.assert_local(&local_id);
@@ -283,9 +283,9 @@ pub(super) async fn modify_entry<'a>(
 struct ModifyEntry<'a> {
     inner: RwLockWriteGuard<'a, Inner>,
     name: &'a str,
-    author_id: &'a mut ReplicaId,
-    orig_author_id: ReplicaId,
-    orig_versions: Option<BTreeMap<ReplicaId, EntryData>>,
+    author_id: &'a mut PublicKey,
+    orig_author_id: PublicKey,
+    orig_versions: Option<BTreeMap<PublicKey, EntryData>>,
     orig_dirty: bool,
     committed: bool,
 }
@@ -294,7 +294,7 @@ impl<'a> ModifyEntry<'a> {
     fn new(
         inner: RwLockWriteGuard<'a, Inner>,
         name: &'a str,
-        author_id: &'a mut ReplicaId,
+        author_id: &'a mut PublicKey,
     ) -> Self {
         let orig_author_id = *author_id;
         let orig_versions = inner.content.entries.get(name).cloned();
@@ -314,7 +314,7 @@ impl<'a> ModifyEntry<'a> {
     // Apply the operation. The operation can still be undone after this by dropping `self`.
     fn apply(
         &mut self,
-        local_id: ReplicaId,
+        local_id: PublicKey,
         version_vector_override: Option<&VersionVector>,
     ) -> Result<()> {
         self.inner

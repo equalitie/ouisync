@@ -24,11 +24,11 @@ use crate::{
     blob::Blob,
     blob_id::BlobId,
     branch::Branch,
+    crypto::sign::PublicKey,
     debug_printer::DebugPrinter,
     error::{Error, Result},
     file::File,
     locator::Locator,
-    replica_id::ReplicaId,
     version_vector::VersionVector,
 };
 use async_recursion::async_recursion;
@@ -39,7 +39,7 @@ use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 pub struct Directory {
     // `branch_id` is equivalent `inner.read().await.branch().id()`, but access to it doesn't
     // require locking.
-    branch_id: ReplicaId,
+    branch_id: PublicKey,
     inner: Arc<RwLock<Inner>>,
     local_branch: Branch,
 }
@@ -115,7 +115,7 @@ impl Directory {
     pub async fn remove_entry(
         &self,
         name: &str,
-        author: &ReplicaId,
+        author: &PublicKey,
         vv: VersionVector,
     ) -> Result<()> {
         self.write()
@@ -142,7 +142,7 @@ impl Directory {
     pub(crate) async fn move_entry(
         &self,
         src_name: &str,
-        src_author: &ReplicaId,
+        src_author: &PublicKey,
         src_entry: EntryData,
         dst_dir: &Directory,
         dst_name: &str,
@@ -227,7 +227,7 @@ impl Directory {
     pub(crate) async fn insert_file_entry(
         &self,
         name: String,
-        author_id: ReplicaId,
+        author_id: PublicKey,
         version_vector: VersionVector,
     ) -> Result<BlobId> {
         let mut inner = self.write().await.inner;
@@ -281,7 +281,7 @@ impl Directory {
         }
     }
 
-    pub async fn open_file(&self, name: &str, author: &ReplicaId) -> Result<File> {
+    pub async fn open_file(&self, name: &str, author: &PublicKey) -> Result<File> {
         self.read()
             .await
             .lookup_version(name, author)?
@@ -290,7 +290,7 @@ impl Directory {
             .await
     }
 
-    pub async fn open_directory(&self, name: &str, author: &ReplicaId) -> Result<Directory> {
+    pub async fn open_directory(&self, name: &str, author: &PublicKey) -> Result<Directory> {
         self.read()
             .await
             .lookup_version(name, author)?
@@ -310,7 +310,7 @@ impl Directory {
         Writer { outer: self, inner }
     }
 
-    pub fn this_replica_id(&self) -> &ReplicaId {
+    pub fn this_replica_id(&self) -> &PublicKey {
         self.local_branch.id()
     }
 
@@ -404,7 +404,7 @@ impl Directory {
         }
     }
 
-    pub fn branch_id(&self) -> &ReplicaId {
+    pub fn branch_id(&self) -> &PublicKey {
         &self.branch_id
     }
 }
@@ -509,7 +509,7 @@ impl Writer<'_> {
         Ok((locator, parent))
     }
 
-    pub fn lookup_version(&self, name: &'_ str, author: &ReplicaId) -> Result<EntryRef> {
+    pub fn lookup_version(&self, name: &'_ str, author: &PublicKey) -> Result<EntryRef> {
         lookup_version(&*self.inner, self.outer, name, author)
     }
 
@@ -532,7 +532,7 @@ impl Writer<'_> {
     pub async fn remove_entry(
         &mut self,
         name: &str,
-        author: &ReplicaId,
+        author: &PublicKey,
         vv: VersionVector,
         // `keep` is set when we're moving the entry and only want to remove it from the entries
         // listed in `self` (as opposed to also remove its data).
@@ -588,14 +588,14 @@ impl Writer<'_> {
     pub async fn insert_entry(
         &mut self,
         name: String,
-        author: ReplicaId,
+        author: PublicKey,
         entry: EntryData,
         keep: Option<BlobId>,
     ) -> Result<()> {
         self.inner.insert_entry(name, author, entry, keep).await
     }
 
-    pub fn this_replica_id(&self) -> &ReplicaId {
+    pub fn this_replica_id(&self) -> &PublicKey {
         self.outer.this_replica_id()
     }
 
@@ -633,7 +633,7 @@ impl Reader<'_> {
         lookup(self.outer, &*self.inner, name)
     }
 
-    pub fn lookup_version(&self, name: &'_ str, author: &ReplicaId) -> Result<EntryRef> {
+    pub fn lookup_version(&self, name: &'_ str, author: &PublicKey) -> Result<EntryRef> {
         lookup_version(&*self.inner, self.outer, name, author)
     }
 
@@ -673,7 +673,7 @@ fn lookup_version<'a>(
     inner: &'a Inner,
     outer: &'a Directory,
     name: &str,
-    author: &ReplicaId,
+    author: &PublicKey,
 ) -> Result<EntryRef<'a>> {
     inner
         .content

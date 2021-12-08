@@ -31,7 +31,7 @@ impl Store {
         write_origin_hash(&writer_set.origin, &mut tx).await?;
 
         for entry in writer_set.entries() {
-            insert_valid_entry(&entry, &mut tx).await?;
+            insert_valid_entry(entry, &mut tx).await?;
         }
 
         let db = Store {
@@ -112,14 +112,22 @@ impl Store {
         Ok(Self { pool, writer_set })
     }
 
-    pub fn try_add_entry(&mut self, entry: Entry) -> bool {
+    pub async fn try_add_entry(&mut self, entry: Entry) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+
         match self.writer_set.prepare_entry(entry) {
             Some(entry) => {
+                insert_valid_entry(&entry.entry, &mut tx).await?;
+                tx.commit().await?;
                 entry.insert();
-                true
+                Ok(())
             }
-            None => false,
+            None => Err(WsError::InvalidEntry.into()),
         }
+    }
+
+    pub fn origin_entry(&self) -> &Entry {
+        self.writer_set.origin_entry()
     }
 }
 
@@ -144,23 +152,22 @@ async fn insert_valid_entry(entry: &Entry, tx: &mut db::Transaction<'_>) -> Resu
 async fn load_entries(tx: &mut db::Transaction<'_>) -> Result<HashMap<Hash, Entry>> {
     use std::cell::Cell;
 
-    let entries =
-        sqlx::query("SELECT writer,added_by,hash,signature FROM writer_set_entries")
-            .fetch_all(tx)
-            .await?
-            .into_iter()
-            .map(|row| {
-                let e = Entry {
-                    writer: row.get(0),
-                    added_by: row.get(1),
-                    hash: row.get(2),
-                    signature: row.get(3),
-                    has_valid_hash: Cell::new(None),
-                    has_valid_signature: Cell::new(None),
-                };
-                (e.hash, e)
-            })
-            .collect();
+    let entries = sqlx::query("SELECT writer,added_by,hash,signature FROM writer_set_entries")
+        .fetch_all(tx)
+        .await?
+        .into_iter()
+        .map(|row| {
+            let e = Entry {
+                writer: row.get(0),
+                added_by: row.get(1),
+                hash: row.get(2),
+                signature: row.get(3),
+                has_valid_hash: Cell::new(None),
+                has_valid_signature: Cell::new(None),
+            };
+            (e.hash, e)
+        })
+        .collect();
 
     Ok(entries)
 }
@@ -213,10 +220,7 @@ async fn create_tables(tx: &mut db::Transaction<'_>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        crypto::sign::Keypair,
-        db,
-    };
+    use crate::{crypto::sign::Keypair, db};
 
     #[tokio::test(flavor = "multi_thread")]
     async fn sanity() {
@@ -227,12 +231,29 @@ mod tests {
 
         let entry = Entry::new(&bob.public, &alice);
 
-        assert!(store.try_add_entry(entry));
+        assert!(store.try_add_entry(entry).await.is_ok());
 
         let malory = Keypair::generate();
         let carol = Keypair::generate();
 
-        assert!(!store.try_add_entry(Entry::new(&malory.public, &malory)));
-        assert!(!store.try_add_entry(Entry::new(&carol.public, &malory)));
+        assert!(!store
+            .try_add_entry(Entry::new(&malory.public, &malory))
+            .await
+            .is_ok());
+        assert!(!store
+            .try_add_entry(Entry::new(&carol.public, &malory))
+            .await
+            .is_ok());
+
+        let mut store = Store::load(pool).await.unwrap();
+
+        assert!(store
+            .try_add_entry(Entry::new(&carol.public, &alice))
+            .await
+            .is_ok());
+        assert!(!store
+            .try_add_entry(Entry::new(&alice.public, &alice))
+            .await
+            .is_ok());
     }
 }

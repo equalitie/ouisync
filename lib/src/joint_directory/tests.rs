@@ -1,7 +1,14 @@
 use super::*;
 use crate::{
-    blob::Blob, branch::Branch, crypto::Cryptor, db, directory::EntryData, index::BranchData,
-    locator::Locator, repository, version_vector::VersionVector,
+    blob::Blob,
+    branch::Branch,
+    crypto::{sign::PublicKey, Cryptor},
+    db,
+    directory::EntryData,
+    index::BranchData,
+    locator::Locator,
+    repository,
+    version_vector::VersionVector,
 };
 use assert_matches::assert_matches;
 use futures_util::future;
@@ -880,7 +887,7 @@ async fn open_file(parent: &Directory, name: &str) -> File {
         .unwrap()
 }
 
-async fn open_file_version(parent: &Directory, name: &str, branch_id: &ReplicaId) -> File {
+async fn open_file_version(parent: &Directory, name: &str, branch_id: &PublicKey) -> File {
     parent
         .read()
         .await

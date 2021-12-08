@@ -2,11 +2,11 @@
 mod tests;
 
 use crate::{
+    crypto::sign::PublicKey,
     directory::{self, Directory, DirectoryRef, EntryRef, EntryType, FileRef},
     error::{Error, Result},
     file::File,
     iterator::{Accumulate, SortedUnion},
-    replica_id::ReplicaId,
     version_vector::VersionVector,
     versioned_file_name,
 };
@@ -24,7 +24,7 @@ use std::{
 /// Unified view over multiple concurrent versions of a directory.
 #[derive(Clone)]
 pub struct JointDirectory {
-    versions: BTreeMap<ReplicaId, Directory>,
+    versions: BTreeMap<PublicKey, Directory>,
 }
 
 impl JointDirectory {
@@ -322,7 +322,7 @@ impl Reader<'_> {
     /// versions: either one is "happens after" the other, or they are identical. It's not possible
     /// for them to be concurrent. Because of this, this function can never return `AmbiguousEntry`
     /// error.
-    pub fn lookup_version(&self, name: &'_ str, branch_id: &'_ ReplicaId) -> Result<FileRef> {
+    pub fn lookup_version(&self, name: &'_ str, branch_id: &'_ PublicKey) -> Result<FileRef> {
         Merge::new(
             self.0
                 .iter()
@@ -395,7 +395,7 @@ impl<'a> JointEntryRef<'a> {
     }
 
     // If this is `Directory`, returns `None` because a joint directory can have multiple authors.
-    pub fn author(&self) -> Option<&'a ReplicaId> {
+    pub fn author(&self) -> Option<&'a PublicKey> {
         match self {
             Self::File(r) => Some(r.author()),
             Self::Directory(_) => None,
@@ -440,7 +440,7 @@ impl<'a> JointFileRef<'a> {
         self.file.open().await
     }
 
-    pub fn author(&self) -> &'a ReplicaId {
+    pub fn author(&self) -> &'a PublicKey {
         self.file.author()
     }
 

@@ -14,11 +14,10 @@ pub(crate) use self::{
 
 use crate::{
     block::BlockId,
-    crypto::{Hash, Hashable},
+    crypto::{sign::PublicKey, Hash, Hashable},
     db,
     error::{Error, Result},
     version_vector::VersionVector,
-    ReplicaId,
 };
 use futures_util::future;
 use sqlx::Row;
@@ -38,12 +37,12 @@ type SnapshotId = u32;
 #[derive(Clone)]
 pub(crate) struct Index {
     pub pool: db::Pool,
-    pub this_replica_id: ReplicaId,
+    pub this_replica_id: PublicKey,
     shared: Arc<Shared>,
 }
 
 impl Index {
-    pub async fn load(pool: db::Pool, this_replica_id: ReplicaId) -> Result<Self> {
+    pub async fn load(pool: db::Pool, this_replica_id: PublicKey) -> Result<Self> {
         let branches = Branches::load(&pool, this_replica_id).await?;
         let (index_tx, _) = watch::channel(true);
 
@@ -57,7 +56,7 @@ impl Index {
         })
     }
 
-    pub fn this_replica_id(&self) -> &ReplicaId {
+    pub fn this_replica_id(&self) -> &PublicKey {
         &self.this_replica_id
     }
 
@@ -77,7 +76,7 @@ impl Index {
 
     /// Notify all tasks waiting for changes on the specified branches.
     /// See also [`BranchData::subscribe`].
-    pub async fn notify_branches_changed(&self, replica_ids: &[ReplicaId]) {
+    pub async fn notify_branches_changed(&self, replica_ids: &[PublicKey]) {
         // Avoid the read lock
         if replica_ids.is_empty() {
             return;
@@ -104,7 +103,7 @@ impl Index {
     /// Panics if `replica_id` identifies this replica instead of a remote one.
     pub async fn receive_root_node(
         &self,
-        replica_id: &ReplicaId,
+        replica_id: &PublicKey,
         versions: VersionVector,
         hash: Hash,
         summary: Summary,
@@ -188,7 +187,7 @@ impl Index {
     // local one is missing.
     async fn has_root_node_new_blocks(
         &self,
-        replica_id: &ReplicaId,
+        replica_id: &PublicKey,
         hash: &Hash,
         remote_summary: &Summary,
     ) -> Result<bool> {
@@ -271,7 +270,7 @@ impl Index {
     /// Update the root node of the remote branch.
     pub(crate) async fn update_remote_branch(
         &self,
-        replica_id: ReplicaId,
+        replica_id: PublicKey,
         node: RootNode,
     ) -> Result<()> {
         let mut branches = self.shared.branches.write().await;
@@ -313,7 +312,7 @@ struct Shared {
 /// Container for all known branches (local and remote)
 pub(crate) struct Branches {
     local: Arc<BranchData>,
-    remote: HashMap<ReplicaId, BranchHolder>,
+    remote: HashMap<PublicKey, BranchHolder>,
     // Number that gets incremented every time a new branch is created.
     version: u64,
 }
@@ -324,7 +323,7 @@ struct BranchHolder {
 }
 
 impl Branches {
-    async fn load(pool: &db::Pool, this_replica_id: ReplicaId) -> Result<Self> {
+    async fn load(pool: &db::Pool, this_replica_id: PublicKey) -> Result<Self> {
         let local = Arc::new(BranchData::new(pool, this_replica_id).await?);
         let remote = load_remote_branches(pool, &this_replica_id).await?;
 
@@ -336,7 +335,7 @@ impl Branches {
     }
 
     /// Returns a branch with the given id, if it exists.
-    pub fn get(&self, replica_id: &ReplicaId) -> Option<&Arc<BranchData>> {
+    pub fn get(&self, replica_id: &PublicKey) -> Option<&Arc<BranchData>> {
         if self.local.id() == replica_id {
             Some(&self.local)
         } else {
@@ -379,7 +378,7 @@ impl Branches {
 pub(crate) struct Subscription {
     shared: Arc<Shared>,
     // Receivers of change notifications from individual branches.
-    branch_rxs: Vec<(ReplicaId, watch::Receiver<()>)>,
+    branch_rxs: Vec<(PublicKey, watch::Receiver<()>)>,
     // Receiver of change notification from the whole index. The bool indicates whether `close` was
     // called on the index.
     index_rx: watch::Receiver<bool>,
@@ -393,7 +392,7 @@ impl Subscription {
     ///
     /// If one is interested only in the close notification, it's more efficient to use
     /// [`Self::closed`].
-    pub async fn recv(&mut self) -> Option<ReplicaId> {
+    pub async fn recv(&mut self) -> Option<PublicKey> {
         if self.version == 0 {
             // First subscribe to the branches that already existed before this subscription was
             // created.
@@ -448,8 +447,8 @@ impl Subscription {
 /// Returns the id of the branch that triggered the watch, or `None` if a watch disconnected. The
 /// disconnected watch is then automatically removed from the vector.
 async fn select_branch_changed(
-    watches: &mut Vec<(ReplicaId, watch::Receiver<()>)>,
-) -> Option<ReplicaId> {
+    watches: &mut Vec<(PublicKey, watch::Receiver<()>)>,
+) -> Option<PublicKey> {
     assert!(!watches.is_empty());
 
     // TODO: `select_all` requires the futures to be `Unpin`. The easiest way to achieve that
@@ -481,8 +480,8 @@ pub(crate) struct ReceiveStatus<T> {
 /// Returns all replica ids we know of except ours.
 async fn load_other_replica_ids(
     pool: &db::Pool,
-    this_replica_id: &ReplicaId,
-) -> Result<Vec<ReplicaId>> {
+    this_replica_id: &PublicKey,
+) -> Result<Vec<PublicKey>> {
     Ok(
         sqlx::query("SELECT DISTINCT replica_id FROM snapshot_root_nodes WHERE replica_id <> ?")
             .bind(this_replica_id)
@@ -494,8 +493,8 @@ async fn load_other_replica_ids(
 
 async fn load_remote_branches(
     pool: &db::Pool,
-    this_replica_id: &ReplicaId,
-) -> Result<HashMap<ReplicaId, BranchHolder>> {
+    this_replica_id: &PublicKey,
+) -> Result<HashMap<PublicKey, BranchHolder>> {
     let ids = load_other_replica_ids(pool, this_replica_id).await?;
     let mut map = HashMap::new();
 

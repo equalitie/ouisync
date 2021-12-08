@@ -1,4 +1,4 @@
-use crate::replica_id::ReplicaId;
+use crate::crypto::sign::PublicKey;
 use serde::{Deserialize, Serialize};
 use sqlx::{
     encode::IsNull,
@@ -17,7 +17,7 @@ use std::{cmp::Ordering, collections::HashMap, fmt};
 /// - `Some(Ordering::Greater)` -> the rhs vector happened-before the lhs vector
 /// - `None`                    -> the version vectors are concurrent
 #[derive(Default, Clone, Serialize, Deserialize)]
-pub struct VersionVector(HashMap<ReplicaId, u64>);
+pub struct VersionVector(HashMap<PublicKey, u64>);
 
 impl VersionVector {
     /// Creates an empty version vector.
@@ -25,35 +25,35 @@ impl VersionVector {
         Self::default()
     }
 
-    pub fn first(replica_id: ReplicaId) -> Self {
+    pub fn first(writer_id: PublicKey) -> Self {
         let mut vv = Self::new();
-        vv.increment(replica_id);
+        vv.increment(writer_id);
         vv
     }
 
     /// Inserts an entry into this version vector. If the entry already exists, it's overwritten
     /// only if the new version is higher than the existing version.
-    pub fn insert(&mut self, replica_id: ReplicaId, version: u64) {
-        let old = self.0.entry(replica_id).or_insert(0);
+    pub fn insert(&mut self, writer_id: PublicKey, version: u64) {
+        let old = self.0.entry(writer_id).or_insert(0);
         *old = (*old).max(version);
     }
 
     /// Retrieves the version corresponding to the given replica id.
-    pub fn get(&self, replica_id: &ReplicaId) -> u64 {
-        self.0.get(replica_id).copied().unwrap_or(0)
+    pub fn get(&self, writer_id: &PublicKey) -> u64 {
+        self.0.get(writer_id).copied().unwrap_or(0)
     }
 
     /// Increments the version corresponding to the given replica id and returns it.
-    pub fn increment(&mut self, replica_id: ReplicaId) -> u64 {
-        let version = self.0.entry(replica_id).or_insert(0);
+    pub fn increment(&mut self, writer_id: PublicKey) -> u64 {
+        let version = self.0.entry(writer_id).or_insert(0);
         *version += 1;
         *version
     }
 
     /// Returns a version vector that is a copy of self but with the version corresponding to
-    /// `replica_id` incremented.
-    pub fn incremented(mut self, replica_id: ReplicaId) -> Self {
-        let version = self.0.entry(replica_id).or_insert(0);
+    /// `writer_id` incremented.
+    pub fn incremented(mut self, writer_id: PublicKey) -> Self {
+        let version = self.0.entry(writer_id).or_insert(0);
         *version += 1;
         self
     }
@@ -61,8 +61,8 @@ impl VersionVector {
     /// Merge two versio vectors into one. The version of each entry in the resulting vector is
     /// the maximum of the corresponding entries of the input vectors.
     pub fn merge(&mut self, other: &Self) {
-        for (replica_id, version) in &other.0 {
-            self.insert(*replica_id, *version)
+        for (writer_id, version) in &other.0 {
+            self.insert(*writer_id, *version)
         }
     }
 
