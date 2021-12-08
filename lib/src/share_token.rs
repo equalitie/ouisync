@@ -104,7 +104,7 @@ mod tests {
 
     #[test]
     fn encode() {
-        let id_hex = "416d9c3fe32017f7b5c8e406630576ad";
+        let id_hex = "416d9c3fe32017f7b5c8e406630576ad416d9c3fe32017f7b5c8e406630576ad";
         let id_bytes = hex::decode(id_hex).unwrap();
         let id = SecretRepositoryId::try_from(id_bytes.as_ref()).unwrap();
 

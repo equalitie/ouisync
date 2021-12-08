@@ -5,7 +5,7 @@ use ed25519_dalek::Verifier;
 use rand::{rngs::OsRng, Rng};
 use serde;
 use std::cmp::Ordering;
-use std::fmt;
+use std::{fmt, str::FromStr};
 
 #[derive(PartialEq, Eq, Clone, Copy, serde::Deserialize, serde::Serialize)]
 pub struct PublicKey(ext::PublicKey);
@@ -101,6 +101,17 @@ impl fmt::Display for PublicKey {
 impl fmt::Debug for PublicKey {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "{:8x}", self)
+    }
+}
+
+impl FromStr for PublicKey {
+    type Err = hex::FromHexError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut bytes = [0; ext::PUBLIC_KEY_LENGTH];
+        hex::decode_to_slice(s, &mut bytes)?;
+
+        Ok(Self(ext::PublicKey::from_bytes(&bytes).unwrap()))
     }
 }
 

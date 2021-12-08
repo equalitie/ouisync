@@ -22,7 +22,7 @@ pub(crate) async fn init(pool: &db::Pool) -> Result<(), Error> {
     Ok(())
 }
 
-pub(crate) async fn get_id(tx: &mut db::Transaction<'_>) -> Result<Option<PublicKey>> {
+async fn get_id(tx: &mut db::Transaction<'_>) -> Result<Option<PublicKey>> {
     let id = sqlx::query("SELECT writer_id FROM this_writer_id WHERE row_id=0")
         .fetch_optional(tx)
         .await?
@@ -31,10 +31,7 @@ pub(crate) async fn get_id(tx: &mut db::Transaction<'_>) -> Result<Option<Public
     Ok(id)
 }
 
-pub(crate) async fn set_id(
-    tx: &mut db::Transaction<'_>,
-    writer_id: &PublicKey,
-) -> Result<(), Error> {
+async fn set_id(tx: &mut db::Transaction<'_>, writer_id: &PublicKey) -> Result<(), Error> {
     sqlx::query(
         "INSERT INTO this_writer_id(row_id, writer_id)
              VALUES (0, ?) ON CONFLICT(row_id) DO UPDATE SET writer_id=?",

@@ -29,7 +29,7 @@ impl WriterSet {
 
         let ret = Self {
             origin: entry.hash,
-            entries: once((entry.hash, entry)).collect::<HashMap<_, _>>(),
+            entries: once((entry.hash, entry)).collect(),
         };
 
         (ret, origin)
