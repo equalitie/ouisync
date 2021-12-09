@@ -335,16 +335,16 @@ impl Repository {
     pub async fn debug_print(&self, print: DebugPrinter) {
         print.display(&"Repository");
         let branches = self.shared.branches.lock().await;
-        for (replica_id, branch) in &*branches {
+        for (writer_id, branch) in &*branches {
             let print = print.indent();
-            let local = if replica_id == self.this_writer_id() {
+            let local = if writer_id == self.this_writer_id() {
                 " (local)"
             } else {
                 ""
             };
             print.display(&format_args!(
                 "Branch ID: {:?}{}, root block ID:{:?}",
-                replica_id,
+                writer_id,
                 local,
                 branch.root_block_id().await
             ));
@@ -593,8 +593,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn root_directory_always_exists() {
-        let replica_id = rand::random();
-        let repo = Repository::open(&db::Store::Memory, replica_id, Cryptor::Null, false)
+        let writer_id = rand::random();
+        let repo = Repository::open(&db::Store::Memory, writer_id, Cryptor::Null, false)
             .await
             .unwrap();
         let _ = repo.open_directory("/").await.unwrap();
@@ -729,8 +729,8 @@ mod tests {
     // This one used to deadlock
     #[tokio::test(flavor = "multi_thread")]
     async fn concurrent_read_and_create_dir() {
-        let replica_id = rand::random();
-        let repo = Repository::open(&db::Store::Memory, replica_id, Cryptor::Null, false)
+        let writer_id = rand::random();
+        let repo = Repository::open(&db::Store::Memory, writer_id, Cryptor::Null, false)
             .await
             .unwrap();
 
