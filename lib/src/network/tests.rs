@@ -214,8 +214,8 @@ async fn write_all_blocks(index: &Index, snapshot: &Snapshot) {
     }
 }
 
-async fn load_latest_root_node(index: &Index, replica_id: &PublicKey) -> Option<RootNode> {
-    RootNode::load_latest(&index.pool, replica_id)
+async fn load_latest_root_node(index: &Index, writer_id: &PublicKey) -> Option<RootNode> {
+    RootNode::load_latest(&index.pool, writer_id)
         .await
         .unwrap()
 }
