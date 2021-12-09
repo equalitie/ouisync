@@ -36,7 +36,7 @@ impl RootNode {
                  missing_blocks_count,
                  missing_blocks_checksum
              FROM snapshot_root_nodes
-             WHERE replica_id = ? AND hash = ?",
+             WHERE writer_id = ? AND hash = ?",
         )
         .bind(writer_id)
         .bind(hash)
@@ -95,7 +95,7 @@ impl RootNode {
 
         sqlx::query(
             "INSERT INTO snapshot_root_nodes (
-                 replica_id,
+                 writer_id,
                  versions,
                  hash,
                  is_complete,
@@ -103,7 +103,7 @@ impl RootNode {
                  missing_blocks_checksum
              )
              VALUES (?, ?, ?, ?, ?, ?)
-             ON CONFLICT (replica_id, hash) DO NOTHING;
+             ON CONFLICT (writer_id, hash) DO NOTHING;
              SELECT
                  snapshot_id,
                  versions,
@@ -111,7 +111,7 @@ impl RootNode {
                  missing_blocks_count,
                  missing_blocks_checksum
              FROM snapshot_root_nodes
-             WHERE replica_id = ? AND hash = ?",
+             WHERE writer_id = ? AND hash = ?",
         )
         .bind(writer_id)
         .bind(&versions)
@@ -152,7 +152,7 @@ impl RootNode {
                  missing_blocks_count,
                  missing_blocks_checksum
              FROM snapshot_root_nodes
-             WHERE replica_id = ?
+             WHERE writer_id = ?
              ORDER BY snapshot_id DESC
              LIMIT ?",
         )
@@ -177,7 +177,7 @@ impl RootNode {
         tx: &'a mut db::Transaction<'_>,
         hash: &'a Hash,
     ) -> impl Stream<Item = Result<PublicKey>> + 'a {
-        sqlx::query("SELECT replica_id FROM snapshot_root_nodes WHERE hash = ?")
+        sqlx::query("SELECT writer_id FROM snapshot_root_nodes WHERE hash = ?")
             .bind(hash)
             .map(|row| row.get(0))
             .fetch(tx)
@@ -191,14 +191,14 @@ impl RootNode {
 
         let snapshot_id = sqlx::query(
             "INSERT INTO snapshot_root_nodes (
-                 replica_id,
+                 writer_id,
                  versions,
                  hash,
                  is_complete,
                  missing_blocks_count,
                  missing_blocks_checksum
              )
-             SELECT replica_id, ?, ?, 1, 0, 0
+             SELECT writer_id, ?, ?, 1, 0, 0
              FROM snapshot_root_nodes
              WHERE snapshot_id = ?
              RETURNING snapshot_id",
@@ -323,7 +323,7 @@ impl RootNode {
     /// Returns the replica id of this node
     async fn load_writer_id(&self, tx: &mut db::Transaction<'_>) -> Result<PublicKey> {
         let writer_id =
-            sqlx::query("SELECT replica_id FROM snapshot_root_nodes WHERE snapshot_id = ?")
+            sqlx::query("SELECT writer_id FROM snapshot_root_nodes WHERE snapshot_id = ?")
                 .bind(&self.snapshot_id)
                 .fetch_one(tx)
                 .await?

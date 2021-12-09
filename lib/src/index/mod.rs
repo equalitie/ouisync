@@ -483,7 +483,7 @@ async fn load_other_writer_ids(
     this_writer_id: &PublicKey,
 ) -> Result<Vec<PublicKey>> {
     Ok(
-        sqlx::query("SELECT DISTINCT replica_id FROM snapshot_root_nodes WHERE replica_id <> ?")
+        sqlx::query("SELECT DISTINCT writer_id FROM snapshot_root_nodes WHERE writer_id <> ?")
             .bind(this_writer_id)
             .map(|row| row.get(0))
             .fetch_all(pool)
@@ -511,7 +511,7 @@ pub(crate) async fn init(pool: &db::Pool) -> Result<(), Error> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS snapshot_root_nodes (
              snapshot_id             INTEGER PRIMARY KEY,
-             replica_id              BLOB NOT NULL,
+             writer_id               BLOB NOT NULL,
              versions                BLOB NOT NULL,
 
              -- Hash of the children
@@ -524,7 +524,7 @@ pub(crate) async fn init(pool: &db::Pool) -> Result<(), Error> {
              missing_blocks_count    INTEGER NOT NULL,
              missing_blocks_checksum INTEGER NOT NULL,
 
-             UNIQUE(replica_id, hash)
+             UNIQUE(writer_id, hash)
          );
 
          CREATE INDEX IF NOT EXISTS index_snapshot_root_nodes_on_hash
