@@ -64,12 +64,12 @@ impl Client {
         match response {
             Response::RootNode {
                 cookie,
-                replica_id,
+                writer_id,
                 versions,
                 hash,
                 summary,
             } => {
-                self.handle_root_node(cookie, replica_id, versions, hash, summary)
+                self.handle_root_node(cookie, writer_id, versions, hash, summary)
                     .await
             }
             Response::InnerNodes {
@@ -97,7 +97,7 @@ impl Client {
     async fn handle_root_node(
         &mut self,
         cookie: u64,
-        replica_id: PublicKey,
+        writer_id: PublicKey,
         versions: VersionVector,
         hash: Hash,
         summary: Summary,
@@ -106,7 +106,7 @@ impl Client {
 
         let status = self
             .index
-            .receive_root_node(&replica_id, versions, hash, summary)
+            .receive_root_node(&writer_id, versions, hash, summary)
             .await?;
 
         if status.updated {

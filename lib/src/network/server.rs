@@ -96,7 +96,7 @@ impl Server {
                 self.stream
                     .send(Response::RootNode {
                         cookie: self.cookie,
-                        replica_id: self.index.this_writer_id,
+                        writer_id: self.index.this_writer_id,
                         versions: node.versions,
                         hash: node.hash,
                         summary: node.summary,
