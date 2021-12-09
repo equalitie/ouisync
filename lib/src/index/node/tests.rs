@@ -11,12 +11,12 @@ use test_strategy::proptest;
 async fn create_new_root_node() {
     let pool = setup().await;
 
-    let replica_id = rand::random();
+    let writer_id = rand::random();
     let hash = rand::random::<u64>().hash();
 
     let node0 = RootNode::create(
         &pool,
-        &replica_id,
+        &writer_id,
         VersionVector::new(),
         hash,
         Summary::FULL,
@@ -25,12 +25,12 @@ async fn create_new_root_node() {
     .unwrap();
     assert_eq!(node0.hash, hash);
 
-    let node1 = RootNode::load_latest_or_create(&pool, &replica_id)
+    let node1 = RootNode::load_latest_or_create(&pool, &writer_id)
         .await
         .unwrap();
     assert_eq!(node1, node0);
 
-    let nodes: Vec<_> = RootNode::load_all(&pool, &replica_id, 2)
+    let nodes: Vec<_> = RootNode::load_all(&pool, &writer_id, 2)
         .try_collect()
         .await
         .unwrap();
@@ -42,12 +42,12 @@ async fn create_new_root_node() {
 async fn create_existing_root_node() {
     let pool = setup().await;
 
-    let replica_id = rand::random();
+    let writer_id = rand::random();
     let hash = rand::random::<u64>().hash();
 
     let node0 = RootNode::create(
         &pool,
-        &replica_id,
+        &writer_id,
         VersionVector::new(),
         hash,
         Summary::FULL,
@@ -57,7 +57,7 @@ async fn create_existing_root_node() {
 
     let node1 = RootNode::create(
         &pool,
-        &replica_id,
+        &writer_id,
         VersionVector::new(),
         hash,
         Summary::FULL,
@@ -66,7 +66,7 @@ async fn create_existing_root_node() {
     .unwrap();
     assert_eq!(node0, node1);
 
-    let nodes: Vec<_> = RootNode::load_all(&pool, &replica_id, 2)
+    let nodes: Vec<_> = RootNode::load_all(&pool, &writer_id, 2)
         .try_collect()
         .await
         .unwrap();
@@ -538,12 +538,12 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
     let mut rng = StdRng::seed_from_u64(rng_seed);
     let pool = setup().await;
 
-    let replica_id = rng.gen();
+    let writer_id = rng.gen();
     let snapshot = Snapshot::generate(&mut rng, leaf_count);
 
     let mut root_node = RootNode::create(
         &pool,
-        &replica_id,
+        &writer_id,
         VersionVector::new(),
         *snapshot.root_hash(),
         Summary::FULL,
@@ -602,13 +602,13 @@ async fn summary_case(leaf_count: usize, rng_seed: u64) {
     let mut rng = StdRng::seed_from_u64(rng_seed);
     let pool = setup().await;
 
-    let replica_id = rng.gen();
+    let writer_id = rng.gen();
     let snapshot = Snapshot::generate(&mut rng, leaf_count);
 
     // Save the snapshot initially with all nodes missing.
     let mut root_node = RootNode::create(
         &pool,
-        &replica_id,
+        &writer_id,
         VersionVector::new(),
         *snapshot.root_hash(),
         Summary::INCOMPLETE,

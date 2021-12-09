@@ -28,7 +28,7 @@ pub(crate) enum Response {
     /// Send the latest root node of this replica to another replica.
     RootNode {
         cookie: u64,
-        replica_id: PublicKey,
+        writer_id: PublicKey,
         versions: VersionVector,
         hash: Hash,
         summary: Summary,
@@ -58,14 +58,14 @@ impl fmt::Debug for Response {
         match self {
             Self::RootNode {
                 cookie,
-                replica_id,
+                writer_id,
                 versions,
                 hash,
                 summary,
             } => f
                 .debug_struct("RootNode")
                 .field("cookie", cookie)
-                .field("replica_id", replica_id)
+                .field("writer_id", writer_id)
                 .field("versions", versions)
                 .field("hash", hash)
                 .field("summary", summary)

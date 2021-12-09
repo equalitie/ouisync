@@ -110,7 +110,7 @@ impl Directory {
     ///
     /// Note: This operation does not simply remove the entry, instead, version vector of the local
     /// entry with the same name is increased to be "happens after" `vv`. If the local version does
-    /// not exist, or if it is the one being removed (author == this_replica_id), then a tombstone
+    /// not exist, or if it is the one being removed (author == this_writer_id), then a tombstone
     /// is created.
     pub async fn remove_entry(
         &self,
@@ -167,7 +167,7 @@ impl Directory {
         dst_dir_writer
             .as_mut()
             .unwrap_or(&mut src_dir_writer)
-            .insert_entry(dst_name.into(), *self.this_replica_id(), dst_entry, None)
+            .insert_entry(dst_name.into(), *self.this_writer_id(), dst_entry, None)
             .await
     }
 
@@ -310,7 +310,7 @@ impl Directory {
         Writer { outer: self, inner }
     }
 
-    pub fn this_replica_id(&self) -> &PublicKey {
+    pub fn this_writer_id(&self) -> &PublicKey {
         self.local_branch.id()
     }
 
@@ -479,7 +479,7 @@ impl Writer<'_> {
         entry_type: EntryType,
         name: String,
     ) -> Result<(Locator, ParentContext)> {
-        let author = *self.this_replica_id();
+        let author = *self.this_writer_id();
 
         let blob_id = rand::random();
         let vv = self
@@ -560,28 +560,28 @@ impl Writer<'_> {
             None
         };
 
-        let this_replica_id = *self.this_replica_id();
+        let this_writer_id = *self.this_writer_id();
 
-        let new_entry = if author == &this_replica_id {
+        let new_entry = if author == &this_writer_id {
             EntryData::Tombstone(EntryTombstoneData {
-                version_vector: vv.incremented(this_replica_id),
+                version_vector: vv.incremented(this_writer_id),
             })
         } else {
-            match self.lookup_version(name, &this_replica_id) {
+            match self.lookup_version(name, &this_writer_id) {
                 Ok(local_entry) => {
                     let mut new_entry = local_entry.clone_data();
                     new_entry.version_vector_mut().merge(&vv);
                     new_entry
                 }
                 Err(Error::EntryNotFound) => EntryData::Tombstone(EntryTombstoneData {
-                    version_vector: vv.incremented(this_replica_id),
+                    version_vector: vv.incremented(this_writer_id),
                 }),
                 Err(e) => return Err(e),
             }
         };
 
         self.inner
-            .insert_entry(name.into(), this_replica_id, new_entry, keep)
+            .insert_entry(name.into(), this_writer_id, new_entry, keep)
             .await
     }
 
@@ -595,8 +595,8 @@ impl Writer<'_> {
         self.inner.insert_entry(name, author, entry, keep).await
     }
 
-    pub fn this_replica_id(&self) -> &PublicKey {
-        self.outer.this_replica_id()
+    pub fn this_writer_id(&self) -> &PublicKey {
+        self.outer.this_writer_id()
     }
 
     #[cfg(test)]

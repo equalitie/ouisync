@@ -94,7 +94,7 @@ impl JointDirectory {
             .apply(&self.read().await)?
             .map(|entry| {
                 let name = entry.name().to_owned();
-                let author = *entry.author().unwrap_or_else(|| local.this_replica_id());
+                let author = *entry.author().unwrap_or_else(|| local.this_writer_id());
                 let vv = entry.version_vector().into_owned();
 
                 (name, author, vv)

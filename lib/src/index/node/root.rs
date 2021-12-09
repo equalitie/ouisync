@@ -24,7 +24,7 @@ impl RootNode {
     /// Returns the root node of the specified replica with the specified hash if it exists.
     pub async fn load(
         pool: &db::Pool,
-        replica_id: &PublicKey,
+        writer_id: &PublicKey,
         hash: &Hash,
     ) -> Result<Option<Self>> {
         sqlx::query(
@@ -36,9 +36,9 @@ impl RootNode {
                  missing_blocks_count,
                  missing_blocks_checksum
              FROM snapshot_root_nodes
-             WHERE replica_id = ? AND hash = ?",
+             WHERE writer_id = ? AND hash = ?",
         )
-        .bind(replica_id)
+        .bind(writer_id)
         .bind(hash)
         .map(|row| Self {
             snapshot_id: row.get(0),
@@ -57,15 +57,15 @@ impl RootNode {
 
     /// Returns the latest root node of the specified replica. If no such node exists yet, creates
     /// it first.
-    pub async fn load_latest_or_create(pool: &db::Pool, replica_id: &PublicKey) -> Result<Self> {
-        let node = Self::load_latest(pool, replica_id).await?;
+    pub async fn load_latest_or_create(pool: &db::Pool, writer_id: &PublicKey) -> Result<Self> {
+        let node = Self::load_latest(pool, writer_id).await?;
 
         if let Some(node) = node {
             Ok(node)
         } else {
             Ok(Self::create(
                 pool,
-                replica_id,
+                writer_id,
                 VersionVector::new(),
                 InnerNodeMap::default().hash(),
                 Summary::FULL,
@@ -76,26 +76,26 @@ impl RootNode {
 
     /// Returns the latest root node of the specified replica or `None` if no snapshot of that
     /// replica exists.
-    pub async fn load_latest(pool: &db::Pool, replica_id: &PublicKey) -> Result<Option<Self>> {
-        Self::load_all(pool, replica_id, 1).try_next().await
+    pub async fn load_latest(pool: &db::Pool, writer_id: &PublicKey) -> Result<Option<Self>> {
+        Self::load_all(pool, writer_id, 1).try_next().await
     }
 
     /// Creates a root node of the specified replica unless it already exists. Returns the newly
     /// created or the existing node.
     pub async fn create(
         pool: &db::Pool,
-        replica_id: &PublicKey,
+        writer_id: &PublicKey,
         mut versions: VersionVector,
         hash: Hash,
         summary: Summary,
     ) -> Result<Self> {
         let is_complete = hash == InnerNodeMap::default().hash();
 
-        versions.insert(*replica_id, 1);
+        versions.insert(*writer_id, 1);
 
         sqlx::query(
             "INSERT INTO snapshot_root_nodes (
-                 replica_id,
+                 writer_id,
                  versions,
                  hash,
                  is_complete,
@@ -103,7 +103,7 @@ impl RootNode {
                  missing_blocks_checksum
              )
              VALUES (?, ?, ?, ?, ?, ?)
-             ON CONFLICT (replica_id, hash) DO NOTHING;
+             ON CONFLICT (writer_id, hash) DO NOTHING;
              SELECT
                  snapshot_id,
                  versions,
@@ -111,15 +111,15 @@ impl RootNode {
                  missing_blocks_count,
                  missing_blocks_checksum
              FROM snapshot_root_nodes
-             WHERE replica_id = ? AND hash = ?",
+             WHERE writer_id = ? AND hash = ?",
         )
-        .bind(replica_id)
+        .bind(writer_id)
         .bind(&versions)
         .bind(&hash)
         .bind(is_complete)
         .bind(db::encode_u64(summary.missing_blocks_count))
         .bind(db::encode_u64(summary.missing_blocks_checksum))
-        .bind(replica_id)
+        .bind(writer_id)
         .bind(&hash)
         .map(|row| RootNode {
             snapshot_id: row.get(0),
@@ -140,7 +140,7 @@ impl RootNode {
     /// replica ordered from the most recent to the least recent.
     pub fn load_all<'a>(
         pool: &'a db::Pool,
-        replica_id: &'a PublicKey,
+        writer_id: &'a PublicKey,
         limit: u32,
     ) -> impl Stream<Item = Result<Self>> + 'a {
         sqlx::query(
@@ -152,11 +152,11 @@ impl RootNode {
                  missing_blocks_count,
                  missing_blocks_checksum
              FROM snapshot_root_nodes
-             WHERE replica_id = ?
+             WHERE writer_id = ?
              ORDER BY snapshot_id DESC
              LIMIT ?",
         )
-        .bind(replica_id)
+        .bind(writer_id)
         .bind(limit)
         .map(|row| Self {
             snapshot_id: row.get(0),
@@ -173,11 +173,11 @@ impl RootNode {
     }
 
     /// Returns the replica ids of the nodes with the specified hash.
-    pub fn load_replica_ids<'a>(
+    pub fn load_writer_ids<'a>(
         tx: &'a mut db::Transaction<'_>,
         hash: &'a Hash,
     ) -> impl Stream<Item = Result<PublicKey>> + 'a {
-        sqlx::query("SELECT replica_id FROM snapshot_root_nodes WHERE hash = ?")
+        sqlx::query("SELECT writer_id FROM snapshot_root_nodes WHERE hash = ?")
             .bind(hash)
             .map(|row| row.get(0))
             .fetch(tx)
@@ -186,19 +186,19 @@ impl RootNode {
 
     /// Creates the next version of this root node with the specified hash.
     pub async fn next_version(&self, tx: &mut db::Transaction<'_>, hash: Hash) -> Result<Self> {
-        let replica_id = self.load_replica_id(&mut *tx).await?;
-        let versions = self.versions.clone().incremented(replica_id);
+        let writer_id = self.load_writer_id(&mut *tx).await?;
+        let versions = self.versions.clone().incremented(writer_id);
 
         let snapshot_id = sqlx::query(
             "INSERT INTO snapshot_root_nodes (
-                 replica_id,
+                 writer_id,
                  versions,
                  hash,
                  is_complete,
                  missing_blocks_count,
                  missing_blocks_checksum
              )
-             SELECT replica_id, ?, ?, 1, 0, 0
+             SELECT writer_id, ?, ?, 1, 0, 0
              FROM snapshot_root_nodes
              WHERE snapshot_id = ?
              RETURNING snapshot_id",
@@ -235,8 +235,8 @@ impl RootNode {
         if let Some(version_vector_override) = version_vector_override {
             new_version_vector.merge(version_vector_override);
         } else {
-            let replica_id = self.load_replica_id(&mut tx).await?;
-            new_version_vector.increment(replica_id);
+            let writer_id = self.load_writer_id(&mut tx).await?;
+            new_version_vector.increment(writer_id);
         }
 
         sqlx::query("UPDATE snapshot_root_nodes SET versions = ? WHERE snapshot_id = ?")
@@ -321,13 +321,13 @@ impl RootNode {
     }
 
     /// Returns the replica id of this node
-    async fn load_replica_id(&self, tx: &mut db::Transaction<'_>) -> Result<PublicKey> {
-        let replica_id =
-            sqlx::query("SELECT replica_id FROM snapshot_root_nodes WHERE snapshot_id = ?")
+    async fn load_writer_id(&self, tx: &mut db::Transaction<'_>) -> Result<PublicKey> {
+        let writer_id =
+            sqlx::query("SELECT writer_id FROM snapshot_root_nodes WHERE snapshot_id = ?")
                 .bind(&self.snapshot_id)
                 .fetch_one(tx)
                 .await?
                 .get(0);
-        Ok(replica_id)
+        Ok(writer_id)
     }
 }

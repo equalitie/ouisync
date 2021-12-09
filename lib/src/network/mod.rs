@@ -591,7 +591,7 @@ impl Inner {
 
         let that_runtime_id =
             match perform_handshake(&mut stream, VERSION, self.this_runtime_id).await {
-                Ok(replica_id) => replica_id,
+                Ok(writer_id) => writer_id,
                 Err(error) => {
                     log::error!("Failed to perform handshake: {}", error);
                     return;

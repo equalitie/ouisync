@@ -9,7 +9,7 @@ use crate::{
     db,
     error::Result,
     network::{Network, NetworkOptions},
-    this_replica,
+    this_writer,
 };
 use std::{
     ffi::CString,
@@ -118,7 +118,7 @@ static mut SESSION: *mut Session = ptr::null_mut();
 
 pub(super) struct Session {
     runtime: Runtime,
-    this_replica_id: PublicKey,
+    this_writer_id: PublicKey,
     network: Network,
     sender: Sender,
     _logger: Logger,
@@ -132,12 +132,12 @@ impl Session {
         logger: Logger,
     ) -> Result<Self> {
         let pool = config::open_db(&store).await?;
-        let this_replica_id = this_replica::get_or_create_id(&pool).await?;
+        let this_writer_id = this_writer::get_or_create_id(&pool).await?;
         let network = Network::new(&NetworkOptions::default()).await?;
 
         Ok(Self {
             runtime,
-            this_replica_id,
+            this_writer_id,
             network,
             sender,
             _logger: logger,
@@ -177,8 +177,8 @@ where
         &self.session.network
     }
 
-    pub(super) fn this_replica_id(&self) -> &PublicKey {
-        &self.session.this_replica_id
+    pub(super) fn this_writer_id(&self) -> &PublicKey {
+        &self.session.this_writer_id
     }
 }
 

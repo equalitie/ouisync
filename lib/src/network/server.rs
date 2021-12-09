@@ -91,12 +91,12 @@ impl Server {
         if cookie < self.cookie || self.cookie == 0 {
             // TODO: send all branches, not just the local one.
             if let Some(node) =
-                RootNode::load_latest(&self.index.pool, &self.index.this_replica_id).await?
+                RootNode::load_latest(&self.index.pool, &self.index.this_writer_id).await?
             {
                 self.stream
                     .send(Response::RootNode {
                         cookie: self.cookie,
-                        replica_id: self.index.this_replica_id,
+                        writer_id: self.index.this_writer_id,
                         versions: node.versions,
                         hash: node.hash,
                         summary: node.summary,

@@ -65,7 +65,7 @@ pub(crate) async fn receive_block(
     Ok(update_summaries_in_transaction(tx, nodes)
         .await?
         .into_iter()
-        .map(|(replica_id, _)| replica_id)
+        .map(|(writer_id, _)| writer_id)
         .collect())
 }
 
@@ -86,9 +86,9 @@ async fn update_summaries_in_transaction(
                 .await?;
         } else {
             let status = RootNode::update_summaries(tx, &hash).await?;
-            RootNode::load_replica_ids(tx, &hash)
-                .try_for_each(|replica_id| {
-                    statuses.push((replica_id, status));
+            RootNode::load_writer_ids(tx, &hash)
+                .try_for_each(|writer_id| {
+                    statuses.push((writer_id, status));
                     future::ready(Ok(()))
                 })
                 .await?;
