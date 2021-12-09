@@ -52,7 +52,7 @@ async fn transfer_snapshot_between_two_replicas_case(
     save_snapshot(&a_index, &snapshot).await;
     write_all_blocks(&a_index, &snapshot).await;
 
-    assert!(load_latest_root_node(&b_index, &a_index.this_replica_id)
+    assert!(load_latest_root_node(&b_index, &a_index.this_writer_id)
         .await
         .is_none());
 
@@ -133,7 +133,7 @@ const CAPACITY: usize = 256;
 async fn save_snapshot(index: &Index, snapshot: &Snapshot) {
     RootNode::create(
         &index.pool,
-        &index.this_replica_id,
+        &index.this_writer_id,
         VersionVector::new(),
         *snapshot.root_hash(),
         Summary::INCOMPLETE,
@@ -158,13 +158,13 @@ async fn save_snapshot(index: &Index, snapshot: &Snapshot) {
 async fn wait_until_snapshots_in_sync(server_index: &Index, client_index: &Index) {
     let mut rx = client_index.subscribe();
 
-    let server_root = load_latest_root_node(server_index, &server_index.this_replica_id)
+    let server_root = load_latest_root_node(server_index, &server_index.this_writer_id)
         .await
         .unwrap();
 
     loop {
         if let Some(client_root) =
-            load_latest_root_node(client_index, &server_index.this_replica_id).await
+            load_latest_root_node(client_index, &server_index.this_writer_id).await
         {
             if client_root.summary.is_complete() && client_root.hash == server_root.hash {
                 // client has now fully downloaded server's latest snapshot.

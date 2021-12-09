@@ -33,12 +33,12 @@ impl Repository {
     /// Opens an existing repository or creates a new one if it doesn't exists yet.
     pub async fn open(
         store: &db::Store,
-        this_replica_id: PublicKey,
+        this_writer_id: PublicKey,
         cryptor: Cryptor,
         enable_merger: bool,
     ) -> Result<Self> {
         let pool = open_db(store).await?;
-        let index = Index::load(pool, this_replica_id).await?;
+        let index = Index::load(pool, this_writer_id).await?;
 
         let shared = Arc::new(Shared {
             index,
@@ -88,8 +88,8 @@ impl Repository {
         set_id(self.db_pool(), &id).await
     }
 
-    pub fn this_replica_id(&self) -> &PublicKey {
-        self.shared.index.this_replica_id()
+    pub fn this_writer_id(&self) -> &PublicKey {
+        self.shared.index.this_writer_id()
     }
 
     /// Looks up an entry by its path. The path must be relative to the repository root.
@@ -209,7 +209,7 @@ impl Repository {
                     .await
                     .ok_or(Error::OperationNotSupported /* can't move root */)?;
 
-                (src_dir, Cow::Borrowed(src_name), *self.this_replica_id())
+                (src_dir, Cow::Borrowed(src_name), *self.this_writer_id())
             }
         };
 
@@ -234,7 +234,7 @@ impl Repository {
                 // destination version vector must be "happened after" those.
                 dst_joint_reader
                     .merge_version_vectors(dst_name)
-                    .incremented(*self.this_replica_id())
+                    .incremented(*self.this_writer_id())
             }
             Ok(_) => return Err(Error::EntryExists),
             Err(e) => return Err(e),
@@ -291,7 +291,7 @@ impl Repository {
         let mut dirs = Vec::with_capacity(branches.len());
 
         for branch in branches {
-            let dir = if branch.id() == self.this_replica_id() {
+            let dir = if branch.id() == self.this_writer_id() {
                 branch.open_or_create_root().await.map_err(|error| {
                     log::error!(
                         "failed to open root directory on the local branch: {:?}",
@@ -337,7 +337,7 @@ impl Repository {
         let branches = self.shared.branches.lock().await;
         for (replica_id, branch) in &*branches {
             let print = print.indent();
-            let local = if replica_id == self.this_replica_id() {
+            let local = if replica_id == self.this_writer_id() {
                 " (local)"
             } else {
                 ""
@@ -493,7 +493,7 @@ impl Merger {
     }
 
     async fn handle_branch_changed(&mut self, branch_id: PublicKey) {
-        if branch_id == *self.shared.index.this_replica_id() {
+        if branch_id == *self.shared.index.this_writer_id() {
             // local branch change - ignore.
             return;
         }

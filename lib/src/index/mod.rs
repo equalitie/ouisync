@@ -37,18 +37,18 @@ type SnapshotId = u32;
 #[derive(Clone)]
 pub(crate) struct Index {
     pub pool: db::Pool,
-    pub this_replica_id: PublicKey,
+    pub this_writer_id: PublicKey,
     shared: Arc<Shared>,
 }
 
 impl Index {
-    pub async fn load(pool: db::Pool, this_replica_id: PublicKey) -> Result<Self> {
-        let branches = Branches::load(&pool, this_replica_id).await?;
+    pub async fn load(pool: db::Pool, this_writer_id: PublicKey) -> Result<Self> {
+        let branches = Branches::load(&pool, this_writer_id).await?;
         let (index_tx, _) = watch::channel(true);
 
         Ok(Self {
             pool,
-            this_replica_id,
+            this_writer_id,
             shared: Arc::new(Shared {
                 branches: RwLock::new(branches),
                 index_tx,
@@ -56,8 +56,8 @@ impl Index {
         })
     }
 
-    pub fn this_replica_id(&self) -> &PublicKey {
-        &self.this_replica_id
+    pub fn this_writer_id(&self) -> &PublicKey {
+        &self.this_writer_id
     }
 
     pub async fn branches(&self) -> RwLockReadGuard<'_, Branches> {
@@ -108,10 +108,10 @@ impl Index {
         hash: Hash,
         summary: Summary,
     ) -> Result<ReceiveStatus<bool>> {
-        assert_ne!(replica_id, &self.this_replica_id);
+        assert_ne!(replica_id, &self.this_writer_id);
 
         // Only accept it if newer or concurrent with our versions.
-        let this_versions = RootNode::load_latest(&self.pool, &self.this_replica_id)
+        let this_versions = RootNode::load_latest(&self.pool, &self.this_writer_id)
             .await?
             .map(|node| node.versions)
             .unwrap_or_default();
@@ -323,9 +323,9 @@ struct BranchHolder {
 }
 
 impl Branches {
-    async fn load(pool: &db::Pool, this_replica_id: PublicKey) -> Result<Self> {
-        let local = Arc::new(BranchData::new(pool, this_replica_id).await?);
-        let remote = load_remote_branches(pool, &this_replica_id).await?;
+    async fn load(pool: &db::Pool, this_writer_id: PublicKey) -> Result<Self> {
+        let local = Arc::new(BranchData::new(pool, this_writer_id).await?);
+        let remote = load_remote_branches(pool, &this_writer_id).await?;
 
         Ok(Self {
             local,
@@ -480,11 +480,11 @@ pub(crate) struct ReceiveStatus<T> {
 /// Returns all replica ids we know of except ours.
 async fn load_other_replica_ids(
     pool: &db::Pool,
-    this_replica_id: &PublicKey,
+    this_writer_id: &PublicKey,
 ) -> Result<Vec<PublicKey>> {
     Ok(
         sqlx::query("SELECT DISTINCT replica_id FROM snapshot_root_nodes WHERE replica_id <> ?")
-            .bind(this_replica_id)
+            .bind(this_writer_id)
             .map(|row| row.get(0))
             .fetch_all(pool)
             .await?,
@@ -493,9 +493,9 @@ async fn load_other_replica_ids(
 
 async fn load_remote_branches(
     pool: &db::Pool,
-    this_replica_id: &PublicKey,
+    this_writer_id: &PublicKey,
 ) -> Result<HashMap<PublicKey, BranchHolder>> {
-    let ids = load_other_replica_ids(pool, this_replica_id).await?;
+    let ids = load_other_replica_ids(pool, this_writer_id).await?;
     let mut map = HashMap::new();
 
     for id in ids {
