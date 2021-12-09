@@ -20,22 +20,22 @@ use tokio::sync::{watch, RwLock, RwLockReadGuard};
 type LocatorHash = Hash;
 
 pub(crate) struct BranchData {
-    replica_id: PublicKey,
+    writer_id: PublicKey,
     root_node: RwLock<RootNode>,
     changed_tx: watch::Sender<()>,
 }
 
 impl BranchData {
-    pub async fn new(pool: &db::Pool, replica_id: PublicKey) -> Result<Self> {
-        let root_node = RootNode::load_latest_or_create(pool, &replica_id).await?;
-        Ok(Self::with_root_node(replica_id, root_node))
+    pub async fn new(pool: &db::Pool, writer_id: PublicKey) -> Result<Self> {
+        let root_node = RootNode::load_latest_or_create(pool, &writer_id).await?;
+        Ok(Self::with_root_node(writer_id, root_node))
     }
 
-    pub fn with_root_node(replica_id: PublicKey, root_node: RootNode) -> Self {
+    pub fn with_root_node(writer_id: PublicKey, root_node: RootNode) -> Self {
         let (changed_tx, _) = watch::channel(());
 
         Self {
-            replica_id,
+            writer_id,
             root_node: RwLock::new(root_node),
             changed_tx,
         }
@@ -43,7 +43,7 @@ impl BranchData {
 
     /// Returns the id of the replica that owns this branch.
     pub fn id(&self) -> &PublicKey {
-        &self.replica_id
+        &self.writer_id
     }
 
     /// Returns the root version vector of this branch.
@@ -130,7 +130,7 @@ impl BranchData {
     ) -> Result<()> {
         let mut old_root = self.root_node.write().await;
 
-        if new_root.versions.get(&self.replica_id) <= old_root.versions.get(&self.replica_id) {
+        if new_root.versions.get(&self.writer_id) <= old_root.versions.get(&self.writer_id) {
             return Ok(());
         }
 
