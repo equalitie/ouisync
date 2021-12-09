@@ -76,15 +76,15 @@ impl Index {
 
     /// Notify all tasks waiting for changes on the specified branches.
     /// See also [`BranchData::subscribe`].
-    pub async fn notify_branches_changed(&self, replica_ids: &[PublicKey]) {
+    pub async fn notify_branches_changed(&self, writer_ids: &[PublicKey]) {
         // Avoid the read lock
-        if replica_ids.is_empty() {
+        if writer_ids.is_empty() {
             return;
         }
 
         let branches = self.shared.branches.read().await;
-        for replica_id in replica_ids {
-            if let Some(branch) = branches.get(replica_id) {
+        for writer_id in writer_ids {
+            if let Some(branch) = branches.get(writer_id) {
                 branch.notify_changed()
             }
         }
@@ -100,15 +100,15 @@ impl Index {
     ///
     /// # Panics
     ///
-    /// Panics if `replica_id` identifies this replica instead of a remote one.
+    /// Panics if `writer_id` identifies this replica instead of a remote one.
     pub async fn receive_root_node(
         &self,
-        replica_id: &PublicKey,
+        writer_id: &PublicKey,
         versions: VersionVector,
         hash: Hash,
         summary: Summary,
     ) -> Result<ReceiveStatus<bool>> {
-        assert_ne!(replica_id, &self.this_writer_id);
+        assert_ne!(writer_id, &self.this_writer_id);
 
         // Only accept it if newer or concurrent with our versions.
         let this_versions = RootNode::load_latest(&self.pool, &self.this_writer_id)
@@ -129,12 +129,12 @@ impl Index {
 
         // Write the root node to the db.
         let updated = self
-            .has_root_node_new_blocks(replica_id, &hash, &summary)
+            .has_root_node_new_blocks(writer_id, &hash, &summary)
             .await?;
         let node =
-            RootNode::create(&self.pool, replica_id, versions, hash, Summary::INCOMPLETE).await?;
+            RootNode::create(&self.pool, writer_id, versions, hash, Summary::INCOMPLETE).await?;
         let complete = self.update_summaries(hash, 0).await?;
-        self.update_remote_branch(*replica_id, node).await?;
+        self.update_remote_branch(*writer_id, node).await?;
 
         Ok(ReceiveStatus { updated, complete })
     }
@@ -187,11 +187,11 @@ impl Index {
     // local one is missing.
     async fn has_root_node_new_blocks(
         &self,
-        replica_id: &PublicKey,
+        writer_id: &PublicKey,
         hash: &Hash,
         remote_summary: &Summary,
     ) -> Result<bool> {
-        if let Some(local_node) = RootNode::load(&self.pool, replica_id, hash).await? {
+        if let Some(local_node) = RootNode::load(&self.pool, writer_id, hash).await? {
             Ok(!local_node
                 .summary
                 .is_up_to_date_with(remote_summary)
@@ -255,14 +255,14 @@ impl Index {
         let statuses = node::update_summaries(&self.pool, hash, layer).await?;
 
         // Find the replicas whose current snapshots became complete by this update.
-        let replica_ids: Vec<_> = statuses
+        let writer_ids: Vec<_> = statuses
             .iter()
             .filter(|(_, status)| status.did_complete())
             .map(|(id, _)| *id)
             .collect();
 
         // Then notify them.
-        self.notify_branches_changed(&replica_ids).await;
+        self.notify_branches_changed(&writer_ids).await;
 
         Ok(statuses.iter().any(|(_, status)| status.is_complete))
     }
@@ -270,13 +270,13 @@ impl Index {
     /// Update the root node of the remote branch.
     pub(crate) async fn update_remote_branch(
         &self,
-        replica_id: PublicKey,
+        writer_id: PublicKey,
         node: RootNode,
     ) -> Result<()> {
         let mut branches = self.shared.branches.write().await;
         let branches = &mut *branches;
 
-        match branches.remote.entry(replica_id) {
+        match branches.remote.entry(writer_id) {
             Entry::Vacant(entry) => {
                 branches.version = branches
                     .version
@@ -284,7 +284,7 @@ impl Index {
                     .expect("branch limit exceeded");
 
                 entry.insert(BranchHolder {
-                    branch: Arc::new(BranchData::with_root_node(replica_id, node)),
+                    branch: Arc::new(BranchData::with_root_node(writer_id, node)),
                     version: branches.version,
                 });
 
@@ -335,11 +335,11 @@ impl Branches {
     }
 
     /// Returns a branch with the given id, if it exists.
-    pub fn get(&self, replica_id: &PublicKey) -> Option<&Arc<BranchData>> {
-        if self.local.id() == replica_id {
+    pub fn get(&self, writer_id: &PublicKey) -> Option<&Arc<BranchData>> {
+        if self.local.id() == writer_id {
             Some(&self.local)
         } else {
-            self.remote.get(replica_id).map(|holder| &holder.branch)
+            self.remote.get(writer_id).map(|holder| &holder.branch)
         }
     }
 
@@ -478,7 +478,7 @@ pub(crate) struct ReceiveStatus<T> {
 }
 
 /// Returns all replica ids we know of except ours.
-async fn load_other_replica_ids(
+async fn load_other_writer_ids(
     pool: &db::Pool,
     this_writer_id: &PublicKey,
 ) -> Result<Vec<PublicKey>> {
@@ -495,7 +495,7 @@ async fn load_remote_branches(
     pool: &db::Pool,
     this_writer_id: &PublicKey,
 ) -> Result<HashMap<PublicKey, BranchHolder>> {
-    let ids = load_other_replica_ids(pool, this_writer_id).await?;
+    let ids = load_other_writer_ids(pool, this_writer_id).await?;
     let mut map = HashMap::new();
 
     for id in ids {
