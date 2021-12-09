@@ -9,7 +9,7 @@ use crate::{
     db,
     error::Result,
     network::{Network, NetworkOptions},
-    this_replica,
+    this_writer,
 };
 use std::{
     ffi::CString,
@@ -132,7 +132,7 @@ impl Session {
         logger: Logger,
     ) -> Result<Self> {
         let pool = config::open_db(&store).await?;
-        let this_writer_id = this_replica::get_or_create_id(&pool).await?;
+        let this_writer_id = this_writer::get_or_create_id(&pool).await?;
         let network = Network::new(&NetworkOptions::default()).await?;
 
         Ok(Self {
