@@ -18,11 +18,11 @@ pub(crate) async fn write_received_block(
 ) -> Result<()> {
     let mut tx = index.pool.begin().await?;
 
-    let replica_ids = index::receive_block(&mut tx, id).await?;
+    let writer_ids = index::receive_block(&mut tx, id).await?;
     block::write(&mut tx, id, content, auth_tag).await?;
     tx.commit().await?;
 
-    index.notify_branches_changed(&replica_ids).await;
+    index.notify_branches_changed(&writer_ids).await;
 
     Ok(())
 }
