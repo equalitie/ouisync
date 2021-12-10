@@ -13,9 +13,12 @@ use sqlx::Row;
 const REPOSITORY_ID: &[u8] = b"repository_id";
 const PASSWORD_SALT: &[u8] = b"password_salt";
 
+/// Initialize the metadata tables for storing Key:Value pairs.  One table stores plaintext values,
+/// the other one stores encrypted ones.
 pub(crate) async fn init(pool: &db::Pool) -> Result<(), Error> {
+    // For storing unencrypted values
     sqlx::query(
-        "CREATE TABLE IF NOT EXISTS metadata_plaintext (
+        "CREATE TABLE IF NOT EXISTS metadata_public (
              name  BLOB NOT NULL PRIMARY KEY,
              value BLOB NOT NULL
          ) WITHOUT ROWID",
@@ -24,8 +27,9 @@ pub(crate) async fn init(pool: &db::Pool) -> Result<(), Error> {
     .await
     .map_err(Error::CreateDbSchema)?;
 
+    // For storing encrypted values
     sqlx::query(
-        "CREATE TABLE IF NOT EXISTS metadata_cyphertext (
+        "CREATE TABLE IF NOT EXISTS metadata_secret (
              name  BLOB NOT NULL PRIMARY KEY,
              nonce BLOB NOT NULL,
              auth_tag BLOB NOT NULL,
@@ -45,13 +49,13 @@ pub(crate) async fn init(pool: &db::Pool) -> Result<(), Error> {
 async fn password_salt(db: db::Pool) -> Result<ScryptSalt> {
     let mut tx = db.begin().await?;
 
-    let salt: Result<ScryptSalt> = get_plaintext(PASSWORD_SALT, &mut tx).await;
+    let salt: Result<ScryptSalt> = get_public(PASSWORD_SALT, &mut tx).await;
 
     let salt = match salt {
         Ok(salt) => salt,
         Err(Error::EntryNotFound) => {
             let salt = SecretKey::generate_scrypt_salt();
-            set_plaintext(PASSWORD_SALT, &salt, &mut tx).await?;
+            set_public(PASSWORD_SALT, &salt, &mut tx).await?;
             salt
         }
         Err(e) => return Err(e),
@@ -66,22 +70,21 @@ async fn password_salt(db: db::Pool) -> Result<ScryptSalt> {
 // Repository Id
 // -------------------------------------------------------------------
 pub(crate) async fn get_repository_id(db: impl db::Executor<'_>) -> Result<SecretRepositoryId> {
-    get_plaintext(REPOSITORY_ID, db)
-        .await
-        .map(|blob| blob.into())
+    get_public(REPOSITORY_ID, db).await.map(|blob| blob.into())
 }
 
 pub(crate) async fn set_repository_id(
     db: impl db::Executor<'_>,
     id: &SecretRepositoryId,
 ) -> Result<()> {
-    set_plaintext(REPOSITORY_ID, id.as_ref(), db).await
+    set_public(REPOSITORY_ID, id.as_ref(), db).await
 }
 
 // -------------------------------------------------------------------
-
-async fn get_plaintext<const N: usize>(id: &[u8], db: impl db::Executor<'_>) -> Result<[u8; N]> {
-    sqlx::query("SELECT value FROM metadata_plaintext WHERE name = ?")
+// Public values
+// -------------------------------------------------------------------
+async fn get_public<const N: usize>(id: &[u8], db: impl db::Executor<'_>) -> Result<[u8; N]> {
+    sqlx::query("SELECT value FROM metadata_public WHERE name = ?")
         .bind(id)
         .map(|row| (row.get::<'_, &[u8], usize>(0)).try_into().unwrap())
         .fetch_optional(db)
@@ -89,9 +92,9 @@ async fn get_plaintext<const N: usize>(id: &[u8], db: impl db::Executor<'_>) -> 
         .ok_or(Error::EntryNotFound)
 }
 
-async fn set_plaintext(id: &[u8], blob: &[u8], db: impl db::Executor<'_>) -> Result<()> {
+async fn set_public(id: &[u8], blob: &[u8], db: impl db::Executor<'_>) -> Result<()> {
     let result = sqlx::query(
-        "INSERT INTO metadata_plaintext(name, value) VALUES (?, ?) ON CONFLICT DO NOTHING",
+        "INSERT INTO metadata_public(name, value) VALUES (?, ?) ON CONFLICT DO NOTHING",
     )
     .bind(id)
     .bind(blob)
@@ -105,13 +108,12 @@ async fn set_plaintext(id: &[u8], blob: &[u8], db: impl db::Executor<'_>) -> Res
     }
 }
 
-async fn get_decrypted<const N: usize>(
-    id: &[u8],
-    key: &SecretKey,
-    db: db::Pool,
-) -> Result<[u8; N]> {
+// -------------------------------------------------------------------
+// Secret values
+// -------------------------------------------------------------------
+async fn get_secret<const N: usize>(id: &[u8], key: &SecretKey, db: db::Pool) -> Result<[u8; N]> {
     let (nonce, auth_tag, mut value): (u64, AuthTag, [u8; N]) =
-        sqlx::query("SELECT nonce, auth_tag, value FROM metadata_cyphertext WHERE name = ?")
+        sqlx::query("SELECT nonce, auth_tag, value FROM metadata_secret WHERE name = ?")
             .bind(id)
             .map(|row| {
                 let nonce: &[u8] = row.get(0);
@@ -136,7 +138,7 @@ async fn get_decrypted<const N: usize>(
     Ok(value)
 }
 
-async fn set_encrypted(id: &[u8], blob: &[u8], key: &SecretKey, pool: db::Pool) -> Result<()> {
+async fn set_secret(id: &[u8], blob: &[u8], key: &SecretKey, pool: db::Pool) -> Result<()> {
     let cryptor = Cryptor::ChaCha20Poly1305(key.clone());
 
     let salt = password_salt(pool.clone()).await?;
@@ -150,7 +152,7 @@ async fn set_encrypted(id: &[u8], blob: &[u8], key: &SecretKey, pool: db::Pool) 
     let auth_tag = cryptor.encrypt(nonce, aad.as_slice(), cypher.as_mut_slice())?;
 
     let result = sqlx::query(
-        "INSERT INTO metadata_cyphertext(name, nonce, auth_tag, value)
+        "INSERT INTO metadata_secret(name, nonce, auth_tag, value)
             VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING",
     )
     .bind(id)
@@ -221,10 +223,11 @@ mod tests {
 
         let key = SecretKey::random();
 
-        set_encrypted(b"hello", b"world", &key, pool.clone())
+        set_secret(b"hello", b"world", &key, pool.clone())
             .await
             .unwrap();
-        let v: [u8; 5] = get_decrypted(b"hello", &key, pool.clone()).await.unwrap();
+
+        let v: [u8; 5] = get_secret(b"hello", &key, pool.clone()).await.unwrap();
 
         assert_eq!(b"world", &v);
     }
