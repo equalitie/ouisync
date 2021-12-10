@@ -1,7 +1,7 @@
 use crate::{
+    crypto::{Cryptor, SecretKey, ScryptSalt},
     db,
     error::{Error, Result},
-    master_key::{MasterKey, Salt},
     repository::SecretRepositoryId,
 };
 use sqlx::Row;
@@ -24,15 +24,15 @@ pub(crate) async fn init(pool: &db::Pool) -> Result<(), Error> {
     Ok(())
 }
 
-async fn password_salt(db: db::Pool) -> Result<Salt> {
+async fn password_salt(db: db::Pool) -> Result<ScryptSalt> {
     let mut tx = db.begin().await?;
 
-    let salt: Result<Salt> = get_plaintext(PASSWORD_SALT, &mut tx).await;
+    let salt: Result<ScryptSalt> = get_plaintext(PASSWORD_SALT, &mut tx).await;
 
     let salt = match salt {
         Ok(salt) => salt,
         Err(Error::EntryNotFound) => {
-            let salt = MasterKey::generate_salt();
+            let salt = SecretKey::generate_scrypt_salt();
             set_plaintext(PASSWORD_SALT, &salt, &mut tx).await?;
             salt
         }
