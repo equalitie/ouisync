@@ -22,11 +22,7 @@ pub(crate) struct RootNode {
 
 impl RootNode {
     /// Returns the root node of the specified replica with the specified hash if it exists.
-    pub async fn load(
-        pool: &db::Pool,
-        writer_id: &PublicKey,
-        hash: &Hash,
-    ) -> Result<Option<Self>> {
+    pub async fn load(pool: &db::Pool, writer_id: &PublicKey, hash: &Hash) -> Result<Option<Self>> {
         sqlx::query(
             "SELECT
                  snapshot_id,

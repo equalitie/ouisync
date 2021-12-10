@@ -42,6 +42,8 @@ impl Keypair {
 }
 
 impl PublicKey {
+    pub const SIZE: usize = ext::PUBLIC_KEY_LENGTH;
+
     pub fn verify(&self, msg: &[u8], signature: &Signature) -> bool {
         self.0.verify(msg, &signature.0).is_ok()
     }
@@ -87,8 +89,13 @@ impl TryFrom<&'_ [u8]> for PublicKey {
     type Error = ext::SignatureError;
 
     fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
-        let pk = ext::PublicKey::from_bytes(bytes)?;
-        Ok(Self(pk))
+        Ok(Self(ext::PublicKey::from_bytes(bytes)?))
+    }
+}
+
+impl From<[u8; ext::PUBLIC_KEY_LENGTH]> for PublicKey {
+    fn from(bytes: [u8; ext::PUBLIC_KEY_LENGTH]) -> Self {
+        Self::try_from(bytes.as_ref()).unwrap()
     }
 }
 

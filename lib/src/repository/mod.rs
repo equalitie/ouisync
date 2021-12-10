@@ -13,8 +13,7 @@ use crate::{
     file::File,
     index::{self, BranchData, Index, Subscription},
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
-    metadata,
-    path,
+    metadata, path,
     scoped_task::{self, ScopedJoinHandle},
     store,
 };
