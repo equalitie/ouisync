@@ -1,5 +1,8 @@
+// TODO: Remove dead code once this is used
+#![allow(dead_code)]
+
 use crate::{
-    crypto::{Cryptor, SecretKey, ScryptSalt},
+    crypto::{AuthTag, Cryptor, ScryptSalt, SecretKey},
     db,
     error::{Error, Result},
     repository::SecretRepositoryId,
@@ -21,9 +24,24 @@ pub(crate) async fn init(pool: &db::Pool) -> Result<(), Error> {
     .await
     .map_err(Error::CreateDbSchema)?;
 
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS metadata_cyphertext (
+             name  BLOB NOT NULL PRIMARY KEY,
+             nonce BLOB NOT NULL,
+             auth_tag BLOB NOT NULL,
+             value BLOB NOT NULL
+         ) WITHOUT ROWID",
+    )
+    .execute(&*pool)
+    .await
+    .map_err(Error::CreateDbSchema)?;
+
     Ok(())
 }
 
+// -------------------------------------------------------------------
+// Salt
+// -------------------------------------------------------------------
 async fn password_salt(db: db::Pool) -> Result<ScryptSalt> {
     let mut tx = db.begin().await?;
 
@@ -84,5 +102,130 @@ async fn set_plaintext(id: &[u8], blob: &[u8], db: impl db::Executor<'_>) -> Res
         Ok(())
     } else {
         Err(Error::EntryExists)
+    }
+}
+
+async fn get_decrypted<const N: usize>(
+    id: &[u8],
+    key: &SecretKey,
+    db: db::Pool,
+) -> Result<[u8; N]> {
+    let (nonce, auth_tag, mut value): (u64, AuthTag, [u8; N]) =
+        sqlx::query("SELECT nonce, auth_tag, value FROM metadata_cyphertext WHERE name = ?")
+            .bind(id)
+            .map(|row| {
+                let nonce: &[u8] = row.get(0);
+                let auth_tag: &[u8] = row.get(1);
+                let value: &[u8] = row.get(2);
+                (
+                    u64::from_le_bytes(nonce.try_into().unwrap()),
+                    AuthTag::clone_from_slice(auth_tag),
+                    value.try_into().unwrap(),
+                )
+            })
+            .fetch_optional(&db.clone())
+            .await?
+            .ok_or(Error::EntryNotFound)?;
+
+    let salt = password_salt(db).await?;
+    let aad = associated_data_for_id(id, &salt);
+    let cryptor = Cryptor::ChaCha20Poly1305(key.clone());
+
+    cryptor.decrypt(nonce, aad.as_slice(), &mut value, &auth_tag)?;
+
+    Ok(value)
+}
+
+async fn set_encrypted(id: &[u8], blob: &[u8], key: &SecretKey, pool: db::Pool) -> Result<()> {
+    let cryptor = Cryptor::ChaCha20Poly1305(key.clone());
+
+    let salt = password_salt(pool.clone()).await?;
+
+    let mut tx = pool.begin().await?;
+
+    let nonce = make_nonce();
+    let aad = associated_data_for_id(id, &salt);
+
+    let mut cypher = blob.to_vec();
+    let auth_tag = cryptor.encrypt(nonce, aad.as_slice(), cypher.as_mut_slice())?;
+
+    let result = sqlx::query(
+        "INSERT INTO metadata_cyphertext(name, nonce, auth_tag, value)
+            VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING",
+    )
+    .bind(id)
+    .bind(&nonce.to_le_bytes()[..])
+    .bind(&*auth_tag)
+    .bind(&cypher)
+    .execute(&mut tx)
+    .await?;
+
+    if result.rows_affected() > 0 {
+        tx.commit().await?;
+        Ok(())
+    } else {
+        Err(Error::EntryExists)
+    }
+}
+
+fn associated_data_for_id(id: &[u8], salt: &ScryptSalt) -> Vec<u8> {
+    salt.iter().chain(id.iter()).cloned().collect::<Vec<_>>()
+}
+
+fn make_nonce() -> u64 {
+    // Random nonces should be OK given that we're not generating too many of them.
+    // But maybe consider using the mixed approach from this SO post?
+    // https://crypto.stackexchange.com/a/77986
+    use rand::Rng;
+    rand::rngs::OsRng.gen()
+}
+
+// -------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db;
+
+    async fn new_memory_db() -> db::Pool {
+        let pool = db::open(&db::Store::Memory).await.unwrap();
+        init(&pool).await.unwrap();
+        pool
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn store_plaintext() {
+        let pool = new_memory_db().await;
+
+        let repo_id = rand::random();
+        set_repository_id(&pool, &repo_id).await.unwrap();
+
+        let repo_id_ = get_repository_id(&pool).await.unwrap();
+
+        assert_eq!(repo_id, repo_id_);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn store_salt() {
+        let pool = new_memory_db().await;
+
+        let salt1 = password_salt(pool.clone()).await.unwrap();
+        let salt2 = password_salt(pool.clone()).await.unwrap();
+
+        assert_eq!(salt1, salt2);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn store_cyphertext() {
+        let pool = new_memory_db().await;
+
+        let key = SecretKey::random();
+
+        set_encrypted(b"hello", b"world", &key, pool.clone())
+            .await
+            .unwrap();
+        let v: [u8; 5] = get_decrypted(b"hello", &key, pool.clone()).await.unwrap();
+
+        assert_eq!(b"world", &v);
     }
 }

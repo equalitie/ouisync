@@ -69,7 +69,8 @@ impl SecretKey {
             salt,
             &Params::recommended(),
             result.as_array_mut(),
-        ).expect("failed to derive scrypt password");
+        )
+        .expect("failed to derive scrypt password");
         result
     }
 
