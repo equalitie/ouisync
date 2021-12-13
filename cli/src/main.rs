@@ -35,6 +35,16 @@ async fn main() -> Result<()> {
         )
         .await?;
 
+        if let Some(password) = options.password_for_repo(name) {
+            if let Err(e) = repo.unlock(password).await {
+                log::warn!(
+                    "failed to unlock the repository {:?} with the provided password: {:?}",
+                    name,
+                    e
+                );
+            }
+        }
+
         mount_repos.insert(name.as_str(), (repo, value));
     }
 

@@ -30,6 +30,10 @@ pub(crate) struct Options {
     #[structopt(short, long, value_name = "NAME:PATH")]
     pub mount: Vec<Named<PathBuf>>,
 
+    /// Password per repository.
+    #[structopt(long, value_name = "NAME:PASSWD")]
+    pub password: Vec<Named<String>>,
+
     /// Print share token for the named repository. Can be specified multiple times to share
     /// multiple repositories.
     #[structopt(long, value_name = "NAME")]
@@ -105,6 +109,15 @@ impl Options {
         } else {
             Ok(Store::File(self.repository_path(name)?))
         }
+    }
+
+    pub fn password_for_repo(&self, repo_name: &str) -> Option<&String> {
+        for Named { name, value } in &self.password {
+            if repo_name == name {
+                return Some(value);
+            }
+        }
+        return None;
     }
 }
 

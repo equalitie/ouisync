@@ -5,7 +5,7 @@ pub use self::id::{PublicRepositoryId, SecretRepositoryId};
 use crate::{
     block,
     branch::Branch,
-    crypto::{sign::PublicKey, Cryptor},
+    crypto::{sign::PublicKey, Cryptor, SecretKey},
     db,
     debug_printer::DebugPrinter,
     directory::{Directory, EntryType},
@@ -21,7 +21,10 @@ use camino::Utf8Path;
 use futures_util::{future, stream::FuturesUnordered, StreamExt};
 use log::Level;
 use std::{collections::HashMap, iter, sync::Arc};
-use tokio::{select, sync::Mutex};
+use tokio::{
+    select,
+    sync::{Mutex, RwLock},
+};
 
 pub struct Repository {
     shared: Arc<Shared>,
@@ -40,6 +43,7 @@ impl Repository {
         let index = Index::load(pool, this_writer_id).await?;
 
         let shared = Arc::new(Shared {
+            master_key: RwLock::new(None),
             index,
             cryptor,
             branches: Mutex::new(HashMap::new()),
@@ -55,6 +59,13 @@ impl Repository {
             shared,
             _merge_handle: merge_handle,
         })
+    }
+
+    pub async fn unlock(&self, password: &str) -> Result<()> {
+        let master_key = metadata::derive_master_key(password, self.db_pool()).await?;
+        let mut guard = self.shared.master_key.write().await;
+        *guard = Some(master_key);
+        Ok(())
     }
 
     /// Get the id of this repository or `Error::EntryNotFound` if no id was assigned yet.
@@ -376,6 +387,7 @@ pub(crate) async fn open_db(store: &db::Store) -> Result<db::Pool> {
 }
 
 struct Shared {
+    master_key: RwLock<Option<SecretKey>>,
     index: Index,
     cryptor: Cryptor,
     // Cache for `Branch` instances to make them persistent over the lifetime of the program.

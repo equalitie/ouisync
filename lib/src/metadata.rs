@@ -46,7 +46,7 @@ pub(crate) async fn init(pool: &db::Pool) -> Result<(), Error> {
 // -------------------------------------------------------------------
 // Salt
 // -------------------------------------------------------------------
-async fn password_salt(db: db::Pool) -> Result<ScryptSalt> {
+async fn password_salt(db: &db::Pool) -> Result<ScryptSalt> {
     let mut tx = db.begin().await?;
 
     let salt: Result<ScryptSalt> = get_public(PASSWORD_SALT, &mut tx).await;
@@ -64,6 +64,16 @@ async fn password_salt(db: db::Pool) -> Result<ScryptSalt> {
     tx.commit().await?;
 
     Ok(salt)
+}
+
+// -------------------------------------------------------------------
+// Master key
+// -------------------------------------------------------------------
+/// Derive the master key from the user provided password and the salt that is stored in the
+/// metadata_plaintext table.
+pub(crate) async fn derive_master_key(user_password: &str, db: &db::Pool) -> Result<SecretKey> {
+    let salt = password_salt(db).await?;
+    Ok(SecretKey::derive_scrypt(user_password, &salt))
 }
 
 // -------------------------------------------------------------------
@@ -125,11 +135,11 @@ async fn get_secret<const N: usize>(id: &[u8], key: &SecretKey, db: db::Pool) ->
                     value.try_into().unwrap(),
                 )
             })
-            .fetch_optional(&db.clone())
+            .fetch_optional(&db)
             .await?
             .ok_or(Error::EntryNotFound)?;
 
-    let salt = password_salt(db).await?;
+    let salt = password_salt(&db).await?;
     let aad = associated_data_for_id(id, &salt);
     let cryptor = Cryptor::ChaCha20Poly1305(key.clone());
 
@@ -141,7 +151,7 @@ async fn get_secret<const N: usize>(id: &[u8], key: &SecretKey, db: db::Pool) ->
 async fn set_secret(id: &[u8], blob: &[u8], key: &SecretKey, pool: db::Pool) -> Result<()> {
     let cryptor = Cryptor::ChaCha20Poly1305(key.clone());
 
-    let salt = password_salt(pool.clone()).await?;
+    let salt = password_salt(&pool).await?;
 
     let mut tx = pool.begin().await?;
 
@@ -211,8 +221,8 @@ mod tests {
     async fn store_salt() {
         let pool = new_memory_db().await;
 
-        let salt1 = password_salt(pool.clone()).await.unwrap();
-        let salt2 = password_salt(pool.clone()).await.unwrap();
+        let salt1 = password_salt(&pool).await.unwrap();
+        let salt2 = password_salt(&pool).await.unwrap();
 
         assert_eq!(salt1, salt2);
     }
