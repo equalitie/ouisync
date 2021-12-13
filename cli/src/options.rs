@@ -111,13 +111,11 @@ impl Options {
         }
     }
 
-    pub fn password_for_repo(&self, repo_name: &str) -> Option<&String> {
-        for Named { name, value } in &self.password {
-            if repo_name == name {
-                return Some(value);
-            }
-        }
-        return None;
+    pub fn password_for_repo(&self, repo_name: &str) -> Option<&str> {
+        self.password
+            .iter()
+            .find(|e| e.name == repo_name)
+            .map(|e| e.value.as_str())
     }
 }
 
