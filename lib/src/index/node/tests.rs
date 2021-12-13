@@ -14,15 +14,9 @@ async fn create_new_root_node() {
     let writer_id = rand::random();
     let hash = rand::random::<u64>().hash();
 
-    let node0 = RootNode::create(
-        &pool,
-        &writer_id,
-        VersionVector::new(),
-        hash,
-        Summary::FULL,
-    )
-    .await
-    .unwrap();
+    let node0 = RootNode::create(&pool, &writer_id, VersionVector::new(), hash, Summary::FULL)
+        .await
+        .unwrap();
     assert_eq!(node0.hash, hash);
 
     let node1 = RootNode::load_latest_or_create(&pool, &writer_id)
@@ -45,25 +39,13 @@ async fn create_existing_root_node() {
     let writer_id = rand::random();
     let hash = rand::random::<u64>().hash();
 
-    let node0 = RootNode::create(
-        &pool,
-        &writer_id,
-        VersionVector::new(),
-        hash,
-        Summary::FULL,
-    )
-    .await
-    .unwrap();
+    let node0 = RootNode::create(&pool, &writer_id, VersionVector::new(), hash, Summary::FULL)
+        .await
+        .unwrap();
 
-    let node1 = RootNode::create(
-        &pool,
-        &writer_id,
-        VersionVector::new(),
-        hash,
-        Summary::FULL,
-    )
-    .await
-    .unwrap();
+    let node1 = RootNode::create(&pool, &writer_id, VersionVector::new(), hash, Summary::FULL)
+        .await
+        .unwrap();
     assert_eq!(node0, node1);
 
     let nodes: Vec<_> = RootNode::load_all(&pool, &writer_id, 2)

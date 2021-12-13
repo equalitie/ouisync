@@ -72,6 +72,12 @@ impl TryFrom<&'_ [u8]> for SecretRepositoryId {
     }
 }
 
+impl From<[u8; PublicKey::SIZE]> for SecretRepositoryId {
+    fn from(bytes: [u8; PublicKey::SIZE]) -> Self {
+        Self(PublicKey::from(bytes))
+    }
+}
+
 /// Public repository id can be freely shared with anyone because it's impossible to extract the
 /// secret id out of it. It can also be used as the info hash for DHT lookups.
 #[repr(transparent)]

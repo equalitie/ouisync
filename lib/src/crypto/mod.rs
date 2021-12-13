@@ -4,7 +4,7 @@ pub mod sign;
 
 pub use self::{
     hash::{Hash, Hashable},
-    secret_key::SecretKey,
+    secret_key::{ScryptSalt, SecretKey},
 };
 /// Re-export the aead module for convenience.
 pub use chacha20poly1305::aead;

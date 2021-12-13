@@ -21,6 +21,7 @@ mod iterator;
 mod joint_directory;
 mod joint_entry;
 mod locator;
+mod metadata;
 mod network;
 mod path;
 mod repository;
