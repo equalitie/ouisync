@@ -1,3 +1,6 @@
+// From experience, this lint is almost never useful. Disabling it globally.
+#![allow(clippy::large_enum_variant)]
+
 #[macro_use]
 mod macros;
 

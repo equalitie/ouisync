@@ -227,13 +227,17 @@ mod tests {
         ws2.add_writer(&carol.public, &alice);
 
         for ws2_entry in ws2.entries() {
-            ws1.prepare_entry(ws2_entry.clone()).map(|e| e.insert());
+            if let Some(e) = ws1.prepare_entry(ws2_entry.clone()) {
+                e.insert()
+            }
         }
 
         assert!(ws1.is_writer(&carol.public));
 
         for ws1_entry in ws1.entries() {
-            ws2.prepare_entry(ws1_entry.clone()).map(|e| e.insert());
+            if let Some(e) = ws2.prepare_entry(ws1_entry.clone()) {
+                e.insert()
+            }
         }
     }
 

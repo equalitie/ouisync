@@ -6,12 +6,18 @@ pub use self::{
     hash::{Hash, Hashable},
     secret_key::{ScryptSalt, SecretKey},
 };
-/// Re-export the aead module for convenience.
 pub use chacha20poly1305::aead;
 
-use self::aead::{AeadInPlace, NewAead};
-use chacha20poly1305::{ChaCha20Poly1305, Nonce};
+use chacha20poly1305::aead::{AeadInPlace, NewAead};
+use chacha20poly1305::ChaCha20Poly1305;
 use generic_array::{sequence::GenericSequence, typenum::Unsigned};
+
+/// Nonce size
+pub const NONCE_SIZE: usize =
+    <<chacha20poly1305::Nonce as GenericSequence<_>>::Length as Unsigned>::USIZE;
+
+/// Nonce
+pub type Nonce = [u8; NONCE_SIZE];
 
 /// Authentication tag.
 pub type AuthTag = chacha20poly1305::Tag;
@@ -29,15 +35,14 @@ pub enum Cryptor {
 impl Cryptor {
     pub fn encrypt(
         &self,
-        nonce: u64,
+        nonce: Nonce,
         aad: &[u8],
         buffer: &mut [u8],
     ) -> Result<AuthTag, aead::Error> {
         match self {
             Self::ChaCha20Poly1305(key) => {
                 let cipher = ChaCha20Poly1305::new(key.as_array());
-                let nonce = make_nonce(nonce);
-                cipher.encrypt_in_place_detached(&nonce, aad, buffer)
+                cipher.encrypt_in_place_detached(&nonce.into(), aad, buffer)
             }
             Self::Null => Ok(AuthTag::default()),
         }
@@ -45,7 +50,7 @@ impl Cryptor {
 
     pub fn decrypt(
         &self,
-        nonce: u64,
+        nonce: Nonce,
         aad: &[u8],
         buffer: &mut [u8],
         auth_tag: &AuthTag,
@@ -53,8 +58,7 @@ impl Cryptor {
         match self {
             Self::ChaCha20Poly1305(key) => {
                 let cipher = ChaCha20Poly1305::new(key.as_array());
-                let nonce = make_nonce(nonce);
-                cipher.decrypt_in_place_detached(&nonce, aad, buffer, auth_tag)
+                cipher.decrypt_in_place_detached(&nonce.into(), aad, buffer, auth_tag)
             }
             Self::Null => Ok(()),
         }
@@ -68,12 +72,4 @@ impl Cryptor {
             Self::Null => Self::Null,
         }
     }
-}
-
-fn make_nonce(counter: u64) -> Nonce {
-    const LEN: usize = <<Nonce as GenericSequence<_>>::Length as Unsigned>::USIZE;
-
-    let mut nonce = Nonce::default();
-    nonce[LEN - 8..].copy_from_slice(&counter.to_be_bytes());
-    nonce
 }
