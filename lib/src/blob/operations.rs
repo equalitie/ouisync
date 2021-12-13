@@ -1,9 +1,8 @@
-use crate::blob::{Blob, Buffer, Core, Cursor, OpenBlock};
-
+use super::{Blob, BlobNonce, Buffer, Core, Cursor, OpenBlock, BLOB_NONCE_SIZE};
 use crate::{
     block::{self, BlockId, BLOCK_SIZE},
     branch::Branch,
-    crypto::{AuthTag, Cryptor},
+    crypto::{aead, AuthTag, Cryptor, Nonce, NONCE_SIZE},
     db,
     error::{Error, Result},
     index::BranchData,
@@ -11,8 +10,6 @@ use crate::{
 };
 use std::{convert::TryInto, io::SeekFrom, sync::Arc};
 use tokio::sync::Mutex;
-
-use super::{Nonce, NONCE_SIZE};
 
 pub(crate) struct Operations<'a> {
     core: &'a mut Core,
@@ -290,7 +287,7 @@ impl<'a> Operations<'a> {
         .await?;
         tx.commit().await?;
 
-        let nonce: Nonce = rand::random();
+        let nonce: BlobNonce = rand::random();
         let blob_key = self.core.branch.cryptor().derive_subkey(&nonce);
 
         *self.current_block = OpenBlock::new_head(self.core.head_locator, &nonce);
@@ -423,7 +420,7 @@ impl<'a> Operations<'a> {
 
         if self.current_block.locator.number() == 0 {
             let old_pos = self.current_block.content.pos;
-            self.current_block.content.pos = NONCE_SIZE;
+            self.current_block.content.pos = BLOB_NONCE_SIZE;
             self.current_block.content.write_u64(self.core.len);
             self.current_block.content.pos = old_pos;
             self.current_block.dirty = true;
@@ -439,7 +436,7 @@ impl<'a> Operations<'a> {
             .await?;
 
             let mut cursor = Cursor::new(buffer);
-            cursor.pos = NONCE_SIZE;
+            cursor.pos = BLOB_NONCE_SIZE;
             cursor.write_u64(self.core.len);
 
             write_block(
@@ -507,17 +504,24 @@ async fn read_block(
 ) -> Result<(BlockId, Buffer)> {
     let (id, mut buffer, auth_tag) = load_block(tx, branch, repo_key, locator).await?;
 
-    let counter = locator.number().into();
-    let aad = id.as_ref(); // "additional associated data"
+    let offset = if locator.number() == 0 {
+        BLOB_NONCE_SIZE
+    } else {
+        0
+    };
 
-    let offset = if counter == 0 { NONCE_SIZE } else { 0 };
-
-    blob_key.decrypt(counter, aad, &mut buffer[offset..], &auth_tag)?;
+    decrypt_block(
+        blob_key,
+        &id,
+        locator.number(),
+        &mut buffer[offset..],
+        &auth_tag,
+    )?;
 
     Ok((id, buffer))
 }
 
-pub(crate) async fn load_block(
+pub(super) async fn load_block(
     tx: &mut db::Transaction<'_>,
     branch: &BranchData,
     cryptor: &Cryptor,
@@ -539,12 +543,13 @@ async fn write_block(
     block_id: &BlockId,
     mut buffer: Buffer,
 ) -> Result<()> {
-    let counter = locator.number().into();
-    let aad = block_id.as_ref(); // "additional associated data"
+    let offset = if locator.number() == 0 {
+        BLOB_NONCE_SIZE
+    } else {
+        0
+    };
 
-    let offset = if counter == 0 { NONCE_SIZE } else { 0 };
-
-    let auth_tag = blob_key.encrypt(counter, aad, &mut buffer[offset..])?;
+    let auth_tag = encrypt_block(blob_key, block_id, locator.number(), &mut buffer[offset..])?;
 
     block::write(tx, block_id, &buffer, &auth_tag).await?;
     branch
@@ -552,4 +557,31 @@ async fn write_block(
         .await?;
 
     Ok(())
+}
+
+pub(super) fn decrypt_block(
+    blob_key: &Cryptor,
+    id: &BlockId,
+    block_number: u32,
+    content: &mut [u8],
+    auth_tag: &AuthTag,
+) -> Result<(), aead::Error> {
+    let block_key = blob_key.derive_subkey(id.as_ref());
+    block_key.decrypt(make_block_nonce(block_number), &[], content, auth_tag)
+}
+
+pub(super) fn encrypt_block(
+    blob_key: &Cryptor,
+    id: &BlockId,
+    block_number: u32,
+    content: &mut [u8],
+) -> Result<AuthTag, aead::Error> {
+    let block_key = blob_key.derive_subkey(id.as_ref());
+    block_key.encrypt(make_block_nonce(block_number), &[], content)
+}
+
+fn make_block_nonce(number: u32) -> Nonce {
+    let mut nonce = Nonce::default();
+    nonce[NONCE_SIZE - 4..].copy_from_slice(number.to_be_bytes().as_ref());
+    nonce
 }

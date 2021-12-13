@@ -2,7 +2,7 @@
 #![allow(dead_code)]
 
 use crate::{
-    crypto::{AuthTag, Cryptor, ScryptSalt, SecretKey},
+    crypto::{AuthTag, Cryptor, Nonce, ScryptSalt, SecretKey},
     db,
     error::{Error, Result},
     repository::SecretRepositoryId,
@@ -122,7 +122,7 @@ async fn set_public(id: &[u8], blob: &[u8], db: impl db::Executor<'_>) -> Result
 // Secret values
 // -------------------------------------------------------------------
 async fn get_secret<const N: usize>(id: &[u8], key: &SecretKey, db: db::Pool) -> Result<[u8; N]> {
-    let (nonce, auth_tag, mut value): (u64, AuthTag, [u8; N]) =
+    let (nonce, auth_tag, mut value): (Nonce, AuthTag, [u8; N]) =
         sqlx::query("SELECT nonce, auth_tag, value FROM metadata_secret WHERE name = ?")
             .bind(id)
             .map(|row| {
@@ -130,7 +130,7 @@ async fn get_secret<const N: usize>(id: &[u8], key: &SecretKey, db: db::Pool) ->
                 let auth_tag: &[u8] = row.get(1);
                 let value: &[u8] = row.get(2);
                 (
-                    u64::from_le_bytes(nonce.try_into().unwrap()),
+                    nonce.try_into().unwrap(),
                     AuthTag::clone_from_slice(auth_tag),
                     value.try_into().unwrap(),
                 )
@@ -166,7 +166,7 @@ async fn set_secret(id: &[u8], blob: &[u8], key: &SecretKey, pool: db::Pool) -> 
             VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING",
     )
     .bind(id)
-    .bind(&nonce.to_le_bytes()[..])
+    .bind(&nonce[..])
     .bind(&*auth_tag)
     .bind(&cypher)
     .execute(&mut tx)
@@ -184,12 +184,11 @@ fn associated_data_for_id(id: &[u8], salt: &ScryptSalt) -> Vec<u8> {
     salt.iter().chain(id.iter()).cloned().collect::<Vec<_>>()
 }
 
-fn make_nonce() -> u64 {
+fn make_nonce() -> Nonce {
     // Random nonces should be OK given that we're not generating too many of them.
     // But maybe consider using the mixed approach from this SO post?
     // https://crypto.stackexchange.com/a/77986
-    use rand::Rng;
-    rand::rngs::OsRng.gen()
+    rand::random()
 }
 
 // -------------------------------------------------------------------

@@ -187,6 +187,7 @@ where
     // only once.
 
     for i in 0..ATTEMPTS {
+        #[allow(clippy::redundant_closure)] // false positive
         match panic::catch_unwind(AssertUnwindSafe(|| f())) {
             Ok(()) => return,
             Err(payload) => {

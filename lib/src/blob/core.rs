@@ -1,6 +1,6 @@
 use super::{
-    operations::{load_block, Operations},
-    Cursor, Nonce, OpenBlock, NONCE_SIZE,
+    operations::{self, Operations},
+    BlobNonce, Cursor, OpenBlock, BLOB_NONCE_SIZE,
 };
 use crate::{
     block::BlockId, branch::Branch, crypto::Cryptor, error::Result, locator::Locator, Error,
@@ -20,7 +20,7 @@ impl Core {
         // No need to commit this as we are only reading here.
         let mut tx = self.branch.db_pool().begin().await?;
 
-        match load_block(
+        match operations::load_block(
             &mut tx,
             self.branch.data(),
             self.branch.cryptor(),
@@ -32,8 +32,7 @@ impl Core {
                 let mut content = Cursor::new(buffer);
                 content.pos = self.header_size();
 
-                self.blob_key
-                    .decrypt(0, id.as_ref(), &mut content, &auth_tag)?;
+                operations::decrypt_block(&self.blob_key, &id, 0, &mut content, &auth_tag)?;
 
                 Ok(OpenBlock {
                     locator: self.head_locator,
@@ -46,7 +45,7 @@ impl Core {
                 // create a new block but we need to also generate new blob key because we no longer
                 // have the original nonce.
 
-                let nonce: Nonce = rand::random();
+                let nonce: BlobNonce = rand::random();
                 self.blob_key = self.branch.cryptor().derive_subkey(&nonce);
 
                 Ok(OpenBlock::new_head(self.head_locator, &nonce))
@@ -74,7 +73,7 @@ impl Core {
     }
 
     pub fn header_size(&self) -> usize {
-        NONCE_SIZE + mem::size_of_val(&self.len)
+        BLOB_NONCE_SIZE + mem::size_of_val(&self.len)
     }
 }
 
