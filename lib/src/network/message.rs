@@ -29,7 +29,7 @@ pub(crate) enum Response {
     RootNode {
         cookie: u64,
         writer_id: PublicKey,
-        versions: VersionVector,
+        version_vector: VersionVector,
         hash: Hash,
         summary: Summary,
     },
@@ -59,14 +59,14 @@ impl fmt::Debug for Response {
             Self::RootNode {
                 cookie,
                 writer_id,
-                versions,
+                version_vector,
                 hash,
                 summary,
             } => f
                 .debug_struct("RootNode")
                 .field("cookie", cookie)
                 .field("writer_id", writer_id)
-                .field("versions", versions)
+                .field("version_vector", version_vector)
                 .field("hash", hash)
                 .field("summary", summary)
                 .finish(),
@@ -85,7 +85,10 @@ impl fmt::Debug for Response {
                 .field("parent", parent_hash)
                 .field("nodes", nodes)
                 .finish(),
-            Self::Block { id, .. } => write!(f, "Block {{ id: {:?}, .. }}", id),
+            Self::Block { id, .. } => f
+                .debug_struct("Block")
+                .field("id", id)
+                .finish_non_exhaustive(),
         }
     }
 }

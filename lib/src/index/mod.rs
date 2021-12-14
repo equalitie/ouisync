@@ -254,15 +254,30 @@ impl Index {
     async fn update_summaries(&self, hash: Hash, layer: usize) -> Result<bool> {
         let statuses = node::update_summaries(&self.pool, hash, layer).await?;
 
+        let branches = self.branches().await;
+        let mut cx = self.pool.acquire().await?;
+
+        // Reload cached root nodes of the branches whose completion status changed.
+        for (id, status) in &statuses {
+            if status.did_change() {
+                if let Some(branch) = branches.get(id) {
+                    branch.reload_root(&mut cx).await?;
+                }
+            }
+        }
+
+        drop(cx);
+        drop(branches);
+
         // Find the replicas whose current snapshots became complete by this update.
-        let writer_ids: Vec<_> = statuses
+        let completed: Vec<_> = statuses
             .iter()
             .filter(|(_, status)| status.did_complete())
             .map(|(id, _)| *id)
             .collect();
 
         // Then notify them.
-        self.notify_branches_changed(&writer_ids).await;
+        self.notify_branches_changed(&completed).await;
 
         Ok(statuses.iter().any(|(_, status)| status.is_complete))
     }

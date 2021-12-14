@@ -1,8 +1,3 @@
-// This is temporary to avoid lint errors when INNER_LAYER_COUNT = 0
-#![allow(clippy::reversed_empty_ranges)]
-#![allow(clippy::absurd_extreme_comparisons)]
-#![allow(arithmetic_overflow)]
-
 use super::{
     node::{InnerNode, LeafNode, RootNode, INNER_LAYER_COUNT},
     path::Path,
@@ -64,6 +59,11 @@ impl BranchData {
             .await
             .update_version_vector(tx, version_vector_override)
             .await
+    }
+
+    /// Is the latest snapshot of this branch complete?
+    pub async fn is_complete(&self) -> bool {
+        self.root_node.read().await.summary.is_complete()
     }
 
     /// Inserts a new block into the index.
@@ -135,6 +135,10 @@ impl BranchData {
         }
 
         self.replace_root(tx, &mut old_root, new_root).await
+    }
+
+    pub async fn reload_root(&self, db: &mut db::Connection) -> Result<()> {
+        self.root_node.write().await.reload(db).await
     }
 
     async fn get_path(

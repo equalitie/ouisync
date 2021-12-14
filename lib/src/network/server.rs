@@ -97,7 +97,7 @@ impl Server {
                     .send(Response::RootNode {
                         cookie: self.cookie,
                         writer_id: self.index.this_writer_id,
-                        versions: node.versions,
+                        version_vector: node.versions,
                         hash: node.hash,
                         summary: node.summary,
                     })

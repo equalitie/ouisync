@@ -3,7 +3,10 @@ use sqlx::{
     encode::IsNull,
     error::BoxDynError,
     pool::PoolOptions,
-    sqlite::{Sqlite, SqliteArgumentValue, SqliteConnectOptions, SqliteTypeInfo, SqliteValueRef},
+    sqlite::{
+        Sqlite, SqliteArgumentValue, SqliteConnectOptions, SqliteConnection, SqliteTypeInfo,
+        SqliteValueRef,
+    },
     Decode, Encode, SqlitePool, Type,
 };
 use std::{convert::Infallible, path::PathBuf, str::FromStr};
@@ -11,6 +14,9 @@ use tokio::fs;
 
 /// Database connection pool.
 pub type Pool = SqlitePool;
+
+/// Database connection.
+pub type Connection = SqliteConnection;
 
 /// Database transaction
 pub type Transaction<'a> = sqlx::Transaction<'a, Sqlite>;

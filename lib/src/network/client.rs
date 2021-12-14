@@ -31,6 +31,12 @@ impl Client {
     }
 
     pub async fn run(&mut self) -> Result<()> {
+        // branch_statuses: HashMap<PublicKey, bool>,
+        // for branch in self.index.branches().await.all() {
+        //     let complete = branch.is_complete().await;
+        //     self.branch_statuses.insert(*branch.id(), complete);
+        // }
+
         let index_closed = self.index.subscribe().closed();
         pin!(index_closed);
 
@@ -65,11 +71,11 @@ impl Client {
             Response::RootNode {
                 cookie,
                 writer_id,
-                versions,
+                version_vector,
                 hash,
                 summary,
             } => {
-                self.handle_root_node(cookie, writer_id, versions, hash, summary)
+                self.handle_root_node(cookie, writer_id, version_vector, hash, summary)
                     .await
             }
             Response::InnerNodes {

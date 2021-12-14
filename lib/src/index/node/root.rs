@@ -248,16 +248,15 @@ impl RootNode {
         Ok(())
     }
 
-    /// Reload this root node from the db. Currently used only in tests.
-    #[cfg(test)]
-    pub async fn reload(&mut self, pool: &db::Pool) -> Result<()> {
+    /// Reload this root node from the db.
+    pub async fn reload(&mut self, db: impl db::Executor<'_>) -> Result<()> {
         let row = sqlx::query(
             "SELECT is_complete, missing_blocks_count, missing_blocks_checksum
              FROM snapshot_root_nodes
              WHERE snapshot_id = ?",
         )
         .bind(self.snapshot_id)
-        .fetch_one(pool)
+        .fetch_one(db)
         .await?;
 
         self.summary.is_complete = row.get(0);
