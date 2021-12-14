@@ -7,6 +7,7 @@ use crate::{
     error::Result,
     index::{self, Index},
 };
+use sqlx::Acquire;
 
 /// Write a block received from a remote replica to the block store. The block must already be
 /// referenced by the index, otherwise an `BlockNotReferenced` error is returned.
@@ -16,13 +17,21 @@ pub(crate) async fn write_received_block(
     content: &[u8],
     auth_tag: &AuthTag,
 ) -> Result<()> {
-    let mut tx = index.pool.begin().await?;
+    let mut cx = index.pool.acquire().await?;
+    let mut tx = cx.begin().await?;
 
     let writer_ids = index::receive_block(&mut tx, id).await?;
     block::write(&mut tx, id, content, auth_tag).await?;
     tx.commit().await?;
 
-    index.notify_branches_changed(&writer_ids).await;
+    let branches = index.branches().await;
+
+    for writer_id in &writer_ids {
+        if let Some(branch) = branches.get(writer_id) {
+            branch.reload_root(&mut cx).await?;
+            branch.notify_changed();
+        }
+    }
 
     Ok(())
 }

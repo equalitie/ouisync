@@ -41,9 +41,9 @@ impl BranchData {
         &self.writer_id
     }
 
-    /// Returns the root version vector of this branch.
-    pub async fn root_version_vector(&self) -> RwLockReadGuard<'_, VersionVector> {
-        RwLockReadGuard::map(self.root_node.read().await, |root| &root.versions)
+    /// Returns the root node of the latest snapshot of this branch.
+    pub async fn root(&self) -> RwLockReadGuard<'_, RootNode> {
+        self.root_node.read().await
     }
 
     /// Update the root version vector of this branch.
@@ -59,11 +59,6 @@ impl BranchData {
             .await
             .update_version_vector(tx, version_vector_override)
             .await
-    }
-
-    /// Is the latest snapshot of this branch complete?
-    pub async fn is_complete(&self) -> bool {
-        self.root_node.read().await.summary.is_complete()
     }
 
     /// Inserts a new block into the index.
@@ -117,7 +112,7 @@ impl BranchData {
     }
 
     /// Trigger a notification event from this branch.
-    pub(super) fn notify_changed(&self) {
+    pub fn notify_changed(&self) {
         self.changed_tx.send(()).unwrap_or(())
     }
 
@@ -207,7 +202,10 @@ impl BranchData {
         new_root: RootNode,
     ) -> Result<()> {
         let old_root = mem::replace(old_root, new_root);
+
+        // TODO: remove only if new_root is complete
         old_root.remove_recursive(tx).await?;
+
         self.notify_changed();
         Ok(())
     }
