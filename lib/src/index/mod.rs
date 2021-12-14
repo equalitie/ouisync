@@ -408,13 +408,14 @@ impl Subscription {
     /// If one is interested only in the close notification, it's more efficient to use
     /// [`Self::closed`].
     pub async fn recv(&mut self) -> Option<PublicKey> {
-        if self.version == 0 {
-            // First subscribe to the branches that already existed before this subscription was
-            // created.
-            self.subscribe_to_recent().await;
-        }
+        loop {
+            if !*self.index_rx.borrow() {
+                return None;
+            }
 
-        while *self.index_rx.borrow() {
+            // Subscribe to the branches that were created before calling this funciton.
+            self.subscribe_to_recent().await;
+
             select! {
                 id = select_branch_changed(&mut self.branch_rxs), if !self.branch_rxs.is_empty() => {
                     if let Some(id) = id {
@@ -422,16 +423,12 @@ impl Subscription {
                     }
                 },
                 result = self.index_rx.changed() => {
-                    if result.is_ok() {
-                        self.subscribe_to_recent().await;
-                    } else {
-                        break;
+                    if result.is_err() {
+                        return None;
                     }
                 }
             }
         }
-
-        None
     }
 
     /// Completes when the index gets closed, either by callig [`Index::close`] or when the last
