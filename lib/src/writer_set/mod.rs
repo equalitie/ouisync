@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 pub mod error;
 pub mod store;
 
@@ -56,6 +54,7 @@ impl WriterSet {
         self.entries.values().any(|e| &e.writer == w)
     }
 
+    #[allow(unused)] // TODO: remove when this is actually used
     pub fn add_writer(&mut self, writer: &PublicKey, added_by: &Keypair) -> Option<Entry> {
         self.make_entry(writer, added_by).map(|e| {
             self.entries.insert(e.hash, e.clone());
@@ -142,6 +141,7 @@ impl Entry {
         }
     }
 
+    #[allow(unused)] // TODO: remove when this is actually used
     pub fn is_valid(&self) -> bool {
         // This ensures hash is valid as well.
         self.has_valid_signature()

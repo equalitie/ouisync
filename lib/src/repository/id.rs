@@ -16,6 +16,8 @@ pub struct SecretRepositoryId(PublicKey);
 derive_sqlx_traits_for_byte_array_wrapper!(SecretRepositoryId);
 
 impl SecretRepositoryId {
+    pub const SIZE: usize = PublicKey::SIZE;
+
     /// Obtain the public id corresponding to this secret id.
     pub fn public(&self) -> PublicRepositoryId {
         // Calculate the info hash by hashing the id with SHA3-256 and taking the first 20 bytes.

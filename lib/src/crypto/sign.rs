@@ -6,6 +6,7 @@ use rand::{rngs::OsRng, Rng};
 use serde;
 use std::cmp::Ordering;
 use std::{fmt, str::FromStr};
+use zeroize::Zeroize;
 
 #[derive(PartialEq, Eq, Clone, Copy, serde::Deserialize, serde::Serialize)]
 pub struct PublicKey(ext::PublicKey);
@@ -26,18 +27,21 @@ impl Keypair {
         // https://stackoverflow.com/questions/65562447/the-trait-rand-corecryptorng-is-not-implemented-for-osrng
         // https://github.com/dalek-cryptography/ed25519-dalek/issues/162
         let mut bytes = [0u8; ext::SECRET_KEY_LENGTH];
-        OsRng {}.fill(&mut bytes[..]);
+        OsRng.fill(&mut bytes[..]);
+        // The unwrap is ok because `bytes` has the correct length.
         let sk = ext::SecretKey::from_bytes(&bytes).unwrap();
-        let pk = (&sk).into();
-        Keypair {
+        let pk = ext::PublicKey::from(&sk);
+
+        bytes.zeroize();
+
+        Self {
             secret: SecretKey(sk),
             public: PublicKey(pk),
         }
     }
 
     pub fn sign(&self, msg: &[u8]) -> Signature {
-        let expanded: ext::ExpandedSecretKey = (&self.secret.0).into();
-        Signature(expanded.sign(msg, &self.public.0))
+        self.secret.sign(msg, &self.public)
     }
 }
 
@@ -99,6 +103,12 @@ impl From<[u8; ext::PUBLIC_KEY_LENGTH]> for PublicKey {
     }
 }
 
+impl<'a> From<&'a SecretKey> for PublicKey {
+    fn from(sk: &'a SecretKey) -> Self {
+        Self((&sk.0).into())
+    }
+}
+
 impl fmt::Display for PublicKey {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{:x}", self)
@@ -133,6 +143,19 @@ impl rand::distributions::Distribution<PublicKey> for rand::distributions::Stand
 
 derive_sqlx_traits_for_byte_array_wrapper!(PublicKey);
 
+impl SecretKey {
+    pub fn sign(&self, msg: &[u8], public_key: &PublicKey) -> Signature {
+        let expanded: ext::ExpandedSecretKey = (&self.0).into();
+        Signature(expanded.sign(msg, &public_key.0))
+    }
+}
+
+impl fmt::Debug for SecretKey {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "SecretKey(****)")
+    }
+}
+
 impl AsRef<[u8]> for Signature {
     fn as_ref(&self) -> &[u8] {
         self.0.as_ref()
@@ -145,6 +168,12 @@ impl TryFrom<&'_ [u8]> for Signature {
     fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
         let sig = ext::Signature::from_bytes(bytes)?;
         Ok(Signature(sig))
+    }
+}
+
+impl fmt::Debug for Signature {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Signature(_)")
     }
 }
 
