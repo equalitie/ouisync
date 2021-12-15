@@ -139,11 +139,9 @@ async fn get_secret<const N: usize>(id: &[u8], key: &SecretKey, db: db::Pool) ->
             .await?
             .ok_or(Error::EntryNotFound)?;
 
-    let salt = password_salt(&db).await?;
-    let aad = associated_data_for_id(id, &salt);
     let cryptor = Cryptor::ChaCha20Poly1305(key.clone());
 
-    cryptor.decrypt(nonce, aad.as_slice(), &mut value, &auth_tag)?;
+    cryptor.decrypt(nonce, id, &mut value, &auth_tag)?;
 
     Ok(value)
 }
@@ -151,15 +149,12 @@ async fn get_secret<const N: usize>(id: &[u8], key: &SecretKey, db: db::Pool) ->
 async fn set_secret(id: &[u8], blob: &[u8], key: &SecretKey, pool: db::Pool) -> Result<()> {
     let cryptor = Cryptor::ChaCha20Poly1305(key.clone());
 
-    let salt = password_salt(&pool).await?;
-
     let mut tx = pool.begin().await?;
 
     let nonce = make_nonce();
-    let aad = associated_data_for_id(id, &salt);
 
     let mut cypher = blob.to_vec();
-    let auth_tag = cryptor.encrypt(nonce, aad.as_slice(), cypher.as_mut_slice())?;
+    let auth_tag = cryptor.encrypt(nonce, id, cypher.as_mut_slice())?;
 
     let result = sqlx::query(
         "INSERT INTO metadata_secret(name, nonce, auth_tag, value)
@@ -178,10 +173,6 @@ async fn set_secret(id: &[u8], blob: &[u8], key: &SecretKey, pool: db::Pool) -> 
     } else {
         Err(Error::EntryExists)
     }
-}
-
-fn associated_data_for_id(id: &[u8], salt: &ScryptSalt) -> Vec<u8> {
-    salt.iter().chain(id.iter()).cloned().collect::<Vec<_>>()
 }
 
 fn make_nonce() -> Nonce {
