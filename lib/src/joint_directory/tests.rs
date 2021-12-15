@@ -823,10 +823,14 @@ async fn setup_with_rng(rng: StdRng, branch_count: usize) -> Vec<Branch> {
     let pool = &pool;
 
     let ids = rng.sample_iter(Standard).take(branch_count);
+    let (notify_tx, _) = async_broadcast::broadcast(1);
 
-    future::join_all(ids.map(|id| async move {
-        let data = BranchData::new(pool, id).await.unwrap();
-        Branch::new(pool.clone(), Arc::new(data), Cryptor::Null)
+    future::join_all(ids.map(|id| {
+        let notify_tx = notify_tx.clone();
+        async move {
+            let data = BranchData::new(pool, id, notify_tx).await.unwrap();
+            Branch::new(pool.clone(), Arc::new(data), Cryptor::Null)
+        }
     }))
     .await
 }

@@ -650,6 +650,9 @@ async fn setup_multiple<const N: usize>() -> [Branch; N] {
 }
 
 async fn create_branch(pool: db::Pool) -> Branch {
-    let branch_data = BranchData::new(&pool, rand::random()).await.unwrap();
+    let (notify_tx, _) = async_broadcast::broadcast(1);
+    let branch_data = BranchData::new(&pool, rand::random(), notify_tx)
+        .await
+        .unwrap();
     Branch::new(pool, Arc::new(branch_data), Cryptor::Null)
 }

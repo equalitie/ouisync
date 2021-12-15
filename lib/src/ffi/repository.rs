@@ -121,8 +121,7 @@ pub unsafe extern "C" fn repository_subscribe(
     let mut rx = holder.repository.subscribe();
 
     let handle = session.runtime().spawn(async move {
-        loop {
-            rx.recv().await;
+        while rx.recv().await.is_ok() {
             sender.send(port, ());
         }
     });

@@ -11,7 +11,7 @@ use crate::{
     directory::{Directory, EntryType},
     error::{Error, Result},
     file::File,
-    index::{self, BranchData, Index, Subscription},
+    index::{self, BranchData, Index},
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     metadata, path,
     scoped_task::{self, ScopedJoinHandle},
@@ -291,7 +291,7 @@ impl Repository {
     }
 
     /// Subscribe to change notification from all current and future branches.
-    pub(crate) fn subscribe(&self) -> Subscription {
+    pub(crate) fn subscribe(&self) -> async_broadcast::Receiver<PublicKey> {
         self.shared.index.subscribe()
     }
 
@@ -450,7 +450,7 @@ impl Merger {
         loop {
             select! {
                 branch_id = rx.recv() => {
-                    if let Some(branch_id) = branch_id {
+                    if let Ok(branch_id) = branch_id {
                         self.handle_branch_changed(branch_id).await
                     } else {
                         break;
@@ -602,7 +602,7 @@ mod tests {
         file.write(b"hello").await.unwrap();
         file.flush().await.unwrap();
 
-        let mut rx = local_branch.data().subscribe();
+        let mut rx = repo.subscribe();
 
         loop {
             match local_root
@@ -627,7 +627,7 @@ mod tests {
                 Err(error) => panic!("unexpected error: {:?}", error),
             }
 
-            rx.changed().await.unwrap()
+            rx.recv().await.unwrap();
         }
     }
 

@@ -29,7 +29,7 @@ pub(crate) async fn write_received_block(
     for writer_id in &writer_ids {
         if let Some(branch) = branches.get(writer_id) {
             branch.reload_root(&mut cx).await?;
-            branch.notify_changed();
+            branch.notify().await;
         }
     }
 
@@ -72,9 +72,14 @@ mod tests {
         super::init(&pool).await.unwrap();
 
         let cryptor = Cryptor::Null;
+        let (notify_tx, _) = async_broadcast::broadcast(1);
 
-        let branch0 = BranchData::new(&pool, rand::random()).await.unwrap();
-        let branch1 = BranchData::new(&pool, rand::random()).await.unwrap();
+        let branch0 = BranchData::new(&pool, rand::random(), notify_tx.clone())
+            .await
+            .unwrap();
+        let branch1 = BranchData::new(&pool, rand::random(), notify_tx)
+            .await
+            .unwrap();
 
         let block_id = rand::random();
         let buffer = vec![0; BLOCK_SIZE];

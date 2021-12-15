@@ -19,6 +19,15 @@ use tokio::{select, sync::mpsc, time};
 
 const TIMEOUT: Duration = Duration::from_secs(30);
 
+#[tokio::test(flavor = "multi_thread")]
+async fn debug() {
+    env_logger::builder()
+        .format_timestamp(None)
+        .format_target(false)
+        .init();
+    transfer_snapshot_between_two_replicas_case(0, 0, 1, 0).await
+}
+
 // Test complete transfer of one snapshot from one replica to another
 // Also test a new snapshot transfer is performed after every local branch
 // change.
@@ -186,7 +195,7 @@ async fn wait_until_snapshots_in_sync(server_index: &Index, client_index: &Index
             }
         }
 
-        rx.recv().await;
+        rx.recv().await.unwrap();
     }
 }
 
@@ -194,7 +203,7 @@ async fn wait_until_block_exists(index: &Index, block_id: &BlockId) {
     let mut rx = index.subscribe();
 
     while !block::exists(&index.pool, block_id).await.unwrap() {
-        rx.recv().await;
+        rx.recv().await.unwrap();
     }
 }
 

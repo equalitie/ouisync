@@ -23,6 +23,18 @@ impl Server {
     pub async fn run(&mut self) -> Result<()> {
         let mut subscription = self.index.subscribe();
 
+        // send initial branches
+        let branch_ids: Vec<_> = self
+            .index
+            .branches()
+            .await
+            .all()
+            .map(|branch| *branch.id())
+            .collect();
+        for branch_id in branch_ids {
+            self.handle_branch_changed(branch_id).await?;
+        }
+
         loop {
             select! {
                 request = self.stream.recv() => {
@@ -35,7 +47,7 @@ impl Server {
                     self.handle_request(request).await?
                 }
                 branch_id = subscription.recv() => {
-                    let branch_id = if let Some(branch_id) = branch_id {
+                    let branch_id = if let Ok(branch_id) = branch_id {
                         branch_id
                     } else {
                         break;

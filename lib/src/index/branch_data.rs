@@ -1,4 +1,5 @@
 use super::{
+    broadcast,
     node::{InnerNode, LeafNode, RootNode, INNER_LAYER_COUNT},
     path::Path,
 };
@@ -10,29 +11,35 @@ use crate::{
     version_vector::VersionVector,
 };
 use std::mem;
-use tokio::sync::{watch, RwLock, RwLockReadGuard};
+use tokio::sync::{RwLock, RwLockReadGuard};
 
 type LocatorHash = Hash;
 
 pub(crate) struct BranchData {
     writer_id: PublicKey,
     root_node: RwLock<RootNode>,
-    changed_tx: watch::Sender<()>,
+    notify_tx: async_broadcast::Sender<PublicKey>,
 }
 
 impl BranchData {
-    pub async fn new(pool: &db::Pool, writer_id: PublicKey) -> Result<Self> {
+    pub async fn new(
+        pool: &db::Pool,
+        writer_id: PublicKey,
+        notify_tx: async_broadcast::Sender<PublicKey>,
+    ) -> Result<Self> {
         let root_node = RootNode::load_latest_or_create(pool, &writer_id).await?;
-        Ok(Self::with_root_node(writer_id, root_node))
+        Ok(Self::with_root_node(writer_id, root_node, notify_tx))
     }
 
-    pub fn with_root_node(writer_id: PublicKey, root_node: RootNode) -> Self {
-        let (changed_tx, _) = watch::channel(());
-
+    pub fn with_root_node(
+        writer_id: PublicKey,
+        root_node: RootNode,
+        notify_tx: async_broadcast::Sender<PublicKey>,
+    ) -> Self {
         Self {
             writer_id,
             root_node: RwLock::new(root_node),
-            changed_tx,
+            notify_tx,
         }
     }
 
@@ -105,15 +112,9 @@ impl BranchData {
         self.write_path(tx, &mut lock, &path).await
     }
 
-    /// Subscribe to notifications of changes in this branch. A notification is emitted every time
-    /// a new snapshot of this branch is created or a previously missing block is downloaded.
-    pub fn subscribe(&self) -> watch::Receiver<()> {
-        self.changed_tx.subscribe()
-    }
-
     /// Trigger a notification event from this branch.
-    pub fn notify_changed(&self) {
-        self.changed_tx.send(()).unwrap_or(())
+    pub async fn notify(&self) {
+        broadcast(&self.notify_tx, self.writer_id).await
     }
 
     /// Update the root node of this branch. Does nothing if the version of `new_root` is not
@@ -206,7 +207,7 @@ impl BranchData {
         // TODO: remove only if new_root is complete
         old_root.remove_recursive(tx).await?;
 
-        self.notify_changed();
+        self.notify().await;
         Ok(())
     }
 }
@@ -219,8 +220,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn insert_and_read() {
-        let pool = init_db().await;
-        let branch = BranchData::new(&pool, rand::random()).await.unwrap();
+        let (pool, branch) = setup().await;
 
         let block_id = rand::random();
         let locator = random_head_locator();
@@ -241,8 +241,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn rewrite_locator() {
         for _ in 0..32 {
-            let pool = init_db().await;
-            let branch = BranchData::new(&pool, rand::random()).await.unwrap();
+            let (pool, branch) = setup().await;
 
             let b1 = rand::random();
             let b2 = rand::random();
@@ -268,8 +267,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn remove_locator() {
-        let pool = init_db().await;
-        let branch = BranchData::new(&pool, rand::random()).await.unwrap();
+        let (pool, branch) = setup().await;
 
         let b = rand::random();
         let locator = random_head_locator();
@@ -319,6 +317,16 @@ mod tests {
         let pool = db::Pool::connect(":memory:").await.unwrap();
         index::init(&pool).await.unwrap();
         pool
+    }
+
+    async fn setup() -> (db::Pool, BranchData) {
+        let pool = init_db().await;
+        let (notify_tx, _) = async_broadcast::broadcast(1);
+        let branch = BranchData::new(&pool, rand::random(), notify_tx)
+            .await
+            .unwrap();
+
+        (pool, branch)
     }
 
     fn random_head_locator() -> Locator {

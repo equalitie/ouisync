@@ -431,8 +431,9 @@ async fn fork_case(
 ) {
     let (mut rng, src_branch) = setup(rng_seed).await;
 
+    let (notify_tx, _) = async_broadcast::broadcast(1);
     let dst_branch = Arc::new(
-        BranchData::new(src_branch.db_pool(), rng.gen())
+        BranchData::new(src_branch.db_pool(), rng.gen(), notify_tx)
             .await
             .unwrap(),
     );
@@ -497,7 +498,8 @@ async fn setup(rng_seed: u64) -> (StdRng, Branch) {
     let cryptor = Cryptor::ChaCha20Poly1305(secret_key);
     let pool = repository::open_db(&db::Store::Memory).await.unwrap();
 
-    let branch = BranchData::new(&pool, rng.gen()).await.unwrap();
+    let (notify_tx, _) = async_broadcast::broadcast(1);
+    let branch = BranchData::new(&pool, rng.gen(), notify_tx).await.unwrap();
     let branch = Branch::new(pool, Arc::new(branch), cryptor);
 
     (rng, branch)
