@@ -19,15 +19,6 @@ use tokio::{select, sync::mpsc, time};
 
 const TIMEOUT: Duration = Duration::from_secs(30);
 
-#[tokio::test(flavor = "multi_thread")]
-async fn debug() {
-    env_logger::builder()
-        .format_timestamp(None)
-        .format_target(false)
-        .init();
-    transfer_snapshot_between_two_replicas_case(0, 0, 1, 0).await
-}
-
 // Test complete transfer of one snapshot from one replica to another
 // Also test a new snapshot transfer is performed after every local branch
 // change.
