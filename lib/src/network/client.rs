@@ -10,66 +10,34 @@ use crate::{
     store,
     version_vector::VersionVector,
 };
-use tokio::{pin, select};
 
 pub(crate) struct Client {
     index: Index,
     stream: ClientStream,
-    // "Cookie" number of the last received `RootNode` response or zero if we haven't received one
-    // yet. To be included in the next sent `RootNode` request. The server uses this to decide
-    // whether the client is up to date.
-    cookie: u64,
 }
 
 impl Client {
     pub fn new(index: Index, stream: ClientStream) -> Self {
-        Self {
-            index,
-            stream,
-            cookie: 0,
-        }
+        Self { index, stream }
     }
 
     pub async fn run(&mut self) -> Result<()> {
-        let index_closed = self.index.subscribe().closed();
-        pin!(index_closed);
-
-        loop {
-            self.stream
-                .send(Request::RootNode {
-                    cookie: self.cookie,
-                })
-                .await;
-
-            loop {
-                // TODO: add a timeout here and send the request again if it expires before we
-                // receive a response.
-                select! {
-                    response = self.stream.recv() => {
-                        if let Some(response) = response {
-                            if self.handle_response(response).await? {
-                                break;
-                            }
-                        } else {
-                            return Ok(());
-                        }
-                    }
-                    _ = &mut index_closed => return Ok(()),
-                }
-            }
+        while let Some(response) = self.stream.recv().await {
+            self.handle_response(response).await?;
         }
+
+        Ok(())
     }
 
-    async fn handle_response(&mut self, response: Response) -> Result<bool> {
+    async fn handle_response(&mut self, response: Response) -> Result<()> {
         match response {
             Response::RootNode {
-                cookie,
                 writer_id,
-                versions,
+                version_vector,
                 hash,
                 summary,
             } => {
-                self.handle_root_node(cookie, writer_id, versions, hash, summary)
+                self.handle_root_node(writer_id, version_vector, hash, summary)
                     .await
             }
             Response::InnerNodes {
@@ -87,29 +55,23 @@ impl Client {
                 id,
                 content,
                 auth_tag,
-            } => {
-                self.handle_block(id, content, auth_tag).await?;
-                Ok(false)
-            }
+            } => self.handle_block(id, content, auth_tag).await,
         }
     }
 
     async fn handle_root_node(
         &mut self,
-        cookie: u64,
         writer_id: PublicKey,
-        versions: VersionVector,
+        version_vector: VersionVector,
         hash: Hash,
         summary: Summary,
-    ) -> Result<bool> {
-        self.cookie = cookie;
-
-        let status = self
+    ) -> Result<()> {
+        let updated = self
             .index
-            .receive_root_node(&writer_id, versions, hash, summary)
+            .receive_root_node(&writer_id, version_vector, hash, summary)
             .await?;
 
-        if status.updated {
+        if updated {
             self.stream
                 .send(Request::InnerNodes {
                     parent_hash: hash,
@@ -118,7 +80,7 @@ impl Client {
                 .await;
         }
 
-        Ok(status.complete)
+        Ok(())
     }
 
     async fn handle_inner_nodes(
@@ -126,38 +88,38 @@ impl Client {
         parent_hash: Hash,
         inner_layer: usize,
         nodes: InnerNodeMap,
-    ) -> Result<bool> {
+    ) -> Result<()> {
         if parent_hash != nodes.hash() {
             log::warn!("inner nodes parent hash mismatch");
-            return Ok(true);
+            return Ok(());
         }
 
-        let status = self
+        let updated = self
             .index
             .receive_inner_nodes(parent_hash, inner_layer, nodes)
             .await?;
 
-        for hash in status.updated {
+        for hash in updated {
             self.stream.send(child_request(hash, inner_layer)).await;
         }
 
-        Ok(status.complete)
+        Ok(())
     }
 
-    async fn handle_leaf_nodes(&self, parent_hash: Hash, nodes: LeafNodeSet) -> Result<bool> {
+    async fn handle_leaf_nodes(&self, parent_hash: Hash, nodes: LeafNodeSet) -> Result<()> {
         if parent_hash != nodes.hash() {
             log::warn!("leaf nodes parent hash mismatch");
-            return Ok(true);
+            return Ok(());
         }
 
-        let status = self.index.receive_leaf_nodes(parent_hash, nodes).await?;
+        let updated = self.index.receive_leaf_nodes(parent_hash, nodes).await?;
 
-        for block_id in status.updated {
+        for block_id in updated {
             // TODO: avoid multiple clients downloading the same block
             self.stream.send(Request::Block(block_id)).await;
         }
 
-        Ok(status.complete)
+        Ok(())
     }
 
     async fn handle_block(&self, id: BlockId, content: Box<[u8]>, auth_tag: AuthTag) -> Result<()> {

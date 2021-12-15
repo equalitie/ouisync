@@ -97,46 +97,76 @@ impl Index {
 
     /// Receive `RootNode` from other replica and store it into the db. Returns whether the
     /// received node was more up-to-date than the corresponding branch stored by this replica.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `writer_id` identifies this replica instead of a remote one.
     pub async fn receive_root_node(
         &self,
         writer_id: &PublicKey,
-        versions: VersionVector,
+        version_vector: VersionVector,
         hash: Hash,
         summary: Summary,
-    ) -> Result<ReceiveStatus<bool>> {
-        assert_ne!(writer_id, &self.this_writer_id);
+    ) -> Result<bool> {
+        let branches = self.branches().await;
 
-        // Only accept it if newer or concurrent with our versions.
-        let this_versions = RootNode::load_latest(&self.pool, &self.this_writer_id)
-            .await?
-            .map(|node| node.versions)
-            .unwrap_or_default();
+        // If the received node is outdated relative to any branch we have, ignore it.
+        for branch in branches.all() {
+            if branch.id() == writer_id {
+                // this will be checked further down.
+                continue;
+            }
 
-        if versions
-            .partial_cmp(&this_versions)
-            .map(Ordering::is_le)
-            .unwrap_or(false)
-        {
-            return Ok(ReceiveStatus {
-                updated: false,
-                complete: false,
-            });
+            if version_vector < branch.root().await.versions {
+                return Ok(false);
+            }
         }
 
-        // Write the root node to the db.
-        let updated = self
-            .has_root_node_new_blocks(writer_id, &hash, &summary)
-            .await?;
-        let node =
-            RootNode::create(&self.pool, writer_id, versions, hash, Summary::INCOMPLETE).await?;
-        let complete = self.update_summaries(hash, 0).await?;
-        self.update_remote_branch(*writer_id, node).await?;
+        // Whether to create new node. We create only if we don't have the branch yet or if the
+        // received one is strictly newer than the one we have.
+        let create;
+        // Whether the remote replica's branch is more up-to-date than ours.
+        let updated;
 
-        Ok(ReceiveStatus { updated, complete })
+        if let Some(branch) = branches.get(writer_id) {
+            let old_node = branch.root().await;
+
+            match version_vector.partial_cmp(&old_node.versions) {
+                Some(Ordering::Greater) => {
+                    create = true;
+                    updated = true;
+                }
+                Some(Ordering::Equal) => {
+                    create = false;
+                    updated = !old_node
+                        .summary
+                        .is_up_to_date_with(&summary)
+                        .unwrap_or(true);
+                }
+                Some(Ordering::Less) | None => {
+                    // outdated or invalid
+                    create = false;
+                    updated = false;
+                }
+            }
+        } else {
+            create = true;
+            updated = hash != InnerNodeMap::default().hash();
+        };
+
+        // avoid deadlock
+        drop(branches);
+
+        if create {
+            let node = RootNode::create(
+                &self.pool,
+                writer_id,
+                version_vector,
+                hash,
+                Summary::INCOMPLETE,
+            )
+            .await?;
+            self.update_remote_branch(*writer_id, node).await?;
+            self.update_summaries(hash, 0).await?;
+        }
+
+        Ok(updated)
     }
 
     /// Receive inner nodes from other replica and store them into the db.
@@ -146,7 +176,7 @@ impl Index {
         parent_hash: Hash,
         inner_layer: usize,
         nodes: InnerNodeMap,
-    ) -> Result<ReceiveStatus<Vec<Hash>>> {
+    ) -> Result<Vec<Hash>> {
         let updated: Vec<_> = self
             .find_inner_nodes_with_new_blocks(&parent_hash, &nodes)
             .await?
@@ -157,9 +187,9 @@ impl Index {
             .into_incomplete()
             .save(&self.pool, &parent_hash)
             .await?;
-        let complete = self.update_summaries(parent_hash, inner_layer).await?;
+        self.update_summaries(parent_hash, inner_layer).await?;
 
-        Ok(ReceiveStatus { updated, complete })
+        Ok(updated)
     }
 
     /// Receive leaf nodes from other replica and store them into the db.
@@ -168,7 +198,7 @@ impl Index {
         &self,
         parent_hash: Hash,
         nodes: LeafNodeSet,
-    ) -> Result<ReceiveStatus<Vec<BlockId>>> {
+    ) -> Result<Vec<BlockId>> {
         let updated: Vec<_> = self
             .find_leaf_nodes_with_new_blocks(&parent_hash, &nodes)
             .await?
@@ -176,29 +206,10 @@ impl Index {
             .collect();
 
         nodes.into_missing().save(&self.pool, &parent_hash).await?;
-        let complete = self
-            .update_summaries(parent_hash, INNER_LAYER_COUNT)
+        self.update_summaries(parent_hash, INNER_LAYER_COUNT)
             .await?;
 
-        Ok(ReceiveStatus { updated, complete })
-    }
-
-    // Check whether the remote replica has some blocks under the specified root node that the
-    // local one is missing.
-    async fn has_root_node_new_blocks(
-        &self,
-        writer_id: &PublicKey,
-        hash: &Hash,
-        remote_summary: &Summary,
-    ) -> Result<bool> {
-        if let Some(local_node) = RootNode::load(&self.pool, writer_id, hash).await? {
-            Ok(!local_node
-                .summary
-                .is_up_to_date_with(remote_summary)
-                .unwrap_or(true))
-        } else {
-            Ok(*hash != InnerNodeMap::default().hash())
-        }
+        Ok(updated)
     }
 
     // Filter inner nodes that the remote replica has some blocks in that the local one is missing.
@@ -248,23 +259,36 @@ impl Index {
     }
 
     // Updates summaries of the specified nodes and all their ancestors, notifies the affected
-    // branches that became complete (wasn't before the update but became after it) and returns
-    // whether at least one affected branch is complete (either already was or became by
-    // the update).
-    async fn update_summaries(&self, hash: Hash, layer: usize) -> Result<bool> {
+    // branches that became complete (wasn't before the update but became after it).
+    async fn update_summaries(&self, hash: Hash, layer: usize) -> Result<()> {
         let statuses = node::update_summaries(&self.pool, hash, layer).await?;
 
+        let branches = self.branches().await;
+        let mut cx = self.pool.acquire().await?;
+
+        // Reload cached root nodes of the branches whose completion status changed.
+        for (id, status) in &statuses {
+            if status.did_change() {
+                if let Some(branch) = branches.get(id) {
+                    branch.reload_root(&mut cx).await?;
+                }
+            }
+        }
+
+        drop(cx);
+        drop(branches);
+
         // Find the replicas whose current snapshots became complete by this update.
-        let writer_ids: Vec<_> = statuses
-            .iter()
+        let completed: Vec<_> = statuses
+            .into_iter()
             .filter(|(_, status)| status.did_complete())
-            .map(|(id, _)| *id)
+            .map(|(id, _)| id)
             .collect();
 
         // Then notify them.
-        self.notify_branches_changed(&writer_ids).await;
+        self.notify_branches_changed(&completed).await;
 
-        Ok(statuses.iter().any(|(_, status)| status.is_complete))
+        Ok(())
     }
 
     /// Update the root node of the remote branch.
@@ -389,17 +413,15 @@ impl Subscription {
     /// Receives the next change notification. Returns the id of the changed branch. Returns `None`
     /// if the index was closed (either by calling [`Index::close`] or when the last instance of it
     /// gets dropped).
-    ///
-    /// If one is interested only in the close notification, it's more efficient to use
-    /// [`Self::closed`].
     pub async fn recv(&mut self) -> Option<PublicKey> {
-        if self.version == 0 {
-            // First subscribe to the branches that already existed before this subscription was
-            // created.
-            self.subscribe_to_recent().await;
-        }
+        loop {
+            if !*self.index_rx.borrow() {
+                return None;
+            }
 
-        while *self.index_rx.borrow() {
+            // Subscribe to the branches that were created before calling this funciton.
+            self.subscribe_to_recent().await;
+
             select! {
                 id = select_branch_changed(&mut self.branch_rxs), if !self.branch_rxs.is_empty() => {
                     if let Some(id) = id {
@@ -407,27 +429,10 @@ impl Subscription {
                     }
                 },
                 result = self.index_rx.changed() => {
-                    if result.is_ok() {
-                        self.subscribe_to_recent().await;
-                    } else {
-                        break;
+                    if result.is_err() {
+                        return None;
                     }
                 }
-            }
-        }
-
-        None
-    }
-
-    /// Completes when the index gets closed, either by callig [`Index::close`] or when the last
-    /// instance of it gets dropped. This is more efficient than using `recv` if one is interested
-    /// only in the close notification.
-    pub async fn closed(self) {
-        let Self { mut index_rx, .. } = self;
-
-        while *index_rx.borrow() {
-            if index_rx.changed().await.is_err() {
-                break;
             }
         }
     }
@@ -468,13 +473,6 @@ async fn select_branch_changed(
             None
         }
     }
-}
-
-pub(crate) struct ReceiveStatus<T> {
-    // Information about the nodes that got updated.
-    pub updated: T,
-    // Whether at least one branch became complete by the update.
-    pub complete: bool,
 }
 
 /// Returns all replica ids we know of except ours.

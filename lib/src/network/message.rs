@@ -10,8 +10,6 @@ use std::fmt;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub(crate) enum Request {
-    /// Request a root node.
-    RootNode { cookie: u64 },
     /// Request inner nodes with the given parent hash and inner layer.
     InnerNodes {
         parent_hash: Hash,
@@ -26,10 +24,12 @@ pub(crate) enum Request {
 #[derive(Serialize, Deserialize)]
 pub(crate) enum Response {
     /// Send the latest root node of this replica to another replica.
+    /// NOTE: this is technically a notification, not a response. There is no corresponding
+    /// `Request` variant -  the server sends these proactively any time there is change in the
+    /// repo.
     RootNode {
-        cookie: u64,
         writer_id: PublicKey,
-        versions: VersionVector,
+        version_vector: VersionVector,
         hash: Hash,
         summary: Summary,
     },
@@ -57,16 +57,14 @@ impl fmt::Debug for Response {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::RootNode {
-                cookie,
                 writer_id,
-                versions,
+                version_vector,
                 hash,
                 summary,
             } => f
                 .debug_struct("RootNode")
-                .field("cookie", cookie)
                 .field("writer_id", writer_id)
-                .field("versions", versions)
+                .field("version_vector", version_vector)
                 .field("hash", hash)
                 .field("summary", summary)
                 .finish(),
@@ -85,7 +83,10 @@ impl fmt::Debug for Response {
                 .field("parent", parent_hash)
                 .field("nodes", nodes)
                 .finish(),
-            Self::Block { id, .. } => write!(f, "Block {{ id: {:?}, .. }}", id),
+            Self::Block { id, .. } => f
+                .debug_struct("Block")
+                .field("id", id)
+                .finish_non_exhaustive(),
         }
     }
 }

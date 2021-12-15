@@ -131,15 +131,28 @@ async fn create_index<R: Rng>(rng: &mut R) -> Index {
 const CAPACITY: usize = 256;
 
 async fn save_snapshot(index: &Index, snapshot: &Snapshot) {
-    RootNode::create(
+    let mut version_vector = VersionVector::new();
+    version_vector.insert(index.this_writer_id, 2); // to force overwrite the initial root node
+
+    let root_node = RootNode::create(
         &index.pool,
         &index.this_writer_id,
-        VersionVector::new(),
+        version_vector,
         *snapshot.root_hash(),
         Summary::INCOMPLETE,
     )
     .await
     .unwrap();
+
+    let mut tx = index.pool.begin().await.unwrap();
+    index
+        .branches()
+        .await
+        .local()
+        .update_root(&mut tx, root_node)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
 
     for layer in snapshot.inner_layers() {
         for (parent_hash, nodes) in layer.inner_maps() {

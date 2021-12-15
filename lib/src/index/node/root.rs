@@ -21,36 +21,6 @@ pub(crate) struct RootNode {
 }
 
 impl RootNode {
-    /// Returns the root node of the specified replica with the specified hash if it exists.
-    pub async fn load(pool: &db::Pool, writer_id: &PublicKey, hash: &Hash) -> Result<Option<Self>> {
-        sqlx::query(
-            "SELECT
-                 snapshot_id,
-                 versions,
-                 hash,
-                 is_complete,
-                 missing_blocks_count,
-                 missing_blocks_checksum
-             FROM snapshot_root_nodes
-             WHERE writer_id = ? AND hash = ?",
-        )
-        .bind(writer_id)
-        .bind(hash)
-        .map(|row| Self {
-            snapshot_id: row.get(0),
-            versions: row.get(1),
-            hash: row.get(2),
-            summary: Summary {
-                is_complete: row.get(3),
-                missing_blocks_count: db::decode_u64(row.get(4)),
-                missing_blocks_checksum: db::decode_u64(row.get(5)),
-            },
-        })
-        .fetch_optional(pool)
-        .await
-        .map_err(Into::into)
-    }
-
     /// Returns the latest root node of the specified replica. If no such node exists yet, creates
     /// it first.
     pub async fn load_latest_or_create(pool: &db::Pool, writer_id: &PublicKey) -> Result<Self> {
@@ -87,6 +57,7 @@ impl RootNode {
     ) -> Result<Self> {
         let is_complete = hash == InnerNodeMap::default().hash();
 
+        // TODO: shouldn't we start with empty vv?
         versions.insert(*writer_id, 1);
 
         sqlx::query(
@@ -248,16 +219,15 @@ impl RootNode {
         Ok(())
     }
 
-    /// Reload this root node from the db. Currently used only in tests.
-    #[cfg(test)]
-    pub async fn reload(&mut self, pool: &db::Pool) -> Result<()> {
+    /// Reload this root node from the db.
+    pub async fn reload(&mut self, db: impl db::Executor<'_>) -> Result<()> {
         let row = sqlx::query(
             "SELECT is_complete, missing_blocks_count, missing_blocks_checksum
              FROM snapshot_root_nodes
              WHERE snapshot_id = ?",
         )
         .bind(self.snapshot_id)
-        .fetch_one(pool)
+        .fetch_one(db)
         .await?;
 
         self.summary.is_complete = row.get(0);

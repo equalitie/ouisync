@@ -112,7 +112,6 @@ impl Summary {
         }
     }
 
-    #[cfg(test)]
     pub fn is_complete(&self) -> bool {
         self.is_complete
     }
@@ -130,5 +129,9 @@ impl SummaryUpdateStatus {
     // Dit the snapshot became complete in the update?
     pub fn did_complete(&self) -> bool {
         self.is_complete && !self.was_complete
+    }
+
+    pub fn did_change(&self) -> bool {
+        self.is_complete != self.was_complete
     }
 }

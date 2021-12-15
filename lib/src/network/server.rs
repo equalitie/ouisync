@@ -4,43 +4,24 @@ use super::{
 };
 use crate::{
     block::{self, BlockId, BLOCK_SIZE},
-    crypto::Hash,
+    crypto::{sign::PublicKey, Hash},
     error::{Error, Result},
-    index::{Index, InnerNode, LeafNode, RootNode},
+    index::{Index, InnerNode, LeafNode},
 };
-use tokio::{pin, select};
+use tokio::select;
 
 pub(crate) struct Server {
     index: Index,
     stream: ServerStream,
-    // "Cookie" number that gets included in the next sent `RootNode` response. The client stores
-    // it and sends it back in their next `RootNode` request. This is then used by the server to
-    // decide whether the client is up to date (if their cookie is equal (or greater) to ours, they
-    // are up to date, otherwise they are not). The server increments this every time there is a
-    // change to the local branch.
-    cookie: u64,
-    // Flag indicating whether the server is waiting for a local change before sending a `RootNode`
-    // response to the client. This gets set to true when the client send us a `RootNode` request
-    // whose cookie is equal (or greater) than ours which indicates that they are up to date with
-    // us.
-    waiting: bool,
 }
 
 impl Server {
     pub fn new(index: Index, stream: ServerStream) -> Self {
-        Self {
-            index,
-            stream,
-            cookie: 1,
-            waiting: false,
-        }
+        Self { index, stream }
     }
 
     pub async fn run(&mut self) -> Result<()> {
-        let mut local_branch_subscription = self.index.branches().await.local().subscribe();
-
-        let index_closed = self.index.subscribe().closed();
-        pin!(index_closed);
+        let mut subscription = self.index.subscribe();
 
         loop {
             select! {
@@ -53,28 +34,55 @@ impl Server {
 
                     self.handle_request(request).await?
                 }
-                _ = local_branch_subscription.changed() => self.handle_local_change().await?,
-                _ = &mut index_closed => break,
+                branch_id = subscription.recv() => {
+                    let branch_id = if let Some(branch_id) = branch_id {
+                        branch_id
+                    } else {
+                        break;
+                    };
+
+                    self.handle_branch_changed(branch_id).await?
+                }
             }
         }
 
         Ok(())
     }
 
-    async fn handle_local_change(&mut self) -> Result<()> {
-        self.cookie = self.cookie.wrapping_add(1);
+    async fn handle_branch_changed(&mut self, branch_id: PublicKey) -> Result<()> {
+        let branches = self.index.branches().await;
+        let branch = if let Some(branch) = branches.get(&branch_id) {
+            branch
+        } else {
+            // branch was removed after the notification was fired.
+            return Ok(());
+        };
 
-        if self.waiting {
-            self.waiting = false;
-            self.handle_root_node(0).await?;
+        let root_node = branch.root().await;
+
+        if !root_node.summary.is_complete() {
+            // send only complete branches
+            return Ok(());
         }
+
+        let response = Response::RootNode {
+            writer_id: *branch.id(),
+            version_vector: root_node.versions.clone(),
+            hash: root_node.hash,
+            summary: root_node.summary,
+        };
+
+        // Don't hold the locks while sending is in progress.
+        drop(root_node);
+        drop(branches);
+
+        self.stream.send(response).await;
 
         Ok(())
     }
 
     async fn handle_request(&mut self, request: Request) -> Result<()> {
         match request {
-            Request::RootNode { cookie } => self.handle_root_node(cookie).await,
             Request::InnerNodes {
                 parent_hash,
                 inner_layer,
@@ -84,34 +92,8 @@ impl Server {
         }
     }
 
-    async fn handle_root_node(&mut self, cookie: u64) -> Result<()> {
-        log::trace!("cookies: server={}, client={}", self.cookie, cookie);
-
-        // Note: the comparison with zero is there to handle the case when the cookie wraps around.
-        if cookie < self.cookie || self.cookie == 0 {
-            // TODO: send all branches, not just the local one.
-            if let Some(node) =
-                RootNode::load_latest(&self.index.pool, &self.index.this_writer_id).await?
-            {
-                self.stream
-                    .send(Response::RootNode {
-                        cookie: self.cookie,
-                        writer_id: self.index.this_writer_id,
-                        versions: node.versions,
-                        hash: node.hash,
-                        summary: node.summary,
-                    })
-                    .await;
-                return Ok(());
-            }
-        }
-
-        self.waiting = true;
-
-        Ok(())
-    }
-
     async fn handle_inner_nodes(&self, parent_hash: Hash, inner_layer: usize) -> Result<()> {
+        // TODO: don't send anything if the nodes are missing
         let nodes = InnerNode::load_children(&self.index.pool, &parent_hash).await?;
 
         self.stream
@@ -126,6 +108,7 @@ impl Server {
     }
 
     async fn handle_leaf_nodes(&self, parent_hash: Hash) -> Result<()> {
+        // TODO: don't send anything if the nodes are missing
         let nodes = LeafNode::load_children(&self.index.pool, &parent_hash).await?;
 
         self.stream
