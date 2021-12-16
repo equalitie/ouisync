@@ -1,10 +1,12 @@
 mod hash;
+mod password;
 mod secret_key;
 pub mod sign;
 
 pub use self::{
     hash::{Hash, Hashable},
     secret_key::{ScryptSalt, SecretKey},
+    password::Password,
 };
 pub use chacha20poly1305::aead;
 
