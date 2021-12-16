@@ -1,11 +1,15 @@
 use crate::{
     crypto::{
-        sign::{self, PublicKey},
+        sign::{self, PublicKey, SecretKey},
         Hash,
     },
     format,
 };
 use btdht::{InfoHash, INFO_HASH_LEN};
+use rand::{
+    distributions::{Distribution, Standard},
+    Rng,
+};
 use serde::{Deserialize, Serialize};
 use sha3::{digest::Digest, Sha3_256};
 use std::{fmt, str::FromStr};
@@ -37,12 +41,12 @@ impl SecretRepositoryId {
     }
 }
 
-// TODO: Temporarily enabling for non tests as well.
-//#[cfg(test)]
-impl rand::distributions::Distribution<SecretRepositoryId> for rand::distributions::Standard {
-    fn sample<R: rand::Rng + ?Sized>(&self, _rng: &mut R) -> SecretRepositoryId {
-        let keypair = crate::crypto::sign::Keypair::generate();
-        SecretRepositoryId(keypair.public)
+// // TODO: Temporarily enabling for non tests as well.
+// //#[cfg(test)]
+impl Distribution<SecretRepositoryId> for Standard {
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> SecretRepositoryId {
+        let sk: SecretKey = rng.gen();
+        SecretRepositoryId(PublicKey::from(&sk))
     }
 }
 
