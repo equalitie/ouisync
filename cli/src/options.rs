@@ -1,6 +1,6 @@
 use crate::APP_NAME;
 use anyhow::{Context, Error, Result};
-use ouisync_lib::{NetworkOptions, ShareToken, Store};
+use ouisync_lib::{MasterSecret, NetworkOptions, Password, SecretKey, ShareToken, Store};
 use std::{
     path::{Path, PathBuf},
     str::FromStr,
@@ -31,8 +31,17 @@ pub(crate) struct Options {
     pub mount: Vec<Named<PathBuf>>,
 
     /// Password per repository.
+    // TODO: Zeroize
     #[structopt(long, value_name = "NAME:PASSWD")]
     pub password: Vec<Named<String>>,
+
+    /// Pre-hashed 32 byte long (64 hexadecimal characters) master secret per repository. This is
+    /// mainly intended for testing as password derivation is rather slow and some of the tests may
+    /// timeout if the `password` argument is used instead. For all other use cases, prefer to use
+    /// the `password` argument instead.
+    // TODO: Zeroize
+    #[structopt(long, value_name = "NAME:KEY")]
+    pub key: Vec<Named<String>>,
 
     /// Print share token for the named repository. Can be specified multiple times to share
     /// multiple repositories.
@@ -111,11 +120,32 @@ impl Options {
         }
     }
 
-    pub fn password_for_repo(&self, repo_name: &str) -> Option<&str> {
-        self.password
+    pub fn secret_for_repo(&self, repo_name: &str) -> Option<MasterSecret> {
+        let key = self
+            .key
             .iter()
             .find(|e| e.name == repo_name)
             .map(|e| e.value.as_str())
+            .map(|k| MasterSecret::SecretKey(SecretKey::from_hex(&k)));
+
+        let pwd = self
+            .password
+            .iter()
+            .find(|e| e.name == repo_name)
+            .map(|e| e.value.as_str())
+            .map(|k| MasterSecret::Password(Password::new(k)));
+
+        match (key, pwd) {
+            (Some(_), Some(_)) => {
+                panic!(
+                    "only one of password or key may be specified per repository ({:?})",
+                    repo_name
+                );
+            }
+            (Some(k), None) => Some(k),
+            (None, Some(p)) => Some(p),
+            (None, None) => None,
+        }
     }
 }
 

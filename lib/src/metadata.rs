@@ -2,78 +2,94 @@
 #![allow(dead_code)]
 
 use crate::{
-    crypto::{AuthTag, Cryptor, Nonce, ScryptSalt, SecretKey},
+    crypto::{AuthTag, Cryptor, Nonce, PasswordSalt, SecretKey},
     db,
     error::{Error, Result},
-    repository::RepositoryId,
+    repository::{RepositoryId, MasterSecret},
 };
 use sqlx::Row;
 
 // Metadata keys
 const REPOSITORY_ID: &[u8] = b"repository_id";
 const PASSWORD_SALT: &[u8] = b"password_salt";
+const READER_KEY: &[u8] = b"reader_key";
 
 /// Initialize the metadata tables for storing Key:Value pairs.  One table stores plaintext values,
 /// the other one stores encrypted ones.
-pub(crate) async fn init(pool: &db::Pool) -> Result<(), Error> {
+pub(crate) async fn init(
+    pool: &db::Pool,
+    master_secret: Option<MasterSecret>,
+) -> Result<(), Error> {
+    let mut tx = pool.begin().await?;
+
+    if is_initialized(&mut tx).await? {
+        return Ok(());
+    }
+
+    if master_secret.is_none() {
+        return Err(Error::RepoInitializationRequiresMasterSecret);
+    }
+
     // For storing unencrypted values
     sqlx::query(
-        "CREATE TABLE IF NOT EXISTS metadata_public (
+        "CREATE TABLE metadata_public (
              name  BLOB NOT NULL PRIMARY KEY,
              value BLOB NOT NULL
          ) WITHOUT ROWID",
     )
-    .execute(&*pool)
+    .execute(&mut tx)
     .await
     .map_err(Error::CreateDbSchema)?;
 
     // For storing encrypted values
     sqlx::query(
-        "CREATE TABLE IF NOT EXISTS metadata_secret (
+        "CREATE TABLE metadata_secret (
              name  BLOB NOT NULL PRIMARY KEY,
              nonce BLOB NOT NULL,
              auth_tag BLOB NOT NULL,
              value BLOB NOT NULL
          ) WITHOUT ROWID",
     )
-    .execute(&*pool)
+    .execute(&mut tx)
     .await
     .map_err(Error::CreateDbSchema)?;
 
+    // The salt is only really required for password hashing. When the repo is initialized with
+    // MasterSecret::Secretkey it's not required. But we generate it anyway as to not leak the
+    // information which (SecretKey or Password) was the repo initialized with.
+    let salt = generate_password_salt(&mut tx).await?;
+
+    tx.commit().await?;
+
     Ok(())
+}
+
+async fn is_initialized(db: impl db::Executor<'_>) -> Result<bool> {
+    Ok(
+        sqlx::query("SELECT name FROM sqlite_master WHERE type='table' AND name='metadata_public'")
+            .fetch_optional(db)
+            .await?
+            .is_some(),
+    )
 }
 
 // -------------------------------------------------------------------
 // Salt
 // -------------------------------------------------------------------
-async fn password_salt(db: &db::Pool) -> Result<ScryptSalt> {
-    let mut tx = db.begin().await?;
+async fn get_password_salt(db: &mut db::Transaction<'_>) -> Result<Option<PasswordSalt>> {
+    let salt: Result<PasswordSalt> = get_public(PASSWORD_SALT, db).await;
 
-    let salt: Result<ScryptSalt> = get_public(PASSWORD_SALT, &mut tx).await;
-
-    let salt = match salt {
-        Ok(salt) => salt,
-        Err(Error::EntryNotFound) => {
-            let salt = SecretKey::generate_scrypt_salt();
-            set_public(PASSWORD_SALT, &salt, &mut tx).await?;
-            salt
-        }
-        Err(e) => return Err(e),
-    };
-
-    tx.commit().await?;
-
-    Ok(salt)
+    match salt {
+        Ok(salt) => Ok(Some(salt)),
+        Err(Error::EntryNotFound) => Ok(None),
+        Err(e) => Err(e),
+    }
 }
 
-// -------------------------------------------------------------------
-// Master key
-// -------------------------------------------------------------------
-/// Derive the master key from the user provided password and the salt that is stored in the
-/// metadata_plaintext table.
-pub(crate) async fn derive_master_key(user_password: &str, db: &db::Pool) -> Result<SecretKey> {
-    let salt = password_salt(db).await?;
-    Ok(SecretKey::derive_scrypt(user_password, &salt))
+async fn generate_password_salt(db: &mut db::Transaction<'_>) -> Result<PasswordSalt> {
+    let salt = SecretKey::generate_password_salt();
+    set_public(PASSWORD_SALT, &salt, db).await?;
+    Ok(salt)
 }
 
 // -------------------------------------------------------------------
@@ -143,10 +159,13 @@ async fn get_secret<const N: usize>(id: &[u8], key: &SecretKey, db: db::Pool) ->
     Ok(value)
 }
 
-async fn set_secret(id: &[u8], blob: &[u8], key: &SecretKey, pool: db::Pool) -> Result<()> {
+async fn set_secret(
+    id: &[u8],
+    blob: &[u8],
+    key: &SecretKey,
+    db: impl db::Executor<'_>,
+) -> Result<()> {
     let cryptor = Cryptor::ChaCha20Poly1305(key.clone());
-
-    let mut tx = pool.begin().await?;
 
     let nonce = make_nonce();
 
@@ -161,11 +180,10 @@ async fn set_secret(id: &[u8], blob: &[u8], key: &SecretKey, pool: db::Pool) -> 
     .bind(&nonce[..])
     .bind(&*auth_tag)
     .bind(&cypher)
-    .execute(&mut tx)
+    .execute(db)
     .await?;
 
     if result.rows_affected() > 0 {
-        tx.commit().await?;
         Ok(())
     } else {
         Err(Error::EntryExists)
@@ -188,7 +206,8 @@ mod tests {
 
     async fn new_memory_db() -> db::Pool {
         let pool = db::open(&db::Store::Memory).await.unwrap();
-        init(&pool).await.unwrap();
+        let master_secret = Some(MasterSecret::SecretKey(SecretKey::random()));
+        init(&pool, master_secret).await.unwrap();
         pool
     }
 
@@ -205,24 +224,12 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn store_salt() {
-        let pool = new_memory_db().await;
-
-        let salt1 = password_salt(&pool).await.unwrap();
-        let salt2 = password_salt(&pool).await.unwrap();
-
-        assert_eq!(salt1, salt2);
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
     async fn store_cyphertext() {
         let pool = new_memory_db().await;
 
         let key = SecretKey::random();
 
-        set_secret(b"hello", b"world", &key, pool.clone())
-            .await
-            .unwrap();
+        set_secret(b"hello", b"world", &key, &pool).await.unwrap();
 
         let v: [u8; 5] = get_secret(b"hello", &key, pool.clone()).await.unwrap();
 

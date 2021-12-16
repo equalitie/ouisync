@@ -3,8 +3,8 @@ use super::{
     utils::{self, Port, SharedHandle, UniqueHandle},
 };
 use crate::{
-    access_control::ShareToken, crypto::Cryptor, directory::EntryType, error::Error,
-    network::Registration, path, repository::Repository,
+    access_control::ShareToken, crypto::{Cryptor, Password}, directory::EntryType, error::Error,
+    network::Registration, path, repository::{MasterSecret, Repository},
 };
 use std::{os::raw::c_char, ptr, sync::Arc};
 use tokio::task::JoinHandle;
@@ -22,6 +22,7 @@ pub struct RepositoryHolder {
 #[no_mangle]
 pub unsafe extern "C" fn repository_open(
     store: *const c_char,
+    master_password: *const c_char,
     port: Port<SharedHandle<RepositoryHolder>>,
     error: *mut *mut c_char,
 ) {
@@ -30,11 +31,18 @@ pub unsafe extern "C" fn repository_open(
         let this_writer_id = *ctx.this_writer_id();
         let network_handle = ctx.network().handle();
 
+        let master_password = if master_password.is_null() {
+            Some(Password::new(utils::ptr_to_str(master_password)?))
+        } else {
+            None
+        };
+
         ctx.spawn(async move {
             let repository = Repository::open(
                 &store.into_std_path_buf().into(),
                 this_writer_id,
                 Cryptor::Null,
+                master_password.map(MasterSecret::Password),
                 true,
             )
             .await?;

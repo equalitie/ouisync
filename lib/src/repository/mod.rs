@@ -5,7 +5,7 @@ pub use self::id::RepositoryId;
 use crate::{
     block,
     branch::Branch,
-    crypto::{sign::PublicKey, Cryptor, SecretKey},
+    crypto::{sign::PublicKey, Cryptor, Password, SecretKey},
     db,
     debug_printer::DebugPrinter,
     directory::{Directory, EntryType},
@@ -21,10 +21,12 @@ use camino::Utf8Path;
 use futures_util::{future, stream::FuturesUnordered, StreamExt};
 use log::Level;
 use std::{collections::HashMap, iter, sync::Arc};
-use tokio::{
-    select,
-    sync::{Mutex, RwLock},
-};
+use tokio::{select, sync::Mutex};
+
+pub enum MasterSecret {
+    Password(Password),
+    SecretKey(SecretKey),
+}
 
 pub struct Repository {
     shared: Arc<Shared>,
@@ -33,17 +35,25 @@ pub struct Repository {
 
 impl Repository {
     /// Opens an existing repository or creates a new one if it doesn't exists yet.
+    ///
+    /// # Arguments
+    ///
+    /// * `master_secret` - A user provided secret to encrypt the reader key as well as the private
+    /// signing key. Must be `Some(_)` when the repository is first being set up. All other times
+    /// it can be set to `Null` to force this replica to be "blind" (i.e. without the read and the
+    /// write access).
     pub async fn open(
         store: &db::Store,
         this_writer_id: PublicKey,
         cryptor: Cryptor,
+        master_secret: Option<MasterSecret>,
         enable_merger: bool,
     ) -> Result<Self> {
-        let pool = open_db(store).await?;
+        let pool = open_db(store, master_secret).await?;
+
         let index = Index::load(pool, this_writer_id).await?;
 
         let shared = Arc::new(Shared {
-            master_key: RwLock::new(None),
             index,
             cryptor,
             branches: Mutex::new(HashMap::new()),
@@ -59,13 +69,6 @@ impl Repository {
             shared,
             _merge_handle: merge_handle,
         })
-    }
-
-    pub async fn unlock(&self, password: &str) -> Result<()> {
-        let master_key = metadata::derive_master_key(password, self.db_pool()).await?;
-        let mut guard = self.shared.master_key.write().await;
-        *guard = Some(master_key);
-        Ok(())
     }
 
     /// Get the id of this repository or `Error::EntryNotFound` if no id was assigned yet.
@@ -375,19 +378,21 @@ impl Drop for Repository {
 }
 
 /// Opens or creates the repository database.
-pub(crate) async fn open_db(store: &db::Store) -> Result<db::Pool> {
+pub(crate) async fn open_db(
+    store: &db::Store,
+    master_secret: Option<MasterSecret>,
+) -> Result<db::Pool> {
     let pool = db::open(store).await?;
 
     block::init(&pool).await?;
     index::init(&pool).await?;
     store::init(&pool).await?;
-    metadata::init(&pool).await?;
+    metadata::init(&pool, master_secret).await?;
 
     Ok(pool)
 }
 
 struct Shared {
-    master_key: RwLock<Option<SecretKey>>,
     index: Index,
     cryptor: Cryptor,
     // Cache for `Branch` instances to make them persistent over the lifetime of the program.
@@ -562,21 +567,37 @@ mod tests {
     use assert_matches::assert_matches;
     use tokio::time::{sleep, Duration};
 
+    fn random_master_secret() -> Option<MasterSecret> {
+        Some(MasterSecret::SecretKey(SecretKey::random()))
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn root_directory_always_exists() {
         let writer_id = rand::random();
-        let repo = Repository::open(&db::Store::Memory, writer_id, Cryptor::Null, false)
-            .await
-            .unwrap();
+        let repo = Repository::open(
+            &db::Store::Memory,
+            writer_id,
+            Cryptor::Null,
+            random_master_secret(),
+            false,
+        )
+        .await
+        .unwrap();
         let _ = repo.open_directory("/").await.unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn merge() {
         let local_id = rand::random();
-        let repo = Repository::open(&db::Store::Memory, local_id, Cryptor::Null, true)
-            .await
-            .unwrap();
+        let repo = Repository::open(
+            &db::Store::Memory,
+            local_id,
+            Cryptor::Null,
+            random_master_secret(),
+            true,
+        )
+        .await
+        .unwrap();
 
         // Add another branch to the index. Eventually there might be a more high-level API for
         // this but for now we have to resort to this.
@@ -634,9 +655,15 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn recreate_previously_deleted_file() {
         let local_id = rand::random();
-        let repo = Repository::open(&db::Store::Memory, local_id, Cryptor::Null, false)
-            .await
-            .unwrap();
+        let repo = Repository::open(
+            &db::Store::Memory,
+            local_id,
+            Cryptor::Null,
+            random_master_secret(),
+            false,
+        )
+        .await
+        .unwrap();
 
         // Create file
         let mut file = repo.create_file("test.txt").await.unwrap();
@@ -666,9 +693,15 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn recreate_previously_deleted_directory() {
         let local_id = rand::random();
-        let repo = Repository::open(&db::Store::Memory, local_id, Cryptor::Null, false)
-            .await
-            .unwrap();
+        let repo = Repository::open(
+            &db::Store::Memory,
+            local_id,
+            Cryptor::Null,
+            random_master_secret(),
+            false,
+        )
+        .await
+        .unwrap();
 
         // Create dir
         repo.create_directory("test")
@@ -701,9 +734,15 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn concurrent_read_and_create_dir() {
         let writer_id = rand::random();
-        let repo = Repository::open(&db::Store::Memory, writer_id, Cryptor::Null, false)
-            .await
-            .unwrap();
+        let repo = Repository::open(
+            &db::Store::Memory,
+            writer_id,
+            Cryptor::Null,
+            random_master_secret(),
+            false,
+        )
+        .await
+        .unwrap();
 
         let path = "/dir";
         let repo = Arc::new(repo);

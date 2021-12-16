@@ -9,6 +9,7 @@ use crate::{
     locator::Locator,
     repository,
     version_vector::VersionVector,
+    MasterSecret, SecretKey,
 };
 use assert_matches::assert_matches;
 use futures_util::future;
@@ -819,7 +820,10 @@ async fn setup(branch_count: usize) -> Vec<Branch> {
 
 // Useful for debugging non-deterministic failures.
 async fn setup_with_rng(rng: StdRng, branch_count: usize) -> Vec<Branch> {
-    let pool = repository::open_db(&db::Store::Memory).await.unwrap();
+    let master_secret = Some(MasterSecret::SecretKey(SecretKey::random()));
+    let pool = repository::open_db(&db::Store::Memory, master_secret)
+        .await
+        .unwrap();
     let pool = &pool;
 
     let ids = rng.sample_iter(Standard).take(branch_count);

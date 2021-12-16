@@ -31,19 +31,10 @@ async fn main() -> Result<()> {
             &options.repository_store(name)?,
             this_writer_id,
             Cryptor::Null,
+            options.secret_for_repo(name),
             !options.disable_merger,
         )
         .await?;
-
-        if let Some(password) = options.password_for_repo(name) {
-            if let Err(e) = repo.unlock(password).await {
-                log::warn!(
-                    "failed to unlock the repository {:?} with the provided password: {:?}",
-                    name,
-                    e
-                );
-            }
-        }
 
         mount_repos.insert(name.as_str(), (repo, value));
     }
@@ -63,6 +54,7 @@ async fn main() -> Result<()> {
                 &options.repository_store(name)?,
                 this_writer_id,
                 Cryptor::Null,
+                options.secret_for_repo(name),
                 false,
             )
             .await?
@@ -101,6 +93,7 @@ async fn main() -> Result<()> {
                 &options.repository_store(name.as_ref())?,
                 this_writer_id,
                 Cryptor::Null,
+                options.secret_for_repo(name.as_ref()),
                 false,
             )
             .await?

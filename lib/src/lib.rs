@@ -40,7 +40,7 @@ mod writer_set;
 
 pub use self::{
     access_control::ShareToken,
-    crypto::{sign, Cryptor},
+    crypto::{sign, Cryptor, Password, SecretKey},
     db::Store,
     directory::{Directory, EntryRef, EntryType},
     error::{Error, Result},
@@ -48,5 +48,5 @@ pub use self::{
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     joint_entry::JointEntry,
     network::{Network, NetworkOptions},
-    repository::Repository,
+    repository::{MasterSecret, Repository},
 };
