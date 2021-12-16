@@ -1,10 +1,10 @@
+use generic_array::{sequence::GenericSequence, typenum::Unsigned};
+use hex;
 use rand::{CryptoRng, Rng};
 use sha3::{
     digest::{Digest, FixedOutput},
     Sha3_256,
 };
-use generic_array::{sequence::GenericSequence, typenum::Unsigned};
-use hex;
 
 // TODO: Using scrypt because argon2 v0.3.2 did not compile.
 use scrypt::{

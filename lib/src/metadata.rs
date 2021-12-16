@@ -5,7 +5,7 @@ use crate::{
     crypto::{AuthTag, Cryptor, Nonce, PasswordSalt, SecretKey},
     db,
     error::{Error, Result},
-    repository::{RepositoryId, MasterSecret},
+    repository::{MasterSecret, RepositoryId},
 };
 use sqlx::Row;
 
@@ -57,7 +57,7 @@ pub(crate) async fn init(
     // The salt is only really required for password hashing. When the repo is initialized with
     // MasterSecret::Secretkey it's not required. But we generate it anyway as to not leak the
     // information which (SecretKey or Password) was the repo initialized with.
-    let salt = generate_password_salt(&mut tx).await?;
+    generate_password_salt(&mut tx).await?;
 
     tx.commit().await?;
 

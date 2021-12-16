@@ -1,3 +1,4 @@
+use ouisync_lib::SecretKey;
 use std::{
     env,
     io::{self, BufRead, BufReader, Read, Write},
@@ -19,6 +20,8 @@ pub struct Bin {
     process: Child,
 }
 
+const REPO_NAME: &str = "test";
+
 impl Bin {
     pub fn start(
         id: u32,
@@ -31,18 +34,23 @@ impl Bin {
         command.arg("--temp");
         command
             .arg("--mount")
-            .arg(format!("test:{}", mount_dir.path().display()));
+            .arg(format!("{}:{}", REPO_NAME, mount_dir.path().display()));
 
         if let Some(share_token) = share_token {
             command.arg("--accept").arg(share_token);
         } else {
-            command.arg("--share").arg("test");
+            command.arg("--share").arg(REPO_NAME);
         }
 
         command.arg("--print-ready-message");
         command.arg("--disable-upnp");
         command.arg("--disable-dht");
         command.arg("--disable-local-discovery");
+
+        let master_key = SecretKey::random();
+        command
+            .arg("--key")
+            .arg(format!("{}:{:x}", REPO_NAME, master_key.as_array()));
 
         for peer in peers {
             command.arg("--peers");
@@ -120,7 +128,8 @@ where
 }
 
 fn wait_for_share_token(process: &mut Child, id: u32) -> String {
-    if let Some(line) = wait_for_line(process.stdout.as_mut().unwrap(), "ouisync:", "?name=test") {
+    let suffix = format!("?name={}", REPO_NAME);
+    if let Some(line) = wait_for_line(process.stdout.as_mut().unwrap(), "ouisync:", &suffix) {
         line
     } else {
         fail(process, id, "Failed to read share token");
