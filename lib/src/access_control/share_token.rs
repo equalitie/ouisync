@@ -23,17 +23,25 @@ pub struct ShareToken {
 pub(super) enum Access {
     Blind,
     Reader {
+        // Key to decrypt the repository content
         read_key: SecretKey,
     },
     Writer {
+        // Key to decrypt and encrypt the repository content
         read_key: SecretKey,
+        // Public key of the replica that is giving the write access ("giver").
         giver_pk: sign::PublicKey,
+        // Secret key created from an unique random nonce to prevent using this share token more
+        // than once.
         nonce_sk: sign::SecretKey,
+        // Signature of (repository_id, nonce_pk) created by the giver (nonce_pk is the
+        // corresponding public key to nonce_sk).
         nonce_pk_signature: sign::Signature,
     },
 }
 
 impl ShareToken {
+    /// Create share token for blind access to the given repository.
     pub fn new(id: SecretRepositoryId) -> Self {
         Self {
             id,
@@ -42,6 +50,7 @@ impl ShareToken {
         }
     }
 
+    /// Attach a suggested repository name to the token.
     pub fn with_name(self, name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -49,6 +58,7 @@ impl ShareToken {
         }
     }
 
+    /// Convert the share token to one that gives reader access.
     pub fn for_reader(self, read_key: SecretKey) -> Self {
         Self {
             access: Access::Reader { read_key },
@@ -56,6 +66,8 @@ impl ShareToken {
         }
     }
 
+    /// Convert the share token to one that gives writer access. `giver_keys` is the signing
+    /// keypair of the replica that gives the access.
     pub fn for_writer(self, read_key: SecretKey, giver_keys: &sign::Keypair) -> Self {
         let nonce_keys = sign::Keypair::generate();
 

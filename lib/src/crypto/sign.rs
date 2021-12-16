@@ -97,9 +97,15 @@ impl TryFrom<&'_ [u8]> for PublicKey {
     }
 }
 
-impl From<[u8; ext::PUBLIC_KEY_LENGTH]> for PublicKey {
-    fn from(bytes: [u8; ext::PUBLIC_KEY_LENGTH]) -> Self {
+impl From<[u8; Self::SIZE]> for PublicKey {
+    fn from(bytes: [u8; Self::SIZE]) -> Self {
         Self::try_from(bytes.as_ref()).unwrap()
+    }
+}
+
+impl From<PublicKey> for [u8; PublicKey::SIZE] {
+    fn from(key: PublicKey) -> Self {
+        key.0.to_bytes()
     }
 }
 

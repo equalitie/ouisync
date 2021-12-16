@@ -22,8 +22,9 @@ pub struct WriterSet {
 impl WriterSet {
     pub fn generate() -> (Self, Keypair) {
         let origin = Keypair::generate();
+        let nonce = rand::random();
 
-        let entry = Entry::new(&origin.public, &origin);
+        let entry = Entry::new(&origin.public, &origin, nonce);
 
         let ret = Self {
             origin: entry.hash,
@@ -55,18 +56,28 @@ impl WriterSet {
     }
 
     #[allow(unused)] // TODO: remove when this is actually used
-    pub fn add_writer(&mut self, writer: &PublicKey, added_by: &Keypair) -> Option<Entry> {
-        self.make_entry(writer, added_by).map(|e| {
+    pub fn add_writer(
+        &mut self,
+        writer: &PublicKey,
+        added_by: &Keypair,
+        nonce: Nonce,
+    ) -> Option<Entry> {
+        self.make_entry(writer, added_by, nonce).map(|e| {
             self.entries.insert(e.hash, e.clone());
             e
         })
     }
 
-    pub fn make_entry(&self, writer: &PublicKey, added_by: &Keypair) -> Option<Entry> {
+    pub fn make_entry(
+        &self,
+        writer: &PublicKey,
+        added_by: &Keypair,
+        nonce: Nonce,
+    ) -> Option<Entry> {
         if !self.is_writer(&added_by.public) {
             return None;
         }
-        Some(Entry::new(writer, added_by))
+        Some(Entry::new(writer, added_by, nonce))
     }
 
     pub fn entries(&self) -> impl Iterator<Item = &Entry> {
@@ -113,6 +124,7 @@ impl<'a> PreparedEntry<'a> {
 pub struct Entry {
     writer: PublicKey,
     added_by: PublicKey,
+    nonce: Nonce,
     // Calculated from above.
     hash: Hash,
     // Calculated from the `hash` and the private key corresponding to `added_by`.
@@ -122,18 +134,21 @@ pub struct Entry {
     has_valid_signature: Cell<Option<bool>>,
 }
 
+type Nonce = [u8; PublicKey::SIZE];
+
 impl Entry {
-    fn new(writer: &PublicKey, added_by: &Keypair) -> Self {
+    fn new(writer: &PublicKey, added_by: &Keypair, nonce: Nonce) -> Self {
         // XXX This is kinda silly, we hash the Entry and then the sign function hashes the hash
         // which it then signs. If the API gave us a way to retrieve the signed hash we wouldn't
         // have to hash twice. There is an (`sign_prehashed`) API that takes Sha512 (hasher, not
         // digest) as an argument, but it doesn't let us look at the digest.
-        let hash = hash_entry(writer, &added_by.public);
+        let hash = hash_entry(writer, &added_by.public, &nonce);
         let signature = added_by.sign(hash.as_ref());
 
         Self {
             writer: *writer,
             added_by: added_by.public,
+            nonce,
             hash,
             signature,
             has_valid_hash: Cell::new(Some(true)),
@@ -152,7 +167,7 @@ impl Entry {
         match b {
             Some(b) => b,
             None => {
-                let v = self.hash == hash_entry(&self.writer, &self.added_by);
+                let v = self.hash == hash_entry(&self.writer, &self.added_by, &self.nonce);
                 self.has_valid_hash.set(Some(v));
                 v
             }
@@ -186,12 +201,13 @@ impl fmt::Debug for Entry {
     }
 }
 
-fn hash_entry(writer: &PublicKey, added_by: &PublicKey) -> Hash {
+fn hash_entry(writer: &PublicKey, added_by: &PublicKey, nonce: &Nonce) -> Hash {
     let mut hasher = Sha3_256::new();
 
     hasher.update(b"OuiSync WriterSet Entry");
     hasher.update(writer);
     hasher.update(added_by);
+    hasher.update(nonce);
 
     hasher.finalize().into()
 }
@@ -207,12 +223,15 @@ mod tests {
         assert!(ws.is_writer(&alice.public));
 
         let bob = Keypair::generate();
+        let bob_nonce = rand::random();
+
         let carol = Keypair::generate();
+        let carol_nonce = rand::random();
 
         assert!(!ws.is_writer(&bob.public));
-        assert!(ws.add_writer(&carol.public, &bob).is_none());
-        assert!(ws.add_writer(&bob.public, &alice).is_some());
-        assert!(ws.add_writer(&carol.public, &bob).is_some());
+        assert!(ws.add_writer(&carol.public, &bob, carol_nonce).is_none());
+        assert!(ws.add_writer(&bob.public, &alice, bob_nonce).is_some());
+        assert!(ws.add_writer(&carol.public, &bob, carol_nonce).is_some());
     }
 
     #[test]
@@ -221,10 +240,13 @@ mod tests {
         let mut ws2 = ws1.clone();
 
         let bob = Keypair::generate();
-        let carol = Keypair::generate();
+        let bob_nonce = rand::random();
 
-        ws1.add_writer(&bob.public, &alice);
-        ws2.add_writer(&carol.public, &alice);
+        let carol = Keypair::generate();
+        let carol_nonce = rand::random();
+
+        ws1.add_writer(&bob.public, &alice, bob_nonce);
+        ws2.add_writer(&carol.public, &alice, carol_nonce);
 
         for ws2_entry in ws2.entries() {
             if let Some(e) = ws1.prepare_entry(ws2_entry.clone()) {
@@ -247,10 +269,13 @@ mod tests {
         let (mut ws2, mallory) = WriterSet::generate();
 
         let bob = Keypair::generate();
-        let carol = Keypair::generate();
+        let bob_nonce = rand::random();
 
-        ws1.add_writer(&bob.public, &alice);
-        ws2.add_writer(&carol.public, &mallory);
+        let carol = Keypair::generate();
+        let carol_nonce = rand::random();
+
+        ws1.add_writer(&bob.public, &alice, bob_nonce);
+        ws2.add_writer(&carol.public, &mallory, carol_nonce);
 
         for ws2_entry in ws2.entries() {
             assert!(ws1.prepare_entry(ws2_entry.clone()).is_none());

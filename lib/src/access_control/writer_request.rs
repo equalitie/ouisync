@@ -24,8 +24,4 @@ impl WriterRequest {
 
         true
     }
-
-    // pub fn nonce(&self) -> &[u8] {
-    //     self.nonce_pk.as_ref()
-    // }
 }

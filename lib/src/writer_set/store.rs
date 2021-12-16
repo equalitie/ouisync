@@ -134,17 +134,17 @@ impl Store {
 /// Insert an entry which is known by this application to have valid entry.hash and
 /// entry.signature.
 async fn insert_valid_entry(entry: &Entry, tx: &mut db::Transaction<'_>) -> Result<()> {
-    let e = sqlx::query(
-        "INSERT INTO writer_set_entries(writer, added_by, hash, signature)
-            VALUES (?, ?, ?, ?)",
+    sqlx::query(
+        "INSERT INTO writer_set_entries(writer, added_by, nonce, hash, signature)
+            VALUES (?, ?, ?, ?, ?)",
     )
     .bind(&entry.writer)
     .bind(&entry.added_by)
+    .bind(&entry.nonce[..])
     .bind(&entry.hash)
     .bind(&entry.signature)
     .execute(tx)
-    .await;
-    e?;
+    .await?;
 
     Ok(())
 }
@@ -152,24 +152,26 @@ async fn insert_valid_entry(entry: &Entry, tx: &mut db::Transaction<'_>) -> Resu
 async fn load_entries(tx: &mut db::Transaction<'_>) -> Result<HashMap<Hash, Entry>> {
     use std::cell::Cell;
 
-    let entries = sqlx::query("SELECT writer,added_by,hash,signature FROM writer_set_entries")
+    sqlx::query("SELECT writer, added_by, nonce, hash, signature FROM writer_set_entries")
         .fetch_all(tx)
         .await?
         .into_iter()
         .map(|row| {
+            let nonce: &[u8] = row.get(2);
+
             let e = Entry {
                 writer: row.get(0),
                 added_by: row.get(1),
-                hash: row.get(2),
-                signature: row.get(3),
+                nonce: nonce.try_into()?,
+                hash: row.get(3),
+                signature: row.get(4),
                 has_valid_hash: Cell::new(None),
                 has_valid_signature: Cell::new(None),
             };
-            (e.hash, e)
-        })
-        .collect();
 
-    Ok(entries)
+            Ok((e.hash, e))
+        })
+        .collect()
 }
 
 async fn load_origin_hash(tx: &mut db::Transaction<'_>) -> Result<Option<Hash>> {
@@ -193,10 +195,14 @@ async fn write_origin_hash(origin_hash: &Hash, tx: &mut db::Transaction<'_>) -> 
 async fn create_tables(tx: &mut db::Transaction<'_>) -> Result<()> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS writer_set_entries (
-             writer BLOB NOT NULL,
-             added_by BLOB NOT NULL,
-             hash BLOB NOT NULL,
-             signature BLOB NOT NULL
+             writer    BLOB NOT NULL,
+             added_by  BLOB NOT NULL,
+             nonce     BLOB NOT NULL,
+             hash      BLOB NOT NULL,
+             signature BLOB NOT NULL,
+
+             UNIQUE(writer),
+             UNIQUE(added_by, nonce)
          );",
     )
     .execute(&mut (*tx))
@@ -228,32 +234,36 @@ mod tests {
         let (mut store, alice) = Store::create_new(&pool).await.unwrap();
 
         let bob = Keypair::generate();
+        let bob_nonce = rand::random();
 
-        let entry = Entry::new(&bob.public, &alice);
+        let entry = Entry::new(&bob.public, &alice, bob_nonce);
 
         assert!(store.try_add_entry(entry).await.is_ok());
 
         let malory = Keypair::generate();
-        let carol = Keypair::generate();
+        let malory_nonce = rand::random();
 
-        assert!(!store
-            .try_add_entry(Entry::new(&malory.public, &malory))
+        let carol = Keypair::generate();
+        let carol_nonce = rand::random();
+
+        assert!(store
+            .try_add_entry(Entry::new(&malory.public, &malory, malory_nonce))
             .await
-            .is_ok());
-        assert!(!store
-            .try_add_entry(Entry::new(&carol.public, &malory))
+            .is_err());
+        assert!(store
+            .try_add_entry(Entry::new(&carol.public, &malory, carol_nonce))
             .await
-            .is_ok());
+            .is_err());
 
         let mut store = Store::load(pool).await.unwrap();
 
         assert!(store
-            .try_add_entry(Entry::new(&carol.public, &alice))
+            .try_add_entry(Entry::new(&carol.public, &alice, carol_nonce))
             .await
             .is_ok());
-        assert!(!store
-            .try_add_entry(Entry::new(&alice.public, &alice))
+        assert!(store
+            .try_add_entry(Entry::new(&alice.public, &alice, rand::random()))
             .await
-            .is_ok());
+            .is_err());
     }
 }
