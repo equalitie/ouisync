@@ -1,5 +1,5 @@
 use crate::{
-    crypto::sign::PublicKey,
+    crypto::sign::{Keypair, PublicKey},
     db,
     error::{Error, Result},
 };
@@ -51,7 +51,8 @@ pub async fn get_or_create_id(db: impl db::Acquire<'_>) -> Result<PublicKey> {
     let id = match get_id(&mut tx).await? {
         Some(id) => id,
         None => {
-            let id = rand::random();
+            let keypair = Keypair::generate();
+            let id = keypair.public;
             set_id(&mut tx, &id).await?;
             id
         }

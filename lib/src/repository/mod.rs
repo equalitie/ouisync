@@ -1,6 +1,6 @@
 mod id;
 
-pub use self::id::{PublicRepositoryId, SecretRepositoryId};
+pub use self::id::RepositoryId;
 
 use crate::{
     block,
@@ -69,12 +69,12 @@ impl Repository {
     }
 
     /// Get the id of this repository or `Error::EntryNotFound` if no id was assigned yet.
-    pub async fn get_id(&self) -> Result<SecretRepositoryId> {
+    pub async fn get_id(&self) -> Result<RepositoryId> {
         metadata::get_repository_id(self.db_pool()).await
     }
 
     /// Get the id of this repository or create it if it wasn't assigned yet.
-    pub async fn get_or_create_id(&self) -> Result<SecretRepositoryId> {
+    pub async fn get_or_create_id(&self) -> Result<RepositoryId> {
         let mut tx = self.db_pool().begin().await?;
 
         let id = match metadata::get_repository_id(&mut tx).await {
@@ -94,7 +94,7 @@ impl Repository {
 
     /// Assign the id to this repository. Fails with `Error::EntryExists` if id was already
     /// assigned either by calling `set_id` or `get_or_create_id`.
-    pub async fn set_id(&self, id: SecretRepositoryId) -> Result<()> {
+    pub async fn set_id(&self, id: RepositoryId) -> Result<()> {
         metadata::set_repository_id(self.db_pool(), &id).await
     }
 

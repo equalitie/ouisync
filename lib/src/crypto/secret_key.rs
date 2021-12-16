@@ -4,6 +4,7 @@ use sha3::{
     Sha3_256,
 };
 // TODO: Using scrypt because argon2 v0.3.2 did not compile.
+use generic_array::{sequence::GenericSequence, typenum::Unsigned};
 use scrypt::{
     password_hash::{
         self,
@@ -30,6 +31,9 @@ const SCRYPT_SALT_LEN: usize = password_hash::Salt::RECOMMENDED_LENGTH;
 pub type ScryptSalt = [u8; SCRYPT_SALT_LEN];
 
 impl SecretKey {
+    /// Size of the key in bytes.
+    pub const SIZE: usize = <<Array as GenericSequence<_>>::Length as Unsigned>::USIZE;
+
     /// Generate a random secret key using the given cryptographically secure random number
     /// generator.
     ///
@@ -97,6 +101,15 @@ impl SecretKey {
     // Use this only for initialization. Panics if this key has more than one clone.
     fn as_array_mut(&mut self) -> &mut Array {
         &mut Arc::get_mut(&mut self.0).unwrap().0
+    }
+}
+
+impl From<[u8; Self::SIZE]> for SecretKey {
+    fn from(mut bytes: [u8; Self::SIZE]) -> Self {
+        let mut key = Self::zero();
+        key.as_array_mut().copy_from_slice(&bytes);
+        bytes.zeroize();
+        key
     }
 }
 

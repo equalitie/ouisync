@@ -3,8 +3,8 @@ use super::{
     utils::{self, Port, SharedHandle, UniqueHandle},
 };
 use crate::{
-    crypto::Cryptor, directory::EntryType, error::Error, network::Registration, path,
-    repository::Repository, share_token::ShareToken,
+    access_control::ShareToken, crypto::Cryptor, directory::EntryType, error::Error,
+    network::Registration, path, repository::Repository,
 };
 use std::{os::raw::c_char, ptr, sync::Arc};
 use tokio::task::JoinHandle;

@@ -9,6 +9,7 @@ pub mod crypto;
 pub mod debug_printer;
 pub mod this_writer;
 
+mod access_control;
 mod blob;
 mod blob_id;
 mod block;
@@ -29,7 +30,6 @@ mod network;
 mod path;
 mod repository;
 mod scoped_task;
-mod share_token;
 mod store;
 #[cfg(test)]
 mod test_utils;
@@ -39,6 +39,7 @@ mod versioned_file_name;
 mod writer_set;
 
 pub use self::{
+    access_control::ShareToken,
     crypto::{sign, Cryptor},
     db::Store,
     directory::{Directory, EntryRef, EntryType},
@@ -48,5 +49,4 @@ pub use self::{
     joint_entry::JointEntry,
     network::{Network, NetworkOptions},
     repository::Repository,
-    share_token::ShareToken,
 };

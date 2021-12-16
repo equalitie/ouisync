@@ -8,10 +8,11 @@
 //! based on the identity of the replicas is needed.
 
 use super::{
+    message::MessageChannel,
     message_dispatcher::{ContentSink, ContentStream},
     protocol::RuntimeId,
 };
-use crate::repository::{PublicRepositoryId, SecretRepositoryId};
+use crate::repository::RepositoryId;
 use noise_protocol::Cipher as _;
 use noise_rust_crypto::{Blake2s, ChaCha20Poly1305, X25519};
 use std::mem;
@@ -38,7 +39,7 @@ impl Role {
     ///
     /// Panics if the runtime ids are equal.
     pub fn determine(
-        repo_id: &SecretRepositoryId,
+        repo_id: &RepositoryId,
         this_runtime_id: &RuntimeId,
         that_runtime_id: &RuntimeId,
     ) -> Self {
@@ -88,8 +89,8 @@ impl DecryptingStream {
         Ok(content)
     }
 
-    pub fn id(&self) -> &PublicRepositoryId {
-        self.inner.id()
+    pub fn channel(&self) -> &MessageChannel {
+        self.inner.channel()
     }
 }
 
@@ -118,8 +119,8 @@ impl EncryptingSink {
         }
     }
 
-    pub fn id(&self) -> &PublicRepositoryId {
-        self.inner.id()
+    pub fn channel(&self) -> &MessageChannel {
+        self.inner.channel()
     }
 }
 
@@ -127,7 +128,7 @@ impl EncryptingSink {
 /// repository.
 pub(super) async fn establish_channel(
     role: Role,
-    repo_id: &SecretRepositoryId,
+    repo_id: &RepositoryId,
     mut stream: ContentStream,
     sink: ContentSink,
 ) -> Result<(DecryptingStream, EncryptingSink), Error> {
@@ -194,7 +195,7 @@ impl From<noise_protocol::Error> for Error {
     }
 }
 
-fn build_handshake_state(role: Role, repo_id: &SecretRepositoryId) -> HandshakeState {
+fn build_handshake_state(role: Role, repo_id: &RepositoryId) -> HandshakeState {
     use noise_protocol::patterns;
 
     let mut state = HandshakeState::new(

@@ -339,6 +339,8 @@ impl Branches {
 
 async fn broadcast<T: Clone>(tx: &async_broadcast::Sender<T>, value: T) {
     // don't await if there are only inactive receivers.
+    // FIXME: this is racy, because all active receivers might get deactivated after this check but
+    //        before the call to `broadcast`. Is there a better way?
     if tx.receiver_count() == 0 {
         return;
     }
