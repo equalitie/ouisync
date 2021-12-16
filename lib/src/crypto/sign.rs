@@ -19,7 +19,7 @@ pub struct Keypair {
     pub secret: SecretKey,
     pub public: PublicKey,
 }
-#[derive(Clone)]
+#[derive(PartialEq, Eq, Clone, Copy)]
 pub struct Signature(ext::Signature);
 
 pub type SignatureError = ext::SignatureError;
@@ -142,9 +142,29 @@ impl Distribution<PublicKey> for Standard {
 derive_sqlx_traits_for_byte_array_wrapper!(PublicKey);
 
 impl SecretKey {
+    pub const SIZE: usize = ext::SECRET_KEY_LENGTH;
+
     pub fn sign(&self, msg: &[u8], public_key: &PublicKey) -> Signature {
         let expanded: ext::ExpandedSecretKey = (&self.0).into();
         Signature(expanded.sign(msg, &public_key.0))
+    }
+}
+
+impl From<[u8; Self::SIZE]> for SecretKey {
+    fn from(bytes: [u8; Self::SIZE]) -> Self {
+        Self(ext::SecretKey::from_bytes(&bytes).unwrap())
+    }
+}
+
+impl AsRef<[u8]> for SecretKey {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+}
+
+impl fmt::Debug for SecretKey {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "SecretKey(****)")
     }
 }
 
@@ -167,10 +187,8 @@ impl Distribution<SecretKey> for Standard {
     }
 }
 
-impl fmt::Debug for SecretKey {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "SecretKey(****)")
-    }
+impl Signature {
+    pub const SIZE: usize = ext::SIGNATURE_LENGTH;
 }
 
 impl AsRef<[u8]> for Signature {
