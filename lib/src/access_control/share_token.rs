@@ -2,7 +2,7 @@ use super::writer_request::WriterRequest;
 use crate::{
     crypto::{sign, SecretKey},
     error::Error,
-    repository::SecretRepositoryId,
+    repository::RepositoryId,
 };
 use std::{borrow::Cow, fmt, str::FromStr};
 use thiserror::Error;
@@ -14,7 +14,7 @@ pub const SCHEME: &str = "ouisync";
 /// other replicas.
 #[derive(Debug)]
 pub struct ShareToken {
-    id: SecretRepositoryId,
+    id: RepositoryId,
     name: String,
     access: Access,
 }
@@ -42,7 +42,7 @@ pub(super) enum Access {
 
 impl ShareToken {
     /// Create share token for blind access to the given repository.
-    pub fn new(id: SecretRepositoryId) -> Self {
+    pub fn new(id: RepositoryId) -> Self {
         Self {
             id,
             name: "".to_owned(),
@@ -86,7 +86,7 @@ impl ShareToken {
     }
 
     /// Id of the repository to share.
-    pub fn id(&self) -> &SecretRepositoryId {
+    pub fn id(&self) -> &RepositoryId {
         &self.id
     }
 
@@ -155,12 +155,12 @@ impl ShareToken {
 }
 
 pub(super) fn signature_material(
-    id: &SecretRepositoryId,
+    id: &RepositoryId,
     pk: &sign::PublicKey,
-) -> [u8; SecretRepositoryId::SIZE + sign::PublicKey::SIZE] {
-    let mut message = [0; SecretRepositoryId::SIZE + sign::PublicKey::SIZE];
-    message[..SecretRepositoryId::SIZE].copy_from_slice(id.as_ref());
-    message[SecretRepositoryId::SIZE..].copy_from_slice(pk.as_ref());
+) -> [u8; RepositoryId::SIZE + sign::PublicKey::SIZE] {
+    let mut message = [0; RepositoryId::SIZE + sign::PublicKey::SIZE];
+    message[..RepositoryId::SIZE].copy_from_slice(id.as_ref());
+    message[RepositoryId::SIZE..].copy_from_slice(pk.as_ref());
     message
 }
 
@@ -232,7 +232,7 @@ mod tests {
     fn encode() {
         let id_hex = "416d9c3fe32017f7b5c8e406630576ad416d9c3fe32017f7b5c8e406630576ad";
         let id_bytes = hex::decode(id_hex).unwrap();
-        let id = SecretRepositoryId::try_from(id_bytes.as_ref()).unwrap();
+        let id = RepositoryId::try_from(id_bytes.as_ref()).unwrap();
 
         let token = ShareToken::new(id);
         assert_eq!(token.to_string(), format!("ouisync:{}", id_hex));
@@ -243,7 +243,7 @@ mod tests {
 
     #[test]
     fn encode_and_decode() {
-        let id: SecretRepositoryId = rand::random();
+        let id: RepositoryId = rand::random();
 
         let token = ShareToken::new(id);
         let string = token.to_string();

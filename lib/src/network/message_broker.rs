@@ -7,7 +7,7 @@ use super::{
     protocol::RuntimeId,
     server::Server,
 };
-use crate::{index::Index, repository::SecretRepositoryId};
+use crate::{index::Index, repository::RepositoryId};
 use std::collections::{hash_map::Entry, HashMap};
 use tokio::{
     net::TcpStream,
@@ -107,7 +107,7 @@ impl MessageBroker {
     /// Try to establish a link between a local repository and a remote repository. The remote
     /// counterpart needs to call this too with matching `local_name` and `remote_name` for the link
     /// to actually be created.
-    pub fn create_link(&mut self, id: SecretRepositoryId, index: Index) {
+    pub fn create_link(&mut self, id: RepositoryId, index: Index) {
         let channel = MessageChannel::from(&id);
         let (abort_tx, abort_rx) = oneshot::channel();
 
@@ -141,14 +141,14 @@ impl MessageBroker {
 
     /// Destroy the link between a local repository with the specified id hash and its remote
     /// counterpart (if one exists).
-    pub fn destroy_link(&mut self, id: &SecretRepositoryId) {
+    pub fn destroy_link(&mut self, id: &RepositoryId) {
         self.links.remove(&MessageChannel::from(id));
     }
 }
 
 async fn run_link(
     role: Role,
-    repo_id: &SecretRepositoryId,
+    repo_id: &RepositoryId,
     stream: ContentStream,
     sink: ContentSink,
     index: Index,

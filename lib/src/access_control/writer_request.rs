@@ -1,8 +1,8 @@
 use super::share_token;
-use crate::{crypto::sign, repository::SecretRepositoryId};
+use crate::{crypto::sign, repository::RepositoryId};
 
 pub struct WriterRequest {
-    pub(super) id: SecretRepositoryId,
+    pub(super) id: RepositoryId,
     pub(super) giver_pk: sign::PublicKey,
     pub(super) recipient_pk: sign::PublicKey,
     pub(super) recipient_pk_signature: sign::Signature,

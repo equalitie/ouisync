@@ -23,7 +23,7 @@ use self::{
 use crate::{
     error::{Error, Result},
     index::Index,
-    repository::{Repository, SecretRepositoryId},
+    repository::{Repository, RepositoryId},
     scoped_task::{self, ScopedJoinHandle, ScopedTaskSet},
     upnp,
 };
@@ -262,7 +262,7 @@ pub struct Registration {
 }
 
 impl Registration {
-    pub async fn get_or_create_id(&self, repo: &Repository) -> Result<SecretRepositoryId> {
+    pub async fn get_or_create_id(&self, repo: &Repository) -> Result<RepositoryId> {
         let mut state = self.inner.state.lock().await;
         let holder = &mut state.registry[self.key];
 
@@ -287,7 +287,7 @@ impl Registration {
         }
     }
 
-    pub async fn set_id(&self, repo: &Repository, id: SecretRepositoryId) -> Result<()> {
+    pub async fn set_id(&self, repo: &Repository, id: RepositoryId) -> Result<()> {
         let mut state = self.inner.state.lock().await;
         let holder = &mut state.registry[self.key];
 
@@ -383,7 +383,7 @@ struct RegistrationHolder {
 enum RegistrationState {
     // Repository is shared with other replicas.
     Shared {
-        id: SecretRepositoryId,
+        id: RepositoryId,
         dht: Option<dht_discovery::LookupRequest>,
     },
     // Repository is not yet shared with any replica.
@@ -417,7 +417,7 @@ struct State {
 }
 
 impl State {
-    fn create_link(&mut self, id: SecretRepositoryId, index: &Index) {
+    fn create_link(&mut self, id: RepositoryId, index: &Index) {
         for broker in self.message_brokers.values_mut() {
             broker.create_link(id, index.clone())
         }
@@ -695,7 +695,7 @@ impl fmt::Display for PeerSource {
     }
 }
 
-fn repository_info_hash(id: &SecretRepositoryId) -> InfoHash {
+fn repository_info_hash(id: &RepositoryId) -> InfoHash {
     // Calculate the info hash by hashing the id with SHA3-256 and taking the first 20 bytes.
     // (bittorrent uses SHA-1 but that is less secure).
     // `unwrap` is OK because the byte slice has the correct length.

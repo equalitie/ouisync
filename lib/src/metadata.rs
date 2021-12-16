@@ -5,7 +5,7 @@ use crate::{
     crypto::{AuthTag, Cryptor, Nonce, ScryptSalt, SecretKey},
     db,
     error::{Error, Result},
-    repository::SecretRepositoryId,
+    repository::RepositoryId,
 };
 use sqlx::Row;
 
@@ -79,14 +79,11 @@ pub(crate) async fn derive_master_key(user_password: &str, db: &db::Pool) -> Res
 // -------------------------------------------------------------------
 // Repository Id
 // -------------------------------------------------------------------
-pub(crate) async fn get_repository_id(db: impl db::Executor<'_>) -> Result<SecretRepositoryId> {
+pub(crate) async fn get_repository_id(db: impl db::Executor<'_>) -> Result<RepositoryId> {
     get_public(REPOSITORY_ID, db).await.map(|blob| blob.into())
 }
 
-pub(crate) async fn set_repository_id(
-    db: impl db::Executor<'_>,
-    id: &SecretRepositoryId,
-) -> Result<()> {
+pub(crate) async fn set_repository_id(db: impl db::Executor<'_>, id: &RepositoryId) -> Result<()> {
     set_public(REPOSITORY_ID, id.as_ref(), db).await
 }
 

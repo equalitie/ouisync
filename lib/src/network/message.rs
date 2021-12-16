@@ -2,7 +2,7 @@ use crate::{
     block::BlockId,
     crypto::{sign::PublicKey, AuthTag, Hash},
     index::{InnerNodeMap, LeafNodeSet, Summary},
-    repository::SecretRepositoryId,
+    repository::RepositoryId,
     version_vector::VersionVector,
 };
 use serde::{Deserialize, Serialize};
@@ -116,8 +116,8 @@ impl MessageChannel {
     }
 }
 
-impl<'a> From<&'a SecretRepositoryId> for MessageChannel {
-    fn from(id: &'a SecretRepositoryId) -> Self {
+impl<'a> From<&'a RepositoryId> for MessageChannel {
+    fn from(id: &'a RepositoryId) -> Self {
         Self(id.salted_hash(b"ouisync message channel").into())
     }
 }
