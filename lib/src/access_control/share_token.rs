@@ -93,7 +93,10 @@ impl ShareToken {
     /// Suggested name of the repository.
     pub fn suggested_name(&self) -> Cow<str> {
         if self.name.is_empty() {
-            Cow::Owned(format!("{:x}", self.id.public()))
+            Cow::Owned(format!(
+                "{:x}",
+                self.id.salted_hash(b"ouisync repository name")
+            ))
         } else {
             Cow::Borrowed(&self.name)
         }

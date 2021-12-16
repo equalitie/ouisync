@@ -2,10 +2,9 @@
 
 use super::{
     connection::{ConnectionPermit, ConnectionPermitHalf},
-    message::Message,
+    message::{Message, MessageChannel},
     message_io::{MessageSink, MessageStream, SendError},
 };
-use crate::repository::PublicRepositoryId;
 use futures_util::{ready, stream::SelectAll, Sink, SinkExt, Stream, StreamExt};
 use std::{
     collections::{HashMap, VecDeque},
@@ -54,14 +53,14 @@ impl MessageDispatcher {
     }
 
     /// Opens a stream for receiving messages with the given id.
-    pub fn open_recv(&self, id: PublicRepositoryId) -> ContentStream {
-        ContentStream::new(id, self.recv.clone())
+    pub fn open_recv(&self, channel: MessageChannel) -> ContentStream {
+        ContentStream::new(channel, self.recv.clone())
     }
 
     /// Opens a sink for sending messages with the given id.
-    pub fn open_send(&self, id: PublicRepositoryId) -> ContentSink {
+    pub fn open_send(&self, channel: MessageChannel) -> ContentSink {
         ContentSink {
-            id,
+            channel,
             state: self.send.clone(),
         }
     }
@@ -79,24 +78,24 @@ impl Drop for MessageDispatcher {
 }
 
 pub(super) struct ContentStream {
-    id: PublicRepositoryId,
+    channel: MessageChannel,
     state: Arc<RecvState>,
     queues_changed_rx: watch::Receiver<()>,
 }
 
 impl ContentStream {
-    fn new(id: PublicRepositoryId, state: Arc<RecvState>) -> Self {
+    fn new(channel: MessageChannel, state: Arc<RecvState>) -> Self {
         let queues_changed_rx = state.queues_changed_tx.subscribe();
 
         Self {
-            id,
+            channel,
             state,
             queues_changed_rx,
         }
     }
 
-    pub fn id(&self) -> &PublicRepositoryId {
-        &self.id
+    pub fn channel(&self) -> &MessageChannel {
+        &self.channel
     }
 
     /// Receive the next message content.
@@ -104,7 +103,7 @@ impl ContentStream {
         let mut closed = false;
 
         loop {
-            if let Some(content) = self.state.pop(&self.id) {
+            if let Some(content) = self.state.pop(&self.channel) {
                 return Some(content);
             }
 
@@ -115,7 +114,7 @@ impl ContentStream {
             select! {
                 message = self.state.reader.recv() => {
                     if let Some(message) = message {
-                        if message.id == self.id {
+                        if message.channel == self.channel {
                             return Some(message.content);
                         } else {
                             self.state.push(message)
@@ -134,20 +133,20 @@ impl ContentStream {
 
 #[derive(Clone)]
 pub(super) struct ContentSink {
-    id: PublicRepositoryId,
+    channel: MessageChannel,
     state: Arc<MultiSink>,
 }
 
 impl ContentSink {
-    pub fn id(&self) -> &PublicRepositoryId {
-        &self.id
+    pub fn channel(&self) -> &MessageChannel {
+        &self.channel
     }
 
     /// Returns whether the send succeeded.
     pub async fn send(&self, content: Vec<u8>) -> bool {
         self.state
             .send(Message {
-                id: self.id,
+                channel: self.channel,
                 content,
             })
             .await
@@ -156,14 +155,14 @@ impl ContentSink {
 
 struct RecvState {
     reader: MultiStream,
-    queues: Mutex<HashMap<PublicRepositoryId, VecDeque<Vec<u8>>>>,
+    queues: Mutex<HashMap<MessageChannel, VecDeque<Vec<u8>>>>,
     queues_changed_tx: watch::Sender<()>,
 }
 
 impl RecvState {
     // Pops a message from the corresponding queue.
-    fn pop(&self, id: &PublicRepositoryId) -> Option<Vec<u8>> {
-        self.queues.lock().unwrap().get_mut(id)?.pop_back()
+    fn pop(&self, channel: &MessageChannel) -> Option<Vec<u8>> {
+        self.queues.lock().unwrap().get_mut(channel)?.pop_back()
     }
 
     // Pushes the message into the corresponding queue, creating it if it didn't exist. Wakes up any
@@ -172,7 +171,7 @@ impl RecvState {
         self.queues
             .lock()
             .unwrap()
-            .entry(message.id)
+            .entry(message.channel)
             .or_default()
             .push_front(message.content);
         self.queues_changed_tx.send(()).unwrap_or(());
@@ -449,18 +448,18 @@ mod tests {
     async fn recv_on_stream() {
         let (mut client, server) = setup().await;
 
-        let repo_id = PublicRepositoryId::random();
+        let channel = MessageChannel::random();
         let send_content = b"hello world";
 
         client
             .send(Message {
-                id: repo_id,
+                channel,
                 content: send_content.to_vec(),
             })
             .await
             .unwrap();
 
-        let mut server_stream = server.open_recv(repo_id);
+        let mut server_stream = server.open_recv(channel);
 
         let recv_content = server_stream.recv().await.unwrap();
         assert_eq!(recv_content, send_content);
@@ -470,24 +469,24 @@ mod tests {
     async fn recv_on_two_streams() {
         let (mut client, server) = setup().await;
 
-        let repo_id0 = PublicRepositoryId::random();
-        let repo_id1 = PublicRepositoryId::random();
+        let channel0 = MessageChannel::random();
+        let channel1 = MessageChannel::random();
 
         let send_content0 = b"one two three";
         let send_content1 = b"four five six";
 
-        for (repo_id, content) in [(repo_id0, send_content0), (repo_id1, send_content1)] {
+        for (channel, content) in [(channel0, send_content0), (channel1, send_content1)] {
             client
                 .send(Message {
-                    id: repo_id,
+                    channel,
                     content: content.to_vec(),
                 })
                 .await
                 .unwrap();
         }
 
-        let server_stream0 = server.open_recv(repo_id0);
-        let server_stream1 = server.open_recv(repo_id1);
+        let server_stream0 = server.open_recv(channel0);
+        let server_stream1 = server.open_recv(channel1);
 
         for (mut server_stream, send_content) in [
             (server_stream0, send_content0),
@@ -502,7 +501,7 @@ mod tests {
     async fn drop_stream() {
         let (mut client, server) = setup().await;
 
-        let repo_id = PublicRepositoryId::random();
+        let channel = MessageChannel::random();
 
         let send_content0 = b"one two three";
         let send_content1 = b"four five six";
@@ -510,15 +509,15 @@ mod tests {
         for content in [send_content0, send_content1] {
             client
                 .send(Message {
-                    id: repo_id,
+                    channel,
                     content: content.to_vec(),
                 })
                 .await
                 .unwrap();
         }
 
-        let mut server_stream0 = server.open_recv(repo_id);
-        let mut server_stream1 = server.open_recv(repo_id);
+        let mut server_stream0 = server.open_recv(channel);
+        let mut server_stream1 = server.open_recv(channel);
 
         let recv_content = server_stream0.recv().await.unwrap();
         assert_eq!(recv_content, send_content0);
@@ -533,9 +532,9 @@ mod tests {
     async fn drop_dispatcher() {
         let (_client, server) = setup().await;
 
-        let repo_id = PublicRepositoryId::random();
+        let channel = MessageChannel::random();
 
-        let mut server_stream = server.open_recv(repo_id);
+        let mut server_stream = server.open_recv(channel);
 
         drop(server);
 
@@ -556,7 +555,7 @@ mod tests {
         let mut client = MessageSink::new(client);
         client
             .send(Message {
-                id: PublicRepositoryId::random(),
+                channel: MessageChannel::random(),
                 content: b"hello world".to_vec(),
             })
             .await

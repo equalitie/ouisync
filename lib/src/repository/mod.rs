@@ -1,6 +1,6 @@
 mod id;
 
-pub use self::id::{PublicRepositoryId, SecretRepositoryId};
+pub use self::id::SecretRepositoryId;
 
 use crate::{
     block,

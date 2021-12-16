@@ -2,15 +2,12 @@ use super::{
     client::Client,
     connection::ConnectionPermit,
     crypto::{self, DecryptingStream, EncryptingSink, Role},
-    message::{Content, Request, Response},
+    message::{Content, MessageChannel, Request, Response},
     message_dispatcher::{ContentSink, ContentStream, MessageDispatcher},
     protocol::RuntimeId,
     server::Server,
 };
-use crate::{
-    index::Index,
-    repository::{PublicRepositoryId, SecretRepositoryId},
-};
+use crate::{index::Index, repository::SecretRepositoryId};
 use std::collections::{hash_map::Entry, HashMap};
 use tokio::{
     net::TcpStream,
@@ -77,7 +74,7 @@ pub(super) struct MessageBroker {
     this_runtime_id: RuntimeId,
     that_runtime_id: RuntimeId,
     dispatcher: MessageDispatcher,
-    links: HashMap<PublicRepositoryId, oneshot::Sender<()>>,
+    links: HashMap<MessageChannel, oneshot::Sender<()>>,
 }
 
 impl MessageBroker {
@@ -110,16 +107,16 @@ impl MessageBroker {
     /// Try to establish a link between a local repository and a remote repository. The remote
     /// counterpart needs to call this too with matching `local_name` and `remote_name` for the link
     /// to actually be created.
-    pub fn create_link(&mut self, sid: SecretRepositoryId, index: Index) {
-        let pid = sid.public();
+    pub fn create_link(&mut self, id: SecretRepositoryId, index: Index) {
+        let channel = MessageChannel::from(&id);
         let (abort_tx, abort_rx) = oneshot::channel();
 
-        match self.links.entry(pid) {
+        match self.links.entry(channel) {
             Entry::Occupied(mut entry) => {
                 if entry.get().is_closed() {
                     entry.insert(abort_tx);
                 } else {
-                    log::warn!("not creating link for {:?} - already exists", pid);
+                    log::warn!("not creating link for {:?} - already exists", channel);
                     return;
                 }
             }
@@ -128,15 +125,15 @@ impl MessageBroker {
             }
         }
 
-        log::debug!("creating link for {:?}", pid);
+        log::debug!("creating link for {:?}", channel);
 
-        let role = Role::determine(&sid, &self.this_runtime_id, &self.that_runtime_id);
-        let stream = self.dispatcher.open_recv(pid);
-        let sink = self.dispatcher.open_send(pid);
+        let role = Role::determine(&id, &self.this_runtime_id, &self.that_runtime_id);
+        let stream = self.dispatcher.open_recv(channel);
+        let sink = self.dispatcher.open_send(channel);
 
         task::spawn(async move {
             select! {
-                _ = run_link(role, &sid, stream, sink, index) => (),
+                _ = run_link(role, &id, stream, sink, index) => (),
                 _ = abort_rx => (),
             }
         });
@@ -145,7 +142,7 @@ impl MessageBroker {
     /// Destroy the link between a local repository with the specified id hash and its remote
     /// counterpart (if one exists).
     pub fn destroy_link(&mut self, id: &SecretRepositoryId) {
-        self.links.remove(&id.public());
+        self.links.remove(&MessageChannel::from(id));
     }
 }
 
@@ -156,14 +153,14 @@ async fn run_link(
     sink: ContentSink,
     index: Index,
 ) {
-    let id = *stream.id();
+    let channel = *stream.channel();
 
     let (stream, sink) = match crypto::establish_channel(role, repo_id, stream, sink).await {
         Ok(channel) => channel,
         Err(error) => {
             log::warn!(
                 "failed to establish encrypted channel for {:?}: {}",
-                id,
+                channel,
                 error
             );
             return;
@@ -177,13 +174,13 @@ async fn run_link(
     // Run everything in parallel:
     // TODO: restart when nonce exhausted
     select! {
-        _ = run_client(id, index.clone(), content_tx.clone(), response_rx) => (),
-        _ = run_server(id, index, content_tx, request_rx ) => (),
+        _ = run_client(channel, index.clone(), content_tx.clone(), response_rx) => (),
+        _ = run_server(channel, index, content_tx, request_rx ) => (),
         _ = recv_messages(stream, request_tx, response_tx) => (),
         _ = send_messages(content_rx, sink) => (),
     }
 
-    log::debug!("link for {:?} terminated", id)
+    log::debug!("link for {:?} terminated", channel)
 }
 
 // Handle incoming messages
@@ -198,7 +195,7 @@ async fn recv_messages(
             Err(error) => {
                 log::warn!(
                     "failed to deserialize message for {:?}: {}",
-                    stream.id(),
+                    stream.channel(),
                     error
                 );
                 continue;
@@ -219,7 +216,7 @@ async fn recv_messages(
         }
     }
 
-    log::debug!("message stream for {:?} closed", stream.id())
+    log::debug!("message stream for {:?} closed", stream.channel())
 }
 
 // Handle outgoing messages
@@ -234,12 +231,12 @@ async fn send_messages(mut content_rx: mpsc::Receiver<Content>, mut sink: Encryp
         }
     }
 
-    log::debug!("message sink for {:?} closed", sink.id())
+    log::debug!("message sink for {:?} closed", sink.channel())
 }
 
 // Create and run client
 async fn run_client(
-    id: PublicRepositoryId,
+    channel: MessageChannel,
     index: Index,
     content_tx: mpsc::Sender<Content>,
     response_rx: mpsc::Receiver<Response>,
@@ -248,14 +245,14 @@ async fn run_client(
     let mut client = Client::new(index, client_stream);
 
     match client.run().await {
-        Ok(()) => log::debug!("client for {:?} terminated", id),
-        Err(error) => log::error!("client for {:?} failed: {}", id, error),
+        Ok(()) => log::debug!("client for {:?} terminated", channel),
+        Err(error) => log::error!("client for {:?} failed: {}", channel, error),
     }
 }
 
 // Create and run server
 async fn run_server(
-    id: PublicRepositoryId,
+    channel: MessageChannel,
     index: Index,
     content_tx: mpsc::Sender<Content>,
     request_rx: mpsc::Receiver<Request>,
@@ -264,7 +261,7 @@ async fn run_server(
     let mut server = Server::new(index, server_stream);
 
     match server.run().await {
-        Ok(()) => log::debug!("server for {:?} terminated", id),
-        Err(error) => log::error!("server for {:?} failed: {}", id, error),
+        Ok(()) => log::debug!("server for {:?} terminated", channel),
+        Err(error) => log::error!("server for {:?} failed: {}", channel, error),
     }
 }

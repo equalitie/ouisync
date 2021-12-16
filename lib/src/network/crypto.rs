@@ -8,10 +8,11 @@
 //! based on the identity of the replicas is needed.
 
 use super::{
+    message::MessageChannel,
     message_dispatcher::{ContentSink, ContentStream},
     protocol::RuntimeId,
 };
-use crate::repository::{PublicRepositoryId, SecretRepositoryId};
+use crate::repository::SecretRepositoryId;
 use noise_protocol::Cipher as _;
 use noise_rust_crypto::{Blake2s, ChaCha20Poly1305, X25519};
 use std::mem;
@@ -88,8 +89,8 @@ impl DecryptingStream {
         Ok(content)
     }
 
-    pub fn id(&self) -> &PublicRepositoryId {
-        self.inner.id()
+    pub fn channel(&self) -> &MessageChannel {
+        self.inner.channel()
     }
 }
 
@@ -118,8 +119,8 @@ impl EncryptingSink {
         }
     }
 
-    pub fn id(&self) -> &PublicRepositoryId {
-        self.inner.id()
+    pub fn channel(&self) -> &MessageChannel {
+        self.inner.channel()
     }
 }
 

@@ -23,10 +23,11 @@ use self::{
 use crate::{
     error::{Error, Result},
     index::Index,
-    repository::{PublicRepositoryId, Repository, SecretRepositoryId},
+    repository::{Repository, SecretRepositoryId},
     scoped_task::{self, ScopedJoinHandle, ScopedTaskSet},
     upnp,
 };
+use btdht::{InfoHash, INFO_HASH_LEN};
 use slab::Slab;
 use std::{
     collections::{hash_map::Entry, HashMap},
@@ -228,7 +229,7 @@ impl Handle {
             RegistrationState::Shared {
                 id,
                 dht: if dht {
-                    self.inner.start_dht_lookup(id.public())
+                    self.inner.start_dht_lookup(repository_info_hash(&id))
                 } else {
                     None
                 },
@@ -273,7 +274,7 @@ impl Registration {
                 holder.state = RegistrationState::Shared {
                     id,
                     dht: if dht {
-                        self.inner.start_dht_lookup(id.public())
+                        self.inner.start_dht_lookup(repository_info_hash(&id))
                     } else {
                         None
                     },
@@ -299,7 +300,7 @@ impl Registration {
                 holder.state = RegistrationState::Shared {
                     id,
                     dht: if dht {
-                        self.inner.start_dht_lookup(id.public())
+                        self.inner.start_dht_lookup(repository_info_hash(&id))
                     } else {
                         None
                     },
@@ -317,7 +318,7 @@ impl Registration {
 
         match &mut state.registry[self.key].state {
             RegistrationState::Shared { id, dht } if dht.is_none() => {
-                *dht = self.inner.start_dht_lookup(id.public());
+                *dht = self.inner.start_dht_lookup(repository_info_hash(id));
             }
             RegistrationState::Shared { .. } => {}
             RegistrationState::Unique { dht } => {
@@ -484,10 +485,10 @@ impl Inner {
         }
     }
 
-    fn start_dht_lookup(&self, id: PublicRepositoryId) -> Option<dht_discovery::LookupRequest> {
+    fn start_dht_lookup(&self, info_hash: InfoHash) -> Option<dht_discovery::LookupRequest> {
         self.dht_discovery
             .as_ref()
-            .map(|dht| dht.lookup(id.to_info_hash(), self.dht_peer_found_tx.clone()))
+            .map(|dht| dht.lookup(info_hash, self.dht_peer_found_tx.clone()))
     }
 
     fn establish_user_provided_connection(self: Arc<Self>, addr: SocketAddr) {
@@ -692,4 +693,12 @@ impl fmt::Display for PeerSource {
             PeerSource::Dht => write!(f, "outgoing (found via DHT)"),
         }
     }
+}
+
+fn repository_info_hash(id: &SecretRepositoryId) -> InfoHash {
+    // Calculate the info hash by hashing the id with SHA3-256 and taking the first 20 bytes.
+    // (bittorrent uses SHA-1 but that is less secure).
+    // `unwrap` is OK because the byte slice has the correct length.
+    InfoHash::try_from(&id.salted_hash(b"ouisync repository info-hash").as_ref()[..INFO_HASH_LEN])
+        .unwrap()
 }

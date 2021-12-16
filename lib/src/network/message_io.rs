@@ -1,5 +1,4 @@
-use super::message::Message;
-use crate::repository::PublicRepositoryId;
+use super::message::{Message, MessageChannel};
 use futures_util::{ready, Sink, Stream};
 use std::{
     fmt, io, mem,
@@ -15,7 +14,7 @@ const MAX_MESSAGE_SIZE: u16 = u16::MAX - 1;
 
 // Messages are encoded like this:
 //
-// [ id: `PublicRepositoryId::SIZE` bytes ][ len: 2 bytes ][ content: `len` bytes ]
+// [ channel: `MessageChannel::SIZE` bytes ][ len: 2 bytes ][ content: `len` bytes ]
 //
 
 /// Wrapper that turns a reader (`AsyncRead`) into a `Stream` of `Message`.
@@ -143,7 +142,7 @@ enum EncodeState {
 }
 
 enum SendingPhase {
-    Id,
+    Channel,
     Len,
     Content,
     Done,
@@ -182,7 +181,7 @@ impl Encoder {
 
         self.state = EncodeState::Sending {
             message,
-            phase: SendingPhase::Id,
+            phase: SendingPhase::Channel,
         };
         self.offset = 0;
 
@@ -201,11 +200,11 @@ impl Encoder {
             match &mut self.state {
                 EncodeState::Idle => return Poll::Ready(Ok(())),
                 EncodeState::Sending { message, phase } => match phase {
-                    SendingPhase::Id => {
+                    SendingPhase::Channel => {
                         match ready!(poll_write_all(
                             io.as_mut(),
                             cx,
-                            message.id.as_ref(),
+                            message.channel.as_ref(),
                             &mut self.offset
                         )) {
                             Ok(true) => {
@@ -256,7 +255,7 @@ impl Encoder {
     fn switch_to_idle_on_error(&mut self, source: io::Error) -> Poll<Result<(), SendError>> {
         let message = match mem::replace(&mut self.state, EncodeState::Idle) {
             EncodeState::Idle => Message {
-                id: [0; PublicRepositoryId::SIZE].into(),
+                channel: MessageChannel::default(),
                 content: vec![],
             },
             EncodeState::Sending { message, .. } => message,
@@ -307,16 +306,16 @@ struct Decoder {
 
 #[derive(Clone, Copy)]
 enum DecodePhase {
-    Id,
-    Len { id: PublicRepositoryId },
-    Content { id: PublicRepositoryId },
+    Channel,
+    Len { channel: MessageChannel },
+    Content { channel: MessageChannel },
 }
 
 impl Default for Decoder {
     fn default() -> Self {
         Self {
-            phase: DecodePhase::Id,
-            buffer: vec![0; PublicRepositoryId::SIZE],
+            phase: DecodePhase::Channel,
+            buffer: vec![0; MessageChannel::SIZE],
             offset: 0,
         }
     }
@@ -331,18 +330,18 @@ impl Decoder {
             ready!(self.poll_read_exact(io.as_mut(), cx))?;
 
             match self.phase {
-                DecodePhase::Id => {
-                    let id: [u8; PublicRepositoryId::SIZE] = self
+                DecodePhase::Channel => {
+                    let channel: [u8; MessageChannel::SIZE] = self
                         .filled()
                         .try_into()
                         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-                    let id = PublicRepositoryId::from(id);
+                    let channel = MessageChannel::from(channel);
 
-                    self.phase = DecodePhase::Len { id };
+                    self.phase = DecodePhase::Len { channel };
                     self.buffer.resize(2, 0);
                     self.offset = 0;
                 }
-                DecodePhase::Len { id } => {
+                DecodePhase::Len { channel } => {
                     let len = u16::from_be_bytes(
                         self.filled()
                             .try_into()
@@ -357,28 +356,28 @@ impl Decoder {
                     }
 
                     if len > 0 {
-                        self.phase = DecodePhase::Content { id };
+                        self.phase = DecodePhase::Content { channel };
                         self.buffer.resize(len as usize, 0);
                         self.offset = 0;
                     } else {
-                        self.phase = DecodePhase::Id;
-                        self.buffer.resize(PublicRepositoryId::SIZE, 0);
+                        self.phase = DecodePhase::Channel;
+                        self.buffer.resize(MessageChannel::SIZE, 0);
                         self.offset = 0;
 
                         return Poll::Ready(Ok(Message {
-                            id,
+                            channel,
                             content: vec![],
                         }));
                     }
                 }
-                DecodePhase::Content { id } => {
+                DecodePhase::Content { channel } => {
                     let content = mem::take(&mut self.buffer);
 
-                    self.phase = DecodePhase::Id;
-                    self.buffer.resize(PublicRepositoryId::SIZE, 0);
+                    self.phase = DecodePhase::Channel;
+                    self.buffer.resize(MessageChannel::SIZE, 0);
                     self.offset = 0;
 
-                    return Poll::Ready(Ok(Message { id, content }));
+                    return Poll::Ready(Ok(Message { channel, content }));
                 }
             }
         }

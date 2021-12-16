@@ -2,7 +2,7 @@ use crate::{
     block::BlockId,
     crypto::{sign::PublicKey, AuthTag, Hash},
     index::{InnerNodeMap, LeafNodeSet, Summary},
-    repository::PublicRepositoryId,
+    repository::SecretRepositoryId,
     version_vector::VersionVector,
 };
 use serde::{Deserialize, Serialize};
@@ -93,7 +93,7 @@ impl fmt::Debug for Response {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub(crate) struct Message {
-    pub id: PublicRepositoryId,
+    pub channel: MessageChannel,
     pub content: Vec<u8>,
 }
 
@@ -101,6 +101,31 @@ pub(crate) struct Message {
 pub(crate) enum Content {
     Request(Request),
     Response(Response),
+}
+
+define_byte_array_wrapper! {
+    // TODO: consider lower size (truncate the hash) which should still be enough to be unique
+    // while reducing the message size.
+    pub(crate) struct MessageChannel([u8; Hash::SIZE]);
+}
+
+impl MessageChannel {
+    #[cfg(test)]
+    pub(crate) fn random() -> Self {
+        Self(rand::random())
+    }
+}
+
+impl<'a> From<&'a SecretRepositoryId> for MessageChannel {
+    fn from(id: &'a SecretRepositoryId) -> Self {
+        Self(id.salted_hash(b"ouisync message channel").into())
+    }
+}
+
+impl Default for MessageChannel {
+    fn default() -> Self {
+        Self([0; Self::SIZE])
+    }
 }
 
 #[cfg(test)]

@@ -52,6 +52,12 @@ impl TryFrom<&'_ [u8]> for Hash {
     }
 }
 
+impl From<Hash> for [u8; Hash::SIZE] {
+    fn from(hash: Hash) -> [u8; Hash::SIZE] {
+        hash.0.into()
+    }
+}
+
 derive_sqlx_traits_for_byte_array_wrapper!(Hash);
 
 type Inner = GenericArray<u8, <Sha3_256 as Digest>::OutputSize>;
