@@ -8,6 +8,7 @@ use crate::{
     repository::{MasterSecret, RepositoryId},
 };
 use sqlx::Row;
+use rand::{rngs::OsRng, Rng};
 
 struct AccessSecrets {
     write_key: sign::SecretKey,
@@ -32,8 +33,9 @@ impl AccessSecrets {
 // Metadata keys
 const REPOSITORY_ID: &[u8] = b"repository_id";
 const PASSWORD_SALT: &[u8] = b"password_salt";
-const READER_KEY: &[u8] = b"reader_key";
+const WRITER_ID: &[u8] = b"writer_id";
 const WRITER_KEY: &[u8] = b"writer_key";
+const READER_KEY: &[u8] = b"reader_key";
 
 /// Initialize the metadata tables for storing Key:Value pairs.  One table stores plaintext values,
 /// the other one stores encrypted ones.
@@ -91,9 +93,36 @@ pub(crate) async fn init(
 
     let secrets = AccessSecrets::generate();
 
-    set_secret(REPOSITORY_ID, secrets.repo_id.as_ref(), &master_key, &mut tx).await?;
+    // TODO: At the moment, writer keys are just random bytes. This is because it is a long term
+    // plan (which may or may not materialize) to have a writer set CRDT structure indicating who
+    // can write to the repository. This structure would collect sign::PublicKeys and as such,
+    // users would locally store their private signing keys corresponding to those in the writer
+    // set instead of storing a "global" sign::PublicKey.
+    set_secret(
+        WRITER_ID,
+        sign::Keypair::generate().public.as_ref(),
+        &master_key,
+        &mut tx,
+    )
+    .await?;
+
+    set_secret(
+        REPOSITORY_ID,
+        secrets.repo_id.as_ref(),
+        &master_key,
+        &mut tx,
+    )
+    .await?;
+
     set_secret(WRITER_KEY, secrets.write_key.as_ref(), &master_key, &mut tx).await?;
-    set_secret(READER_KEY, secrets.read_key.as_array(), &master_key, &mut tx).await?;
+
+    set_secret(
+        READER_KEY,
+        secrets.read_key.as_array(),
+        &master_key,
+        &mut tx,
+    )
+    .await?;
 
     tx.commit().await?;
 
@@ -154,6 +183,28 @@ pub(crate) async fn set_repository_id(db: impl db::Executor<'_>, id: &Repository
 }
 
 // -------------------------------------------------------------------
+// Writer Id
+// -------------------------------------------------------------------
+pub(crate) async fn get_writer_id(
+    key: &Option<SecretKey>,
+    db: impl db::Executor<'_>,
+) -> Result<sign::PublicKey> {
+    let id = match key {
+        Some(key) => get_secret(WRITER_ID, key, db).await?.map(|blob| blob.into()).into(),
+        None => OsRng.gen(),//sign::Keypair::generate().public,
+    };
+    Ok(id)
+}
+
+pub(crate) async fn set_writer_id(
+    id: &sign::PublicKey,
+    key: &SecretKey,
+    db: impl db::Executor<'_>,
+) -> Result<()> {
+    set_secret(WRITER_ID, id.as_ref(), key, db).await
+}
+
+// -------------------------------------------------------------------
 // Public values
 // -------------------------------------------------------------------
 async fn get_public<const N: usize>(id: &[u8], db: impl db::Executor<'_>) -> Result<[u8; N]> {
@@ -184,7 +235,11 @@ async fn set_public(id: &[u8], blob: &[u8], db: impl db::Executor<'_>) -> Result
 // -------------------------------------------------------------------
 // Secret values
 // -------------------------------------------------------------------
-async fn get_secret<const N: usize>(id: &[u8], key: &SecretKey, db: db::Pool) -> Result<[u8; N]> {
+async fn get_secret<const N: usize>(
+    id: &[u8],
+    key: &SecretKey,
+    db: impl db::Executor<'_>,
+) -> Result<[u8; N]> {
     let (nonce, auth_tag, mut value): (Nonce, AuthTag, [u8; N]) =
         sqlx::query("SELECT nonce, auth_tag, value FROM metadata_secret WHERE name = ?")
             .bind(id)
@@ -198,7 +253,7 @@ async fn get_secret<const N: usize>(id: &[u8], key: &SecretKey, db: db::Pool) ->
                     value.try_into().unwrap(),
                 )
             })
-            .fetch_optional(&db)
+            .fetch_optional(db)
             .await?
             .ok_or(Error::EntryNotFound)?;
 
@@ -281,7 +336,7 @@ mod tests {
 
         set_secret(b"hello", b"world", &key, &pool).await.unwrap();
 
-        let v: [u8; 5] = get_secret(b"hello", &key, pool.clone()).await.unwrap();
+        let v: [u8; 5] = get_secret(b"hello", &key, &pool).await.unwrap();
 
         assert_eq!(b"world", &v);
     }

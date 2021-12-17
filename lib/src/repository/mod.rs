@@ -29,7 +29,7 @@ pub enum MasterSecret {
 }
 
 pub struct Repository {
-    master_key: Option<SecretKey>,
+    _master_key: Option<SecretKey>,
     shared: Arc<Shared>,
     _merge_handle: Option<ScopedJoinHandle<()>>,
 }
@@ -45,12 +45,14 @@ impl Repository {
     /// write access).
     pub async fn open(
         store: &db::Store,
-        this_writer_id: PublicKey,
+        _this_writer_id: PublicKey,
         cryptor: Cryptor,
         master_secret: Option<MasterSecret>,
         enable_merger: bool,
     ) -> Result<Self> {
         let (pool, master_key) = open_db(store, master_secret).await?;
+
+        let this_writer_id = metadata::get_writer_id(&master_key, &pool).await?;
 
         let index = Index::load(pool, this_writer_id).await?;
 
@@ -67,7 +69,7 @@ impl Repository {
         };
 
         Ok(Self {
-            master_key,
+            _master_key: master_key,
             shared,
             _merge_handle: merge_handle,
         })

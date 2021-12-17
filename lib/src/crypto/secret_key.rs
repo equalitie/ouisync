@@ -1,10 +1,10 @@
+use super::Hash;
 use argon2::{
     password_hash::{self, rand_core::OsRng},
     Argon2,
 };
 use generic_array::{sequence::GenericSequence, typenum::Unsigned};
 use hex;
-use super::Hash;
 use rand::{CryptoRng, Rng};
 use sha3::{
     digest::{Digest, FixedOutput},
