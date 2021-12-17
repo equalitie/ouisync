@@ -14,6 +14,7 @@ use crate::{
     index::{self, BranchData, Index},
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     metadata, path,
+    replica_id::ReplicaId,
     scoped_task::{self, ScopedJoinHandle},
     store,
 };
@@ -45,7 +46,7 @@ impl Repository {
     /// write access).
     pub async fn open(
         store: &db::Store,
-        _this_writer_id: PublicKey,
+        _this_replica_id: ReplicaId,
         cryptor: Cryptor,
         master_secret: Option<MasterSecret>,
         enable_merger: bool,
