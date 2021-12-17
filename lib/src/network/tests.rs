@@ -124,7 +124,8 @@ async fn create_index<R: Rng>(rng: &mut R) -> Index {
     let master_secret = Some(MasterSecret::SecretKey(SecretKey::random()));
     let db = repository::open_db(&db::Store::Memory, master_secret)
         .await
-        .unwrap();
+        .unwrap()
+        .0;
     let id = rng.gen();
 
     Index::load(db, id).await.unwrap()

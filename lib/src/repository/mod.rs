@@ -14,6 +14,7 @@ use crate::{
     index::{self, BranchData, Index},
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     metadata, path,
+    replica_id::ReplicaId,
     scoped_task::{self, ScopedJoinHandle},
     store,
 };
@@ -29,6 +30,7 @@ pub enum MasterSecret {
 }
 
 pub struct Repository {
+    _master_key: Option<SecretKey>,
     shared: Arc<Shared>,
     _merge_handle: Option<ScopedJoinHandle<()>>,
 }
@@ -44,12 +46,14 @@ impl Repository {
     /// write access).
     pub async fn open(
         store: &db::Store,
-        this_writer_id: PublicKey,
+        _this_replica_id: ReplicaId,
         cryptor: Cryptor,
         master_secret: Option<MasterSecret>,
         enable_merger: bool,
     ) -> Result<Self> {
-        let pool = open_db(store, master_secret).await?;
+        let (pool, master_key) = open_db(store, master_secret).await?;
+
+        let this_writer_id = metadata::get_writer_id(&master_key, &pool).await?;
 
         let index = Index::load(pool, this_writer_id).await?;
 
@@ -66,6 +70,7 @@ impl Repository {
         };
 
         Ok(Self {
+            _master_key: master_key,
             shared,
             _merge_handle: merge_handle,
         })
@@ -381,15 +386,15 @@ impl Drop for Repository {
 pub(crate) async fn open_db(
     store: &db::Store,
     master_secret: Option<MasterSecret>,
-) -> Result<db::Pool> {
+) -> Result<(db::Pool, Option<SecretKey>)> {
     let pool = db::open(store).await?;
 
     block::init(&pool).await?;
     index::init(&pool).await?;
     store::init(&pool).await?;
-    metadata::init(&pool, master_secret).await?;
+    let secret_key = metadata::init(&pool, master_secret).await?;
 
-    Ok(pool)
+    Ok((pool, secret_key))
 }
 
 struct Shared {

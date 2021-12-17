@@ -33,7 +33,7 @@ pub unsafe extern "C" fn repository_open(
 ) {
     session::with(port, error, |ctx| {
         let store = utils::ptr_to_path_buf(store)?;
-        let this_writer_id = *ctx.this_writer_id();
+        let this_replica_id = *ctx.this_replica_id();
         let network_handle = ctx.network().handle();
 
         let master_password = if master_password.is_null() {
@@ -45,7 +45,7 @@ pub unsafe extern "C" fn repository_open(
         ctx.spawn(async move {
             let repository = Repository::open(
                 &store.into_std_path_buf().into(),
-                this_writer_id,
+                this_replica_id,
                 Cryptor::Null,
                 master_password.map(MasterSecret::Password),
                 true,

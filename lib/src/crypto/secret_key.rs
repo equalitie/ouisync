@@ -1,3 +1,4 @@
+use super::Hash;
 use argon2::{
     password_hash::{self, rand_core::OsRng},
     Argon2,
@@ -116,6 +117,14 @@ impl From<[u8; Self::SIZE]> for SecretKey {
         let mut key = Self::zero();
         key.as_array_mut().copy_from_slice(&bytes);
         bytes.zeroize();
+        key
+    }
+}
+
+impl From<Hash> for SecretKey {
+    fn from(mut hash: Hash) -> Self {
+        let key = Self::from_bytes(hash.as_ref());
+        hash.zeroize();
         key
     }
 }

@@ -7,7 +7,7 @@ mod macros;
 pub mod config;
 pub mod crypto;
 pub mod debug_printer;
-pub mod this_writer;
+pub mod replica_id;
 
 mod access_control;
 mod blob;

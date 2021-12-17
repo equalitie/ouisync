@@ -3,7 +3,7 @@ mod virtual_filesystem;
 
 use self::options::{Named, Options};
 use anyhow::Result;
-use ouisync_lib::{config, this_writer, Cryptor, Network, Repository, ShareToken};
+use ouisync_lib::{config, replica_id, Cryptor, Network, Repository, ShareToken};
 use std::{collections::HashMap, io};
 use structopt::StructOpt;
 use tokio::{fs::File, io::AsyncWriteExt};
@@ -22,7 +22,7 @@ async fn main() -> Result<()> {
     env_logger::init();
 
     let pool = config::open_db(&options.config_store()?).await?;
-    let this_writer_id = this_writer::get_or_create_id(&pool).await?;
+    let this_writer_id = replica_id::get_or_create_this_replica_id(&pool).await?;
 
     // Gather the repositories to be mounted.
     let mut mount_repos = HashMap::new();

@@ -4,12 +4,11 @@ use super::{
     utils::{self, AssumeSend, Port},
 };
 use crate::{
-    config,
-    crypto::sign::PublicKey,
-    db,
+    config, db,
     error::Result,
     network::{Network, NetworkOptions},
-    this_writer,
+    replica_id,
+    replica_id::ReplicaId,
 };
 use std::{
     ffi::CString,
@@ -118,7 +117,7 @@ static mut SESSION: *mut Session = ptr::null_mut();
 
 pub(super) struct Session {
     runtime: Runtime,
-    this_writer_id: PublicKey,
+    this_replica_id: ReplicaId,
     network: Network,
     sender: Sender,
     _logger: Logger,
@@ -132,12 +131,12 @@ impl Session {
         logger: Logger,
     ) -> Result<Self> {
         let pool = config::open_db(&store).await?;
-        let this_writer_id = this_writer::get_or_create_id(&pool).await?;
+        let this_replica_id = replica_id::get_or_create_this_replica_id(&pool).await?;
         let network = Network::new(&NetworkOptions::default()).await?;
 
         Ok(Self {
             runtime,
-            this_writer_id,
+            this_replica_id,
             network,
             sender,
             _logger: logger,
@@ -177,8 +176,8 @@ where
         &self.session.network
     }
 
-    pub(super) fn this_writer_id(&self) -> &PublicKey {
-        &self.session.this_writer_id
+    pub(super) fn this_replica_id(&self) -> &ReplicaId {
+        &self.session.this_replica_id
     }
 }
 
