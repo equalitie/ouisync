@@ -4,12 +4,11 @@ use super::{
     utils::{self, AssumeSend, Port},
 };
 use crate::{
-    config,
-    replica_id::ReplicaId,
-    db,
+    config, db,
     error::Result,
     network::{Network, NetworkOptions},
     replica_id,
+    replica_id::ReplicaId,
 };
 use std::{
     ffi::CString,

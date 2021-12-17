@@ -7,8 +7,8 @@ use crate::{
     error::{Error, Result},
     repository::{MasterSecret, RepositoryId},
 };
-use sqlx::Row;
 use rand::{rngs::OsRng, Rng};
+use sqlx::Row;
 
 struct AccessSecrets {
     write_key: sign::SecretKey,
@@ -98,13 +98,7 @@ pub(crate) async fn init(
     // can write to the repository. This structure would collect sign::PublicKeys and as such,
     // users would locally store their private signing keys corresponding to those in the writer
     // set instead of storing a "global" sign::PublicKey.
-    set_secret(
-        WRITER_ID,
-        sign::Keypair::generate().public.as_ref(),
-        &master_key,
-        &mut tx,
-    )
-    .await?;
+    set_writer_id(&OsRng.gen(), &master_key, &mut tx).await?;
 
     set_secret(
         REPOSITORY_ID,
@@ -190,18 +184,21 @@ pub(crate) async fn get_writer_id(
     db: impl db::Executor<'_>,
 ) -> Result<sign::PublicKey> {
     let id = match key {
-        Some(key) => get_secret(WRITER_ID, key, db).await?.map(|blob| blob.into()).into(),
-        None => OsRng.gen(),//sign::Keypair::generate().public,
+        Some(key) => get_secret(WRITER_ID, key, db)
+            .await?
+            .map(|blob| blob.into())
+            .into(),
+        None => OsRng.gen(),
     };
     Ok(id)
 }
 
 pub(crate) async fn set_writer_id(
-    id: &sign::PublicKey,
+    writer_id: &sign::PublicKey,
     key: &SecretKey,
     db: impl db::Executor<'_>,
 ) -> Result<()> {
-    set_secret(WRITER_ID, id.as_ref(), key, db).await
+    set_secret(WRITER_ID, writer_id.as_ref(), key, db).await
 }
 
 // -------------------------------------------------------------------

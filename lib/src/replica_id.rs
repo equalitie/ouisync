@@ -2,8 +2,8 @@ use crate::{
     db,
     error::{Error, Result},
 };
-use sqlx::Row;
 use rand::{rngs::OsRng, Rng};
+use sqlx::Row;
 
 define_byte_array_wrapper! {
     /// ReplicaId uniquely identifies machines on which this software is running. Its only purpose is
