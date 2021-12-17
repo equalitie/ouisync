@@ -3,6 +3,7 @@ use generic_array::{sequence::GenericSequence, typenum::Unsigned, GenericArray};
 use serde::{Deserialize, Serialize};
 use sha3::{digest::Digest, Sha3_256};
 use std::{array::TryFromSliceError, fmt};
+use zeroize::Zeroize;
 
 /// Wrapper for a 256-bit hash digest, for convenience. Also implements friendly formatting.
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
@@ -11,6 +12,10 @@ pub struct Hash(Inner);
 
 impl Hash {
     pub const SIZE: usize = <Inner as GenericSequence<_>>::Length::USIZE;
+
+    pub fn as_array(&self) -> &Inner {
+        &self.0
+    }
 }
 
 impl From<Inner> for Hash {
@@ -55,6 +60,12 @@ impl TryFrom<&'_ [u8]> for Hash {
 impl From<Hash> for [u8; Hash::SIZE] {
     fn from(hash: Hash) -> [u8; Hash::SIZE] {
         hash.0.into()
+    }
+}
+
+impl Zeroize for Hash {
+    fn zeroize(&mut self) {
+        self.0.zeroize()
     }
 }
 

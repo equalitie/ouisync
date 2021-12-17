@@ -4,6 +4,7 @@ use argon2::{
 };
 use generic_array::{sequence::GenericSequence, typenum::Unsigned};
 use hex;
+use super::Hash;
 use rand::{CryptoRng, Rng};
 use sha3::{
     digest::{Digest, FixedOutput},
@@ -116,6 +117,14 @@ impl From<[u8; Self::SIZE]> for SecretKey {
         let mut key = Self::zero();
         key.as_array_mut().copy_from_slice(&bytes);
         bytes.zeroize();
+        key
+    }
+}
+
+impl From<Hash> for SecretKey {
+    fn from(mut hash: Hash) -> Self {
+        let key = Self::from_bytes(hash.as_ref());
+        hash.zeroize();
         key
     }
 }

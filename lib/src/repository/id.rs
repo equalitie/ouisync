@@ -71,3 +71,9 @@ impl From<[u8; PublicKey::SIZE]> for RepositoryId {
         Self(PublicKey::from(bytes))
     }
 }
+
+impl From<PublicKey> for RepositoryId {
+    fn from(pk: PublicKey) -> Self {
+        Self(pk)
+    }
+}

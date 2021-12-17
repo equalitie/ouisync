@@ -2,33 +2,62 @@
 #![allow(dead_code)]
 
 use crate::{
-    crypto::{AuthTag, Cryptor, Nonce, PasswordSalt, SecretKey},
+    crypto::{sign, AuthTag, Cryptor, Hash, Hashable, Nonce, PasswordSalt, SecretKey},
     db,
     error::{Error, Result},
     repository::{MasterSecret, RepositoryId},
 };
 use sqlx::Row;
 
+struct AccessSecrets {
+    write_key: sign::SecretKey,
+    // The read_key is calculated as a hash of the write_key.
+    read_key: SecretKey,
+    // The public part corresponding to write_key
+    repo_id: RepositoryId,
+}
+
+impl AccessSecrets {
+    fn generate() -> Self {
+        let keypair = sign::Keypair::generate();
+
+        AccessSecrets {
+            write_key: keypair.secret,
+            read_key: keypair.public.as_ref().hash().into(),
+            repo_id: keypair.public.into(),
+        }
+    }
+}
+
 // Metadata keys
 const REPOSITORY_ID: &[u8] = b"repository_id";
 const PASSWORD_SALT: &[u8] = b"password_salt";
 const READER_KEY: &[u8] = b"reader_key";
+const WRITER_KEY: &[u8] = b"writer_key";
 
 /// Initialize the metadata tables for storing Key:Value pairs.  One table stores plaintext values,
 /// the other one stores encrypted ones.
+///
+/// If `master_secret` is `Some(MasterSecret::Password)`, that password shall be converted to
+/// SecretKey. If `master_secret` is `Some(MasterSecret::SecretKey)` that key is returned.
 pub(crate) async fn init(
     pool: &db::Pool,
     master_secret: Option<MasterSecret>,
-) -> Result<(), Error> {
+) -> Result<Option<SecretKey>, Error> {
     let mut tx = pool.begin().await?;
 
     if is_initialized(&mut tx).await? {
-        return Ok(());
+        let key = match master_secret {
+            Some(secret) => Some(secret_to_key(secret, &mut tx).await?),
+            None => None,
+        };
+        return Ok(key);
     }
 
-    if master_secret.is_none() {
-        return Err(Error::RepoInitializationRequiresMasterSecret);
-    }
+    let master_secret = match master_secret {
+        None => return Err(Error::RepoInitializationRequiresMasterSecret),
+        Some(master_secret) => master_secret,
+    };
 
     // For storing unencrypted values
     sqlx::query(
@@ -54,14 +83,35 @@ pub(crate) async fn init(
     .await
     .map_err(Error::CreateDbSchema)?;
 
-    // The salt is only really required for password hashing. When the repo is initialized with
-    // MasterSecret::Secretkey it's not required. But we generate it anyway as to not leak the
+    // The salt is only essential for password hashing. When the repo is initialized with
+    // MasterSecret::Secretkey it's not required. But we generate it anyway so as to not leak the
     // information which (SecretKey or Password) was the repo initialized with.
     generate_password_salt(&mut tx).await?;
+    let master_key = secret_to_key(master_secret, &mut tx).await?;
+
+    let secrets = AccessSecrets::generate();
+
+    set_secret(REPOSITORY_ID, secrets.repo_id.as_ref(), &master_key, &mut tx).await?;
+    set_secret(WRITER_KEY, secrets.write_key.as_ref(), &master_key, &mut tx).await?;
+    set_secret(READER_KEY, secrets.read_key.as_array(), &master_key, &mut tx).await?;
 
     tx.commit().await?;
 
-    Ok(())
+    Ok(Some(master_key))
+}
+
+async fn secret_to_key(secret: MasterSecret, db: impl db::Executor<'_>) -> Result<SecretKey> {
+    let key = match secret {
+        MasterSecret::SecretKey(key) => key,
+        MasterSecret::Password(pwd) => {
+            let salt = get_password_salt(db)
+                .await?
+                .expect("database is not initialized");
+            SecretKey::derive_from_password(pwd.as_ref(), &salt)
+        }
+    };
+
+    Ok(key)
 }
 
 async fn is_initialized(db: impl db::Executor<'_>) -> Result<bool> {
@@ -76,7 +126,7 @@ async fn is_initialized(db: impl db::Executor<'_>) -> Result<bool> {
 // -------------------------------------------------------------------
 // Salt
 // -------------------------------------------------------------------
-async fn get_password_salt(db: &mut db::Transaction<'_>) -> Result<Option<PasswordSalt>> {
+async fn get_password_salt(db: impl db::Executor<'_>) -> Result<Option<PasswordSalt>> {
     let salt: Result<PasswordSalt> = get_public(PASSWORD_SALT, db).await;
 
     match salt {
