@@ -65,7 +65,9 @@ pub(crate) async fn init(
     sqlx::query(
         "CREATE TABLE metadata_public (
              name  BLOB NOT NULL PRIMARY KEY,
-             value BLOB NOT NULL
+             value BLOB NOT NULL,
+
+             UNIQUE(name)
          ) WITHOUT ROWID",
     )
     .execute(&mut tx)
@@ -78,7 +80,10 @@ pub(crate) async fn init(
              name  BLOB NOT NULL PRIMARY KEY,
              nonce BLOB NOT NULL,
              auth_tag BLOB NOT NULL,
-             value BLOB NOT NULL
+             value BLOB NOT NULL,
+
+             UNIQUE(name),
+             UNIQUE(nonce)
          ) WITHOUT ROWID",
     )
     .execute(&mut tx)
