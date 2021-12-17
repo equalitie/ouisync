@@ -145,7 +145,8 @@ mod tests {
         let master_secret = Some(MasterSecret::SecretKey(SecretKey::random()));
         let pool = repository::open_db(&db::Store::Memory, master_secret)
             .await
-            .unwrap();
+            .unwrap()
+            .0;
 
         let writer_id = rand::random();
         let index = Index::load(pool.clone(), writer_id).await.unwrap();

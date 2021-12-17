@@ -823,7 +823,8 @@ async fn setup_with_rng(rng: StdRng, branch_count: usize) -> Vec<Branch> {
     let master_secret = Some(MasterSecret::SecretKey(SecretKey::random()));
     let pool = repository::open_db(&db::Store::Memory, master_secret)
         .await
-        .unwrap();
+        .unwrap()
+        .0;
     let pool = &pool;
 
     let ids = rng.sample_iter(Standard).take(branch_count);

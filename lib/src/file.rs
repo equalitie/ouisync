@@ -251,7 +251,8 @@ mod test {
         let master_secret = Some(MasterSecret::SecretKey(SecretKey::random()));
         let pool = repository::open_db(&db::Store::Memory, master_secret)
             .await
-            .unwrap();
+            .unwrap()
+            .0;
         create_branch(pool).await
     }
 

@@ -2,7 +2,7 @@
 #![allow(dead_code)]
 
 use crate::{
-    crypto::{sign, AuthTag, Cryptor, Hash, Hashable, Nonce, PasswordSalt, SecretKey},
+    crypto::{sign, AuthTag, Cryptor, Hashable, Nonce, PasswordSalt, SecretKey},
     db,
     error::{Error, Result},
     repository::{MasterSecret, RepositoryId},

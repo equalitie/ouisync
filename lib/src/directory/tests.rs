@@ -642,7 +642,8 @@ async fn setup() -> Branch {
     let master_secret = Some(MasterSecret::SecretKey(SecretKey::random()));
     let pool = repository::open_db(&db::Store::Memory, master_secret)
         .await
-        .unwrap();
+        .unwrap()
+        .0;
     create_branch(pool).await
 }
 
@@ -650,7 +651,8 @@ async fn setup_multiple<const N: usize>() -> [Branch; N] {
     let master_secret = Some(MasterSecret::SecretKey(SecretKey::random()));
     let pool = repository::open_db(&db::Store::Memory, master_secret)
         .await
-        .unwrap();
+        .unwrap()
+        .0;
     let branches: Vec<_> = future::join_all((0..N).map(|_| create_branch(pool.clone()))).await;
     branches.try_into().ok().unwrap()
 }
