@@ -175,7 +175,7 @@ impl FromStr for ShareToken {
     type Err = DecodeError;
 
     fn from_str(input: &str) -> Result<Self, Self::Err> {
-        let input = input.trim_start();
+        let input = input.trim();
         let input = input.strip_prefix(SCHEME).ok_or(DecodeError)?;
         let input = input.strip_prefix(':').ok_or(DecodeError)?;
 
