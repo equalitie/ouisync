@@ -11,6 +11,7 @@ use crate::{
     index::{node_test_utils::Snapshot, Index, RootNode, Summary},
     repository, store, test_utils,
     version_vector::VersionVector,
+    MasterSecret, SecretKey,
 };
 use rand::prelude::*;
 use std::{fmt, future::Future, time::Duration};
@@ -120,7 +121,10 @@ async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed:
 }
 
 async fn create_index<R: Rng>(rng: &mut R) -> Index {
-    let db = repository::open_db(&db::Store::Memory).await.unwrap();
+    let master_secret = Some(MasterSecret::SecretKey(SecretKey::random()));
+    let db = repository::open_db(&db::Store::Memory, master_secret)
+        .await
+        .unwrap();
     let id = rng.gen();
 
     Index::load(db, id).await.unwrap()

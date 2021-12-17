@@ -1,6 +1,6 @@
 use super::*;
 use crate::index::BranchData;
-use crate::{block, repository};
+use crate::{block, repository, MasterSecret};
 use crate::{
     crypto::{Cryptor, SecretKey},
     error::Error,
@@ -495,8 +495,11 @@ async fn fork_case(
 async fn setup(rng_seed: u64) -> (StdRng, Branch) {
     let mut rng = StdRng::seed_from_u64(rng_seed);
     let secret_key = SecretKey::generate(&mut rng);
-    let cryptor = Cryptor::ChaCha20Poly1305(secret_key);
-    let pool = repository::open_db(&db::Store::Memory).await.unwrap();
+    let cryptor = Cryptor::ChaCha20Poly1305(secret_key.clone());
+    let master_secret = Some(MasterSecret::SecretKey(secret_key));
+    let pool = repository::open_db(&db::Store::Memory, master_secret)
+        .await
+        .unwrap();
 
     let (notify_tx, _) = async_broadcast::broadcast(1);
     let branch = BranchData::new(&pool, rng.gen(), notify_tx).await.unwrap();

@@ -1,16 +1,13 @@
+use argon2::{
+    password_hash::{self, rand_core::OsRng},
+    Argon2,
+};
+use generic_array::{sequence::GenericSequence, typenum::Unsigned};
+use hex;
 use rand::{CryptoRng, Rng};
 use sha3::{
     digest::{Digest, FixedOutput},
     Sha3_256,
-};
-// TODO: Using scrypt because argon2 v0.3.2 did not compile.
-use generic_array::{sequence::GenericSequence, typenum::Unsigned};
-use scrypt::{
-    password_hash::{
-        self,
-        rand_core::{OsRng, RngCore},
-    },
-    scrypt, Params,
 };
 use std::{fmt, sync::Arc};
 use zeroize::Zeroize;
@@ -27,12 +24,25 @@ use zeroize::Zeroize;
 #[derive(Clone)]
 pub struct SecretKey(Arc<Inner>);
 
-const SCRYPT_SALT_LEN: usize = password_hash::Salt::RECOMMENDED_LENGTH;
-pub type ScryptSalt = [u8; SCRYPT_SALT_LEN];
+const PASSWORD_SALT_LEN: usize = password_hash::Salt::RECOMMENDED_LENGTH;
+pub type PasswordSalt = [u8; PASSWORD_SALT_LEN];
 
 impl SecretKey {
     /// Size of the key in bytes.
     pub const SIZE: usize = <<Array as GenericSequence<_>>::Length as Unsigned>::USIZE;
+
+    /// Load secret key from byte array of size SIZE.
+    pub fn from_bytes(bytes: &[u8]) -> Self {
+        Self(Arc::new(Inner(*Array::from_slice(bytes))))
+    }
+
+    /// Load secret key from hexadecimal string of size 2*SIZE.
+    pub fn from_hex(hex_str: &str) -> Self {
+        let mut bytes = hex::decode(&hex_str).expect("failed to decode the secret key from hex");
+        let key = Self::from_bytes(&bytes);
+        bytes.zeroize();
+        key
+    }
 
     /// Generate a random secret key using the given cryptographically secure random number
     /// generator.
@@ -66,23 +76,20 @@ impl SecretKey {
     }
 
     /// Derive a secret key from user's password and salt.
-    pub fn derive_scrypt(user_password: &str, salt: &ScryptSalt) -> Self {
+    pub fn derive_from_password(user_password: &str, salt: &PasswordSalt) -> Self {
         let mut result = Self::zero();
-        scrypt(
-            user_password.as_bytes(),
-            salt,
-            &Params::recommended(),
-            result.as_array_mut(),
-        )
-        .expect("failed to derive scrypt password");
+        // Note: we controll the output and salt size. And the only other check that this function
+        // does is whether the password isn't too long, but that would have to be more than
+        // 0xffffffff so the `.expect` shouldn't be an issue.
+        Argon2::default()
+            .hash_password_into(user_password.as_ref(), salt, result.as_array_mut())
+            .expect("failed to hash password");
         result
     }
 
     /// Generate random salt for use with the `derive_scrypt` function.
-    pub fn generate_scrypt_salt() -> ScryptSalt {
-        let mut salt = [0u8; SCRYPT_SALT_LEN];
-        OsRng.fill_bytes(&mut salt);
-        salt
+    pub fn generate_password_salt() -> PasswordSalt {
+        OsRng.gen()
     }
 
     /// Returns reference to the underlying array.

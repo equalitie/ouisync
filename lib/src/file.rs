@@ -146,7 +146,7 @@ impl File {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{crypto::Cryptor, db, index::BranchData, repository};
+    use crate::{crypto::Cryptor, db, index::BranchData, repository, MasterSecret, SecretKey};
     use std::sync::Arc;
 
     #[tokio::test(flavor = "multi_thread")]
@@ -248,7 +248,10 @@ mod test {
     }
 
     async fn setup() -> Branch {
-        let pool = repository::open_db(&db::Store::Memory).await.unwrap();
+        let master_secret = Some(MasterSecret::SecretKey(SecretKey::random()));
+        let pool = repository::open_db(&db::Store::Memory, master_secret)
+            .await
+            .unwrap();
         create_branch(pool).await
     }
 

@@ -113,7 +113,7 @@ impl Branch {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{db, index::Index, locator::Locator, repository};
+    use crate::{db, index::Index, locator::Locator, repository, MasterSecret, SecretKey};
 
     #[tokio::test(flavor = "multi_thread")]
     async fn ensure_root_directory_exists() {
@@ -142,7 +142,10 @@ mod tests {
     }
 
     async fn setup() -> Branch {
-        let pool = repository::open_db(&db::Store::Memory).await.unwrap();
+        let master_secret = Some(MasterSecret::SecretKey(SecretKey::random()));
+        let pool = repository::open_db(&db::Store::Memory, master_secret)
+            .await
+            .unwrap();
 
         let writer_id = rand::random();
         let index = Index::load(pool.clone(), writer_id).await.unwrap();

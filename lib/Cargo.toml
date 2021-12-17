@@ -13,8 +13,7 @@ publish = false
 crate-type = ["lib", "cdylib"] # TODO: we might also need `staticlib` for ios
 
 [dependencies]
-# TODO: Use argon2 instead of scrypt, but v0.3.2 did not compile.
-scrypt = { version = "0.8.1" }
+argon2 = "0.3.2"
 async-broadcast = "0.3.4"
 async-recursion = "0.3.2"
 base64 = "0.13.0"
