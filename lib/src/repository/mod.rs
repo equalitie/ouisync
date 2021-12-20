@@ -51,29 +51,31 @@ impl Repository {
         master_secret: Option<MasterSecret>,
         enable_merger: bool,
     ) -> Result<Self> {
-        let (pool, master_key) = open_db(store, master_secret).await?;
+        let pool = open_db(store).await?;
 
-        let this_writer_id = metadata::get_writer_id(&master_key, &pool).await?;
+        todo!()
 
-        let index = Index::load(pool, this_writer_id).await?;
+        // let this_writer_id = metadata::get_writer_id(&master_key, &pool).await?;
 
-        let shared = Arc::new(Shared {
-            index,
-            cryptor,
-            branches: Mutex::new(HashMap::new()),
-        });
+        // let index = Index::load(pool, this_writer_id).await?;
 
-        let merge_handle = if enable_merger {
-            Some(scoped_task::spawn(Merger::new(shared.clone()).run()))
-        } else {
-            None
-        };
+        // let shared = Arc::new(Shared {
+        //     index,
+        //     cryptor,
+        //     branches: Mutex::new(HashMap::new()),
+        // });
 
-        Ok(Self {
-            _master_key: master_key,
-            shared,
-            _merge_handle: merge_handle,
-        })
+        // let merge_handle = if enable_merger {
+        //     Some(scoped_task::spawn(Merger::new(shared.clone()).run()))
+        // } else {
+        //     None
+        // };
+
+        // Ok(Self {
+        //     _master_key: master_key,
+        //     shared,
+        //     _merge_handle: merge_handle,
+        // })
     }
 
     /// Get the id of this repository or `Error::EntryNotFound` if no id was assigned yet.
@@ -383,18 +385,15 @@ impl Drop for Repository {
 }
 
 /// Opens or creates the repository database.
-pub(crate) async fn open_db(
-    store: &db::Store,
-    master_secret: Option<MasterSecret>,
-) -> Result<(db::Pool, Option<SecretKey>)> {
+pub(crate) async fn open_db(store: &db::Store) -> Result<db::Pool> {
     let pool = db::open(store).await?;
 
     block::init(&pool).await?;
     index::init(&pool).await?;
     store::init(&pool).await?;
-    let secret_key = metadata::init(&pool, master_secret).await?;
+    metadata::init(&pool).await?;
 
-    Ok((pool, secret_key))
+    Ok(pool)
 }
 
 struct Shared {
