@@ -74,7 +74,8 @@ pub(crate) async fn init(
     generate_password_salt(&mut tx).await?;
     let master_key = secret_to_key(master_secret, &mut tx).await?;
 
-    let secrets = WriteSecrets::new(OsRng.gen());
+    let write_key: sign::SecretKey = OsRng.gen();
+    let secrets = WriteSecrets::from(write_key);
 
     // TODO: At the moment, writer keys are just random bytes. This is because it is a long term
     // plan (which may or may not materialize) to have a writer set CRDT structure indicating who

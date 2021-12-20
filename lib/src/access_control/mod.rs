@@ -3,10 +3,12 @@ mod share_token;
 pub use self::share_token::ShareToken;
 
 use crate::{
-    crypto::{sign, SecretKey},
+    crypto::{sign, SecretKey, SecretKeyLengthError},
+    error::Error,
     repository::RepositoryId,
 };
-use std::fmt;
+use std::{fmt, string::FromUtf8Error};
+use thiserror::Error;
 
 pub(crate) enum AccessSecrets {
     Blind {
@@ -23,6 +25,46 @@ impl AccessSecrets {
     pub fn id(&self) -> &RepositoryId {
         match self {
             Self::Blind { id } | Self::Read { id, .. } | Self::Write(WriteSecrets { id, .. }) => id,
+        }
+    }
+
+    pub fn encode(&self, out: &mut Vec<u8>) {
+        match self {
+            Self::Blind { id } => {
+                out.push(AccessMode::Blind as u8);
+                out.extend_from_slice(id.as_ref());
+            }
+            Self::Read { id, read_key } => {
+                out.push(AccessMode::Read as u8);
+                out.extend_from_slice(id.as_ref());
+                out.extend_from_slice(read_key.as_array().as_ref());
+            }
+            Self::Write(secrets) => {
+                out.push(AccessMode::Write as u8);
+                out.extend_from_slice(secrets.write_key.as_ref());
+            }
+        }
+    }
+
+    pub fn decode(mut input: &[u8]) -> Result<Self, DecodeError> {
+        let mode = *input.get(0).ok_or(DecodeError)?;
+        let mode = AccessMode::try_from(mode)?;
+        input = &input[1..];
+
+        match mode {
+            AccessMode::Blind => {
+                let id = RepositoryId::try_from(input)?;
+                Ok(Self::Blind { id })
+            }
+            AccessMode::Read => {
+                let id = RepositoryId::try_from(&input[..RepositoryId::SIZE])?;
+                let read_key = SecretKey::try_from(&input[RepositoryId::SIZE..])?;
+                Ok(Self::Read { id, read_key })
+            }
+            AccessMode::Write => {
+                let write_key = sign::SecretKey::try_from(input)?;
+                Ok(Self::Write(write_key.into()))
+            }
         }
     }
 }
@@ -43,8 +85,8 @@ pub(crate) struct WriteSecrets {
     pub write_key: sign::SecretKey,
 }
 
-impl WriteSecrets {
-    pub fn new(write_key: sign::SecretKey) -> Self {
+impl From<sign::SecretKey> for WriteSecrets {
+    fn from(write_key: sign::SecretKey) -> Self {
         let id = sign::PublicKey::from(&write_key);
         let id = id.into();
 
@@ -58,6 +100,66 @@ impl WriteSecrets {
     }
 }
 
+#[repr(u8)]
+enum AccessMode {
+    Blind = 0,
+    Read = 1,
+    Write = 2,
+}
+
+impl TryFrom<u8> for AccessMode {
+    type Error = DecodeError;
+
+    fn try_from(byte: u8) -> Result<Self, Self::Error> {
+        match byte {
+            b if b == Self::Blind as u8 => Ok(Self::Blind),
+            b if b == Self::Read as u8 => Ok(Self::Read),
+            b if b == Self::Write as u8 => Ok(Self::Write),
+            _ => Err(DecodeError),
+        }
+    }
+}
+
 fn derive_read_key_from_write_key(write_key: &sign::SecretKey) -> SecretKey {
     SecretKey::derive_from_key(write_key.as_ref(), b"ouisync repository read key")
+}
+
+#[derive(Debug, Error)]
+#[error("decode error")]
+pub struct DecodeError;
+
+impl From<base64::DecodeError> for DecodeError {
+    fn from(_: base64::DecodeError) -> Self {
+        Self
+    }
+}
+
+impl From<bincode::Error> for DecodeError {
+    fn from(_: bincode::Error) -> Self {
+        Self
+    }
+}
+
+impl From<FromUtf8Error> for DecodeError {
+    fn from(_: FromUtf8Error) -> Self {
+        Self
+    }
+}
+
+impl From<sign::SignatureError> for DecodeError {
+    fn from(_: sign::SignatureError) -> Self {
+        Self
+    }
+}
+
+impl From<SecretKeyLengthError> for DecodeError {
+    fn from(_: SecretKeyLengthError) -> Self {
+        Self
+    }
+}
+
+impl From<DecodeError> for Error {
+    fn from(_: DecodeError) -> Self {
+        Self::MalformedData
+    }
 }

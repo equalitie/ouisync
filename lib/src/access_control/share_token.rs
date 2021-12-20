@@ -1,11 +1,6 @@
-use super::{AccessSecrets, WriteSecrets};
-use crate::{
-    crypto::{sign, SecretKey},
-    error::Error,
-    repository::RepositoryId,
-};
-use std::{borrow::Cow, fmt, str::FromStr, string::FromUtf8Error};
-use thiserror::Error;
+use super::{AccessSecrets, DecodeError};
+use crate::repository::RepositoryId;
+use std::{borrow::Cow, fmt, str::FromStr};
 use zeroize::Zeroizing;
 
 pub const SCHEME: &str = "ouisync";
@@ -54,13 +49,6 @@ impl ShareToken {
     }
 }
 
-#[repr(u8)]
-enum AccessMode {
-    Blind = 0,
-    Read = 1,
-    Write = 2,
-}
-
 impl FromStr for ShareToken {
     type Err = DecodeError;
 
@@ -72,67 +60,15 @@ impl FromStr for ShareToken {
         let (input, params) = input.split_once('?').unwrap_or((input, ""));
 
         let input = Zeroizing::new(base64::decode_config(input, base64::URL_SAFE_NO_PAD)?);
-        let mut input = &input[..];
 
-        let version = read_byte(&mut input)?;
-        if version > VERSION {
+        if *input.get(0).ok_or(DecodeError)? > VERSION {
             return Err(DecodeError);
         }
 
-        let mode = read_mode(&mut input)?;
-        let secrets = match mode {
-            AccessMode::Blind => {
-                let id = read_key(&mut input, RepositoryId::SIZE)?;
-                AccessSecrets::Blind { id }
-            }
-            AccessMode::Read => {
-                let id = read_key(&mut input, RepositoryId::SIZE)?;
-                let read_key = read_key(&mut input, SecretKey::SIZE)?;
-                AccessSecrets::Read { id, read_key }
-            }
-            AccessMode::Write => {
-                let write_key = read_key(&mut input, sign::SecretKey::SIZE)?;
-                let secrets = WriteSecrets::new(write_key);
-                AccessSecrets::Write(secrets)
-            }
-        };
-
+        let secrets = AccessSecrets::decode(&input[1..])?;
         let name = parse_name(params)?;
 
         Ok(Self { secrets, name })
-    }
-}
-
-fn read_mode(input: &mut &[u8]) -> Result<AccessMode, DecodeError> {
-    match read_byte(input)? {
-        b if b == AccessMode::Blind as u8 => Ok(AccessMode::Blind),
-        b if b == AccessMode::Read as u8 => Ok(AccessMode::Read),
-        b if b == AccessMode::Write as u8 => Ok(AccessMode::Write),
-        _ => Err(DecodeError),
-    }
-}
-
-fn read_byte(input: &mut &[u8]) -> Result<u8, DecodeError> {
-    if let Some(b) = input.get(0).copied() {
-        *input = &input[1..];
-        Ok(b)
-    } else {
-        Err(DecodeError)
-    }
-}
-
-fn read_key<'a, T>(input: &mut &'a [u8], len: usize) -> Result<T, DecodeError>
-where
-    T: TryFrom<&'a [u8]>,
-{
-    if len <= input.len() {
-        let (output, new_input) = input.split_at(len);
-        let output = T::try_from(output).map_err(|_| DecodeError)?;
-        *input = new_input;
-
-        Ok(output)
-    } else {
-        Err(DecodeError)
     }
 }
 
@@ -150,22 +86,7 @@ impl fmt::Display for ShareToken {
         write!(f, "{}:", SCHEME)?;
 
         let mut buffer = vec![VERSION];
-
-        match &self.secrets {
-            AccessSecrets::Blind { id } => {
-                buffer.push(AccessMode::Blind as u8);
-                buffer.extend_from_slice(id.as_ref());
-            }
-            AccessSecrets::Read { id, read_key } => {
-                buffer.push(AccessMode::Read as u8);
-                buffer.extend_from_slice(id.as_ref());
-                buffer.extend_from_slice(read_key.as_array().as_ref());
-            }
-            AccessSecrets::Write(secrets) => {
-                buffer.push(AccessMode::Write as u8);
-                buffer.extend_from_slice(secrets.write_key.as_ref());
-            }
-        }
+        self.secrets.encode(&mut buffer);
 
         write!(
             f,
@@ -181,37 +102,10 @@ impl fmt::Display for ShareToken {
     }
 }
 
-#[derive(Debug, Error)]
-#[error("failed to decode share token")]
-pub struct DecodeError;
-
-impl From<FromUtf8Error> for DecodeError {
-    fn from(_: FromUtf8Error) -> Self {
-        Self
-    }
-}
-
-impl From<base64::DecodeError> for DecodeError {
-    fn from(_: base64::DecodeError) -> Self {
-        Self
-    }
-}
-
-impl From<sign::SignatureError> for DecodeError {
-    fn from(_: sign::SignatureError) -> Self {
-        Self
-    }
-}
-
-impl From<DecodeError> for Error {
-    fn from(_: DecodeError) -> Self {
-        Self::MalformedData
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::crypto::{sign, SecretKey};
     use assert_matches::assert_matches;
 
     #[test]
@@ -265,8 +159,7 @@ mod tests {
         let token_write_key: sign::SecretKey = rand::random();
         let token_id = RepositoryId::from(sign::PublicKey::from(&token_write_key));
 
-        let token = ShareToken::new(AccessSecrets::Write(WriteSecrets::new(token_write_key)))
-            .with_name("foo");
+        let token = ShareToken::new(AccessSecrets::Write(token_write_key.into())).with_name("foo");
 
         let encoded = token.to_string();
         let decoded: ShareToken = encoded.parse().unwrap();

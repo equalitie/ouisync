@@ -8,11 +8,12 @@ use rand::{
     Rng,
 };
 use serde;
+use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::{fmt, str::FromStr};
 use zeroize::Zeroize;
 
-#[derive(PartialEq, Eq, Clone, Copy, serde::Deserialize, serde::Serialize)]
+#[derive(PartialEq, Eq, Clone, Copy, Deserialize, Serialize)]
 pub struct PublicKey(ext::PublicKey);
 
 pub struct SecretKey(ext::SecretKey);

@@ -113,7 +113,7 @@ impl SecretKey {
 }
 
 impl TryFrom<&[u8]> for SecretKey {
-    type Error = LengthError;
+    type Error = SecretKeyLengthError;
 
     fn try_from(slice: &[u8]) -> Result<Self, Self::Error> {
         if slice.len() >= Self::SIZE {
@@ -121,7 +121,7 @@ impl TryFrom<&[u8]> for SecretKey {
             key.as_array_mut().copy_from_slice(slice);
             Ok(key)
         } else {
-            Err(LengthError)
+            Err(SecretKeyLengthError)
         }
     }
 }
@@ -144,4 +144,4 @@ type Array = chacha20poly1305::Key;
 
 #[derive(Debug, Error)]
 #[error("invalid secret key length")]
-pub struct LengthError;
+pub struct SecretKeyLengthError;

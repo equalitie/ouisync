@@ -6,10 +6,12 @@ use rand::{
     distributions::{Distribution, Standard},
     Rng,
 };
+use serde::{Deserialize, Serialize};
 use sha3::{digest::Digest, Sha3_256};
 use std::str::FromStr;
 
-#[derive(PartialEq, Eq, Clone, Debug, Copy)]
+#[derive(PartialEq, Eq, Clone, Debug, Copy, Serialize, Deserialize)]
+#[repr(transparent)]
 pub struct RepositoryId(PublicKey);
 
 derive_sqlx_traits_for_byte_array_wrapper!(RepositoryId);

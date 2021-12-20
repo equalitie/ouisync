@@ -6,7 +6,7 @@ pub mod sign;
 pub use self::{
     hash::{Hash, Hashable},
     password::Password,
-    secret_key::{PasswordSalt, SecretKey},
+    secret_key::{PasswordSalt, SecretKey, SecretKeyLengthError},
 };
 pub use chacha20poly1305::aead;
 
