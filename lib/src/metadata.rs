@@ -1,12 +1,13 @@
 use crate::{
     access_control::WriteSecrets,
-    crypto::{sign, AuthTag, Cryptor, Nonce, PasswordSalt, SecretKey},
+    crypto::{sign, AuthTag, Cryptor, Nonce, PasswordSalt, SecretKey, AUTH_TAG_SIZE},
     db,
     error::{Error, Result},
     repository::{MasterSecret, RepositoryId},
 };
 use rand::{rngs::OsRng, Rng};
 use sqlx::Row;
+use zeroize::Zeroize;
 
 // Metadata keys
 const REPOSITORY_ID: &[u8] = b"repository_id";
@@ -139,7 +140,7 @@ async fn generate_password_salt(db: &mut db::Transaction<'_>) -> Result<Password
 // Repository Id
 // -------------------------------------------------------------------
 pub(crate) async fn get_repository_id(db: impl db::Executor<'_>) -> Result<RepositoryId> {
-    get_public(REPOSITORY_ID, db).await.map(|blob| blob.into())
+    get_public(REPOSITORY_ID, db).await
 }
 
 pub(crate) async fn set_repository_id(id: &RepositoryId, db: impl db::Executor<'_>) -> Result<()> {
@@ -154,7 +155,7 @@ pub(crate) async fn get_writer_id(
     db: impl db::Executor<'_>,
 ) -> Result<sign::PublicKey> {
     let id = match key {
-        Some(key) => get_secret(WRITER_ID, key, db).await?.into(),
+        Some(key) => get_secret(WRITER_ID, key, db).await?,
         None => OsRng.gen(),
     };
     Ok(id)
@@ -171,13 +172,17 @@ pub(crate) async fn set_writer_id(
 // -------------------------------------------------------------------
 // Public values
 // -------------------------------------------------------------------
-async fn get_public<const N: usize>(id: &[u8], db: impl db::Executor<'_>) -> Result<[u8; N]> {
-    sqlx::query("SELECT value FROM metadata_public WHERE name = ?")
+async fn get_public<T>(id: &[u8], db: impl db::Executor<'_>) -> Result<T>
+where
+    T: for<'a> TryFrom<&'a [u8]>,
+{
+    let row = sqlx::query("SELECT value FROM metadata_public WHERE name = ?")
         .bind(id)
-        .map(|row| (row.get::<'_, &[u8], usize>(0)).try_into().unwrap())
         .fetch_optional(db)
-        .await?
-        .ok_or(Error::EntryNotFound)
+        .await?;
+    let row = row.ok_or(Error::EntryNotFound)?;
+    let bytes: &[u8] = row.get(0);
+    bytes.try_into().map_err(|_| Error::MalformedData)
 }
 
 async fn set_public(id: &[u8], blob: &[u8], db: impl db::Executor<'_>) -> Result<()> {
@@ -197,33 +202,32 @@ async fn set_public(id: &[u8], blob: &[u8], db: impl db::Executor<'_>) -> Result
 // -------------------------------------------------------------------
 // Secret values
 // -------------------------------------------------------------------
-async fn get_secret<const N: usize>(
-    id: &[u8],
-    key: &SecretKey,
-    db: impl db::Executor<'_>,
-) -> Result<[u8; N]> {
-    let (nonce, auth_tag, mut value): (Nonce, AuthTag, [u8; N]) =
-        sqlx::query("SELECT nonce, auth_tag, value FROM metadata_secret WHERE name = ?")
-            .bind(id)
-            .map(|row| {
-                let nonce: &[u8] = row.get(0);
-                let auth_tag: &[u8] = row.get(1);
-                let value: &[u8] = row.get(2);
-                (
-                    nonce.try_into().unwrap(),
-                    AuthTag::clone_from_slice(auth_tag),
-                    value.try_into().unwrap(),
-                )
-            })
-            .fetch_optional(db)
-            .await?
-            .ok_or(Error::EntryNotFound)?;
+async fn get_secret<T>(id: &[u8], key: &SecretKey, db: impl db::Executor<'_>) -> Result<T>
+where
+    for<'a> T: TryFrom<&'a [u8]>,
+{
+    let row = sqlx::query("SELECT nonce, auth_tag, value FROM metadata_secret WHERE name = ?")
+        .bind(id)
+        .fetch_optional(db)
+        .await?
+        .ok_or(Error::EntryNotFound)?;
+
+    let nonce: &[u8] = row.get(0);
+    let nonce = Nonce::try_from(nonce)?;
+
+    let auth_tag: &[u8] = row.get(1);
+    let auth_tag: [u8; AUTH_TAG_SIZE] = auth_tag.try_into()?;
+    let auth_tag = AuthTag::from(auth_tag);
+
+    let mut buffer: Vec<_> = row.get(2);
 
     let cryptor = Cryptor::ChaCha20Poly1305(key.clone());
+    cryptor.decrypt(nonce, id, &mut buffer, &auth_tag)?;
 
-    cryptor.decrypt(nonce, id, &mut value, &auth_tag)?;
+    let secret = T::try_from(&buffer).map_err(|_| Error::MalformedData)?;
+    buffer.zeroize();
 
-    Ok(value)
+    Ok(secret)
 }
 
 async fn set_secret(

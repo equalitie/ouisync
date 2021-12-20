@@ -24,6 +24,8 @@ pub type Nonce = [u8; NONCE_SIZE];
 /// Authentication tag.
 pub type AuthTag = chacha20poly1305::Tag;
 
+pub const AUTH_TAG_SIZE: usize = <<AuthTag as GenericSequence<_>>::Length as Unsigned>::USIZE;
+
 /// Encryptor/decryptor
 #[derive(Clone)]
 pub enum Cryptor {
