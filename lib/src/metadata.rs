@@ -1,31 +1,12 @@
 use crate::{
-    crypto::{sign, AuthTag, Cryptor, Hashable, Nonce, PasswordSalt, SecretKey},
+    access_control::AccessSecrets,
+    crypto::{sign, AuthTag, Cryptor, Nonce, PasswordSalt, SecretKey},
     db,
     error::{Error, Result},
     repository::{MasterSecret, RepositoryId},
 };
 use rand::{rngs::OsRng, Rng};
 use sqlx::Row;
-
-struct AccessSecrets {
-    write_key: sign::SecretKey,
-    // The read_key is calculated as a hash of the write_key.
-    read_key: SecretKey,
-    // The public part corresponding to write_key
-    repo_id: RepositoryId,
-}
-
-impl AccessSecrets {
-    fn generate() -> Self {
-        let keypair = sign::Keypair::generate();
-
-        AccessSecrets {
-            write_key: keypair.secret,
-            read_key: keypair.public.as_ref().hash().into(),
-            repo_id: keypair.public.into(),
-        }
-    }
-}
 
 // Metadata keys
 const REPOSITORY_ID: &[u8] = b"repository_id";
