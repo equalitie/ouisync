@@ -1,8 +1,12 @@
 use super::{AccessSecrets, WriteSecrets};
-use crate::{crypto::sign, error::Error, repository::RepositoryId};
+use crate::{
+    crypto::{sign, SecretKey},
+    error::Error,
+    repository::RepositoryId,
+};
 use std::{borrow::Cow, fmt, str::FromStr, string::FromUtf8Error};
 use thiserror::Error;
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroizing;
 
 pub const SCHEME: &str = "ouisync";
 pub const VERSION: u8 = 0; // when this reaches 128, switch to variable-lengh encoding.
@@ -78,16 +82,16 @@ impl FromStr for ShareToken {
         let mode = read_mode(&mut input)?;
         let secrets = match mode {
             AccessMode::Blind => {
-                let id = read_key(&mut input)?;
+                let id = read_key(&mut input, RepositoryId::SIZE)?;
                 AccessSecrets::Blind { id }
             }
             AccessMode::Read => {
-                let id = read_key(&mut input)?;
-                let read_key = read_key(&mut input)?;
+                let id = read_key(&mut input, RepositoryId::SIZE)?;
+                let read_key = read_key(&mut input, SecretKey::SIZE)?;
                 AccessSecrets::Read { id, read_key }
             }
             AccessMode::Write => {
-                let write_key = read_key(&mut input)?;
+                let write_key = read_key(&mut input, sign::SecretKey::SIZE)?;
                 let secrets = WriteSecrets::new(write_key);
                 AccessSecrets::Write(secrets)
             }
@@ -117,20 +121,16 @@ fn read_byte(input: &mut &[u8]) -> Result<u8, DecodeError> {
     }
 }
 
-fn read_key<T, const N: usize>(input: &mut &[u8]) -> Result<T, DecodeError>
+fn read_key<'a, T>(input: &mut &'a [u8], len: usize) -> Result<T, DecodeError>
 where
-    T: From<[u8; N]>,
+    T: TryFrom<&'a [u8]>,
 {
-    if N <= input.len() {
-        let (output_slice, new_input) = input.split_at(N);
-
-        let mut output_array: [u8; N] = output_slice.try_into().unwrap();
-        let output_key = T::from(output_array);
-        output_array.zeroize();
-
+    if len <= input.len() {
+        let (output, new_input) = input.split_at(len);
+        let output = T::try_from(output).map_err(|_| DecodeError)?;
         *input = new_input;
 
-        Ok(output_key)
+        Ok(output)
     } else {
         Err(DecodeError)
     }
@@ -212,7 +212,6 @@ impl From<DecodeError> for Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crypto::SecretKey;
     use assert_matches::assert_matches;
 
     #[test]

@@ -10,6 +10,7 @@ use sha3::{
     Sha3_256,
 };
 use std::{fmt, sync::Arc};
+use thiserror::Error;
 use zeroize::Zeroize;
 
 /// Symmetric encryption/decryption secret key.
@@ -31,17 +32,17 @@ impl SecretKey {
     /// Size of the key in bytes.
     pub const SIZE: usize = <<Array as GenericSequence<_>>::Length as Unsigned>::USIZE;
 
-    /// Load secret key from byte array of size SIZE.
-    pub fn from_bytes(bytes: &[u8]) -> Self {
-        Self(Arc::new(Inner(*Array::from_slice(bytes))))
-    }
+    /// Parse secret key from hexadecimal string of size 2*SIZE.
+    pub fn parse_hex(hex_str: &str) -> Result<Self, hex::FromHexError> {
+        let mut bytes = [0; Self::SIZE];
+        hex::decode_to_slice(&hex_str, &mut bytes)?;
 
-    /// Load secret key from hexadecimal string of size 2*SIZE.
-    pub fn from_hex(hex_str: &str) -> Self {
-        let mut bytes = hex::decode(&hex_str).expect("failed to decode the secret key from hex");
-        let key = Self::from_bytes(&bytes);
+        let mut key = Self::zero();
+        key.as_array_mut().copy_from_slice(&bytes);
+
         bytes.zeroize();
-        key
+
+        Ok(key)
     }
 
     /// Generate a random secret key using the given cryptographically secure random number
@@ -111,12 +112,17 @@ impl SecretKey {
     }
 }
 
-impl From<[u8; Self::SIZE]> for SecretKey {
-    fn from(mut bytes: [u8; Self::SIZE]) -> Self {
-        let mut key = Self::zero();
-        key.as_array_mut().copy_from_slice(&bytes);
-        bytes.zeroize();
-        key
+impl TryFrom<&[u8]> for SecretKey {
+    type Error = LengthError;
+
+    fn try_from(slice: &[u8]) -> Result<Self, Self::Error> {
+        if slice.len() >= Self::SIZE {
+            let mut key = Self::zero();
+            key.as_array_mut().copy_from_slice(slice);
+            Ok(key)
+        } else {
+            Err(LengthError)
+        }
     }
 }
 
@@ -135,3 +141,7 @@ impl Drop for Inner {
 }
 
 type Array = chacha20poly1305::Key;
+
+#[derive(Debug, Error)]
+#[error("invalid secret key length")]
+pub struct LengthError;

@@ -152,9 +152,11 @@ impl SecretKey {
     }
 }
 
-impl From<[u8; Self::SIZE]> for SecretKey {
-    fn from(bytes: [u8; Self::SIZE]) -> Self {
-        Self(ext::SecretKey::from_bytes(&bytes).unwrap())
+impl TryFrom<&[u8]> for SecretKey {
+    type Error = ext::SignatureError;
+
+    fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
+        Ok(Self(ext::SecretKey::from_bytes(bytes)?))
     }
 }
 
