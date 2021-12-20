@@ -62,14 +62,15 @@ async fn main() -> Result<()> {
             .await?
         };
 
-        let token = ShareToken::new(id).with_name(name);
+        // TODO:
+        // let token = ShareToken::new(AccessSecrets::Blind { id }).with_name(name);
 
-        if let Some(file) = &mut share_file {
-            file.write_all(token.to_string().as_bytes()).await?;
-            file.write(b"\n").await?;
-        } else {
-            println!("{}", token);
-        }
+        // if let Some(file) = &mut share_file {
+        //     file.write_all(token.to_string().as_bytes()).await?;
+        //     file.write(b"\n").await?;
+        // } else {
+        //     println!("{}", token);
+        // }
     }
 
     if let Some(mut file) = share_file {

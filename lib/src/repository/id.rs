@@ -1,16 +1,13 @@
-use crate::{
-    crypto::{
-        sign::{self, PublicKey, SecretKey},
-        Hash,
-    },
-    format,
+use crate::crypto::{
+    sign::{self, PublicKey, SecretKey},
+    Hash,
 };
 use rand::{
     distributions::{Distribution, Standard},
     Rng,
 };
 use sha3::{digest::Digest, Sha3_256};
-use std::{fmt, str::FromStr};
+use std::str::FromStr;
 
 #[derive(PartialEq, Eq, Clone, Debug, Copy)]
 pub struct RepositoryId(PublicKey);
@@ -43,12 +40,6 @@ impl FromStr for RepositoryId {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(Self(PublicKey::from_str(s)?))
-    }
-}
-
-impl fmt::LowerHex for RepositoryId {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        format::hex(f, self.0.as_ref())
     }
 }
 

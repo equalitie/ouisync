@@ -69,7 +69,7 @@ impl Cryptor {
     pub fn derive_subkey(&self, nonce: &[u8]) -> Self {
         match self {
             Self::ChaCha20Poly1305(key) => {
-                Self::ChaCha20Poly1305(SecretKey::derive_from_key(key, nonce))
+                Self::ChaCha20Poly1305(SecretKey::derive_from_key(key.as_array().as_ref(), nonce))
             }
             Self::Null => Self::Null,
         }

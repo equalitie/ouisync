@@ -1,17 +1,8 @@
-use crate::{
-    crypto::{sign, SecretKey},
-    error::Error,
-    repository::RepositoryId,
-};
-use std::{
-    borrow::Cow,
-    fmt,
-    io::{self, Cursor, Read, Write},
-    slice,
-    str::FromStr,
-    string::FromUtf8Error,
-};
+use super::{AccessSecrets, WriteSecrets};
+use crate::{crypto::sign, error::Error, repository::RepositoryId};
+use std::{borrow::Cow, fmt, str::FromStr, string::FromUtf8Error};
 use thiserror::Error;
+use zeroize::{Zeroize, Zeroizing};
 
 pub const SCHEME: &str = "ouisync";
 pub const VERSION: u8 = 0; // when this reaches 128, switch to variable-lengh encoding.
@@ -20,80 +11,30 @@ pub const VERSION: u8 = 0; // when this reaches 128, switch to variable-lengh en
 /// other replicas.
 #[derive(Debug)]
 pub struct ShareToken {
-    id: RepositoryId,
-    access: Access,
+    secrets: AccessSecrets,
     name: String,
 }
 
-#[derive(Debug)]
-pub(super) enum Access {
-    Blind,
-    Reader {
-        // Key to decrypt the repository content
-        read_key: SecretKey,
-    },
-    Writer {
-        // Key to decrypt and encrypt the repository content
-        read_key: SecretKey,
-        // Public key of the replica that is giving the write access ("giver").
-        giver_pk: sign::PublicKey,
-        // Secret key created from an unique random nonce to prevent using this share token more
-        // than once.
-        nonce_sk: sign::SecretKey,
-        // Signature of (repository_id, nonce_pk) created by the giver (nonce_pk is the
-        // corresponding public key to nonce_sk).
-        nonce_pk_signature: sign::Signature,
-    },
-}
-
 impl ShareToken {
-    /// Create share token for blind access to the given repository.
-    pub fn new(id: RepositoryId) -> Self {
+    /// Create share token with the given access secrets.
+    pub(crate) fn new(secrets: AccessSecrets) -> Self {
         Self {
-            id,
-            access: Access::Blind,
+            secrets,
             name: "".to_owned(),
         }
     }
 
     /// Attach a suggested repository name to the token.
-    pub fn with_name(self, name: impl Into<String>) -> Self {
+    pub(crate) fn with_name(self, name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
             ..self
         }
     }
 
-    /// Convert the share token to one that gives reader access.
-    pub fn for_reader(self, read_key: SecretKey) -> Self {
-        Self {
-            access: Access::Reader { read_key },
-            ..self
-        }
-    }
-
-    /// Convert the share token to one that gives writer access. `giver_keys` is the signing
-    /// keypair of the replica that gives the access.
-    pub fn for_writer(self, read_key: SecretKey, giver_keys: &sign::Keypair) -> Self {
-        let nonce_keys = sign::Keypair::generate();
-
-        let message = signature_material(&self.id, &nonce_keys.public);
-        let nonce_pk_signature = giver_keys.sign(&message);
-
-        Self {
-            access: Access::Writer {
-                read_key,
-                giver_pk: giver_keys.public,
-                nonce_sk: nonce_keys.secret,
-                nonce_pk_signature,
-            },
-            ..self
-        }
-    }
-
     /// Id of the repository to share.
     pub fn id(&self) -> &RepositoryId {
-        &self.id
+        self.secrets.id()
     }
 
     /// Suggested name of the repository.
@@ -101,46 +42,19 @@ impl ShareToken {
         if self.name.is_empty() {
             Cow::Owned(format!(
                 "{:x}",
-                self.id.salted_hash(b"ouisync repository name")
+                self.secrets.id().salted_hash(b"ouisync repository name")
             ))
         } else {
             Cow::Borrowed(&self.name)
         }
     }
-
-    /// Returns the read key if this token is for reader or writer access, `None` if for blind.
-    pub fn read_key(&self) -> Option<&SecretKey> {
-        match &self.access {
-            Access::Reader { read_key } | Access::Writer { read_key, .. } => Some(read_key),
-            Access::Blind => None,
-        }
-    }
-
-    /// Validate this token
-    pub fn validate(&self) -> bool {
-        match &self.access {
-            Access::Blind | Access::Reader { .. } => true,
-            Access::Writer {
-                giver_pk,
-                nonce_sk,
-                nonce_pk_signature,
-                ..
-            } => {
-                let message = signature_material(&self.id, &sign::PublicKey::from(nonce_sk));
-                giver_pk.verify(&message[..], nonce_pk_signature)
-            }
-        }
-    }
 }
 
-pub(super) fn signature_material(
-    id: &RepositoryId,
-    pk: &sign::PublicKey,
-) -> [u8; RepositoryId::SIZE + sign::PublicKey::SIZE] {
-    let mut message = [0; RepositoryId::SIZE + sign::PublicKey::SIZE];
-    message[..RepositoryId::SIZE].copy_from_slice(id.as_ref());
-    message[RepositoryId::SIZE..].copy_from_slice(pk.as_ref());
-    message
+#[repr(u8)]
+enum AccessMode {
+    Blind = 0,
+    Read = 1,
+    Write = 2,
 }
 
 impl FromStr for ShareToken {
@@ -153,76 +67,72 @@ impl FromStr for ShareToken {
 
         let (input, params) = input.split_once('?').unwrap_or((input, ""));
 
-        let mut cursor = Cursor::new(input);
-        let mut decoder = base64::read::DecoderReader::new(&mut cursor, base64::URL_SAFE_NO_PAD);
+        let input = Zeroizing::new(base64::decode_config(input, base64::URL_SAFE_NO_PAD)?);
+        let mut input = &input[..];
 
-        let version = read_version(&mut decoder)?;
+        let version = read_byte(&mut input)?;
         if version > VERSION {
             return Err(DecodeError);
         }
 
-        let id = RepositoryId::from(read_array(&mut decoder)?);
-        let access = read_access(&mut decoder)?;
+        let mode = read_mode(&mut input)?;
+        let secrets = match mode {
+            AccessMode::Blind => {
+                let id = read_key(&mut input)?;
+                AccessSecrets::Blind { id }
+            }
+            AccessMode::Read => {
+                let id = read_key(&mut input)?;
+                let read_key = read_key(&mut input)?;
+                AccessSecrets::Read { id, read_key }
+            }
+            AccessMode::Write => {
+                let write_key = read_key(&mut input)?;
+                let secrets = WriteSecrets::new(write_key);
+                AccessSecrets::Write(secrets)
+            }
+        };
 
         let name = parse_name(params)?;
 
-        Ok(Self { id, access, name })
+        Ok(Self { secrets, name })
     }
 }
 
-fn read_version<R>(reader: &mut R) -> io::Result<u8>
-where
-    R: Read,
-{
-    let mut byte = 0u8;
-    reader.read_exact(slice::from_mut(&mut byte))?;
-    Ok(byte)
+fn read_mode(input: &mut &[u8]) -> Result<AccessMode, DecodeError> {
+    match read_byte(input)? {
+        b if b == AccessMode::Blind as u8 => Ok(AccessMode::Blind),
+        b if b == AccessMode::Read as u8 => Ok(AccessMode::Read),
+        b if b == AccessMode::Write as u8 => Ok(AccessMode::Write),
+        _ => Err(DecodeError),
+    }
 }
 
-fn read_access<R>(reader: &mut R) -> io::Result<Access>
-where
-    R: io::Read,
-{
-    let read_key = if let Some(array) = none_on_eof(read_array(reader))? {
-        SecretKey::from(array)
+fn read_byte(input: &mut &[u8]) -> Result<u8, DecodeError> {
+    if let Some(b) = input.get(0).copied() {
+        *input = &input[1..];
+        Ok(b)
     } else {
-        return Ok(Access::Blind);
-    };
-
-    let giver_pk = if let Some(array) = none_on_eof(read_array(reader))? {
-        sign::PublicKey::from(array)
-    } else {
-        return Ok(Access::Reader { read_key });
-    };
-
-    let nonce_sk = sign::SecretKey::from(read_array(reader)?);
-
-    let nonce_pk_signature: [u8; sign::Signature::SIZE] = read_array(reader)?;
-    let nonce_pk_signature = sign::Signature::try_from(nonce_pk_signature.as_ref())
-        .map_err(|error| io::Error::new(io::ErrorKind::Other, error))?;
-
-    Ok(Access::Writer {
-        read_key,
-        giver_pk,
-        nonce_sk,
-        nonce_pk_signature,
-    })
+        Err(DecodeError)
+    }
 }
 
-fn read_array<R, const N: usize>(reader: &mut R) -> io::Result<[u8; N]>
+fn read_key<T, const N: usize>(input: &mut &[u8]) -> Result<T, DecodeError>
 where
-    R: io::Read,
+    T: From<[u8; N]>,
 {
-    let mut buffer = [0; N];
-    reader.read_exact(&mut buffer)?;
-    Ok(buffer)
-}
+    if N <= input.len() {
+        let (output_slice, new_input) = input.split_at(N);
 
-fn none_on_eof<T>(result: io::Result<T>) -> io::Result<Option<T>> {
-    match result {
-        Ok(value) => Ok(Some(value)),
-        Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => Ok(None),
-        Err(error) => Err(error),
+        let mut output_array: [u8; N] = output_slice.try_into().unwrap();
+        let output_key = T::from(output_array);
+        output_array.zeroize();
+
+        *input = new_input;
+
+        Ok(output_key)
+    } else {
+        Err(DecodeError)
     }
 }
 
@@ -239,27 +149,29 @@ impl fmt::Display for ShareToken {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}:", SCHEME)?;
 
-        let mut encoder = base64::write::EncoderStringWriter::new(base64::URL_SAFE_NO_PAD);
-        encoder.write_all(VERSION.to_be_bytes().as_ref()).unwrap();
-        encoder.write_all(self.id.as_ref()).unwrap();
+        let mut buffer = vec![VERSION];
 
-        if let Some(read_key) = self.read_key() {
-            encoder.write_all(read_key.as_array().as_ref()).unwrap();
+        match &self.secrets {
+            AccessSecrets::Blind { id } => {
+                buffer.push(AccessMode::Blind as u8);
+                buffer.extend_from_slice(id.as_ref());
+            }
+            AccessSecrets::Read { id, read_key } => {
+                buffer.push(AccessMode::Read as u8);
+                buffer.extend_from_slice(id.as_ref());
+                buffer.extend_from_slice(read_key.as_array().as_ref());
+            }
+            AccessSecrets::Write(secrets) => {
+                buffer.push(AccessMode::Write as u8);
+                buffer.extend_from_slice(secrets.write_key.as_ref());
+            }
         }
 
-        if let Access::Writer {
-            read_key: _,
-            giver_pk,
-            nonce_sk,
-            nonce_pk_signature,
-        } = &self.access
-        {
-            encoder.write_all(giver_pk.as_ref()).unwrap();
-            encoder.write_all(nonce_sk.as_ref()).unwrap();
-            encoder.write_all(nonce_pk_signature.as_ref()).unwrap();
-        }
-
-        write!(f, "{}", encoder.into_inner())?;
+        write!(
+            f,
+            "{}",
+            base64::encode_config(buffer, base64::URL_SAFE_NO_PAD)
+        )?;
 
         if !self.name.is_empty() {
             write!(f, "?name={}", urlencoding::encode(&self.name))?
@@ -273,14 +185,20 @@ impl fmt::Display for ShareToken {
 #[error("failed to decode share token")]
 pub struct DecodeError;
 
-impl From<io::Error> for DecodeError {
-    fn from(_: io::Error) -> Self {
+impl From<FromUtf8Error> for DecodeError {
+    fn from(_: FromUtf8Error) -> Self {
         Self
     }
 }
 
-impl From<FromUtf8Error> for DecodeError {
-    fn from(_: FromUtf8Error) -> Self {
+impl From<base64::DecodeError> for DecodeError {
+    fn from(_: base64::DecodeError) -> Self {
+        Self
+    }
+}
+
+impl From<sign::SignatureError> for DecodeError {
+    fn from(_: sign::SignatureError) -> Self {
         Self
     }
 }
@@ -294,88 +212,69 @@ impl From<DecodeError> for Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::crypto::SecretKey;
     use assert_matches::assert_matches;
 
     #[test]
     fn encode_and_decode_blind() {
-        let id: RepositoryId = rand::random();
-        let token = ShareToken::new(id);
+        let token_id: RepositoryId = rand::random();
+        let token = ShareToken::new(AccessSecrets::Blind { id: token_id });
 
         let encoded = token.to_string();
         let decoded: ShareToken = encoded.parse().unwrap();
 
-        assert_eq!(decoded.id, token.id);
         assert_eq!(decoded.name, "");
-        assert_matches!(decoded.access, Access::Blind);
+        assert_matches!(decoded.secrets, AccessSecrets::Blind { id } => {
+            assert_eq!(id, token_id)
+        });
     }
 
     #[test]
     fn encode_and_decode_blind_with_name() {
-        let id: RepositoryId = rand::random();
-        let token = ShareToken::new(id).with_name("foo");
+        let token_id: RepositoryId = rand::random();
+        let token = ShareToken::new(AccessSecrets::Blind { id: token_id }).with_name("foo");
 
         let encoded = token.to_string();
         let decoded: ShareToken = encoded.parse().unwrap();
 
-        assert_eq!(decoded.id, token.id);
         assert_eq!(decoded.name, token.name);
-        assert_matches!(decoded.access, Access::Blind);
+        assert_matches!(decoded.secrets, AccessSecrets::Blind { id } => assert_eq!(id, token_id));
     }
 
     #[test]
     fn encode_and_decode_reader() {
-        let id: RepositoryId = rand::random();
-        let read_key = SecretKey::random();
-        let token = ShareToken::new(id).for_reader(read_key).with_name("foo");
+        let token_id: RepositoryId = rand::random();
+        let token_read_key = SecretKey::random();
+        let token = ShareToken::new(AccessSecrets::Read {
+            id: token_id,
+            read_key: token_read_key.clone(),
+        })
+        .with_name("foo");
 
         let encoded = token.to_string();
         let decoded: ShareToken = encoded.parse().unwrap();
 
-        assert_eq!(decoded.id, token.id);
         assert_eq!(decoded.name, token.name);
-        assert_matches!(decoded.access, Access::Reader { read_key } => {
-            assert_eq!(read_key.as_array(), token.read_key().unwrap().as_array())
+        assert_matches!(decoded.secrets, AccessSecrets::Read { id, read_key } => {
+            assert_eq!(id,token_id);
+            assert_eq!(read_key.as_array(), token_read_key.as_array());
         });
     }
 
     #[test]
     fn encode_and_decode_writer() {
-        let id: RepositoryId = rand::random();
-        let read_key = SecretKey::random();
-        let giver_keys = sign::Keypair::generate();
+        let token_write_key: sign::SecretKey = rand::random();
+        let token_id = RepositoryId::from(sign::PublicKey::from(&token_write_key));
 
-        let token = ShareToken::new(id)
-            .for_writer(read_key, &giver_keys)
+        let token = ShareToken::new(AccessSecrets::Write(WriteSecrets::new(token_write_key)))
             .with_name("foo");
 
         let encoded = token.to_string();
         let decoded: ShareToken = encoded.parse().unwrap();
 
-        assert_eq!(decoded.id, token.id);
         assert_eq!(decoded.name, token.name);
-
-        match (token.access, decoded.access) {
-            (
-                Access::Writer {
-                    read_key: orig_read_key,
-                    giver_pk: orig_giver_pk,
-                    nonce_sk: orig_nonce_sk,
-                    nonce_pk_signature: orig_nonce_pk_signature,
-                },
-                Access::Writer {
-                    read_key: decoded_read_key,
-                    giver_pk: decoded_giver_pk,
-                    nonce_sk: decoded_nonce_sk,
-                    nonce_pk_signature: decoded_nonce_pk_signature,
-                },
-            ) => {
-                assert_eq!(decoded_read_key.as_array(), orig_read_key.as_array());
-                assert_eq!(decoded_giver_pk, orig_giver_pk);
-                assert_eq!(decoded_nonce_sk.as_ref(), orig_nonce_sk.as_ref());
-                assert_eq!(decoded_nonce_pk_signature, orig_nonce_pk_signature);
-            }
-            (Access::Writer { .. }, decoded) => panic!("unexpected decoded access {:?}", decoded),
-            (_, _) => unreachable!(),
-        }
+        assert_matches!(decoded.secrets, AccessSecrets::Write(access) => {
+            assert_eq!(access.id, token_id);
+        });
     }
 }

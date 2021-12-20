@@ -1,5 +1,5 @@
 use crate::{
-    access_control::AccessSecrets,
+    access_control::WriteSecrets,
     crypto::{sign, AuthTag, Cryptor, Nonce, PasswordSalt, SecretKey},
     db,
     error::{Error, Result},
@@ -12,8 +12,8 @@ use sqlx::Row;
 const REPOSITORY_ID: &[u8] = b"repository_id";
 const PASSWORD_SALT: &[u8] = b"password_salt";
 const WRITER_ID: &[u8] = b"writer_id";
-const WRITER_KEY: &[u8] = b"writer_key";
-const READER_KEY: &[u8] = b"reader_key";
+const WRITE_KEY: &[u8] = b"write_key";
+const READ_KEY: &[u8] = b"read_key";
 
 /// Initialize the metadata tables for storing Key:Value pairs.  One table stores plaintext values,
 /// the other one stores encrypted ones.
@@ -74,7 +74,7 @@ pub(crate) async fn init(
     generate_password_salt(&mut tx).await?;
     let master_key = secret_to_key(master_secret, &mut tx).await?;
 
-    let secrets = AccessSecrets::generate();
+    let secrets = WriteSecrets::new(OsRng.gen());
 
     // TODO: At the moment, writer keys are just random bytes. This is because it is a long term
     // plan (which may or may not materialize) to have a writer set CRDT structure indicating who
@@ -83,17 +83,9 @@ pub(crate) async fn init(
     // set instead of storing a "global" sign::PublicKey.
     set_writer_id(&OsRng.gen(), &master_key, &mut tx).await?;
 
-    set_repository_id(&secrets.repo_id, &mut tx).await?;
-
-    set_secret(WRITER_KEY, secrets.write_key.as_ref(), &master_key, &mut tx).await?;
-
-    set_secret(
-        READER_KEY,
-        secrets.read_key.as_array(),
-        &master_key,
-        &mut tx,
-    )
-    .await?;
+    set_repository_id(&secrets.id, &mut tx).await?;
+    set_secret(WRITE_KEY, secrets.write_key.as_ref(), &master_key, &mut tx).await?;
+    set_secret(READ_KEY, secrets.read_key.as_array(), &master_key, &mut tx).await?;
 
     tx.commit().await?;
 
@@ -188,13 +180,11 @@ async fn get_public<const N: usize>(id: &[u8], db: impl db::Executor<'_>) -> Res
 }
 
 async fn set_public(id: &[u8], blob: &[u8], db: impl db::Executor<'_>) -> Result<()> {
-    let result = sqlx::query(
-        "INSERT OR REPLACE INTO metadata_public(name, value) VALUES (?, ?)",
-    )
-    .bind(id)
-    .bind(blob)
-    .execute(db)
-    .await?;
+    let result = sqlx::query("INSERT OR REPLACE INTO metadata_public(name, value) VALUES (?, ?)")
+        .bind(id)
+        .bind(blob)
+        .execute(db)
+        .await?;
 
     if result.rows_affected() > 0 {
         Ok(())

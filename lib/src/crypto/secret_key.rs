@@ -1,4 +1,3 @@
-use super::Hash;
 use argon2::{
     password_hash::{self, rand_core::OsRng},
     Argon2,
@@ -64,12 +63,12 @@ impl SecretKey {
     }
 
     /// Derive a secret key from another secret key and a nonce.
-    pub fn derive_from_key(master_key: &Self, nonce: &[u8]) -> Self {
+    pub fn derive_from_key(master_key: &[u8], nonce: &[u8]) -> Self {
         let mut sub_key = Self::zero();
 
         // TODO: verify this is actually secure!
         let mut hasher = Sha3_256::new();
-        hasher.update(master_key.as_array());
+        hasher.update(master_key);
         hasher.update(nonce);
         hasher.finalize_into(sub_key.as_array_mut());
 
@@ -117,14 +116,6 @@ impl From<[u8; Self::SIZE]> for SecretKey {
         let mut key = Self::zero();
         key.as_array_mut().copy_from_slice(&bytes);
         bytes.zeroize();
-        key
-    }
-}
-
-impl From<Hash> for SecretKey {
-    fn from(mut hash: Hash) -> Self {
-        let key = Self::from_bytes(hash.as_ref());
-        hash.zeroize();
         key
     }
 }

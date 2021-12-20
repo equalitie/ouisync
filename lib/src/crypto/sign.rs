@@ -14,7 +14,9 @@ use zeroize::Zeroize;
 
 #[derive(PartialEq, Eq, Clone, Copy, serde::Deserialize, serde::Serialize)]
 pub struct PublicKey(ext::PublicKey);
+
 pub struct SecretKey(ext::SecretKey);
+
 pub struct Keypair {
     pub secret: SecretKey,
     pub public: PublicKey,

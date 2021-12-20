@@ -126,7 +126,7 @@ impl Options {
             .iter()
             .find(|e| e.name == repo_name)
             .map(|e| e.value.as_str())
-            .map(|k| MasterSecret::SecretKey(SecretKey::from_hex(&k)));
+            .map(|k| MasterSecret::SecretKey(SecretKey::from_hex(k)));
 
         let pwd = self
             .password
