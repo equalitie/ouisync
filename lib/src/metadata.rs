@@ -180,10 +180,7 @@ pub(crate) async fn get_writer_id(
     db: impl db::Executor<'_>,
 ) -> Result<sign::PublicKey> {
     let id = match key {
-        Some(key) => get_secret(WRITER_ID, key, db)
-            .await?
-            .map(|blob| blob.into())
-            .into(),
+        Some(key) => get_secret(WRITER_ID, key, db).await?.into(),
         None => OsRng.gen(),
     };
     Ok(id)

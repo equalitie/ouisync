@@ -1,4 +1,3 @@
-use super::writer_request::WriterRequest;
 use crate::{
     crypto::{sign, SecretKey},
     error::Error,
@@ -132,33 +131,6 @@ impl ShareToken {
             }
         }
     }
-
-    /// If this token is for a writer access, converts it to a `WriterRequest`, otherwise returns
-    /// an error which contains the original token.
-    pub fn into_writer_request(self, recipient_pk: sign::PublicKey) -> Result<WriterRequest, Self> {
-        match self.access {
-            Access::Writer {
-                giver_pk,
-                nonce_sk,
-                nonce_pk_signature,
-                ..
-            } => {
-                let nonce_pk = sign::PublicKey::from(&nonce_sk);
-                let message = signature_material(&self.id, &recipient_pk);
-                let recipient_pk_signature = nonce_sk.sign(&message, &nonce_pk);
-
-                Ok(WriterRequest {
-                    id: self.id,
-                    giver_pk,
-                    recipient_pk,
-                    recipient_pk_signature,
-                    nonce_pk,
-                    nonce_pk_signature,
-                })
-            }
-            Access::Reader { .. } | Access::Blind => Err(self),
-        }
-    }
 }
 
 pub(super) fn signature_material(
@@ -175,7 +147,7 @@ impl FromStr for ShareToken {
     type Err = DecodeError;
 
     fn from_str(input: &str) -> Result<Self, Self::Err> {
-        let input = input.trim();
+        let input = input.trim_start();
         let input = input.strip_prefix(SCHEME).ok_or(DecodeError)?;
         let input = input.strip_prefix(':').ok_or(DecodeError)?;
 
