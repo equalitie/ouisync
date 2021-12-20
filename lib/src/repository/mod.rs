@@ -89,7 +89,7 @@ impl Repository {
             Ok(id) => id,
             Err(Error::EntryNotFound) => {
                 let id = rand::random();
-                metadata::set_repository_id(&mut tx, &id).await?;
+                metadata::set_repository_id(&id, &mut tx).await?;
                 id
             }
             Err(error) => return Err(error),
@@ -103,7 +103,7 @@ impl Repository {
     /// Assign the id to this repository. Fails with `Error::EntryExists` if id was already
     /// assigned either by calling `set_id` or `get_or_create_id`.
     pub async fn set_id(&self, id: RepositoryId) -> Result<()> {
-        metadata::set_repository_id(self.db_pool(), &id).await
+        metadata::set_repository_id(&id, self.db_pool()).await
     }
 
     pub fn this_writer_id(&self) -> &PublicKey {

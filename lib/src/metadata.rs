@@ -1,6 +1,3 @@
-// TODO: Remove dead code once this is used
-#![allow(dead_code)]
-
 use crate::{
     crypto::{sign, AuthTag, Cryptor, Hashable, Nonce, PasswordSalt, SecretKey},
     db,
@@ -105,13 +102,7 @@ pub(crate) async fn init(
     // set instead of storing a "global" sign::PublicKey.
     set_writer_id(&OsRng.gen(), &master_key, &mut tx).await?;
 
-    set_secret(
-        REPOSITORY_ID,
-        secrets.repo_id.as_ref(),
-        &master_key,
-        &mut tx,
-    )
-    .await?;
+    set_repository_id(&secrets.repo_id, &mut tx).await?;
 
     set_secret(WRITER_KEY, secrets.write_key.as_ref(), &master_key, &mut tx).await?;
 
@@ -177,7 +168,7 @@ pub(crate) async fn get_repository_id(db: impl db::Executor<'_>) -> Result<Repos
     get_public(REPOSITORY_ID, db).await.map(|blob| blob.into())
 }
 
-pub(crate) async fn set_repository_id(db: impl db::Executor<'_>, id: &RepositoryId) -> Result<()> {
+pub(crate) async fn set_repository_id(id: &RepositoryId, db: impl db::Executor<'_>) -> Result<()> {
     set_public(REPOSITORY_ID, id.as_ref(), db).await
 }
 
@@ -220,7 +211,7 @@ async fn get_public<const N: usize>(id: &[u8], db: impl db::Executor<'_>) -> Res
 
 async fn set_public(id: &[u8], blob: &[u8], db: impl db::Executor<'_>) -> Result<()> {
     let result = sqlx::query(
-        "INSERT INTO metadata_public(name, value) VALUES (?, ?) ON CONFLICT DO NOTHING",
+        "INSERT OR REPLACE INTO metadata_public(name, value) VALUES (?, ?)",
     )
     .bind(id)
     .bind(blob)
@@ -323,7 +314,7 @@ mod tests {
         let pool = new_memory_db().await;
 
         let repo_id = rand::random();
-        set_repository_id(&pool, &repo_id).await.unwrap();
+        set_repository_id(&repo_id, &pool).await.unwrap();
 
         let repo_id_ = get_repository_id(&pool).await.unwrap();
 
