@@ -3,7 +3,7 @@ use super::{
     utils::{self, Port, SharedHandle, UniqueHandle},
 };
 use crate::{
-    access_control::{MasterSecret, ShareToken},
+    access_control::{AccessMode, AccessSecrets, MasterSecret, ShareToken},
     crypto::Password,
     directory::EntryType,
     error::Error,
@@ -26,13 +26,47 @@ pub struct RepositoryHolder {
 /// Creates a new repository.
 #[no_mangle]
 pub unsafe extern "C" fn repository_create(
-    _store: *const c_char,
-    _master_password: *const c_char,
-    _share_token: *const c_char,
-    _port: Port<SharedHandle<RepositoryHolder>>,
-    _error: *mut *mut c_char,
+    store: *const c_char,
+    master_password: *const c_char,
+    share_token: *const c_char,
+    port: Port<SharedHandle<RepositoryHolder>>,
+    error: *mut *mut c_char,
 ) {
-    todo!()
+    session::with(port, error, |ctx| {
+        let store = utils::ptr_to_path_buf(store)?;
+        let this_replica_id = *ctx.this_replica_id();
+        let network_handle = ctx.network().handle();
+
+        let master_password = Password::new(utils::ptr_to_str(master_password)?);
+
+        let access_secrets = if share_token.is_null() {
+            Arc::new(AccessSecrets::random_write())
+        } else {
+            let share_token = utils::ptr_to_str(share_token)?;
+            let share_token: ShareToken = share_token.parse()?;
+            share_token.access_secrets().clone()
+        };
+
+        ctx.spawn(async move {
+            let repository = Repository::create(
+                &store.into_std_path_buf().into(),
+                this_replica_id,
+                MasterSecret::Password(master_password),
+                access_secrets,
+                true,
+            )
+            .await?;
+
+            let registration = network_handle.register(&repository).await;
+
+            let holder = Arc::new(RepositoryHolder {
+                repository,
+                registration,
+            });
+
+            Ok(SharedHandle::new(holder))
+        })
+    })
 }
 
 /// Opens an existing repository.
@@ -208,17 +242,23 @@ pub unsafe extern "C" fn repository_disable_dht(
 #[no_mangle]
 pub unsafe extern "C" fn repository_create_share_token(
     handle: SharedHandle<RepositoryHolder>,
+    access_mode: u8,
     name: *const c_char,
     port: Port<String>,
     error: *mut *mut c_char,
 ) {
     session::with(port, error, |ctx| {
         let holder = handle.get();
+        let access_mode = AccessMode::try_from(access_mode)?;
         let name = utils::ptr_to_str(name)?.to_owned();
 
         ctx.spawn(async move {
-            let secrets = holder.repository.access_secrets().clone();
-            let share_token = ShareToken::from(secrets).with_name(name);
+            let access_secrets = holder
+                .repository
+                .access_secrets()
+                .clone()
+                .with_mode(access_mode);
+            let share_token = ShareToken::from(access_secrets).with_name(name);
 
             Ok(share_token.to_string())
         })
