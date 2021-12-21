@@ -1,6 +1,6 @@
 use super::{AccessSecrets, DecodeError};
 use crate::repository::RepositoryId;
-use std::{borrow::Cow, fmt, str::FromStr};
+use std::{borrow::Cow, fmt, str::FromStr, sync::Arc};
 use zeroize::Zeroizing;
 
 pub const SCHEME: &str = "ouisync";
@@ -10,21 +10,13 @@ pub const VERSION: u8 = 0; // when this reaches 128, switch to variable-lengh en
 /// other replicas.
 #[derive(Debug)]
 pub struct ShareToken {
-    secrets: AccessSecrets,
+    secrets: Arc<AccessSecrets>,
     name: String,
 }
 
 impl ShareToken {
-    /// Create share token with the given access secrets.
-    pub(crate) fn new(secrets: AccessSecrets) -> Self {
-        Self {
-            secrets,
-            name: "".to_owned(),
-        }
-    }
-
     /// Attach a suggested repository name to the token.
-    pub(crate) fn with_name(self, name: impl Into<String>) -> Self {
+    pub fn with_name(self, name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
             ..self
@@ -45,6 +37,25 @@ impl ShareToken {
             ))
         } else {
             Cow::Borrowed(&self.name)
+        }
+    }
+
+    pub fn access_secrets(&self) -> &Arc<AccessSecrets> {
+        &self.secrets
+    }
+}
+
+impl From<AccessSecrets> for ShareToken {
+    fn from(secrets: AccessSecrets) -> Self {
+        Self::from(Arc::new(secrets))
+    }
+}
+
+impl From<Arc<AccessSecrets>> for ShareToken {
+    fn from(secrets: Arc<AccessSecrets>) -> Self {
+        Self {
+            secrets,
+            name: String::new(),
         }
     }
 }
@@ -68,7 +79,7 @@ impl FromStr for ShareToken {
         let secrets = AccessSecrets::decode(&input[1..])?;
         let name = parse_name(params)?;
 
-        Ok(Self { secrets, name })
+        Ok(Self::from(secrets).with_name(name))
     }
 }
 
@@ -111,13 +122,13 @@ mod tests {
     #[test]
     fn encode_and_decode_blind() {
         let token_id: RepositoryId = rand::random();
-        let token = ShareToken::new(AccessSecrets::Blind { id: token_id });
+        let token = ShareToken::from(AccessSecrets::Blind { id: token_id });
 
         let encoded = token.to_string();
         let decoded: ShareToken = encoded.parse().unwrap();
 
         assert_eq!(decoded.name, "");
-        assert_matches!(decoded.secrets, AccessSecrets::Blind { id } => {
+        assert_matches!(*decoded.secrets, AccessSecrets::Blind { id } => {
             assert_eq!(id, token_id)
         });
     }
@@ -125,20 +136,20 @@ mod tests {
     #[test]
     fn encode_and_decode_blind_with_name() {
         let token_id: RepositoryId = rand::random();
-        let token = ShareToken::new(AccessSecrets::Blind { id: token_id }).with_name("foo");
+        let token = ShareToken::from(AccessSecrets::Blind { id: token_id }).with_name("foo");
 
         let encoded = token.to_string();
         let decoded: ShareToken = encoded.parse().unwrap();
 
         assert_eq!(decoded.name, token.name);
-        assert_matches!(decoded.secrets, AccessSecrets::Blind { id } => assert_eq!(id, token_id));
+        assert_matches!(decoded.secrets.as_ref(), AccessSecrets::Blind { id } => assert_eq!(*id, token_id));
     }
 
     #[test]
     fn encode_and_decode_reader() {
         let token_id: RepositoryId = rand::random();
         let token_read_key = cipher::SecretKey::random();
-        let token = ShareToken::new(AccessSecrets::Read {
+        let token = ShareToken::from(AccessSecrets::Read {
             id: token_id,
             read_key: token_read_key.clone(),
         })
@@ -148,8 +159,8 @@ mod tests {
         let decoded: ShareToken = encoded.parse().unwrap();
 
         assert_eq!(decoded.name, token.name);
-        assert_matches!(decoded.secrets, AccessSecrets::Read { id, read_key } => {
-            assert_eq!(id,token_id);
+        assert_matches!(decoded.secrets.as_ref(), AccessSecrets::Read { id, read_key } => {
+            assert_eq!(*id, token_id);
             assert_eq!(read_key.as_ref(), token_read_key.as_ref());
         });
     }
@@ -159,13 +170,13 @@ mod tests {
         let token_write_key: sign::SecretKey = rand::random();
         let token_id = RepositoryId::from(sign::PublicKey::from(&token_write_key));
 
-        let token = ShareToken::new(AccessSecrets::Write(token_write_key.into())).with_name("foo");
+        let token = ShareToken::from(AccessSecrets::Write(token_write_key.into())).with_name("foo");
 
         let encoded = token.to_string();
         let decoded: ShareToken = encoded.parse().unwrap();
 
         assert_eq!(decoded.name, token.name);
-        assert_matches!(decoded.secrets, AccessSecrets::Write(access) => {
+        assert_matches!(decoded.secrets.as_ref(), AccessSecrets::Write(access) => {
             assert_eq!(access.id, token_id);
         });
     }

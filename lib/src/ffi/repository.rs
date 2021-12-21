@@ -208,7 +208,7 @@ pub unsafe extern "C" fn repository_create_share_token(
                 .registration
                 .get_or_create_id(&holder.repository)
                 .await?;
-            let share_token = ShareToken::new(AccessSecrets::Blind { id }).with_name(name);
+            let share_token = ShareToken::from(AccessSecrets::Blind { id }).with_name(name);
 
             Ok(share_token.to_string())
         })

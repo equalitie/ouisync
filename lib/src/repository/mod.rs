@@ -37,7 +37,7 @@ impl Repository {
         store: &db::Store,
         _this_replica_id: ReplicaId,
         master_secret: MasterSecret,
-        access_secrets: AccessSecrets,
+        access_secrets: Arc<AccessSecrets>,
         enable_merger: bool,
     ) -> Result<Self> {
         let pool = create_db(store).await?;
@@ -86,13 +86,13 @@ impl Repository {
             AccessSecrets::Blind { id }
         };
 
-        Self::new(pool, this_writer_id, access_secrets, enable_merger).await
+        Self::new(pool, this_writer_id, access_secrets.into(), enable_merger).await
     }
 
     async fn new(
         pool: db::Pool,
         this_writer_id: PublicKey,
-        access_secrets: AccessSecrets,
+        access_secrets: Arc<AccessSecrets>,
         enable_merger: bool,
     ) -> Result<Self> {
         let enable_merger = enable_merger && access_secrets.can_write();
@@ -100,7 +100,7 @@ impl Repository {
 
         let shared = Arc::new(Shared {
             index,
-            secrets: Arc::new(access_secrets),
+            access_secrets,
             branches: Mutex::new(HashMap::new()),
         });
 
@@ -148,6 +148,10 @@ impl Repository {
 
     pub fn this_writer_id(&self) -> &PublicKey {
         self.shared.index.this_writer_id()
+    }
+
+    pub fn access_secrets(&self) -> &Arc<AccessSecrets> {
+        &self.shared.access_secrets
     }
 
     /// Looks up an entry by its path. The path must be relative to the repository root.
@@ -436,7 +440,7 @@ pub(crate) async fn create_db(store: &db::Store) -> Result<db::Pool> {
 
 struct Shared {
     index: Index,
-    secrets: Arc<AccessSecrets>,
+    access_secrets: Arc<AccessSecrets>,
     // Cache for `Branch` instances to make them persistent over the lifetime of the program.
     branches: Mutex<HashMap<PublicKey, Branch>>,
 }
@@ -472,7 +476,7 @@ impl Shared {
                 Branch::new(
                     self.index.pool.clone(),
                     data.clone(),
-                    self.secrets.cryptor(),
+                    self.access_secrets.cryptor(),
                 )
             })
             .clone()
@@ -622,7 +626,7 @@ mod tests {
             &db::Store::Memory,
             writer_id,
             MasterSecret::random(),
-            AccessSecrets::random_write(),
+            AccessSecrets::random_write().into(),
             false,
         )
         .await
@@ -637,7 +641,7 @@ mod tests {
             &db::Store::Memory,
             local_id,
             MasterSecret::random(),
-            AccessSecrets::random_write(),
+            AccessSecrets::random_write().into(),
             true,
         )
         .await
@@ -703,7 +707,7 @@ mod tests {
             &db::Store::Memory,
             local_id,
             MasterSecret::random(),
-            AccessSecrets::random_write(),
+            AccessSecrets::random_write().into(),
             false,
         )
         .await
@@ -741,7 +745,7 @@ mod tests {
             &db::Store::Memory,
             local_id,
             MasterSecret::random(),
-            AccessSecrets::random_write(),
+            AccessSecrets::random_write().into(),
             false,
         )
         .await
@@ -782,7 +786,7 @@ mod tests {
             &db::Store::Memory,
             writer_id,
             MasterSecret::random(),
-            AccessSecrets::random_write(),
+            AccessSecrets::random_write().into(),
             false,
         )
         .await
@@ -833,7 +837,7 @@ mod tests {
             &db::Store::Memory,
             rand::random(),
             MasterSecret::random(),
-            AccessSecrets::random_write(),
+            AccessSecrets::random_write().into(),
             false,
         )
         .await

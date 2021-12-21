@@ -1,5 +1,5 @@
 use crate::APP_NAME;
-use anyhow::{Context, Error, Result};
+use anyhow::{format_err, Context, Error, Result};
 use ouisync_lib::{cipher::SecretKey, MasterSecret, NetworkOptions, Password, ShareToken, Store};
 use std::{
     path::{Path, PathBuf},
@@ -25,8 +25,13 @@ pub(crate) struct Options {
     #[structopt(flatten)]
     pub network: NetworkOptions,
 
-    /// Mount the named repository at the specified path. If no such repository exists yet, it will
-    /// be created. Can be specified multiple times to mount multiple repositories.
+    /// Create new repository with the specified name. Can be specified multiple times to create
+    /// multiple repositories.
+    #[structopt(short, long, value_name = "NAME")]
+    pub create: Vec<String>,
+
+    /// Mount the named repository at the specified path. Can be specified multiple times to mount
+    /// multiple repositories.
     #[structopt(short, long, value_name = "NAME:PATH")]
     pub mount: Vec<Named<PathBuf>>,
 
@@ -120,16 +125,14 @@ impl Options {
         }
     }
 
-    pub fn secret_for_repo(&self, repo_name: &str) -> Option<MasterSecret> {
+    pub fn secret_for_repo(&self, repo_name: &str) -> Result<MasterSecret> {
         let key = self
             .key
             .iter()
             .find(|e| e.name == repo_name)
             .map(|e| e.value.as_str())
             .map(|k| {
-                MasterSecret::SecretKey(
-                    SecretKey::parse_hex(k).expect("failed to parse secret key"),
-                )
+                MasterSecret::SecretKey(SecretKey::parse_hex(k).expect("failed to parse key"))
             });
 
         let pwd = self
@@ -146,9 +149,12 @@ impl Options {
                     repo_name
                 );
             }
-            (Some(k), None) => Some(k),
-            (None, Some(p)) => Some(p),
-            (None, None) => None,
+            (Some(k), None) => Ok(k),
+            (None, Some(p)) => Ok(p),
+            (None, None) => Err(format_err!(
+                "missing password or key for repository {:?}",
+                repo_name
+            )),
         }
     }
 }

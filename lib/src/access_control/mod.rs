@@ -28,6 +28,7 @@ impl AccessSecrets {
     pub fn generate_write<R: Rng + CryptoRng + ?Sized>(rng: &mut R) -> Self {
         let write_key: sign::SecretKey = rng.gen();
         let write_secrets = WriteSecrets::from(write_key);
+
         Self::Write(write_secrets)
     }
 
