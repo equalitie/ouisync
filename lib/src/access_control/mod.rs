@@ -1,6 +1,7 @@
+mod master_secret;
 mod share_token;
 
-pub use self::share_token::ShareToken;
+pub use self::{master_secret::MasterSecret, share_token::ShareToken};
 
 use crate::{
     crypto::{cipher, sign, Cryptor},

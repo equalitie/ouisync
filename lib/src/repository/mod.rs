@@ -3,14 +3,10 @@ mod id;
 pub use self::id::RepositoryId;
 
 use crate::{
-    access_control::AccessSecrets,
+    access_control::{AccessSecrets, MasterSecret},
     block,
     branch::Branch,
-    crypto::{
-        cipher,
-        sign::{self, PublicKey},
-        Password,
-    },
+    crypto::sign::{self, PublicKey},
     db,
     debug_printer::DebugPrinter,
     directory::{Directory, EntryType},
@@ -29,18 +25,6 @@ use log::Level;
 use rand::{rngs::OsRng, Rng};
 use std::{collections::HashMap, iter, sync::Arc};
 use tokio::{select, sync::Mutex};
-
-pub enum MasterSecret {
-    Password(Password),
-    SecretKey(cipher::SecretKey),
-}
-
-impl MasterSecret {
-    /// Generates random master secret containing a secret key.
-    pub fn random() -> Self {
-        Self::SecretKey(cipher::SecretKey::random())
-    }
-}
 
 pub struct Repository {
     shared: Arc<Shared>,

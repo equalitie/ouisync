@@ -1,12 +1,12 @@
 use crate::{
-    access_control::{AccessSecrets, WriteSecrets},
+    access_control::{AccessSecrets, MasterSecret, WriteSecrets},
     crypto::{
         cipher::{AuthTag, Nonce, SecretKey, AUTH_TAG_SIZE},
         sign, Cryptor, PasswordSalt,
     },
     db,
     error::{Error, Result},
-    repository::{MasterSecret, RepositoryId},
+    repository::RepositoryId,
 };
 use rand::{rngs::OsRng, Rng};
 use sqlx::Row;

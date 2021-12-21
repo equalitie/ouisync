@@ -3,13 +3,13 @@ use super::{
     utils::{self, Port, SharedHandle, UniqueHandle},
 };
 use crate::{
-    access_control::{AccessSecrets, ShareToken},
+    access_control::{AccessSecrets, MasterSecret, ShareToken},
     crypto::Password,
     directory::EntryType,
     error::Error,
     network::Registration,
     path,
-    repository::{MasterSecret, Repository},
+    repository::Repository,
 };
 use std::{os::raw::c_char, ptr, sync::Arc};
 use tokio::task::JoinHandle;
