@@ -28,11 +28,17 @@ impl Core {
         )
         .await
         {
-            Ok((id, buffer, auth_tag)) => {
+            Ok((id, mut buffer, auth_tag)) => {
+                operations::decrypt_block(
+                    &self.blob_key,
+                    &id,
+                    0,
+                    &mut buffer[BLOB_NONCE_SIZE..],
+                    &auth_tag,
+                )?;
+
                 let mut content = Cursor::new(buffer);
                 content.pos = self.header_size();
-
-                operations::decrypt_block(&self.blob_key, &id, 0, &mut content, &auth_tag)?;
 
                 Ok(OpenBlock {
                     locator: self.head_locator,

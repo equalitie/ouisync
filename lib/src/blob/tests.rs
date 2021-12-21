@@ -402,6 +402,41 @@ async fn modify_blob() {
     }
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn append() {
+    let (mut rng, branch) = setup(0).await;
+
+    let locator = random_head_locator(&mut rng);
+    let mut blob = Blob::create(branch.clone(), locator);
+    blob.write(b"foo").await.unwrap();
+    blob.flush().await.unwrap();
+
+    let mut blob = Blob::open(branch.clone(), locator).await.unwrap();
+    blob.seek(SeekFrom::End(0)).await.unwrap();
+    blob.write(b"bar").await.unwrap();
+    blob.flush().await.unwrap();
+
+    let mut blob = Blob::open(branch, locator).await.unwrap();
+    let content = blob.read_to_end().await.unwrap();
+    assert_eq!(content, b"foobar");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn write_reopen_and_read() {
+    let (mut rng, branch) = setup(0).await;
+
+    let locator = random_head_locator(&mut rng);
+    let mut blob = Blob::create(branch, locator);
+    blob.write(b"foo").await.unwrap();
+    blob.flush().await.unwrap();
+
+    let core = blob.core().clone();
+
+    let mut blob = Blob::reopen(core).await.unwrap();
+    let content = blob.read_to_end().await.unwrap();
+    assert_eq!(content, b"foo");
+}
+
 #[proptest]
 fn fork(
     #[strategy(0..2 * BLOCK_SIZE)] src_len: usize,
