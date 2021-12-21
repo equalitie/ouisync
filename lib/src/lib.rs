@@ -39,8 +39,8 @@ mod versioned_file_name;
 mod writer_set;
 
 pub use self::{
-    access_control::ShareToken,
-    crypto::{sign, Cryptor, Password, SecretKey},
+    access_control::{AccessMode, AccessSecrets, MasterSecret, ShareToken},
+    crypto::{cipher, sign, Cryptor, Password},
     db::Store,
     directory::{Directory, EntryRef, EntryType},
     error::{Error, Result},
@@ -48,5 +48,5 @@ pub use self::{
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     joint_entry::JointEntry,
     network::{Network, NetworkOptions},
-    repository::{MasterSecret, Repository},
+    repository::Repository,
 };

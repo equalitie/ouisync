@@ -1,4 +1,4 @@
-use ouisync_lib::SecretKey;
+use ouisync_lib::cipher::SecretKey;
 use std::{
     env,
     io::{self, BufRead, BufReader, Read, Write},
@@ -39,7 +39,8 @@ impl Bin {
         if let Some(share_token) = share_token {
             command.arg("--accept").arg(share_token);
         } else {
-            command.arg("--share").arg(REPO_NAME);
+            command.arg("--create").arg(REPO_NAME);
+            command.arg("--share").arg(format!("{}:read", REPO_NAME));
         }
 
         command.arg("--print-ready-message");
@@ -48,9 +49,11 @@ impl Bin {
         command.arg("--disable-local-discovery");
 
         let master_key = SecretKey::random();
-        command
-            .arg("--key")
-            .arg(format!("{}:{:x}", REPO_NAME, master_key.as_array()));
+        command.arg("--key").arg(format!(
+            "{}:{}",
+            REPO_NAME,
+            hex::encode(master_key.as_ref())
+        ));
 
         for peer in peers {
             command.arg("--peers");

@@ -2,7 +2,7 @@
 
 use crate::{
     block::{self, BlockId},
-    crypto::AuthTag,
+    crypto::cipher::AuthTag,
     db,
     error::Result,
     index::{self, Index},
@@ -58,7 +58,7 @@ pub(crate) async fn init(pool: &db::Pool) -> Result<()> {
 mod tests {
     use crate::{
         block::{self, BLOCK_SIZE},
-        crypto::{AuthTag, Cryptor},
+        crypto::{cipher::AuthTag, Cryptor},
         db,
         index::{self, BranchData},
         locator::Locator,

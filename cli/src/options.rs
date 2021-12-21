@@ -1,6 +1,8 @@
 use crate::APP_NAME;
-use anyhow::{Context, Error, Result};
-use ouisync_lib::{MasterSecret, NetworkOptions, Password, SecretKey, ShareToken, Store};
+use anyhow::{format_err, Context, Error, Result};
+use ouisync_lib::{
+    cipher::SecretKey, AccessMode, MasterSecret, NetworkOptions, Password, ShareToken, Store,
+};
 use std::{
     path::{Path, PathBuf},
     str::FromStr,
@@ -25,8 +27,13 @@ pub(crate) struct Options {
     #[structopt(flatten)]
     pub network: NetworkOptions,
 
-    /// Mount the named repository at the specified path. If no such repository exists yet, it will
-    /// be created. Can be specified multiple times to mount multiple repositories.
+    /// Create new repository with the specified name. Can be specified multiple times to create
+    /// multiple repositories.
+    #[structopt(short, long, value_name = "NAME")]
+    pub create: Vec<String>,
+
+    /// Mount the named repository at the specified path. Can be specified multiple times to mount
+    /// multiple repositories.
     #[structopt(short, long, value_name = "NAME:PATH")]
     pub mount: Vec<Named<PathBuf>>,
 
@@ -43,10 +50,10 @@ pub(crate) struct Options {
     #[structopt(long, value_name = "NAME:KEY")]
     pub key: Vec<Named<String>>,
 
-    /// Print share token for the named repository. Can be specified multiple times to share
-    /// multiple repositories.
-    #[structopt(long, value_name = "NAME")]
-    pub share: Vec<String>,
+    /// Print share token for the named repository with the specified access mode ("blind", "read"
+    /// or "write"). Can be specified multiple times to share multiple repositories.
+    #[structopt(long, value_name = "NAME:ACCESS_MODE")]
+    pub share: Vec<Named<AccessMode>>,
 
     /// Print the share tokens to a file instead of standard output (one token per line)
     #[structopt(long, value_name = "PATH")]
@@ -120,13 +127,15 @@ impl Options {
         }
     }
 
-    pub fn secret_for_repo(&self, repo_name: &str) -> Option<MasterSecret> {
+    pub fn secret_for_repo(&self, repo_name: &str) -> Result<MasterSecret> {
         let key = self
             .key
             .iter()
             .find(|e| e.name == repo_name)
             .map(|e| e.value.as_str())
-            .map(|k| MasterSecret::SecretKey(SecretKey::from_hex(&k)));
+            .map(|k| {
+                MasterSecret::SecretKey(SecretKey::parse_hex(k).expect("failed to parse key"))
+            });
 
         let pwd = self
             .password
@@ -142,9 +151,12 @@ impl Options {
                     repo_name
                 );
             }
-            (Some(k), None) => Some(k),
-            (None, Some(p)) => Some(p),
-            (None, None) => None,
+            (Some(k), None) => Ok(k),
+            (None, Some(p)) => Ok(p),
+            (None, None) => Err(format_err!(
+                "missing password or key for repository {:?}",
+                repo_name
+            )),
         }
     }
 }

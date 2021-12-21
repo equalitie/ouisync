@@ -1,8 +1,8 @@
 use super::*;
 use crate::index::BranchData;
-use crate::{block, repository, MasterSecret};
+use crate::{block, repository};
 use crate::{
-    crypto::{Cryptor, SecretKey},
+    crypto::{cipher::SecretKey, Cryptor},
     error::Error,
     test_utils,
 };
@@ -402,6 +402,41 @@ async fn modify_blob() {
     }
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn append() {
+    let (mut rng, branch) = setup(0).await;
+
+    let locator = random_head_locator(&mut rng);
+    let mut blob = Blob::create(branch.clone(), locator);
+    blob.write(b"foo").await.unwrap();
+    blob.flush().await.unwrap();
+
+    let mut blob = Blob::open(branch.clone(), locator).await.unwrap();
+    blob.seek(SeekFrom::End(0)).await.unwrap();
+    blob.write(b"bar").await.unwrap();
+    blob.flush().await.unwrap();
+
+    let mut blob = Blob::open(branch, locator).await.unwrap();
+    let content = blob.read_to_end().await.unwrap();
+    assert_eq!(content, b"foobar");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn write_reopen_and_read() {
+    let (mut rng, branch) = setup(0).await;
+
+    let locator = random_head_locator(&mut rng);
+    let mut blob = Blob::create(branch, locator);
+    blob.write(b"foo").await.unwrap();
+    blob.flush().await.unwrap();
+
+    let core = blob.core().clone();
+
+    let mut blob = Blob::reopen(core).await.unwrap();
+    let content = blob.read_to_end().await.unwrap();
+    assert_eq!(content, b"foo");
+}
+
 #[proptest]
 fn fork(
     #[strategy(0..2 * BLOCK_SIZE)] src_len: usize,
@@ -496,11 +531,7 @@ async fn setup(rng_seed: u64) -> (StdRng, Branch) {
     let mut rng = StdRng::seed_from_u64(rng_seed);
     let secret_key = SecretKey::generate(&mut rng);
     let cryptor = Cryptor::ChaCha20Poly1305(secret_key.clone());
-    let master_secret = Some(MasterSecret::SecretKey(secret_key));
-    let pool = repository::open_db(&db::Store::Memory, master_secret)
-        .await
-        .unwrap()
-        .0;
+    let pool = repository::create_db(&db::Store::Memory).await.unwrap();
 
     let (notify_tx, _) = async_broadcast::broadcast(1);
     let branch = BranchData::new(&pool, rng.gen(), notify_tx).await.unwrap();

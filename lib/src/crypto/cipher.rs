@@ -1,17 +1,32 @@
-use super::Hash;
-use argon2::{
-    password_hash::{self, rand_core::OsRng},
-    Argon2,
-};
+//! Encryption / Decryption utilities.
+
+// reexport for convenience
+pub use chacha20poly1305::aead;
+
+use super::password::PasswordSalt;
+use argon2::Argon2;
 use generic_array::{sequence::GenericSequence, typenum::Unsigned};
 use hex;
-use rand::{CryptoRng, Rng};
+use rand::{rngs::OsRng, CryptoRng, Rng};
 use sha3::{
     digest::{Digest, FixedOutput},
     Sha3_256,
 };
 use std::{fmt, sync::Arc};
-use zeroize::Zeroize;
+use thiserror::Error;
+use zeroize::{Zeroize, Zeroizing};
+
+/// Nonce
+pub type Nonce = [u8; NONCE_SIZE];
+pub const NONCE_SIZE: usize =
+    <<chacha20poly1305::Nonce as GenericSequence<_>>::Length as Unsigned>::USIZE;
+
+/// Authentication tag.
+pub type AuthTag = chacha20poly1305::Tag;
+pub const AUTH_TAG_SIZE: usize = <<AuthTag as GenericSequence<_>>::Length as Unsigned>::USIZE;
+
+const SECRET_KEY_SIZE: usize =
+    <<chacha20poly1305::Key as GenericSequence<_>>::Length as Unsigned>::USIZE;
 
 /// Symmetric encryption/decryption secret key.
 ///
@@ -23,26 +38,23 @@ use zeroize::Zeroize;
 /// scrambled (overwritten with zeros) when the key is dropped to make sure it does not stay in
 /// the memory past its lifetime.
 #[derive(Clone)]
-pub struct SecretKey(Arc<Inner>);
-
-const PASSWORD_SALT_LEN: usize = password_hash::Salt::RECOMMENDED_LENGTH;
-pub type PasswordSalt = [u8; PASSWORD_SALT_LEN];
+pub struct SecretKey(Arc<Zeroizing<[u8; SECRET_KEY_SIZE]>>);
 
 impl SecretKey {
     /// Size of the key in bytes.
-    pub const SIZE: usize = <<Array as GenericSequence<_>>::Length as Unsigned>::USIZE;
+    pub const SIZE: usize = SECRET_KEY_SIZE;
 
-    /// Load secret key from byte array of size SIZE.
-    pub fn from_bytes(bytes: &[u8]) -> Self {
-        Self(Arc::new(Inner(*Array::from_slice(bytes))))
-    }
+    /// Parse secret key from hexadecimal string of size 2*SIZE.
+    pub fn parse_hex(hex_str: &str) -> Result<Self, hex::FromHexError> {
+        let mut bytes = [0; Self::SIZE];
+        hex::decode_to_slice(&hex_str, &mut bytes)?;
 
-    /// Load secret key from hexadecimal string of size 2*SIZE.
-    pub fn from_hex(hex_str: &str) -> Self {
-        let mut bytes = hex::decode(&hex_str).expect("failed to decode the secret key from hex");
-        let key = Self::from_bytes(&bytes);
+        let mut key = Self::zero();
+        key.as_mut().copy_from_slice(&bytes);
+
         bytes.zeroize();
-        key
+
+        Ok(key)
     }
 
     /// Generate a random secret key using the given cryptographically secure random number
@@ -54,24 +66,24 @@ impl SecretKey {
         // Create all-zero array initially, then fill it with random bytes in place to avoid moving
         // the array which could leave the sensitive data in memory.
         let mut key = Self::zero();
-        rng.fill(key.as_array_mut().as_mut_slice());
+        rng.fill(key.as_mut());
         key
     }
 
     /// Generate a random secret key using the default RNG.
     pub fn random() -> Self {
-        Self::generate(&mut rand::thread_rng())
+        Self::generate(&mut OsRng)
     }
 
     /// Derive a secret key from another secret key and a nonce.
-    pub fn derive_from_key(master_key: &Self, nonce: &[u8]) -> Self {
+    pub fn derive_from_key(master_key: &[u8], nonce: &[u8]) -> Self {
         let mut sub_key = Self::zero();
 
         // TODO: verify this is actually secure!
         let mut hasher = Sha3_256::new();
-        hasher.update(master_key.as_array());
+        hasher.update(master_key);
         hasher.update(nonce);
-        hasher.finalize_into(sub_key.as_array_mut());
+        hasher.finalize_into(sub_key.as_mut().into());
 
         sub_key
     }
@@ -83,49 +95,41 @@ impl SecretKey {
         // does is whether the password isn't too long, but that would have to be more than
         // 0xffffffff so the `.expect` shouldn't be an issue.
         Argon2::default()
-            .hash_password_into(user_password.as_ref(), salt, result.as_array_mut())
+            .hash_password_into(user_password.as_ref(), salt, result.as_mut())
             .expect("failed to hash password");
         result
     }
 
-    /// Generate random salt for use with the `derive_scrypt` function.
-    pub fn generate_password_salt() -> PasswordSalt {
-        OsRng.gen()
-    }
-
-    /// Returns reference to the underlying array.
-    ///
-    /// Note this function is somewhat dangerous because if used carelessly the underlying
-    /// sensitive data can be copied or revealed.
-    pub fn as_array(&self) -> &Array {
-        &self.0 .0
-    }
-
     // Use this only for initialization.
     fn zero() -> Self {
-        Self(Arc::new(Inner(Array::default())))
+        Self(Arc::new(Zeroizing::new([0; Self::SIZE])))
     }
 
     // Use this only for initialization. Panics if this key has more than one clone.
-    fn as_array_mut(&mut self) -> &mut Array {
-        &mut Arc::get_mut(&mut self.0).unwrap().0
+    fn as_mut(&mut self) -> &mut [u8] {
+        &mut **Arc::get_mut(&mut self.0).unwrap()
     }
 }
 
-impl From<[u8; Self::SIZE]> for SecretKey {
-    fn from(mut bytes: [u8; Self::SIZE]) -> Self {
-        let mut key = Self::zero();
-        key.as_array_mut().copy_from_slice(&bytes);
-        bytes.zeroize();
-        key
+impl TryFrom<&[u8]> for SecretKey {
+    type Error = SecretKeyLengthError;
+
+    fn try_from(slice: &[u8]) -> Result<Self, Self::Error> {
+        if slice.len() >= Self::SIZE {
+            let mut key = Self::zero();
+            key.as_mut().copy_from_slice(slice);
+            Ok(key)
+        } else {
+            Err(SecretKeyLengthError)
+        }
     }
 }
 
-impl From<Hash> for SecretKey {
-    fn from(mut hash: Hash) -> Self {
-        let key = Self::from_bytes(hash.as_ref());
-        hash.zeroize();
-        key
+/// Note this trait is somewhat dangerous because if used carelessly the underlying sensitive data
+/// can be copied or revealed.
+impl AsRef<[u8]> for SecretKey {
+    fn as_ref(&self) -> &[u8] {
+        &**self.0
     }
 }
 
@@ -135,12 +139,6 @@ impl fmt::Debug for SecretKey {
     }
 }
 
-struct Inner(Array);
-
-impl Drop for Inner {
-    fn drop(&mut self) {
-        self.0.as_mut_slice().zeroize()
-    }
-}
-
-type Array = chacha20poly1305::Key;
+#[derive(Debug, Error)]
+#[error("invalid secret key length")]
+pub struct SecretKeyLengthError;

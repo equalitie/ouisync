@@ -2,9 +2,12 @@ mod options;
 mod virtual_filesystem;
 
 use self::options::{Named, Options};
-use anyhow::Result;
-use ouisync_lib::{config, replica_id, Cryptor, Network, Repository, ShareToken};
-use std::{collections::HashMap, io};
+use anyhow::{format_err, Result};
+use ouisync_lib::{config, replica_id, AccessSecrets, Network, Repository, ShareToken};
+use std::{
+    collections::{hash_map::Entry, HashMap},
+    io,
+};
 use structopt::StructOpt;
 use tokio::{fs::File, io::AsyncWriteExt};
 
@@ -24,19 +27,21 @@ async fn main() -> Result<()> {
     let pool = config::open_db(&options.config_store()?).await?;
     let this_writer_id = replica_id::get_or_create_this_replica_id(&pool).await?;
 
-    // Gather the repositories to be mounted.
-    let mut mount_repos = HashMap::new();
-    for Named { name, value } in &options.mount {
-        let repo = Repository::open(
+    // Create repositories
+    let mut repos = HashMap::new();
+
+    for name in &options.create {
+        let secret = options.secret_for_repo(name)?;
+        let repo = Repository::create(
             &options.repository_store(name)?,
             this_writer_id,
-            Cryptor::Null,
-            options.secret_for_repo(name),
+            secret,
+            AccessSecrets::random_write().into(),
             !options.disable_merger,
         )
         .await?;
 
-        mount_repos.insert(name.as_str(), (repo, value));
+        repos.insert(name.clone(), repo);
     }
 
     // Print share tokens
@@ -46,23 +51,23 @@ async fn main() -> Result<()> {
         None
     };
 
-    for name in &options.share {
-        let id = if let Some((repo, _)) = mount_repos.get(name.as_str()) {
-            repo.get_or_create_id().await?
+    for Named { name, value } in &options.share {
+        let secrets = if let Some(repo) = repos.get(name) {
+            repo.access_secrets().clone().with_mode(*value)
         } else {
             Repository::open(
                 &options.repository_store(name)?,
                 this_writer_id,
-                Cryptor::Null,
-                options.secret_for_repo(name),
+                options.secret_for_repo(name).ok(),
                 false,
             )
             .await?
-            .get_or_create_id()
-            .await?
+            .access_secrets()
+            .clone()
+            .with_mode(*value)
         };
 
-        let token = ShareToken::new(id).with_name(name);
+        let token = ShareToken::from(secrets).with_name(name);
 
         if let Some(file) = &mut share_file {
             file.write_all(token.to_string().as_bytes()).await?;
@@ -85,23 +90,28 @@ async fn main() -> Result<()> {
 
     for token in options.accept.iter().chain(&accept_file_tokens) {
         let name = token.suggested_name();
+        let access_secrets = token.access_secrets();
+        let master_secret = options.secret_for_repo(&name)?;
 
-        if let Some((repo, _)) = mount_repos.get(name.as_ref()) {
-            repo.set_id(*token.id()).await?
-        } else {
-            Repository::open(
+        if let Entry::Vacant(entry) = repos.entry(name.as_ref().to_owned()) {
+            let repo = Repository::create(
                 &options.repository_store(name.as_ref())?,
                 this_writer_id,
-                Cryptor::Null,
-                options.secret_for_repo(name.as_ref()),
+                master_secret,
+                access_secrets.clone(),
                 false,
             )
-            .await?
-            .set_id(*token.id())
-            .await?
-        }
+            .await?;
 
-        log::info!("share token accepted: {}", token);
+            entry.insert(repo);
+
+            log::info!("share token accepted: {}", token);
+        } else {
+            return Err(format_err!(
+                "can't accept share token for repository {:?} - already exists",
+                name
+            ));
+        }
     }
 
     // Start the network
@@ -110,13 +120,22 @@ async fn main() -> Result<()> {
 
     // Mount repositories
     let mut repo_guards = Vec::new();
-    for (repo, mount_point) in mount_repos.into_values() {
+    for Named { name, value } in &options.mount {
+        let repo = if let Some(repo) = repos.remove(name) {
+            repo
+        } else {
+            Repository::open(
+                &options.repository_store(name)?,
+                this_writer_id,
+                options.secret_for_repo(name).ok(),
+                !options.disable_merger,
+            )
+            .await?
+        };
+
         let registration = network_handle.register(&repo).await;
-        let mount_guard = virtual_filesystem::mount(
-            tokio::runtime::Handle::current(),
-            repo,
-            mount_point.clone(),
-        )?;
+        let mount_guard =
+            virtual_filesystem::mount(tokio::runtime::Handle::current(), repo, value.clone())?;
 
         repo_guards.push((mount_guard, registration));
     }

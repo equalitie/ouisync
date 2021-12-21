@@ -1,5 +1,5 @@
 use super::*;
-use ouisync_lib::{Cryptor, MasterSecret, Repository, SecretKey, Store};
+use ouisync_lib::{AccessSecrets, MasterSecret, Repository, Store};
 use proptest::prelude::*;
 use rand::{self, distributions::Standard, rngs::StdRng, Rng, SeedableRng};
 use std::{collections::HashMap, ffi::OsString, fs::Metadata, future::Future, io::ErrorKind};
@@ -216,13 +216,11 @@ async fn setup() -> (MountGuard, TempDir) {
     // static LOG_INIT: Once = Once::new();
     // LOG_INIT.call_once(env_logger::init);
 
-    let master_secret = Some(MasterSecret::SecretKey(SecretKey::random()));
-
-    let repo = Repository::open(
+    let repo = Repository::create(
         &Store::Memory,
         rand::random(),
-        Cryptor::Null,
-        master_secret,
+        MasterSecret::random(),
+        AccessSecrets::random_write().into(),
         true,
     )
     .await

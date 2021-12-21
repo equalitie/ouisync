@@ -8,13 +8,16 @@ use rand::{
     Rng,
 };
 use serde;
+use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::{fmt, str::FromStr};
 use zeroize::Zeroize;
 
-#[derive(PartialEq, Eq, Clone, Copy, serde::Deserialize, serde::Serialize)]
+#[derive(PartialEq, Eq, Clone, Copy, Deserialize, Serialize)]
 pub struct PublicKey(ext::PublicKey);
+
 pub struct SecretKey(ext::SecretKey);
+
 pub struct Keypair {
     pub secret: SecretKey,
     pub public: PublicKey,
@@ -150,9 +153,11 @@ impl SecretKey {
     }
 }
 
-impl From<[u8; Self::SIZE]> for SecretKey {
-    fn from(bytes: [u8; Self::SIZE]) -> Self {
-        Self(ext::SecretKey::from_bytes(&bytes).unwrap())
+impl TryFrom<&[u8]> for SecretKey {
+    type Error = ext::SignatureError;
+
+    fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
+        Ok(Self(ext::SecretKey::from_bytes(bytes)?))
     }
 }
 

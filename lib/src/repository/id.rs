@@ -1,18 +1,17 @@
-use crate::{
-    crypto::{
-        sign::{self, PublicKey, SecretKey},
-        Hash,
-    },
-    format,
+use crate::crypto::{
+    sign::{self, PublicKey, SecretKey},
+    Hash,
 };
 use rand::{
     distributions::{Distribution, Standard},
     Rng,
 };
+use serde::{Deserialize, Serialize};
 use sha3::{digest::Digest, Sha3_256};
-use std::{fmt, str::FromStr};
+use std::str::FromStr;
 
-#[derive(PartialEq, Eq, Clone, Debug, Copy)]
+#[derive(PartialEq, Eq, Clone, Debug, Copy, Serialize, Deserialize)]
+#[repr(transparent)]
 pub struct RepositoryId(PublicKey);
 
 derive_sqlx_traits_for_byte_array_wrapper!(RepositoryId);
@@ -43,12 +42,6 @@ impl FromStr for RepositoryId {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(Self(PublicKey::from_str(s)?))
-    }
-}
-
-impl fmt::LowerHex for RepositoryId {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        format::hex(f, self.0.as_ref())
     }
 }
 

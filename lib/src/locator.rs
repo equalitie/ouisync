@@ -50,7 +50,7 @@ impl Locator {
 
         match cryptor {
             Cryptor::ChaCha20Poly1305(key) => {
-                hasher.update(key.as_array().as_slice().hash());
+                hasher.update(key.as_ref().hash());
             }
             Cryptor::Null => {}
         }

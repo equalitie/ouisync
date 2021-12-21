@@ -1,6 +1,6 @@
 use super::{BlockId, BLOCK_SIZE};
 use crate::{
-    crypto::AuthTag,
+    crypto::cipher::AuthTag,
     db,
     error::{Error, Result},
 };

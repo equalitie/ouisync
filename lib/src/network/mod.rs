@@ -221,33 +221,20 @@ impl Handle {
     /// the future. The repository is automatically deregistered when the returned handle is
     /// dropped.
     pub async fn register(&self, repository: &Repository) -> Registration {
-        let id = repository.get_id().await.ok();
+        let id = *repository.id();
 
         // TODO: consider disabling DHT by default, for privacy reasons.
-        let dht = true;
-        let registration_state = if let Some(id) = id {
-            RegistrationState::Shared {
-                id,
-                dht: if dht {
-                    self.inner.start_dht_lookup(repository_info_hash(&id))
-                } else {
-                    None
-                },
-            }
-        } else {
-            RegistrationState::Unique { dht }
-        };
+        let dht = self.inner.start_dht_lookup(repository_info_hash(&id));
 
         let mut network_state = self.inner.state.lock().await;
 
         let key = network_state.registry.insert(RegistrationHolder {
             index: repository.index().clone(),
-            state: registration_state,
+            id,
+            dht,
         });
 
-        if let Some(id) = id {
-            network_state.create_link(id, repository.index());
-        }
+        network_state.create_link(id, repository.index());
 
         Registration {
             inner: self.inner.clone(),
@@ -262,91 +249,22 @@ pub struct Registration {
 }
 
 impl Registration {
-    pub async fn get_or_create_id(&self, repo: &Repository) -> Result<RepositoryId> {
-        let mut state = self.inner.state.lock().await;
-        let holder = &mut state.registry[self.key];
-
-        match holder.state {
-            RegistrationState::Shared { id, .. } => Ok(id),
-            RegistrationState::Unique { dht } => {
-                let id = repo.get_or_create_id().await?;
-
-                holder.state = RegistrationState::Shared {
-                    id,
-                    dht: if dht {
-                        self.inner.start_dht_lookup(repository_info_hash(&id))
-                    } else {
-                        None
-                    },
-                };
-
-                state.create_link(id, repo.index());
-
-                Ok(id)
-            }
-        }
-    }
-
-    pub async fn set_id(&self, repo: &Repository, id: RepositoryId) -> Result<()> {
-        let mut state = self.inner.state.lock().await;
-        let holder = &mut state.registry[self.key];
-
-        match holder.state {
-            RegistrationState::Shared { id: current_id, .. } if id == current_id => Ok(()),
-            RegistrationState::Shared { .. } => Err(Error::EntryExists),
-            RegistrationState::Unique { dht } => {
-                repo.set_id(id).await?;
-
-                holder.state = RegistrationState::Shared {
-                    id,
-                    dht: if dht {
-                        self.inner.start_dht_lookup(repository_info_hash(&id))
-                    } else {
-                        None
-                    },
-                };
-
-                state.create_link(id, repo.index());
-
-                Ok(())
-            }
-        }
-    }
-
     pub async fn enable_dht(&self) {
         let mut state = self.inner.state.lock().await;
-
-        match &mut state.registry[self.key].state {
-            RegistrationState::Shared { id, dht } if dht.is_none() => {
-                *dht = self.inner.start_dht_lookup(repository_info_hash(id));
-            }
-            RegistrationState::Shared { .. } => {}
-            RegistrationState::Unique { dht } => {
-                *dht = true;
-            }
-        }
+        let holder = &mut state.registry[self.key];
+        holder.dht = self
+            .inner
+            .start_dht_lookup(repository_info_hash(&holder.id));
     }
 
     pub async fn disable_dht(&self) {
         let mut state = self.inner.state.lock().await;
-
-        match &mut state.registry[self.key].state {
-            RegistrationState::Shared { dht, .. } => {
-                *dht = None;
-            }
-            RegistrationState::Unique { dht, .. } => {
-                *dht = false;
-            }
-        }
+        state.registry[self.key].dht = None;
     }
 
     pub async fn is_dht_enabled(&self) -> bool {
         let state = self.inner.state.lock().await;
-
-        match &state.registry[self.key].state {
-            RegistrationState::Shared { dht, .. } => dht.is_some(),
-            RegistrationState::Unique { dht, .. } => *dht,
-        }
+        state.registry[self.key].dht.is_some()
     }
 }
 
@@ -366,10 +284,8 @@ impl Drop for Registration {
             let mut state = inner.state.lock().await;
             let holder = state.registry.remove(key);
 
-            if let RegistrationState::Shared { id, .. } = &holder.state {
-                for broker in state.message_brokers.values_mut() {
-                    broker.destroy_link(id);
-                }
+            for broker in state.message_brokers.values_mut() {
+                broker.destroy_link(&holder.id);
             }
         });
     }
@@ -377,20 +293,8 @@ impl Drop for Registration {
 
 struct RegistrationHolder {
     index: Index,
-    state: RegistrationState,
-}
-
-enum RegistrationState {
-    // Repository is shared with other replicas.
-    Shared {
-        id: RepositoryId,
-        dht: Option<dht_discovery::LookupRequest>,
-    },
-    // Repository is not yet shared with any replica.
-    Unique {
-        // Whether dht should be enabled for this repository when it becomes shared.
-        dht: bool,
-    },
+    id: RepositoryId,
+    dht: Option<dht_discovery::LookupRequest>,
 }
 
 #[derive(Default)]
@@ -622,9 +526,7 @@ impl Inner {
                 // lookup but make sure we correctly handle edge cases, for example, when we have
                 // more than one repository shared with the peer.
                 for (_, holder) in &state.registry {
-                    if let RegistrationState::Shared { id, .. } = holder.state {
-                        broker.create_link(id, holder.index.clone());
-                    }
+                    broker.create_link(holder.id, holder.index.clone());
                 }
 
                 entry.insert(broker);

@@ -3,13 +3,13 @@ use super::{
     utils::{self, Port, SharedHandle, UniqueHandle},
 };
 use crate::{
-    access_control::ShareToken,
-    crypto::{Cryptor, Password},
+    access_control::{AccessMode, AccessSecrets, MasterSecret, ShareToken},
+    crypto::Password,
     directory::EntryType,
     error::Error,
     network::Registration,
     path,
-    repository::{MasterSecret, Repository},
+    repository::Repository,
 };
 use std::{os::raw::c_char, ptr, sync::Arc};
 use tokio::task::JoinHandle;
@@ -23,7 +23,53 @@ pub struct RepositoryHolder {
     registration: Registration,
 }
 
-/// Opens a repository.
+/// Creates a new repository.
+#[no_mangle]
+pub unsafe extern "C" fn repository_create(
+    store: *const c_char,
+    master_password: *const c_char,
+    share_token: *const c_char,
+    port: Port<SharedHandle<RepositoryHolder>>,
+    error: *mut *mut c_char,
+) {
+    session::with(port, error, |ctx| {
+        let store = utils::ptr_to_path_buf(store)?;
+        let this_replica_id = *ctx.this_replica_id();
+        let network_handle = ctx.network().handle();
+
+        let master_password = Password::new(utils::ptr_to_str(master_password)?);
+
+        let access_secrets = if share_token.is_null() {
+            Arc::new(AccessSecrets::random_write())
+        } else {
+            let share_token = utils::ptr_to_str(share_token)?;
+            let share_token: ShareToken = share_token.parse()?;
+            share_token.access_secrets().clone()
+        };
+
+        ctx.spawn(async move {
+            let repository = Repository::create(
+                &store.into_std_path_buf().into(),
+                this_replica_id,
+                MasterSecret::Password(master_password),
+                access_secrets,
+                true,
+            )
+            .await?;
+
+            let registration = network_handle.register(&repository).await;
+
+            let holder = Arc::new(RepositoryHolder {
+                repository,
+                registration,
+            });
+
+            Ok(SharedHandle::new(holder))
+        })
+    })
+}
+
+/// Opens an existing repository.
 #[no_mangle]
 pub unsafe extern "C" fn repository_open(
     store: *const c_char,
@@ -46,7 +92,6 @@ pub unsafe extern "C" fn repository_open(
             let repository = Repository::open(
                 &store.into_std_path_buf().into(),
                 this_replica_id,
-                Cryptor::Null,
                 master_password.map(MasterSecret::Password),
                 true,
             )
@@ -193,46 +238,29 @@ pub unsafe extern "C" fn repository_disable_dht(
     });
 }
 
+// TODO: specify access mode
 #[no_mangle]
 pub unsafe extern "C" fn repository_create_share_token(
     handle: SharedHandle<RepositoryHolder>,
+    access_mode: u8,
     name: *const c_char,
     port: Port<String>,
     error: *mut *mut c_char,
 ) {
     session::with(port, error, |ctx| {
         let holder = handle.get();
+        let access_mode = AccessMode::try_from(access_mode)?;
         let name = utils::ptr_to_str(name)?.to_owned();
 
         ctx.spawn(async move {
-            let id = holder
-                .registration
-                .get_or_create_id(&holder.repository)
-                .await?;
-            let share_token = ShareToken::new(id).with_name(name);
+            let access_secrets = holder
+                .repository
+                .access_secrets()
+                .clone()
+                .with_mode(access_mode);
+            let share_token = ShareToken::from(access_secrets).with_name(name);
 
             Ok(share_token.to_string())
-        })
-    })
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn repository_accept_share_token(
-    handle: SharedHandle<RepositoryHolder>,
-    token: *const c_char,
-    port: Port<()>,
-    error: *mut *mut c_char,
-) {
-    session::with(port, error, |ctx| {
-        let holder = handle.get();
-        let token = utils::ptr_to_str(token)?;
-        let token: ShareToken = token.parse()?;
-
-        ctx.spawn(async move {
-            holder
-                .registration
-                .set_id(&holder.repository, *token.id())
-                .await
         })
     })
 }

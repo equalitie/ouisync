@@ -1,3 +1,4 @@
+use argon2::password_hash;
 use std::sync::Arc;
 use zeroize::Zeroizing;
 
@@ -17,3 +18,6 @@ impl AsRef<str> for Password {
         self.0.as_ref()
     }
 }
+
+pub(crate) const PASSWORD_SALT_LEN: usize = password_hash::Salt::RECOMMENDED_LENGTH;
+pub(crate) type PasswordSalt = [u8; PASSWORD_SALT_LEN];

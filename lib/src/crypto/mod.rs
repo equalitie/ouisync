@@ -1,28 +1,17 @@
+pub mod cipher;
 mod hash;
 mod password;
-pub mod secret_key;
 pub mod sign;
 
+pub(crate) use self::password::PasswordSalt;
 pub use self::{
     hash::{Hash, Hashable},
     password::Password,
-    secret_key::{PasswordSalt, SecretKey},
 };
-pub use chacha20poly1305::aead;
 
+use self::cipher::{aead, AuthTag, Nonce, SecretKey};
 use chacha20poly1305::aead::{AeadInPlace, NewAead};
 use chacha20poly1305::ChaCha20Poly1305;
-use generic_array::{sequence::GenericSequence, typenum::Unsigned};
-
-/// Nonce size
-pub const NONCE_SIZE: usize =
-    <<chacha20poly1305::Nonce as GenericSequence<_>>::Length as Unsigned>::USIZE;
-
-/// Nonce
-pub type Nonce = [u8; NONCE_SIZE];
-
-/// Authentication tag.
-pub type AuthTag = chacha20poly1305::Tag;
 
 /// Encryptor/decryptor
 #[derive(Clone)]
@@ -43,7 +32,7 @@ impl Cryptor {
     ) -> Result<AuthTag, aead::Error> {
         match self {
             Self::ChaCha20Poly1305(key) => {
-                let cipher = ChaCha20Poly1305::new(key.as_array());
+                let cipher = ChaCha20Poly1305::new(key.as_ref().into());
                 cipher.encrypt_in_place_detached(&nonce.into(), aad, buffer)
             }
             Self::Null => Ok(AuthTag::default()),
@@ -59,7 +48,7 @@ impl Cryptor {
     ) -> Result<(), aead::Error> {
         match self {
             Self::ChaCha20Poly1305(key) => {
-                let cipher = ChaCha20Poly1305::new(key.as_array());
+                let cipher = ChaCha20Poly1305::new(key.as_ref().into());
                 cipher.decrypt_in_place_detached(&nonce.into(), aad, buffer, auth_tag)
             }
             Self::Null => Ok(()),
@@ -69,7 +58,7 @@ impl Cryptor {
     pub fn derive_subkey(&self, nonce: &[u8]) -> Self {
         match self {
             Self::ChaCha20Poly1305(key) => {
-                Self::ChaCha20Poly1305(SecretKey::derive_from_key(key, nonce))
+                Self::ChaCha20Poly1305(SecretKey::derive_from_key(key.as_ref(), nonce))
             }
             Self::Null => Self::Null,
         }
