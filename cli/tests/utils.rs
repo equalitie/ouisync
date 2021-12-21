@@ -39,6 +39,7 @@ impl Bin {
         if let Some(share_token) = share_token {
             command.arg("--accept").arg(share_token);
         } else {
+            command.arg("--create").arg(REPO_NAME);
             command.arg("--share").arg(REPO_NAME);
         }
 
