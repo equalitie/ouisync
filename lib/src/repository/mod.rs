@@ -5,7 +5,7 @@ pub use self::id::RepositoryId;
 use crate::{
     block,
     branch::Branch,
-    crypto::{sign::PublicKey, Cryptor, Password, SecretKey},
+    crypto::{cipher, sign::PublicKey, Cryptor, Password},
     db,
     debug_printer::DebugPrinter,
     directory::{Directory, EntryType},
@@ -26,11 +26,11 @@ use tokio::{select, sync::Mutex};
 
 pub enum MasterSecret {
     Password(Password),
-    SecretKey(SecretKey),
+    SecretKey(cipher::SecretKey),
 }
 
 pub struct Repository {
-    _master_key: Option<SecretKey>,
+    _master_key: Option<cipher::SecretKey>,
     shared: Arc<Shared>,
     _merge_handle: Option<ScopedJoinHandle<()>>,
 }
@@ -572,7 +572,7 @@ mod tests {
     use tokio::time::{sleep, Duration};
 
     fn random_master_secret() -> Option<MasterSecret> {
-        Some(MasterSecret::SecretKey(SecretKey::random()))
+        Some(MasterSecret::SecretKey(cipher::SecretKey::random()))
     }
 
     #[tokio::test(flavor = "multi_thread")]

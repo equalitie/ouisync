@@ -1,4 +1,4 @@
-use ouisync_lib::SecretKey;
+use ouisync_lib::cipher::SecretKey;
 use std::{
     env,
     io::{self, BufRead, BufReader, Read, Write},

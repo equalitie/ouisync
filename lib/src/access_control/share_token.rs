@@ -105,7 +105,7 @@ impl fmt::Display for ShareToken {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crypto::{sign, SecretKey};
+    use crate::crypto::{cipher, sign};
     use assert_matches::assert_matches;
 
     #[test]
@@ -137,7 +137,7 @@ mod tests {
     #[test]
     fn encode_and_decode_reader() {
         let token_id: RepositoryId = rand::random();
-        let token_read_key = SecretKey::random();
+        let token_read_key = cipher::SecretKey::random();
         let token = ShareToken::new(AccessSecrets::Read {
             id: token_id,
             read_key: token_read_key.clone(),

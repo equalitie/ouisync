@@ -1,6 +1,6 @@
 use crate::APP_NAME;
 use anyhow::{Context, Error, Result};
-use ouisync_lib::{MasterSecret, NetworkOptions, Password, SecretKey, ShareToken, Store};
+use ouisync_lib::{cipher::SecretKey, MasterSecret, NetworkOptions, Password, ShareToken, Store};
 use std::{
     path::{Path, PathBuf},
     str::FromStr,

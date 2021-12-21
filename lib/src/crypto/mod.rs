@@ -1,31 +1,17 @@
+pub mod cipher;
 mod hash;
 mod password;
-pub mod secret_key;
 pub mod sign;
 
 pub(crate) use self::password::PasswordSalt;
 pub use self::{
     hash::{Hash, Hashable},
     password::Password,
-    secret_key::{SecretKey, SecretKeyLengthError},
 };
-pub use chacha20poly1305::aead;
 
+use self::cipher::{aead, AuthTag, Nonce, SecretKey};
 use chacha20poly1305::aead::{AeadInPlace, NewAead};
 use chacha20poly1305::ChaCha20Poly1305;
-use generic_array::{sequence::GenericSequence, typenum::Unsigned};
-
-/// Nonce size
-pub const NONCE_SIZE: usize =
-    <<chacha20poly1305::Nonce as GenericSequence<_>>::Length as Unsigned>::USIZE;
-
-/// Nonce
-pub type Nonce = [u8; NONCE_SIZE];
-
-/// Authentication tag.
-pub type AuthTag = chacha20poly1305::Tag;
-
-pub const AUTH_TAG_SIZE: usize = <<AuthTag as GenericSequence<_>>::Length as Unsigned>::USIZE;
 
 /// Encryptor/decryptor
 #[derive(Clone)]

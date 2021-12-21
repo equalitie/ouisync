@@ -1,6 +1,9 @@
 use crate::{
     access_control::{AccessSecrets, WriteSecrets},
-    crypto::{sign, AuthTag, Cryptor, Nonce, PasswordSalt, SecretKey, AUTH_TAG_SIZE},
+    crypto::{
+        cipher::{AuthTag, Nonce, SecretKey, AUTH_TAG_SIZE},
+        sign, Cryptor, PasswordSalt,
+    },
     db,
     error::{Error, Result},
     repository::{MasterSecret, RepositoryId},
@@ -24,7 +27,7 @@ pub(crate) async fn init(pool: &db::Pool) -> Result<(), Error> {
     sqlx::query(
         "CREATE TABLE metadata_public (
              name  BLOB NOT NULL PRIMARY KEY,
-             value BLOB NOT NULL,
+             value BLOB NOT NULL
          ) WITHOUT ROWID",
     )
     .execute(&mut tx)

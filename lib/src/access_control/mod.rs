@@ -3,7 +3,7 @@ mod share_token;
 pub use self::share_token::ShareToken;
 
 use crate::{
-    crypto::{sign, SecretKey, SecretKeyLengthError},
+    crypto::{cipher, sign},
     error::Error,
     repository::RepositoryId,
 };
@@ -16,7 +16,7 @@ pub(crate) enum AccessSecrets {
     },
     Read {
         id: RepositoryId,
-        read_key: SecretKey,
+        read_key: cipher::SecretKey,
     },
     Write(WriteSecrets),
 }
@@ -58,7 +58,7 @@ impl AccessSecrets {
             }
             AccessMode::Read => {
                 let id = RepositoryId::try_from(&input[..RepositoryId::SIZE])?;
-                let read_key = SecretKey::try_from(&input[RepositoryId::SIZE..])?;
+                let read_key = cipher::SecretKey::try_from(&input[RepositoryId::SIZE..])?;
                 Ok(Self::Read { id, read_key })
             }
             AccessMode::Write => {
@@ -81,7 +81,7 @@ impl fmt::Debug for AccessSecrets {
 
 pub(crate) struct WriteSecrets {
     pub id: RepositoryId,
-    pub read_key: SecretKey,
+    pub read_key: cipher::SecretKey,
     pub write_key: sign::SecretKey,
 }
 
@@ -120,8 +120,8 @@ impl TryFrom<u8> for AccessMode {
     }
 }
 
-fn derive_read_key_from_write_key(write_key: &sign::SecretKey) -> SecretKey {
-    SecretKey::derive_from_key(write_key.as_ref(), b"ouisync repository read key")
+fn derive_read_key_from_write_key(write_key: &sign::SecretKey) -> cipher::SecretKey {
+    cipher::SecretKey::derive_from_key(write_key.as_ref(), b"ouisync repository read key")
 }
 
 #[derive(Debug, Error)]
@@ -152,8 +152,8 @@ impl From<sign::SignatureError> for DecodeError {
     }
 }
 
-impl From<SecretKeyLengthError> for DecodeError {
-    fn from(_: SecretKeyLengthError) -> Self {
+impl From<cipher::SecretKeyLengthError> for DecodeError {
+    fn from(_: cipher::SecretKeyLengthError) -> Self {
         Self
     }
 }

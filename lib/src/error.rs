@@ -1,6 +1,6 @@
 use crate::{
     block::{BlockId, BLOCK_SIZE},
-    crypto::aead,
+    crypto::cipher::aead,
 };
 use std::{array::TryFromSliceError, convert::Infallible, fmt, io};
 use thiserror::Error;

@@ -40,7 +40,7 @@ mod writer_set;
 
 pub use self::{
     access_control::ShareToken,
-    crypto::{sign, Cryptor, Password, SecretKey},
+    crypto::{cipher, sign, Cryptor, Password},
     db::Store,
     directory::{Directory, EntryRef, EntryType},
     error::{Error, Result},

@@ -2,7 +2,7 @@ use super::*;
 use crate::index::BranchData;
 use crate::{block, repository};
 use crate::{
-    crypto::{Cryptor, SecretKey},
+    crypto::{cipher::SecretKey, Cryptor},
     error::Error,
     test_utils,
 };

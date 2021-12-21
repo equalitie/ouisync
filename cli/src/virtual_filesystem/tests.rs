@@ -1,5 +1,5 @@
 use super::*;
-use ouisync_lib::{Cryptor, MasterSecret, Repository, SecretKey, Store};
+use ouisync_lib::{cipher::SecretKey, Cryptor, MasterSecret, Repository, Store};
 use proptest::prelude::*;
 use rand::{self, distributions::Standard, rngs::StdRng, Rng, SeedableRng};
 use std::{collections::HashMap, ffi::OsString, fs::Metadata, future::Future, io::ErrorKind};

@@ -2,7 +2,10 @@ use super::{Blob, BlobNonce, Buffer, Core, Cursor, OpenBlock, BLOB_NONCE_SIZE};
 use crate::{
     block::{self, BlockId, BLOCK_SIZE},
     branch::Branch,
-    crypto::{aead, AuthTag, Cryptor, Nonce, NONCE_SIZE},
+    crypto::{
+        cipher::{aead, AuthTag, Nonce, NONCE_SIZE},
+        Cryptor,
+    },
     db,
     error::{Error, Result},
     index::BranchData,
