@@ -608,6 +608,8 @@ async fn merge_branches(local: Branch, remote: Branch) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::io::SeekFrom;
+
     use super::*;
     use crate::{db, index::RootNode};
     use assert_matches::assert_matches;
@@ -823,6 +825,32 @@ mod tests {
 
         create_dir.await.unwrap();
         open_dir.await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn append_to_file() {
+        let repo = Repository::create(
+            &db::Store::Memory,
+            rand::random(),
+            MasterSecret::random(),
+            AccessSecrets::random_write(),
+            false,
+        )
+        .await
+        .unwrap();
+
+        let mut file = repo.create_file("foo.txt").await.unwrap();
+        file.write(b"foo").await.unwrap();
+        file.flush().await.unwrap();
+
+        let mut file = repo.open_file("foo.txt").await.unwrap();
+        file.seek(SeekFrom::End(0)).await.unwrap();
+        file.write(b"bar").await.unwrap();
+        file.flush().await.unwrap();
+
+        let mut file = repo.open_file("foo.txt").await.unwrap();
+        let content = file.read_to_end().await.unwrap();
+        assert_eq!(content, b"foobar");
     }
 
     async fn read_file(repo: &Repository, path: impl AsRef<Utf8Path>) -> Vec<u8> {
