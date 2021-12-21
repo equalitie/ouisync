@@ -35,6 +35,13 @@ pub enum MasterSecret {
     SecretKey(cipher::SecretKey),
 }
 
+impl MasterSecret {
+    /// Generates random master secret containing a secret key.
+    pub fn random() -> Self {
+        Self::SecretKey(cipher::SecretKey::random())
+    }
+}
+
 pub struct Repository {
     shared: Arc<Shared>,
     _merge_handle: Option<ScopedJoinHandle<()>>,
@@ -622,25 +629,33 @@ mod tests {
     use assert_matches::assert_matches;
     use tokio::time::{sleep, Duration};
 
-    fn random_master_secret() -> Option<MasterSecret> {
-        Some(MasterSecret::SecretKey(cipher::SecretKey::random()))
-    }
-
     #[tokio::test(flavor = "multi_thread")]
     async fn root_directory_always_exists() {
         let writer_id = rand::random();
-        let repo = Repository::open(&db::Store::Memory, writer_id, random_master_secret(), false)
-            .await
-            .unwrap();
+        let repo = Repository::create(
+            &db::Store::Memory,
+            writer_id,
+            MasterSecret::random(),
+            AccessSecrets::random_write(),
+            false,
+        )
+        .await
+        .unwrap();
         let _ = repo.open_directory("/").await.unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn merge() {
         let local_id = rand::random();
-        let repo = Repository::open(&db::Store::Memory, local_id, random_master_secret(), true)
-            .await
-            .unwrap();
+        let repo = Repository::create(
+            &db::Store::Memory,
+            local_id,
+            MasterSecret::random(),
+            AccessSecrets::random_write(),
+            true,
+        )
+        .await
+        .unwrap();
 
         // Add another branch to the index. Eventually there might be a more high-level API for
         // this but for now we have to resort to this.
@@ -698,9 +713,15 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn recreate_previously_deleted_file() {
         let local_id = rand::random();
-        let repo = Repository::open(&db::Store::Memory, local_id, random_master_secret(), false)
-            .await
-            .unwrap();
+        let repo = Repository::create(
+            &db::Store::Memory,
+            local_id,
+            MasterSecret::random(),
+            AccessSecrets::random_write(),
+            false,
+        )
+        .await
+        .unwrap();
 
         // Create file
         let mut file = repo.create_file("test.txt").await.unwrap();
@@ -730,9 +751,15 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn recreate_previously_deleted_directory() {
         let local_id = rand::random();
-        let repo = Repository::open(&db::Store::Memory, local_id, random_master_secret(), false)
-            .await
-            .unwrap();
+        let repo = Repository::create(
+            &db::Store::Memory,
+            local_id,
+            MasterSecret::random(),
+            AccessSecrets::random_write(),
+            false,
+        )
+        .await
+        .unwrap();
 
         // Create dir
         repo.create_directory("test")
@@ -765,9 +792,15 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn concurrent_read_and_create_dir() {
         let writer_id = rand::random();
-        let repo = Repository::open(&db::Store::Memory, writer_id, random_master_secret(), false)
-            .await
-            .unwrap();
+        let repo = Repository::create(
+            &db::Store::Memory,
+            writer_id,
+            MasterSecret::random(),
+            AccessSecrets::random_write(),
+            false,
+        )
+        .await
+        .unwrap();
 
         let path = "/dir";
         let repo = Arc::new(repo);
