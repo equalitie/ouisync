@@ -81,7 +81,7 @@ async fn get_or_generate_password_salt(db: impl db::Acquire<'_>) -> Result<Passw
     let salt = match get_public(PASSWORD_SALT, &mut tx).await {
         Ok(salt) => salt,
         Err(Error::EntryNotFound) => {
-            let salt = SecretKey::generate_password_salt();
+            let salt: PasswordSalt = OsRng.gen();
             insert_public(PASSWORD_SALT, &salt, &mut tx).await?;
             salt
         }

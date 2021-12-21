@@ -3,10 +3,11 @@ mod password;
 pub mod secret_key;
 pub mod sign;
 
+pub(crate) use self::password::PasswordSalt;
 pub use self::{
     hash::{Hash, Hashable},
     password::Password,
-    secret_key::{PasswordSalt, SecretKey, SecretKeyLengthError},
+    secret_key::{SecretKey, SecretKeyLengthError},
 };
 pub use chacha20poly1305::aead;
 

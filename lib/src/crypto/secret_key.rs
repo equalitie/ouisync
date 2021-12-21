@@ -1,7 +1,5 @@
-use argon2::{
-    password_hash::{self, rand_core::OsRng},
-    Argon2,
-};
+use super::password::PasswordSalt;
+use argon2::Argon2;
 use generic_array::{sequence::GenericSequence, typenum::Unsigned};
 use hex;
 use rand::{CryptoRng, Rng};
@@ -24,9 +22,6 @@ use zeroize::Zeroize;
 /// the memory past its lifetime.
 #[derive(Clone)]
 pub struct SecretKey(Arc<Inner>);
-
-const PASSWORD_SALT_LEN: usize = password_hash::Salt::RECOMMENDED_LENGTH;
-pub type PasswordSalt = [u8; PASSWORD_SALT_LEN];
 
 impl SecretKey {
     /// Size of the key in bytes.
@@ -86,11 +81,6 @@ impl SecretKey {
             .hash_password_into(user_password.as_ref(), salt, result.as_array_mut())
             .expect("failed to hash password");
         result
-    }
-
-    /// Generate random salt for use with the `derive_scrypt` function.
-    pub fn generate_password_salt() -> PasswordSalt {
-        OsRng.gen()
     }
 
     /// Returns reference to the underlying array.
