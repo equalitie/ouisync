@@ -1,7 +1,6 @@
 use crate::{
     blob::{self, Blob},
     branch::Branch,
-    crypto::sign::PublicKey,
     db,
     directory::{Directory, ParentContext},
     error::Result,
@@ -100,14 +99,20 @@ impl File {
 
     /// Flushes this file, ensuring that all intermediately buffered contents gets written to the
     /// store.
-    pub async fn flush(&mut self, local_writer_id: &PublicKey) -> Result<()> {
+    pub async fn flush(&mut self) -> Result<()> {
         if !self.blob.is_dirty().await {
             return Ok(());
         }
 
+
         let mut tx = self.blob.db_pool().begin().await?;
 
         self.blob.flush_in_transaction(&mut tx).await?;
+
+        // Since the blob is dirty, it must be that it's been forked onto the local branch. That in
+        // turn means that self.blob.branch().id() is the ID of the local writer.
+        let local_writer_id = self.blob.branch().id();
+
         self.parent
             .modify_entry(tx, local_writer_id, None)
             .await?;
@@ -161,7 +166,7 @@ mod test {
         let mut file0 = branch0.ensure_file_exists("/dog.jpg".into()).await.unwrap();
 
         file0.write(b"small", &branch0).await.unwrap();
-        file0.flush(branch0.id()).await.unwrap();
+        file0.flush().await.unwrap();
 
         // Write to the file by branch 1
         let mut file1 = branch0
@@ -180,7 +185,7 @@ mod test {
 
         // This will create a fork on branch 1
         file1.write(b"large", &branch1).await.unwrap();
-        file1.flush(branch1.id()).await.unwrap();
+        file1.flush().await.unwrap();
 
         // Reopen orig file and verify it's unchanged
         let mut file = branch0
@@ -226,7 +231,7 @@ mod test {
         let branch1 = create_branch(branch0.db_pool().clone()).await;
 
         let mut file0 = branch0.ensure_file_exists("/pig.jpg".into()).await.unwrap();
-        file0.flush(branch0.id()).await.unwrap();
+        file0.flush().await.unwrap();
 
         let mut file1 = branch0
             .open_root()
@@ -246,7 +251,7 @@ mod test {
 
         for _ in 0..2 {
             file1.write(b"oink", &branch1).await.unwrap();
-            file1.flush(branch1.id()).await.unwrap();
+            file1.flush().await.unwrap();
         }
     }
 

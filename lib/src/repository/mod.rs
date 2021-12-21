@@ -293,10 +293,10 @@ impl Repository {
             )
             .await?;
 
-        src_dir.flush(None, local_branch.id()).await?;
+        src_dir.flush(None).await?;
 
         if src_dir != dst_dir {
-            dst_dir.flush(None, local_branch.id()).await?;
+            dst_dir.flush(None).await?;
         }
 
         Ok(())
@@ -645,7 +645,7 @@ mod tests {
             .await
             .unwrap();
         file.write(b"hello", &remote_branch).await.unwrap();
-        file.flush(remote_branch.id()).await.unwrap();
+        file.flush().await.unwrap();
 
         let mut rx = repo.subscribe();
 
@@ -694,7 +694,7 @@ mod tests {
         // Create file
         let mut file = repo.create_file("test.txt").await.unwrap();
         file.write(b"foo", &local_branch).await.unwrap();
-        file.flush(local_branch.id()).await.unwrap();
+        file.flush().await.unwrap();
         drop(file);
 
         // Read it back and check the content
@@ -708,7 +708,7 @@ mod tests {
         // Create a file with the same name but different content
         let mut file = repo.create_file("test.txt").await.unwrap();
         file.write(b"bar", &local_branch).await.unwrap();
-        file.flush(local_branch.id()).await.unwrap();
+        file.flush().await.unwrap();
         drop(file);
 
         // Read it back and check the content
@@ -729,13 +729,11 @@ mod tests {
         .await
         .unwrap();
 
-        let local_branch = repo.local_branch().await;
-
         // Create dir
         repo.create_directory("test")
             .await
             .unwrap()
-            .flush(None, local_branch.id())
+            .flush(None)
             .await
             .unwrap();
 
@@ -750,7 +748,7 @@ mod tests {
         repo.create_directory("test")
             .await
             .unwrap()
-            .flush(None, local_branch.id())
+            .flush(None)
             .await
             .unwrap();
 
@@ -774,7 +772,6 @@ mod tests {
 
         let path = "/dir";
         let repo = Arc::new(repo);
-        let local_branch = repo.local_branch().await;
 
         let _watch_dog = scoped_task::spawn(async {
             sleep(Duration::from_millis(5 * 1000)).await;
@@ -789,7 +786,7 @@ mod tests {
             let repo = repo.clone();
             async move {
                 let dir = repo.create_directory(path).await.unwrap();
-                dir.flush(None, local_branch.id()).await.unwrap();
+                dir.flush(None).await.unwrap();
             }
         });
 
@@ -827,12 +824,12 @@ mod tests {
         let local_branch = repo.local_branch().await;
         let mut file = repo.create_file("foo.txt").await.unwrap();
         file.write(b"foo", &local_branch).await.unwrap();
-        file.flush(local_branch.id()).await.unwrap();
+        file.flush().await.unwrap();
 
         let mut file = repo.open_file("foo.txt").await.unwrap();
         file.seek(SeekFrom::End(0)).await.unwrap();
         file.write(b"bar", &local_branch).await.unwrap();
-        file.flush(local_branch.id()).await.unwrap();
+        file.flush().await.unwrap();
 
         let mut file = repo.open_file("foo.txt").await.unwrap();
         let content = file.read_to_end().await.unwrap();

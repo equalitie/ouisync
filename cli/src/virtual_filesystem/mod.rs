@@ -609,12 +609,10 @@ impl Inner {
             umask
         );
 
-        let local_branch = self.require_local_branch().await?;
-
         let path = self.inodes.get(parent).calculate_path().join(name);
         let dir = self.repository.create_directory(path).await?;
 
-        dir.flush(None, local_branch.id()).await?;
+        dir.flush(None).await?;
 
         let inode = self
             .inodes
@@ -664,11 +662,10 @@ impl Inner {
             flags
         );
 
-        let local_branch = self.require_local_branch().await?;
         let path = self.inodes.get(parent).calculate_path().join(name);
         let mut file = self.repository.create_file(&path).await?;
 
-        file.flush(local_branch.id()).await?;
+        file.flush().await?;
 
         let branch_id = *file.branch().id();
         let entry = JointEntry::File(file);
@@ -714,12 +711,10 @@ impl Inner {
         );
 
         // TODO: what about `flags`?
-        let local_branch = self.require_local_branch().await?;
-
         let file = self.entries.get_file_mut(handle)?;
 
         if flush {
-            file.flush(local_branch.id()).await?;
+            file.flush().await?;
         }
 
         self.entries.remove(handle);
@@ -792,8 +787,7 @@ impl Inner {
             self.inodes.path_display(inode, None),
             handle
         );
-        let local_branch = self.require_local_branch().await?;
-        self.entries.get_file_mut(handle)?.flush(local_branch.id()).await
+        self.entries.get_file_mut(handle)?.flush().await
     }
 
     async fn fsync(&mut self, inode: Inode, handle: FileHandle, datasync: bool) -> Result<()> {
@@ -805,8 +799,7 @@ impl Inner {
         );
 
         // TODO: what about `datasync`?
-        let local_branch = self.require_local_branch().await?;
-        self.entries.get_file_mut(handle)?.flush(local_branch.id()).await
+        self.entries.get_file_mut(handle)?.flush().await
     }
 
     async fn unlink(&mut self, parent: Inode, name: &OsStr) -> Result<()> {

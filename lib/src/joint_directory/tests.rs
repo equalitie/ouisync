@@ -106,12 +106,12 @@ async fn conflict_forked_files() {
     // it into branch 1.
     let mut file1 = open_file_version(&root0, "file.txt", branches[0].id()).await;
     file1.write(b"two", &branches[1]).await.unwrap();
-    file1.flush(branches[1].id()).await.unwrap();
+    file1.flush().await.unwrap();
 
     // Modify the file by branch 0 as well, to create concurrent versions
     let mut file0 = open_file_version(&root0, "file.txt", branches[0].id()).await;
     file0.write(b"three", &branches[0]).await.unwrap();
-    file0.flush(branches[0].id()).await.unwrap();
+    file0.flush().await.unwrap();
 
     // Open branch 1's root dir which should have been created in the process.
     let root1 = branches[1].open_root().await.unwrap();
@@ -140,11 +140,11 @@ async fn conflict_directories() {
 
     let root0 = branches[0].open_or_create_root().await.unwrap();
     let dir0 = root0.create_directory("dir".to_owned(), &branches[0]).await.unwrap();
-    dir0.flush(None, branches[0].id()).await.unwrap();
+    dir0.flush(None).await.unwrap();
 
     let root1 = branches[1].open_or_create_root().await.unwrap();
     let dir1 = root1.create_directory("dir".to_owned(), &branches[1]).await.unwrap();
-    dir1.flush(None, branches[1].id()).await.unwrap();
+    dir1.flush(None).await.unwrap();
 
     let root = JointDirectory::new(branches[0].clone(), vec![root0, root1]);
     let root = root.read().await;
@@ -168,7 +168,7 @@ async fn conflict_file_and_directory() {
     let root1 = branches[1].open_or_create_root().await.unwrap();
 
     let dir1 = root1.create_directory("config".to_owned(), &branches[1]).await.unwrap();
-    dir1.flush(None, branches[1].id()).await.unwrap();
+    dir1.flush(None).await.unwrap();
 
     let root = JointDirectory::new(branches[0].clone(), vec![root0, root1]);
     let root = root.read().await;
@@ -277,7 +277,7 @@ async fn merge_locally_non_existing_file() {
 
     // Create local root dir
     let local_root = branches[0].open_or_create_root().await.unwrap();
-    local_root.flush(None, branches[0].id()).await.unwrap();
+    local_root.flush(None).await.unwrap();
 
     // Create remote root dir
     let remote_root = branches[1].open_or_create_root().await.unwrap();
@@ -311,7 +311,7 @@ async fn merge_locally_older_file() {
     let content_v1 = b"version 1";
 
     let local_root = branches[0].open_or_create_root().await.unwrap();
-    local_root.flush(None, branches[0].id()).await.unwrap();
+    local_root.flush(None).await.unwrap();
 
     let remote_root = branches[1].open_or_create_root().await.unwrap();
 
@@ -360,7 +360,7 @@ async fn merge_locally_newer_file() {
     let content_v1 = b"version 1";
 
     let local_root = branches[0].open_or_create_root().await.unwrap();
-    local_root.flush(None, branches[0].id()).await.unwrap();
+    local_root.flush(None).await.unwrap();
 
     let remote_root = branches[1].open_or_create_root().await.unwrap();
 
@@ -403,7 +403,7 @@ async fn merge_concurrent_file() {
     let branches = setup(2).await;
 
     let local_root = branches[0].open_or_create_root().await.unwrap();
-    local_root.flush(None, branches[0].id()).await.unwrap();
+    local_root.flush(None).await.unwrap();
 
     let remote_root = branches[1].open_or_create_root().await.unwrap();
 
@@ -451,7 +451,7 @@ async fn local_merge_is_idempotent() {
     let branches = setup(2).await;
 
     let local_root = branches[0].open_or_create_root().await.unwrap();
-    local_root.flush(None, branches[0].id()).await.unwrap();
+    local_root.flush(None).await.unwrap();
 
     let vv0 = branches[0].data().root().await.versions.clone();
 
@@ -503,10 +503,10 @@ async fn remote_merge_is_idempotent() {
     let branches = setup(2).await;
 
     let local_root = branches[0].open_or_create_root().await.unwrap();
-    local_root.flush(None, branches[0].id()).await.unwrap();
+    local_root.flush(None).await.unwrap();
 
     let remote_root = branches[1].open_or_create_root().await.unwrap();
-    remote_root.flush(None, branches[1].id()).await.unwrap();
+    remote_root.flush(None).await.unwrap();
 
     create_file(&remote_root, "cat.jpg", b"v0", &branches[1]).await;
 
@@ -555,10 +555,10 @@ async fn merge_sequential_modifications() {
     let branches = setup_with_rng(StdRng::seed_from_u64(0), 2).await;
 
     let local_root = branches[0].open_or_create_root().await.unwrap();
-    local_root.flush(None, branches[0].id()).await.unwrap();
+    local_root.flush(None).await.unwrap();
 
     let remote_root = branches[1].open_or_create_root().await.unwrap();
-    remote_root.flush(None, branches[1].id()).await.unwrap();
+    remote_root.flush(None).await.unwrap();
 
     // Create a file by local, then modify it by remote, then read it back by local verifying
     // the modification by remote got through.
@@ -660,10 +660,10 @@ async fn merge_missing_file() {
     let branches = setup(2).await;
 
     let local_root = branches[0].open_or_create_root().await.unwrap();
-    local_root.flush(None, branches[0].id()).await.unwrap();
+    local_root.flush(None).await.unwrap();
 
     let remote_root = branches[1].open_or_create_root().await.unwrap();
-    create_dangling_file(&remote_root, "squirrel.jpg", branches[1].id()).await;
+    create_dangling_file(&remote_root, "squirrel.jpg").await;
 
     // First attempt to merge fails because the file blob doesn't exist yet.
     match JointDirectory::new(branches[0].clone(), vec![local_root.clone(), remote_root.clone()])
@@ -707,10 +707,10 @@ async fn merge_missing_subdirectory() {
     let branches = setup(2).await;
 
     let local_root = branches[0].open_or_create_root().await.unwrap();
-    local_root.flush(None, branches[0].id()).await.unwrap();
+    local_root.flush(None).await.unwrap();
 
     let remote_root = branches[1].open_or_create_root().await.unwrap();
-    create_dangling_directory(&remote_root, "animals", branches[1].id()).await;
+    create_dangling_directory(&remote_root, "animals").await;
 
     // First attempt to merge fails because the subdirectory blob doesn't exist yet.
     match JointDirectory::new(branches[0].clone(), vec![local_root.clone(), remote_root.clone()])
@@ -761,7 +761,7 @@ async fn remove_non_empty_subdirectory() {
         .create_directory("dir1".into(), &branches[0])
         .await
         .unwrap()
-        .flush(None, branches[0].id())
+        .flush(None)
         .await
         .unwrap();
 
@@ -773,7 +773,7 @@ async fn remove_non_empty_subdirectory() {
         .create_directory("dir2".into(), &branches[1])
         .await
         .unwrap()
-        .flush(None, branches[1].id())
+        .flush(None)
         .await
         .unwrap();
 
@@ -849,7 +849,7 @@ async fn create_file(parent: &Directory, name: &str, content: &[u8], local_branc
         file.write(content, local_branch).await.unwrap();
     }
 
-    file.flush(local_branch.id()).await.unwrap();
+    file.flush().await.unwrap();
 }
 
 async fn update_file(parent: &Directory, name: &str, content: &[u8], local_branch: &Branch) {
@@ -857,7 +857,7 @@ async fn update_file(parent: &Directory, name: &str, content: &[u8], local_branc
 
     file.truncate(0, local_branch).await.unwrap();
     file.write(content, local_branch).await.unwrap();
-    file.flush(local_branch.id()).await.unwrap();
+    file.flush().await.unwrap();
 }
 
 async fn open_file(parent: &Directory, name: &str) -> File {
@@ -904,15 +904,15 @@ async fn read_version_vector(parent: &Directory, name: &str) -> VersionVector {
 
 // TODO: try to reduce the code duplication in the following functions.
 
-async fn create_dangling_file(parent: &Directory, name: &str, local_branch_id: &PublicKey) {
-    create_dangling_entry(parent, EntryType::File, name, local_branch_id).await
+async fn create_dangling_file(parent: &Directory, name: &str) {
+    create_dangling_entry(parent, EntryType::File, name).await
 }
 
-async fn create_dangling_directory(parent: &Directory, name: &str, local_branch_id: &PublicKey) {
-    create_dangling_entry(parent, EntryType::Directory, name, local_branch_id).await
+async fn create_dangling_directory(parent: &Directory, name: &str) {
+    create_dangling_entry(parent, EntryType::Directory, name).await
 }
 
-async fn create_dangling_entry(parent: &Directory, entry_type: EntryType, name: &str, local_branch_id: &PublicKey) {
+async fn create_dangling_entry(parent: &Directory, entry_type: EntryType, name: &str) {
     let mut writer = parent.write().await;
     let branch_id = *writer.branch().id();
     let blob_id = rand::random();
@@ -926,7 +926,7 @@ async fn create_dangling_entry(parent: &Directory, entry_type: EntryType, name: 
         )
         .await
         .unwrap();
-    writer.flush(None, local_branch_id).await.unwrap();
+    writer.flush(None).await.unwrap();
 }
 
 async fn replace_dangling_file(parent: &Directory, name: &str, local_branch: &Branch) {
@@ -951,7 +951,7 @@ async fn replace_dangling_file(parent: &Directory, name: &str, local_branch: &Br
         .create_file(name.into(), local_branch)
         .await
         .unwrap()
-        .flush(local_branch.id())
+        .flush()
         .await
         .unwrap();
 }
@@ -979,7 +979,7 @@ async fn replace_dangling_directory(parent: &Directory, name: &str, local_branch
         .create_directory(name.into(), local_branch)
         .await
         .unwrap()
-        .flush(None, local_branch.id())
+        .flush(None)
         .await
         .unwrap();
 }

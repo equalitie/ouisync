@@ -88,8 +88,8 @@ impl Directory {
     /// vector is merged with `version_vector_override`. This is useful to support merging
     /// concurrent versions of a directory where the resulting version vector should be the merge
     /// of the version vectors of the concurrent versions.
-    pub async fn flush(&self, version_vector_override: Option<&VersionVector>, local_id: &PublicKey) -> Result<()> {
-        self.write().await.flush(version_vector_override, local_id).await
+    pub async fn flush(&self, version_vector_override: Option<&VersionVector>) -> Result<()> {
+        self.write().await.flush(version_vector_override).await
     }
 
     /// Creates a new file inside this directory.
@@ -515,7 +515,7 @@ impl Writer<'_> {
         lookup_version(&*self.inner, self.outer, name, author)
     }
 
-    pub async fn flush(&mut self, version_vector_override: Option<&VersionVector>, local_id: &PublicKey) -> Result<()> {
+    pub async fn flush(&mut self, version_vector_override: Option<&VersionVector>) -> Result<()> {
         if !self.inner.content.dirty && version_vector_override.is_none() {
             return Ok(());
         }
@@ -524,8 +524,12 @@ impl Writer<'_> {
 
         self.inner.flush(&mut tx).await?;
 
+        // Since the blob is dirty, it must be that it's been forked onto the local branch. That in
+        // turn means that self.inner.blob.branch().id() is the ID of the local writer.
+        let local_writer_id = *self.inner.blob.branch().id();
+
         self.inner
-            .modify_self_entry(tx, local_id, version_vector_override)
+            .modify_self_entry(tx, &local_writer_id, version_vector_override)
             .await?;
 
         Ok(())

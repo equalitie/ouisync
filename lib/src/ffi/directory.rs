@@ -28,9 +28,7 @@ pub unsafe extern "C" fn directory_create(
 
         ctx.spawn(async move {
             let dir = repo.create_directory(path).await?;
-            let local_writer_id = repo.local_branch_id().await;
-            dir.flush(None, &local_writer_id).await?;
-
+            dir.flush(None).await?;
             Ok(())
         })
     })

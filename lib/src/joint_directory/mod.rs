@@ -109,7 +109,7 @@ impl JointDirectory {
             local_writer.remove_entry(&name, &author, vv, None, &self.local_branch).await?;
         }
 
-        local_writer.flush(None, self.local_branch.id()).await
+        local_writer.flush(None).await
     }
 
     #[async_recursion]
@@ -134,7 +134,7 @@ impl JointDirectory {
 
     pub async fn flush(&mut self) -> Result<()> {
         if let Some(version) = self.version(self.local_branch.id()).await {
-            version.flush(None, self.local_branch.id()).await?
+            version.flush(None).await?
         }
 
         Ok(())
@@ -185,7 +185,7 @@ impl JointDirectory {
             dir.merge().await?;
         }
 
-        local_version.flush(Some(&new_version_vector), self.local_branch.id()).await?;
+        local_version.flush(Some(&new_version_vector)).await?;
 
         Ok(local_version)
     }
