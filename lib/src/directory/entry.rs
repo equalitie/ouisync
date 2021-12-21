@@ -100,8 +100,8 @@ impl<'a> EntryRef<'a> {
         matches!(self, Self::Tombstone(_))
     }
 
-    pub fn is_local(&self) -> bool {
-        self.inner().is_local()
+    pub fn branch_id(&self) -> &PublicKey {
+        self.inner().branch_id()
     }
 
     pub fn parent(&self) -> &Directory {
@@ -159,14 +159,13 @@ impl<'a> FileRef<'a> {
         if let Some(blob_core) = blob_core.upgrade() {
             File::reopen(
                 blob_core,
-                self.inner.parent_outer.local_branch.clone(),
+                self.inner.parent_outer.db_pool().clone(),
                 self.inner.parent_context(),
             )
             .await
         } else {
             let file = File::open(
                 self.inner.parent_inner.blob.branch().clone(),
-                self.inner.parent_outer.local_branch.clone(),
                 self.locator(),
                 self.inner.parent_context(),
             )
@@ -178,8 +177,8 @@ impl<'a> FileRef<'a> {
         }
     }
 
-    pub fn is_local(&self) -> bool {
-        self.inner.is_local()
+    pub fn branch_id(&self) -> &PublicKey {
+        self.inner.branch_id()
     }
 
     pub fn parent(&self) -> &Directory {
@@ -227,15 +226,14 @@ impl<'a> DirectoryRef<'a> {
             .open_directories
             .open(
                 self.inner.parent_inner.blob.branch().clone(),
-                self.inner.parent_outer.local_branch.clone(),
                 self.locator(),
                 self.inner.parent_context(),
             )
             .await
     }
 
-    pub fn is_local(&self) -> bool {
-        self.inner.is_local()
+    pub fn branch_id(&self) -> &'a PublicKey {
+        self.inner.branch_id()
     }
 
     pub(crate) fn data(&self) -> &EntryDirectoryData {
@@ -266,8 +264,8 @@ impl<'a> TombstoneRef<'a> {
         self.inner.name
     }
 
-    pub fn is_local(&self) -> bool {
-        self.inner.is_local()
+    pub fn branch_id(&self) -> &'a PublicKey {
+        self.inner.branch_id()
     }
 
     pub fn data(&self) -> &EntryTombstoneData {
@@ -299,7 +297,7 @@ struct RefInner<'a> {
     author: &'a PublicKey,
 }
 
-impl RefInner<'_> {
+impl<'a> RefInner<'a> {
     fn parent_context(&self) -> ParentContext {
         ParentContext::new(
             self.parent_outer.branch_id,
@@ -309,8 +307,8 @@ impl RefInner<'_> {
         )
     }
 
-    pub fn is_local(&self) -> bool {
-        self.parent_inner.blob.branch().id() == self.parent_outer.local_branch.id()
+    pub fn branch_id(&self) -> &'a PublicKey {
+        self.parent_inner.blob.branch().id()
     }
 }
 

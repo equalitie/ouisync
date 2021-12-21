@@ -1,6 +1,7 @@
 use super::{inner::Inner, parent_context::ParentContext, Directory};
 use crate::{
     branch::Branch,
+    db,
     error::{Error, Result},
     locator::Locator,
 };
@@ -18,17 +19,17 @@ impl RootDirectoryCache {
         Self(Mutex::new(Weak::new()))
     }
 
-    pub async fn open(&self, owner_branch: Branch, local_branch: Branch) -> Result<Directory> {
+    pub async fn open(&self, owner_branch: Branch, db_pool: db::Pool) -> Result<Directory> {
         let mut inner = self.0.lock().await;
 
         if let Some(inner) = inner.upgrade() {
             Ok(Directory {
                 branch_id: *owner_branch.id(),
                 inner,
-                local_branch,
+                db_pool,
             })
         } else {
-            let dir = Directory::open_root(owner_branch, local_branch).await?;
+            let dir = Directory::open_root(owner_branch).await?;
             *inner = Arc::downgrade(&dir.inner);
             Ok(dir)
         }
@@ -41,7 +42,7 @@ impl RootDirectoryCache {
             Ok(Directory {
                 branch_id: *branch.id(),
                 inner,
-                local_branch: branch,
+                db_pool: branch.db_pool().clone(),
             })
         } else {
             let dir = Directory::open_or_create_root(branch).await?;
@@ -62,7 +63,6 @@ impl SubdirectoryCache {
     pub async fn open(
         &self,
         owner_branch: Branch,
-        local_branch: Branch,
         locator: Locator,
         parent: ParentContext,
     ) -> Result<Directory> {
@@ -74,18 +74,18 @@ impl SubdirectoryCache {
                     Directory {
                         branch_id: *owner_branch.id(),
                         inner,
-                        local_branch,
+                        db_pool: owner_branch.db_pool().clone(),
                     }
                 } else {
                     let dir =
-                        Directory::open(owner_branch, local_branch, locator, Some(parent)).await?;
+                        Directory::open(owner_branch, locator, Some(parent)).await?;
                     entry.insert(Arc::downgrade(&dir.inner));
                     dir
                 }
             }
             hash_map::Entry::Vacant(entry) => {
                 let dir =
-                    Directory::open(owner_branch, local_branch, locator, Some(parent)).await?;
+                    Directory::open(owner_branch, locator, Some(parent)).await?;
                 entry.insert(Arc::downgrade(&dir.inner));
                 dir
             }
@@ -99,7 +99,7 @@ impl SubdirectoryCache {
 
     pub async fn create(
         &self,
-        branch: Branch,
+        branch: &Branch,
         locator: Locator,
         parent: ParentContext,
     ) -> Result<Directory> {
@@ -108,7 +108,7 @@ impl SubdirectoryCache {
         let dir = match map.entry(locator) {
             hash_map::Entry::Occupied(_) => return Err(Error::EntryExists),
             hash_map::Entry::Vacant(entry) => {
-                let dir = Directory::create(branch, locator, Some(parent));
+                let dir = Directory::create(branch.clone(), locator, Some(parent));
                 entry.insert(Arc::downgrade(&dir.inner));
                 dir
             }

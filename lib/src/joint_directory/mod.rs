@@ -2,6 +2,7 @@
 mod tests;
 
 use crate::{
+    branch::Branch,
     crypto::sign::PublicKey,
     directory::{self, Directory, DirectoryRef, EntryRef, EntryType, FileRef},
     error::{Error, Result},
@@ -24,12 +25,13 @@ use std::{
 /// Unified view over multiple concurrent versions of a directory.
 #[derive(Clone)]
 pub struct JointDirectory {
+    local_branch: Branch,
     versions: BTreeMap<PublicKey, Directory>,
 }
 
 impl JointDirectory {
     /// Creates a new `JointDirectory` over the specified directory versions.
-    pub fn new<I>(versions: I) -> Self
+    pub fn new<I>(local_branch: Branch, versions: I) -> Self
     where
         I: IntoIterator<Item = Directory>,
     {
@@ -38,12 +40,12 @@ impl JointDirectory {
             .map(|dir| (*dir.branch_id(), dir))
             .collect();
 
-        Self { versions }
+        Self { local_branch, versions }
     }
 
     /// Lock this joint directory for reading.
     pub async fn read(&self) -> Reader<'_> {
-        Reader(future::join_all(self.versions.values().map(|dir| dir.read())).await)
+        Reader(future::join_all(self.versions.values().map(|dir| dir.read())).await, &self.local_branch)
     }
 
     /// Descends into an arbitrarily nested subdirectory of this directory at the specified path.
@@ -62,7 +64,7 @@ impl JointDirectory {
                         .lookup(name)
                         .find_map(|entry| entry.directory().ok())
                         .ok_or(Error::EntryNotFound)?
-                        .open(MissingVersionStrategy::Skip)
+                        .open(MissingVersionStrategy::Skip, &self.local_branch)
                         .await?;
                     curr = Cow::Owned(next);
                 }
@@ -94,7 +96,7 @@ impl JointDirectory {
             .apply(&self.read().await)?
             .map(|entry| {
                 let name = entry.name().to_owned();
-                let author = *entry.author().unwrap_or_else(|| local.this_writer_id());
+                let author = *entry.author().unwrap_or_else(|| self.local_branch.id());
                 let vv = entry.version_vector().into_owned();
 
                 (name, author, vv)
@@ -104,7 +106,7 @@ impl JointDirectory {
         let mut local_writer = local.write().await;
 
         for (name, author, vv) in entries {
-            local_writer.remove_entry(&name, &author, vv, None).await?;
+            local_writer.remove_entry(&name, &author, vv, None, &self.local_branch).await?;
         }
 
         local_writer.flush(None).await
@@ -116,7 +118,10 @@ impl JointDirectory {
             pattern
                 .apply(&self.read().await)?
                 .filter_map(|e| e.directory().ok())
-                .map(|e| async move { e.open(MissingVersionStrategy::Skip).await }),
+                .map(|e| {
+                    let local_branch = &self.local_branch;
+                    async move { e.open(MissingVersionStrategy::Skip, &local_branch).await }
+                }),
         )
         .await?;
 
@@ -128,7 +133,7 @@ impl JointDirectory {
     }
 
     pub async fn flush(&mut self) -> Result<()> {
-        if let Some(version) = self.local_version().await {
+        if let Some(version) = self.version(self.local_branch.id()).await {
             version.flush(None).await?
         }
 
@@ -156,7 +161,7 @@ impl JointDirectory {
             match entry {
                 JointEntryRef::File(entry) => files.push(entry.open().await?),
                 JointEntryRef::Directory(entry) => {
-                    subdirs.push(entry.open(MissingVersionStrategy::Fail).await?)
+                    subdirs.push(entry.open(MissingVersionStrategy::Fail, &self.local_branch).await?)
                 }
             }
         }
@@ -167,7 +172,7 @@ impl JointDirectory {
 
         // Fork files
         for mut file in files {
-            match file.fork().await {
+            match file.fork(&self.local_branch).await {
                 // `EntryExists` error means the file already exists locally at the same or greater
                 // version than the remote file which is OK and expected, so we ignore it.
                 Ok(()) | Err(Error::EntryExists) => (),
@@ -187,13 +192,13 @@ impl JointDirectory {
 
     // Ensures this joint directory contains a local version and returns it.
     async fn fork(&mut self) -> Result<Directory> {
-        if let Some(local) = self.local_version().await {
+        if let Some(local) = self.version(self.local_branch.id()).await {
             return Ok(local.clone());
         }
 
         // Grab any version and fork it to create the local one.
         let remote = self.versions.values().next().ok_or(Error::EntryNotFound)?;
-        let local = remote.clone().fork().await?;
+        let local = remote.clone().fork(&self.local_branch).await?;
 
         let id = *local.read().await.branch().id();
         self.versions.insert(id, local.clone());
@@ -212,11 +217,11 @@ impl JointDirectory {
         outcome
     }
 
-    async fn local_version(&self) -> Option<&Directory> {
-        // TODO: Consider storing the local version separately, so accessing it is quicker (O(1)).
+    async fn version(&self, branch_id: &PublicKey) -> Option<&Directory> {
+        // TODO: I think we can simply do versions.get(branch_id) (?)
 
         for version in self.versions.values() {
-            if version.read().await.is_local() {
+            if version.read().await.branch().id() == branch_id {
                 return Some(version);
             }
         }
@@ -232,18 +237,18 @@ impl fmt::Debug for JointDirectory {
 }
 
 /// View of a `JointDirectory` for performing read-only queries.
-pub struct Reader<'a>(Vec<directory::Reader<'a>>);
+pub struct Reader<'a>(Vec<directory::Reader<'a>>, &'a Branch);
 
 impl Reader<'_> {
     /// Returns iterator over the entries of this directory. Multiple concurrent versions of the
     /// same file are returned as separate `JointEntryRef::File` entries. Multiple concurrent
     /// versions of the same directory are returned as a single `JointEntryRef::Directory` entry.
-    pub fn entries(&self) -> impl Iterator<Item = JointEntryRef> {
+    pub fn entries<'a>(&'a self) -> impl Iterator<Item = JointEntryRef<'a>> + 'a {
         let entries = self.0.iter().map(|directory| directory.entries());
         let entries = SortedUnion::new(entries, |entry| entry.name());
         let entries = Accumulate::new(entries, |entry| entry.name());
 
-        entries.flat_map(|(_, entries)| Merge::new(entries.into_iter()))
+        entries.flat_map(|(_, entries)| Merge::new(entries.into_iter(), self.1.id()))
     }
 
     /// Returns all versions of an entry with the given name. Concurrent file versions are returned
@@ -254,6 +259,7 @@ impl Reader<'_> {
                 .iter()
                 .filter_map(move |dir| dir.lookup(name).ok())
                 .flatten(),
+            self.1.id(),
         )
     }
 
@@ -271,7 +277,7 @@ impl Reader<'_> {
         // First try exact match as it is more common.
         let mut last_file = None;
 
-        for entry in Merge::new(self.entry_versions(name)) {
+        for entry in Merge::new(self.entry_versions(name), self.1.id()) {
             match entry {
                 JointEntryRef::Directory(_) => return Ok(entry),
                 JointEntryRef::File(_) if last_file.is_none() => {
@@ -300,7 +306,7 @@ impl Reader<'_> {
         // contain one.
         // NOTE: Using keep_maximal may be an overkill in this case because of the invariant that
         // no single author/replica can create concurrent versions of an entry.
-        let mut entries = keep_maximal(entries).into_iter();
+        let mut entries = keep_maximal(entries, self.1.id()).into_iter();
 
         let first = entries.next().ok_or(Error::EntryNotFound)?;
 
@@ -327,6 +333,7 @@ impl Reader<'_> {
             self.0
                 .iter()
                 .filter_map(|dir| dir.lookup_version(name, branch_id).ok()),
+            self.1.id(),
         )
         .find_map(|entry| entry.file().ok())
         .ok_or(Error::EntryNotFound)
@@ -486,11 +493,12 @@ impl<'a> JointDirectoryRef<'a> {
     pub async fn open(
         &self,
         missing_version_strategy: MissingVersionStrategy,
+        local_branch: &Branch,
     ) -> Result<JointDirectory> {
         let directories = future::try_join_all(self.0.iter().map(|dir| async move {
             match dir.open().await {
                 Ok(open_dir) => Ok(Some(open_dir)),
-                Err(e) if dir.is_local() => {
+                Err(e) if dir.branch_id() == local_branch.id() => {
                     log::error!(
                         "failed to open directory '{}' on the local branch: {:?}",
                         self.name(),
@@ -520,7 +528,7 @@ impl<'a> JointDirectoryRef<'a> {
         .into_iter()
         .flatten();
 
-        Ok(JointDirectory::new(directories))
+        Ok(JointDirectory::new(local_branch.clone(), directories))
     }
 }
 
@@ -558,14 +566,14 @@ struct Merge<'a> {
 impl<'a> Merge<'a> {
     // All these entries are expected to have the same name. They can be either files, directories
     // or a mix of the two.
-    fn new<I>(entries: I) -> Self
+    fn new<I>(entries: I, local_branch_id: &PublicKey) -> Self
     where
         I: Iterator<Item = EntryRef<'a>>,
     {
         let mut files = VecDeque::new();
         let mut directories = vec![];
 
-        let entries = keep_maximal(entries);
+        let entries = keep_maximal(entries, local_branch_id);
 
         for entry in entries {
             match entry {
@@ -605,7 +613,7 @@ impl<'a> Iterator for Merge<'a> {
 
 trait Versioned {
     fn version_vector(&self) -> &VersionVector;
-    fn is_local(&self) -> bool;
+    fn branch_id(&self) -> &PublicKey;
 }
 
 impl Versioned for EntryRef<'_> {
@@ -613,8 +621,8 @@ impl Versioned for EntryRef<'_> {
         EntryRef::version_vector(self)
     }
 
-    fn is_local(&self) -> bool {
-        EntryRef::is_local(self)
+    fn branch_id(&self) -> &PublicKey {
+        EntryRef::branch_id(self)
     }
 }
 
@@ -623,23 +631,25 @@ impl Versioned for FileRef<'_> {
         FileRef::version_vector(self)
     }
 
-    fn is_local(&self) -> bool {
-        FileRef::is_local(self)
+    fn branch_id(&self) -> &PublicKey {
+        FileRef::branch_id(self)
     }
 }
 
 // Returns the entries with the maximal version vectors.
-fn keep_maximal<E: Versioned>(entries: impl Iterator<Item = E>) -> Vec<E> {
+fn keep_maximal<E: Versioned>(entries: impl Iterator<Item = E>, local_branch_id: &PublicKey) -> Vec<E> {
     let mut max: Vec<E> = Vec::new();
 
     for new in entries {
         let mut insert = true;
         let mut remove = None;
 
+        let new_is_local = local_branch_id == new.branch_id();
+
         for (index, old) in max.iter().enumerate() {
             match (
                 old.version_vector().partial_cmp(new.version_vector()),
-                new.is_local(),
+                new_is_local,
             ) {
                 // If both have identical versions, prefer the local one
                 (Some(Ordering::Less), _) | (Some(Ordering::Equal), true) => {

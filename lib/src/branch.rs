@@ -49,8 +49,8 @@ impl Branch {
         &self.cryptor
     }
 
-    pub(crate) async fn open_root(&self, local_branch: Branch) -> Result<Directory> {
-        self.root_directory.open(self.clone(), local_branch).await
+    pub(crate) async fn open_root(&self) -> Result<Directory> {
+        self.root_directory.open(self.clone(), self.pool.clone()).await
     }
 
     pub(crate) async fn open_or_create_root(&self) -> Result<Directory> {
@@ -77,7 +77,7 @@ impl Branch {
                     let next = if let Some(next) = next {
                         next
                     } else {
-                        curr.create_directory(name.to_string()).await?
+                        curr.create_directory(name.to_string(), &self).await?
                     };
 
                     curr = next;
@@ -94,7 +94,7 @@ impl Branch {
     pub(crate) async fn ensure_file_exists(&self, path: &Utf8Path) -> Result<File> {
         let (parent, name) = path::decompose(path).ok_or(Error::EntryIsDirectory)?;
         let dir = self.ensure_directory_exists(parent).await?;
-        dir.create_file(name.to_string()).await
+        dir.create_file(name.to_string(), &self).await
     }
 
     pub async fn root_block_id(&self) -> Result<BlockId> {
@@ -103,8 +103,7 @@ impl Branch {
     }
 
     pub async fn debug_print(&self, print: DebugPrinter) {
-        // TODO: We're lying here about the local branch argument to open_root.
-        if let Ok(root) = self.open_root(self.clone()).await {
+        if let Ok(root) = self.open_root().await {
             root.debug_print(print).await;
         }
     }

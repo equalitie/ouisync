@@ -45,7 +45,7 @@ impl ParentContext {
     pub async fn modify_entry(
         &mut self,
         tx: db::Transaction<'_>,
-        local_id: PublicKey,
+        local_id: &PublicKey,
         version_vector_override: Option<&VersionVector>,
     ) -> Result<()> {
         inner::modify_entry(
@@ -60,11 +60,11 @@ impl ParentContext {
     }
 
     /// Forks the parent directory and inserts the entry into it as file, returning its new blob id.
-    pub async fn fork_file(&mut self, local_branch: Branch) -> Result<BlobId> {
+    pub async fn fork_file(&mut self, local_branch: &Branch) -> Result<BlobId> {
         let old_vv = self.entry_version_vector().await;
 
-        let outer = self.directory(local_branch);
-        let outer = outer.fork().await?;
+        let outer = self.directory(local_branch.db_pool().clone());
+        let outer = outer.fork(&local_branch).await?;
 
         let blob_id = outer
             .insert_file_entry(self.entry_name.clone(), self.entry_author, old_vv)
@@ -80,11 +80,11 @@ impl ParentContext {
     }
 
     /// Returns the parent directory of the entry bound to the given local branch.
-    pub fn directory(&self, local_branch: Branch) -> Directory {
+    pub fn directory(&self, db_pool: db::Pool) -> Directory {
         Directory {
             branch_id: self.branch_id,
             inner: self.directory_inner.clone(),
-            local_branch,
+            db_pool,
         }
     }
 

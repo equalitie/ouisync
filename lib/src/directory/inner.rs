@@ -73,7 +73,7 @@ impl Inner {
         &mut self,
         name: &str,
         author_id: &mut PublicKey,
-        local_id: PublicKey,
+        local_id: &PublicKey,
         version_vector_override: Option<&VersionVector>,
     ) -> Result<()> {
         let versions = self
@@ -83,13 +83,13 @@ impl Inner {
             .ok_or(Error::EntryNotFound)?;
         let authors_version = versions.get(author_id).ok_or(Error::EntryNotFound)?;
 
-        if *author_id != local_id {
+        if author_id != local_id {
             // There may already exist a local version of the entry. If it does, we may
             // overwrite it only if the existing version "happened before" this new one being
             // modified.  Note that if there doesn't alreay exist a local version, that is
             // essentially the same as if it did exist but it's version_vector was a zero
             // vector.
-            let local_version = versions.get(&local_id);
+            let local_version = versions.get(local_id);
             let local_happened_before = local_version.map_or(true, |local_version| {
                 local_version.version_vector() < authors_version.version_vector()
             });
@@ -106,12 +106,12 @@ impl Inner {
         if let Some(version_vector_override) = version_vector_override {
             version.version_vector_mut().merge(version_vector_override)
         } else {
-            version.version_vector_mut().increment(local_id);
+            version.version_vector_mut().increment(*local_id);
         }
 
-        versions.insert(local_id, version);
+        versions.insert(*local_id, version);
 
-        *author_id = local_id;
+        *author_id = *local_id;
         self.content.dirty = true;
 
         Ok(())
@@ -121,7 +121,7 @@ impl Inner {
     pub async fn modify_self_entry(
         &mut self,
         tx: db::Transaction<'_>,
-        local_id: PublicKey,
+        local_id: &PublicKey,
         version_vector_override: Option<&VersionVector>,
     ) -> Result<()> {
         if let Some(ctx) = self.parent.as_mut() {
@@ -261,12 +261,12 @@ impl Content {
 pub(super) async fn modify_entry<'a>(
     mut tx: db::Transaction<'a>,
     inner: RwLockWriteGuard<'a, Inner>,
-    local_id: PublicKey,
+    local_id: &PublicKey,
     name: &'a str,
     author_id: &'a mut PublicKey,
     version_vector_override: Option<&'a VersionVector>,
 ) -> Result<()> {
-    inner.assert_local(&local_id);
+    inner.assert_local(local_id);
 
     let mut op = ModifyEntry::new(inner, name, author_id);
     op.apply(local_id, version_vector_override)?;
@@ -314,7 +314,7 @@ impl<'a> ModifyEntry<'a> {
     // Apply the operation. The operation can still be undone after this by dropping `self`.
     fn apply(
         &mut self,
-        local_id: PublicKey,
+        local_id: &PublicKey,
         version_vector_override: Option<&VersionVector>,
     ) -> Result<()> {
         self.inner

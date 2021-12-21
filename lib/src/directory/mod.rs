@@ -25,6 +25,7 @@ use crate::{
     blob_id::BlobId,
     branch::Branch,
     crypto::sign::PublicKey,
+    db,
     debug_printer::DebugPrinter,
     error::{Error, Result},
     file::File,
@@ -41,15 +42,15 @@ pub struct Directory {
     // require locking.
     branch_id: PublicKey,
     inner: Arc<RwLock<Inner>>,
-    local_branch: Branch,
+    db_pool: db::Pool,
 }
 
 #[allow(clippy::len_without_is_empty)]
 impl Directory {
     /// Opens the root directory.
     /// For internal use only. Use [`Branch::open_root`] instead.
-    pub(crate) async fn open_root(owner_branch: Branch, local_branch: Branch) -> Result<Self> {
-        Self::open(owner_branch, local_branch, Locator::ROOT, None).await
+    pub(crate) async fn open_root(owner_branch: Branch) -> Result<Self> {
+        Self::open(owner_branch, Locator::ROOT, None).await
     }
 
     /// Opens the root directory or creates it if it doesn't exist.
@@ -59,7 +60,7 @@ impl Directory {
 
         let locator = Locator::ROOT;
 
-        match Self::open(branch.clone(), branch.clone(), locator, None).await {
+        match Self::open(branch.clone(), locator, None).await {
             Ok(dir) => Ok(dir),
             Err(Error::EntryNotFound) => Ok(Self::create(branch, locator, None)),
             Err(error) => Err(error),
@@ -72,6 +73,10 @@ impl Directory {
             outer: self,
             inner: self.inner.read().await,
         }
+    }
+
+    pub fn db_pool(&self) -> &db::Pool {
+        &self.db_pool
     }
 
     /// Flushes this directory ensuring that any pending changes are written to the store and the
@@ -92,8 +97,8 @@ impl Directory {
     /// # Panics
     ///
     /// Panics if this directory is not in the local branch.
-    pub async fn create_file(&self, name: String) -> Result<File> {
-        self.write().await.create_file(name).await
+    pub async fn create_file(&self, name: String, local_branch: &Branch) -> Result<File> {
+        self.write().await.create_file(name, local_branch).await
     }
 
     /// Creates a new subdirectory of this directory.
@@ -101,8 +106,8 @@ impl Directory {
     /// # Panics
     ///
     /// Panics if this directory is not in the local branch.
-    pub async fn create_directory(&self, name: String) -> Result<Self> {
-        self.write().await.create_directory(name).await
+    pub async fn create_directory(&self, name: String, local_branch: &Branch) -> Result<Self> {
+        self.write().await.create_directory(name, local_branch).await
     }
 
     /// Removes a file or subdirectory from this directory. If the entry to be removed is a
@@ -117,10 +122,11 @@ impl Directory {
         name: &str,
         author: &PublicKey,
         vv: VersionVector,
+        local_branch: &Branch,
     ) -> Result<()> {
         self.write()
             .await
-            .remove_entry(name, author, vv, None)
+            .remove_entry(name, author, vv, None, local_branch)
             .await
     }
 
@@ -147,6 +153,7 @@ impl Directory {
         dst_dir: &Directory,
         dst_name: &str,
         dst_vv: VersionVector,
+        local_branch: &Branch,
     ) -> Result<()> {
         let (mut src_dir_writer, mut dst_dir_writer) = write_pair(self, dst_dir).await;
 
@@ -156,6 +163,7 @@ impl Directory {
                 src_author,
                 src_entry.version_vector().clone(),
                 src_entry.blob_id().cloned(),
+                local_branch,
             )
             .await?;
 
@@ -167,7 +175,7 @@ impl Directory {
         dst_dir_writer
             .as_mut()
             .unwrap_or(&mut src_dir_writer)
-            .insert_entry(dst_name.into(), *self.this_writer_id(), dst_entry, None)
+            .insert_entry(dst_name.into(), *local_branch.id(), dst_entry, None)
             .await
     }
 
@@ -176,20 +184,21 @@ impl Directory {
     //       consistent with `File::fork`.
     // TODO: consider rewriting this to avoid recursion
     #[async_recursion]
-    pub async fn fork(&self) -> Result<Directory> {
+    pub async fn fork(&self, local_branch: &Branch) -> Result<Directory> {
         let inner = self.read().await;
 
-        if self.local_branch.id() == inner.branch().id() {
+        if local_branch.id() == inner.branch().id() {
             return Ok(self.clone());
         }
 
         if let Some(parent) = &inner.inner.parent {
-            let parent_dir = parent.directory(self.local_branch.clone()).fork().await?;
+            //let parent_dir = parent.directory(local_branch.clone()).fork().await?;
+            let parent_dir = parent.directory(self.db_pool().clone()).fork(local_branch).await?;
 
             match parent_dir
                 .read()
                 .await
-                .lookup_version(parent.entry_name(), self.local_branch.id())
+                .lookup_version(parent.entry_name(), local_branch.id())
             {
                 Ok(EntryRef::Directory(entry)) => return entry.open().await,
                 Ok(EntryRef::File(_)) => {
@@ -201,10 +210,10 @@ impl Directory {
             }
 
             parent_dir
-                .create_directory(parent.entry_name().to_owned())
+                .create_directory(parent.entry_name().to_owned(), local_branch)
                 .await
         } else {
-            self.local_branch.open_or_create_root().await
+            local_branch.open_or_create_root().await
         }
     }
 
@@ -214,7 +223,7 @@ impl Directory {
             .inner
             .parent
             .as_ref()
-            .map(|parent_ctx| parent_ctx.directory(self.local_branch.clone()))
+            .map(|parent_ctx| parent_ctx.directory(self.db_pool.clone()))
     }
 
     /// Inserts a dangling file entry into this directory. It's the responsibility of the caller to
@@ -244,11 +253,11 @@ impl Directory {
 
     async fn open(
         owner_branch: Branch,
-        local_branch: Branch,
         locator: Locator,
         parent: Option<ParentContext>,
     ) -> Result<Self> {
         let branch_id = *owner_branch.id();
+        let db_pool =  owner_branch.db_pool().clone();
         let mut blob = Blob::open(owner_branch, locator).await?;
         let buffer = blob.read_to_end().await?;
         let content = bincode::deserialize(&buffer).map_err(Error::MalformedDirectory)?;
@@ -261,12 +270,13 @@ impl Directory {
                 parent,
                 open_directories: SubdirectoryCache::new(),
             })),
-            local_branch,
+            db_pool,
         })
     }
 
     fn create(owner_branch: Branch, locator: Locator, parent: Option<ParentContext>) -> Self {
         let branch_id = *owner_branch.id();
+        let db_pool = owner_branch.db_pool().clone();
         let blob = Blob::create(owner_branch.clone(), locator);
 
         Directory {
@@ -277,7 +287,7 @@ impl Directory {
                 parent,
                 open_directories: SubdirectoryCache::new(),
             })),
-            local_branch: owner_branch,
+            db_pool,
         }
     }
 
@@ -301,17 +311,10 @@ impl Directory {
 
     // Lock this directory for writing.
     //
-    // # Panics
-    //
-    // Panics if not in the local branch.
+    // The caller is responsible for ensurig this is the local branch.
     pub(crate) async fn write(&self) -> Writer<'_> {
         let inner = self.inner.write().await;
-        inner.assert_local(self.local_branch.id());
         Writer { outer: self, inner }
-    }
-
-    pub fn this_writer_id(&self) -> &PublicKey {
-        self.local_branch.id()
     }
 
     #[async_recursion]
@@ -338,7 +341,6 @@ impl Directory {
 
                         let file = File::open(
                             inner.blob.branch().clone(),
-                            self.local_branch.clone(),
                             Locator::head(file_data.blob_id),
                             parent_context,
                         )
@@ -383,7 +385,6 @@ impl Directory {
                             .open_directories
                             .open(
                                 inner.blob.branch().clone(),
-                                self.local_branch.clone(),
                                 Locator::head(data.blob_id),
                                 parent_context,
                             )
@@ -457,20 +458,20 @@ pub(crate) struct Writer<'a> {
 }
 
 impl Writer<'_> {
-    pub async fn create_file(&mut self, name: String) -> Result<File> {
-        let (locator, parent) = self.create_entry(EntryType::File, name).await?;
+    pub async fn create_file(&mut self, name: String, local_branch: &Branch) -> Result<File> {
+        let (locator, parent) = self.create_entry(EntryType::File, name, local_branch.id()).await?;
         Ok(File::create(
-            self.outer.local_branch.clone(),
+            local_branch.clone(),
             locator,
             parent,
         ))
     }
 
-    pub async fn create_directory(&mut self, name: String) -> Result<Directory> {
-        let (locator, parent) = self.create_entry(EntryType::Directory, name).await?;
+    pub async fn create_directory(&mut self, name: String, local_branch: &Branch) -> Result<Directory> {
+        let (locator, parent) = self.create_entry(EntryType::Directory, name, local_branch.id()).await?;
         self.inner
             .open_directories
-            .create(self.outer.local_branch.clone(), locator, parent)
+            .create(local_branch, locator, parent)
             .await
     }
 
@@ -478,21 +479,22 @@ impl Writer<'_> {
         &mut self,
         entry_type: EntryType,
         name: String,
+        this_writer_id: &PublicKey,
     ) -> Result<(Locator, ParentContext)> {
-        let author = *self.this_writer_id();
+        let author = this_writer_id;
 
         let blob_id = rand::random();
         let vv = self
             .inner
-            .entry_version_vector(&name, &author)
+            .entry_version_vector(&name, author)
             .cloned()
             .unwrap_or_default()
-            .incremented(author);
+            .incremented(*author);
 
         self.inner
             .insert_entry(
                 name.clone(),
-                author,
+                *author,
                 EntryData::new(entry_type, blob_id, vv),
                 None,
             )
@@ -503,7 +505,7 @@ impl Writer<'_> {
             *self.outer.branch_id(),
             self.outer.inner.clone(),
             name,
-            author,
+            *author,
         );
 
         Ok((locator, parent))
@@ -518,12 +520,16 @@ impl Writer<'_> {
             return Ok(());
         }
 
-        let mut tx = self.outer.local_branch.db_pool().begin().await?;
+        let mut tx = self.outer.db_pool().begin().await?;
 
         self.inner.flush(&mut tx).await?;
 
+        // Since the blob is dirty, it must be that it's been forked onto the local branch. That in
+        // turn means that self.inner.blob.branch().id() is the ID of the local writer.
+        let local_writer_id = *self.inner.blob.branch().id();
+
         self.inner
-            .modify_self_entry(tx, *self.outer.local_branch.id(), version_vector_override)
+            .modify_self_entry(tx, &local_writer_id, version_vector_override)
             .await?;
 
         Ok(())
@@ -537,6 +543,7 @@ impl Writer<'_> {
         // `keep` is set when we're moving the entry and only want to remove it from the entries
         // listed in `self` (as opposed to also remove its data).
         keep: Option<BlobId>,
+        local_branch: &Branch,
     ) -> Result<()> {
         // If we are removing a directory, ensure it's empty (recursive removal can still be
         // implemented at the upper layers).
@@ -560,7 +567,7 @@ impl Writer<'_> {
             None
         };
 
-        let this_writer_id = *self.this_writer_id();
+        let this_writer_id = *local_branch.id();
 
         let new_entry = if author == &this_writer_id {
             EntryData::Tombstone(EntryTombstoneData {
@@ -593,10 +600,6 @@ impl Writer<'_> {
         keep: Option<BlobId>,
     ) -> Result<()> {
         self.inner.insert_entry(name, author, entry, keep).await
-    }
-
-    pub fn this_writer_id(&self) -> &PublicKey {
-        self.outer.this_writer_id()
     }
 
     #[cfg(test)]
@@ -655,11 +658,6 @@ impl Reader<'_> {
         } else {
             self.branch().data().root().await.versions.clone()
         }
-    }
-
-    /// Is this directory in the local branch?
-    pub(crate) fn is_local(&self) -> bool {
-        self.branch().id() == self.outer.local_branch.id()
     }
 
     /// Locator of this directory

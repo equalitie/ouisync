@@ -40,6 +40,7 @@ mod writer_set;
 
 pub use self::{
     access_control::{AccessMode, AccessSecrets, MasterSecret, ShareToken},
+    branch::Branch,
     crypto::{cipher, sign, Cryptor, Password},
     db::Store,
     directory::{Directory, EntryRef, EntryType},
