@@ -102,8 +102,18 @@ impl<'q> Encode<'q, Sqlite> for &'q Store {
     }
 }
 
-/// Opens a connection to the specified database. Creates the database if it doesn't already exist.
+/// Opens a connection to the specified database. Fails if the db doesn't exist.
 pub(crate) async fn open(store: &Store) -> Result<Pool> {
+    let options = match store {
+        Store::File(path) => SqliteConnectOptions::new().filename(path),
+        Store::Memory => SqliteConnectOptions::from_str(MEMORY).expect("invalid db uri"),
+    };
+
+    create_pool(options).await
+}
+
+/// Opens a connection to the specified database. Creates the database if it doesn't already exist.
+pub(crate) async fn open_or_create(store: &Store) -> Result<Pool> {
     let options = match store {
         Store::File(path) => {
             if let Some(dir) = path.parent() {
@@ -119,6 +129,10 @@ pub(crate) async fn open(store: &Store) -> Result<Pool> {
         Store::Memory => SqliteConnectOptions::from_str(MEMORY).expect("invalid db uri"),
     };
 
+    create_pool(options).await
+}
+
+async fn create_pool(options: SqliteConnectOptions) -> Result<Pool> {
     // HACK: workaround for https://github.com/launchbadge/sqlx/issues/1467
     let options = options.serialized(true);
 

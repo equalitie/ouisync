@@ -54,7 +54,10 @@ pub(crate) async fn init(pool: &db::Pool) -> Result<(), Error> {
     Ok(())
 }
 
-async fn secret_to_key(secret: MasterSecret, db: impl db::Acquire<'_>) -> Result<SecretKey> {
+pub(crate) async fn secret_to_key(
+    secret: MasterSecret,
+    db: impl db::Acquire<'_>,
+) -> Result<SecretKey> {
     let key = match secret {
         MasterSecret::SecretKey(key) => key,
         MasterSecret::Password(pwd) => {
@@ -64,15 +67,6 @@ async fn secret_to_key(secret: MasterSecret, db: impl db::Acquire<'_>) -> Result
     };
 
     Ok(key)
-}
-
-async fn is_initialized(db: impl db::Executor<'_>) -> Result<bool> {
-    Ok(
-        sqlx::query("SELECT name FROM sqlite_master WHERE type='table' AND name='metadata_public'")
-            .fetch_optional(db)
-            .await?
-            .is_some(),
-    )
 }
 
 // -------------------------------------------------------------------
@@ -335,7 +329,7 @@ mod tests {
     use crate::db;
 
     async fn new_memory_db() -> db::Pool {
-        let pool = db::open(&db::Store::Memory).await.unwrap();
+        let pool = db::open_or_create(&db::Store::Memory).await.unwrap();
         init(&pool).await.unwrap();
         pool
     }

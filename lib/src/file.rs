@@ -248,7 +248,7 @@ mod test {
     }
 
     async fn setup() -> Branch {
-        let pool = repository::open_db(&db::Store::Memory).await.unwrap();
+        let pool = repository::create_db(&db::Store::Memory).await.unwrap();
         create_branch(pool).await
     }
 

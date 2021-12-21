@@ -230,7 +230,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn sanity() {
-        let pool = db::open(&db::Store::Memory).await.unwrap();
+        let pool = db::open_or_create(&db::Store::Memory).await.unwrap();
         let (mut store, alice) = Store::create_new(&pool).await.unwrap();
 
         let bob = Keypair::generate();

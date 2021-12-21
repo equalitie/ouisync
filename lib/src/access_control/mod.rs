@@ -3,7 +3,7 @@ mod share_token;
 pub use self::share_token::ShareToken;
 
 use crate::{
-    crypto::{cipher, sign},
+    crypto::{cipher, sign, Cryptor},
     error::Error,
     repository::RepositoryId,
 };
@@ -64,6 +64,20 @@ impl AccessSecrets {
             AccessMode::Write => {
                 let write_key = sign::SecretKey::try_from(input)?;
                 Ok(Self::Write(write_key.into()))
+            }
+        }
+    }
+
+    pub fn can_write(&self) -> bool {
+        matches!(self, Self::Write(_))
+    }
+
+    // TODO: temporary method, remove when the integration of AccessSecrets is done.
+    pub fn cryptor(&self) -> Cryptor {
+        match self {
+            Self::Blind { .. } => Cryptor::Null,
+            Self::Read { read_key, .. } | Self::Write(WriteSecrets { read_key, .. }) => {
+                Cryptor::ChaCha20Poly1305(read_key.clone())
             }
         }
     }

@@ -4,7 +4,7 @@ use super::{
 };
 use crate::{
     access_control::{AccessSecrets, ShareToken},
-    crypto::{Cryptor, Password},
+    crypto::Password,
     directory::EntryType,
     error::Error,
     network::Registration,
@@ -46,7 +46,6 @@ pub unsafe extern "C" fn repository_open(
             let repository = Repository::open(
                 &store.into_std_path_buf().into(),
                 this_replica_id,
-                Cryptor::Null,
                 master_password.map(MasterSecret::Password),
                 true,
             )
