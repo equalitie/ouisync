@@ -6,7 +6,11 @@ use crate::{
     access_control::AccessSecrets,
     block,
     branch::Branch,
-    crypto::{cipher, sign::PublicKey, Password},
+    crypto::{
+        cipher,
+        sign::{self, PublicKey},
+        Password,
+    },
     db,
     debug_printer::DebugPrinter,
     directory::{Directory, EntryType},
@@ -22,6 +26,7 @@ use crate::{
 use camino::Utf8Path;
 use futures_util::{future, stream::FuturesUnordered, StreamExt};
 use log::Level;
+use rand::{rngs::OsRng, Rng};
 use std::{collections::HashMap, iter, sync::Arc};
 use tokio::{select, sync::Mutex};
 
@@ -36,6 +41,31 @@ pub struct Repository {
 }
 
 impl Repository {
+    /// Creates a new repository.
+    pub async fn create(
+        store: &db::Store,
+        _this_replica_id: ReplicaId,
+        master_secret: MasterSecret,
+        access_secrets: AccessSecrets,
+        enable_merger: bool,
+    ) -> Result<Self> {
+        let pool = create_db(store).await?;
+        let mut tx = pool.begin().await?;
+
+        let master_key = metadata::secret_to_key(master_secret, &mut tx).await?;
+
+        // TODO: we should be storing the SK in the db, not the PK.
+        let this_writer_id: sign::SecretKey = OsRng.gen();
+        let this_writer_id = PublicKey::from(&this_writer_id);
+        metadata::set_writer_id(&this_writer_id, &master_key, &mut tx).await?;
+
+        metadata::set_access_secrets(&access_secrets, &master_key, &mut tx).await?;
+
+        tx.commit().await?;
+
+        Self::new(pool, this_writer_id, access_secrets, enable_merger).await
+    }
+
     /// Opens an existing repository.
     ///
     /// # Arguments
@@ -58,19 +88,28 @@ impl Repository {
 
         let this_writer_id = metadata::get_writer_id(&master_key, &pool).await?;
 
-        let secrets = if let Some(master_key) = master_key {
+        let access_secrets = if let Some(master_key) = master_key {
             metadata::get_access_secrets(&master_key, &pool).await?
         } else {
             let id = metadata::get_repository_id(&pool).await?;
             AccessSecrets::Blind { id }
         };
 
-        let enable_merger = enable_merger && secrets.can_write();
+        Self::new(pool, this_writer_id, access_secrets, enable_merger).await
+    }
+
+    async fn new(
+        pool: db::Pool,
+        this_writer_id: PublicKey,
+        access_secrets: AccessSecrets,
+        enable_merger: bool,
+    ) -> Result<Self> {
+        let enable_merger = enable_merger && access_secrets.can_write();
         let index = Index::load(pool, this_writer_id).await?;
 
         let shared = Arc::new(Shared {
             index,
-            secrets: Arc::new(secrets),
+            secrets: Arc::new(access_secrets),
             branches: Mutex::new(HashMap::new()),
         });
 

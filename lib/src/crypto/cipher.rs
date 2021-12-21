@@ -7,7 +7,7 @@ use super::password::PasswordSalt;
 use argon2::Argon2;
 use generic_array::{sequence::GenericSequence, typenum::Unsigned};
 use hex;
-use rand::{CryptoRng, Rng};
+use rand::{rngs::OsRng, CryptoRng, Rng};
 use sha3::{
     digest::{Digest, FixedOutput},
     Sha3_256,
@@ -72,7 +72,7 @@ impl SecretKey {
 
     /// Generate a random secret key using the default RNG.
     pub fn random() -> Self {
-        Self::generate(&mut rand::thread_rng())
+        Self::generate(&mut OsRng)
     }
 
     /// Derive a secret key from another secret key and a nonce.

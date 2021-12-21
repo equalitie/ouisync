@@ -1,5 +1,5 @@
 use super::*;
-use ouisync_lib::{cipher::SecretKey, Cryptor, MasterSecret, Repository, Store};
+use ouisync_lib::{cipher::SecretKey, MasterSecret, Repository, Store};
 use proptest::prelude::*;
 use rand::{self, distributions::Standard, rngs::StdRng, Rng, SeedableRng};
 use std::{collections::HashMap, ffi::OsString, fs::Metadata, future::Future, io::ErrorKind};
@@ -218,15 +218,9 @@ async fn setup() -> (MountGuard, TempDir) {
 
     let master_secret = Some(MasterSecret::SecretKey(SecretKey::random()));
 
-    let repo = Repository::open(
-        &Store::Memory,
-        rand::random(),
-        Cryptor::Null,
-        master_secret,
-        true,
-    )
-    .await
-    .unwrap();
+    let repo = Repository::open(&Store::Memory, rand::random(), master_secret, true)
+        .await
+        .unwrap();
     let mount_dir = tempdir().unwrap();
     let guard = super::mount(tokio::runtime::Handle::current(), repo, mount_dir.path()).unwrap();
 

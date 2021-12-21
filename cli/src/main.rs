@@ -3,7 +3,7 @@ mod virtual_filesystem;
 
 use self::options::{Named, Options};
 use anyhow::Result;
-use ouisync_lib::{config, replica_id, Cryptor, Network, Repository, ShareToken};
+use ouisync_lib::{config, replica_id, Network, Repository, ShareToken};
 use std::{collections::HashMap, io};
 use structopt::StructOpt;
 use tokio::{fs::File, io::AsyncWriteExt};
@@ -30,7 +30,6 @@ async fn main() -> Result<()> {
         let repo = Repository::open(
             &options.repository_store(name)?,
             this_writer_id,
-            Cryptor::Null,
             options.secret_for_repo(name),
             !options.disable_merger,
         )
@@ -53,7 +52,6 @@ async fn main() -> Result<()> {
             Repository::open(
                 &options.repository_store(name)?,
                 this_writer_id,
-                Cryptor::Null,
                 options.secret_for_repo(name),
                 false,
             )
@@ -93,7 +91,6 @@ async fn main() -> Result<()> {
             Repository::open(
                 &options.repository_store(name.as_ref())?,
                 this_writer_id,
-                Cryptor::Null,
                 options.secret_for_repo(name.as_ref()),
                 false,
             )

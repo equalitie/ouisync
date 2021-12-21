@@ -7,10 +7,11 @@ use crate::{
     error::Error,
     repository::RepositoryId,
 };
+use rand::{rngs::OsRng, CryptoRng, Rng};
 use std::{fmt, string::FromUtf8Error};
 use thiserror::Error;
 
-pub(crate) enum AccessSecrets {
+pub enum AccessSecrets {
     Blind {
         id: RepositoryId,
     },
@@ -22,13 +23,25 @@ pub(crate) enum AccessSecrets {
 }
 
 impl AccessSecrets {
-    pub fn id(&self) -> &RepositoryId {
+    /// Generates random access secrets with write access using the provided RNG.
+    pub fn generate_write<R: Rng + CryptoRng + ?Sized>(rng: &mut R) -> Self {
+        let write_key: sign::SecretKey = rng.gen();
+        let write_secrets = WriteSecrets::from(write_key);
+        Self::Write(write_secrets)
+    }
+
+    /// Generates random access secrets with write access using OsRng.
+    pub fn random_write() -> Self {
+        Self::generate_write(&mut OsRng)
+    }
+
+    pub(crate) fn id(&self) -> &RepositoryId {
         match self {
             Self::Blind { id } | Self::Read { id, .. } | Self::Write(WriteSecrets { id, .. }) => id,
         }
     }
 
-    pub fn encode(&self, out: &mut Vec<u8>) {
+    pub(crate) fn encode(&self, out: &mut Vec<u8>) {
         match self {
             Self::Blind { id } => {
                 out.push(AccessMode::Blind as u8);
@@ -46,7 +59,7 @@ impl AccessSecrets {
         }
     }
 
-    pub fn decode(mut input: &[u8]) -> Result<Self, DecodeError> {
+    pub(crate) fn decode(mut input: &[u8]) -> Result<Self, DecodeError> {
         let mode = *input.get(0).ok_or(DecodeError)?;
         let mode = AccessMode::try_from(mode)?;
         input = &input[1..];
@@ -68,12 +81,12 @@ impl AccessSecrets {
         }
     }
 
-    pub fn can_write(&self) -> bool {
+    pub(crate) fn can_write(&self) -> bool {
         matches!(self, Self::Write(_))
     }
 
     // TODO: temporary method, remove when the integration of AccessSecrets is done.
-    pub fn cryptor(&self) -> Cryptor {
+    pub(crate) fn cryptor(&self) -> Cryptor {
         match self {
             Self::Blind { .. } => Cryptor::Null,
             Self::Read { read_key, .. } | Self::Write(WriteSecrets { read_key, .. }) => {
@@ -93,10 +106,10 @@ impl fmt::Debug for AccessSecrets {
     }
 }
 
-pub(crate) struct WriteSecrets {
-    pub id: RepositoryId,
-    pub read_key: cipher::SecretKey,
-    pub write_key: sign::SecretKey,
+pub struct WriteSecrets {
+    pub(crate) id: RepositoryId,
+    pub(crate) read_key: cipher::SecretKey,
+    pub(crate) write_key: sign::SecretKey,
 }
 
 impl From<sign::SecretKey> for WriteSecrets {

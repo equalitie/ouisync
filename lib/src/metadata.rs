@@ -105,10 +105,10 @@ pub(crate) async fn set_repository_id(id: &RepositoryId, db: impl db::Executor<'
 // Writer Id
 // -------------------------------------------------------------------
 pub(crate) async fn get_writer_id(
-    key: &Option<SecretKey>,
+    master_key: &Option<SecretKey>,
     db: impl db::Executor<'_>,
 ) -> Result<sign::PublicKey> {
-    let id = match key {
+    let id = match master_key {
         Some(key) => get_secret(WRITER_ID, key, db).await?,
         None => OsRng.gen(),
     };
@@ -117,10 +117,10 @@ pub(crate) async fn get_writer_id(
 
 pub(crate) async fn set_writer_id(
     writer_id: &sign::PublicKey,
-    key: &SecretKey,
+    master_key: &SecretKey,
     db: impl db::Executor<'_>,
 ) -> Result<()> {
-    insert_secret(WRITER_ID, writer_id.as_ref(), key, db).await
+    insert_secret(WRITER_ID, writer_id.as_ref(), master_key, db).await
 }
 
 // -------------------------------------------------------------------
