@@ -39,7 +39,7 @@ mod versioned_file_name;
 mod writer_set;
 
 pub use self::{
-    access_control::{AccessSecrets, MasterSecret, ShareToken},
+    access_control::{AccessMode, AccessSecrets, MasterSecret, ShareToken},
     crypto::{cipher, sign, Cryptor, Password},
     db::Store,
     directory::{Directory, EntryRef, EntryType},

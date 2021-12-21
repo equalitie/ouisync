@@ -1,6 +1,8 @@
 use crate::APP_NAME;
 use anyhow::{format_err, Context, Error, Result};
-use ouisync_lib::{cipher::SecretKey, MasterSecret, NetworkOptions, Password, ShareToken, Store};
+use ouisync_lib::{
+    cipher::SecretKey, AccessMode, MasterSecret, NetworkOptions, Password, ShareToken, Store,
+};
 use std::{
     path::{Path, PathBuf},
     str::FromStr,
@@ -48,10 +50,10 @@ pub(crate) struct Options {
     #[structopt(long, value_name = "NAME:KEY")]
     pub key: Vec<Named<String>>,
 
-    /// Print share token for the named repository. Can be specified multiple times to share
-    /// multiple repositories.
-    #[structopt(long, value_name = "NAME")]
-    pub share: Vec<String>,
+    /// Print share token for the named repository with the specified access mode ("blind", "read"
+    /// or "write"). Can be specified multiple times to share multiple repositories.
+    #[structopt(long, value_name = "NAME:ACCESS_MODE")]
+    pub share: Vec<Named<AccessMode>>,
 
     /// Print the share tokens to a file instead of standard output (one token per line)
     #[structopt(long, value_name = "PATH")]

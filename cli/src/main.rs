@@ -51,9 +51,9 @@ async fn main() -> Result<()> {
         None
     };
 
-    for name in &options.share {
+    for Named { name, value } in &options.share {
         let secrets = if let Some(repo) = repos.get(name) {
-            repo.access_secrets().clone()
+            repo.access_secrets().clone().with_mode(*value)
         } else {
             Repository::open(
                 &options.repository_store(name)?,
@@ -64,6 +64,7 @@ async fn main() -> Result<()> {
             .await?
             .access_secrets()
             .clone()
+            .with_mode(*value)
         };
 
         let token = ShareToken::from(secrets).with_name(name);

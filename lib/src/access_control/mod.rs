@@ -9,7 +9,7 @@ use crate::{
     repository::RepositoryId,
 };
 use rand::{rngs::OsRng, CryptoRng, Rng};
-use std::{fmt, string::FromUtf8Error};
+use std::{fmt, str::FromStr, string::FromUtf8Error, sync::Arc};
 use thiserror::Error;
 
 pub enum AccessSecrets {
@@ -35,6 +35,25 @@ impl AccessSecrets {
     /// Generates random access secrets with write access using OsRng.
     pub fn random_write() -> Self {
         Self::generate_write(&mut OsRng)
+    }
+
+    /// Change the access mode of this secrets to the given mode. If the given mode is higher than
+    /// self, returns self unchanged.
+    pub fn with_mode(self: Arc<Self>, mode: AccessMode) -> Arc<Self> {
+        match (self.as_ref(), mode) {
+            (Self::Blind { .. }, AccessMode::Blind | AccessMode::Read | AccessMode::Write)
+            | (Self::Read { .. }, AccessMode::Read | AccessMode::Write)
+            | (Self::Write { .. }, AccessMode::Write) => self,
+            (Self::Read { id, .. } | Self::Write(WriteSecrets { id, .. }), AccessMode::Blind) => {
+                Arc::new(Self::Blind { id: *id })
+            }
+            (Self::Write(WriteSecrets { id, read_key, .. }), AccessMode::Read) => {
+                Arc::new(Self::Read {
+                    id: *id,
+                    read_key: read_key.clone(),
+                })
+            }
+        }
     }
 
     pub(crate) fn id(&self) -> &RepositoryId {
@@ -129,8 +148,9 @@ impl From<sign::SecretKey> for WriteSecrets {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
 #[repr(u8)]
-enum AccessMode {
+pub enum AccessMode {
     Blind = 0,
     Read = 1,
     Write = 2,
@@ -145,6 +165,19 @@ impl TryFrom<u8> for AccessMode {
             b if b == Self::Read as u8 => Ok(Self::Read),
             b if b == Self::Write as u8 => Ok(Self::Write),
             _ => Err(DecodeError),
+        }
+    }
+}
+
+impl FromStr for AccessMode {
+    type Err = AccessModeParseError;
+
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        match input.chars().next() {
+            Some('b' | 'B') => Ok(AccessMode::Blind),
+            Some('r' | 'R') => Ok(AccessMode::Read),
+            Some('w' | 'W') => Ok(AccessMode::Write),
+            _ => Err(AccessModeParseError),
         }
     }
 }
@@ -192,3 +225,7 @@ impl From<DecodeError> for Error {
         Self::MalformedData
     }
 }
+
+#[derive(Debug, Error)]
+#[error("failed to parse access mode")]
+pub struct AccessModeParseError;
