@@ -28,7 +28,8 @@ pub unsafe extern "C" fn directory_create(
 
         ctx.spawn(async move {
             let dir = repo.create_directory(path).await?;
-            dir.flush(None).await?;
+            let local_writer_id = repo.local_branch_id().await;
+            dir.flush(None, &local_writer_id).await?;
 
             Ok(())
         })
@@ -45,6 +46,7 @@ pub unsafe extern "C" fn directory_open(
     session::with(port, error, |ctx| {
         let path = utils::ptr_to_path_buf(path)?;
         let repo = repo.get();
+
 
         ctx.spawn(async move {
             let dir = repo.open_directory(path).await?;

@@ -163,6 +163,7 @@ impl Repository {
         branch_id: &PublicKey,
     ) -> Result<File> {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
+
         self.open_directory(parent)
             .await?
             .read()
@@ -179,25 +180,21 @@ impl Repository {
 
     /// Creates a new file at the given path.
     pub async fn create_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<File> {
-        self.local_branch()
-            .await
-            .ensure_file_exists(path.as_ref())
-            .await
+        let local_branch = self.local_branch().await;
+        local_branch.ensure_file_exists(path.as_ref()).await
     }
 
     /// Creates a new directory at the given path.
     pub async fn create_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<Directory> {
-        self.local_branch()
-            .await
-            .ensure_directory_exists(path.as_ref())
-            .await
+        let local_branch = self.local_branch().await;
+        local_branch.ensure_directory_exists(path.as_ref()).await
     }
 
     /// Removes the file or directory (must be empty) and flushes its parent directory.
     pub async fn remove_entry<P: AsRef<Utf8Path>>(&self, path: P) -> Result<()> {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::OperationNotSupported)?;
         let mut parent = self.open_directory(parent).await?;
-        parent.remove_entry(name).await?;
+        parent.remove_entry(name,).await?;
         parent.flush().await
     }
 
@@ -219,6 +216,8 @@ impl Repository {
         dst_dir_path: D,
         dst_name: &str,
     ) -> Result<()> {
+        let local_branch = self.local_branch().await;
+
         use std::borrow::Cow;
 
         let src_joint_dir = self.open_directory(src_dir_path).await?;
@@ -230,13 +229,13 @@ impl Repository {
                 let src_author = *entry.author();
 
                 let mut file = entry.open().await?;
-                file.fork().await?;
+                file.fork(&local_branch).await?;
 
                 (file.parent(), Cow::Owned(src_name), src_author)
             }
             JointEntryRef::Directory(entry) => {
                 let dir_to_move = entry
-                    .open(MissingVersionStrategy::Skip)
+                    .open(MissingVersionStrategy::Skip, &local_branch)
                     .await?
                     .merge()
                     .await?;
@@ -290,13 +289,14 @@ impl Repository {
                 &dst_dir,
                 dst_name,
                 dst_vv,
+                &local_branch,
             )
             .await?;
 
-        src_dir.flush(None).await?;
+        src_dir.flush(None, local_branch.id()).await?;
 
         if src_dir != dst_dir {
-            dst_dir.flush(None).await?;
+            dst_dir.flush(None, local_branch.id()).await?;
         }
 
         Ok(())
@@ -305,6 +305,11 @@ impl Repository {
     /// Returns the local branch
     pub async fn local_branch(&self) -> Branch {
         self.shared.local_branch().await
+    }
+
+    /// Returns the local branch ID
+    pub async fn local_branch_id(&self) -> PublicKey {
+        *self.shared.local_branch().await.id()
     }
 
     /// Return the branch with the specified id.
@@ -337,7 +342,7 @@ impl Repository {
                     error
                 })?
             } else {
-                match branch.open_root(self.local_branch().await).await {
+                match branch.open_root().await {
                     Ok(dir) => dir,
                     Err(Error::EntryNotFound | Error::BlockNotFound(_)) => {
                         // Some branch roots may not have been loaded across the network yet. We'll
@@ -358,7 +363,7 @@ impl Repository {
             dirs.push(dir);
         }
 
-        Ok(JointDirectory::new(dirs))
+        Ok(JointDirectory::new(self.local_branch().await, dirs))
     }
 
     pub(crate) fn index(&self) -> &Index {
@@ -514,14 +519,14 @@ impl Merger {
     }
 
     async fn spawn_task(&mut self, remote_id: PublicKey) {
+        let local = self.shared.local_branch().await;
+
         let remote = if let Some(remote) = self.shared.branch(&remote_id).await {
             remote
         } else {
             // branch removed in the meantime - ignore.
             return;
         };
-
-        let local = self.shared.local_branch().await;
 
         let handle = scoped_task::spawn(async move {
             if local.data().root().await.versions > remote.data().root().await.versions {
@@ -575,8 +580,8 @@ enum MergeState {
 }
 
 async fn merge_branches(local: Branch, remote: Branch) -> Result<()> {
-    let remote_root = remote.open_root(local.clone()).await?;
-    JointDirectory::new(iter::once(remote_root)).merge().await?;
+    let remote_root = remote.open_root().await?;
+    JointDirectory::new(local.clone(), iter::once(remote_root)).merge().await?;
 
     Ok(())
 }
@@ -636,11 +641,11 @@ mod tests {
         let local_root = local_branch.open_or_create_root().await.unwrap();
 
         let mut file = remote_root
-            .create_file("test.txt".to_owned())
+            .create_file("test.txt".to_owned(), &remote_branch)
             .await
             .unwrap();
-        file.write(b"hello").await.unwrap();
-        file.flush().await.unwrap();
+        file.write(b"hello", &remote_branch).await.unwrap();
+        file.flush(remote_branch.id()).await.unwrap();
 
         let mut rx = repo.subscribe();
 
@@ -684,10 +689,12 @@ mod tests {
         .await
         .unwrap();
 
+        let local_branch = repo.local_branch().await;
+
         // Create file
         let mut file = repo.create_file("test.txt").await.unwrap();
-        file.write(b"foo").await.unwrap();
-        file.flush().await.unwrap();
+        file.write(b"foo", &local_branch).await.unwrap();
+        file.flush(local_branch.id()).await.unwrap();
         drop(file);
 
         // Read it back and check the content
@@ -700,8 +707,8 @@ mod tests {
 
         // Create a file with the same name but different content
         let mut file = repo.create_file("test.txt").await.unwrap();
-        file.write(b"bar").await.unwrap();
-        file.flush().await.unwrap();
+        file.write(b"bar", &local_branch).await.unwrap();
+        file.flush(local_branch.id()).await.unwrap();
         drop(file);
 
         // Read it back and check the content
@@ -722,11 +729,13 @@ mod tests {
         .await
         .unwrap();
 
+        let local_branch = repo.local_branch().await;
+
         // Create dir
         repo.create_directory("test")
             .await
             .unwrap()
-            .flush(None)
+            .flush(None, local_branch.id())
             .await
             .unwrap();
 
@@ -741,7 +750,7 @@ mod tests {
         repo.create_directory("test")
             .await
             .unwrap()
-            .flush(None)
+            .flush(None, local_branch.id())
             .await
             .unwrap();
 
@@ -765,6 +774,7 @@ mod tests {
 
         let path = "/dir";
         let repo = Arc::new(repo);
+        let local_branch = repo.local_branch().await;
 
         let _watch_dog = scoped_task::spawn(async {
             sleep(Duration::from_millis(5 * 1000)).await;
@@ -779,7 +789,7 @@ mod tests {
             let repo = repo.clone();
             async move {
                 let dir = repo.create_directory(path).await.unwrap();
-                dir.flush(None).await.unwrap();
+                dir.flush(None, local_branch.id()).await.unwrap();
             }
         });
 
@@ -814,14 +824,15 @@ mod tests {
         .await
         .unwrap();
 
+        let local_branch = repo.local_branch().await;
         let mut file = repo.create_file("foo.txt").await.unwrap();
-        file.write(b"foo").await.unwrap();
-        file.flush().await.unwrap();
+        file.write(b"foo", &local_branch).await.unwrap();
+        file.flush(local_branch.id()).await.unwrap();
 
         let mut file = repo.open_file("foo.txt").await.unwrap();
         file.seek(SeekFrom::End(0)).await.unwrap();
-        file.write(b"bar").await.unwrap();
-        file.flush().await.unwrap();
+        file.write(b"bar", &local_branch).await.unwrap();
+        file.flush(local_branch.id()).await.unwrap();
 
         let mut file = repo.open_file("foo.txt").await.unwrap();
         let content = file.read_to_end().await.unwrap();

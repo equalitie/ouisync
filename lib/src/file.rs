@@ -1,6 +1,8 @@
 use crate::{
     blob::{self, Blob},
     branch::Branch,
+    crypto::sign::PublicKey,
+    db,
     directory::{Directory, ParentContext},
     error::Result,
     locator::Locator,
@@ -13,34 +15,35 @@ use tokio::sync::Mutex;
 pub struct File {
     blob: Blob,
     parent: ParentContext,
-    local_branch: Branch,
+    pool: db::Pool,
 }
 
 impl File {
     /// Opens an existing file.
     pub(crate) async fn open(
         owner_branch: Branch,
-        local_branch: Branch,
         locator: Locator,
         parent: ParentContext,
     ) -> Result<Self> {
+        let pool = owner_branch.db_pool().clone();
+
         Ok(Self {
             blob: Blob::open(owner_branch, locator).await?,
             parent,
-            local_branch,
+            pool,
         })
     }
 
     /// Opens an existing file. Reuse the already opened blob::Core
     pub(crate) async fn reopen(
         blob_core: Arc<Mutex<blob::Core>>,
-        local_branch: Branch,
+        pool: db::Pool,
         parent: ParentContext,
     ) -> Result<Self> {
         Ok(Self {
             blob: Blob::reopen(blob_core).await?,
             parent,
-            local_branch,
+            pool
         })
     }
 
@@ -49,7 +52,7 @@ impl File {
         Self {
             blob: Blob::create(branch.clone(), locator),
             parent,
-            local_branch: branch,
+            pool: branch.db_pool().clone(),
         }
     }
 
@@ -58,7 +61,7 @@ impl File {
     }
 
     pub fn parent(&self) -> Directory {
-        self.parent.directory(self.local_branch.clone())
+        self.parent.directory(self.pool.clone())
     }
 
     /// Length of this file in bytes.
@@ -79,8 +82,8 @@ impl File {
     }
 
     /// Writes `buffer` into this file.
-    pub async fn write(&mut self, buffer: &[u8]) -> Result<()> {
-        self.fork().await?;
+    pub async fn write(&mut self, buffer: &[u8], local_branch: &Branch) -> Result<()> {
+        self.fork(local_branch).await?;
         self.blob.write(buffer).await
     }
 
@@ -90,14 +93,14 @@ impl File {
     }
 
     /// Truncates the file to the given length.
-    pub async fn truncate(&mut self, len: u64) -> Result<()> {
-        self.fork().await?;
+    pub async fn truncate(&mut self, len: u64, local_branch: &Branch) -> Result<()> {
+        self.fork(local_branch).await?;
         self.blob.truncate(len).await
     }
 
     /// Flushes this file, ensuring that all intermediately buffered contents gets written to the
     /// store.
-    pub async fn flush(&mut self) -> Result<()> {
+    pub async fn flush(&mut self, local_writer_id: &PublicKey) -> Result<()> {
         if !self.blob.is_dirty().await {
             return Ok(());
         }
@@ -106,7 +109,7 @@ impl File {
 
         self.blob.flush_in_transaction(&mut tx).await?;
         self.parent
-            .modify_entry(tx, *self.local_branch.id(), None)
+            .modify_entry(tx, local_writer_id, None)
             .await?;
 
         Ok(())
@@ -118,17 +121,17 @@ impl File {
 
     /// Forks this file into the local branch. Ensure all its ancestor directories exist and live
     /// in the local branch as well. Should be called before any mutable operation.
-    pub async fn fork(&mut self) -> Result<()> {
-        if self.blob.branch().id() == self.local_branch.id() {
+    pub async fn fork(&mut self, local_branch: &Branch) -> Result<()> {
+        if self.blob.branch().id() == local_branch.id() {
             // File already lives in the local branch. We assume the ancestor directories have been
             // already created as well so there is nothing else to do.
             return Ok(());
         }
 
         // TODO: this should be atomic
-        let blob_id = self.parent.fork_file(self.local_branch.clone()).await?;
+        let blob_id = self.parent.fork_file(local_branch).await?;
         self.blob
-            .fork(self.local_branch.clone(), Locator::head(blob_id))
+            .fork(local_branch.clone(), Locator::head(blob_id))
             .await
     }
 
@@ -157,12 +160,12 @@ mod test {
         // Create a file owned by branch 0
         let mut file0 = branch0.ensure_file_exists("/dog.jpg".into()).await.unwrap();
 
-        file0.write(b"small").await.unwrap();
-        file0.flush().await.unwrap();
+        file0.write(b"small", &branch0).await.unwrap();
+        file0.flush(branch0.id()).await.unwrap();
 
         // Write to the file by branch 1
         let mut file1 = branch0
-            .open_root(branch1.clone())
+            .open_root()
             .await
             .unwrap()
             .read()
@@ -176,12 +179,12 @@ mod test {
             .unwrap();
 
         // This will create a fork on branch 1
-        file1.write(b"large").await.unwrap();
-        file1.flush().await.unwrap();
+        file1.write(b"large", &branch1).await.unwrap();
+        file1.flush(branch1.id()).await.unwrap();
 
         // Reopen orig file and verify it's unchanged
         let mut file = branch0
-            .open_root(branch0.clone())
+            .open_root()
             .await
             .unwrap()
             .read()
@@ -198,7 +201,7 @@ mod test {
 
         // Reopen forked file and verify it's modified
         let mut file = branch1
-            .open_root(branch1.clone())
+            .open_root()
             .await
             .unwrap()
             .read()
@@ -223,10 +226,10 @@ mod test {
         let branch1 = create_branch(branch0.db_pool().clone()).await;
 
         let mut file0 = branch0.ensure_file_exists("/pig.jpg".into()).await.unwrap();
-        file0.flush().await.unwrap();
+        file0.flush(branch0.id()).await.unwrap();
 
         let mut file1 = branch0
-            .open_root(branch1.clone())
+            .open_root()
             .await
             .unwrap()
             .read()
@@ -239,11 +242,11 @@ mod test {
             .await
             .unwrap();
 
-        file1.fork().await.unwrap();
+        file1.fork(&branch1).await.unwrap();
 
         for _ in 0..2 {
-            file1.write(b"oink").await.unwrap();
-            file1.flush().await.unwrap();
+            file1.write(b"oink", &branch1).await.unwrap();
+            file1.flush(branch1.id()).await.unwrap();
         }
     }
 
@@ -266,7 +269,6 @@ impl fmt::Debug for File {
         f.debug_struct("File")
             .field("blob_id", &self.blob.blob_id())
             .field("branch", &self.blob.branch().id())
-            .field("local_branch", &self.local_branch.id())
             .finish()
     }
 }

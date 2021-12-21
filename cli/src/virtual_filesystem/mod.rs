@@ -17,6 +17,7 @@ use fuser::{
     ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow,
 };
 use ouisync_lib::{
+    Branch,
     debug_printer::DebugPrinter, EntryType, Error, File, JointDirectory, JointEntry, JointEntryRef,
     MissingVersionStrategy, Repository, Result,
 };
@@ -377,6 +378,7 @@ impl Inner {
 
         log::debug!("lookup {}", self.inodes.path_display(parent, Some(name)));
 
+        let local_branch = self.repository.local_branch().await;
         let parent_path = self.inodes.get(parent).calculate_path();
         let parent_dir = self.repository.open_directory(parent_path).await?;
         let parent_dir = parent_dir.read().await;
@@ -389,7 +391,7 @@ impl Inner {
             ),
             JointEntryRef::Directory(entry) => (
                 entry
-                    .open(MissingVersionStrategy::Skip)
+                    .open(MissingVersionStrategy::Skip, &local_branch)
                     .await?
                     .read()
                     .await
@@ -429,6 +431,8 @@ impl Inner {
         bkuptime: Option<SystemTime>,
         flags: Option<u32>,
     ) -> Result<FileAttr> {
+        let local_branch = self.require_local_branch().await?;
+
         let mut scope = FormatOptionScope::new(", ");
 
         log::debug!(
@@ -476,7 +480,7 @@ impl Inner {
         };
 
         if let Some(size) = size {
-            file.truncate(size).await?;
+            file.truncate(size, &local_branch).await?;
         }
 
         Ok(make_file_attr(inode, EntryType::File, file.len().await))
@@ -605,9 +609,12 @@ impl Inner {
             umask
         );
 
+        let local_branch = self.require_local_branch().await?;
+
         let path = self.inodes.get(parent).calculate_path().join(name);
         let dir = self.repository.create_directory(path).await?;
-        dir.flush(None).await?;
+
+        dir.flush(None, local_branch.id()).await?;
 
         let inode = self
             .inodes
@@ -657,10 +664,11 @@ impl Inner {
             flags
         );
 
+        let local_branch = self.require_local_branch().await?;
         let path = self.inodes.get(parent).calculate_path().join(name);
         let mut file = self.repository.create_file(&path).await?;
 
-        file.flush().await?;
+        file.flush(local_branch.id()).await?;
 
         let branch_id = *file.branch().id();
         let entry = JointEntry::File(file);
@@ -706,11 +714,12 @@ impl Inner {
         );
 
         // TODO: what about `flags`?
+        let local_branch = self.require_local_branch().await?;
 
         let file = self.entries.get_file_mut(handle)?;
 
         if flush {
-            file.flush().await?;
+            file.flush(local_branch.id()).await?;
         }
 
         self.entries.remove(handle);
@@ -769,9 +778,10 @@ impl Inner {
 
         let offset: u64 = offset.try_into().map_err(|_| Error::OffsetOutOfRange)?;
 
+        let local_branch = self.require_local_branch().await?;
         let file = self.entries.get_file_mut(handle)?;
         file.seek(SeekFrom::Start(offset)).await?;
-        file.write(data).await?;
+        file.write(data, &local_branch).await?;
 
         Ok(data.len().try_into().unwrap_or(u32::MAX))
     }
@@ -782,7 +792,8 @@ impl Inner {
             self.inodes.path_display(inode, None),
             handle
         );
-        self.entries.get_file_mut(handle)?.flush().await
+        let local_branch = self.require_local_branch().await?;
+        self.entries.get_file_mut(handle)?.flush(local_branch.id()).await
     }
 
     async fn fsync(&mut self, inode: Inode, handle: FileHandle, datasync: bool) -> Result<()> {
@@ -794,7 +805,8 @@ impl Inner {
         );
 
         // TODO: what about `datasync`?
-        self.entries.get_file_mut(handle)?.flush().await
+        let local_branch = self.require_local_branch().await?;
+        self.entries.get_file_mut(handle)?.flush(local_branch.id()).await
     }
 
     async fn unlink(&mut self, parent: Inode, name: &OsStr) -> Result<()> {
@@ -866,6 +878,10 @@ impl Inner {
         }
     }
 
+    async fn require_local_branch(&self) -> Result<Branch> {
+        Ok(self.repository.local_branch().await)//.ok_or(Error::PermissionsDenied)
+    }
+
     // For debugging, use when needed
     #[allow(dead_code)]
     async fn debug_print(&self, print: DebugPrinter) {
@@ -927,6 +943,7 @@ fn to_error_code(error: &Error) -> libc::c_int {
         Error::EntryIsDirectory => libc::EISDIR,
         Error::NonUtf8FileName => libc::EINVAL,
         Error::OffsetOutOfRange => libc::EINVAL,
+        Error::PermissionsDenied => libc::EACCES,
         Error::DirectoryNotEmpty => libc::ENOTEMPTY,
         Error::OperationNotSupported => libc::ENOSYS,
     }

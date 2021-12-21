@@ -11,18 +11,18 @@ async fn create_and_list_entries() {
     // Create the root directory and put some file in it.
     let dir = branch.open_or_create_root().await.unwrap();
 
-    let mut file_dog = dir.create_file("dog.txt".into()).await.unwrap();
-    file_dog.write(b"woof").await.unwrap();
-    file_dog.flush().await.unwrap();
+    let mut file_dog = dir.create_file("dog.txt".into(), &branch).await.unwrap();
+    file_dog.write(b"woof", &branch).await.unwrap();
+    file_dog.flush(branch.id()).await.unwrap();
 
-    let mut file_cat = dir.create_file("cat.txt".into()).await.unwrap();
-    file_cat.write(b"meow").await.unwrap();
-    file_cat.flush().await.unwrap();
+    let mut file_cat = dir.create_file("cat.txt".into(), &branch).await.unwrap();
+    file_cat.write(b"meow", &branch).await.unwrap();
+    file_cat.flush(branch.id()).await.unwrap();
 
-    dir.flush(None).await.unwrap();
+    dir.flush(None, branch.id()).await.unwrap();
 
     // Reopen the dir and try to read the files.
-    let dir = branch.open_root(branch.clone()).await.unwrap();
+    let dir = branch.open_root().await.unwrap();
     let dir = dir.read().await;
 
     let expected_names: BTreeSet<_> = vec!["dog.txt", "cat.txt"].into_iter().collect();
@@ -52,15 +52,15 @@ async fn add_entry_to_existing_directory() {
 
     // Create empty directory
     let dir = branch.open_or_create_root().await.unwrap();
-    dir.flush(None).await.unwrap();
+    dir.flush(None, branch.id()).await.unwrap();
 
     // Reopen it and add a file to it.
-    let dir = branch.open_root(branch.clone()).await.unwrap();
-    dir.create_file("none.txt".into()).await.unwrap();
-    dir.flush(None).await.unwrap();
+    let dir = branch.open_root().await.unwrap();
+    dir.create_file("none.txt".into(), &branch).await.unwrap();
+    dir.flush(None, branch.id()).await.unwrap();
 
     // Reopen it again and check the file is still there.
-    let dir = branch.open_root(branch.clone()).await.unwrap();
+    let dir = branch.open_root().await.unwrap();
     assert!(dir.read().await.lookup("none.txt").is_ok());
 }
 
@@ -72,22 +72,22 @@ async fn remove_file() {
 
     // Create a directory with a single file.
     let parent_dir = branch.open_or_create_root().await.unwrap();
-    let mut file = parent_dir.create_file(name.into()).await.unwrap();
-    file.flush().await.unwrap();
+    let mut file = parent_dir.create_file(name.into(), &branch).await.unwrap();
+    file.flush(branch.id()).await.unwrap();
 
     let file_vv = file.version_vector().await;
     let file_locator = *file.locator();
 
     // Reopen and remove the file
-    let parent_dir = branch.open_root(branch.clone()).await.unwrap();
+    let parent_dir = branch.open_root().await.unwrap();
     parent_dir
-        .remove_entry(name, branch.id(), file_vv)
+        .remove_entry(name, branch.id(), file_vv, &branch)
         .await
         .unwrap();
-    parent_dir.flush(None).await.unwrap();
+    parent_dir.flush(None, branch.id()).await.unwrap();
 
     // Reopen again and check the file entry was removed.
-    let parent_dir = branch.open_root(branch.clone()).await.unwrap();
+    let parent_dir = branch.open_root().await.unwrap();
     let parent_dir = parent_dir.read().await;
 
     match parent_dir.lookup(name) {
@@ -111,9 +111,9 @@ async fn remove_file() {
 
     // Try re-creating the file again
     drop(parent_dir); // Drop the previous handle to avoid deadlock.
-    let parent_dir = branch.open_root(branch.clone()).await.unwrap();
-    let mut file = parent_dir.create_file(name.into()).await.unwrap();
-    file.flush().await.unwrap();
+    let parent_dir = branch.open_root().await.unwrap();
+    let mut file = parent_dir.create_file(name.into(), &branch).await.unwrap();
+    file.flush(branch.id()).await.unwrap();
 }
 
 // Rename a file without moving it to another directory.
@@ -127,14 +127,14 @@ async fn rename_file() {
 
     // Create a directory with a single file.
     let parent_dir = branch.open_or_create_root().await.unwrap();
-    let mut file = parent_dir.create_file(src_name.into()).await.unwrap();
-    file.write(content).await.unwrap();
-    file.flush().await.unwrap();
+    let mut file = parent_dir.create_file(src_name.into(), &branch).await.unwrap();
+    file.write(content, &branch).await.unwrap();
+    file.flush(branch.id()).await.unwrap();
 
     let file_locator = *file.locator();
 
     // Reopen and move the file
-    let parent_dir = branch.open_root(branch.clone()).await.unwrap();
+    let parent_dir = branch.open_root().await.unwrap();
 
     let entry_to_move = parent_dir
         .read()
@@ -151,14 +151,15 @@ async fn rename_file() {
             &parent_dir,
             dst_name,
             VersionVector::first(*branch.id()),
+            &branch,
         )
         .await
         .unwrap();
 
-    parent_dir.flush(None).await.unwrap();
+    parent_dir.flush(None, branch.id()).await.unwrap();
 
     // Reopen again and check the file entry was removed.
-    let parent_dir = branch.open_root(branch.clone()).await.unwrap();
+    let parent_dir = branch.open_root().await.unwrap();
     let parent_dir = parent_dir.read().await;
 
     let mut dst_file = parent_dir
@@ -187,11 +188,11 @@ async fn move_file_within_branch() {
 
     // Create a directory with a single file.
     let root_dir = branch.open_or_create_root().await.unwrap();
-    let aux_dir = root_dir.create_directory("aux".into()).await.unwrap();
+    let aux_dir = root_dir.create_directory("aux".into(), &branch).await.unwrap();
 
-    let mut file = root_dir.create_file(file_name.into()).await.unwrap();
-    file.write(content).await.unwrap();
-    file.flush().await.unwrap();
+    let mut file = root_dir.create_file(file_name.into(), &branch).await.unwrap();
+    file.write(content, &branch).await.unwrap();
+    file.flush(branch.id()).await.unwrap();
 
     let file_locator = *file.locator();
 
@@ -214,12 +215,13 @@ async fn move_file_within_branch() {
             &aux_dir,
             file_name,
             VersionVector::first(*branch.id()),
+            &branch,
         )
         .await
         .unwrap();
 
     let mut file = branch
-        .open_root(branch.clone())
+        .open_root()
         .await
         .unwrap()
         .open_directory("aux", branch.id())
@@ -261,6 +263,7 @@ async fn move_file_within_branch() {
             &root_dir,
             file_name,
             tombstone_vv.incremented(*branch.id()),
+            &branch,
         )
         .await
         .unwrap();
@@ -288,15 +291,15 @@ async fn move_non_empty_directory() {
 
     // Create a directory with a single file.
     let root_dir = branch.open_or_create_root().await.unwrap();
-    let dir = root_dir.create_directory(dir_name.into()).await.unwrap();
+    let dir = root_dir.create_directory(dir_name.into(), &branch).await.unwrap();
 
-    let mut file = dir.create_file(file_name.into()).await.unwrap();
-    file.write(content).await.unwrap();
-    file.flush().await.unwrap();
+    let mut file = dir.create_file(file_name.into(), &branch).await.unwrap();
+    file.write(content, &branch).await.unwrap();
+    file.flush(branch.id()).await.unwrap();
     let file_locator = *file.locator();
 
     let dst_dir = root_dir
-        .create_directory(dst_dir_name.into())
+        .create_directory(dst_dir_name.into(), &branch)
         .await
         .unwrap();
 
@@ -315,12 +318,13 @@ async fn move_non_empty_directory() {
             &dst_dir,
             dir_name,
             VersionVector::first(*branch.id()),
+            &branch,
         )
         .await
         .unwrap();
 
     let file = branch
-        .open_root(branch.clone())
+        .open_root()
         .await
         .unwrap()
         .open_directory(dst_dir_name, branch.id())
@@ -344,8 +348,8 @@ async fn remove_subdirectory() {
 
     // Create a directory with a single subdirectory.
     let parent_dir = branch.open_or_create_root().await.unwrap();
-    let dir = parent_dir.create_directory(name.into()).await.unwrap();
-    dir.flush(None).await.unwrap();
+    let dir = parent_dir.create_directory(name.into(), &branch).await.unwrap();
+    dir.flush(None, branch.id()).await.unwrap();
 
     let (dir_locator, dir_vv) = {
         let reader = dir.read().await;
@@ -353,15 +357,15 @@ async fn remove_subdirectory() {
     };
 
     // Reopen and remove the subdirectory
-    let parent_dir = branch.open_root(branch.clone()).await.unwrap();
+    let parent_dir = branch.open_root().await.unwrap();
     parent_dir
-        .remove_entry(name, branch.id(), dir_vv)
+        .remove_entry(name, branch.id(), dir_vv, &branch)
         .await
         .unwrap();
-    parent_dir.flush(None).await.unwrap();
+    parent_dir.flush(None, branch.id()).await.unwrap();
 
     // Reopen again and check the subdirectory entry was removed.
-    let parent_dir = branch.open_root(branch.clone()).await.unwrap();
+    let parent_dir = branch.open_root().await.unwrap();
     let parent_dir = parent_dir.read().await;
     assert_matches!(
         parent_dir.lookup(name).unwrap().next(),
@@ -382,30 +386,30 @@ async fn fork() {
 
     // Create a nested directory by branch 0
     let root0 = branches[0].open_or_create_root().await.unwrap();
-    root0.flush(None).await.unwrap();
+    root0.flush(None, branches[0].id()).await.unwrap();
 
-    let dir0 = root0.create_directory("dir".into()).await.unwrap();
-    dir0.flush(None).await.unwrap();
+    let dir0 = root0.create_directory("dir".into(), &branches[0]).await.unwrap();
+    dir0.flush(None, branches[0].id()).await.unwrap();
 
     // Fork it by branch 1 and modify it
     let dir0 = branches[0]
-        .open_root(branches[1].clone())
+        .open_root()
         .await
         .unwrap()
         .open_directory("dir", branches[0].id())
         .await
         .unwrap();
 
-    let dir1 = dir0.fork().await.unwrap();
+    let dir1 = dir0.fork(&branches[1]).await.unwrap();
 
-    dir1.create_file("dog.jpg".into()).await.unwrap();
-    dir1.flush(None).await.unwrap();
+    dir1.create_file("dog.jpg".into(), &branches[1]).await.unwrap();
+    dir1.flush(None, branches[1].id()).await.unwrap();
 
     assert_eq!(dir1.read().await.branch().id(), branches[1].id());
 
     // Reopen orig dir and verify it's unchanged
     let dir = branches[0]
-        .open_root(branches[0].clone())
+        .open_root()
         .await
         .unwrap()
         .open_directory("dir", branches[0].id())
@@ -416,7 +420,7 @@ async fn fork() {
 
     // Reopen forked dir and verify it contains the new file
     let dir = branches[1]
-        .open_root(branches[1].clone())
+        .open_root()
         .await
         .unwrap()
         .open_directory("dir", branches[1].id())
@@ -429,7 +433,7 @@ async fn fork() {
     );
 
     // Verify the root dir got forked as well
-    branches[1].open_root(branches[1].clone()).await.unwrap();
+    branches[1].open_root().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -439,10 +443,10 @@ async fn fork_over_tombstone() {
     // Create a directory in branch 0 and delete it.
     let root0 = branches[0].open_or_create_root().await.unwrap();
     root0
-        .create_directory("dir".into())
+        .create_directory("dir".into(), &branches[0])
         .await
         .unwrap()
-        .flush(None)
+        .flush(None, branches[0].id())
         .await
         .unwrap();
     let vv = root0
@@ -453,28 +457,28 @@ async fn fork_over_tombstone() {
         .version_vector()
         .clone();
     root0
-        .remove_entry("dir", branches[0].id(), vv)
+        .remove_entry("dir", branches[0].id(), vv, &branches[0])
         .await
         .unwrap();
 
     // Create a directory with the same name in branch 1.
     let root1 = branches[1].open_or_create_root().await.unwrap();
     root1
-        .create_directory("dir".into())
+        .create_directory("dir".into(), &branches[1])
         .await
         .unwrap()
-        .flush(None)
+        .flush(None, branches[1].id())
         .await
         .unwrap();
 
     // Open it by branch 0 and fork it.
-    let root1_on_0 = branches[1].open_root(branches[0].clone()).await.unwrap();
+    let root1_on_0 = branches[1].open_root().await.unwrap();
     let dir1 = root1_on_0
         .open_directory("dir", branches[1].id())
         .await
         .unwrap();
 
-    dir1.fork().await.unwrap().flush(None).await.unwrap();
+    dir1.fork(&branches[0]).await.unwrap().flush(None, branches[0].id()).await.unwrap();
 
     // Check the forked dir now exists in branch 0.
     assert_matches!(
@@ -491,7 +495,7 @@ async fn modify_directory_concurrently() {
     // Obtain two instances of the same directory, create a new file in one of them and verify
     // the file immediately exists in the other one as well.
 
-    let dir0 = root.create_directory("dir".to_owned()).await.unwrap();
+    let dir0 = root.create_directory("dir".to_owned(), &branch).await.unwrap();
     let dir1 = root
         .read()
         .await
@@ -505,9 +509,9 @@ async fn modify_directory_concurrently() {
         .await
         .unwrap();
 
-    let mut file0 = dir0.create_file("file.txt".to_owned()).await.unwrap();
-    file0.write(b"hello").await.unwrap();
-    file0.flush().await.unwrap();
+    let mut file0 = dir0.create_file("file.txt".to_owned(), &branch).await.unwrap();
+    file0.write(b"hello", &branch).await.unwrap();
+    file0.flush(branch.id()).await.unwrap();
 
     let mut file1 = dir1
         .read()
@@ -606,10 +610,10 @@ async fn remove_concurrent_file_version() {
         {
             let mut writer = root.write().await;
             writer
-                .remove_entry(name, author_to_remove, vv_to_remove.clone(), None)
+                .remove_entry(name, author_to_remove, vv_to_remove.clone(), None, &branches[0])
                 .await
                 .unwrap();
-            writer.flush(None).await.unwrap();
+            writer.flush(None, branches[0].id()).await.unwrap();
         }
 
         // Verify the removed version is gone but the other version remains
