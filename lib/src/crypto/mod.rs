@@ -46,7 +46,7 @@ impl Cryptor {
     ) -> Result<AuthTag, aead::Error> {
         match self {
             Self::ChaCha20Poly1305(key) => {
-                let cipher = ChaCha20Poly1305::new(key.as_array());
+                let cipher = ChaCha20Poly1305::new(key.as_ref().into());
                 cipher.encrypt_in_place_detached(&nonce.into(), aad, buffer)
             }
             Self::Null => Ok(AuthTag::default()),
@@ -62,7 +62,7 @@ impl Cryptor {
     ) -> Result<(), aead::Error> {
         match self {
             Self::ChaCha20Poly1305(key) => {
-                let cipher = ChaCha20Poly1305::new(key.as_array());
+                let cipher = ChaCha20Poly1305::new(key.as_ref().into());
                 cipher.decrypt_in_place_detached(&nonce.into(), aad, buffer, auth_tag)
             }
             Self::Null => Ok(()),
@@ -72,7 +72,7 @@ impl Cryptor {
     pub fn derive_subkey(&self, nonce: &[u8]) -> Self {
         match self {
             Self::ChaCha20Poly1305(key) => {
-                Self::ChaCha20Poly1305(SecretKey::derive_from_key(key.as_array().as_ref(), nonce))
+                Self::ChaCha20Poly1305(SecretKey::derive_from_key(key.as_ref(), nonce))
             }
             Self::Null => Self::Null,
         }

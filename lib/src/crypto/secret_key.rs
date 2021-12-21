@@ -9,7 +9,10 @@ use sha3::{
 };
 use std::{fmt, sync::Arc};
 use thiserror::Error;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
+
+const SECRET_KEY_SIZE: usize =
+    <<chacha20poly1305::Key as GenericSequence<_>>::Length as Unsigned>::USIZE;
 
 /// Symmetric encryption/decryption secret key.
 ///
@@ -21,11 +24,11 @@ use zeroize::Zeroize;
 /// scrambled (overwritten with zeros) when the key is dropped to make sure it does not stay in
 /// the memory past its lifetime.
 #[derive(Clone)]
-pub struct SecretKey(Arc<Inner>);
+pub struct SecretKey(Arc<Zeroizing<[u8; SECRET_KEY_SIZE]>>);
 
 impl SecretKey {
     /// Size of the key in bytes.
-    pub const SIZE: usize = <<Array as GenericSequence<_>>::Length as Unsigned>::USIZE;
+    pub const SIZE: usize = SECRET_KEY_SIZE;
 
     /// Parse secret key from hexadecimal string of size 2*SIZE.
     pub fn parse_hex(hex_str: &str) -> Result<Self, hex::FromHexError> {
@@ -33,7 +36,7 @@ impl SecretKey {
         hex::decode_to_slice(&hex_str, &mut bytes)?;
 
         let mut key = Self::zero();
-        key.as_array_mut().copy_from_slice(&bytes);
+        key.as_mut().copy_from_slice(&bytes);
 
         bytes.zeroize();
 
@@ -49,7 +52,7 @@ impl SecretKey {
         // Create all-zero array initially, then fill it with random bytes in place to avoid moving
         // the array which could leave the sensitive data in memory.
         let mut key = Self::zero();
-        rng.fill(key.as_array_mut().as_mut_slice());
+        rng.fill(key.as_mut());
         key
     }
 
@@ -66,7 +69,7 @@ impl SecretKey {
         let mut hasher = Sha3_256::new();
         hasher.update(master_key);
         hasher.update(nonce);
-        hasher.finalize_into(sub_key.as_array_mut());
+        hasher.finalize_into(sub_key.as_mut().into());
 
         sub_key
     }
@@ -78,27 +81,19 @@ impl SecretKey {
         // does is whether the password isn't too long, but that would have to be more than
         // 0xffffffff so the `.expect` shouldn't be an issue.
         Argon2::default()
-            .hash_password_into(user_password.as_ref(), salt, result.as_array_mut())
+            .hash_password_into(user_password.as_ref(), salt, result.as_mut())
             .expect("failed to hash password");
         result
     }
 
-    /// Returns reference to the underlying array.
-    ///
-    /// Note this function is somewhat dangerous because if used carelessly the underlying
-    /// sensitive data can be copied or revealed.
-    pub fn as_array(&self) -> &Array {
-        &self.0 .0
-    }
-
     // Use this only for initialization.
     fn zero() -> Self {
-        Self(Arc::new(Inner(Array::default())))
+        Self(Arc::new(Zeroizing::new([0; Self::SIZE])))
     }
 
     // Use this only for initialization. Panics if this key has more than one clone.
-    fn as_array_mut(&mut self) -> &mut Array {
-        &mut Arc::get_mut(&mut self.0).unwrap().0
+    fn as_mut(&mut self) -> &mut [u8] {
+        &mut **Arc::get_mut(&mut self.0).unwrap()
     }
 }
 
@@ -108,11 +103,19 @@ impl TryFrom<&[u8]> for SecretKey {
     fn try_from(slice: &[u8]) -> Result<Self, Self::Error> {
         if slice.len() >= Self::SIZE {
             let mut key = Self::zero();
-            key.as_array_mut().copy_from_slice(slice);
+            key.as_mut().copy_from_slice(slice);
             Ok(key)
         } else {
             Err(SecretKeyLengthError)
         }
+    }
+}
+
+/// Note this trait is somewhat dangerous because if used carelessly the underlying sensitive data
+/// can be copied or revealed.
+impl AsRef<[u8]> for SecretKey {
+    fn as_ref(&self) -> &[u8] {
+        &**self.0
     }
 }
 
@@ -121,16 +124,6 @@ impl fmt::Debug for SecretKey {
         write!(f, "SecretKey(****)")
     }
 }
-
-struct Inner(Array);
-
-impl Drop for Inner {
-    fn drop(&mut self) {
-        self.0.as_mut_slice().zeroize()
-    }
-}
-
-type Array = chacha20poly1305::Key;
 
 #[derive(Debug, Error)]
 #[error("invalid secret key length")]

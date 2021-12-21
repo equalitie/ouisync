@@ -37,7 +37,7 @@ impl AccessSecrets {
             Self::Read { id, read_key } => {
                 out.push(AccessMode::Read as u8);
                 out.extend_from_slice(id.as_ref());
-                out.extend_from_slice(read_key.as_array().as_ref());
+                out.extend_from_slice(read_key.as_ref());
             }
             Self::Write(secrets) => {
                 out.push(AccessMode::Write as u8);

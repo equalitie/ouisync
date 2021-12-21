@@ -48,9 +48,11 @@ impl Bin {
         command.arg("--disable-local-discovery");
 
         let master_key = SecretKey::random();
-        command
-            .arg("--key")
-            .arg(format!("{}:{:x}", REPO_NAME, master_key.as_array()));
+        command.arg("--key").arg(format!(
+            "{}:{}",
+            REPO_NAME,
+            hex::encode(master_key.as_ref())
+        ));
 
         for peer in peers {
             command.arg("--peers");

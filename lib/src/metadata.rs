@@ -145,13 +145,7 @@ pub(crate) async fn set_access_secrets(
             replace_secret(ACCESS_KEY, dummy_key.as_ref(), master_key, &mut tx).await?;
         }
         AccessSecrets::Read { read_key, .. } => {
-            replace_secret(
-                ACCESS_KEY,
-                read_key.as_array().as_ref(),
-                master_key,
-                &mut tx,
-            )
-            .await?;
+            replace_secret(ACCESS_KEY, read_key.as_ref(), master_key, &mut tx).await?;
         }
         AccessSecrets::Write(secrets) => {
             replace_secret(ACCESS_KEY, secrets.write_key.as_ref(), master_key, &mut tx).await?;

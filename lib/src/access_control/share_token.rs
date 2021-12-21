@@ -150,7 +150,7 @@ mod tests {
         assert_eq!(decoded.name, token.name);
         assert_matches!(decoded.secrets, AccessSecrets::Read { id, read_key } => {
             assert_eq!(id,token_id);
-            assert_eq!(read_key.as_array(), token_read_key.as_array());
+            assert_eq!(read_key.as_ref(), token_read_key.as_ref());
         });
     }
 
