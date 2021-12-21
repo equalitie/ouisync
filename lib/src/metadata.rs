@@ -97,10 +97,6 @@ pub(crate) async fn get_repository_id(db: impl db::Executor<'_>) -> Result<Repos
     get_public(REPOSITORY_ID, db).await
 }
 
-pub(crate) async fn set_repository_id(id: &RepositoryId, db: impl db::Executor<'_>) -> Result<()> {
-    insert_public(REPOSITORY_ID, id.as_ref(), db).await
-}
-
 // -------------------------------------------------------------------
 // Writer Id
 // -------------------------------------------------------------------
@@ -338,12 +334,11 @@ mod tests {
     async fn store_plaintext() {
         let pool = new_memory_db().await;
 
-        let repo_id = rand::random();
-        set_repository_id(&repo_id, &pool).await.unwrap();
+        insert_public(b"hello", b"world", &pool).await.unwrap();
 
-        let repo_id_ = get_repository_id(&pool).await.unwrap();
+        let v: [u8; 5] = get_public(b"hello", &pool).await.unwrap();
 
-        assert_eq!(repo_id, repo_id_);
+        assert_eq!(b"world", &v);
     }
 
     #[tokio::test(flavor = "multi_thread")]

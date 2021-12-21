@@ -116,34 +116,9 @@ impl Repository {
         })
     }
 
-    /// Get the id of this repository or `Error::EntryNotFound` if no id was assigned yet.
-    pub async fn get_id(&self) -> Result<RepositoryId> {
-        metadata::get_repository_id(self.db_pool()).await
-    }
-
-    /// Get the id of this repository or create it if it wasn't assigned yet.
-    pub async fn get_or_create_id(&self) -> Result<RepositoryId> {
-        let mut tx = self.db_pool().begin().await?;
-
-        let id = match metadata::get_repository_id(&mut tx).await {
-            Ok(id) => id,
-            Err(Error::EntryNotFound) => {
-                let id = rand::random();
-                metadata::set_repository_id(&id, &mut tx).await?;
-                id
-            }
-            Err(error) => return Err(error),
-        };
-
-        tx.commit().await?;
-
-        Ok(id)
-    }
-
-    /// Assign the id to this repository. Fails with `Error::EntryExists` if id was already
-    /// assigned either by calling `set_id` or `get_or_create_id`.
-    pub async fn set_id(&self, id: RepositoryId) -> Result<()> {
-        metadata::set_repository_id(&id, self.db_pool()).await
+    /// Get the id of this repository.
+    pub fn id(&self) -> &RepositoryId {
+        self.shared.access_secrets.id()
     }
 
     pub fn this_writer_id(&self) -> &PublicKey {
@@ -388,10 +363,6 @@ impl Repository {
 
     pub(crate) fn index(&self) -> &Index {
         &self.shared.index
-    }
-
-    fn db_pool(&self) -> &db::Pool {
-        &self.index().pool
     }
 
     pub async fn debug_print(&self, print: DebugPrinter) {

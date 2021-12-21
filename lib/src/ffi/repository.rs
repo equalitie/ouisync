@@ -3,7 +3,7 @@ use super::{
     utils::{self, Port, SharedHandle, UniqueHandle},
 };
 use crate::{
-    access_control::{AccessSecrets, MasterSecret, ShareToken},
+    access_control::{MasterSecret, ShareToken},
     crypto::Password,
     directory::EntryType,
     error::Error,
@@ -23,7 +23,19 @@ pub struct RepositoryHolder {
     registration: Registration,
 }
 
-/// Opens a repository.
+/// Creates a new repository.
+#[no_mangle]
+pub unsafe extern "C" fn repository_create(
+    _store: *const c_char,
+    _master_password: *const c_char,
+    _share_token: *const c_char,
+    _port: Port<SharedHandle<RepositoryHolder>>,
+    _error: *mut *mut c_char,
+) {
+    todo!()
+}
+
+/// Opens an existing repository.
 #[no_mangle]
 pub unsafe extern "C" fn repository_open(
     store: *const c_char,
@@ -192,6 +204,7 @@ pub unsafe extern "C" fn repository_disable_dht(
     });
 }
 
+// TODO: specify access mode
 #[no_mangle]
 pub unsafe extern "C" fn repository_create_share_token(
     handle: SharedHandle<RepositoryHolder>,
@@ -204,34 +217,10 @@ pub unsafe extern "C" fn repository_create_share_token(
         let name = utils::ptr_to_str(name)?.to_owned();
 
         ctx.spawn(async move {
-            let id = holder
-                .registration
-                .get_or_create_id(&holder.repository)
-                .await?;
-            let share_token = ShareToken::from(AccessSecrets::Blind { id }).with_name(name);
+            let secrets = holder.repository.access_secrets().clone();
+            let share_token = ShareToken::from(secrets).with_name(name);
 
             Ok(share_token.to_string())
-        })
-    })
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn repository_accept_share_token(
-    handle: SharedHandle<RepositoryHolder>,
-    token: *const c_char,
-    port: Port<()>,
-    error: *mut *mut c_char,
-) {
-    session::with(port, error, |ctx| {
-        let holder = handle.get();
-        let token = utils::ptr_to_str(token)?;
-        let token: ShareToken = token.parse()?;
-
-        ctx.spawn(async move {
-            holder
-                .registration
-                .set_id(&holder.repository, *token.id())
-                .await
         })
     })
 }
