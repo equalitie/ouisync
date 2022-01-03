@@ -252,7 +252,7 @@ mod tests {
 
     async fn setup() -> (Branch, Branch) {
         let pool = repository::create_db(&db::Store::Memory).await.unwrap();
-        let secrets = Arc::new(AccessSecrets::random_write());
+        let secrets = AccessSecrets::random_write();
 
         (
             create_branch(pool.clone(), secrets.clone()).await,
@@ -260,7 +260,7 @@ mod tests {
         )
     }
 
-    async fn create_branch(pool: db::Pool, secrets: Arc<AccessSecrets>) -> Branch {
+    async fn create_branch(pool: db::Pool, secrets: AccessSecrets) -> Branch {
         let (notify_tx, _) = async_broadcast::broadcast(1);
         let branch_data = BranchData::new(&pool, rand::random(), notify_tx)
             .await

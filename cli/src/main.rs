@@ -36,7 +36,7 @@ async fn main() -> Result<()> {
             &options.repository_store(name)?,
             this_writer_id,
             secret,
-            AccessSecrets::random_write().into(),
+            AccessSecrets::random_write(),
             !options.disable_merger,
         )
         .await?;
@@ -53,7 +53,7 @@ async fn main() -> Result<()> {
 
     for Named { name, value } in &options.share {
         let secrets = if let Some(repo) = repos.get(name) {
-            repo.access_secrets().clone().with_mode(*value)
+            repo.secrets().with_mode(*value)
         } else {
             Repository::open(
                 &options.repository_store(name)?,
@@ -62,8 +62,7 @@ async fn main() -> Result<()> {
                 false,
             )
             .await?
-            .access_secrets()
-            .clone()
+            .secrets()
             .with_mode(*value)
         };
 
@@ -90,7 +89,7 @@ async fn main() -> Result<()> {
 
     for token in options.accept.iter().chain(&accept_file_tokens) {
         let name = token.suggested_name();
-        let access_secrets = token.access_secrets();
+        let access_secrets = token.secrets();
         let master_secret = options.secret_for_repo(&name)?;
 
         if let Entry::Vacant(entry) = repos.entry(name.as_ref().to_owned()) {

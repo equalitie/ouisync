@@ -37,7 +37,7 @@ impl Repository {
         store: &db::Store,
         _this_replica_id: ReplicaId,
         master_secret: MasterSecret,
-        access_secrets: Arc<AccessSecrets>,
+        access_secrets: AccessSecrets,
         enable_merger: bool,
     ) -> Result<Self> {
         let pool = create_db(store).await?;
@@ -86,21 +86,21 @@ impl Repository {
             AccessSecrets::Blind { id }
         };
 
-        Self::new(pool, this_writer_id, access_secrets.into(), enable_merger).await
+        Self::new(pool, this_writer_id, access_secrets, enable_merger).await
     }
 
     async fn new(
         pool: db::Pool,
         this_writer_id: PublicKey,
-        access_secrets: Arc<AccessSecrets>,
+        secrets: AccessSecrets,
         enable_merger: bool,
     ) -> Result<Self> {
-        let enable_merger = enable_merger && access_secrets.can_write();
+        let enable_merger = enable_merger && secrets.can_write();
         let index = Index::load(pool, this_writer_id).await?;
 
         let shared = Arc::new(Shared {
             index,
-            access_secrets,
+            secrets,
             branches: Mutex::new(HashMap::new()),
         });
 
@@ -118,15 +118,15 @@ impl Repository {
 
     /// Get the id of this repository.
     pub fn id(&self) -> &RepositoryId {
-        self.shared.access_secrets.id()
+        self.shared.secrets.id()
     }
 
     pub fn this_writer_id(&self) -> &PublicKey {
         self.shared.index.this_writer_id()
     }
 
-    pub fn access_secrets(&self) -> &Arc<AccessSecrets> {
-        &self.shared.access_secrets
+    pub fn secrets(&self) -> &AccessSecrets {
+        &self.shared.secrets
     }
 
     /// Looks up an entry by its path. The path must be relative to the repository root.
@@ -416,7 +416,7 @@ pub(crate) async fn create_db(store: &db::Store) -> Result<db::Pool> {
 
 struct Shared {
     index: Index,
-    access_secrets: Arc<AccessSecrets>,
+    secrets: AccessSecrets,
     // Cache for `Branch` instances to make them persistent over the lifetime of the program.
     branches: Mutex<HashMap<PublicKey, Branch>>,
 }
@@ -449,11 +449,7 @@ impl Shared {
             .await
             .entry(*data.id())
             .or_insert_with(|| {
-                Branch::new(
-                    self.index.pool.clone(),
-                    data.clone(),
-                    self.access_secrets.clone(),
-                )
+                Branch::new(self.index.pool.clone(), data.clone(), self.secrets.clone())
             })
             .clone()
     }
@@ -604,7 +600,7 @@ mod tests {
             &db::Store::Memory,
             writer_id,
             MasterSecret::random(),
-            AccessSecrets::random_write().into(),
+            AccessSecrets::random_write(),
             false,
         )
         .await
@@ -619,7 +615,7 @@ mod tests {
             &db::Store::Memory,
             local_id,
             MasterSecret::random(),
-            AccessSecrets::random_write().into(),
+            AccessSecrets::random_write(),
             true,
         )
         .await
@@ -685,7 +681,7 @@ mod tests {
             &db::Store::Memory,
             local_id,
             MasterSecret::random(),
-            AccessSecrets::random_write().into(),
+            AccessSecrets::random_write(),
             false,
         )
         .await
@@ -725,7 +721,7 @@ mod tests {
             &db::Store::Memory,
             local_id,
             MasterSecret::random(),
-            AccessSecrets::random_write().into(),
+            AccessSecrets::random_write(),
             false,
         )
         .await
@@ -766,7 +762,7 @@ mod tests {
             &db::Store::Memory,
             writer_id,
             MasterSecret::random(),
-            AccessSecrets::random_write().into(),
+            AccessSecrets::random_write(),
             false,
         )
         .await
@@ -817,7 +813,7 @@ mod tests {
             &db::Store::Memory,
             rand::random(),
             MasterSecret::random(),
-            AccessSecrets::random_write().into(),
+            AccessSecrets::random_write(),
             false,
         )
         .await

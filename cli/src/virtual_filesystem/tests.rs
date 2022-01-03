@@ -220,7 +220,7 @@ async fn setup() -> (MountGuard, TempDir) {
         &Store::Memory,
         rand::random(),
         MasterSecret::random(),
-        AccessSecrets::random_write().into(),
+        AccessSecrets::random_write(),
         true,
     )
     .await

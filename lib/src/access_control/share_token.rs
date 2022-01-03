@@ -1,6 +1,6 @@
 use super::{AccessSecrets, DecodeError};
 use crate::repository::RepositoryId;
-use std::{borrow::Cow, fmt, str::FromStr, sync::Arc};
+use std::{borrow::Cow, fmt, str::FromStr};
 use zeroize::Zeroizing;
 
 pub const SCHEME: &str = "ouisync";
@@ -10,7 +10,7 @@ pub const VERSION: u8 = 0; // when this reaches 128, switch to variable-lengh en
 /// other replicas.
 #[derive(Debug)]
 pub struct ShareToken {
-    secrets: Arc<AccessSecrets>,
+    secrets: AccessSecrets,
     name: String,
 }
 
@@ -40,19 +40,17 @@ impl ShareToken {
         }
     }
 
-    pub fn access_secrets(&self) -> &Arc<AccessSecrets> {
+    pub fn secrets(&self) -> &AccessSecrets {
         &self.secrets
+    }
+
+    pub fn into_secrets(self) -> AccessSecrets {
+        self.secrets
     }
 }
 
 impl From<AccessSecrets> for ShareToken {
     fn from(secrets: AccessSecrets) -> Self {
-        Self::from(Arc::new(secrets))
-    }
-}
-
-impl From<Arc<AccessSecrets>> for ShareToken {
-    fn from(secrets: Arc<AccessSecrets>) -> Self {
         Self {
             secrets,
             name: String::new(),
@@ -128,7 +126,7 @@ mod tests {
         let decoded: ShareToken = encoded.parse().unwrap();
 
         assert_eq!(decoded.name, "");
-        assert_matches!(*decoded.secrets, AccessSecrets::Blind { id } => {
+        assert_matches!(decoded.secrets, AccessSecrets::Blind { id } => {
             assert_eq!(id, token_id)
         });
     }
@@ -142,7 +140,7 @@ mod tests {
         let decoded: ShareToken = encoded.parse().unwrap();
 
         assert_eq!(decoded.name, token.name);
-        assert_matches!(decoded.secrets.as_ref(), AccessSecrets::Blind { id } => assert_eq!(*id, token_id));
+        assert_matches!(decoded.secrets, AccessSecrets::Blind { id } => assert_eq!(id, token_id));
     }
 
     #[test]
@@ -159,8 +157,8 @@ mod tests {
         let decoded: ShareToken = encoded.parse().unwrap();
 
         assert_eq!(decoded.name, token.name);
-        assert_matches!(decoded.secrets.as_ref(), AccessSecrets::Read { id, read_key } => {
-            assert_eq!(*id, token_id);
+        assert_matches!(decoded.secrets, AccessSecrets::Read { id, read_key } => {
+            assert_eq!(id, token_id);
             assert_eq!(read_key.as_ref(), token_read_key.as_ref());
         });
     }
@@ -176,7 +174,7 @@ mod tests {
         let decoded: ShareToken = encoded.parse().unwrap();
 
         assert_eq!(decoded.name, token.name);
-        assert_matches!(decoded.secrets.as_ref(), AccessSecrets::Write(access) => {
+        assert_matches!(decoded.secrets, AccessSecrets::Write(access) => {
             assert_eq!(access.id, token_id);
         });
     }

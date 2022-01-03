@@ -681,20 +681,22 @@ async fn remove_concurrent_file_version() {
 
 async fn setup() -> Branch {
     let pool = repository::create_db(&db::Store::Memory).await.unwrap();
-    create_branch(pool).await
+    let secrets = AccessSecrets::random_write();
+    create_branch(pool, secrets).await
 }
 
 async fn setup_multiple<const N: usize>() -> [Branch; N] {
     let pool = repository::create_db(&db::Store::Memory).await.unwrap();
-    let branches: Vec<_> = future::join_all((0..N).map(|_| create_branch(pool.clone()))).await;
+    let secrets = AccessSecrets::random_write();
+    let branches: Vec<_> =
+        future::join_all((0..N).map(|_| create_branch(pool.clone(), secrets.clone()))).await;
     branches.try_into().ok().unwrap()
 }
 
-async fn create_branch(pool: db::Pool) -> Branch {
+async fn create_branch(pool: db::Pool, secrets: AccessSecrets) -> Branch {
     let (notify_tx, _) = async_broadcast::broadcast(1);
-    let secrets = AccessSecrets::random_write();
     let branch_data = BranchData::new(&pool, rand::random(), notify_tx)
         .await
         .unwrap();
-    Branch::new(pool, Arc::new(branch_data), Arc::new(secrets))
+    Branch::new(pool, Arc::new(branch_data), secrets)
 }

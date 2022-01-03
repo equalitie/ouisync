@@ -20,7 +20,7 @@ use std::sync::Arc;
 pub struct Branch {
     pool: db::Pool,
     branch_data: Arc<BranchData>,
-    secrets: Arc<AccessSecrets>,
+    secrets: AccessSecrets,
     root_directory: Arc<RootDirectoryCache>,
 }
 
@@ -28,7 +28,7 @@ impl Branch {
     pub(crate) fn new(
         pool: db::Pool,
         branch_data: Arc<BranchData>,
-        secrets: Arc<AccessSecrets>,
+        secrets: AccessSecrets,
     ) -> Self {
         Self {
             pool,
@@ -50,7 +50,7 @@ impl Branch {
         &self.pool
     }
 
-    pub(crate) fn secrets(&self) -> &Arc<AccessSecrets> {
+    pub(crate) fn secrets(&self) -> &AccessSecrets {
         &self.secrets
     }
 
@@ -159,11 +159,7 @@ mod tests {
         let secrets = AccessSecrets::generate_write(&mut rand::thread_rng());
 
         let index = Index::load(pool.clone(), writer_id).await.unwrap();
-        let branch = Branch::new(
-            pool,
-            index.branches().await.local().clone(),
-            Arc::new(secrets),
-        );
+        let branch = Branch::new(pool, index.branches().await.local().clone(), secrets);
 
         branch
     }

@@ -17,9 +17,8 @@ use fuser::{
     ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow,
 };
 use ouisync_lib::{
-    Branch,
-    debug_printer::DebugPrinter, EntryType, Error, File, JointDirectory, JointEntry, JointEntryRef,
-    MissingVersionStrategy, Repository, Result,
+    debug_printer::DebugPrinter, Branch, EntryType, Error, File, JointDirectory, JointEntry,
+    JointEntryRef, MissingVersionStrategy, Repository, Result,
 };
 use std::{
     convert::TryInto,
@@ -872,7 +871,7 @@ impl Inner {
     }
 
     async fn require_local_branch(&self) -> Result<Branch> {
-        Ok(self.repository.local_branch().await)//.ok_or(Error::PermissionsDenied)
+        Ok(self.repository.local_branch().await) //.ok_or(Error::PermissionsDenied)
     }
 
     // For debugging, use when needed

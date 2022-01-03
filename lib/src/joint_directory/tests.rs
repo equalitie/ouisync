@@ -858,7 +858,7 @@ async fn setup_with_rng(mut rng: StdRng, branch_count: usize) -> Vec<Branch> {
     let pool = &pool;
 
     let (notify_tx, _) = async_broadcast::broadcast(1);
-    let secrets = Arc::new(AccessSecrets::generate_write(&mut rng));
+    let secrets = AccessSecrets::generate_write(&mut rng);
 
     future::join_all((0..branch_count).map(|_| {
         let id = rng.gen();

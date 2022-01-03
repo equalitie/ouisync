@@ -530,7 +530,7 @@ async fn setup(rng_seed: u64) -> (StdRng, Branch) {
 
     let (notify_tx, _) = async_broadcast::broadcast(1);
     let branch = BranchData::new(&pool, rng.gen(), notify_tx).await.unwrap();
-    let branch = Branch::new(pool, Arc::new(branch), Arc::new(secrets));
+    let branch = Branch::new(pool, Arc::new(branch), secrets);
 
     (rng, branch)
 }

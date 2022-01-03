@@ -44,11 +44,11 @@ pub unsafe extern "C" fn repository_create(
         let master_password = Password::new(utils::ptr_to_str(master_password)?);
 
         let access_secrets = if share_token.is_null() {
-            Arc::new(AccessSecrets::random_write())
+            AccessSecrets::random_write()
         } else {
             let share_token = utils::ptr_to_str(share_token)?;
             let share_token: ShareToken = share_token.parse()?;
-            share_token.access_secrets().clone()
+            share_token.into_secrets()
         };
 
         ctx.spawn(async move {
@@ -256,11 +256,7 @@ pub unsafe extern "C" fn repository_create_share_token(
         let name = utils::ptr_to_str(name)?.to_owned();
 
         ctx.spawn(async move {
-            let access_secrets = holder
-                .repository
-                .access_secrets()
-                .clone()
-                .with_mode(access_mode);
+            let access_secrets = holder.repository.secrets().with_mode(access_mode);
             let share_token = ShareToken::from(access_secrets).with_name(name);
 
             Ok(share_token.to_string())
