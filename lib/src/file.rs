@@ -149,15 +149,14 @@ impl File {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
-    use crate::{crypto::Cryptor, db, index::BranchData, repository};
+    use crate::{access_control::AccessSecrets, db, index::BranchData, repository};
     use std::sync::Arc;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn fork() {
-        let branch0 = setup().await;
-        let branch1 = create_branch(branch0.db_pool().clone()).await;
+        let (branch0, branch1) = setup().await;
 
         // Create a file owned by branch 0
         let mut file0 = branch0.ensure_file_exists("/dog.jpg".into()).await.unwrap();
@@ -224,8 +223,7 @@ mod test {
         // This test makes sure that modifying a forked file properly updates the file metadata so
         // subsequent modifications work correclty.
 
-        let branch0 = setup().await;
-        let branch1 = create_branch(branch0.db_pool().clone()).await;
+        let (branch0, branch1) = setup().await;
 
         let mut file0 = branch0.ensure_file_exists("/pig.jpg".into()).await.unwrap();
         file0.flush().await.unwrap();
@@ -252,17 +250,22 @@ mod test {
         }
     }
 
-    async fn setup() -> Branch {
+    async fn setup() -> (Branch, Branch) {
         let pool = repository::create_db(&db::Store::Memory).await.unwrap();
-        create_branch(pool).await
+        let secrets = Arc::new(AccessSecrets::random_write());
+
+        (
+            create_branch(pool.clone(), secrets.clone()).await,
+            create_branch(pool, secrets).await,
+        )
     }
 
-    async fn create_branch(pool: db::Pool) -> Branch {
+    async fn create_branch(pool: db::Pool, secrets: Arc<AccessSecrets>) -> Branch {
         let (notify_tx, _) = async_broadcast::broadcast(1);
         let branch_data = BranchData::new(&pool, rand::random(), notify_tx)
             .await
             .unwrap();
-        Branch::new(pool, Arc::new(branch_data), Cryptor::Null)
+        Branch::new(pool, Arc::new(branch_data), secrets)
     }
 }
 

@@ -1,18 +1,12 @@
 use super::*;
 use crate::{
-    blob::Blob,
-    branch::Branch,
-    crypto::{sign::PublicKey, Cryptor},
-    db,
-    directory::EntryData,
-    index::BranchData,
-    locator::Locator,
-    repository,
+    access_control::AccessSecrets, blob::Blob, branch::Branch, crypto::sign::PublicKey, db,
+    directory::EntryData, index::BranchData, locator::Locator, repository,
     version_vector::VersionVector,
 };
 use assert_matches::assert_matches;
 use futures_util::future;
-use rand::{distributions::Standard, rngs::StdRng, Rng, SeedableRng};
+use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::{iter, sync::Arc};
 
 #[tokio::test(flavor = "multi_thread")]
@@ -859,18 +853,21 @@ async fn setup(branch_count: usize) -> Vec<Branch> {
 }
 
 // Useful for debugging non-deterministic failures.
-async fn setup_with_rng(rng: StdRng, branch_count: usize) -> Vec<Branch> {
+async fn setup_with_rng(mut rng: StdRng, branch_count: usize) -> Vec<Branch> {
     let pool = repository::create_db(&db::Store::Memory).await.unwrap();
     let pool = &pool;
 
-    let ids = rng.sample_iter(Standard).take(branch_count);
     let (notify_tx, _) = async_broadcast::broadcast(1);
+    let secrets = Arc::new(AccessSecrets::generate_write(&mut rng));
 
-    future::join_all(ids.map(|id| {
+    future::join_all((0..branch_count).map(|_| {
+        let id = rng.gen();
         let notify_tx = notify_tx.clone();
+        let secrets = secrets.clone();
+
         async move {
             let data = BranchData::new(pool, id, notify_tx).await.unwrap();
-            Branch::new(pool.clone(), Arc::new(data), Cryptor::Null)
+            Branch::new(pool.clone(), Arc::new(data), secrets)
         }
     }))
     .await

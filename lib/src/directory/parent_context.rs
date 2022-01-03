@@ -64,7 +64,7 @@ impl ParentContext {
         let old_vv = self.entry_version_vector().await;
 
         let outer = self.directory(local_branch.db_pool().clone());
-        let outer = outer.fork(&local_branch).await?;
+        let outer = outer.fork(local_branch).await?;
 
         let blob_id = outer
             .insert_file_entry(self.entry_name.clone(), self.entry_author, old_vv)

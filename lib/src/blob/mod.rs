@@ -51,7 +51,8 @@ impl Blob {
         let mut tx = branch.db_pool().begin().await?;
 
         let (id, buffer, auth_tag) =
-            operations::load_block(&mut tx, branch.data(), branch.cryptor(), &head_locator).await?;
+            operations::load_block(&mut tx, branch.data(), &branch.cryptor(), &head_locator)
+                .await?;
 
         let mut content = Cursor::new(buffer);
 

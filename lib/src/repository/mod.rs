@@ -452,7 +452,7 @@ impl Shared {
                 Branch::new(
                     self.index.pool.clone(),
                     data.clone(),
-                    self.access_secrets.cryptor(),
+                    self.access_secrets.clone(),
                 )
             })
             .clone()

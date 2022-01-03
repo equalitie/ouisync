@@ -1,4 +1,5 @@
 use crate::{
+    access_control::AccessSecrets,
     blob::Blob,
     block::BlockId,
     crypto::Cryptor,
@@ -19,16 +20,20 @@ use std::sync::Arc;
 pub struct Branch {
     pool: db::Pool,
     branch_data: Arc<BranchData>,
-    cryptor: Cryptor,
+    secrets: Arc<AccessSecrets>,
     root_directory: Arc<RootDirectoryCache>,
 }
 
 impl Branch {
-    pub(crate) fn new(pool: db::Pool, branch_data: Arc<BranchData>, cryptor: Cryptor) -> Self {
+    pub(crate) fn new(
+        pool: db::Pool,
+        branch_data: Arc<BranchData>,
+        secrets: Arc<AccessSecrets>,
+    ) -> Self {
         Self {
             pool,
             branch_data,
-            cryptor,
+            secrets,
             root_directory: Arc::new(RootDirectoryCache::new()),
         }
     }
@@ -45,8 +50,13 @@ impl Branch {
         &self.pool
     }
 
-    pub(crate) fn cryptor(&self) -> &Cryptor {
-        &self.cryptor
+    pub(crate) fn secrets(&self) -> &Arc<AccessSecrets> {
+        &self.secrets
+    }
+
+    // TODO: remove
+    pub(crate) fn cryptor(&self) -> Cryptor {
+        self.secrets.cryptor()
     }
 
     pub(crate) async fn open_root(&self) -> Result<Directory> {
@@ -79,7 +89,7 @@ impl Branch {
                     let next = if let Some(next) = next {
                         next
                     } else {
-                        curr.create_directory(name.to_string(), &self).await?
+                        curr.create_directory(name.to_string(), self).await?
                     };
 
                     curr = next;
@@ -96,7 +106,7 @@ impl Branch {
     pub(crate) async fn ensure_file_exists(&self, path: &Utf8Path) -> Result<File> {
         let (parent, name) = path::decompose(path).ok_or(Error::EntryIsDirectory)?;
         let dir = self.ensure_directory_exists(parent).await?;
-        dir.create_file(name.to_string(), &self).await
+        dir.create_file(name.to_string(), self).await
     }
 
     pub async fn root_block_id(&self) -> Result<BlockId> {
@@ -146,8 +156,14 @@ mod tests {
         let pool = repository::create_db(&db::Store::Memory).await.unwrap();
 
         let writer_id = rand::random();
+        let secrets = AccessSecrets::generate_write(&mut rand::thread_rng());
+
         let index = Index::load(pool.clone(), writer_id).await.unwrap();
-        let branch = Branch::new(pool, index.branches().await.local().clone(), Cryptor::Null);
+        let branch = Branch::new(
+            pool,
+            index.branches().await.local().clone(),
+            Arc::new(secrets),
+        );
 
         branch
     }

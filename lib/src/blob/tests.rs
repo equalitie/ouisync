@@ -1,11 +1,7 @@
 use super::*;
 use crate::index::BranchData;
+use crate::{access_control::AccessSecrets, error::Error, test_utils};
 use crate::{block, repository};
-use crate::{
-    crypto::{cipher::SecretKey, Cryptor},
-    error::Error,
-    test_utils,
-};
 use assert_matches::assert_matches;
 use proptest::collection::vec;
 use rand::{distributions::Standard, prelude::*};
@@ -238,8 +234,8 @@ async fn remove_blob() {
     blob.write(&content).await.unwrap();
     blob.flush().await.unwrap();
 
-    let locator0 = locator0.encode(branch.cryptor());
-    let locator1 = locator1.encode(branch.cryptor());
+    let locator0 = locator0.encode(&branch.cryptor());
+    let locator1 = locator1.encode(&branch.cryptor());
 
     let block_ids = {
         let mut tx = branch.db_pool().begin().await.unwrap();
@@ -284,8 +280,8 @@ async fn truncate_to_empty() {
     blob.write(&content).await.unwrap();
     blob.flush().await.unwrap();
 
-    let locator0 = locator0.encode(branch.cryptor());
-    let locator1 = locator1.encode(branch.cryptor());
+    let locator0 = locator0.encode(&branch.cryptor());
+    let locator1 = locator1.encode(&branch.cryptor());
 
     let (old_block_id0, old_block_id1) = {
         let mut tx = branch.db_pool().begin().await.unwrap();
@@ -354,7 +350,7 @@ async fn truncate_to_shorter() {
         assert_matches!(
             branch
                 .data()
-                .get(&mut tx, &locator.encode(branch.cryptor()))
+                .get(&mut tx, &locator.encode(&branch.cryptor()))
                 .await,
             Err(Error::EntryNotFound)
         );
@@ -373,8 +369,8 @@ async fn modify_blob() {
     blob.write(&content).await.unwrap();
     blob.flush().await.unwrap();
 
-    let locator0 = locator0.encode(branch.cryptor());
-    let locator1 = locator1.encode(branch.cryptor());
+    let locator0 = locator0.encode(&branch.cryptor());
+    let locator1 = locator1.encode(&branch.cryptor());
 
     let (old_block_id0, old_block_id1) = {
         let mut tx = branch.db_pool().begin().await.unwrap();
@@ -475,7 +471,7 @@ async fn fork_case(
     let dst_branch = Branch::new(
         src_branch.db_pool().clone(),
         dst_branch,
-        src_branch.cryptor().clone(),
+        src_branch.secrets().clone(),
     );
 
     let src_locator = if src_locator_is_root {
@@ -529,13 +525,12 @@ async fn fork_case(
 
 async fn setup(rng_seed: u64) -> (StdRng, Branch) {
     let mut rng = StdRng::seed_from_u64(rng_seed);
-    let secret_key = SecretKey::generate(&mut rng);
-    let cryptor = Cryptor::ChaCha20Poly1305(secret_key.clone());
+    let secrets = AccessSecrets::generate_write(&mut rng);
     let pool = repository::create_db(&db::Store::Memory).await.unwrap();
 
     let (notify_tx, _) = async_broadcast::broadcast(1);
     let branch = BranchData::new(&pool, rng.gen(), notify_tx).await.unwrap();
-    let branch = Branch::new(pool, Arc::new(branch), cryptor);
+    let branch = Branch::new(pool, Arc::new(branch), Arc::new(secrets));
 
     (rng, branch)
 }

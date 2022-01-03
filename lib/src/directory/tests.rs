@@ -1,5 +1,5 @@
 use super::*;
-use crate::{crypto::Cryptor, db, index::BranchData, repository};
+use crate::{access_control::AccessSecrets, db, index::BranchData, repository};
 use assert_matches::assert_matches;
 use futures_util::future;
 use std::{array, collections::BTreeSet, convert::TryInto};
@@ -692,8 +692,9 @@ async fn setup_multiple<const N: usize>() -> [Branch; N] {
 
 async fn create_branch(pool: db::Pool) -> Branch {
     let (notify_tx, _) = async_broadcast::broadcast(1);
+    let secrets = AccessSecrets::random_write();
     let branch_data = BranchData::new(&pool, rand::random(), notify_tx)
         .await
         .unwrap();
-    Branch::new(pool, Arc::new(branch_data), Cryptor::Null)
+    Branch::new(pool, Arc::new(branch_data), Arc::new(secrets))
 }
