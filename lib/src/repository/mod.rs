@@ -194,7 +194,7 @@ impl Repository {
     pub async fn remove_entry<P: AsRef<Utf8Path>>(&self, path: P) -> Result<()> {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::OperationNotSupported)?;
         let mut parent = self.open_directory(parent).await?;
-        parent.remove_entry(name,).await?;
+        parent.remove_entry(name).await?;
         parent.flush().await
     }
 
@@ -581,7 +581,9 @@ enum MergeState {
 
 async fn merge_branches(local: Branch, remote: Branch) -> Result<()> {
     let remote_root = remote.open_root().await?;
-    JointDirectory::new(local.clone(), iter::once(remote_root)).merge().await?;
+    JointDirectory::new(local.clone(), iter::once(remote_root))
+        .merge()
+        .await?;
 
     Ok(())
 }

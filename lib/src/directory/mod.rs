@@ -107,7 +107,10 @@ impl Directory {
     ///
     /// Panics if this directory is not in the local branch.
     pub async fn create_directory(&self, name: String, local_branch: &Branch) -> Result<Self> {
-        self.write().await.create_directory(name, local_branch).await
+        self.write()
+            .await
+            .create_directory(name, local_branch)
+            .await
     }
 
     /// Removes a file or subdirectory from this directory. If the entry to be removed is a
@@ -193,7 +196,10 @@ impl Directory {
 
         if let Some(parent) = &inner.inner.parent {
             //let parent_dir = parent.directory(local_branch.clone()).fork().await?;
-            let parent_dir = parent.directory(self.db_pool().clone()).fork(local_branch).await?;
+            let parent_dir = parent
+                .directory(self.db_pool().clone())
+                .fork(local_branch)
+                .await?;
 
             match parent_dir
                 .read()
@@ -257,7 +263,7 @@ impl Directory {
         parent: Option<ParentContext>,
     ) -> Result<Self> {
         let branch_id = *owner_branch.id();
-        let db_pool =  owner_branch.db_pool().clone();
+        let db_pool = owner_branch.db_pool().clone();
         let mut blob = Blob::open(owner_branch, locator).await?;
         let buffer = blob.read_to_end().await?;
         let content = bincode::deserialize(&buffer).map_err(Error::MalformedDirectory)?;
@@ -459,16 +465,20 @@ pub(crate) struct Writer<'a> {
 
 impl Writer<'_> {
     pub async fn create_file(&mut self, name: String, local_branch: &Branch) -> Result<File> {
-        let (locator, parent) = self.create_entry(EntryType::File, name, local_branch.id()).await?;
-        Ok(File::create(
-            local_branch.clone(),
-            locator,
-            parent,
-        ))
+        let (locator, parent) = self
+            .create_entry(EntryType::File, name, local_branch.id())
+            .await?;
+        Ok(File::create(local_branch.clone(), locator, parent))
     }
 
-    pub async fn create_directory(&mut self, name: String, local_branch: &Branch) -> Result<Directory> {
-        let (locator, parent) = self.create_entry(EntryType::Directory, name, local_branch.id()).await?;
+    pub async fn create_directory(
+        &mut self,
+        name: String,
+        local_branch: &Branch,
+    ) -> Result<Directory> {
+        let (locator, parent) = self
+            .create_entry(EntryType::Directory, name, local_branch.id())
+            .await?;
         self.inner
             .open_directories
             .create(local_branch, locator, parent)

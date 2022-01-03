@@ -18,6 +18,10 @@ pub const ENTRY_TYPE_INVALID: u8 = 0;
 pub const ENTRY_TYPE_FILE: u8 = 1;
 pub const ENTRY_TYPE_DIRECTORY: u8 = 2;
 
+pub const ACCESS_MODE_BLIND: u8 = 0;
+pub const ACCESS_MODE_READ: u8 = 1;
+pub const ACCESS_MODE_WRITE: u8 = 2;
+
 pub struct RepositoryHolder {
     repository: Repository,
     registration: Registration,
@@ -238,7 +242,6 @@ pub unsafe extern "C" fn repository_disable_dht(
     });
 }
 
-// TODO: specify access mode
 #[no_mangle]
 pub unsafe extern "C" fn repository_create_share_token(
     handle: SharedHandle<RepositoryHolder>,
@@ -249,7 +252,7 @@ pub unsafe extern "C" fn repository_create_share_token(
 ) {
     session::with(port, error, |ctx| {
         let holder = handle.get();
-        let access_mode = AccessMode::try_from(access_mode)?;
+        let access_mode = access_mode_from_num(access_mode)?;
         let name = utils::ptr_to_str(name)?.to_owned();
 
         ctx.spawn(async move {
@@ -293,5 +296,18 @@ pub(super) fn entry_type_to_num(entry_type: EntryType) -> u8 {
     match entry_type {
         EntryType::File => ENTRY_TYPE_FILE,
         EntryType::Directory => ENTRY_TYPE_DIRECTORY,
+    }
+}
+
+fn access_mode_from_num(num: u8) -> Result<AccessMode, Error> {
+    // Note: we could've used `AccessMode::try_from` instead but then we would need a separate
+    // check (ideally a compile-time one) that the `ACCESS_MODE_*` constants match the
+    // corresponding `AccessMode` variants.
+
+    match num {
+        ACCESS_MODE_BLIND => Ok(AccessMode::Blind),
+        ACCESS_MODE_READ => Ok(AccessMode::Read),
+        ACCESS_MODE_WRITE => Ok(AccessMode::Write),
+        _ => Err(Error::MalformedData),
     }
 }

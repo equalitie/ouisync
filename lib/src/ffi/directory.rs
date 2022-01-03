@@ -45,7 +45,6 @@ pub unsafe extern "C" fn directory_open(
         let path = utils::ptr_to_path_buf(path)?;
         let repo = repo.get();
 
-
         ctx.spawn(async move {
             let dir = repo.open_directory(path).await?;
             let entries = dir

@@ -42,7 +42,7 @@ impl File {
         Ok(Self {
             blob: Blob::reopen(blob_core).await?,
             parent,
-            pool
+            pool,
         })
     }
 
@@ -104,7 +104,6 @@ impl File {
             return Ok(());
         }
 
-
         let mut tx = self.blob.db_pool().begin().await?;
 
         self.blob.flush_in_transaction(&mut tx).await?;
@@ -113,9 +112,7 @@ impl File {
         // turn means that self.blob.branch().id() is the ID of the local writer.
         let local_writer_id = self.blob.branch().id();
 
-        self.parent
-            .modify_entry(tx, local_writer_id, None)
-            .await?;
+        self.parent.modify_entry(tx, local_writer_id, None).await?;
 
         Ok(())
     }

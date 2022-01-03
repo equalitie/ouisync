@@ -40,12 +40,18 @@ impl JointDirectory {
             .map(|dir| (*dir.branch_id(), dir))
             .collect();
 
-        Self { local_branch, versions }
+        Self {
+            local_branch,
+            versions,
+        }
     }
 
     /// Lock this joint directory for reading.
     pub async fn read(&self) -> Reader<'_> {
-        Reader(future::join_all(self.versions.values().map(|dir| dir.read())).await, &self.local_branch)
+        Reader(
+            future::join_all(self.versions.values().map(|dir| dir.read())).await,
+            &self.local_branch,
+        )
     }
 
     /// Descends into an arbitrarily nested subdirectory of this directory at the specified path.
@@ -106,7 +112,9 @@ impl JointDirectory {
         let mut local_writer = local.write().await;
 
         for (name, author, vv) in entries {
-            local_writer.remove_entry(&name, &author, vv, None, &self.local_branch).await?;
+            local_writer
+                .remove_entry(&name, &author, vv, None, &self.local_branch)
+                .await?;
         }
 
         local_writer.flush(None).await
@@ -160,9 +168,11 @@ impl JointDirectory {
         for entry in self.read().await.entries() {
             match entry {
                 JointEntryRef::File(entry) => files.push(entry.open().await?),
-                JointEntryRef::Directory(entry) => {
-                    subdirs.push(entry.open(MissingVersionStrategy::Fail, &self.local_branch).await?)
-                }
+                JointEntryRef::Directory(entry) => subdirs.push(
+                    entry
+                        .open(MissingVersionStrategy::Fail, &self.local_branch)
+                        .await?,
+                ),
             }
         }
 
@@ -637,7 +647,10 @@ impl Versioned for FileRef<'_> {
 }
 
 // Returns the entries with the maximal version vectors.
-fn keep_maximal<E: Versioned>(entries: impl Iterator<Item = E>, local_branch_id: &PublicKey) -> Vec<E> {
+fn keep_maximal<E: Versioned>(
+    entries: impl Iterator<Item = E>,
+    local_branch_id: &PublicKey,
+) -> Vec<E> {
     let mut max: Vec<E> = Vec::new();
 
     for new in entries {

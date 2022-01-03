@@ -127,7 +127,10 @@ async fn rename_file() {
 
     // Create a directory with a single file.
     let parent_dir = branch.open_or_create_root().await.unwrap();
-    let mut file = parent_dir.create_file(src_name.into(), &branch).await.unwrap();
+    let mut file = parent_dir
+        .create_file(src_name.into(), &branch)
+        .await
+        .unwrap();
     file.write(content, &branch).await.unwrap();
     file.flush().await.unwrap();
 
@@ -188,9 +191,15 @@ async fn move_file_within_branch() {
 
     // Create a directory with a single file.
     let root_dir = branch.open_or_create_root().await.unwrap();
-    let aux_dir = root_dir.create_directory("aux".into(), &branch).await.unwrap();
+    let aux_dir = root_dir
+        .create_directory("aux".into(), &branch)
+        .await
+        .unwrap();
 
-    let mut file = root_dir.create_file(file_name.into(), &branch).await.unwrap();
+    let mut file = root_dir
+        .create_file(file_name.into(), &branch)
+        .await
+        .unwrap();
     file.write(content, &branch).await.unwrap();
     file.flush().await.unwrap();
 
@@ -291,7 +300,10 @@ async fn move_non_empty_directory() {
 
     // Create a directory with a single file.
     let root_dir = branch.open_or_create_root().await.unwrap();
-    let dir = root_dir.create_directory(dir_name.into(), &branch).await.unwrap();
+    let dir = root_dir
+        .create_directory(dir_name.into(), &branch)
+        .await
+        .unwrap();
 
     let mut file = dir.create_file(file_name.into(), &branch).await.unwrap();
     file.write(content, &branch).await.unwrap();
@@ -348,7 +360,10 @@ async fn remove_subdirectory() {
 
     // Create a directory with a single subdirectory.
     let parent_dir = branch.open_or_create_root().await.unwrap();
-    let dir = parent_dir.create_directory(name.into(), &branch).await.unwrap();
+    let dir = parent_dir
+        .create_directory(name.into(), &branch)
+        .await
+        .unwrap();
     dir.flush(None).await.unwrap();
 
     let (dir_locator, dir_vv) = {
@@ -388,7 +403,10 @@ async fn fork() {
     let root0 = branches[0].open_or_create_root().await.unwrap();
     root0.flush(None).await.unwrap();
 
-    let dir0 = root0.create_directory("dir".into(), &branches[0]).await.unwrap();
+    let dir0 = root0
+        .create_directory("dir".into(), &branches[0])
+        .await
+        .unwrap();
     dir0.flush(None).await.unwrap();
 
     // Fork it by branch 1 and modify it
@@ -402,7 +420,9 @@ async fn fork() {
 
     let dir1 = dir0.fork(&branches[1]).await.unwrap();
 
-    dir1.create_file("dog.jpg".into(), &branches[1]).await.unwrap();
+    dir1.create_file("dog.jpg".into(), &branches[1])
+        .await
+        .unwrap();
     dir1.flush(None).await.unwrap();
 
     assert_eq!(dir1.read().await.branch().id(), branches[1].id());
@@ -478,7 +498,12 @@ async fn fork_over_tombstone() {
         .await
         .unwrap();
 
-    dir1.fork(&branches[0]).await.unwrap().flush(None).await.unwrap();
+    dir1.fork(&branches[0])
+        .await
+        .unwrap()
+        .flush(None)
+        .await
+        .unwrap();
 
     // Check the forked dir now exists in branch 0.
     assert_matches!(
@@ -495,7 +520,10 @@ async fn modify_directory_concurrently() {
     // Obtain two instances of the same directory, create a new file in one of them and verify
     // the file immediately exists in the other one as well.
 
-    let dir0 = root.create_directory("dir".to_owned(), &branch).await.unwrap();
+    let dir0 = root
+        .create_directory("dir".to_owned(), &branch)
+        .await
+        .unwrap();
     let dir1 = root
         .read()
         .await
@@ -509,7 +537,10 @@ async fn modify_directory_concurrently() {
         .await
         .unwrap();
 
-    let mut file0 = dir0.create_file("file.txt".to_owned(), &branch).await.unwrap();
+    let mut file0 = dir0
+        .create_file("file.txt".to_owned(), &branch)
+        .await
+        .unwrap();
     file0.write(b"hello", &branch).await.unwrap();
     file0.flush().await.unwrap();
 
@@ -610,7 +641,13 @@ async fn remove_concurrent_file_version() {
         {
             let mut writer = root.write().await;
             writer
-                .remove_entry(name, author_to_remove, vv_to_remove.clone(), None, &branches[0])
+                .remove_entry(
+                    name,
+                    author_to_remove,
+                    vv_to_remove.clone(),
+                    None,
+                    &branches[0],
+                )
                 .await
                 .unwrap();
             writer.flush(None).await.unwrap();

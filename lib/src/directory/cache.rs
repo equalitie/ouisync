@@ -77,15 +77,13 @@ impl SubdirectoryCache {
                         db_pool: owner_branch.db_pool().clone(),
                     }
                 } else {
-                    let dir =
-                        Directory::open(owner_branch, locator, Some(parent)).await?;
+                    let dir = Directory::open(owner_branch, locator, Some(parent)).await?;
                     entry.insert(Arc::downgrade(&dir.inner));
                     dir
                 }
             }
             hash_map::Entry::Vacant(entry) => {
-                let dir =
-                    Directory::open(owner_branch, locator, Some(parent)).await?;
+                let dir = Directory::open(owner_branch, locator, Some(parent)).await?;
                 entry.insert(Arc::downgrade(&dir.inner));
                 dir
             }

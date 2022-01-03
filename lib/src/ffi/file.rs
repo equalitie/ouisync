@@ -24,7 +24,10 @@ pub unsafe extern "C" fn file_open(
 
         ctx.spawn(async move {
             let file = repo.open_file(&path).await?;
-            Ok(SharedHandle::new(Arc::new(Mutex::new(FfiFile{file, repo}))))
+            Ok(SharedHandle::new(Arc::new(Mutex::new(FfiFile {
+                file,
+                repo,
+            }))))
         })
     })
 }
@@ -44,7 +47,10 @@ pub unsafe extern "C" fn file_create(
             let mut file = repo.create_file(&path).await?;
             file.flush().await?;
 
-            Ok(SharedHandle::new(Arc::new(Mutex::new(FfiFile{file, repo}))))
+            Ok(SharedHandle::new(Arc::new(Mutex::new(FfiFile {
+                file,
+                repo,
+            }))))
         })
     })
 }
@@ -74,9 +80,7 @@ pub unsafe extern "C" fn file_close(
     session::with(port, error, |ctx| {
         let ffi_file = handle.release();
 
-        ctx.spawn(async move {
-            ffi_file.lock().await.file.flush().await
-        })
+        ctx.spawn(async move { ffi_file.lock().await.file.flush().await })
     })
 }
 
@@ -89,9 +93,7 @@ pub unsafe extern "C" fn file_flush(
     session::with(port, error, |ctx| {
         let ffi_file = handle.get();
 
-        ctx.spawn(async move {
-            ffi_file.lock().await.file.flush().await
-        })
+        ctx.spawn(async move { ffi_file.lock().await.file.flush().await })
     })
 }
 
@@ -113,7 +115,7 @@ pub unsafe extern "C" fn file_read(
         let len: usize = len.try_into().map_err(|_| Error::OffsetOutOfRange)?;
 
         ctx.spawn(async move {
-            let mut g  = ffi_file.lock().await;
+            let mut g = ffi_file.lock().await;
             g.file.seek(SeekFrom::Start(offset)).await?;
 
             let buffer = slice::from_raw_parts_mut(buffer.into_inner(), len);

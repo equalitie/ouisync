@@ -50,7 +50,9 @@ impl Branch {
     }
 
     pub(crate) async fn open_root(&self) -> Result<Directory> {
-        self.root_directory.open(self.clone(), self.pool.clone()).await
+        self.root_directory
+            .open(self.clone(), self.pool.clone())
+            .await
     }
 
     pub(crate) async fn open_or_create_root(&self) -> Result<Directory> {
