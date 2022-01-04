@@ -127,10 +127,6 @@ impl Repository {
         })
     }
 
-    pub fn this_writer_id(&self) -> &PublicKey {
-        &self.shared.this_writer_id
-    }
-
     pub fn secrets(&self) -> &AccessSecrets {
         &self.shared.secrets
     }
@@ -255,7 +251,7 @@ impl Repository {
                     .await
                     .ok_or(Error::OperationNotSupported /* can't move root */)?;
 
-                (src_dir, Cow::Borrowed(src_name), *self.this_writer_id())
+                (src_dir, Cow::Borrowed(src_name), *local_branch.id())
             }
         };
 
@@ -280,7 +276,7 @@ impl Repository {
                 // destination version vector must be "happened after" those.
                 dst_joint_reader
                     .merge_version_vectors(dst_name)
-                    .incremented(*self.this_writer_id())
+                    .incremented(*local_branch.id())
             }
             Ok(_) => return Err(Error::EntryExists),
             Err(e) => return Err(e),
@@ -339,7 +335,7 @@ impl Repository {
         let mut dirs = Vec::with_capacity(branches.len());
 
         for branch in branches {
-            let dir = if branch.id() == self.this_writer_id() {
+            let dir = if branch.id() == local_branch.id() {
                 branch.open_or_create_root().await.map_err(|error| {
                     log::error!(
                         "failed to open root directory on the local branch: {:?}",
@@ -377,7 +373,7 @@ impl Repository {
         let branches = self.shared.branches.lock().await;
         for (writer_id, branch) in &*branches {
             let print = print.indent();
-            let local = if writer_id == self.this_writer_id() {
+            let local = if *writer_id == self.shared.this_writer_id {
                 " (local)"
             } else {
                 ""
