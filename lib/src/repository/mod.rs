@@ -462,10 +462,8 @@ impl Shared {
         match self.branches.lock().await.entry(*data.id()) {
             Entry::Occupied(entry) => Ok(entry.get().clone()),
             Entry::Vacant(entry) => {
-                // let keys = self.secrets.keys().ok_or(Error::PermissionDenied)?;
-                // TODO: use keys, not secrets
-                let branch =
-                    Branch::new(self.index.pool.clone(), data.clone(), self.secrets.clone());
+                let keys = self.secrets.keys().ok_or(Error::PermissionDenied)?;
+                let branch = Branch::new(self.index.pool.clone(), data.clone(), keys);
                 entry.insert(branch.clone());
                 Ok(branch)
             }

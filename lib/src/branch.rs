@@ -1,5 +1,5 @@
 use crate::{
-    access_control::AccessSecrets,
+    access_control::AccessKeys,
     blob::Blob,
     block::BlockId,
     crypto::Cryptor,
@@ -20,20 +20,16 @@ use std::sync::Arc;
 pub struct Branch {
     pool: db::Pool,
     branch_data: Arc<BranchData>,
-    secrets: AccessSecrets,
+    keys: AccessKeys,
     root_directory: Arc<RootDirectoryCache>,
 }
 
 impl Branch {
-    pub(crate) fn new(
-        pool: db::Pool,
-        branch_data: Arc<BranchData>,
-        secrets: AccessSecrets,
-    ) -> Self {
+    pub(crate) fn new(pool: db::Pool, branch_data: Arc<BranchData>, keys: AccessKeys) -> Self {
         Self {
             pool,
             branch_data,
-            secrets,
+            keys,
             root_directory: Arc::new(RootDirectoryCache::new()),
         }
     }
@@ -50,13 +46,13 @@ impl Branch {
         &self.pool
     }
 
-    pub(crate) fn secrets(&self) -> &AccessSecrets {
-        &self.secrets
+    pub(crate) fn keys(&self) -> &AccessKeys {
+        &self.keys
     }
 
     // TODO: remove
     pub(crate) fn cryptor(&self) -> Cryptor {
-        self.secrets.cryptor()
+        self.keys.cryptor()
     }
 
     pub(crate) async fn open_root(&self) -> Result<Directory> {
@@ -124,7 +120,7 @@ impl Branch {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{db, index::Index, locator::Locator, repository};
+    use crate::{access_control::WriteSecrets, db, index::Index, locator::Locator, repository};
 
     #[tokio::test(flavor = "multi_thread")]
     async fn ensure_root_directory_exists() {
@@ -156,10 +152,12 @@ mod tests {
         let pool = repository::create_db(&db::Store::Memory).await.unwrap();
 
         let writer_id = rand::random();
-        let secrets = AccessSecrets::generate_write(&mut rand::thread_rng());
+        let secrets = WriteSecrets::random();
+        let repository_id = secrets.id;
+        let keys = secrets.into();
 
-        let index = Index::load(pool.clone(), *secrets.id()).await.unwrap();
+        let index = Index::load(pool.clone(), repository_id).await.unwrap();
         let branch = index.create_branch(writer_id).await.unwrap();
-        Branch::new(pool, branch, secrets)
+        Branch::new(pool, branch, keys)
     }
 }

@@ -1,7 +1,14 @@
 use super::*;
 use crate::{
-    access_control::AccessSecrets, blob::Blob, branch::Branch, crypto::sign::PublicKey, db,
-    directory::EntryData, index::BranchData, locator::Locator, repository,
+    access_control::{AccessKeys, WriteSecrets},
+    blob::Blob,
+    branch::Branch,
+    crypto::sign::PublicKey,
+    db,
+    directory::EntryData,
+    index::BranchData,
+    locator::Locator,
+    repository,
     version_vector::VersionVector,
 };
 use assert_matches::assert_matches;
@@ -858,16 +865,16 @@ async fn setup_with_rng(mut rng: StdRng, branch_count: usize) -> Vec<Branch> {
     let pool = &pool;
 
     let (notify_tx, _) = async_broadcast::broadcast(1);
-    let secrets = AccessSecrets::generate_write(&mut rng);
+    let keys = AccessKeys::from(WriteSecrets::generate(&mut rng));
 
     future::join_all((0..branch_count).map(|_| {
         let id = rng.gen();
         let notify_tx = notify_tx.clone();
-        let secrets = secrets.clone();
+        let keys = keys.clone();
 
         async move {
             let data = BranchData::new(pool, id, notify_tx).await.unwrap();
-            Branch::new(pool.clone(), Arc::new(data), secrets)
+            Branch::new(pool.clone(), Arc::new(data), keys)
         }
     }))
     .await

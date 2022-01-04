@@ -151,7 +151,12 @@ impl File {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{access_control::AccessSecrets, db, index::BranchData, repository};
+    use crate::{
+        access_control::{AccessKeys, WriteSecrets},
+        db,
+        index::BranchData,
+        repository,
+    };
     use std::sync::Arc;
 
     #[tokio::test(flavor = "multi_thread")]
@@ -252,20 +257,20 @@ mod tests {
 
     async fn setup() -> (Branch, Branch) {
         let pool = repository::create_db(&db::Store::Memory).await.unwrap();
-        let secrets = AccessSecrets::random_write();
+        let keys = AccessKeys::from(WriteSecrets::random());
 
         (
-            create_branch(pool.clone(), secrets.clone()).await,
-            create_branch(pool, secrets).await,
+            create_branch(pool.clone(), keys.clone()).await,
+            create_branch(pool, keys).await,
         )
     }
 
-    async fn create_branch(pool: db::Pool, secrets: AccessSecrets) -> Branch {
+    async fn create_branch(pool: db::Pool, keys: AccessKeys) -> Branch {
         let (notify_tx, _) = async_broadcast::broadcast(1);
         let branch_data = BranchData::new(&pool, rand::random(), notify_tx)
             .await
             .unwrap();
-        Branch::new(pool, Arc::new(branch_data), secrets)
+        Branch::new(pool, Arc::new(branch_data), keys)
     }
 }
 

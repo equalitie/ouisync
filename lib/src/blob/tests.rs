@@ -1,6 +1,6 @@
 use super::*;
 use crate::index::BranchData;
-use crate::{access_control::AccessSecrets, error::Error, test_utils};
+use crate::{access_control::WriteSecrets, error::Error, test_utils};
 use crate::{block, repository};
 use assert_matches::assert_matches;
 use proptest::collection::vec;
@@ -471,7 +471,7 @@ async fn fork_case(
     let dst_branch = Branch::new(
         src_branch.db_pool().clone(),
         dst_branch,
-        src_branch.secrets().clone(),
+        src_branch.keys().clone(),
     );
 
     let src_locator = if src_locator_is_root {
@@ -525,12 +525,12 @@ async fn fork_case(
 
 async fn setup(rng_seed: u64) -> (StdRng, Branch) {
     let mut rng = StdRng::seed_from_u64(rng_seed);
-    let secrets = AccessSecrets::generate_write(&mut rng);
+    let keys = WriteSecrets::generate(&mut rng).into();
     let pool = repository::create_db(&db::Store::Memory).await.unwrap();
 
     let (notify_tx, _) = async_broadcast::broadcast(1);
     let branch = BranchData::new(&pool, rng.gen(), notify_tx).await.unwrap();
-    let branch = Branch::new(pool, Arc::new(branch), secrets);
+    let branch = Branch::new(pool, Arc::new(branch), keys);
 
     (rng, branch)
 }
