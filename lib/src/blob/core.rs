@@ -23,7 +23,7 @@ impl Core {
         match operations::load_block(
             &mut tx,
             self.branch.data(),
-            &self.branch.cryptor(),
+            &self.branch.keys().cryptor(),
             &self.head_locator,
         )
         .await
@@ -52,7 +52,7 @@ impl Core {
                 // have the original nonce.
 
                 let nonce: BlobNonce = rand::random();
-                self.blob_key = self.branch.cryptor().derive_subkey(&nonce);
+                self.blob_key = self.branch.keys().cryptor().derive_subkey(&nonce);
 
                 Ok(OpenBlock::new_head(self.head_locator, &nonce))
             }
@@ -65,7 +65,7 @@ impl Core {
         let mut tx = branch.db_pool().begin().await?;
         branch
             .data()
-            .get(&mut tx, &head_locator.encode(&branch.cryptor()))
+            .get(&mut tx, &head_locator.encode(&branch.keys().cryptor()))
             .await
     }
 

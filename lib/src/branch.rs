@@ -2,7 +2,6 @@ use crate::{
     access_control::AccessKeys,
     blob::Blob,
     block::BlockId,
-    crypto::Cryptor,
     db,
     debug_printer::DebugPrinter,
     directory::{Directory, EntryRef, RootDirectoryCache},
@@ -48,11 +47,6 @@ impl Branch {
 
     pub(crate) fn keys(&self) -> &AccessKeys {
         &self.keys
-    }
-
-    // TODO: remove
-    pub(crate) fn cryptor(&self) -> Cryptor {
-        self.keys.cryptor()
     }
 
     pub(crate) async fn open_root(&self) -> Result<Directory> {

@@ -50,14 +50,18 @@ impl Blob {
         // NOTE: no need to commit this transaction because we are only reading here.
         let mut tx = branch.db_pool().begin().await?;
 
-        let (id, buffer, auth_tag) =
-            operations::load_block(&mut tx, branch.data(), &branch.cryptor(), &head_locator)
-                .await?;
+        let (id, buffer, auth_tag) = operations::load_block(
+            &mut tx,
+            branch.data(),
+            &branch.keys().cryptor(),
+            &head_locator,
+        )
+        .await?;
 
         let mut content = Cursor::new(buffer);
 
         let nonce: BlobNonce = content.read_array();
-        let blob_key = branch.cryptor().derive_subkey(&nonce);
+        let blob_key = branch.keys().cryptor().derive_subkey(&nonce);
 
         operations::decrypt_block(&blob_key, &id, 0, &mut content, &auth_tag)?;
 
@@ -89,7 +93,7 @@ impl Blob {
     /// Creates a new blob.
     pub fn create(branch: Branch, head_locator: Locator) -> Self {
         let nonce: BlobNonce = rand::random();
-        let blob_key = branch.cryptor().derive_subkey(&nonce);
+        let blob_key = branch.keys().cryptor().derive_subkey(&nonce);
 
         let current_block = OpenBlock::new_head(head_locator, &nonce);
 

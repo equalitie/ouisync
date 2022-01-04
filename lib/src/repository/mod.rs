@@ -320,11 +320,6 @@ impl Repository {
         self.shared.local_branch().await
     }
 
-    /// Return the branch with the specified id if it exists.
-    pub(crate) async fn branch(&self, id: &PublicKey) -> Result<Branch> {
-        self.shared.branch(id).await
-    }
-
     /// Subscribe to change notification from all current and future branches.
     pub(crate) fn subscribe(&self) -> async_broadcast::Receiver<PublicKey> {
         self.shared.index.subscribe()
@@ -650,7 +645,7 @@ mod tests {
             .await
             .unwrap();
 
-        let remote_branch = repo.branch(&remote_id).await.unwrap();
+        let remote_branch = repo.shared.branch(&remote_id).await.unwrap();
         let remote_root = remote_branch.open_or_create_root().await.unwrap();
 
         let local_branch = repo.local_branch().await.unwrap();
