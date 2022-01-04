@@ -158,7 +158,9 @@ mod tests {
         let writer_id = rand::random();
         let secrets = AccessSecrets::generate_write(&mut rand::thread_rng());
 
-        let index = Index::load(pool.clone(), writer_id).await.unwrap();
+        let index = Index::load(pool.clone(), *secrets.id(), writer_id)
+            .await
+            .unwrap();
         let branch = Branch::new(pool, index.branches().await.local().clone(), secrets);
 
         branch

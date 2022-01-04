@@ -46,6 +46,7 @@ pub use self::{
     directory::{Directory, EntryRef, EntryType},
     error::{Error, Result},
     file::File,
+    index::Index,
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     joint_entry::JointEntry,
     network::{Network, NetworkOptions},

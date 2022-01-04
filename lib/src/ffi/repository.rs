@@ -61,7 +61,7 @@ pub unsafe extern "C" fn repository_create(
             )
             .await?;
 
-            let registration = network_handle.register(&repository).await;
+            let registration = network_handle.register(repository.index().clone()).await;
 
             let holder = Arc::new(RepositoryHolder {
                 repository,
@@ -101,7 +101,7 @@ pub unsafe extern "C" fn repository_open(
             )
             .await?;
 
-            let registration = network_handle.register(&repository).await;
+            let registration = network_handle.register(repository.index().clone()).await;
 
             let holder = Arc::new(RepositoryHolder {
                 repository,

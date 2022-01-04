@@ -23,7 +23,7 @@ use self::{
 use crate::{
     error::{Error, Result},
     index::Index,
-    repository::{Repository, RepositoryId},
+    repository::RepositoryId,
     scoped_task::{self, ScopedJoinHandle, ScopedTaskSet},
     upnp,
 };
@@ -220,21 +220,20 @@ impl Handle {
     /// repositories of currently connected remote replicas as well as any replicas connected in
     /// the future. The repository is automatically deregistered when the returned handle is
     /// dropped.
-    pub async fn register(&self, repository: &Repository) -> Registration {
-        let id = *repository.id();
-
+    pub async fn register(&self, index: Index) -> Registration {
         // TODO: consider disabling DHT by default, for privacy reasons.
-        let dht = self.inner.start_dht_lookup(repository_info_hash(&id));
+        let dht = self
+            .inner
+            .start_dht_lookup(repository_info_hash(index.repository_id()));
 
         let mut network_state = self.inner.state.lock().await;
 
         let key = network_state.registry.insert(RegistrationHolder {
-            index: repository.index().clone(),
-            id,
+            index: index.clone(),
             dht,
         });
 
-        network_state.create_link(id, repository.index());
+        network_state.create_link(index);
 
         Registration {
             inner: self.inner.clone(),
@@ -254,7 +253,7 @@ impl Registration {
         let holder = &mut state.registry[self.key];
         holder.dht = self
             .inner
-            .start_dht_lookup(repository_info_hash(&holder.id));
+            .start_dht_lookup(repository_info_hash(holder.index.repository_id()));
     }
 
     pub async fn disable_dht(&self) {
@@ -285,7 +284,7 @@ impl Drop for Registration {
             let holder = state.registry.remove(key);
 
             for broker in state.message_brokers.values_mut() {
-                broker.destroy_link(&holder.id);
+                broker.destroy_link(holder.index.repository_id());
             }
         });
     }
@@ -293,7 +292,6 @@ impl Drop for Registration {
 
 struct RegistrationHolder {
     index: Index,
-    id: RepositoryId,
     dht: Option<dht_discovery::LookupRequest>,
 }
 
@@ -321,9 +319,9 @@ struct State {
 }
 
 impl State {
-    fn create_link(&mut self, id: RepositoryId, index: &Index) {
+    fn create_link(&mut self, index: Index) {
         for broker in self.message_brokers.values_mut() {
-            broker.create_link(id, index.clone())
+            broker.create_link(index.clone())
         }
     }
 }
@@ -526,7 +524,7 @@ impl Inner {
                 // lookup but make sure we correctly handle edge cases, for example, when we have
                 // more than one repository shared with the peer.
                 for (_, holder) in &state.registry {
-                    broker.create_link(holder.id, holder.index.clone());
+                    broker.create_link(holder.index.clone());
                 }
 
                 entry.insert(broker);

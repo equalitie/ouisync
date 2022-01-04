@@ -52,7 +52,7 @@ async fn transfer_snapshot_between_two_replicas_case(
     save_snapshot(&a_index, &snapshot).await;
     write_all_blocks(&a_index, &snapshot).await;
 
-    assert!(load_latest_root_node(&b_index, &a_index.this_writer_id)
+    assert!(load_latest_root_node(&b_index, a_index.this_writer_id())
         .await
         .is_none());
 
@@ -121,9 +121,10 @@ async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed:
 
 async fn create_index<R: Rng>(rng: &mut R) -> Index {
     let db = repository::create_db(&db::Store::Memory).await.unwrap();
-    let id = rng.gen();
+    let repository_id = rng.gen();
+    let writer_id = rng.gen();
 
-    Index::load(db, id).await.unwrap()
+    Index::load(db, repository_id, writer_id).await.unwrap()
 }
 
 // Enough capacity to prevent deadlocks.
@@ -132,11 +133,11 @@ const CAPACITY: usize = 256;
 
 async fn save_snapshot(index: &Index, snapshot: &Snapshot) {
     let mut version_vector = VersionVector::new();
-    version_vector.insert(index.this_writer_id, 2); // to force overwrite the initial root node
+    version_vector.insert(*index.this_writer_id(), 2); // to force overwrite the initial root node
 
     let root_node = RootNode::create(
         &index.pool,
-        &index.this_writer_id,
+        index.this_writer_id(),
         version_vector,
         *snapshot.root_hash(),
         Summary::INCOMPLETE,
@@ -171,13 +172,13 @@ async fn save_snapshot(index: &Index, snapshot: &Snapshot) {
 async fn wait_until_snapshots_in_sync(server_index: &Index, client_index: &Index) {
     let mut rx = client_index.subscribe();
 
-    let server_root = load_latest_root_node(server_index, &server_index.this_writer_id)
+    let server_root = load_latest_root_node(server_index, server_index.this_writer_id())
         .await
         .unwrap();
 
     loop {
         if let Some(client_root) =
-            load_latest_root_node(client_index, &server_index.this_writer_id).await
+            load_latest_root_node(client_index, server_index.this_writer_id()).await
         {
             if client_root.summary.is_complete() && client_root.hash == server_root.hash {
                 // client has now fully downloaded server's latest snapshot.

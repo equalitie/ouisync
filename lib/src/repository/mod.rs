@@ -96,7 +96,7 @@ impl Repository {
         enable_merger: bool,
     ) -> Result<Self> {
         let enable_merger = enable_merger && secrets.can_write();
-        let index = Index::load(pool, this_writer_id).await?;
+        let index = Index::load(pool, *secrets.id(), this_writer_id).await?;
 
         let shared = Arc::new(Shared {
             index,
@@ -116,17 +116,16 @@ impl Repository {
         })
     }
 
-    /// Get the id of this repository.
-    pub fn id(&self) -> &RepositoryId {
-        self.shared.secrets.id()
-    }
-
     pub fn this_writer_id(&self) -> &PublicKey {
         self.shared.index.this_writer_id()
     }
 
     pub fn secrets(&self) -> &AccessSecrets {
         &self.shared.secrets
+    }
+
+    pub fn index(&self) -> &Index {
+        &self.shared.index
     }
 
     /// Looks up an entry by its path. The path must be relative to the repository root.
@@ -364,10 +363,6 @@ impl Repository {
         }
 
         Ok(JointDirectory::new(self.local_branch().await, dirs))
-    }
-
-    pub(crate) fn index(&self) -> &Index {
-        &self.shared.index
     }
 
     pub async fn debug_print(&self, print: DebugPrinter) {

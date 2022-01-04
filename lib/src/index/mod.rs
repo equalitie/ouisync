@@ -17,6 +17,7 @@ use crate::{
     crypto::{sign::PublicKey, Hash, Hashable},
     db,
     error::{Error, Result},
+    repository::RepositoryId,
     version_vector::VersionVector,
 };
 use sqlx::Row;
@@ -31,21 +32,25 @@ use tokio::sync::{RwLock, RwLockReadGuard};
 type SnapshotId = u32;
 
 #[derive(Clone)]
-pub(crate) struct Index {
-    pub pool: db::Pool,
-    pub this_writer_id: PublicKey,
+pub struct Index {
+    pub(crate) pool: db::Pool,
     shared: Arc<Shared>,
 }
 
 impl Index {
-    pub async fn load(pool: db::Pool, this_writer_id: PublicKey) -> Result<Self> {
+    pub(crate) async fn load(
+        pool: db::Pool,
+        repository_id: RepositoryId,
+        this_writer_id: PublicKey,
+    ) -> Result<Self> {
         let (notify_tx, notify_rx) = async_broadcast::broadcast(32);
         let branches = Branches::load(&pool, this_writer_id, notify_tx.clone()).await?;
 
         Ok(Self {
             pool,
-            this_writer_id,
             shared: Arc::new(Shared {
+                repository_id,
+                this_writer_id,
                 branches: RwLock::new(branches),
                 notify_tx,
                 notify_rx: notify_rx.deactivate(),
@@ -53,27 +58,31 @@ impl Index {
         })
     }
 
-    pub fn this_writer_id(&self) -> &PublicKey {
-        &self.this_writer_id
+    pub(crate) fn repository_id(&self) -> &RepositoryId {
+        &self.shared.repository_id
     }
 
-    pub async fn branches(&self) -> RwLockReadGuard<'_, Branches> {
+    pub(crate) fn this_writer_id(&self) -> &PublicKey {
+        &self.shared.this_writer_id
+    }
+
+    pub(crate) async fn branches(&self) -> RwLockReadGuard<'_, Branches> {
         self.shared.branches.read().await
     }
 
     /// Subscribe to change notification from all current and future branches.
-    pub fn subscribe(&self) -> async_broadcast::Receiver<PublicKey> {
+    pub(crate) fn subscribe(&self) -> async_broadcast::Receiver<PublicKey> {
         self.shared.notify_rx.activate_cloned()
     }
 
     /// Signal to all subscribers of this index that it is about to be terminated.
-    pub fn close(&self) {
+    pub(crate) fn close(&self) {
         self.shared.notify_tx.close();
     }
 
     /// Receive `RootNode` from other replica and store it into the db. Returns whether the
     /// received node was more up-to-date than the corresponding branch stored by this replica.
-    pub async fn receive_root_node(
+    pub(crate) async fn receive_root_node(
         &self,
         writer_id: &PublicKey,
         version_vector: VersionVector,
@@ -147,7 +156,7 @@ impl Index {
 
     /// Receive inner nodes from other replica and store them into the db.
     /// Returns hashes of those nodes that were more up to date than the locally stored ones.
-    pub async fn receive_inner_nodes(
+    pub(crate) async fn receive_inner_nodes(
         &self,
         parent_hash: Hash,
         inner_layer: usize,
@@ -170,7 +179,7 @@ impl Index {
 
     /// Receive leaf nodes from other replica and store them into the db.
     /// Returns the ids of the blocks that the remote replica has but the local one has not.
-    pub async fn receive_leaf_nodes(
+    pub(crate) async fn receive_leaf_nodes(
         &self,
         parent_hash: Hash,
         nodes: LeafNodeSet,
@@ -294,6 +303,8 @@ impl Index {
 }
 
 struct Shared {
+    repository_id: RepositoryId,
+    this_writer_id: PublicKey,
     branches: RwLock<Branches>,
     notify_tx: async_broadcast::Sender<PublicKey>,
     notify_rx: async_broadcast::InactiveReceiver<PublicKey>,
