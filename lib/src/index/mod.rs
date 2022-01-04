@@ -20,11 +20,11 @@ use crate::{
     repository::RepositoryId,
     version_vector::VersionVector,
 };
+use futures_util::TryStreamExt;
 use sqlx::Row;
 use std::{
     cmp::Ordering,
     collections::{hash_map::Entry, HashMap},
-    iter,
     sync::Arc,
 };
 use tokio::sync::{RwLock, RwLockReadGuard};
@@ -38,19 +38,14 @@ pub struct Index {
 }
 
 impl Index {
-    pub(crate) async fn load(
-        pool: db::Pool,
-        repository_id: RepositoryId,
-        this_writer_id: PublicKey,
-    ) -> Result<Self> {
+    pub(crate) async fn load(pool: db::Pool, repository_id: RepositoryId) -> Result<Self> {
         let (notify_tx, notify_rx) = async_broadcast::broadcast(32);
-        let branches = Branches::load(&pool, this_writer_id, notify_tx.clone()).await?;
+        let branches = load_branches(&pool, notify_tx.clone()).await?;
 
         Ok(Self {
             pool,
             shared: Arc::new(Shared {
                 repository_id,
-                this_writer_id,
                 branches: RwLock::new(branches),
                 notify_tx,
                 notify_rx: notify_rx.deactivate(),
@@ -69,7 +64,7 @@ impl Index {
     pub(crate) async fn create_branch(&self, writer_id: PublicKey) -> Result<Arc<BranchData>> {
         let mut branches = self.shared.branches.write().await;
 
-        match branches.remote.entry(writer_id) {
+        match branches.entry(writer_id) {
             Entry::Occupied(_) => Err(Error::EntryExists),
             Entry::Vacant(entry) => {
                 let branch = Arc::new(
@@ -103,7 +98,7 @@ impl Index {
         let branches = self.branches().await;
 
         // If the received node is outdated relative to any branch we have, ignore it.
-        for branch in branches.all() {
+        for branch in branches.values() {
             if branch.id() == writer_id {
                 // this will be checked further down.
                 continue;
@@ -292,7 +287,7 @@ impl Index {
     ) -> Result<()> {
         let mut branches = self.shared.branches.write().await;
 
-        match branches.remote.entry(writer_id) {
+        match branches.entry(writer_id) {
             Entry::Vacant(entry) => {
                 entry.insert(Arc::new(BranchData::with_root_node(
                     writer_id,
@@ -315,49 +310,13 @@ impl Index {
 
 struct Shared {
     repository_id: RepositoryId,
-    this_writer_id: PublicKey,
     branches: RwLock<Branches>,
     notify_tx: async_broadcast::Sender<PublicKey>,
     notify_rx: async_broadcast::InactiveReceiver<PublicKey>,
 }
 
 /// Container for all known branches (local and remote)
-pub(crate) struct Branches {
-    local: Arc<BranchData>,
-    remote: HashMap<PublicKey, Arc<BranchData>>,
-}
-
-impl Branches {
-    async fn load(
-        pool: &db::Pool,
-        this_writer_id: PublicKey,
-        notify_tx: async_broadcast::Sender<PublicKey>,
-    ) -> Result<Self> {
-        let local = Arc::new(BranchData::new(pool, this_writer_id, notify_tx.clone()).await?);
-        let remote = load_remote_branches(pool, &this_writer_id, notify_tx).await?;
-
-        Ok(Self { local, remote })
-    }
-
-    /// Returns a branch with the given id, if it exists.
-    pub fn get(&self, writer_id: &PublicKey) -> Option<&Arc<BranchData>> {
-        if self.local.id() == writer_id {
-            Some(&self.local)
-        } else {
-            self.remote.get(writer_id)
-        }
-    }
-
-    /// Returns an iterator over all branches in this container.
-    pub fn all(&self) -> impl Iterator<Item = &Arc<BranchData>> {
-        iter::once(&self.local).chain(self.remote.values())
-    }
-
-    /// Returns the local branch.
-    pub fn local(&self) -> &Arc<BranchData> {
-        &self.local
-    }
-}
+pub(crate) type Branches = HashMap<PublicKey, Arc<BranchData>>;
 
 async fn broadcast<T: Clone>(tx: &async_broadcast::Sender<T>, value: T) {
     // don't await if there are only inactive receivers.
@@ -370,34 +329,23 @@ async fn broadcast<T: Clone>(tx: &async_broadcast::Sender<T>, value: T) {
     tx.broadcast(value).await.map(|_| ()).unwrap_or(())
 }
 
-/// Returns all replica ids we know of except ours.
-async fn load_other_writer_ids(
+async fn load_branches(
     pool: &db::Pool,
-    this_writer_id: &PublicKey,
-) -> Result<Vec<PublicKey>> {
-    Ok(
-        sqlx::query("SELECT DISTINCT writer_id FROM snapshot_root_nodes WHERE writer_id <> ?")
-            .bind(this_writer_id)
-            .map(|row| row.get(0))
-            .fetch_all(pool)
-            .await?,
-    )
-}
-
-async fn load_remote_branches(
-    pool: &db::Pool,
-    this_writer_id: &PublicKey,
     notify_tx: async_broadcast::Sender<PublicKey>,
 ) -> Result<HashMap<PublicKey, Arc<BranchData>>> {
-    let ids = load_other_writer_ids(pool, this_writer_id).await?;
-    let mut map = HashMap::new();
-
-    for id in ids {
-        let branch = Arc::new(BranchData::new(pool, id, notify_tx.clone()).await?);
-        map.insert(id, branch);
-    }
-
-    Ok(map)
+    sqlx::query("SELECT DISTINCT writer_id FROM snapshot_root_nodes")
+        .fetch(pool)
+        .err_into()
+        .and_then(|row| {
+            let notify_tx = notify_tx.clone();
+            async move {
+                let id = row.get(0);
+                let branch = Arc::new(BranchData::new(pool, id, notify_tx).await?);
+                Ok((id, branch))
+            }
+        })
+        .try_collect()
+        .await
 }
 
 /// Initializes the index. Creates the required database schema unless already exists.

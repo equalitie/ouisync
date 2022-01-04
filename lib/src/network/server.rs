@@ -24,13 +24,7 @@ impl Server {
         let mut subscription = self.index.subscribe();
 
         // send initial branches
-        let branch_ids: Vec<_> = self
-            .index
-            .branches()
-            .await
-            .all()
-            .map(|branch| *branch.id())
-            .collect();
+        let branch_ids: Vec<_> = self.index.branches().await.keys().copied().collect();
         for branch_id in branch_ids {
             self.handle_branch_changed(branch_id).await?;
         }

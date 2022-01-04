@@ -64,7 +64,7 @@ async fn transfer_snapshot_between_two_replicas_case(
 
             if remaining_changesets > 0 {
                 for _ in 0..changeset_size {
-                    create_block(&mut rng, &a_index).await;
+                    create_block(&mut rng, &a_index, &a_id).await;
                 }
 
                 remaining_changesets -= 1;
@@ -122,7 +122,7 @@ async fn create_index<R: Rng>(rng: &mut R) -> (Index, PublicKey) {
     let repository_id = rng.gen();
     let writer_id = rng.gen();
 
-    let index = Index::load(db, repository_id, writer_id).await.unwrap();
+    let index = Index::load(db, repository_id).await.unwrap();
     index.create_branch(writer_id).await.unwrap();
 
     (index, writer_id)
@@ -150,7 +150,8 @@ async fn save_snapshot(index: &Index, writer_id: PublicKey, snapshot: &Snapshot)
     index
         .branches()
         .await
-        .local()
+        .get(&writer_id)
+        .unwrap()
         .update_root(&mut tx, root_node)
         .await
         .unwrap();
@@ -202,8 +203,8 @@ async fn wait_until_block_exists(index: &Index, block_id: &BlockId) {
     }
 }
 
-async fn create_block(rng: &mut impl Rng, index: &Index) {
-    let branch = index.branches().await.local().clone();
+async fn create_block(rng: &mut impl Rng, index: &Index, writer_id: &PublicKey) {
+    let branch = index.branches().await.get(writer_id).unwrap().clone();
     let encoded_locator = rng.gen::<u64>().hash();
     let block_id = rng.gen();
     let content = vec![0; BLOCK_SIZE];

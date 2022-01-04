@@ -54,12 +54,11 @@ impl Repository {
 
         tx.commit().await?;
 
-        let index = Index::load(pool, *access_secrets.id(), this_writer_id).await?;
-        // let local_branch = if access_secrets.can_write() {
-        //     Some(index.create_branch(this_writer_id).await?)
-        // } else {
-        //     None
-        // };
+        let index = Index::load(pool, *access_secrets.id()).await?;
+
+        if access_secrets.can_write() {
+            index.create_branch(this_writer_id).await?;
+        }
 
         Self::new(index, this_writer_id, access_secrets, enable_merger).await
     }
@@ -93,21 +92,17 @@ impl Repository {
             AccessSecrets::Blind { id }
         };
 
-        let index = Index::load(pool, *access_secrets.id(), this_writer_id).await?;
-        // let local_branch = index.branches().await.get(&this_writer_id).cloned();
+        let index = Index::load(pool, *access_secrets.id()).await?;
 
         Self::new(index, this_writer_id, access_secrets, enable_merger).await
     }
 
     async fn new(
         index: Index,
-        // local_branch: Option<Arc<BranchData>>,
         this_writer_id: PublicKey,
         secrets: AccessSecrets,
         enable_merger: bool,
     ) -> Result<Self> {
-        let enable_merger = enable_merger && secrets.can_write();
-
         let shared = Arc::new(Shared {
             index,
             this_writer_id,
@@ -115,11 +110,15 @@ impl Repository {
             branches: Mutex::new(HashMap::new()),
         });
 
-        let merge_handle = if enable_merger {
-            Some(scoped_task::spawn(Merger::new(shared.clone()).run()))
+        let local_branch = if enable_merger {
+            shared.local_branch().await
         } else {
             None
         };
+
+        let merge_handle = local_branch.map(|local_branch| {
+            scoped_task::spawn(Merger::new(shared.clone(), local_branch).run())
+        });
 
         Ok(Self {
             shared,
@@ -310,7 +309,7 @@ impl Repository {
 
     /// Returns the local branch if it exists.
     pub async fn local_branch(&self) -> Option<Branch> {
-        Some(self.shared.local_branch().await)
+        self.shared.local_branch().await
     }
 
     /// Return the branch with the specified id if it exists.
@@ -421,8 +420,8 @@ struct Shared {
 }
 
 impl Shared {
-    pub async fn local_branch(&self) -> Branch {
-        self.inflate(self.index.branches().await.local()).await
+    pub async fn local_branch(&self) -> Option<Branch> {
+        self.branch(&self.this_writer_id).await
     }
 
     pub async fn branch(&self, id: &PublicKey) -> Option<Branch> {
@@ -434,7 +433,7 @@ impl Shared {
             self.index
                 .branches()
                 .await
-                .all()
+                .values()
                 .map(|data| self.inflate(data)),
         )
         .await
@@ -457,14 +456,16 @@ impl Shared {
 // The merge algorithm.
 struct Merger {
     shared: Arc<Shared>,
+    local_branch: Branch,
     tasks: FuturesUnordered<ScopedJoinHandle<PublicKey>>,
     states: HashMap<PublicKey, MergeState>,
 }
 
 impl Merger {
-    fn new(shared: Arc<Shared>) -> Self {
+    fn new(shared: Arc<Shared>, local_branch: Branch) -> Self {
         Self {
             shared,
+            local_branch,
             tasks: FuturesUnordered::new(),
             states: HashMap::new(),
         }
@@ -492,7 +493,7 @@ impl Merger {
     }
 
     async fn handle_branch_changed(&mut self, branch_id: PublicKey) {
-        if branch_id == self.shared.this_writer_id {
+        if branch_id == *self.local_branch.id() {
             // local branch change - ignore.
             return;
         }
@@ -514,7 +515,7 @@ impl Merger {
     }
 
     async fn spawn_task(&mut self, remote_id: PublicKey) {
-        let local = self.shared.local_branch().await;
+        let local = self.local_branch.clone();
 
         let remote = if let Some(remote) = self.shared.branch(&remote_id).await {
             remote
