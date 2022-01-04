@@ -101,7 +101,7 @@ pub(crate) async fn get_repository_id(db: impl db::Executor<'_>) -> Result<Repos
 // Writer Id
 // -------------------------------------------------------------------
 pub(crate) async fn get_writer_id(
-    master_key: &Option<SecretKey>,
+    master_key: Option<&SecretKey>,
     db: impl db::Executor<'_>,
 ) -> Result<sign::PublicKey> {
     let id = match master_key {

@@ -377,7 +377,9 @@ impl Inner {
 
         log::debug!("lookup {}", self.inodes.path_display(parent, Some(name)));
 
-        let local_branch = self.repository.local_branch().await;
+        // TODO: local branch shouldn't be required here. Instead, `JoinDirectoryRef::open` should
+        // take the local branch as `Option`.
+        let local_branch = self.require_local_branch().await?;
         let parent_path = self.inodes.get(parent).calculate_path();
         let parent_dir = self.repository.open_directory(parent_path).await?;
         let parent_dir = parent_dir.read().await;
@@ -871,7 +873,10 @@ impl Inner {
     }
 
     async fn require_local_branch(&self) -> Result<Branch> {
-        Ok(self.repository.local_branch().await) //.ok_or(Error::PermissionsDenied)
+        self.repository
+            .local_branch()
+            .await
+            .ok_or(Error::PermissionDenied)
     }
 
     // For debugging, use when needed
@@ -935,7 +940,7 @@ fn to_error_code(error: &Error) -> libc::c_int {
         Error::EntryIsDirectory => libc::EISDIR,
         Error::NonUtf8FileName => libc::EINVAL,
         Error::OffsetOutOfRange => libc::EINVAL,
-        Error::PermissionsDenied => libc::EACCES,
+        Error::PermissionDenied => libc::EACCES,
         Error::DirectoryNotEmpty => libc::ENOTEMPTY,
         Error::OperationNotSupported => libc::ENOSYS,
     }

@@ -77,7 +77,7 @@ impl Repository {
             None
         };
 
-        let this_writer_id = metadata::get_writer_id(&master_key, &pool).await?;
+        let this_writer_id = metadata::get_writer_id(master_key.as_ref(), &pool).await?;
 
         let access_secrets = if let Some(master_key) = master_key {
             metadata::get_access_secrets(&master_key, &pool).await?
@@ -179,13 +179,13 @@ impl Repository {
 
     /// Creates a new file at the given path.
     pub async fn create_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<File> {
-        let local_branch = self.local_branch().await;
+        let local_branch = self.local_branch().await.ok_or(Error::PermissionDenied)?;
         local_branch.ensure_file_exists(path.as_ref()).await
     }
 
     /// Creates a new directory at the given path.
     pub async fn create_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<Directory> {
-        let local_branch = self.local_branch().await;
+        let local_branch = self.local_branch().await.ok_or(Error::PermissionDenied)?;
         local_branch.ensure_directory_exists(path.as_ref()).await
     }
 
@@ -215,7 +215,7 @@ impl Repository {
         dst_dir_path: D,
         dst_name: &str,
     ) -> Result<()> {
-        let local_branch = self.local_branch().await;
+        let local_branch = self.local_branch().await.ok_or(Error::PermissionDenied)?;
 
         use std::borrow::Cow;
 
@@ -301,23 +301,18 @@ impl Repository {
         Ok(())
     }
 
-    /// Returns the local branch
-    pub async fn local_branch(&self) -> Branch {
-        self.shared.local_branch().await
+    /// Returns the local branch if it exists.
+    pub async fn local_branch(&self) -> Option<Branch> {
+        Some(self.shared.local_branch().await)
     }
 
-    /// Returns the local branch ID
-    pub async fn local_branch_id(&self) -> PublicKey {
-        *self.shared.local_branch().await.id()
-    }
-
-    /// Return the branch with the specified id.
-    pub async fn branch(&self, id: &PublicKey) -> Option<Branch> {
+    /// Return the branch with the specified id if it exists.
+    pub(crate) async fn branch(&self, id: &PublicKey) -> Option<Branch> {
         self.shared.branch(id).await
     }
 
     /// Returns all branches
-    pub async fn branches(&self) -> Vec<Branch> {
+    pub(crate) async fn branches(&self) -> Vec<Branch> {
         self.shared.branches().await
     }
 
@@ -328,6 +323,7 @@ impl Repository {
 
     // Opens the root directory across all branches as JointDirectory.
     async fn joint_root(&self) -> Result<JointDirectory> {
+        let local_branch = self.local_branch().await.ok_or(Error::PermissionDenied)?;
         let branches = self.branches().await;
         let mut dirs = Vec::with_capacity(branches.len());
 
@@ -362,7 +358,7 @@ impl Repository {
             dirs.push(dir);
         }
 
-        Ok(JointDirectory::new(self.local_branch().await, dirs))
+        Ok(JointDirectory::new(local_branch, dirs))
     }
 
     pub async fn debug_print(&self, print: DebugPrinter) {
@@ -630,7 +626,7 @@ mod tests {
         let remote_branch = repo.branch(&remote_id).await.unwrap();
         let remote_root = remote_branch.open_or_create_root().await.unwrap();
 
-        let local_branch = repo.local_branch().await;
+        let local_branch = repo.local_branch().await.unwrap();
         let local_root = local_branch.open_or_create_root().await.unwrap();
 
         let mut file = remote_root
@@ -682,7 +678,7 @@ mod tests {
         .await
         .unwrap();
 
-        let local_branch = repo.local_branch().await;
+        let local_branch = repo.local_branch().await.unwrap();
 
         // Create file
         let mut file = repo.create_file("test.txt").await.unwrap();
@@ -814,7 +810,7 @@ mod tests {
         .await
         .unwrap();
 
-        let local_branch = repo.local_branch().await;
+        let local_branch = repo.local_branch().await.unwrap();
         let mut file = repo.create_file("foo.txt").await.unwrap();
         file.write(b"foo", &local_branch).await.unwrap();
         file.flush().await.unwrap();
