@@ -23,7 +23,7 @@ impl Core {
         match operations::load_block(
             &mut tx,
             self.branch.data(),
-            &self.branch.keys().cryptor(),
+            &self.branch.keys().read,
             &self.head_locator,
         )
         .await
@@ -65,7 +65,7 @@ impl Core {
         let mut tx = branch.db_pool().begin().await?;
         branch
             .data()
-            .get(&mut tx, &head_locator.encode(&branch.keys().cryptor()))
+            .get(&mut tx, &head_locator.encode(&branch.keys().read))
             .await
     }
 

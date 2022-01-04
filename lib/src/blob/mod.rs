@@ -50,13 +50,9 @@ impl Blob {
         // NOTE: no need to commit this transaction because we are only reading here.
         let mut tx = branch.db_pool().begin().await?;
 
-        let (id, buffer, auth_tag) = operations::load_block(
-            &mut tx,
-            branch.data(),
-            &branch.keys().cryptor(),
-            &head_locator,
-        )
-        .await?;
+        let (id, buffer, auth_tag) =
+            operations::load_block(&mut tx, branch.data(), &branch.keys().read, &head_locator)
+                .await?;
 
         let mut content = Cursor::new(buffer);
 

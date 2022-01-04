@@ -3,7 +3,7 @@ use crate::{
     block::{self, BlockId, BLOCK_SIZE},
     branch::Branch,
     crypto::{
-        cipher::{aead, AuthTag, Nonce, NONCE_SIZE},
+        cipher::{self, aead, AuthTag, Nonce, NONCE_SIZE},
         Cryptor,
     },
     db,
@@ -67,7 +67,7 @@ impl<'a> Operations<'a> {
             let (id, content) = read_block(
                 &mut tx,
                 self.core.branch.data(),
-                &self.core.branch.keys().cryptor(),
+                &self.core.branch.keys().read,
                 &self.core.blob_key,
                 &locator,
             )
@@ -138,7 +138,7 @@ impl<'a> Operations<'a> {
                 read_block(
                     tx,
                     self.core.branch.data(),
-                    &self.core.branch.keys().cryptor(),
+                    &self.core.branch.keys().read,
                     &self.core.blob_key,
                     &locator,
                 )
@@ -202,7 +202,7 @@ impl<'a> Operations<'a> {
             let (id, content) = read_block(
                 tx,
                 self.core.branch.data(),
-                &self.core.branch.keys().cryptor(),
+                &self.core.branch.keys().read,
                 &self.core.blob_key,
                 &locator,
             )
@@ -312,8 +312,8 @@ impl<'a> Operations<'a> {
         let mut tx = self.db_pool().begin().await?;
 
         for (src_locator, dst_locator) in self.locators().zip(dst_head_locator.sequence()) {
-            let encoded_src_locator = src_locator.encode(&self.core.branch.keys().cryptor());
-            let encoded_dst_locator = dst_locator.encode(&self.core.branch.keys().cryptor());
+            let encoded_src_locator = src_locator.encode(&self.core.branch.keys().read);
+            let encoded_dst_locator = dst_locator.encode(&self.core.branch.keys().read);
 
             let block_id = self
                 .core
@@ -402,7 +402,7 @@ impl<'a> Operations<'a> {
         write_block(
             tx,
             self.core.branch.data(),
-            &self.core.branch.keys().cryptor(),
+            &self.core.branch.keys().read,
             &self.core.blob_key,
             &self.current_block.locator,
             &self.current_block.id,
@@ -432,7 +432,7 @@ impl<'a> Operations<'a> {
             let (_, buffer) = read_block(
                 tx,
                 self.core.branch.data(),
-                &self.core.branch.keys().cryptor(),
+                &self.core.branch.keys().read,
                 &self.core.blob_key,
                 &locator,
             )
@@ -445,7 +445,7 @@ impl<'a> Operations<'a> {
             write_block(
                 tx,
                 self.core.branch.data(),
-                &self.core.branch.keys().cryptor(),
+                &self.core.branch.keys().read,
                 &self.core.blob_key,
                 &locator,
                 &rand::random(),
@@ -467,7 +467,7 @@ impl<'a> Operations<'a> {
             self.core
                 .branch
                 .data()
-                .remove(tx, &locator.encode(&self.core.branch.keys().cryptor()))
+                .remove(tx, &locator.encode(&self.core.branch.keys().read))
                 .await?;
         }
 
@@ -501,7 +501,7 @@ impl<'a> Operations<'a> {
 async fn read_block(
     tx: &mut db::Transaction<'_>,
     branch: &BranchData,
-    repo_key: &Cryptor,
+    repo_key: &cipher::SecretKey,
     blob_key: &Cryptor,
     locator: &Locator,
 ) -> Result<(BlockId, Buffer)> {
@@ -527,10 +527,10 @@ async fn read_block(
 pub(super) async fn load_block(
     tx: &mut db::Transaction<'_>,
     branch: &BranchData,
-    cryptor: &Cryptor,
+    read_key: &cipher::SecretKey,
     locator: &Locator,
 ) -> Result<(BlockId, Buffer, AuthTag)> {
-    let id = branch.get(tx, &locator.encode(cryptor)).await?;
+    let id = branch.get(tx, &locator.encode(read_key)).await?;
     let mut content = Buffer::new();
     let auth_tag = block::read(tx, &id, &mut content).await?;
 
@@ -540,7 +540,7 @@ pub(super) async fn load_block(
 async fn write_block(
     tx: &mut db::Transaction<'_>,
     branch: &BranchData,
-    repo_key: &Cryptor,
+    repo_key: &cipher::SecretKey,
     blob_key: &Cryptor,
     locator: &Locator,
     block_id: &BlockId,

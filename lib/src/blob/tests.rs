@@ -234,8 +234,8 @@ async fn remove_blob() {
     blob.write(&content).await.unwrap();
     blob.flush().await.unwrap();
 
-    let locator0 = locator0.encode(&branch.keys().cryptor());
-    let locator1 = locator1.encode(&branch.keys().cryptor());
+    let locator0 = locator0.encode(&branch.keys().read);
+    let locator1 = locator1.encode(&branch.keys().read);
 
     let block_ids = {
         let mut tx = branch.db_pool().begin().await.unwrap();
@@ -280,8 +280,8 @@ async fn truncate_to_empty() {
     blob.write(&content).await.unwrap();
     blob.flush().await.unwrap();
 
-    let locator0 = locator0.encode(&branch.keys().cryptor());
-    let locator1 = locator1.encode(&branch.keys().cryptor());
+    let locator0 = locator0.encode(&branch.keys().read);
+    let locator1 = locator1.encode(&branch.keys().read);
 
     let (old_block_id0, old_block_id1) = {
         let mut tx = branch.db_pool().begin().await.unwrap();
@@ -350,7 +350,7 @@ async fn truncate_to_shorter() {
         assert_matches!(
             branch
                 .data()
-                .get(&mut tx, &locator.encode(&branch.keys().cryptor()))
+                .get(&mut tx, &locator.encode(&branch.keys().read))
                 .await,
             Err(Error::EntryNotFound)
         );
@@ -369,8 +369,8 @@ async fn modify_blob() {
     blob.write(&content).await.unwrap();
     blob.flush().await.unwrap();
 
-    let locator0 = locator0.encode(&branch.keys().cryptor());
-    let locator1 = locator1.encode(&branch.keys().cryptor());
+    let locator0 = locator0.encode(&branch.keys().read);
+    let locator1 = locator1.encode(&branch.keys().read);
 
     let (old_block_id0, old_block_id1) = {
         let mut tx = branch.db_pool().begin().await.unwrap();
