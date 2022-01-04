@@ -62,12 +62,23 @@ impl Index {
         &self.shared.repository_id
     }
 
-    pub(crate) fn this_writer_id(&self) -> &PublicKey {
-        &self.shared.this_writer_id
-    }
-
     pub(crate) async fn branches(&self) -> RwLockReadGuard<'_, Branches> {
         self.shared.branches.read().await
+    }
+
+    pub(crate) async fn create_branch(&self, writer_id: PublicKey) -> Result<Arc<BranchData>> {
+        let mut branches = self.shared.branches.write().await;
+
+        match branches.remote.entry(writer_id) {
+            Entry::Occupied(_) => Err(Error::EntryExists),
+            Entry::Vacant(entry) => {
+                let branch = Arc::new(
+                    BranchData::new(&self.pool, writer_id, self.shared.notify_tx.clone()).await?,
+                );
+                entry.insert(branch.clone());
+                Ok(branch)
+            }
+        }
     }
 
     /// Subscribe to change notification from all current and future branches.

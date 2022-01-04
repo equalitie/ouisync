@@ -54,7 +54,14 @@ impl Repository {
 
         tx.commit().await?;
 
-        Self::new(pool, this_writer_id, access_secrets, enable_merger).await
+        let index = Index::load(pool, *access_secrets.id(), this_writer_id).await?;
+        // let local_branch = if access_secrets.can_write() {
+        //     Some(index.create_branch(this_writer_id).await?)
+        // } else {
+        //     None
+        // };
+
+        Self::new(index, this_writer_id, access_secrets, enable_merger).await
     }
 
     /// Opens an existing repository.
@@ -86,20 +93,24 @@ impl Repository {
             AccessSecrets::Blind { id }
         };
 
-        Self::new(pool, this_writer_id, access_secrets, enable_merger).await
+        let index = Index::load(pool, *access_secrets.id(), this_writer_id).await?;
+        // let local_branch = index.branches().await.get(&this_writer_id).cloned();
+
+        Self::new(index, this_writer_id, access_secrets, enable_merger).await
     }
 
     async fn new(
-        pool: db::Pool,
+        index: Index,
+        // local_branch: Option<Arc<BranchData>>,
         this_writer_id: PublicKey,
         secrets: AccessSecrets,
         enable_merger: bool,
     ) -> Result<Self> {
         let enable_merger = enable_merger && secrets.can_write();
-        let index = Index::load(pool, *secrets.id(), this_writer_id).await?;
 
         let shared = Arc::new(Shared {
             index,
+            this_writer_id,
             secrets,
             branches: Mutex::new(HashMap::new()),
         });
@@ -117,7 +128,7 @@ impl Repository {
     }
 
     pub fn this_writer_id(&self) -> &PublicKey {
-        self.shared.index.this_writer_id()
+        &self.shared.this_writer_id
     }
 
     pub fn secrets(&self) -> &AccessSecrets {
@@ -407,6 +418,7 @@ pub(crate) async fn create_db(store: &db::Store) -> Result<db::Pool> {
 
 struct Shared {
     index: Index,
+    this_writer_id: PublicKey,
     secrets: AccessSecrets,
     // Cache for `Branch` instances to make them persistent over the lifetime of the program.
     branches: Mutex<HashMap<PublicKey, Branch>>,
@@ -484,7 +496,7 @@ impl Merger {
     }
 
     async fn handle_branch_changed(&mut self, branch_id: PublicKey) {
-        if branch_id == *self.shared.index.this_writer_id() {
+        if branch_id == self.shared.this_writer_id {
             // local branch change - ignore.
             return;
         }
