@@ -9,15 +9,15 @@ use crate::{
     locator::Locator,
 };
 use std::{convert::TryInto, io::SeekFrom, sync::Arc};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, MutexGuard};
 
 pub(crate) struct Operations<'a> {
-    core: &'a mut Core,
+    core: MutexGuard<'a, Core>,
     current_block: &'a mut OpenBlock,
 }
 
 impl<'a> Operations<'a> {
-    pub fn new(core: &'a mut Core, current_block: &'a mut OpenBlock) -> Self {
+    pub fn new(core: MutexGuard<'a, Core>, current_block: &'a mut OpenBlock) -> Self {
         Self {
             core,
             current_block,
@@ -50,7 +50,7 @@ impl<'a> Operations<'a> {
             }
 
             let locator = self.current_block.locator.next();
-            if locator.number() >= self.block_count() {
+            if locator.number() >= self.core.block_count() {
                 break;
             }
 
@@ -59,7 +59,7 @@ impl<'a> Operations<'a> {
             // read could rollback the changes made in a previous iteration which would then be
             // lost. This is fine because there is going to be at most one dirty block within
             // a single `read` invocation anyway.
-            let mut tx = self.db_pool().begin().await?;
+            let mut tx = self.core.db_pool().begin().await?;
 
             let (id, content) = read_block(
                 &mut tx,
@@ -97,7 +97,7 @@ impl<'a> Operations<'a> {
 
     /// Writes `buffer` into this blob, advancing the blob's internal cursor.
     pub async fn write(&mut self, buffer: &[u8]) -> Result<()> {
-        let mut tx = self.db_pool().begin().await?;
+        let mut tx = self.core.db_pool().begin().await?;
         self.write_in_transaction(&mut tx, buffer).await?;
         tx.commit().await?;
         Ok(())
@@ -131,7 +131,7 @@ impl<'a> Operations<'a> {
             }
 
             let locator = self.current_block.locator.next();
-            let (id, content) = if locator.number() < self.block_count() {
+            let (id, content) = if locator.number() < self.core.block_count() {
                 read_block(
                     tx,
                     self.core.branch.data(),
@@ -157,7 +157,7 @@ impl<'a> Operations<'a> {
     ///
     /// Returns the new seek position from the start of the blob.
     pub async fn seek(&mut self, pos: SeekFrom) -> Result<u64> {
-        let mut tx = self.db_pool().begin().await?;
+        let mut tx = self.core.db_pool().begin().await?;
         let offset = self.seek_in_transaction(&mut tx, pos).await?;
         tx.commit().await?;
         Ok(offset)
@@ -189,7 +189,7 @@ impl<'a> Operations<'a> {
             }
         };
 
-        let actual_offset = offset + self.header_size() as u64;
+        let actual_offset = offset + self.core.header_size() as u64;
         let block_number = (actual_offset / BLOCK_SIZE as u64) as u32;
         let block_offset = (actual_offset % BLOCK_SIZE as u64) as usize;
 
@@ -214,7 +214,7 @@ impl<'a> Operations<'a> {
 
     /// Truncate the blob to the given length.
     pub async fn truncate(&mut self, len: u64) -> Result<()> {
-        let mut tx = self.db_pool().begin().await?;
+        let mut tx = self.core.db_pool().begin().await?;
         self.truncate_in_transaction(&mut tx, len).await?;
         tx.commit().await?;
         Ok(())
@@ -237,12 +237,12 @@ impl<'a> Operations<'a> {
             return Err(Error::OperationNotSupported);
         }
 
-        let old_block_count = self.block_count();
+        let old_block_count = self.core.block_count();
 
         self.core.len = len;
         self.core.len_dirty = true;
 
-        let new_block_count = self.block_count();
+        let new_block_count = self.core.block_count();
 
         if self.seek_position() > self.core.len {
             self.seek_in_transaction(tx, SeekFrom::End(0)).await?;
@@ -276,13 +276,13 @@ impl<'a> Operations<'a> {
 
     /// Removes this blob.
     pub async fn remove(&mut self) -> Result<()> {
-        let mut tx = self.db_pool().begin().await?;
+        let mut tx = self.core.db_pool().begin().await?;
         self.remove_blocks(
             &mut tx,
             self.core
                 .head_locator
                 .sequence()
-                .take(self.block_count() as usize),
+                .take(self.core.block_count() as usize),
         )
         .await?;
         tx.commit().await?;
@@ -306,9 +306,9 @@ impl<'a> Operations<'a> {
             self.core.branch.id() != dst_branch.id() || self.core.head_locator != dst_head_locator
         );
 
-        let mut tx = self.db_pool().begin().await?;
+        let mut tx = self.core.db_pool().begin().await?;
 
-        for (src_locator, dst_locator) in self.locators().zip(dst_head_locator.sequence()) {
+        for (src_locator, dst_locator) in self.core.locators().zip(dst_head_locator.sequence()) {
             let encoded_src_locator = src_locator.encode(&self.core.branch.keys().read);
             let encoded_dst_locator = dst_locator.encode(&self.core.branch.keys().read);
 
@@ -350,17 +350,6 @@ impl<'a> Operations<'a> {
         ))
     }
 
-    pub fn db_pool(&self) -> &db::Pool {
-        self.core.branch.db_pool()
-    }
-
-    pub fn locators(&self) -> impl Iterator<Item = Locator> {
-        self.core
-            .head_locator
-            .sequence()
-            .take(self.block_count() as usize)
-    }
-
     async fn replace_current_block(
         &mut self,
         tx: &mut db::Transaction<'_>,
@@ -375,7 +364,7 @@ impl<'a> Operations<'a> {
 
         if locator.number() == 0 {
             // If head block, skip over the header.
-            content.pos = self.header_size();
+            content.pos = self.core.header_size();
         }
 
         *self.current_block = OpenBlock {
@@ -471,23 +460,11 @@ impl<'a> Operations<'a> {
         Ok(())
     }
 
-    // Total number of blocks in this blob including the possibly partially filled final block.
-    fn block_count(&self) -> u32 {
-        // https://stackoverflow.com/questions/2745074/fast-ceiling-of-an-integer-division-in-c-c
-        (1 + (self.core.len + self.header_size() as u64 - 1) / BLOCK_SIZE as u64)
-            .try_into()
-            .unwrap_or(u32::MAX)
-    }
-
     // Returns the current seek position from the start of the blob.
     pub fn seek_position(&mut self) -> u64 {
         self.current_block.locator.number() as u64 * BLOCK_SIZE as u64
             + self.current_block.content.pos as u64
-            - self.header_size() as u64
-    }
-
-    fn header_size(&self) -> usize {
-        self.core.header_size()
+            - self.core.header_size() as u64
     }
 
     fn locator_at(&self, number: u32) -> Locator {

@@ -277,7 +277,7 @@ mod tests {
 impl fmt::Debug for File {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("File")
-            .field("blob_id", &self.blob.blob_id())
+            .field("blob_id", &self.blob.locator().blob_id())
             .field("branch", &self.blob.branch().id())
             .finish()
     }
