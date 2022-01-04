@@ -157,12 +157,7 @@ impl<'a> FileRef<'a> {
         let blob_core = &mut *guard;
 
         if let Some(blob_core) = blob_core.upgrade() {
-            File::reopen(
-                blob_core,
-                self.inner.parent_outer.db_pool().clone(),
-                self.inner.parent_context(),
-            )
-            .await
+            File::reopen(blob_core, self.inner.parent_context()).await
         } else {
             let file = File::open(
                 self.inner.parent_inner.blob.branch().clone(),

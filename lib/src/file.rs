@@ -1,7 +1,6 @@
 use crate::{
     blob::{self, Blob},
     branch::Branch,
-    db,
     directory::{Directory, ParentContext},
     error::Result,
     locator::Locator,
@@ -14,7 +13,6 @@ use tokio::sync::Mutex;
 pub struct File {
     blob: Blob,
     parent: ParentContext,
-    pool: db::Pool,
 }
 
 impl File {
@@ -24,34 +22,28 @@ impl File {
         locator: Locator,
         parent: ParentContext,
     ) -> Result<Self> {
-        let pool = owner_branch.db_pool().clone();
-
         Ok(Self {
             blob: Blob::open(owner_branch, locator).await?,
             parent,
-            pool,
         })
     }
 
     /// Opens an existing file. Reuse the already opened blob::Core
     pub(crate) async fn reopen(
         blob_core: Arc<Mutex<blob::Core>>,
-        pool: db::Pool,
         parent: ParentContext,
     ) -> Result<Self> {
         Ok(Self {
             blob: Blob::reopen(blob_core).await?,
             parent,
-            pool,
         })
     }
 
     /// Creates a new file.
     pub(crate) fn create(branch: Branch, locator: Locator, parent: ParentContext) -> Self {
         Self {
-            blob: Blob::create(branch.clone(), locator),
+            blob: Blob::create(branch, locator),
             parent,
-            pool: branch.db_pool().clone(),
         }
     }
 
@@ -60,7 +52,7 @@ impl File {
     }
 
     pub fn parent(&self) -> Directory {
-        self.parent.directory(self.pool.clone())
+        self.parent.directory(self.blob.db_pool().clone())
     }
 
     /// Length of this file in bytes.
