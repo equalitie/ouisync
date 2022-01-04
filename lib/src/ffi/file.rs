@@ -147,7 +147,7 @@ pub unsafe extern "C" fn file_write(
 
             let mut g = ffi_file.lock().await;
 
-            let local_branch = g.repo.local_branch().await.ok_or(Error::PermissionDenied)?;
+            let local_branch = g.repo.local_branch().await?;
 
             g.file.seek(SeekFrom::Start(offset)).await?;
             g.file.write(buffer, &local_branch).await?;
@@ -169,7 +169,7 @@ pub unsafe extern "C" fn file_truncate(
         let ffi_file = handle.get();
         ctx.spawn(async move {
             let mut g = ffi_file.lock().await;
-            let local_branch = g.repo.local_branch().await.ok_or(Error::PermissionDenied)?;
+            let local_branch = g.repo.local_branch().await?;
             g.file.truncate(len, &local_branch).await
         })
     })

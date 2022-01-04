@@ -23,7 +23,11 @@ use camino::Utf8Path;
 use futures_util::{future, stream::FuturesUnordered, StreamExt};
 use log::Level;
 use rand::{rngs::OsRng, Rng};
-use std::{collections::HashMap, iter, sync::Arc};
+use std::{
+    collections::{hash_map::Entry, HashMap},
+    iter,
+    sync::Arc,
+};
 use tokio::{select, sync::Mutex};
 
 pub struct Repository {
@@ -111,7 +115,11 @@ impl Repository {
         });
 
         let local_branch = if enable_merger {
-            shared.local_branch().await
+            match shared.local_branch().await {
+                Ok(branch) => Some(branch),
+                Err(Error::PermissionDenied) => None,
+                Err(error) => return Err(error),
+            }
         } else {
             None
         };
@@ -185,13 +193,13 @@ impl Repository {
 
     /// Creates a new file at the given path.
     pub async fn create_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<File> {
-        let local_branch = self.local_branch().await.ok_or(Error::PermissionDenied)?;
+        let local_branch = self.local_branch().await?;
         local_branch.ensure_file_exists(path.as_ref()).await
     }
 
     /// Creates a new directory at the given path.
     pub async fn create_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<Directory> {
-        let local_branch = self.local_branch().await.ok_or(Error::PermissionDenied)?;
+        let local_branch = self.local_branch().await?;
         local_branch.ensure_directory_exists(path.as_ref()).await
     }
 
@@ -221,7 +229,7 @@ impl Repository {
         dst_dir_path: D,
         dst_name: &str,
     ) -> Result<()> {
-        let local_branch = self.local_branch().await.ok_or(Error::PermissionDenied)?;
+        let local_branch = self.local_branch().await?;
 
         use std::borrow::Cow;
 
@@ -308,18 +316,13 @@ impl Repository {
     }
 
     /// Returns the local branch if it exists.
-    pub async fn local_branch(&self) -> Option<Branch> {
+    pub async fn local_branch(&self) -> Result<Branch> {
         self.shared.local_branch().await
     }
 
     /// Return the branch with the specified id if it exists.
-    pub(crate) async fn branch(&self, id: &PublicKey) -> Option<Branch> {
+    pub(crate) async fn branch(&self, id: &PublicKey) -> Result<Branch> {
         self.shared.branch(id).await
-    }
-
-    /// Returns all branches
-    pub(crate) async fn branches(&self) -> Vec<Branch> {
-        self.shared.branches().await
     }
 
     /// Subscribe to change notification from all current and future branches.
@@ -329,8 +332,8 @@ impl Repository {
 
     // Opens the root directory across all branches as JointDirectory.
     async fn joint_root(&self) -> Result<JointDirectory> {
-        let local_branch = self.local_branch().await.ok_or(Error::PermissionDenied)?;
-        let branches = self.branches().await;
+        let local_branch = self.local_branch().await?;
+        let branches = self.shared.branches().await?;
         let mut dirs = Vec::with_capacity(branches.len());
 
         for branch in branches {
@@ -420,16 +423,30 @@ struct Shared {
 }
 
 impl Shared {
-    pub async fn local_branch(&self) -> Option<Branch> {
-        self.branch(&self.this_writer_id).await
+    pub async fn local_branch(&self) -> Result<Branch> {
+        self.inflate(
+            self.index
+                .branches()
+                .await
+                .get(&self.this_writer_id)
+                .ok_or(Error::PermissionDenied)?,
+        )
+        .await
     }
 
-    pub async fn branch(&self, id: &PublicKey) -> Option<Branch> {
-        Some(self.inflate(self.index.branches().await.get(id)?).await)
+    pub async fn branch(&self, id: &PublicKey) -> Result<Branch> {
+        self.inflate(
+            self.index
+                .branches()
+                .await
+                .get(id)
+                .ok_or(Error::EntryNotFound)?,
+        )
+        .await
     }
 
-    pub async fn branches(&self) -> Vec<Branch> {
-        future::join_all(
+    pub async fn branches(&self) -> Result<Vec<Branch>> {
+        future::try_join_all(
             self.index
                 .branches()
                 .await
@@ -441,15 +458,18 @@ impl Shared {
 
     // Create `Branch` wrapping the given `data`, reusing a previously cached one if it exists,
     // and putting it into the cache it it does not.
-    async fn inflate(&self, data: &Arc<BranchData>) -> Branch {
-        self.branches
-            .lock()
-            .await
-            .entry(*data.id())
-            .or_insert_with(|| {
-                Branch::new(self.index.pool.clone(), data.clone(), self.secrets.clone())
-            })
-            .clone()
+    async fn inflate(&self, data: &Arc<BranchData>) -> Result<Branch> {
+        match self.branches.lock().await.entry(*data.id()) {
+            Entry::Occupied(entry) => Ok(entry.get().clone()),
+            Entry::Vacant(entry) => {
+                // let keys = self.secrets.keys().ok_or(Error::PermissionDenied)?;
+                // TODO: use keys, not secrets
+                let branch =
+                    Branch::new(self.index.pool.clone(), data.clone(), self.secrets.clone());
+                entry.insert(branch.clone());
+                Ok(branch)
+            }
+        }
     }
 }
 
@@ -517,7 +537,7 @@ impl Merger {
     async fn spawn_task(&mut self, remote_id: PublicKey) {
         let local = self.local_branch.clone();
 
-        let remote = if let Some(remote) = self.shared.branch(&remote_id).await {
+        let remote = if let Ok(remote) = self.shared.branch(&remote_id).await {
             remote
         } else {
             // branch removed in the meantime - ignore.

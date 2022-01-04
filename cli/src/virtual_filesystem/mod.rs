@@ -17,8 +17,8 @@ use fuser::{
     ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow,
 };
 use ouisync_lib::{
-    debug_printer::DebugPrinter, Branch, EntryType, Error, File, JointDirectory, JointEntry,
-    JointEntryRef, MissingVersionStrategy, Repository, Result,
+    debug_printer::DebugPrinter, EntryType, Error, File, JointDirectory, JointEntry, JointEntryRef,
+    MissingVersionStrategy, Repository, Result,
 };
 use std::{
     convert::TryInto,
@@ -379,7 +379,7 @@ impl Inner {
 
         // TODO: local branch shouldn't be required here. Instead, `JoinDirectoryRef::open` should
         // take the local branch as `Option`.
-        let local_branch = self.require_local_branch().await?;
+        let local_branch = self.repository.local_branch().await?;
         let parent_path = self.inodes.get(parent).calculate_path();
         let parent_dir = self.repository.open_directory(parent_path).await?;
         let parent_dir = parent_dir.read().await;
@@ -432,7 +432,7 @@ impl Inner {
         bkuptime: Option<SystemTime>,
         flags: Option<u32>,
     ) -> Result<FileAttr> {
-        let local_branch = self.require_local_branch().await?;
+        let local_branch = self.repository.local_branch().await?;
 
         let mut scope = FormatOptionScope::new(", ");
 
@@ -774,7 +774,7 @@ impl Inner {
 
         let offset: u64 = offset.try_into().map_err(|_| Error::OffsetOutOfRange)?;
 
-        let local_branch = self.require_local_branch().await?;
+        let local_branch = self.repository.local_branch().await?;
         let file = self.entries.get_file_mut(handle)?;
         file.seek(SeekFrom::Start(offset)).await?;
         file.write(data, &local_branch).await?;
@@ -870,13 +870,6 @@ impl Inner {
                 Ok(JointEntry::File(file))
             }
         }
-    }
-
-    async fn require_local_branch(&self) -> Result<Branch> {
-        self.repository
-            .local_branch()
-            .await
-            .ok_or(Error::PermissionDenied)
     }
 
     // For debugging, use when needed
