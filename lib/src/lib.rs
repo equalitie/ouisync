@@ -41,11 +41,12 @@ mod writer_set;
 pub use self::{
     access_control::{AccessMode, AccessSecrets, MasterSecret, ShareToken},
     branch::Branch,
-    crypto::{cipher, sign, Cryptor, Password},
+    crypto::{cipher, sign, Password},
     db::Store,
     directory::{Directory, EntryRef, EntryType},
     error::{Error, Result},
     file::File,
+    index::Index,
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     joint_entry::JointEntry,
     network::{Network, NetworkOptions},

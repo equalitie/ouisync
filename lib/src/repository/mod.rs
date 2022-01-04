@@ -23,7 +23,11 @@ use camino::Utf8Path;
 use futures_util::{future, stream::FuturesUnordered, StreamExt};
 use log::Level;
 use rand::{rngs::OsRng, Rng};
-use std::{collections::HashMap, iter, sync::Arc};
+use std::{
+    collections::{hash_map::Entry, HashMap},
+    iter,
+    sync::Arc,
+};
 use tokio::{select, sync::Mutex};
 
 pub struct Repository {
@@ -37,7 +41,7 @@ impl Repository {
         store: &db::Store,
         _this_replica_id: ReplicaId,
         master_secret: MasterSecret,
-        access_secrets: Arc<AccessSecrets>,
+        access_secrets: AccessSecrets,
         enable_merger: bool,
     ) -> Result<Self> {
         let pool = create_db(store).await?;
@@ -54,7 +58,13 @@ impl Repository {
 
         tx.commit().await?;
 
-        Self::new(pool, this_writer_id, access_secrets, enable_merger).await
+        let index = Index::load(pool, *access_secrets.id()).await?;
+
+        if access_secrets.can_write() {
+            index.create_branch(this_writer_id).await?;
+        }
+
+        Self::new(index, this_writer_id, access_secrets, enable_merger).await
     }
 
     /// Opens an existing repository.
@@ -77,7 +87,7 @@ impl Repository {
             None
         };
 
-        let this_writer_id = metadata::get_writer_id(&master_key, &pool).await?;
+        let this_writer_id = metadata::get_writer_id(master_key.as_ref(), &pool).await?;
 
         let access_secrets = if let Some(master_key) = master_key {
             metadata::get_access_secrets(&master_key, &pool).await?
@@ -86,29 +96,37 @@ impl Repository {
             AccessSecrets::Blind { id }
         };
 
-        Self::new(pool, this_writer_id, access_secrets.into(), enable_merger).await
+        let index = Index::load(pool, *access_secrets.id()).await?;
+
+        Self::new(index, this_writer_id, access_secrets, enable_merger).await
     }
 
     async fn new(
-        pool: db::Pool,
+        index: Index,
         this_writer_id: PublicKey,
-        access_secrets: Arc<AccessSecrets>,
+        secrets: AccessSecrets,
         enable_merger: bool,
     ) -> Result<Self> {
-        let enable_merger = enable_merger && access_secrets.can_write();
-        let index = Index::load(pool, this_writer_id).await?;
-
         let shared = Arc::new(Shared {
             index,
-            access_secrets,
+            this_writer_id,
+            secrets,
             branches: Mutex::new(HashMap::new()),
         });
 
-        let merge_handle = if enable_merger {
-            Some(scoped_task::spawn(Merger::new(shared.clone()).run()))
+        let local_branch = if enable_merger {
+            match shared.local_branch().await {
+                Ok(branch) => Some(branch),
+                Err(Error::PermissionDenied) => None,
+                Err(error) => return Err(error),
+            }
         } else {
             None
         };
+
+        let merge_handle = local_branch.map(|local_branch| {
+            scoped_task::spawn(Merger::new(shared.clone(), local_branch).run())
+        });
 
         Ok(Self {
             shared,
@@ -116,17 +134,12 @@ impl Repository {
         })
     }
 
-    /// Get the id of this repository.
-    pub fn id(&self) -> &RepositoryId {
-        self.shared.access_secrets.id()
+    pub fn secrets(&self) -> &AccessSecrets {
+        &self.shared.secrets
     }
 
-    pub fn this_writer_id(&self) -> &PublicKey {
-        self.shared.index.this_writer_id()
-    }
-
-    pub fn access_secrets(&self) -> &Arc<AccessSecrets> {
-        &self.shared.access_secrets
+    pub fn index(&self) -> &Index {
+        &self.shared.index
     }
 
     /// Looks up an entry by its path. The path must be relative to the repository root.
@@ -180,13 +193,13 @@ impl Repository {
 
     /// Creates a new file at the given path.
     pub async fn create_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<File> {
-        let local_branch = self.local_branch().await;
+        let local_branch = self.local_branch().await?;
         local_branch.ensure_file_exists(path.as_ref()).await
     }
 
     /// Creates a new directory at the given path.
     pub async fn create_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<Directory> {
-        let local_branch = self.local_branch().await;
+        let local_branch = self.local_branch().await?;
         local_branch.ensure_directory_exists(path.as_ref()).await
     }
 
@@ -216,7 +229,7 @@ impl Repository {
         dst_dir_path: D,
         dst_name: &str,
     ) -> Result<()> {
-        let local_branch = self.local_branch().await;
+        let local_branch = self.local_branch().await?;
 
         use std::borrow::Cow;
 
@@ -245,7 +258,7 @@ impl Repository {
                     .await
                     .ok_or(Error::OperationNotSupported /* can't move root */)?;
 
-                (src_dir, Cow::Borrowed(src_name), *self.this_writer_id())
+                (src_dir, Cow::Borrowed(src_name), *local_branch.id())
             }
         };
 
@@ -270,7 +283,7 @@ impl Repository {
                 // destination version vector must be "happened after" those.
                 dst_joint_reader
                     .merge_version_vectors(dst_name)
-                    .incremented(*self.this_writer_id())
+                    .incremented(*local_branch.id())
             }
             Ok(_) => return Err(Error::EntryExists),
             Err(e) => return Err(e),
@@ -302,24 +315,9 @@ impl Repository {
         Ok(())
     }
 
-    /// Returns the local branch
-    pub async fn local_branch(&self) -> Branch {
+    /// Returns the local branch if it exists.
+    pub async fn local_branch(&self) -> Result<Branch> {
         self.shared.local_branch().await
-    }
-
-    /// Returns the local branch ID
-    pub async fn local_branch_id(&self) -> PublicKey {
-        *self.shared.local_branch().await.id()
-    }
-
-    /// Return the branch with the specified id.
-    pub async fn branch(&self, id: &PublicKey) -> Option<Branch> {
-        self.shared.branch(id).await
-    }
-
-    /// Returns all branches
-    pub async fn branches(&self) -> Vec<Branch> {
-        self.shared.branches().await
     }
 
     /// Subscribe to change notification from all current and future branches.
@@ -329,11 +327,12 @@ impl Repository {
 
     // Opens the root directory across all branches as JointDirectory.
     async fn joint_root(&self) -> Result<JointDirectory> {
-        let branches = self.branches().await;
+        let local_branch = self.local_branch().await?;
+        let branches = self.shared.branches().await?;
         let mut dirs = Vec::with_capacity(branches.len());
 
         for branch in branches {
-            let dir = if branch.id() == self.this_writer_id() {
+            let dir = if branch.id() == local_branch.id() {
                 branch.open_or_create_root().await.map_err(|error| {
                     log::error!(
                         "failed to open root directory on the local branch: {:?}",
@@ -363,11 +362,7 @@ impl Repository {
             dirs.push(dir);
         }
 
-        Ok(JointDirectory::new(self.local_branch().await, dirs))
-    }
-
-    pub(crate) fn index(&self) -> &Index {
-        &self.shared.index
+        Ok(JointDirectory::new(local_branch, dirs))
     }
 
     pub async fn debug_print(&self, print: DebugPrinter) {
@@ -375,7 +370,7 @@ impl Repository {
         let branches = self.shared.branches.lock().await;
         for (writer_id, branch) in &*branches {
             let print = print.indent();
-            let local = if writer_id == self.this_writer_id() {
+            let local = if *writer_id == self.shared.this_writer_id {
                 " (local)"
             } else {
                 ""
@@ -416,26 +411,41 @@ pub(crate) async fn create_db(store: &db::Store) -> Result<db::Pool> {
 
 struct Shared {
     index: Index,
-    access_secrets: Arc<AccessSecrets>,
+    this_writer_id: PublicKey,
+    secrets: AccessSecrets,
     // Cache for `Branch` instances to make them persistent over the lifetime of the program.
     branches: Mutex<HashMap<PublicKey, Branch>>,
 }
 
 impl Shared {
-    pub async fn local_branch(&self) -> Branch {
-        self.inflate(self.index.branches().await.local()).await
-    }
-
-    pub async fn branch(&self, id: &PublicKey) -> Option<Branch> {
-        Some(self.inflate(self.index.branches().await.get(id)?).await)
-    }
-
-    pub async fn branches(&self) -> Vec<Branch> {
-        future::join_all(
+    pub async fn local_branch(&self) -> Result<Branch> {
+        self.inflate(
             self.index
                 .branches()
                 .await
-                .all()
+                .get(&self.this_writer_id)
+                .ok_or(Error::PermissionDenied)?,
+        )
+        .await
+    }
+
+    pub async fn branch(&self, id: &PublicKey) -> Result<Branch> {
+        self.inflate(
+            self.index
+                .branches()
+                .await
+                .get(id)
+                .ok_or(Error::EntryNotFound)?,
+        )
+        .await
+    }
+
+    pub async fn branches(&self) -> Result<Vec<Branch>> {
+        future::try_join_all(
+            self.index
+                .branches()
+                .await
+                .values()
                 .map(|data| self.inflate(data)),
         )
         .await
@@ -443,33 +453,32 @@ impl Shared {
 
     // Create `Branch` wrapping the given `data`, reusing a previously cached one if it exists,
     // and putting it into the cache it it does not.
-    async fn inflate(&self, data: &Arc<BranchData>) -> Branch {
-        self.branches
-            .lock()
-            .await
-            .entry(*data.id())
-            .or_insert_with(|| {
-                Branch::new(
-                    self.index.pool.clone(),
-                    data.clone(),
-                    self.access_secrets.cryptor(),
-                )
-            })
-            .clone()
+    async fn inflate(&self, data: &Arc<BranchData>) -> Result<Branch> {
+        match self.branches.lock().await.entry(*data.id()) {
+            Entry::Occupied(entry) => Ok(entry.get().clone()),
+            Entry::Vacant(entry) => {
+                let keys = self.secrets.keys().ok_or(Error::PermissionDenied)?;
+                let branch = Branch::new(self.index.pool.clone(), data.clone(), keys);
+                entry.insert(branch.clone());
+                Ok(branch)
+            }
+        }
     }
 }
 
 // The merge algorithm.
 struct Merger {
     shared: Arc<Shared>,
+    local_branch: Branch,
     tasks: FuturesUnordered<ScopedJoinHandle<PublicKey>>,
     states: HashMap<PublicKey, MergeState>,
 }
 
 impl Merger {
-    fn new(shared: Arc<Shared>) -> Self {
+    fn new(shared: Arc<Shared>, local_branch: Branch) -> Self {
         Self {
             shared,
+            local_branch,
             tasks: FuturesUnordered::new(),
             states: HashMap::new(),
         }
@@ -497,7 +506,7 @@ impl Merger {
     }
 
     async fn handle_branch_changed(&mut self, branch_id: PublicKey) {
-        if branch_id == *self.shared.index.this_writer_id() {
+        if branch_id == *self.local_branch.id() {
             // local branch change - ignore.
             return;
         }
@@ -519,9 +528,9 @@ impl Merger {
     }
 
     async fn spawn_task(&mut self, remote_id: PublicKey) {
-        let local = self.shared.local_branch().await;
+        let local = self.local_branch.clone();
 
-        let remote = if let Some(remote) = self.shared.branch(&remote_id).await {
+        let remote = if let Ok(remote) = self.shared.branch(&remote_id).await {
             remote
         } else {
             // branch removed in the meantime - ignore.
@@ -604,7 +613,7 @@ mod tests {
             &db::Store::Memory,
             writer_id,
             MasterSecret::random(),
-            AccessSecrets::random_write().into(),
+            AccessSecrets::random_write(),
             false,
         )
         .await
@@ -619,7 +628,7 @@ mod tests {
             &db::Store::Memory,
             local_id,
             MasterSecret::random(),
-            AccessSecrets::random_write().into(),
+            AccessSecrets::random_write(),
             true,
         )
         .await
@@ -636,10 +645,10 @@ mod tests {
             .await
             .unwrap();
 
-        let remote_branch = repo.branch(&remote_id).await.unwrap();
+        let remote_branch = repo.shared.branch(&remote_id).await.unwrap();
         let remote_root = remote_branch.open_or_create_root().await.unwrap();
 
-        let local_branch = repo.local_branch().await;
+        let local_branch = repo.local_branch().await.unwrap();
         let local_root = local_branch.open_or_create_root().await.unwrap();
 
         let mut file = remote_root
@@ -685,13 +694,13 @@ mod tests {
             &db::Store::Memory,
             local_id,
             MasterSecret::random(),
-            AccessSecrets::random_write().into(),
+            AccessSecrets::random_write(),
             false,
         )
         .await
         .unwrap();
 
-        let local_branch = repo.local_branch().await;
+        let local_branch = repo.local_branch().await.unwrap();
 
         // Create file
         let mut file = repo.create_file("test.txt").await.unwrap();
@@ -725,7 +734,7 @@ mod tests {
             &db::Store::Memory,
             local_id,
             MasterSecret::random(),
-            AccessSecrets::random_write().into(),
+            AccessSecrets::random_write(),
             false,
         )
         .await
@@ -766,7 +775,7 @@ mod tests {
             &db::Store::Memory,
             writer_id,
             MasterSecret::random(),
-            AccessSecrets::random_write().into(),
+            AccessSecrets::random_write(),
             false,
         )
         .await
@@ -817,13 +826,13 @@ mod tests {
             &db::Store::Memory,
             rand::random(),
             MasterSecret::random(),
-            AccessSecrets::random_write().into(),
+            AccessSecrets::random_write(),
             false,
         )
         .await
         .unwrap();
 
-        let local_branch = repo.local_branch().await;
+        let local_branch = repo.local_branch().await.unwrap();
         let mut file = repo.create_file("foo.txt").await.unwrap();
         file.write(b"foo", &local_branch).await.unwrap();
         file.flush().await.unwrap();

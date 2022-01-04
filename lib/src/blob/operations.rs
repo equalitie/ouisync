@@ -2,10 +2,7 @@ use super::{Blob, BlobNonce, Buffer, Core, Cursor, OpenBlock, BLOB_NONCE_SIZE};
 use crate::{
     block::{self, BlockId, BLOCK_SIZE},
     branch::Branch,
-    crypto::{
-        cipher::{aead, AuthTag, Nonce, NONCE_SIZE},
-        Cryptor,
-    },
+    crypto::cipher::{self, aead, AuthTag, Nonce, NONCE_SIZE},
     db,
     error::{Error, Result},
     index::BranchData,
@@ -67,7 +64,7 @@ impl<'a> Operations<'a> {
             let (id, content) = read_block(
                 &mut tx,
                 self.core.branch.data(),
-                self.core.branch.cryptor(),
+                &self.core.branch.keys().read,
                 &self.core.blob_key,
                 &locator,
             )
@@ -138,7 +135,7 @@ impl<'a> Operations<'a> {
                 read_block(
                     tx,
                     self.core.branch.data(),
-                    self.core.branch.cryptor(),
+                    &self.core.branch.keys().read,
                     &self.core.blob_key,
                     &locator,
                 )
@@ -202,7 +199,7 @@ impl<'a> Operations<'a> {
             let (id, content) = read_block(
                 tx,
                 self.core.branch.data(),
-                self.core.branch.cryptor(),
+                &self.core.branch.keys().read,
                 &self.core.blob_key,
                 &locator,
             )
@@ -291,7 +288,7 @@ impl<'a> Operations<'a> {
         tx.commit().await?;
 
         let nonce: BlobNonce = rand::random();
-        let blob_key = self.core.branch.cryptor().derive_subkey(&nonce);
+        let blob_key = self.core.branch.keys().read.derive_subkey(&nonce);
 
         *self.current_block = OpenBlock::new_head(self.core.head_locator, &nonce);
         self.core.blob_key = blob_key;
@@ -312,8 +309,8 @@ impl<'a> Operations<'a> {
         let mut tx = self.db_pool().begin().await?;
 
         for (src_locator, dst_locator) in self.locators().zip(dst_head_locator.sequence()) {
-            let encoded_src_locator = src_locator.encode(self.core.branch.cryptor());
-            let encoded_dst_locator = dst_locator.encode(self.core.branch.cryptor());
+            let encoded_src_locator = src_locator.encode(&self.core.branch.keys().read);
+            let encoded_dst_locator = dst_locator.encode(&self.core.branch.keys().read);
 
             let block_id = self
                 .core
@@ -402,7 +399,7 @@ impl<'a> Operations<'a> {
         write_block(
             tx,
             self.core.branch.data(),
-            self.core.branch.cryptor(),
+            &self.core.branch.keys().read,
             &self.core.blob_key,
             &self.current_block.locator,
             &self.current_block.id,
@@ -432,7 +429,7 @@ impl<'a> Operations<'a> {
             let (_, buffer) = read_block(
                 tx,
                 self.core.branch.data(),
-                self.core.branch.cryptor(),
+                &self.core.branch.keys().read,
                 &self.core.blob_key,
                 &locator,
             )
@@ -445,7 +442,7 @@ impl<'a> Operations<'a> {
             write_block(
                 tx,
                 self.core.branch.data(),
-                self.core.branch.cryptor(),
+                &self.core.branch.keys().read,
                 &self.core.blob_key,
                 &locator,
                 &rand::random(),
@@ -467,7 +464,7 @@ impl<'a> Operations<'a> {
             self.core
                 .branch
                 .data()
-                .remove(tx, &locator.encode(self.core.branch.cryptor()))
+                .remove(tx, &locator.encode(&self.core.branch.keys().read))
                 .await?;
         }
 
@@ -501,8 +498,8 @@ impl<'a> Operations<'a> {
 async fn read_block(
     tx: &mut db::Transaction<'_>,
     branch: &BranchData,
-    repo_key: &Cryptor,
-    blob_key: &Cryptor,
+    repo_key: &cipher::SecretKey,
+    blob_key: &cipher::SecretKey,
     locator: &Locator,
 ) -> Result<(BlockId, Buffer)> {
     let (id, mut buffer, auth_tag) = load_block(tx, branch, repo_key, locator).await?;
@@ -527,10 +524,10 @@ async fn read_block(
 pub(super) async fn load_block(
     tx: &mut db::Transaction<'_>,
     branch: &BranchData,
-    cryptor: &Cryptor,
+    read_key: &cipher::SecretKey,
     locator: &Locator,
 ) -> Result<(BlockId, Buffer, AuthTag)> {
-    let id = branch.get(tx, &locator.encode(cryptor)).await?;
+    let id = branch.get(tx, &locator.encode(read_key)).await?;
     let mut content = Buffer::new();
     let auth_tag = block::read(tx, &id, &mut content).await?;
 
@@ -540,8 +537,8 @@ pub(super) async fn load_block(
 async fn write_block(
     tx: &mut db::Transaction<'_>,
     branch: &BranchData,
-    repo_key: &Cryptor,
-    blob_key: &Cryptor,
+    repo_key: &cipher::SecretKey,
+    blob_key: &cipher::SecretKey,
     locator: &Locator,
     block_id: &BlockId,
     mut buffer: Buffer,
@@ -563,7 +560,7 @@ async fn write_block(
 }
 
 pub(super) fn decrypt_block(
-    blob_key: &Cryptor,
+    blob_key: &cipher::SecretKey,
     id: &BlockId,
     block_number: u32,
     content: &mut [u8],
@@ -574,7 +571,7 @@ pub(super) fn decrypt_block(
 }
 
 pub(super) fn encrypt_block(
-    blob_key: &Cryptor,
+    blob_key: &cipher::SecretKey,
     id: &BlockId,
     block_number: u32,
     content: &mut [u8],

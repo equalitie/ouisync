@@ -1,7 +1,7 @@
 use crate::{
+    access_control::AccessKeys,
     blob::Blob,
     block::BlockId,
-    crypto::Cryptor,
     db,
     debug_printer::DebugPrinter,
     directory::{Directory, EntryRef, RootDirectoryCache},
@@ -19,16 +19,16 @@ use std::sync::Arc;
 pub struct Branch {
     pool: db::Pool,
     branch_data: Arc<BranchData>,
-    cryptor: Cryptor,
+    keys: AccessKeys,
     root_directory: Arc<RootDirectoryCache>,
 }
 
 impl Branch {
-    pub(crate) fn new(pool: db::Pool, branch_data: Arc<BranchData>, cryptor: Cryptor) -> Self {
+    pub(crate) fn new(pool: db::Pool, branch_data: Arc<BranchData>, keys: AccessKeys) -> Self {
         Self {
             pool,
             branch_data,
-            cryptor,
+            keys,
             root_directory: Arc::new(RootDirectoryCache::new()),
         }
     }
@@ -45,8 +45,8 @@ impl Branch {
         &self.pool
     }
 
-    pub(crate) fn cryptor(&self) -> &Cryptor {
-        &self.cryptor
+    pub(crate) fn keys(&self) -> &AccessKeys {
+        &self.keys
     }
 
     pub(crate) async fn open_root(&self) -> Result<Directory> {
@@ -79,7 +79,7 @@ impl Branch {
                     let next = if let Some(next) = next {
                         next
                     } else {
-                        curr.create_directory(name.to_string(), &self).await?
+                        curr.create_directory(name.to_string(), self).await?
                     };
 
                     curr = next;
@@ -96,7 +96,7 @@ impl Branch {
     pub(crate) async fn ensure_file_exists(&self, path: &Utf8Path) -> Result<File> {
         let (parent, name) = path::decompose(path).ok_or(Error::EntryIsDirectory)?;
         let dir = self.ensure_directory_exists(parent).await?;
-        dir.create_file(name.to_string(), &self).await
+        dir.create_file(name.to_string(), self).await
     }
 
     pub async fn root_block_id(&self) -> Result<BlockId> {
@@ -114,7 +114,7 @@ impl Branch {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{db, index::Index, locator::Locator, repository};
+    use crate::{access_control::WriteSecrets, db, index::Index, locator::Locator, repository};
 
     #[tokio::test(flavor = "multi_thread")]
     async fn ensure_root_directory_exists() {
@@ -146,9 +146,12 @@ mod tests {
         let pool = repository::create_db(&db::Store::Memory).await.unwrap();
 
         let writer_id = rand::random();
-        let index = Index::load(pool.clone(), writer_id).await.unwrap();
-        let branch = Branch::new(pool, index.branches().await.local().clone(), Cryptor::Null);
+        let secrets = WriteSecrets::random();
+        let repository_id = secrets.id;
+        let keys = secrets.into();
 
-        branch
+        let index = Index::load(pool.clone(), repository_id).await.unwrap();
+        let branch = index.create_branch(writer_id).await.unwrap();
+        Branch::new(pool, branch, keys)
     }
 }

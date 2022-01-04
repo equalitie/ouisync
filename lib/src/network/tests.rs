@@ -45,16 +45,14 @@ async fn transfer_snapshot_between_two_replicas_case(
 ) {
     let mut rng = StdRng::seed_from_u64(rng_seed);
 
-    let a_index = create_index(&mut rng).await;
-    let b_index = create_index(&mut rng).await;
+    let (a_index, a_id) = create_index(&mut rng).await;
+    let (b_index, _) = create_index(&mut rng).await;
 
     let snapshot = Snapshot::generate(&mut rng, leaf_count);
-    save_snapshot(&a_index, &snapshot).await;
+    save_snapshot(&a_index, a_id, &snapshot).await;
     write_all_blocks(&a_index, &snapshot).await;
 
-    assert!(load_latest_root_node(&b_index, &a_index.this_writer_id)
-        .await
-        .is_none());
+    assert!(load_latest_root_node(&b_index, &a_id).await.is_none());
 
     // Wait until replica B catches up to replica A, then have replica A perform a local change
     // (create one new block) and repeat.
@@ -62,11 +60,11 @@ async fn transfer_snapshot_between_two_replicas_case(
         let mut remaining_changesets = changeset_count;
 
         loop {
-            wait_until_snapshots_in_sync(&a_index, &b_index).await;
+            wait_until_snapshots_in_sync(&a_index, &a_id, &b_index).await;
 
             if remaining_changesets > 0 {
                 for _ in 0..changeset_size {
-                    create_block(&mut rng, &a_index).await;
+                    create_block(&mut rng, &a_index, &a_id).await;
                 }
 
                 remaining_changesets -= 1;
@@ -93,13 +91,13 @@ fn transfer_blocks_between_two_replicas(
 async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed: u64) {
     let mut rng = StdRng::seed_from_u64(rng_seed);
 
-    let a_index = create_index(&mut rng).await;
-    let b_index = create_index(&mut rng).await;
+    let (a_index, a_id) = create_index(&mut rng).await;
+    let (b_index, b_id) = create_index(&mut rng).await;
 
     // Initially both replicas have the whole snapshot but no blocks.
     let snapshot = Snapshot::generate(&mut rng, block_count);
-    save_snapshot(&a_index, &snapshot).await;
-    save_snapshot(&b_index, &snapshot).await;
+    save_snapshot(&a_index, a_id, &snapshot).await;
+    save_snapshot(&b_index, b_id, &snapshot).await;
 
     // Keep adding the blocks to replica A and verify they get received by replica B as well.
     let drive = async {
@@ -119,24 +117,28 @@ async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed:
     simulate_connection_until(a_index.clone(), b_index.clone(), drive).await
 }
 
-async fn create_index<R: Rng>(rng: &mut R) -> Index {
+async fn create_index<R: Rng>(rng: &mut R) -> (Index, PublicKey) {
     let db = repository::create_db(&db::Store::Memory).await.unwrap();
-    let id = rng.gen();
+    let repository_id = rng.gen();
+    let writer_id = rng.gen();
 
-    Index::load(db, id).await.unwrap()
+    let index = Index::load(db, repository_id).await.unwrap();
+    index.create_branch(writer_id).await.unwrap();
+
+    (index, writer_id)
 }
 
 // Enough capacity to prevent deadlocks.
 // TODO: find the actual minimum necessary capacity.
 const CAPACITY: usize = 256;
 
-async fn save_snapshot(index: &Index, snapshot: &Snapshot) {
+async fn save_snapshot(index: &Index, writer_id: PublicKey, snapshot: &Snapshot) {
     let mut version_vector = VersionVector::new();
-    version_vector.insert(index.this_writer_id, 2); // to force overwrite the initial root node
+    version_vector.insert(writer_id, 2); // to force overwrite the initial root node
 
     let root_node = RootNode::create(
         &index.pool,
-        &index.this_writer_id,
+        &writer_id,
         version_vector,
         *snapshot.root_hash(),
         Summary::INCOMPLETE,
@@ -148,7 +150,8 @@ async fn save_snapshot(index: &Index, snapshot: &Snapshot) {
     index
         .branches()
         .await
-        .local()
+        .get(&writer_id)
+        .unwrap()
         .update_root(&mut tx, root_node)
         .await
         .unwrap();
@@ -168,17 +171,19 @@ async fn save_snapshot(index: &Index, snapshot: &Snapshot) {
     }
 }
 
-async fn wait_until_snapshots_in_sync(server_index: &Index, client_index: &Index) {
+async fn wait_until_snapshots_in_sync(
+    server_index: &Index,
+    server_id: &PublicKey,
+    client_index: &Index,
+) {
     let mut rx = client_index.subscribe();
 
-    let server_root = load_latest_root_node(server_index, &server_index.this_writer_id)
+    let server_root = load_latest_root_node(server_index, server_id)
         .await
         .unwrap();
 
     loop {
-        if let Some(client_root) =
-            load_latest_root_node(client_index, &server_index.this_writer_id).await
-        {
+        if let Some(client_root) = load_latest_root_node(client_index, server_id).await {
             if client_root.summary.is_complete() && client_root.hash == server_root.hash {
                 // client has now fully downloaded server's latest snapshot.
                 assert_eq!(client_root.versions, server_root.versions);
@@ -198,8 +203,8 @@ async fn wait_until_block_exists(index: &Index, block_id: &BlockId) {
     }
 }
 
-async fn create_block(rng: &mut impl Rng, index: &Index) {
-    let branch = index.branches().await.local().clone();
+async fn create_block(rng: &mut impl Rng, index: &Index, writer_id: &PublicKey) {
+    let branch = index.branches().await.get(writer_id).unwrap().clone();
     let encoded_locator = rng.gen::<u64>().hash();
     let block_id = rng.gen();
     let content = vec![0; BLOCK_SIZE];

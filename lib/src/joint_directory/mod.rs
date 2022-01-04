@@ -128,7 +128,7 @@ impl JointDirectory {
                 .filter_map(|e| e.directory().ok())
                 .map(|e| {
                     let local_branch = &self.local_branch;
-                    async move { e.open(MissingVersionStrategy::Skip, &local_branch).await }
+                    async move { e.open(MissingVersionStrategy::Skip, local_branch).await }
                 }),
         )
         .await?;
@@ -253,7 +253,7 @@ impl Reader<'_> {
     /// Returns iterator over the entries of this directory. Multiple concurrent versions of the
     /// same file are returned as separate `JointEntryRef::File` entries. Multiple concurrent
     /// versions of the same directory are returned as a single `JointEntryRef::Directory` entry.
-    pub fn entries<'a>(&'a self) -> impl Iterator<Item = JointEntryRef<'a>> + 'a {
+    pub fn entries(&self) -> impl Iterator<Item = JointEntryRef> {
         let entries = self.0.iter().map(|directory| directory.entries());
         let entries = SortedUnion::new(entries, |entry| entry.name());
         let entries = Accumulate::new(entries, |entry| entry.name());

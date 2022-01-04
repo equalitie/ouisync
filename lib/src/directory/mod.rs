@@ -148,6 +148,7 @@ impl Directory {
     /// # Panics
     ///
     /// Panics when `self` (i.e. the source directory) or `dst_dir` are not local.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn move_entry(
         &self,
         src_name: &str,
@@ -283,7 +284,7 @@ impl Directory {
     fn create(owner_branch: Branch, locator: Locator, parent: Option<ParentContext>) -> Self {
         let branch_id = *owner_branch.id();
         let db_pool = owner_branch.db_pool().clone();
-        let blob = Blob::create(owner_branch.clone(), locator);
+        let blob = Blob::create(owner_branch, locator);
 
         Directory {
             branch_id,

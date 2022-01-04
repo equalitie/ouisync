@@ -1,6 +1,6 @@
 use crate::{
     blob_id::BlobId,
-    crypto::{Cryptor, Hash, Hashable},
+    crypto::{cipher::SecretKey, Hash, Hashable},
 };
 
 use sha3::{Digest, Sha3_256};
@@ -43,18 +43,11 @@ impl Locator {
     }
 
     /// Secure encoding of this locator for the use in the index.
-    pub fn encode(&self, cryptor: &Cryptor) -> Hash {
+    pub fn encode(&self, secret_key: &SecretKey) -> Hash {
         let mut hasher = Sha3_256::new();
 
         hasher.update(self.hash().as_ref());
-
-        match cryptor {
-            Cryptor::ChaCha20Poly1305(key) => {
-                hasher.update(key.as_ref().hash());
-            }
-            Cryptor::Null => {}
-        }
-
+        hasher.update(secret_key.as_ref().hash());
         hasher.finalize().into()
     }
 

@@ -20,8 +20,8 @@ pub enum Error {
     CreateDbSchema(#[source] sqlx::Error),
     #[error("failed to execute database query")]
     QueryDb(#[from] sqlx::Error),
-    #[error("permissions denied")]
-    PermissionsDenied,
+    #[error("permission denied")]
+    PermissionDenied,
     #[error("data is malformed")]
     MalformedData,
     #[error("block not found: {0}")]

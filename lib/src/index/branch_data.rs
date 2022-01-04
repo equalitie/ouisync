@@ -215,16 +215,17 @@ impl BranchData {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{crypto::Cryptor, index, locator::Locator};
+    use crate::{crypto::cipher::SecretKey, index, locator::Locator};
     use sqlx::Row;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn insert_and_read() {
         let (pool, branch) = setup().await;
+        let secret_key = SecretKey::random();
 
         let block_id = rand::random();
         let locator = random_head_locator();
-        let encoded_locator = locator.encode(&Cryptor::Null);
+        let encoded_locator = locator.encode(&secret_key);
 
         let mut tx = pool.begin().await.unwrap();
 
@@ -242,12 +243,13 @@ mod tests {
     async fn rewrite_locator() {
         for _ in 0..32 {
             let (pool, branch) = setup().await;
+            let secret_key = SecretKey::random();
 
             let b1 = rand::random();
             let b2 = rand::random();
 
             let locator = random_head_locator();
-            let encoded_locator = locator.encode(&Cryptor::Null);
+            let encoded_locator = locator.encode(&secret_key);
 
             let mut tx = pool.begin().await.unwrap();
 
@@ -268,10 +270,11 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn remove_locator() {
         let (pool, branch) = setup().await;
+        let secret_key = SecretKey::random();
 
         let b = rand::random();
         let locator = random_head_locator();
-        let encoded_locator = locator.encode(&Cryptor::Null);
+        let encoded_locator = locator.encode(&secret_key);
 
         let mut tx = pool.begin().await.unwrap();
 

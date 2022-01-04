@@ -1,5 +1,10 @@
 use super::*;
-use crate::{crypto::Cryptor, db, index::BranchData, repository};
+use crate::{
+    access_control::{AccessKeys, WriteSecrets},
+    db,
+    index::BranchData,
+    repository,
+};
 use assert_matches::assert_matches;
 use futures_util::future;
 use std::{array, collections::BTreeSet, convert::TryInto};
@@ -681,19 +686,22 @@ async fn remove_concurrent_file_version() {
 
 async fn setup() -> Branch {
     let pool = repository::create_db(&db::Store::Memory).await.unwrap();
-    create_branch(pool).await
+    let keys = WriteSecrets::random().into();
+    create_branch(pool, keys).await
 }
 
 async fn setup_multiple<const N: usize>() -> [Branch; N] {
     let pool = repository::create_db(&db::Store::Memory).await.unwrap();
-    let branches: Vec<_> = future::join_all((0..N).map(|_| create_branch(pool.clone()))).await;
+    let keys = AccessKeys::from(WriteSecrets::random());
+    let branches: Vec<_> =
+        future::join_all((0..N).map(|_| create_branch(pool.clone(), keys.clone()))).await;
     branches.try_into().ok().unwrap()
 }
 
-async fn create_branch(pool: db::Pool) -> Branch {
+async fn create_branch(pool: db::Pool, keys: AccessKeys) -> Branch {
     let (notify_tx, _) = async_broadcast::broadcast(1);
     let branch_data = BranchData::new(&pool, rand::random(), notify_tx)
         .await
         .unwrap();
-    Branch::new(pool, Arc::new(branch_data), Cryptor::Null)
+    Branch::new(pool, Arc::new(branch_data), keys)
 }

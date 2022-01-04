@@ -5,6 +5,10 @@ pub use chacha20poly1305::aead;
 
 use super::password::PasswordSalt;
 use argon2::Argon2;
+use chacha20poly1305::{
+    aead::{AeadInPlace, NewAead},
+    ChaCha20Poly1305,
+};
 use generic_array::{sequence::GenericSequence, typenum::Unsigned};
 use hex;
 use rand::{rngs::OsRng, CryptoRng, Rng};
@@ -98,6 +102,34 @@ impl SecretKey {
             .hash_password_into(user_password.as_ref(), salt, result.as_mut())
             .expect("failed to hash password");
         result
+    }
+
+    /// Shortcut for `SecretKey::derive_from_key(self.as_ref(), nonce)` for convenience.
+    pub fn derive_subkey(&self, nonce: &[u8]) -> Self {
+        Self::derive_from_key(self.as_ref(), nonce)
+    }
+
+    /// Encrypt a message in place using Authenticated Encryption with Associated Data.
+    pub fn encrypt(
+        &self,
+        nonce: Nonce,
+        aad: &[u8],
+        buffer: &mut [u8],
+    ) -> Result<AuthTag, aead::Error> {
+        let cipher = ChaCha20Poly1305::new(self.as_ref().into());
+        cipher.encrypt_in_place_detached(&nonce.into(), aad, buffer)
+    }
+
+    /// Decrypt a message in place using Authenticated Encryption with Associated Data.
+    pub fn decrypt(
+        &self,
+        nonce: Nonce,
+        aad: &[u8],
+        buffer: &mut [u8],
+        auth_tag: &AuthTag,
+    ) -> Result<(), aead::Error> {
+        let cipher = ChaCha20Poly1305::new(self.as_ref().into());
+        cipher.decrypt_in_place_detached(&nonce.into(), aad, buffer, auth_tag)
     }
 
     // Use this only for initialization.

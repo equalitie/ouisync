@@ -2,7 +2,7 @@ use crate::{
     access_control::{AccessSecrets, MasterSecret, WriteSecrets},
     crypto::{
         cipher::{AuthTag, Nonce, SecretKey, AUTH_TAG_SIZE},
-        sign, Cryptor, PasswordSalt,
+        sign, PasswordSalt,
     },
     db,
     error::{Error, Result},
@@ -101,7 +101,7 @@ pub(crate) async fn get_repository_id(db: impl db::Executor<'_>) -> Result<Repos
 // Writer Id
 // -------------------------------------------------------------------
 pub(crate) async fn get_writer_id(
-    master_key: &Option<SecretKey>,
+    master_key: Option<&SecretKey>,
     db: impl db::Executor<'_>,
 ) -> Result<sign::PublicKey> {
     let id = match master_key {
@@ -141,7 +141,13 @@ pub(crate) async fn set_access_secrets(
             replace_secret(ACCESS_KEY, read_key.as_ref(), master_key, &mut tx).await?;
         }
         AccessSecrets::Write(secrets) => {
-            replace_secret(ACCESS_KEY, secrets.write_key.as_ref(), master_key, &mut tx).await?;
+            replace_secret(
+                ACCESS_KEY,
+                secrets.write_key.as_ref().as_ref(),
+                master_key,
+                &mut tx,
+            )
+            .await?;
         }
     }
 
@@ -239,8 +245,7 @@ where
 
     let mut buffer: Vec<_> = row.get(2);
 
-    let cryptor = Cryptor::ChaCha20Poly1305(master_key.clone());
-    cryptor.decrypt(nonce, id, &mut buffer, &auth_tag)?;
+    master_key.decrypt(nonce, id, &mut buffer, &auth_tag)?;
 
     let secret = T::try_from(&buffer).map_err(|_| Error::MalformedData)?;
     buffer.zeroize();
@@ -301,11 +306,10 @@ fn prepare_secret(
     blob: &[u8],
     master_key: &SecretKey,
 ) -> Result<(Nonce, Vec<u8>, AuthTag)> {
-    let cryptor = Cryptor::ChaCha20Poly1305(master_key.clone());
     let nonce = make_nonce();
 
     let mut cypher = blob.to_vec();
-    let auth_tag = cryptor.encrypt(nonce, id, &mut cypher)?;
+    let auth_tag = master_key.encrypt(nonce, id, &mut cypher)?;
 
     Ok((nonce, cypher, auth_tag))
 }

@@ -5,7 +5,7 @@ mod share_token;
 pub use self::{access_mode::AccessMode, master_secret::MasterSecret, share_token::ShareToken};
 
 use crate::{
-    crypto::{cipher, sign, Cryptor},
+    crypto::{cipher, sign},
     error::Error,
     repository::RepositoryId,
 };
@@ -13,6 +13,8 @@ use rand::{rngs::OsRng, CryptoRng, Rng};
 use std::{fmt, string::FromUtf8Error, sync::Arc};
 use thiserror::Error;
 
+/// Secrets for access to a repository.
+#[derive(Clone)]
 pub enum AccessSecrets {
     Blind {
         id: RepositoryId,
@@ -27,33 +29,28 @@ pub enum AccessSecrets {
 impl AccessSecrets {
     /// Generates random access secrets with write access using the provided RNG.
     pub fn generate_write<R: Rng + CryptoRng + ?Sized>(rng: &mut R) -> Self {
-        let write_key: sign::SecretKey = rng.gen();
-        let write_secrets = WriteSecrets::from(write_key);
-
-        Self::Write(write_secrets)
+        Self::Write(WriteSecrets::generate(rng))
     }
 
     /// Generates random access secrets with write access using OsRng.
     pub fn random_write() -> Self {
-        Self::generate_write(&mut OsRng)
+        Self::Write(WriteSecrets::random())
     }
 
     /// Change the access mode of this secrets to the given mode. If the given mode is higher than
     /// self, returns self unchanged.
-    pub fn with_mode(self: Arc<Self>, mode: AccessMode) -> Arc<Self> {
-        match (self.as_ref(), mode) {
+    pub fn with_mode(&self, mode: AccessMode) -> Self {
+        match (self, mode) {
             (Self::Blind { .. }, AccessMode::Blind | AccessMode::Read | AccessMode::Write)
             | (Self::Read { .. }, AccessMode::Read | AccessMode::Write)
-            | (Self::Write { .. }, AccessMode::Write) => self,
+            | (Self::Write { .. }, AccessMode::Write) => self.clone(),
             (Self::Read { id, .. } | Self::Write(WriteSecrets { id, .. }), AccessMode::Blind) => {
-                Arc::new(Self::Blind { id: *id })
+                Self::Blind { id: *id }
             }
-            (Self::Write(WriteSecrets { id, read_key, .. }), AccessMode::Read) => {
-                Arc::new(Self::Read {
-                    id: *id,
-                    read_key: read_key.clone(),
-                })
-            }
+            (Self::Write(WriteSecrets { id, read_key, .. }), AccessMode::Read) => Self::Read {
+                id: *id,
+                read_key: read_key.clone(),
+            },
         }
     }
 
@@ -76,7 +73,7 @@ impl AccessSecrets {
             }
             Self::Write(secrets) => {
                 out.push(AccessMode::Write as u8);
-                out.extend_from_slice(secrets.write_key.as_ref());
+                out.extend_from_slice(secrets.write_key.as_ref().as_ref());
             }
         }
     }
@@ -107,13 +104,17 @@ impl AccessSecrets {
         matches!(self, Self::Write(_))
     }
 
-    // TODO: temporary method, remove when the integration of AccessSecrets is done.
-    pub(crate) fn cryptor(&self) -> Cryptor {
+    pub(crate) fn keys(&self) -> Option<AccessKeys> {
         match self {
-            Self::Blind { .. } => Cryptor::Null,
-            Self::Read { read_key, .. } | Self::Write(WriteSecrets { read_key, .. }) => {
-                Cryptor::ChaCha20Poly1305(read_key.clone())
-            }
+            Self::Blind { .. } => None,
+            Self::Read { read_key, .. } => Some(AccessKeys {
+                read: read_key.clone(),
+                write: None,
+            }),
+            Self::Write(secrets) => Some(AccessKeys {
+                read: secrets.read_key.clone(),
+                write: Some(secrets.write_key.clone()),
+            }),
         }
     }
 }
@@ -128,10 +129,25 @@ impl fmt::Debug for AccessSecrets {
     }
 }
 
+/// Secrets for write access.
+#[derive(Clone)]
 pub struct WriteSecrets {
     pub(crate) id: RepositoryId,
     pub(crate) read_key: cipher::SecretKey,
-    pub(crate) write_key: sign::SecretKey,
+    pub(crate) write_key: Arc<sign::SecretKey>,
+}
+
+impl WriteSecrets {
+    /// Generates random write secrets using the provided RNG.
+    pub(crate) fn generate<R: Rng + CryptoRng + ?Sized>(rng: &mut R) -> Self {
+        let write_key: sign::SecretKey = rng.gen();
+        Self::from(write_key)
+    }
+
+    /// Generates random write secrets using OsRng.
+    pub(crate) fn random() -> Self {
+        Self::generate(&mut OsRng)
+    }
 }
 
 impl From<sign::SecretKey> for WriteSecrets {
@@ -144,7 +160,23 @@ impl From<sign::SecretKey> for WriteSecrets {
         Self {
             id,
             read_key,
-            write_key,
+            write_key: Arc::new(write_key),
+        }
+    }
+}
+
+/// Secret keys for read and optionaly write access.
+#[derive(Clone)]
+pub(crate) struct AccessKeys {
+    pub read: cipher::SecretKey,
+    pub write: Option<Arc<sign::SecretKey>>,
+}
+
+impl From<WriteSecrets> for AccessKeys {
+    fn from(secrets: WriteSecrets) -> Self {
+        Self {
+            read: secrets.read_key,
+            write: Some(secrets.write_key),
         }
     }
 }

@@ -107,8 +107,8 @@ impl MessageBroker {
     /// Try to establish a link between a local repository and a remote repository. The remote
     /// counterpart needs to call this too with matching `local_name` and `remote_name` for the link
     /// to actually be created.
-    pub fn create_link(&mut self, id: RepositoryId, index: Index) {
-        let channel = MessageChannel::from(&id);
+    pub fn create_link(&mut self, index: Index) {
+        let channel = MessageChannel::from(index.repository_id());
         let (abort_tx, abort_rx) = oneshot::channel();
 
         match self.links.entry(channel) {
@@ -127,13 +127,17 @@ impl MessageBroker {
 
         log::debug!("creating link for {:?}", channel);
 
-        let role = Role::determine(&id, &self.this_runtime_id, &self.that_runtime_id);
+        let role = Role::determine(
+            index.repository_id(),
+            &self.this_runtime_id,
+            &self.that_runtime_id,
+        );
         let stream = self.dispatcher.open_recv(channel);
         let sink = self.dispatcher.open_send(channel);
 
         task::spawn(async move {
             select! {
-                _ = run_link(role, &id, stream, sink, index) => (),
+                _ = run_link(role, stream, sink, index) => (),
                 _ = abort_rx => (),
             }
         });
@@ -146,26 +150,21 @@ impl MessageBroker {
     }
 }
 
-async fn run_link(
-    role: Role,
-    repo_id: &RepositoryId,
-    stream: ContentStream,
-    sink: ContentSink,
-    index: Index,
-) {
+async fn run_link(role: Role, stream: ContentStream, sink: ContentSink, index: Index) {
     let channel = *stream.channel();
 
-    let (stream, sink) = match crypto::establish_channel(role, repo_id, stream, sink).await {
-        Ok(channel) => channel,
-        Err(error) => {
-            log::warn!(
-                "failed to establish encrypted channel for {:?}: {}",
-                channel,
-                error
-            );
-            return;
-        }
-    };
+    let (stream, sink) =
+        match crypto::establish_channel(role, index.repository_id(), stream, sink).await {
+            Ok(channel) => channel,
+            Err(error) => {
+                log::warn!(
+                    "failed to establish encrypted channel for {:?}: {}",
+                    channel,
+                    error
+                );
+                return;
+            }
+        };
 
     let (request_tx, request_rx) = mpsc::channel(1);
     let (response_tx, response_rx) = mpsc::channel(1);
