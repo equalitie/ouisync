@@ -234,7 +234,7 @@ impl Blob {
         self.branch.db_pool()
     }
 
-    pub async fn lock(&mut self) -> Operations<'_> {
+    async fn lock(&mut self) -> Operations<'_> {
         let core_guard = self.core.lock().await;
         Operations::new(core_guard, &mut self.current_block)
     }
