@@ -7,7 +7,7 @@ use crate::{
 };
 use assert_matches::assert_matches;
 use futures_util::future;
-use std::{array, collections::BTreeSet, convert::TryInto};
+use std::{collections::BTreeSet, convert::TryInto};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn create_and_list_entries() {
@@ -567,12 +567,12 @@ async fn modify_directory_concurrently() {
 #[tokio::test(flavor = "multi_thread")]
 async fn insert_entry_newer_than_existing() {
     let name = "foo.txt";
-    let id0 = rand::random();
-    let id1 = rand::random();
+    let id0 = PublicKey::random();
+    let id1 = PublicKey::random();
 
     // Test all permutations of the replica ids, to detect any unwanted dependency on their
     // order.
-    for (a_author, b_author) in array::IntoIter::new([(id0, id1), (id1, id0)]) {
+    for (a_author, b_author) in [(id0, id1), (id1, id0)] {
         let branch = setup().await;
         let root = branch.open_or_create_root().await.unwrap();
 
@@ -700,7 +700,7 @@ async fn setup_multiple<const N: usize>() -> [Branch; N] {
 
 async fn create_branch(pool: db::Pool, keys: AccessKeys) -> Branch {
     let (notify_tx, _) = async_broadcast::broadcast(1);
-    let branch_data = BranchData::new(&pool, rand::random(), notify_tx)
+    let branch_data = BranchData::new(&pool, PublicKey::random(), notify_tx)
         .await
         .unwrap();
     Branch::new(pool, Arc::new(branch_data), keys)

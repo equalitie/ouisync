@@ -58,7 +58,10 @@ pub(crate) async fn init(pool: &db::Pool) -> Result<()> {
 mod tests {
     use crate::{
         block::{self, BLOCK_SIZE},
-        crypto::cipher::{AuthTag, SecretKey},
+        crypto::{
+            cipher::{AuthTag, SecretKey},
+            sign::PublicKey,
+        },
         db,
         index::{self, BranchData},
         locator::Locator,
@@ -74,10 +77,10 @@ mod tests {
         let secret_key = SecretKey::random();
         let (notify_tx, _) = async_broadcast::broadcast(1);
 
-        let branch0 = BranchData::new(&pool, rand::random(), notify_tx.clone())
+        let branch0 = BranchData::new(&pool, PublicKey::random(), notify_tx.clone())
             .await
             .unwrap();
-        let branch1 = BranchData::new(&pool, rand::random(), notify_tx)
+        let branch1 = BranchData::new(&pool, PublicKey::random(), notify_tx)
             .await
             .unwrap();
 

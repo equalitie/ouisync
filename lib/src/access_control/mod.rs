@@ -28,7 +28,7 @@ pub enum AccessSecrets {
 
 impl AccessSecrets {
     /// Generates random access secrets with write access using the provided RNG.
-    pub fn generate_write<R: Rng + CryptoRng + ?Sized>(rng: &mut R) -> Self {
+    pub fn generate_write<R: Rng + CryptoRng>(rng: &mut R) -> Self {
         Self::Write(WriteSecrets::generate(rng))
     }
 
@@ -73,7 +73,7 @@ impl AccessSecrets {
             }
             Self::Write(secrets) => {
                 out.push(AccessMode::Write as u8);
-                out.extend_from_slice(secrets.write_key.as_ref().as_ref());
+                out.extend_from_slice(secrets.write_keys.secret.as_ref());
             }
         }
     }
@@ -95,7 +95,8 @@ impl AccessSecrets {
             }
             AccessMode::Write => {
                 let write_key = sign::SecretKey::try_from(input)?;
-                Ok(Self::Write(write_key.into()))
+                let write_keys = sign::Keypair::from(write_key);
+                Ok(Self::Write(write_keys.into()))
             }
         }
     }
@@ -113,7 +114,7 @@ impl AccessSecrets {
             }),
             Self::Write(secrets) => Some(AccessKeys {
                 read: secrets.read_key.clone(),
-                write: Some(secrets.write_key.clone()),
+                write: Some(secrets.write_keys.clone()),
             }),
         }
     }
@@ -134,14 +135,13 @@ impl fmt::Debug for AccessSecrets {
 pub struct WriteSecrets {
     pub(crate) id: RepositoryId,
     pub(crate) read_key: cipher::SecretKey,
-    pub(crate) write_key: Arc<sign::SecretKey>,
+    pub(crate) write_keys: Arc<sign::Keypair>,
 }
 
 impl WriteSecrets {
     /// Generates random write secrets using the provided RNG.
-    pub(crate) fn generate<R: Rng + CryptoRng + ?Sized>(rng: &mut R) -> Self {
-        let write_key: sign::SecretKey = rng.gen();
-        Self::from(write_key)
+    pub(crate) fn generate<R: Rng + CryptoRng>(rng: &mut R) -> Self {
+        Self::from(sign::Keypair::generate(rng))
     }
 
     /// Generates random write secrets using OsRng.
@@ -150,17 +150,15 @@ impl WriteSecrets {
     }
 }
 
-impl From<sign::SecretKey> for WriteSecrets {
-    fn from(write_key: sign::SecretKey) -> Self {
-        let id = sign::PublicKey::from(&write_key);
-        let id = id.into();
-
-        let read_key = derive_read_key_from_write_key(&write_key);
+impl From<sign::Keypair> for WriteSecrets {
+    fn from(keys: sign::Keypair) -> Self {
+        let id = keys.public.into();
+        let read_key = derive_read_key_from_write_key(&keys.secret);
 
         Self {
             id,
             read_key,
-            write_key: Arc::new(write_key),
+            write_keys: Arc::new(keys),
         }
     }
 }
@@ -168,15 +166,25 @@ impl From<sign::SecretKey> for WriteSecrets {
 /// Secret keys for read and optionaly write access.
 #[derive(Clone)]
 pub(crate) struct AccessKeys {
-    pub read: cipher::SecretKey,
-    pub write: Option<Arc<sign::SecretKey>>,
+    read: cipher::SecretKey,
+    write: Option<Arc<sign::Keypair>>,
+}
+
+impl AccessKeys {
+    pub fn read(&self) -> &cipher::SecretKey {
+        &self.read
+    }
+
+    pub fn write(&self) -> Option<&sign::Keypair> {
+        self.write.as_deref()
+    }
 }
 
 impl From<WriteSecrets> for AccessKeys {
     fn from(secrets: WriteSecrets) -> Self {
         Self {
             read: secrets.read_key,
-            write: Some(secrets.write_key),
+            write: Some(secrets.write_keys),
         }
     }
 }

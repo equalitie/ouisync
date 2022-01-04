@@ -145,6 +145,7 @@ mod tests {
     use super::*;
     use crate::{
         access_control::{AccessKeys, WriteSecrets},
+        crypto::sign::PublicKey,
         db,
         index::BranchData,
         repository,
@@ -259,7 +260,7 @@ mod tests {
 
     async fn create_branch(pool: db::Pool, keys: AccessKeys) -> Branch {
         let (notify_tx, _) = async_broadcast::broadcast(1);
-        let branch_data = BranchData::new(&pool, rand::random(), notify_tx)
+        let branch_data = BranchData::new(&pool, PublicKey::random(), notify_tx)
             .await
             .unwrap();
         Branch::new(pool, Arc::new(branch_data), keys)

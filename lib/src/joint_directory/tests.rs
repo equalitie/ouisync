@@ -13,7 +13,7 @@ use crate::{
 };
 use assert_matches::assert_matches;
 use futures_util::future;
-use rand::{rngs::StdRng, Rng, SeedableRng};
+use rand::{rngs::StdRng, SeedableRng};
 use std::{iter, sync::Arc};
 
 #[tokio::test(flavor = "multi_thread")]
@@ -868,7 +868,7 @@ async fn setup_with_rng(mut rng: StdRng, branch_count: usize) -> Vec<Branch> {
     let keys = AccessKeys::from(WriteSecrets::generate(&mut rng));
 
     future::join_all((0..branch_count).map(|_| {
-        let id = rng.gen();
+        let id = PublicKey::generate(&mut rng);
         let notify_tx = notify_tx.clone();
         let keys = keys.clone();
 

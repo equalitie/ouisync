@@ -1,7 +1,13 @@
 use std::iter;
 
 use super::{inner::INNER_LAYER_COUNT, summary::Summary, test_utils::Snapshot, *};
-use crate::{crypto::Hashable, db, error::Error, test_utils, version_vector::VersionVector};
+use crate::{
+    crypto::{sign::PublicKey, Hashable},
+    db,
+    error::Error,
+    test_utils,
+    version_vector::VersionVector,
+};
 use assert_matches::assert_matches;
 use futures_util::TryStreamExt;
 use rand::prelude::*;
@@ -11,7 +17,7 @@ use test_strategy::proptest;
 async fn create_new_root_node() {
     let pool = setup().await;
 
-    let writer_id = rand::random();
+    let writer_id = PublicKey::random();
     let hash = rand::random::<u64>().hash();
 
     let node0 = RootNode::create(&pool, &writer_id, VersionVector::new(), hash, Summary::FULL)
@@ -36,7 +42,7 @@ async fn create_new_root_node() {
 async fn create_existing_root_node() {
     let pool = setup().await;
 
-    let writer_id = rand::random();
+    let writer_id = PublicKey::random();
     let hash = rand::random::<u64>().hash();
 
     let node0 = RootNode::create(&pool, &writer_id, VersionVector::new(), hash, Summary::FULL)
@@ -520,7 +526,7 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
     let mut rng = StdRng::seed_from_u64(rng_seed);
     let pool = setup().await;
 
-    let writer_id = rng.gen();
+    let writer_id = PublicKey::generate(&mut rng);
     let snapshot = Snapshot::generate(&mut rng, leaf_count);
 
     let mut root_node = RootNode::create(
@@ -584,7 +590,7 @@ async fn summary_case(leaf_count: usize, rng_seed: u64) {
     let mut rng = StdRng::seed_from_u64(rng_seed);
     let pool = setup().await;
 
-    let writer_id = rng.gen();
+    let writer_id = PublicKey::generate(&mut rng);
     let snapshot = Snapshot::generate(&mut rng, leaf_count);
 
     // Save the snapshot initially with all nodes missing.

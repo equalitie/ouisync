@@ -233,17 +233,17 @@ mod tests {
         let pool = db::open_or_create(&db::Store::Memory).await.unwrap();
         let (mut store, alice) = Store::create_new(&pool).await.unwrap();
 
-        let bob = Keypair::generate();
+        let bob = Keypair::random();
         let bob_nonce = rand::random();
 
         let entry = Entry::new(&bob.public, &alice, bob_nonce);
 
         assert!(store.try_add_entry(entry).await.is_ok());
 
-        let malory = Keypair::generate();
+        let malory = Keypair::random();
         let malory_nonce = rand::random();
 
-        let carol = Keypair::generate();
+        let carol = Keypair::random();
         let carol_nonce = rand::random();
 
         assert!(store

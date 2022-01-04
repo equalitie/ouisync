@@ -64,7 +64,7 @@ impl<'a> Operations<'a> {
             let (id, content) = read_block(
                 &mut tx,
                 self.core.branch.data(),
-                &self.core.branch.keys().read,
+                self.core.branch.keys().read(),
                 &self.core.blob_key,
                 &locator,
             )
@@ -135,7 +135,7 @@ impl<'a> Operations<'a> {
                 read_block(
                     tx,
                     self.core.branch.data(),
-                    &self.core.branch.keys().read,
+                    self.core.branch.keys().read(),
                     &self.core.blob_key,
                     &locator,
                 )
@@ -199,7 +199,7 @@ impl<'a> Operations<'a> {
             let (id, content) = read_block(
                 tx,
                 self.core.branch.data(),
-                &self.core.branch.keys().read,
+                self.core.branch.keys().read(),
                 &self.core.blob_key,
                 &locator,
             )
@@ -288,7 +288,7 @@ impl<'a> Operations<'a> {
         tx.commit().await?;
 
         let nonce: BlobNonce = rand::random();
-        let blob_key = self.core.branch.keys().read.derive_subkey(&nonce);
+        let blob_key = self.core.branch.keys().read().derive_subkey(&nonce);
 
         *self.current_block = OpenBlock::new_head(self.core.head_locator, &nonce);
         self.core.blob_key = blob_key;
@@ -309,8 +309,8 @@ impl<'a> Operations<'a> {
         let mut tx = self.core.db_pool().begin().await?;
 
         for (src_locator, dst_locator) in self.core.locators().zip(dst_head_locator.sequence()) {
-            let encoded_src_locator = src_locator.encode(&self.core.branch.keys().read);
-            let encoded_dst_locator = dst_locator.encode(&self.core.branch.keys().read);
+            let encoded_src_locator = src_locator.encode(self.core.branch.keys().read());
+            let encoded_dst_locator = dst_locator.encode(self.core.branch.keys().read());
 
             let block_id = self
                 .core
@@ -388,7 +388,7 @@ impl<'a> Operations<'a> {
         write_block(
             tx,
             self.core.branch.data(),
-            &self.core.branch.keys().read,
+            self.core.branch.keys().read(),
             &self.core.blob_key,
             &self.current_block.locator,
             &self.current_block.id,
@@ -418,7 +418,7 @@ impl<'a> Operations<'a> {
             let (_, buffer) = read_block(
                 tx,
                 self.core.branch.data(),
-                &self.core.branch.keys().read,
+                self.core.branch.keys().read(),
                 &self.core.blob_key,
                 &locator,
             )
@@ -431,7 +431,7 @@ impl<'a> Operations<'a> {
             write_block(
                 tx,
                 self.core.branch.data(),
-                &self.core.branch.keys().read,
+                self.core.branch.keys().read(),
                 &self.core.blob_key,
                 &locator,
                 &rand::random(),
@@ -453,7 +453,7 @@ impl<'a> Operations<'a> {
             self.core
                 .branch
                 .data()
-                .remove(tx, &locator.encode(&self.core.branch.keys().read))
+                .remove(tx, &locator.encode(self.core.branch.keys().read()))
                 .await?;
         }
 

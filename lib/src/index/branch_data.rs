@@ -325,7 +325,7 @@ mod tests {
     async fn setup() -> (db::Pool, BranchData) {
         let pool = init_db().await;
         let (notify_tx, _) = async_broadcast::broadcast(1);
-        let branch = BranchData::new(&pool, rand::random(), notify_tx)
+        let branch = BranchData::new(&pool, PublicKey::random(), notify_tx)
             .await
             .unwrap();
 

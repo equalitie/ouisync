@@ -9,7 +9,8 @@ use crate::{
     crypto::{cipher::AuthTag, sign::PublicKey, Hashable},
     db,
     index::{node_test_utils::Snapshot, Index, RootNode, Summary},
-    repository, store, test_utils,
+    repository::{self, RepositoryId},
+    store, test_utils,
     version_vector::VersionVector,
 };
 use rand::prelude::*;
@@ -117,10 +118,10 @@ async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed:
     simulate_connection_until(a_index.clone(), b_index.clone(), drive).await
 }
 
-async fn create_index<R: Rng>(rng: &mut R) -> (Index, PublicKey) {
+async fn create_index<R: Rng + CryptoRng>(rng: &mut R) -> (Index, PublicKey) {
     let db = repository::create_db(&db::Store::Memory).await.unwrap();
-    let repository_id = rng.gen();
-    let writer_id = rng.gen();
+    let repository_id = RepositoryId::generate(rng);
+    let writer_id = PublicKey::generate(rng);
 
     let index = Index::load(db, repository_id).await.unwrap();
     index.create_branch(writer_id).await.unwrap();

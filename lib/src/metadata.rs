@@ -1,7 +1,7 @@
 use crate::{
     access_control::{AccessSecrets, MasterSecret, WriteSecrets},
     crypto::{
-        cipher::{AuthTag, Nonce, SecretKey, AUTH_TAG_SIZE},
+        cipher::{self, AuthTag, Nonce, AUTH_TAG_SIZE},
         sign, PasswordSalt,
     },
     db,
@@ -57,12 +57,12 @@ pub(crate) async fn init(pool: &db::Pool) -> Result<(), Error> {
 pub(crate) async fn secret_to_key(
     secret: MasterSecret,
     db: impl db::Acquire<'_>,
-) -> Result<SecretKey> {
+) -> Result<cipher::SecretKey> {
     let key = match secret {
         MasterSecret::SecretKey(key) => key,
         MasterSecret::Password(pwd) => {
             let salt = get_or_generate_password_salt(db).await?;
-            SecretKey::derive_from_password(pwd.as_ref(), &salt)
+            cipher::SecretKey::derive_from_password(pwd.as_ref(), &salt)
         }
     };
 
@@ -101,19 +101,19 @@ pub(crate) async fn get_repository_id(db: impl db::Executor<'_>) -> Result<Repos
 // Writer Id
 // -------------------------------------------------------------------
 pub(crate) async fn get_writer_id(
-    master_key: Option<&SecretKey>,
+    master_key: Option<&cipher::SecretKey>,
     db: impl db::Executor<'_>,
 ) -> Result<sign::PublicKey> {
     let id = match master_key {
         Some(key) => get_secret(WRITER_ID, key, db).await?,
-        None => OsRng.gen(),
+        None => sign::PublicKey::generate(&mut OsRng),
     };
     Ok(id)
 }
 
 pub(crate) async fn set_writer_id(
     writer_id: &sign::PublicKey,
-    master_key: &SecretKey,
+    master_key: &cipher::SecretKey,
     db: impl db::Executor<'_>,
 ) -> Result<()> {
     insert_secret(WRITER_ID, writer_id.as_ref(), master_key, db).await
@@ -124,7 +124,7 @@ pub(crate) async fn set_writer_id(
 // -------------------------------------------------------------------
 pub(crate) async fn set_access_secrets(
     secrets: &AccessSecrets,
-    master_key: &SecretKey,
+    master_key: &cipher::SecretKey,
     db: impl db::Acquire<'_>,
 ) -> Result<()> {
     let mut tx = db.begin().await?;
@@ -134,7 +134,7 @@ pub(crate) async fn set_access_secrets(
     match secrets {
         AccessSecrets::Blind { .. } => {
             // Insert a dummy key for plausible deniability.
-            let dummy_key: sign::SecretKey = OsRng.gen();
+            let dummy_key = sign::SecretKey::random();
             replace_secret(ACCESS_KEY, dummy_key.as_ref(), master_key, &mut tx).await?;
         }
         AccessSecrets::Read { read_key, .. } => {
@@ -143,7 +143,7 @@ pub(crate) async fn set_access_secrets(
         AccessSecrets::Write(secrets) => {
             replace_secret(
                 ACCESS_KEY,
-                secrets.write_key.as_ref().as_ref(),
+                secrets.write_keys.secret.as_ref(),
                 master_key,
                 &mut tx,
             )
@@ -157,7 +157,7 @@ pub(crate) async fn set_access_secrets(
 }
 
 pub(crate) async fn get_access_secrets(
-    master_key: &SecretKey,
+    master_key: &cipher::SecretKey,
     db: impl db::Acquire<'_>,
 ) -> Result<AccessSecrets> {
     let mut cx = db.acquire().await?;
@@ -166,17 +166,18 @@ pub(crate) async fn get_access_secrets(
 
     // try to interpret it first as the write key
     let write_key: sign::SecretKey = get_secret(ACCESS_KEY, master_key, &mut *cx).await?;
-    let derived_id = sign::PublicKey::from(&write_key);
-    let derived_id = RepositoryId::from(derived_id);
+    let write_keys = sign::Keypair::from(write_key);
+
+    let derived_id = RepositoryId::from(write_keys.public);
 
     if derived_id == id {
         // It was the write key. We have write access.
-        Ok(AccessSecrets::Write(WriteSecrets::from(write_key)))
+        Ok(AccessSecrets::Write(WriteSecrets::from(write_keys)))
     } else {
         // It wasn't the write key. Either it's the read key or a dummy key. We can't tell so
         // assume it's the read key for now.
         // unwrap is OK because the two secret key types have the same size.
-        let read_key = SecretKey::try_from(write_key.as_ref()).unwrap();
+        let read_key = cipher::SecretKey::try_from(write_keys.secret.as_ref()).unwrap();
         Ok(AccessSecrets::Read { id, read_key })
     }
 }
@@ -226,7 +227,11 @@ async fn replace_public(id: &[u8], blob: &[u8], db: impl db::Executor<'_>) -> Re
 // -------------------------------------------------------------------
 // Secret values
 // -------------------------------------------------------------------
-async fn get_secret<T>(id: &[u8], master_key: &SecretKey, db: impl db::Executor<'_>) -> Result<T>
+async fn get_secret<T>(
+    id: &[u8],
+    master_key: &cipher::SecretKey,
+    db: impl db::Executor<'_>,
+) -> Result<T>
 where
     for<'a> T: TryFrom<&'a [u8]>,
 {
@@ -256,7 +261,7 @@ where
 async fn insert_secret(
     id: &[u8],
     blob: &[u8],
-    master_key: &SecretKey,
+    master_key: &cipher::SecretKey,
     db: impl db::Executor<'_>,
 ) -> Result<()> {
     let (nonce, cypher, auth_tag) = prepare_secret(id, blob, master_key)?;
@@ -282,7 +287,7 @@ async fn insert_secret(
 async fn replace_secret(
     id: &[u8],
     blob: &[u8],
-    master_key: &SecretKey,
+    master_key: &cipher::SecretKey,
     db: impl db::Executor<'_>,
 ) -> Result<()> {
     let (nonce, cypher, auth_tag) = prepare_secret(id, blob, master_key)?;
@@ -304,7 +309,7 @@ async fn replace_secret(
 fn prepare_secret(
     id: &[u8],
     blob: &[u8],
-    master_key: &SecretKey,
+    master_key: &cipher::SecretKey,
 ) -> Result<(Nonce, Vec<u8>, AuthTag)> {
     let nonce = make_nonce();
 
@@ -349,7 +354,7 @@ mod tests {
     async fn store_cyphertext() {
         let pool = new_memory_db().await;
 
-        let key = SecretKey::random();
+        let key = cipher::SecretKey::random();
 
         insert_secret(b"hello", b"world", &key, &pool)
             .await

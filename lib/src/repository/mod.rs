@@ -22,7 +22,6 @@ use crate::{
 use camino::Utf8Path;
 use futures_util::{future, stream::FuturesUnordered, StreamExt};
 use log::Level;
-use rand::{rngs::OsRng, Rng};
 use std::{
     collections::{hash_map::Entry, HashMap},
     iter,
@@ -50,7 +49,7 @@ impl Repository {
         let master_key = metadata::secret_to_key(master_secret, &mut tx).await?;
 
         // TODO: we should be storing the SK in the db, not the PK.
-        let this_writer_id: sign::SecretKey = OsRng.gen();
+        let this_writer_id = sign::SecretKey::random();
         let this_writer_id = PublicKey::from(&this_writer_id);
         metadata::set_writer_id(&this_writer_id, &master_key, &mut tx).await?;
 
@@ -623,10 +622,9 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn merge() {
-        let local_id = rand::random();
         let repo = Repository::create(
             &db::Store::Memory,
-            local_id,
+            rand::random(),
             MasterSecret::random(),
             AccessSecrets::random_write(),
             true,
@@ -636,7 +634,7 @@ mod tests {
 
         // Add another branch to the index. Eventually there might be a more high-level API for
         // this but for now we have to resort to this.
-        let remote_id = rand::random();
+        let remote_id = PublicKey::random();
         let remote_node = RootNode::load_latest_or_create(&repo.index().pool, &remote_id)
             .await
             .unwrap();
