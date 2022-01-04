@@ -2,10 +2,7 @@ use super::{Blob, BlobNonce, Buffer, Core, Cursor, OpenBlock, BLOB_NONCE_SIZE};
 use crate::{
     block::{self, BlockId, BLOCK_SIZE},
     branch::Branch,
-    crypto::{
-        cipher::{self, aead, AuthTag, Nonce, NONCE_SIZE},
-        Cryptor,
-    },
+    crypto::cipher::{self, aead, AuthTag, Nonce, NONCE_SIZE},
     db,
     error::{Error, Result},
     index::BranchData,
@@ -291,7 +288,7 @@ impl<'a> Operations<'a> {
         tx.commit().await?;
 
         let nonce: BlobNonce = rand::random();
-        let blob_key = self.core.branch.keys().cryptor().derive_subkey(&nonce);
+        let blob_key = self.core.branch.keys().read.derive_subkey(&nonce);
 
         *self.current_block = OpenBlock::new_head(self.core.head_locator, &nonce);
         self.core.blob_key = blob_key;
@@ -502,7 +499,7 @@ async fn read_block(
     tx: &mut db::Transaction<'_>,
     branch: &BranchData,
     repo_key: &cipher::SecretKey,
-    blob_key: &Cryptor,
+    blob_key: &cipher::SecretKey,
     locator: &Locator,
 ) -> Result<(BlockId, Buffer)> {
     let (id, mut buffer, auth_tag) = load_block(tx, branch, repo_key, locator).await?;
@@ -541,7 +538,7 @@ async fn write_block(
     tx: &mut db::Transaction<'_>,
     branch: &BranchData,
     repo_key: &cipher::SecretKey,
-    blob_key: &Cryptor,
+    blob_key: &cipher::SecretKey,
     locator: &Locator,
     block_id: &BlockId,
     mut buffer: Buffer,
@@ -563,7 +560,7 @@ async fn write_block(
 }
 
 pub(super) fn decrypt_block(
-    blob_key: &Cryptor,
+    blob_key: &cipher::SecretKey,
     id: &BlockId,
     block_number: u32,
     content: &mut [u8],
@@ -574,7 +571,7 @@ pub(super) fn decrypt_block(
 }
 
 pub(super) fn encrypt_block(
-    blob_key: &Cryptor,
+    blob_key: &cipher::SecretKey,
     id: &BlockId,
     block_number: u32,
     content: &mut [u8],

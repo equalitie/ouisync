@@ -3,14 +3,15 @@ use super::{
     BlobNonce, Cursor, OpenBlock, BLOB_NONCE_SIZE,
 };
 use crate::{
-    block::BlockId, branch::Branch, crypto::Cryptor, error::Result, locator::Locator, Error,
+    block::BlockId, branch::Branch, crypto::cipher::SecretKey, error::Result, locator::Locator,
+    Error,
 };
 use std::{fmt, mem};
 
 pub(crate) struct Core {
     pub branch: Branch,
     pub head_locator: Locator,
-    pub blob_key: Cryptor,
+    pub blob_key: SecretKey,
     pub len: u64,
     pub len_dirty: bool,
 }
@@ -52,7 +53,7 @@ impl Core {
                 // have the original nonce.
 
                 let nonce: BlobNonce = rand::random();
-                self.blob_key = self.branch.keys().cryptor().derive_subkey(&nonce);
+                self.blob_key = self.branch.keys().read.derive_subkey(&nonce);
 
                 Ok(OpenBlock::new_head(self.head_locator, &nonce))
             }

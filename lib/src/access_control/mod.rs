@@ -5,7 +5,7 @@ mod share_token;
 pub use self::{access_mode::AccessMode, master_secret::MasterSecret, share_token::ShareToken};
 
 use crate::{
-    crypto::{cipher, sign, Cryptor},
+    crypto::{cipher, sign},
     error::Error,
     repository::RepositoryId,
 };
@@ -178,13 +178,6 @@ impl From<WriteSecrets> for AccessKeys {
             read: secrets.read_key,
             write: Some(secrets.write_key),
         }
-    }
-}
-
-impl AccessKeys {
-    // TODO: temporary method, remove when the integration of AccessSecrets is done.
-    pub(crate) fn cryptor(&self) -> Cryptor {
-        Cryptor::ChaCha20Poly1305(self.read.clone())
     }
 }
 
