@@ -60,7 +60,7 @@ mod tests {
         block::{self, BLOCK_SIZE},
         crypto::{
             cipher::{AuthTag, SecretKey},
-            sign::PublicKey,
+            sign::{Keypair, PublicKey},
         },
         db,
         index::{self, BranchData},
@@ -74,7 +74,8 @@ mod tests {
         block::init(&pool).await.unwrap();
         super::init(&pool).await.unwrap();
 
-        let secret_key = SecretKey::random();
+        let read_key = SecretKey::random();
+        let write_keys = Keypair::random();
         let (notify_tx, _) = async_broadcast::broadcast(1);
 
         let branch0 = BranchData::new(&pool, PublicKey::random(), notify_tx.clone())
@@ -94,19 +95,31 @@ mod tests {
             .unwrap();
 
         let locator0 = Locator::head(rand::random());
-        let locator0 = locator0.encode(&secret_key);
-        branch0.insert(&mut tx, &block_id, &locator0).await.unwrap();
+        let locator0 = locator0.encode(&read_key);
+        branch0
+            .insert(&mut tx, &block_id, &locator0, &write_keys)
+            .await
+            .unwrap();
 
         let locator1 = Locator::head(rand::random());
-        let locator1 = locator1.encode(&secret_key);
-        branch1.insert(&mut tx, &block_id, &locator1).await.unwrap();
+        let locator1 = locator1.encode(&read_key);
+        branch1
+            .insert(&mut tx, &block_id, &locator1, &write_keys)
+            .await
+            .unwrap();
 
         assert!(block::exists(&mut tx, &block_id).await.unwrap());
 
-        branch0.remove(&mut tx, &locator0).await.unwrap();
+        branch0
+            .remove(&mut tx, &locator0, &write_keys)
+            .await
+            .unwrap();
         assert!(block::exists(&mut tx, &block_id).await.unwrap());
 
-        branch1.remove(&mut tx, &locator1).await.unwrap();
+        branch1
+            .remove(&mut tx, &locator1, &write_keys)
+            .await
+            .unwrap();
         assert!(!block::exists(&mut tx, &block_id).await.unwrap(),);
     }
 }

@@ -5,7 +5,10 @@ use super::{
 };
 use crate::{
     block::BlockId,
-    crypto::{sign::PublicKey, Hash},
+    crypto::{
+        sign::{Keypair, PublicKey},
+        Hash,
+    },
     db,
     error::{Error, Result},
     version_vector::VersionVector,
@@ -74,6 +77,7 @@ impl BranchData {
         tx: &mut db::Transaction<'_>,
         block_id: &BlockId,
         encoded_locator: &LocatorHash,
+        write_keys: &Keypair,
     ) -> Result<()> {
         let mut lock = self.root_node.write().await;
         let mut path = self.get_path(tx, &lock.hash, encoded_locator).await?;
@@ -84,7 +88,7 @@ impl BranchData {
         assert!(!path.has_leaf(block_id));
 
         path.set_leaf(block_id);
-        self.write_path(tx, &mut lock, &path).await
+        self.write_path(tx, &mut lock, &path, write_keys).await
     }
 
     /// Retrieve `BlockId` of a block with the given encoded `Locator`.
@@ -104,12 +108,17 @@ impl BranchData {
 
     /// Remove the block identified by encoded_locator from the index. Returns the id of the
     /// removed block.
-    pub async fn remove(&self, tx: &mut db::Transaction<'_>, encoded_locator: &Hash) -> Result<()> {
+    pub async fn remove(
+        &self,
+        tx: &mut db::Transaction<'_>,
+        encoded_locator: &Hash,
+        write_keys: &Keypair,
+    ) -> Result<()> {
         let mut lock = self.root_node.write().await;
         let mut path = self.get_path(tx, &lock.hash, encoded_locator).await?;
         path.remove_leaf(encoded_locator)
             .ok_or(Error::EntryNotFound)?;
-        self.write_path(tx, &mut lock, &path).await
+        self.write_path(tx, &mut lock, &path, write_keys).await
     }
 
     /// Trigger a notification event from this branch.
@@ -176,6 +185,7 @@ impl BranchData {
         tx: &mut db::Transaction<'_>,
         old_root: &mut RootNode,
         path: &Path,
+        _write_keys: &Keypair,
     ) -> Result<()> {
         for (i, inner_layer) in path.inner.iter().enumerate() {
             if let Some(parent_hash) = path.hash_at_layer(i) {
@@ -192,6 +202,7 @@ impl BranchData {
             }
         }
 
+        // TODO: sign the new root
         let new_root = old_root.next_version(tx, path.root_hash).await?;
         self.replace_root(tx, old_root, new_root).await
     }
@@ -215,22 +226,27 @@ impl BranchData {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{crypto::cipher::SecretKey, index, locator::Locator};
+    use crate::{
+        crypto::{cipher::SecretKey, sign::Keypair},
+        index,
+        locator::Locator,
+    };
     use sqlx::Row;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn insert_and_read() {
         let (pool, branch) = setup().await;
-        let secret_key = SecretKey::random();
+        let read_key = SecretKey::random();
+        let write_keys = Keypair::random();
 
         let block_id = rand::random();
         let locator = random_head_locator();
-        let encoded_locator = locator.encode(&secret_key);
+        let encoded_locator = locator.encode(&read_key);
 
         let mut tx = pool.begin().await.unwrap();
 
         branch
-            .insert(&mut tx, &block_id, &encoded_locator)
+            .insert(&mut tx, &block_id, &encoded_locator, &write_keys)
             .await
             .unwrap();
 
@@ -243,18 +259,25 @@ mod tests {
     async fn rewrite_locator() {
         for _ in 0..32 {
             let (pool, branch) = setup().await;
-            let secret_key = SecretKey::random();
+            let read_key = SecretKey::random();
+            let write_keys = Keypair::random();
 
             let b1 = rand::random();
             let b2 = rand::random();
 
             let locator = random_head_locator();
-            let encoded_locator = locator.encode(&secret_key);
+            let encoded_locator = locator.encode(&read_key);
 
             let mut tx = pool.begin().await.unwrap();
 
-            branch.insert(&mut tx, &b1, &encoded_locator).await.unwrap();
-            branch.insert(&mut tx, &b2, &encoded_locator).await.unwrap();
+            branch
+                .insert(&mut tx, &b1, &encoded_locator, &write_keys)
+                .await
+                .unwrap();
+            branch
+                .insert(&mut tx, &b2, &encoded_locator, &write_keys)
+                .await
+                .unwrap();
 
             let r = branch.get(&mut tx, &encoded_locator).await.unwrap();
 
@@ -270,18 +293,22 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn remove_locator() {
         let (pool, branch) = setup().await;
-        let secret_key = SecretKey::random();
+        let read_key = SecretKey::random();
+        let write_keys = Keypair::random();
 
         let b = rand::random();
         let locator = random_head_locator();
-        let encoded_locator = locator.encode(&secret_key);
+        let encoded_locator = locator.encode(&read_key);
 
         let mut tx = pool.begin().await.unwrap();
 
         assert_eq!(0, count_branch_forest_entries(&mut tx).await);
 
         {
-            branch.insert(&mut tx, &b, &encoded_locator).await.unwrap();
+            branch
+                .insert(&mut tx, &b, &encoded_locator, &write_keys)
+                .await
+                .unwrap();
             let r = branch.get(&mut tx, &encoded_locator).await.unwrap();
             assert_eq!(r, b);
         }
@@ -292,7 +319,10 @@ mod tests {
         );
 
         {
-            branch.remove(&mut tx, &encoded_locator).await.unwrap();
+            branch
+                .remove(&mut tx, &encoded_locator, &write_keys)
+                .await
+                .unwrap();
 
             match branch.get(&mut tx, &encoded_locator).await {
                 Err(Error::EntryNotFound) => { /* OK */ }

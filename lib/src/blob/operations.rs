@@ -2,7 +2,10 @@ use super::{Blob, BlobNonce, Buffer, Core, Cursor, OpenBlock, BLOB_NONCE_SIZE};
 use crate::{
     block::{self, BlockId, BLOCK_SIZE},
     branch::Branch,
-    crypto::cipher::{self, aead, AuthTag, Nonce, NONCE_SIZE},
+    crypto::{
+        cipher::{self, aead, AuthTag, Nonce, NONCE_SIZE},
+        sign,
+    },
     db,
     error::{Error, Result},
     index::BranchData,
@@ -308,9 +311,17 @@ impl<'a> Operations<'a> {
 
         let mut tx = self.core.db_pool().begin().await?;
 
+        let read_key = self.core.branch.keys().read();
+        let write_keys = self
+            .core
+            .branch
+            .keys()
+            .write()
+            .ok_or(Error::PermissionDenied)?;
+
         for (src_locator, dst_locator) in self.core.locators().zip(dst_head_locator.sequence()) {
-            let encoded_src_locator = src_locator.encode(self.core.branch.keys().read());
-            let encoded_dst_locator = dst_locator.encode(self.core.branch.keys().read());
+            let encoded_src_locator = src_locator.encode(read_key);
+            let encoded_dst_locator = dst_locator.encode(read_key);
 
             let block_id = self
                 .core
@@ -321,7 +332,7 @@ impl<'a> Operations<'a> {
 
             dst_branch
                 .data()
-                .insert(&mut tx, &block_id, &encoded_dst_locator)
+                .insert(&mut tx, &block_id, &encoded_dst_locator, write_keys)
                 .await?;
         }
 
@@ -383,12 +394,21 @@ impl<'a> Operations<'a> {
             return Ok(());
         }
 
+        let read_key = self.core.branch.keys().read();
+        let write_keys = self
+            .core
+            .branch
+            .keys()
+            .write()
+            .ok_or(Error::PermissionDenied)?;
+
         self.current_block.id = rand::random();
 
         write_block(
             tx,
             self.core.branch.data(),
-            self.core.branch.keys().read(),
+            read_key,
+            write_keys,
             &self.core.blob_key,
             &self.current_block.locator,
             &self.current_block.id,
@@ -406,6 +426,14 @@ impl<'a> Operations<'a> {
         if !self.core.len_dirty {
             return Ok(());
         }
+
+        let read_key = self.core.branch.keys().read();
+        let write_keys = self
+            .core
+            .branch
+            .keys()
+            .write()
+            .ok_or(Error::PermissionDenied)?;
 
         if self.current_block.locator.number() == 0 {
             let old_pos = self.current_block.content.pos;
@@ -431,7 +459,8 @@ impl<'a> Operations<'a> {
             write_block(
                 tx,
                 self.core.branch.data(),
-                self.core.branch.keys().read(),
+                read_key,
+                write_keys,
                 &self.core.blob_key,
                 &locator,
                 &rand::random(),
@@ -449,11 +478,19 @@ impl<'a> Operations<'a> {
     where
         T: IntoIterator<Item = Locator>,
     {
+        let read_key = self.core.branch.keys().read();
+        let write_keys = self
+            .core
+            .branch
+            .keys()
+            .write()
+            .ok_or(Error::PermissionDenied)?;
+
         for locator in locators {
             self.core
                 .branch
                 .data()
-                .remove(tx, &locator.encode(self.core.branch.keys().read()))
+                .remove(tx, &locator.encode(read_key), write_keys)
                 .await?;
         }
 
@@ -511,10 +548,12 @@ pub(super) async fn load_block(
     Ok((id, content, auth_tag))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn write_block(
     tx: &mut db::Transaction<'_>,
     branch: &BranchData,
-    repo_key: &cipher::SecretKey,
+    repo_read_key: &cipher::SecretKey,
+    repo_write_keys: &sign::Keypair,
     blob_key: &cipher::SecretKey,
     locator: &Locator,
     block_id: &BlockId,
@@ -530,7 +569,12 @@ async fn write_block(
 
     block::write(tx, block_id, &buffer, &auth_tag).await?;
     branch
-        .insert(tx, block_id, &locator.encode(repo_key))
+        .insert(
+            tx,
+            block_id,
+            &locator.encode(repo_read_key),
+            repo_write_keys,
+        )
         .await?;
 
     Ok(())

@@ -6,7 +6,11 @@ use super::{
 };
 use crate::{
     block::{self, BlockId, BLOCK_SIZE},
-    crypto::{cipher::AuthTag, sign::PublicKey, Hashable},
+    crypto::{
+        cipher::AuthTag,
+        sign::{Keypair, PublicKey},
+        Hashable,
+    },
     db,
     index::{node_test_utils::Snapshot, Index, RootNode, Summary},
     repository::{self, RepositoryId},
@@ -204,15 +208,16 @@ async fn wait_until_block_exists(index: &Index, block_id: &BlockId) {
     }
 }
 
-async fn create_block(rng: &mut impl Rng, index: &Index, writer_id: &PublicKey) {
+async fn create_block(rng: &mut StdRng, index: &Index, writer_id: &PublicKey) {
     let branch = index.branches().await.get(writer_id).unwrap().clone();
     let encoded_locator = rng.gen::<u64>().hash();
     let block_id = rng.gen();
     let content = vec![0; BLOCK_SIZE];
+    let write_keys = Keypair::generate(rng);
 
     let mut tx = index.pool.begin().await.unwrap();
     branch
-        .insert(&mut tx, &block_id, &encoded_locator)
+        .insert(&mut tx, &block_id, &encoded_locator, &write_keys)
         .await
         .unwrap();
     block::write(&mut tx, &block_id, &content, &AuthTag::default())
