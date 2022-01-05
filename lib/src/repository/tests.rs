@@ -248,6 +248,166 @@ async fn append_to_file() {
     assert_eq!(content, b"foobar");
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn blind_access() {
+    let pool = db::Pool::connect(":memory:").await.unwrap();
+    let replica_id = rand::random();
+
+    // Create the repo and put a file in it.
+    let repo = Repository::create_in(
+        pool.clone(),
+        replica_id,
+        MasterSecret::random(),
+        AccessSecrets::random_write(),
+        false,
+    )
+    .await
+    .unwrap();
+
+    let local_branch = repo.local_branch().await.unwrap();
+
+    let mut file = repo.create_file("secret.txt").await.unwrap();
+    file.write(b"redacted", &local_branch).await.unwrap();
+    file.flush().await.unwrap();
+
+    drop(file);
+    drop(repo);
+
+    // Reopen the repo in blind mode.
+    let repo = Repository::open_in(pool, replica_id, None, AccessMode::Blind, false)
+        .await
+        .unwrap();
+
+    // Reading files is not allowed.
+    assert_matches!(
+        repo.open_file("secret.txt").await,
+        Err(Error::PermissionDenied)
+    );
+
+    // Creating files is not allowed.
+    assert_matches!(
+        repo.create_file("hack.txt").await,
+        Err(Error::PermissionDenied)
+    );
+
+    // Removing files is not allowed.
+    assert_matches!(
+        repo.remove_entry("secret.txt").await,
+        Err(Error::PermissionDenied)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn read_access_same_replica() {
+    let pool = db::Pool::connect(":memory:").await.unwrap();
+    let replica_id = rand::random();
+    let master_secret = MasterSecret::random();
+
+    let repo = Repository::create_in(
+        pool.clone(),
+        replica_id,
+        master_secret.clone(),
+        AccessSecrets::random_write(),
+        false,
+    )
+    .await
+    .unwrap();
+
+    let local_branch = repo.local_branch().await.unwrap();
+
+    let mut file = repo.create_file("public.txt").await.unwrap();
+    file.write(b"hello world", &local_branch).await.unwrap();
+    file.flush().await.unwrap();
+
+    drop(file);
+    drop(repo);
+
+    // Reopen the repo in read-only mode.
+    let repo = Repository::open_in(
+        pool,
+        replica_id,
+        Some(master_secret),
+        AccessMode::Read,
+        false,
+    )
+    .await
+    .unwrap();
+
+    // Reading files is allowed.
+    let mut file = repo.open_file("public.txt").await.unwrap();
+    let content = file.read_to_end().await.unwrap();
+    assert_eq!(content, b"hello world");
+
+    // Writing is not allowed.
+    let local_branch = repo.local_branch().await.unwrap();
+    file.seek(SeekFrom::Start(0)).await.unwrap();
+    // short writes that don't cross block boundaries don't trigger the permission check which is
+    // why the following works...
+    file.write(b"hello universe", &local_branch).await.unwrap();
+    // ...but flushing the file is not allowed.
+    assert_matches!(file.flush().await, Err(Error::PermissionDenied));
+
+    // Creating files works...
+    let mut file = repo.create_file("hack.txt").await.unwrap();
+    // ...but flushing it is not allowed.
+    assert_matches!(file.flush().await, Err(Error::PermissionDenied));
+
+    // Removing files is not allowed.
+    assert_matches!(
+        repo.remove_entry("public.txt").await,
+        Err(Error::PermissionDenied)
+    );
+}
+
+// FIXME: this test currently fails because we ignore `this_replica_id`.
+#[ignore]
+#[tokio::test(flavor = "multi_thread")]
+async fn read_access_different_replica() {
+    let pool = db::Pool::connect(":memory:").await.unwrap();
+    let master_secret = MasterSecret::random();
+
+    let replica_id_a = rand::random();
+    let repo = Repository::create_in(
+        pool.clone(),
+        replica_id_a,
+        master_secret.clone(),
+        AccessSecrets::random_write(),
+        false,
+    )
+    .await
+    .unwrap();
+
+    let local_branch = repo.local_branch().await.unwrap();
+
+    let mut file = repo.create_file("public.txt").await.unwrap();
+    file.write(b"hello world", &local_branch).await.unwrap();
+    file.flush().await.unwrap();
+
+    drop(file);
+    drop(repo);
+
+    let replica_id_b = rand::random();
+    let repo = Repository::open_in(
+        pool,
+        replica_id_b,
+        Some(master_secret),
+        AccessMode::Read,
+        false,
+    )
+    .await
+    .unwrap();
+
+    // The second replica doesn't have its own local branch in the repo.
+    assert_matches!(
+        repo.local_branch().await.map(|_| ()),
+        Err(Error::PermissionDenied)
+    );
+
+    let mut file = repo.open_file("public.txt").await.unwrap();
+    let content = file.read_to_end().await.unwrap();
+    assert_eq!(content, b"hello world");
+}
+
 async fn read_file(repo: &Repository, path: impl AsRef<Utf8Path>) -> Vec<u8> {
     repo.open_file(path)
         .await

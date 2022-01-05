@@ -1,5 +1,6 @@
 use crate::crypto::{cipher::SecretKey, Password};
 
+#[derive(Clone)]
 pub enum MasterSecret {
     Password(Password),
     SecretKey(SecretKey),

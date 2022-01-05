@@ -7,7 +7,7 @@ pub use self::id::RepositoryId;
 
 use self::merger::Merger;
 use crate::{
-    access_control::{AccessSecrets, MasterSecret},
+    access_control::{AccessMode, AccessSecrets, MasterSecret},
     block,
     branch::Branch,
     crypto::sign::{self, PublicKey},
@@ -100,7 +100,14 @@ impl Repository {
         enable_merger: bool,
     ) -> Result<Self> {
         let pool = db::open(store).await?;
-        Self::open_in(pool, this_replica_id, master_secret, enable_merger).await
+        Self::open_in(
+            pool,
+            this_replica_id,
+            master_secret,
+            AccessMode::Write,
+            enable_merger,
+        )
+        .await
     }
 
     /// Opens an existing repository in an already opened database.
@@ -108,6 +115,9 @@ impl Repository {
         pool: db::Pool,
         _this_replica_id: ReplicaId,
         master_secret: Option<MasterSecret>,
+        // Allows to reduce the access mode (e.g. open in read-only mode even if the master secret
+        // would give us write access otherwise). Currently used only in tests.
+        max_access_mode: AccessMode,
         enable_merger: bool,
     ) -> Result<Self> {
         let mut conn = pool.acquire().await?;
@@ -121,7 +131,9 @@ impl Repository {
         let this_writer_id = metadata::get_writer_id(master_key.as_ref(), &mut conn).await?;
 
         let access_secrets = if let Some(master_key) = master_key {
-            metadata::get_access_secrets(&master_key, &mut conn).await?
+            metadata::get_access_secrets(&master_key, &mut conn)
+                .await?
+                .with_mode(max_access_mode)
         } else {
             let id = metadata::get_repository_id(&mut conn).await?;
             AccessSecrets::Blind { id }
