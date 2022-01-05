@@ -359,7 +359,8 @@ async fn read_access_same_replica() {
     );
 }
 
-// FIXME: this test currently fails because we ignore `this_replica_id`.
+// FIXME: this test currently fails because JointDirectory currently requires local branch even
+// if we are only reading from it.
 #[ignore]
 #[tokio::test(flavor = "multi_thread")]
 async fn read_access_different_replica() {

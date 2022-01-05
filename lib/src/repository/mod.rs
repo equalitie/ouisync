@@ -10,7 +10,10 @@ use crate::{
     access_control::{AccessMode, AccessSecrets, MasterSecret},
     block,
     branch::Branch,
-    crypto::sign::{self, PublicKey},
+    crypto::{
+        cipher,
+        sign::{self, PublicKey},
+    },
     db,
     debug_printer::DebugPrinter,
     directory::{Directory, EntryType},
@@ -59,7 +62,7 @@ impl Repository {
     /// Creates a new repository in an already opened database.
     pub(crate) async fn create_in(
         pool: db::Pool,
-        _this_replica_id: ReplicaId,
+        this_replica_id: ReplicaId,
         master_secret: MasterSecret,
         access_secrets: AccessSecrets,
         enable_merger: bool,
@@ -68,12 +71,7 @@ impl Repository {
         init_db(&mut tx).await?;
 
         let master_key = metadata::secret_to_key(master_secret, &mut tx).await?;
-
-        // TODO: we should be storing the SK in the db, not the PK.
-        let this_writer_id = sign::SecretKey::random();
-        let this_writer_id = PublicKey::from(&this_writer_id);
-        metadata::set_writer_id(&this_writer_id, &master_key, &mut tx).await?;
-
+        let this_writer_id = generate_writer_id(&this_replica_id, &master_key, &mut tx).await?;
         metadata::set_access_secrets(&access_secrets, &master_key, &mut tx).await?;
 
         tx.commit().await?;
@@ -113,7 +111,7 @@ impl Repository {
     /// Opens an existing repository in an already opened database.
     pub(crate) async fn open_in(
         pool: db::Pool,
-        _this_replica_id: ReplicaId,
+        this_replica_id: ReplicaId,
         master_secret: Option<MasterSecret>,
         // Allows to reduce the access mode (e.g. open in read-only mode even if the master secret
         // would give us write access otherwise). Currently used only in tests.
@@ -128,19 +126,33 @@ impl Repository {
             None
         };
 
-        let this_writer_id = metadata::get_writer_id(master_key.as_ref(), &mut conn).await?;
-
-        let access_secrets = if let Some(master_key) = master_key {
-            metadata::get_access_secrets(&master_key, &mut conn)
-                .await?
-                .with_mode(max_access_mode)
+        let access_secrets = if let Some(master_key) = &master_key {
+            metadata::get_access_secrets(master_key, &mut conn).await?
         } else {
             let id = metadata::get_repository_id(&mut conn).await?;
             AccessSecrets::Blind { id }
         };
 
+        // If we are writer, load the writer id from the db, otherwise use a dummy random one.
+        let this_writer_id = if access_secrets.can_write() {
+            // This unwrap is ok because the fact that we have write access means the access
+            // secrets must have been successfully decrypted and thus we must have a valid
+            // master secret.
+            let master_key = master_key.as_ref().unwrap();
+
+            if metadata::check_replica_id(&this_replica_id, &mut conn).await? {
+                metadata::get_writer_id(master_key, &mut conn).await?
+            } else {
+                // Replica id changed. Must generate new writer id.
+                generate_writer_id(&this_replica_id, master_key, &mut conn).await?
+            }
+        } else {
+            PublicKey::from(&sign::SecretKey::random())
+        };
+
         drop(conn);
 
+        let access_secrets = access_secrets.with_mode(max_access_mode);
         let index = Index::load(pool, *access_secrets.id()).await?;
 
         Self::new(index, this_writer_id, access_secrets, enable_merger).await
@@ -521,4 +533,17 @@ impl Shared {
             }
         }
     }
+}
+
+async fn generate_writer_id(
+    this_replica_id: &ReplicaId,
+    master_key: &cipher::SecretKey,
+    conn: &mut db::Connection,
+) -> Result<sign::PublicKey> {
+    // TODO: we should be storing the SK in the db, not the PK.
+    let writer_id = sign::SecretKey::random();
+    let writer_id = PublicKey::from(&writer_id);
+    metadata::set_writer_id(&writer_id, this_replica_id, master_key, conn).await?;
+
+    Ok(writer_id)
 }

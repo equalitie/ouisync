@@ -6,6 +6,7 @@ use crate::{
     },
     db,
     error::{Error, Result},
+    replica_id::ReplicaId,
     repository::RepositoryId,
 };
 use rand::{rngs::OsRng, Rng};
@@ -17,6 +18,7 @@ const REPOSITORY_ID: &[u8] = b"repository_id";
 const PASSWORD_SALT: &[u8] = b"password_salt";
 const WRITER_ID: &[u8] = b"writer_id";
 const ACCESS_KEY: &[u8] = b"access_key"; // read key or write key
+const REPLICA_ID: &[u8] = b"replica_id";
 
 /// Initialize the metadata tables for storing Key:Value pairs.  One table stores plaintext values,
 /// the other one stores encrypted ones.
@@ -79,7 +81,7 @@ async fn get_or_generate_password_salt(conn: &mut db::Connection) -> Result<Pass
         Ok(salt) => salt,
         Err(Error::EntryNotFound) => {
             let salt: PasswordSalt = OsRng.gen();
-            insert_public(PASSWORD_SALT, &salt, &mut tx).await?;
+            set_public(PASSWORD_SALT, &salt, &mut tx).await?;
             salt
         }
         Err(error) => return Err(error),
@@ -101,22 +103,39 @@ pub(crate) async fn get_repository_id(conn: &mut db::Connection) -> Result<Repos
 // Writer Id
 // -------------------------------------------------------------------
 pub(crate) async fn get_writer_id(
-    master_key: Option<&cipher::SecretKey>,
+    master_key: &cipher::SecretKey,
     conn: &mut db::Connection,
 ) -> Result<sign::PublicKey> {
-    let id = match master_key {
-        Some(key) => get_secret(WRITER_ID, key, conn).await?,
-        None => sign::PublicKey::generate(&mut OsRng),
-    };
-    Ok(id)
+    get_secret(WRITER_ID, master_key, conn).await
 }
 
 pub(crate) async fn set_writer_id(
     writer_id: &sign::PublicKey,
+    replica_id: &ReplicaId,
     master_key: &cipher::SecretKey,
     conn: &mut db::Connection,
 ) -> Result<()> {
-    insert_secret(WRITER_ID, writer_id.as_ref(), master_key, conn).await
+    let mut tx = conn.begin().await?;
+
+    set_secret(WRITER_ID, writer_id.as_ref(), master_key, &mut tx).await?;
+    set_public(REPLICA_ID, replica_id.as_ref(), &mut tx).await?;
+
+    tx.commit().await?;
+
+    Ok(())
+}
+
+// -------------------------------------------------------------------
+// Replica id
+// -------------------------------------------------------------------
+
+// Checks whether the stored replica id is the same as the specified one.
+pub(crate) async fn check_replica_id(
+    replica_id: &ReplicaId,
+    conn: &mut db::Connection,
+) -> Result<bool> {
+    let old_replica_id: ReplicaId = get_public(REPLICA_ID, conn).await?;
+    Ok(old_replica_id == *replica_id)
 }
 
 // -------------------------------------------------------------------
@@ -129,19 +148,19 @@ pub(crate) async fn set_access_secrets(
 ) -> Result<()> {
     let mut tx = conn.begin().await?;
 
-    replace_public(REPOSITORY_ID, secrets.id().as_ref(), &mut tx).await?;
+    set_public(REPOSITORY_ID, secrets.id().as_ref(), &mut tx).await?;
 
     match secrets {
         AccessSecrets::Blind { .. } => {
             // Insert a dummy key for plausible deniability.
             let dummy_key = sign::SecretKey::random();
-            replace_secret(ACCESS_KEY, dummy_key.as_ref(), master_key, &mut tx).await?;
+            set_secret(ACCESS_KEY, dummy_key.as_ref(), master_key, &mut tx).await?;
         }
         AccessSecrets::Read { read_key, .. } => {
-            replace_secret(ACCESS_KEY, read_key.as_ref(), master_key, &mut tx).await?;
+            set_secret(ACCESS_KEY, read_key.as_ref(), master_key, &mut tx).await?;
         }
         AccessSecrets::Write(secrets) => {
-            replace_secret(
+            set_secret(
                 ACCESS_KEY,
                 secrets.write_keys.secret.as_ref(),
                 master_key,
@@ -196,23 +215,7 @@ where
     bytes.try_into().map_err(|_| Error::MalformedData)
 }
 
-async fn insert_public(id: &[u8], blob: &[u8], conn: &mut db::Connection) -> Result<()> {
-    let result = sqlx::query(
-        "INSERT INTO metadata_public(name, value) VALUES (?, ?) ON CONFLICT DO NOTHING",
-    )
-    .bind(id)
-    .bind(blob)
-    .execute(conn)
-    .await?;
-
-    if result.rows_affected() > 0 {
-        Ok(())
-    } else {
-        Err(Error::EntryExists)
-    }
-}
-
-async fn replace_public(id: &[u8], blob: &[u8], conn: &mut db::Connection) -> Result<()> {
+async fn set_public(id: &[u8], blob: &[u8], conn: &mut db::Connection) -> Result<()> {
     sqlx::query("INSERT OR REPLACE INTO metadata_public(name, value) VALUES (?, ?)")
         .bind(id)
         .bind(blob)
@@ -256,39 +259,16 @@ where
     Ok(secret)
 }
 
-async fn insert_secret(
+async fn set_secret(
     id: &[u8],
     blob: &[u8],
     master_key: &cipher::SecretKey,
     conn: &mut db::Connection,
 ) -> Result<()> {
-    let (nonce, cypher, auth_tag) = prepare_secret(id, blob, master_key)?;
+    let nonce = make_nonce();
 
-    let result = sqlx::query(
-        "INSERT INTO metadata_secret(name, nonce, auth_tag, value)
-            VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING",
-    )
-    .bind(id)
-    .bind(&nonce[..])
-    .bind(&auth_tag[..])
-    .bind(&cypher)
-    .execute(conn)
-    .await?;
-
-    if result.rows_affected() > 0 {
-        Ok(())
-    } else {
-        Err(Error::EntryExists)
-    }
-}
-
-async fn replace_secret(
-    id: &[u8],
-    blob: &[u8],
-    master_key: &cipher::SecretKey,
-    conn: &mut db::Connection,
-) -> Result<()> {
-    let (nonce, cypher, auth_tag) = prepare_secret(id, blob, master_key)?;
+    let mut cypher = blob.to_vec();
+    let auth_tag = master_key.encrypt(nonce, id, &mut cypher)?;
 
     sqlx::query(
         "INSERT OR REPLACE INTO metadata_secret(name, nonce, auth_tag, value)
@@ -302,19 +282,6 @@ async fn replace_secret(
     .await?;
 
     Ok(())
-}
-
-fn prepare_secret(
-    id: &[u8],
-    blob: &[u8],
-    master_key: &cipher::SecretKey,
-) -> Result<(Nonce, Vec<u8>, AuthTag)> {
-    let nonce = make_nonce();
-
-    let mut cypher = blob.to_vec();
-    let auth_tag = master_key.encrypt(nonce, id, &mut cypher)?;
-
-    Ok((nonce, cypher, auth_tag))
 }
 
 fn make_nonce() -> Nonce {
@@ -342,7 +309,7 @@ mod tests {
     async fn store_plaintext() {
         let mut conn = new_memory_db().await;
 
-        insert_public(b"hello", b"world", &mut conn).await.unwrap();
+        set_public(b"hello", b"world", &mut conn).await.unwrap();
 
         let v: [u8; 5] = get_public(b"hello", &mut conn).await.unwrap();
 
@@ -355,7 +322,7 @@ mod tests {
 
         let key = cipher::SecretKey::random();
 
-        insert_secret(b"hello", b"world", &key, &mut conn)
+        set_secret(b"hello", b"world", &key, &mut conn)
             .await
             .unwrap();
 
