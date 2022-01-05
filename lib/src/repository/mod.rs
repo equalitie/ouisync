@@ -38,13 +38,32 @@ impl Repository {
     /// Creates a new repository.
     pub async fn create(
         store: &db::Store,
+        this_replica_id: ReplicaId,
+        master_secret: MasterSecret,
+        access_secrets: AccessSecrets,
+        enable_merger: bool,
+    ) -> Result<Self> {
+        let pool = db::open_or_create(store).await?;
+        Self::create_in(
+            pool,
+            this_replica_id,
+            master_secret,
+            access_secrets,
+            enable_merger,
+        )
+        .await
+    }
+
+    /// Creates a new repository in an already opened database.
+    pub(crate) async fn create_in(
+        pool: db::Pool,
         _this_replica_id: ReplicaId,
         master_secret: MasterSecret,
         access_secrets: AccessSecrets,
         enable_merger: bool,
     ) -> Result<Self> {
-        let pool = create_db(store).await?;
         let mut tx = pool.begin().await?;
+        init_db(&mut tx).await?;
 
         let master_key = metadata::secret_to_key(master_secret, &mut tx).await?;
 
@@ -74,11 +93,21 @@ impl Repository {
     ///                     the repository will be opened as a blind replica.
     pub async fn open(
         store: &db::Store,
-        _this_replica_id: ReplicaId,
+        this_replica_id: ReplicaId,
         master_secret: Option<MasterSecret>,
         enable_merger: bool,
     ) -> Result<Self> {
         let pool = db::open(store).await?;
+        Self::open_in(pool, this_replica_id, master_secret, enable_merger).await
+    }
+
+    /// Opens an existing repository in an already opened database.
+    pub(crate) async fn open_in(
+        pool: db::Pool,
+        _this_replica_id: ReplicaId,
+        master_secret: Option<MasterSecret>,
+        enable_merger: bool,
+    ) -> Result<Self> {
         let mut conn = pool.acquire().await?;
 
         let master_key = if let Some(master_secret) = master_secret {
@@ -399,10 +428,19 @@ impl Drop for Repository {
     }
 }
 
-/// Creates the repository database.
+/// Creates and initializes the repository database.
+#[cfg(test)]
 pub(crate) async fn create_db(store: &db::Store) -> Result<db::Pool> {
     let pool = db::open_or_create(store).await?;
-    let mut tx = pool.begin().await?;
+    init_db(&mut *pool.acquire().await?).await?;
+
+    Ok(pool)
+}
+
+async fn init_db(conn: &mut db::Connection) -> Result<()> {
+    use sqlx::Connection;
+
+    let mut tx = conn.begin().await?;
 
     block::init(&mut tx).await?;
     index::init(&mut tx).await?;
@@ -411,7 +449,7 @@ pub(crate) async fn create_db(store: &db::Store) -> Result<db::Pool> {
 
     tx.commit().await?;
 
-    Ok(pool)
+    Ok(())
 }
 
 struct Shared {
