@@ -8,7 +8,7 @@ use generic_array::{sequence::GenericSequence, typenum::Unsigned};
 use sqlx::{sqlite::SqliteRow, Row};
 
 /// Initializes the block store. Creates the required database schema unless already exists.
-pub async fn init(pool: &db::Pool) -> Result<()> {
+pub async fn init(conn: &mut db::Connection) -> Result<()> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS blocks (
              id       BLOB NOT NULL PRIMARY KEY,
@@ -16,7 +16,7 @@ pub async fn init(pool: &db::Pool) -> Result<()> {
              content  BLOB NOT NULL
          ) WITHOUT ROWID",
     )
-    .execute(pool)
+    .execute(conn)
     .await
     .map_err(Error::CreateDbSchema)?;
 
@@ -28,10 +28,10 @@ pub async fn init(pool: &db::Pool) -> Result<()> {
 /// # Panics
 ///
 /// Panics if `buffer` length is less than [`BLOCK_SIZE`].
-pub async fn read(db: impl db::Executor<'_>, id: &BlockId, buffer: &mut [u8]) -> Result<AuthTag> {
+pub async fn read(conn: &mut db::Connection, id: &BlockId, buffer: &mut [u8]) -> Result<AuthTag> {
     let row = sqlx::query("SELECT auth_tag, content FROM blocks WHERE id = ?")
         .bind(id)
-        .fetch_optional(db)
+        .fetch_optional(conn)
         .await?
         .ok_or_else(|| Error::BlockNotFound(*id))?;
 
@@ -71,7 +71,7 @@ fn from_row(row: SqliteRow, buffer: &mut [u8]) -> Result<AuthTag> {
 /// Panics if buffer length is not equal to [`BLOCK_SIZE`].
 ///
 pub async fn write(
-    tx: &mut db::Transaction<'_>,
+    conn: &mut db::Connection,
     id: &BlockId,
     buffer: &[u8],
     auth_tag: &AuthTag,
@@ -90,7 +90,7 @@ pub async fn write(
     .bind(id)
     .bind(auth_tag.as_slice())
     .bind(buffer)
-    .execute(&mut *tx)
+    .execute(&mut *conn)
     .await?;
 
     if result.rows_affected() > 0 {
@@ -102,7 +102,7 @@ pub async fn write(
             .bind(buffer)
             .bind(auth_tag.as_slice())
             .bind(id)
-            .fetch_one(tx)
+            .fetch_one(conn)
             .await?
             .get(0)
         {
@@ -116,10 +116,10 @@ pub async fn write(
 /// Checks whether a block exists in the store.
 /// (Currently used only in tests)
 #[cfg(test)]
-pub async fn exists(db: impl db::Executor<'_>, id: &BlockId) -> Result<bool> {
+pub async fn exists(conn: &mut db::Connection, id: &BlockId) -> Result<bool> {
     Ok(sqlx::query("SELECT 0 FROM blocks WHERE id = ?")
         .bind(id)
-        .fetch_optional(db)
+        .fetch_optional(conn)
         .await?
         .is_some())
 }
@@ -128,39 +128,32 @@ pub async fn exists(db: impl db::Executor<'_>, id: &BlockId) -> Result<bool> {
 mod tests {
     use super::*;
     use rand::Rng;
+    use sqlx::Connection;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn write_and_read() {
-        let pool = make_pool().await;
-        init(&pool).await.unwrap();
+        let mut conn = setup().await;
 
         let id = rand::random();
         let content = random_block_content();
         let auth_tag = AuthTag::default();
 
-        let mut tx = pool.begin().await.unwrap();
-
-        write(&mut tx, &id, &content, &auth_tag).await.unwrap();
+        write(&mut conn, &id, &content, &auth_tag).await.unwrap();
 
         let mut buffer = vec![0; BLOCK_SIZE];
-        read(&mut tx, &id, &mut buffer).await.unwrap();
-
-        tx.commit().await.unwrap();
+        read(&mut conn, &id, &mut buffer).await.unwrap();
 
         assert_eq!(buffer, content);
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn try_read_missing_block() {
-        let pool = make_pool().await;
-        init(&pool).await.unwrap();
+        let mut conn = setup().await;
 
         let id = rand::random();
         let mut buffer = vec![0; BLOCK_SIZE];
 
-        let mut tx = pool.begin().await.unwrap();
-
-        match read(&mut tx, &id, &mut buffer).await {
+        match read(&mut conn, &id, &mut buffer).await {
             Err(Error::BlockNotFound(missing_id)) => assert_eq!(missing_id, id),
             Err(error) => panic!("unexpected error: {:?}", error),
             Ok(_) => panic!("unexpected success"),
@@ -169,37 +162,30 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn try_write_existing_block() {
-        let pool = make_pool().await;
-        init(&pool).await.unwrap();
+        let mut conn = setup().await;
 
         let id = rand::random();
         let content0 = random_block_content();
         let auth_tag = AuthTag::default();
 
-        let mut tx = pool.begin().await.unwrap();
-        write(&mut tx, &id, &content0, &auth_tag).await.unwrap();
-        tx.commit().await.unwrap();
+        write(&mut conn, &id, &content0, &auth_tag).await.unwrap();
 
         // Try to overwrite it with the same content -> no-op.
-        {
-            let mut tx = pool.begin().await.unwrap();
-            write(&mut tx, &id, &content0, &auth_tag).await.unwrap();
-        }
+        write(&mut conn, &id, &content0, &auth_tag).await.unwrap();
 
         // Try to overwrite it with a different content -> error
-        {
-            let content1 = random_block_content();
-            let mut tx = pool.begin().await.unwrap();
-            match write(&mut tx, &id, &content1, &auth_tag).await {
-                Err(Error::BlockExists) => (),
-                Err(error) => panic!("unexpected error: {:?}", error),
-                Ok(_) => panic!("unexpected success"),
-            }
+        let content1 = random_block_content();
+        match write(&mut conn, &id, &content1, &auth_tag).await {
+            Err(Error::BlockExists) => (),
+            Err(error) => panic!("unexpected error: {:?}", error),
+            Ok(_) => panic!("unexpected success"),
         }
     }
 
-    async fn make_pool() -> db::Pool {
-        db::Pool::connect(":memory:").await.unwrap()
+    async fn setup() -> db::Connection {
+        let mut conn = db::Connection::connect(":memory:").await.unwrap();
+        init(&mut conn).await.unwrap();
+        conn
     }
 
     fn random_block_content() -> Vec<u8> {

@@ -25,7 +25,8 @@ async fn main() -> Result<()> {
     env_logger::init();
 
     let pool = config::open_db(&options.config_store()?).await?;
-    let this_writer_id = replica_id::get_or_create_this_replica_id(&pool).await?;
+    let this_writer_id =
+        replica_id::get_or_create_this_replica_id(&mut *pool.acquire().await?).await?;
 
     // Create repositories
     let mut repos = HashMap::new();

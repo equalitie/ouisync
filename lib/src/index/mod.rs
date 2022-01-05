@@ -20,7 +20,6 @@ use crate::{
     repository::RepositoryId,
     version_vector::VersionVector,
 };
-use futures_util::TryStreamExt;
 use sqlx::Row;
 use std::{
     cmp::Ordering,
@@ -40,7 +39,7 @@ pub struct Index {
 impl Index {
     pub(crate) async fn load(pool: db::Pool, repository_id: RepositoryId) -> Result<Self> {
         let (notify_tx, notify_rx) = async_broadcast::broadcast(32);
-        let branches = load_branches(&pool, notify_tx.clone()).await?;
+        let branches = load_branches(&mut *pool.acquire().await?, notify_tx.clone()).await?;
 
         Ok(Self {
             pool,
@@ -68,7 +67,12 @@ impl Index {
             Entry::Occupied(_) => Err(Error::EntryExists),
             Entry::Vacant(entry) => {
                 let branch = Arc::new(
-                    BranchData::new(&self.pool, writer_id, self.shared.notify_tx.clone()).await?,
+                    BranchData::new(
+                        &mut *self.pool.acquire().await?,
+                        writer_id,
+                        self.shared.notify_tx.clone(),
+                    )
+                    .await?,
                 );
                 entry.insert(branch.clone());
                 Ok(branch)
@@ -146,7 +150,7 @@ impl Index {
 
         if create {
             let node = RootNode::create(
-                &self.pool,
+                &mut *self.pool.acquire().await?,
                 writer_id,
                 version_vector,
                 hash,
@@ -176,7 +180,7 @@ impl Index {
 
         nodes
             .into_incomplete()
-            .save(&self.pool, &parent_hash)
+            .save(&mut *self.pool.acquire().await?, &parent_hash)
             .await?;
         self.update_summaries(parent_hash, inner_layer).await?;
 
@@ -196,7 +200,10 @@ impl Index {
             .map(|node| node.block_id)
             .collect();
 
-        nodes.into_missing().save(&self.pool, &parent_hash).await?;
+        nodes
+            .into_missing()
+            .save(&mut *self.pool.acquire().await?, &parent_hash)
+            .await?;
         self.update_summaries(parent_hash, INNER_LAYER_COUNT)
             .await?;
 
@@ -212,7 +219,8 @@ impl Index {
         parent_hash: &'b Hash,
         remote_nodes: &'c InnerNodeMap,
     ) -> Result<impl Iterator<Item = &'c InnerNode>> {
-        let local_nodes = InnerNode::load_children(&self.pool, parent_hash).await?;
+        let local_nodes =
+            InnerNode::load_children(&mut *self.pool.acquire().await?, parent_hash).await?;
 
         Ok(remote_nodes
             .iter()
@@ -242,7 +250,8 @@ impl Index {
         parent_hash: &'b Hash,
         remote_nodes: &'c LeafNodeSet,
     ) -> Result<impl Iterator<Item = &'c LeafNode>> {
-        let local_nodes = LeafNode::load_children(&self.pool, parent_hash).await?;
+        let local_nodes =
+            LeafNode::load_children(&mut *self.pool.acquire().await?, parent_hash).await?;
 
         Ok(remote_nodes
             .present()
@@ -252,21 +261,21 @@ impl Index {
     // Updates summaries of the specified nodes and all their ancestors, notifies the affected
     // branches that became complete (wasn't before the update but became after it).
     async fn update_summaries(&self, hash: Hash, layer: usize) -> Result<()> {
-        let statuses = node::update_summaries(&self.pool, hash, layer).await?;
+        let mut conn = self.pool.acquire().await?;
 
+        let statuses = node::update_summaries(&mut conn, hash, layer).await?;
         let branches = self.branches().await;
-        let mut cx = self.pool.acquire().await?;
 
         // Reload cached root nodes of the branches whose completion status changed.
         for (id, status) in &statuses {
             if status.did_change() {
                 if let Some(branch) = branches.get(id) {
-                    branch.reload_root(&mut cx).await?;
+                    branch.reload_root(&mut conn).await?;
                 }
             }
         }
 
-        drop(cx);
+        drop(conn);
         drop(branches);
 
         // Find the replicas whose current snapshots became complete by this update and notify them.
@@ -330,26 +339,28 @@ async fn broadcast<T: Clone>(tx: &async_broadcast::Sender<T>, value: T) {
 }
 
 async fn load_branches(
-    pool: &db::Pool,
+    conn: &mut db::Connection,
     notify_tx: async_broadcast::Sender<PublicKey>,
 ) -> Result<HashMap<PublicKey, Arc<BranchData>>> {
-    sqlx::query("SELECT DISTINCT writer_id FROM snapshot_root_nodes")
-        .fetch(pool)
-        .err_into()
-        .and_then(|row| {
-            let notify_tx = notify_tx.clone();
-            async move {
-                let id = row.get(0);
-                let branch = Arc::new(BranchData::new(pool, id, notify_tx).await?);
-                Ok((id, branch))
-            }
-        })
-        .try_collect()
-        .await
+    let rows = sqlx::query("SELECT DISTINCT writer_id FROM snapshot_root_nodes")
+        .fetch_all(&mut *conn)
+        .await?;
+
+    let mut branches = HashMap::new();
+
+    for row in rows {
+        let id = row.get(0);
+        let notify_tx = notify_tx.clone();
+        let branch = Arc::new(BranchData::new(&mut *conn, id, notify_tx).await?);
+
+        branches.insert(id, branch);
+    }
+
+    Ok(branches)
 }
 
 /// Initializes the index. Creates the required database schema unless already exists.
-pub(crate) async fn init(pool: &db::Pool) -> Result<(), Error> {
+pub(crate) async fn init(conn: &mut db::Connection) -> Result<(), Error> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS snapshot_root_nodes (
              snapshot_id             INTEGER PRIMARY KEY,
@@ -451,7 +462,7 @@ pub(crate) async fn init(pool: &db::Pool) -> Result<(), Error> {
 
          ",
     )
-    .execute(pool)
+    .execute(conn)
     .await
     .map_err(Error::CreateDbSchema)?;
 

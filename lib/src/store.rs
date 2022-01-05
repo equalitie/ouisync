@@ -38,7 +38,7 @@ pub(crate) async fn write_received_block(
 
 /// Initialize database objects to support operations that affect both the index and the block
 /// store.
-pub(crate) async fn init(pool: &db::Pool) -> Result<()> {
+pub(crate) async fn init(conn: &mut db::Connection) -> Result<()> {
     // Create trigger to delete orphaned blocks.
     sqlx::query(
         "CREATE TRIGGER IF NOT EXISTS blocks_delete_on_leaf_node_deleted
@@ -48,7 +48,7 @@ pub(crate) async fn init(pool: &db::Pool) -> Result<()> {
              DELETE FROM blocks WHERE id = old.block_id;
          END;",
     )
-    .execute(pool)
+    .execute(conn)
     .await?;
 
     Ok(())
@@ -66,29 +66,30 @@ mod tests {
         index::{self, BranchData},
         locator::Locator,
     };
+    use sqlx::Connection;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn remove_block() {
-        let pool = db::Pool::connect(":memory:").await.unwrap();
-        index::init(&pool).await.unwrap();
-        block::init(&pool).await.unwrap();
-        super::init(&pool).await.unwrap();
+        let mut conn = db::Connection::connect(":memory:").await.unwrap();
+        index::init(&mut conn).await.unwrap();
+        block::init(&mut conn).await.unwrap();
+        super::init(&mut conn).await.unwrap();
 
         let read_key = SecretKey::random();
         let write_keys = Keypair::random();
         let (notify_tx, _) = async_broadcast::broadcast(1);
 
-        let branch0 = BranchData::new(&pool, PublicKey::random(), notify_tx.clone())
+        let branch0 = BranchData::new(&mut conn, PublicKey::random(), notify_tx.clone())
             .await
             .unwrap();
-        let branch1 = BranchData::new(&pool, PublicKey::random(), notify_tx)
+        let branch1 = BranchData::new(&mut conn, PublicKey::random(), notify_tx)
             .await
             .unwrap();
 
         let block_id = rand::random();
         let buffer = vec![0; BLOCK_SIZE];
 
-        let mut tx = pool.begin().await.unwrap();
+        let mut tx = conn.begin().await.unwrap();
 
         block::write(&mut tx, &block_id, &buffer, &AuthTag::default())
             .await

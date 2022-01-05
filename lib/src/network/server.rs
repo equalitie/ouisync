@@ -100,7 +100,8 @@ impl Server {
 
     async fn handle_inner_nodes(&self, parent_hash: Hash, inner_layer: usize) -> Result<()> {
         // TODO: don't send anything if the nodes are missing
-        let nodes = InnerNode::load_children(&self.index.pool, &parent_hash).await?;
+        let nodes =
+            InnerNode::load_children(&mut *self.index.pool.acquire().await?, &parent_hash).await?;
 
         self.stream
             .send(Response::InnerNodes {
@@ -115,7 +116,8 @@ impl Server {
 
     async fn handle_leaf_nodes(&self, parent_hash: Hash) -> Result<()> {
         // TODO: don't send anything if the nodes are missing
-        let nodes = LeafNode::load_children(&self.index.pool, &parent_hash).await?;
+        let nodes =
+            LeafNode::load_children(&mut *self.index.pool.acquire().await?, &parent_hash).await?;
 
         self.stream
             .send(Response::LeafNodes { parent_hash, nodes })
@@ -126,17 +128,19 @@ impl Server {
 
     async fn handle_block(&self, id: BlockId) -> Result<()> {
         let mut content = vec![0; BLOCK_SIZE].into_boxed_slice();
-        let auth_tag = match block::read(&self.index.pool, &id, &mut content).await {
-            Ok(auth_tag) => auth_tag,
-            Err(Error::BlockNotFound(_)) => {
-                // This is probably a request to an already deleted orphaned block from an outdated
-                // branch. It should be safe to ingore this as the client will request the correct
-                // blocks when it becomes up to date to our latest branch.
-                log::warn!("requested block {:?} not found", id);
-                return Ok(());
-            }
-            Err(error) => return Err(error),
-        };
+
+        let auth_tag =
+            match block::read(&mut *self.index.pool.acquire().await?, &id, &mut content).await {
+                Ok(auth_tag) => auth_tag,
+                Err(Error::BlockNotFound(_)) => {
+                    // This is probably a request to an already deleted orphaned block from an outdated
+                    // branch. It should be safe to ingore this as the client will request the correct
+                    // blocks when it becomes up to date to our latest branch.
+                    log::warn!("requested block {:?} not found", id);
+                    return Ok(());
+                }
+                Err(error) => return Err(error),
+            };
 
         self.stream
             .send(Response::Block {

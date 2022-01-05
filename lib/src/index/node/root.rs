@@ -23,14 +23,17 @@ pub(crate) struct RootNode {
 impl RootNode {
     /// Returns the latest root node of the specified replica. If no such node exists yet, creates
     /// it first.
-    pub async fn load_latest_or_create(pool: &db::Pool, writer_id: &PublicKey) -> Result<Self> {
-        let node = Self::load_latest(pool, writer_id).await?;
+    pub async fn load_latest_or_create(
+        conn: &mut db::Connection,
+        writer_id: &PublicKey,
+    ) -> Result<Self> {
+        let node = Self::load_latest(conn, writer_id).await?;
 
         if let Some(node) = node {
             Ok(node)
         } else {
             Ok(Self::create(
-                pool,
+                conn,
                 writer_id,
                 VersionVector::new(),
                 InnerNodeMap::default().hash(),
@@ -42,14 +45,17 @@ impl RootNode {
 
     /// Returns the latest root node of the specified replica or `None` if no snapshot of that
     /// replica exists.
-    pub async fn load_latest(pool: &db::Pool, writer_id: &PublicKey) -> Result<Option<Self>> {
-        Self::load_all(pool, writer_id, 1).try_next().await
+    pub async fn load_latest(
+        conn: &mut db::Connection,
+        writer_id: &PublicKey,
+    ) -> Result<Option<Self>> {
+        Self::load_all(conn, writer_id, 1).try_next().await
     }
 
     /// Creates a root node of the specified replica unless it already exists. Returns the newly
     /// created or the existing node.
     pub async fn create(
-        pool: &db::Pool,
+        conn: &mut db::Connection,
         writer_id: &PublicKey,
         mut versions: VersionVector,
         hash: Hash,
@@ -98,7 +104,7 @@ impl RootNode {
                 missing_blocks_checksum: db::decode_u64(row.get(4)),
             },
         })
-        .fetch_one(pool)
+        .fetch_one(conn)
         .await
         .map_err(Into::into)
     }
@@ -106,7 +112,7 @@ impl RootNode {
     /// Returns a stream of all (but at most `limit`) root nodes corresponding to the specified
     /// replica ordered from the most recent to the least recent.
     pub fn load_all<'a>(
-        pool: &'a db::Pool,
+        conn: &'a mut db::Connection,
         writer_id: &'a PublicKey,
         limit: u32,
     ) -> impl Stream<Item = Result<Self>> + 'a {
@@ -135,19 +141,19 @@ impl RootNode {
                 missing_blocks_checksum: db::decode_u64(row.get(5)),
             },
         })
-        .fetch(pool)
+        .fetch(conn)
         .err_into()
     }
 
     /// Returns the replica ids of the nodes with the specified hash.
     pub fn load_writer_ids<'a>(
-        tx: &'a mut db::Transaction<'_>,
+        conn: &'a mut db::Connection,
         hash: &'a Hash,
     ) -> impl Stream<Item = Result<PublicKey>> + 'a {
         sqlx::query("SELECT writer_id FROM snapshot_root_nodes WHERE hash = ?")
             .bind(hash)
             .map(|row| row.get(0))
-            .fetch(tx)
+            .fetch(conn)
             .err_into()
     }
 
@@ -220,14 +226,14 @@ impl RootNode {
     }
 
     /// Reload this root node from the db.
-    pub async fn reload(&mut self, db: impl db::Executor<'_>) -> Result<()> {
+    pub async fn reload(&mut self, conn: &mut db::Connection) -> Result<()> {
         let row = sqlx::query(
             "SELECT is_complete, missing_blocks_count, missing_blocks_checksum
              FROM snapshot_root_nodes
              WHERE snapshot_id = ?",
         )
         .bind(self.snapshot_id)
-        .fetch_one(db)
+        .fetch_one(conn)
         .await?;
 
         self.summary.is_complete = row.get(0);
@@ -272,7 +278,7 @@ impl RootNode {
         })
     }
 
-    pub async fn remove_recursive(&self, tx: &mut db::Transaction<'_>) -> Result<()> {
+    pub async fn remove_recursive(&self, conn: &mut db::Connection) -> Result<()> {
         // This uses db triggers to delete the whole snapshot.
         sqlx::query(
             "PRAGMA recursive_triggers = ON;
@@ -280,7 +286,7 @@ impl RootNode {
              PRAGMA recursive_triggers = OFF;",
         )
         .bind(self.snapshot_id)
-        .execute(tx)
+        .execute(conn)
         .await?;
 
         Ok(())

@@ -79,21 +79,24 @@ impl Repository {
         enable_merger: bool,
     ) -> Result<Self> {
         let pool = db::open(store).await?;
+        let mut conn = pool.acquire().await?;
 
         let master_key = if let Some(master_secret) = master_secret {
-            Some(metadata::secret_to_key(master_secret, &pool).await?)
+            Some(metadata::secret_to_key(master_secret, &mut conn).await?)
         } else {
             None
         };
 
-        let this_writer_id = metadata::get_writer_id(master_key.as_ref(), &pool).await?;
+        let this_writer_id = metadata::get_writer_id(master_key.as_ref(), &mut conn).await?;
 
         let access_secrets = if let Some(master_key) = master_key {
-            metadata::get_access_secrets(&master_key, &pool).await?
+            metadata::get_access_secrets(&master_key, &mut conn).await?
         } else {
-            let id = metadata::get_repository_id(&pool).await?;
+            let id = metadata::get_repository_id(&mut conn).await?;
             AccessSecrets::Blind { id }
         };
+
+        drop(conn);
 
         let index = Index::load(pool, *access_secrets.id()).await?;
 
@@ -399,11 +402,14 @@ impl Drop for Repository {
 /// Creates the repository database.
 pub(crate) async fn create_db(store: &db::Store) -> Result<db::Pool> {
     let pool = db::open_or_create(store).await?;
+    let mut tx = pool.begin().await?;
 
-    block::init(&pool).await?;
-    index::init(&pool).await?;
-    store::init(&pool).await?;
-    metadata::init(&pool).await?;
+    block::init(&mut tx).await?;
+    index::init(&mut tx).await?;
+    store::init(&mut tx).await?;
+    metadata::init(&mut tx).await?;
+
+    tx.commit().await?;
 
     Ok(pool)
 }
@@ -635,9 +641,12 @@ mod tests {
         // Add another branch to the index. Eventually there might be a more high-level API for
         // this but for now we have to resort to this.
         let remote_id = PublicKey::random();
-        let remote_node = RootNode::load_latest_or_create(&repo.index().pool, &remote_id)
-            .await
-            .unwrap();
+        let remote_node = RootNode::load_latest_or_create(
+            &mut repo.index().pool.acquire().await.unwrap(),
+            &remote_id,
+        )
+        .await
+        .unwrap();
         repo.index()
             .update_remote_branch(remote_id, remote_node)
             .await

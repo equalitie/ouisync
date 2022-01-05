@@ -141,8 +141,10 @@ async fn save_snapshot(index: &Index, writer_id: PublicKey, snapshot: &Snapshot)
     let mut version_vector = VersionVector::new();
     version_vector.insert(writer_id, 2); // to force overwrite the initial root node
 
+    let mut conn = index.pool.acquire().await.unwrap();
+
     let root_node = RootNode::create(
-        &index.pool,
+        &mut conn,
         &writer_id,
         version_vector,
         *snapshot.root_hash(),
@@ -151,22 +153,25 @@ async fn save_snapshot(index: &Index, writer_id: PublicKey, snapshot: &Snapshot)
     .await
     .unwrap();
 
-    let mut tx = index.pool.begin().await.unwrap();
     index
         .branches()
         .await
         .get(&writer_id)
         .unwrap()
-        .update_root(&mut tx, root_node)
+        .update_root(&mut conn, root_node)
         .await
         .unwrap();
-    tx.commit().await.unwrap();
 
     for layer in snapshot.inner_layers() {
         for (parent_hash, nodes) in layer.inner_maps() {
-            nodes.save(&index.pool, parent_hash).await.unwrap();
+            nodes.save(&mut conn, parent_hash).await.unwrap();
         }
     }
+
+    // release the connection here to prevent potential deadlock because `receive_leaf_nodes`
+    // acquires a connection internally (note the deadlock would happen only if the pool capacity
+    // is one).
+    drop(conn);
 
     for (parent_hash, nodes) in snapshot.leaf_sets() {
         index
@@ -203,7 +208,10 @@ async fn wait_until_snapshots_in_sync(
 async fn wait_until_block_exists(index: &Index, block_id: &BlockId) {
     let mut rx = index.subscribe();
 
-    while !block::exists(&index.pool, block_id).await.unwrap() {
+    while !block::exists(&mut index.pool.acquire().await.unwrap(), block_id)
+        .await
+        .unwrap()
+    {
         rx.recv().await.unwrap();
     }
 }
@@ -239,7 +247,9 @@ async fn write_all_blocks(index: &Index, snapshot: &Snapshot) {
 }
 
 async fn load_latest_root_node(index: &Index, writer_id: &PublicKey) -> Option<RootNode> {
-    RootNode::load_latest(&index.pool, writer_id).await.unwrap()
+    RootNode::load_latest(&mut index.pool.acquire().await.unwrap(), writer_id)
+        .await
+        .unwrap()
 }
 
 // Simulate connection between two replicas until the given future completes.

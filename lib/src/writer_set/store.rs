@@ -69,17 +69,16 @@ impl Store {
 
     /// Load existing database.
     pub async fn load(pool: db::Pool) -> Result<Store> {
-        // Only reading here, so no need to commit the transaction.
-        let mut tx = pool.begin().await?;
+        let mut conn = pool.acquire().await?;
 
-        let origin_hash = match load_origin_hash(&mut tx).await? {
+        let origin_hash = match load_origin_hash(&mut conn).await? {
             Some(origin_hash) => origin_hash,
             None => {
                 return Err(WsError::OriginNotFound.into());
             }
         };
 
-        let mut entries = load_entries(&mut tx).await?;
+        let mut entries = load_entries(&mut conn).await?;
 
         let origin = entries
             .remove(&origin_hash)
@@ -149,7 +148,7 @@ async fn insert_valid_entry(entry: &Entry, tx: &mut db::Transaction<'_>) -> Resu
     Ok(())
 }
 
-async fn load_entries(tx: &mut db::Transaction<'_>) -> Result<HashMap<Hash, Entry>> {
+async fn load_entries(tx: &mut db::Connection) -> Result<HashMap<Hash, Entry>> {
     use std::cell::Cell;
 
     sqlx::query("SELECT writer, added_by, nonce, hash, signature FROM writer_set_entries")
@@ -174,9 +173,9 @@ async fn load_entries(tx: &mut db::Transaction<'_>) -> Result<HashMap<Hash, Entr
         .collect()
 }
 
-async fn load_origin_hash(tx: &mut db::Transaction<'_>) -> Result<Option<Hash>> {
+async fn load_origin_hash(conn: &mut db::Connection) -> Result<Option<Hash>> {
     let h = sqlx::query("SELECT origin_hash FROM writer_set_origin")
-        .fetch_optional(tx)
+        .fetch_optional(conn)
         .await?
         .map(|row| row.get(0));
 

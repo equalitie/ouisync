@@ -536,14 +536,14 @@ async fn read_block(
 }
 
 pub(super) async fn load_block(
-    tx: &mut db::Transaction<'_>,
+    conn: &mut db::Connection,
     branch: &BranchData,
     read_key: &cipher::SecretKey,
     locator: &Locator,
 ) -> Result<(BlockId, Buffer, AuthTag)> {
-    let id = branch.get(tx, &locator.encode(read_key)).await?;
+    let id = branch.get(conn, &locator.encode(read_key)).await?;
     let mut content = Buffer::new();
-    let auth_tag = block::read(tx, &id, &mut content).await?;
+    let auth_tag = block::read(conn, &id, &mut content).await?;
 
     Ok((id, content, auth_tag))
 }

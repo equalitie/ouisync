@@ -20,11 +20,10 @@ pub(crate) struct Core {
 
 impl Core {
     pub async fn open_first_block(&mut self) -> Result<OpenBlock> {
-        // No need to commit this as we are only reading here.
-        let mut tx = self.branch.db_pool().begin().await?;
+        let mut conn = self.branch.db_pool().acquire().await?;
 
         match operations::load_block(
-            &mut tx,
+            &mut conn,
             self.branch.data(),
             self.branch.keys().read(),
             &self.head_locator,
@@ -64,12 +63,12 @@ impl Core {
     }
 
     pub async fn first_block_id(&self) -> Result<BlockId> {
-        // NOTE: no need to commit this transaction because we are only reading here.
-        let mut tx = self.branch.db_pool().begin().await?;
+        let mut conn = self.branch.db_pool().acquire().await?;
+
         self.branch
             .data()
             .get(
-                &mut tx,
+                &mut conn,
                 &self.head_locator.encode(self.branch.keys().read()),
             )
             .await

@@ -131,7 +131,8 @@ impl Session {
         logger: Logger,
     ) -> Result<Self> {
         let pool = config::open_db(&store).await?;
-        let this_replica_id = replica_id::get_or_create_this_replica_id(&pool).await?;
+        let this_replica_id =
+            replica_id::get_or_create_this_replica_id(&mut *pool.acquire().await?).await?;
         let network = Network::new(&NetworkOptions::default()).await?;
 
         Ok(Self {

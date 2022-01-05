@@ -21,15 +21,6 @@ pub type Connection = SqliteConnection;
 /// Database transaction
 pub type Transaction<'a> = sqlx::Transaction<'a, Sqlite>;
 
-/// This trait allows to write functions that work with any of `Pool`, `Connection` or
-/// `Transaction`. It's an alias for `sqlx::Executor<Database = Sqlite>` for convenience.
-pub trait Executor<'a>: sqlx::Executor<'a, Database = Sqlite> {}
-impl<'a, T> Executor<'a> for T where T: sqlx::Executor<'a, Database = Sqlite> {}
-
-/// Alias for `sqlx::Acquire<Database = Sqlite>` for convenience.
-pub trait Acquire<'a>: sqlx::Acquire<'a, Database = Sqlite> {}
-impl<'a, T> Acquire<'a> for T where T: sqlx::Acquire<'a, Database = Sqlite> {}
-
 // URI of a memory-only db.
 const MEMORY: &str = ":memory:";
 

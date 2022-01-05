@@ -46,12 +46,15 @@ impl Blob {
 
     /// Opens an existing blob.
     pub async fn open(branch: Branch, head_locator: Locator) -> Result<Self> {
-        // NOTE: no need to commit this transaction because we are only reading here.
-        let mut tx = branch.db_pool().begin().await?;
+        let mut conn = branch.db_pool().acquire().await?;
 
-        let (id, buffer, auth_tag) =
-            operations::load_block(&mut tx, branch.data(), branch.keys().read(), &head_locator)
-                .await?;
+        let (id, buffer, auth_tag) = operations::load_block(
+            &mut conn,
+            branch.data(),
+            branch.keys().read(),
+            &head_locator,
+        )
+        .await?;
 
         let mut content = Cursor::new(buffer);
 
