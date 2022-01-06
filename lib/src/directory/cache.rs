@@ -1,7 +1,6 @@
 use super::{inner::Inner, parent_context::ParentContext, Directory};
 use crate::{
     branch::Branch,
-    db,
     error::{Error, Result},
     locator::Locator,
 };
@@ -19,14 +18,13 @@ impl RootDirectoryCache {
         Self(Mutex::new(Weak::new()))
     }
 
-    pub async fn open(&self, owner_branch: Branch, db_pool: db::Pool) -> Result<Directory> {
+    pub async fn open(&self, owner_branch: Branch) -> Result<Directory> {
         let mut inner = self.0.lock().await;
 
         if let Some(inner) = inner.upgrade() {
             Ok(Directory {
                 branch_id: *owner_branch.id(),
                 inner,
-                db_pool,
             })
         } else {
             let dir = Directory::open_root(owner_branch).await?;
@@ -42,7 +40,6 @@ impl RootDirectoryCache {
             Ok(Directory {
                 branch_id: *branch.id(),
                 inner,
-                db_pool: branch.db_pool().clone(),
             })
         } else {
             let dir = Directory::open_or_create_root(branch).await?;
@@ -74,7 +71,6 @@ impl SubdirectoryCache {
                     Directory {
                         branch_id: *owner_branch.id(),
                         inner,
-                        db_pool: owner_branch.db_pool().clone(),
                     }
                 } else {
                     let dir = Directory::open(owner_branch, locator, Some(parent)).await?;

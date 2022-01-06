@@ -25,7 +25,6 @@ use crate::{
     blob_id::BlobId,
     branch::Branch,
     crypto::sign::PublicKey,
-    db,
     debug_printer::DebugPrinter,
     error::{Error, Result},
     file::File,
@@ -42,7 +41,6 @@ pub struct Directory {
     // require locking.
     branch_id: PublicKey,
     inner: Arc<RwLock<Inner>>,
-    db_pool: db::Pool,
 }
 
 #[allow(clippy::len_without_is_empty)]
@@ -73,10 +71,6 @@ impl Directory {
             outer: self,
             inner: self.inner.read().await,
         }
-    }
-
-    pub fn db_pool(&self) -> &db::Pool {
-        &self.db_pool
     }
 
     /// Flushes this directory ensuring that any pending changes are written to the store and the
@@ -196,11 +190,7 @@ impl Directory {
         }
 
         if let Some(parent) = &inner.inner.parent {
-            //let parent_dir = parent.directory(local_branch.clone()).fork().await?;
-            let parent_dir = parent
-                .directory(self.db_pool().clone())
-                .fork(local_branch)
-                .await?;
+            let parent_dir = parent.directory().fork(local_branch).await?;
 
             match parent_dir
                 .read()
@@ -225,12 +215,12 @@ impl Directory {
     }
 
     pub async fn parent(&self) -> Option<Directory> {
-        self.read()
-            .await
-            .inner
+        let read = self.read().await;
+
+        read.inner
             .parent
             .as_ref()
-            .map(|parent_ctx| parent_ctx.directory(self.db_pool.clone()))
+            .map(|parent_ctx| parent_ctx.directory())
     }
 
     /// Inserts a dangling file entry into this directory. It's the responsibility of the caller to
@@ -264,7 +254,6 @@ impl Directory {
         parent: Option<ParentContext>,
     ) -> Result<Self> {
         let branch_id = *owner_branch.id();
-        let db_pool = owner_branch.db_pool().clone();
         let mut blob = Blob::open(owner_branch, locator).await?;
         let buffer = blob.read_to_end().await?;
         let content = bincode::deserialize(&buffer).map_err(Error::MalformedDirectory)?;
@@ -277,13 +266,11 @@ impl Directory {
                 parent,
                 open_directories: SubdirectoryCache::new(),
             })),
-            db_pool,
         })
     }
 
     fn create(owner_branch: Branch, locator: Locator, parent: Option<ParentContext>) -> Self {
         let branch_id = *owner_branch.id();
-        let db_pool = owner_branch.db_pool().clone();
         let blob = Blob::create(owner_branch, locator);
 
         Directory {
@@ -294,7 +281,6 @@ impl Directory {
                 parent,
                 open_directories: SubdirectoryCache::new(),
             })),
-            db_pool,
         }
     }
 
@@ -317,8 +303,6 @@ impl Directory {
     }
 
     // Lock this directory for writing.
-    //
-    // The caller is responsible for ensurig this is the local branch.
     pub(crate) async fn write(&self) -> Writer<'_> {
         let inner = self.inner.write().await;
         Writer { outer: self, inner }
@@ -531,7 +515,7 @@ impl Writer<'_> {
             return Ok(());
         }
 
-        let mut tx = self.outer.db_pool().begin().await?;
+        let mut tx = self.inner.blob.db_pool().begin().await?;
 
         self.inner.flush(&mut tx).await?;
 

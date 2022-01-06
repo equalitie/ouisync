@@ -52,7 +52,7 @@ impl File {
     }
 
     pub fn parent(&self) -> Directory {
-        self.parent.directory(self.blob.db_pool().clone())
+        self.parent.directory()
     }
 
     /// Length of this file in bytes.

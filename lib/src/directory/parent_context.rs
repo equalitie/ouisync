@@ -63,7 +63,7 @@ impl ParentContext {
     pub async fn fork_file(&mut self, local_branch: &Branch) -> Result<BlobId> {
         let old_vv = self.entry_version_vector().await;
 
-        let outer = self.directory(local_branch.db_pool().clone());
+        let outer = self.directory();
         let outer = outer.fork(local_branch).await?;
 
         let blob_id = outer
@@ -80,11 +80,10 @@ impl ParentContext {
     }
 
     /// Returns the parent directory of the entry bound to the given local branch.
-    pub fn directory(&self, db_pool: db::Pool) -> Directory {
+    pub fn directory(&self) -> Directory {
         Directory {
             branch_id: self.branch_id,
             inner: self.directory_inner.clone(),
-            db_pool,
         }
     }
 
