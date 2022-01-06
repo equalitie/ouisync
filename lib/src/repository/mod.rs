@@ -305,7 +305,7 @@ impl Repository {
             }
             JointEntryRef::Directory(entry) => {
                 let dir_to_move = entry
-                    .open(MissingVersionStrategy::Skip, &local_branch)
+                    .open(MissingVersionStrategy::Skip)
                     .await?
                     .merge()
                     .await?;
@@ -384,12 +384,12 @@ impl Repository {
 
     // Opens the root directory across all branches as JointDirectory.
     async fn joint_root(&self) -> Result<JointDirectory> {
-        let local_branch = self.local_branch().await?;
+        let local_branch = self.local_branch().await.ok();
         let branches = self.shared.branches().await?;
         let mut dirs = Vec::with_capacity(branches.len());
 
         for branch in branches {
-            let dir = if branch.id() == local_branch.id() {
+            let dir = if Some(branch.id()) == local_branch.as_ref().map(Branch::id) {
                 branch.open_or_create_root().await.map_err(|error| {
                     log::error!(
                         "failed to open root directory on the local branch: {:?}",

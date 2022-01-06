@@ -377,9 +377,6 @@ impl Inner {
 
         log::debug!("lookup {}", self.inodes.path_display(parent, Some(name)));
 
-        // TODO: local branch shouldn't be required here. Instead, `JoinDirectoryRef::open` should
-        // take the local branch as `Option`.
-        let local_branch = self.repository.local_branch().await?;
         let parent_path = self.inodes.get(parent).calculate_path();
         let parent_dir = self.repository.open_directory(parent_path).await?;
         let parent_dir = parent_dir.read().await;
@@ -392,7 +389,7 @@ impl Inner {
             ),
             JointEntryRef::Directory(entry) => (
                 entry
-                    .open(MissingVersionStrategy::Skip, &local_branch)
+                    .open(MissingVersionStrategy::Skip)
                     .await?
                     .read()
                     .await

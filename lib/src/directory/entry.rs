@@ -125,7 +125,7 @@ impl<'a> EntryRef<'a> {
     }
 }
 
-#[derive(Copy, Clone, Eq, PartialEq)]
+#[derive(Copy, Clone)]
 pub struct FileRef<'a> {
     entry_data: &'a EntryFileData,
     inner: RefInner<'a>,
@@ -196,7 +196,7 @@ impl fmt::Debug for FileRef<'_> {
     }
 }
 
-#[derive(Copy, Clone, Eq, PartialEq)]
+#[derive(Copy, Clone)]
 pub struct DirectoryRef<'a> {
     entry_data: &'a EntryDirectoryData,
     inner: RefInner<'a>,
@@ -248,7 +248,7 @@ impl fmt::Debug for DirectoryRef<'_> {
     }
 }
 
-#[derive(Copy, Clone, Eq, PartialEq)]
+#[derive(Copy, Clone)]
 pub struct TombstoneRef<'a> {
     entry_data: &'a EntryTombstoneData,
     inner: RefInner<'a>,

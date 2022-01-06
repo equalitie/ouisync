@@ -135,7 +135,7 @@ enum MergeState {
 
 async fn merge_branches(local: Branch, remote: Branch) -> Result<()> {
     let remote_root = remote.open_root().await?;
-    JointDirectory::new(local.clone(), iter::once(remote_root))
+    JointDirectory::new(Some(local.clone()), iter::once(remote_root))
         .merge()
         .await?;
 
