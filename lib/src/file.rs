@@ -97,14 +97,8 @@ impl File {
         }
 
         let mut tx = self.blob.db_pool().begin().await?;
-
         self.blob.flush_in_transaction(&mut tx).await?;
-
-        // Since the blob is dirty, it must be that it's been forked onto the local branch. That in
-        // turn means that self.blob.branch().id() is the ID of the local writer.
-        let local_writer_id = self.blob.branch().id();
-
-        self.parent.modify_entry(tx, local_writer_id, None).await?;
+        self.parent.modify_entry(tx, None).await?;
 
         Ok(())
     }

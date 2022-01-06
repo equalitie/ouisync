@@ -45,13 +45,11 @@ impl ParentContext {
     pub async fn modify_entry(
         &mut self,
         tx: db::Transaction<'_>,
-        local_id: &PublicKey,
         version_vector_override: Option<&VersionVector>,
     ) -> Result<()> {
         inner::modify_entry(
             tx,
             self.directory_inner.write().await,
-            local_id,
             &self.entry_name,
             &mut self.entry_author,
             version_vector_override,

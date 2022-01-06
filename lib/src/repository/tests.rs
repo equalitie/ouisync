@@ -60,7 +60,7 @@ async fn merge() {
     let remote_root = remote_branch.open_or_create_root().await.unwrap();
 
     let mut file = remote_root
-        .create_file("test.txt".to_owned(), &remote_branch)
+        .create_file("test.txt".to_owned())
         .await
         .unwrap();
     file.write(b"hello", &remote_branch).await.unwrap();

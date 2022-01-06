@@ -87,24 +87,13 @@ impl Directory {
     }
 
     /// Creates a new file inside this directory.
-    ///
-    /// # Panics
-    ///
-    /// Panics if this directory is not in the local branch.
-    pub async fn create_file(&self, name: String, local_branch: &Branch) -> Result<File> {
-        self.write().await.create_file(name, local_branch).await
+    pub async fn create_file(&self, name: String) -> Result<File> {
+        self.write().await.create_file(name).await
     }
 
     /// Creates a new subdirectory of this directory.
-    ///
-    /// # Panics
-    ///
-    /// Panics if this directory is not in the local branch.
-    pub async fn create_directory(&self, name: String, local_branch: &Branch) -> Result<Self> {
-        self.write()
-            .await
-            .create_directory(name, local_branch)
-            .await
+    pub async fn create_directory(&self, name: String) -> Result<Self> {
+        self.write().await.create_directory(name).await
     }
 
     /// Removes a file or subdirectory from this directory. If the entry to be removed is a
@@ -119,11 +108,10 @@ impl Directory {
         name: &str,
         author: &PublicKey,
         vv: VersionVector,
-        local_branch: &Branch,
     ) -> Result<()> {
         self.write()
             .await
-            .remove_entry(name, author, vv, None, local_branch)
+            .remove_entry(name, author, vv, None)
             .await
     }
 
@@ -138,11 +126,6 @@ impl Directory {
     ///
     /// Thus using the "caller provided" version vector, we ensure that we don't accidentally
     /// delete data.
-    ///
-    /// # Panics
-    ///
-    /// Panics when `self` (i.e. the source directory) or `dst_dir` are not local.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn move_entry(
         &self,
         src_name: &str,
@@ -151,7 +134,6 @@ impl Directory {
         dst_dir: &Directory,
         dst_name: &str,
         dst_vv: VersionVector,
-        local_branch: &Branch,
     ) -> Result<()> {
         let (mut src_dir_writer, mut dst_dir_writer) = write_pair(self, dst_dir).await;
 
@@ -161,7 +143,6 @@ impl Directory {
                 src_author,
                 src_entry.version_vector().clone(),
                 src_entry.blob_id().cloned(),
-                local_branch,
             )
             .await?;
 
@@ -169,11 +150,13 @@ impl Directory {
         let mut dst_entry = src_entry.clone();
         *dst_entry.version_vector_mut() = dst_vv;
 
+        let dst_author = dst_dir.branch_id;
+
         // TODO: We need to undo the `remove_file` action from above if this next one fails.
         dst_dir_writer
             .as_mut()
             .unwrap_or(&mut src_dir_writer)
-            .insert_entry(dst_name.into(), *local_branch.id(), dst_entry, None)
+            .insert_entry(dst_name.into(), dst_author, dst_entry, None)
             .await
     }
 
@@ -207,7 +190,7 @@ impl Directory {
             }
 
             parent_dir
-                .create_directory(parent.entry_name().to_owned(), local_branch)
+                .create_directory(parent.entry_name().to_owned())
                 .await
         } else {
             local_branch.open_or_create_root().await
@@ -449,24 +432,16 @@ pub(crate) struct Writer<'a> {
 }
 
 impl Writer<'_> {
-    pub async fn create_file(&mut self, name: String, local_branch: &Branch) -> Result<File> {
-        let (locator, parent) = self
-            .create_entry(EntryType::File, name, local_branch.id())
-            .await?;
-        Ok(File::create(local_branch.clone(), locator, parent))
+    pub async fn create_file(&mut self, name: String) -> Result<File> {
+        let (locator, parent) = self.create_entry(EntryType::File, name).await?;
+        Ok(File::create(self.branch().clone(), locator, parent))
     }
 
-    pub async fn create_directory(
-        &mut self,
-        name: String,
-        local_branch: &Branch,
-    ) -> Result<Directory> {
-        let (locator, parent) = self
-            .create_entry(EntryType::Directory, name, local_branch.id())
-            .await?;
+    pub async fn create_directory(&mut self, name: String) -> Result<Directory> {
+        let (locator, parent) = self.create_entry(EntryType::Directory, name).await?;
         self.inner
             .open_directories
-            .create(local_branch, locator, parent)
+            .create(self.branch(), locator, parent)
             .await
     }
 
@@ -474,22 +449,21 @@ impl Writer<'_> {
         &mut self,
         entry_type: EntryType,
         name: String,
-        this_writer_id: &PublicKey,
     ) -> Result<(Locator, ParentContext)> {
-        let author = this_writer_id;
+        let author = *self.branch().id();
 
         let blob_id = rand::random();
         let vv = self
             .inner
-            .entry_version_vector(&name, author)
+            .entry_version_vector(&name, &author)
             .cloned()
             .unwrap_or_default()
-            .incremented(*author);
+            .incremented(author);
 
         self.inner
             .insert_entry(
                 name.clone(),
-                *author,
+                author,
                 EntryData::new(entry_type, blob_id, vv),
                 None,
             )
@@ -500,7 +474,7 @@ impl Writer<'_> {
             *self.outer.branch_id(),
             self.outer.inner.clone(),
             name,
-            *author,
+            author,
         );
 
         Ok((locator, parent))
@@ -516,15 +490,9 @@ impl Writer<'_> {
         }
 
         let mut tx = self.inner.blob.db_pool().begin().await?;
-
         self.inner.flush(&mut tx).await?;
-
-        // Since the blob is dirty, it must be that it's been forked onto the local branch. That in
-        // turn means that self.inner.blob.branch().id() is the ID of the local writer.
-        let local_writer_id = *self.inner.blob.branch().id();
-
         self.inner
-            .modify_self_entry(tx, &local_writer_id, version_vector_override)
+            .modify_self_entry(tx, version_vector_override)
             .await?;
 
         Ok(())
@@ -538,7 +506,6 @@ impl Writer<'_> {
         // `keep` is set when we're moving the entry and only want to remove it from the entries
         // listed in `self` (as opposed to also remove its data).
         keep: Option<BlobId>,
-        local_branch: &Branch,
     ) -> Result<()> {
         // If we are removing a directory, ensure it's empty (recursive removal can still be
         // implemented at the upper layers).
@@ -562,7 +529,7 @@ impl Writer<'_> {
             None
         };
 
-        let this_writer_id = *local_branch.id();
+        let this_writer_id = *self.branch().id();
 
         let new_entry = if author == &this_writer_id {
             EntryData::Tombstone(EntryTombstoneData {
@@ -597,7 +564,6 @@ impl Writer<'_> {
         self.inner.insert_entry(name, author, entry, keep).await
     }
 
-    #[cfg(test)]
     pub(crate) fn branch(&self) -> &Branch {
         self.inner.blob.branch()
     }

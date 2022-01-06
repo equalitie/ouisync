@@ -77,7 +77,7 @@ impl Branch {
                     let next = if let Some(next) = next {
                         next
                     } else {
-                        curr.create_directory(name.to_string(), self).await?
+                        curr.create_directory(name.to_string()).await?
                     };
 
                     curr = next;
@@ -94,7 +94,7 @@ impl Branch {
     pub(crate) async fn ensure_file_exists(&self, path: &Utf8Path) -> Result<File> {
         let (parent, name) = path::decompose(path).ok_or(Error::EntryIsDirectory)?;
         let dir = self.ensure_directory_exists(parent).await?;
-        dir.create_file(name.to_string(), self).await
+        dir.create_file(name.to_string()).await
     }
 
     pub async fn root_block_id(&self) -> Result<BlockId> {

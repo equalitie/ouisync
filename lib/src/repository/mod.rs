@@ -264,6 +264,9 @@ impl Repository {
     pub async fn remove_entry<P: AsRef<Utf8Path>>(&self, path: P) -> Result<()> {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::OperationNotSupported)?;
         let mut parent = self.open_directory(parent).await?;
+
+        // TODO: fork the parent dir
+
         parent.remove_entry(name).await?;
         parent.flush().await
     }
@@ -272,6 +275,9 @@ impl Repository {
     pub async fn remove_entry_recursively<P: AsRef<Utf8Path>>(&self, path: P) -> Result<()> {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::OperationNotSupported)?;
         let mut parent = self.open_directory(parent).await?;
+
+        // TODO: fork the parent dir
+
         parent.remove_entry_recursively(name).await?;
         parent.flush().await
     }
@@ -286,9 +292,9 @@ impl Repository {
         dst_dir_path: D,
         dst_name: &str,
     ) -> Result<()> {
-        let local_branch = self.local_branch().await?;
-
         use std::borrow::Cow;
+
+        let local_branch = self.local_branch().await?;
 
         let src_joint_dir = self.open_directory(src_dir_path).await?;
         let src_joint_dir_r = src_joint_dir.read().await;
@@ -359,7 +365,6 @@ impl Repository {
                 &dst_dir,
                 dst_name,
                 dst_vv,
-                &local_branch,
             )
             .await?;
 

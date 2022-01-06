@@ -115,9 +115,7 @@ impl JointDirectory {
         let mut local_writer = local.write().await;
 
         for (name, author, vv) in entries {
-            local_writer
-                .remove_entry(&name, &author, vv, None, local_branch)
-                .await?;
+            local_writer.remove_entry(&name, &author, vv, None).await?;
         }
 
         local_writer.flush(None).await

@@ -145,17 +145,11 @@ async fn conflict_directories() {
     let branches = setup(2).await;
 
     let root0 = branches[0].open_or_create_root().await.unwrap();
-    let dir0 = root0
-        .create_directory("dir".to_owned(), &branches[0])
-        .await
-        .unwrap();
+    let dir0 = root0.create_directory("dir".to_owned()).await.unwrap();
     dir0.flush(None).await.unwrap();
 
     let root1 = branches[1].open_or_create_root().await.unwrap();
-    let dir1 = root1
-        .create_directory("dir".to_owned(), &branches[1])
-        .await
-        .unwrap();
+    let dir1 = root1.create_directory("dir".to_owned()).await.unwrap();
     dir1.flush(None).await.unwrap();
 
     let root = JointDirectory::new(Some(branches[0].clone()), vec![root0, root1]);
@@ -179,10 +173,7 @@ async fn conflict_file_and_directory() {
 
     let root1 = branches[1].open_or_create_root().await.unwrap();
 
-    let dir1 = root1
-        .create_directory("config".to_owned(), &branches[1])
-        .await
-        .unwrap();
+    let dir1 = root1.create_directory("config".to_owned()).await.unwrap();
     dir1.flush(None).await.unwrap();
 
     let root = JointDirectory::new(Some(branches[0].clone()), vec![root0, root1]);
@@ -266,17 +257,11 @@ async fn cd_into_concurrent_directory() {
 
     let root0 = branches[0].open_or_create_root().await.unwrap();
 
-    let dir0 = root0
-        .create_directory("pics".to_owned(), &branches[0])
-        .await
-        .unwrap();
+    let dir0 = root0.create_directory("pics".to_owned()).await.unwrap();
     create_file(&dir0, "dog.jpg", &[], &branches[0]).await;
 
     let root1 = branches[1].open_or_create_root().await.unwrap();
-    let dir1 = root1
-        .create_directory("pics".to_owned(), &branches[1])
-        .await
-        .unwrap();
+    let dir1 = root1.create_directory("pics".to_owned()).await.unwrap();
     create_file(&dir1, "cat.jpg", &[], &branches[1]).await;
 
     let root = JointDirectory::new(Some(branches[0].clone()), vec![root0, root1]);
@@ -663,17 +648,11 @@ async fn merge_concurrent_directories() {
     let branches = setup(2).await;
 
     let local_root = branches[0].open_or_create_root().await.unwrap();
-    let local_dir = local_root
-        .create_directory("dir".into(), &branches[0])
-        .await
-        .unwrap();
+    let local_dir = local_root.create_directory("dir".into()).await.unwrap();
     create_file(&local_dir, "dog.jpg", &[], &branches[0]).await;
 
     let remote_root = branches[1].open_or_create_root().await.unwrap();
-    let remote_dir = remote_root
-        .create_directory("dir".into(), &branches[1])
-        .await
-        .unwrap();
+    let remote_dir = remote_root.create_directory("dir".into()).await.unwrap();
     create_file(&remote_dir, "cat.jpg", &[], &branches[1]).await;
 
     JointDirectory::new(
@@ -756,7 +735,7 @@ async fn merge_missing_file() {
         Err(Error::EntryNotFound)
     );
 
-    replace_dangling_file(&remote_root, "squirrel.jpg", &branches[1]).await;
+    replace_dangling_file(&remote_root, "squirrel.jpg").await;
 
     // Merge again. This time it succeeds.
     JointDirectory::new(
@@ -809,7 +788,7 @@ async fn merge_missing_subdirectory() {
         Err(Error::EntryNotFound)
     );
 
-    replace_dangling_directory(&remote_root, "animals", &branches[1]).await;
+    replace_dangling_directory(&remote_root, "animals").await;
 
     // Merge again. This time it succeeds.
     JointDirectory::new(
@@ -835,14 +814,11 @@ async fn remove_non_empty_subdirectory() {
     let branches = setup(2).await;
 
     let local_root = branches[0].open_or_create_root().await.unwrap();
-    let local_dir = local_root
-        .create_directory("dir0".into(), &branches[0])
-        .await
-        .unwrap();
+    let local_dir = local_root.create_directory("dir0".into()).await.unwrap();
     create_file(&local_dir, "foo.txt", &[], &branches[0]).await;
 
     local_root
-        .create_directory("dir1".into(), &branches[0])
+        .create_directory("dir1".into())
         .await
         .unwrap()
         .flush(None)
@@ -850,14 +826,11 @@ async fn remove_non_empty_subdirectory() {
         .unwrap();
 
     let remote_root = branches[1].open_or_create_root().await.unwrap();
-    let remote_dir = remote_root
-        .create_directory("dir0".into(), &branches[1])
-        .await
-        .unwrap();
+    let remote_dir = remote_root.create_directory("dir0".into()).await.unwrap();
     create_file(&remote_dir, "bar.txt", &[], &branches[1]).await;
 
     remote_root
-        .create_directory("dir2".into(), &branches[1])
+        .create_directory("dir2".into())
         .await
         .unwrap()
         .flush(None)
@@ -938,10 +911,7 @@ where
 }
 
 async fn create_file(parent: &Directory, name: &str, content: &[u8], local_branch: &Branch) {
-    let mut file = parent
-        .create_file(name.to_owned(), local_branch)
-        .await
-        .unwrap();
+    let mut file = parent.create_file(name.to_owned()).await.unwrap();
 
     if !content.is_empty() {
         file.write(content, local_branch).await.unwrap();
@@ -1027,7 +997,7 @@ async fn create_dangling_entry(parent: &Directory, entry_type: EntryType, name: 
     writer.flush(None).await.unwrap();
 }
 
-async fn replace_dangling_file(parent: &Directory, name: &str, local_branch: &Branch) {
+async fn replace_dangling_file(parent: &Directory, name: &str) {
     let reader = parent.read().await;
     let old_blob_id = *reader
         .lookup_version(name, reader.branch().id())
@@ -1046,7 +1016,7 @@ async fn replace_dangling_file(parent: &Directory, name: &str, local_branch: &Br
     drop(reader);
 
     parent
-        .create_file(name.into(), local_branch)
+        .create_file(name.into())
         .await
         .unwrap()
         .flush()
@@ -1054,7 +1024,7 @@ async fn replace_dangling_file(parent: &Directory, name: &str, local_branch: &Br
         .unwrap();
 }
 
-async fn replace_dangling_directory(parent: &Directory, name: &str, local_branch: &Branch) {
+async fn replace_dangling_directory(parent: &Directory, name: &str) {
     let reader = parent.read().await;
     let old_blob_id = *reader
         .lookup_version(name, reader.branch().id())
@@ -1074,7 +1044,7 @@ async fn replace_dangling_directory(parent: &Directory, name: &str, local_branch
     drop(reader);
 
     parent
-        .create_directory(name.into(), local_branch)
+        .create_directory(name.into())
         .await
         .unwrap()
         .flush(None)
