@@ -1,7 +1,7 @@
 use std::io::SeekFrom;
 
 use super::*;
-use crate::{db, index::RootNode};
+use crate::db;
 use assert_matches::assert_matches;
 use tokio::time::{sleep, Duration};
 
@@ -22,41 +22,19 @@ async fn root_directory_always_exists() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn merge() {
-    let secrets = AccessSecrets::random_write();
-
     let repo = Repository::create(
         &db::Store::Memory,
         rand::random(),
         MasterSecret::random(),
-        secrets.clone(),
+        AccessSecrets::random_write(),
         true,
     )
     .await
     .unwrap();
 
-    // Add another branch to the index. Eventually there might be a more high-level API for
-    // this but for now we have to resort to this.
+    // Create remote branch and create a file in it.
     let remote_id = PublicKey::random();
-    let remote_node = RootNode::load_latest_or_create(
-        &mut repo.index().pool.acquire().await.unwrap(),
-        &remote_id,
-    )
-    .await
-    .unwrap();
-    repo.index()
-        .update_remote_branch(remote_id, remote_node)
-        .await
-        .unwrap();
-
-    // Create a file in the remote branch.
-    let remote_branch = repo
-        .shared
-        .branch(&remote_id)
-        .await
-        .unwrap()
-        // Need to re-open the branch with write access because remote branches are read-only by
-        // default.
-        .reopen(secrets.keys().unwrap());
+    let remote_branch = repo.create_remote_branch(remote_id).await.unwrap();
     let remote_root = remote_branch.open_or_create_root().await.unwrap();
 
     let mut file = remote_root
@@ -66,6 +44,7 @@ async fn merge() {
     file.write(b"hello", &remote_branch).await.unwrap();
     file.flush().await.unwrap();
 
+    // Open the local root.
     let local_branch = repo.local_branch().await.unwrap();
     let local_root = local_branch.open_or_create_root().await.unwrap();
 
@@ -414,6 +393,34 @@ async fn read_access_different_replica() {
     let mut file = repo.open_file("public.txt").await.unwrap();
     let content = file.read_to_end().await.unwrap();
     assert_eq!(content, b"hello world");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn truncate_remote_file() {
+    let repo = Repository::create(
+        &db::Store::Memory,
+        rand::random(),
+        MasterSecret::random(),
+        AccessSecrets::random_write(),
+        false,
+    )
+    .await
+    .unwrap();
+
+    let remote_branch = repo
+        .create_remote_branch(PublicKey::random())
+        .await
+        .unwrap();
+    let remote_root = remote_branch.open_or_create_root().await.unwrap();
+
+    let mut file = remote_root.create_file("test.txt".into()).await.unwrap();
+    file.write(b"foo", &remote_branch).await.unwrap();
+    file.flush().await.unwrap();
+
+    let local_branch = repo.local_branch().await.unwrap();
+
+    let mut file = repo.open_file("test.txt").await.unwrap();
+    file.truncate(0, &local_branch).await.unwrap();
 }
 
 async fn read_file(repo: &Repository, path: impl AsRef<Utf8Path>) -> Vec<u8> {

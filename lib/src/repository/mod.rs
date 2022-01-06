@@ -451,6 +451,34 @@ impl Repository {
             branch.debug_print(print.indent()).await;
         }
     }
+
+    // Create remote branch in this repository and returns it. If this repository has write access
+    // then the returned branch will also have write access.
+    // FOR TESTS ONLY!
+    #[cfg(test)]
+    pub(crate) async fn create_remote_branch(&self, remote_id: PublicKey) -> Result<Branch> {
+        use crate::index::RootNode;
+
+        let keys = self.shared.secrets.keys().ok_or(Error::PermissionDenied)?;
+
+        let remote_node = RootNode::load_latest_or_create(
+            &mut self.index().pool.acquire().await.unwrap(),
+            &remote_id,
+        )
+        .await?;
+
+        self.index()
+            .update_remote_branch(remote_id, remote_node)
+            .await?;
+
+        let branch = self.shared.branch(&remote_id).await?;
+
+        // Need to re-open the branch with write access because remote branches are read-only by
+        // default.
+        let branch = branch.reopen(keys);
+
+        Ok(branch)
+    }
 }
 
 impl Drop for Repository {

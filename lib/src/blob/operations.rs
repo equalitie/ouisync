@@ -312,12 +312,7 @@ impl<'a> Operations<'a> {
         let mut tx = self.core.db_pool().begin().await?;
 
         let read_key = self.core.branch.keys().read();
-        let write_keys = self
-            .core
-            .branch
-            .keys()
-            .write()
-            .ok_or(Error::PermissionDenied)?;
+        let write_keys = dst_branch.keys().write().ok_or(Error::PermissionDenied)?;
 
         for (src_locator, dst_locator) in self.core.locators().zip(dst_head_locator.sequence()) {
             let encoded_src_locator = src_locator.encode(read_key);
