@@ -2,10 +2,7 @@ use crate::crypto::{
     sign::{self, PublicKey, SecretKey},
     Hash,
 };
-use rand::{
-    distributions::{Distribution, Standard},
-    Rng,
-};
+use rand::{rngs::OsRng, CryptoRng, Rng};
 use serde::{Deserialize, Serialize};
 use sha3::{digest::Digest, Sha3_256};
 use std::str::FromStr;
@@ -19,21 +16,23 @@ derive_sqlx_traits_for_byte_array_wrapper!(RepositoryId);
 impl RepositoryId {
     pub const SIZE: usize = PublicKey::SIZE;
 
+    // // TODO: Temporarily enabling for non tests as well.
+    // //#[cfg(test)]
+    pub fn generate<R: Rng + CryptoRng>(rng: &mut R) -> Self {
+        let sk = SecretKey::generate(rng);
+        RepositoryId(PublicKey::from(&sk))
+    }
+
+    pub fn random() -> Self {
+        Self::generate(&mut OsRng)
+    }
+
     /// Hash of this id using the given salt.
     pub fn salted_hash(&self, salt: &[u8]) -> Hash {
         let mut hasher = Sha3_256::new();
         hasher.update(self.0.as_ref());
         hasher.update(salt);
         hasher.finalize().into()
-    }
-}
-
-// // TODO: Temporarily enabling for non tests as well.
-// //#[cfg(test)]
-impl Distribution<RepositoryId> for Standard {
-    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> RepositoryId {
-        let sk: SecretKey = rng.gen();
-        RepositoryId(PublicKey::from(&sk))
     }
 }
 

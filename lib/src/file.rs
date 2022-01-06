@@ -1,7 +1,6 @@
 use crate::{
     blob::{self, Blob},
     branch::Branch,
-    db,
     directory::{Directory, ParentContext},
     error::Result,
     locator::Locator,
@@ -14,7 +13,6 @@ use tokio::sync::Mutex;
 pub struct File {
     blob: Blob,
     parent: ParentContext,
-    pool: db::Pool,
 }
 
 impl File {
@@ -24,34 +22,28 @@ impl File {
         locator: Locator,
         parent: ParentContext,
     ) -> Result<Self> {
-        let pool = owner_branch.db_pool().clone();
-
         Ok(Self {
             blob: Blob::open(owner_branch, locator).await?,
             parent,
-            pool,
         })
     }
 
     /// Opens an existing file. Reuse the already opened blob::Core
     pub(crate) async fn reopen(
         blob_core: Arc<Mutex<blob::Core>>,
-        pool: db::Pool,
         parent: ParentContext,
     ) -> Result<Self> {
         Ok(Self {
             blob: Blob::reopen(blob_core).await?,
             parent,
-            pool,
         })
     }
 
     /// Creates a new file.
     pub(crate) fn create(branch: Branch, locator: Locator, parent: ParentContext) -> Self {
         Self {
-            blob: Blob::create(branch.clone(), locator),
+            blob: Blob::create(branch, locator),
             parent,
-            pool: branch.db_pool().clone(),
         }
     }
 
@@ -60,7 +52,7 @@ impl File {
     }
 
     pub fn parent(&self) -> Directory {
-        self.parent.directory(self.pool.clone())
+        self.parent.directory()
     }
 
     /// Length of this file in bytes.
@@ -105,14 +97,8 @@ impl File {
         }
 
         let mut tx = self.blob.db_pool().begin().await?;
-
         self.blob.flush_in_transaction(&mut tx).await?;
-
-        // Since the blob is dirty, it must be that it's been forked onto the local branch. That in
-        // turn means that self.blob.branch().id() is the ID of the local writer.
-        let local_writer_id = self.blob.branch().id();
-
-        self.parent.modify_entry(tx, local_writer_id, None).await?;
+        self.parent.modify_entry(tx, None).await?;
 
         Ok(())
     }
@@ -153,6 +139,7 @@ mod tests {
     use super::*;
     use crate::{
         access_control::{AccessKeys, WriteSecrets},
+        crypto::sign::PublicKey,
         db,
         index::BranchData,
         repository,
@@ -267,9 +254,13 @@ mod tests {
 
     async fn create_branch(pool: db::Pool, keys: AccessKeys) -> Branch {
         let (notify_tx, _) = async_broadcast::broadcast(1);
-        let branch_data = BranchData::new(&pool, rand::random(), notify_tx)
-            .await
-            .unwrap();
+        let branch_data = BranchData::new(
+            &mut pool.acquire().await.unwrap(),
+            PublicKey::random(),
+            notify_tx,
+        )
+        .await
+        .unwrap();
         Branch::new(pool, Arc::new(branch_data), keys)
     }
 }
@@ -277,7 +268,7 @@ mod tests {
 impl fmt::Debug for File {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("File")
-            .field("blob_id", &self.blob.blob_id())
+            .field("blob_id", &self.blob.locator().blob_id())
             .field("branch", &self.blob.branch().id())
             .finish()
     }

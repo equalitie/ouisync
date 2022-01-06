@@ -1,30 +1,41 @@
-use std::iter;
-
 use super::{inner::INNER_LAYER_COUNT, summary::Summary, test_utils::Snapshot, *};
-use crate::{crypto::Hashable, db, error::Error, test_utils, version_vector::VersionVector};
+use crate::{
+    crypto::{sign::PublicKey, Hashable},
+    db,
+    error::Error,
+    test_utils,
+    version_vector::VersionVector,
+};
 use assert_matches::assert_matches;
 use futures_util::TryStreamExt;
 use rand::prelude::*;
+use std::iter;
 use test_strategy::proptest;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn create_new_root_node() {
-    let pool = setup().await;
+    let mut conn = setup().await;
 
-    let writer_id = rand::random();
+    let writer_id = PublicKey::random();
     let hash = rand::random::<u64>().hash();
 
-    let node0 = RootNode::create(&pool, &writer_id, VersionVector::new(), hash, Summary::FULL)
-        .await
-        .unwrap();
+    let node0 = RootNode::create(
+        &mut conn,
+        &writer_id,
+        VersionVector::new(),
+        hash,
+        Summary::FULL,
+    )
+    .await
+    .unwrap();
     assert_eq!(node0.hash, hash);
 
-    let node1 = RootNode::load_latest_or_create(&pool, &writer_id)
+    let node1 = RootNode::load_latest_or_create(&mut conn, &writer_id)
         .await
         .unwrap();
     assert_eq!(node1, node0);
 
-    let nodes: Vec<_> = RootNode::load_all(&pool, &writer_id, 2)
+    let nodes: Vec<_> = RootNode::load_all(&mut conn, &writer_id, 2)
         .try_collect()
         .await
         .unwrap();
@@ -34,21 +45,33 @@ async fn create_new_root_node() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn create_existing_root_node() {
-    let pool = setup().await;
+    let mut conn = setup().await;
 
-    let writer_id = rand::random();
+    let writer_id = PublicKey::random();
     let hash = rand::random::<u64>().hash();
 
-    let node0 = RootNode::create(&pool, &writer_id, VersionVector::new(), hash, Summary::FULL)
-        .await
-        .unwrap();
+    let node0 = RootNode::create(
+        &mut conn,
+        &writer_id,
+        VersionVector::new(),
+        hash,
+        Summary::FULL,
+    )
+    .await
+    .unwrap();
 
-    let node1 = RootNode::create(&pool, &writer_id, VersionVector::new(), hash, Summary::FULL)
-        .await
-        .unwrap();
+    let node1 = RootNode::create(
+        &mut conn,
+        &writer_id,
+        VersionVector::new(),
+        hash,
+        Summary::FULL,
+    )
+    .await
+    .unwrap();
     assert_eq!(node0, node1);
 
-    let nodes: Vec<_> = RootNode::load_all(&pool, &writer_id, 2)
+    let nodes: Vec<_> = RootNode::load_all(&mut conn, &writer_id, 2)
         .try_collect()
         .await
         .unwrap();
@@ -58,13 +81,13 @@ async fn create_existing_root_node() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn create_new_inner_node() {
-    let pool = setup().await;
+    let mut conn = setup().await;
 
     let parent = rand::random::<u64>().hash();
     let hash = rand::random::<u64>().hash();
     let bucket = rand::random();
 
-    let mut tx = pool.begin().await.unwrap();
+    let mut tx = conn.begin().await.unwrap();
 
     let node = InnerNode::new(hash);
     node.save(&mut tx, &parent, bucket).await.unwrap();
@@ -82,13 +105,13 @@ async fn create_new_inner_node() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn create_existing_inner_node() {
-    let pool = setup().await;
+    let mut conn = setup().await;
 
     let parent = rand::random::<u64>().hash();
     let hash = rand::random::<u64>().hash();
     let bucket = rand::random();
 
-    let mut tx = pool.begin().await.unwrap();
+    let mut tx = conn.begin().await.unwrap();
 
     let node0 = InnerNode::new(hash);
     node0.save(&mut tx, &parent, bucket).await.unwrap();
@@ -108,7 +131,7 @@ async fn create_existing_inner_node() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn attempt_to_create_conflicting_inner_node() {
-    let pool = setup().await;
+    let mut conn = setup().await;
 
     let parent = rand::random::<u64>().hash();
     let bucket = rand::random();
@@ -121,7 +144,7 @@ async fn attempt_to_create_conflicting_inner_node() {
         }
     };
 
-    let mut tx = pool.begin().await.unwrap();
+    let mut tx = conn.begin().await.unwrap();
 
     let node0 = InnerNode::new(hash0);
     node0.save(&mut tx, &parent, bucket).await.unwrap();
@@ -132,18 +155,16 @@ async fn attempt_to_create_conflicting_inner_node() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn save_new_present_leaf_node() {
-    let pool = setup().await;
+    let mut conn = setup().await;
 
     let parent = rand::random::<u64>().hash();
     let encoded_locator = rand::random::<u64>().hash();
     let block_id = rand::random();
 
-    let mut tx = pool.begin().await.unwrap();
-
     let node = LeafNode::present(encoded_locator, block_id);
-    node.save(&mut tx, &parent).await.unwrap();
+    node.save(&mut conn, &parent).await.unwrap();
 
-    let nodes = LeafNode::load_children(&mut tx, &parent).await.unwrap();
+    let nodes = LeafNode::load_children(&mut conn, &parent).await.unwrap();
     assert_eq!(nodes.len(), 1);
 
     let node = nodes.get(&encoded_locator).unwrap();
@@ -154,13 +175,13 @@ async fn save_new_present_leaf_node() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn save_new_missing_leaf_node() {
-    let pool = setup().await;
+    let mut conn = setup().await;
 
     let parent = rand::random::<u64>().hash();
     let encoded_locator = rand::random::<u64>().hash();
     let block_id = rand::random();
 
-    let mut tx = pool.begin().await.unwrap();
+    let mut tx = conn.begin().await.unwrap();
 
     let node = LeafNode::missing(encoded_locator, block_id);
     node.save(&mut tx, &parent).await.unwrap();
@@ -176,13 +197,13 @@ async fn save_new_missing_leaf_node() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn save_missing_leaf_node_over_existing_missing_one() {
-    let pool = setup().await;
+    let mut conn = setup().await;
 
     let parent = rand::random::<u64>().hash();
     let encoded_locator = rand::random::<u64>().hash();
     let block_id = rand::random();
 
-    let mut tx = pool.begin().await.unwrap();
+    let mut tx = conn.begin().await.unwrap();
 
     let node = LeafNode::missing(encoded_locator, block_id);
     node.save(&mut tx, &parent).await.unwrap();
@@ -201,21 +222,19 @@ async fn save_missing_leaf_node_over_existing_missing_one() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn save_missing_leaf_node_over_existing_present_one() {
-    let pool = setup().await;
+    let mut conn = setup().await;
 
     let parent = rand::random::<u64>().hash();
     let encoded_locator = rand::random::<u64>().hash();
     let block_id = rand::random();
 
-    let mut tx = pool.begin().await.unwrap();
-
     let node = LeafNode::present(encoded_locator, block_id);
-    node.save(&mut tx, &parent).await.unwrap();
+    node.save(&mut conn, &parent).await.unwrap();
 
     let node = LeafNode::missing(encoded_locator, block_id);
-    node.save(&mut tx, &parent).await.unwrap();
+    node.save(&mut conn, &parent).await.unwrap();
 
-    let nodes = LeafNode::load_children(&mut tx, &parent).await.unwrap();
+    let nodes = LeafNode::load_children(&mut conn, &parent).await.unwrap();
     assert_eq!(nodes.len(), 1);
 
     let node = nodes.get(&encoded_locator).unwrap();
@@ -226,11 +245,10 @@ async fn save_missing_leaf_node_over_existing_present_one() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn compute_status_from_empty_leaf_nodes() {
-    let pool = setup().await;
+    let mut conn = setup().await;
     let hash = LeafNodeSet::default().hash();
 
-    let mut tx = pool.begin().await.unwrap();
-    let summary = InnerNode::compute_summary(&mut tx, &hash, INNER_LAYER_COUNT)
+    let summary = InnerNode::compute_summary(&mut conn, &hash, INNER_LAYER_COUNT)
         .await
         .unwrap();
 
@@ -240,14 +258,13 @@ async fn compute_status_from_empty_leaf_nodes() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn compute_status_from_incomplete_leaf_nodes() {
-    let pool = setup().await;
+    let mut conn = setup().await;
 
     let node = LeafNode::missing(rand::random::<u64>().hash(), rand::random());
     let nodes: LeafNodeSet = iter::once(node).collect();
     let hash = nodes.hash();
 
-    let mut tx = pool.begin().await.unwrap();
-    let summary = InnerNode::compute_summary(&mut tx, &hash, INNER_LAYER_COUNT)
+    let summary = InnerNode::compute_summary(&mut conn, &hash, INNER_LAYER_COUNT)
         .await
         .unwrap();
 
@@ -256,15 +273,14 @@ async fn compute_status_from_incomplete_leaf_nodes() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn compute_status_from_complete_leaf_nodes_with_all_missing_blocks() {
-    let pool = setup().await;
+    let mut conn = setup().await;
 
     let node = LeafNode::missing(rand::random::<u64>().hash(), rand::random());
     let nodes: LeafNodeSet = iter::once(node).collect();
     let hash = nodes.hash();
-    nodes.save(&pool, &hash).await.unwrap();
+    nodes.save(&mut conn, &hash).await.unwrap();
 
-    let mut tx = pool.begin().await.unwrap();
-    let summary = InnerNode::compute_summary(&mut tx, &hash, INNER_LAYER_COUNT)
+    let summary = InnerNode::compute_summary(&mut conn, &hash, INNER_LAYER_COUNT)
         .await
         .unwrap();
 
@@ -274,17 +290,16 @@ async fn compute_status_from_complete_leaf_nodes_with_all_missing_blocks() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn compute_status_from_complete_leaf_nodes_with_some_present_blocks() {
-    let pool = setup().await;
+    let mut conn = setup().await;
 
     let node0 = LeafNode::present(rand::random::<u64>().hash(), rand::random());
     let node1 = LeafNode::missing(rand::random::<u64>().hash(), rand::random());
     let node2 = LeafNode::missing(rand::random::<u64>().hash(), rand::random());
     let nodes: LeafNodeSet = vec![node0, node1, node2].into_iter().collect();
     let hash = nodes.hash();
-    nodes.save(&pool, &hash).await.unwrap();
+    nodes.save(&mut conn, &hash).await.unwrap();
 
-    let mut tx = pool.begin().await.unwrap();
-    let summary = InnerNode::compute_summary(&mut tx, &hash, INNER_LAYER_COUNT)
+    let summary = InnerNode::compute_summary(&mut conn, &hash, INNER_LAYER_COUNT)
         .await
         .unwrap();
 
@@ -294,16 +309,15 @@ async fn compute_status_from_complete_leaf_nodes_with_some_present_blocks() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn compute_status_from_complete_leaf_nodes_with_all_present_blocks() {
-    let pool = setup().await;
+    let mut conn = setup().await;
 
     let node0 = LeafNode::present(rand::random::<u64>().hash(), rand::random());
     let node1 = LeafNode::present(rand::random::<u64>().hash(), rand::random());
     let nodes: LeafNodeSet = vec![node0, node1].into_iter().collect();
     let hash = nodes.hash();
-    nodes.save(&pool, &hash).await.unwrap();
+    nodes.save(&mut conn, &hash).await.unwrap();
 
-    let mut tx = pool.begin().await.unwrap();
-    let summary = InnerNode::compute_summary(&mut tx, &hash, INNER_LAYER_COUNT)
+    let summary = InnerNode::compute_summary(&mut conn, &hash, INNER_LAYER_COUNT)
         .await
         .unwrap();
 
@@ -313,11 +327,10 @@ async fn compute_status_from_complete_leaf_nodes_with_all_present_blocks() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn compute_status_from_empty_inner_nodes() {
-    let pool = setup().await;
+    let mut conn = setup().await;
     let hash = InnerNodeMap::default().hash();
 
-    let mut tx = pool.begin().await.unwrap();
-    let summary = InnerNode::compute_summary(&mut tx, &hash, INNER_LAYER_COUNT - 1)
+    let summary = InnerNode::compute_summary(&mut conn, &hash, INNER_LAYER_COUNT - 1)
         .await
         .unwrap();
 
@@ -327,14 +340,13 @@ async fn compute_status_from_empty_inner_nodes() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn compute_status_from_incomplete_inner_nodes() {
-    let pool = setup().await;
+    let mut conn = setup().await;
 
     let node = InnerNode::new(rand::random::<u64>().hash());
     let nodes: InnerNodeMap = iter::once((0, node)).collect();
     let hash = nodes.hash();
 
-    let mut tx = pool.begin().await.unwrap();
-    let summary = InnerNode::compute_summary(&mut tx, &hash, INNER_LAYER_COUNT - 1)
+    let summary = InnerNode::compute_summary(&mut conn, &hash, INNER_LAYER_COUNT - 1)
         .await
         .unwrap();
 
@@ -343,7 +355,7 @@ async fn compute_status_from_incomplete_inner_nodes() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn compute_status_from_complete_inner_nodes_with_all_missing_blocks() {
-    let pool = setup().await;
+    let mut conn = setup().await;
 
     let inners: InnerNodeMap = (0..2)
         .map(|bucket| {
@@ -361,10 +373,9 @@ async fn compute_status_from_complete_inner_nodes_with_all_missing_blocks() {
         .collect();
 
     let hash = inners.hash();
-    inners.save(&pool, &hash).await.unwrap();
+    inners.save(&mut conn, &hash).await.unwrap();
 
-    let mut tx = pool.begin().await.unwrap();
-    let summary = InnerNode::compute_summary(&mut tx, &hash, INNER_LAYER_COUNT - 1)
+    let summary = InnerNode::compute_summary(&mut conn, &hash, INNER_LAYER_COUNT - 1)
         .await
         .unwrap();
 
@@ -374,7 +385,7 @@ async fn compute_status_from_complete_inner_nodes_with_all_missing_blocks() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn compute_status_from_complete_inner_nodes_with_some_present_blocks() {
-    let pool = setup().await;
+    let mut conn = setup().await;
 
     // all missing
     let inner0 = {
@@ -419,10 +430,9 @@ async fn compute_status_from_complete_inner_nodes_with_some_present_blocks() {
         .into_iter()
         .collect();
     let hash = inners.hash();
-    inners.save(&pool, &hash).await.unwrap();
+    inners.save(&mut conn, &hash).await.unwrap();
 
-    let mut tx = pool.begin().await.unwrap();
-    let summary = InnerNode::compute_summary(&mut tx, &hash, INNER_LAYER_COUNT - 1)
+    let summary = InnerNode::compute_summary(&mut conn, &hash, INNER_LAYER_COUNT - 1)
         .await
         .unwrap();
 
@@ -432,7 +442,7 @@ async fn compute_status_from_complete_inner_nodes_with_some_present_blocks() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn compute_status_from_complete_inner_nodes_with_all_present_blocks() {
-    let pool = setup().await;
+    let mut conn = setup().await;
 
     let inners: InnerNodeMap = (0..2)
         .map(|bucket| {
@@ -451,10 +461,9 @@ async fn compute_status_from_complete_inner_nodes_with_all_present_blocks() {
         .collect();
 
     let hash = inners.hash();
-    inners.save(&pool, &hash).await.unwrap();
+    inners.save(&mut conn, &hash).await.unwrap();
 
-    let mut tx = pool.begin().await.unwrap();
-    let summary = InnerNode::compute_summary(&mut tx, &hash, INNER_LAYER_COUNT - 1)
+    let summary = InnerNode::compute_summary(&mut conn, &hash, INNER_LAYER_COUNT - 1)
         .await
         .unwrap();
 
@@ -464,46 +473,43 @@ async fn compute_status_from_complete_inner_nodes_with_all_present_blocks() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn set_present_on_leaf_node_with_missing_block() {
-    let pool = setup().await;
-    let mut tx = pool.begin().await.unwrap();
+    let mut conn = setup().await;
 
     let parent = rand::random::<u64>().hash();
     let encoded_locator = rand::random::<u64>().hash();
     let block_id = rand::random();
 
     let node = LeafNode::missing(encoded_locator, block_id);
-    node.save(&mut tx, &parent).await.unwrap();
+    node.save(&mut conn, &parent).await.unwrap();
 
-    assert!(LeafNode::set_present(&mut tx, &block_id).await.unwrap());
+    assert!(LeafNode::set_present(&mut conn, &block_id).await.unwrap());
 
-    let nodes = LeafNode::load_children(&mut tx, &parent).await.unwrap();
+    let nodes = LeafNode::load_children(&mut conn, &parent).await.unwrap();
     assert!(!nodes.get(&encoded_locator).unwrap().is_missing);
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn set_present_on_leaf_node_with_present_block() {
-    let pool = setup().await;
-    let mut tx = pool.begin().await.unwrap();
+    let mut conn = setup().await;
 
     let parent = rand::random::<u64>().hash();
     let encoded_locator = rand::random::<u64>().hash();
     let block_id = rand::random();
 
     let node = LeafNode::present(encoded_locator, block_id);
-    node.save(&mut tx, &parent).await.unwrap();
+    node.save(&mut conn, &parent).await.unwrap();
 
-    assert!(!LeafNode::set_present(&mut tx, &block_id).await.unwrap());
+    assert!(!LeafNode::set_present(&mut conn, &block_id).await.unwrap());
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn set_present_on_leaf_node_that_does_not_exist() {
-    let pool = setup().await;
-    let mut tx = pool.begin().await.unwrap();
+    let mut conn = setup().await;
 
     let block_id = rand::random();
 
     assert_matches!(
-        LeafNode::set_present(&mut tx, &block_id).await,
+        LeafNode::set_present(&mut conn, &block_id).await,
         Err(Error::BlockNotReferenced)
     )
 }
@@ -518,13 +524,13 @@ fn check_complete(
 
 async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
     let mut rng = StdRng::seed_from_u64(rng_seed);
-    let pool = setup().await;
+    let mut conn = setup().await;
 
-    let writer_id = rng.gen();
+    let writer_id = PublicKey::generate(&mut rng);
     let snapshot = Snapshot::generate(&mut rng, leaf_count);
 
     let mut root_node = RootNode::create(
-        &pool,
+        &mut conn,
         &writer_id,
         VersionVector::new(),
         *snapshot.root_hash(),
@@ -533,10 +539,10 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
     .await
     .unwrap();
 
-    super::update_summaries(&pool, root_node.hash, 0)
+    super::update_summaries(&mut conn, root_node.hash, 0)
         .await
         .unwrap();
-    root_node.reload(&pool).await.unwrap();
+    root_node.reload(&mut conn).await.unwrap();
     assert_eq!(root_node.summary.is_complete(), leaf_count == 0);
 
     // TODO: consider randomizing the order the nodes are saved so it's not always
@@ -544,11 +550,11 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
 
     for layer in snapshot.inner_layers() {
         for (parent_hash, nodes) in layer.inner_maps() {
-            nodes.save(&pool, parent_hash).await.unwrap();
-            super::update_summaries(&pool, *parent_hash, layer.number())
+            nodes.save(&mut conn, parent_hash).await.unwrap();
+            super::update_summaries(&mut conn, *parent_hash, layer.number())
                 .await
                 .unwrap();
-            root_node.reload(&pool).await.unwrap();
+            root_node.reload(&mut conn).await.unwrap();
             assert!(!root_node.summary.is_complete());
         }
     }
@@ -556,13 +562,13 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
     let mut unsaved_leaves = snapshot.leaf_count();
 
     for (parent_hash, nodes) in snapshot.leaf_sets() {
-        nodes.save(&pool, parent_hash).await.unwrap();
+        nodes.save(&mut conn, parent_hash).await.unwrap();
         unsaved_leaves -= nodes.len();
 
-        super::update_summaries(&pool, *parent_hash, INNER_LAYER_COUNT)
+        super::update_summaries(&mut conn, *parent_hash, INNER_LAYER_COUNT)
             .await
             .unwrap();
-        root_node.reload(&pool).await.unwrap();
+        root_node.reload(&mut conn).await.unwrap();
 
         if unsaved_leaves > 0 {
             assert!(!root_node.summary.is_complete());
@@ -582,14 +588,14 @@ fn summary(
 
 async fn summary_case(leaf_count: usize, rng_seed: u64) {
     let mut rng = StdRng::seed_from_u64(rng_seed);
-    let pool = setup().await;
+    let mut conn = setup().await;
 
-    let writer_id = rng.gen();
+    let writer_id = PublicKey::generate(&mut rng);
     let snapshot = Snapshot::generate(&mut rng, leaf_count);
 
     // Save the snapshot initially with all nodes missing.
     let mut root_node = RootNode::create(
-        &pool,
+        &mut conn,
         &writer_id,
         VersionVector::new(),
         *snapshot.root_hash(),
@@ -599,7 +605,7 @@ async fn summary_case(leaf_count: usize, rng_seed: u64) {
     .unwrap();
 
     if snapshot.leaf_count() == 0 {
-        super::update_summaries(&pool, root_node.hash, 0)
+        super::update_summaries(&mut conn, root_node.hash, 0)
             .await
             .unwrap();
     }
@@ -609,7 +615,7 @@ async fn summary_case(leaf_count: usize, rng_seed: u64) {
             nodes
                 .clone()
                 .into_incomplete()
-                .save(&pool, parent_hash)
+                .save(&mut conn, parent_hash)
                 .await
                 .unwrap();
         }
@@ -619,11 +625,11 @@ async fn summary_case(leaf_count: usize, rng_seed: u64) {
         nodes
             .clone()
             .into_missing()
-            .save(&pool, parent_hash)
+            .save(&mut conn, parent_hash)
             .await
             .unwrap();
 
-        super::update_summaries(&pool, *parent_hash, INNER_LAYER_COUNT)
+        super::update_summaries(&mut conn, *parent_hash, INNER_LAYER_COUNT)
             .await
             .unwrap();
     }
@@ -631,7 +637,7 @@ async fn summary_case(leaf_count: usize, rng_seed: u64) {
     let mut expected_missing_blocks_count = snapshot.leaf_count() as u64;
 
     // Check that initially all blocks are missing
-    root_node.reload(&pool).await.unwrap();
+    root_node.reload(&mut conn).await.unwrap();
     assert_eq!(
         root_node.summary.missing_blocks_count,
         expected_missing_blocks_count
@@ -640,13 +646,11 @@ async fn summary_case(leaf_count: usize, rng_seed: u64) {
     // Keep receiving the blocks one by one and verify the missing blocks summaries get updated
     // accordingly.
     for block_id in snapshot.block_ids() {
-        let mut tx = pool.begin().await.unwrap();
-        super::receive_block(&mut tx, block_id).await.unwrap();
-        tx.commit().await.unwrap();
+        super::receive_block(&mut conn, block_id).await.unwrap();
 
         expected_missing_blocks_count -= 1;
 
-        root_node.reload(&pool).await.unwrap();
+        root_node.reload(&mut conn).await.unwrap();
         assert_eq!(
             root_node.summary.missing_blocks_count,
             expected_missing_blocks_count
@@ -656,8 +660,10 @@ async fn summary_case(leaf_count: usize, rng_seed: u64) {
     }
 }
 
-async fn setup() -> db::Pool {
-    let pool = db::Pool::connect(":memory:").await.unwrap();
-    super::super::init(&pool).await.unwrap();
-    pool
+async fn setup() -> db::Connection {
+    use sqlx::Connection;
+
+    let mut conn = db::Connection::connect(":memory:").await.unwrap();
+    super::super::init(&mut conn).await.unwrap();
+    conn
 }

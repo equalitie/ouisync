@@ -69,17 +69,16 @@ impl Store {
 
     /// Load existing database.
     pub async fn load(pool: db::Pool) -> Result<Store> {
-        // Only reading here, so no need to commit the transaction.
-        let mut tx = pool.begin().await?;
+        let mut conn = pool.acquire().await?;
 
-        let origin_hash = match load_origin_hash(&mut tx).await? {
+        let origin_hash = match load_origin_hash(&mut conn).await? {
             Some(origin_hash) => origin_hash,
             None => {
                 return Err(WsError::OriginNotFound.into());
             }
         };
 
-        let mut entries = load_entries(&mut tx).await?;
+        let mut entries = load_entries(&mut conn).await?;
 
         let origin = entries
             .remove(&origin_hash)
@@ -149,7 +148,7 @@ async fn insert_valid_entry(entry: &Entry, tx: &mut db::Transaction<'_>) -> Resu
     Ok(())
 }
 
-async fn load_entries(tx: &mut db::Transaction<'_>) -> Result<HashMap<Hash, Entry>> {
+async fn load_entries(tx: &mut db::Connection) -> Result<HashMap<Hash, Entry>> {
     use std::cell::Cell;
 
     sqlx::query("SELECT writer, added_by, nonce, hash, signature FROM writer_set_entries")
@@ -174,9 +173,9 @@ async fn load_entries(tx: &mut db::Transaction<'_>) -> Result<HashMap<Hash, Entr
         .collect()
 }
 
-async fn load_origin_hash(tx: &mut db::Transaction<'_>) -> Result<Option<Hash>> {
+async fn load_origin_hash(conn: &mut db::Connection) -> Result<Option<Hash>> {
     let h = sqlx::query("SELECT origin_hash FROM writer_set_origin")
-        .fetch_optional(tx)
+        .fetch_optional(conn)
         .await?
         .map(|row| row.get(0));
 
@@ -233,17 +232,17 @@ mod tests {
         let pool = db::open_or_create(&db::Store::Memory).await.unwrap();
         let (mut store, alice) = Store::create_new(&pool).await.unwrap();
 
-        let bob = Keypair::generate();
+        let bob = Keypair::random();
         let bob_nonce = rand::random();
 
         let entry = Entry::new(&bob.public, &alice, bob_nonce);
 
         assert!(store.try_add_entry(entry).await.is_ok());
 
-        let malory = Keypair::generate();
+        let malory = Keypair::random();
         let malory_nonce = rand::random();
 
-        let carol = Keypair::generate();
+        let carol = Keypair::random();
         let carol_nonce = rand::random();
 
         assert!(store

@@ -13,7 +13,7 @@ use crate::{
 };
 use assert_matches::assert_matches;
 use futures_util::future;
-use rand::{rngs::StdRng, Rng, SeedableRng};
+use rand::{rngs::StdRng, SeedableRng};
 use std::{iter, sync::Arc};
 
 #[tokio::test(flavor = "multi_thread")]
@@ -26,7 +26,7 @@ async fn no_conflict() {
     let root1 = branches[1].open_or_create_root().await.unwrap();
     create_file(&root1, "file1.txt", &[], &branches[1]).await;
 
-    let root = JointDirectory::new(branches[0].clone(), vec![root0, root1]);
+    let root = JointDirectory::new(Some(branches[0].clone()), vec![root0, root1]);
     let root = root.read().await;
 
     let entries: Vec<_> = root.entries().collect();
@@ -37,11 +37,16 @@ async fn no_conflict() {
     assert_eq!(entries[1].name(), "file1.txt");
     assert_eq!(entries[1].entry_type(), EntryType::File);
 
-    assert_eq!(root.lookup("file0.txt").collect::<Vec<_>>(), entries[0..1]);
-    assert_eq!(root.lookup("file1.txt").collect::<Vec<_>>(), entries[1..2]);
+    for (index, entry) in entries.iter().enumerate() {
+        let name = format!("file{}.txt", index);
 
-    assert_eq!(root.lookup_unique("file0.txt").unwrap(), entries[0]);
-    assert_eq!(root.lookup_unique("file1.txt").unwrap(), entries[1]);
+        let lookup: Vec<_> = root.lookup(&name).collect();
+        assert_eq!(lookup.len(), 1);
+        assert_eq!(lookup[0].name(), entry.name());
+
+        let lookup_unique = root.lookup_unique(&name).unwrap();
+        assert_eq!(lookup_unique.name(), entry.name());
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -54,7 +59,7 @@ async fn conflict_independent_files() {
     let root1 = branches[1].open_or_create_root().await.unwrap();
     create_file(&root1, "file.txt", &[], &branches[1]).await;
 
-    let root = JointDirectory::new(branches[0].clone(), vec![root0, root1]);
+    let root = JointDirectory::new(Some(branches[0].clone()), vec![root0, root1]);
     let root = root.read().await;
 
     let files: Vec<_> = root.entries().map(|entry| entry.file().unwrap()).collect();
@@ -67,13 +72,13 @@ async fn conflict_independent_files() {
             .unwrap();
         assert_eq!(file.name(), "file.txt");
 
-        assert_eq!(
+        assert_matches!(
             root.lookup_unique(&versioned_file_name::create("file.txt", branch.id()))
                 .unwrap(),
-            JointEntryRef::File(JointFileRef {
-                file: *file,
-                needs_disambiguation: true
-            })
+            JointEntryRef::File(file_ref) => {
+                assert_eq!(file_ref.name(), file.name());
+                assert!(file_ref.needs_disambiguation);
+            }
         );
     }
 
@@ -117,7 +122,7 @@ async fn conflict_forked_files() {
     // Open branch 1's root dir which should have been created in the process.
     let root1 = branches[1].open_root().await.unwrap();
 
-    let root = JointDirectory::new(branches[1].clone(), vec![root0, root1]);
+    let root = JointDirectory::new(Some(branches[1].clone()), vec![root0, root1]);
     let root = root.read().await;
 
     let files: Vec<_> = root.entries().map(|entry| entry.file().unwrap()).collect();
@@ -140,20 +145,14 @@ async fn conflict_directories() {
     let branches = setup(2).await;
 
     let root0 = branches[0].open_or_create_root().await.unwrap();
-    let dir0 = root0
-        .create_directory("dir".to_owned(), &branches[0])
-        .await
-        .unwrap();
+    let dir0 = root0.create_directory("dir".to_owned()).await.unwrap();
     dir0.flush(None).await.unwrap();
 
     let root1 = branches[1].open_or_create_root().await.unwrap();
-    let dir1 = root1
-        .create_directory("dir".to_owned(), &branches[1])
-        .await
-        .unwrap();
+    let dir1 = root1.create_directory("dir".to_owned()).await.unwrap();
     dir1.flush(None).await.unwrap();
 
-    let root = JointDirectory::new(branches[0].clone(), vec![root0, root1]);
+    let root = JointDirectory::new(Some(branches[0].clone()), vec![root0, root1]);
     let root = root.read().await;
 
     let directories: Vec<_> = root
@@ -174,13 +173,10 @@ async fn conflict_file_and_directory() {
 
     let root1 = branches[1].open_or_create_root().await.unwrap();
 
-    let dir1 = root1
-        .create_directory("config".to_owned(), &branches[1])
-        .await
-        .unwrap();
+    let dir1 = root1.create_directory("config".to_owned()).await.unwrap();
     dir1.flush(None).await.unwrap();
 
-    let root = JointDirectory::new(branches[0].clone(), vec![root0, root1]);
+    let root = JointDirectory::new(Some(branches[0].clone()), vec![root0, root1]);
     let root = root.read().await;
 
     let entries: Vec<_> = root.entries().collect();
@@ -224,7 +220,7 @@ async fn conflict_identical_versions() {
     let root1 = branches[1].open_root().await.unwrap();
 
     // Create joint directory using branch 1 as the local branch.
-    let root = JointDirectory::new(branches[1].clone(), vec![root0, root1]);
+    let root = JointDirectory::new(Some(branches[1].clone()), vec![root0, root1]);
     let root = root.read().await;
 
     // The file appears among the entries only once...
@@ -261,20 +257,14 @@ async fn cd_into_concurrent_directory() {
 
     let root0 = branches[0].open_or_create_root().await.unwrap();
 
-    let dir0 = root0
-        .create_directory("pics".to_owned(), &branches[0])
-        .await
-        .unwrap();
+    let dir0 = root0.create_directory("pics".to_owned()).await.unwrap();
     create_file(&dir0, "dog.jpg", &[], &branches[0]).await;
 
     let root1 = branches[1].open_or_create_root().await.unwrap();
-    let dir1 = root1
-        .create_directory("pics".to_owned(), &branches[1])
-        .await
-        .unwrap();
+    let dir1 = root1.create_directory("pics".to_owned()).await.unwrap();
     create_file(&dir1, "cat.jpg", &[], &branches[1]).await;
 
-    let root = JointDirectory::new(branches[0].clone(), vec![root0, root1]);
+    let root = JointDirectory::new(Some(branches[0].clone()), vec![root0, root1]);
     let dir = root.cd("pics").await.unwrap();
     let dir = dir.read().await;
 
@@ -305,10 +295,13 @@ async fn merge_locally_non_existing_file() {
     let remote_root = branches[1].open_root().await.unwrap();
 
     // Construct a joint directory over both root dirs and merge it.
-    JointDirectory::new(branches[0].clone(), vec![local_root.clone(), remote_root])
-        .merge()
-        .await
-        .unwrap();
+    JointDirectory::new(
+        Some(branches[0].clone()),
+        vec![local_root.clone(), remote_root],
+    )
+    .merge()
+    .await
+    .unwrap();
 
     // Verify the file now exists in the local branch.
     let local_content = open_file(&local_root, "cat.jpg")
@@ -337,7 +330,7 @@ async fn merge_locally_older_file() {
     // Merge to transfer the file to the local branch
     let remote_root = branches[1].open_root().await.unwrap();
     let mut root = JointDirectory::new(
-        branches[0].clone(),
+        Some(branches[0].clone()),
         vec![local_root.clone(), remote_root.clone()],
     );
     root.merge().await.unwrap();
@@ -345,10 +338,13 @@ async fn merge_locally_older_file() {
     // Modify the file by the remote branch
     update_file(&remote_root, "cat.jpg", content_v1, &branches[1]).await;
 
-    JointDirectory::new(branches[0].clone(), vec![local_root.clone(), remote_root])
-        .merge()
-        .await
-        .unwrap();
+    JointDirectory::new(
+        Some(branches[0].clone()),
+        vec![local_root.clone(), remote_root],
+    )
+    .merge()
+    .await
+    .unwrap();
 
     let reader = local_root.read().await;
 
@@ -387,7 +383,7 @@ async fn merge_locally_newer_file() {
 
     let remote_root = branches[1].open_root().await.unwrap();
     let mut root = JointDirectory::new(
-        branches[0].clone(),
+        Some(branches[0].clone()),
         vec![local_root.clone(), remote_root.clone()],
     );
     root.merge().await.unwrap();
@@ -395,10 +391,13 @@ async fn merge_locally_newer_file() {
     // Modify the file by the local branch
     update_file(&local_root, "cat.jpg", content_v1, &branches[0]).await;
 
-    JointDirectory::new(branches[0].clone(), vec![local_root.clone(), remote_root])
-        .merge()
-        .await
-        .unwrap();
+    JointDirectory::new(
+        Some(branches[0].clone()),
+        vec![local_root.clone(), remote_root],
+    )
+    .merge()
+    .await
+    .unwrap();
 
     let reader = local_root.read().await;
 
@@ -433,7 +432,7 @@ async fn merge_concurrent_file() {
 
     let remote_root = branches[1].open_root().await.unwrap();
     let mut root = JointDirectory::new(
-        branches[0].clone(),
+        Some(branches[0].clone()),
         vec![local_root.clone(), remote_root.clone()],
     );
     root.merge().await.unwrap();
@@ -442,10 +441,13 @@ async fn merge_concurrent_file() {
     update_file(&local_root, "cat.jpg", b"v1", &branches[0]).await;
     update_file(&remote_root, "cat.jpg", b"v2", &branches[1]).await;
 
-    JointDirectory::new(branches[0].clone(), vec![local_root.clone(), remote_root])
-        .merge()
-        .await
-        .unwrap();
+    JointDirectory::new(
+        Some(branches[0].clone()),
+        vec![local_root.clone(), remote_root],
+    )
+    .merge()
+    .await
+    .unwrap();
 
     // The versions are concurrent, so both are present in the local branch.
     assert_eq!(
@@ -485,7 +487,7 @@ async fn local_merge_is_idempotent() {
     // Merge after a remote modification - this causes local modification.
     create_file(&remote_root, "cat.jpg", b"v0", &branches[1]).await;
     JointDirectory::new(
-        branches[0].clone(),
+        Some(branches[0].clone()),
         vec![local_root.clone(), remote_root.clone()],
     )
     .merge()
@@ -498,7 +500,7 @@ async fn local_merge_is_idempotent() {
     // Merge again. This time there is no local modification because there was no remote
     // modification either.
     JointDirectory::new(
-        branches[0].clone(),
+        Some(branches[0].clone()),
         vec![local_root.clone(), remote_root.clone()],
     )
     .merge()
@@ -512,7 +514,7 @@ async fn local_merge_is_idempotent() {
     // again.
     update_file(&remote_root, "cat.jpg", b"v1", &branches[1]).await;
     JointDirectory::new(
-        branches[0].clone(),
+        Some(branches[0].clone()),
         vec![local_root.clone(), remote_root.clone()],
     )
     .merge()
@@ -523,7 +525,7 @@ async fn local_merge_is_idempotent() {
     assert!(vv3 > vv2);
 
     // Another idempotent merge which causes no local modification.
-    JointDirectory::new(branches[0].clone(), vec![local_root, remote_root])
+    JointDirectory::new(Some(branches[0].clone()), vec![local_root, remote_root])
         .merge()
         .await
         .unwrap();
@@ -546,7 +548,7 @@ async fn remote_merge_is_idempotent() {
 
     // First merge remote into local
     JointDirectory::new(
-        branches[0].clone(),
+        Some(branches[0].clone()),
         vec![local_root.clone(), remote_root.clone()],
     )
     .merge()
@@ -556,7 +558,7 @@ async fn remote_merge_is_idempotent() {
     let vv0 = branches[0].data().root().await.versions.clone();
 
     // Then merge local back into remote. This has no effect.
-    JointDirectory::new(branches[1].clone(), vec![remote_root, local_root])
+    JointDirectory::new(Some(branches[1].clone()), vec![remote_root, local_root])
         .merge()
         .await
         .unwrap();
@@ -574,7 +576,7 @@ async fn merge_remote_only() {
     create_file(&remote_root, "cat.jpg", b"v0", &branches[1]).await;
 
     // When passing only the remote dir to the joint directory the merge still works.
-    JointDirectory::new(branches[0].clone(), iter::once(remote_root))
+    JointDirectory::new(Some(branches[0].clone()), iter::once(remote_root))
         .merge()
         .await
         .unwrap();
@@ -605,7 +607,7 @@ async fn merge_sequential_modifications() {
     let vv0 = read_version_vector(&local_root, "dog.jpg").await;
 
     JointDirectory::new(
-        branches[1].clone(),
+        Some(branches[1].clone()),
         vec![remote_root.clone(), local_root.clone()],
     )
     .merge()
@@ -620,10 +622,13 @@ async fn merge_sequential_modifications() {
     let vv2 = read_version_vector(&remote_root, "dog.jpg").await;
     assert!(vv2 > vv1);
 
-    JointDirectory::new(branches[0].clone(), vec![local_root.clone(), remote_root])
-        .merge()
-        .await
-        .unwrap();
+    JointDirectory::new(
+        Some(branches[0].clone()),
+        vec![local_root.clone(), remote_root],
+    )
+    .merge()
+    .await
+    .unwrap();
 
     let reader = local_root.read().await;
     let entry = reader
@@ -643,23 +648,20 @@ async fn merge_concurrent_directories() {
     let branches = setup(2).await;
 
     let local_root = branches[0].open_or_create_root().await.unwrap();
-    let local_dir = local_root
-        .create_directory("dir".into(), &branches[0])
-        .await
-        .unwrap();
+    let local_dir = local_root.create_directory("dir".into()).await.unwrap();
     create_file(&local_dir, "dog.jpg", &[], &branches[0]).await;
 
     let remote_root = branches[1].open_or_create_root().await.unwrap();
-    let remote_dir = remote_root
-        .create_directory("dir".into(), &branches[1])
-        .await
-        .unwrap();
+    let remote_dir = remote_root.create_directory("dir".into()).await.unwrap();
     create_file(&remote_dir, "cat.jpg", &[], &branches[1]).await;
 
-    JointDirectory::new(branches[0].clone(), vec![local_root.clone(), remote_root])
-        .merge()
-        .await
-        .unwrap();
+    JointDirectory::new(
+        Some(branches[0].clone()),
+        vec![local_root.clone(), remote_root],
+    )
+    .merge()
+    .await
+    .unwrap();
 
     let local_root = local_root.read().await;
 
@@ -713,7 +715,7 @@ async fn merge_missing_file() {
 
     // First attempt to merge fails because the file blob doesn't exist yet.
     match JointDirectory::new(
-        branches[0].clone(),
+        Some(branches[0].clone()),
         vec![local_root.clone(), remote_root.clone()],
     )
     .merge()
@@ -733,13 +735,16 @@ async fn merge_missing_file() {
         Err(Error::EntryNotFound)
     );
 
-    replace_dangling_file(&remote_root, "squirrel.jpg", &branches[1]).await;
+    replace_dangling_file(&remote_root, "squirrel.jpg").await;
 
     // Merge again. This time it succeeds.
-    JointDirectory::new(branches[0].clone(), vec![local_root.clone(), remote_root])
-        .merge()
-        .await
-        .unwrap();
+    JointDirectory::new(
+        Some(branches[0].clone()),
+        vec![local_root.clone(), remote_root],
+    )
+    .merge()
+    .await
+    .unwrap();
 
     assert_matches!(
         local_root
@@ -763,7 +768,7 @@ async fn merge_missing_subdirectory() {
 
     // First attempt to merge fails because the subdirectory blob doesn't exist yet.
     match JointDirectory::new(
-        branches[0].clone(),
+        Some(branches[0].clone()),
         vec![local_root.clone(), remote_root.clone()],
     )
     .merge()
@@ -783,13 +788,16 @@ async fn merge_missing_subdirectory() {
         Err(Error::EntryNotFound)
     );
 
-    replace_dangling_directory(&remote_root, "animals", &branches[1]).await;
+    replace_dangling_directory(&remote_root, "animals").await;
 
     // Merge again. This time it succeeds.
-    JointDirectory::new(branches[0].clone(), vec![local_root.clone(), remote_root])
-        .merge()
-        .await
-        .unwrap();
+    JointDirectory::new(
+        Some(branches[0].clone()),
+        vec![local_root.clone(), remote_root],
+    )
+    .merge()
+    .await
+    .unwrap();
 
     assert_matches!(
         local_root
@@ -806,14 +814,11 @@ async fn remove_non_empty_subdirectory() {
     let branches = setup(2).await;
 
     let local_root = branches[0].open_or_create_root().await.unwrap();
-    let local_dir = local_root
-        .create_directory("dir0".into(), &branches[0])
-        .await
-        .unwrap();
+    let local_dir = local_root.create_directory("dir0".into()).await.unwrap();
     create_file(&local_dir, "foo.txt", &[], &branches[0]).await;
 
     local_root
-        .create_directory("dir1".into(), &branches[0])
+        .create_directory("dir1".into())
         .await
         .unwrap()
         .flush(None)
@@ -821,21 +826,21 @@ async fn remove_non_empty_subdirectory() {
         .unwrap();
 
     let remote_root = branches[1].open_or_create_root().await.unwrap();
-    let remote_dir = remote_root
-        .create_directory("dir0".into(), &branches[1])
-        .await
-        .unwrap();
+    let remote_dir = remote_root.create_directory("dir0".into()).await.unwrap();
     create_file(&remote_dir, "bar.txt", &[], &branches[1]).await;
 
     remote_root
-        .create_directory("dir2".into(), &branches[1])
+        .create_directory("dir2".into())
         .await
         .unwrap()
         .flush(None)
         .await
         .unwrap();
 
-    let mut root = JointDirectory::new(branches[0].clone(), vec![local_root.clone(), remote_root]);
+    let mut root = JointDirectory::new(
+        Some(branches[0].clone()),
+        vec![local_root.clone(), remote_root],
+    );
     root.remove_entry_recursively("dir0").await.unwrap();
 
     let joint_reader = root.read().await;
@@ -868,12 +873,14 @@ async fn setup_with_rng(mut rng: StdRng, branch_count: usize) -> Vec<Branch> {
     let keys = AccessKeys::from(WriteSecrets::generate(&mut rng));
 
     future::join_all((0..branch_count).map(|_| {
-        let id = rng.gen();
+        let id = PublicKey::generate(&mut rng);
         let notify_tx = notify_tx.clone();
         let keys = keys.clone();
 
         async move {
-            let data = BranchData::new(pool, id, notify_tx).await.unwrap();
+            let data = BranchData::new(&mut pool.acquire().await.unwrap(), id, notify_tx)
+                .await
+                .unwrap();
             Branch::new(pool.clone(), Arc::new(data), keys)
         }
     }))
@@ -904,10 +911,7 @@ where
 }
 
 async fn create_file(parent: &Directory, name: &str, content: &[u8], local_branch: &Branch) {
-    let mut file = parent
-        .create_file(name.to_owned(), local_branch)
-        .await
-        .unwrap();
+    let mut file = parent.create_file(name.to_owned()).await.unwrap();
 
     if !content.is_empty() {
         file.write(content, local_branch).await.unwrap();
@@ -993,7 +997,7 @@ async fn create_dangling_entry(parent: &Directory, entry_type: EntryType, name: 
     writer.flush(None).await.unwrap();
 }
 
-async fn replace_dangling_file(parent: &Directory, name: &str, local_branch: &Branch) {
+async fn replace_dangling_file(parent: &Directory, name: &str) {
     let reader = parent.read().await;
     let old_blob_id = *reader
         .lookup_version(name, reader.branch().id())
@@ -1012,7 +1016,7 @@ async fn replace_dangling_file(parent: &Directory, name: &str, local_branch: &Br
     drop(reader);
 
     parent
-        .create_file(name.into(), local_branch)
+        .create_file(name.into())
         .await
         .unwrap()
         .flush()
@@ -1020,7 +1024,7 @@ async fn replace_dangling_file(parent: &Directory, name: &str, local_branch: &Br
         .unwrap();
 }
 
-async fn replace_dangling_directory(parent: &Directory, name: &str, local_branch: &Branch) {
+async fn replace_dangling_directory(parent: &Directory, name: &str) {
     let reader = parent.read().await;
     let old_blob_id = *reader
         .lookup_version(name, reader.branch().id())
@@ -1040,7 +1044,7 @@ async fn replace_dangling_directory(parent: &Directory, name: &str, local_branch
     drop(reader);
 
     parent
-        .create_directory(name.into(), local_branch)
+        .create_directory(name.into())
         .await
         .unwrap()
         .flush(None)

@@ -154,8 +154,8 @@ mod tests {
 
     #[test]
     fn eq() {
-        let id0 = rand::random();
-        let id1 = rand::random();
+        let id0 = PublicKey::random();
+        let id1 = PublicKey::random();
 
         assert_eq!(vv![], vv![]);
         assert_eq!(vv![id0 => 0], vv![id0 => 0]);
@@ -166,8 +166,8 @@ mod tests {
 
     #[test]
     fn cmp_equal() {
-        let id0 = rand::random();
-        let id1 = rand::random();
+        let id0 = PublicKey::random();
+        let id1 = PublicKey::random();
 
         assert_eq!(vv![].partial_cmp(&vv![]), Some(Ordering::Equal));
         assert_eq!(
@@ -190,8 +190,8 @@ mod tests {
 
     #[test]
     fn cmp_less() {
-        let id0 = rand::random();
-        let id1 = rand::random();
+        let id0 = PublicKey::random();
+        let id1 = PublicKey::random();
 
         assert_eq!(vv![].partial_cmp(&vv![id0 => 1]), Some(Ordering::Less));
 
@@ -218,8 +218,8 @@ mod tests {
 
     #[test]
     fn cmp_greater() {
-        let id0 = rand::random();
-        let id1 = rand::random();
+        let id0 = PublicKey::random();
+        let id1 = PublicKey::random();
 
         assert_eq!(vv![id0 => 1].partial_cmp(&vv![]), Some(Ordering::Greater));
 
@@ -248,8 +248,8 @@ mod tests {
 
     #[test]
     fn cmp_concurrent() {
-        let id0 = rand::random();
-        let id1 = rand::random();
+        let id0 = PublicKey::random();
+        let id1 = PublicKey::random();
 
         assert_eq!(
             vv![id0 => 0, id1 => 1].partial_cmp(&vv![id0 => 1, id1 => 0]),
@@ -261,7 +261,7 @@ mod tests {
 
     #[test]
     fn insert() {
-        let id = rand::random();
+        let id = PublicKey::random();
 
         let mut vv = vv![];
         assert_eq!(vv.get(&id), 0);
@@ -278,7 +278,7 @@ mod tests {
 
     #[test]
     fn increment_in_place() {
-        let id = rand::random();
+        let id = PublicKey::random();
 
         let mut vv = vv![];
         assert_eq!(vv.get(&id), 0);
@@ -289,8 +289,8 @@ mod tests {
 
     #[test]
     fn merge() {
-        let id0 = rand::random();
-        let id1 = rand::random();
+        let id0 = PublicKey::random();
+        let id1 = PublicKey::random();
 
         let mut vv = vv![];
         vv.merge(&vv![]);

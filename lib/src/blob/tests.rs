@@ -1,7 +1,8 @@
 use super::*;
-use crate::index::BranchData;
-use crate::{access_control::WriteSecrets, error::Error, test_utils};
-use crate::{block, repository};
+use crate::{
+    access_control::WriteSecrets, block, error::Error, index::BranchData, repository,
+    sign::PublicKey, test_utils,
+};
 use assert_matches::assert_matches;
 use proptest::collection::vec;
 use rand::{distributions::Standard, prelude::*};
@@ -234,8 +235,8 @@ async fn remove_blob() {
     blob.write(&content).await.unwrap();
     blob.flush().await.unwrap();
 
-    let locator0 = locator0.encode(&branch.keys().read);
-    let locator1 = locator1.encode(&branch.keys().read);
+    let locator0 = locator0.encode(branch.keys().read());
+    let locator1 = locator1.encode(branch.keys().read());
 
     let block_ids = {
         let mut tx = branch.db_pool().begin().await.unwrap();
@@ -280,8 +281,8 @@ async fn truncate_to_empty() {
     blob.write(&content).await.unwrap();
     blob.flush().await.unwrap();
 
-    let locator0 = locator0.encode(&branch.keys().read);
-    let locator1 = locator1.encode(&branch.keys().read);
+    let locator0 = locator0.encode(branch.keys().read());
+    let locator1 = locator1.encode(branch.keys().read());
 
     let (old_block_id0, old_block_id1) = {
         let mut tx = branch.db_pool().begin().await.unwrap();
@@ -350,7 +351,7 @@ async fn truncate_to_shorter() {
         assert_matches!(
             branch
                 .data()
-                .get(&mut tx, &locator.encode(&branch.keys().read))
+                .get(&mut tx, &locator.encode(branch.keys().read()))
                 .await,
             Err(Error::EntryNotFound)
         );
@@ -369,8 +370,8 @@ async fn modify_blob() {
     blob.write(&content).await.unwrap();
     blob.flush().await.unwrap();
 
-    let locator0 = locator0.encode(&branch.keys().read);
-    let locator1 = locator1.encode(&branch.keys().read);
+    let locator0 = locator0.encode(branch.keys().read());
+    let locator1 = locator1.encode(branch.keys().read());
 
     let (old_block_id0, old_block_id1) = {
         let mut tx = branch.db_pool().begin().await.unwrap();
@@ -464,9 +465,13 @@ async fn fork_case(
 
     let (notify_tx, _) = async_broadcast::broadcast(1);
     let dst_branch = Arc::new(
-        BranchData::new(src_branch.db_pool(), rng.gen(), notify_tx)
-            .await
-            .unwrap(),
+        BranchData::new(
+            &mut src_branch.db_pool().acquire().await.unwrap(),
+            PublicKey::random(),
+            notify_tx,
+        )
+        .await
+        .unwrap(),
     );
     let dst_branch = Branch::new(
         src_branch.db_pool().clone(),
@@ -529,7 +534,13 @@ async fn setup(rng_seed: u64) -> (StdRng, Branch) {
     let pool = repository::create_db(&db::Store::Memory).await.unwrap();
 
     let (notify_tx, _) = async_broadcast::broadcast(1);
-    let branch = BranchData::new(&pool, rng.gen(), notify_tx).await.unwrap();
+    let branch = BranchData::new(
+        &mut pool.acquire().await.unwrap(),
+        PublicKey::random(),
+        notify_tx,
+    )
+    .await
+    .unwrap();
     let branch = Branch::new(pool, Arc::new(branch), keys);
 
     (rng, branch)

@@ -1,9 +1,11 @@
-use super::{
-    operations::{self, Operations},
-    BlobNonce, Cursor, OpenBlock, BLOB_NONCE_SIZE,
-};
+use super::{operations, BlobNonce, Cursor, OpenBlock, BLOB_NONCE_SIZE};
 use crate::{
-    block::BlockId, branch::Branch, crypto::cipher::SecretKey, error::Result, locator::Locator,
+    block::{BlockId, BLOCK_SIZE},
+    branch::Branch,
+    crypto::cipher::SecretKey,
+    db,
+    error::Result,
+    locator::Locator,
     Error,
 };
 use std::{fmt, mem};
@@ -18,13 +20,12 @@ pub(crate) struct Core {
 
 impl Core {
     pub async fn open_first_block(&mut self) -> Result<OpenBlock> {
-        // No need to commit this as we are only reading here.
-        let mut tx = self.branch.db_pool().begin().await?;
+        let mut conn = self.branch.db_pool().acquire().await?;
 
         match operations::load_block(
-            &mut tx,
+            &mut conn,
             self.branch.data(),
-            &self.branch.keys().read,
+            self.branch.keys().read(),
             &self.head_locator,
         )
         .await
@@ -53,7 +54,7 @@ impl Core {
                 // have the original nonce.
 
                 let nonce: BlobNonce = rand::random();
-                self.blob_key = self.branch.keys().read.derive_subkey(&nonce);
+                self.blob_key = self.branch.keys().read().derive_subkey(&nonce);
 
                 Ok(OpenBlock::new_head(self.head_locator, &nonce))
             }
@@ -61,13 +62,20 @@ impl Core {
         }
     }
 
-    pub async fn first_block_id(branch: &Branch, head_locator: Locator) -> Result<BlockId> {
-        // NOTE: no need to commit this transaction because we are only reading here.
-        let mut tx = branch.db_pool().begin().await?;
-        branch
+    pub async fn first_block_id(&self) -> Result<BlockId> {
+        let mut conn = self.branch.db_pool().acquire().await?;
+
+        self.branch
             .data()
-            .get(&mut tx, &head_locator.encode(&branch.keys().read))
+            .get(
+                &mut conn,
+                &self.head_locator.encode(self.branch.keys().read()),
+            )
             .await
+    }
+
+    pub fn db_pool(&self) -> &db::Pool {
+        self.branch.db_pool()
     }
 
     /// Length of this blob in bytes.
@@ -75,12 +83,22 @@ impl Core {
         self.len
     }
 
-    pub fn operations<'a>(&'a mut self, current_block: &'a mut OpenBlock) -> Operations<'a> {
-        Operations::new(self, current_block)
-    }
-
     pub fn header_size(&self) -> usize {
         BLOB_NONCE_SIZE + mem::size_of_val(&self.len)
+    }
+
+    // Total number of blocks in this blob including the possibly partially filled final block.
+    pub fn block_count(&self) -> u32 {
+        // https://stackoverflow.com/questions/2745074/fast-ceiling-of-an-integer-division-in-c-c
+        (1 + (self.len + self.header_size() as u64 - 1) / BLOCK_SIZE as u64)
+            .try_into()
+            .unwrap_or(u32::MAX)
+    }
+
+    pub fn locators(&self) -> impl Iterator<Item = Locator> {
+        self.head_locator
+            .sequence()
+            .take(self.block_count() as usize)
     }
 }
 

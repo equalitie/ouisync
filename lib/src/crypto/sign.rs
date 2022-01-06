@@ -2,11 +2,7 @@ use crate::format;
 use core::hash::{Hash, Hasher};
 use ed25519_dalek as ext;
 use ed25519_dalek::Verifier;
-use rand::{
-    distributions::{Distribution, Standard},
-    rngs::OsRng,
-    Rng,
-};
+use rand::{rngs::OsRng, CryptoRng, Rng};
 use serde;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
@@ -28,11 +24,15 @@ pub struct Signature(ext::Signature);
 pub type SignatureError = ext::SignatureError;
 
 impl Keypair {
-    pub fn generate() -> Self {
-        let secret: SecretKey = OsRng.gen();
-        let public: PublicKey = (&secret).into();
+    pub fn generate<R: Rng + CryptoRng>(rng: &mut R) -> Self {
+        let secret = SecretKey::generate(rng);
+        let public = PublicKey::from(&secret);
 
         Self { secret, public }
+    }
+
+    pub fn random() -> Self {
+        Self::generate(&mut OsRng)
     }
 
     pub fn sign(&self, msg: &[u8]) -> Signature {
@@ -40,8 +40,26 @@ impl Keypair {
     }
 }
 
+impl From<SecretKey> for Keypair {
+    fn from(secret: SecretKey) -> Self {
+        let public = PublicKey::from(&secret);
+        Self { secret, public }
+    }
+}
+
 impl PublicKey {
     pub const SIZE: usize = ext::PUBLIC_KEY_LENGTH;
+
+    // // TODO: Temporarily enabling for non tests as well.
+    // //#[cfg(test)]
+    pub fn generate<R: Rng + CryptoRng>(rng: &mut R) -> Self {
+        (&SecretKey::generate(rng)).into()
+    }
+
+    #[cfg(test)]
+    pub fn random() -> Self {
+        Self::generate(&mut OsRng)
+    }
 
     pub fn verify(&self, msg: &[u8], signature: &Signature) -> bool {
         self.0.verify(msg, &signature.0).is_ok()
@@ -133,19 +151,31 @@ impl FromStr for PublicKey {
     }
 }
 
-// // TODO: Temporarily enabling for non tests as well.
-// //#[cfg(test)]
-impl Distribution<PublicKey> for Standard {
-    fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> PublicKey {
-        let secret: SecretKey = rng.gen();
-        (&secret).into()
-    }
-}
-
 derive_sqlx_traits_for_byte_array_wrapper!(PublicKey);
 
 impl SecretKey {
     pub const SIZE: usize = ext::SECRET_KEY_LENGTH;
+
+    pub fn generate<R: Rng + CryptoRng>(rng: &mut R) -> Self {
+        // TODO: Not using SecretKey::generate because `ed25519_dalek` uses an incompatible version
+        // of the `rand` dependency.
+        // https://stackoverflow.com/questions/65562447/the-trait-rand-corecryptorng-is-not-implemented-for-osrng
+        // https://github.com/dalek-cryptography/ed25519-dalek/issues/162
+
+        let mut bytes = [0u8; ext::SECRET_KEY_LENGTH];
+        rng.fill(&mut bytes[..]);
+
+        // The unwrap is ok because `bytes` has the correct length.
+        let sk = ext::SecretKey::from_bytes(&bytes).unwrap();
+
+        bytes.zeroize();
+
+        Self(sk)
+    }
+
+    pub fn random() -> Self {
+        Self::generate(&mut OsRng)
+    }
 
     pub fn sign(&self, msg: &[u8], public_key: &PublicKey) -> Signature {
         let expanded: ext::ExpandedSecretKey = (&self.0).into();
@@ -170,25 +200,6 @@ impl AsRef<[u8]> for SecretKey {
 impl fmt::Debug for SecretKey {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "SecretKey(****)")
-    }
-}
-
-impl Distribution<SecretKey> for Standard {
-    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> SecretKey {
-        // TODO: Not using SecretKey::generate because `ed25519_dalek` uses an incompatible version
-        // of the `rand` dependency.
-        // https://stackoverflow.com/questions/65562447/the-trait-rand-corecryptorng-is-not-implemented-for-osrng
-        // https://github.com/dalek-cryptography/ed25519-dalek/issues/162
-
-        let mut bytes = [0u8; ext::SECRET_KEY_LENGTH];
-        rng.fill(&mut bytes[..]);
-
-        // The unwrap is ok because `bytes` has the correct length.
-        let sk = ext::SecretKey::from_bytes(&bytes).unwrap();
-
-        bytes.zeroize();
-
-        SecretKey(sk)
     }
 }
 

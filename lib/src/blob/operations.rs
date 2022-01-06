@@ -2,22 +2,25 @@ use super::{Blob, BlobNonce, Buffer, Core, Cursor, OpenBlock, BLOB_NONCE_SIZE};
 use crate::{
     block::{self, BlockId, BLOCK_SIZE},
     branch::Branch,
-    crypto::cipher::{self, aead, AuthTag, Nonce, NONCE_SIZE},
+    crypto::{
+        cipher::{self, aead, AuthTag, Nonce, NONCE_SIZE},
+        sign,
+    },
     db,
     error::{Error, Result},
     index::BranchData,
     locator::Locator,
 };
 use std::{convert::TryInto, io::SeekFrom, sync::Arc};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, MutexGuard};
 
 pub(crate) struct Operations<'a> {
-    core: &'a mut Core,
+    core: MutexGuard<'a, Core>,
     current_block: &'a mut OpenBlock,
 }
 
 impl<'a> Operations<'a> {
-    pub fn new(core: &'a mut Core, current_block: &'a mut OpenBlock) -> Self {
+    pub fn new(core: MutexGuard<'a, Core>, current_block: &'a mut OpenBlock) -> Self {
         Self {
             core,
             current_block,
@@ -50,7 +53,7 @@ impl<'a> Operations<'a> {
             }
 
             let locator = self.current_block.locator.next();
-            if locator.number() >= self.block_count() {
+            if locator.number() >= self.core.block_count() {
                 break;
             }
 
@@ -59,12 +62,12 @@ impl<'a> Operations<'a> {
             // read could rollback the changes made in a previous iteration which would then be
             // lost. This is fine because there is going to be at most one dirty block within
             // a single `read` invocation anyway.
-            let mut tx = self.db_pool().begin().await?;
+            let mut tx = self.core.db_pool().begin().await?;
 
             let (id, content) = read_block(
                 &mut tx,
                 self.core.branch.data(),
-                &self.core.branch.keys().read,
+                self.core.branch.keys().read(),
                 &self.core.blob_key,
                 &locator,
             )
@@ -97,7 +100,7 @@ impl<'a> Operations<'a> {
 
     /// Writes `buffer` into this blob, advancing the blob's internal cursor.
     pub async fn write(&mut self, buffer: &[u8]) -> Result<()> {
-        let mut tx = self.db_pool().begin().await?;
+        let mut tx = self.core.db_pool().begin().await?;
         self.write_in_transaction(&mut tx, buffer).await?;
         tx.commit().await?;
         Ok(())
@@ -131,11 +134,11 @@ impl<'a> Operations<'a> {
             }
 
             let locator = self.current_block.locator.next();
-            let (id, content) = if locator.number() < self.block_count() {
+            let (id, content) = if locator.number() < self.core.block_count() {
                 read_block(
                     tx,
                     self.core.branch.data(),
-                    &self.core.branch.keys().read,
+                    self.core.branch.keys().read(),
                     &self.core.blob_key,
                     &locator,
                 )
@@ -157,7 +160,7 @@ impl<'a> Operations<'a> {
     ///
     /// Returns the new seek position from the start of the blob.
     pub async fn seek(&mut self, pos: SeekFrom) -> Result<u64> {
-        let mut tx = self.db_pool().begin().await?;
+        let mut tx = self.core.db_pool().begin().await?;
         let offset = self.seek_in_transaction(&mut tx, pos).await?;
         tx.commit().await?;
         Ok(offset)
@@ -189,7 +192,7 @@ impl<'a> Operations<'a> {
             }
         };
 
-        let actual_offset = offset + self.header_size() as u64;
+        let actual_offset = offset + self.core.header_size() as u64;
         let block_number = (actual_offset / BLOCK_SIZE as u64) as u32;
         let block_offset = (actual_offset % BLOCK_SIZE as u64) as usize;
 
@@ -199,7 +202,7 @@ impl<'a> Operations<'a> {
             let (id, content) = read_block(
                 tx,
                 self.core.branch.data(),
-                &self.core.branch.keys().read,
+                self.core.branch.keys().read(),
                 &self.core.blob_key,
                 &locator,
             )
@@ -214,7 +217,7 @@ impl<'a> Operations<'a> {
 
     /// Truncate the blob to the given length.
     pub async fn truncate(&mut self, len: u64) -> Result<()> {
-        let mut tx = self.db_pool().begin().await?;
+        let mut tx = self.core.db_pool().begin().await?;
         self.truncate_in_transaction(&mut tx, len).await?;
         tx.commit().await?;
         Ok(())
@@ -237,12 +240,12 @@ impl<'a> Operations<'a> {
             return Err(Error::OperationNotSupported);
         }
 
-        let old_block_count = self.block_count();
+        let old_block_count = self.core.block_count();
 
         self.core.len = len;
         self.core.len_dirty = true;
 
-        let new_block_count = self.block_count();
+        let new_block_count = self.core.block_count();
 
         if self.seek_position() > self.core.len {
             self.seek_in_transaction(tx, SeekFrom::End(0)).await?;
@@ -276,19 +279,19 @@ impl<'a> Operations<'a> {
 
     /// Removes this blob.
     pub async fn remove(&mut self) -> Result<()> {
-        let mut tx = self.db_pool().begin().await?;
+        let mut tx = self.core.db_pool().begin().await?;
         self.remove_blocks(
             &mut tx,
             self.core
                 .head_locator
                 .sequence()
-                .take(self.block_count() as usize),
+                .take(self.core.block_count() as usize),
         )
         .await?;
         tx.commit().await?;
 
         let nonce: BlobNonce = rand::random();
-        let blob_key = self.core.branch.keys().read.derive_subkey(&nonce);
+        let blob_key = self.core.branch.keys().read().derive_subkey(&nonce);
 
         *self.current_block = OpenBlock::new_head(self.core.head_locator, &nonce);
         self.core.blob_key = blob_key;
@@ -306,11 +309,14 @@ impl<'a> Operations<'a> {
             self.core.branch.id() != dst_branch.id() || self.core.head_locator != dst_head_locator
         );
 
-        let mut tx = self.db_pool().begin().await?;
+        let mut tx = self.core.db_pool().begin().await?;
 
-        for (src_locator, dst_locator) in self.locators().zip(dst_head_locator.sequence()) {
-            let encoded_src_locator = src_locator.encode(&self.core.branch.keys().read);
-            let encoded_dst_locator = dst_locator.encode(&self.core.branch.keys().read);
+        let read_key = self.core.branch.keys().read();
+        let write_keys = dst_branch.keys().write().ok_or(Error::PermissionDenied)?;
+
+        for (src_locator, dst_locator) in self.core.locators().zip(dst_head_locator.sequence()) {
+            let encoded_src_locator = src_locator.encode(read_key);
+            let encoded_dst_locator = dst_locator.encode(read_key);
 
             let block_id = self
                 .core
@@ -321,7 +327,7 @@ impl<'a> Operations<'a> {
 
             dst_branch
                 .data()
-                .insert(&mut tx, &block_id, &encoded_dst_locator)
+                .insert(&mut tx, &block_id, &encoded_dst_locator, write_keys)
                 .await?;
         }
 
@@ -350,17 +356,6 @@ impl<'a> Operations<'a> {
         ))
     }
 
-    pub fn db_pool(&self) -> &db::Pool {
-        self.core.branch.db_pool()
-    }
-
-    pub fn locators(&self) -> impl Iterator<Item = Locator> {
-        self.core
-            .head_locator
-            .sequence()
-            .take(self.block_count() as usize)
-    }
-
     async fn replace_current_block(
         &mut self,
         tx: &mut db::Transaction<'_>,
@@ -375,7 +370,7 @@ impl<'a> Operations<'a> {
 
         if locator.number() == 0 {
             // If head block, skip over the header.
-            content.pos = self.header_size();
+            content.pos = self.core.header_size();
         }
 
         *self.current_block = OpenBlock {
@@ -394,12 +389,21 @@ impl<'a> Operations<'a> {
             return Ok(());
         }
 
+        let read_key = self.core.branch.keys().read();
+        let write_keys = self
+            .core
+            .branch
+            .keys()
+            .write()
+            .ok_or(Error::PermissionDenied)?;
+
         self.current_block.id = rand::random();
 
         write_block(
             tx,
             self.core.branch.data(),
-            &self.core.branch.keys().read,
+            read_key,
+            write_keys,
             &self.core.blob_key,
             &self.current_block.locator,
             &self.current_block.id,
@@ -418,6 +422,14 @@ impl<'a> Operations<'a> {
             return Ok(());
         }
 
+        let read_key = self.core.branch.keys().read();
+        let write_keys = self
+            .core
+            .branch
+            .keys()
+            .write()
+            .ok_or(Error::PermissionDenied)?;
+
         if self.current_block.locator.number() == 0 {
             let old_pos = self.current_block.content.pos;
             self.current_block.content.pos = BLOB_NONCE_SIZE;
@@ -429,7 +441,7 @@ impl<'a> Operations<'a> {
             let (_, buffer) = read_block(
                 tx,
                 self.core.branch.data(),
-                &self.core.branch.keys().read,
+                self.core.branch.keys().read(),
                 &self.core.blob_key,
                 &locator,
             )
@@ -442,7 +454,8 @@ impl<'a> Operations<'a> {
             write_block(
                 tx,
                 self.core.branch.data(),
-                &self.core.branch.keys().read,
+                read_key,
+                write_keys,
                 &self.core.blob_key,
                 &locator,
                 &rand::random(),
@@ -460,34 +473,30 @@ impl<'a> Operations<'a> {
     where
         T: IntoIterator<Item = Locator>,
     {
+        let read_key = self.core.branch.keys().read();
+        let write_keys = self
+            .core
+            .branch
+            .keys()
+            .write()
+            .ok_or(Error::PermissionDenied)?;
+
         for locator in locators {
             self.core
                 .branch
                 .data()
-                .remove(tx, &locator.encode(&self.core.branch.keys().read))
+                .remove(tx, &locator.encode(read_key), write_keys)
                 .await?;
         }
 
         Ok(())
     }
 
-    // Total number of blocks in this blob including the possibly partially filled final block.
-    fn block_count(&self) -> u32 {
-        // https://stackoverflow.com/questions/2745074/fast-ceiling-of-an-integer-division-in-c-c
-        (1 + (self.core.len + self.header_size() as u64 - 1) / BLOCK_SIZE as u64)
-            .try_into()
-            .unwrap_or(u32::MAX)
-    }
-
     // Returns the current seek position from the start of the blob.
     pub fn seek_position(&mut self) -> u64 {
         self.current_block.locator.number() as u64 * BLOCK_SIZE as u64
             + self.current_block.content.pos as u64
-            - self.header_size() as u64
-    }
-
-    fn header_size(&self) -> usize {
-        self.core.header_size()
+            - self.core.header_size() as u64
     }
 
     fn locator_at(&self, number: u32) -> Locator {
@@ -522,22 +531,24 @@ async fn read_block(
 }
 
 pub(super) async fn load_block(
-    tx: &mut db::Transaction<'_>,
+    conn: &mut db::Connection,
     branch: &BranchData,
     read_key: &cipher::SecretKey,
     locator: &Locator,
 ) -> Result<(BlockId, Buffer, AuthTag)> {
-    let id = branch.get(tx, &locator.encode(read_key)).await?;
+    let id = branch.get(conn, &locator.encode(read_key)).await?;
     let mut content = Buffer::new();
-    let auth_tag = block::read(tx, &id, &mut content).await?;
+    let auth_tag = block::read(conn, &id, &mut content).await?;
 
     Ok((id, content, auth_tag))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn write_block(
     tx: &mut db::Transaction<'_>,
     branch: &BranchData,
-    repo_key: &cipher::SecretKey,
+    repo_read_key: &cipher::SecretKey,
+    repo_write_keys: &sign::Keypair,
     blob_key: &cipher::SecretKey,
     locator: &Locator,
     block_id: &BlockId,
@@ -553,7 +564,12 @@ async fn write_block(
 
     block::write(tx, block_id, &buffer, &auth_tag).await?;
     branch
-        .insert(tx, block_id, &locator.encode(repo_key))
+        .insert(
+            tx,
+            block_id,
+            &locator.encode(repo_read_key),
+            repo_write_keys,
+        )
         .await?;
 
     Ok(())

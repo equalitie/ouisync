@@ -119,7 +119,7 @@ mod tests {
 
     #[test]
     fn encode_and_decode_blind() {
-        let token_id: RepositoryId = rand::random();
+        let token_id = RepositoryId::random();
         let token = ShareToken::from(AccessSecrets::Blind { id: token_id });
 
         let encoded = token.to_string();
@@ -133,7 +133,7 @@ mod tests {
 
     #[test]
     fn encode_and_decode_blind_with_name() {
-        let token_id: RepositoryId = rand::random();
+        let token_id = RepositoryId::random();
         let token = ShareToken::from(AccessSecrets::Blind { id: token_id }).with_name("foo");
 
         let encoded = token.to_string();
@@ -145,7 +145,7 @@ mod tests {
 
     #[test]
     fn encode_and_decode_reader() {
-        let token_id: RepositoryId = rand::random();
+        let token_id = RepositoryId::random();
         let token_read_key = cipher::SecretKey::random();
         let token = ShareToken::from(AccessSecrets::Read {
             id: token_id,
@@ -165,10 +165,11 @@ mod tests {
 
     #[test]
     fn encode_and_decode_writer() {
-        let token_write_key: sign::SecretKey = rand::random();
-        let token_id = RepositoryId::from(sign::PublicKey::from(&token_write_key));
+        let token_write_keys = sign::Keypair::random();
+        let token_id = RepositoryId::from(token_write_keys.public);
 
-        let token = ShareToken::from(AccessSecrets::Write(token_write_key.into())).with_name("foo");
+        let token =
+            ShareToken::from(AccessSecrets::Write(token_write_keys.into())).with_name("foo");
 
         let encoded = token.to_string();
         let decoded: ShareToken = encoded.parse().unwrap();

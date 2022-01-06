@@ -31,7 +31,7 @@ pub fn parse(name: &str) -> (&str, Option<[u8; SUFFIX_LEN / 2]>) {
 mod tests {
     use super::*;
     use crate::test_utils;
-    use rand::{rngs::StdRng, Rng, SeedableRng};
+    use rand::{rngs::StdRng, SeedableRng};
     use test_strategy::proptest;
 
     #[test]
@@ -53,7 +53,7 @@ mod tests {
     ) {
         let mut rng = StdRng::seed_from_u64(rng_seed);
 
-        let branch_id: PublicKey = rng.gen();
+        let branch_id = PublicKey::generate(&mut rng);
         let versioned_name = create(&base_name, &branch_id);
 
         let (parsed_base_name, branch_id_prefix) = parse(&versioned_name);

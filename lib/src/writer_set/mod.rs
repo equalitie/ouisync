@@ -21,7 +21,7 @@ pub struct WriterSet {
 
 impl WriterSet {
     pub fn generate() -> (Self, Keypair) {
-        let origin = Keypair::generate();
+        let origin = Keypair::random();
         let nonce = rand::random();
 
         let entry = Entry::new(&origin.public, &origin, nonce);
@@ -222,10 +222,10 @@ mod tests {
 
         assert!(ws.is_writer(&alice.public));
 
-        let bob = Keypair::generate();
+        let bob = Keypair::random();
         let bob_nonce = rand::random();
 
-        let carol = Keypair::generate();
+        let carol = Keypair::random();
         let carol_nonce = rand::random();
 
         assert!(!ws.is_writer(&bob.public));
@@ -239,10 +239,10 @@ mod tests {
         let (mut ws1, alice) = WriterSet::generate();
         let mut ws2 = ws1.clone();
 
-        let bob = Keypair::generate();
+        let bob = Keypair::random();
         let bob_nonce = rand::random();
 
-        let carol = Keypair::generate();
+        let carol = Keypair::random();
         let carol_nonce = rand::random();
 
         ws1.add_writer(&bob.public, &alice, bob_nonce);
@@ -268,10 +268,10 @@ mod tests {
         let (mut ws1, alice) = WriterSet::generate();
         let (mut ws2, mallory) = WriterSet::generate();
 
-        let bob = Keypair::generate();
+        let bob = Keypair::random();
         let bob_nonce = rand::random();
 
-        let carol = Keypair::generate();
+        let carol = Keypair::random();
         let carol_nonce = rand::random();
 
         ws1.add_writer(&bob.public, &alice, bob_nonce);

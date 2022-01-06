@@ -125,7 +125,7 @@ impl<'a> EntryRef<'a> {
     }
 }
 
-#[derive(Copy, Clone, Eq, PartialEq)]
+#[derive(Copy, Clone)]
 pub struct FileRef<'a> {
     entry_data: &'a EntryFileData,
     inner: RefInner<'a>,
@@ -157,12 +157,7 @@ impl<'a> FileRef<'a> {
         let blob_core = &mut *guard;
 
         if let Some(blob_core) = blob_core.upgrade() {
-            File::reopen(
-                blob_core,
-                self.inner.parent_outer.db_pool().clone(),
-                self.inner.parent_context(),
-            )
-            .await
+            File::reopen(blob_core, self.inner.parent_context()).await
         } else {
             let file = File::open(
                 self.inner.parent_inner.blob.branch().clone(),
@@ -201,7 +196,7 @@ impl fmt::Debug for FileRef<'_> {
     }
 }
 
-#[derive(Copy, Clone, Eq, PartialEq)]
+#[derive(Copy, Clone)]
 pub struct DirectoryRef<'a> {
     entry_data: &'a EntryDirectoryData,
     inner: RefInner<'a>,
@@ -253,7 +248,7 @@ impl fmt::Debug for DirectoryRef<'_> {
     }
 }
 
-#[derive(Copy, Clone, Eq, PartialEq)]
+#[derive(Copy, Clone)]
 pub struct TombstoneRef<'a> {
     entry_data: &'a EntryTombstoneData,
     inner: RefInner<'a>,

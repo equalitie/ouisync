@@ -22,7 +22,7 @@ use crate::{
     error::Result,
 };
 use futures_util::{future, TryStreamExt};
-use sqlx::Sqlite;
+use sqlx::Acquire;
 
 /// Get the bucket for `locator` at the specified `inner_layer`.
 pub(super) fn get_bucket(locator: &Hash, inner_layer: usize) -> u8 {
@@ -32,15 +32,12 @@ pub(super) fn get_bucket(locator: &Hash, inner_layer: usize) -> u8 {
 /// Update summary of the nodes with the specified hash and layer and all their ancestor nodes.
 /// Returns a map `PublicKey -> SummaryUpdateStatus` indicating which branches were affected
 /// and whether they became complete by this update.
-pub(super) async fn update_summaries<'a, T>(
-    db: T,
+pub(super) async fn update_summaries(
+    conn: &mut db::Connection,
     hash: Hash,
     layer: usize,
-) -> Result<Vec<(PublicKey, SummaryUpdateStatus)>>
-where
-    T: sqlx::Acquire<'a, Database = Sqlite>,
-{
-    let mut tx = db.begin().await?;
+) -> Result<Vec<(PublicKey, SummaryUpdateStatus)>> {
+    let mut tx = conn.begin().await?;
     let statuses = update_summaries_in_transaction(&mut tx, vec![(hash, layer)]).await?;
     tx.commit().await?;
 
@@ -50,27 +47,33 @@ where
 /// Receive a block from other replica. This marks the block as not missing by the local replica.
 /// Returns the replica ids whose branches reference the received block (if any).
 pub(crate) async fn receive_block(
-    tx: &mut db::Transaction<'_>,
+    conn: &mut db::Connection,
     id: &BlockId,
 ) -> Result<Vec<PublicKey>> {
-    if !LeafNode::set_present(tx, id).await? {
+    let mut tx = conn.begin().await?;
+
+    if !LeafNode::set_present(&mut tx, id).await? {
         return Ok(Vec::new());
     }
 
-    let nodes = LeafNode::load_parent_hashes(tx, id)
+    let nodes = LeafNode::load_parent_hashes(&mut tx, id)
         .map_ok(|hash| (hash, INNER_LAYER_COUNT))
         .try_collect()
         .await?;
 
-    Ok(update_summaries_in_transaction(tx, nodes)
+    let ids = update_summaries_in_transaction(&mut tx, nodes)
         .await?
         .into_iter()
         .map(|(writer_id, _)| writer_id)
-        .collect())
+        .collect();
+
+    tx.commit().await?;
+
+    Ok(ids)
 }
 
 async fn update_summaries_in_transaction(
-    tx: &mut sqlx::Transaction<'_, Sqlite>,
+    tx: &mut db::Transaction<'_>,
     mut nodes: Vec<(Hash, usize)>,
 ) -> Result<Vec<(PublicKey, SummaryUpdateStatus)>> {
     let mut statuses = Vec::new();

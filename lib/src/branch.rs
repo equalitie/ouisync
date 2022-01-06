@@ -50,9 +50,7 @@ impl Branch {
     }
 
     pub(crate) async fn open_root(&self) -> Result<Directory> {
-        self.root_directory
-            .open(self.clone(), self.pool.clone())
-            .await
+        self.root_directory.open(self.clone()).await
     }
 
     pub(crate) async fn open_or_create_root(&self) -> Result<Directory> {
@@ -79,7 +77,7 @@ impl Branch {
                     let next = if let Some(next) = next {
                         next
                     } else {
-                        curr.create_directory(name.to_string(), self).await?
+                        curr.create_directory(name.to_string()).await?
                     };
 
                     curr = next;
@@ -96,7 +94,7 @@ impl Branch {
     pub(crate) async fn ensure_file_exists(&self, path: &Utf8Path) -> Result<File> {
         let (parent, name) = path::decompose(path).ok_or(Error::EntryIsDirectory)?;
         let dir = self.ensure_directory_exists(parent).await?;
-        dir.create_file(name.to_string(), self).await
+        dir.create_file(name.to_string()).await
     }
 
     pub async fn root_block_id(&self) -> Result<BlockId> {
@@ -107,6 +105,16 @@ impl Branch {
     pub async fn debug_print(&self, print: DebugPrinter) {
         if let Ok(root) = self.open_root().await {
             root.debug_print(print).await;
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn reopen(self, keys: AccessKeys) -> Self {
+        Self {
+            pool: self.pool,
+            branch_data: self.branch_data,
+            keys,
+            root_directory: self.root_directory,
         }
     }
 }
@@ -145,7 +153,7 @@ mod tests {
     async fn setup() -> Branch {
         let pool = repository::create_db(&db::Store::Memory).await.unwrap();
 
-        let writer_id = rand::random();
+        let writer_id = PublicKey::random();
         let secrets = WriteSecrets::random();
         let repository_id = secrets.id;
         let keys = secrets.into();

@@ -21,15 +21,6 @@ pub type Connection = SqliteConnection;
 /// Database transaction
 pub type Transaction<'a> = sqlx::Transaction<'a, Sqlite>;
 
-/// This trait allows to write functions that work with any of `Pool`, `Connection` or
-/// `Transaction`. It's an alias for `sqlx::Executor<Database = Sqlite>` for convenience.
-pub trait Executor<'a>: sqlx::Executor<'a, Database = Sqlite> {}
-impl<'a, T> Executor<'a> for T where T: sqlx::Executor<'a, Database = Sqlite> {}
-
-/// Alias for `sqlx::Acquire<Database = Sqlite>` for convenience.
-pub trait Acquire<'a>: sqlx::Acquire<'a, Database = Sqlite> {}
-impl<'a, T> Acquire<'a> for T where T: sqlx::Acquire<'a, Database = Sqlite> {}
-
 // URI of a memory-only db.
 const MEMORY: &str = ":memory:";
 
@@ -133,9 +124,6 @@ pub(crate) async fn open_or_create(store: &Store) -> Result<Pool> {
 }
 
 async fn create_pool(options: SqliteConnectOptions) -> Result<Pool> {
-    // HACK: workaround for https://github.com/launchbadge/sqlx/issues/1467
-    let options = options.serialized(true);
-
     PoolOptions::new()
         // HACK: Using only one connection turns the pool effectively into a mutex over a single
         // connection. This is a heavy-handed fix that prevents the "table is locked" errors that

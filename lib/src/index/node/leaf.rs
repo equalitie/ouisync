@@ -8,7 +8,7 @@ use crate::{
 use futures_util::{Stream, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_256};
-use sqlx::Row;
+use sqlx::{Acquire, Row};
 use std::{iter::FromIterator, mem, slice, vec};
 
 #[derive(Clone, Copy, Eq, PartialEq, Debug, Serialize, Deserialize)]
@@ -46,7 +46,7 @@ impl LeafNode {
     }
 
     /// Saves the node to the db unless it already exists.
-    pub async fn save(&self, tx: &mut db::Transaction<'_>, parent: &Hash) -> Result<()> {
+    pub async fn save(&self, conn: &mut db::Connection, parent: &Hash) -> Result<()> {
         sqlx::query(
             "INSERT INTO snapshot_leaf_nodes (parent, locator, block_id, is_missing)
              VALUES (?, ?, ?, ?)
@@ -56,13 +56,13 @@ impl LeafNode {
         .bind(&self.locator)
         .bind(&self.block_id)
         .bind(&self.is_missing)
-        .execute(tx)
+        .execute(conn)
         .await?;
 
         Ok(())
     }
 
-    pub async fn load_children(db: impl db::Executor<'_>, parent: &Hash) -> Result<LeafNodeSet> {
+    pub async fn load_children(conn: &mut db::Connection, parent: &Hash) -> Result<LeafNodeSet> {
         Ok(sqlx::query(
             "SELECT locator, block_id, is_missing
              FROM snapshot_leaf_nodes
@@ -74,7 +74,7 @@ impl LeafNode {
             block_id: row.get(1),
             is_missing: row.get(2),
         })
-        .fetch_all(db)
+        .fetch_all(conn)
         .await?
         .into_iter()
         .collect())
@@ -82,23 +82,23 @@ impl LeafNode {
 
     /// Loads all parent hashes of nodes with the specified block id.
     pub fn load_parent_hashes<'a>(
-        tx: &'a mut db::Transaction<'_>,
+        conn: &'a mut db::Connection,
         block_id: &'a BlockId,
     ) -> impl Stream<Item = Result<Hash>> + 'a {
         sqlx::query("SELECT parent FROM snapshot_leaf_nodes WHERE block_id = ?")
             .bind(block_id)
             .map(|row| row.get(0))
-            .fetch(tx)
+            .fetch(conn)
             .err_into()
     }
 
     /// Marks all leaf nodes that point to the specified block as present (not missing). Returns
     /// whether at least one node was modified.
-    pub async fn set_present(tx: &mut db::Transaction<'_>, block_id: &BlockId) -> Result<bool> {
+    pub async fn set_present(conn: &mut db::Connection, block_id: &BlockId) -> Result<bool> {
         // Check whether there is at least one node that references the given block.
         if sqlx::query("SELECT 1 FROM snapshot_leaf_nodes WHERE block_id = ? LIMIT 1")
             .bind(block_id)
-            .fetch_optional(&mut *tx)
+            .fetch_optional(&mut *conn)
             .await?
             .is_none()
         {
@@ -110,7 +110,7 @@ impl LeafNode {
             "UPDATE snapshot_leaf_nodes SET is_missing = 0 WHERE block_id = ? AND is_missing = 1",
         )
         .bind(block_id)
-        .execute(tx)
+        .execute(conn)
         .await?;
 
         Ok(result.rows_affected() > 0)
@@ -178,8 +178,8 @@ impl LeafNodeSet {
         Some(self.0.remove(index))
     }
 
-    pub async fn save(&self, pool: &db::Pool, parent: &Hash) -> Result<()> {
-        let mut tx = pool.begin().await?;
+    pub async fn save(&self, conn: &mut db::Connection, parent: &Hash) -> Result<()> {
+        let mut tx = conn.begin().await?;
         for node in self {
             node.save(&mut tx, parent).await?;
         }

@@ -1,12 +1,19 @@
 mod id;
+mod merger;
+#[cfg(test)]
+mod tests;
 
 pub use self::id::RepositoryId;
 
+use self::merger::Merger;
 use crate::{
-    access_control::{AccessSecrets, MasterSecret},
+    access_control::{AccessMode, AccessSecrets, MasterSecret},
     block,
     branch::Branch,
-    crypto::sign::{self, PublicKey},
+    crypto::{
+        cipher,
+        sign::{self, PublicKey},
+    },
     db,
     debug_printer::DebugPrinter,
     directory::{Directory, EntryType},
@@ -20,15 +27,12 @@ use crate::{
     store,
 };
 use camino::Utf8Path;
-use futures_util::{future, stream::FuturesUnordered, StreamExt};
-use log::Level;
-use rand::{rngs::OsRng, Rng};
+use futures_util::future;
 use std::{
     collections::{hash_map::Entry, HashMap},
-    iter,
     sync::Arc,
 };
-use tokio::{select, sync::Mutex};
+use tokio::sync::Mutex;
 
 pub struct Repository {
     shared: Arc<Shared>,
@@ -39,21 +43,35 @@ impl Repository {
     /// Creates a new repository.
     pub async fn create(
         store: &db::Store,
-        _this_replica_id: ReplicaId,
+        this_replica_id: ReplicaId,
         master_secret: MasterSecret,
         access_secrets: AccessSecrets,
         enable_merger: bool,
     ) -> Result<Self> {
-        let pool = create_db(store).await?;
+        let pool = db::open_or_create(store).await?;
+        Self::create_in(
+            pool,
+            this_replica_id,
+            master_secret,
+            access_secrets,
+            enable_merger,
+        )
+        .await
+    }
+
+    /// Creates a new repository in an already opened database.
+    pub(crate) async fn create_in(
+        pool: db::Pool,
+        this_replica_id: ReplicaId,
+        master_secret: MasterSecret,
+        access_secrets: AccessSecrets,
+        enable_merger: bool,
+    ) -> Result<Self> {
         let mut tx = pool.begin().await?;
+        init_db(&mut tx).await?;
 
         let master_key = metadata::secret_to_key(master_secret, &mut tx).await?;
-
-        // TODO: we should be storing the SK in the db, not the PK.
-        let this_writer_id: sign::SecretKey = OsRng.gen();
-        let this_writer_id = PublicKey::from(&this_writer_id);
-        metadata::set_writer_id(&this_writer_id, &master_key, &mut tx).await?;
-
+        let this_writer_id = generate_writer_id(&this_replica_id, &master_key, &mut tx).await?;
         metadata::set_access_secrets(&access_secrets, &master_key, &mut tx).await?;
 
         tx.commit().await?;
@@ -75,27 +93,66 @@ impl Repository {
     ///                     the repository will be opened as a blind replica.
     pub async fn open(
         store: &db::Store,
-        _this_replica_id: ReplicaId,
+        this_replica_id: ReplicaId,
         master_secret: Option<MasterSecret>,
         enable_merger: bool,
     ) -> Result<Self> {
         let pool = db::open(store).await?;
+        Self::open_in(
+            pool,
+            this_replica_id,
+            master_secret,
+            AccessMode::Write,
+            enable_merger,
+        )
+        .await
+    }
+
+    /// Opens an existing repository in an already opened database.
+    pub(crate) async fn open_in(
+        pool: db::Pool,
+        this_replica_id: ReplicaId,
+        master_secret: Option<MasterSecret>,
+        // Allows to reduce the access mode (e.g. open in read-only mode even if the master secret
+        // would give us write access otherwise). Currently used only in tests.
+        max_access_mode: AccessMode,
+        enable_merger: bool,
+    ) -> Result<Self> {
+        let mut conn = pool.acquire().await?;
 
         let master_key = if let Some(master_secret) = master_secret {
-            Some(metadata::secret_to_key(master_secret, &pool).await?)
+            Some(metadata::secret_to_key(master_secret, &mut conn).await?)
         } else {
             None
         };
 
-        let this_writer_id = metadata::get_writer_id(master_key.as_ref(), &pool).await?;
-
-        let access_secrets = if let Some(master_key) = master_key {
-            metadata::get_access_secrets(&master_key, &pool).await?
+        let access_secrets = if let Some(master_key) = &master_key {
+            metadata::get_access_secrets(master_key, &mut conn).await?
         } else {
-            let id = metadata::get_repository_id(&pool).await?;
+            let id = metadata::get_repository_id(&mut conn).await?;
             AccessSecrets::Blind { id }
         };
 
+        // If we are writer, load the writer id from the db, otherwise use a dummy random one.
+        let this_writer_id = if access_secrets.can_write() {
+            // This unwrap is ok because the fact that we have write access means the access
+            // secrets must have been successfully decrypted and thus we must have a valid
+            // master secret.
+            let master_key = master_key.as_ref().unwrap();
+
+            if metadata::check_replica_id(&this_replica_id, &mut conn).await? {
+                metadata::get_writer_id(master_key, &mut conn).await?
+            } else {
+                // Replica id changed. Must generate new writer id.
+                generate_writer_id(&this_replica_id, master_key, &mut conn).await?
+            }
+        } else {
+            PublicKey::from(&sign::SecretKey::random())
+        };
+
+        drop(conn);
+
+        let access_secrets = access_secrets.with_mode(max_access_mode);
         let index = Index::load(pool, *access_secrets.id()).await?;
 
         Self::new(index, this_writer_id, access_secrets, enable_merger).await
@@ -207,6 +264,9 @@ impl Repository {
     pub async fn remove_entry<P: AsRef<Utf8Path>>(&self, path: P) -> Result<()> {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::OperationNotSupported)?;
         let mut parent = self.open_directory(parent).await?;
+
+        // TODO: fork the parent dir
+
         parent.remove_entry(name).await?;
         parent.flush().await
     }
@@ -215,6 +275,9 @@ impl Repository {
     pub async fn remove_entry_recursively<P: AsRef<Utf8Path>>(&self, path: P) -> Result<()> {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::OperationNotSupported)?;
         let mut parent = self.open_directory(parent).await?;
+
+        // TODO: fork the parent dir
+
         parent.remove_entry_recursively(name).await?;
         parent.flush().await
     }
@@ -229,9 +292,9 @@ impl Repository {
         dst_dir_path: D,
         dst_name: &str,
     ) -> Result<()> {
-        let local_branch = self.local_branch().await?;
-
         use std::borrow::Cow;
+
+        let local_branch = self.local_branch().await?;
 
         let src_joint_dir = self.open_directory(src_dir_path).await?;
         let src_joint_dir_r = src_joint_dir.read().await;
@@ -248,7 +311,7 @@ impl Repository {
             }
             JointEntryRef::Directory(entry) => {
                 let dir_to_move = entry
-                    .open(MissingVersionStrategy::Skip, &local_branch)
+                    .open(MissingVersionStrategy::Skip)
                     .await?
                     .merge()
                     .await?;
@@ -302,7 +365,6 @@ impl Repository {
                 &dst_dir,
                 dst_name,
                 dst_vv,
-                &local_branch,
             )
             .await?;
 
@@ -327,12 +389,12 @@ impl Repository {
 
     // Opens the root directory across all branches as JointDirectory.
     async fn joint_root(&self) -> Result<JointDirectory> {
-        let local_branch = self.local_branch().await?;
+        let local_branch = self.local_branch().await.ok();
         let branches = self.shared.branches().await?;
         let mut dirs = Vec::with_capacity(branches.len());
 
         for branch in branches {
-            let dir = if branch.id() == local_branch.id() {
+            let dir = if Some(branch.id()) == local_branch.as_ref().map(Branch::id) {
                 branch.open_or_create_root().await.map_err(|error| {
                     log::error!(
                         "failed to open root directory on the local branch: {:?}",
@@ -389,6 +451,34 @@ impl Repository {
             branch.debug_print(print.indent()).await;
         }
     }
+
+    // Create remote branch in this repository and returns it. If this repository has write access
+    // then the returned branch will also have write access.
+    // FOR TESTS ONLY!
+    #[cfg(test)]
+    pub(crate) async fn create_remote_branch(&self, remote_id: PublicKey) -> Result<Branch> {
+        use crate::index::RootNode;
+
+        let keys = self.shared.secrets.keys().ok_or(Error::PermissionDenied)?;
+
+        let remote_node = RootNode::load_latest_or_create(
+            &mut self.index().pool.acquire().await.unwrap(),
+            &remote_id,
+        )
+        .await?;
+
+        self.index()
+            .update_remote_branch(remote_id, remote_node)
+            .await?;
+
+        let branch = self.shared.branch(&remote_id).await?;
+
+        // Need to re-open the branch with write access because remote branches are read-only by
+        // default.
+        let branch = branch.reopen(keys);
+
+        Ok(branch)
+    }
 }
 
 impl Drop for Repository {
@@ -397,16 +487,28 @@ impl Drop for Repository {
     }
 }
 
-/// Creates the repository database.
+/// Creates and initializes the repository database.
+#[cfg(test)]
 pub(crate) async fn create_db(store: &db::Store) -> Result<db::Pool> {
     let pool = db::open_or_create(store).await?;
-
-    block::init(&pool).await?;
-    index::init(&pool).await?;
-    store::init(&pool).await?;
-    metadata::init(&pool).await?;
+    init_db(&mut *pool.acquire().await?).await?;
 
     Ok(pool)
+}
+
+async fn init_db(conn: &mut db::Connection) -> Result<()> {
+    use sqlx::Connection;
+
+    let mut tx = conn.begin().await?;
+
+    block::init(&mut tx).await?;
+    index::init(&mut tx).await?;
+    store::init(&mut tx).await?;
+    metadata::init(&mut tx).await?;
+
+    tx.commit().await?;
+
+    Ok(())
 }
 
 struct Shared {
@@ -458,6 +560,14 @@ impl Shared {
             Entry::Occupied(entry) => Ok(entry.get().clone()),
             Entry::Vacant(entry) => {
                 let keys = self.secrets.keys().ok_or(Error::PermissionDenied)?;
+
+                // Only the local branch is writable.
+                let keys = if *data.id() == self.this_writer_id {
+                    keys
+                } else {
+                    keys.read_only()
+                };
+
                 let branch = Branch::new(self.index.pool.clone(), data.clone(), keys);
                 entry.insert(branch.clone());
                 Ok(branch)
@@ -466,393 +576,15 @@ impl Shared {
     }
 }
 
-// The merge algorithm.
-struct Merger {
-    shared: Arc<Shared>,
-    local_branch: Branch,
-    tasks: FuturesUnordered<ScopedJoinHandle<PublicKey>>,
-    states: HashMap<PublicKey, MergeState>,
-}
+async fn generate_writer_id(
+    this_replica_id: &ReplicaId,
+    master_key: &cipher::SecretKey,
+    conn: &mut db::Connection,
+) -> Result<sign::PublicKey> {
+    // TODO: we should be storing the SK in the db, not the PK.
+    let writer_id = sign::SecretKey::random();
+    let writer_id = PublicKey::from(&writer_id);
+    metadata::set_writer_id(&writer_id, this_replica_id, master_key, conn).await?;
 
-impl Merger {
-    fn new(shared: Arc<Shared>, local_branch: Branch) -> Self {
-        Self {
-            shared,
-            local_branch,
-            tasks: FuturesUnordered::new(),
-            states: HashMap::new(),
-        }
-    }
-
-    async fn run(mut self) {
-        let mut rx = self.shared.index.subscribe();
-
-        loop {
-            select! {
-                branch_id = rx.recv() => {
-                    if let Ok(branch_id) = branch_id {
-                        self.handle_branch_changed(branch_id).await
-                    } else {
-                        break;
-                    }
-                }
-                branch_id = self.tasks.next(), if !self.tasks.is_empty() => {
-                    if let Some(Ok(branch_id)) = branch_id {
-                        self.handle_task_finished(branch_id).await
-                    }
-                }
-            }
-        }
-    }
-
-    async fn handle_branch_changed(&mut self, branch_id: PublicKey) {
-        if branch_id == *self.local_branch.id() {
-            // local branch change - ignore.
-            return;
-        }
-
-        if let Some(state) = self.states.get_mut(&branch_id) {
-            // Merge of this branch is already ongoing - schedule to run it again after it's
-            // finished.
-            *state = MergeState::Pending;
-            return;
-        }
-
-        self.spawn_task(branch_id).await
-    }
-
-    async fn handle_task_finished(&mut self, branch_id: PublicKey) {
-        if let Some(MergeState::Pending) = self.states.remove(&branch_id) {
-            self.spawn_task(branch_id).await
-        }
-    }
-
-    async fn spawn_task(&mut self, remote_id: PublicKey) {
-        let local = self.local_branch.clone();
-
-        let remote = if let Ok(remote) = self.shared.branch(&remote_id).await {
-            remote
-        } else {
-            // branch removed in the meantime - ignore.
-            return;
-        };
-
-        let handle = scoped_task::spawn(async move {
-            if local.data().root().await.versions > remote.data().root().await.versions {
-                log::debug!(
-                    "merge with branch {:?} suppressed - local branch already up to date",
-                    remote_id
-                );
-                return remote_id;
-            }
-
-            log::debug!("merge with branch {:?} started", remote_id);
-
-            match merge_branches(local, remote).await {
-                Ok(()) => {
-                    log::info!("merge with branch {:?} complete", remote_id)
-                }
-                Err(error) => {
-                    // `EntryNotFound` most likely means the remote snapshot is not fully
-                    // downloaded yet and `BlockNotFound` means that a block is not downloaded yet.
-                    // Both error are harmless because the merge will be attempted again on the
-                    // next change notification. We reduce the log severity for them to avoid log
-                    // spam.
-                    let level = if matches!(error, Error::EntryNotFound | Error::BlockNotFound(_)) {
-                        Level::Trace
-                    } else {
-                        Level::Error
-                    };
-
-                    log::log!(
-                        level,
-                        "merge with branch {:?} failed: {}",
-                        remote_id,
-                        error.verbose()
-                    )
-                }
-            }
-
-            remote_id
-        });
-
-        self.tasks.push(handle);
-        self.states.insert(remote_id, MergeState::Ongoing);
-    }
-}
-
-enum MergeState {
-    // A merge is ongoing
-    Ongoing,
-    // A merge is ongoing and another one was already scheduled
-    Pending,
-}
-
-async fn merge_branches(local: Branch, remote: Branch) -> Result<()> {
-    let remote_root = remote.open_root().await?;
-    JointDirectory::new(local.clone(), iter::once(remote_root))
-        .merge()
-        .await?;
-
-    Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use std::io::SeekFrom;
-
-    use super::*;
-    use crate::{db, index::RootNode};
-    use assert_matches::assert_matches;
-    use tokio::time::{sleep, Duration};
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn root_directory_always_exists() {
-        let writer_id = rand::random();
-        let repo = Repository::create(
-            &db::Store::Memory,
-            writer_id,
-            MasterSecret::random(),
-            AccessSecrets::random_write(),
-            false,
-        )
-        .await
-        .unwrap();
-        let _ = repo.open_directory("/").await.unwrap();
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn merge() {
-        let local_id = rand::random();
-        let repo = Repository::create(
-            &db::Store::Memory,
-            local_id,
-            MasterSecret::random(),
-            AccessSecrets::random_write(),
-            true,
-        )
-        .await
-        .unwrap();
-
-        // Add another branch to the index. Eventually there might be a more high-level API for
-        // this but for now we have to resort to this.
-        let remote_id = rand::random();
-        let remote_node = RootNode::load_latest_or_create(&repo.index().pool, &remote_id)
-            .await
-            .unwrap();
-        repo.index()
-            .update_remote_branch(remote_id, remote_node)
-            .await
-            .unwrap();
-
-        let remote_branch = repo.shared.branch(&remote_id).await.unwrap();
-        let remote_root = remote_branch.open_or_create_root().await.unwrap();
-
-        let local_branch = repo.local_branch().await.unwrap();
-        let local_root = local_branch.open_or_create_root().await.unwrap();
-
-        let mut file = remote_root
-            .create_file("test.txt".to_owned(), &remote_branch)
-            .await
-            .unwrap();
-        file.write(b"hello", &remote_branch).await.unwrap();
-        file.flush().await.unwrap();
-
-        let mut rx = repo.subscribe();
-
-        loop {
-            match local_root
-                .read()
-                .await
-                .lookup_version("test.txt", &remote_id)
-            {
-                Ok(entry) => {
-                    let content = entry
-                        .file()
-                        .unwrap()
-                        .open()
-                        .await
-                        .unwrap()
-                        .read_to_end()
-                        .await
-                        .unwrap();
-                    assert_eq!(content, b"hello");
-                    break;
-                }
-                Err(Error::EntryNotFound) => (),
-                Err(error) => panic!("unexpected error: {:?}", error),
-            }
-
-            rx.recv().await.unwrap();
-        }
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn recreate_previously_deleted_file() {
-        let local_id = rand::random();
-        let repo = Repository::create(
-            &db::Store::Memory,
-            local_id,
-            MasterSecret::random(),
-            AccessSecrets::random_write(),
-            false,
-        )
-        .await
-        .unwrap();
-
-        let local_branch = repo.local_branch().await.unwrap();
-
-        // Create file
-        let mut file = repo.create_file("test.txt").await.unwrap();
-        file.write(b"foo", &local_branch).await.unwrap();
-        file.flush().await.unwrap();
-        drop(file);
-
-        // Read it back and check the content
-        let content = read_file(&repo, "test.txt").await;
-        assert_eq!(content, b"foo");
-
-        // Delete it and assert it's gone
-        repo.remove_entry("test.txt").await.unwrap();
-        assert_matches!(repo.open_file("test.txt").await, Err(Error::EntryNotFound));
-
-        // Create a file with the same name but different content
-        let mut file = repo.create_file("test.txt").await.unwrap();
-        file.write(b"bar", &local_branch).await.unwrap();
-        file.flush().await.unwrap();
-        drop(file);
-
-        // Read it back and check the content
-        let content = read_file(&repo, "test.txt").await;
-        assert_eq!(content, b"bar");
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn recreate_previously_deleted_directory() {
-        let local_id = rand::random();
-        let repo = Repository::create(
-            &db::Store::Memory,
-            local_id,
-            MasterSecret::random(),
-            AccessSecrets::random_write(),
-            false,
-        )
-        .await
-        .unwrap();
-
-        // Create dir
-        repo.create_directory("test")
-            .await
-            .unwrap()
-            .flush(None)
-            .await
-            .unwrap();
-
-        // Check it exists
-        assert_matches!(repo.open_directory("test").await, Ok(_));
-
-        // Delete it and assert it's gone
-        repo.remove_entry("test").await.unwrap();
-        assert_matches!(repo.open_directory("test").await, Err(Error::EntryNotFound));
-
-        // Create another directory with the same name
-        repo.create_directory("test")
-            .await
-            .unwrap()
-            .flush(None)
-            .await
-            .unwrap();
-
-        // Check it exists
-        assert_matches!(repo.open_directory("test").await, Ok(_))
-    }
-
-    // This one used to deadlock
-    #[tokio::test(flavor = "multi_thread")]
-    async fn concurrent_read_and_create_dir() {
-        let writer_id = rand::random();
-        let repo = Repository::create(
-            &db::Store::Memory,
-            writer_id,
-            MasterSecret::random(),
-            AccessSecrets::random_write(),
-            false,
-        )
-        .await
-        .unwrap();
-
-        let path = "/dir";
-        let repo = Arc::new(repo);
-
-        let _watch_dog = scoped_task::spawn(async {
-            sleep(Duration::from_millis(5 * 1000)).await;
-            panic!("timed out");
-        });
-
-        // The deadlock here happened because the reader lock when opening the directory is
-        // acquired in the opposite order to the writer lock acqurired from flushing. I.e. the
-        // reader lock acquires `/` and then `/dir`, but flushing acquires `/dir` first and
-        // then `/`.
-        let create_dir = scoped_task::spawn({
-            let repo = repo.clone();
-            async move {
-                let dir = repo.create_directory(path).await.unwrap();
-                dir.flush(None).await.unwrap();
-            }
-        });
-
-        let open_dir = scoped_task::spawn({
-            let repo = repo.clone();
-            async move {
-                for _ in 1..10 {
-                    if let Ok(dir) = repo.open_directory(path).await {
-                        dir.read().await.entries().count();
-                        return;
-                    }
-                    // Sometimes opening the directory may outrace its creation,
-                    // so continue to retry again.
-                }
-                panic!("Failed to open the directory after multiple attempts");
-            }
-        });
-
-        create_dir.await.unwrap();
-        open_dir.await.unwrap();
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn append_to_file() {
-        let repo = Repository::create(
-            &db::Store::Memory,
-            rand::random(),
-            MasterSecret::random(),
-            AccessSecrets::random_write(),
-            false,
-        )
-        .await
-        .unwrap();
-
-        let local_branch = repo.local_branch().await.unwrap();
-        let mut file = repo.create_file("foo.txt").await.unwrap();
-        file.write(b"foo", &local_branch).await.unwrap();
-        file.flush().await.unwrap();
-
-        let mut file = repo.open_file("foo.txt").await.unwrap();
-        file.seek(SeekFrom::End(0)).await.unwrap();
-        file.write(b"bar", &local_branch).await.unwrap();
-        file.flush().await.unwrap();
-
-        let mut file = repo.open_file("foo.txt").await.unwrap();
-        let content = file.read_to_end().await.unwrap();
-        assert_eq!(content, b"foobar");
-    }
-
-    async fn read_file(repo: &Repository, path: impl AsRef<Utf8Path>) -> Vec<u8> {
-        repo.open_file(path)
-            .await
-            .unwrap()
-            .read_to_end()
-            .await
-            .unwrap()
-    }
+    Ok(writer_id)
 }

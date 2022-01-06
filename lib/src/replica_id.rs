@@ -3,7 +3,7 @@ use crate::{
     error::{Error, Result},
 };
 use rand::{rngs::OsRng, Rng};
-use sqlx::Row;
+use sqlx::{Acquire, Row};
 
 define_byte_array_wrapper! {
     /// ReplicaId uniquely identifies machines on which this software is running. Its only purpose is
@@ -39,9 +39,9 @@ pub(crate) async fn init_this_replica(pool: &db::Pool) -> Result<(), Error> {
     Ok(())
 }
 
-pub async fn get_or_create_this_replica_id(db: impl db::Acquire<'_>) -> Result<ReplicaId> {
+pub async fn get_or_create_this_replica_id(conn: &mut db::Connection) -> Result<ReplicaId> {
     // Use db transaction to make the operations atomic.
-    let mut tx = db.begin().await?;
+    let mut tx = conn.begin().await?;
 
     let id = match get_id(&mut tx).await? {
         Some(id) => id,
@@ -57,23 +57,23 @@ pub async fn get_or_create_this_replica_id(db: impl db::Acquire<'_>) -> Result<R
     Ok(id)
 }
 
-async fn get_id(tx: &mut db::Transaction<'_>) -> Result<Option<ReplicaId>> {
+async fn get_id(conn: &mut db::Connection) -> Result<Option<ReplicaId>> {
     let id = sqlx::query("SELECT writer_id FROM this_replica_id WHERE row_id=0")
-        .fetch_optional(tx)
+        .fetch_optional(conn)
         .await?
         .map(|row| row.get(0));
 
     Ok(id)
 }
 
-async fn set_id(tx: &mut db::Transaction<'_>, writer_id: &ReplicaId) -> Result<(), Error> {
+async fn set_id(conn: &mut db::Connection, writer_id: &ReplicaId) -> Result<(), Error> {
     sqlx::query(
         "INSERT INTO this_replica_id(row_id, writer_id)
              VALUES (0, ?) ON CONFLICT(row_id) DO UPDATE SET writer_id=?",
     )
     .bind(writer_id)
     .bind(writer_id)
-    .execute(tx)
+    .execute(conn)
     .await?;
 
     Ok(())

@@ -7,7 +7,6 @@ mod operations;
 pub(crate) use self::core::Core;
 use self::operations::Operations;
 use crate::{
-    blob_id::BlobId,
     block::{BlockId, BLOCK_SIZE},
     branch::Branch,
     db,
@@ -20,7 +19,7 @@ use std::{
     ops::{Deref, DerefMut},
     sync::Arc,
 };
-use tokio::sync::{Mutex, MutexGuard};
+use tokio::sync::Mutex;
 use zeroize::Zeroize;
 
 pub(crate) struct Blob {
@@ -47,17 +46,20 @@ impl Blob {
 
     /// Opens an existing blob.
     pub async fn open(branch: Branch, head_locator: Locator) -> Result<Self> {
-        // NOTE: no need to commit this transaction because we are only reading here.
-        let mut tx = branch.db_pool().begin().await?;
+        let mut conn = branch.db_pool().acquire().await?;
 
-        let (id, buffer, auth_tag) =
-            operations::load_block(&mut tx, branch.data(), &branch.keys().read, &head_locator)
-                .await?;
+        let (id, buffer, auth_tag) = operations::load_block(
+            &mut conn,
+            branch.data(),
+            branch.keys().read(),
+            &head_locator,
+        )
+        .await?;
 
         let mut content = Cursor::new(buffer);
 
         let nonce: BlobNonce = content.read_array();
-        let blob_key = branch.keys().read.derive_subkey(&nonce);
+        let blob_key = branch.keys().read().derive_subkey(&nonce);
 
         operations::decrypt_block(&blob_key, &id, 0, &mut content, &auth_tag)?;
 
@@ -83,13 +85,13 @@ impl Blob {
     }
 
     pub async fn first_block_id(&self) -> Result<BlockId> {
-        Core::first_block_id(&self.branch, self.head_locator).await
+        self.core.lock().await.first_block_id().await
     }
 
     /// Creates a new blob.
     pub fn create(branch: Branch, head_locator: Locator) -> Self {
         let nonce: BlobNonce = rand::random();
-        let blob_key = branch.keys().read.derive_subkey(&nonce);
+        let blob_key = branch.keys().read().derive_subkey(&nonce);
 
         let current_block = OpenBlock::new_head(head_locator, &nonce);
 
@@ -135,10 +137,6 @@ impl Blob {
         &self.head_locator
     }
 
-    pub fn blob_id(&self) -> &BlobId {
-        self.head_locator.blob_id()
-    }
-
     pub async fn len(&self) -> u64 {
         self.core.lock().await.len()
     }
@@ -147,18 +145,18 @@ impl Blob {
     /// number of bytes actually read which might be less than `buffer.len()` if the portion of the
     /// blob past the internal cursor is smaller than `buffer.len()`.
     pub async fn read(&mut self, buffer: &mut [u8]) -> Result<usize> {
-        self.lock().await.ops().read(buffer).await
+        self.lock().await.read(buffer).await
     }
 
     /// Read all data from this blob from the current seek position until the end and return then
     /// in a `Vec`.
     pub async fn read_to_end(&mut self) -> Result<Vec<u8>> {
-        self.lock().await.ops().read_to_end().await
+        self.lock().await.read_to_end().await
     }
 
     /// Writes `buffer` into this blob, advancing the blob's internal cursor.
     pub async fn write(&mut self, buffer: &[u8]) -> Result<()> {
-        self.lock().await.ops().write(buffer).await
+        self.lock().await.write(buffer).await
     }
 
     /// Writes into this blob in a db transaction.
@@ -167,11 +165,7 @@ impl Blob {
         tx: &mut db::Transaction<'_>,
         buffer: &[u8],
     ) -> Result<()> {
-        self.lock()
-            .await
-            .ops()
-            .write_in_transaction(tx, buffer)
-            .await
+        self.lock().await.write_in_transaction(tx, buffer).await
     }
 
     /// Seek to an offset in the blob.
@@ -181,12 +175,12 @@ impl Blob {
     ///
     /// Returns the new seek position from the start of the blob.
     pub async fn seek(&mut self, pos: SeekFrom) -> Result<u64> {
-        self.lock().await.ops().seek(pos).await
+        self.lock().await.seek(pos).await
     }
 
     /// Truncate the blob to the given length.
     pub async fn truncate(&mut self, len: u64) -> Result<()> {
-        self.lock().await.ops().truncate(len).await
+        self.lock().await.truncate(len).await
     }
 
     /// Truncate the blob to the given length in a db transaction.
@@ -195,11 +189,7 @@ impl Blob {
         tx: &mut db::Transaction<'_>,
         len: u64,
     ) -> Result<()> {
-        self.lock()
-            .await
-            .ops()
-            .truncate_in_transaction(tx, len)
-            .await
+        self.lock().await.truncate_in_transaction(tx, len).await
     }
 
     /// Flushes this blob, ensuring that all intermediately buffered contents gets written to the
@@ -216,12 +206,12 @@ impl Blob {
 
     /// Flushes this blob in a db transaction.
     pub async fn flush_in_transaction(&mut self, tx: &mut db::Transaction<'_>) -> Result<bool> {
-        self.lock().await.ops().flush_in_transaction(tx).await
+        self.lock().await.flush_in_transaction(tx).await
     }
 
     /// Removes this blob.
     pub async fn remove(&mut self) -> Result<()> {
-        self.lock().await.ops().remove().await
+        self.lock().await.remove().await
     }
 
     /// Creates a shallow copy (only the index nodes are copied, not blocks) of this blob into the
@@ -231,12 +221,7 @@ impl Blob {
             return Ok(());
         }
 
-        let new_self = self
-            .lock()
-            .await
-            .ops()
-            .fork(dst_branch, dst_head_locator)
-            .await?;
+        let new_self = self.lock().await.fork(dst_branch, dst_head_locator).await?;
 
         *self = new_self;
 
@@ -252,23 +237,9 @@ impl Blob {
         self.branch.db_pool()
     }
 
-    async fn lock(&mut self) -> OperationsLock<'_> {
+    async fn lock(&mut self) -> Operations<'_> {
         let core_guard = self.core.lock().await;
-        OperationsLock {
-            core_guard,
-            current_block: &mut self.current_block,
-        }
-    }
-}
-
-struct OperationsLock<'a> {
-    core_guard: MutexGuard<'a, Core>,
-    current_block: &'a mut OpenBlock,
-}
-
-impl<'a> OperationsLock<'a> {
-    fn ops(&mut self) -> Operations {
-        self.core_guard.operations(self.current_block)
+        Operations::new(core_guard, &mut self.current_block)
     }
 }
 

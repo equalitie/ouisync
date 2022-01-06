@@ -10,7 +10,7 @@ use crate::{
 use futures_util::{future, Stream, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_256};
-use sqlx::Row;
+use sqlx::{Acquire, Row};
 use std::{
     collections::{btree_map, BTreeMap},
     convert::TryInto,
@@ -36,7 +36,7 @@ impl InnerNode {
     }
 
     /// Load all inner nodes with the specified parent hash.
-    pub async fn load_children(db: impl db::Executor<'_>, parent: &Hash) -> Result<InnerNodeMap> {
+    pub async fn load_children(conn: &mut db::Connection, parent: &Hash) -> Result<InnerNodeMap> {
         sqlx::query(
             "SELECT
                  bucket,
@@ -61,7 +61,7 @@ impl InnerNode {
 
             (bucket, node)
         })
-        .fetch(db)
+        .fetch(conn)
         .try_filter_map(|(bucket, node)| {
             // TODO: consider reporting out-of-range buckets as errors
             future::ready(Ok(bucket.try_into().ok().map(|bucket| (bucket, node))))
@@ -73,13 +73,13 @@ impl InnerNode {
 
     /// Loads parent hashes of all inner nodes with the specifed hash.
     pub fn load_parent_hashes<'a>(
-        db: impl db::Executor<'a> + 'a,
+        conn: &'a mut db::Connection,
         hash: &'a Hash,
     ) -> impl Stream<Item = Result<Hash>> + 'a {
         sqlx::query("SELECT parent FROM snapshot_inner_nodes WHERE hash = ?")
             .bind(hash)
             .map(|row| row.get(0))
-            .fetch(db)
+            .fetch(conn)
             .err_into()
     }
 
@@ -142,7 +142,7 @@ impl InnerNode {
 
     /// Compute summaries from the children nodes of the specified parent nodes.
     pub async fn compute_summary(
-        tx: &mut db::Transaction<'_>,
+        conn: &mut db::Connection,
         parent_hash: &Hash,
         parent_layer: usize,
     ) -> Result<Summary> {
@@ -153,7 +153,7 @@ impl InnerNode {
             if *parent_hash == empty_children.hash() {
                 Ok(Summary::from_inners(&empty_children))
             } else {
-                let children = InnerNode::load_children(&mut *tx, parent_hash).await?;
+                let children = InnerNode::load_children(&mut *conn, parent_hash).await?;
 
                 // We download all children nodes of a given parent together so when we know that
                 // we have at least one we also know we have them all. Thus it's enough to check
@@ -172,7 +172,7 @@ impl InnerNode {
             if *parent_hash == empty_children.hash() {
                 Ok(Summary::from_leaves(&empty_children))
             } else {
-                let children = LeafNode::load_children(&mut *tx, parent_hash).await?;
+                let children = LeafNode::load_children(&mut *conn, parent_hash).await?;
 
                 // Similarly as in the inner nodes case, we only need to check that we have at
                 // least one leaf node child and that already tells us that we have them all.
@@ -215,8 +215,8 @@ impl InnerNodeMap {
     }
 
     /// Atomically saves all nodes in this map to the db.
-    pub async fn save(&self, pool: &'_ db::Pool, parent: &'_ Hash) -> Result<()> {
-        let mut tx = pool.begin().await?;
+    pub async fn save(&self, conn: &'_ mut db::Connection, parent: &'_ Hash) -> Result<()> {
+        let mut tx = conn.begin().await?;
         for (bucket, node) in self {
             node.save(&mut tx, parent, bucket).await?;
         }

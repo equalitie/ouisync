@@ -6,10 +6,15 @@ use super::{
 };
 use crate::{
     block::{self, BlockId, BLOCK_SIZE},
-    crypto::{cipher::AuthTag, sign::PublicKey, Hashable},
+    crypto::{
+        cipher::AuthTag,
+        sign::{Keypair, PublicKey},
+        Hashable,
+    },
     db,
     index::{node_test_utils::Snapshot, Index, RootNode, Summary},
-    repository, store, test_utils,
+    repository::{self, RepositoryId},
+    store, test_utils,
     version_vector::VersionVector,
 };
 use rand::prelude::*;
@@ -117,10 +122,10 @@ async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed:
     simulate_connection_until(a_index.clone(), b_index.clone(), drive).await
 }
 
-async fn create_index<R: Rng>(rng: &mut R) -> (Index, PublicKey) {
+async fn create_index<R: Rng + CryptoRng>(rng: &mut R) -> (Index, PublicKey) {
     let db = repository::create_db(&db::Store::Memory).await.unwrap();
-    let repository_id = rng.gen();
-    let writer_id = rng.gen();
+    let repository_id = RepositoryId::generate(rng);
+    let writer_id = PublicKey::generate(rng);
 
     let index = Index::load(db, repository_id).await.unwrap();
     index.create_branch(writer_id).await.unwrap();
@@ -136,8 +141,10 @@ async fn save_snapshot(index: &Index, writer_id: PublicKey, snapshot: &Snapshot)
     let mut version_vector = VersionVector::new();
     version_vector.insert(writer_id, 2); // to force overwrite the initial root node
 
+    let mut conn = index.pool.acquire().await.unwrap();
+
     let root_node = RootNode::create(
-        &index.pool,
+        &mut conn,
         &writer_id,
         version_vector,
         *snapshot.root_hash(),
@@ -146,22 +153,25 @@ async fn save_snapshot(index: &Index, writer_id: PublicKey, snapshot: &Snapshot)
     .await
     .unwrap();
 
-    let mut tx = index.pool.begin().await.unwrap();
     index
         .branches()
         .await
         .get(&writer_id)
         .unwrap()
-        .update_root(&mut tx, root_node)
+        .update_root(&mut conn, root_node)
         .await
         .unwrap();
-    tx.commit().await.unwrap();
 
     for layer in snapshot.inner_layers() {
         for (parent_hash, nodes) in layer.inner_maps() {
-            nodes.save(&index.pool, parent_hash).await.unwrap();
+            nodes.save(&mut conn, parent_hash).await.unwrap();
         }
     }
+
+    // release the connection here to prevent potential deadlock because `receive_leaf_nodes`
+    // acquires a connection internally (note the deadlock would happen only if the pool capacity
+    // is one).
+    drop(conn);
 
     for (parent_hash, nodes) in snapshot.leaf_sets() {
         index
@@ -198,20 +208,24 @@ async fn wait_until_snapshots_in_sync(
 async fn wait_until_block_exists(index: &Index, block_id: &BlockId) {
     let mut rx = index.subscribe();
 
-    while !block::exists(&index.pool, block_id).await.unwrap() {
+    while !block::exists(&mut index.pool.acquire().await.unwrap(), block_id)
+        .await
+        .unwrap()
+    {
         rx.recv().await.unwrap();
     }
 }
 
-async fn create_block(rng: &mut impl Rng, index: &Index, writer_id: &PublicKey) {
+async fn create_block(rng: &mut StdRng, index: &Index, writer_id: &PublicKey) {
     let branch = index.branches().await.get(writer_id).unwrap().clone();
     let encoded_locator = rng.gen::<u64>().hash();
     let block_id = rng.gen();
     let content = vec![0; BLOCK_SIZE];
+    let write_keys = Keypair::generate(rng);
 
     let mut tx = index.pool.begin().await.unwrap();
     branch
-        .insert(&mut tx, &block_id, &encoded_locator)
+        .insert(&mut tx, &block_id, &encoded_locator, &write_keys)
         .await
         .unwrap();
     block::write(&mut tx, &block_id, &content, &AuthTag::default())
@@ -233,7 +247,9 @@ async fn write_all_blocks(index: &Index, snapshot: &Snapshot) {
 }
 
 async fn load_latest_root_node(index: &Index, writer_id: &PublicKey) -> Option<RootNode> {
-    RootNode::load_latest(&index.pool, writer_id).await.unwrap()
+    RootNode::load_latest(&mut index.pool.acquire().await.unwrap(), writer_id)
+        .await
+        .unwrap()
 }
 
 // Simulate connection between two replicas until the given future completes.
