@@ -527,6 +527,14 @@ impl Shared {
             Entry::Occupied(entry) => Ok(entry.get().clone()),
             Entry::Vacant(entry) => {
                 let keys = self.secrets.keys().ok_or(Error::PermissionDenied)?;
+
+                // Only the local branch is writable.
+                let keys = if *data.id() == self.this_writer_id {
+                    keys
+                } else {
+                    keys.read_only()
+                };
+
                 let branch = Branch::new(self.index.pool.clone(), data.clone(), keys);
                 entry.insert(branch.clone());
                 Ok(branch)

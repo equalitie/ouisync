@@ -107,6 +107,16 @@ impl Branch {
             root.debug_print(print).await;
         }
     }
+
+    #[cfg(test)]
+    pub(crate) fn reopen(self, keys: AccessKeys) -> Self {
+        Self {
+            pool: self.pool,
+            branch_data: self.branch_data,
+            keys,
+            root_directory: self.root_directory,
+        }
+    }
 }
 
 #[cfg(test)]

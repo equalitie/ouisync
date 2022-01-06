@@ -178,6 +178,13 @@ impl AccessKeys {
     pub fn write(&self) -> Option<&sign::Keypair> {
         self.write.as_deref()
     }
+
+    pub fn read_only(self) -> Self {
+        Self {
+            read: self.read,
+            write: None,
+        }
+    }
 }
 
 impl From<WriteSecrets> for AccessKeys {

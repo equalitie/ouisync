@@ -22,11 +22,13 @@ async fn root_directory_always_exists() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn merge() {
+    let secrets = AccessSecrets::random_write();
+
     let repo = Repository::create(
         &db::Store::Memory,
         rand::random(),
         MasterSecret::random(),
-        AccessSecrets::random_write(),
+        secrets.clone(),
         true,
     )
     .await
@@ -46,11 +48,16 @@ async fn merge() {
         .await
         .unwrap();
 
-    let remote_branch = repo.shared.branch(&remote_id).await.unwrap();
+    // Create a file in the remote branch.
+    let remote_branch = repo
+        .shared
+        .branch(&remote_id)
+        .await
+        .unwrap()
+        // Need to re-open the branch with write access because remote branches are read-only by
+        // default.
+        .reopen(secrets.keys().unwrap());
     let remote_root = remote_branch.open_or_create_root().await.unwrap();
-
-    let local_branch = repo.local_branch().await.unwrap();
-    let local_root = local_branch.open_or_create_root().await.unwrap();
 
     let mut file = remote_root
         .create_file("test.txt".to_owned(), &remote_branch)
@@ -58,6 +65,9 @@ async fn merge() {
         .unwrap();
     file.write(b"hello", &remote_branch).await.unwrap();
     file.flush().await.unwrap();
+
+    let local_branch = repo.local_branch().await.unwrap();
+    let local_root = local_branch.open_or_create_root().await.unwrap();
 
     let mut rx = repo.subscribe();
 
