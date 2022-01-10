@@ -312,6 +312,8 @@ impl<'a> Operations<'a> {
         let mut tx = self.core.db_pool().begin().await?;
 
         let read_key = self.core.branch.keys().read();
+        // Take the write key from the dst branch, not the src branch, to protect us against
+        // accidentally forking into remote branch (remote branches don't have write access).
         let write_keys = dst_branch.keys().write().ok_or(Error::PermissionDenied)?;
 
         for (src_locator, dst_locator) in self.core.locators().zip(dst_head_locator.sequence()) {

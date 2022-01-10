@@ -34,15 +34,7 @@ async fn merge() {
 
     // Create remote branch and create a file in it.
     let remote_id = PublicKey::random();
-    let remote_branch = repo.create_remote_branch(remote_id).await.unwrap();
-    let remote_root = remote_branch.open_or_create_root().await.unwrap();
-
-    let mut file = remote_root
-        .create_file("test.txt".to_owned())
-        .await
-        .unwrap();
-    file.write(b"hello", &remote_branch).await.unwrap();
-    file.flush().await.unwrap();
+    create_remote_file(&repo, remote_id, "test.txt", b"hello").await;
 
     // Open the local root.
     let local_branch = repo.local_branch().await.unwrap();
@@ -90,11 +82,9 @@ async fn recreate_previously_deleted_file() {
     .await
     .unwrap();
 
-    let local_branch = repo.local_branch().await.unwrap();
-
     // Create file
     let mut file = repo.create_file("test.txt").await.unwrap();
-    file.write(b"foo", &local_branch).await.unwrap();
+    file.write(b"foo").await.unwrap();
     file.flush().await.unwrap();
     drop(file);
 
@@ -108,7 +98,7 @@ async fn recreate_previously_deleted_file() {
 
     // Create a file with the same name but different content
     let mut file = repo.create_file("test.txt").await.unwrap();
-    file.write(b"bar", &local_branch).await.unwrap();
+    file.write(b"bar").await.unwrap();
     file.flush().await.unwrap();
     drop(file);
 
@@ -222,14 +212,13 @@ async fn append_to_file() {
     .await
     .unwrap();
 
-    let local_branch = repo.local_branch().await.unwrap();
     let mut file = repo.create_file("foo.txt").await.unwrap();
-    file.write(b"foo", &local_branch).await.unwrap();
+    file.write(b"foo").await.unwrap();
     file.flush().await.unwrap();
 
     let mut file = repo.open_file("foo.txt").await.unwrap();
     file.seek(SeekFrom::End(0)).await.unwrap();
-    file.write(b"bar", &local_branch).await.unwrap();
+    file.write(b"bar").await.unwrap();
     file.flush().await.unwrap();
 
     let mut file = repo.open_file("foo.txt").await.unwrap();
@@ -253,10 +242,8 @@ async fn blind_access() {
     .await
     .unwrap();
 
-    let local_branch = repo.local_branch().await.unwrap();
-
     let mut file = repo.create_file("secret.txt").await.unwrap();
-    file.write(b"redacted", &local_branch).await.unwrap();
+    file.write(b"redacted").await.unwrap();
     file.flush().await.unwrap();
 
     drop(file);
@@ -302,10 +289,8 @@ async fn read_access_same_replica() {
     .await
     .unwrap();
 
-    let local_branch = repo.local_branch().await.unwrap();
-
     let mut file = repo.create_file("public.txt").await.unwrap();
-    file.write(b"hello world", &local_branch).await.unwrap();
+    file.write(b"hello world").await.unwrap();
     file.flush().await.unwrap();
 
     drop(file);
@@ -328,11 +313,10 @@ async fn read_access_same_replica() {
     assert_eq!(content, b"hello world");
 
     // Writing is not allowed.
-    let local_branch = repo.local_branch().await.unwrap();
     file.seek(SeekFrom::Start(0)).await.unwrap();
     // short writes that don't cross block boundaries don't trigger the permission check which is
     // why the following works...
-    file.write(b"hello universe", &local_branch).await.unwrap();
+    file.write(b"hello universe").await.unwrap();
     // ...but flushing the file is not allowed.
     assert_matches!(file.flush().await, Err(Error::PermissionDenied));
 
@@ -364,10 +348,8 @@ async fn read_access_different_replica() {
     .await
     .unwrap();
 
-    let local_branch = repo.local_branch().await.unwrap();
-
     let mut file = repo.create_file("public.txt").await.unwrap();
-    file.write(b"hello world", &local_branch).await.unwrap();
+    file.write(b"hello world").await.unwrap();
     file.flush().await.unwrap();
 
     drop(file);
@@ -396,7 +378,7 @@ async fn read_access_different_replica() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn truncate_remote_file() {
+async fn truncate_forked_remote_file() {
     let repo = Repository::create(
         &db::Store::Memory,
         rand::random(),
@@ -407,20 +389,30 @@ async fn truncate_remote_file() {
     .await
     .unwrap();
 
-    let remote_branch = repo
-        .create_remote_branch(PublicKey::random())
-        .await
-        .unwrap();
-    let remote_root = remote_branch.open_or_create_root().await.unwrap();
-
-    let mut file = remote_root.create_file("test.txt".into()).await.unwrap();
-    file.write(b"foo", &remote_branch).await.unwrap();
-    file.flush().await.unwrap();
+    create_remote_file(&repo, PublicKey::random(), "test.txt", b"foo").await;
 
     let local_branch = repo.local_branch().await.unwrap();
+    let mut file = repo.open_file("test.txt").await.unwrap();
+    file.fork(&local_branch).await.unwrap();
+    file.truncate(0).await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn attempt_to_modify_remote_file() {
+    let repo = Repository::create(
+        &db::Store::Memory,
+        rand::random(),
+        MasterSecret::random(),
+        AccessSecrets::random_write(),
+        false,
+    )
+    .await
+    .unwrap();
+
+    create_remote_file(&repo, PublicKey::random(), "test.txt", b"foo").await;
 
     let mut file = repo.open_file("test.txt").await.unwrap();
-    file.truncate(0, &local_branch).await.unwrap();
+    assert_matches!(file.truncate(0).await, Err(Error::PermissionDenied));
 }
 
 async fn read_file(repo: &Repository, path: impl AsRef<Utf8Path>) -> Vec<u8> {
@@ -430,4 +422,17 @@ async fn read_file(repo: &Repository, path: impl AsRef<Utf8Path>) -> Vec<u8> {
         .read_to_end()
         .await
         .unwrap()
+}
+
+async fn create_remote_file(repo: &Repository, remote_id: PublicKey, name: &str, content: &[u8]) {
+    let remote_branch = repo
+        .create_remote_branch(remote_id)
+        .await
+        .unwrap()
+        .reopen(repo.secrets().keys().unwrap());
+
+    let remote_root = remote_branch.open_or_create_root().await.unwrap();
+    let mut file = remote_root.create_file(name.into()).await.unwrap();
+    file.write(content).await.unwrap();
+    file.flush().await.unwrap();
 }
