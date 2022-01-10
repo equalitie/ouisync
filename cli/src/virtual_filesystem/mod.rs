@@ -478,7 +478,8 @@ impl Inner {
         };
 
         if let Some(size) = size {
-            file.truncate(size, &local_branch).await?;
+            file.fork(&local_branch).await?;
+            file.truncate(size).await?;
         }
 
         Ok(make_file_attr(inode, EntryType::File, file.len().await))
@@ -770,11 +771,12 @@ impl Inner {
         );
 
         let offset: u64 = offset.try_into().map_err(|_| Error::OffsetOutOfRange)?;
-
         let local_branch = self.repository.local_branch().await?;
+
         let file = self.entries.get_file_mut(handle)?;
         file.seek(SeekFrom::Start(offset)).await?;
-        file.write(data, &local_branch).await?;
+        file.fork(&local_branch).await?;
+        file.write(data).await?;
 
         Ok(data.len().try_into().unwrap_or(u32::MAX))
     }

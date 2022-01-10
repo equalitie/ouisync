@@ -108,15 +108,15 @@ async fn conflict_forked_files() {
     let root0 = branches[0].open_or_create_root().await.unwrap();
     create_file(&root0, "file.txt", b"one", &branches[0]).await;
 
-    // Open the file with branch 1 as the local branch and then modify it which copies (forks)
-    // it into branch 1.
+    // Fork the file into branch 1 and then modify it.
     let mut file1 = open_file_version(&root0, "file.txt", branches[0].id()).await;
-    file1.write(b"two", &branches[1]).await.unwrap();
+    file1.fork(&branches[1]).await.unwrap();
+    file1.write(b"two").await.unwrap();
     file1.flush().await.unwrap();
 
     // Modify the file by branch 0 as well, to create concurrent versions
     let mut file0 = open_file_version(&root0, "file.txt", branches[0].id()).await;
-    file0.write(b"three", &branches[0]).await.unwrap();
+    file0.write(b"three").await.unwrap();
     file0.flush().await.unwrap();
 
     // Open branch 1's root dir which should have been created in the process.
@@ -914,7 +914,8 @@ async fn create_file(parent: &Directory, name: &str, content: &[u8], local_branc
     let mut file = parent.create_file(name.to_owned()).await.unwrap();
 
     if !content.is_empty() {
-        file.write(content, local_branch).await.unwrap();
+        file.fork(local_branch).await.unwrap();
+        file.write(content).await.unwrap();
     }
 
     file.flush().await.unwrap();
@@ -923,8 +924,9 @@ async fn create_file(parent: &Directory, name: &str, content: &[u8], local_branc
 async fn update_file(parent: &Directory, name: &str, content: &[u8], local_branch: &Branch) {
     let mut file = open_file(parent, name).await;
 
-    file.truncate(0, local_branch).await.unwrap();
-    file.write(content, local_branch).await.unwrap();
+    file.fork(local_branch).await.unwrap();
+    file.truncate(0).await.unwrap();
+    file.write(content).await.unwrap();
     file.flush().await.unwrap();
 }
 

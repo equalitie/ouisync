@@ -17,11 +17,11 @@ async fn create_and_list_entries() {
     let dir = branch.open_or_create_root().await.unwrap();
 
     let mut file_dog = dir.create_file("dog.txt".into()).await.unwrap();
-    file_dog.write(b"woof", &branch).await.unwrap();
+    file_dog.write(b"woof").await.unwrap();
     file_dog.flush().await.unwrap();
 
     let mut file_cat = dir.create_file("cat.txt".into()).await.unwrap();
-    file_cat.write(b"meow", &branch).await.unwrap();
+    file_cat.write(b"meow").await.unwrap();
     file_cat.flush().await.unwrap();
 
     dir.flush(None).await.unwrap();
@@ -133,7 +133,7 @@ async fn rename_file() {
     // Create a directory with a single file.
     let parent_dir = branch.open_or_create_root().await.unwrap();
     let mut file = parent_dir.create_file(src_name.into()).await.unwrap();
-    file.write(content, &branch).await.unwrap();
+    file.write(content).await.unwrap();
     file.flush().await.unwrap();
 
     let file_locator = *file.locator();
@@ -195,7 +195,7 @@ async fn move_file_within_branch() {
     let aux_dir = root_dir.create_directory("aux".into()).await.unwrap();
 
     let mut file = root_dir.create_file(file_name.into()).await.unwrap();
-    file.write(content, &branch).await.unwrap();
+    file.write(content).await.unwrap();
     file.flush().await.unwrap();
 
     let file_locator = *file.locator();
@@ -296,7 +296,7 @@ async fn move_non_empty_directory() {
     let dir = root_dir.create_directory(dir_name.into()).await.unwrap();
 
     let mut file = dir.create_file(file_name.into()).await.unwrap();
-    file.write(content, &branch).await.unwrap();
+    file.write(content).await.unwrap();
     file.flush().await.unwrap();
     let file_locator = *file.locator();
 
@@ -516,7 +516,7 @@ async fn modify_directory_concurrently() {
         .unwrap();
 
     let mut file0 = dir0.create_file("file.txt".to_owned()).await.unwrap();
-    file0.write(b"hello", &branch).await.unwrap();
+    file0.write(b"hello").await.unwrap();
     file0.flush().await.unwrap();
 
     let mut file1 = dir1

@@ -73,8 +73,7 @@ impl File {
     }
 
     /// Writes `buffer` into this file.
-    pub async fn write(&mut self, buffer: &[u8], local_branch: &Branch) -> Result<()> {
-        self.fork(local_branch).await?;
+    pub async fn write(&mut self, buffer: &[u8]) -> Result<()> {
         self.blob.write(buffer).await
     }
 
@@ -84,8 +83,7 @@ impl File {
     }
 
     /// Truncates the file to the given length.
-    pub async fn truncate(&mut self, len: u64, local_branch: &Branch) -> Result<()> {
-        self.fork(local_branch).await?;
+    pub async fn truncate(&mut self, len: u64) -> Result<()> {
         self.blob.truncate(len).await
     }
 
@@ -153,10 +151,10 @@ mod tests {
         // Create a file owned by branch 0
         let mut file0 = branch0.ensure_file_exists("/dog.jpg".into()).await.unwrap();
 
-        file0.write(b"small", &branch0).await.unwrap();
+        file0.write(b"small").await.unwrap();
         file0.flush().await.unwrap();
 
-        // Write to the file by branch 1
+        // Open the file, fork it into branch 1 and modify it.
         let mut file1 = branch0
             .open_root()
             .await
@@ -171,8 +169,8 @@ mod tests {
             .await
             .unwrap();
 
-        // This will create a fork on branch 1
-        file1.write(b"large", &branch1).await.unwrap();
+        file1.fork(&branch1).await.unwrap();
+        file1.write(b"large").await.unwrap();
         file1.flush().await.unwrap();
 
         // Reopen orig file and verify it's unchanged
@@ -237,7 +235,7 @@ mod tests {
         file1.fork(&branch1).await.unwrap();
 
         for _ in 0..2 {
-            file1.write(b"oink", &branch1).await.unwrap();
+            file1.write(b"oink").await.unwrap();
             file1.flush().await.unwrap();
         }
     }
