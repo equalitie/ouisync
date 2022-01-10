@@ -1,7 +1,7 @@
 use crate::{
     access_control::{AccessSecrets, MasterSecret, WriteSecrets},
     crypto::{
-        cipher::{self, AuthTag, Nonce, AUTH_TAG_SIZE},
+        cipher::{self, Nonce},
         sign, PasswordSalt,
     },
     db,
@@ -41,7 +41,6 @@ pub(crate) async fn init(conn: &mut db::Connection) -> Result<(), Error> {
         "CREATE TABLE metadata_secret (
              name     BLOB NOT NULL PRIMARY KEY,
              nonce    BLOB NOT NULL,
-             auth_tag BLOB NOT NULL,
              value    BLOB NOT NULL,
 
              UNIQUE(nonce)
@@ -236,7 +235,7 @@ async fn get_secret<T>(
 where
     for<'a> T: TryFrom<&'a [u8]>,
 {
-    let row = sqlx::query("SELECT nonce, auth_tag, value FROM metadata_secret WHERE name = ?")
+    let row = sqlx::query("SELECT nonce, value FROM metadata_secret WHERE name = ?")
         .bind(id)
         .fetch_optional(conn)
         .await?
@@ -245,13 +244,9 @@ where
     let nonce: &[u8] = row.get(0);
     let nonce = Nonce::try_from(nonce)?;
 
-    let auth_tag: &[u8] = row.get(1);
-    let auth_tag: [u8; AUTH_TAG_SIZE] = auth_tag.try_into()?;
-    let auth_tag = AuthTag::from(auth_tag);
+    let mut buffer: Vec<_> = row.get(1);
 
-    let mut buffer: Vec<_> = row.get(2);
-
-    master_key.decrypt(nonce, id, &mut buffer, &auth_tag)?;
+    master_key.decrypt_no_aead(nonce, &mut buffer);
 
     let secret = T::try_from(&buffer).map_err(|_| Error::MalformedData)?;
     buffer.zeroize();
@@ -268,15 +263,14 @@ async fn set_secret(
     let nonce = make_nonce();
 
     let mut cypher = blob.to_vec();
-    let auth_tag = master_key.encrypt(nonce, id, &mut cypher)?;
+    master_key.encrypt_no_aead(nonce, &mut cypher);
 
     sqlx::query(
-        "INSERT OR REPLACE INTO metadata_secret(name, nonce, auth_tag, value)
-            VALUES (?, ?, ?, ?)",
+        "INSERT OR REPLACE INTO metadata_secret(name, nonce, value)
+            VALUES (?, ?, ?)",
     )
     .bind(id)
     .bind(&nonce[..])
-    .bind(&auth_tag[..])
     .bind(&cypher)
     .execute(conn)
     .await?;
