@@ -34,7 +34,11 @@ async fn merge() {
 
     // Create remote branch and create a file in it.
     let remote_id = PublicKey::random();
-    let remote_branch = repo.create_remote_branch(remote_id).await.unwrap();
+    let remote_branch = repo
+        .create_remote_branch(remote_id)
+        .await
+        .unwrap()
+        .reopen(repo.secrets().keys().unwrap());
     let remote_root = remote_branch.open_or_create_root().await.unwrap();
 
     let mut file = remote_root
@@ -43,6 +47,9 @@ async fn merge() {
         .unwrap();
     file.write(b"hello", &remote_branch).await.unwrap();
     file.flush().await.unwrap();
+
+    drop(file);
+    drop(remote_root);
 
     // Open the local root.
     let local_branch = repo.local_branch().await.unwrap();
@@ -411,14 +418,20 @@ async fn truncate_remote_file() {
         .create_remote_branch(PublicKey::random())
         .await
         .unwrap();
+    // Reopen the remote branch with forced write access so we can modify it.
+    let remote_branch = remote_branch.reopen(repo.secrets().keys().unwrap());
+
     let remote_root = remote_branch.open_or_create_root().await.unwrap();
 
     let mut file = remote_root.create_file("test.txt".into()).await.unwrap();
     file.write(b"foo", &remote_branch).await.unwrap();
     file.flush().await.unwrap();
 
-    let local_branch = repo.local_branch().await.unwrap();
+    // Clear the root directory cache which also removes the forced write access.
+    drop(file);
+    drop(remote_root);
 
+    let local_branch = repo.local_branch().await.unwrap();
     let mut file = repo.open_file("test.txt").await.unwrap();
     file.truncate(0, &local_branch).await.unwrap();
 }
