@@ -329,4 +329,22 @@ mod tests {
 
         assert_eq!(b"world", &v);
     }
+
+    // Using a bad key should not decrypt properly, but also should not cause an error. This is to
+    // let user claim plausible deniability in not knowing the real secret key/password.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn bad_key_is_not_error() {
+        let mut conn = new_memory_db().await;
+
+        let good_key = cipher::SecretKey::random();
+        let bad_key = cipher::SecretKey::random();
+
+        set_secret(b"hello", b"world", &good_key, &mut conn)
+            .await
+            .unwrap();
+
+        let v: [u8; 5] = get_secret(b"hello", &bad_key, &mut conn).await.unwrap();
+
+        assert_ne!(b"world", &v);
+    }
 }
