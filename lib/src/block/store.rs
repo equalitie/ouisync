@@ -128,7 +128,6 @@ pub async fn exists(conn: &mut db::Connection, id: &BlockId) -> Result<bool> {
 mod tests {
     use super::*;
     use rand::Rng;
-    use sqlx::Connection;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn write_and_read() {
@@ -183,7 +182,13 @@ mod tests {
     }
 
     async fn setup() -> db::Connection {
-        let mut conn = db::Connection::connect(":memory:").await.unwrap();
+        let mut conn = db::open_or_create(&db::Store::Memory)
+            .await
+            .unwrap()
+            .acquire()
+            .await
+            .unwrap()
+            .detach();
         init(&mut conn).await.unwrap();
         conn
     }

@@ -2,6 +2,3 @@
 
 members = ["bindgen", "cli", "lib"]
 
-[patch.crates-io]
-# Workaround for https://github.com/launchbadge/sqlx/issues/1467
-sqlx = { git = "https://github.com/launchbadge/sqlx", rev = "b419bf529823241a7fd598628919ab451fd7d136" }

@@ -638,6 +638,7 @@ async fn summary_case(leaf_count: usize, rng_seed: u64) {
 
     // Check that initially all blocks are missing
     root_node.reload(&mut conn).await.unwrap();
+
     assert_eq!(
         root_node.summary.missing_blocks_count,
         expected_missing_blocks_count
@@ -661,9 +662,13 @@ async fn summary_case(leaf_count: usize, rng_seed: u64) {
 }
 
 async fn setup() -> db::Connection {
-    use sqlx::Connection;
-
-    let mut conn = db::Connection::connect(":memory:").await.unwrap();
+    let mut conn = db::open_or_create(&db::Store::Memory)
+        .await
+        .unwrap()
+        .acquire()
+        .await
+        .unwrap()
+        .detach();
     super::super::init(&mut conn).await.unwrap();
     conn
 }

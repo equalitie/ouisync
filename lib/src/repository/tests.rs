@@ -228,7 +228,7 @@ async fn append_to_file() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn blind_access() {
-    let pool = db::Pool::connect(":memory:").await.unwrap();
+    let pool = db::open_or_create(&db::Store::Memory).await.unwrap();
     let replica_id = rand::random();
 
     // Create the repo and put a file in it.
@@ -275,7 +275,7 @@ async fn blind_access() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn read_access_same_replica() {
-    let pool = db::Pool::connect(":memory:").await.unwrap();
+    let pool = db::open_or_create(&db::Store::Memory).await.unwrap();
     let replica_id = rand::random();
     let master_secret = MasterSecret::random();
 
@@ -334,7 +334,7 @@ async fn read_access_same_replica() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn read_access_different_replica() {
-    let pool = db::Pool::connect(":memory:").await.unwrap();
+    let pool = db::open_or_create(&db::Store::Memory).await.unwrap();
     let master_secret = MasterSecret::random();
 
     let replica_id_a = rand::random();

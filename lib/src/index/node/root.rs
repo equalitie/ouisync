@@ -131,7 +131,8 @@ impl RootNode {
         )
         .bind(writer_id)
         .bind(limit)
-        .map(|row| Self {
+        .fetch(conn)
+        .map_ok(|row| Self {
             snapshot_id: row.get(0),
             versions: row.get(1),
             hash: row.get(2),
@@ -141,7 +142,6 @@ impl RootNode {
                 missing_blocks_checksum: db::decode_u64(row.get(5)),
             },
         })
-        .fetch(conn)
         .err_into()
     }
 
@@ -152,8 +152,8 @@ impl RootNode {
     ) -> impl Stream<Item = Result<PublicKey>> + 'a {
         sqlx::query("SELECT writer_id FROM snapshot_root_nodes WHERE hash = ?")
             .bind(hash)
-            .map(|row| row.get(0))
             .fetch(conn)
+            .map_ok(|row| row.get(0))
             .err_into()
     }
 
@@ -245,15 +245,15 @@ impl RootNode {
 
     /// Updates the summaries of all nodes with the specified hash.
     pub async fn update_summaries(
-        tx: &mut db::Transaction<'_>,
+        conn: &mut db::Connection,
         hash: &Hash,
     ) -> Result<SummaryUpdateStatus> {
-        let summary = InnerNode::compute_summary(tx, hash, 0).await?;
+        let summary = InnerNode::compute_summary(conn, hash, 0).await?;
 
         let was_complete =
             sqlx::query("SELECT 0 FROM snapshot_root_nodes WHERE hash = ? AND is_complete = 1")
                 .bind(hash)
-                .fetch_optional(&mut *tx)
+                .fetch_optional(&mut *conn)
                 .await?
                 .is_some();
 
@@ -269,7 +269,7 @@ impl RootNode {
         .bind(db::encode_u64(summary.missing_blocks_count))
         .bind(db::encode_u64(summary.missing_blocks_checksum))
         .bind(hash)
-        .execute(tx)
+        .execute(conn)
         .await?;
 
         Ok(SummaryUpdateStatus {

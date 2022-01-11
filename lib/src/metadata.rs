@@ -291,10 +291,15 @@ fn make_nonce() -> Nonce {
 mod tests {
     use super::*;
     use crate::db;
-    use sqlx::Connection;
 
     async fn new_memory_db() -> db::Connection {
-        let mut conn = db::Connection::connect(":memory:").await.unwrap();
+        let mut conn = db::open_or_create(&db::Store::Memory)
+            .await
+            .unwrap()
+            .acquire()
+            .await
+            .unwrap()
+            .detach();
         init(&mut conn).await.unwrap();
         conn
     }

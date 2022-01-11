@@ -70,7 +70,14 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn remove_block() {
-        let mut conn = db::Connection::connect(":memory:").await.unwrap();
+        let mut conn = db::open_or_create(&db::Store::Memory)
+            .await
+            .unwrap()
+            .acquire()
+            .await
+            .unwrap()
+            .detach();
+
         index::init(&mut conn).await.unwrap();
         block::init(&mut conn).await.unwrap();
         super::init(&mut conn).await.unwrap();

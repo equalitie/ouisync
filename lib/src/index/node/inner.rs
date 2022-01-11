@@ -48,7 +48,8 @@ impl InnerNode {
              WHERE parent = ?",
         )
         .bind(parent)
-        .map(|row| {
+        .fetch(conn)
+        .map_ok(|row| {
             let bucket: u32 = row.get(0);
             let node = Self {
                 hash: row.get(1),
@@ -61,7 +62,6 @@ impl InnerNode {
 
             (bucket, node)
         })
-        .fetch(conn)
         .try_filter_map(|(bucket, node)| {
             // TODO: consider reporting out-of-range buckets as errors
             future::ready(Ok(bucket.try_into().ok().map(|bucket| (bucket, node))))
@@ -78,8 +78,8 @@ impl InnerNode {
     ) -> impl Stream<Item = Result<Hash>> + 'a {
         sqlx::query("SELECT parent FROM snapshot_inner_nodes WHERE hash = ?")
             .bind(hash)
-            .map(|row| row.get(0))
             .fetch(conn)
+            .map_ok(|row| row.get(0))
             .err_into()
     }
 
@@ -116,11 +116,11 @@ impl InnerNode {
 
     /// Updates summaries of all nodes with the specified hash at the specified inner layer.
     pub async fn update_summaries(
-        tx: &mut db::Transaction<'_>,
+        conn: &mut db::Connection,
         hash: &Hash,
         inner_layer: usize,
     ) -> Result<()> {
-        let summary = Self::compute_summary(tx, hash, inner_layer + 1).await?;
+        let summary = Self::compute_summary(conn, hash, inner_layer + 1).await?;
 
         sqlx::query(
             "UPDATE snapshot_inner_nodes
@@ -134,7 +134,7 @@ impl InnerNode {
         .bind(db::encode_u64(summary.missing_blocks_count))
         .bind(db::encode_u64(summary.missing_blocks_checksum))
         .bind(hash)
-        .execute(tx)
+        .execute(conn)
         .await?;
 
         Ok(())

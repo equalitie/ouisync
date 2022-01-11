@@ -38,7 +38,7 @@ pub(super) async fn update_summaries(
     layer: usize,
 ) -> Result<Vec<(PublicKey, SummaryUpdateStatus)>> {
     let mut tx = conn.begin().await?;
-    let statuses = update_summaries_in_transaction(&mut tx, vec![(hash, layer)]).await?;
+    let statuses = update_summaries_with_stack(&mut tx, vec![(hash, layer)]).await?;
     tx.commit().await?;
 
     Ok(statuses)
@@ -61,7 +61,7 @@ pub(crate) async fn receive_block(
         .try_collect()
         .await?;
 
-    let ids = update_summaries_in_transaction(&mut tx, nodes)
+    let ids = update_summaries_with_stack(&mut tx, nodes)
         .await?
         .into_iter()
         .map(|(writer_id, _)| writer_id)
@@ -72,24 +72,24 @@ pub(crate) async fn receive_block(
     Ok(ids)
 }
 
-async fn update_summaries_in_transaction(
-    tx: &mut db::Transaction<'_>,
+async fn update_summaries_with_stack(
+    conn: &mut db::Connection,
     mut nodes: Vec<(Hash, usize)>,
 ) -> Result<Vec<(PublicKey, SummaryUpdateStatus)>> {
     let mut statuses = Vec::new();
 
     while let Some((hash, layer)) = nodes.pop() {
         if layer > 0 {
-            InnerNode::update_summaries(tx, &hash, layer - 1).await?;
-            InnerNode::load_parent_hashes(&mut *tx, &hash)
+            InnerNode::update_summaries(conn, &hash, layer - 1).await?;
+            InnerNode::load_parent_hashes(conn, &hash)
                 .try_for_each(|parent_hash| {
                     nodes.push((parent_hash, layer - 1));
                     future::ready(Ok(()))
                 })
                 .await?;
         } else {
-            let status = RootNode::update_summaries(tx, &hash).await?;
-            RootNode::load_writer_ids(tx, &hash)
+            let status = RootNode::update_summaries(conn, &hash).await?;
+            RootNode::load_writer_ids(conn, &hash)
                 .try_for_each(|writer_id| {
                     statuses.push((writer_id, status));
                     future::ready(Ok(()))
