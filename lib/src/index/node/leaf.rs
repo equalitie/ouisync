@@ -69,12 +69,13 @@ impl LeafNode {
              WHERE parent = ?",
         )
         .bind(parent)
-        .map(|row| LeafNode {
+        .fetch(conn)
+        .map_ok(|row| LeafNode {
             locator: row.get(0),
             block_id: row.get(1),
             is_missing: row.get(2),
         })
-        .fetch_all(conn)
+        .try_collect::<Vec<_>>()
         .await?
         .into_iter()
         .collect())
@@ -87,8 +88,8 @@ impl LeafNode {
     ) -> impl Stream<Item = Result<Hash>> + 'a {
         sqlx::query("SELECT parent FROM snapshot_leaf_nodes WHERE block_id = ?")
             .bind(block_id)
-            .map(|row| row.get(0))
             .fetch(conn)
+            .map_ok(|row| row.get(0))
             .err_into()
     }
 

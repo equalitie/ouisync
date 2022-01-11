@@ -48,7 +48,8 @@ impl InnerNode {
              WHERE parent = ?",
         )
         .bind(parent)
-        .map(|row| {
+        .fetch(conn)
+        .map_ok(|row| {
             let bucket: u32 = row.get(0);
             let node = Self {
                 hash: row.get(1),
@@ -61,7 +62,6 @@ impl InnerNode {
 
             (bucket, node)
         })
-        .fetch(conn)
         .try_filter_map(|(bucket, node)| {
             // TODO: consider reporting out-of-range buckets as errors
             future::ready(Ok(bucket.try_into().ok().map(|bucket| (bucket, node))))
@@ -78,8 +78,8 @@ impl InnerNode {
     ) -> impl Stream<Item = Result<Hash>> + 'a {
         sqlx::query("SELECT parent FROM snapshot_inner_nodes WHERE hash = ?")
             .bind(hash)
-            .map(|row| row.get(0))
             .fetch(conn)
+            .map_ok(|row| row.get(0))
             .err_into()
     }
 

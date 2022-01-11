@@ -131,7 +131,8 @@ impl RootNode {
         )
         .bind(writer_id)
         .bind(limit)
-        .map(|row| Self {
+        .fetch(conn)
+        .map_ok(|row| Self {
             snapshot_id: row.get(0),
             versions: row.get(1),
             hash: row.get(2),
@@ -141,7 +142,6 @@ impl RootNode {
                 missing_blocks_checksum: db::decode_u64(row.get(5)),
             },
         })
-        .fetch(conn)
         .err_into()
     }
 
@@ -152,8 +152,8 @@ impl RootNode {
     ) -> impl Stream<Item = Result<PublicKey>> + 'a {
         sqlx::query("SELECT writer_id FROM snapshot_root_nodes WHERE hash = ?")
             .bind(hash)
-            .map(|row| row.get(0))
             .fetch(conn)
+            .map_ok(|row| row.get(0))
             .err_into()
     }
 
