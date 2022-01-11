@@ -33,7 +33,6 @@ mod scoped_task;
 mod store;
 #[cfg(test)]
 mod test_utils;
-mod upnp;
 mod version_vector;
 mod versioned_file_name;
 mod writer_set;

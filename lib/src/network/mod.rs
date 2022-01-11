@@ -12,6 +12,7 @@ mod protocol;
 mod server;
 #[cfg(test)]
 mod tests;
+mod upnp;
 
 use self::{
     connection::{ConnectionDeduplicator, ConnectionDirection, ConnectionPermit},
@@ -25,7 +26,6 @@ use crate::{
     index::Index,
     repository::RepositoryId,
     scoped_task::{self, ScopedJoinHandle, ScopedTaskSet},
-    upnp,
 };
 use btdht::{InfoHash, INFO_HASH_LEN};
 use slab::Slab;
