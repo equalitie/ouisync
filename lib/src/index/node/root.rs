@@ -245,15 +245,15 @@ impl RootNode {
 
     /// Updates the summaries of all nodes with the specified hash.
     pub async fn update_summaries(
-        tx: &mut db::Transaction<'_>,
+        conn: &mut db::Connection,
         hash: &Hash,
     ) -> Result<SummaryUpdateStatus> {
-        let summary = InnerNode::compute_summary(tx, hash, 0).await?;
+        let summary = InnerNode::compute_summary(conn, hash, 0).await?;
 
         let was_complete =
             sqlx::query("SELECT 0 FROM snapshot_root_nodes WHERE hash = ? AND is_complete = 1")
                 .bind(hash)
-                .fetch_optional(&mut *tx)
+                .fetch_optional(&mut *conn)
                 .await?
                 .is_some();
 
@@ -269,7 +269,7 @@ impl RootNode {
         .bind(db::encode_u64(summary.missing_blocks_count))
         .bind(db::encode_u64(summary.missing_blocks_checksum))
         .bind(hash)
-        .execute(tx)
+        .execute(conn)
         .await?;
 
         Ok(SummaryUpdateStatus {

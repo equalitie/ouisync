@@ -154,7 +154,7 @@ impl BranchData {
         let mut parent = path.root_hash;
 
         for level in 0..INNER_LAYER_COUNT {
-            path.inner[level] = InnerNode::load_children(&mut *conn, &parent).await?;
+            path.inner[level] = InnerNode::load_children(conn, &parent).await?;
 
             if let Some(node) = path.inner[level].get(path.get_bucket(level)) {
                 parent = node.hash
@@ -165,7 +165,7 @@ impl BranchData {
             path.layers_found += 1;
         }
 
-        path.leaves = LeafNode::load_children(&mut *conn, &parent).await?;
+        path.leaves = LeafNode::load_children(conn, &parent).await?;
 
         if path.leaves.get(encoded_locator).is_some() {
             path.layers_found += 1;
@@ -232,7 +232,7 @@ mod tests {
         index,
         locator::Locator,
     };
-    use sqlx::{Connection, Row};
+    use sqlx::Row;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn insert_and_read() {
@@ -342,7 +342,13 @@ mod tests {
     }
 
     async fn init_db() -> db::Connection {
-        let mut conn = db::Connection::connect(":memory:").await.unwrap();
+        let mut conn = db::open_or_create(&db::Store::Memory)
+            .await
+            .unwrap()
+            .acquire()
+            .await
+            .unwrap()
+            .detach();
         index::init(&mut conn).await.unwrap();
         conn
     }

@@ -116,11 +116,11 @@ impl InnerNode {
 
     /// Updates summaries of all nodes with the specified hash at the specified inner layer.
     pub async fn update_summaries(
-        tx: &mut db::Transaction<'_>,
+        conn: &mut db::Connection,
         hash: &Hash,
         inner_layer: usize,
     ) -> Result<()> {
-        let summary = Self::compute_summary(tx, hash, inner_layer + 1).await?;
+        let summary = Self::compute_summary(conn, hash, inner_layer + 1).await?;
 
         sqlx::query(
             "UPDATE snapshot_inner_nodes
@@ -134,7 +134,7 @@ impl InnerNode {
         .bind(db::encode_u64(summary.missing_blocks_count))
         .bind(db::encode_u64(summary.missing_blocks_checksum))
         .bind(hash)
-        .execute(tx)
+        .execute(conn)
         .await?;
 
         Ok(())
