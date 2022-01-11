@@ -124,9 +124,6 @@ pub(crate) async fn open_or_create(store: &Store) -> Result<Pool> {
 }
 
 async fn create_pool(options: SqliteConnectOptions) -> Result<Pool> {
-    // HACK: workaround for https://github.com/launchbadge/sqlx/issues/1467
-    let options = options.serialized(true);
-
     PoolOptions::new()
         // HACK: Using only one connection turns the pool effectively into a mutex over a single
         // connection. This is a heavy-handed fix that prevents the "table is locked" errors that
