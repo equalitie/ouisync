@@ -62,7 +62,9 @@ impl FromStr for ShareToken {
     type Err = DecodeError;
 
     fn from_str(input: &str) -> Result<Self, Self::Err> {
-        let input = input.trim_start();
+        // Trim from the end as well because reading lines from a file includes the `\n` character.
+        // Also the user may accidentally include white space if done from the app.
+        let input = input.trim();
         let input = input.strip_prefix(SCHEME).ok_or(DecodeError)?;
         let input = input.strip_prefix(':').ok_or(DecodeError)?;
 
