@@ -5,7 +5,10 @@ pub use chacha20poly1305::aead;
 
 use super::password::PasswordSalt;
 use argon2::Argon2;
-use chacha20::{ChaCha20, cipher::{NewCipher, StreamCipher}};
+use chacha20::{
+    cipher::{NewCipher, StreamCipher},
+    ChaCha20,
+};
 use chacha20poly1305::{
     aead::{AeadInPlace, NewAead},
     ChaCha20Poly1305,
@@ -134,21 +137,13 @@ impl SecretKey {
     }
 
     /// Encrypt a message in place without using Authenticated Encryption nor Associated Data
-    pub fn encrypt_no_aead(
-        &self,
-        nonce: Nonce,
-        buffer: &mut [u8],
-    ) {
+    pub fn encrypt_no_aead(&self, nonce: Nonce, buffer: &mut [u8]) {
         let mut cipher = ChaCha20::new(self.as_ref().into(), &nonce.into());
         cipher.apply_keystream(buffer)
     }
 
     /// Decrypt a message in place without using Authenticated Encryption with Associated Data.
-    pub fn decrypt_no_aead(
-        &self,
-        nonce: Nonce,
-        buffer: &mut [u8],
-    ) {
+    pub fn decrypt_no_aead(&self, nonce: Nonce, buffer: &mut [u8]) {
         let mut cipher = ChaCha20::new(self.as_ref().into(), &nonce.into());
         cipher.apply_keystream(buffer)
     }
