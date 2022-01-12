@@ -98,9 +98,11 @@ impl Server {
     }
 
     async fn handle_inner_nodes(&self, parent_hash: Hash, inner_layer: usize) -> Result<()> {
-        // TODO: don't send anything if the nodes are missing
         let nodes =
             InnerNode::load_children(&mut *self.index.pool.acquire().await?, &parent_hash).await?;
+        if nodes.is_empty() {
+            return Ok(());
+        }
 
         self.stream
             .send(Response::InnerNodes {
@@ -114,9 +116,11 @@ impl Server {
     }
 
     async fn handle_leaf_nodes(&self, parent_hash: Hash) -> Result<()> {
-        // TODO: don't send anything if the nodes are missing
         let nodes =
             LeafNode::load_children(&mut *self.index.pool.acquire().await?, &parent_hash).await?;
+        if nodes.is_empty() {
+            return Ok(());
+        }
 
         self.stream
             .send(Response::LeafNodes { parent_hash, nodes })
