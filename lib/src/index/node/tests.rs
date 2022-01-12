@@ -29,7 +29,7 @@ async fn create_new_root_node() {
     )
     .await
     .unwrap();
-    assert_eq!(*node0.proof.hash(), hash);
+    assert_eq!(node0.proof.hash, hash);
 
     let node1 = RootNode::load_latest(&mut conn, writer_id)
         .await
@@ -538,7 +538,7 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
     .await
     .unwrap();
 
-    super::update_summaries(&mut conn, *root_node.proof.hash(), 0)
+    super::update_summaries(&mut conn, root_node.proof.hash, 0)
         .await
         .unwrap();
     root_node.reload(&mut conn).await.unwrap();
@@ -603,7 +603,7 @@ async fn summary_case(leaf_count: usize, rng_seed: u64) {
     .unwrap();
 
     if snapshot.leaf_count() == 0 {
-        super::update_summaries(&mut conn, *root_node.proof.hash(), 0)
+        super::update_summaries(&mut conn, root_node.proof.hash, 0)
             .await
             .unwrap();
     }

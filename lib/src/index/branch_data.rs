@@ -52,7 +52,7 @@ impl BranchData {
         notify_tx: async_broadcast::Sender<PublicKey>,
     ) -> Self {
         Self {
-            writer_id: *root_node.proof.writer_id(),
+            writer_id: root_node.proof.writer_id,
             root_node: RwLock::new(root_node),
             notify_tx,
         }
@@ -93,7 +93,7 @@ impl BranchData {
     ) -> Result<()> {
         let mut lock = self.root_node.write().await;
         let mut path = self
-            .get_path(conn, lock.proof.hash(), encoded_locator)
+            .get_path(conn, &lock.proof.hash, encoded_locator)
             .await?;
 
         // We shouldn't be inserting a block to a branch twice. If we do, the assumption is that we
@@ -109,7 +109,7 @@ impl BranchData {
     pub async fn get(&self, conn: &mut db::Connection, encoded_locator: &Hash) -> Result<BlockId> {
         let root_node = self.root_node.read().await;
         let path = self
-            .get_path(conn, root_node.proof.hash(), encoded_locator)
+            .get_path(conn, &root_node.proof.hash, encoded_locator)
             .await?;
 
         match path.get_leaf() {
@@ -128,7 +128,7 @@ impl BranchData {
     ) -> Result<()> {
         let mut lock = self.root_node.write().await;
         let mut path = self
-            .get_path(conn, lock.proof.hash(), encoded_locator)
+            .get_path(conn, &lock.proof.hash, encoded_locator)
             .await?;
         path.remove_leaf(encoded_locator)
             .ok_or(Error::EntryNotFound)?;
@@ -215,7 +215,7 @@ impl BranchData {
         }
 
         // TODO: sign the new root
-        let new_proof = Proof::new(*old_root.proof.writer_id(), path.root_hash);
+        let new_proof = Proof::new(old_root.proof.writer_id, path.root_hash);
         let new_root = old_root.next_version(&mut tx, new_proof).await?;
         self.replace_root(&mut tx, old_root, new_root).await?;
 

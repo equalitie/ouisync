@@ -72,9 +72,9 @@ impl Server {
         }
 
         let response = Response::RootNode {
-            writer_id: *root_node.proof.writer_id(),
+            writer_id: root_node.proof.writer_id,
             version_vector: root_node.versions.clone(),
-            hash: *root_node.proof.hash(),
+            hash: root_node.proof.hash,
             summary: root_node.summary,
         };
 

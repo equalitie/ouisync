@@ -38,10 +38,10 @@ impl RootNode {
         mut versions: VersionVector,
         summary: Summary,
     ) -> Result<Self> {
-        let is_complete = *proof.hash() == InnerNodeMap::default().hash();
+        let is_complete = proof.hash == InnerNodeMap::default().hash();
 
         // TODO: shouldn't we start with empty vv?
-        versions.insert(*proof.writer_id(), 1);
+        versions.insert(proof.writer_id, 1);
 
         sqlx::query(
             "INSERT INTO snapshot_root_nodes (
@@ -63,14 +63,14 @@ impl RootNode {
              FROM snapshot_root_nodes
              WHERE writer_id = ? AND hash = ?",
         )
-        .bind(proof.writer_id())
-        .bind(proof.hash())
+        .bind(&proof.writer_id)
+        .bind(&proof.hash)
         .bind(&versions)
         .bind(is_complete)
         .bind(db::encode_u64(summary.missing_blocks_count))
         .bind(db::encode_u64(summary.missing_blocks_checksum))
-        .bind(proof.writer_id())
-        .bind(proof.hash())
+        .bind(&proof.writer_id)
+        .bind(&proof.hash)
         .map(|row| Self {
             snapshot_id: row.get(0),
             versions: row.get(1),
@@ -140,9 +140,9 @@ impl RootNode {
     ///
     /// Panics if the writer_id of the current proof differs from the writer_id of the new proof.
     pub async fn next_version(&self, tx: &mut db::Transaction<'_>, proof: Proof) -> Result<Self> {
-        assert_eq!(proof.writer_id(), self.proof.writer_id());
+        assert_eq!(proof.writer_id, self.proof.writer_id);
 
-        let versions = self.versions.clone().incremented(*self.proof.writer_id());
+        let versions = self.versions.clone().incremented(self.proof.writer_id);
 
         let snapshot_id = sqlx::query(
             "INSERT INTO snapshot_root_nodes (
@@ -156,8 +156,8 @@ impl RootNode {
              VALUES (?, ?, ?, 1, 0, 0)
              RETURNING snapshot_id",
         )
-        .bind(proof.writer_id())
-        .bind(proof.hash())
+        .bind(&proof.writer_id)
+        .bind(&proof.hash)
         .bind(&versions)
         .fetch_one(tx)
         .await?
@@ -188,7 +188,7 @@ impl RootNode {
         if let Some(version_vector_override) = version_vector_override {
             new_version_vector.merge(version_vector_override);
         } else {
-            new_version_vector.increment(*self.proof.writer_id());
+            new_version_vector.increment(self.proof.writer_id);
         }
 
         sqlx::query("UPDATE snapshot_root_nodes SET versions = ? WHERE snapshot_id = ?")
