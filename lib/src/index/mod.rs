@@ -96,16 +96,15 @@ impl Index {
     /// received node was more up-to-date than the corresponding branch stored by this replica.
     pub(crate) async fn receive_root_node(
         &self,
-        writer_id: PublicKey,
+        proof: Proof,
         version_vector: VersionVector,
-        hash: Hash,
         summary: Summary,
     ) -> Result<bool> {
         let branches = self.branches().await;
 
         // If the received node is outdated relative to any branch we have, ignore it.
         for branch in branches.values() {
-            if *branch.id() == writer_id {
+            if *branch.id() == proof.writer_id {
                 // this will be checked further down.
                 continue;
             }
@@ -121,7 +120,7 @@ impl Index {
         // Whether the remote replica's branch is more up-to-date than ours.
         let updated;
 
-        if let Some(branch) = branches.get(&writer_id) {
+        if let Some(branch) = branches.get(&proof.writer_id) {
             let old_node = branch.root().await;
 
             match version_vector.partial_cmp(&old_node.versions) {
@@ -144,16 +143,17 @@ impl Index {
             }
         } else {
             create = true;
-            updated = hash != InnerNodeMap::default().hash();
+            updated = proof.hash != InnerNodeMap::default().hash();
         };
 
         // avoid deadlock
         drop(branches);
 
         if create {
+            let hash = proof.hash;
             let node = RootNode::create(
                 &mut *self.pool.acquire().await?,
-                Proof::new(writer_id, hash),
+                proof,
                 version_vector,
                 Summary::INCOMPLETE,
             )

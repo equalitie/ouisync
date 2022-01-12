@@ -1,7 +1,7 @@
 use crate::{
     block::BlockId,
-    crypto::{cipher::AuthTag, sign::PublicKey, Hash},
-    index::{InnerNodeMap, LeafNodeSet, Summary},
+    crypto::{cipher::AuthTag, Hash},
+    index::{InnerNodeMap, LeafNodeSet, Proof, Summary},
     repository::RepositoryId,
     version_vector::VersionVector,
 };
@@ -28,9 +28,8 @@ pub(crate) enum Response {
     /// `Request` variant -  the server sends these proactively any time there is change in the
     /// repo.
     RootNode {
-        writer_id: PublicKey,
+        proof: Proof,
         version_vector: VersionVector,
-        hash: Hash,
         summary: Summary,
     },
     /// Send inner nodes with the given parent hash and inner layer.
@@ -57,15 +56,13 @@ impl fmt::Debug for Response {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::RootNode {
-                writer_id,
+                proof,
                 version_vector,
-                hash,
                 summary,
             } => f
                 .debug_struct("RootNode")
-                .field("writer_id", writer_id)
+                .field("proof", proof)
                 .field("version_vector", version_vector)
-                .field("hash", hash)
                 .field("summary", summary)
                 .finish(),
             Self::InnerNodes {

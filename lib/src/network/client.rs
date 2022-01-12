@@ -4,9 +4,9 @@ use super::{
 };
 use crate::{
     block::BlockId,
-    crypto::{cipher::AuthTag, sign::PublicKey, Hash, Hashable},
+    crypto::{cipher::AuthTag, Hash, Hashable},
     error::{Error, Result},
-    index::{Index, InnerNodeMap, LeafNodeSet, Summary, INNER_LAYER_COUNT},
+    index::{Index, InnerNodeMap, LeafNodeSet, Proof, Summary, INNER_LAYER_COUNT},
     store,
     version_vector::VersionVector,
 };
@@ -32,14 +32,10 @@ impl Client {
     async fn handle_response(&mut self, response: Response) -> Result<()> {
         match response {
             Response::RootNode {
-                writer_id,
+                proof,
                 version_vector,
-                hash,
                 summary,
-            } => {
-                self.handle_root_node(writer_id, version_vector, hash, summary)
-                    .await
-            }
+            } => self.handle_root_node(proof, version_vector, summary).await,
             Response::InnerNodes {
                 parent_hash,
                 inner_layer,
@@ -61,20 +57,20 @@ impl Client {
 
     async fn handle_root_node(
         &mut self,
-        writer_id: PublicKey,
+        proof: Proof,
         version_vector: VersionVector,
-        hash: Hash,
         summary: Summary,
     ) -> Result<()> {
+        let parent_hash = proof.hash;
         let updated = self
             .index
-            .receive_root_node(writer_id, version_vector, hash, summary)
+            .receive_root_node(proof, version_vector, summary)
             .await?;
 
         if updated {
             self.stream
                 .send(Request::InnerNodes {
-                    parent_hash: hash,
+                    parent_hash,
                     inner_layer: 0,
                 })
                 .await;
