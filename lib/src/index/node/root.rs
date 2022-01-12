@@ -179,7 +179,7 @@ impl RootNode {
         conn: &mut db::Connection,
         hash: &Hash,
     ) -> Result<SummaryUpdateStatus> {
-        let summary = InnerNode::compute_summary(conn, hash, 0).await?;
+        let summary = InnerNode::compute_summary(conn, hash).await?;
 
         let was_complete =
             sqlx::query("SELECT 0 FROM snapshot_root_nodes WHERE hash = ? AND is_complete = 1")

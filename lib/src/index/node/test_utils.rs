@@ -118,10 +118,6 @@ impl<'a> InnerLayer<'a> {
             (parent_hash, nodes)
         })
     }
-
-    pub fn number(&self) -> usize {
-        self.1
-    }
 }
 
 fn add_inner_node(

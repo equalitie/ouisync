@@ -162,7 +162,7 @@ impl Index {
             )
             .await?;
             self.update_remote_branch(node).await?;
-            self.update_summaries(hash, 0).await?;
+            self.update_summaries(hash).await?;
         }
 
         Ok(updated)
@@ -173,7 +173,6 @@ impl Index {
     pub(crate) async fn receive_inner_nodes(
         &self,
         parent_hash: Hash,
-        inner_layer: usize,
         nodes: InnerNodeMap,
     ) -> Result<Vec<Hash>> {
         let updated: Vec<_> = self
@@ -186,7 +185,7 @@ impl Index {
             .into_incomplete()
             .save(&mut *self.pool.acquire().await?, &parent_hash)
             .await?;
-        self.update_summaries(parent_hash, inner_layer).await?;
+        self.update_summaries(parent_hash).await?;
 
         Ok(updated)
     }
@@ -208,8 +207,7 @@ impl Index {
             .into_missing()
             .save(&mut *self.pool.acquire().await?, &parent_hash)
             .await?;
-        self.update_summaries(parent_hash, INNER_LAYER_COUNT)
-            .await?;
+        self.update_summaries(parent_hash).await?;
 
         Ok(updated)
     }
@@ -264,10 +262,10 @@ impl Index {
 
     // Updates summaries of the specified nodes and all their ancestors, notifies the affected
     // branches that became complete (wasn't before the update but became after it).
-    async fn update_summaries(&self, hash: Hash, layer: usize) -> Result<()> {
+    async fn update_summaries(&self, hash: Hash) -> Result<()> {
         let mut conn = self.pool.acquire().await?;
 
-        let statuses = node::update_summaries(&mut conn, hash, layer).await?;
+        let statuses = node::update_summaries(&mut conn, hash).await?;
         let branches = self.branches().await;
 
         // Reload cached root nodes of the branches whose completion status changed.

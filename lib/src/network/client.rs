@@ -84,10 +84,7 @@ impl Client {
 
         // TODO: require parent exists
 
-        let updated = self
-            .index
-            .receive_inner_nodes(parent_hash, inner_layer, nodes)
-            .await?;
+        let updated = self.index.receive_inner_nodes(parent_hash, nodes).await?;
 
         for hash in updated {
             self.stream.send(child_request(hash, inner_layer)).await;

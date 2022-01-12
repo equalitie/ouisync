@@ -1,5 +1,5 @@
 use super::{
-    leaf::{LeafNode, LeafNodeSet},
+    leaf::{LeafNode, LeafNodeSet, EMPTY_LEAF_HASH},
     summary::Summary,
 };
 use crate::{
@@ -116,12 +116,8 @@ impl InnerNode {
     }
 
     /// Updates summaries of all nodes with the specified hash at the specified inner layer.
-    pub async fn update_summaries(
-        conn: &mut db::Connection,
-        hash: &Hash,
-        inner_layer: usize,
-    ) -> Result<()> {
-        let summary = Self::compute_summary(conn, hash, inner_layer + 1).await?;
+    pub async fn update_summaries(conn: &mut db::Connection, hash: &Hash) -> Result<()> {
+        let summary = Self::compute_summary(conn, hash).await?;
 
         sqlx::query(
             "UPDATE snapshot_inner_nodes
@@ -142,48 +138,37 @@ impl InnerNode {
     }
 
     /// Compute summaries from the children nodes of the specified parent nodes.
-    pub async fn compute_summary(
-        conn: &mut db::Connection,
-        parent_hash: &Hash,
-        parent_layer: usize,
-    ) -> Result<Summary> {
-        if parent_layer < INNER_LAYER_COUNT {
-            let empty_children = InnerNodeMap::default();
-            // If the parent hash is equal to the hash of empty node collection it means the node
-            // has no children and we can cut this short.
-            if *parent_hash == empty_children.hash() {
-                Ok(Summary::from_inners(&empty_children))
-            } else {
-                let children = InnerNode::load_children(&mut *conn, parent_hash).await?;
-
-                // We download all children nodes of a given parent together so when we know that
-                // we have at least one we also know we have them all. Thus it's enough to check
-                // that all of them are complete.
-                if !children.is_empty() {
-                    Ok(Summary::from_inners(&children))
-                } else {
-                    Ok(Summary::INCOMPLETE)
-                }
-            }
-        } else {
-            let empty_children = LeafNodeSet::default();
-
-            // If the parent hash is equal to the hash of empty node collection it means the node
-            // has no children and we can cut this short.
-            if *parent_hash == empty_children.hash() {
-                Ok(Summary::from_leaves(&empty_children))
-            } else {
-                let children = LeafNode::load_children(&mut *conn, parent_hash).await?;
-
-                // Similarly as in the inner nodes case, we only need to check that we have at
-                // least one leaf node child and that already tells us that we have them all.
-                if !children.is_empty() {
-                    Ok(Summary::from_leaves(&children))
-                } else {
-                    Ok(Summary::INCOMPLETE)
-                }
-            }
+    pub async fn compute_summary(conn: &mut db::Connection, parent_hash: &Hash) -> Result<Summary> {
+        // 1st attempt: empty inner nodes
+        if parent_hash == &*EMPTY_INNER_HASH {
+            let children = InnerNodeMap::default();
+            return Ok(Summary::from_inners(&children));
         }
+
+        // 2nd attempt: empty leaf nodes
+        if parent_hash == &*EMPTY_LEAF_HASH {
+            let children = LeafNodeSet::default();
+            return Ok(Summary::from_leaves(&children));
+        }
+
+        // 3rd attempt: non-empty inner nodes
+        let children = InnerNode::load_children(conn, parent_hash).await?;
+        if !children.is_empty() {
+            // We download all children nodes of a given parent together so when we know that
+            // we have at least one we also know we have them all.
+            return Ok(Summary::from_inners(&children));
+        }
+
+        // 4th attempt: non-empty leaf nodes
+        let children = LeafNode::load_children(conn, parent_hash).await?;
+        if !children.is_empty() {
+            // Similarly as in the inner nodes case, we only need to check that we have at
+            // least one leaf node child and that already tells us that we have them all.
+            return Ok(Summary::from_leaves(&children));
+        }
+
+        // The parent hash doesn't correspond to any known node
+        Ok(Summary::INCOMPLETE)
     }
 }
 

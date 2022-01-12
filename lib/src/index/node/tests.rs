@@ -1,5 +1,5 @@
 use super::{
-    super::proof::Proof, inner::INNER_LAYER_COUNT, summary::Summary, test_utils::Snapshot, *,
+    super::proof::Proof, leaf::EMPTY_LEAF_HASH, summary::Summary, test_utils::Snapshot, *,
 };
 use crate::{
     crypto::{
@@ -254,9 +254,7 @@ async fn compute_status_from_empty_leaf_nodes() {
     let mut conn = setup().await;
 
     let hash = *EMPTY_LEAF_HASH;
-    let summary = InnerNode::compute_summary(&mut conn, &hash, INNER_LAYER_COUNT)
-        .await
-        .unwrap();
+    let summary = InnerNode::compute_summary(&mut conn, &hash).await.unwrap();
 
     assert!(summary.is_complete);
     assert_eq!(summary.missing_blocks_count, 0);
@@ -270,9 +268,7 @@ async fn compute_status_from_incomplete_leaf_nodes() {
     let nodes: LeafNodeSet = iter::once(node).collect();
     let hash = nodes.hash();
 
-    let summary = InnerNode::compute_summary(&mut conn, &hash, INNER_LAYER_COUNT)
-        .await
-        .unwrap();
+    let summary = InnerNode::compute_summary(&mut conn, &hash).await.unwrap();
 
     assert_eq!(summary, Summary::INCOMPLETE);
 }
@@ -286,9 +282,7 @@ async fn compute_status_from_complete_leaf_nodes_with_all_missing_blocks() {
     let hash = nodes.hash();
     nodes.save(&mut conn, &hash).await.unwrap();
 
-    let summary = InnerNode::compute_summary(&mut conn, &hash, INNER_LAYER_COUNT)
-        .await
-        .unwrap();
+    let summary = InnerNode::compute_summary(&mut conn, &hash).await.unwrap();
 
     assert!(summary.is_complete);
     assert_eq!(summary.missing_blocks_count, 1);
@@ -305,9 +299,7 @@ async fn compute_status_from_complete_leaf_nodes_with_some_present_blocks() {
     let hash = nodes.hash();
     nodes.save(&mut conn, &hash).await.unwrap();
 
-    let summary = InnerNode::compute_summary(&mut conn, &hash, INNER_LAYER_COUNT)
-        .await
-        .unwrap();
+    let summary = InnerNode::compute_summary(&mut conn, &hash).await.unwrap();
 
     assert!(summary.is_complete);
     assert_eq!(summary.missing_blocks_count, 2);
@@ -323,9 +315,7 @@ async fn compute_status_from_complete_leaf_nodes_with_all_present_blocks() {
     let hash = nodes.hash();
     nodes.save(&mut conn, &hash).await.unwrap();
 
-    let summary = InnerNode::compute_summary(&mut conn, &hash, INNER_LAYER_COUNT)
-        .await
-        .unwrap();
+    let summary = InnerNode::compute_summary(&mut conn, &hash).await.unwrap();
 
     assert!(summary.is_complete);
     assert_eq!(summary.missing_blocks_count, 0);
@@ -336,9 +326,7 @@ async fn compute_status_from_empty_inner_nodes() {
     let mut conn = setup().await;
 
     let hash = *EMPTY_INNER_HASH;
-    let summary = InnerNode::compute_summary(&mut conn, &hash, INNER_LAYER_COUNT - 1)
-        .await
-        .unwrap();
+    let summary = InnerNode::compute_summary(&mut conn, &hash).await.unwrap();
 
     assert!(summary.is_complete);
     assert_eq!(summary.missing_blocks_count, 0);
@@ -352,9 +340,7 @@ async fn compute_status_from_incomplete_inner_nodes() {
     let nodes: InnerNodeMap = iter::once((0, node)).collect();
     let hash = nodes.hash();
 
-    let summary = InnerNode::compute_summary(&mut conn, &hash, INNER_LAYER_COUNT - 1)
-        .await
-        .unwrap();
+    let summary = InnerNode::compute_summary(&mut conn, &hash).await.unwrap();
 
     assert_eq!(summary, Summary::INCOMPLETE);
 }
@@ -381,9 +367,7 @@ async fn compute_status_from_complete_inner_nodes_with_all_missing_blocks() {
     let hash = inners.hash();
     inners.save(&mut conn, &hash).await.unwrap();
 
-    let summary = InnerNode::compute_summary(&mut conn, &hash, INNER_LAYER_COUNT - 1)
-        .await
-        .unwrap();
+    let summary = InnerNode::compute_summary(&mut conn, &hash).await.unwrap();
 
     assert!(summary.is_complete);
     assert_eq!(summary.missing_blocks_count, 2);
@@ -438,9 +422,7 @@ async fn compute_status_from_complete_inner_nodes_with_some_present_blocks() {
     let hash = inners.hash();
     inners.save(&mut conn, &hash).await.unwrap();
 
-    let summary = InnerNode::compute_summary(&mut conn, &hash, INNER_LAYER_COUNT - 1)
-        .await
-        .unwrap();
+    let summary = InnerNode::compute_summary(&mut conn, &hash).await.unwrap();
 
     assert!(summary.is_complete);
     assert_eq!(summary.missing_blocks_count, 3);
@@ -469,9 +451,7 @@ async fn compute_status_from_complete_inner_nodes_with_all_present_blocks() {
     let hash = inners.hash();
     inners.save(&mut conn, &hash).await.unwrap();
 
-    let summary = InnerNode::compute_summary(&mut conn, &hash, INNER_LAYER_COUNT - 1)
-        .await
-        .unwrap();
+    let summary = InnerNode::compute_summary(&mut conn, &hash).await.unwrap();
 
     assert!(summary.is_complete);
     assert_eq!(summary.missing_blocks_count, 0);
@@ -545,7 +525,7 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
     .await
     .unwrap();
 
-    super::update_summaries(&mut conn, root_node.proof.hash, 0)
+    super::update_summaries(&mut conn, root_node.proof.hash)
         .await
         .unwrap();
     root_node.reload(&mut conn).await.unwrap();
@@ -557,7 +537,7 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
     for layer in snapshot.inner_layers() {
         for (parent_hash, nodes) in layer.inner_maps() {
             nodes.save(&mut conn, parent_hash).await.unwrap();
-            super::update_summaries(&mut conn, *parent_hash, layer.number())
+            super::update_summaries(&mut conn, *parent_hash)
                 .await
                 .unwrap();
             root_node.reload(&mut conn).await.unwrap();
@@ -571,7 +551,7 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
         nodes.save(&mut conn, parent_hash).await.unwrap();
         unsaved_leaves -= nodes.len();
 
-        super::update_summaries(&mut conn, *parent_hash, INNER_LAYER_COUNT)
+        super::update_summaries(&mut conn, *parent_hash)
             .await
             .unwrap();
         root_node.reload(&mut conn).await.unwrap();
@@ -611,7 +591,7 @@ async fn summary_case(leaf_count: usize, rng_seed: u64) {
     .unwrap();
 
     if snapshot.leaf_count() == 0 {
-        super::update_summaries(&mut conn, root_node.proof.hash, 0)
+        super::update_summaries(&mut conn, root_node.proof.hash)
             .await
             .unwrap();
     }
@@ -635,7 +615,7 @@ async fn summary_case(leaf_count: usize, rng_seed: u64) {
             .await
             .unwrap();
 
-        super::update_summaries(&mut conn, *parent_hash, INNER_LAYER_COUNT)
+        super::update_summaries(&mut conn, *parent_hash)
             .await
             .unwrap();
     }
