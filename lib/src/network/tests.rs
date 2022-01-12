@@ -57,7 +57,7 @@ async fn transfer_snapshot_between_two_replicas_case(
     save_snapshot(&a_index, a_id, &snapshot).await;
     write_all_blocks(&a_index, &snapshot).await;
 
-    assert!(load_latest_root_node(&b_index, &a_id).await.is_none());
+    assert!(load_latest_root_node(&b_index, a_id).await.is_none());
 
     // Wait until replica B catches up to replica A, then have replica A perform a local change
     // (create one new block) and repeat.
@@ -65,7 +65,7 @@ async fn transfer_snapshot_between_two_replicas_case(
         let mut remaining_changesets = changeset_count;
 
         loop {
-            wait_until_snapshots_in_sync(&a_index, &a_id, &b_index).await;
+            wait_until_snapshots_in_sync(&a_index, a_id, &b_index).await;
 
             if remaining_changesets > 0 {
                 for _ in 0..changeset_size {
@@ -145,7 +145,7 @@ async fn save_snapshot(index: &Index, writer_id: PublicKey, snapshot: &Snapshot)
 
     let root_node = RootNode::create(
         &mut conn,
-        &writer_id,
+        writer_id,
         version_vector,
         *snapshot.root_hash(),
         Summary::INCOMPLETE,
@@ -183,7 +183,7 @@ async fn save_snapshot(index: &Index, writer_id: PublicKey, snapshot: &Snapshot)
 
 async fn wait_until_snapshots_in_sync(
     server_index: &Index,
-    server_id: &PublicKey,
+    server_id: PublicKey,
     client_index: &Index,
 ) {
     let mut rx = client_index.subscribe();
@@ -246,7 +246,7 @@ async fn write_all_blocks(index: &Index, snapshot: &Snapshot) {
     }
 }
 
-async fn load_latest_root_node(index: &Index, writer_id: &PublicKey) -> Option<RootNode> {
+async fn load_latest_root_node(index: &Index, writer_id: PublicKey) -> Option<RootNode> {
     RootNode::load_latest(&mut index.pool.acquire().await.unwrap(), writer_id)
         .await
         .unwrap()

@@ -20,7 +20,7 @@ use tokio::sync::{RwLock, RwLockReadGuard};
 type LocatorHash = Hash;
 
 pub(crate) struct BranchData {
-    writer_id: PublicKey,
+    writer_id: PublicKey, // copied from `root_node` to allow accessing it without locking.
     root_node: RwLock<RootNode>,
     notify_tx: async_broadcast::Sender<PublicKey>,
 }
@@ -31,12 +31,12 @@ impl BranchData {
         writer_id: PublicKey,
         notify_tx: async_broadcast::Sender<PublicKey>,
     ) -> Result<Self> {
-        let root_node = if let Some(node) = RootNode::load_latest(conn, &writer_id).await? {
+        let root_node = if let Some(node) = RootNode::load_latest(conn, writer_id).await? {
             node
         } else {
             RootNode::create(
                 conn,
-                &writer_id,
+                writer_id,
                 VersionVector::new(),
                 node::initial_root_hash(),
                 Summary::FULL,
@@ -44,16 +44,15 @@ impl BranchData {
             .await?
         };
 
-        Ok(Self::with_root_node(writer_id, root_node, notify_tx))
+        Ok(Self::with_root_node(root_node, notify_tx))
     }
 
     pub fn with_root_node(
-        writer_id: PublicKey,
         root_node: RootNode,
         notify_tx: async_broadcast::Sender<PublicKey>,
     ) -> Self {
         Self {
-            writer_id,
+            writer_id: root_node.writer_id,
             root_node: RwLock::new(root_node),
             notify_tx,
         }

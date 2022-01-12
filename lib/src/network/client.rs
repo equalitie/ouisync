@@ -68,7 +68,7 @@ impl Client {
     ) -> Result<()> {
         let updated = self
             .index
-            .receive_root_node(&writer_id, version_vector, hash, summary)
+            .receive_root_node(writer_id, version_vector, hash, summary)
             .await?;
 
         if updated {

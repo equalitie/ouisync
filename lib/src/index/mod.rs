@@ -95,7 +95,7 @@ impl Index {
     /// received node was more up-to-date than the corresponding branch stored by this replica.
     pub(crate) async fn receive_root_node(
         &self,
-        writer_id: &PublicKey,
+        writer_id: PublicKey,
         version_vector: VersionVector,
         hash: Hash,
         summary: Summary,
@@ -104,7 +104,7 @@ impl Index {
 
         // If the received node is outdated relative to any branch we have, ignore it.
         for branch in branches.values() {
-            if branch.id() == writer_id {
+            if *branch.id() == writer_id {
                 // this will be checked further down.
                 continue;
             }
@@ -120,7 +120,7 @@ impl Index {
         // Whether the remote replica's branch is more up-to-date than ours.
         let updated;
 
-        if let Some(branch) = branches.get(writer_id) {
+        if let Some(branch) = branches.get(&writer_id) {
             let old_node = branch.root().await;
 
             match version_vector.partial_cmp(&old_node.versions) {
@@ -158,7 +158,7 @@ impl Index {
                 Summary::INCOMPLETE,
             )
             .await?;
-            self.update_remote_branch(*writer_id, node).await?;
+            self.update_remote_branch(node).await?;
             self.update_summaries(hash, 0).await?;
         }
 
@@ -290,17 +290,13 @@ impl Index {
     }
 
     /// Update the root node of the remote branch.
-    pub(crate) async fn update_remote_branch(
-        &self,
-        writer_id: PublicKey,
-        node: RootNode,
-    ) -> Result<()> {
+    pub(crate) async fn update_remote_branch(&self, node: RootNode) -> Result<()> {
         let mut branches = self.shared.branches.write().await;
+        let writer_id = node.writer_id;
 
         match branches.entry(writer_id) {
             Entry::Vacant(entry) => {
                 entry.insert(Arc::new(BranchData::with_root_node(
-                    writer_id,
                     node,
                     self.shared.notify_tx.clone(),
                 )));

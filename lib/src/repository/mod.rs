@@ -463,16 +463,14 @@ impl Repository {
 
         let remote_node = RootNode::create(
             &mut *self.index().pool.acquire().await?,
-            &remote_id,
+            remote_id,
             VersionVector::new(),
             index::initial_root_hash(),
             Summary::FULL,
         )
         .await?;
 
-        self.index()
-            .update_remote_branch(remote_id, remote_node)
-            .await?;
+        self.index().update_remote_branch(remote_node).await?;
 
         self.shared.branch(&remote_id).await
     }
