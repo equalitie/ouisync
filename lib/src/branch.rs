@@ -125,7 +125,7 @@ mod tests {
     use crate::{
         access_control::WriteSecrets,
         db,
-        index::{Index, Verified},
+        index::{Index, Proof},
         locator::Locator,
         repository,
     };
@@ -165,7 +165,7 @@ mod tests {
 
         let index = Index::load(pool.clone(), repository_id).await.unwrap();
 
-        let proof = Verified::first(writer_id, &secrets.write_keys);
+        let proof = Proof::first(writer_id, &secrets.write_keys);
         let branch = index.create_branch(proof).await.unwrap();
 
         Branch::new(pool, branch, secrets.into())

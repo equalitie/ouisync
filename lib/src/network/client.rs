@@ -6,7 +6,7 @@ use crate::{
     block::BlockId,
     crypto::{cipher::AuthTag, Hash, Hashable},
     error::{Error, Result},
-    index::{Index, InnerNodeMap, LeafNodeSet, Proof, Summary, INNER_LAYER_COUNT},
+    index::{Index, InnerNodeMap, LeafNodeSet, Summary, UntrustedProof, INNER_LAYER_COUNT},
     store,
     version_vector::VersionVector,
 };
@@ -57,7 +57,7 @@ impl Client {
 
     async fn handle_root_node(
         &mut self,
-        proof: Proof,
+        proof: UntrustedProof,
         version_vector: VersionVector,
         summary: Summary,
     ) -> Result<()> {

@@ -1,7 +1,7 @@
 use crate::{
     block::BlockId,
     crypto::{cipher::AuthTag, Hash},
-    index::{InnerNodeMap, LeafNodeSet, Proof, Summary},
+    index::{InnerNodeMap, LeafNodeSet, Summary, UntrustedProof},
     repository::RepositoryId,
     version_vector::VersionVector,
 };
@@ -28,7 +28,7 @@ pub(crate) enum Response {
     /// `Request` variant -  the server sends these proactively any time there is change in the
     /// repo.
     RootNode {
-        proof: Proof,
+        proof: UntrustedProof,
         version_vector: VersionVector,
         summary: Summary,
     },

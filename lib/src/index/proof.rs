@@ -12,50 +12,23 @@ use thiserror::Error;
 
 /// Information that prove that a snapshot was created by a replica that has write access to the
 /// repository.
-#[derive(Clone, Copy, Eq, PartialEq, Debug, Serialize, Deserialize)]
-pub(crate) struct Proof {
-    pub writer_id: PublicKey,
-    pub hash: Hash,
-    pub signature: Signature,
-}
+#[derive(Clone, Copy, Eq, PartialEq, Debug)]
+pub(crate) struct Proof(UntrustedProof);
 
 impl Proof {
-    pub fn verify(self, repository_id: &RepositoryId) -> Result<Verified, ProofError> {
-        let signature_material = signature_material(&self.writer_id, &self.hash);
-        if repository_id
-            .write_public_key()
-            .verify(&signature_material, &self.signature)
-        {
-            Ok(Verified(self))
-        } else {
-            Err(ProofError)
-        }
-    }
-
-    /// Assume the proof is verified without actually verifying it and convert it into `Verified`.
-    ///
-    /// Use only for proofs loaded from the local database, never for ones received from remote
-    /// replicas.
-    pub fn assume_verified(self) -> Verified {
-        Verified(self)
-    }
-}
-
-impl From<Verified> for Proof {
-    fn from(verified: Verified) -> Self {
-        verified.0
-    }
-}
-
-#[derive(Clone, Copy, Eq, PartialEq, Debug)]
-pub(crate) struct Verified(Proof);
-
-impl Verified {
+    /// Create new proof signed with the given write keys.
     pub fn new(writer_id: PublicKey, hash: Hash, write_keys: &Keypair) -> Self {
         let signature_material = signature_material(&writer_id, &hash);
         let signature = write_keys.sign(&signature_material);
 
-        Self(Proof {
+        Self::new_unchecked(writer_id, hash, signature)
+    }
+
+    /// Create new proof form a pre-existing signature without checking whether the signature
+    /// is valid. Use only when loading proofs from the local db, never when receiving them from
+    /// remote replicas.
+    pub fn new_unchecked(writer_id: PublicKey, hash: Hash, signature: Signature) -> Self {
+        Self(UntrustedProof {
             writer_id,
             hash,
             signature,
@@ -73,11 +46,38 @@ impl Verified {
     }
 }
 
-impl Deref for Verified {
-    type Target = Proof;
+impl Deref for Proof {
+    type Target = UntrustedProof;
 
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+#[derive(Clone, Copy, Eq, PartialEq, Debug, Serialize, Deserialize)]
+pub(crate) struct UntrustedProof {
+    pub writer_id: PublicKey,
+    pub hash: Hash,
+    pub signature: Signature,
+}
+
+impl UntrustedProof {
+    pub fn verify(self, repository_id: &RepositoryId) -> Result<Proof, ProofError> {
+        let signature_material = signature_material(&self.writer_id, &self.hash);
+        if repository_id
+            .write_public_key()
+            .verify(&signature_material, &self.signature)
+        {
+            Ok(Proof(self))
+        } else {
+            Err(ProofError)
+        }
+    }
+}
+
+impl From<Proof> for UntrustedProof {
+    fn from(proof: Proof) -> Self {
+        proof.0
     }
 }
 

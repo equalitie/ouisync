@@ -1,5 +1,5 @@
 use super::{
-    super::proof::Verified, inner::INNER_LAYER_COUNT, summary::Summary, test_utils::Snapshot, *,
+    super::proof::Proof, inner::INNER_LAYER_COUNT, summary::Summary, test_utils::Snapshot, *,
 };
 use crate::{
     crypto::{
@@ -27,7 +27,7 @@ async fn create_new_root_node() {
 
     let node0 = RootNode::create(
         &mut conn,
-        Verified::new(writer_id, hash, &write_keys),
+        Proof::new(writer_id, hash, &write_keys),
         VersionVector::new(),
         Summary::FULL,
     )
@@ -59,7 +59,7 @@ async fn attempt_to_create_existing_root_node() {
 
     let node = RootNode::create(
         &mut conn,
-        Verified::new(writer_id, hash, &write_keys),
+        Proof::new(writer_id, hash, &write_keys),
         VersionVector::new(),
         Summary::FULL,
     )
@@ -69,7 +69,7 @@ async fn attempt_to_create_existing_root_node() {
     assert_matches!(
         RootNode::create(
             &mut conn,
-            Verified::new(writer_id, hash, &write_keys),
+            Proof::new(writer_id, hash, &write_keys),
             VersionVector::new(),
             Summary::FULL,
         )
@@ -538,7 +538,7 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
 
     let mut root_node = RootNode::create(
         &mut conn,
-        Verified::new(writer_id, *snapshot.root_hash(), &write_keys),
+        Proof::new(writer_id, *snapshot.root_hash(), &write_keys),
         VersionVector::new(),
         Summary::FULL,
     )
@@ -603,7 +603,7 @@ async fn summary_case(leaf_count: usize, rng_seed: u64) {
     // Save the snapshot initially with all nodes missing.
     let mut root_node = RootNode::create(
         &mut conn,
-        Verified::new(writer_id, *snapshot.root_hash(), &write_keys),
+        Proof::new(writer_id, *snapshot.root_hash(), &write_keys),
         VersionVector::new(),
         Summary::INCOMPLETE,
     )

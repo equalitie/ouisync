@@ -1,8 +1,5 @@
 use super::{
-    super::{
-        proof::{Proof, Verified},
-        SnapshotId,
-    },
+    super::{proof::Proof, SnapshotId},
     inner::InnerNode,
     summary::{Summary, SummaryUpdateStatus},
 };
@@ -18,7 +15,7 @@ use sqlx::Row;
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub(crate) struct RootNode {
     pub snapshot_id: SnapshotId,
-    pub proof: Verified,
+    pub proof: Proof,
     pub versions: VersionVector,
     pub summary: Summary,
 }
@@ -36,7 +33,7 @@ impl RootNode {
     /// Creates a root node of the specified replica unless it already exists.
     pub async fn create(
         conn: &mut db::Connection,
-        proof: Verified,
+        proof: Proof,
         mut versions: VersionVector,
         summary: Summary,
     ) -> Result<Self> {
@@ -101,24 +98,15 @@ impl RootNode {
         .bind(writer_id.as_ref().to_owned()) // needed to satisfy the borrow checker.
         .bind(limit)
         .fetch(conn)
-        .map_ok(move |row| {
-            let proof = Proof {
-                writer_id,
-                hash: row.get(1),
-                signature: row.get(3),
-            };
-            let proof = proof.assume_verified();
-
-            Self {
-                snapshot_id: row.get(0),
-                proof,
-                versions: row.get(2),
-                summary: Summary {
-                    is_complete: row.get(4),
-                    missing_blocks_count: db::decode_u64(row.get(5)),
-                    missing_blocks_checksum: db::decode_u64(row.get(6)),
-                },
-            }
+        .map_ok(move |row| Self {
+            snapshot_id: row.get(0),
+            proof: Proof::new_unchecked(writer_id, row.get(1), row.get(3)),
+            versions: row.get(2),
+            summary: Summary {
+                is_complete: row.get(4),
+                missing_blocks_count: db::decode_u64(row.get(5)),
+                missing_blocks_checksum: db::decode_u64(row.get(6)),
+            },
         })
         .err_into()
     }

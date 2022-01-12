@@ -19,7 +19,7 @@ use crate::{
     directory::{Directory, EntryType},
     error::{Error, Result},
     file::File,
-    index::{self, BranchData, Index, Verified},
+    index::{self, BranchData, Index, Proof},
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     metadata, path,
     replica_id::ReplicaId,
@@ -79,7 +79,7 @@ impl Repository {
         let index = Index::load(pool, *access_secrets.id()).await?;
 
         if let Some(write_keys) = access_secrets.write_keys() {
-            let proof = Verified::first(this_writer_id, write_keys);
+            let proof = Proof::first(this_writer_id, write_keys);
             index.create_branch(proof).await?;
         }
 
@@ -463,7 +463,7 @@ impl Repository {
         };
 
         let write_keys = self.secrets().write_keys().ok_or(Error::PermissionDenied)?;
-        let proof = Verified::first(remote_id, write_keys);
+        let proof = Proof::first(remote_id, write_keys);
 
         let remote_node = RootNode::create(
             &mut *self.index().pool.acquire().await?,

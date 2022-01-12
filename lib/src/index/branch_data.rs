@@ -42,12 +42,12 @@ impl BranchData {
         write_keys: &Keypair,
         notify_tx: async_broadcast::Sender<PublicKey>,
     ) -> Result<Self> {
-        use super::{node::Summary, proof::Verified};
+        use super::{node::Summary, proof::Proof};
 
         Ok(Self::new(
             RootNode::create(
                 conn,
-                Verified::first(writer_id, write_keys),
+                Proof::first(writer_id, write_keys),
                 VersionVector::new(),
                 Summary::FULL,
             )

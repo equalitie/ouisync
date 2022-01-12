@@ -11,7 +11,7 @@ pub(crate) use self::{
         receive_block, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, RootNode, Summary,
         INNER_LAYER_COUNT,
     },
-    proof::{Proof, Verified},
+    proof::{Proof, UntrustedProof},
 };
 
 use crate::{
@@ -62,7 +62,7 @@ impl Index {
         self.shared.branches.read().await
     }
 
-    pub(crate) async fn create_branch(&self, proof: Verified) -> Result<Arc<BranchData>> {
+    pub(crate) async fn create_branch(&self, proof: Proof) -> Result<Arc<BranchData>> {
         let mut branches = self.shared.branches.write().await;
 
         match branches.entry(proof.writer_id) {
@@ -99,7 +99,7 @@ impl Index {
     /// received node was more up-to-date than the corresponding branch stored by this replica.
     pub(crate) async fn receive_root_node(
         &self,
-        proof: Verified,
+        proof: Proof,
         version_vector: VersionVector,
         summary: Summary,
     ) -> Result<bool> {

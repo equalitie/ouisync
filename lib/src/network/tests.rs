@@ -12,7 +12,7 @@ use crate::{
         Hashable,
     },
     db,
-    index::{node_test_utils::Snapshot, Index, RootNode, Summary, Verified},
+    index::{node_test_utils::Snapshot, Index, Proof, RootNode, Summary},
     repository::{self, RepositoryId},
     store, test_utils,
     version_vector::VersionVector,
@@ -130,7 +130,7 @@ async fn create_index<R: Rng + CryptoRng>(rng: &mut R, write_keys: &Keypair) -> 
     let repository_id = RepositoryId::from(write_keys.public);
 
     let index = Index::load(db, repository_id).await.unwrap();
-    let proof = Verified::first(writer_id, write_keys);
+    let proof = Proof::first(writer_id, write_keys);
     index.create_branch(proof).await.unwrap();
 
     (index, writer_id)
@@ -159,7 +159,7 @@ async fn save_snapshot(
 
     let root_node = RootNode::create(
         &mut conn,
-        Verified::new(writer_id, *snapshot.root_hash(), write_keys),
+        Proof::new(writer_id, *snapshot.root_hash(), write_keys),
         version_vector,
         Summary::INCOMPLETE,
     )
