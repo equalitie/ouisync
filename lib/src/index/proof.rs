@@ -1,8 +1,8 @@
-use super::node::InnerNodeMap;
+use super::node::EMPTY_INNER_HASH;
 use crate::{
     crypto::{
         sign::{Keypair, PublicKey, Signature},
-        Hash, Hashable,
+        Hash,
     },
     repository::RepositoryId,
 };
@@ -37,7 +37,7 @@ impl Proof {
 
     /// Proof for the first snapshot of a newly created branch.
     pub fn first(writer_id: PublicKey, write_keys: &Keypair) -> Self {
-        Self::new(writer_id, InnerNodeMap::default().hash(), write_keys)
+        Self::new(writer_id, *EMPTY_INNER_HASH, write_keys)
     }
 
     /// Create proof for the next snapshot version.

@@ -252,8 +252,8 @@ async fn save_missing_leaf_node_over_existing_present_one() {
 #[tokio::test(flavor = "multi_thread")]
 async fn compute_status_from_empty_leaf_nodes() {
     let mut conn = setup().await;
-    let hash = LeafNodeSet::default().hash();
 
+    let hash = *EMPTY_LEAF_HASH;
     let summary = InnerNode::compute_summary(&mut conn, &hash, INNER_LAYER_COUNT)
         .await
         .unwrap();
@@ -334,8 +334,8 @@ async fn compute_status_from_complete_leaf_nodes_with_all_present_blocks() {
 #[tokio::test(flavor = "multi_thread")]
 async fn compute_status_from_empty_inner_nodes() {
     let mut conn = setup().await;
-    let hash = InnerNodeMap::default().hash();
 
+    let hash = *EMPTY_INNER_HASH;
     let summary = InnerNode::compute_summary(&mut conn, &hash, INNER_LAYER_COUNT - 1)
         .await
         .unwrap();

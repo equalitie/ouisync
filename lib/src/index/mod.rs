@@ -9,14 +9,14 @@ pub(crate) use self::{
     branch_data::BranchData,
     node::{
         receive_block, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, RootNode, Summary,
-        INNER_LAYER_COUNT,
+        EMPTY_INNER_HASH, INNER_LAYER_COUNT,
     },
     proof::{Proof, UntrustedProof},
 };
 
 use crate::{
     block::BlockId,
-    crypto::{sign::PublicKey, Hash, Hashable},
+    crypto::{sign::PublicKey, Hash},
     db,
     error::{Error, Result},
     repository::RepositoryId,
@@ -146,7 +146,7 @@ impl Index {
             }
         } else {
             create = true;
-            updated = proof.hash != InnerNodeMap::default().hash();
+            updated = proof.hash != *EMPTY_INNER_HASH;
         };
 
         // avoid deadlock

@@ -9,8 +9,8 @@ mod summary;
 mod tests;
 
 pub(crate) use self::{
-    inner::{InnerNode, InnerNodeMap, INNER_LAYER_COUNT},
-    leaf::{LeafNode, LeafNodeSet, ModifyStatus},
+    inner::{InnerNode, InnerNodeMap, EMPTY_INNER_HASH, INNER_LAYER_COUNT},
+    leaf::{LeafNode, LeafNodeSet, ModifyStatus, EMPTY_LEAF_HASH},
     root::RootNode,
     summary::{Summary, SummaryUpdateStatus},
 };

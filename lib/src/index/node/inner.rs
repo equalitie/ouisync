@@ -8,6 +8,7 @@ use crate::{
     error::Result,
 };
 use futures_util::{future, Stream, TryStreamExt};
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_256};
 use sqlx::{Acquire, Row};
@@ -276,6 +277,7 @@ impl Hashable for InnerNodeMap {
     fn hash(&self) -> Hash {
         // XXX: Have some cryptographer check this whether there are no attacks.
         let mut hasher = Sha3_256::new();
+        hasher.update(b"inner"); // to disambiguate it from hash of leaf nodes
         hasher.update(&[self.len() as u8]);
         for (bucket, node) in self.iter() {
             hasher.update(bucket.to_le_bytes());
@@ -284,6 +286,9 @@ impl Hashable for InnerNodeMap {
         hasher.finalize().into()
     }
 }
+
+// Cached hash of an empty InnerNodeMap.
+pub(crate) static EMPTY_INNER_HASH: Lazy<Hash> = Lazy::new(|| InnerNodeMap::default().hash());
 
 pub(crate) struct InnerNodeMapIter<'a>(btree_map::Iter<'a, u8, InnerNode>);
 
