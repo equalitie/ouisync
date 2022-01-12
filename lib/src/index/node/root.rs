@@ -1,10 +1,10 @@
 use super::{
     super::{proof::Proof, SnapshotId},
-    inner::{InnerNode, InnerNodeMap},
+    inner::InnerNode,
     summary::{Summary, SummaryUpdateStatus},
 };
 use crate::{
-    crypto::{sign::PublicKey, Hash, Hashable},
+    crypto::{sign::PublicKey, Hash},
     db,
     error::Result,
     version_vector::VersionVector,
@@ -38,8 +38,6 @@ impl RootNode {
         mut versions: VersionVector,
         summary: Summary,
     ) -> Result<Self> {
-        let is_complete = proof.hash == InnerNodeMap::default().hash();
-
         // TODO: shouldn't we start with empty vv?
         versions.insert(proof.writer_id, 1);
 
@@ -66,7 +64,7 @@ impl RootNode {
         .bind(&proof.writer_id)
         .bind(&proof.hash)
         .bind(&versions)
-        .bind(is_complete)
+        .bind(summary.is_complete)
         .bind(db::encode_u64(summary.missing_blocks_count))
         .bind(db::encode_u64(summary.missing_blocks_checksum))
         .bind(&proof.writer_id)
