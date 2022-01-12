@@ -21,28 +21,6 @@ pub(crate) struct RootNode {
 }
 
 impl RootNode {
-    /// Returns the latest root node of the specified replica. If no such node exists yet, creates
-    /// it first.
-    pub async fn load_latest_or_create(
-        conn: &mut db::Connection,
-        writer_id: &PublicKey,
-    ) -> Result<Self> {
-        let node = Self::load_latest(conn, writer_id).await?;
-
-        if let Some(node) = node {
-            Ok(node)
-        } else {
-            Ok(Self::create(
-                conn,
-                writer_id,
-                VersionVector::new(),
-                InnerNodeMap::default().hash(),
-                Summary::FULL,
-            )
-            .await?)
-        }
-    }
-
     /// Returns the latest root node of the specified replica or `None` if no snapshot of that
     /// replica exists.
     pub async fn load_latest(

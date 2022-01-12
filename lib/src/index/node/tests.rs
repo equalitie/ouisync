@@ -30,8 +30,9 @@ async fn create_new_root_node() {
     .unwrap();
     assert_eq!(node0.hash, hash);
 
-    let node1 = RootNode::load_latest_or_create(&mut conn, &writer_id)
+    let node1 = RootNode::load_latest(&mut conn, &writer_id)
         .await
+        .unwrap()
         .unwrap();
     assert_eq!(node1, node0);
 

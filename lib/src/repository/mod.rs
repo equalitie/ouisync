@@ -456,11 +456,17 @@ impl Repository {
     // FOR TESTS ONLY!
     #[cfg(test)]
     pub(crate) async fn create_remote_branch(&self, remote_id: PublicKey) -> Result<Branch> {
-        use crate::index::RootNode;
+        use crate::{
+            index::{RootNode, Summary},
+            version_vector::VersionVector,
+        };
 
-        let remote_node = RootNode::load_latest_or_create(
-            &mut self.index().pool.acquire().await.unwrap(),
+        let remote_node = RootNode::create(
+            &mut *self.index().pool.acquire().await?,
             &remote_id,
+            VersionVector::new(),
+            index::initial_root_hash(),
+            Summary::FULL,
         )
         .await?;
 

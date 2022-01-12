@@ -1,6 +1,6 @@
 use super::{
     broadcast,
-    node::{InnerNode, LeafNode, RootNode, INNER_LAYER_COUNT},
+    node::{self, InnerNode, LeafNode, RootNode, Summary, INNER_LAYER_COUNT},
     path::Path,
 };
 use crate::{
@@ -31,7 +31,19 @@ impl BranchData {
         writer_id: PublicKey,
         notify_tx: async_broadcast::Sender<PublicKey>,
     ) -> Result<Self> {
-        let root_node = RootNode::load_latest_or_create(conn, &writer_id).await?;
+        let root_node = if let Some(node) = RootNode::load_latest(conn, &writer_id).await? {
+            node
+        } else {
+            RootNode::create(
+                conn,
+                &writer_id,
+                VersionVector::new(),
+                node::initial_root_hash(),
+                Summary::FULL,
+            )
+            .await?
+        };
+
         Ok(Self::with_root_node(writer_id, root_node, notify_tx))
     }
 
