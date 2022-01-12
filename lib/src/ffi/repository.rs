@@ -87,9 +87,9 @@ pub unsafe extern "C" fn repository_open(
         let network_handle = ctx.network().handle();
 
         let master_password = if master_password.is_null() {
-            Some(Password::new(utils::ptr_to_str(master_password)?))
-        } else {
             None
+        } else {
+            Some(Password::new(utils::ptr_to_str(master_password)?))
         };
 
         ctx.spawn(async move {
