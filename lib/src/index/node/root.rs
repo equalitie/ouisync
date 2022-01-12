@@ -134,8 +134,14 @@ impl RootNode {
             .err_into()
     }
 
-    /// Creates the next version of this root node with the specified hash.
-    pub async fn next_version(&self, tx: &mut db::Transaction<'_>, hash: Hash) -> Result<Self> {
+    /// Creates the next version of this root node with the specified proof.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the writer_id of the current proof differs from the writer_id of the new proof.
+    pub async fn next_version(&self, tx: &mut db::Transaction<'_>, proof: Proof) -> Result<Self> {
+        assert_eq!(proof.writer_id(), self.proof.writer_id());
+
         let versions = self.versions.clone().incremented(*self.proof.writer_id());
 
         let snapshot_id = sqlx::query(
@@ -150,17 +156,16 @@ impl RootNode {
              VALUES (?, ?, ?, 1, 0, 0)
              RETURNING snapshot_id",
         )
-        .bind(self.proof.writer_id())
-        .bind(&hash)
+        .bind(proof.writer_id())
+        .bind(proof.hash())
         .bind(&versions)
-        .bind(self.snapshot_id)
         .fetch_one(tx)
         .await?
         .get(0);
 
         Ok(Self {
             snapshot_id,
-            proof: Proof::new(*self.proof.writer_id(), hash),
+            proof,
             versions,
             summary: Summary::FULL,
         })

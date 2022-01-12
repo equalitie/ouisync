@@ -215,7 +215,8 @@ impl BranchData {
         }
 
         // TODO: sign the new root
-        let new_root = old_root.next_version(&mut tx, path.root_hash).await?;
+        let new_proof = Proof::new(*old_root.proof.writer_id(), path.root_hash);
+        let new_root = old_root.next_version(&mut tx, new_proof).await?;
         self.replace_root(&mut tx, old_root, new_root).await?;
 
         tx.commit().await?;
