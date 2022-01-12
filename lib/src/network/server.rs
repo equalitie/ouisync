@@ -105,11 +105,7 @@ impl Server {
         }
 
         self.stream
-            .send(Response::InnerNodes {
-                parent_hash,
-                inner_layer,
-                nodes,
-            })
+            .send(Response::InnerNodes { inner_layer, nodes })
             .await;
 
         Ok(())
@@ -122,9 +118,7 @@ impl Server {
             return Ok(());
         }
 
-        self.stream
-            .send(Response::LeafNodes { parent_hash, nodes })
-            .await;
+        self.stream.send(Response::LeafNodes(nodes)).await;
 
         Ok(())
     }

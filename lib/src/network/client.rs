@@ -36,17 +36,10 @@ impl Client {
                 version_vector,
                 summary,
             } => self.handle_root_node(proof, version_vector, summary).await,
-            Response::InnerNodes {
-                parent_hash,
-                inner_layer,
-                nodes,
-            } => {
-                self.handle_inner_nodes(parent_hash, inner_layer, nodes)
-                    .await
+            Response::InnerNodes { inner_layer, nodes } => {
+                self.handle_inner_nodes(inner_layer, nodes).await
             }
-            Response::LeafNodes { parent_hash, nodes } => {
-                self.handle_leaf_nodes(parent_hash, nodes).await
-            }
+            Response::LeafNodes(nodes) => self.handle_leaf_nodes(nodes).await,
             Response::Block {
                 id,
                 content,
@@ -86,16 +79,8 @@ impl Client {
         Ok(())
     }
 
-    async fn handle_inner_nodes(
-        &self,
-        parent_hash: Hash,
-        inner_layer: usize,
-        nodes: InnerNodeMap,
-    ) -> Result<()> {
-        if parent_hash != nodes.hash() {
-            log::warn!("inner nodes parent hash mismatch");
-            return Ok(());
-        }
+    async fn handle_inner_nodes(&self, inner_layer: usize, nodes: InnerNodeMap) -> Result<()> {
+        let parent_hash = nodes.hash();
 
         // TODO: require parent exists
 
@@ -111,11 +96,8 @@ impl Client {
         Ok(())
     }
 
-    async fn handle_leaf_nodes(&self, parent_hash: Hash, nodes: LeafNodeSet) -> Result<()> {
-        if parent_hash != nodes.hash() {
-            log::warn!("leaf nodes parent hash mismatch");
-            return Ok(());
-        }
+    async fn handle_leaf_nodes(&self, nodes: LeafNodeSet) -> Result<()> {
+        let parent_hash = nodes.hash();
 
         // TODO: require parent exists
 

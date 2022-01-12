@@ -32,17 +32,14 @@ pub(crate) enum Response {
         version_vector: VersionVector,
         summary: Summary,
     },
-    /// Send inner nodes with the given parent hash and inner layer.
+    /// Send inner nodes at the given inner layer.
+    // (TODO: remove the layer)
     InnerNodes {
-        parent_hash: Hash,
         inner_layer: usize,
         nodes: InnerNodeMap,
     },
-    /// Send leaf nodes with the given parent hash.
-    LeafNodes {
-        parent_hash: Hash,
-        nodes: LeafNodeSet,
-    },
+    /// Send leaf nodes.
+    LeafNodes(LeafNodeSet),
     /// Send a requested block.
     Block {
         id: BlockId,
@@ -65,21 +62,12 @@ impl fmt::Debug for Response {
                 .field("version_vector", version_vector)
                 .field("summary", summary)
                 .finish(),
-            Self::InnerNodes {
-                parent_hash,
-                inner_layer,
-                nodes,
-            } => f
+            Self::InnerNodes { inner_layer, nodes } => f
                 .debug_struct("InnerNodes")
-                .field("parent_hash", parent_hash)
                 .field("inner_layer", inner_layer)
                 .field("nodes", nodes)
                 .finish(),
-            Self::LeafNodes { parent_hash, nodes } => f
-                .debug_struct("LeafNodes")
-                .field("parent", parent_hash)
-                .field("nodes", nodes)
-                .finish(),
+            Self::LeafNodes(nodes) => f.debug_tuple("LeafNodes").field(nodes).finish(),
             Self::Block { id, .. } => f
                 .debug_struct("Block")
                 .field("id", id)
