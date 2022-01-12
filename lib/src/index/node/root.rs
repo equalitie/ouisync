@@ -6,7 +6,7 @@ use super::{
 use crate::{
     crypto::{sign::PublicKey, Hash},
     db,
-    error::Result,
+    error::{Error, Result},
     version_vector::VersionVector,
 };
 use futures_util::{Stream, TryStreamExt};
@@ -30,8 +30,7 @@ impl RootNode {
         Self::load_all(conn, writer_id, 1).try_next().await
     }
 
-    /// Creates a root node of the specified replica unless it already exists. Returns the newly
-    /// created or the existing node.
+    /// Creates a root node of the specified replica unless it already exists.
     pub async fn create(
         conn: &mut db::Connection,
         proof: Proof,
@@ -41,7 +40,7 @@ impl RootNode {
         // TODO: shouldn't we start with empty vv?
         versions.insert(proof.writer_id, 1);
 
-        sqlx::query(
+        let snapshot_id = sqlx::query(
             "INSERT INTO snapshot_root_nodes (
                  writer_id,
                  hash,
@@ -51,15 +50,8 @@ impl RootNode {
                  missing_blocks_checksum
              )
              VALUES (?, ?, ?, ?, ?, ?)
-             ON CONFLICT (writer_id, hash) DO NOTHING;
-             SELECT
-                 snapshot_id,
-                 versions,
-                 is_complete,
-                 missing_blocks_count,
-                 missing_blocks_checksum
-             FROM snapshot_root_nodes
-             WHERE writer_id = ? AND hash = ?",
+             ON CONFLICT (writer_id, hash) DO NOTHING
+             RETURNING snapshot_id",
         )
         .bind(&proof.writer_id)
         .bind(&proof.hash)
@@ -67,21 +59,17 @@ impl RootNode {
         .bind(summary.is_complete)
         .bind(db::encode_u64(summary.missing_blocks_count))
         .bind(db::encode_u64(summary.missing_blocks_checksum))
-        .bind(&proof.writer_id)
-        .bind(&proof.hash)
-        .map(|row| Self {
-            snapshot_id: row.get(0),
-            versions: row.get(1),
+        .fetch_optional(conn)
+        .await?
+        .ok_or(Error::EntryExists)?
+        .get(0);
+
+        Ok(Self {
+            snapshot_id,
             proof,
-            summary: Summary {
-                is_complete: row.get(2),
-                missing_blocks_count: db::decode_u64(row.get(3)),
-                missing_blocks_checksum: db::decode_u64(row.get(4)),
-            },
+            versions,
+            summary,
         })
-        .fetch_one(conn)
-        .await
-        .map_err(Into::into)
     }
 
     /// Returns a stream of all (but at most `limit`) root nodes corresponding to the specified

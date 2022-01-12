@@ -138,10 +138,16 @@ async fn create_index<R: Rng + CryptoRng>(rng: &mut R) -> (Index, PublicKey) {
 const CAPACITY: usize = 256;
 
 async fn save_snapshot(index: &Index, writer_id: PublicKey, snapshot: &Snapshot) {
-    let mut version_vector = VersionVector::new();
-    version_vector.insert(writer_id, 2); // to force overwrite the initial root node
+    // If the snapshot is empty then there is nothing else to save in addition to the initial root
+    // node the index already has.
+    if snapshot.leaf_count() == 0 {
+        return;
+    }
 
     let mut conn = index.pool.acquire().await.unwrap();
+
+    let mut version_vector = VersionVector::new();
+    version_vector.insert(writer_id, 2); // to force overwrite the initial root node
 
     let root_node = RootNode::create(
         &mut conn,

@@ -46,13 +46,13 @@ async fn create_new_root_node() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn create_existing_root_node() {
+async fn attempt_to_create_existing_root_node() {
     let mut conn = setup().await;
 
     let writer_id = PublicKey::random();
     let hash = rand::random::<u64>().hash();
 
-    let node0 = RootNode::create(
+    let node = RootNode::create(
         &mut conn,
         Proof::new(writer_id, hash),
         VersionVector::new(),
@@ -61,22 +61,23 @@ async fn create_existing_root_node() {
     .await
     .unwrap();
 
-    let node1 = RootNode::create(
-        &mut conn,
-        Proof::new(writer_id, hash),
-        VersionVector::new(),
-        Summary::FULL,
-    )
-    .await
-    .unwrap();
-    assert_eq!(node0, node1);
+    assert_matches!(
+        RootNode::create(
+            &mut conn,
+            Proof::new(writer_id, hash),
+            VersionVector::new(),
+            Summary::FULL,
+        )
+        .await,
+        Err(Error::EntryExists)
+    );
 
     let nodes: Vec<_> = RootNode::load_all(&mut conn, writer_id, 2)
         .try_collect()
         .await
         .unwrap();
     assert_eq!(nodes.len(), 1);
-    assert_eq!(nodes[0], node0);
+    assert_eq!(nodes[0], node);
 }
 
 #[tokio::test(flavor = "multi_thread")]
