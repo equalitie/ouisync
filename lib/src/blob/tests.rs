@@ -468,6 +468,7 @@ async fn fork_case(
         BranchData::create(
             &mut src_branch.db_pool().acquire().await.unwrap(),
             PublicKey::random(),
+            src_branch.keys().write().unwrap(),
             notify_tx,
         )
         .await
@@ -530,18 +531,19 @@ async fn fork_case(
 
 async fn setup(rng_seed: u64) -> (StdRng, Branch) {
     let mut rng = StdRng::seed_from_u64(rng_seed);
-    let keys = WriteSecrets::generate(&mut rng).into();
+    let secrets = WriteSecrets::generate(&mut rng);
     let pool = repository::create_db(&db::Store::Memory).await.unwrap();
 
     let (notify_tx, _) = async_broadcast::broadcast(1);
     let branch = BranchData::create(
         &mut pool.acquire().await.unwrap(),
         PublicKey::random(),
+        &secrets.write_keys,
         notify_tx,
     )
     .await
     .unwrap();
-    let branch = Branch::new(pool, Arc::new(branch), keys);
+    let branch = Branch::new(pool, Arc::new(branch), secrets.into());
 
     (rng, branch)
 }

@@ -12,7 +12,7 @@ use crate::{
         Hashable,
     },
     db,
-    index::{node_test_utils::Snapshot, Index, Proof, RootNode, Summary},
+    index::{node_test_utils::Snapshot, Index, RootNode, Summary, Verified},
     repository::{self, RepositoryId},
     store, test_utils,
     version_vector::VersionVector,
@@ -50,11 +50,12 @@ async fn transfer_snapshot_between_two_replicas_case(
 ) {
     let mut rng = StdRng::seed_from_u64(rng_seed);
 
-    let (a_index, a_id) = create_index(&mut rng).await;
-    let (b_index, _) = create_index(&mut rng).await;
+    let write_keys = Keypair::generate(&mut rng);
+    let (a_index, a_id) = create_index(&mut rng, &write_keys).await;
+    let (b_index, _) = create_index(&mut rng, &write_keys).await;
 
     let snapshot = Snapshot::generate(&mut rng, leaf_count);
-    save_snapshot(&a_index, a_id, &snapshot).await;
+    save_snapshot(&a_index, a_id, &write_keys, &snapshot).await;
     write_all_blocks(&a_index, &snapshot).await;
 
     assert!(load_latest_root_node(&b_index, a_id).await.is_none());
@@ -69,7 +70,7 @@ async fn transfer_snapshot_between_two_replicas_case(
 
             if remaining_changesets > 0 {
                 for _ in 0..changeset_size {
-                    create_block(&mut rng, &a_index, &a_id).await;
+                    create_block(&mut rng, &a_index, &a_id, &write_keys).await;
                 }
 
                 remaining_changesets -= 1;
@@ -96,13 +97,14 @@ fn transfer_blocks_between_two_replicas(
 async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed: u64) {
     let mut rng = StdRng::seed_from_u64(rng_seed);
 
-    let (a_index, a_id) = create_index(&mut rng).await;
-    let (b_index, b_id) = create_index(&mut rng).await;
+    let write_keys = Keypair::generate(&mut rng);
+    let (a_index, a_id) = create_index(&mut rng, &write_keys).await;
+    let (b_index, b_id) = create_index(&mut rng, &write_keys).await;
 
     // Initially both replicas have the whole snapshot but no blocks.
     let snapshot = Snapshot::generate(&mut rng, block_count);
-    save_snapshot(&a_index, a_id, &snapshot).await;
-    save_snapshot(&b_index, b_id, &snapshot).await;
+    save_snapshot(&a_index, a_id, &write_keys, &snapshot).await;
+    save_snapshot(&b_index, b_id, &write_keys, &snapshot).await;
 
     // Keep adding the blocks to replica A and verify they get received by replica B as well.
     let drive = async {
@@ -122,13 +124,14 @@ async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed:
     simulate_connection_until(a_index.clone(), b_index.clone(), drive).await
 }
 
-async fn create_index<R: Rng + CryptoRng>(rng: &mut R) -> (Index, PublicKey) {
+async fn create_index<R: Rng + CryptoRng>(rng: &mut R, write_keys: &Keypair) -> (Index, PublicKey) {
     let db = repository::create_db(&db::Store::Memory).await.unwrap();
-    let repository_id = RepositoryId::generate(rng);
     let writer_id = PublicKey::generate(rng);
+    let repository_id = RepositoryId::from(write_keys.public);
 
     let index = Index::load(db, repository_id).await.unwrap();
-    index.create_branch(writer_id).await.unwrap();
+    let proof = Verified::first(writer_id, write_keys);
+    index.create_branch(proof).await.unwrap();
 
     (index, writer_id)
 }
@@ -137,7 +140,12 @@ async fn create_index<R: Rng + CryptoRng>(rng: &mut R) -> (Index, PublicKey) {
 // TODO: find the actual minimum necessary capacity.
 const CAPACITY: usize = 256;
 
-async fn save_snapshot(index: &Index, writer_id: PublicKey, snapshot: &Snapshot) {
+async fn save_snapshot(
+    index: &Index,
+    writer_id: PublicKey,
+    write_keys: &Keypair,
+    snapshot: &Snapshot,
+) {
     // If the snapshot is empty then there is nothing else to save in addition to the initial root
     // node the index already has.
     if snapshot.leaf_count() == 0 {
@@ -151,7 +159,7 @@ async fn save_snapshot(index: &Index, writer_id: PublicKey, snapshot: &Snapshot)
 
     let root_node = RootNode::create(
         &mut conn,
-        Proof::new(writer_id, *snapshot.root_hash()),
+        Verified::new(writer_id, *snapshot.root_hash(), write_keys),
         version_vector,
         Summary::INCOMPLETE,
     )
@@ -222,16 +230,20 @@ async fn wait_until_block_exists(index: &Index, block_id: &BlockId) {
     }
 }
 
-async fn create_block(rng: &mut StdRng, index: &Index, writer_id: &PublicKey) {
+async fn create_block(
+    rng: &mut StdRng,
+    index: &Index,
+    writer_id: &PublicKey,
+    write_keys: &Keypair,
+) {
     let branch = index.branches().await.get(writer_id).unwrap().clone();
     let encoded_locator = rng.gen::<u64>().hash();
     let block_id = rng.gen();
     let content = vec![0; BLOCK_SIZE];
-    let write_keys = Keypair::generate(rng);
 
     let mut tx = index.pool.begin().await.unwrap();
     branch
-        .insert(&mut tx, &block_id, &encoded_locator, &write_keys)
+        .insert(&mut tx, &block_id, &encoded_locator, write_keys)
         .await
         .unwrap();
     block::write(&mut tx, &block_id, &content, &AuthTag::default())

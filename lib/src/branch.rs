@@ -122,7 +122,13 @@ impl Branch {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{access_control::WriteSecrets, db, index::Index, locator::Locator, repository};
+    use crate::{
+        access_control::WriteSecrets,
+        db,
+        index::{Index, Verified},
+        locator::Locator,
+        repository,
+    };
 
     #[tokio::test(flavor = "multi_thread")]
     async fn ensure_root_directory_exists() {
@@ -156,10 +162,12 @@ mod tests {
         let writer_id = PublicKey::random();
         let secrets = WriteSecrets::random();
         let repository_id = secrets.id;
-        let keys = secrets.into();
 
         let index = Index::load(pool.clone(), repository_id).await.unwrap();
-        let branch = index.create_branch(writer_id).await.unwrap();
-        Branch::new(pool, branch, keys)
+
+        let proof = Verified::first(writer_id, &secrets.write_keys);
+        let branch = index.create_branch(proof).await.unwrap();
+
+        Branch::new(pool, branch, secrets.into())
     }
 }

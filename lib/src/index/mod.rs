@@ -11,7 +11,7 @@ pub(crate) use self::{
         receive_block, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, RootNode, Summary,
         INNER_LAYER_COUNT,
     },
-    proof::Proof,
+    proof::{Proof, Verified},
 };
 
 use crate::{
@@ -62,21 +62,22 @@ impl Index {
         self.shared.branches.read().await
     }
 
-    pub(crate) async fn create_branch(&self, writer_id: PublicKey) -> Result<Arc<BranchData>> {
+    pub(crate) async fn create_branch(&self, proof: Verified) -> Result<Arc<BranchData>> {
         let mut branches = self.shared.branches.write().await;
 
-        match branches.entry(writer_id) {
+        match branches.entry(proof.writer_id) {
             Entry::Occupied(_) => Err(Error::EntryExists),
             Entry::Vacant(entry) => {
                 let root_node = RootNode::create(
                     &mut *self.pool.acquire().await?,
-                    Proof::first(writer_id),
+                    proof,
                     VersionVector::new(),
                     Summary::FULL,
                 )
                 .await?;
-                let branch = Arc::new(BranchData::new(root_node, self.shared.notify_tx.clone()));
 
+                let branch = BranchData::new(root_node, self.shared.notify_tx.clone());
+                let branch = Arc::new(branch);
                 entry.insert(branch.clone());
 
                 Ok(branch)
@@ -98,7 +99,7 @@ impl Index {
     /// received node was more up-to-date than the corresponding branch stored by this replica.
     pub(crate) async fn receive_root_node(
         &self,
-        proof: Proof,
+        proof: Verified,
         version_vector: VersionVector,
         summary: Summary,
     ) -> Result<bool> {
@@ -375,6 +376,9 @@ pub(crate) async fn init(conn: &mut db::Connection) -> Result<(), Error> {
 
              -- Hash of the children
              hash                    BLOB NOT NULL,
+
+             -- Signature proving the creator has write access
+             signature               BLOB NOT NULL,
 
              -- Is this snapshot completely downloaded?
              is_complete             INTEGER NOT NULL,

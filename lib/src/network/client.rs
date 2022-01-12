@@ -61,6 +61,13 @@ impl Client {
         version_vector: VersionVector,
         summary: Summary,
     ) -> Result<()> {
+        let proof = if let Ok(proof) = proof.verify(self.index.repository_id()) {
+            proof
+        } else {
+            log::warn!("root node proof verification failed");
+            return Ok(());
+        };
+
         let parent_hash = proof.hash;
         let updated = self
             .index
@@ -90,6 +97,8 @@ impl Client {
             return Ok(());
         }
 
+        // TODO: require parent exists
+
         let updated = self
             .index
             .receive_inner_nodes(parent_hash, inner_layer, nodes)
@@ -107,6 +116,8 @@ impl Client {
             log::warn!("leaf nodes parent hash mismatch");
             return Ok(());
         }
+
+        // TODO: require parent exists
 
         let updated = self.index.receive_leaf_nodes(parent_hash, nodes).await?;
 

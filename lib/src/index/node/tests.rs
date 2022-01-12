@@ -1,8 +1,11 @@
 use super::{
-    super::proof::Proof, inner::INNER_LAYER_COUNT, summary::Summary, test_utils::Snapshot, *,
+    super::proof::Verified, inner::INNER_LAYER_COUNT, summary::Summary, test_utils::Snapshot, *,
 };
 use crate::{
-    crypto::{sign::PublicKey, Hashable},
+    crypto::{
+        sign::{Keypair, PublicKey},
+        Hashable,
+    },
     db,
     error::Error,
     test_utils,
@@ -19,11 +22,12 @@ async fn create_new_root_node() {
     let mut conn = setup().await;
 
     let writer_id = PublicKey::random();
+    let write_keys = Keypair::random();
     let hash = rand::random::<u64>().hash();
 
     let node0 = RootNode::create(
         &mut conn,
-        Proof::new(writer_id, hash),
+        Verified::new(writer_id, hash, &write_keys),
         VersionVector::new(),
         Summary::FULL,
     )
@@ -50,11 +54,12 @@ async fn attempt_to_create_existing_root_node() {
     let mut conn = setup().await;
 
     let writer_id = PublicKey::random();
+    let write_keys = Keypair::random();
     let hash = rand::random::<u64>().hash();
 
     let node = RootNode::create(
         &mut conn,
-        Proof::new(writer_id, hash),
+        Verified::new(writer_id, hash, &write_keys),
         VersionVector::new(),
         Summary::FULL,
     )
@@ -64,7 +69,7 @@ async fn attempt_to_create_existing_root_node() {
     assert_matches!(
         RootNode::create(
             &mut conn,
-            Proof::new(writer_id, hash),
+            Verified::new(writer_id, hash, &write_keys),
             VersionVector::new(),
             Summary::FULL,
         )
@@ -528,11 +533,12 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
     let mut conn = setup().await;
 
     let writer_id = PublicKey::generate(&mut rng);
+    let write_keys = Keypair::generate(&mut rng);
     let snapshot = Snapshot::generate(&mut rng, leaf_count);
 
     let mut root_node = RootNode::create(
         &mut conn,
-        Proof::new(writer_id, *snapshot.root_hash()),
+        Verified::new(writer_id, *snapshot.root_hash(), &write_keys),
         VersionVector::new(),
         Summary::FULL,
     )
@@ -591,12 +597,13 @@ async fn summary_case(leaf_count: usize, rng_seed: u64) {
     let mut conn = setup().await;
 
     let writer_id = PublicKey::generate(&mut rng);
+    let write_keys = Keypair::generate(&mut rng);
     let snapshot = Snapshot::generate(&mut rng, leaf_count);
 
     // Save the snapshot initially with all nodes missing.
     let mut root_node = RootNode::create(
         &mut conn,
-        Proof::new(writer_id, *snapshot.root_hash()),
+        Verified::new(writer_id, *snapshot.root_hash(), &write_keys),
         VersionVector::new(),
         Summary::INCOMPLETE,
     )

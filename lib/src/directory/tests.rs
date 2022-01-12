@@ -1,6 +1,7 @@
 use super::*;
 use crate::{
     access_control::{AccessKeys, WriteSecrets},
+    crypto::sign::Keypair,
     db,
     index::BranchData,
     repository,
@@ -664,9 +665,11 @@ async fn setup_multiple<const N: usize>() -> [Branch; N] {
 
 async fn create_branch(pool: db::Pool, keys: AccessKeys) -> Branch {
     let (notify_tx, _) = async_broadcast::broadcast(1);
+    let write_keys = Keypair::random();
     let branch_data = BranchData::create(
         &mut pool.acquire().await.unwrap(),
         PublicKey::random(),
+        &write_keys,
         notify_tx,
     )
     .await

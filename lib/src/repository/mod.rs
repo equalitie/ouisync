@@ -19,7 +19,7 @@ use crate::{
     directory::{Directory, EntryType},
     error::{Error, Result},
     file::File,
-    index::{self, BranchData, Index},
+    index::{self, BranchData, Index, Verified},
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     metadata, path,
     replica_id::ReplicaId,
@@ -78,8 +78,9 @@ impl Repository {
 
         let index = Index::load(pool, *access_secrets.id()).await?;
 
-        if access_secrets.can_write() {
-            index.create_branch(this_writer_id).await?;
+        if let Some(write_keys) = access_secrets.write_keys() {
+            let proof = Verified::first(this_writer_id, write_keys);
+            index.create_branch(proof).await?;
         }
 
         Self::new(index, this_writer_id, access_secrets, enable_merger).await
@@ -457,13 +458,16 @@ impl Repository {
     #[cfg(test)]
     pub(crate) async fn create_remote_branch(&self, remote_id: PublicKey) -> Result<Branch> {
         use crate::{
-            index::{Proof, RootNode, Summary},
+            index::{RootNode, Summary},
             version_vector::VersionVector,
         };
 
+        let write_keys = self.secrets().write_keys().ok_or(Error::PermissionDenied)?;
+        let proof = Verified::first(remote_id, write_keys);
+
         let remote_node = RootNode::create(
             &mut *self.index().pool.acquire().await?,
-            Proof::first(remote_id),
+            proof,
             VersionVector::new(),
             Summary::FULL,
         )

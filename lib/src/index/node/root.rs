@@ -1,5 +1,8 @@
 use super::{
-    super::{proof::Proof, SnapshotId},
+    super::{
+        proof::{Proof, Verified},
+        SnapshotId,
+    },
     inner::InnerNode,
     summary::{Summary, SummaryUpdateStatus},
 };
@@ -15,7 +18,7 @@ use sqlx::Row;
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub(crate) struct RootNode {
     pub snapshot_id: SnapshotId,
-    pub proof: Proof,
+    pub proof: Verified,
     pub versions: VersionVector,
     pub summary: Summary,
 }
@@ -33,7 +36,7 @@ impl RootNode {
     /// Creates a root node of the specified replica unless it already exists.
     pub async fn create(
         conn: &mut db::Connection,
-        proof: Proof,
+        proof: Verified,
         mut versions: VersionVector,
         summary: Summary,
     ) -> Result<Self> {
@@ -43,19 +46,21 @@ impl RootNode {
         let snapshot_id = sqlx::query(
             "INSERT INTO snapshot_root_nodes (
                  writer_id,
-                 hash,
                  versions,
+                 hash,
+                 signature,
                  is_complete,
                  missing_blocks_count,
                  missing_blocks_checksum
              )
-             VALUES (?, ?, ?, ?, ?, ?)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT (writer_id, hash) DO NOTHING
              RETURNING snapshot_id",
         )
         .bind(&proof.writer_id)
-        .bind(&proof.hash)
         .bind(&versions)
+        .bind(&proof.hash)
+        .bind(&proof.signature)
         .bind(summary.is_complete)
         .bind(db::encode_u64(summary.missing_blocks_count))
         .bind(db::encode_u64(summary.missing_blocks_checksum))
@@ -84,6 +89,7 @@ impl RootNode {
                  snapshot_id,
                  hash,
                  versions,
+                 signature,
                  is_complete,
                  missing_blocks_count,
                  missing_blocks_checksum
@@ -95,15 +101,24 @@ impl RootNode {
         .bind(writer_id.as_ref().to_owned()) // needed to satisfy the borrow checker.
         .bind(limit)
         .fetch(conn)
-        .map_ok(move |row| Self {
-            snapshot_id: row.get(0),
-            proof: Proof::new(writer_id, row.get(1)),
-            versions: row.get(2),
-            summary: Summary {
-                is_complete: row.get(3),
-                missing_blocks_count: db::decode_u64(row.get(4)),
-                missing_blocks_checksum: db::decode_u64(row.get(5)),
-            },
+        .map_ok(move |row| {
+            let proof = Proof {
+                writer_id,
+                hash: row.get(1),
+                signature: row.get(3),
+            };
+            let proof = proof.assume_verified();
+
+            Self {
+                snapshot_id: row.get(0),
+                proof,
+                versions: row.get(2),
+                summary: Summary {
+                    is_complete: row.get(4),
+                    missing_blocks_count: db::decode_u64(row.get(5)),
+                    missing_blocks_checksum: db::decode_u64(row.get(6)),
+                },
+            }
         })
         .err_into()
     }
@@ -118,43 +133,6 @@ impl RootNode {
             .fetch(conn)
             .map_ok(|row| row.get(0))
             .err_into()
-    }
-
-    /// Creates the next version of this root node with the specified proof.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the writer_id of the current proof differs from the writer_id of the new proof.
-    pub async fn next_version(&self, tx: &mut db::Transaction<'_>, proof: Proof) -> Result<Self> {
-        assert_eq!(proof.writer_id, self.proof.writer_id);
-
-        let versions = self.versions.clone().incremented(self.proof.writer_id);
-
-        let snapshot_id = sqlx::query(
-            "INSERT INTO snapshot_root_nodes (
-                 writer_id,
-                 hash,
-                 versions,
-                 is_complete,
-                 missing_blocks_count,
-                 missing_blocks_checksum
-             )
-             VALUES (?, ?, ?, 1, 0, 0)
-             RETURNING snapshot_id",
-        )
-        .bind(&proof.writer_id)
-        .bind(&proof.hash)
-        .bind(&versions)
-        .fetch_one(tx)
-        .await?
-        .get(0);
-
-        Ok(Self {
-            snapshot_id,
-            proof,
-            versions,
-            summary: Summary::FULL,
-        })
     }
 
     /// Updates the version vector of this node.

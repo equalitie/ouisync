@@ -2,7 +2,6 @@ use super::{
     broadcast,
     node::{InnerNode, LeafNode, RootNode, INNER_LAYER_COUNT},
     path::Path,
-    proof::Proof,
 };
 use crate::{
     block::BlockId,
@@ -40,14 +39,15 @@ impl BranchData {
     pub async fn create(
         conn: &mut db::Connection,
         writer_id: PublicKey,
+        write_keys: &Keypair,
         notify_tx: async_broadcast::Sender<PublicKey>,
     ) -> Result<Self> {
-        use super::node::Summary;
+        use super::{node::Summary, proof::Verified};
 
         Ok(Self::new(
             RootNode::create(
                 conn,
-                Proof::first(writer_id),
+                Verified::first(writer_id, write_keys),
                 VersionVector::new(),
                 Summary::FULL,
             )
@@ -193,7 +193,7 @@ impl BranchData {
         conn: &mut db::Connection,
         old_root: &mut RootNode,
         path: &Path,
-        _write_keys: &Keypair,
+        write_keys: &Keypair,
     ) -> Result<()> {
         let mut tx = conn.begin().await?;
 
@@ -212,9 +212,11 @@ impl BranchData {
             }
         }
 
-        // TODO: sign the new root
-        let new_proof = Proof::new(old_root.proof.writer_id, path.root_hash);
-        let new_root = old_root.next_version(&mut tx, new_proof).await?;
+        let new_proof = old_root.proof.next(path.root_hash, write_keys);
+        let new_version_vector = old_root.versions.clone().incremented(new_proof.writer_id);
+        let new_root =
+            RootNode::create(&mut tx, new_proof, new_version_vector, old_root.summary).await?;
+
         self.replace_root(&mut tx, old_root, new_root).await?;
 
         tx.commit().await?;
@@ -369,10 +371,16 @@ mod tests {
 
     async fn setup() -> (db::Connection, BranchData) {
         let mut conn = init_db().await;
+
         let (notify_tx, _) = async_broadcast::broadcast(1);
-        let branch = BranchData::create(&mut conn, PublicKey::random(), notify_tx)
-            .await
-            .unwrap();
+        let branch = BranchData::create(
+            &mut conn,
+            PublicKey::random(),
+            &Keypair::random(),
+            notify_tx,
+        )
+        .await
+        .unwrap();
 
         (conn, branch)
     }

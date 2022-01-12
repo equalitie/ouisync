@@ -255,6 +255,7 @@ mod tests {
         let branch_data = BranchData::create(
             &mut pool.acquire().await.unwrap(),
             PublicKey::random(),
+            keys.write().unwrap(),
             notify_tx,
         )
         .await
