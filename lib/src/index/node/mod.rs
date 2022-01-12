@@ -17,7 +17,7 @@ pub(crate) use self::{
 
 use crate::{
     block::BlockId,
-    crypto::{sign::PublicKey, Hash, Hashable},
+    crypto::{sign::PublicKey, Hash},
     db,
     error::Result,
 };
@@ -27,11 +27,6 @@ use sqlx::Acquire;
 /// Get the bucket for `locator` at the specified `inner_layer`.
 pub(super) fn get_bucket(locator: &Hash, inner_layer: usize) -> u8 {
     locator.as_ref()[inner_layer]
-}
-
-/// Hash of the initial root node of a branch.
-pub(crate) fn initial_root_hash() -> Hash {
-    InnerNodeMap::default().hash()
 }
 
 /// Update summary of the nodes with the specified hash and layer and all their ancestor nodes.

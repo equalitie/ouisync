@@ -1,4 +1,5 @@
-use crate::crypto::{sign::PublicKey, Hash};
+use super::node::InnerNodeMap;
+use crate::crypto::{sign::PublicKey, Hash, Hashable};
 
 /// Information that prove that a snapshot was created by a replica that has write access to the
 /// repository.
@@ -14,10 +15,10 @@ impl Proof {
         Self { writer_id, hash }
     }
 
-    // /// Proof attached to the first root node of a branch.
-    // pub fn first(writer_id: PublicKey) -> Self {
-
-    // }
+    /// Proof attached to the first root node of a branch.
+    pub fn first(writer_id: PublicKey) -> Self {
+        Self::new(writer_id, InnerNodeMap::default().hash())
+    }
 
     pub fn writer_id(&self) -> &PublicKey {
         &self.writer_id

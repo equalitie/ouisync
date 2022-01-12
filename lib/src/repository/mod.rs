@@ -463,7 +463,7 @@ impl Repository {
 
         let remote_node = RootNode::create(
             &mut *self.index().pool.acquire().await?,
-            Proof::new(remote_id, index::initial_root_hash()),
+            Proof::first(remote_id),
             VersionVector::new(),
             Summary::FULL,
         )

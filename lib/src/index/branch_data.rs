@@ -1,6 +1,6 @@
 use super::{
     broadcast,
-    node::{self, InnerNode, LeafNode, RootNode, Summary, INNER_LAYER_COUNT},
+    node::{InnerNode, LeafNode, RootNode, Summary, INNER_LAYER_COUNT},
     path::Path,
     proof::Proof,
 };
@@ -37,7 +37,7 @@ impl BranchData {
         } else {
             RootNode::create(
                 conn,
-                Proof::new(writer_id, node::initial_root_hash()),
+                Proof::first(writer_id),
                 VersionVector::new(),
                 Summary::FULL,
             )
