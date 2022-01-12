@@ -664,7 +664,7 @@ async fn setup_multiple<const N: usize>() -> [Branch; N] {
 
 async fn create_branch(pool: db::Pool, keys: AccessKeys) -> Branch {
     let (notify_tx, _) = async_broadcast::broadcast(1);
-    let branch_data = BranchData::new(
+    let branch_data = BranchData::create(
         &mut pool.acquire().await.unwrap(),
         PublicKey::random(),
         notify_tx,

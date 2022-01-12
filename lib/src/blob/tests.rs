@@ -465,7 +465,7 @@ async fn fork_case(
 
     let (notify_tx, _) = async_broadcast::broadcast(1);
     let dst_branch = Arc::new(
-        BranchData::new(
+        BranchData::create(
             &mut src_branch.db_pool().acquire().await.unwrap(),
             PublicKey::random(),
             notify_tx,
@@ -534,7 +534,7 @@ async fn setup(rng_seed: u64) -> (StdRng, Branch) {
     let pool = repository::create_db(&db::Store::Memory).await.unwrap();
 
     let (notify_tx, _) = async_broadcast::broadcast(1);
-    let branch = BranchData::new(
+    let branch = BranchData::create(
         &mut pool.acquire().await.unwrap(),
         PublicKey::random(),
         notify_tx,

@@ -1,6 +1,6 @@
 use super::{
     broadcast,
-    node::{InnerNode, LeafNode, RootNode, Summary, INNER_LAYER_COUNT},
+    node::{InnerNode, LeafNode, RootNode, INNER_LAYER_COUNT},
     path::Path,
     proof::Proof,
 };
@@ -27,35 +27,33 @@ pub(crate) struct BranchData {
 }
 
 impl BranchData {
-    pub async fn new(
+    pub fn new(root_node: RootNode, notify_tx: async_broadcast::Sender<PublicKey>) -> Self {
+        Self {
+            writer_id: root_node.proof.writer_id,
+            root_node: RwLock::new(root_node),
+            notify_tx,
+        }
+    }
+
+    // TODO: remove this
+    #[cfg(test)]
+    pub async fn create(
         conn: &mut db::Connection,
         writer_id: PublicKey,
         notify_tx: async_broadcast::Sender<PublicKey>,
     ) -> Result<Self> {
-        let root_node = if let Some(node) = RootNode::load_latest(conn, writer_id).await? {
-            node
-        } else {
+        use super::node::Summary;
+
+        Ok(Self::new(
             RootNode::create(
                 conn,
                 Proof::first(writer_id),
                 VersionVector::new(),
                 Summary::FULL,
             )
-            .await?
-        };
-
-        Ok(Self::with_root_node(root_node, notify_tx))
-    }
-
-    pub fn with_root_node(
-        root_node: RootNode,
-        notify_tx: async_broadcast::Sender<PublicKey>,
-    ) -> Self {
-        Self {
-            writer_id: root_node.proof.writer_id,
-            root_node: RwLock::new(root_node),
+            .await?,
             notify_tx,
-        }
+        ))
     }
 
     /// Returns the id of the replica that owns this branch.
@@ -372,7 +370,7 @@ mod tests {
     async fn setup() -> (db::Connection, BranchData) {
         let mut conn = init_db().await;
         let (notify_tx, _) = async_broadcast::broadcast(1);
-        let branch = BranchData::new(&mut conn, PublicKey::random(), notify_tx)
+        let branch = BranchData::create(&mut conn, PublicKey::random(), notify_tx)
             .await
             .unwrap();
 

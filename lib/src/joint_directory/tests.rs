@@ -878,7 +878,7 @@ async fn setup_with_rng(mut rng: StdRng, branch_count: usize) -> Vec<Branch> {
         let keys = keys.clone();
 
         async move {
-            let data = BranchData::new(&mut pool.acquire().await.unwrap(), id, notify_tx)
+            let data = BranchData::create(&mut pool.acquire().await.unwrap(), id, notify_tx)
                 .await
                 .unwrap();
             Branch::new(pool.clone(), Arc::new(data), keys)

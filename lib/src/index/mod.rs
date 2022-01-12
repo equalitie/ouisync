@@ -68,15 +68,17 @@ impl Index {
         match branches.entry(writer_id) {
             Entry::Occupied(_) => Err(Error::EntryExists),
             Entry::Vacant(entry) => {
-                let branch = Arc::new(
-                    BranchData::new(
-                        &mut *self.pool.acquire().await?,
-                        writer_id,
-                        self.shared.notify_tx.clone(),
-                    )
-                    .await?,
-                );
+                let root_node = RootNode::create(
+                    &mut *self.pool.acquire().await?,
+                    Proof::first(writer_id),
+                    VersionVector::new(),
+                    Summary::FULL,
+                )
+                .await?;
+                let branch = Arc::new(BranchData::new(root_node, self.shared.notify_tx.clone()));
+
                 entry.insert(branch.clone());
+
                 Ok(branch)
             }
         }
@@ -296,7 +298,7 @@ impl Index {
 
         match branches.entry(writer_id) {
             Entry::Vacant(entry) => {
-                entry.insert(Arc::new(BranchData::with_root_node(
+                entry.insert(Arc::new(BranchData::new(
                     node,
                     self.shared.notify_tx.clone(),
                 )));
@@ -339,6 +341,8 @@ async fn load_branches(
     conn: &mut db::Connection,
     notify_tx: async_broadcast::Sender<PublicKey>,
 ) -> Result<HashMap<PublicKey, Arc<BranchData>>> {
+    // TODO: load the root nodes in a single query
+
     let rows = sqlx::query("SELECT DISTINCT writer_id FROM snapshot_root_nodes")
         .fetch_all(&mut *conn)
         .await?;
@@ -347,8 +351,13 @@ async fn load_branches(
 
     for row in rows {
         let id = row.get(0);
+        let root_node = if let Some(node) = RootNode::load_latest(conn, id).await? {
+            node
+        } else {
+            continue;
+        };
         let notify_tx = notify_tx.clone();
-        let branch = Arc::new(BranchData::new(&mut *conn, id, notify_tx).await?);
+        let branch = Arc::new(BranchData::new(root_node, notify_tx));
 
         branches.insert(id, branch);
     }
