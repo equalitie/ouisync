@@ -1,5 +1,5 @@
 use super::{
-    super::SnapshotId,
+    super::{proof::Proof, SnapshotId},
     inner::{InnerNode, InnerNodeMap},
     summary::{Summary, SummaryUpdateStatus},
 };
@@ -15,9 +15,8 @@ use sqlx::Row;
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub(crate) struct RootNode {
     pub snapshot_id: SnapshotId,
-    pub writer_id: PublicKey,
+    pub proof: Proof,
     pub versions: VersionVector,
-    pub hash: Hash,
     pub summary: Summary,
 }
 
@@ -35,21 +34,20 @@ impl RootNode {
     /// created or the existing node.
     pub async fn create(
         conn: &mut db::Connection,
-        writer_id: PublicKey,
+        proof: Proof,
         mut versions: VersionVector,
-        hash: Hash,
         summary: Summary,
     ) -> Result<Self> {
-        let is_complete = hash == InnerNodeMap::default().hash();
+        let is_complete = *proof.hash() == InnerNodeMap::default().hash();
 
         // TODO: shouldn't we start with empty vv?
-        versions.insert(writer_id, 1);
+        versions.insert(*proof.writer_id(), 1);
 
         sqlx::query(
             "INSERT INTO snapshot_root_nodes (
                  writer_id,
-                 versions,
                  hash,
+                 versions,
                  is_complete,
                  missing_blocks_count,
                  missing_blocks_checksum
@@ -65,19 +63,18 @@ impl RootNode {
              FROM snapshot_root_nodes
              WHERE writer_id = ? AND hash = ?",
         )
-        .bind(&writer_id)
+        .bind(proof.writer_id())
+        .bind(proof.hash())
         .bind(&versions)
-        .bind(&hash)
         .bind(is_complete)
         .bind(db::encode_u64(summary.missing_blocks_count))
         .bind(db::encode_u64(summary.missing_blocks_checksum))
-        .bind(&writer_id)
-        .bind(&hash)
+        .bind(proof.writer_id())
+        .bind(proof.hash())
         .map(|row| Self {
             snapshot_id: row.get(0),
-            writer_id,
             versions: row.get(1),
-            hash,
+            proof,
             summary: Summary {
                 is_complete: row.get(2),
                 missing_blocks_count: db::decode_u64(row.get(3)),
@@ -99,8 +96,8 @@ impl RootNode {
         sqlx::query(
             "SELECT
                  snapshot_id,
-                 versions,
                  hash,
+                 versions,
                  is_complete,
                  missing_blocks_count,
                  missing_blocks_checksum
@@ -114,9 +111,8 @@ impl RootNode {
         .fetch(conn)
         .map_ok(move |row| Self {
             snapshot_id: row.get(0),
-            writer_id,
-            versions: row.get(1),
-            hash: row.get(2),
+            proof: Proof::new(writer_id, row.get(1)),
+            versions: row.get(2),
             summary: Summary {
                 is_complete: row.get(3),
                 missing_blocks_count: db::decode_u64(row.get(4)),
@@ -140,24 +136,23 @@ impl RootNode {
 
     /// Creates the next version of this root node with the specified hash.
     pub async fn next_version(&self, tx: &mut db::Transaction<'_>, hash: Hash) -> Result<Self> {
-        let versions = self.versions.clone().incremented(self.writer_id);
+        let versions = self.versions.clone().incremented(*self.proof.writer_id());
 
         let snapshot_id = sqlx::query(
             "INSERT INTO snapshot_root_nodes (
                  writer_id,
-                 versions,
                  hash,
+                 versions,
                  is_complete,
                  missing_blocks_count,
                  missing_blocks_checksum
              )
-             SELECT writer_id, ?, ?, 1, 0, 0
-             FROM snapshot_root_nodes
-             WHERE snapshot_id = ?
+             VALUES (?, ?, ?, 1, 0, 0)
              RETURNING snapshot_id",
         )
-        .bind(&versions)
+        .bind(self.proof.writer_id())
         .bind(&hash)
+        .bind(&versions)
         .bind(self.snapshot_id)
         .fetch_one(tx)
         .await?
@@ -165,9 +160,8 @@ impl RootNode {
 
         Ok(Self {
             snapshot_id,
-            writer_id: self.writer_id,
+            proof: Proof::new(*self.proof.writer_id(), hash),
             versions,
-            hash,
             summary: Summary::FULL,
         })
     }
@@ -189,7 +183,7 @@ impl RootNode {
         if let Some(version_vector_override) = version_vector_override {
             new_version_vector.merge(version_vector_override);
         } else {
-            new_version_vector.increment(self.writer_id);
+            new_version_vector.increment(*self.proof.writer_id());
         }
 
         sqlx::query("UPDATE snapshot_root_nodes SET versions = ? WHERE snapshot_id = ?")

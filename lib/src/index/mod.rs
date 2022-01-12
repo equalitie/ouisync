@@ -11,6 +11,7 @@ pub(crate) use self::{
         receive_block, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, RootNode, Summary,
         INNER_LAYER_COUNT,
     },
+    proof::Proof,
 };
 
 use crate::{
@@ -152,9 +153,8 @@ impl Index {
         if create {
             let node = RootNode::create(
                 &mut *self.pool.acquire().await?,
-                writer_id,
+                Proof::new(writer_id, hash),
                 version_vector,
-                hash,
                 Summary::INCOMPLETE,
             )
             .await?;
@@ -292,7 +292,7 @@ impl Index {
     /// Update the root node of the remote branch.
     pub(crate) async fn update_remote_branch(&self, node: RootNode) -> Result<()> {
         let mut branches = self.shared.branches.write().await;
-        let writer_id = node.writer_id;
+        let writer_id = *node.proof.writer_id();
 
         match branches.entry(writer_id) {
             Entry::Vacant(entry) => {

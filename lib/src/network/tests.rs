@@ -12,7 +12,7 @@ use crate::{
         Hashable,
     },
     db,
-    index::{node_test_utils::Snapshot, Index, RootNode, Summary},
+    index::{node_test_utils::Snapshot, Index, Proof, RootNode, Summary},
     repository::{self, RepositoryId},
     store, test_utils,
     version_vector::VersionVector,
@@ -145,9 +145,8 @@ async fn save_snapshot(index: &Index, writer_id: PublicKey, snapshot: &Snapshot)
 
     let root_node = RootNode::create(
         &mut conn,
-        writer_id,
+        Proof::new(writer_id, *snapshot.root_hash()),
         version_vector,
-        *snapshot.root_hash(),
         Summary::INCOMPLETE,
     )
     .await
@@ -194,7 +193,9 @@ async fn wait_until_snapshots_in_sync(
 
     loop {
         if let Some(client_root) = load_latest_root_node(client_index, server_id).await {
-            if client_root.summary.is_complete() && client_root.hash == server_root.hash {
+            if client_root.summary.is_complete()
+                && client_root.proof.hash() == server_root.proof.hash()
+            {
                 // client has now fully downloaded server's latest snapshot.
                 assert_eq!(client_root.versions, server_root.versions);
                 break;

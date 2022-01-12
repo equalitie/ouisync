@@ -2,6 +2,7 @@ use super::{
     broadcast,
     node::{self, InnerNode, LeafNode, RootNode, Summary, INNER_LAYER_COUNT},
     path::Path,
+    proof::Proof,
 };
 use crate::{
     block::BlockId,
@@ -36,9 +37,8 @@ impl BranchData {
         } else {
             RootNode::create(
                 conn,
-                writer_id,
+                Proof::new(writer_id, node::initial_root_hash()),
                 VersionVector::new(),
-                node::initial_root_hash(),
                 Summary::FULL,
             )
             .await?
@@ -52,7 +52,7 @@ impl BranchData {
         notify_tx: async_broadcast::Sender<PublicKey>,
     ) -> Self {
         Self {
-            writer_id: root_node.writer_id,
+            writer_id: *root_node.proof.writer_id(),
             root_node: RwLock::new(root_node),
             notify_tx,
         }
@@ -92,7 +92,9 @@ impl BranchData {
         write_keys: &Keypair,
     ) -> Result<()> {
         let mut lock = self.root_node.write().await;
-        let mut path = self.get_path(conn, &lock.hash, encoded_locator).await?;
+        let mut path = self
+            .get_path(conn, lock.proof.hash(), encoded_locator)
+            .await?;
 
         // We shouldn't be inserting a block to a branch twice. If we do, the assumption is that we
         // hit one in 2^sizeof(BlockVersion) chance that we randomly generated the same
@@ -107,7 +109,7 @@ impl BranchData {
     pub async fn get(&self, conn: &mut db::Connection, encoded_locator: &Hash) -> Result<BlockId> {
         let root_node = self.root_node.read().await;
         let path = self
-            .get_path(conn, &root_node.hash, encoded_locator)
+            .get_path(conn, root_node.proof.hash(), encoded_locator)
             .await?;
 
         match path.get_leaf() {
@@ -125,7 +127,9 @@ impl BranchData {
         write_keys: &Keypair,
     ) -> Result<()> {
         let mut lock = self.root_node.write().await;
-        let mut path = self.get_path(conn, &lock.hash, encoded_locator).await?;
+        let mut path = self
+            .get_path(conn, lock.proof.hash(), encoded_locator)
+            .await?;
         path.remove_leaf(encoded_locator)
             .ok_or(Error::EntryNotFound)?;
         self.write_path(conn, &mut lock, &path, write_keys).await

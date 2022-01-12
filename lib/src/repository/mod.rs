@@ -457,15 +457,14 @@ impl Repository {
     #[cfg(test)]
     pub(crate) async fn create_remote_branch(&self, remote_id: PublicKey) -> Result<Branch> {
         use crate::{
-            index::{RootNode, Summary},
+            index::{Proof, RootNode, Summary},
             version_vector::VersionVector,
         };
 
         let remote_node = RootNode::create(
             &mut *self.index().pool.acquire().await?,
-            remote_id,
+            Proof::new(remote_id, index::initial_root_hash()),
             VersionVector::new(),
-            index::initial_root_hash(),
             Summary::FULL,
         )
         .await?;

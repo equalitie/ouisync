@@ -1,4 +1,6 @@
-use super::{inner::INNER_LAYER_COUNT, summary::Summary, test_utils::Snapshot, *};
+use super::{
+    super::proof::Proof, inner::INNER_LAYER_COUNT, summary::Summary, test_utils::Snapshot, *,
+};
 use crate::{
     crypto::{sign::PublicKey, Hashable},
     db,
@@ -21,14 +23,13 @@ async fn create_new_root_node() {
 
     let node0 = RootNode::create(
         &mut conn,
-        writer_id,
+        Proof::new(writer_id, hash),
         VersionVector::new(),
-        hash,
         Summary::FULL,
     )
     .await
     .unwrap();
-    assert_eq!(node0.hash, hash);
+    assert_eq!(*node0.proof.hash(), hash);
 
     let node1 = RootNode::load_latest(&mut conn, writer_id)
         .await
@@ -53,9 +54,8 @@ async fn create_existing_root_node() {
 
     let node0 = RootNode::create(
         &mut conn,
-        writer_id,
+        Proof::new(writer_id, hash),
         VersionVector::new(),
-        hash,
         Summary::FULL,
     )
     .await
@@ -63,9 +63,8 @@ async fn create_existing_root_node() {
 
     let node1 = RootNode::create(
         &mut conn,
-        writer_id,
+        Proof::new(writer_id, hash),
         VersionVector::new(),
-        hash,
         Summary::FULL,
     )
     .await
@@ -532,15 +531,14 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
 
     let mut root_node = RootNode::create(
         &mut conn,
-        writer_id,
+        Proof::new(writer_id, *snapshot.root_hash()),
         VersionVector::new(),
-        *snapshot.root_hash(),
         Summary::FULL,
     )
     .await
     .unwrap();
 
-    super::update_summaries(&mut conn, root_node.hash, 0)
+    super::update_summaries(&mut conn, *root_node.proof.hash(), 0)
         .await
         .unwrap();
     root_node.reload(&mut conn).await.unwrap();
@@ -597,16 +595,15 @@ async fn summary_case(leaf_count: usize, rng_seed: u64) {
     // Save the snapshot initially with all nodes missing.
     let mut root_node = RootNode::create(
         &mut conn,
-        writer_id,
+        Proof::new(writer_id, *snapshot.root_hash()),
         VersionVector::new(),
-        *snapshot.root_hash(),
         Summary::INCOMPLETE,
     )
     .await
     .unwrap();
 
     if snapshot.leaf_count() == 0 {
-        super::update_summaries(&mut conn, root_node.hash, 0)
+        super::update_summaries(&mut conn, *root_node.proof.hash(), 0)
             .await
             .unwrap();
     }
