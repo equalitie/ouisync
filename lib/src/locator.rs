@@ -1,9 +1,7 @@
 use crate::{
     blob_id::BlobId,
-    crypto::{cipher::SecretKey, Hash, Hashable},
+    crypto::{cipher::SecretKey, Digest, Hash, Hashable},
 };
-
-use sha3::{Digest, Sha3_256};
 
 /// A type of block identifier similar to `BlockId` but serving a different purpose. While
 /// `BlockId` reflects the block content (it changes when the content change), `Locator` reflects
@@ -44,11 +42,7 @@ impl Locator {
 
     /// Secure encoding of this locator for the use in the index.
     pub fn encode(&self, secret_key: &SecretKey) -> Hash {
-        let mut hasher = Sha3_256::new();
-
-        hasher.update(self.hash().as_ref());
-        hasher.update(secret_key.as_ref().hash());
-        hasher.finalize().into()
+        (secret_key.as_ref(), self).hash()
     }
 
     /// Sequence of locators starting at `self` and continuing with the corresponding trunk
@@ -74,10 +68,8 @@ impl Locator {
 }
 
 impl Hashable for Locator {
-    fn hash(&self) -> Hash {
-        let mut hasher = Sha3_256::new();
-        hasher.update(self.blob.as_ref());
-        hasher.update(self.block.to_le_bytes());
-        hasher.finalize().into()
+    fn update_hash<H: Digest>(&self, h: &mut H) {
+        self.blob.as_ref().update_hash(h);
+        self.block.update_hash(h);
     }
 }

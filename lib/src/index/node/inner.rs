@@ -3,14 +3,13 @@ use super::{
     summary::Summary,
 };
 use crate::{
-    crypto::{Hash, Hashable},
+    crypto::{Digest, Hash, Hashable},
     db,
     error::Result,
 };
 use futures_util::{future, Stream, TryStreamExt};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
-use sha3::{Digest, Sha3_256};
 use sqlx::{Acquire, Row};
 use std::{
     collections::{btree_map, BTreeMap},
@@ -259,16 +258,14 @@ impl<'a> IntoIterator for &'a InnerNodeMap {
 }
 
 impl Hashable for InnerNodeMap {
-    fn hash(&self) -> Hash {
-        // XXX: Have some cryptographer check this whether there are no attacks.
-        let mut hasher = Sha3_256::new();
-        hasher.update(b"inner"); // to disambiguate it from hash of leaf nodes
-        hasher.update(&[self.len() as u8]);
+    fn update_hash<H: Digest>(&self, h: &mut H) {
+        b"inner".update_hash(h); // to disambiguate it from hash of leaf nodes
+        (self.len() as u64).update_hash(h); // XXX: Have some cryptographer check this whether there are no attacks.
+
         for (bucket, node) in self.iter() {
-            hasher.update(bucket.to_le_bytes());
-            hasher.update(node.hash);
+            bucket.update_hash(h);
+            node.hash.update_hash(h);
         }
-        hasher.finalize().into()
     }
 }
 

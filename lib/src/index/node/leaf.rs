@@ -1,6 +1,6 @@
 use crate::{
     block::BlockId,
-    crypto::{Hash, Hashable},
+    crypto::{Digest, Hash, Hashable},
     db,
     error::Error,
     error::Result,
@@ -8,7 +8,6 @@ use crate::{
 use futures_util::{Stream, TryStreamExt};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
-use sha3::{Digest, Sha3_256};
 use sqlx::{Acquire, Row};
 use std::{iter::FromIterator, mem, slice, vec};
 
@@ -250,16 +249,14 @@ impl IntoIterator for LeafNodeSet {
 }
 
 impl Hashable for LeafNodeSet {
-    fn hash(&self) -> Hash {
-        let mut hasher = Sha3_256::new();
-        // XXX: Is updating with length enough to prevent attacks?
-        hasher.update((self.len() as u64).to_le_bytes());
-        hasher.update(b"leaf"); // to disambiguate it from hash of inner nodes
+    fn update_hash<H: Digest>(&self, h: &mut H) {
+        b"leaf".update_hash(h); // to disambiguate it from hash of inner nodes
+        (self.len() as u64).update_hash(h); // XXX: Is updating with length enough to prevent attacks?
+
         for node in self.iter() {
-            hasher.update(node.locator());
-            hasher.update(node.block_id);
+            node.locator().update_hash(h);
+            node.block_id.as_ref().update_hash(h);
         }
-        hasher.finalize().into()
     }
 }
 
