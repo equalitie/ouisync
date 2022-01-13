@@ -121,6 +121,35 @@ async fn receive_valid_inner_nodes() {
     assert!(!inner_nodes.is_empty());
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn receive_inner_nodes_with_missing_root_parent() {
+    let (index, write_keys) = setup().await;
+
+    let local_id = PublicKey::random();
+
+    index
+        .create_branch(Proof::first(local_id, &write_keys))
+        .await
+        .unwrap();
+
+    let snapshot = Snapshot::generate(&mut rand::thread_rng(), 1);
+
+    for layer in snapshot.inner_layers() {
+        let inner_nodes = layer.inner_maps().next().unwrap().1.clone();
+        let result = index.receive_inner_nodes(inner_nodes).await;
+        assert_matches!(result, Err(ReceiveError::ParentNodeNotFound));
+
+        // The orphaned inner nodes were not written to the db.
+        let inner_nodes = InnerNode::load_children(
+            &mut index.pool.acquire().await.unwrap(),
+            snapshot.root_hash(),
+        )
+        .await
+        .unwrap();
+        assert!(inner_nodes.is_empty());
+    }
+}
+
 async fn setup() -> (Index, Keypair) {
     let pool = db::open_or_create(&db::Store::Memory).await.unwrap();
     init(&mut pool.acquire().await.unwrap()).await.unwrap();

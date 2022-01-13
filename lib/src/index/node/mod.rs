@@ -70,6 +70,22 @@ pub(crate) async fn receive_block(
     Ok(ids)
 }
 
+/// Does a parent node (root or inner) with the given hash exist?
+pub(crate) async fn parent_exists(conn: &mut db::Connection, hash: &Hash) -> Result<bool> {
+    use sqlx::Row;
+
+    Ok(sqlx::query(
+        "SELECT
+             EXISTS(SELECT 0 FROM snapshot_root_nodes  WHERE hash = ?) OR
+             EXISTS(SELECT 0 FROM snapshot_inner_nodes WHERE hash = ?)",
+    )
+    .bind(hash)
+    .bind(hash)
+    .fetch_one(conn)
+    .await?
+    .get(0))
+}
+
 async fn update_summaries_with_stack(
     conn: &mut db::Connection,
     mut nodes: Vec<Hash>,

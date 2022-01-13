@@ -175,10 +175,13 @@ impl Index {
 
     /// Receive inner nodes from other replica and store them into the db.
     /// Returns hashes of those nodes that were more up to date than the locally stored ones.
-    pub(crate) async fn receive_inner_nodes(&self, nodes: InnerNodeMap) -> Result<Vec<Hash>> {
-        // TODO: require parent exists
-
+    pub(crate) async fn receive_inner_nodes(
+        &self,
+        nodes: InnerNodeMap,
+    ) -> Result<Vec<Hash>, ReceiveError> {
         let parent_hash = nodes.hash();
+        self.check_parent_node_exists(&parent_hash).await?;
+
         let updated: Vec<_> = self
             .find_inner_nodes_with_new_blocks(&parent_hash, &nodes)
             .await?
@@ -196,7 +199,10 @@ impl Index {
 
     /// Receive leaf nodes from other replica and store them into the db.
     /// Returns the ids of the blocks that the remote replica has but the local one has not.
-    pub(crate) async fn receive_leaf_nodes(&self, nodes: LeafNodeSet) -> Result<Vec<BlockId>> {
+    pub(crate) async fn receive_leaf_nodes(
+        &self,
+        nodes: LeafNodeSet,
+    ) -> Result<Vec<BlockId>, ReceiveError> {
         // TODO: require parent exists
 
         let parent_hash = nodes.hash();
@@ -315,6 +321,14 @@ impl Index {
         };
 
         Ok(())
+    }
+
+    async fn check_parent_node_exists(&self, hash: &Hash) -> Result<(), ReceiveError> {
+        if node::parent_exists(&mut *self.pool.acquire().await?, hash).await? {
+            Ok(())
+        } else {
+            Err(ReceiveError::ParentNodeNotFound)
+        }
     }
 }
 
