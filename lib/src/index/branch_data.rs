@@ -223,7 +223,16 @@ impl BranchData {
             }
         }
 
-        let new_proof = old_root.proof.next(path.root_hash, write_keys);
+        let new_proof = Proof::new(
+            old_root.proof.writer_id,
+            old_root
+                .proof
+                .version_vector
+                .clone()
+                .incremented(old_root.proof.writer_id),
+            path.root_hash,
+            write_keys,
+        );
         let new_root = RootNode::create(&mut tx, new_proof, old_root.summary).await?;
 
         self.replace_root(&mut tx, old_root, new_root).await?;

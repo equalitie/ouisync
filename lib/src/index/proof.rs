@@ -56,16 +56,6 @@ impl Proof {
             write_keys,
         )
     }
-
-    /// Create proof for the next snapshot version.
-    pub fn next(&self, hash: Hash, write_keys: &Keypair) -> Self {
-        Self::new(
-            self.0.writer_id,
-            self.0.version_vector.clone().incremented(self.0.writer_id),
-            hash,
-            write_keys,
-        )
-    }
 }
 
 impl Deref for Proof {
