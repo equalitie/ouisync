@@ -159,8 +159,7 @@ async fn save_snapshot(
 
     let root_node = RootNode::create(
         &mut conn,
-        Proof::new(writer_id, *snapshot.root_hash(), write_keys),
-        version_vector,
+        Proof::new(writer_id, version_vector, *snapshot.root_hash(), write_keys),
         Summary::INCOMPLETE,
     )
     .await
@@ -207,7 +206,10 @@ async fn wait_until_snapshots_in_sync(
             if client_root.summary.is_complete() && client_root.proof.hash == server_root.proof.hash
             {
                 // client has now fully downloaded server's latest snapshot.
-                assert_eq!(client_root.versions, server_root.versions);
+                assert_eq!(
+                    client_root.proof.version_vector,
+                    server_root.proof.version_vector
+                );
                 break;
             }
         }

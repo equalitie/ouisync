@@ -5,6 +5,7 @@ use crate::{
         Hash,
     },
     repository::RepositoryId,
+    version_vector::VersionVector,
 };
 use serde::{Deserialize, Serialize};
 use std::ops::Deref;
@@ -17,19 +18,30 @@ pub(crate) struct Proof(UntrustedProof);
 
 impl Proof {
     /// Create new proof signed with the given write keys.
-    pub fn new(writer_id: PublicKey, hash: Hash, write_keys: &Keypair) -> Self {
+    pub fn new(
+        writer_id: PublicKey,
+        version_vector: VersionVector,
+        hash: Hash,
+        write_keys: &Keypair,
+    ) -> Self {
         let signature_material = signature_material(&writer_id, &hash);
         let signature = write_keys.sign(&signature_material);
 
-        Self::new_unchecked(writer_id, hash, signature)
+        Self::new_unchecked(writer_id, version_vector, hash, signature)
     }
 
     /// Create new proof form a pre-existing signature without checking whether the signature
     /// is valid. Use only when loading proofs from the local db, never when receiving them from
     /// remote replicas.
-    pub fn new_unchecked(writer_id: PublicKey, hash: Hash, signature: Signature) -> Self {
+    pub fn new_unchecked(
+        writer_id: PublicKey,
+        version_vector: VersionVector,
+        hash: Hash,
+        signature: Signature,
+    ) -> Self {
         Self(UntrustedProof {
             writer_id,
+            version_vector,
             hash,
             signature,
         })
@@ -37,12 +49,22 @@ impl Proof {
 
     /// Proof for the first snapshot of a newly created branch.
     pub fn first(writer_id: PublicKey, write_keys: &Keypair) -> Self {
-        Self::new(writer_id, *EMPTY_INNER_HASH, write_keys)
+        Self::new(
+            writer_id,
+            VersionVector::new(),
+            *EMPTY_INNER_HASH,
+            write_keys,
+        )
     }
 
     /// Create proof for the next snapshot version.
     pub fn next(&self, hash: Hash, write_keys: &Keypair) -> Self {
-        Self::new(self.0.writer_id, hash, write_keys)
+        Self::new(
+            self.0.writer_id,
+            self.0.version_vector.clone().incremented(self.0.writer_id),
+            hash,
+            write_keys,
+        )
     }
 }
 
@@ -57,6 +79,7 @@ impl Deref for Proof {
 #[derive(Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub(crate) struct UntrustedProof {
     pub writer_id: PublicKey,
+    pub version_vector: VersionVector,
     pub hash: Hash,
     pub signature: Signature,
 }

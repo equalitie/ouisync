@@ -1,5 +1,8 @@
 use super::{node::RootNode, node_test_utils::Snapshot, *};
-use crate::crypto::sign::{Keypair, PublicKey};
+use crate::{
+    crypto::sign::{Keypair, PublicKey},
+    version_vector::VersionVector,
+};
 use assert_matches::assert_matches;
 
 #[tokio::test(flavor = "multi_thread")]
@@ -30,7 +33,6 @@ async fn receive_valid_root_node() {
     index
         .receive_root_node(
             Proof::first(remote_id, &write_keys).into(),
-            VersionVector::first(remote_id),
             Summary::INCOMPLETE,
         )
         .await
@@ -65,7 +67,6 @@ async fn receive_root_node_with_invalid_proof() {
     let result = index
         .receive_root_node(
             Proof::first(remote_id, &invalid_write_keys).into(),
-            VersionVector::first(remote_id),
             Summary::INCOMPLETE,
         )
         .await;
@@ -95,8 +96,13 @@ async fn receive_valid_child_nodes() {
 
     index
         .receive_root_node(
-            Proof::new(remote_id, *snapshot.root_hash(), &write_keys).into(),
-            VersionVector::first(remote_id),
+            Proof::new(
+                remote_id,
+                VersionVector::first(remote_id),
+                *snapshot.root_hash(),
+                &write_keys,
+            )
+            .into(),
             Summary::INCOMPLETE,
         )
         .await

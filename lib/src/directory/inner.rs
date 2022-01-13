@@ -127,10 +127,17 @@ impl Inner {
         if let Some(ctx) = self.parent.as_mut() {
             ctx.modify_entry(tx, version_vector_override).await
         } else {
+            let write_keys = self
+                .blob
+                .branch()
+                .keys()
+                .write()
+                .ok_or(Error::PermissionDenied)?;
+
             self.blob
                 .branch()
                 .data()
-                .update_root_version_vector(tx, version_vector_override)
+                .update_root_version_vector(tx, version_vector_override, write_keys)
                 .await
         }
     }

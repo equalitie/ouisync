@@ -3,7 +3,6 @@ use crate::{
     crypto::{cipher::AuthTag, Hash},
     index::{InnerNodeMap, LeafNodeSet, Summary, UntrustedProof},
     repository::RepositoryId,
-    version_vector::VersionVector,
 };
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -25,7 +24,6 @@ pub(crate) enum Response {
     /// repo.
     RootNode {
         proof: UntrustedProof,
-        version_vector: VersionVector,
         summary: Summary,
     },
     /// Send inner nodes.
@@ -44,14 +42,9 @@ pub(crate) enum Response {
 impl fmt::Debug for Response {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::RootNode {
-                proof,
-                version_vector,
-                summary,
-            } => f
+            Self::RootNode { proof, summary } => f
                 .debug_struct("RootNode")
                 .field("proof", proof)
-                .field("version_vector", version_vector)
                 .field("summary", summary)
                 .finish(),
             Self::InnerNodes(nodes) => f.debug_tuple("InnerNodes").field(nodes).finish(),

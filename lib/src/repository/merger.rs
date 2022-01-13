@@ -83,7 +83,9 @@ impl Merger {
         };
 
         let handle = scoped_task::spawn(async move {
-            if local.data().root().await.versions > remote.data().root().await.versions {
+            if local.data().root().await.proof.version_vector
+                > remote.data().root().await.proof.version_vector
+            {
                 log::debug!(
                     "merge with branch {:?} suppressed - local branch already up to date",
                     remote_id

@@ -73,7 +73,6 @@ impl Server {
 
         let response = Response::RootNode {
             proof: root_node.proof.clone().into(),
-            version_vector: root_node.versions.clone(),
             summary: root_node.summary,
         };
 

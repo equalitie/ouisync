@@ -23,7 +23,6 @@ use crate::{
     db,
     error::{Error, Result},
     repository::RepositoryId,
-    version_vector::VersionVector,
 };
 use sqlx::Row;
 use std::{
@@ -72,13 +71,9 @@ impl Index {
         match branches.entry(proof.writer_id) {
             Entry::Occupied(_) => Err(Error::EntryExists),
             Entry::Vacant(entry) => {
-                let root_node = RootNode::create(
-                    &mut *self.pool.acquire().await?,
-                    proof,
-                    VersionVector::new(),
-                    Summary::FULL,
-                )
-                .await?;
+                let root_node =
+                    RootNode::create(&mut *self.pool.acquire().await?, proof, Summary::FULL)
+                        .await?;
 
                 let branch = BranchData::new(root_node, self.shared.notify_tx.clone());
                 let branch = Arc::new(branch);
@@ -104,7 +99,6 @@ impl Index {
     pub(crate) async fn receive_root_node(
         &self,
         proof: UntrustedProof,
-        version_vector: VersionVector,
         summary: Summary,
     ) -> Result<bool, ReceiveError> {
         let proof = proof.verify(self.repository_id())?;
@@ -117,7 +111,7 @@ impl Index {
                 continue;
             }
 
-            if version_vector < branch.root().await.versions {
+            if proof.version_vector < branch.root().await.proof.version_vector {
                 return Ok(false);
             }
         }
@@ -131,7 +125,10 @@ impl Index {
         if let Some(branch) = branches.get(&proof.writer_id) {
             let old_node = branch.root().await;
 
-            match version_vector.partial_cmp(&old_node.versions) {
+            match proof
+                .version_vector
+                .partial_cmp(&old_node.proof.version_vector)
+            {
                 Some(Ordering::Greater) => {
                     create = true;
                     updated = true;
@@ -159,13 +156,9 @@ impl Index {
 
         if create {
             let hash = proof.hash;
-            let node = RootNode::create(
-                &mut *self.pool.acquire().await?,
-                proof,
-                version_vector,
-                Summary::INCOMPLETE,
-            )
-            .await?;
+            let node =
+                RootNode::create(&mut *self.pool.acquire().await?, proof, Summary::INCOMPLETE)
+                    .await?;
             self.update_remote_branch(node).await?;
             self.update_summaries(hash).await?;
         }

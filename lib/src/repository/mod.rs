@@ -447,7 +447,7 @@ impl Repository {
             let print = print.indent();
             print.display(&format_args!(
                 "/, vv: {:?}",
-                branch.data().root().await.versions
+                branch.data().root().await.proof.version_vector
             ));
             branch.debug_print(print.indent()).await;
         }
@@ -457,10 +457,7 @@ impl Repository {
     // FOR TESTS ONLY!
     #[cfg(test)]
     pub(crate) async fn create_remote_branch(&self, remote_id: PublicKey) -> Result<Branch> {
-        use crate::{
-            index::{RootNode, Summary},
-            version_vector::VersionVector,
-        };
+        use crate::index::{RootNode, Summary};
 
         let write_keys = self.secrets().write_keys().ok_or(Error::PermissionDenied)?;
         let proof = Proof::first(remote_id, write_keys);
@@ -468,7 +465,6 @@ impl Repository {
         let remote_node = RootNode::create(
             &mut *self.index().pool.acquire().await?,
             proof,
-            VersionVector::new(),
             Summary::FULL,
         )
         .await?;
