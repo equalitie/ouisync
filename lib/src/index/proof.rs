@@ -12,7 +12,7 @@ use thiserror::Error;
 
 /// Information that prove that a snapshot was created by a replica that has write access to the
 /// repository.
-#[derive(Clone, Copy, Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug)]
 pub(crate) struct Proof(UntrustedProof);
 
 impl Proof {
@@ -41,7 +41,7 @@ impl Proof {
     }
 
     /// Create proof for the next snapshot version.
-    pub fn next(self, hash: Hash, write_keys: &Keypair) -> Self {
+    pub fn next(&self, hash: Hash, write_keys: &Keypair) -> Self {
         Self::new(self.0.writer_id, hash, write_keys)
     }
 }
@@ -54,7 +54,7 @@ impl Deref for Proof {
     }
 }
 
-#[derive(Clone, Copy, Eq, PartialEq, Debug, Serialize, Deserialize)]
+#[derive(Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub(crate) struct UntrustedProof {
     pub writer_id: PublicKey,
     pub hash: Hash,
