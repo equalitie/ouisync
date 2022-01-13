@@ -24,7 +24,7 @@ impl Proof {
         hash: Hash,
         write_keys: &Keypair,
     ) -> Self {
-        let signature_material = signature_material(&writer_id, &hash);
+        let signature_material = signature_material(&writer_id, &version_vector, &hash);
         let signature = write_keys.sign(&signature_material);
 
         Self::new_unchecked(writer_id, version_vector, hash, signature)
@@ -76,7 +76,8 @@ pub(crate) struct UntrustedProof {
 
 impl UntrustedProof {
     pub fn verify(self, repository_id: &RepositoryId) -> Result<Proof, ProofError> {
-        let signature_material = signature_material(&self.writer_id, &self.hash);
+        let signature_material =
+            signature_material(&self.writer_id, &self.version_vector, &self.hash);
         if repository_id
             .write_public_key()
             .verify(&signature_material, &self.signature)
@@ -94,11 +95,17 @@ impl From<Proof> for UntrustedProof {
     }
 }
 
-fn signature_material(writer_id: &PublicKey, hash: &Hash) -> [u8; PublicKey::SIZE + Hash::SIZE] {
-    let mut array = [0; PublicKey::SIZE + Hash::SIZE];
-    array[..PublicKey::SIZE].copy_from_slice(writer_id.as_ref());
-    array[PublicKey::SIZE..].copy_from_slice(hash.as_ref());
-    array
+// TODO: consider an alternative way to do this: iteratively build a SHA2-512 hash of all the
+// fields and then use that hash with `sign_prehashed` / `verify_prehashed`. This would avoid the
+// potentially expensive serialization and allocation.
+fn signature_material(
+    writer_id: &PublicKey,
+    version_vector: &VersionVector,
+    hash: &Hash,
+) -> Vec<u8> {
+    // unwrap should be OK because serialization into a vector has no reason to ever fail (unless
+    // there is a bug).
+    bincode::serialize(&(writer_id, version_vector, hash)).unwrap()
 }
 
 #[derive(Debug, Error)]
