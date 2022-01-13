@@ -7,6 +7,7 @@ mod tests;
 
 #[cfg(test)]
 pub(crate) use self::node::test_utils as node_test_utils;
+use self::proof::ProofError;
 pub(crate) use self::{
     branch_data::BranchData,
     node::{
@@ -30,6 +31,7 @@ use std::{
     collections::{hash_map::Entry, HashMap},
     sync::Arc,
 };
+use thiserror::Error;
 use tokio::sync::{RwLock, RwLockReadGuard};
 
 type SnapshotId = u32;
@@ -101,10 +103,11 @@ impl Index {
     /// received node was more up-to-date than the corresponding branch stored by this replica.
     pub(crate) async fn receive_root_node(
         &self,
-        proof: Proof,
+        proof: UntrustedProof,
         version_vector: VersionVector,
         summary: Summary,
-    ) -> Result<bool> {
+    ) -> Result<bool, ReceiveError> {
+        let proof = proof.verify(self.repository_id())?;
         let branches = self.branches().await;
 
         // If the received node is outdated relative to any branch we have, ignore it.
@@ -173,6 +176,8 @@ impl Index {
     /// Receive inner nodes from other replica and store them into the db.
     /// Returns hashes of those nodes that were more up to date than the locally stored ones.
     pub(crate) async fn receive_inner_nodes(&self, nodes: InnerNodeMap) -> Result<Vec<Hash>> {
+        // TODO: require parent exists
+
         let parent_hash = nodes.hash();
         let updated: Vec<_> = self
             .find_inner_nodes_with_new_blocks(&parent_hash, &nodes)
@@ -192,6 +197,8 @@ impl Index {
     /// Receive leaf nodes from other replica and store them into the db.
     /// Returns the ids of the blocks that the remote replica has but the local one has not.
     pub(crate) async fn receive_leaf_nodes(&self, nodes: LeafNodeSet) -> Result<Vec<BlockId>> {
+        // TODO: require parent exists
+
         let parent_hash = nodes.hash();
         let updated: Vec<_> = self
             .find_leaf_nodes_with_new_blocks(&parent_hash, &nodes)
@@ -358,6 +365,28 @@ async fn load_branches(
     }
 
     Ok(branches)
+}
+
+#[derive(Debug, Error)]
+pub(crate) enum ReceiveError {
+    #[error("proof is invalid")]
+    InvalidProof,
+    #[error("parent node not found")]
+    ParentNodeNotFound,
+    #[error("fatal error")]
+    Fatal(#[from] Error),
+}
+
+impl From<ProofError> for ReceiveError {
+    fn from(_: ProofError) -> Self {
+        Self::InvalidProof
+    }
+}
+
+impl From<sqlx::Error> for ReceiveError {
+    fn from(error: sqlx::Error) -> Self {
+        Self::from(Error::from(error))
+    }
 }
 
 /// Initializes the index. Creates the required database schema unless already exists.

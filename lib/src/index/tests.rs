@@ -26,10 +26,12 @@ async fn receive_valid_root_node() {
     drop(conn);
 
     // Receive root node from the remote replica.
-    let vv = VersionVector::first(remote_id);
-    let proof = Proof::first(remote_id, &write_keys);
     index
-        .receive_root_node(proof, vv, Summary::INCOMPLETE)
+        .receive_root_node(
+            Proof::first(remote_id, &write_keys).into(),
+            VersionVector::first(remote_id),
+            Summary::INCOMPLETE,
+        )
         .await
         .unwrap();
 
@@ -61,7 +63,7 @@ async fn receive_valid_inner_nodes() {
 
     index
         .receive_root_node(
-            Proof::new(remote_id, *snapshot.root_hash(), &write_keys),
+            Proof::new(remote_id, *snapshot.root_hash(), &write_keys).into(),
             VersionVector::first(remote_id),
             Summary::INCOMPLETE,
         )
