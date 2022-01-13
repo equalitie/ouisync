@@ -10,13 +10,9 @@ use std::fmt;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub(crate) enum Request {
-    /// Request inner nodes with the given parent hash and inner layer.
-    InnerNodes {
-        parent_hash: Hash,
-        inner_layer: usize,
-    },
-    /// Request leaf nodes with the given parent hash.
-    LeafNodes { parent_hash: Hash },
+    /// Request child nodes (inner or leaf) with the given parent hash. Responded with either
+    /// `InnerNodes` or `LeafNodes` response.
+    ChildNodes(Hash),
     /// Request block with the given id.
     Block(BlockId),
 }
@@ -32,12 +28,8 @@ pub(crate) enum Response {
         version_vector: VersionVector,
         summary: Summary,
     },
-    /// Send inner nodes at the given inner layer.
-    // (TODO: remove the layer)
-    InnerNodes {
-        inner_layer: usize,
-        nodes: InnerNodeMap,
-    },
+    /// Send inner nodes.
+    InnerNodes(InnerNodeMap),
     /// Send leaf nodes.
     LeafNodes(LeafNodeSet),
     /// Send a requested block.
@@ -62,11 +54,7 @@ impl fmt::Debug for Response {
                 .field("version_vector", version_vector)
                 .field("summary", summary)
                 .finish(),
-            Self::InnerNodes { inner_layer, nodes } => f
-                .debug_struct("InnerNodes")
-                .field("inner_layer", inner_layer)
-                .field("nodes", nodes)
-                .finish(),
+            Self::InnerNodes(nodes) => f.debug_tuple("InnerNodes").field(nodes).finish(),
             Self::LeafNodes(nodes) => f.debug_tuple("LeafNodes").field(nodes).finish(),
             Self::Block { id, .. } => f
                 .debug_struct("Block")

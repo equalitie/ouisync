@@ -9,7 +9,7 @@ pub(crate) use self::{
     branch_data::BranchData,
     node::{
         receive_block, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, RootNode, Summary,
-        EMPTY_INNER_HASH, INNER_LAYER_COUNT,
+        EMPTY_INNER_HASH,
     },
     proof::{Proof, UntrustedProof},
 };

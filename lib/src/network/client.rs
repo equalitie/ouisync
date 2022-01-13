@@ -4,9 +4,9 @@ use super::{
 };
 use crate::{
     block::BlockId,
-    crypto::{cipher::AuthTag, Hash, Hashable},
+    crypto::{cipher::AuthTag, Hashable},
     error::{Error, Result},
-    index::{Index, InnerNodeMap, LeafNodeSet, Summary, UntrustedProof, INNER_LAYER_COUNT},
+    index::{Index, InnerNodeMap, LeafNodeSet, Summary, UntrustedProof},
     store,
     version_vector::VersionVector,
 };
@@ -36,9 +36,7 @@ impl Client {
                 version_vector,
                 summary,
             } => self.handle_root_node(proof, version_vector, summary).await,
-            Response::InnerNodes { inner_layer, nodes } => {
-                self.handle_inner_nodes(inner_layer, nodes).await
-            }
+            Response::InnerNodes(nodes) => self.handle_inner_nodes(nodes).await,
             Response::LeafNodes(nodes) => self.handle_leaf_nodes(nodes).await,
             Response::Block {
                 id,
@@ -68,18 +66,13 @@ impl Client {
             .await?;
 
         if updated {
-            self.stream
-                .send(Request::InnerNodes {
-                    parent_hash,
-                    inner_layer: 0,
-                })
-                .await;
+            self.stream.send(Request::ChildNodes(parent_hash)).await;
         }
 
         Ok(())
     }
 
-    async fn handle_inner_nodes(&self, inner_layer: usize, nodes: InnerNodeMap) -> Result<()> {
+    async fn handle_inner_nodes(&self, nodes: InnerNodeMap) -> Result<()> {
         let parent_hash = nodes.hash();
 
         // TODO: require parent exists
@@ -87,7 +80,7 @@ impl Client {
         let updated = self.index.receive_inner_nodes(parent_hash, nodes).await?;
 
         for hash in updated {
-            self.stream.send(child_request(hash, inner_layer)).await;
+            self.stream.send(Request::ChildNodes(hash)).await;
         }
 
         Ok(())
@@ -117,16 +110,5 @@ impl Client {
             Err(Error::BlockNotReferenced) => Ok(()),
             Err(e) => Err(e),
         }
-    }
-}
-
-fn child_request(parent_hash: Hash, inner_layer: usize) -> Request {
-    if inner_layer < INNER_LAYER_COUNT - 1 {
-        Request::InnerNodes {
-            parent_hash,
-            inner_layer: inner_layer + 1,
-        }
-    } else {
-        Request::LeafNodes { parent_hash }
     }
 }

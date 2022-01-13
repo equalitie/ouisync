@@ -88,37 +88,25 @@ impl Server {
 
     async fn handle_request(&mut self, request: Request) -> Result<()> {
         match request {
-            Request::InnerNodes {
-                parent_hash,
-                inner_layer,
-            } => self.handle_inner_nodes(parent_hash, inner_layer).await,
-            Request::LeafNodes { parent_hash } => self.handle_leaf_nodes(parent_hash).await,
+            Request::ChildNodes(parent_hash) => self.handle_child_nodes(parent_hash).await,
             Request::Block(id) => self.handle_block(id).await,
         }
     }
 
-    async fn handle_inner_nodes(&self, parent_hash: Hash, inner_layer: usize) -> Result<()> {
-        let nodes =
-            InnerNode::load_children(&mut *self.index.pool.acquire().await?, &parent_hash).await?;
-        if nodes.is_empty() {
-            return Ok(());
+    async fn handle_child_nodes(&self, parent_hash: Hash) -> Result<()> {
+        let mut conn = self.index.pool.acquire().await?;
+
+        // At most one of these will be non-empty.
+        let inner_nodes = InnerNode::load_children(&mut conn, &parent_hash).await?;
+        let leaf_nodes = LeafNode::load_children(&mut conn, &parent_hash).await?;
+
+        if !inner_nodes.is_empty() {
+            self.stream.send(Response::InnerNodes(inner_nodes)).await;
         }
 
-        self.stream
-            .send(Response::InnerNodes { inner_layer, nodes })
-            .await;
-
-        Ok(())
-    }
-
-    async fn handle_leaf_nodes(&self, parent_hash: Hash) -> Result<()> {
-        let nodes =
-            LeafNode::load_children(&mut *self.index.pool.acquire().await?, &parent_hash).await?;
-        if nodes.is_empty() {
-            return Ok(());
+        if !leaf_nodes.is_empty() {
+            self.stream.send(Response::LeafNodes(leaf_nodes)).await;
         }
-
-        self.stream.send(Response::LeafNodes(nodes)).await;
 
         Ok(())
     }
