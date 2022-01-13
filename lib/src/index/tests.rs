@@ -80,7 +80,7 @@ async fn receive_root_node_with_invalid_proof() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn receive_valid_inner_nodes() {
+async fn receive_valid_child_nodes() {
     let (index, write_keys) = setup().await;
 
     let local_id = PublicKey::random();
@@ -101,24 +101,33 @@ async fn receive_valid_inner_nodes() {
         )
         .await
         .unwrap();
-    let inner_nodes = snapshot
-        .inner_layers()
-        .next()
-        .unwrap()
-        .inner_maps()
-        .next()
-        .unwrap()
-        .1
-        .clone();
-    index.receive_inner_nodes(inner_nodes).await.unwrap();
 
-    let inner_nodes = InnerNode::load_children(
-        &mut index.pool.acquire().await.unwrap(),
-        snapshot.root_hash(),
-    )
-    .await
-    .unwrap();
-    assert!(!inner_nodes.is_empty());
+    for layer in snapshot.inner_layers() {
+        for (hash, inner_nodes) in layer.inner_maps() {
+            index
+                .receive_inner_nodes(inner_nodes.clone())
+                .await
+                .unwrap();
+
+            assert!(
+                !InnerNode::load_children(&mut index.pool.acquire().await.unwrap(), hash)
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+    }
+
+    for (hash, leaf_nodes) in snapshot.leaf_sets() {
+        index.receive_leaf_nodes(leaf_nodes.clone()).await.unwrap();
+
+        assert!(
+            !LeafNode::load_children(&mut index.pool.acquire().await.unwrap(), hash)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
