@@ -617,7 +617,13 @@ impl Reader<'_> {
         if let Some(parent) = &self.inner.parent {
             parent.entry_version_vector().await
         } else {
-            self.branch().data().root().await.versions.clone()
+            self.branch()
+                .data()
+                .root()
+                .await
+                .proof
+                .version_vector
+                .clone()
         }
     }
 

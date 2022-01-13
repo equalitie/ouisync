@@ -7,7 +7,6 @@ use crate::{
     crypto::{sign::PublicKey, Hash},
     db,
     error::{Error, Result},
-    version_vector::VersionVector,
 };
 use futures_util::{Stream, TryStreamExt};
 use sqlx::Row;
@@ -16,7 +15,6 @@ use sqlx::Row;
 pub(crate) struct RootNode {
     pub snapshot_id: SnapshotId,
     pub proof: Proof,
-    pub versions: VersionVector,
     pub summary: Summary,
 }
 
@@ -31,15 +29,7 @@ impl RootNode {
     }
 
     /// Creates a root node of the specified replica unless it already exists.
-    pub async fn create(
-        conn: &mut db::Connection,
-        proof: Proof,
-        mut versions: VersionVector,
-        summary: Summary,
-    ) -> Result<Self> {
-        // TODO: shouldn't we start with empty vv?
-        versions.insert(proof.writer_id, 1);
-
+    pub async fn create(conn: &mut db::Connection, proof: Proof, summary: Summary) -> Result<Self> {
         let snapshot_id = sqlx::query(
             "INSERT INTO snapshot_root_nodes (
                  writer_id,
@@ -55,7 +45,7 @@ impl RootNode {
              RETURNING snapshot_id",
         )
         .bind(&proof.writer_id)
-        .bind(&versions)
+        .bind(&proof.version_vector)
         .bind(&proof.hash)
         .bind(&proof.signature)
         .bind(summary.is_complete)
@@ -69,7 +59,6 @@ impl RootNode {
         Ok(Self {
             snapshot_id,
             proof,
-            versions,
             summary,
         })
     }
@@ -84,8 +73,8 @@ impl RootNode {
         sqlx::query(
             "SELECT
                  snapshot_id,
-                 hash,
                  versions,
+                 hash,
                  signature,
                  is_complete,
                  missing_blocks_count,
@@ -100,8 +89,7 @@ impl RootNode {
         .fetch(conn)
         .map_ok(move |row| Self {
             snapshot_id: row.get(0),
-            proof: Proof::new_unchecked(writer_id, row.get(1), row.get(3)),
-            versions: row.get(2),
+            proof: Proof::new_unchecked(writer_id, row.get(1), row.get(2), row.get(3)),
             summary: Summary {
                 is_complete: row.get(4),
                 missing_blocks_count: db::decode_u64(row.get(5)),
@@ -123,35 +111,39 @@ impl RootNode {
             .err_into()
     }
 
-    /// Updates the version vector of this node.
-    /// If `version_vector_override` is `None`, the local counter of the current version vector is
-    /// incremented by one. If it is `Some`, the current version vector is merged with the
-    /// specified one.
+    /// Updates the proof of this node.
     ///
-    /// NOTE: this function take the transaction by value to make sure the version vector member
-    /// variable is updated only when the db query succeeds, to keep things in sync.
-    pub async fn update_version_vector(
+    /// Only the version vector can be updated. To update any other field of the proof, a new root
+    /// node needs to be created.
+    ///
+    /// NOTE: this function take the transaction by value to make sure the `proof` member
+    /// variable is updated only when the db UPDATE is finalized which happens when the
+    /// transaction is committed which consumes the transaction.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the writer_id or the hash of the new_proof differ from the ones in the current
+    /// proof.
+    pub async fn update_proof(
         &mut self,
         mut tx: db::Transaction<'_>,
-        version_vector_override: Option<&VersionVector>,
+        new_proof: Proof,
     ) -> Result<()> {
-        let mut new_version_vector = self.versions.clone();
+        assert_eq!(new_proof.writer_id, self.proof.writer_id);
+        assert_eq!(new_proof.hash, self.proof.hash);
 
-        if let Some(version_vector_override) = version_vector_override {
-            new_version_vector.merge(version_vector_override);
-        } else {
-            new_version_vector.increment(self.proof.writer_id);
-        }
-
-        sqlx::query("UPDATE snapshot_root_nodes SET versions = ? WHERE snapshot_id = ?")
-            .bind(&new_version_vector)
-            .bind(&self.snapshot_id)
-            .execute(&mut tx)
-            .await?;
+        sqlx::query(
+            "UPDATE snapshot_root_nodes SET versions = ?, signature = ? WHERE snapshot_id = ?",
+        )
+        .bind(&new_proof.version_vector)
+        .bind(&new_proof.signature)
+        .bind(&self.snapshot_id)
+        .execute(&mut tx)
+        .await?;
 
         tx.commit().await?;
 
-        self.versions = new_version_vector;
+        self.proof = new_proof;
 
         Ok(())
     }

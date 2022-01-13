@@ -2,6 +2,7 @@ use super::{
     broadcast,
     node::{InnerNode, LeafNode, RootNode, INNER_LAYER_COUNT},
     path::Path,
+    proof::Proof,
 };
 use crate::{
     block::BlockId,
@@ -42,16 +43,10 @@ impl BranchData {
         write_keys: &Keypair,
         notify_tx: async_broadcast::Sender<PublicKey>,
     ) -> Result<Self> {
-        use super::{node::Summary, proof::Proof};
+        use super::node::Summary;
 
         Ok(Self::new(
-            RootNode::create(
-                conn,
-                Proof::first(writer_id, write_keys),
-                VersionVector::new(),
-                Summary::FULL,
-            )
-            .await?,
+            RootNode::create(conn, Proof::first(writer_id, write_keys), Summary::FULL).await?,
             notify_tx,
         ))
     }
@@ -71,14 +66,28 @@ impl BranchData {
         &self,
         tx: db::Transaction<'_>,
         version_vector_override: Option<&VersionVector>,
+        write_keys: &Keypair,
     ) -> Result<()> {
         // TODO: should we emit a notification event here?
 
-        self.root_node
-            .write()
-            .await
-            .update_version_vector(tx, version_vector_override)
-            .await
+        let mut root_node = self.root_node.write().await;
+
+        let mut new_version_vector = root_node.proof.version_vector.clone();
+
+        if let Some(version_vector_override) = version_vector_override {
+            new_version_vector.merge(version_vector_override);
+        } else {
+            new_version_vector.increment(root_node.proof.writer_id);
+        }
+
+        let new_proof = Proof::new(
+            root_node.proof.writer_id,
+            new_version_vector,
+            root_node.proof.hash,
+            write_keys,
+        );
+
+        root_node.update_proof(tx, new_proof).await
     }
 
     /// Inserts a new block into the index.
@@ -143,7 +152,9 @@ impl BranchData {
     pub async fn update_root(&self, conn: &mut db::Connection, new_root: RootNode) -> Result<()> {
         let mut old_root = self.root_node.write().await;
 
-        if new_root.versions.get(&self.writer_id) <= old_root.versions.get(&self.writer_id) {
+        if new_root.proof.version_vector.get(&self.writer_id)
+            <= old_root.proof.version_vector.get(&self.writer_id)
+        {
             return Ok(());
         }
 
@@ -212,10 +223,17 @@ impl BranchData {
             }
         }
 
-        let new_proof = old_root.proof.next(path.root_hash, write_keys);
-        let new_version_vector = old_root.versions.clone().incremented(new_proof.writer_id);
-        let new_root =
-            RootNode::create(&mut tx, new_proof, new_version_vector, old_root.summary).await?;
+        let new_proof = Proof::new(
+            old_root.proof.writer_id,
+            old_root
+                .proof
+                .version_vector
+                .clone()
+                .incremented(old_root.proof.writer_id),
+            path.root_hash,
+            write_keys,
+        );
+        let new_root = RootNode::create(&mut tx, new_proof, old_root.summary).await?;
 
         self.replace_root(&mut tx, old_root, new_root).await?;
 

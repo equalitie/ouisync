@@ -8,7 +8,6 @@ use crate::{
     error::{Error, Result},
     index::{Index, InnerNodeMap, LeafNodeSet, ReceiveError, Summary, UntrustedProof},
     store,
-    version_vector::VersionVector,
 };
 
 pub(crate) struct Client {
@@ -37,14 +36,7 @@ impl Client {
 
     async fn handle_response(&mut self, response: Response) -> Result<(), ReceiveError> {
         match response {
-            Response::RootNode {
-                proof,
-                version_vector,
-                summary,
-            } => {
-                self.handle_root_node(proof, version_vector, summary)
-                    .await?
-            }
+            Response::RootNode { proof, summary } => self.handle_root_node(proof, summary).await?,
             Response::InnerNodes(nodes) => self.handle_inner_nodes(nodes).await?,
             Response::LeafNodes(nodes) => self.handle_leaf_nodes(nodes).await?,
             Response::Block {
@@ -60,14 +52,10 @@ impl Client {
     async fn handle_root_node(
         &mut self,
         proof: UntrustedProof,
-        version_vector: VersionVector,
         summary: Summary,
     ) -> Result<(), ReceiveError> {
         let hash = proof.hash;
-        let updated = self
-            .index
-            .receive_root_node(proof, version_vector, summary)
-            .await?;
+        let updated = self.index.receive_root_node(proof, summary).await?;
 
         if updated {
             self.stream.send(Request::ChildNodes(hash)).await;
