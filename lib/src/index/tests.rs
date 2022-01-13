@@ -122,7 +122,7 @@ async fn receive_valid_inner_nodes() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn receive_inner_nodes_with_missing_root_parent() {
+async fn receive_child_nodes_with_missing_root_parent() {
     let (index, write_keys) = setup().await;
 
     let local_id = PublicKey::random();
@@ -135,19 +135,26 @@ async fn receive_inner_nodes_with_missing_root_parent() {
     let snapshot = Snapshot::generate(&mut rand::thread_rng(), 1);
 
     for layer in snapshot.inner_layers() {
-        let inner_nodes = layer.inner_maps().next().unwrap().1.clone();
-        let result = index.receive_inner_nodes(inner_nodes).await;
+        let (hash, inner_nodes) = layer.inner_maps().next().unwrap();
+        let result = index.receive_inner_nodes(inner_nodes.clone()).await;
         assert_matches!(result, Err(ReceiveError::ParentNodeNotFound));
 
         // The orphaned inner nodes were not written to the db.
-        let inner_nodes = InnerNode::load_children(
-            &mut index.pool.acquire().await.unwrap(),
-            snapshot.root_hash(),
-        )
-        .await
-        .unwrap();
+        let inner_nodes = InnerNode::load_children(&mut index.pool.acquire().await.unwrap(), hash)
+            .await
+            .unwrap();
         assert!(inner_nodes.is_empty());
     }
+
+    let (hash, leaf_nodes) = snapshot.leaf_sets().next().unwrap();
+    let result = index.receive_leaf_nodes(leaf_nodes.clone()).await;
+    assert_matches!(result, Err(ReceiveError::ParentNodeNotFound));
+
+    // The orphaned leaf nodes were not written to the db.
+    let leaf_nodes = LeafNode::load_children(&mut index.pool.acquire().await.unwrap(), hash)
+        .await
+        .unwrap();
+    assert!(leaf_nodes.is_empty());
 }
 
 async fn setup() -> (Index, Keypair) {

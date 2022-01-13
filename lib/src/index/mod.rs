@@ -203,9 +203,9 @@ impl Index {
         &self,
         nodes: LeafNodeSet,
     ) -> Result<Vec<BlockId>, ReceiveError> {
-        // TODO: require parent exists
-
         let parent_hash = nodes.hash();
+        self.check_parent_node_exists(&parent_hash).await?;
+
         let updated: Vec<_> = self
             .find_leaf_nodes_with_new_blocks(&parent_hash, &nodes)
             .await?
