@@ -1,5 +1,6 @@
 use super::{node::RootNode, node_test_utils::Snapshot, *};
 use crate::crypto::sign::{Keypair, PublicKey};
+use assert_matches::assert_matches;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn receive_valid_root_node() {
@@ -45,6 +46,37 @@ async fn receive_valid_root_node() {
         .await
         .unwrap()
         .is_some());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn receive_root_node_with_invalid_proof() {
+    let (index, write_keys) = setup().await;
+
+    let local_id = PublicKey::random();
+    let remote_id = PublicKey::random();
+
+    index
+        .create_branch(Proof::first(local_id, &write_keys))
+        .await
+        .unwrap();
+
+    // Receive invalid root node from the remote replica.
+    let invalid_write_keys = Keypair::random();
+    let result = index
+        .receive_root_node(
+            Proof::first(remote_id, &invalid_write_keys).into(),
+            VersionVector::first(remote_id),
+            Summary::INCOMPLETE,
+        )
+        .await;
+    assert_matches!(result, Err(ReceiveError::InvalidProof));
+
+    // The invalid root was not written to the db.
+    let mut conn = index.pool.acquire().await.unwrap();
+    assert!(RootNode::load_latest(&mut conn, remote_id)
+        .await
+        .unwrap()
+        .is_none());
 }
 
 #[tokio::test(flavor = "multi_thread")]
