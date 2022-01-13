@@ -186,11 +186,8 @@ async fn save_snapshot(
     // is one).
     drop(conn);
 
-    for (parent_hash, nodes) in snapshot.leaf_sets() {
-        index
-            .receive_leaf_nodes(*parent_hash, nodes.clone())
-            .await
-            .unwrap();
+    for (_, nodes) in snapshot.leaf_sets() {
+        index.receive_leaf_nodes(nodes.clone()).await.unwrap();
     }
 }
 

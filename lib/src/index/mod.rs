@@ -16,7 +16,7 @@ pub(crate) use self::{
 
 use crate::{
     block::BlockId,
-    crypto::{sign::PublicKey, Hash},
+    crypto::{sign::PublicKey, Hash, Hashable},
     db,
     error::{Error, Result},
     repository::RepositoryId,
@@ -170,11 +170,8 @@ impl Index {
 
     /// Receive inner nodes from other replica and store them into the db.
     /// Returns hashes of those nodes that were more up to date than the locally stored ones.
-    pub(crate) async fn receive_inner_nodes(
-        &self,
-        parent_hash: Hash,
-        nodes: InnerNodeMap,
-    ) -> Result<Vec<Hash>> {
+    pub(crate) async fn receive_inner_nodes(&self, nodes: InnerNodeMap) -> Result<Vec<Hash>> {
+        let parent_hash = nodes.hash();
         let updated: Vec<_> = self
             .find_inner_nodes_with_new_blocks(&parent_hash, &nodes)
             .await?
@@ -192,11 +189,8 @@ impl Index {
 
     /// Receive leaf nodes from other replica and store them into the db.
     /// Returns the ids of the blocks that the remote replica has but the local one has not.
-    pub(crate) async fn receive_leaf_nodes(
-        &self,
-        parent_hash: Hash,
-        nodes: LeafNodeSet,
-    ) -> Result<Vec<BlockId>> {
+    pub(crate) async fn receive_leaf_nodes(&self, nodes: LeafNodeSet) -> Result<Vec<BlockId>> {
+        let parent_hash = nodes.hash();
         let updated: Vec<_> = self
             .find_leaf_nodes_with_new_blocks(&parent_hash, &nodes)
             .await?

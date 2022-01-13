@@ -4,7 +4,7 @@ use super::{
 };
 use crate::{
     block::BlockId,
-    crypto::{cipher::AuthTag, Hashable},
+    crypto::cipher::AuthTag,
     error::{Error, Result},
     index::{Index, InnerNodeMap, LeafNodeSet, Summary, UntrustedProof},
     store,
@@ -73,11 +73,9 @@ impl Client {
     }
 
     async fn handle_inner_nodes(&self, nodes: InnerNodeMap) -> Result<()> {
-        let parent_hash = nodes.hash();
-
         // TODO: require parent exists
 
-        let updated = self.index.receive_inner_nodes(parent_hash, nodes).await?;
+        let updated = self.index.receive_inner_nodes(nodes).await?;
 
         for hash in updated {
             self.stream.send(Request::ChildNodes(hash)).await;
@@ -87,11 +85,9 @@ impl Client {
     }
 
     async fn handle_leaf_nodes(&self, nodes: LeafNodeSet) -> Result<()> {
-        let parent_hash = nodes.hash();
-
         // TODO: require parent exists
 
-        let updated = self.index.receive_leaf_nodes(parent_hash, nodes).await?;
+        let updated = self.index.receive_leaf_nodes(nodes).await?;
 
         for block_id in updated {
             // TODO: avoid multiple clients downloading the same block
