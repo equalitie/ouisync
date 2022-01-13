@@ -1,7 +1,7 @@
 use crate::{
     block::BlockId,
-    crypto::{cipher::AuthTag, sign::PublicKey, Hash},
-    index::{InnerNodeMap, LeafNodeSet, Summary},
+    crypto::{cipher::AuthTag, Hash},
+    index::{InnerNodeMap, LeafNodeSet, Summary, UntrustedProof},
     repository::RepositoryId,
     version_vector::VersionVector,
 };
@@ -10,13 +10,9 @@ use std::fmt;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub(crate) enum Request {
-    /// Request inner nodes with the given parent hash and inner layer.
-    InnerNodes {
-        parent_hash: Hash,
-        inner_layer: usize,
-    },
-    /// Request leaf nodes with the given parent hash.
-    LeafNodes { parent_hash: Hash },
+    /// Request child nodes (inner or leaf) with the given parent hash. Responded with either
+    /// `InnerNodes` or `LeafNodes` response.
+    ChildNodes(Hash),
     /// Request block with the given id.
     Block(BlockId),
 }
@@ -28,22 +24,14 @@ pub(crate) enum Response {
     /// `Request` variant -  the server sends these proactively any time there is change in the
     /// repo.
     RootNode {
-        writer_id: PublicKey,
+        proof: UntrustedProof,
         version_vector: VersionVector,
-        hash: Hash,
         summary: Summary,
     },
-    /// Send inner nodes with the given parent hash and inner layer.
-    InnerNodes {
-        parent_hash: Hash,
-        inner_layer: usize,
-        nodes: InnerNodeMap,
-    },
-    /// Send leaf nodes with the given parent hash.
-    LeafNodes {
-        parent_hash: Hash,
-        nodes: LeafNodeSet,
-    },
+    /// Send inner nodes.
+    InnerNodes(InnerNodeMap),
+    /// Send leaf nodes.
+    LeafNodes(LeafNodeSet),
     /// Send a requested block.
     Block {
         id: BlockId,
@@ -57,32 +45,17 @@ impl fmt::Debug for Response {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::RootNode {
-                writer_id,
+                proof,
                 version_vector,
-                hash,
                 summary,
             } => f
                 .debug_struct("RootNode")
-                .field("writer_id", writer_id)
+                .field("proof", proof)
                 .field("version_vector", version_vector)
-                .field("hash", hash)
                 .field("summary", summary)
                 .finish(),
-            Self::InnerNodes {
-                parent_hash,
-                inner_layer,
-                nodes,
-            } => f
-                .debug_struct("InnerNodes")
-                .field("parent_hash", parent_hash)
-                .field("inner_layer", inner_layer)
-                .field("nodes", nodes)
-                .finish(),
-            Self::LeafNodes { parent_hash, nodes } => f
-                .debug_struct("LeafNodes")
-                .field("parent", parent_hash)
-                .field("nodes", nodes)
-                .finish(),
+            Self::InnerNodes(nodes) => f.debug_tuple("InnerNodes").field(nodes).finish(),
+            Self::LeafNodes(nodes) => f.debug_tuple("LeafNodes").field(nodes).finish(),
             Self::Block { id, .. } => f
                 .debug_struct("Block")
                 .field("id", id)

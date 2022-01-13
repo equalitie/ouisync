@@ -9,7 +9,7 @@ mod summary;
 mod tests;
 
 pub(crate) use self::{
-    inner::{InnerNode, InnerNodeMap, INNER_LAYER_COUNT},
+    inner::{InnerNode, InnerNodeMap, EMPTY_INNER_HASH, INNER_LAYER_COUNT},
     leaf::{LeafNode, LeafNodeSet, ModifyStatus},
     root::RootNode,
     summary::{Summary, SummaryUpdateStatus},
@@ -35,10 +35,9 @@ pub(super) fn get_bucket(locator: &Hash, inner_layer: usize) -> u8 {
 pub(super) async fn update_summaries(
     conn: &mut db::Connection,
     hash: Hash,
-    layer: usize,
 ) -> Result<Vec<(PublicKey, SummaryUpdateStatus)>> {
     let mut tx = conn.begin().await?;
-    let statuses = update_summaries_with_stack(&mut tx, vec![(hash, layer)]).await?;
+    let statuses = update_summaries_with_stack(&mut tx, vec![hash]).await?;
     tx.commit().await?;
 
     Ok(statuses)
@@ -57,7 +56,6 @@ pub(crate) async fn receive_block(
     }
 
     let nodes = LeafNode::load_parent_hashes(&mut tx, id)
-        .map_ok(|hash| (hash, INNER_LAYER_COUNT))
         .try_collect()
         .await?;
 
@@ -72,30 +70,44 @@ pub(crate) async fn receive_block(
     Ok(ids)
 }
 
+/// Does a parent node (root or inner) with the given hash exist?
+pub(crate) async fn parent_exists(conn: &mut db::Connection, hash: &Hash) -> Result<bool> {
+    use sqlx::Row;
+
+    Ok(sqlx::query(
+        "SELECT
+             EXISTS(SELECT 0 FROM snapshot_root_nodes  WHERE hash = ?) OR
+             EXISTS(SELECT 0 FROM snapshot_inner_nodes WHERE hash = ?)",
+    )
+    .bind(hash)
+    .bind(hash)
+    .fetch_one(conn)
+    .await?
+    .get(0))
+}
+
 async fn update_summaries_with_stack(
     conn: &mut db::Connection,
-    mut nodes: Vec<(Hash, usize)>,
+    mut nodes: Vec<Hash>,
 ) -> Result<Vec<(PublicKey, SummaryUpdateStatus)>> {
     let mut statuses = Vec::new();
 
-    while let Some((hash, layer)) = nodes.pop() {
-        if layer > 0 {
-            InnerNode::update_summaries(conn, &hash, layer - 1).await?;
-            InnerNode::load_parent_hashes(conn, &hash)
-                .try_for_each(|parent_hash| {
-                    nodes.push((parent_hash, layer - 1));
-                    future::ready(Ok(()))
-                })
-                .await?;
-        } else {
-            let status = RootNode::update_summaries(conn, &hash).await?;
-            RootNode::load_writer_ids(conn, &hash)
-                .try_for_each(|writer_id| {
-                    statuses.push((writer_id, status));
-                    future::ready(Ok(()))
-                })
-                .await?;
-        }
+    while let Some(hash) = nodes.pop() {
+        let status = RootNode::update_summaries(conn, &hash).await?;
+        RootNode::load_writer_ids(conn, &hash)
+            .try_for_each(|writer_id| {
+                statuses.push((writer_id, status));
+                future::ready(Ok(()))
+            })
+            .await?;
+
+        InnerNode::update_summaries(conn, &hash).await?;
+        InnerNode::load_parent_hashes(conn, &hash)
+            .try_for_each(|parent_hash| {
+                nodes.push(parent_hash);
+                future::ready(Ok(()))
+            })
+            .await?;
     }
 
     Ok(statuses)

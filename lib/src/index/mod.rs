@@ -1,15 +1,20 @@
 mod branch_data;
 mod node;
 mod path;
+mod proof;
+#[cfg(test)]
+mod tests;
 
 #[cfg(test)]
 pub(crate) use self::node::test_utils as node_test_utils;
+use self::proof::ProofError;
 pub(crate) use self::{
     branch_data::BranchData,
     node::{
         receive_block, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, RootNode, Summary,
-        INNER_LAYER_COUNT,
+        EMPTY_INNER_HASH,
     },
+    proof::{Proof, UntrustedProof},
 };
 
 use crate::{
@@ -26,6 +31,7 @@ use std::{
     collections::{hash_map::Entry, HashMap},
     sync::Arc,
 };
+use thiserror::Error;
 use tokio::sync::{RwLock, RwLockReadGuard};
 
 type SnapshotId = u32;
@@ -60,21 +66,24 @@ impl Index {
         self.shared.branches.read().await
     }
 
-    pub(crate) async fn create_branch(&self, writer_id: PublicKey) -> Result<Arc<BranchData>> {
+    pub(crate) async fn create_branch(&self, proof: Proof) -> Result<Arc<BranchData>> {
         let mut branches = self.shared.branches.write().await;
 
-        match branches.entry(writer_id) {
+        match branches.entry(proof.writer_id) {
             Entry::Occupied(_) => Err(Error::EntryExists),
             Entry::Vacant(entry) => {
-                let branch = Arc::new(
-                    BranchData::new(
-                        &mut *self.pool.acquire().await?,
-                        writer_id,
-                        self.shared.notify_tx.clone(),
-                    )
-                    .await?,
-                );
+                let root_node = RootNode::create(
+                    &mut *self.pool.acquire().await?,
+                    proof,
+                    VersionVector::new(),
+                    Summary::FULL,
+                )
+                .await?;
+
+                let branch = BranchData::new(root_node, self.shared.notify_tx.clone());
+                let branch = Arc::new(branch);
                 entry.insert(branch.clone());
+
                 Ok(branch)
             }
         }
@@ -94,16 +103,16 @@ impl Index {
     /// received node was more up-to-date than the corresponding branch stored by this replica.
     pub(crate) async fn receive_root_node(
         &self,
-        writer_id: &PublicKey,
+        proof: UntrustedProof,
         version_vector: VersionVector,
-        hash: Hash,
         summary: Summary,
-    ) -> Result<bool> {
+    ) -> Result<bool, ReceiveError> {
+        let proof = proof.verify(self.repository_id())?;
         let branches = self.branches().await;
 
         // If the received node is outdated relative to any branch we have, ignore it.
         for branch in branches.values() {
-            if branch.id() == writer_id {
+            if *branch.id() == proof.writer_id {
                 // this will be checked further down.
                 continue;
             }
@@ -119,7 +128,7 @@ impl Index {
         // Whether the remote replica's branch is more up-to-date than ours.
         let updated;
 
-        if let Some(branch) = branches.get(writer_id) {
+        if let Some(branch) = branches.get(&proof.writer_id) {
             let old_node = branch.root().await;
 
             match version_vector.partial_cmp(&old_node.versions) {
@@ -142,23 +151,23 @@ impl Index {
             }
         } else {
             create = true;
-            updated = hash != InnerNodeMap::default().hash();
+            updated = proof.hash != *EMPTY_INNER_HASH;
         };
 
         // avoid deadlock
         drop(branches);
 
         if create {
+            let hash = proof.hash;
             let node = RootNode::create(
                 &mut *self.pool.acquire().await?,
-                writer_id,
+                proof,
                 version_vector,
-                hash,
                 Summary::INCOMPLETE,
             )
             .await?;
-            self.update_remote_branch(*writer_id, node).await?;
-            self.update_summaries(hash, 0).await?;
+            self.update_remote_branch(node).await?;
+            self.update_summaries(hash).await?;
         }
 
         Ok(updated)
@@ -168,10 +177,11 @@ impl Index {
     /// Returns hashes of those nodes that were more up to date than the locally stored ones.
     pub(crate) async fn receive_inner_nodes(
         &self,
-        parent_hash: Hash,
-        inner_layer: usize,
         nodes: InnerNodeMap,
-    ) -> Result<Vec<Hash>> {
+    ) -> Result<Vec<Hash>, ReceiveError> {
+        let parent_hash = nodes.hash();
+        self.check_parent_node_exists(&parent_hash).await?;
+
         let updated: Vec<_> = self
             .find_inner_nodes_with_new_blocks(&parent_hash, &nodes)
             .await?
@@ -182,7 +192,7 @@ impl Index {
             .into_incomplete()
             .save(&mut *self.pool.acquire().await?, &parent_hash)
             .await?;
-        self.update_summaries(parent_hash, inner_layer).await?;
+        self.update_summaries(parent_hash).await?;
 
         Ok(updated)
     }
@@ -191,9 +201,11 @@ impl Index {
     /// Returns the ids of the blocks that the remote replica has but the local one has not.
     pub(crate) async fn receive_leaf_nodes(
         &self,
-        parent_hash: Hash,
         nodes: LeafNodeSet,
-    ) -> Result<Vec<BlockId>> {
+    ) -> Result<Vec<BlockId>, ReceiveError> {
+        let parent_hash = nodes.hash();
+        self.check_parent_node_exists(&parent_hash).await?;
+
         let updated: Vec<_> = self
             .find_leaf_nodes_with_new_blocks(&parent_hash, &nodes)
             .await?
@@ -204,8 +216,7 @@ impl Index {
             .into_missing()
             .save(&mut *self.pool.acquire().await?, &parent_hash)
             .await?;
-        self.update_summaries(parent_hash, INNER_LAYER_COUNT)
-            .await?;
+        self.update_summaries(parent_hash).await?;
 
         Ok(updated)
     }
@@ -260,10 +271,10 @@ impl Index {
 
     // Updates summaries of the specified nodes and all their ancestors, notifies the affected
     // branches that became complete (wasn't before the update but became after it).
-    async fn update_summaries(&self, hash: Hash, layer: usize) -> Result<()> {
+    async fn update_summaries(&self, hash: Hash) -> Result<()> {
         let mut conn = self.pool.acquire().await?;
 
-        let statuses = node::update_summaries(&mut conn, hash, layer).await?;
+        let statuses = node::update_summaries(&mut conn, hash).await?;
         let branches = self.branches().await;
 
         // Reload cached root nodes of the branches whose completion status changed.
@@ -289,17 +300,13 @@ impl Index {
     }
 
     /// Update the root node of the remote branch.
-    pub(crate) async fn update_remote_branch(
-        &self,
-        writer_id: PublicKey,
-        node: RootNode,
-    ) -> Result<()> {
+    pub(crate) async fn update_remote_branch(&self, node: RootNode) -> Result<()> {
         let mut branches = self.shared.branches.write().await;
+        let writer_id = node.proof.writer_id;
 
         match branches.entry(writer_id) {
             Entry::Vacant(entry) => {
-                entry.insert(Arc::new(BranchData::with_root_node(
-                    writer_id,
+                entry.insert(Arc::new(BranchData::new(
                     node,
                     self.shared.notify_tx.clone(),
                 )));
@@ -314,6 +321,14 @@ impl Index {
         };
 
         Ok(())
+    }
+
+    async fn check_parent_node_exists(&self, hash: &Hash) -> Result<(), ReceiveError> {
+        if node::parent_exists(&mut *self.pool.acquire().await?, hash).await? {
+            Ok(())
+        } else {
+            Err(ReceiveError::ParentNodeNotFound)
+        }
     }
 }
 
@@ -342,6 +357,8 @@ async fn load_branches(
     conn: &mut db::Connection,
     notify_tx: async_broadcast::Sender<PublicKey>,
 ) -> Result<HashMap<PublicKey, Arc<BranchData>>> {
+    // TODO: load the root nodes in a single query
+
     let rows = sqlx::query("SELECT DISTINCT writer_id FROM snapshot_root_nodes")
         .fetch_all(&mut *conn)
         .await?;
@@ -350,13 +367,40 @@ async fn load_branches(
 
     for row in rows {
         let id = row.get(0);
+        let root_node = if let Some(node) = RootNode::load_latest(conn, id).await? {
+            node
+        } else {
+            continue;
+        };
         let notify_tx = notify_tx.clone();
-        let branch = Arc::new(BranchData::new(&mut *conn, id, notify_tx).await?);
+        let branch = Arc::new(BranchData::new(root_node, notify_tx));
 
         branches.insert(id, branch);
     }
 
     Ok(branches)
+}
+
+#[derive(Debug, Error)]
+pub(crate) enum ReceiveError {
+    #[error("proof is invalid")]
+    InvalidProof,
+    #[error("parent node not found")]
+    ParentNodeNotFound,
+    #[error("fatal error")]
+    Fatal(#[from] Error),
+}
+
+impl From<ProofError> for ReceiveError {
+    fn from(_: ProofError) -> Self {
+        Self::InvalidProof
+    }
+}
+
+impl From<sqlx::Error> for ReceiveError {
+    fn from(error: sqlx::Error) -> Self {
+        Self::from(Error::from(error))
+    }
 }
 
 /// Initializes the index. Creates the required database schema unless already exists.
@@ -369,6 +413,9 @@ pub(crate) async fn init(conn: &mut db::Connection) -> Result<(), Error> {
 
              -- Hash of the children
              hash                    BLOB NOT NULL,
+
+             -- Signature proving the creator has write access
+             signature               BLOB NOT NULL,
 
              -- Is this snapshot completely downloaded?
              is_complete             INTEGER NOT NULL,

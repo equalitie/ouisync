@@ -6,6 +6,7 @@ use crate::{
     error::Result,
 };
 use futures_util::{Stream, TryStreamExt};
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_256};
 use sqlx::{Acquire, Row};
@@ -253,6 +254,7 @@ impl Hashable for LeafNodeSet {
         let mut hasher = Sha3_256::new();
         // XXX: Is updating with length enough to prevent attacks?
         hasher.update((self.len() as u64).to_le_bytes());
+        hasher.update(b"leaf"); // to disambiguate it from hash of inner nodes
         for node in self.iter() {
             hasher.update(node.locator());
             hasher.update(node.block_id);
@@ -260,6 +262,9 @@ impl Hashable for LeafNodeSet {
         hasher.finalize().into()
     }
 }
+
+// Cached hash of an empty LeafNodeSet.
+pub(crate) static EMPTY_LEAF_HASH: Lazy<Hash> = Lazy::new(|| LeafNodeSet::default().hash());
 
 pub enum ModifyStatus {
     Updated(BlockId),

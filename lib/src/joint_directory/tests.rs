@@ -1,14 +1,7 @@
 use super::*;
 use crate::{
-    access_control::{AccessKeys, WriteSecrets},
-    blob::Blob,
-    branch::Branch,
-    crypto::sign::PublicKey,
-    db,
-    directory::EntryData,
-    index::BranchData,
-    locator::Locator,
-    repository,
+    access_control::WriteSecrets, blob::Blob, branch::Branch, crypto::sign::PublicKey, db,
+    directory::EntryData, index::BranchData, locator::Locator, repository,
     version_vector::VersionVector,
 };
 use assert_matches::assert_matches;
@@ -870,18 +863,23 @@ async fn setup_with_rng(mut rng: StdRng, branch_count: usize) -> Vec<Branch> {
     let pool = &pool;
 
     let (notify_tx, _) = async_broadcast::broadcast(1);
-    let keys = AccessKeys::from(WriteSecrets::generate(&mut rng));
+    let secrets = WriteSecrets::generate(&mut rng);
 
     future::join_all((0..branch_count).map(|_| {
         let id = PublicKey::generate(&mut rng);
         let notify_tx = notify_tx.clone();
-        let keys = keys.clone();
+        let secrets = secrets.clone();
 
         async move {
-            let data = BranchData::new(&mut pool.acquire().await.unwrap(), id, notify_tx)
-                .await
-                .unwrap();
-            Branch::new(pool.clone(), Arc::new(data), keys)
+            let data = BranchData::create(
+                &mut pool.acquire().await.unwrap(),
+                id,
+                &secrets.write_keys,
+                notify_tx,
+            )
+            .await
+            .unwrap();
+            Branch::new(pool.clone(), Arc::new(data), secrets.into())
         }
     }))
     .await

@@ -4,9 +4,9 @@ use super::{
 };
 use crate::{
     block::BlockId,
-    crypto::{cipher::AuthTag, sign::PublicKey, Hash, Hashable},
+    crypto::cipher::AuthTag,
     error::{Error, Result},
-    index::{Index, InnerNodeMap, LeafNodeSet, Summary, INNER_LAYER_COUNT},
+    index::{Index, InnerNodeMap, LeafNodeSet, ReceiveError, Summary, UntrustedProof},
     store,
     version_vector::VersionVector,
 };
@@ -23,96 +23,71 @@ impl Client {
 
     pub async fn run(&mut self) -> Result<()> {
         while let Some(response) = self.stream.recv().await {
-            self.handle_response(response).await?;
+            match self.handle_response(response).await {
+                Ok(()) => {}
+                Err(error @ (ReceiveError::InvalidProof | ReceiveError::ParentNodeNotFound)) => {
+                    log::warn!("failed to handle response: {}", error)
+                }
+                Err(ReceiveError::Fatal(error)) => return Err(error),
+            }
         }
 
         Ok(())
     }
 
-    async fn handle_response(&mut self, response: Response) -> Result<()> {
+    async fn handle_response(&mut self, response: Response) -> Result<(), ReceiveError> {
         match response {
             Response::RootNode {
-                writer_id,
+                proof,
                 version_vector,
-                hash,
                 summary,
             } => {
-                self.handle_root_node(writer_id, version_vector, hash, summary)
-                    .await
+                self.handle_root_node(proof, version_vector, summary)
+                    .await?
             }
-            Response::InnerNodes {
-                parent_hash,
-                inner_layer,
-                nodes,
-            } => {
-                self.handle_inner_nodes(parent_hash, inner_layer, nodes)
-                    .await
-            }
-            Response::LeafNodes { parent_hash, nodes } => {
-                self.handle_leaf_nodes(parent_hash, nodes).await
-            }
+            Response::InnerNodes(nodes) => self.handle_inner_nodes(nodes).await?,
+            Response::LeafNodes(nodes) => self.handle_leaf_nodes(nodes).await?,
             Response::Block {
                 id,
                 content,
                 auth_tag,
-            } => self.handle_block(id, content, auth_tag).await,
+            } => self.handle_block(id, content, auth_tag).await?,
         }
+
+        Ok(())
     }
 
     async fn handle_root_node(
         &mut self,
-        writer_id: PublicKey,
+        proof: UntrustedProof,
         version_vector: VersionVector,
-        hash: Hash,
         summary: Summary,
-    ) -> Result<()> {
+    ) -> Result<(), ReceiveError> {
+        let hash = proof.hash;
         let updated = self
             .index
-            .receive_root_node(&writer_id, version_vector, hash, summary)
+            .receive_root_node(proof, version_vector, summary)
             .await?;
 
         if updated {
-            self.stream
-                .send(Request::InnerNodes {
-                    parent_hash: hash,
-                    inner_layer: 0,
-                })
-                .await;
+            self.stream.send(Request::ChildNodes(hash)).await;
         }
 
         Ok(())
     }
 
-    async fn handle_inner_nodes(
-        &self,
-        parent_hash: Hash,
-        inner_layer: usize,
-        nodes: InnerNodeMap,
-    ) -> Result<()> {
-        if parent_hash != nodes.hash() {
-            log::warn!("inner nodes parent hash mismatch");
-            return Ok(());
-        }
-
-        let updated = self
-            .index
-            .receive_inner_nodes(parent_hash, inner_layer, nodes)
-            .await?;
+    async fn handle_inner_nodes(&self, nodes: InnerNodeMap) -> Result<(), ReceiveError> {
+        let updated = self.index.receive_inner_nodes(nodes).await?;
 
         for hash in updated {
-            self.stream.send(child_request(hash, inner_layer)).await;
+            self.stream.send(Request::ChildNodes(hash)).await;
         }
 
         Ok(())
     }
 
-    async fn handle_leaf_nodes(&self, parent_hash: Hash, nodes: LeafNodeSet) -> Result<()> {
-        if parent_hash != nodes.hash() {
-            log::warn!("leaf nodes parent hash mismatch");
-            return Ok(());
-        }
-
-        let updated = self.index.receive_leaf_nodes(parent_hash, nodes).await?;
+    async fn handle_leaf_nodes(&self, nodes: LeafNodeSet) -> Result<(), ReceiveError> {
+        let updated = self.index.receive_leaf_nodes(nodes).await?;
 
         for block_id in updated {
             // TODO: avoid multiple clients downloading the same block
@@ -131,16 +106,5 @@ impl Client {
             Err(Error::BlockNotReferenced) => Ok(()),
             Err(e) => Err(e),
         }
-    }
-}
-
-fn child_request(parent_hash: Hash, inner_layer: usize) -> Request {
-    if inner_layer < INNER_LAYER_COUNT - 1 {
-        Request::InnerNodes {
-            parent_hash,
-            inner_layer: inner_layer + 1,
-        }
-    } else {
-        Request::LeafNodes { parent_hash }
     }
 }

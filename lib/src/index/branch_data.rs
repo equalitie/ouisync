@@ -20,31 +20,40 @@ use tokio::sync::{RwLock, RwLockReadGuard};
 type LocatorHash = Hash;
 
 pub(crate) struct BranchData {
-    writer_id: PublicKey,
+    writer_id: PublicKey, // copied from `root_node` to allow accessing it without locking.
     root_node: RwLock<RootNode>,
     notify_tx: async_broadcast::Sender<PublicKey>,
 }
 
 impl BranchData {
-    pub async fn new(
-        conn: &mut db::Connection,
-        writer_id: PublicKey,
-        notify_tx: async_broadcast::Sender<PublicKey>,
-    ) -> Result<Self> {
-        let root_node = RootNode::load_latest_or_create(conn, &writer_id).await?;
-        Ok(Self::with_root_node(writer_id, root_node, notify_tx))
-    }
-
-    pub fn with_root_node(
-        writer_id: PublicKey,
-        root_node: RootNode,
-        notify_tx: async_broadcast::Sender<PublicKey>,
-    ) -> Self {
+    pub fn new(root_node: RootNode, notify_tx: async_broadcast::Sender<PublicKey>) -> Self {
         Self {
-            writer_id,
+            writer_id: root_node.proof.writer_id,
             root_node: RwLock::new(root_node),
             notify_tx,
         }
+    }
+
+    // TODO: remove this
+    #[cfg(test)]
+    pub async fn create(
+        conn: &mut db::Connection,
+        writer_id: PublicKey,
+        write_keys: &Keypair,
+        notify_tx: async_broadcast::Sender<PublicKey>,
+    ) -> Result<Self> {
+        use super::{node::Summary, proof::Proof};
+
+        Ok(Self::new(
+            RootNode::create(
+                conn,
+                Proof::first(writer_id, write_keys),
+                VersionVector::new(),
+                Summary::FULL,
+            )
+            .await?,
+            notify_tx,
+        ))
     }
 
     /// Returns the id of the replica that owns this branch.
@@ -81,7 +90,9 @@ impl BranchData {
         write_keys: &Keypair,
     ) -> Result<()> {
         let mut lock = self.root_node.write().await;
-        let mut path = self.get_path(conn, &lock.hash, encoded_locator).await?;
+        let mut path = self
+            .get_path(conn, &lock.proof.hash, encoded_locator)
+            .await?;
 
         // We shouldn't be inserting a block to a branch twice. If we do, the assumption is that we
         // hit one in 2^sizeof(BlockVersion) chance that we randomly generated the same
@@ -96,7 +107,7 @@ impl BranchData {
     pub async fn get(&self, conn: &mut db::Connection, encoded_locator: &Hash) -> Result<BlockId> {
         let root_node = self.root_node.read().await;
         let path = self
-            .get_path(conn, &root_node.hash, encoded_locator)
+            .get_path(conn, &root_node.proof.hash, encoded_locator)
             .await?;
 
         match path.get_leaf() {
@@ -114,7 +125,9 @@ impl BranchData {
         write_keys: &Keypair,
     ) -> Result<()> {
         let mut lock = self.root_node.write().await;
-        let mut path = self.get_path(conn, &lock.hash, encoded_locator).await?;
+        let mut path = self
+            .get_path(conn, &lock.proof.hash, encoded_locator)
+            .await?;
         path.remove_leaf(encoded_locator)
             .ok_or(Error::EntryNotFound)?;
         self.write_path(conn, &mut lock, &path, write_keys).await
@@ -180,7 +193,7 @@ impl BranchData {
         conn: &mut db::Connection,
         old_root: &mut RootNode,
         path: &Path,
-        _write_keys: &Keypair,
+        write_keys: &Keypair,
     ) -> Result<()> {
         let mut tx = conn.begin().await?;
 
@@ -199,8 +212,11 @@ impl BranchData {
             }
         }
 
-        // TODO: sign the new root
-        let new_root = old_root.next_version(&mut tx, path.root_hash).await?;
+        let new_proof = old_root.proof.next(path.root_hash, write_keys);
+        let new_version_vector = old_root.versions.clone().incremented(new_proof.writer_id);
+        let new_root =
+            RootNode::create(&mut tx, new_proof, new_version_vector, old_root.summary).await?;
+
         self.replace_root(&mut tx, old_root, new_root).await?;
 
         tx.commit().await?;
@@ -355,10 +371,16 @@ mod tests {
 
     async fn setup() -> (db::Connection, BranchData) {
         let mut conn = init_db().await;
+
         let (notify_tx, _) = async_broadcast::broadcast(1);
-        let branch = BranchData::new(&mut conn, PublicKey::random(), notify_tx)
-            .await
-            .unwrap();
+        let branch = BranchData::create(
+            &mut conn,
+            PublicKey::random(),
+            &Keypair::random(),
+            notify_tx,
+        )
+        .await
+        .unwrap();
 
         (conn, branch)
     }

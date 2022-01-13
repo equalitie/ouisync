@@ -34,6 +34,10 @@ impl RepositoryId {
         hasher.update(salt);
         hasher.finalize().into()
     }
+
+    pub fn write_public_key(&self) -> &PublicKey {
+        &self.0
+    }
 }
 
 impl FromStr for RepositoryId {

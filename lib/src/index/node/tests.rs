@@ -1,6 +1,11 @@
-use super::{inner::INNER_LAYER_COUNT, summary::Summary, test_utils::Snapshot, *};
+use super::{
+    super::proof::Proof, leaf::EMPTY_LEAF_HASH, summary::Summary, test_utils::Snapshot, *,
+};
 use crate::{
-    crypto::{sign::PublicKey, Hashable},
+    crypto::{
+        sign::{Keypair, PublicKey},
+        Hashable,
+    },
     db,
     error::Error,
     test_utils,
@@ -17,25 +22,26 @@ async fn create_new_root_node() {
     let mut conn = setup().await;
 
     let writer_id = PublicKey::random();
+    let write_keys = Keypair::random();
     let hash = rand::random::<u64>().hash();
 
     let node0 = RootNode::create(
         &mut conn,
-        &writer_id,
+        Proof::new(writer_id, hash, &write_keys),
         VersionVector::new(),
-        hash,
         Summary::FULL,
     )
     .await
     .unwrap();
-    assert_eq!(node0.hash, hash);
+    assert_eq!(node0.proof.hash, hash);
 
-    let node1 = RootNode::load_latest_or_create(&mut conn, &writer_id)
+    let node1 = RootNode::load_latest(&mut conn, writer_id)
         .await
+        .unwrap()
         .unwrap();
     assert_eq!(node1, node0);
 
-    let nodes: Vec<_> = RootNode::load_all(&mut conn, &writer_id, 2)
+    let nodes: Vec<_> = RootNode::load_all(&mut conn, writer_id, 2)
         .try_collect()
         .await
         .unwrap();
@@ -44,39 +50,39 @@ async fn create_new_root_node() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn create_existing_root_node() {
+async fn attempt_to_create_existing_root_node() {
     let mut conn = setup().await;
 
     let writer_id = PublicKey::random();
+    let write_keys = Keypair::random();
     let hash = rand::random::<u64>().hash();
 
-    let node0 = RootNode::create(
+    let node = RootNode::create(
         &mut conn,
-        &writer_id,
+        Proof::new(writer_id, hash, &write_keys),
         VersionVector::new(),
-        hash,
         Summary::FULL,
     )
     .await
     .unwrap();
 
-    let node1 = RootNode::create(
-        &mut conn,
-        &writer_id,
-        VersionVector::new(),
-        hash,
-        Summary::FULL,
-    )
-    .await
-    .unwrap();
-    assert_eq!(node0, node1);
+    assert_matches!(
+        RootNode::create(
+            &mut conn,
+            Proof::new(writer_id, hash, &write_keys),
+            VersionVector::new(),
+            Summary::FULL,
+        )
+        .await,
+        Err(Error::EntryExists)
+    );
 
-    let nodes: Vec<_> = RootNode::load_all(&mut conn, &writer_id, 2)
+    let nodes: Vec<_> = RootNode::load_all(&mut conn, writer_id, 2)
         .try_collect()
         .await
         .unwrap();
     assert_eq!(nodes.len(), 1);
-    assert_eq!(nodes[0], node0);
+    assert_eq!(nodes[0], node);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -246,11 +252,9 @@ async fn save_missing_leaf_node_over_existing_present_one() {
 #[tokio::test(flavor = "multi_thread")]
 async fn compute_status_from_empty_leaf_nodes() {
     let mut conn = setup().await;
-    let hash = LeafNodeSet::default().hash();
 
-    let summary = InnerNode::compute_summary(&mut conn, &hash, INNER_LAYER_COUNT)
-        .await
-        .unwrap();
+    let hash = *EMPTY_LEAF_HASH;
+    let summary = InnerNode::compute_summary(&mut conn, &hash).await.unwrap();
 
     assert!(summary.is_complete);
     assert_eq!(summary.missing_blocks_count, 0);
@@ -264,9 +268,7 @@ async fn compute_status_from_incomplete_leaf_nodes() {
     let nodes: LeafNodeSet = iter::once(node).collect();
     let hash = nodes.hash();
 
-    let summary = InnerNode::compute_summary(&mut conn, &hash, INNER_LAYER_COUNT)
-        .await
-        .unwrap();
+    let summary = InnerNode::compute_summary(&mut conn, &hash).await.unwrap();
 
     assert_eq!(summary, Summary::INCOMPLETE);
 }
@@ -280,9 +282,7 @@ async fn compute_status_from_complete_leaf_nodes_with_all_missing_blocks() {
     let hash = nodes.hash();
     nodes.save(&mut conn, &hash).await.unwrap();
 
-    let summary = InnerNode::compute_summary(&mut conn, &hash, INNER_LAYER_COUNT)
-        .await
-        .unwrap();
+    let summary = InnerNode::compute_summary(&mut conn, &hash).await.unwrap();
 
     assert!(summary.is_complete);
     assert_eq!(summary.missing_blocks_count, 1);
@@ -299,9 +299,7 @@ async fn compute_status_from_complete_leaf_nodes_with_some_present_blocks() {
     let hash = nodes.hash();
     nodes.save(&mut conn, &hash).await.unwrap();
 
-    let summary = InnerNode::compute_summary(&mut conn, &hash, INNER_LAYER_COUNT)
-        .await
-        .unwrap();
+    let summary = InnerNode::compute_summary(&mut conn, &hash).await.unwrap();
 
     assert!(summary.is_complete);
     assert_eq!(summary.missing_blocks_count, 2);
@@ -317,9 +315,7 @@ async fn compute_status_from_complete_leaf_nodes_with_all_present_blocks() {
     let hash = nodes.hash();
     nodes.save(&mut conn, &hash).await.unwrap();
 
-    let summary = InnerNode::compute_summary(&mut conn, &hash, INNER_LAYER_COUNT)
-        .await
-        .unwrap();
+    let summary = InnerNode::compute_summary(&mut conn, &hash).await.unwrap();
 
     assert!(summary.is_complete);
     assert_eq!(summary.missing_blocks_count, 0);
@@ -328,11 +324,9 @@ async fn compute_status_from_complete_leaf_nodes_with_all_present_blocks() {
 #[tokio::test(flavor = "multi_thread")]
 async fn compute_status_from_empty_inner_nodes() {
     let mut conn = setup().await;
-    let hash = InnerNodeMap::default().hash();
 
-    let summary = InnerNode::compute_summary(&mut conn, &hash, INNER_LAYER_COUNT - 1)
-        .await
-        .unwrap();
+    let hash = *EMPTY_INNER_HASH;
+    let summary = InnerNode::compute_summary(&mut conn, &hash).await.unwrap();
 
     assert!(summary.is_complete);
     assert_eq!(summary.missing_blocks_count, 0);
@@ -346,9 +340,7 @@ async fn compute_status_from_incomplete_inner_nodes() {
     let nodes: InnerNodeMap = iter::once((0, node)).collect();
     let hash = nodes.hash();
 
-    let summary = InnerNode::compute_summary(&mut conn, &hash, INNER_LAYER_COUNT - 1)
-        .await
-        .unwrap();
+    let summary = InnerNode::compute_summary(&mut conn, &hash).await.unwrap();
 
     assert_eq!(summary, Summary::INCOMPLETE);
 }
@@ -375,9 +367,7 @@ async fn compute_status_from_complete_inner_nodes_with_all_missing_blocks() {
     let hash = inners.hash();
     inners.save(&mut conn, &hash).await.unwrap();
 
-    let summary = InnerNode::compute_summary(&mut conn, &hash, INNER_LAYER_COUNT - 1)
-        .await
-        .unwrap();
+    let summary = InnerNode::compute_summary(&mut conn, &hash).await.unwrap();
 
     assert!(summary.is_complete);
     assert_eq!(summary.missing_blocks_count, 2);
@@ -432,9 +422,7 @@ async fn compute_status_from_complete_inner_nodes_with_some_present_blocks() {
     let hash = inners.hash();
     inners.save(&mut conn, &hash).await.unwrap();
 
-    let summary = InnerNode::compute_summary(&mut conn, &hash, INNER_LAYER_COUNT - 1)
-        .await
-        .unwrap();
+    let summary = InnerNode::compute_summary(&mut conn, &hash).await.unwrap();
 
     assert!(summary.is_complete);
     assert_eq!(summary.missing_blocks_count, 3);
@@ -463,9 +451,7 @@ async fn compute_status_from_complete_inner_nodes_with_all_present_blocks() {
     let hash = inners.hash();
     inners.save(&mut conn, &hash).await.unwrap();
 
-    let summary = InnerNode::compute_summary(&mut conn, &hash, INNER_LAYER_COUNT - 1)
-        .await
-        .unwrap();
+    let summary = InnerNode::compute_summary(&mut conn, &hash).await.unwrap();
 
     assert!(summary.is_complete);
     assert_eq!(summary.missing_blocks_count, 0);
@@ -527,19 +513,19 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
     let mut conn = setup().await;
 
     let writer_id = PublicKey::generate(&mut rng);
+    let write_keys = Keypair::generate(&mut rng);
     let snapshot = Snapshot::generate(&mut rng, leaf_count);
 
     let mut root_node = RootNode::create(
         &mut conn,
-        &writer_id,
+        Proof::new(writer_id, *snapshot.root_hash(), &write_keys),
         VersionVector::new(),
-        *snapshot.root_hash(),
         Summary::FULL,
     )
     .await
     .unwrap();
 
-    super::update_summaries(&mut conn, root_node.hash, 0)
+    super::update_summaries(&mut conn, root_node.proof.hash)
         .await
         .unwrap();
     root_node.reload(&mut conn).await.unwrap();
@@ -551,7 +537,7 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
     for layer in snapshot.inner_layers() {
         for (parent_hash, nodes) in layer.inner_maps() {
             nodes.save(&mut conn, parent_hash).await.unwrap();
-            super::update_summaries(&mut conn, *parent_hash, layer.number())
+            super::update_summaries(&mut conn, *parent_hash)
                 .await
                 .unwrap();
             root_node.reload(&mut conn).await.unwrap();
@@ -565,7 +551,7 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
         nodes.save(&mut conn, parent_hash).await.unwrap();
         unsaved_leaves -= nodes.len();
 
-        super::update_summaries(&mut conn, *parent_hash, INNER_LAYER_COUNT)
+        super::update_summaries(&mut conn, *parent_hash)
             .await
             .unwrap();
         root_node.reload(&mut conn).await.unwrap();
@@ -591,21 +577,21 @@ async fn summary_case(leaf_count: usize, rng_seed: u64) {
     let mut conn = setup().await;
 
     let writer_id = PublicKey::generate(&mut rng);
+    let write_keys = Keypair::generate(&mut rng);
     let snapshot = Snapshot::generate(&mut rng, leaf_count);
 
     // Save the snapshot initially with all nodes missing.
     let mut root_node = RootNode::create(
         &mut conn,
-        &writer_id,
+        Proof::new(writer_id, *snapshot.root_hash(), &write_keys),
         VersionVector::new(),
-        *snapshot.root_hash(),
         Summary::INCOMPLETE,
     )
     .await
     .unwrap();
 
     if snapshot.leaf_count() == 0 {
-        super::update_summaries(&mut conn, root_node.hash, 0)
+        super::update_summaries(&mut conn, root_node.proof.hash)
             .await
             .unwrap();
     }
@@ -629,7 +615,7 @@ async fn summary_case(leaf_count: usize, rng_seed: u64) {
             .await
             .unwrap();
 
-        super::update_summaries(&mut conn, *parent_hash, INNER_LAYER_COUNT)
+        super::update_summaries(&mut conn, *parent_hash)
             .await
             .unwrap();
     }

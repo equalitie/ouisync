@@ -19,7 +19,7 @@ use crate::{
     directory::{Directory, EntryType},
     error::{Error, Result},
     file::File,
-    index::{self, BranchData, Index},
+    index::{self, BranchData, Index, Proof},
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     metadata, path,
     replica_id::ReplicaId,
@@ -78,8 +78,9 @@ impl Repository {
 
         let index = Index::load(pool, *access_secrets.id()).await?;
 
-        if access_secrets.can_write() {
-            index.create_branch(this_writer_id).await?;
+        if let Some(write_keys) = access_secrets.write_keys() {
+            let proof = Proof::first(this_writer_id, write_keys);
+            index.create_branch(proof).await?;
         }
 
         Self::new(index, this_writer_id, access_secrets, enable_merger).await
@@ -456,17 +457,23 @@ impl Repository {
     // FOR TESTS ONLY!
     #[cfg(test)]
     pub(crate) async fn create_remote_branch(&self, remote_id: PublicKey) -> Result<Branch> {
-        use crate::index::RootNode;
+        use crate::{
+            index::{RootNode, Summary},
+            version_vector::VersionVector,
+        };
 
-        let remote_node = RootNode::load_latest_or_create(
-            &mut self.index().pool.acquire().await.unwrap(),
-            &remote_id,
+        let write_keys = self.secrets().write_keys().ok_or(Error::PermissionDenied)?;
+        let proof = Proof::first(remote_id, write_keys);
+
+        let remote_node = RootNode::create(
+            &mut *self.index().pool.acquire().await?,
+            proof,
+            VersionVector::new(),
+            Summary::FULL,
         )
         .await?;
 
-        self.index()
-            .update_remote_branch(remote_id, remote_node)
-            .await?;
+        self.index().update_remote_branch(remote_node).await?;
 
         self.shared.branch(&remote_id).await
     }

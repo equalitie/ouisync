@@ -86,10 +86,15 @@ mod tests {
         let write_keys = Keypair::random();
         let (notify_tx, _) = async_broadcast::broadcast(1);
 
-        let branch0 = BranchData::new(&mut conn, PublicKey::random(), notify_tx.clone())
-            .await
-            .unwrap();
-        let branch1 = BranchData::new(&mut conn, PublicKey::random(), notify_tx)
+        let branch0 = BranchData::create(
+            &mut conn,
+            PublicKey::random(),
+            &write_keys,
+            notify_tx.clone(),
+        )
+        .await
+        .unwrap();
+        let branch1 = BranchData::create(&mut conn, PublicKey::random(), &write_keys, notify_tx)
             .await
             .unwrap();
 

@@ -10,15 +10,18 @@ use std::{fmt, str::FromStr};
 use zeroize::Zeroize;
 
 #[derive(PartialEq, Eq, Clone, Copy, Deserialize, Serialize)]
+#[repr(transparent)]
 pub struct PublicKey(ext::PublicKey);
 
+#[repr(transparent)]
 pub struct SecretKey(ext::SecretKey);
 
 pub struct Keypair {
     pub secret: SecretKey,
     pub public: PublicKey,
 }
-#[derive(PartialEq, Eq, Clone, Copy)]
+#[derive(PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
+#[repr(transparent)]
 pub struct Signature(ext::Signature);
 
 pub type SignatureError = ext::SignatureError;

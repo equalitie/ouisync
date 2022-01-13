@@ -72,9 +72,8 @@ impl Server {
         }
 
         let response = Response::RootNode {
-            writer_id: *branch.id(),
+            proof: root_node.proof.into(),
             version_vector: root_node.versions.clone(),
-            hash: root_node.hash,
             summary: root_node.summary,
         };
 
@@ -89,39 +88,25 @@ impl Server {
 
     async fn handle_request(&mut self, request: Request) -> Result<()> {
         match request {
-            Request::InnerNodes {
-                parent_hash,
-                inner_layer,
-            } => self.handle_inner_nodes(parent_hash, inner_layer).await,
-            Request::LeafNodes { parent_hash } => self.handle_leaf_nodes(parent_hash).await,
+            Request::ChildNodes(parent_hash) => self.handle_child_nodes(parent_hash).await,
             Request::Block(id) => self.handle_block(id).await,
         }
     }
 
-    async fn handle_inner_nodes(&self, parent_hash: Hash, inner_layer: usize) -> Result<()> {
-        // TODO: don't send anything if the nodes are missing
-        let nodes =
-            InnerNode::load_children(&mut *self.index.pool.acquire().await?, &parent_hash).await?;
+    async fn handle_child_nodes(&self, parent_hash: Hash) -> Result<()> {
+        let mut conn = self.index.pool.acquire().await?;
 
-        self.stream
-            .send(Response::InnerNodes {
-                parent_hash,
-                inner_layer,
-                nodes,
-            })
-            .await;
+        // At most one of these will be non-empty.
+        let inner_nodes = InnerNode::load_children(&mut conn, &parent_hash).await?;
+        let leaf_nodes = LeafNode::load_children(&mut conn, &parent_hash).await?;
 
-        Ok(())
-    }
+        if !inner_nodes.is_empty() {
+            self.stream.send(Response::InnerNodes(inner_nodes)).await;
+        }
 
-    async fn handle_leaf_nodes(&self, parent_hash: Hash) -> Result<()> {
-        // TODO: don't send anything if the nodes are missing
-        let nodes =
-            LeafNode::load_children(&mut *self.index.pool.acquire().await?, &parent_hash).await?;
-
-        self.stream
-            .send(Response::LeafNodes { parent_hash, nodes })
-            .await;
+        if !leaf_nodes.is_empty() {
+            self.stream.send(Response::LeafNodes(leaf_nodes)).await;
+        }
 
         Ok(())
     }
