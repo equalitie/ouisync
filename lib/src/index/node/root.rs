@@ -34,12 +34,9 @@ impl RootNode {
     pub async fn create(
         conn: &mut db::Connection,
         proof: Proof,
-        mut versions: VersionVector,
+        versions: VersionVector,
         summary: Summary,
     ) -> Result<Self> {
-        // TODO: shouldn't we start with empty vv?
-        versions.insert(proof.writer_id, 1);
-
         let snapshot_id = sqlx::query(
             "INSERT INTO snapshot_root_nodes (
                  writer_id,
