@@ -3,7 +3,7 @@ use crate::{
     block::{self, BlockId, BlockNonce, BLOCK_SIZE},
     branch::Branch,
     crypto::{
-        cipher::{self, aead, AuthTag, Nonce},
+        cipher::{self, AuthTag, Nonce},
         sign,
     },
     db,
@@ -498,9 +498,9 @@ async fn read_block(
     read_key: &cipher::SecretKey,
     locator: &Locator,
 ) -> Result<(BlockId, Buffer)> {
-    let (id, mut buffer, auth_tag, nonce) = load_block(tx, branch, read_key, locator).await?;
+    let (id, mut buffer, _auth_tag, nonce) = load_block(tx, branch, read_key, locator).await?;
 
-    decrypt_block(read_key, &nonce, &mut buffer, &auth_tag)?;
+    decrypt_block(read_key, &nonce, &mut buffer);
 
     Ok((id, buffer))
 }
@@ -527,10 +527,10 @@ async fn write_block(
     mut buffer: Buffer,
 ) -> Result<BlockId> {
     let nonce = rand::random();
-    let auth_tag = encrypt_block(read_key, &nonce, &mut buffer)?;
+    encrypt_block(read_key, &nonce, &mut buffer);
     let id = BlockId::from_content(&buffer);
 
-    block::write(tx, &id, &buffer, &auth_tag, &nonce).await?;
+    block::write(tx, &id, &buffer, &AuthTag::default(), &nonce).await?;
     branch
         .insert(tx, &id, &locator.encode(read_key), write_keys)
         .await?;
@@ -542,17 +542,16 @@ pub(super) fn decrypt_block(
     blob_key: &cipher::SecretKey,
     block_nonce: &BlockNonce,
     content: &mut [u8],
-    auth_tag: &AuthTag,
-) -> Result<(), aead::Error> {
+) {
     let block_key = blob_key.derive_subkey(block_nonce);
-    block_key.decrypt(&Nonce::default(), &[], content, auth_tag)
+    block_key.decrypt_no_aead(&Nonce::default(), content);
 }
 
 pub(super) fn encrypt_block(
     blob_key: &cipher::SecretKey,
     block_nonce: &BlockNonce,
     content: &mut [u8],
-) -> Result<AuthTag, aead::Error> {
+) {
     let block_key = blob_key.derive_subkey(block_nonce);
-    block_key.encrypt(&Nonce::default(), &[], content)
+    block_key.encrypt_no_aead(&Nonce::default(), content);
 }

@@ -48,7 +48,7 @@ impl Blob {
     pub async fn open(branch: Branch, head_locator: Locator) -> Result<Self> {
         let mut conn = branch.db_pool().acquire().await?;
 
-        let (id, buffer, auth_tag, nonce) = operations::load_block(
+        let (id, buffer, _auth_tag, nonce) = operations::load_block(
             &mut conn,
             branch.data(),
             branch.keys().read(),
@@ -58,7 +58,7 @@ impl Blob {
 
         let mut content = Cursor::new(buffer);
 
-        operations::decrypt_block(branch.keys().read(), &nonce, &mut content, &auth_tag)?;
+        operations::decrypt_block(branch.keys().read(), &nonce, &mut content);
 
         let len = content.read_u64();
 

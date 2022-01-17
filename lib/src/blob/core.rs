@@ -28,13 +28,8 @@ impl Core {
         )
         .await
         {
-            Ok((id, mut buffer, auth_tag, nonce)) => {
-                operations::decrypt_block(
-                    self.branch.keys().read(),
-                    &nonce,
-                    &mut buffer,
-                    &auth_tag,
-                )?;
+            Ok((id, mut buffer, _auth_tag, nonce)) => {
+                operations::decrypt_block(self.branch.keys().read(), &nonce, &mut buffer);
 
                 let mut content = Cursor::new(buffer);
                 content.pos = self.header_size();
