@@ -203,6 +203,19 @@ where
     }
 }
 
+impl<T0, T1, T2> Hashable for (T0, T1, T2)
+where
+    T0: Hashable,
+    T1: Hashable,
+    T2: Hashable,
+{
+    fn update_hash<S: Digest>(&self, state: &mut S) {
+        self.0.update_hash(state);
+        self.1.update_hash(state);
+        self.2.update_hash(state);
+    }
+}
+
 impl<'a, T> Hashable for &'a T
 where
     T: Hashable + ?Sized,
