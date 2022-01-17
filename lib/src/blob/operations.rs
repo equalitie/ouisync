@@ -3,7 +3,7 @@ use crate::{
     block::{self, BlockId, BlockNonce, BLOCK_SIZE},
     branch::Branch,
     crypto::{
-        cipher::{self, AuthTag, Nonce},
+        cipher::{self, Nonce},
         sign,
     },
     db,
@@ -498,8 +498,7 @@ async fn read_block(
     read_key: &cipher::SecretKey,
     locator: &Locator,
 ) -> Result<(BlockId, Buffer)> {
-    let (id, mut buffer, _auth_tag, nonce) = load_block(tx, branch, read_key, locator).await?;
-
+    let (id, mut buffer, nonce) = load_block(tx, branch, read_key, locator).await?;
     decrypt_block(read_key, &nonce, &mut buffer);
 
     Ok((id, buffer))
@@ -510,12 +509,12 @@ pub(super) async fn load_block(
     branch: &BranchData,
     read_key: &cipher::SecretKey,
     locator: &Locator,
-) -> Result<(BlockId, Buffer, AuthTag, BlockNonce)> {
+) -> Result<(BlockId, Buffer, BlockNonce)> {
     let id = branch.get(conn, &locator.encode(read_key)).await?;
     let mut content = Buffer::new();
-    let (auth_tag, nonce) = block::read(conn, &id, &mut content).await?;
+    let nonce = block::read(conn, &id, &mut content).await?;
 
-    Ok((id, content, auth_tag, nonce))
+    Ok((id, content, nonce))
 }
 
 async fn write_block(
@@ -530,7 +529,7 @@ async fn write_block(
     encrypt_block(read_key, &nonce, &mut buffer);
     let id = BlockId::from_content(&buffer);
 
-    block::write(tx, &id, &buffer, &AuthTag::default(), &nonce).await?;
+    block::write(tx, &id, &buffer, &nonce).await?;
     branch
         .insert(tx, &id, &locator.encode(read_key), write_keys)
         .await?;

@@ -6,10 +6,7 @@ use super::{
 };
 use crate::{
     block::{self, BlockId, BlockNonce, BLOCK_SIZE},
-    crypto::{
-        cipher::AuthTag,
-        sign::{Keypair, PublicKey},
-    },
+    crypto::sign::{Keypair, PublicKey},
     db,
     index::{node_test_utils::Snapshot, Index, Proof, RootNode, Summary},
     repository::{self, RepositoryId},
@@ -112,7 +109,7 @@ async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed:
 
         for block_id in snapshot.block_ids() {
             // Write the block by replica A.
-            store::write_received_block(&a_index, block_id, &content, &AuthTag::default(), &nonce)
+            store::write_received_block(&a_index, block_id, &content, &nonce)
                 .await
                 .unwrap();
 
@@ -249,7 +246,7 @@ async fn create_block(
         .insert(&mut tx, &block_id, &encoded_locator, write_keys)
         .await
         .unwrap();
-    block::write(&mut tx, &block_id, &content, &AuthTag::default(), &nonce)
+    block::write(&mut tx, &block_id, &content, &nonce)
         .await
         .unwrap();
     tx.commit().await.unwrap();
@@ -261,15 +258,9 @@ async fn write_all_blocks(index: &Index, snapshot: &Snapshot) {
     for (_, nodes) in snapshot.leaf_sets() {
         for node in nodes {
             // TODO: change this so that block content, id and nonce match.
-            store::write_received_block(
-                index,
-                &node.block_id,
-                &content,
-                &AuthTag::default(),
-                &BlockNonce::default(),
-            )
-            .await
-            .unwrap();
+            store::write_received_block(index, &node.block_id, &content, &BlockNonce::default())
+                .await
+                .unwrap();
         }
     }
 }

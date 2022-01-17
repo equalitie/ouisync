@@ -48,7 +48,7 @@ impl Blob {
     pub async fn open(branch: Branch, head_locator: Locator) -> Result<Self> {
         let mut conn = branch.db_pool().acquire().await?;
 
-        let (id, buffer, _auth_tag, nonce) = operations::load_block(
+        let (id, buffer, nonce) = operations::load_block(
             &mut conn,
             branch.data(),
             branch.keys().read(),

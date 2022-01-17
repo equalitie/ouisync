@@ -113,9 +113,9 @@ impl Server {
     async fn handle_block(&self, id: BlockId) -> Result<()> {
         let mut content = vec![0; BLOCK_SIZE].into_boxed_slice();
 
-        let (auth_tag, nonce) =
+        let nonce =
             match block::read(&mut *self.index.pool.acquire().await?, &id, &mut content).await {
-                Ok(ok) => ok,
+                Ok(nonce) => nonce,
                 Err(Error::BlockNotFound(_)) => {
                     // This is probably a request to an already deleted orphaned block from an outdated
                     // branch. It should be safe to ingore this as the client will request the correct
@@ -127,12 +127,7 @@ impl Server {
             };
 
         self.stream
-            .send(Response::Block {
-                id,
-                content,
-                auth_tag,
-                nonce,
-            })
+            .send(Response::Block { id, content, nonce })
             .await;
 
         Ok(())

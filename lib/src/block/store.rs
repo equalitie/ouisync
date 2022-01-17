@@ -1,10 +1,8 @@
 use super::{BlockId, BLOCK_SIZE};
 use crate::{
-    crypto::cipher::AuthTag,
     db,
     error::{Error, Result},
 };
-use generic_array::{sequence::GenericSequence, typenum::Unsigned};
 use sqlx::{sqlite::SqliteRow, Row};
 
 pub(crate) const BLOCK_NONCE_SIZE: usize = 32;
@@ -15,7 +13,6 @@ pub async fn init(conn: &mut db::Connection) -> Result<()> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS blocks (
              id       BLOB NOT NULL PRIMARY KEY,
-             auth_tag BLOB NOT NULL,
              nonce    BLOB NOT NULL,
              content  BLOB NOT NULL
          ) WITHOUT ROWID",
@@ -36,8 +33,8 @@ pub(crate) async fn read(
     conn: &mut db::Connection,
     id: &BlockId,
     buffer: &mut [u8],
-) -> Result<(AuthTag, BlockNonce)> {
-    let row = sqlx::query("SELECT auth_tag, nonce, content FROM blocks WHERE id = ?")
+) -> Result<BlockNonce> {
+    let row = sqlx::query("SELECT nonce, content FROM blocks WHERE id = ?")
         .bind(id)
         .fetch_optional(conn)
         .await?
@@ -46,29 +43,23 @@ pub(crate) async fn read(
     from_row(row, buffer)
 }
 
-fn from_row(row: SqliteRow, buffer: &mut [u8]) -> Result<(AuthTag, BlockNonce)> {
+fn from_row(row: SqliteRow, buffer: &mut [u8]) -> Result<BlockNonce> {
     assert!(
         buffer.len() >= BLOCK_SIZE,
         "insufficient buffer length for block read"
     );
 
-    let auth_tag: &[u8] = row.get(0);
-    if auth_tag.len() != <AuthTag as GenericSequence<_>>::Length::USIZE {
-        return Err(Error::MalformedData);
-    }
-    let auth_tag = AuthTag::clone_from_slice(auth_tag);
-
-    let nonce: &[u8] = row.get(1);
+    let nonce: &[u8] = row.get(0);
     let nonce = BlockNonce::try_from(nonce)?;
 
-    let content: &[u8] = row.get(2);
+    let content: &[u8] = row.get(1);
     if content.len() != BLOCK_SIZE {
         return Err(Error::WrongBlockLength(content.len()));
     }
 
     buffer.copy_from_slice(content);
 
-    Ok((auth_tag, nonce))
+    Ok(nonce)
 }
 
 /// Writes a block into the store.
@@ -85,7 +76,6 @@ pub(crate) async fn write(
     conn: &mut db::Connection,
     id: &BlockId,
     buffer: &[u8],
-    auth_tag: &AuthTag,
     nonce: &BlockNonce,
 ) -> Result<()> {
     assert_eq!(
@@ -95,12 +85,11 @@ pub(crate) async fn write(
     );
 
     let result = sqlx::query(
-        "INSERT INTO blocks (id, auth_tag, nonce, content)
-         VALUES (?, ?, ?, ?)
+        "INSERT INTO blocks (id, nonce, content)
+         VALUES (?, ?, ?)
          ON CONFLICT (id) DO NOTHING",
     )
     .bind(id)
-    .bind(auth_tag.as_slice())
     .bind(nonce.as_slice())
     .bind(buffer)
     .execute(&mut *conn)
@@ -111,9 +100,8 @@ pub(crate) async fn write(
     } else {
         // Block with the same id already exists. If it also has the same content, treat it as a
         // success (to make this function idempotent), otherwise error.
-        if sqlx::query("SELECT content = ? AND auth_tag = ? AND nonce = ? FROM blocks WHERE id = ?")
+        if sqlx::query("SELECT content = ? AND nonce = ? FROM blocks WHERE id = ?")
             .bind(buffer)
-            .bind(auth_tag.as_slice())
             .bind(nonce.as_slice())
             .bind(id)
             .fetch_one(conn)
@@ -149,12 +137,9 @@ mod tests {
 
         let content = random_block_content();
         let id = BlockId::from_content(&content);
-        let auth_tag = AuthTag::default();
         let nonce = BlockNonce::default();
 
-        write(&mut conn, &id, &content, &auth_tag, &nonce)
-            .await
-            .unwrap();
+        write(&mut conn, &id, &content, &nonce).await.unwrap();
 
         let mut buffer = vec![0; BLOCK_SIZE];
         read(&mut conn, &id, &mut buffer).await.unwrap();
@@ -182,21 +167,16 @@ mod tests {
 
         let content0 = random_block_content();
         let id = BlockId::from_content(&content0);
-        let auth_tag = AuthTag::default();
         let nonce = BlockNonce::default();
 
-        write(&mut conn, &id, &content0, &auth_tag, &nonce)
-            .await
-            .unwrap();
+        write(&mut conn, &id, &content0, &nonce).await.unwrap();
 
         // Try to overwrite it with the same content -> no-op.
-        write(&mut conn, &id, &content0, &auth_tag, &nonce)
-            .await
-            .unwrap();
+        write(&mut conn, &id, &content0, &nonce).await.unwrap();
 
         // Try to overwrite it with a different content -> error
         let content1 = random_block_content();
-        match write(&mut conn, &id, &content1, &auth_tag, &nonce).await {
+        match write(&mut conn, &id, &content1, &nonce).await {
             Err(Error::BlockExists) => (),
             Err(error) => panic!("unexpected error: {:?}", error),
             Ok(_) => panic!("unexpected success"),

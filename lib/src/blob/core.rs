@@ -28,7 +28,7 @@ impl Core {
         )
         .await
         {
-            Ok((id, mut buffer, _auth_tag, nonce)) => {
+            Ok((id, mut buffer, nonce)) => {
                 operations::decrypt_block(self.branch.keys().read(), &nonce, &mut buffer);
 
                 let mut content = Cursor::new(buffer);

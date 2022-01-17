@@ -4,7 +4,6 @@ use super::{
 };
 use crate::{
     block::{BlockId, BlockNonce},
-    crypto::cipher::AuthTag,
     error::{Error, Result},
     index::{Index, InnerNodeMap, LeafNodeSet, ReceiveError, Summary, UntrustedProof},
     store,
@@ -39,12 +38,7 @@ impl Client {
             Response::RootNode { proof, summary } => self.handle_root_node(proof, summary).await?,
             Response::InnerNodes(nodes) => self.handle_inner_nodes(nodes).await?,
             Response::LeafNodes(nodes) => self.handle_leaf_nodes(nodes).await?,
-            Response::Block {
-                id,
-                content,
-                auth_tag,
-                nonce,
-            } => self.handle_block(id, content, auth_tag, nonce).await?,
+            Response::Block { id, content, nonce } => self.handle_block(id, content, nonce).await?,
         }
 
         Ok(())
@@ -86,15 +80,8 @@ impl Client {
         Ok(())
     }
 
-    async fn handle_block(
-        &self,
-        id: BlockId,
-        content: Box<[u8]>,
-        auth_tag: AuthTag,
-        nonce: BlockNonce,
-    ) -> Result<()> {
-        // TODO: how to validate the block?
-        match store::write_received_block(&self.index, &id, &content, &auth_tag, &nonce).await {
+    async fn handle_block(&self, id: BlockId, content: Box<[u8]>, nonce: BlockNonce) -> Result<()> {
+        match store::write_received_block(&self.index, &id, &content, &nonce).await {
             Ok(_) => Ok(()),
             // Ignore `BlockNotReferenced` errors as they only mean that the block is no longer
             // needed.
