@@ -238,8 +238,11 @@ async fn create_block(
 ) {
     let branch = index.branches().await.get(writer_id).unwrap().clone();
     let encoded_locator = rng.gen::<u64>().hash();
-    let block_id = rng.gen();
-    let content = vec![0; BLOCK_SIZE];
+
+    let mut content = vec![0; BLOCK_SIZE];
+    rng.fill(&mut content[..]);
+
+    let block_id = BlockId::from_content(&content);
     let nonce = rng.gen();
 
     let mut tx = index.pool.begin().await.unwrap();

@@ -255,7 +255,7 @@ impl OpenBlock {
 
         Self {
             locator,
-            id: rand::random(),
+            id: BlockId::from_content(&[]),
             content,
             dirty: true,
         }

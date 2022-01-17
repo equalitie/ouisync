@@ -147,8 +147,8 @@ mod tests {
     async fn write_and_read() {
         let mut conn = setup().await;
 
-        let id = rand::random();
         let content = random_block_content();
+        let id = BlockId::from_content(&content);
         let auth_tag = AuthTag::default();
         let nonce = BlockNonce::default();
 
@@ -166,8 +166,8 @@ mod tests {
     async fn try_read_missing_block() {
         let mut conn = setup().await;
 
-        let id = rand::random();
         let mut buffer = vec![0; BLOCK_SIZE];
+        let id = BlockId::from_content(&buffer);
 
         match read(&mut conn, &id, &mut buffer).await {
             Err(Error::BlockNotFound(missing_id)) => assert_eq!(missing_id, id),
@@ -180,8 +180,8 @@ mod tests {
     async fn try_write_existing_block() {
         let mut conn = setup().await;
 
-        let id = rand::random();
         let content0 = random_block_content();
+        let id = BlockId::from_content(&content0);
         let auth_tag = AuthTag::default();
         let nonce = BlockNonce::default();
 

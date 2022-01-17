@@ -142,7 +142,7 @@ impl<'a> Operations<'a> {
                 )
                 .await?
             } else {
-                (rand::random(), Buffer::new())
+                (BlockId::from_content(&[]), Buffer::new())
             };
 
             self.replace_current_block(tx, locator, id, content).await?;
@@ -526,9 +526,9 @@ async fn write_block(
     locator: &Locator,
     mut buffer: Buffer,
 ) -> Result<BlockId> {
-    let id = rand::random();
     let nonce = rand::random();
     let auth_tag = encrypt_block(read_key, &nonce, &mut buffer)?;
+    let id = BlockId::from_content(&buffer);
 
     block::write(tx, &id, &buffer, &auth_tag, &nonce).await?;
     branch
