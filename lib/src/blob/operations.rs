@@ -1,6 +1,6 @@
 use super::{Blob, BlobNonce, Buffer, Core, Cursor, OpenBlock, BLOB_NONCE_SIZE};
 use crate::{
-    block::{self, BlockId, BLOCK_SIZE},
+    block::{self, BlockId, BlockNonce, BLOCK_SIZE},
     branch::Branch,
     crypto::{
         cipher::{self, aead, AuthTag, Nonce},
@@ -537,7 +537,7 @@ pub(super) async fn load_block(
 ) -> Result<(BlockId, Buffer, AuthTag)> {
     let id = branch.get(conn, &locator.encode(read_key)).await?;
     let mut content = Buffer::new();
-    let auth_tag = block::read(conn, &id, &mut content).await?;
+    let (auth_tag, _) = block::read(conn, &id, &mut content).await?;
 
     Ok((id, content, auth_tag))
 }
@@ -559,8 +559,9 @@ async fn write_block(
 
     let block_id = rand::random();
     let auth_tag = encrypt_block(blob_key, &block_id, locator.number(), &mut buffer[offset..])?;
+    let nonce = BlockNonce::default();
 
-    block::write(tx, &block_id, &buffer, &auth_tag).await?;
+    block::write(tx, &block_id, &buffer, &auth_tag, &nonce).await?;
     branch
         .insert(
             tx,

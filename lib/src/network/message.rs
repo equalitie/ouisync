@@ -1,5 +1,5 @@
 use crate::{
-    block::BlockId,
+    block::{BlockId, BlockNonce},
     crypto::{cipher::AuthTag, Hash},
     index::{InnerNodeMap, LeafNodeSet, Summary, UntrustedProof},
     repository::RepositoryId,
@@ -35,6 +35,7 @@ pub(crate) enum Response {
         id: BlockId,
         content: Box<[u8]>,
         auth_tag: AuthTag,
+        nonce: BlockNonce,
     },
 }
 

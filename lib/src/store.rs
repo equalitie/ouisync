@@ -1,7 +1,7 @@
 //! Operation that affect both the index and the block store.
 
 use crate::{
-    block::{self, BlockId},
+    block::{self, BlockId, BlockNonce},
     crypto::cipher::AuthTag,
     db,
     error::Result,
@@ -16,12 +16,13 @@ pub(crate) async fn write_received_block(
     id: &BlockId,
     content: &[u8],
     auth_tag: &AuthTag,
+    nonce: &BlockNonce,
 ) -> Result<()> {
     let mut cx = index.pool.acquire().await?;
     let mut tx = cx.begin().await?;
 
     let writer_ids = index::receive_block(&mut tx, id).await?;
-    block::write(&mut tx, id, content, auth_tag).await?;
+    block::write(&mut tx, id, content, auth_tag, nonce).await?;
     tx.commit().await?;
 
     let branches = index.branches().await;
@@ -57,7 +58,7 @@ pub(crate) async fn init(conn: &mut db::Connection) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use crate::{
-        block::{self, BLOCK_SIZE},
+        block::{self, BlockNonce, BLOCK_SIZE},
         crypto::{
             cipher::{AuthTag, SecretKey},
             sign::{Keypair, PublicKey},
@@ -103,9 +104,15 @@ mod tests {
 
         let mut tx = conn.begin().await.unwrap();
 
-        block::write(&mut tx, &block_id, &buffer, &AuthTag::default())
-            .await
-            .unwrap();
+        block::write(
+            &mut tx,
+            &block_id,
+            &buffer,
+            &AuthTag::default(),
+            &BlockNonce::default(),
+        )
+        .await
+        .unwrap();
 
         let locator0 = Locator::head(rand::random());
         let locator0 = locator0.encode(&read_key);

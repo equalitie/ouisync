@@ -5,7 +5,7 @@ use super::{
     server::Server,
 };
 use crate::{
-    block::{self, BlockId, BLOCK_SIZE},
+    block::{self, BlockId, BlockNonce, BLOCK_SIZE},
     crypto::{
         cipher::AuthTag,
         sign::{Keypair, PublicKey},
@@ -109,10 +109,11 @@ async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed:
     // Keep adding the blocks to replica A and verify they get received by replica B as well.
     let drive = async {
         let content = vec![0; BLOCK_SIZE];
+        let nonce = BlockNonce::default();
 
         for block_id in snapshot.block_ids() {
             // Write the block by replica A.
-            store::write_received_block(&a_index, block_id, &content, &AuthTag::default())
+            store::write_received_block(&a_index, block_id, &content, &AuthTag::default(), &nonce)
                 .await
                 .unwrap();
 
@@ -239,13 +240,14 @@ async fn create_block(
     let encoded_locator = rng.gen::<u64>().hash();
     let block_id = rng.gen();
     let content = vec![0; BLOCK_SIZE];
+    let nonce = rng.gen();
 
     let mut tx = index.pool.begin().await.unwrap();
     branch
         .insert(&mut tx, &block_id, &encoded_locator, write_keys)
         .await
         .unwrap();
-    block::write(&mut tx, &block_id, &content, &AuthTag::default())
+    block::write(&mut tx, &block_id, &content, &AuthTag::default(), &nonce)
         .await
         .unwrap();
     tx.commit().await.unwrap();
@@ -256,9 +258,15 @@ async fn write_all_blocks(index: &Index, snapshot: &Snapshot) {
 
     for (_, nodes) in snapshot.leaf_sets() {
         for node in nodes {
-            store::write_received_block(index, &node.block_id, &content, &AuthTag::default())
-                .await
-                .unwrap();
+            store::write_received_block(
+                index,
+                &node.block_id,
+                &content,
+                &AuthTag::default(),
+                &BlockNonce::default(),
+            )
+            .await
+            .unwrap();
         }
     }
 }

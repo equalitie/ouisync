@@ -4,7 +4,7 @@ mod store;
 
 #[cfg(test)]
 pub(crate) use self::store::exists;
-pub(crate) use self::store::{init, read, write};
+pub(crate) use self::store::{init, read, write, BlockNonce};
 
 /// Block size in bytes.
 pub const BLOCK_SIZE: usize = 32 * 1024;
@@ -13,12 +13,6 @@ define_byte_array_wrapper! {
     /// Unique id of a block.
     pub struct BlockId([u8; 32]);
 }
-
-// impl BlockId {
-//     pub(crate) fn from_content(content: &[u8]) -> Self {
-
-//     }
-// }
 
 derive_rand_for_wrapper!(BlockId);
 derive_sqlx_traits_for_byte_array_wrapper!(BlockId);
