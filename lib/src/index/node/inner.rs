@@ -171,6 +171,12 @@ impl InnerNode {
     }
 }
 
+impl Hashable for InnerNode {
+    fn update_hash<S: Digest>(&self, state: &mut S) {
+        self.hash.update_hash(state);
+    }
+}
+
 #[derive(Default, Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct InnerNodeMap(BTreeMap<u8, InnerNode>);
 
@@ -179,6 +185,7 @@ impl InnerNodeMap {
         self.0.is_empty()
     }
 
+    #[allow(unused)]
     pub fn len(&self) -> usize {
         self.0.len()
     }
@@ -260,13 +267,7 @@ impl<'a> IntoIterator for &'a InnerNodeMap {
 impl Hashable for InnerNodeMap {
     fn update_hash<S: Digest>(&self, state: &mut S) {
         b"inner".update_hash(state); // to disambiguate it from hash of leaf nodes
-
-        (self.len() as u64).update_hash(state); // XXX: Have some cryptographer check this whether there are no attacks.
-
-        for (bucket, node) in self.iter() {
-            bucket.update_hash(state);
-            node.hash.update_hash(state);
-        }
+        self.0.update_hash(state);
     }
 }
 

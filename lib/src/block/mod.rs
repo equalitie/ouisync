@@ -1,3 +1,5 @@
+use crate::crypto::{Digest, Hashable};
+
 mod store;
 
 #[cfg(test)]
@@ -14,3 +16,9 @@ define_byte_array_wrapper! {
 
 derive_rand_for_wrapper!(BlockId);
 derive_sqlx_traits_for_byte_array_wrapper!(BlockId);
+
+impl Hashable for BlockId {
+    fn update_hash<S: Digest>(&self, state: &mut S) {
+        self.0.update_hash(state)
+    }
+}
