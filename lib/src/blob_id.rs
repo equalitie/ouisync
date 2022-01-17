@@ -1,3 +1,4 @@
+use crate::crypto::{Digest, Hashable};
 use rand::{
     distributions::{Distribution, Standard},
     Rng,
@@ -21,5 +22,11 @@ impl Distribution<BlobId> for Standard {
                 return sample;
             }
         }
+    }
+}
+
+impl Hashable for BlobId {
+    fn update_hash<S: Digest>(&self, state: &mut S) {
+        self.0.update_hash(state)
     }
 }
