@@ -68,8 +68,8 @@ impl Locator {
 }
 
 impl Hashable for Locator {
-    fn update_hash<H: Digest>(&self, h: &mut H) {
-        self.blob.as_ref().update_hash(h);
-        self.block.update_hash(h);
+    fn update_hash<S: Digest>(&self, state: &mut S) {
+        self.blob.as_ref().update_hash(state);
+        self.block.update_hash(state);
     }
 }

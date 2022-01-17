@@ -106,8 +106,8 @@ impl Hash for PublicKey {
 }
 
 impl Hashable for PublicKey {
-    fn update_hash<H: Digest>(&self, h: &mut H) {
-        self.0.as_bytes().update_hash(h)
+    fn update_hash<S: Digest>(&self, state: &mut S) {
+        self.0.as_bytes().update_hash(state)
     }
 }
 

@@ -76,8 +76,8 @@ impl Zeroize for Hash {
 }
 
 impl Hashable for Hash {
-    fn update_hash<H: Digest>(&self, h: &mut H) {
-        self.as_ref().update_hash(h)
+    fn update_hash<S: Digest>(&self, state: &mut S) {
+        self.as_ref().update_hash(state)
     }
 }
 
@@ -88,7 +88,7 @@ type Inner = GenericArray<u8, <Sha3_256 as Digest>::OutputSize>;
 /// Similar to std::hash::Hash, but for cryptographic hashes.
 pub trait Hashable {
     // Update the hash state.
-    fn update_hash<H: Digest>(&self, h: &mut H);
+    fn update_hash<S: Digest>(&self, state: &mut S);
 
     // Hash self using the given hashing algorithm.
     fn hash_with<H>(&self) -> Hash
@@ -107,26 +107,26 @@ pub trait Hashable {
 }
 
 impl Hashable for [u8] {
-    fn update_hash<H: Digest>(&self, h: &mut H) {
-        h.update(self)
+    fn update_hash<S: Digest>(&self, state: &mut S) {
+        state.update(self)
     }
 }
 
 impl Hashable for u8 {
-    fn update_hash<H: Digest>(&self, h: &mut H) {
-        slice::from_ref(self).update_hash(h)
+    fn update_hash<S: Digest>(&self, state: &mut S) {
+        slice::from_ref(self).update_hash(state)
     }
 }
 
 impl Hashable for u32 {
-    fn update_hash<H: Digest>(&self, h: &mut H) {
-        self.to_le_bytes().update_hash(h)
+    fn update_hash<S: Digest>(&self, state: &mut S) {
+        self.to_le_bytes().update_hash(state)
     }
 }
 
 impl Hashable for u64 {
-    fn update_hash<H: Digest>(&self, h: &mut H) {
-        self.to_le_bytes().update_hash(h)
+    fn update_hash<S: Digest>(&self, state: &mut S) {
+        self.to_le_bytes().update_hash(state)
     }
 }
 
@@ -135,9 +135,9 @@ where
     T0: Hashable,
     T1: Hashable,
 {
-    fn update_hash<H: Digest>(&self, h: &mut H) {
-        self.0.update_hash(h);
-        self.1.update_hash(h);
+    fn update_hash<S: Digest>(&self, state: &mut S) {
+        self.0.update_hash(state);
+        self.1.update_hash(state);
     }
 }
 
@@ -145,7 +145,7 @@ impl<'a, T> Hashable for &'a T
 where
     T: Hashable + ?Sized,
 {
-    fn update_hash<H: Digest>(&self, h: &mut H) {
-        (*self).update_hash(h)
+    fn update_hash<S: Digest>(&self, state: &mut S) {
+        (*self).update_hash(state)
     }
 }

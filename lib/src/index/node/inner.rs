@@ -258,13 +258,14 @@ impl<'a> IntoIterator for &'a InnerNodeMap {
 }
 
 impl Hashable for InnerNodeMap {
-    fn update_hash<H: Digest>(&self, h: &mut H) {
-        b"inner".update_hash(h); // to disambiguate it from hash of leaf nodes
-        (self.len() as u64).update_hash(h); // XXX: Have some cryptographer check this whether there are no attacks.
+    fn update_hash<S: Digest>(&self, state: &mut S) {
+        b"inner".update_hash(state); // to disambiguate it from hash of leaf nodes
+
+        (self.len() as u64).update_hash(state); // XXX: Have some cryptographer check this whether there are no attacks.
 
         for (bucket, node) in self.iter() {
-            bucket.update_hash(h);
-            node.hash.update_hash(h);
+            bucket.update_hash(state);
+            node.hash.update_hash(state);
         }
     }
 }

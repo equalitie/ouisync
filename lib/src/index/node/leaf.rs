@@ -249,13 +249,14 @@ impl IntoIterator for LeafNodeSet {
 }
 
 impl Hashable for LeafNodeSet {
-    fn update_hash<H: Digest>(&self, h: &mut H) {
-        b"leaf".update_hash(h); // to disambiguate it from hash of inner nodes
-        (self.len() as u64).update_hash(h); // XXX: Is updating with length enough to prevent attacks?
+    fn update_hash<S: Digest>(&self, state: &mut S) {
+        b"leaf".update_hash(state); // to disambiguate it from hash of inner nodes
+
+        (self.len() as u64).update_hash(state); // XXX: Is updating with length enough to prevent attacks?
 
         for node in self.iter() {
-            node.locator().update_hash(h);
-            node.block_id.as_ref().update_hash(h);
+            node.locator().update_hash(state);
+            node.block_id.as_ref().update_hash(state);
         }
     }
 }
