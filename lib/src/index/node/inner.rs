@@ -282,3 +282,13 @@ impl<'a> Iterator for InnerNodeMapIter<'a> {
         self.0.next().map(|(bucket, node)| (*bucket, node))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_map_hash() {
+        assert_eq!(*EMPTY_INNER_HASH, InnerNodeMap::default().hash())
+    }
+}

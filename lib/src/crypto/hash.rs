@@ -6,7 +6,11 @@ use generic_array::{
 };
 use serde::{Deserialize, Serialize};
 use sha3::Sha3_256;
-use std::{array::TryFromSliceError, fmt, slice};
+use std::{
+    array::TryFromSliceError,
+    collections::{BTreeMap, BTreeSet},
+    fmt, slice,
+};
 use zeroize::Zeroize;
 
 pub use sha3::digest::Digest;
@@ -90,6 +94,17 @@ pub trait Hashable {
     // Update the hash state.
     fn update_hash<S: Digest>(&self, state: &mut S);
 
+    // This is needed due to lack of specialization in stable rust.
+    fn update_hash_slice<S>(slice: &[Self], state: &mut S)
+    where
+        S: Digest,
+        Self: Sized,
+    {
+        for item in slice {
+            item.update_hash(state)
+        }
+    }
+
     // Hash self using the given hashing algorithm.
     fn hash_with<H>(&self) -> Hash
     where
@@ -106,29 +121,76 @@ pub trait Hashable {
     }
 }
 
-impl Hashable for [u8] {
-    fn update_hash<S: Digest>(&self, state: &mut S) {
-        state.update(self)
-    }
-}
-
 impl Hashable for u8 {
     fn update_hash<S: Digest>(&self, state: &mut S) {
-        slice::from_ref(self).update_hash(state)
+        state.update(slice::from_ref(self))
+    }
+
+    fn update_hash_slice<S: Digest>(slice: &[Self], state: &mut S) {
+        state.update(slice)
     }
 }
 
 impl Hashable for u32 {
     fn update_hash<S: Digest>(&self, state: &mut S) {
-        self.to_le_bytes().update_hash(state)
+        state.update(&self.to_le_bytes())
     }
 }
 
 impl Hashable for u64 {
     fn update_hash<S: Digest>(&self, state: &mut S) {
-        self.to_le_bytes().update_hash(state)
+        state.update(&self.to_le_bytes())
     }
 }
+
+impl<T> Hashable for [T]
+where
+    T: Hashable,
+{
+    fn update_hash<S: Digest>(&self, state: &mut S) {
+        (self.len() as u64).update_hash(state);
+        Hashable::update_hash_slice(self, state);
+    }
+}
+
+impl<T> Hashable for Vec<T>
+where
+    T: Hashable,
+{
+    fn update_hash<S: Digest>(&self, state: &mut S) {
+        self.as_slice().update_hash(state);
+    }
+}
+
+impl<K, V> Hashable for BTreeMap<K, V>
+where
+    K: Hashable,
+    V: Hashable,
+{
+    fn update_hash<S: Digest>(&self, state: &mut S) {
+        (self.len() as u64).update_hash(state);
+        for (key, value) in self {
+            key.update_hash(state);
+            value.update_hash(state);
+        }
+    }
+}
+
+impl<T> Hashable for BTreeSet<T>
+where
+    T: Hashable,
+{
+    fn update_hash<S: Digest>(&self, state: &mut S) {
+        (self.len() as u64).update_hash(state);
+        for item in self {
+            item.update_hash(state);
+        }
+    }
+}
+
+// NOTE: `Hashable` is purposefully not implemented for `HashMap` / `HashSet` because the resulting
+// hash would be dependent on the iteration order which in case of `HashMap` / `HashSet` is often
+// random. Thus two maps/set that compare as equal would produce different hashes.
 
 impl<T0, T1> Hashable for (T0, T1)
 where
@@ -146,6 +208,6 @@ where
     T: Hashable + ?Sized,
 {
     fn update_hash<S: Digest>(&self, state: &mut S) {
-        (*self).update_hash(state)
+        (**self).update_hash(state);
     }
 }
