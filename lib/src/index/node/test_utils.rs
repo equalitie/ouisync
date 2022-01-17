@@ -1,6 +1,6 @@
 use super::{get_bucket, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, INNER_LAYER_COUNT};
 use crate::{
-    block::BlockId,
+    block::{BlockId, BlockNonce, BLOCK_SIZE},
     crypto::{Hash, Hashable},
 };
 use rand::Rng;
@@ -11,25 +11,30 @@ pub(crate) struct Snapshot {
     root_hash: Hash,
     inners: [HashMap<BucketPath, InnerNodeMap>; INNER_LAYER_COUNT],
     leaves: HashMap<BucketPath, LeafNodeSet>,
+    blocks: HashMap<BlockId, Block>,
 }
 
 impl Snapshot {
-    // Generate a random snapshot with the given maximum number of leaf nodes.
-    pub fn generate<R: Rng>(rng: &mut R, leaf_count: usize) -> Self {
-        let leaves = (0..leaf_count)
+    // Generate a random snapshot with the given number of blocks.
+    pub fn generate<R: Rng>(rng: &mut R, block_count: usize) -> Self {
+        let blocks: HashMap<_, _> = (0..block_count)
             .map(|_| {
-                let locator = rng.gen();
-                let block_id = rng.gen();
-                LeafNode::present(locator, block_id)
+                let mut content = vec![0; BLOCK_SIZE];
+                rng.fill(&mut content[..]);
+
+                let id = BlockId::from_content(&content);
+                let nonce = rng.gen();
+
+                (id, Block { content, nonce })
             })
             .collect();
 
-        Self::from_leaves(leaves)
-    }
-
-    pub fn from_leaves(leaves: Vec<LeafNode>) -> Self {
-        let leaves = leaves
-            .into_iter()
+        let leaves = blocks
+            .keys()
+            .map(|id| {
+                let locator = rng.gen();
+                LeafNode::present(locator, *id)
+            })
             .fold(HashMap::<_, LeafNodeSet>::new(), |mut map, leaf| {
                 map.entry(BucketPath::new(leaf.locator(), INNER_LAYER_COUNT - 1))
                     .or_default()
@@ -65,6 +70,7 @@ impl Snapshot {
             root_hash,
             inners,
             leaves,
+            blocks,
         }
     }
 
@@ -87,10 +93,8 @@ impl Snapshot {
         (0..self.inners.len()).map(move |inner_layer| InnerLayer(self, inner_layer))
     }
 
-    pub fn block_ids(&self) -> impl Iterator<Item = &BlockId> {
-        self.leaves
-            .values()
-            .flat_map(|nodes| nodes.iter().map(|node| &node.block_id))
+    pub fn blocks(&self) -> &HashMap<BlockId, Block> {
+        &self.blocks
     }
 
     // Returns the parent hash of inner nodes at `inner_layer` with the specified bucket path.
@@ -118,6 +122,11 @@ impl<'a> InnerLayer<'a> {
             (parent_hash, nodes)
         })
     }
+}
+
+pub(crate) struct Block {
+    pub content: Vec<u8>,
+    pub nonce: BlockNonce,
 }
 
 fn add_inner_node(

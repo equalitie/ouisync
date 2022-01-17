@@ -12,15 +12,16 @@ use sqlx::Acquire;
 /// referenced by the index, otherwise an `BlockNotReferenced` error is returned.
 pub(crate) async fn write_received_block(
     index: &Index,
-    id: &BlockId,
     content: &[u8],
     nonce: &BlockNonce,
 ) -> Result<()> {
+    let id = BlockId::from_content(content);
+
     let mut cx = index.pool.acquire().await?;
     let mut tx = cx.begin().await?;
 
-    let writer_ids = index::receive_block(&mut tx, id).await?;
-    block::write(&mut tx, id, content, nonce).await?;
+    let writer_ids = index::receive_block(&mut tx, &id).await?;
+    block::write(&mut tx, &id, content, nonce).await?;
     tx.commit().await?;
 
     let branches = index.branches().await;

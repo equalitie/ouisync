@@ -5,7 +5,7 @@ use super::{
     server::Server,
 };
 use crate::{
-    block::{self, BlockId, BlockNonce, BLOCK_SIZE},
+    block::{self, BlockId, BLOCK_SIZE},
     crypto::sign::{Keypair, PublicKey},
     db,
     index::{node_test_utils::Snapshot, Index, Proof, RootNode, Summary},
@@ -104,17 +104,14 @@ async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed:
 
     // Keep adding the blocks to replica A and verify they get received by replica B as well.
     let drive = async {
-        let content = vec![0; BLOCK_SIZE];
-        let nonce = BlockNonce::default();
-
-        for block_id in snapshot.block_ids() {
+        for (id, block) in snapshot.blocks() {
             // Write the block by replica A.
-            store::write_received_block(&a_index, block_id, &content, &nonce)
+            store::write_received_block(&a_index, &block.content, &block.nonce)
                 .await
                 .unwrap();
 
             // Then wait until replica B receives and writes it too.
-            wait_until_block_exists(&b_index, block_id).await;
+            wait_until_block_exists(&b_index, id).await;
         }
     };
 
@@ -253,15 +250,10 @@ async fn create_block(
 }
 
 async fn write_all_blocks(index: &Index, snapshot: &Snapshot) {
-    let content = vec![0; BLOCK_SIZE];
-
-    for (_, nodes) in snapshot.leaf_sets() {
-        for node in nodes {
-            // TODO: change this so that block content, id and nonce match.
-            store::write_received_block(index, &node.block_id, &content, &BlockNonce::default())
-                .await
-                .unwrap();
-        }
+    for block in snapshot.blocks().values() {
+        store::write_received_block(index, &block.content, &block.nonce)
+            .await
+            .unwrap();
     }
 }
 
