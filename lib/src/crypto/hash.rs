@@ -1,9 +1,7 @@
+pub use sha3::digest::Digest;
+
 use crate::format;
-use generic_array::{
-    sequence::GenericSequence,
-    typenum::{Unsigned, U32},
-    GenericArray,
-};
+use generic_array::{typenum::U32, GenericArray};
 use serde::{Deserialize, Serialize};
 use sha3::Sha3_256;
 use std::{
@@ -13,24 +11,24 @@ use std::{
 };
 use zeroize::Zeroize;
 
-pub use sha3::digest::Digest;
-
 /// Wrapper for a 256-bit hash digest, for convenience. Also implements friendly formatting.
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
 #[repr(transparent)]
-pub struct Hash(Inner);
+pub struct Hash([u8; Self::SIZE]);
 
 impl Hash {
-    pub const SIZE: usize = <Inner as GenericSequence<_>>::Length::USIZE;
+    pub const SIZE: usize = 32;
+}
 
-    pub fn as_array(&self) -> &Inner {
-        &self.0
+impl From<[u8; Self::SIZE]> for Hash {
+    fn from(array: [u8; Self::SIZE]) -> Self {
+        Hash(array)
     }
 }
 
-impl From<Inner> for Hash {
-    fn from(inner: Inner) -> Self {
-        Hash(inner)
+impl From<GenericArray<u8, U32>> for Hash {
+    fn from(array: GenericArray<u8, U32>) -> Self {
+        Hash(array.into())
     }
 }
 
@@ -62,14 +60,13 @@ impl TryFrom<&'_ [u8]> for Hash {
     type Error = TryFromSliceError;
 
     fn try_from(slice: &[u8]) -> Result<Self, Self::Error> {
-        let slice: [u8; Self::SIZE] = slice.try_into()?;
-        Ok(Self(slice.into()))
+        Ok(Self(slice.try_into()?))
     }
 }
 
 impl From<Hash> for [u8; Hash::SIZE] {
     fn from(hash: Hash) -> [u8; Hash::SIZE] {
-        hash.0.into()
+        hash.0
     }
 }
 
@@ -87,7 +84,8 @@ impl Hashable for Hash {
 
 derive_sqlx_traits_for_byte_array_wrapper!(Hash);
 
-type Inner = GenericArray<u8, <Sha3_256 as Digest>::OutputSize>;
+#[cfg(test)]
+derive_rand_for_wrapper!(Hash);
 
 /// Similar to std::hash::Hash, but for cryptographic hashes.
 pub trait Hashable {

@@ -1,8 +1,7 @@
-use super::{operations, BlobNonce, Cursor, OpenBlock, BLOB_NONCE_SIZE};
+use super::{operations, Cursor, OpenBlock};
 use crate::{
     block::{BlockId, BLOCK_SIZE},
     branch::Branch,
-    crypto::cipher::SecretKey,
     db,
     error::Result,
     locator::Locator,
@@ -13,7 +12,6 @@ use std::{fmt, mem};
 pub(crate) struct Core {
     pub branch: Branch,
     pub head_locator: Locator,
-    pub blob_key: SecretKey,
     pub len: u64,
     pub len_dirty: bool,
 }
@@ -30,14 +28,8 @@ impl Core {
         )
         .await
         {
-            Ok((id, mut buffer, auth_tag)) => {
-                operations::decrypt_block(
-                    &self.blob_key,
-                    &id,
-                    0,
-                    &mut buffer[BLOB_NONCE_SIZE..],
-                    &auth_tag,
-                )?;
+            Ok((id, mut buffer, nonce)) => {
+                operations::decrypt_block(self.branch.keys().read(), &nonce, &mut buffer);
 
                 let mut content = Cursor::new(buffer);
                 content.pos = self.header_size();
@@ -50,13 +42,7 @@ impl Core {
                 })
             }
             Err(Error::EntryNotFound) if self.len == 0 => {
-                // create a new block but we need to also generate new blob key because we no longer
-                // have the original nonce.
-
-                let nonce: BlobNonce = rand::random();
-                self.blob_key = self.branch.keys().read().derive_subkey(&nonce);
-
-                Ok(OpenBlock::new_head(self.head_locator, &nonce))
+                Ok(OpenBlock::new_head(self.head_locator))
             }
             Err(error) => Err(error),
         }
@@ -84,7 +70,7 @@ impl Core {
     }
 
     pub fn header_size(&self) -> usize {
-        BLOB_NONCE_SIZE + mem::size_of_val(&self.len)
+        mem::size_of_val(&self.len)
     }
 
     // Total number of blocks in this blob including the possibly partially filled final block.

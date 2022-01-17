@@ -97,7 +97,7 @@ impl Branch {
         dir.create_file(name.to_string()).await
     }
 
-    pub async fn root_block_id(&self) -> Result<BlockId> {
+    pub(crate) async fn root_block_id(&self) -> Result<BlockId> {
         let blob = Blob::open(self.clone(), Locator::ROOT).await?;
         blob.first_block_id().await
     }

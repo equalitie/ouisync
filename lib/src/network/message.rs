@@ -1,6 +1,7 @@
 use crate::{
-    block::BlockId,
-    crypto::{cipher::AuthTag, Hash},
+    block::{BlockId, BlockNonce},
+    crypto::Hash,
+    format::Hex,
     index::{InnerNodeMap, LeafNodeSet, Summary, UntrustedProof},
     repository::RepositoryId,
 };
@@ -32,9 +33,8 @@ pub(crate) enum Response {
     LeafNodes(LeafNodeSet),
     /// Send a requested block.
     Block {
-        id: BlockId,
         content: Box<[u8]>,
-        auth_tag: AuthTag,
+        nonce: BlockNonce,
     },
 }
 
@@ -49,9 +49,9 @@ impl fmt::Debug for Response {
                 .finish(),
             Self::InnerNodes(nodes) => f.debug_tuple("InnerNodes").field(nodes).finish(),
             Self::LeafNodes(nodes) => f.debug_tuple("LeafNodes").field(nodes).finish(),
-            Self::Block { id, .. } => f
+            Self::Block { content, .. } => f
                 .debug_struct("Block")
-                .field("id", id)
+                .field("content", &format_args!("{:6x}", Hex(content)))
                 .finish_non_exhaustive(),
         }
     }

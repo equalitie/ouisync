@@ -6,11 +6,7 @@ use super::{
 };
 use crate::{
     block::{self, BlockId, BLOCK_SIZE},
-    crypto::{
-        cipher::AuthTag,
-        sign::{Keypair, PublicKey},
-        Hashable,
-    },
+    crypto::sign::{Keypair, PublicKey},
     db,
     index::{node_test_utils::Snapshot, Index, Proof, RootNode, Summary},
     repository::{self, RepositoryId},
@@ -108,16 +104,14 @@ async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed:
 
     // Keep adding the blocks to replica A and verify they get received by replica B as well.
     let drive = async {
-        let content = vec![0; BLOCK_SIZE];
-
-        for block_id in snapshot.block_ids() {
+        for (id, block) in snapshot.blocks() {
             // Write the block by replica A.
-            store::write_received_block(&a_index, block_id, &content, &AuthTag::default())
+            store::write_received_block(&a_index, &block.content, &block.nonce)
                 .await
                 .unwrap();
 
             // Then wait until replica B receives and writes it too.
-            wait_until_block_exists(&b_index, block_id).await;
+            wait_until_block_exists(&b_index, id).await;
         }
     };
 
@@ -236,30 +230,30 @@ async fn create_block(
     write_keys: &Keypair,
 ) {
     let branch = index.branches().await.get(writer_id).unwrap().clone();
-    let encoded_locator = rng.gen::<u64>().hash();
-    let block_id = rng.gen();
-    let content = vec![0; BLOCK_SIZE];
+    let encoded_locator = rng.gen();
+
+    let mut content = vec![0; BLOCK_SIZE];
+    rng.fill(&mut content[..]);
+
+    let block_id = BlockId::from_content(&content);
+    let nonce = rng.gen();
 
     let mut tx = index.pool.begin().await.unwrap();
     branch
         .insert(&mut tx, &block_id, &encoded_locator, write_keys)
         .await
         .unwrap();
-    block::write(&mut tx, &block_id, &content, &AuthTag::default())
+    block::write(&mut tx, &block_id, &content, &nonce)
         .await
         .unwrap();
     tx.commit().await.unwrap();
 }
 
 async fn write_all_blocks(index: &Index, snapshot: &Snapshot) {
-    let content = vec![0; BLOCK_SIZE];
-
-    for (_, nodes) in snapshot.leaf_sets() {
-        for node in nodes {
-            store::write_received_block(index, &node.block_id, &content, &AuthTag::default())
-                .await
-                .unwrap();
-        }
+    for block in snapshot.blocks().values() {
+        store::write_received_block(index, &block.content, &block.nonce)
+            .await
+            .unwrap();
     }
 }
 

@@ -113,26 +113,20 @@ impl Server {
     async fn handle_block(&self, id: BlockId) -> Result<()> {
         let mut content = vec![0; BLOCK_SIZE].into_boxed_slice();
 
-        let auth_tag =
+        let nonce =
             match block::read(&mut *self.index.pool.acquire().await?, &id, &mut content).await {
-                Ok(auth_tag) => auth_tag,
+                Ok(nonce) => nonce,
                 Err(Error::BlockNotFound(_)) => {
-                    // This is probably a request to an already deleted orphaned block from an outdated
-                    // branch. It should be safe to ingore this as the client will request the correct
-                    // blocks when it becomes up to date to our latest branch.
+                    // This is probably a request to an already deleted orphaned block from an
+                    // outdated branch. It should be safe to ignore this as the client will request
+                    // the correct blocks when it becomes up to date to our latest branch.
                     log::warn!("requested block {:?} not found", id);
                     return Ok(());
                 }
                 Err(error) => return Err(error),
             };
 
-        self.stream
-            .send(Response::Block {
-                id,
-                content,
-                auth_tag,
-            })
-            .await;
+        self.stream.send(Response::Block { content, nonce }).await;
 
         Ok(())
     }

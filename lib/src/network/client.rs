@@ -3,8 +3,7 @@ use super::{
     message_broker::ClientStream,
 };
 use crate::{
-    block::BlockId,
-    crypto::cipher::AuthTag,
+    block::BlockNonce,
     error::{Error, Result},
     index::{Index, InnerNodeMap, LeafNodeSet, ReceiveError, Summary, UntrustedProof},
     store,
@@ -39,11 +38,7 @@ impl Client {
             Response::RootNode { proof, summary } => self.handle_root_node(proof, summary).await?,
             Response::InnerNodes(nodes) => self.handle_inner_nodes(nodes).await?,
             Response::LeafNodes(nodes) => self.handle_leaf_nodes(nodes).await?,
-            Response::Block {
-                id,
-                content,
-                auth_tag,
-            } => self.handle_block(id, content, auth_tag).await?,
+            Response::Block { content, nonce } => self.handle_block(content, nonce).await?,
         }
 
         Ok(())
@@ -85,9 +80,8 @@ impl Client {
         Ok(())
     }
 
-    async fn handle_block(&self, id: BlockId, content: Box<[u8]>, auth_tag: AuthTag) -> Result<()> {
-        // TODO: how to validate the block?
-        match store::write_received_block(&self.index, &id, &content, &auth_tag).await {
+    async fn handle_block(&self, content: Box<[u8]>, nonce: BlockNonce) -> Result<()> {
+        match store::write_received_block(&self.index, &content, &nonce).await {
             Ok(_) => Ok(()),
             // Ignore `BlockNotReferenced` errors as they only mean that the block is no longer
             // needed.

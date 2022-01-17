@@ -637,7 +637,7 @@ async fn summary_case(leaf_count: usize, rng_seed: u64) {
 
     // Keep receiving the blocks one by one and verify the missing blocks summaries get updated
     // accordingly.
-    for block_id in snapshot.block_ids() {
+    for block_id in snapshot.blocks().keys() {
         super::receive_block(&mut conn, block_id).await.unwrap();
 
         expected_missing_blocks_count -= 1;

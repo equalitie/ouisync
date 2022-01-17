@@ -266,7 +266,7 @@ impl Hashable for LeafNodeSet {
 // Cached hash of an empty LeafNodeSet.
 pub(crate) static EMPTY_LEAF_HASH: Lazy<Hash> = Lazy::new(|| LeafNodeSet::default().hash());
 
-pub enum ModifyStatus {
+pub(crate) enum ModifyStatus {
     Updated(BlockId),
     Inserted,
     Unchanged,

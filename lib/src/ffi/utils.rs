@@ -108,6 +108,7 @@ impl<T> RefHandle<T> {
 #[derive(Clone, Copy)]
 pub(super) struct AssumeSend<T>(T);
 
+#[allow(clippy::non_send_fields_in_send_ty)]
 unsafe impl<T> Send for AssumeSend<T> {}
 
 impl<T> AssumeSend<T> {

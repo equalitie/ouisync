@@ -1,9 +1,9 @@
-use super::{Blob, BlobNonce, Buffer, Core, Cursor, OpenBlock, BLOB_NONCE_SIZE};
+use super::{Blob, Buffer, Core, Cursor, OpenBlock};
 use crate::{
-    block::{self, BlockId, BLOCK_SIZE},
+    block::{self, BlockId, BlockNonce, BLOCK_SIZE},
     branch::Branch,
     crypto::{
-        cipher::{self, aead, AuthTag, Nonce, NONCE_SIZE},
+        cipher::{self, Nonce},
         sign,
     },
     db,
@@ -68,7 +68,6 @@ impl<'a> Operations<'a> {
                 &mut tx,
                 self.core.branch.data(),
                 self.core.branch.keys().read(),
-                &self.core.blob_key,
                 &locator,
             )
             .await?;
@@ -139,12 +138,11 @@ impl<'a> Operations<'a> {
                     tx,
                     self.core.branch.data(),
                     self.core.branch.keys().read(),
-                    &self.core.blob_key,
                     &locator,
                 )
                 .await?
             } else {
-                (rand::random(), Buffer::new())
+                (BlockId::from_content(&[]), Buffer::new())
             };
 
             self.replace_current_block(tx, locator, id, content).await?;
@@ -203,7 +201,6 @@ impl<'a> Operations<'a> {
                 tx,
                 self.core.branch.data(),
                 self.core.branch.keys().read(),
-                &self.core.blob_key,
                 &locator,
             )
             .await?;
@@ -290,11 +287,7 @@ impl<'a> Operations<'a> {
         .await?;
         tx.commit().await?;
 
-        let nonce: BlobNonce = rand::random();
-        let blob_key = self.core.branch.keys().read().derive_subkey(&nonce);
-
-        *self.current_block = OpenBlock::new_head(self.core.head_locator, &nonce);
-        self.core.blob_key = blob_key;
+        *self.current_block = OpenBlock::new_head(self.core.head_locator);
         self.core.len = 0;
         self.core.len_dirty = true;
 
@@ -338,7 +331,6 @@ impl<'a> Operations<'a> {
         let new_core = Core {
             branch: dst_branch.clone(),
             head_locator: dst_head_locator,
-            blob_key: self.core.blob_key.clone(),
             len: self.core.len,
             len_dirty: self.core.len_dirty,
         };
@@ -399,20 +391,17 @@ impl<'a> Operations<'a> {
             .write()
             .ok_or(Error::PermissionDenied)?;
 
-        self.current_block.id = rand::random();
-
-        write_block(
+        let block_id = write_block(
             tx,
             self.core.branch.data(),
             read_key,
             write_keys,
-            &self.core.blob_key,
             &self.current_block.locator,
-            &self.current_block.id,
             self.current_block.content.buffer.clone(),
         )
         .await?;
 
+        self.current_block.id = block_id;
         self.current_block.dirty = false;
 
         Ok(())
@@ -434,7 +423,7 @@ impl<'a> Operations<'a> {
 
         if self.current_block.locator.number() == 0 {
             let old_pos = self.current_block.content.pos;
-            self.current_block.content.pos = BLOB_NONCE_SIZE;
+            self.current_block.content.pos = 0;
             self.current_block.content.write_u64(self.core.len);
             self.current_block.content.pos = old_pos;
             self.current_block.dirty = true;
@@ -444,13 +433,12 @@ impl<'a> Operations<'a> {
                 tx,
                 self.core.branch.data(),
                 self.core.branch.keys().read(),
-                &self.core.blob_key,
                 &locator,
             )
             .await?;
 
             let mut cursor = Cursor::new(buffer);
-            cursor.pos = BLOB_NONCE_SIZE;
+            cursor.pos = 0;
             cursor.write_u64(self.core.len);
 
             write_block(
@@ -458,9 +446,7 @@ impl<'a> Operations<'a> {
                 self.core.branch.data(),
                 read_key,
                 write_keys,
-                &self.core.blob_key,
                 &locator,
-                &rand::random(),
                 cursor.buffer,
             )
             .await?;
@@ -509,25 +495,11 @@ impl<'a> Operations<'a> {
 async fn read_block(
     tx: &mut db::Transaction<'_>,
     branch: &BranchData,
-    repo_key: &cipher::SecretKey,
-    blob_key: &cipher::SecretKey,
+    read_key: &cipher::SecretKey,
     locator: &Locator,
 ) -> Result<(BlockId, Buffer)> {
-    let (id, mut buffer, auth_tag) = load_block(tx, branch, repo_key, locator).await?;
-
-    let offset = if locator.number() == 0 {
-        BLOB_NONCE_SIZE
-    } else {
-        0
-    };
-
-    decrypt_block(
-        blob_key,
-        &id,
-        locator.number(),
-        &mut buffer[offset..],
-        &auth_tag,
-    )?;
+    let (id, mut buffer, nonce) = load_block(tx, branch, read_key, locator).await?;
+    decrypt_block(read_key, &nonce, &mut buffer);
 
     Ok((id, buffer))
 }
@@ -537,69 +509,48 @@ pub(super) async fn load_block(
     branch: &BranchData,
     read_key: &cipher::SecretKey,
     locator: &Locator,
-) -> Result<(BlockId, Buffer, AuthTag)> {
+) -> Result<(BlockId, Buffer, BlockNonce)> {
     let id = branch.get(conn, &locator.encode(read_key)).await?;
     let mut content = Buffer::new();
-    let auth_tag = block::read(conn, &id, &mut content).await?;
+    let nonce = block::read(conn, &id, &mut content).await?;
 
-    Ok((id, content, auth_tag))
+    Ok((id, content, nonce))
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn write_block(
     tx: &mut db::Transaction<'_>,
     branch: &BranchData,
-    repo_read_key: &cipher::SecretKey,
-    repo_write_keys: &sign::Keypair,
-    blob_key: &cipher::SecretKey,
+    read_key: &cipher::SecretKey,
+    write_keys: &sign::Keypair,
     locator: &Locator,
-    block_id: &BlockId,
     mut buffer: Buffer,
-) -> Result<()> {
-    let offset = if locator.number() == 0 {
-        BLOB_NONCE_SIZE
-    } else {
-        0
-    };
+) -> Result<BlockId> {
+    let nonce = rand::random();
+    encrypt_block(read_key, &nonce, &mut buffer);
+    let id = BlockId::from_content(&buffer);
 
-    let auth_tag = encrypt_block(blob_key, block_id, locator.number(), &mut buffer[offset..])?;
-
-    block::write(tx, block_id, &buffer, &auth_tag).await?;
+    block::write(tx, &id, &buffer, &nonce).await?;
     branch
-        .insert(
-            tx,
-            block_id,
-            &locator.encode(repo_read_key),
-            repo_write_keys,
-        )
+        .insert(tx, &id, &locator.encode(read_key), write_keys)
         .await?;
 
-    Ok(())
+    Ok(id)
 }
 
 pub(super) fn decrypt_block(
     blob_key: &cipher::SecretKey,
-    id: &BlockId,
-    block_number: u32,
+    block_nonce: &BlockNonce,
     content: &mut [u8],
-    auth_tag: &AuthTag,
-) -> Result<(), aead::Error> {
-    let block_key = blob_key.derive_subkey(id.as_ref());
-    block_key.decrypt(make_block_nonce(block_number), &[], content, auth_tag)
+) {
+    let block_key = blob_key.derive_subkey(block_nonce);
+    block_key.decrypt_no_aead(&Nonce::default(), content);
 }
 
 pub(super) fn encrypt_block(
     blob_key: &cipher::SecretKey,
-    id: &BlockId,
-    block_number: u32,
+    block_nonce: &BlockNonce,
     content: &mut [u8],
-) -> Result<AuthTag, aead::Error> {
-    let block_key = blob_key.derive_subkey(id.as_ref());
-    block_key.encrypt(make_block_nonce(block_number), &[], content)
-}
-
-fn make_block_nonce(number: u32) -> Nonce {
-    let mut nonce = Nonce::default();
-    nonce[NONCE_SIZE - 4..].copy_from_slice(number.to_be_bytes().as_ref());
-    nonce
+) {
+    let block_key = blob_key.derive_subkey(block_nonce);
+    block_key.encrypt_no_aead(&Nonce::default(), content);
 }

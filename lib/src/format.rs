@@ -26,3 +26,11 @@ pub(crate) fn hex(f: &mut fmt::Formatter, bytes: &[u8]) -> fmt::Result {
 
     Ok(())
 }
+
+pub(crate) struct Hex<'a>(pub &'a [u8]);
+
+impl fmt::LowerHex for Hex<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        hex(f, self.0)
+    }
+}
