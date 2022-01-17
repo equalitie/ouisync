@@ -30,11 +30,10 @@ impl Core {
         )
         .await
         {
-            Ok((id, mut buffer, auth_tag)) => {
+            Ok((id, mut buffer, auth_tag, nonce)) => {
                 operations::decrypt_block(
                     &self.blob_key,
-                    &id,
-                    0,
+                    &nonce,
                     &mut buffer[BLOB_NONCE_SIZE..],
                     &auth_tag,
                 )?;

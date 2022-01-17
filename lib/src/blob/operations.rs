@@ -510,7 +510,7 @@ async fn read_block(
     blob_key: &cipher::SecretKey,
     locator: &Locator,
 ) -> Result<(BlockId, Buffer)> {
-    let (id, mut buffer, auth_tag) = load_block(tx, branch, repo_key, locator).await?;
+    let (id, mut buffer, auth_tag, nonce) = load_block(tx, branch, repo_key, locator).await?;
 
     let offset = if locator.number() == 0 {
         BLOB_NONCE_SIZE
@@ -518,13 +518,7 @@ async fn read_block(
         0
     };
 
-    decrypt_block(
-        blob_key,
-        &id,
-        locator.number(),
-        &mut buffer[offset..],
-        &auth_tag,
-    )?;
+    decrypt_block(blob_key, &nonce, &mut buffer[offset..], &auth_tag)?;
 
     Ok((id, buffer))
 }
@@ -534,12 +528,12 @@ pub(super) async fn load_block(
     branch: &BranchData,
     read_key: &cipher::SecretKey,
     locator: &Locator,
-) -> Result<(BlockId, Buffer, AuthTag)> {
+) -> Result<(BlockId, Buffer, AuthTag, BlockNonce)> {
     let id = branch.get(conn, &locator.encode(read_key)).await?;
     let mut content = Buffer::new();
-    let (auth_tag, _) = block::read(conn, &id, &mut content).await?;
+    let (auth_tag, nonce) = block::read(conn, &id, &mut content).await?;
 
-    Ok((id, content, auth_tag))
+    Ok((id, content, auth_tag, nonce))
 }
 
 async fn write_block(
@@ -557,53 +551,33 @@ async fn write_block(
         0
     };
 
-    let block_id = rand::random();
-    let auth_tag = encrypt_block(blob_key, &block_id, locator.number(), &mut buffer[offset..])?;
-    let nonce = BlockNonce::default();
+    let id = rand::random();
+    let nonce = rand::random();
+    let auth_tag = encrypt_block(blob_key, &nonce, &mut buffer[offset..])?;
 
-    block::write(tx, &block_id, &buffer, &auth_tag, &nonce).await?;
+    block::write(tx, &id, &buffer, &auth_tag, &nonce).await?;
     branch
-        .insert(
-            tx,
-            &block_id,
-            &locator.encode(repo_read_key),
-            repo_write_keys,
-        )
+        .insert(tx, &id, &locator.encode(repo_read_key), repo_write_keys)
         .await?;
 
-    Ok(block_id)
+    Ok(id)
 }
 
 pub(super) fn decrypt_block(
     blob_key: &cipher::SecretKey,
-    id: &BlockId,
-    block_number: u32,
+    block_nonce: &BlockNonce,
     content: &mut [u8],
     auth_tag: &AuthTag,
 ) -> Result<(), aead::Error> {
-    let block_nonce = make_block_nonce(id, block_number);
-    let block_key = blob_key.derive_subkey(&block_nonce);
+    let block_key = blob_key.derive_subkey(block_nonce);
     block_key.decrypt(&Nonce::default(), &[], content, auth_tag)
 }
 
 pub(super) fn encrypt_block(
     blob_key: &cipher::SecretKey,
-    id: &BlockId,
-    block_number: u32,
+    block_nonce: &BlockNonce,
     content: &mut [u8],
 ) -> Result<AuthTag, aead::Error> {
-    let block_nonce = make_block_nonce(id, block_number);
-    let block_key = blob_key.derive_subkey(&block_nonce);
+    let block_key = blob_key.derive_subkey(block_nonce);
     block_key.encrypt(&Nonce::default(), &[], content)
-}
-
-const BLOCK_NONCE_SIZE: usize = 32;
-
-fn make_block_nonce(id: &BlockId, number: u32) -> [u8; BLOCK_NONCE_SIZE] {
-    const PREFIX: usize = BLOCK_NONCE_SIZE - 4;
-
-    let mut nonce = [0; BLOCK_NONCE_SIZE];
-    nonce[..PREFIX].copy_from_slice(&id.as_ref()[..PREFIX]);
-    nonce[PREFIX..].copy_from_slice(&number.to_be_bytes());
-    nonce
 }
