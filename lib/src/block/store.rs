@@ -28,7 +28,11 @@ pub async fn init(conn: &mut db::Connection) -> Result<()> {
 /// # Panics
 ///
 /// Panics if `buffer` length is less than [`BLOCK_SIZE`].
-pub async fn read(conn: &mut db::Connection, id: &BlockId, buffer: &mut [u8]) -> Result<AuthTag> {
+pub(crate) async fn read(
+    conn: &mut db::Connection,
+    id: &BlockId,
+    buffer: &mut [u8],
+) -> Result<AuthTag> {
     let row = sqlx::query("SELECT auth_tag, content FROM blocks WHERE id = ?")
         .bind(id)
         .fetch_optional(conn)
@@ -70,7 +74,7 @@ fn from_row(row: SqliteRow, buffer: &mut [u8]) -> Result<AuthTag> {
 ///
 /// Panics if buffer length is not equal to [`BLOCK_SIZE`].
 ///
-pub async fn write(
+pub(crate) async fn write(
     conn: &mut db::Connection,
     id: &BlockId,
     buffer: &[u8],
@@ -116,7 +120,7 @@ pub async fn write(
 /// Checks whether a block exists in the store.
 /// (Currently used only in tests)
 #[cfg(test)]
-pub async fn exists(conn: &mut db::Connection, id: &BlockId) -> Result<bool> {
+pub(crate) async fn exists(conn: &mut db::Connection, id: &BlockId) -> Result<bool> {
     Ok(sqlx::query("SELECT 0 FROM blocks WHERE id = ?")
         .bind(id)
         .fetch_optional(conn)

@@ -399,20 +399,18 @@ impl<'a> Operations<'a> {
             .write()
             .ok_or(Error::PermissionDenied)?;
 
-        self.current_block.id = rand::random();
-
-        write_block(
+        let block_id = write_block(
             tx,
             self.core.branch.data(),
             read_key,
             write_keys,
             &self.core.blob_key,
             &self.current_block.locator,
-            &self.current_block.id,
             self.current_block.content.buffer.clone(),
         )
         .await?;
 
+        self.current_block.id = block_id;
         self.current_block.dirty = false;
 
         Ok(())
@@ -460,7 +458,6 @@ impl<'a> Operations<'a> {
                 write_keys,
                 &self.core.blob_key,
                 &locator,
-                &rand::random(),
                 cursor.buffer,
             )
             .await?;
@@ -545,7 +542,6 @@ pub(super) async fn load_block(
     Ok((id, content, auth_tag))
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn write_block(
     tx: &mut db::Transaction<'_>,
     branch: &BranchData,
@@ -553,28 +549,28 @@ async fn write_block(
     repo_write_keys: &sign::Keypair,
     blob_key: &cipher::SecretKey,
     locator: &Locator,
-    block_id: &BlockId,
     mut buffer: Buffer,
-) -> Result<()> {
+) -> Result<BlockId> {
     let offset = if locator.number() == 0 {
         BLOB_NONCE_SIZE
     } else {
         0
     };
 
-    let auth_tag = encrypt_block(blob_key, block_id, locator.number(), &mut buffer[offset..])?;
+    let block_id = rand::random();
+    let auth_tag = encrypt_block(blob_key, &block_id, locator.number(), &mut buffer[offset..])?;
 
-    block::write(tx, block_id, &buffer, &auth_tag).await?;
+    block::write(tx, &block_id, &buffer, &auth_tag).await?;
     branch
         .insert(
             tx,
-            block_id,
+            &block_id,
             &locator.encode(repo_read_key),
             repo_write_keys,
         )
         .await?;
 
-    Ok(())
+    Ok(block_id)
 }
 
 pub(super) fn decrypt_block(
