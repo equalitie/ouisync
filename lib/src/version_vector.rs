@@ -1,4 +1,4 @@
-use crate::crypto::sign::PublicKey;
+use crate::crypto::{sign::PublicKey, Digest, Hashable};
 use serde::{Deserialize, Serialize};
 use sqlx::{
     encode::IsNull,
@@ -134,6 +134,12 @@ impl<'r> Decode<'r, Sqlite> for VersionVector {
     fn decode(value: SqliteValueRef<'r>) -> Result<Self, BoxDynError> {
         let slice = <&[u8]>::decode(value)?;
         Ok(bincode::deserialize(slice)?)
+    }
+}
+
+impl Hashable for VersionVector {
+    fn update_hash<S: Digest>(&self, state: &mut S) {
+        self.0.update_hash(state)
     }
 }
 
