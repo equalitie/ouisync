@@ -261,6 +261,7 @@ async fn write_all_blocks(index: &Index, snapshot: &Snapshot) {
 
     for (_, nodes) in snapshot.leaf_sets() {
         for node in nodes {
+            // TODO: change this so that block content, id and nonce match.
             store::write_received_block(
                 index,
                 &node.block_id,
