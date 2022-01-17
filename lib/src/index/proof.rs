@@ -2,7 +2,7 @@ use super::node::EMPTY_INNER_HASH;
 use crate::{
     crypto::{
         sign::{Keypair, PublicKey, Signature},
-        Hash,
+        Hash, Hashable,
     },
     repository::RepositoryId,
     version_vector::VersionVector,
@@ -25,7 +25,7 @@ impl Proof {
         write_keys: &Keypair,
     ) -> Self {
         let signature_material = signature_material(&writer_id, &version_vector, &hash);
-        let signature = write_keys.sign(&signature_material);
+        let signature = write_keys.sign(signature_material.as_ref());
 
         Self::new_unchecked(writer_id, version_vector, hash, signature)
     }
@@ -80,7 +80,7 @@ impl UntrustedProof {
             signature_material(&self.writer_id, &self.version_vector, &self.hash);
         if repository_id
             .write_public_key()
-            .verify(&signature_material, &self.signature)
+            .verify(signature_material.as_ref(), &self.signature)
         {
             Ok(Proof(self))
         } else {
@@ -95,17 +95,8 @@ impl From<Proof> for UntrustedProof {
     }
 }
 
-// TODO: consider an alternative way to do this: iteratively build a SHA2-512 hash of all the
-// fields and then use that hash with `sign_prehashed` / `verify_prehashed`. This would avoid the
-// potentially expensive serialization and allocation.
-fn signature_material(
-    writer_id: &PublicKey,
-    version_vector: &VersionVector,
-    hash: &Hash,
-) -> Vec<u8> {
-    // unwrap should be OK because serialization into a vector has no reason to ever fail (unless
-    // there is a bug).
-    bincode::serialize(&(writer_id, version_vector, hash)).unwrap()
+fn signature_material(writer_id: &PublicKey, version_vector: &VersionVector, hash: &Hash) -> Hash {
+    (writer_id, version_vector, hash).hash()
 }
 
 #[derive(Debug, Error)]

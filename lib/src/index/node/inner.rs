@@ -3,14 +3,13 @@ use super::{
     summary::Summary,
 };
 use crate::{
-    crypto::{Hash, Hashable},
+    crypto::{Digest, Hash, Hashable},
     db,
     error::Result,
 };
 use futures_util::{future, Stream, TryStreamExt};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
-use sha3::{Digest, Sha3_256};
 use sqlx::{Acquire, Row};
 use std::{
     collections::{btree_map, BTreeMap},
@@ -172,6 +171,12 @@ impl InnerNode {
     }
 }
 
+impl Hashable for InnerNode {
+    fn update_hash<S: Digest>(&self, state: &mut S) {
+        self.hash.update_hash(state);
+    }
+}
+
 #[derive(Default, Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct InnerNodeMap(BTreeMap<u8, InnerNode>);
 
@@ -180,6 +185,7 @@ impl InnerNodeMap {
         self.0.is_empty()
     }
 
+    #[allow(unused)]
     pub fn len(&self) -> usize {
         self.0.len()
     }
@@ -259,16 +265,9 @@ impl<'a> IntoIterator for &'a InnerNodeMap {
 }
 
 impl Hashable for InnerNodeMap {
-    fn hash(&self) -> Hash {
-        // XXX: Have some cryptographer check this whether there are no attacks.
-        let mut hasher = Sha3_256::new();
-        hasher.update(b"inner"); // to disambiguate it from hash of leaf nodes
-        hasher.update(&[self.len() as u8]);
-        for (bucket, node) in self.iter() {
-            hasher.update(bucket.to_le_bytes());
-            hasher.update(node.hash);
-        }
-        hasher.finalize().into()
+    fn update_hash<S: Digest>(&self, state: &mut S) {
+        b"inner".update_hash(state); // to disambiguate it from hash of leaf nodes
+        self.0.update_hash(state);
     }
 }
 
@@ -282,5 +281,15 @@ impl<'a> Iterator for InnerNodeMapIter<'a> {
 
     fn next(&mut self) -> Option<(u8, &'a InnerNode)> {
         self.0.next().map(|(bucket, node)| (*bucket, node))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_map_hash() {
+        assert_eq!(*EMPTY_INNER_HASH, InnerNodeMap::default().hash())
     }
 }

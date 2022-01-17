@@ -5,6 +5,6 @@ pub mod sign;
 
 pub(crate) use self::password::PasswordSalt;
 pub use self::{
-    hash::{Hash, Hashable},
+    hash::{Digest, Hash, Hashable},
     password::Password,
 };

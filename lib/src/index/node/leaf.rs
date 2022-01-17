@@ -1,6 +1,6 @@
 use crate::{
     block::BlockId,
-    crypto::{Hash, Hashable},
+    crypto::{Digest, Hash, Hashable},
     db,
     error::Error,
     error::Result,
@@ -8,7 +8,6 @@ use crate::{
 use futures_util::{Stream, TryStreamExt};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
-use sha3::{Digest, Sha3_256};
 use sqlx::{Acquire, Row};
 use std::{iter::FromIterator, mem, slice, vec};
 
@@ -119,6 +118,13 @@ impl LeafNode {
     }
 }
 
+impl Hashable for LeafNode {
+    fn update_hash<S: Digest>(&self, state: &mut S) {
+        self.locator.update_hash(state);
+        self.block_id.update_hash(state);
+    }
+}
+
 /// Collection that acts as a ordered set of `LeafNode`s
 #[derive(Default, Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct LeafNodeSet(Vec<LeafNode>);
@@ -128,6 +134,7 @@ impl LeafNodeSet {
         self.0.is_empty()
     }
 
+    #[allow(unused)]
     pub fn len(&self) -> usize {
         self.0.len()
     }
@@ -250,16 +257,9 @@ impl IntoIterator for LeafNodeSet {
 }
 
 impl Hashable for LeafNodeSet {
-    fn hash(&self) -> Hash {
-        let mut hasher = Sha3_256::new();
-        // XXX: Is updating with length enough to prevent attacks?
-        hasher.update((self.len() as u64).to_le_bytes());
-        hasher.update(b"leaf"); // to disambiguate it from hash of inner nodes
-        for node in self.iter() {
-            hasher.update(node.locator());
-            hasher.update(node.block_id);
-        }
-        hasher.finalize().into()
+    fn update_hash<S: Digest>(&self, state: &mut S) {
+        b"leaf".update_hash(state); // to disambiguate it from hash of inner nodes
+        self.0.update_hash(state);
     }
 }
 

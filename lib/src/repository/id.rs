@@ -1,10 +1,9 @@
 use crate::crypto::{
     sign::{self, PublicKey, SecretKey},
-    Hash,
+    Digest, Hash, Hashable,
 };
 use rand::{rngs::OsRng, CryptoRng, Rng};
 use serde::{Deserialize, Serialize};
-use sha3::{digest::Digest, Sha3_256};
 use std::str::FromStr;
 
 #[derive(PartialEq, Eq, Clone, Debug, Copy, Serialize, Deserialize)]
@@ -29,10 +28,7 @@ impl RepositoryId {
 
     /// Hash of this id using the given salt.
     pub fn salted_hash(&self, salt: &[u8]) -> Hash {
-        let mut hasher = Sha3_256::new();
-        hasher.update(self.0.as_ref());
-        hasher.update(salt);
-        hasher.finalize().into()
+        (self, salt).hash()
     }
 
     pub fn write_public_key(&self) -> &PublicKey {
@@ -71,5 +67,11 @@ impl From<[u8; PublicKey::SIZE]> for RepositoryId {
 impl From<PublicKey> for RepositoryId {
     fn from(pk: PublicKey) -> Self {
         Self(pk)
+    }
+}
+
+impl Hashable for RepositoryId {
+    fn update_hash<S: Digest>(&self, state: &mut S) {
+        self.0.update_hash(state)
     }
 }

@@ -1,4 +1,4 @@
-use crate::crypto::sign::PublicKey;
+use crate::crypto::{sign::PublicKey, Digest, Hashable};
 use serde::{Deserialize, Serialize};
 use sqlx::{
     encode::IsNull,
@@ -6,7 +6,7 @@ use sqlx::{
     sqlite::{SqliteArgumentValue, SqliteTypeInfo, SqliteValueRef},
     Decode, Encode, Sqlite, Type,
 };
-use std::{cmp::Ordering, collections::HashMap, fmt};
+use std::{cmp::Ordering, collections::BTreeMap, fmt};
 
 /// [Version vector](https://en.wikipedia.org/wiki/Version_vector).
 ///
@@ -17,7 +17,7 @@ use std::{cmp::Ordering, collections::HashMap, fmt};
 /// - `Some(Ordering::Greater)` -> the rhs vector happened-before the lhs vector
 /// - `None`                    -> the version vectors are concurrent
 #[derive(Default, Clone, Serialize, Deserialize)]
-pub struct VersionVector(HashMap<PublicKey, u64>);
+pub struct VersionVector(BTreeMap<PublicKey, u64>);
 
 impl VersionVector {
     /// Creates an empty version vector.
@@ -134,6 +134,12 @@ impl<'r> Decode<'r, Sqlite> for VersionVector {
     fn decode(value: SqliteValueRef<'r>) -> Result<Self, BoxDynError> {
         let slice = <&[u8]>::decode(value)?;
         Ok(bincode::deserialize(slice)?)
+    }
+}
+
+impl Hashable for VersionVector {
+    fn update_hash<S: Digest>(&self, state: &mut S) {
+        self.0.update_hash(state)
     }
 }
 

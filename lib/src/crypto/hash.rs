@@ -1,9 +1,19 @@
 use crate::format;
-use generic_array::{sequence::GenericSequence, typenum::Unsigned, GenericArray};
+use generic_array::{
+    sequence::GenericSequence,
+    typenum::{Unsigned, U32},
+    GenericArray,
+};
 use serde::{Deserialize, Serialize};
-use sha3::{digest::Digest, Sha3_256};
-use std::{array::TryFromSliceError, fmt};
+use sha3::Sha3_256;
+use std::{
+    array::TryFromSliceError,
+    collections::{BTreeMap, BTreeSet},
+    fmt, slice,
+};
 use zeroize::Zeroize;
+
+pub use sha3::digest::Digest;
 
 /// Wrapper for a 256-bit hash digest, for convenience. Also implements friendly formatting.
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
@@ -69,23 +79,148 @@ impl Zeroize for Hash {
     }
 }
 
+impl Hashable for Hash {
+    fn update_hash<S: Digest>(&self, state: &mut S) {
+        self.as_ref().update_hash(state)
+    }
+}
+
 derive_sqlx_traits_for_byte_array_wrapper!(Hash);
 
 type Inner = GenericArray<u8, <Sha3_256 as Digest>::OutputSize>;
 
-/// Trait for types that can be cryptographically hashed.
+/// Similar to std::hash::Hash, but for cryptographic hashes.
 pub trait Hashable {
-    fn hash(&self) -> Hash;
+    // Update the hash state.
+    fn update_hash<S: Digest>(&self, state: &mut S);
+
+    // This is needed due to lack of specialization in stable rust.
+    fn update_hash_slice<S>(slice: &[Self], state: &mut S)
+    where
+        S: Digest,
+        Self: Sized,
+    {
+        for item in slice {
+            item.update_hash(state)
+        }
+    }
+
+    // Hash self using the given hashing algorithm.
+    fn hash_with<H>(&self) -> Hash
+    where
+        H: Digest<OutputSize = U32>,
+    {
+        let mut h = H::new();
+        self.update_hash(&mut h);
+        h.finalize().into()
+    }
+
+    // Hash self using the default hashing algorithm (SHA3-256).
+    fn hash(&self) -> Hash {
+        self.hash_with::<Sha3_256>()
+    }
 }
 
-impl Hashable for &'_ [u8] {
-    fn hash(&self) -> Hash {
-        Sha3_256::digest(self).into()
+impl Hashable for u8 {
+    fn update_hash<S: Digest>(&self, state: &mut S) {
+        state.update(slice::from_ref(self))
+    }
+
+    fn update_hash_slice<S: Digest>(slice: &[Self], state: &mut S) {
+        state.update(slice)
+    }
+}
+
+impl Hashable for u32 {
+    fn update_hash<S: Digest>(&self, state: &mut S) {
+        state.update(&self.to_le_bytes())
     }
 }
 
 impl Hashable for u64 {
-    fn hash(&self) -> Hash {
-        (&self.to_le_bytes()[..]).hash()
+    fn update_hash<S: Digest>(&self, state: &mut S) {
+        state.update(&self.to_le_bytes())
+    }
+}
+
+impl<T> Hashable for [T]
+where
+    T: Hashable,
+{
+    fn update_hash<S: Digest>(&self, state: &mut S) {
+        (self.len() as u64).update_hash(state);
+        Hashable::update_hash_slice(self, state);
+    }
+}
+
+impl<T> Hashable for Vec<T>
+where
+    T: Hashable,
+{
+    fn update_hash<S: Digest>(&self, state: &mut S) {
+        self.as_slice().update_hash(state);
+    }
+}
+
+impl<K, V> Hashable for BTreeMap<K, V>
+where
+    K: Hashable,
+    V: Hashable,
+{
+    fn update_hash<S: Digest>(&self, state: &mut S) {
+        (self.len() as u64).update_hash(state);
+        for (key, value) in self {
+            key.update_hash(state);
+            value.update_hash(state);
+        }
+    }
+}
+
+impl<T> Hashable for BTreeSet<T>
+where
+    T: Hashable,
+{
+    fn update_hash<S: Digest>(&self, state: &mut S) {
+        (self.len() as u64).update_hash(state);
+        for item in self {
+            item.update_hash(state);
+        }
+    }
+}
+
+// NOTE: `Hashable` is purposefully not implemented for `HashMap` / `HashSet` because the resulting
+// hash would be dependent on the iteration order which in case of `HashMap` / `HashSet` is often
+// random. Thus two maps/set that compare as equal would produce different hashes.
+
+impl<T0, T1> Hashable for (T0, T1)
+where
+    T0: Hashable,
+    T1: Hashable,
+{
+    fn update_hash<S: Digest>(&self, state: &mut S) {
+        self.0.update_hash(state);
+        self.1.update_hash(state);
+    }
+}
+
+impl<T0, T1, T2> Hashable for (T0, T1, T2)
+where
+    T0: Hashable,
+    T1: Hashable,
+    T2: Hashable,
+{
+    fn update_hash<S: Digest>(&self, state: &mut S) {
+        self.0.update_hash(state);
+        self.1.update_hash(state);
+        self.2.update_hash(state);
+    }
+}
+
+impl<'a, T> Hashable for &'a T
+where
+    T: Hashable + ?Sized,
+{
+    fn update_hash<S: Digest>(&self, state: &mut S) {
+        (**self).update_hash(state);
     }
 }
