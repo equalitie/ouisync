@@ -6,7 +6,7 @@ use sqlx::{
     sqlite::{SqliteArgumentValue, SqliteTypeInfo, SqliteValueRef},
     Decode, Encode, Sqlite, Type,
 };
-use std::{cmp::Ordering, collections::HashMap, fmt};
+use std::{cmp::Ordering, collections::BTreeMap, fmt};
 
 /// [Version vector](https://en.wikipedia.org/wiki/Version_vector).
 ///
@@ -17,7 +17,7 @@ use std::{cmp::Ordering, collections::HashMap, fmt};
 /// - `Some(Ordering::Greater)` -> the rhs vector happened-before the lhs vector
 /// - `None`                    -> the version vectors are concurrent
 #[derive(Default, Clone, Serialize, Deserialize)]
-pub struct VersionVector(HashMap<PublicKey, u64>);
+pub struct VersionVector(BTreeMap<PublicKey, u64>);
 
 impl VersionVector {
     /// Creates an empty version vector.
