@@ -548,7 +548,7 @@ impl Shared {
     }
 
     // Create `Branch` wrapping the given `data`, reusing a previously cached one if it exists,
-    // and putting it into the cache it it does not.
+    // and putting it into the cache if it does not.
     async fn inflate(&self, data: &Arc<BranchData>) -> Result<Branch> {
         match self.branches.lock().await.entry(*data.id()) {
             Entry::Occupied(entry) => Ok(entry.get().clone()),

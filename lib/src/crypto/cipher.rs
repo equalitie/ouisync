@@ -91,7 +91,7 @@ impl SecretKey {
     // TODO: the following two functions have identical implementations. Consider replacing them
     // with a single function (what should it be called?).
 
-    /// Encrypt a message in place without using Authenticated Encryption nor Associated Data
+    /// Encrypt a message in place without using Authenticated Encryption with Associated Data
     pub(crate) fn encrypt_no_aead(&self, nonce: &Nonce, buffer: &mut [u8]) {
         let mut cipher = ChaCha20::new(self.as_ref().into(), nonce.into());
         cipher.apply_keystream(buffer)
