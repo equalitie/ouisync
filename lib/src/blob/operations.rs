@@ -585,7 +585,7 @@ pub(super) fn decrypt_block(
     auth_tag: &AuthTag,
 ) -> Result<(), aead::Error> {
     let block_key = blob_key.derive_subkey(id.as_ref());
-    block_key.decrypt(make_block_nonce(block_number), &[], content, auth_tag)
+    block_key.decrypt(&make_block_nonce(block_number), &[], content, auth_tag)
 }
 
 pub(super) fn encrypt_block(
@@ -595,7 +595,7 @@ pub(super) fn encrypt_block(
     content: &mut [u8],
 ) -> Result<AuthTag, aead::Error> {
     let block_key = blob_key.derive_subkey(id.as_ref());
-    block_key.encrypt(make_block_nonce(block_number), &[], content)
+    block_key.encrypt(&make_block_nonce(block_number), &[], content)
 }
 
 fn make_block_nonce(number: u32) -> Nonce {

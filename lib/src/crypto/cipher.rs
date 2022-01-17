@@ -116,35 +116,35 @@ impl SecretKey {
     /// Encrypt a message in place using Authenticated Encryption with Associated Data.
     pub fn encrypt(
         &self,
-        nonce: Nonce,
+        nonce: &Nonce,
         aad: &[u8],
         buffer: &mut [u8],
     ) -> Result<AuthTag, aead::Error> {
         let cipher = ChaCha20Poly1305::new(self.as_ref().into());
-        cipher.encrypt_in_place_detached(&nonce.into(), aad, buffer)
+        cipher.encrypt_in_place_detached(nonce.into(), aad, buffer)
     }
 
     /// Decrypt a message in place using Authenticated Encryption with Associated Data.
     pub fn decrypt(
         &self,
-        nonce: Nonce,
+        nonce: &Nonce,
         aad: &[u8],
         buffer: &mut [u8],
         auth_tag: &AuthTag,
     ) -> Result<(), aead::Error> {
         let cipher = ChaCha20Poly1305::new(self.as_ref().into());
-        cipher.decrypt_in_place_detached(&nonce.into(), aad, buffer, auth_tag)
+        cipher.decrypt_in_place_detached(nonce.into(), aad, buffer, auth_tag)
     }
 
     /// Encrypt a message in place without using Authenticated Encryption nor Associated Data
-    pub fn encrypt_no_aead(&self, nonce: Nonce, buffer: &mut [u8]) {
-        let mut cipher = ChaCha20::new(self.as_ref().into(), &nonce.into());
+    pub fn encrypt_no_aead(&self, nonce: &Nonce, buffer: &mut [u8]) {
+        let mut cipher = ChaCha20::new(self.as_ref().into(), nonce.into());
         cipher.apply_keystream(buffer)
     }
 
     /// Decrypt a message in place without using Authenticated Encryption with Associated Data.
-    pub fn decrypt_no_aead(&self, nonce: Nonce, buffer: &mut [u8]) {
-        let mut cipher = ChaCha20::new(self.as_ref().into(), &nonce.into());
+    pub fn decrypt_no_aead(&self, nonce: &Nonce, buffer: &mut [u8]) {
+        let mut cipher = ChaCha20::new(self.as_ref().into(), nonce.into());
         cipher.apply_keystream(buffer)
     }
 

@@ -246,7 +246,7 @@ where
 
     let mut buffer: Vec<_> = row.get(1);
 
-    master_key.decrypt_no_aead(nonce, &mut buffer);
+    master_key.decrypt_no_aead(&nonce, &mut buffer);
 
     let secret = T::try_from(&buffer).map_err(|_| Error::MalformedData)?;
     buffer.zeroize();
@@ -263,7 +263,7 @@ async fn set_secret(
     let nonce = make_nonce();
 
     let mut cypher = blob.to_vec();
-    master_key.encrypt_no_aead(nonce, &mut cypher);
+    master_key.encrypt_no_aead(&nonce, &mut cypher);
 
     sqlx::query(
         "INSERT OR REPLACE INTO metadata_secret(name, nonce, value)
