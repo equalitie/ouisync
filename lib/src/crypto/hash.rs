@@ -87,6 +87,7 @@ type Inner = GenericArray<u8, <Sha3_256 as Digest>::OutputSize>;
 
 /// Similar to std::hash::Hash, but for cryptographic hashes.
 pub trait Hashable {
+    // Update the hash state.
     fn update_hash<H: Digest>(&self, h: &mut H);
 
     // Hash self using the given hashing algorithm.

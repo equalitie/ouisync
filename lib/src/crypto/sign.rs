@@ -1,12 +1,18 @@
-use crate::format;
-use core::hash::{Hash, Hasher};
+use crate::{
+    crypto::{Digest, Hashable},
+    format,
+};
 use ed25519_dalek as ext;
 use ed25519_dalek::Verifier;
 use rand::{rngs::OsRng, CryptoRng, Rng};
 use serde;
 use serde::{Deserialize, Serialize};
-use std::cmp::Ordering;
-use std::{fmt, str::FromStr};
+use std::{
+    cmp::Ordering,
+    fmt,
+    hash::{Hash, Hasher},
+    str::FromStr,
+};
 use zeroize::Zeroize;
 
 #[derive(PartialEq, Eq, Clone, Copy, Deserialize, Serialize)]
@@ -96,6 +102,12 @@ impl fmt::LowerHex for PublicKey {
 impl Hash for PublicKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.0.as_bytes().hash(state);
+    }
+}
+
+impl Hashable for PublicKey {
+    fn update_hash<H: Digest>(&self, h: &mut H) {
+        self.0.as_bytes().update_hash(h)
     }
 }
 
