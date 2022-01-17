@@ -3,7 +3,7 @@ use crate::{
     block::{self, BlockId, BLOCK_SIZE},
     branch::Branch,
     crypto::{
-        cipher::{self, aead, AuthTag, Nonce, NONCE_SIZE},
+        cipher::{self, aead, AuthTag, Nonce},
         sign,
     },
     db,
@@ -584,8 +584,9 @@ pub(super) fn decrypt_block(
     content: &mut [u8],
     auth_tag: &AuthTag,
 ) -> Result<(), aead::Error> {
-    let block_key = blob_key.derive_subkey(id.as_ref());
-    block_key.decrypt(&make_block_nonce(block_number), &[], content, auth_tag)
+    let block_nonce = make_block_nonce(id, block_number);
+    let block_key = blob_key.derive_subkey(&block_nonce);
+    block_key.decrypt(&Nonce::default(), &[], content, auth_tag)
 }
 
 pub(super) fn encrypt_block(
@@ -594,12 +595,18 @@ pub(super) fn encrypt_block(
     block_number: u32,
     content: &mut [u8],
 ) -> Result<AuthTag, aead::Error> {
-    let block_key = blob_key.derive_subkey(id.as_ref());
-    block_key.encrypt(&make_block_nonce(block_number), &[], content)
+    let block_nonce = make_block_nonce(id, block_number);
+    let block_key = blob_key.derive_subkey(&block_nonce);
+    block_key.encrypt(&Nonce::default(), &[], content)
 }
 
-fn make_block_nonce(number: u32) -> Nonce {
-    let mut nonce = Nonce::default();
-    nonce[NONCE_SIZE - 4..].copy_from_slice(number.to_be_bytes().as_ref());
+const BLOCK_NONCE_SIZE: usize = 32;
+
+fn make_block_nonce(id: &BlockId, number: u32) -> [u8; BLOCK_NONCE_SIZE] {
+    const PREFIX: usize = BLOCK_NONCE_SIZE - 4;
+
+    let mut nonce = [0; BLOCK_NONCE_SIZE];
+    nonce[..PREFIX].copy_from_slice(&id.as_ref()[..PREFIX]);
+    nonce[PREFIX..].copy_from_slice(&number.to_be_bytes());
     nonce
 }

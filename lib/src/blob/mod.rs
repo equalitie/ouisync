@@ -243,8 +243,8 @@ impl Blob {
     }
 }
 
-// Unique nonce per blob, used to derive the per-blob encryption key. Should be large enough so that
-// when it's randomly generated, the chance of collision is negligible.
+// Nonce used to derive the per-blob encryption key. Should be large enough so that when it's
+// randomly generated, the chance of collision is negligible.
 const BLOB_NONCE_SIZE: usize = 32;
 type BlobNonce = [u8; BLOB_NONCE_SIZE];
 
