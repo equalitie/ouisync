@@ -2,12 +2,6 @@ use crate::crypto::{Digest, Hash, Hashable};
 use serde::{Deserialize, Serialize};
 use std::{array::TryFromSliceError, fmt};
 
-#[cfg(test)]
-use rand::{
-    distributions::{Distribution, Standard},
-    Rng,
-};
-
 mod store;
 
 #[cfg(test)]
@@ -54,17 +48,7 @@ impl Hashable for BlockId {
     }
 }
 
-#[cfg(test)]
-impl Distribution<BlockId> for Standard {
-    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> BlockId {
-        use generic_array::GenericArray;
-
-        let inner: [u8; Hash::SIZE] = rng.gen();
-        let inner: GenericArray<_, _> = inner.into();
-        let hash = Hash::from(inner);
-
-        BlockId(hash)
-    }
-}
-
 derive_sqlx_traits_for_byte_array_wrapper!(BlockId);
+
+#[cfg(test)]
+derive_rand_for_wrapper!(BlockId);

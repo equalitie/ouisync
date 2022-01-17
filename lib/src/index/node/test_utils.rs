@@ -18,7 +18,7 @@ impl Snapshot {
     pub fn generate<R: Rng>(rng: &mut R, leaf_count: usize) -> Self {
         let leaves = (0..leaf_count)
             .map(|_| {
-                let locator = rng.gen::<u64>().hash();
+                let locator = rng.gen();
                 let block_id = rng.gen();
                 LeafNode::present(locator, block_id)
             })

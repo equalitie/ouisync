@@ -1,3 +1,5 @@
+pub use sha3::digest::Digest;
+
 use crate::format;
 use generic_array::{typenum::U32, GenericArray};
 use serde::{Deserialize, Serialize};
@@ -8,8 +10,6 @@ use std::{
     fmt, slice,
 };
 use zeroize::Zeroize;
-
-pub use sha3::digest::Digest;
 
 /// Wrapper for a 256-bit hash digest, for convenience. Also implements friendly formatting.
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
@@ -83,6 +83,9 @@ impl Hashable for Hash {
 }
 
 derive_sqlx_traits_for_byte_array_wrapper!(Hash);
+
+#[cfg(test)]
+derive_rand_for_wrapper!(Hash);
 
 /// Similar to std::hash::Hash, but for cryptographic hashes.
 pub trait Hashable {

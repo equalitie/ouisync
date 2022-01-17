@@ -9,7 +9,6 @@ use crate::{
     crypto::{
         cipher::AuthTag,
         sign::{Keypair, PublicKey},
-        Hashable,
     },
     db,
     index::{node_test_utils::Snapshot, Index, Proof, RootNode, Summary},
@@ -237,7 +236,7 @@ async fn create_block(
     write_keys: &Keypair,
 ) {
     let branch = index.branches().await.get(writer_id).unwrap().clone();
-    let encoded_locator = rng.gen::<u64>().hash();
+    let encoded_locator = rng.gen();
 
     let mut content = vec![0; BLOCK_SIZE];
     rng.fill(&mut content[..]);
