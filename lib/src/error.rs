@@ -1,7 +1,4 @@
-use crate::{
-    block::{BlockId, BLOCK_SIZE},
-    crypto::cipher::aead,
-};
+use crate::block::{BlockId, BLOCK_SIZE};
 use std::{array::TryFromSliceError, convert::Infallible, fmt, io};
 use thiserror::Error;
 
@@ -32,8 +29,6 @@ pub enum Error {
     BlockNotReferenced,
     #[error("block has wrong length (expected: {}, actual: {0})", BLOCK_SIZE)]
     WrongBlockLength(usize),
-    #[error("encryption / decryption failed")]
-    Crypto,
     #[error("not a directory or directory malformed")]
     MalformedDirectory(#[source] bincode::Error),
     #[error("entry already exists")]
@@ -81,12 +76,6 @@ impl From<TryFromSliceError> for Error {
 impl From<crate::writer_set::error::Error> for Error {
     fn from(e: crate::writer_set::error::Error) -> Self {
         Error::WriterSet(e)
-    }
-}
-
-impl From<aead::Error> for Error {
-    fn from(_: aead::Error) -> Self {
-        Self::Crypto
     }
 }
 

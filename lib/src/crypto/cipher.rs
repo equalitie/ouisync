@@ -1,17 +1,10 @@
 //! Encryption / Decryption utilities.
 
-// reexport for convenience
-pub use chacha20poly1305::aead;
-
 use super::password::PasswordSalt;
 use argon2::Argon2;
 use chacha20::{
     cipher::{NewCipher, StreamCipher},
     ChaCha20,
-};
-use chacha20poly1305::{
-    aead::{AeadInPlace, NewAead},
-    ChaCha20Poly1305,
 };
 use generic_array::{sequence::GenericSequence, typenum::Unsigned};
 use hex;
@@ -25,16 +18,9 @@ use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
 
 /// Nonce
-pub type Nonce = [u8; NONCE_SIZE];
-pub const NONCE_SIZE: usize =
-    <<chacha20poly1305::Nonce as GenericSequence<_>>::Length as Unsigned>::USIZE;
-
-/// Authentication tag.
-pub type AuthTag = chacha20poly1305::Tag;
-pub const AUTH_TAG_SIZE: usize = <<AuthTag as GenericSequence<_>>::Length as Unsigned>::USIZE;
-
-const SECRET_KEY_SIZE: usize =
-    <<chacha20poly1305::Key as GenericSequence<_>>::Length as Unsigned>::USIZE;
+pub(crate) type Nonce = [u8; NONCE_SIZE];
+pub(crate) const NONCE_SIZE: usize =
+    <<chacha20::Nonce as GenericSequence<_>>::Length as Unsigned>::USIZE;
 
 /// Symmetric encryption/decryption secret key.
 ///
@@ -46,11 +32,11 @@ const SECRET_KEY_SIZE: usize =
 /// scrambled (overwritten with zeros) when the key is dropped to make sure it does not stay in
 /// the memory past its lifetime.
 #[derive(Clone)]
-pub struct SecretKey(Arc<Zeroizing<[u8; SECRET_KEY_SIZE]>>);
+pub struct SecretKey(Arc<Zeroizing<[u8; Self::SIZE]>>);
 
 impl SecretKey {
     /// Size of the key in bytes.
-    pub const SIZE: usize = SECRET_KEY_SIZE;
+    pub const SIZE: usize = <<chacha20::Key as GenericSequence<_>>::Length as Unsigned>::USIZE;
 
     /// Parse secret key from hexadecimal string of size 2*SIZE.
     pub fn parse_hex(hex_str: &str) -> Result<Self, hex::FromHexError> {
@@ -99,7 +85,7 @@ impl SecretKey {
     /// Derive a secret key from user's password and salt.
     pub fn derive_from_password(user_password: &str, salt: &PasswordSalt) -> Self {
         let mut result = Self::zero();
-        // Note: we controll the output and salt size. And the only other check that this function
+        // Note: we control the output and salt size. And the only other check that this function
         // does is whether the password isn't too long, but that would have to be more than
         // 0xffffffff so the `.expect` shouldn't be an issue.
         Argon2::default()
@@ -113,37 +99,17 @@ impl SecretKey {
         Self::derive_from_key(self.as_ref(), nonce)
     }
 
-    /// Encrypt a message in place using Authenticated Encryption with Associated Data.
-    pub fn encrypt(
-        &self,
-        nonce: &Nonce,
-        aad: &[u8],
-        buffer: &mut [u8],
-    ) -> Result<AuthTag, aead::Error> {
-        let cipher = ChaCha20Poly1305::new(self.as_ref().into());
-        cipher.encrypt_in_place_detached(nonce.into(), aad, buffer)
-    }
-
-    /// Decrypt a message in place using Authenticated Encryption with Associated Data.
-    pub fn decrypt(
-        &self,
-        nonce: &Nonce,
-        aad: &[u8],
-        buffer: &mut [u8],
-        auth_tag: &AuthTag,
-    ) -> Result<(), aead::Error> {
-        let cipher = ChaCha20Poly1305::new(self.as_ref().into());
-        cipher.decrypt_in_place_detached(nonce.into(), aad, buffer, auth_tag)
-    }
+    // TODO: the following two functions have identical implementations. Consider replacing them
+    // with a single function (what should it be called?).
 
     /// Encrypt a message in place without using Authenticated Encryption nor Associated Data
-    pub fn encrypt_no_aead(&self, nonce: &Nonce, buffer: &mut [u8]) {
+    pub(crate) fn encrypt_no_aead(&self, nonce: &Nonce, buffer: &mut [u8]) {
         let mut cipher = ChaCha20::new(self.as_ref().into(), nonce.into());
         cipher.apply_keystream(buffer)
     }
 
     /// Decrypt a message in place without using Authenticated Encryption with Associated Data.
-    pub fn decrypt_no_aead(&self, nonce: &Nonce, buffer: &mut [u8]) {
+    pub(crate) fn decrypt_no_aead(&self, nonce: &Nonce, buffer: &mut [u8]) {
         let mut cipher = ChaCha20::new(self.as_ref().into(), nonce.into());
         cipher.apply_keystream(buffer)
     }
