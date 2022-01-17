@@ -64,9 +64,7 @@ fn from_row(row: SqliteRow, buffer: &mut [u8]) -> Result<BlockNonce> {
 
 /// Writes a block into the store.
 ///
-/// This function is idempotent, that is, writing the same block (same id, same content) multiple
-/// times has the same effect as writing it only once. However, attempt to write a block with the
-/// same id as an existing block but with a different content or auth_tag is an error.
+/// If a block with the same id already exists, this is a no-op.
 ///
 /// # Panics
 ///
@@ -84,7 +82,7 @@ pub(crate) async fn write(
         "incorrect buffer length for block write"
     );
 
-    let result = sqlx::query(
+    sqlx::query(
         "INSERT INTO blocks (id, nonce, content)
          VALUES (?, ?, ?)
          ON CONFLICT (id) DO NOTHING",
@@ -95,24 +93,7 @@ pub(crate) async fn write(
     .execute(&mut *conn)
     .await?;
 
-    if result.rows_affected() > 0 {
-        Ok(())
-    } else {
-        // Block with the same id already exists. If it also has the same content, treat it as a
-        // success (to make this function idempotent), otherwise error.
-        if sqlx::query("SELECT content = ? AND nonce = ? FROM blocks WHERE id = ?")
-            .bind(buffer)
-            .bind(nonce.as_slice())
-            .bind(id)
-            .fetch_one(conn)
-            .await?
-            .get(0)
-        {
-            Ok(())
-        } else {
-            Err(Error::BlockExists)
-        }
-    }
+    Ok(())
 }
 
 /// Checks whether a block exists in the store.
@@ -170,17 +151,7 @@ mod tests {
         let nonce = BlockNonce::default();
 
         write(&mut conn, &id, &content0, &nonce).await.unwrap();
-
-        // Try to overwrite it with the same content -> no-op.
         write(&mut conn, &id, &content0, &nonce).await.unwrap();
-
-        // Try to overwrite it with a different content -> error
-        let content1 = random_block_content();
-        match write(&mut conn, &id, &content1, &nonce).await {
-            Err(Error::BlockExists) => (),
-            Err(error) => panic!("unexpected error: {:?}", error),
-            Ok(_) => panic!("unexpected success"),
-        }
     }
 
     async fn setup() -> db::Connection {
