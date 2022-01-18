@@ -67,7 +67,7 @@ impl SecretKey {
     }
 
     /// Derive a secret key from another secret key and a nonce.
-    pub fn derive_from_key(master_key: &[u8], nonce: &[u8]) -> Self {
+    pub fn derive_from_key(master_key: &[u8; Self::SIZE], nonce: &[u8]) -> Self {
         let mut sub_key = Self::zero();
 
         // TODO: verify this is actually secure!
@@ -133,8 +133,8 @@ impl TryFrom<&[u8]> for SecretKey {
 
 /// Note this trait is somewhat dangerous because if used carelessly the underlying sensitive data
 /// can be copied or revealed.
-impl AsRef<[u8]> for SecretKey {
-    fn as_ref(&self) -> &[u8] {
+impl AsRef<[u8; Self::SIZE]> for SecretKey {
+    fn as_ref(&self) -> &[u8; Self::SIZE] {
         &**self.0
     }
 }

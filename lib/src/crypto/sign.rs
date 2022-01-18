@@ -206,8 +206,8 @@ impl TryFrom<&[u8]> for SecretKey {
     }
 }
 
-impl AsRef<[u8]> for SecretKey {
-    fn as_ref(&self) -> &[u8] {
+impl AsRef<[u8; Self::SIZE]> for SecretKey {
+    fn as_ref(&self) -> &[u8; Self::SIZE] {
         self.0.as_bytes()
     }
 }
