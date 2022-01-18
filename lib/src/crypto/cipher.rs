@@ -1,6 +1,6 @@
 //! Encryption / Decryption utilities.
 
-use super::password::PasswordSalt;
+use super::{hash::Digest, password::PasswordSalt};
 use argon2::Argon2;
 use chacha20::{
     cipher::{NewCipher, StreamCipher},
@@ -9,10 +9,6 @@ use chacha20::{
 use generic_array::{sequence::GenericSequence, typenum::Unsigned};
 use hex;
 use rand::{rngs::OsRng, CryptoRng, Rng};
-use sha3::{
-    digest::{Digest, FixedOutput},
-    Sha3_256,
-};
 use std::{fmt, sync::Arc};
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
@@ -70,12 +66,10 @@ impl SecretKey {
     }
 
     /// Derive a secret key from another secret key and a nonce.
-    pub fn derive_from_key(master_key: &[u8], nonce: &[u8]) -> Self {
+    pub fn derive_from_key(master_key: &[u8; Self::SIZE], nonce: &[u8]) -> Self {
         let mut sub_key = Self::zero();
 
-        // TODO: verify this is actually secure!
-        let mut hasher = Sha3_256::new();
-        hasher.update(master_key);
+        let mut hasher = blake3::Hasher::new_keyed(master_key);
         hasher.update(nonce);
         hasher.finalize_into(sub_key.as_mut().into());
 
@@ -92,11 +86,6 @@ impl SecretKey {
             .hash_password_into(user_password.as_ref(), salt, result.as_mut())
             .expect("failed to hash password");
         result
-    }
-
-    /// Shortcut for `SecretKey::derive_from_key(self.as_ref(), nonce)` for convenience.
-    pub fn derive_subkey(&self, nonce: &[u8]) -> Self {
-        Self::derive_from_key(self.as_ref(), nonce)
     }
 
     // TODO: the following two functions have identical implementations. Consider replacing them
@@ -141,8 +130,8 @@ impl TryFrom<&[u8]> for SecretKey {
 
 /// Note this trait is somewhat dangerous because if used carelessly the underlying sensitive data
 /// can be copied or revealed.
-impl AsRef<[u8]> for SecretKey {
-    fn as_ref(&self) -> &[u8] {
+impl AsRef<[u8; Self::SIZE]> for SecretKey {
+    fn as_ref(&self) -> &[u8; Self::SIZE] {
         &**self.0
     }
 }

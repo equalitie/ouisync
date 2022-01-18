@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     cmp::Ordering,
     fmt,
-    hash::{Hash, Hasher},
+    hash::{Hash as StdHash, Hasher},
     str::FromStr,
 };
 use zeroize::Zeroize;
@@ -99,9 +99,9 @@ impl fmt::LowerHex for PublicKey {
 
 // https://github.com/dalek-cryptography/ed25519-dalek/issues/183
 #[allow(clippy::derive_hash_xor_eq)]
-impl Hash for PublicKey {
+impl StdHash for PublicKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.as_bytes().hash(state);
+        StdHash::hash(self.0.as_bytes(), state);
     }
 }
 
@@ -206,8 +206,8 @@ impl TryFrom<&[u8]> for SecretKey {
     }
 }
 
-impl AsRef<[u8]> for SecretKey {
-    fn as_ref(&self) -> &[u8] {
+impl AsRef<[u8; Self::SIZE]> for SecretKey {
+    fn as_ref(&self) -> &[u8; Self::SIZE] {
         self.0.as_bytes()
     }
 }

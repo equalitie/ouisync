@@ -3,9 +3,8 @@ pub mod store;
 
 use crate::crypto::{
     sign::{Keypair, PublicKey, Signature},
-    Hash,
+    Hash, Hashable,
 };
-use sha3::{Digest, Sha3_256};
 use std::collections::{hash_map, HashMap};
 use std::{cell::Cell, fmt, iter::once};
 
@@ -202,14 +201,7 @@ impl fmt::Debug for Entry {
 }
 
 fn hash_entry(writer: &PublicKey, added_by: &PublicKey, nonce: &Nonce) -> Hash {
-    let mut hasher = Sha3_256::new();
-
-    hasher.update(b"OuiSync WriterSet Entry");
-    hasher.update(writer);
-    hasher.update(added_by);
-    hasher.update(nonce);
-
-    hasher.finalize().into()
+    (b"OuiSync WriterSet Entry", writer, added_by, nonce).hash()
 }
 
 #[cfg(test)]

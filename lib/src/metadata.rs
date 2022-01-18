@@ -193,7 +193,7 @@ pub(crate) async fn get_access_secrets(
         // It wasn't the write key. Either it's the read key or a dummy key. We can't tell so
         // assume it's the read key for now.
         // unwrap is OK because the two secret key types have the same size.
-        let read_key = cipher::SecretKey::try_from(write_keys.secret.as_ref()).unwrap();
+        let read_key = cipher::SecretKey::try_from(write_keys.secret.as_ref().as_slice()).unwrap();
         Ok(AccessSecrets::Read { id, read_key })
     }
 }
