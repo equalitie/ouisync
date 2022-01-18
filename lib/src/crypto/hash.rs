@@ -1,4 +1,4 @@
-pub use sha3::digest::Digest;
+pub use blake3::traits::digest::Digest;
 
 use crate::format;
 use generic_array::{typenum::U32, GenericArray};
@@ -9,32 +9,66 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fmt, slice,
 };
-use zeroize::Zeroize;
 
-/// Wrapper for a 256-bit hash digest, for convenience. Also implements friendly formatting.
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
+#[cfg(test)]
+use rand::{
+    distributions::{Distribution, Standard},
+    Rng,
+};
+
+/// Wrapper for a 256-bit hash digest. Also implements friendly formatting.
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 #[repr(transparent)]
-pub struct Hash([u8; Self::SIZE]);
+#[serde(from = "[u8; Self::SIZE]", into = "[u8; Self::SIZE]")]
+pub struct Hash(blake3::Hash);
 
 impl Hash {
-    pub const SIZE: usize = 32;
+    pub const SIZE: usize = blake3::OUT_LEN;
 }
 
 impl From<[u8; Self::SIZE]> for Hash {
     fn from(array: [u8; Self::SIZE]) -> Self {
-        Hash(array)
+        Hash(array.into())
     }
 }
 
 impl From<GenericArray<u8, U32>> for Hash {
     fn from(array: GenericArray<u8, U32>) -> Self {
+        let array: [u8; Self::SIZE] = array.into();
         Hash(array.into())
+    }
+}
+
+impl TryFrom<&'_ [u8]> for Hash {
+    type Error = TryFromSliceError;
+
+    fn try_from(slice: &[u8]) -> Result<Self, Self::Error> {
+        let array: [u8; Self::SIZE] = slice.try_into()?;
+        Ok(Self(array.into()))
+    }
+}
+
+impl From<Hash> for [u8; Hash::SIZE] {
+    fn from(hash: Hash) -> [u8; Hash::SIZE] {
+        hash.0.into()
     }
 }
 
 impl AsRef<[u8]> for Hash {
     fn as_ref(&self) -> &[u8] {
-        self.0.as_slice()
+        self.0.as_bytes().as_slice()
+    }
+}
+
+impl PartialOrd for Hash {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Hash {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0.as_bytes().cmp(other.0.as_bytes())
     }
 }
 
@@ -52,27 +86,7 @@ impl fmt::Debug for Hash {
 
 impl fmt::LowerHex for Hash {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        format::hex(f, &self.0)
-    }
-}
-
-impl TryFrom<&'_ [u8]> for Hash {
-    type Error = TryFromSliceError;
-
-    fn try_from(slice: &[u8]) -> Result<Self, Self::Error> {
-        Ok(Self(slice.try_into()?))
-    }
-}
-
-impl From<Hash> for [u8; Hash::SIZE] {
-    fn from(hash: Hash) -> [u8; Hash::SIZE] {
-        hash.0
-    }
-}
-
-impl Zeroize for Hash {
-    fn zeroize(&mut self) {
-        self.0.zeroize()
+        format::hex(f, self.as_ref())
     }
 }
 
@@ -85,7 +99,12 @@ impl Hashable for Hash {
 derive_sqlx_traits_for_byte_array_wrapper!(Hash);
 
 #[cfg(test)]
-derive_rand_for_wrapper!(Hash);
+impl Distribution<Hash> for Standard {
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Hash {
+        let array: [u8; Hash::SIZE] = rng.gen();
+        Hash(array.into())
+    }
+}
 
 /// Similar to std::hash::Hash, but for cryptographic hashes.
 pub trait Hashable {

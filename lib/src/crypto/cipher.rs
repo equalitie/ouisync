@@ -1,6 +1,6 @@
 //! Encryption / Decryption utilities.
 
-use super::password::PasswordSalt;
+use super::{hash::Digest, password::PasswordSalt};
 use argon2::Argon2;
 use chacha20::{
     cipher::{NewCipher, StreamCipher},
@@ -9,10 +9,7 @@ use chacha20::{
 use generic_array::{sequence::GenericSequence, typenum::Unsigned};
 use hex;
 use rand::{rngs::OsRng, CryptoRng, Rng};
-use sha3::{
-    digest::{Digest, FixedOutput},
-    Sha3_256,
-};
+use sha3::Sha3_256;
 use std::{fmt, sync::Arc};
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
