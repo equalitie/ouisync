@@ -3,7 +3,6 @@ pub use blake3::traits::digest::Digest;
 use crate::format;
 use generic_array::{typenum::U32, GenericArray};
 use serde::{Deserialize, Serialize};
-use sha3::Sha3_256;
 use std::{
     array::TryFromSliceError,
     collections::{BTreeMap, BTreeSet},
@@ -132,9 +131,9 @@ pub trait Hashable {
         h.finalize().into()
     }
 
-    // Hash self using the default hashing algorithm (SHA3-256).
+    // Hash self using the default hashing algorithm (BLAKE3).
     fn hash(&self) -> Hash {
-        self.hash_with::<Sha3_256>()
+        self.hash_with::<blake3::Hasher>()
     }
 }
 
