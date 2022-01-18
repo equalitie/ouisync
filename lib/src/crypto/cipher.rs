@@ -94,11 +94,6 @@ impl SecretKey {
         result
     }
 
-    /// Shortcut for `SecretKey::derive_from_key(self.as_ref(), nonce)` for convenience.
-    pub fn derive_subkey(&self, nonce: &[u8]) -> Self {
-        Self::derive_from_key(self.as_ref(), nonce)
-    }
-
     // TODO: the following two functions have identical implementations. Consider replacing them
     // with a single function (what should it be called?).
 

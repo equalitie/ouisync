@@ -3,7 +3,7 @@ use crate::{
     block::{self, BlockId, BlockNonce, BLOCK_SIZE},
     branch::Branch,
     crypto::{
-        cipher::{self, Nonce},
+        cipher::{self, Nonce, SecretKey},
         sign,
     },
     db,
@@ -542,7 +542,7 @@ pub(super) fn decrypt_block(
     block_nonce: &BlockNonce,
     content: &mut [u8],
 ) {
-    let block_key = blob_key.derive_subkey(block_nonce);
+    let block_key = SecretKey::derive_from_key(blob_key.as_ref(), block_nonce);
     block_key.decrypt_no_aead(&Nonce::default(), content);
 }
 
@@ -551,6 +551,6 @@ pub(super) fn encrypt_block(
     block_nonce: &BlockNonce,
     content: &mut [u8],
 ) {
-    let block_key = blob_key.derive_subkey(block_nonce);
+    let block_key = SecretKey::derive_from_key(blob_key.as_ref(), block_nonce);
     block_key.encrypt_no_aead(&Nonce::default(), content);
 }
