@@ -119,6 +119,15 @@ pub trait Hashable {
     }
 }
 
+impl<'a, T> Hashable for &'a T
+where
+    T: Hashable + ?Sized,
+{
+    fn update_hash<S: Digest>(&self, state: &mut S) {
+        (**self).update_hash(state);
+    }
+}
+
 impl Hashable for u8 {
     fn update_hash<S: Digest>(&self, state: &mut S) {
         state.update(slice::from_ref(self))
@@ -148,6 +157,15 @@ where
     fn update_hash<S: Digest>(&self, state: &mut S) {
         (self.len() as u64).update_hash(state);
         Hashable::update_hash_slice(self, state);
+    }
+}
+
+impl<T, const N: usize> Hashable for [T; N]
+where
+    T: Hashable,
+{
+    fn update_hash<S: Digest>(&self, state: &mut S) {
+        self.as_slice().update_hash(state)
     }
 }
 
@@ -190,35 +208,18 @@ where
 // hash would be dependent on the iteration order which in case of `HashMap` / `HashSet` is often
 // random. Thus two maps/set that compare as equal would produce different hashes.
 
-impl<T0, T1> Hashable for (T0, T1)
-where
-    T0: Hashable,
-    T1: Hashable,
-{
-    fn update_hash<S: Digest>(&self, state: &mut S) {
-        self.0.update_hash(state);
-        self.1.update_hash(state);
+macro_rules! impl_hashable_for_tuple {
+    ($($name:ident)+) => {
+        impl<$($name: Hashable),+> Hashable for ($($name,)+) {
+            #[allow(non_snake_case)]
+            fn update_hash<S: Digest>(&self, state: &mut S) {
+                let ($($name,)+) = self;
+                $($name.update_hash(state);)+
+            }
+        }
     }
 }
 
-impl<T0, T1, T2> Hashable for (T0, T1, T2)
-where
-    T0: Hashable,
-    T1: Hashable,
-    T2: Hashable,
-{
-    fn update_hash<S: Digest>(&self, state: &mut S) {
-        self.0.update_hash(state);
-        self.1.update_hash(state);
-        self.2.update_hash(state);
-    }
-}
-
-impl<'a, T> Hashable for &'a T
-where
-    T: Hashable + ?Sized,
-{
-    fn update_hash<S: Digest>(&self, state: &mut S) {
-        (**self).update_hash(state);
-    }
-}
+impl_hashable_for_tuple!(T0 T1);
+impl_hashable_for_tuple!(T0 T1 T2);
+impl_hashable_for_tuple!(T0 T1 T2 T3);
