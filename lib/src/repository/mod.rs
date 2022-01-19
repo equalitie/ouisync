@@ -447,21 +447,11 @@ impl Repository {
     // FOR TESTS ONLY!
     #[cfg(test)]
     pub(crate) async fn create_remote_branch(&self, remote_id: PublicKey) -> Result<Branch> {
-        use crate::index::{RootNode, Summary};
-
         let write_keys = self.secrets().write_keys().ok_or(Error::PermissionDenied)?;
         let proof = Proof::first(remote_id, write_keys);
+        let branch = self.index().create_branch(proof).await?;
 
-        let remote_node = RootNode::create(
-            &mut *self.index().pool.acquire().await?,
-            proof,
-            Summary::FULL,
-        )
-        .await?;
-
-        self.index().update_remote_branch(remote_node).await?;
-
-        self.shared.branch(&remote_id).await
+        self.shared.inflate(&branch).await
     }
 }
 

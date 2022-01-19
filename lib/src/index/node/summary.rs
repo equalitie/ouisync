@@ -116,22 +116,3 @@ impl Summary {
         self.is_complete
     }
 }
-
-#[derive(Copy, Clone)]
-pub(crate) struct SummaryUpdateStatus {
-    // Is the snapshot complete now?
-    pub is_complete: bool,
-    // Was the snapshot complete before the update?
-    pub was_complete: bool,
-}
-
-impl SummaryUpdateStatus {
-    // Dit the snapshot became complete in the update?
-    pub fn did_complete(&self) -> bool {
-        self.is_complete && !self.was_complete
-    }
-
-    pub fn did_change(&self) -> bool {
-        self.is_complete != self.was_complete
-    }
-}

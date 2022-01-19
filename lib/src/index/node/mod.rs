@@ -12,7 +12,7 @@ pub(crate) use self::{
     inner::{InnerNode, InnerNodeMap, EMPTY_INNER_HASH, INNER_LAYER_COUNT},
     leaf::{LeafNode, LeafNodeSet, ModifyStatus},
     root::RootNode,
-    summary::{Summary, SummaryUpdateStatus},
+    summary::Summary,
 };
 
 use crate::{
@@ -29,13 +29,13 @@ pub(super) fn get_bucket(locator: &Hash, inner_layer: usize) -> u8 {
     locator.as_ref()[inner_layer]
 }
 
-/// Update summary of the nodes with the specified hash and layer and all their ancestor nodes.
-/// Returns a map `PublicKey -> SummaryUpdateStatus` indicating which branches were affected
-/// and whether they became complete by this update.
+/// Update summary of the nodes with the specified hash and all their ancestor nodes.
+/// Returns a map `PublicKey -> bool` indicating which branches were affected and whether they are
+/// complete.
 pub(super) async fn update_summaries(
     conn: &mut db::Connection,
     hash: Hash,
-) -> Result<Vec<(PublicKey, SummaryUpdateStatus)>> {
+) -> Result<Vec<(PublicKey, bool)>> {
     let mut tx = conn.begin().await?;
     let statuses = update_summaries_with_stack(&mut tx, vec![hash]).await?;
     tx.commit().await?;
@@ -89,14 +89,14 @@ pub(crate) async fn parent_exists(conn: &mut db::Connection, hash: &Hash) -> Res
 async fn update_summaries_with_stack(
     conn: &mut db::Connection,
     mut nodes: Vec<Hash>,
-) -> Result<Vec<(PublicKey, SummaryUpdateStatus)>> {
+) -> Result<Vec<(PublicKey, bool)>> {
     let mut statuses = Vec::new();
 
     while let Some(hash) = nodes.pop() {
-        let status = RootNode::update_summaries(conn, &hash).await?;
+        let complete = RootNode::update_summaries(conn, &hash).await?;
         RootNode::load_writer_ids(conn, &hash)
             .try_for_each(|writer_id| {
-                statuses.push((writer_id, status));
+                statuses.push((writer_id, complete));
                 future::ready(Ok(()))
             })
             .await?;

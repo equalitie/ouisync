@@ -174,7 +174,6 @@ async fn receive_child_nodes_with_missing_root_parent() {
     assert!(leaf_nodes.is_empty());
 }
 
-#[ignore]
 #[tokio::test(flavor = "multi_thread")]
 async fn does_not_delete_old_branch_until_new_branch_is_complete() {
     let (index, write_keys) = setup().await;

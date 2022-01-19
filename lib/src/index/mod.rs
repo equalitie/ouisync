@@ -156,10 +156,7 @@ impl Index {
 
         if create {
             let hash = proof.hash;
-            let node =
-                RootNode::create(&mut *self.pool.acquire().await?, proof, Summary::INCOMPLETE)
-                    .await?;
-            self.update_remote_branch(node).await?;
+            RootNode::create(&mut *self.pool.acquire().await?, proof, Summary::INCOMPLETE).await?;
             self.update_summaries(hash).await?;
         }
 
@@ -265,53 +262,56 @@ impl Index {
     // Updates summaries of the specified nodes and all their ancestors, notifies the affected
     // branches that became complete (wasn't before the update but became after it).
     async fn update_summaries(&self, hash: Hash) -> Result<()> {
-        let mut conn = self.pool.acquire().await?;
+        let statuses = node::update_summaries(&mut *self.pool.acquire().await?, hash).await?;
 
-        let statuses = node::update_summaries(&mut conn, hash).await?;
-        let branches = self.branches().await;
-
-        // Reload cached root nodes of the branches whose completion status changed.
-        for (id, status) in &statuses {
-            if status.did_change() {
-                if let Some(branch) = branches.get(id) {
-                    branch.reload_root(&mut conn).await?;
-                }
-            }
-        }
-
-        drop(conn);
-        drop(branches);
-
-        // Find the replicas whose current snapshots became complete by this update and notify them.
-        for (writer_id, status) in statuses {
-            if status.did_complete() {
-                broadcast(&self.shared.notify_tx, writer_id).await;
+        for (id, complete) in statuses {
+            if complete {
+                self.update_root_node(id).await?;
+            } else {
+                self.reload_root_node(&id).await?;
             }
         }
 
         Ok(())
     }
 
-    /// Update the root node of the remote branch.
-    pub(crate) async fn update_remote_branch(&self, node: RootNode) -> Result<()> {
+    async fn update_root_node(&self, writer_id: PublicKey) -> Result<()> {
         let mut branches = self.shared.branches.write().await;
-        let writer_id = node.proof.writer_id;
+        let mut conn = self.pool.acquire().await?;
 
-        match branches.entry(writer_id) {
+        let node = RootNode::load_latest_complete(&mut conn, writer_id).await?;
+
+        let created = match branches.entry(writer_id) {
             Entry::Vacant(entry) => {
                 entry.insert(Arc::new(BranchData::new(
                     node,
                     self.shared.notify_tx.clone(),
                 )));
-
-                broadcast(&self.shared.notify_tx, writer_id).await;
+                true
             }
             Entry::Occupied(entry) => {
-                let mut tx = self.pool.begin().await?;
-                entry.get().update_root(&mut tx, node).await?;
-                tx.commit().await?;
+                entry.get().update_root(&mut conn, node).await?;
+                false
             }
         };
+
+        drop(conn);
+        drop(branches);
+
+        if created {
+            broadcast(&self.shared.notify_tx, writer_id).await;
+        }
+
+        Ok(())
+    }
+
+    async fn reload_root_node(&self, writer_id: &PublicKey) -> Result<()> {
+        let branches = self.shared.branches.read().await;
+        let mut conn = self.pool.acquire().await?;
+
+        if let Some(branch) = branches.get(writer_id) {
+            branch.reload_root(&mut conn).await?;
+        }
 
         Ok(())
     }
