@@ -6,6 +6,7 @@ use crate::{
     version_vector::VersionVector,
 };
 use assert_matches::assert_matches;
+use futures_util::{future, StreamExt};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn receive_valid_root_node() {
@@ -80,6 +81,47 @@ async fn receive_root_node_with_invalid_proof() {
         .await
         .unwrap()
         .is_none());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn receive_duplicate_root_node() {
+    let (index, write_keys) = setup().await;
+
+    let local_id = PublicKey::random();
+    let remote_id = PublicKey::random();
+
+    index
+        .create_branch(Proof::first(local_id, &write_keys))
+        .await
+        .unwrap();
+
+    let snapshot = Snapshot::generate(&mut rand::thread_rng(), 1);
+    let proof = Proof::new(
+        remote_id,
+        VersionVector::first(remote_id),
+        *snapshot.root_hash(),
+        &write_keys,
+    );
+
+    // Receive root node for the first time.
+    index
+        .receive_root_node(proof.clone().into(), Summary::INCOMPLETE)
+        .await
+        .unwrap();
+
+    // Receiving it again is a no-op.
+    index
+        .receive_root_node(proof.into(), Summary::INCOMPLETE)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        RootNode::load_all(&mut index.pool.acquire().await.unwrap(), remote_id, 2)
+            .filter(|node| future::ready(node.is_ok()))
+            .count()
+            .await,
+        1
+    )
 }
 
 #[tokio::test(flavor = "multi_thread")]

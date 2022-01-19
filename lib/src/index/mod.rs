@@ -151,13 +151,18 @@ impl Index {
             updated = proof.hash != *EMPTY_INNER_HASH;
         };
 
-        // avoid deadlock
+        // Prevent deadlock.
         drop(branches);
 
         if create {
+            let mut conn = self.pool.acquire().await?;
             let hash = proof.hash;
-            RootNode::create(&mut *self.pool.acquire().await?, proof, Summary::INCOMPLETE).await?;
-            self.update_summaries(hash).await?;
+
+            match RootNode::create(&mut conn, proof, Summary::INCOMPLETE).await {
+                Ok(_) => self.update_summaries(&mut conn, hash).await?,
+                Err(Error::EntryExists) => (), // ignore duplicate nodes but don't fail.
+                Err(error) => return Err(error.into()),
+            }
         }
 
         Ok(updated)
@@ -169,20 +174,23 @@ impl Index {
         &self,
         nodes: InnerNodeMap,
     ) -> Result<Vec<Hash>, ReceiveError> {
+        let mut conn = self.pool.acquire().await?;
         let parent_hash = nodes.hash();
-        self.check_parent_node_exists(&parent_hash).await?;
+
+        self.check_parent_node_exists(&mut conn, &parent_hash)
+            .await?;
 
         let updated: Vec<_> = self
-            .find_inner_nodes_with_new_blocks(&parent_hash, &nodes)
+            .find_inner_nodes_with_new_blocks(&mut conn, &parent_hash, &nodes)
             .await?
             .map(|node| node.hash)
             .collect();
 
         nodes
             .into_incomplete()
-            .save(&mut *self.pool.acquire().await?, &parent_hash)
+            .save(&mut conn, &parent_hash)
             .await?;
-        self.update_summaries(parent_hash).await?;
+        self.update_summaries(&mut conn, parent_hash).await?;
 
         Ok(updated)
     }
@@ -193,20 +201,20 @@ impl Index {
         &self,
         nodes: LeafNodeSet,
     ) -> Result<Vec<BlockId>, ReceiveError> {
+        let mut conn = self.pool.acquire().await?;
         let parent_hash = nodes.hash();
-        self.check_parent_node_exists(&parent_hash).await?;
+
+        self.check_parent_node_exists(&mut conn, &parent_hash)
+            .await?;
 
         let updated: Vec<_> = self
-            .find_leaf_nodes_with_new_blocks(&parent_hash, &nodes)
+            .find_leaf_nodes_with_new_blocks(&mut conn, &parent_hash, &nodes)
             .await?
             .map(|node| node.block_id)
             .collect();
 
-        nodes
-            .into_missing()
-            .save(&mut *self.pool.acquire().await?, &parent_hash)
-            .await?;
-        self.update_summaries(parent_hash).await?;
+        nodes.into_missing().save(&mut conn, &parent_hash).await?;
+        self.update_summaries(&mut conn, parent_hash).await?;
 
         Ok(updated)
     }
@@ -217,11 +225,11 @@ impl Index {
     // `remote_nodes`.
     async fn find_inner_nodes_with_new_blocks<'a>(
         &self,
+        conn: &mut db::Connection,
         parent_hash: &Hash,
         remote_nodes: &'a InnerNodeMap,
     ) -> Result<impl Iterator<Item = &'a InnerNode>> {
-        let local_nodes =
-            InnerNode::load_children(&mut *self.pool.acquire().await?, parent_hash).await?;
+        let local_nodes = InnerNode::load_children(conn, parent_hash).await?;
 
         Ok(remote_nodes
             .iter()
@@ -248,11 +256,11 @@ impl Index {
     // `remote_nodes`.
     async fn find_leaf_nodes_with_new_blocks<'a>(
         &self,
+        conn: &mut db::Connection,
         parent_hash: &Hash,
         remote_nodes: &'a LeafNodeSet,
     ) -> Result<impl Iterator<Item = &'a LeafNode>> {
-        let local_nodes =
-            LeafNode::load_children(&mut *self.pool.acquire().await?, parent_hash).await?;
+        let local_nodes = LeafNode::load_children(conn, parent_hash).await?;
 
         Ok(remote_nodes
             .present()
@@ -261,27 +269,28 @@ impl Index {
 
     // Updates summaries of the specified nodes and all their ancestors, notifies the affected
     // branches that became complete (wasn't before the update but became after it).
-    async fn update_summaries(&self, hash: Hash) -> Result<()> {
-        let statuses = node::update_summaries(&mut *self.pool.acquire().await?, hash).await?;
+    async fn update_summaries(&self, conn: &mut db::Connection, hash: Hash) -> Result<()> {
+        let statuses = node::update_summaries(conn, hash).await?;
 
         for (id, complete) in statuses {
             if complete {
-                self.update_root_node(id).await?;
+                self.update_root_node(conn, id).await?;
             } else {
-                self.reload_root_node(&id).await?;
+                self.reload_root_node(conn, &id).await?;
             }
         }
 
         Ok(())
     }
 
-    async fn update_root_node(&self, writer_id: PublicKey) -> Result<()> {
-        let mut branches = self.shared.branches.write().await;
-        let mut conn = self.pool.acquire().await?;
+    async fn update_root_node(
+        &self,
+        conn: &mut db::Connection,
+        writer_id: PublicKey,
+    ) -> Result<()> {
+        let node = RootNode::load_latest_complete(conn, writer_id).await?;
 
-        let node = RootNode::load_latest_complete(&mut conn, writer_id).await?;
-
-        let created = match branches.entry(writer_id) {
+        let created = match self.shared.branches.write().await.entry(writer_id) {
             Entry::Vacant(entry) => {
                 entry.insert(Arc::new(BranchData::new(
                     node,
@@ -290,13 +299,10 @@ impl Index {
                 true
             }
             Entry::Occupied(entry) => {
-                entry.get().update_root(&mut conn, node).await?;
+                entry.get().update_root(conn, node).await?;
                 false
             }
         };
-
-        drop(conn);
-        drop(branches);
 
         if created {
             broadcast(&self.shared.notify_tx, writer_id).await;
@@ -305,19 +311,24 @@ impl Index {
         Ok(())
     }
 
-    async fn reload_root_node(&self, writer_id: &PublicKey) -> Result<()> {
-        let branches = self.shared.branches.read().await;
-        let mut conn = self.pool.acquire().await?;
-
-        if let Some(branch) = branches.get(writer_id) {
-            branch.reload_root(&mut conn).await?;
+    async fn reload_root_node(
+        &self,
+        conn: &mut db::Connection,
+        writer_id: &PublicKey,
+    ) -> Result<()> {
+        if let Some(branch) = self.shared.branches.read().await.get(writer_id) {
+            branch.reload_root(conn).await?;
         }
 
         Ok(())
     }
 
-    async fn check_parent_node_exists(&self, hash: &Hash) -> Result<(), ReceiveError> {
-        if node::parent_exists(&mut *self.pool.acquire().await?, hash).await? {
+    async fn check_parent_node_exists(
+        &self,
+        conn: &mut db::Connection,
+        hash: &Hash,
+    ) -> Result<(), ReceiveError> {
+        if node::parent_exists(conn, hash).await? {
             Ok(())
         } else {
             Err(ReceiveError::ParentNodeNotFound)
