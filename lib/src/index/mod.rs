@@ -218,11 +218,11 @@ impl Index {
     //
     // Assumes (but does not enforce) that `parent_hash` is the parent hash of all nodes in
     // `remote_nodes`.
-    async fn find_inner_nodes_with_new_blocks<'a, 'b, 'c>(
-        &'a self,
-        parent_hash: &'b Hash,
-        remote_nodes: &'c InnerNodeMap,
-    ) -> Result<impl Iterator<Item = &'c InnerNode>> {
+    async fn find_inner_nodes_with_new_blocks<'a>(
+        &self,
+        parent_hash: &Hash,
+        remote_nodes: &'a InnerNodeMap,
+    ) -> Result<impl Iterator<Item = &'a InnerNode>> {
         let local_nodes =
             InnerNode::load_children(&mut *self.pool.acquire().await?, parent_hash).await?;
 
@@ -249,11 +249,11 @@ impl Index {
     //
     // Assumes (but does not enforce) that `parent_hash` is the parent hash of all nodes in
     // `remote_nodes`.
-    async fn find_leaf_nodes_with_new_blocks<'a, 'b, 'c>(
-        &'a self,
-        parent_hash: &'b Hash,
-        remote_nodes: &'c LeafNodeSet,
-    ) -> Result<impl Iterator<Item = &'c LeafNode>> {
+    async fn find_leaf_nodes_with_new_blocks<'a>(
+        &self,
+        parent_hash: &Hash,
+        remote_nodes: &'a LeafNodeSet,
+    ) -> Result<impl Iterator<Item = &'a LeafNode>> {
         let local_nodes =
             LeafNode::load_children(&mut *self.pool.acquire().await?, parent_hash).await?;
 

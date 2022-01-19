@@ -17,30 +17,25 @@ pub(crate) struct Snapshot {
 impl Snapshot {
     // Generate a random snapshot with the given number of blocks.
     pub fn generate<R: Rng>(rng: &mut R, block_count: usize) -> Self {
-        let blocks: HashMap<_, _> = (0..block_count)
-            .map(|_| {
-                let mut content = vec![0; BLOCK_SIZE];
-                rng.fill(&mut content[..]);
+        Self::new((0..block_count).map(|_| (Block::generate(rng), rng.gen())))
+    }
 
-                let id = BlockId::from_content(&content);
-                let nonce = rng.gen();
+    // Create snapshot given an iterator of blocks where each block is associated to its encoded
+    // locator.
+    pub fn new(blocks_and_locators: impl IntoIterator<Item = (Block, Hash)>) -> Self {
+        let mut blocks = HashMap::new();
+        let mut leaves = HashMap::new();
 
-                (id, Block { content, nonce })
-            })
-            .collect();
+        for (block, locator) in blocks_and_locators {
+            let id = BlockId::from_content(&block.content);
+            blocks.insert(id, block);
 
-        let leaves = blocks
-            .keys()
-            .map(|id| {
-                let locator = rng.gen();
-                LeafNode::present(locator, *id)
-            })
-            .fold(HashMap::<_, LeafNodeSet>::new(), |mut map, leaf| {
-                map.entry(BucketPath::new(leaf.locator(), INNER_LAYER_COUNT - 1))
-                    .or_default()
-                    .modify(leaf.locator(), &leaf.block_id, true);
-                map
-            });
+            let node = LeafNode::present(locator, id);
+            leaves
+                .entry(BucketPath::new(node.locator(), INNER_LAYER_COUNT - 1))
+                .or_insert_with(LeafNodeSet::default)
+                .modify(node.locator(), &node.block_id, true);
+        }
 
         let mut inners: [HashMap<_, InnerNodeMap>; INNER_LAYER_COUNT] = Default::default();
 
@@ -124,9 +119,21 @@ impl<'a> InnerLayer<'a> {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct Block {
     pub content: Vec<u8>,
     pub nonce: BlockNonce,
+}
+
+impl Block {
+    pub fn generate<R: Rng>(rng: &mut R) -> Self {
+        let mut content = vec![0; BLOCK_SIZE];
+        rng.fill(&mut content[..]);
+
+        let nonce = rng.gen();
+
+        Self { content, nonce }
+    }
 }
 
 fn add_inner_node(

@@ -27,6 +27,7 @@ pub(crate) struct BranchData {
 }
 
 impl BranchData {
+    /// Construct a branch data using the provided root node.
     pub fn new(root_node: RootNode, notify_tx: async_broadcast::Sender<PublicKey>) -> Self {
         Self {
             writer_id: root_node.proof.writer_id,
@@ -35,7 +36,7 @@ impl BranchData {
         }
     }
 
-    // TODO: remove this
+    /// Create branch data with the initial root node. Convenience function for tests only.
     #[cfg(test)]
     pub async fn create(
         conn: &mut db::Connection,
