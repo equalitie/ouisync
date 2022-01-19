@@ -133,7 +133,7 @@ where
 
 fn wait_for_share_token(process: &mut Child, id: u32) -> String {
     let suffix = format!("?name={}", REPO_NAME);
-    if let Some(line) = wait_for_line(process.stdout.as_mut().unwrap(), "ouisync:", &suffix) {
+    if let Some(line) = wait_for_line(process.stdout.as_mut().unwrap(), "ouisync:", &suffix, id) {
         line
     } else {
         fail(process, id, "Failed to read share token");
@@ -142,22 +142,26 @@ fn wait_for_share_token(process: &mut Child, id: u32) -> String {
 
 fn wait_for_ready_message(process: &mut Child, id: u32) -> u16 {
     const PREFIX: &str = "Listening on port ";
-    if let Some(line) = wait_for_line(process.stdout.as_mut().unwrap(), PREFIX, "") {
+    if let Some(line) = wait_for_line(process.stdout.as_mut().unwrap(), PREFIX, "", id) {
         line[PREFIX.len()..].parse().unwrap()
     } else {
         fail(process, id, "Failed to read listening port");
     }
 }
 
-fn wait_for_line<R: Read>(reader: &mut R, prefix: &str, suffix: &str) -> Option<String> {
-    let mut line = BufReader::new(reader)
-        .lines()
-        .filter_map(|line| line.ok())
-        .find(|line| line.starts_with(prefix) && line.ends_with(suffix))?;
+fn wait_for_line<R: Read>(reader: &mut R, prefix: &str, suffix: &str, id: u32) -> Option<String> {
+    for mut line in BufReader::new(reader).lines().filter_map(|line| line.ok()) {
+        if line.starts_with(prefix) && line.ends_with(suffix) {
+            let len = line.trim_end().len();
+            line.truncate(len);
 
-    let len = line.trim_end().len();
-    line.truncate(len);
-    Some(line)
+            return Some(line);
+        } else {
+            println!("[{}] {}", id, line)
+        }
+    }
+
+    None
 }
 
 fn fail(process: &mut Child, id: u32, message: &str) -> ! {
@@ -193,7 +197,7 @@ where
 
     for i in 0..ATTEMPTS {
         match f() {
-            Ok(()) => break,
+            Ok(()) => return,
             Err(error) => {
                 last_error = Some(error);
             }
@@ -204,6 +208,8 @@ where
 
     if let Some(error) = last_error {
         panic!("{}", error)
+    } else {
+        unreachable!()
     }
 }
 

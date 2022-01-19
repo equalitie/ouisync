@@ -25,7 +25,7 @@ async fn main() -> Result<()> {
     env_logger::init();
 
     let pool = config::open_db(&options.config_store()?).await?;
-    let this_writer_id =
+    let this_replica_id =
         replica_id::get_or_create_this_replica_id(&mut *pool.acquire().await?).await?;
 
     // Create repositories
@@ -35,7 +35,7 @@ async fn main() -> Result<()> {
         let secret = options.secret_for_repo(name)?;
         let repo = Repository::create(
             &options.repository_store(name)?,
-            this_writer_id,
+            this_replica_id,
             secret,
             AccessSecrets::random_write(),
             !options.disable_merger,
@@ -58,7 +58,7 @@ async fn main() -> Result<()> {
         } else {
             Repository::open(
                 &options.repository_store(name)?,
-                this_writer_id,
+                this_replica_id,
                 options.secret_for_repo(name).ok(),
                 false,
             )
@@ -96,7 +96,7 @@ async fn main() -> Result<()> {
         if let Entry::Vacant(entry) = repos.entry(name.as_ref().to_owned()) {
             let repo = Repository::create(
                 &options.repository_store(name.as_ref())?,
-                this_writer_id,
+                this_replica_id,
                 master_secret,
                 access_secrets.clone(),
                 false,
@@ -126,7 +126,7 @@ async fn main() -> Result<()> {
         } else {
             Repository::open(
                 &options.repository_store(name)?,
-                this_writer_id,
+                this_replica_id,
                 options.secret_for_repo(name).ok(),
                 !options.disable_merger,
             )
@@ -142,7 +142,7 @@ async fn main() -> Result<()> {
 
     if options.print_ready_message {
         println!("Listening on port {}", network.local_addr().port());
-        println!("This writer ID is {}", this_writer_id);
+        println!("This replica ID is {}", this_replica_id);
     }
 
     terminated().await?;

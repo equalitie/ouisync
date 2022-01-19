@@ -159,7 +159,9 @@ impl Index {
             let hash = proof.hash;
 
             match RootNode::create(&mut conn, proof, Summary::INCOMPLETE).await {
-                Ok(_) => self.update_summaries(&mut conn, hash).await?,
+                Ok(_) => {
+                    self.update_summaries(&mut conn, hash).await?;
+                }
                 Err(Error::EntryExists) => (), // ignore duplicate nodes but don't fail.
                 Err(error) => return Err(error.into()),
             }

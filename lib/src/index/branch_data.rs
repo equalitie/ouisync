@@ -29,6 +29,8 @@ pub(crate) struct BranchData {
 impl BranchData {
     /// Construct a branch data using the provided root node.
     pub fn new(root_node: RootNode, notify_tx: async_broadcast::Sender<PublicKey>) -> Self {
+        assert!(root_node.summary.is_complete());
+
         Self {
             writer_id: root_node.proof.writer_id,
             root_node: RwLock::new(root_node),
