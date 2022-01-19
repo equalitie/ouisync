@@ -191,6 +191,7 @@ async fn concurrent_read_and_create_dir() {
                 }
                 // Sometimes opening the directory may outrace its creation,
                 // so continue to retry again.
+                sleep(Duration::from_millis(10)).await;
             }
             panic!("Failed to open the directory after multiple attempts");
         }
@@ -369,7 +370,7 @@ async fn read_access_different_replica() {
     // The second replica doesn't have its own local branch in the repo.
     assert_matches!(
         repo.local_branch().await.map(|_| ()),
-        Err(Error::PermissionDenied)
+        None
     );
 
     let mut file = repo.open_file("public.txt").await.unwrap();
@@ -391,7 +392,7 @@ async fn truncate_forked_remote_file() {
 
     create_remote_file(&repo, PublicKey::random(), "test.txt", b"foo").await;
 
-    let local_branch = repo.local_branch().await.unwrap();
+    let local_branch = repo.get_or_create_local_branch().await.unwrap();
     let mut file = repo.open_file("test.txt").await.unwrap();
     file.fork(&local_branch).await.unwrap();
     file.truncate(0).await.unwrap();

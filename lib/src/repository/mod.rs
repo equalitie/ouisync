@@ -78,11 +78,6 @@ impl Repository {
 
         let index = Index::load(pool, *access_secrets.id()).await?;
 
-        if let Some(write_keys) = access_secrets.write_keys() {
-            let proof = Proof::first(this_writer_id, write_keys);
-            index.create_branch(proof).await?;
-        }
-
         Self::new(index, this_writer_id, access_secrets, enable_merger).await
     }
 
@@ -173,7 +168,7 @@ impl Repository {
         });
 
         let local_branch = if enable_merger {
-            match shared.local_branch().await {
+            match shared.get_or_create_local_branch().await {
                 Ok(branch) => Some(branch),
                 Err(Error::PermissionDenied) => None,
                 Err(error) => return Err(error),
@@ -251,13 +246,13 @@ impl Repository {
 
     /// Creates a new file at the given path.
     pub async fn create_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<File> {
-        let local_branch = self.local_branch().await?;
+        let local_branch = self.get_or_create_local_branch().await?;
         local_branch.ensure_file_exists(path.as_ref()).await
     }
 
     /// Creates a new directory at the given path.
     pub async fn create_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<Directory> {
-        let local_branch = self.local_branch().await?;
+        let local_branch = self.get_or_create_local_branch().await?;
         local_branch.ensure_directory_exists(path.as_ref()).await
     }
 
@@ -295,7 +290,7 @@ impl Repository {
     ) -> Result<()> {
         use std::borrow::Cow;
 
-        let local_branch = self.local_branch().await?;
+        let local_branch = self.get_or_create_local_branch().await?;
 
         let src_joint_dir = self.open_directory(src_dir_path).await?;
         let src_joint_dir_r = src_joint_dir.read().await;
@@ -379,8 +374,13 @@ impl Repository {
     }
 
     /// Returns the local branch if it exists.
-    pub async fn local_branch(&self) -> Result<Branch> {
+    pub async fn local_branch(&self) -> Option<Branch> {
         self.shared.local_branch().await
+    }
+
+    /// Returns the local branch if it exists, otherwise return PermissionDenied error.
+    pub async fn get_or_create_local_branch(&self) -> Result<Branch> {
+        self.shared.get_or_create_local_branch().await
     }
 
     /// Subscribe to change notification from all current and future branches.
@@ -390,35 +390,25 @@ impl Repository {
 
     // Opens the root directory across all branches as JointDirectory.
     async fn joint_root(&self) -> Result<JointDirectory> {
-        let local_branch = self.local_branch().await.ok();
+        let local_branch = self.local_branch().await;
         let branches = self.shared.branches().await?;
         let mut dirs = Vec::with_capacity(branches.len());
 
         for branch in branches {
-            let dir = if Some(branch.id()) == local_branch.as_ref().map(Branch::id) {
-                branch.open_or_create_root().await.map_err(|error| {
+            let dir = match branch.open_root().await {
+                Ok(dir) => dir,
+                Err(Error::EntryNotFound | Error::BlockNotFound(_)) => {
+                    // Some branch roots may not have been loaded across the network yet. We'll
+                    // ignore those.
+                    continue;
+                }
+                Err(error) => {
                     log::error!(
-                        "failed to open root directory on the local branch: {:?}",
+                        "failed to open root directory on a remote branch {:?}: {:?}",
+                        branch.id(),
                         error
                     );
-                    error
-                })?
-            } else {
-                match branch.open_root().await {
-                    Ok(dir) => dir,
-                    Err(Error::EntryNotFound | Error::BlockNotFound(_)) => {
-                        // Some branch roots may not have been loaded across the network yet. We'll
-                        // ignore those.
-                        continue;
-                    }
-                    Err(error) => {
-                        log::error!(
-                            "failed to open root directory on a remote branch {:?}: {:?}",
-                            branch.id(),
-                            error
-                        );
-                        return Err(error);
-                    }
+                    return Err(error);
                 }
             };
 
@@ -514,15 +504,30 @@ struct Shared {
 }
 
 impl Shared {
-    pub async fn local_branch(&self) -> Result<Branch> {
-        self.inflate(
-            self.index
-                .branches()
-                .await
-                .get(&self.this_writer_id)
-                .ok_or(Error::PermissionDenied)?,
-        )
-        .await
+    pub async fn local_branch(&self) -> Option<Branch> {
+        match self.index.branches().await.get(&self.this_writer_id) {
+            None => None,
+            Some(data) => self.inflate(data).await.ok()
+        }
+    }
+
+    pub async fn get_or_create_local_branch(&self) -> Result<Branch> {
+        let branches = self.index.branches().await;
+
+        let data = if let Some(data) = branches.get(&self.this_writer_id) {
+            data.clone()
+        } else {
+            drop(branches);
+
+            if let Some(write_keys) = self.secrets.write_keys() {
+                let proof = Proof::first(self.this_writer_id, write_keys);
+                self.index.create_branch(proof).await?
+            } else {
+                return Err(Error::PermissionDenied);
+            }
+        };
+
+        self.inflate(&data).await
     }
 
     pub async fn branch(&self, id: &PublicKey) -> Result<Branch> {

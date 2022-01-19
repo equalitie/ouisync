@@ -429,7 +429,7 @@ impl Inner {
         bkuptime: Option<SystemTime>,
         flags: Option<u32>,
     ) -> Result<FileAttr> {
-        let local_branch = self.repository.local_branch().await?;
+        let local_branch = self.repository.get_or_create_local_branch().await?;
 
         let mut scope = FormatOptionScope::new(", ");
 
@@ -771,7 +771,7 @@ impl Inner {
         );
 
         let offset: u64 = offset.try_into().map_err(|_| Error::OffsetOutOfRange)?;
-        let local_branch = self.repository.local_branch().await?;
+        let local_branch = self.repository.get_or_create_local_branch().await?;
 
         let file = self.entries.get_file_mut(handle)?;
         file.seek(SeekFrom::Start(offset)).await?;
