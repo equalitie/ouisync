@@ -202,7 +202,6 @@ impl BranchData {
         Ok(path)
     }
 
-    // TODO: make sure nodes are saved as complete.
     async fn write_path(
         &self,
         conn: &mut db::Connection,
@@ -246,6 +245,7 @@ impl BranchData {
         Ok(())
     }
 
+    // Panics if `new_root` is not complete.
     async fn replace_root(
         &self,
         conn: &mut db::Connection,
