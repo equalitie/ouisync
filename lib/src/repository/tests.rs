@@ -368,10 +368,7 @@ async fn read_access_different_replica() {
     .unwrap();
 
     // The second replica doesn't have its own local branch in the repo.
-    assert_matches!(
-        repo.local_branch().await.map(|_| ()),
-        None
-    );
+    assert_matches!(repo.local_branch().await.map(|_| ()), None);
 
     let mut file = repo.open_file("public.txt").await.unwrap();
     let content = file.read_to_end().await.unwrap();

@@ -1,5 +1,6 @@
 use anyhow::{format_err, Error};
 use ouisync_lib::cipher::SecretKey;
+use rand::Rng;
 use std::{
     env,
     fmt::Debug,
@@ -234,5 +235,29 @@ fn terminate(process: &Child) {
     // undefined behaviour here.
     unsafe {
         libc::kill(process.id() as libc::pid_t, libc::SIGTERM);
+    }
+}
+
+// RNG adaptor that implements `io::Read`.
+pub struct RngRead<R>(pub R);
+
+impl<R: Rng> Read for RngRead<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.0.fill(buf);
+        Ok(buf.len())
+    }
+}
+
+// `io::Write` that just counts the number of bytes written.
+pub struct CountWrite(pub usize);
+
+impl Write for CountWrite {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0 += buf.len();
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
     }
 }

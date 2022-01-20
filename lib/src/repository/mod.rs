@@ -497,7 +497,7 @@ impl Shared {
     pub async fn local_branch(&self) -> Option<Branch> {
         match self.index.branches().await.get(&self.this_writer_id) {
             None => None,
-            Some(data) => self.inflate(data).await.ok()
+            Some(data) => self.inflate(data).await.ok(),
         }
     }
 
