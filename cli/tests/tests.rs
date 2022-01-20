@@ -1,6 +1,6 @@
 mod utils;
 
-use self::utils::{eventually, eventually_true, Bin};
+use self::utils::{check_eq, eventually, Bin};
 use std::{fs, net::Ipv4Addr};
 
 #[test]
@@ -18,8 +18,8 @@ fn transfer_single_file() {
     fs::write(a.root().join(file_name), orig_content).unwrap();
 
     eventually(|| {
-        let content = fs::read_to_string(b.root().join(file_name)).unwrap();
-        assert_eq!(content, orig_content);
+        let content = fs::read_to_string(b.root().join(file_name))?;
+        check_eq(content, orig_content)
     })
 }
 
@@ -41,8 +41,8 @@ fn sequential_write_to_the_same_file() {
 
     // B reads what A wrote
     eventually(|| {
-        let content = fs::read_to_string(b.root().join(file_name)).unwrap();
-        assert_eq!(content, content_a);
+        let content = fs::read_to_string(b.root().join(file_name))?;
+        check_eq(content, content_a)
     });
 
     // B writes
@@ -50,8 +50,8 @@ fn sequential_write_to_the_same_file() {
 
     // A reads what B wrote
     eventually(|| {
-        let content = fs::read_to_string(a.root().join(file_name)).unwrap();
-        assert_eq!(content, content_b);
+        let content = fs::read_to_string(a.root().join(file_name))?;
+        check_eq(content, content_b)
     });
 }
 
@@ -76,10 +76,6 @@ fn fast_sequential_writes() {
             fs::write(a.root().join(file), &content).unwrap();
         }
 
-        // Allowing this lint because even though the `map(|e| e.unwrap())` bit has no effect on the
-        // resulting count, it is still useful in that it catches any errors when reading the dir
-        // by panicking.
-        #[allow(clippy::suspicious_map)]
-        eventually_true(|| fs::read_dir(b.root()).unwrap().map(|e| e.unwrap()).count() == count);
+        eventually(|| check_eq(fs::read_dir(b.root())?.filter(|e| e.is_ok()).count(), count));
     }
 }

@@ -27,7 +27,10 @@ pub(crate) struct BranchData {
 }
 
 impl BranchData {
+    /// Construct a branch data using the provided root node.
     pub fn new(root_node: RootNode, notify_tx: async_broadcast::Sender<PublicKey>) -> Self {
+        assert!(root_node.summary.is_complete());
+
         Self {
             writer_id: root_node.proof.writer_id,
             root_node: RwLock::new(root_node),
@@ -35,7 +38,7 @@ impl BranchData {
         }
     }
 
-    // TODO: remove this
+    /// Create branch data with the initial root node. Convenience function for tests only.
     #[cfg(test)]
     pub async fn create(
         conn: &mut db::Connection,
@@ -104,8 +107,7 @@ impl BranchData {
             .await?;
 
         // We shouldn't be inserting a block to a branch twice. If we do, the assumption is that we
-        // hit one in 2^sizeof(BlockVersion) chance that we randomly generated the same
-        // BlockVersion twice.
+        // hit one in 2^sizeof(BlockId) chance that we randomly generated the same BlockId twice.
         assert!(!path.has_leaf(block_id));
 
         path.set_leaf(block_id);
@@ -149,6 +151,10 @@ impl BranchData {
 
     /// Update the root node of this branch. Does nothing if the version of `new_root` is not
     /// greater than the version of the current root.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `new_root` is not complete.
     pub async fn update_root(&self, conn: &mut db::Connection, new_root: RootNode) -> Result<()> {
         let mut old_root = self.root_node.write().await;
 
@@ -198,7 +204,6 @@ impl BranchData {
         Ok(path)
     }
 
-    // TODO: make sure nodes are saved as complete.
     async fn write_path(
         &self,
         conn: &mut db::Connection,
@@ -242,18 +247,20 @@ impl BranchData {
         Ok(())
     }
 
+    // Panics if `new_root` is not complete.
     async fn replace_root(
         &self,
         conn: &mut db::Connection,
         old_root: &mut RootNode,
         new_root: RootNode,
     ) -> Result<()> {
-        let old_root = mem::replace(old_root, new_root);
+        assert!(new_root.summary.is_complete());
 
-        // TODO: remove only if new_root is complete
-        old_root.remove_recursive(conn).await?;
-
+        mem::replace(old_root, new_root)
+            .remove_recursive(conn)
+            .await?;
         self.notify().await;
+
         Ok(())
     }
 }

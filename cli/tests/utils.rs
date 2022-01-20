@@ -1,9 +1,10 @@
+use anyhow::{format_err, Error};
 use ouisync_lib::cipher::SecretKey;
 use std::{
     env,
+    fmt::Debug,
     io::{self, BufRead, BufReader, Read, Write},
     net::SocketAddr,
-    panic::{self, AssertUnwindSafe},
     path::Path,
     process::{Child, Command, Stdio},
     thread,
@@ -132,7 +133,7 @@ where
 
 fn wait_for_share_token(process: &mut Child, id: u32) -> String {
     let suffix = format!("?name={}", REPO_NAME);
-    if let Some(line) = wait_for_line(process.stdout.as_mut().unwrap(), "ouisync:", &suffix) {
+    if let Some(line) = wait_for_line(process.stdout.as_mut().unwrap(), "ouisync:", &suffix, id) {
         line
     } else {
         fail(process, id, "Failed to read share token");
@@ -141,22 +142,26 @@ fn wait_for_share_token(process: &mut Child, id: u32) -> String {
 
 fn wait_for_ready_message(process: &mut Child, id: u32) -> u16 {
     const PREFIX: &str = "Listening on port ";
-    if let Some(line) = wait_for_line(process.stdout.as_mut().unwrap(), PREFIX, "") {
+    if let Some(line) = wait_for_line(process.stdout.as_mut().unwrap(), PREFIX, "", id) {
         line[PREFIX.len()..].parse().unwrap()
     } else {
         fail(process, id, "Failed to read listening port");
     }
 }
 
-fn wait_for_line<R: Read>(reader: &mut R, prefix: &str, suffix: &str) -> Option<String> {
-    let mut line = BufReader::new(reader)
-        .lines()
-        .filter_map(|line| line.ok())
-        .find(|line| line.starts_with(prefix) && line.ends_with(suffix))?;
+fn wait_for_line<R: Read>(reader: &mut R, prefix: &str, suffix: &str, id: u32) -> Option<String> {
+    for mut line in BufReader::new(reader).lines().filter_map(|line| line.ok()) {
+        if line.starts_with(prefix) && line.ends_with(suffix) {
+            let len = line.trim_end().len();
+            line.truncate(len);
 
-    let len = line.trim_end().len();
-    line.truncate(len);
-    Some(line)
+            return Some(line);
+        } else {
+            println!("[{}] {}", id, line)
+        }
+    }
+
+    None
 }
 
 fn fail(process: &mut Child, id: u32, message: &str) -> ! {
@@ -177,63 +182,47 @@ fn fail(process: &mut Child, id: u32, message: &str) -> ! {
     panic!("[{}] Failed to run ouisync executable", id);
 }
 
-/// Runs the given closure a couple of times until it succeeds (does not panic) with a short delay
-/// between attempts. Panics (re-raising the last panic) if it doesn't succeedd even after all
-/// atempts are exhausted.
+/// Runs the given closure a couple of times until it succeeds (returns `Ok`) with a short delay
+/// between attempts. Panics (with the last error) if it doesn't succeedd even after all atempts
+/// are exhausted.
 #[track_caller]
 pub fn eventually<F>(mut f: F)
 where
-    F: FnMut(),
+    F: FnMut() -> Result<(), Error>,
 {
     const ATTEMPTS: u32 = 10;
     const INITIAL_DELAY: Duration = Duration::from_millis(10);
 
-    let mut last_panic_payload = None;
-
-    // TODO: currently in case of panic, the panic message is printed multiple times (one for each
-    // panickied attempt). This could in theory be supressed by setting an empty `panic_hook`
-    // before the attempts and then restorring the original hook after them, before resuming the
-    // panic. This however doesn't work in practice because `resume_unwind` does not invoke the
-    // panic hook, so this would result in the program panicking, but without showing any message
-    // which is not very useful. We should try to figure out a way to have the panic message printed
-    // only once.
+    let mut last_error = None;
 
     for i in 0..ATTEMPTS {
-        #[allow(clippy::redundant_closure)] // false positive
-        match panic::catch_unwind(AssertUnwindSafe(|| f())) {
+        match f() {
             Ok(()) => return,
-            Err(payload) => {
-                last_panic_payload = Some(payload);
+            Err(error) => {
+                last_error = Some(error);
             }
         }
 
         thread::sleep(INITIAL_DELAY * 2u32.pow(i));
     }
 
-    if let Some(panic_payload) = last_panic_payload {
-        panic::resume_unwind(panic_payload)
+    if let Some(error) = last_error {
+        panic!("{}", error)
     } else {
         unreachable!()
     }
 }
 
-#[track_caller]
-pub fn eventually_true<F>(mut f: F)
+pub fn check_eq<A, B>(a: A, b: B) -> Result<(), Error>
 where
-    F: FnMut() -> bool,
+    A: PartialEq<B> + Debug,
+    B: Debug,
 {
-    const ATTEMPTS: u32 = 10;
-    const INITIAL_DELAY: Duration = Duration::from_millis(10);
-
-    for i in 0..ATTEMPTS {
-        if f() {
-            return;
-        }
-
-        thread::sleep(INITIAL_DELAY * 2u32.pow(i));
+    if a == b {
+        Ok(())
+    } else {
+        Err(format_err!("check_eq failed: {:?} != {:?}", a, b))
     }
-
-    panic!("The test did not finish within the given timeout");
 }
 
 // Gracefully terminate the process, unlike `Child::kill` which sends `SIGKILL` and thus doesn't

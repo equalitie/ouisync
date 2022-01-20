@@ -146,38 +146,20 @@ async fn save_snapshot(
         return;
     }
 
-    let mut conn = index.pool.acquire().await.unwrap();
-
     let mut version_vector = VersionVector::new();
     version_vector.insert(writer_id, 2); // to force overwrite the initial root node
-
-    let root_node = RootNode::create(
-        &mut conn,
-        Proof::new(writer_id, version_vector, *snapshot.root_hash(), write_keys),
-        Summary::INCOMPLETE,
-    )
-    .await
-    .unwrap();
+    let proof = Proof::new(writer_id, version_vector, *snapshot.root_hash(), write_keys);
 
     index
-        .branches()
-        .await
-        .get(&writer_id)
-        .unwrap()
-        .update_root(&mut conn, root_node)
+        .receive_root_node(proof.into(), Summary::INCOMPLETE)
         .await
         .unwrap();
 
     for layer in snapshot.inner_layers() {
-        for (parent_hash, nodes) in layer.inner_maps() {
-            nodes.save(&mut conn, parent_hash).await.unwrap();
+        for (_, nodes) in layer.inner_maps() {
+            index.receive_inner_nodes(nodes.clone()).await.unwrap();
         }
     }
-
-    // release the connection here to prevent potential deadlock because `receive_leaf_nodes`
-    // acquires a connection internally (note the deadlock would happen only if the pool capacity
-    // is one).
-    drop(conn);
 
     for (_, nodes) in snapshot.leaf_sets() {
         index.receive_leaf_nodes(nodes.clone()).await.unwrap();

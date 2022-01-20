@@ -28,11 +28,8 @@ pub(crate) struct InnerNode {
 
 impl InnerNode {
     /// Creates new unsaved inner node with the specified hash.
-    pub fn new(hash: Hash) -> Self {
-        Self {
-            hash,
-            summary: Summary::INCOMPLETE,
-        }
+    pub fn new(hash: Hash, summary: Summary) -> Self {
+        Self { hash, summary }
     }
 
     /// Load all inner nodes with the specified parent hash.

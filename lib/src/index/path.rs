@@ -1,4 +1,6 @@
-use super::node::{self, InnerNode, InnerNodeMap, LeafNodeSet, ModifyStatus, INNER_LAYER_COUNT};
+use super::node::{
+    self, InnerNode, InnerNodeMap, LeafNodeSet, ModifyStatus, Summary, INNER_LAYER_COUNT,
+};
 use crate::{
     block::BlockId,
     crypto::{Hash, Hashable},
@@ -117,7 +119,7 @@ impl Path {
         for inner_layer in (0..start_layer).rev() {
             let hash = self.compute_hash_for_layer(inner_layer + 1);
             let bucket = self.get_bucket(inner_layer);
-            self.inner[inner_layer].insert(bucket, InnerNode::new(hash));
+            self.inner[inner_layer].insert(bucket, InnerNode::new(hash, Summary::FULL));
         }
 
         self.root_hash = self.compute_hash_for_layer(0);

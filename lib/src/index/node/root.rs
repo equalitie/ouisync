@@ -1,7 +1,7 @@
 use super::{
     super::{proof::Proof, SnapshotId},
     inner::InnerNode,
-    summary::{Summary, SummaryUpdateStatus},
+    summary::Summary,
 };
 use crate::{
     crypto::{sign::PublicKey, Hash},
@@ -19,15 +19,6 @@ pub(crate) struct RootNode {
 }
 
 impl RootNode {
-    /// Returns the latest root node of the specified replica or `None` if no snapshot of that
-    /// replica exists.
-    pub async fn load_latest(
-        conn: &mut db::Connection,
-        writer_id: PublicKey,
-    ) -> Result<Option<Self>> {
-        Self::load_all(conn, writer_id, 1).try_next().await
-    }
-
     /// Creates a root node of the specified replica unless it already exists.
     pub async fn create(conn: &mut db::Connection, proof: Proof, summary: Summary) -> Result<Self> {
         let snapshot_id = sqlx::query(
@@ -99,6 +90,54 @@ impl RootNode {
         .err_into()
     }
 
+    /// Returns the latest root node of the specified replica or `None` if no snapshot of that
+    /// replica exists.
+    pub async fn load_latest(
+        conn: &mut db::Connection,
+        writer_id: PublicKey,
+    ) -> Result<Option<Self>> {
+        Self::load_all(conn, writer_id, 1).try_next().await
+    }
+
+    /// Returns the latest complete root node of the specified replica. Unlike `load_latest`, this
+    /// assumes the node exists and returns `EntryNotFound` otherwise.
+    pub async fn load_latest_complete(
+        conn: &mut db::Connection,
+        writer_id: PublicKey,
+    ) -> Result<Self> {
+        sqlx::query(
+            "SELECT
+                 snapshot_id,
+                 versions,
+                 hash,
+                 signature,
+                 missing_blocks_count,
+                 missing_blocks_checksum
+             FROM
+                 snapshot_root_nodes
+             WHERE
+                 snapshot_id = (
+                     SELECT MAX(snapshot_id)
+                     FROM snapshot_root_nodes
+                     WHERE writer_id = ? AND is_complete = 1
+                 )
+            ",
+        )
+        .bind(&writer_id)
+        .fetch_optional(conn)
+        .await?
+        .map(|row| Self {
+            snapshot_id: row.get(0),
+            proof: Proof::new_unchecked(writer_id, row.get(1), row.get(2), row.get(3)),
+            summary: Summary {
+                is_complete: true,
+                missing_blocks_count: db::decode_u64(row.get(4)),
+                missing_blocks_checksum: db::decode_u64(row.get(5)),
+            },
+        })
+        .ok_or(Error::EntryNotFound)
+    }
+
     /// Returns the replica ids of the nodes with the specified hash.
     pub fn load_writer_ids<'a>(
         conn: &'a mut db::Connection,
@@ -166,19 +205,10 @@ impl RootNode {
         Ok(())
     }
 
-    /// Updates the summaries of all nodes with the specified hash.
-    pub async fn update_summaries(
-        conn: &mut db::Connection,
-        hash: &Hash,
-    ) -> Result<SummaryUpdateStatus> {
+    /// Updates the summaries of all nodes with the specified hash. Returns whether the nodes are
+    /// complete.
+    pub async fn update_summaries(conn: &mut db::Connection, hash: &Hash) -> Result<bool> {
         let summary = InnerNode::compute_summary(conn, hash).await?;
-
-        let was_complete =
-            sqlx::query("SELECT 0 FROM snapshot_root_nodes WHERE hash = ? AND is_complete = 1")
-                .bind(hash)
-                .fetch_optional(&mut *conn)
-                .await?
-                .is_some();
 
         sqlx::query(
             "UPDATE snapshot_root_nodes
@@ -195,10 +225,7 @@ impl RootNode {
         .execute(conn)
         .await?;
 
-        Ok(SummaryUpdateStatus {
-            is_complete: summary.is_complete,
-            was_complete,
-        })
+        Ok(summary.is_complete)
     }
 
     pub async fn remove_recursive(&self, conn: &mut db::Connection) -> Result<()> {
