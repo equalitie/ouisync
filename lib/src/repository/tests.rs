@@ -3,7 +3,8 @@ use std::io::SeekFrom;
 use super::*;
 use crate::db;
 use assert_matches::assert_matches;
-use tokio::time::{sleep, Duration};
+use rand::Rng;
+use tokio::time::{sleep, timeout, Duration};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn root_directory_always_exists() {
@@ -164,11 +165,6 @@ async fn concurrent_read_and_create_dir() {
     let path = "/dir";
     let repo = Arc::new(repo);
 
-    let _watch_dog = scoped_task::spawn(async {
-        sleep(Duration::from_millis(5 * 1000)).await;
-        panic!("timed out");
-    });
-
     // The deadlock here happened because the reader lock when opening the directory is
     // acquired in the opposite order to the writer lock acqurired from flushing. I.e. the
     // reader lock acquires `/` and then `/dir`, but flushing acquires `/dir` first and
@@ -197,8 +193,75 @@ async fn concurrent_read_and_create_dir() {
         }
     });
 
-    create_dir.await.unwrap();
-    open_dir.await.unwrap();
+    timeout(Duration::from_secs(5), async {
+        create_dir.await.unwrap();
+        open_dir.await.unwrap();
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn concurrent_write_and_read_file() {
+    let writer_id = rand::random();
+    let repo = Repository::create(
+        &db::Store::Memory,
+        writer_id,
+        MasterSecret::random(),
+        AccessSecrets::random_write(),
+        false,
+    )
+    .await
+    .unwrap();
+
+    let repo = Arc::new(repo);
+
+    let chunk_size = 1024;
+    let chunk_count = 100;
+
+    let write_file = scoped_task::spawn({
+        let repo = repo.clone();
+
+        async move {
+            let mut file = repo.create_file("test.txt").await.unwrap();
+            let mut buffer = vec![0; chunk_size];
+
+            for _ in 0..chunk_count {
+                rand::thread_rng().fill(&mut buffer[..]);
+                file.write(&buffer).await.unwrap();
+            }
+
+            file.flush().await.unwrap();
+        }
+    });
+
+    let open_dir = scoped_task::spawn({
+        let repo = repo.clone();
+
+        async move {
+            loop {
+                let file = match repo.open_file("test.txt").await {
+                    Ok(file) => file,
+                    Err(Error::EntryNotFound) => {
+                        sleep(Duration::from_millis(10)).await;
+                        continue;
+                    }
+                    Err(error) => panic!("unexpected error: {:?}", error),
+                };
+
+                if file.len().await == (chunk_count * chunk_size) as u64 {
+                    break;
+                }
+            }
+        }
+    });
+
+    timeout(Duration::from_secs(5), async {
+        write_file.await.unwrap();
+        open_dir.await.unwrap();
+    })
+    .await
+    .unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
