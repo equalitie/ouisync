@@ -1,4 +1,6 @@
-use super::{get_bucket, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, INNER_LAYER_COUNT};
+use super::{
+    get_bucket, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, Summary, INNER_LAYER_COUNT,
+};
 use crate::{
     block::{BlockId, BlockNonce, BLOCK_SIZE},
     crypto::{Hash, Hashable},
@@ -145,7 +147,7 @@ fn add_inner_node(
     let (bucket, parent_path) = path.pop(inner_layer);
     maps.entry(parent_path)
         .or_default()
-        .insert(bucket, InnerNode::new(hash));
+        .insert(bucket, InnerNode::new(hash, Summary::INCOMPLETE));
 }
 
 #[derive(Default, Clone, Copy, Eq, PartialEq, Hash, Debug)]

@@ -23,7 +23,7 @@ async fn create_new_root_node() {
 
     let writer_id = PublicKey::random();
     let write_keys = Keypair::random();
-    let hash = rand::random::<u64>().hash();
+    let hash = rand::random();
 
     let node0 = RootNode::create(
         &mut conn,
@@ -54,7 +54,7 @@ async fn attempt_to_create_existing_root_node() {
 
     let writer_id = PublicKey::random();
     let write_keys = Keypair::random();
-    let hash = rand::random::<u64>().hash();
+    let hash = rand::random();
 
     let node = RootNode::create(
         &mut conn,
@@ -86,13 +86,13 @@ async fn attempt_to_create_existing_root_node() {
 async fn create_new_inner_node() {
     let mut conn = setup().await;
 
-    let parent = rand::random::<u64>().hash();
-    let hash = rand::random::<u64>().hash();
+    let parent = rand::random();
+    let hash = rand::random();
     let bucket = rand::random();
 
     let mut tx = conn.begin().await.unwrap();
 
-    let node = InnerNode::new(hash);
+    let node = InnerNode::new(hash, Summary::FULL);
     node.save(&mut tx, &parent, bucket).await.unwrap();
 
     let nodes = InnerNode::load_children(&mut tx, &parent).await.unwrap();
@@ -110,16 +110,16 @@ async fn create_new_inner_node() {
 async fn create_existing_inner_node() {
     let mut conn = setup().await;
 
-    let parent = rand::random::<u64>().hash();
-    let hash = rand::random::<u64>().hash();
+    let parent = rand::random();
+    let hash = rand::random();
     let bucket = rand::random();
 
     let mut tx = conn.begin().await.unwrap();
 
-    let node0 = InnerNode::new(hash);
+    let node0 = InnerNode::new(hash, Summary::FULL);
     node0.save(&mut tx, &parent, bucket).await.unwrap();
 
-    let node1 = InnerNode::new(hash);
+    let node1 = InnerNode::new(hash, Summary::FULL);
     node1.save(&mut tx, &parent, bucket).await.unwrap();
 
     let nodes = InnerNode::load_children(&mut tx, &parent).await.unwrap();
@@ -136,12 +136,12 @@ async fn create_existing_inner_node() {
 async fn attempt_to_create_conflicting_inner_node() {
     let mut conn = setup().await;
 
-    let parent = rand::random::<u64>().hash();
+    let parent = rand::random();
     let bucket = rand::random();
 
-    let hash0 = rand::random::<u64>().hash();
+    let hash0 = rand::random();
     let hash1 = loop {
-        let hash = rand::random::<u64>().hash();
+        let hash = rand::random();
         if hash != hash0 {
             break hash;
         }
@@ -149,10 +149,10 @@ async fn attempt_to_create_conflicting_inner_node() {
 
     let mut tx = conn.begin().await.unwrap();
 
-    let node0 = InnerNode::new(hash0);
+    let node0 = InnerNode::new(hash0, Summary::FULL);
     node0.save(&mut tx, &parent, bucket).await.unwrap();
 
-    let node1 = InnerNode::new(hash1);
+    let node1 = InnerNode::new(hash1, Summary::FULL);
     assert_matches!(node1.save(&mut tx, &parent, bucket).await, Err(_)); // TODO: match concrete error type
 }
 
@@ -160,8 +160,8 @@ async fn attempt_to_create_conflicting_inner_node() {
 async fn save_new_present_leaf_node() {
     let mut conn = setup().await;
 
-    let parent = rand::random::<u64>().hash();
-    let encoded_locator = rand::random::<u64>().hash();
+    let parent = rand::random();
+    let encoded_locator = rand::random();
     let block_id = rand::random();
 
     let node = LeafNode::present(encoded_locator, block_id);
@@ -180,8 +180,8 @@ async fn save_new_present_leaf_node() {
 async fn save_new_missing_leaf_node() {
     let mut conn = setup().await;
 
-    let parent = rand::random::<u64>().hash();
-    let encoded_locator = rand::random::<u64>().hash();
+    let parent = rand::random();
+    let encoded_locator = rand::random();
     let block_id = rand::random();
 
     let mut tx = conn.begin().await.unwrap();
@@ -202,8 +202,8 @@ async fn save_new_missing_leaf_node() {
 async fn save_missing_leaf_node_over_existing_missing_one() {
     let mut conn = setup().await;
 
-    let parent = rand::random::<u64>().hash();
-    let encoded_locator = rand::random::<u64>().hash();
+    let parent = rand::random();
+    let encoded_locator = rand::random();
     let block_id = rand::random();
 
     let mut tx = conn.begin().await.unwrap();
@@ -227,8 +227,8 @@ async fn save_missing_leaf_node_over_existing_missing_one() {
 async fn save_missing_leaf_node_over_existing_present_one() {
     let mut conn = setup().await;
 
-    let parent = rand::random::<u64>().hash();
-    let encoded_locator = rand::random::<u64>().hash();
+    let parent = rand::random();
+    let encoded_locator = rand::random();
     let block_id = rand::random();
 
     let node = LeafNode::present(encoded_locator, block_id);
@@ -261,7 +261,7 @@ async fn compute_status_from_empty_leaf_nodes() {
 async fn compute_status_from_incomplete_leaf_nodes() {
     let mut conn = setup().await;
 
-    let node = LeafNode::missing(rand::random::<u64>().hash(), rand::random());
+    let node = LeafNode::missing(rand::random(), rand::random());
     let nodes: LeafNodeSet = iter::once(node).collect();
     let hash = nodes.hash();
 
@@ -274,7 +274,7 @@ async fn compute_status_from_incomplete_leaf_nodes() {
 async fn compute_status_from_complete_leaf_nodes_with_all_missing_blocks() {
     let mut conn = setup().await;
 
-    let node = LeafNode::missing(rand::random::<u64>().hash(), rand::random());
+    let node = LeafNode::missing(rand::random(), rand::random());
     let nodes: LeafNodeSet = iter::once(node).collect();
     let hash = nodes.hash();
     nodes.save(&mut conn, &hash).await.unwrap();
@@ -289,9 +289,9 @@ async fn compute_status_from_complete_leaf_nodes_with_all_missing_blocks() {
 async fn compute_status_from_complete_leaf_nodes_with_some_present_blocks() {
     let mut conn = setup().await;
 
-    let node0 = LeafNode::present(rand::random::<u64>().hash(), rand::random());
-    let node1 = LeafNode::missing(rand::random::<u64>().hash(), rand::random());
-    let node2 = LeafNode::missing(rand::random::<u64>().hash(), rand::random());
+    let node0 = LeafNode::present(rand::random(), rand::random());
+    let node1 = LeafNode::missing(rand::random(), rand::random());
+    let node2 = LeafNode::missing(rand::random(), rand::random());
     let nodes: LeafNodeSet = vec![node0, node1, node2].into_iter().collect();
     let hash = nodes.hash();
     nodes.save(&mut conn, &hash).await.unwrap();
@@ -306,8 +306,8 @@ async fn compute_status_from_complete_leaf_nodes_with_some_present_blocks() {
 async fn compute_status_from_complete_leaf_nodes_with_all_present_blocks() {
     let mut conn = setup().await;
 
-    let node0 = LeafNode::present(rand::random::<u64>().hash(), rand::random());
-    let node1 = LeafNode::present(rand::random::<u64>().hash(), rand::random());
+    let node0 = LeafNode::present(rand::random(), rand::random());
+    let node1 = LeafNode::present(rand::random(), rand::random());
     let nodes: LeafNodeSet = vec![node0, node1].into_iter().collect();
     let hash = nodes.hash();
     nodes.save(&mut conn, &hash).await.unwrap();
@@ -333,7 +333,7 @@ async fn compute_status_from_empty_inner_nodes() {
 async fn compute_status_from_incomplete_inner_nodes() {
     let mut conn = setup().await;
 
-    let node = InnerNode::new(rand::random::<u64>().hash());
+    let node = InnerNode::new(rand::random(), Summary::INCOMPLETE);
     let nodes: InnerNodeMap = iter::once((0, node)).collect();
     let hash = nodes.hash();
 
@@ -348,15 +348,12 @@ async fn compute_status_from_complete_inner_nodes_with_all_missing_blocks() {
 
     let inners: InnerNodeMap = (0..2)
         .map(|bucket| {
-            let leaf = LeafNode::missing(rand::random::<u64>().hash(), rand::random());
+            let leaf = LeafNode::missing(rand::random(), rand::random());
             let leaf_nodes: LeafNodeSet = iter::once(leaf).collect();
 
             (
                 bucket,
-                InnerNode {
-                    hash: leaf_nodes.hash(),
-                    summary: Summary::from_leaves(&leaf_nodes),
-                },
+                InnerNode::new(leaf_nodes.hash(), Summary::from_leaves(&leaf_nodes)),
             )
         })
         .collect();
@@ -377,40 +374,31 @@ async fn compute_status_from_complete_inner_nodes_with_some_present_blocks() {
     // all missing
     let inner0 = {
         let leaf_nodes: LeafNodeSet = (0..2)
-            .map(|_| LeafNode::missing(rand::random::<u64>().hash(), rand::random()))
+            .map(|_| LeafNode::missing(rand::random(), rand::random()))
             .collect();
 
-        InnerNode {
-            hash: leaf_nodes.hash(),
-            summary: Summary::from_leaves(&leaf_nodes),
-        }
+        InnerNode::new(leaf_nodes.hash(), Summary::from_leaves(&leaf_nodes))
     };
 
     // some present
     let inner1 = {
         let leaf_nodes: LeafNodeSet = vec![
-            LeafNode::missing(rand::random::<u64>().hash(), rand::random()),
-            LeafNode::present(rand::random::<u64>().hash(), rand::random()),
+            LeafNode::missing(rand::random(), rand::random()),
+            LeafNode::present(rand::random(), rand::random()),
         ]
         .into_iter()
         .collect();
 
-        InnerNode {
-            hash: leaf_nodes.hash(),
-            summary: Summary::from_leaves(&leaf_nodes),
-        }
+        InnerNode::new(leaf_nodes.hash(), Summary::from_leaves(&leaf_nodes))
     };
 
     // all present
     let inner2 = {
         let leaf_nodes: LeafNodeSet = (0..2)
-            .map(|_| LeafNode::present(rand::random::<u64>().hash(), rand::random()))
+            .map(|_| LeafNode::present(rand::random(), rand::random()))
             .collect();
 
-        InnerNode {
-            hash: leaf_nodes.hash(),
-            summary: Summary::from_leaves(&leaf_nodes),
-        }
+        InnerNode::new(leaf_nodes.hash(), Summary::from_leaves(&leaf_nodes))
     };
 
     let inners: InnerNodeMap = vec![(0, inner0), (1, inner1), (2, inner2)]
@@ -432,15 +420,12 @@ async fn compute_status_from_complete_inner_nodes_with_all_present_blocks() {
     let inners: InnerNodeMap = (0..2)
         .map(|bucket| {
             let leaf_nodes: LeafNodeSet = (0..2)
-                .map(|_| LeafNode::present(rand::random::<u64>().hash(), rand::random()))
+                .map(|_| LeafNode::present(rand::random(), rand::random()))
                 .collect();
 
             (
                 bucket,
-                InnerNode {
-                    hash: leaf_nodes.hash(),
-                    summary: Summary::from_leaves(&leaf_nodes),
-                },
+                InnerNode::new(leaf_nodes.hash(), Summary::from_leaves(&leaf_nodes)),
             )
         })
         .collect();
@@ -458,8 +443,8 @@ async fn compute_status_from_complete_inner_nodes_with_all_present_blocks() {
 async fn set_present_on_leaf_node_with_missing_block() {
     let mut conn = setup().await;
 
-    let parent = rand::random::<u64>().hash();
-    let encoded_locator = rand::random::<u64>().hash();
+    let parent = rand::random();
+    let encoded_locator = rand::random();
     let block_id = rand::random();
 
     let node = LeafNode::missing(encoded_locator, block_id);
@@ -475,8 +460,8 @@ async fn set_present_on_leaf_node_with_missing_block() {
 async fn set_present_on_leaf_node_with_present_block() {
     let mut conn = setup().await;
 
-    let parent = rand::random::<u64>().hash();
-    let encoded_locator = rand::random::<u64>().hash();
+    let parent = rand::random();
+    let encoded_locator = rand::random();
     let block_id = rand::random();
 
     let node = LeafNode::present(encoded_locator, block_id);

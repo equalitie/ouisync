@@ -147,7 +147,6 @@ async fn receive_root_node_with_existing_hash() {
     let locator = rng.gen();
 
     let mut conn = index.pool.acquire().await.unwrap();
-
     block::write(&mut conn, &block_id, &content, &block_nonce)
         .await
         .unwrap();
@@ -155,28 +154,22 @@ async fn receive_root_node_with_existing_hash() {
         .insert(&mut conn, &block_id, &locator, &write_keys)
         .await
         .unwrap();
-
     drop(conn);
 
-    // Receive root node with the same hash as the current local one.
+    // Receive root node with the same hash as the current local one but different writer id.
     let root = local_branch.root().await;
-
     assert!(root.summary.is_complete());
     let root_hash = root.proof.hash;
-
+    let root_vv = root.proof.version_vector.clone();
     drop(root);
 
-    let proof = Proof::new(
-        remote_id,
-        VersionVector::first(remote_id),
-        root_hash,
-        &write_keys,
-    );
+    let proof = Proof::new(remote_id, root_vv, root_hash, &write_keys);
 
-    assert!(!index
+    // TODO: assert this returns false as we shouldn't need to download further nodes
+    index
         .receive_root_node(proof.into(), Summary::FULL)
         .await
-        .unwrap());
+        .unwrap();
 
     assert!(local_branch.root().await.summary.is_complete());
 }
