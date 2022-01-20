@@ -1,12 +1,13 @@
 use super::{node::RootNode, node_test_utils::Snapshot, *};
 use crate::{
-    block,
+    block::{self, BLOCK_SIZE},
     crypto::sign::{Keypair, PublicKey},
     store,
     version_vector::VersionVector,
 };
 use assert_matches::assert_matches;
 use futures_util::{future, StreamExt};
+use rand::Rng;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn receive_valid_root_node() {
@@ -122,6 +123,62 @@ async fn receive_duplicate_root_node() {
             .await,
         1
     )
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn receive_root_node_with_existing_hash() {
+    let (index, write_keys) = setup().await;
+    let mut rng = rand::thread_rng();
+
+    let local_id = PublicKey::generate(&mut rng);
+    let remote_id = PublicKey::generate(&mut rng);
+
+    let local_branch = index
+        .create_branch(Proof::first(local_id, &write_keys))
+        .await
+        .unwrap();
+
+    // Create one block locally
+    let mut content = vec![0; BLOCK_SIZE];
+    rng.fill(&mut content[..]);
+
+    let block_id = BlockId::from_content(&content);
+    let block_nonce = rng.gen();
+    let locator = rng.gen();
+
+    let mut conn = index.pool.acquire().await.unwrap();
+
+    block::write(&mut conn, &block_id, &content, &block_nonce)
+        .await
+        .unwrap();
+    local_branch
+        .insert(&mut conn, &block_id, &locator, &write_keys)
+        .await
+        .unwrap();
+
+    drop(conn);
+
+    // Receive root node with the same hash as the current local one.
+    let root = local_branch.root().await;
+
+    assert!(root.summary.is_complete());
+    let root_hash = root.proof.hash;
+
+    drop(root);
+
+    let proof = Proof::new(
+        remote_id,
+        VersionVector::first(remote_id),
+        root_hash,
+        &write_keys,
+    );
+
+    assert!(!index
+        .receive_root_node(proof.into(), Summary::FULL)
+        .await
+        .unwrap());
+
+    assert!(local_branch.root().await.summary.is_complete());
 }
 
 #[tokio::test(flavor = "multi_thread")]
