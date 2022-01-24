@@ -293,12 +293,12 @@ async fn append_to_file() {
 #[tokio::test(flavor = "multi_thread")]
 async fn blind_access() {
     let pool = db::open_or_create(&db::Store::Memory).await.unwrap();
-    let replica_id = rand::random();
+    let device_id = rand::random();
 
     // Create the repo and put a file in it.
     let repo = Repository::create_in(
         pool.clone(),
-        replica_id,
+        device_id,
         MasterSecret::random(),
         AccessSecrets::random_write(),
         false,
@@ -314,7 +314,7 @@ async fn blind_access() {
     drop(repo);
 
     // Reopen the repo in blind mode.
-    let repo = Repository::open_in(pool, replica_id, None, AccessMode::Blind, false)
+    let repo = Repository::open_in(pool, device_id, None, AccessMode::Blind, false)
         .await
         .unwrap();
 
@@ -340,12 +340,12 @@ async fn blind_access() {
 #[tokio::test(flavor = "multi_thread")]
 async fn read_access_same_replica() {
     let pool = db::open_or_create(&db::Store::Memory).await.unwrap();
-    let replica_id = rand::random();
+    let device_id = rand::random();
     let master_secret = MasterSecret::random();
 
     let repo = Repository::create_in(
         pool.clone(),
-        replica_id,
+        device_id,
         master_secret.clone(),
         AccessSecrets::random_write(),
         false,
@@ -363,7 +363,7 @@ async fn read_access_same_replica() {
     // Reopen the repo in read-only mode.
     let repo = Repository::open_in(
         pool,
-        replica_id,
+        device_id,
         Some(master_secret),
         AccessMode::Read,
         false,
@@ -401,10 +401,10 @@ async fn read_access_different_replica() {
     let pool = db::open_or_create(&db::Store::Memory).await.unwrap();
     let master_secret = MasterSecret::random();
 
-    let replica_id_a = rand::random();
+    let device_id_a = rand::random();
     let repo = Repository::create_in(
         pool.clone(),
-        replica_id_a,
+        device_id_a,
         master_secret.clone(),
         AccessSecrets::random_write(),
         false,
@@ -419,10 +419,10 @@ async fn read_access_different_replica() {
     drop(file);
     drop(repo);
 
-    let replica_id_b = rand::random();
+    let device_id_b = rand::random();
     let repo = Repository::open_in(
         pool,
-        replica_id_b,
+        device_id_b,
         Some(master_secret),
         AccessMode::Read,
         false,

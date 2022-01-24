@@ -5,10 +5,9 @@ use super::{
 };
 use crate::{
     config, db,
+    device_id::{self, DeviceId},
     error::Result,
     network::{Network, NetworkOptions},
-    replica_id,
-    replica_id::ReplicaId,
 };
 use std::{
     ffi::CString,
@@ -117,7 +116,7 @@ static mut SESSION: *mut Session = ptr::null_mut();
 
 pub(super) struct Session {
     runtime: Runtime,
-    this_replica_id: ReplicaId,
+    device_id: DeviceId,
     network: Network,
     sender: Sender,
     _logger: Logger,
@@ -131,13 +130,12 @@ impl Session {
         logger: Logger,
     ) -> Result<Self> {
         let pool = config::open_db(&store).await?;
-        let this_replica_id =
-            replica_id::get_or_create_this_replica_id(&mut *pool.acquire().await?).await?;
+        let device_id = device_id::get_or_create(&mut *pool.acquire().await?).await?;
         let network = Network::new(&NetworkOptions::default()).await?;
 
         Ok(Self {
             runtime,
-            this_replica_id,
+            device_id,
             network,
             sender,
             _logger: logger,
@@ -177,8 +175,8 @@ where
         &self.session.network
     }
 
-    pub(super) fn this_replica_id(&self) -> &ReplicaId {
-        &self.session.this_replica_id
+    pub(super) fn device_id(&self) -> &DeviceId {
+        &self.session.device_id
     }
 }
 

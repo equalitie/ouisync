@@ -5,8 +5,8 @@ use crate::{
         sign, PasswordSalt,
     },
     db,
+    device_id::DeviceId,
     error::{Error, Result},
-    replica_id::ReplicaId,
     repository::RepositoryId,
 };
 use rand::{rngs::OsRng, Rng};
@@ -18,7 +18,7 @@ const REPOSITORY_ID: &[u8] = b"repository_id";
 const PASSWORD_SALT: &[u8] = b"password_salt";
 const WRITER_ID: &[u8] = b"writer_id";
 const ACCESS_KEY: &[u8] = b"access_key"; // read key or write key
-const REPLICA_ID: &[u8] = b"replica_id";
+const DEVICE_ID: &[u8] = b"device_id";
 
 /// Initialize the metadata tables for storing Key:Value pairs.  One table stores plaintext values,
 /// the other one stores encrypted ones.
@@ -110,14 +110,14 @@ pub(crate) async fn get_writer_id(
 
 pub(crate) async fn set_writer_id(
     writer_id: &sign::PublicKey,
-    replica_id: &ReplicaId,
+    device_id: &DeviceId,
     master_key: &cipher::SecretKey,
     conn: &mut db::Connection,
 ) -> Result<()> {
     let mut tx = conn.begin().await?;
 
     set_secret(WRITER_ID, writer_id.as_ref(), master_key, &mut tx).await?;
-    set_public(REPLICA_ID, replica_id.as_ref(), &mut tx).await?;
+    set_public(DEVICE_ID, device_id.as_ref(), &mut tx).await?;
 
     tx.commit().await?;
 
@@ -128,13 +128,13 @@ pub(crate) async fn set_writer_id(
 // Replica id
 // -------------------------------------------------------------------
 
-// Checks whether the stored replica id is the same as the specified one.
-pub(crate) async fn check_replica_id(
-    replica_id: &ReplicaId,
+// Checks whether the stored device id is the same as the specified one.
+pub(crate) async fn check_device_id(
+    device_id: &DeviceId,
     conn: &mut db::Connection,
 ) -> Result<bool> {
-    let old_replica_id: ReplicaId = get_public(REPLICA_ID, conn).await?;
-    Ok(old_replica_id == *replica_id)
+    let old_device_id: DeviceId = get_public(DEVICE_ID, conn).await?;
+    Ok(old_device_id == *device_id)
 }
 
 // -------------------------------------------------------------------

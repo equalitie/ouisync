@@ -38,7 +38,7 @@ pub unsafe extern "C" fn repository_create(
 ) {
     session::with(port, error, |ctx| {
         let store = utils::ptr_to_path_buf(store)?;
-        let this_replica_id = *ctx.this_replica_id();
+        let device_id = *ctx.device_id();
         let network_handle = ctx.network().handle();
 
         let master_password = Password::new(utils::ptr_to_str(master_password)?);
@@ -54,7 +54,7 @@ pub unsafe extern "C" fn repository_create(
         ctx.spawn(async move {
             let repository = Repository::create(
                 &store.into_std_path_buf().into(),
-                this_replica_id,
+                device_id,
                 MasterSecret::Password(master_password),
                 access_secrets,
                 true,
@@ -83,7 +83,7 @@ pub unsafe extern "C" fn repository_open(
 ) {
     session::with(port, error, |ctx| {
         let store = utils::ptr_to_path_buf(store)?;
-        let this_replica_id = *ctx.this_replica_id();
+        let device_id = *ctx.device_id();
         let network_handle = ctx.network().handle();
 
         let master_password = if master_password.is_null() {
@@ -95,7 +95,7 @@ pub unsafe extern "C" fn repository_open(
         ctx.spawn(async move {
             let repository = Repository::open(
                 &store.into_std_path_buf().into(),
-                this_replica_id,
+                device_id,
                 master_password.map(MasterSecret::Password),
                 true,
             )

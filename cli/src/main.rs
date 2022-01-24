@@ -3,7 +3,7 @@ mod virtual_filesystem;
 
 use self::options::{Named, Options};
 use anyhow::{format_err, Result};
-use ouisync_lib::{config, replica_id, AccessSecrets, Network, Repository, ShareToken};
+use ouisync_lib::{config, device_id, AccessSecrets, Network, Repository, ShareToken};
 use std::{
     collections::{hash_map::Entry, HashMap},
     io,
@@ -25,8 +25,7 @@ async fn main() -> Result<()> {
     env_logger::init();
 
     let pool = config::open_db(&options.config_store()?).await?;
-    let this_replica_id =
-        replica_id::get_or_create_this_replica_id(&mut *pool.acquire().await?).await?;
+    let device_id = device_id::get_or_create(&mut *pool.acquire().await?).await?;
 
     // Create repositories
     let mut repos = HashMap::new();
@@ -35,7 +34,7 @@ async fn main() -> Result<()> {
         let secret = options.secret_for_repo(name)?;
         let repo = Repository::create(
             &options.repository_store(name)?,
-            this_replica_id,
+            device_id,
             secret,
             AccessSecrets::random_write(),
             !options.disable_merger,
@@ -58,7 +57,7 @@ async fn main() -> Result<()> {
         } else {
             Repository::open(
                 &options.repository_store(name)?,
-                this_replica_id,
+                device_id,
                 options.secret_for_repo(name).ok(),
                 false,
             )
@@ -96,7 +95,7 @@ async fn main() -> Result<()> {
         if let Entry::Vacant(entry) = repos.entry(name.as_ref().to_owned()) {
             let repo = Repository::create(
                 &options.repository_store(name.as_ref())?,
-                this_replica_id,
+                device_id,
                 master_secret,
                 access_secrets.clone(),
                 false,
@@ -126,7 +125,7 @@ async fn main() -> Result<()> {
         } else {
             Repository::open(
                 &options.repository_store(name)?,
-                this_replica_id,
+                device_id,
                 options.secret_for_repo(name).ok(),
                 !options.disable_merger,
             )
@@ -142,7 +141,7 @@ async fn main() -> Result<()> {
 
     if options.print_ready_message {
         println!("Listening on port {}", network.local_addr().port());
-        println!("This replica ID is {}", this_replica_id);
+        println!("Device ID is {}", device_id);
     }
 
     terminated().await?;

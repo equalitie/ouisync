@@ -16,13 +16,13 @@ use crate::{
     },
     db,
     debug_printer::DebugPrinter,
+    device_id::DeviceId,
     directory::{Directory, EntryType},
     error::{Error, Result},
     file::File,
     index::{self, BranchData, Index, Proof},
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     metadata, path,
-    replica_id::ReplicaId,
     scoped_task::{self, ScopedJoinHandle},
     store,
 };
@@ -43,7 +43,7 @@ impl Repository {
     /// Creates a new repository.
     pub async fn create(
         store: &db::Store,
-        this_replica_id: ReplicaId,
+        device_id: DeviceId,
         master_secret: MasterSecret,
         access_secrets: AccessSecrets,
         enable_merger: bool,
@@ -51,7 +51,7 @@ impl Repository {
         let pool = db::open_or_create(store).await?;
         Self::create_in(
             pool,
-            this_replica_id,
+            device_id,
             master_secret,
             access_secrets,
             enable_merger,
@@ -62,7 +62,7 @@ impl Repository {
     /// Creates a new repository in an already opened database.
     pub(crate) async fn create_in(
         pool: db::Pool,
-        this_replica_id: ReplicaId,
+        device_id: DeviceId,
         master_secret: MasterSecret,
         access_secrets: AccessSecrets,
         enable_merger: bool,
@@ -71,7 +71,7 @@ impl Repository {
         init_db(&mut tx).await?;
 
         let master_key = metadata::secret_to_key(master_secret, &mut tx).await?;
-        let this_writer_id = generate_writer_id(&this_replica_id, &master_key, &mut tx).await?;
+        let this_writer_id = generate_writer_id(&device_id, &master_key, &mut tx).await?;
         metadata::set_access_secrets(&access_secrets, &master_key, &mut tx).await?;
 
         tx.commit().await?;
@@ -89,14 +89,14 @@ impl Repository {
     ///                     the repository will be opened as a blind replica.
     pub async fn open(
         store: &db::Store,
-        this_replica_id: ReplicaId,
+        device_id: DeviceId,
         master_secret: Option<MasterSecret>,
         enable_merger: bool,
     ) -> Result<Self> {
         let pool = db::open(store).await?;
         Self::open_in(
             pool,
-            this_replica_id,
+            device_id,
             master_secret,
             AccessMode::Write,
             enable_merger,
@@ -107,7 +107,7 @@ impl Repository {
     /// Opens an existing repository in an already opened database.
     pub(crate) async fn open_in(
         pool: db::Pool,
-        this_replica_id: ReplicaId,
+        device_id: DeviceId,
         master_secret: Option<MasterSecret>,
         // Allows to reduce the access mode (e.g. open in read-only mode even if the master secret
         // would give us write access otherwise). Currently used only in tests.
@@ -136,11 +136,11 @@ impl Repository {
             // master secret.
             let master_key = master_key.as_ref().unwrap();
 
-            if metadata::check_replica_id(&this_replica_id, &mut conn).await? {
+            if metadata::check_device_id(&device_id, &mut conn).await? {
                 metadata::get_writer_id(master_key, &mut conn).await?
             } else {
                 // Replica id changed. Must generate new writer id.
-                generate_writer_id(&this_replica_id, master_key, &mut conn).await?
+                generate_writer_id(&device_id, master_key, &mut conn).await?
             }
         } else {
             PublicKey::from(&sign::SecretKey::random())
@@ -576,14 +576,14 @@ impl Shared {
 }
 
 async fn generate_writer_id(
-    this_replica_id: &ReplicaId,
+    device_id: &DeviceId,
     master_key: &cipher::SecretKey,
     conn: &mut db::Connection,
 ) -> Result<sign::PublicKey> {
     // TODO: we should be storing the SK in the db, not the PK.
     let writer_id = sign::SecretKey::random();
     let writer_id = PublicKey::from(&writer_id);
-    metadata::set_writer_id(&writer_id, this_replica_id, master_key, conn).await?;
+    metadata::set_writer_id(&writer_id, device_id, master_key, conn).await?;
 
     Ok(writer_id)
 }
