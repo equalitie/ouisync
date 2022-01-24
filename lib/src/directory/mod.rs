@@ -268,12 +268,17 @@ impl Directory {
     }
 
     pub async fn open_file(&self, name: &str, author: &PublicKey) -> Result<File> {
-        self.read()
-            .await
-            .lookup_version(name, author)?
-            .file()?
-            .open()
-            .await
+        // IMPORTANT: make sure the parent directory is unlocked before `await`-ing the `open`
+        // future, to avoid deadlocks.
+        let open = {
+            self.read()
+                .await
+                .lookup_version(name, author)?
+                .file()?
+                .open()
+        };
+
+        open.await
     }
 
     pub async fn open_directory(&self, name: &str, author: &PublicKey) -> Result<Directory> {

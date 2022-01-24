@@ -19,7 +19,9 @@ use std::{
     borrow::Cow,
     cmp::Ordering,
     collections::{BTreeMap, VecDeque},
-    fmt, iter, mem,
+    fmt,
+    future::Future,
+    iter, mem,
 };
 
 /// Unified view over multiple concurrent versions of a directory.
@@ -446,8 +448,10 @@ impl<'a> JointFileRef<'a> {
         }
     }
 
-    pub async fn open(&self) -> Result<File> {
-        self.file.open().await
+    // NOTE: deliberately returning explicit `impl Future` instead of using `async` to make it so
+    // the returned future does NOT borrow from `self`. See [FileRef::open] for details.
+    pub fn open(&self) -> impl Future<Output = Result<File>> {
+        self.file.open()
     }
 
     pub fn author(&self) -> &'a PublicKey {

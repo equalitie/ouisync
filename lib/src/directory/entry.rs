@@ -12,7 +12,7 @@ use crate::{
     locator::Locator,
     version_vector::VersionVector,
 };
-use std::{fmt, sync::Arc};
+use std::{fmt, future::Future, sync::Arc};
 
 /// Info about a directory entry.
 #[derive(Copy, Clone, Debug)]
@@ -152,23 +152,26 @@ impl<'a> FileRef<'a> {
         &self.entry_data.version_vector
     }
 
-    pub async fn open(&self) -> Result<File> {
-        let mut guard = self.entry_data.blob_core.lock().await;
-        let blob_core = &mut *guard;
+    /// This function deliberately returns a future that does NOT borrow from `self`. This is why
+    /// it's not a regular `async` function but rather returns explicit `impl Future`. The reason
+    /// for this is to prevent deadlocks when opening a file while its parent directory is locked.
+    pub fn open(&self) -> impl Future<Output = Result<File>> {
+        let core = self.entry_data.blob_core.clone();
+        let parent_context = self.inner.parent_context();
+        let branch = self.inner.parent_inner.blob.branch().clone();
+        let locator = self.locator();
 
-        if let Some(blob_core) = blob_core.upgrade() {
-            File::reopen(blob_core, self.inner.parent_context()).await
-        } else {
-            let file = File::open(
-                self.inner.parent_inner.blob.branch().clone(),
-                self.locator(),
-                self.inner.parent_context(),
-            )
-            .await?;
+        async move {
+            let mut core = core.lock().await;
 
-            *blob_core = Arc::downgrade(file.blob_core());
+            if let Some(core) = core.upgrade() {
+                File::reopen(core, parent_context).await
+            } else {
+                let file = File::open(branch, locator, parent_context).await?;
+                *core = Arc::downgrade(file.blob_core());
 
-            Ok(file)
+                Ok(file)
+            }
         }
     }
 
