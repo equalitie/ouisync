@@ -264,11 +264,28 @@ pub unsafe extern "C" fn repository_create_share_token(
     })
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn share_token_mode(token: *const c_char) -> u8 {
+    #![allow(clippy::question_mark)] // false positive
+
+    let token = if let Ok(token) = utils::ptr_to_str(token) {
+        token
+    } else {
+        return ACCESS_MODE_BLIND;
+    };
+
+    let token: ShareToken = if let Ok(token) = token.parse() {
+        token
+    } else {
+        return ACCESS_MODE_BLIND;
+    };
+
+    access_mode_to_num(token.access_mode())
+}
+
 /// IMPORTANT: the caller is responsible for deallocating the returned pointer unless it is `null`.
 #[no_mangle]
-pub unsafe extern "C" fn extract_suggested_name_from_share_token(
-    token: *const c_char,
-) -> *const c_char {
+pub unsafe extern "C" fn share_token_suggested_name(token: *const c_char) -> *const c_char {
     let token = if let Ok(token) = utils::ptr_to_str(token) {
         token
     } else {
@@ -305,5 +322,28 @@ fn access_mode_from_num(num: u8) -> Result<AccessMode, Error> {
         ACCESS_MODE_READ => Ok(AccessMode::Read),
         ACCESS_MODE_WRITE => Ok(AccessMode::Write),
         _ => Err(Error::MalformedData),
+    }
+}
+
+fn access_mode_to_num(mode: AccessMode) -> u8 {
+    match mode {
+        AccessMode::Blind => ACCESS_MODE_BLIND,
+        AccessMode::Read => ACCESS_MODE_READ,
+        AccessMode::Write => ACCESS_MODE_WRITE,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn access_mode_constants() {
+        for mode in [AccessMode::Blind, AccessMode::Read, AccessMode::Write] {
+            assert_eq!(
+                access_mode_from_num(access_mode_to_num(mode)).unwrap(),
+                mode
+            );
+        }
     }
 }

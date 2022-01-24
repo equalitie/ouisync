@@ -2,7 +2,7 @@ use super::DecodeError;
 use std::str::FromStr;
 use thiserror::Error;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Eq, PartialEq, Debug)]
 #[repr(u8)]
 pub enum AccessMode {
     Blind = 0,

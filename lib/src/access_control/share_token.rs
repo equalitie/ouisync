@@ -1,4 +1,4 @@
-use super::{AccessSecrets, DecodeError};
+use super::{AccessMode, AccessSecrets, DecodeError};
 use crate::repository::RepositoryId;
 use std::{borrow::Cow, fmt, str::FromStr};
 use zeroize::Zeroizing;
@@ -46,6 +46,14 @@ impl ShareToken {
 
     pub fn into_secrets(self) -> AccessSecrets {
         self.secrets
+    }
+
+    pub fn access_mode(&self) -> AccessMode {
+        match self.secrets {
+            AccessSecrets::Blind { .. } => AccessMode::Blind,
+            AccessSecrets::Read { .. } => AccessMode::Read,
+            AccessSecrets::Write(_) => AccessMode::Write,
+        }
     }
 }
 
