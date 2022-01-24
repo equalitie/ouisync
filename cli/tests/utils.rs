@@ -9,7 +9,7 @@ use std::{
     path::Path,
     process::{Child, Command, Stdio},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tempfile::TempDir;
 
@@ -187,16 +187,25 @@ fn fail(process: &mut Child, id: u32, message: &str) -> ! {
 /// between attempts. Panics (with the last error) if it doesn't succeedd even after all atempts
 /// are exhausted.
 #[track_caller]
-pub fn eventually<F>(mut f: F)
+pub fn eventually<F>(f: F)
 where
     F: FnMut() -> Result<(), Error>,
 {
-    const ATTEMPTS: u32 = 10;
-    const INITIAL_DELAY: Duration = Duration::from_millis(10);
+    eventually_with_timeout(Duration::from_secs(30), f)
+}
 
+#[track_caller]
+pub fn eventually_with_timeout<F>(timeout: Duration, mut f: F)
+where
+    F: FnMut() -> Result<(), Error>,
+{
+    const MAX_DELAY: Duration = Duration::from_secs(1);
+
+    let start = Instant::now();
+    let mut delay = Duration::from_millis(10);
     let mut last_error = None;
 
-    for i in 0..ATTEMPTS {
+    while start.elapsed() <= timeout {
         match f() {
             Ok(()) => return,
             Err(error) => {
@@ -204,7 +213,11 @@ where
             }
         }
 
-        thread::sleep(INITIAL_DELAY * 2u32.pow(i));
+        thread::sleep(delay);
+
+        if delay < MAX_DELAY {
+            delay *= 2;
+        }
     }
 
     if let Some(error) = last_error {
