@@ -11,7 +11,7 @@ use crate::{
     path,
     repository::Repository,
 };
-use std::{os::raw::c_char, ptr, sync::Arc};
+use std::{mem, os::raw::c_char, ptr, slice, sync::Arc};
 use tokio::task::JoinHandle;
 
 pub const ENTRY_TYPE_INVALID: u8 = 0;
@@ -306,7 +306,61 @@ pub unsafe extern "C" fn share_token_suggested_name(token: *const c_char) -> *co
     }
 }
 
-// #[no_mangle]
+/// IMPORTANT: the caller is responsible for deallocating `out_bytes` unless it is `null`.
+#[no_mangle]
+pub unsafe extern "C" fn share_token_encode(
+    token: *const c_char,
+    out_bytes: *mut *const u8,
+    out_len: *mut u64,
+) {
+    let token = if let Ok(token) = utils::ptr_to_str(token) {
+        token
+    } else {
+        *out_bytes = ptr::null_mut();
+        *out_len = 0;
+        return;
+    };
+
+    let token: ShareToken = if let Ok(token) = token.parse() {
+        token
+    } else {
+        *out_bytes = ptr::null_mut();
+        *out_len = 0;
+        return;
+    };
+
+    let mut buffer = Vec::new();
+    token.encode(&mut buffer);
+
+    let mut buffer = buffer.into_boxed_slice();
+    *out_bytes = buffer.as_mut_ptr();
+    *out_len = buffer.len() as u64;
+    mem::forget(buffer);
+}
+
+/// IMPORTANT: the caller is responsible for deallocating the returned pointer unless it is `null`.
+#[no_mangle]
+pub unsafe extern "C" fn share_token_decode(bytes: *const u8, len: u64) -> *const c_char {
+    let len = if let Ok(len) = len.try_into() {
+        len
+    } else {
+        return ptr::null();
+    };
+
+    let slice = slice::from_raw_parts(bytes, len);
+
+    let token = if let Ok(token) = ShareToken::decode(slice) {
+        token
+    } else {
+        return ptr::null();
+    };
+
+    if let Ok(s) = utils::str_to_c_string(token.to_string().as_ref()) {
+        s.into_raw()
+    } else {
+        ptr::null()
+    }
+}
 
 pub(super) fn entry_type_to_num(entry_type: EntryType) -> u8 {
     match entry_type {
