@@ -292,6 +292,10 @@ impl Index {
 
         let created = match self.shared.branches.write().await.entry(writer_id) {
             Entry::Vacant(entry) => {
+                // We could have accumulated a bunch of incomplete root nodes before this
+                // particular one became complete. We want to remove those.
+                node.remove_recursively_all_older(conn).await?;
+
                 entry.insert(Arc::new(BranchData::new(
                     node,
                     self.shared.notify_tx.clone(),

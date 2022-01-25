@@ -228,14 +228,15 @@ impl RootNode {
         Ok(summary.is_complete)
     }
 
-    pub async fn remove_recursive(&self, conn: &mut db::Connection) -> Result<()> {
+    pub async fn remove_recursively_all_older(&self, conn: &mut db::Connection) -> Result<()> {
         // This uses db triggers to delete the whole snapshot.
         sqlx::query(
             "PRAGMA recursive_triggers = ON;
-             DELETE FROM snapshot_root_nodes WHERE snapshot_id = ?;
+             DELETE FROM snapshot_root_nodes WHERE snapshot_id < ? AND writer_id = ?;
              PRAGMA recursive_triggers = OFF;",
         )
         .bind(self.snapshot_id)
+        .bind(&self.proof.writer_id)
         .execute(conn)
         .await?;
 
