@@ -10,7 +10,7 @@ use crate::{
     repository::RepositoryId,
 };
 use rand::{rngs::OsRng, CryptoRng, Rng};
-use std::{fmt, string::FromUtf8Error, sync::Arc};
+use std::{fmt, str::Utf8Error, string::FromUtf8Error, sync::Arc};
 use thiserror::Error;
 
 /// Secrets for access to a repository.
@@ -78,25 +78,35 @@ impl AccessSecrets {
         }
     }
 
-    pub(crate) fn decode(mut input: &[u8]) -> Result<Self, DecodeError> {
-        let mode = *input.get(0).ok_or(DecodeError)?;
-        let mode = AccessMode::try_from(mode)?;
-        input = &input[1..];
+    // Returns the decoded secrets and the remaining input.
+    pub(crate) fn decode(input: &[u8]) -> Result<(Self, &[u8]), DecodeError> {
+        let (mode, input) = input.split_first().ok_or(DecodeError)?;
+        let mode = AccessMode::try_from(*mode)?;
 
         match mode {
             AccessMode::Blind => {
-                let id = RepositoryId::try_from(input)?;
-                Ok(Self::Blind { id })
+                let (id, input) = try_split_at(input, RepositoryId::SIZE).ok_or(DecodeError)?;
+                let id = RepositoryId::try_from(id)?;
+
+                Ok((Self::Blind { id }, input))
             }
             AccessMode::Read => {
-                let id = RepositoryId::try_from(&input[..RepositoryId::SIZE])?;
-                let read_key = cipher::SecretKey::try_from(&input[RepositoryId::SIZE..])?;
-                Ok(Self::Read { id, read_key })
+                let (id, input) = try_split_at(input, RepositoryId::SIZE).ok_or(DecodeError)?;
+                let id = RepositoryId::try_from(id)?;
+
+                let (read_key, input) =
+                    try_split_at(input, cipher::SecretKey::SIZE).ok_or(DecodeError)?;
+                let read_key = cipher::SecretKey::try_from(read_key)?;
+
+                Ok((Self::Read { id, read_key }, input))
             }
             AccessMode::Write => {
-                let write_key = sign::SecretKey::try_from(input)?;
+                let (write_key, input) =
+                    try_split_at(input, sign::SecretKey::SIZE).ok_or(DecodeError)?;
+                let write_key = sign::SecretKey::try_from(write_key)?;
                 let write_keys = sign::Keypair::from(write_key);
-                Ok(Self::Write(write_keys.into()))
+
+                Ok((Self::Write(write_keys.into()), input))
             }
         }
     }
@@ -207,6 +217,15 @@ fn derive_read_key_from_write_key(write_key: &sign::SecretKey) -> cipher::Secret
     cipher::SecretKey::derive_from_key(write_key.as_ref(), b"ouisync repository read key")
 }
 
+// Similar to `split_at` but returns `None` instead of panic when `index` is out of range.
+fn try_split_at(slice: &[u8], index: usize) -> Option<(&[u8], &[u8])> {
+    if index <= slice.len() {
+        Some(slice.split_at(index))
+    } else {
+        None
+    }
+}
+
 #[derive(Debug, Error)]
 #[error("decode error")]
 pub struct DecodeError;
@@ -225,6 +244,12 @@ impl From<bincode::Error> for DecodeError {
 
 impl From<FromUtf8Error> for DecodeError {
     fn from(_: FromUtf8Error) -> Self {
+        Self
+    }
+}
+
+impl From<Utf8Error> for DecodeError {
+    fn from(_: Utf8Error) -> Self {
         Self
     }
 }

@@ -67,6 +67,8 @@ impl StdRedirect {
 
 impl Drop for StdRedirect {
     fn drop(&mut self) {
+        // FIXME: potential race condition here - the atomic store should happen before the write
+
         // Write empty line to the pipe to wake up the reader
         self.writer.write_all(b"\n").unwrap_or(());
         self.writer.flush().unwrap_or(());

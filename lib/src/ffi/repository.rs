@@ -1,6 +1,6 @@
 use super::{
     session,
-    utils::{self, Port, SharedHandle, UniqueHandle},
+    utils::{self, Bytes, Port, SharedHandle, UniqueHandle},
 };
 use crate::{
     access_control::{AccessMode, AccessSecrets, MasterSecret, ShareToken},
@@ -11,7 +11,7 @@ use crate::{
     path,
     repository::Repository,
 };
-use std::{os::raw::c_char, ptr, sync::Arc};
+use std::{os::raw::c_char, ptr, slice, sync::Arc};
 use tokio::task::JoinHandle;
 
 pub const ENTRY_TYPE_INVALID: u8 = 0;
@@ -264,11 +264,29 @@ pub unsafe extern "C" fn repository_create_share_token(
     })
 }
 
+/// Returns the access mode of the given share token.
+#[no_mangle]
+pub unsafe extern "C" fn share_token_mode(token: *const c_char) -> u8 {
+    #![allow(clippy::question_mark)] // false positive
+
+    let token = if let Ok(token) = utils::ptr_to_str(token) {
+        token
+    } else {
+        return ACCESS_MODE_BLIND;
+    };
+
+    let token: ShareToken = if let Ok(token) = token.parse() {
+        token
+    } else {
+        return ACCESS_MODE_BLIND;
+    };
+
+    access_mode_to_num(token.access_mode())
+}
+
 /// IMPORTANT: the caller is responsible for deallocating the returned pointer unless it is `null`.
 #[no_mangle]
-pub unsafe extern "C" fn extract_suggested_name_from_share_token(
-    token: *const c_char,
-) -> *const c_char {
+pub unsafe extern "C" fn share_token_suggested_name(token: *const c_char) -> *const c_char {
     let token = if let Ok(token) = utils::ptr_to_str(token) {
         token
     } else {
@@ -282,6 +300,53 @@ pub unsafe extern "C" fn extract_suggested_name_from_share_token(
     };
 
     if let Ok(s) = utils::str_to_c_string(token.suggested_name().as_ref()) {
+        s.into_raw()
+    } else {
+        ptr::null()
+    }
+}
+
+/// IMPORTANT: the caller is responsible for deallocating the returned buffer unless it is `null`.
+#[no_mangle]
+pub unsafe extern "C" fn share_token_encode(token: *const c_char) -> Bytes {
+    #![allow(clippy::question_mark)] // false positive
+
+    let token = if let Ok(token) = utils::ptr_to_str(token) {
+        token
+    } else {
+        return Bytes::NULL;
+    };
+
+    let token: ShareToken = if let Ok(token) = token.parse() {
+        token
+    } else {
+        return Bytes::NULL;
+    };
+
+    let mut buffer = Vec::new();
+    token.encode(&mut buffer);
+
+    Bytes::from_vec(buffer)
+}
+
+/// IMPORTANT: the caller is responsible for deallocating the returned pointer unless it is `null`.
+#[no_mangle]
+pub unsafe extern "C" fn share_token_decode(bytes: *const u8, len: u64) -> *const c_char {
+    let len = if let Ok(len) = len.try_into() {
+        len
+    } else {
+        return ptr::null();
+    };
+
+    let slice = slice::from_raw_parts(bytes, len);
+
+    let token = if let Ok(token) = ShareToken::decode(slice) {
+        token
+    } else {
+        return ptr::null();
+    };
+
+    if let Ok(s) = utils::str_to_c_string(token.to_string().as_ref()) {
         s.into_raw()
     } else {
         ptr::null()
@@ -305,5 +370,28 @@ fn access_mode_from_num(num: u8) -> Result<AccessMode, Error> {
         ACCESS_MODE_READ => Ok(AccessMode::Read),
         ACCESS_MODE_WRITE => Ok(AccessMode::Write),
         _ => Err(Error::MalformedData),
+    }
+}
+
+fn access_mode_to_num(mode: AccessMode) -> u8 {
+    match mode {
+        AccessMode::Blind => ACCESS_MODE_BLIND,
+        AccessMode::Read => ACCESS_MODE_READ,
+        AccessMode::Write => ACCESS_MODE_WRITE,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn access_mode_constants() {
+        for mode in [AccessMode::Blind, AccessMode::Read, AccessMode::Write] {
+            assert_eq!(
+                access_mode_from_num(access_mode_to_num(mode)).unwrap(),
+                mode
+            );
+        }
     }
 }

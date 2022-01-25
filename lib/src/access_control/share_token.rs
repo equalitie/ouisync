@@ -1,6 +1,10 @@
-use super::{AccessSecrets, DecodeError};
+use super::{AccessMode, AccessSecrets, DecodeError};
 use crate::repository::RepositoryId;
-use std::{borrow::Cow, fmt, str::FromStr};
+use std::{
+    borrow::Cow,
+    fmt,
+    str::{self, FromStr},
+};
 use zeroize::Zeroizing;
 
 pub const SCHEME: &str = "ouisync";
@@ -47,6 +51,28 @@ impl ShareToken {
     pub fn into_secrets(self) -> AccessSecrets {
         self.secrets
     }
+
+    pub fn access_mode(&self) -> AccessMode {
+        match self.secrets {
+            AccessSecrets::Blind { .. } => AccessMode::Blind,
+            AccessSecrets::Read { .. } => AccessMode::Read,
+            AccessSecrets::Write(_) => AccessMode::Write,
+        }
+    }
+
+    pub fn encode(&self, out: &mut Vec<u8>) {
+        out.push(VERSION);
+        self.secrets.encode(out);
+        out.extend_from_slice(self.name.as_bytes());
+    }
+
+    pub fn decode(input: &[u8]) -> Result<Self, DecodeError> {
+        let input = decode_version(input)?;
+        let (secrets, input) = AccessSecrets::decode(input)?;
+        let name = str::from_utf8(input)?.to_owned();
+
+        Ok(Self { secrets, name })
+    }
 }
 
 impl From<AccessSecrets> for ShareToken {
@@ -71,12 +97,9 @@ impl FromStr for ShareToken {
         let (input, params) = input.split_once('?').unwrap_or((input, ""));
 
         let input = Zeroizing::new(base64::decode_config(input, base64::URL_SAFE_NO_PAD)?);
+        let input = decode_version(&input)?;
 
-        if *input.get(0).ok_or(DecodeError)? > VERSION {
-            return Err(DecodeError);
-        }
-
-        let secrets = AccessSecrets::decode(&input[1..])?;
+        let (secrets, _) = AccessSecrets::decode(input)?;
         let name = parse_name(params)?;
 
         Ok(Self::from(secrets).with_name(name))
@@ -90,6 +113,15 @@ fn parse_name(query: &str) -> Result<String, DecodeError> {
         .unwrap_or("");
 
     Ok(urlencoding::decode(value)?.into_owned())
+}
+
+fn decode_version(input: &[u8]) -> Result<&[u8], DecodeError> {
+    let (first, rest) = input.split_first().ok_or(DecodeError)?;
+    if *first == VERSION {
+        Ok(rest)
+    } else {
+        Err(DecodeError)
+    }
 }
 
 impl fmt::Display for ShareToken {
@@ -120,7 +152,7 @@ mod tests {
     use assert_matches::assert_matches;
 
     #[test]
-    fn encode_and_decode_blind() {
+    fn to_string_from_string_blind() {
         let token_id = RepositoryId::random();
         let token = ShareToken::from(AccessSecrets::Blind { id: token_id });
 
@@ -134,7 +166,7 @@ mod tests {
     }
 
     #[test]
-    fn encode_and_decode_blind_with_name() {
+    fn to_string_from_string_blind_with_name() {
         let token_id = RepositoryId::random();
         let token = ShareToken::from(AccessSecrets::Blind { id: token_id }).with_name("foo");
 
@@ -146,7 +178,7 @@ mod tests {
     }
 
     #[test]
-    fn encode_and_decode_reader() {
+    fn to_string_from_string_reader() {
         let token_id = RepositoryId::random();
         let token_read_key = cipher::SecretKey::random();
         let token = ShareToken::from(AccessSecrets::Read {
@@ -166,7 +198,7 @@ mod tests {
     }
 
     #[test]
-    fn encode_and_decode_writer() {
+    fn to_string_from_string_writer() {
         let token_write_keys = sign::Keypair::random();
         let token_id = RepositoryId::from(token_write_keys.public);
 
@@ -179,6 +211,28 @@ mod tests {
         assert_eq!(decoded.name, token.name);
         assert_matches!(decoded.secrets, AccessSecrets::Write(access) => {
             assert_eq!(access.id, token_id);
+        });
+    }
+
+    #[test]
+    fn encode_and_decode() {
+        let token_id = RepositoryId::random();
+        let token_read_key = cipher::SecretKey::random();
+        let token = ShareToken::from(AccessSecrets::Read {
+            id: token_id,
+            read_key: token_read_key.clone(),
+        })
+        .with_name("foo");
+
+        let mut buffer = vec![];
+        token.encode(&mut buffer);
+
+        let decoded = ShareToken::decode(&buffer).unwrap();
+
+        assert_eq!(decoded.name, token.name);
+        assert_matches!(decoded.secrets, AccessSecrets::Read { id, read_key } => {
+            assert_eq!(id, token_id);
+            assert_eq!(read_key.as_ref(), token_read_key.as_ref());
         });
     }
 }
