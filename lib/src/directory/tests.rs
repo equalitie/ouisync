@@ -254,8 +254,6 @@ async fn move_file_within_branch() {
         .await
         .lookup_version(file_name, branch.id())
         .unwrap()
-        .tombstone()
-        .unwrap()
         .version_vector()
         .clone();
 

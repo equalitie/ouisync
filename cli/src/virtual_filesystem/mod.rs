@@ -913,7 +913,6 @@ fn to_error_code(error: &Error) -> libc::c_int {
         Error::CreateDbDirectory(_)
         | Error::ConnectToDb(_)
         | Error::CreateDbSchema(_)
-        | Error::EntryIsTombstone
         | Error::QueryDb(_)
         | Error::BlockNotFound(_)
         | Error::BlockExists
