@@ -49,8 +49,6 @@ pub enum Error {
     DirectoryNotEmpty,
     #[error("operation is not supported")]
     OperationNotSupported,
-    #[error("repository initialization requires a master secret (--password or --key)")]
-    RepoInitializationRequiresMasterSecret,
     #[error("network error")]
     Network(#[source] io::Error),
     #[error("writer set error")]

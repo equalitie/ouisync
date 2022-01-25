@@ -921,7 +921,6 @@ fn to_error_code(error: &Error) -> libc::c_int {
         | Error::MalformedData
         | Error::MalformedDirectory(_)
         | Error::WrongBlockLength(_)
-        | Error::RepoInitializationRequiresMasterSecret
         | Error::Network(_)
         | Error::WriterSet(_) => libc::EIO,
         Error::EntryNotFound | Error::AmbiguousEntry => libc::ENOENT,
