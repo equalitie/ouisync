@@ -68,7 +68,7 @@ impl<'a> EntryRef<'a> {
         match self {
             Self::File(r) => Ok(r),
             Self::Directory(_) => Err(Error::EntryIsDirectory),
-            Self::Tombstone(_) => Err(Error::EntryIsTombstone),
+            Self::Tombstone(_) => Err(Error::EntryNotFound),
         }
     }
 
@@ -76,15 +76,7 @@ impl<'a> EntryRef<'a> {
         match self {
             Self::File(_) => Err(Error::EntryIsFile),
             Self::Directory(r) => Ok(r),
-            Self::Tombstone(_) => Err(Error::EntryIsTombstone),
-        }
-    }
-
-    pub fn tombstone(self) -> Result<TombstoneRef<'a>> {
-        match self {
-            Self::File(_) => Err(Error::EntryIsFile),
-            Self::Directory(_) => Err(Error::EntryIsDirectory),
-            Self::Tombstone(t) => Ok(t),
+            Self::Tombstone(_) => Err(Error::EntryNotFound),
         }
     }
 

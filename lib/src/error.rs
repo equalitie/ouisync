@@ -9,8 +9,6 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 pub enum Error {
     #[error("failed to create database directory")]
     CreateDbDirectory(#[source] io::Error),
-    #[error("failed to delete database")]
-    DeleteDb(#[source] io::Error),
     #[error("failed to establish database connection")]
     ConnectToDb(#[source] sqlx::Error),
     #[error("failed to create database schema")]
@@ -41,8 +39,6 @@ pub enum Error {
     EntryIsFile,
     #[error("entry is a directory")]
     EntryIsDirectory,
-    #[error("entry is a tombstone")]
-    EntryIsTombstone,
     #[error("File name is not a valid UTF-8 string")]
     NonUtf8FileName,
     #[error("offset is out of range")]
@@ -51,8 +47,6 @@ pub enum Error {
     DirectoryNotEmpty,
     #[error("operation is not supported")]
     OperationNotSupported,
-    #[error("repository initialization requires a master secret (--password or --key)")]
-    RepoInitializationRequiresMasterSecret,
     #[error("network error")]
     Network(#[source] io::Error),
     #[error("writer set error")]

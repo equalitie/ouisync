@@ -911,10 +911,8 @@ fn make_file_attr(inode: Inode, entry_type: EntryType, len: u64) -> FileAttr {
 fn to_error_code(error: &Error) -> libc::c_int {
     match error {
         Error::CreateDbDirectory(_)
-        | Error::DeleteDb(_)
         | Error::ConnectToDb(_)
         | Error::CreateDbSchema(_)
-        | Error::EntryIsTombstone
         | Error::QueryDb(_)
         | Error::BlockNotFound(_)
         | Error::BlockExists
@@ -922,7 +920,6 @@ fn to_error_code(error: &Error) -> libc::c_int {
         | Error::MalformedData
         | Error::MalformedDirectory(_)
         | Error::WrongBlockLength(_)
-        | Error::RepoInitializationRequiresMasterSecret
         | Error::Network(_)
         | Error::WriterSet(_) => libc::EIO,
         Error::EntryNotFound | Error::AmbiguousEntry => libc::ENOENT,
