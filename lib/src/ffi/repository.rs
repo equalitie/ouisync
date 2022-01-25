@@ -264,6 +264,7 @@ pub unsafe extern "C" fn repository_create_share_token(
     })
 }
 
+/// Returns the access mode of the given share token.
 #[no_mangle]
 pub unsafe extern "C" fn share_token_mode(token: *const c_char) -> u8 {
     #![allow(clippy::question_mark)] // false positive
@@ -304,6 +305,8 @@ pub unsafe extern "C" fn share_token_suggested_name(token: *const c_char) -> *co
         ptr::null()
     }
 }
+
+// #[no_mangle]
 
 pub(super) fn entry_type_to_num(entry_type: EntryType) -> u8 {
     match entry_type {
