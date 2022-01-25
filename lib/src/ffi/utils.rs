@@ -9,6 +9,7 @@ use std::{
     marker::PhantomData,
     mem,
     os::raw::c_char,
+    ptr,
     sync::Arc,
 };
 
@@ -141,4 +142,27 @@ pub unsafe fn ptr_to_store(ptr: *const c_char) -> Result<db::Store> {
 
 pub fn str_to_c_string(s: &str) -> Result<CString> {
     CString::new(s.as_bytes()).map_err(|_| Error::MalformedData)
+}
+
+#[repr(C)]
+pub struct Bytes {
+    pub ptr: *const u8,
+    pub len: u64,
+}
+
+impl Bytes {
+    pub const NULL: Self = Self {
+        ptr: ptr::null(),
+        len: 0,
+    };
+
+    pub fn from_vec(vec: Vec<u8>) -> Self {
+        let slice = vec.into_boxed_slice();
+        let buffer = Self {
+            ptr: slice.as_ptr(),
+            len: slice.len() as u64,
+        };
+        mem::forget(slice);
+        buffer
+    }
 }

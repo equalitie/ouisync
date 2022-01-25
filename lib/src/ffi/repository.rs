@@ -1,6 +1,6 @@
 use super::{
     session,
-    utils::{self, Port, SharedHandle, UniqueHandle},
+    utils::{self, Bytes, Port, SharedHandle, UniqueHandle},
 };
 use crate::{
     access_control::{AccessMode, AccessSecrets, MasterSecret, ShareToken},
@@ -11,7 +11,7 @@ use crate::{
     path,
     repository::Repository,
 };
-use std::{mem, os::raw::c_char, ptr, slice, sync::Arc};
+use std::{os::raw::c_char, ptr, slice, sync::Arc};
 use tokio::task::JoinHandle;
 
 pub const ENTRY_TYPE_INVALID: u8 = 0;
@@ -306,36 +306,27 @@ pub unsafe extern "C" fn share_token_suggested_name(token: *const c_char) -> *co
     }
 }
 
-/// IMPORTANT: the caller is responsible for deallocating `out_bytes` unless it is `null`.
+/// IMPORTANT: the caller is responsible for deallocating the returned buffer unless it is `null`.
 #[no_mangle]
-pub unsafe extern "C" fn share_token_encode(
-    token: *const c_char,
-    out_bytes: *mut *const u8,
-    out_len: *mut u64,
-) {
+pub unsafe extern "C" fn share_token_encode(token: *const c_char) -> Bytes {
+    #![allow(clippy::question_mark)] // false positive
+
     let token = if let Ok(token) = utils::ptr_to_str(token) {
         token
     } else {
-        *out_bytes = ptr::null_mut();
-        *out_len = 0;
-        return;
+        return Bytes::NULL;
     };
 
     let token: ShareToken = if let Ok(token) = token.parse() {
         token
     } else {
-        *out_bytes = ptr::null_mut();
-        *out_len = 0;
-        return;
+        return Bytes::NULL;
     };
 
     let mut buffer = Vec::new();
     token.encode(&mut buffer);
 
-    let mut buffer = buffer.into_boxed_slice();
-    *out_bytes = buffer.as_mut_ptr();
-    *out_len = buffer.len() as u64;
-    mem::forget(buffer);
+    Bytes::from_vec(buffer)
 }
 
 /// IMPORTANT: the caller is responsible for deallocating the returned pointer unless it is `null`.
