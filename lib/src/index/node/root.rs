@@ -6,9 +6,10 @@ use super::{
 use crate::{
     crypto::{sign::PublicKey, Hash},
     db,
+    debug_printer::DebugPrinter,
     error::{Error, Result},
 };
-use futures_util::{Stream, TryStreamExt};
+use futures_util::{Stream, StreamExt, TryStreamExt};
 use sqlx::Row;
 
 #[derive(Clone, Eq, PartialEq, Debug)]
@@ -241,5 +242,48 @@ impl RootNode {
         .await?;
 
         Ok(())
+    }
+
+    pub async fn debug_print(conn: &mut db::Connection, printer: DebugPrinter) {
+        let mut roots = sqlx::query(
+            "SELECT
+                 snapshot_id,
+                 versions,
+                 hash,
+                 signature,
+                 is_complete,
+                 missing_blocks_count,
+                 missing_blocks_checksum,
+                 writer_id
+             FROM snapshot_root_nodes
+             ORDER BY snapshot_id DESC",
+        )
+        .fetch(conn)
+        .map_ok(move |row| Self {
+            snapshot_id: row.get(0),
+            proof: Proof::new_unchecked(row.get(7), row.get(1), row.get(2), row.get(3)),
+            summary: Summary {
+                is_complete: row.get(4),
+                missing_blocks_count: db::decode_u64(row.get(5)),
+                missing_blocks_checksum: db::decode_u64(row.get(6)),
+            },
+        });
+
+        while let Some(root_node) = roots.next().await {
+            match root_node {
+                Ok(root_node) => {
+                    printer.debug(&format_args!(
+                        "RootNode: snapshot_id:{:?}, writer_id:{:?}, vv:{:?}, is_complete:{:?}",
+                        root_node.snapshot_id,
+                        root_node.proof.writer_id,
+                        root_node.proof.version_vector,
+                        root_node.summary.is_complete
+                    ));
+                }
+                Err(err) => {
+                    printer.debug(&format_args!("RootNode: error: {:?}", err));
+                }
+            }
+        }
     }
 }

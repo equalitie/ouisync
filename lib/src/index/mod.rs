@@ -21,6 +21,7 @@ use crate::{
     block::BlockId,
     crypto::{sign::PublicKey, Hash, Hashable},
     db,
+    debug_printer::DebugPrinter,
     error::{Error, Result},
     repository::RepositoryId,
 };
@@ -166,6 +167,11 @@ impl Index {
         }
 
         Ok(updated)
+    }
+
+    pub(crate) async fn debug_print(&self, print: DebugPrinter) {
+        let mut conn = self.pool.acquire().await.unwrap();
+        RootNode::debug_print(&mut conn, print).await;
     }
 
     /// Receive inner nodes from other replica and store them into the db.

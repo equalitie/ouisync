@@ -451,6 +451,10 @@ impl Repository {
             ));
             branch.debug_print(print.indent()).await;
         }
+
+        print.display(&"Index");
+        let print = print.indent();
+        self.index().debug_print(print).await;
     }
 
     // Create remote branch in this repository and returns it.
