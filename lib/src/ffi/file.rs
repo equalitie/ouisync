@@ -2,7 +2,11 @@ use super::{
     session,
     utils::{self, AssumeSend, Port, SharedHandle},
 };
-use crate::{error::Error, file::File, repository::Repository};
+use crate::{
+    error::{Error, Result},
+    file::File,
+    repository::Repository,
+};
 use std::{convert::TryInto, io::SeekFrom, os::raw::c_char, slice, sync::Arc};
 use tokio::sync::Mutex;
 
@@ -15,10 +19,9 @@ pub struct FfiFile {
 pub unsafe extern "C" fn file_open(
     repo: SharedHandle<Repository>,
     path: *const c_char,
-    port: Port<SharedHandle<Mutex<FfiFile>>>,
-    error: *mut *mut c_char,
+    port: Port<Result<SharedHandle<Mutex<FfiFile>>>>,
 ) {
-    session::with(port, error, |ctx| {
+    session::with(port, |ctx| {
         let path = utils::ptr_to_path_buf(path)?;
         let repo = repo.get();
 
@@ -36,10 +39,9 @@ pub unsafe extern "C" fn file_open(
 pub unsafe extern "C" fn file_create(
     repo: SharedHandle<Repository>,
     path: *const c_char,
-    port: Port<SharedHandle<Mutex<FfiFile>>>,
-    error: *mut *mut c_char,
+    port: Port<Result<SharedHandle<Mutex<FfiFile>>>>,
 ) {
-    session::with(port, error, |ctx| {
+    session::with(port, |ctx| {
         let path = utils::ptr_to_path_buf(path)?;
         let repo = repo.get();
 
@@ -60,10 +62,9 @@ pub unsafe extern "C" fn file_create(
 pub unsafe extern "C" fn file_remove(
     repo: SharedHandle<Repository>,
     path: *const c_char,
-    port: Port<()>,
-    error: *mut *mut c_char,
+    port: Port<Result<()>>,
 ) {
-    session::with(port, error, |ctx| {
+    session::with(port, |ctx| {
         let repo = repo.get();
         let path = utils::ptr_to_path_buf(path)?;
 
@@ -72,12 +73,8 @@ pub unsafe extern "C" fn file_remove(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn file_close(
-    handle: SharedHandle<Mutex<FfiFile>>,
-    port: Port<()>,
-    error: *mut *mut c_char,
-) {
-    session::with(port, error, |ctx| {
+pub unsafe extern "C" fn file_close(handle: SharedHandle<Mutex<FfiFile>>, port: Port<Result<()>>) {
+    session::with(port, |ctx| {
         let ffi_file = handle.release();
 
         ctx.spawn(async move { ffi_file.lock().await.file.flush().await })
@@ -85,12 +82,8 @@ pub unsafe extern "C" fn file_close(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn file_flush(
-    handle: SharedHandle<Mutex<FfiFile>>,
-    port: Port<()>,
-    error: *mut *mut c_char,
-) {
-    session::with(port, error, |ctx| {
+pub unsafe extern "C" fn file_flush(handle: SharedHandle<Mutex<FfiFile>>, port: Port<Result<()>>) {
+    session::with(port, |ctx| {
         let ffi_file = handle.get();
 
         ctx.spawn(async move { ffi_file.lock().await.file.flush().await })
@@ -105,10 +98,9 @@ pub unsafe extern "C" fn file_read(
     offset: u64,
     buffer: *mut u8,
     len: u64,
-    port: Port<u64>,
-    error: *mut *mut c_char,
+    port: Port<Result<u64>>,
 ) {
-    session::with(port, error, |ctx| {
+    session::with(port, |ctx| {
         let ffi_file = handle.get();
 
         let buffer = AssumeSend::new(buffer);
@@ -133,10 +125,9 @@ pub unsafe extern "C" fn file_write(
     offset: u64,
     buffer: *const u8,
     len: u64,
-    port: Port<()>,
-    error: *mut *mut c_char,
+    port: Port<Result<()>>,
 ) {
-    session::with(port, error, |ctx| {
+    session::with(port, |ctx| {
         let ffi_file = handle.get();
 
         let buffer = AssumeSend::new(buffer);
@@ -163,10 +154,9 @@ pub unsafe extern "C" fn file_write(
 pub unsafe extern "C" fn file_truncate(
     handle: SharedHandle<Mutex<FfiFile>>,
     len: u64,
-    port: Port<()>,
-    error: *mut *mut c_char,
+    port: Port<Result<()>>,
 ) {
-    session::with(port, error, |ctx| {
+    session::with(port, |ctx| {
         let ffi_file = handle.get();
         ctx.spawn(async move {
             let mut g = ffi_file.lock().await;
@@ -179,12 +169,8 @@ pub unsafe extern "C" fn file_truncate(
 
 /// Retrieve the size of the file in bytes.
 #[no_mangle]
-pub unsafe extern "C" fn file_len(
-    handle: SharedHandle<Mutex<FfiFile>>,
-    port: Port<u64>,
-    error: *mut *mut c_char,
-) {
-    session::with(port, error, |ctx| {
+pub unsafe extern "C" fn file_len(handle: SharedHandle<Mutex<FfiFile>>, port: Port<Result<u64>>) {
+    session::with(port, |ctx| {
         let ffi_file = handle.get();
         ctx.spawn(async move {
             let g = ffi_file.lock().await;
