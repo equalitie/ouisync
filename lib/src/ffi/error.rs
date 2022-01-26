@@ -1,7 +1,7 @@
 use crate::error::Error;
 use std::io;
 
-#[repr(u32)]
+#[repr(C)]
 pub enum ErrorCode {
     /// No error
     Ok = 0,
@@ -24,7 +24,7 @@ pub enum ErrorCode {
     /// Network error
     Network = 9,
     /// Unspecified error
-    Other = u32::MAX,
+    Other = 65536,
 }
 
 pub(crate) trait ToErrorCode {
