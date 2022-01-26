@@ -15,7 +15,6 @@ use crate::{
     version_vector::VersionVector,
 };
 use sqlx::Acquire;
-use std::mem;
 use tokio::sync::{RwLock, RwLockReadGuard};
 
 type LocatorHash = Hash;
@@ -256,9 +255,13 @@ impl BranchData {
     ) -> Result<()> {
         assert!(new_root.summary.is_complete());
 
-        mem::replace(old_root, new_root)
-            .remove_recursive(conn)
-            .await?;
+        // NOTE: It is not enough to remove only the old_root because there may be a non zero
+        // number of incomplete roots that have been downloaded prior to new_root becoming
+        // complete.
+        new_root.remove_recursively_all_older(conn).await?;
+
+        *old_root = new_root;
+
         self.notify().await;
 
         Ok(())

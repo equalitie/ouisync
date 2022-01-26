@@ -21,6 +21,7 @@ use crate::{
     block::BlockId,
     crypto::{sign::PublicKey, Hash, Hashable},
     db,
+    debug_printer::DebugPrinter,
     error::{Error, Result},
     repository::RepositoryId,
 };
@@ -168,6 +169,11 @@ impl Index {
         Ok(updated)
     }
 
+    pub(crate) async fn debug_print(&self, print: DebugPrinter) {
+        let mut conn = self.pool.acquire().await.unwrap();
+        RootNode::debug_print(&mut conn, print).await;
+    }
+
     /// Receive inner nodes from other replica and store them into the db.
     /// Returns hashes of those nodes that were more up to date than the locally stored ones.
     pub(crate) async fn receive_inner_nodes(
@@ -292,6 +298,10 @@ impl Index {
 
         let created = match self.shared.branches.write().await.entry(writer_id) {
             Entry::Vacant(entry) => {
+                // We could have accumulated a bunch of incomplete root nodes before this
+                // particular one became complete. We want to remove those.
+                node.remove_recursively_all_older(conn).await?;
+
                 entry.insert(Arc::new(BranchData::new(
                     node,
                     self.shared.notify_tx.clone(),
