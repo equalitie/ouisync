@@ -49,6 +49,10 @@ pub enum Error {
     Network(#[source] io::Error),
     #[error("writer set error")]
     WriterSet(crate::writer_set::error::Error),
+    #[error("failed to initialize logger")]
+    InitializeLogger(#[source] io::Error),
+    #[error("failed to initialize runtime")]
+    InitializeRuntime(#[source] io::Error),
 }
 
 impl Error {

@@ -6,12 +6,11 @@ use super::{
 use crate::{
     config, db,
     device_id::{self, DeviceId},
-    error::Result,
+    error::{Error, Result},
     network::{Network, NetworkOptions},
 };
 use std::{
     ffi::CString,
-    fmt,
     future::Future,
     mem,
     os::raw::{c_char, c_void},
@@ -43,7 +42,7 @@ pub unsafe extern "C" fn session_open(
     let logger = match Logger::new() {
         Ok(logger) => logger,
         Err(error) => {
-            sender.send_err(port, error_ptr, error);
+            sender.send_err(port, error_ptr, Error::InitializeLogger(error));
             return;
         }
     };
@@ -51,7 +50,7 @@ pub unsafe extern "C" fn session_open(
     let runtime = match runtime::Builder::new_multi_thread().enable_all().build() {
         Ok(runtime) => runtime,
         Err(error) => {
-            sender.send_err(port, error_ptr, error);
+            sender.send_err(port, error_ptr, Error::InitializeRuntime(error));
             return;
         }
     };
@@ -228,10 +227,7 @@ impl Sender {
         (self.post_c_object_fn)(port.into(), &mut value.into());
     }
 
-    unsafe fn send_err<T, E>(&self, port: Port<T>, error_ptr: *mut *mut c_char, error: E)
-    where
-        E: fmt::Display,
-    {
+    unsafe fn send_err<T>(&self, port: Port<T>, error_ptr: *mut *mut c_char, error: Error) {
         if !error_ptr.is_null() {
             *error_ptr = CString::new(error.to_string()).unwrap().into_raw();
         }

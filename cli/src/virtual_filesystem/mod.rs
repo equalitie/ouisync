@@ -920,7 +920,9 @@ fn to_error_code(error: &Error) -> libc::c_int {
         | Error::MalformedDirectory(_)
         | Error::WrongBlockLength(_)
         | Error::Network(_)
-        | Error::WriterSet(_) => libc::EIO,
+        | Error::WriterSet(_)
+        | Error::InitializeLogger(_)
+        | Error::InitializeRuntime(_) => libc::EIO,
         Error::EntryNotFound | Error::AmbiguousEntry => libc::ENOENT,
         Error::EntryExists => libc::EEXIST,
         Error::EntryIsFile => libc::ENOTDIR,
