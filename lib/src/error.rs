@@ -21,8 +21,6 @@ pub enum Error {
     MalformedData,
     #[error("block not found: {0}")]
     BlockNotFound(BlockId),
-    #[error("block already exists")]
-    BlockExists,
     #[error("block is not referenced by the index")]
     BlockNotReferenced,
     #[error("block has wrong length (expected: {}, actual: {0})", BLOCK_SIZE)]
