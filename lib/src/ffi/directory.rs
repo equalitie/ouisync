@@ -2,7 +2,7 @@ use super::{
     repository, session,
     utils::{self, Port, RefHandle, SharedHandle, UniqueHandle},
 };
-use crate::{directory::EntryType, repository::Repository};
+use crate::{directory::EntryType, error::Result, repository::Repository};
 use std::{convert::TryInto, ffi::CString, os::raw::c_char};
 
 // Currently this is only a read-only snapshot of a directory.
@@ -19,10 +19,9 @@ impl Directory {
 pub unsafe extern "C" fn directory_create(
     repo: SharedHandle<Repository>,
     path: *const c_char,
-    port: Port<()>,
-    error: *mut *mut c_char,
+    port: Port<Result<()>>,
 ) {
-    session::with(port, error, |ctx| {
+    session::with(port, |ctx| {
         let path = utils::ptr_to_path_buf(path)?;
         let repo = repo.get();
 
@@ -38,10 +37,9 @@ pub unsafe extern "C" fn directory_create(
 pub unsafe extern "C" fn directory_open(
     repo: SharedHandle<Repository>,
     path: *const c_char,
-    port: Port<UniqueHandle<Directory>>,
-    error: *mut *mut c_char,
+    port: Port<Result<UniqueHandle<Directory>>>,
 ) {
-    session::with(port, error, |ctx| {
+    session::with(port, |ctx| {
         let path = utils::ptr_to_path_buf(path)?;
         let repo = repo.get();
 
@@ -71,10 +69,9 @@ pub unsafe extern "C" fn directory_open(
 pub unsafe extern "C" fn directory_remove(
     repo: SharedHandle<Repository>,
     path: *const c_char,
-    port: Port<()>,
-    error: *mut *mut c_char,
+    port: Port<Result<()>>,
 ) {
-    session::with(port, error, |ctx| {
+    session::with(port, |ctx| {
         let repo = repo.get();
         let path = utils::ptr_to_path_buf(path)?;
 
@@ -87,10 +84,9 @@ pub unsafe extern "C" fn directory_remove(
 pub unsafe extern "C" fn directory_remove_recursively(
     repo: SharedHandle<Repository>,
     path: *const c_char,
-    port: Port<()>,
-    error: *mut *mut c_char,
+    port: Port<Result<()>>,
 ) {
-    session::with(port, error, |ctx| {
+    session::with(port, |ctx| {
         let repo = repo.get();
         let path = utils::ptr_to_path_buf(path)?;
 

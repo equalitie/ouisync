@@ -21,8 +21,6 @@ pub enum Error {
     MalformedData,
     #[error("block not found: {0}")]
     BlockNotFound(BlockId),
-    #[error("block already exists")]
-    BlockExists,
     #[error("block is not referenced by the index")]
     BlockNotReferenced,
     #[error("block has wrong length (expected: {}, actual: {0})", BLOCK_SIZE)]
@@ -51,6 +49,10 @@ pub enum Error {
     Network(#[source] io::Error),
     #[error("writer set error")]
     WriterSet(crate::writer_set::error::Error),
+    #[error("failed to initialize logger")]
+    InitializeLogger(#[source] io::Error),
+    #[error("failed to initialize runtime")]
+    InitializeRuntime(#[source] io::Error),
 }
 
 impl Error {

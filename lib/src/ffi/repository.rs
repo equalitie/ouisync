@@ -6,7 +6,7 @@ use crate::{
     access_control::{AccessMode, AccessSecrets, MasterSecret, ShareToken},
     crypto::Password,
     directory::EntryType,
-    error::Error,
+    error::{Error, Result},
     network::Registration,
     path,
     repository::Repository,
@@ -33,10 +33,9 @@ pub unsafe extern "C" fn repository_create(
     store: *const c_char,
     master_password: *const c_char,
     share_token: *const c_char,
-    port: Port<SharedHandle<RepositoryHolder>>,
-    error: *mut *mut c_char,
+    port: Port<Result<SharedHandle<RepositoryHolder>>>,
 ) {
-    session::with(port, error, |ctx| {
+    session::with(port, |ctx| {
         let store = utils::ptr_to_path_buf(store)?;
         let device_id = *ctx.device_id();
         let network_handle = ctx.network().handle();
@@ -78,10 +77,9 @@ pub unsafe extern "C" fn repository_create(
 pub unsafe extern "C" fn repository_open(
     store: *const c_char,
     master_password: *const c_char,
-    port: Port<SharedHandle<RepositoryHolder>>,
-    error: *mut *mut c_char,
+    port: Port<Result<SharedHandle<RepositoryHolder>>>,
 ) {
-    session::with(port, error, |ctx| {
+    session::with(port, |ctx| {
         let store = utils::ptr_to_path_buf(store)?;
         let device_id = *ctx.device_id();
         let network_handle = ctx.network().handle();
@@ -128,10 +126,9 @@ pub unsafe extern "C" fn repository_close(handle: SharedHandle<RepositoryHolder>
 pub unsafe extern "C" fn repository_entry_type(
     handle: SharedHandle<RepositoryHolder>,
     path: *const c_char,
-    port: Port<u8>,
-    error: *mut *mut c_char,
+    port: Port<Result<u8>>,
 ) {
-    session::with(port, error, |ctx| {
+    session::with(port, |ctx| {
         let holder = handle.get();
         let path = utils::ptr_to_path_buf(path)?;
 
@@ -151,10 +148,9 @@ pub unsafe extern "C" fn repository_move_entry(
     handle: SharedHandle<RepositoryHolder>,
     src: *const c_char,
     dst: *const c_char,
-    port: Port<()>,
-    error: *mut *mut c_char,
+    port: Port<Result<()>>,
 ) {
-    session::with(port, error, |ctx| {
+    session::with(port, |ctx| {
         let holder = handle.get();
         let src = utils::ptr_to_path_buf(src)?;
         let dst = utils::ptr_to_path_buf(dst)?;
@@ -247,10 +243,9 @@ pub unsafe extern "C" fn repository_create_share_token(
     handle: SharedHandle<RepositoryHolder>,
     access_mode: u8,
     name: *const c_char,
-    port: Port<String>,
-    error: *mut *mut c_char,
+    port: Port<Result<String>>,
 ) {
-    session::with(port, error, |ctx| {
+    session::with(port, |ctx| {
         let holder = handle.get();
         let access_mode = access_mode_from_num(access_mode)?;
         let name = utils::ptr_to_str(name)?.to_owned();

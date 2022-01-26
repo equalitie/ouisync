@@ -1,17 +1,16 @@
 use super::{
     dart::{DartCObject, PostDartCObjectFn},
+    error::{ErrorCode, ToErrorCode},
     logger::Logger,
-    utils::{self, AssumeSend, Port},
+    utils::{self, Port},
 };
 use crate::{
     config, db,
     device_id::{self, DeviceId},
-    error::Result,
+    error::{Error, Result},
     network::{Network, NetworkOptions},
 };
 use std::{
-    ffi::CString,
-    fmt,
     future::Future,
     mem,
     os::raw::{c_char, c_void},
@@ -26,8 +25,7 @@ use tokio::runtime::{self, Runtime};
 pub unsafe extern "C" fn session_open(
     post_c_object_fn: *const c_void,
     store: *const c_char,
-    port: Port<()>,
-    error_ptr: *mut *mut c_char,
+    port: Port<Result<()>>,
 ) {
     let sender = Sender {
         post_c_object_fn: mem::transmute(post_c_object_fn),
@@ -35,7 +33,7 @@ pub unsafe extern "C" fn session_open(
 
     if !SESSION.is_null() {
         // Session already exists.
-        sender.send_ok(port, error_ptr, ());
+        sender.send_result(port, Ok(()));
         return;
     }
 
@@ -43,7 +41,7 @@ pub unsafe extern "C" fn session_open(
     let logger = match Logger::new() {
         Ok(logger) => logger,
         Err(error) => {
-            sender.send_err(port, error_ptr, error);
+            sender.send_result(port, Err(Error::InitializeLogger(error)));
             return;
         }
     };
@@ -51,7 +49,7 @@ pub unsafe extern "C" fn session_open(
     let runtime = match runtime::Builder::new_multi_thread().enable_all().build() {
         Ok(runtime) => runtime,
         Err(error) => {
-            sender.send_err(port, error_ptr, error);
+            sender.send_result(port, Err(Error::InitializeRuntime(error)));
             return;
         }
     };
@@ -59,14 +57,14 @@ pub unsafe extern "C" fn session_open(
     let store = match utils::ptr_to_store(store) {
         Ok(store) => store,
         Err(error) => {
-            sender.send_err(port, error_ptr, error);
+            sender.send_result(port, Err(error));
             return;
         }
     };
 
     let handle = runtime.handle().clone();
 
-    handle.spawn(sender.invoke(port, error_ptr, async move {
+    handle.spawn(sender.invoke(port, async move {
         let session = Session::new(runtime, store, sender, logger).await?;
 
         assert!(SESSION.is_null());
@@ -86,24 +84,21 @@ pub unsafe extern "C" fn session_close() {
     }
 }
 
-pub(super) unsafe fn with<T, F>(port: Port<T>, error_ptr: *mut *mut c_char, f: F)
+pub(super) unsafe fn with<T, F>(port: Port<Result<T>>, f: F)
 where
     F: FnOnce(Context<T>) -> Result<()>,
+    T: Into<DartCObject>,
 {
     assert!(!SESSION.is_null(), "session is not initialized");
 
     let session = &*SESSION;
-    let context = Context {
-        session,
-        port,
-        error_ptr,
-    };
+    let context = Context { session, port };
 
     let _runtime_guard = context.session.runtime.enter();
 
     match f(context) {
         Ok(()) => (),
-        Err(error) => session.sender.send_err(port, error_ptr, error),
+        Err(error) => session.sender.send_result(port, Err(error)),
     }
 }
 
@@ -153,8 +148,7 @@ impl Session {
 
 pub(super) struct Context<'a, T> {
     session: &'a Session,
-    port: Port<T>,
-    error_ptr: *mut *mut c_char,
+    port: Port<Result<T>>,
 }
 
 impl<T> Context<'_, T>
@@ -167,7 +161,7 @@ where
     {
         self.session
             .runtime
-            .spawn(self.session.sender.invoke(self.port, self.error_ptr, f));
+            .spawn(self.session.sender.invoke(self.port, f));
         Ok(())
     }
 
@@ -187,55 +181,37 @@ pub(super) struct Sender {
 }
 
 impl Sender {
-    // NOTE: using explicit `impl Future` return instead of `async` to be able to specify the
-    // returned future is `Send` even though `error_ptr` is not `Send`.
-    unsafe fn invoke<F, T>(
-        &self,
-        port: Port<T>,
-        error_ptr: *mut *mut c_char,
-        f: F,
-    ) -> impl Future<Output = ()> + Send + 'static
+    pub(crate) async unsafe fn invoke<F, T>(self, port: Port<Result<T>>, f: F)
     where
         F: Future<Output = Result<T>> + Send + 'static,
         T: Into<DartCObject> + 'static,
     {
-        let error_ptr = AssumeSend::new(error_ptr);
-        let sender = *self;
+        self.send_result(port, f.await)
+    }
 
-        async move {
-            match f.await {
-                Ok(value) => sender.send_ok(port, error_ptr.into_inner(), value),
-                Err(error) => sender.send_err(port, error_ptr.into_inner(), error),
+    pub(crate) unsafe fn send_result<T>(&self, port: Port<Result<T>>, value: Result<T>)
+    where
+        T: Into<DartCObject>,
+    {
+        let port = port.into();
+
+        match value {
+            Ok(value) => {
+                (self.post_c_object_fn)(port, &mut ErrorCode::Ok.into());
+                (self.post_c_object_fn)(port, &mut value.into());
+            }
+            Err(error) => {
+                log::error!("ffi error: {:?}", error);
+                (self.post_c_object_fn)(port, &mut error.to_error_code().into());
+                (self.post_c_object_fn)(port, &mut error.to_string().into());
             }
         }
     }
 
-    pub(super) unsafe fn send<T>(&self, port: Port<T>, value: T)
+    pub(crate) unsafe fn send<T>(&self, port: Port<T>, value: T)
     where
         T: Into<DartCObject>,
     {
         (self.post_c_object_fn)(port.into(), &mut value.into());
-    }
-
-    unsafe fn send_ok<T>(&self, port: Port<T>, error_ptr: *mut *mut c_char, value: T)
-    where
-        T: Into<DartCObject>,
-    {
-        if !error_ptr.is_null() {
-            *error_ptr = ptr::null_mut();
-        }
-
-        (self.post_c_object_fn)(port.into(), &mut value.into());
-    }
-
-    unsafe fn send_err<T, E>(&self, port: Port<T>, error_ptr: *mut *mut c_char, error: E)
-    where
-        E: fmt::Display,
-    {
-        if !error_ptr.is_null() {
-            *error_ptr = CString::new(error.to_string()).unwrap().into_raw();
-        }
-
-        (self.post_c_object_fn)(port.into(), &mut ().into());
     }
 }

@@ -3,6 +3,7 @@
 // Most of this file is ripped from [dart-sys](https://crates.io/crates/dart-sys) and
 // [allo-isolate](https://crates.io/crates/allo-isolate)
 
+use super::error::ErrorCode;
 use std::{ffi::CString, os::raw::c_char};
 
 #[repr(C)]
@@ -17,6 +18,17 @@ impl From<()> for DartCObject {
         DartCObject {
             type_: DartCObjectType::Null,
             value: DartCObjectValue { as_bool: false },
+        }
+    }
+}
+
+impl From<u32> for DartCObject {
+    fn from(value: u32) -> Self {
+        DartCObject {
+            type_: DartCObjectType::Int32,
+            value: DartCObjectValue {
+                as_int32: value as i32,
+            },
         }
     }
 }
@@ -60,6 +72,12 @@ impl From<String> for DartCObject {
                 as_string: CString::new(value).unwrap_or_default().into_raw(),
             },
         }
+    }
+}
+
+impl From<ErrorCode> for DartCObject {
+    fn from(value: ErrorCode) -> Self {
+        Self::from(value as u32)
     }
 }
 
