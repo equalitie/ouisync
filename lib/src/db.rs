@@ -125,13 +125,6 @@ pub(crate) async fn open_or_create(store: &Store) -> Result<Pool> {
 
 async fn create_pool(options: SqliteConnectOptions) -> Result<Pool> {
     PoolOptions::new()
-        // HACK: Using only one connection turns the pool effectively into a mutex over a single
-        // connection. This is a heavy-handed fix that prevents the "table is locked" errors that
-        // sometimes happen when multiple tasks try to access the same table and at least one of
-        // them mutably. The downside is that this means only one task can access the database at
-        // any given time which might affect performance.
-        // TODO: find a more fine-grained way to solve this issue.
-        .max_connections(1)
         .connect_with(options)
         .await
         .map_err(Error::ConnectToDb)

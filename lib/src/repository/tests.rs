@@ -240,18 +240,20 @@ async fn concurrent_write_and_read_file() {
 
         async move {
             loop {
-                let file = match repo.open_file("test.txt").await {
-                    Ok(file) => file,
-                    Err(Error::EntryNotFound) => {
-                        sleep(Duration::from_millis(10)).await;
-                        continue;
+                match repo.open_file("test.txt").await {
+                    Ok(file) => {
+                        let actual_len = file.len().await;
+                        let expected_len = (chunk_count * chunk_size) as u64;
+
+                        if actual_len == expected_len {
+                            break;
+                        }
                     }
+                    Err(Error::EntryNotFound) => (),
                     Err(error) => panic!("unexpected error: {:?}", error),
                 };
 
-                if file.len().await == (chunk_count * chunk_size) as u64 {
-                    break;
-                }
+                sleep(Duration::from_millis(10)).await;
             }
         }
     });
