@@ -172,13 +172,25 @@ impl Directory {
             return Ok(self.clone());
         }
 
-        if let Some(parent) = &inner.inner.parent {
-            let parent_dir = parent.directory().fork(local_branch).await?;
+        let parent = if let Some(parent) = &inner.inner.parent {
+            let dir = parent.directory();
+            let entry_name = parent.entry_name().to_owned();
+
+            Some((dir, entry_name))
+        } else {
+            None
+        };
+
+        // Prevent deadlock
+        drop(inner);
+
+        if let Some((parent_dir, parent_entry_name)) = parent {
+            let parent_dir = parent_dir.fork(local_branch).await?;
 
             match parent_dir
                 .read()
                 .await
-                .lookup_version(parent.entry_name(), local_branch.id())
+                .lookup_version(&parent_entry_name, local_branch.id())
             {
                 Ok(EntryRef::Directory(entry)) => return entry.open().await,
                 Ok(EntryRef::File(_)) => {
@@ -189,9 +201,7 @@ impl Directory {
                 Err(error) => return Err(error),
             }
 
-            parent_dir
-                .create_directory(parent.entry_name().to_owned())
-                .await
+            parent_dir.create_directory(parent_entry_name).await
         } else {
             local_branch.open_or_create_root().await
         }
@@ -209,10 +219,6 @@ impl Directory {
     /// Inserts a dangling file entry into this directory. It's the responsibility of the caller to
     /// make sure the returned locator eventually points to an actual file.
     /// For internal use only!
-    ///
-    /// # Panics
-    ///
-    /// Panics if this directory is not in the local branch.
     pub(crate) async fn insert_file_entry(
         &self,
         name: String,
