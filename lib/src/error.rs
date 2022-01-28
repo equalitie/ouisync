@@ -47,8 +47,6 @@ pub enum Error {
     OperationNotSupported,
     #[error("network error")]
     Network(#[source] io::Error),
-    #[error("writer set error")]
-    WriterSet(crate::writer_set::error::Error),
     #[error("failed to initialize logger")]
     InitializeLogger(#[source] io::Error),
     #[error("failed to initialize runtime")]
@@ -66,12 +64,6 @@ impl Error {
 impl From<TryFromSliceError> for Error {
     fn from(_: TryFromSliceError) -> Self {
         Self::MalformedData
-    }
-}
-
-impl From<crate::writer_set::error::Error> for Error {
-    fn from(e: crate::writer_set::error::Error) -> Self {
-        Error::WriterSet(e)
     }
 }
 

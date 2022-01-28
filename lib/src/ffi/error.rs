@@ -53,7 +53,6 @@ impl ToErrorCode for Error {
             | Self::EntryIsDirectory
             | Self::NonUtf8FileName
             | Self::OffsetOutOfRange
-            | Self::WriterSet(_)
             | Self::InitializeLogger(_)
             | Self::InitializeRuntime(_) => ErrorCode::Other,
         }

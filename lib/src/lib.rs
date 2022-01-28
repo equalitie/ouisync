@@ -35,7 +35,6 @@ mod store;
 mod test_utils;
 mod version_vector;
 mod versioned_file_name;
-mod writer_set;
 
 pub use self::{
     access_control::{AccessMode, AccessSecrets, MasterSecret, ShareToken},
