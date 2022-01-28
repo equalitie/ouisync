@@ -5,7 +5,6 @@ use super::{
     utils::{self, Port},
 };
 use crate::{
-    config, db,
     device_id::{self, DeviceId},
     error::{Error, Result},
     network::{Network, NetworkOptions},
@@ -14,6 +13,7 @@ use std::{
     future::Future,
     mem,
     os::raw::{c_char, c_void},
+    path::PathBuf,
     ptr,
 };
 use tokio::runtime::{self, Runtime};
@@ -24,7 +24,7 @@ use tokio::runtime::{self, Runtime};
 #[no_mangle]
 pub unsafe extern "C" fn session_open(
     post_c_object_fn: *const c_void,
-    store: *const c_char,
+    device_id_config_path: *const c_char,
     port: Port<Result<()>>,
 ) {
     let sender = Sender {
@@ -54,8 +54,8 @@ pub unsafe extern "C" fn session_open(
         }
     };
 
-    let store = match utils::ptr_to_store(store) {
-        Ok(store) => store,
+    let device_id_config_path = match utils::ptr_to_native_path_buf(device_id_config_path) {
+        Ok(device_id_config_path) => device_id_config_path,
         Err(error) => {
             sender.send_result(port, Err(error));
             return;
@@ -65,7 +65,7 @@ pub unsafe extern "C" fn session_open(
     let handle = runtime.handle().clone();
 
     handle.spawn(sender.invoke(port, async move {
-        let session = Session::new(runtime, store, sender, logger).await?;
+        let session = Session::new(runtime, device_id_config_path, sender, logger).await?;
 
         assert!(SESSION.is_null());
 
@@ -120,12 +120,11 @@ pub(super) struct Session {
 impl Session {
     async fn new(
         runtime: Runtime,
-        store: db::Store,
+        device_id_config_path: PathBuf,
         sender: Sender,
         logger: Logger,
     ) -> Result<Self> {
-        let pool = config::open_db(&store).await?;
-        let device_id = device_id::get_or_create(&mut *pool.acquire().await?).await?;
+        let device_id = device_id::get_or_create(&device_id_config_path).await?;
         let network = Network::new(&NetworkOptions::default()).await?;
 
         Ok(Self {

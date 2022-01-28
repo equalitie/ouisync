@@ -3,7 +3,7 @@ mod virtual_filesystem;
 
 use self::options::{Named, Options};
 use anyhow::{format_err, Result};
-use ouisync_lib::{config, device_id, AccessSecrets, Network, Repository, ShareToken};
+use ouisync_lib::{device_id, AccessSecrets, Network, Repository, ShareToken};
 use std::{
     collections::{hash_map::Entry, HashMap},
     io,
@@ -24,8 +24,11 @@ async fn main() -> Result<()> {
 
     env_logger::init();
 
-    let pool = config::open_db(&options.config_store()?).await?;
-    let device_id = device_id::get_or_create(&mut *pool.acquire().await?).await?;
+    let device_id = if !options.temp {
+        device_id::get_or_create(&options.device_id_config_path()?).await?
+    } else {
+        rand::random()
+    };
 
     // Create repositories
     let mut repos = HashMap::new();

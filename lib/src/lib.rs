@@ -4,7 +4,6 @@
 #[macro_use]
 mod macros;
 
-pub mod config;
 pub mod crypto;
 pub mod debug_printer;
 pub mod device_id;

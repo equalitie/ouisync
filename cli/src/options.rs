@@ -96,17 +96,8 @@ impl Options {
     }
 
     /// Path to the config database.
-    pub fn config_path(&self) -> Result<PathBuf> {
-        Ok(self.data_dir()?.join("config.db"))
-    }
-
-    /// Store of the config database
-    pub fn config_store(&self) -> Result<Store> {
-        if self.temp {
-            Ok(Store::Memory)
-        } else {
-            Ok(Store::File(self.config_path()?))
-        }
+    pub fn device_id_config_path(&self) -> Result<PathBuf> {
+        Ok(self.data_dir()?.join("device_id.conf"))
     }
 
     /// Path to the database of the repository with the specified name.

@@ -23,6 +23,8 @@ pub enum ErrorCode {
     OperationNotSupported = 8,
     /// Network error
     Network = 9,
+    /// Failed to read from or write into the device ID config file
+    DeviceIdConfig = 10,
     /// Unspecified error
     Other = 65536,
 }
@@ -37,7 +39,8 @@ impl ToErrorCode for Error {
             Self::CreateDbDirectory(_)
             | Self::ConnectToDb(_)
             | Self::CreateDbSchema(_)
-            | Self::QueryDb(_) => ErrorCode::Db,
+            | Self::DeviceIdConfig(_) => ErrorCode::DeviceIdConfig,
+            Self::QueryDb(_) => ErrorCode::Db,
             Self::PermissionDenied => ErrorCode::PermissionDenied,
             Self::MalformedData | Self::MalformedDirectory(_) => ErrorCode::MalformedData,
             Self::EntryExists => ErrorCode::EntryExists,

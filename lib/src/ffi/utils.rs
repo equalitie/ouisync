@@ -1,9 +1,7 @@
 use super::dart::{self, DartCObject};
-use crate::{
-    db,
-    error::{self, Error, Result},
-};
+use crate::error::{Error, Result};
 use camino::Utf8PathBuf;
+use std::path::PathBuf;
 use std::{
     ffi::{CStr, CString},
     marker::PhantomData,
@@ -136,8 +134,8 @@ pub unsafe fn ptr_to_path_buf(ptr: *const c_char) -> Result<Utf8PathBuf> {
     Ok(Utf8PathBuf::from(ptr_to_str(ptr)?))
 }
 
-pub unsafe fn ptr_to_store(ptr: *const c_char) -> Result<db::Store> {
-    Ok(error::into_ok(ptr_to_str(ptr)?.parse()))
+pub unsafe fn ptr_to_native_path_buf(ptr: *const c_char) -> Result<PathBuf> {
+    Ok(PathBuf::from(ptr_to_str(ptr)?))
 }
 
 pub fn str_to_c_string(s: &str) -> Result<CString> {

@@ -1,9 +1,9 @@
-use crate::{
-    db,
-    error::{Error, Result},
-};
+use crate::error::{Error, Result};
 use rand::{rngs::OsRng, Rng};
-use sqlx::{Acquire, Row};
+use std::io::{self, ErrorKind};
+use std::path::Path;
+use tokio::fs::{File, OpenOptions};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 define_byte_array_wrapper! {
     /// DeviceId uniquely identifies machines on which this software is running. Its only purpose is
@@ -22,59 +22,68 @@ define_byte_array_wrapper! {
 derive_rand_for_wrapper!(DeviceId);
 derive_sqlx_traits_for_byte_array_wrapper!(DeviceId);
 
-/// Initializes the table that holds a single entry: the DeviceId of this replica
-pub(crate) async fn init(pool: &db::Pool) -> Result<(), Error> {
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS device_id (
-             -- row_id is always zero and is used to rewrite the row if there is one already
-             -- in the table.
-             row_id INTEGER PRIMARY KEY,
-             value  BLOB NOT NULL
-         );",
-    )
-    .execute(pool)
-    .await
-    .map_err(Error::CreateDbSchema)?;
-
-    Ok(())
-}
-
-pub async fn get_or_create(conn: &mut db::Connection) -> Result<DeviceId> {
-    // Use db transaction to make the operations atomic.
-    let mut tx = conn.begin().await?;
-
-    let id = match get(&mut tx).await? {
-        Some(id) => id,
-        None => {
-            let id = OsRng.gen();
-            set(&mut tx, &id).await?;
-            id
+pub async fn get_or_create(path: &Path) -> Result<DeviceId> {
+    match File::open(path).await {
+        Ok(file) => parse(file).await.map_err(Error::DeviceIdConfig),
+        Err(e) if e.kind() == ErrorKind::NotFound => {
+            create(path).await.map_err(Error::DeviceIdConfig)
         }
-    };
-
-    tx.commit().await?;
-
-    Ok(id)
+        Err(e) => Err(Error::DeviceIdConfig(e)),
+    }
 }
 
-async fn get(conn: &mut db::Connection) -> Result<Option<DeviceId>> {
-    let id = sqlx::query("SELECT value FROM device_id WHERE row_id=0")
-        .fetch_optional(conn)
-        .await?
-        .map(|row| row.get(0));
+pub async fn parse(file: File) -> io::Result<DeviceId> {
+    let reader = BufReader::new(file);
+    let mut lines = reader.lines();
 
-    Ok(id)
+    while let Some(line) = lines.next_line().await? {
+        let line = line.trim();
+
+        if line.is_empty() || line.starts_with("#") {
+            continue;
+        }
+
+        let bytes = match hex::decode(line) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                return Err(io::Error::new(
+                    ErrorKind::InvalidData,
+                    format!("failed to parse config line {:?}: {:?}", line, e),
+                ))
+            }
+        };
+
+        return Ok(DeviceId(bytes.try_into().unwrap()));
+    }
+
+    Err(io::Error::new(
+        ErrorKind::InvalidData,
+        "no device ID found in the device ID config file",
+    ))
 }
 
-async fn set(conn: &mut db::Connection, writer_id: &DeviceId) -> Result<(), Error> {
-    sqlx::query(
-        "INSERT INTO device_id(row_id, value)
-             VALUES (0, ?) ON CONFLICT(row_id) DO UPDATE SET value=?",
-    )
-    .bind(writer_id)
-    .bind(writer_id)
-    .execute(conn)
-    .await?;
+const COMMENT: &'static str = "\
+# The value stored in this file is the device ID. It is uniquelly generated for each device and
+# its only purpose is to detect when a database has been migrated from one device to another.
+#
+# * When a database is migrated, the safest option is to NOT migrate this file with it.*
+#
+# However, the user may chose to *move* this file alongside the database. In such case it is
+# important to ensure the same device ID is never used by a writer replica concurrently from
+# more than one location. Doing so will likely result in data corruption.
+#
+# Device ID is never transmitted over the network and thus can't be used for peer identification.";
 
-    Ok(())
+pub async fn create(path: &Path) -> std::io::Result<DeviceId> {
+    // TODO: Consider doing this atomically by first writing to a .tmp file and then rename once
+    // writing is done.
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .await?;
+    let id = OsRng.gen::<DeviceId>();
+    let content = format!("{}\n\n{}\n", COMMENT, hex::encode(id.as_ref()));
+    file.write_all(content.as_ref()).await?;
+    Ok(id)
 }

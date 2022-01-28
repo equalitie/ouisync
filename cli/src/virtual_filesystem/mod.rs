@@ -914,6 +914,7 @@ fn to_error_code(error: &Error) -> libc::c_int {
         | Error::ConnectToDb(_)
         | Error::CreateDbSchema(_)
         | Error::QueryDb(_)
+        | Error::DeviceIdConfig(_)
         | Error::BlockNotFound(_)
         | Error::BlockNotReferenced
         | Error::MalformedData
