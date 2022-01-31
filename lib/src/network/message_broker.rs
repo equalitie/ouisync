@@ -245,7 +245,7 @@ async fn run_client(
 
     match client.run().await {
         Ok(()) => log::debug!("client for {:?} terminated", channel),
-        Err(error) => log::error!("client for {:?} failed: {}", channel, error),
+        Err(error) => log::error!("client for {:?} failed: {:?}", channel, error),
     }
 }
 
@@ -261,6 +261,6 @@ async fn run_server(
 
     match server.run().await {
         Ok(()) => log::debug!("server for {:?} terminated", channel),
-        Err(error) => log::error!("server for {:?} failed: {}", channel, error),
+        Err(error) => log::error!("server for {:?} failed: {:?}", channel, error),
     }
 }
