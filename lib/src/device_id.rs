@@ -76,9 +76,10 @@ const COMMENT: &'static str = "\
 #
 # However, the user may chose to *move* this file alongside the database. In such case it is
 # important to ensure the same device ID is never used by a writer replica concurrently from
-# more than one location. Doing so will likely result in data corruption.
+# more than one location. Doing so will likely result in data loss.
 #
-# Device ID is never transmitted over the network and thus can't be used for peer identification.";
+# Device ID is never used in construction of network messages and thus can't be used for peer 
+# identification.";
 
 pub async fn create(path: &Path) -> std::io::Result<DeviceId> {
     // TODO: Consider doing this atomically by first writing to a .tmp file and then rename once
