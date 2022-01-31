@@ -48,12 +48,18 @@ pub async fn parse(file: File) -> io::Result<DeviceId> {
             Err(e) => {
                 return Err(io::Error::new(
                     ErrorKind::InvalidData,
-                    format!("failed to parse config line {:?}: {:?}", line, e),
+                    format!("failed to parse from hex {:?}: {:?}", line, e),
                 ))
             }
         };
 
-        return Ok(DeviceId(bytes.try_into().unwrap()));
+        return match bytes.try_into() {
+            Ok(bytes) => Ok(DeviceId(bytes)),
+            Err(e) => Err(io::Error::new(
+                ErrorKind::InvalidData,
+                format!("device ID has incorrect size {:?}: {:?}", line, e),
+            )),
+        };
     }
 
     Err(io::Error::new(
