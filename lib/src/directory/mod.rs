@@ -216,25 +216,24 @@ impl Directory {
             .map(|parent_ctx| parent_ctx.directory())
     }
 
-    /// Inserts a dangling file entry into this directory. It's the responsibility of the caller to
-    /// make sure the returned locator eventually points to an actual file.
+    /// Inserts a file entry into this directory. It's the responsibility of the caller to make
+    /// sure the passed in `blob_id` eventually points to an actual file.
     /// For internal use only!
     pub(crate) async fn insert_file_entry(
         &self,
         name: String,
         author_id: PublicKey,
         version_vector: VersionVector,
-    ) -> Result<BlobId> {
+        blob_id: BlobId,
+    ) -> Result<()> {
         let mut inner = self.write().await.inner;
 
-        let blob_id = rand::random();
         let entry_data = EntryData::file(blob_id, version_vector);
-
         inner
             .insert_entry(name, author_id, entry_data, None)
             .await?;
 
-        Ok(blob_id)
+        Ok(())
     }
 
     async fn open(

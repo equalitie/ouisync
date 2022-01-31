@@ -114,11 +114,13 @@ impl File {
             return Ok(());
         }
 
-        // TODO: this should be atomic
-        let blob_id = self.parent.fork_file(local_branch).await?;
+        let blob_id = rand::random();
         self.blob
             .fork(local_branch.clone(), Locator::head(blob_id))
-            .await
+            .await?;
+        self.parent.fork_file(local_branch, blob_id).await?;
+
+        Ok(())
     }
 
     pub async fn version_vector(&self) -> VersionVector {
