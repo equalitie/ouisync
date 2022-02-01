@@ -113,9 +113,9 @@ impl Merger {
 
                     log::log!(
                         level,
-                        "merge with branch {:?} failed: {}",
+                        "merge with branch {:?} failed: {:?}",
                         remote_id,
-                        error.verbose()
+                        error
                     )
                 }
             }

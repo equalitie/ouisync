@@ -11,6 +11,7 @@ use crate::{
     index::BranchData,
     locator::Locator,
 };
+use sqlx::Connection;
 use std::{convert::TryInto, io::SeekFrom, sync::Arc};
 use tokio::sync::{Mutex, MutexGuard};
 
@@ -37,6 +38,7 @@ impl<'a> Operations<'a> {
     /// blob past the internal cursor is smaller than `buffer.len()`.
     pub async fn read(&mut self, mut buffer: &mut [u8]) -> Result<usize> {
         let mut total_len = 0;
+        let mut conn = self.core.db_pool().acquire().await?;
 
         loop {
             let remaining = (self.core.len - self.seek_position())
@@ -57,24 +59,22 @@ impl<'a> Operations<'a> {
                 break;
             }
 
-            // NOTE: unlike in `write` we create a separate transaction for each iteration. This is
-            // because if we created a single transaction for the whole `read` call, then a failed
-            // read could rollback the changes made in a previous iteration which would then be
-            // lost. This is fine because there is going to be at most one dirty block within
-            // a single `read` invocation anyway.
-            let mut tx = self.core.db_pool().begin().await?;
-
             let (id, content) = read_block(
-                &mut tx,
+                &mut conn,
                 self.core.branch.data(),
                 self.core.branch.keys().read(),
                 &locator,
             )
             .await?;
 
+            // NOTE: unlike in `write` we create a separate transaction for each iteration. This is
+            // because if we created a single transaction for the whole `read` call, then a failed
+            // read could rollback the changes made in a previous iteration which would then be
+            // lost. This is fine because there is going to be at most one dirty block within
+            // a single `read` invocation anyway.
+            let mut tx = conn.begin().await?;
             self.replace_current_block(&mut tx, locator, id, content)
                 .await?;
-
             tx.commit().await?;
         }
 
@@ -493,12 +493,12 @@ impl<'a> Operations<'a> {
 }
 
 async fn read_block(
-    tx: &mut db::Transaction<'_>,
+    conn: &mut db::Connection,
     branch: &BranchData,
     read_key: &cipher::SecretKey,
     locator: &Locator,
 ) -> Result<(BlockId, Buffer)> {
-    let (id, mut buffer, nonce) = load_block(tx, branch, read_key, locator).await?;
+    let (id, mut buffer, nonce) = load_block(conn, branch, read_key, locator).await?;
     decrypt_block(read_key, &nonce, &mut buffer);
 
     Ok((id, buffer))
@@ -510,6 +510,14 @@ pub(super) async fn load_block(
     read_key: &cipher::SecretKey,
     locator: &Locator,
 ) -> Result<(BlockId, Buffer, BlockNonce)> {
+    // TODO: there is a small (but non-zero) chance that the block might be deleted in between the
+    // `BranchData::get` and `block::read` calls by another thread. To avoid this, we should make
+    // the two operations atomic. This can be done either by running them in a transaction or by
+    // rewriting them as a single query (which can be done using "recursive common table
+    // expressions" (https://www.sqlite.org/lang_with.html)). If we decide to use transactions, we
+    // need to be extra careful to not cause deadlock due the order tables are locked when shared
+    // cache is enabled. The recursive query seems like the safer option.
+
     let id = branch.get(conn, &locator.encode(read_key)).await?;
     let mut content = Buffer::new();
     let nonce = block::read(conn, &id, &mut content).await?;
@@ -529,10 +537,13 @@ async fn write_block(
     encrypt_block(read_key, &nonce, &mut buffer);
     let id = BlockId::from_content(&buffer);
 
-    block::write(tx, &id, &buffer, &nonce).await?;
+    // NOTE: make sure the index and block store operations run in the same order as in
+    // `load_block` to prevent potential deadlocks when `load_block` and `write_block` run
+    // concurrently and `load_block` runs inside a transaction.
     branch
         .insert(tx, &id, &locator.encode(read_key), write_keys)
         .await?;
+    block::write(tx, &id, &buffer, &nonce).await?;
 
     Ok(id)
 }

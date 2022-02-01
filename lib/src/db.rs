@@ -1,13 +1,8 @@
 use crate::error::{Error, Result};
 use sqlx::{
-    encode::IsNull,
-    error::BoxDynError,
     pool::PoolOptions,
-    sqlite::{
-        Sqlite, SqliteArgumentValue, SqliteConnectOptions, SqliteConnection, SqliteTypeInfo,
-        SqliteValueRef,
-    },
-    Decode, Encode, SqlitePool, Type,
+    sqlite::{Sqlite, SqliteConnectOptions, SqliteConnection},
+    SqlitePool,
 };
 use std::{convert::Infallible, path::PathBuf, str::FromStr};
 use tokio::fs;
@@ -65,34 +60,6 @@ impl FromStr for Store {
     }
 }
 
-impl Type<Sqlite> for Store {
-    fn type_info() -> SqliteTypeInfo {
-        str::type_info()
-    }
-}
-
-impl<'r> Decode<'r, Sqlite> for Store {
-    fn decode(value: SqliteValueRef<'r>) -> Result<Self, BoxDynError> {
-        let s = <&str>::decode(value)?;
-        Ok(s.parse()?)
-    }
-}
-
-impl<'q> Encode<'q, Sqlite> for &'q Store {
-    fn encode_by_ref(&self, args: &mut Vec<SqliteArgumentValue<'q>>) -> IsNull {
-        match self {
-            Store::File(path) => {
-                if let Some(s) = path.to_str() {
-                    s.encode_by_ref(args)
-                } else {
-                    IsNull::Yes
-                }
-            }
-            Store::Memory => MEMORY.encode_by_ref(args),
-        }
-    }
-}
-
 /// Opens a connection to the specified database. Fails if the db doesn't exist.
 pub(crate) async fn open(store: &Store) -> Result<Pool> {
     let options = match store {
@@ -125,13 +92,6 @@ pub(crate) async fn open_or_create(store: &Store) -> Result<Pool> {
 
 async fn create_pool(options: SqliteConnectOptions) -> Result<Pool> {
     PoolOptions::new()
-        // HACK: Using only one connection turns the pool effectively into a mutex over a single
-        // connection. This is a heavy-handed fix that prevents the "table is locked" errors that
-        // sometimes happen when multiple tasks try to access the same table and at least one of
-        // them mutably. The downside is that this means only one task can access the database at
-        // any given time which might affect performance.
-        // TODO: find a more fine-grained way to solve this issue.
-        .max_connections(1)
         .connect_with(options)
         .await
         .map_err(Error::ConnectToDb)

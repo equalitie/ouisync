@@ -115,10 +115,8 @@ impl BranchData {
 
     /// Retrieve `BlockId` of a block with the given encoded `Locator`.
     pub async fn get(&self, conn: &mut db::Connection, encoded_locator: &Hash) -> Result<BlockId> {
-        let root_node = self.root_node.read().await;
-        let path = self
-            .get_path(conn, &root_node.proof.hash, encoded_locator)
-            .await?;
+        let root_hash = self.root_node.read().await.proof.hash;
+        let path = self.get_path(conn, &root_hash, encoded_locator).await?;
 
         match path.get_leaf() {
             Some(block_id) => Ok(block_id),

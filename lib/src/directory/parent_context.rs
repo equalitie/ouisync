@@ -57,20 +57,20 @@ impl ParentContext {
         .await
     }
 
-    /// Forks the parent directory and inserts the entry into it as file, returning its new blob id.
-    pub async fn fork_file(&mut self, local_branch: &Branch) -> Result<BlobId> {
+    /// Forks the parent directory and inserts the entry into it as file with the given blob id.
+    pub async fn fork_file(&mut self, local_branch: &Branch, blob_id: BlobId) -> Result<()> {
         let old_vv = self.entry_version_vector().await;
 
         let outer = self.directory();
         let outer = outer.fork(local_branch).await?;
 
-        let blob_id = outer
-            .insert_file_entry(self.entry_name.clone(), self.entry_author, old_vv)
+        outer
+            .insert_file_entry(self.entry_name.clone(), self.entry_author, old_vv, blob_id)
             .await?;
 
         self.directory_inner = outer.inner;
 
-        Ok(blob_id)
+        Ok(())
     }
 
     pub(super) fn entry_name(&self) -> &str {

@@ -2,3 +2,5 @@
 
 members = ["bindgen", "cli", "lib"]
 
+[patch.crates-io]
+sqlx = { git = "https://github.com/madadam/sqlx/", branch = "sqlite-unlock-notify" }

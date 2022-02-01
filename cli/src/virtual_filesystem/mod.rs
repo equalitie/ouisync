@@ -61,7 +61,7 @@ macro_rules! try_request {
         match $result {
             Ok(value) => value,
             Err(error) => {
-                log::error!("{}", error);
+                log::error!("{:?}", error);
                 $reply.error(to_error_code(&error));
                 return;
             }

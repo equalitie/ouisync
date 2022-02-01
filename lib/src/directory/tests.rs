@@ -547,8 +547,8 @@ async fn insert_entry_newer_than_existing() {
 
         let a_vv = VersionVector::first(a_author);
 
-        let blob_id = root
-            .insert_file_entry(name.to_owned(), a_author, a_vv.clone())
+        let blob_id = rand::random();
+        root.insert_file_entry(name.to_owned(), a_author, a_vv.clone(), blob_id)
             .await
             .unwrap();
 
@@ -561,7 +561,8 @@ async fn insert_entry_newer_than_existing() {
 
         let b_vv = a_vv.incremented(b_author);
 
-        root.insert_file_entry(name.to_owned(), b_author, b_vv.clone())
+        let blob_id = rand::random();
+        root.insert_file_entry(name.to_owned(), b_author, b_vv.clone(), blob_id)
             .await
             .unwrap();
 
@@ -594,11 +595,11 @@ async fn remove_concurrent_file_version() {
         // Create the concurrent versions
         for branch_id in branches.iter().map(|branch| *branch.id()) {
             let vv = VersionVector::first(branch_id);
+            let blob_id = rand::random();
 
             vvs.push(vv.clone());
 
-            let blob_id = root
-                .insert_file_entry(name.into(), branch_id, vv)
+            root.insert_file_entry(name.into(), branch_id, vv, blob_id)
                 .await
                 .unwrap();
 
