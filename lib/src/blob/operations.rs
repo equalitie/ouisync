@@ -11,6 +11,7 @@ use crate::{
     index::BranchData,
     locator::Locator,
 };
+use sqlx::Connection;
 use std::{convert::TryInto, io::SeekFrom, sync::Arc};
 use tokio::sync::{Mutex, MutexGuard};
 
@@ -37,6 +38,7 @@ impl<'a> Operations<'a> {
     /// blob past the internal cursor is smaller than `buffer.len()`.
     pub async fn read(&mut self, mut buffer: &mut [u8]) -> Result<usize> {
         let mut total_len = 0;
+        let mut conn = self.core.db_pool().acquire().await?;
 
         loop {
             let remaining = (self.core.len - self.seek_position())
@@ -57,24 +59,22 @@ impl<'a> Operations<'a> {
                 break;
             }
 
-            // NOTE: unlike in `write` we create a separate transaction for each iteration. This is
-            // because if we created a single transaction for the whole `read` call, then a failed
-            // read could rollback the changes made in a previous iteration which would then be
-            // lost. This is fine because there is going to be at most one dirty block within
-            // a single `read` invocation anyway.
-            let mut tx = self.core.db_pool().begin().await?;
-
             let (id, content) = read_block(
-                &mut tx,
+                &mut conn,
                 self.core.branch.data(),
                 self.core.branch.keys().read(),
                 &locator,
             )
             .await?;
 
+            // NOTE: unlike in `write` we create a separate transaction for each iteration. This is
+            // because if we created a single transaction for the whole `read` call, then a failed
+            // read could rollback the changes made in a previous iteration which would then be
+            // lost. This is fine because there is going to be at most one dirty block within
+            // a single `read` invocation anyway.
+            let mut tx = conn.begin().await?;
             self.replace_current_block(&mut tx, locator, id, content)
                 .await?;
-
             tx.commit().await?;
         }
 

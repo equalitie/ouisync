@@ -39,7 +39,7 @@ pub async fn parse(file: File) -> io::Result<DeviceId> {
     while let Some(line) = lines.next_line().await? {
         let line = line.trim();
 
-        if line.is_empty() || line.starts_with("#") {
+        if line.is_empty() || line.starts_with('#') {
             continue;
         }
 
@@ -68,7 +68,7 @@ pub async fn parse(file: File) -> io::Result<DeviceId> {
     ))
 }
 
-const COMMENT: &'static str = "\
+const COMMENT: &str = "\
 # The value stored in this file is the device ID. It is uniquelly generated for each device and
 # its only purpose is to detect when a database has been migrated from one device to another.
 #
@@ -78,7 +78,7 @@ const COMMENT: &'static str = "\
 # important to ensure the same device ID is never used by a writer replica concurrently from
 # more than one location. Doing so will likely result in data loss.
 #
-# Device ID is never used in construction of network messages and thus can't be used for peer 
+# Device ID is never used in construction of network messages and thus can't be used for peer
 # identification.";
 
 pub async fn create(path: &Path) -> std::io::Result<DeviceId> {
