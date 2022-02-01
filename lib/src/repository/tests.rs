@@ -293,7 +293,7 @@ async fn append_to_file() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn blind_access() {
+async fn blind_access_non_empty_repo() {
     let pool = db::open_or_create(&db::Store::Memory).await.unwrap();
     let device_id = rand::random();
 
@@ -347,6 +347,37 @@ async fn blind_access() {
         // Reading the root directory is not allowed either.
         assert_matches!(repo.open_directory("/").await, Err(Error::PermissionDenied));
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn blind_access_empty_repo() {
+    let pool = db::open_or_create(&db::Store::Memory).await.unwrap();
+    let device_id = rand::random();
+
+    // Create an empty repo.
+    Repository::create_in(
+        pool.clone(),
+        device_id,
+        MasterSecret::random(),
+        AccessSecrets::random_write(),
+        false,
+    )
+    .await
+    .unwrap();
+
+    // Reopen the repo in blind mode.
+    let repo = Repository::open_in(
+        pool.clone(),
+        device_id,
+        Some(MasterSecret::random()),
+        AccessMode::Read,
+        false,
+    )
+    .await
+    .unwrap();
+
+    // Reading the root directory is not allowed.
+    assert_matches!(repo.open_directory("/").await, Err(Error::PermissionDenied));
 }
 
 #[tokio::test(flavor = "multi_thread")]
