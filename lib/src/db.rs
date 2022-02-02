@@ -1,5 +1,6 @@
 use crate::error::{Error, Result};
 use sqlx::{
+    pool::PoolConnection,
     sqlite::{Sqlite, SqliteConnectOptions, SqliteConnection},
     SqlitePool,
 };
@@ -10,9 +11,6 @@ use std::{
     str::FromStr,
 };
 use tokio::fs;
-
-/// Database connection pool.
-pub type Pool = SqlitePool;
 
 /// Database connection.
 pub type Connection = SqliteConnection;
@@ -62,42 +60,64 @@ impl FromStr for Store {
     }
 }
 
+/// Database connection pool.
+#[derive(Clone)]
+pub(crate) struct Pool {
+    inner: SqlitePool,
+}
+
+impl Pool {
+    async fn open_permanent(path: &Path, create_if_missing: bool) -> Result<Self> {
+        if create_if_missing {
+            if let Some(dir) = path.parent() {
+                fs::create_dir_all(dir)
+                    .await
+                    .map_err(Error::CreateDbDirectory)?;
+            }
+        }
+
+        Ok(Self {
+            inner: SqlitePool::connect_with(
+                SqliteConnectOptions::new()
+                    .filename(path)
+                    .create_if_missing(create_if_missing),
+            )
+            .await
+            .map_err(Error::ConnectToDb)?,
+        })
+    }
+
+    async fn open_temporary() -> Result<Self> {
+        Ok(Self {
+            inner: SqlitePool::connect_with(SqliteConnectOptions::from_str(MEMORY).unwrap())
+                .await
+                .map_err(Error::ConnectToDb)?,
+        })
+    }
+
+    pub async fn acquire(&self) -> Result<PoolConnection<Sqlite>> {
+        Ok(self.inner.acquire().await?)
+    }
+
+    pub async fn begin(&self) -> Result<Transaction<'static>> {
+        Ok(self.inner.begin().await?)
+    }
+}
+
 /// Opens a connection to the specified database. Fails if the db doesn't exist.
 pub(crate) async fn open(store: &Store) -> Result<Pool> {
     match store {
-        Store::Permanent(path) => Pool::connect_with(SqliteConnectOptions::new().filename(path))
-            .await
-            .map_err(Error::ConnectToDb),
-        Store::Temporary => open_temporary().await,
+        Store::Permanent(path) => Pool::open_permanent(path, false).await,
+        Store::Temporary => Pool::open_temporary().await,
     }
 }
 
 /// Opens a connection to the specified database. Creates the database if it doesn't already exist.
 pub(crate) async fn open_or_create(store: &Store) -> Result<Pool> {
     match store {
-        Store::Permanent(path) => {
-            if let Some(dir) = path.parent() {
-                fs::create_dir_all(dir)
-                    .await
-                    .map_err(Error::CreateDbDirectory)?;
-            }
-
-            Pool::connect_with(
-                SqliteConnectOptions::new()
-                    .filename(path)
-                    .create_if_missing(true),
-            )
-            .await
-            .map_err(Error::ConnectToDb)
-        }
-        Store::Temporary => open_temporary().await,
+        Store::Permanent(path) => Pool::open_permanent(path, true).await,
+        Store::Temporary => Pool::open_temporary().await,
     }
-}
-
-async fn open_temporary() -> Result<Pool> {
-    Pool::connect_with(SqliteConnectOptions::from_str(MEMORY).unwrap())
-        .await
-        .map_err(Error::ConnectToDb)
 }
 
 // Explicit cast from `i64` to `u64` to work around the lack of native `u64` support in the sqlx
