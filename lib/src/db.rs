@@ -1,6 +1,5 @@
 use crate::error::{Error, Result};
 use sqlx::{
-    pool::PoolOptions,
     sqlite::{Sqlite, SqliteConnectOptions, SqliteConnection},
     SqlitePool,
 };
@@ -65,17 +64,17 @@ impl FromStr for Store {
 
 /// Opens a connection to the specified database. Fails if the db doesn't exist.
 pub(crate) async fn open(store: &Store) -> Result<Pool> {
-    let options = match store {
-        Store::Permanent(path) => SqliteConnectOptions::new().filename(path),
-        Store::Temporary => SqliteConnectOptions::from_str(MEMORY).expect("invalid db uri"),
-    };
-
-    create_pool(options).await
+    match store {
+        Store::Permanent(path) => Pool::connect_with(SqliteConnectOptions::new().filename(path))
+            .await
+            .map_err(Error::ConnectToDb),
+        Store::Temporary => open_temporary().await,
+    }
 }
 
 /// Opens a connection to the specified database. Creates the database if it doesn't already exist.
 pub(crate) async fn open_or_create(store: &Store) -> Result<Pool> {
-    let options = match store {
+    match store {
         Store::Permanent(path) => {
             if let Some(dir) = path.parent() {
                 fs::create_dir_all(dir)
@@ -83,19 +82,20 @@ pub(crate) async fn open_or_create(store: &Store) -> Result<Pool> {
                     .map_err(Error::CreateDbDirectory)?;
             }
 
-            SqliteConnectOptions::new()
-                .filename(path)
-                .create_if_missing(true)
+            Pool::connect_with(
+                SqliteConnectOptions::new()
+                    .filename(path)
+                    .create_if_missing(true),
+            )
+            .await
+            .map_err(Error::ConnectToDb)
         }
-        Store::Temporary => SqliteConnectOptions::from_str(MEMORY).expect("invalid db uri"),
-    };
-
-    create_pool(options).await
+        Store::Temporary => open_temporary().await,
+    }
 }
 
-async fn create_pool(options: SqliteConnectOptions) -> Result<Pool> {
-    PoolOptions::new()
-        .connect_with(options)
+async fn open_temporary() -> Result<Pool> {
+    Pool::connect_with(SqliteConnectOptions::from_str(MEMORY).unwrap())
         .await
         .map_err(Error::ConnectToDb)
 }
