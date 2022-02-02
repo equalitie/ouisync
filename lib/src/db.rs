@@ -1,7 +1,7 @@
 use crate::error::{Error, Result};
 use sqlx::{
     pool::PoolConnection,
-    sqlite::{Sqlite, SqliteConnectOptions, SqliteConnection},
+    sqlite::{Sqlite, SqliteConnectOptions, SqliteConnection, SqlitePoolOptions},
     SqlitePool,
 };
 use std::{
@@ -77,19 +77,31 @@ impl Pool {
         }
 
         Ok(Self {
-            inner: SqlitePool::connect_with(
-                SqliteConnectOptions::new()
-                    .filename(path)
-                    .create_if_missing(create_if_missing),
-            )
-            .await
-            .map_err(Error::ConnectToDb)?,
+            // HACK: using only one connection to work around `SQLITE_BUSY` errors.
+            inner: SqlitePoolOptions::new()
+                .max_connections(1)
+                .connect_with(
+                    SqliteConnectOptions::new()
+                        .filename(path)
+                        .create_if_missing(create_if_missing),
+                )
+                .await
+                .map_err(Error::ConnectToDb)?,
         })
     }
 
     async fn open_temporary() -> Result<Self> {
         Ok(Self {
-            inner: SqlitePool::connect_with(SqliteConnectOptions::from_str(MEMORY).unwrap())
+            // HACK: using only one connection to avoid having to use shared cache (which is
+            // necessary when using multiple connections to a memory database, but it's extremely
+            // prone to deadlocks)
+            inner: SqlitePoolOptions::new()
+                .max_connections(1)
+                .connect_with(
+                    SqliteConnectOptions::from_str(MEMORY)
+                        .unwrap()
+                        .shared_cache(false),
+                )
                 .await
                 .map_err(Error::ConnectToDb)?,
         })
