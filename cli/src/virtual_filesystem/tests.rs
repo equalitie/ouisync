@@ -217,7 +217,7 @@ async fn setup() -> (MountGuard, TempDir) {
     // LOG_INIT.call_once(env_logger::init);
 
     let repo = Repository::create(
-        &Store::Memory,
+        &Store::Temporary,
         rand::random(),
         MasterSecret::random(),
         AccessSecrets::random_write(),

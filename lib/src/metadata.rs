@@ -335,7 +335,7 @@ mod tests {
     use crate::db;
 
     async fn new_memory_db() -> db::Connection {
-        let mut conn = db::open_or_create(&db::Store::Memory)
+        let mut conn = db::open_or_create(&db::Store::Temporary)
             .await
             .unwrap()
             .acquire()

@@ -10,7 +10,7 @@ use tokio::time::{sleep, timeout, Duration};
 async fn root_directory_always_exists() {
     let writer_id = rand::random();
     let repo = Repository::create(
-        &db::Store::Memory,
+        &db::Store::Temporary,
         writer_id,
         MasterSecret::random(),
         AccessSecrets::random_write(),
@@ -24,7 +24,7 @@ async fn root_directory_always_exists() {
 #[tokio::test(flavor = "multi_thread")]
 async fn merge() {
     let repo = Repository::create(
-        &db::Store::Memory,
+        &db::Store::Temporary,
         rand::random(),
         MasterSecret::random(),
         AccessSecrets::random_write(),
@@ -74,7 +74,7 @@ async fn merge() {
 async fn recreate_previously_deleted_file() {
     let local_id = rand::random();
     let repo = Repository::create(
-        &db::Store::Memory,
+        &db::Store::Temporary,
         local_id,
         MasterSecret::random(),
         AccessSecrets::random_write(),
@@ -112,7 +112,7 @@ async fn recreate_previously_deleted_file() {
 async fn recreate_previously_deleted_directory() {
     let local_id = rand::random();
     let repo = Repository::create(
-        &db::Store::Memory,
+        &db::Store::Temporary,
         local_id,
         MasterSecret::random(),
         AccessSecrets::random_write(),
@@ -153,7 +153,7 @@ async fn recreate_previously_deleted_directory() {
 async fn concurrent_read_and_create_dir() {
     let writer_id = rand::random();
     let repo = Repository::create(
-        &db::Store::Memory,
+        &db::Store::Temporary,
         writer_id,
         MasterSecret::random(),
         AccessSecrets::random_write(),
@@ -205,7 +205,7 @@ async fn concurrent_read_and_create_dir() {
 async fn concurrent_write_and_read_file() {
     let writer_id = rand::random();
     let repo = Repository::create(
-        &db::Store::Memory,
+        &db::Store::Temporary,
         writer_id,
         MasterSecret::random(),
         AccessSecrets::random_write(),
@@ -269,7 +269,7 @@ async fn concurrent_write_and_read_file() {
 #[tokio::test(flavor = "multi_thread")]
 async fn append_to_file() {
     let repo = Repository::create(
-        &db::Store::Memory,
+        &db::Store::Temporary,
         rand::random(),
         MasterSecret::random(),
         AccessSecrets::random_write(),
@@ -294,7 +294,7 @@ async fn append_to_file() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn blind_access_non_empty_repo() {
-    let pool = db::open_or_create(&db::Store::Memory).await.unwrap();
+    let pool = db::open_or_create(&db::Store::Temporary).await.unwrap();
     let device_id = rand::random();
 
     // Create the repo and put a file in it.
@@ -351,7 +351,7 @@ async fn blind_access_non_empty_repo() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn blind_access_empty_repo() {
-    let pool = db::open_or_create(&db::Store::Memory).await.unwrap();
+    let pool = db::open_or_create(&db::Store::Temporary).await.unwrap();
     let device_id = rand::random();
 
     // Create an empty repo.
@@ -382,7 +382,7 @@ async fn blind_access_empty_repo() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn read_access_same_replica() {
-    let pool = db::open_or_create(&db::Store::Memory).await.unwrap();
+    let pool = db::open_or_create(&db::Store::Temporary).await.unwrap();
     let device_id = rand::random();
     let master_secret = MasterSecret::random();
 
@@ -441,7 +441,7 @@ async fn read_access_same_replica() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn read_access_different_replica() {
-    let pool = db::open_or_create(&db::Store::Memory).await.unwrap();
+    let pool = db::open_or_create(&db::Store::Temporary).await.unwrap();
     let master_secret = MasterSecret::random();
 
     let device_id_a = rand::random();
@@ -484,7 +484,7 @@ async fn read_access_different_replica() {
 #[tokio::test(flavor = "multi_thread")]
 async fn truncate_forked_remote_file() {
     let repo = Repository::create(
-        &db::Store::Memory,
+        &db::Store::Temporary,
         rand::random(),
         MasterSecret::random(),
         AccessSecrets::random_write(),
@@ -504,7 +504,7 @@ async fn truncate_forked_remote_file() {
 #[tokio::test(flavor = "multi_thread")]
 async fn attempt_to_modify_remote_file() {
     let repo = Repository::create(
-        &db::Store::Memory,
+        &db::Store::Temporary,
         rand::random(),
         MasterSecret::random(),
         AccessSecrets::random_write(),

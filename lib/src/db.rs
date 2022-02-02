@@ -22,29 +22,25 @@ const MEMORY: &str = ":memory:";
 /// Database store.
 #[derive(Debug)]
 pub enum Store {
-    /// Database stored on the filesystem.
-    File(PathBuf),
-    /// Temporary database stored in memory.
-    Memory,
-}
-
-impl From<String> for Store {
-    fn from(string: String) -> Self {
-        if string == MEMORY {
-            Self::Memory
-        } else {
-            Self::File(PathBuf::from(string))
-        }
-    }
+    /// Permanent database stored in the specified file.
+    Permanent(PathBuf),
+    /// Temporary database wiped out on program termination.
+    Temporary,
 }
 
 impl From<PathBuf> for Store {
     fn from(path: PathBuf) -> Self {
         if path.to_str() == Some(MEMORY) {
-            Self::Memory
+            Self::Temporary
         } else {
-            Self::File(path)
+            Self::Permanent(path)
         }
+    }
+}
+
+impl From<String> for Store {
+    fn from(string: String) -> Self {
+        Self::from(PathBuf::from(string))
     }
 }
 
@@ -52,19 +48,15 @@ impl FromStr for Store {
     type Err = Infallible;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s == MEMORY {
-            Ok(Self::Memory)
-        } else {
-            Ok(Self::File(s.into()))
-        }
+        Ok(Self::from(s.to_owned()))
     }
 }
 
 /// Opens a connection to the specified database. Fails if the db doesn't exist.
 pub(crate) async fn open(store: &Store) -> Result<Pool> {
     let options = match store {
-        Store::File(path) => SqliteConnectOptions::new().filename(path),
-        Store::Memory => SqliteConnectOptions::from_str(MEMORY).expect("invalid db uri"),
+        Store::Permanent(path) => SqliteConnectOptions::new().filename(path),
+        Store::Temporary => SqliteConnectOptions::from_str(MEMORY).expect("invalid db uri"),
     };
 
     create_pool(options).await
@@ -73,7 +65,7 @@ pub(crate) async fn open(store: &Store) -> Result<Pool> {
 /// Opens a connection to the specified database. Creates the database if it doesn't already exist.
 pub(crate) async fn open_or_create(store: &Store) -> Result<Pool> {
     let options = match store {
-        Store::File(path) => {
+        Store::Permanent(path) => {
             if let Some(dir) = path.parent() {
                 fs::create_dir_all(dir)
                     .await
@@ -84,7 +76,7 @@ pub(crate) async fn open_or_create(store: &Store) -> Result<Pool> {
                 .filename(path)
                 .create_if_missing(true)
         }
-        Store::Memory => SqliteConnectOptions::from_str(MEMORY).expect("invalid db uri"),
+        Store::Temporary => SqliteConnectOptions::from_str(MEMORY).expect("invalid db uri"),
     };
 
     create_pool(options).await

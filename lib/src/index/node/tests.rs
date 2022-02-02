@@ -638,7 +638,7 @@ async fn summary_case(leaf_count: usize, rng_seed: u64) {
 }
 
 async fn setup() -> db::Connection {
-    let mut conn = db::open_or_create(&db::Store::Memory)
+    let mut conn = db::open_or_create(&db::Store::Temporary)
         .await
         .unwrap()
         .acquire()

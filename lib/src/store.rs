@@ -204,7 +204,7 @@ mod tests {
     }
 
     async fn setup() -> db::Pool {
-        let pool = db::open_or_create(&db::Store::Memory).await.unwrap();
+        let pool = db::open_or_create(&db::Store::Temporary).await.unwrap();
         let mut conn = pool.acquire().await.unwrap();
 
         index::init(&mut conn).await.unwrap();
