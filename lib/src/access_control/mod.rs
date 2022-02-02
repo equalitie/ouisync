@@ -54,6 +54,14 @@ impl AccessSecrets {
         }
     }
 
+    pub fn access_mode(&self) -> AccessMode {
+        match self {
+            Self::Blind { .. } => AccessMode::Blind,
+            Self::Read { .. } => AccessMode::Read,
+            Self::Write(_) => AccessMode::Write,
+        }
+    }
+
     pub(crate) fn id(&self) -> &RepositoryId {
         match self {
             Self::Blind { id } | Self::Read { id, .. } | Self::Write(WriteSecrets { id, .. }) => id,

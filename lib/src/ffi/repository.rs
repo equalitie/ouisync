@@ -259,6 +259,12 @@ pub unsafe extern "C" fn repository_create_share_token(
     })
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn repository_access_mode(handle: SharedHandle<RepositoryHolder>) -> u8 {
+    let holder = handle.get();
+    access_mode_to_num(holder.repository.access_mode())
+}
+
 /// Returns the access mode of the given share token.
 #[no_mangle]
 pub unsafe extern "C" fn share_token_mode(token: *const c_char) -> u8 {

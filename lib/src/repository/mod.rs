@@ -398,6 +398,11 @@ impl Repository {
         self.shared.index.subscribe()
     }
 
+    /// Gets the access mode this repository is opened in.
+    pub fn access_mode(&self) -> AccessMode {
+        self.shared.secrets.access_mode()
+    }
+
     // Opens the root directory across all branches as JointDirectory.
     async fn joint_root(&self) -> Result<JointDirectory> {
         // If we have only blind access we can cut this short. Also this check is necessary to

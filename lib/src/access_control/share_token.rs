@@ -53,11 +53,7 @@ impl ShareToken {
     }
 
     pub fn access_mode(&self) -> AccessMode {
-        match self.secrets {
-            AccessSecrets::Blind { .. } => AccessMode::Blind,
-            AccessSecrets::Read { .. } => AccessMode::Read,
-            AccessSecrets::Write(_) => AccessMode::Write,
-        }
+        self.secrets.access_mode()
     }
 
     pub fn encode(&self, out: &mut Vec<u8>) {
