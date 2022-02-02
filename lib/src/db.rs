@@ -4,7 +4,12 @@ use sqlx::{
     sqlite::{Sqlite, SqliteConnectOptions, SqliteConnection},
     SqlitePool,
 };
-use std::{convert::Infallible, path::PathBuf, str::FromStr};
+use std::{
+    borrow::Cow,
+    convert::Infallible,
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 use tokio::fs;
 
 /// Database connection pool.
@@ -28,19 +33,25 @@ pub enum Store {
     Temporary,
 }
 
-impl From<PathBuf> for Store {
-    fn from(path: PathBuf) -> Self {
-        if path.to_str() == Some(MEMORY) {
+impl<'a> From<Cow<'a, Path>> for Store {
+    fn from(path: Cow<'a, Path>) -> Self {
+        if path.as_ref().to_str() == Some(MEMORY) {
             Self::Temporary
         } else {
-            Self::Permanent(path)
+            Self::Permanent(path.into_owned())
         }
     }
 }
 
-impl From<String> for Store {
-    fn from(string: String) -> Self {
-        Self::from(PathBuf::from(string))
+impl From<PathBuf> for Store {
+    fn from(path: PathBuf) -> Self {
+        Self::from(Cow::Owned(path))
+    }
+}
+
+impl<'a> From<&'a Path> for Store {
+    fn from(path: &'a Path) -> Self {
+        Self::from(Cow::Borrowed(path))
     }
 }
 
@@ -48,7 +59,7 @@ impl FromStr for Store {
     type Err = Infallible;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(Self::from(s.to_owned()))
+        Ok(Self::from(Path::new(s)))
     }
 }
 
