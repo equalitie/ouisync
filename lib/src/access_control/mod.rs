@@ -115,6 +115,10 @@ impl AccessSecrets {
         matches!(self, Self::Write(_))
     }
 
+    pub(crate) fn can_read(&self) -> bool {
+        matches!(self, Self::Read { .. } | Self::Write(_))
+    }
+
     pub(crate) fn keys(&self) -> Option<AccessKeys> {
         match self {
             Self::Blind { .. } => None,

@@ -293,7 +293,7 @@ async fn append_to_file() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn blind_access() {
+async fn blind_access_non_empty_repo() {
     let pool = db::open_or_create(&db::Store::Memory).await.unwrap();
     let device_id = rand::random();
 
@@ -315,28 +315,69 @@ async fn blind_access() {
     drop(file);
     drop(repo);
 
+    // Reopen the repo first explicitly in blind mode and then using incorrect secret. The two ways
+    // should be indistinguishable from each other.
+    for (master_secret, access_mode) in [
+        (None, AccessMode::Blind),
+        (Some(MasterSecret::random()), AccessMode::Write),
+    ] {
+        // Reopen the repo in blind mode.
+        let repo = Repository::open_in(pool.clone(), device_id, master_secret, access_mode, false)
+            .await
+            .unwrap();
+
+        // Reading files is not allowed.
+        assert_matches!(
+            repo.open_file("secret.txt").await,
+            Err(Error::PermissionDenied)
+        );
+
+        // Creating files is not allowed.
+        assert_matches!(
+            repo.create_file("hack.txt").await,
+            Err(Error::PermissionDenied)
+        );
+
+        // Removing files is not allowed.
+        assert_matches!(
+            repo.remove_entry("secret.txt").await,
+            Err(Error::PermissionDenied)
+        );
+
+        // Reading the root directory is not allowed either.
+        assert_matches!(repo.open_directory("/").await, Err(Error::PermissionDenied));
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn blind_access_empty_repo() {
+    let pool = db::open_or_create(&db::Store::Memory).await.unwrap();
+    let device_id = rand::random();
+
+    // Create an empty repo.
+    Repository::create_in(
+        pool.clone(),
+        device_id,
+        MasterSecret::random(),
+        AccessSecrets::random_write(),
+        false,
+    )
+    .await
+    .unwrap();
+
     // Reopen the repo in blind mode.
-    let repo = Repository::open_in(pool, device_id, None, AccessMode::Blind, false)
-        .await
-        .unwrap();
+    let repo = Repository::open_in(
+        pool.clone(),
+        device_id,
+        Some(MasterSecret::random()),
+        AccessMode::Read,
+        false,
+    )
+    .await
+    .unwrap();
 
-    // Reading files is not allowed.
-    assert_matches!(
-        repo.open_file("secret.txt").await,
-        Err(Error::PermissionDenied)
-    );
-
-    // Creating files is not allowed.
-    assert_matches!(
-        repo.create_file("hack.txt").await,
-        Err(Error::PermissionDenied)
-    );
-
-    // Removing files is not allowed.
-    assert_matches!(
-        repo.remove_entry("secret.txt").await,
-        Err(Error::PermissionDenied)
-    );
+    // Reading the root directory is not allowed.
+    assert_matches!(repo.open_directory("/").await, Err(Error::PermissionDenied));
 }
 
 #[tokio::test(flavor = "multi_thread")]

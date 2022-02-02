@@ -400,6 +400,12 @@ impl Repository {
 
     // Opens the root directory across all branches as JointDirectory.
     async fn joint_root(&self) -> Result<JointDirectory> {
+        // If we have only blind access we can cut this short. Also this check is necessary to
+        // distinguish *empty* repository with blind access from one with read access.
+        if !self.shared.secrets.can_read() {
+            return Err(Error::PermissionDenied);
+        }
+
         let local_branch = self.local_branch().await;
         let branches = self.shared.branches().await?;
         let mut dirs = Vec::with_capacity(branches.len());
