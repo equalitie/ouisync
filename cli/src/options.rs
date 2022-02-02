@@ -112,9 +112,9 @@ impl Options {
     /// Store of the database of the repository with the specified name.
     pub fn repository_store(&self, name: &str) -> Result<Store> {
         if self.temp {
-            Ok(Store::Memory)
+            Ok(Store::Temporary)
         } else {
-            Ok(Store::File(self.repository_path(name)?))
+            Ok(Store::Permanent(self.repository_path(name)?))
         }
     }
 

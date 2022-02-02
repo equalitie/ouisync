@@ -119,7 +119,7 @@ async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed:
 }
 
 async fn create_index<R: Rng + CryptoRng>(rng: &mut R, write_keys: &Keypair) -> (Index, PublicKey) {
-    let db = repository::create_db(&db::Store::Memory).await.unwrap();
+    let db = repository::create_db(&db::Store::Temporary).await.unwrap();
     let writer_id = PublicKey::generate(rng);
     let repository_id = RepositoryId::from(write_keys.public);
 

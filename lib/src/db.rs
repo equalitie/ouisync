@@ -1,14 +1,18 @@
 use crate::error::{Error, Result};
 use sqlx::{
-    pool::PoolOptions,
-    sqlite::{Sqlite, SqliteConnectOptions, SqliteConnection},
+    sqlite::{Sqlite, SqliteConnectOptions, SqliteConnection, SqlitePoolOptions},
     SqlitePool,
 };
-use std::{convert::Infallible, path::PathBuf, str::FromStr};
+use std::{
+    borrow::Cow,
+    convert::Infallible,
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 use tokio::fs;
 
 /// Database connection pool.
-pub type Pool = SqlitePool;
+pub(crate) type Pool = SqlitePool;
 
 /// Database connection.
 pub type Connection = SqliteConnection;
@@ -22,29 +26,31 @@ const MEMORY: &str = ":memory:";
 /// Database store.
 #[derive(Debug)]
 pub enum Store {
-    /// Database stored on the filesystem.
-    File(PathBuf),
-    /// Temporary database stored in memory.
-    Memory,
+    /// Permanent database stored in the specified file.
+    Permanent(PathBuf),
+    /// Temporary database wiped out on program termination.
+    Temporary,
 }
 
-impl From<String> for Store {
-    fn from(string: String) -> Self {
-        if string == MEMORY {
-            Self::Memory
+impl<'a> From<Cow<'a, Path>> for Store {
+    fn from(path: Cow<'a, Path>) -> Self {
+        if path.as_ref().to_str() == Some(MEMORY) {
+            Self::Temporary
         } else {
-            Self::File(PathBuf::from(string))
+            Self::Permanent(path.into_owned())
         }
     }
 }
 
 impl From<PathBuf> for Store {
     fn from(path: PathBuf) -> Self {
-        if path.to_str() == Some(MEMORY) {
-            Self::Memory
-        } else {
-            Self::File(path)
-        }
+        Self::from(Cow::Owned(path))
+    }
+}
+
+impl<'a> From<&'a Path> for Store {
+    fn from(path: &'a Path) -> Self {
+        Self::from(Cow::Borrowed(path))
     }
 }
 
@@ -52,47 +58,64 @@ impl FromStr for Store {
     type Err = Infallible;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s == MEMORY {
-            Ok(Self::Memory)
-        } else {
-            Ok(Self::File(s.into()))
-        }
+        Ok(Self::from(Path::new(s)))
     }
 }
 
 /// Opens a connection to the specified database. Fails if the db doesn't exist.
 pub(crate) async fn open(store: &Store) -> Result<Pool> {
-    let options = match store {
-        Store::File(path) => SqliteConnectOptions::new().filename(path),
-        Store::Memory => SqliteConnectOptions::from_str(MEMORY).expect("invalid db uri"),
-    };
-
-    create_pool(options).await
+    match store {
+        Store::Permanent(path) => open_permanent(path, false).await,
+        Store::Temporary => open_temporary().await,
+    }
 }
 
 /// Opens a connection to the specified database. Creates the database if it doesn't already exist.
 pub(crate) async fn open_or_create(store: &Store) -> Result<Pool> {
-    let options = match store {
-        Store::File(path) => {
-            if let Some(dir) = path.parent() {
-                fs::create_dir_all(dir)
-                    .await
-                    .map_err(Error::CreateDbDirectory)?;
-            }
-
-            SqliteConnectOptions::new()
-                .filename(path)
-                .create_if_missing(true)
-        }
-        Store::Memory => SqliteConnectOptions::from_str(MEMORY).expect("invalid db uri"),
-    };
-
-    create_pool(options).await
+    match store {
+        Store::Permanent(path) => open_permanent(path, true).await,
+        Store::Temporary => open_temporary().await,
+    }
 }
 
-async fn create_pool(options: SqliteConnectOptions) -> Result<Pool> {
-    PoolOptions::new()
-        .connect_with(options)
+async fn open_permanent(path: &Path, create_if_missing: bool) -> Result<Pool> {
+    if create_if_missing {
+        if let Some(dir) = path.parent() {
+            fs::create_dir_all(dir)
+                .await
+                .map_err(Error::CreateDbDirectory)?;
+        }
+    }
+
+    // HACK: using only one connection to work around `SQLITE_BUSY` errors.
+    //
+    // TODO: After some experimentation, it seems that using `SqliteSynchornous::Normal` might fix
+    // those errors but it needs more testing. But even if it works, we should try to avoid making
+    // the test and the production code diverge too much. This means that in order to use multiple
+    // connections we would either have to stop using memory databases or we would have to enable
+    // shared cache also for file databases. Both approaches have their drawbacks.
+    SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::new()
+                .filename(path)
+                .create_if_missing(create_if_missing),
+        )
+        .await
+        .map_err(Error::ConnectToDb)
+}
+
+async fn open_temporary() -> Result<Pool> {
+    // HACK: using only one connection to avoid having to use shared cache (which is
+    // necessary when using multiple connections to a memory database, but it's extremely
+    // prone to deadlocks)
+    SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::from_str(MEMORY)
+                .unwrap()
+                .shared_cache(false),
+        )
         .await
         .map_err(Error::ConnectToDb)
 }

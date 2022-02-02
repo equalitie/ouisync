@@ -341,7 +341,7 @@ async fn does_not_delete_old_branch_until_new_branch_is_complete() {
 }
 
 async fn setup() -> (Index, Keypair) {
-    let pool = db::open_or_create(&db::Store::Memory).await.unwrap();
+    let pool = db::open_or_create(&db::Store::Temporary).await.unwrap();
 
     let mut conn = pool.acquire().await.unwrap();
     init(&mut conn).await.unwrap();

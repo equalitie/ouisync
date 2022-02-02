@@ -532,7 +532,7 @@ async fn fork_case(
 async fn setup(rng_seed: u64) -> (StdRng, Branch) {
     let mut rng = StdRng::seed_from_u64(rng_seed);
     let secrets = WriteSecrets::generate(&mut rng);
-    let pool = repository::create_db(&db::Store::Memory).await.unwrap();
+    let pool = repository::create_db(&db::Store::Temporary).await.unwrap();
 
     let (notify_tx, _) = async_broadcast::broadcast(1);
     let branch = BranchData::create(

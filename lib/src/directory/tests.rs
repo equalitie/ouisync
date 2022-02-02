@@ -649,13 +649,13 @@ async fn remove_concurrent_file_version() {
 }
 
 async fn setup() -> Branch {
-    let pool = repository::create_db(&db::Store::Memory).await.unwrap();
+    let pool = repository::create_db(&db::Store::Temporary).await.unwrap();
     let keys = WriteSecrets::random().into();
     create_branch(pool, keys).await
 }
 
 async fn setup_multiple<const N: usize>() -> [Branch; N] {
-    let pool = repository::create_db(&db::Store::Memory).await.unwrap();
+    let pool = repository::create_db(&db::Store::Temporary).await.unwrap();
     let keys = AccessKeys::from(WriteSecrets::random());
     let branches: Vec<_> =
         future::join_all((0..N).map(|_| create_branch(pool.clone(), keys.clone()))).await;

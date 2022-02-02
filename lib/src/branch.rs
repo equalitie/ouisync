@@ -157,7 +157,7 @@ mod tests {
     }
 
     async fn setup() -> Branch {
-        let pool = repository::create_db(&db::Store::Memory).await.unwrap();
+        let pool = repository::create_db(&db::Store::Temporary).await.unwrap();
 
         let writer_id = PublicKey::random();
         let secrets = WriteSecrets::random();
