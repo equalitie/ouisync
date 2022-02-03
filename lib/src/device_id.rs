@@ -2,7 +2,7 @@ use crate::error::{Error, Result};
 use rand::{rngs::OsRng, Rng};
 use std::io::{self, ErrorKind};
 use std::path::Path;
-use tokio::fs::{File, OpenOptions};
+use tokio::fs::{self, File, OpenOptions};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 define_byte_array_wrapper! {
@@ -82,6 +82,10 @@ const COMMENT: &str = "\
 # identification.";
 
 pub async fn create(path: &Path) -> std::io::Result<DeviceId> {
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir).await?;
+    }
+
     // TODO: Consider doing this atomically by first writing to a .tmp file and then rename once
     // writing is done.
     let mut file = OpenOptions::new()
