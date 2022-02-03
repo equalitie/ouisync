@@ -55,53 +55,6 @@ impl RootNode {
         })
     }
 
-    /// Returns a stream of all (but at most `limit`) root nodes corresponding to the specified
-    /// writer ordered from the most recent to the least recent.
-    pub fn load_all_by_writer(
-        conn: &mut db::Connection,
-        writer_id: PublicKey,
-        limit: u32,
-    ) -> impl Stream<Item = Result<Self>> + '_ {
-        sqlx::query(
-            "SELECT
-                 snapshot_id,
-                 versions,
-                 hash,
-                 signature,
-                 is_complete,
-                 missing_blocks_count,
-                 missing_blocks_checksum
-             FROM snapshot_root_nodes
-             WHERE writer_id = ?
-             ORDER BY snapshot_id DESC
-             LIMIT ?",
-        )
-        .bind(writer_id.as_ref().to_owned()) // needed to satisfy the borrow checker.
-        .bind(limit)
-        .fetch(conn)
-        .map_ok(move |row| Self {
-            snapshot_id: row.get(0),
-            proof: Proof::new_unchecked(writer_id, row.get(1), row.get(2), row.get(3)),
-            summary: Summary {
-                is_complete: row.get(4),
-                missing_blocks_count: db::decode_u64(row.get(5)),
-                missing_blocks_checksum: db::decode_u64(row.get(6)),
-            },
-        })
-        .err_into()
-    }
-
-    /// Returns the latest root node of the specified writer or `None` if no snapshot of that
-    /// writer exists.
-    pub async fn load_latest_by_writer(
-        conn: &mut db::Connection,
-        writer_id: PublicKey,
-    ) -> Result<Option<Self>> {
-        Self::load_all_by_writer(conn, writer_id, 1)
-            .try_next()
-            .await
-    }
-
     /// Returns the latest complete root node of the specified writer. Unlike
     /// `load_latest_by_writer`, this assumes the node exists and returns `EntryNotFound` otherwise.
     pub async fn load_latest_complete_by_writer(
@@ -139,6 +92,91 @@ impl RootNode {
             },
         })
         .ok_or(Error::EntryNotFound)
+    }
+
+    /// Return the latest complete root nodes of all known writers.
+    pub fn load_all_latest_complete(
+        conn: &mut db::Connection,
+    ) -> impl Stream<Item = Result<Self>> + '_ {
+        sqlx::query(
+            "SELECT
+                 snapshot_id,
+                 writer_id,
+                 versions,
+                 hash,
+                 signature,
+                 missing_blocks_count,
+                 missing_blocks_checksum
+             FROM
+                 snapshot_root_nodes
+             WHERE
+                 snapshot_id IN (
+                     SELECT MAX(snapshot_id)
+                     FROM snapshot_root_nodes
+                     WHERE is_complete = 1
+                     GROUP BY writer_id
+                 )",
+        )
+        .fetch(conn)
+        .map_ok(|row| Self {
+            snapshot_id: row.get(0),
+            proof: Proof::new_unchecked(row.get(1), row.get(2), row.get(3), row.get(4)),
+            summary: Summary {
+                is_complete: true,
+                missing_blocks_count: db::decode_u64(row.get(5)),
+                missing_blocks_checksum: db::decode_u64(row.get(6)),
+            },
+        })
+        .err_into()
+    }
+
+    /// Returns a stream of all (but at most `limit`) root nodes corresponding to the specified
+    /// writer ordered from the most recent to the least recent.
+    #[cfg(test)]
+    pub fn load_all_by_writer(
+        conn: &mut db::Connection,
+        writer_id: PublicKey,
+        limit: u32,
+    ) -> impl Stream<Item = Result<Self>> + '_ {
+        sqlx::query(
+            "SELECT
+                 snapshot_id,
+                 versions,
+                 hash,
+                 signature,
+                 is_complete,
+                 missing_blocks_count,
+                 missing_blocks_checksum
+             FROM snapshot_root_nodes
+             WHERE writer_id = ?
+             ORDER BY snapshot_id DESC
+             LIMIT ?",
+        )
+        .bind(writer_id.as_ref().to_owned()) // needed to satisfy the borrow checker.
+        .bind(limit)
+        .fetch(conn)
+        .map_ok(move |row| Self {
+            snapshot_id: row.get(0),
+            proof: Proof::new_unchecked(writer_id, row.get(1), row.get(2), row.get(3)),
+            summary: Summary {
+                is_complete: row.get(4),
+                missing_blocks_count: db::decode_u64(row.get(5)),
+                missing_blocks_checksum: db::decode_u64(row.get(6)),
+            },
+        })
+        .err_into()
+    }
+
+    /// Returns the latest root node of the specified writer or `None` if no snapshot of that
+    /// writer exists.
+    #[cfg(test)]
+    pub async fn load_latest_by_writer(
+        conn: &mut db::Connection,
+        writer_id: PublicKey,
+    ) -> Result<Option<Self>> {
+        Self::load_all_by_writer(conn, writer_id, 1)
+            .try_next()
+            .await
     }
 
     /// Returns the writer ids of the nodes with the specified hash.

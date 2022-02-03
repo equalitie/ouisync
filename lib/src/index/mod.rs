@@ -25,7 +25,7 @@ use crate::{
     error::{Error, Result},
     repository::RepositoryId,
 };
-use sqlx::Row;
+use futures_util::TryStreamExt;
 use std::{
     cmp::Ordering,
     collections::{hash_map::Entry, HashMap},
@@ -371,28 +371,15 @@ async fn load_branches(
     conn: &mut db::Connection,
     notify_tx: async_broadcast::Sender<PublicKey>,
 ) -> Result<HashMap<PublicKey, Arc<BranchData>>> {
-    // TODO: load the root nodes in a single query
+    RootNode::load_all_latest_complete(conn)
+        .map_ok(|node| {
+            let writer_id = node.proof.writer_id;
+            let branch = Arc::new(BranchData::new(node, notify_tx.clone()));
 
-    let rows = sqlx::query("SELECT DISTINCT writer_id FROM snapshot_root_nodes")
-        .fetch_all(&mut *conn)
-        .await?;
-
-    let mut branches = HashMap::new();
-
-    for row in rows {
-        let id = row.get(0);
-        let root_node = if let Some(node) = RootNode::load_latest_by_writer(conn, id).await? {
-            node
-        } else {
-            continue;
-        };
-        let notify_tx = notify_tx.clone();
-        let branch = Arc::new(BranchData::new(root_node, notify_tx));
-
-        branches.insert(id, branch);
-    }
-
-    Ok(branches)
+            (writer_id, branch)
+        })
+        .try_collect()
+        .await
 }
 
 #[derive(Debug, Error)]
