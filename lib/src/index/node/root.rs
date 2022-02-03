@@ -20,7 +20,7 @@ pub(crate) struct RootNode {
 }
 
 impl RootNode {
-    /// Creates a root node of the specified replica unless it already exists.
+    /// Creates a root node with the specified proof unless it already exists.
     pub async fn create(conn: &mut db::Connection, proof: Proof, summary: Summary) -> Result<Self> {
         let snapshot_id = sqlx::query(
             "INSERT INTO snapshot_root_nodes (
@@ -56,8 +56,8 @@ impl RootNode {
     }
 
     /// Returns a stream of all (but at most `limit`) root nodes corresponding to the specified
-    /// replica ordered from the most recent to the least recent.
-    pub fn load_all(
+    /// writer ordered from the most recent to the least recent.
+    pub fn load_all_by_writer(
         conn: &mut db::Connection,
         writer_id: PublicKey,
         limit: u32,
@@ -91,18 +91,20 @@ impl RootNode {
         .err_into()
     }
 
-    /// Returns the latest root node of the specified replica or `None` if no snapshot of that
-    /// replica exists.
-    pub async fn load_latest(
+    /// Returns the latest root node of the specified writer or `None` if no snapshot of that
+    /// writer exists.
+    pub async fn load_latest_by_writer(
         conn: &mut db::Connection,
         writer_id: PublicKey,
     ) -> Result<Option<Self>> {
-        Self::load_all(conn, writer_id, 1).try_next().await
+        Self::load_all_by_writer(conn, writer_id, 1)
+            .try_next()
+            .await
     }
 
-    /// Returns the latest complete root node of the specified replica. Unlike `load_latest`, this
-    /// assumes the node exists and returns `EntryNotFound` otherwise.
-    pub async fn load_latest_complete(
+    /// Returns the latest complete root node of the specified writer. Unlike
+    /// `load_latest_by_writer`, this assumes the node exists and returns `EntryNotFound` otherwise.
+    pub async fn load_latest_complete_by_writer(
         conn: &mut db::Connection,
         writer_id: PublicKey,
     ) -> Result<Self> {
@@ -139,7 +141,7 @@ impl RootNode {
         .ok_or(Error::EntryNotFound)
     }
 
-    /// Returns the replica ids of the nodes with the specified hash.
+    /// Returns the writer ids of the nodes with the specified hash.
     pub fn load_writer_ids<'a>(
         conn: &'a mut db::Connection,
         hash: &'a Hash,

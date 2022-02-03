@@ -294,7 +294,7 @@ impl Index {
         conn: &mut db::Connection,
         writer_id: PublicKey,
     ) -> Result<()> {
-        let node = RootNode::load_latest_complete(conn, writer_id).await?;
+        let node = RootNode::load_latest_complete_by_writer(conn, writer_id).await?;
 
         let created = match self.shared.branches.write().await.entry(writer_id) {
             Entry::Vacant(entry) => {
@@ -381,7 +381,7 @@ async fn load_branches(
 
     for row in rows {
         let id = row.get(0);
-        let root_node = if let Some(node) = RootNode::load_latest(conn, id).await? {
+        let root_node = if let Some(node) = RootNode::load_latest_by_writer(conn, id).await? {
             node
         } else {
             continue;
