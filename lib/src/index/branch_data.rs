@@ -271,10 +271,13 @@ mod tests {
     use super::*;
     use crate::{
         crypto::{cipher::SecretKey, sign::Keypair},
-        index,
+        index::{self, EMPTY_INNER_HASH},
         locator::Locator,
+        test_utils,
     };
+    use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
     use sqlx::Row;
+    use test_strategy::proptest;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn insert_and_read() {
@@ -371,6 +374,47 @@ mod tests {
         assert_eq!(0, count_branch_forest_entries(&mut conn).await);
     }
 
+    #[proptest]
+    fn empty_nodes_are_not_stored(
+        #[strategy(1usize..32)] leaf_count: usize,
+        #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
+    ) {
+        test_utils::run(empty_nodes_are_not_stored_case(leaf_count, rng_seed))
+    }
+
+    async fn empty_nodes_are_not_stored_case(leaf_count: usize, rng_seed: u64) {
+        let mut rng = StdRng::seed_from_u64(rng_seed);
+        let (mut conn, branch) = setup().await;
+        let write_keys = Keypair::generate(&mut rng);
+
+        let mut locators = Vec::new();
+
+        // Add blocks
+        for _ in 0..leaf_count {
+            let locator = rng.gen();
+            let block_id = rng.gen();
+            branch
+                .insert(&mut conn, &block_id, &locator, &write_keys)
+                .await
+                .unwrap();
+            locators.push(locator);
+
+            assert!(!has_empty_inner_node(&mut conn).await);
+        }
+
+        // Remove blocks
+        locators.shuffle(&mut rng);
+
+        for locator in locators {
+            branch
+                .remove(&mut conn, &locator, &write_keys)
+                .await
+                .unwrap();
+
+            assert!(!has_empty_inner_node(&mut conn).await);
+        }
+    }
+
     async fn count_branch_forest_entries(conn: &mut db::Connection) -> usize {
         sqlx::query(
             "SELECT
@@ -381,6 +425,15 @@ mod tests {
         .await
         .unwrap()
         .get::<u32, _>(0) as usize
+    }
+
+    async fn has_empty_inner_node(conn: &mut db::Connection) -> bool {
+        sqlx::query("SELECT 0 FROM snapshot_inner_nodes WHERE hash = ? LIMIT 1")
+            .bind(&*EMPTY_INNER_HASH)
+            .fetch_optional(conn)
+            .await
+            .unwrap()
+            .is_some()
     }
 
     async fn init_db() -> db::Connection {
