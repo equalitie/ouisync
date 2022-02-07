@@ -23,11 +23,11 @@ async fn receive_valid_root_node() {
 
     // Initially only the local branch exists
     let mut conn = index.pool.acquire().await.unwrap();
-    assert!(RootNode::load_latest(&mut conn, local_id)
+    assert!(RootNode::load_latest_by_writer(&mut conn, local_id)
         .await
         .unwrap()
         .is_some());
-    assert!(RootNode::load_latest(&mut conn, remote_id)
+    assert!(RootNode::load_latest_by_writer(&mut conn, remote_id)
         .await
         .unwrap()
         .is_none());
@@ -44,11 +44,11 @@ async fn receive_valid_root_node() {
 
     // Both the local and the remote branch now exist.
     let mut conn = index.pool.acquire().await.unwrap();
-    assert!(RootNode::load_latest(&mut conn, local_id)
+    assert!(RootNode::load_latest_by_writer(&mut conn, local_id)
         .await
         .unwrap()
         .is_some());
-    assert!(RootNode::load_latest(&mut conn, remote_id)
+    assert!(RootNode::load_latest_by_writer(&mut conn, remote_id)
         .await
         .unwrap()
         .is_some());
@@ -78,7 +78,7 @@ async fn receive_root_node_with_invalid_proof() {
 
     // The invalid root was not written to the db.
     let mut conn = index.pool.acquire().await.unwrap();
-    assert!(RootNode::load_latest(&mut conn, remote_id)
+    assert!(RootNode::load_latest_by_writer(&mut conn, remote_id)
         .await
         .unwrap()
         .is_none());
@@ -117,7 +117,7 @@ async fn receive_duplicate_root_node() {
         .unwrap();
 
     assert_eq!(
-        RootNode::load_all(&mut index.pool.acquire().await.unwrap(), remote_id, 2)
+        RootNode::load_all_by_writer(&mut index.pool.acquire().await.unwrap(), remote_id, 2)
             .filter(|node| future::ready(node.is_ok()))
             .count()
             .await,

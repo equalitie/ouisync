@@ -1,5 +1,6 @@
 use super::node::{
-    self, InnerNode, InnerNodeMap, LeafNodeSet, ModifyStatus, Summary, INNER_LAYER_COUNT,
+    self, InnerNode, InnerNodeMap, LeafNodeSet, ModifyStatus, Summary, EMPTY_INNER_HASH,
+    INNER_LAYER_COUNT,
 };
 use crate::{
     block::BlockId,
@@ -88,25 +89,7 @@ impl Path {
 
     pub fn remove_leaf(&mut self, locator: &Hash) -> Option<BlockId> {
         let block_id = self.leaves.remove(locator)?.block_id;
-        let mut start_layer = INNER_LAYER_COUNT;
-
-        if self.leaves.is_empty() {
-            for layer in (0..INNER_LAYER_COUNT).rev() {
-                let bucket = self.get_bucket(layer);
-                let nodes = &mut self.inner[layer];
-
-                nodes.remove(bucket);
-
-                if nodes.is_empty() {
-                    start_layer = layer;
-                } else {
-                    break;
-                }
-            }
-        }
-
-        self.recalculate(start_layer);
-
+        self.recalculate(INNER_LAYER_COUNT);
         Some(block_id)
     }
 
@@ -117,21 +100,31 @@ impl Path {
     /// Recalculate layers from start_layer all the way to the root.
     fn recalculate(&mut self, start_layer: usize) {
         for inner_layer in (0..start_layer).rev() {
-            let hash = self.compute_hash_for_layer(inner_layer + 1);
             let bucket = self.get_bucket(inner_layer);
-            self.inner[inner_layer].insert(bucket, InnerNode::new(hash, Summary::FULL));
+
+            if let Some(hash) = self.compute_hash_for_layer(inner_layer + 1) {
+                self.inner[inner_layer].insert(bucket, InnerNode::new(hash, Summary::FULL));
+            } else {
+                self.inner[inner_layer].remove(bucket);
+            }
         }
 
-        self.root_hash = self.compute_hash_for_layer(0);
+        self.root_hash = self.compute_hash_for_layer(0).unwrap_or(*EMPTY_INNER_HASH);
     }
 
     // Assumes layers higher than `layer` have their hashes/BlockVersions already
     // computed/assigned.
-    fn compute_hash_for_layer(&self, layer: usize) -> Hash {
+    fn compute_hash_for_layer(&self, layer: usize) -> Option<Hash> {
         if layer == INNER_LAYER_COUNT {
-            self.leaves.hash()
+            if self.leaves.is_empty() {
+                None
+            } else {
+                Some(self.leaves.hash())
+            }
+        } else if self.inner[layer].is_empty() {
+            None
         } else {
-            self.inner[layer].hash()
+            Some(self.inner[layer].hash())
         }
     }
 }

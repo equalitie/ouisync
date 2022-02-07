@@ -25,7 +25,7 @@ use crate::{
     error::{Error, Result},
     repository::RepositoryId,
 };
-use sqlx::Row;
+use futures_util::TryStreamExt;
 use std::{
     cmp::Ordering,
     collections::{hash_map::Entry, HashMap},
@@ -244,8 +244,9 @@ impl Index {
                     node
                 } else {
                     // node not present locally - we implicitly treat this as if the local replica
-                    // had zero blocks under this node.
-                    return true;
+                    // had zero blocks under this node unless the remote node is empty, in that
+                    // case we ignore it.
+                    return !remote_node.is_empty();
                 };
 
                 !local_node
@@ -294,7 +295,7 @@ impl Index {
         conn: &mut db::Connection,
         writer_id: PublicKey,
     ) -> Result<()> {
-        let node = RootNode::load_latest_complete(conn, writer_id).await?;
+        let node = RootNode::load_latest_complete_by_writer(conn, writer_id).await?;
 
         let created = match self.shared.branches.write().await.entry(writer_id) {
             Entry::Vacant(entry) => {
@@ -371,28 +372,15 @@ async fn load_branches(
     conn: &mut db::Connection,
     notify_tx: async_broadcast::Sender<PublicKey>,
 ) -> Result<HashMap<PublicKey, Arc<BranchData>>> {
-    // TODO: load the root nodes in a single query
+    RootNode::load_all_latest_complete(conn)
+        .map_ok(|node| {
+            let writer_id = node.proof.writer_id;
+            let branch = Arc::new(BranchData::new(node, notify_tx.clone()));
 
-    let rows = sqlx::query("SELECT DISTINCT writer_id FROM snapshot_root_nodes")
-        .fetch_all(&mut *conn)
-        .await?;
-
-    let mut branches = HashMap::new();
-
-    for row in rows {
-        let id = row.get(0);
-        let root_node = if let Some(node) = RootNode::load_latest(conn, id).await? {
-            node
-        } else {
-            continue;
-        };
-        let notify_tx = notify_tx.clone();
-        let branch = Arc::new(BranchData::new(root_node, notify_tx));
-
-        branches.insert(id, branch);
-    }
-
-    Ok(branches)
+            (writer_id, branch)
+        })
+        .try_collect()
+        .await
 }
 
 #[derive(Debug, Error)]
