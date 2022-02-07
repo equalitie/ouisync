@@ -59,6 +59,12 @@ impl Summary {
         let mut is_complete = true;
 
         for (_, node) in nodes {
+            // We should never store empty nodes, but in case someone sends us one anyway, ignore
+            // it.
+            if node.is_empty() {
+                continue;
+            }
+
             is_complete = is_complete && node.summary.is_complete;
             missing_blocks_count =
                 missing_blocks_count.saturating_add(node.summary.missing_blocks_count);

@@ -166,6 +166,10 @@ impl InnerNode {
         // The parent hash doesn't correspond to any known node
         Ok(Summary::INCOMPLETE)
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.hash == *EMPTY_INNER_HASH || self.hash == *EMPTY_LEAF_HASH
+    }
 }
 
 impl Hashable for InnerNode {

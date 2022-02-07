@@ -244,8 +244,9 @@ impl Index {
                     node
                 } else {
                     // node not present locally - we implicitly treat this as if the local replica
-                    // had zero blocks under this node.
-                    return true;
+                    // had zero blocks under this node unless the remote node is empty, in that
+                    // case we ignore it.
+                    return !remote_node.is_empty();
                 };
 
                 !local_node
