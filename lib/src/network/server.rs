@@ -99,6 +99,8 @@ impl Server {
         let inner_nodes = InnerNode::load_children(&mut conn, &parent_hash).await?;
         let leaf_nodes = LeafNode::load_children(&mut conn, &parent_hash).await?;
 
+        drop(conn);
+
         if !inner_nodes.is_empty() {
             self.stream.send(Response::InnerNodes(inner_nodes)).await;
         }
@@ -111,20 +113,22 @@ impl Server {
     }
 
     async fn handle_block(&self, id: BlockId) -> Result<()> {
+        let mut conn = self.index.pool.acquire().await?;
         let mut content = vec![0; BLOCK_SIZE].into_boxed_slice();
 
-        let nonce =
-            match block::read(&mut *self.index.pool.acquire().await?, &id, &mut content).await {
-                Ok(nonce) => nonce,
-                Err(Error::BlockNotFound(_)) => {
-                    // This is probably a request to an already deleted orphaned block from an
-                    // outdated branch. It should be safe to ignore this as the client will request
-                    // the correct blocks when it becomes up to date to our latest branch.
-                    log::warn!("requested block {:?} not found", id);
-                    return Ok(());
-                }
-                Err(error) => return Err(error),
-            };
+        let nonce = match block::read(&mut conn, &id, &mut content).await {
+            Ok(nonce) => nonce,
+            Err(Error::BlockNotFound(_)) => {
+                // This is probably a request to an already deleted orphaned block from an
+                // outdated branch. It should be safe to ignore this as the client will request
+                // the correct blocks when it becomes up to date to our latest branch.
+                log::warn!("requested block {:?} not found", id);
+                return Ok(());
+            }
+            Err(error) => return Err(error),
+        };
+
+        drop(conn);
 
         self.stream.send(Response::Block { content, nonce }).await;
 
