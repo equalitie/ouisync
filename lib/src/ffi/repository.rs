@@ -22,6 +22,9 @@ pub const ACCESS_MODE_BLIND: u8 = 0;
 pub const ACCESS_MODE_READ: u8 = 1;
 pub const ACCESS_MODE_WRITE: u8 = 2;
 
+// Merger is currently experimental.
+const ENABLE_MERGER: bool = false;
+
 pub struct RepositoryHolder {
     repository: Repository,
     registration: Registration,
@@ -56,7 +59,7 @@ pub unsafe extern "C" fn repository_create(
                 device_id,
                 MasterSecret::Password(master_password),
                 access_secrets,
-                true,
+                ENABLE_MERGER,
             )
             .await?;
 
@@ -95,7 +98,7 @@ pub unsafe extern "C" fn repository_open(
                 &store.into_std_path_buf().into(),
                 device_id,
                 master_password.map(MasterSecret::Password),
-                true,
+                ENABLE_MERGER,
             )
             .await?;
 
