@@ -1,6 +1,7 @@
 use android_log_sys::{LogPriority, __android_log_print};
 use android_logger::FilterBuilder;
 use log::{Level, LevelFilter};
+use once_cell::sync::Lazy;
 use os_pipe::{PipeReader, PipeWriter};
 use std::{
     ffi::{CStr, CString},
@@ -14,6 +15,12 @@ use std::{
     thread,
     thread::JoinHandle,
 };
+
+// Android log tag.
+// HACK: if the tag is anything other than 'flutter' then the logs won't show up in the app if
+// built in release mode.
+const TAG: &str = "flutter";
+// const TAG: &str = env!("CARGO_PKG_NAME");
 
 pub struct Logger {
     _stdout: StdRedirect,
@@ -130,18 +137,18 @@ fn print(priority: LogPriority, message: String) -> String {
 }
 
 fn print_cstr(priority: LogPriority, message: &CStr) {
-    let tag = CStr::from_bytes_with_nul(b"ouisync\0").unwrap();
+    static TAG_C: Lazy<CString> = Lazy::new(|| CString::new(TAG).unwrap());
 
     // SAFETY: both pointers point to valid c-style strings.
     unsafe {
-        __android_log_print(priority as raw::c_int, tag.as_ptr(), message.as_ptr());
+        __android_log_print(priority as raw::c_int, TAG_C.as_ptr(), message.as_ptr());
     }
 }
 
 fn setup_logger() {
     android_logger::init_once(
         android_logger::Config::default()
-            .with_tag(env!("CARGO_PKG_NAME"))
+            .with_tag(TAG)
             .with_min_level(Level::Trace)
             .with_filter(
                 FilterBuilder::new()
