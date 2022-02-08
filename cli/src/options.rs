@@ -20,9 +20,9 @@ pub(crate) struct Options {
     #[structopt(long, value_name = "PATH")]
     pub data_dir: Option<PathBuf>,
 
-    /// Disable Merger
+    /// Enable Merger (experimental)
     #[structopt(long)]
-    pub disable_merger: bool,
+    pub enable_merger: bool,
 
     #[structopt(flatten)]
     pub network: NetworkOptions,
