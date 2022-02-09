@@ -302,12 +302,13 @@ impl<'a> Operations<'a> {
             self.core.branch.id() != dst_branch.id() || self.core.head_locator != dst_head_locator
         );
 
-        let mut tx = self.core.db_pool().begin().await?;
-
         let read_key = self.core.branch.keys().read();
         // Take the write key from the dst branch, not the src branch, to protect us against
         // accidentally forking into remote branch (remote branches don't have write access).
         let write_keys = dst_branch.keys().write().ok_or(Error::PermissionDenied)?;
+
+        let mut tx = self.core.db_pool().begin().await?;
+        let mut dst_writer = dst_branch.data().write();
 
         for (src_locator, dst_locator) in self.core.locators().zip(dst_head_locator.sequence()) {
             let encoded_src_locator = src_locator.encode(read_key);
@@ -320,12 +321,12 @@ impl<'a> Operations<'a> {
                 .get(&mut tx, &encoded_src_locator)
                 .await?;
 
-            dst_branch
-                .data()
+            dst_writer
                 .insert(&mut tx, &block_id, &encoded_dst_locator, write_keys)
                 .await?;
         }
 
+        dst_writer.finish().await;
         tx.commit().await?;
 
         let new_core = Core {
@@ -469,13 +470,15 @@ impl<'a> Operations<'a> {
             .write()
             .ok_or(Error::PermissionDenied)?;
 
+        let mut writer = self.core.branch.data().write();
+
         for locator in locators {
-            self.core
-                .branch
-                .data()
+            writer
                 .remove(tx, &locator.encode(read_key), write_keys)
                 .await?;
         }
+
+        writer.finish().await;
 
         Ok(())
     }
