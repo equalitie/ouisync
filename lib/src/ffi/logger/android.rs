@@ -17,10 +17,9 @@ use std::{
 };
 
 // Android log tag.
-// HACK: if the tag is anything other than 'flutter' then the logs won't show up in the app if
-// built in release mode.
-const TAG: &str = "flutter";
-// const TAG: &str = env!("CARGO_PKG_NAME");
+// HACK: if the tag doesn't start with 'flutter' then the logs won't show up in the app if built in
+// release mode.
+const TAG: &str = concat!("flutter-", env!("CARGO_PKG_NAME"));
 
 pub struct Logger {
     _stdout: StdRedirect,
