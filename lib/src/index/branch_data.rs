@@ -100,45 +100,45 @@ impl BranchData {
         encoded_locator: &LocatorHash,
         write_keys: &Keypair,
     ) -> Result<()> {
-        let mut lock = self.root_node.write().await;
-        let mut path = self
-            .get_path(conn, &lock.proof.hash, encoded_locator)
+        let mut writer = self.write();
+        writer
+            .insert(conn, block_id, encoded_locator, write_keys)
             .await?;
-
-        // We shouldn't be inserting a block to a branch twice. If we do, the assumption is that we
-        // hit one in 2^sizeof(BlockId) chance that we randomly generated the same BlockId twice.
-        assert!(!path.has_leaf(block_id));
-
-        path.set_leaf(block_id);
-        self.write_path(conn, &mut lock, &path, write_keys).await
+        writer.finish().await;
+        Ok(())
     }
 
-    /// Retrieve `BlockId` of a block with the given encoded `Locator`.
-    pub async fn get(&self, conn: &mut db::Connection, encoded_locator: &Hash) -> Result<BlockId> {
-        let root_hash = self.root_node.read().await.proof.hash;
-        let path = self.get_path(conn, &root_hash, encoded_locator).await?;
-
-        match path.get_leaf() {
-            Some(block_id) => Ok(block_id),
-            None => Err(Error::EntryNotFound),
-        }
-    }
-
-    /// Remove the block identified by encoded_locator from the index. Returns the id of the
-    /// removed block.
+    /// Removes the block identified by encoded_locator from the index.
+    #[cfg(test)] // currently test only
     pub async fn remove(
         &self,
         conn: &mut db::Connection,
         encoded_locator: &Hash,
         write_keys: &Keypair,
     ) -> Result<()> {
-        let mut lock = self.root_node.write().await;
-        let mut path = self
-            .get_path(conn, &lock.proof.hash, encoded_locator)
-            .await?;
-        path.remove_leaf(encoded_locator)
-            .ok_or(Error::EntryNotFound)?;
-        self.write_path(conn, &mut lock, &path, write_keys).await
+        let mut writer = self.write();
+        writer.remove(conn, encoded_locator, write_keys).await?;
+        writer.finish().await;
+        Ok(())
+    }
+
+    /// Perform multiple `insert` and/or `remove` operations in a batch.
+    pub fn write(&self) -> Writer {
+        Writer {
+            branch: self,
+            notify: false,
+        }
+    }
+
+    /// Retrieve `BlockId` of a block with the given encoded `Locator`.
+    pub async fn get(&self, conn: &mut db::Connection, encoded_locator: &Hash) -> Result<BlockId> {
+        let root_hash = self.root_node.read().await.proof.hash;
+        let path = load_path(conn, &root_hash, encoded_locator).await?;
+
+        match path.get_leaf() {
+            Some(block_id) => Ok(block_id),
+            None => Err(Error::EntryNotFound),
+        }
     }
 
     /// Trigger a notification event from this branch.
@@ -161,109 +161,168 @@ impl BranchData {
             return Ok(());
         }
 
-        self.replace_root(conn, &mut old_root, new_root).await
-    }
-
-    pub async fn reload_root(&self, db: &mut db::Connection) -> Result<()> {
-        self.root_node.write().await.reload(db).await
-    }
-
-    async fn get_path(
-        &self,
-        conn: &mut db::Connection,
-        root_hash: &Hash,
-        encoded_locator: &LocatorHash,
-    ) -> Result<Path> {
-        let mut path = Path::new(*root_hash, *encoded_locator);
-
-        path.layers_found += 1;
-
-        let mut parent = path.root_hash;
-
-        for level in 0..INNER_LAYER_COUNT {
-            path.inner[level] = InnerNode::load_children(conn, &parent).await?;
-
-            if let Some(node) = path.inner[level].get(path.get_bucket(level)) {
-                parent = node.hash
-            } else {
-                return Ok(path);
-            };
-
-            path.layers_found += 1;
-        }
-
-        path.leaves = LeafNode::load_children(conn, &parent).await?;
-
-        if path.leaves.get(encoded_locator).is_some() {
-            path.layers_found += 1;
-        }
-
-        Ok(path)
-    }
-
-    async fn write_path(
-        &self,
-        conn: &mut db::Connection,
-        old_root: &mut RootNode,
-        path: &Path,
-        write_keys: &Keypair,
-    ) -> Result<()> {
-        let mut tx = conn.begin().await?;
-
-        for (i, inner_layer) in path.inner.iter().enumerate() {
-            if let Some(parent_hash) = path.hash_at_layer(i) {
-                for (bucket, node) in inner_layer {
-                    node.save(&mut tx, &parent_hash, bucket).await?;
-                }
-            }
-        }
-
-        let layer = Path::total_layer_count() - 1;
-        if let Some(parent_hash) = path.hash_at_layer(layer - 1) {
-            for leaf in &path.leaves {
-                leaf.save(&mut tx, &parent_hash).await?;
-            }
-        }
-
-        let new_proof = Proof::new(
-            old_root.proof.writer_id,
-            old_root
-                .proof
-                .version_vector
-                .clone()
-                .incremented(old_root.proof.writer_id),
-            path.root_hash,
-            write_keys,
-        );
-        let new_root = RootNode::create(&mut tx, new_proof, old_root.summary).await?;
-
-        self.replace_root(&mut tx, old_root, new_root).await?;
-
-        tx.commit().await?;
-
-        Ok(())
-    }
-
-    // Panics if `new_root` is not complete.
-    async fn replace_root(
-        &self,
-        conn: &mut db::Connection,
-        old_root: &mut RootNode,
-        new_root: RootNode,
-    ) -> Result<()> {
-        assert!(new_root.summary.is_complete());
-
-        // NOTE: It is not enough to remove only the old_root because there may be a non zero
-        // number of incomplete roots that have been downloaded prior to new_root becoming
-        // complete.
-        new_root.remove_recursively_all_older(conn).await?;
-
-        *old_root = new_root;
+        replace_root(conn, &mut old_root, new_root).await?;
 
         self.notify().await;
 
         Ok(())
     }
+
+    pub async fn reload_root(&self, db: &mut db::Connection) -> Result<()> {
+        self.root_node.write().await.reload(db).await
+    }
+}
+
+/// Handle to perform multiple mutable operations on `BranchData`.
+///
+/// Currently this only suppresses notification events until `finish` is called but in the future
+/// it could also actually batch the operations so only one snapshot is created.
+pub(crate) struct Writer<'a> {
+    branch: &'a BranchData,
+    notify: bool,
+}
+
+impl<'a> Writer<'a> {
+    /// Inserts a new block into the index.
+    pub async fn insert(
+        &mut self,
+        conn: &mut db::Connection,
+        block_id: &BlockId,
+        encoded_locator: &LocatorHash,
+        write_keys: &Keypair,
+    ) -> Result<()> {
+        let mut lock = self.branch.root_node.write().await;
+        let mut path = load_path(conn, &lock.proof.hash, encoded_locator).await?;
+
+        // We shouldn't be inserting a block to a branch twice. If we do, the assumption is that we
+        // hit one in 2^sizeof(BlockId) chance that we randomly generated the same BlockId twice.
+        assert!(!path.has_leaf(block_id));
+
+        path.set_leaf(block_id);
+        save_path(conn, &mut lock, &path, write_keys).await?;
+
+        self.notify = true;
+
+        Ok(())
+    }
+
+    /// Removes the block identified by encoded_locator from the index.
+    pub async fn remove(
+        &mut self,
+        conn: &mut db::Connection,
+        encoded_locator: &Hash,
+        write_keys: &Keypair,
+    ) -> Result<()> {
+        let mut lock = self.branch.root_node.write().await;
+        let mut path = load_path(conn, &lock.proof.hash, encoded_locator).await?;
+
+        path.remove_leaf(encoded_locator)
+            .ok_or(Error::EntryNotFound)?;
+        save_path(conn, &mut lock, &path, write_keys).await?;
+
+        self.notify = true;
+
+        Ok(())
+    }
+
+    /// Finishes the writes. If at least one operation was performed, emits a notification event.
+    pub async fn finish(self) {
+        if self.notify {
+            self.branch.notify().await;
+        }
+    }
+}
+
+async fn load_path(
+    conn: &mut db::Connection,
+    root_hash: &Hash,
+    encoded_locator: &LocatorHash,
+) -> Result<Path> {
+    let mut path = Path::new(*root_hash, *encoded_locator);
+
+    path.layers_found += 1;
+
+    let mut parent = path.root_hash;
+
+    for level in 0..INNER_LAYER_COUNT {
+        path.inner[level] = InnerNode::load_children(conn, &parent).await?;
+
+        if let Some(node) = path.inner[level].get(path.get_bucket(level)) {
+            parent = node.hash
+        } else {
+            return Ok(path);
+        };
+
+        path.layers_found += 1;
+    }
+
+    path.leaves = LeafNode::load_children(conn, &parent).await?;
+
+    if path.leaves.get(encoded_locator).is_some() {
+        path.layers_found += 1;
+    }
+
+    Ok(path)
+}
+
+async fn save_path(
+    conn: &mut db::Connection,
+    old_root: &mut RootNode,
+    path: &Path,
+    write_keys: &Keypair,
+) -> Result<()> {
+    let mut tx = conn.begin().await?;
+
+    for (i, inner_layer) in path.inner.iter().enumerate() {
+        if let Some(parent_hash) = path.hash_at_layer(i) {
+            for (bucket, node) in inner_layer {
+                node.save(&mut tx, &parent_hash, bucket).await?;
+            }
+        }
+    }
+
+    let layer = Path::total_layer_count() - 1;
+    if let Some(parent_hash) = path.hash_at_layer(layer - 1) {
+        for leaf in &path.leaves {
+            leaf.save(&mut tx, &parent_hash).await?;
+        }
+    }
+
+    let new_proof = Proof::new(
+        old_root.proof.writer_id,
+        old_root
+            .proof
+            .version_vector
+            .clone()
+            .incremented(old_root.proof.writer_id),
+        path.root_hash,
+        write_keys,
+    );
+    let new_root = RootNode::create(&mut tx, new_proof, old_root.summary).await?;
+
+    replace_root(&mut tx, old_root, new_root).await?;
+
+    tx.commit().await?;
+
+    Ok(())
+}
+
+// Panics if `new_root` is not complete.
+async fn replace_root(
+    conn: &mut db::Connection,
+    old_root: &mut RootNode,
+    new_root: RootNode,
+) -> Result<()> {
+    assert!(new_root.summary.is_complete());
+
+    // NOTE: It is not enough to remove only the old_root because there may be a non zero
+    // number of incomplete roots that have been downloaded prior to new_root becoming
+    // complete.
+    new_root.remove_recursively_all_older(conn).await?;
+
+    *old_root = new_root;
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -316,6 +375,7 @@ mod tests {
                 .insert(&mut conn, &b1, &encoded_locator, &write_keys)
                 .await
                 .unwrap();
+
             branch
                 .insert(&mut conn, &b2, &encoded_locator, &write_keys)
                 .await
@@ -393,10 +453,12 @@ mod tests {
         for _ in 0..leaf_count {
             let locator = rng.gen();
             let block_id = rng.gen();
+
             branch
                 .insert(&mut conn, &block_id, &locator, &write_keys)
                 .await
                 .unwrap();
+
             locators.push(locator);
 
             assert!(!has_empty_inner_node(&mut conn).await);

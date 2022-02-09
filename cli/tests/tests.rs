@@ -133,6 +133,9 @@ fn concurrent_read_and_write_file(size: usize) {
     // TODO: check the files are identical
 }
 
+// This used to cause deadlock. For the deadlock to be triggered, the file to be deleted must be
+// large enough so that the number of blocks it consists of is greater than the capacity of the
+// notification channel.
 #[test]
 fn concurrent_read_and_delete_file() {
     let a = Bin::start(0, [], None);
