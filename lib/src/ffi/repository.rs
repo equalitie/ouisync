@@ -190,12 +190,6 @@ pub unsafe extern "C" fn repository_subscribe(
     UniqueHandle::new(Box::new(handle))
 }
 
-/// Cancel the repository change notifications subscription.
-#[no_mangle]
-pub unsafe extern "C" fn subscription_cancel(handle: UniqueHandle<JoinHandle<()>>) {
-    handle.release().abort();
-}
-
 #[no_mangle]
 pub unsafe extern "C" fn repository_is_dht_enabled(
     handle: SharedHandle<RepositoryHolder>,

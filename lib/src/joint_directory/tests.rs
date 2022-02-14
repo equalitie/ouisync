@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     access_control::WriteSecrets, blob::Blob, branch::Branch, crypto::sign::PublicKey, db,
-    directory::EntryData, index::BranchData, locator::Locator, repository,
+    directory::EntryData, index::BranchData, locator::Locator, repository, sync::broadcast,
     version_vector::VersionVector,
 };
 use assert_matches::assert_matches;
@@ -862,7 +862,7 @@ async fn setup_with_rng(mut rng: StdRng, branch_count: usize) -> Vec<Branch> {
     let pool = repository::create_db(&db::Store::Temporary).await.unwrap();
     let pool = &pool;
 
-    let (notify_tx, _) = async_broadcast::broadcast(1);
+    let notify_tx = broadcast::Sender::new(1);
     let secrets = WriteSecrets::generate(&mut rng);
 
     future::join_all((0..branch_count).map(|_| {

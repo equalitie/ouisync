@@ -6,5 +6,6 @@ mod directory;
 mod error;
 mod file;
 mod logger;
+mod network;
 mod repository;
 mod session;

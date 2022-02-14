@@ -2,7 +2,7 @@ use super::{
     dart::{DartCObject, PostDartCObjectFn},
     error::{ErrorCode, ToErrorCode},
     logger::Logger,
-    utils::{self, Port},
+    utils::{self, Port, UniqueHandle},
 };
 use crate::{
     device_id::{self, DeviceId},
@@ -16,7 +16,10 @@ use std::{
     path::PathBuf,
     ptr,
 };
-use tokio::runtime::{self, Runtime};
+use tokio::{
+    runtime::{self, Runtime},
+    task::JoinHandle,
+};
 
 /// Opens the ouisync session. `post_c_object_fn` should be a pointer to the dart's
 /// `NativeApi.postCObject` function cast to `Pointer<Void>` (the casting is necessary to work
@@ -84,6 +87,12 @@ pub unsafe extern "C" fn session_close() {
     }
 }
 
+/// Cancel a notification subscription.
+#[no_mangle]
+pub unsafe extern "C" fn subscription_cancel(handle: UniqueHandle<JoinHandle<()>>) {
+    handle.release().abort();
+}
+
 pub(super) unsafe fn with<T, F>(port: Port<Result<T>>, f: F)
 where
     F: FnOnce(Context<T>) -> Result<()>,
@@ -142,6 +151,10 @@ impl Session {
 
     pub(super) fn sender(&self) -> Sender {
         self.sender
+    }
+
+    pub(super) fn network(&self) -> &Network {
+        &self.network
     }
 }
 

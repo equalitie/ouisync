@@ -143,6 +143,7 @@ mod tests {
         db,
         index::BranchData,
         repository,
+        sync::broadcast,
     };
     use std::sync::Arc;
 
@@ -253,7 +254,7 @@ mod tests {
     }
 
     async fn create_branch(pool: db::Pool, keys: AccessKeys) -> Branch {
-        let (notify_tx, _) = async_broadcast::broadcast(1);
+        let notify_tx = broadcast::Sender::new(1);
         let branch_data = BranchData::create(
             &mut pool.acquire().await.unwrap(),
             PublicKey::random(),

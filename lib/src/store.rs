@@ -68,6 +68,7 @@ mod tests {
         index::{self, node_test_utils::Snapshot, BranchData, Proof, Summary},
         locator::Locator,
         repository::RepositoryId,
+        sync::broadcast,
         version_vector::VersionVector,
     };
     use assert_matches::assert_matches;
@@ -79,7 +80,7 @@ mod tests {
 
         let read_key = SecretKey::random();
         let write_keys = Keypair::random();
-        let (notify_tx, _) = async_broadcast::broadcast(1);
+        let notify_tx = broadcast::Sender::new(1);
 
         let branch0 = BranchData::create(
             &mut conn,

@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     access_control::WriteSecrets, block, error::Error, index::BranchData, repository,
-    sign::PublicKey, test_utils,
+    sign::PublicKey, sync::broadcast, test_utils,
 };
 use assert_matches::assert_matches;
 use proptest::collection::vec;
@@ -463,7 +463,7 @@ async fn fork_case(
 ) {
     let (mut rng, src_branch) = setup(rng_seed).await;
 
-    let (notify_tx, _) = async_broadcast::broadcast(1);
+    let notify_tx = broadcast::Sender::new(1);
     let dst_branch = Arc::new(
         BranchData::create(
             &mut src_branch.db_pool().acquire().await.unwrap(),
@@ -534,7 +534,7 @@ async fn setup(rng_seed: u64) -> (StdRng, Branch) {
     let secrets = WriteSecrets::generate(&mut rng);
     let pool = repository::create_db(&db::Store::Temporary).await.unwrap();
 
-    let (notify_tx, _) = async_broadcast::broadcast(1);
+    let notify_tx = broadcast::Sender::new(1);
     let branch = BranchData::create(
         &mut pool.acquire().await.unwrap(),
         PublicKey::random(),

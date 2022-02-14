@@ -26,6 +26,7 @@ use crate::{
     index::Index,
     repository::RepositoryId,
     scoped_task::{self, ScopedJoinHandle, ScopedTaskSet},
+    sync::broadcast,
 };
 use btdht::{InfoHash, INFO_HASH_LEN};
 use slab::Slab;
@@ -39,6 +40,7 @@ use std::{
     time::Duration,
 };
 use structopt::StructOpt;
+use thiserror::Error;
 use tokio::{
     net::{TcpListener, TcpStream},
     sync::{mpsc, Mutex},
@@ -161,6 +163,7 @@ impl Network {
             dht_discovery,
             dht_peer_found_tx,
             connection_deduplicator: ConnectionDeduplicator::new(),
+            event_tx: broadcast::Sender::new(32),
             tasks: Arc::downgrade(&tasks),
         });
 
@@ -209,6 +212,14 @@ impl Network {
     }
 }
 
+/// Network event
+#[derive(Clone)]
+#[repr(u8)]
+pub enum NetworkEvent {
+    /// Attempt to connect to a peer whose protocol version is higher than ours.
+    ProtocolVersionMismatch = 0,
+}
+
 /// Handle for the network which can be cheaply cloned and sent to other threads.
 #[derive(Clone)]
 pub struct Handle {
@@ -239,6 +250,11 @@ impl Handle {
             inner: self.inner.clone(),
             key,
         }
+    }
+
+    /// Subscribe to network notification events.
+    pub fn subscribe(&self) -> broadcast::Receiver<NetworkEvent> {
+        self.inner.event_tx.subscribe()
     }
 }
 
@@ -308,6 +324,7 @@ struct Inner {
     dht_discovery: Option<DhtDiscovery>,
     dht_peer_found_tx: mpsc::UnboundedSender<SocketAddr>,
     connection_deduplicator: ConnectionDeduplicator,
+    event_tx: broadcast::Sender<NetworkEvent>,
     // Note that unwrapping the upgraded weak pointer should be fine because if the underlying Arc
     // was Dropped, we would not be asking for the upgrade in the first place.
     tasks: Weak<Tasks>,
@@ -495,7 +512,15 @@ impl Inner {
         let that_runtime_id =
             match perform_handshake(&mut stream, VERSION, self.this_runtime_id).await {
                 Ok(writer_id) => writer_id,
-                Err(error) => {
+                Err(error @ HandshakeError::ProtocolVersionMismatch) => {
+                    log::error!("Failed to perform handshake: {}", error);
+                    self.event_tx
+                        .broadcast(NetworkEvent::ProtocolVersionMismatch)
+                        .await
+                        .unwrap_or(());
+                    return;
+                }
+                Err(HandshakeError::Fatal(error)) => {
                     log::error!("Failed to perform handshake: {}", error);
                     return;
                 }
@@ -560,20 +585,25 @@ async fn perform_handshake(
     stream: &mut TcpStream,
     this_version: Version,
     this_runtime_id: RuntimeId,
-) -> io::Result<RuntimeId> {
+) -> Result<RuntimeId, HandshakeError> {
     this_version.write_into(stream).await?;
     this_runtime_id.write_into(stream).await?;
 
     let that_version = Version::read_from(stream).await?;
 
     if that_version > this_version {
-        return Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "unsupported protocol version",
-        ));
+        return Err(HandshakeError::ProtocolVersionMismatch);
     }
 
-    RuntimeId::read_from(stream).await
+    Ok(RuntimeId::read_from(stream).await?)
+}
+
+#[derive(Debug, Error)]
+enum HandshakeError {
+    #[error("protocol version mismatch")]
+    ProtocolVersionMismatch,
+    #[error("fatal error")]
+    Fatal(#[from] io::Error),
 }
 
 #[derive(Clone, Copy, Debug)]
