@@ -24,6 +24,7 @@ use crate::{
     debug_printer::DebugPrinter,
     error::{Error, Result},
     repository::RepositoryId,
+    sync::broadcast,
 };
 use futures_util::TryStreamExt;
 use std::{
@@ -44,7 +45,7 @@ pub struct Index {
 
 impl Index {
     pub(crate) async fn load(pool: db::Pool, repository_id: RepositoryId) -> Result<Self> {
-        let (notify_tx, notify_rx) = async_broadcast::broadcast(32);
+        let notify_tx = broadcast::Sender::new(32);
         let branches = load_branches(&mut *pool.acquire().await?, notify_tx.clone()).await?;
 
         Ok(Self {
@@ -53,7 +54,6 @@ impl Index {
                 repository_id,
                 branches: RwLock::new(branches),
                 notify_tx,
-                notify_rx: notify_rx.deactivate(),
             }),
         })
     }
@@ -86,8 +86,8 @@ impl Index {
     }
 
     /// Subscribe to change notification from all current and future branches.
-    pub(crate) fn subscribe(&self) -> async_broadcast::Receiver<PublicKey> {
-        self.shared.notify_rx.activate_cloned()
+    pub(crate) fn subscribe(&self) -> broadcast::Receiver<PublicKey> {
+        self.shared.notify_tx.subscribe()
     }
 
     /// Signal to all subscribers of this index that it is about to be terminated.
@@ -316,7 +316,11 @@ impl Index {
         };
 
         if created {
-            broadcast(&self.shared.notify_tx, writer_id).await;
+            self.shared
+                .notify_tx
+                .broadcast(writer_id)
+                .await
+                .unwrap_or(());
         }
 
         Ok(())
@@ -350,27 +354,15 @@ impl Index {
 struct Shared {
     repository_id: RepositoryId,
     branches: RwLock<Branches>,
-    notify_tx: async_broadcast::Sender<PublicKey>,
-    notify_rx: async_broadcast::InactiveReceiver<PublicKey>,
+    notify_tx: broadcast::Sender<PublicKey>,
 }
 
 /// Container for all known branches (local and remote)
 pub(crate) type Branches = HashMap<PublicKey, Arc<BranchData>>;
 
-async fn broadcast<T: Clone>(tx: &async_broadcast::Sender<T>, value: T) {
-    // don't await if there are only inactive receivers.
-    // FIXME: this is racy, because all active receivers might get deactivated after this check but
-    //        before the call to `broadcast`. Is there a better way?
-    if tx.receiver_count() == 0 {
-        return;
-    }
-
-    tx.broadcast(value).await.map(|_| ()).unwrap_or(())
-}
-
 async fn load_branches(
     conn: &mut db::Connection,
-    notify_tx: async_broadcast::Sender<PublicKey>,
+    notify_tx: broadcast::Sender<PublicKey>,
 ) -> Result<HashMap<PublicKey, Arc<BranchData>>> {
     RootNode::load_all_latest_complete(conn)
         .map_ok(|node| {

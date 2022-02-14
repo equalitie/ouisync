@@ -30,6 +30,7 @@ mod path;
 mod repository;
 mod scoped_task;
 mod store;
+mod sync;
 #[cfg(test)]
 mod test_utils;
 mod version_vector;

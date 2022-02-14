@@ -1,5 +1,4 @@
 use super::{
-    broadcast,
     node::{InnerNode, LeafNode, RootNode, INNER_LAYER_COUNT},
     path::Path,
     proof::Proof,
@@ -12,6 +11,7 @@ use crate::{
     },
     db,
     error::{Error, Result},
+    sync::broadcast,
     version_vector::VersionVector,
 };
 use sqlx::Acquire;
@@ -22,12 +22,12 @@ type LocatorHash = Hash;
 pub(crate) struct BranchData {
     writer_id: PublicKey, // copied from `root_node` to allow accessing it without locking.
     root_node: RwLock<RootNode>,
-    notify_tx: async_broadcast::Sender<PublicKey>,
+    notify_tx: broadcast::Sender<PublicKey>,
 }
 
 impl BranchData {
     /// Construct a branch data using the provided root node.
-    pub fn new(root_node: RootNode, notify_tx: async_broadcast::Sender<PublicKey>) -> Self {
+    pub fn new(root_node: RootNode, notify_tx: broadcast::Sender<PublicKey>) -> Self {
         assert!(root_node.summary.is_complete());
 
         Self {
@@ -43,7 +43,7 @@ impl BranchData {
         conn: &mut db::Connection,
         writer_id: PublicKey,
         write_keys: &Keypair,
-        notify_tx: async_broadcast::Sender<PublicKey>,
+        notify_tx: broadcast::Sender<PublicKey>,
     ) -> Result<Self> {
         use super::node::Summary;
 
@@ -143,7 +143,7 @@ impl BranchData {
 
     /// Trigger a notification event from this branch.
     pub async fn notify(&self) {
-        broadcast(&self.notify_tx, self.writer_id).await
+        self.notify_tx.broadcast(self.writer_id).await.unwrap_or(())
     }
 
     /// Update the root node of this branch. Does nothing if the version of `new_root` is not
@@ -513,7 +513,7 @@ mod tests {
     async fn setup() -> (db::Connection, BranchData) {
         let mut conn = init_db().await;
 
-        let (notify_tx, _) = async_broadcast::broadcast(1);
+        let notify_tx = broadcast::Sender::new(1);
         let branch = BranchData::create(
             &mut conn,
             PublicKey::random(),
