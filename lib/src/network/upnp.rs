@@ -1,15 +1,19 @@
 use crate::scoped_task::{self, ScopedJoinHandle};
 use futures_util::TryStreamExt;
+use futures_util::{Stream, StreamExt};
 use rupnp::{
+    Device,
     http::Uri,
     ssdp::{SearchTarget, URN},
     Service,
 };
 use std::{
     collections::HashMap,
+    future::Future,
     fmt, io, net,
     sync::{Arc, Mutex},
     time::Duration,
+    pin::Pin,
 };
 
 #[derive(Clone, Copy)]
@@ -63,7 +67,7 @@ impl PortForwarder {
     }
 
     async fn run(mappings: Vec<Mapping>) -> Result<(), rupnp::Error> {
-        const DISCOVERY_DURATION: Duration = Duration::from_secs(3);
+        const DISCOVERY_DURATION: Duration = Duration::from_secs(5);
         const SLEEP_DURATION: Duration = Duration::from_secs(10 * 60);
 
         let handles = Arc::new(Mutex::new(HashMap::new()));
@@ -71,51 +75,87 @@ impl PortForwarder {
         // Periodically check for new devices: maybe UPnP was enabled later after the app started,
         // maybe the device was swapped for another one,...
         loop {
-            let devices = rupnp::discover(&SearchTarget::RootDevice, DISCOVERY_DURATION).await?;
-            let mut devices = Box::pin(devices);
+            let device_urls = discover_device_urls(&SearchTarget::RootDevice, DISCOVERY_DURATION).await?;
+            let mut device_urls = Box::pin(device_urls);
 
-            while let Some(device) = devices.try_next().await? {
-                // We are only interested in IGD.
-                if device.device_type().typ() != "InternetGatewayDevice" {
-                    continue;
-                }
+            // NOTE: don't use `try_next().await?` here from the TryStreamExt interface as that
+            // will quit on the first device that fails to respond. Whereas what we want is to just
+            // ignore the device and go on trying the next one in line.
+            while let Some(result) = device_urls.next().await {
+                let device_url = match result {
+                    Ok(device_url) => device_url,
+                    Err(e) => {
+                        log::debug!("Failed to contact one of the UPnP devices: {:?}", e);
+                        continue;
+                    }
+                };
 
-                if let Some((service, version)) = find_connection_service(&device) {
-                    let url = device.url().clone();
+                let mappings = mappings.clone();
+                Self::spawn_if_not_running(device_url.clone(), &handles, move || {
 
-                    let per_igd_port_forwarder = PerIGDPortForwarder {
-                        device_url: url.clone(),
-                        service,
-                        mappings: mappings.clone(),
-                        _version: version,
-                    };
+                    Box::pin(async move {
+                        let device = Device::from_url(device_url).await?;
 
-                    let weak_handles = Arc::downgrade(&handles);
+                        // We are only interested in IGD.
+                        if device.device_type().typ() != "InternetGatewayDevice" {
+                            return Ok(());
+                        }
 
-                    handles.lock().unwrap().entry(url).or_insert_with(|| {
-                        scoped_task::spawn(async move {
-                            let r = per_igd_port_forwarder.run().await;
+                        if let Some((service, version)) = find_connection_service(&device) {
+                            let url = device.url().clone();
 
-                            log::warn!("UPnP port forwarding on IGD ended ({:?})", r);
+                            let per_igd_port_forwarder = PerIGDPortForwarder {
+                                device_url: url.clone(),
+                                service,
+                                mappings,
+                                _version: version,
+                            };
 
-                            if let Some(handles) = weak_handles.upgrade() {
-                                handles
-                                    .lock()
-                                    .unwrap()
-                                    .remove(&per_igd_port_forwarder.device_url);
+                            match per_igd_port_forwarder.run().await {
+                                Ok(_) => log::debug!("UPnP port forwarding on IGD ended {:?}", device.url()),
+                                Err(e) => log::warn!("UPnP port forwarding on IGD ended {:?} ({:?})", device.url(), e),
                             }
-                        })
-                    });
-                } else {
-                    log::warn!(
-                        "UPnP port forwarding failed: non-compliant device '{}'",
-                        device.friendly_name()
-                    );
-                }
+                        } else {
+                            log::debug!(
+                                "UPnP port forwarding failed: non-compliant device '{}'",
+                                device.friendly_name()
+                            );
+                        }
+
+                        Ok(())
+                    })
+                });
             }
 
             tokio::time::sleep(SLEEP_DURATION).await;
         }
+    }
+
+    fn spawn_if_not_running<JobMaker>(
+            device_url: Uri,
+            handles: &Arc<Mutex<HashMap<Uri, ScopedJoinHandle<()>>>>,
+            job: JobMaker)
+        where
+            JobMaker: FnOnce() -> Pin<Box<dyn Future<Output = Result<(), rupnp::Error>> + Send>> + Send + 'static
+    {
+        let weak_handles = Arc::downgrade(handles);
+
+        handles.lock().unwrap().entry(device_url.clone()).or_insert_with(|| {
+            scoped_task::spawn(async move {
+                let result = job().await;
+
+                if let Err(e) = result {
+                    log::warn!("UPnP port forwarding on IGD {:?} ended ({:?})", device_url, e);
+                }
+
+                if let Some(handles) = weak_handles.upgrade() {
+                    handles
+                        .lock()
+                        .unwrap()
+                        .remove(&device_url);
+                }
+            })
+        });
     }
 }
 
@@ -344,4 +384,14 @@ impl std::error::Error for InvalidResponse {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         None
     }
+}
+
+pub async fn discover_device_urls(
+    search_target: &SearchTarget,
+    timeout: Duration,
+) -> Result<impl Stream<Item = Result<Uri, rupnp::Error>>, rupnp::Error> {
+    Ok(ssdp_client::search(search_target, timeout, 3)
+        .await?
+        .map_err(rupnp::Error::SSDPError)
+        .map(|res| Ok(res?.location().parse()?)))
 }
