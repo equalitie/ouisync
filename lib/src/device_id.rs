@@ -2,8 +2,7 @@ use crate::error::{Error, Result};
 use rand::{rngs::OsRng, Rng};
 use std::io::{self, ErrorKind};
 use std::path::Path;
-use tokio::fs::{self, File, OpenOptions};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use crate::single_value_config::SingleValueConfig;
 
 define_byte_array_wrapper! {
     /// DeviceId uniquely identifies machines on which this software is running. Its only purpose is
@@ -23,52 +22,40 @@ derive_rand_for_wrapper!(DeviceId);
 derive_sqlx_traits_for_byte_array_wrapper!(DeviceId);
 
 pub async fn get_or_create(path: &Path) -> Result<DeviceId> {
-    match File::open(path).await {
-        Ok(file) => parse(file).await.map_err(Error::DeviceIdConfig),
+    let cfg = SingleValueConfig::new(path, CONFIG_COMMENT);
+
+    match cfg.get::<String>().await {
+        Ok(string) => hex_decode(string),
         Err(e) if e.kind() == ErrorKind::NotFound => {
-            create(path).await.map_err(Error::DeviceIdConfig)
-        }
-        Err(e) => Err(Error::DeviceIdConfig(e)),
+            let new_id = OsRng.gen::<DeviceId>();
+            cfg.set(&hex::encode(new_id.as_ref())).await.map(|_| new_id)
+        },
+        Err(e) => Err(e)
     }
+    .map_err(Error::DeviceIdConfig)
 }
 
-pub async fn parse(file: File) -> io::Result<DeviceId> {
-    let reader = BufReader::new(file);
-    let mut lines = reader.lines();
-
-    while let Some(line) = lines.next_line().await? {
-        let line = line.trim();
-
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-
-        let bytes = match hex::decode(line) {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                return Err(io::Error::new(
-                    ErrorKind::InvalidData,
-                    format!("failed to parse from hex {:?}: {:?}", line, e),
-                ))
-            }
-        };
-
-        return match bytes.try_into() {
-            Ok(bytes) => Ok(DeviceId(bytes)),
-            Err(e) => Err(io::Error::new(
+fn hex_decode(hex: String) -> io::Result<DeviceId> {
+    let bytes = match hex::decode(&hex) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            return Err(io::Error::new(
                 ErrorKind::InvalidData,
-                format!("device ID has incorrect size {:?}: {:?}", line, e),
-            )),
-        };
+                format!("failed to decode from hex {:?}: {:?}", hex, e),
+            ))
+        }
+    };
+    
+    match bytes.try_into() {
+        Ok(bytes) => Ok(DeviceId(bytes)),
+        Err(e) => Err(io::Error::new(
+            ErrorKind::InvalidData,
+            format!("device ID has incorrect size {:?}: {:?}", hex, e),
+        )),
     }
-
-    Err(io::Error::new(
-        ErrorKind::InvalidData,
-        "no device ID found in the device ID config file",
-    ))
 }
 
-const COMMENT: &str = "\
+const CONFIG_COMMENT: &str = "\
 # The value stored in this file is the device ID. It is uniquelly generated for each device and
 # its only purpose is to detect when a database has been migrated from one device to another.
 #
@@ -80,21 +67,3 @@ const COMMENT: &str = "\
 #
 # Device ID is never used in construction of network messages and thus can't be used for peer
 # identification.";
-
-pub async fn create(path: &Path) -> std::io::Result<DeviceId> {
-    if let Some(dir) = path.parent() {
-        fs::create_dir_all(dir).await?;
-    }
-
-    // TODO: Consider doing this atomically by first writing to a .tmp file and then rename once
-    // writing is done.
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .await?;
-    let id = OsRng.gen::<DeviceId>();
-    let content = format!("{}\n\n{}\n", COMMENT, hex::encode(id.as_ref()));
-    file.write_all(content.as_ref()).await?;
-    Ok(id)
-}
