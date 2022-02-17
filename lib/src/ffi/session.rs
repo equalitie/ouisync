@@ -134,7 +134,12 @@ impl Session {
         logger: Logger,
     ) -> Result<Self> {
         let device_id = device_id::get_or_create(&device_id_config_path).await?;
-        let network = Network::new(&NetworkOptions::default()).await?;
+
+        // TODO: Get the configs path as the argument instead of deriving it from the path to the
+        // device_id config file.
+        let configs_path = device_id_config_path.parent();
+
+        let network = Network::new(&NetworkOptions::default(), configs_path).await?;
 
         Ok(Self {
             runtime,

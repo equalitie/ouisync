@@ -1,7 +1,8 @@
 use crate::APP_NAME;
 use anyhow::{format_err, Context, Error, Result};
 use ouisync_lib::{
-    cipher::SecretKey, AccessMode, MasterSecret, NetworkOptions, Password, ShareToken, Store,
+    cipher::SecretKey, device_id, AccessMode, MasterSecret, NetworkOptions, Password, ShareToken,
+    Store,
 };
 use std::{
     path::{Path, PathBuf},
@@ -97,7 +98,7 @@ impl Options {
 
     /// Path to the config database.
     pub fn device_id_config_path(&self) -> Result<PathBuf> {
-        Ok(self.data_dir()?.join("device_id.conf"))
+        Ok(self.data_dir()?.join(device_id::CONFIG_FILE_NAME))
     }
 
     /// Path to the database of the repository with the specified name.
