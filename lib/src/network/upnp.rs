@@ -2,18 +2,18 @@ use crate::scoped_task::{self, ScopedJoinHandle};
 use futures_util::TryStreamExt;
 use futures_util::{Stream, StreamExt};
 use rupnp::{
-    Device,
     http::Uri,
     ssdp::{SearchTarget, URN},
-    Service,
+    Device, Service,
 };
 use std::{
     collections::HashMap,
+    fmt,
     future::Future,
-    fmt, io, net,
+    io, net,
+    pin::Pin,
     sync::{Arc, Mutex},
     time::Duration,
-    pin::Pin,
 };
 
 #[derive(Clone, Copy)]
@@ -75,7 +75,8 @@ impl PortForwarder {
         // Periodically check for new devices: maybe UPnP was enabled later after the app started,
         // maybe the device was swapped for another one,...
         loop {
-            let device_urls = discover_device_urls(&SearchTarget::RootDevice, DISCOVERY_DURATION).await?;
+            let device_urls =
+                discover_device_urls(&SearchTarget::RootDevice, DISCOVERY_DURATION).await?;
             let mut device_urls = Box::pin(device_urls);
 
             // NOTE: don't use `try_next().await?` here from the TryStreamExt interface as that
@@ -92,7 +93,6 @@ impl PortForwarder {
 
                 let mappings = mappings.clone();
                 Self::spawn_if_not_running(device_url.clone(), &handles, move || {
-
                     Box::pin(async move {
                         let device = Device::from_url(device_url).await?;
 
@@ -112,8 +112,15 @@ impl PortForwarder {
                             };
 
                             match per_igd_port_forwarder.run().await {
-                                Ok(_) => log::debug!("UPnP port forwarding on IGD ended {:?}", device.url()),
-                                Err(e) => log::warn!("UPnP port forwarding on IGD ended {:?} ({:?})", device.url(), e),
+                                Ok(_) => log::debug!(
+                                    "UPnP port forwarding on IGD ended {:?}",
+                                    device.url()
+                                ),
+                                Err(e) => log::warn!(
+                                    "UPnP port forwarding on IGD ended {:?} ({:?})",
+                                    device.url(),
+                                    e
+                                ),
                             }
                         } else {
                             log::debug!(
@@ -127,35 +134,43 @@ impl PortForwarder {
                 });
             }
 
+            // TODO: Break from this sleep when all above coroutines stop.
             tokio::time::sleep(SLEEP_DURATION).await;
         }
     }
 
     fn spawn_if_not_running<JobMaker>(
-            device_url: Uri,
-            handles: &Arc<Mutex<HashMap<Uri, ScopedJoinHandle<()>>>>,
-            job: JobMaker)
-        where
-            JobMaker: FnOnce() -> Pin<Box<dyn Future<Output = Result<(), rupnp::Error>> + Send>> + Send + 'static
+        device_url: Uri,
+        handles: &Arc<Mutex<HashMap<Uri, ScopedJoinHandle<()>>>>,
+        job: JobMaker,
+    ) where
+        JobMaker: FnOnce() -> Pin<Box<dyn Future<Output = Result<(), rupnp::Error>> + Send>>
+            + Send
+            + 'static,
     {
         let weak_handles = Arc::downgrade(handles);
 
-        handles.lock().unwrap().entry(device_url.clone()).or_insert_with(|| {
-            scoped_task::spawn(async move {
-                let result = job().await;
+        handles
+            .lock()
+            .unwrap()
+            .entry(device_url.clone())
+            .or_insert_with(|| {
+                scoped_task::spawn(async move {
+                    let result = job().await;
 
-                if let Err(e) = result {
-                    log::warn!("UPnP port forwarding on IGD {:?} ended ({:?})", device_url, e);
-                }
+                    if let Err(e) = result {
+                        log::warn!(
+                            "UPnP port forwarding on IGD {:?} ended ({:?})",
+                            device_url,
+                            e
+                        );
+                    }
 
-                if let Some(handles) = weak_handles.upgrade() {
-                    handles
-                        .lock()
-                        .unwrap()
-                        .remove(&device_url);
-                }
-            })
-        });
+                    if let Some(handles) = weak_handles.upgrade() {
+                        handles.lock().unwrap().remove(&device_url);
+                    }
+                })
+            });
     }
 }
 
