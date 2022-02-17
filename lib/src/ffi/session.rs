@@ -27,7 +27,7 @@ use tokio::{
 #[no_mangle]
 pub unsafe extern "C" fn session_open(
     post_c_object_fn: *const c_void,
-    device_id_config_path: *const c_char,
+    configs_path: *const c_char,
     port: Port<Result<()>>,
 ) {
     let sender = Sender {
@@ -57,8 +57,8 @@ pub unsafe extern "C" fn session_open(
         }
     };
 
-    let device_id_config_path = match utils::ptr_to_native_path_buf(device_id_config_path) {
-        Ok(device_id_config_path) => device_id_config_path,
+    let configs_path = match utils::ptr_to_native_path_buf(configs_path) {
+        Ok(configs_path) => configs_path,
         Err(error) => {
             sender.send_result(port, Err(error));
             return;
@@ -68,7 +68,7 @@ pub unsafe extern "C" fn session_open(
     let handle = runtime.handle().clone();
 
     handle.spawn(sender.invoke(port, async move {
-        let session = Session::new(runtime, device_id_config_path, sender, logger).await?;
+        let session = Session::new(runtime, configs_path, sender, logger).await?;
 
         assert!(SESSION.is_null());
 
@@ -129,17 +129,14 @@ pub(super) struct Session {
 impl Session {
     async fn new(
         runtime: Runtime,
-        device_id_config_path: PathBuf,
+        configs_path: PathBuf,
         sender: Sender,
         logger: Logger,
     ) -> Result<Self> {
-        let device_id = device_id::get_or_create(&device_id_config_path).await?;
+        let device_id =
+            device_id::get_or_create(&configs_path.join(device_id::CONFIG_FILE_NAME)).await?;
 
-        // TODO: Get the configs path as the argument instead of deriving it from the path to the
-        // device_id config file.
-        let configs_path = device_id_config_path.parent();
-
-        let network = Network::new(&NetworkOptions::default(), configs_path).await?;
+        let network = Network::new(&NetworkOptions::default(), Some(configs_path)).await?;
 
         Ok(Self {
             runtime,
