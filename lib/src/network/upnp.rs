@@ -15,6 +15,7 @@ use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
+use tokio::time::sleep;
 
 #[derive(Clone, Copy)]
 pub(crate) struct Mapping {
@@ -89,9 +90,9 @@ impl PortForwarder {
         // Periodically check for new devices: maybe UPnP was enabled later after the app started,
         // maybe the device was swapped for another one,...
         loop {
-            let device_urls =
-                discover_device_urls(&SearchTarget::RootDevice, DISCOVERY_DURATION).await?;
-            let mut device_urls = Box::pin(device_urls);
+            let mut device_urls = Box::pin(
+                discover_device_urls(&SearchTarget::RootDevice, DISCOVERY_DURATION).await?,
+            );
 
             // NOTE: don't use `try_next().await?` here from the TryStreamExt interface as that
             // will quit on the first device that fails to respond. Whereas what we want is to just
@@ -129,7 +130,7 @@ impl PortForwarder {
                         } else {
                             Err(rupnp::Error::InvalidResponse(
                                 format!(
-                                    "UPnP port forwarding failed: non-compliant device '{}'",
+                                    "port forwarding failed: non-compliant device '{}'",
                                     device.friendly_name()
                                 )
                                 .into(),
@@ -163,11 +164,7 @@ impl PortForwarder {
 
                 if first_attempt {
                     if let Err(e) = result {
-                        log::warn!(
-                            "UPnP port forwarding on IGD {:?} ended: {}",
-                            device_url,
-                            e
-                        );
+                        log::warn!("UPnP port forwarding on IGD {:?} ended: {}", device_url, e);
                     }
                 }
 
@@ -184,10 +181,10 @@ impl PortForwarder {
                 if entry.get().is_none() {
                     entry.insert(Some(do_spawn(false)));
                 }
-            },
+            }
             Entry::Vacant(entry) => {
                 entry.insert(Some(do_spawn(true)));
-            },
+            }
         }
     }
 }
@@ -211,15 +208,24 @@ impl PerIGDPortForwarder {
     async fn run(&self) -> Result<(), rupnp::Error> {
         let local_ip = local_address_to(&self.device_url).await?;
 
-        let lease_duration = Duration::from_secs(15 * 60);
+        let lease_duration = Duration::from_secs(5 * 60);
         let sleep_delta = Duration::from_secs(5);
+        let error_sleep_duration = Duration::from_secs(15);
         let sleep_duration = lease_duration.saturating_sub(sleep_delta);
 
+        let mut error_reported = false;
         let mut ext_port_reported = false;
         let mut ext_addr_reported = false;
 
         loop {
-            self.add_port_mappings(&local_ip, lease_duration).await?;
+            if self
+                .add_port_mappings(&local_ip, lease_duration)
+                .await
+                .is_err()
+            {
+                sleep(error_sleep_duration).await;
+                continue;
+            }
 
             if !ext_port_reported {
                 ext_port_reported = true;
@@ -232,19 +238,24 @@ impl PerIGDPortForwarder {
                 }
             }
 
-            if !ext_addr_reported {
-                ext_addr_reported = true;
-                match self.get_external_ip_address().await {
-                    Ok(addr) => {
+            match self.get_external_ip_address().await {
+                Ok(addr) => {
+                    if !ext_addr_reported {
+                        error_reported = false;
+                        ext_addr_reported = true;
                         log::info!("UPnP the external IP address is {}", addr);
                     }
-                    Err(e) => {
+                }
+                Err(e) => {
+                    if !error_reported {
+                        error_reported = true;
+                        ext_addr_reported = false;
                         log::warn!("UPnP failed to retrieve external IP address: {:?}", e);
                     }
                 }
             }
 
-            tokio::time::sleep(sleep_duration).await;
+            sleep(sleep_duration).await;
 
             // We've seen IGD devices that refuse to update the lease if the previous lease has not
             // yet ended. So what we're doing here is that we do attempt to do just that, but we
@@ -264,9 +275,16 @@ impl PerIGDPortForwarder {
             // 2. We could try to update the lease, and then confirm that the lease has indeed been
             //    updated. Unfortunately, we've seen IGD devices which fail to report active
             //    leases (or report only the first one in their list or some other random subset).
-            self.add_port_mappings(&local_ip, lease_duration).await?;
+            if self
+                .add_port_mappings(&local_ip, lease_duration)
+                .await
+                .is_err()
+            {
+                sleep(error_sleep_duration).await;
+                continue;
+            }
 
-            tokio::time::sleep(sleep_delta * 2).await;
+            sleep(sleep_delta * 2).await;
         }
     }
 
