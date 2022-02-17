@@ -29,6 +29,10 @@ pub(crate) enum Protocol {
     Udp,
 }
 
+// `Option` is used to keep track of which Uris have already been tried so as to not flood the
+// debug log with repeated "device failure" warnings.
+type JobHandles = HashMap<Uri, Option<ScopedJoinHandle<()>>>;
+
 impl fmt::Display for Protocol {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -76,7 +80,7 @@ impl PortForwarder {
         // to balance it with not spamming the network with multicast queries.
         const SLEEP_DURATION: Duration = Duration::from_secs(15);
 
-        let handles = Arc::new(Mutex::new(HashMap::new()));
+        let job_handles = Arc::new(Mutex::new(JobHandles::new()));
 
         // Make it an Arc so we can clone lazily (only when we're not already running a spawned
         // coroutine on an IGD device).
@@ -102,7 +106,7 @@ impl PortForwarder {
                 };
 
                 let mappings = mappings.clone();
-                Self::spawn_if_not_running(device_url.clone(), &handles, move || {
+                Self::spawn_if_not_running(device_url.clone(), &job_handles, move || {
                     Box::pin(async move {
                         let device = Device::from_url(device_url).await?;
 
@@ -121,25 +125,16 @@ impl PortForwarder {
                                 _version: version,
                             };
 
-                            match per_igd_port_forwarder.run().await {
-                                Ok(_) => log::debug!(
-                                    "UPnP port forwarding on IGD ended {:?}",
-                                    device.url()
-                                ),
-                                Err(e) => log::warn!(
-                                    "UPnP port forwarding on IGD ended {:?} ({:?})",
-                                    device.url(),
-                                    e
-                                ),
-                            }
+                            per_igd_port_forwarder.run().await
                         } else {
-                            log::debug!(
-                                "UPnP port forwarding failed: non-compliant device '{}'",
-                                device.friendly_name()
-                            );
+                            Err(rupnp::Error::InvalidResponse(
+                                format!(
+                                    "UPnP port forwarding failed: non-compliant device '{}'",
+                                    device.friendly_name()
+                                )
+                                .into(),
+                            ))
                         }
-
-                        Ok(())
                     })
                 });
             }
@@ -147,39 +142,53 @@ impl PortForwarder {
             tokio::time::sleep(SLEEP_DURATION).await;
         }
     }
-
     fn spawn_if_not_running<JobMaker>(
         device_url: Uri,
-        handles: &Arc<Mutex<HashMap<Uri, ScopedJoinHandle<()>>>>,
+        job_handles: &Arc<Mutex<JobHandles>>,
         job: JobMaker,
     ) where
         JobMaker: FnOnce() -> Pin<Box<dyn Future<Output = Result<(), rupnp::Error>> + Send>>
             + Send
             + 'static,
     {
-        let weak_handles = Arc::downgrade(handles);
+        let weak_handles = Arc::downgrade(job_handles);
 
-        handles
-            .lock()
-            .unwrap()
-            .entry(device_url.clone())
-            .or_insert_with(|| {
-                scoped_task::spawn(async move {
-                    let result = job().await;
+        let mut job_handles = job_handles.lock().unwrap();
 
+        let do_spawn = |first_attempt| {
+            let device_url = device_url.clone();
+
+            scoped_task::spawn(async move {
+                let result = job().await;
+
+                if first_attempt {
                     if let Err(e) = result {
                         log::warn!(
-                            "UPnP port forwarding on IGD {:?} ended ({:?})",
+                            "UPnP port forwarding on IGD {:?} ended: {}",
                             device_url,
                             e
                         );
                     }
+                }
 
-                    if let Some(handles) = weak_handles.upgrade() {
-                        handles.lock().unwrap().remove(&device_url);
-                    }
-                })
-            });
+                if let Some(handles) = weak_handles.upgrade() {
+                    handles.lock().unwrap().insert(device_url, None);
+                }
+            })
+        };
+
+        use std::collections::hash_map::Entry;
+
+        match job_handles.entry(device_url.clone()) {
+            Entry::Occupied(mut entry) => {
+                if entry.get().is_none() {
+                    entry.insert(Some(do_spawn(false)));
+                }
+            },
+            Entry::Vacant(entry) => {
+                entry.insert(Some(do_spawn(true)));
+            },
+        }
     }
 }
 
