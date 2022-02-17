@@ -26,7 +26,7 @@ pub const CONFIG_FILE_NAME: &str = "device_id.conf";
 pub async fn get_or_create(path: &Path) -> Result<DeviceId> {
     let cfg = SingleValueConfig::new(path, CONFIG_COMMENT);
 
-    match cfg.get::<String>().await {
+    match cfg.get().await {
         Ok(string) => hex_decode(string),
         Err(e) if e.kind() == ErrorKind::NotFound => {
             let new_id = OsRng.gen::<DeviceId>();

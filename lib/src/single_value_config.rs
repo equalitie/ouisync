@@ -1,6 +1,7 @@
 use std::{
     fmt,
     io::{self, ErrorKind},
+    marker::PhantomData,
     path::{Path, PathBuf},
     str::FromStr,
 };
@@ -9,20 +10,25 @@ use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
 };
 
-pub(crate) struct SingleValueConfig {
+pub(crate) struct SingleValueConfig<Value>
+where
+    Value: fmt::Display + FromStr,
+{
     path: PathBuf,
     comment: &'static str,
+    phantom: PhantomData<Value>,
 }
 
-impl SingleValueConfig {
+impl<Value: fmt::Display + FromStr> SingleValueConfig<Value> {
     pub fn new(path: &Path, comment: &'static str) -> Self {
         Self {
             path: path.to_path_buf(),
             comment,
+            phantom: PhantomData,
         }
     }
 
-    pub async fn set<Value: fmt::Display>(&self, value: &Value) -> io::Result<()> {
+    pub async fn set(&self, value: &Value) -> io::Result<()> {
         if let Some(dir) = self.path.parent() {
             fs::create_dir_all(dir).await?;
         }
@@ -39,11 +45,11 @@ impl SingleValueConfig {
             .await
     }
 
-    pub async fn get<Value: FromStr>(&self) -> io::Result<Value> {
+    pub async fn get(&self) -> io::Result<Value> {
         let file = File::open(&self.path).await?;
-        let string = self.parse(file).await?;
+        let line = self.find_value_line(file).await?;
 
-        string.parse().map_err(|_| {
+        line.parse().map_err(|_| {
             io::Error::new(
                 ErrorKind::InvalidData,
                 format!("failed to convert data to value from file {:?}", self.path),
@@ -51,7 +57,7 @@ impl SingleValueConfig {
         })
     }
 
-    async fn parse(&self, file: File) -> io::Result<String> {
+    async fn find_value_line(&self, file: File) -> io::Result<String> {
         let reader = BufReader::new(file);
         let mut lines = reader.lines();
 

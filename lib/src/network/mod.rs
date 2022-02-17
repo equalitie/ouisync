@@ -225,7 +225,7 @@ impl Network {
             let original_port = preferred_addr.port();
 
             if preferred_addr.port() == 0 {
-                if let Ok(last_port) = cfg.get::<u16>().await {
+                if let Ok(last_port) = cfg.get().await {
                     preferred_addr.set_port(last_port);
                 }
             }
@@ -256,7 +256,9 @@ impl Network {
         }
     }
 
-    fn last_used_port_config<P: AsRef<Path>>(configs_path: Option<P>) -> Option<SingleValueConfig> {
+    fn last_used_port_config<P: AsRef<Path>>(
+        configs_path: Option<P>,
+    ) -> Option<SingleValueConfig<u16>> {
         const FILE_NAME: &str = "last_used_tcp_port.cfg";
         const COMMENT: &str ="\
             # The value stored in this file is the last used TCP port for listening on incoming connections.\n\
@@ -264,7 +266,8 @@ impl Network {
             # is mainly useful for users who can't or don't want to use UPnP and have to default to manually\n\
             # setting up port forwarding on their routers.\n\
             #\n\
-            # The value is not used when the user specifies the --port option on the command line.";
+            # The value is not used when the user specifies the --port option on the command line. However,\n\
+            # it may still be overwritten.";
 
         if let Some(configs_path) = configs_path {
             Some(SingleValueConfig::new(
