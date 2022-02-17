@@ -116,8 +116,20 @@ async fn main() -> Result<()> {
         }
     }
 
+    let configs_path = if !options.temp {
+        match options.data_dir() {
+            Ok(path) => Some(path),
+            Err(e) => {
+                log::warn!("No path for configs: {}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     // Start the network
-    let network = Network::new(&options.network).await?;
+    let network = Network::new(&options.network, configs_path.as_ref()).await?;
     let network_handle = network.handle();
 
     // Mount repositories

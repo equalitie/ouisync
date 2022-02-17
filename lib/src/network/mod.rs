@@ -26,6 +26,7 @@ use crate::{
     index::Index,
     repository::RepositoryId,
     scoped_task::{self, ScopedJoinHandle, ScopedTaskSet},
+    single_value_config::SingleValueConfig,
     sync::broadcast,
 };
 use btdht::{InfoHash, INFO_HASH_LEN};
@@ -36,6 +37,7 @@ use std::{
     future::Future,
     io, iter,
     net::{IpAddr, Ipv4Addr, SocketAddr},
+    path::Path,
     sync::{Arc, Mutex as BlockingMutex, Weak},
     time::Duration,
 };
@@ -102,10 +104,11 @@ pub struct Network {
 }
 
 impl Network {
-    pub async fn new(options: &NetworkOptions) -> Result<Self> {
-        let listener = TcpListener::bind(options.listen_addr())
-            .await
-            .map_err(Error::Network)?;
+    pub async fn new<P: AsRef<Path>>(
+        options: &NetworkOptions,
+        configs_path: Option<P>,
+    ) -> Result<Self> {
+        let listener = Self::bind_listener(options.listen_addr(), configs_path).await?;
 
         let local_addr = listener.local_addr().map_err(Error::Network)?;
 
@@ -208,6 +211,68 @@ impl Network {
     pub fn handle(&self) -> Handle {
         Handle {
             inner: self.inner.clone(),
+        }
+    }
+
+    // If the user did not specify (through NetworkOptions) the preferred port, then try to use
+    // the one used last time. If that fails, or if this is the first time the app is running,
+    // then use a random port.
+    async fn bind_listener<P: AsRef<Path>>(
+        mut preferred_addr: SocketAddr,
+        configs_path: Option<P>,
+    ) -> Result<TcpListener> {
+        if let Some(cfg) = Self::last_used_port_config(configs_path) {
+            let original_port = preferred_addr.port();
+
+            if preferred_addr.port() == 0 {
+                if let Ok(last_port) = cfg.get::<u16>().await {
+                    preferred_addr.set_port(last_port);
+                }
+            }
+
+            let listener = match TcpListener::bind(preferred_addr).await {
+                Ok(listener) => Ok(listener),
+                Err(e) => {
+                    if original_port == 0 && original_port != preferred_addr.port() {
+                        preferred_addr.set_port(0);
+                        TcpListener::bind(preferred_addr).await
+                    } else {
+                        Err(e)
+                    }
+                }
+            }
+            .map_err(Error::Network)?;
+
+            if let Ok(addr) = listener.local_addr() {
+                // Ignore failures
+                cfg.set(&addr.port()).await.ok();
+            }
+
+            Ok(listener)
+        } else {
+            TcpListener::bind(preferred_addr)
+                .await
+                .map_err(Error::Network)
+        }
+    }
+
+    fn last_used_port_config<P: AsRef<Path>>(configs_path: Option<P>) -> Option<SingleValueConfig> {
+        const FILE_NAME: &str = "last_used_tcp_port.cfg";
+        const COMMENT: &str ="\
+            # The value stored in this file is the last used TCP port for listening on incoming connections.\n\
+            # It is used to avoid binding to a random port every time the application starts. This, in turn,\n\
+            # is mainly useful for users who can't or don't want to use UPnP and have to default to manually\n\
+            # setting up port forwarding on their routers.\n\
+            #\n\
+            # The value is not used when the user specifies the --port option on the command line.";
+
+        if let Some(configs_path) = configs_path {
+            Some(SingleValueConfig::new(
+                &configs_path.as_ref().join(FILE_NAME),
+                COMMENT,
+            ))
+        } else {
+            None
         }
     }
 }

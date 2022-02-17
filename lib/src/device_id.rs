@@ -1,8 +1,8 @@
 use crate::error::{Error, Result};
+use crate::single_value_config::SingleValueConfig;
 use rand::{rngs::OsRng, Rng};
 use std::io::{self, ErrorKind};
 use std::path::Path;
-use crate::single_value_config::SingleValueConfig;
 
 define_byte_array_wrapper! {
     /// DeviceId uniquely identifies machines on which this software is running. Its only purpose is
@@ -21,6 +21,8 @@ define_byte_array_wrapper! {
 derive_rand_for_wrapper!(DeviceId);
 derive_sqlx_traits_for_byte_array_wrapper!(DeviceId);
 
+pub const CONFIG_FILE_NAME: &str = "device_id.conf";
+
 pub async fn get_or_create(path: &Path) -> Result<DeviceId> {
     let cfg = SingleValueConfig::new(path, CONFIG_COMMENT);
 
@@ -29,8 +31,8 @@ pub async fn get_or_create(path: &Path) -> Result<DeviceId> {
         Err(e) if e.kind() == ErrorKind::NotFound => {
             let new_id = OsRng.gen::<DeviceId>();
             cfg.set(&hex::encode(new_id.as_ref())).await.map(|_| new_id)
-        },
-        Err(e) => Err(e)
+        }
+        Err(e) => Err(e),
     }
     .map_err(Error::DeviceIdConfig)
 }
@@ -45,7 +47,7 @@ fn hex_decode(hex: String) -> io::Result<DeviceId> {
             ))
         }
     };
-    
+
     match bytes.try_into() {
         Ok(bytes) => Ok(DeviceId(bytes)),
         Err(e) => Err(io::Error::new(
