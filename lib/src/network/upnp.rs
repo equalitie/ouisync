@@ -232,7 +232,8 @@ impl PerIGDPortForwarder {
 
                 for mapping in &self.mappings {
                     log::info!(
-                        "UPnP port forwarding started on external port {}",
+                        "UPnP port forwarding started on external port {}:{}",
+                        mapping.protocol,
                         mapping.external
                     );
                 }
