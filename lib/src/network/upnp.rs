@@ -67,10 +67,20 @@ impl PortForwarder {
     }
 
     async fn run(mappings: Vec<Mapping>) -> Result<(), rupnp::Error> {
+        // Devices may have a timeout period when they don't respond to repeated queries, the
+        // DISCOVERY_RUDATION constant should be higher than that. The rupnp project internally
+        // assumes this duration is three seconds.
         const DISCOVERY_DURATION: Duration = Duration::from_secs(5);
-        const SLEEP_DURATION: Duration = Duration::from_secs(10 * 60);
+        // SLEEP_DURATION is relevant e.g. when the user enables UPnP on their router. We don't
+        // want them to have to wait too long to start syncing after they do so. But we also have
+        // to balance it with not spamming the network with multicast queries.
+        const SLEEP_DURATION: Duration = Duration::from_secs(15);
 
         let handles = Arc::new(Mutex::new(HashMap::new()));
+
+        // Make it an Arc so we can clone lazily (only when we're not already running a spawned
+        // coroutine on an IGD device).
+        let mappings = Arc::new(mappings);
 
         // Periodically check for new devices: maybe UPnP was enabled later after the app started,
         // maybe the device was swapped for another one,...
@@ -107,7 +117,7 @@ impl PortForwarder {
                             let per_igd_port_forwarder = PerIGDPortForwarder {
                                 device_url: url.clone(),
                                 service,
-                                mappings,
+                                mappings: (*mappings).clone(),
                                 _version: version,
                             };
 
@@ -134,7 +144,6 @@ impl PortForwarder {
                 });
             }
 
-            // TODO: Break from this sleep when all above coroutines stop.
             tokio::time::sleep(SLEEP_DURATION).await;
         }
     }
@@ -401,6 +410,14 @@ impl std::error::Error for InvalidResponse {
     }
 }
 
+// There is a problem with the rupnp::discover function in that once the ssdp_client::search finds
+// device URLs, it then starts probing them (with Device::from_url) one by one. If there is a
+// device on the network which does not respond, or does so after a very long timeout (not affected
+// by the `timeout` argument), then all devices that follow will be probed after the long delay or
+// never.
+//
+// So instead we do the ssdp_client::search ourselves and then the Device::from_url in a separate
+// coroutine spawned above.
 pub async fn discover_device_urls(
     search_target: &SearchTarget,
     timeout: Duration,
