@@ -7,6 +7,7 @@ mod macros;
 pub mod crypto;
 pub mod debug_printer;
 pub mod device_id;
+pub mod network;
 
 mod access_control;
 mod blob;
@@ -27,7 +28,6 @@ mod joint_directory;
 mod joint_entry;
 mod locator;
 mod metadata;
-mod network;
 mod path;
 mod repository;
 mod scoped_task;

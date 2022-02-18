@@ -26,7 +26,7 @@ use tokio::{
 
 // Hardcoded DHT routers to bootstrap the DHT against.
 // TODO: add this to `NetworkOptions` so it can be overriden by the user.
-const DHT_ROUTERS: &[&str] = &["router.bittorrent.com:6881", "dht.transmissionbt.com:6881"];
+pub const DHT_ROUTERS: &[&str] = &["router.bittorrent.com:6881", "dht.transmissionbt.com:6881"];
 
 // Interval for the delay before a repository is re-announced on the DHT. The actual delay is an
 // uniformly random value from this interval.
@@ -251,7 +251,7 @@ impl Lookup {
 }
 
 // Returns the router addresses split into ipv4 and ipv6 (in that order)
-async fn dht_router_addresses() -> (Vec<SocketAddr>, Vec<SocketAddr>) {
+pub async fn dht_router_addresses() -> (Vec<SocketAddr>, Vec<SocketAddr>) {
     future::join_all(DHT_ROUTERS.iter().map(net::lookup_host))
         .await
         .into_iter()

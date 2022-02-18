@@ -1,0 +1,21 @@
+[package]
+name = "ouisync-utilities"
+description = "Utilities for working with and debugging OuiSync"
+version = "0.1.0"
+authors = ["Adam Cigánek <adam@equalit.ie>", "Peter Jankuliak <peter@equalit.ie>"]
+license = "MPL-2.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "btdht"
+path = "src/btdht.rs"
+
+[dependencies]
+futures-util = { version = "0.3.15", default-features = false }
+btdht = { version = "0.8.1", git = "https://github.com/equalitie/btdht.git" }
+ouisync-lib = { package = "ouisync", path = "../lib" }
+env_logger = "0.9.0"
+log = "0.4.14"
+structopt = "0.3.21"
+tokio = { version = "1.14.0", features = ["signal"] }
