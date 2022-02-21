@@ -7,7 +7,13 @@ use crate::{
     file::File,
     repository::Repository,
 };
-use std::{convert::TryInto, io::SeekFrom, os::raw::c_char, slice, sync::Arc};
+use std::{
+    convert::TryInto,
+    io::SeekFrom,
+    os::raw::{c_char, c_int},
+    slice,
+    sync::Arc,
+};
 use tokio::sync::Mutex;
 
 pub struct FfiFile {
@@ -176,5 +182,27 @@ pub unsafe extern "C" fn file_len(handle: SharedHandle<Mutex<FfiFile>>, port: Po
             let g = ffi_file.lock().await;
             Ok(g.file.len().await)
         })
+    })
+}
+
+/// Copy the file contents into the provided raw file descriptor.
+/// This function takes ownership of the file descriptor and closes it when it finishes. If the
+/// caller needs to access the descriptor afterwards (or while the function is running), he/she
+/// needs to `dup` it before passing it into this function.
+#[cfg(unix)]
+#[no_mangle]
+pub unsafe extern "C" fn file_copy_to_raw_fd(
+    handle: SharedHandle<Mutex<FfiFile>>,
+    fd: c_int,
+    port: Port<Result<()>>,
+) {
+    use std::os::unix::io::FromRawFd;
+    use tokio::fs;
+
+    session::with(port, |ctx| {
+        let src = handle.get();
+        let mut dst = fs::File::from_raw_fd(fd);
+
+        ctx.spawn(async move { src.lock().await.file.copy_to_writer(&mut dst).await })
     })
 }
