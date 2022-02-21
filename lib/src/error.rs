@@ -53,6 +53,8 @@ pub enum Error {
     InitializeLogger(#[source] io::Error),
     #[error("failed to initialize runtime")]
     InitializeRuntime(#[source] io::Error),
+    #[error("failed to write into writer")]
+    Writer(#[source] io::Error),
 }
 
 impl Error {

@@ -1,14 +1,18 @@
 use crate::{
     blob::{self, Blob},
+    block::BLOCK_SIZE,
     branch::Branch,
     directory::{Directory, ParentContext},
-    error::Result,
+    error::{Error, Result},
     locator::Locator,
     version_vector::VersionVector,
 };
 use std::io::SeekFrom;
 use std::{fmt, sync::Arc};
-use tokio::sync::Mutex;
+use tokio::{
+    io::{AsyncWrite, AsyncWriteExt},
+    sync::Mutex,
+};
 
 pub struct File {
     blob: Blob,
@@ -97,6 +101,23 @@ impl File {
         let mut tx = self.blob.db_pool().begin().await?;
         self.blob.flush_in_transaction(&mut tx).await?;
         self.parent.modify_entry(tx, None).await?;
+
+        Ok(())
+    }
+
+    /// Copy the entire contents of this file into the provided writer (e.g. a file on a regular
+    /// filesystem)
+    pub async fn copy_to_writer<W: AsyncWrite + Unpin>(&mut self, dst: &mut W) -> Result<()> {
+        let mut buffer = vec![0; BLOCK_SIZE];
+
+        loop {
+            let len = self.read(&mut buffer).await?;
+            dst.write_all(&buffer[..len]).await.map_err(Error::Writer)?;
+
+            if len < buffer.len() {
+                break;
+            }
+        }
 
         Ok(())
     }

@@ -57,7 +57,8 @@ impl ToErrorCode for Error {
             | Self::NonUtf8FileName
             | Self::OffsetOutOfRange
             | Self::InitializeLogger(_)
-            | Self::InitializeRuntime(_) => ErrorCode::Other,
+            | Self::InitializeRuntime(_)
+            | Self::Writer(_) => ErrorCode::Other,
         }
     }
 }
