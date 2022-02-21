@@ -269,14 +269,9 @@ impl Network {
             # The value is not used when the user specifies the --port option on the command line. However,\n\
             # it may still be overwritten.";
 
-        if let Some(configs_path) = configs_path {
-            Some(SingleValueConfig::new(
-                &configs_path.as_ref().join(FILE_NAME),
-                COMMENT,
-            ))
-        } else {
-            None
-        }
+        configs_path.map(|configs_path| {
+            SingleValueConfig::new(&configs_path.as_ref().join(FILE_NAME), COMMENT)
+        })
     }
 }
 

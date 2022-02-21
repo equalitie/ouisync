@@ -922,7 +922,8 @@ fn to_error_code(error: &Error) -> libc::c_int {
         | Error::WrongBlockLength(_)
         | Error::Network(_)
         | Error::InitializeLogger(_)
-        | Error::InitializeRuntime(_) => libc::EIO,
+        | Error::InitializeRuntime(_)
+        | Error::Writer(_) => libc::EIO,
         Error::EntryNotFound | Error::AmbiguousEntry => libc::ENOENT,
         Error::EntryExists => libc::EEXIST,
         Error::EntryIsFile => libc::ENOTDIR,
