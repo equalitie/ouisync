@@ -1,4 +1,4 @@
-use super::{Blob, Buffer, Core, Cursor, OpenBlock};
+use super::{core::HEADER_SIZE, Blob, Buffer, Core, Cursor, OpenBlock};
 use crate::{
     block::{self, BlockId, BlockNonce, BLOCK_SIZE},
     branch::Branch,
@@ -169,7 +169,7 @@ impl<'a> Operations<'a> {
             }
         };
 
-        let actual_offset = offset + self.core.header_size() as u64;
+        let actual_offset = offset + HEADER_SIZE as u64;
         let block_number = (actual_offset / BLOCK_SIZE as u64) as u32;
         let block_offset = (actual_offset % BLOCK_SIZE as u64) as usize;
 
@@ -336,7 +336,7 @@ impl<'a> Operations<'a> {
 
         if locator.number() == 0 {
             // If head block, skip over the header.
-            content.pos = self.core.header_size();
+            content.pos = HEADER_SIZE;
         }
 
         *self.current_block = OpenBlock {
@@ -458,7 +458,7 @@ impl<'a> Operations<'a> {
     pub fn seek_position(&mut self) -> u64 {
         self.current_block.locator.number() as u64 * BLOCK_SIZE as u64
             + self.current_block.content.pos as u64
-            - self.core.header_size() as u64
+            - HEADER_SIZE as u64
     }
 
     fn locator_at(&self, number: u32) -> Locator {

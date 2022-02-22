@@ -1,6 +1,8 @@
 use crate::{block::BLOCK_SIZE, branch::Branch, locator::Locator};
 use std::{fmt, mem};
 
+pub(super) const HEADER_SIZE: usize = mem::size_of::<usize>();
+
 pub(crate) struct Core {
     pub branch: Branch,
     pub head_locator: Locator,
@@ -9,14 +11,10 @@ pub(crate) struct Core {
 }
 
 impl Core {
-    pub fn header_size(&self) -> usize {
-        mem::size_of_val(&self.len)
-    }
-
     // Total number of blocks in this blob including the possibly partially filled final block.
     pub fn block_count(&self) -> u32 {
         // https://stackoverflow.com/questions/2745074/fast-ceiling-of-an-integer-division-in-c-c
-        (1 + (self.len + self.header_size() as u64 - 1) / BLOCK_SIZE as u64)
+        (1 + (self.len + HEADER_SIZE as u64 - 1) / BLOCK_SIZE as u64)
             .try_into()
             .unwrap_or(u32::MAX)
     }

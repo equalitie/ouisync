@@ -5,6 +5,7 @@ mod core;
 mod operations;
 
 pub(crate) use self::core::Core;
+use self::core::HEADER_SIZE;
 use self::operations::Operations;
 use crate::{
     block::{BlockId, BLOCK_SIZE},
@@ -101,7 +102,7 @@ impl Blob {
                 operations::decrypt_block(branch.keys().read(), &nonce, &mut buffer);
 
                 let mut content = Cursor::new(buffer);
-                content.pos = core_guard.header_size();
+                content.pos = HEADER_SIZE;
 
                 OpenBlock {
                     locator: head_locator,
