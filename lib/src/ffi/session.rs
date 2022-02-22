@@ -13,8 +13,7 @@ use std::{
     future::Future,
     mem,
     os::raw::{c_char, c_void},
-    path::PathBuf,
-    ptr,
+    ptr, thread,
 };
 use tokio::{
     runtime::{self, Runtime},
@@ -65,17 +64,42 @@ pub unsafe extern "C" fn session_open(
         }
     };
 
-    let handle = runtime.handle().clone();
+    // NOTE: spawning a separate thread and using `runtime.block_on` instead of using
+    // `runtime.spawn` to avoid moving the runtime into "itself" which would be problematic because
+    // if there was an error the runtime would be dropped inside an async context which would panic.
+    thread::spawn(move || {
+        let device_id = match runtime.block_on(device_id::get_or_create(
+            &configs_path.join(device_id::CONFIG_FILE_NAME),
+        )) {
+            Ok(device_id) => device_id,
+            Err(error) => {
+                sender.send_result(port, Err(error));
+                return;
+            }
+        };
 
-    handle.spawn(sender.invoke(port, async move {
-        let session = Session::new(runtime, configs_path, sender, logger).await?;
+        let network =
+            match runtime.block_on(Network::new(&NetworkOptions::default(), Some(configs_path))) {
+                Ok(network) => network,
+                Err(error) => {
+                    sender.send_result(port, Err(error));
+                    return;
+                }
+            };
+
+        let session = Session {
+            runtime,
+            device_id,
+            network,
+            sender,
+            _logger: logger,
+        };
 
         assert!(SESSION.is_null());
-
         SESSION = Box::into_raw(Box::new(session));
 
-        Ok(())
-    }));
+        sender.send_result(port, Ok(()));
+    });
 }
 
 /// Closes the ouisync session.
@@ -127,26 +151,6 @@ pub(super) struct Session {
 }
 
 impl Session {
-    async fn new(
-        runtime: Runtime,
-        configs_path: PathBuf,
-        sender: Sender,
-        logger: Logger,
-    ) -> Result<Self> {
-        let device_id =
-            device_id::get_or_create(&configs_path.join(device_id::CONFIG_FILE_NAME)).await?;
-
-        let network = Network::new(&NetworkOptions::default(), Some(configs_path)).await?;
-
-        Ok(Self {
-            runtime,
-            device_id,
-            network,
-            sender,
-            _logger: logger,
-        })
-    }
-
     pub(super) fn runtime(&self) -> &Runtime {
         &self.runtime
     }
