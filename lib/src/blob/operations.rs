@@ -18,6 +18,7 @@ use tokio::sync::{Mutex, MutexGuard};
 pub(crate) struct Operations<'a> {
     core: MutexGuard<'a, Core>,
     branch: &'a Branch,
+    head_locator: &'a Locator,
     current_block: &'a mut OpenBlock,
 }
 
@@ -25,11 +26,13 @@ impl<'a> Operations<'a> {
     pub fn new(
         core: MutexGuard<'a, Core>,
         branch: &'a Branch,
+        head_locator: &'a Locator,
         current_block: &'a mut OpenBlock,
     ) -> Self {
         Self {
             core,
             branch,
+            head_locator,
             current_block,
         }
     }
@@ -212,8 +215,7 @@ impl<'a> Operations<'a> {
 
         self.remove_blocks(
             tx,
-            self.core
-                .head_locator
+            self.head_locator
                 .sequence()
                 .skip(new_block_count as usize)
                 .take((old_block_count - new_block_count) as usize),
@@ -240,15 +242,14 @@ impl<'a> Operations<'a> {
         let mut tx = conn.begin().await?;
         self.remove_blocks(
             &mut tx,
-            self.core
-                .head_locator
+            self.head_locator
                 .sequence()
                 .take(self.core.block_count() as usize),
         )
         .await?;
         tx.commit().await?;
 
-        *self.current_block = OpenBlock::new_head(self.core.head_locator);
+        *self.current_block = OpenBlock::new_head(*self.head_locator);
         self.core.len = 0;
         self.core.len_dirty = true;
 
@@ -264,7 +265,7 @@ impl<'a> Operations<'a> {
         dst_head_locator: Locator,
     ) -> Result<Blob> {
         // This should gracefuly handled in the Blob from where this function is invoked.
-        assert!(self.branch.id() != dst_branch.id() || self.core.head_locator != dst_head_locator);
+        assert!(self.branch.id() != dst_branch.id() || *self.head_locator != dst_head_locator);
 
         let read_key = self.branch.keys().read();
         // Take the write key from the dst branch, not the src branch, to protect us against
@@ -274,7 +275,7 @@ impl<'a> Operations<'a> {
         let mut tx = conn.begin().await?;
         let mut dst_writer = dst_branch.data().write();
 
-        for (src_locator, dst_locator) in self.core.locators().zip(dst_head_locator.sequence()) {
+        for (src_locator, dst_locator) in self.locators().zip(dst_head_locator.sequence()) {
             let encoded_src_locator = src_locator.encode(read_key);
             let encoded_dst_locator = dst_locator.encode(read_key);
 
@@ -293,7 +294,6 @@ impl<'a> Operations<'a> {
         tx.commit().await?;
 
         let new_core = Core {
-            head_locator: dst_head_locator,
             len: self.core.len,
             len_dirty: self.core.len_dirty,
         };
@@ -433,7 +433,13 @@ impl<'a> Operations<'a> {
     }
 
     fn locator_at(&self, number: u32) -> Locator {
-        self.core.head_locator.nth(number)
+        self.head_locator.nth(number)
+    }
+
+    fn locators(&self) -> impl Iterator<Item = Locator> {
+        self.head_locator
+            .sequence()
+            .take(self.core.block_count() as usize)
     }
 }
 

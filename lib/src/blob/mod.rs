@@ -66,7 +66,6 @@ impl Blob {
 
         Ok(Self::new(
             Arc::new(Mutex::new(Core {
-                head_locator,
                 len,
                 len_dirty: false,
             })),
@@ -87,7 +86,7 @@ impl Blob {
         core: Arc<Mutex<Core>>,
     ) -> Result<Self> {
         let mut conn = branch.db_pool().acquire().await?;
-        let core_guard = core.lock().await;
+        let len = core.lock().await.len;
 
         let current_block = match operations::load_block(
             &mut conn,
@@ -110,11 +109,9 @@ impl Blob {
                     dirty: false,
                 }
             }
-            Err(Error::EntryNotFound) if core_guard.len == 0 => OpenBlock::new_head(head_locator),
+            Err(Error::EntryNotFound) if len == 0 => OpenBlock::new_head(head_locator),
             Err(error) => return Err(error),
         };
-
-        drop(core_guard);
 
         Ok(Self::new(core, branch, head_locator, current_block))
     }
@@ -137,7 +134,6 @@ impl Blob {
 
         Self::new(
             Arc::new(Mutex::new(Core {
-                head_locator,
                 len: 0,
                 len_dirty: false,
             })),
@@ -279,7 +275,12 @@ impl Blob {
 
     async fn lock(&mut self) -> Operations<'_> {
         let core_guard = self.core.lock().await;
-        Operations::new(core_guard, &self.branch, &mut self.current_block)
+        Operations::new(
+            core_guard,
+            &self.branch,
+            &self.head_locator,
+            &mut self.current_block,
+        )
     }
 }
 

@@ -1,10 +1,10 @@
-use crate::{block::BLOCK_SIZE, locator::Locator};
-use std::{fmt, mem};
+use crate::block::BLOCK_SIZE;
+use std::mem;
 
 pub(super) const HEADER_SIZE: usize = mem::size_of::<usize>();
 
+#[derive(Debug)]
 pub(crate) struct Core {
-    pub head_locator: Locator,
     pub len: u64,
     pub len_dirty: bool,
 }
@@ -16,19 +16,5 @@ impl Core {
         (1 + (self.len + HEADER_SIZE as u64 - 1) / BLOCK_SIZE as u64)
             .try_into()
             .unwrap_or(u32::MAX)
-    }
-
-    pub fn locators(&self) -> impl Iterator<Item = Locator> {
-        self.head_locator
-            .sequence()
-            .take(self.block_count() as usize)
-    }
-}
-
-impl fmt::Debug for Core {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_struct("blob::Core")
-            .field("head_locator", &self.head_locator)
-            .finish()
     }
 }
