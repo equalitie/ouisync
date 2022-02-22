@@ -26,16 +26,16 @@ use zeroize::Zeroize;
 
 pub(crate) struct Blob {
     core: Arc<Mutex<Core>>,
-    head_locator: Locator,
     branch: Branch,
+    head_locator: Locator,
     current_block: OpenBlock,
 }
 
 impl Blob {
     pub fn new(
         core: Arc<Mutex<Core>>,
-        head_locator: Locator,
         branch: Branch,
+        head_locator: Locator,
         current_block: OpenBlock,
     ) -> Self {
         Self {
@@ -66,13 +66,12 @@ impl Blob {
 
         Ok(Self::new(
             Arc::new(Mutex::new(Core {
-                branch: branch.clone(),
                 head_locator,
                 len,
                 len_dirty: false,
             })),
-            head_locator,
             branch,
+            head_locator,
             OpenBlock {
                 locator: head_locator,
                 id,
@@ -117,7 +116,7 @@ impl Blob {
 
         drop(core_guard);
 
-        Ok(Self::new(core, head_locator, branch, current_block))
+        Ok(Self::new(core, branch, head_locator, current_block))
     }
 
     pub async fn first_block_id(&self) -> Result<BlockId> {
@@ -138,13 +137,12 @@ impl Blob {
 
         Self::new(
             Arc::new(Mutex::new(Core {
-                branch: branch.clone(),
                 head_locator,
                 len: 0,
                 len_dirty: false,
             })),
-            head_locator,
             branch,
+            head_locator,
             current_block,
         )
     }
@@ -281,7 +279,7 @@ impl Blob {
 
     async fn lock(&mut self) -> Operations<'_> {
         let core_guard = self.core.lock().await;
-        Operations::new(core_guard, &mut self.current_block)
+        Operations::new(core_guard, &self.branch, &mut self.current_block)
     }
 }
 

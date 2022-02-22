@@ -1,10 +1,9 @@
-use crate::{block::BLOCK_SIZE, branch::Branch, locator::Locator};
+use crate::{block::BLOCK_SIZE, locator::Locator};
 use std::{fmt, mem};
 
 pub(super) const HEADER_SIZE: usize = mem::size_of::<usize>();
 
 pub(crate) struct Core {
-    pub branch: Branch,
     pub head_locator: Locator,
     pub len: u64,
     pub len_dirty: bool,
