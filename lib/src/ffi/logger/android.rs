@@ -151,7 +151,8 @@ fn setup_logger() {
             .with_min_level(Level::Trace)
             .with_filter(
                 FilterBuilder::new()
-                    .filter(None, LevelFilter::Error)
+                    // disable logs from dependencies to avoid log spam
+                    .filter(None, LevelFilter::Off)
                     // TODO: allow changing the log level
                     .filter(Some(env!("CARGO_PKG_NAME")), LevelFilter::Trace)
                     .build(),
