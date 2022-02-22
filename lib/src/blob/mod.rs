@@ -137,18 +137,23 @@ impl Blob {
     /// number of bytes actually read which might be less than `buffer.len()` if the portion of the
     /// blob past the internal cursor is smaller than `buffer.len()`.
     pub async fn read(&mut self, buffer: &mut [u8]) -> Result<usize> {
-        self.lock().await.read(buffer).await
+        let mut conn = self.db_pool().acquire().await?;
+        self.lock().await.read(&mut conn, buffer).await
     }
 
     /// Read all data from this blob from the current seek position until the end and return then
     /// in a `Vec`.
     pub async fn read_to_end(&mut self) -> Result<Vec<u8>> {
-        self.lock().await.read_to_end().await
+        let mut conn = self.db_pool().acquire().await?;
+        self.lock().await.read_to_end(&mut conn).await
     }
 
     /// Writes `buffer` into this blob, advancing the blob's internal cursor.
     pub async fn write(&mut self, buffer: &[u8]) -> Result<()> {
-        self.lock().await.write(buffer).await
+        let mut tx = self.db_pool().begin().await?;
+        self.lock().await.write(&mut tx, buffer).await?;
+        tx.commit().await?;
+        Ok(())
     }
 
     /// Writes into this blob in a db transaction.
@@ -157,7 +162,7 @@ impl Blob {
         tx: &mut db::Transaction<'_>,
         buffer: &[u8],
     ) -> Result<()> {
-        self.lock().await.write_in_transaction(tx, buffer).await
+        self.lock().await.write(tx, buffer).await
     }
 
     /// Seek to an offset in the blob.
@@ -167,12 +172,18 @@ impl Blob {
     ///
     /// Returns the new seek position from the start of the blob.
     pub async fn seek(&mut self, pos: SeekFrom) -> Result<u64> {
-        self.lock().await.seek(pos).await
+        let mut tx = self.db_pool().begin().await?;
+        let pos = self.lock().await.seek(&mut tx, pos).await?;
+        tx.commit().await?;
+        Ok(pos)
     }
 
     /// Truncate the blob to the given length.
     pub async fn truncate(&mut self, len: u64) -> Result<()> {
-        self.lock().await.truncate(len).await
+        let mut tx = self.db_pool().begin().await?;
+        self.lock().await.truncate(&mut tx, len).await?;
+        tx.commit().await?;
+        Ok(())
     }
 
     /// Truncate the blob to the given length in a db transaction.
@@ -181,7 +192,7 @@ impl Blob {
         tx: &mut db::Transaction<'_>,
         len: u64,
     ) -> Result<()> {
-        self.lock().await.truncate_in_transaction(tx, len).await
+        self.lock().await.truncate(tx, len).await
     }
 
     /// Flushes this blob, ensuring that all intermediately buffered contents gets written to the
@@ -190,7 +201,7 @@ impl Blob {
     #[cfg(test)]
     pub async fn flush(&mut self) -> Result<bool> {
         let mut tx = self.db_pool().begin().await?;
-        let was_dirty = self.flush_in_transaction(&mut tx).await?;
+        let was_dirty = self.lock().await.flush(&mut tx).await?;
         tx.commit().await?;
 
         Ok(was_dirty)
@@ -198,12 +209,13 @@ impl Blob {
 
     /// Flushes this blob in a db transaction.
     pub async fn flush_in_transaction(&mut self, tx: &mut db::Transaction<'_>) -> Result<bool> {
-        self.lock().await.flush_in_transaction(tx).await
+        self.lock().await.flush(tx).await
     }
 
     /// Removes this blob.
     pub async fn remove(&mut self) -> Result<()> {
-        self.lock().await.remove().await
+        let mut conn = self.db_pool().acquire().await?;
+        self.lock().await.remove(&mut conn).await
     }
 
     /// Creates a shallow copy (only the index nodes are copied, not blocks) of this blob into the
@@ -213,7 +225,12 @@ impl Blob {
             return Ok(());
         }
 
-        let new_self = self.lock().await.fork(dst_branch, dst_head_locator).await?;
+        let mut conn = self.db_pool().acquire().await?;
+        let new_self = self
+            .lock()
+            .await
+            .fork(&mut conn, dst_branch, dst_head_locator)
+            .await?;
 
         *self = new_self;
 

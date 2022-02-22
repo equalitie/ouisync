@@ -36,9 +36,12 @@ impl<'a> Operations<'a> {
     /// Reads data from this blob into `buffer`, advancing the internal cursor. Returns the
     /// number of bytes actually read which might be less than `buffer.len()` if the portion of the
     /// blob past the internal cursor is smaller than `buffer.len()`.
-    pub async fn read(&mut self, mut buffer: &mut [u8]) -> Result<usize> {
+    pub async fn read(
+        &mut self,
+        conn: &mut db::Connection,
+        mut buffer: &mut [u8],
+    ) -> Result<usize> {
         let mut total_len = 0;
-        let mut conn = self.core.db_pool().acquire().await?;
 
         loop {
             let remaining = (self.core.len - self.seek_position())
@@ -60,7 +63,7 @@ impl<'a> Operations<'a> {
             }
 
             let (id, content) = read_block(
-                &mut conn,
+                conn,
                 self.core.branch.data(),
                 self.core.branch.keys().read(),
                 &locator,
@@ -83,7 +86,7 @@ impl<'a> Operations<'a> {
 
     /// Read all data from this blob from the current seek position until the end and return then
     /// in a `Vec`.
-    pub async fn read_to_end(&mut self) -> Result<Vec<u8>> {
+    pub async fn read_to_end(&mut self, conn: &mut db::Connection) -> Result<Vec<u8>> {
         let mut buffer = vec![
             0;
             (self.core.len - self.seek_position())
@@ -91,26 +94,14 @@ impl<'a> Operations<'a> {
                 .unwrap_or(usize::MAX)
         ];
 
-        let len = self.read(&mut buffer).await?;
+        let len = self.read(conn, &mut buffer).await?;
         buffer.truncate(len);
 
         Ok(buffer)
     }
 
-    /// Writes `buffer` into this blob, advancing the blob's internal cursor.
-    pub async fn write(&mut self, buffer: &[u8]) -> Result<()> {
-        let mut tx = self.core.db_pool().begin().await?;
-        self.write_in_transaction(&mut tx, buffer).await?;
-        tx.commit().await?;
-        Ok(())
-    }
-
     /// Writes into the blob in db transaction.
-    pub async fn write_in_transaction(
-        &mut self,
-        tx: &mut db::Transaction<'_>,
-        mut buffer: &[u8],
-    ) -> Result<()> {
+    pub async fn write(&mut self, tx: &mut db::Transaction<'_>, mut buffer: &[u8]) -> Result<()> {
         loop {
             let len = self.current_block.content.write(buffer);
 
@@ -157,19 +148,7 @@ impl<'a> Operations<'a> {
     /// will be clamped to be within the range.
     ///
     /// Returns the new seek position from the start of the blob.
-    pub async fn seek(&mut self, pos: SeekFrom) -> Result<u64> {
-        let mut tx = self.core.db_pool().begin().await?;
-        let offset = self.seek_in_transaction(&mut tx, pos).await?;
-        tx.commit().await?;
-        Ok(offset)
-    }
-
-    /// Seek to an offset in the blob in a db transaction.
-    pub async fn seek_in_transaction(
-        &mut self,
-        tx: &mut db::Transaction<'_>,
-        pos: SeekFrom,
-    ) -> Result<u64> {
+    pub async fn seek(&mut self, tx: &mut db::Transaction<'_>, pos: SeekFrom) -> Result<u64> {
         let offset = match pos {
             SeekFrom::Start(n) => n.min(self.core.len),
             SeekFrom::End(n) => {
@@ -213,19 +192,7 @@ impl<'a> Operations<'a> {
     }
 
     /// Truncate the blob to the given length.
-    pub async fn truncate(&mut self, len: u64) -> Result<()> {
-        let mut tx = self.core.db_pool().begin().await?;
-        self.truncate_in_transaction(&mut tx, len).await?;
-        tx.commit().await?;
-        Ok(())
-    }
-
-    /// Truncate the blob to the given length in a db transaction.
-    pub async fn truncate_in_transaction(
-        &mut self,
-        tx: &mut db::Transaction<'_>,
-        len: u64,
-    ) -> Result<()> {
+    pub async fn truncate(&mut self, tx: &mut db::Transaction<'_>, len: u64) -> Result<()> {
         // TODO: reuse the truncated blocks on subsequent writes if the content is identical
 
         if len == self.core.len {
@@ -245,7 +212,7 @@ impl<'a> Operations<'a> {
         let new_block_count = self.core.block_count();
 
         if self.seek_position() > self.core.len {
-            self.seek_in_transaction(tx, SeekFrom::End(0)).await?;
+            self.seek(tx, SeekFrom::End(0)).await?;
         }
 
         self.remove_blocks(
@@ -259,11 +226,10 @@ impl<'a> Operations<'a> {
         .await
     }
 
-    /// Flushes this blob in a db transaction, ensuring that all intermediately buffered contents
-    /// gets written to the store.
-    ///
+    /// Flushes this blob, ensuring that all intermediately buffered contents gets written to the
+    /// store.
     /// Return true if was dirty and the flush actually took place
-    pub async fn flush_in_transaction(&mut self, tx: &mut db::Transaction<'_>) -> Result<bool> {
+    pub async fn flush(&mut self, tx: &mut db::Transaction<'_>) -> Result<bool> {
         if !self.is_dirty() {
             return Ok(false);
         }
@@ -275,8 +241,8 @@ impl<'a> Operations<'a> {
     }
 
     /// Removes this blob.
-    pub async fn remove(&mut self) -> Result<()> {
-        let mut tx = self.core.db_pool().begin().await?;
+    pub async fn remove(&mut self, conn: &mut db::Connection) -> Result<()> {
+        let mut tx = conn.begin().await?;
         self.remove_blocks(
             &mut tx,
             self.core
@@ -296,7 +262,12 @@ impl<'a> Operations<'a> {
 
     /// Creates a shallow copy (only the index nodes are copied, not blocks) of this blob into the
     /// specified destination branch and locator.
-    pub async fn fork(&mut self, dst_branch: Branch, dst_head_locator: Locator) -> Result<Blob> {
+    pub async fn fork(
+        &mut self,
+        conn: &mut db::Connection,
+        dst_branch: Branch,
+        dst_head_locator: Locator,
+    ) -> Result<Blob> {
         // This should gracefuly handled in the Blob from where this function is invoked.
         assert!(
             self.core.branch.id() != dst_branch.id() || self.core.head_locator != dst_head_locator
@@ -307,7 +278,7 @@ impl<'a> Operations<'a> {
         // accidentally forking into remote branch (remote branches don't have write access).
         let write_keys = dst_branch.keys().write().ok_or(Error::PermissionDenied)?;
 
-        let mut tx = self.core.db_pool().begin().await?;
+        let mut tx = conn.begin().await?;
         let mut dst_writer = dst_branch.data().write();
 
         for (src_locator, dst_locator) in self.core.locators().zip(dst_head_locator.sequence()) {

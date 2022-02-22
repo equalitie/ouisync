@@ -2,7 +2,6 @@ use super::{operations, Cursor, OpenBlock};
 use crate::{
     block::{BlockId, BLOCK_SIZE},
     branch::Branch,
-    db,
     error::Result,
     locator::Locator,
     Error,
@@ -58,10 +57,6 @@ impl Core {
                 &self.head_locator.encode(self.branch.keys().read()),
             )
             .await
-    }
-
-    pub fn db_pool(&self) -> &db::Pool {
-        self.branch.db_pool()
     }
 
     /// Length of this blob in bytes.
