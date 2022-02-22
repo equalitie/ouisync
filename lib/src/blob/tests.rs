@@ -423,13 +423,13 @@ async fn write_reopen_and_read() {
     let (mut rng, branch) = setup(0).await;
 
     let locator = random_head_locator(&mut rng);
-    let mut blob = Blob::create(branch, locator);
+    let mut blob = Blob::create(branch.clone(), locator);
     blob.write(b"foo").await.unwrap();
     blob.flush().await.unwrap();
 
     let core = blob.core().clone();
 
-    let mut blob = Blob::reopen(core).await.unwrap();
+    let mut blob = Blob::reopen(branch, locator, core).await.unwrap();
     let content = blob.read_to_end().await.unwrap();
     assert_eq!(content, b"foo");
 }

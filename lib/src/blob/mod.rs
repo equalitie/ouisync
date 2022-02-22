@@ -12,6 +12,7 @@ use crate::{
     db,
     error::Result,
     locator::Locator,
+    Error,
 };
 use std::{
     convert::TryInto,
@@ -80,8 +81,54 @@ impl Blob {
         ))
     }
 
+    pub async fn reopen(
+        branch: Branch,
+        head_locator: Locator,
+        core: Arc<Mutex<Core>>,
+    ) -> Result<Self> {
+        let mut conn = branch.db_pool().acquire().await?;
+        let core_guard = core.lock().await;
+
+        let current_block = match operations::load_block(
+            &mut conn,
+            branch.data(),
+            branch.keys().read(),
+            &head_locator,
+        )
+        .await
+        {
+            Ok((id, mut buffer, nonce)) => {
+                operations::decrypt_block(branch.keys().read(), &nonce, &mut buffer);
+
+                let mut content = Cursor::new(buffer);
+                content.pos = core_guard.header_size();
+
+                OpenBlock {
+                    locator: head_locator,
+                    id,
+                    content,
+                    dirty: false,
+                }
+            }
+            Err(Error::EntryNotFound) if core_guard.len == 0 => OpenBlock::new_head(head_locator),
+            Err(error) => return Err(error),
+        };
+
+        drop(core_guard);
+
+        Ok(Self::new(core, head_locator, branch, current_block))
+    }
+
     pub async fn first_block_id(&self) -> Result<BlockId> {
-        self.core.lock().await.first_block_id().await
+        let mut conn = self.db_pool().acquire().await?;
+
+        self.branch
+            .data()
+            .get(
+                &mut conn,
+                &self.head_locator.encode(self.branch.keys().read()),
+            )
+            .await
     }
 
     /// Creates a new blob.
@@ -101,21 +148,6 @@ impl Blob {
         )
     }
 
-    pub async fn reopen(core: Arc<Mutex<Core>>) -> Result<Self> {
-        let ptr = core.clone();
-        let mut guard = core.lock().await;
-        let core = &mut *guard;
-
-        let current_block = core.open_first_block().await?;
-
-        Ok(Self::new(
-            ptr,
-            core.head_locator,
-            core.branch.clone(),
-            current_block,
-        ))
-    }
-
     pub fn branch(&self) -> &Branch {
         &self.branch
     }
@@ -130,7 +162,7 @@ impl Blob {
     }
 
     pub async fn len(&self) -> u64 {
-        self.core.lock().await.len()
+        self.core.lock().await.len
     }
 
     /// Reads data from this blob into `buffer`, advancing the internal cursor. Returns the

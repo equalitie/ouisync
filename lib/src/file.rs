@@ -22,23 +22,25 @@ pub struct File {
 impl File {
     /// Opens an existing file.
     pub(crate) async fn open(
-        owner_branch: Branch,
+        branch: Branch,
         locator: Locator,
         parent: ParentContext,
     ) -> Result<Self> {
         Ok(Self {
-            blob: Blob::open(owner_branch, locator).await?,
+            blob: Blob::open(branch, locator).await?,
             parent,
         })
     }
 
     /// Opens an existing file. Reuse the already opened blob::Core
     pub(crate) async fn reopen(
-        blob_core: Arc<Mutex<blob::Core>>,
+        branch: Branch,
+        locator: Locator,
         parent: ParentContext,
+        blob_core: Arc<Mutex<blob::Core>>,
     ) -> Result<Self> {
         Ok(Self {
-            blob: Blob::reopen(blob_core).await?,
+            blob: Blob::reopen(branch, locator, blob_core).await?,
             parent,
         })
     }

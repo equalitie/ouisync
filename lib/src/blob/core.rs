@@ -1,11 +1,4 @@
-use super::{operations, Cursor, OpenBlock};
-use crate::{
-    block::{BlockId, BLOCK_SIZE},
-    branch::Branch,
-    error::Result,
-    locator::Locator,
-    Error,
-};
+use crate::{block::BLOCK_SIZE, branch::Branch, locator::Locator};
 use std::{fmt, mem};
 
 pub(crate) struct Core {
@@ -16,54 +9,6 @@ pub(crate) struct Core {
 }
 
 impl Core {
-    pub async fn open_first_block(&mut self) -> Result<OpenBlock> {
-        let mut conn = self.branch.db_pool().acquire().await?;
-
-        match operations::load_block(
-            &mut conn,
-            self.branch.data(),
-            self.branch.keys().read(),
-            &self.head_locator,
-        )
-        .await
-        {
-            Ok((id, mut buffer, nonce)) => {
-                operations::decrypt_block(self.branch.keys().read(), &nonce, &mut buffer);
-
-                let mut content = Cursor::new(buffer);
-                content.pos = self.header_size();
-
-                Ok(OpenBlock {
-                    locator: self.head_locator,
-                    id,
-                    content,
-                    dirty: false,
-                })
-            }
-            Err(Error::EntryNotFound) if self.len == 0 => {
-                Ok(OpenBlock::new_head(self.head_locator))
-            }
-            Err(error) => Err(error),
-        }
-    }
-
-    pub async fn first_block_id(&self) -> Result<BlockId> {
-        let mut conn = self.branch.db_pool().acquire().await?;
-
-        self.branch
-            .data()
-            .get(
-                &mut conn,
-                &self.head_locator.encode(self.branch.keys().read()),
-            )
-            .await
-    }
-
-    /// Length of this blob in bytes.
-    pub fn len(&self) -> u64 {
-        self.len
-    }
-
     pub fn header_size(&self) -> usize {
         mem::size_of_val(&self.len)
     }
