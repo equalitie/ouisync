@@ -394,7 +394,7 @@ impl Repository {
     }
 
     /// Subscribe to change notification from all current and future branches.
-    pub(crate) fn subscribe(&self) -> async_broadcast::Receiver<PublicKey> {
+    pub fn subscribe(&self) -> async_broadcast::Receiver<PublicKey> {
         self.shared.index.subscribe()
     }
 

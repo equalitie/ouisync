@@ -344,6 +344,12 @@ impl Registration {
         let state = self.inner.state.lock().await;
         state.registry[self.key].dht.is_some()
     }
+
+    // Cancel the registration. Same as dropping self, but allows to wait until the deregistration
+    // is complete.
+    pub async fn cancel(self) {
+        deregister(&self.inner, self.key).await
+    }
 }
 
 impl Drop for Registration {
@@ -358,14 +364,18 @@ impl Drop for Registration {
         let key = self.key;
 
         // HACK: Can't run async code inside `drop`, spawning a task instead.
-        tasks.other.spawn(async move {
-            let mut state = inner.state.lock().await;
-            let holder = state.registry.remove(key);
+        tasks
+            .other
+            .spawn(async move { deregister(&inner, key).await });
+    }
+}
 
-            for broker in state.message_brokers.values_mut() {
-                broker.destroy_link(holder.index.repository_id());
-            }
-        });
+async fn deregister(inner: &Inner, key: usize) {
+    let mut state = inner.state.lock().await;
+    if let Some(holder) = state.registry.try_remove(key) {
+        for broker in state.message_brokers.values_mut() {
+            broker.destroy_link(holder.index.repository_id());
+        }
     }
 }
 
