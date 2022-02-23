@@ -1,4 +1,4 @@
-use super::{Blob, Buffer, Core, Cursor, OpenBlock};
+use super::{core::HEADER_SIZE, Blob, Buffer, Core, Cursor, OpenBlock};
 use crate::{
     block::{self, BlockId, BlockNonce, BLOCK_SIZE},
     branch::Branch,
@@ -17,13 +17,22 @@ use tokio::sync::{Mutex, MutexGuard};
 
 pub(crate) struct Operations<'a> {
     core: MutexGuard<'a, Core>,
+    branch: &'a Branch,
+    head_locator: &'a Locator,
     current_block: &'a mut OpenBlock,
 }
 
 impl<'a> Operations<'a> {
-    pub fn new(core: MutexGuard<'a, Core>, current_block: &'a mut OpenBlock) -> Self {
+    pub fn new(
+        core: MutexGuard<'a, Core>,
+        branch: &'a Branch,
+        head_locator: &'a Locator,
+        current_block: &'a mut OpenBlock,
+    ) -> Self {
         Self {
             core,
+            branch,
+            head_locator,
             current_block,
         }
     }
@@ -64,8 +73,8 @@ impl<'a> Operations<'a> {
 
             let (id, content) = read_block(
                 conn,
-                self.core.branch.data(),
-                self.core.branch.keys().read(),
+                self.branch.data(),
+                self.branch.keys().read(),
                 &locator,
             )
             .await?;
@@ -125,13 +134,7 @@ impl<'a> Operations<'a> {
 
             let locator = self.current_block.locator.next();
             let (id, content) = if locator.number() < self.core.block_count() {
-                read_block(
-                    tx,
-                    self.core.branch.data(),
-                    self.core.branch.keys().read(),
-                    &locator,
-                )
-                .await?
+                read_block(tx, self.branch.data(), self.branch.keys().read(), &locator).await?
             } else {
                 (BlockId::from_content(&[]), Buffer::new())
             };
@@ -169,20 +172,15 @@ impl<'a> Operations<'a> {
             }
         };
 
-        let actual_offset = offset + self.core.header_size() as u64;
+        let actual_offset = offset + HEADER_SIZE as u64;
         let block_number = (actual_offset / BLOCK_SIZE as u64) as u32;
         let block_offset = (actual_offset % BLOCK_SIZE as u64) as usize;
 
         if block_number != self.current_block.locator.number() {
             let locator = self.locator_at(block_number);
 
-            let (id, content) = read_block(
-                tx,
-                self.core.branch.data(),
-                self.core.branch.keys().read(),
-                &locator,
-            )
-            .await?;
+            let (id, content) =
+                read_block(tx, self.branch.data(), self.branch.keys().read(), &locator).await?;
             self.replace_current_block(tx, locator, id, content).await?;
         }
 
@@ -217,8 +215,7 @@ impl<'a> Operations<'a> {
 
         self.remove_blocks(
             tx,
-            self.core
-                .head_locator
+            self.head_locator
                 .sequence()
                 .skip(new_block_count as usize)
                 .take((old_block_count - new_block_count) as usize),
@@ -245,15 +242,14 @@ impl<'a> Operations<'a> {
         let mut tx = conn.begin().await?;
         self.remove_blocks(
             &mut tx,
-            self.core
-                .head_locator
+            self.head_locator
                 .sequence()
                 .take(self.core.block_count() as usize),
         )
         .await?;
         tx.commit().await?;
 
-        *self.current_block = OpenBlock::new_head(self.core.head_locator);
+        *self.current_block = OpenBlock::new_head(*self.head_locator);
         self.core.len = 0;
         self.core.len_dirty = true;
 
@@ -269,11 +265,9 @@ impl<'a> Operations<'a> {
         dst_head_locator: Locator,
     ) -> Result<Blob> {
         // This should gracefuly handled in the Blob from where this function is invoked.
-        assert!(
-            self.core.branch.id() != dst_branch.id() || self.core.head_locator != dst_head_locator
-        );
+        assert!(self.branch.id() != dst_branch.id() || *self.head_locator != dst_head_locator);
 
-        let read_key = self.core.branch.keys().read();
+        let read_key = self.branch.keys().read();
         // Take the write key from the dst branch, not the src branch, to protect us against
         // accidentally forking into remote branch (remote branches don't have write access).
         let write_keys = dst_branch.keys().write().ok_or(Error::PermissionDenied)?;
@@ -281,12 +275,11 @@ impl<'a> Operations<'a> {
         let mut tx = conn.begin().await?;
         let mut dst_writer = dst_branch.data().write();
 
-        for (src_locator, dst_locator) in self.core.locators().zip(dst_head_locator.sequence()) {
+        for (src_locator, dst_locator) in self.locators().zip(dst_head_locator.sequence()) {
             let encoded_src_locator = src_locator.encode(read_key);
             let encoded_dst_locator = dst_locator.encode(read_key);
 
             let block_id = self
-                .core
                 .branch
                 .data()
                 .get(&mut tx, &encoded_src_locator)
@@ -301,8 +294,6 @@ impl<'a> Operations<'a> {
         tx.commit().await?;
 
         let new_core = Core {
-            branch: dst_branch.clone(),
-            head_locator: dst_head_locator,
             len: self.core.len,
             len_dirty: self.core.len_dirty,
         };
@@ -314,12 +305,12 @@ impl<'a> Operations<'a> {
             dirty: self.current_block.dirty,
         };
 
-        Ok(Blob::new(
-            Arc::new(Mutex::new(new_core)),
-            dst_head_locator,
-            dst_branch,
+        Ok(Blob {
+            core: Arc::new(Mutex::new(new_core)),
+            branch: dst_branch,
+            head_locator: dst_head_locator,
             current_block,
-        ))
+        })
     }
 
     async fn replace_current_block(
@@ -336,7 +327,7 @@ impl<'a> Operations<'a> {
 
         if locator.number() == 0 {
             // If head block, skip over the header.
-            content.pos = self.core.header_size();
+            content.pos = HEADER_SIZE;
         }
 
         *self.current_block = OpenBlock {
@@ -355,17 +346,12 @@ impl<'a> Operations<'a> {
             return Ok(());
         }
 
-        let read_key = self.core.branch.keys().read();
-        let write_keys = self
-            .core
-            .branch
-            .keys()
-            .write()
-            .ok_or(Error::PermissionDenied)?;
+        let read_key = self.branch.keys().read();
+        let write_keys = self.branch.keys().write().ok_or(Error::PermissionDenied)?;
 
         let block_id = write_block(
             tx,
-            self.core.branch.data(),
+            self.branch.data(),
             read_key,
             write_keys,
             &self.current_block.locator,
@@ -385,13 +371,8 @@ impl<'a> Operations<'a> {
             return Ok(());
         }
 
-        let read_key = self.core.branch.keys().read();
-        let write_keys = self
-            .core
-            .branch
-            .keys()
-            .write()
-            .ok_or(Error::PermissionDenied)?;
+        let read_key = self.branch.keys().read();
+        let write_keys = self.branch.keys().write().ok_or(Error::PermissionDenied)?;
 
         if self.current_block.locator.number() == 0 {
             let old_pos = self.current_block.content.pos;
@@ -401,13 +382,8 @@ impl<'a> Operations<'a> {
             self.current_block.dirty = true;
         } else {
             let locator = self.locator_at(0);
-            let (_, buffer) = read_block(
-                tx,
-                self.core.branch.data(),
-                self.core.branch.keys().read(),
-                &locator,
-            )
-            .await?;
+            let (_, buffer) =
+                read_block(tx, self.branch.data(), self.branch.keys().read(), &locator).await?;
 
             let mut cursor = Cursor::new(buffer);
             cursor.pos = 0;
@@ -415,7 +391,7 @@ impl<'a> Operations<'a> {
 
             write_block(
                 tx,
-                self.core.branch.data(),
+                self.branch.data(),
                 read_key,
                 write_keys,
                 &locator,
@@ -433,15 +409,10 @@ impl<'a> Operations<'a> {
     where
         T: IntoIterator<Item = Locator>,
     {
-        let read_key = self.core.branch.keys().read();
-        let write_keys = self
-            .core
-            .branch
-            .keys()
-            .write()
-            .ok_or(Error::PermissionDenied)?;
+        let read_key = self.branch.keys().read();
+        let write_keys = self.branch.keys().write().ok_or(Error::PermissionDenied)?;
 
-        let mut writer = self.core.branch.data().write();
+        let mut writer = self.branch.data().write();
 
         for locator in locators {
             writer
@@ -458,11 +429,17 @@ impl<'a> Operations<'a> {
     pub fn seek_position(&mut self) -> u64 {
         self.current_block.locator.number() as u64 * BLOCK_SIZE as u64
             + self.current_block.content.pos as u64
-            - self.core.header_size() as u64
+            - HEADER_SIZE as u64
     }
 
     fn locator_at(&self, number: u32) -> Locator {
-        self.core.head_locator.nth(number)
+        self.head_locator.nth(number)
+    }
+
+    fn locators(&self) -> impl Iterator<Item = Locator> {
+        self.head_locator
+            .sequence()
+            .take(self.core.block_count() as usize)
     }
 }
 

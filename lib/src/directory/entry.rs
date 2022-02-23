@@ -157,7 +157,7 @@ impl<'a> FileRef<'a> {
             let mut core = core.lock().await;
 
             if let Some(core) = core.upgrade() {
-                File::reopen(core, parent_context).await
+                File::reopen(branch, locator, parent_context, core).await
             } else {
                 let file = File::open(branch, locator, parent_context).await?;
                 *core = Arc::downgrade(file.blob_core());
