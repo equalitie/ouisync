@@ -137,9 +137,11 @@ impl MessageBroker {
 
         task::spawn(async move {
             select! {
-                _ = run_link(role, stream, sink, index) => (),
+                _ = maintain_link(role, channel, stream, sink, index) => (),
                 _ = abort_rx => (),
             }
+
+            log::debug!("link for {:?} destroyed", channel)
         });
     }
 
@@ -150,41 +152,56 @@ impl MessageBroker {
     }
 }
 
-async fn run_link(role: Role, stream: ContentStream, sink: ContentSink, index: Index) {
-    let channel = *stream.channel();
-
-    let (stream, sink) =
-        match crypto::establish_channel(role, index.repository_id(), stream, sink).await {
-            Ok(channel) => channel,
+// Repeatedly establish and run the link until it's explicitly destroyed by calling `destroy_link()`.
+async fn maintain_link(
+    role: Role,
+    channel: MessageChannel,
+    mut stream: ContentStream,
+    mut sink: ContentSink,
+    index: Index,
+) {
+    loop {
+        match crypto::establish_channel(role, index.repository_id(), &mut stream, &mut sink).await {
+            Ok((stream, sink)) => {
+                run_link(channel, stream, sink, &index).await;
+            }
             Err(error) => {
                 log::warn!(
                     "failed to establish encrypted channel for {:?}: {}",
                     channel,
                     error
                 );
-                return;
             }
         };
 
+        // HACK: `establish_channel` sometimes returns immediatelly, so we need to yield explicitly
+        // here otherwise we could starve the runtime.
+        task::yield_now().await;
+    }
+}
+
+async fn run_link(
+    channel: MessageChannel,
+    stream: DecryptingStream<'_>,
+    sink: EncryptingSink<'_>,
+    index: &Index,
+) {
     let (request_tx, request_rx) = mpsc::channel(1);
     let (response_tx, response_rx) = mpsc::channel(1);
     let (content_tx, content_rx) = mpsc::channel(1);
 
     // Run everything in parallel:
-    // TODO: restart when nonce exhausted
     select! {
         _ = run_client(channel, index.clone(), content_tx.clone(), response_rx) => (),
-        _ = run_server(channel, index, content_tx, request_rx ) => (),
+        _ = run_server(channel, index.clone(), content_tx, request_rx ) => (),
         _ = recv_messages(stream, request_tx, response_tx) => (),
         _ = send_messages(content_rx, sink) => (),
     }
-
-    log::debug!("link for {:?} terminated", channel)
 }
 
 // Handle incoming messages
 async fn recv_messages(
-    mut stream: DecryptingStream,
+    mut stream: DecryptingStream<'_>,
     request_tx: mpsc::Sender<Request>,
     response_tx: mpsc::Sender<Response>,
 ) {
@@ -219,7 +236,7 @@ async fn recv_messages(
 }
 
 // Handle outgoing messages
-async fn send_messages(mut content_rx: mpsc::Receiver<Content>, mut sink: EncryptingSink) {
+async fn send_messages(mut content_rx: mpsc::Receiver<Content>, mut sink: EncryptingSink<'_>) {
     while let Some(content) = content_rx.recv().await {
         // unwrap is OK because serialization into a vec should never fail unless we have a bug
         // somewhere.

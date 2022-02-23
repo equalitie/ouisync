@@ -1,11 +1,13 @@
 use ouisync::{AccessSecrets, Error, MasterSecret, Network, NetworkOptions, Repository, Store};
+use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::{net::Ipv4Addr, time::Duration};
 use tokio::time;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn relink_repository() {
-    // Create two peers and connect them together.
+    let mut rng = StdRng::seed_from_u64(0);
 
+    // Create two peers and connect them together.
     let network_a = Network::new::<String>(&test_network_options(), None)
         .await
         .unwrap();
@@ -21,9 +23,9 @@ async fn relink_repository() {
 
     let repo_a = Repository::create(
         &Store::Temporary,
-        rand::random(),
-        MasterSecret::random(),
-        AccessSecrets::random_write(),
+        rng.gen(),
+        MasterSecret::generate(&mut rng),
+        AccessSecrets::generate_write(&mut rng),
         false,
     )
     .await
@@ -31,8 +33,8 @@ async fn relink_repository() {
 
     let repo_b = Repository::create(
         &Store::Temporary,
-        rand::random(),
-        MasterSecret::random(),
+        rng.gen(),
+        MasterSecret::generate(&mut rng),
         repo_a.secrets().clone(),
         false,
     )

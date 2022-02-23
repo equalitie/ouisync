@@ -22,6 +22,7 @@ use tokio::{
 
 /// Reads/writes messages from/to the underlying TCP streams and dispatches them to individual
 /// streams/sinks based on their ids.
+#[derive(Clone)]
 pub(super) struct MessageDispatcher {
     recv: Arc<RecvState>,
     send: Arc<MultiSink>,
@@ -145,6 +146,8 @@ impl ContentSink {
 
     /// Returns whether the send succeeded.
     pub async fn send(&self, content: Vec<u8>) -> bool {
+        assert!(!content.is_empty());
+
         self.state
             .send(Message {
                 channel: self.channel,
