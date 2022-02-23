@@ -17,6 +17,7 @@ use tokio::{
     net::{tcp, TcpStream},
     select,
     sync::watch,
+    task,
 };
 
 /// Reads/writes messages from/to the underlying TCP streams and dispatches them to individual
@@ -104,7 +105,7 @@ impl ContentStream {
 
         loop {
             if let Some(content) = self.state.pop(&self.channel) {
-                return Some(content);
+                return decode_message_content(content);
             }
 
             if closed {
@@ -115,7 +116,7 @@ impl ContentStream {
                 message = self.state.reader.recv() => {
                     if let Some(message) = message {
                         if message.channel == self.channel {
-                            return Some(message.content);
+                            return decode_message_content(message.content);
                         } else {
                             self.state.push(message)
                         }
@@ -153,6 +154,18 @@ impl ContentSink {
     }
 }
 
+impl Drop for ContentSink {
+    fn drop(&mut self) {
+        let channel = self.channel;
+        let state = self.state.clone();
+
+        // Gracefully close the channel. Have to spawn because sending is async.
+        task::spawn(async move {
+            state.send(create_close_message(channel)).await;
+        });
+    }
+}
+
 struct RecvState {
     reader: MultiStream,
     queues: Mutex<HashMap<MessageChannel, VecDeque<Vec<u8>>>>,
@@ -175,6 +188,23 @@ impl RecvState {
             .or_default()
             .push_front(message.content);
         self.queues_changed_tx.send(()).unwrap_or(());
+    }
+}
+
+fn decode_message_content(content: Vec<u8>) -> Option<Vec<u8>> {
+    if !content.is_empty() {
+        Some(content)
+    } else {
+        // Empty content indicates channel close
+        None
+    }
+}
+
+fn create_close_message(channel: MessageChannel) -> Message {
+    Message {
+        channel,
+        // Empty content indicates channel close
+        content: Vec::new(),
     }
 }
 
@@ -564,6 +594,39 @@ mod tests {
         stream.close();
 
         assert!(stream.recv().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn drop_sink() {
+        let (client_socket, server_socket) = create_connected_sockets().await;
+
+        let client = MessageDispatcher::new();
+        client.bind(client_socket, ConnectionPermit::dummy());
+
+        let server = MessageDispatcher::new();
+        server.bind(server_socket, ConnectionPermit::dummy());
+
+        let channel_a = MessageChannel::random();
+        let channel_b = MessageChannel::random();
+
+        let client_sink_a = client.open_send(channel_a);
+        let client_sink_b = client.open_send(channel_b);
+
+        let mut server_stream_a = server.open_recv(channel_a);
+        let mut server_stream_b = server.open_recv(channel_b);
+
+        assert!(client_sink_a.send(b"hello A".to_vec()).await);
+        assert!(client_sink_b.send(b"hello B".to_vec()).await);
+
+        // Dropping the sink closes channel A, but leaves channel B open.
+        drop(client_sink_a);
+
+        // Stream A receives the message and then closes.
+        assert!(server_stream_a.recv().await.is_some());
+        assert!(server_stream_a.recv().await.is_none());
+
+        // Stream B is still open
+        assert!(server_stream_b.recv().await.is_some());
     }
 
     async fn setup() -> (MessageSink<TcpStream>, MessageDispatcher) {
