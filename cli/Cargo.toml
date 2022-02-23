@@ -13,7 +13,7 @@ name = "ouisync"
 path = "src/main.rs"
 
 [[test]]
-name = "integration"
+name = "cli-integration"
 path = "tests/tests.rs"
 
 [dependencies]

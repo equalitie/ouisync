@@ -23,7 +23,7 @@ type CipherState = noise_protocol::CipherState<Cipher>;
 type HandshakeState = noise_protocol::HandshakeState<X25519, Cipher, Blake2s>;
 
 /// Role of this replica in the communication protocol.
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, PartialEq, Debug)]
 pub(super) enum Role {
     /// Initiator sends the first message
     Initiator,
@@ -61,13 +61,13 @@ impl Role {
 const MAX_NONCE: u64 = u64::MAX - 1;
 
 /// Wrapper for [`ContentStream`] that decrypts incoming messages.
-pub(super) struct DecryptingStream {
-    inner: ContentStream,
+pub(super) struct DecryptingStream<'a> {
+    inner: &'a mut ContentStream,
     cipher: CipherState,
     buffer: Vec<u8>,
 }
 
-impl DecryptingStream {
+impl DecryptingStream<'_> {
     pub async fn recv(&mut self) -> Result<Vec<u8>, Error> {
         if self.cipher.get_next_n() >= MAX_NONCE {
             return Err(Error::Exhausted);
@@ -95,13 +95,13 @@ impl DecryptingStream {
 }
 
 /// Wrapper for [`ContentSink`] that encrypts outgoing messages.
-pub(super) struct EncryptingSink {
-    inner: ContentSink,
+pub(super) struct EncryptingSink<'a> {
+    inner: &'a mut ContentSink,
     cipher: CipherState,
     buffer: Vec<u8>,
 }
 
-impl EncryptingSink {
+impl EncryptingSink<'_> {
     pub async fn send(&mut self, mut content: Vec<u8>) -> Result<(), Error> {
         if self.cipher.get_next_n() >= MAX_NONCE {
             return Err(Error::Exhausted);
@@ -126,12 +126,12 @@ impl EncryptingSink {
 
 /// Establish encrypted communication channel for the purpose of syncing the given
 /// repository.
-pub(super) async fn establish_channel(
+pub(super) async fn establish_channel<'a>(
     role: Role,
     repo_id: &RepositoryId,
-    mut stream: ContentStream,
-    sink: ContentSink,
-) -> Result<(DecryptingStream, EncryptingSink), Error> {
+    stream: &'a mut ContentStream,
+    sink: &'a mut ContentSink,
+) -> Result<(DecryptingStream<'a>, EncryptingSink<'a>), Error> {
     let mut handshake_state = build_handshake_state(role, repo_id);
 
     let (recv_cipher, send_cipher) = match role {
