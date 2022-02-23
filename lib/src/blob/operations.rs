@@ -305,12 +305,12 @@ impl<'a> Operations<'a> {
             dirty: self.current_block.dirty,
         };
 
-        Ok(Blob::new(
-            Arc::new(Mutex::new(new_core)),
-            dst_branch,
-            dst_head_locator,
+        Ok(Blob {
+            core: Arc::new(Mutex::new(new_core)),
+            branch: dst_branch,
+            head_locator: dst_head_locator,
             current_block,
-        ))
+        })
     }
 
     async fn replace_current_block(

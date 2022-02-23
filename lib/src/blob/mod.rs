@@ -32,52 +32,22 @@ pub(crate) struct Blob {
 }
 
 impl Blob {
-    pub fn new(
-        core: Arc<Mutex<Core>>,
-        branch: Branch,
-        head_locator: Locator,
-        current_block: OpenBlock,
-    ) -> Self {
-        Self {
-            core,
-            head_locator,
-            branch,
-            current_block,
-        }
-    }
-
     /// Opens an existing blob.
     pub async fn open(branch: Branch, head_locator: Locator) -> Result<Self> {
         let mut conn = branch.db_pool().acquire().await?;
 
-        let (id, buffer, nonce) = operations::load_block(
-            &mut conn,
-            branch.data(),
-            branch.keys().read(),
-            &head_locator,
-        )
-        .await?;
+        let mut current_block = OpenBlock::open_head(&mut conn, &branch, head_locator).await?;
+        let len = current_block.content.read_u64();
 
-        let mut content = Cursor::new(buffer);
-
-        operations::decrypt_block(branch.keys().read(), &nonce, &mut content);
-
-        let len = content.read_u64();
-
-        Ok(Self::new(
-            Arc::new(Mutex::new(Core {
+        Ok(Self {
+            core: Arc::new(Mutex::new(Core {
                 len,
                 len_dirty: false,
             })),
             branch,
             head_locator,
-            OpenBlock {
-                locator: head_locator,
-                id,
-                content,
-                dirty: false,
-            },
-        ))
+            current_block,
+        })
     }
 
     pub async fn reopen(
@@ -85,35 +55,28 @@ impl Blob {
         head_locator: Locator,
         core: Arc<Mutex<Core>>,
     ) -> Result<Self> {
+        // Make sure we acquire db connection first and lock the core second always in that order,
+        // to prevent deadlocks.
         let mut conn = branch.db_pool().acquire().await?;
-        let len = core.lock().await.len;
+        let core_guard = core.lock().await;
 
-        let current_block = match operations::load_block(
-            &mut conn,
-            branch.data(),
-            branch.keys().read(),
-            &head_locator,
-        )
-        .await
-        {
-            Ok((id, mut buffer, nonce)) => {
-                operations::decrypt_block(branch.keys().read(), &nonce, &mut buffer);
-
-                let mut content = Cursor::new(buffer);
-                content.pos = HEADER_SIZE;
-
-                OpenBlock {
-                    locator: head_locator,
-                    id,
-                    content,
-                    dirty: false,
-                }
+        let current_block = match OpenBlock::open_head(&mut conn, &branch, head_locator).await {
+            Ok(mut current_block) => {
+                current_block.content.pos = HEADER_SIZE;
+                current_block
             }
-            Err(Error::EntryNotFound) if len == 0 => OpenBlock::new_head(head_locator),
+            Err(Error::EntryNotFound) if core_guard.len == 0 => OpenBlock::new_head(head_locator),
             Err(error) => return Err(error),
         };
 
-        Ok(Self::new(core, branch, head_locator, current_block))
+        drop(core_guard);
+
+        Ok(Self {
+            core,
+            branch,
+            head_locator,
+            current_block,
+        })
     }
 
     pub async fn first_block_id(&self) -> Result<BlockId> {
@@ -132,15 +95,15 @@ impl Blob {
     pub fn create(branch: Branch, head_locator: Locator) -> Self {
         let current_block = OpenBlock::new_head(head_locator);
 
-        Self::new(
-            Arc::new(Mutex::new(Core {
+        Self {
+            core: Arc::new(Mutex::new(Core {
                 len: 0,
                 len_dirty: false,
             })),
             branch,
             head_locator,
             current_block,
-        )
+        }
     }
 
     pub fn branch(&self) -> &Branch {
@@ -308,6 +271,25 @@ impl OpenBlock {
             content,
             dirty: true,
         }
+    }
+
+    async fn open_head(
+        conn: &mut db::Connection,
+        branch: &Branch,
+        locator: Locator,
+    ) -> Result<Self> {
+        let (id, mut buffer, nonce) =
+            operations::load_block(conn, branch.data(), branch.keys().read(), &locator).await?;
+        operations::decrypt_block(branch.keys().read(), &nonce, &mut buffer);
+
+        let content = Cursor::new(buffer);
+
+        Ok(Self {
+            locator,
+            id,
+            content,
+            dirty: false,
+        })
     }
 }
 
