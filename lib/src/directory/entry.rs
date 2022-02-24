@@ -148,23 +148,30 @@ impl<'a> FileRef<'a> {
     /// it's not a regular `async` function but rather returns explicit `impl Future`. The reason
     /// for this is to prevent deadlocks when opening a file while its parent directory is locked.
     pub fn open(&self) -> impl Future<Output = Result<File>> {
-        let core = self.entry_data.blob_core.clone();
         let parent_context = self.inner.parent_context();
         let branch = self.inner.parent_inner.blob.branch().clone();
         let locator = self.locator();
 
-        async move {
-            let mut core = core.lock().await;
+        // TODO: This is a quick fix to a file corruption problem caused by one thread writing to a
+        // file and another thread reading and closing it periodically. The problem was that both
+        // files shared the same blob::Core and when the blob for reading was being closed, the
+        // Blob::flush function was called which detected that the size has changed and overwrote
+        // the first block with outdated data.
+        File::open(branch, locator, parent_context)
 
-            if let Some(core) = core.upgrade() {
-                File::reopen(branch, locator, parent_context, core).await
-            } else {
-                let file = File::open(branch, locator, parent_context).await?;
-                *core = Arc::downgrade(file.blob_core());
+        //let core = self.entry_data.blob_core.clone();
+        //async move {
+        //    let mut core = core.lock().await;
 
-                Ok(file)
-            }
-        }
+        //    if let Some(core) = core.upgrade() {
+        //        File::reopen(branch, locator, parent_context, core).await
+        //    } else {
+        //        let file = File::open(branch, locator, parent_context).await?;
+        //        *core = Arc::downgrade(file.blob_core());
+
+        //        Ok(file)
+        //    }
+        //}
     }
 
     pub fn branch_id(&self) -> &PublicKey {
