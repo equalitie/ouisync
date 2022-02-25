@@ -1,7 +1,7 @@
 use std::io::SeekFrom;
 
 use super::*;
-use crate::db;
+use crate::{blob, block::BLOCK_SIZE, db};
 use assert_matches::assert_matches;
 use rand::Rng;
 use tokio::time::{sleep, timeout, Duration};
@@ -19,6 +19,68 @@ async fn root_directory_always_exists() {
     .await
     .unwrap();
     let _ = repo.open_directory("/").await.unwrap();
+}
+
+// Count leaf nodes in the index of the local branch.
+async fn count_local_index_leaf_nodes(repo: &Repository) -> usize {
+    let index = repo.index();
+    let branch = repo.local_branch().await.unwrap();
+    let mut conn = index.pool.acquire().await.unwrap();
+    branch.data().count_leaf_nodes(&mut conn).await.unwrap()
+}
+
+fn random_bytes(size: usize) -> Vec<u8> {
+    let mut buffer = vec![0; size];
+    rand::thread_rng().fill(&mut buffer[..]);
+    buffer
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn count_blocks_sanity_checks() {
+    let device_id = rand::random();
+
+    let repo = Repository::create(
+        &db::Store::Temporary,
+        device_id,
+        MasterSecret::random(),
+        AccessSecrets::random_write(),
+        false,
+    )
+    .await
+    .unwrap();
+
+    let file_name = "test.txt";
+
+    //------------------------------------------------------------------------
+    // Create a small file in the root.
+
+    let mut file = repo.create_file(file_name).await.unwrap();
+    file.write(&random_bytes(BLOCK_SIZE - blob::HEADER_SIZE))
+        .await
+        .unwrap();
+    file.flush().await.unwrap();
+
+    // 2 = one for the root + one for the file.
+    assert_eq!(count_local_index_leaf_nodes(&repo).await, 2);
+
+    //------------------------------------------------------------------------
+    // Make the file bigger to expand to two blocks
+
+    file.write(&random_bytes(1)).await.unwrap();
+    file.flush().await.unwrap();
+
+    // 3 = one for the root + two for the file.
+    assert_eq!(count_local_index_leaf_nodes(&repo).await, 3);
+
+    //------------------------------------------------------------------------
+    // Remove the file, we should end up with just one block for the root.
+
+    repo.remove_entry(file_name).await.unwrap();
+
+    // 1 = one for the root with a tombstone entry
+    assert_eq!(count_local_index_leaf_nodes(&repo).await, 1);
+
+    //------------------------------------------------------------------------
 }
 
 #[tokio::test(flavor = "multi_thread")]

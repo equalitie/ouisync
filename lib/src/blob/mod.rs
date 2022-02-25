@@ -5,7 +5,6 @@ mod core;
 mod operations;
 
 pub(crate) use self::core::Core;
-use self::core::HEADER_SIZE;
 use self::operations::Operations;
 use crate::{
     block::{BlockId, BLOCK_SIZE},
@@ -18,11 +17,16 @@ use crate::{
 use std::{
     convert::TryInto,
     io::SeekFrom,
+    mem,
     ops::{Deref, DerefMut},
     sync::Arc,
 };
 use tokio::sync::Mutex;
 use zeroize::Zeroize;
+
+// Using u64 instead of usize because HEADER_SIZE must be the same irrespective of whether we're on
+// a 32bit or 64bit processor (if we want two such replicas to be able to sync).
+pub(super) const HEADER_SIZE: usize = mem::size_of::<u64>();
 
 pub(crate) struct Blob {
     core: Arc<Mutex<Core>>,
