@@ -36,7 +36,7 @@ fn random_bytes(size: usize) -> Vec<u8> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn count_blocks_sanity_checks() {
+async fn count_leaf_nodes_sanity_checks() {
     let device_id = rand::random();
 
     let repo = Repository::create(
@@ -81,6 +81,41 @@ async fn count_blocks_sanity_checks() {
     assert_eq!(count_local_index_leaf_nodes(&repo).await, 1);
 
     //------------------------------------------------------------------------
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn count_leaf_nodes_concurrent_writes() {
+    let device_id = rand::random();
+
+    let repo = Repository::create(
+        &db::Store::Temporary,
+        device_id,
+        MasterSecret::random(),
+        AccessSecrets::random_write(),
+        false,
+    )
+    .await
+    .unwrap();
+
+    let file_name = "test.txt";
+
+    let mut h1 = repo.create_file(file_name).await.unwrap();
+    // Make sure it exists for the next `open_file` operation to succeed.
+    h1.flush().await.unwrap();
+
+    // Write two blocks
+    h1.write(&random_bytes(2*BLOCK_SIZE - blob::HEADER_SIZE)).await.unwrap();
+
+    let mut h2 = repo.open_file(file_name).await.unwrap();
+    h2.write(&random_bytes(BLOCK_SIZE - blob::HEADER_SIZE)).await.unwrap();
+
+    h1.flush().await.unwrap();
+    h2.flush().await.unwrap();
+
+    repo.remove_entry(file_name).await.unwrap();
+
+    // One for the root with the tombstone
+    assert_eq!(count_local_index_leaf_nodes(&repo).await, 1);
 }
 
 #[tokio::test(flavor = "multi_thread")]
