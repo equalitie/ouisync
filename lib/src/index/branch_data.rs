@@ -14,7 +14,7 @@ use crate::{
     sync::broadcast,
     version_vector::VersionVector,
 };
-use async_recursion::async_recursion;
+
 use sqlx::Acquire;
 use tokio::sync::{RwLock, RwLockReadGuard};
 
@@ -271,6 +271,9 @@ async fn load_path(
 
     Ok(path)
 }
+
+#[cfg(test)]
+use async_recursion::async_recursion;
 
 #[async_recursion]
 #[cfg(test)]
