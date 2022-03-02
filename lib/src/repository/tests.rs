@@ -84,6 +84,44 @@ async fn count_leaf_nodes_sanity_checks() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn count_leaf_nodes_concurrent_write_and_access() {
+    let device_id = rand::random();
+
+    let repo = Repository::create(
+        &db::Store::Temporary,
+        device_id,
+        MasterSecret::random(),
+        AccessSecrets::random_write(),
+        false,
+    )
+    .await
+    .unwrap();
+
+    let file_name = "test.txt";
+
+    let mut h1 = repo.create_file(file_name).await.unwrap();
+
+    // Make sure it exists for the next command to open it.
+    h1.flush().await.unwrap();
+
+    let mut h2 = repo.open_file(file_name).await.unwrap();
+
+    // Write 2 blocks.
+    h1.write(&random_bytes(2*BLOCK_SIZE - blob::HEADER_SIZE)).await.unwrap();
+
+    h1.flush().await.unwrap();
+
+    // There was an issue where this command would re-write the content even though
+    // we did not perform any write operation on this handle.
+    h2.flush().await.unwrap();
+
+    repo.remove_entry(file_name).await.unwrap();
+
+    // One for the root + two for the blob
+    assert_eq!(count_local_index_leaf_nodes(&repo).await, 3);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn count_leaf_nodes_concurrent_writes() {
     let device_id = rand::random();
 
