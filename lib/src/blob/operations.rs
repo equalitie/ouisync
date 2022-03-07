@@ -1,4 +1,4 @@
-use super::{Blob, Buffer, Core, Cursor, OpenBlock, HEADER_SIZE};
+use super::{Blob, Buffer, Core, Cursor, Inner, OpenBlock, HEADER_SIZE};
 use crate::{
     block::{self, BlockId, BlockNonce, BLOCK_SIZE},
     branch::Branch,
@@ -16,27 +16,13 @@ use std::{convert::TryInto, io::SeekFrom, sync::Arc};
 use tokio::sync::{Mutex, MutexGuard};
 
 pub(crate) struct Operations<'a> {
-    core: MutexGuard<'a, Core>,
-    branch: &'a Branch,
-    head_locator: &'a Locator,
-    current_block: &'a mut OpenBlock,
+    pub(super) core: MutexGuard<'a, Core>,
+    pub(super) branch: &'a Branch,
+    pub(super) head_locator: &'a Locator,
+    pub(super) current_block: &'a mut OpenBlock,
 }
 
 impl<'a> Operations<'a> {
-    pub fn new(
-        core: MutexGuard<'a, Core>,
-        branch: &'a Branch,
-        head_locator: &'a Locator,
-        current_block: &'a mut OpenBlock,
-    ) -> Self {
-        Self {
-            core,
-            branch,
-            head_locator,
-            current_block,
-        }
-    }
-
     /// Was this blob modified and not flushed yet?
     pub fn is_dirty(&self) -> bool {
         self.current_block.dirty || self.core.len_dirty
@@ -307,9 +293,11 @@ impl<'a> Operations<'a> {
 
         Ok(Blob {
             core: Arc::new(Mutex::new(new_core)),
-            branch: dst_branch,
-            head_locator: dst_head_locator,
-            current_block,
+            inner: Inner {
+                branch: dst_branch,
+                head_locator: dst_head_locator,
+                current_block,
+            },
         })
     }
 

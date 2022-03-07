@@ -1,5 +1,6 @@
 use crate::block::BLOCK_SIZE;
 
+// State shared among multiple instances of the same file.
 #[derive(Debug)]
 pub(crate) struct Core {
     pub len: u64,

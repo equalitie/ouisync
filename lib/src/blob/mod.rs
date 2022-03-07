@@ -30,9 +30,7 @@ pub(super) const HEADER_SIZE: usize = mem::size_of::<u64>();
 
 pub(crate) struct Blob {
     core: Arc<Mutex<Core>>,
-    branch: Branch,
-    head_locator: Locator,
-    current_block: OpenBlock,
+    inner: Inner,
 }
 
 impl Blob {
@@ -48,9 +46,11 @@ impl Blob {
                 len,
                 len_dirty: false,
             })),
-            branch,
-            head_locator,
-            current_block,
+            inner: Inner {
+                branch,
+                head_locator,
+                current_block,
+            },
         })
     }
 
@@ -77,20 +77,26 @@ impl Blob {
 
         Ok(Self {
             core,
-            branch,
-            head_locator,
-            current_block,
+            inner: Inner {
+                branch,
+                head_locator,
+                current_block,
+            },
         })
     }
 
     pub async fn first_block_id(&self) -> Result<BlockId> {
         let mut conn = self.db_pool().acquire().await?;
 
-        self.branch
+        self.inner
+            .branch
             .data()
             .get(
                 &mut conn,
-                &self.head_locator.encode(self.branch.keys().read()),
+                &self
+                    .inner
+                    .head_locator
+                    .encode(self.inner.branch.keys().read()),
             )
             .await
     }
@@ -104,14 +110,16 @@ impl Blob {
                 len: 0,
                 len_dirty: false,
             })),
-            branch,
-            head_locator,
-            current_block,
+            inner: Inner {
+                branch,
+                head_locator,
+                current_block,
+            },
         }
     }
 
     pub fn branch(&self) -> &Branch {
-        &self.branch
+        &self.inner.branch
     }
 
     pub fn core(&self) -> &Arc<Mutex<Core>> {
@@ -120,7 +128,7 @@ impl Blob {
 
     /// Locator of this blob.
     pub fn locator(&self) -> &Locator {
-        &self.head_locator
+        &self.inner.head_locator
     }
 
     pub async fn len(&self) -> u64 {
@@ -215,7 +223,8 @@ impl Blob {
     /// Creates a shallow copy (only the index nodes are copied, not blocks) of this blob into the
     /// specified destination branch and locator.
     pub async fn fork(&mut self, dst_branch: Branch, dst_head_locator: Locator) -> Result<()> {
-        if self.branch.id() == dst_branch.id() && self.head_locator == dst_head_locator {
+        if self.inner.branch.id() == dst_branch.id() && self.inner.head_locator == dst_head_locator
+        {
             return Ok(());
         }
 
@@ -233,22 +242,27 @@ impl Blob {
 
     /// Was this blob modified and not flushed yet?
     pub async fn is_dirty(&self) -> bool {
-        self.current_block.dirty || self.core.lock().await.len_dirty
+        self.inner.current_block.dirty || self.core.lock().await.len_dirty
     }
 
     pub fn db_pool(&self) -> &db::Pool {
-        self.branch.db_pool()
+        self.inner.branch.db_pool()
     }
 
     async fn lock(&mut self) -> Operations<'_> {
-        let core_guard = self.core.lock().await;
-        Operations::new(
-            core_guard,
-            &self.branch,
-            &self.head_locator,
-            &mut self.current_block,
-        )
+        Operations {
+            core: self.core.lock().await,
+            branch: &self.inner.branch,
+            head_locator: &self.inner.head_locator,
+            current_block: &mut self.inner.current_block,
+        }
     }
+}
+
+struct Inner {
+    branch: Branch,
+    head_locator: Locator,
+    current_block: OpenBlock,
 }
 
 // Data for a block that's been loaded into memory and decrypted.
