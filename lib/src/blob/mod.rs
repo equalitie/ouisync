@@ -42,7 +42,7 @@ impl Blob {
         let len = current_block.content.read_u64();
 
         Ok(Self {
-            core: Arc::new(Mutex::new(Core { len })),
+            core: Core::new(len),
             inner: Inner {
                 branch,
                 head_locator,

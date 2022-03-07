@@ -12,8 +12,8 @@ use crate::{
     locator::Locator,
 };
 use sqlx::Connection;
-use std::{convert::TryInto, io::SeekFrom, sync::Arc};
-use tokio::sync::{Mutex, MutexGuard};
+use std::{convert::TryInto, io::SeekFrom};
+use tokio::sync::MutexGuard;
 
 pub(crate) struct Operations<'a> {
     pub(super) core: MutexGuard<'a, Core>,
@@ -294,8 +294,6 @@ impl<'a> Operations<'a> {
         dst_writer.finish().await;
         tx.commit().await?;
 
-        let new_core = Core { len: self.core.len };
-
         let current_block = OpenBlock {
             locator: dst_head_locator.nth(self.inner.current_block.locator.number()),
             id: self.inner.current_block.id,
@@ -304,7 +302,7 @@ impl<'a> Operations<'a> {
         };
 
         Ok(Blob {
-            core: Arc::new(Mutex::new(new_core)),
+            core: Core::new(self.core.len),
             inner: Inner {
                 branch: dst_branch,
                 head_locator: dst_head_locator,
