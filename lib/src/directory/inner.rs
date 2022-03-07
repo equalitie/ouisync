@@ -242,12 +242,11 @@ impl Content {
             .into_iter()
             .filter(|old_author| *old_author != author)
             .filter_map(|old_author| versions.remove(&old_author))
-            .map(|data| match data {
+            .filter_map(|data| match data {
                 EntryData::File(data) => Some(data.blob_id),
                 EntryData::Directory(data) => Some(data.blob_id),
                 EntryData::Tombstone(_) => None,
             })
-            .flatten()
             // Because we filtered out *old_author != author above.
             .chain(old_blob_id)
             .collect();

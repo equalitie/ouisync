@@ -55,7 +55,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{array::IntoIter, iter};
+    use std::iter;
 
     #[test]
     fn test_sorted_union_zero() {
@@ -77,7 +77,7 @@ mod tests {
     fn test_sorted_union_two() {
         let l = &[(1, "l0"), (3, "l1"), (4, "l2"), (4, "l3")];
         let r = &[(1, "r0"), (2, "r1"), (2, "r2"), (3, "r3")];
-        let u = SortedUnion::new(IntoIter::new([l, r]), |(num, _)| num);
+        let u = SortedUnion::new([l, r], |(num, _)| num);
         assert_eq!(
             u.collect::<Vec<_>>(),
             [
@@ -98,7 +98,7 @@ mod tests {
         let v0 = &[(1, "00"), (3, "01"), (4, "02")];
         let v1 = &[(1, "10"), (2, "11"), (2, "12")];
         let v2 = &[(2, "20"), (2, "21"), (5, "22")];
-        let u = SortedUnion::new(IntoIter::new([v0, v1, v2]), |(num, _)| num);
+        let u = SortedUnion::new([v0, v1, v2], |(num, _)| num);
         assert_eq!(
             u.collect::<Vec<_>>(),
             [
