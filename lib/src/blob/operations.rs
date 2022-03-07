@@ -23,7 +23,7 @@ pub(crate) struct Operations<'a> {
 impl<'a> Operations<'a> {
     /// Was this blob modified and not flushed yet?
     pub fn is_dirty(&self) -> bool {
-        self.inner.current_block.dirty || self.core.len_dirty
+        self.inner.current_block.dirty || self.inner.len_dirty
     }
 
     /// Reads data from this blob into `buffer`, advancing the internal cursor. Returns the
@@ -109,7 +109,7 @@ impl<'a> Operations<'a> {
 
             if self.seek_position() > self.core.len {
                 self.core.len = self.seek_position();
-                self.core.len_dirty = true;
+                self.inner.len_dirty = true;
             }
 
             if buffer.is_empty() {
@@ -200,7 +200,7 @@ impl<'a> Operations<'a> {
         let old_block_count = self.core.block_count();
 
         self.core.len = len;
-        self.core.len_dirty = true;
+        self.inner.len_dirty = true;
 
         let new_block_count = self.core.block_count();
 
@@ -248,7 +248,7 @@ impl<'a> Operations<'a> {
 
         self.inner.current_block = OpenBlock::new_head(self.inner.head_locator);
         self.core.len = 0;
-        self.core.len_dirty = true;
+        self.inner.len_dirty = true;
 
         Ok(())
     }
@@ -294,10 +294,7 @@ impl<'a> Operations<'a> {
         dst_writer.finish().await;
         tx.commit().await?;
 
-        let new_core = Core {
-            len: self.core.len,
-            len_dirty: self.core.len_dirty,
-        };
+        let new_core = Core { len: self.core.len };
 
         let current_block = OpenBlock {
             locator: dst_head_locator.nth(self.inner.current_block.locator.number()),
@@ -312,6 +309,7 @@ impl<'a> Operations<'a> {
                 branch: dst_branch,
                 head_locator: dst_head_locator,
                 current_block,
+                len_dirty: self.inner.len_dirty,
             },
         })
     }
@@ -375,7 +373,7 @@ impl<'a> Operations<'a> {
 
     // Write the current blob length into the blob header in the head block.
     async fn write_len(&mut self, tx: &mut db::Transaction<'_>) -> Result<()> {
-        if !self.core.len_dirty {
+        if !self.inner.len_dirty {
             return Ok(());
         }
 
@@ -418,7 +416,7 @@ impl<'a> Operations<'a> {
             .await?;
         }
 
-        self.core.len_dirty = false;
+        self.inner.len_dirty = false;
 
         Ok(())
     }

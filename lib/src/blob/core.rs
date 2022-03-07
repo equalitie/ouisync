@@ -4,7 +4,6 @@ use crate::block::BLOCK_SIZE;
 #[derive(Debug)]
 pub(crate) struct Core {
     pub len: u64,
-    pub len_dirty: bool,
 }
 
 impl Core {

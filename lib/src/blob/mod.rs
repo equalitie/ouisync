@@ -42,14 +42,12 @@ impl Blob {
         let len = current_block.content.read_u64();
 
         Ok(Self {
-            core: Arc::new(Mutex::new(Core {
-                len,
-                len_dirty: false,
-            })),
+            core: Arc::new(Mutex::new(Core { len })),
             inner: Inner {
                 branch,
                 head_locator,
                 current_block,
+                len_dirty: false,
             },
         })
     }
@@ -81,6 +79,7 @@ impl Blob {
                 branch,
                 head_locator,
                 current_block,
+                len_dirty: false,
             },
         })
     }
@@ -106,14 +105,12 @@ impl Blob {
         let current_block = OpenBlock::new_head(head_locator);
 
         Self {
-            core: Arc::new(Mutex::new(Core {
-                len: 0,
-                len_dirty: false,
-            })),
+            core: Arc::new(Mutex::new(Core { len: 0 })),
             inner: Inner {
                 branch,
                 head_locator,
                 current_block,
+                len_dirty: false,
             },
         }
     }
@@ -241,8 +238,8 @@ impl Blob {
     }
 
     /// Was this blob modified and not flushed yet?
-    pub async fn is_dirty(&self) -> bool {
-        self.inner.current_block.dirty || self.core.lock().await.len_dirty
+    pub fn is_dirty(&self) -> bool {
+        self.inner.current_block.dirty || self.inner.len_dirty
     }
 
     pub fn db_pool(&self) -> &db::Pool {
@@ -261,6 +258,7 @@ struct Inner {
     branch: Branch,
     head_locator: Locator,
     current_block: OpenBlock,
+    len_dirty: bool,
 }
 
 // Data for a block that's been loaded into memory and decrypted.

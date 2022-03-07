@@ -322,6 +322,7 @@ async fn concurrent_write_and_read_file() {
     .unwrap();
 }
 
+// TODO: WIP
 #[tokio::test(flavor = "multi_thread")]
 async fn interleaved_flush() {
     enum FlushOrder {
@@ -358,15 +359,15 @@ async fn interleaved_flush() {
         let mut file1 = repo.open_file(file_name).await.unwrap();
 
         file0.write(content0).await.unwrap();
-        file1.write(content1).await.unwrap();
+        // file1.write(content1).await.unwrap();
 
         match flush_order {
             FlushOrder::FirstThenSecond => {
                 file0.flush().await.unwrap();
-                file1.flush().await.unwrap();
+                // file1.flush().await.unwrap();
             }
             FlushOrder::SecondThenFirst => {
-                file1.flush().await.unwrap();
+                // file1.flush().await.unwrap();
                 file0.flush().await.unwrap();
             }
         }
@@ -378,9 +379,17 @@ async fn interleaved_flush() {
             label
         );
 
+        let actual_content = read_file(&repo, file_name).await;
+        assert_eq!(
+            actual_content.len(),
+            expected_content.len(),
+            "'{}': unexpected file content length",
+            label
+        );
+
         assert!(
-            read_file(&repo, file_name).await == expected_content,
-            "'{}': unexpected file content after write",
+            actual_content == expected_content,
+            "'{}': unexpected file content",
             label
         )
     }
@@ -398,6 +407,7 @@ async fn interleaved_flush() {
     )
     .await;
 
+    /*
     case(
         "write 1 block, write 2 blocks, flush 1st then 2nd",
         &content1,
@@ -417,6 +427,7 @@ async fn interleaved_flush() {
         &concat([nth_block(&content1, 0), nth_block(&content2, 1)]),
     )
     .await;
+    */
 }
 
 #[tokio::test(flavor = "multi_thread")]

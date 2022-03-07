@@ -96,7 +96,7 @@ impl File {
     /// Flushes this file, ensuring that all intermediately buffered contents gets written to the
     /// store.
     pub async fn flush(&mut self) -> Result<()> {
-        if !self.blob.is_dirty().await {
+        if !self.blob.is_dirty() {
             return Ok(());
         }
 
