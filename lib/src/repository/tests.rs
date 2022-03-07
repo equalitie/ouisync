@@ -29,12 +29,6 @@ async fn count_local_index_leaf_nodes(repo: &Repository) -> usize {
     branch.data().count_leaf_nodes(&mut conn).await.unwrap()
 }
 
-fn random_bytes(size: usize) -> Vec<u8> {
-    let mut buffer = vec![0; size];
-    rand::thread_rng().fill(&mut buffer[..]);
-    buffer
-}
-
 #[tokio::test(flavor = "multi_thread")]
 async fn count_leaf_nodes_sanity_checks() {
     let device_id = rand::random();
@@ -81,79 +75,6 @@ async fn count_leaf_nodes_sanity_checks() {
     assert_eq!(count_local_index_leaf_nodes(&repo).await, 1);
 
     //------------------------------------------------------------------------
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn count_leaf_nodes_concurrent_write_and_access() {
-    let device_id = rand::random();
-
-    let repo = Repository::create(
-        &db::Store::Temporary,
-        device_id,
-        MasterSecret::random(),
-        AccessSecrets::random_write(),
-        false,
-    )
-    .await
-    .unwrap();
-
-    let file_name = "test.txt";
-
-    let mut h1 = repo.create_file(file_name).await.unwrap();
-
-    // Make sure it exists for the next command to open it.
-    h1.flush().await.unwrap();
-
-    let mut h2 = repo.open_file(file_name).await.unwrap();
-
-    // Write 2 blocks.
-    h1.write(&random_bytes(2*BLOCK_SIZE - blob::HEADER_SIZE)).await.unwrap();
-
-    h1.flush().await.unwrap();
-
-    // There was an issue where this command would re-write the content even though
-    // we did not perform any write operation on this handle.
-    h2.flush().await.unwrap();
-
-    repo.remove_entry(file_name).await.unwrap();
-
-    // One for the root + two for the blob
-    assert_eq!(count_local_index_leaf_nodes(&repo).await, 3);
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn count_leaf_nodes_concurrent_writes() {
-    let device_id = rand::random();
-
-    let repo = Repository::create(
-        &db::Store::Temporary,
-        device_id,
-        MasterSecret::random(),
-        AccessSecrets::random_write(),
-        false,
-    )
-    .await
-    .unwrap();
-
-    let file_name = "test.txt";
-
-    let mut h1 = repo.create_file(file_name).await.unwrap();
-    // Make sure it exists for the next `open_file` operation to succeed.
-    h1.flush().await.unwrap();
-
-    // Write two blocks
-    h1.write(&random_bytes(2*BLOCK_SIZE - blob::HEADER_SIZE)).await.unwrap();
-
-    let mut h2 = repo.open_file(file_name).await.unwrap();
-    h2.write(&random_bytes(BLOCK_SIZE - blob::HEADER_SIZE)).await.unwrap();
-
-    h1.flush().await.unwrap();
-    h2.flush().await.unwrap();
-
-    repo.remove_entry(file_name).await.unwrap();
-
-    // One for the root with the tombstone
-    assert_eq!(count_local_index_leaf_nodes(&repo).await, 1);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -399,6 +320,103 @@ async fn concurrent_write_and_read_file() {
     })
     .await
     .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn interleaved_flush() {
+    enum FlushOrder {
+        FirstThenSecond,
+        SecondThenFirst,
+    }
+
+    // Open two instances of the same file, write `content0` to the first and `content1` to the
+    // second, then flush in the specified order, finally check the total number of blocks in the
+    // repository and the content of the file.
+    #[track_caller]
+    async fn case(
+        label: &str,
+        content0: &[u8],
+        content1: &[u8],
+        flush_order: FlushOrder,
+        expected_total_block_count: usize,
+        expected_content: &[u8],
+    ) {
+        let repo = Repository::create(
+            &db::Store::Temporary,
+            rand::random(),
+            MasterSecret::random(),
+            AccessSecrets::random_write(),
+            false,
+        )
+        .await
+        .unwrap();
+        let file_name = "test.txt";
+
+        let mut file0 = repo.create_file(file_name).await.unwrap();
+        file0.flush().await.unwrap();
+
+        let mut file1 = repo.open_file(file_name).await.unwrap();
+
+        file0.write(content0).await.unwrap();
+        file1.write(content1).await.unwrap();
+
+        match flush_order {
+            FlushOrder::FirstThenSecond => {
+                file0.flush().await.unwrap();
+                file1.flush().await.unwrap();
+            }
+            FlushOrder::SecondThenFirst => {
+                file1.flush().await.unwrap();
+                file0.flush().await.unwrap();
+            }
+        }
+
+        assert_eq!(
+            count_local_index_leaf_nodes(&repo).await,
+            expected_total_block_count,
+            "'{}': unexpected total number of blocks in the repository",
+            label
+        );
+
+        assert!(
+            read_file(&repo, file_name).await == expected_content,
+            "'{}': unexpected file content after write",
+            label
+        )
+    }
+
+    let content1 = random_bytes(BLOCK_SIZE - blob::HEADER_SIZE); // 1 block
+    let content2 = random_bytes(2 * BLOCK_SIZE - blob::HEADER_SIZE); // 2 blocks
+
+    case(
+        "write 2 blocks, write 0 blocks, flush 2nd then 1st",
+        &content2,
+        &[],
+        FlushOrder::SecondThenFirst,
+        3,
+        &content2,
+    )
+    .await;
+
+    case(
+        "write 1 block, write 2 blocks, flush 1st then 2nd",
+        &content1,
+        &content2,
+        FlushOrder::FirstThenSecond,
+        3,
+        &concat([nth_block(&content1, 0), nth_block(&content2, 1)]),
+    )
+    .await;
+
+    case(
+        "write 1 block, write 2 blocks, flush 2nd then 1st",
+        &content1,
+        &content2,
+        FlushOrder::SecondThenFirst,
+        3,
+        &concat([nth_block(&content1, 0), nth_block(&content2, 1)]),
+    )
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -674,4 +692,25 @@ async fn create_remote_file(repo: &Repository, remote_id: PublicKey, name: &str,
     let mut file = remote_root.create_file(name.into()).await.unwrap();
     file.write(content).await.unwrap();
     file.flush().await.unwrap();
+}
+
+fn random_bytes(size: usize) -> Vec<u8> {
+    let mut buffer = vec![0; size];
+    rand::thread_rng().fill(&mut buffer[..]);
+    buffer
+}
+
+fn nth_block(content: &[u8], index: usize) -> &[u8] {
+    if index == 0 {
+        &content[..BLOCK_SIZE - blob::HEADER_SIZE]
+    } else {
+        &content[BLOCK_SIZE - blob::HEADER_SIZE + (index - 1) * BLOCK_SIZE..][..BLOCK_SIZE]
+    }
+}
+
+fn concat<const N: usize>(buffers: [&[u8]; N]) -> Vec<u8> {
+    buffers.into_iter().fold(Vec::new(), |mut vec, buffer| {
+        vec.extend_from_slice(buffer);
+        vec
+    })
 }
