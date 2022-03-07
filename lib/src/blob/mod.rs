@@ -252,9 +252,7 @@ impl Blob {
     async fn lock(&mut self) -> Operations<'_> {
         Operations {
             core: self.core.lock().await,
-            branch: &self.inner.branch,
-            head_locator: &self.inner.head_locator,
-            current_block: &mut self.inner.current_block,
+            inner: &mut self.inner,
         }
     }
 }

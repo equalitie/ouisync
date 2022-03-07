@@ -17,15 +17,13 @@ use tokio::sync::{Mutex, MutexGuard};
 
 pub(crate) struct Operations<'a> {
     pub(super) core: MutexGuard<'a, Core>,
-    pub(super) branch: &'a Branch,
-    pub(super) head_locator: &'a Locator,
-    pub(super) current_block: &'a mut OpenBlock,
+    pub(super) inner: &'a mut Inner,
 }
 
 impl<'a> Operations<'a> {
     /// Was this blob modified and not flushed yet?
     pub fn is_dirty(&self) -> bool {
-        self.current_block.dirty || self.core.len_dirty
+        self.inner.current_block.dirty || self.core.len_dirty
     }
 
     /// Reads data from this blob into `buffer`, advancing the internal cursor. Returns the
@@ -43,7 +41,7 @@ impl<'a> Operations<'a> {
                 .try_into()
                 .unwrap_or(usize::MAX);
             let len = buffer.len().min(remaining);
-            let len = self.current_block.content.read(&mut buffer[..len]);
+            let len = self.inner.current_block.content.read(&mut buffer[..len]);
 
             buffer = &mut buffer[len..];
             total_len += len;
@@ -52,15 +50,15 @@ impl<'a> Operations<'a> {
                 break;
             }
 
-            let locator = self.current_block.locator.next();
+            let locator = self.inner.current_block.locator.next();
             if locator.number() >= self.core.block_count() {
                 break;
             }
 
             let (id, content) = read_block(
                 conn,
-                self.branch.data(),
-                self.branch.keys().read(),
+                self.inner.branch.data(),
+                self.inner.branch.keys().read(),
                 &locator,
             )
             .await?;
@@ -98,13 +96,13 @@ impl<'a> Operations<'a> {
     /// Writes into the blob in db transaction.
     pub async fn write(&mut self, tx: &mut db::Transaction<'_>, mut buffer: &[u8]) -> Result<()> {
         loop {
-            let len = self.current_block.content.write(buffer);
+            let len = self.inner.current_block.content.write(buffer);
 
             // TODO: only set the dirty flag if the content actually changed. Otherwise overwirting
             // a block with the same content it already had would result in a new block with a new
             // version being unnecessarily created.
             if len > 0 {
-                self.current_block.dirty = true;
+                self.inner.current_block.dirty = true;
             }
 
             buffer = &buffer[len..];
@@ -118,9 +116,15 @@ impl<'a> Operations<'a> {
                 break;
             }
 
-            let locator = self.current_block.locator.next();
+            let locator = self.inner.current_block.locator.next();
             let (id, content) = if locator.number() < self.core.block_count() {
-                read_block(tx, self.branch.data(), self.branch.keys().read(), &locator).await?
+                read_block(
+                    tx,
+                    self.inner.branch.data(),
+                    self.inner.branch.keys().read(),
+                    &locator,
+                )
+                .await?
             } else {
                 (BlockId::from_content(&[]), Buffer::new())
             };
@@ -162,15 +166,20 @@ impl<'a> Operations<'a> {
         let block_number = (actual_offset / BLOCK_SIZE as u64) as u32;
         let block_offset = (actual_offset % BLOCK_SIZE as u64) as usize;
 
-        if block_number != self.current_block.locator.number() {
+        if block_number != self.inner.current_block.locator.number() {
             let locator = self.locator_at(block_number);
 
-            let (id, content) =
-                read_block(tx, self.branch.data(), self.branch.keys().read(), &locator).await?;
+            let (id, content) = read_block(
+                tx,
+                self.inner.branch.data(),
+                self.inner.branch.keys().read(),
+                &locator,
+            )
+            .await?;
             self.replace_current_block(tx, locator, id, content).await?;
         }
 
-        self.current_block.content.pos = block_offset;
+        self.inner.current_block.content.pos = block_offset;
 
         Ok(offset)
     }
@@ -201,7 +210,8 @@ impl<'a> Operations<'a> {
 
         self.remove_blocks(
             tx,
-            self.head_locator
+            self.inner
+                .head_locator
                 .sequence()
                 .skip(new_block_count as usize)
                 .take((old_block_count - new_block_count) as usize),
@@ -228,14 +238,15 @@ impl<'a> Operations<'a> {
         let mut tx = conn.begin().await?;
         self.remove_blocks(
             &mut tx,
-            self.head_locator
+            self.inner
+                .head_locator
                 .sequence()
                 .take(self.core.block_count() as usize),
         )
         .await?;
         tx.commit().await?;
 
-        *self.current_block = OpenBlock::new_head(*self.head_locator);
+        self.inner.current_block = OpenBlock::new_head(self.inner.head_locator);
         self.core.len = 0;
         self.core.len_dirty = true;
 
@@ -251,9 +262,12 @@ impl<'a> Operations<'a> {
         dst_head_locator: Locator,
     ) -> Result<Blob> {
         // This should gracefuly handled in the Blob from where this function is invoked.
-        assert!(self.branch.id() != dst_branch.id() || *self.head_locator != dst_head_locator);
+        assert!(
+            self.inner.branch.id() != dst_branch.id()
+                || self.inner.head_locator != dst_head_locator
+        );
 
-        let read_key = self.branch.keys().read();
+        let read_key = self.inner.branch.keys().read();
         // Take the write key from the dst branch, not the src branch, to protect us against
         // accidentally forking into remote branch (remote branches don't have write access).
         let write_keys = dst_branch.keys().write().ok_or(Error::PermissionDenied)?;
@@ -266,6 +280,7 @@ impl<'a> Operations<'a> {
             let encoded_dst_locator = dst_locator.encode(read_key);
 
             let block_id = self
+                .inner
                 .branch
                 .data()
                 .get(&mut tx, &encoded_src_locator)
@@ -285,10 +300,10 @@ impl<'a> Operations<'a> {
         };
 
         let current_block = OpenBlock {
-            locator: dst_head_locator.nth(self.current_block.locator.number()),
-            id: self.current_block.id,
-            content: self.current_block.content.clone(),
-            dirty: self.current_block.dirty,
+            locator: dst_head_locator.nth(self.inner.current_block.locator.number()),
+            id: self.inner.current_block.id,
+            content: self.inner.current_block.content.clone(),
+            dirty: self.inner.current_block.dirty,
         };
 
         Ok(Blob {
@@ -318,7 +333,7 @@ impl<'a> Operations<'a> {
             content.pos = HEADER_SIZE;
         }
 
-        *self.current_block = OpenBlock {
+        self.inner.current_block = OpenBlock {
             locator,
             id,
             content,
@@ -330,25 +345,30 @@ impl<'a> Operations<'a> {
 
     // Write the current block into the store.
     async fn write_current_block(&mut self, tx: &mut db::Transaction<'_>) -> Result<()> {
-        if !self.current_block.dirty {
+        if !self.inner.current_block.dirty {
             return Ok(());
         }
 
-        let read_key = self.branch.keys().read();
-        let write_keys = self.branch.keys().write().ok_or(Error::PermissionDenied)?;
+        let read_key = self.inner.branch.keys().read();
+        let write_keys = self
+            .inner
+            .branch
+            .keys()
+            .write()
+            .ok_or(Error::PermissionDenied)?;
 
         let block_id = write_block(
             tx,
-            self.branch.data(),
+            self.inner.branch.data(),
             read_key,
             write_keys,
-            &self.current_block.locator,
-            self.current_block.content.buffer.clone(),
+            &self.inner.current_block.locator,
+            self.inner.current_block.content.buffer.clone(),
         )
         .await?;
 
-        self.current_block.id = block_id;
-        self.current_block.dirty = false;
+        self.inner.current_block.id = block_id;
+        self.inner.current_block.dirty = false;
 
         Ok(())
     }
@@ -359,19 +379,29 @@ impl<'a> Operations<'a> {
             return Ok(());
         }
 
-        let read_key = self.branch.keys().read();
-        let write_keys = self.branch.keys().write().ok_or(Error::PermissionDenied)?;
+        let read_key = self.inner.branch.keys().read();
+        let write_keys = self
+            .inner
+            .branch
+            .keys()
+            .write()
+            .ok_or(Error::PermissionDenied)?;
 
-        if self.current_block.locator.number() == 0 {
-            let old_pos = self.current_block.content.pos;
-            self.current_block.content.pos = 0;
-            self.current_block.content.write_u64(self.core.len);
-            self.current_block.content.pos = old_pos;
-            self.current_block.dirty = true;
+        if self.inner.current_block.locator.number() == 0 {
+            let old_pos = self.inner.current_block.content.pos;
+            self.inner.current_block.content.pos = 0;
+            self.inner.current_block.content.write_u64(self.core.len);
+            self.inner.current_block.content.pos = old_pos;
+            self.inner.current_block.dirty = true;
         } else {
             let locator = self.locator_at(0);
-            let (_, buffer) =
-                read_block(tx, self.branch.data(), self.branch.keys().read(), &locator).await?;
+            let (_, buffer) = read_block(
+                tx,
+                self.inner.branch.data(),
+                self.inner.branch.keys().read(),
+                &locator,
+            )
+            .await?;
 
             let mut cursor = Cursor::new(buffer);
             cursor.pos = 0;
@@ -379,7 +409,7 @@ impl<'a> Operations<'a> {
 
             write_block(
                 tx,
-                self.branch.data(),
+                self.inner.branch.data(),
                 read_key,
                 write_keys,
                 &locator,
@@ -397,10 +427,15 @@ impl<'a> Operations<'a> {
     where
         T: IntoIterator<Item = Locator>,
     {
-        let read_key = self.branch.keys().read();
-        let write_keys = self.branch.keys().write().ok_or(Error::PermissionDenied)?;
+        let read_key = self.inner.branch.keys().read();
+        let write_keys = self
+            .inner
+            .branch
+            .keys()
+            .write()
+            .ok_or(Error::PermissionDenied)?;
 
-        let mut writer = self.branch.data().write();
+        let mut writer = self.inner.branch.data().write();
 
         for locator in locators {
             writer
@@ -415,17 +450,18 @@ impl<'a> Operations<'a> {
 
     // Returns the current seek position from the start of the blob.
     pub fn seek_position(&mut self) -> u64 {
-        self.current_block.locator.number() as u64 * BLOCK_SIZE as u64
-            + self.current_block.content.pos as u64
+        self.inner.current_block.locator.number() as u64 * BLOCK_SIZE as u64
+            + self.inner.current_block.content.pos as u64
             - HEADER_SIZE as u64
     }
 
     fn locator_at(&self, number: u32) -> Locator {
-        self.head_locator.nth(number)
+        self.inner.head_locator.nth(number)
     }
 
     fn locators(&self) -> impl Iterator<Item = Locator> {
-        self.head_locator
+        self.inner
+            .head_locator
             .sequence()
             .take(self.core.block_count() as usize)
     }
