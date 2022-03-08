@@ -1,5 +1,5 @@
 use crate::{
-    blob::{Blob, Core, MaybeInitCore},
+    blob::{Blob, MaybeInitCore, UninitCore},
     block::BLOCK_SIZE,
     branch::Branch,
     directory::{Directory, ParentContext},
@@ -31,9 +31,14 @@ impl File {
     }
 
     /// Creates a new file.
-    pub(crate) fn create(branch: Branch, locator: Locator, parent: ParentContext) -> Self {
+    pub(crate) fn create(
+        branch: Branch,
+        locator: Locator,
+        parent: ParentContext,
+        blob_core: UninitCore,
+    ) -> Self {
         Self {
-            blob: Blob::create(branch, locator, Core::uninit()),
+            blob: Blob::create(branch, locator, blob_core),
             parent,
         }
     }

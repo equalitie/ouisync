@@ -445,7 +445,12 @@ pub(crate) struct Writer<'a> {
 impl Writer<'_> {
     pub async fn create_file(&mut self, name: String) -> Result<File> {
         let (locator, parent) = self.create_entry(EntryType::File, name).await?;
-        Ok(File::create(self.branch().clone(), locator, parent))
+        Ok(File::create(
+            self.branch().clone(),
+            locator,
+            parent,
+            Core::uninit(),
+        ))
     }
 
     pub async fn create_directory(&mut self, name: String) -> Result<Directory> {
