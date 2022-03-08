@@ -1,11 +1,11 @@
+mod core;
+mod inner;
+mod operations;
 #[cfg(test)]
 mod tests;
 
-mod core;
-mod operations;
-
 pub(crate) use self::core::{Core, MaybeInitCore, UninitCore};
-use self::operations::Operations;
+use self::{inner::Inner, operations::Operations};
 use crate::{
     block::{BlockId, BLOCK_SIZE},
     branch::Branch,
@@ -216,13 +216,6 @@ impl Blob {
             inner: &mut self.inner,
         }
     }
-}
-
-struct Inner {
-    branch: Branch,
-    head_locator: Locator,
-    current_block: OpenBlock,
-    len_dirty: bool,
 }
 
 // Data for a block that's been loaded into memory and decrypted.

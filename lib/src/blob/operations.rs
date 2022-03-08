@@ -1,4 +1,4 @@
-use super::{Blob, Buffer, Core, Cursor, Inner, OpenBlock, HEADER_SIZE};
+use super::{inner::Inner, Blob, Buffer, Core, Cursor, OpenBlock, HEADER_SIZE};
 use crate::{
     block::{self, BlockId, BlockNonce, BLOCK_SIZE},
     branch::Branch,
