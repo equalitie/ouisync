@@ -4,7 +4,7 @@ mod operations;
 mod tests;
 
 pub(crate) use self::inner::{Core, MaybeInitCore, UninitCore};
-use self::{inner::Inner, operations::Operations};
+use self::{inner::Unique, operations::Operations};
 use crate::{
     block::{BlockId, BLOCK_SIZE},
     branch::Branch,
@@ -28,7 +28,7 @@ pub(super) const HEADER_SIZE: usize = mem::size_of::<u64>();
 
 pub(crate) struct Blob {
     core: Arc<Mutex<Core>>,
-    inner: Inner,
+    unique: Unique,
 }
 
 impl Blob {
@@ -42,7 +42,7 @@ impl Blob {
 
         Ok(Self {
             core,
-            inner: Inner {
+            unique: Unique {
                 branch,
                 head_locator,
                 current_block,
@@ -57,7 +57,7 @@ impl Blob {
 
         Self {
             core: core.init(),
-            inner: Inner {
+            unique: Unique {
                 branch,
                 head_locator,
                 current_block,
@@ -69,26 +69,26 @@ impl Blob {
     pub async fn first_block_id(&self) -> Result<BlockId> {
         let mut conn = self.db_pool().acquire().await?;
 
-        self.inner
+        self.unique
             .branch
             .data()
             .get(
                 &mut conn,
                 &self
-                    .inner
+                    .unique
                     .head_locator
-                    .encode(self.inner.branch.keys().read()),
+                    .encode(self.unique.branch.keys().read()),
             )
             .await
     }
 
     pub fn branch(&self) -> &Branch {
-        &self.inner.branch
+        &self.unique.branch
     }
 
     /// Locator of this blob.
     pub fn locator(&self) -> &Locator {
-        &self.inner.head_locator
+        &self.unique.head_locator
     }
 
     pub async fn len(&self) -> u64 {
@@ -183,7 +183,8 @@ impl Blob {
     /// Creates a shallow copy (only the index nodes are copied, not blocks) of this blob into the
     /// specified destination branch and locator.
     pub async fn fork(&mut self, dst_branch: Branch, dst_head_locator: Locator) -> Result<()> {
-        if self.inner.branch.id() == dst_branch.id() && self.inner.head_locator == dst_head_locator
+        if self.unique.branch.id() == dst_branch.id()
+            && self.unique.head_locator == dst_head_locator
         {
             return Ok(());
         }
@@ -202,17 +203,17 @@ impl Blob {
 
     /// Was this blob modified and not flushed yet?
     pub fn is_dirty(&self) -> bool {
-        self.inner.current_block.dirty || self.inner.len_dirty
+        self.unique.current_block.dirty || self.unique.len_dirty
     }
 
     pub fn db_pool(&self) -> &db::Pool {
-        self.inner.branch.db_pool()
+        self.unique.branch.db_pool()
     }
 
     async fn lock(&mut self) -> Operations<'_> {
         Operations {
             core: self.core.lock().await,
-            inner: &mut self.inner,
+            unique: &mut self.unique,
         }
     }
 }

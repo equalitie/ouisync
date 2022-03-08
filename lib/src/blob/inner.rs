@@ -5,18 +5,18 @@ use crate::{block::BLOCK_SIZE, branch::Branch, locator::Locator};
 use std::sync::{Arc, Weak};
 use tokio::sync::Mutex;
 
-// State unique to each instance of a file.
-pub(super) struct Inner {
+// State unique to each instance of a blob.
+pub(super) struct Unique {
     pub branch: Branch,
     pub head_locator: Locator,
     pub current_block: OpenBlock,
     pub len_dirty: bool,
 }
 
-// State shared among multiple instances of the same file.
+// State shared among multiple instances of the same blob.
 #[derive(Debug)]
 pub(crate) struct Core {
-    pub len: u64,
+    pub(super) len: u64,
 }
 
 impl Core {

@@ -1,4 +1,4 @@
-use super::{inner::Inner, Blob, Buffer, Core, Cursor, OpenBlock, HEADER_SIZE};
+use super::{inner::Unique, Blob, Buffer, Core, Cursor, OpenBlock, HEADER_SIZE};
 use crate::{
     block::{self, BlockId, BlockNonce, BLOCK_SIZE},
     branch::Branch,
@@ -17,13 +17,13 @@ use tokio::sync::MutexGuard;
 
 pub(crate) struct Operations<'a> {
     pub(super) core: MutexGuard<'a, Core>,
-    pub(super) inner: &'a mut Inner,
+    pub(super) unique: &'a mut Unique,
 }
 
 impl<'a> Operations<'a> {
     /// Was this blob modified and not flushed yet?
     pub fn is_dirty(&self) -> bool {
-        self.inner.current_block.dirty || self.inner.len_dirty
+        self.unique.current_block.dirty || self.unique.len_dirty
     }
 
     /// Reads data from this blob into `buffer`, advancing the internal cursor. Returns the
@@ -41,7 +41,7 @@ impl<'a> Operations<'a> {
                 .try_into()
                 .unwrap_or(usize::MAX);
             let len = buffer.len().min(remaining);
-            let len = self.inner.current_block.content.read(&mut buffer[..len]);
+            let len = self.unique.current_block.content.read(&mut buffer[..len]);
 
             buffer = &mut buffer[len..];
             total_len += len;
@@ -50,15 +50,15 @@ impl<'a> Operations<'a> {
                 break;
             }
 
-            let locator = self.inner.current_block.locator.next();
+            let locator = self.unique.current_block.locator.next();
             if locator.number() >= self.core.block_count() {
                 break;
             }
 
             let (id, content) = read_block(
                 conn,
-                self.inner.branch.data(),
-                self.inner.branch.keys().read(),
+                self.unique.branch.data(),
+                self.unique.branch.keys().read(),
                 &locator,
             )
             .await?;
@@ -96,32 +96,32 @@ impl<'a> Operations<'a> {
     /// Writes into the blob in db transaction.
     pub async fn write(&mut self, tx: &mut db::Transaction<'_>, mut buffer: &[u8]) -> Result<()> {
         loop {
-            let len = self.inner.current_block.content.write(buffer);
+            let len = self.unique.current_block.content.write(buffer);
 
             // TODO: only set the dirty flag if the content actually changed. Otherwise overwirting
             // a block with the same content it already had would result in a new block with a new
             // version being unnecessarily created.
             if len > 0 {
-                self.inner.current_block.dirty = true;
+                self.unique.current_block.dirty = true;
             }
 
             buffer = &buffer[len..];
 
             if self.seek_position() > self.core.len {
                 self.core.len = self.seek_position();
-                self.inner.len_dirty = true;
+                self.unique.len_dirty = true;
             }
 
             if buffer.is_empty() {
                 break;
             }
 
-            let locator = self.inner.current_block.locator.next();
+            let locator = self.unique.current_block.locator.next();
             let (id, content) = if locator.number() < self.core.block_count() {
                 read_block(
                     tx,
-                    self.inner.branch.data(),
-                    self.inner.branch.keys().read(),
+                    self.unique.branch.data(),
+                    self.unique.branch.keys().read(),
                     &locator,
                 )
                 .await?
@@ -166,20 +166,20 @@ impl<'a> Operations<'a> {
         let block_number = (actual_offset / BLOCK_SIZE as u64) as u32;
         let block_offset = (actual_offset % BLOCK_SIZE as u64) as usize;
 
-        if block_number != self.inner.current_block.locator.number() {
+        if block_number != self.unique.current_block.locator.number() {
             let locator = self.locator_at(block_number);
 
             let (id, content) = read_block(
                 tx,
-                self.inner.branch.data(),
-                self.inner.branch.keys().read(),
+                self.unique.branch.data(),
+                self.unique.branch.keys().read(),
                 &locator,
             )
             .await?;
             self.replace_current_block(tx, locator, id, content).await?;
         }
 
-        self.inner.current_block.content.pos = block_offset;
+        self.unique.current_block.content.pos = block_offset;
 
         Ok(offset)
     }
@@ -200,7 +200,7 @@ impl<'a> Operations<'a> {
         let old_block_count = self.core.block_count();
 
         self.core.len = len;
-        self.inner.len_dirty = true;
+        self.unique.len_dirty = true;
 
         let new_block_count = self.core.block_count();
 
@@ -210,7 +210,7 @@ impl<'a> Operations<'a> {
 
         self.remove_blocks(
             tx,
-            self.inner
+            self.unique
                 .head_locator
                 .sequence()
                 .skip(new_block_count as usize)
@@ -238,7 +238,7 @@ impl<'a> Operations<'a> {
         let mut tx = conn.begin().await?;
         self.remove_blocks(
             &mut tx,
-            self.inner
+            self.unique
                 .head_locator
                 .sequence()
                 .take(self.core.block_count() as usize),
@@ -246,9 +246,9 @@ impl<'a> Operations<'a> {
         .await?;
         tx.commit().await?;
 
-        self.inner.current_block = OpenBlock::new_head(self.inner.head_locator);
+        self.unique.current_block = OpenBlock::new_head(self.unique.head_locator);
         self.core.len = 0;
-        self.inner.len_dirty = true;
+        self.unique.len_dirty = true;
 
         Ok(())
     }
@@ -263,11 +263,11 @@ impl<'a> Operations<'a> {
     ) -> Result<Blob> {
         // This should gracefuly handled in the Blob from where this function is invoked.
         assert!(
-            self.inner.branch.id() != dst_branch.id()
-                || self.inner.head_locator != dst_head_locator
+            self.unique.branch.id() != dst_branch.id()
+                || self.unique.head_locator != dst_head_locator
         );
 
-        let read_key = self.inner.branch.keys().read();
+        let read_key = self.unique.branch.keys().read();
         // Take the write key from the dst branch, not the src branch, to protect us against
         // accidentally forking into remote branch (remote branches don't have write access).
         let write_keys = dst_branch.keys().write().ok_or(Error::PermissionDenied)?;
@@ -280,7 +280,7 @@ impl<'a> Operations<'a> {
             let encoded_dst_locator = dst_locator.encode(read_key);
 
             let block_id = self
-                .inner
+                .unique
                 .branch
                 .data()
                 .get(&mut tx, &encoded_src_locator)
@@ -295,19 +295,19 @@ impl<'a> Operations<'a> {
         tx.commit().await?;
 
         let current_block = OpenBlock {
-            locator: dst_head_locator.nth(self.inner.current_block.locator.number()),
-            id: self.inner.current_block.id,
-            content: self.inner.current_block.content.clone(),
-            dirty: self.inner.current_block.dirty,
+            locator: dst_head_locator.nth(self.unique.current_block.locator.number()),
+            id: self.unique.current_block.id,
+            content: self.unique.current_block.content.clone(),
+            dirty: self.unique.current_block.dirty,
         };
 
         Ok(Blob {
             core: self.core.deep_clone(),
-            inner: Inner {
+            unique: Unique {
                 branch: dst_branch,
                 head_locator: dst_head_locator,
                 current_block,
-                len_dirty: self.inner.len_dirty,
+                len_dirty: self.unique.len_dirty,
             },
         })
     }
@@ -329,7 +329,7 @@ impl<'a> Operations<'a> {
             content.pos = HEADER_SIZE;
         }
 
-        self.inner.current_block = OpenBlock {
+        self.unique.current_block = OpenBlock {
             locator,
             id,
             content,
@@ -341,13 +341,13 @@ impl<'a> Operations<'a> {
 
     // Write the current block into the store.
     async fn write_current_block(&mut self, tx: &mut db::Transaction<'_>) -> Result<()> {
-        if !self.inner.current_block.dirty {
+        if !self.unique.current_block.dirty {
             return Ok(());
         }
 
-        let read_key = self.inner.branch.keys().read();
+        let read_key = self.unique.branch.keys().read();
         let write_keys = self
-            .inner
+            .unique
             .branch
             .keys()
             .write()
@@ -355,46 +355,46 @@ impl<'a> Operations<'a> {
 
         let block_id = write_block(
             tx,
-            self.inner.branch.data(),
+            self.unique.branch.data(),
             read_key,
             write_keys,
-            &self.inner.current_block.locator,
-            self.inner.current_block.content.buffer.clone(),
+            &self.unique.current_block.locator,
+            self.unique.current_block.content.buffer.clone(),
         )
         .await?;
 
-        self.inner.current_block.id = block_id;
-        self.inner.current_block.dirty = false;
+        self.unique.current_block.id = block_id;
+        self.unique.current_block.dirty = false;
 
         Ok(())
     }
 
     // Write the current blob length into the blob header in the head block.
     async fn write_len(&mut self, tx: &mut db::Transaction<'_>) -> Result<()> {
-        if !self.inner.len_dirty {
+        if !self.unique.len_dirty {
             return Ok(());
         }
 
-        let read_key = self.inner.branch.keys().read();
+        let read_key = self.unique.branch.keys().read();
         let write_keys = self
-            .inner
+            .unique
             .branch
             .keys()
             .write()
             .ok_or(Error::PermissionDenied)?;
 
-        if self.inner.current_block.locator.number() == 0 {
-            let old_pos = self.inner.current_block.content.pos;
-            self.inner.current_block.content.pos = 0;
-            self.inner.current_block.content.write_u64(self.core.len);
-            self.inner.current_block.content.pos = old_pos;
-            self.inner.current_block.dirty = true;
+        if self.unique.current_block.locator.number() == 0 {
+            let old_pos = self.unique.current_block.content.pos;
+            self.unique.current_block.content.pos = 0;
+            self.unique.current_block.content.write_u64(self.core.len);
+            self.unique.current_block.content.pos = old_pos;
+            self.unique.current_block.dirty = true;
         } else {
             let locator = self.locator_at(0);
             let (_, buffer) = read_block(
                 tx,
-                self.inner.branch.data(),
-                self.inner.branch.keys().read(),
+                self.unique.branch.data(),
+                self.unique.branch.keys().read(),
                 &locator,
             )
             .await?;
@@ -405,7 +405,7 @@ impl<'a> Operations<'a> {
 
             write_block(
                 tx,
-                self.inner.branch.data(),
+                self.unique.branch.data(),
                 read_key,
                 write_keys,
                 &locator,
@@ -414,7 +414,7 @@ impl<'a> Operations<'a> {
             .await?;
         }
 
-        self.inner.len_dirty = false;
+        self.unique.len_dirty = false;
 
         Ok(())
     }
@@ -423,15 +423,15 @@ impl<'a> Operations<'a> {
     where
         T: IntoIterator<Item = Locator>,
     {
-        let read_key = self.inner.branch.keys().read();
+        let read_key = self.unique.branch.keys().read();
         let write_keys = self
-            .inner
+            .unique
             .branch
             .keys()
             .write()
             .ok_or(Error::PermissionDenied)?;
 
-        let mut writer = self.inner.branch.data().write();
+        let mut writer = self.unique.branch.data().write();
 
         for locator in locators {
             writer
@@ -446,17 +446,17 @@ impl<'a> Operations<'a> {
 
     // Returns the current seek position from the start of the blob.
     pub fn seek_position(&mut self) -> u64 {
-        self.inner.current_block.locator.number() as u64 * BLOCK_SIZE as u64
-            + self.inner.current_block.content.pos as u64
+        self.unique.current_block.locator.number() as u64 * BLOCK_SIZE as u64
+            + self.unique.current_block.content.pos as u64
             - HEADER_SIZE as u64
     }
 
     fn locator_at(&self, number: u32) -> Locator {
-        self.inner.head_locator.nth(number)
+        self.unique.head_locator.nth(number)
     }
 
     fn locators(&self) -> impl Iterator<Item = Locator> {
-        self.inner
+        self.unique
             .head_locator
             .sequence()
             .take(self.core.block_count() as usize)
