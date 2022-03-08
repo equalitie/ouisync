@@ -322,10 +322,41 @@ async fn concurrent_write_and_read_file() {
     .unwrap();
 }
 
-// TODO: WIP
-#[ignore]
 #[tokio::test(flavor = "multi_thread")]
 async fn interleaved_flush() {
+    let content1 = random_bytes(BLOCK_SIZE - blob::HEADER_SIZE); // 1 block
+    let content2 = random_bytes(2 * BLOCK_SIZE - blob::HEADER_SIZE); // 2 blocks
+
+    case(
+        "write 2 blocks, write 0 blocks, flush 2nd then 1st",
+        &content2,
+        &[],
+        FlushOrder::SecondThenFirst,
+        3,
+        &content2,
+    )
+    .await;
+
+    case(
+        "write 1 block, write 2 blocks, flush 1st then 2nd",
+        &content1,
+        &content2,
+        FlushOrder::FirstThenSecond,
+        3,
+        &concat([nth_block(&content1, 0), nth_block(&content2, 1)]),
+    )
+    .await;
+
+    case(
+        "write 1 block, write 2 blocks, flush 2nd then 1st",
+        &content1,
+        &content2,
+        FlushOrder::SecondThenFirst,
+        3,
+        &concat([nth_block(&content1, 0), nth_block(&content2, 1)]),
+    )
+    .await;
+
     enum FlushOrder {
         FirstThenSecond,
         SecondThenFirst,
@@ -334,7 +365,6 @@ async fn interleaved_flush() {
     // Open two instances of the same file, write `content0` to the first and `content1` to the
     // second, then flush in the specified order, finally check the total number of blocks in the
     // repository and the content of the file.
-    #[track_caller]
     async fn case(
         label: &str,
         content0: &[u8],
@@ -360,15 +390,15 @@ async fn interleaved_flush() {
         let mut file1 = repo.open_file(file_name).await.unwrap();
 
         file0.write(content0).await.unwrap();
-        // file1.write(content1).await.unwrap();
+        file1.write(content1).await.unwrap();
 
         match flush_order {
             FlushOrder::FirstThenSecond => {
                 file0.flush().await.unwrap();
-                // file1.flush().await.unwrap();
+                file1.flush().await.unwrap();
             }
             FlushOrder::SecondThenFirst => {
-                // file1.flush().await.unwrap();
+                file1.flush().await.unwrap();
                 file0.flush().await.unwrap();
             }
         }
@@ -394,41 +424,6 @@ async fn interleaved_flush() {
             label
         )
     }
-
-    let content1 = random_bytes(BLOCK_SIZE - blob::HEADER_SIZE); // 1 block
-    let content2 = random_bytes(2 * BLOCK_SIZE - blob::HEADER_SIZE); // 2 blocks
-
-    case(
-        "write 2 blocks, write 0 blocks, flush 2nd then 1st",
-        &content2,
-        &[],
-        FlushOrder::SecondThenFirst,
-        3,
-        &content2,
-    )
-    .await;
-
-    /*
-    case(
-        "write 1 block, write 2 blocks, flush 1st then 2nd",
-        &content1,
-        &content2,
-        FlushOrder::FirstThenSecond,
-        3,
-        &concat([nth_block(&content1, 0), nth_block(&content2, 1)]),
-    )
-    .await;
-
-    case(
-        "write 1 block, write 2 blocks, flush 2nd then 1st",
-        &content1,
-        &content2,
-        FlushOrder::SecondThenFirst,
-        3,
-        &concat([nth_block(&content1, 0), nth_block(&content2, 1)]),
-    )
-    .await;
-    */
 }
 
 #[tokio::test(flavor = "multi_thread")]
