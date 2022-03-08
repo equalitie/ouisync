@@ -149,7 +149,7 @@ impl Directory {
             .await?;
 
         // TODO: vv is needlessly created twice here.
-        let mut dst_entry = src_entry.clone();
+        let mut dst_entry = src_entry;
         *dst_entry.version_vector_mut() = dst_vv;
 
         let dst_author = dst_dir.branch_id;

@@ -149,25 +149,23 @@ impl<'a> FileRef<'a> {
     /// it's not a regular `async` function but rather returns explicit `impl Future`. The reason
     /// for this is to prevent deadlocks when opening a file while its parent directory is locked.
     pub fn open(&self) -> impl Future<Output = Result<File>> {
-        let shared_slot = self.entry_data.blob_shared.clone();
+        let shared = {
+            let mut slot = self.entry_data.blob_shared.lock().unwrap();
+            if let Some(shared) = slot.upgrade() {
+                shared.into()
+            } else {
+                let shared = Shared::uninit();
+                *slot = shared.downgrade();
+                shared.into()
+            }
+        };
+
         let parent_context = self.inner.parent_context();
         let branch = self.inner.parent_inner.blob.branch().clone();
         let locator = self.locator();
 
-        async move {
-            let shared = {
-                let mut shared_slot = shared_slot.lock().await;
-                if let Some(shared) = shared_slot.upgrade() {
-                    shared.into()
-                } else {
-                    let shared = Shared::uninit();
-                    *shared_slot = shared.downgrade();
-                    shared.into()
-                }
-            };
-
-            File::open(branch, locator, parent_context, shared).await
-        }
+        // Only this function is async and nothing we pass to it is borrowed from self.
+        File::open(branch, locator, parent_context, shared)
     }
 
     pub fn branch_id(&self) -> &PublicKey {
