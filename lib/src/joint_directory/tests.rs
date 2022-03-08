@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     access_control::WriteSecrets,
-    blob::{Blob, Core},
+    blob::{Blob, Shared},
     branch::Branch,
     crypto::sign::PublicKey,
     db,
@@ -1022,7 +1022,7 @@ async fn replace_dangling_file(parent: &Directory, name: &str) {
     Blob::create(
         reader.branch().clone(),
         Locator::head(old_blob_id),
-        Core::uninit(),
+        Shared::uninit(),
     )
     .flush()
     .await
@@ -1054,7 +1054,7 @@ async fn replace_dangling_directory(parent: &Directory, name: &str) {
     Blob::create(
         reader.branch().clone(),
         Locator::head(old_blob_id),
-        Core::uninit(),
+        Shared::uninit(),
     )
     .flush()
     .await

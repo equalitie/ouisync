@@ -1,6 +1,6 @@
 use super::{cache::SubdirectoryCache, entry_data::EntryData, parent_context::ParentContext};
 use crate::{
-    blob::{Blob, Core},
+    blob::{Blob, Shared},
     blob_id::BlobId,
     branch::Branch,
     crypto::sign::PublicKey,
@@ -62,7 +62,7 @@ impl Inner {
             Blob::open(
                 branch.clone(),
                 Locator::head(old_blob_id),
-                Core::uninit().into(),
+                Shared::uninit().into(),
             )
             .await?
             .remove()

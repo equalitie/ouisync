@@ -3,7 +3,7 @@ mod operations;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use self::inner::{Core, MaybeInitCore, UninitCore};
+pub(crate) use self::inner::{MaybeInitShared, Shared, UninitShared};
 use self::{inner::Unique, operations::Operations};
 use crate::{
     block::{BlockId, BLOCK_SIZE},
@@ -27,21 +27,25 @@ use zeroize::Zeroize;
 pub(super) const HEADER_SIZE: usize = mem::size_of::<u64>();
 
 pub(crate) struct Blob {
-    core: Arc<Mutex<Core>>,
+    shared: Arc<Mutex<Shared>>,
     unique: Unique,
 }
 
 impl Blob {
     /// Opens an existing blob.
-    pub async fn open(branch: Branch, head_locator: Locator, core: MaybeInitCore) -> Result<Self> {
+    pub async fn open(
+        branch: Branch,
+        head_locator: Locator,
+        shared: MaybeInitShared,
+    ) -> Result<Self> {
         let mut conn = branch.db_pool().acquire().await?;
         let mut current_block = OpenBlock::open_head(&mut conn, &branch, head_locator).await?;
 
         let len = current_block.content.read_u64();
-        let core = core.ensure_init(len).await;
+        let shared = shared.ensure_init(len).await;
 
         Ok(Self {
-            core,
+            shared,
             unique: Unique {
                 branch,
                 head_locator,
@@ -52,11 +56,11 @@ impl Blob {
     }
 
     /// Creates a new blob.
-    pub fn create(branch: Branch, head_locator: Locator, core: UninitCore) -> Self {
+    pub fn create(branch: Branch, head_locator: Locator, shared: UninitShared) -> Self {
         let current_block = OpenBlock::new_head(head_locator);
 
         Self {
-            core: core.init(),
+            shared: shared.init(),
             unique: Unique {
                 branch,
                 head_locator,
@@ -92,7 +96,7 @@ impl Blob {
     }
 
     pub async fn len(&self) -> u64 {
-        self.core.lock().await.len
+        self.shared.lock().await.len
     }
 
     /// Reads data from this blob into `buffer`, advancing the internal cursor. Returns the
@@ -212,7 +216,7 @@ impl Blob {
 
     async fn lock(&mut self) -> Operations<'_> {
         Operations {
-            core: self.core.lock().await,
+            shared: self.shared.lock().await,
             unique: &mut self.unique,
         }
     }

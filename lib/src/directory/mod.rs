@@ -23,7 +23,7 @@ use self::{
     inner::{Content, Inner},
 };
 use crate::{
-    blob::{Blob, Core},
+    blob::{Blob, Shared},
     blob_id::BlobId,
     branch::Branch,
     crypto::sign::PublicKey,
@@ -244,7 +244,7 @@ impl Directory {
         parent: Option<ParentContext>,
     ) -> Result<Self> {
         let branch_id = *owner_branch.id();
-        let mut blob = Blob::open(owner_branch, locator, Core::uninit().into()).await?;
+        let mut blob = Blob::open(owner_branch, locator, Shared::uninit().into()).await?;
         let buffer = blob.read_to_end().await?;
         let content = bincode::deserialize(&buffer).map_err(Error::MalformedDirectory)?;
 
@@ -261,7 +261,7 @@ impl Directory {
 
     fn create(owner_branch: Branch, locator: Locator, parent: Option<ParentContext>) -> Self {
         let branch_id = *owner_branch.id();
-        let blob = Blob::create(owner_branch, locator, Core::uninit());
+        let blob = Blob::create(owner_branch, locator, Shared::uninit());
 
         Directory {
             branch_id,
@@ -329,7 +329,7 @@ impl Directory {
                             inner.blob.branch().clone(),
                             Locator::head(file_data.blob_id),
                             parent_context,
-                            Core::uninit().into(),
+                            Shared::uninit().into(),
                         )
                         .await;
 
@@ -446,11 +446,11 @@ pub(crate) struct Writer<'a> {
 
 impl Writer<'_> {
     pub async fn create_file(&mut self, name: String) -> Result<File> {
-        let core = Core::uninit();
+        let shared = Shared::uninit();
         let (locator, parent) = self
-            .create_entry(NewEntryType::File(core.downgrade()), name)
+            .create_entry(NewEntryType::File(shared.downgrade()), name)
             .await?;
-        Ok(File::create(self.branch().clone(), locator, parent, core))
+        Ok(File::create(self.branch().clone(), locator, parent, shared))
     }
 
     pub async fn create_directory(&mut self, name: String) -> Result<Directory> {

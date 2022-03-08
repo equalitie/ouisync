@@ -1,5 +1,5 @@
 use crate::{
-    blob::{Blob, MaybeInitCore, UninitCore},
+    blob::{Blob, MaybeInitShared, UninitShared},
     block::BLOCK_SIZE,
     branch::Branch,
     directory::{Directory, ParentContext},
@@ -22,10 +22,10 @@ impl File {
         branch: Branch,
         locator: Locator,
         parent: ParentContext,
-        blob_core: MaybeInitCore,
+        blob_shared: MaybeInitShared,
     ) -> Result<Self> {
         Ok(Self {
-            blob: Blob::open(branch, locator, blob_core).await?,
+            blob: Blob::open(branch, locator, blob_shared).await?,
             parent,
         })
     }
@@ -35,10 +35,10 @@ impl File {
         branch: Branch,
         locator: Locator,
         parent: ParentContext,
-        blob_core: UninitCore,
+        blob_shared: UninitShared,
     ) -> Self {
         Self {
-            blob: Blob::create(branch, locator, blob_core),
+            blob: Blob::create(branch, locator, blob_shared),
             parent,
         }
     }

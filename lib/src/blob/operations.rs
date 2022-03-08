@@ -1,4 +1,4 @@
-use super::{inner::Unique, Blob, Buffer, Core, Cursor, OpenBlock, HEADER_SIZE};
+use super::{inner::Unique, Blob, Buffer, Cursor, OpenBlock, Shared, HEADER_SIZE};
 use crate::{
     block::{self, BlockId, BlockNonce, BLOCK_SIZE},
     branch::Branch,
@@ -16,7 +16,7 @@ use std::{convert::TryInto, io::SeekFrom};
 use tokio::sync::MutexGuard;
 
 pub(crate) struct Operations<'a> {
-    pub(super) core: MutexGuard<'a, Core>,
+    pub(super) shared: MutexGuard<'a, Shared>,
     pub(super) unique: &'a mut Unique,
 }
 
@@ -37,7 +37,7 @@ impl<'a> Operations<'a> {
         let mut total_len = 0;
 
         loop {
-            let remaining = (self.core.len - self.seek_position())
+            let remaining = (self.shared.len - self.seek_position())
                 .try_into()
                 .unwrap_or(usize::MAX);
             let len = buffer.len().min(remaining);
@@ -51,7 +51,7 @@ impl<'a> Operations<'a> {
             }
 
             let locator = self.unique.current_block.locator.next();
-            if locator.number() >= self.core.block_count() {
+            if locator.number() >= self.shared.block_count() {
                 break;
             }
 
@@ -82,7 +82,7 @@ impl<'a> Operations<'a> {
     pub async fn read_to_end(&mut self, conn: &mut db::Connection) -> Result<Vec<u8>> {
         let mut buffer = vec![
             0;
-            (self.core.len - self.seek_position())
+            (self.shared.len - self.seek_position())
                 .try_into()
                 .unwrap_or(usize::MAX)
         ];
@@ -107,8 +107,8 @@ impl<'a> Operations<'a> {
 
             buffer = &buffer[len..];
 
-            if self.seek_position() > self.core.len {
-                self.core.len = self.seek_position();
+            if self.seek_position() > self.shared.len {
+                self.shared.len = self.seek_position();
                 self.unique.len_dirty = true;
             }
 
@@ -117,7 +117,7 @@ impl<'a> Operations<'a> {
             }
 
             let locator = self.unique.current_block.locator.next();
-            let (id, content) = if locator.number() < self.core.block_count() {
+            let (id, content) = if locator.number() < self.shared.block_count() {
                 read_block(
                     tx,
                     self.unique.branch.data(),
@@ -143,19 +143,19 @@ impl<'a> Operations<'a> {
     /// Returns the new seek position from the start of the blob.
     pub async fn seek(&mut self, tx: &mut db::Transaction<'_>, pos: SeekFrom) -> Result<u64> {
         let offset = match pos {
-            SeekFrom::Start(n) => n.min(self.core.len),
+            SeekFrom::Start(n) => n.min(self.shared.len),
             SeekFrom::End(n) => {
                 if n >= 0 {
-                    self.core.len
+                    self.shared.len
                 } else {
-                    self.core.len.saturating_sub((-n) as u64)
+                    self.shared.len.saturating_sub((-n) as u64)
                 }
             }
             SeekFrom::Current(n) => {
                 if n >= 0 {
                     self.seek_position()
                         .saturating_add(n as u64)
-                        .min(self.core.len)
+                        .min(self.shared.len)
                 } else {
                     self.seek_position().saturating_sub((-n) as u64)
                 }
@@ -188,23 +188,23 @@ impl<'a> Operations<'a> {
     pub async fn truncate(&mut self, tx: &mut db::Transaction<'_>, len: u64) -> Result<()> {
         // TODO: reuse the truncated blocks on subsequent writes if the content is identical
 
-        if len == self.core.len {
+        if len == self.shared.len {
             return Ok(());
         }
 
-        if len > self.core.len {
+        if len > self.shared.len {
             // TODO: consider supporting this
             return Err(Error::OperationNotSupported);
         }
 
-        let old_block_count = self.core.block_count();
+        let old_block_count = self.shared.block_count();
 
-        self.core.len = len;
+        self.shared.len = len;
         self.unique.len_dirty = true;
 
-        let new_block_count = self.core.block_count();
+        let new_block_count = self.shared.block_count();
 
-        if self.seek_position() > self.core.len {
+        if self.seek_position() > self.shared.len {
             self.seek(tx, SeekFrom::End(0)).await?;
         }
 
@@ -241,13 +241,13 @@ impl<'a> Operations<'a> {
             self.unique
                 .head_locator
                 .sequence()
-                .take(self.core.block_count() as usize),
+                .take(self.shared.block_count() as usize),
         )
         .await?;
         tx.commit().await?;
 
         self.unique.current_block = OpenBlock::new_head(self.unique.head_locator);
-        self.core.len = 0;
+        self.shared.len = 0;
         self.unique.len_dirty = true;
 
         Ok(())
@@ -302,7 +302,7 @@ impl<'a> Operations<'a> {
         };
 
         Ok(Blob {
-            core: self.core.deep_clone(),
+            shared: self.shared.deep_clone(),
             unique: Unique {
                 branch: dst_branch,
                 head_locator: dst_head_locator,
@@ -386,7 +386,7 @@ impl<'a> Operations<'a> {
         if self.unique.current_block.locator.number() == 0 {
             let old_pos = self.unique.current_block.content.pos;
             self.unique.current_block.content.pos = 0;
-            self.unique.current_block.content.write_u64(self.core.len);
+            self.unique.current_block.content.write_u64(self.shared.len);
             self.unique.current_block.content.pos = old_pos;
             self.unique.current_block.dirty = true;
         } else {
@@ -401,7 +401,7 @@ impl<'a> Operations<'a> {
 
             let mut cursor = Cursor::new(buffer);
             cursor.pos = 0;
-            cursor.write_u64(self.core.len);
+            cursor.write_u64(self.shared.len);
 
             write_block(
                 tx,
@@ -459,7 +459,7 @@ impl<'a> Operations<'a> {
         self.unique
             .head_locator
             .sequence()
-            .take(self.core.block_count() as usize)
+            .take(self.shared.block_count() as usize)
     }
 }
 

@@ -15,13 +15,13 @@ pub(super) struct Unique {
 
 // State shared among multiple instances of the same blob.
 #[derive(Debug)]
-pub(crate) struct Core {
+pub(crate) struct Shared {
     pub(super) len: u64,
 }
 
-impl Core {
-    pub fn uninit() -> UninitCore {
-        UninitCore(Self::new(0))
+impl Shared {
+    pub fn uninit() -> UninitShared {
+        UninitShared(Self::new(0))
     }
 
     pub fn deep_clone(&self) -> Arc<Mutex<Self>> {
@@ -41,44 +41,46 @@ impl Core {
     }
 }
 
+// Wrapper for `Shared` that's not initialized.
 #[derive(Clone)]
-pub(crate) struct UninitCore(Arc<Mutex<Core>>);
+pub(crate) struct UninitShared(Arc<Mutex<Shared>>);
 
-impl UninitCore {
-    pub(super) fn init(self) -> Arc<Mutex<Core>> {
+impl UninitShared {
+    pub(super) fn init(self) -> Arc<Mutex<Shared>> {
         self.0
     }
 
-    pub(crate) fn downgrade(&self) -> Weak<Mutex<Core>> {
+    pub(crate) fn downgrade(&self) -> Weak<Mutex<Shared>> {
         Arc::downgrade(&self.0)
     }
 }
 
-pub(crate) struct MaybeInitCore {
-    core: Arc<Mutex<Core>>,
+// Wrapper for `Shared` that may or might not be initialized.
+pub(crate) struct MaybeInitShared {
+    shared: Arc<Mutex<Shared>>,
     init: bool,
 }
 
-impl MaybeInitCore {
-    pub(super) async fn ensure_init(self, len: u64) -> Arc<Mutex<Core>> {
+impl MaybeInitShared {
+    pub(super) async fn ensure_init(self, len: u64) -> Arc<Mutex<Shared>> {
         if !self.init {
-            self.core.lock().await.len = len;
+            self.shared.lock().await.len = len;
         }
 
-        self.core
+        self.shared
     }
 }
 
-impl From<Arc<Mutex<Core>>> for MaybeInitCore {
-    fn from(core: Arc<Mutex<Core>>) -> Self {
-        Self { core, init: true }
+impl From<Arc<Mutex<Shared>>> for MaybeInitShared {
+    fn from(shared: Arc<Mutex<Shared>>) -> Self {
+        Self { shared, init: true }
     }
 }
 
-impl From<UninitCore> for MaybeInitCore {
-    fn from(core: UninitCore) -> Self {
+impl From<UninitShared> for MaybeInitShared {
+    fn from(shared: UninitShared) -> Self {
         Self {
-            core: core.0,
+            shared: shared.0,
             init: false,
         }
     }

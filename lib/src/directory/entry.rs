@@ -5,7 +5,7 @@ use super::{
     Directory,
 };
 use crate::{
-    blob::Core,
+    blob::Shared,
     blob_id::BlobId,
     crypto::sign::PublicKey,
     error::{Error, Result},
@@ -149,24 +149,24 @@ impl<'a> FileRef<'a> {
     /// it's not a regular `async` function but rather returns explicit `impl Future`. The reason
     /// for this is to prevent deadlocks when opening a file while its parent directory is locked.
     pub fn open(&self) -> impl Future<Output = Result<File>> {
-        let core_slot = self.entry_data.blob_core.clone();
+        let shared_slot = self.entry_data.blob_shared.clone();
         let parent_context = self.inner.parent_context();
         let branch = self.inner.parent_inner.blob.branch().clone();
         let locator = self.locator();
 
         async move {
-            let core = {
-                let mut core_slot = core_slot.lock().await;
-                if let Some(core) = core_slot.upgrade() {
-                    core.into()
+            let shared = {
+                let mut shared_slot = shared_slot.lock().await;
+                if let Some(shared) = shared_slot.upgrade() {
+                    shared.into()
                 } else {
-                    let core = Core::uninit();
-                    *core_slot = core.downgrade();
-                    core.into()
+                    let shared = Shared::uninit();
+                    *shared_slot = shared.downgrade();
+                    shared.into()
                 }
             };
 
-            File::open(branch, locator, parent_context, core).await
+            File::open(branch, locator, parent_context, shared).await
         }
     }
 

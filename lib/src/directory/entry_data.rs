@@ -1,5 +1,5 @@
 use crate::{
-    blob::{self, Core},
+    blob::{self, Shared},
     blob_id::BlobId,
     version_vector::VersionVector,
 };
@@ -22,7 +22,7 @@ pub(crate) enum EntryData {
 impl EntryData {
     pub fn new(entry_type: NewEntryType, blob_id: BlobId, version_vector: VersionVector) -> Self {
         match entry_type {
-            NewEntryType::File(core) => Self::file(blob_id, version_vector, core),
+            NewEntryType::File(shared) => Self::file(blob_id, version_vector, shared),
             NewEntryType::Directory => Self::directory(blob_id, version_vector),
         }
     }
@@ -30,12 +30,12 @@ impl EntryData {
     pub fn file(
         blob_id: BlobId,
         version_vector: VersionVector,
-        blob_core: Weak<Mutex<Core>>,
+        blob_shared: Weak<Mutex<Shared>>,
     ) -> Self {
         Self::File(EntryFileData {
             blob_id,
             version_vector,
-            blob_core: Arc::new(Mutex::new(blob_core)),
+            blob_shared: Arc::new(Mutex::new(blob_shared)),
         })
     }
 
@@ -72,7 +72,7 @@ impl EntryData {
 }
 
 pub(crate) enum NewEntryType {
-    File(Weak<Mutex<Core>>),
+    File(Weak<Mutex<Shared>>),
     Directory,
 }
 
@@ -84,7 +84,7 @@ pub(crate) struct EntryFileData {
     pub version_vector: VersionVector,
     #[serde(skip)]
     // The Arc here is so that Self is Clone.
-    pub blob_core: Arc<Mutex<Weak<Mutex<blob::Core>>>>,
+    pub blob_shared: Arc<Mutex<Weak<Mutex<blob::Shared>>>>,
 }
 
 impl fmt::Debug for EntryFileData {
