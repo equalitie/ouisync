@@ -302,7 +302,7 @@ impl<'a> Operations<'a> {
         };
 
         Ok(Blob {
-            core: Core::new(self.core.len),
+            core: self.core.deep_clone(),
             inner: Inner {
                 branch: dst_branch,
                 head_locator: dst_head_locator,

@@ -5,14 +5,13 @@ mod core;
 mod operations;
 
 pub(crate) use self::core::Core;
-use self::operations::Operations;
+use self::{core::MaybeInitCore, operations::Operations};
 use crate::{
     block::{BlockId, BLOCK_SIZE},
     branch::Branch,
     db,
     error::Result,
     locator::Locator,
-    Error,
 };
 use std::{
     convert::TryInto,
@@ -35,43 +34,12 @@ pub(crate) struct Blob {
 
 impl Blob {
     /// Opens an existing blob.
-    pub async fn open(branch: Branch, head_locator: Locator) -> Result<Self> {
+    pub async fn open(branch: Branch, head_locator: Locator, core: MaybeInitCore) -> Result<Self> {
         let mut conn = branch.db_pool().acquire().await?;
-
         let mut current_block = OpenBlock::open_head(&mut conn, &branch, head_locator).await?;
+
         let len = current_block.content.read_u64();
-
-        Ok(Self {
-            core: Core::new(len),
-            inner: Inner {
-                branch,
-                head_locator,
-                current_block,
-                len_dirty: false,
-            },
-        })
-    }
-
-    pub async fn reopen(
-        branch: Branch,
-        head_locator: Locator,
-        core: Arc<Mutex<Core>>,
-    ) -> Result<Self> {
-        // Make sure we acquire db connection first and lock the core second always in that order,
-        // to prevent deadlocks.
-        let mut conn = branch.db_pool().acquire().await?;
-        let core_guard = core.lock().await;
-
-        let current_block = match OpenBlock::open_head(&mut conn, &branch, head_locator).await {
-            Ok(mut current_block) => {
-                current_block.content.pos = HEADER_SIZE;
-                current_block
-            }
-            Err(Error::EntryNotFound) if core_guard.len == 0 => OpenBlock::new_head(head_locator),
-            Err(error) => return Err(error),
-        };
-
-        drop(core_guard);
+        let core = core.ensure_init(len).await;
 
         Ok(Self {
             core,
@@ -82,6 +50,21 @@ impl Blob {
                 len_dirty: false,
             },
         })
+    }
+
+    /// Creates a new blob.
+    pub fn create(branch: Branch, head_locator: Locator) -> Self {
+        let current_block = OpenBlock::new_head(head_locator);
+
+        Self {
+            core: Core::uninit().init(),
+            inner: Inner {
+                branch,
+                head_locator,
+                current_block,
+                len_dirty: false,
+            },
+        }
     }
 
     pub async fn first_block_id(&self) -> Result<BlockId> {
@@ -98,21 +81,6 @@ impl Blob {
                     .encode(self.inner.branch.keys().read()),
             )
             .await
-    }
-
-    /// Creates a new blob.
-    pub fn create(branch: Branch, head_locator: Locator) -> Self {
-        let current_block = OpenBlock::new_head(head_locator);
-
-        Self {
-            core: Arc::new(Mutex::new(Core { len: 0 })),
-            inner: Inner {
-                branch,
-                head_locator,
-                current_block,
-                len_dirty: false,
-            },
-        }
     }
 
     pub fn branch(&self) -> &Branch {

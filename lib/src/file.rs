@@ -1,5 +1,5 @@
 use crate::{
-    blob::{self, Blob},
+    blob::{self, Blob, Core},
     block::BLOCK_SIZE,
     branch::Branch,
     directory::{Directory, ParentContext},
@@ -27,7 +27,7 @@ impl File {
         parent: ParentContext,
     ) -> Result<Self> {
         Ok(Self {
-            blob: Blob::open(branch, locator).await?,
+            blob: Blob::open(branch, locator, Core::uninit().into()).await?,
             parent,
         })
     }
@@ -40,7 +40,7 @@ impl File {
         blob_core: Arc<Mutex<blob::Core>>,
     ) -> Result<Self> {
         Ok(Self {
-            blob: Blob::reopen(branch, locator, blob_core).await?,
+            blob: Blob::open(branch, locator, blob_core.into()).await?,
             parent,
         })
     }

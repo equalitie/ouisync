@@ -21,7 +21,7 @@ use self::{
     inner::{Content, Inner},
 };
 use crate::{
-    blob::Blob,
+    blob::{Blob, Core},
     blob_id::BlobId,
     branch::Branch,
     crypto::sign::PublicKey,
@@ -242,7 +242,7 @@ impl Directory {
         parent: Option<ParentContext>,
     ) -> Result<Self> {
         let branch_id = *owner_branch.id();
-        let mut blob = Blob::open(owner_branch, locator).await?;
+        let mut blob = Blob::open(owner_branch, locator, Core::uninit().into()).await?;
         let buffer = blob.read_to_end().await?;
         let content = bincode::deserialize(&buffer).map_err(Error::MalformedDirectory)?;
 

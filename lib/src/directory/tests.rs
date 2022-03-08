@@ -110,7 +110,7 @@ async fn remove_file() {
     assert_eq!(parent_dir.entries().count(), 1);
 
     // Check the file blob itself was removed as well.
-    match Blob::open(branch.clone(), file_locator).await {
+    match Blob::open(branch.clone(), file_locator, Core::uninit().into()).await {
         Err(Error::EntryNotFound) => (),
         Err(error) => panic!("unexpected error {:?}", error),
         Ok(_) => panic!("file blob should not exists but it does"),
@@ -374,7 +374,7 @@ async fn remove_subdirectory() {
     );
 
     // Check the directory blob itself was removed as well.
-    match Blob::open(branch, dir_locator).await {
+    match Blob::open(branch, dir_locator, Core::uninit().into()).await {
         Err(Error::EntryNotFound) => (),
         Err(error) => panic!("unexpected error {:?}", error),
         Ok(_) => panic!("directory blob should not exists but it does"),
