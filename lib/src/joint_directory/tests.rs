@@ -5,7 +5,7 @@ use crate::{
     branch::Branch,
     crypto::sign::PublicKey,
     db,
-    directory::EntryData,
+    directory::{EntryData, NewEntryType},
     index::BranchData,
     locator::Locator,
     repository,
@@ -15,7 +15,10 @@ use crate::{
 use assert_matches::assert_matches;
 use futures_util::future;
 use rand::{rngs::StdRng, SeedableRng};
-use std::{iter, sync::Arc};
+use std::{
+    iter,
+    sync::{Arc, Weak},
+};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn no_conflict() {
@@ -981,14 +984,14 @@ async fn read_version_vector(parent: &Directory, name: &str) -> VersionVector {
 // TODO: try to reduce the code duplication in the following functions.
 
 async fn create_dangling_file(parent: &Directory, name: &str) {
-    create_dangling_entry(parent, EntryType::File, name).await
+    create_dangling_entry(parent, NewEntryType::File(Weak::new()), name).await
 }
 
 async fn create_dangling_directory(parent: &Directory, name: &str) {
-    create_dangling_entry(parent, EntryType::Directory, name).await
+    create_dangling_entry(parent, NewEntryType::Directory, name).await
 }
 
-async fn create_dangling_entry(parent: &Directory, entry_type: EntryType, name: &str) {
+async fn create_dangling_entry(parent: &Directory, entry_type: NewEntryType, name: &str) {
     let mut writer = parent.write().await;
     let branch_id = *writer.branch().id();
     let blob_id = rand::random();

@@ -8,7 +8,9 @@ mod parent_context;
 mod tests;
 
 pub(crate) use self::{
-    cache::RootDirectoryCache, entry_data::EntryData, parent_context::ParentContext,
+    cache::RootDirectoryCache,
+    entry_data::{EntryData, NewEntryType},
+    parent_context::ParentContext,
 };
 pub use self::{
     entry::{DirectoryRef, EntryRef, FileRef},
@@ -32,7 +34,7 @@ use crate::{
     version_vector::VersionVector,
 };
 use async_recursion::async_recursion;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 #[derive(Clone)]
@@ -228,7 +230,7 @@ impl Directory {
     ) -> Result<()> {
         let mut inner = self.write().await.inner;
 
-        let entry_data = EntryData::file(blob_id, version_vector);
+        let entry_data = EntryData::file(blob_id, version_vector, Weak::new());
         inner
             .insert_entry(name, author_id, entry_data, None)
             .await?;
@@ -444,17 +446,15 @@ pub(crate) struct Writer<'a> {
 
 impl Writer<'_> {
     pub async fn create_file(&mut self, name: String) -> Result<File> {
-        let (locator, parent) = self.create_entry(EntryType::File, name).await?;
-        Ok(File::create(
-            self.branch().clone(),
-            locator,
-            parent,
-            Core::uninit(),
-        ))
+        let core = Core::uninit();
+        let (locator, parent) = self
+            .create_entry(NewEntryType::File(core.downgrade()), name)
+            .await?;
+        Ok(File::create(self.branch().clone(), locator, parent, core))
     }
 
     pub async fn create_directory(&mut self, name: String) -> Result<Directory> {
-        let (locator, parent) = self.create_entry(EntryType::Directory, name).await?;
+        let (locator, parent) = self.create_entry(NewEntryType::Directory, name).await?;
         self.inner
             .open_directories
             .create(self.branch(), locator, parent)
@@ -463,7 +463,7 @@ impl Writer<'_> {
 
     async fn create_entry(
         &mut self,
-        entry_type: EntryType,
+        entry_type: NewEntryType,
         name: String,
     ) -> Result<(Locator, ParentContext)> {
         let author = *self.branch().id();

@@ -1,5 +1,8 @@
-use super::entry_type::EntryType;
-use crate::{blob, blob_id::BlobId, version_vector::VersionVector};
+use crate::{
+    blob::{self, Core},
+    blob_id::BlobId,
+    version_vector::VersionVector,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     fmt,
@@ -17,18 +20,22 @@ pub(crate) enum EntryData {
 }
 
 impl EntryData {
-    pub fn new(entry_type: EntryType, blob_id: BlobId, version_vector: VersionVector) -> Self {
+    pub fn new(entry_type: NewEntryType, blob_id: BlobId, version_vector: VersionVector) -> Self {
         match entry_type {
-            EntryType::File => Self::file(blob_id, version_vector),
-            EntryType::Directory => Self::directory(blob_id, version_vector),
+            NewEntryType::File(core) => Self::file(blob_id, version_vector, core),
+            NewEntryType::Directory => Self::directory(blob_id, version_vector),
         }
     }
 
-    pub fn file(blob_id: BlobId, version_vector: VersionVector) -> Self {
+    pub fn file(
+        blob_id: BlobId,
+        version_vector: VersionVector,
+        blob_core: Weak<Mutex<Core>>,
+    ) -> Self {
         Self::File(EntryFileData {
             blob_id,
             version_vector,
-            blob_core: Arc::new(Mutex::new(Weak::new())),
+            blob_core: Arc::new(Mutex::new(blob_core)),
         })
     }
 
@@ -62,6 +69,11 @@ impl EntryData {
             Self::Tombstone(_) => None,
         }
     }
+}
+
+pub(crate) enum NewEntryType {
+    File(Weak<Mutex<Core>>),
+    Directory,
 }
 
 //--------------------------------------------------------------------
