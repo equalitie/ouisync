@@ -1,5 +1,5 @@
 use crate::{
-    blob::{self, Blob, Core},
+    blob::{Blob, Core, MaybeInitCore},
     block::BLOCK_SIZE,
     branch::Branch,
     directory::{Directory, ParentContext},
@@ -7,12 +7,9 @@ use crate::{
     locator::Locator,
     version_vector::VersionVector,
 };
+use std::fmt;
 use std::io::SeekFrom;
-use std::{fmt, sync::Arc};
-use tokio::{
-    io::{AsyncWrite, AsyncWriteExt},
-    sync::Mutex,
-};
+use tokio::io::{AsyncWrite, AsyncWriteExt};
 
 pub struct File {
     blob: Blob,
@@ -25,22 +22,10 @@ impl File {
         branch: Branch,
         locator: Locator,
         parent: ParentContext,
+        blob_core: MaybeInitCore,
     ) -> Result<Self> {
         Ok(Self {
-            blob: Blob::open(branch, locator, Core::uninit().into()).await?,
-            parent,
-        })
-    }
-
-    /// Opens an existing file. Reuse the already opened blob::Core
-    pub(crate) async fn reopen(
-        branch: Branch,
-        locator: Locator,
-        parent: ParentContext,
-        blob_core: Arc<Mutex<blob::Core>>,
-    ) -> Result<Self> {
-        Ok(Self {
-            blob: Blob::open(branch, locator, blob_core.into()).await?,
+            blob: Blob::open(branch, locator, blob_core).await?,
             parent,
         })
     }
@@ -48,7 +33,7 @@ impl File {
     /// Creates a new file.
     pub(crate) fn create(branch: Branch, locator: Locator, parent: ParentContext) -> Self {
         Self {
-            blob: Blob::create(branch, locator),
+            blob: Blob::create(branch, locator, Core::uninit()),
             parent,
         }
     }
@@ -122,10 +107,6 @@ impl File {
         }
 
         Ok(())
-    }
-
-    pub(crate) fn blob_core(&self) -> &Arc<Mutex<blob::Core>> {
-        self.blob.core()
     }
 
     /// Forks this file into the local branch. Ensure all its ancestor directories exist and live

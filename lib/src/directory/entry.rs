@@ -5,6 +5,7 @@ use super::{
     Directory,
 };
 use crate::{
+    blob::Core,
     blob_id::BlobId,
     crypto::sign::PublicKey,
     error::{Error, Result},
@@ -12,7 +13,7 @@ use crate::{
     locator::Locator,
     version_vector::VersionVector,
 };
-use std::{fmt, future::Future, sync::Arc};
+use std::{fmt, future::Future};
 
 /// Info about a directory entry.
 #[derive(Copy, Clone, Debug)]
@@ -148,22 +149,24 @@ impl<'a> FileRef<'a> {
     /// it's not a regular `async` function but rather returns explicit `impl Future`. The reason
     /// for this is to prevent deadlocks when opening a file while its parent directory is locked.
     pub fn open(&self) -> impl Future<Output = Result<File>> {
-        let core = self.entry_data.blob_core.clone();
+        let core_slot = self.entry_data.blob_core.clone();
         let parent_context = self.inner.parent_context();
         let branch = self.inner.parent_inner.blob.branch().clone();
         let locator = self.locator();
 
         async move {
-            let mut core = core.lock().await;
+            let core = {
+                let mut core_slot = core_slot.lock().await;
+                if let Some(core) = core_slot.upgrade() {
+                    core.into()
+                } else {
+                    let core = Core::uninit();
+                    *core_slot = core.downgrade();
+                    core.into()
+                }
+            };
 
-            if let Some(core) = core.upgrade() {
-                File::reopen(branch, locator, parent_context, core).await
-            } else {
-                let file = File::open(branch, locator, parent_context).await?;
-                *core = Arc::downgrade(file.blob_core());
-
-                Ok(file)
-            }
+            File::open(branch, locator, parent_context, core).await
         }
     }
 

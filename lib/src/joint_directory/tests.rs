@@ -1,7 +1,15 @@
 use super::*;
 use crate::{
-    access_control::WriteSecrets, blob::Blob, branch::Branch, crypto::sign::PublicKey, db,
-    directory::EntryData, index::BranchData, locator::Locator, repository, sync::broadcast,
+    access_control::WriteSecrets,
+    blob::{Blob, Core},
+    branch::Branch,
+    crypto::sign::PublicKey,
+    db,
+    directory::EntryData,
+    index::BranchData,
+    locator::Locator,
+    repository,
+    sync::broadcast,
     version_vector::VersionVector,
 };
 use assert_matches::assert_matches;
@@ -1008,10 +1016,14 @@ async fn replace_dangling_file(parent: &Directory, name: &str) {
 
     // Create a dummy blob so the `create_file` call doesn't fail when trying to delete the
     // previous blob (which doesn't exists because the file was created as danling).
-    Blob::create(reader.branch().clone(), Locator::head(old_blob_id))
-        .flush()
-        .await
-        .unwrap();
+    Blob::create(
+        reader.branch().clone(),
+        Locator::head(old_blob_id),
+        Core::uninit(),
+    )
+    .flush()
+    .await
+    .unwrap();
 
     drop(reader);
 
@@ -1036,10 +1048,14 @@ async fn replace_dangling_directory(parent: &Directory, name: &str) {
 
     // Create a dummy blob so the `create_directory` call doesn't fail when trying to delete
     // the previous blob (which doesn't exists because the file was created as danling).
-    Blob::create(reader.branch().clone(), Locator::head(old_blob_id))
-        .flush()
-        .await
-        .unwrap();
+    Blob::create(
+        reader.branch().clone(),
+        Locator::head(old_blob_id),
+        Core::uninit(),
+    )
+    .flush()
+    .await
+    .unwrap();
 
     drop(reader);
 

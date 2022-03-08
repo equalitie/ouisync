@@ -4,8 +4,8 @@ mod tests;
 mod core;
 mod operations;
 
-pub(crate) use self::core::Core;
-use self::{core::MaybeInitCore, operations::Operations};
+pub(crate) use self::core::{Core, MaybeInitCore, UninitCore};
+use self::operations::Operations;
 use crate::{
     block::{BlockId, BLOCK_SIZE},
     branch::Branch,
@@ -53,11 +53,11 @@ impl Blob {
     }
 
     /// Creates a new blob.
-    pub fn create(branch: Branch, head_locator: Locator) -> Self {
+    pub fn create(branch: Branch, head_locator: Locator, core: UninitCore) -> Self {
         let current_block = OpenBlock::new_head(head_locator);
 
         Self {
-            core: Core::uninit().init(),
+            core: core.init(),
             inner: Inner {
                 branch,
                 head_locator,
@@ -85,10 +85,6 @@ impl Blob {
 
     pub fn branch(&self) -> &Branch {
         &self.inner.branch
-    }
-
-    pub fn core(&self) -> &Arc<Mutex<Core>> {
-        &self.core
     }
 
     /// Locator of this blob.

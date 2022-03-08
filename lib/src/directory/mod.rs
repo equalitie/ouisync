@@ -259,7 +259,7 @@ impl Directory {
 
     fn create(owner_branch: Branch, locator: Locator, parent: Option<ParentContext>) -> Self {
         let branch_id = *owner_branch.id();
-        let blob = Blob::create(owner_branch, locator);
+        let blob = Blob::create(owner_branch, locator, Core::uninit());
 
         Directory {
             branch_id,
@@ -327,6 +327,7 @@ impl Directory {
                             inner.blob.branch().clone(),
                             Locator::head(file_data.blob_id),
                             parent_context,
+                            Core::uninit().into(),
                         )
                         .await;
 

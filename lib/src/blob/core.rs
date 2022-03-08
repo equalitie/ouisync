@@ -1,5 +1,5 @@
 use crate::block::BLOCK_SIZE;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use tokio::sync::Mutex;
 
 // State shared among multiple instances of the same file.
@@ -30,6 +30,7 @@ impl Core {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct UninitCore(Arc<Mutex<Core>>);
 
 impl UninitCore {
@@ -37,7 +38,9 @@ impl UninitCore {
         self.0
     }
 
-    // pub(crate)
+    pub(crate) fn downgrade(&self) -> Weak<Mutex<Core>> {
+        Arc::downgrade(&self.0)
+    }
 }
 
 pub(crate) struct MaybeInitCore {
