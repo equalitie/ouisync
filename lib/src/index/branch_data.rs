@@ -14,6 +14,7 @@ use crate::{
     sync::broadcast,
     version_vector::VersionVector,
 };
+
 use sqlx::Acquire;
 use tokio::sync::{RwLock, RwLockReadGuard};
 
@@ -141,6 +142,12 @@ impl BranchData {
         }
     }
 
+    #[cfg(test)]
+    pub async fn count_leaf_nodes(&self, conn: &mut db::Connection) -> Result<usize> {
+        let root_hash = self.root_node.read().await.proof.hash;
+        count_leaf_nodes(conn, 0, &root_hash).await
+    }
+
     /// Trigger a notification event from this branch.
     pub async fn notify(&self) {
         self.notify_tx.broadcast(self.writer_id).await.unwrap_or(())
@@ -263,6 +270,31 @@ async fn load_path(
     }
 
     Ok(path)
+}
+
+#[cfg(test)]
+use async_recursion::async_recursion;
+
+#[async_recursion]
+#[cfg(test)]
+async fn count_leaf_nodes(
+    conn: &mut db::Connection,
+    current_layer: usize,
+    node: &Hash,
+) -> Result<usize> {
+    if current_layer < INNER_LAYER_COUNT {
+        let children = InnerNode::load_children(conn, node).await?;
+
+        let mut sum = 0;
+
+        for (_bucket, child) in children {
+            sum += count_leaf_nodes(conn, current_layer + 1, &child.hash).await?;
+        }
+
+        Ok(sum)
+    } else {
+        Ok(LeafNode::load_children(conn, node).await?.len())
+    }
 }
 
 async fn save_path(

@@ -1,6 +1,6 @@
 use super::{cache::SubdirectoryCache, entry_data::EntryData, parent_context::ParentContext};
 use crate::{
-    blob::Blob,
+    blob::{Blob, Shared},
     blob_id::BlobId,
     branch::Branch,
     crypto::sign::PublicKey,
@@ -59,10 +59,14 @@ impl Inner {
         let to_delete = old_blobs.into_iter().filter(|b| keep != Some(*b));
 
         future::try_join_all(to_delete.map(|old_blob_id| async move {
-            Blob::open(branch.clone(), Locator::head(old_blob_id))
-                .await?
-                .remove()
-                .await
+            Blob::open(
+                branch.clone(),
+                Locator::head(old_blob_id),
+                Shared::uninit().into(),
+            )
+            .await?
+            .remove()
+            .await
         }))
         .await?;
 
@@ -157,7 +161,7 @@ impl Inner {
     }
 }
 
-#[derive(Clone, Deserialize, Serialize, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 pub(super) struct Content {
     pub entries: BTreeMap<String, BTreeMap<PublicKey, EntryData>>,
     #[serde(skip)]
@@ -242,12 +246,11 @@ impl Content {
             .into_iter()
             .filter(|old_author| *old_author != author)
             .filter_map(|old_author| versions.remove(&old_author))
-            .map(|data| match data {
+            .filter_map(|data| match data {
                 EntryData::File(data) => Some(data.blob_id),
                 EntryData::Directory(data) => Some(data.blob_id),
                 EntryData::Tombstone(_) => None,
             })
-            .flatten()
             // Because we filtered out *old_author != author above.
             .chain(old_blob_id)
             .collect();

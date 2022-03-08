@@ -1,5 +1,5 @@
 use crate::{
-    blob::{self, Blob},
+    blob::{Blob, MaybeInitShared, UninitShared},
     block::BLOCK_SIZE,
     branch::Branch,
     directory::{Directory, ParentContext},
@@ -7,12 +7,9 @@ use crate::{
     locator::Locator,
     version_vector::VersionVector,
 };
+use std::fmt;
 use std::io::SeekFrom;
-use std::{fmt, sync::Arc};
-use tokio::{
-    io::{AsyncWrite, AsyncWriteExt},
-    sync::Mutex,
-};
+use tokio::io::{AsyncWrite, AsyncWriteExt};
 
 pub struct File {
     blob: Blob,
@@ -25,30 +22,23 @@ impl File {
         branch: Branch,
         locator: Locator,
         parent: ParentContext,
+        blob_shared: MaybeInitShared,
     ) -> Result<Self> {
         Ok(Self {
-            blob: Blob::open(branch, locator).await?,
-            parent,
-        })
-    }
-
-    /// Opens an existing file. Reuse the already opened blob::Core
-    pub(crate) async fn reopen(
-        branch: Branch,
-        locator: Locator,
-        parent: ParentContext,
-        blob_core: Arc<Mutex<blob::Core>>,
-    ) -> Result<Self> {
-        Ok(Self {
-            blob: Blob::reopen(branch, locator, blob_core).await?,
+            blob: Blob::open(branch, locator, blob_shared).await?,
             parent,
         })
     }
 
     /// Creates a new file.
-    pub(crate) fn create(branch: Branch, locator: Locator, parent: ParentContext) -> Self {
+    pub(crate) fn create(
+        branch: Branch,
+        locator: Locator,
+        parent: ParentContext,
+        blob_shared: UninitShared,
+    ) -> Self {
         Self {
-            blob: Blob::create(branch, locator),
+            blob: Blob::create(branch, locator, blob_shared),
             parent,
         }
     }
@@ -96,7 +86,7 @@ impl File {
     /// Flushes this file, ensuring that all intermediately buffered contents gets written to the
     /// store.
     pub async fn flush(&mut self) -> Result<()> {
-        if !self.blob.is_dirty().await {
+        if !self.blob.is_dirty() {
             return Ok(());
         }
 
@@ -122,10 +112,6 @@ impl File {
         }
 
         Ok(())
-    }
-
-    pub(crate) fn blob_core(&self) -> &Arc<Mutex<blob::Core>> {
-        self.blob.core()
     }
 
     /// Forks this file into the local branch. Ensure all its ancestor directories exist and live

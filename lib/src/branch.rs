@@ -1,6 +1,6 @@
 use crate::{
     access_control::AccessKeys,
-    blob::Blob,
+    blob::{Blob, Shared},
     block::BlockId,
     db,
     debug_printer::DebugPrinter,
@@ -98,7 +98,7 @@ impl Branch {
     }
 
     pub(crate) async fn root_block_id(&self) -> Result<BlockId> {
-        let blob = Blob::open(self.clone(), Locator::ROOT).await?;
+        let blob = Blob::open(self.clone(), Locator::ROOT, Shared::uninit().into()).await?;
         blob.first_block_id().await
     }
 

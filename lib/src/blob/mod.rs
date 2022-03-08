@@ -1,126 +1,102 @@
+mod inner;
+mod operations;
 #[cfg(test)]
 mod tests;
 
-mod core;
-mod operations;
-
-pub(crate) use self::core::Core;
-use self::core::HEADER_SIZE;
-use self::operations::Operations;
+pub(crate) use self::inner::{MaybeInitShared, Shared, UninitShared};
+use self::{inner::Unique, operations::Operations};
 use crate::{
     block::{BlockId, BLOCK_SIZE},
     branch::Branch,
     db,
     error::Result,
     locator::Locator,
-    Error,
 };
 use std::{
     convert::TryInto,
     io::SeekFrom,
+    mem,
     ops::{Deref, DerefMut},
     sync::Arc,
 };
 use tokio::sync::Mutex;
 use zeroize::Zeroize;
 
+// Using u64 instead of usize because HEADER_SIZE must be the same irrespective of whether we're on
+// a 32bit or 64bit processor (if we want two such replicas to be able to sync).
+pub(super) const HEADER_SIZE: usize = mem::size_of::<u64>();
+
 pub(crate) struct Blob {
-    core: Arc<Mutex<Core>>,
-    branch: Branch,
-    head_locator: Locator,
-    current_block: OpenBlock,
+    shared: Arc<Mutex<Shared>>,
+    unique: Unique,
 }
 
 impl Blob {
     /// Opens an existing blob.
-    pub async fn open(branch: Branch, head_locator: Locator) -> Result<Self> {
+    pub async fn open(
+        branch: Branch,
+        head_locator: Locator,
+        shared: MaybeInitShared,
+    ) -> Result<Self> {
         let mut conn = branch.db_pool().acquire().await?;
-
         let mut current_block = OpenBlock::open_head(&mut conn, &branch, head_locator).await?;
+
         let len = current_block.content.read_u64();
+        let shared = shared.ensure_init(len).await;
 
         Ok(Self {
-            core: Arc::new(Mutex::new(Core {
-                len,
+            shared,
+            unique: Unique {
+                branch,
+                head_locator,
+                current_block,
                 len_dirty: false,
-            })),
-            branch,
-            head_locator,
-            current_block,
+            },
         })
     }
 
-    pub async fn reopen(
-        branch: Branch,
-        head_locator: Locator,
-        core: Arc<Mutex<Core>>,
-    ) -> Result<Self> {
-        // Make sure we acquire db connection first and lock the core second always in that order,
-        // to prevent deadlocks.
-        let mut conn = branch.db_pool().acquire().await?;
-        let core_guard = core.lock().await;
+    /// Creates a new blob.
+    pub fn create(branch: Branch, head_locator: Locator, shared: UninitShared) -> Self {
+        let current_block = OpenBlock::new_head(head_locator);
 
-        let current_block = match OpenBlock::open_head(&mut conn, &branch, head_locator).await {
-            Ok(mut current_block) => {
-                current_block.content.pos = HEADER_SIZE;
-                current_block
-            }
-            Err(Error::EntryNotFound) if core_guard.len == 0 => OpenBlock::new_head(head_locator),
-            Err(error) => return Err(error),
-        };
-
-        drop(core_guard);
-
-        Ok(Self {
-            core,
-            branch,
-            head_locator,
-            current_block,
-        })
+        Self {
+            shared: shared.init(),
+            unique: Unique {
+                branch,
+                head_locator,
+                current_block,
+                len_dirty: false,
+            },
+        }
     }
 
     pub async fn first_block_id(&self) -> Result<BlockId> {
         let mut conn = self.db_pool().acquire().await?;
 
-        self.branch
+        self.unique
+            .branch
             .data()
             .get(
                 &mut conn,
-                &self.head_locator.encode(self.branch.keys().read()),
+                &self
+                    .unique
+                    .head_locator
+                    .encode(self.unique.branch.keys().read()),
             )
             .await
     }
 
-    /// Creates a new blob.
-    pub fn create(branch: Branch, head_locator: Locator) -> Self {
-        let current_block = OpenBlock::new_head(head_locator);
-
-        Self {
-            core: Arc::new(Mutex::new(Core {
-                len: 0,
-                len_dirty: false,
-            })),
-            branch,
-            head_locator,
-            current_block,
-        }
-    }
-
     pub fn branch(&self) -> &Branch {
-        &self.branch
-    }
-
-    pub fn core(&self) -> &Arc<Mutex<Core>> {
-        &self.core
+        &self.unique.branch
     }
 
     /// Locator of this blob.
     pub fn locator(&self) -> &Locator {
-        &self.head_locator
+        &self.unique.head_locator
     }
 
     pub async fn len(&self) -> u64 {
-        self.core.lock().await.len
+        self.shared.lock().await.len
     }
 
     /// Reads data from this blob into `buffer`, advancing the internal cursor. Returns the
@@ -211,7 +187,9 @@ impl Blob {
     /// Creates a shallow copy (only the index nodes are copied, not blocks) of this blob into the
     /// specified destination branch and locator.
     pub async fn fork(&mut self, dst_branch: Branch, dst_head_locator: Locator) -> Result<()> {
-        if self.branch.id() == dst_branch.id() && self.head_locator == dst_head_locator {
+        if self.unique.branch.id() == dst_branch.id()
+            && self.unique.head_locator == dst_head_locator
+        {
             return Ok(());
         }
 
@@ -228,22 +206,19 @@ impl Blob {
     }
 
     /// Was this blob modified and not flushed yet?
-    pub async fn is_dirty(&self) -> bool {
-        self.current_block.dirty || self.core.lock().await.len_dirty
+    pub fn is_dirty(&self) -> bool {
+        self.unique.current_block.dirty || self.unique.len_dirty
     }
 
     pub fn db_pool(&self) -> &db::Pool {
-        self.branch.db_pool()
+        self.unique.branch.db_pool()
     }
 
     async fn lock(&mut self) -> Operations<'_> {
-        let core_guard = self.core.lock().await;
-        Operations::new(
-            core_guard,
-            &self.branch,
-            &self.head_locator,
-            &mut self.current_block,
-        )
+        Operations {
+            shared: self.shared.lock().await,
+            unique: &mut self.unique,
+        }
     }
 }
 

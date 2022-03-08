@@ -38,7 +38,7 @@ pub(crate) async fn read(
         .bind(id)
         .fetch_optional(conn)
         .await?
-        .ok_or_else(|| Error::BlockNotFound(*id))?;
+        .ok_or(Error::BlockNotFound(*id))?;
 
     from_row(row, buffer)
 }

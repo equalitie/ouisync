@@ -5,6 +5,7 @@ use super::{
     Directory,
 };
 use crate::{
+    blob::Shared,
     blob_id::BlobId,
     crypto::sign::PublicKey,
     error::{Error, Result},
@@ -12,7 +13,7 @@ use crate::{
     locator::Locator,
     version_vector::VersionVector,
 };
-use std::{fmt, future::Future, sync::Arc};
+use std::{fmt, future::Future};
 
 /// Info about a directory entry.
 #[derive(Copy, Clone, Debug)]
@@ -148,30 +149,23 @@ impl<'a> FileRef<'a> {
     /// it's not a regular `async` function but rather returns explicit `impl Future`. The reason
     /// for this is to prevent deadlocks when opening a file while its parent directory is locked.
     pub fn open(&self) -> impl Future<Output = Result<File>> {
+        let shared = {
+            let mut slot = self.entry_data.blob_shared.lock().unwrap();
+            if let Some(shared) = slot.upgrade() {
+                shared.into()
+            } else {
+                let shared = Shared::uninit();
+                *slot = shared.downgrade();
+                shared.into()
+            }
+        };
+
         let parent_context = self.inner.parent_context();
         let branch = self.inner.parent_inner.blob.branch().clone();
         let locator = self.locator();
 
-        // TODO: This is a quick fix to a file corruption problem caused by one thread writing to a
-        // file and another thread reading and closing it periodically. The problem was that both
-        // files shared the same blob::Core and when the blob for reading was being closed, the
-        // Blob::flush function was called which detected that the size has changed and overwrote
-        // the first block with outdated data.
-        File::open(branch, locator, parent_context)
-
-        //let core = self.entry_data.blob_core.clone();
-        //async move {
-        //    let mut core = core.lock().await;
-
-        //    if let Some(core) = core.upgrade() {
-        //        File::reopen(branch, locator, parent_context, core).await
-        //    } else {
-        //        let file = File::open(branch, locator, parent_context).await?;
-        //        *core = Arc::downgrade(file.blob_core());
-
-        //        Ok(file)
-        //    }
-        //}
+        // Only this function is async and nothing we pass to it is borrowed from self.
+        File::open(branch, locator, parent_context, shared)
     }
 
     pub fn branch_id(&self) -> &PublicKey {

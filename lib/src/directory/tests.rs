@@ -110,7 +110,7 @@ async fn remove_file() {
     assert_eq!(parent_dir.entries().count(), 1);
 
     // Check the file blob itself was removed as well.
-    match Blob::open(branch.clone(), file_locator).await {
+    match Blob::open(branch.clone(), file_locator, Shared::uninit().into()).await {
         Err(Error::EntryNotFound) => (),
         Err(error) => panic!("unexpected error {:?}", error),
         Ok(_) => panic!("file blob should not exists but it does"),
@@ -374,7 +374,7 @@ async fn remove_subdirectory() {
     );
 
     // Check the directory blob itself was removed as well.
-    match Blob::open(branch, dir_locator).await {
+    match Blob::open(branch, dir_locator, Shared::uninit().into()).await {
         Err(Error::EntryNotFound) => (),
         Err(error) => panic!("unexpected error {:?}", error),
         Ok(_) => panic!("directory blob should not exists but it does"),
@@ -555,7 +555,7 @@ async fn insert_entry_newer_than_existing() {
 
         // Need to create this dummy blob here otherwise the subsequent `insert_entry` would
         // fail when trying to delete it.
-        Blob::create(branch.clone(), Locator::head(blob_id))
+        Blob::create(branch.clone(), Locator::head(blob_id), Shared::uninit())
             .flush()
             .await
             .unwrap();
@@ -604,10 +604,14 @@ async fn remove_concurrent_file_version() {
                 .await
                 .unwrap();
 
-            Blob::create(branches[0].clone(), Locator::head(blob_id))
-                .flush()
-                .await
-                .unwrap();
+            Blob::create(
+                branches[0].clone(),
+                Locator::head(blob_id),
+                Shared::uninit(),
+            )
+            .flush()
+            .await
+            .unwrap();
         }
 
         let author_to_remove = branches[index_to_remove].id();

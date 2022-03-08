@@ -1,13 +1,24 @@
 use super::*;
 use crate::{
-    access_control::WriteSecrets, blob::Blob, branch::Branch, crypto::sign::PublicKey, db,
-    directory::EntryData, index::BranchData, locator::Locator, repository, sync::broadcast,
+    access_control::WriteSecrets,
+    blob::{Blob, Shared},
+    branch::Branch,
+    crypto::sign::PublicKey,
+    db,
+    directory::{EntryData, NewEntryType},
+    index::BranchData,
+    locator::Locator,
+    repository,
+    sync::broadcast,
     version_vector::VersionVector,
 };
 use assert_matches::assert_matches;
 use futures_util::future;
 use rand::{rngs::StdRng, SeedableRng};
-use std::{iter, sync::Arc};
+use std::{
+    iter,
+    sync::{Arc, Weak},
+};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn no_conflict() {
@@ -973,14 +984,14 @@ async fn read_version_vector(parent: &Directory, name: &str) -> VersionVector {
 // TODO: try to reduce the code duplication in the following functions.
 
 async fn create_dangling_file(parent: &Directory, name: &str) {
-    create_dangling_entry(parent, EntryType::File, name).await
+    create_dangling_entry(parent, NewEntryType::File(Weak::new()), name).await
 }
 
 async fn create_dangling_directory(parent: &Directory, name: &str) {
-    create_dangling_entry(parent, EntryType::Directory, name).await
+    create_dangling_entry(parent, NewEntryType::Directory, name).await
 }
 
-async fn create_dangling_entry(parent: &Directory, entry_type: EntryType, name: &str) {
+async fn create_dangling_entry(parent: &Directory, entry_type: NewEntryType, name: &str) {
     let mut writer = parent.write().await;
     let branch_id = *writer.branch().id();
     let blob_id = rand::random();
@@ -1008,10 +1019,14 @@ async fn replace_dangling_file(parent: &Directory, name: &str) {
 
     // Create a dummy blob so the `create_file` call doesn't fail when trying to delete the
     // previous blob (which doesn't exists because the file was created as danling).
-    Blob::create(reader.branch().clone(), Locator::head(old_blob_id))
-        .flush()
-        .await
-        .unwrap();
+    Blob::create(
+        reader.branch().clone(),
+        Locator::head(old_blob_id),
+        Shared::uninit(),
+    )
+    .flush()
+    .await
+    .unwrap();
 
     drop(reader);
 
@@ -1036,10 +1051,14 @@ async fn replace_dangling_directory(parent: &Directory, name: &str) {
 
     // Create a dummy blob so the `create_directory` call doesn't fail when trying to delete
     // the previous blob (which doesn't exists because the file was created as danling).
-    Blob::create(reader.branch().clone(), Locator::head(old_blob_id))
-        .flush()
-        .await
-        .unwrap();
+    Blob::create(
+        reader.branch().clone(),
+        Locator::head(old_blob_id),
+        Shared::uninit(),
+    )
+    .flush()
+    .await
+    .unwrap();
 
     drop(reader);
 

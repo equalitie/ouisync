@@ -1,7 +1,7 @@
 use std::io::SeekFrom;
 
 use super::*;
-use crate::db;
+use crate::{blob, block::BLOCK_SIZE, db};
 use assert_matches::assert_matches;
 use rand::Rng;
 use tokio::time::{sleep, timeout, Duration};
@@ -19,6 +19,62 @@ async fn root_directory_always_exists() {
     .await
     .unwrap();
     let _ = repo.open_directory("/").await.unwrap();
+}
+
+// Count leaf nodes in the index of the local branch.
+async fn count_local_index_leaf_nodes(repo: &Repository) -> usize {
+    let index = repo.index();
+    let branch = repo.local_branch().await.unwrap();
+    let mut conn = index.pool.acquire().await.unwrap();
+    branch.data().count_leaf_nodes(&mut conn).await.unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn count_leaf_nodes_sanity_checks() {
+    let device_id = rand::random();
+
+    let repo = Repository::create(
+        &db::Store::Temporary,
+        device_id,
+        MasterSecret::random(),
+        AccessSecrets::random_write(),
+        false,
+    )
+    .await
+    .unwrap();
+
+    let file_name = "test.txt";
+
+    //------------------------------------------------------------------------
+    // Create a small file in the root.
+
+    let mut file = repo.create_file(file_name).await.unwrap();
+    file.write(&random_bytes(BLOCK_SIZE - blob::HEADER_SIZE))
+        .await
+        .unwrap();
+    file.flush().await.unwrap();
+
+    // 2 = one for the root + one for the file.
+    assert_eq!(count_local_index_leaf_nodes(&repo).await, 2);
+
+    //------------------------------------------------------------------------
+    // Make the file bigger to expand to two blocks
+
+    file.write(&random_bytes(1)).await.unwrap();
+    file.flush().await.unwrap();
+
+    // 3 = one for the root + two for the file.
+    assert_eq!(count_local_index_leaf_nodes(&repo).await, 3);
+
+    //------------------------------------------------------------------------
+    // Remove the file, we should end up with just one block for the root.
+
+    repo.remove_entry(file_name).await.unwrap();
+
+    // 1 = one for the root with a tombstone entry
+    assert_eq!(count_local_index_leaf_nodes(&repo).await, 1);
+
+    //------------------------------------------------------------------------
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -264,6 +320,110 @@ async fn concurrent_write_and_read_file() {
     })
     .await
     .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn interleaved_flush() {
+    let content1 = random_bytes(BLOCK_SIZE - blob::HEADER_SIZE); // 1 block
+    let content2 = random_bytes(2 * BLOCK_SIZE - blob::HEADER_SIZE); // 2 blocks
+
+    case(
+        "write 2 blocks, write 0 blocks, flush 2nd then 1st",
+        &content2,
+        &[],
+        FlushOrder::SecondThenFirst,
+        3,
+        &content2,
+    )
+    .await;
+
+    case(
+        "write 1 block, write 2 blocks, flush 1st then 2nd",
+        &content1,
+        &content2,
+        FlushOrder::FirstThenSecond,
+        3,
+        &concat([nth_block(&content1, 0), nth_block(&content2, 1)]),
+    )
+    .await;
+
+    case(
+        "write 1 block, write 2 blocks, flush 2nd then 1st",
+        &content1,
+        &content2,
+        FlushOrder::SecondThenFirst,
+        3,
+        &concat([nth_block(&content1, 0), nth_block(&content2, 1)]),
+    )
+    .await;
+
+    enum FlushOrder {
+        FirstThenSecond,
+        SecondThenFirst,
+    }
+
+    // Open two instances of the same file, write `content0` to the first and `content1` to the
+    // second, then flush in the specified order, finally check the total number of blocks in the
+    // repository and the content of the file.
+    async fn case(
+        label: &str,
+        content0: &[u8],
+        content1: &[u8],
+        flush_order: FlushOrder,
+        expected_total_block_count: usize,
+        expected_content: &[u8],
+    ) {
+        let repo = Repository::create(
+            &db::Store::Temporary,
+            rand::random(),
+            MasterSecret::random(),
+            AccessSecrets::random_write(),
+            false,
+        )
+        .await
+        .unwrap();
+        let file_name = "test.txt";
+
+        let mut file0 = repo.create_file(file_name).await.unwrap();
+        file0.flush().await.unwrap();
+
+        let mut file1 = repo.open_file(file_name).await.unwrap();
+
+        file0.write(content0).await.unwrap();
+        file1.write(content1).await.unwrap();
+
+        match flush_order {
+            FlushOrder::FirstThenSecond => {
+                file0.flush().await.unwrap();
+                file1.flush().await.unwrap();
+            }
+            FlushOrder::SecondThenFirst => {
+                file1.flush().await.unwrap();
+                file0.flush().await.unwrap();
+            }
+        }
+
+        assert_eq!(
+            count_local_index_leaf_nodes(&repo).await,
+            expected_total_block_count,
+            "'{}': unexpected total number of blocks in the repository",
+            label
+        );
+
+        let actual_content = read_file(&repo, file_name).await;
+        assert_eq!(
+            actual_content.len(),
+            expected_content.len(),
+            "'{}': unexpected file content length",
+            label
+        );
+
+        assert!(
+            actual_content == expected_content,
+            "'{}': unexpected file content",
+            label
+        )
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -539,4 +699,25 @@ async fn create_remote_file(repo: &Repository, remote_id: PublicKey, name: &str,
     let mut file = remote_root.create_file(name.into()).await.unwrap();
     file.write(content).await.unwrap();
     file.flush().await.unwrap();
+}
+
+fn random_bytes(size: usize) -> Vec<u8> {
+    let mut buffer = vec![0; size];
+    rand::thread_rng().fill(&mut buffer[..]);
+    buffer
+}
+
+fn nth_block(content: &[u8], index: usize) -> &[u8] {
+    if index == 0 {
+        &content[..BLOCK_SIZE - blob::HEADER_SIZE]
+    } else {
+        &content[BLOCK_SIZE - blob::HEADER_SIZE + (index - 1) * BLOCK_SIZE..][..BLOCK_SIZE]
+    }
+}
+
+fn concat<const N: usize>(buffers: [&[u8]; N]) -> Vec<u8> {
+    buffers.into_iter().fold(Vec::new(), |mut vec, buffer| {
+        vec.extend_from_slice(buffer);
+        vec
+    })
 }

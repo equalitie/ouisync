@@ -1,11 +1,14 @@
-use super::entry_type::EntryType;
-use crate::{blob, blob_id::BlobId, version_vector::VersionVector};
+use crate::{
+    blob::{self, Shared},
+    blob_id::BlobId,
+    version_vector::VersionVector,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     fmt,
-    sync::{Arc, Weak},
+    sync::{Mutex as BlockingMutex, Weak},
 };
-use tokio::sync::Mutex;
+use tokio::sync::Mutex as AsyncMutex;
 
 //--------------------------------------------------------------------
 
@@ -17,18 +20,22 @@ pub(crate) enum EntryData {
 }
 
 impl EntryData {
-    pub fn new(entry_type: EntryType, blob_id: BlobId, version_vector: VersionVector) -> Self {
+    pub fn new(entry_type: NewEntryType, blob_id: BlobId, version_vector: VersionVector) -> Self {
         match entry_type {
-            EntryType::File => Self::file(blob_id, version_vector),
-            EntryType::Directory => Self::directory(blob_id, version_vector),
+            NewEntryType::File(shared) => Self::file(blob_id, version_vector, shared),
+            NewEntryType::Directory => Self::directory(blob_id, version_vector),
         }
     }
 
-    pub fn file(blob_id: BlobId, version_vector: VersionVector) -> Self {
+    pub fn file(
+        blob_id: BlobId,
+        version_vector: VersionVector,
+        blob_shared: Weak<AsyncMutex<Shared>>,
+    ) -> Self {
         Self::File(EntryFileData {
             blob_id,
             version_vector,
-            blob_core: Arc::new(Mutex::new(Weak::new())),
+            blob_shared: BlockingMutex::new(blob_shared),
         })
     }
 
@@ -64,15 +71,32 @@ impl EntryData {
     }
 }
 
+pub(crate) enum NewEntryType {
+    File(Weak<AsyncMutex<Shared>>),
+    Directory,
+}
+
 //--------------------------------------------------------------------
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Deserialize, Serialize)]
 pub(crate) struct EntryFileData {
     pub blob_id: BlobId,
     pub version_vector: VersionVector,
     #[serde(skip)]
-    // The Arc here is so that Self is Clone.
-    pub blob_core: Arc<Mutex<Weak<Mutex<blob::Core>>>>,
+    // Using blocking mutex here to avoid `async` to lock it. We never need to lock it across await
+    // points so it should be fine.
+    // TODO: consider using the arc_swap crate for this.
+    pub blob_shared: BlockingMutex<Weak<AsyncMutex<blob::Shared>>>,
+}
+
+impl Clone for EntryFileData {
+    fn clone(&self) -> Self {
+        Self {
+            blob_id: self.blob_id,
+            version_vector: self.version_vector.clone(),
+            blob_shared: BlockingMutex::new(self.blob_shared.lock().unwrap().clone()),
+        }
+    }
 }
 
 impl fmt::Debug for EntryFileData {

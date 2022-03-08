@@ -8,7 +8,9 @@ mod parent_context;
 mod tests;
 
 pub(crate) use self::{
-    cache::RootDirectoryCache, entry_data::EntryData, parent_context::ParentContext,
+    cache::RootDirectoryCache,
+    entry_data::{EntryData, NewEntryType},
+    parent_context::ParentContext,
 };
 pub use self::{
     entry::{DirectoryRef, EntryRef, FileRef},
@@ -21,7 +23,7 @@ use self::{
     inner::{Content, Inner},
 };
 use crate::{
-    blob::Blob,
+    blob::{Blob, Shared},
     blob_id::BlobId,
     branch::Branch,
     crypto::sign::PublicKey,
@@ -32,7 +34,7 @@ use crate::{
     version_vector::VersionVector,
 };
 use async_recursion::async_recursion;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 #[derive(Clone)]
@@ -147,7 +149,7 @@ impl Directory {
             .await?;
 
         // TODO: vv is needlessly created twice here.
-        let mut dst_entry = src_entry.clone();
+        let mut dst_entry = src_entry;
         *dst_entry.version_vector_mut() = dst_vv;
 
         let dst_author = dst_dir.branch_id;
@@ -228,7 +230,7 @@ impl Directory {
     ) -> Result<()> {
         let mut inner = self.write().await.inner;
 
-        let entry_data = EntryData::file(blob_id, version_vector);
+        let entry_data = EntryData::file(blob_id, version_vector, Weak::new());
         inner
             .insert_entry(name, author_id, entry_data, None)
             .await?;
@@ -242,7 +244,7 @@ impl Directory {
         parent: Option<ParentContext>,
     ) -> Result<Self> {
         let branch_id = *owner_branch.id();
-        let mut blob = Blob::open(owner_branch, locator).await?;
+        let mut blob = Blob::open(owner_branch, locator, Shared::uninit().into()).await?;
         let buffer = blob.read_to_end().await?;
         let content = bincode::deserialize(&buffer).map_err(Error::MalformedDirectory)?;
 
@@ -259,7 +261,7 @@ impl Directory {
 
     fn create(owner_branch: Branch, locator: Locator, parent: Option<ParentContext>) -> Self {
         let branch_id = *owner_branch.id();
-        let blob = Blob::create(owner_branch, locator);
+        let blob = Blob::create(owner_branch, locator, Shared::uninit());
 
         Directory {
             branch_id,
@@ -327,6 +329,7 @@ impl Directory {
                             inner.blob.branch().clone(),
                             Locator::head(file_data.blob_id),
                             parent_context,
+                            Shared::uninit().into(),
                         )
                         .await;
 
@@ -443,12 +446,15 @@ pub(crate) struct Writer<'a> {
 
 impl Writer<'_> {
     pub async fn create_file(&mut self, name: String) -> Result<File> {
-        let (locator, parent) = self.create_entry(EntryType::File, name).await?;
-        Ok(File::create(self.branch().clone(), locator, parent))
+        let shared = Shared::uninit();
+        let (locator, parent) = self
+            .create_entry(NewEntryType::File(shared.downgrade()), name)
+            .await?;
+        Ok(File::create(self.branch().clone(), locator, parent, shared))
     }
 
     pub async fn create_directory(&mut self, name: String) -> Result<Directory> {
-        let (locator, parent) = self.create_entry(EntryType::Directory, name).await?;
+        let (locator, parent) = self.create_entry(NewEntryType::Directory, name).await?;
         self.inner
             .open_directories
             .create(self.branch(), locator, parent)
@@ -457,7 +463,7 @@ impl Writer<'_> {
 
     async fn create_entry(
         &mut self,
-        entry_type: EntryType,
+        entry_type: NewEntryType,
         name: String,
     ) -> Result<(Locator, ParentContext)> {
         let author = *self.branch().id();
