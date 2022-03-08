@@ -269,10 +269,10 @@ impl Repository {
     /// Removes the file or directory (must be empty) and flushes its parent directory.
     pub async fn remove_entry<P: AsRef<Utf8Path>>(&self, path: P) -> Result<()> {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::OperationNotSupported)?;
+
+        self.get_or_create_local_branch().await?;
+
         let mut parent = self.open_directory(parent).await?;
-
-        // TODO: fork the parent dir
-
         parent.remove_entry(name).await?;
         parent.flush().await
     }

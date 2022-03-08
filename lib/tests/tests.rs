@@ -8,38 +8,10 @@ async fn relink_repository() {
     let mut rng = StdRng::seed_from_u64(0);
 
     // Create two peers and connect them together.
-    let network_a = Network::new::<String>(&test_network_options(), None)
-        .await
-        .unwrap();
-    let network_b = Network::new::<String>(
-        &NetworkOptions {
-            peers: vec![*network_a.local_addr()],
-            ..test_network_options()
-        },
-        None,
-    )
-    .await
-    .unwrap();
+    let (network_a, network_b) = create_connected_peers().await;
 
-    let repo_a = Repository::create(
-        &Store::Temporary,
-        rng.gen(),
-        MasterSecret::generate(&mut rng),
-        AccessSecrets::generate_write(&mut rng),
-        false,
-    )
-    .await
-    .unwrap();
-
-    let repo_b = Repository::create(
-        &Store::Temporary,
-        rng.gen(),
-        MasterSecret::generate(&mut rng),
-        repo_a.secrets().clone(),
-        false,
-    )
-    .await
-    .unwrap();
+    let repo_a = create_repo(&mut rng).await;
+    let repo_b = create_repo_with_secrets(&mut rng, repo_a.secrets().clone()).await;
 
     let _reg_a = network_a.handle().register(repo_a.index().clone()).await;
     let reg_b = network_b.handle().register(repo_b.index().clone()).await;
@@ -65,6 +37,71 @@ async fn relink_repository() {
 
     // Wait until the file is updated
     expect_file_content(&repo_b, "test.txt", b"second").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn remove_remote_file() {
+    let mut rng = StdRng::seed_from_u64(0);
+
+    let (network_a, network_b) = create_connected_peers().await;
+
+    let repo_a = create_repo(&mut rng).await;
+    let _reg_a = network_a.handle().register(repo_a.index().clone()).await;
+
+    let repo_b = create_repo_with_secrets(&mut rng, repo_a.secrets().clone()).await;
+    let _reg_b = network_b.handle().register(repo_b.index().clone()).await;
+
+    // Create a file by A and wait until B sees itb
+    repo_a
+        .create_file("test.txt")
+        .await
+        .unwrap()
+        .flush()
+        .await
+        .unwrap();
+
+    expect_file_content(&repo_b, "test.txt", &[]).await;
+
+    // Delete the file by B
+    repo_b.remove_entry("test.txt").await.unwrap();
+
+    // TODO: wait until A sees the file being deleted
+}
+
+// Create two `Network` instances connected together.
+async fn create_connected_peers() -> (Network, Network) {
+    let a = Network::new::<String>(&test_network_options(), None)
+        .await
+        .unwrap();
+
+    let b = Network::new::<String>(
+        &NetworkOptions {
+            peers: vec![*a.local_addr()],
+            ..test_network_options()
+        },
+        None,
+    )
+    .await
+    .unwrap();
+
+    (a, b)
+}
+
+async fn create_repo(rng: &mut StdRng) -> Repository {
+    let secrets = AccessSecrets::generate_write(rng);
+    create_repo_with_secrets(rng, secrets).await
+}
+
+async fn create_repo_with_secrets(rng: &mut StdRng, secrets: AccessSecrets) -> Repository {
+    Repository::create(
+        &Store::Temporary,
+        rng.gen(),
+        MasterSecret::generate(rng),
+        secrets,
+        false,
+    )
+    .await
+    .unwrap()
 }
 
 fn test_network_options() -> NetworkOptions {
