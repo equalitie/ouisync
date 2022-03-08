@@ -1,10 +1,9 @@
-mod core;
 mod inner;
 mod operations;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use self::core::{Core, MaybeInitCore, UninitCore};
+pub(crate) use self::inner::{Core, MaybeInitCore, UninitCore};
 use self::{inner::Inner, operations::Operations};
 use crate::{
     block::{BlockId, BLOCK_SIZE},
