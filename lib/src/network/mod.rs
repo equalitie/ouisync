@@ -22,7 +22,7 @@ use self::{
     protocol::{RuntimeId, Version, VERSION},
 };
 use crate::{
-    config::SingleValueConfig,
+    config::{ConfigStore, SingleValueConfig},
     error::{Error, Result},
     index::Index,
     repository::RepositoryId,
@@ -37,7 +37,6 @@ use std::{
     future::Future,
     io, iter,
     net::{IpAddr, Ipv4Addr, SocketAddr},
-    path::Path,
     sync::{Arc, Mutex as BlockingMutex, Weak},
     time::Duration,
 };
@@ -104,8 +103,8 @@ pub struct Network {
 }
 
 impl Network {
-    pub async fn new(options: &NetworkOptions, configs_path: Option<&Path>) -> Result<Self> {
-        let listener = Self::bind_listener(options.listen_addr(), configs_path).await?;
+    pub async fn new(options: &NetworkOptions, config: Option<ConfigStore>) -> Result<Self> {
+        let listener = Self::bind_listener(options.listen_addr(), config).await?;
 
         let local_addr = listener.local_addr().map_err(Error::Network)?;
 
@@ -214,11 +213,11 @@ impl Network {
     // If the user did not specify (through NetworkOptions) the preferred port, then try to use
     // the one used last time. If that fails, or if this is the first time the app is running,
     // then use a random port.
-    async fn bind_listener<P: AsRef<Path>>(
+    async fn bind_listener(
         mut preferred_addr: SocketAddr,
-        configs_path: Option<P>,
+        config: Option<ConfigStore>,
     ) -> Result<TcpListener> {
-        if let Some(cfg) = Self::last_used_port_config(configs_path) {
+        if let Some(cfg) = Self::last_used_port_config(config) {
             let original_port = preferred_addr.port();
 
             if preferred_addr.port() == 0 {
@@ -253,9 +252,7 @@ impl Network {
         }
     }
 
-    fn last_used_port_config<P: AsRef<Path>>(
-        configs_path: Option<P>,
-    ) -> Option<SingleValueConfig<u16>> {
+    fn last_used_port_config(config: Option<ConfigStore>) -> Option<SingleValueConfig<u16>> {
         const FILE_NAME: &str = "last_used_tcp_port.cfg";
         const COMMENT: &str ="\
             # The value stored in this file is the last used TCP port for listening on incoming connections.\n\
@@ -266,9 +263,9 @@ impl Network {
             # The value is not used when the user specifies the --port option on the command line. However,\n\
             # it may still be overwritten.";
 
-        configs_path.map(|configs_path| {
-            SingleValueConfig::new(&configs_path.as_ref().join(FILE_NAME), COMMENT)
-        })
+        config
+            .as_ref()
+            .map(|config| SingleValueConfig::new(config, FILE_NAME, COMMENT))
     }
 }
 

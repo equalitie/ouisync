@@ -3,7 +3,7 @@ mod virtual_filesystem;
 
 use self::options::{Named, Options};
 use anyhow::{format_err, Result};
-use ouisync_lib::{device_id, AccessSecrets, Network, Repository, ShareToken};
+use ouisync_lib::{device_id, AccessSecrets, ConfigStore, Network, Repository, ShareToken};
 use std::{
     collections::{hash_map::Entry, HashMap},
     io,
@@ -17,15 +17,22 @@ pub(crate) const APP_NAME: &str = "ouisync";
 async fn main() -> Result<()> {
     let options = Options::from_args();
 
-    if options.print_data_dir {
-        println!("{}", options.data_dir()?.display());
+    if options.print_dirs {
+        println!("data:   {}", options.data_dir()?.display());
+        println!("config: {}", options.config_dir()?.display());
         return Ok(());
     }
 
     env_logger::init();
 
+    let config = if !options.temp {
+        ConfigStore::new(options.config_dir()?)
+    } else {
+        ConfigStore::temp()
+    };
+
     let device_id = if !options.temp {
-        device_id::get_or_create(&options.device_id_config_path()?).await?
+        device_id::get_or_create(&config).await?
     } else {
         rand::random()
     };
@@ -116,20 +123,8 @@ async fn main() -> Result<()> {
         }
     }
 
-    let configs_path = if !options.temp {
-        match options.data_dir() {
-            Ok(path) => Some(path),
-            Err(e) => {
-                log::warn!("No path for configs: {}", e);
-                None
-            }
-        }
-    } else {
-        None
-    };
-
     // Start the network
-    let network = Network::new(&options.network, configs_path.as_deref()).await?;
+    let network = Network::new(&options.network, Some(config)).await?;
     let network_handle = network.handle();
 
     // Mount repositories

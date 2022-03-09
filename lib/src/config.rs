@@ -4,11 +4,57 @@ use std::{
     marker::PhantomData,
     path::{Path, PathBuf},
     str::FromStr,
+    sync::Arc,
 };
 use tokio::{
     fs::{self, File, OpenOptions},
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
 };
+
+#[derive(Clone)]
+pub struct ConfigStore {
+    dir: Arc<Path>,
+}
+
+impl ConfigStore {
+    pub fn new(dir: impl Into<PathBuf>) -> Self {
+        Self {
+            dir: dir.into().into_boxed_path().into(),
+        }
+    }
+
+    pub fn temp() -> Self {
+        Self { dir: todo!() }
+    }
+
+    // pub fn entry<'a, 'b, T>(&self, key: &'a ConfigKey<'b, T>) -> ConfigEntry<'a, 'b, T> {
+    //     ConfigEntry {
+    //         manager: self.clone(),
+    //         key,
+    //     }
+    // }
+}
+
+// pub(crate) struct ConfigKey<'b, T> {
+//     name: &'b str,
+//     comment: &'b str,
+//     _type: PhantomData<T>,
+// }
+
+// impl<'b, T> ConfigKey<'b, T> {
+//     pub const fn new(name: &'b str, comment: &'b str) -> Self {
+//         Self {
+//             name,
+//             comment,
+//             _type: PhantomData,
+//         }
+//     }
+// }
+
+// pub(crate) struct ConfigEntry<'a, 'b, T> {
+//     manager: ConfigManager,
+//     key: &'a ConfigKey<'b, T>,
+// }
 
 pub(crate) struct SingleValueConfig<Value>
 where
@@ -20,9 +66,9 @@ where
 }
 
 impl<Value: fmt::Display + FromStr> SingleValueConfig<Value> {
-    pub fn new(path: &Path, comment: &'static str) -> Self {
+    pub fn new(store: &ConfigStore, key: &str, comment: &'static str) -> Self {
         Self {
-            path: path.to_path_buf(),
+            path: store.dir.join(key),
             comment,
             phantom: PhantomData,
         }

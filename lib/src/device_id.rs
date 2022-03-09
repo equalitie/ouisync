@@ -1,8 +1,7 @@
-use crate::config::SingleValueConfig;
+use crate::config::{ConfigStore, SingleValueConfig};
 use crate::error::{Error, Result};
 use rand::{rngs::OsRng, Rng};
 use std::io::{self, ErrorKind};
-use std::path::Path;
 
 define_byte_array_wrapper! {
     /// DeviceId uniquely identifies machines on which this software is running. Its only purpose is
@@ -23,8 +22,8 @@ derive_sqlx_traits_for_byte_array_wrapper!(DeviceId);
 
 pub const CONFIG_FILE_NAME: &str = "device_id.conf";
 
-pub async fn get_or_create(path: &Path) -> Result<DeviceId> {
-    let cfg = SingleValueConfig::new(path, CONFIG_COMMENT);
+pub async fn get_or_create(config: &ConfigStore) -> Result<DeviceId> {
+    let cfg = SingleValueConfig::new(config, CONFIG_FILE_NAME, CONFIG_COMMENT);
 
     match cfg.get().await {
         Ok(string) => hex_decode(string),

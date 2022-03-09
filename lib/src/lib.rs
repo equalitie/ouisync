@@ -40,6 +40,7 @@ mod versioned_file_name;
 pub use self::{
     access_control::{AccessMode, AccessSecrets, MasterSecret, ShareToken},
     branch::Branch,
+    config::ConfigStore,
     crypto::{cipher, sign, Password},
     db::Store,
     directory::{Directory, EntryRef, EntryType},

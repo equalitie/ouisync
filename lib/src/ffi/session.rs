@@ -5,6 +5,7 @@ use super::{
     utils::{self, Port, UniqueHandle},
 };
 use crate::{
+    config::ConfigStore,
     device_id::{self, DeviceId},
     error::{Error, Result},
     network::{Network, NetworkOptions},
@@ -64,13 +65,13 @@ pub unsafe extern "C" fn session_open(
         }
     };
 
+    let config = ConfigStore::new(configs_path);
+
     // NOTE: spawning a separate thread and using `runtime.block_on` instead of using
     // `runtime.spawn` to avoid moving the runtime into "itself" which would be problematic because
     // if there was an error the runtime would be dropped inside an async context which would panic.
     thread::spawn(move || {
-        let device_id = match runtime.block_on(device_id::get_or_create(
-            &configs_path.join(device_id::CONFIG_FILE_NAME),
-        )) {
+        let device_id = match runtime.block_on(device_id::get_or_create(&config)) {
             Ok(device_id) => device_id,
             Err(error) => {
                 sender.send_result(port, Err(error));
@@ -78,10 +79,8 @@ pub unsafe extern "C" fn session_open(
             }
         };
 
-        let network = match runtime.block_on(Network::new(
-            &NetworkOptions::default(),
-            Some(&configs_path),
-        )) {
+        let network = match runtime.block_on(Network::new(&NetworkOptions::default(), Some(config)))
+        {
             Ok(network) => network,
             Err(error) => {
                 sender.send_result(port, Err(error));
