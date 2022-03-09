@@ -53,11 +53,6 @@ impl<T> ConfigKey<T> {
     }
 }
 
-// pub(crate) struct ConfigEntry<'a, 'b, T> {
-//     manager: ConfigManager,
-//     key: &'a ConfigKey<'b, T>,
-// }
-
 pub(crate) struct SingleValueConfig<Value>
 where
     Value: fmt::Display + FromStr + 'static,
@@ -96,8 +91,13 @@ impl<Value: fmt::Display + FromStr> SingleValueConfig<Value> {
             .open(path)
             .await?;
 
-        file.write_all(format!("{}\n\n{}\n", self.key.comment, value).as_ref())
-            .await
+        for line in self.key.comment.lines() {
+            file.write_all(format!("# {}\n", line).as_bytes()).await?;
+        }
+
+        file.write_all(format!("\n{}\n", value).as_bytes()).await?;
+
+        Ok(())
     }
 
     pub async fn get(&self) -> io::Result<Value> {

@@ -50,13 +50,13 @@ use tokio::{
 
 const LAST_USED_TCP_PORT_KEY: ConfigKey<u16> = ConfigKey::new(
     "last_used_tcp_port",
-    "# The value stored in this file is the last used TCP port for listening on incoming\n\
-     # connections. It is used to avoid binding to a random port every time the application\n\
-     # starts. This, in turn, is mainly useful for users who can't or don't want to use UPnP and\n\
-     # have to default to manually setting up port forwarding on their routers.\n\
-     # \n\
-     # The value is not used when the user specifies the --port option on the command line.\n\
-     # However, it may still be overwritten.",
+    "The value stored in this file is the last used TCP port for listening on incoming\n\
+     connections. It is used to avoid binding to a random port every time the application starts.\n\
+     This, in turn, is mainly useful for users who can't or don't want to use UPnP and have to\n\
+     default to manually setting up port forwarding on their routers.\n\
+     \n\
+     The value is not used when the user specifies the --port option on the command line.\n\
+     However, it may still be overwritten.",
 );
 
 #[derive(StructOpt, Debug)]

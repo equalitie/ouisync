@@ -22,18 +22,18 @@ derive_sqlx_traits_for_byte_array_wrapper!(DeviceId);
 
 const KEY: ConfigKey<String> = ConfigKey::new(
     "device_id",
-    "# The value stored in this file is the device ID. It is uniquelly generated for each device\n\
-     # and its only purpose is to detect when a database has been migrated from one device to \
+    "The value stored in this file is the device ID. It is uniquelly generated for each device\n\
+     and its only purpose is to detect when a database has been migrated from one device to\n\
      another.\n\
-     # \n\
-     # * When a database is migrated, the safest option is to NOT migrate this file with it. *\n\
-     # \n\
-     # However, the user may chose to *move* this file alongside the database. In such case it\n\
-     # is important to ensure the same device ID is never used by a writer replica concurrently\n\
-     # from more than one location. Doing so will likely result in data loss.\n\
-     # \n\
-     # Device ID is never used in construction of network messages and thus can't be used for\n\
-     # peer identification.",
+     \n\
+     * When a database is migrated, the safest option is to NOT migrate this file with it. *\n\
+     \n\
+     However, the user may chose to *move* this file alongside the database. In such case it is\n\
+     important to ensure the same device ID is never used by a writer replica concurrently from\n\
+     more than one location. Doing so will likely result in data loss.\n\
+     \n\
+     Device ID is never used in construction of network messages and thus can't be used for peer\n\
+     identification.",
 );
 
 pub async fn get_or_create(config: &ConfigStore) -> Result<DeviceId> {
