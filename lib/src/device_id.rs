@@ -1,7 +1,8 @@
 use crate::config::{ConfigKey, ConfigStore};
 use crate::error::{Error, Result};
+use hex::FromHexError;
 use rand::{rngs::OsRng, Rng};
-use std::io::{self, ErrorKind};
+use std::{io::ErrorKind, str::FromStr};
 
 define_byte_array_wrapper! {
     /// DeviceId uniquely identifies machines on which this software is running. Its only purpose is
@@ -20,7 +21,17 @@ define_byte_array_wrapper! {
 derive_rand_for_wrapper!(DeviceId);
 derive_sqlx_traits_for_byte_array_wrapper!(DeviceId);
 
-const KEY: ConfigKey<String> = ConfigKey::new(
+impl FromStr for DeviceId {
+    type Err = FromHexError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut buffer = [0; Self::SIZE];
+        hex::decode_to_slice(s.trim(), &mut buffer)?;
+        Ok(Self(buffer))
+    }
+}
+
+const KEY: ConfigKey<DeviceId> = ConfigKey::new(
     "device_id",
     "The value stored in this file is the device ID. It is uniquelly generated for each device\n\
      and its only purpose is to detect when a database has been migrated from one device to\n\
@@ -40,32 +51,12 @@ pub async fn get_or_create(config: &ConfigStore) -> Result<DeviceId> {
     let cfg = config.entry(KEY);
 
     match cfg.get().await {
-        Ok(string) => hex_decode(string),
+        Ok(id) => Ok(id),
         Err(e) if e.kind() == ErrorKind::NotFound => {
-            let new_id = OsRng.gen::<DeviceId>();
-            cfg.set(&hex::encode(new_id.as_ref())).await.map(|_| new_id)
+            let new_id = OsRng.gen();
+            cfg.set(&new_id).await.map(|_| new_id)
         }
         Err(e) => Err(e),
     }
     .map_err(Error::DeviceIdConfig)
-}
-
-fn hex_decode(hex: String) -> io::Result<DeviceId> {
-    let bytes = match hex::decode(&hex) {
-        Ok(bytes) => bytes,
-        Err(e) => {
-            return Err(io::Error::new(
-                ErrorKind::InvalidData,
-                format!("failed to decode from hex {:?}: {:?}", hex, e),
-            ))
-        }
-    };
-
-    match bytes.try_into() {
-        Ok(bytes) => Ok(DeviceId(bytes)),
-        Err(e) => Err(io::Error::new(
-            ErrorKind::InvalidData,
-            format!("device ID has incorrect size {:?}: {:?}", hex, e),
-        )),
-    }
 }
