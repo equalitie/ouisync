@@ -116,12 +116,12 @@ pub struct Network {
 
 impl Network {
     pub async fn new(options: &NetworkOptions, config: ConfigStore) -> Result<Self> {
-        let listener = Self::bind_listener(options.listen_addr(), config).await?;
+        let listener = Self::bind_listener(options.listen_addr(), &config).await?;
 
         let local_addr = listener.local_addr().map_err(Error::Network)?;
 
         let dht_sockets = if !options.disable_dht {
-            Some(dht_discovery::bind().await.map_err(Error::Network)?)
+            Some(dht_discovery::bind(&config).await.map_err(Error::Network)?)
         } else {
             None
         };
@@ -225,7 +225,10 @@ impl Network {
     // If the user did not specify (through NetworkOptions) the preferred port, then try to use
     // the one used last time. If that fails, or if this is the first time the app is running,
     // then use a random port.
-    async fn bind_listener(preferred_addr: SocketAddr, config: ConfigStore) -> Result<TcpListener> {
+    async fn bind_listener(
+        preferred_addr: SocketAddr,
+        config: &ConfigStore,
+    ) -> Result<TcpListener> {
         socket::bind(preferred_addr, config.entry(LAST_USED_TCP_PORT_KEY))
             .await
             .map_err(Error::Network)
