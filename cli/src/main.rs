@@ -28,7 +28,7 @@ async fn main() -> Result<()> {
     let config = if !options.temp {
         ConfigStore::new(options.config_dir()?)
     } else {
-        ConfigStore::temp()
+        ConfigStore::null()
     };
 
     let device_id = if !options.temp {

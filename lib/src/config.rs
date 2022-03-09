@@ -13,18 +13,19 @@ use tokio::{
 
 #[derive(Clone)]
 pub struct ConfigStore {
-    dir: Arc<Path>,
+    dir: Option<Arc<Path>>,
 }
 
 impl ConfigStore {
     pub fn new(dir: impl Into<PathBuf>) -> Self {
         Self {
-            dir: dir.into().into_boxed_path().into(),
+            dir: Some(dir.into().into_boxed_path().into()),
         }
     }
 
-    pub fn temp() -> Self {
-        Self { dir: todo!() }
+    // Create "null" config store which doesn't actually store anything on the filesystem.
+    pub fn null() -> Self {
+        Self { dir: None }
     }
 
     // pub fn entry<'a, 'b, T>(&self, key: &'a ConfigKey<'b, T>) -> ConfigEntry<'a, 'b, T> {
@@ -60,7 +61,7 @@ pub(crate) struct SingleValueConfig<Value>
 where
     Value: fmt::Display + FromStr,
 {
-    path: PathBuf,
+    path: Option<PathBuf>,
     comment: &'static str,
     phantom: PhantomData<Value>,
 }
@@ -68,14 +69,20 @@ where
 impl<Value: fmt::Display + FromStr> SingleValueConfig<Value> {
     pub fn new(store: &ConfigStore, key: &str, comment: &'static str) -> Self {
         Self {
-            path: store.dir.join(key),
+            path: store.dir.as_ref().map(|dir| dir.join(key)),
             comment,
             phantom: PhantomData,
         }
     }
 
     pub async fn set(&self, value: &Value) -> io::Result<()> {
-        if let Some(dir) = self.path.parent() {
+        let path = if let Some(path) = &self.path {
+            path
+        } else {
+            return Ok(());
+        };
+
+        if let Some(dir) = path.parent() {
             fs::create_dir_all(dir).await?;
         }
 
@@ -84,7 +91,7 @@ impl<Value: fmt::Display + FromStr> SingleValueConfig<Value> {
         let mut file = OpenOptions::new()
             .write(true)
             .create_new(true)
-            .open(&self.path)
+            .open(path)
             .await?;
 
         file.write_all(format!("{}\n\n{}\n", self.comment, value).as_ref())
@@ -92,7 +99,12 @@ impl<Value: fmt::Display + FromStr> SingleValueConfig<Value> {
     }
 
     pub async fn get(&self) -> io::Result<Value> {
-        let file = File::open(&self.path).await?;
+        let path = self
+            .path
+            .as_ref()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "config value not found"))?;
+
+        let file = File::open(path).await?;
         let line = self.find_value_line(file).await?;
 
         line.parse().map_err(|_| {
