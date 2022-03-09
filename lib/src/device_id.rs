@@ -1,5 +1,5 @@
+use crate::config::SingleValueConfig;
 use crate::error::{Error, Result};
-use crate::single_value_config::SingleValueConfig;
 use rand::{rngs::OsRng, Rng};
 use std::io::{self, ErrorKind};
 use std::path::Path;

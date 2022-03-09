@@ -22,11 +22,11 @@ use self::{
     protocol::{RuntimeId, Version, VERSION},
 };
 use crate::{
+    config::SingleValueConfig,
     error::{Error, Result},
     index::Index,
     repository::RepositoryId,
     scoped_task::{self, ScopedJoinHandle, ScopedTaskSet},
-    single_value_config::SingleValueConfig,
     sync::broadcast,
 };
 use btdht::{InfoHash, INFO_HASH_LEN};

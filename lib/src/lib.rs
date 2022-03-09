@@ -13,6 +13,7 @@ mod blob;
 mod blob_id;
 mod block;
 mod branch;
+mod config;
 mod db;
 mod directory;
 mod error;
@@ -29,7 +30,6 @@ mod network;
 mod path;
 mod repository;
 mod scoped_task;
-mod single_value_config;
 mod store;
 mod sync;
 #[cfg(test)]
