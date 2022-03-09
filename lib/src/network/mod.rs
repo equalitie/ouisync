@@ -22,7 +22,7 @@ use self::{
     protocol::{RuntimeId, Version, VERSION},
 };
 use crate::{
-    config::{ConfigKey, ConfigStore, SingleValueConfig},
+    config::{ConfigEntry, ConfigKey, ConfigStore},
     error::{Error, Result},
     index::Index,
     repository::RepositoryId,
@@ -263,10 +263,10 @@ impl Network {
         }
     }
 
-    fn last_used_port_config(config: Option<ConfigStore>) -> Option<SingleValueConfig<u16>> {
+    fn last_used_port_config(config: Option<ConfigStore>) -> Option<ConfigEntry<u16>> {
         config
             .as_ref()
-            .map(|config| SingleValueConfig::new(config, LAST_USED_TCP_PORT_KEY))
+            .map(|config| config.entry(LAST_USED_TCP_PORT_KEY))
     }
 }
 

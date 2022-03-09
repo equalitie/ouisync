@@ -1,4 +1,4 @@
-use crate::config::{ConfigKey, ConfigStore, SingleValueConfig};
+use crate::config::{ConfigKey, ConfigStore};
 use crate::error::{Error, Result};
 use rand::{rngs::OsRng, Rng};
 use std::io::{self, ErrorKind};
@@ -37,7 +37,7 @@ const KEY: ConfigKey<String> = ConfigKey::new(
 );
 
 pub async fn get_or_create(config: &ConfigStore) -> Result<DeviceId> {
-    let cfg = SingleValueConfig::new(config, KEY);
+    let cfg = config.entry(KEY);
 
     match cfg.get().await {
         Ok(string) => hex_decode(string),

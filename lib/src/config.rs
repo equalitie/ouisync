@@ -28,12 +28,16 @@ impl ConfigStore {
         Self { dir: None }
     }
 
-    // pub fn entry<'a, 'b, T>(&self, key: &'a ConfigKey<'b, T>) -> ConfigEntry<'a, 'b, T> {
-    //     ConfigEntry {
-    //         manager: self.clone(),
-    //         key,
-    //     }
-    // }
+    // Obtain the config entry for the specified key.
+    pub(crate) fn entry<T>(&self, key: ConfigKey<T>) -> ConfigEntry<T>
+    where
+        T: fmt::Display + FromStr,
+    {
+        ConfigEntry {
+            store: self.clone(),
+            key,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -53,7 +57,7 @@ impl<T> ConfigKey<T> {
     }
 }
 
-pub(crate) struct SingleValueConfig<Value>
+pub(crate) struct ConfigEntry<Value>
 where
     Value: fmt::Display + FromStr + 'static,
 {
@@ -61,14 +65,7 @@ where
     key: ConfigKey<Value>,
 }
 
-impl<Value: fmt::Display + FromStr> SingleValueConfig<Value> {
-    pub fn new(store: &ConfigStore, key: ConfigKey<Value>) -> Self {
-        Self {
-            store: store.clone(),
-            key,
-        }
-    }
-
+impl<Value: fmt::Display + FromStr> ConfigEntry<Value> {
     pub async fn set(&self, value: &Value) -> io::Result<()> {
         let path = if let Some(path) = self.path() {
             path
