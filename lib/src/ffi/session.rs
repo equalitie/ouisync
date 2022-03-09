@@ -78,14 +78,16 @@ pub unsafe extern "C" fn session_open(
             }
         };
 
-        let network =
-            match runtime.block_on(Network::new(&NetworkOptions::default(), Some(configs_path))) {
-                Ok(network) => network,
-                Err(error) => {
-                    sender.send_result(port, Err(error));
-                    return;
-                }
-            };
+        let network = match runtime.block_on(Network::new(
+            &NetworkOptions::default(),
+            Some(&configs_path),
+        )) {
+            Ok(network) => network,
+            Err(error) => {
+                sender.send_result(port, Err(error));
+                return;
+            }
+        };
 
         let session = Session {
             runtime,

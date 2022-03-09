@@ -70,11 +70,9 @@ async fn remove_remote_file() {
 
 // Create two `Network` instances connected together.
 async fn create_connected_peers() -> (Network, Network) {
-    let a = Network::new::<String>(&test_network_options(), None)
-        .await
-        .unwrap();
+    let a = Network::new(&test_network_options(), None).await.unwrap();
 
-    let b = Network::new::<String>(
+    let b = Network::new(
         &NetworkOptions {
             peers: vec![*a.local_addr()],
             ..test_network_options()

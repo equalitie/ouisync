@@ -104,10 +104,7 @@ pub struct Network {
 }
 
 impl Network {
-    pub async fn new<P: AsRef<Path>>(
-        options: &NetworkOptions,
-        configs_path: Option<P>,
-    ) -> Result<Self> {
+    pub async fn new(options: &NetworkOptions, configs_path: Option<&Path>) -> Result<Self> {
         let listener = Self::bind_listener(options.listen_addr(), configs_path).await?;
 
         let local_addr = listener.local_addr().map_err(Error::Network)?;

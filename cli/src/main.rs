@@ -129,7 +129,7 @@ async fn main() -> Result<()> {
     };
 
     // Start the network
-    let network = Network::new(&options.network, configs_path.as_ref()).await?;
+    let network = Network::new(&options.network, configs_path.as_deref()).await?;
     let network_handle = network.handle();
 
     // Mount repositories
