@@ -10,6 +10,7 @@ mod message_dispatcher;
 mod message_io;
 mod protocol;
 mod server;
+mod socket;
 #[cfg(test)]
 mod tests;
 mod upnp;
@@ -224,38 +225,10 @@ impl Network {
     // If the user did not specify (through NetworkOptions) the preferred port, then try to use
     // the one used last time. If that fails, or if this is the first time the app is running,
     // then use a random port.
-    async fn bind_listener(
-        mut preferred_addr: SocketAddr,
-        config: ConfigStore,
-    ) -> Result<TcpListener> {
-        let cfg = config.entry(LAST_USED_TCP_PORT_KEY);
-        let original_port = preferred_addr.port();
-
-        if preferred_addr.port() == 0 {
-            if let Ok(last_port) = cfg.get().await {
-                preferred_addr.set_port(last_port);
-            }
-        }
-
-        let listener = match TcpListener::bind(preferred_addr).await {
-            Ok(listener) => Ok(listener),
-            Err(e) => {
-                if original_port == 0 && original_port != preferred_addr.port() {
-                    preferred_addr.set_port(0);
-                    TcpListener::bind(preferred_addr).await
-                } else {
-                    Err(e)
-                }
-            }
-        }
-        .map_err(Error::Network)?;
-
-        if let Ok(addr) = listener.local_addr() {
-            // Ignore failures
-            cfg.set(&addr.port()).await.ok();
-        }
-
-        Ok(listener)
+    async fn bind_listener(preferred_addr: SocketAddr, config: ConfigStore) -> Result<TcpListener> {
+        socket::bind(preferred_addr, config.entry(LAST_USED_TCP_PORT_KEY))
+            .await
+            .map_err(Error::Network)
     }
 }
 
