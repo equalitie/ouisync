@@ -1,5 +1,8 @@
-use super::ip_stack::IpStack;
-use crate::scoped_task::{self, ScopedJoinHandle};
+use super::{ip_stack::IpStack, socket};
+use crate::{
+    config::{ConfigKey, ConfigStore},
+    scoped_task::{self, ScopedJoinHandle},
+};
 use btdht::{InfoHash, MainlineDht};
 use futures_util::{future, stream, StreamExt};
 use rand::Rng;
@@ -30,6 +33,9 @@ const DHT_ROUTERS: &[&str] = &["router.bittorrent.com:6881", "dht.transmissionbt
 // to get too close to that value to avoid DHT churn.
 const MIN_DHT_ANNOUNCE_DELAY: Duration = Duration::from_secs(5 * 60);
 const MAX_DHT_ANNOUNCE_DELAY: Duration = Duration::from_secs(12 * 60);
+
+const LAST_USED_PORT_V4: ConfigKey<u16> = ConfigKey::new("last_used_dht_port_v4", "");
+const LAST_USED_PORT_V6: ConfigKey<u16> = ConfigKey::new("last_used_dht_port_v6", "");
 
 pub(super) struct DhtDiscovery {
     dhts: IpStack<MainlineDht>,
@@ -222,13 +228,21 @@ async fn dht_router_addresses() -> (Vec<SocketAddr>, Vec<SocketAddr>) {
         .partition(|addr| addr.is_ipv4())
 }
 
-pub(super) async fn bind() -> io::Result<IpStack<UdpSocket>> {
+pub(super) async fn bind(config: &ConfigStore) -> io::Result<IpStack<UdpSocket>> {
     // TODO: [BEP-32](https://www.bittorrent.org/beps/bep_0032.html) says we should bind the ipv6
     // socket to a concrete unicast address, not to an unspecified one. Consider finding somehow
     // what the local ipv6 address of this device is and use that instead.
     match (
-        UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).await,
-        UdpSocket::bind((Ipv6Addr::UNSPECIFIED, 0)).await,
+        socket::bind(
+            (Ipv4Addr::UNSPECIFIED, 0).into(),
+            config.entry(LAST_USED_PORT_V4),
+        )
+        .await,
+        socket::bind(
+            (Ipv6Addr::UNSPECIFIED, 0).into(),
+            config.entry(LAST_USED_PORT_V6),
+        )
+        .await,
     ) {
         (Ok(v4), Ok(v6)) => Ok(IpStack::Dual { v4, v6 }),
         (Ok(v4), Err(error)) => {

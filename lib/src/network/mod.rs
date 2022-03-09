@@ -10,6 +10,7 @@ mod message_dispatcher;
 mod message_io;
 mod protocol;
 mod server;
+mod socket;
 #[cfg(test)]
 mod tests;
 mod upnp;
@@ -115,12 +116,12 @@ pub struct Network {
 
 impl Network {
     pub async fn new(options: &NetworkOptions, config: ConfigStore) -> Result<Self> {
-        let listener = Self::bind_listener(options.listen_addr(), config).await?;
+        let listener = Self::bind_listener(options.listen_addr(), &config).await?;
 
         let local_addr = listener.local_addr().map_err(Error::Network)?;
 
         let dht_sockets = if !options.disable_dht {
-            Some(dht_discovery::bind().await.map_err(Error::Network)?)
+            Some(dht_discovery::bind(&config).await.map_err(Error::Network)?)
         } else {
             None
         };
@@ -225,37 +226,12 @@ impl Network {
     // the one used last time. If that fails, or if this is the first time the app is running,
     // then use a random port.
     async fn bind_listener(
-        mut preferred_addr: SocketAddr,
-        config: ConfigStore,
+        preferred_addr: SocketAddr,
+        config: &ConfigStore,
     ) -> Result<TcpListener> {
-        let cfg = config.entry(LAST_USED_TCP_PORT_KEY);
-        let original_port = preferred_addr.port();
-
-        if preferred_addr.port() == 0 {
-            if let Ok(last_port) = cfg.get().await {
-                preferred_addr.set_port(last_port);
-            }
-        }
-
-        let listener = match TcpListener::bind(preferred_addr).await {
-            Ok(listener) => Ok(listener),
-            Err(e) => {
-                if original_port == 0 && original_port != preferred_addr.port() {
-                    preferred_addr.set_port(0);
-                    TcpListener::bind(preferred_addr).await
-                } else {
-                    Err(e)
-                }
-            }
-        }
-        .map_err(Error::Network)?;
-
-        if let Ok(addr) = listener.local_addr() {
-            // Ignore failures
-            cfg.set(&addr.port()).await.ok();
-        }
-
-        Ok(listener)
+        socket::bind(preferred_addr, config.entry(LAST_USED_TCP_PORT_KEY))
+            .await
+            .map_err(Error::Network)
     }
 }
 
