@@ -57,23 +57,20 @@ pub(crate) struct SingleValueConfig<Value>
 where
     Value: fmt::Display + FromStr + 'static,
 {
-    path: Option<PathBuf>,
+    store: ConfigStore,
     key: ConfigKey<Value>,
 }
 
 impl<Value: fmt::Display + FromStr> SingleValueConfig<Value> {
     pub fn new(store: &ConfigStore, key: ConfigKey<Value>) -> Self {
         Self {
-            path: store
-                .dir
-                .as_ref()
-                .map(|dir| dir.join(key.name).with_extension("conf")),
+            store: store.clone(),
             key,
         }
     }
 
     pub async fn set(&self, value: &Value) -> io::Result<()> {
-        let path = if let Some(path) = &self.path {
+        let path = if let Some(path) = self.path() {
             path
         } else {
             return Ok(());
@@ -101,10 +98,12 @@ impl<Value: fmt::Display + FromStr> SingleValueConfig<Value> {
     }
 
     pub async fn get(&self) -> io::Result<Value> {
-        let path = self
-            .path
-            .as_ref()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "config value not found"))?;
+        let path = self.path().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("{:?}: null config store", self.key.name),
+            )
+        })?;
 
         let file = File::open(path).await?;
         let line = self.find_value_line(file).await?;
@@ -112,9 +111,16 @@ impl<Value: fmt::Display + FromStr> SingleValueConfig<Value> {
         line.parse().map_err(|_| {
             io::Error::new(
                 ErrorKind::InvalidData,
-                format!("failed to convert data to value from file {:?}", self.path),
+                format!("{:?}: malformed value", self.key.name),
             )
         })
+    }
+
+    fn path(&self) -> Option<PathBuf> {
+        self.store
+            .dir
+            .as_ref()
+            .map(|dir| dir.join(self.key.name).with_extension("conf"))
     }
 
     async fn find_value_line(&self, file: File) -> io::Result<String> {
@@ -131,9 +137,6 @@ impl<Value: fmt::Display + FromStr> SingleValueConfig<Value> {
             return Ok(line.to_owned());
         }
 
-        Err(io::Error::new(
-            ErrorKind::InvalidData,
-            format!("no value found in {:?}", self.path),
-        ))
+        Ok(String::new())
     }
 }
