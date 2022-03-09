@@ -1,4 +1,6 @@
-use ouisync::{AccessSecrets, Error, MasterSecret, Network, NetworkOptions, Repository, Store};
+use ouisync::{
+    AccessSecrets, ConfigStore, Error, MasterSecret, Network, NetworkOptions, Repository, Store,
+};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::{net::Ipv4Addr, time::Duration};
 use tokio::time;
@@ -70,14 +72,16 @@ async fn remove_remote_file() {
 
 // Create two `Network` instances connected together.
 async fn create_connected_peers() -> (Network, Network) {
-    let a = Network::new(&test_network_options(), None).await.unwrap();
+    let a = Network::new(&test_network_options(), ConfigStore::null())
+        .await
+        .unwrap();
 
     let b = Network::new(
         &NetworkOptions {
             peers: vec![*a.local_addr()],
             ..test_network_options()
         },
-        None,
+        ConfigStore::null(),
     )
     .await
     .unwrap();

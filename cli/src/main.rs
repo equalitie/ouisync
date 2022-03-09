@@ -124,7 +124,7 @@ async fn main() -> Result<()> {
     }
 
     // Start the network
-    let network = Network::new(&options.network, Some(config)).await?;
+    let network = Network::new(&options.network, config).await?;
     let network_handle = network.handle();
 
     // Mount repositories

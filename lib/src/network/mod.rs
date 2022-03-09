@@ -22,7 +22,7 @@ use self::{
     protocol::{RuntimeId, Version, VERSION},
 };
 use crate::{
-    config::{ConfigEntry, ConfigKey, ConfigStore},
+    config::{ConfigKey, ConfigStore},
     error::{Error, Result},
     index::Index,
     repository::RepositoryId,
@@ -114,7 +114,7 @@ pub struct Network {
 }
 
 impl Network {
-    pub async fn new(options: &NetworkOptions, config: Option<ConfigStore>) -> Result<Self> {
+    pub async fn new(options: &NetworkOptions, config: ConfigStore) -> Result<Self> {
         let listener = Self::bind_listener(options.listen_addr(), config).await?;
 
         let local_addr = listener.local_addr().map_err(Error::Network)?;
@@ -226,47 +226,36 @@ impl Network {
     // then use a random port.
     async fn bind_listener(
         mut preferred_addr: SocketAddr,
-        config: Option<ConfigStore>,
+        config: ConfigStore,
     ) -> Result<TcpListener> {
-        if let Some(cfg) = Self::last_used_port_config(config) {
-            let original_port = preferred_addr.port();
+        let cfg = config.entry(LAST_USED_TCP_PORT_KEY);
+        let original_port = preferred_addr.port();
 
-            if preferred_addr.port() == 0 {
-                if let Ok(last_port) = cfg.get().await {
-                    preferred_addr.set_port(last_port);
-                }
+        if preferred_addr.port() == 0 {
+            if let Ok(last_port) = cfg.get().await {
+                preferred_addr.set_port(last_port);
             }
-
-            let listener = match TcpListener::bind(preferred_addr).await {
-                Ok(listener) => Ok(listener),
-                Err(e) => {
-                    if original_port == 0 && original_port != preferred_addr.port() {
-                        preferred_addr.set_port(0);
-                        TcpListener::bind(preferred_addr).await
-                    } else {
-                        Err(e)
-                    }
-                }
-            }
-            .map_err(Error::Network)?;
-
-            if let Ok(addr) = listener.local_addr() {
-                // Ignore failures
-                cfg.set(&addr.port()).await.ok();
-            }
-
-            Ok(listener)
-        } else {
-            TcpListener::bind(preferred_addr)
-                .await
-                .map_err(Error::Network)
         }
-    }
 
-    fn last_used_port_config(config: Option<ConfigStore>) -> Option<ConfigEntry<u16>> {
-        config
-            .as_ref()
-            .map(|config| config.entry(LAST_USED_TCP_PORT_KEY))
+        let listener = match TcpListener::bind(preferred_addr).await {
+            Ok(listener) => Ok(listener),
+            Err(e) => {
+                if original_port == 0 && original_port != preferred_addr.port() {
+                    preferred_addr.set_port(0);
+                    TcpListener::bind(preferred_addr).await
+                } else {
+                    Err(e)
+                }
+            }
+        }
+        .map_err(Error::Network)?;
+
+        if let Ok(addr) = listener.local_addr() {
+            // Ignore failures
+            cfg.set(&addr.port()).await.ok();
+        }
+
+        Ok(listener)
     }
 }
 
