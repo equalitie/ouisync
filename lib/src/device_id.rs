@@ -1,8 +1,8 @@
+use crate::config::{ConfigKey, ConfigStore};
 use crate::error::{Error, Result};
-use crate::single_value_config::SingleValueConfig;
+use hex::FromHexError;
 use rand::{rngs::OsRng, Rng};
-use std::io::{self, ErrorKind};
-use std::path::Path;
+use std::{io::ErrorKind, str::FromStr};
 
 define_byte_array_wrapper! {
     /// DeviceId uniquely identifies machines on which this software is running. Its only purpose is
@@ -21,51 +21,42 @@ define_byte_array_wrapper! {
 derive_rand_for_wrapper!(DeviceId);
 derive_sqlx_traits_for_byte_array_wrapper!(DeviceId);
 
-pub const CONFIG_FILE_NAME: &str = "device_id.conf";
+impl FromStr for DeviceId {
+    type Err = FromHexError;
 
-pub async fn get_or_create(path: &Path) -> Result<DeviceId> {
-    let cfg = SingleValueConfig::new(path, CONFIG_COMMENT);
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut buffer = [0; Self::SIZE];
+        hex::decode_to_slice(s.trim(), &mut buffer)?;
+        Ok(Self(buffer))
+    }
+}
+
+const KEY: ConfigKey<DeviceId> = ConfigKey::new(
+    "device_id",
+    "The value stored in this file is the device ID. It is uniquelly generated for each device\n\
+     and its only purpose is to detect when a database has been migrated from one device to\n\
+     another.\n\
+     \n\
+     * When a database is migrated, the safest option is to NOT migrate this file with it. *\n\
+     \n\
+     However, the user may chose to *move* this file alongside the database. In such case it is\n\
+     important to ensure the same device ID is never used by a writer replica concurrently from\n\
+     more than one location. Doing so will likely result in data loss.\n\
+     \n\
+     Device ID is never used in construction of network messages and thus can't be used for peer\n\
+     identification.",
+);
+
+pub async fn get_or_create(config: &ConfigStore) -> Result<DeviceId> {
+    let cfg = config.entry(KEY);
 
     match cfg.get().await {
-        Ok(string) => hex_decode(string),
+        Ok(id) => Ok(id),
         Err(e) if e.kind() == ErrorKind::NotFound => {
-            let new_id = OsRng.gen::<DeviceId>();
-            cfg.set(&hex::encode(new_id.as_ref())).await.map(|_| new_id)
+            let new_id = OsRng.gen();
+            cfg.set(&new_id).await.map(|_| new_id)
         }
         Err(e) => Err(e),
     }
     .map_err(Error::DeviceIdConfig)
 }
-
-fn hex_decode(hex: String) -> io::Result<DeviceId> {
-    let bytes = match hex::decode(&hex) {
-        Ok(bytes) => bytes,
-        Err(e) => {
-            return Err(io::Error::new(
-                ErrorKind::InvalidData,
-                format!("failed to decode from hex {:?}: {:?}", hex, e),
-            ))
-        }
-    };
-
-    match bytes.try_into() {
-        Ok(bytes) => Ok(DeviceId(bytes)),
-        Err(e) => Err(io::Error::new(
-            ErrorKind::InvalidData,
-            format!("device ID has incorrect size {:?}: {:?}", hex, e),
-        )),
-    }
-}
-
-const CONFIG_COMMENT: &str = "\
-# The value stored in this file is the device ID. It is uniquelly generated for each device and
-# its only purpose is to detect when a database has been migrated from one device to another.
-#
-# * When a database is migrated, the safest option is to NOT migrate this file with it.*
-#
-# However, the user may chose to *move* this file alongside the database. In such case it is
-# important to ensure the same device ID is never used by a writer replica concurrently from
-# more than one location. Doing so will likely result in data loss.
-#
-# Device ID is never used in construction of network messages and thus can't be used for peer
-# identification.";

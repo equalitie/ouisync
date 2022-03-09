@@ -101,6 +101,9 @@ fn create_multicast_socket() -> io::Result<tokio::net::UdpSocket> {
     // one set reuse_address(true) before "binding" the socket.
     let sync_socket = Socket::new(Domain::IPV4, Type::DGRAM, None)?;
     sync_socket.set_reuse_address(true)?;
+
+    // FIXME: this might be blocking. We should make this whole function async and use
+    // `block_in_place`.
     sync_socket.bind(&SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, MULTICAST_PORT).into())?;
 
     let sync_socket: std::net::UdpSocket = sync_socket.into();

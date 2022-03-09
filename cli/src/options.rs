@@ -1,8 +1,7 @@
 use crate::APP_NAME;
 use anyhow::{format_err, Context, Error, Result};
 use ouisync_lib::{
-    cipher::SecretKey, device_id, AccessMode, MasterSecret, NetworkOptions, Password, ShareToken,
-    Store,
+    cipher::SecretKey, AccessMode, MasterSecret, NetworkOptions, Password, ShareToken, Store,
 };
 use std::{
     path::{Path, PathBuf},
@@ -17,9 +16,13 @@ use tokio::{
 /// Command line options.
 #[derive(StructOpt, Debug)]
 pub(crate) struct Options {
-    /// Path to the data directory. Use the --print-data-dir flag to see the default.
+    /// Path to the data directory. Use the --print-dirs flag to see the default.
     #[structopt(long, value_name = "PATH")]
     pub data_dir: Option<PathBuf>,
+
+    /// Path to the config directory. Use the --print-dirs flag to see the default.
+    #[structopt(long, value_name = "PATH")]
+    pub config_dir: Option<PathBuf>,
 
     /// Enable Merger (experimental)
     #[structopt(long)]
@@ -68,9 +71,9 @@ pub(crate) struct Options {
     #[structopt(long, value_name = "PATH")]
     pub accept_file: Option<PathBuf>,
 
-    /// Prints the path to the data directory and exits.
+    /// Prints the path to the data and config directories and exits.
     #[structopt(long)]
-    pub print_data_dir: bool,
+    pub print_dirs: bool,
 
     /// Prints the listening address to the stdout when the replica becomes ready.
     /// Note this flag is unstable and experimental.
@@ -96,9 +99,15 @@ impl Options {
         }
     }
 
-    /// Path to the config database.
-    pub fn device_id_config_path(&self) -> Result<PathBuf> {
-        Ok(self.data_dir()?.join(device_id::CONFIG_FILE_NAME))
+    /// Path to the config directory.
+    pub fn config_dir(&self) -> Result<PathBuf> {
+        if let Some(path) = &self.config_dir {
+            Ok(path.clone())
+        } else {
+            Ok(dirs::config_dir()
+                .context("failed to initialize default config directory")?
+                .join(APP_NAME))
+        }
     }
 
     /// Path to the database of the repository with the specified name.
