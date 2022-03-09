@@ -22,7 +22,7 @@ use self::{
     protocol::{RuntimeId, Version, VERSION},
 };
 use crate::{
-    config::{ConfigStore, SingleValueConfig},
+    config::{ConfigKey, ConfigStore, SingleValueConfig},
     error::{Error, Result},
     index::Index,
     repository::RepositoryId,
@@ -47,6 +47,17 @@ use tokio::{
     sync::{mpsc, Mutex},
     task, time,
 };
+
+const LAST_USED_TCP_PORT_KEY: ConfigKey<u16> = ConfigKey::new(
+    "last_used_tcp_port",
+    "# The value stored in this file is the last used TCP port for listening on incoming\n\
+     # connections. It is used to avoid binding to a random port every time the application\n\
+     # starts. This, in turn, is mainly useful for users who can't or don't want to use UPnP and\n\
+     # have to default to manually setting up port forwarding on their routers.\n\
+     # \n\
+     # The value is not used when the user specifies the --port option on the command line.\n\
+     # However, it may still be overwritten.",
+);
 
 #[derive(StructOpt, Debug)]
 pub struct NetworkOptions {
@@ -253,19 +264,9 @@ impl Network {
     }
 
     fn last_used_port_config(config: Option<ConfigStore>) -> Option<SingleValueConfig<u16>> {
-        const FILE_NAME: &str = "last_used_tcp_port.cfg";
-        const COMMENT: &str ="\
-            # The value stored in this file is the last used TCP port for listening on incoming connections.\n\
-            # It is used to avoid binding to a random port every time the application starts. This, in turn,\n\
-            # is mainly useful for users who can't or don't want to use UPnP and have to default to manually\n\
-            # setting up port forwarding on their routers.\n\
-            #\n\
-            # The value is not used when the user specifies the --port option on the command line. However,\n\
-            # it may still be overwritten.";
-
         config
             .as_ref()
-            .map(|config| SingleValueConfig::new(config, FILE_NAME, COMMENT))
+            .map(|config| SingleValueConfig::new(config, LAST_USED_TCP_PORT_KEY))
     }
 }
 

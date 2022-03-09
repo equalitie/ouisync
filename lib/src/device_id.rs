@@ -1,4 +1,4 @@
-use crate::config::{ConfigStore, SingleValueConfig};
+use crate::config::{ConfigKey, ConfigStore, SingleValueConfig};
 use crate::error::{Error, Result};
 use rand::{rngs::OsRng, Rng};
 use std::io::{self, ErrorKind};
@@ -20,10 +20,24 @@ define_byte_array_wrapper! {
 derive_rand_for_wrapper!(DeviceId);
 derive_sqlx_traits_for_byte_array_wrapper!(DeviceId);
 
-pub const CONFIG_FILE_NAME: &str = "device_id.conf";
+const KEY: ConfigKey<String> = ConfigKey::new(
+    "device_id",
+    "# The value stored in this file is the device ID. It is uniquelly generated for each device\n\
+     # and its only purpose is to detect when a database has been migrated from one device to \
+     another.\n\
+     # \n\
+     # * When a database is migrated, the safest option is to NOT migrate this file with it. *\n\
+     # \n\
+     # However, the user may chose to *move* this file alongside the database. In such case it\n\
+     # is important to ensure the same device ID is never used by a writer replica concurrently\n\
+     # from more than one location. Doing so will likely result in data loss.\n\
+     # \n\
+     # Device ID is never used in construction of network messages and thus can't be used for\n\
+     # peer identification.",
+);
 
 pub async fn get_or_create(config: &ConfigStore) -> Result<DeviceId> {
-    let cfg = SingleValueConfig::new(config, CONFIG_FILE_NAME, CONFIG_COMMENT);
+    let cfg = SingleValueConfig::new(config, KEY);
 
     match cfg.get().await {
         Ok(string) => hex_decode(string),
@@ -55,16 +69,3 @@ fn hex_decode(hex: String) -> io::Result<DeviceId> {
         )),
     }
 }
-
-const CONFIG_COMMENT: &str = "\
-# The value stored in this file is the device ID. It is uniquelly generated for each device and
-# its only purpose is to detect when a database has been migrated from one device to another.
-#
-# * When a database is migrated, the safest option is to NOT migrate this file with it.*
-#
-# However, the user may chose to *move* this file alongside the database. In such case it is
-# important to ensure the same device ID is never used by a writer replica concurrently from
-# more than one location. Doing so will likely result in data loss.
-#
-# Device ID is never used in construction of network messages and thus can't be used for peer
-# identification.";

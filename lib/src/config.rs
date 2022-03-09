@@ -36,21 +36,22 @@ impl ConfigStore {
     // }
 }
 
-// pub(crate) struct ConfigKey<'b, T> {
-//     name: &'b str,
-//     comment: &'b str,
-//     _type: PhantomData<T>,
-// }
+#[derive(Clone, Copy)]
+pub(crate) struct ConfigKey<T: 'static> {
+    name: &'static str,
+    comment: &'static str,
+    _type: PhantomData<&'static T>,
+}
 
-// impl<'b, T> ConfigKey<'b, T> {
-//     pub const fn new(name: &'b str, comment: &'b str) -> Self {
-//         Self {
-//             name,
-//             comment,
-//             _type: PhantomData,
-//         }
-//     }
-// }
+impl<T> ConfigKey<T> {
+    pub const fn new(name: &'static str, comment: &'static str) -> Self {
+        Self {
+            name,
+            comment,
+            _type: PhantomData,
+        }
+    }
+}
 
 // pub(crate) struct ConfigEntry<'a, 'b, T> {
 //     manager: ConfigManager,
@@ -59,19 +60,20 @@ impl ConfigStore {
 
 pub(crate) struct SingleValueConfig<Value>
 where
-    Value: fmt::Display + FromStr,
+    Value: fmt::Display + FromStr + 'static,
 {
     path: Option<PathBuf>,
-    comment: &'static str,
-    phantom: PhantomData<Value>,
+    key: ConfigKey<Value>,
 }
 
 impl<Value: fmt::Display + FromStr> SingleValueConfig<Value> {
-    pub fn new(store: &ConfigStore, key: &str, comment: &'static str) -> Self {
+    pub fn new(store: &ConfigStore, key: ConfigKey<Value>) -> Self {
         Self {
-            path: store.dir.as_ref().map(|dir| dir.join(key)),
-            comment,
-            phantom: PhantomData,
+            path: store
+                .dir
+                .as_ref()
+                .map(|dir| dir.join(key.name).with_extension("conf")),
+            key,
         }
     }
 
@@ -94,7 +96,7 @@ impl<Value: fmt::Display + FromStr> SingleValueConfig<Value> {
             .open(path)
             .await?;
 
-        file.write_all(format!("{}\n\n{}\n", self.comment, value).as_ref())
+        file.write_all(format!("{}\n\n{}\n", self.key.comment, value).as_ref())
             .await
     }
 
