@@ -25,7 +25,7 @@ use self::{
 };
 use crate::{
     config::{ConfigKey, ConfigStore},
-    error::{Error, Result},
+    error::Error,
     index::Index,
     repository::RepositoryId,
     scoped_task::{self, ScopedJoinHandle, ScopedTaskSet},
@@ -116,12 +116,12 @@ pub struct Network {
 }
 
 impl Network {
-    pub async fn new(options: &NetworkOptions, config: ConfigStore) -> Result<Self> {
+    pub async fn new(options: &NetworkOptions, config: ConfigStore) -> Result<Self, NetworkError> {
         let listener = Self::bind_listener(options.listen_addr(), &config).await?;
-        let listener_local_addr = listener.local_addr().map_err(Error::Network)?;
+        let listener_local_addr = listener.local_addr()?;
 
         let dht_sockets = if !options.disable_dht {
-            Some(dht_discovery::bind(&config).await.map_err(Error::Network)?)
+            Some(dht_discovery::bind(&config).await?)
         } else {
             None
         };
@@ -129,16 +129,14 @@ impl Network {
         let dht_local_addrs = dht_sockets
             .as_ref()
             .map(|sockets| sockets.as_ref().try_map(|socket| socket.local_addr()))
-            .transpose()
-            .map_err(Error::Network)?;
+            .transpose()?;
 
         let port_forwarder = if !options.disable_upnp {
             let dht_port_v4 = dht_sockets
                 .as_ref()
                 .and_then(|sockets| sockets.v4())
                 .map(|socket| socket.local_addr())
-                .transpose()
-                .map_err(Error::Network)?
+                .transpose()?
                 .map(|addr| addr.port());
 
             // TODO: the ipv6 port typically doesn't need to be port-mapped but it might need to
@@ -243,10 +241,8 @@ impl Network {
     async fn bind_listener(
         preferred_addr: SocketAddr,
         config: &ConfigStore,
-    ) -> Result<TcpListener> {
-        socket::bind(preferred_addr, config.entry(LAST_USED_TCP_PORT_KEY))
-            .await
-            .map_err(Error::Network)
+    ) -> Result<TcpListener, NetworkError> {
+        Ok(socket::bind(preferred_addr, config.entry(LAST_USED_TCP_PORT_KEY)).await?)
     }
 }
 
@@ -668,6 +664,16 @@ impl fmt::Display for PeerSource {
             PeerSource::LocalDiscovery => write!(f, "outgoing (locally discovered)"),
             PeerSource::Dht => write!(f, "outgoing (found via DHT)"),
         }
+    }
+}
+
+#[derive(Debug, Error)]
+#[error("network error")]
+pub struct NetworkError(#[from] io::Error);
+
+impl From<NetworkError> for Error {
+    fn from(src: NetworkError) -> Self {
+        Self::Network(src.0)
     }
 }
 
