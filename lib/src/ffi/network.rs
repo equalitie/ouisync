@@ -40,10 +40,27 @@ pub unsafe extern "C" fn network_local_addr() -> *const c_char {
     let local_addr = session::get().network().listener_local_addr();
 
     // TODO: Get <TCP or UDP> from the network object.
+    utils::str_to_ptr(&format!("TCP:{}", local_addr))
+}
 
-    if let Ok(s) = utils::str_to_c_string(&format!("TCP:{}", local_addr)) {
-        s.into_raw()
-    } else {
-        ptr::null()
-    }
+/// Returns the local dht address for ipv4, if available.
+/// See [`network_local_addr`] for the format details.
+#[no_mangle]
+pub unsafe extern "C" fn network_dht_local_addr_v4() -> *const c_char {
+    session::get()
+        .network()
+        .dht_local_addr_v4()
+        .map(|addr| utils::str_to_ptr(&format!("UDP:{}", addr)))
+        .unwrap_or(ptr::null_mut())
+}
+
+/// Returns the local dht address for ipv6, if available.
+/// See [`network_local_addr`] for the format details.
+#[no_mangle]
+pub unsafe extern "C" fn network_dht_local_addr_v6() -> *const c_char {
+    session::get()
+        .network()
+        .dht_local_addr_v6()
+        .map(|addr| utils::str_to_ptr(&format!("UDP:{}", addr)))
+        .unwrap_or(ptr::null_mut())
 }

@@ -150,7 +150,7 @@ async fn main() -> Result<()> {
     }
 
     if options.print_ready_message {
-        println!("Listening on port {}", network.local_addr().port());
+        println!("Listening on port {}", network.listener_local_addr().port());
         println!("Device ID is {}", device_id);
     }
 

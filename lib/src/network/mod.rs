@@ -18,6 +18,7 @@ mod upnp;
 use self::{
     connection::{ConnectionDeduplicator, ConnectionDirection, ConnectionPermit},
     dht_discovery::DhtDiscovery,
+    ip_stack::IpStack,
     local_discovery::LocalDiscovery,
     message_broker::MessageBroker,
     protocol::{RuntimeId, Version, VERSION},
@@ -125,10 +126,11 @@ impl Network {
             None
         };
 
-        // let dht_local_addrs = dht_sockets
-        //     .as_ref()
-        //     .map(|sockets| sockets.try_map(|socket| socket.local_addr()))
-        //     .transpose();
+        let dht_local_addrs = dht_sockets
+            .as_ref()
+            .map(|sockets| sockets.as_ref().try_map(|socket| socket.local_addr()))
+            .transpose()
+            .map_err(Error::Network)?;
 
         let port_forwarder = if !options.disable_upnp {
             let dht_port_v4 = dht_sockets
@@ -175,6 +177,7 @@ impl Network {
                 message_brokers: HashMap::new(),
                 registry: Slab::new(),
             }),
+            dht_local_addrs,
             dht_discovery,
             dht_peer_found_tx,
             connection_deduplicator: ConnectionDeduplicator::new(),
@@ -218,6 +221,14 @@ impl Network {
 
     pub fn listener_local_addr(&self) -> &SocketAddr {
         &self.inner.listener_local_addr
+    }
+
+    pub fn dht_local_addr_v4(&self) -> Option<&SocketAddr> {
+        self.inner.dht_local_addrs.as_ref()?.v4()
+    }
+
+    pub fn dht_local_addr_v6(&self) -> Option<&SocketAddr> {
+        self.inner.dht_local_addrs.as_ref()?.v6()
     }
 
     pub fn handle(&self) -> Handle {
@@ -358,6 +369,7 @@ struct Inner {
     listener_local_addr: SocketAddr,
     this_runtime_id: RuntimeId,
     state: Mutex<State>,
+    dht_local_addrs: Option<IpStack<SocketAddr>>,
     dht_discovery: Option<DhtDiscovery>,
     dht_peer_found_tx: mpsc::UnboundedSender<SocketAddr>,
     connection_deduplicator: ConnectionDeduplicator,
