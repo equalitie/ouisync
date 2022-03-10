@@ -35,15 +35,38 @@ fn encode_network_event(event: NetworkEvent) -> u8 {
 ///
 /// For IPv4: "TCP:192.168.1.1:65522"
 /// For IPv6: "TCP:[2001:db8::1]:65522"
+///
+/// IMPORTANT: the caller is responsible for deallocating the returned pointer unless it is `null`.
 #[no_mangle]
-pub unsafe extern "C" fn network_local_addr() -> *const c_char {
-    let local_addr = session::get().network().local_addr();
+pub unsafe extern "C" fn network_listener_local_addr() -> *mut c_char {
+    let local_addr = session::get().network().listener_local_addr();
 
     // TODO: Get <TCP or UDP> from the network object.
+    utils::str_to_ptr(&format!("TCP:{}", local_addr))
+}
 
-    if let Ok(s) = utils::str_to_c_string(&format!("TCP:{}", local_addr)) {
-        s.into_raw()
-    } else {
-        ptr::null()
-    }
+/// Returns the local dht address for ipv4, if available.
+/// See [`network_local_addr`] for the format details.
+///
+/// IMPORTANT: the caller is responsible for deallocating the returned pointer unless it is `null`.
+#[no_mangle]
+pub unsafe extern "C" fn network_dht_local_addr_v4() -> *mut c_char {
+    session::get()
+        .network()
+        .dht_local_addr_v4()
+        .map(|addr| utils::str_to_ptr(&format!("UDP:{}", addr)))
+        .unwrap_or(ptr::null_mut())
+}
+
+/// Returns the local dht address for ipv6, if available.
+/// See [`network_local_addr`] for the format details.
+///
+/// IMPORTANT: the caller is responsible for deallocating the returned pointer unless it is `null`.
+#[no_mangle]
+pub unsafe extern "C" fn network_dht_local_addr_v6() -> *mut c_char {
+    session::get()
+        .network()
+        .dht_local_addr_v6()
+        .map(|addr| utils::str_to_ptr(&format!("UDP:{}", addr)))
+        .unwrap_or(ptr::null_mut())
 }

@@ -142,6 +142,12 @@ pub fn str_to_c_string(s: &str) -> Result<CString> {
     CString::new(s.as_bytes()).map_err(|_| Error::MalformedData)
 }
 
+pub fn str_to_ptr(s: &str) -> *mut c_char {
+    str_to_c_string(s)
+        .map(CString::into_raw)
+        .unwrap_or(ptr::null_mut())
+}
+
 #[repr(C)]
 pub struct Bytes {
     pub ptr: *const u8,

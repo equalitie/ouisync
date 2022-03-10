@@ -78,7 +78,7 @@ async fn create_connected_peers() -> (Network, Network) {
 
     let b = Network::new(
         &NetworkOptions {
-            peers: vec![*a.local_addr()],
+            peers: vec![*a.listener_local_addr()],
             ..test_network_options()
         },
         ConfigStore::null(),

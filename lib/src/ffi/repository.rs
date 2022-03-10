@@ -297,11 +297,7 @@ pub unsafe extern "C" fn share_token_suggested_name(token: *const c_char) -> *co
         return ptr::null();
     };
 
-    if let Ok(s) = utils::str_to_c_string(token.suggested_name().as_ref()) {
-        s.into_raw()
-    } else {
-        ptr::null()
-    }
+    utils::str_to_ptr(token.suggested_name().as_ref())
 }
 
 /// IMPORTANT: the caller is responsible for deallocating the returned buffer unless it is `null`.
@@ -344,11 +340,7 @@ pub unsafe extern "C" fn share_token_decode(bytes: *const u8, len: u64) -> *cons
         return ptr::null();
     };
 
-    if let Ok(s) = utils::str_to_c_string(token.to_string().as_ref()) {
-        s.into_raw()
-    } else {
-        ptr::null()
-    }
+    utils::str_to_ptr(token.to_string().as_ref())
 }
 
 pub(super) fn entry_type_to_num(entry_type: EntryType) -> u8 {
