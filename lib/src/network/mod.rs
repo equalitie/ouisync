@@ -117,14 +117,18 @@ pub struct Network {
 impl Network {
     pub async fn new(options: &NetworkOptions, config: ConfigStore) -> Result<Self> {
         let listener = Self::bind_listener(options.listen_addr(), &config).await?;
-
-        let local_addr = listener.local_addr().map_err(Error::Network)?;
+        let listener_local_addr = listener.local_addr().map_err(Error::Network)?;
 
         let dht_sockets = if !options.disable_dht {
             Some(dht_discovery::bind(&config).await.map_err(Error::Network)?)
         } else {
             None
         };
+
+        // let dht_local_addrs = dht_sockets
+        //     .as_ref()
+        //     .map(|sockets| sockets.try_map(|socket| socket.local_addr()))
+        //     .transpose();
 
         let port_forwarder = if !options.disable_upnp {
             let dht_port_v4 = dht_sockets
@@ -140,8 +144,8 @@ impl Network {
 
             Some(upnp::PortForwarder::new(
                 iter::once(upnp::Mapping {
-                    external: local_addr.port(),
-                    internal: local_addr.port(),
+                    external: listener_local_addr.port(),
+                    internal: listener_local_addr.port(),
                     protocol: upnp::Protocol::Tcp,
                 })
                 .chain(dht_port_v4.map(|port| upnp::Mapping {
@@ -155,7 +159,7 @@ impl Network {
         };
 
         let dht_discovery = if let Some(dht_sockets) = dht_sockets {
-            Some(DhtDiscovery::new(dht_sockets, local_addr.port()).await)
+            Some(DhtDiscovery::new(dht_sockets, listener_local_addr.port()).await)
         } else {
             None
         };
@@ -165,7 +169,7 @@ impl Network {
         let (dht_peer_found_tx, mut dht_peer_found_rx) = mpsc::unbounded_channel();
 
         let inner = Arc::new(Inner {
-            local_addr,
+            listener_local_addr,
             this_runtime_id: rand::random(),
             state: Mutex::new(State {
                 message_brokers: HashMap::new(),
@@ -212,8 +216,8 @@ impl Network {
         Ok(network)
     }
 
-    pub fn local_addr(&self) -> &SocketAddr {
-        &self.inner.local_addr
+    pub fn listener_local_addr(&self) -> &SocketAddr {
+        &self.inner.listener_local_addr
     }
 
     pub fn handle(&self) -> Handle {
@@ -351,7 +355,7 @@ struct Tasks {
 }
 
 struct Inner {
-    local_addr: SocketAddr,
+    listener_local_addr: SocketAddr,
     this_runtime_id: RuntimeId,
     state: Mutex<State>,
     dht_discovery: Option<DhtDiscovery>,
@@ -390,11 +394,8 @@ impl Inner {
             return;
         }
 
-        let self_ = self.clone();
-        *local_discovery = Some(scoped_task::spawn(async move {
-            let port = self_.local_addr.port();
-            self_.run_local_discovery(port).await;
-        }));
+        let port = self.listener_local_addr.port();
+        *local_discovery = Some(scoped_task::spawn(self.clone().run_local_discovery(port)));
     }
 
     async fn run_local_discovery(self: Arc<Self>, listener_port: u16) {

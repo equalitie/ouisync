@@ -37,7 +37,7 @@ fn encode_network_event(event: NetworkEvent) -> u8 {
 /// For IPv6: "TCP:[2001:db8::1]:65522"
 #[no_mangle]
 pub unsafe extern "C" fn network_local_addr() -> *const c_char {
-    let local_addr = session::get().network().local_addr();
+    let local_addr = session::get().network().listener_local_addr();
 
     // TODO: Get <TCP or UDP> from the network object.
 
