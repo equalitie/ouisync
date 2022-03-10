@@ -34,8 +34,17 @@ const DHT_ROUTERS: &[&str] = &["router.bittorrent.com:6881", "dht.transmissionbt
 const MIN_DHT_ANNOUNCE_DELAY: Duration = Duration::from_secs(5 * 60);
 const MAX_DHT_ANNOUNCE_DELAY: Duration = Duration::from_secs(12 * 60);
 
-const LAST_USED_PORT_V4: ConfigKey<u16> = ConfigKey::new("last_used_dht_port_v4", "");
-const LAST_USED_PORT_V6: ConfigKey<u16> = ConfigKey::new("last_used_dht_port_v6", "");
+const LAST_USED_PORT_V4: ConfigKey<u16> =
+    ConfigKey::new("last_used_udp_port_v4", LAST_USED_PORT_COMMENT);
+
+const LAST_USED_PORT_V6: ConfigKey<u16> =
+    ConfigKey::new("last_used_udp_port_v6", LAST_USED_PORT_COMMENT);
+
+const LAST_USED_PORT_COMMENT: &str =
+    "The value stored in this file is the last used UDP port for listening on incoming\n\
+     connections. It is used to avoid binding to a random port every time the application starts.\n\
+     This, in turn, is mainly useful for users who can't or don't want to use UPnP and have to\n\
+     default to manually setting up port forwarding on their routers.";
 
 pub(super) struct DhtDiscovery {
     dhts: IpStack<MainlineDht>,
@@ -89,6 +98,12 @@ impl DhtDiscovery {
 }
 
 fn start_dht(socket: UdpSocket, acceptor_port: u16, routers: Vec<SocketAddr>) -> MainlineDht {
+    let protocol = match socket.local_addr() {
+        Ok(SocketAddr::V4(_)) => "IPv4",
+        Ok(SocketAddr::V6(_)) => "IPv6",
+        Err(_) => "?",
+    };
+
     // TODO: load the DHT state from a previous save if it exists.
     let dht = MainlineDht::builder()
         .add_routers(routers)
@@ -101,9 +116,9 @@ fn start_dht(socket: UdpSocket, acceptor_port: u16, routers: Vec<SocketAddr>) ->
         let dht = dht.clone();
         async move {
             if dht.bootstrapped().await {
-                log::info!("DHT bootstrap complete")
+                log::info!("DHT {} bootstrap complete", protocol)
             } else {
-                log::error!("DHT bootstrap failed")
+                log::error!("DHT {} bootstrap failed", protocol)
             }
         }
     });
