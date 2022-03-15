@@ -125,34 +125,33 @@ mod instrumented {
     }
 
     impl<T> Guard<T> {
-        async fn new<F>(inner: F, location: &'static Location<'static>) -> Self
+        pub async fn new<F>(inner: F, location: &'static Location<'static>) -> Self
         where
             F: Future<Output = T>,
         {
-            tokio::pin!(inner);
-
-            let inner = match time::timeout(DEADLOCK_WARNING_TIMEOUT, &mut inner).await {
-                Ok(inner) => inner,
-                Err(_) => {
-                    // Warn when we are taking too long to acquire the lock.
-                    log::warn!("lock at {}: excessive wait (deadlock?)", location);
-                    inner.await
-                }
-            };
-
-            log::trace!("lock at {}: acquired", location);
-
-            // Warn when we are taking too long holding the lock.
-            let handle = scoped_task::spawn(async move {
-                time::sleep(DEADLOCK_WARNING_TIMEOUT).await;
-                log::warn!("lock at {}: excessive hold (deadlock?)", location);
-            });
+            let (inner, handle) = acquire(inner, location).await;
 
             Self {
                 inner,
                 location,
                 _handle: handle,
             }
+        }
+
+        pub async fn try_new<F, E>(
+            inner: F,
+            location: &'static Location<'static>,
+        ) -> Result<Self, E>
+        where
+            F: Future<Output = Result<T, E>>,
+        {
+            let (inner, handle) = acquire(inner, location).await;
+
+            Ok(Self {
+                inner: inner?,
+                location,
+                _handle: handle,
+            })
         }
     }
 
@@ -180,5 +179,34 @@ mod instrumented {
         fn deref_mut(&mut self) -> &mut Self::Target {
             self.inner.deref_mut()
         }
+    }
+
+    async fn acquire<F>(
+        inner: F,
+        location: &'static Location<'static>,
+    ) -> (F::Output, ScopedJoinHandle<()>)
+    where
+        F: Future,
+    {
+        tokio::pin!(inner);
+
+        let inner = match time::timeout(DEADLOCK_WARNING_TIMEOUT, &mut inner).await {
+            Ok(inner) => inner,
+            Err(_) => {
+                // Warn when we are taking too long to acquire the lock.
+                log::warn!("lock at {}: excessive wait (deadlock?)", location);
+                inner.await
+            }
+        };
+
+        log::trace!("lock at {}: acquired", location);
+
+        // Warn when we are taking too long holding the lock.
+        let handle = scoped_task::spawn(async move {
+            time::sleep(DEADLOCK_WARNING_TIMEOUT).await;
+            log::warn!("lock at {}: excessive hold (deadlock?)", location);
+        });
+
+        (inner, handle)
     }
 }

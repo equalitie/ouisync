@@ -6,13 +6,30 @@ use sqlx::{
 use std::{
     borrow::Cow,
     convert::Infallible,
+    future::Future,
     path::{Path, PathBuf},
     str::FromStr,
 };
 use tokio::fs;
 
 /// Database connection pool.
-pub(crate) type Pool = SqlitePool;
+#[derive(Clone)]
+pub(crate) struct Pool(SqlitePool);
+
+impl Pool {
+    pub fn acquire(&self) -> impl Future<Output = Result<PoolConnection, sqlx::Error>> {
+        self.0.acquire()
+    }
+
+    pub fn begin<'a>(
+        &'a self,
+    ) -> impl Future<Output = Result<Transaction<'static>, sqlx::Error>> + 'a {
+        self.0.begin()
+    }
+}
+
+/// Pooled database connection
+pub type PoolConnection = sqlx::pool::PoolConnection<Sqlite>;
 
 /// Database connection.
 pub type Connection = SqliteConnection;
@@ -102,6 +119,7 @@ async fn open_permanent(path: &Path, create_if_missing: bool) -> Result<Pool> {
                 .create_if_missing(create_if_missing),
         )
         .await
+        .map(Pool)
         .map_err(Error::ConnectToDb)
 }
 
@@ -117,6 +135,7 @@ async fn open_temporary() -> Result<Pool> {
                 .shared_cache(false),
         )
         .await
+        .map(Pool)
         .map_err(Error::ConnectToDb)
 }
 
