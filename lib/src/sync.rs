@@ -64,5 +64,101 @@ pub(crate) mod broadcast {
 
 /// Synchronization objects instrumented for deadlock detection.
 pub(super) mod instrumented {
-    pub use tokio::sync::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
+    pub use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+
+    use crate::scoped_task::{self, ScopedJoinHandle};
+    use std::{
+        future::Future,
+        ops::{Deref, DerefMut},
+        panic::Location,
+        time::Duration,
+    };
+    use tokio::{sync as upstream, time};
+
+    const DEADLOCK_WARNING_TIMEOUT: Duration = Duration::from_secs(5);
+
+    /// Instrumented replacement for `tokio::sync::Mutex`.
+    pub struct Mutex<T>(upstream::Mutex<T>);
+
+    impl<T> Mutex<T> {
+        pub fn new(value: T) -> Self {
+            Self(upstream::Mutex::new(value))
+        }
+
+        // NOTE: using `track_caller` so that the `Location` constructed inside points to where
+        // this function is called and not inside it. Also using `impl Future` return instead of
+        // `async fn` because `track_caller` doesn't work correctly with `async`.
+        #[track_caller]
+        pub fn lock(&self) -> impl Future<Output = MutexGuard<'_, T>> {
+            Guard::new(self.0.lock(), Location::caller())
+        }
+    }
+
+    pub type MutexGuard<'a, T> = Guard<upstream::MutexGuard<'a, T>>;
+
+    // Wrapper for various lock guard types which prints a log message when the lock is being
+    // acquired, released and when it's taking too long to become acquired (potential deadlock).
+    pub struct Guard<T> {
+        inner: T,
+        location: &'static Location<'static>,
+        _handle: ScopedJoinHandle<()>,
+    }
+
+    impl<T> Guard<T> {
+        async fn new<F>(inner: F, location: &'static Location<'static>) -> Self
+        where
+            F: Future<Output = T>,
+        {
+            tokio::pin!(inner);
+
+            let inner = match time::timeout(DEADLOCK_WARNING_TIMEOUT, &mut inner).await {
+                Ok(inner) => inner,
+                Err(_) => {
+                    // Warn when we are taking too long to acquire the lock.
+                    log::warn!("lock at {}: excessive wait (deadlock?)", location);
+                    inner.await
+                }
+            };
+
+            log::trace!("lock at {}: acquired", location);
+
+            // Warn when we are taking too long holding the lock.
+            let handle = scoped_task::spawn(async move {
+                time::sleep(DEADLOCK_WARNING_TIMEOUT).await;
+                log::warn!("lock at {}: excessive hold (deadlock?)", location);
+            });
+
+            Self {
+                inner,
+                location,
+                _handle: handle,
+            }
+        }
+    }
+
+    impl<T> Drop for Guard<T> {
+        fn drop(&mut self) {
+            log::trace!("lock at {}: released", self.location);
+        }
+    }
+
+    impl<T> Deref for Guard<T>
+    where
+        T: Deref,
+    {
+        type Target = T::Target;
+
+        fn deref(&self) -> &Self::Target {
+            self.inner.deref()
+        }
+    }
+
+    impl<T> DerefMut for Guard<T>
+    where
+        T: DerefMut,
+    {
+        fn deref_mut(&mut self) -> &mut Self::Target {
+            self.inner.deref_mut()
+        }
+    }
 }
