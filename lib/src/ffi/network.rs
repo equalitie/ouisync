@@ -36,7 +36,7 @@ fn encode_network_event(event: NetworkEvent) -> u8 {
 /// For IPv4: "TCP:192.168.1.1:65522"
 /// For IPv6: "TCP:[2001:db8::1]:65522"
 ///
-/// IMPORTANT: the caller is responsible for deallocating the returned pointer unless it is `null`.
+/// IMPORTANT: the caller is responsible for deallocating the returned pointer.
 #[no_mangle]
 pub unsafe extern "C" fn network_listener_local_addr() -> *mut c_char {
     let local_addr = session::get().network().listener_local_addr();
