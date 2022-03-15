@@ -1,6 +1,6 @@
 use crate::{
+    deadlock::DeadlockGuard,
     error::{Error, Result},
-    sync::InstrumentedGuard,
 };
 use sqlx::{
     sqlite::{Sqlite, SqliteConnectOptions, SqliteConnection, SqlitePoolOptions},
@@ -23,7 +23,7 @@ pub(crate) struct Pool(SqlitePool);
 impl Pool {
     #[track_caller]
     pub fn acquire(&self) -> impl Future<Output = Result<PoolConnection, sqlx::Error>> {
-        InstrumentedGuard::try_new(self.0.acquire(), Location::caller())
+        DeadlockGuard::try_wrap(self.0.acquire(), Location::caller())
     }
 
     pub fn begin<'a>(
@@ -34,10 +34,10 @@ impl Pool {
 }
 
 /// Pooled database connection
-pub type PoolConnection = InstrumentedGuard<sqlx::pool::PoolConnection<Sqlite>>;
+pub(crate) type PoolConnection = DeadlockGuard<sqlx::pool::PoolConnection<Sqlite>>;
 
 #[cfg(test)]
-impl InstrumentedGuard<sqlx::pool::PoolConnection<Sqlite>> {
+impl DeadlockGuard<sqlx::pool::PoolConnection<Sqlite>> {
     pub fn detach(self) -> SqliteConnection {
         self.into_inner().detach()
     }

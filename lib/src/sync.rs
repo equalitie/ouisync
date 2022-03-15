@@ -1,8 +1,7 @@
 //! Synchronization utilities
 
-pub(crate) use self::instrumented::{
-    Guard as InstrumentedGuard, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard,
-};
+use crate::deadlock::DeadlockGuard;
+use std::{future::Future, panic::Location};
 
 /// MPMC broadcast channel
 pub(crate) mod broadcast {
@@ -64,158 +63,43 @@ pub(crate) mod broadcast {
     }
 }
 
-/// Synchronization objects instrumented for deadlock detection.
-mod instrumented {
-    use crate::scoped_task::{self, ScopedJoinHandle};
-    use std::{
-        future::Future,
-        ops::{Deref, DerefMut},
-        panic::Location,
-        time::Duration,
-    };
-    use tokio::{sync as upstream, time};
+/// Replacement for `tokio::sync::Mutex` instrumented for deadlock detection.
+pub struct Mutex<T>(tokio::sync::Mutex<T>);
 
-    const DEADLOCK_WARNING_TIMEOUT: Duration = Duration::from_secs(5);
-
-    /// Instrumented replacement for `tokio::sync::Mutex`.
-    pub struct Mutex<T>(upstream::Mutex<T>);
-
-    impl<T> Mutex<T> {
-        pub fn new(value: T) -> Self {
-            Self(upstream::Mutex::new(value))
-        }
-
-        // NOTE: using `track_caller` so that the `Location` constructed inside points to where
-        // this function is called and not inside it. Also using `impl Future` return instead of
-        // `async fn` because `track_caller` doesn't work correctly with `async`.
-        #[track_caller]
-        pub fn lock(&self) -> impl Future<Output = MutexGuard<'_, T>> {
-            Guard::new(self.0.lock(), Location::caller())
-        }
+impl<T> Mutex<T> {
+    pub fn new(value: T) -> Self {
+        Self(tokio::sync::Mutex::new(value))
     }
 
-    pub type MutexGuard<'a, T> = Guard<upstream::MutexGuard<'a, T>>;
-
-    /// Instrumented replacement for `tokio::sync::RwLock`.
-    pub struct RwLock<T>(upstream::RwLock<T>);
-
-    impl<T> RwLock<T> {
-        pub fn new(value: T) -> Self {
-            Self(upstream::RwLock::new(value))
-        }
-
-        #[track_caller]
-        pub fn read(&self) -> impl Future<Output = RwLockReadGuard<'_, T>> {
-            Guard::new(self.0.read(), Location::caller())
-        }
-
-        #[track_caller]
-        pub fn write(&self) -> impl Future<Output = RwLockWriteGuard<'_, T>> {
-            Guard::new(self.0.write(), Location::caller())
-        }
-    }
-
-    pub type RwLockReadGuard<'a, T> = Guard<upstream::RwLockReadGuard<'a, T>>;
-    pub type RwLockWriteGuard<'a, T> = Guard<upstream::RwLockWriteGuard<'a, T>>;
-
-    // Wrapper for various lock guard types which prints a log message when the lock is being
-    // acquired, released and when it's taking too long to become acquired (potential deadlock).
-    pub struct Guard<T> {
-        inner: T,
-        _location: LogOnDrop,
-        _handle: ScopedJoinHandle<()>,
-    }
-
-    impl<T> Guard<T> {
-        pub async fn new<F>(inner: F, location: &'static Location<'static>) -> Self
-        where
-            F: Future<Output = T>,
-        {
-            let (inner, handle) = acquire(inner, location).await;
-
-            Self {
-                inner,
-                _location: LogOnDrop(location),
-                _handle: handle,
-            }
-        }
-
-        pub async fn try_new<F, E>(
-            inner: F,
-            location: &'static Location<'static>,
-        ) -> Result<Self, E>
-        where
-            F: Future<Output = Result<T, E>>,
-        {
-            let (inner, handle) = acquire(inner, location).await;
-
-            Ok(Self {
-                inner: inner?,
-                _location: LogOnDrop(location),
-                _handle: handle,
-            })
-        }
-
-        #[cfg(test)]
-        pub fn into_inner(self) -> T {
-            self.inner
-        }
-    }
-
-    struct LogOnDrop(&'static Location<'static>);
-
-    impl Drop for LogOnDrop {
-        fn drop(&mut self) {
-            log::trace!("lock at {}: released", self.0);
-        }
-    }
-
-    impl<T> Deref for Guard<T>
-    where
-        T: Deref,
-    {
-        type Target = T::Target;
-
-        fn deref(&self) -> &Self::Target {
-            self.inner.deref()
-        }
-    }
-
-    impl<T> DerefMut for Guard<T>
-    where
-        T: DerefMut,
-    {
-        fn deref_mut(&mut self) -> &mut Self::Target {
-            self.inner.deref_mut()
-        }
-    }
-
-    async fn acquire<F>(
-        inner: F,
-        location: &'static Location<'static>,
-    ) -> (F::Output, ScopedJoinHandle<()>)
-    where
-        F: Future,
-    {
-        tokio::pin!(inner);
-
-        let inner = match time::timeout(DEADLOCK_WARNING_TIMEOUT, &mut inner).await {
-            Ok(inner) => inner,
-            Err(_) => {
-                // Warn when we are taking too long to acquire the lock.
-                log::warn!("lock at {}: excessive wait (deadlock?)", location);
-                inner.await
-            }
-        };
-
-        log::trace!("lock at {}: acquired", location);
-
-        // Warn when we are taking too long holding the lock.
-        let handle = scoped_task::spawn(async move {
-            time::sleep(DEADLOCK_WARNING_TIMEOUT).await;
-            log::warn!("lock at {}: excessive hold (deadlock?)", location);
-        });
-
-        (inner, handle)
+    // NOTE: using `track_caller` so that the `Location` constructed inside points to where
+    // this function is called and not inside it. Also using `impl Future` return instead of
+    // `async fn` because `track_caller` doesn't work correctly with `async`.
+    #[track_caller]
+    pub fn lock(&self) -> impl Future<Output = MutexGuard<'_, T>> {
+        DeadlockGuard::wrap(self.0.lock(), Location::caller())
     }
 }
+
+pub type MutexGuard<'a, T> = DeadlockGuard<tokio::sync::MutexGuard<'a, T>>;
+
+/// Replacement for `tokio::sync::RwLock` instrumented for deadlock detection.
+pub struct RwLock<T>(tokio::sync::RwLock<T>);
+
+impl<T> RwLock<T> {
+    pub fn new(value: T) -> Self {
+        Self(tokio::sync::RwLock::new(value))
+    }
+
+    #[track_caller]
+    pub fn read(&self) -> impl Future<Output = RwLockReadGuard<'_, T>> {
+        DeadlockGuard::wrap(self.0.read(), Location::caller())
+    }
+
+    #[track_caller]
+    pub fn write(&self) -> impl Future<Output = RwLockWriteGuard<'_, T>> {
+        DeadlockGuard::wrap(self.0.write(), Location::caller())
+    }
+}
+
+pub type RwLockReadGuard<'a, T> = DeadlockGuard<tokio::sync::RwLockReadGuard<'a, T>>;
+pub type RwLockWriteGuard<'a, T> = DeadlockGuard<tokio::sync::RwLockWriteGuard<'a, T>>;
