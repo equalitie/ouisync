@@ -63,9 +63,7 @@ pub(crate) mod broadcast {
 }
 
 /// Synchronization objects instrumented for deadlock detection.
-pub(super) mod instrumented {
-    pub use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
-
+mod instrumented {
     use crate::scoped_task::{self, ScopedJoinHandle};
     use std::{
         future::Future,
@@ -95,6 +93,28 @@ pub(super) mod instrumented {
     }
 
     pub type MutexGuard<'a, T> = Guard<upstream::MutexGuard<'a, T>>;
+
+    /// Instrumented replacement for `tokio::sync::RwLock`.
+    pub struct RwLock<T>(upstream::RwLock<T>);
+
+    impl<T> RwLock<T> {
+        pub fn new(value: T) -> Self {
+            Self(upstream::RwLock::new(value))
+        }
+
+        #[track_caller]
+        pub fn read(&self) -> impl Future<Output = RwLockReadGuard<'_, T>> {
+            Guard::new(self.0.read(), Location::caller())
+        }
+
+        #[track_caller]
+        pub fn write(&self) -> impl Future<Output = RwLockWriteGuard<'_, T>> {
+            Guard::new(self.0.write(), Location::caller())
+        }
+    }
+
+    pub type RwLockReadGuard<'a, T> = Guard<upstream::RwLockReadGuard<'a, T>>;
+    pub type RwLockWriteGuard<'a, T> = Guard<upstream::RwLockWriteGuard<'a, T>>;
 
     // Wrapper for various lock guard types which prints a log message when the lock is being
     // acquired, released and when it's taking too long to become acquired (potential deadlock).
