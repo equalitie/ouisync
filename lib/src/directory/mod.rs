@@ -35,6 +35,7 @@ use crate::{
     version_vector::VersionVector,
 };
 use async_recursion::async_recursion;
+use sqlx::Connection;
 use std::sync::{Arc, Weak};
 
 #[derive(Clone)]
@@ -505,7 +506,8 @@ impl Writer<'_> {
             return Ok(());
         }
 
-        let mut tx = self.inner.blob.db_pool().begin().await?;
+        let mut conn = self.inner.blob.db_pool().acquire().await?;
+        let mut tx = conn.begin().await?;
         self.inner.flush(&mut tx).await?;
         self.inner
             .modify_self_entry(tx, version_vector_override)

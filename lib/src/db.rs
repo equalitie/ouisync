@@ -10,6 +10,7 @@ use std::{
     borrow::Cow,
     convert::Infallible,
     future::Future,
+    ops::{Deref, DerefMut},
     panic::Location,
     path::{Path, PathBuf},
     str::FromStr,
@@ -26,12 +27,19 @@ impl Pool {
         DeadlockGuard::try_wrap(self.0.acquire(), Location::caller())
     }
 
-    pub fn begin<'a>(
-        &'a self,
-    ) -> impl Future<Output = Result<Transaction<'static>, sqlx::Error>> + 'a {
-        self.0.begin()
+    #[track_caller]
+    pub fn begin(&self) -> impl Future<Output = Result<PoolTransaction, sqlx::Error>> + '_ {
+        let location = Location::caller();
+        async move {
+            Ok(PoolTransaction(
+                DeadlockGuard::try_wrap(self.0.begin(), location).await?,
+            ))
+        }
     }
 }
+
+/// Database connection.
+pub type Connection = SqliteConnection;
 
 /// Pooled database connection
 pub(crate) type PoolConnection = DeadlockGuard<sqlx::pool::PoolConnection<Sqlite>>;
@@ -43,11 +51,31 @@ impl DeadlockGuard<sqlx::pool::PoolConnection<Sqlite>> {
     }
 }
 
-/// Database connection.
-pub type Connection = SqliteConnection;
-
 /// Database transaction
 pub type Transaction<'a> = sqlx::Transaction<'a, Sqlite>;
+
+/// Database transaction obtained from `Pool::begin`.
+pub struct PoolTransaction(DeadlockGuard<sqlx::Transaction<'static, Sqlite>>);
+
+impl PoolTransaction {
+    pub async fn commit(self) -> Result<(), sqlx::Error> {
+        self.0.into_inner().commit().await
+    }
+}
+
+impl Deref for PoolTransaction {
+    type Target = Transaction<'static>;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref()
+    }
+}
+
+impl DerefMut for PoolTransaction {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.0.as_mut()
+    }
+}
 
 // URI of a memory-only db.
 const MEMORY: &str = ":memory:";

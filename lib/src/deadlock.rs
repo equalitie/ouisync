@@ -49,9 +49,16 @@ impl<T> DeadlockGuard<T> {
         })
     }
 
-    #[cfg(test)]
     pub(crate) fn into_inner(self) -> T {
         self.inner
+    }
+
+    pub(crate) fn as_ref(&self) -> &T {
+        &self.inner
+    }
+
+    pub(crate) fn as_mut(&mut self) -> &mut T {
+        &mut self.inner
     }
 }
 
