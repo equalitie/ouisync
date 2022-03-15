@@ -12,11 +12,11 @@ use crate::{
     db,
     error::{Error, Result},
     sync::broadcast,
+    sync::{RwLock, RwLockReadGuard},
     version_vector::VersionVector,
 };
 
 use sqlx::Acquire;
-use tokio::sync::{RwLock, RwLockReadGuard};
 
 type LocatorHash = Hash;
 

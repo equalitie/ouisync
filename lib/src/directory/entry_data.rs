@@ -1,6 +1,7 @@
 use crate::{
     blob::{self, Shared},
     blob_id::BlobId,
+    sync::Mutex as AsyncMutex,
     version_vector::VersionVector,
 };
 use serde::{Deserialize, Serialize};
@@ -8,7 +9,6 @@ use std::{
     fmt,
     sync::{Mutex as BlockingMutex, Weak},
 };
-use tokio::sync::Mutex as AsyncMutex;
 
 //--------------------------------------------------------------------
 

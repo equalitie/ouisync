@@ -1,4 +1,7 @@
-use crate::error::{Error, Result};
+use crate::{
+    deadlock::DeadlockGuard,
+    error::{Error, Result},
+};
 use sqlx::{
     sqlite::{Sqlite, SqliteConnectOptions, SqliteConnection, SqlitePoolOptions},
     SqlitePool,
@@ -6,19 +9,73 @@ use sqlx::{
 use std::{
     borrow::Cow,
     convert::Infallible,
+    future::Future,
+    ops::{Deref, DerefMut},
+    panic::Location,
     path::{Path, PathBuf},
     str::FromStr,
 };
 use tokio::fs;
 
 /// Database connection pool.
-pub(crate) type Pool = SqlitePool;
+#[derive(Clone)]
+pub(crate) struct Pool(SqlitePool);
+
+impl Pool {
+    #[track_caller]
+    pub fn acquire(&self) -> impl Future<Output = Result<PoolConnection, sqlx::Error>> {
+        DeadlockGuard::try_wrap(self.0.acquire(), Location::caller())
+    }
+
+    #[track_caller]
+    pub fn begin(&self) -> impl Future<Output = Result<PoolTransaction, sqlx::Error>> + '_ {
+        let location = Location::caller();
+        async move {
+            Ok(PoolTransaction(
+                DeadlockGuard::try_wrap(self.0.begin(), location).await?,
+            ))
+        }
+    }
+}
 
 /// Database connection.
 pub type Connection = SqliteConnection;
 
+/// Pooled database connection
+pub(crate) type PoolConnection = DeadlockGuard<sqlx::pool::PoolConnection<Sqlite>>;
+
+#[cfg(test)]
+impl DeadlockGuard<sqlx::pool::PoolConnection<Sqlite>> {
+    pub fn detach(self) -> SqliteConnection {
+        self.into_inner().detach()
+    }
+}
+
 /// Database transaction
 pub type Transaction<'a> = sqlx::Transaction<'a, Sqlite>;
+
+/// Database transaction obtained from `Pool::begin`.
+pub struct PoolTransaction(DeadlockGuard<sqlx::Transaction<'static, Sqlite>>);
+
+impl PoolTransaction {
+    pub async fn commit(self) -> Result<(), sqlx::Error> {
+        self.0.into_inner().commit().await
+    }
+}
+
+impl Deref for PoolTransaction {
+    type Target = Transaction<'static>;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref()
+    }
+}
+
+impl DerefMut for PoolTransaction {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.0.as_mut()
+    }
+}
 
 // URI of a memory-only db.
 const MEMORY: &str = ":memory:";
@@ -102,6 +159,7 @@ async fn open_permanent(path: &Path, create_if_missing: bool) -> Result<Pool> {
                 .create_if_missing(create_if_missing),
         )
         .await
+        .map(Pool)
         .map_err(Error::ConnectToDb)
 }
 
@@ -117,6 +175,7 @@ async fn open_temporary() -> Result<Pool> {
                 .shared_cache(false),
         )
         .await
+        .map(Pool)
         .map_err(Error::ConnectToDb)
 }
 

@@ -7,6 +7,7 @@ use crate::{
     locator::Locator,
     version_vector::VersionVector,
 };
+use sqlx::Connection;
 use std::fmt;
 use std::io::SeekFrom;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
@@ -90,7 +91,8 @@ impl File {
             return Ok(());
         }
 
-        let mut tx = self.blob.db_pool().begin().await?;
+        let mut conn = self.blob.db_pool().acquire().await?;
+        let mut tx = conn.begin().await?;
         self.blob.flush_in_transaction(&mut tx).await?;
         self.parent.modify_entry(tx, None).await?;
 

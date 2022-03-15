@@ -24,7 +24,7 @@ use crate::{
     debug_printer::DebugPrinter,
     error::{Error, Result},
     repository::RepositoryId,
-    sync::broadcast,
+    sync::{broadcast, RwLock, RwLockReadGuard},
 };
 use futures_util::TryStreamExt;
 use std::{
@@ -33,7 +33,6 @@ use std::{
     sync::Arc,
 };
 use thiserror::Error;
-use tokio::sync::{RwLock, RwLockReadGuard};
 
 type SnapshotId = u32;
 

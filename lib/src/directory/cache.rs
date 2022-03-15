@@ -3,12 +3,12 @@ use crate::{
     branch::Branch,
     error::{Error, Result},
     locator::Locator,
+    sync::{Mutex, RwLock},
 };
 use std::{
     collections::{hash_map, HashMap},
     sync::{Arc, Weak},
 };
-use tokio::sync::{Mutex, RwLock};
 
 // Cache for open root directory
 pub(crate) struct RootDirectoryCache(Mutex<Weak<RwLock<Inner>>>);

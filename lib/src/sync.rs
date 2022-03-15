@@ -1,5 +1,8 @@
 //! Synchronization utilities
 
+use crate::deadlock::DeadlockGuard;
+use std::{future::Future, panic::Location};
+
 /// MPMC broadcast channel
 pub(crate) mod broadcast {
     pub use async_broadcast::Receiver;
@@ -59,3 +62,44 @@ pub(crate) mod broadcast {
         }
     }
 }
+
+/// Replacement for `tokio::sync::Mutex` instrumented for deadlock detection.
+pub struct Mutex<T>(tokio::sync::Mutex<T>);
+
+impl<T> Mutex<T> {
+    pub fn new(value: T) -> Self {
+        Self(tokio::sync::Mutex::new(value))
+    }
+
+    // NOTE: using `track_caller` so that the `Location` constructed inside points to where
+    // this function is called and not inside it. Also using `impl Future` return instead of
+    // `async fn` because `track_caller` doesn't work correctly with `async`.
+    #[track_caller]
+    pub fn lock(&self) -> impl Future<Output = MutexGuard<'_, T>> {
+        DeadlockGuard::wrap(self.0.lock(), Location::caller())
+    }
+}
+
+pub type MutexGuard<'a, T> = DeadlockGuard<tokio::sync::MutexGuard<'a, T>>;
+
+/// Replacement for `tokio::sync::RwLock` instrumented for deadlock detection.
+pub struct RwLock<T>(tokio::sync::RwLock<T>);
+
+impl<T> RwLock<T> {
+    pub fn new(value: T) -> Self {
+        Self(tokio::sync::RwLock::new(value))
+    }
+
+    #[track_caller]
+    pub fn read(&self) -> impl Future<Output = RwLockReadGuard<'_, T>> {
+        DeadlockGuard::wrap(self.0.read(), Location::caller())
+    }
+
+    #[track_caller]
+    pub fn write(&self) -> impl Future<Output = RwLockWriteGuard<'_, T>> {
+        DeadlockGuard::wrap(self.0.write(), Location::caller())
+    }
+}
+
+pub type RwLockReadGuard<'a, T> = DeadlockGuard<tokio::sync::RwLockReadGuard<'a, T>>;
+pub type RwLockWriteGuard<'a, T> = DeadlockGuard<tokio::sync::RwLockWriteGuard<'a, T>>;

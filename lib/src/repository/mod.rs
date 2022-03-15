@@ -25,6 +25,7 @@ use crate::{
     metadata, path,
     scoped_task::{self, ScopedJoinHandle},
     store,
+    sync::Mutex,
 };
 use camino::Utf8Path;
 use futures_util::future;
@@ -32,7 +33,6 @@ use std::{
     collections::{hash_map::Entry, HashMap},
     sync::Arc,
 };
-use tokio::sync::Mutex;
 
 pub struct Repository {
     shared: Arc<Shared>,

@@ -15,6 +15,7 @@ mod block;
 mod branch;
 mod config;
 mod db;
+mod deadlock;
 mod directory;
 mod error;
 mod ffi;
