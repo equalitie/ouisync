@@ -1,4 +1,7 @@
-use crate::error::{Error, Result};
+use crate::{
+    error::{Error, Result},
+    sync::InstrumentedGuard,
+};
 use sqlx::{
     sqlite::{Sqlite, SqliteConnectOptions, SqliteConnection, SqlitePoolOptions},
     SqlitePool,
@@ -7,6 +10,7 @@ use std::{
     borrow::Cow,
     convert::Infallible,
     future::Future,
+    panic::Location,
     path::{Path, PathBuf},
     str::FromStr,
 };
@@ -17,8 +21,9 @@ use tokio::fs;
 pub(crate) struct Pool(SqlitePool);
 
 impl Pool {
+    #[track_caller]
     pub fn acquire(&self) -> impl Future<Output = Result<PoolConnection, sqlx::Error>> {
-        self.0.acquire()
+        InstrumentedGuard::try_new(self.0.acquire(), Location::caller())
     }
 
     pub fn begin<'a>(
@@ -29,7 +34,14 @@ impl Pool {
 }
 
 /// Pooled database connection
-pub type PoolConnection = sqlx::pool::PoolConnection<Sqlite>;
+pub type PoolConnection = InstrumentedGuard<sqlx::pool::PoolConnection<Sqlite>>;
+
+#[cfg(test)]
+impl InstrumentedGuard<sqlx::pool::PoolConnection<Sqlite>> {
+    pub fn detach(self) -> SqliteConnection {
+        self.into_inner().detach()
+    }
+}
 
 /// Database connection.
 pub type Connection = SqliteConnection;

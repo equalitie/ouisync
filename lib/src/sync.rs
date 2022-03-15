@@ -1,6 +1,8 @@
 //! Synchronization utilities
 
-pub(crate) use self::instrumented::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
+pub(crate) use self::instrumented::{
+    Guard as InstrumentedGuard, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard,
+};
 
 /// MPMC broadcast channel
 pub(crate) mod broadcast {
@@ -120,7 +122,7 @@ mod instrumented {
     // acquired, released and when it's taking too long to become acquired (potential deadlock).
     pub struct Guard<T> {
         inner: T,
-        location: &'static Location<'static>,
+        _location: LogOnDrop,
         _handle: ScopedJoinHandle<()>,
     }
 
@@ -133,7 +135,7 @@ mod instrumented {
 
             Self {
                 inner,
-                location,
+                _location: LogOnDrop(location),
                 _handle: handle,
             }
         }
@@ -149,15 +151,22 @@ mod instrumented {
 
             Ok(Self {
                 inner: inner?,
-                location,
+                _location: LogOnDrop(location),
                 _handle: handle,
             })
         }
+
+        #[cfg(test)]
+        pub fn into_inner(self) -> T {
+            self.inner
+        }
     }
 
-    impl<T> Drop for Guard<T> {
+    struct LogOnDrop(&'static Location<'static>);
+
+    impl Drop for LogOnDrop {
         fn drop(&mut self) {
-            log::trace!("lock at {}: released", self.location);
+            log::trace!("lock at {}: released", self.0);
         }
     }
 
