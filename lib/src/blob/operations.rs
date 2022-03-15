@@ -10,10 +10,10 @@ use crate::{
     error::{Error, Result},
     index::BranchData,
     locator::Locator,
+    sync::MutexGuard,
 };
 use sqlx::Connection;
 use std::{convert::TryInto, io::SeekFrom};
-use tokio::sync::MutexGuard;
 
 pub(crate) struct Operations<'a> {
     pub(super) shared: MutexGuard<'a, Shared>,

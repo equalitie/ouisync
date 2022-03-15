@@ -1,5 +1,7 @@
 //! Synchronization utilities
 
+pub(crate) use self::instrumented::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
+
 /// MPMC broadcast channel
 pub(crate) mod broadcast {
     pub use async_broadcast::Receiver;
@@ -58,4 +60,9 @@ pub(crate) mod broadcast {
             self.tx.close();
         }
     }
+}
+
+/// Synchronization objects instrumented for deadlock detection.
+pub(super) mod instrumented {
+    pub use tokio::sync::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 }

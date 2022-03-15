@@ -7,13 +7,13 @@ use crate::{
     db,
     error::{Error, Result},
     locator::Locator,
+    sync::RwLockWriteGuard,
     version_vector::VersionVector,
 };
 use async_recursion::async_recursion;
 use futures_util::future;
 use serde::{Deserialize, Serialize};
 use std::collections::{btree_map, BTreeMap};
-use tokio::sync::RwLockWriteGuard;
 
 pub(super) struct Inner {
     pub blob: Blob,

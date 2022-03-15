@@ -1,9 +1,8 @@
 //! Innternal state of Blob
 
 use super::OpenBlock;
-use crate::{block::BLOCK_SIZE, branch::Branch, locator::Locator};
+use crate::{block::BLOCK_SIZE, branch::Branch, locator::Locator, sync::Mutex};
 use std::sync::{Arc, Weak};
-use tokio::sync::Mutex;
 
 // State unique to each instance of a blob.
 pub(super) struct Unique {

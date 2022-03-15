@@ -11,6 +11,7 @@ use crate::{
     db,
     error::Result,
     locator::Locator,
+    sync::Mutex,
 };
 use std::{
     convert::TryInto,
@@ -19,7 +20,6 @@ use std::{
     ops::{Deref, DerefMut},
     sync::Arc,
 };
-use tokio::sync::Mutex;
 use zeroize::Zeroize;
 
 // Using u64 instead of usize because HEADER_SIZE must be the same irrespective of whether we're on

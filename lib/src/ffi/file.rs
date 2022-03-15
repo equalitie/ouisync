@@ -6,6 +6,7 @@ use crate::{
     error::{Error, Result},
     file::File,
     repository::Repository,
+    sync::Mutex,
 };
 use std::{
     convert::TryInto,
@@ -14,7 +15,6 @@ use std::{
     slice,
     sync::Arc,
 };
-use tokio::sync::Mutex;
 
 pub struct FfiFile {
     file: File,

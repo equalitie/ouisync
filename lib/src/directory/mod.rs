@@ -31,11 +31,11 @@ use crate::{
     error::{Error, Result},
     file::File,
     locator::Locator,
+    sync::{RwLock, RwLockReadGuard, RwLockWriteGuard},
     version_vector::VersionVector,
 };
 use async_recursion::async_recursion;
 use std::sync::{Arc, Weak};
-use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 #[derive(Clone)]
 pub struct Directory {
