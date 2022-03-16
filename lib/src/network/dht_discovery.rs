@@ -4,6 +4,7 @@ use crate::{
     scoped_task::{self, ScopedJoinHandle},
 };
 use btdht::{InfoHash, MainlineDht};
+use chrono::{offset::Local, DateTime};
 use futures_util::{future, stream, StreamExt};
 use rand::Rng;
 use std::{
@@ -14,7 +15,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex, RwLock, Weak,
     },
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 use tokio::{
     net::{self, UdpSocket},
@@ -203,6 +204,8 @@ impl Lookup {
     ) -> ScopedJoinHandle<()> {
         scoped_task::spawn(async move {
             loop {
+                log::debug!("DHT Starting search for info hash: {:?}", info_hash);
+
                 // find peers for the repo and also announce that we have it.
                 let mut peers =
                     stream::iter(dhts.iter()).flat_map(|dht| dht.search(info_hash, true));
@@ -224,9 +227,23 @@ impl Lookup {
                 let duration =
                     rand::thread_rng().gen_range(MIN_DHT_ANNOUNCE_DELAY..MAX_DHT_ANNOUNCE_DELAY);
 
+                {
+                    let time: DateTime<Local> = (SystemTime::now() + duration).into();
+                    log::debug!(
+                        "DHT search for {:?} ended. Next one scheduled at {} (in {:?})",
+                        info_hash,
+                        time.format("%T"),
+                        duration
+                    );
+                }
+
                 select! {
-                    _ = time::sleep(duration) => (),
-                    _ = wake_up.changed() => (),
+                    _ = time::sleep(duration) => {
+                        log::debug!("DHT sleep duration passed")
+                    },
+                    _ = wake_up.changed() => {
+                        log::debug!("DHT wake up")
+                    },
                 }
             }
         })
