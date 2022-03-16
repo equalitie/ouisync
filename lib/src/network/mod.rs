@@ -1,7 +1,7 @@
 mod client;
 mod connection;
 mod crypto;
-mod dht_discovery;
+pub mod dht_discovery;
 mod ip_stack;
 mod local_discovery;
 mod message;
@@ -677,7 +677,7 @@ impl From<NetworkError> for Error {
     }
 }
 
-fn repository_info_hash(id: &RepositoryId) -> InfoHash {
+pub fn repository_info_hash(id: &RepositoryId) -> InfoHash {
     // Calculate the info hash by hashing the id with SHA3-256 and taking the first 20 bytes.
     // (bittorrent uses SHA-1 but that is less secure).
     // `unwrap` is OK because the byte slice has the correct length.
