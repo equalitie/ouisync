@@ -1,7 +1,7 @@
 //! Synchronization utilities
 
-use crate::deadlock::DeadlockGuard;
-use std::{future::Future, panic::Location};
+use crate::deadlock::{DeadlockGuard, DeadlockTracker};
+use std::future::Future;
 
 /// MPMC broadcast channel
 pub(crate) mod broadcast {
@@ -64,11 +64,17 @@ pub(crate) mod broadcast {
 }
 
 /// Replacement for `tokio::sync::Mutex` instrumented for deadlock detection.
-pub struct Mutex<T>(tokio::sync::Mutex<T>);
+pub struct Mutex<T> {
+    inner: tokio::sync::Mutex<T>,
+    deadlock_tracker: DeadlockTracker,
+}
 
 impl<T> Mutex<T> {
     pub fn new(value: T) -> Self {
-        Self(tokio::sync::Mutex::new(value))
+        Self {
+            inner: tokio::sync::Mutex::new(value),
+            deadlock_tracker: DeadlockTracker::new(),
+        }
     }
 
     // NOTE: using `track_caller` so that the `Location` constructed inside points to where
@@ -76,28 +82,34 @@ impl<T> Mutex<T> {
     // `async fn` because `track_caller` doesn't work correctly with `async`.
     #[track_caller]
     pub fn lock(&self) -> impl Future<Output = MutexGuard<'_, T>> {
-        DeadlockGuard::wrap(self.0.lock(), Location::caller())
+        DeadlockGuard::wrap(self.inner.lock(), self.deadlock_tracker.clone())
     }
 }
 
 pub type MutexGuard<'a, T> = DeadlockGuard<tokio::sync::MutexGuard<'a, T>>;
 
 /// Replacement for `tokio::sync::RwLock` instrumented for deadlock detection.
-pub struct RwLock<T>(tokio::sync::RwLock<T>);
+pub struct RwLock<T> {
+    inner: tokio::sync::RwLock<T>,
+    deadlock_tracker: DeadlockTracker,
+}
 
 impl<T> RwLock<T> {
     pub fn new(value: T) -> Self {
-        Self(tokio::sync::RwLock::new(value))
+        Self {
+            inner: tokio::sync::RwLock::new(value),
+            deadlock_tracker: DeadlockTracker::new(),
+        }
     }
 
     #[track_caller]
     pub fn read(&self) -> impl Future<Output = RwLockReadGuard<'_, T>> {
-        DeadlockGuard::wrap(self.0.read(), Location::caller())
+        DeadlockGuard::wrap(self.inner.read(), self.deadlock_tracker.clone())
     }
 
     #[track_caller]
     pub fn write(&self) -> impl Future<Output = RwLockWriteGuard<'_, T>> {
-        DeadlockGuard::wrap(self.0.write(), Location::caller())
+        DeadlockGuard::wrap(self.inner.write(), self.deadlock_tracker.clone())
     }
 }
 

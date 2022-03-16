@@ -1,5 +1,5 @@
 use crate::{
-    deadlock::DeadlockGuard,
+    deadlock::{DeadlockGuard, DeadlockTracker},
     error::{Error, Result},
 };
 use sqlx::{
@@ -11,7 +11,6 @@ use std::{
     convert::Infallible,
     future::Future,
     ops::{Deref, DerefMut},
-    panic::Location,
     path::{Path, PathBuf},
     str::FromStr,
 };
@@ -19,22 +18,28 @@ use tokio::fs;
 
 /// Database connection pool.
 #[derive(Clone)]
-pub(crate) struct Pool(SqlitePool);
+pub(crate) struct Pool {
+    inner: SqlitePool,
+    deadlock_tracker: DeadlockTracker,
+}
 
 impl Pool {
+    fn new(inner: SqlitePool) -> Self {
+        Self {
+            inner,
+            deadlock_tracker: DeadlockTracker::new(),
+        }
+    }
+
     #[track_caller]
     pub fn acquire(&self) -> impl Future<Output = Result<PoolConnection, sqlx::Error>> {
-        DeadlockGuard::try_wrap(self.0.acquire(), Location::caller())
+        DeadlockGuard::try_wrap(self.inner.acquire(), self.deadlock_tracker.clone())
     }
 
     #[track_caller]
     pub fn begin(&self) -> impl Future<Output = Result<PoolTransaction, sqlx::Error>> + '_ {
-        let location = Location::caller();
-        async move {
-            Ok(PoolTransaction(
-                DeadlockGuard::try_wrap(self.0.begin(), location).await?,
-            ))
-        }
+        let future = DeadlockGuard::try_wrap(self.inner.begin(), self.deadlock_tracker.clone());
+        async move { Ok(PoolTransaction(future.await?)) }
     }
 }
 
@@ -159,7 +164,7 @@ async fn open_permanent(path: &Path, create_if_missing: bool) -> Result<Pool> {
                 .create_if_missing(create_if_missing),
         )
         .await
-        .map(Pool)
+        .map(Pool::new)
         .map_err(Error::ConnectToDb)
 }
 
@@ -175,7 +180,7 @@ async fn open_temporary() -> Result<Pool> {
                 .shared_cache(false),
         )
         .await
-        .map(Pool)
+        .map(Pool::new)
         .map_err(Error::ConnectToDb)
 }
 

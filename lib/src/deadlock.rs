@@ -1,52 +1,60 @@
 //! Utilities for deadlock detection
 
-use crate::scoped_task::{self, ScopedJoinHandle};
+use slab::Slab;
 use std::{
+    fmt,
     future::Future,
     ops::{Deref, DerefMut},
     panic::Location,
+    sync::{Arc, Mutex as BlockingMutex},
     time::Duration,
 };
 use tokio::time;
 
 const DEADLOCK_WARNING_TIMEOUT: Duration = Duration::from_secs(5);
 
-// Wrapper for various lock guard types which prints a log message when the lock is being
-// acquired, released and when it's taking too long to become acquired (potential deadlock).
+// Wrapper for various lock guard types which logs a warning when a potential deadlock is detected.
 pub struct DeadlockGuard<T> {
     inner: T,
-    _location: LogOnDrop,
-    _handle: ScopedJoinHandle<()>,
+    _acquire: Acquire,
 }
 
 impl<T> DeadlockGuard<T> {
-    pub(crate) async fn wrap<F>(inner: F, location: &'static Location<'static>) -> Self
+    #[track_caller]
+    pub(crate) fn wrap<F>(inner: F, tracker: DeadlockTracker) -> impl Future<Output = Self>
     where
         F: Future<Output = T>,
     {
-        let (inner, handle) = acquire(inner, location).await;
+        let acquire = tracker.acquire();
 
-        Self {
-            inner,
-            _location: LogOnDrop(location),
-            _handle: handle,
+        async move {
+            let inner = detect_deadlock(inner, &tracker).await;
+
+            Self {
+                inner,
+                _acquire: acquire,
+            }
         }
     }
 
-    pub(crate) async fn try_wrap<F, E>(
+    #[track_caller]
+    pub(crate) fn try_wrap<F, E>(
         inner: F,
-        location: &'static Location<'static>,
-    ) -> Result<Self, E>
+        tracker: DeadlockTracker,
+    ) -> impl Future<Output = Result<Self, E>>
     where
         F: Future<Output = Result<T, E>>,
     {
-        let (inner, handle) = acquire(inner, location).await;
+        let acquire = tracker.acquire();
 
-        Ok(Self {
-            inner: inner?,
-            _location: LogOnDrop(location),
-            _handle: handle,
-        })
+        async move {
+            let inner = detect_deadlock(inner, &tracker).await;
+
+            Ok(Self {
+                inner: inner?,
+                _acquire: acquire,
+            })
+        }
     }
 
     pub(crate) fn into_inner(self) -> T {
@@ -82,39 +90,66 @@ where
     }
 }
 
-async fn acquire<F>(
-    inner: F,
-    location: &'static Location<'static>,
-) -> (F::Output, ScopedJoinHandle<()>)
+/// Tracks all locations when a given lock is currently being acquired.
+#[derive(Clone)]
+pub(crate) struct DeadlockTracker {
+    locations: Arc<BlockingMutex<Slab<&'static Location<'static>>>>,
+}
+
+impl DeadlockTracker {
+    pub fn new() -> Self {
+        Self {
+            locations: Arc::new(BlockingMutex::new(Slab::new())),
+        }
+    }
+
+    #[track_caller]
+    fn acquire(&self) -> Acquire {
+        let key = self.locations.lock().unwrap().insert(Location::caller());
+
+        Acquire {
+            locations: self.locations.clone(),
+            key,
+        }
+    }
+}
+
+impl fmt::Display for DeadlockTracker {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let locations = self.locations.lock().unwrap();
+        let mut comma = false;
+
+        for (_, location) in &*locations {
+            write!(f, "{}{}", if comma { ", " } else { "" }, location)?;
+            comma = true;
+        }
+
+        Ok(())
+    }
+}
+
+struct Acquire {
+    locations: Arc<BlockingMutex<Slab<&'static Location<'static>>>>,
+    key: usize,
+}
+
+impl Drop for Acquire {
+    fn drop(&mut self) {
+        self.locations.lock().unwrap().remove(self.key);
+    }
+}
+
+async fn detect_deadlock<F>(inner: F, tracker: &DeadlockTracker) -> F::Output
 where
     F: Future,
 {
     tokio::pin!(inner);
 
-    let inner = match time::timeout(DEADLOCK_WARNING_TIMEOUT, &mut inner).await {
+    match time::timeout(DEADLOCK_WARNING_TIMEOUT, &mut inner).await {
         Ok(inner) => inner,
         Err(_) => {
-            // Warn when we are taking too long to acquire the lock.
-            log::warn!("lock at {}: excessive wait (deadlock?)", location);
+            log::warn!("potential deadlock at {}", tracker);
             inner.await
         }
-    };
-
-    log::trace!("lock at {}: acquired", location);
-
-    // Warn when we are taking too long holding the lock.
-    let handle = scoped_task::spawn(async move {
-        time::sleep(DEADLOCK_WARNING_TIMEOUT).await;
-        log::warn!("lock at {}: excessive hold (deadlock?)", location);
-    });
-
-    (inner, handle)
-}
-
-struct LogOnDrop(&'static Location<'static>);
-
-impl Drop for LogOnDrop {
-    fn drop(&mut self) {
-        log::trace!("lock at {}: released", self.0);
     }
 }
