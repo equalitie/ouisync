@@ -30,7 +30,7 @@ pub const DHT_ROUTERS: &[&str] = &["router.bittorrent.com:6881", "dht.transmissi
 
 // Interval for the delay before a repository is re-announced on the DHT. The actual delay is an
 // uniformly random value from this interval.
-// BEP5 indicatest that "After 15 minutes of inactivity, a node becomes questionable." so try not
+// BEP5 indicates that "After 15 minutes of inactivity, a node becomes questionable." so try not
 // to get too close to that value to avoid DHT churn.
 const MIN_DHT_ANNOUNCE_DELAY: Duration = Duration::from_secs(5 * 60);
 const MAX_DHT_ANNOUNCE_DELAY: Duration = Duration::from_secs(12 * 60);
@@ -166,7 +166,11 @@ struct Lookup {
 
 impl Lookup {
     fn new(dhts: IpStack<MainlineDht>, info_hash: InfoHash) -> Self {
-        let (wake_up_tx, wake_up_rx) = watch::channel(());
+        let (wake_up_tx, mut wake_up_rx) = watch::channel(());
+        // Mark the initial value as seen so the change notification is not triggered immediately
+        // but only when we create the first request.
+        wake_up_rx.borrow_and_update();
+
         let seen_peers = Arc::new(RwLock::new(Default::default()));
         let requests = Arc::new(Mutex::new(HashMap::new()));
 
@@ -203,6 +207,9 @@ impl Lookup {
         mut wake_up: watch::Receiver<()>,
     ) -> ScopedJoinHandle<()> {
         scoped_task::spawn(async move {
+            // Wait for the first request to be created
+            wake_up.changed().await.unwrap_or(());
+
             loop {
                 log::debug!("DHT Starting search for info hash: {:?}", info_hash);
 
