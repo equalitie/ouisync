@@ -153,6 +153,8 @@ fn setup_logger() {
                 FilterBuilder::new()
                     // disable logs from dependencies to avoid log spam
                     .filter(None, LevelFilter::Off)
+                    // but do show DHT routing table stats
+                    .filter(Some("btdht::routing"), LevelFilter::Debug)
                     // TODO: allow changing the log level
                     .filter(Some(env!("CARGO_PKG_NAME")), LevelFilter::Trace)
                     .build(),
