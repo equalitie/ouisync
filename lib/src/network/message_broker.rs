@@ -28,13 +28,10 @@ impl ServerStream {
     }
 
     pub async fn recv(&mut self) -> Option<Request> {
-        let rq = self.rx.recv().await?;
-        log::trace!("server: recv {:?}", rq);
-        Some(rq)
+        self.rx.recv().await
     }
 
     pub async fn send(&self, response: Response) -> bool {
-        log::trace!("server: send {:?}", response);
         self.tx.send(Content::Response(response)).await.is_ok()
     }
 }
