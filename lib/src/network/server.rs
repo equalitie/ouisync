@@ -73,10 +73,11 @@ impl Server {
         }
 
         log::debug!(
-            "server: handle_branch_changed(branch_id: {:?}, hash: {:?}, vv: {:?})",
+            "server: handle_branch_changed(branch_id: {:?}, hash: {:?}, vv: {:?}, missing blocks: {})",
             branch_id,
             root_node.proof.hash,
-            root_node.proof.version_vector
+            root_node.proof.version_vector,
+            root_node.summary.missing_blocks_count(),
         );
 
         let response = Response::RootNode {
