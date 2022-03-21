@@ -1,9 +1,16 @@
 use ouisync::{
-    AccessSecrets, ConfigStore, Error, MasterSecret, Network, NetworkOptions, Repository, Store,
+    AccessMode, AccessSecrets, ConfigStore, Error, MasterSecret, Network, NetworkOptions,
+    Repository, Store,
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
-use std::{net::Ipv4Addr, time::Duration};
+use std::{
+    future::Future,
+    net::{Ipv4Addr, SocketAddr},
+    time::Duration,
+};
 use tokio::time;
+
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[tokio::test(flavor = "multi_thread")]
 async fn relink_repository() {
@@ -24,7 +31,11 @@ async fn relink_repository() {
     file_a.flush().await.unwrap();
 
     // Wait until the file is seen by B
-    expect_file_content(&repo_b, "test.txt", b"first").await;
+    with_timeout(
+        DEFAULT_TIMEOUT,
+        expect_file_content(&repo_b, "test.txt", b"first"),
+    )
+    .await;
 
     // Unlink B's repo
     reg_b.cancel().await;
@@ -38,7 +49,11 @@ async fn relink_repository() {
     let _reg_b = network_b.handle().register(repo_b.index().clone()).await;
 
     // Wait until the file is updated
-    expect_file_content(&repo_b, "test.txt", b"second").await;
+    with_timeout(
+        DEFAULT_TIMEOUT,
+        expect_file_content(&repo_b, "test.txt", b"second"),
+    )
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -53,7 +68,7 @@ async fn remove_remote_file() {
     let repo_b = create_repo_with_secrets(&mut rng, repo_a.secrets().clone()).await;
     let _reg_b = network_b.handle().register(repo_b.index().clone()).await;
 
-    // Create a file by A and wait until B sees itb
+    // Create a file by A and wait until B sees it.
     repo_a
         .create_file("test.txt")
         .await
@@ -62,12 +77,61 @@ async fn remove_remote_file() {
         .await
         .unwrap();
 
-    expect_file_content(&repo_b, "test.txt", &[]).await;
+    with_timeout(
+        DEFAULT_TIMEOUT,
+        expect_file_content(&repo_b, "test.txt", &[]),
+    )
+    .await;
 
     // Delete the file by B
     repo_b.remove_entry("test.txt").await.unwrap();
 
     // TODO: wait until A sees the file being deleted
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn relay() {
+    // Simulate two peers that can't connect to each other but both can connect to a third peer.
+
+    env_logger::init();
+
+    let mut rng = StdRng::seed_from_u64(0);
+
+    // The "relay" peer.
+    let network_r = Network::new(&test_network_options(), ConfigStore::null())
+        .await
+        .unwrap();
+
+    let network_a = create_peer_connected_to(*network_r.listener_local_addr()).await;
+    let network_b = create_peer_connected_to(*network_r.listener_local_addr()).await;
+
+    let repo_a = create_repo(&mut rng).await;
+    let _reg_a = network_a.handle().register(repo_a.index().clone()).await;
+
+    let repo_b = create_repo_with_secrets(&mut rng, repo_a.secrets().clone()).await;
+    let _reg_b = network_b.handle().register(repo_b.index().clone()).await;
+
+    let repo_r =
+        create_repo_with_secrets(&mut rng, repo_a.secrets().with_mode(AccessMode::Blind)).await;
+    let _reg_r = network_r.handle().register(repo_r.index().clone()).await;
+
+    // There used to be a deadlock that got triggered only when transferring a sufficiently large
+    // file. 20 blocks seems to do it.
+    let mut content = vec![0; 20 * 32 * 1024];
+    rng.fill(&mut content[..]);
+
+    // Create a file by A and wait until B sees it. The file must pass through R because A and B
+    // are not connected to each other.
+    let mut file = repo_a.create_file("test.dat").await.unwrap();
+    file.write(&content).await.unwrap();
+    file.flush().await.unwrap();
+    drop(file);
+
+    with_timeout(
+        Duration::from_secs(60),
+        expect_file_content(&repo_b, "test.dat", &content),
+    )
+    .await;
 }
 
 // Create two `Network` instances connected together.
@@ -76,17 +140,22 @@ async fn create_connected_peers() -> (Network, Network) {
         .await
         .unwrap();
 
-    let b = Network::new(
+    let b = create_peer_connected_to(*a.listener_local_addr()).await;
+
+    (a, b)
+}
+
+// Create a `Network` instance connected only to the given address.
+async fn create_peer_connected_to(addr: SocketAddr) -> Network {
+    Network::new(
         &NetworkOptions {
-            peers: vec![*a.listener_local_addr()],
+            peers: vec![addr],
             ..test_network_options()
         },
         ConfigStore::null(),
     )
     .await
-    .unwrap();
-
-    (a, b)
+    .unwrap()
 }
 
 async fn create_repo(rng: &mut StdRng) -> Repository {
@@ -120,26 +189,28 @@ fn test_network_options() -> NetworkOptions {
 // file content matches.
 async fn expect_file_content(repo: &Repository, path: &str, expected_content: &[u8]) {
     let mut rx = repo.subscribe();
+    while rx.recv().await.is_ok() {
+        let mut file = match repo.open_file(path).await {
+            Ok(file) => file,
+            Err(Error::EntryNotFound | Error::BlockNotFound(_)) => continue,
+            Err(error) => panic!("unexpected error: {:?}", error),
+        };
 
-    time::timeout(Duration::from_secs(5), async {
-        while rx.recv().await.is_ok() {
-            let mut file = match repo.open_file(path).await {
-                Ok(file) => file,
-                Err(Error::EntryNotFound | Error::BlockNotFound(_)) => continue,
-                Err(error) => panic!("unexpected error: {:?}", error),
-            };
+        let actual_content = match file.read_to_end().await {
+            Ok(content) => content,
+            Err(Error::BlockNotFound(_)) => continue,
+            Err(error) => panic!("unexpected error: {:?}", error),
+        };
 
-            let actual_content = match file.read_to_end().await {
-                Ok(content) => content,
-                Err(Error::BlockNotFound(_)) => continue,
-                Err(error) => panic!("unexpected error: {:?}", error),
-            };
-
-            if actual_content == expected_content {
-                break;
-            }
+        if actual_content == expected_content {
+            break;
         }
-    })
-    .await
-    .expect("timeout waiting for expected file content")
+    }
+}
+
+async fn with_timeout<F>(timeout: Duration, f: F) -> F::Output
+where
+    F: Future,
+{
+    time::timeout(timeout, f).await.expect("timeout expired")
 }
