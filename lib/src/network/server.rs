@@ -56,7 +56,7 @@ impl Server {
         Ok(())
     }
 
-    async fn handle_branch_changed(&mut self, branch_id: PublicKey) -> Result<()> {
+    async fn handle_branch_changed(&self, branch_id: PublicKey) -> Result<()> {
         let branches = self.index.branches().await;
         let branch = if let Some(branch) = branches.get(&branch_id) {
             branch
@@ -94,7 +94,7 @@ impl Server {
         Ok(())
     }
 
-    async fn handle_request(&mut self, request: Request) -> Result<()> {
+    async fn handle_request(&self, request: Request) -> Result<()> {
         match request {
             Request::ChildNodes(parent_hash) => self.handle_child_nodes(parent_hash).await,
             Request::Block(id) => self.handle_block(id).await,
