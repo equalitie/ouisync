@@ -2,7 +2,7 @@ use super::{
     get_bucket, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, Summary, INNER_LAYER_COUNT,
 };
 use crate::{
-    block::{BlockId, BlockNonce, BLOCK_SIZE},
+    block::{BlockData, BlockId, BlockNonce, BLOCK_SIZE},
     crypto::{Hash, Hashable},
 };
 use rand::Rng;
@@ -29,7 +29,7 @@ impl Snapshot {
         let mut leaves = HashMap::new();
 
         for (block, locator) in blocks_and_locators {
-            let id = BlockId::from_content(&block.content);
+            let id = block.data.id;
             blocks.insert(id, block);
 
             let node = LeafNode::present(locator, id);
@@ -123,7 +123,7 @@ impl<'a> InnerLayer<'a> {
 
 #[derive(Clone)]
 pub(crate) struct Block {
-    pub content: Vec<u8>,
+    pub data: BlockData,
     pub nonce: BlockNonce,
 }
 
@@ -134,7 +134,10 @@ impl Block {
 
         let nonce = rng.gen();
 
-        Self { content, nonce }
+        Self {
+            data: BlockData::from(content.into_boxed_slice()),
+            nonce,
+        }
     }
 }
 

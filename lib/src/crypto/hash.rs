@@ -6,7 +6,9 @@ use serde::{Deserialize, Serialize};
 use std::{
     array::TryFromSliceError,
     collections::{BTreeMap, BTreeSet},
-    fmt, slice,
+    fmt,
+    ops::Deref,
+    slice,
 };
 
 #[cfg(test)]
@@ -241,3 +243,46 @@ macro_rules! impl_hashable_for_tuple {
 impl_hashable_for_tuple!(T0 T1);
 impl_hashable_for_tuple!(T0 T1 T2);
 impl_hashable_for_tuple!(T0 T1 T2 T3);
+
+/// Wrapper that caches the hash of the inner value.
+pub(crate) struct CacheHash<T> {
+    owner: T,
+    hash: Hash,
+}
+
+impl<T> CacheHash<T> {
+    pub fn into_inner(self) -> T {
+        self.owner
+    }
+}
+
+impl<T> Deref for CacheHash<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.owner
+    }
+}
+
+impl<T> From<T> for CacheHash<T>
+where
+    T: Hashable,
+{
+    fn from(owner: T) -> Self {
+        let hash = owner.hash();
+        Self { owner, hash }
+    }
+}
+
+impl<T> Hashable for CacheHash<T>
+where
+    T: Hashable,
+{
+    fn update_hash<S: Digest>(&self, state: &mut S) {
+        self.owner.update_hash(state)
+    }
+
+    fn hash(&self) -> Hash {
+        self.hash
+    }
+}

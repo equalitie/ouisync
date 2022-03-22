@@ -121,4 +121,8 @@ impl Summary {
     pub fn is_complete(&self) -> bool {
         self.is_complete
     }
+
+    pub fn missing_blocks_count(&self) -> u64 {
+        self.missing_blocks_count
+    }
 }

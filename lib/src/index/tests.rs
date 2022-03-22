@@ -205,7 +205,7 @@ async fn receive_valid_child_nodes() {
     for layer in snapshot.inner_layers() {
         for (hash, inner_nodes) in layer.inner_maps() {
             index
-                .receive_inner_nodes(inner_nodes.clone())
+                .receive_inner_nodes(inner_nodes.clone().into())
                 .await
                 .unwrap();
 
@@ -219,7 +219,10 @@ async fn receive_valid_child_nodes() {
     }
 
     for (hash, leaf_nodes) in snapshot.leaf_sets() {
-        index.receive_leaf_nodes(leaf_nodes.clone()).await.unwrap();
+        index
+            .receive_leaf_nodes(leaf_nodes.clone().into())
+            .await
+            .unwrap();
 
         assert!(
             !LeafNode::load_children(&mut index.pool.acquire().await.unwrap(), hash)
@@ -245,7 +248,7 @@ async fn receive_child_nodes_with_missing_root_parent() {
 
     for layer in snapshot.inner_layers() {
         let (hash, inner_nodes) = layer.inner_maps().next().unwrap();
-        let result = index.receive_inner_nodes(inner_nodes.clone()).await;
+        let result = index.receive_inner_nodes(inner_nodes.clone().into()).await;
         assert_matches!(result, Err(ReceiveError::ParentNodeNotFound));
 
         // The orphaned inner nodes were not written to the db.
@@ -256,7 +259,7 @@ async fn receive_child_nodes_with_missing_root_parent() {
     }
 
     let (hash, leaf_nodes) = snapshot.leaf_sets().next().unwrap();
-    let result = index.receive_leaf_nodes(leaf_nodes.clone()).await;
+    let result = index.receive_leaf_nodes(leaf_nodes.clone().into()).await;
     assert_matches!(result, Err(ReceiveError::ParentNodeNotFound));
 
     // The orphaned leaf nodes were not written to the db.
@@ -294,16 +297,22 @@ async fn does_not_delete_old_branch_until_new_branch_is_complete() {
 
     for layer in snapshot0.inner_layers() {
         for (_, nodes) in layer.inner_maps() {
-            index.receive_inner_nodes(nodes.clone()).await.unwrap();
+            index
+                .receive_inner_nodes(nodes.clone().into())
+                .await
+                .unwrap();
         }
     }
 
     for (_, nodes) in snapshot0.leaf_sets() {
-        index.receive_leaf_nodes(nodes.clone()).await.unwrap();
+        index
+            .receive_leaf_nodes(nodes.clone().into())
+            .await
+            .unwrap();
     }
 
     for block in snapshot0.blocks().values() {
-        store::write_received_block(&index, &block.content, &block.nonce)
+        store::write_received_block(&index, &block.data, &block.nonce)
             .await
             .unwrap();
     }

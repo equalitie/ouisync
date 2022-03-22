@@ -1,32 +1,51 @@
-use super::{
-    message::{Request, Response},
-    message_broker::ClientStream,
-};
+use super::message::{Content, Request, Response};
 use crate::{
-    block::BlockNonce,
+    block::{BlockData, BlockNonce},
+    crypto::{CacheHash, Hashable},
     error::{Error, Result},
     index::{Index, InnerNodeMap, LeafNodeSet, ReceiveError, Summary, UntrustedProof},
     store,
 };
+use std::time::Duration;
+use tokio::{select, sync::mpsc, time};
+
+const REPORT_INTERVAL: Duration = Duration::from_secs(1);
 
 pub(crate) struct Client {
     index: Index,
-    stream: ClientStream,
+    tx: Sender,
+    rx: Receiver,
+    report: bool,
 }
 
 impl Client {
-    pub fn new(index: Index, stream: ClientStream) -> Self {
-        Self { index, stream }
+    pub fn new(index: Index, tx: mpsc::Sender<Content>, rx: mpsc::Receiver<Response>) -> Self {
+        Self {
+            index,
+            tx: Sender(tx),
+            rx,
+            report: true,
+        }
     }
 
     pub async fn run(&mut self) -> Result<()> {
-        while let Some(response) = self.stream.recv().await {
-            match self.handle_response(response).await {
-                Ok(()) => {}
-                Err(error @ (ReceiveError::InvalidProof | ReceiveError::ParentNodeNotFound)) => {
-                    log::warn!("failed to handle response: {}", error)
+        let mut report_interval = time::interval(REPORT_INTERVAL);
+
+        loop {
+            select! {
+                Some(response) = self.rx.recv() => {
+                    match self.handle_response(response).await {
+                        Ok(()) => {}
+                        Err(
+                            error @ (ReceiveError::InvalidProof | ReceiveError::ParentNodeNotFound),
+                        ) => {
+                            log::warn!("failed to handle response: {}", error)
+                        }
+                        Err(ReceiveError::Fatal(error)) => return Err(error),
+                    }
                 }
-                Err(ReceiveError::Fatal(error)) => return Err(error),
+                _ = report_interval.tick() => self.report().await?,
+                else => break,
             }
         }
 
@@ -49,44 +68,91 @@ impl Client {
         proof: UntrustedProof,
         summary: Summary,
     ) -> Result<(), ReceiveError> {
+        log::trace!(
+            "client: handle_root_node(hash: {:?}, vv: {:?}, missing_blocks: {})",
+            proof.hash,
+            proof.version_vector,
+            summary.missing_blocks_count()
+        );
+
         let hash = proof.hash;
         let updated = self.index.receive_root_node(proof, summary).await?;
 
         if updated {
-            self.stream.send(Request::ChildNodes(hash)).await;
+            self.tx.send(Request::ChildNodes(hash)).await;
         }
 
         Ok(())
     }
 
     async fn handle_inner_nodes(&self, nodes: InnerNodeMap) -> Result<(), ReceiveError> {
+        let nodes = CacheHash::from(nodes);
+        log::trace!("client: handle_inner_nodes({:?})", nodes.hash());
+
         let updated = self.index.receive_inner_nodes(nodes).await?;
 
         for hash in updated {
-            self.stream.send(Request::ChildNodes(hash)).await;
+            self.tx.send(Request::ChildNodes(hash)).await;
         }
 
         Ok(())
     }
 
-    async fn handle_leaf_nodes(&self, nodes: LeafNodeSet) -> Result<(), ReceiveError> {
+    async fn handle_leaf_nodes(&mut self, nodes: LeafNodeSet) -> Result<(), ReceiveError> {
+        let nodes = CacheHash::from(nodes);
+        log::trace!("client: handle_leaf_nodes({:?})", nodes.hash());
+
         let updated = self.index.receive_leaf_nodes(nodes).await?;
+
+        if !updated.is_empty() {
+            self.report = true;
+        }
 
         for block_id in updated {
             // TODO: avoid multiple clients downloading the same block
-            self.stream.send(Request::Block(block_id)).await;
+            self.tx.send(Request::Block(block_id)).await;
         }
 
         Ok(())
     }
 
-    async fn handle_block(&self, content: Box<[u8]>, nonce: BlockNonce) -> Result<()> {
-        match store::write_received_block(&self.index, &content, &nonce).await {
-            Ok(_) => Ok(()),
+    async fn handle_block(&mut self, content: Box<[u8]>, nonce: BlockNonce) -> Result<()> {
+        let data = BlockData::from(content);
+        log::trace!("client: handle_block({:?})", data.id);
+
+        match store::write_received_block(&self.index, &data, &nonce).await {
+            Ok(_) => {
+                self.report = true;
+                Ok(())
+            }
             // Ignore `BlockNotReferenced` errors as they only mean that the block is no longer
             // needed.
             Err(Error::BlockNotReferenced) => Ok(()),
             Err(e) => Err(e),
         }
     }
+
+    async fn report(&mut self) -> Result<()> {
+        if !self.report {
+            return Ok(());
+        }
+
+        log::debug!(
+            "client: missing blocks: {}",
+            store::count_missing_blocks(&mut *self.index.pool.acquire().await?).await?
+        );
+        self.report = false;
+
+        Ok(())
+    }
 }
+
+struct Sender(mpsc::Sender<Content>);
+
+impl Sender {
+    async fn send(&self, request: Request) -> bool {
+        self.0.send(Content::Request(request)).await.is_ok()
+    }
+}
+
+type Receiver = mpsc::Receiver<Response>;

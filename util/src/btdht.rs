@@ -4,7 +4,11 @@ use ouisync_lib::{
     network::{self, dht_discovery},
     ShareToken,
 };
-use std::{collections::HashSet, io, net::{Ipv4Addr, Ipv6Addr}};
+use std::{
+    collections::HashSet,
+    io,
+    net::{Ipv4Addr, Ipv6Addr},
+};
 use structopt::StructOpt;
 use tokio::{net::UdpSocket, task};
 
@@ -32,28 +36,28 @@ async fn main() -> io::Result<()> {
         println!("  {:?}", router);
     }
 
-    let dht_v4 = socket_v4.map(|socket|
+    let dht_v4 = socket_v4.map(|socket| {
         MainlineDht::builder()
             .add_routers(ipv4_routers)
             .set_read_only(true)
             .start(socket)
-    );
+    });
 
-    let dht_v6 = socket_v6.map(|socket|
+    let dht_v6 = socket_v6.map(|socket| {
         MainlineDht::builder()
             .add_routers(ipv6_routers)
             .set_read_only(true)
             .start(socket)
-    );
+    });
 
     let task = task::spawn(async move {
         if let Some(dht) = dht_v4 {
-            println!("");
+            println!();
             lookup("IPv4", &dht, &options.token).await;
         }
 
         if let Some(dht) = dht_v6 {
-            println!("");
+            println!();
             lookup("IPv6", &dht, &options.token).await;
         }
     });
@@ -65,14 +69,14 @@ async fn main() -> io::Result<()> {
 
 async fn lookup(prefix: &str, dht: &MainlineDht, token: &ShareToken) {
     println!("{} Bootstrapping...", prefix);
-    
+
     if dht.bootstrapped().await {
         let mut seen_peers = HashSet::new();
         let info_hash = network::repository_info_hash(token.id());
-    
+
         println!("{} Searching for peers...", prefix);
         let mut peers = dht.search(info_hash, false);
-    
+
         while let Some(peer) = peers.next().await {
             if seen_peers.insert(peer) {
                 println!("  {:?}", peer);

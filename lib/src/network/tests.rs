@@ -1,7 +1,6 @@
 use super::{
     client::Client,
     message::{Content, Request, Response},
-    message_broker::{ClientStream, ServerStream},
     server::Server,
 };
 use crate::{
@@ -106,7 +105,7 @@ async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed:
     let drive = async {
         for (id, block) in snapshot.blocks() {
             // Write the block by replica A.
-            store::write_received_block(&a_index, &block.content, &block.nonce)
+            store::write_received_block(&a_index, &block.data, &block.nonce)
                 .await
                 .unwrap();
 
@@ -157,12 +156,18 @@ async fn save_snapshot(
 
     for layer in snapshot.inner_layers() {
         for (_, nodes) in layer.inner_maps() {
-            index.receive_inner_nodes(nodes.clone()).await.unwrap();
+            index
+                .receive_inner_nodes(nodes.clone().into())
+                .await
+                .unwrap();
         }
     }
 
     for (_, nodes) in snapshot.leaf_sets() {
-        index.receive_leaf_nodes(nodes.clone()).await.unwrap();
+        index
+            .receive_leaf_nodes(nodes.clone().into())
+            .await
+            .unwrap();
     }
 }
 
@@ -233,7 +238,7 @@ async fn create_block(
 
 async fn write_all_blocks(index: &Index, snapshot: &Snapshot) {
     for block in snapshot.blocks().values() {
-        store::write_received_block(index, &block.content, &block.nonce)
+        store::write_received_block(index, &block.data, &block.nonce)
             .await
             .unwrap();
     }
@@ -278,8 +283,7 @@ where
 fn create_server(index: Index) -> (Server, mpsc::Receiver<Content>, mpsc::Sender<Request>) {
     let (send_tx, send_rx) = mpsc::channel(1);
     let (recv_tx, recv_rx) = mpsc::channel(CAPACITY);
-    let stream = ServerStream::new(send_tx, recv_rx);
-    let server = Server::new(index, stream);
+    let server = Server::new(index, send_tx, recv_rx);
 
     (server, send_rx, recv_tx)
 }
@@ -287,8 +291,7 @@ fn create_server(index: Index) -> (Server, mpsc::Receiver<Content>, mpsc::Sender
 fn create_client(index: Index) -> (Client, mpsc::Receiver<Content>, mpsc::Sender<Response>) {
     let (send_tx, send_rx) = mpsc::channel(1);
     let (recv_tx, recv_rx) = mpsc::channel(CAPACITY);
-    let stream = ClientStream::new(send_tx, recv_rx);
-    let client = Client::new(index, stream);
+    let client = Client::new(index, send_tx, recv_rx);
 
     (client, send_rx, recv_tx)
 }
