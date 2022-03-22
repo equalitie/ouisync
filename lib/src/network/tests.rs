@@ -1,7 +1,7 @@
 use super::{
     client::Client,
     message::{Content, Request, Response},
-    message_broker::{ClientStream, ServerStream},
+    message_broker::ClientStream,
     server::Server,
 };
 use crate::{
@@ -278,8 +278,7 @@ where
 fn create_server(index: Index) -> (Server, mpsc::Receiver<Content>, mpsc::Sender<Request>) {
     let (send_tx, send_rx) = mpsc::channel(1);
     let (recv_tx, recv_rx) = mpsc::channel(CAPACITY);
-    let stream = ServerStream::new(send_tx, recv_rx);
-    let server = Server::new(index, stream);
+    let server = Server::new(index, send_tx, recv_rx);
 
     (server, send_rx, recv_tx)
 }

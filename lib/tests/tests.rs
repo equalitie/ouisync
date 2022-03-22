@@ -93,8 +93,6 @@ async fn remove_remote_file() {
 async fn relay() {
     // Simulate two peers that can't connect to each other but both can connect to a third peer.
 
-    env_logger::init();
-
     let mut rng = StdRng::seed_from_u64(0);
 
     // The "relay" peer.

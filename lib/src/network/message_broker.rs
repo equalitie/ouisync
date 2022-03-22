@@ -16,29 +16,6 @@ use tokio::{
     task,
 };
 
-/// A stream for receiving Requests and sending Responses
-pub(crate) struct ServerStream {
-    tx: mpsc::Sender<Content>,
-    rx: mpsc::Receiver<Request>,
-}
-
-impl ServerStream {
-    pub(super) fn new(tx: mpsc::Sender<Content>, rx: mpsc::Receiver<Request>) -> Self {
-        Self { tx, rx }
-    }
-
-    pub async fn recv(&mut self) -> Option<Request> {
-        let rq = self.rx.recv().await?;
-        log::trace!("server: recv {:?}", rq);
-        Some(rq)
-    }
-
-    pub async fn send(&self, response: Response) -> bool {
-        log::trace!("server: send {:?}", response);
-        self.tx.send(Content::Response(response)).await.is_ok()
-    }
-}
-
 /// A stream for sending Requests and receiving Responses
 pub(crate) struct ClientStream {
     tx: mpsc::Sender<Content>,
@@ -273,8 +250,7 @@ async fn run_server(
     content_tx: mpsc::Sender<Content>,
     request_rx: mpsc::Receiver<Request>,
 ) {
-    let server_stream = ServerStream::new(content_tx, request_rx);
-    let mut server = Server::new(index, server_stream);
+    let mut server = Server::new(index, content_tx, request_rx);
 
     match server.run().await {
         Ok(()) => log::debug!("server for {:?} terminated", channel),
