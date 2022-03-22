@@ -1,7 +1,4 @@
-use super::{
-    message::{Request, Response},
-    message_broker::ClientStream,
-};
+use super::message::{Content, Request, Response};
 use crate::{
     block::BlockNonce,
     error::{Error, Result},
@@ -9,21 +6,23 @@ use crate::{
     store,
 };
 use std::time::Duration;
-use tokio::{select, time};
+use tokio::{select, sync::mpsc, time};
 
 const REPORT_INTERVAL: Duration = Duration::from_secs(1);
 
 pub(crate) struct Client {
     index: Index,
-    stream: ClientStream,
+    tx: Sender,
+    rx: Receiver,
     report: bool,
 }
 
 impl Client {
-    pub fn new(index: Index, stream: ClientStream) -> Self {
+    pub fn new(index: Index, tx: mpsc::Sender<Content>, rx: mpsc::Receiver<Response>) -> Self {
         Self {
             index,
-            stream,
+            tx: Sender(tx),
+            rx,
             report: true,
         }
     }
@@ -33,7 +32,7 @@ impl Client {
 
         loop {
             select! {
-                Some(response) = self.stream.recv() => {
+                Some(response) = self.rx.recv() => {
                     match self.handle_response(response).await {
                         Ok(()) => {}
                         Err(
@@ -72,7 +71,7 @@ impl Client {
         let updated = self.index.receive_root_node(proof, summary).await?;
 
         if updated {
-            self.stream.send(Request::ChildNodes(hash)).await;
+            self.tx.send(Request::ChildNodes(hash)).await;
         }
 
         Ok(())
@@ -82,7 +81,7 @@ impl Client {
         let updated = self.index.receive_inner_nodes(nodes).await?;
 
         for hash in updated {
-            self.stream.send(Request::ChildNodes(hash)).await;
+            self.tx.send(Request::ChildNodes(hash)).await;
         }
 
         Ok(())
@@ -97,7 +96,7 @@ impl Client {
 
         for block_id in updated {
             // TODO: avoid multiple clients downloading the same block
-            self.stream.send(Request::Block(block_id)).await;
+            self.tx.send(Request::Block(block_id)).await;
         }
 
         Ok(())
@@ -130,3 +129,13 @@ impl Client {
         Ok(())
     }
 }
+
+struct Sender(mpsc::Sender<Content>);
+
+impl Sender {
+    async fn send(&self, request: Request) -> bool {
+        self.0.send(Content::Request(request)).await.is_ok()
+    }
+}
+
+type Receiver = mpsc::Receiver<Response>;

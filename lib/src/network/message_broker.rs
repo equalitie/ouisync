@@ -16,29 +16,6 @@ use tokio::{
     task,
 };
 
-/// A stream for sending Requests and receiving Responses
-pub(crate) struct ClientStream {
-    tx: mpsc::Sender<Content>,
-    rx: mpsc::Receiver<Response>,
-}
-
-impl ClientStream {
-    pub(super) fn new(tx: mpsc::Sender<Content>, rx: mpsc::Receiver<Response>) -> Self {
-        Self { tx, rx }
-    }
-
-    pub async fn recv(&mut self) -> Option<Response> {
-        let rs = self.rx.recv().await?;
-        log::trace!("client: recv {:?}", rs);
-        Some(rs)
-    }
-
-    pub async fn send(&self, request: Request) -> bool {
-        log::trace!("client: send {:?}", request);
-        self.tx.send(Content::Request(request)).await.is_ok()
-    }
-}
-
 /// Maintains one or more connections to a peer, listening on all of them at the same time. Note
 /// that at the present all the connections are TCP based and so dropping some of them would make
 /// sense. However, in the future we may also have other transports (e.g. Bluetooth) and thus
@@ -234,8 +211,7 @@ async fn run_client(
     content_tx: mpsc::Sender<Content>,
     response_rx: mpsc::Receiver<Response>,
 ) {
-    let client_stream = ClientStream::new(content_tx, response_rx);
-    let mut client = Client::new(index, client_stream);
+    let mut client = Client::new(index, content_tx, response_rx);
 
     match client.run().await {
         Ok(()) => log::debug!("client for {:?} terminated", channel),
