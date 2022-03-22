@@ -1,6 +1,7 @@
 use super::message::{Content, Request, Response};
 use crate::{
-    block::BlockNonce,
+    block::{BlockId, BlockNonce},
+    crypto::Hashable,
     error::{Error, Result},
     index::{Index, InnerNodeMap, LeafNodeSet, ReceiveError, Summary, UntrustedProof},
     store,
@@ -67,6 +68,13 @@ impl Client {
         proof: UntrustedProof,
         summary: Summary,
     ) -> Result<(), ReceiveError> {
+        log::trace!(
+            "client: handle_root_node(hash: {:?}, vv: {:?}, missing_blocks: {})",
+            proof.hash,
+            proof.version_vector,
+            summary.missing_blocks_count()
+        );
+
         let hash = proof.hash;
         let updated = self.index.receive_root_node(proof, summary).await?;
 
@@ -78,6 +86,8 @@ impl Client {
     }
 
     async fn handle_inner_nodes(&self, nodes: InnerNodeMap) -> Result<(), ReceiveError> {
+        log::trace!("client: handle_inner_nodes({:?})", nodes.hash());
+
         let updated = self.index.receive_inner_nodes(nodes).await?;
 
         for hash in updated {
@@ -88,6 +98,8 @@ impl Client {
     }
 
     async fn handle_leaf_nodes(&mut self, nodes: LeafNodeSet) -> Result<(), ReceiveError> {
+        log::trace!("client: handle_leaf_nodes({:?})", nodes.hash());
+
         let updated = self.index.receive_leaf_nodes(nodes).await?;
 
         if !updated.is_empty() {
@@ -103,6 +115,11 @@ impl Client {
     }
 
     async fn handle_block(&mut self, content: Box<[u8]>, nonce: BlockNonce) -> Result<()> {
+        log::trace!(
+            "client: handle_block({:?})",
+            BlockId::from_content(&content)
+        );
+
         match store::write_received_block(&self.index, &content, &nonce).await {
             Ok(_) => {
                 self.report = true;

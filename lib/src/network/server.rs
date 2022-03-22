@@ -5,8 +5,10 @@ use crate::{
     error::{Error, Result},
     index::{Index, InnerNode, LeafNode},
 };
-use std::fmt;
-use tokio::{select, sync::mpsc};
+use std::{fmt, time::Duration};
+use tokio::{select, sync::mpsc, time};
+
+const REPORT_INTERVAL: Duration = Duration::from_secs(1);
 
 pub(crate) struct Server {
     index: Index,
@@ -34,9 +36,20 @@ impl Server {
             handle_branch_changed(index, tx, branch_id).await?;
         }
 
+        let mut report_interval = time::interval(REPORT_INTERVAL);
+        let mut stats = Stats::new();
+
         let handle_request = async {
-            while let Some(request) = rx.recv().await {
-                handle_request(index, tx, request).await?
+            loop {
+                select! {
+                    Some(request) = rx.recv() => {
+                        handle_request(index, tx, &mut stats, request).await?
+                    }
+                    _ = report_interval.tick() => {
+                        stats.report()
+                    }
+                    else => break,
+                }
             }
 
             Ok(())
@@ -73,7 +86,7 @@ async fn handle_branch_changed(index: &Index, tx: &Sender, branch_id: PublicKey)
         return Ok(());
     }
 
-    log::debug!(
+    log::trace!(
         "server: handle_branch_changed(branch_id: {:?}, hash: {:?}, vv: {:?}, missing blocks: {})",
         branch_id,
         root_node.proof.hash,
@@ -95,14 +108,24 @@ async fn handle_branch_changed(index: &Index, tx: &Sender, branch_id: PublicKey)
     Ok(())
 }
 
-async fn handle_request(index: &Index, tx: &Sender, request: Request) -> Result<()> {
+async fn handle_request(
+    index: &Index,
+    tx: &Sender,
+    stats: &mut Stats,
+    request: Request,
+) -> Result<()> {
     match request {
-        Request::ChildNodes(parent_hash) => handle_child_nodes(index, tx, parent_hash).await,
-        Request::Block(id) => handle_block(index, tx, id).await,
+        Request::ChildNodes(parent_hash) => handle_child_nodes(index, tx, stats, parent_hash).await,
+        Request::Block(id) => handle_block(index, tx, stats, id).await,
     }
 }
 
-async fn handle_child_nodes(index: &Index, tx: &Sender, parent_hash: Hash) -> Result<()> {
+async fn handle_child_nodes(
+    index: &Index,
+    tx: &Sender,
+    stats: &mut Stats,
+    parent_hash: Hash,
+) -> Result<()> {
     let reporter = RequestReporter::new("handle_child_nodes", &parent_hash);
 
     let mut conn = index.pool.acquire().await?;
@@ -123,14 +146,16 @@ async fn handle_child_nodes(index: &Index, tx: &Sender, parent_hash: Hash) -> Re
         }
 
         reporter.ok();
+        stats.ok();
     } else {
         reporter.not_found();
+        stats.not_found();
     }
 
     Ok(())
 }
 
-async fn handle_block(index: &Index, tx: &Sender, id: BlockId) -> Result<()> {
+async fn handle_block(index: &Index, tx: &Sender, stats: &mut Stats, id: BlockId) -> Result<()> {
     let reporter = RequestReporter::new("handle_block", &id);
 
     let mut conn = index.pool.acquire().await?;
@@ -143,6 +168,8 @@ async fn handle_block(index: &Index, tx: &Sender, id: BlockId) -> Result<()> {
             // outdated branch. It should be safe to ignore this as the client will request
             // the correct blocks when it becomes up to date to our latest branch.
             reporter.not_found();
+            stats.not_found();
+
             return Ok(());
         }
         Err(error) => return Err(error),
@@ -152,6 +179,7 @@ async fn handle_block(index: &Index, tx: &Sender, id: BlockId) -> Result<()> {
 
     tx.send(Response::Block { content, nonce }).await;
     reporter.ok();
+    stats.ok();
 
     Ok(())
 }
@@ -201,7 +229,7 @@ where
     T: fmt::Debug,
 {
     fn drop(&mut self) {
-        log::debug!("server: {}({:?}) - {}", self.label, self.id, self.status)
+        log::trace!("server: {}({:?}) - {}", self.label, self.id, self.status)
     }
 }
 
@@ -218,5 +246,46 @@ impl fmt::Display for Status {
             Self::NotFound => write!(f, "not found"),
             Self::Error => write!(f, "error"),
         }
+    }
+}
+
+struct Stats {
+    count_ok: u64,
+    count_not_found: u64,
+    report: bool,
+}
+
+impl Stats {
+    fn new() -> Self {
+        Self {
+            count_ok: 0,
+            count_not_found: 0,
+            report: true,
+        }
+    }
+
+    fn ok(&mut self) {
+        self.count_ok += 1;
+        self.report = true;
+    }
+
+    fn not_found(&mut self) {
+        self.count_not_found += 1;
+        self.report = true;
+    }
+
+    fn report(&mut self) {
+        if !self.report {
+            return;
+        }
+
+        log::debug!(
+            "server: request stats - ok: {}, not found: {}, total: {}",
+            self.count_ok,
+            self.count_not_found,
+            self.count_ok + self.count_not_found
+        );
+
+        self.report = false;
     }
 }
