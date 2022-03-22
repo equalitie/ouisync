@@ -2,16 +2,17 @@ mod utils;
 
 use anyhow::format_err;
 
-use self::utils::{check_eq, eventually, Bin, CountWrite, RngRead};
+use self::utils::{check_eq, eventually, eventually_with_timeout, Bin, CountWrite, RngRead};
 use std::{
     fs::{self, File},
     io::{self, Read},
     net::Ipv4Addr,
     thread,
+    time::Duration,
 };
 
 #[test]
-fn transfer_single_file() {
+fn transfer_single_small_file() {
     let a = Bin::start(0, [], None);
     let b = Bin::start(
         1,
@@ -28,6 +29,35 @@ fn transfer_single_file() {
         let content = fs::read_to_string(b.root().join(file_name))?;
         check_eq(content, orig_content)
     })
+}
+
+#[test]
+fn transfer_single_large_file() {
+    let a = Bin::start(0, [], None);
+    let b = Bin::start(
+        1,
+        [(Ipv4Addr::LOCALHOST, a.port()).into()],
+        Some(a.share_token()),
+    );
+
+    let file_name = "test.dat";
+    let size = 4 * 1024 * 1024;
+
+    // Create the file by A
+    {
+        let mut src = RngRead(rand::thread_rng()).take(size as u64);
+        let mut dst = File::create(a.root().join(file_name)).unwrap();
+        io::copy(&mut src, &mut dst).unwrap();
+    }
+
+    // Wait until it's fully received by B
+    eventually(|| {
+        let mut src = File::open(b.root().join(file_name))?;
+        let mut dst = CountWrite(0);
+        io::copy(&mut src, &mut dst)?;
+
+        check_eq(dst.0, size)
+    });
 }
 
 #[test]
@@ -180,4 +210,45 @@ fn concurrent_read_and_delete_file() {
 
     let _a = a_handle.join().unwrap();
     let _b = b_handle.join().unwrap();
+}
+
+// FIXME: this currently fails due to the request/response deadlock and/or due to the request
+// explosion problem.
+#[ignore]
+#[test]
+fn relay() {
+    // Create three nodes: A, B and R where A and B are connected only to R but not to each other.
+    // Then create a file by A and let it be received by B which requires the file to pass through
+    // R first.
+
+    let r = Bin::start(0, [], None); // "relay" node
+    let a = Bin::start(
+        1,
+        [(Ipv4Addr::LOCALHOST, r.port()).into()],
+        Some(r.share_token()),
+    );
+    let b = Bin::start(
+        2,
+        [(Ipv4Addr::LOCALHOST, r.port()).into()],
+        Some(r.share_token()),
+    );
+
+    let file_name = "test.dat";
+    let size = 8 * 1024 * 1024;
+
+    // Create the file by A
+    {
+        let mut src = RngRead(rand::thread_rng()).take(size as u64);
+        let mut dst = File::create(a.root().join(file_name)).unwrap();
+        io::copy(&mut src, &mut dst).unwrap();
+    }
+
+    // Wait until it's fully received by B
+    eventually_with_timeout(Duration::from_secs(2 * 60), || {
+        let mut src = File::open(b.root().join(file_name))?;
+        let mut dst = CountWrite(0);
+        io::copy(&mut src, &mut dst)?;
+
+        check_eq(dst.0, size)
+    });
 }
