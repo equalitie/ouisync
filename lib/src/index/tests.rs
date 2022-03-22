@@ -303,7 +303,7 @@ async fn does_not_delete_old_branch_until_new_branch_is_complete() {
     }
 
     for block in snapshot0.blocks().values() {
-        store::write_received_block(&index, &block.content, &block.nonce)
+        store::write_received_block(&index, &block.data, &block.nonce)
             .await
             .unwrap();
     }

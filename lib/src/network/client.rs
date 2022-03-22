@@ -1,6 +1,6 @@
 use super::message::{Content, Request, Response};
 use crate::{
-    block::{BlockId, BlockNonce},
+    block::{BlockData, BlockNonce},
     crypto::Hashable,
     error::{Error, Result},
     index::{Index, InnerNodeMap, LeafNodeSet, ReceiveError, Summary, UntrustedProof},
@@ -115,12 +115,11 @@ impl Client {
     }
 
     async fn handle_block(&mut self, content: Box<[u8]>, nonce: BlockNonce) -> Result<()> {
-        log::trace!(
-            "client: handle_block({:?})",
-            BlockId::from_content(&content)
-        );
+        let data = BlockData::from(content);
 
-        match store::write_received_block(&self.index, &content, &nonce).await {
+        log::trace!("client: handle_block({:?})", data.id);
+
+        match store::write_received_block(&self.index, &data, &nonce).await {
             Ok(_) => {
                 self.report = true;
                 Ok(())

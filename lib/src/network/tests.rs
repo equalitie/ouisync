@@ -105,7 +105,7 @@ async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed:
     let drive = async {
         for (id, block) in snapshot.blocks() {
             // Write the block by replica A.
-            store::write_received_block(&a_index, &block.content, &block.nonce)
+            store::write_received_block(&a_index, &block.data, &block.nonce)
                 .await
                 .unwrap();
 
@@ -232,7 +232,7 @@ async fn create_block(
 
 async fn write_all_blocks(index: &Index, snapshot: &Snapshot) {
     for block in snapshot.blocks().values() {
-        store::write_received_block(index, &block.content, &block.nonce)
+        store::write_received_block(index, &block.data, &block.nonce)
             .await
             .unwrap();
     }

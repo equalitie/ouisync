@@ -52,3 +52,16 @@ derive_sqlx_traits_for_byte_array_wrapper!(BlockId);
 
 #[cfg(test)]
 derive_rand_for_wrapper!(BlockId);
+
+#[derive(Clone)]
+pub(crate) struct BlockData {
+    pub content: Box<[u8]>,
+    pub id: BlockId,
+}
+
+impl From<Box<[u8]>> for BlockData {
+    fn from(content: Box<[u8]>) -> Self {
+        let id = BlockId::from_content(&content);
+        Self { content, id }
+    }
+}

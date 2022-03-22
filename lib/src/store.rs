@@ -1,7 +1,7 @@
 //! Operation that affect both the index and the block store.
 
 use crate::{
-    block::{self, BlockId, BlockNonce},
+    block::{self, BlockData, BlockNonce},
     db,
     error::Result,
     index::{self, Index},
@@ -12,16 +12,14 @@ use sqlx::{Connection, Row};
 /// referenced by the index, otherwise an `BlockNotReferenced` error is returned.
 pub(crate) async fn write_received_block(
     index: &Index,
-    content: &[u8],
+    data: &BlockData,
     nonce: &BlockNonce,
 ) -> Result<()> {
-    let id = BlockId::from_content(content);
-
     let mut cx = index.pool.acquire().await?;
     let mut tx = cx.begin().await?;
 
-    let writer_ids = index::receive_block(&mut tx, &id).await?;
-    block::write(&mut tx, &id, content, nonce).await?;
+    let writer_ids = index::receive_block(&mut tx, &data.id).await?;
+    block::write(&mut tx, &data.id, &data.content, nonce).await?;
     tx.commit().await?;
 
     let branches = index.branches().await;
@@ -71,7 +69,7 @@ pub(crate) async fn count_missing_blocks(conn: &mut db::Connection) -> Result<us
 mod tests {
     use super::*;
     use crate::{
-        block::{self, BlockNonce, BLOCK_SIZE},
+        block::{self, BlockId, BlockNonce, BLOCK_SIZE},
         crypto::{
             cipher::SecretKey,
             sign::{Keypair, PublicKey},
@@ -165,7 +163,7 @@ mod tests {
             let mut content = vec![0; BLOCK_SIZE];
             let nonce = block::read(&mut conn, id, &mut content).await.unwrap();
 
-            assert_eq!(content, block.content);
+            assert_eq!(&content[..], &block.data.content[..]);
             assert_eq!(nonce, block.nonce);
             assert_eq!(BlockId::from_content(&content), *id);
         }
@@ -182,7 +180,7 @@ mod tests {
 
         for block in snapshot.blocks().values() {
             assert_matches!(
-                write_received_block(&index, &block.content, &block.nonce).await,
+                write_received_block(&index, &block.data, &block.nonce).await,
                 Err(Error::BlockNotReferenced)
             );
         }
@@ -214,7 +212,7 @@ mod tests {
         receive_nodes(&index, &write_keys, remote_branch_id, &snapshot).await;
 
         for (num, block) in snapshot.blocks().values().enumerate() {
-            write_received_block(&index, &block.content, &block.nonce)
+            write_received_block(&index, &block.data, &block.nonce)
                 .await
                 .unwrap();
             assert_eq!(
@@ -267,7 +265,7 @@ mod tests {
 
     async fn receive_blocks(index: &Index, snapshot: &Snapshot) {
         for block in snapshot.blocks().values() {
-            write_received_block(index, &block.content, &block.nonce)
+            write_received_block(index, &block.data, &block.nonce)
                 .await
                 .unwrap();
         }
