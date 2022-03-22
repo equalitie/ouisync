@@ -1,7 +1,7 @@
 use super::message::{Content, Request, Response};
 use crate::{
     block::{BlockData, BlockNonce},
-    crypto::Hashable,
+    crypto::{CacheHash, Hashable},
     error::{Error, Result},
     index::{Index, InnerNodeMap, LeafNodeSet, ReceiveError, Summary, UntrustedProof},
     store,
@@ -86,6 +86,7 @@ impl Client {
     }
 
     async fn handle_inner_nodes(&self, nodes: InnerNodeMap) -> Result<(), ReceiveError> {
+        let nodes = CacheHash::from(nodes);
         log::trace!("client: handle_inner_nodes({:?})", nodes.hash());
 
         let updated = self.index.receive_inner_nodes(nodes).await?;
@@ -98,6 +99,7 @@ impl Client {
     }
 
     async fn handle_leaf_nodes(&mut self, nodes: LeafNodeSet) -> Result<(), ReceiveError> {
+        let nodes = CacheHash::from(nodes);
         log::trace!("client: handle_leaf_nodes({:?})", nodes.hash());
 
         let updated = self.index.receive_leaf_nodes(nodes).await?;
@@ -116,7 +118,6 @@ impl Client {
 
     async fn handle_block(&mut self, content: Box<[u8]>, nonce: BlockNonce) -> Result<()> {
         let data = BlockData::from(content);
-
         log::trace!("client: handle_block({:?})", data.id);
 
         match store::write_received_block(&self.index, &data, &nonce).await {

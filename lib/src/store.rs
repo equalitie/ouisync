@@ -254,12 +254,18 @@ mod tests {
 
         for layer in snapshot.inner_layers() {
             for (_, nodes) in layer.inner_maps() {
-                index.receive_inner_nodes(nodes.clone()).await.unwrap();
+                index
+                    .receive_inner_nodes(nodes.clone().into())
+                    .await
+                    .unwrap();
             }
         }
 
         for (_, nodes) in snapshot.leaf_sets() {
-            index.receive_leaf_nodes(nodes.clone()).await.unwrap();
+            index
+                .receive_leaf_nodes(nodes.clone().into())
+                .await
+                .unwrap();
         }
     }
 

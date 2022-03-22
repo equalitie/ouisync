@@ -19,7 +19,7 @@ pub(crate) use self::{
 
 use crate::{
     block::BlockId,
-    crypto::{sign::PublicKey, Hash, Hashable},
+    crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
     db,
     debug_printer::DebugPrinter,
     error::{Error, Result},
@@ -177,7 +177,7 @@ impl Index {
     /// Returns hashes of those nodes that were more up to date than the locally stored ones.
     pub(crate) async fn receive_inner_nodes(
         &self,
-        nodes: InnerNodeMap,
+        nodes: CacheHash<InnerNodeMap>,
     ) -> Result<Vec<Hash>, ReceiveError> {
         let mut conn = self.pool.acquire().await?;
         let parent_hash = nodes.hash();
@@ -192,6 +192,7 @@ impl Index {
             .collect();
 
         nodes
+            .into_inner()
             .into_incomplete()
             .save(&mut conn, &parent_hash)
             .await?;
@@ -204,7 +205,7 @@ impl Index {
     /// Returns the ids of the blocks that the remote replica has but the local one has not.
     pub(crate) async fn receive_leaf_nodes(
         &self,
-        nodes: LeafNodeSet,
+        nodes: CacheHash<LeafNodeSet>,
     ) -> Result<Vec<BlockId>, ReceiveError> {
         let mut conn = self.pool.acquire().await?;
         let parent_hash = nodes.hash();
@@ -218,7 +219,11 @@ impl Index {
             .map(|node| node.block_id)
             .collect();
 
-        nodes.into_missing().save(&mut conn, &parent_hash).await?;
+        nodes
+            .into_inner()
+            .into_missing()
+            .save(&mut conn, &parent_hash)
+            .await?;
         self.update_summaries(&mut conn, parent_hash).await?;
 
         Ok(updated)
