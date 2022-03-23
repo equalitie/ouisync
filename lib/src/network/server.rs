@@ -6,7 +6,11 @@ use crate::{
     index::{Index, InnerNode, LeafNode},
 };
 use std::{fmt, time::Duration};
-use tokio::{select, sync::mpsc, time};
+use tokio::{
+    select,
+    sync::mpsc,
+    time::{self, MissedTickBehavior},
+};
 
 const REPORT_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -37,6 +41,8 @@ impl Server {
         }
 
         let mut report_interval = time::interval(REPORT_INTERVAL);
+        report_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
         let mut stats = Stats::new();
 
         let handle_request = async {
