@@ -86,7 +86,11 @@ mod tests {
         },
         db,
         error::Error,
-        index::{self, node_test_utils::Snapshot, BranchData, Proof, Summary},
+        index::{
+            self,
+            node_test_utils::{receive_blocks, receive_nodes, Snapshot},
+            BranchData,
+        },
         locator::Locator,
         repository::RepositoryId,
         sync::broadcast,
@@ -164,7 +168,14 @@ mod tests {
 
         let snapshot = Snapshot::generate(&mut rand::thread_rng(), 5);
 
-        receive_nodes(&index, &write_keys, branch_id, &snapshot).await;
+        receive_nodes(
+            &index,
+            &write_keys,
+            branch_id,
+            VersionVector::first(branch_id),
+            &snapshot,
+        )
+        .await;
         receive_blocks(&index, &snapshot).await;
 
         let mut conn = index.pool.acquire().await.unwrap();
@@ -219,7 +230,14 @@ mod tests {
             0
         );
 
-        receive_nodes(&index, &write_keys, remote_branch_id, &snapshot).await;
+        receive_nodes(
+            &index,
+            &write_keys,
+            remote_branch_id,
+            VersionVector::first(remote_branch_id),
+            &snapshot,
+        )
+        .await;
 
         for (num, block) in snapshot.blocks().values().enumerate() {
             write_received_block(&index, &block.data, &block.nonce)
@@ -243,47 +261,5 @@ mod tests {
         super::init(&mut conn).await.unwrap();
 
         pool
-    }
-
-    async fn receive_nodes(
-        index: &Index,
-        write_keys: &Keypair,
-        branch_id: PublicKey,
-        snapshot: &Snapshot,
-    ) {
-        let proof = Proof::new(
-            branch_id,
-            VersionVector::first(branch_id),
-            *snapshot.root_hash(),
-            write_keys,
-        );
-        index
-            .receive_root_node(proof.into(), Summary::INCOMPLETE)
-            .await
-            .unwrap();
-
-        for layer in snapshot.inner_layers() {
-            for (_, nodes) in layer.inner_maps() {
-                index
-                    .receive_inner_nodes(nodes.clone().into())
-                    .await
-                    .unwrap();
-            }
-        }
-
-        for (_, nodes) in snapshot.leaf_sets() {
-            index
-                .receive_leaf_nodes(nodes.clone().into())
-                .await
-                .unwrap();
-        }
-    }
-
-    async fn receive_blocks(index: &Index, snapshot: &Snapshot) {
-        for block in snapshot.blocks().values() {
-            write_received_block(index, &block.data, &block.nonce)
-                .await
-                .unwrap();
-        }
     }
 }
