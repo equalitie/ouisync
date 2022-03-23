@@ -86,6 +86,8 @@ pub(crate) async fn parent_exists(conn: &mut db::Connection, hash: &Hash) -> Res
     .get(0))
 }
 
+// TODO: if we knew the type of the node (root vs inner) of each hash, we would be able to avoid
+// calculating the summary for the wrong type.
 async fn update_summaries_with_stack(
     conn: &mut db::Connection,
     mut nodes: Vec<Hash>,

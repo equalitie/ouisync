@@ -18,6 +18,7 @@ pub(crate) struct Summary {
 
 impl Summary {
     /// Summary indicating the subtree hasn't been completely downloaded yet.
+    // TODO: consider renaming this to `UNKNOWN`, `UNDECIDED`, `UNDEFINED`, etc...
     pub const INCOMPLETE: Self = Self {
         is_complete: false,
         missing_blocks_count: u64::MAX,
@@ -63,6 +64,11 @@ impl Summary {
             // it.
             if node.is_empty() {
                 continue;
+            }
+
+            // If at least one node is incomplete the whole collection is incomplete as well.
+            if node.summary == Self::INCOMPLETE {
+                return Self::INCOMPLETE;
             }
 
             is_complete = is_complete && node.summary.is_complete;

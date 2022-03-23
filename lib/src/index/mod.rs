@@ -202,11 +202,9 @@ impl Index {
             .find_inner_nodes_with_new_blocks(&mut conn, &parent_hash, &nodes)
             .await?;
 
-        nodes
-            .into_inner()
-            .into_incomplete()
-            .save(&mut conn, &parent_hash)
-            .await?;
+        let mut nodes = nodes.into_inner().into_incomplete();
+        nodes.inherit_summaries(&mut conn).await?;
+        nodes.save(&mut conn, &parent_hash).await?;
         self.update_summaries(&mut conn, parent_hash).await?;
 
         Ok(updated)
@@ -251,7 +249,9 @@ impl Index {
         remote_nodes: &InnerNodeMap,
     ) -> Result<Vec<Hash>> {
         let local_nodes = InnerNode::load_children(conn, parent_hash).await?;
+
         let mut receive_filter = self.shared.receive_filter.lock().unwrap();
+        receive_filter.cleanup();
 
         Ok(remote_nodes
             .iter()
@@ -532,6 +532,8 @@ pub(crate) async fn init(conn: &mut db::Connection) -> Result<(), Error> {
     Ok(())
 }
 
+/// Filter for received nodes to avoid processing a node that doesn't contain any new information
+/// compared to the last time we received that same node.
 struct ReceiveFilter {
     entries: HashMap<Hash, (Summary, Instant)>,
 }
@@ -546,8 +548,6 @@ impl ReceiveFilter {
     }
 
     fn check(&mut self, hash: Hash, summary: Summary) -> bool {
-        self.cleanup();
-
         match self.entries.entry(hash) {
             Entry::Occupied(mut entry) => {
                 if entry.get().0.is_up_to_date_with(&summary).unwrap_or(false) {
