@@ -6,7 +6,7 @@ use crate::{
     error::Result,
     index::{self, Index},
 };
-use sqlx::{Connection, Row};
+use sqlx::Connection;
 
 /// Write a block received from a remote replica to the block store. The block must already be
 /// referenced by the index, otherwise an `BlockNotReferenced` error is returned.
@@ -60,19 +60,6 @@ pub(crate) async fn init(conn: &mut db::Connection) -> Result<()> {
     .await?;
 
     Ok(())
-}
-
-/// Retrieve the number of missing (not downloaded yet) blocks.
-pub(crate) async fn count_missing_blocks(conn: &mut db::Connection) -> Result<usize> {
-    let row = sqlx::query(
-        "SELECT COUNT(*)
-         FROM snapshot_leaf_nodes LEFT JOIN blocks ON snapshot_leaf_nodes.block_id = blocks.id
-         WHERE blocks.id IS NULL",
-    )
-    .fetch_one(conn)
-    .await?;
-
-    Ok(db::decode_u64(row.get(0)) as usize)
 }
 
 #[cfg(test)]
@@ -209,46 +196,6 @@ mod tests {
         let mut conn = index.pool.acquire().await.unwrap();
         for id in snapshot.blocks().keys() {
             assert!(!block::exists(&mut conn, id).await.unwrap());
-        }
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn count_missing_blocks_test() {
-        let pool = setup().await;
-
-        let write_keys = Keypair::random();
-        let repository_id = RepositoryId::from(write_keys.public);
-        let index = Index::load(pool.clone(), repository_id).await.unwrap();
-
-        let snapshot = Snapshot::generate(&mut rand::thread_rng(), 5);
-        let remote_branch_id = PublicKey::random();
-
-        assert_eq!(
-            count_missing_blocks(&mut pool.acquire().await.unwrap())
-                .await
-                .unwrap(),
-            0
-        );
-
-        receive_nodes(
-            &index,
-            &write_keys,
-            remote_branch_id,
-            VersionVector::first(remote_branch_id),
-            &snapshot,
-        )
-        .await;
-
-        for (num, block) in snapshot.blocks().values().enumerate() {
-            write_received_block(&index, &block.data, &block.nonce)
-                .await
-                .unwrap();
-            assert_eq!(
-                count_missing_blocks(&mut pool.acquire().await.unwrap())
-                    .await
-                    .unwrap(),
-                snapshot.blocks().len() - num - 1
-            );
         }
     }
 

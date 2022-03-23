@@ -139,7 +139,7 @@ impl Client {
 
         log::debug!(
             "client: missing blocks: {}",
-            store::count_missing_blocks(&mut *self.index.pool.acquire().await?).await?
+            self.index.count_missing_blocks().await
         );
         self.report = false;
 

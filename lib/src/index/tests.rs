@@ -1,4 +1,8 @@
-use super::{node::RootNode, node_test_utils::Snapshot, *};
+use super::{
+    node::RootNode,
+    node_test_utils::{receive_nodes, Snapshot},
+    *,
+};
 use crate::{
     block::{self, BLOCK_SIZE},
     crypto::sign::{Keypair, PublicKey},
@@ -347,6 +351,35 @@ async fn does_not_delete_old_branch_until_new_branch_is_complete() {
         &snapshot0,
     )
     .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn count_missing_blocks() {
+    let (index, write_keys) = setup().await;
+
+    let snapshot = Snapshot::generate(&mut rand::thread_rng(), 5);
+    let remote_branch_id = PublicKey::random();
+
+    assert_eq!(index.count_missing_blocks().await, 0);
+
+    receive_nodes(
+        &index,
+        &write_keys,
+        remote_branch_id,
+        VersionVector::first(remote_branch_id),
+        &snapshot,
+    )
+    .await;
+
+    for (num, block) in snapshot.blocks().values().enumerate() {
+        store::write_received_block(&index, &block.data, &block.nonce)
+            .await
+            .unwrap();
+        assert_eq!(
+            index.count_missing_blocks().await,
+            (snapshot.blocks().len() - num - 1) as u64
+        );
+    }
 }
 
 async fn setup() -> (Index, Keypair) {

@@ -96,6 +96,17 @@ impl Index {
         self.shared.notify_tx.close();
     }
 
+    /// Retrieve the number of missing (not downloaded yet) blocks across all branches.
+    pub(crate) async fn count_missing_blocks(&self) -> u64 {
+        let mut count = 0;
+
+        for branch in self.branches().await.values() {
+            count += branch.root().await.summary.missing_blocks_count();
+        }
+
+        count
+    }
+
     /// Receive `RootNode` from other replica and store it into the db. Returns whether the
     /// received node was more up-to-date than the corresponding branch stored by this replica.
     pub(crate) async fn receive_root_node(
