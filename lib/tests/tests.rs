@@ -1,5 +1,5 @@
 use ouisync::{
-    AccessMode, AccessSecrets, ConfigStore, Error, MasterSecret, Network, NetworkOptions,
+    AccessMode, AccessSecrets, ConfigStore, Error, File, MasterSecret, Network, NetworkOptions,
     Repository, Store,
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -96,8 +96,7 @@ async fn relay() {
     // There used to be a deadlock that got triggered only when transferring a sufficiently large
     // file.
     let file_size = 4 * 1024 * 1024;
-
-    // let file_size = 128 * 1024 * 1024;
+    // let file_size = 384 * 1024 * 1024;
     // env_logger::init();
 
     let mut rng = StdRng::seed_from_u64(0);
@@ -126,12 +125,46 @@ async fn relay() {
     // Create a file by A and wait until B sees it. The file must pass through R because A and B
     // are not connected to each other.
     let mut file = repo_a.create_file("test.dat").await.unwrap();
-    file.write(&content).await.unwrap();
+    // file.write(&content).await.unwrap();
+    write_in_chunks(&mut file, &content, 4096).await;
     file.flush().await.unwrap();
     drop(file);
 
     with_timeout(
-        Duration::from_secs(60),
+        Duration::from_secs(60 * 60),
+        expect_file_content(&repo_b, "test.dat", &content),
+    )
+    .await;
+}
+
+// DEBUG
+#[ignore]
+#[tokio::test(flavor = "multi_thread")]
+async fn transfer_large_file() {
+    let file_size = 1024 * 1024 * 1024;
+    env_logger::init();
+
+    let mut rng = StdRng::seed_from_u64(0);
+
+    let (network_a, network_b) = create_connected_peers().await;
+
+    let repo_a = create_repo(&mut rng).await;
+    let _reg_a = network_a.handle().register(repo_a.index().clone()).await;
+
+    let repo_b = create_repo_with_secrets(&mut rng, repo_a.secrets().clone()).await;
+    let _reg_b = network_b.handle().register(repo_b.index().clone()).await;
+
+    let mut content = vec![0; file_size];
+    rng.fill(&mut content[..]);
+
+    // Create a file by A and wait until B sees it.
+    let mut file = repo_a.create_file("test.dat").await.unwrap();
+    write_in_chunks(&mut file, &content, 4096).await;
+    file.flush().await.unwrap();
+    drop(file);
+
+    with_timeout(
+        Duration::from_secs(60 * 60),
         expect_file_content(&repo_b, "test.dat", &content),
     )
     .await;
@@ -216,4 +249,11 @@ where
     F: Future,
 {
     time::timeout(timeout, f).await.expect("timeout expired")
+}
+
+async fn write_in_chunks(file: &mut File, content: &[u8], chunk_size: usize) {
+    for offset in (0..content.len()).step_by(chunk_size) {
+        let end = (offset + chunk_size).min(content.len());
+        file.write(&content[offset..end]).await.unwrap();
+    }
 }

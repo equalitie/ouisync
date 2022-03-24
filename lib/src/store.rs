@@ -24,20 +24,11 @@ pub(crate) async fn write_received_block(
 
     let branches = index.branches().await;
 
-    // Reload root nodes of the affected branches.
+    // Reload root nodes of the affected branches and notify them.
     for writer_id in &writer_ids {
         if let Some(branch) = branches.get(writer_id) {
             branch.reload_root(&mut cx).await?;
-        }
-    }
-
-    // Notify the affected branches, but make sure to release the db connection before. This is to
-    // avoid deadlocks due to the notification channel being bounded.
-    drop(cx);
-
-    for writer_id in &writer_ids {
-        if let Some(branch) = branches.get(writer_id) {
-            branch.notify().await;
+            branch.notify();
         }
     }
 

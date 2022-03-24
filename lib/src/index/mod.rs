@@ -318,30 +318,24 @@ impl Index {
     ) -> Result<()> {
         let node = RootNode::load_latest_complete_by_writer(conn, writer_id).await?;
 
-        let created = match self.shared.branches.write().await.entry(writer_id) {
+        let created_branch = match self.shared.branches.write().await.entry(writer_id) {
             Entry::Vacant(entry) => {
                 // We could have accumulated a bunch of incomplete root nodes before this
                 // particular one became complete. We want to remove those.
                 node.remove_recursively_all_older(conn).await?;
 
-                entry.insert(Arc::new(BranchData::new(
-                    node,
-                    self.shared.notify_tx.clone(),
-                )));
-                true
+                let branch = Arc::new(BranchData::new(node, self.shared.notify_tx.clone()));
+                entry.insert(branch.clone());
+                Some(branch)
             }
             Entry::Occupied(entry) => {
                 entry.get().update_root(conn, node).await?;
-                false
+                None
             }
         };
 
-        if created {
-            self.shared
-                .notify_tx
-                .broadcast(writer_id)
-                .await
-                .unwrap_or(());
+        if let Some(branch) = created_branch {
+            branch.notify();
         }
 
         Ok(())

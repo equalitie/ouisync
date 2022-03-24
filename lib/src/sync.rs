@@ -6,7 +6,7 @@ use std::future::Future;
 /// MPMC broadcast channel
 pub(crate) mod broadcast {
     pub use async_broadcast::Receiver;
-    use tokio::task;
+    use tokio::{sync::watch, task};
 
     /// Sender for a mpmc broadcast channel.
     ///
@@ -59,6 +59,44 @@ pub(crate) mod broadcast {
         /// Close the channel explicitly. This makes all subsequent receives to fail immediately.
         pub fn close(&self) {
             self.tx.close();
+        }
+    }
+
+    /// Adapter for `Sender` which enables overflow of messages sent previously on this same sender.
+    pub struct OverflowSender<T> {
+        tx: watch::Sender<Option<T>>,
+    }
+
+    impl<T> OverflowSender<T>
+    where
+        T: Clone + Send + Sync + 'static,
+    {
+        pub fn new(inner: Sender<T>) -> Self {
+            let (tx, mut rx) = watch::channel::<Option<T>>(None);
+
+            task::spawn(async move {
+                while rx.changed().await.is_ok() {
+                    let value = if let Some(value) = &*rx.borrow() {
+                        value.clone()
+                    } else {
+                        continue;
+                    };
+
+                    if inner.broadcast(value).await.is_err() {
+                        break;
+                    }
+                }
+            });
+
+            Self { tx }
+        }
+
+        pub fn broadcast(&self, value: T) -> Result<(), async_broadcast::SendError<T>> {
+            self.tx
+                .send(Some(value))
+                .map_err(|watch::error::SendError(value)| {
+                    async_broadcast::SendError(value.unwrap())
+                })
         }
     }
 }

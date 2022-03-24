@@ -23,7 +23,7 @@ type LocatorHash = Hash;
 pub(crate) struct BranchData {
     writer_id: PublicKey, // copied from `root_node` to allow accessing it without locking.
     root_node: RwLock<RootNode>,
-    notify_tx: broadcast::Sender<PublicKey>,
+    notify_tx: broadcast::OverflowSender<PublicKey>,
 }
 
 impl BranchData {
@@ -34,7 +34,7 @@ impl BranchData {
         Self {
             writer_id: root_node.proof.writer_id,
             root_node: RwLock::new(root_node),
-            notify_tx,
+            notify_tx: broadcast::OverflowSender::new(notify_tx),
         }
     }
 
@@ -105,7 +105,7 @@ impl BranchData {
         writer
             .insert(conn, block_id, encoded_locator, write_keys)
             .await?;
-        writer.finish().await;
+        writer.finish();
         Ok(())
     }
 
@@ -119,7 +119,7 @@ impl BranchData {
     ) -> Result<()> {
         let mut writer = self.write();
         writer.remove(conn, encoded_locator, write_keys).await?;
-        writer.finish().await;
+        writer.finish();
         Ok(())
     }
 
@@ -149,8 +149,8 @@ impl BranchData {
     }
 
     /// Trigger a notification event from this branch.
-    pub async fn notify(&self) {
-        self.notify_tx.broadcast(self.writer_id).await.unwrap_or(())
+    pub fn notify(&self) {
+        self.notify_tx.broadcast(self.writer_id).unwrap_or(())
     }
 
     /// Update the root node of this branch. Does nothing if the version of `new_root` is not
@@ -170,7 +170,7 @@ impl BranchData {
 
         replace_root(conn, &mut old_root, new_root).await?;
 
-        self.notify().await;
+        self.notify();
 
         Ok(())
     }
@@ -233,9 +233,9 @@ impl<'a> Writer<'a> {
     }
 
     /// Finishes the writes. If at least one operation was performed, emits a notification event.
-    pub async fn finish(self) {
+    pub fn finish(self) {
         if self.notify {
-            self.branch.notify().await;
+            self.branch.notify();
         }
     }
 }

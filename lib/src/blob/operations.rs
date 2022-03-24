@@ -291,7 +291,7 @@ impl<'a> Operations<'a> {
                 .await?;
         }
 
-        dst_writer.finish().await;
+        dst_writer.finish();
         tx.commit().await?;
 
         let current_block = OpenBlock {
@@ -439,7 +439,7 @@ impl<'a> Operations<'a> {
                 .await?;
         }
 
-        writer.finish().await;
+        writer.finish();
 
         Ok(())
     }

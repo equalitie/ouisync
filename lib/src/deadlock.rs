@@ -11,7 +11,7 @@ use std::{
 };
 use tokio::time;
 
-const DEADLOCK_WARNING_TIMEOUT: Duration = Duration::from_secs(5);
+const WARNING_TIMEOUT: Duration = Duration::from_secs(5);
 
 // Wrapper for various lock guard types which logs a warning when a potential deadlock is detected.
 pub struct DeadlockGuard<T> {
@@ -128,6 +128,14 @@ impl fmt::Display for DeadlockTracker {
     }
 }
 
+struct DeadlockMessage<'a>(&'a DeadlockTracker);
+
+impl fmt::Display for DeadlockMessage<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "potential deadlock at {}", self.0)
+    }
+}
+
 struct Acquire {
     locations: Arc<BlockingMutex<Slab<&'static Location<'static>>>>,
     key: usize,
@@ -143,13 +151,23 @@ async fn detect_deadlock<F>(inner: F, tracker: &DeadlockTracker) -> F::Output
 where
     F: Future,
 {
-    tokio::pin!(inner);
+    warn_slow(DeadlockMessage(tracker), inner).await
+}
 
-    match time::timeout(DEADLOCK_WARNING_TIMEOUT, &mut inner).await {
-        Ok(inner) => inner,
+/// Run `fut` into completion but if it takes more than `WARNING_TIMEOUT`, log the given warning
+/// message.
+pub(crate) async fn warn_slow<F, M>(message: M, fut: F) -> F::Output
+where
+    F: Future,
+    M: fmt::Display,
+{
+    tokio::pin!(fut);
+
+    match time::timeout(WARNING_TIMEOUT, &mut fut).await {
+        Ok(output) => output,
         Err(_) => {
-            log::warn!("potential deadlock at {}", tracker);
-            inner.await
+            log::warn!("{}", message);
+            fut.await
         }
     }
 }
