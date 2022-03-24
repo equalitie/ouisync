@@ -7,7 +7,11 @@ use crate::{
     store,
 };
 use std::time::Duration;
-use tokio::{select, sync::mpsc, time};
+use tokio::{
+    select,
+    sync::mpsc,
+    time::{self, MissedTickBehavior},
+};
 
 const REPORT_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -30,6 +34,7 @@ impl Client {
 
     pub async fn run(&mut self) -> Result<()> {
         let mut report_interval = time::interval(REPORT_INTERVAL);
+        report_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
         loop {
             select! {
@@ -69,7 +74,7 @@ impl Client {
         summary: Summary,
     ) -> Result<(), ReceiveError> {
         log::trace!(
-            "client: handle_root_node(hash: {:?}, vv: {:?}, missing_blocks: {})",
+            "handle_root_node(hash: {:?}, vv: {:?}, missing_blocks: {})",
             proof.hash,
             proof.version_vector,
             summary.missing_blocks_count()
@@ -87,7 +92,7 @@ impl Client {
 
     async fn handle_inner_nodes(&self, nodes: InnerNodeMap) -> Result<(), ReceiveError> {
         let nodes = CacheHash::from(nodes);
-        log::trace!("client: handle_inner_nodes({:?})", nodes.hash());
+        log::trace!("handle_inner_nodes({:?})", nodes.hash());
 
         let updated = self.index.receive_inner_nodes(nodes).await?;
 
@@ -100,7 +105,7 @@ impl Client {
 
     async fn handle_leaf_nodes(&mut self, nodes: LeafNodeSet) -> Result<(), ReceiveError> {
         let nodes = CacheHash::from(nodes);
-        log::trace!("client: handle_leaf_nodes({:?})", nodes.hash());
+        log::trace!("handle_leaf_nodes({:?})", nodes.hash());
 
         let updated = self.index.receive_leaf_nodes(nodes).await?;
 
@@ -118,7 +123,7 @@ impl Client {
 
     async fn handle_block(&mut self, content: Box<[u8]>, nonce: BlockNonce) -> Result<()> {
         let data = BlockData::from(content);
-        log::trace!("client: handle_block({:?})", data.id);
+        log::trace!("handle_block({:?})", data.id);
 
         match store::write_received_block(&self.index, &data, &nonce).await {
             Ok(_) => {
@@ -138,8 +143,8 @@ impl Client {
         }
 
         log::debug!(
-            "client: missing blocks: {}",
-            store::count_missing_blocks(&mut *self.index.pool.acquire().await?).await?
+            "missing blocks: {}",
+            self.index.count_missing_blocks().await
         );
         self.report = false;
 

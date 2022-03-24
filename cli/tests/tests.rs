@@ -212,9 +212,6 @@ fn concurrent_read_and_delete_file() {
     let _b = b_handle.join().unwrap();
 }
 
-// FIXME: this currently fails due to the request/response deadlock and/or due to the request
-// explosion problem.
-#[ignore]
 #[test]
 fn relay() {
     // Create three nodes: A, B and R where A and B are connected only to R but not to each other.
@@ -234,7 +231,7 @@ fn relay() {
     );
 
     let file_name = "test.dat";
-    let size = 8 * 1024 * 1024;
+    let size = 4 * 1024 * 1024;
 
     // Create the file by A
     {

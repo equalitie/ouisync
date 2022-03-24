@@ -6,7 +6,11 @@ use crate::{
     index::{Index, InnerNode, LeafNode},
 };
 use std::{fmt, time::Duration};
-use tokio::{select, sync::mpsc, time};
+use tokio::{
+    select,
+    sync::mpsc,
+    time::{self, MissedTickBehavior},
+};
 
 const REPORT_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -37,6 +41,8 @@ impl Server {
         }
 
         let mut report_interval = time::interval(REPORT_INTERVAL);
+        report_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
         let mut stats = Stats::new();
 
         let handle_request = async {
@@ -87,7 +93,7 @@ async fn handle_branch_changed(index: &Index, tx: &Sender, branch_id: PublicKey)
     }
 
     log::trace!(
-        "server: handle_branch_changed(branch_id: {:?}, hash: {:?}, vv: {:?}, missing blocks: {})",
+        "handle_branch_changed(branch_id: {:?}, hash: {:?}, vv: {:?}, missing blocks: {})",
         branch_id,
         root_node.proof.hash,
         root_node.proof.version_vector,
@@ -229,7 +235,7 @@ where
     T: fmt::Debug,
 {
     fn drop(&mut self) {
-        log::trace!("server: {}({:?}) - {}", self.label, self.id, self.status)
+        log::trace!("{}({:?}) - {}", self.label, self.id, self.status)
     }
 }
 
@@ -280,7 +286,7 @@ impl Stats {
         }
 
         log::debug!(
-            "server: request stats - ok: {}, not found: {}, total: {}",
+            "request stats - ok: {}, not found: {}, total: {}",
             self.count_ok,
             self.count_not_found,
             self.count_ok + self.count_not_found

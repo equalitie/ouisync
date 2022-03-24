@@ -93,6 +93,13 @@ async fn remove_remote_file() {
 async fn relay() {
     // Simulate two peers that can't connect to each other but both can connect to a third peer.
 
+    // There used to be a deadlock that got triggered only when transferring a sufficiently large
+    // file.
+    let file_size = 4 * 1024 * 1024;
+
+    // let file_size = 128 * 1024 * 1024;
+    // env_logger::init();
+
     let mut rng = StdRng::seed_from_u64(0);
 
     // The "relay" peer.
@@ -113,9 +120,7 @@ async fn relay() {
         create_repo_with_secrets(&mut rng, repo_a.secrets().with_mode(AccessMode::Blind)).await;
     let _reg_r = network_r.handle().register(repo_r.index().clone()).await;
 
-    // There used to be a deadlock that got triggered only when transferring a sufficiently large
-    // file. 20 blocks seems to do it.
-    let mut content = vec![0; 20 * 32 * 1024];
+    let mut content = vec![0; file_size];
     rng.fill(&mut content[..]);
 
     // Create a file by A and wait until B sees it. The file must pass through R because A and B

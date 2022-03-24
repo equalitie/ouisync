@@ -86,6 +86,35 @@ pub(crate) async fn parent_exists(conn: &mut db::Connection, hash: &Hash) -> Res
     .get(0))
 }
 
+enum ParentNodeKind {
+    Root,
+    Inner,
+}
+
+async fn parent_kind(conn: &mut db::Connection, hash: &Hash) -> Result<Option<ParentNodeKind>> {
+    use sqlx::Row;
+
+    let kind: u8 = sqlx::query(
+        "SELECT CASE
+             WHEN EXISTS(SELECT 0 FROM snapshot_root_nodes  WHERE hash = ?) THEN 1
+             WHEN EXISTS(SELECT 0 FROM snapshot_inner_nodes WHERE hash = ?) THEN 2
+             ELSE 0
+         END",
+    )
+    .bind(hash)
+    .bind(hash)
+    .fetch_one(conn)
+    .await?
+    .get(0);
+
+    match kind {
+        0 => Ok(None),
+        1 => Ok(Some(ParentNodeKind::Root)),
+        2 => Ok(Some(ParentNodeKind::Inner)),
+        _ => unreachable!(),
+    }
+}
+
 async fn update_summaries_with_stack(
     conn: &mut db::Connection,
     mut nodes: Vec<Hash>,
@@ -93,21 +122,27 @@ async fn update_summaries_with_stack(
     let mut statuses = Vec::new();
 
     while let Some(hash) = nodes.pop() {
-        let complete = RootNode::update_summaries(conn, &hash).await?;
-        RootNode::load_writer_ids(conn, &hash)
-            .try_for_each(|writer_id| {
-                statuses.push((writer_id, complete));
-                future::ready(Ok(()))
-            })
-            .await?;
-
-        InnerNode::update_summaries(conn, &hash).await?;
-        InnerNode::load_parent_hashes(conn, &hash)
-            .try_for_each(|parent_hash| {
-                nodes.push(parent_hash);
-                future::ready(Ok(()))
-            })
-            .await?;
+        match parent_kind(conn, &hash).await? {
+            Some(ParentNodeKind::Root) => {
+                let complete = RootNode::update_summaries(conn, &hash).await?;
+                RootNode::load_writer_ids(conn, &hash)
+                    .try_for_each(|writer_id| {
+                        statuses.push((writer_id, complete));
+                        future::ready(Ok(()))
+                    })
+                    .await?;
+            }
+            Some(ParentNodeKind::Inner) => {
+                InnerNode::update_summaries(conn, &hash).await?;
+                InnerNode::load_parent_hashes(conn, &hash)
+                    .try_for_each(|parent_hash| {
+                        nodes.push(parent_hash);
+                        future::ready(Ok(()))
+                    })
+                    .await?;
+            }
+            None => (),
+        }
     }
 
     Ok(statuses)

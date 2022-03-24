@@ -170,6 +170,46 @@ impl InnerNode {
     pub fn is_empty(&self) -> bool {
         self.hash == *EMPTY_INNER_HASH || self.hash == *EMPTY_LEAF_HASH
     }
+
+    /// If the summary of this node is `INCOMPLETE` and there exists another node with the same
+    /// hash as this one, copy the summary of that node into this node.
+    ///
+    /// Note this is hack/workaround due to the database schema currently not being fully
+    /// normalized. That is, when there is a node that has more than one parent, we actually
+    /// represent it as multiple records, each with distinct parent_hash. The summaries of those
+    /// records need to be identical (because they conceptually represent a single node) so we need
+    /// this function to copy them manually.
+    /// Ideally, we should change the db schema to be normalized, which in this case would mean
+    /// to have only one record per node and to represent the parent-child relation using a
+    /// separate db table (many-to-many relation).
+    async fn inherit_summary(&mut self, conn: &mut db::Connection) -> Result<()> {
+        if self.summary != Summary::INCOMPLETE {
+            return Ok(());
+        }
+
+        let summary = sqlx::query(
+            "SELECT
+                 is_complete,
+                 missing_blocks_count,
+                 missing_blocks_checksum
+             FROM snapshot_inner_nodes
+             WHERE hash = ?",
+        )
+        .bind(&self.hash)
+        .fetch_optional(conn)
+        .await?
+        .map(|row| Summary {
+            is_complete: row.get(0),
+            missing_blocks_count: db::decode_u64(row.get(1)),
+            missing_blocks_checksum: db::decode_u64(row.get(2)),
+        });
+
+        if let Some(summary) = summary {
+            self.summary = summary;
+        }
+
+        Ok(())
+    }
 }
 
 impl Hashable for InnerNode {
@@ -226,6 +266,16 @@ impl InnerNodeMap {
         }
 
         self
+    }
+
+    pub async fn inherit_summaries(&mut self, conn: &mut db::Connection) -> Result<()> {
+        let mut tx = conn.begin().await?;
+        for node in self.0.values_mut() {
+            node.inherit_summary(&mut tx).await?;
+        }
+        tx.commit().await?;
+
+        Ok(())
     }
 }
 

@@ -7,7 +7,10 @@ use crate::{
     block::{self, BlockId, BLOCK_SIZE},
     crypto::sign::{Keypair, PublicKey},
     db,
-    index::{node_test_utils::Snapshot, Index, Proof, RootNode, Summary},
+    index::{
+        node_test_utils::{receive_blocks, receive_nodes, Snapshot},
+        Index, Proof, RootNode,
+    },
     repository::{self, RepositoryId},
     store, test_utils,
     version_vector::VersionVector,
@@ -51,7 +54,7 @@ async fn transfer_snapshot_between_two_replicas_case(
 
     let snapshot = Snapshot::generate(&mut rng, leaf_count);
     save_snapshot(&a_index, a_id, &write_keys, &snapshot).await;
-    write_all_blocks(&a_index, &snapshot).await;
+    receive_blocks(&a_index, &snapshot).await;
 
     assert!(load_latest_root_node(&b_index, a_id).await.is_none());
 
@@ -147,28 +150,8 @@ async fn save_snapshot(
 
     let mut version_vector = VersionVector::new();
     version_vector.insert(writer_id, 2); // to force overwrite the initial root node
-    let proof = Proof::new(writer_id, version_vector, *snapshot.root_hash(), write_keys);
 
-    index
-        .receive_root_node(proof.into(), Summary::INCOMPLETE)
-        .await
-        .unwrap();
-
-    for layer in snapshot.inner_layers() {
-        for (_, nodes) in layer.inner_maps() {
-            index
-                .receive_inner_nodes(nodes.clone().into())
-                .await
-                .unwrap();
-        }
-    }
-
-    for (_, nodes) in snapshot.leaf_sets() {
-        index
-            .receive_leaf_nodes(nodes.clone().into())
-            .await
-            .unwrap();
-    }
+    receive_nodes(index, write_keys, writer_id, version_vector, snapshot).await;
 }
 
 async fn wait_until_snapshots_in_sync(
@@ -234,14 +217,6 @@ async fn create_block(
         .await
         .unwrap();
     tx.commit().await.unwrap();
-}
-
-async fn write_all_blocks(index: &Index, snapshot: &Snapshot) {
-    for block in snapshot.blocks().values() {
-        store::write_received_block(index, &block.data, &block.nonce)
-            .await
-            .unwrap();
-    }
 }
 
 async fn load_latest_root_node(index: &Index, writer_id: PublicKey) -> Option<RootNode> {

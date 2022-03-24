@@ -30,7 +30,8 @@ use futures_util::TryStreamExt;
 use std::{
     cmp::Ordering,
     collections::{hash_map::Entry, HashMap},
-    sync::Arc,
+    sync::{Arc, Mutex as BlockingMutex},
+    time::{Duration, Instant},
 };
 use thiserror::Error;
 
@@ -53,6 +54,7 @@ impl Index {
                 repository_id,
                 branches: RwLock::new(branches),
                 notify_tx,
+                receive_filter: BlockingMutex::new(ReceiveFilter::new()),
             }),
         })
     }
@@ -92,6 +94,17 @@ impl Index {
     /// Signal to all subscribers of this index that it is about to be terminated.
     pub(crate) fn close(&self) {
         self.shared.notify_tx.close();
+    }
+
+    /// Retrieve the number of missing (not downloaded yet) blocks across all branches.
+    pub(crate) async fn count_missing_blocks(&self) -> u64 {
+        let mut count = 0;
+
+        for branch in self.branches().await.values() {
+            count += branch.root().await.summary.missing_blocks_count();
+        }
+
+        count
     }
 
     /// Receive `RootNode` from other replica and store it into the db. Returns whether the
@@ -185,17 +198,13 @@ impl Index {
         self.check_parent_node_exists(&mut conn, &parent_hash)
             .await?;
 
-        let updated: Vec<_> = self
+        let updated = self
             .find_inner_nodes_with_new_blocks(&mut conn, &parent_hash, &nodes)
-            .await?
-            .map(|node| node.hash)
-            .collect();
-
-        nodes
-            .into_inner()
-            .into_incomplete()
-            .save(&mut conn, &parent_hash)
             .await?;
+
+        let mut nodes = nodes.into_inner().into_incomplete();
+        nodes.inherit_summaries(&mut conn).await?;
+        nodes.save(&mut conn, &parent_hash).await?;
         self.update_summaries(&mut conn, parent_hash).await?;
 
         Ok(updated)
@@ -233,17 +242,24 @@ impl Index {
     //
     // Assumes (but does not enforce) that `parent_hash` is the parent hash of all nodes in
     // `remote_nodes`.
-    async fn find_inner_nodes_with_new_blocks<'a>(
+    async fn find_inner_nodes_with_new_blocks(
         &self,
         conn: &mut db::Connection,
         parent_hash: &Hash,
-        remote_nodes: &'a InnerNodeMap,
-    ) -> Result<impl Iterator<Item = &'a InnerNode>> {
+        remote_nodes: &InnerNodeMap,
+    ) -> Result<Vec<Hash>> {
         let local_nodes = InnerNode::load_children(conn, parent_hash).await?;
+
+        let mut receive_filter = self.shared.receive_filter.lock().unwrap();
+        receive_filter.cleanup();
 
         Ok(remote_nodes
             .iter()
             .filter(move |(bucket, remote_node)| {
+                if !receive_filter.check(remote_node.hash, remote_node.summary) {
+                    return false;
+                }
+
                 let local_node = if let Some(node) = local_nodes.get(*bucket) {
                     node
                 } else {
@@ -258,7 +274,8 @@ impl Index {
                     .is_up_to_date_with(&remote_node.summary)
                     .unwrap_or(true)
             })
-            .map(|(_, node)| node))
+            .map(|(_, node)| node.hash)
+            .collect())
     }
 
     // Filter leaf nodes that the remote replica has a block for but the local one is missing it.
@@ -359,6 +376,7 @@ struct Shared {
     repository_id: RepositoryId,
     branches: RwLock<Branches>,
     notify_tx: broadcast::Sender<PublicKey>,
+    receive_filter: BlockingMutex<ReceiveFilter>,
 }
 
 /// Container for all known branches (local and remote)
@@ -512,4 +530,42 @@ pub(crate) async fn init(conn: &mut db::Connection) -> Result<(), Error> {
     .map_err(Error::CreateDbSchema)?;
 
     Ok(())
+}
+
+/// Filter for received nodes to avoid processing a node that doesn't contain any new information
+/// compared to the last time we received that same node.
+struct ReceiveFilter {
+    entries: HashMap<Hash, (Summary, Instant)>,
+}
+
+const RECEIVE_FILTER_EXPIRY: Duration = Duration::from_secs(5 * 60);
+
+impl ReceiveFilter {
+    fn new() -> Self {
+        Self {
+            entries: HashMap::new(),
+        }
+    }
+
+    fn check(&mut self, hash: Hash, summary: Summary) -> bool {
+        match self.entries.entry(hash) {
+            Entry::Occupied(mut entry) => {
+                if entry.get().0.is_up_to_date_with(&summary).unwrap_or(false) {
+                    false
+                } else {
+                    entry.insert((summary, Instant::now()));
+                    true
+                }
+            }
+            Entry::Vacant(entry) => {
+                entry.insert((summary, Instant::now()));
+                true
+            }
+        }
+    }
+
+    fn cleanup(&mut self) {
+        self.entries
+            .retain(|_, (_, timestamp)| timestamp.elapsed() < RECEIVE_FILTER_EXPIRY)
+    }
 }

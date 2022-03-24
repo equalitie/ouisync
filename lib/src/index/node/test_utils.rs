@@ -1,9 +1,15 @@
 use super::{
+    super::{Index, Proof},
     get_bucket, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, Summary, INNER_LAYER_COUNT,
 };
 use crate::{
     block::{BlockData, BlockId, BlockNonce, BLOCK_SIZE},
-    crypto::{Hash, Hashable},
+    crypto::{
+        sign::{Keypair, PublicKey},
+        Hash, Hashable,
+    },
+    store,
+    version_vector::VersionVector,
 };
 use rand::Rng;
 use std::{collections::HashMap, mem};
@@ -138,6 +144,45 @@ impl Block {
             data: BlockData::from(content.into_boxed_slice()),
             nonce,
         }
+    }
+}
+
+// Receive all nodes in `snapshot` into `index`.
+pub(crate) async fn receive_nodes(
+    index: &Index,
+    write_keys: &Keypair,
+    branch_id: PublicKey,
+    version_vector: VersionVector,
+    snapshot: &Snapshot,
+) {
+    let proof = Proof::new(branch_id, version_vector, *snapshot.root_hash(), write_keys);
+    index
+        .receive_root_node(proof.into(), Summary::INCOMPLETE)
+        .await
+        .unwrap();
+
+    for layer in snapshot.inner_layers() {
+        for (_, nodes) in layer.inner_maps() {
+            index
+                .receive_inner_nodes(nodes.clone().into())
+                .await
+                .unwrap();
+        }
+    }
+
+    for (_, nodes) in snapshot.leaf_sets() {
+        index
+            .receive_leaf_nodes(nodes.clone().into())
+            .await
+            .unwrap();
+    }
+}
+
+pub(crate) async fn receive_blocks(index: &Index, snapshot: &Snapshot) {
+    for block in snapshot.blocks().values() {
+        store::write_received_block(index, &block.data, &block.nonce)
+            .await
+            .unwrap();
     }
 }
 
