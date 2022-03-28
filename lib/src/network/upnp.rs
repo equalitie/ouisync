@@ -206,11 +206,13 @@ struct PerIGDPortForwarder {
 
 impl PerIGDPortForwarder {
     async fn run(&self) -> Result<(), rupnp::Error> {
+        // NOTE: It's OK to exit this function when an error happens (as opposed to keep looping).
+        // It's because we're periodically searching for IGD devices and as long as there is one,
+        // this task (if it fails) shall be restarted.
         let local_ip = local_address_to(&self.device_url).await?;
 
         let lease_duration = Duration::from_secs(5 * 60);
         let sleep_delta = Duration::from_secs(5);
-        let error_sleep_duration = Duration::from_secs(15);
         let sleep_duration = lease_duration.saturating_sub(sleep_delta);
 
         let mut error_reported = false;
@@ -218,14 +220,7 @@ impl PerIGDPortForwarder {
         let mut ext_addr_reported = false;
 
         loop {
-            if self
-                .add_port_mappings(&local_ip, lease_duration)
-                .await
-                .is_err()
-            {
-                sleep(error_sleep_duration).await;
-                continue;
-            }
+            self.add_port_mappings(&local_ip, lease_duration).await?;
 
             if !ext_port_reported {
                 ext_port_reported = true;
@@ -276,14 +271,7 @@ impl PerIGDPortForwarder {
             // 2. We could try to update the lease, and then confirm that the lease has indeed been
             //    updated. Unfortunately, we've seen IGD devices which fail to report active
             //    leases (or report only the first one in their list or some other random subset).
-            if self
-                .add_port_mappings(&local_ip, lease_duration)
-                .await
-                .is_err()
-            {
-                sleep(error_sleep_duration).await;
-                continue;
-            }
+            self.add_port_mappings(&local_ip, lease_duration).await?;
 
             sleep(sleep_delta * 2).await;
         }
