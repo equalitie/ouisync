@@ -71,8 +71,6 @@ impl BranchData {
         version_vector_override: Option<&VersionVector>,
         write_keys: &Keypair,
     ) -> Result<()> {
-        // TODO: should we emit a notification event here?
-
         let mut root_node = self.root_node.write().await;
 
         let mut new_version_vector = root_node.proof.version_vector.clone();
@@ -90,7 +88,11 @@ impl BranchData {
             write_keys,
         );
 
-        root_node.update_proof(tx, new_proof).await
+        root_node.update_proof(tx, new_proof).await?;
+
+        self.notify();
+
+        Ok(())
     }
 
     /// Inserts a new block into the index.
@@ -101,34 +103,34 @@ impl BranchData {
         encoded_locator: &LocatorHash,
         write_keys: &Keypair,
     ) -> Result<()> {
-        let mut writer = self.write();
-        writer
-            .insert(conn, block_id, encoded_locator, write_keys)
-            .await?;
-        writer.finish();
+        let mut lock = self.root_node.write().await;
+        let mut path = load_path(conn, &lock.proof.hash, encoded_locator).await?;
+
+        // We shouldn't be inserting a block to a branch twice. If we do, the assumption is that we
+        // hit one in 2^sizeof(BlockId) chance that we randomly generated the same BlockId twice.
+        assert!(!path.has_leaf(block_id));
+
+        path.set_leaf(block_id);
+        save_path(conn, &mut lock, &path, write_keys).await?;
+
         Ok(())
     }
 
     /// Removes the block identified by encoded_locator from the index.
-    #[cfg(test)] // currently test only
     pub async fn remove(
         &self,
         conn: &mut db::Connection,
         encoded_locator: &Hash,
         write_keys: &Keypair,
     ) -> Result<()> {
-        let mut writer = self.write();
-        writer.remove(conn, encoded_locator, write_keys).await?;
-        writer.finish();
-        Ok(())
-    }
+        let mut lock = self.root_node.write().await;
+        let mut path = load_path(conn, &lock.proof.hash, encoded_locator).await?;
 
-    /// Perform multiple `insert` and/or `remove` operations in a batch.
-    pub fn write(&self) -> Writer {
-        Writer {
-            branch: self,
-            notify: false,
-        }
+        path.remove_leaf(encoded_locator)
+            .ok_or(Error::EntryNotFound)?;
+        save_path(conn, &mut lock, &path, write_keys).await?;
+
+        Ok(())
     }
 
     /// Retrieve `BlockId` of a block with the given encoded `Locator`.
@@ -177,66 +179,6 @@ impl BranchData {
 
     pub async fn reload_root(&self, db: &mut db::Connection) -> Result<()> {
         self.root_node.write().await.reload(db).await
-    }
-}
-
-/// Handle to perform multiple mutable operations on `BranchData`.
-///
-/// Currently this only suppresses notification events until `finish` is called but in the future
-/// it could also actually batch the operations so only one snapshot is created.
-pub(crate) struct Writer<'a> {
-    branch: &'a BranchData,
-    notify: bool,
-}
-
-impl<'a> Writer<'a> {
-    /// Inserts a new block into the index.
-    pub async fn insert(
-        &mut self,
-        conn: &mut db::Connection,
-        block_id: &BlockId,
-        encoded_locator: &LocatorHash,
-        write_keys: &Keypair,
-    ) -> Result<()> {
-        let mut lock = self.branch.root_node.write().await;
-        let mut path = load_path(conn, &lock.proof.hash, encoded_locator).await?;
-
-        // We shouldn't be inserting a block to a branch twice. If we do, the assumption is that we
-        // hit one in 2^sizeof(BlockId) chance that we randomly generated the same BlockId twice.
-        assert!(!path.has_leaf(block_id));
-
-        path.set_leaf(block_id);
-        save_path(conn, &mut lock, &path, write_keys).await?;
-
-        self.notify = true;
-
-        Ok(())
-    }
-
-    /// Removes the block identified by encoded_locator from the index.
-    pub async fn remove(
-        &mut self,
-        conn: &mut db::Connection,
-        encoded_locator: &Hash,
-        write_keys: &Keypair,
-    ) -> Result<()> {
-        let mut lock = self.branch.root_node.write().await;
-        let mut path = load_path(conn, &lock.proof.hash, encoded_locator).await?;
-
-        path.remove_leaf(encoded_locator)
-            .ok_or(Error::EntryNotFound)?;
-        save_path(conn, &mut lock, &path, write_keys).await?;
-
-        self.notify = true;
-
-        Ok(())
-    }
-
-    /// Finishes the writes. If at least one operation was performed, emits a notification event.
-    pub fn finish(self) {
-        if self.notify {
-            self.branch.notify();
-        }
     }
 }
 
