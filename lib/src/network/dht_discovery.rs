@@ -31,9 +31,10 @@ pub const DHT_ROUTERS: &[&str] = &["router.bittorrent.com:6881", "dht.transmissi
 // Interval for the delay before a repository is re-announced on the DHT. The actual delay is an
 // uniformly random value from this interval.
 // BEP5 indicates that "After 15 minutes of inactivity, a node becomes questionable." so try not
-// to get too close to that value to avoid DHT churn.
-const MIN_DHT_ANNOUNCE_DELAY: Duration = Duration::from_secs(5 * 60);
-const MAX_DHT_ANNOUNCE_DELAY: Duration = Duration::from_secs(12 * 60);
+// to get too close to that value to avoid DHT churn. However, too frequent updates may cause
+// other nodes to put us on a blacklist.
+const MIN_DHT_ANNOUNCE_DELAY: Duration = Duration::from_secs(3 * 60);
+const MAX_DHT_ANNOUNCE_DELAY: Duration = Duration::from_secs(6 * 60);
 
 const LAST_USED_PORT_V4: ConfigKey<u16> =
     ConfigKey::new("last_used_udp_port_v4", LAST_USED_PORT_COMMENT);
