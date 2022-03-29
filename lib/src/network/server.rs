@@ -154,6 +154,8 @@ async fn handle_child_nodes(
         reporter.ok();
         stats.ok();
     } else {
+        tx.send(Response::ChildNodesError(parent_hash)).await;
+
         reporter.not_found();
         stats.not_found();
     }
@@ -164,30 +166,33 @@ async fn handle_child_nodes(
 async fn handle_block(index: &Index, tx: &Sender, stats: &mut Stats, id: BlockId) -> Result<()> {
     let reporter = RequestReporter::new("handle_block", &id);
 
-    let mut conn = index.pool.acquire().await?;
     let mut content = vec![0; BLOCK_SIZE].into_boxed_slice();
+    let mut conn = index.pool.acquire().await?;
+    let result = block::read(&mut conn, &id, &mut content).await;
+    drop(conn); // don't hold the connection while sending is in progress
 
-    let nonce = match block::read(&mut conn, &id, &mut content).await {
-        Ok(nonce) => nonce,
+    match result {
+        Ok(nonce) => {
+            tx.send(Response::Block { content, nonce }).await;
+
+            reporter.ok();
+            stats.ok();
+
+            Ok(())
+        }
         Err(Error::BlockNotFound(_)) => {
-            // This is probably a request to an already deleted orphaned block from an
-            // outdated branch. It should be safe to ignore this as the client will request
-            // the correct blocks when it becomes up to date to our latest branch.
+            tx.send(Response::BlockError(id)).await;
+
             reporter.not_found();
             stats.not_found();
 
-            return Ok(());
+            Ok(())
         }
-        Err(error) => return Err(error),
-    };
-
-    drop(conn);
-
-    tx.send(Response::Block { content, nonce }).await;
-    reporter.ok();
-    stats.ok();
-
-    Ok(())
+        Err(error) => {
+            tx.send(Response::BlockError(id)).await;
+            Err(error)
+        }
+    }
 }
 
 type Receiver = mpsc::Receiver<Request>;

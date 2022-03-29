@@ -63,6 +63,7 @@ impl Client {
             Response::InnerNodes(nodes) => self.handle_inner_nodes(nodes).await?,
             Response::LeafNodes(nodes) => self.handle_leaf_nodes(nodes).await?,
             Response::Block { content, nonce } => self.handle_block(content, nonce).await?,
+            Response::ChildNodesError(_) | Response::BlockError(_) => (),
         }
 
         Ok(())
