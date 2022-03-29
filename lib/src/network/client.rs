@@ -6,20 +6,12 @@ use crate::{
     index::{Index, InnerNodeMap, LeafNodeSet, ReceiveError, Summary, UntrustedProof},
     store,
 };
-use std::time::Duration;
-use tokio::{
-    select,
-    sync::mpsc,
-    time::{self, MissedTickBehavior},
-};
-
-const REPORT_INTERVAL: Duration = Duration::from_secs(1);
+use tokio::sync::mpsc;
 
 pub(crate) struct Client {
     index: Index,
     tx: Sender,
     rx: Receiver,
-    report: bool,
 }
 
 impl Client {
@@ -28,29 +20,17 @@ impl Client {
             index,
             tx: Sender(tx),
             rx,
-            report: true,
         }
     }
 
     pub async fn run(&mut self) -> Result<()> {
-        let mut report_interval = time::interval(REPORT_INTERVAL);
-        report_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-
-        loop {
-            select! {
-                Some(response) = self.rx.recv() => {
-                    match self.handle_response(response).await {
-                        Ok(()) => {}
-                        Err(
-                            error @ (ReceiveError::InvalidProof | ReceiveError::ParentNodeNotFound),
-                        ) => {
-                            log::warn!("failed to handle response: {}", error)
-                        }
-                        Err(ReceiveError::Fatal(error)) => return Err(error),
-                    }
+        while let Some(response) = self.rx.recv().await {
+            match self.handle_response(response).await {
+                Ok(()) => (),
+                Err(error @ (ReceiveError::InvalidProof | ReceiveError::ParentNodeNotFound)) => {
+                    log::warn!("failed to handle response: {}", error)
                 }
-                _ = report_interval.tick() => self.report().await?,
-                else => break,
+                Err(ReceiveError::Fatal(error)) => return Err(error),
             }
         }
 
@@ -110,10 +90,6 @@ impl Client {
 
         let updated = self.index.receive_leaf_nodes(nodes).await?;
 
-        if !updated.is_empty() {
-            self.report = true;
-        }
-
         for block_id in updated {
             // TODO: avoid multiple clients downloading the same block
             self.tx.send(Request::Block(block_id)).await;
@@ -127,29 +103,12 @@ impl Client {
         log::trace!("handle_block({:?})", data.id);
 
         match store::write_received_block(&self.index, &data, &nonce).await {
-            Ok(_) => {
-                self.report = true;
-                Ok(())
-            }
+            Ok(_) => Ok(()),
             // Ignore `BlockNotReferenced` errors as they only mean that the block is no longer
             // needed.
             Err(Error::BlockNotReferenced) => Ok(()),
             Err(e) => Err(e),
         }
-    }
-
-    async fn report(&mut self) -> Result<()> {
-        if !self.report {
-            return Ok(());
-        }
-
-        log::debug!(
-            "missing blocks: {}",
-            self.index.count_missing_blocks().await
-        );
-        self.report = false;
-
-        Ok(())
     }
 }
 

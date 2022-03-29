@@ -25,14 +25,16 @@ use crate::{
     metadata, path,
     scoped_task::{self, ScopedJoinHandle},
     store,
-    sync::Mutex,
+    sync::{broadcast::ThrottleReceiver, Mutex},
 };
 use camino::Utf8Path;
 use futures_util::future;
 use std::{
     collections::{hash_map::Entry, HashMap},
     sync::Arc,
+    time::Duration,
 };
+use tokio::task;
 
 pub struct Repository {
     shared: Arc<Shared>,
@@ -161,7 +163,7 @@ impl Repository {
         enable_merger: bool,
     ) -> Result<Self> {
         let shared = Arc::new(Shared {
-            index,
+            index: index.clone(),
             this_writer_id,
             secrets,
             branches: Mutex::new(HashMap::new()),
@@ -180,6 +182,8 @@ impl Repository {
         let merge_handle = local_branch.map(|local_branch| {
             scoped_task::spawn(Merger::new(shared.clone(), local_branch).run())
         });
+
+        task::spawn(report_sync_progress(index));
 
         Ok(Self {
             shared,
@@ -601,4 +605,19 @@ async fn generate_writer_id(
     metadata::set_writer_id(&writer_id, device_id, master_key, conn).await?;
 
     Ok(writer_id)
+}
+
+async fn report_sync_progress(index: Index) {
+    // TODO: change this to report the progress as MB downloaded / MB total and/or percents
+
+    let mut prev_missing_blocks = 0;
+    let mut event_rx = ThrottleReceiver::new(index.subscribe(), Duration::from_secs(1));
+
+    while event_rx.recv().await.is_ok() {
+        let next_missing_blocks = index.count_missing_blocks().await;
+        if next_missing_blocks != prev_missing_blocks {
+            prev_missing_blocks = next_missing_blocks;
+            log::debug!("sync progress: {} missing blocks", prev_missing_blocks);
+        }
+    }
 }
