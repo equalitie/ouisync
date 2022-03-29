@@ -232,7 +232,7 @@ async fn expect_file_content(repo: &Repository, path: &str, expected_content: &[
             Err(error) => panic!("unexpected error: {:?}", error),
         };
 
-        let actual_content = match file.read_to_end().await {
+        let actual_content = match read_in_chunks(&mut file, 4096).await {
             Ok(content) => content,
             Err(Error::BlockNotFound(_)) => continue,
             Err(error) => panic!("unexpected error: {:?}", error),
@@ -255,5 +255,30 @@ async fn write_in_chunks(file: &mut File, content: &[u8], chunk_size: usize) {
     for offset in (0..content.len()).step_by(chunk_size) {
         let end = (offset + chunk_size).min(content.len());
         file.write(&content[offset..end]).await.unwrap();
+
+        if to_megabytes(end) > to_megabytes(offset) {
+            log::debug!(
+                "file write progress: {}/{} MB",
+                to_megabytes(end),
+                to_megabytes(content.len())
+            );
+        }
     }
+}
+
+async fn read_in_chunks(file: &mut File, chunk_size: usize) -> Result<Vec<u8>, Error> {
+    let mut content = vec![0; file.len().await as usize];
+    let mut offset = 0;
+
+    while offset < content.len() {
+        let end = (offset + chunk_size).min(content.len());
+        let size = file.read(&mut content[offset..end]).await?;
+        offset += size;
+    }
+
+    Ok(content)
+}
+
+fn to_megabytes(bytes: usize) -> usize {
+    bytes / 1024 / 1024
 }
