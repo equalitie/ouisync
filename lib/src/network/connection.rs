@@ -33,6 +33,7 @@ impl ConnectionDeduplicator {
             entry.insert(id);
             id
         } else {
+            log::debug!("ConnectionDeduplicator: Not permitting another connection ({:?}, {:?})", addr, dir);
             return None;
         };
 
@@ -45,7 +46,7 @@ impl ConnectionDeduplicator {
     }
 }
 
-#[derive(Clone, Copy, Eq, PartialEq, Hash)]
+#[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]
 pub(super) enum ConnectionDirection {
     Incoming,
     Outgoing,
