@@ -1,52 +1,127 @@
 use super::message::{Content, Request, Response};
 use crate::{
-    block::{BlockData, BlockNonce},
-    crypto::{CacheHash, Hashable},
+    block::{BlockData, BlockId, BlockNonce},
+    crypto::{CacheHash, Hash, Hashable},
     error::{Error, Result},
     index::{Index, InnerNodeMap, LeafNodeSet, ReceiveError, Summary, UntrustedProof},
     store,
 };
+use std::collections::{HashSet, VecDeque};
 use tokio::sync::mpsc;
+
+// Maximum number of sent request for which we haven't received a response yet.
+// Higher values give better performance but too high risks congesting the network. Also there is a
+// point of diminishing returns. 32 seems to be the sweet spot based on a simple experiment.
+// TODO: run more precise benchmarks to find the actual optimum.
+const MAX_PENDING_REQUESTS: usize = 32;
 
 pub(crate) struct Client {
     index: Index,
-    tx: Sender,
-    rx: Receiver,
+    tx: mpsc::Sender<Content>,
+    rx: mpsc::Receiver<Response>,
+    // TODO: share this among all clients of a given peer so even when there are multiple repos
+    // shared with the same peer, the total number of in-flight requests to that peer is still
+    // bounded.
+    pending_requests: HashSet<Request>,
+    send_queue: VecDeque<Request>,
+    recv_queue: VecDeque<Success>,
 }
 
 impl Client {
     pub fn new(index: Index, tx: mpsc::Sender<Content>, rx: mpsc::Receiver<Response>) -> Self {
         Self {
             index,
-            tx: Sender(tx),
+            tx,
             rx,
+            pending_requests: HashSet::new(),
+            send_queue: VecDeque::new(),
+            recv_queue: VecDeque::new(),
         }
     }
 
     pub async fn run(&mut self) -> Result<()> {
         while let Some(response) = self.rx.recv().await {
-            match self.handle_response(response).await {
-                Ok(()) => (),
-                Err(error @ (ReceiveError::InvalidProof | ReceiveError::ParentNodeNotFound)) => {
-                    log::warn!("failed to handle response: {}", error)
+            self.enqueue_response(response);
+
+            loop {
+                self.send_requests().await;
+
+                if let Some(response) = self.dequeue_response() {
+                    self.handle_response(response).await?;
+                } else {
+                    break;
                 }
-                Err(ReceiveError::Fatal(error)) => return Err(error),
             }
         }
 
         Ok(())
     }
 
-    async fn handle_response(&mut self, response: Response) -> Result<(), ReceiveError> {
-        match response {
-            Response::RootNode { proof, summary } => self.handle_root_node(proof, summary).await?,
-            Response::InnerNodes(nodes) => self.handle_inner_nodes(nodes).await?,
-            Response::LeafNodes(nodes) => self.handle_leaf_nodes(nodes).await?,
-            Response::Block { content, nonce } => self.handle_block(content, nonce).await?,
-            Response::ChildNodesError(_) | Response::BlockError(_) => (),
+    async fn send_requests(&mut self) {
+        loop {
+            if self.pending_requests.len() >= MAX_PENDING_REQUESTS {
+                // Too many requests already in-flight.
+                break;
+            }
+
+            let request = if let Some(request) = self.send_queue.pop_back() {
+                request
+            } else {
+                // No request scheduled for sending.
+                break;
+            };
+
+            if !self.pending_requests.insert(request) {
+                // The same request is already in-flight.
+                continue;
+            }
+
+            self.tx.send(Content::Request(request)).await.unwrap_or(());
+        }
+    }
+
+    fn enqueue_response(&mut self, response: Response) {
+        let response = ProcessedResponse::from(response);
+
+        if let Some(request) = response.to_request() {
+            if !self.pending_requests.remove(&request) {
+                // unsolicited response
+                return;
+            }
         }
 
-        Ok(())
+        if let ProcessedResponse::Success(response) = response {
+            self.recv_queue.push_front(response);
+        }
+    }
+
+    fn dequeue_response(&mut self) -> Option<Success> {
+        // To avoid enqueueing too many requests to sent (which might become outdated by the time
+        // we get to actually send them) we process a response (which usually produces more
+        // requests to send) only when there are no more requests queued.
+        if !self.send_queue.is_empty() {
+            return None;
+        }
+
+        self.recv_queue.pop_back()
+    }
+
+    async fn handle_response(&mut self, response: Success) -> Result<()> {
+        let result = match response {
+            Success::RootNode { proof, summary } => self.handle_root_node(proof, summary).await,
+            Success::InnerNodes(nodes) => self.handle_inner_nodes(nodes).await,
+            Success::LeafNodes(nodes) => self.handle_leaf_nodes(nodes).await,
+            Success::Block { data, nonce } => self.handle_block(data, nonce).await,
+        };
+
+        match result {
+            Ok(()) => Ok(()),
+            Err(error @ (ReceiveError::InvalidProof | ReceiveError::ParentNodeNotFound)) => {
+                log::warn!("failed to handle response: {}", error);
+                Ok(())
+            }
+            Err(ReceiveError::Fatal(error)) => Err(error),
+        }
     }
 
     async fn handle_root_node(
@@ -65,41 +140,48 @@ impl Client {
         let updated = self.index.receive_root_node(proof, summary).await?;
 
         if updated {
-            self.tx.send(Request::ChildNodes(hash)).await;
+            self.send_queue.push_front(Request::ChildNodes(hash));
         }
 
         Ok(())
     }
 
-    async fn handle_inner_nodes(&self, nodes: InnerNodeMap) -> Result<(), ReceiveError> {
-        let nodes = CacheHash::from(nodes);
+    async fn handle_inner_nodes(
+        &mut self,
+        nodes: CacheHash<InnerNodeMap>,
+    ) -> Result<(), ReceiveError> {
         log::trace!("handle_inner_nodes({:?})", nodes.hash());
 
         let updated = self.index.receive_inner_nodes(nodes).await?;
 
         for hash in updated {
-            self.tx.send(Request::ChildNodes(hash)).await;
+            self.send_queue.push_front(Request::ChildNodes(hash));
         }
 
         Ok(())
     }
 
-    async fn handle_leaf_nodes(&mut self, nodes: LeafNodeSet) -> Result<(), ReceiveError> {
-        let nodes = CacheHash::from(nodes);
+    async fn handle_leaf_nodes(
+        &mut self,
+        nodes: CacheHash<LeafNodeSet>,
+    ) -> Result<(), ReceiveError> {
         log::trace!("handle_leaf_nodes({:?})", nodes.hash());
 
         let updated = self.index.receive_leaf_nodes(nodes).await?;
 
         for block_id in updated {
             // TODO: avoid multiple clients downloading the same block
-            self.tx.send(Request::Block(block_id)).await;
+            self.send_queue.push_front(Request::Block(block_id));
         }
 
         Ok(())
     }
 
-    async fn handle_block(&mut self, content: Box<[u8]>, nonce: BlockNonce) -> Result<()> {
-        let data = BlockData::from(content);
+    async fn handle_block(
+        &mut self,
+        data: BlockData,
+        nonce: BlockNonce,
+    ) -> Result<(), ReceiveError> {
         log::trace!("handle_block({:?})", data.id);
 
         match store::write_received_block(&self.index, &data, &nonce).await {
@@ -107,17 +189,61 @@ impl Client {
             // Ignore `BlockNotReferenced` errors as they only mean that the block is no longer
             // needed.
             Err(Error::BlockNotReferenced) => Ok(()),
-            Err(e) => Err(e),
+            Err(error) => Err(error.into()),
         }
     }
 }
 
-struct Sender(mpsc::Sender<Content>);
+enum ProcessedResponse {
+    Success(Success),
+    Failure(Failure),
+}
 
-impl Sender {
-    async fn send(&self, request: Request) -> bool {
-        self.0.send(Content::Request(request)).await.is_ok()
+impl ProcessedResponse {
+    fn to_request(&self) -> Option<Request> {
+        match self {
+            Self::Success(Success::RootNode { .. }) => None,
+            Self::Success(Success::InnerNodes(nodes)) => Some(Request::ChildNodes(nodes.hash())),
+            Self::Success(Success::LeafNodes(nodes)) => Some(Request::ChildNodes(nodes.hash())),
+            Self::Success(Success::Block { data, .. }) => Some(Request::Block(data.id)),
+            Self::Failure(Failure::ChildNodes(hash)) => Some(Request::ChildNodes(*hash)),
+            Self::Failure(Failure::Block(id)) => Some(Request::Block(*id)),
+        }
     }
 }
 
-type Receiver = mpsc::Receiver<Response>;
+impl From<Response> for ProcessedResponse {
+    fn from(response: Response) -> Self {
+        match response {
+            Response::RootNode { proof, summary } => {
+                Self::Success(Success::RootNode { proof, summary })
+            }
+            Response::InnerNodes(nodes) => Self::Success(Success::InnerNodes(nodes.into())),
+            Response::LeafNodes(nodes) => Self::Success(Success::LeafNodes(nodes.into())),
+            Response::Block { content, nonce } => Self::Success(Success::Block {
+                data: content.into(),
+                nonce,
+            }),
+            Response::ChildNodesError(hash) => Self::Failure(Failure::ChildNodes(hash)),
+            Response::BlockError(id) => Self::Failure(Failure::Block(id)),
+        }
+    }
+}
+
+enum Success {
+    RootNode {
+        proof: UntrustedProof,
+        summary: Summary,
+    },
+    InnerNodes(CacheHash<InnerNodeMap>),
+    LeafNodes(CacheHash<LeafNodeSet>),
+    Block {
+        data: BlockData,
+        nonce: BlockNonce,
+    },
+}
+
+enum Failure {
+    ChildNodes(Hash),
+    Block(BlockId),
+}

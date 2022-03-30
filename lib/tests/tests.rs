@@ -92,12 +92,11 @@ async fn remove_remote_file() {
 #[tokio::test(flavor = "multi_thread")]
 async fn relay() {
     // Simulate two peers that can't connect to each other but both can connect to a third peer.
+    // env_logger::init();
 
     // There used to be a deadlock that got triggered only when transferring a sufficiently large
     // file.
     let file_size = 4 * 1024 * 1024;
-    // let file_size = 384 * 1024 * 1024;
-    // env_logger::init();
 
     let mut rng = StdRng::seed_from_u64(0);
 
@@ -137,13 +136,11 @@ async fn relay() {
     .await;
 }
 
-// DEBUG
-#[ignore]
 #[tokio::test(flavor = "multi_thread")]
 async fn transfer_large_file() {
-    // let file_size = 1024 * 1024 * 1024;
-    let file_size = 64 * 1024 * 1024;
-    env_logger::init();
+    // env_logger::init();
+
+    let file_size = 4 * 1024 * 1024;
 
     let mut rng = StdRng::seed_from_u64(0);
 
