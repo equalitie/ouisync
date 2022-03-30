@@ -30,7 +30,7 @@ pub(crate) struct Client {
     // TODO: share this among all clients of a given peer so even when there are multiple repos
     // shared with the same peer, the total number of in-flight requests to that peer is still
     // bounded.
-    pending_requests: HashMap<Request, Instant>,
+    request_limiter: RequestLimiter,
     send_queue: VecDeque<Request>,
     recv_queue: VecDeque<Success>,
 }
@@ -41,7 +41,7 @@ impl Client {
             index,
             tx,
             rx,
-            pending_requests: HashMap::new(),
+            request_limiter: RequestLimiter::new(),
             send_queue: VecDeque::new(),
             recv_queue: VecDeque::new(),
         }
@@ -53,7 +53,7 @@ impl Client {
                 Some(response) = self.rx.recv() => {
                     self.enqueue_response(response);
                 }
-                _ = wait_for_next_expiry(&mut self.pending_requests) => (),
+                _ = self.request_limiter.expired() => (),
                 else => break,
             }
 
@@ -73,7 +73,7 @@ impl Client {
 
     async fn send_requests(&mut self) {
         loop {
-            if self.pending_requests.len() >= MAX_PENDING_REQUESTS {
+            if self.request_limiter.is_full() {
                 // Too many requests already in-flight.
                 break;
             }
@@ -85,11 +85,7 @@ impl Client {
                 break;
             };
 
-            if self
-                .pending_requests
-                .insert(request, Instant::now())
-                .is_some()
-            {
+            if !self.request_limiter.insert(request) {
                 // The same request is already in-flight.
                 continue;
             }
@@ -102,7 +98,7 @@ impl Client {
         let response = ProcessedResponse::from(response);
 
         if let Some(request) = response.to_request() {
-            if self.pending_requests.remove(&request).is_none() {
+            if !self.request_limiter.remove(&request) {
                 // unsolicited response
                 return;
             }
@@ -266,11 +262,33 @@ enum Failure {
     Block(BlockId),
 }
 
-async fn wait_for_next_expiry(pending: &mut HashMap<Request, Instant>) {
-    if let Some((&request, &timestamp)) = pending.iter().min_by(|(_, a), (_, b)| a.cmp(b)) {
-        time::sleep_until((timestamp + PENDING_REQUEST_EXPIRY).into()).await;
-        pending.remove(&request);
-    } else {
-        future::pending().await
+struct RequestLimiter(HashMap<Request, Instant>);
+
+impl RequestLimiter {
+    fn new() -> Self {
+        Self(HashMap::new())
+    }
+
+    fn is_full(&self) -> bool {
+        self.0.len() >= MAX_PENDING_REQUESTS
+    }
+
+    fn insert(&mut self, request: Request) -> bool {
+        self.0.insert(request, Instant::now()).is_none()
+    }
+
+    fn remove(&mut self, request: &Request) -> bool {
+        self.0.remove(request).is_some()
+    }
+
+    async fn expired(&mut self) {
+        if let Some((&request, &timestamp)) =
+            self.0.iter().min_by(|(_, lhs), (_, rhs)| lhs.cmp(rhs))
+        {
+            time::sleep_until((timestamp + PENDING_REQUEST_EXPIRY).into()).await;
+            self.0.remove(&request);
+        } else {
+            future::pending().await
+        }
     }
 }
