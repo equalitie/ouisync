@@ -6,14 +6,22 @@ use crate::{
     index::{Index, InnerNodeMap, LeafNodeSet, ReceiveError, Summary, UntrustedProof},
     store,
 };
-use std::collections::{HashSet, VecDeque};
-use tokio::sync::mpsc;
+use std::{
+    collections::{HashMap, VecDeque},
+    future,
+    time::{Duration, Instant},
+};
+use tokio::{select, sync::mpsc, time};
 
 // Maximum number of sent request for which we haven't received a response yet.
 // Higher values give better performance but too high risks congesting the network. Also there is a
 // point of diminishing returns. 32 seems to be the sweet spot based on a simple experiment.
 // TODO: run more precise benchmarks to find the actual optimum.
 const MAX_PENDING_REQUESTS: usize = 32;
+
+// If a response to a pending request is not received within this time, the request is expired so
+// that it doesn't block other requests from being sent.
+const PENDING_REQUEST_EXPIRY: Duration = Duration::from_secs(10);
 
 pub(crate) struct Client {
     index: Index,
@@ -22,7 +30,7 @@ pub(crate) struct Client {
     // TODO: share this among all clients of a given peer so even when there are multiple repos
     // shared with the same peer, the total number of in-flight requests to that peer is still
     // bounded.
-    pending_requests: HashSet<Request>,
+    pending_requests: HashMap<Request, Instant>,
     send_queue: VecDeque<Request>,
     recv_queue: VecDeque<Success>,
 }
@@ -33,15 +41,21 @@ impl Client {
             index,
             tx,
             rx,
-            pending_requests: HashSet::new(),
+            pending_requests: HashMap::new(),
             send_queue: VecDeque::new(),
             recv_queue: VecDeque::new(),
         }
     }
 
     pub async fn run(&mut self) -> Result<()> {
-        while let Some(response) = self.rx.recv().await {
-            self.enqueue_response(response);
+        loop {
+            select! {
+                Some(response) = self.rx.recv() => {
+                    self.enqueue_response(response);
+                }
+                _ = wait_for_next_expiry(&mut self.pending_requests) => (),
+                else => break,
+            }
 
             loop {
                 self.send_requests().await;
@@ -71,7 +85,11 @@ impl Client {
                 break;
             };
 
-            if !self.pending_requests.insert(request) {
+            if self
+                .pending_requests
+                .insert(request, Instant::now())
+                .is_some()
+            {
                 // The same request is already in-flight.
                 continue;
             }
@@ -84,7 +102,7 @@ impl Client {
         let response = ProcessedResponse::from(response);
 
         if let Some(request) = response.to_request() {
-            if !self.pending_requests.remove(&request) {
+            if self.pending_requests.remove(&request).is_none() {
                 // unsolicited response
                 return;
             }
@@ -96,7 +114,7 @@ impl Client {
     }
 
     fn dequeue_response(&mut self) -> Option<Success> {
-        // To avoid enqueueing too many requests to sent (which might become outdated by the time
+        // To avoid en-queueing too many requests to sent (which might become outdated by the time
         // we get to actually send them) we process a response (which usually produces more
         // requests to send) only when there are no more requests queued.
         if !self.send_queue.is_empty() {
@@ -246,4 +264,13 @@ enum Success {
 enum Failure {
     ChildNodes(Hash),
     Block(BlockId),
+}
+
+async fn wait_for_next_expiry(pending: &mut HashMap<Request, Instant>) {
+    if let Some((&request, &timestamp)) = pending.iter().min_by(|(_, a), (_, b)| a.cmp(b)) {
+        time::sleep_until((timestamp + PENDING_REQUEST_EXPIRY).into()).await;
+        pending.remove(&request);
+    } else {
+        future::pending().await
+    }
 }
