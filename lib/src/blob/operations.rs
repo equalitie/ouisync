@@ -186,8 +186,6 @@ impl<'a> Operations<'a> {
 
     /// Truncate the blob to the given length.
     pub async fn truncate(&mut self, tx: &mut db::Transaction<'_>, len: u64) -> Result<()> {
-        // TODO: reuse the truncated blocks on subsequent writes if the content is identical
-
         if len == self.shared.len {
             return Ok(());
         }
@@ -273,7 +271,6 @@ impl<'a> Operations<'a> {
         let write_keys = dst_branch.keys().write().ok_or(Error::PermissionDenied)?;
 
         let mut tx = conn.begin().await?;
-        let mut dst_writer = dst_branch.data().write();
 
         for (src_locator, dst_locator) in self.locators().zip(dst_head_locator.sequence()) {
             let encoded_src_locator = src_locator.encode(read_key);
@@ -286,12 +283,12 @@ impl<'a> Operations<'a> {
                 .get(&mut tx, &encoded_src_locator)
                 .await?;
 
-            dst_writer
+            dst_branch
+                .data()
                 .insert(&mut tx, &block_id, &encoded_dst_locator, write_keys)
                 .await?;
         }
 
-        dst_writer.finish();
         tx.commit().await?;
 
         let current_block = OpenBlock {
@@ -431,15 +428,13 @@ impl<'a> Operations<'a> {
             .write()
             .ok_or(Error::PermissionDenied)?;
 
-        let mut writer = self.unique.branch.data().write();
-
         for locator in locators {
-            writer
+            self.unique
+                .branch
+                .data()
                 .remove(tx, &locator.encode(read_key), write_keys)
                 .await?;
         }
-
-        writer.finish();
 
         Ok(())
     }

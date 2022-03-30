@@ -133,6 +133,7 @@ async fn handle_child_nodes(
     parent_hash: Hash,
 ) -> Result<()> {
     let reporter = RequestReporter::new("handle_child_nodes", &parent_hash);
+    stats.node();
 
     let mut conn = index.pool.acquire().await?;
 
@@ -152,10 +153,9 @@ async fn handle_child_nodes(
         }
 
         reporter.ok();
-        stats.ok();
     } else {
+        tx.send(Response::ChildNodesError(parent_hash)).await;
         reporter.not_found();
-        stats.not_found();
     }
 
     Ok(())
@@ -163,31 +163,29 @@ async fn handle_child_nodes(
 
 async fn handle_block(index: &Index, tx: &Sender, stats: &mut Stats, id: BlockId) -> Result<()> {
     let reporter = RequestReporter::new("handle_block", &id);
+    stats.block();
 
-    let mut conn = index.pool.acquire().await?;
     let mut content = vec![0; BLOCK_SIZE].into_boxed_slice();
+    let mut conn = index.pool.acquire().await?;
+    let result = block::read(&mut conn, &id, &mut content).await;
+    drop(conn); // don't hold the connection while sending is in progress
 
-    let nonce = match block::read(&mut conn, &id, &mut content).await {
-        Ok(nonce) => nonce,
-        Err(Error::BlockNotFound(_)) => {
-            // This is probably a request to an already deleted orphaned block from an
-            // outdated branch. It should be safe to ignore this as the client will request
-            // the correct blocks when it becomes up to date to our latest branch.
-            reporter.not_found();
-            stats.not_found();
-
-            return Ok(());
+    match result {
+        Ok(nonce) => {
+            tx.send(Response::Block { content, nonce }).await;
+            reporter.ok();
+            Ok(())
         }
-        Err(error) => return Err(error),
-    };
-
-    drop(conn);
-
-    tx.send(Response::Block { content, nonce }).await;
-    reporter.ok();
-    stats.ok();
-
-    Ok(())
+        Err(Error::BlockNotFound(_)) => {
+            tx.send(Response::BlockError(id)).await;
+            reporter.not_found();
+            Ok(())
+        }
+        Err(error) => {
+            tx.send(Response::BlockError(id)).await;
+            Err(error)
+        }
+    }
 }
 
 type Receiver = mpsc::Receiver<Request>;
@@ -256,27 +254,27 @@ impl fmt::Display for Status {
 }
 
 struct Stats {
-    count_ok: u64,
-    count_not_found: u64,
+    nodes: u64,
+    blocks: u64,
     report: bool,
 }
 
 impl Stats {
     fn new() -> Self {
         Self {
-            count_ok: 0,
-            count_not_found: 0,
+            nodes: 0,
+            blocks: 0,
             report: true,
         }
     }
 
-    fn ok(&mut self) {
-        self.count_ok += 1;
+    fn node(&mut self) {
+        self.nodes += 1;
         self.report = true;
     }
 
-    fn not_found(&mut self) {
-        self.count_not_found += 1;
+    fn block(&mut self) {
+        self.blocks += 1;
         self.report = true;
     }
 
@@ -286,10 +284,10 @@ impl Stats {
         }
 
         log::debug!(
-            "request stats - ok: {}, not found: {}, total: {}",
-            self.count_ok,
-            self.count_not_found,
-            self.count_ok + self.count_not_found
+            "request stats - nodes: {}, blocks: {}, total: {}",
+            self.nodes,
+            self.blocks,
+            self.nodes + self.blocks
         );
 
         self.report = false;

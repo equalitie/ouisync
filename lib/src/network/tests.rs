@@ -217,6 +217,8 @@ async fn create_block(
         .await
         .unwrap();
     tx.commit().await.unwrap();
+
+    branch.notify();
 }
 
 async fn load_latest_root_node(index: &Index, writer_id: PublicKey) -> Option<RootNode> {

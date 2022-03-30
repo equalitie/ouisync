@@ -149,14 +149,15 @@ async fn open_permanent(path: &Path, create_if_missing: bool) -> Result<Pool> {
         }
     }
 
-    // HACK: using only one connection to work around `SQLITE_BUSY` errors.
-    //
-    // TODO: After some experimentation, it seems that using `SqliteSynchornous::Normal` might fix
-    // those errors but it needs more testing. But even if it works, we should try to avoid making
-    // the test and the production code diverge too much. This means that in order to use multiple
-    // connections we would either have to stop using memory databases or we would have to enable
-    // shared cache also for file databases. Both approaches have their drawbacks.
     SqlitePoolOptions::new()
+        // HACK: using only one connection to work around `SQLITE_BUSY` errors.
+        //
+        // TODO: After some experimentation, it seems that using `SqliteSynchornous::Normal` might
+        // fix those errors but it needs more testing. But even if it works, we should try to avoid
+        // making the test and the production code diverge too much. This means that in order to
+        // use multiple connections we would either have to stop using memory databases or we would
+        // have to enable shared cache also for file databases. Both approaches have their
+        // drawbacks.
         .max_connections(1)
         .connect_with(
             SqliteConnectOptions::new()
@@ -169,11 +170,15 @@ async fn open_permanent(path: &Path, create_if_missing: bool) -> Result<Pool> {
 }
 
 async fn open_temporary() -> Result<Pool> {
-    // HACK: using only one connection to avoid having to use shared cache (which is
-    // necessary when using multiple connections to a memory database, but it's extremely
-    // prone to deadlocks)
     SqlitePoolOptions::new()
+        // HACK: using only one connection to avoid having to use shared cache (which is
+        // necessary when using multiple connections to a memory database, but it's extremely
+        // prone to deadlocks)
         .max_connections(1)
+        // Never reap connections because without shared cache it would also destroy the whole
+        // database.
+        .max_lifetime(None)
+        .idle_timeout(None)
         .connect_with(
             SqliteConnectOptions::from_str(MEMORY)
                 .unwrap()

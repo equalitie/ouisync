@@ -9,6 +9,7 @@ mod message_broker;
 mod message_dispatcher;
 mod message_io;
 mod protocol;
+mod request_limiter;
 mod server;
 mod socket;
 #[cfg(test)]

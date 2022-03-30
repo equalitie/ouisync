@@ -8,7 +8,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize, Debug)]
 pub(crate) enum Request {
     /// Request child nodes (inner or leaf) with the given parent hash. Responded with either
     /// `InnerNodes` or `LeafNodes` response.
@@ -31,11 +31,15 @@ pub(crate) enum Response {
     InnerNodes(InnerNodeMap),
     /// Send leaf nodes.
     LeafNodes(LeafNodeSet),
+    /// Send that a ChildNodes request failed
+    ChildNodesError(Hash),
     /// Send a requested block.
     Block {
         content: Box<[u8]>,
         nonce: BlockNonce,
     },
+    /// Send that a Block request failed
+    BlockError(BlockId),
 }
 
 // Custom `Debug` impl to avoid printing the whole block content in the `Block` variant.
@@ -49,10 +53,12 @@ impl fmt::Debug for Response {
                 .finish(),
             Self::InnerNodes(nodes) => f.debug_tuple("InnerNodes").field(nodes).finish(),
             Self::LeafNodes(nodes) => f.debug_tuple("LeafNodes").field(nodes).finish(),
+            Self::ChildNodesError(hash) => f.debug_tuple("ChildNodesError").field(hash).finish(),
             Self::Block { content, .. } => f
                 .debug_struct("Block")
                 .field("content", &format_args!("{:6x}", Hex(content)))
                 .finish_non_exhaustive(),
+            Self::BlockError(id) => f.debug_tuple("BlockError").field(id).finish(),
         }
     }
 }

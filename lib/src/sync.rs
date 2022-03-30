@@ -6,7 +6,8 @@ use std::future::Future;
 /// MPMC broadcast channel
 pub(crate) mod broadcast {
     pub use async_broadcast::Receiver;
-    use tokio::{sync::watch, task};
+    use std::time::{Duration, Instant};
+    use tokio::{select, sync::watch, task, time};
 
     /// Sender for a mpmc broadcast channel.
     ///
@@ -97,6 +98,53 @@ pub(crate) mod broadcast {
                 .map_err(|watch::error::SendError(value)| {
                     async_broadcast::SendError(value.unwrap())
                 })
+        }
+    }
+
+    /// Adapter for `Receiver` which limits the rate at which messages are received. The messages
+    /// are not buffered - if the rate limit is exceeded, all but the last message are discarded.
+    pub(crate) struct ThrottleReceiver<T> {
+        rx: Receiver<T>,
+        interval: Duration,
+        last_recv: Instant,
+    }
+
+    impl<T> ThrottleReceiver<T>
+    where
+        T: Clone,
+    {
+        pub fn new(inner: Receiver<T>, interval: Duration) -> Self {
+            Self {
+                rx: inner,
+                interval,
+                last_recv: Instant::now() - interval,
+            }
+        }
+
+        pub async fn recv(&mut self) -> Result<T, async_broadcast::RecvError> {
+            let mut item = None;
+            let end = self.last_recv + self.interval;
+
+            if Instant::now() < end {
+                loop {
+                    select! {
+                        _ = time::sleep_until(end.into()) => break,
+                        result = self.rx.recv() => {
+                            item = Some(result?);
+                        }
+                    }
+                }
+            }
+
+            let item = if let Some(item) = item {
+                item
+            } else {
+                self.rx.recv().await?
+            };
+
+            self.last_recv = Instant::now();
+
+            Ok(item)
         }
     }
 }

@@ -1,71 +1,125 @@
-use super::message::{Content, Request, Response};
+use super::{
+    message::{Content, Request, Response},
+    request_limiter::RequestLimiter,
+};
 use crate::{
-    block::{BlockData, BlockNonce},
-    crypto::{CacheHash, Hashable},
+    block::{BlockData, BlockId, BlockNonce},
+    crypto::{CacheHash, Hash, Hashable},
     error::{Error, Result},
     index::{Index, InnerNodeMap, LeafNodeSet, ReceiveError, Summary, UntrustedProof},
     store,
 };
-use std::time::Duration;
-use tokio::{
-    select,
-    sync::mpsc,
-    time::{self, MissedTickBehavior},
-};
-
-const REPORT_INTERVAL: Duration = Duration::from_secs(1);
+use std::collections::VecDeque;
+use tokio::{select, sync::mpsc};
 
 pub(crate) struct Client {
     index: Index,
-    tx: Sender,
-    rx: Receiver,
-    report: bool,
+    tx: mpsc::Sender<Content>,
+    rx: mpsc::Receiver<Response>,
+    // TODO: share this among all clients of a given peer so even when there are multiple repos
+    // shared with the same peer, the total number of in-flight requests to that peer is still
+    // bounded.
+    request_limiter: RequestLimiter,
+    send_queue: VecDeque<Request>,
+    recv_queue: VecDeque<Success>,
 }
 
 impl Client {
     pub fn new(index: Index, tx: mpsc::Sender<Content>, rx: mpsc::Receiver<Response>) -> Self {
         Self {
             index,
-            tx: Sender(tx),
+            tx,
             rx,
-            report: true,
+            request_limiter: RequestLimiter::new(),
+            send_queue: VecDeque::new(),
+            recv_queue: VecDeque::new(),
         }
     }
 
     pub async fn run(&mut self) -> Result<()> {
-        let mut report_interval = time::interval(REPORT_INTERVAL);
-        report_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-
         loop {
             select! {
                 Some(response) = self.rx.recv() => {
-                    match self.handle_response(response).await {
-                        Ok(()) => {}
-                        Err(
-                            error @ (ReceiveError::InvalidProof | ReceiveError::ParentNodeNotFound),
-                        ) => {
-                            log::warn!("failed to handle response: {}", error)
-                        }
-                        Err(ReceiveError::Fatal(error)) => return Err(error),
-                    }
+                    self.enqueue_response(response);
                 }
-                _ = report_interval.tick() => self.report().await?,
+                _ = self.request_limiter.expired() => (),
                 else => break,
+            }
+
+            loop {
+                self.send_requests().await;
+
+                if let Some(response) = self.dequeue_response() {
+                    self.handle_response(response).await?;
+                } else {
+                    break;
+                }
             }
         }
 
         Ok(())
     }
 
-    async fn handle_response(&mut self, response: Response) -> Result<(), ReceiveError> {
-        match response {
-            Response::RootNode { proof, summary } => self.handle_root_node(proof, summary).await?,
-            Response::InnerNodes(nodes) => self.handle_inner_nodes(nodes).await?,
-            Response::LeafNodes(nodes) => self.handle_leaf_nodes(nodes).await?,
-            Response::Block { content, nonce } => self.handle_block(content, nonce).await?,
+    async fn send_requests(&mut self) {
+        while let Some(entry) = self.request_limiter.vacant_entry() {
+            let request = if let Some(request) = self.send_queue.pop_back() {
+                request
+            } else {
+                // No request scheduled for sending.
+                break;
+            };
+
+            if !entry.insert(request) {
+                // The same request is already in-flight.
+                continue;
+            }
+
+            self.tx.send(Content::Request(request)).await.unwrap_or(());
+        }
+    }
+
+    fn enqueue_response(&mut self, response: Response) {
+        let response = ProcessedResponse::from(response);
+
+        if let Some(request) = response.to_request() {
+            if !self.request_limiter.remove(&request) {
+                // unsolicited response
+                return;
+            }
         }
 
-        Ok(())
+        if let ProcessedResponse::Success(response) = response {
+            self.recv_queue.push_front(response);
+        }
+    }
+
+    fn dequeue_response(&mut self) -> Option<Success> {
+        // To avoid en-queueing too many requests to sent (which might become outdated by the time
+        // we get to actually send them) we process a response (which usually produces more
+        // requests to send) only when there are no more requests queued.
+        if !self.send_queue.is_empty() {
+            return None;
+        }
+
+        self.recv_queue.pop_back()
+    }
+
+    async fn handle_response(&mut self, response: Success) -> Result<()> {
+        let result = match response {
+            Success::RootNode { proof, summary } => self.handle_root_node(proof, summary).await,
+            Success::InnerNodes(nodes) => self.handle_inner_nodes(nodes).await,
+            Success::LeafNodes(nodes) => self.handle_leaf_nodes(nodes).await,
+            Success::Block { data, nonce } => self.handle_block(data, nonce).await,
+        };
+
+        match result {
+            Ok(()) => Ok(()),
+            Err(error @ (ReceiveError::InvalidProof | ReceiveError::ParentNodeNotFound)) => {
+                log::warn!("failed to handle response: {}", error);
+                Ok(())
+            }
+            Err(ReceiveError::Fatal(error)) => Err(error),
+        }
     }
 
     async fn handle_root_node(
@@ -84,80 +138,110 @@ impl Client {
         let updated = self.index.receive_root_node(proof, summary).await?;
 
         if updated {
-            self.tx.send(Request::ChildNodes(hash)).await;
+            self.send_queue.push_front(Request::ChildNodes(hash));
         }
 
         Ok(())
     }
 
-    async fn handle_inner_nodes(&self, nodes: InnerNodeMap) -> Result<(), ReceiveError> {
-        let nodes = CacheHash::from(nodes);
+    async fn handle_inner_nodes(
+        &mut self,
+        nodes: CacheHash<InnerNodeMap>,
+    ) -> Result<(), ReceiveError> {
         log::trace!("handle_inner_nodes({:?})", nodes.hash());
 
         let updated = self.index.receive_inner_nodes(nodes).await?;
 
         for hash in updated {
-            self.tx.send(Request::ChildNodes(hash)).await;
+            self.send_queue.push_front(Request::ChildNodes(hash));
         }
 
         Ok(())
     }
 
-    async fn handle_leaf_nodes(&mut self, nodes: LeafNodeSet) -> Result<(), ReceiveError> {
-        let nodes = CacheHash::from(nodes);
+    async fn handle_leaf_nodes(
+        &mut self,
+        nodes: CacheHash<LeafNodeSet>,
+    ) -> Result<(), ReceiveError> {
         log::trace!("handle_leaf_nodes({:?})", nodes.hash());
 
         let updated = self.index.receive_leaf_nodes(nodes).await?;
 
-        if !updated.is_empty() {
-            self.report = true;
-        }
-
         for block_id in updated {
             // TODO: avoid multiple clients downloading the same block
-            self.tx.send(Request::Block(block_id)).await;
+            self.send_queue.push_front(Request::Block(block_id));
         }
 
         Ok(())
     }
 
-    async fn handle_block(&mut self, content: Box<[u8]>, nonce: BlockNonce) -> Result<()> {
-        let data = BlockData::from(content);
+    async fn handle_block(
+        &mut self,
+        data: BlockData,
+        nonce: BlockNonce,
+    ) -> Result<(), ReceiveError> {
         log::trace!("handle_block({:?})", data.id);
 
         match store::write_received_block(&self.index, &data, &nonce).await {
-            Ok(_) => {
-                self.report = true;
-                Ok(())
-            }
+            Ok(_) => Ok(()),
             // Ignore `BlockNotReferenced` errors as they only mean that the block is no longer
             // needed.
             Err(Error::BlockNotReferenced) => Ok(()),
-            Err(e) => Err(e),
+            Err(error) => Err(error.into()),
         }
-    }
-
-    async fn report(&mut self) -> Result<()> {
-        if !self.report {
-            return Ok(());
-        }
-
-        log::debug!(
-            "missing blocks: {}",
-            self.index.count_missing_blocks().await
-        );
-        self.report = false;
-
-        Ok(())
     }
 }
 
-struct Sender(mpsc::Sender<Content>);
+enum ProcessedResponse {
+    Success(Success),
+    Failure(Failure),
+}
 
-impl Sender {
-    async fn send(&self, request: Request) -> bool {
-        self.0.send(Content::Request(request)).await.is_ok()
+impl ProcessedResponse {
+    fn to_request(&self) -> Option<Request> {
+        match self {
+            Self::Success(Success::RootNode { .. }) => None,
+            Self::Success(Success::InnerNodes(nodes)) => Some(Request::ChildNodes(nodes.hash())),
+            Self::Success(Success::LeafNodes(nodes)) => Some(Request::ChildNodes(nodes.hash())),
+            Self::Success(Success::Block { data, .. }) => Some(Request::Block(data.id)),
+            Self::Failure(Failure::ChildNodes(hash)) => Some(Request::ChildNodes(*hash)),
+            Self::Failure(Failure::Block(id)) => Some(Request::Block(*id)),
+        }
     }
 }
 
-type Receiver = mpsc::Receiver<Response>;
+impl From<Response> for ProcessedResponse {
+    fn from(response: Response) -> Self {
+        match response {
+            Response::RootNode { proof, summary } => {
+                Self::Success(Success::RootNode { proof, summary })
+            }
+            Response::InnerNodes(nodes) => Self::Success(Success::InnerNodes(nodes.into())),
+            Response::LeafNodes(nodes) => Self::Success(Success::LeafNodes(nodes.into())),
+            Response::Block { content, nonce } => Self::Success(Success::Block {
+                data: content.into(),
+                nonce,
+            }),
+            Response::ChildNodesError(hash) => Self::Failure(Failure::ChildNodes(hash)),
+            Response::BlockError(id) => Self::Failure(Failure::Block(id)),
+        }
+    }
+}
+
+enum Success {
+    RootNode {
+        proof: UntrustedProof,
+        summary: Summary,
+    },
+    InnerNodes(CacheHash<InnerNodeMap>),
+    LeafNodes(CacheHash<LeafNodeSet>),
+    Block {
+        data: BlockData,
+        nonce: BlockNonce,
+    },
+}
+
+enum Failure {
+    ChildNodes(Hash),
+    Block(BlockId),
+}
