@@ -23,12 +23,14 @@ impl RequestLimiter {
         Self(HashMap::new())
     }
 
-    pub fn is_full(&self) -> bool {
-        self.0.len() >= MAX_PENDING_REQUESTS
-    }
-
-    pub fn insert(&mut self, request: Request) -> bool {
-        self.0.insert(request, Instant::now()).is_none()
+    /// Returns a handle to a vacant entry allowing further insertion. Returns `None` if the
+    /// request limit is already reached.
+    pub fn vacant_entry(&mut self) -> Option<VacantEntry> {
+        if self.0.len() < MAX_PENDING_REQUESTS {
+            Some(VacantEntry(self))
+        } else {
+            None
+        }
     }
 
     pub fn remove(&mut self, request: &Request) -> bool {
@@ -44,5 +46,13 @@ impl RequestLimiter {
         } else {
             future::pending().await
         }
+    }
+}
+
+pub(super) struct VacantEntry<'a>(&'a mut RequestLimiter);
+
+impl VacantEntry<'_> {
+    pub fn insert(self, request: Request) -> bool {
+        self.0 .0.insert(request, Instant::now()).is_none()
     }
 }

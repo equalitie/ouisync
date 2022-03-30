@@ -61,12 +61,7 @@ impl Client {
     }
 
     async fn send_requests(&mut self) {
-        loop {
-            if self.request_limiter.is_full() {
-                // Too many requests already in-flight.
-                break;
-            }
-
+        while let Some(entry) = self.request_limiter.vacant_entry() {
             let request = if let Some(request) = self.send_queue.pop_back() {
                 request
             } else {
@@ -74,7 +69,7 @@ impl Client {
                 break;
             };
 
-            if !self.request_limiter.insert(request) {
+            if !entry.insert(request) {
                 // The same request is already in-flight.
                 continue;
             }
