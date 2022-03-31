@@ -38,6 +38,12 @@ impl Client {
 
     pub async fn run(&mut self) -> Result<()> {
         loop {
+            // // DEBUG
+            // if rand::Rng::gen_bool(&mut rand::thread_rng(), 0.05) {
+            //     log::error!("triggering forced failure");
+            //     return Err(Error::OperationNotSupported);
+            // }
+
             select! {
                 Some(response) = self.rx.recv() => {
                     self.enqueue_response(response);

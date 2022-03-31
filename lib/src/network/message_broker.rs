@@ -115,22 +115,33 @@ async fn maintain_link(
     index: Index,
 ) {
     loop {
-        match crypto::establish_channel(role, index.repository_id(), &mut stream, &mut sink).await {
-            Ok((stream, sink)) => {
-                run_link(channel, stream, sink, &index).await;
-            }
-            Err(error) => {
-                log::warn!(
-                    "failed to establish encrypted channel for {:?}: {}",
-                    channel,
-                    error
-                );
-            }
-        };
+        let (stream, sink) =
+            match crypto::establish_channel(role, index.repository_id(), &mut stream, &mut sink)
+                .await
+            {
+                Ok(io) => {
+                    log::debug!(
+                        "established encrypted channel for {:?} as {:?}",
+                        channel,
+                        role
+                    );
+                    io
+                }
+                Err(error) => {
+                    log::warn!(
+                        "failed to establish encrypted channel for {:?} as {:?}: {}",
+                        channel,
+                        role,
+                        error
+                    );
+                    // HACK: `establish_channel` sometimes returns immediately, so we need to yield explicitly
+                    // here otherwise we could starve the runtime.
+                    task::yield_now().await;
+                    continue;
+                }
+            };
 
-        // HACK: `establish_channel` sometimes returns immediatelly, so we need to yield explicitly
-        // here otherwise we could starve the runtime.
-        task::yield_now().await;
+        run_link(channel, stream, sink, &index).await;
     }
 }
 
