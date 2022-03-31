@@ -35,7 +35,7 @@ use crate::{
 use btdht::{InfoHash, INFO_HASH_LEN};
 use slab::Slab;
 use std::{
-    collections::{hash_map::Entry, HashMap},
+    collections::{hash_map::Entry, HashMap, HashSet},
     fmt,
     future::Future,
     io, iter,
@@ -231,6 +231,10 @@ impl Network {
         Handle {
             inner: self.inner.clone(),
         }
+    }
+
+    pub fn collect_peer_info(&self) -> HashMap<SocketAddr, HashSet<ConnectionDirection>> {
+        self.inner.connection_deduplicator.collect_peer_info()
     }
 
     // If the user did not specify (through NetworkOptions) the preferred port, then try to use

@@ -1,5 +1,5 @@
 use std::{
-    collections::{hash_map::Entry, HashMap},
+    collections::{hash_map::Entry, HashMap, HashSet},
     net::SocketAddr,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -48,10 +48,29 @@ impl ConnectionDeduplicator {
             notify: Arc::new(Notify::new()),
         })
     }
+
+    pub fn collect_peer_info(&self) -> HashMap<SocketAddr, HashSet<ConnectionDirection>> {
+        let connections = self.connections.lock().unwrap();
+
+        let mut map = HashMap::<_, HashSet<_>>::new();
+
+        for c in connections.keys() {
+            match map.entry(c.addr) {
+                Entry::Vacant(entry) => {
+                    entry.insert(std::iter::once(c.dir).collect());
+                },
+                Entry::Occupied(mut entry) => {
+                    entry.get_mut().insert(c.dir);
+                }
+            }
+        }
+
+        map
+    }
 }
 
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]
-pub(super) enum ConnectionDirection {
+pub enum ConnectionDirection {
     Incoming,
     Outgoing,
 }

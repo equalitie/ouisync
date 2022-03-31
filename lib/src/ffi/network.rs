@@ -45,6 +45,27 @@ pub unsafe extern "C" fn network_listener_local_addr() -> *mut c_char {
     utils::str_to_ptr(&format!("TCP:{}", local_addr))
 }
 
+/// Return an array of peers with which we're connected. Each peer is represented as a string in
+/// the format "<TCP or UDP>:<IPv4 or [IPv6]>:<PORT>;...".
+#[no_mangle]
+pub unsafe extern "C" fn network_connected_peers() -> *mut c_char {
+    let peer_info = session::get().network().collect_peer_info();
+
+    let s = peer_info
+        .iter()
+        .map(|info| format!("TCP:{}", info.0))
+        // The Iterator's intersperse function would come in handy here.
+        .fold("".to_string(), |a, b| {
+            if a.is_empty() {
+                b
+            } else {
+                format!("{};{}", a, b)
+            }
+        });
+
+    utils::str_to_ptr(&s)
+}
+
 /// Returns the local dht address for ipv4, if available.
 /// See [`network_local_addr`] for the format details.
 ///
