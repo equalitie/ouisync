@@ -66,6 +66,11 @@ impl MessageDispatcher {
         }
     }
 
+    pub fn close(&self) {
+        self.recv.reader.close();
+        self.send.close();
+    }
+
     pub fn is_closed(&self) -> bool {
         self.recv.reader.is_empty() || self.send.is_empty()
     }
@@ -73,8 +78,7 @@ impl MessageDispatcher {
 
 impl Drop for MessageDispatcher {
     fn drop(&mut self) {
-        self.recv.reader.close();
-        self.send.close();
+        self.close();
     }
 }
 
@@ -100,23 +104,23 @@ impl ContentStream {
     }
 
     /// Receive the next message content.
-    pub async fn recv(&mut self) -> Option<Vec<u8>> {
+    pub async fn recv(&mut self) -> Result<Vec<u8>, ContentRecvError> {
         let mut closed = false;
 
         loop {
             if let Some(content) = self.state.pop(&self.channel) {
-                return Some(content);
+                return decode_message_content(content);
             }
 
             if closed {
-                return None;
+                return Err(ContentRecvError::Closed);
             }
 
             select! {
                 message = self.state.reader.recv() => {
                     if let Some(message) = message {
                         if message.channel == self.channel {
-                            return Some(message.content);
+                            return decode_message_content(message.content);
                         } else {
                             self.state.push(message)
                         }
@@ -145,12 +149,41 @@ impl ContentSink {
 
     /// Returns whether the send succeeded.
     pub async fn send(&self, content: Vec<u8>) -> bool {
+        assert!(!content.is_empty());
+
         self.state
             .send(Message {
                 channel: self.channel,
                 content,
             })
             .await
+    }
+
+    /// Reset this channel. The peer will get `RecvError::Reset` from `ContentStream::recv` but will
+    /// still be able to receive further messages.
+    pub async fn reset(&self) {
+        self.state.send(create_reset_message(self.channel)).await;
+    }
+}
+
+#[derive(Debug)]
+pub(super) enum ContentRecvError {
+    Closed,
+    Reset,
+}
+
+const fn create_reset_message(channel: MessageChannel) -> Message {
+    Message {
+        channel,
+        content: Vec::new(),
+    }
+}
+
+fn decode_message_content(content: Vec<u8>) -> Result<Vec<u8>, ContentRecvError> {
+    if content.is_empty() {
+        Err(ContentRecvError::Reset)
+    } else {
+        Ok(content)
     }
 }
 
@@ -442,6 +475,7 @@ impl Future for Send<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use assert_matches::assert_matches;
     use std::net::Ipv4Addr;
     use tokio::net::{TcpListener, TcpStream};
 
@@ -539,7 +573,7 @@ mod tests {
 
         drop(server);
 
-        assert!(server_stream.recv().await.is_none());
+        assert_matches!(server_stream.recv().await, Err(ContentRecvError::Closed));
     }
 
     #[tokio::test]

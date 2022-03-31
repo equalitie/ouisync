@@ -24,6 +24,10 @@ pub(crate) struct Client {
     recv_queue: VecDeque<Success>,
 }
 
+// DEBUG
+use std::sync::atomic::{AtomicBool, Ordering};
+static FAILED: AtomicBool = AtomicBool::new(false);
+
 impl Client {
     pub fn new(index: Index, tx: mpsc::Sender<Content>, rx: mpsc::Receiver<Response>) -> Self {
         Self {
@@ -38,11 +42,13 @@ impl Client {
 
     pub async fn run(&mut self) -> Result<()> {
         loop {
-            // // DEBUG
-            // if rand::Rng::gen_bool(&mut rand::thread_rng(), 0.05) {
-            //     log::error!("triggering forced failure");
-            //     return Err(Error::OperationNotSupported);
-            // }
+            // DEBUG
+            if !FAILED.load(Ordering::Relaxed) && rand::Rng::gen_bool(&mut rand::thread_rng(), 0.05)
+            {
+                log::error!("triggering forced failure");
+                FAILED.store(true, Ordering::Relaxed);
+                return Err(Error::OperationNotSupported);
+            }
 
             select! {
                 Some(response) = self.rx.recv() => {

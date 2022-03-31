@@ -92,7 +92,8 @@ async fn handle_branch_changed(index: &Index, tx: &Sender, branch_id: PublicKey)
         return Ok(());
     }
 
-    log::trace!(
+    log::debug!(
+        // log::trace!(
         "handle_branch_changed(branch_id: {:?}, hash: {:?}, vv: {:?}, missing blocks: {})",
         branch_id,
         root_node.proof.hash,
