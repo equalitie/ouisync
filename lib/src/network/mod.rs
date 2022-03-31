@@ -195,12 +195,9 @@ impl Network {
             let weak = Arc::downgrade(&inner);
             async move {
                 while let Some(peer_addr) = dht_peer_found_rx.recv().await {
-                    let inner = match weak.upgrade() {
-                        Some(inner) => inner,
-                        None => return,
-                    };
-
-                    inner.spawn(inner.clone().establish_dht_connection(peer_addr));
+                    if let Some(inner) = weak.upgrade() {
+                        inner.spawn(inner.clone().establish_dht_connection(peer_addr));
+                    }
                 }
             }
         });
@@ -556,7 +553,7 @@ impl Inner {
             match perform_handshake(&mut stream, VERSION, self.this_runtime_id).await {
                 Ok(writer_id) => writer_id,
                 Err(error @ HandshakeError::ProtocolVersionMismatch) => {
-                    log::error!("Failed to perform handshake: {}", error);
+                    log::error!("Failed to perform handshake with {}: {}", addr, error);
                     self.event_tx
                         .broadcast(NetworkEvent::ProtocolVersionMismatch)
                         .await
@@ -564,7 +561,7 @@ impl Inner {
                     return;
                 }
                 Err(HandshakeError::Fatal(error)) => {
-                    log::error!("Failed to perform handshake: {}", error);
+                    log::error!("Failed to perform handshake with {}: {}", addr, error);
                     return;
                 }
             };
@@ -583,7 +580,7 @@ impl Inner {
         match state.message_brokers.entry(that_runtime_id) {
             Entry::Occupied(entry) => entry.get().add_connection(stream, permit),
             Entry::Vacant(entry) => {
-                log::info!("Connected to replica {:?}", that_runtime_id);
+                log::info!("Connected to replica {:?} {}", that_runtime_id, addr);
 
                 let mut broker =
                     MessageBroker::new(self.this_runtime_id, that_runtime_id, stream, permit);
@@ -602,7 +599,12 @@ impl Inner {
         drop(state_guard);
 
         released.notified().await;
-        log::info!("Lost {} TCP connection: {}", peer_source, addr);
+        log::info!(
+            "Lost {} TCP connection: {:?} {}",
+            peer_source,
+            that_runtime_id,
+            addr
+        );
 
         // Remove the broker if it has no more connections.
         let mut state = self.state.lock().await;

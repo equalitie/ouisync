@@ -33,7 +33,11 @@ impl ConnectionDeduplicator {
             entry.insert(id);
             id
         } else {
-            log::debug!("ConnectionDeduplicator: Not permitting another connection ({:?}, {:?})", addr, dir);
+            log::debug!(
+                "ConnectionDeduplicator: Not permitting another connection ({:?}, {:?})",
+                addr,
+                dir
+            );
             return None;
         };
 
