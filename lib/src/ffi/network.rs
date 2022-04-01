@@ -2,32 +2,57 @@ use super::{
     session,
     utils::{self, Port, UniqueHandle},
 };
-use crate::network::NetworkEvent;
 use std::{os::raw::c_char, ptr};
-use tokio::task::JoinHandle;
+use tokio::{select, task::JoinHandle};
 
 pub const NETWORK_EVENT_PROTOCOL_VERSION_MISMATCH: u8 = 0;
+pub const NETWORK_EVENT_PEER_SET_CHANGE: u8 = 1;
 
 /// Subscribe to network event notifications.
 #[no_mangle]
 pub unsafe extern "C" fn network_subscribe(port: Port<u8>) -> UniqueHandle<JoinHandle<()>> {
     let session = session::get();
     let sender = session.sender();
-    let mut rx = session.network().handle().subscribe();
+
+    let mut on_protocol_mismatch = session.network().handle().on_protocol_mismatch();
+    let mut on_peer_set_change = session.network().handle().on_peer_set_change();
 
     let handle = session.runtime().spawn(async move {
-        while let Ok(event) = rx.recv().await {
-            sender.send(port, encode_network_event(event));
+        // TODO: This loop exits when the first of the watched channels closes. It might be less
+        // error prone to keep the loop until all of the channels are closed.
+        loop {
+            select! {
+                e = on_protocol_mismatch.changed() => {
+                    match e {
+                        Ok(()) => {
+                            // If it's false, than that's the initial state and there is nothing to report.
+                            if *on_protocol_mismatch.borrow() {
+                                sender.send(port, NETWORK_EVENT_PROTOCOL_VERSION_MISMATCH);
+                            }
+                        },
+                        Err(_) => {
+                            return;
+                        }
+                    }
+                },
+                e = on_peer_set_change.changed() => {
+                    match e {
+                        Ok(()) => {
+                            // If it's false, than that's the initial state and there is nothing to report.
+                            if *on_peer_set_change.borrow() {
+                                sender.send(port, NETWORK_EVENT_PEER_SET_CHANGE);
+                            }
+                        },
+                        Err(_) => {
+                            return;
+                        }
+                    }
+                }
+            }
         }
     });
 
     UniqueHandle::new(Box::new(handle))
-}
-
-fn encode_network_event(event: NetworkEvent) -> u8 {
-    match event {
-        NetworkEvent::ProtocolVersionMismatch => NETWORK_EVENT_PROTOCOL_VERSION_MISMATCH,
-    }
 }
 
 /// Return the local network endpoint as string. The format is
@@ -43,6 +68,27 @@ pub unsafe extern "C" fn network_listener_local_addr() -> *mut c_char {
 
     // TODO: Get <TCP or UDP> from the network object.
     utils::str_to_ptr(&format!("TCP:{}", local_addr))
+}
+
+/// Return an array of peers with which we're connected. Each peer is represented as a string in
+/// the format "<TCP or UDP>:<IPv4 or [IPv6]>:<PORT>;...".
+#[no_mangle]
+pub unsafe extern "C" fn network_connected_peers() -> *mut c_char {
+    let peer_info = session::get().network().collect_peer_info();
+
+    let s = peer_info
+        .iter()
+        .map(|info| format!("TCP:{}", info.0))
+        // The Iterator's intersperse function would come in handy here.
+        .fold("".to_string(), |a, b| {
+            if a.is_empty() {
+                b
+            } else {
+                format!("{};{}", a, b)
+            }
+        });
+
+    utils::str_to_ptr(&s)
 }
 
 /// Returns the local dht address for ipv4, if available.
