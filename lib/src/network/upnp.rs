@@ -1,3 +1,4 @@
+use super::ip_stack::Protocol;
 use crate::scoped_task::{self, ScopedJoinHandle};
 use futures_util::TryStreamExt;
 use futures_util::{Stream, StreamExt};
@@ -24,24 +25,9 @@ pub(crate) struct Mapping {
     pub protocol: Protocol,
 }
 
-#[derive(Clone, Copy)]
-pub(crate) enum Protocol {
-    Tcp,
-    Udp,
-}
-
 // `Option` is used to keep track of which Uris have already been tried so as to not flood the
 // debug log with repeated "device failure" warnings.
 type JobHandles = HashMap<Uri, Option<ScopedJoinHandle<()>>>;
-
-impl fmt::Display for Protocol {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Self::Tcp => write!(f, "TCP"),
-            Self::Udp => write!(f, "UDP"),
-        }
-    }
-}
 
 pub(crate) struct PortForwarder {
     _task: ScopedJoinHandle<()>,

@@ -19,7 +19,7 @@ mod upnp;
 use self::{
     connection::{ConnectionDeduplicator, ConnectionDirection, ConnectionPermit},
     dht_discovery::DhtDiscovery,
-    ip_stack::IpStack,
+    ip_stack::{IpStack, Protocol},
     local_discovery::LocalDiscovery,
     message_broker::MessageBroker,
     protocol::{RuntimeId, Version, VERSION},
@@ -146,12 +146,12 @@ impl Network {
                 iter::once(upnp::Mapping {
                     external: listener_local_addr.port(),
                     internal: listener_local_addr.port(),
-                    protocol: upnp::Protocol::Tcp,
+                    protocol: Protocol::Tcp,
                 })
                 .chain(dht_port_v4.map(|port| upnp::Mapping {
                     external: port,
                     internal: port,
-                    protocol: upnp::Protocol::Udp,
+                    protocol: Protocol::Udp,
                 })),
             ))
         } else {
