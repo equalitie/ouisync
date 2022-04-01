@@ -6,19 +6,36 @@ use std::{
         Arc, Mutex as SyncMutex,
     },
 };
-use tokio::sync::Notify;
+// NOTE: Watch has an advantage over Notify in that it's better at broadcasting to multiple
+// consumers. This particular line is problematic in Notify documentation:
+//
+//   https://docs.rs/tokio/latest/tokio/sync/struct.Notify.html#method.notify_waiters
+//
+//   "Unlike with notify_one(), no permit is stored to be used by the next call to notified().await."
+//
+// The issue is described in more detail here:
+//
+//   https://github.com/tokio-rs/tokio/issues/3757
+use tokio::sync::{watch, Notify};
 
 /// Prevents establishing duplicate connections.
 pub(super) struct ConnectionDeduplicator {
     next_id: AtomicU64,
     connections: Arc<SyncMutex<HashMap<ConnectionKey, u64>>>,
+    on_change_tx: Arc<watch::Sender<bool>>,
+    // We need to keep this to prevent the Sender from closing.
+    on_change_rx: watch::Receiver<bool>,
 }
 
 impl ConnectionDeduplicator {
     pub fn new() -> Self {
+        let (tx, rx) = watch::channel(false);
+
         Self {
             next_id: AtomicU64::new(0),
             connections: Arc::new(SyncMutex::new(HashMap::new())),
+            on_change_tx: Arc::new(tx),
+            on_change_rx: rx,
         }
     }
 
@@ -31,6 +48,7 @@ impl ConnectionDeduplicator {
         let id = if let Entry::Vacant(entry) = self.connections.lock().unwrap().entry(key) {
             let id = self.next_id.fetch_add(1, Ordering::Relaxed);
             entry.insert(id);
+            self.on_change_tx.send(true).unwrap_or(());
             id
         } else {
             log::debug!(
@@ -45,7 +63,8 @@ impl ConnectionDeduplicator {
             connections: self.connections.clone(),
             key,
             id,
-            notify: Arc::new(Notify::new()),
+            on_release: Arc::new(Notify::new()),
+            on_deduplicator_change: self.on_change_tx.clone(),
         })
     }
 
@@ -67,6 +86,10 @@ impl ConnectionDeduplicator {
 
         map
     }
+
+    pub fn on_change(&self) -> watch::Receiver<bool> {
+        self.on_change_rx.clone()
+    }
 }
 
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]
@@ -81,7 +104,8 @@ pub(super) struct ConnectionPermit {
     connections: Arc<SyncMutex<HashMap<ConnectionKey, u64>>>,
     key: ConnectionKey,
     id: u64,
-    notify: Arc<Notify>,
+    on_release: Arc<Notify>,
+    on_deduplicator_change: Arc<watch::Sender<bool>>,
 }
 
 impl ConnectionPermit {
@@ -96,7 +120,8 @@ impl ConnectionPermit {
                 connections: self.connections.clone(),
                 key: self.key,
                 id: self.id,
-                notify: self.notify.clone(),
+                on_release: self.on_release.clone(),
+                on_deduplicator_change: self.on_deduplicator_change.clone(),
             }),
             ConnectionPermitHalf(self),
         )
@@ -104,7 +129,7 @@ impl ConnectionPermit {
 
     /// Returns a `Notify` that gets notified when this permit gets released.
     pub fn released(&self) -> Arc<Notify> {
-        self.notify.clone()
+        self.on_release.clone()
     }
 
     pub fn addr(&self) -> SocketAddr {
@@ -123,7 +148,7 @@ impl ConnectionPermit {
                 addr: (Ipv4Addr::UNSPECIFIED, 0).into(),
             },
             id: 0,
-            notify: Arc::new(Notify::new()),
+            on_release: Arc::new(Notify::new()),
         }
     }
 }
@@ -136,7 +161,8 @@ impl Drop for ConnectionPermit {
             }
         }
 
-        self.notify.notify_one()
+        self.on_release.notify_one();
+        self.on_deduplicator_change.send(true).unwrap_or(());
     }
 }
 

@@ -168,7 +168,7 @@ impl Network {
 
         let (dht_peer_found_tx, mut dht_peer_found_rx) = mpsc::unbounded_channel();
 
-        let (on_protocol_mismatch_tx, on_protocol_mismatch_rx) = watch::channel(None);
+        let (on_protocol_mismatch_tx, on_protocol_mismatch_rx) = watch::channel(false);
 
         let inner = Arc::new(Inner {
             listener_local_addr,
@@ -282,9 +282,14 @@ impl Handle {
         }
     }
 
-    /// Subscribe to network notification events.
-    pub fn on_protocol_mismatch(&self) -> watch::Receiver<Option<()>> {
+    /// Subscribe to network protocol mismatch events.
+    pub fn on_protocol_mismatch(&self) -> watch::Receiver<bool> {
         self.inner.on_protocol_mismatch_rx.clone()
+    }
+
+    /// Subscribe change in connected peers events.
+    pub fn on_peer_set_change(&self) -> watch::Receiver<bool> {
+        self.inner.connection_deduplicator.on_change()
     }
 }
 
@@ -365,8 +370,8 @@ struct Inner {
     dht_discovery: Option<DhtDiscovery>,
     dht_peer_found_tx: mpsc::UnboundedSender<SocketAddr>,
     connection_deduplicator: ConnectionDeduplicator,
-    on_protocol_mismatch_tx: watch::Sender<Option<()>>,
-    on_protocol_mismatch_rx: watch::Receiver<Option<()>>,
+    on_protocol_mismatch_tx: watch::Sender<bool>,
+    on_protocol_mismatch_rx: watch::Receiver<bool>,
     // Note that unwrapping the upgraded weak pointer should be fine because if the underlying Arc
     // was Dropped, we would not be asking for the upgrade in the first place.
     tasks: Weak<Tasks>,
@@ -553,7 +558,7 @@ impl Inner {
                 Ok(writer_id) => writer_id,
                 Err(error @ HandshakeError::ProtocolVersionMismatch) => {
                     log::error!("Failed to perform handshake with {}: {}", addr, error);
-                    self.on_protocol_mismatch_tx.send(Some(())).unwrap_or(());
+                    self.on_protocol_mismatch_tx.send(true).unwrap_or(());
                     return;
                 }
                 Err(HandshakeError::Fatal(error)) => {

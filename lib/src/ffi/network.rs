@@ -3,22 +3,51 @@ use super::{
     utils::{self, Port, UniqueHandle},
 };
 use std::{os::raw::c_char, ptr};
-use tokio::task::JoinHandle;
+use tokio::{select, task::JoinHandle};
 
 pub const NETWORK_EVENT_PROTOCOL_VERSION_MISMATCH: u8 = 0;
+pub const NETWORK_EVENT_PEER_SET_CHANGE: u8 = 1;
 
 /// Subscribe to network event notifications.
 #[no_mangle]
 pub unsafe extern "C" fn network_subscribe(port: Port<u8>) -> UniqueHandle<JoinHandle<()>> {
     let session = session::get();
     let sender = session.sender();
-    let mut rx = session.network().handle().on_protocol_mismatch();
+
+    let mut on_protocol_mismatch = session.network().handle().on_protocol_mismatch();
+    let mut on_peer_set_change = session.network().handle().on_peer_set_change();
 
     let handle = session.runtime().spawn(async move {
-        while rx.changed().await.is_ok() {
-            // If it's None, than that's the initial state and there is nothing to report.
-            if let Some(()) = *rx.borrow() {
-                sender.send(port, NETWORK_EVENT_PROTOCOL_VERSION_MISMATCH);
+        // TODO: This loop exits when the first of the watched channels closes. It might be less
+        // error prone to keep the loop until all of the channels are closed.
+        loop {
+            select! {
+                e = on_protocol_mismatch.changed() => {
+                    match e {
+                        Ok(()) => {
+                            // If it's false, than that's the initial state and there is nothing to report.
+                            if *on_protocol_mismatch.borrow() {
+                                sender.send(port, NETWORK_EVENT_PROTOCOL_VERSION_MISMATCH);
+                            }
+                        },
+                        Err(_) => {
+                            return;
+                        }
+                    }
+                },
+                e = on_peer_set_change.changed() => {
+                    match e {
+                        Ok(()) => {
+                            // If it's false, than that's the initial state and there is nothing to report.
+                            if *on_peer_set_change.borrow() {
+                                sender.send(port, NETWORK_EVENT_PEER_SET_CHANGE);
+                            }
+                        },
+                        Err(_) => {
+                            return;
+                        }
+                    }
+                }
             }
         }
     });
