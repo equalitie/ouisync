@@ -58,7 +58,7 @@ impl ConnectionDeduplicator {
             match map.entry(c.addr) {
                 Entry::Vacant(entry) => {
                     entry.insert(std::iter::once(c.dir).collect());
-                },
+                }
                 Entry::Occupied(mut entry) => {
                     entry.get_mut().insert(c.dir);
                 }

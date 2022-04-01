@@ -2,7 +2,6 @@ use super::{
     session,
     utils::{self, Port, UniqueHandle},
 };
-use crate::network::NetworkEvent;
 use std::{os::raw::c_char, ptr};
 use tokio::task::JoinHandle;
 
@@ -13,21 +12,18 @@ pub const NETWORK_EVENT_PROTOCOL_VERSION_MISMATCH: u8 = 0;
 pub unsafe extern "C" fn network_subscribe(port: Port<u8>) -> UniqueHandle<JoinHandle<()>> {
     let session = session::get();
     let sender = session.sender();
-    let mut rx = session.network().handle().subscribe();
+    let mut rx = session.network().handle().on_protocol_mismatch();
 
     let handle = session.runtime().spawn(async move {
-        while let Ok(event) = rx.recv().await {
-            sender.send(port, encode_network_event(event));
+        while rx.changed().await.is_ok() {
+            // If it's None, than that's the initial state and there is nothing to report.
+            if let Some(()) = *rx.borrow() {
+                sender.send(port, NETWORK_EVENT_PROTOCOL_VERSION_MISMATCH);
+            }
         }
     });
 
     UniqueHandle::new(Box::new(handle))
-}
-
-fn encode_network_event(event: NetworkEvent) -> u8 {
-    match event {
-        NetworkEvent::ProtocolVersionMismatch => NETWORK_EVENT_PROTOCOL_VERSION_MISMATCH,
-    }
 }
 
 /// Return the local network endpoint as string. The format is

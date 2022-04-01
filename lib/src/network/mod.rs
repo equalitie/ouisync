@@ -30,7 +30,6 @@ use crate::{
     index::Index,
     repository::RepositoryId,
     scoped_task::{self, ScopedJoinHandle, ScopedTaskSet},
-    sync::broadcast,
 };
 use btdht::{InfoHash, INFO_HASH_LEN};
 use slab::Slab;
@@ -47,7 +46,7 @@ use structopt::StructOpt;
 use thiserror::Error;
 use tokio::{
     net::{TcpListener, TcpStream},
-    sync::{mpsc, Mutex},
+    sync::{mpsc, watch, Mutex},
     task, time,
 };
 
@@ -169,6 +168,8 @@ impl Network {
 
         let (dht_peer_found_tx, mut dht_peer_found_rx) = mpsc::unbounded_channel();
 
+        let (on_protocol_mismatch_tx, on_protocol_mismatch_rx) = watch::channel(None);
+
         let inner = Arc::new(Inner {
             listener_local_addr,
             this_runtime_id: rand::random(),
@@ -180,7 +181,8 @@ impl Network {
             dht_discovery,
             dht_peer_found_tx,
             connection_deduplicator: ConnectionDeduplicator::new(),
-            event_tx: broadcast::Sender::new(32),
+            on_protocol_mismatch_tx,
+            on_protocol_mismatch_rx,
             tasks: Arc::downgrade(&tasks),
         });
 
@@ -248,14 +250,6 @@ impl Network {
     }
 }
 
-/// Network event
-#[derive(Clone)]
-#[repr(u8)]
-pub enum NetworkEvent {
-    /// Attempt to connect to a peer whose protocol version is higher than ours.
-    ProtocolVersionMismatch = 0,
-}
-
 /// Handle for the network which can be cheaply cloned and sent to other threads.
 #[derive(Clone)]
 pub struct Handle {
@@ -289,8 +283,8 @@ impl Handle {
     }
 
     /// Subscribe to network notification events.
-    pub fn subscribe(&self) -> broadcast::Receiver<NetworkEvent> {
-        self.inner.event_tx.subscribe()
+    pub fn on_protocol_mismatch(&self) -> watch::Receiver<Option<()>> {
+        self.inner.on_protocol_mismatch_rx.clone()
     }
 }
 
@@ -371,7 +365,8 @@ struct Inner {
     dht_discovery: Option<DhtDiscovery>,
     dht_peer_found_tx: mpsc::UnboundedSender<SocketAddr>,
     connection_deduplicator: ConnectionDeduplicator,
-    event_tx: broadcast::Sender<NetworkEvent>,
+    on_protocol_mismatch_tx: watch::Sender<Option<()>>,
+    on_protocol_mismatch_rx: watch::Receiver<Option<()>>,
     // Note that unwrapping the upgraded weak pointer should be fine because if the underlying Arc
     // was Dropped, we would not be asking for the upgrade in the first place.
     tasks: Weak<Tasks>,
@@ -558,10 +553,7 @@ impl Inner {
                 Ok(writer_id) => writer_id,
                 Err(error @ HandshakeError::ProtocolVersionMismatch) => {
                     log::error!("Failed to perform handshake with {}: {}", addr, error);
-                    self.event_tx
-                        .broadcast(NetworkEvent::ProtocolVersionMismatch)
-                        .await
-                        .unwrap_or(());
+                    self.on_protocol_mismatch_tx.send(Some(())).unwrap_or(());
                     return;
                 }
                 Err(HandshakeError::Fatal(error)) => {
