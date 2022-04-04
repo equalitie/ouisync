@@ -149,6 +149,7 @@ impl ConnectionPermit {
             },
             id: 0,
             on_release: Arc::new(Notify::new()),
+            on_deduplicator_change: Arc::new(watch::channel(false).0),
         }
     }
 }
