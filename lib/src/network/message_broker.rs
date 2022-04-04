@@ -10,7 +10,7 @@ use super::{
 use crate::{index::Index, repository::RepositoryId};
 use std::{
     collections::{hash_map::Entry, HashMap},
-    future,
+    fmt, future,
 };
 use tokio::{
     net::TcpStream,
@@ -93,13 +93,19 @@ impl MessageBroker {
         let stream = self.dispatcher.open_recv(channel);
         let sink = self.dispatcher.open_send(channel);
 
+        let info = ChannelInfo {
+            channel,
+            this_runtime_id: self.this_runtime_id,
+            that_runtime_id: self.that_runtime_id,
+        };
+
         task::spawn(async move {
             select! {
-                _ = maintain_link(role, channel, stream, sink.clone(), index) => (),
+                _ = maintain_link(role, info, stream, sink.clone(), index) => (),
                 _ = abort_rx => sink.reset().await,
             }
 
-            log::debug!("link for {:?} destroyed", channel)
+            log::debug!("{} link destroyed", info)
         });
     }
 
@@ -113,7 +119,7 @@ impl MessageBroker {
 // Repeatedly establish and run the link until it's explicitly destroyed by calling `destroy_link()`.
 async fn maintain_link(
     role: Role,
-    channel: MessageChannel,
+    info: ChannelInfo,
     mut stream: ContentStream,
     mut sink: ContentSink,
     index: Index,
@@ -124,18 +130,14 @@ async fn maintain_link(
                 .await
             {
                 Ok(io) => {
-                    log::debug!(
-                        "established encrypted channel for {:?} as {:?}",
-                        channel,
-                        role
-                    );
+                    log::debug!("{} established encrypted channel as {:?}", info, role);
 
                     io
                 }
                 Err(error @ (EstablishError::Crypto | EstablishError::Reset)) => {
                     log::warn!(
-                        "failed to establish encrypted channel for {:?} as {:?}: {}",
-                        channel,
+                        "{} failed to establish encrypted channel as {:?}: {}",
+                        info,
                         role,
                         error
                     );
@@ -144,8 +146,8 @@ async fn maintain_link(
                 }
                 Err(error @ EstablishError::Closed) => {
                     log::debug!(
-                        "failed to establish encrypted channel for {:?} as {:?}: {}",
-                        channel,
+                        "{} failed to establish encrypted channel as {:?}: {}",
+                        info,
                         role,
                         error
                     );
@@ -154,10 +156,7 @@ async fn maintain_link(
                 }
             };
 
-        let status = run_link(channel, crypto_stream, crypto_sink, &index).await;
-
-        // DEBUG
-        log::debug!("link stopped as {:?}: {:?}", role, status);
+        let status = run_link(info, crypto_stream, crypto_sink, &index).await;
 
         match status {
             Status::Failed => sink.reset().await,
@@ -168,7 +167,7 @@ async fn maintain_link(
 }
 
 async fn run_link(
-    channel: MessageChannel,
+    info: ChannelInfo,
     stream: DecryptingStream<'_>,
     sink: EncryptingSink<'_>,
     index: &Index,
@@ -179,15 +178,16 @@ async fn run_link(
 
     // Run everything in parallel:
     select! {
-        status = run_client(channel, index.clone(), content_tx.clone(), response_rx) => status,
-        status = run_server(channel, index.clone(), content_tx, request_rx ) => status,
-        status = recv_messages(stream, request_tx, response_tx) => status,
-        status = send_messages(content_rx, sink) => status,
+        status = run_client(info, index.clone(), content_tx.clone(), response_rx) => status,
+        status = run_server(info, index.clone(), content_tx, request_rx ) => status,
+        status = recv_messages(info, stream, request_tx, response_tx) => status,
+        status = send_messages(info, content_rx, sink) => status,
     }
 }
 
 // Handle incoming messages
 async fn recv_messages(
+    info: ChannelInfo,
     mut stream: DecryptingStream<'_>,
     request_tx: mpsc::Sender<Request>,
     response_tx: mpsc::Sender<Response>,
@@ -196,18 +196,15 @@ async fn recv_messages(
         let content = match stream.recv().await {
             Ok(content) => content,
             Err(RecvError::Crypto) => {
-                log::warn!(
-                    "failed to decrypt incoming message for {:?}",
-                    stream.channel()
-                );
+                log::warn!("{} failed to decrypt incoming message", info);
                 return Status::Reset;
             }
             Err(RecvError::Reset) => {
-                log::debug!("message stream for {:?} reset", stream.channel());
+                log::debug!("{} message stream reset", info);
                 return Status::Reset;
             }
             Err(RecvError::Closed) => {
-                log::debug!("message stream for {:?} closed", stream.channel());
+                log::debug!("{} message stream closed", info);
                 return Status::Closed;
             }
         };
@@ -215,11 +212,7 @@ async fn recv_messages(
         let content: Content = match bincode::deserialize(&content) {
             Ok(content) => content,
             Err(error) => {
-                log::warn!(
-                    "failed to deserialize incoming message for {:?}: {}",
-                    stream.channel(),
-                    error
-                );
+                log::warn!("{} failed to deserialize incoming message: {}", info, error);
                 continue; // TODO: should we return `Status::Reset` here as well?
             }
         };
@@ -233,6 +226,7 @@ async fn recv_messages(
 
 // Handle outgoing messages
 async fn send_messages(
+    info: ChannelInfo,
     mut content_rx: mpsc::Receiver<Content>,
     mut sink: EncryptingSink<'_>,
 ) -> Status {
@@ -250,11 +244,11 @@ async fn send_messages(
         match sink.send(content).await {
             Ok(()) => (),
             Err(SendError::Reset) => {
-                log::debug!("message sink for {:?} reset", sink.channel());
+                log::debug!("{} message sink reset", info);
                 return Status::Reset;
             }
             Err(SendError::Closed) => {
-                log::debug!("message sink for {:?} closed", sink.channel());
+                log::debug!("{} message sink closed", info);
                 return Status::Closed;
             }
         }
@@ -263,7 +257,7 @@ async fn send_messages(
 
 // Create and run client. Returns only on error.
 async fn run_client(
-    channel: MessageChannel,
+    info: ChannelInfo,
     index: Index,
     content_tx: mpsc::Sender<Content>,
     response_rx: mpsc::Receiver<Response>,
@@ -273,7 +267,7 @@ async fn run_client(
     match client.run().await {
         Ok(()) => forever().await,
         Err(error) => {
-            log::error!("client for {:?} failed: {:?}", channel, error);
+            log::error!("{} client failed: {:?}", info, error);
             Status::Failed
         }
     }
@@ -281,7 +275,7 @@ async fn run_client(
 
 // Create and run server. Returns only on error.
 async fn run_server(
-    channel: MessageChannel,
+    info: ChannelInfo,
     index: Index,
     content_tx: mpsc::Sender<Content>,
     request_rx: mpsc::Receiver<Request>,
@@ -291,7 +285,7 @@ async fn run_server(
     match server.run().await {
         Ok(()) => forever().await,
         Err(error) => {
-            log::error!("server for {:?} failed: {:?}", channel, error);
+            log::error!("{} server failed: {:?}", info, error);
             Status::Failed
         }
     }
@@ -310,4 +304,21 @@ enum Status {
     Reset,
     // Connection closed
     Closed,
+}
+
+#[derive(Clone, Copy)]
+struct ChannelInfo {
+    channel: MessageChannel,
+    this_runtime_id: RuntimeId,
+    that_runtime_id: RuntimeId,
+}
+
+impl fmt::Display for ChannelInfo {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{:?} [{:?} -> {:?}]",
+            self.channel, self.this_runtime_id, self.that_runtime_id
+        )
+    }
 }

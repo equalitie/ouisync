@@ -99,10 +99,6 @@ impl ContentStream {
         }
     }
 
-    pub fn channel(&self) -> &MessageChannel {
-        &self.channel
-    }
-
     /// Receive the next message content.
     pub async fn recv(&mut self) -> Result<Vec<u8>, ContentRecvError> {
         let mut closed = false;
@@ -143,10 +139,6 @@ pub(super) struct ContentSink {
 }
 
 impl ContentSink {
-    pub fn channel(&self) -> &MessageChannel {
-        &self.channel
-    }
-
     /// Returns whether the send succeeded.
     pub async fn send(&self, content: Vec<u8>) -> bool {
         assert!(!content.is_empty());

@@ -8,7 +8,6 @@
 //! based on the identity of the replicas is needed.
 
 use super::{
-    message::MessageChannel,
     message_dispatcher::{ContentRecvError, ContentSink, ContentStream},
     protocol::RuntimeId,
 };
@@ -88,10 +87,6 @@ impl DecryptingStream<'_> {
 
         Ok(content)
     }
-
-    pub fn channel(&self) -> &MessageChannel {
-        self.inner.channel()
-    }
 }
 
 /// Wrapper for [`ContentSink`] that encrypts outgoing messages.
@@ -117,10 +112,6 @@ impl EncryptingSink<'_> {
         } else {
             Err(SendError::Closed)
         }
-    }
-
-    pub fn channel(&self) -> &MessageChannel {
-        self.inner.channel()
     }
 }
 
