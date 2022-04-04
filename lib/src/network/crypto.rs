@@ -127,13 +127,8 @@ pub(super) async fn establish_channel<'a>(
 
     let (recv_cipher, send_cipher) = match role {
         Role::Initiator => {
-            let content = handshake_state.write_message_vec(&[])?;
-            if !sink.send(content).await {
-                return Err(EstablishError::Closed);
-            }
-
-            let content = stream.recv().await?;
-            handshake_state.read_message_vec(&content)?;
+            handshake_send(&mut handshake_state, sink, &[]).await?;
+            handshake_recv(&mut handshake_state, stream).await?;
 
             assert!(handshake_state.completed());
 
@@ -141,13 +136,8 @@ pub(super) async fn establish_channel<'a>(
             (recv_cipher, send_cipher)
         }
         Role::Responder => {
-            let content = stream.recv().await?;
-            handshake_state.read_message_vec(&content)?;
-
-            let content = handshake_state.write_message_vec(&[])?;
-            if !sink.send(content).await {
-                return Err(EstablishError::Closed);
-            }
+            handshake_recv(&mut handshake_state, stream).await?;
+            handshake_send(&mut handshake_state, sink, &[]).await?;
 
             assert!(handshake_state.completed());
 
@@ -236,4 +226,25 @@ fn build_handshake_state(role: Role, repo_id: &RepositoryId) -> HandshakeState {
     );
     state.push_psk(repo_id.salted_hash(b"pre-shared-key").as_ref());
     state
+}
+
+async fn handshake_send(
+    state: &mut HandshakeState,
+    sink: &mut ContentSink,
+    msg: &[u8],
+) -> Result<(), EstablishError> {
+    let content = state.write_message_vec(msg)?;
+    if sink.send(content).await {
+        Ok(())
+    } else {
+        Err(EstablishError::Closed)
+    }
+}
+
+async fn handshake_recv(
+    state: &mut HandshakeState,
+    stream: &mut ContentStream,
+) -> Result<Vec<u8>, EstablishError> {
+    let content = stream.recv().await?;
+    Ok(state.read_message_vec(&content)?)
 }

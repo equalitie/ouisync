@@ -256,9 +256,10 @@ impl Index {
         Ok(remote_nodes
             .iter()
             .filter(move |(bucket, remote_node)| {
-                if !receive_filter.check(remote_node.hash, remote_node.summary) {
-                    return false;
-                }
+                // DEBUG
+                // if !receive_filter.check(remote_node.hash, remote_node.summary) {
+                //     return false;
+                // }
 
                 let local_node = if let Some(node) = local_nodes.get(*bucket) {
                     node
