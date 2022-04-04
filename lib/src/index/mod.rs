@@ -107,6 +107,15 @@ impl Index {
         count
     }
 
+    pub(crate) async fn debug_print(&self, print: DebugPrinter) {
+        let mut conn = self.pool.acquire().await.unwrap();
+        RootNode::debug_print(&mut conn, print).await;
+    }
+
+    pub(crate) fn reset_receive_filter(&self) {
+        self.shared.receive_filter.lock().unwrap().clear_all()
+    }
+
     /// Receive `RootNode` from other replica and store it into the db. Returns whether the
     /// received node was more up-to-date than the corresponding branch stored by this replica.
     pub(crate) async fn receive_root_node(
@@ -181,11 +190,6 @@ impl Index {
         Ok(updated)
     }
 
-    pub(crate) async fn debug_print(&self, print: DebugPrinter) {
-        let mut conn = self.pool.acquire().await.unwrap();
-        RootNode::debug_print(&mut conn, print).await;
-    }
-
     /// Receive inner nodes from other replica and store them into the db.
     /// Returns hashes of those nodes that were more up to date than the locally stored ones.
     pub(crate) async fn receive_inner_nodes(
@@ -251,15 +255,14 @@ impl Index {
         let local_nodes = InnerNode::load_children(conn, parent_hash).await?;
 
         let mut receive_filter = self.shared.receive_filter.lock().unwrap();
-        receive_filter.cleanup();
+        receive_filter.clear_expired();
 
         Ok(remote_nodes
             .iter()
             .filter(move |(bucket, remote_node)| {
-                // DEBUG
-                // if !receive_filter.check(remote_node.hash, remote_node.summary) {
-                //     return false;
-                // }
+                if !receive_filter.check(remote_node.hash, remote_node.summary) {
+                    return false;
+                }
 
                 let local_node = if let Some(node) = local_nodes.get(*bucket) {
                     node
@@ -559,8 +562,12 @@ impl ReceiveFilter {
         }
     }
 
-    fn cleanup(&mut self) {
+    fn clear_expired(&mut self) {
         self.entries
             .retain(|_, (_, timestamp)| timestamp.elapsed() < RECEIVE_FILTER_EXPIRY)
+    }
+
+    fn clear_all(&mut self) {
+        self.entries.clear()
     }
 }

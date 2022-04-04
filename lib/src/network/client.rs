@@ -42,6 +42,8 @@ impl Client {
     }
 
     pub async fn run(&mut self) -> Result<()> {
+        self.index.reset_receive_filter();
+
         loop {
             // DEBUG
             if !FAILED.load(Ordering::Relaxed) && rand::Rng::gen_bool(&mut rand::thread_rng(), 0.05)
