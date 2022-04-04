@@ -1,3 +1,4 @@
+mod channel_info;
 mod client;
 mod connection;
 mod crypto;

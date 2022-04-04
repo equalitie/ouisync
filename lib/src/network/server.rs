@@ -1,4 +1,7 @@
-use super::message::{Content, Request, Response};
+use super::{
+    channel_info::ChannelInfo,
+    message::{Content, Request, Response},
+};
 use crate::{
     block::{self, BlockId, BLOCK_SIZE},
     crypto::{sign::PublicKey, Hash},
@@ -186,9 +189,9 @@ impl<'a> Monitor<'a> {
             return Ok(());
         }
 
-        log::debug!(
-            // log::trace!(
-            "handle_branch_changed(branch_id: {:?}, hash: {:?}, vv: {:?}, missing blocks: {})",
+        log::trace!(
+            "{} handle_branch_changed(branch_id: {:?}, hash: {:?}, vv: {:?}, missing blocks: {})",
+            ChannelInfo::current(),
             branch_id,
             root_node.proof.hash,
             root_node.proof.version_vector,
@@ -255,7 +258,13 @@ where
     T: fmt::Debug,
 {
     fn drop(&mut self) {
-        log::trace!("{}({:?}) - {}", self.label, self.id, self.status)
+        log::trace!(
+            "{} {}({:?}) - {}",
+            ChannelInfo::current(),
+            self.label,
+            self.id,
+            self.status
+        )
     }
 }
 
@@ -306,7 +315,8 @@ impl Stats {
         }
 
         log::debug!(
-            "request stats - nodes: {}, blocks: {}, total: {}",
+            "{} request stats - nodes: {}, blocks: {}, total: {}",
+            ChannelInfo::current(),
             self.nodes,
             self.blocks,
             self.nodes + self.blocks

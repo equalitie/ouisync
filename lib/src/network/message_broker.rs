@@ -7,10 +7,10 @@ use super::{
     protocol::RuntimeId,
     server::Server,
 };
-use crate::{index::Index, repository::RepositoryId};
+use crate::{index::Index, network::channel_info::ChannelInfo, repository::RepositoryId};
 use std::{
     collections::{hash_map::Entry, HashMap},
-    fmt, future,
+    future,
 };
 use tokio::{
     net::TcpStream,
@@ -66,6 +66,7 @@ impl MessageBroker {
     /// to actually be created.
     pub fn create_link(&mut self, index: Index) {
         let channel = MessageChannel::from(index.repository_id());
+        let channel_info = ChannelInfo::new(channel, self.this_runtime_id, self.that_runtime_id);
         let (abort_tx, abort_rx) = oneshot::channel();
 
         match self.links.entry(channel) {
@@ -73,7 +74,7 @@ impl MessageBroker {
                 if entry.get().is_closed() {
                     entry.insert(abort_tx);
                 } else {
-                    log::warn!("not creating link for {:?} - already exists", channel);
+                    log::warn!("{} not creating link - already exists", channel_info);
                     return;
                 }
             }
@@ -82,7 +83,7 @@ impl MessageBroker {
             }
         }
 
-        log::debug!("creating link for {:?}", channel);
+        log::debug!("{} creating link", channel_info);
 
         let role = Role::determine(
             index.repository_id(),
@@ -93,20 +94,16 @@ impl MessageBroker {
         let stream = self.dispatcher.open_recv(channel);
         let sink = self.dispatcher.open_send(channel);
 
-        let info = ChannelInfo {
-            channel,
-            this_runtime_id: self.this_runtime_id,
-            that_runtime_id: self.that_runtime_id,
-        };
-
-        task::spawn(async move {
+        let task = async move {
             select! {
-                _ = maintain_link(role, info, stream, sink.clone(), index) => (),
+                _ = maintain_link(role, stream, sink.clone(), index) => (),
                 _ = abort_rx => sink.reset().await,
             }
 
-            log::debug!("{} link destroyed", info)
-        });
+            log::debug!("{} link destroyed", channel_info)
+        };
+
+        task::spawn(channel_info.apply(task));
     }
 
     /// Destroy the link between a local repository with the specified id hash and its remote
@@ -117,27 +114,25 @@ impl MessageBroker {
 }
 
 // Repeatedly establish and run the link until it's explicitly destroyed by calling `destroy_link()`.
-async fn maintain_link(
-    role: Role,
-    info: ChannelInfo,
-    mut stream: ContentStream,
-    mut sink: ContentSink,
-    index: Index,
-) {
+async fn maintain_link(role: Role, mut stream: ContentStream, mut sink: ContentSink, index: Index) {
     loop {
         let (crypto_stream, crypto_sink) =
             match crypto::establish_channel(role, index.repository_id(), &mut stream, &mut sink)
                 .await
             {
                 Ok(io) => {
-                    log::debug!("{} established encrypted channel as {:?}", info, role);
+                    log::debug!(
+                        "{} established encrypted channel as {:?}",
+                        ChannelInfo::current(),
+                        role
+                    );
 
                     io
                 }
                 Err(error @ (EstablishError::Crypto | EstablishError::Reset)) => {
                     log::warn!(
                         "{} failed to establish encrypted channel as {:?}: {}",
-                        info,
+                        ChannelInfo::current(),
                         role,
                         error
                     );
@@ -147,7 +142,7 @@ async fn maintain_link(
                 Err(error @ EstablishError::Closed) => {
                     log::debug!(
                         "{} failed to establish encrypted channel as {:?}: {}",
-                        info,
+                        ChannelInfo::current(),
                         role,
                         error
                     );
@@ -156,7 +151,7 @@ async fn maintain_link(
                 }
             };
 
-        let status = run_link(info, crypto_stream, crypto_sink, &index).await;
+        let status = run_link(crypto_stream, crypto_sink, &index).await;
 
         match status {
             Status::Failed => sink.reset().await,
@@ -166,28 +161,22 @@ async fn maintain_link(
     }
 }
 
-async fn run_link(
-    info: ChannelInfo,
-    stream: DecryptingStream<'_>,
-    sink: EncryptingSink<'_>,
-    index: &Index,
-) -> Status {
+async fn run_link(stream: DecryptingStream<'_>, sink: EncryptingSink<'_>, index: &Index) -> Status {
     let (request_tx, request_rx) = mpsc::channel(1);
     let (response_tx, response_rx) = mpsc::channel(1);
     let (content_tx, content_rx) = mpsc::channel(1);
 
     // Run everything in parallel:
     select! {
-        status = run_client(info, index.clone(), content_tx.clone(), response_rx) => status,
-        status = run_server(info, index.clone(), content_tx, request_rx ) => status,
-        status = recv_messages(info, stream, request_tx, response_tx) => status,
-        status = send_messages(info, content_rx, sink) => status,
+        status = run_client(index.clone(), content_tx.clone(), response_rx) => status,
+        status = run_server(index.clone(), content_tx, request_rx ) => status,
+        status = recv_messages(stream, request_tx, response_tx) => status,
+        status = send_messages(content_rx, sink) => status,
     }
 }
 
 // Handle incoming messages
 async fn recv_messages(
-    info: ChannelInfo,
     mut stream: DecryptingStream<'_>,
     request_tx: mpsc::Sender<Request>,
     response_tx: mpsc::Sender<Response>,
@@ -196,15 +185,18 @@ async fn recv_messages(
         let content = match stream.recv().await {
             Ok(content) => content,
             Err(RecvError::Crypto) => {
-                log::warn!("{} failed to decrypt incoming message", info);
+                log::warn!(
+                    "{} failed to decrypt incoming message",
+                    ChannelInfo::current()
+                );
                 return Status::Reset;
             }
             Err(RecvError::Reset) => {
-                log::debug!("{} message stream reset", info);
+                log::debug!("{} message stream reset", ChannelInfo::current());
                 return Status::Reset;
             }
             Err(RecvError::Closed) => {
-                log::debug!("{} message stream closed", info);
+                log::debug!("{} message stream closed", ChannelInfo::current());
                 return Status::Closed;
             }
         };
@@ -212,7 +204,11 @@ async fn recv_messages(
         let content: Content = match bincode::deserialize(&content) {
             Ok(content) => content,
             Err(error) => {
-                log::warn!("{} failed to deserialize incoming message: {}", info, error);
+                log::warn!(
+                    "{} failed to deserialize incoming message: {}",
+                    ChannelInfo::current(),
+                    error
+                );
                 continue; // TODO: should we return `Status::Reset` here as well?
             }
         };
@@ -226,7 +222,6 @@ async fn recv_messages(
 
 // Handle outgoing messages
 async fn send_messages(
-    info: ChannelInfo,
     mut content_rx: mpsc::Receiver<Content>,
     mut sink: EncryptingSink<'_>,
 ) -> Status {
@@ -244,11 +239,11 @@ async fn send_messages(
         match sink.send(content).await {
             Ok(()) => (),
             Err(SendError::Reset) => {
-                log::debug!("{} message sink reset", info);
+                log::debug!("{} message sink reset", ChannelInfo::current());
                 return Status::Reset;
             }
             Err(SendError::Closed) => {
-                log::debug!("{} message sink closed", info);
+                log::debug!("{} message sink closed", ChannelInfo::current());
                 return Status::Closed;
             }
         }
@@ -257,7 +252,6 @@ async fn send_messages(
 
 // Create and run client. Returns only on error.
 async fn run_client(
-    info: ChannelInfo,
     index: Index,
     content_tx: mpsc::Sender<Content>,
     response_rx: mpsc::Receiver<Response>,
@@ -267,7 +261,7 @@ async fn run_client(
     match client.run().await {
         Ok(()) => forever().await,
         Err(error) => {
-            log::error!("{} client failed: {:?}", info, error);
+            log::error!("{} client failed: {:?}", ChannelInfo::current(), error);
             Status::Failed
         }
     }
@@ -275,7 +269,6 @@ async fn run_client(
 
 // Create and run server. Returns only on error.
 async fn run_server(
-    info: ChannelInfo,
     index: Index,
     content_tx: mpsc::Sender<Content>,
     request_rx: mpsc::Receiver<Request>,
@@ -285,7 +278,7 @@ async fn run_server(
     match server.run().await {
         Ok(()) => forever().await,
         Err(error) => {
-            log::error!("{} server failed: {:?}", info, error);
+            log::error!("{} server failed: {:?}", ChannelInfo::current(), error);
             Status::Failed
         }
     }
@@ -304,21 +297,4 @@ enum Status {
     Reset,
     // Connection closed
     Closed,
-}
-
-#[derive(Clone, Copy)]
-struct ChannelInfo {
-    channel: MessageChannel,
-    this_runtime_id: RuntimeId,
-    that_runtime_id: RuntimeId,
-}
-
-impl fmt::Display for ChannelInfo {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "{:?} [{:?} -> {:?}]",
-            self.channel, self.this_runtime_id, self.that_runtime_id
-        )
-    }
 }
