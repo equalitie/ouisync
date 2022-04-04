@@ -42,7 +42,7 @@ impl Client {
     }
 
     pub async fn run(&mut self) -> Result<()> {
-        self.index.reset_receive_filter();
+        let _enable = self.index.enable_receive_filter();
 
         loop {
             // DEBUG
