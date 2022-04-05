@@ -132,7 +132,7 @@ async fn relay() {
     drop(file);
 
     with_timeout(
-        Duration::from_secs(60 * 60),
+        Duration::from_secs(60),
         expect_file_content(&repo_b, "test.dat", &content),
     )
     .await;
@@ -164,7 +164,7 @@ async fn transfer_large_file() {
     drop(file);
 
     with_timeout(
-        Duration::from_secs(60 * 60),
+        Duration::from_secs(60),
         expect_file_content(&repo_b, "test.dat", &content),
     )
     .await;

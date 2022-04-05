@@ -3,7 +3,7 @@ use super::{
     connection::ConnectionPermit,
     crypto::{self, DecryptingStream, EncryptingSink, EstablishError, RecvError, Role, SendError},
     message::{Content, MessageChannel, Request, Response},
-    message_dispatcher::{ContentSink, ContentStream, MessageDispatcher},
+    message_dispatcher::{ChannelClosed, ContentSink, ContentStream, MessageDispatcher},
     protocol::RuntimeId,
     server::Server,
 };
@@ -97,9 +97,7 @@ impl MessageBroker {
         let task = async move {
             select! {
                 _ = maintain_link(role, stream, sink.clone(), index) => (),
-                _ = abort_rx => {
-                    sink.send(MSG_RESET.to_vec()).await.unwrap_or(());
-                }
+                _ = abort_rx => (),
             }
 
             log::debug!("{} link destroyed", channel_info)
@@ -118,36 +116,40 @@ impl MessageBroker {
 // Repeatedly establish and run the link until it's explicitly destroyed by calling `destroy_link()`.
 async fn maintain_link(role: Role, mut stream: ContentStream, mut sink: ContentSink, index: Index) {
     loop {
+        match barrier(&mut stream, &mut sink).await {
+            Ok(()) => (),
+            Err(ChannelClosed) => break,
+        }
+
         let (crypto_stream, crypto_sink) =
-            match establish_link(role, &mut stream, &mut sink, &index).await {
+            match establish_channel(role, &mut stream, &mut sink, &index).await {
                 Ok(io) => io,
                 Err(EstablishError::Crypto) => continue,
                 Err(EstablishError::Closed) => break,
             };
 
         match run_link(crypto_stream, crypto_sink, &index).await {
-            ControlFlow::Continue => {
-                if sink.send(MSG_RESET.to_vec()).await.is_err() {
-                    break;
-                }
-            }
+            ControlFlow::Continue => continue,
             ControlFlow::Break => break,
         }
     }
 }
 
-async fn establish_link<'a>(
+/// Ensures there are no more in-flight messages beween us and the peer.
+async fn barrier(stream: &mut ContentStream, sink: &mut ContentSink) -> Result<(), ChannelClosed> {
+    sink.send(vec![]).await?;
+    sink.send(vec![rand::random()]).await?;
+    while stream.recv().await?.len() != 1 {}
+
+    Ok(())
+}
+
+async fn establish_channel<'a>(
     role: Role,
     stream: &'a mut ContentStream,
     sink: &'a mut ContentSink,
     index: &Index,
 ) -> Result<(DecryptingStream<'a>, EncryptingSink<'a>), EstablishError> {
-    // Put both peers into the same initial state by draining all messages sent in previous
-    // iterations, if any.
-    sink.send(MSG_BARRIER.to_vec()).await?;
-    while stream.recv().await? != MSG_BARRIER {}
-
-    // Establish the encrypted channel
     match crypto::establish_channel(role, index.repository_id(), stream, sink).await {
         Ok(io) => {
             log::debug!(
@@ -313,8 +315,3 @@ enum ControlFlow {
     Continue,
     Break,
 }
-
-// Message to request to terminate the current link and try to establish it again.
-const MSG_RESET: &[u8] = &[0];
-// Message to synchronize the peer states before establishing the encrypted channel.
-const MSG_BARRIER: &[u8] = &[1];
