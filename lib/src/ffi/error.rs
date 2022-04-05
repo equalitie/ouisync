@@ -58,7 +58,8 @@ impl ToErrorCode for Error {
             | Self::OffsetOutOfRange
             | Self::InitializeLogger(_)
             | Self::InitializeRuntime(_)
-            | Self::Writer(_) => ErrorCode::Other,
+            | Self::Writer(_)
+            | Self::RequestTimeout => ErrorCode::Other,
         }
     }
 }

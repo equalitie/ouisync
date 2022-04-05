@@ -45,7 +45,7 @@ impl Client {
                 Some(response) = self.rx.recv() => {
                     self.enqueue_response(response);
                 }
-                _ = self.request_limiter.expired() => (),
+                _ = self.request_limiter.expired() => return Err(Error::RequestTimeout),
                 else => break,
             }
 
