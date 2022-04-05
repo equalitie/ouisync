@@ -1,5 +1,5 @@
 use std::{
-    collections::{hash_map::Entry, HashMap, HashSet},
+    collections::{hash_map::Entry, HashMap},
     net::SocketAddr,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -18,10 +18,18 @@ use std::{
 //   https://github.com/tokio-rs/tokio/issues/3757
 use tokio::sync::{watch, Notify};
 
+#[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]
+pub enum PeerState {
+    Known,
+    Connecting,
+    Handshaking,
+    Active,
+}
+
 /// Prevents establishing duplicate connections.
 pub(super) struct ConnectionDeduplicator {
     next_id: AtomicU64,
-    connections: Arc<SyncMutex<HashMap<ConnectionKey, u64>>>,
+    connections: Arc<SyncMutex<HashMap<ConnectionKey, Peer>>>,
     on_change_tx: Arc<watch::Sender<bool>>,
     // We need to keep this to prevent the Sender from closing.
     on_change_rx: watch::Receiver<bool>,
@@ -47,7 +55,10 @@ impl ConnectionDeduplicator {
         let key = ConnectionKey { addr, dir };
         let id = if let Entry::Vacant(entry) = self.connections.lock().unwrap().entry(key) {
             let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-            entry.insert(id);
+            entry.insert(Peer {
+                id,
+                state: PeerState::Known,
+            });
             self.on_change_tx.send(true).unwrap_or(());
             id
         } else {
@@ -68,28 +79,23 @@ impl ConnectionDeduplicator {
         })
     }
 
-    pub fn collect_peer_info(&self) -> HashMap<SocketAddr, HashSet<ConnectionDirection>> {
+    pub fn collect_peer_info(&self) -> HashMap<SocketAddr, PeerState> {
         let connections = self.connections.lock().unwrap();
-
-        let mut map = HashMap::<_, HashSet<_>>::new();
-
-        for c in connections.keys() {
-            match map.entry(c.addr) {
-                Entry::Vacant(entry) => {
-                    entry.insert(std::iter::once(c.dir).collect());
-                }
-                Entry::Occupied(mut entry) => {
-                    entry.get_mut().insert(c.dir);
-                }
-            }
-        }
-
-        map
+        connections
+            .iter()
+            .map(|(key, peer)| (key.addr, peer.state))
+            .collect()
     }
 
     pub fn on_change(&self) -> watch::Receiver<bool> {
         self.on_change_rx.clone()
     }
+}
+
+#[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]
+struct Peer {
+    id: u64,
+    state: PeerState,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]
@@ -101,7 +107,7 @@ pub enum ConnectionDirection {
 /// Connection permit that prevents another connection to the same peer (socket address) to be
 /// established as long as it remains in scope.
 pub(super) struct ConnectionPermit {
-    connections: Arc<SyncMutex<HashMap<ConnectionKey, u64>>>,
+    connections: Arc<SyncMutex<HashMap<ConnectionKey, Peer>>>,
     key: ConnectionKey,
     id: u64,
     on_release: Arc<Notify>,
@@ -125,6 +131,30 @@ impl ConnectionPermit {
             }),
             ConnectionPermitHalf(self),
         )
+    }
+
+    pub fn mark_as_connecting(&self) {
+        self.set_state(PeerState::Connecting);
+    }
+
+    pub fn mark_as_handshaking(&self) {
+        self.set_state(PeerState::Handshaking);
+    }
+
+    pub fn mark_as_active(&self) {
+        self.set_state(PeerState::Active);
+    }
+
+    fn set_state(&self, new_state: PeerState) {
+        let mut lock = self.connections.lock().unwrap();
+
+        // Unwrap because if `self` exists, then the entry should exist as well.
+        let peer = lock.get_mut(&self.key).unwrap();
+
+        if peer.state != new_state {
+            peer.state = new_state;
+            self.on_deduplicator_change.send(true).unwrap_or(());
+        }
     }
 
     /// Returns a `Notify` that gets notified when this permit gets released.
@@ -157,7 +187,7 @@ impl ConnectionPermit {
 impl Drop for ConnectionPermit {
     fn drop(&mut self) {
         if let Entry::Occupied(entry) = self.connections.lock().unwrap().entry(self.key) {
-            if *entry.get() == self.id {
+            if entry.get().id == self.id {
                 entry.remove();
             }
         }
