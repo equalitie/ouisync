@@ -100,23 +100,23 @@ impl ContentStream {
     }
 
     /// Receive the next message content.
-    pub async fn recv(&mut self) -> Result<Vec<u8>, ContentRecvError> {
+    pub async fn recv(&mut self) -> Result<Vec<u8>, ChannelClosed> {
         let mut closed = false;
 
         loop {
             if let Some(content) = self.state.pop(&self.channel) {
-                return decode_message_content(content);
+                return Ok(content);
             }
 
             if closed {
-                return Err(ContentRecvError::Closed);
+                return Err(ChannelClosed);
             }
 
             select! {
                 message = self.state.reader.recv() => {
                     if let Some(message) = message {
                         if message.channel == self.channel {
-                            return decode_message_content(message.content);
+                            return Ok(message.content);
                         } else {
                             self.state.push(message)
                         }
@@ -140,9 +140,7 @@ pub(super) struct ContentSink {
 
 impl ContentSink {
     /// Returns whether the send succeeded.
-    pub async fn send(&self, content: Vec<u8>) -> bool {
-        assert!(!content.is_empty());
-
+    pub async fn send(&self, content: Vec<u8>) -> Result<(), ChannelClosed> {
         self.state
             .send(Message {
                 channel: self.channel,
@@ -150,34 +148,10 @@ impl ContentSink {
             })
             .await
     }
-
-    /// Reset this channel. The peer will get `RecvError::Reset` from `ContentStream::recv` but will
-    /// still be able to receive further messages.
-    pub async fn reset(&self) {
-        self.state.send(create_reset_message(self.channel)).await;
-    }
 }
 
 #[derive(Debug)]
-pub(super) enum ContentRecvError {
-    Closed,
-    Reset,
-}
-
-const fn create_reset_message(channel: MessageChannel) -> Message {
-    Message {
-        channel,
-        content: Vec::new(),
-    }
-}
-
-fn decode_message_content(content: Vec<u8>) -> Result<Vec<u8>, ContentRecvError> {
-    if content.is_empty() {
-        Err(ContentRecvError::Reset)
-    } else {
-        Ok(content)
-    }
-}
+pub(super) struct ChannelClosed;
 
 struct RecvState {
     reader: MultiStream,
@@ -422,7 +396,7 @@ struct Send<'a> {
 }
 
 impl Future for Send<'_> {
-    type Output = bool;
+    type Output = Result<(), ChannelClosed>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut inner = self.inner.lock().unwrap();
@@ -431,7 +405,7 @@ impl Future for Send<'_> {
             let sink = if let Some(sink) = inner.sinks.first_mut() {
                 sink
             } else {
-                return Poll::Ready(false);
+                return Poll::Ready(Err(ChannelClosed));
             };
 
             let message = match sink.poll_ready_unpin(cx) {
@@ -439,7 +413,7 @@ impl Future for Send<'_> {
                     if let Some(message) = self.message.take() {
                         message
                     } else {
-                        return Poll::Ready(true);
+                        return Poll::Ready(Ok(()));
                     }
                 }
                 Poll::Ready(Err(error)) => {
@@ -565,7 +539,7 @@ mod tests {
 
         drop(server);
 
-        assert_matches!(server_stream.recv().await, Err(ContentRecvError::Closed));
+        assert_matches!(server_stream.recv().await, Err(ChannelClosed));
     }
 
     #[tokio::test]

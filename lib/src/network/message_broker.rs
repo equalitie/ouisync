@@ -97,7 +97,9 @@ impl MessageBroker {
         let task = async move {
             select! {
                 _ = maintain_link(role, stream, sink.clone(), index) => (),
-                _ = abort_rx => sink.reset().await,
+                _ = abort_rx => {
+                    sink.send(MSG_RESET.to_vec()).await.unwrap_or(());
+                }
             }
 
             log::debug!("{} link destroyed", channel_info)
@@ -117,61 +119,73 @@ impl MessageBroker {
 async fn maintain_link(role: Role, mut stream: ContentStream, mut sink: ContentSink, index: Index) {
     loop {
         let (crypto_stream, crypto_sink) =
-            match crypto::establish_channel(role, index.repository_id(), &mut stream, &mut sink)
-                .await
-            {
-                Ok(io) => {
-                    log::debug!(
-                        "{} established encrypted channel as {:?}",
-                        ChannelInfo::current(),
-                        role
-                    );
-
-                    io
-                }
-                Err(error @ (EstablishError::Crypto | EstablishError::Reset)) => {
-                    log::warn!(
-                        "{} failed to establish encrypted channel as {:?}: {}",
-                        ChannelInfo::current(),
-                        role,
-                        error
-                    );
-
-                    continue;
-                }
-                Err(error @ EstablishError::Closed) => {
-                    log::debug!(
-                        "{} failed to establish encrypted channel as {:?}: {}",
-                        ChannelInfo::current(),
-                        role,
-                        error
-                    );
-
-                    break;
-                }
+            match establish_link(role, &mut stream, &mut sink, &index).await {
+                Ok(io) => io,
+                Err(EstablishError::Crypto) => continue,
+                Err(EstablishError::Closed) => break,
             };
 
-        let status = run_link(crypto_stream, crypto_sink, &index).await;
-
-        match status {
-            Status::Failed => sink.reset().await,
-            Status::Reset => (),
-            Status::Closed => break,
+        match run_link(crypto_stream, crypto_sink, &index).await {
+            ControlFlow::Continue => {
+                if sink.send(MSG_RESET.to_vec()).await.is_err() {
+                    break;
+                }
+            }
+            ControlFlow::Break => break,
         }
     }
 }
 
-async fn run_link(stream: DecryptingStream<'_>, sink: EncryptingSink<'_>, index: &Index) -> Status {
+async fn establish_link<'a>(
+    role: Role,
+    stream: &'a mut ContentStream,
+    sink: &'a mut ContentSink,
+    index: &Index,
+) -> Result<(DecryptingStream<'a>, EncryptingSink<'a>), EstablishError> {
+    // Put both peers into the same initial state by draining all messages sent in previous
+    // iterations, if any.
+    sink.send(MSG_BARRIER.to_vec()).await?;
+    while stream.recv().await? != MSG_BARRIER {}
+
+    // Establish the encrypted channel
+    match crypto::establish_channel(role, index.repository_id(), stream, sink).await {
+        Ok(io) => {
+            log::debug!(
+                "{} established encrypted channel as {:?}",
+                ChannelInfo::current(),
+                role
+            );
+
+            Ok(io)
+        }
+        Err(error) => {
+            log::warn!(
+                "{} failed to establish encrypted channel as {:?}: {}",
+                ChannelInfo::current(),
+                role,
+                error
+            );
+
+            Err(error)
+        }
+    }
+}
+
+async fn run_link(
+    stream: DecryptingStream<'_>,
+    sink: EncryptingSink<'_>,
+    index: &Index,
+) -> ControlFlow {
     let (request_tx, request_rx) = mpsc::channel(1);
     let (response_tx, response_rx) = mpsc::channel(1);
     let (content_tx, content_rx) = mpsc::channel(1);
 
     // Run everything in parallel:
     select! {
-        status = run_client(index.clone(), content_tx.clone(), response_rx) => status,
-        status = run_server(index.clone(), content_tx, request_rx ) => status,
-        status = recv_messages(stream, request_tx, response_tx) => status,
-        status = send_messages(content_rx, sink) => status,
+        flow = run_client(index.clone(), content_tx.clone(), response_rx) => flow,
+        flow = run_server(index.clone(), content_tx, request_rx ) => flow,
+        flow = recv_messages(stream, request_tx, response_tx) => flow,
+        flow = send_messages(content_rx, sink) => flow,
     }
 }
 
@@ -180,7 +194,7 @@ async fn recv_messages(
     mut stream: DecryptingStream<'_>,
     request_tx: mpsc::Sender<Request>,
     response_tx: mpsc::Sender<Response>,
-) -> Status {
+) -> ControlFlow {
     loop {
         let content = match stream.recv().await {
             Ok(content) => content,
@@ -189,15 +203,18 @@ async fn recv_messages(
                     "{} failed to decrypt incoming message",
                     ChannelInfo::current()
                 );
-                return Status::Reset;
+                return ControlFlow::Continue;
             }
-            Err(RecvError::Reset) => {
-                log::debug!("{} message stream reset", ChannelInfo::current());
-                return Status::Reset;
+            Err(RecvError::Exhausted) => {
+                log::debug!(
+                    "{} incoming message nonce counter exhausted",
+                    ChannelInfo::current()
+                );
+                return ControlFlow::Continue;
             }
             Err(RecvError::Closed) => {
                 log::debug!("{} message stream closed", ChannelInfo::current());
-                return Status::Closed;
+                return ControlFlow::Break;
             }
         };
 
@@ -209,7 +226,7 @@ async fn recv_messages(
                     ChannelInfo::current(),
                     error
                 );
-                continue; // TODO: should we return `Status::Reset` here as well?
+                continue; // TODO: should we return `ControlFlow::Continue` here as well?
             }
         };
 
@@ -224,7 +241,7 @@ async fn recv_messages(
 async fn send_messages(
     mut content_rx: mpsc::Receiver<Content>,
     mut sink: EncryptingSink<'_>,
-) -> Status {
+) -> ControlFlow {
     loop {
         let content = if let Some(content) = content_rx.recv().await {
             content
@@ -238,13 +255,16 @@ async fn send_messages(
 
         match sink.send(content).await {
             Ok(()) => (),
-            Err(SendError::Reset) => {
-                log::debug!("{} message sink reset", ChannelInfo::current());
-                return Status::Reset;
+            Err(SendError::Exhausted) => {
+                log::debug!(
+                    "{} outgoing message nonce counter exhausted",
+                    ChannelInfo::current()
+                );
+                return ControlFlow::Continue;
             }
             Err(SendError::Closed) => {
                 log::debug!("{} message sink closed", ChannelInfo::current());
-                return Status::Closed;
+                return ControlFlow::Break;
             }
         }
     }
@@ -255,14 +275,14 @@ async fn run_client(
     index: Index,
     content_tx: mpsc::Sender<Content>,
     response_rx: mpsc::Receiver<Response>,
-) -> Status {
+) -> ControlFlow {
     let mut client = Client::new(index, content_tx, response_rx);
 
     match client.run().await {
         Ok(()) => forever().await,
         Err(error) => {
             log::error!("{} client failed: {:?}", ChannelInfo::current(), error);
-            Status::Failed
+            ControlFlow::Continue
         }
     }
 }
@@ -272,14 +292,14 @@ async fn run_server(
     index: Index,
     content_tx: mpsc::Sender<Content>,
     request_rx: mpsc::Receiver<Request>,
-) -> Status {
+) -> ControlFlow {
     let mut server = Server::new(index, content_tx, request_rx);
 
     match server.run().await {
         Ok(()) => forever().await,
         Err(error) => {
             log::error!("{} server failed: {:?}", ChannelInfo::current(), error);
-            Status::Failed
+            ControlFlow::Continue
         }
     }
 }
@@ -289,12 +309,12 @@ async fn forever() -> ! {
     unreachable!()
 }
 
-#[derive(Debug)]
-enum Status {
-    // Failure (e.g. database error, request timeout, ...)
-    Failed,
-    // Message channel reset
-    Reset,
-    // Connection closed
-    Closed,
+enum ControlFlow {
+    Continue,
+    Break,
 }
+
+// Message to request to terminate the current link and try to establish it again.
+const MSG_RESET: &[u8] = &[0];
+// Message to synchronize the peer states before establishing the encrypted channel.
+const MSG_BARRIER: &[u8] = &[1];

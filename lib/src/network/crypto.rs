@@ -8,7 +8,7 @@
 //! based on the identity of the replicas is needed.
 
 use super::{
-    message_dispatcher::{ContentRecvError, ContentSink, ContentStream},
+    message_dispatcher::{ChannelClosed, ContentSink, ContentStream},
     protocol::RuntimeId,
 };
 use crate::repository::RepositoryId;
@@ -69,7 +69,7 @@ pub(super) struct DecryptingStream<'a> {
 impl DecryptingStream<'_> {
     pub async fn recv(&mut self) -> Result<Vec<u8>, RecvError> {
         if self.cipher.get_next_n() >= MAX_NONCE {
-            return Err(RecvError::Reset);
+            return Err(RecvError::Exhausted);
         }
 
         let mut content = self.inner.recv().await?;
@@ -99,7 +99,7 @@ pub(super) struct EncryptingSink<'a> {
 impl EncryptingSink<'_> {
     pub async fn send(&mut self, mut content: Vec<u8>) -> Result<(), SendError> {
         if self.cipher.get_next_n() >= MAX_NONCE {
-            return Err(SendError::Reset);
+            return Err(SendError::Exhausted);
         }
 
         self.buffer.resize(content.len() + Cipher::tag_len(), 0);
@@ -107,11 +107,7 @@ impl EncryptingSink<'_> {
 
         mem::swap(&mut content, &mut self.buffer);
 
-        if self.inner.send(content).await {
-            Ok(())
-        } else {
-            Err(SendError::Closed)
-        }
+        Ok(self.inner.send(content).await?)
     }
 }
 
@@ -162,28 +158,31 @@ pub(super) async fn establish_channel<'a>(
 
 #[derive(Debug, Error)]
 pub(super) enum SendError {
-    #[error("channel reset")]
-    Reset,
     #[error("channel closed")]
     Closed,
+    #[error("nonce counter exhausted")]
+    Exhausted,
+}
+
+impl From<ChannelClosed> for SendError {
+    fn from(_: ChannelClosed) -> Self {
+        Self::Closed
+    }
 }
 
 #[derive(Debug, Error)]
 pub(super) enum RecvError {
     #[error("decryption failed")]
     Crypto,
-    #[error("channel reset")]
-    Reset,
     #[error("channel closed")]
     Closed,
+    #[error("nonce counter exhausted")]
+    Exhausted,
 }
 
-impl From<ContentRecvError> for RecvError {
-    fn from(src: ContentRecvError) -> Self {
-        match src {
-            ContentRecvError::Closed => Self::Closed,
-            ContentRecvError::Reset => Self::Reset,
-        }
+impl From<ChannelClosed> for RecvError {
+    fn from(_: ChannelClosed) -> Self {
+        Self::Closed
     }
 }
 
@@ -191,8 +190,6 @@ impl From<ContentRecvError> for RecvError {
 pub(super) enum EstablishError {
     #[error("encryption / decryption failed")]
     Crypto,
-    #[error("channel reset")]
-    Reset,
     #[error("channel closed")]
     Closed,
 }
@@ -203,12 +200,9 @@ impl From<noise_protocol::Error> for EstablishError {
     }
 }
 
-impl From<ContentRecvError> for EstablishError {
-    fn from(src: ContentRecvError) -> Self {
-        match src {
-            ContentRecvError::Closed => Self::Closed,
-            ContentRecvError::Reset => Self::Reset,
-        }
+impl From<ChannelClosed> for EstablishError {
+    fn from(_: ChannelClosed) -> Self {
+        Self::Closed
     }
 }
 
@@ -234,11 +228,7 @@ async fn handshake_send(
     msg: &[u8],
 ) -> Result<(), EstablishError> {
     let content = state.write_message_vec(msg)?;
-    if sink.send(content).await {
-        Ok(())
-    } else {
-        Err(EstablishError::Closed)
-    }
+    Ok(sink.send(content).await?)
 }
 
 async fn handshake_recv(
