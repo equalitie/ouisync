@@ -17,7 +17,6 @@ use tokio::{
     net::{tcp, TcpStream},
     select,
     sync::watch,
-    task,
 };
 
 /// Reads/writes messages from/to the underlying TCP streams and dispatches them to individual
@@ -67,6 +66,11 @@ impl MessageDispatcher {
         }
     }
 
+    pub fn close(&self) {
+        self.recv.reader.close();
+        self.send.close();
+    }
+
     pub fn is_closed(&self) -> bool {
         self.recv.reader.is_empty() || self.send.is_empty()
     }
@@ -74,8 +78,7 @@ impl MessageDispatcher {
 
 impl Drop for MessageDispatcher {
     fn drop(&mut self) {
-        self.recv.reader.close();
-        self.send.close();
+        self.close();
     }
 }
 
@@ -96,28 +99,24 @@ impl ContentStream {
         }
     }
 
-    pub fn channel(&self) -> &MessageChannel {
-        &self.channel
-    }
-
     /// Receive the next message content.
-    pub async fn recv(&mut self) -> Option<Vec<u8>> {
+    pub async fn recv(&mut self) -> Result<Vec<u8>, ChannelClosed> {
         let mut closed = false;
 
         loop {
             if let Some(content) = self.state.pop(&self.channel) {
-                return decode_message_content(content);
+                return Ok(content);
             }
 
             if closed {
-                return None;
+                return Err(ChannelClosed);
             }
 
             select! {
                 message = self.state.reader.recv() => {
                     if let Some(message) = message {
                         if message.channel == self.channel {
-                            return decode_message_content(message.content);
+                            return Ok(message.content);
                         } else {
                             self.state.push(message)
                         }
@@ -140,14 +139,8 @@ pub(super) struct ContentSink {
 }
 
 impl ContentSink {
-    pub fn channel(&self) -> &MessageChannel {
-        &self.channel
-    }
-
     /// Returns whether the send succeeded.
-    pub async fn send(&self, content: Vec<u8>) -> bool {
-        assert!(!content.is_empty());
-
+    pub async fn send(&self, content: Vec<u8>) -> Result<(), ChannelClosed> {
         self.state
             .send(Message {
                 channel: self.channel,
@@ -157,17 +150,8 @@ impl ContentSink {
     }
 }
 
-impl Drop for ContentSink {
-    fn drop(&mut self) {
-        let channel = self.channel;
-        let state = self.state.clone();
-
-        // Gracefully close the channel. Have to spawn because sending is async.
-        task::spawn(async move {
-            state.send(create_close_message(channel)).await;
-        });
-    }
-}
+#[derive(Debug)]
+pub(super) struct ChannelClosed;
 
 struct RecvState {
     reader: MultiStream,
@@ -191,23 +175,6 @@ impl RecvState {
             .or_default()
             .push_front(message.content);
         self.queues_changed_tx.send(()).unwrap_or(());
-    }
-}
-
-fn decode_message_content(content: Vec<u8>) -> Option<Vec<u8>> {
-    if !content.is_empty() {
-        Some(content)
-    } else {
-        // Empty content indicates channel close
-        None
-    }
-}
-
-fn create_close_message(channel: MessageChannel) -> Message {
-    Message {
-        channel,
-        // Empty content indicates channel close
-        content: Vec::new(),
     }
 }
 
@@ -429,7 +396,7 @@ struct Send<'a> {
 }
 
 impl Future for Send<'_> {
-    type Output = bool;
+    type Output = Result<(), ChannelClosed>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut inner = self.inner.lock().unwrap();
@@ -438,7 +405,7 @@ impl Future for Send<'_> {
             let sink = if let Some(sink) = inner.sinks.first_mut() {
                 sink
             } else {
-                return Poll::Ready(false);
+                return Poll::Ready(Err(ChannelClosed));
             };
 
             let message = match sink.poll_ready_unpin(cx) {
@@ -446,7 +413,7 @@ impl Future for Send<'_> {
                     if let Some(message) = self.message.take() {
                         message
                     } else {
-                        return Poll::Ready(true);
+                        return Poll::Ready(Ok(()));
                     }
                 }
                 Poll::Ready(Err(error)) => {
@@ -474,6 +441,7 @@ impl Future for Send<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use assert_matches::assert_matches;
     use std::net::Ipv4Addr;
     use tokio::net::{TcpListener, TcpStream};
 
@@ -571,7 +539,7 @@ mod tests {
 
         drop(server);
 
-        assert!(server_stream.recv().await.is_none());
+        assert_matches!(server_stream.recv().await, Err(ChannelClosed));
     }
 
     #[tokio::test]
@@ -597,39 +565,6 @@ mod tests {
         stream.close();
 
         assert!(stream.recv().await.is_none());
-    }
-
-    #[tokio::test]
-    async fn drop_sink() {
-        let (client_socket, server_socket) = create_connected_sockets().await;
-
-        let client = MessageDispatcher::new();
-        client.bind(client_socket, ConnectionPermit::dummy());
-
-        let server = MessageDispatcher::new();
-        server.bind(server_socket, ConnectionPermit::dummy());
-
-        let channel_a = MessageChannel::random();
-        let channel_b = MessageChannel::random();
-
-        let client_sink_a = client.open_send(channel_a);
-        let client_sink_b = client.open_send(channel_b);
-
-        let mut server_stream_a = server.open_recv(channel_a);
-        let mut server_stream_b = server.open_recv(channel_b);
-
-        assert!(client_sink_a.send(b"hello A".to_vec()).await);
-        assert!(client_sink_b.send(b"hello B".to_vec()).await);
-
-        // Dropping the sink closes channel A, but leaves channel B open.
-        drop(client_sink_a);
-
-        // Stream A receives the message and then closes.
-        assert!(server_stream_a.recv().await.is_some());
-        assert!(server_stream_a.recv().await.is_none());
-
-        // Stream B is still open
-        assert!(server_stream_b.recv().await.is_some());
     }
 
     async fn setup() -> (MessageSink<TcpStream>, MessageDispatcher) {

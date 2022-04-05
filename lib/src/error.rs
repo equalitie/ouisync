@@ -55,6 +55,8 @@ pub enum Error {
     InitializeRuntime(#[source] io::Error),
     #[error("failed to write into writer")]
     Writer(#[source] io::Error),
+    #[error("request timeout")]
+    RequestTimeout,
 }
 
 impl Error {

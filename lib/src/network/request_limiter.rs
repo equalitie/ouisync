@@ -14,7 +14,7 @@ const MAX_PENDING_REQUESTS: usize = 32;
 
 // If a response to a pending request is not received within this time, the request is expired so
 // that it doesn't block other requests from being sent.
-const PENDING_REQUEST_EXPIRY: Duration = Duration::from_secs(10);
+const PENDING_REQUEST_EXPIRY: Duration = Duration::from_secs(30);
 
 pub(super) struct RequestLimiter(HashMap<Request, Instant>);
 
@@ -37,6 +37,11 @@ impl RequestLimiter {
         self.0.remove(request).is_some()
     }
 
+    /// Wait until a request in this limiter expires and remove it. If there are currently no
+    /// requests in this limiter, this method waits forever.
+    ///
+    /// This method is cancel-safe in the sense that no request is removed if the returned future
+    /// is dropped before being driven to completion.
     pub async fn expired(&mut self) {
         if let Some((&request, &timestamp)) =
             self.0.iter().min_by(|(_, lhs), (_, rhs)| lhs.cmp(rhs))

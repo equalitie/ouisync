@@ -8,8 +8,7 @@
 //! based on the identity of the replicas is needed.
 
 use super::{
-    message::MessageChannel,
-    message_dispatcher::{ContentSink, ContentStream},
+    message_dispatcher::{ChannelClosed, ContentSink, ContentStream},
     protocol::RuntimeId,
 };
 use crate::repository::RepositoryId;
@@ -68,29 +67,25 @@ pub(super) struct DecryptingStream<'a> {
 }
 
 impl DecryptingStream<'_> {
-    pub async fn recv(&mut self) -> Result<Vec<u8>, Error> {
+    pub async fn recv(&mut self) -> Result<Vec<u8>, RecvError> {
         if self.cipher.get_next_n() >= MAX_NONCE {
-            return Err(Error::Exhausted);
+            return Err(RecvError::Exhausted);
         }
 
-        let mut content = self.inner.recv().await.ok_or(Error::Closed)?;
+        let mut content = self.inner.recv().await?;
 
         let plain_len = content
             .len()
             .checked_sub(Cipher::tag_len())
-            .ok_or(Error::Crypto)?;
+            .ok_or(RecvError::Crypto)?;
         self.buffer.resize(plain_len, 0);
         self.cipher
             .decrypt(&content, &mut self.buffer)
-            .map_err(|_| Error::Crypto)?;
+            .map_err(|_| RecvError::Crypto)?;
 
         mem::swap(&mut content, &mut self.buffer);
 
         Ok(content)
-    }
-
-    pub fn channel(&self) -> &MessageChannel {
-        self.inner.channel()
     }
 }
 
@@ -102,9 +97,9 @@ pub(super) struct EncryptingSink<'a> {
 }
 
 impl EncryptingSink<'_> {
-    pub async fn send(&mut self, mut content: Vec<u8>) -> Result<(), Error> {
+    pub async fn send(&mut self, mut content: Vec<u8>) -> Result<(), SendError> {
         if self.cipher.get_next_n() >= MAX_NONCE {
-            return Err(Error::Exhausted);
+            return Err(SendError::Exhausted);
         }
 
         self.buffer.resize(content.len() + Cipher::tag_len(), 0);
@@ -112,15 +107,7 @@ impl EncryptingSink<'_> {
 
         mem::swap(&mut content, &mut self.buffer);
 
-        if self.inner.send(content).await {
-            Ok(())
-        } else {
-            Err(Error::Closed)
-        }
-    }
-
-    pub fn channel(&self) -> &MessageChannel {
-        self.inner.channel()
+        Ok(self.inner.send(content).await?)
     }
 }
 
@@ -131,18 +118,13 @@ pub(super) async fn establish_channel<'a>(
     repo_id: &RepositoryId,
     stream: &'a mut ContentStream,
     sink: &'a mut ContentSink,
-) -> Result<(DecryptingStream<'a>, EncryptingSink<'a>), Error> {
+) -> Result<(DecryptingStream<'a>, EncryptingSink<'a>), EstablishError> {
     let mut handshake_state = build_handshake_state(role, repo_id);
 
     let (recv_cipher, send_cipher) = match role {
         Role::Initiator => {
-            let content = handshake_state.write_message_vec(&[])?;
-            if !sink.send(content).await {
-                return Err(Error::Closed);
-            }
-
-            let content = stream.recv().await.ok_or(Error::Closed)?;
-            handshake_state.read_message_vec(&content)?;
+            handshake_send(&mut handshake_state, sink, &[]).await?;
+            handshake_recv(&mut handshake_state, stream).await?;
 
             assert!(handshake_state.completed());
 
@@ -150,13 +132,8 @@ pub(super) async fn establish_channel<'a>(
             (recv_cipher, send_cipher)
         }
         Role::Responder => {
-            let content = stream.recv().await.ok_or(Error::Closed)?;
-            handshake_state.read_message_vec(&content)?;
-
-            let content = handshake_state.write_message_vec(&[])?;
-            if !sink.send(content).await {
-                return Err(Error::Closed);
-            }
+            handshake_recv(&mut handshake_state, stream).await?;
+            handshake_send(&mut handshake_state, sink, &[]).await?;
 
             assert!(handshake_state.completed());
 
@@ -180,18 +157,52 @@ pub(super) async fn establish_channel<'a>(
 }
 
 #[derive(Debug, Error)]
-pub(super) enum Error {
-    #[error("encryption / decryption failed")]
-    Crypto,
-    #[error("send / receive failed - channel closed")]
+pub(super) enum SendError {
+    #[error("channel closed")]
     Closed,
     #[error("nonce counter exhausted")]
     Exhausted,
 }
 
-impl From<noise_protocol::Error> for Error {
+impl From<ChannelClosed> for SendError {
+    fn from(_: ChannelClosed) -> Self {
+        Self::Closed
+    }
+}
+
+#[derive(Debug, Error)]
+pub(super) enum RecvError {
+    #[error("decryption failed")]
+    Crypto,
+    #[error("channel closed")]
+    Closed,
+    #[error("nonce counter exhausted")]
+    Exhausted,
+}
+
+impl From<ChannelClosed> for RecvError {
+    fn from(_: ChannelClosed) -> Self {
+        Self::Closed
+    }
+}
+
+#[derive(Debug, Error)]
+pub(super) enum EstablishError {
+    #[error("encryption / decryption failed")]
+    Crypto,
+    #[error("channel closed")]
+    Closed,
+}
+
+impl From<noise_protocol::Error> for EstablishError {
     fn from(_: noise_protocol::Error) -> Self {
         Self::Crypto
+    }
+}
+
+impl From<ChannelClosed> for EstablishError {
+    fn from(_: ChannelClosed) -> Self {
+        Self::Closed
     }
 }
 
@@ -209,4 +220,21 @@ fn build_handshake_state(role: Role, repo_id: &RepositoryId) -> HandshakeState {
     );
     state.push_psk(repo_id.salted_hash(b"pre-shared-key").as_ref());
     state
+}
+
+async fn handshake_send(
+    state: &mut HandshakeState,
+    sink: &mut ContentSink,
+    msg: &[u8],
+) -> Result<(), EstablishError> {
+    let content = state.write_message_vec(msg)?;
+    Ok(sink.send(content).await?)
+}
+
+async fn handshake_recv(
+    state: &mut HandshakeState,
+    stream: &mut ContentStream,
+) -> Result<Vec<u8>, EstablishError> {
+    let content = stream.recv().await?;
+    Ok(state.read_message_vec(&content)?)
 }

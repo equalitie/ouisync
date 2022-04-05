@@ -155,6 +155,8 @@ pub(crate) async fn receive_nodes(
     version_vector: VersionVector,
     snapshot: &Snapshot,
 ) {
+    let _enable = index.enable_receive_filter();
+
     let proof = Proof::new(branch_id, version_vector, *snapshot.root_hash(), write_keys);
     index
         .receive_root_node(proof.into(), Summary::INCOMPLETE)

@@ -181,6 +181,7 @@ async fn receive_root_node_with_existing_hash() {
 #[tokio::test(flavor = "multi_thread")]
 async fn receive_valid_child_nodes() {
     let (index, write_keys) = setup().await;
+    let _enable = index.enable_receive_filter();
 
     let local_id = PublicKey::random();
     let remote_id = PublicKey::random();
@@ -276,6 +277,8 @@ async fn receive_child_nodes_with_missing_root_parent() {
 #[tokio::test(flavor = "multi_thread")]
 async fn does_not_delete_old_branch_until_new_branch_is_complete() {
     let (index, write_keys) = setup().await;
+    let _enable = index.enable_receive_filter();
+
     let mut rng = rand::thread_rng();
 
     let local_id = PublicKey::generate(&mut rng);

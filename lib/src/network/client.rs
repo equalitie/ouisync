@@ -1,4 +1,5 @@
 use super::{
+    channel_info::ChannelInfo,
     message::{Content, Request, Response},
     request_limiter::RequestLimiter,
 };
@@ -37,12 +38,14 @@ impl Client {
     }
 
     pub async fn run(&mut self) -> Result<()> {
+        let _enable = self.index.enable_receive_filter();
+
         loop {
             select! {
                 Some(response) = self.rx.recv() => {
                     self.enqueue_response(response);
                 }
-                _ = self.request_limiter.expired() => (),
+                _ = self.request_limiter.expired() => return Err(Error::RequestTimeout),
                 else => break,
             }
 
@@ -115,7 +118,11 @@ impl Client {
         match result {
             Ok(()) => Ok(()),
             Err(error @ (ReceiveError::InvalidProof | ReceiveError::ParentNodeNotFound)) => {
-                log::warn!("failed to handle response: {}", error);
+                log::warn!(
+                    "{} failed to handle response: {}",
+                    ChannelInfo::current(),
+                    error
+                );
                 Ok(())
             }
             Err(ReceiveError::Fatal(error)) => Err(error),
@@ -128,7 +135,8 @@ impl Client {
         summary: Summary,
     ) -> Result<(), ReceiveError> {
         log::trace!(
-            "handle_root_node(hash: {:?}, vv: {:?}, missing_blocks: {})",
+            "{} handle_root_node(hash: {:?}, vv: {:?}, missing_blocks: {})",
+            ChannelInfo::current(),
             proof.hash,
             proof.version_vector,
             summary.missing_blocks_count()
@@ -148,7 +156,11 @@ impl Client {
         &mut self,
         nodes: CacheHash<InnerNodeMap>,
     ) -> Result<(), ReceiveError> {
-        log::trace!("handle_inner_nodes({:?})", nodes.hash());
+        log::trace!(
+            "{} handle_inner_nodes({:?})",
+            ChannelInfo::current(),
+            nodes.hash()
+        );
 
         let updated = self.index.receive_inner_nodes(nodes).await?;
 
@@ -163,7 +175,11 @@ impl Client {
         &mut self,
         nodes: CacheHash<LeafNodeSet>,
     ) -> Result<(), ReceiveError> {
-        log::trace!("handle_leaf_nodes({:?})", nodes.hash());
+        log::trace!(
+            "{} handle_leaf_nodes({:?})",
+            ChannelInfo::current(),
+            nodes.hash()
+        );
 
         let updated = self.index.receive_leaf_nodes(nodes).await?;
 
@@ -180,7 +196,7 @@ impl Client {
         data: BlockData,
         nonce: BlockNonce,
     ) -> Result<(), ReceiveError> {
-        log::trace!("handle_block({:?})", data.id);
+        log::trace!("{} handle_block({:?})", ChannelInfo::current(), data.id);
 
         match store::write_received_block(&self.index, &data, &nonce).await {
             Ok(_) => Ok(()),

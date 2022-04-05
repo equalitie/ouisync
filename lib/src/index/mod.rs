@@ -2,12 +2,12 @@ mod branch_data;
 mod node;
 mod path;
 mod proof;
+mod receive_filter;
 #[cfg(test)]
 mod tests;
 
 #[cfg(test)]
 pub(crate) use self::node::test_utils as node_test_utils;
-use self::proof::ProofError;
 pub(crate) use self::{
     branch_data::BranchData,
     node::{
@@ -17,6 +17,7 @@ pub(crate) use self::{
     proof::{Proof, UntrustedProof},
 };
 
+use self::{proof::ProofError, receive_filter::ReceiveFilter};
 use crate::{
     block::BlockId,
     crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
@@ -30,8 +31,7 @@ use futures_util::TryStreamExt;
 use std::{
     cmp::Ordering,
     collections::{hash_map::Entry, HashMap},
-    sync::{Arc, Mutex as BlockingMutex},
-    time::{Duration, Instant},
+    sync::Arc,
 };
 use thiserror::Error;
 
@@ -41,6 +41,7 @@ type SnapshotId = u32;
 pub struct Index {
     pub(crate) pool: db::Pool,
     shared: Arc<Shared>,
+    receive_filter: ReceiveFilter,
 }
 
 impl Index {
@@ -54,8 +55,8 @@ impl Index {
                 repository_id,
                 branches: RwLock::new(branches),
                 notify_tx,
-                receive_filter: BlockingMutex::new(ReceiveFilter::new()),
             }),
+            receive_filter: ReceiveFilter::new(),
         })
     }
 
@@ -105,6 +106,15 @@ impl Index {
         }
 
         count
+    }
+
+    pub(crate) async fn debug_print(&self, print: DebugPrinter) {
+        let mut conn = self.pool.acquire().await.unwrap();
+        RootNode::debug_print(&mut conn, print).await;
+    }
+
+    pub(crate) fn enable_receive_filter(&self) -> receive_filter::Enable {
+        self.receive_filter.enable()
     }
 
     /// Receive `RootNode` from other replica and store it into the db. Returns whether the
@@ -181,11 +191,6 @@ impl Index {
         Ok(updated)
     }
 
-    pub(crate) async fn debug_print(&self, print: DebugPrinter) {
-        let mut conn = self.pool.acquire().await.unwrap();
-        RootNode::debug_print(&mut conn, print).await;
-    }
-
     /// Receive inner nodes from other replica and store them into the db.
     /// Returns hashes of those nodes that were more up to date than the locally stored ones.
     pub(crate) async fn receive_inner_nodes(
@@ -250,8 +255,7 @@ impl Index {
     ) -> Result<Vec<Hash>> {
         let local_nodes = InnerNode::load_children(conn, parent_hash).await?;
 
-        let mut receive_filter = self.shared.receive_filter.lock().unwrap();
-        receive_filter.cleanup();
+        let mut receive_filter = self.receive_filter.access();
 
         Ok(remote_nodes
             .iter()
@@ -370,7 +374,6 @@ struct Shared {
     repository_id: RepositoryId,
     branches: RwLock<Branches>,
     notify_tx: broadcast::Sender<PublicKey>,
-    receive_filter: BlockingMutex<ReceiveFilter>,
 }
 
 /// Container for all known branches (local and remote)
@@ -524,42 +527,4 @@ pub(crate) async fn init(conn: &mut db::Connection) -> Result<(), Error> {
     .map_err(Error::CreateDbSchema)?;
 
     Ok(())
-}
-
-/// Filter for received nodes to avoid processing a node that doesn't contain any new information
-/// compared to the last time we received that same node.
-struct ReceiveFilter {
-    entries: HashMap<Hash, (Summary, Instant)>,
-}
-
-const RECEIVE_FILTER_EXPIRY: Duration = Duration::from_secs(5 * 60);
-
-impl ReceiveFilter {
-    fn new() -> Self {
-        Self {
-            entries: HashMap::new(),
-        }
-    }
-
-    fn check(&mut self, hash: Hash, summary: Summary) -> bool {
-        match self.entries.entry(hash) {
-            Entry::Occupied(mut entry) => {
-                if entry.get().0.is_up_to_date_with(&summary).unwrap_or(false) {
-                    false
-                } else {
-                    entry.insert((summary, Instant::now()));
-                    true
-                }
-            }
-            Entry::Vacant(entry) => {
-                entry.insert((summary, Instant::now()));
-                true
-            }
-        }
-    }
-
-    fn cleanup(&mut self) {
-        self.entries
-            .retain(|_, (_, timestamp)| timestamp.elapsed() < RECEIVE_FILTER_EXPIRY)
-    }
 }

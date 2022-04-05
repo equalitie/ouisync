@@ -1,14 +1,17 @@
 use super::{
     client::Client,
     connection::ConnectionPermit,
-    crypto::{self, DecryptingStream, EncryptingSink, Role},
+    crypto::{self, DecryptingStream, EncryptingSink, EstablishError, RecvError, Role, SendError},
     message::{Content, MessageChannel, Request, Response},
     message_dispatcher::{ContentSink, ContentStream, MessageDispatcher},
     protocol::RuntimeId,
     server::Server,
 };
-use crate::{index::Index, repository::RepositoryId};
-use std::collections::{hash_map::Entry, HashMap};
+use crate::{index::Index, network::channel_info::ChannelInfo, repository::RepositoryId};
+use std::{
+    collections::{hash_map::Entry, HashMap},
+    future,
+};
 use tokio::{
     net::TcpStream,
     select,
@@ -63,6 +66,7 @@ impl MessageBroker {
     /// to actually be created.
     pub fn create_link(&mut self, index: Index) {
         let channel = MessageChannel::from(index.repository_id());
+        let channel_info = ChannelInfo::new(channel, self.this_runtime_id, self.that_runtime_id);
         let (abort_tx, abort_rx) = oneshot::channel();
 
         match self.links.entry(channel) {
@@ -70,7 +74,7 @@ impl MessageBroker {
                 if entry.get().is_closed() {
                     entry.insert(abort_tx);
                 } else {
-                    log::warn!("not creating link for {:?} - already exists", channel);
+                    log::warn!("{} not creating link - already exists", channel_info);
                     return;
                 }
             }
@@ -79,24 +83,29 @@ impl MessageBroker {
             }
         }
 
-        log::debug!("creating link for {:?}", channel);
+        log::debug!("{} creating link", channel_info);
 
         let role = Role::determine(
             index.repository_id(),
             &self.this_runtime_id,
             &self.that_runtime_id,
         );
+
         let stream = self.dispatcher.open_recv(channel);
         let sink = self.dispatcher.open_send(channel);
 
-        task::spawn(async move {
+        let task = async move {
             select! {
-                _ = maintain_link(role, channel, stream, sink, index) => (),
-                _ = abort_rx => (),
+                _ = maintain_link(role, stream, sink.clone(), index) => (),
+                _ = abort_rx => {
+                    sink.send(MSG_RESET.to_vec()).await.unwrap_or(());
+                }
             }
 
-            log::debug!("link for {:?} destroyed", channel)
-        });
+            log::debug!("{} link destroyed", channel_info)
+        };
+
+        task::spawn(channel_info.apply(task));
     }
 
     /// Destroy the link between a local repository with the specified id hash and its remote
@@ -107,49 +116,76 @@ impl MessageBroker {
 }
 
 // Repeatedly establish and run the link until it's explicitly destroyed by calling `destroy_link()`.
-async fn maintain_link(
-    role: Role,
-    channel: MessageChannel,
-    mut stream: ContentStream,
-    mut sink: ContentSink,
-    index: Index,
-) {
+async fn maintain_link(role: Role, mut stream: ContentStream, mut sink: ContentSink, index: Index) {
     loop {
-        match crypto::establish_channel(role, index.repository_id(), &mut stream, &mut sink).await {
-            Ok((stream, sink)) => {
-                run_link(channel, stream, sink, &index).await;
-            }
-            Err(error) => {
-                log::warn!(
-                    "failed to establish encrypted channel for {:?}: {}",
-                    channel,
-                    error
-                );
-            }
-        };
+        let (crypto_stream, crypto_sink) =
+            match establish_link(role, &mut stream, &mut sink, &index).await {
+                Ok(io) => io,
+                Err(EstablishError::Crypto) => continue,
+                Err(EstablishError::Closed) => break,
+            };
 
-        // HACK: `establish_channel` sometimes returns immediatelly, so we need to yield explicitly
-        // here otherwise we could starve the runtime.
-        task::yield_now().await;
+        match run_link(crypto_stream, crypto_sink, &index).await {
+            ControlFlow::Continue => {
+                if sink.send(MSG_RESET.to_vec()).await.is_err() {
+                    break;
+                }
+            }
+            ControlFlow::Break => break,
+        }
+    }
+}
+
+async fn establish_link<'a>(
+    role: Role,
+    stream: &'a mut ContentStream,
+    sink: &'a mut ContentSink,
+    index: &Index,
+) -> Result<(DecryptingStream<'a>, EncryptingSink<'a>), EstablishError> {
+    // Put both peers into the same initial state by draining all messages sent in previous
+    // iterations, if any.
+    sink.send(MSG_BARRIER.to_vec()).await?;
+    while stream.recv().await? != MSG_BARRIER {}
+
+    // Establish the encrypted channel
+    match crypto::establish_channel(role, index.repository_id(), stream, sink).await {
+        Ok(io) => {
+            log::debug!(
+                "{} established encrypted channel as {:?}",
+                ChannelInfo::current(),
+                role
+            );
+
+            Ok(io)
+        }
+        Err(error) => {
+            log::warn!(
+                "{} failed to establish encrypted channel as {:?}: {}",
+                ChannelInfo::current(),
+                role,
+                error
+            );
+
+            Err(error)
+        }
     }
 }
 
 async fn run_link(
-    channel: MessageChannel,
     stream: DecryptingStream<'_>,
     sink: EncryptingSink<'_>,
     index: &Index,
-) {
+) -> ControlFlow {
     let (request_tx, request_rx) = mpsc::channel(1);
     let (response_tx, response_rx) = mpsc::channel(1);
     let (content_tx, content_rx) = mpsc::channel(1);
 
     // Run everything in parallel:
     select! {
-        _ = run_client(channel, index.clone(), content_tx.clone(), response_rx) => (),
-        _ = run_server(channel, index.clone(), content_tx, request_rx ) => (),
-        _ = recv_messages(stream, request_tx, response_tx) => (),
-        _ = send_messages(content_rx, sink) => (),
+        flow = run_client(index.clone(), content_tx.clone(), response_rx) => flow,
+        flow = run_server(index.clone(), content_tx, request_rx ) => flow,
+        flow = recv_messages(stream, request_tx, response_tx) => flow,
+        flow = send_messages(content_rx, sink) => flow,
     }
 }
 
@@ -158,78 +194,127 @@ async fn recv_messages(
     mut stream: DecryptingStream<'_>,
     request_tx: mpsc::Sender<Request>,
     response_tx: mpsc::Sender<Response>,
-) {
-    while let Ok(content) = stream.recv().await {
+) -> ControlFlow {
+    loop {
+        let content = match stream.recv().await {
+            Ok(content) => content,
+            Err(RecvError::Crypto) => {
+                log::warn!(
+                    "{} failed to decrypt incoming message",
+                    ChannelInfo::current()
+                );
+                return ControlFlow::Continue;
+            }
+            Err(RecvError::Exhausted) => {
+                log::debug!(
+                    "{} incoming message nonce counter exhausted",
+                    ChannelInfo::current()
+                );
+                return ControlFlow::Continue;
+            }
+            Err(RecvError::Closed) => {
+                log::debug!("{} message stream closed", ChannelInfo::current());
+                return ControlFlow::Break;
+            }
+        };
+
         let content: Content = match bincode::deserialize(&content) {
             Ok(content) => content,
             Err(error) => {
                 log::warn!(
-                    "failed to deserialize message for {:?}: {}",
-                    stream.channel(),
+                    "{} failed to deserialize incoming message: {}",
+                    ChannelInfo::current(),
                     error
                 );
-                continue;
+                continue; // TODO: should we return `ControlFlow::Continue` here as well?
             }
         };
 
         match content {
-            Content::Request(request) => {
-                if request_tx.send(request).await.is_err() {
-                    break;
-                }
-            }
-            Content::Response(response) => {
-                if response_tx.send(response).await.is_err() {
-                    break;
-                }
-            }
+            Content::Request(request) => request_tx.send(request).await.unwrap_or(()),
+            Content::Response(response) => response_tx.send(response).await.unwrap_or(()),
         }
     }
-
-    log::debug!("message stream for {:?} closed", stream.channel())
 }
 
 // Handle outgoing messages
-async fn send_messages(mut content_rx: mpsc::Receiver<Content>, mut sink: EncryptingSink<'_>) {
-    while let Some(content) = content_rx.recv().await {
+async fn send_messages(
+    mut content_rx: mpsc::Receiver<Content>,
+    mut sink: EncryptingSink<'_>,
+) -> ControlFlow {
+    loop {
+        let content = if let Some(content) = content_rx.recv().await {
+            content
+        } else {
+            forever().await
+        };
+
         // unwrap is OK because serialization into a vec should never fail unless we have a bug
         // somewhere.
         let content = bincode::serialize(&content).unwrap();
 
-        if sink.send(content).await.is_err() {
-            break;
+        match sink.send(content).await {
+            Ok(()) => (),
+            Err(SendError::Exhausted) => {
+                log::debug!(
+                    "{} outgoing message nonce counter exhausted",
+                    ChannelInfo::current()
+                );
+                return ControlFlow::Continue;
+            }
+            Err(SendError::Closed) => {
+                log::debug!("{} message sink closed", ChannelInfo::current());
+                return ControlFlow::Break;
+            }
         }
     }
-
-    log::debug!("message sink for {:?} closed", sink.channel())
 }
 
-// Create and run client
+// Create and run client. Returns only on error.
 async fn run_client(
-    channel: MessageChannel,
     index: Index,
     content_tx: mpsc::Sender<Content>,
     response_rx: mpsc::Receiver<Response>,
-) {
+) -> ControlFlow {
     let mut client = Client::new(index, content_tx, response_rx);
 
     match client.run().await {
-        Ok(()) => log::debug!("client for {:?} terminated", channel),
-        Err(error) => log::error!("client for {:?} failed: {:?}", channel, error),
+        Ok(()) => forever().await,
+        Err(error) => {
+            log::error!("{} client failed: {:?}", ChannelInfo::current(), error);
+            ControlFlow::Continue
+        }
     }
 }
 
-// Create and run server
+// Create and run server. Returns only on error.
 async fn run_server(
-    channel: MessageChannel,
     index: Index,
     content_tx: mpsc::Sender<Content>,
     request_rx: mpsc::Receiver<Request>,
-) {
+) -> ControlFlow {
     let mut server = Server::new(index, content_tx, request_rx);
 
     match server.run().await {
-        Ok(()) => log::debug!("server for {:?} terminated", channel),
-        Err(error) => log::error!("server for {:?} failed: {:?}", channel, error),
+        Ok(()) => forever().await,
+        Err(error) => {
+            log::error!("{} server failed: {:?}", ChannelInfo::current(), error);
+            ControlFlow::Continue
+        }
     }
 }
+
+async fn forever() -> ! {
+    let () = future::pending().await;
+    unreachable!()
+}
+
+enum ControlFlow {
+    Continue,
+    Break,
+}
+
+// Message to request to terminate the current link and try to establish it again.
+const MSG_RESET: &[u8] = &[0];
+// Message to synchronize the peer states before establishing the encrypted channel.
+const MSG_BARRIER: &[u8] = &[1];

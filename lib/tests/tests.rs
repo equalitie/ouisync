@@ -14,6 +14,8 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[tokio::test(flavor = "multi_thread")]
 async fn relink_repository() {
+    // env_logger::init();
+
     let mut rng = StdRng::seed_from_u64(0);
 
     // Create two peers and connect them together.
