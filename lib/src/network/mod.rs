@@ -18,7 +18,7 @@ mod tests;
 mod upnp;
 
 use self::{
-    connection::{ConnectionDeduplicator, ConnectionDirection, ConnectionPermit},
+    connection::{ConnectionDeduplicator, ConnectionDirection, ConnectionPermit, PeerState},
     dht_discovery::DhtDiscovery,
     ip_stack::{IpStack, Protocol},
     local_discovery::LocalDiscovery,
@@ -35,7 +35,7 @@ use crate::{
 use btdht::{InfoHash, INFO_HASH_LEN};
 use slab::Slab;
 use std::{
-    collections::{hash_map::Entry, HashMap, HashSet},
+    collections::{hash_map::Entry, HashMap},
     fmt,
     future::Future,
     io, iter,
@@ -236,7 +236,7 @@ impl Network {
         }
     }
 
-    pub fn collect_peer_info(&self) -> HashMap<SocketAddr, HashSet<ConnectionDirection>> {
+    pub fn collect_peer_info(&self) -> HashMap<SocketAddr, PeerState> {
         self.inner.connection_deduplicator.collect_peer_info()
     }
 
@@ -469,6 +469,7 @@ impl Inner {
                         return;
                     };
 
+                    permit.mark_as_connecting();
                     let socket = inner.keep_connecting(addr).await;
 
                     inner
@@ -489,6 +490,8 @@ impl Inner {
         } else {
             return;
         };
+
+        permit.mark_as_connecting();
 
         let socket = match TcpStream::connect(addr).await {
             Ok(socket) => socket,
@@ -511,6 +514,8 @@ impl Inner {
         } else {
             return;
         };
+
+        permit.mark_as_connecting();
 
         // TODO: we should give up after a timeout
         let socket = self.keep_connecting(addr).await;
@@ -554,6 +559,8 @@ impl Inner {
 
         log::info!("New {} TCP connection: {}", peer_source, addr);
 
+        permit.mark_as_handshaking();
+
         let that_runtime_id =
             match perform_handshake(&mut stream, VERSION, self.this_runtime_id).await {
                 Ok(writer_id) => writer_id,
@@ -573,6 +580,8 @@ impl Inner {
             log::debug!("Connection from self, discarding");
             return;
         }
+
+        permit.mark_as_active();
 
         let released = permit.released();
 
