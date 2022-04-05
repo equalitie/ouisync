@@ -1,5 +1,5 @@
 use std::{
-    collections::{hash_map::Entry, HashMap},
+    collections::{BTreeMap, hash_map::Entry, HashMap},
     net::SocketAddr,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -79,7 +79,8 @@ impl ConnectionDeduplicator {
         })
     }
 
-    pub fn collect_peer_info(&self) -> HashMap<SocketAddr, PeerState> {
+    // Using BTreeMap for the user to see similar IPs together.
+    pub fn collect_peer_info(&self) -> BTreeMap<SocketAddr, PeerState> {
         let connections = self.connections.lock().unwrap();
         connections
             .iter()

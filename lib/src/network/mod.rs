@@ -35,7 +35,7 @@ use crate::{
 use btdht::{InfoHash, INFO_HASH_LEN};
 use slab::Slab;
 use std::{
-    collections::{hash_map::Entry, HashMap},
+    collections::{BTreeMap, hash_map::Entry, HashMap},
     fmt,
     future::Future,
     io, iter,
@@ -236,7 +236,7 @@ impl Network {
         }
     }
 
-    pub fn collect_peer_info(&self) -> HashMap<SocketAddr, PeerState> {
+    pub fn collect_peer_info(&self) -> BTreeMap<SocketAddr, PeerState> {
         self.inner.connection_deduplicator.collect_peer_info()
     }
 
