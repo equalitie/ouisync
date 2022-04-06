@@ -2,3 +2,6 @@
 
 members = ["bindgen", "cli", "lib", "util"]
 
+[patch.crates-io]
+tokio        = { git = "https://github.com/madadam/tokio.git", branch = "expose-stream-timeout" }
+tokio-stream = { git = "https://github.com/madadam/tokio.git", branch = "expose-stream-timeout" }
