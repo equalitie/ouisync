@@ -80,11 +80,11 @@ impl ConnectionDeduplicator {
     }
 
     // Using BTreeMap for the user to see similar IPs together.
-    pub fn collect_peer_info(&self) -> BTreeMap<SocketAddr, PeerState> {
+    pub fn collect_peer_info(&self) -> BTreeMap<ConnectionKey, PeerState> {
         let connections = self.connections.lock().unwrap();
         connections
             .iter()
-            .map(|(key, peer)| (key.addr, peer.state))
+            .map(|(key, peer)| (*key, peer.state))
             .collect()
     }
 
@@ -99,7 +99,7 @@ struct Peer {
     state: PeerState,
 }
 
-#[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]
+#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 pub enum ConnectionDirection {
     Incoming,
     Outgoing,
@@ -175,8 +175,8 @@ impl ConnectionPermit {
         Self {
             connections: Arc::new(SyncMutex::new(HashMap::new())),
             key: ConnectionKey {
-                dir: ConnectionDirection::Incoming,
                 addr: (Ipv4Addr::UNSPECIFIED, 0).into(),
+                dir: ConnectionDirection::Incoming,
             },
             id: 0,
             on_release: Arc::new(Notify::new()),
@@ -202,8 +202,8 @@ impl Drop for ConnectionPermit {
 /// See [`ConnectionPermit::split`] for more details.
 pub(super) struct ConnectionPermitHalf(ConnectionPermit);
 
-#[derive(Clone, Copy, Eq, PartialEq, Hash)]
-struct ConnectionKey {
-    dir: ConnectionDirection,
-    addr: SocketAddr,
+#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub struct ConnectionKey {
+    pub addr: SocketAddr,
+    pub dir: ConnectionDirection,
 }
