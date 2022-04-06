@@ -2,6 +2,7 @@
 
 use super::{
     connection::{ConnectionPermit, ConnectionPermitHalf},
+    keep_alive::{KeepAliveSink, KeepAliveStream},
     message::{Message, MessageChannel},
     message_io::{MessageSink, MessageStream, SendError},
 };
@@ -12,12 +13,18 @@ use std::{
     pin::Pin,
     sync::{Arc, Mutex},
     task::{Context, Poll, Waker},
+    time::Duration,
 };
 use tokio::{
     net::{tcp, TcpStream},
     select,
     sync::watch,
 };
+
+// Time after which if no message is received, the connection is dropped.
+const KEEP_ALIVE_RECV_INTERVAL: Duration = Duration::from_secs(60);
+// How often to send keep-alive messages if no regular messages have been sent.
+const KEEP_ALIVE_SEND_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Reads/writes messages from/to the underlying TCP streams and dispatches them to individual
 /// streams/sinks based on their ids.
@@ -184,14 +191,14 @@ impl RecvState {
 // Stream of `Message` backed by a `TcpStream`. Closes on first error. Contains a connection
 // permit which gets released on drop.
 struct PermittedStream {
-    inner: MessageStream<tcp::OwnedReadHalf>,
+    inner: KeepAliveStream<tcp::OwnedReadHalf>,
     _permit: ConnectionPermitHalf,
 }
 
 impl PermittedStream {
     fn new(stream: tcp::OwnedReadHalf, permit: ConnectionPermitHalf) -> Self {
         Self {
-            inner: MessageStream::new(stream),
+            inner: KeepAliveStream::new(MessageStream::new(stream), KEEP_ALIVE_RECV_INTERVAL),
             _permit: permit,
         }
     }
@@ -211,14 +218,14 @@ impl Stream for PermittedStream {
 // Sink for `Message` backed by a `TcpStream`.
 // Contains a connection permit which gets released on drop.
 struct PermittedSink {
-    inner: MessageSink<tcp::OwnedWriteHalf>,
+    inner: KeepAliveSink<tcp::OwnedWriteHalf>,
     _permit: ConnectionPermitHalf,
 }
 
 impl PermittedSink {
     fn new(stream: tcp::OwnedWriteHalf, permit: ConnectionPermitHalf) -> Self {
         Self {
-            inner: MessageSink::new(stream),
+            inner: KeepAliveSink::new(MessageSink::new(stream), KEEP_ALIVE_SEND_INTERVAL),
             _permit: permit,
         }
     }
