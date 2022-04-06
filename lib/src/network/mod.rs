@@ -18,7 +18,7 @@ mod tests;
 mod upnp;
 
 use self::{
-    connection::{ConnectionDeduplicator, ConnectionDirection, ConnectionPermit, PeerState},
+    connection::{ConnectionDeduplicator, ConnectionDirection, ConnectionPermit, ConnectionKey, PeerState},
     dht_discovery::DhtDiscovery,
     ip_stack::{IpStack, Protocol},
     local_discovery::LocalDiscovery,
@@ -236,7 +236,7 @@ impl Network {
         }
     }
 
-    pub fn collect_peer_info(&self) -> BTreeMap<SocketAddr, PeerState> {
+    pub fn collect_peer_info(&self) -> BTreeMap<ConnectionKey, PeerState> {
         self.inner.connection_deduplicator.collect_peer_info()
     }
 
