@@ -74,17 +74,19 @@ pub unsafe extern "C" fn network_listener_local_addr() -> *mut c_char {
 /// the format "<TCP or UDP>:<IPv4 or [IPv6]>:<PORT>;...".
 #[no_mangle]
 pub unsafe extern "C" fn network_connected_peers() -> *mut c_char {
+    use std::borrow::Cow;
+
     let peer_info = session::get().network().collect_peer_info();
 
     let s = peer_info
         .iter()
-        .map(|info| format!("TCP:{}", info.0))
-        // The Iterator's intersperse function would come in handy here.
-        .fold("".to_string(), |a, b| {
+        .map(|info| format!("{}:{:?}:{:?}", info.0.addr, info.0.dir, info.1))
+        // The Iterator's `intersperse` function would come in handy here. But ATM it's in nightly.
+        .fold(Cow::Borrowed(""), |a, b| {
             if a.is_empty() {
-                b
+                Cow::Owned(b)
             } else {
-                format!("{};{}", a, b)
+                Cow::Owned(format!("{};{}", a, b))
             }
         });
 
