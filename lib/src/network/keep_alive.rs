@@ -46,18 +46,30 @@ where
     type Item = io::Result<Message>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let item = match ready!(self.inner.poll_next_unpin(cx)) {
-            Some(Ok(Ok(message))) => Some(Ok(message)),
-            Some(Ok(Err(error))) => Some(Err(error)),
-            Some(Err(_)) => Some(Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "message stream timed out",
-            ))),
-            None => None,
-        };
+        loop {
+            let item = match ready!(self.inner.poll_next_unpin(cx)) {
+                Some(Ok(Ok(message))) => {
+                    if is_keep_alive(&message) {
+                        continue;
+                    } else {
+                        Some(Ok(message))
+                    }
+                }
+                Some(Ok(Err(error))) => Some(Err(error)),
+                Some(Err(_)) => Some(Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "message stream timed out",
+                ))),
+                None => None,
+            };
 
-        Poll::Ready(item)
+            return Poll::Ready(item);
+        }
     }
+}
+
+fn is_keep_alive(message: &Message) -> bool {
+    message.channel == MessageChannel::default() && message.content.is_empty()
 }
 
 /// Adapter for `MessageSink` which periodically sends keep-alive messages if no regular messages
@@ -158,9 +170,14 @@ async fn sink_worker<W>(
 {
     loop {
         select! {
-            Some(command) = command_rx.recv() => {
-                let result = inner.send(command.message).await;
-                command.result_tx.send(result).unwrap_or(());
+            command = command_rx.recv() => {
+                if let Some(command) = command {
+                    let result = inner.send(command.message).await;
+                    command.result_tx.send(result).unwrap_or(());
+                } else {
+                    inner.close().await.unwrap_or(());
+                    break;
+                }
             }
             _ = time::sleep(interval) => {
                 // Send keep-alive message (empty message on the default channel)
@@ -170,9 +187,8 @@ async fn sink_worker<W>(
                         content: Vec::new(),
                     })
                     .await
-                    .unwrap_or(())
+                    .unwrap_or(());
             }
-            else => break,
         }
     }
 }
@@ -201,30 +217,105 @@ mod tests {
     use tokio::net::{TcpListener, TcpStream};
 
     #[tokio::test]
-    async fn sink() {
+    async fn sink_keep_alive_if_no_send() {
         let (client, server) = create_connected_sockets().await;
 
-        let _sink = KeepAliveSink::new(MessageSink::new(client), Duration::from_millis(100));
+        let mut sink = KeepAliveSink::new(MessageSink::new(client), Duration::from_millis(100));
         let mut stream = MessageStream::new(server);
 
-        time::sleep(Duration::from_millis(200)).await;
+        time::sleep(Duration::from_millis(150)).await;
 
-        let message = stream.next().now_or_never().unwrap().unwrap().unwrap();
-        assert_eq!(message.channel, MessageChannel::default());
-        assert_eq!(message.content, []);
+        sink.close().await.unwrap();
+
+        assert_eq!(
+            stream.next().await.unwrap().unwrap(),
+            Message {
+                channel: MessageChannel::default(),
+                content: Vec::new()
+            }
+        );
     }
 
     #[tokio::test]
-    async fn stream() {
+    async fn sink_no_keep_alive_if_send() {
+        let (client, server) = create_connected_sockets().await;
+
+        let mut sink = KeepAliveSink::new(MessageSink::new(client), Duration::from_millis(100));
+        let mut stream = MessageStream::new(server);
+
+        time::sleep(Duration::from_millis(80)).await;
+
+        let message = Message {
+            channel: MessageChannel::random(),
+            content: b"hello".to_vec(),
+        };
+
+        sink.send(message.clone()).await.unwrap();
+
+        time::sleep(Duration::from_millis(40)).await;
+
+        sink.close().await.unwrap();
+
+        assert_eq!(stream.next().await.unwrap().unwrap(), message);
+
+        let error = stream.next().await.unwrap().unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
+    }
+
+    #[tokio::test]
+    async fn stream_timeout_if_no_recv() {
         let (_client, server) = create_connected_sockets().await;
 
         let mut stream =
             KeepAliveStream::new(MessageStream::new(server), Duration::from_millis(100));
 
-        time::sleep(Duration::from_millis(200)).await;
+        time::sleep(Duration::from_millis(150)).await;
 
-        let error = stream.next().now_or_never().unwrap().unwrap().unwrap_err();
+        let error = stream.next().await.unwrap().unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+    }
+
+    #[tokio::test]
+    async fn stream_no_timeout_if_recv() {
+        let (client, server) = create_connected_sockets().await;
+
+        let mut sink = MessageSink::new(client);
+        let mut stream =
+            KeepAliveStream::new(MessageStream::new(server), Duration::from_millis(100));
+
+        time::sleep(Duration::from_millis(80)).await;
+
+        let message = Message {
+            channel: MessageChannel::random(),
+            content: b"hello".to_vec(),
+        };
+
+        sink.send(message.clone()).await.unwrap();
+
+        time::sleep(Duration::from_millis(40)).await;
+
+        sink.close().await.unwrap();
+
+        assert_eq!(stream.next().await.unwrap().unwrap(), message);
+
+        let error = stream.next().await.unwrap().unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
+    }
+
+    #[tokio::test]
+    async fn stream_ignores_keep_alive_messages() {
+        let (client, server) = create_connected_sockets().await;
+
+        let mut sink = KeepAliveSink::new(MessageSink::new(client), Duration::from_millis(100));
+        let mut stream =
+            KeepAliveStream::new(MessageStream::new(server), Duration::from_millis(250));
+
+        time::sleep(Duration::from_millis(150)).await;
+
+        sink.close().await.unwrap();
+
+        let error = stream.next().await.unwrap().unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
     }
 
     async fn create_connected_sockets() -> (TcpStream, TcpStream) {
