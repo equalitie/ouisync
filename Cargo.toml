@@ -3,5 +3,6 @@
 members = ["bindgen", "cli", "lib", "util"]
 
 [patch.crates-io]
-tokio        = { git = "https://github.com/madadam/tokio.git", branch = "expose-stream-timeout" }
-tokio-stream = { git = "https://github.com/madadam/tokio.git", branch = "expose-stream-timeout" }
+# TODO: remove these on next tokio-stream release (> 0.1.8)
+tokio        = { git = "https://github.com/tokio-rs/tokio.git", rev = "83477c72" }
+tokio-stream = { git = "https://github.com/tokio-rs/tokio.git", rev = "83477c72" }
