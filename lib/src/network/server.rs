@@ -68,13 +68,16 @@ impl<'a> Responder<'a> {
 
         loop {
             select! {
-                Some(request) = self.rx.recv() => {
-                    self.handle_request(request).await?
+                request = self.rx.recv() => {
+                    if let Some(request) = request {
+                        self.handle_request(request).await?;
+                    } else {
+                        break;
+                    }
                 }
                 _ = report_interval.tick() => {
                     self.stats.report()
                 }
-                else => break,
             }
         }
 
