@@ -12,13 +12,13 @@ use tokio::time;
 // TODO: run more precise benchmarks to find the actual optimum.
 const MAX_PENDING_REQUESTS: usize = 32;
 
-// If a response to a pending request is not received within this time, the request is expired so
-// that it doesn't block other requests from being sent.
-const PENDING_REQUEST_EXPIRY: Duration = Duration::from_secs(30);
+// If a response to a pending request is not received within this time, a request timeout error is
+// triggered.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
-pub(super) struct RequestLimiter(HashMap<Request, Instant>);
+pub(super) struct PendingRequests(HashMap<Request, Instant>);
 
-impl RequestLimiter {
+impl PendingRequests {
     pub fn new() -> Self {
         Self(HashMap::new())
     }
@@ -37,8 +37,8 @@ impl RequestLimiter {
         self.0.remove(request).is_some()
     }
 
-    /// Wait until a request in this limiter expires and remove it. If there are currently no
-    /// requests in this limiter, this method waits forever.
+    /// Wait until a pending request expires and remove it from the collection. If there are
+    /// currently no pending requests, this method waits forever.
     ///
     /// This method is cancel-safe in the sense that no request is removed if the returned future
     /// is dropped before being driven to completion.
@@ -46,7 +46,7 @@ impl RequestLimiter {
         if let Some((&request, &timestamp)) =
             self.0.iter().min_by(|(_, lhs), (_, rhs)| lhs.cmp(rhs))
         {
-            time::sleep_until((timestamp + PENDING_REQUEST_EXPIRY).into()).await;
+            time::sleep_until((timestamp + REQUEST_TIMEOUT).into()).await;
             self.0.remove(&request);
         } else {
             future::pending().await
@@ -54,7 +54,7 @@ impl RequestLimiter {
     }
 }
 
-pub(super) struct VacantEntry<'a>(&'a mut RequestLimiter);
+pub(super) struct VacantEntry<'a>(&'a mut PendingRequests);
 
 impl VacantEntry<'_> {
     pub fn insert(self, request: Request) -> bool {

@@ -1,7 +1,7 @@
 use super::{
     channel_info::ChannelInfo,
     message::{Content, Request, Response},
-    request_limiter::RequestLimiter,
+    request::PendingRequests,
 };
 use crate::{
     block::{BlockData, BlockId, BlockNonce},
@@ -20,7 +20,7 @@ pub(crate) struct Client {
     // TODO: share this among all clients of a given peer so even when there are multiple repos
     // shared with the same peer, the total number of in-flight requests to that peer is still
     // bounded.
-    request_limiter: RequestLimiter,
+    pending_requests: PendingRequests,
     send_queue: VecDeque<Request>,
     recv_queue: VecDeque<Success>,
 }
@@ -31,7 +31,7 @@ impl Client {
             index,
             tx,
             rx,
-            request_limiter: RequestLimiter::new(),
+            pending_requests: PendingRequests::new(),
             send_queue: VecDeque::new(),
             recv_queue: VecDeque::new(),
         }
@@ -49,7 +49,7 @@ impl Client {
                         break;
                     }
                 }
-                _ = self.request_limiter.expired() => return Err(Error::RequestTimeout),
+                _ = self.pending_requests.expired() => return Err(Error::RequestTimeout),
             }
 
             loop {
@@ -67,7 +67,7 @@ impl Client {
     }
 
     async fn send_requests(&mut self) {
-        while let Some(entry) = self.request_limiter.vacant_entry() {
+        while let Some(entry) = self.pending_requests.vacant_entry() {
             let request = if let Some(request) = self.send_queue.pop_back() {
                 request
             } else {
@@ -88,7 +88,7 @@ impl Client {
         let response = ProcessedResponse::from(response);
 
         if let Some(request) = response.to_request() {
-            if !self.request_limiter.remove(&request) {
+            if !self.pending_requests.remove(&request) {
                 // unsolicited response
                 return;
             }
