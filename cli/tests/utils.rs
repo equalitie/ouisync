@@ -1,4 +1,5 @@
 use anyhow::{format_err, Error};
+use backoff::{self, ExponentialBackoffBuilder};
 use ouisync_lib::cipher::SecretKey;
 use rand::Rng;
 use std::{
@@ -9,7 +10,7 @@ use std::{
     path::Path,
     process::{Child, Command, Stdio},
     thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 use tempfile::TempDir;
 
@@ -199,32 +200,15 @@ pub fn eventually_with_timeout<F>(timeout: Duration, mut f: F)
 where
     F: FnMut() -> Result<(), Error>,
 {
-    const MAX_DELAY: Duration = Duration::from_secs(1);
+    let backoff = ExponentialBackoffBuilder::new()
+        .with_initial_interval(Duration::from_millis(100))
+        .with_max_interval(Duration::from_secs(1))
+        .with_randomization_factor(0.0)
+        .with_multiplier(2.0)
+        .with_max_elapsed_time(Some(timeout))
+        .build();
 
-    let start = Instant::now();
-    let mut delay = Duration::from_millis(10);
-    let mut last_error = None;
-
-    while start.elapsed() <= timeout {
-        match f() {
-            Ok(()) => return,
-            Err(error) => {
-                last_error = Some(error);
-            }
-        }
-
-        thread::sleep(delay);
-
-        if delay < MAX_DELAY {
-            delay *= 2;
-        }
-    }
-
-    if let Some(error) = last_error {
-        panic!("{}", error)
-    } else {
-        unreachable!()
-    }
+    backoff::retry(backoff, || Ok(f()?)).unwrap()
 }
 
 pub fn check_eq<A, B>(a: A, b: B) -> Result<(), Error>

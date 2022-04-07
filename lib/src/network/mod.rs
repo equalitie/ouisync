@@ -19,7 +19,9 @@ mod tests;
 mod upnp;
 
 use self::{
-    connection::{ConnectionDeduplicator, ConnectionDirection, ConnectionPermit, ConnectionKey, PeerState},
+    connection::{
+        ConnectionDeduplicator, ConnectionDirection, ConnectionKey, ConnectionPermit, PeerState,
+    },
     dht_discovery::DhtDiscovery,
     ip_stack::{IpStack, Protocol},
     local_discovery::LocalDiscovery,
@@ -33,10 +35,11 @@ use crate::{
     repository::RepositoryId,
     scoped_task::{self, ScopedJoinHandle, ScopedTaskSet},
 };
+use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
 use btdht::{InfoHash, INFO_HASH_LEN};
 use slab::Slab;
 use std::{
-    collections::{BTreeMap, hash_map::Entry, HashMap},
+    collections::{hash_map::Entry, BTreeMap, HashMap},
     fmt,
     future::Future,
     io, iter,
@@ -497,7 +500,11 @@ impl Inner {
         let socket = match TcpStream::connect(addr).await {
             Ok(socket) => socket,
             Err(error) => {
-                log::error!("Failed to create outgoing TCP connection: {}", error);
+                log::error!(
+                    "Failed to create outgoing TCP connection to {}: {}",
+                    addr,
+                    error
+                );
                 return;
             }
         };
@@ -518,7 +525,6 @@ impl Inner {
 
         permit.mark_as_connecting();
 
-        // TODO: we should give up after a timeout
         let socket = self.keep_connecting(addr).await;
 
         self.handle_new_connection(socket, PeerSource::Dht, permit)
@@ -526,7 +532,10 @@ impl Inner {
     }
 
     async fn keep_connecting(&self, addr: SocketAddr) -> TcpStream {
-        let mut i = 0;
+        let mut backoff = ExponentialBackoffBuilder::new()
+            .with_initial_interval(Duration::from_millis(200))
+            .with_max_interval(Duration::from_secs(10))
+            .build();
 
         loop {
             match TcpStream::connect(addr).await {
@@ -534,17 +543,17 @@ impl Inner {
                     return socket;
                 }
                 Err(error) => {
-                    // TODO: Might be worth randomizing this somehow.
-                    let sleep_duration = Duration::from_secs(5)
-                        .min(Duration::from_millis(200 * 2u64.pow(i.min(10))));
+                    // unwrap is OK, because we didn't specify max_elapsed_time so it never
+                    // returns `None`.
+                    let duration = backoff.next_backoff().unwrap();
+
                     log::debug!(
                         "Failed to create outgoing TCP connection to {}: {}. Retrying in {:?}",
                         addr,
                         error,
-                        sleep_duration
+                        duration
                     );
-                    time::sleep(sleep_duration).await;
-                    i = i.saturating_add(1);
+                    time::sleep(duration).await;
                 }
             }
         }

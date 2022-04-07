@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, hash_map::Entry, HashMap},
+    collections::{hash_map::Entry, BTreeMap, HashMap},
     net::SocketAddr,
     sync::{
         atomic::{AtomicU64, Ordering},
