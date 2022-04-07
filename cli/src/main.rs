@@ -3,19 +3,19 @@ mod virtual_filesystem;
 
 use self::options::{Named, Options};
 use anyhow::{format_err, Result};
+use clap::Parser;
 use ouisync_lib::{device_id, AccessSecrets, ConfigStore, Network, Repository, ShareToken};
 use std::{
     collections::{hash_map::Entry, HashMap},
     io,
 };
-use structopt::StructOpt;
 use tokio::{fs::File, io::AsyncWriteExt};
 
 pub(crate) const APP_NAME: &str = "ouisync";
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let options = Options::from_args();
+    let options = Options::parse();
 
     if options.print_dirs {
         println!("data:   {}", options.data_dir()?.display());

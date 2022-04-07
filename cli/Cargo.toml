@@ -20,11 +20,11 @@ path = "tests/tests.rs"
 ouisync-lib = { package = "ouisync", version = "0.1", path = "../lib" }
 anyhow = "1.0.40"
 camino = "1.0.5"
+clap = { version = "3.1.8", features = ["derive"] }
 dirs = "4.0.0"
 env_logger = "0.9.0"
 log = "0.4.14"
 slab = "0.4.5"
-structopt = "0.3.21"
 tokio = { version = "1.17.0", features = ["signal"] }
 rand = "0.8.4"
 

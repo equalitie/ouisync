@@ -1,5 +1,6 @@
 use crate::APP_NAME;
 use anyhow::{format_err, Context, Error, Result};
+use clap::Parser;
 use ouisync_lib::{
     cipher::SecretKey, AccessMode, MasterSecret, NetworkOptions, Password, ShareToken, Store,
 };
@@ -7,43 +8,42 @@ use std::{
     path::{Path, PathBuf},
     str::FromStr,
 };
-use structopt::StructOpt;
 use tokio::{
     fs::File,
     io::{AsyncBufReadExt, BufReader},
 };
 
 /// Command line options.
-#[derive(StructOpt, Debug)]
+#[derive(Parser, Debug)]
 pub(crate) struct Options {
     /// Path to the data directory. Use the --print-dirs flag to see the default.
-    #[structopt(long, value_name = "PATH")]
+    #[clap(long, value_name = "PATH")]
     pub data_dir: Option<PathBuf>,
 
     /// Path to the config directory. Use the --print-dirs flag to see the default.
-    #[structopt(long, value_name = "PATH")]
+    #[clap(long, value_name = "PATH")]
     pub config_dir: Option<PathBuf>,
 
     /// Enable Merger (experimental)
-    #[structopt(long)]
+    #[clap(long)]
     pub enable_merger: bool,
 
-    #[structopt(flatten)]
+    #[clap(flatten)]
     pub network: NetworkOptions,
 
     /// Create new repository with the specified name. Can be specified multiple times to create
     /// multiple repositories.
-    #[structopt(short, long, value_name = "NAME")]
+    #[clap(short, long, value_name = "NAME")]
     pub create: Vec<String>,
 
     /// Mount the named repository at the specified path. Can be specified multiple times to mount
     /// multiple repositories.
-    #[structopt(short, long, value_name = "NAME:PATH")]
+    #[clap(short, long, value_name = "NAME:PATH")]
     pub mount: Vec<Named<PathBuf>>,
 
     /// Password per repository.
     // TODO: Zeroize
-    #[structopt(long, value_name = "NAME:PASSWD")]
+    #[clap(long, value_name = "NAME:PASSWD")]
     pub password: Vec<Named<String>>,
 
     /// Pre-hashed 32 byte long (64 hexadecimal characters) master secret per repository. This is
@@ -51,39 +51,39 @@ pub(crate) struct Options {
     /// timeout if the `password` argument is used instead. For all other use cases, prefer to use
     /// the `password` argument instead.
     // TODO: Zeroize
-    #[structopt(long, value_name = "NAME:KEY")]
+    #[clap(long, value_name = "NAME:KEY")]
     pub key: Vec<Named<String>>,
 
     /// Print share token for the named repository with the specified access mode ("blind", "read"
     /// or "write"). Can be specified multiple times to share multiple repositories.
-    #[structopt(long, value_name = "NAME:ACCESS_MODE")]
+    #[clap(long, value_name = "NAME:ACCESS_MODE")]
     pub share: Vec<Named<AccessMode>>,
 
     /// Print the share tokens to a file instead of standard output (one token per line)
-    #[structopt(long, value_name = "PATH")]
+    #[clap(long, value_name = "PATH")]
     pub share_file: Option<PathBuf>,
 
     /// Accept a share token. Can be specified multiple times to accept multiple tokens.
-    #[structopt(long, value_name = "TOKEN")]
+    #[clap(long, value_name = "TOKEN")]
     pub accept: Vec<ShareToken>,
 
     /// Accept share tokens by reading them from a file, one token per line.
-    #[structopt(long, value_name = "PATH")]
+    #[clap(long, value_name = "PATH")]
     pub accept_file: Option<PathBuf>,
 
     /// Prints the path to the data and config directories and exits.
-    #[structopt(long)]
+    #[clap(long)]
     pub print_dirs: bool,
 
     /// Prints the listening address to the stdout when the replica becomes ready.
     /// Note this flag is unstable and experimental.
-    #[structopt(long)]
+    #[clap(long)]
     pub print_ready_message: bool,
 
     /// Use temporary, memory-only databases. All data will be wiped out when the program
     /// exits. If this flag is set, the --data-dir option is ignored. Use only for experimentation
     /// and testing.
-    #[structopt(long)]
+    #[clap(long)]
     pub temp: bool,
 }
 

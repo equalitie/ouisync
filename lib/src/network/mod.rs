@@ -37,6 +37,7 @@ use crate::{
 };
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
 use btdht::{InfoHash, INFO_HASH_LEN};
+use clap::Parser;
 use slab::Slab;
 use std::{
     collections::{hash_map::Entry, BTreeMap, HashMap},
@@ -47,7 +48,6 @@ use std::{
     sync::{Arc, Mutex as BlockingMutex, Weak},
     time::Duration,
 };
-use structopt::StructOpt;
 use thiserror::Error;
 use tokio::{
     net::{TcpListener, TcpStream},
@@ -66,30 +66,30 @@ const LAST_USED_TCP_PORT_KEY: ConfigKey<u16> = ConfigKey::new(
      However, it may still be overwritten.",
 );
 
-#[derive(StructOpt, Debug)]
+#[derive(Parser, Debug)]
 pub struct NetworkOptions {
     /// Port to listen on (0 for random)
-    #[structopt(short, long, default_value = "0")]
+    #[clap(short, long, default_value = "0")]
     pub port: u16,
 
     /// IP address to bind to
-    #[structopt(short, long, default_value = "0.0.0.0", value_name = "ip")]
+    #[clap(short, long, default_value = "0.0.0.0", value_name = "ip")]
     pub bind: IpAddr,
 
     /// Disable local discovery
-    #[structopt(short, long)]
+    #[clap(short, long)]
     pub disable_local_discovery: bool,
 
     /// Disable UPnP
-    #[structopt(long)]
+    #[clap(long)]
     pub disable_upnp: bool,
 
     /// Disable DHT
-    #[structopt(long)]
+    #[clap(long)]
     pub disable_dht: bool,
 
     /// Explicit list of IP:PORT pairs of peers to connect to
-    #[structopt(long)]
+    #[clap(long)]
     pub peers: Vec<SocketAddr>,
 }
 
