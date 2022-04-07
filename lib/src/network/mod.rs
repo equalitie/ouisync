@@ -4,6 +4,7 @@ mod connection;
 mod crypto;
 pub mod dht_discovery;
 mod ip_stack;
+mod keep_alive;
 mod local_discovery;
 mod message;
 mod message_broker;

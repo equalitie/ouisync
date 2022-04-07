@@ -42,11 +42,14 @@ impl Client {
 
         loop {
             select! {
-                Some(response) = self.rx.recv() => {
-                    self.enqueue_response(response);
+                response = self.rx.recv() => {
+                    if let Some(response) = response {
+                        self.enqueue_response(response);
+                    } else {
+                        break;
+                    }
                 }
                 _ = self.request_limiter.expired() => return Err(Error::RequestTimeout),
-                else => break,
             }
 
             loop {

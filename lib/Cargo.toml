@@ -47,7 +47,9 @@ sqlx = { version = "0.5.11", features = ["runtime-tokio-rustls", "sqlite"] }
 ssdp-client = "1.0"
 structopt = "0.3.21"
 thiserror = "1.0.24"
-tokio = "1.14.0"
+tokio = "1.17.0"
+tokio-stream = "0.1.8"
+tokio-util = "0.7.1"
 urlencoding = "2.1.0"
 zeroize = "1.2.0"
 
@@ -63,4 +65,3 @@ libc = "0.2.93"
 assert_matches = "1.5"
 proptest = "1.0"
 test-strategy = "0.1.1"
-

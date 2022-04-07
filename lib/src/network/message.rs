@@ -63,7 +63,7 @@ impl fmt::Debug for Response {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize, Debug)]
 pub(crate) struct Message {
     pub channel: MessageChannel,
     pub content: Vec<u8>,
