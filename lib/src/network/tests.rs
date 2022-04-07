@@ -1,6 +1,7 @@
 use super::{
     client::Client,
     message::{Content, Request, Response},
+    request::MAX_PENDING_REQUESTS,
     server::Server,
 };
 use crate::{
@@ -16,9 +17,13 @@ use crate::{
     version_vector::VersionVector,
 };
 use rand::prelude::*;
-use std::{fmt, future::Future, time::Duration};
+use std::{fmt, future::Future, sync::Arc, time::Duration};
 use test_strategy::proptest;
-use tokio::{select, sync::mpsc, time};
+use tokio::{
+    select,
+    sync::{mpsc, Semaphore},
+    time,
+};
 
 const TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -268,7 +273,12 @@ fn create_server(index: Index) -> (Server, mpsc::Receiver<Content>, mpsc::Sender
 fn create_client(index: Index) -> (Client, mpsc::Receiver<Content>, mpsc::Sender<Response>) {
     let (send_tx, send_rx) = mpsc::channel(1);
     let (recv_tx, recv_rx) = mpsc::channel(CAPACITY);
-    let client = Client::new(index, send_tx, recv_rx);
+    let client = Client::new(
+        index,
+        send_tx,
+        recv_rx,
+        Arc::new(Semaphore::new(MAX_PENDING_REQUESTS)),
+    );
 
     (client, send_rx, recv_tx)
 }
