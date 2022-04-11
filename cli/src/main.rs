@@ -80,7 +80,7 @@ async fn main() -> Result<()> {
 
         if let Some(file) = &mut share_file {
             file.write_all(token.to_string().as_bytes()).await?;
-            file.write(b"\n").await?;
+            file.write_all(b"\n").await?;
         } else {
             println!("{}", token);
         }
