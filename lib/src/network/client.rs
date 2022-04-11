@@ -1,7 +1,7 @@
 use super::{
     channel_info::ChannelInfo,
     message::{Content, Request, Response},
-    request_limiter::RequestLimiter,
+    request::PendingRequests,
 };
 use crate::{
     block::{BlockData, BlockId, BlockNonce},
@@ -10,28 +10,35 @@ use crate::{
     index::{Index, InnerNodeMap, LeafNodeSet, ReceiveError, Summary, UntrustedProof},
     store,
 };
-use std::collections::VecDeque;
-use tokio::{select, sync::mpsc};
+use std::{collections::VecDeque, sync::Arc};
+use tokio::{
+    select,
+    sync::{mpsc, OwnedSemaphorePermit, Semaphore},
+};
 
 pub(crate) struct Client {
     index: Index,
     tx: mpsc::Sender<Content>,
     rx: mpsc::Receiver<Response>,
-    // TODO: share this among all clients of a given peer so even when there are multiple repos
-    // shared with the same peer, the total number of in-flight requests to that peer is still
-    // bounded.
-    request_limiter: RequestLimiter,
+    request_limiter: Arc<Semaphore>,
+    pending_requests: PendingRequests,
     send_queue: VecDeque<Request>,
     recv_queue: VecDeque<Success>,
 }
 
 impl Client {
-    pub fn new(index: Index, tx: mpsc::Sender<Content>, rx: mpsc::Receiver<Response>) -> Self {
+    pub fn new(
+        index: Index,
+        tx: mpsc::Sender<Content>,
+        rx: mpsc::Receiver<Response>,
+        request_limiter: Arc<Semaphore>,
+    ) -> Self {
         Self {
             index,
             tx,
             rx,
-            request_limiter: RequestLimiter::new(),
+            request_limiter,
+            pending_requests: PendingRequests::new(),
             send_queue: VecDeque::new(),
             recv_queue: VecDeque::new(),
         }
@@ -49,46 +56,44 @@ impl Client {
                         break;
                     }
                 }
-                _ = self.request_limiter.expired() => return Err(Error::RequestTimeout),
+                send_permit = self.request_limiter.clone().acquire_owned(),
+                    if !self.send_queue.is_empty() =>
+                {
+                    // unwrap is OK because we never `close()` the semaphore.
+                    self.send_request(send_permit.unwrap()).await;
+                }
+                _ = self.pending_requests.expired() => return Err(Error::RequestTimeout),
             }
 
-            loop {
-                self.send_requests().await;
-
-                if let Some(response) = self.dequeue_response() {
-                    self.handle_response(response).await?;
-                } else {
-                    break;
-                }
+            while let Some(response) = self.dequeue_response() {
+                self.handle_response(response).await?;
             }
         }
 
         Ok(())
     }
 
-    async fn send_requests(&mut self) {
-        while let Some(entry) = self.request_limiter.vacant_entry() {
-            let request = if let Some(request) = self.send_queue.pop_back() {
-                request
-            } else {
-                // No request scheduled for sending.
-                break;
-            };
+    async fn send_request(&mut self, permit: OwnedSemaphorePermit) {
+        let request = if let Some(request) = self.send_queue.pop_back() {
+            request
+        } else {
+            // No request scheduled for sending.
+            return;
+        };
 
-            if !entry.insert(request) {
-                // The same request is already in-flight.
-                continue;
-            }
-
-            self.tx.send(Content::Request(request)).await.unwrap_or(());
+        if !self.pending_requests.insert(request, permit) {
+            // The same request is already in-flight.
+            return;
         }
+
+        self.tx.send(Content::Request(request)).await.unwrap_or(());
     }
 
     fn enqueue_response(&mut self, response: Response) {
         let response = ProcessedResponse::from(response);
 
         if let Some(request) = response.to_request() {
-            if !self.request_limiter.remove(&request) {
+            if !self.pending_requests.remove(&request) {
                 // unsolicited response
                 return;
             }

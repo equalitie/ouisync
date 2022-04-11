@@ -5,17 +5,19 @@ use super::{
     message::{Content, MessageChannel, Request, Response},
     message_dispatcher::{ChannelClosed, ContentSink, ContentStream, MessageDispatcher},
     protocol::RuntimeId,
+    request::MAX_PENDING_REQUESTS,
     server::Server,
 };
 use crate::{index::Index, network::channel_info::ChannelInfo, repository::RepositoryId};
 use std::{
     collections::{hash_map::Entry, HashMap},
     future,
+    sync::Arc,
 };
 use tokio::{
     net::TcpStream,
     select,
-    sync::{mpsc, oneshot},
+    sync::{mpsc, oneshot, Semaphore},
     task,
 };
 
@@ -32,6 +34,7 @@ pub(super) struct MessageBroker {
     that_runtime_id: RuntimeId,
     dispatcher: MessageDispatcher,
     links: HashMap<MessageChannel, oneshot::Sender<()>>,
+    request_limiter: Arc<Semaphore>,
 }
 
 impl MessageBroker {
@@ -46,6 +49,7 @@ impl MessageBroker {
             that_runtime_id,
             dispatcher: MessageDispatcher::new(),
             links: HashMap::new(),
+            request_limiter: Arc::new(Semaphore::new(MAX_PENDING_REQUESTS)),
         };
 
         this.add_connection(stream, permit);
@@ -93,10 +97,11 @@ impl MessageBroker {
 
         let stream = self.dispatcher.open_recv(channel);
         let sink = self.dispatcher.open_send(channel);
+        let request_limiter = self.request_limiter.clone();
 
         let task = async move {
             select! {
-                _ = maintain_link(role, stream, sink.clone(), index) => (),
+                _ = maintain_link(role, stream, sink.clone(), index, request_limiter) => (),
                 _ = abort_rx => (),
             }
 
@@ -114,7 +119,13 @@ impl MessageBroker {
 }
 
 // Repeatedly establish and run the link until it's explicitly destroyed by calling `destroy_link()`.
-async fn maintain_link(role: Role, mut stream: ContentStream, mut sink: ContentSink, index: Index) {
+async fn maintain_link(
+    role: Role,
+    mut stream: ContentStream,
+    mut sink: ContentSink,
+    index: Index,
+    request_limiter: Arc<Semaphore>,
+) {
     loop {
         match barrier(&mut stream, &mut sink).await {
             Ok(()) => (),
@@ -128,7 +139,7 @@ async fn maintain_link(role: Role, mut stream: ContentStream, mut sink: ContentS
                 Err(EstablishError::Closed) => break,
             };
 
-        match run_link(crypto_stream, crypto_sink, &index).await {
+        match run_link(crypto_stream, crypto_sink, &index, request_limiter.clone()).await {
             ControlFlow::Continue => continue,
             ControlFlow::Break => break,
         }
@@ -177,6 +188,7 @@ async fn run_link(
     stream: DecryptingStream<'_>,
     sink: EncryptingSink<'_>,
     index: &Index,
+    request_limiter: Arc<Semaphore>,
 ) -> ControlFlow {
     let (request_tx, request_rx) = mpsc::channel(1);
     let (response_tx, response_rx) = mpsc::channel(1);
@@ -184,7 +196,7 @@ async fn run_link(
 
     // Run everything in parallel:
     select! {
-        flow = run_client(index.clone(), content_tx.clone(), response_rx) => flow,
+        flow = run_client(index.clone(), content_tx.clone(), response_rx, request_limiter) => flow,
         flow = run_server(index.clone(), content_tx, request_rx ) => flow,
         flow = recv_messages(stream, request_tx, response_tx) => flow,
         flow = send_messages(content_rx, sink) => flow,
@@ -277,8 +289,9 @@ async fn run_client(
     index: Index,
     content_tx: mpsc::Sender<Content>,
     response_rx: mpsc::Receiver<Response>,
+    request_limiter: Arc<Semaphore>,
 ) -> ControlFlow {
-    let mut client = Client::new(index, content_tx, response_rx);
+    let mut client = Client::new(index, content_tx, response_rx, request_limiter);
 
     match client.run().await {
         Ok(()) => forever().await,
