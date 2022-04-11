@@ -29,6 +29,7 @@ mod joint_entry;
 mod locator;
 mod metadata;
 mod path;
+mod progress;
 mod repository;
 mod scoped_task;
 mod store;

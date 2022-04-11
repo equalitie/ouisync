@@ -1,11 +1,12 @@
 use super::{
     node::RootNode,
-    node_test_utils::{receive_nodes, Snapshot},
+    node_test_utils::{receive_blocks, receive_nodes, Snapshot},
     *,
 };
 use crate::{
     block::{self, BLOCK_SIZE},
     crypto::sign::{Keypair, PublicKey},
+    progress::Progress,
     store,
     version_vector::VersionVector,
 };
@@ -357,13 +358,16 @@ async fn does_not_delete_old_branch_until_new_branch_is_complete() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn count_missing_blocks() {
+async fn sync_progress_single_branch() {
     let (index, write_keys) = setup().await;
 
     let snapshot = Snapshot::generate(&mut rand::thread_rng(), 5);
     let remote_branch_id = PublicKey::random();
 
-    assert_eq!(index.count_missing_blocks().await, 0);
+    assert_eq!(
+        index.sync_progress().await.unwrap(),
+        Progress { value: 0, total: 0 }
+    );
 
     receive_nodes(
         &index,
@@ -374,15 +378,77 @@ async fn count_missing_blocks() {
     )
     .await;
 
+    assert_eq!(
+        index.sync_progress().await.unwrap(),
+        Progress { value: 0, total: 5 }
+    );
+
     for (num, block) in snapshot.blocks().values().enumerate() {
         store::write_received_block(&index, &block.data, &block.nonce)
             .await
             .unwrap();
         assert_eq!(
-            index.count_missing_blocks().await,
-            (snapshot.blocks().len() - num - 1) as u64
+            index.sync_progress().await.unwrap(),
+            Progress {
+                value: (num + 1) as u64,
+                total: 5,
+            }
         );
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn sync_progress_multiple_branches() {
+    let (index, write_keys) = setup().await;
+    let mut rng = rand::thread_rng();
+
+    let branch_id_a = PublicKey::generate(&mut rng);
+    let snapshot_a = Snapshot::generate(&mut rng, 5);
+
+    assert_eq!(
+        index.sync_progress().await.unwrap(),
+        Progress { value: 0, total: 0 }
+    );
+
+    receive_nodes(
+        &index,
+        &write_keys,
+        branch_id_a,
+        VersionVector::first(branch_id_a),
+        &snapshot_a,
+    )
+    .await;
+
+    receive_blocks(&index, &snapshot_a).await;
+
+    assert_eq!(
+        index.sync_progress().await.unwrap(),
+        Progress { value: 5, total: 5 }
+    );
+
+    let branch_id_b = PublicKey::generate(&mut rng);
+    let snapshot_b = snapshot_a.add_blocks(&mut rng, 1);
+
+    receive_nodes(
+        &index,
+        &write_keys,
+        branch_id_b,
+        VersionVector::first(branch_id_b),
+        &snapshot_b,
+    )
+    .await;
+
+    assert_eq!(
+        index.sync_progress().await.unwrap(),
+        Progress { value: 5, total: 6 }
+    );
+
+    receive_blocks(&index, &snapshot_b).await;
+
+    assert_eq!(
+        index.sync_progress().await.unwrap(),
+        Progress { value: 6, total: 6 }
+    );
 }
 
 async fn setup() -> (Index, Keypair) {

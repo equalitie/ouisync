@@ -100,6 +100,20 @@ impl Snapshot {
         &self.blocks
     }
 
+    pub fn add_blocks<R: Rng>(mut self, rng: &mut R, count: usize) -> Self {
+        let old_blocks_and_locators = self
+            .leaves
+            .into_values()
+            .flatten()
+            .map(|node| (node.block_id, *node.locator()))
+            .filter_map(|(block_id, locator)| {
+                self.blocks.remove(&block_id).map(|block| (block, locator))
+            });
+        let new_blocks_and_locators = (0..count).map(|_| (Block::generate(rng), rng.gen()));
+
+        Self::new(old_blocks_and_locators.chain(new_blocks_and_locators))
+    }
+
     // Returns the parent hash of inner nodes at `inner_layer` with the specified bucket path.
     fn parent_hash(&self, inner_layer: usize, path: &BucketPath) -> &Hash {
         if inner_layer == 0 {
