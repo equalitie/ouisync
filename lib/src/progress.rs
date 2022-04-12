@@ -11,6 +11,14 @@ pub struct Progress {
 }
 
 impl Progress {
+    pub fn ratio(&self) -> f64 {
+        if self.total == 0 {
+            1.0
+        } else {
+            self.value as f64 / self.total as f64
+        }
+    }
+
     pub fn percent(self) -> Percent {
         Percent(self)
     }
@@ -49,12 +57,7 @@ impl fmt::Display for Progress {
 
 impl fmt::Display for Percent {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let ratio = if self.0.total == 0 {
-            1.0
-        } else {
-            self.0.value as f64 / self.0.total as f64
-        };
-
+        let ratio = self.0.ratio();
         let precision = f.precision().unwrap_or(0);
 
         write!(f, "{:1.*}%", precision, 100.0 * ratio)

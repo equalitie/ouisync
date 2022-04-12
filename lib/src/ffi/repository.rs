@@ -262,6 +262,18 @@ pub unsafe extern "C" fn repository_access_mode(handle: SharedHandle<RepositoryH
     access_mode_to_num(holder.repository.access_mode())
 }
 
+/// Returns the syncing progress as a float in the 0.0 - 1.0 range.
+#[no_mangle]
+pub unsafe extern "C" fn repository_sync_progress(
+    handle: SharedHandle<RepositoryHolder>,
+    port: Port<Result<f64>>,
+) {
+    session::with(port, |ctx| {
+        let holder = handle.get();
+        ctx.spawn(async move { Ok(holder.repository.sync_progress().await?.ratio()) })
+    })
+}
+
 /// Returns the access mode of the given share token.
 #[no_mangle]
 pub unsafe extern "C" fn share_token_mode(token: *const c_char) -> u8 {
