@@ -3,8 +3,9 @@ use std::{
     ops::{Div, Mul},
 };
 
+/// Progress of a task.
 #[derive(Clone, Copy, Eq, PartialEq, Debug)]
-pub(crate) struct Progress {
+pub struct Progress {
     pub value: u64,
     pub total: u64,
 }
@@ -37,7 +38,8 @@ impl Div<u64> for Progress {
     }
 }
 
-pub(crate) struct Percent(Progress);
+/// Percentage formatting of `Progress`.
+pub struct Percent(Progress);
 
 impl fmt::Display for Progress {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {

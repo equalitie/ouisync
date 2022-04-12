@@ -408,6 +408,12 @@ impl Repository {
         self.shared.secrets.access_mode()
     }
 
+    /// Gets the syncing progress of this repository (number of downloaded blocks / number of
+    /// all blocks)
+    pub async fn sync_progress(&self) -> Result<Progress> {
+        self.shared.index.sync_progress().await
+    }
+
     // Opens the root directory across all branches as JointDirectory.
     async fn joint_root(&self) -> Result<JointDirectory> {
         // If we have only blind access we can cut this short. Also this check is necessary to
