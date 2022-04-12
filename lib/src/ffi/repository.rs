@@ -266,11 +266,18 @@ pub unsafe extern "C" fn repository_access_mode(handle: SharedHandle<RepositoryH
 #[no_mangle]
 pub unsafe extern "C" fn repository_sync_progress(
     handle: SharedHandle<RepositoryHolder>,
-    port: Port<Result<f64>>,
+    port: Port<Result<Vec<u8>>>,
 ) {
     session::with(port, |ctx| {
         let holder = handle.get();
-        ctx.spawn(async move { Ok(holder.repository.sync_progress().await?.ratio()) })
+        ctx.spawn(async move {
+            let progress = holder.repository.sync_progress().await?;
+            let mut serialized = Vec::with_capacity(16);
+            serialized.extend_from_slice(progress.value.to_be_bytes().as_ref());
+            serialized.extend_from_slice(progress.total.to_be_bytes().as_ref());
+
+            Ok(serialized)
+        })
     })
 }
 

@@ -150,23 +150,27 @@ pub fn str_to_ptr(s: &str) -> *mut c_char {
 
 #[repr(C)]
 pub struct Bytes {
-    pub ptr: *const u8,
+    pub ptr: *mut u8,
     pub len: u64,
 }
 
 impl Bytes {
     pub const NULL: Self = Self {
-        ptr: ptr::null(),
+        ptr: ptr::null_mut(),
         len: 0,
     };
 
     pub fn from_vec(vec: Vec<u8>) -> Self {
-        let slice = vec.into_boxed_slice();
+        let mut slice = vec.into_boxed_slice();
         let buffer = Self {
-            ptr: slice.as_ptr(),
+            ptr: slice.as_mut_ptr(),
             len: slice.len() as u64,
         };
         mem::forget(slice);
         buffer
+    }
+
+    pub unsafe fn into_vec(self) -> Vec<u8> {
+        Vec::from_raw_parts(self.ptr, self.len as usize, self.len as usize)
     }
 }
