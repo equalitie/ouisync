@@ -1,10 +1,11 @@
+use serde::Serialize;
 use std::{
     fmt,
     ops::{Div, Mul},
 };
 
 /// Progress of a task.
-#[derive(Clone, Copy, Eq, PartialEq, Debug)]
+#[derive(Clone, Copy, Eq, PartialEq, Debug, Serialize)]
 pub struct Progress {
     pub value: u64,
     pub total: u64,

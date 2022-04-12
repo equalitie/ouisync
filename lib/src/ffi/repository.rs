@@ -272,11 +272,8 @@ pub unsafe extern "C" fn repository_sync_progress(
         let holder = handle.get();
         ctx.spawn(async move {
             let progress = holder.repository.sync_progress().await?;
-            let mut serialized = Vec::with_capacity(16);
-            serialized.extend_from_slice(progress.value.to_be_bytes().as_ref());
-            serialized.extend_from_slice(progress.total.to_be_bytes().as_ref());
-
-            Ok(serialized)
+            // unwrap is OK because serialization into a vector has no reason to fail
+            Ok(rmp_serde::to_vec(&progress).unwrap())
         })
     })
 }
