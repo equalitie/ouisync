@@ -19,9 +19,7 @@ mod tests;
 mod upnp;
 
 use self::{
-    connection::{
-        ConnectionDeduplicator, ConnectionDirection, ConnectionKey, ConnectionPermit, PeerState,
-    },
+    connection::{ConnectionDeduplicator, ConnectionDirection, ConnectionPermit, PeerInfo},
     dht_discovery::DhtDiscovery,
     ip_stack::{IpStack, Protocol},
     local_discovery::LocalDiscovery,
@@ -40,7 +38,7 @@ use btdht::{InfoHash, INFO_HASH_LEN};
 use clap::Parser;
 use slab::Slab;
 use std::{
-    collections::{hash_map::Entry, BTreeMap, HashMap},
+    collections::{hash_map::Entry, HashMap},
     fmt,
     future::Future,
     io, iter,
@@ -240,7 +238,7 @@ impl Network {
         }
     }
 
-    pub fn collect_peer_info(&self) -> BTreeMap<ConnectionKey, PeerState> {
+    pub fn collect_peer_info(&self) -> Vec<PeerInfo> {
         self.inner.connection_deduplicator.collect_peer_info()
     }
 

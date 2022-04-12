@@ -1,11 +1,13 @@
+use serde::{Serialize, Serializer};
 use std::{
-    collections::{hash_map::Entry, BTreeMap, HashMap},
-    net::SocketAddr,
+    collections::{hash_map::Entry, HashMap},
+    net::{IpAddr, SocketAddr},
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex as SyncMutex,
     },
 };
+
 // NOTE: Watch has an advantage over Notify in that it's better at broadcasting to multiple
 // consumers. This particular line is problematic in Notify documentation:
 //
@@ -18,7 +20,7 @@ use std::{
 //   https://github.com/tokio-rs/tokio/issues/3757
 use tokio::sync::{watch, Notify};
 
-#[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]
+#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Serialize)]
 pub enum PeerState {
     Known,
     Connecting,
@@ -79,18 +81,42 @@ impl ConnectionDeduplicator {
         })
     }
 
-    // Using BTreeMap for the user to see similar IPs together.
-    pub fn collect_peer_info(&self) -> BTreeMap<ConnectionKey, PeerState> {
+    // Sorted by the IP, so the user sees similar IPs together.
+    pub fn collect_peer_info(&self) -> Vec<PeerInfo> {
         let connections = self.connections.lock().unwrap();
-        connections
+        let mut infos: Vec<_> = connections
             .iter()
-            .map(|(key, peer)| (*key, peer.state))
-            .collect()
+            .map(|(key, peer)| PeerInfo {
+                ip: key.addr.ip(),
+                port: key.addr.port(),
+                direction: key.dir,
+                state: peer.state,
+            })
+            .collect();
+        infos.sort();
+        infos
     }
 
     pub fn on_change(&self) -> watch::Receiver<bool> {
         self.on_change_rx.clone()
     }
+}
+
+/// Information about a peer.
+#[derive(Eq, PartialEq, Ord, PartialOrd, Serialize)]
+pub struct PeerInfo {
+    #[serde(serialize_with = "serialize_ip_as_string")]
+    pub ip: IpAddr,
+    pub port: u16,
+    pub direction: ConnectionDirection,
+    pub state: PeerState,
+}
+
+fn serialize_ip_as_string<S>(ip: &IpAddr, s: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    ip.to_string().serialize(s)
 }
 
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]
@@ -99,7 +125,7 @@ struct Peer {
     state: PeerState,
 }
 
-#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
+#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Serialize)]
 pub enum ConnectionDirection {
     Incoming,
     Outgoing,

@@ -1,6 +1,6 @@
 use super::{
     session,
-    utils::{self, Port, UniqueHandle},
+    utils::{self, Bytes, Port, UniqueHandle},
 };
 use std::{os::raw::c_char, ptr};
 use tokio::{select, task::JoinHandle};
@@ -70,27 +70,12 @@ pub unsafe extern "C" fn network_listener_local_addr() -> *mut c_char {
     utils::str_to_ptr(&format!("TCP:{}", local_addr))
 }
 
-/// Return an array of peers with which we're connected. Each peer is represented as a string in
-/// the format "<TCP or UDP>:<IPv4 or [IPv6]>:<PORT>;...".
+/// Return the list of peers with which we're connected, serialized with msgpack.
 #[no_mangle]
-pub unsafe extern "C" fn network_connected_peers() -> *mut c_char {
-    use std::borrow::Cow;
-
+pub unsafe extern "C" fn network_connected_peers() -> Bytes {
     let peer_info = session::get().network().collect_peer_info();
-
-    let s = peer_info
-        .iter()
-        .map(|info| format!("{}:{:?}:{:?}", info.0.addr, info.0.dir, info.1))
-        // The Iterator's `intersperse` function would come in handy here. But ATM it's in nightly.
-        .fold(Cow::Borrowed(""), |a, b| {
-            if a.is_empty() {
-                Cow::Owned(b)
-            } else {
-                Cow::Owned(format!("{};{}", a, b))
-            }
-        });
-
-    utils::str_to_ptr(&s)
+    let bytes = rmp_serde::to_vec(&peer_info).unwrap();
+    Bytes::from_vec(bytes)
 }
 
 /// Returns the local dht address for ipv4, if available.
