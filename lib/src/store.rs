@@ -5,8 +5,9 @@ use crate::{
     db,
     error::Result,
     index::{self, Index},
+    progress::Progress,
 };
-use sqlx::Connection;
+use sqlx::{Connection, Row};
 
 /// Write a block received from a remote replica to the block store. The block must already be
 /// referenced by the index, otherwise an `BlockNotReferenced` error is returned.
@@ -33,6 +34,27 @@ pub(crate) async fn write_received_block(
     }
 
     Ok(())
+}
+
+/// Returns the syncing progress as the number of downloaded blocks / number of total blocks.
+pub(crate) async fn sync_progress(conn: &mut db::Connection) -> Result<Progress> {
+    // TODO: should we use `COUNT(DISTINCT ... )` ?
+    Ok(sqlx::query(
+        "SELECT
+             COUNT(blocks.id),
+             COUNT(snapshot_leaf_nodes.block_id)
+         FROM
+             snapshot_leaf_nodes
+             LEFT JOIN blocks ON blocks.id = snapshot_leaf_nodes.block_id
+         ",
+    )
+    .fetch_optional(conn)
+    .await?
+    .map(|row| Progress {
+        value: db::decode_u64(row.get(0)),
+        total: db::decode_u64(row.get(1)),
+    })
+    .unwrap_or(Progress { value: 0, total: 0 }))
 }
 
 /// Initialize database objects to support operations that affect both the index and the block

@@ -24,7 +24,9 @@ use crate::{
     db,
     debug_printer::DebugPrinter,
     error::{Error, Result},
+    progress::Progress,
     repository::RepositoryId,
+    store,
     sync::{broadcast, RwLock, RwLockReadGuard},
 };
 use futures_util::TryStreamExt;
@@ -97,15 +99,10 @@ impl Index {
         self.shared.notify_tx.close();
     }
 
-    /// Retrieve the number of missing (not downloaded yet) blocks across all branches.
-    pub(crate) async fn count_missing_blocks(&self) -> u64 {
-        let mut count = 0;
-
-        for branch in self.branches().await.values() {
-            count += branch.root().await.summary.missing_blocks_count();
-        }
-
-        count
+    /// Retrieve the syncing progress of this repository (number of downloaded blocks / number of
+    /// all blocks)
+    pub(crate) async fn sync_progress(&self) -> Result<Progress> {
+        store::sync_progress(&mut *self.pool.acquire().await?).await
     }
 
     pub(crate) async fn debug_print(&self, print: DebugPrinter) {

@@ -8,7 +8,7 @@ pub use self::id::RepositoryId;
 use self::merger::Merger;
 use crate::{
     access_control::{AccessMode, AccessSecrets, MasterSecret},
-    block,
+    block::{self, BLOCK_SIZE},
     branch::Branch,
     crypto::{
         cipher,
@@ -23,6 +23,7 @@ use crate::{
     index::{self, BranchData, Index, Proof},
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     metadata, path,
+    progress::Progress,
     scoped_task::{self, ScopedJoinHandle},
     store,
     sync::{broadcast::ThrottleReceiver, Mutex},
@@ -407,6 +408,12 @@ impl Repository {
         self.shared.secrets.access_mode()
     }
 
+    /// Gets the syncing progress of this repository (number of downloaded blocks / number of
+    /// all blocks)
+    pub async fn sync_progress(&self) -> Result<Progress> {
+        self.shared.index.sync_progress().await
+    }
+
     // Opens the root directory across all branches as JointDirectory.
     async fn joint_root(&self) -> Result<JointDirectory> {
         // If we have only blind access we can cut this short. Also this check is necessary to
@@ -610,14 +617,25 @@ async fn generate_writer_id(
 async fn report_sync_progress(index: Index) {
     // TODO: change this to report the progress as MB downloaded / MB total and/or percents
 
-    let mut prev_missing_blocks = 0;
+    let mut prev_progress = Progress { value: 0, total: 0 };
     let mut event_rx = ThrottleReceiver::new(index.subscribe(), Duration::from_secs(1));
 
     while event_rx.recv().await.is_ok() {
-        let next_missing_blocks = index.count_missing_blocks().await;
-        if next_missing_blocks != prev_missing_blocks {
-            prev_missing_blocks = next_missing_blocks;
-            log::debug!("sync progress: {} missing blocks", prev_missing_blocks);
+        let next_progress = match index.sync_progress().await {
+            Ok(progress) => progress,
+            Err(error) => {
+                log::error!("failed to retrieve sync progress: {:?}", error);
+                continue;
+            }
+        };
+
+        if next_progress != prev_progress {
+            prev_progress = next_progress;
+            log::debug!(
+                "sync progress: {} MB ({:.1})",
+                prev_progress * BLOCK_SIZE as u64 / 1024 / 1024,
+                prev_progress.percent()
+            );
         }
     }
 }

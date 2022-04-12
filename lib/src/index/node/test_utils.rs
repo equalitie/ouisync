@@ -11,7 +11,10 @@ use crate::{
     store,
     version_vector::VersionVector,
 };
-use rand::Rng;
+use rand::{
+    distributions::{Distribution, Standard},
+    Rng,
+};
 use std::{collections::HashMap, mem};
 
 // In-memory snapshot for testing purposes.
@@ -25,7 +28,7 @@ pub(crate) struct Snapshot {
 impl Snapshot {
     // Generate a random snapshot with the given number of blocks.
     pub fn generate<R: Rng>(rng: &mut R, block_count: usize) -> Self {
-        Self::new((0..block_count).map(|_| (Block::generate(rng), rng.gen())))
+        Self::new(rng.sample_iter(Standard).take(block_count))
     }
 
     // Create snapshot given an iterator of blocks where each block is associated to its encoded
@@ -133,14 +136,14 @@ pub(crate) struct Block {
     pub nonce: BlockNonce,
 }
 
-impl Block {
-    pub fn generate<R: Rng>(rng: &mut R) -> Self {
+impl Distribution<Block> for Standard {
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Block {
         let mut content = vec![0; BLOCK_SIZE];
         rng.fill(&mut content[..]);
 
         let nonce = rng.gen();
 
-        Self {
+        Block {
             data: BlockData::from(content.into_boxed_slice()),
             nonce,
         }
