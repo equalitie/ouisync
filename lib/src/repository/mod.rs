@@ -450,6 +450,10 @@ impl Repository {
         Ok(JointDirectory::new(local_branch, dirs))
     }
 
+    pub async fn debug_print_root(&self) {
+        self.debug_print(DebugPrinter::new()).await
+    }
+
     pub async fn debug_print(&self, print: DebugPrinter) {
         print.display(&"Repository");
         let branches = self.shared.branches.lock().await;

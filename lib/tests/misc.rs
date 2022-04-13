@@ -1,6 +1,7 @@
 use ouisync::{AccessMode, ConfigStore, Error, File, Network, Repository};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::time::Duration;
+use tokio::time;
 
 mod common;
 
@@ -26,11 +27,12 @@ async fn relink_repository() {
     file_a.flush().await.unwrap();
 
     // Wait until the file is seen by B
-    common::timeout(
+    time::timeout(
         DEFAULT_TIMEOUT,
         expect_file_content(&repo_b, "test.txt", b"first"),
     )
-    .await;
+    .await
+    .unwrap();
 
     // Unlink B's repo
     reg_b.cancel().await;
@@ -44,11 +46,12 @@ async fn relink_repository() {
     let _reg_b = network_b.handle().register(repo_b.index().clone()).await;
 
     // Wait until the file is updated
-    common::timeout(
+    time::timeout(
         DEFAULT_TIMEOUT,
         expect_file_content(&repo_b, "test.txt", b"second"),
     )
-    .await;
+    .await
+    .unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -69,11 +72,12 @@ async fn remove_remote_file() {
         .await
         .unwrap();
 
-    common::timeout(
+    time::timeout(
         DEFAULT_TIMEOUT,
         expect_file_content(&repo_b, "test.txt", &[]),
     )
-    .await;
+    .await
+    .unwrap();
 
     // Delete the file by B
     repo_b.remove_entry("test.txt").await.unwrap();
@@ -122,11 +126,12 @@ async fn relay() {
     file.flush().await.unwrap();
     drop(file);
 
-    common::timeout(
+    time::timeout(
         Duration::from_secs(60),
         expect_file_content(&repo_b, "test.dat", &content),
     )
-    .await;
+    .await
+    .unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -151,11 +156,12 @@ async fn transfer_large_file() {
     file.flush().await.unwrap();
     drop(file);
 
-    common::timeout(
+    time::timeout(
         Duration::from_secs(60),
         expect_file_content(&repo_b, "test.dat", &content),
     )
-    .await;
+    .await
+    .unwrap();
 }
 
 // Wait until the file at `path` has the expected content. Panics if timeout elapses before the

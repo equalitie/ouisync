@@ -3,6 +3,7 @@
 use ouisync::{File, Repository, BLOB_HEADER_SIZE, BLOCK_SIZE};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::time::Duration;
+use tokio::time;
 
 mod common;
 
@@ -36,12 +37,12 @@ async fn local_delete_local_file() {
 async fn local_delete_remote_file() {
     let mut rng = StdRng::seed_from_u64(0);
 
-    let (network_a, network_b) = common::create_connected_peers().await;
-    let (repo_a, repo_b) = common::create_linked_repos(&mut rng).await;
-    let _reg_a = network_a.handle().register(repo_a.index().clone()).await;
-    let _reg_b = network_b.handle().register(repo_b.index().clone()).await;
+    let (network_l, network_r) = common::create_connected_peers().await;
+    let (repo_l, repo_r) = common::create_linked_repos(&mut rng).await;
+    let _reg_l = network_l.handle().register(repo_l.index().clone()).await;
+    let _reg_r = network_r.handle().register(repo_r.index().clone()).await;
 
-    repo_a
+    repo_r
         .create_file("test.dat")
         .await
         .unwrap()
@@ -50,24 +51,26 @@ async fn local_delete_remote_file() {
         .unwrap();
 
     // 1 block for the file + 1 block for the remote root directory
-    common::timeout(Duration::from_secs(5), expect_block_count(&repo_b, 2)).await;
+    time::timeout(Duration::from_secs(5), expect_block_count(&repo_l, 2))
+        .await
+        .unwrap();
 
-    repo_b.remove_entry("test.dat").await.unwrap();
+    repo_l.remove_entry("test.dat").await.unwrap();
 
     // Both the remote file and the remote root directory are removed.
-    assert_eq!(repo_b.count_blocks().await.unwrap(), 1);
+    assert_eq!(repo_l.count_blocks().await.unwrap(), 1);
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn remote_delete_remote_file() {
     let mut rng = StdRng::seed_from_u64(0);
 
-    let (network_a, network_b) = common::create_connected_peers().await;
-    let (repo_a, repo_b) = common::create_linked_repos(&mut rng).await;
-    let _reg_a = network_a.handle().register(repo_a.index().clone()).await;
-    let _reg_b = network_b.handle().register(repo_b.index().clone()).await;
+    let (network_l, network_r) = common::create_connected_peers().await;
+    let (repo_l, repo_r) = common::create_linked_repos(&mut rng).await;
+    let _reg_l = network_l.handle().register(repo_l.index().clone()).await;
+    let _reg_r = network_r.handle().register(repo_r.index().clone()).await;
 
-    repo_a
+    repo_r
         .create_file("test.dat")
         .await
         .unwrap()
@@ -76,12 +79,16 @@ async fn remote_delete_remote_file() {
         .unwrap();
 
     // 1 block for the file + 1 block for the remote root directory
-    common::timeout(Duration::from_secs(5), expect_block_count(&repo_b, 2)).await;
+    time::timeout(Duration::from_secs(5), expect_block_count(&repo_l, 2))
+        .await
+        .unwrap();
 
-    repo_a.remove_entry("test.dat").await.unwrap();
+    repo_r.remove_entry("test.dat").await.unwrap();
 
     // The remote file is removed but the remote root remains to track the tombstone
-    common::timeout(Duration::from_secs(5), expect_block_count(&repo_b, 1)).await;
+    time::timeout(Duration::from_secs(5), expect_block_count(&repo_l, 1))
+        .await
+        .unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -111,20 +118,22 @@ async fn local_truncate_local_file() {
 async fn local_truncate_remote_file() {
     let mut rng = StdRng::seed_from_u64(0);
 
-    let (network_a, network_b) = common::create_connected_peers().await;
-    let (repo_a, repo_b) = common::create_linked_repos(&mut rng).await;
-    let _reg_a = network_a.handle().register(repo_a.index().clone()).await;
-    let _reg_b = network_b.handle().register(repo_b.index().clone()).await;
+    let (network_l, network_r) = common::create_connected_peers().await;
+    let (repo_l, repo_r) = common::create_linked_repos(&mut rng).await;
+    let _reg_l = network_l.handle().register(repo_l.index().clone()).await;
+    let _reg_r = network_r.handle().register(repo_r.index().clone()).await;
 
-    let mut file = repo_a.create_file("test.dat").await.unwrap();
+    let mut file = repo_r.create_file("test.dat").await.unwrap();
     write_to_file(&mut rng, &mut file, 2 * BLOCK_SIZE - BLOB_HEADER_SIZE).await;
     file.flush().await.unwrap();
 
     // 2 blocks for the file + 1 block for the remote root directory
-    common::timeout(Duration::from_secs(5), expect_block_count(&repo_b, 3)).await;
+    time::timeout(Duration::from_secs(5), expect_block_count(&repo_l, 3))
+        .await
+        .unwrap();
 
-    let mut file = repo_b.open_file("test.dat").await.unwrap();
-    file.fork(&repo_b.get_or_create_local_branch().await.unwrap())
+    let mut file = repo_l.open_file("test.dat").await.unwrap();
+    file.fork(&repo_l.get_or_create_local_branch().await.unwrap())
         .await
         .unwrap();
     file.truncate(0).await.unwrap();
@@ -133,32 +142,34 @@ async fn local_truncate_remote_file() {
     //   1 block for the file (the original 2 blocks were removed)
     // + 1 block for the local root (created when the file was forked)
     // + 0 blocks for the remote root (removed for being outdated)
-    assert_eq!(repo_b.count_blocks().await.unwrap(), 2);
+    assert_eq!(repo_l.count_blocks().await.unwrap(), 2);
 }
 
-// FIXME: unknown why this fails
-#[ignore]
 #[tokio::test(flavor = "multi_thread")]
 async fn remote_truncate_remote_file() {
     let mut rng = StdRng::seed_from_u64(0);
 
-    let (network_a, network_b) = common::create_connected_peers().await;
-    let (repo_a, repo_b) = common::create_linked_repos(&mut rng).await;
-    let _reg_a = network_a.handle().register(repo_a.index().clone()).await;
-    let _reg_b = network_b.handle().register(repo_b.index().clone()).await;
+    let (network_l, network_r) = common::create_connected_peers().await;
+    let (repo_l, repo_r) = common::create_linked_repos(&mut rng).await;
+    let _reg_l = network_l.handle().register(repo_l.index().clone()).await;
+    let _reg_r = network_r.handle().register(repo_r.index().clone()).await;
 
-    let mut file = repo_a.create_file("test.dat").await.unwrap();
+    let mut file = repo_r.create_file("test.dat").await.unwrap();
     write_to_file(&mut rng, &mut file, 2 * BLOCK_SIZE - BLOB_HEADER_SIZE).await;
     file.flush().await.unwrap();
 
     // 2 blocks for the file + 1 block for the remote root
-    common::timeout(Duration::from_secs(5), expect_block_count(&repo_b, 3)).await;
+    time::timeout(Duration::from_secs(5), expect_block_count(&repo_l, 3))
+        .await
+        .unwrap();
 
     file.truncate(0).await.unwrap();
     file.flush().await.unwrap();
 
     // 1 block for the file + 1 block for the remote root
-    common::timeout(Duration::from_secs(5), expect_block_count(&repo_b, 2)).await;
+    time::timeout(Duration::from_secs(5), expect_block_count(&repo_l, 2))
+        .await
+        .unwrap();
 }
 
 async fn expect_block_count(repo: &Repository, expected_count: usize) {

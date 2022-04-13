@@ -5,9 +5,7 @@ use rand::{rngs::StdRng, Rng};
 use std::{
     future::Future,
     net::{Ipv4Addr, SocketAddr},
-    time::Duration,
 };
-use tokio::time;
 
 // Create two `Network` instances connected together.
 pub(crate) async fn create_connected_peers() -> (Network, Network) {
@@ -68,13 +66,6 @@ pub(crate) fn test_network_options() -> NetworkOptions {
         disable_dht: true,
         ..Default::default()
     }
-}
-
-pub(crate) async fn timeout<F>(timeout: Duration, f: F) -> F::Output
-where
-    F: Future,
-{
-    time::timeout(timeout, f).await.expect("timeout expired")
 }
 
 // Keep calling `f` until it returns `true`. Wait for repo notification between calls.
