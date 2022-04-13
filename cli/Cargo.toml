@@ -12,10 +12,6 @@ default-run = "ouisync"
 name = "ouisync"
 path = "src/main.rs"
 
-[[test]]
-name = "cli-integration"
-path = "tests/tests.rs"
-
 [dependencies]
 ouisync-lib = { package = "ouisync", version = "0.1", path = "../lib" }
 anyhow = "1.0.40"

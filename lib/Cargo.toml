@@ -12,10 +12,6 @@ publish = false
 [lib]
 crate-type = ["lib", "cdylib"] # TODO: we might also need `staticlib` for ios
 
-[[test]]
-name = "lib-integration"
-path = "tests/tests.rs"
-
 [dependencies]
 argon2 = "0.3.2"
 async-broadcast = "0.3.4"
