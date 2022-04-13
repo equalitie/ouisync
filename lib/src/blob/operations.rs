@@ -316,7 +316,6 @@ impl<'a> Operations<'a> {
         id: BlockId,
         content: Buffer,
     ) -> Result<()> {
-        self.write_len(tx).await?;
         self.write_current_block(tx).await?;
 
         let mut content = Cursor::new(content);
