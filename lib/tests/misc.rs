@@ -1,7 +1,6 @@
 use ouisync::{AccessMode, ConfigStore, Error, File, Network, Repository};
 use rand::{rngs::StdRng, Rng, SeedableRng};
-use std::{future::Future, time::Duration};
-use tokio::time;
+use std::time::Duration;
 
 mod common;
 
@@ -16,8 +15,7 @@ async fn relink_repository() {
     // Create two peers and connect them together.
     let (network_a, network_b) = common::create_connected_peers().await;
 
-    let repo_a = common::create_repo(&mut rng).await;
-    let repo_b = common::create_repo_with_secrets(&mut rng, repo_a.secrets().clone()).await;
+    let (repo_a, repo_b) = common::create_linked_repos(&mut rng).await;
 
     let _reg_a = network_a.handle().register(repo_a.index().clone()).await;
     let reg_b = network_b.handle().register(repo_b.index().clone()).await;
@@ -28,7 +26,7 @@ async fn relink_repository() {
     file_a.flush().await.unwrap();
 
     // Wait until the file is seen by B
-    with_timeout(
+    common::timeout(
         DEFAULT_TIMEOUT,
         expect_file_content(&repo_b, "test.txt", b"first"),
     )
@@ -46,7 +44,7 @@ async fn relink_repository() {
     let _reg_b = network_b.handle().register(repo_b.index().clone()).await;
 
     // Wait until the file is updated
-    with_timeout(
+    common::timeout(
         DEFAULT_TIMEOUT,
         expect_file_content(&repo_b, "test.txt", b"second"),
     )
@@ -58,11 +56,8 @@ async fn remove_remote_file() {
     let mut rng = StdRng::seed_from_u64(0);
 
     let (network_a, network_b) = common::create_connected_peers().await;
-
-    let repo_a = common::create_repo(&mut rng).await;
+    let (repo_a, repo_b) = common::create_linked_repos(&mut rng).await;
     let _reg_a = network_a.handle().register(repo_a.index().clone()).await;
-
-    let repo_b = common::create_repo_with_secrets(&mut rng, repo_a.secrets().clone()).await;
     let _reg_b = network_b.handle().register(repo_b.index().clone()).await;
 
     // Create a file by A and wait until B sees it.
@@ -74,7 +69,7 @@ async fn remove_remote_file() {
         .await
         .unwrap();
 
-    with_timeout(
+    common::timeout(
         DEFAULT_TIMEOUT,
         expect_file_content(&repo_b, "test.txt", &[]),
     )
@@ -127,7 +122,7 @@ async fn relay() {
     file.flush().await.unwrap();
     drop(file);
 
-    with_timeout(
+    common::timeout(
         Duration::from_secs(60),
         expect_file_content(&repo_b, "test.dat", &content),
     )
@@ -143,11 +138,8 @@ async fn transfer_large_file() {
     let mut rng = StdRng::seed_from_u64(0);
 
     let (network_a, network_b) = common::create_connected_peers().await;
-
-    let repo_a = common::create_repo(&mut rng).await;
+    let (repo_a, repo_b) = common::create_linked_repos(&mut rng).await;
     let _reg_a = network_a.handle().register(repo_a.index().clone()).await;
-
-    let repo_b = common::create_repo_with_secrets(&mut rng, repo_a.secrets().clone()).await;
     let _reg_b = network_b.handle().register(repo_b.index().clone()).await;
 
     let mut content = vec![0; file_size];
@@ -159,7 +151,7 @@ async fn transfer_large_file() {
     file.flush().await.unwrap();
     drop(file);
 
-    with_timeout(
+    common::timeout(
         Duration::from_secs(60),
         expect_file_content(&repo_b, "test.dat", &content),
     )
@@ -187,13 +179,6 @@ async fn expect_file_content(repo: &Repository, path: &str, expected_content: &[
             break;
         }
     }
-}
-
-async fn with_timeout<F>(timeout: Duration, f: F) -> F::Output
-where
-    F: Future,
-{
-    time::timeout(timeout, f).await.expect("timeout expired")
 }
 
 async fn write_in_chunks(file: &mut File, content: &[u8], chunk_size: usize) {

@@ -2,7 +2,12 @@ use ouisync::{
     AccessSecrets, ConfigStore, MasterSecret, Network, NetworkOptions, Repository, Store,
 };
 use rand::{rngs::StdRng, Rng};
-use std::net::{Ipv4Addr, SocketAddr};
+use std::{
+    future::Future,
+    net::{Ipv4Addr, SocketAddr},
+    time::Duration,
+};
+use tokio::time;
 
 // Create two `Network` instances connected together.
 pub(crate) async fn create_connected_peers() -> (Network, Network) {
@@ -48,6 +53,13 @@ pub(crate) async fn create_repo_with_secrets(
     .unwrap()
 }
 
+pub(crate) async fn create_linked_repos(rng: &mut StdRng) -> (Repository, Repository) {
+    let repo_a = create_repo(rng).await;
+    let repo_b = create_repo_with_secrets(rng, repo_a.secrets().clone()).await;
+
+    (repo_a, repo_b)
+}
+
 pub(crate) fn test_network_options() -> NetworkOptions {
     NetworkOptions {
         bind: Ipv4Addr::LOCALHOST.into(),
@@ -56,4 +68,11 @@ pub(crate) fn test_network_options() -> NetworkOptions {
         disable_dht: true,
         ..Default::default()
     }
+}
+
+pub(crate) async fn timeout<F>(timeout: Duration, f: F) -> F::Output
+where
+    F: Future,
+{
+    time::timeout(timeout, f).await.expect("timeout expired")
 }
