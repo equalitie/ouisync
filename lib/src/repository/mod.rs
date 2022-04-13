@@ -479,6 +479,12 @@ impl Repository {
         self.index().debug_print(print).await;
     }
 
+    /// Returns the total number of blocks in this repository. This is useful for diagnostics and
+    /// tests.
+    pub async fn count_blocks(&self) -> Result<usize> {
+        block::count(&mut *self.shared.index.pool.acquire().await?).await
+    }
+
     // Create remote branch in this repository and returns it.
     // FOR TESTS ONLY!
     #[cfg(test)]

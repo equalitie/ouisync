@@ -107,6 +107,16 @@ pub(crate) async fn exists(conn: &mut db::Connection, id: &BlockId) -> Result<bo
         .is_some())
 }
 
+/// Returns the total number of blocks in the store.
+pub(crate) async fn count(conn: &mut db::Connection) -> Result<usize> {
+    Ok(db::decode_u64(
+        sqlx::query("SELECT COUNT(*) FROM blocks")
+            .fetch_one(conn)
+            .await?
+            .get(0),
+    ) as usize)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
