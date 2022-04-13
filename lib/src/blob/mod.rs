@@ -22,9 +22,10 @@ use std::{
 };
 use zeroize::Zeroize;
 
+/// Size of the blob header in bytes.
 // Using u64 instead of usize because HEADER_SIZE must be the same irrespective of whether we're on
 // a 32bit or 64bit processor (if we want two such replicas to be able to sync).
-pub(super) const HEADER_SIZE: usize = mem::size_of::<u64>();
+pub const HEADER_SIZE: usize = mem::size_of::<u64>();
 
 pub(crate) struct Blob {
     shared: Arc<Mutex<Shared>>,

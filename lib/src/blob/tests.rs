@@ -365,6 +365,24 @@ async fn truncate_to_shorter() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn truncate_marks_as_dirty() {
+    let (mut rng, branch) = setup(0).await;
+    let locator = random_head_locator(&mut rng);
+
+    let content: Vec<_> = (&mut rng)
+        .sample_iter(Standard)
+        .take(2 * BLOCK_SIZE)
+        .collect();
+
+    let mut blob = Blob::create(branch.clone(), locator, Shared::uninit());
+    blob.write(&content).await.unwrap();
+    blob.flush().await.unwrap();
+
+    blob.truncate(0).await.unwrap();
+    assert!(blob.is_dirty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn modify_blob() {
     let (mut rng, branch) = setup(0).await;
 

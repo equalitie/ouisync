@@ -450,6 +450,10 @@ impl Repository {
         Ok(JointDirectory::new(local_branch, dirs))
     }
 
+    pub async fn debug_print_root(&self) {
+        self.debug_print(DebugPrinter::new()).await
+    }
+
     pub async fn debug_print(&self, print: DebugPrinter) {
         print.display(&"Repository");
         let branches = self.shared.branches.lock().await;
@@ -477,6 +481,12 @@ impl Repository {
         print.display(&"Index");
         let print = print.indent();
         self.index().debug_print(print).await;
+    }
+
+    /// Returns the total number of blocks in this repository. This is useful for diagnostics and
+    /// tests.
+    pub async fn count_blocks(&self) -> Result<usize> {
+        block::count(&mut *self.shared.index.pool.acquire().await?).await
     }
 
     // Create remote branch in this repository and returns it.
