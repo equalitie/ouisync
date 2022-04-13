@@ -41,6 +41,8 @@ mod versioned_file_name;
 
 pub use self::{
     access_control::{AccessMode, AccessSecrets, MasterSecret, ShareToken},
+    blob::HEADER_SIZE as BLOB_HEADER_SIZE,
+    block::BLOCK_SIZE,
     branch::Branch,
     config::ConfigStore,
     crypto::{cipher, sign, Password},

@@ -161,24 +161,22 @@ async fn transfer_large_file() {
 // Wait until the file at `path` has the expected content. Panics if timeout elapses before the
 // file content matches.
 async fn expect_file_content(repo: &Repository, path: &str, expected_content: &[u8]) {
-    let mut rx = repo.subscribe();
-    while rx.recv().await.is_ok() {
+    common::eventually(repo, || async {
         let mut file = match repo.open_file(path).await {
             Ok(file) => file,
-            Err(Error::EntryNotFound | Error::BlockNotFound(_)) => continue,
+            Err(Error::EntryNotFound | Error::BlockNotFound(_)) => return false,
             Err(error) => panic!("unexpected error: {:?}", error),
         };
 
         let actual_content = match read_in_chunks(&mut file, 4096).await {
             Ok(content) => content,
-            Err(Error::BlockNotFound(_)) => continue,
+            Err(Error::BlockNotFound(_)) => return false,
             Err(error) => panic!("unexpected error: {:?}", error),
         };
 
-        if actual_content == expected_content {
-            break;
-        }
-    }
+        actual_content == expected_content
+    })
+    .await
 }
 
 async fn write_in_chunks(file: &mut File, content: &[u8], chunk_size: usize) {

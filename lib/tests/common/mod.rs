@@ -76,3 +76,20 @@ where
 {
     time::timeout(timeout, f).await.expect("timeout expired")
 }
+
+// Keep calling `f` until it returns `true`. Wait for repo notification between calls.
+pub(crate) async fn eventually<F, Fut>(repo: &Repository, mut f: F)
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = bool>,
+{
+    let mut rx = repo.subscribe();
+
+    loop {
+        if f().await {
+            break;
+        }
+
+        rx.recv().await.unwrap();
+    }
+}
