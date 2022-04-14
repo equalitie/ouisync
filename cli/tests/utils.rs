@@ -135,7 +135,12 @@ where
 
 fn wait_for_share_token(process: &mut Child, id: u32) -> String {
     let suffix = format!("?name={}", REPO_NAME);
-    if let Some(line) = wait_for_line(process.stdout.as_mut().unwrap(), "ouisync:", &suffix, id) {
+    if let Some(line) = wait_for_line(
+        process.stdout.as_mut().unwrap(),
+        "https://ouisync.net/r/",
+        &suffix,
+        id,
+    ) {
         line
     } else {
         fail(process, id, "Failed to read share token");

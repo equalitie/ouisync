@@ -7,7 +7,7 @@ use std::{
 };
 use zeroize::Zeroizing;
 
-pub const SCHEME: &str = "ouisync";
+pub const PREFIX: &str = "https://ouisync.net/r/";
 pub const VERSION: u8 = 0; // when this reaches 128, switch to variable-lengh encoding.
 
 /// Token to share a repository which can be encoded as a URL-formatted string and transmitted to
@@ -87,8 +87,7 @@ impl FromStr for ShareToken {
         // Trim from the end as well because reading lines from a file includes the `\n` character.
         // Also the user may accidentally include white space if done from the app.
         let input = input.trim();
-        let input = input.strip_prefix(SCHEME).ok_or(DecodeError)?;
-        let input = input.strip_prefix(':').ok_or(DecodeError)?;
+        let input = input.strip_prefix(PREFIX).ok_or(DecodeError)?;
 
         let (input, params) = input.split_once('?').unwrap_or((input, ""));
 
@@ -122,7 +121,7 @@ fn decode_version(input: &[u8]) -> Result<&[u8], DecodeError> {
 
 impl fmt::Display for ShareToken {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}:", SCHEME)?;
+        write!(f, "{}", PREFIX)?;
 
         let mut buffer = vec![VERSION];
         self.secrets.encode(&mut buffer);
