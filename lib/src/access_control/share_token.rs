@@ -7,7 +7,7 @@ use std::{
 };
 use zeroize::Zeroizing;
 
-pub const PREFIX: &str = "https://ouisync.net/r/";
+pub const PREFIX: &str = "https://ouisync.net/r#";
 pub const VERSION: u8 = 0; // when this reaches 128, switch to variable-lengh encoding.
 
 /// Token to share a repository which can be encoded as a URL-formatted string and transmitted to
