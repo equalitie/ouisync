@@ -1,3 +1,4 @@
+mod block_manager;
 mod id;
 mod merger;
 #[cfg(test)]
@@ -184,6 +185,8 @@ impl Repository {
             scoped_task::spawn(Merger::new(shared.clone(), local_branch).run())
         });
 
+        // TODO:
+        // task::spawn(block_manager::run(shared.clone()));
         task::spawn(report_sync_progress(index));
 
         Ok(Self {
@@ -590,6 +593,7 @@ impl Shared {
         .await
     }
 
+    // TODO: consider rewriting this to return `impl Stream` to avoid the Vec allocation.
     pub async fn branches(&self) -> Result<Vec<Branch>> {
         future::try_join_all(
             self.index
