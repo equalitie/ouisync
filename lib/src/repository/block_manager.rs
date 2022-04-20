@@ -1,10 +1,14 @@
-//! Takes care of requesting needed blocks and removing unneeded blocks.
+//! Takes care of requesting missing blocks and removing unneeded blocks.
 
 use super::Shared;
 use crate::{
+    directory::EntryRef,
     error::{Error, Result},
+    joint_directory::versioned,
     JointDirectory,
 };
+use async_recursion::async_recursion;
+use futures_util::{stream, StreamExt};
 use std::sync::Arc;
 
 pub(super) async fn run(shared: Arc<Shared>) {
@@ -35,9 +39,45 @@ async fn handle(shared: &Shared) -> Result<()> {
         }
     }
 
-    traverse(JointDirectory::new(None, roots)).await
+    traverse(shared, JointDirectory::new(None, roots)).await
 }
 
-async fn traverse(dir: JointDirectory) -> Result<()> {
-    todo!()
+#[async_recursion]
+async fn traverse(shared: &Shared, dir: JointDirectory) -> Result<()> {
+    for (_, entry_versions) in dir.read().await.entries_all_versions() {
+        // Process children first.
+        recurse(shared, &entry_versions).await?;
+
+        let (current, outdated): (_, Vec<_>) = versioned::partition(entry_versions, None);
+
+        for entry in current {
+            request_missing_blocks(shared, entry).await?;
+        }
+
+        for entry in outdated {
+            remove_unneeded_blocks(shared, entry).await?;
+        }
+    }
+
+    Ok(())
+}
+
+async fn recurse(shared: &Shared, versions: &[EntryRef<'_>]) -> Result<()> {
+    let dir_entries = versions.iter().filter_map(|entry| entry.directory().ok());
+    let dirs: Vec<_> = stream::iter(dir_entries)
+        .filter_map(|entry| async move { entry.open().await.ok() })
+        .collect()
+        .await;
+
+    traverse(shared, JointDirectory::new(None, dirs)).await
+}
+
+async fn request_missing_blocks(_shared: &Shared, _entry: EntryRef<'_>) -> Result<()> {
+    // TODO
+    Ok(())
+}
+
+async fn remove_unneeded_blocks(_shared: &Shared, _entry: EntryRef<'_>) -> Result<()> {
+    // TODO
+    Ok(())
 }

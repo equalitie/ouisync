@@ -15,6 +15,7 @@ impl<I> PairCombinations<I>
 where
     I: Iterator + Clone,
 {
+    #[cfg(test)]
     pub fn new<J>(iter: J) -> Self
     where
         J: IntoIterator<IntoIter = I>,

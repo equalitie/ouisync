@@ -185,8 +185,7 @@ impl Repository {
             scoped_task::spawn(Merger::new(shared.clone(), local_branch).run())
         });
 
-        // TODO:
-        // task::spawn(block_manager::run(shared.clone()));
+        task::spawn(block_manager::run(shared.clone()));
         task::spawn(report_sync_progress(index));
 
         Ok(Self {

@@ -2,11 +2,12 @@ mod accumulate;
 mod combinations;
 mod sorted_union;
 
-pub(crate) use self::{
-    accumulate::Accumulate, combinations::PairCombinations, sorted_union::SortedUnion,
-};
+#[cfg(test)]
+pub(crate) use self::combinations::PairCombinations;
+pub(crate) use self::{accumulate::Accumulate, sorted_union::SortedUnion};
 
 /// Shim for [Iterator::is_sorted_by_key](https://doc.rust-lang.org/std/iter/trait.Iterator.html#method.is_sorted_by_key).
+#[cfg(test)]
 pub(crate) fn is_sorted_by_key<I, K, F>(iter: I, mut f: F) -> bool
 where
     I: IntoIterator,

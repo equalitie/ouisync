@@ -7,7 +7,7 @@ use crate::{
 };
 use std::cmp::Ordering;
 
-pub(super) trait Versioned {
+pub trait Versioned {
     fn version_vector(&self) -> &VersionVector;
     fn branch_id(&self) -> &PublicKey;
 }
@@ -32,7 +32,7 @@ impl Versioned for FileRef<'_> {
     }
 }
 
-pub(super) trait Container<E>: Default {
+pub trait Container<E>: Default {
     fn insert(&mut self, item: E);
 }
 
@@ -43,14 +43,14 @@ impl<E> Container<E> for Vec<E> {
 }
 
 #[derive(Default)]
-pub(super) struct Discard;
+pub struct Discard;
 
 impl<E> Container<E> for Discard {
     fn insert(&mut self, _: E) {}
 }
 
 // Partition the entries into those with the maximal versions and the rest.
-pub(super) fn partition<I, M>(entries: I, local_branch_id: Option<&PublicKey>) -> (Vec<I::Item>, M)
+pub fn partition<I, M>(entries: I, local_branch_id: Option<&PublicKey>) -> (Vec<I::Item>, M)
 where
     I: IntoIterator,
     I::Item: Versioned,
