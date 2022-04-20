@@ -450,6 +450,12 @@ impl Repository {
         Ok(JointDirectory::new(local_branch, dirs))
     }
 
+    /// Close this repository. Unlike `drop`, this also ensures all the db connections are closed
+    /// before returning.
+    pub async fn close(self) {
+        self.shared.index.pool.close().await;
+    }
+
     pub async fn debug_print_root(&self) {
         self.debug_print(DebugPrinter::new()).await
     }
