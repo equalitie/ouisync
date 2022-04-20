@@ -49,7 +49,7 @@ use std::{
 use thiserror::Error;
 use tokio::{
     net::{TcpListener, TcpStream},
-    sync::{mpsc, watch, Mutex},
+    sync::{mpsc, watch},
     task, time,
 };
 
@@ -176,7 +176,7 @@ impl Network {
         let inner = Arc::new(Inner {
             listener_local_addr,
             this_runtime_id: rand::random(),
-            state: Mutex::new(State {
+            state: BlockingMutex::new(State {
                 message_brokers: HashMap::new(),
                 registry: Slab::new(),
             }),
@@ -264,13 +264,13 @@ impl Handle {
     /// repositories of currently connected remote replicas as well as any replicas connected in
     /// the future. The repository is automatically deregistered when the returned handle is
     /// dropped.
-    pub async fn register(&self, index: Index) -> Registration {
+    pub fn register(&self, index: Index) -> Registration {
         // TODO: consider disabling DHT by default, for privacy reasons.
         let dht = self
             .inner
             .start_dht_lookup(repository_info_hash(index.repository_id()));
 
-        let mut network_state = self.inner.state.lock().await;
+        let mut network_state = self.inner.state.lock().unwrap();
 
         let key = network_state.registry.insert(RegistrationHolder {
             index: index.clone(),
@@ -302,54 +302,33 @@ pub struct Registration {
 }
 
 impl Registration {
-    pub async fn enable_dht(&self) {
-        let mut state = self.inner.state.lock().await;
+    pub fn enable_dht(&self) {
+        let mut state = self.inner.state.lock().unwrap();
         let holder = &mut state.registry[self.key];
         holder.dht = self
             .inner
             .start_dht_lookup(repository_info_hash(holder.index.repository_id()));
     }
 
-    pub async fn disable_dht(&self) {
-        let mut state = self.inner.state.lock().await;
+    pub fn disable_dht(&self) {
+        let mut state = self.inner.state.lock().unwrap();
         state.registry[self.key].dht = None;
     }
 
-    pub async fn is_dht_enabled(&self) -> bool {
-        let state = self.inner.state.lock().await;
+    pub fn is_dht_enabled(&self) -> bool {
+        let state = self.inner.state.lock().unwrap();
         state.registry[self.key].dht.is_some()
-    }
-
-    // Cancel the registration. Same as dropping self, but allows to wait until the deregistration
-    // is complete.
-    pub async fn cancel(self) {
-        deregister(&self.inner, self.key).await
     }
 }
 
 impl Drop for Registration {
     fn drop(&mut self) {
-        let tasks = if let Some(tasks) = self.inner.tasks.upgrade() {
-            tasks
-        } else {
-            return;
-        };
+        let mut state = self.inner.state.lock().unwrap();
 
-        let inner = self.inner.clone();
-        let key = self.key;
-
-        // HACK: Can't run async code inside `drop`, spawning a task instead.
-        tasks
-            .other
-            .spawn(async move { deregister(&inner, key).await });
-    }
-}
-
-async fn deregister(inner: &Inner, key: usize) {
-    let mut state = inner.state.lock().await;
-    if let Some(holder) = state.registry.try_remove(key) {
-        for broker in state.message_brokers.values_mut() {
-            broker.destroy_link(holder.index.repository_id());
+        if let Some(holder) = state.registry.try_remove(self.key) {
+            for broker in state.message_brokers.values_mut() {
+                broker.destroy_link(holder.index.repository_id());
+            }
         }
     }
 }
@@ -368,7 +347,7 @@ struct Tasks {
 struct Inner {
     listener_local_addr: SocketAddr,
     this_runtime_id: RuntimeId,
-    state: Mutex<State>,
+    state: BlockingMutex<State>,
     dht_local_addrs: Option<IpStack<SocketAddr>>,
     dht_discovery: Option<DhtDiscovery>,
     dht_peer_found_tx: mpsc::UnboundedSender<SocketAddr>,
@@ -593,29 +572,29 @@ impl Inner {
 
         let released = permit.released();
 
-        let mut state_guard = self.state.lock().await;
-        let state = &mut *state_guard;
+        {
+            let mut state = self.state.lock().unwrap();
+            let state = &mut *state;
 
-        match state.message_brokers.entry(that_runtime_id) {
-            Entry::Occupied(entry) => entry.get().add_connection(stream, permit),
-            Entry::Vacant(entry) => {
-                log::info!("Connected to replica {:?} {}", that_runtime_id, addr);
+            match state.message_brokers.entry(that_runtime_id) {
+                Entry::Occupied(entry) => entry.get().add_connection(stream, permit),
+                Entry::Vacant(entry) => {
+                    log::info!("Connected to replica {:?} {}", that_runtime_id, addr);
 
-                let mut broker =
-                    MessageBroker::new(self.this_runtime_id, that_runtime_id, stream, permit);
+                    let mut broker =
+                        MessageBroker::new(self.this_runtime_id, that_runtime_id, stream, permit);
 
-                // TODO: for DHT connection we should only link the repository for which we did the
-                // lookup but make sure we correctly handle edge cases, for example, when we have
-                // more than one repository shared with the peer.
-                for (_, holder) in &state.registry {
-                    broker.create_link(holder.index.clone());
+                    // TODO: for DHT connection we should only link the repository for which we did the
+                    // lookup but make sure we correctly handle edge cases, for example, when we have
+                    // more than one repository shared with the peer.
+                    for (_, holder) in &state.registry {
+                        broker.create_link(holder.index.clone());
+                    }
+
+                    entry.insert(broker);
                 }
-
-                entry.insert(broker);
-            }
-        };
-
-        drop(state_guard);
+            };
+        }
 
         released.notified().await;
         log::info!(
@@ -626,7 +605,7 @@ impl Inner {
         );
 
         // Remove the broker if it has no more connections.
-        let mut state = self.state.lock().await;
+        let mut state = self.state.lock().unwrap();
         if let Entry::Occupied(entry) = state.message_brokers.entry(that_runtime_id) {
             if !entry.get().has_connections() {
                 entry.remove();

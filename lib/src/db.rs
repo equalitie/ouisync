@@ -41,6 +41,10 @@ impl Pool {
         let future = DeadlockGuard::try_wrap(self.inner.begin(), self.deadlock_tracker.clone());
         async move { Ok(PoolTransaction(future.await?)) }
     }
+
+    pub async fn close(&self) {
+        self.inner.close().await
+    }
 }
 
 /// Database connection.

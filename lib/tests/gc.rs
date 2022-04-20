@@ -39,8 +39,8 @@ async fn local_delete_remote_file() {
 
     let (network_l, network_r) = common::create_connected_peers().await;
     let (repo_l, repo_r) = common::create_linked_repos(&mut rng).await;
-    let _reg_l = network_l.handle().register(repo_l.index().clone()).await;
-    let _reg_r = network_r.handle().register(repo_r.index().clone()).await;
+    let _reg_l = network_l.handle().register(repo_l.index().clone());
+    let _reg_r = network_r.handle().register(repo_r.index().clone());
 
     repo_r
         .create_file("test.dat")
@@ -67,8 +67,8 @@ async fn remote_delete_remote_file() {
 
     let (network_l, network_r) = common::create_connected_peers().await;
     let (repo_l, repo_r) = common::create_linked_repos(&mut rng).await;
-    let _reg_l = network_l.handle().register(repo_l.index().clone()).await;
-    let _reg_r = network_r.handle().register(repo_r.index().clone()).await;
+    let _reg_l = network_l.handle().register(repo_l.index().clone());
+    let _reg_r = network_r.handle().register(repo_r.index().clone());
 
     repo_r
         .create_file("test.dat")
@@ -120,8 +120,8 @@ async fn local_truncate_remote_file() {
 
     let (network_l, network_r) = common::create_connected_peers().await;
     let (repo_l, repo_r) = common::create_linked_repos(&mut rng).await;
-    let _reg_l = network_l.handle().register(repo_l.index().clone()).await;
-    let _reg_r = network_r.handle().register(repo_r.index().clone()).await;
+    let _reg_l = network_l.handle().register(repo_l.index().clone());
+    let _reg_r = network_r.handle().register(repo_r.index().clone());
 
     let mut file = repo_r.create_file("test.dat").await.unwrap();
     write_to_file(&mut rng, &mut file, 2 * BLOCK_SIZE - BLOB_HEADER_SIZE).await;
@@ -151,8 +151,8 @@ async fn remote_truncate_remote_file() {
 
     let (network_l, network_r) = common::create_connected_peers().await;
     let (repo_l, repo_r) = common::create_linked_repos(&mut rng).await;
-    let _reg_l = network_l.handle().register(repo_l.index().clone()).await;
-    let _reg_r = network_r.handle().register(repo_r.index().clone()).await;
+    let _reg_l = network_l.handle().register(repo_l.index().clone());
+    let _reg_r = network_r.handle().register(repo_r.index().clone());
 
     let mut file = repo_r.create_file("test.dat").await.unwrap();
     write_to_file(&mut rng, &mut file, 2 * BLOCK_SIZE - BLOB_HEADER_SIZE).await;

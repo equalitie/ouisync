@@ -63,7 +63,7 @@ pub unsafe extern "C" fn repository_create(
             )
             .await?;
 
-            let registration = network_handle.register(repository.index().clone()).await;
+            let registration = network_handle.register(repository.index().clone());
 
             let holder = Arc::new(RepositoryHolder {
                 repository,
@@ -102,7 +102,7 @@ pub unsafe extern "C" fn repository_open(
             )
             .await?;
 
-            let registration = network_handle.register(repository.index().clone()).await;
+            let registration = network_handle.register(repository.index().clone());
 
             let holder = Arc::new(RepositoryHolder {
                 repository,
@@ -116,11 +116,15 @@ pub unsafe extern "C" fn repository_open(
 
 /// Closes a repository.
 #[no_mangle]
-pub unsafe extern "C" fn repository_close(handle: SharedHandle<RepositoryHolder>) {
-    // NOTE: The `Drop` impl of `Registration` `spawn`s which means it must be called from within a
-    // runtime context.
-    let _runtime_guard = session::get().runtime().enter();
-    handle.release();
+pub unsafe extern "C" fn repository_close(handle: SharedHandle<RepositoryHolder>, port: Port<()>) {
+    let session = session::get();
+    let sender = session.sender();
+    let holder = handle.release();
+
+    session.runtime().spawn(async move {
+        holder.repository.close().await;
+        sender.send(port, ());
+    });
 }
 
 /// Returns the type of repository entry (file, directory, ...).
@@ -191,48 +195,18 @@ pub unsafe extern "C" fn repository_subscribe(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn repository_is_dht_enabled(
-    handle: SharedHandle<RepositoryHolder>,
-    port: Port<bool>,
-) {
-    let session = session::get();
-    let sender = session.sender();
-    let holder = handle.get();
-
-    session.runtime().spawn(async move {
-        let value = holder.registration.is_dht_enabled().await;
-        sender.send(port, value);
-    });
+pub unsafe extern "C" fn repository_is_dht_enabled(handle: SharedHandle<RepositoryHolder>) -> bool {
+    handle.get().registration.is_dht_enabled()
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn repository_enable_dht(
-    handle: SharedHandle<RepositoryHolder>,
-    port: Port<()>,
-) {
-    let session = session::get();
-    let sender = session.sender();
-    let holder = handle.get();
-
-    session.runtime().spawn(async move {
-        holder.registration.enable_dht().await;
-        sender.send(port, ());
-    });
+pub unsafe extern "C" fn repository_enable_dht(handle: SharedHandle<RepositoryHolder>) {
+    handle.get().registration.enable_dht()
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn repository_disable_dht(
-    handle: SharedHandle<RepositoryHolder>,
-    port: Port<()>,
-) {
-    let session = session::get();
-    let sender = session.sender();
-    let holder = handle.get();
-
-    session.runtime().spawn(async move {
-        holder.registration.disable_dht().await;
-        sender.send(port, ());
-    });
+pub unsafe extern "C" fn repository_disable_dht(handle: SharedHandle<RepositoryHolder>) {
+    handle.get().registration.disable_dht()
 }
 
 #[no_mangle]

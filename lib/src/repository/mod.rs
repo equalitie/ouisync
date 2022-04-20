@@ -450,6 +450,12 @@ impl Repository {
         Ok(JointDirectory::new(local_branch, dirs))
     }
 
+    /// Close all db connections held by this repository. After this function returns, any
+    /// subsequent operation on this repository that requires to access the db returns an error.
+    pub async fn close(&self) {
+        self.shared.index.pool.close().await;
+    }
+
     pub async fn debug_print_root(&self) {
         self.debug_print(DebugPrinter::new()).await
     }
