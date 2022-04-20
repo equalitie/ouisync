@@ -569,6 +569,24 @@ async fn fork_case(
 
 // TODO: test that fork() doesn't create new blocks
 
+#[tokio::test(flavor = "multi_thread")]
+async fn block_ids_test() {
+    let (mut rng, branch) = setup(0).await;
+
+    let blob_id: BlobId = rng.gen();
+    let head_locator = Locator::head(blob_id);
+    let mut blob = Blob::create(branch.clone(), head_locator, Shared::uninit());
+
+    let content: Vec<_> = rng
+        .sample_iter(Standard)
+        .take(BLOCK_SIZE * 3 - HEADER_SIZE)
+        .collect();
+    blob.write(&content).await.unwrap();
+    blob.flush().await.unwrap();
+
+    assert_eq!(block_ids(&branch, blob_id).count().await, 3);
+}
+
 async fn setup(rng_seed: u64) -> (StdRng, Branch) {
     let mut rng = StdRng::seed_from_u64(rng_seed);
     let secrets = WriteSecrets::generate(&mut rng);

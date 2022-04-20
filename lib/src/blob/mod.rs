@@ -6,7 +6,11 @@ mod tests;
 
 pub(crate) use self::inner::{MaybeInitShared, Shared, UninitShared};
 use self::{inner::Unique, open_block::OpenBlock, operations::Operations};
-use crate::{block::BlockId, branch::Branch, db, error::Result, locator::Locator, sync::Mutex};
+use crate::{
+    blob_id::BlobId, block::BlockId, branch::Branch, db, error::Error, error::Result,
+    locator::Locator, sync::Mutex,
+};
+use futures_util::{future, stream, Stream, StreamExt};
 use std::{io::SeekFrom, mem, sync::Arc};
 
 /// Size of the blob header in bytes.
@@ -208,4 +212,29 @@ impl Blob {
             unique: &mut self.unique,
         }
     }
+}
+
+/// Returns the block ids of the given blob in their sequential order.
+pub(crate) fn block_ids(
+    branch: &Branch,
+    blob_id: BlobId,
+) -> impl Stream<Item = Result<BlockId>> + '_ {
+    stream::iter(
+        Locator::head(blob_id)
+            .sequence()
+            .map(|locator| locator.encode(branch.keys().read())),
+    )
+    .then(move |locator| async move {
+        // NOTE: doing acquire in each step as opposed to once at the beginning to avoid holding
+        // the db connection for too long.
+        // TODO: consider batching multiple steps to avoid excessive acquire/release.
+        let mut conn = branch.db_pool().acquire().await?;
+        branch.data().get(&mut conn, &locator).await
+    })
+    .take_while(|result| {
+        future::ready(match result {
+            Err(Error::EntryNotFound) => false,
+            Err(_) | Ok(_) => true,
+        })
+    })
 }
