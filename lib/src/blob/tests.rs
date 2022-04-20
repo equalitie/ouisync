@@ -584,7 +584,15 @@ async fn block_ids_test() {
     blob.write(&content).await.unwrap();
     blob.flush().await.unwrap();
 
-    assert_eq!(block_ids(&branch, blob_id).count().await, 3);
+    let mut conn = branch.db_pool().acquire().await.unwrap();
+    let mut block_ids = BlockIds::new(&branch, blob_id);
+    let mut actual_count = 0;
+
+    while block_ids.next(&mut conn).await.unwrap().is_some() {
+        actual_count += 1;
+    }
+
+    assert_eq!(actual_count, 3);
 }
 
 async fn setup(rng_seed: u64) -> (StdRng, Branch) {

@@ -2,7 +2,7 @@
 
 use super::Shared;
 use crate::{
-    blob,
+    blob::BlockIds,
     blob_id::BlobId,
     block,
     directory::EntryRef,
@@ -11,9 +11,8 @@ use crate::{
     JointDirectory,
 };
 use async_recursion::async_recursion;
-use futures_util::{stream, StreamExt, TryStreamExt};
+use futures_util::{stream, StreamExt};
 use std::sync::Arc;
-use tokio::pin;
 
 pub(super) async fn run(shared: Arc<Shared>) {
     let mut rx = shared.index.subscribe();
@@ -88,12 +87,14 @@ async fn remove_unneeded_blocks(shared: &Shared, entry: EntryRef<'_>) -> Result<
         return Ok(());
     };
 
-    let block_ids = blob::block_ids(entry.branch(), *blob_id);
-    pin!(block_ids);
+    let mut conn = shared.index.pool.acquire().await?;
+    let mut block_ids = BlockIds::new(entry.branch(), *blob_id);
 
-    while let Some(block_id) = block_ids.try_next().await? {
-        let mut conn = shared.index.pool.acquire().await?;
+    while let Some(block_id) = block_ids.next(&mut conn).await? {
         block::remove(&mut conn, &block_id).await?;
+
+        // TODO: consider releasing and re-acquiring the connection after some number of iterations,
+        // to not hold it for too long.
     }
 
     Ok(())
