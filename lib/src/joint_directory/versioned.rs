@@ -53,7 +53,7 @@ impl<E> Container<E> for Discard {
 pub(super) fn partition<I, M>(entries: I, local_branch_id: Option<&PublicKey>) -> (Vec<I::Item>, M)
 where
     I: IntoIterator,
-    I::Item: Versioned + std::fmt::Debug,
+    I::Item: Versioned,
     M: Container<I::Item>,
 {
     let mut max: Vec<I::Item> = Vec::new();
@@ -101,7 +101,7 @@ where
 pub(super) fn keep_maximal<I>(entries: I, local_branch_id: Option<&PublicKey>) -> Vec<I::Item>
 where
     I: IntoIterator,
-    I::Item: Versioned + std::fmt::Debug,
+    I::Item: Versioned,
 {
     let (max, Discard) = partition(entries, local_branch_id);
     max
@@ -110,7 +110,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::iterator::PairCombinations;
+    use crate::iterator::{self, PairCombinations};
     use assert_matches::assert_matches;
     use proptest::{arbitrary::any, collection::vec, sample::Index, strategy::Strategy};
     use std::ops::Range;
@@ -155,12 +155,16 @@ mod tests {
             );
             assert_ne!(a.branch_id, b.branch_id);
         }
+
+        // `max` must preserve original order.
+        assert!(iterator::is_sorted_by_key(&max, |entry| entry.index));
     }
 
     #[derive(Clone, Eq, PartialEq, Debug)]
     struct TestEntry {
         version_vector: VersionVector,
         branch_id: PublicKey,
+        index: usize,
     }
 
     impl Versioned for TestEntry {
@@ -199,6 +203,13 @@ mod tests {
                     true
                 },
             )
+            .prop_map(|mut entries| {
+                for (index, entry) in entries.iter_mut().enumerate() {
+                    entry.index = index;
+                }
+
+                entries
+            })
     }
 
     fn entry_with_public_keys_strategy(
@@ -221,6 +232,7 @@ mod tests {
             TestEntry {
                 version_vector,
                 branch_id,
+                index: 0,
             }
         })
     }
