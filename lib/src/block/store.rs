@@ -100,7 +100,7 @@ pub(crate) async fn write(
 ///
 /// If the block doesn't exists, this is a no-op.
 pub(crate) async fn remove(conn: &mut db::Connection, id: &BlockId) -> Result<()> {
-    sqlx::query("DELETE FROM blocks WHERE id = ? LIMIT 1")
+    sqlx::query("DELETE FROM blocks WHERE id = ?")
         .bind(id)
         .execute(conn)
         .await?;
@@ -174,6 +174,21 @@ mod tests {
 
         write(&mut conn, &id, &content0, &nonce).await.unwrap();
         write(&mut conn, &id, &content0, &nonce).await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn remove_block() {
+        let mut conn = setup().await;
+
+        let content = random_block_content();
+        let id = BlockId::from_content(&content);
+        let nonce = BlockNonce::default();
+
+        write(&mut conn, &id, &content, &nonce).await.unwrap();
+        assert!(exists(&mut conn, &id).await.unwrap());
+
+        remove(&mut conn, &id).await.unwrap();
+        assert!(!exists(&mut conn, &id).await.unwrap());
     }
 
     async fn setup() -> db::Connection {
