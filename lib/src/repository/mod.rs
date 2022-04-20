@@ -450,9 +450,9 @@ impl Repository {
         Ok(JointDirectory::new(local_branch, dirs))
     }
 
-    /// Close this repository. Unlike `drop`, this also ensures all the db connections are closed
-    /// before returning.
-    pub async fn close(self) {
+    /// Close all db connections held by this repository. After this function returns, any
+    /// subsequent operation on this repository that requires to access the db returns an error.
+    pub async fn close(&self) {
         self.shared.index.pool.close().await;
     }
 
