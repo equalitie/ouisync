@@ -7,6 +7,7 @@ use super::{
 use crate::{
     blob::Shared,
     blob_id::BlobId,
+    branch::Branch,
     crypto::sign::PublicKey,
     error::{Error, Result},
     file::File,
@@ -109,6 +110,10 @@ impl<'a> EntryRef<'a> {
         }
     }
 
+    pub(crate) fn branch(&self) -> &Branch {
+        self.inner().branch()
+    }
+
     fn inner(&self) -> &RefInner {
         match self {
             Self::File(r) => &r.inner,
@@ -133,7 +138,7 @@ impl<'a> FileRef<'a> {
         Locator::head(*self.blob_id())
     }
 
-    pub(crate) fn blob_id(&self) -> &BlobId {
+    pub(crate) fn blob_id(&self) -> &'a BlobId {
         &self.entry_data.blob_id
     }
 
@@ -201,6 +206,10 @@ pub struct DirectoryRef<'a> {
 impl<'a> DirectoryRef<'a> {
     pub fn name(&self) -> &'a str {
         self.inner.name
+    }
+
+    pub(crate) fn blob_id(&self) -> &'a BlobId {
+        &self.entry_data.blob_id
     }
 
     pub(crate) fn locator(&self) -> Locator {
@@ -291,6 +300,10 @@ struct RefInner<'a> {
 impl<'a> RefInner<'a> {
     fn parent_context(&self) -> ParentContext {
         ParentContext::new(self.parent_outer.clone(), self.name.into(), *self.author)
+    }
+
+    fn branch(&self) -> &Branch {
+        self.parent_inner.blob.branch()
     }
 
     pub fn branch_id(&self) -> &'a PublicKey {

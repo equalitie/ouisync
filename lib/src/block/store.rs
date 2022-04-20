@@ -96,7 +96,19 @@ pub(crate) async fn write(
     Ok(())
 }
 
-/// Checks whether a block exists in the store.
+/// Removes the block.
+///
+/// If the block doesn't exists, this is a no-op.
+pub(crate) async fn remove(conn: &mut db::Connection, id: &BlockId) -> Result<()> {
+    sqlx::query("DELETE FROM blocks WHERE id = ? LIMIT 1")
+        .bind(id)
+        .execute(conn)
+        .await?;
+
+    Ok(())
+}
+
+/// Checks whether the block exists in the store.
 /// (Currently used only in tests)
 #[cfg(test)]
 pub(crate) async fn exists(conn: &mut db::Connection, id: &BlockId) -> Result<bool> {

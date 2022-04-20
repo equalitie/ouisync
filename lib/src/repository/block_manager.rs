@@ -2,14 +2,18 @@
 
 use super::Shared;
 use crate::{
+    blob,
+    blob_id::BlobId,
+    block,
     directory::EntryRef,
     error::{Error, Result},
     joint_directory::versioned,
     JointDirectory,
 };
 use async_recursion::async_recursion;
-use futures_util::{stream, StreamExt};
+use futures_util::{stream, StreamExt, TryStreamExt};
 use std::sync::Arc;
+use tokio::pin;
 
 pub(super) async fn run(shared: Arc<Shared>) {
     let mut rx = shared.index.subscribe();
@@ -77,7 +81,28 @@ async fn request_missing_blocks(_shared: &Shared, _entry: EntryRef<'_>) -> Resul
     Ok(())
 }
 
-async fn remove_unneeded_blocks(_shared: &Shared, _entry: EntryRef<'_>) -> Result<()> {
-    // TODO
+async fn remove_unneeded_blocks(shared: &Shared, entry: EntryRef<'_>) -> Result<()> {
+    let blob_id = if let Some(blob_id) = blob_id(&entry) {
+        blob_id
+    } else {
+        return Ok(());
+    };
+
+    let block_ids = blob::block_ids(entry.branch(), *blob_id);
+    pin!(block_ids);
+
+    while let Some(block_id) = block_ids.try_next().await? {
+        let mut conn = shared.index.pool.acquire().await?;
+        block::remove(&mut conn, &block_id).await?;
+    }
+
     Ok(())
+}
+
+fn blob_id<'a>(entry: &EntryRef<'a>) -> Option<&'a BlobId> {
+    match entry {
+        EntryRef::File(entry) => Some(entry.blob_id()),
+        EntryRef::Directory(entry) => Some(entry.blob_id()),
+        EntryRef::Tombstone(_) => None,
+    }
 }

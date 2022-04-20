@@ -6,7 +6,7 @@ mod store;
 
 #[cfg(test)]
 pub(crate) use self::store::exists;
-pub(crate) use self::store::{count, init, read, write, BlockNonce};
+pub(crate) use self::store::{count, init, read, remove, write, BlockNonce};
 
 /// Block size in bytes.
 pub const BLOCK_SIZE: usize = 32 * 1024;
