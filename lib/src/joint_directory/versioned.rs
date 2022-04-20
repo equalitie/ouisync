@@ -110,6 +110,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::iterator::PairCombinations;
     use assert_matches::assert_matches;
     use proptest::{arbitrary::any, collection::vec, sample::Index, strategy::Strategy};
     use std::ops::Range;
@@ -121,7 +122,14 @@ mod tests {
     }
 
     fn partition_test_case(entries: Vec<TestEntry>) {
-        let (max, min): (_, Vec<_>) = partition(entries, None);
+        let (max, min): (_, Vec<_>) = partition(entries.iter().cloned(), None);
+
+        // Every input entry must end up either in `max` or `min`.
+        assert_eq!(entries.len(), max.len() + min.len());
+
+        for entry in entries {
+            assert!(max.contains(&entry) || min.contains(&entry));
+        }
 
         // For every entry in `min`, there must be at least one entry in `max` which is
         // happens-after or equal.
@@ -137,24 +145,19 @@ mod tests {
         }
 
         // Any two entries in `max` must be concurrent and have different branch ids.
-        for i in 0..max.len() {
-            for j in 0..i {
-                let a = &max[i];
-                let b = &max[j];
-
-                assert_matches!(
-                    a.version_vector.partial_cmp(&b.version_vector),
-                    None,
-                    "{:?}, {:?} must be concurrent",
-                    a,
-                    b
-                );
-                assert_ne!(a.branch_id, b.branch_id);
-            }
+        for (a, b) in PairCombinations::new(&max) {
+            assert_matches!(
+                a.version_vector.partial_cmp(&b.version_vector),
+                None,
+                "{:?}, {:?} must be concurrent",
+                a,
+                b
+            );
+            assert_ne!(a.branch_id, b.branch_id);
         }
     }
 
-    #[derive(Debug)]
+    #[derive(Clone, Eq, PartialEq, Debug)]
     struct TestEntry {
         version_vector: VersionVector,
         branch_id: PublicKey,
@@ -185,16 +188,11 @@ mod tests {
             .prop_filter(
                 "broken invariant: entries from the same branch can't be concurrent",
                 |entries| {
-                    for i in 0..entries.len() {
-                        for j in 0..i {
-                            if entries[i].branch_id == entries[j].branch_id
-                                && entries[i]
-                                    .version_vector
-                                    .partial_cmp(&entries[j].version_vector)
-                                    == None
-                            {
-                                return false;
-                            }
+                    for (a, b) in PairCombinations::new(entries) {
+                        if a.branch_id == b.branch_id
+                            && a.version_vector.partial_cmp(&b.version_vector) == None
+                        {
+                            return false;
                         }
                     }
 
