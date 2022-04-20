@@ -1,7 +1,13 @@
 use super::*;
 use crate::{
-    access_control::WriteSecrets, block, error::Error, index::BranchData, repository,
-    sign::PublicKey, sync::broadcast, test_utils,
+    access_control::WriteSecrets,
+    block::{self, BLOCK_SIZE},
+    error::Error,
+    index::BranchData,
+    repository,
+    sign::PublicKey,
+    sync::broadcast,
+    test_utils,
 };
 use assert_matches::assert_matches;
 use proptest::collection::vec;
