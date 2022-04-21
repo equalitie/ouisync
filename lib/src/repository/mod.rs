@@ -6,7 +6,10 @@ mod tests;
 
 pub use self::id::RepositoryId;
 
-use self::merger::Merger;
+use self::{
+    block_manager::{BlockManager, BlockManagerHandle},
+    merger::Merger,
+};
 use crate::{
     access_control::{AccessMode, AccessSecrets, MasterSecret},
     block::{self, BLOCK_SIZE},
@@ -41,6 +44,7 @@ use tokio::task;
 pub struct Repository {
     shared: Arc<Shared>,
     _merge_handle: Option<ScopedJoinHandle<()>>,
+    block_manager_handle: BlockManagerHandle,
 }
 
 impl Repository {
@@ -185,12 +189,15 @@ impl Repository {
             scoped_task::spawn(Merger::new(shared.clone(), local_branch).run())
         });
 
-        task::spawn(block_manager::run(shared.clone()));
+        let (block_manager, block_manager_handle) = BlockManager::new(shared.clone());
+        task::spawn(block_manager.run());
+
         task::spawn(report_sync_progress(index));
 
         Ok(Self {
             shared,
             _merge_handle: merge_handle,
+            block_manager_handle,
         })
     }
 
@@ -421,6 +428,16 @@ impl Repository {
     /// all blocks)
     pub async fn sync_progress(&self) -> Result<Progress> {
         self.shared.index.sync_progress().await
+    }
+
+    /// Trigger manual garbage collection and wait for it to complete. Returns whether the
+    /// collection completed successfully.
+    ///
+    /// It's not necessary to call this method as the garbage collection happens automatically in
+    /// the background. It can still be useful if one wants to make sure the collection completed
+    /// and/or to know whether it completed successfully or failed.
+    pub async fn collect_garbage(&self) -> Result<()> {
+        self.block_manager_handle.collect_garbage().await
     }
 
     // Opens the root directory across all branches as JointDirectory.
