@@ -462,7 +462,7 @@ impl Repository {
                 }
                 Err(error) => {
                     log::error!(
-                        "failed to open root directory on a remote branch {:?}: {:?}",
+                        "failed to open root directory in branch {:?}: {:?}",
                         branch.id(),
                         error
                     );

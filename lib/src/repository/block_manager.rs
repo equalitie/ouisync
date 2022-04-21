@@ -64,12 +64,19 @@ impl BlockManager {
     }
 
     async fn process(&self) -> Result<()> {
+        self.remove_outdated_branches().await?;
+
+        let root = self.joint_root().await?;
+        self.traverse(root).await
+    }
+
+    async fn joint_root(&self) -> Result<JointDirectory> {
         let branches = self.shared.branches().await?;
-        let mut roots = Vec::with_capacity(branches.len());
+        let mut versions = Vec::with_capacity(branches.len());
 
         for branch in branches {
             match branch.open_root().await {
-                Ok(dir) => roots.push(dir),
+                Ok(dir) => versions.push(dir),
                 Err(Error::BlockNotFound(_)) => {
                     // TODO: request the missing block
                     continue;
@@ -78,7 +85,7 @@ impl BlockManager {
             }
         }
 
-        self.traverse(JointDirectory::new(None, roots)).await
+        Ok(JointDirectory::new(None, versions))
     }
 
     #[async_recursion]
@@ -131,6 +138,27 @@ impl BlockManager {
 
             // TODO: consider releasing and re-acquiring the connection after some number of iterations,
             // to not hold it for too long.
+        }
+
+        Ok(())
+    }
+
+    async fn remove_outdated_branches(&self) -> Result<()> {
+        let branches = self.shared.branches().await?;
+        let branches: Vec<_> = stream::iter(branches)
+            .then(|branch| async move {
+                let id = *branch.id();
+                let vv = branch.data().root().await.proof.version_vector.clone();
+
+                (id, vv)
+            })
+            .collect()
+            .await;
+
+        let (_, outdated): (_, Vec<_>) = versioned::partition(branches, None);
+
+        for (id, _) in outdated {
+            self.shared.remove_branch(&id).await?;
         }
 
         Ok(())

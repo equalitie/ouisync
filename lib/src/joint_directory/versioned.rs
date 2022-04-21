@@ -12,6 +12,16 @@ pub trait Versioned {
     fn branch_id(&self) -> &PublicKey;
 }
 
+impl Versioned for (PublicKey, VersionVector) {
+    fn version_vector(&self) -> &VersionVector {
+        &self.1
+    }
+
+    fn branch_id(&self) -> &PublicKey {
+        &self.0
+    }
+}
+
 impl Versioned for EntryRef<'_> {
     fn version_vector(&self) -> &VersionVector {
         EntryRef::version_vector(self)
