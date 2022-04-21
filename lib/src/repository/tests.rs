@@ -966,6 +966,44 @@ async fn file_conflict_attempt_to_fork_and_modify_remote() {
     assert_matches!(remote_file.flush().await, Err(Error::EntryExists));
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn remove_branch() {
+    let repo = Repository::create(
+        &db::Store::Temporary,
+        rand::random(),
+        MasterSecret::random(),
+        AccessSecrets::random_write(),
+        false,
+    )
+    .await
+    .unwrap();
+
+    let local_branch = repo.get_or_create_local_branch().await.unwrap();
+
+    let remote_id = PublicKey::random();
+    let remote_branch = repo
+        .create_remote_branch(remote_id)
+        .await
+        .unwrap()
+        .reopen(repo.secrets().keys().unwrap());
+
+    create_file_in(&remote_branch, "foo.txt", b"foo").await;
+    create_file_in(&remote_branch, "bar.txt", b"bar").await;
+
+    let mut file = repo.open_file("foo.txt").await.unwrap();
+    file.fork(&local_branch).await.unwrap();
+    file.parent().flush().await.unwrap();
+    drop(file);
+
+    repo.shared.remove_branch(&remote_id).await.unwrap();
+
+    // The forked file still exists
+    assert_eq!(read_file(&repo, "foo.txt").await, b"foo");
+
+    // The remote-only file is gone
+    assert_matches!(repo.open_file("bar.txt").await, Err(Error::EntryNotFound));
+}
+
 async fn read_file(repo: &Repository, path: impl AsRef<Utf8Path>) -> Vec<u8> {
     repo.open_file(path)
         .await

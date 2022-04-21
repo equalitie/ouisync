@@ -621,6 +621,11 @@ impl Shared {
         .await
     }
 
+    pub async fn remove_branch(&self, id: &PublicKey) -> Result<()> {
+        self.branches.lock().await.remove(id);
+        self.index.remove_branch(id).await
+    }
+
     // Create `Branch` wrapping the given `data`, reusing a previously cached one if it exists,
     // and putting it into the cache if it does not.
     async fn inflate(&self, data: &Arc<BranchData>) -> Result<Branch> {
@@ -658,8 +663,6 @@ async fn generate_writer_id(
 }
 
 async fn report_sync_progress(index: Index) {
-    // TODO: change this to report the progress as MB downloaded / MB total and/or percents
-
     let mut prev_progress = Progress { value: 0, total: 0 };
     let mut event_rx = ThrottleReceiver::new(index.subscribe(), Duration::from_secs(1));
 
