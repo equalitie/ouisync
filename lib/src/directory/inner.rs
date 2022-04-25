@@ -185,12 +185,7 @@ impl Content {
             btree_map::Entry::Occupied(entry) => {
                 let old_data = entry.into_mut();
 
-                // If the existing entry is
-                //     1. "same", or
-                //     2. "happens after", or
-                //     3. "concurrent"
-                // then don't update it. Note that #3 should not happen because of the invariant
-                // that one replica (version author) must not create concurrent entries.
+                // Only allow overwriting entries that are strictly older than the new entry.
                 if new_data
                     .version_vector()
                     .partial_cmp(old_data.version_vector())
@@ -199,17 +194,9 @@ impl Content {
                     return Err(Error::EntryExists);
                 }
 
-                match (&*old_data, &new_data) {
-                    (EntryData::File(_), EntryData::Directory(_))
-                    | (EntryData::Directory(_), EntryData::File(_)) => {
-                        return Err(Error::EntryExists)
-                    }
-                    _ => (),
-                }
-
                 old_blob_ids.extend(old_data.blob_id().copied());
-
                 *old_data = new_data;
+
                 old_data
             }
         };
