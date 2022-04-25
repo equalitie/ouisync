@@ -178,26 +178,12 @@ impl Content {
         new_data: EntryData,
     ) -> Result<Vec<BlobId>> {
         let versions = self.entries.entry(name).or_insert_with(Default::default);
+        let mut old_blob_ids = Vec::new();
 
-        // Find outdated entries
-        // clippy: false positive - the iterator borrows a value that is subsequently mutated, so
-        // the `collect` is needed to work around that.
-        #[allow(clippy::needless_collect)]
-        let old_authors: Vec<_> = versions
-            .iter()
-            // We'll check `author`'s VersionVector below, so no need to do it twice
-            .filter(|(id, _)| *id != &author)
-            .filter(|(_, old_data)| old_data.version_vector() < new_data.version_vector())
-            .map(|(id, _)| *id)
-            .collect();
-
-        let old_blob_id = match versions.entry(author) {
-            btree_map::Entry::Vacant(entry) => {
-                entry.insert(new_data);
-                None
-            }
-            btree_map::Entry::Occupied(mut entry) => {
-                let old_data = entry.get_mut();
+        let new_data = match versions.entry(author) {
+            btree_map::Entry::Vacant(entry) => entry.insert(new_data),
+            btree_map::Entry::Occupied(entry) => {
+                let old_data = entry.into_mut();
 
                 // If the existing entry is
                 //     1. "same", or
@@ -205,8 +191,11 @@ impl Content {
                 //     3. "concurrent"
                 // then don't update it. Note that #3 should not happen because of the invariant
                 // that one replica (version author) must not create concurrent entries.
-                #[allow(clippy::neg_cmp_op_on_partial_ord)]
-                if !(old_data.version_vector() < new_data.version_vector()) {
+                if new_data
+                    .version_vector()
+                    .partial_cmp(old_data.version_vector())
+                    != Some(Ordering::Greater)
+                {
                     return Err(Error::EntryExists);
                 }
 
@@ -218,34 +207,28 @@ impl Content {
                     _ => (),
                 }
 
-                let old_blob_id = match old_data {
-                    EntryData::File(data) => Some(data.blob_id),
-                    EntryData::Directory(data) => Some(data.blob_id),
-                    EntryData::Tombstone(_) => None,
-                };
+                old_blob_ids.extend(old_data.blob_id().copied());
 
                 *old_data = new_data;
-                old_blob_id
+                old_data
             }
         };
 
-        // Remove the outdated entries and collect their blob ids.
-        let old_blobs = old_authors
-            .into_iter()
-            .filter(|old_author| *old_author != author)
-            .filter_map(|old_author| versions.remove(&old_author))
-            .filter_map(|data| match data {
-                EntryData::File(data) => Some(data.blob_id),
-                EntryData::Directory(data) => Some(data.blob_id),
-                EntryData::Tombstone(_) => None,
-            })
-            // Because we filtered out *old_author != author above.
-            .chain(old_blob_id)
-            .collect();
+        let new_vv = new_data.version_vector().clone();
+
+        // Remove outdated versions
+        versions.retain(|_, data| {
+            if data.version_vector() < &new_vv {
+                old_blob_ids.extend(data.blob_id().copied());
+                false
+            } else {
+                true
+            }
+        });
 
         self.dirty = true;
 
-        Ok(old_blobs)
+        Ok(old_blob_ids)
     }
 }
 
@@ -270,10 +253,7 @@ fn can_overwrite(
         return true;
     };
 
-    match lhs_vv.partial_cmp(rhs_vv) {
-        Some(Ordering::Greater) => true,
-        Some(Ordering::Equal | Ordering::Less) | None => false,
-    }
+    lhs_vv.partial_cmp(rhs_vv) == Some(Ordering::Greater)
 }
 
 #[async_recursion]
