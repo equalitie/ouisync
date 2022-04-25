@@ -676,6 +676,10 @@ async fn attempt_to_modify_remote_file() {
 
     let mut file = repo.open_file("test.txt").await.unwrap();
     assert_matches!(file.truncate(0).await, Err(Error::PermissionDenied));
+
+    let mut file = repo.open_file("test.txt").await.unwrap();
+    file.write(b"bar").await.unwrap();
+    assert_matches!(file.flush().await, Err(Error::PermissionDenied));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -781,6 +785,90 @@ async fn version_vector_fork_file() {
         file.parent().parent().await.unwrap().version_vector().await,
         vv![local_id => 3, remote_id => 2]
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn file_conflict_modify_local() {
+    let repo = Repository::create(
+        &db::Store::Temporary,
+        rand::random(),
+        MasterSecret::random(),
+        AccessSecrets::random_write(),
+        false,
+    )
+    .await
+    .unwrap();
+
+    let local_branch = repo.get_or_create_local_branch().await.unwrap();
+    let local_id = *local_branch.id();
+
+    let remote_id = PublicKey::random();
+    let remote_branch = repo
+        .create_remote_branch(remote_id)
+        .await
+        .unwrap()
+        .reopen(repo.secrets().keys().unwrap());
+
+    // Create two concurrent versions of the same file.
+    let local_file = create_file_in(&local_branch, "test.txt", b"local v1").await;
+    assert_eq!(local_file.version_vector().await, vv![local_id => 2]);
+    drop(local_file);
+
+    let remote_file = create_file_in(&remote_branch, "test.txt", b"remote v1").await;
+    assert_eq!(remote_file.version_vector().await, vv![remote_id => 2]);
+    drop(remote_file);
+
+    // Modify the local version.
+    let mut local_file = repo.open_file_version("test.txt", &local_id).await.unwrap();
+    local_file.write(b"local v2").await.unwrap();
+    local_file.flush().await.unwrap();
+    drop(local_file);
+
+    let mut local_file = repo.open_file_version("test.txt", &local_id).await.unwrap();
+    assert_eq!(local_file.read_to_end().await.unwrap(), b"local v2");
+    assert_eq!(local_file.version_vector().await, vv![local_id => 3]);
+
+    let mut remote_file = repo
+        .open_file_version("test.txt", &remote_id)
+        .await
+        .unwrap();
+    assert_eq!(remote_file.read_to_end().await.unwrap(), b"remote v1");
+    assert_eq!(remote_file.version_vector().await, vv![remote_id => 2]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn file_conflict_attempt_to_fork_and_modify_remote() {
+    let repo = Repository::create(
+        &db::Store::Temporary,
+        rand::random(),
+        MasterSecret::random(),
+        AccessSecrets::random_write(),
+        false,
+    )
+    .await
+    .unwrap();
+
+    let local_branch = repo.get_or_create_local_branch().await.unwrap();
+
+    let remote_id = PublicKey::random();
+    let remote_branch = repo
+        .create_remote_branch(remote_id)
+        .await
+        .unwrap()
+        .reopen(repo.secrets().keys().unwrap());
+
+    // Create two concurrent versions of the same file.
+    create_file_in(&local_branch, "test.txt", b"local v1").await;
+    create_file_in(&remote_branch, "test.txt", b"remote v1").await;
+
+    // Attempt to fork the remote version (fork is required to modify it)
+    let mut remote_file = repo
+        .open_file_version("test.txt", &remote_id)
+        .await
+        .unwrap();
+    remote_file.fork(&local_branch).await.unwrap();
+    remote_file.write(b"remote v2").await.unwrap();
+    assert_matches!(remote_file.flush().await, Err(Error::EntryExists));
 }
 
 async fn read_file(repo: &Repository, path: impl AsRef<Utf8Path>) -> Vec<u8> {
