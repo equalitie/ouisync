@@ -13,7 +13,10 @@ use crate::{
 use async_recursion::async_recursion;
 use futures_util::future;
 use serde::{Deserialize, Serialize};
-use std::collections::{btree_map, BTreeMap};
+use std::{
+    cmp::Ordering,
+    collections::{btree_map, BTreeMap},
+};
 
 pub(super) struct Inner {
     pub blob: Blob,
@@ -86,27 +89,12 @@ impl Inner {
             .entries
             .get_mut(name)
             .ok_or(Error::EntryNotFound)?;
-        let authors_version = versions.get(author_id).ok_or(Error::EntryNotFound)?;
 
-        if *author_id != local_id {
-            // There may already exist a local version of the entry. If it does, we may
-            // overwrite it only if the existing version "happened before" this new one being
-            // modified.  Note that if there doesn't alreay exist a local version, that is
-            // essentially the same as if it did exist but it's version_vector was a zero
-            // vector.
-            let local_version = versions.get(&local_id);
-            let local_happened_before = local_version.map_or(true, |local_version| {
-                local_version.version_vector() < authors_version.version_vector()
-            });
-
-            // TODO: use a more descriptive error here.
-            if !local_happened_before {
-                return Err(Error::EntryExists);
-            }
+        if !can_overwrite(versions, author_id, &local_id) {
+            return Err(Error::EntryExists);
         }
 
-        // `unwrap` is OK because we already established the entry exists.
-        let mut version = versions.remove(author_id).unwrap();
+        let mut version = versions.remove(author_id).ok_or(Error::EntryNotFound)?;
 
         if let Some(version_vector_override) = version_vector_override {
             version.version_vector_mut().merge(version_vector_override)
@@ -258,6 +246,33 @@ impl Content {
         self.dirty = true;
 
         Ok(old_blobs)
+    }
+}
+
+fn can_overwrite(
+    versions: &BTreeMap<PublicKey, EntryData>,
+    lhs: &PublicKey,
+    rhs: &PublicKey,
+) -> bool {
+    if lhs == rhs {
+        return true;
+    }
+
+    let lhs_vv = if let Some(vv) = versions.get(lhs).map(|v| v.version_vector()) {
+        vv
+    } else {
+        return true;
+    };
+
+    let rhs_vv = if let Some(vv) = versions.get(rhs).map(|v| v.version_vector()) {
+        vv
+    } else {
+        return true;
+    };
+
+    match lhs_vv.partial_cmp(rhs_vv) {
+        Some(Ordering::Greater) => true,
+        Some(Ordering::Equal | Ordering::Less) | None => false,
     }
 }
 
