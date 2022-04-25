@@ -147,17 +147,6 @@ impl Hashable for VersionVector {
 mod tests {
     use super::*;
 
-    macro_rules! vv {
-        ($($key:expr => $version:expr),*) => {{
-            #[allow(unused_mut)]
-            let mut vv = VersionVector::new();
-            $(
-                vv.insert($key, $version);
-            )*
-            vv
-        }};
-    }
-
     #[test]
     fn eq() {
         let id0 = PublicKey::random();

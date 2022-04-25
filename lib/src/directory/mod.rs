@@ -396,6 +396,11 @@ impl Directory {
     pub fn branch_id(&self) -> &PublicKey {
         &self.branch_id
     }
+
+    #[cfg(test)]
+    pub(crate) async fn version_vector(&self) -> VersionVector {
+        self.read().await.version_vector().await
+    }
 }
 
 impl PartialEq for Directory {

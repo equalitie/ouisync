@@ -399,7 +399,8 @@ impl Repository {
         self.shared.local_branch().await
     }
 
-    /// Returns the local branch if it exists, otherwise return PermissionDenied error.
+    /// Returns the local branch if it exists or create it otherwise. The repository must have
+    /// write access, otherwise returns PermissionDenied error.
     pub async fn get_or_create_local_branch(&self) -> Result<Branch> {
         self.shared.get_or_create_local_branch().await
     }

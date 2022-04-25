@@ -100,10 +100,9 @@ async fn remove_file() {
     match parent_dir.lookup(name) {
         Err(Error::EntryNotFound) => panic!("expected to find a tombstone, but found nothing"),
         Err(error) => panic!("unexpected error {:?}", error),
-        Ok(entries) => {
-            let entries: Vec<_> = entries.collect();
-            assert_eq!(entries.len(), 1);
-            assert_matches!(entries[0], EntryRef::Tombstone(_));
+        Ok(mut entries) => {
+            assert_matches!(entries.next(), Some(EntryRef::Tombstone(_)));
+            assert_matches!(entries.next(), None);
         }
     }
 

@@ -36,6 +36,7 @@ mod store;
 mod sync;
 #[cfg(test)]
 mod test_utils;
+#[cfg_attr(test, macro_use)]
 mod version_vector;
 mod versioned_file_name;
 
