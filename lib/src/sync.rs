@@ -201,3 +201,44 @@ impl<T> RwLock<T> {
 
 pub type RwLockReadGuard<'a, T> = DeadlockGuard<tokio::sync::RwLockReadGuard<'a, T>>;
 pub type RwLockWriteGuard<'a, T> = DeadlockGuard<tokio::sync::RwLockWriteGuard<'a, T>>;
+
+/// Similar to tokio::sync::watch, but has no initial value. Because there is no initial value the
+/// API must be sligthly different. In particular, we don't have the `borrow` function.
+pub mod uninitialized_watch {
+    use tokio::sync::watch as w;
+
+    pub struct Sender<T>(w::Sender<Option<T>>);
+
+    impl<T> Sender<T> {
+        pub fn send(&self, value: T) -> Result<(), w::error::SendError<T>> {
+            // Unwrap OK because we know we just wrapped the value.
+            self.0.send(Some(value)).map_err(|e| w::error::SendError(e.0.unwrap()))
+        }
+    }
+
+    #[derive(Clone)]
+    pub struct Receiver<T>(w::Receiver<Option<T>>);
+
+    impl<T: Clone> Receiver<T> {
+        pub async fn changed(&mut self) -> Result<T, w::error::RecvError> {
+            loop {
+                if let Err(e) = self.0.changed().await {
+                    return Err(e);
+                }
+
+                // Note: the w::Ref struct returned by `borrow` does not implement `Map`, so (I
+                // think) we need to clone the value wrapped in `Option`.
+                match &*self.0.borrow() {
+                    // It's the initial value, we ignore that one.
+                    None => continue,
+                    Some(v) => return Ok(v.clone()),
+                }
+            }
+        }
+    }
+
+    pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
+        let (tx, rx) = w::channel(None);
+        (Sender(tx), Receiver(rx))
+    }
+}
