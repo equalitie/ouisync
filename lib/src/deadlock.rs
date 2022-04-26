@@ -1,5 +1,6 @@
 //! Utilities for deadlock detection
 
+use backtrace::Backtrace;
 use slab::Slab;
 use std::{
     fmt,
@@ -90,10 +91,18 @@ where
     }
 }
 
+struct LockLocation {
+    // NOTE: In release build, the backtrace contains some useful information, but not the actual
+    // line where the `acquire` function was called for, thus we include the `Location` as well as
+    // it's cheap and useful.
+    file_and_line: &'static Location<'static>,
+    backtrace: Backtrace,
+}
+
 /// Tracks all locations when a given lock is currently being acquired.
 #[derive(Clone)]
 pub(crate) struct DeadlockTracker {
-    locations: Arc<BlockingMutex<Slab<&'static Location<'static>>>>,
+    locations: Arc<BlockingMutex<Slab<LockLocation>>>,
 }
 
 impl DeadlockTracker {
@@ -105,7 +114,13 @@ impl DeadlockTracker {
 
     #[track_caller]
     fn acquire(&self) -> Acquire {
-        let key = self.locations.lock().unwrap().insert(Location::caller());
+        let file_and_line = Location::caller();
+        let backtrace = Backtrace::new_unresolved();
+
+        let key = self.locations.lock().unwrap().insert(LockLocation {
+            file_and_line,
+            backtrace,
+        });
 
         Acquire {
             locations: self.locations.clone(),
@@ -116,12 +131,11 @@ impl DeadlockTracker {
 
 impl fmt::Display for DeadlockTracker {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let locations = self.locations.lock().unwrap();
-        let mut comma = false;
+        let mut locations = self.locations.lock().unwrap();
 
-        for (_, location) in &*locations {
-            write!(f, "{}{}", if comma { ", " } else { "" }, location)?;
-            comma = true;
+        for (_, location) in &mut *locations {
+            location.backtrace.resolve();
+            write!(f, "\n{}\n{:?}", location.file_and_line, location.backtrace)?;
         }
 
         Ok(())
@@ -132,12 +146,12 @@ struct DeadlockMessage<'a>(&'a DeadlockTracker);
 
 impl fmt::Display for DeadlockMessage<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "potential deadlock at {}", self.0)
+        write!(f, "potential deadlock at:{}", self.0)
     }
 }
 
 struct Acquire {
-    locations: Arc<BlockingMutex<Slab<&'static Location<'static>>>>,
+    locations: Arc<BlockingMutex<Slab<LockLocation>>>,
     key: usize,
 }
 
