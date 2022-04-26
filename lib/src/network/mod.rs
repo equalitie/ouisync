@@ -32,6 +32,7 @@ use crate::{
     index::Index,
     repository::RepositoryId,
     scoped_task::{self, ScopedJoinHandle, ScopedTaskSet},
+    sync::uninitialized_watch,
 };
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
 use btdht::{InfoHash, INFO_HASH_LEN};
@@ -171,7 +172,7 @@ impl Network {
 
         let (dht_peer_found_tx, mut dht_peer_found_rx) = mpsc::unbounded_channel();
 
-        let (on_protocol_mismatch_tx, on_protocol_mismatch_rx) = watch::channel(false);
+        let (on_protocol_mismatch_tx, on_protocol_mismatch_rx) = uninitialized_watch::channel();
 
         let inner = Arc::new(Inner {
             listener_local_addr,
@@ -286,7 +287,7 @@ impl Handle {
     }
 
     /// Subscribe to network protocol mismatch events.
-    pub fn on_protocol_mismatch(&self) -> watch::Receiver<bool> {
+    pub fn on_protocol_mismatch(&self) -> uninitialized_watch::Receiver<()> {
         self.inner.on_protocol_mismatch_rx.clone()
     }
 
@@ -352,8 +353,8 @@ struct Inner {
     dht_discovery: Option<DhtDiscovery>,
     dht_peer_found_tx: mpsc::UnboundedSender<SocketAddr>,
     connection_deduplicator: ConnectionDeduplicator,
-    on_protocol_mismatch_tx: watch::Sender<bool>,
-    on_protocol_mismatch_rx: watch::Receiver<bool>,
+    on_protocol_mismatch_tx: uninitialized_watch::Sender<()>,
+    on_protocol_mismatch_rx: uninitialized_watch::Receiver<()>,
     // Note that unwrapping the upgraded weak pointer should be fine because if the underlying Arc
     // was Dropped, we would not be asking for the upgrade in the first place.
     tasks: Weak<Tasks>,
@@ -553,7 +554,7 @@ impl Inner {
                 Ok(writer_id) => writer_id,
                 Err(error @ HandshakeError::ProtocolVersionMismatch) => {
                     log::error!("Failed to perform handshake with {}: {}", addr, error);
-                    self.on_protocol_mismatch_tx.send(true).unwrap_or(());
+                    self.on_protocol_mismatch_tx.send(()).unwrap_or(());
                     return;
                 }
                 Err(HandshakeError::Fatal(error)) => {

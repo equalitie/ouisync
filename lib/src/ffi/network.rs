@@ -25,10 +25,7 @@ pub unsafe extern "C" fn network_subscribe(port: Port<u8>) -> UniqueHandle<JoinH
                 e = on_protocol_mismatch.changed() => {
                     match e {
                         Ok(()) => {
-                            // If it's false, than that's the initial state and there is nothing to report.
-                            if *on_protocol_mismatch.borrow() {
-                                sender.send(port, NETWORK_EVENT_PROTOCOL_VERSION_MISMATCH);
-                            }
+                            sender.send(port, NETWORK_EVENT_PROTOCOL_VERSION_MISMATCH);
                         },
                         Err(_) => {
                             return;
