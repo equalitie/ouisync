@@ -316,6 +316,10 @@ impl Repository {
                 let src_author = *entry.author();
 
                 let mut file = entry.open().await?;
+
+                // Prevent deadlocks
+                drop(src_joint_dir_r);
+
                 file.fork(&local_branch).await?;
 
                 (file.parent(), Cow::Owned(src_name), src_author)
@@ -327,6 +331,9 @@ impl Repository {
                     .merge()
                     .await?;
 
+                // Prevent deadlocks
+                drop(src_joint_dir_r);
+
                 let src_dir = dir_to_move
                     .parent()
                     .await
@@ -336,6 +343,8 @@ impl Repository {
             }
         };
 
+        drop(src_joint_dir);
+
         // Get the entry here before we release the lock to the directory. This way the entry shall
         // contain version vector that we want to delete and if someone updates the entry between
         // now and when the entry is actually to be removed, the concurrent updates shall remain.
@@ -344,9 +353,6 @@ impl Repository {
             .await
             .lookup_version(&src_name, &src_author)?
             .clone_data();
-
-        drop(src_joint_dir_r);
-        drop(src_joint_dir);
 
         let dst_joint_dir = self.open_directory(&dst_dir_path).await?;
         let dst_joint_reader = dst_joint_dir.read().await;
