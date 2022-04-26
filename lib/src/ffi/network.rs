@@ -35,10 +35,7 @@ pub unsafe extern "C" fn network_subscribe(port: Port<u8>) -> UniqueHandle<JoinH
                 e = on_peer_set_change.changed() => {
                     match e {
                         Ok(()) => {
-                            // If it's false, than that's the initial state and there is nothing to report.
-                            if *on_peer_set_change.borrow() {
-                                sender.send(port, NETWORK_EVENT_PEER_SET_CHANGE);
-                            }
+                            sender.send(port, NETWORK_EVENT_PEER_SET_CHANGE);
                         },
                         Err(_) => {
                             return;

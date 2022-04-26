@@ -212,7 +212,9 @@ pub mod uninitialized_watch {
     impl<T> Sender<T> {
         pub fn send(&self, value: T) -> Result<(), w::error::SendError<T>> {
             // Unwrap OK because we know we just wrapped the value.
-            self.0.send(Some(value)).map_err(|e| w::error::SendError(e.0.unwrap()))
+            self.0
+                .send(Some(value))
+                .map_err(|e| w::error::SendError(e.0.unwrap()))
         }
     }
 

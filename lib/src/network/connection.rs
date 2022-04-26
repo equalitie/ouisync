@@ -8,8 +8,8 @@ use std::{
     },
 };
 
-// NOTE: Watch has an advantage over Notify in that it's better at broadcasting to multiple
-// consumers. This particular line is problematic in Notify documentation:
+// NOTE: Watch (or uninitialized_watch) has an advantage over Notify in that it's better at
+// broadcasting to multiple consumers. This particular line is problematic in Notify documentation:
 //
 //   https://docs.rs/tokio/latest/tokio/sync/struct.Notify.html#method.notify_waiters
 //
@@ -18,7 +18,8 @@ use std::{
 // The issue is described in more detail here:
 //
 //   https://github.com/tokio-rs/tokio/issues/3757
-use tokio::sync::{watch, Notify};
+use crate::sync::uninitialized_watch;
+use tokio::sync::Notify;
 
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Serialize)]
 pub enum PeerState {
@@ -32,14 +33,14 @@ pub enum PeerState {
 pub(super) struct ConnectionDeduplicator {
     next_id: AtomicU64,
     connections: Arc<SyncMutex<HashMap<ConnectionKey, Peer>>>,
-    on_change_tx: Arc<watch::Sender<bool>>,
+    on_change_tx: Arc<uninitialized_watch::Sender<()>>,
     // We need to keep this to prevent the Sender from closing.
-    on_change_rx: watch::Receiver<bool>,
+    on_change_rx: uninitialized_watch::Receiver<()>,
 }
 
 impl ConnectionDeduplicator {
     pub fn new() -> Self {
-        let (tx, rx) = watch::channel(false);
+        let (tx, rx) = uninitialized_watch::channel();
 
         Self {
             next_id: AtomicU64::new(0),
@@ -61,7 +62,7 @@ impl ConnectionDeduplicator {
                 id,
                 state: PeerState::Known,
             });
-            self.on_change_tx.send(true).unwrap_or(());
+            self.on_change_tx.send(()).unwrap_or(());
             id
         } else {
             log::debug!(
@@ -97,7 +98,7 @@ impl ConnectionDeduplicator {
         infos
     }
 
-    pub fn on_change(&self) -> watch::Receiver<bool> {
+    pub fn on_change(&self) -> uninitialized_watch::Receiver<()> {
         self.on_change_rx.clone()
     }
 }
@@ -138,7 +139,7 @@ pub(super) struct ConnectionPermit {
     key: ConnectionKey,
     id: u64,
     on_release: Arc<Notify>,
-    on_deduplicator_change: Arc<watch::Sender<bool>>,
+    on_deduplicator_change: Arc<uninitialized_watch::Sender<()>>,
 }
 
 impl ConnectionPermit {
@@ -180,7 +181,7 @@ impl ConnectionPermit {
 
         if peer.state != new_state {
             peer.state = new_state;
-            self.on_deduplicator_change.send(true).unwrap_or(());
+            self.on_deduplicator_change.send(()).unwrap_or(());
         }
     }
 
@@ -206,7 +207,7 @@ impl ConnectionPermit {
             },
             id: 0,
             on_release: Arc::new(Notify::new()),
-            on_deduplicator_change: Arc::new(watch::channel(false).0),
+            on_deduplicator_change: Arc::new(uninitialized_watch::channel().0),
         }
     }
 }
@@ -220,7 +221,7 @@ impl Drop for ConnectionPermit {
         }
 
         self.on_release.notify_one();
-        self.on_deduplicator_change.send(true).unwrap_or(());
+        self.on_deduplicator_change.send(()).unwrap_or(());
     }
 }
 

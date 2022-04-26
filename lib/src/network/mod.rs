@@ -50,7 +50,7 @@ use std::{
 use thiserror::Error;
 use tokio::{
     net::{TcpListener, TcpStream},
-    sync::{mpsc, watch},
+    sync::mpsc,
     task, time,
 };
 
@@ -292,7 +292,7 @@ impl Handle {
     }
 
     /// Subscribe change in connected peers events.
-    pub fn on_peer_set_change(&self) -> watch::Receiver<bool> {
+    pub fn on_peer_set_change(&self) -> uninitialized_watch::Receiver<()> {
         self.inner.connection_deduplicator.on_change()
     }
 }
