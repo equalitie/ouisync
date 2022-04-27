@@ -34,14 +34,14 @@ impl ParentContext {
     pub async fn modify_entry(
         &mut self,
         tx: db::Transaction<'_>,
-        version_vector_override: Option<&VersionVector>,
+        increment: &VersionVector,
     ) -> Result<()> {
         inner::modify_entry(
             tx,
             self.directory.inner.write().await,
             &self.entry_name,
             &mut self.entry_author,
-            version_vector_override,
+            increment,
         )
         .await
     }

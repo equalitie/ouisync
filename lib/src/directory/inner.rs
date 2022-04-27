@@ -125,7 +125,7 @@ impl Inner {
         &mut self,
         name: &str,
         author_id: &mut PublicKey,
-        version_vector_override: Option<&VersionVector>,
+        increment: &VersionVector,
     ) -> Result<()> {
         let local_id = *self.branch().id();
         let versions = self.entries.get_mut(name).ok_or(Error::EntryNotFound)?;
@@ -135,13 +135,7 @@ impl Inner {
         }
 
         let mut version = versions.remove(author_id).ok_or(Error::EntryNotFound)?;
-
-        if let Some(version_vector_override) = version_vector_override {
-            version.version_vector_mut().merge(version_vector_override)
-        } else {
-            version.version_vector_mut().increment(local_id);
-        }
-
+        *version.version_vector_mut() += increment;
         versions.insert(local_id, version);
 
         *author_id = local_id;
@@ -154,10 +148,10 @@ impl Inner {
     pub async fn modify_self_entry(
         &mut self,
         tx: db::Transaction<'_>,
-        version_vector_override: Option<&VersionVector>,
+        increment: &VersionVector,
     ) -> Result<()> {
         if let Some(ctx) = self.parent.as_mut() {
-            ctx.modify_entry(tx, version_vector_override).await
+            ctx.modify_entry(tx, increment).await
         } else {
             let write_keys = self
                 .blob
@@ -169,7 +163,7 @@ impl Inner {
             self.blob
                 .branch()
                 .data()
-                .update_root_version_vector(tx, version_vector_override, write_keys)
+                .update_root_version_vector(tx, increment, write_keys)
                 .await
         }
     }
@@ -213,14 +207,12 @@ pub(super) async fn modify_entry<'a>(
     inner: RwLockWriteGuard<'a, Inner>,
     name: &'a str,
     author_id: &'a mut PublicKey,
-    version_vector_override: Option<&'a VersionVector>,
+    increment: &'a VersionVector,
 ) -> Result<()> {
     let mut op = ModifyEntry::new(inner, name, author_id);
-    op.apply(version_vector_override)?;
+    op.apply(increment)?;
     op.inner.flush(&mut tx).await?;
-    op.inner
-        .modify_self_entry(tx, version_vector_override)
-        .await?;
+    op.inner.modify_self_entry(tx, increment).await?;
     op.commit();
 
     Ok(())
@@ -259,9 +251,9 @@ impl<'a> ModifyEntry<'a> {
     }
 
     // Apply the operation. The operation can still be undone after this by dropping `self`.
-    fn apply(&mut self, version_vector_override: Option<&VersionVector>) -> Result<()> {
+    fn apply(&mut self, increment: &VersionVector) -> Result<()> {
         self.inner
-            .modify_entry(self.name, self.author_id, version_vector_override)
+            .modify_entry(self.name, self.author_id, increment)
     }
 
     // Commit the operation. After this is called the operation cannot be undone.

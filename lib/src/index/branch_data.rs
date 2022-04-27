@@ -68,18 +68,13 @@ impl BranchData {
     pub async fn update_root_version_vector(
         &self,
         tx: db::Transaction<'_>,
-        version_vector_override: Option<&VersionVector>,
+        increment: &VersionVector,
         write_keys: &Keypair,
     ) -> Result<()> {
         let mut root_node = self.root_node.write().await;
 
         let mut new_version_vector = root_node.proof.version_vector.clone();
-
-        if let Some(version_vector_override) = version_vector_override {
-            new_version_vector.merge(version_vector_override);
-        } else {
-            new_version_vector.increment(root_node.proof.writer_id);
-        }
+        new_version_vector += increment;
 
         let new_proof = Proof::new(
             root_node.proof.writer_id,
