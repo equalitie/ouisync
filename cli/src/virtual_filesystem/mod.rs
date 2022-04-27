@@ -611,7 +611,7 @@ impl Inner {
         let path = self.inodes.get(parent).calculate_path().join(name);
         let dir = self.repository.create_directory(path).await?;
 
-        dir.flush(None).await?;
+        dir.flush().await?;
 
         let inode = self
             .inodes

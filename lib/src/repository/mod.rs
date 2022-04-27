@@ -385,10 +385,10 @@ impl Repository {
             )
             .await?;
 
-        src_dir.flush(None).await?;
+        src_dir.flush().await?;
 
         if src_dir != dst_dir {
-            dst_dir.flush(None).await?;
+            dst_dir.flush().await?;
         }
 
         Ok(())

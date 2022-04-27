@@ -73,14 +73,8 @@ impl Directory {
     /// Flushes this directory ensuring that any pending changes are written to the store and the
     /// version vectors of this and the ancestor directories are properly updated.
     /// Also flushes all ancestor directories.
-    ///
-    /// The way the version vector is updated depends on the `version_vector_override` parameter.
-    /// When it is `None`, the local counter is incremented by one. When it is `Some`, the version
-    /// vector is merged with `version_vector_override`. This is useful to support merging
-    /// concurrent versions of a directory where the resulting version vector should be the merge
-    /// of the version vectors of the concurrent versions.
-    pub async fn flush(&self, version_vector_override: Option<&VersionVector>) -> Result<()> {
-        self.write().await.flush(version_vector_override).await
+    pub async fn flush(&self) -> Result<()> {
+        self.write().await.flush().await
     }
 
     /// Creates a new file inside this directory.
@@ -452,17 +446,16 @@ impl Writer<'_> {
         lookup_version(&*self.inner, self.outer, name, author)
     }
 
-    pub async fn flush(&mut self, version_vector_override: Option<&VersionVector>) -> Result<()> {
-        if !self.inner.dirty && version_vector_override.is_none() {
+    pub async fn flush(&mut self) -> Result<()> {
+        // TODO: vv increment
+        if !self.inner.dirty {
             return Ok(());
         }
 
         let mut conn = self.inner.blob.db_pool().acquire().await?;
         let mut tx = conn.begin().await?;
         self.inner.flush(&mut tx).await?;
-        self.inner
-            .modify_self_entry(tx, version_vector_override)
-            .await?;
+        self.inner.modify_self_entry(tx, None).await?;
 
         Ok(())
     }

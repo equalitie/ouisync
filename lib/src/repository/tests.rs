@@ -180,7 +180,7 @@ async fn recreate_previously_deleted_directory() {
     repo.create_directory("test")
         .await
         .unwrap()
-        .flush(None)
+        .flush()
         .await
         .unwrap();
 
@@ -195,7 +195,7 @@ async fn recreate_previously_deleted_directory() {
     repo.create_directory("test")
         .await
         .unwrap()
-        .flush(None)
+        .flush()
         .await
         .unwrap();
 
@@ -228,7 +228,7 @@ async fn concurrent_read_and_create_dir() {
         let repo = repo.clone();
         async move {
             let dir = repo.create_directory(path).await.unwrap();
-            dir.flush(None).await.unwrap();
+            dir.flush().await.unwrap();
         }
     });
 
