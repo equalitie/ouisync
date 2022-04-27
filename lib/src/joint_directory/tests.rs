@@ -1001,7 +1001,6 @@ async fn create_dangling_entry(parent: &Directory, entry_type: NewEntryType, nam
             name.into(),
             branch_id,
             EntryData::new(entry_type, blob_id, VersionVector::first(branch_id)),
-            None,
         )
         .await
         .unwrap();

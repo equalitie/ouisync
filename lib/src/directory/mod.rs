@@ -158,7 +158,7 @@ impl Directory {
         dst_dir_writer
             .as_mut()
             .unwrap_or(&mut src_dir_writer)
-            .insert_entry(dst_name.into(), dst_author, dst_entry, None)
+            .insert_entry(dst_name.into(), dst_author, dst_entry)
             .await
     }
 
@@ -568,9 +568,8 @@ impl Writer<'_> {
         name: String,
         author: PublicKey,
         entry: EntryData,
-        keep: Option<BlobId>,
     ) -> Result<()> {
-        self.inner.insert_entry(name, author, entry, keep).await
+        self.inner.insert_entry(name, author, entry, None).await
     }
 
     pub(crate) fn branch(&self) -> &Branch {
