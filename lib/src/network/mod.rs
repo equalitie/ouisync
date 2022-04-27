@@ -24,7 +24,7 @@ use self::{
     ip_stack::{IpStack, Protocol},
     local_discovery::LocalDiscovery,
     message_broker::MessageBroker,
-    protocol::{RuntimeId, Version, VERSION},
+    protocol::{MAGIC, RuntimeId, Version, VERSION},
 };
 use crate::{
     config::{ConfigKey, ConfigStore},
@@ -49,6 +49,7 @@ use std::{
 };
 use thiserror::Error;
 use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
     sync::mpsc,
     task, time,
@@ -579,6 +580,10 @@ impl Inner {
                     self.on_protocol_mismatch(their_version);
                     return;
                 }
+                Err(ref error @ HandshakeError::BadMagic) => {
+                    log::error!("Failed to perform handshake with {}: {}", addr, error);
+                    return;
+                }
                 Err(HandshakeError::Fatal(error)) => {
                     log::error!("Failed to perform handshake with {}: {}", addr, error);
                     return;
@@ -652,8 +657,18 @@ async fn perform_handshake(
     this_version: Version,
     this_runtime_id: RuntimeId,
 ) -> Result<RuntimeId, HandshakeError> {
+    stream.write_all(MAGIC).await?;
+
     this_version.write_into(stream).await?;
     this_runtime_id.write_into(stream).await?;
+
+    let mut that_magic = [0; MAGIC.len()];
+
+    stream.read_exact(&mut that_magic).await?;
+
+    if MAGIC != &that_magic {
+        return Err(HandshakeError::BadMagic);
+    }
 
     let that_version = Version::read_from(stream).await?;
 
@@ -668,6 +683,8 @@ async fn perform_handshake(
 enum HandshakeError {
     #[error("protocol version mismatch")]
     ProtocolVersionMismatch(Version),
+    #[error("bad magic")]
+    BadMagic,
     #[error("fatal error")]
     Fatal(#[from] io::Error),
 }

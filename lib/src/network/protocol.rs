@@ -1,6 +1,9 @@
 use std::io;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
+// First string in a handshake, helps with weeding out connections with completely different
+// protocols on the other end.
+pub(super) const MAGIC: &[u8; 7] = b"OUISYNC";
 pub(super) const VERSION: Version = Version(0);
 
 define_byte_array_wrapper! {
