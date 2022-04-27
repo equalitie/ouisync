@@ -6,7 +6,12 @@ use sqlx::{
     sqlite::{SqliteArgumentValue, SqliteTypeInfo, SqliteValueRef},
     Decode, Encode, Sqlite, Type,
 };
-use std::{cmp::Ordering, collections::BTreeMap, fmt, ops::AddAssign};
+use std::{
+    cmp::Ordering,
+    collections::BTreeMap,
+    fmt,
+    ops::{AddAssign, Sub},
+};
 
 /// [Version vector](https://en.wikipedia.org/wiki/Version_vector).
 ///
@@ -71,6 +76,10 @@ impl VersionVector {
             self.insert(*writer_id, *version)
         }
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.values().all(|version| *version == 0)
+    }
 }
 
 // Less clutter in the debug output this way (as opposed to deriving).
@@ -121,6 +130,20 @@ impl AddAssign<&'_ Self> for VersionVector {
         for (writer_id, version) in &rhs.0 {
             self.increment_by(*writer_id, *version);
         }
+    }
+}
+
+impl Sub for VersionVector {
+    type Output = Self;
+
+    fn sub(mut self, rhs: Self) -> Self::Output {
+        for (writer_id, rhs_version) in &rhs.0 {
+            if let Some(lhs_version) = self.0.get_mut(writer_id) {
+                *lhs_version = lhs_version.saturating_sub(*rhs_version);
+            }
+        }
+
+        self
     }
 }
 
@@ -343,5 +366,24 @@ mod tests {
 
         vv += &vv![id1 => 1];
         assert_eq!(vv, vv![id0 => 2, id1 => 1]);
+    }
+
+    #[test]
+    fn sub() {
+        let id0 = PublicKey::random();
+        let id1 = PublicKey::random();
+
+        assert_eq!(vv![id0 => 2, id1 => 2] - vv![], vv![id0 => 2, id1 => 2]);
+        assert_eq!(
+            vv![id0 => 2, id1 => 2] - vv![id0 => 1],
+            vv![id0 => 1, id1 => 2]
+        );
+        assert_eq!(
+            vv![id0 => 1, id1 => 2] - vv![id0 => 1, id1 => 1],
+            vv![id1 => 1]
+        );
+        assert_eq!(vv![id1 => 1] - vv![id0 => 1], vv![id1 => 1]);
+        assert_eq!(vv![id1 => 1] - vv![id1 => 2], vv![]);
+        assert_eq!(vv![] - vv![id0 => 1], vv![]);
     }
 }

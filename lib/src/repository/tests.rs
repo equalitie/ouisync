@@ -696,6 +696,7 @@ async fn version_vector_create_file() {
     let local_branch = repo.get_or_create_local_branch().await.unwrap();
     let local_id = *local_branch.id();
 
+    // Initially the vvs are all empty
     let mut file = repo.create_file("parent/test.txt").await.unwrap();
     assert_eq!(file.version_vector().await, vv![]);
     assert_eq!(file.parent().version_vector().await, vv![]);
@@ -706,21 +707,60 @@ async fn version_vector_create_file() {
 
     file.flush().await.unwrap();
     assert_eq!(file.version_vector().await, vv![local_id => 1]);
-    assert_eq!(file.parent().version_vector().await, vv![local_id => 1]);
+    assert_eq!(file.parent().version_vector().await, vv![local_id => 2]);
     // The root version vector gets increment also for every created block.
     assert_eq!(
         file.parent().parent().await.unwrap().version_vector().await,
-        vv![local_id => 4]
+        vv![local_id => 6]
     );
 
     file.write(b"blah").await.unwrap();
     file.flush().await.unwrap();
     assert_eq!(file.version_vector().await, vv![local_id => 2]);
-    assert_eq!(file.parent().version_vector().await, vv![local_id => 2]);
+    assert_eq!(file.parent().version_vector().await, vv![local_id => 3]);
     assert_eq!(
         file.parent().parent().await.unwrap().version_vector().await,
-        vv![local_id => 8]
+        vv![local_id => 10]
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn version_vector_deep_hierarchy() {
+    let repo = Repository::create(
+        &db::Store::Temporary,
+        rand::random(),
+        MasterSecret::random(),
+        AccessSecrets::random_write(),
+        false,
+    )
+    .await
+    .unwrap();
+    let local_branch = repo.get_or_create_local_branch().await.unwrap();
+    let local_id = *local_branch.id();
+
+    let depth = 10;
+    let mut dirs = Vec::new();
+    dirs.push(local_branch.open_or_create_root().await.unwrap());
+
+    for i in 0..depth {
+        let dir = dirs
+            .last()
+            .unwrap()
+            .create_directory(format!("dir-{}", i))
+            .await
+            .unwrap();
+        dirs.push(dir);
+    }
+
+    dirs.last().unwrap().flush().await.unwrap();
+
+    // Each directory's local version is one less than its parent.
+    for (index, dir) in dirs.iter().skip(1).enumerate() {
+        assert_eq!(
+            dir.version_vector().await,
+            vv![local_id => (depth - index) as u64]
+        );
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -773,18 +813,39 @@ async fn version_vector_fork_file() {
         .await
         .unwrap()
         .reopen(repo.secrets().keys().unwrap());
-    let mut file = create_file_in(&remote_branch, "parent/test.txt", &[]).await;
+    let mut file = create_file_in(&remote_branch, "test.txt", &[]).await;
 
     file.fork(&local_branch).await.unwrap();
-    assert_eq!(file.version_vector().await, vv![remote_id => 2]);
+    assert_eq!(file.version_vector().await, vv![remote_id => 1]);
+    assert_eq!(file.parent().version_vector().await, vv![local_id => 1]);
+
+    file.flush().await.unwrap();
+    assert_eq!(file.version_vector().await, vv![remote_id => 1]);
     assert_eq!(
         file.parent().version_vector().await,
-        vv![local_id => 1, remote_id => 2]
+        vv![local_id => 1, remote_id => 1]
     );
-    assert_eq!(
-        file.parent().parent().await.unwrap().version_vector().await,
-        vv![local_id => 3, remote_id => 2]
-    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn version_vector_empty_directory() {
+    let repo = Repository::create(
+        &db::Store::Temporary,
+        rand::random(),
+        MasterSecret::random(),
+        AccessSecrets::random_write(),
+        false,
+    )
+    .await
+    .unwrap();
+
+    let local_id = *repo.get_or_create_local_branch().await.unwrap().id();
+
+    let dir = repo.create_directory("stuff").await.unwrap();
+    assert_eq!(dir.version_vector().await, vv![]);
+
+    dir.flush().await.unwrap();
+    assert_eq!(dir.version_vector().await, vv![local_id => 1]);
 }
 
 #[tokio::test(flavor = "multi_thread")]

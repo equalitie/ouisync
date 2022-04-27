@@ -222,7 +222,7 @@ impl Directory {
             inner: Arc::new(RwLock::new(Inner {
                 blob,
                 entries,
-                dirty: false,
+                version_vector_increment: VersionVector::new(),
                 parent,
                 open_directories: SubdirectoryCache::new(),
             })),
@@ -238,7 +238,7 @@ impl Directory {
             inner: Arc::new(RwLock::new(Inner {
                 blob,
                 entries: BTreeMap::new(),
-                dirty: true,
+                version_vector_increment: VersionVector::first(branch_id),
                 parent,
                 open_directories: SubdirectoryCache::new(),
             })),
@@ -447,17 +447,14 @@ impl Writer<'_> {
     }
 
     pub async fn flush(&mut self) -> Result<()> {
-        // TODO: vv increment
-        if !self.inner.dirty {
+        if self.inner.version_vector_increment.is_empty() {
             return Ok(());
         }
-
-        let increment = VersionVector::first(*self.branch().id());
 
         let mut conn = self.inner.blob.db_pool().acquire().await?;
         let mut tx = conn.begin().await?;
         self.inner.flush(&mut tx).await?;
-        self.inner.modify_self_entry(tx, &increment).await?;
+        self.inner.modify_self_entry(tx).await?;
 
         Ok(())
     }

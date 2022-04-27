@@ -14,6 +14,7 @@ use async_recursion::async_recursion;
 use std::{
     cmp::Ordering,
     collections::{btree_map, BTreeMap},
+    mem,
     sync::Weak,
 };
 
@@ -21,8 +22,9 @@ pub(super) struct Inner {
     pub blob: Blob,
     // map of entry name to map of author to entry data
     pub entries: BTreeMap<String, BTreeMap<PublicKey, EntryData>>,
-    // have `entries` been modified since the last `flush`?
-    pub dirty: bool,
+    // If this is an empty version vector it means this directory hasn't been modified. Otherwise
+    // the version vector of this directory will be incremented by this on the next `flush`.
+    pub version_vector_increment: VersionVector,
     pub parent: Option<ParentContext>,
     // Cache of open subdirectories. Used to make sure that multiple instances of the same directory
     // all share the same internal state.
@@ -31,18 +33,12 @@ pub(super) struct Inner {
 
 impl Inner {
     pub async fn flush(&mut self, tx: &mut db::Transaction<'_>) -> Result<()> {
-        if !self.dirty {
-            return Ok(());
-        }
-
         let buffer =
             bincode::serialize(&self.entries).expect("failed to serialize directory content");
 
         self.blob.truncate_in_transaction(tx, 0).await?;
         self.blob.write_in_transaction(tx, &buffer).await?;
         self.blob.flush_in_transaction(tx).await?;
-
-        self.dirty = false;
 
         Ok(())
     }
@@ -59,8 +55,11 @@ impl Inner {
         let versions = self.entries.entry(name).or_insert_with(Default::default);
         let mut old_blob_ids = Vec::new();
 
-        let new_data = match versions.entry(author) {
-            btree_map::Entry::Vacant(entry) => entry.insert(new_data),
+        let (old_vv, new_vv) = match versions.entry(author) {
+            btree_map::Entry::Vacant(entry) => (
+                VersionVector::new(),
+                entry.insert(new_data).version_vector().clone(),
+            ),
             btree_map::Entry::Occupied(entry) => {
                 let old_data = entry.into_mut();
 
@@ -80,14 +79,17 @@ impl Inner {
                 }
 
                 old_blob_ids.extend(old_data.blob_id().copied());
-                *old_data = new_data;
 
-                old_data
+                let new_vv = new_data.version_vector().clone();
+
+                let old_data = mem::replace(old_data, new_data);
+                let old_vv = old_data.into_version_vector();
+
+                (old_vv, new_vv)
             }
         };
 
         // Remove outdated versions
-        let new_vv = new_data.version_vector().clone();
         versions.retain(|_, data| {
             if data.version_vector() < &new_vv {
                 old_blob_ids.extend(data.blob_id().copied());
@@ -97,7 +99,7 @@ impl Inner {
             }
         });
 
-        self.dirty = true;
+        self.version_vector_increment += &(new_vv - old_vv);
 
         // Remove blobs of the outdated versions.
         // TODO: This should succeed/fail atomically with the above.
@@ -139,19 +141,17 @@ impl Inner {
         versions.insert(local_id, version);
 
         *author_id = local_id;
-        self.dirty = true;
+        self.version_vector_increment += increment;
 
         Ok(())
     }
 
     // Modify the entry of this directory in its parent.
-    pub async fn modify_self_entry(
-        &mut self,
-        tx: db::Transaction<'_>,
-        increment: &VersionVector,
-    ) -> Result<()> {
+    pub async fn modify_self_entry(&mut self, tx: db::Transaction<'_>) -> Result<()> {
+        let increment = mem::take(&mut self.version_vector_increment);
+
         if let Some(ctx) = self.parent.as_mut() {
-            ctx.modify_entry(tx, increment).await
+            ctx.modify_entry(tx, &increment).await
         } else {
             let write_keys = self
                 .blob
@@ -163,7 +163,7 @@ impl Inner {
             self.blob
                 .branch()
                 .data()
-                .update_root_version_vector(tx, increment, write_keys)
+                .update_root_version_vector(tx, &increment, write_keys)
                 .await
         }
     }
@@ -212,7 +212,7 @@ pub(super) async fn modify_entry<'a>(
     let mut op = ModifyEntry::new(inner, name, author_id);
     op.apply(increment)?;
     op.inner.flush(&mut tx).await?;
-    op.inner.modify_self_entry(tx, increment).await?;
+    op.inner.modify_self_entry(tx).await?;
     op.commit();
 
     Ok(())
@@ -225,7 +225,7 @@ struct ModifyEntry<'a> {
     author_id: &'a mut PublicKey,
     orig_author_id: PublicKey,
     orig_versions: Option<BTreeMap<PublicKey, EntryData>>,
-    orig_dirty: bool,
+    orig_version_vector_increment: VersionVector,
     committed: bool,
 }
 
@@ -237,7 +237,7 @@ impl<'a> ModifyEntry<'a> {
     ) -> Self {
         let orig_author_id = *author_id;
         let orig_versions = inner.entries.get(name).cloned();
-        let orig_dirty = inner.dirty;
+        let orig_version_vector_increment = inner.version_vector_increment.clone();
 
         Self {
             inner,
@@ -245,7 +245,7 @@ impl<'a> ModifyEntry<'a> {
             author_id,
             orig_author_id,
             orig_versions,
-            orig_dirty,
+            orig_version_vector_increment,
             committed: false,
         }
     }
@@ -269,7 +269,7 @@ impl Drop for ModifyEntry<'_> {
         }
 
         *self.author_id = self.orig_author_id;
-        self.inner.dirty = self.orig_dirty;
+        self.inner.version_vector_increment = mem::take(&mut self.orig_version_vector_increment);
 
         if let Some(versions) = self.orig_versions.take() {
             // `unwrap` is OK here because the existence of `versions_backup` implies that the
