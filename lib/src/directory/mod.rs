@@ -176,7 +176,7 @@ impl Directory {
         }
 
         let parent = if let Some(parent) = &inner.inner.parent {
-            let dir = parent.directory();
+            let dir = parent.directory().clone();
             let entry_name = parent.entry_name().to_owned();
 
             Some((dir, entry_name))
@@ -216,7 +216,7 @@ impl Directory {
         read.inner
             .parent
             .as_ref()
-            .map(|parent_ctx| parent_ctx.directory())
+            .map(|parent_ctx| parent_ctx.directory().clone())
     }
 
     /// Inserts a file entry into this directory. It's the responsibility of the caller to make
@@ -319,12 +319,7 @@ impl Directory {
                     EntryData::File(file_data) => {
                         let print = print.indent();
 
-                        let parent_context = ParentContext::new(
-                            self.branch_id,
-                            self.inner.clone(),
-                            name.into(),
-                            *author,
-                        );
+                        let parent_context = ParentContext::new(self.clone(), name.into(), *author);
 
                         let file = File::open(
                             inner.blob.branch().clone(),
@@ -362,12 +357,7 @@ impl Directory {
                     EntryData::Directory(data) => {
                         let print = print.indent();
 
-                        let parent_context = ParentContext::new(
-                            self.branch_id,
-                            self.inner.clone(),
-                            name.into(),
-                            *author,
-                        );
+                        let parent_context = ParentContext::new(self.clone(), name.into(), *author);
 
                         let dir = inner
                             .open_directories
@@ -492,12 +482,7 @@ impl Writer<'_> {
             .await?;
 
         let locator = Locator::head(blob_id);
-        let parent = ParentContext::new(
-            *self.outer.branch_id(),
-            self.outer.inner.clone(),
-            name,
-            author,
-        );
+        let parent = ParentContext::new(self.outer.clone(), name, author);
 
         Ok((locator, parent))
     }

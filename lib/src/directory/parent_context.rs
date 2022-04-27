@@ -1,18 +1,14 @@
-use super::inner::{self, Inner};
+use super::inner;
 use crate::{
     blob_id::BlobId, branch::Branch, crypto::sign::PublicKey, db, directory::Directory,
-    error::Result, sync::RwLock, version_vector::VersionVector,
+    error::Result, version_vector::VersionVector,
 };
-use std::sync::Arc;
 
 /// Info about an entry in the context of its parent directory.
 #[derive(Clone)]
 pub(crate) struct ParentContext {
-    /// Equivalent to `directory_inner.read().await.branch().id()` but access to it doesn't require
-    /// locking.
-    branch_id: PublicKey,
-    /// The shared part of the parent directory of the entry.
-    directory_inner: Arc<RwLock<Inner>>,
+    /// The parent directory of the entry.
+    directory: Directory,
     /// The name of the entry in its parent directory.
     entry_name: String,
     /// Author of the particular version of entry, i.e. the ID of the replica last to have
@@ -21,15 +17,9 @@ pub(crate) struct ParentContext {
 }
 
 impl ParentContext {
-    pub(super) fn new(
-        branch_id: PublicKey,
-        directory_inner: Arc<RwLock<Inner>>,
-        entry_name: String,
-        entry_author: PublicKey,
-    ) -> Self {
+    pub(super) fn new(directory: Directory, entry_name: String, entry_author: PublicKey) -> Self {
         Self {
-            branch_id,
-            directory_inner,
+            directory,
             entry_name,
             entry_author,
         }
@@ -48,7 +38,7 @@ impl ParentContext {
     ) -> Result<()> {
         inner::modify_entry(
             tx,
-            self.directory_inner.write().await,
+            self.directory.inner.write().await,
             &self.entry_name,
             &mut self.entry_author,
             version_vector_override,
@@ -60,14 +50,14 @@ impl ParentContext {
     pub async fn fork_file(&mut self, local_branch: &Branch, blob_id: BlobId) -> Result<()> {
         let old_vv = self.entry_version_vector().await;
 
-        let outer = self.directory();
-        let outer = outer.fork(local_branch).await?;
+        let directory = self.directory();
+        let directory = directory.fork(local_branch).await?;
 
-        outer
+        directory
             .insert_file_entry(self.entry_name.clone(), self.entry_author, old_vv, blob_id)
             .await?;
 
-        self.directory_inner = outer.inner;
+        self.directory = directory;
 
         Ok(())
     }
@@ -77,17 +67,15 @@ impl ParentContext {
     }
 
     /// Returns the parent directory of the entry bound to the given local branch.
-    pub fn directory(&self) -> Directory {
-        Directory {
-            branch_id: self.branch_id,
-            inner: self.directory_inner.clone(),
-        }
+    pub fn directory(&self) -> &Directory {
+        &self.directory
     }
 
     // TODO: Can this be done without cloning the VersionVector? E.g. by returning some kind of
     // read lock.
     pub async fn entry_version_vector(&self) -> VersionVector {
-        self.directory_inner
+        self.directory
+            .inner
             .read()
             .await
             .entry_version_vector(&self.entry_name, &self.entry_author)

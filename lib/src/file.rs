@@ -49,7 +49,7 @@ impl File {
     }
 
     pub fn parent(&self) -> Directory {
-        self.parent.directory()
+        self.parent.directory().clone()
     }
 
     /// Length of this file in bytes.
