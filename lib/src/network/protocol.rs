@@ -1,6 +1,9 @@
 use std::io;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
+// First string in a handshake, helps with weeding out connections with completely different
+// protocols on the other end.
+pub(super) const MAGIC: &[u8; 7] = b"OUISYNC";
 pub(super) const VERSION: Version = Version(0);
 
 define_byte_array_wrapper! {
@@ -46,5 +49,11 @@ impl Version {
         W: AsyncWrite + Unpin,
     {
         io.write_u8(self.0).await
+    }
+}
+
+impl std::convert::From<Version> for u32 {
+    fn from(v: Version) -> u32 {
+        v.0 as u32
     }
 }

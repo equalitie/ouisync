@@ -24,7 +24,7 @@ use self::{
     ip_stack::{IpStack, Protocol},
     local_discovery::LocalDiscovery,
     message_broker::MessageBroker,
-    protocol::{RuntimeId, Version, VERSION},
+    protocol::{MAGIC, RuntimeId, Version, VERSION},
 };
 use crate::{
     config::{ConfigKey, ConfigStore},
@@ -32,6 +32,7 @@ use crate::{
     index::Index,
     repository::RepositoryId,
     scoped_task::{self, ScopedJoinHandle, ScopedTaskSet},
+    sync::uninitialized_watch,
 };
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
 use btdht::{InfoHash, INFO_HASH_LEN};
@@ -48,8 +49,9 @@ use std::{
 };
 use thiserror::Error;
 use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
-    sync::{mpsc, watch},
+    sync::mpsc,
     task, time,
 };
 
@@ -171,7 +173,7 @@ impl Network {
 
         let (dht_peer_found_tx, mut dht_peer_found_rx) = mpsc::unbounded_channel();
 
-        let (on_protocol_mismatch_tx, on_protocol_mismatch_rx) = watch::channel(false);
+        let (on_protocol_mismatch_tx, on_protocol_mismatch_rx) = uninitialized_watch::channel();
 
         let inner = Arc::new(Inner {
             listener_local_addr,
@@ -187,6 +189,7 @@ impl Network {
             on_protocol_mismatch_tx,
             on_protocol_mismatch_rx,
             tasks: Arc::downgrade(&tasks),
+            highest_seen_protocol_version: BlockingMutex::new(VERSION),
         });
 
         let network = Self {
@@ -251,6 +254,13 @@ impl Network {
     ) -> Result<TcpListener, NetworkError> {
         Ok(socket::bind(preferred_addr, config.entry(LAST_USED_TCP_PORT_KEY)).await?)
     }
+
+    pub fn current_protocol_version(&self) -> u32 {
+        VERSION.into()
+    }
+    pub fn highest_seen_protocol_version(&self) -> u32 {
+        (*self.inner.highest_seen_protocol_version.lock().unwrap()).into()
+    }
 }
 
 /// Handle for the network which can be cheaply cloned and sent to other threads.
@@ -286,12 +296,12 @@ impl Handle {
     }
 
     /// Subscribe to network protocol mismatch events.
-    pub fn on_protocol_mismatch(&self) -> watch::Receiver<bool> {
+    pub fn on_protocol_mismatch(&self) -> uninitialized_watch::Receiver<()> {
         self.inner.on_protocol_mismatch_rx.clone()
     }
 
     /// Subscribe change in connected peers events.
-    pub fn on_peer_set_change(&self) -> watch::Receiver<bool> {
+    pub fn on_peer_set_change(&self) -> uninitialized_watch::Receiver<()> {
         self.inner.connection_deduplicator.on_change()
     }
 }
@@ -352,11 +362,12 @@ struct Inner {
     dht_discovery: Option<DhtDiscovery>,
     dht_peer_found_tx: mpsc::UnboundedSender<SocketAddr>,
     connection_deduplicator: ConnectionDeduplicator,
-    on_protocol_mismatch_tx: watch::Sender<bool>,
-    on_protocol_mismatch_rx: watch::Receiver<bool>,
+    on_protocol_mismatch_tx: uninitialized_watch::Sender<()>,
+    on_protocol_mismatch_rx: uninitialized_watch::Receiver<()>,
     // Note that unwrapping the upgraded weak pointer should be fine because if the underlying Arc
     // was Dropped, we would not be asking for the upgrade in the first place.
     tasks: Weak<Tasks>,
+    highest_seen_protocol_version: BlockingMutex<Version>,
 }
 
 struct State {
@@ -536,6 +547,19 @@ impl Inner {
         }
     }
 
+    fn on_protocol_mismatch(&self, their_version: Version) {
+        // We know that `their_version` is higher than our version because otherwise this function
+        // wouldn't get called, but let's double check.
+        assert!(VERSION < their_version);
+
+        let mut highest = self.highest_seen_protocol_version.lock().unwrap();
+
+        if *highest < their_version {
+            *highest = their_version;
+            self.on_protocol_mismatch_tx.send(()).unwrap_or(());
+        }
+    }
+
     async fn handle_new_connection(
         self: Arc<Self>,
         mut stream: TcpStream,
@@ -551,9 +575,13 @@ impl Inner {
         let that_runtime_id =
             match perform_handshake(&mut stream, VERSION, self.this_runtime_id).await {
                 Ok(writer_id) => writer_id,
-                Err(error @ HandshakeError::ProtocolVersionMismatch) => {
+                Err(ref error @ HandshakeError::ProtocolVersionMismatch(their_version)) => {
                     log::error!("Failed to perform handshake with {}: {}", addr, error);
-                    self.on_protocol_mismatch_tx.send(true).unwrap_or(());
+                    self.on_protocol_mismatch(their_version);
+                    return;
+                }
+                Err(ref error @ HandshakeError::BadMagic) => {
+                    log::error!("Failed to perform handshake with {}: {}", addr, error);
                     return;
                 }
                 Err(HandshakeError::Fatal(error)) => {
@@ -629,13 +657,23 @@ async fn perform_handshake(
     this_version: Version,
     this_runtime_id: RuntimeId,
 ) -> Result<RuntimeId, HandshakeError> {
+    stream.write_all(MAGIC).await?;
+
     this_version.write_into(stream).await?;
     this_runtime_id.write_into(stream).await?;
+
+    let mut that_magic = [0; MAGIC.len()];
+
+    stream.read_exact(&mut that_magic).await?;
+
+    if MAGIC != &that_magic {
+        return Err(HandshakeError::BadMagic);
+    }
 
     let that_version = Version::read_from(stream).await?;
 
     if that_version > this_version {
-        return Err(HandshakeError::ProtocolVersionMismatch);
+        return Err(HandshakeError::ProtocolVersionMismatch(that_version));
     }
 
     Ok(RuntimeId::read_from(stream).await?)
@@ -644,7 +682,9 @@ async fn perform_handshake(
 #[derive(Debug, Error)]
 enum HandshakeError {
     #[error("protocol version mismatch")]
-    ProtocolVersionMismatch,
+    ProtocolVersionMismatch(Version),
+    #[error("bad magic")]
+    BadMagic,
     #[error("fatal error")]
     Fatal(#[from] io::Error),
 }

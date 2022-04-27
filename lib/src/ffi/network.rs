@@ -25,10 +25,7 @@ pub unsafe extern "C" fn network_subscribe(port: Port<u8>) -> UniqueHandle<JoinH
                 e = on_protocol_mismatch.changed() => {
                     match e {
                         Ok(()) => {
-                            // If it's false, than that's the initial state and there is nothing to report.
-                            if *on_protocol_mismatch.borrow() {
-                                sender.send(port, NETWORK_EVENT_PROTOCOL_VERSION_MISMATCH);
-                            }
+                            sender.send(port, NETWORK_EVENT_PROTOCOL_VERSION_MISMATCH);
                         },
                         Err(_) => {
                             return;
@@ -38,10 +35,7 @@ pub unsafe extern "C" fn network_subscribe(port: Port<u8>) -> UniqueHandle<JoinH
                 e = on_peer_set_change.changed() => {
                     match e {
                         Ok(()) => {
-                            // If it's false, than that's the initial state and there is nothing to report.
-                            if *on_peer_set_change.borrow() {
-                                sender.send(port, NETWORK_EVENT_PEER_SET_CHANGE);
-                            }
+                            sender.send(port, NETWORK_EVENT_PEER_SET_CHANGE);
                         },
                         Err(_) => {
                             return;
@@ -76,6 +70,19 @@ pub unsafe extern "C" fn network_connected_peers() -> Bytes {
     let peer_info = session::get().network().collect_peer_info();
     let bytes = rmp_serde::to_vec(&peer_info).unwrap();
     Bytes::from_vec(bytes)
+}
+
+/// Return our currently used protocol version number.
+#[no_mangle]
+pub unsafe extern "C" fn network_current_protocol_version() -> u32 {
+    session::get().network().current_protocol_version()
+}
+
+/// Return the highest seen protocol version number. The value returned is always higher
+/// or equal to the value returned from network_current_protocol_version() fn.
+#[no_mangle]
+pub unsafe extern "C" fn network_highest_seen_protocol_version() -> u32 {
+    session::get().network().highest_seen_protocol_version()
 }
 
 /// Returns the local dht address for ipv4, if available.
