@@ -1,24 +1,12 @@
 use super::*;
 use crate::{
-    access_control::WriteSecrets,
-    blob::{Blob, Shared},
-    branch::Branch,
-    crypto::sign::PublicKey,
-    db,
-    directory::{EntryData, NewEntryType},
-    index::BranchData,
-    locator::Locator,
-    repository,
-    sync::broadcast,
-    version_vector::VersionVector,
+    access_control::WriteSecrets, branch::Branch, crypto::sign::PublicKey, db, index::BranchData,
+    repository, sync::broadcast, version_vector::VersionVector,
 };
 use assert_matches::assert_matches;
 use futures_util::future;
 use rand::{rngs::StdRng, SeedableRng};
-use std::{
-    iter,
-    sync::{Arc, Weak},
-};
+use std::{iter, sync::Arc};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn no_conflict() {
@@ -675,12 +663,7 @@ async fn merge_concurrent_directories() {
     assert_eq!(entry.name(), "dir");
     assert_matches!(entry, EntryRef::Directory(_));
 
-    let expected_vv = {
-        let mut vv = VersionVector::new();
-        vv.insert(*branches[0].id(), 2); // 1: create, 2: add "dog.jpg"
-        vv.insert(*branches[1].id(), 2); // 1: create, 2: add "cat.jpg"
-        vv
-    };
+    let expected_vv = vv![*branches[0].id() => 1, *branches[1].id() => 1];
     assert_eq!(entry.version_vector(), &expected_vv);
 
     let dir = entry.directory().unwrap().open().await.unwrap();
@@ -707,111 +690,7 @@ async fn merge_concurrent_directories() {
     assert_eq!(entry.author(), branches[1].id());
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn merge_missing_file() {
-    let branches = setup(2).await;
-
-    let local_root = branches[0].open_or_create_root().await.unwrap();
-    local_root.flush(None).await.unwrap();
-
-    let remote_root = branches[1].open_or_create_root().await.unwrap();
-    create_dangling_file(&remote_root, "squirrel.jpg").await;
-
-    // First attempt to merge fails because the file blob doesn't exist yet.
-    match JointDirectory::new(
-        Some(branches[0].clone()),
-        vec![local_root.clone(), remote_root.clone()],
-    )
-    .merge()
-    .await
-    {
-        Err(Error::EntryNotFound) => (),
-        Err(error) => panic!("unexpected error {:?}", error),
-        Ok(_) => panic!("unexpected success"),
-    }
-
-    assert_matches!(
-        local_root
-            .read()
-            .await
-            .lookup("squirrel.jpg")
-            .map(|mut entries| entries.next()),
-        Err(Error::EntryNotFound)
-    );
-
-    replace_dangling_file(&remote_root, "squirrel.jpg").await;
-
-    // Merge again. This time it succeeds.
-    JointDirectory::new(
-        Some(branches[0].clone()),
-        vec![local_root.clone(), remote_root],
-    )
-    .merge()
-    .await
-    .unwrap();
-
-    assert_matches!(
-        local_root
-            .read()
-            .await
-            .lookup("squirrel.jpg")
-            .map(|mut entries| entries.next()),
-        Ok(Some(_))
-    );
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn merge_missing_subdirectory() {
-    let branches = setup(2).await;
-
-    let local_root = branches[0].open_or_create_root().await.unwrap();
-    local_root.flush(None).await.unwrap();
-
-    let remote_root = branches[1].open_or_create_root().await.unwrap();
-    create_dangling_directory(&remote_root, "animals").await;
-
-    // First attempt to merge fails because the subdirectory blob doesn't exist yet.
-    match JointDirectory::new(
-        Some(branches[0].clone()),
-        vec![local_root.clone(), remote_root.clone()],
-    )
-    .merge()
-    .await
-    {
-        Err(Error::EntryNotFound) => (),
-        Err(error) => panic!("unexpected error {:?}", error),
-        Ok(_) => panic!("unexpected success"),
-    }
-
-    assert_matches!(
-        local_root
-            .read()
-            .await
-            .lookup("animals")
-            .map(|mut entries| entries.next()),
-        Err(Error::EntryNotFound)
-    );
-
-    replace_dangling_directory(&remote_root, "animals").await;
-
-    // Merge again. This time it succeeds.
-    JointDirectory::new(
-        Some(branches[0].clone()),
-        vec![local_root.clone(), remote_root],
-    )
-    .merge()
-    .await
-    .unwrap();
-
-    assert_matches!(
-        local_root
-            .read()
-            .await
-            .lookup("animals")
-            .map(|mut entries| entries.next()),
-        Ok(Some(_))
-    );
-}
+// TODO: merge directory with missing blocks
 
 #[tokio::test(flavor = "multi_thread")]
 async fn remove_non_empty_subdirectory() {
@@ -979,93 +858,4 @@ async fn read_version_vector(parent: &Directory, name: &str) -> VersionVector {
         .unwrap()
         .version_vector()
         .clone()
-}
-
-// TODO: try to reduce the code duplication in the following functions.
-
-async fn create_dangling_file(parent: &Directory, name: &str) {
-    create_dangling_entry(parent, NewEntryType::File(Weak::new()), name).await
-}
-
-async fn create_dangling_directory(parent: &Directory, name: &str) {
-    create_dangling_entry(parent, NewEntryType::Directory, name).await
-}
-
-async fn create_dangling_entry(parent: &Directory, entry_type: NewEntryType, name: &str) {
-    let mut writer = parent.write().await;
-    let branch_id = *writer.branch().id();
-    let blob_id = rand::random();
-
-    writer
-        .insert_entry(
-            name.into(),
-            branch_id,
-            EntryData::new(entry_type, blob_id, VersionVector::first(branch_id)),
-        )
-        .await
-        .unwrap();
-    writer.flush(None).await.unwrap();
-}
-
-async fn replace_dangling_file(parent: &Directory, name: &str) {
-    let reader = parent.read().await;
-    let old_blob_id = *reader
-        .lookup_version(name, reader.branch().id())
-        .unwrap()
-        .file()
-        .unwrap()
-        .blob_id();
-
-    // Create a dummy blob so the `create_file` call doesn't fail when trying to delete the
-    // previous blob (which doesn't exists because the file was created as danling).
-    Blob::create(
-        reader.branch().clone(),
-        Locator::head(old_blob_id),
-        Shared::uninit(),
-    )
-    .flush()
-    .await
-    .unwrap();
-
-    drop(reader);
-
-    parent
-        .create_file(name.into())
-        .await
-        .unwrap()
-        .flush()
-        .await
-        .unwrap();
-}
-
-async fn replace_dangling_directory(parent: &Directory, name: &str) {
-    let reader = parent.read().await;
-    let old_blob_id = *reader
-        .lookup_version(name, reader.branch().id())
-        .unwrap()
-        .directory()
-        .unwrap()
-        .locator()
-        .blob_id();
-
-    // Create a dummy blob so the `create_directory` call doesn't fail when trying to delete
-    // the previous blob (which doesn't exists because the file was created as danling).
-    Blob::create(
-        reader.branch().clone(),
-        Locator::head(old_blob_id),
-        Shared::uninit(),
-    )
-    .flush()
-    .await
-    .unwrap();
-
-    drop(reader);
-
-    parent
-        .create_directory(name.into())
-        .await
-        .unwrap()
-        .flush(None)
-        .await
-        .unwrap();
 }

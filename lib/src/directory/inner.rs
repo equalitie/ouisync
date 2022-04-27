@@ -14,6 +14,7 @@ use async_recursion::async_recursion;
 use std::{
     cmp::Ordering,
     collections::{btree_map, BTreeMap},
+    sync::Weak,
 };
 
 pub(super) struct Inner {
@@ -52,33 +53,41 @@ impl Inner {
         &mut self,
         name: String,
         author: PublicKey,
-        data: EntryData,
+        mut new_data: EntryData,
         keep: Option<BlobId>,
     ) -> Result<()> {
         let versions = self.entries.entry(name).or_insert_with(Default::default);
         let mut old_blob_ids = Vec::new();
 
-        let data = match versions.entry(author) {
-            btree_map::Entry::Vacant(entry) => entry.insert(data),
+        let new_data = match versions.entry(author) {
+            btree_map::Entry::Vacant(entry) => entry.insert(new_data),
             btree_map::Entry::Occupied(entry) => {
                 let old_data = entry.into_mut();
 
-                // Only allow overwriting entries that are strictly older than the new entry.
-                if data.version_vector().partial_cmp(old_data.version_vector())
-                    != Some(Ordering::Greater)
-                {
-                    return Err(Error::EntryExists);
+                match old_data {
+                    EntryData::File(_) | EntryData::Directory(_)
+                        if new_data.version_vector() > old_data.version_vector() => {}
+                    EntryData::File(_) | EntryData::Directory(_) => {
+                        // Don't allow overwriting existing entry unless it is strictly older than
+                        // the new entry.
+                        return Err(Error::EntryExists);
+                    }
+                    EntryData::Tombstone(old_data) => {
+                        new_data
+                            .version_vector_mut()
+                            .merge(&old_data.version_vector);
+                    }
                 }
 
                 old_blob_ids.extend(old_data.blob_id().copied());
-                *old_data = data;
+                *old_data = new_data;
 
                 old_data
             }
         };
 
         // Remove outdated versions
-        let new_vv = data.version_vector().clone();
+        let new_vv = new_data.version_vector().clone();
         versions.retain(|_, data| {
             if data.version_vector() < &new_vv {
                 old_blob_ids.extend(data.blob_id().copied());
@@ -92,23 +101,23 @@ impl Inner {
 
         // Remove blobs of the outdated versions.
         // TODO: This should succeed/fail atomically with the above.
-        // TODO: when GC is implemented, this won't be necessary so remove it.
-        for blob_id in old_blob_ids {
-            if Some(blob_id) == keep {
-                continue;
-            }
-
-            Blob::open(
-                self.blob.branch().clone(),
-                Locator::head(blob_id),
-                Shared::uninit().into(),
-            )
-            .await?
-            .remove()
-            .await?;
-        }
+        // TODO: when GC is implemented, this won't be necessary.
+        remove_outdated_blobs(self.blob.branch(), old_blob_ids, keep).await?;
 
         Ok(())
+    }
+
+    /// Inserts a file entry into this directory. It's the responsibility of the caller to make
+    /// sure the passed in `blob_id` eventually points to an actual file.
+    pub async fn insert_file_entry(
+        &mut self,
+        name: String,
+        author_id: PublicKey,
+        version_vector: VersionVector,
+        blob_id: BlobId,
+    ) -> Result<()> {
+        let data = EntryData::file(blob_id, version_vector, Weak::new());
+        self.insert_entry(name, author_id, data, None).await
     }
 
     // Modify an entry in this directory with the specified name and author.
@@ -280,4 +289,27 @@ impl Drop for ModifyEntry<'_> {
             self.inner.entries.remove(self.name);
         }
     }
+}
+
+async fn remove_outdated_blobs(
+    branch: &Branch,
+    remove: Vec<BlobId>,
+    keep: Option<BlobId>,
+) -> Result<()> {
+    for blob_id in remove {
+        if Some(blob_id) == keep {
+            continue;
+        }
+
+        Blob::open(
+            branch.clone(),
+            Locator::head(blob_id),
+            Shared::uninit().into(),
+        )
+        .await?
+        .remove()
+        .await?;
+    }
+
+    Ok(())
 }

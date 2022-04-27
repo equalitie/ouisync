@@ -8,9 +8,7 @@ mod parent_context;
 mod tests;
 
 pub(crate) use self::{
-    cache::RootDirectoryCache,
-    entry_data::{EntryData, NewEntryType},
-    parent_context::ParentContext,
+    cache::RootDirectoryCache, entry_data::EntryData, parent_context::ParentContext,
 };
 pub use self::{
     entry::{DirectoryRef, EntryRef, FileRef},
@@ -32,10 +30,7 @@ use crate::{
 };
 use async_recursion::async_recursion;
 use sqlx::Connection;
-use std::{
-    collections::BTreeMap,
-    sync::{Arc, Weak},
-};
+use std::{collections::BTreeMap, sync::Arc};
 
 #[derive(Clone)]
 pub struct Directory {
@@ -216,26 +211,6 @@ impl Directory {
             .parent
             .as_ref()
             .map(|parent_ctx| parent_ctx.directory().clone())
-    }
-
-    /// Inserts a file entry into this directory. It's the responsibility of the caller to make
-    /// sure the passed in `blob_id` eventually points to an actual file.
-    /// For internal use only!
-    pub(crate) async fn insert_file_entry(
-        &self,
-        name: String,
-        author_id: PublicKey,
-        version_vector: VersionVector,
-        blob_id: BlobId,
-    ) -> Result<()> {
-        let mut inner = self.write().await.inner;
-
-        let entry_data = EntryData::file(blob_id, version_vector, Weak::new());
-        inner
-            .insert_entry(name, author_id, entry_data, None)
-            .await?;
-
-        Ok(())
     }
 
     async fn open(
@@ -443,49 +418,34 @@ pub(crate) struct Writer<'a> {
 
 impl Writer<'_> {
     pub async fn create_file(&mut self, name: String) -> Result<File> {
+        let author = *self.branch().id();
+        let blob_id = rand::random();
         let shared = Shared::uninit();
-        let (locator, parent) = self
-            .create_entry(NewEntryType::File(shared.downgrade()), name)
-            .await?;
-        Ok(File::create(self.branch().clone(), locator, parent, shared))
+        let data = EntryData::file(blob_id, VersionVector::new(), shared.downgrade());
+        let parent = ParentContext::new(self.outer.clone(), name.clone(), author);
+
+        self.inner.insert_entry(name, author, data, None).await?;
+
+        Ok(File::create(
+            self.branch().clone(),
+            Locator::head(blob_id),
+            parent,
+            shared,
+        ))
     }
 
     pub async fn create_directory(&mut self, name: String) -> Result<Directory> {
-        let (locator, parent) = self.create_entry(NewEntryType::Directory, name).await?;
+        let author = *self.branch().id();
+        let blob_id = rand::random();
+        let data = EntryData::directory(blob_id, VersionVector::new());
+        let parent = ParentContext::new(self.outer.clone(), name.clone(), author);
+
+        self.inner.insert_entry(name, author, data, None).await?;
+
         self.inner
             .open_directories
-            .create(self.branch(), locator, parent)
+            .create(self.branch(), Locator::head(blob_id), parent)
             .await
-    }
-
-    async fn create_entry(
-        &mut self,
-        entry_type: NewEntryType,
-        name: String,
-    ) -> Result<(Locator, ParentContext)> {
-        let author = *self.branch().id();
-
-        let blob_id = rand::random();
-        let vv = self
-            .inner
-            .entry_version_vector(&name, &author)
-            .cloned()
-            .unwrap_or_default()
-            .incremented(author);
-
-        self.inner
-            .insert_entry(
-                name.clone(),
-                author,
-                EntryData::new(entry_type, blob_id, vv),
-                None,
-            )
-            .await?;
-
-        let locator = Locator::head(blob_id);
-        let parent = ParentContext::new(self.outer.clone(), name, author);
-
-        Ok((locator, parent))
     }
 
     pub fn lookup_version(&self, name: &'_ str, author: &PublicKey) -> Result<EntryRef> {
@@ -572,7 +532,7 @@ impl Writer<'_> {
         self.inner.insert_entry(name, author, entry, None).await
     }
 
-    pub(crate) fn branch(&self) -> &Branch {
+    pub fn branch(&self) -> &Branch {
         self.inner.blob.branch()
     }
 }

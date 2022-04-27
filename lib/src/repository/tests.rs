@@ -697,16 +697,16 @@ async fn version_vector_create_file() {
     let local_id = *local_branch.id();
 
     let mut file = repo.create_file("parent/test.txt").await.unwrap();
-    assert_eq!(file.version_vector().await, vv![local_id => 1]);
-    assert_eq!(file.parent().version_vector().await, vv![local_id => 1]);
+    assert_eq!(file.version_vector().await, vv![]);
+    assert_eq!(file.parent().version_vector().await, vv![]);
     assert_eq!(
         file.parent().parent().await.unwrap().version_vector().await,
         vv![]
     );
 
     file.flush().await.unwrap();
-    assert_eq!(file.version_vector().await, vv![local_id => 2]);
-    assert_eq!(file.parent().version_vector().await, vv![local_id => 2]);
+    assert_eq!(file.version_vector().await, vv![local_id => 1]);
+    assert_eq!(file.parent().version_vector().await, vv![local_id => 1]);
     // The root version vector gets increment also for every created block.
     assert_eq!(
         file.parent().parent().await.unwrap().version_vector().await,
@@ -715,8 +715,8 @@ async fn version_vector_create_file() {
 
     file.write(b"blah").await.unwrap();
     file.flush().await.unwrap();
-    assert_eq!(file.version_vector().await, vv![local_id => 3]);
-    assert_eq!(file.parent().version_vector().await, vv![local_id => 3]);
+    assert_eq!(file.version_vector().await, vv![local_id => 2]);
+    assert_eq!(file.parent().version_vector().await, vv![local_id => 2]);
     assert_eq!(
         file.parent().parent().await.unwrap().version_vector().await,
         vv![local_id => 8]
@@ -746,7 +746,7 @@ async fn version_vector_recreate_deleted_file() {
     let mut file = repo.create_file("test.txt").await.unwrap();
     file.flush().await.unwrap();
 
-    assert_eq!(file.version_vector().await, vv![local_id => 5]);
+    assert_eq!(file.version_vector().await, vv![local_id => 3]);
 }
 
 // FIXME: when forking file/directory, the version vectors of the ancestor directories should be
@@ -811,11 +811,11 @@ async fn file_conflict_modify_local() {
 
     // Create two concurrent versions of the same file.
     let local_file = create_file_in(&local_branch, "test.txt", b"local v1").await;
-    assert_eq!(local_file.version_vector().await, vv![local_id => 2]);
+    assert_eq!(local_file.version_vector().await, vv![local_id => 1]);
     drop(local_file);
 
     let remote_file = create_file_in(&remote_branch, "test.txt", b"remote v1").await;
-    assert_eq!(remote_file.version_vector().await, vv![remote_id => 2]);
+    assert_eq!(remote_file.version_vector().await, vv![remote_id => 1]);
     drop(remote_file);
 
     // Modify the local version.
@@ -826,14 +826,14 @@ async fn file_conflict_modify_local() {
 
     let mut local_file = repo.open_file_version("test.txt", &local_id).await.unwrap();
     assert_eq!(local_file.read_to_end().await.unwrap(), b"local v2");
-    assert_eq!(local_file.version_vector().await, vv![local_id => 3]);
+    assert_eq!(local_file.version_vector().await, vv![local_id => 2]);
 
     let mut remote_file = repo
         .open_file_version("test.txt", &remote_id)
         .await
         .unwrap();
     assert_eq!(remote_file.read_to_end().await.unwrap(), b"remote v1");
-    assert_eq!(remote_file.version_vector().await, vv![remote_id => 2]);
+    assert_eq!(remote_file.version_vector().await, vv![remote_id => 1]);
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -54,6 +54,9 @@ impl ParentContext {
         let directory = directory.fork(local_branch).await?;
 
         directory
+            .inner
+            .write()
+            .await
             .insert_file_entry(self.entry_name.clone(), self.entry_author, old_vv, blob_id)
             .await?;
 
