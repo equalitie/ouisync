@@ -6,7 +6,7 @@ use sqlx::{
     sqlite::{SqliteArgumentValue, SqliteTypeInfo, SqliteValueRef},
     Decode, Encode, Sqlite, Type,
 };
-use std::{cmp::Ordering, collections::BTreeMap, fmt};
+use std::{cmp::Ordering, collections::BTreeMap, fmt, ops::AddAssign};
 
 /// [Version vector](https://en.wikipedia.org/wiki/Version_vector).
 ///
@@ -45,8 +45,14 @@ impl VersionVector {
 
     /// Increments the version corresponding to the given replica id and returns it.
     pub fn increment(&mut self, writer_id: PublicKey) -> u64 {
+        self.increment_by(writer_id, 1)
+    }
+
+    /// Increments the version corresponding to the given replica id by the given value and returns
+    /// it.
+    pub fn increment_by(&mut self, writer_id: PublicKey, value: u64) -> u64 {
         let version = self.0.entry(writer_id).or_insert(0);
-        *version += 1;
+        *version += value;
         *version
     }
 
@@ -64,10 +70,6 @@ impl VersionVector {
         for (writer_id, version) in &other.0 {
             self.insert(*writer_id, *version)
         }
-    }
-
-    pub fn clear_in_place(&mut self) {
-        self.0.clear();
     }
 }
 
@@ -113,6 +115,14 @@ impl PartialEq for VersionVector {
 }
 
 impl Eq for VersionVector {}
+
+impl AddAssign<&'_ Self> for VersionVector {
+    fn add_assign(&mut self, rhs: &'_ Self) {
+        for (writer_id, version) in &rhs.0 {
+            self.increment_by(*writer_id, *version);
+        }
+    }
+}
 
 // Support reading/writing `VersionVector` directly from/to the db:
 
@@ -314,5 +324,24 @@ mod tests {
         let mut vv = vv![id0 => 1, id1 => 2];
         vv.merge(&vv![id0 => 2, id1 => 1]);
         assert_eq!(vv, vv![id0 => 2, id1 => 2]);
+    }
+
+    #[test]
+    fn add() {
+        let id0 = PublicKey::random();
+        let id1 = PublicKey::random();
+
+        let mut vv = vv![];
+        vv += &vv![];
+        assert_eq!(vv, vv![]);
+
+        vv += &vv![id0 => 1];
+        assert_eq!(vv, vv![id0 => 1]);
+
+        vv += &vv![id0 => 1];
+        assert_eq!(vv, vv![id0 => 2]);
+
+        vv += &vv![id1 => 1];
+        assert_eq!(vv, vv![id0 => 2, id1 => 1]);
     }
 }
