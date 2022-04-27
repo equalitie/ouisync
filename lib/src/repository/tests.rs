@@ -789,9 +789,6 @@ async fn version_vector_recreate_deleted_file() {
     assert_eq!(file.version_vector().await, vv![local_id => 3]);
 }
 
-// FIXME: when forking file/directory, the version vectors of the ancestor directories should be
-// updated accordingly.
-#[ignore]
 #[tokio::test(flavor = "multi_thread")]
 async fn version_vector_fork_file() {
     let repo = Repository::create(
@@ -819,11 +816,10 @@ async fn version_vector_fork_file() {
     assert_eq!(file.version_vector().await, vv![remote_id => 1]);
     assert_eq!(file.parent().version_vector().await, vv![local_id => 1]);
 
-    file.flush().await.unwrap();
-    assert_eq!(file.version_vector().await, vv![remote_id => 1]);
+    file.parent().flush().await.unwrap();
     assert_eq!(
         file.parent().version_vector().await,
-        vv![local_id => 1, remote_id => 1]
+        vv![local_id => 3, remote_id => 1]
     );
 }
 
