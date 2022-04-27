@@ -11,8 +11,6 @@ use crate::{
     version_vector::VersionVector,
 };
 use async_recursion::async_recursion;
-use futures_util::future;
-use serde::{Deserialize, Serialize};
 use std::{
     cmp::Ordering,
     collections::{btree_map, BTreeMap},
@@ -20,7 +18,10 @@ use std::{
 
 pub(super) struct Inner {
     pub blob: Blob,
-    pub content: Content,
+    // map of entry name to map of author to entry data
+    pub entries: BTreeMap<String, BTreeMap<PublicKey, EntryData>>,
+    // have `entries` been modified since the last `flush`?
+    pub dirty: bool,
     pub parent: Option<ParentContext>,
     // Cache of open subdirectories. Used to make sure that multiple instances of the same directory
     // all share the same internal state.
@@ -29,18 +30,18 @@ pub(super) struct Inner {
 
 impl Inner {
     pub async fn flush(&mut self, tx: &mut db::Transaction<'_>) -> Result<()> {
-        if !self.content.dirty {
+        if !self.dirty {
             return Ok(());
         }
 
         let buffer =
-            bincode::serialize(&self.content).expect("failed to serialize directory content");
+            bincode::serialize(&self.entries).expect("failed to serialize directory content");
 
         self.blob.truncate_in_transaction(tx, 0).await?;
         self.blob.write_in_transaction(tx, &buffer).await?;
         self.blob.flush_in_transaction(tx).await?;
 
-        self.content.dirty = false;
+        self.dirty = false;
 
         Ok(())
     }
@@ -51,27 +52,61 @@ impl Inner {
         &mut self,
         name: String,
         author: PublicKey,
-        entry_data: EntryData,
+        data: EntryData,
         keep: Option<BlobId>,
     ) -> Result<()> {
-        let old_blobs = self.content.insert(name.clone(), author, entry_data)?;
+        let versions = self.entries.entry(name).or_insert_with(Default::default);
+        let mut old_blob_ids = Vec::new();
 
+        let data = match versions.entry(author) {
+            btree_map::Entry::Vacant(entry) => entry.insert(data),
+            btree_map::Entry::Occupied(entry) => {
+                let old_data = entry.into_mut();
+
+                // Only allow overwriting entries that are strictly older than the new entry.
+                if data.version_vector().partial_cmp(old_data.version_vector())
+                    != Some(Ordering::Greater)
+                {
+                    return Err(Error::EntryExists);
+                }
+
+                old_blob_ids.extend(old_data.blob_id().copied());
+                *old_data = data;
+
+                old_data
+            }
+        };
+
+        // Remove outdated versions
+        let new_vv = data.version_vector().clone();
+        versions.retain(|_, data| {
+            if data.version_vector() < &new_vv {
+                old_blob_ids.extend(data.blob_id().copied());
+                false
+            } else {
+                true
+            }
+        });
+
+        self.dirty = true;
+
+        // Remove blobs of the outdated versions.
         // TODO: This should succeed/fail atomically with the above.
-        let branch = self.blob.branch();
+        // TODO: when GC is implemented, this won't be necessary so remove it.
+        for blob_id in old_blob_ids {
+            if Some(blob_id) == keep {
+                continue;
+            }
 
-        let to_delete = old_blobs.into_iter().filter(|b| keep != Some(*b));
-
-        future::try_join_all(to_delete.map(|old_blob_id| async move {
             Blob::open(
-                branch.clone(),
-                Locator::head(old_blob_id),
+                self.blob.branch().clone(),
+                Locator::head(blob_id),
                 Shared::uninit().into(),
             )
             .await?
             .remove()
-            .await
-        }))
-        .await?;
+            .await?;
+        }
 
         Ok(())
     }
@@ -84,11 +119,7 @@ impl Inner {
         version_vector_override: Option<&VersionVector>,
     ) -> Result<()> {
         let local_id = *self.branch().id();
-        let versions = self
-            .content
-            .entries
-            .get_mut(name)
-            .ok_or(Error::EntryNotFound)?;
+        let versions = self.entries.get_mut(name).ok_or(Error::EntryNotFound)?;
 
         if !can_overwrite(versions, author_id, &local_id) {
             return Err(Error::EntryExists);
@@ -105,7 +136,7 @@ impl Inner {
         versions.insert(local_id, version);
 
         *author_id = local_id;
-        self.content.dirty = true;
+        self.dirty = true;
 
         Ok(())
     }
@@ -135,87 +166,11 @@ impl Inner {
     }
 
     pub fn entry_version_vector(&self, name: &str, author: &PublicKey) -> Option<&VersionVector> {
-        Some(
-            self.content
-                .entries
-                .get(name)?
-                .get(author)?
-                .version_vector(),
-        )
+        Some(self.entries.get(name)?.get(author)?.version_vector())
     }
 
     fn branch(&self) -> &Branch {
         self.blob.branch()
-    }
-}
-
-#[derive(Deserialize, Serialize, Debug)]
-pub(super) struct Content {
-    pub entries: BTreeMap<String, BTreeMap<PublicKey, EntryData>>,
-    #[serde(skip)]
-    pub dirty: bool,
-}
-
-impl Content {
-    pub fn new() -> Self {
-        Self {
-            entries: Default::default(),
-            dirty: true,
-        }
-    }
-
-    /// Inserts entry into the content and removes all previously existing versions whose version
-    /// vector "happens before" the new entry. If an entry with the same `author` already exists
-    /// and its version vector is not "happens before" the new entry, nothing is inserted or
-    /// removed and an error is returned instead.
-    ///
-    /// Returns the blob ids of all the removed entries (if any). It's the responsibility of the
-    /// caller to remove the old blobs.
-    fn insert(
-        &mut self,
-        name: String,
-        author: PublicKey,
-        new_data: EntryData,
-    ) -> Result<Vec<BlobId>> {
-        let versions = self.entries.entry(name).or_insert_with(Default::default);
-        let mut old_blob_ids = Vec::new();
-
-        let new_data = match versions.entry(author) {
-            btree_map::Entry::Vacant(entry) => entry.insert(new_data),
-            btree_map::Entry::Occupied(entry) => {
-                let old_data = entry.into_mut();
-
-                // Only allow overwriting entries that are strictly older than the new entry.
-                if new_data
-                    .version_vector()
-                    .partial_cmp(old_data.version_vector())
-                    != Some(Ordering::Greater)
-                {
-                    return Err(Error::EntryExists);
-                }
-
-                old_blob_ids.extend(old_data.blob_id().copied());
-                *old_data = new_data;
-
-                old_data
-            }
-        };
-
-        let new_vv = new_data.version_vector().clone();
-
-        // Remove outdated versions
-        versions.retain(|_, data| {
-            if data.version_vector() < &new_vv {
-                old_blob_ids.extend(data.blob_id().copied());
-                false
-            } else {
-                true
-            }
-        });
-
-        self.dirty = true;
-
-        Ok(old_blob_ids)
     }
 }
 
@@ -280,8 +235,8 @@ impl<'a> ModifyEntry<'a> {
         author_id: &'a mut PublicKey,
     ) -> Self {
         let orig_author_id = *author_id;
-        let orig_versions = inner.content.entries.get(name).cloned();
-        let orig_dirty = inner.content.dirty;
+        let orig_versions = inner.entries.get(name).cloned();
+        let orig_dirty = inner.dirty;
 
         Self {
             inner,
@@ -313,16 +268,16 @@ impl Drop for ModifyEntry<'_> {
         }
 
         *self.author_id = self.orig_author_id;
-        self.inner.content.dirty = self.orig_dirty;
+        self.inner.dirty = self.orig_dirty;
 
         if let Some(versions) = self.orig_versions.take() {
             // `unwrap` is OK here because the existence of `versions_backup` implies that the
             // entry for `name` exists because we never remove it during the `modify_entry` call.
             // Also as the `ModifyEntry` struct is holding an exclusive lock (write lock) to the
             // directory internals, it's impossible for someone to remove the entry in the meantime.
-            *self.inner.content.entries.get_mut(self.name).unwrap() = versions;
+            *self.inner.entries.get_mut(self.name).unwrap() = versions;
         } else {
-            self.inner.content.entries.remove(self.name);
+            self.inner.entries.remove(self.name);
         }
     }
 }

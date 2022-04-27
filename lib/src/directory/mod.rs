@@ -17,11 +17,7 @@ pub use self::{
     entry_type::EntryType,
 };
 
-use self::{
-    cache::SubdirectoryCache,
-    entry_data::EntryTombstoneData,
-    inner::{Content, Inner},
-};
+use self::{cache::SubdirectoryCache, entry_data::EntryTombstoneData, inner::Inner};
 use crate::{
     blob::{Blob, Shared},
     blob_id::BlobId,
@@ -36,7 +32,10 @@ use crate::{
 };
 use async_recursion::async_recursion;
 use sqlx::Connection;
-use std::sync::{Arc, Weak};
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, Weak},
+};
 
 #[derive(Clone)]
 pub struct Directory {
@@ -247,13 +246,14 @@ impl Directory {
         let branch_id = *owner_branch.id();
         let mut blob = Blob::open(owner_branch, locator, Shared::uninit().into()).await?;
         let buffer = blob.read_to_end().await?;
-        let content = bincode::deserialize(&buffer).map_err(Error::MalformedDirectory)?;
+        let entries = bincode::deserialize(&buffer).map_err(Error::MalformedDirectory)?;
 
         Ok(Self {
             branch_id,
             inner: Arc::new(RwLock::new(Inner {
                 blob,
-                content,
+                entries,
+                dirty: false,
                 parent,
                 open_directories: SubdirectoryCache::new(),
             })),
@@ -268,7 +268,8 @@ impl Directory {
             branch_id,
             inner: Arc::new(RwLock::new(Inner {
                 blob,
-                content: Content::new(),
+                entries: BTreeMap::new(),
+                dirty: true,
                 parent,
                 open_directories: SubdirectoryCache::new(),
             })),
@@ -308,7 +309,7 @@ impl Directory {
     pub async fn debug_print(&self, print: DebugPrinter) {
         let inner = self.inner.read().await;
 
-        for (name, versions) in &inner.content.entries {
+        for (name, versions) in &inner.entries {
             print.display(name);
             let print = print.indent();
 
@@ -492,7 +493,7 @@ impl Writer<'_> {
     }
 
     pub async fn flush(&mut self, version_vector_override: Option<&VersionVector>) -> Result<()> {
-        if !self.inner.content.dirty && version_vector_override.is_none() {
+        if !self.inner.dirty && version_vector_override.is_none() {
             return Ok(());
         }
 
@@ -586,15 +587,11 @@ pub struct Reader<'a> {
 impl Reader<'_> {
     /// Returns iterator over the entries of this directory.
     pub fn entries(&self) -> impl Iterator<Item = EntryRef> + DoubleEndedIterator + Clone {
-        self.inner
-            .content
-            .entries
-            .iter()
-            .flat_map(move |(name, versions)| {
-                versions.iter().map(move |(author, data)| {
-                    EntryRef::new(self.outer, &*self.inner, name, data, author)
-                })
+        self.inner.entries.iter().flat_map(move |(name, versions)| {
+            versions.iter().map(move |(author, data)| {
+                EntryRef::new(self.outer, &*self.inner, name, data, author)
             })
+        })
     }
 
     /// Lookup an entry of this directory by name.
@@ -649,7 +646,6 @@ fn lookup_version<'a>(
     author: &PublicKey,
 ) -> Result<EntryRef<'a>> {
     inner
-        .content
         .entries
         .get_key_value(name)
         .and_then(|(name, versions)| {
@@ -666,7 +662,6 @@ fn lookup<'a>(
     name: &'_ str,
 ) -> Result<impl Iterator<Item = EntryRef<'a>> + Clone + ExactSizeIterator> {
     inner
-        .content
         .entries
         .get_key_value(name)
         .map(|(name, versions)| {
