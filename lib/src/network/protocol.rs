@@ -48,3 +48,9 @@ impl Version {
         io.write_u8(self.0).await
     }
 }
+
+impl std::convert::From<Version> for u32 {
+    fn from(v: Version) -> u32 {
+        v.0 as u32
+    }
+}

@@ -72,6 +72,19 @@ pub unsafe extern "C" fn network_connected_peers() -> Bytes {
     Bytes::from_vec(bytes)
 }
 
+/// Return our currently used protocol version number.
+#[no_mangle]
+pub unsafe extern "C" fn network_current_protocol_version() -> u32 {
+    session::get().network().current_protocol_version()
+}
+
+/// Return the highest seen protocol version number. The value returned is always higher
+/// or equal to the value returned from network_current_protocol_version() fn.
+#[no_mangle]
+pub unsafe extern "C" fn network_highest_seen_protocol_version() -> u32 {
+    session::get().network().highest_seen_protocol_version()
+}
+
 /// Returns the local dht address for ipv4, if available.
 /// See [`network_local_addr`] for the format details.
 ///

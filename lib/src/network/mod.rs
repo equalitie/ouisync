@@ -188,6 +188,7 @@ impl Network {
             on_protocol_mismatch_tx,
             on_protocol_mismatch_rx,
             tasks: Arc::downgrade(&tasks),
+            highest_seen_protocol_version: BlockingMutex::new(VERSION),
         });
 
         let network = Self {
@@ -251,6 +252,13 @@ impl Network {
         config: &ConfigStore,
     ) -> Result<TcpListener, NetworkError> {
         Ok(socket::bind(preferred_addr, config.entry(LAST_USED_TCP_PORT_KEY)).await?)
+    }
+
+    pub fn current_protocol_version(&self) -> u32 {
+        VERSION.into()
+    }
+    pub fn highest_seen_protocol_version(&self) -> u32 {
+        (*self.inner.highest_seen_protocol_version.lock().unwrap()).into()
     }
 }
 
@@ -358,6 +366,7 @@ struct Inner {
     // Note that unwrapping the upgraded weak pointer should be fine because if the underlying Arc
     // was Dropped, we would not be asking for the upgrade in the first place.
     tasks: Weak<Tasks>,
+    highest_seen_protocol_version: BlockingMutex<Version>,
 }
 
 struct State {
@@ -537,6 +546,19 @@ impl Inner {
         }
     }
 
+    fn on_protocol_mismatch(&self, their_version: Version) {
+        // We know that `their_version` is higher than our version because otherwise this function
+        // wouldn't get called, but let's double check.
+        assert!(VERSION < their_version);
+
+        let mut highest = self.highest_seen_protocol_version.lock().unwrap();
+
+        if *highest < their_version {
+            *highest = their_version;
+            self.on_protocol_mismatch_tx.send(()).unwrap_or(());
+        }
+    }
+
     async fn handle_new_connection(
         self: Arc<Self>,
         mut stream: TcpStream,
@@ -552,9 +574,9 @@ impl Inner {
         let that_runtime_id =
             match perform_handshake(&mut stream, VERSION, self.this_runtime_id).await {
                 Ok(writer_id) => writer_id,
-                Err(error @ HandshakeError::ProtocolVersionMismatch) => {
+                Err(ref error @ HandshakeError::ProtocolVersionMismatch(their_version)) => {
                     log::error!("Failed to perform handshake with {}: {}", addr, error);
-                    self.on_protocol_mismatch_tx.send(()).unwrap_or(());
+                    self.on_protocol_mismatch(their_version);
                     return;
                 }
                 Err(HandshakeError::Fatal(error)) => {
@@ -636,7 +658,7 @@ async fn perform_handshake(
     let that_version = Version::read_from(stream).await?;
 
     if that_version > this_version {
-        return Err(HandshakeError::ProtocolVersionMismatch);
+        return Err(HandshakeError::ProtocolVersionMismatch(that_version));
     }
 
     Ok(RuntimeId::read_from(stream).await?)
@@ -645,7 +667,7 @@ async fn perform_handshake(
 #[derive(Debug, Error)]
 enum HandshakeError {
     #[error("protocol version mismatch")]
-    ProtocolVersionMismatch,
+    ProtocolVersionMismatch(Version),
     #[error("fatal error")]
     Fatal(#[from] io::Error),
 }
