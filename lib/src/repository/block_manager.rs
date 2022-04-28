@@ -2,15 +2,13 @@ use super::Shared;
 use crate::{
     blob::BlockIds,
     blob_id::BlobId,
-    block,
-    directory::EntryRef,
+    block::{self, BlockId},
     error::{Error, Result},
-    joint_directory::versioned,
-    JointDirectory,
+    joint_directory::{versioned, JointDirectory, JointEntryRef, MissingVersionStrategy},
 };
 use async_recursion::async_recursion;
 use futures_util::{stream, StreamExt};
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 use tokio::{
     select,
     sync::{mpsc, oneshot},
@@ -66,78 +64,96 @@ impl BlockManager {
     async fn process(&self) -> Result<()> {
         self.remove_outdated_branches().await?;
 
-        let root = self.joint_root().await?;
-        self.traverse(root).await
+        // HACK: Currently we use greedy block downloading which means it can happen that blocks
+        // belonging to a file/directory are downloaded before blocks of its parent which would
+        // make those blocks seem unreachable. To avoid collecting them prematurelly, we proceed
+        // with the collection only if there are no missing blocks. Once we switch to lazy block
+        // downloading, we should remove this check.
+        if self.has_missing_blocks().await? {
+            return Ok(());
+        }
+
+        self.prepare_reachable_blocks().await?;
+        self.traverse_root().await?;
+        self.remove_unreachable_blocks().await?;
+
+        Ok(())
     }
 
-    async fn joint_root(&self) -> Result<JointDirectory> {
+    async fn traverse_root(&self) -> Result<()> {
         let branches = self.shared.branches().await?;
         let mut versions = Vec::with_capacity(branches.len());
+        let mut entries = Vec::new();
 
         for branch in branches {
+            // We already removed outdated branches at this point, so every remaining root
+            // directory version is up to date.
+            entries.push(BlockIds::new(branch.clone(), BlobId::ZERO));
+
             match branch.open_root().await {
                 Ok(dir) => versions.push(dir),
-                Err(Error::BlockNotFound(_)) => {
-                    // TODO: request the missing block
+                Err(Error::BlockNotFound(block_id)) => {
+                    let mut conn = self.shared.index.pool.acquire().await?;
+                    block::mark_reachable(&mut conn, &block_id).await?;
+                    self.handle_missing_block(block_id);
                     continue;
                 }
                 Err(error) => return Err(error),
             }
         }
 
-        Ok(JointDirectory::new(None, versions))
+        for entry in entries {
+            self.mark_reachable(entry).await?;
+        }
+
+        self.traverse(JointDirectory::new(None, versions)).await
     }
 
     #[async_recursion]
     async fn traverse(&self, dir: JointDirectory) -> Result<()> {
-        for (_, entry_versions) in dir.read().await.entries_all_versions() {
-            // Process children first.
-            self.recurse(&entry_versions).await?;
+        let mut entries = Vec::new();
+        let mut subdirs = Vec::new();
 
-            let (current, outdated): (_, Vec<_>) = versioned::partition(entry_versions, None);
+        // Collect the entries first, so we don't keep the directories locked while we are
+        // processing the entries.
+        for entry in dir.read().await.entries() {
+            match entry {
+                JointEntryRef::File(entry) => {
+                    entries.push(BlockIds::new(
+                        entry.inner().branch().clone(),
+                        *entry.inner().blob_id(),
+                    ));
+                }
+                JointEntryRef::Directory(entry) => {
+                    for version in entry.versions() {
+                        entries.push(BlockIds::new(version.branch().clone(), *version.blob_id()));
+                    }
 
-            for entry in current {
-                self.request_missing_blocks(entry).await?;
+                    subdirs.push(entry.open(MissingVersionStrategy::Skip).await?);
+                }
             }
+        }
 
-            for entry in outdated {
-                self.remove_unneeded_blocks(entry).await?;
-            }
+        for entry in entries {
+            self.mark_reachable(entry).await?;
+        }
+
+        for dir in subdirs {
+            self.traverse(dir).await?;
         }
 
         Ok(())
     }
 
-    async fn recurse(&self, versions: &[EntryRef<'_>]) -> Result<()> {
-        let dir_entries = versions.iter().filter_map(|entry| entry.directory().ok());
-        let dirs: Vec<_> = stream::iter(dir_entries)
-            .filter_map(|entry| async move { entry.open().await.ok() })
-            .collect()
-            .await;
-
-        self.traverse(JointDirectory::new(None, dirs)).await
-    }
-
-    async fn request_missing_blocks(&self, _entry: EntryRef<'_>) -> Result<()> {
-        // TODO
-        Ok(())
-    }
-
-    async fn remove_unneeded_blocks(&self, entry: EntryRef<'_>) -> Result<()> {
-        let blob_id = if let Some(blob_id) = blob_id(&entry) {
-            blob_id
-        } else {
-            return Ok(());
-        };
-
+    async fn mark_reachable(&self, mut block_ids: BlockIds) -> Result<()> {
         let mut conn = self.shared.index.pool.acquire().await?;
-        let mut block_ids = BlockIds::new(entry.branch(), *blob_id);
 
         while let Some(block_id) = block_ids.next(&mut conn).await? {
-            block::remove(&mut conn, &block_id).await?;
+            block::mark_reachable(&mut conn, &block_id).await?;
 
-            // TODO: consider releasing and re-acquiring the connection after some number of iterations,
-            // to not hold it for too long.
+            if !block::exists(&mut conn, &block_id).await? {
+                self.handle_missing_block(block_id);
+            }
         }
 
         Ok(())
@@ -145,7 +161,7 @@ impl BlockManager {
 
     async fn remove_outdated_branches(&self) -> Result<()> {
         let branches = self.shared.branches().await?;
-        let branches: Vec<_> = stream::iter(branches)
+        let branch_infos: Vec<_> = stream::iter(&branches)
             .then(|branch| async move {
                 let id = *branch.id();
                 let vv = branch.data().root().await.proof.version_vector.clone();
@@ -155,18 +171,55 @@ impl BlockManager {
             .collect()
             .await;
 
-        let (_, outdated): (_, Vec<_>) = versioned::partition(branches, None);
+        let keep: HashSet<_> = versioned::keep_maximal(branch_infos, None)
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
 
-        for (id, vv) in outdated {
-            // Avoid deleting empty local branch before any content is added to it.
-            if vv.is_empty() {
+        for branch in branches {
+            if keep.contains(branch.id()) {
                 continue;
             }
 
-            self.shared.remove_branch(&id).await?;
+            // Avoid deleting empty local branch before any content is added to it.
+            if branch.data().root().await.proof.version_vector.is_empty() {
+                continue;
+            }
+
+            self.shared.remove_branch(branch.id()).await?;
         }
 
         Ok(())
+    }
+
+    async fn prepare_reachable_blocks(&self) -> Result<()> {
+        let mut conn = self.shared.index.pool.acquire().await?;
+        block::clear_reachable(&mut conn).await
+    }
+
+    async fn remove_unreachable_blocks(&self) -> Result<()> {
+        let mut conn = self.shared.index.pool.acquire().await?;
+        let count = block::remove_unreachable(&mut conn).await?;
+
+        if count > 0 {
+            log::debug!("unreachable blocks removed: {}", count);
+        }
+
+        Ok(())
+    }
+
+    fn handle_missing_block(&self, _block_id: BlockId) {
+        // TODO
+    }
+
+    async fn has_missing_blocks(&self) -> Result<bool> {
+        for branch in self.shared.branches().await? {
+            if branch.data().root().await.summary.missing_blocks_count() > 0 {
+                return Ok(true);
+            }
+        }
+
+        Ok(false)
     }
 }
 
@@ -192,12 +245,4 @@ impl BlockManagerHandle {
 
 enum Command {
     CollectGarbage(oneshot::Sender<Result<()>>),
-}
-
-fn blob_id<'a>(entry: &EntryRef<'a>) -> Option<&'a BlobId> {
-    match entry {
-        EntryRef::File(entry) => Some(entry.blob_id()),
-        EntryRef::Directory(entry) => Some(entry.blob_id()),
-        EntryRef::Tombstone(_) => None,
-    }
 }

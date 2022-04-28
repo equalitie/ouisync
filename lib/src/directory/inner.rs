@@ -2,6 +2,7 @@ use super::{cache::SubdirectoryCache, entry_data::EntryData, parent_context::Par
 use crate::{
     blob::{Blob, Shared},
     blob_id::BlobId,
+    block,
     branch::Branch,
     crypto::sign::PublicKey,
     db,
@@ -147,12 +148,16 @@ impl Inner {
     }
 
     // Modify the entry of this directory in its parent.
-    pub async fn modify_self_entry(&mut self, tx: db::Transaction<'_>) -> Result<()> {
+    pub async fn modify_self_entry(&mut self, mut tx: db::Transaction<'_>) -> Result<()> {
         let increment = mem::take(&mut self.version_vector_increment);
 
         if let Some(ctx) = self.parent.as_mut() {
             ctx.modify_entry(tx, &increment).await
         } else {
+            // At this point all local newly created blocks should become reachable so they can be
+            // safely unpinned to become normal subjects of garbage collection.
+            block::unpin_all(&mut tx).await?;
+
             let write_keys = self
                 .blob
                 .branch()
@@ -164,7 +169,9 @@ impl Inner {
                 .branch()
                 .data()
                 .update_root_version_vector(tx, &increment, write_keys)
-                .await
+                .await?;
+
+            Ok(())
         }
     }
 

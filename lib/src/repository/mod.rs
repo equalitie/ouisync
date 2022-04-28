@@ -123,6 +123,7 @@ impl Repository {
         enable_merger: bool,
     ) -> Result<Self> {
         let mut conn = pool.acquire().await?;
+        init_db(&mut conn).await?;
 
         let master_key = if let Some(master_secret) = master_secret {
             Some(metadata::secret_to_key(master_secret, &mut conn).await?)

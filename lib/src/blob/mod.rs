@@ -214,13 +214,13 @@ impl Blob {
 }
 
 /// Pseudo-stream that yields the block ids of the given blob in their sequential order.
-pub(crate) struct BlockIds<'a> {
-    branch: &'a Branch,
+pub(crate) struct BlockIds {
+    branch: Branch,
     locator: Locator,
 }
 
-impl<'a> BlockIds<'a> {
-    pub fn new(branch: &'a Branch, blob_id: BlobId) -> Self {
+impl BlockIds {
+    pub fn new(branch: Branch, blob_id: BlobId) -> Self {
         Self {
             branch,
             locator: Locator::head(blob_id),

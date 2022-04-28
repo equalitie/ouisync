@@ -585,7 +585,7 @@ async fn block_ids_test() {
     blob.flush().await.unwrap();
 
     let mut conn = branch.db_pool().acquire().await.unwrap();
-    let mut block_ids = BlockIds::new(&branch, blob_id);
+    let mut block_ids = BlockIds::new(branch, blob_id);
     let mut actual_count = 0;
 
     while block_ids.next(&mut conn).await.unwrap().is_some() {

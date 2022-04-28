@@ -10,6 +10,7 @@ define_byte_array_wrapper! {
 }
 
 impl BlobId {
+    // TODO: rename to `ROOT`
     pub(crate) const ZERO: Self = Self([0; Self::SIZE]);
 }
 

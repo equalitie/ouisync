@@ -245,20 +245,15 @@ pub struct Reader<'a> {
 }
 
 impl Reader<'_> {
-    /// Returns iterator over the entries of this directory. Each item contains all versions of its
-    /// corresponding entry, even the outdated ones.
-    pub fn entries_all_versions(&self) -> impl Iterator<Item = (&str, Vec<EntryRef>)> {
-        let entries = self.versions.iter().map(|directory| directory.entries());
-        let entries = SortedUnion::new(entries, |entry| entry.name());
-        Accumulate::new(entries, |entry| entry.name())
-    }
-
     /// Returns iterator over the entries of this directory. Multiple concurrent versions of the
     /// same file are returned as separate `JointEntryRef::File` entries. Multiple concurrent
     /// versions of the same directory are returned as a single `JointEntryRef::Directory` entry.
     pub fn entries(&self) -> impl Iterator<Item = JointEntryRef> {
-        self.entries_all_versions()
-            .flat_map(|(_, entries)| Merge::new(entries.into_iter(), self.local_branch))
+        let entries = self.versions.iter().map(|directory| directory.entries());
+        let entries = SortedUnion::new(entries, |entry| entry.name());
+        let entries = Accumulate::new(entries, |entry| entry.name());
+
+        entries.flat_map(|(_, entries)| Merge::new(entries.into_iter(), self.local_branch))
     }
 
     /// Returns all versions of an entry with the given name. Concurrent file versions are returned
@@ -520,7 +515,7 @@ impl<'a> JointDirectoryRef<'a> {
                 Err(e)
                     if self
                         .local_branch
-                        .map(|local_branch| dir.branch_id() == local_branch.id())
+                        .map(|local_branch| dir.branch().id() == local_branch.id())
                         .unwrap_or(false) =>
                 {
                     log::error!(
@@ -553,6 +548,10 @@ impl<'a> JointDirectoryRef<'a> {
         .flatten();
 
         Ok(JointDirectory::new(self.local_branch.cloned(), directories))
+    }
+
+    pub(crate) fn versions(&self) -> &[DirectoryRef] {
+        &self.versions
     }
 }
 

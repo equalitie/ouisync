@@ -514,6 +514,13 @@ async fn write_block(
         .await?;
     block::write(tx, &id, &buffer, &nonce).await?;
 
+    // Pin locally created blocks so they are not prematurelly collected. All pinned blocks are
+    // unpinned when the current changeset is flushed at which point the block should already be
+    // reachable. The pins are not persistent so if the app is terminated or crashes before the
+    // current changeset is flushed, all unreachable blocks will be subject to collection on the
+    // next app start.
+    block::pin(tx, &id).await?;
+
     Ok(id)
 }
 

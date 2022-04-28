@@ -28,7 +28,7 @@ pub(crate) async fn init(conn: &mut db::Connection) -> Result<(), Error> {
 
     // For storing unencrypted values
     sqlx::query(
-        "CREATE TABLE metadata_public (
+        "CREATE TABLE IF NOT EXISTS metadata_public (
              name  BLOB NOT NULL PRIMARY KEY,
              value BLOB NOT NULL
          ) WITHOUT ROWID",
@@ -39,7 +39,7 @@ pub(crate) async fn init(conn: &mut db::Connection) -> Result<(), Error> {
 
     // For storing encrypted values
     sqlx::query(
-        "CREATE TABLE metadata_secret (
+        "CREATE TABLE IF NOT EXISTS metadata_secret (
              name     BLOB NOT NULL PRIMARY KEY,
              nonce    BLOB NOT NULL,
              value    BLOB NOT NULL,

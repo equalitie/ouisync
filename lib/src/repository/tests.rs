@@ -913,6 +913,8 @@ async fn file_conflict_modify_local() {
     assert_eq!(remote_file.version_vector().await, vv![remote_id => 1]);
     drop(remote_file);
 
+    repo.collect_garbage().await.unwrap();
+
     // Modify the local version.
     let mut local_file = repo.open_file_version("test.txt", &local_id).await.unwrap();
     local_file.write(b"local v2").await.unwrap();
@@ -966,9 +968,6 @@ async fn file_conflict_attempt_to_fork_and_modify_remote() {
     assert_matches!(remote_file.flush().await, Err(Error::EntryExists));
 }
 
-// FIXME: currently gc sometimes collects blocks that are still referenced which makes this test to
-// sometimes fail when trying to read the file after the branch removal.
-#[ignore]
 #[tokio::test(flavor = "multi_thread")]
 async fn remove_branch() {
     let repo = Repository::create(

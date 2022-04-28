@@ -110,10 +110,6 @@ impl<'a> EntryRef<'a> {
         }
     }
 
-    pub(crate) fn branch(&self) -> &Branch {
-        self.inner().branch()
-    }
-
     fn inner(&self) -> &RefInner {
         match self {
             Self::File(r) => &r.inner,
@@ -173,8 +169,8 @@ impl<'a> FileRef<'a> {
         File::open(branch, locator, parent_context, shared)
     }
 
-    pub fn branch_id(&self) -> &PublicKey {
-        self.inner.branch_id()
+    pub fn branch(&self) -> &Branch {
+        self.inner.branch()
     }
 
     pub fn parent(&self) -> &Directory {
@@ -208,12 +204,12 @@ impl<'a> DirectoryRef<'a> {
         self.inner.name
     }
 
-    pub(crate) fn blob_id(&self) -> &'a BlobId {
-        &self.entry_data.blob_id
+    pub(crate) fn locator(&self) -> Locator {
+        Locator::head(*self.blob_id())
     }
 
-    pub(crate) fn locator(&self) -> Locator {
-        Locator::head(self.entry_data.blob_id)
+    pub(crate) fn blob_id(&self) -> &'a BlobId {
+        &self.entry_data.blob_id
     }
 
     pub fn author(&self) -> &'a PublicKey {
@@ -232,8 +228,8 @@ impl<'a> DirectoryRef<'a> {
             .await
     }
 
-    pub fn branch_id(&self) -> &'a PublicKey {
-        self.inner.branch_id()
+    pub fn branch(&self) -> &'a Branch {
+        self.inner.branch()
     }
 
     pub(crate) fn data(&self) -> &EntryDirectoryData {
@@ -302,7 +298,7 @@ impl<'a> RefInner<'a> {
         ParentContext::new(self.parent_outer.clone(), self.name.into(), *self.author)
     }
 
-    fn branch(&self) -> &Branch {
+    fn branch(&self) -> &'a Branch {
         self.parent_inner.blob.branch()
     }
 

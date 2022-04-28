@@ -38,7 +38,7 @@ impl Versioned for FileRef<'_> {
     }
 
     fn branch_id(&self) -> &PublicKey {
-        FileRef::branch_id(self)
+        self.branch().id()
     }
 }
 
@@ -108,7 +108,7 @@ where
 }
 
 // Returns the entries with the maximal version vectors.
-pub(super) fn keep_maximal<I>(entries: I, local_branch_id: Option<&PublicKey>) -> Vec<I::Item>
+pub(crate) fn keep_maximal<I>(entries: I, local_branch_id: Option<&PublicKey>) -> Vec<I::Item>
 where
     I: IntoIterator,
     I::Item: Versioned,
