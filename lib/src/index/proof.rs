@@ -51,7 +51,7 @@ impl Proof {
     pub fn first(writer_id: PublicKey, write_keys: &Keypair) -> Self {
         Self::new(
             writer_id,
-            VersionVector::first(writer_id),
+            VersionVector::new(),
             *EMPTY_INNER_HASH,
             write_keys,
         )

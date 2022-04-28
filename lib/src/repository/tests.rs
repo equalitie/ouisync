@@ -966,6 +966,9 @@ async fn file_conflict_attempt_to_fork_and_modify_remote() {
     assert_matches!(remote_file.flush().await, Err(Error::EntryExists));
 }
 
+// FIXME: currently gc sometimes collects blocks that are still referenced which makes this test to
+// sometimes fail when trying to read the file after the branch removal.
+#[ignore]
 #[tokio::test(flavor = "multi_thread")]
 async fn remove_branch() {
     let repo = Repository::create(

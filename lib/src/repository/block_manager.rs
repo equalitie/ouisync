@@ -157,7 +157,12 @@ impl BlockManager {
 
         let (_, outdated): (_, Vec<_>) = versioned::partition(branches, None);
 
-        for (id, _) in outdated {
+        for (id, vv) in outdated {
+            // Avoid deleting empty local branch before any content is added to it.
+            if vv.is_empty() {
+                continue;
+            }
+
             self.shared.remove_branch(&id).await?;
         }
 
