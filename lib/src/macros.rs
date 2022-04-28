@@ -113,6 +113,19 @@ macro_rules! derive_sqlx_traits_for_byte_array_wrapper {
     };
 }
 
+/// `VersionVector` literal.
+#[cfg(test)]
+macro_rules! vv {
+    ($($key:expr => $version:expr),*) => {{
+        #[allow(unused_mut)]
+        let mut vv = $crate::version_vector::VersionVector::new();
+        $(
+            vv.insert($key, $version);
+        )*
+        vv
+    }};
+}
+
 #[cfg(test)]
 mod tests {
     define_byte_array_wrapper! {

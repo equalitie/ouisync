@@ -49,7 +49,7 @@ impl File {
     }
 
     pub fn parent(&self) -> Directory {
-        self.parent.directory()
+        self.parent.directory().clone()
     }
 
     /// Length of this file in bytes.
@@ -91,10 +91,13 @@ impl File {
             return Ok(());
         }
 
+        let increment = VersionVector::first(*self.branch().id());
+
         let mut conn = self.blob.db_pool().acquire().await?;
         let mut tx = conn.begin().await?;
+
         self.blob.flush_in_transaction(&mut tx).await?;
-        self.parent.modify_entry(tx, None).await?;
+        self.parent.modify_entry(tx, &increment).await?;
 
         Ok(())
     }

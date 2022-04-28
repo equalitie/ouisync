@@ -1,9 +1,8 @@
-use std::io::SeekFrom;
-
 use super::*;
 use crate::{blob, block::BLOCK_SIZE, db};
 use assert_matches::assert_matches;
 use rand::Rng;
+use std::io::SeekFrom;
 use tokio::time::{sleep, timeout, Duration};
 
 #[tokio::test(flavor = "multi_thread")]
@@ -181,7 +180,7 @@ async fn recreate_previously_deleted_directory() {
     repo.create_directory("test")
         .await
         .unwrap()
-        .flush(None)
+        .flush()
         .await
         .unwrap();
 
@@ -196,7 +195,7 @@ async fn recreate_previously_deleted_directory() {
     repo.create_directory("test")
         .await
         .unwrap()
-        .flush(None)
+        .flush()
         .await
         .unwrap();
 
@@ -229,7 +228,7 @@ async fn concurrent_read_and_create_dir() {
         let repo = repo.clone();
         async move {
             let dir = repo.create_directory(path).await.unwrap();
-            dir.flush(None).await.unwrap();
+            dir.flush().await.unwrap();
         }
     });
 
@@ -677,6 +676,294 @@ async fn attempt_to_modify_remote_file() {
 
     let mut file = repo.open_file("test.txt").await.unwrap();
     assert_matches!(file.truncate(0).await, Err(Error::PermissionDenied));
+
+    let mut file = repo.open_file("test.txt").await.unwrap();
+    file.write(b"bar").await.unwrap();
+    assert_matches!(file.flush().await, Err(Error::PermissionDenied));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn version_vector_create_file() {
+    let repo = Repository::create(
+        &db::Store::Temporary,
+        rand::random(),
+        MasterSecret::random(),
+        AccessSecrets::random_write(),
+        false,
+    )
+    .await
+    .unwrap();
+    let local_branch = repo.get_or_create_local_branch().await.unwrap();
+    let local_id = *local_branch.id();
+
+    // Initially the vvs are all empty
+    let mut file = repo.create_file("parent/test.txt").await.unwrap();
+    assert_eq!(file.version_vector().await, vv![]);
+    assert_eq!(file.parent().version_vector().await, vv![]);
+    assert_eq!(
+        file.parent().parent().await.unwrap().version_vector().await,
+        vv![]
+    );
+
+    file.flush().await.unwrap();
+    // +1 for the file being created
+    assert_eq!(file.version_vector().await, vv![local_id => 1]);
+    // +1 for the parent being created
+    // +1 for inserting the file
+    assert_eq!(file.parent().version_vector().await, vv![local_id => 2]);
+    // Currently the root version vector gets increment also for every created block (or rather,
+    // for every created snapshot but currently creating a local block also creates a snapshot).
+    // +1 for the root being created
+    // +2 for inserting the parent
+    // +1 for the file block
+    // +1 for the parent block
+    // +1 for the root block
+    assert_eq!(
+        file.parent().parent().await.unwrap().version_vector().await,
+        vv![local_id => 6]
+    );
+
+    file.write(b"blah").await.unwrap();
+    file.flush().await.unwrap();
+    // +1 for the file being modified
+    assert_eq!(file.version_vector().await, vv![local_id => 2]);
+    // +1 for the parent being modified due to file vv bump
+    assert_eq!(file.parent().version_vector().await, vv![local_id => 3]);
+    // +1 for the root being modified due to parent vv bump
+    // +1 for the file block
+    // +1 for the parent block
+    // +1 for the root block
+    assert_eq!(
+        file.parent().parent().await.unwrap().version_vector().await,
+        vv![local_id => 10]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn version_vector_deep_hierarchy() {
+    let repo = Repository::create(
+        &db::Store::Temporary,
+        rand::random(),
+        MasterSecret::random(),
+        AccessSecrets::random_write(),
+        false,
+    )
+    .await
+    .unwrap();
+    let local_branch = repo.get_or_create_local_branch().await.unwrap();
+    let local_id = *local_branch.id();
+
+    let depth = 10;
+    let mut dirs = Vec::new();
+    dirs.push(local_branch.open_or_create_root().await.unwrap());
+
+    for i in 0..depth {
+        let dir = dirs
+            .last()
+            .unwrap()
+            .create_directory(format!("dir-{}", i))
+            .await
+            .unwrap();
+        dirs.push(dir);
+    }
+
+    dirs.last().unwrap().flush().await.unwrap();
+
+    // Each directory's local version is one less than its parent.
+    for (index, dir) in dirs.iter().skip(1).enumerate() {
+        assert_eq!(
+            dir.version_vector().await,
+            vv![local_id => (depth - index) as u64]
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn version_vector_recreate_deleted_file() {
+    let repo = Repository::create(
+        &db::Store::Temporary,
+        rand::random(),
+        MasterSecret::random(),
+        AccessSecrets::random_write(),
+        false,
+    )
+    .await
+    .unwrap();
+
+    let local_id = *repo.get_or_create_local_branch().await.unwrap().id();
+
+    let mut file = repo.create_file("test.txt").await.unwrap();
+    file.flush().await.unwrap();
+    drop(file);
+
+    repo.remove_entry("test.txt").await.unwrap();
+
+    let mut file = repo.create_file("test.txt").await.unwrap();
+    file.flush().await.unwrap();
+
+    assert_eq!(file.version_vector().await, vv![local_id => 3]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn version_vector_fork_file() {
+    let repo = Repository::create(
+        &db::Store::Temporary,
+        rand::random(),
+        MasterSecret::random(),
+        AccessSecrets::random_write(),
+        false,
+    )
+    .await
+    .unwrap();
+
+    let local_branch = repo.get_or_create_local_branch().await.unwrap();
+    let local_id = *local_branch.id();
+
+    let remote_id = PublicKey::random();
+    let remote_branch = repo
+        .create_remote_branch(remote_id)
+        .await
+        .unwrap()
+        .reopen(repo.secrets().keys().unwrap());
+
+    let remote_root = remote_branch.open_or_create_root().await.unwrap();
+    let remote_parent = remote_root.create_directory("parent".into()).await.unwrap();
+    let mut file = remote_parent.create_file("test.txt".into()).await.unwrap();
+    file.flush().await.unwrap();
+
+    file.fork(&local_branch).await.unwrap();
+
+    let local_parent = file.parent();
+    let local_root = local_parent.parent().await.unwrap();
+
+    assert_eq!(file.version_vector().await, vv![remote_id => 1]);
+    assert_eq!(local_parent.version_vector().await, vv![]);
+    // Currently root version vector is incremented also every time a new snapshot is created
+    // (`File::fork` internally creates one new snapshot for every block the file consists of. In
+    // this case the file has only one block).
+    assert_eq!(local_root.version_vector().await, vv![local_id => 1]);
+
+    file.parent().flush().await.unwrap();
+
+    // +(1, 0) for the parent being created
+    // +(0, 1) for inserting the forked file
+    assert_eq!(
+        local_parent.version_vector().await,
+        vv![local_id => 1, remote_id => 1]
+    );
+    // +(1, 0) for the root being created
+    // +(1, 1) for inserting the parent
+    // +(1, 0) for the root block
+    // +(1, 0) for the parent block
+    assert_eq!(
+        local_root.version_vector().await,
+        vv![local_id => 5, remote_id => 1]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn version_vector_empty_directory() {
+    let repo = Repository::create(
+        &db::Store::Temporary,
+        rand::random(),
+        MasterSecret::random(),
+        AccessSecrets::random_write(),
+        false,
+    )
+    .await
+    .unwrap();
+
+    let local_id = *repo.get_or_create_local_branch().await.unwrap().id();
+
+    let dir = repo.create_directory("stuff").await.unwrap();
+    assert_eq!(dir.version_vector().await, vv![]);
+
+    dir.flush().await.unwrap();
+    assert_eq!(dir.version_vector().await, vv![local_id => 1]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn file_conflict_modify_local() {
+    let repo = Repository::create(
+        &db::Store::Temporary,
+        rand::random(),
+        MasterSecret::random(),
+        AccessSecrets::random_write(),
+        false,
+    )
+    .await
+    .unwrap();
+
+    let local_branch = repo.get_or_create_local_branch().await.unwrap();
+    let local_id = *local_branch.id();
+
+    let remote_id = PublicKey::random();
+    let remote_branch = repo
+        .create_remote_branch(remote_id)
+        .await
+        .unwrap()
+        .reopen(repo.secrets().keys().unwrap());
+
+    // Create two concurrent versions of the same file.
+    let local_file = create_file_in(&local_branch, "test.txt", b"local v1").await;
+    assert_eq!(local_file.version_vector().await, vv![local_id => 1]);
+    drop(local_file);
+
+    let remote_file = create_file_in(&remote_branch, "test.txt", b"remote v1").await;
+    assert_eq!(remote_file.version_vector().await, vv![remote_id => 1]);
+    drop(remote_file);
+
+    // Modify the local version.
+    let mut local_file = repo.open_file_version("test.txt", &local_id).await.unwrap();
+    local_file.write(b"local v2").await.unwrap();
+    local_file.flush().await.unwrap();
+    drop(local_file);
+
+    let mut local_file = repo.open_file_version("test.txt", &local_id).await.unwrap();
+    assert_eq!(local_file.read_to_end().await.unwrap(), b"local v2");
+    assert_eq!(local_file.version_vector().await, vv![local_id => 2]);
+
+    let mut remote_file = repo
+        .open_file_version("test.txt", &remote_id)
+        .await
+        .unwrap();
+    assert_eq!(remote_file.read_to_end().await.unwrap(), b"remote v1");
+    assert_eq!(remote_file.version_vector().await, vv![remote_id => 1]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn file_conflict_attempt_to_fork_and_modify_remote() {
+    let repo = Repository::create(
+        &db::Store::Temporary,
+        rand::random(),
+        MasterSecret::random(),
+        AccessSecrets::random_write(),
+        false,
+    )
+    .await
+    .unwrap();
+
+    let local_branch = repo.get_or_create_local_branch().await.unwrap();
+
+    let remote_id = PublicKey::random();
+    let remote_branch = repo
+        .create_remote_branch(remote_id)
+        .await
+        .unwrap()
+        .reopen(repo.secrets().keys().unwrap());
+
+    // Create two concurrent versions of the same file.
+    create_file_in(&local_branch, "test.txt", b"local v1").await;
+    create_file_in(&remote_branch, "test.txt", b"remote v1").await;
+
+    // Attempt to fork the remote version (fork is required to modify it)
+    let mut remote_file = repo
+        .open_file_version("test.txt", &remote_id)
+        .await
+        .unwrap();
+    remote_file.fork(&local_branch).await.unwrap();
+    remote_file.write(b"remote v2").await.unwrap();
+    assert_matches!(remote_file.flush().await, Err(Error::EntryExists));
 }
 
 async fn read_file(repo: &Repository, path: impl AsRef<Utf8Path>) -> Vec<u8> {
@@ -695,10 +982,15 @@ async fn create_remote_file(repo: &Repository, remote_id: PublicKey, name: &str,
         .unwrap()
         .reopen(repo.secrets().keys().unwrap());
 
-    let remote_root = remote_branch.open_or_create_root().await.unwrap();
-    let mut file = remote_root.create_file(name.into()).await.unwrap();
+    create_file_in(&remote_branch, name, content).await;
+}
+
+async fn create_file_in(branch: &Branch, name: &str, content: &[u8]) -> File {
+    let root = branch.open_or_create_root().await.unwrap();
+    let mut file = root.create_file(name.into()).await.unwrap();
     file.write(content).await.unwrap();
     file.flush().await.unwrap();
+    file
 }
 
 fn random_bytes(size: usize) -> Vec<u8> {

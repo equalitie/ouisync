@@ -20,13 +20,6 @@ pub(crate) enum EntryData {
 }
 
 impl EntryData {
-    pub fn new(entry_type: NewEntryType, blob_id: BlobId, version_vector: VersionVector) -> Self {
-        match entry_type {
-            NewEntryType::File(shared) => Self::file(blob_id, version_vector, shared),
-            NewEntryType::Directory => Self::directory(blob_id, version_vector),
-        }
-    }
-
     pub fn file(
         blob_id: BlobId,
         version_vector: VersionVector,
@@ -62,6 +55,14 @@ impl EntryData {
         }
     }
 
+    pub fn into_version_vector(self) -> VersionVector {
+        match self {
+            Self::File(f) => f.version_vector,
+            Self::Directory(d) => d.version_vector,
+            Self::Tombstone(t) => t.version_vector,
+        }
+    }
+
     pub fn blob_id(&self) -> Option<&BlobId> {
         match self {
             Self::File(f) => Some(&f.blob_id),
@@ -69,11 +70,6 @@ impl EntryData {
             Self::Tombstone(_) => None,
         }
     }
-}
-
-pub(crate) enum NewEntryType {
-    File(Weak<AsyncMutex<Shared>>),
-    Directory,
 }
 
 //--------------------------------------------------------------------

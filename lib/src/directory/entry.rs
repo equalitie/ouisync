@@ -290,12 +290,7 @@ struct RefInner<'a> {
 
 impl<'a> RefInner<'a> {
     fn parent_context(&self) -> ParentContext {
-        ParentContext::new(
-            self.parent_outer.branch_id,
-            self.parent_outer.inner.clone(),
-            self.name.into(),
-            *self.author,
-        )
+        ParentContext::new(self.parent_outer.clone(), self.name.into(), *self.author)
     }
 
     pub fn branch_id(&self) -> &'a PublicKey {

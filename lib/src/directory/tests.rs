@@ -26,7 +26,7 @@ async fn create_and_list_entries() {
     file_cat.write(b"meow").await.unwrap();
     file_cat.flush().await.unwrap();
 
-    dir.flush(None).await.unwrap();
+    dir.flush().await.unwrap();
 
     // Reopen the dir and try to read the files.
     let dir = branch.open_root().await.unwrap();
@@ -59,12 +59,12 @@ async fn add_entry_to_existing_directory() {
 
     // Create empty directory
     let dir = branch.open_or_create_root().await.unwrap();
-    dir.flush(None).await.unwrap();
+    dir.flush().await.unwrap();
 
     // Reopen it and add a file to it.
     let dir = branch.open_root().await.unwrap();
     dir.create_file("none.txt".into()).await.unwrap();
-    dir.flush(None).await.unwrap();
+    dir.flush().await.unwrap();
 
     // Reopen it again and check the file is still there.
     let dir = branch.open_root().await.unwrap();
@@ -91,7 +91,7 @@ async fn remove_file() {
         .remove_entry(name, branch.id(), file_vv)
         .await
         .unwrap();
-    parent_dir.flush(None).await.unwrap();
+    parent_dir.flush().await.unwrap();
 
     // Reopen again and check the file entry was removed.
     let parent_dir = branch.open_root().await.unwrap();
@@ -100,10 +100,9 @@ async fn remove_file() {
     match parent_dir.lookup(name) {
         Err(Error::EntryNotFound) => panic!("expected to find a tombstone, but found nothing"),
         Err(error) => panic!("unexpected error {:?}", error),
-        Ok(entries) => {
-            let entries: Vec<_> = entries.collect();
-            assert_eq!(entries.len(), 1);
-            assert_matches!(entries[0], EntryRef::Tombstone(_));
+        Ok(mut entries) => {
+            assert_matches!(entries.next(), Some(EntryRef::Tombstone(_)));
+            assert_matches!(entries.next(), None);
         }
     }
 
@@ -162,7 +161,7 @@ async fn rename_file() {
         .await
         .unwrap();
 
-    parent_dir.flush(None).await.unwrap();
+    parent_dir.flush().await.unwrap();
 
     // Reopen again and check the file entry was removed.
     let parent_dir = branch.open_root().await.unwrap();
@@ -350,7 +349,7 @@ async fn remove_subdirectory() {
     // Create a directory with a single subdirectory.
     let parent_dir = branch.open_or_create_root().await.unwrap();
     let dir = parent_dir.create_directory(name.into()).await.unwrap();
-    dir.flush(None).await.unwrap();
+    dir.flush().await.unwrap();
 
     let (dir_locator, dir_vv) = {
         let reader = dir.read().await;
@@ -363,7 +362,7 @@ async fn remove_subdirectory() {
         .remove_entry(name, branch.id(), dir_vv)
         .await
         .unwrap();
-    parent_dir.flush(None).await.unwrap();
+    parent_dir.flush().await.unwrap();
 
     // Reopen again and check the subdirectory entry was removed.
     let parent_dir = branch.open_root().await.unwrap();
@@ -387,10 +386,10 @@ async fn fork() {
 
     // Create a nested directory by branch 0
     let root0 = branches[0].open_or_create_root().await.unwrap();
-    root0.flush(None).await.unwrap();
+    root0.flush().await.unwrap();
 
     let dir0 = root0.create_directory("dir".into()).await.unwrap();
-    dir0.flush(None).await.unwrap();
+    dir0.flush().await.unwrap();
 
     // Fork it by branch 1 and modify it
     let dir0 = branches[0]
@@ -404,7 +403,7 @@ async fn fork() {
     let dir1 = dir0.fork(&branches[1]).await.unwrap();
 
     dir1.create_file("dog.jpg".into()).await.unwrap();
-    dir1.flush(None).await.unwrap();
+    dir1.flush().await.unwrap();
 
     assert_eq!(dir1.read().await.branch().id(), branches[1].id());
 
@@ -447,7 +446,7 @@ async fn fork_over_tombstone() {
         .create_directory("dir".into())
         .await
         .unwrap()
-        .flush(None)
+        .flush()
         .await
         .unwrap();
     let vv = root0
@@ -468,7 +467,7 @@ async fn fork_over_tombstone() {
         .create_directory("dir".into())
         .await
         .unwrap()
-        .flush(None)
+        .flush()
         .await
         .unwrap();
 
@@ -482,7 +481,7 @@ async fn fork_over_tombstone() {
     dir1.fork(&branches[0])
         .await
         .unwrap()
-        .flush(None)
+        .flush()
         .await
         .unwrap();
 
@@ -549,7 +548,10 @@ async fn insert_entry_newer_than_existing() {
         let a_vv = VersionVector::first(a_author);
 
         let blob_id = rand::random();
-        root.insert_file_entry(name.to_owned(), a_author, a_vv.clone(), blob_id)
+        root.inner
+            .write()
+            .await
+            .insert_file_entry(name.to_owned(), a_author, a_vv.clone(), blob_id)
             .await
             .unwrap();
 
@@ -563,7 +565,10 @@ async fn insert_entry_newer_than_existing() {
         let b_vv = a_vv.incremented(b_author);
 
         let blob_id = rand::random();
-        root.insert_file_entry(name.to_owned(), b_author, b_vv.clone(), blob_id)
+        root.inner
+            .write()
+            .await
+            .insert_file_entry(name.to_owned(), b_author, b_vv.clone(), blob_id)
             .await
             .unwrap();
 
@@ -600,7 +605,10 @@ async fn remove_concurrent_file_version() {
 
             vvs.push(vv.clone());
 
-            root.insert_file_entry(name.into(), branch_id, vv, blob_id)
+            root.inner
+                .write()
+                .await
+                .insert_file_entry(name.into(), branch_id, vv, blob_id)
                 .await
                 .unwrap();
 
@@ -624,7 +632,7 @@ async fn remove_concurrent_file_version() {
                 .remove_entry(name, author_to_remove, vv_to_remove.clone(), None)
                 .await
                 .unwrap();
-            writer.flush(None).await.unwrap();
+            writer.flush().await.unwrap();
         }
 
         // Verify the removed version is gone but the other version remains

@@ -8,20 +8,14 @@ mod parent_context;
 mod tests;
 
 pub(crate) use self::{
-    cache::RootDirectoryCache,
-    entry_data::{EntryData, NewEntryType},
-    parent_context::ParentContext,
+    cache::RootDirectoryCache, entry_data::EntryData, parent_context::ParentContext,
 };
 pub use self::{
     entry::{DirectoryRef, EntryRef, FileRef},
     entry_type::EntryType,
 };
 
-use self::{
-    cache::SubdirectoryCache,
-    entry_data::EntryTombstoneData,
-    inner::{Content, Inner},
-};
+use self::{cache::SubdirectoryCache, entry_data::EntryTombstoneData, inner::Inner};
 use crate::{
     blob::{Blob, Shared},
     blob_id::BlobId,
@@ -36,7 +30,7 @@ use crate::{
 };
 use async_recursion::async_recursion;
 use sqlx::Connection;
-use std::sync::{Arc, Weak};
+use std::{collections::BTreeMap, sync::Arc};
 
 #[derive(Clone)]
 pub struct Directory {
@@ -79,14 +73,8 @@ impl Directory {
     /// Flushes this directory ensuring that any pending changes are written to the store and the
     /// version vectors of this and the ancestor directories are properly updated.
     /// Also flushes all ancestor directories.
-    ///
-    /// The way the version vector is updated depends on the `version_vector_override` parameter.
-    /// When it is `None`, the local counter is incremented by one. When it is `Some`, the version
-    /// vector is merged with `version_vector_override`. This is useful to support merging
-    /// concurrent versions of a directory where the resulting version vector should be the merge
-    /// of the version vectors of the concurrent versions.
-    pub async fn flush(&self, version_vector_override: Option<&VersionVector>) -> Result<()> {
-        self.write().await.flush(version_vector_override).await
+    pub async fn flush(&self) -> Result<()> {
+        self.write().await.flush().await
     }
 
     /// Creates a new file inside this directory.
@@ -159,7 +147,7 @@ impl Directory {
         dst_dir_writer
             .as_mut()
             .unwrap_or(&mut src_dir_writer)
-            .insert_entry(dst_name.into(), dst_author, dst_entry, None)
+            .insert_entry(dst_name.into(), dst_author, dst_entry)
             .await
     }
 
@@ -176,7 +164,7 @@ impl Directory {
         }
 
         let parent = if let Some(parent) = &inner.inner.parent {
-            let dir = parent.directory();
+            let dir = parent.directory().clone();
             let entry_name = parent.entry_name().to_owned();
 
             Some((dir, entry_name))
@@ -216,27 +204,7 @@ impl Directory {
         read.inner
             .parent
             .as_ref()
-            .map(|parent_ctx| parent_ctx.directory())
-    }
-
-    /// Inserts a file entry into this directory. It's the responsibility of the caller to make
-    /// sure the passed in `blob_id` eventually points to an actual file.
-    /// For internal use only!
-    pub(crate) async fn insert_file_entry(
-        &self,
-        name: String,
-        author_id: PublicKey,
-        version_vector: VersionVector,
-        blob_id: BlobId,
-    ) -> Result<()> {
-        let mut inner = self.write().await.inner;
-
-        let entry_data = EntryData::file(blob_id, version_vector, Weak::new());
-        inner
-            .insert_entry(name, author_id, entry_data, None)
-            .await?;
-
-        Ok(())
+            .map(|parent_ctx| parent_ctx.directory().clone())
     }
 
     async fn open(
@@ -247,13 +215,14 @@ impl Directory {
         let branch_id = *owner_branch.id();
         let mut blob = Blob::open(owner_branch, locator, Shared::uninit().into()).await?;
         let buffer = blob.read_to_end().await?;
-        let content = bincode::deserialize(&buffer).map_err(Error::MalformedDirectory)?;
+        let entries = bincode::deserialize(&buffer).map_err(Error::MalformedDirectory)?;
 
         Ok(Self {
             branch_id,
             inner: Arc::new(RwLock::new(Inner {
                 blob,
-                content,
+                entries,
+                version_vector_increment: VersionVector::new(),
                 parent,
                 open_directories: SubdirectoryCache::new(),
             })),
@@ -268,7 +237,8 @@ impl Directory {
             branch_id,
             inner: Arc::new(RwLock::new(Inner {
                 blob,
-                content: Content::new(),
+                entries: BTreeMap::new(),
+                version_vector_increment: VersionVector::first(branch_id),
                 parent,
                 open_directories: SubdirectoryCache::new(),
             })),
@@ -308,7 +278,7 @@ impl Directory {
     pub async fn debug_print(&self, print: DebugPrinter) {
         let inner = self.inner.read().await;
 
-        for (name, versions) in &inner.content.entries {
+        for (name, versions) in &inner.entries {
             print.display(name);
             let print = print.indent();
 
@@ -319,12 +289,7 @@ impl Directory {
                     EntryData::File(file_data) => {
                         let print = print.indent();
 
-                        let parent_context = ParentContext::new(
-                            self.branch_id,
-                            self.inner.clone(),
-                            name.into(),
-                            *author,
-                        );
+                        let parent_context = ParentContext::new(self.clone(), name.into(), *author);
 
                         let file = File::open(
                             inner.blob.branch().clone(),
@@ -362,12 +327,7 @@ impl Directory {
                     EntryData::Directory(data) => {
                         let print = print.indent();
 
-                        let parent_context = ParentContext::new(
-                            self.branch_id,
-                            self.inner.clone(),
-                            name.into(),
-                            *author,
-                        );
+                        let parent_context = ParentContext::new(self.clone(), name.into(), *author);
 
                         let dir = inner
                             .open_directories
@@ -395,6 +355,11 @@ impl Directory {
 
     pub fn branch_id(&self) -> &PublicKey {
         &self.branch_id
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn version_vector(&self) -> VersionVector {
+        self.read().await.version_vector().await
     }
 }
 
@@ -447,71 +412,49 @@ pub(crate) struct Writer<'a> {
 
 impl Writer<'_> {
     pub async fn create_file(&mut self, name: String) -> Result<File> {
+        let author = *self.branch().id();
+        let blob_id = rand::random();
         let shared = Shared::uninit();
-        let (locator, parent) = self
-            .create_entry(NewEntryType::File(shared.downgrade()), name)
-            .await?;
-        Ok(File::create(self.branch().clone(), locator, parent, shared))
+        let data = EntryData::file(blob_id, VersionVector::new(), shared.downgrade());
+        let parent = ParentContext::new(self.outer.clone(), name.clone(), author);
+
+        self.inner.insert_entry(name, author, data, None).await?;
+
+        Ok(File::create(
+            self.branch().clone(),
+            Locator::head(blob_id),
+            parent,
+            shared,
+        ))
     }
 
     pub async fn create_directory(&mut self, name: String) -> Result<Directory> {
-        let (locator, parent) = self.create_entry(NewEntryType::Directory, name).await?;
+        let author = *self.branch().id();
+        let blob_id = rand::random();
+        let data = EntryData::directory(blob_id, VersionVector::new());
+        let parent = ParentContext::new(self.outer.clone(), name.clone(), author);
+
+        self.inner.insert_entry(name, author, data, None).await?;
+
         self.inner
             .open_directories
-            .create(self.branch(), locator, parent)
+            .create(self.branch(), Locator::head(blob_id), parent)
             .await
-    }
-
-    async fn create_entry(
-        &mut self,
-        entry_type: NewEntryType,
-        name: String,
-    ) -> Result<(Locator, ParentContext)> {
-        let author = *self.branch().id();
-
-        let blob_id = rand::random();
-        let vv = self
-            .inner
-            .entry_version_vector(&name, &author)
-            .cloned()
-            .unwrap_or_default()
-            .incremented(author);
-
-        self.inner
-            .insert_entry(
-                name.clone(),
-                author,
-                EntryData::new(entry_type, blob_id, vv),
-                None,
-            )
-            .await?;
-
-        let locator = Locator::head(blob_id);
-        let parent = ParentContext::new(
-            *self.outer.branch_id(),
-            self.outer.inner.clone(),
-            name,
-            author,
-        );
-
-        Ok((locator, parent))
     }
 
     pub fn lookup_version(&self, name: &'_ str, author: &PublicKey) -> Result<EntryRef> {
         lookup_version(&*self.inner, self.outer, name, author)
     }
 
-    pub async fn flush(&mut self, version_vector_override: Option<&VersionVector>) -> Result<()> {
-        if !self.inner.content.dirty && version_vector_override.is_none() {
+    pub async fn flush(&mut self) -> Result<()> {
+        if self.inner.version_vector_increment.is_empty() {
             return Ok(());
         }
 
         let mut conn = self.inner.blob.db_pool().acquire().await?;
         let mut tx = conn.begin().await?;
         self.inner.flush(&mut tx).await?;
-        self.inner
-            .modify_self_entry(tx, version_vector_override)
-            .await?;
+        self.inner.modify_self_entry(tx).await?;
 
         Ok(())
     }
@@ -577,12 +520,11 @@ impl Writer<'_> {
         name: String,
         author: PublicKey,
         entry: EntryData,
-        keep: Option<BlobId>,
     ) -> Result<()> {
-        self.inner.insert_entry(name, author, entry, keep).await
+        self.inner.insert_entry(name, author, entry, None).await
     }
 
-    pub(crate) fn branch(&self) -> &Branch {
+    pub fn branch(&self) -> &Branch {
         self.inner.blob.branch()
     }
 }
@@ -596,15 +538,11 @@ pub struct Reader<'a> {
 impl Reader<'_> {
     /// Returns iterator over the entries of this directory.
     pub fn entries(&self) -> impl Iterator<Item = EntryRef> + DoubleEndedIterator + Clone {
-        self.inner
-            .content
-            .entries
-            .iter()
-            .flat_map(move |(name, versions)| {
-                versions.iter().map(move |(author, data)| {
-                    EntryRef::new(self.outer, &*self.inner, name, data, author)
-                })
+        self.inner.entries.iter().flat_map(move |(name, versions)| {
+            versions.iter().map(move |(author, data)| {
+                EntryRef::new(self.outer, &*self.inner, name, data, author)
             })
+        })
     }
 
     /// Lookup an entry of this directory by name.
@@ -659,7 +597,6 @@ fn lookup_version<'a>(
     author: &PublicKey,
 ) -> Result<EntryRef<'a>> {
     inner
-        .content
         .entries
         .get_key_value(name)
         .and_then(|(name, versions)| {
@@ -676,7 +613,6 @@ fn lookup<'a>(
     name: &'_ str,
 ) -> Result<impl Iterator<Item = EntryRef<'a>> + Clone + ExactSizeIterator> {
     inner
-        .content
         .entries
         .get_key_value(name)
         .map(|(name, versions)| {

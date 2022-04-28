@@ -6,7 +6,12 @@ use sqlx::{
     sqlite::{SqliteArgumentValue, SqliteTypeInfo, SqliteValueRef},
     Decode, Encode, Sqlite, Type,
 };
-use std::{cmp::Ordering, collections::BTreeMap, fmt};
+use std::{
+    cmp::Ordering,
+    collections::BTreeMap,
+    fmt,
+    ops::{AddAssign, Sub},
+};
 
 /// [Version vector](https://en.wikipedia.org/wiki/Version_vector).
 ///
@@ -45,8 +50,14 @@ impl VersionVector {
 
     /// Increments the version corresponding to the given replica id and returns it.
     pub fn increment(&mut self, writer_id: PublicKey) -> u64 {
+        self.increment_by(writer_id, 1)
+    }
+
+    /// Increments the version corresponding to the given replica id by the given value and returns
+    /// it.
+    pub fn increment_by(&mut self, writer_id: PublicKey, value: u64) -> u64 {
         let version = self.0.entry(writer_id).or_insert(0);
-        *version += 1;
+        *version += value;
         *version
     }
 
@@ -66,8 +77,8 @@ impl VersionVector {
         }
     }
 
-    pub fn clear_in_place(&mut self) {
-        self.0.clear();
+    pub fn is_empty(&self) -> bool {
+        self.0.values().all(|version| *version == 0)
     }
 }
 
@@ -114,6 +125,28 @@ impl PartialEq for VersionVector {
 
 impl Eq for VersionVector {}
 
+impl AddAssign<&'_ Self> for VersionVector {
+    fn add_assign(&mut self, rhs: &'_ Self) {
+        for (writer_id, version) in &rhs.0 {
+            self.increment_by(*writer_id, *version);
+        }
+    }
+}
+
+impl Sub for VersionVector {
+    type Output = Self;
+
+    fn sub(mut self, rhs: Self) -> Self::Output {
+        for (writer_id, rhs_version) in &rhs.0 {
+            if let Some(lhs_version) = self.0.get_mut(writer_id) {
+                *lhs_version = lhs_version.saturating_sub(*rhs_version);
+            }
+        }
+
+        self
+    }
+}
+
 // Support reading/writing `VersionVector` directly from/to the db:
 
 impl Type<Sqlite> for VersionVector {
@@ -146,17 +179,6 @@ impl Hashable for VersionVector {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    macro_rules! vv {
-        ($($key:expr => $version:expr),*) => {{
-            #[allow(unused_mut)]
-            let mut vv = VersionVector::new();
-            $(
-                vv.insert($key, $version);
-            )*
-            vv
-        }};
-    }
 
     #[test]
     fn eq() {
@@ -325,5 +347,43 @@ mod tests {
         let mut vv = vv![id0 => 1, id1 => 2];
         vv.merge(&vv![id0 => 2, id1 => 1]);
         assert_eq!(vv, vv![id0 => 2, id1 => 2]);
+    }
+
+    #[test]
+    fn add() {
+        let id0 = PublicKey::random();
+        let id1 = PublicKey::random();
+
+        let mut vv = vv![];
+        vv += &vv![];
+        assert_eq!(vv, vv![]);
+
+        vv += &vv![id0 => 1];
+        assert_eq!(vv, vv![id0 => 1]);
+
+        vv += &vv![id0 => 1];
+        assert_eq!(vv, vv![id0 => 2]);
+
+        vv += &vv![id1 => 1];
+        assert_eq!(vv, vv![id0 => 2, id1 => 1]);
+    }
+
+    #[test]
+    fn sub() {
+        let id0 = PublicKey::random();
+        let id1 = PublicKey::random();
+
+        assert_eq!(vv![id0 => 2, id1 => 2] - vv![], vv![id0 => 2, id1 => 2]);
+        assert_eq!(
+            vv![id0 => 2, id1 => 2] - vv![id0 => 1],
+            vv![id0 => 1, id1 => 2]
+        );
+        assert_eq!(
+            vv![id0 => 1, id1 => 2] - vv![id0 => 1, id1 => 1],
+            vv![id1 => 1]
+        );
+        assert_eq!(vv![id1 => 1] - vv![id0 => 1], vv![id1 => 1]);
+        assert_eq!(vv![id1 => 1] - vv![id1 => 2], vv![]);
+        assert_eq!(vv![] - vv![id0 => 1], vv![]);
     }
 }
