@@ -24,7 +24,7 @@ use self::{
     ip_stack::{IpStack, Protocol},
     local_discovery::LocalDiscovery,
     message_broker::MessageBroker,
-    protocol::{MAGIC, RuntimeId, Version, VERSION},
+    protocol::{RuntimeId, Version, MAGIC, VERSION},
 };
 use crate::{
     config::{ConfigKey, ConfigStore},
@@ -462,12 +462,23 @@ impl Inner {
                     };
 
                     permit.mark_as_connecting();
-                    let socket = inner.keep_connecting(addr).await;
 
-                    inner
-                        .clone()
-                        .handle_new_connection(socket, PeerSource::UserProvided, permit)
-                        .await;
+                    match inner.connect_with_retries(addr).await {
+                        Some(socket) => {
+                            inner
+                                .clone()
+                                .handle_new_connection(socket, PeerSource::UserProvided, permit)
+                                .await;
+                        }
+                        // Let a discovery mechanism find the address again.
+                        None => {
+                            log::warn!(
+                                "Failed to create outgoing TCP connection to user provided address {}",
+                                addr,
+                            );
+                            return;
+                        }
+                    }
                 }
             }
         })
@@ -489,7 +500,7 @@ impl Inner {
             Ok(socket) => socket,
             Err(error) => {
                 log::error!(
-                    "Failed to create outgoing TCP connection to {}: {}",
+                    "Failed to create outgoing locally discovered TCP connection to {}: {}",
                     addr,
                     error
                 );
@@ -513,35 +524,40 @@ impl Inner {
 
         permit.mark_as_connecting();
 
-        let socket = self.keep_connecting(addr).await;
-
-        self.handle_new_connection(socket, PeerSource::Dht, permit)
-            .await;
+        if let Some(socket) = self.connect_with_retries(addr).await {
+            self.handle_new_connection(socket, PeerSource::Dht, permit)
+                .await;
+        } else {
+            // TODO: Check if the address is still reported by the DHT discovery and retry if so.
+            // That way we can avoid waiting for the next DHT lookup to start and finish.
+            log::warn!(
+                "Failed to create outgoing TCP connection to DHT discovered address {}",
+                addr,
+            );
+        }
     }
 
-    async fn keep_connecting(&self, addr: SocketAddr) -> TcpStream {
+    async fn connect_with_retries(&self, addr: SocketAddr) -> Option<TcpStream> {
         let mut backoff = ExponentialBackoffBuilder::new()
             .with_initial_interval(Duration::from_millis(200))
             .with_max_interval(Duration::from_secs(10))
+            .with_max_elapsed_time(Some(Duration::from_secs(5 * 60)))
             .build();
 
         loop {
             match TcpStream::connect(addr).await {
                 Ok(socket) => {
-                    return socket;
+                    return Some(socket);
                 }
-                Err(error) => {
-                    // unwrap is OK, because we didn't specify max_elapsed_time so it never
-                    // returns `None`.
-                    let duration = backoff.next_backoff().unwrap();
-
-                    log::debug!(
-                        "Failed to create outgoing TCP connection to {}: {}. Retrying in {:?}",
-                        addr,
-                        error,
-                        duration
-                    );
-                    time::sleep(duration).await;
+                Err(_) => {
+                    match backoff.next_backoff() {
+                        Some(duration) => {
+                            time::sleep(duration).await;
+                        }
+                        // Max elapsed time was reached, let whatever discovery mechanism found
+                        // this address to find it again.
+                        None => return None,
+                    }
                 }
             }
         }
