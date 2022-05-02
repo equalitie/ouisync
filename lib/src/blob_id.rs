@@ -10,16 +10,15 @@ define_byte_array_wrapper! {
 }
 
 impl BlobId {
-    // TODO: rename to `ROOT`
-    pub(crate) const ZERO: Self = Self([0; Self::SIZE]);
+    pub(crate) const ROOT: Self = Self([0; Self::SIZE]);
 }
 
-// Never generates `ZERO`
+// Never generates `ROOT`
 impl Distribution<BlobId> for Standard {
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> BlobId {
         loop {
             let sample = BlobId(self.sample(rng));
-            if sample != BlobId::ZERO {
+            if sample != BlobId::ROOT {
                 return sample;
             }
         }

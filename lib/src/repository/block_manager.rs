@@ -88,7 +88,7 @@ impl BlockManager {
         for branch in branches {
             // We already removed outdated branches at this point, so every remaining root
             // directory version is up to date.
-            entries.push(BlockIds::new(branch.clone(), BlobId::ZERO));
+            entries.push(BlockIds::new(branch.clone(), BlobId::ROOT));
 
             match branch.open_root().await {
                 Ok(dir) => versions.push(dir),

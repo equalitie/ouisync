@@ -905,11 +905,11 @@ async fn file_conflict_modify_local() {
         .reopen(repo.secrets().keys().unwrap());
 
     // Create two concurrent versions of the same file.
-    let local_file = create_file_in(&local_branch, "test.txt", b"local v1").await;
+    let local_file = create_file_in_branch(&local_branch, "test.txt", b"local v1").await;
     assert_eq!(local_file.version_vector().await, vv![local_id => 1]);
     drop(local_file);
 
-    let remote_file = create_file_in(&remote_branch, "test.txt", b"remote v1").await;
+    let remote_file = create_file_in_branch(&remote_branch, "test.txt", b"remote v1").await;
     assert_eq!(remote_file.version_vector().await, vv![remote_id => 1]);
     drop(remote_file);
 
@@ -955,8 +955,8 @@ async fn file_conflict_attempt_to_fork_and_modify_remote() {
         .reopen(repo.secrets().keys().unwrap());
 
     // Create two concurrent versions of the same file.
-    create_file_in(&local_branch, "test.txt", b"local v1").await;
-    create_file_in(&remote_branch, "test.txt", b"remote v1").await;
+    create_file_in_branch(&local_branch, "test.txt", b"local v1").await;
+    create_file_in_branch(&remote_branch, "test.txt", b"remote v1").await;
 
     // Attempt to fork the remote version (fork is required to modify it)
     let mut remote_file = repo
@@ -989,8 +989,11 @@ async fn remove_branch() {
         .unwrap()
         .reopen(repo.secrets().keys().unwrap());
 
-    create_file_in(&remote_branch, "foo.txt", b"foo").await;
-    create_file_in(&remote_branch, "bar.txt", b"bar").await;
+    // Keep the root dir open until we create both files to make sure it keeps write access.
+    let remote_root = remote_branch.open_or_create_root().await.unwrap();
+    create_file_in_directory(&remote_root, "foo.txt", b"foo").await;
+    create_file_in_directory(&remote_root, "bar.txt", b"bar").await;
+    drop(remote_root);
 
     let mut file = repo.open_file("foo.txt").await.unwrap();
     file.fork(&local_branch).await.unwrap();
@@ -1022,12 +1025,16 @@ async fn create_remote_file(repo: &Repository, remote_id: PublicKey, name: &str,
         .unwrap()
         .reopen(repo.secrets().keys().unwrap());
 
-    create_file_in(&remote_branch, name, content).await;
+    create_file_in_branch(&remote_branch, name, content).await;
 }
 
-async fn create_file_in(branch: &Branch, name: &str, content: &[u8]) -> File {
+async fn create_file_in_branch(branch: &Branch, name: &str, content: &[u8]) -> File {
     let root = branch.open_or_create_root().await.unwrap();
-    let mut file = root.create_file(name.into()).await.unwrap();
+    create_file_in_directory(&root, name, content).await
+}
+
+async fn create_file_in_directory(dir: &Directory, name: &str, content: &[u8]) -> File {
+    let mut file = dir.create_file(name.into()).await.unwrap();
     file.write(content).await.unwrap();
     file.flush().await.unwrap();
     file
