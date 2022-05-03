@@ -674,6 +674,16 @@ async fn attempt_to_modify_remote_file() {
 
     create_remote_file(&repo, PublicKey::random(), "test.txt", b"foo").await;
 
+    // HACK: during the above `create_remote_file` call the remote branch is opened in write mode
+    // and then the remote root dir is cached. If the garbage collector kicks in at that time and
+    // opens the remote root dir as well, it retains it in the cache even after
+    // `create_remote_file` is finished. Then the following `open_file` might open the root from
+    // the cache where it still has write mode and that would make the subsequent assertions to
+    // fail because they expect it to have read-only mode. To prevent this we manually trigger
+    // the garbage collector and wait for it to finish, to make sure the root dir is dropped and
+    // removed from the cache. Then `open_file` reopens the root dir correctly in read-only mode.
+    repo.collect_garbage().await.unwrap();
+
     let mut file = repo.open_file("test.txt").await.unwrap();
     assert_matches!(file.truncate(0).await, Err(Error::PermissionDenied));
 
