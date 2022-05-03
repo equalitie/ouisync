@@ -259,11 +259,7 @@ async fn save_path(
 
     let new_proof = Proof::new(
         old_root.proof.writer_id,
-        old_root
-            .proof
-            .version_vector
-            .clone()
-            .incremented(old_root.proof.writer_id),
+        old_root.proof.version_vector.clone(),
         path.root_hash,
         write_keys,
     );

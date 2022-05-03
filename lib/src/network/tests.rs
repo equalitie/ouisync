@@ -10,7 +10,7 @@ use crate::{
     db,
     index::{
         node_test_utils::{receive_blocks, receive_nodes, Snapshot},
-        Index, Proof, RootNode,
+        BranchData, Index, Proof, RootNode,
     },
     repository::{self, RepositoryId},
     store, test_utils,
@@ -51,6 +51,8 @@ async fn transfer_snapshot_between_two_replicas_case(
     changeset_size: usize,
     rng_seed: u64,
 ) {
+    assert!(changeset_size > 0);
+
     let mut rng = StdRng::seed_from_u64(rng_seed);
 
     let write_keys = Keypair::generate(&mut rng);
@@ -64,7 +66,7 @@ async fn transfer_snapshot_between_two_replicas_case(
     assert!(load_latest_root_node(&b_index, a_id).await.is_none());
 
     // Wait until replica B catches up to replica A, then have replica A perform a local change
-    // (create one new block) and repeat.
+    // and repeat.
     let drive = async {
         let mut remaining_changesets = changeset_count;
 
@@ -72,10 +74,7 @@ async fn transfer_snapshot_between_two_replicas_case(
             wait_until_snapshots_in_sync(&a_index, a_id, &b_index).await;
 
             if remaining_changesets > 0 {
-                for _ in 0..changeset_size {
-                    create_block(&mut rng, &a_index, &a_id, &write_keys).await;
-                }
-
+                create_changeset(&mut rng, &a_index, &a_id, &write_keys, changeset_size).await;
                 remaining_changesets -= 1;
             } else {
                 break;
@@ -198,13 +197,31 @@ async fn wait_until_block_exists(index: &Index, block_id: &BlockId) {
     }
 }
 
-async fn create_block(
+// Simulate a changeset, e.g. create a file, write to it and flush it.
+async fn create_changeset(
     rng: &mut StdRng,
     index: &Index,
     writer_id: &PublicKey,
     write_keys: &Keypair,
+    size: usize,
 ) {
+    use sqlx::Connection;
+
     let branch = index.branches().await.get(writer_id).unwrap().clone();
+
+    for _ in 0..size {
+        create_block(rng, index, &branch, write_keys).await;
+    }
+
+    let mut cx = index.pool.acquire().await.unwrap();
+    let tx = cx.begin().await.unwrap();
+    branch
+        .update_root_version_vector(tx, &VersionVector::first(*writer_id), write_keys)
+        .await
+        .unwrap();
+}
+
+async fn create_block(rng: &mut StdRng, index: &Index, branch: &BranchData, write_keys: &Keypair) {
     let encoded_locator = rng.gen();
 
     let mut content = vec![0; BLOCK_SIZE];
@@ -222,8 +239,6 @@ async fn create_block(
         .await
         .unwrap();
     tx.commit().await.unwrap();
-
-    branch.notify();
 }
 
 async fn load_latest_root_node(index: &Index, writer_id: PublicKey) -> Option<RootNode> {

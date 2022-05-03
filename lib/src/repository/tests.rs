@@ -721,16 +721,11 @@ async fn version_vector_create_file() {
     // +1 for the parent being created
     // +1 for inserting the file
     assert_eq!(file.parent().version_vector().await, vv![local_id => 2]);
-    // Currently the root version vector gets increment also for every created block (or rather,
-    // for every created snapshot but currently creating a local block also creates a snapshot).
     // +1 for the root being created
     // +2 for inserting the parent
-    // +1 for the file block
-    // +1 for the parent block
-    // +1 for the root block
     assert_eq!(
         file.parent().parent().await.unwrap().version_vector().await,
-        vv![local_id => 6]
+        vv![local_id => 3]
     );
 
     file.write(b"blah").await.unwrap();
@@ -740,12 +735,9 @@ async fn version_vector_create_file() {
     // +1 for the parent being modified due to file vv bump
     assert_eq!(file.parent().version_vector().await, vv![local_id => 3]);
     // +1 for the root being modified due to parent vv bump
-    // +1 for the file block
-    // +1 for the parent block
-    // +1 for the root block
     assert_eq!(
         file.parent().parent().await.unwrap().version_vector().await,
-        vv![local_id => 10]
+        vv![local_id => 4]
     );
 }
 
@@ -848,10 +840,7 @@ async fn version_vector_fork_file() {
 
     assert_eq!(file.version_vector().await, vv![remote_id => 1]);
     assert_eq!(local_parent.version_vector().await, vv![]);
-    // Currently root version vector is incremented also every time a new snapshot is created
-    // (`File::fork` internally creates one new snapshot for every block the file consists of. In
-    // this case the file has only one block).
-    assert_eq!(local_root.version_vector().await, vv![local_id => 1]);
+    assert_eq!(local_root.version_vector().await, vv![]);
 
     file.parent().flush().await.unwrap();
 
@@ -863,11 +852,9 @@ async fn version_vector_fork_file() {
     );
     // +(1, 0) for the root being created
     // +(1, 1) for inserting the parent
-    // +(1, 0) for the root block
-    // +(1, 0) for the parent block
     assert_eq!(
         local_root.version_vector().await,
-        vv![local_id => 5, remote_id => 1]
+        vv![local_id => 2, remote_id => 1]
     );
 }
 
