@@ -8,7 +8,8 @@ mod parent_context;
 mod tests;
 
 pub(crate) use self::{
-    cache::RootDirectoryCache, entry_data::EntryData, parent_context::ParentContext,
+    cache::RootDirectoryCache, entry_data::EntryData, inner::OverwriteStrategy,
+    parent_context::ParentContext,
 };
 pub use self::{
     entry::{DirectoryRef, EntryRef, FileRef},
@@ -18,7 +19,6 @@ pub use self::{
 use self::{cache::SubdirectoryCache, entry_data::EntryTombstoneData, inner::Inner};
 use crate::{
     blob::{Blob, Shared},
-    blob_id::BlobId,
     branch::Branch,
     crypto::sign::PublicKey,
     debug_printer::DebugPrinter,
@@ -102,7 +102,7 @@ impl Directory {
     ) -> Result<()> {
         self.write()
             .await
-            .remove_entry(name, author, vv, None)
+            .remove_entry(name, author, vv, OverwriteStrategy::Remove)
             .await
     }
 
@@ -133,7 +133,7 @@ impl Directory {
                 src_name,
                 src_author,
                 src_entry.version_vector().clone(),
-                src_entry.blob_id().cloned(),
+                OverwriteStrategy::Keep,
             )
             .await?;
 
@@ -418,7 +418,9 @@ impl Writer<'_> {
         let data = EntryData::file(blob_id, VersionVector::new(), shared.downgrade());
         let parent = ParentContext::new(self.outer.clone(), name.clone(), author);
 
-        self.inner.insert_entry(name, author, data, None).await?;
+        self.inner
+            .insert_entry(name, author, data, OverwriteStrategy::Remove)
+            .await?;
 
         Ok(File::create(
             self.branch().clone(),
@@ -434,7 +436,9 @@ impl Writer<'_> {
         let data = EntryData::directory(blob_id, VersionVector::new());
         let parent = ParentContext::new(self.outer.clone(), name.clone(), author);
 
-        self.inner.insert_entry(name, author, data, None).await?;
+        self.inner
+            .insert_entry(name, author, data, OverwriteStrategy::Remove)
+            .await?;
 
         self.inner
             .open_directories
@@ -464,9 +468,7 @@ impl Writer<'_> {
         name: &str,
         author: &PublicKey,
         vv: VersionVector,
-        // `keep` is set when we're moving the entry and only want to remove it from the entries
-        // listed in `self` (as opposed to also remove its data).
-        keep: Option<BlobId>,
+        overwrite: OverwriteStrategy,
     ) -> Result<()> {
         // If we are removing a directory, ensure it's empty (recursive removal can still be
         // implemented at the upper layers).
@@ -481,7 +483,9 @@ impl Writer<'_> {
         let _old_dir_reader = if let Some(dir) = &old_dir {
             let reader = dir.read().await;
 
-            if keep.is_none() && reader.entries().any(|entry| !entry.is_tombstone()) {
+            if matches!(overwrite, OverwriteStrategy::Remove)
+                && reader.entries().any(|entry| !entry.is_tombstone())
+            {
                 return Err(Error::DirectoryNotEmpty);
             }
 
@@ -511,7 +515,7 @@ impl Writer<'_> {
         };
 
         self.inner
-            .insert_entry(name.into(), this_writer_id, new_entry, keep)
+            .insert_entry(name.into(), this_writer_id, new_entry, overwrite)
             .await
     }
 
@@ -521,7 +525,9 @@ impl Writer<'_> {
         author: PublicKey,
         entry: EntryData,
     ) -> Result<()> {
-        self.inner.insert_entry(name, author, entry, None).await
+        self.inner
+            .insert_entry(name, author, entry, OverwriteStrategy::Remove)
+            .await
     }
 
     pub fn branch(&self) -> &Branch {
