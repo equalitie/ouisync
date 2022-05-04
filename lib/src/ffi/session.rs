@@ -2,7 +2,7 @@ use super::{
     dart::{DartCObject, PostDartCObjectFn},
     error::{ErrorCode, ToErrorCode},
     logger::Logger,
-    utils::{self, Port, UniqueHandle},
+    utils::{self, Bytes, Port, UniqueHandle},
 };
 use crate::{
     config::ConfigStore,
@@ -100,6 +100,29 @@ pub unsafe extern "C" fn session_open(
 
         sender.send_result(port, Ok(()));
     });
+}
+
+/// Retrieve a serialized state monitor corresponding to the `path`.  The path is in the form
+/// "a:b:c". An empty string returns the "root" state monitor.
+#[no_mangle]
+pub unsafe extern "C" fn session_get_state_monitor(path: *const c_char) -> Bytes {
+    let path = match utils::ptr_to_str(path) {
+        Ok(s) => s,
+        Err(e) => {
+            log::error!(
+                "Failed to parse input in session_get_state_monitor: {:?}",
+                e
+            );
+            return Bytes::NULL;
+        }
+    };
+
+    if let Some(monitor) = get().network.state_monitor.locate(path) {
+        let bytes = rmp_serde::to_vec(&*monitor).unwrap();
+        Bytes::from_vec(bytes)
+    } else {
+        Bytes::NULL
+    }
 }
 
 /// Closes the ouisync session.

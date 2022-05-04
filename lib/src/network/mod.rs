@@ -115,6 +115,7 @@ impl Default for NetworkOptions {
 
 pub struct Network {
     inner: Arc<Inner>,
+    pub state_monitor: Arc<StateMonitor>,
     // We keep tasks here instead of in Inner because we want them to be
     // destroyed when Network is Dropped.
     _tasks: Arc<Tasks>,
@@ -195,6 +196,7 @@ impl Network {
 
         let network = Self {
             inner: inner.clone(),
+            state_monitor: StateMonitor::make_root(),
             _tasks: tasks,
             _port_forwarder: port_forwarder,
         };
