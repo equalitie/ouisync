@@ -30,9 +30,6 @@ async fn local_delete_local_file() {
     assert_eq!(repo.count_blocks().await.unwrap(), 1);
 }
 
-// FIXME: currently when removing remote a file, we only put a tombstone into the local version of
-// the parent directory but we don't delete the blocks of the file.
-#[ignore]
 #[tokio::test(flavor = "multi_thread")]
 async fn local_delete_remote_file() {
     let mut rng = StdRng::seed_from_u64(0);
@@ -56,6 +53,7 @@ async fn local_delete_remote_file() {
         .unwrap();
 
     repo_l.remove_entry("test.dat").await.unwrap();
+    repo_l.collect_garbage().await.unwrap();
 
     // Both the remote file and the remote root directory are removed.
     assert_eq!(repo_l.count_blocks().await.unwrap(), 1);
@@ -110,10 +108,6 @@ async fn local_truncate_local_file() {
     assert_eq!(repo.count_blocks().await.unwrap(), 2);
 }
 
-// FIXME: `truncate(0)` currently removes the leaf nodes pointing to the original blocks and
-// replaces them with one new leaf node pointing to the new block. The original blocks are still
-// referenced by the remote branch and are not removed.
-#[ignore]
 #[tokio::test(flavor = "multi_thread")]
 async fn local_truncate_remote_file() {
     let mut rng = StdRng::seed_from_u64(0);
