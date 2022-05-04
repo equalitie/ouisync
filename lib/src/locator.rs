@@ -17,7 +17,7 @@ pub(crate) struct Locator {
 impl Locator {
     /// Locator of the root block, that is, the head block of the root blob.
     pub const ROOT: Self = Self {
-        blob: BlobId::ZERO,
+        blob: BlobId::ROOT,
         block: 0,
     };
 

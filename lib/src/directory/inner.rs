@@ -2,6 +2,7 @@ use super::{cache::SubdirectoryCache, entry_data::EntryData, parent_context::Par
 use crate::{
     blob::{Blob, Shared},
     blob_id::BlobId,
+    block,
     branch::Branch,
     crypto::sign::PublicKey,
     db,
@@ -43,14 +44,14 @@ impl Inner {
         Ok(())
     }
 
-    // If `keep` is set to Some(some_blob_id), than that blob won't be removed from the store. This
-    // is useful when we want to move or rename a an entry.
+    // If `keep` is set to `true`, the existing blob won't be removed from the store. This is
+    // useful when we want to move or rename a an entry.
     pub async fn insert_entry(
         &mut self,
         name: String,
         author: PublicKey,
         mut new_data: EntryData,
-        keep: Option<BlobId>,
+        overwrite: OverwriteStrategy,
     ) -> Result<()> {
         let versions = self.entries.entry(name).or_insert_with(Default::default);
         let mut old_blob_ids = Vec::new();
@@ -78,7 +79,9 @@ impl Inner {
                     }
                 }
 
-                old_blob_ids.extend(old_data.blob_id().copied());
+                if matches!(overwrite, OverwriteStrategy::Remove) {
+                    old_blob_ids.extend(old_data.blob_id().copied());
+                }
 
                 let new_vv = new_data.version_vector().clone();
 
@@ -103,8 +106,7 @@ impl Inner {
 
         // Remove blobs of the outdated versions.
         // TODO: This should succeed/fail atomically with the above.
-        // TODO: when GC is implemented, this won't be necessary.
-        remove_outdated_blobs(self.blob.branch(), old_blob_ids, keep).await?;
+        remove_outdated_blobs(self.blob.branch(), old_blob_ids).await?;
 
         Ok(())
     }
@@ -119,7 +121,8 @@ impl Inner {
         blob_id: BlobId,
     ) -> Result<()> {
         let data = EntryData::file(blob_id, version_vector, Weak::new());
-        self.insert_entry(name, author_id, data, None).await
+        self.insert_entry(name, author_id, data, OverwriteStrategy::Remove)
+            .await
     }
 
     // Modify an entry in this directory with the specified name and author.
@@ -147,12 +150,16 @@ impl Inner {
     }
 
     // Modify the entry of this directory in its parent.
-    pub async fn modify_self_entry(&mut self, tx: db::Transaction<'_>) -> Result<()> {
+    pub async fn modify_self_entry(&mut self, mut tx: db::Transaction<'_>) -> Result<()> {
         let increment = mem::take(&mut self.version_vector_increment);
 
         if let Some(ctx) = self.parent.as_mut() {
             ctx.modify_entry(tx, &increment).await
         } else {
+            // At this point all local newly created blocks should become reachable so they can be
+            // safely unpinned to become normal subjects of garbage collection.
+            block::unpin_all(&mut tx).await?;
+
             let write_keys = self
                 .blob
                 .branch()
@@ -164,7 +171,9 @@ impl Inner {
                 .branch()
                 .data()
                 .update_root_version_vector(tx, &increment, write_keys)
-                .await
+                .await?;
+
+            Ok(())
         }
     }
 
@@ -283,16 +292,17 @@ impl Drop for ModifyEntry<'_> {
     }
 }
 
-async fn remove_outdated_blobs(
-    branch: &Branch,
-    remove: Vec<BlobId>,
-    keep: Option<BlobId>,
-) -> Result<()> {
-    for blob_id in remove {
-        if Some(blob_id) == keep {
-            continue;
-        }
+/// What to do with the existing entry when inserting a new entry in its place.
+pub(crate) enum OverwriteStrategy {
+    // Remove it
+    Remove,
+    // Keep it (useful when inserting a tombstone oven an entry which is to be moved somewhere
+    // else)
+    Keep,
+}
 
+async fn remove_outdated_blobs(branch: &Branch, remove: Vec<BlobId>) -> Result<()> {
+    for blob_id in remove {
         Blob::open(
             branch.clone(),
             Locator::head(blob_id),

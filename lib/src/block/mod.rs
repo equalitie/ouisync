@@ -4,9 +4,10 @@ use std::{array::TryFromSliceError, fmt};
 
 mod store;
 
-#[cfg(test)]
-pub(crate) use self::store::exists;
-pub(crate) use self::store::{count, init, read, write, BlockNonce};
+pub(crate) use self::store::{
+    clear_reachable, count, exists, init, mark_reachable, pin, read, remove_unreachable, unpin_all,
+    write, BlockNonce,
+};
 
 /// Block size in bytes.
 pub const BLOCK_SIZE: usize = 32 * 1024;

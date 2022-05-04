@@ -1,6 +1,6 @@
 //! Innternal state of Blob
 
-use super::OpenBlock;
+use super::open_block::OpenBlock;
 use crate::{block::BLOCK_SIZE, branch::Branch, locator::Locator, sync::Mutex};
 use std::sync::{Arc, Weak};
 

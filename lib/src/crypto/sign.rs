@@ -125,11 +125,11 @@ impl TryFrom<&'_ [u8]> for PublicKey {
     }
 }
 
-impl From<[u8; Self::SIZE]> for PublicKey {
-    fn from(bytes: [u8; Self::SIZE]) -> Self {
-        Self::try_from(bytes.as_ref()).unwrap()
-    }
-}
+// impl From<[u8; Self::SIZE]> for PublicKey {
+//     fn from(bytes: [u8; Self::SIZE]) -> Self {
+//         Self::try_from(bytes.as_ref()).unwrap()
+//     }
+// }
 
 impl From<PublicKey> for [u8; PublicKey::SIZE] {
     fn from(key: PublicKey) -> Self {
@@ -167,6 +167,31 @@ impl FromStr for PublicKey {
 }
 
 derive_sqlx_traits_for_byte_array_wrapper!(PublicKey);
+
+#[cfg(test)]
+mod test_utils {
+    use super::{PublicKey, SecretKey};
+    use proptest::{
+        arbitrary::{any, Arbitrary},
+        array::UniformArrayStrategy,
+        num,
+        strategy::{Map, NoShrink, Strategy},
+    };
+
+    impl Arbitrary for PublicKey {
+        type Parameters = ();
+        type Strategy = Map<
+            NoShrink<UniformArrayStrategy<num::u8::Any, [u8; SecretKey::SIZE]>>,
+            fn([u8; SecretKey::SIZE]) -> Self,
+        >;
+
+        fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+            any::<[u8; SecretKey::SIZE]>()
+                .no_shrink()
+                .prop_map(|array| (&SecretKey::try_from(&array[..]).unwrap()).into())
+        }
+    }
+}
 
 impl SecretKey {
     pub const SIZE: usize = ext::SECRET_KEY_LENGTH;

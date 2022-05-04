@@ -269,6 +269,23 @@ impl RootNode {
         Ok(summary.is_complete)
     }
 
+    /// Removes this node including its snapshot.
+    pub async fn remove_recursively(&self, conn: &mut db::Connection) -> Result<()> {
+        // This uses db triggers to delete the whole snapshot.
+        sqlx::query(
+            "PRAGMA recursive_triggers = ON;
+             DELETE FROM snapshot_root_nodes WHERE snapshot_id = ?;
+             PRAGMA recursive_triggers = OFF;",
+        )
+        .bind(self.snapshot_id)
+        .execute(conn)
+        .await?;
+
+        Ok(())
+    }
+
+    /// Removes all root nodes, including their snapshots, that are older than this node and are
+    /// on the same branch.
     pub async fn remove_recursively_all_older(&self, conn: &mut db::Connection) -> Result<()> {
         // This uses db triggers to delete the whole snapshot.
         sqlx::query(

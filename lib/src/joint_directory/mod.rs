@@ -1,10 +1,11 @@
 #[cfg(test)]
 mod tests;
+pub(crate) mod versioned;
 
 use crate::{
     branch::Branch,
     crypto::sign::PublicKey,
-    directory::{self, Directory, DirectoryRef, EntryRef, EntryType, FileRef},
+    directory::{self, Directory, DirectoryRef, EntryRef, EntryType, FileRef, OverwriteStrategy},
     error::{Error, Result},
     file::File,
     iterator::{Accumulate, SortedUnion},
@@ -17,7 +18,6 @@ use either::Either;
 use futures_util::future;
 use std::{
     borrow::Cow,
-    cmp::Ordering,
     collections::{BTreeMap, VecDeque},
     fmt,
     future::Future,
@@ -117,7 +117,9 @@ impl JointDirectory {
         let mut local_writer = local.write().await;
 
         for (name, author, vv) in entries {
-            local_writer.remove_entry(&name, &author, vv, None).await?;
+            local_writer
+                .remove_entry(&name, &author, vv, OverwriteStrategy::Remove)
+                .await?;
         }
 
         local_writer.flush().await
@@ -311,7 +313,8 @@ impl Reader<'_> {
         // contain one.
         // NOTE: Using keep_maximal may be an overkill in this case because of the invariant that
         // no single author/replica can create concurrent versions of an entry.
-        let mut entries = keep_maximal(entries, self.local_branch.map(Branch::id)).into_iter();
+        let mut entries =
+            versioned::keep_maximal(entries, self.local_branch.map(Branch::id)).into_iter();
 
         let first = entries.next().ok_or(Error::EntryNotFound)?;
 
@@ -514,7 +517,7 @@ impl<'a> JointDirectoryRef<'a> {
                 Err(e)
                     if self
                         .local_branch
-                        .map(|local_branch| dir.branch_id() == local_branch.id())
+                        .map(|local_branch| dir.branch().id() == local_branch.id())
                         .unwrap_or(false) =>
                 {
                     log::error!(
@@ -547,6 +550,10 @@ impl<'a> JointDirectoryRef<'a> {
         .flatten();
 
         Ok(JointDirectory::new(self.local_branch.cloned(), directories))
+    }
+
+    pub(crate) fn versions(&self) -> &[DirectoryRef] {
+        &self.versions
     }
 }
 
@@ -592,7 +599,7 @@ impl<'a> Merge<'a> {
         let mut files = VecDeque::new();
         let mut directories = vec![];
 
-        let entries = keep_maximal(entries, local_branch.map(Branch::id));
+        let entries = versioned::keep_maximal(entries, local_branch.map(Branch::id));
 
         for entry in entries {
             match entry {
@@ -629,79 +636,6 @@ impl<'a> Iterator for Merge<'a> {
             needs_disambiguation: self.needs_disambiguation,
         }))
     }
-}
-
-trait Versioned {
-    fn version_vector(&self) -> &VersionVector;
-    fn branch_id(&self) -> &PublicKey;
-}
-
-impl Versioned for EntryRef<'_> {
-    fn version_vector(&self) -> &VersionVector {
-        EntryRef::version_vector(self)
-    }
-
-    fn branch_id(&self) -> &PublicKey {
-        EntryRef::branch_id(self)
-    }
-}
-
-impl Versioned for FileRef<'_> {
-    fn version_vector(&self) -> &VersionVector {
-        FileRef::version_vector(self)
-    }
-
-    fn branch_id(&self) -> &PublicKey {
-        FileRef::branch_id(self)
-    }
-}
-
-// Returns the entries with the maximal version vectors.
-fn keep_maximal<E: Versioned>(
-    entries: impl Iterator<Item = E>,
-    local_branch_id: Option<&PublicKey>,
-) -> Vec<E> {
-    let mut max: Vec<E> = Vec::new();
-
-    for new in entries {
-        let mut insert = true;
-        let mut remove = None;
-
-        let new_is_local = local_branch_id == Some(new.branch_id());
-
-        for (index, old) in max.iter().enumerate() {
-            match (
-                old.version_vector().partial_cmp(new.version_vector()),
-                new_is_local,
-            ) {
-                // If both have identical versions, prefer the local one
-                (Some(Ordering::Less), _) | (Some(Ordering::Equal), true) => {
-                    insert = true;
-                    remove = Some(index);
-                    break;
-                }
-                (Some(Ordering::Greater), _) | (Some(Ordering::Equal), false) => {
-                    insert = false;
-                    break;
-                }
-                (None, _) => {
-                    insert = true;
-                }
-            }
-        }
-
-        // Note: using `Vec::remove` to maintain the original order. Is there a more efficient
-        // way?
-        if let Some(index) = remove {
-            max.remove(index);
-        }
-
-        if insert {
-            max.push(new)
-        }
-    }
-
-    max
 }
 
 enum Pattern<'a> {

@@ -1,4 +1,8 @@
-use super::{inner::Unique, Blob, Buffer, Cursor, OpenBlock, Shared, HEADER_SIZE};
+use super::{
+    inner::Unique,
+    open_block::{Buffer, Cursor, OpenBlock},
+    Blob, Shared, HEADER_SIZE,
+};
 use crate::{
     block::{self, BlockId, BlockNonce, BLOCK_SIZE},
     branch::Branch,
@@ -509,6 +513,13 @@ async fn write_block(
         .insert(tx, &id, &locator.encode(read_key), write_keys)
         .await?;
     block::write(tx, &id, &buffer, &nonce).await?;
+
+    // Pin locally created blocks so they are not prematurelly collected. All pinned blocks are
+    // unpinned when the current changeset is flushed at which point the block should already be
+    // reachable. The pins are not persistent so if the app is terminated or crashes before the
+    // current changeset is flushed, all unreachable blocks will be subject to collection on the
+    // next app start.
+    block::pin(tx, &id).await?;
 
     Ok(id)
 }

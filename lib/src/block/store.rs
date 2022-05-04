@@ -15,7 +15,13 @@ pub async fn init(conn: &mut db::Connection) -> Result<()> {
              id       BLOB NOT NULL PRIMARY KEY,
              nonce    BLOB NOT NULL,
              content  BLOB NOT NULL
-         ) WITHOUT ROWID",
+         ) WITHOUT ROWID;
+
+         CREATE TEMPORARY TABLE IF NOT EXISTS reachable_blocks (
+             id     BLOB NOT NULL PRIMARY KEY,
+             pinned INT  NOT NULL
+         ) WITHOUT ROWID;
+        ",
     )
     .execute(conn)
     .await
@@ -96,9 +102,7 @@ pub(crate) async fn write(
     Ok(())
 }
 
-/// Checks whether a block exists in the store.
-/// (Currently used only in tests)
-#[cfg(test)]
+/// Checks whether the block exists in the store.
 pub(crate) async fn exists(conn: &mut db::Connection, id: &BlockId) -> Result<bool> {
     Ok(sqlx::query("SELECT 0 FROM blocks WHERE id = ?")
         .bind(id)
@@ -115,6 +119,62 @@ pub(crate) async fn count(conn: &mut db::Connection) -> Result<usize> {
             .await?
             .get(0),
     ) as usize)
+}
+
+/// Clear the reachable flag from all blocks except the pinned ones. Do this once before every
+/// garbage collection pass.
+pub(crate) async fn clear_reachable(conn: &mut db::Connection) -> Result<()> {
+    sqlx::query("DELETE FROM reachable_blocks WHERE pinned = 0")
+        .execute(conn)
+        .await?;
+
+    Ok(())
+}
+
+/// Mark the specified block as reachable.
+pub(crate) async fn mark_reachable(conn: &mut db::Connection, id: &BlockId) -> Result<()> {
+    sqlx::query("INSERT INTO reachable_blocks (id, pinned) VALUES (?, 0) ON CONFLICT DO NOTHING")
+        .bind(id)
+        .execute(conn)
+        .await?;
+
+    Ok(())
+}
+
+/// Remove all unreachable blocks. Do this at the end of every garbage collection pass.
+pub(crate) async fn remove_unreachable(conn: &mut db::Connection) -> Result<usize> {
+    let count = sqlx::query(
+        "DELETE FROM blocks
+         WHERE id NOT IN (SELECT id FROM reachable_blocks)",
+    )
+    .execute(conn)
+    .await?
+    .rows_affected();
+
+    Ok(count as usize)
+}
+
+/// Mark the specified block as reachable and pin it to prevent it from being marked as
+/// unreachable. The block remains pinned until `unpin_all` is called or until the app restarts.
+pub(crate) async fn pin(conn: &mut db::Connection, id: &BlockId) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO reachable_blocks (id, pinned) VALUES (?, 1)
+         ON CONFLICT DO UPDATE SET pinned = 1",
+    )
+    .bind(id)
+    .execute(conn)
+    .await?;
+
+    Ok(())
+}
+
+/// Unpin all pinned blocks, but keep the marked as reachable.
+pub(crate) async fn unpin_all(conn: &mut db::Connection) -> Result<()> {
+    sqlx::query("UPDATE reachable_blocks SET pinned = 0")
+        .execute(conn)
+        .await?;
+
+    Ok(())
 }
 
 #[cfg(test)]

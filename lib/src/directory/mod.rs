@@ -8,7 +8,8 @@ mod parent_context;
 mod tests;
 
 pub(crate) use self::{
-    cache::RootDirectoryCache, entry_data::EntryData, parent_context::ParentContext,
+    cache::RootDirectoryCache, entry_data::EntryData, inner::OverwriteStrategy,
+    parent_context::ParentContext,
 };
 pub use self::{
     entry::{DirectoryRef, EntryRef, FileRef},
@@ -18,7 +19,6 @@ pub use self::{
 use self::{cache::SubdirectoryCache, entry_data::EntryTombstoneData, inner::Inner};
 use crate::{
     blob::{Blob, Shared},
-    blob_id::BlobId,
     branch::Branch,
     crypto::sign::PublicKey,
     debug_printer::DebugPrinter,
@@ -102,7 +102,7 @@ impl Directory {
     ) -> Result<()> {
         self.write()
             .await
-            .remove_entry(name, author, vv, None)
+            .remove_entry(name, author, vv, OverwriteStrategy::Remove)
             .await
     }
 
@@ -133,7 +133,7 @@ impl Directory {
                 src_name,
                 src_author,
                 src_entry.version_vector().clone(),
-                src_entry.blob_id().cloned(),
+                OverwriteStrategy::Keep,
             )
             .await?;
 
@@ -175,27 +175,29 @@ impl Directory {
         // Prevent deadlock
         drop(inner);
 
-        if let Some((parent_dir, parent_entry_name)) = parent {
+        let dir = if let Some((parent_dir, parent_entry_name)) = parent {
             let parent_dir = parent_dir.fork(local_branch).await?;
+            let mut parent_dir = parent_dir.write().await;
 
-            match parent_dir
-                .read()
-                .await
-                .lookup_version(&parent_entry_name, local_branch.id())
-            {
-                Ok(EntryRef::Directory(entry)) => return entry.open().await,
+            match parent_dir.lookup_version(&parent_entry_name, local_branch.id()) {
+                Ok(EntryRef::Directory(entry)) => entry.open().await?,
                 Ok(EntryRef::File(_)) => {
                     // FIXME: create the directory alongside the file somehow.
                     return Err(Error::EntryIsFile);
                 }
-                Ok(EntryRef::Tombstone(_)) | Err(Error::EntryNotFound) => (),
+                Ok(EntryRef::Tombstone(_)) | Err(Error::EntryNotFound) => {
+                    parent_dir.create_directory(parent_entry_name).await?
+                }
                 Err(error) => return Err(error),
             }
-
-            parent_dir.create_directory(parent_entry_name).await
         } else {
-            local_branch.open_or_create_root().await
-        }
+            local_branch.open_or_create_root().await?
+        };
+
+        let src_vv = self.read().await.version_vector().await;
+        dir.write().await.fork(&src_vv).await;
+
+        Ok(dir)
     }
 
     pub async fn parent(&self) -> Option<Directory> {
@@ -418,7 +420,9 @@ impl Writer<'_> {
         let data = EntryData::file(blob_id, VersionVector::new(), shared.downgrade());
         let parent = ParentContext::new(self.outer.clone(), name.clone(), author);
 
-        self.inner.insert_entry(name, author, data, None).await?;
+        self.inner
+            .insert_entry(name, author, data, OverwriteStrategy::Remove)
+            .await?;
 
         Ok(File::create(
             self.branch().clone(),
@@ -434,7 +438,9 @@ impl Writer<'_> {
         let data = EntryData::directory(blob_id, VersionVector::new());
         let parent = ParentContext::new(self.outer.clone(), name.clone(), author);
 
-        self.inner.insert_entry(name, author, data, None).await?;
+        self.inner
+            .insert_entry(name, author, data, OverwriteStrategy::Remove)
+            .await?;
 
         self.inner
             .open_directories
@@ -464,9 +470,7 @@ impl Writer<'_> {
         name: &str,
         author: &PublicKey,
         vv: VersionVector,
-        // `keep` is set when we're moving the entry and only want to remove it from the entries
-        // listed in `self` (as opposed to also remove its data).
-        keep: Option<BlobId>,
+        overwrite: OverwriteStrategy,
     ) -> Result<()> {
         // If we are removing a directory, ensure it's empty (recursive removal can still be
         // implemented at the upper layers).
@@ -481,7 +485,9 @@ impl Writer<'_> {
         let _old_dir_reader = if let Some(dir) = &old_dir {
             let reader = dir.read().await;
 
-            if keep.is_none() && reader.entries().any(|entry| !entry.is_tombstone()) {
+            if matches!(overwrite, OverwriteStrategy::Remove)
+                && reader.entries().any(|entry| !entry.is_tombstone())
+            {
                 return Err(Error::DirectoryNotEmpty);
             }
 
@@ -511,7 +517,7 @@ impl Writer<'_> {
         };
 
         self.inner
-            .insert_entry(name.into(), this_writer_id, new_entry, keep)
+            .insert_entry(name.into(), this_writer_id, new_entry, overwrite)
             .await
     }
 
@@ -521,11 +527,34 @@ impl Writer<'_> {
         author: PublicKey,
         entry: EntryData,
     ) -> Result<()> {
-        self.inner.insert_entry(name, author, entry, None).await
+        self.inner
+            .insert_entry(name, author, entry, OverwriteStrategy::Remove)
+            .await
     }
 
     pub fn branch(&self) -> &Branch {
         self.inner.blob.branch()
+    }
+
+    /// Version vector of this directory.
+    pub async fn version_vector(&self) -> VersionVector {
+        version_vector(&self.inner).await
+    }
+
+    async fn fork(&mut self, src_vv: &VersionVector) {
+        let dst_vv = self.version_vector().await;
+
+        for (id, version) in src_vv {
+            if *version == 0 {
+                continue;
+            }
+
+            if dst_vv.get(id) > 0 {
+                continue;
+            }
+
+            self.inner.version_vector_increment.increment(*id);
+        }
     }
 }
 
@@ -570,17 +599,7 @@ impl Reader<'_> {
 
     /// Version vector of this directory.
     pub async fn version_vector(&self) -> VersionVector {
-        if let Some(parent) = &self.inner.parent {
-            parent.entry_version_vector().await
-        } else {
-            self.branch()
-                .data()
-                .root()
-                .await
-                .proof
-                .version_vector
-                .clone()
-        }
+        version_vector(&self.inner).await
     }
 
     /// Locator of this directory
@@ -621,4 +640,20 @@ fn lookup<'a>(
                 .map(move |(author, data)| EntryRef::new(outer, inner, name, data, author))
         })
         .ok_or(Error::EntryNotFound)
+}
+
+async fn version_vector(inner: &Inner) -> VersionVector {
+    if let Some(parent) = &inner.parent {
+        parent.entry_version_vector().await
+    } else {
+        inner
+            .blob
+            .branch()
+            .data()
+            .root()
+            .await
+            .proof
+            .version_vector
+            .clone()
+    }
 }

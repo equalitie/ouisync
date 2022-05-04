@@ -2,7 +2,7 @@
 
 use ouisync::{File, Repository, BLOB_HEADER_SIZE, BLOCK_SIZE};
 use rand::{rngs::StdRng, Rng, SeedableRng};
-use std::time::Duration;
+use std::{io::SeekFrom, time::Duration};
 use tokio::time;
 
 mod common;
@@ -30,9 +30,6 @@ async fn local_delete_local_file() {
     assert_eq!(repo.count_blocks().await.unwrap(), 1);
 }
 
-// FIXME: currently when removing remote a file, we only put a tombstone into the local version of
-// the parent directory but we don't delete the blocks of the file.
-#[ignore]
 #[tokio::test(flavor = "multi_thread")]
 async fn local_delete_remote_file() {
     let mut rng = StdRng::seed_from_u64(0);
@@ -56,6 +53,7 @@ async fn local_delete_remote_file() {
         .unwrap();
 
     repo_l.remove_entry("test.dat").await.unwrap();
+    repo_l.collect_garbage().await.unwrap();
 
     // Both the remote file and the remote root directory are removed.
     assert_eq!(repo_l.count_blocks().await.unwrap(), 1);
@@ -110,10 +108,6 @@ async fn local_truncate_local_file() {
     assert_eq!(repo.count_blocks().await.unwrap(), 2);
 }
 
-// FIXME: `truncate(0)` currently removes the leaf nodes pointing to the original blocks and
-// replaces them with one new leaf node pointing to the new block. The original blocks are still
-// referenced by the remote branch and are not removed.
-#[ignore]
 #[tokio::test(flavor = "multi_thread")]
 async fn local_truncate_remote_file() {
     let mut rng = StdRng::seed_from_u64(0);
@@ -138,6 +132,8 @@ async fn local_truncate_remote_file() {
         .unwrap();
     file.truncate(0).await.unwrap();
     file.flush().await.unwrap();
+
+    repo_l.collect_garbage().await.unwrap();
 
     //   1 block for the file (the original 2 blocks were removed)
     // + 1 block for the local root (created when the file was forked)
@@ -168,6 +164,54 @@ async fn remote_truncate_remote_file() {
 
     // 1 block for the file + 1 block for the remote root
     time::timeout(Duration::from_secs(5), expect_block_count(&repo_l, 2))
+        .await
+        .unwrap();
+}
+
+// FIXME: this currently fails because the first block of the file is not changed by the update and
+// so is never redownloaded.
+#[ignore]
+#[tokio::test(flavor = "multi_thread")]
+async fn concurrent_delete_update() {
+    let mut rng = StdRng::seed_from_u64(0);
+
+    let (network_l, network_r) = common::create_connected_peers().await;
+    let (repo_l, repo_r) = common::create_linked_repos(&mut rng).await;
+    let reg_l = network_l.handle().register(repo_l.index().clone());
+    let reg_r = network_r.handle().register(repo_r.index().clone());
+
+    let mut file = repo_r.create_file("test.dat").await.unwrap();
+    write_to_file(&mut rng, &mut file, BLOCK_SIZE - BLOB_HEADER_SIZE).await;
+    file.flush().await.unwrap();
+
+    // 1 for the remote root + 1 for the file
+    time::timeout(Duration::from_secs(5), expect_block_count(&repo_l, 2))
+        .await
+        .unwrap();
+
+    // Disconnect to allow concurrent modifications.
+    drop(reg_l);
+    drop(reg_r);
+
+    // Local delete
+    repo_l.remove_entry("test.dat").await.unwrap();
+    repo_l.collect_garbage().await.unwrap();
+
+    // Sanity check
+    assert_eq!(repo_l.count_blocks().await.unwrap(), 1);
+
+    // Remote update. Don't change the length of the file so the first block (where the length it
+    // stored) remains unchanged.
+    file.seek(SeekFrom::End(-64)).await.unwrap();
+    write_to_file(&mut rng, &mut file, 64).await;
+    file.flush().await.unwrap();
+
+    // Re-connect
+    let _reg_l = network_l.handle().register(repo_l.index().clone());
+    let _reg_r = network_r.handle().register(repo_r.index().clone());
+
+    // 1 for the local root + 1 for the remote root + 2 for the file
+    time::timeout(Duration::from_secs(5), expect_block_count(&repo_l, 4))
         .await
         .unwrap();
 }

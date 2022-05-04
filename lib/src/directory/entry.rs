@@ -7,6 +7,7 @@ use super::{
 use crate::{
     blob::Shared,
     blob_id::BlobId,
+    branch::Branch,
     crypto::sign::PublicKey,
     error::{Error, Result},
     file::File,
@@ -133,7 +134,7 @@ impl<'a> FileRef<'a> {
         Locator::head(*self.blob_id())
     }
 
-    pub(crate) fn blob_id(&self) -> &BlobId {
+    pub(crate) fn blob_id(&self) -> &'a BlobId {
         &self.entry_data.blob_id
     }
 
@@ -168,8 +169,8 @@ impl<'a> FileRef<'a> {
         File::open(branch, locator, parent_context, shared)
     }
 
-    pub fn branch_id(&self) -> &PublicKey {
-        self.inner.branch_id()
+    pub fn branch(&self) -> &Branch {
+        self.inner.branch()
     }
 
     pub fn parent(&self) -> &Directory {
@@ -204,7 +205,11 @@ impl<'a> DirectoryRef<'a> {
     }
 
     pub(crate) fn locator(&self) -> Locator {
-        Locator::head(self.entry_data.blob_id)
+        Locator::head(*self.blob_id())
+    }
+
+    pub(crate) fn blob_id(&self) -> &'a BlobId {
+        &self.entry_data.blob_id
     }
 
     pub fn author(&self) -> &'a PublicKey {
@@ -223,8 +228,8 @@ impl<'a> DirectoryRef<'a> {
             .await
     }
 
-    pub fn branch_id(&self) -> &'a PublicKey {
-        self.inner.branch_id()
+    pub fn branch(&self) -> &'a Branch {
+        self.inner.branch()
     }
 
     pub(crate) fn data(&self) -> &EntryDirectoryData {
@@ -291,6 +296,10 @@ struct RefInner<'a> {
 impl<'a> RefInner<'a> {
     fn parent_context(&self) -> ParentContext {
         ParentContext::new(self.parent_outer.clone(), self.name.into(), *self.author)
+    }
+
+    fn branch(&self) -> &'a Branch {
+        self.parent_inner.blob.branch()
     }
 
     pub fn branch_id(&self) -> &'a PublicKey {

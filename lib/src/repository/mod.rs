@@ -1,3 +1,4 @@
+mod block_manager;
 mod id;
 mod merger;
 #[cfg(test)]
@@ -5,7 +6,10 @@ mod tests;
 
 pub use self::id::RepositoryId;
 
-use self::merger::Merger;
+use self::{
+    block_manager::{BlockManager, BlockManagerHandle},
+    merger::Merger,
+};
 use crate::{
     access_control::{AccessMode, AccessSecrets, MasterSecret},
     block::{self, BLOCK_SIZE},
@@ -40,6 +44,7 @@ use tokio::task;
 pub struct Repository {
     shared: Arc<Shared>,
     _merge_handle: Option<ScopedJoinHandle<()>>,
+    block_manager_handle: BlockManagerHandle,
 }
 
 impl Repository {
@@ -118,6 +123,7 @@ impl Repository {
         enable_merger: bool,
     ) -> Result<Self> {
         let mut conn = pool.acquire().await?;
+        init_db(&mut conn).await?;
 
         let master_key = if let Some(master_secret) = master_secret {
             Some(metadata::secret_to_key(master_secret, &mut conn).await?)
@@ -184,11 +190,20 @@ impl Repository {
             scoped_task::spawn(Merger::new(shared.clone(), local_branch).run())
         });
 
+        let (block_manager, block_manager_handle) = BlockManager::new(shared.clone());
+
+        // Garbage collection requires at least read access to be able to determine block
+        // reachability.
+        if shared.secrets.can_read() {
+            task::spawn(block_manager.run());
+        }
+
         task::spawn(report_sync_progress(index));
 
         Ok(Self {
             shared,
             _merge_handle: merge_handle,
+            block_manager_handle,
         })
     }
 
@@ -421,6 +436,16 @@ impl Repository {
         self.shared.index.sync_progress().await
     }
 
+    /// Trigger manual garbage collection and wait for it to complete. Returns whether the
+    /// collection completed successfully.
+    ///
+    /// It's not necessary to call this method as the garbage collection happens automatically in
+    /// the background. It can still be useful if one wants to make sure the collection completed
+    /// and/or to know whether it completed successfully or failed.
+    pub async fn collect_garbage(&self) -> Result<()> {
+        self.block_manager_handle.collect_garbage().await
+    }
+
     // Opens the root directory across all branches as JointDirectory.
     async fn joint_root(&self) -> Result<JointDirectory> {
         // If we have only blind access we can cut this short. Also this check is necessary to
@@ -443,7 +468,7 @@ impl Repository {
                 }
                 Err(error) => {
                     log::error!(
-                        "failed to open root directory on a remote branch {:?}: {:?}",
+                        "failed to open root directory in branch {:?}: {:?}",
                         branch.id(),
                         error
                     );
@@ -590,6 +615,7 @@ impl Shared {
         .await
     }
 
+    // TODO: consider rewriting this to return `impl Stream` to avoid the Vec allocation.
     pub async fn branches(&self) -> Result<Vec<Branch>> {
         future::try_join_all(
             self.index
@@ -599,6 +625,11 @@ impl Shared {
                 .map(|data| self.inflate(data)),
         )
         .await
+    }
+
+    pub async fn remove_branch(&self, id: &PublicKey) -> Result<()> {
+        self.branches.lock().await.remove(id);
+        self.index.remove_branch(id).await
     }
 
     // Create `Branch` wrapping the given `data`, reusing a previously cached one if it exists,
@@ -638,8 +669,6 @@ async fn generate_writer_id(
 }
 
 async fn report_sync_progress(index: Index) {
-    // TODO: change this to report the progress as MB downloaded / MB total and/or percents
-
     let mut prev_progress = Progress { value: 0, total: 0 };
     let mut event_rx = ThrottleReceiver::new(index.subscribe(), Duration::from_secs(1));
 

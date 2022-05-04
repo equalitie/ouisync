@@ -58,12 +58,6 @@ impl TryFrom<&'_ [u8]> for RepositoryId {
     }
 }
 
-impl From<[u8; PublicKey::SIZE]> for RepositoryId {
-    fn from(bytes: [u8; PublicKey::SIZE]) -> Self {
-        Self(PublicKey::from(bytes))
-    }
-}
-
 impl From<PublicKey> for RepositoryId {
     fn from(pk: PublicKey) -> Self {
         Self(pk)

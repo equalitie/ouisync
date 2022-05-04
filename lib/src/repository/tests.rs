@@ -674,6 +674,16 @@ async fn attempt_to_modify_remote_file() {
 
     create_remote_file(&repo, PublicKey::random(), "test.txt", b"foo").await;
 
+    // HACK: during the above `create_remote_file` call the remote branch is opened in write mode
+    // and then the remote root dir is cached. If the garbage collector kicks in at that time and
+    // opens the remote root dir as well, it retains it in the cache even after
+    // `create_remote_file` is finished. Then the following `open_file` might open the root from
+    // the cache where it still has write mode and that would make the subsequent assertions to
+    // fail because they expect it to have read-only mode. To prevent this we manually trigger
+    // the garbage collector and wait for it to finish, to make sure the root dir is dropped and
+    // removed from the cache. Then `open_file` reopens the root dir correctly in read-only mode.
+    repo.collect_garbage().await.unwrap();
+
     let mut file = repo.open_file("test.txt").await.unwrap();
     assert_matches!(file.truncate(0).await, Err(Error::PermissionDenied));
 
@@ -711,16 +721,11 @@ async fn version_vector_create_file() {
     // +1 for the parent being created
     // +1 for inserting the file
     assert_eq!(file.parent().version_vector().await, vv![local_id => 2]);
-    // Currently the root version vector gets increment also for every created block (or rather,
-    // for every created snapshot but currently creating a local block also creates a snapshot).
     // +1 for the root being created
     // +2 for inserting the parent
-    // +1 for the file block
-    // +1 for the parent block
-    // +1 for the root block
     assert_eq!(
         file.parent().parent().await.unwrap().version_vector().await,
-        vv![local_id => 6]
+        vv![local_id => 3]
     );
 
     file.write(b"blah").await.unwrap();
@@ -730,12 +735,9 @@ async fn version_vector_create_file() {
     // +1 for the parent being modified due to file vv bump
     assert_eq!(file.parent().version_vector().await, vv![local_id => 3]);
     // +1 for the root being modified due to parent vv bump
-    // +1 for the file block
-    // +1 for the parent block
-    // +1 for the root block
     assert_eq!(
         file.parent().parent().await.unwrap().version_vector().await,
-        vv![local_id => 10]
+        vv![local_id => 4]
     );
 }
 
@@ -805,7 +807,7 @@ async fn version_vector_recreate_deleted_file() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn version_vector_fork_file() {
+async fn version_vector_fork_files() {
     let repo = Repository::create(
         &db::Store::Temporary,
         rand::random(),
@@ -817,48 +819,53 @@ async fn version_vector_fork_file() {
     .unwrap();
 
     let local_branch = repo.get_or_create_local_branch().await.unwrap();
-    let local_id = *local_branch.id();
-
-    let remote_id = PublicKey::random();
     let remote_branch = repo
-        .create_remote_branch(remote_id)
+        .create_remote_branch(PublicKey::random())
         .await
         .unwrap()
         .reopen(repo.secrets().keys().unwrap());
 
     let remote_root = remote_branch.open_or_create_root().await.unwrap();
     let remote_parent = remote_root.create_directory("parent".into()).await.unwrap();
-    let mut file = remote_parent.create_file("test.txt".into()).await.unwrap();
-    file.flush().await.unwrap();
+    let mut file0 = create_file_in_directory(&remote_parent, "foo.txt", &[]).await;
+    let mut file1 = create_file_in_directory(&remote_parent, "bar.txt", &[]).await;
 
-    file.fork(&local_branch).await.unwrap();
+    let remote_file0_vv = file0.version_vector().await;
+    let remote_file1_vv = file1.version_vector().await;
 
-    let local_parent = file.parent();
+    // Fork the first file
+    file0.fork(&local_branch).await.unwrap();
+
+    let local_parent = file0.parent();
     let local_root = local_parent.parent().await.unwrap();
 
-    assert_eq!(file.version_vector().await, vv![remote_id => 1]);
-    assert_eq!(local_parent.version_vector().await, vv![]);
-    // Currently root version vector is incremented also every time a new snapshot is created
-    // (`File::fork` internally creates one new snapshot for every block the file consists of. In
-    // this case the file has only one block).
-    assert_eq!(local_root.version_vector().await, vv![local_id => 1]);
+    local_parent.flush().await.unwrap();
 
-    file.parent().flush().await.unwrap();
+    // Parent and root are concurrent because the second file isn't forked yet.
+    assert_eq!(file0.version_vector().await, remote_file0_vv);
+    assert_eq!(
+        local_parent
+            .version_vector()
+            .await
+            .partial_cmp(&remote_parent.version_vector().await),
+        None
+    );
+    assert_eq!(
+        local_root
+            .version_vector()
+            .await
+            .partial_cmp(&remote_root.version_vector().await),
+        None
+    );
 
-    // +(1, 0) for the parent being created
-    // +(0, 1) for inserting the forked file
-    assert_eq!(
-        local_parent.version_vector().await,
-        vv![local_id => 1, remote_id => 1]
-    );
-    // +(1, 0) for the root being created
-    // +(1, 1) for inserting the parent
-    // +(1, 0) for the root block
-    // +(1, 0) for the parent block
-    assert_eq!(
-        local_root.version_vector().await,
-        vv![local_id => 5, remote_id => 1]
-    );
+    // Fork the second file
+    file1.fork(&local_branch).await.unwrap();
+    local_parent.flush().await.unwrap();
+
+    // Parent and root are now newer.
+    assert_eq!(file1.version_vector().await, remote_file1_vv);
+    assert!(local_parent.version_vector().await > remote_parent.version_vector().await);
+    assert!(local_root.version_vector().await > remote_root.version_vector().await);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -905,13 +912,15 @@ async fn file_conflict_modify_local() {
         .reopen(repo.secrets().keys().unwrap());
 
     // Create two concurrent versions of the same file.
-    let local_file = create_file_in(&local_branch, "test.txt", b"local v1").await;
+    let local_file = create_file_in_branch(&local_branch, "test.txt", b"local v1").await;
     assert_eq!(local_file.version_vector().await, vv![local_id => 1]);
     drop(local_file);
 
-    let remote_file = create_file_in(&remote_branch, "test.txt", b"remote v1").await;
+    let remote_file = create_file_in_branch(&remote_branch, "test.txt", b"remote v1").await;
     assert_eq!(remote_file.version_vector().await, vv![remote_id => 1]);
     drop(remote_file);
+
+    repo.collect_garbage().await.unwrap();
 
     // Modify the local version.
     let mut local_file = repo.open_file_version("test.txt", &local_id).await.unwrap();
@@ -953,8 +962,8 @@ async fn file_conflict_attempt_to_fork_and_modify_remote() {
         .reopen(repo.secrets().keys().unwrap());
 
     // Create two concurrent versions of the same file.
-    create_file_in(&local_branch, "test.txt", b"local v1").await;
-    create_file_in(&remote_branch, "test.txt", b"remote v1").await;
+    create_file_in_branch(&local_branch, "test.txt", b"local v1").await;
+    create_file_in_branch(&remote_branch, "test.txt", b"remote v1").await;
 
     // Attempt to fork the remote version (fork is required to modify it)
     let mut remote_file = repo
@@ -964,6 +973,47 @@ async fn file_conflict_attempt_to_fork_and_modify_remote() {
     remote_file.fork(&local_branch).await.unwrap();
     remote_file.write(b"remote v2").await.unwrap();
     assert_matches!(remote_file.flush().await, Err(Error::EntryExists));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn remove_branch() {
+    let repo = Repository::create(
+        &db::Store::Temporary,
+        rand::random(),
+        MasterSecret::random(),
+        AccessSecrets::random_write(),
+        false,
+    )
+    .await
+    .unwrap();
+
+    let local_branch = repo.get_or_create_local_branch().await.unwrap();
+
+    let remote_id = PublicKey::random();
+    let remote_branch = repo
+        .create_remote_branch(remote_id)
+        .await
+        .unwrap()
+        .reopen(repo.secrets().keys().unwrap());
+
+    // Keep the root dir open until we create both files to make sure it keeps write access.
+    let remote_root = remote_branch.open_or_create_root().await.unwrap();
+    create_file_in_directory(&remote_root, "foo.txt", b"foo").await;
+    create_file_in_directory(&remote_root, "bar.txt", b"bar").await;
+    drop(remote_root);
+
+    let mut file = repo.open_file("foo.txt").await.unwrap();
+    file.fork(&local_branch).await.unwrap();
+    file.parent().flush().await.unwrap();
+    drop(file);
+
+    repo.shared.remove_branch(&remote_id).await.unwrap();
+
+    // The forked file still exists
+    assert_eq!(read_file(&repo, "foo.txt").await, b"foo");
+
+    // The remote-only file is gone
+    assert_matches!(repo.open_file("bar.txt").await, Err(Error::EntryNotFound));
 }
 
 async fn read_file(repo: &Repository, path: impl AsRef<Utf8Path>) -> Vec<u8> {
@@ -982,12 +1032,16 @@ async fn create_remote_file(repo: &Repository, remote_id: PublicKey, name: &str,
         .unwrap()
         .reopen(repo.secrets().keys().unwrap());
 
-    create_file_in(&remote_branch, name, content).await;
+    create_file_in_branch(&remote_branch, name, content).await;
 }
 
-async fn create_file_in(branch: &Branch, name: &str, content: &[u8]) -> File {
+async fn create_file_in_branch(branch: &Branch, name: &str, content: &[u8]) -> File {
     let root = branch.open_or_create_root().await.unwrap();
-    let mut file = root.create_file(name.into()).await.unwrap();
+    create_file_in_directory(&root, name, content).await
+}
+
+async fn create_file_in_directory(dir: &Directory, name: &str, content: &[u8]) -> File {
+    let mut file = dir.create_file(name.into()).await.unwrap();
     file.write(content).await.unwrap();
     file.flush().await.unwrap();
     file

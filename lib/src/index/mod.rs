@@ -89,6 +89,30 @@ impl Index {
         }
     }
 
+    /// Remove the branch including all its blocks, except those that are also referenced from
+    /// other branch(es).
+    pub(crate) async fn remove_branch(&self, id: &PublicKey) -> Result<()> {
+        let branch = self.shared.branches.write().await.remove(id);
+        let branch = if let Some(branch) = branch {
+            branch
+        } else {
+            return Ok(());
+        };
+
+        let mut conn = self.pool.acquire().await?;
+
+        let root = branch.root().await;
+        root.remove_recursively_all_older(&mut conn).await?;
+        root.remove_recursively(&mut conn).await?;
+
+        drop(root);
+        drop(conn);
+
+        branch.notify();
+
+        Ok(())
+    }
+
     /// Subscribe to change notification from all current and future branches.
     pub(crate) fn subscribe(&self) -> broadcast::Receiver<PublicKey> {
         self.shared.notify_tx.subscribe()

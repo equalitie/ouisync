@@ -1,7 +1,13 @@
 use super::*;
 use crate::{
-    access_control::WriteSecrets, block, error::Error, index::BranchData, repository,
-    sign::PublicKey, sync::broadcast, test_utils,
+    access_control::WriteSecrets,
+    block::{self, BLOCK_SIZE},
+    error::Error,
+    index::BranchData,
+    repository,
+    sign::PublicKey,
+    sync::broadcast,
+    test_utils,
 };
 use assert_matches::assert_matches;
 use proptest::collection::vec;
@@ -562,6 +568,32 @@ async fn fork_case(
 }
 
 // TODO: test that fork() doesn't create new blocks
+
+#[tokio::test(flavor = "multi_thread")]
+async fn block_ids_test() {
+    let (mut rng, branch) = setup(0).await;
+
+    let blob_id: BlobId = rng.gen();
+    let head_locator = Locator::head(blob_id);
+    let mut blob = Blob::create(branch.clone(), head_locator, Shared::uninit());
+
+    let content: Vec<_> = rng
+        .sample_iter(Standard)
+        .take(BLOCK_SIZE * 3 - HEADER_SIZE)
+        .collect();
+    blob.write(&content).await.unwrap();
+    blob.flush().await.unwrap();
+
+    let mut conn = branch.db_pool().acquire().await.unwrap();
+    let mut block_ids = BlockIds::new(branch, blob_id);
+    let mut actual_count = 0;
+
+    while block_ids.next(&mut conn).await.unwrap().is_some() {
+        actual_count += 1;
+    }
+
+    assert_eq!(actual_count, 3);
+}
 
 async fn setup(rng_seed: u64) -> (StdRng, Branch) {
     let mut rng = StdRng::seed_from_u64(rng_seed);

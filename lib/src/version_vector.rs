@@ -8,7 +8,7 @@ use sqlx::{
 };
 use std::{
     cmp::Ordering,
-    collections::BTreeMap,
+    collections::{btree_map, BTreeMap},
     fmt,
     ops::{AddAssign, Sub},
 };
@@ -80,6 +80,10 @@ impl VersionVector {
     pub fn is_empty(&self) -> bool {
         self.0.values().all(|version| *version == 0)
     }
+
+    pub fn iter(&self) -> Iter {
+        self.0.iter()
+    }
 }
 
 // Less clutter in the debug output this way (as opposed to deriving).
@@ -144,6 +148,17 @@ impl Sub for VersionVector {
         }
 
         self
+    }
+}
+
+pub type Iter<'a> = btree_map::Iter<'a, PublicKey, u64>;
+
+impl<'a> IntoIterator for &'a VersionVector {
+    type Item = <Iter<'a> as Iterator>::Item;
+    type IntoIter = Iter<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
     }
 }
 
