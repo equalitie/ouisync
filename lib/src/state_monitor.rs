@@ -72,6 +72,31 @@ impl StateMonitor {
         child
     }
 
+    pub fn locate(self: &Arc<Self>, path: &str) -> Option<Arc<Self>> {
+        if path.is_empty() {
+            return Some(self.clone());
+        }
+
+        let (child, rest) = match path.find(':') {
+            Some(split_at) => {
+                let (child, rest) = path.split_at(split_at);
+                (child, Some(&rest[1..]))
+            },
+            None => {
+                (path, None)
+            }
+        };
+
+        let children = self.children.lock().unwrap();
+
+        children.get(child).and_then(|child| {
+            match rest {
+                Some(rest) => child.locate(rest),
+                None => Some(child.clone()),
+            }
+        })
+    }
+
     pub fn make_value<T: 'static + fmt::Debug>(self: &Arc<Self>, key: String, value: T) -> MonitoredValue<T> {
         let value = Arc::new(Mutex::new(value));
 
@@ -215,7 +240,9 @@ pub struct OnChangeHandle {
 impl Drop for OnChangeHandle {
     fn drop(&mut self) {
         if let Some(state_monitor) = self.state_monitor.upgrade() {
-            state_monitor.on_change.lock().unwrap().remove(self.handle);
+            // `let _ =` because there is some weird warning if it's not used:
+            // "warning: unused boxed `FnMut` trait object that must be used"
+            let _ = state_monitor.on_change.lock().unwrap().remove(self.handle);
             state_monitor.changed();
         }
     }
