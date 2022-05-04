@@ -11,6 +11,15 @@ use std::{
     },
 };
 use slab::Slab;
+use serde::{
+    Serialize,
+    Serializer,
+    ser::{
+        SerializeSeq,
+        SerializeMap,
+        SerializeStruct,
+    }
+};
 
 pub struct StateMonitor {
     // The `id` is only unique within the parent.
@@ -117,13 +126,29 @@ impl StateMonitor {
     fn changed(&self) {
         // The documentation suggests not to iterate over slabs as it may be inefficient, but we
         // expect there will be very few handlers inside `on_change` so it shouldn't matter.
-        for p in self.on_change.lock().unwrap().iter_mut() {
-            p.1();
+        for (_i, callback) in self.on_change.lock().unwrap().iter_mut() {
+            callback();
         }
 
         if let Some(parent) = self.parent.upgrade() {
             parent.changed();
         }
+    }
+}
+
+impl Serialize for StateMonitor {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        // XXX: Should values and children be under a single Mutex?
+        let values = self.values.lock().unwrap();
+        let children = self.children.lock().unwrap();
+
+        let mut s = serializer.serialize_struct("StateMonitor", 2)?;
+        s.serialize_field("values", &ValuesSerializer(&*values))?;
+        s.serialize_field("children", &ChildrenSerializer(&*children))?;
+        s.end()
     }
 }
 
@@ -195,3 +220,51 @@ impl Drop for OnChangeHandle {
         }
     }
 }
+
+// --- Serialization helpers
+
+struct ValuesSerializer<'a>(&'a BTreeMap<String, Slab<MonitoredValueHandle>>);
+struct ValuesSlabSerializer<'a>(&'a Slab<MonitoredValueHandle>);
+struct ChildrenSerializer<'a>(&'a BTreeMap<String, Arc<StateMonitor>>);
+
+impl<'a> Serialize for ValuesSerializer<'a> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut map = serializer.serialize_map(Some(self.0.len()))?;
+        for (k,v) in self.0.iter() {
+            map.serialize_entry(k, &ValuesSlabSerializer(v))?;
+        }
+        map.end()
+    }
+}
+
+impl<'a> Serialize for ValuesSlabSerializer<'a> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut seq = serializer.serialize_seq(Some(self.0.len()))?;
+        for (_id, m) in self.0.iter() {
+            let v = m.ptr.lock().unwrap();
+            seq.serialize_element(&format!("{:?}", v))?;
+        }
+        seq.end()
+    }
+}
+
+impl<'a> Serialize for ChildrenSerializer<'a> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut seq = serializer.serialize_seq(Some(self.0.len()))?;
+        for (name, _) in self.0.iter() {
+            seq.serialize_element(name)?;
+        }
+        seq.end()
+    }
+}
+
+// ---
