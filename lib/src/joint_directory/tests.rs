@@ -648,7 +648,7 @@ async fn merge_concurrent_directories() {
     assert_eq!(entry.name(), "dir");
     assert_matches!(entry, EntryRef::Directory(_));
 
-    let expected_vv = vv![*branches[0].id() => 2, *branches[1].id() => 1];
+    let expected_vv = vv![*branches[0].id() => 2, *branches[1].id() => 2];
     assert_eq!(entry.version_vector(), &expected_vv);
 
     let dir = entry.directory().unwrap().open().await.unwrap();

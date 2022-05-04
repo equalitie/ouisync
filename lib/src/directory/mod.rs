@@ -175,27 +175,29 @@ impl Directory {
         // Prevent deadlock
         drop(inner);
 
-        if let Some((parent_dir, parent_entry_name)) = parent {
+        let dir = if let Some((parent_dir, parent_entry_name)) = parent {
             let parent_dir = parent_dir.fork(local_branch).await?;
+            let mut parent_dir = parent_dir.write().await;
 
-            match parent_dir
-                .read()
-                .await
-                .lookup_version(&parent_entry_name, local_branch.id())
-            {
-                Ok(EntryRef::Directory(entry)) => return entry.open().await,
+            match parent_dir.lookup_version(&parent_entry_name, local_branch.id()) {
+                Ok(EntryRef::Directory(entry)) => entry.open().await?,
                 Ok(EntryRef::File(_)) => {
                     // FIXME: create the directory alongside the file somehow.
                     return Err(Error::EntryIsFile);
                 }
-                Ok(EntryRef::Tombstone(_)) | Err(Error::EntryNotFound) => (),
+                Ok(EntryRef::Tombstone(_)) | Err(Error::EntryNotFound) => {
+                    parent_dir.create_directory(parent_entry_name).await?
+                }
                 Err(error) => return Err(error),
             }
-
-            parent_dir.create_directory(parent_entry_name).await
         } else {
-            local_branch.open_or_create_root().await
-        }
+            local_branch.open_or_create_root().await?
+        };
+
+        let src_vv = self.read().await.version_vector().await;
+        dir.write().await.fork(&src_vv).await;
+
+        Ok(dir)
     }
 
     pub async fn parent(&self) -> Option<Directory> {
@@ -533,6 +535,27 @@ impl Writer<'_> {
     pub fn branch(&self) -> &Branch {
         self.inner.blob.branch()
     }
+
+    /// Version vector of this directory.
+    pub async fn version_vector(&self) -> VersionVector {
+        version_vector(&self.inner).await
+    }
+
+    async fn fork(&mut self, src_vv: &VersionVector) {
+        let dst_vv = self.version_vector().await;
+
+        for (id, version) in src_vv {
+            if *version == 0 {
+                continue;
+            }
+
+            if dst_vv.get(id) > 0 {
+                continue;
+            }
+
+            self.inner.version_vector_increment.increment(*id);
+        }
+    }
 }
 
 /// View of a `Directory` for performing read-only queries.
@@ -576,17 +599,7 @@ impl Reader<'_> {
 
     /// Version vector of this directory.
     pub async fn version_vector(&self) -> VersionVector {
-        if let Some(parent) = &self.inner.parent {
-            parent.entry_version_vector().await
-        } else {
-            self.branch()
-                .data()
-                .root()
-                .await
-                .proof
-                .version_vector
-                .clone()
-        }
+        version_vector(&self.inner).await
     }
 
     /// Locator of this directory
@@ -627,4 +640,20 @@ fn lookup<'a>(
                 .map(move |(author, data)| EntryRef::new(outer, inner, name, data, author))
         })
         .ok_or(Error::EntryNotFound)
+}
+
+async fn version_vector(inner: &Inner) -> VersionVector {
+    if let Some(parent) = &inner.parent {
+        parent.entry_version_vector().await
+    } else {
+        inner
+            .blob
+            .branch()
+            .data()
+            .root()
+            .await
+            .proof
+            .version_vector
+            .clone()
+    }
 }
