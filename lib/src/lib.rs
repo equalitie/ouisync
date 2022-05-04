@@ -32,6 +32,7 @@ mod path;
 mod progress;
 mod repository;
 mod scoped_task;
+mod state_monitor;
 mod store;
 mod sync;
 #[cfg(test)]
