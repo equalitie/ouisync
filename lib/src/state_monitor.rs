@@ -1,24 +1,16 @@
+use serde::{
+    ser::{SerializeMap, SerializeSeq, SerializeStruct},
+    Serialize, Serializer,
+};
+use slab::Slab;
 use std::{
     collections::{btree_map as map, BTreeMap},
     fmt,
     ops::Drop,
     sync::{
-        Arc,
         atomic::{AtomicU64, Ordering},
-        Weak,
-        Mutex,
-        MutexGuard,
+        Arc, Mutex, MutexGuard, Weak,
     },
-};
-use slab::Slab;
-use serde::{
-    Serialize,
-    Serializer,
-    ser::{
-        SerializeSeq,
-        SerializeMap,
-        SerializeStruct,
-    }
 };
 
 pub struct StateMonitor {
@@ -50,20 +42,26 @@ impl StateMonitor {
         let mut is_new = false;
         let name_clone = name.clone();
 
-        let child = self.children.lock().unwrap().entry(name_clone).or_insert_with(|| {
-            is_new = true;
-            let id = self.next_child_id.fetch_add(1, Ordering::Relaxed);
+        let child = self
+            .children
+            .lock()
+            .unwrap()
+            .entry(name_clone)
+            .or_insert_with(|| {
+                is_new = true;
+                let id = self.next_child_id.fetch_add(1, Ordering::Relaxed);
 
-            Arc::new(Self {
-                id,
-                name,
-                parent: weak_self,
-                values: Mutex::new(BTreeMap::new()),
-                children: Mutex::new(BTreeMap::new()),
-                on_change: Mutex::new(Slab::new()),
-                next_child_id: AtomicU64::new(0),
+                Arc::new(Self {
+                    id,
+                    name,
+                    parent: weak_self,
+                    values: Mutex::new(BTreeMap::new()),
+                    children: Mutex::new(BTreeMap::new()),
+                    on_change: Mutex::new(Slab::new()),
+                    next_child_id: AtomicU64::new(0),
+                })
             })
-        }).clone();
+            .clone();
 
         if is_new {
             self.changed();
@@ -81,42 +79,38 @@ impl StateMonitor {
             Some(split_at) => {
                 let (child, rest) = path.split_at(split_at);
                 (child, Some(&rest[1..]))
-            },
-            None => {
-                (path, None)
             }
+            None => (path, None),
         };
 
         let children = self.children.lock().unwrap();
 
-        children.get(child).and_then(|child| {
-            match rest {
-                Some(rest) => child.locate(rest),
-                None => Some(child.clone()),
-            }
+        children.get(child).and_then(|child| match rest {
+            Some(rest) => child.locate(rest),
+            None => Some(child.clone()),
         })
     }
 
-    pub fn make_value<T: 'static + fmt::Debug>(self: &Arc<Self>, key: String, value: T) -> MonitoredValue<T> {
+    pub fn make_value<T: 'static + fmt::Debug>(
+        self: &Arc<Self>,
+        key: String,
+        value: T,
+    ) -> MonitoredValue<T> {
         let value = Arc::new(Mutex::new(value));
 
         let id = match self.values.lock().unwrap().entry(key.clone()) {
             map::Entry::Vacant(e) => {
                 let mut slab = Slab::new();
 
-                let id = slab.insert(MonitoredValueHandle {
-                    ptr: value.clone(),
-                });
+                let id = slab.insert(MonitoredValueHandle { ptr: value.clone() });
 
                 e.insert(slab);
 
                 id
-            },
-            map::Entry::Occupied(mut e) => {
-                e.get_mut().insert(MonitoredValueHandle {
-                    ptr: value.clone(),
-                })
             }
+            map::Entry::Occupied(mut e) => e
+                .get_mut()
+                .insert(MonitoredValueHandle { ptr: value.clone() }),
         };
 
         self.changed();
@@ -144,7 +138,7 @@ impl StateMonitor {
 
         OnChangeHandle {
             state_monitor: weak_self,
-            handle
+            handle,
         }
     }
 
@@ -260,7 +254,7 @@ impl<'a> Serialize for ValuesSerializer<'a> {
         S: Serializer,
     {
         let mut map = serializer.serialize_map(Some(self.0.len()))?;
-        for (k,v) in self.0.iter() {
+        for (k, v) in self.0.iter() {
             map.serialize_entry(k, &ValuesSlabSerializer(v))?;
         }
         map.end()
