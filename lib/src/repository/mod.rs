@@ -191,7 +191,12 @@ impl Repository {
         });
 
         let (block_manager, block_manager_handle) = BlockManager::new(shared.clone());
-        task::spawn(block_manager.run());
+
+        // Garbage collection requires at least read access to be able to determine block
+        // reachability.
+        if shared.secrets.can_read() {
+            task::spawn(block_manager.run());
+        }
 
         task::spawn(report_sync_progress(index));
 
