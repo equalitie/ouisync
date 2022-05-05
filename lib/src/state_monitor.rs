@@ -16,6 +16,8 @@ use std::{
 
 static NEXT_MONITOR_ID: AtomicU64 = AtomicU64::new(0);
 
+// --- StateMonitor
+
 pub struct StateMonitor {
     id: u64,
     name: String,
@@ -155,23 +157,6 @@ impl StateMonitor {
     }
 }
 
-impl Serialize for StateMonitor {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let lock = self.lock();
-
-        // When serializing into the messagepack format, the `serialize_struct(_, N)` is serialized
-        // into a list of size N (use `unpackList` in Dart).
-        let mut s = serializer.serialize_struct("StateMonitor", 3)?;
-        s.serialize_field("change_id", &lock.change_id)?;
-        s.serialize_field("values", &ValuesSerializer(&lock.values))?;
-        s.serialize_field("children", &ChildrenSerializer(&lock.children))?;
-        s.end()
-    }
-}
-
 impl Drop for StateMonitor {
     fn drop(&mut self) {
         if let Some(parent) = self.parent.upgrade() {
@@ -187,6 +172,8 @@ impl Drop for StateMonitor {
         }
     }
 }
+
+// --- MonitoredValue
 
 pub struct MonitoredValue<T> {
     id: usize,
@@ -226,7 +213,24 @@ struct MonitoredValueHandle {
     ptr: Arc<Mutex<dyn fmt::Debug>>,
 }
 
-// --- Serialization helpers
+// --- Serialization
+
+impl Serialize for StateMonitor {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let lock = self.lock();
+
+        // When serializing into the messagepack format, the `serialize_struct(_, N)` is serialized
+        // into a list of size N (use `unpackList` in Dart).
+        let mut s = serializer.serialize_struct("StateMonitor", 3)?;
+        s.serialize_field("change_id", &lock.change_id)?;
+        s.serialize_field("values", &ValuesSerializer(&lock.values))?;
+        s.serialize_field("children", &ChildrenSerializer(&lock.children))?;
+        s.end()
+    }
+}
 
 struct ValuesSerializer<'a>(&'a BTreeMap<String, Slab<MonitoredValueHandle>>);
 struct ValuesSlabSerializer<'a>(&'a Slab<MonitoredValueHandle>);
