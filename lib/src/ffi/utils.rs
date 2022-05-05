@@ -85,6 +85,40 @@ impl<T> From<UniqueHandle<T>> for DartCObject {
     }
 }
 
+/// FFI handle to a resource with unique ownership that can also be null.
+#[repr(transparent)]
+pub struct UniqueNullableHandle<T>(u64, PhantomData<*const T>);
+
+impl<T> UniqueNullableHandle<T> {
+    pub const NULL: Self = Self(0, PhantomData);
+
+    pub fn new(resource: Box<T>) -> Self {
+        Self(Box::into_raw(resource) as _, PhantomData)
+    }
+
+    pub unsafe fn get(&self) -> Option<&T> {
+        if self.0 != 0 {
+            Some(&*(self.0 as *const _))
+        } else {
+            None
+        }
+    }
+
+    pub unsafe fn release(self) -> Option<Box<T>> {
+        if self.0 != 0 {
+            Some(Box::from_raw(self.0 as *mut _))
+        } else {
+            None
+        }
+    }
+}
+
+impl<T> From<UniqueNullableHandle<T>> for DartCObject {
+    fn from(handle: UniqueNullableHandle<T>) -> Self {
+        DartCObject::from(handle.0)
+    }
+}
+
 /// FFI handle to a borrowed resource.
 #[repr(transparent)]
 pub struct RefHandle<T>(u64, PhantomData<*const T>);

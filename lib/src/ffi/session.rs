@@ -2,7 +2,7 @@ use super::{
     dart::{DartCObject, PostDartCObjectFn},
     error::{ErrorCode, ToErrorCode},
     logger::Logger,
-    utils::{self, Bytes, Port, UniqueHandle},
+    utils::{self, Bytes, Port, UniqueHandle, UniqueNullableHandle},
 };
 use crate::{
     config::ConfigStore,
@@ -122,6 +122,55 @@ pub unsafe extern "C" fn session_get_state_monitor(path: *const c_char) -> Bytes
         Bytes::from_vec(bytes)
     } else {
         Bytes::NULL
+    }
+}
+
+/// Subscribe to "on change" events happening inside a monitor corresponding to the `path`.  The
+/// path is in the form "a:b:c" and an empty string represents the "root" state monitor.
+#[no_mangle]
+pub unsafe extern "C" fn session_state_monitor_subscribe(
+    path: *const c_char,
+    port: Port<()>,
+) -> UniqueNullableHandle<JoinHandle<()>> {
+    let path = match utils::ptr_to_str(path) {
+        Ok(s) => s,
+        Err(e) => {
+            log::error!(
+                "Failed to parse input in session_get_state_monitor: {:?}",
+                e
+            );
+            return UniqueNullableHandle::NULL;
+        }
+    };
+
+    let session = get();
+    let sender = session.sender();
+
+    if let Some(monitor) = get().network.monitor.locate(path) {
+        let mut rx = monitor.subscribe();
+
+        let handle = session.runtime().spawn(async move {
+            loop {
+                match rx.changed().await {
+                    Ok(()) => sender.send(port, ()),
+                    Err(_) => return,
+                }
+            }
+        });
+
+        UniqueNullableHandle::new(Box::new(handle))
+    } else {
+        UniqueNullableHandle::NULL
+    }
+}
+
+/// Unsubscribe from the above "on change" StateMonitor events.
+#[no_mangle]
+pub unsafe extern "C" fn session_state_monitor_unsubscribe(
+    handle: UniqueNullableHandle<JoinHandle<()>>,
+) {
+    if let Some(handle) = handle.release() {
+        handle.abort();
     }
 }
 
