@@ -109,7 +109,7 @@ impl StateMonitor {
     /// If the caller fails to ensure this uniqueness, the value of this variable shall be seen as
     /// the string "<AMBIGUOUS>". Such solution seem to be more sensible than panicking given that
     /// this is only a monitoring piece of code.
-    pub fn make_value<T: 'static + fmt::Debug>(
+    pub fn make_value<T: 'static + fmt::Debug + Sync + Send>(
         self: &Arc<Self>,
         name: String,
         value: T,
@@ -196,7 +196,7 @@ impl<T> MonitoredValue<T> {
         self.value.lock().unwrap()
     }
 
-    pub fn set(&mut self, value: T) {
+    pub fn set(&self, value: T) {
         *self.value.lock().unwrap() = value;
         if let Some(monitor) = self.monitor.upgrade() {
             monitor.changed(monitor.lock());
@@ -227,7 +227,7 @@ impl<T> Drop for MonitoredValue<T> {
 
 struct MonitoredValueHandle {
     refcount: usize,
-    ptr: Arc<Mutex<dyn fmt::Debug>>,
+    ptr: Arc<Mutex<dyn fmt::Debug + Sync + Send>>,
 }
 
 // --- Serialization
