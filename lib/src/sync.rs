@@ -216,6 +216,10 @@ pub mod uninitialized_watch {
                 .send(Some(value))
                 .map_err(|e| w::error::SendError(e.0.unwrap()))
         }
+
+        pub fn subscribe(&self) -> Receiver<T> {
+            Receiver(self.0.subscribe())
+        }
     }
 
     #[derive(Clone)]

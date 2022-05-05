@@ -1,3 +1,4 @@
+use crate::sync::uninitialized_watch;
 use serde::{
     ser::{SerializeMap, SerializeSeq, SerializeStruct},
     Serialize, Serializer,
@@ -28,7 +29,7 @@ pub struct StateMonitorInner {
     change_id: u64,
     values: BTreeMap<String, Slab<MonitoredValueHandle>>,
     children: BTreeMap<String, Arc<StateMonitor>>,
-    on_change: Slab<Box<dyn FnMut()>>,
+    on_change: uninitialized_watch::Sender<()>,
 }
 
 impl StateMonitor {
@@ -41,7 +42,7 @@ impl StateMonitor {
                 change_id: 0,
                 values: BTreeMap::new(),
                 children: BTreeMap::new(),
-                on_change: Slab::new(),
+                on_change: uninitialized_watch::channel().0,
             }),
         })
     }
@@ -67,7 +68,7 @@ impl StateMonitor {
                         change_id: 0,
                         values: BTreeMap::new(),
                         children: BTreeMap::new(),
-                        on_change: Slab::new(),
+                        on_change: uninitialized_watch::channel().0,
                     }),
                 })
             })
@@ -131,25 +132,14 @@ impl StateMonitor {
         }
     }
 
-    pub fn on_change<F: 'static + FnMut()>(self: &Arc<Self>, f: F) -> OnChangeHandle {
-        let weak_self = Arc::downgrade(self);
-        let mut lock = self.lock();
-        let handle = lock.on_change.insert(Box::new(f));
-
-        OnChangeHandle {
-            state_monitor: weak_self,
-            handle,
-        }
+    /// Get notified whenever there is a change in this StateMonitor
+    pub fn subscribe(self: &Arc<Self>) -> uninitialized_watch::Receiver<()> {
+        self.lock().on_change.subscribe()
     }
 
     fn changed(&self, mut lock: MutexGuard<'_, StateMonitorInner>) {
         lock.change_id += 1;
-
-        // The documentation suggests not to iterate over slabs as it may be inefficient, but we
-        // expect there will be very few handlers inside `on_change` so it shouldn't matter.
-        for (_i, callback) in lock.on_change.iter_mut() {
-            callback();
-        }
+        lock.on_change.send(()).unwrap_or(());
 
         // When serializing, we lock from parent to child (to access the child's `change_id`), so
         // make sure we don't try to lock in the reverse direction as that could deadlock.
@@ -234,23 +224,6 @@ impl<T> Drop for MonitoredValue<T> {
 
 struct MonitoredValueHandle {
     ptr: Arc<Mutex<dyn fmt::Debug>>,
-}
-
-pub struct OnChangeHandle {
-    state_monitor: Weak<StateMonitor>,
-    handle: usize,
-}
-
-impl Drop for OnChangeHandle {
-    fn drop(&mut self) {
-        if let Some(state_monitor) = self.state_monitor.upgrade() {
-            let mut lock = state_monitor.lock();
-            // `let _ =` because there is some weird warning if it's not used:
-            // "warning: unused boxed `FnMut` trait object that must be used"
-            let _ = lock.on_change.remove(self.handle);
-            state_monitor.changed(lock);
-        }
-    }
 }
 
 // --- Serialization helpers
