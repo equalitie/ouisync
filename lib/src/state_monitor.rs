@@ -13,15 +13,15 @@ use std::{
     },
 };
 
+static NEXT_MONITOR_ID: AtomicU64 = AtomicU64::new(0);
+
 pub struct StateMonitor {
-    // The `id` is only unique within the parent.
     id: u64,
     name: String,
     parent: Weak<StateMonitor>,
     values: Mutex<BTreeMap<String, Slab<MonitoredValueHandle>>>,
     children: Mutex<BTreeMap<String, Arc<StateMonitor>>>,
     on_change: Mutex<Slab<Box<dyn FnMut()>>>,
-    next_child_id: AtomicU64,
 }
 
 impl StateMonitor {
@@ -33,7 +33,6 @@ impl StateMonitor {
             values: Mutex::new(BTreeMap::new()),
             children: Mutex::new(BTreeMap::new()),
             on_change: Mutex::new(Slab::new()),
-            next_child_id: AtomicU64::new(0),
         })
     }
 
@@ -49,7 +48,7 @@ impl StateMonitor {
             .entry(name_clone)
             .or_insert_with(|| {
                 is_new = true;
-                let id = self.next_child_id.fetch_add(1, Ordering::Relaxed);
+                let id = NEXT_MONITOR_ID.fetch_add(1, Ordering::Relaxed);
 
                 Arc::new(Self {
                     id,
@@ -58,7 +57,6 @@ impl StateMonitor {
                     values: Mutex::new(BTreeMap::new()),
                     children: Mutex::new(BTreeMap::new()),
                     on_change: Mutex::new(Slab::new()),
-                    next_child_id: AtomicU64::new(0),
                 })
             })
             .clone();
@@ -164,6 +162,8 @@ impl Serialize for StateMonitor {
         let values = self.values.lock().unwrap();
         let children = self.children.lock().unwrap();
 
+        // When serializing into the messagepack format, the `serialize_struct(_, N)` is serialized
+        // into a list of size N (use `unpackList` in Dart).
         let mut s = serializer.serialize_struct("StateMonitor", 2)?;
         s.serialize_field("values", &ValuesSerializer(&*values))?;
         s.serialize_field("children", &ChildrenSerializer(&*children))?;
