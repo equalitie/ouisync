@@ -117,7 +117,7 @@ pub unsafe extern "C" fn session_get_state_monitor(path: *const c_char) -> Bytes
         }
     };
 
-    if let Some(monitor) = get().network.state_monitor.locate(path) {
+    if let Some(monitor) = get().network.monitor.locate(path) {
         let bytes = rmp_serde::to_vec(&*monitor).unwrap();
         Bytes::from_vec(bytes)
     } else {

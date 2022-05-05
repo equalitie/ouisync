@@ -32,7 +32,7 @@ use crate::{
     index::Index,
     repository::RepositoryId,
     scoped_task::{self, ScopedJoinHandle, ScopedTaskSet},
-    state_monitor::StateMonitor,
+    state_monitor::{MonitoredValue, StateMonitor},
     sync::uninitialized_watch,
 };
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
@@ -115,7 +115,7 @@ impl Default for NetworkOptions {
 
 pub struct Network {
     inner: Arc<Inner>,
-    pub state_monitor: Arc<StateMonitor>,
+    pub monitor: Arc<StateMonitor>,
     // We keep tasks here instead of in Inner because we want them to be
     // destroyed when Network is Dropped.
     _tasks: Arc<Tasks>,
@@ -177,7 +177,10 @@ impl Network {
 
         let (on_protocol_mismatch_tx, on_protocol_mismatch_rx) = uninitialized_watch::channel();
 
+        let monitor = StateMonitor::make_root();
+
         let inner = Arc::new(Inner {
+            monitor: monitor.clone(),
             listener_local_addr,
             this_runtime_id: rand::random(),
             state: BlockingMutex::new(State {
@@ -196,7 +199,7 @@ impl Network {
 
         let network = Self {
             inner: inner.clone(),
-            state_monitor: StateMonitor::make_root(),
+            monitor,
             _tasks: tasks,
             _port_forwarder: port_forwarder,
         };
@@ -358,6 +361,7 @@ struct Tasks {
 }
 
 struct Inner {
+    monitor: Arc<StateMonitor>,
     listener_local_addr: SocketAddr,
     this_runtime_id: RuntimeId,
     state: BlockingMutex<State>,
@@ -404,7 +408,23 @@ impl Inner {
         *local_discovery = Some(scoped_task::spawn(self.clone().run_local_discovery(port)));
     }
 
+    fn start_test(self: &Arc<Self>) {
+        let monitor = self.monitor.make_child("local-discovery".into());
+        let recv_count = monitor.make_value::<u64>("recv-count".into(), 0);
+
+        task::spawn(async move {
+            let mut i = 0;
+            loop {
+                time::sleep(Duration::from_secs(2)).await;
+                println!("------ rust recv_count increment {}", i);
+                i += 1;
+                recv_count.set(i);
+            }
+        });
+    }
     async fn run_local_discovery(self: Arc<Self>, listener_port: u16) {
+        self.start_test();
+
         let discovery = match LocalDiscovery::new(self.this_runtime_id, listener_port) {
             Ok(discovery) => discovery,
             Err(error) => {
@@ -412,6 +432,7 @@ impl Inner {
                 return;
             }
         };
+
 
         while let Some(addr) = discovery.recv().await {
             let tasks = self.tasks.upgrade().unwrap();
