@@ -103,9 +103,12 @@ impl StateMonitor {
         })
     }
 
-    /// Creates a new monitored value.
+    /// Creates a new monitored value. The caller is responsible for ensuring that there is always
+    /// at most one value of a given `name` per StateMonitor instance.
     ///
-    /// Panics when a value of the same `name` already exists.
+    /// If the caller fails to ensure this uniqueness, the value of this variable shall be seen as
+    /// the string "<AMBIGUOUS>". Such solution seem to be more sensible than panicking given that
+    /// this is only a monitoring piece of code.
     pub fn make_value<T: 'static + fmt::Debug>(
         self: &Arc<Self>,
         name: String,
@@ -116,12 +119,20 @@ impl StateMonitor {
 
         match lock.values.entry(name.clone()) {
             map::Entry::Vacant(e) => {
-                e.insert(MonitoredValueHandle { ptr: value.clone() });
+                e.insert(MonitoredValueHandle {
+                    refcount: 1,
+                    ptr: value.clone(),
+                });
             }
-            map::Entry::Occupied(_) => panic!(
-                "Monitored value of the same name ({:?}) already exists",
-                name
-            ),
+            map::Entry::Occupied(mut e) => {
+                log::error!(
+                    "StateMonitor: Monitored value of the same name ({:?}) already exists",
+                    name
+                );
+                let v = e.get_mut();
+                v.refcount += 1;
+                v.ptr = Arc::new(Mutex::new("<AMBIGUOUS>"));
+            }
         };
 
         self.changed(lock);
@@ -197,13 +208,25 @@ impl<T> Drop for MonitoredValue<T> {
     fn drop(&mut self) {
         if let Some(monitor) = self.monitor.upgrade() {
             let mut lock = monitor.lock();
-            lock.values.remove(&self.name);
-            monitor.changed(lock);
+
+            // Can we not clone (since we're droping anyway)?
+            match lock.values.entry(self.name.clone()) {
+                map::Entry::Occupied(mut e) => {
+                    let v = e.get_mut();
+                    v.refcount -= 1;
+                    if v.refcount == 0 {
+                        e.remove();
+                        monitor.changed(lock);
+                    }
+                }
+                map::Entry::Vacant(_) => unreachable!(),
+            }
         }
     }
 }
 
 struct MonitoredValueHandle {
+    refcount: usize,
     ptr: Arc<Mutex<dyn fmt::Debug>>,
 }
 
