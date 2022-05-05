@@ -23,6 +23,9 @@ pub struct StateMonitor {
 }
 
 pub struct StateMonitorInner {
+    // Incremented on each change, can be used by monitors to determine whether a child has
+    // changed.
+    change_id: u64,
     values: BTreeMap<String, Slab<MonitoredValueHandle>>,
     children: BTreeMap<String, Arc<StateMonitor>>,
     on_change: Slab<Box<dyn FnMut()>>,
@@ -35,6 +38,7 @@ impl StateMonitor {
             name: "".into(),
             parent: Weak::new(),
             inner: Mutex::new(StateMonitorInner {
+                change_id: 0,
                 values: BTreeMap::new(),
                 children: BTreeMap::new(),
                 on_change: Slab::new(),
@@ -60,6 +64,7 @@ impl StateMonitor {
                     name,
                     parent: weak_self,
                     inner: Mutex::new(StateMonitorInner {
+                        change_id: 0,
                         values: BTreeMap::new(),
                         children: BTreeMap::new(),
                         on_change: Slab::new(),
@@ -107,11 +112,8 @@ impl StateMonitor {
         let id = match lock.values.entry(key.clone()) {
             map::Entry::Vacant(e) => {
                 let mut slab = Slab::new();
-
                 let id = slab.insert(MonitoredValueHandle { ptr: value.clone() });
-
                 e.insert(slab);
-
                 id
             }
             map::Entry::Occupied(mut e) => e
@@ -141,15 +143,16 @@ impl StateMonitor {
     }
 
     fn changed(&self, mut lock: MutexGuard<'_, StateMonitorInner>) {
+        lock.change_id += 1;
+
         // The documentation suggests not to iterate over slabs as it may be inefficient, but we
         // expect there will be very few handlers inside `on_change` so it shouldn't matter.
         for (_i, callback) in lock.on_change.iter_mut() {
             callback();
         }
 
-        // We don't know what the callback in `parent` will execute and if they tried to access
-        // `inner` of this monitor, then we would get a deadlock. So let's drop the `lock` just to
-        // be on the safe side.
+        // When serializing, we lock from parent to child (to access the child's `change_id`), so
+        // make sure we don't try to lock in the reverse direction as that could deadlock.
         drop(lock);
 
         if let Some(parent) = self.parent.upgrade() {
@@ -171,7 +174,8 @@ impl Serialize for StateMonitor {
 
         // When serializing into the messagepack format, the `serialize_struct(_, N)` is serialized
         // into a list of size N (use `unpackList` in Dart).
-        let mut s = serializer.serialize_struct("StateMonitor", 2)?;
+        let mut s = serializer.serialize_struct("StateMonitor", 3)?;
+        s.serialize_field("change_id", &lock.change_id)?;
         s.serialize_field("values", &ValuesSerializer(&lock.values))?;
         s.serialize_field("children", &ChildrenSerializer(&lock.children))?;
         s.end()
@@ -218,6 +222,7 @@ impl<T> Drop for MonitoredValue<T> {
     fn drop(&mut self) {
         if let Some(monitor) = self.monitor.upgrade() {
             let mut lock = monitor.lock();
+
             // TODO: Can we do without cloning the name? Since we're `drop`ing here anyway...
             if let map::Entry::Occupied(mut e) = lock.values.entry(self.name.clone()) {
                 e.get_mut().remove(self.id);
@@ -286,11 +291,11 @@ impl<'a> Serialize for ChildrenSerializer<'a> {
     where
         S: Serializer,
     {
-        let mut seq = serializer.serialize_seq(Some(self.0.len()))?;
-        for (name, _) in self.0.iter() {
-            seq.serialize_element(name)?;
+        let mut map = serializer.serialize_map(Some(self.0.len()))?;
+        for (name, child) in self.0.iter() {
+            map.serialize_entry(name, &child.lock().change_id)?;
         }
-        seq.end()
+        map.end()
     }
 }
 
