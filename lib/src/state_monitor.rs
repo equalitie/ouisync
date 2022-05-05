@@ -19,9 +19,13 @@ pub struct StateMonitor {
     id: u64,
     name: String,
     parent: Weak<StateMonitor>,
-    values: Mutex<BTreeMap<String, Slab<MonitoredValueHandle>>>,
-    children: Mutex<BTreeMap<String, Arc<StateMonitor>>>,
-    on_change: Mutex<Slab<Box<dyn FnMut()>>>,
+    inner: Mutex<StateMonitorInner>,
+}
+
+pub struct StateMonitorInner {
+    values: BTreeMap<String, Slab<MonitoredValueHandle>>,
+    children: BTreeMap<String, Arc<StateMonitor>>,
+    on_change: Slab<Box<dyn FnMut()>>,
 }
 
 impl StateMonitor {
@@ -30,9 +34,11 @@ impl StateMonitor {
             id: 0,
             name: "".into(),
             parent: Weak::new(),
-            values: Mutex::new(BTreeMap::new()),
-            children: Mutex::new(BTreeMap::new()),
-            on_change: Mutex::new(Slab::new()),
+            inner: Mutex::new(StateMonitorInner {
+                values: BTreeMap::new(),
+                children: BTreeMap::new(),
+                on_change: Slab::new(),
+            }),
         })
     }
 
@@ -40,11 +46,10 @@ impl StateMonitor {
         let weak_self = Arc::downgrade(self);
         let mut is_new = false;
         let name_clone = name.clone();
+        let mut lock = self.lock();
 
-        let child = self
+        let child = lock
             .children
-            .lock()
-            .unwrap()
             .entry(name_clone)
             .or_insert_with(|| {
                 is_new = true;
@@ -54,15 +59,17 @@ impl StateMonitor {
                     id,
                     name,
                     parent: weak_self,
-                    values: Mutex::new(BTreeMap::new()),
-                    children: Mutex::new(BTreeMap::new()),
-                    on_change: Mutex::new(Slab::new()),
+                    inner: Mutex::new(StateMonitorInner {
+                        values: BTreeMap::new(),
+                        children: BTreeMap::new(),
+                        on_change: Slab::new(),
+                    }),
                 })
             })
             .clone();
 
         if is_new {
-            self.changed();
+            self.changed(lock);
         }
 
         child
@@ -81,9 +88,9 @@ impl StateMonitor {
             None => (path, None),
         };
 
-        let children = self.children.lock().unwrap();
+        let lock = self.lock();
 
-        children.get(child).and_then(|child| match rest {
+        lock.children.get(child).and_then(|child| match rest {
             Some(rest) => child.locate(rest),
             None => Some(child.clone()),
         })
@@ -95,8 +102,9 @@ impl StateMonitor {
         value: T,
     ) -> MonitoredValue<T> {
         let value = Arc::new(Mutex::new(value));
+        let mut lock = self.lock();
 
-        let id = match self.values.lock().unwrap().entry(key.clone()) {
+        let id = match lock.values.entry(key.clone()) {
             map::Entry::Vacant(e) => {
                 let mut slab = Slab::new();
 
@@ -111,7 +119,7 @@ impl StateMonitor {
                 .insert(MonitoredValueHandle { ptr: value.clone() }),
         };
 
-        self.changed();
+        self.changed(lock);
 
         MonitoredValue {
             id,
@@ -121,18 +129,10 @@ impl StateMonitor {
         }
     }
 
-    pub fn children(&self) -> Vec<String> {
-        self.children.lock().unwrap().keys().cloned().collect()
-    }
-
-    pub fn child(&self, name: &str) -> Option<Arc<StateMonitor>> {
-        self.children.lock().unwrap().get(name).cloned()
-    }
-
     pub fn on_change<F: 'static + FnMut()>(self: &Arc<Self>, f: F) -> OnChangeHandle {
         let weak_self = Arc::downgrade(self);
-        let mut on_change = self.on_change.lock().unwrap();
-        let handle = on_change.insert(Box::new(f));
+        let mut lock = self.lock();
+        let handle = lock.on_change.insert(Box::new(f));
 
         OnChangeHandle {
             state_monitor: weak_self,
@@ -140,16 +140,25 @@ impl StateMonitor {
         }
     }
 
-    fn changed(&self) {
+    fn changed(&self, mut lock: MutexGuard<'_, StateMonitorInner>) {
         // The documentation suggests not to iterate over slabs as it may be inefficient, but we
         // expect there will be very few handlers inside `on_change` so it shouldn't matter.
-        for (_i, callback) in self.on_change.lock().unwrap().iter_mut() {
+        for (_i, callback) in lock.on_change.iter_mut() {
             callback();
         }
 
+        // We don't know what the callback in `parent` will execute and if they tried to access
+        // `inner` of this monitor, then we would get a deadlock. So let's drop the `lock` just to
+        // be on the safe side.
+        drop(lock);
+
         if let Some(parent) = self.parent.upgrade() {
-            parent.changed();
+            parent.changed(parent.lock());
         }
+    }
+
+    fn lock(&self) -> MutexGuard<'_, StateMonitorInner> {
+        self.inner.lock().unwrap()
     }
 }
 
@@ -158,15 +167,13 @@ impl Serialize for StateMonitor {
     where
         S: Serializer,
     {
-        // XXX: Should values and children be under a single Mutex?
-        let values = self.values.lock().unwrap();
-        let children = self.children.lock().unwrap();
+        let lock = self.lock();
 
         // When serializing into the messagepack format, the `serialize_struct(_, N)` is serialized
         // into a list of size N (use `unpackList` in Dart).
         let mut s = serializer.serialize_struct("StateMonitor", 2)?;
-        s.serialize_field("values", &ValuesSerializer(&*values))?;
-        s.serialize_field("children", &ChildrenSerializer(&*children))?;
+        s.serialize_field("values", &ValuesSerializer(&lock.values))?;
+        s.serialize_field("children", &ChildrenSerializer(&lock.children))?;
         s.end()
     }
 }
@@ -175,13 +182,12 @@ impl Drop for StateMonitor {
     fn drop(&mut self) {
         if let Some(parent) = self.parent.upgrade() {
             let name = self.name.clone();
-            let mut children = parent.children.lock().unwrap();
+            let mut parent_lock = parent.lock();
 
-            if let map::Entry::Occupied(e) = children.entry(name) {
+            if let map::Entry::Occupied(e) = parent_lock.children.entry(name) {
                 if e.get().id == self.id {
                     e.remove();
-                    drop(children);
-                    parent.changed();
+                    parent.changed(parent_lock);
                 }
             }
         }
@@ -203,7 +209,7 @@ impl<T> MonitoredValue<T> {
     pub fn set(&mut self, value: T) {
         *self.value.lock().unwrap() = value;
         if let Some(monitor) = self.monitor.upgrade() {
-            monitor.changed();
+            monitor.changed(monitor.lock());
         }
     }
 }
@@ -211,12 +217,11 @@ impl<T> MonitoredValue<T> {
 impl<T> Drop for MonitoredValue<T> {
     fn drop(&mut self) {
         if let Some(monitor) = self.monitor.upgrade() {
-            let mut values = monitor.values.lock().unwrap();
+            let mut lock = monitor.lock();
             // TODO: Can we do without cloning the name? Since we're `drop`ing here anyway...
-            if let map::Entry::Occupied(mut e) = values.entry(self.name.clone()) {
+            if let map::Entry::Occupied(mut e) = lock.values.entry(self.name.clone()) {
                 e.get_mut().remove(self.id);
-                drop(values);
-                monitor.changed();
+                monitor.changed(lock);
             }
         }
     }
@@ -234,10 +239,11 @@ pub struct OnChangeHandle {
 impl Drop for OnChangeHandle {
     fn drop(&mut self) {
         if let Some(state_monitor) = self.state_monitor.upgrade() {
+            let mut lock = state_monitor.lock();
             // `let _ =` because there is some weird warning if it's not used:
             // "warning: unused boxed `FnMut` trait object that must be used"
-            let _ = state_monitor.on_change.lock().unwrap().remove(self.handle);
-            state_monitor.changed();
+            let _ = lock.on_change.remove(self.handle);
+            state_monitor.changed(lock);
         }
     }
 }
