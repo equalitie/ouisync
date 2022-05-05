@@ -1,9 +1,8 @@
 use crate::sync::uninitialized_watch;
 use serde::{
-    ser::{SerializeMap, SerializeSeq, SerializeStruct},
+    ser::{SerializeMap, SerializeStruct},
     Serialize, Serializer,
 };
-use slab::Slab;
 use std::{
     collections::{btree_map as map, BTreeMap},
     fmt,
@@ -29,7 +28,7 @@ pub struct StateMonitorInner {
     // Incremented on each change, can be used by monitors to determine whether a child has
     // changed.
     change_id: u64,
-    values: BTreeMap<String, Slab<MonitoredValueHandle>>,
+    values: BTreeMap<String, MonitoredValueHandle>,
     children: BTreeMap<String, Arc<StateMonitor>>,
     on_change: uninitialized_watch::Sender<()>,
 }
@@ -104,31 +103,31 @@ impl StateMonitor {
         })
     }
 
+    /// Creates a new monitored value.
+    ///
+    /// Panics when a value of the same `name` already exists.
     pub fn make_value<T: 'static + fmt::Debug>(
         self: &Arc<Self>,
-        key: String,
+        name: String,
         value: T,
     ) -> MonitoredValue<T> {
         let value = Arc::new(Mutex::new(value));
         let mut lock = self.lock();
 
-        let id = match lock.values.entry(key.clone()) {
+        match lock.values.entry(name.clone()) {
             map::Entry::Vacant(e) => {
-                let mut slab = Slab::new();
-                let id = slab.insert(MonitoredValueHandle { ptr: value.clone() });
-                e.insert(slab);
-                id
+                e.insert(MonitoredValueHandle { ptr: value.clone() });
             }
-            map::Entry::Occupied(mut e) => e
-                .get_mut()
-                .insert(MonitoredValueHandle { ptr: value.clone() }),
+            map::Entry::Occupied(_) => panic!(
+                "Monitored value of the same name ({:?}) already exists",
+                name
+            ),
         };
 
         self.changed(lock);
 
         MonitoredValue {
-            id,
-            name: key,
+            name,
             monitor: Arc::downgrade(self),
             value,
         }
@@ -176,7 +175,6 @@ impl Drop for StateMonitor {
 // --- MonitoredValue
 
 pub struct MonitoredValue<T> {
-    id: usize,
     name: String,
     monitor: Weak<StateMonitor>,
     value: Arc<Mutex<T>>,
@@ -199,12 +197,8 @@ impl<T> Drop for MonitoredValue<T> {
     fn drop(&mut self) {
         if let Some(monitor) = self.monitor.upgrade() {
             let mut lock = monitor.lock();
-
-            // TODO: Can we do without cloning the name? Since we're `drop`ing here anyway...
-            if let map::Entry::Occupied(mut e) = lock.values.entry(self.name.clone()) {
-                e.get_mut().remove(self.id);
-                monitor.changed(lock);
-            }
+            lock.values.remove(&self.name);
+            monitor.changed(lock);
         }
     }
 }
@@ -232,8 +226,7 @@ impl Serialize for StateMonitor {
     }
 }
 
-struct ValuesSerializer<'a>(&'a BTreeMap<String, Slab<MonitoredValueHandle>>);
-struct ValuesSlabSerializer<'a>(&'a Slab<MonitoredValueHandle>);
+struct ValuesSerializer<'a>(&'a BTreeMap<String, MonitoredValueHandle>);
 struct ChildrenSerializer<'a>(&'a BTreeMap<String, Arc<StateMonitor>>);
 
 impl<'a> Serialize for ValuesSerializer<'a> {
@@ -243,23 +236,10 @@ impl<'a> Serialize for ValuesSerializer<'a> {
     {
         let mut map = serializer.serialize_map(Some(self.0.len()))?;
         for (k, v) in self.0.iter() {
-            map.serialize_entry(k, &ValuesSlabSerializer(v))?;
+            let v = v.ptr.lock().unwrap();
+            map.serialize_entry(k, &format!("{:?}", v))?;
         }
         map.end()
-    }
-}
-
-impl<'a> Serialize for ValuesSlabSerializer<'a> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let mut seq = serializer.serialize_seq(Some(self.0.len()))?;
-        for (_id, m) in self.0.iter() {
-            let v = m.ptr.lock().unwrap();
-            seq.serialize_element(&format!("{:?}", v))?;
-        }
-        seq.end()
     }
 }
 
