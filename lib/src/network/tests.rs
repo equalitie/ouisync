@@ -172,8 +172,6 @@ async fn failed_block_only_peer() {
 
 // Same as `failed_block_only_peer` test but this time there is a second peer who remains connected
 // for the whole duration of the test. This is to uncover any potential request caching issues.
-// FIXME: currently fails because the receive filter is shared among all clients
-#[ignore]
 #[tokio::test]
 async fn failed_block_same_peer() {
     let mut rng = StdRng::seed_from_u64(0);
