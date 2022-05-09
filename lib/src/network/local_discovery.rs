@@ -1,5 +1,8 @@
 use super::protocol::RuntimeId;
-use crate::scoped_task::ScopedJoinHandle;
+use crate::{
+    scoped_task::ScopedJoinHandle,
+    state_monitor::{MonitoredValue, StateMonitor},
+};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -21,6 +24,8 @@ pub(super) struct LocalDiscovery {
     id: RuntimeId,
     listener_port: u16,
     socket: Arc<UdpSocket>,
+    beacon_requests_received: MonitoredValue<u64>,
+    beacon_responses_received: MonitoredValue<u64>,
     _beacon_handle: ScopedJoinHandle<()>,
 }
 
@@ -29,17 +34,22 @@ impl LocalDiscovery {
     /// LRU cache so as to not re-report it too frequently. Once the peer disconnects, the user of
     /// `LocalDiscovery` should call `forget` with the `RuntimeId` and the replica shall start
     /// reporting it again.
-    pub fn new(id: RuntimeId, listener_port: u16) -> io::Result<Self> {
+    pub fn new(id: RuntimeId, listener_port: u16, monitor: Arc<StateMonitor>) -> io::Result<Self> {
         let socket = create_multicast_socket()?;
         let socket = Arc::new(socket);
 
-        let beacon_handle = task::spawn(run_beacon(socket.clone(), id, listener_port));
+        let beacon_requests_received = monitor.make_value("beacon-requests-received".into(), 0);
+        let beacon_responses_received = monitor.make_value("beacon-responses-received".into(), 0);
+
+        let beacon_handle = task::spawn(run_beacon(socket.clone(), id, listener_port, monitor));
         let beacon_handle = ScopedJoinHandle(beacon_handle);
 
         Ok(Self {
             id,
             listener_port,
             socket,
+            beacon_requests_received,
+            beacon_responses_received,
             _beacon_handle: beacon_handle,
         })
     }
@@ -74,6 +84,8 @@ impl LocalDiscovery {
         };
 
         if is_request {
+            *self.beacon_requests_received.get() += 1;
+
             // TODO: Consider `spawn`ing this, so it doesn't block this function.
             if let Err(error) = send(
                 &self.socket,
@@ -87,6 +99,8 @@ impl LocalDiscovery {
             {
                 log::error!("Failed to send discovery message: {}", error);
             }
+        } else {
+            *self.beacon_responses_received.get() += 1;
         }
 
         Some(SocketAddr::new(addr.ip(), port))
@@ -117,8 +131,14 @@ fn create_multicast_socket() -> io::Result<tokio::net::UdpSocket> {
     tokio::net::UdpSocket::from_std(sync_socket)
 }
 
-async fn run_beacon(socket: Arc<UdpSocket>, id: RuntimeId, listener_port: u16) {
+async fn run_beacon(
+    socket: Arc<UdpSocket>,
+    id: RuntimeId,
+    listener_port: u16,
+    monitor: Arc<StateMonitor>,
+) {
     let multicast_endpoint = SocketAddr::new(MULTICAST_ADDR.into(), MULTICAST_PORT);
+    let beacons_sent = monitor.make_value::<u64>("beacons-sent".into(), 0);
 
     loop {
         if let Err(error) = send(
@@ -134,6 +154,8 @@ async fn run_beacon(socket: Arc<UdpSocket>, id: RuntimeId, listener_port: u16) {
             log::error!("Failed to send discovery message: {}", error);
             break;
         }
+
+        *beacons_sent.get() += 1;
 
         let delay = rand::thread_rng().gen_range(2..8);
         sleep(Duration::from_secs(delay)).await;

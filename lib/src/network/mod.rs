@@ -32,6 +32,7 @@ use crate::{
     index::Index,
     repository::RepositoryId,
     scoped_task::{self, ScopedJoinHandle, ScopedTaskSet},
+    state_monitor::StateMonitor,
     sync::uninitialized_watch,
 };
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
@@ -114,6 +115,7 @@ impl Default for NetworkOptions {
 
 pub struct Network {
     inner: Arc<Inner>,
+    pub monitor: Arc<StateMonitor>,
     // We keep tasks here instead of in Inner because we want them to be
     // destroyed when Network is Dropped.
     _tasks: Arc<Tasks>,
@@ -175,7 +177,10 @@ impl Network {
 
         let (on_protocol_mismatch_tx, on_protocol_mismatch_rx) = uninitialized_watch::channel();
 
+        let monitor = StateMonitor::make_root();
+
         let inner = Arc::new(Inner {
+            monitor: monitor.clone(),
             listener_local_addr,
             this_runtime_id: rand::random(),
             state: BlockingMutex::new(State {
@@ -194,6 +199,7 @@ impl Network {
 
         let network = Self {
             inner: inner.clone(),
+            monitor,
             _tasks: tasks,
             _port_forwarder: port_forwarder,
         };
@@ -355,6 +361,7 @@ struct Tasks {
 }
 
 struct Inner {
+    monitor: Arc<StateMonitor>,
     listener_local_addr: SocketAddr,
     this_runtime_id: RuntimeId,
     state: BlockingMutex<State>,
@@ -402,7 +409,9 @@ impl Inner {
     }
 
     async fn run_local_discovery(self: Arc<Self>, listener_port: u16) {
-        let discovery = match LocalDiscovery::new(self.this_runtime_id, listener_port) {
+        let monitor = self.monitor.make_child("local-discovery");
+
+        let discovery = match LocalDiscovery::new(self.this_runtime_id, listener_port, monitor) {
             Ok(discovery) => discovery,
             Err(error) => {
                 log::error!("Failed to create LocalDiscovery: {}", error);
