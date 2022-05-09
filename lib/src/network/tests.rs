@@ -16,11 +16,15 @@ use crate::{
     store, test_utils,
     version_vector::VersionVector,
 };
+use futures_util::{
+    future::{self, FusedFuture},
+    FutureExt,
+};
 use rand::prelude::*;
 use std::{fmt, future::Future, sync::Arc, time::Duration};
 use test_strategy::proptest;
 use tokio::{
-    select,
+    pin, select,
     sync::{mpsc, Semaphore},
     time,
 };
@@ -65,6 +69,9 @@ async fn transfer_snapshot_between_two_replicas_case(
 
     assert!(load_latest_root_node(&b_index, a_id).await.is_none());
 
+    let mut server = create_server(a_index.clone());
+    let mut client = create_client(b_index.clone());
+
     // Wait until replica B catches up to replica A, then have replica A perform a local change
     // and repeat.
     let drive = async {
@@ -82,7 +89,7 @@ async fn transfer_snapshot_between_two_replicas_case(
         }
     };
 
-    simulate_connection_until(a_index.clone(), b_index.clone(), drive).await
+    simulate_connection_until(&mut server, &mut client, drive).await
 }
 
 #[proptest]
@@ -108,6 +115,9 @@ async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed:
     save_snapshot(&a_index, a_id, &write_keys, &snapshot).await;
     save_snapshot(&b_index, b_id, &write_keys, &snapshot).await;
 
+    let mut server = create_server(a_index.clone());
+    let mut client = create_client(b_index.clone());
+
     // Keep adding the blocks to replica A and verify they get received by replica B as well.
     let drive = async {
         for (id, block) in snapshot.blocks() {
@@ -121,7 +131,183 @@ async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed:
         }
     };
 
-    simulate_connection_until(a_index.clone(), b_index.clone(), drive).await
+    simulate_connection_until(&mut server, &mut client, drive).await
+}
+
+// Receive a `LeafNode` with non-missing block, then drop the connection before the block itself is
+// received, then re-establish the connection and make sure the block gets received then.
+#[tokio::test]
+async fn failed_block_only_peer() {
+    let mut rng = StdRng::seed_from_u64(0);
+
+    let write_keys = Keypair::generate(&mut rng);
+    let (a_index, a_id) = create_index(&mut rng, &write_keys).await;
+    let (b_index, _) = create_index(&mut rng, &write_keys).await;
+
+    let snapshot = Snapshot::generate(&mut rng, 1);
+    save_snapshot(&a_index, a_id, &write_keys, &snapshot).await;
+    receive_blocks(&a_index, &snapshot).await;
+
+    let mut server = create_server(a_index.clone());
+    let mut client = create_client(b_index.clone());
+
+    simulate_connection_until(
+        &mut server,
+        &mut client,
+        wait_until_snapshots_in_sync(&a_index, a_id, &b_index),
+    )
+    .await;
+
+    // Simulate peer disconnecting and reconnecting.
+    drop(server);
+    drop(client);
+
+    let mut server = create_server(a_index.clone());
+    let mut client = create_client(b_index.clone());
+
+    simulate_connection_until(&mut server, &mut client, async {
+        for id in snapshot.blocks().keys() {
+            wait_until_block_exists(&b_index, id).await
+        }
+    })
+    .await;
+}
+
+// Same as `failed_block_only_peer` test but this time there is a second peer who remains connected
+// for the whole duration of the test. This is to uncover any potential request caching issues.
+#[tokio::test]
+async fn failed_block_same_peer() {
+    let mut rng = StdRng::seed_from_u64(0);
+
+    let write_keys = Keypair::generate(&mut rng);
+    let (a_index, a_id) = create_index(&mut rng, &write_keys).await;
+    let (b_index, _) = create_index(&mut rng, &write_keys).await;
+    let (c_index, _) = create_index(&mut rng, &write_keys).await;
+
+    let snapshot = Snapshot::generate(&mut rng, 1);
+    save_snapshot(&a_index, a_id, &write_keys, &snapshot).await;
+    receive_blocks(&a_index, &snapshot).await;
+
+    // [A]-(server_ac)---+
+    //                   |
+    //               (client_ca)
+    //                   |
+    //                  [C]
+    //                   |
+    //               (client_cb)
+    //                   |
+    // [B]-(server_bc)---+
+
+    let mut server_ac = create_server(a_index.clone());
+    let mut client_ca = create_client(c_index.clone());
+
+    let mut server_bc = create_server(b_index.clone());
+    let mut client_cb = create_client(c_index.clone());
+
+    // Run both connections in parallel until C syncs its index (but not blocks) with B
+    let conn_ac = simulate_connection(&mut server_ac, &mut client_ca);
+
+    let conn_bc = simulate_connection(&mut server_bc, &mut client_cb);
+    pin!(conn_bc);
+
+    run_until(
+        future::join(conn_ac, &mut conn_bc),
+        wait_until_snapshots_in_sync(&a_index, a_id, &c_index),
+    )
+    .await;
+
+    // Drop and recreate the B-C connection but keep the A-C connection up.
+    drop(server_ac);
+    drop(client_ca);
+
+    let mut server_ac = create_server(a_index.clone());
+    let mut client_ca = create_client(c_index.clone());
+
+    // Run the new B-C connection in parallel with the existing A-C connection until all blocks are
+    // received.
+    let conn_ac = simulate_connection(&mut server_ac, &mut client_ca);
+
+    run_until(future::join(conn_ac, conn_bc), async {
+        for id in snapshot.blocks().keys() {
+            wait_until_block_exists(&c_index, id).await
+        }
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn failed_block_other_peer() {
+    let mut rng = StdRng::seed_from_u64(0);
+
+    let write_keys = Keypair::generate(&mut rng);
+    let (a_index, a_id) = create_index(&mut rng, &write_keys).await;
+    let (b_index, b_id) = create_index(&mut rng, &write_keys).await;
+    let (c_index, _) = create_index(&mut rng, &write_keys).await;
+
+    let snapshot = Snapshot::generate(&mut rng, 1);
+
+    save_snapshot(&a_index, a_id, &write_keys, &snapshot).await;
+    receive_blocks(&a_index, &snapshot).await;
+
+    save_snapshot(&b_index, b_id, &write_keys, &snapshot).await;
+    receive_blocks(&b_index, &snapshot).await;
+
+    // [A]-(server_ac)---+
+    //                   |
+    //               (client_ca)
+    //                   |
+    //                  [C]
+    //                   |
+    //               (client_cb)
+    //                   |
+    // [B]-(server_bc)---+
+
+    let mut server_ac = create_server(a_index.clone());
+    let mut client_ca = create_client(c_index.clone());
+
+    let mut server_bc = create_server(b_index.clone());
+    let mut client_cb = create_client(c_index.clone());
+
+    let conn_bc = simulate_connection(&mut server_bc, &mut client_cb);
+    pin!(conn_bc);
+
+    {
+        // Run the two connections in parallel until C syncs its index with either A or B.
+        let conn_ac = simulate_connection(&mut server_ac, &mut client_ca);
+        let conn_ac = run_until(
+            conn_ac,
+            wait_until_snapshots_in_sync(&a_index, a_id, &c_index),
+        )
+        .fuse();
+        pin!(conn_ac);
+
+        let conn_bc = run_until(
+            &mut conn_bc,
+            wait_until_snapshots_in_sync(&b_index, b_id, &c_index),
+        );
+        pin!(conn_bc);
+
+        future::select(&mut conn_ac, conn_bc).await;
+
+        // Make sure C's index is synced with A but don't advance the B-C connection yet so C
+        // doesn't receive any blocks from neither A nor B yet.
+        if !conn_ac.is_terminated() {
+            conn_ac.await;
+        }
+    }
+
+    // Drop the A-C connection so C can't receive any blocks from A anymore.
+    drop(server_ac);
+    drop(client_ca);
+
+    // Continue running the B-C connection and verify C receives the missing blocks from B who is
+    // the only remaining peer at this point.
+    run_until(conn_bc, async {
+        for id in snapshot.blocks().keys() {
+            wait_until_block_exists(&c_index, id).await;
+        }
+    })
+    .await;
 }
 
 async fn create_index<R: Rng + CryptoRng>(rng: &mut R, write_keys: &Keypair) -> (Index, PublicKey) {
@@ -248,12 +434,17 @@ async fn load_latest_root_node(index: &Index, writer_id: PublicKey) -> Option<Ro
 }
 
 // Simulate connection between two replicas until the given future completes.
-async fn simulate_connection_until<F>(server_index: Index, client_index: Index, until: F)
+async fn simulate_connection_until<F>(server: &mut ServerData, client: &mut ClientData, until: F)
 where
-    F: Future<Output = ()>,
+    F: Future,
 {
-    let (mut server, server_send_rx, server_recv_tx) = create_server(server_index);
-    let (mut client, client_send_rx, client_recv_tx) = create_client(client_index);
+    run_until(simulate_connection(server, client), until).await
+}
+
+// Simulate connection forever.
+async fn simulate_connection(server: &mut ServerData, client: &mut ClientData) {
+    let (server, server_send_rx, server_recv_tx) = server;
+    let (client, client_send_rx, client_recv_tx) = client;
 
     let mut server_conn = Connection {
         send_rx: server_send_rx,
@@ -270,14 +461,30 @@ where
 
         result = server.run() => result.unwrap(),
         result = client.run() => result.unwrap(),
-        _ = server_conn.run() => (),
-        _ = client_conn.run() => (),
+        _ = server_conn.run() => panic!("connection closed prematurely"),
+        _ = client_conn.run() => panic!("connection closed prematurely"),
+    }
+}
+
+// Runs `task` until `until` completes. Panics if `until` doesn't complete before `TIMEOUT` or if
+// `task` completes before `until`.
+async fn run_until<F, U>(task: F, until: U)
+where
+    F: Future,
+    U: Future,
+{
+    select! {
+        biased; // deterministic poll order for repeatable tests
+        _ = task => panic!("task completed prematurely"),
         _ = until => (),
         _ = time::sleep(TIMEOUT) => panic!("test timed out"),
     }
 }
 
-fn create_server(index: Index) -> (Server, mpsc::Receiver<Content>, mpsc::Sender<Request>) {
+type ServerData = (Server, mpsc::Receiver<Content>, mpsc::Sender<Request>);
+type ClientData = (Client, mpsc::Receiver<Content>, mpsc::Sender<Response>);
+
+fn create_server(index: Index) -> ServerData {
     let (send_tx, send_rx) = mpsc::channel(1);
     let (recv_tx, recv_rx) = mpsc::channel(CAPACITY);
     let server = Server::new(index, send_tx, recv_rx);
@@ -285,7 +492,7 @@ fn create_server(index: Index) -> (Server, mpsc::Receiver<Content>, mpsc::Sender
     (server, send_rx, recv_tx)
 }
 
-fn create_client(index: Index) -> (Client, mpsc::Receiver<Content>, mpsc::Sender<Response>) {
+fn create_client(index: Index) -> ClientData {
     let (send_tx, send_rx) = mpsc::channel(1);
     let (recv_tx, recv_rx) = mpsc::channel(CAPACITY);
     let client = Client::new(
@@ -299,12 +506,12 @@ fn create_client(index: Index) -> (Client, mpsc::Receiver<Content>, mpsc::Sender
 }
 
 // Simulated connection between a server and a client.
-struct Connection<T> {
-    send_rx: mpsc::Receiver<Content>,
-    recv_tx: mpsc::Sender<T>,
+struct Connection<'a, T> {
+    send_rx: &'a mut mpsc::Receiver<Content>,
+    recv_tx: &'a mut mpsc::Sender<T>,
 }
 
-impl<T> Connection<T>
+impl<T> Connection<'_, T>
 where
     T: From<Content> + fmt::Debug,
 {

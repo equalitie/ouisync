@@ -7,7 +7,9 @@ use crate::{
     block::{BlockData, BlockId, BlockNonce},
     crypto::{CacheHash, Hash, Hashable},
     error::{Error, Result},
-    index::{Index, InnerNodeMap, LeafNodeSet, ReceiveError, Summary, UntrustedProof},
+    index::{
+        Index, InnerNodeMap, LeafNodeSet, ReceiveError, ReceiveFilter, Summary, UntrustedProof,
+    },
     store,
 };
 use std::{collections::VecDeque, sync::Arc};
@@ -24,6 +26,7 @@ pub(crate) struct Client {
     pending_requests: PendingRequests,
     send_queue: VecDeque<Request>,
     recv_queue: VecDeque<Success>,
+    receive_filter: ReceiveFilter,
 }
 
 impl Client {
@@ -41,13 +44,14 @@ impl Client {
             pending_requests: PendingRequests::new(),
             send_queue: VecDeque::new(),
             recv_queue: VecDeque::new(),
+            receive_filter: ReceiveFilter::new(),
         }
     }
 
     pub async fn run(&mut self) -> Result<()> {
-        let _enable = self.index.enable_receive_filter();
-
         loop {
+            self.receive_filter.clear_expired();
+
             select! {
                 response = self.rx.recv() => {
                     if let Some(response) = response {
@@ -170,7 +174,10 @@ impl Client {
             nodes.hash()
         );
 
-        let updated = self.index.receive_inner_nodes(nodes).await?;
+        let updated = self
+            .index
+            .receive_inner_nodes(nodes, &mut self.receive_filter)
+            .await?;
 
         for hash in updated {
             self.send_queue.push_front(Request::ChildNodes(hash));

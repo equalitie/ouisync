@@ -8,6 +8,7 @@ use crate::{
         sign::{Keypair, PublicKey},
         Hash, Hashable,
     },
+    index::ReceiveFilter,
     store,
     version_vector::VersionVector,
 };
@@ -158,7 +159,7 @@ pub(crate) async fn receive_nodes(
     version_vector: VersionVector,
     snapshot: &Snapshot,
 ) {
-    let _enable = index.enable_receive_filter();
+    let mut receive_filter = ReceiveFilter::new();
 
     let proof = Proof::new(branch_id, version_vector, *snapshot.root_hash(), write_keys);
     index
@@ -169,7 +170,7 @@ pub(crate) async fn receive_nodes(
     for layer in snapshot.inner_layers() {
         for (_, nodes) in layer.inner_maps() {
             index
-                .receive_inner_nodes(nodes.clone().into())
+                .receive_inner_nodes(nodes.clone().into(), &mut receive_filter)
                 .await
                 .unwrap();
         }

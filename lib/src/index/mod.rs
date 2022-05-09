@@ -15,9 +15,10 @@ pub(crate) use self::{
         EMPTY_INNER_HASH,
     },
     proof::{Proof, UntrustedProof},
+    receive_filter::ReceiveFilter,
 };
 
-use self::{proof::ProofError, receive_filter::ReceiveFilter};
+use self::proof::ProofError;
 use crate::{
     block::BlockId,
     crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
@@ -43,7 +44,6 @@ type SnapshotId = u32;
 pub struct Index {
     pub(crate) pool: db::Pool,
     shared: Arc<Shared>,
-    receive_filter: ReceiveFilter,
 }
 
 impl Index {
@@ -58,7 +58,6 @@ impl Index {
                 branches: RwLock::new(branches),
                 notify_tx,
             }),
-            receive_filter: ReceiveFilter::new(),
         })
     }
 
@@ -132,10 +131,6 @@ impl Index {
     pub(crate) async fn debug_print(&self, print: DebugPrinter) {
         let mut conn = self.pool.acquire().await.unwrap();
         RootNode::debug_print(&mut conn, print).await;
-    }
-
-    pub(crate) fn enable_receive_filter(&self) -> receive_filter::Enable {
-        self.receive_filter.enable()
     }
 
     /// Receive `RootNode` from other replica and store it into the db. Returns whether the
@@ -217,6 +212,7 @@ impl Index {
     pub(crate) async fn receive_inner_nodes(
         &self,
         nodes: CacheHash<InnerNodeMap>,
+        receive_filter: &mut ReceiveFilter,
     ) -> Result<Vec<Hash>, ReceiveError> {
         let mut conn = self.pool.acquire().await?;
         let parent_hash = nodes.hash();
@@ -225,7 +221,7 @@ impl Index {
             .await?;
 
         let updated = self
-            .find_inner_nodes_with_new_blocks(&mut conn, &parent_hash, &nodes)
+            .find_inner_nodes_with_new_blocks(&mut conn, &parent_hash, &nodes, receive_filter)
             .await?;
 
         let mut nodes = nodes.into_inner().into_incomplete();
@@ -273,10 +269,9 @@ impl Index {
         conn: &mut db::Connection,
         parent_hash: &Hash,
         remote_nodes: &InnerNodeMap,
+        receive_filter: &mut ReceiveFilter,
     ) -> Result<Vec<Hash>> {
         let local_nodes = InnerNode::load_children(conn, parent_hash).await?;
-
-        let mut receive_filter = self.receive_filter.access();
 
         Ok(remote_nodes
             .iter()

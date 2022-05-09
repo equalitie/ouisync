@@ -185,7 +185,6 @@ async fn receive_root_node_with_existing_hash() {
 #[tokio::test(flavor = "multi_thread")]
 async fn receive_valid_child_nodes() {
     let (index, write_keys) = setup().await;
-    let _enable = index.enable_receive_filter();
 
     let local_id = PublicKey::random();
     let remote_id = PublicKey::random();
@@ -211,10 +210,12 @@ async fn receive_valid_child_nodes() {
         .await
         .unwrap();
 
+    let mut receive_filter = ReceiveFilter::new();
+
     for layer in snapshot.inner_layers() {
         for (hash, inner_nodes) in layer.inner_maps() {
             index
-                .receive_inner_nodes(inner_nodes.clone().into())
+                .receive_inner_nodes(inner_nodes.clone().into(), &mut receive_filter)
                 .await
                 .unwrap();
 
@@ -254,10 +255,13 @@ async fn receive_child_nodes_with_missing_root_parent() {
         .unwrap();
 
     let snapshot = Snapshot::generate(&mut rand::thread_rng(), 1);
+    let mut receive_filter = ReceiveFilter::new();
 
     for layer in snapshot.inner_layers() {
         let (hash, inner_nodes) = layer.inner_maps().next().unwrap();
-        let result = index.receive_inner_nodes(inner_nodes.clone().into()).await;
+        let result = index
+            .receive_inner_nodes(inner_nodes.clone().into(), &mut receive_filter)
+            .await;
         assert_matches!(result, Err(ReceiveError::ParentNodeNotFound));
 
         // The orphaned inner nodes were not written to the db.
@@ -281,7 +285,6 @@ async fn receive_child_nodes_with_missing_root_parent() {
 #[tokio::test(flavor = "multi_thread")]
 async fn does_not_delete_old_branch_until_new_branch_is_complete() {
     let (index, write_keys) = setup().await;
-    let _enable = index.enable_receive_filter();
 
     let mut rng = rand::thread_rng();
 
@@ -306,10 +309,12 @@ async fn does_not_delete_old_branch_until_new_branch_is_complete() {
         .await
         .unwrap();
 
+    let mut receive_filter = ReceiveFilter::new();
+
     for layer in snapshot0.inner_layers() {
         for (_, nodes) in layer.inner_maps() {
             index
-                .receive_inner_nodes(nodes.clone().into())
+                .receive_inner_nodes(nodes.clone().into(), &mut receive_filter)
                 .await
                 .unwrap();
         }
