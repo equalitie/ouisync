@@ -32,7 +32,7 @@ use crate::{
     index::Index,
     repository::RepositoryId,
     scoped_task::{self, ScopedJoinHandle, ScopedTaskSet},
-    state_monitor::{MonitoredValue, StateMonitor},
+    state_monitor::StateMonitor,
     sync::uninitialized_watch,
 };
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
@@ -408,22 +408,7 @@ impl Inner {
         *local_discovery = Some(scoped_task::spawn(self.clone().run_local_discovery(port)));
     }
 
-    fn start_test(self: &Arc<Self>) {
-        let monitor = self.monitor.make_child("local-discovery".into());
-        let recv_count = monitor.make_value::<u64>("recv-count".into(), 0);
-
-        task::spawn(async move {
-            let mut i = 0;
-            loop {
-                time::sleep(Duration::from_secs(2)).await;
-                println!("------ rust recv_count increment {}", i);
-                i += 1;
-                recv_count.set(i);
-            }
-        });
-    }
     async fn run_local_discovery(self: Arc<Self>, listener_port: u16) {
-        self.start_test();
 
         let discovery = match LocalDiscovery::new(self.this_runtime_id, listener_port) {
             Ok(discovery) => discovery,
@@ -432,7 +417,6 @@ impl Inner {
                 return;
             }
         };
-
 
         while let Some(addr) = discovery.recv().await {
             let tasks = self.tasks.upgrade().unwrap();
