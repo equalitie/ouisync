@@ -96,14 +96,6 @@ impl<T> UniqueNullableHandle<T> {
         Self(Box::into_raw(resource) as _, PhantomData)
     }
 
-    pub unsafe fn get(&self) -> Option<&T> {
-        if self.0 != 0 {
-            Some(&*(self.0 as *const _))
-        } else {
-            None
-        }
-    }
-
     pub unsafe fn release(self) -> Option<Box<T>> {
         if self.0 != 0 {
             Some(Box::from_raw(self.0 as *mut _))
