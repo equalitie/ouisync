@@ -21,7 +21,7 @@ static NEXT_MONITOR_ID: AtomicU64 = AtomicU64::new(0);
 pub struct StateMonitor {
     id: u64,
     name: String,
-    parent: Weak<StateMonitor>,
+    parent: Option<Arc<StateMonitor>>,
     inner: Mutex<StateMonitorInner>,
 }
 
@@ -30,7 +30,7 @@ pub struct StateMonitorInner {
     // changed.
     change_id: u64,
     values: BTreeMap<String, MonitoredValueHandle>,
-    children: BTreeMap<String, Arc<StateMonitor>>,
+    children: BTreeMap<String, Weak<StateMonitor>>,
     on_change: uninitialized_watch::Sender<()>,
 }
 
@@ -39,7 +39,7 @@ impl StateMonitor {
         Arc::new(Self {
             id: 0,
             name: "".into(),
-            parent: Weak::new(),
+            parent: None,
             inner: Mutex::new(StateMonitorInner {
                 change_id: 0,
                 values: BTreeMap::new(),
@@ -50,32 +50,37 @@ impl StateMonitor {
     }
 
     pub fn make_child<S: Into<String>>(self: &Arc<Self>, name: S) -> Arc<StateMonitor> {
-        let weak_self = Arc::downgrade(self);
         let mut is_new = false;
         let name = name.into();
         let name_clone = name.clone();
         let mut lock = self.lock();
 
-        let child = lock
-            .children
-            .entry(name_clone)
-            .or_insert_with(|| {
+        let child = match lock.children.entry(name_clone) {
+            map::Entry::Vacant(e) => {
                 is_new = true;
                 let id = NEXT_MONITOR_ID.fetch_add(1, Ordering::Relaxed);
 
-                Arc::new(Self {
+                let child = Arc::new(Self {
                     id,
                     name: name.into(),
-                    parent: weak_self,
+                    parent: Some(self.clone()),
                     inner: Mutex::new(StateMonitorInner {
                         change_id: 0,
                         values: BTreeMap::new(),
                         children: BTreeMap::new(),
                         on_change: uninitialized_watch::channel().0,
                     }),
-                })
-            })
-            .clone();
+                });
+
+                e.insert(Arc::downgrade(&child));
+                child
+            },
+            map::Entry::Occupied(e) => {
+                // Unwrap OK because children are responsible for removing themselves from the map on
+                // Drop.
+                e.get().upgrade().unwrap()
+            }
+        };
 
         if is_new {
             self.changed(lock);
@@ -99,9 +104,14 @@ impl StateMonitor {
 
         let lock = self.lock();
 
-        lock.children.get(child).and_then(|child| match rest {
-            Some(rest) => child.locate(rest),
-            None => Some(child.clone()),
+        lock.children.get(child).and_then(|child| {
+            // Unwrap OK because children are responsible for removing themselves from the map on
+            // Drop.
+            let child = child.upgrade().unwrap();
+            match rest {
+                Some(rest) => child.locate(rest),
+                None => Some(child),
+            }
         })
     }
 
@@ -141,7 +151,7 @@ impl StateMonitor {
 
         MonitoredValue {
             name,
-            monitor: Arc::downgrade(self),
+            monitor: self.clone(),
             value,
         }
     }
@@ -159,7 +169,7 @@ impl StateMonitor {
         // make sure we don't try to lock in the reverse direction as that could deadlock.
         drop(lock);
 
-        if let Some(parent) = self.parent.upgrade() {
+        if let Some(parent) = &self.parent {
             parent.changed(parent.lock());
         }
     }
@@ -171,12 +181,14 @@ impl StateMonitor {
 
 impl Drop for StateMonitor {
     fn drop(&mut self) {
-        if let Some(parent) = self.parent.upgrade() {
+        if let Some(parent) = &self.parent {
             let name = self.name.clone();
             let mut parent_lock = parent.lock();
 
             if let map::Entry::Occupied(e) = parent_lock.children.entry(name) {
-                if e.get().id == self.id {
+                // Unwrap OK because children are responsible for removing thmselves from the map
+                // on Drop.
+                if e.get().upgrade().unwrap().id == self.id {
                     e.remove();
                     parent.changed(parent_lock);
                 }
@@ -189,7 +201,7 @@ impl Drop for StateMonitor {
 
 pub struct MonitoredValue<T> {
     name: String,
-    monitor: Weak<StateMonitor>,
+    monitor: Arc<StateMonitor>,
     value: Arc<Mutex<T>>,
 }
 
@@ -203,7 +215,7 @@ impl<T> MonitoredValue<T> {
 }
 
 pub struct MutexGuardWrap<'a, T> {
-    monitor: Weak<StateMonitor>,
+    monitor: Arc<StateMonitor>,
     guard: MutexGuard<'a, T>,
 }
 
@@ -223,29 +235,25 @@ impl<'a, T> core::ops::DerefMut for MutexGuardWrap<'a, T> {
 
 impl<'a, T> Drop for MutexGuardWrap<'a, T> {
     fn drop(&mut self) {
-        if let Some(monitor) = self.monitor.upgrade() {
-            monitor.changed(monitor.lock());
-        }
+        self.monitor.changed(self.monitor.lock());
     }
 }
 
 impl<T> Drop for MonitoredValue<T> {
     fn drop(&mut self) {
-        if let Some(monitor) = self.monitor.upgrade() {
-            let mut lock = monitor.lock();
+        let mut lock = self.monitor.lock();
 
-            // Can we not clone (since we're droping anyway)?
-            match lock.values.entry(self.name.clone()) {
-                map::Entry::Occupied(mut e) => {
-                    let v = e.get_mut();
-                    v.refcount -= 1;
-                    if v.refcount == 0 {
-                        e.remove();
-                        monitor.changed(lock);
-                    }
+        // Can we not clone (since we're droping anyway)?
+        match lock.values.entry(self.name.clone()) {
+            map::Entry::Occupied(mut e) => {
+                let v = e.get_mut();
+                v.refcount -= 1;
+                if v.refcount == 0 {
+                    e.remove();
+                    self.monitor.changed(lock);
                 }
-                map::Entry::Vacant(_) => unreachable!(),
             }
+            map::Entry::Vacant(_) => unreachable!(),
         }
     }
 }
@@ -275,7 +283,7 @@ impl Serialize for StateMonitor {
 }
 
 struct ValuesSerializer<'a>(&'a BTreeMap<String, MonitoredValueHandle>);
-struct ChildrenSerializer<'a>(&'a BTreeMap<String, Arc<StateMonitor>>);
+struct ChildrenSerializer<'a>(&'a BTreeMap<String, Weak<StateMonitor>>);
 
 impl<'a> Serialize for ValuesSerializer<'a> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -298,7 +306,10 @@ impl<'a> Serialize for ChildrenSerializer<'a> {
     {
         let mut map = serializer.serialize_map(Some(self.0.len()))?;
         for (name, child) in self.0.iter() {
-            map.serialize_entry(name, &child.lock().change_id)?;
+            // Unwrap OK because children are responsible for removing themselves from the map on
+            // Drop.
+            let child = child.upgrade().unwrap();
+            map.serialize_entry(name, &child.inner.lock().unwrap().change_id)?;
         }
         map.end()
     }

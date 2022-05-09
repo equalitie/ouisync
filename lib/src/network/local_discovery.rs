@@ -23,7 +23,6 @@ pub(super) struct LocalDiscovery {
     socket: Arc<UdpSocket>,
     beacon_requests_received: MonitoredValue<u64>,
     beacon_responses_received: MonitoredValue<u64>,
-    _monitor: Arc<StateMonitor>,
     _beacon_handle: ScopedJoinHandle<()>,
 }
 
@@ -36,16 +35,18 @@ impl LocalDiscovery {
         let socket = create_multicast_socket()?;
         let socket = Arc::new(socket);
 
-        let beacon_handle = task::spawn(run_beacon(socket.clone(), id, listener_port, monitor.clone()));
+        let beacon_requests_received = monitor.make_value("beacon-requests-received".into(), 0);
+        let beacon_responses_received = monitor.make_value("beacon-responses-received".into(), 0);
+
+        let beacon_handle = task::spawn(run_beacon(socket.clone(), id, listener_port, monitor));
         let beacon_handle = ScopedJoinHandle(beacon_handle);
 
         Ok(Self {
             id,
             listener_port,
             socket,
-            beacon_requests_received: monitor.make_value("beacon-requests-received".into(), 0),
-            beacon_responses_received: monitor.make_value("beacon-responses-received".into(), 0),
-            _monitor: monitor,
+            beacon_requests_received,
+            beacon_responses_received,
             _beacon_handle: beacon_handle,
         })
     }
