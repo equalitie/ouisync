@@ -409,8 +409,9 @@ impl Inner {
     }
 
     async fn run_local_discovery(self: Arc<Self>, listener_port: u16) {
+        let monitor = self.monitor.make_child("local-discovery");
 
-        let discovery = match LocalDiscovery::new(self.this_runtime_id, listener_port) {
+        let discovery = match LocalDiscovery::new(self.this_runtime_id, listener_port, monitor) {
             Ok(discovery) => discovery,
             Err(error) => {
                 log::error!("Failed to create LocalDiscovery: {}", error);
