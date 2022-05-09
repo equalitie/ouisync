@@ -5,6 +5,7 @@ use serde::{
 };
 use std::{
     collections::{btree_map as map, BTreeMap},
+    convert::Into,
     fmt,
     ops::Drop,
     sync::{
@@ -48,9 +49,10 @@ impl StateMonitor {
         })
     }
 
-    pub fn make_child(self: &Arc<Self>, name: String) -> Arc<StateMonitor> {
+    pub fn make_child<S: Into<String>>(self: &Arc<Self>, name: S) -> Arc<StateMonitor> {
         let weak_self = Arc::downgrade(self);
         let mut is_new = false;
+        let name = name.into();
         let name_clone = name.clone();
         let mut lock = self.lock();
 
@@ -63,7 +65,7 @@ impl StateMonitor {
 
                 Arc::new(Self {
                     id,
-                    name,
+                    name: name.into(),
                     parent: weak_self,
                     inner: Mutex::new(StateMonitorInner {
                         change_id: 0,
@@ -192,12 +194,35 @@ pub struct MonitoredValue<T> {
 }
 
 impl<T> MonitoredValue<T> {
-    pub fn get(&self) -> MutexGuard<'_, T> {
-        self.value.lock().unwrap()
+    pub fn get(&self) -> MutexGuardWrap<'_, T> {
+        MutexGuardWrap {
+            monitor: self.monitor.clone(),
+            guard: self.value.lock().unwrap(),
+        }
     }
+}
 
-    pub fn set(&self, value: T) {
-        *self.value.lock().unwrap() = value;
+pub struct MutexGuardWrap<'a, T> {
+    monitor: Weak<StateMonitor>,
+    guard: MutexGuard<'a, T>,
+}
+
+impl<'a, T> core::ops::Deref for MutexGuardWrap<'a, T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        &*self.guard
+    }
+}
+
+impl<'a, T> core::ops::DerefMut for MutexGuardWrap<'a, T> {
+    fn deref_mut(&mut self) -> &mut T {
+        &mut *self.guard
+    }
+}
+
+impl<'a, T> Drop for MutexGuardWrap<'a, T> {
+    fn drop(&mut self) {
         if let Some(monitor) = self.monitor.upgrade() {
             monitor.changed(monitor.lock());
         }
