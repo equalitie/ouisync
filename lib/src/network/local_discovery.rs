@@ -1,5 +1,8 @@
 use super::protocol::RuntimeId;
-use crate::{scoped_task::ScopedJoinHandle, state_monitor::{MonitoredValue, StateMonitor}};
+use crate::{
+    scoped_task::ScopedJoinHandle,
+    state_monitor::{MonitoredValue, StateMonitor},
+};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::{

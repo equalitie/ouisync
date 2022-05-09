@@ -74,7 +74,7 @@ impl StateMonitor {
 
                 e.insert(Arc::downgrade(&child));
                 child
-            },
+            }
             map::Entry::Occupied(e) => {
                 // Unwrap OK because children are responsible for removing themselves from the map on
                 // Drop.
