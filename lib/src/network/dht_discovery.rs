@@ -2,6 +2,7 @@ use super::{ip_stack::IpStack, socket};
 use crate::{
     config::{ConfigKey, ConfigStore},
     scoped_task::{self, ScopedJoinHandle},
+    state_monitor::{MonitoredValue, StateMonitor},
 };
 use btdht::{InfoHash, MainlineDht};
 use chrono::{offset::Local, DateTime};
@@ -52,19 +53,38 @@ pub(super) struct DhtDiscovery {
     dhts: IpStack<MainlineDht>,
     lookups: Arc<Mutex<Lookups>>,
     next_id: AtomicU64,
+    _state_v4: MonitoredValue<&'static str>,
+    _state_v6: MonitoredValue<&'static str>,
 }
 
 impl DhtDiscovery {
-    pub async fn new(sockets: IpStack<UdpSocket>, acceptor_port: u16) -> Self {
+    pub async fn new(
+        sockets: IpStack<UdpSocket>,
+        acceptor_port: u16,
+        monitor: Arc<StateMonitor>,
+    ) -> Self {
         let (routers_v4, routers_v6) = dht_router_addresses().await;
         let lookups = Arc::new(Mutex::new(HashMap::default()));
 
+        let state_v4 = monitor.make_value::<&'static str>("v4".into(), "not started");
+        let state_v6 = monitor.make_value::<&'static str>("v6".into(), "not started");
+
         let dhts = match sockets {
-            IpStack::V4(socket) => IpStack::V4(start_dht(socket, acceptor_port, routers_v4)),
-            IpStack::V6(socket) => IpStack::V6(start_dht(socket, acceptor_port, routers_v6)),
+            IpStack::V4(socket) => IpStack::V4(start_dht(
+                socket,
+                acceptor_port,
+                routers_v4,
+                state_v4.clone(),
+            )),
+            IpStack::V6(socket) => IpStack::V6(start_dht(
+                socket,
+                acceptor_port,
+                routers_v6,
+                state_v6.clone(),
+            )),
             IpStack::Dual { v4, v6 } => IpStack::Dual {
-                v4: start_dht(v4, acceptor_port, routers_v4),
-                v6: start_dht(v6, acceptor_port, routers_v6),
+                v4: start_dht(v4, acceptor_port, routers_v4, state_v4.clone()),
+                v6: start_dht(v6, acceptor_port, routers_v6, state_v6.clone()),
             },
         };
 
@@ -72,6 +92,8 @@ impl DhtDiscovery {
             dhts,
             lookups,
             next_id: AtomicU64::new(0),
+            _state_v4: state_v4,
+            _state_v6: state_v6,
         }
     }
 
@@ -99,7 +121,12 @@ impl DhtDiscovery {
     }
 }
 
-fn start_dht(socket: UdpSocket, acceptor_port: u16, routers: Vec<SocketAddr>) -> MainlineDht {
+fn start_dht(
+    socket: UdpSocket,
+    acceptor_port: u16,
+    routers: Vec<SocketAddr>,
+    state: MonitoredValue<&'static str>,
+) -> MainlineDht {
     let protocol = match socket.local_addr() {
         Ok(SocketAddr::V4(_)) => "IPv4",
         Ok(SocketAddr::V6(_)) => "IPv6",
@@ -116,10 +143,13 @@ fn start_dht(socket: UdpSocket, acceptor_port: u16, routers: Vec<SocketAddr>) ->
     // Spawn a task to log the DHT bootstrap status.
     task::spawn({
         let dht = dht.clone();
+        *state.get() = "bootstrapping";
         async move {
             if dht.bootstrapped().await {
+                *state.get() = "bootstrapped";
                 log::info!("DHT {} bootstrap complete", protocol)
             } else {
+                *state.get() = "bootstrap failed";
                 log::error!("DHT {} bootstrap failed", protocol)
             }
         }

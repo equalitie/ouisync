@@ -165,8 +165,11 @@ impl Network {
             None
         };
 
+        let monitor = StateMonitor::make_root();
+
         let dht_discovery = if let Some(dht_sockets) = dht_sockets {
-            Some(DhtDiscovery::new(dht_sockets, listener_local_addr.port()).await)
+            let monitor = monitor.make_child("dht-discovery");
+            Some(DhtDiscovery::new(dht_sockets, listener_local_addr.port(), monitor).await)
         } else {
             None
         };
@@ -176,8 +179,6 @@ impl Network {
         let (dht_peer_found_tx, mut dht_peer_found_rx) = mpsc::unbounded_channel();
 
         let (on_protocol_mismatch_tx, on_protocol_mismatch_rx) = uninitialized_watch::channel();
-
-        let monitor = StateMonitor::make_root();
 
         let inner = Arc::new(Inner {
             monitor: monitor.clone(),
