@@ -8,18 +8,12 @@ use std::{
     convert::Into,
     fmt,
     ops::Drop,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc, Mutex, MutexGuard, Weak,
-    },
+    sync::{Arc, Mutex, MutexGuard, Weak},
 };
-
-static NEXT_MONITOR_ID: AtomicU64 = AtomicU64::new(0);
 
 // --- StateMonitor
 
 pub struct StateMonitor {
-    id: u64,
     name: String,
     parent: Option<Arc<StateMonitor>>,
     inner: Mutex<StateMonitorInner>,
@@ -37,7 +31,6 @@ pub struct StateMonitorInner {
 impl StateMonitor {
     pub fn make_root() -> Arc<Self> {
         Arc::new(Self {
-            id: 0,
             name: "".into(),
             parent: None,
             inner: Mutex::new(StateMonitorInner {
@@ -58,10 +51,8 @@ impl StateMonitor {
         let child = match lock.children.entry(name_clone) {
             map::Entry::Vacant(e) => {
                 is_new = true;
-                let id = NEXT_MONITOR_ID.fetch_add(1, Ordering::Relaxed);
 
                 let child = Arc::new(Self {
-                    id,
                     name: name.into(),
                     parent: Some(self.clone()),
                     inner: Mutex::new(StateMonitorInner {
@@ -126,8 +117,8 @@ impl StateMonitor {
         name: String,
         value: T,
     ) -> MonitoredValue<T> {
-        let value = Arc::new(Mutex::new(value));
         let mut lock = self.lock();
+        let value = Arc::new(Mutex::new(value));
 
         match lock.values.entry(name.clone()) {
             map::Entry::Vacant(e) => {
@@ -186,12 +177,8 @@ impl Drop for StateMonitor {
             let mut parent_lock = parent.lock();
 
             if let map::Entry::Occupied(e) = parent_lock.children.entry(name) {
-                // Unwrap OK because children are responsible for removing thmselves from the map
-                // on Drop.
-                if e.get().upgrade().unwrap().id == self.id {
-                    e.remove();
-                    parent.changed(parent_lock);
-                }
+                e.remove();
+                parent.changed(parent_lock);
             }
         }
     }
@@ -203,6 +190,22 @@ pub struct MonitoredValue<T> {
     name: String,
     monitor: Arc<StateMonitor>,
     value: Arc<Mutex<T>>,
+}
+
+impl<T> Clone for MonitoredValue<T> {
+    fn clone(&self) -> Self {
+        let mut lock = self.monitor.lock();
+
+        // Unwrap OK because since this instance exists, there must be an entry for it in the
+        // parent monitor.values map.
+        lock.values.get_mut(&self.name).unwrap().refcount += 1;
+
+        Self {
+            name: self.name.clone(),
+            monitor: self.monitor.clone(),
+            value: self.value.clone(),
+        }
+    }
 }
 
 impl<T> MonitoredValue<T> {
@@ -243,7 +246,7 @@ impl<T> Drop for MonitoredValue<T> {
     fn drop(&mut self) {
         let mut lock = self.monitor.lock();
 
-        // Can we not clone (since we're droping anyway)?
+        // Can we avoid cloning `self.name` (since we're droping anyway)?
         match lock.values.entry(self.name.clone()) {
             map::Entry::Occupied(mut e) => {
                 let v = e.get_mut();
@@ -308,8 +311,7 @@ impl<'a> Serialize for ChildrenSerializer<'a> {
         for (name, child) in self.0.iter() {
             // Unwrap OK because children are responsible for removing themselves from the map on
             // Drop.
-            let child = child.upgrade().unwrap();
-            map.serialize_entry(name, &child.inner.lock().unwrap().change_id)?;
+            map.serialize_entry(name, &child.upgrade().unwrap().lock().change_id)?;
         }
         map.end()
     }

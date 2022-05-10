@@ -15,10 +15,12 @@ use std::{
     mem,
     os::raw::{c_char, c_void},
     ptr, thread,
+    time::Duration,
 };
 use tokio::{
     runtime::{self, Runtime},
     task::JoinHandle,
+    time,
 };
 
 /// Opens the ouisync session. `post_c_object_fn` should be a pointer to the dart's
@@ -155,6 +157,8 @@ pub unsafe extern "C" fn session_state_monitor_subscribe(
                     Ok(()) => sender.send(port, ()),
                     Err(_) => return,
                 }
+                // Prevent flooding the app with too many "on change" notifications.
+                time::sleep(Duration::from_millis(200)).await;
             }
         });
 
