@@ -7,13 +7,13 @@ use std::cmp::Ordering;
 /// and the number of missing blocks in the subtree.
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub(crate) struct Summary {
-    pub(super) is_complete: bool,
-    pub(super) missing_blocks_count: u64,
+    pub(in super::super) is_complete: bool,
+    pub(in super::super) missing_blocks_count: u64,
     // Checksum is used to disambiguate the situation where two replicas have exactly the same
     // missing blocks (both count and checksum would be the same) or they just happen to have the
     // same number of missing blocks, but those blocks are different (counts would be the same but
     // checksums would differ (unless there is a collision which should be rare)).
-    pub(super) missing_blocks_checksum: u64,
+    pub(in super::super) missing_blocks_checksum: u64,
 }
 
 impl Summary {

@@ -53,7 +53,7 @@ impl StateMonitor {
                 is_new = true;
 
                 let child = Arc::new(Self {
-                    name: name.into(),
+                    name,
                     parent: Some(self.clone()),
                     inner: Mutex::new(StateMonitorInner {
                         change_id: 0,

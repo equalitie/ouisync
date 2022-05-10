@@ -159,7 +159,7 @@ pub(crate) async fn receive_nodes(
     version_vector: VersionVector,
     snapshot: &Snapshot,
 ) {
-    let mut receive_filter = ReceiveFilter::new();
+    let mut receive_filter = ReceiveFilter::new(index.pool.clone());
 
     let proof = Proof::new(branch_id, version_vector, *snapshot.root_hash(), write_keys);
     index

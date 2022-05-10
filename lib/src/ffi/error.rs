@@ -39,8 +39,8 @@ impl ToErrorCode for Error {
             Self::CreateDbDirectory(_)
             | Self::ConnectToDb(_)
             | Self::CreateDbSchema(_)
-            | Self::DeviceIdConfig(_) => ErrorCode::DeviceIdConfig,
-            Self::QueryDb(_) => ErrorCode::Db,
+            | Self::QueryDb(_) => ErrorCode::Db,
+            Self::DeviceIdConfig(_) => ErrorCode::DeviceIdConfig,
             Self::PermissionDenied => ErrorCode::PermissionDenied,
             Self::MalformedData | Self::MalformedDirectory(_) => ErrorCode::MalformedData,
             Self::EntryExists => ErrorCode::EntryExists,
