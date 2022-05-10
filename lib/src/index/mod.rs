@@ -31,6 +31,7 @@ use crate::{
     sync::{broadcast, RwLock, RwLockReadGuard},
 };
 use futures_util::TryStreamExt;
+use sqlx::Connection;
 use std::{
     cmp::Ordering,
     collections::{hash_map::Entry, HashMap},
@@ -272,30 +273,34 @@ impl Index {
         receive_filter: &mut ReceiveFilter,
     ) -> Result<Vec<Hash>> {
         let local_nodes = InnerNode::load_children(conn, parent_hash).await?;
+        let mut output = Vec::with_capacity(remote_nodes.len());
 
-        Ok(remote_nodes
-            .iter()
-            .filter(move |(bucket, remote_node)| {
-                if !receive_filter.check(remote_node.hash, remote_node.summary) {
-                    return false;
-                }
+        for (bucket, remote_node) in remote_nodes {
+            if !receive_filter
+                .check(conn, &remote_node.hash, &remote_node.summary)
+                .await?
+            {
+                continue;
+            }
 
-                let local_node = if let Some(node) = local_nodes.get(*bucket) {
-                    node
-                } else {
-                    // node not present locally - we implicitly treat this as if the local replica
-                    // had zero blocks under this node unless the remote node is empty, in that
-                    // case we ignore it.
-                    return !remote_node.is_empty();
-                };
-
+            let insert = if let Some(local_node) = local_nodes.get(bucket) {
                 !local_node
                     .summary
                     .is_up_to_date_with(&remote_node.summary)
                     .unwrap_or(true)
-            })
-            .map(|(_, node)| node.hash)
-            .collect())
+            } else {
+                // node not present locally - we implicitly treat this as if the local replica
+                // had zero blocks under this node unless the remote node is empty, in that
+                // case we ignore it.
+                !remote_node.is_empty()
+            };
+
+            if insert {
+                output.push(remote_node.hash);
+            }
+        }
+
+        Ok(output)
     }
 
     // Filter leaf nodes that the remote replica has a block for but the local one is missing it.
@@ -434,113 +439,10 @@ impl From<sqlx::Error> for ReceiveError {
 
 /// Initializes the index. Creates the required database schema unless already exists.
 pub(crate) async fn init(conn: &mut db::Connection) -> Result<(), Error> {
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS snapshot_root_nodes (
-             snapshot_id             INTEGER PRIMARY KEY,
-             writer_id               BLOB NOT NULL,
-             versions                BLOB NOT NULL,
-
-             -- Hash of the children
-             hash                    BLOB NOT NULL,
-
-             -- Signature proving the creator has write access
-             signature               BLOB NOT NULL,
-
-             -- Is this snapshot completely downloaded?
-             is_complete             INTEGER NOT NULL,
-
-             -- Summary of the missing blocks in this subree
-             missing_blocks_count    INTEGER NOT NULL,
-             missing_blocks_checksum INTEGER NOT NULL,
-
-             UNIQUE(writer_id, hash)
-         );
-
-         CREATE INDEX IF NOT EXISTS index_snapshot_root_nodes_on_hash
-             ON snapshot_root_nodes (hash);
-
-         CREATE TABLE IF NOT EXISTS snapshot_inner_nodes (
-             -- Parent's `hash`
-             parent                  BLOB NOT NULL,
-
-             -- Index of this node within its siblings
-             bucket                  INTEGER NOT NULL,
-
-             -- Hash of the children
-             hash                    BLOB NOT NULL,
-
-             -- Is this subree completely downloaded?
-             is_complete             INTEGER NOT NULL,
-
-             -- Summary of the missing blocks in this subree
-             missing_blocks_count    INTEGER NOT NULL,
-             missing_blocks_checksum INTEGER NOT NULL,
-
-             UNIQUE(parent, bucket)
-         );
-
-         CREATE INDEX IF NOT EXISTS index_snapshot_inner_nodes_on_hash
-             ON snapshot_inner_nodes (hash);
-
-         CREATE TABLE IF NOT EXISTS snapshot_leaf_nodes (
-             -- Parent's `hash`
-             parent      BLOB NOT NULL,
-             locator     BLOB NOT NULL,
-             block_id    BLOB NOT NULL,
-
-             -- Is the block pointed to by this node missing?
-             is_missing  INTEGER NOT NULL,
-
-             UNIQUE(parent, locator, block_id)
-         );
-
-         CREATE INDEX IF NOT EXISTS index_snapshot_leaf_nodes_on_block_id
-             ON snapshot_leaf_nodes (block_id);
-
-         -- Prevents creating multiple inner nodes with the same parent and bucket but different
-         -- hash.
-         CREATE TRIGGER IF NOT EXISTS snapshot_inner_nodes_conflict_check
-         BEFORE INSERT ON snapshot_inner_nodes
-         WHEN EXISTS (
-             SELECT 0
-             FROM snapshot_inner_nodes
-             WHERE parent = new.parent
-               AND bucket = new.bucket
-               AND hash <> new.hash
-         )
-         BEGIN
-             SELECT RAISE (ABORT, 'inner node conflict');
-         END;
-
-         -- Delete whole subtree if a node is deleted and there are no more nodes at the same layer
-         -- with the same hash.
-         -- Note this needs `PRAGMA recursive_triggers = ON` to work.
-         CREATE TRIGGER IF NOT EXISTS snapshot_inner_nodes_delete_on_root_deleted
-         AFTER DELETE ON snapshot_root_nodes
-         WHEN NOT EXISTS (SELECT 0 FROM snapshot_root_nodes WHERE hash = old.hash)
-         BEGIN
-             DELETE FROM snapshot_inner_nodes WHERE parent = old.hash;
-         END;
-
-         CREATE TRIGGER IF NOT EXISTS snapshot_inner_nodes_delete_on_parent_deleted
-         AFTER DELETE ON snapshot_inner_nodes
-         WHEN NOT EXISTS (SELECT 0 FROM snapshot_inner_nodes WHERE hash = old.hash)
-         BEGIN
-             DELETE FROM snapshot_inner_nodes WHERE parent = old.hash;
-         END;
-
-         CREATE TRIGGER IF NOT EXISTS snapshot_leaf_nodes_delete_on_parent_deleted
-         AFTER DELETE ON snapshot_inner_nodes
-         WHEN NOT EXISTS (SELECT 0 FROM snapshot_inner_nodes WHERE hash = old.hash)
-         BEGIN
-             DELETE FROM snapshot_leaf_nodes WHERE parent = old.hash;
-         END;
-
-         ",
-    )
-    .execute(conn)
-    .await
-    .map_err(Error::CreateDbSchema)?;
+    let mut tx = conn.begin().await?;
+    node::init(&mut tx).await?;
+    receive_filter::init(&mut tx).await?;
+    tx.commit().await?;
 
     Ok(())
 }

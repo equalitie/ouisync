@@ -36,6 +36,8 @@ impl Client {
         rx: mpsc::Receiver<Response>,
         request_limiter: Arc<Semaphore>,
     ) -> Self {
+        let pool = index.pool.clone();
+
         Self {
             index,
             tx,
@@ -44,14 +46,12 @@ impl Client {
             pending_requests: PendingRequests::new(),
             send_queue: VecDeque::new(),
             recv_queue: VecDeque::new(),
-            receive_filter: ReceiveFilter::new(),
+            receive_filter: ReceiveFilter::new(pool),
         }
     }
 
     pub async fn run(&mut self) -> Result<()> {
         loop {
-            self.receive_filter.clear_expired();
-
             select! {
                 response = self.rx.recv() => {
                     if let Some(response) = response {

@@ -210,7 +210,7 @@ async fn receive_valid_child_nodes() {
         .await
         .unwrap();
 
-    let mut receive_filter = ReceiveFilter::new();
+    let mut receive_filter = ReceiveFilter::new(index.pool.clone());
 
     for layer in snapshot.inner_layers() {
         for (hash, inner_nodes) in layer.inner_maps() {
@@ -255,7 +255,7 @@ async fn receive_child_nodes_with_missing_root_parent() {
         .unwrap();
 
     let snapshot = Snapshot::generate(&mut rand::thread_rng(), 1);
-    let mut receive_filter = ReceiveFilter::new();
+    let mut receive_filter = ReceiveFilter::new(index.pool.clone());
 
     for layer in snapshot.inner_layers() {
         let (hash, inner_nodes) = layer.inner_maps().next().unwrap();
@@ -309,7 +309,7 @@ async fn does_not_delete_old_branch_until_new_branch_is_complete() {
         .await
         .unwrap();
 
-    let mut receive_filter = ReceiveFilter::new();
+    let mut receive_filter = ReceiveFilter::new(index.pool.clone());
 
     for layer in snapshot0.inner_layers() {
         for (_, nodes) in layer.inner_maps() {
