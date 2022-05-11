@@ -3,12 +3,12 @@ use backoff::{self, ExponentialBackoffBuilder};
 use ouisync_lib::cipher::SecretKey;
 use rand::Rng;
 use std::{
-    env,
-    fmt::Debug,
+    cell::Cell,
+    env, fmt,
     io::{self, BufRead, BufReader, Read, Write},
     net::SocketAddr,
     path::Path,
-    process::{Child, Command, Stdio},
+    process::{Child, ChildStdout, Command, Stdio},
     thread,
     time::Duration,
 };
@@ -16,7 +16,7 @@ use tempfile::TempDir;
 
 /// Wrapper for the ouisync binary.
 pub struct Bin {
-    id: u32,
+    id: Id,
     mount_dir: TempDir,
     port: u16,
     share_token: String,
@@ -26,11 +26,8 @@ pub struct Bin {
 const REPO_NAME: &str = "test";
 
 impl Bin {
-    pub fn start(
-        id: u32,
-        peers: impl IntoIterator<Item = SocketAddr>,
-        share_token: Option<&str>,
-    ) -> Self {
+    pub fn start(peers: impl IntoIterator<Item = SocketAddr>, share_token: Option<&str>) -> Self {
+        let id = Id::new();
         let mount_dir = TempDir::new().unwrap();
 
         let mut command = Command::new(env!("CARGO_BIN_EXE_ouisync"));
@@ -46,7 +43,7 @@ impl Bin {
             command.arg("--share").arg(format!("{}:write", REPO_NAME));
         }
 
-        command.arg("--print-ready-message");
+        command.arg("--print-port");
         command.arg("--disable-upnp");
         command.arg("--disable-dht");
         command.arg("--disable-local-discovery");
@@ -63,21 +60,30 @@ impl Bin {
             command.arg(peer.to_string());
         }
 
+        // Disable log output unless explicitly enabled.
+        if env::var("RUST_LOG").is_err() {
+            command.env("RUST_LOG", "off");
+        }
+
         command.stdout(Stdio::piped());
         command.stderr(Stdio::piped());
 
         let mut process = command.spawn().unwrap();
 
+        let mut stdout = BufReader::new(process.stdout.take().unwrap());
+
         let share_token = if let Some(share_token) = share_token {
             share_token.to_owned()
         } else {
-            wait_for_share_token(&mut process, id)
+            wait_for_share_token(&mut process, &mut stdout, &id)
         };
 
-        let port = wait_for_ready_message(&mut process, id);
+        let port = wait_for_ready_message(&mut process, &mut stdout, &id);
 
-        copy_lines_prefixed(process.stdout.take().unwrap(), io::stdout(), id);
-        copy_lines_prefixed(process.stderr.take().unwrap(), io::stderr(), id);
+        copy_lines_prefixed(stdout, io::stdout(), &id);
+
+        let stderr = BufReader::new(process.stderr.take().unwrap());
+        copy_lines_prefixed(stderr, io::stderr(), &id);
 
         Self {
             id,
@@ -103,7 +109,9 @@ impl Bin {
     fn kill(&mut self) {
         terminate(&self.process);
         let exit_status = self.process.wait().unwrap();
-        println!("[{}] Process finished with {}", self.id, exit_status);
+        if !exit_status.success() {
+            panic!("[{}] Process finished with {}", self.id, exit_status);
+        }
     }
 }
 
@@ -113,14 +121,48 @@ impl Drop for Bin {
     }
 }
 
+thread_local! {
+    static NEXT_ID: Cell<u32> = Cell::new(0);
+}
+
+// Friendly id of a `Bin` used to prefix log messages to simplify debugging.
+#[derive(Clone)]
+struct Id {
+    case: String,
+    item: u32,
+}
+
+impl Id {
+    fn new() -> Self {
+        let thread = thread::current();
+        let case = thread
+            .name()
+            .map(|name| name.to_owned())
+            .unwrap_or_else(|| format!("{:?}", thread.id()));
+        let item = NEXT_ID.with(|next_id| {
+            let id = next_id.get();
+            next_id.set(id + 1);
+            id
+        });
+
+        Self { case, item }
+    }
+}
+
+impl fmt::Display for Id {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}/{}", self.case, self.item)
+    }
+}
+
 // Spawns a thread that reads lines from `reader`, prefixes them with `id` and then writes them to
 // `writer`.
-fn copy_lines_prefixed<R, W>(reader: R, mut writer: W, id: u32)
+fn copy_lines_prefixed<R, W>(mut reader: R, mut writer: W, id: &Id)
 where
-    R: Read + Send + 'static,
+    R: BufRead + Send + 'static,
     W: Write + Send + 'static,
 {
-    let mut reader = BufReader::new(reader);
+    let id = id.clone();
     let mut line = String::new();
 
     thread::spawn(move || loop {
@@ -133,31 +175,39 @@ where
     });
 }
 
-fn wait_for_share_token(process: &mut Child, id: u32) -> String {
+fn wait_for_share_token(
+    process: &mut Child,
+    stdout: &mut BufReader<ChildStdout>,
+    id: &Id,
+) -> String {
     let suffix = format!("?name={}", REPO_NAME);
-    if let Some(line) = wait_for_line(
-        process.stdout.as_mut().unwrap(),
-        "https://ouisync.net/r",
-        &suffix,
-        id,
-    ) {
+    if let Some(line) = wait_for_line(stdout, "https://ouisync.net/r", &suffix, id) {
         line
     } else {
         fail(process, id, "Failed to read share token");
     }
 }
 
-fn wait_for_ready_message(process: &mut Child, id: u32) -> u16 {
+fn wait_for_ready_message(
+    process: &mut Child,
+    stdout: &mut BufReader<ChildStdout>,
+    id: &Id,
+) -> u16 {
     const PREFIX: &str = "Listening on port ";
-    if let Some(line) = wait_for_line(process.stdout.as_mut().unwrap(), PREFIX, "", id) {
+    if let Some(line) = wait_for_line(stdout, PREFIX, "", id) {
         line[PREFIX.len()..].parse().unwrap()
     } else {
         fail(process, id, "Failed to read listening port");
     }
 }
 
-fn wait_for_line<R: Read>(reader: &mut R, prefix: &str, suffix: &str, id: u32) -> Option<String> {
-    for mut line in BufReader::new(reader).lines().filter_map(|line| line.ok()) {
+fn wait_for_line<R: BufRead>(
+    reader: &mut R,
+    prefix: &str,
+    suffix: &str,
+    id: &Id,
+) -> Option<String> {
+    for mut line in reader.lines().filter_map(|line| line.ok()) {
         if line.starts_with(prefix) && line.ends_with(suffix) {
             let len = line.trim_end().len();
             line.truncate(len);
@@ -171,7 +221,7 @@ fn wait_for_line<R: Read>(reader: &mut R, prefix: &str, suffix: &str, id: u32) -
     None
 }
 
-fn fail(process: &mut Child, id: u32, message: &str) -> ! {
+fn fail(process: &mut Child, id: &Id, message: &str) -> ! {
     println!("[{}] {}", id, message);
     println!("[{}] Waiting for process to finish", id);
 
@@ -218,8 +268,8 @@ where
 
 pub fn check_eq<A, B>(a: A, b: B) -> Result<(), Error>
 where
-    A: PartialEq<B> + Debug,
-    B: Debug,
+    A: PartialEq<B> + fmt::Debug,
+    B: fmt::Debug,
 {
     if a == b {
         Ok(())

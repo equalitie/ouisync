@@ -75,10 +75,15 @@ pub(crate) struct Options {
     #[clap(long)]
     pub print_dirs: bool,
 
-    /// Prints the listening address to the stdout when the replica becomes ready.
+    /// Prints the listening port to the stdout when the replica becomes ready.
     /// Note this flag is unstable and experimental.
     #[clap(long)]
-    pub print_ready_message: bool,
+    pub print_port: bool,
+
+    /// Prints the device id to the stdout when the replica becomes ready.
+    /// Note this flag is unstable and experimental.
+    #[clap(long)]
+    pub print_device_id: bool,
 
     /// Use temporary, memory-only databases. All data will be wiped out when the program
     /// exits. If this flag is set, the --data-dir option is ignored. Use only for experimentation

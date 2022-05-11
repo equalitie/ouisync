@@ -149,8 +149,11 @@ async fn main() -> Result<()> {
         repo_guards.push((mount_guard, registration));
     }
 
-    if options.print_ready_message {
+    if options.print_port {
         println!("Listening on port {}", network.listener_local_addr().port());
+    }
+
+    if options.print_device_id {
         println!("Device ID is {}", device_id);
     }
 

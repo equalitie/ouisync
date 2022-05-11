@@ -13,9 +13,8 @@ use std::{
 
 #[test]
 fn transfer_single_small_file() {
-    let a = Bin::start(0, [], None);
+    let a = Bin::start([], None);
     let b = Bin::start(
-        1,
         [(Ipv4Addr::LOCALHOST, a.port()).into()],
         Some(a.share_token()),
     );
@@ -33,9 +32,8 @@ fn transfer_single_small_file() {
 
 #[test]
 fn transfer_single_large_file() {
-    let a = Bin::start(0, [], None);
+    let a = Bin::start([], None);
     let b = Bin::start(
-        1,
         [(Ipv4Addr::LOCALHOST, a.port()).into()],
         Some(a.share_token()),
     );
@@ -62,9 +60,8 @@ fn transfer_single_large_file() {
 
 #[test]
 fn sequential_write_to_the_same_file() {
-    let a = Bin::start(0, [], None);
+    let a = Bin::start([], None);
     let b = Bin::start(
-        1,
         [(Ipv4Addr::LOCALHOST, a.port()).into()],
         Some(a.share_token()),
     );
@@ -98,9 +95,8 @@ fn fast_sequential_writes() {
     // perfomed more than one write operation (mkdir, echo foo > bar,...) quickly one after another
     // (e.g. "$ mkdir a; mkdir b").
     for _ in 0..5 {
-        let a = Bin::start(0, [], None);
+        let a = Bin::start([], None);
         let b = Bin::start(
-            1,
             [(Ipv4Addr::LOCALHOST, a.port()).into()],
             Some(a.share_token()),
         );
@@ -128,9 +124,8 @@ fn concurrent_read_and_write_large_file() {
 }
 
 fn concurrent_read_and_write_file(size: usize) {
-    let a = Bin::start(0, [], None);
+    let a = Bin::start([], None);
     let b = Bin::start(
-        1,
         [(Ipv4Addr::LOCALHOST, a.port()).into()],
         Some(a.share_token()),
     );
@@ -168,9 +163,8 @@ fn concurrent_read_and_write_file(size: usize) {
 // notification channel.
 #[test]
 fn concurrent_read_and_delete_file() {
-    let a = Bin::start(0, [], None);
+    let a = Bin::start([], None);
     let b = Bin::start(
-        1,
         [(Ipv4Addr::LOCALHOST, a.port()).into()],
         Some(a.share_token()),
     );
@@ -218,14 +212,12 @@ fn relay() {
     // Then create a file by A and let it be received by B which requires the file to pass through
     // R first.
 
-    let r = Bin::start(0, [], None); // "relay" node
+    let r = Bin::start([], None); // "relay" node
     let a = Bin::start(
-        1,
         [(Ipv4Addr::LOCALHOST, r.port()).into()],
         Some(r.share_token()),
     );
     let b = Bin::start(
-        2,
         [(Ipv4Addr::LOCALHOST, r.port()).into()],
         Some(r.share_token()),
     );
