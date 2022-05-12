@@ -14,18 +14,18 @@ use tokio::{
     sync::{mpsc, oneshot},
 };
 
-/// Takes care of requesting missing blocks and removing unneeded blocks.
-pub(super) struct BlockManager {
+/// Removes unneeded blocks
+pub(super) struct GarbageCollector {
     shared: Arc<Shared>,
     command_rx: mpsc::Receiver<Command>,
 }
 
-impl BlockManager {
-    pub fn new(shared: Arc<Shared>) -> (Self, BlockManagerHandle) {
+impl GarbageCollector {
+    pub fn new(shared: Arc<Shared>) -> (Self, GarbageCollectorHandle) {
         let (command_tx, command_rx) = mpsc::channel(1);
         (
             Self { shared, command_rx },
-            BlockManagerHandle { command_tx },
+            GarbageCollectorHandle { command_tx },
         )
     }
 
@@ -48,7 +48,7 @@ impl BlockManager {
                 }
                 command = self.command_rx.recv() => {
                     match command {
-                        Some(Command::CollectGarbage(result_tx)) => {
+                        Some(Command::Collect(result_tx)) => {
                             let result = self.process().await;
                             result_tx.send(result).unwrap_or(());
                         }
@@ -228,17 +228,17 @@ impl BlockManager {
     }
 }
 
-pub(super) struct BlockManagerHandle {
+pub(super) struct GarbageCollectorHandle {
     command_tx: mpsc::Sender<Command>,
 }
 
-impl BlockManagerHandle {
+impl GarbageCollectorHandle {
     /// Trigger garbage collection and wait for it to complete.
     pub async fn collect_garbage(&self) -> Result<()> {
         let (result_tx, result_rx) = oneshot::channel();
 
         self.command_tx
-            .send(Command::CollectGarbage(result_tx))
+            .send(Command::Collect(result_tx))
             .await
             .unwrap_or(());
 
@@ -249,5 +249,5 @@ impl BlockManagerHandle {
 }
 
 enum Command {
-    CollectGarbage(oneshot::Sender<Result<()>>),
+    Collect(oneshot::Sender<Result<()>>),
 }

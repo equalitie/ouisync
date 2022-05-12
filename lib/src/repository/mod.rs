@@ -1,4 +1,4 @@
-mod block_manager;
+mod garbage_collector;
 mod id;
 mod merger;
 #[cfg(test)]
@@ -7,7 +7,7 @@ mod tests;
 pub use self::id::RepositoryId;
 
 use self::{
-    block_manager::{BlockManager, BlockManagerHandle},
+    garbage_collector::{GarbageCollector, GarbageCollectorHandle},
     merger::Merger,
 };
 use crate::{
@@ -44,7 +44,7 @@ use tokio::task;
 pub struct Repository {
     shared: Arc<Shared>,
     _merge_handle: Option<ScopedJoinHandle<()>>,
-    block_manager_handle: BlockManagerHandle,
+    block_manager_handle: GarbageCollectorHandle,
 }
 
 impl Repository {
@@ -190,7 +190,7 @@ impl Repository {
             scoped_task::spawn(Merger::new(shared.clone(), local_branch).run())
         });
 
-        let (block_manager, block_manager_handle) = BlockManager::new(shared.clone());
+        let (block_manager, block_manager_handle) = GarbageCollector::new(shared.clone());
 
         // Garbage collection requires at least read access to be able to determine block
         // reachability.
