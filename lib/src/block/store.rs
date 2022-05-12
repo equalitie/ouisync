@@ -21,6 +21,39 @@ pub async fn init(conn: &mut db::Connection) -> Result<()> {
              id     BLOB NOT NULL PRIMARY KEY,
              pinned INT  NOT NULL
          ) WITHOUT ROWID;
+
+         CREATE TEMPORARY TABLE IF NOT EXISTS missing_blocks (
+             id        INT  NOT NULL PRIMARY KEY,
+             block_id  BLOB NOT NULL,
+             requested INT  NOT NULL,
+
+             UNIQUE(block_id)
+         );
+
+         CREATE TEMPORARY TABLE IF NOT EXISTS block_requests (
+             missing_block_id INT NOT NULL,
+             client_id        INT NOT NULL,
+             active           INT NOT NULL,
+
+             FOREIGN KEY(missing_block_id) REFERENCES missing_blocks(id) ON DELETE CASCADE
+         );
+
+         CREATE INDEX IF NOT EXISTS index_block_requests_on_client_id
+             ON block_requests (client_id);
+
+         -- Delete missing block when the block is no longer missing
+         CREATE TEMPORARY TRIGGER IF NOT EXISTS missing_blocks_delete_on_block_created
+         AFTER INSERT ON blocks
+         BEGIN
+             DELETE FROM missing_blocks WHERE block_id = new.id;
+         END;
+
+         -- Delete unrequested missing block without any requests
+         CREATE TEMPORARY TRIGGER IF NOT EXISTS missing_blocks_delete_unrequested_and_unaccepted
+         AFTER DELETE ON block_requests
+         BEGIN
+             DELETE FROM missing_blocks WHERE id = old.missing_block_id AND requested = 0;
+         END;
         ",
     )
     .execute(conn)
