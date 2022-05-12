@@ -1,14 +1,13 @@
-use super::Shared;
+use super::{utils, Shared};
 use crate::{
     blob::BlockIds,
     blob_id::BlobId,
-    block::{self, BlockId},
+    block,
     error::{Error, Result},
-    joint_directory::{versioned, JointDirectory, JointEntryRef, MissingVersionStrategy},
+    joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
 };
 use async_recursion::async_recursion;
-use futures_util::{stream, StreamExt};
-use std::{collections::HashSet, sync::Arc};
+use std::sync::Arc;
 use tokio::{
     select,
     sync::{mpsc, oneshot},
@@ -39,7 +38,7 @@ impl GarbageCollector {
                         match self.process().await {
                             Ok(()) => (),
                             Err(error) => {
-                                log::error!("block manager failed: {:?}", error);
+                                log::error!("garbage collector failed: {:?}", error);
                             }
                         }
                     } else {
@@ -58,7 +57,7 @@ impl GarbageCollector {
             }
         }
 
-        log::debug!("block manager terminated");
+        log::debug!("garbage collector terminated");
     }
 
     async fn process(&self) -> Result<()> {
@@ -100,7 +99,6 @@ impl GarbageCollector {
                 Err(Error::BlockNotFound(block_id)) => {
                     let mut conn = self.shared.index.pool.acquire().await?;
                     block::mark_reachable(&mut conn, &block_id).await?;
-                    self.handle_missing_block(block_id);
                     continue;
                 }
                 Err(error) => return Err(error),
@@ -155,37 +153,15 @@ impl GarbageCollector {
 
         while let Some(block_id) = block_ids.next(&mut conn).await? {
             block::mark_reachable(&mut conn, &block_id).await?;
-
-            if !block::exists(&mut conn, &block_id).await? {
-                self.handle_missing_block(block_id);
-            }
         }
 
         Ok(())
     }
 
     async fn remove_outdated_branches(&self) -> Result<()> {
-        let branches = self.shared.branches().await?;
-        let branch_infos: Vec<_> = stream::iter(&branches)
-            .then(|branch| async move {
-                let id = *branch.id();
-                let vv = branch.data().root().await.proof.version_vector.clone();
+        let outdated_branches = utils::outdated_branches(self.shared.branches().await?).await;
 
-                (id, vv)
-            })
-            .collect()
-            .await;
-
-        let keep: HashSet<_> = versioned::keep_maximal(branch_infos, None)
-            .into_iter()
-            .map(|(id, _)| id)
-            .collect();
-
-        for branch in branches {
-            if keep.contains(branch.id()) {
-                continue;
-            }
-
+        for branch in outdated_branches {
             // Avoid deleting empty local branch before any content is added to it.
             if branch.data().root().await.proof.version_vector.is_empty() {
                 continue;
@@ -211,10 +187,6 @@ impl GarbageCollector {
         }
 
         Ok(())
-    }
-
-    fn handle_missing_block(&self, _block_id: BlockId) {
-        // TODO
     }
 
     async fn has_missing_blocks(&self) -> Result<bool> {

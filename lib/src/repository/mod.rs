@@ -1,12 +1,15 @@
+mod block_requester;
 mod garbage_collector;
 mod id;
 mod merger;
 #[cfg(test)]
 mod tests;
+mod utils;
 
 pub use self::id::RepositoryId;
 
 use self::{
+    block_requester::BlockRequester,
     garbage_collector::{GarbageCollector, GarbageCollectorHandle},
     merger::Merger,
 };
@@ -44,7 +47,7 @@ use tokio::task;
 pub struct Repository {
     shared: Arc<Shared>,
     _merge_handle: Option<ScopedJoinHandle<()>>,
-    block_manager_handle: GarbageCollectorHandle,
+    garbage_collector_handle: GarbageCollectorHandle,
 }
 
 impl Repository {
@@ -190,12 +193,15 @@ impl Repository {
             scoped_task::spawn(Merger::new(shared.clone(), local_branch).run())
         });
 
-        let (block_manager, block_manager_handle) = GarbageCollector::new(shared.clone());
+        let (garbage_collector, garbage_collector_handle) = GarbageCollector::new(shared.clone());
 
-        // Garbage collection requires at least read access to be able to determine block
-        // reachability.
+        // GarbageCollector and BlockRequester require at least read access to be able to determine
+        // block reachability.
         if shared.secrets.can_read() {
-            task::spawn(block_manager.run());
+            task::spawn(garbage_collector.run());
+
+            let block_requester = BlockRequester::new(shared.clone());
+            task::spawn(block_requester.run());
         }
 
         task::spawn(report_sync_progress(index));
@@ -203,7 +209,7 @@ impl Repository {
         Ok(Self {
             shared,
             _merge_handle: merge_handle,
-            block_manager_handle,
+            garbage_collector_handle,
         })
     }
 
@@ -443,7 +449,7 @@ impl Repository {
     /// the background. It can still be useful if one wants to make sure the collection completed
     /// and/or to know whether it completed successfully or failed.
     pub async fn collect_garbage(&self) -> Result<()> {
-        self.block_manager_handle.collect_garbage().await
+        self.garbage_collector_handle.collect_garbage().await
     }
 
     // Opens the root directory across all branches as JointDirectory.
