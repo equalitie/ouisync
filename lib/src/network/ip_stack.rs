@@ -62,6 +62,20 @@ impl<T> IpStack<T> {
             }),
         }
     }
+
+    pub fn map<F, U>(self, mut f: F) -> IpStack<U>
+    where
+        F: FnMut(T) -> U,
+    {
+        match self {
+            Self::V4(v4) => IpStack::V4(f(v4)),
+            Self::V6(v6) => IpStack::V6(f(v6)),
+            Self::Dual { v4, v6 } => IpStack::Dual {
+                v4: f(v4),
+                v6: f(v6),
+            },
+        }
+    }
 }
 
 pub(super) struct Iter<T>(Option<IpStack<T>>);
