@@ -22,7 +22,7 @@ pub struct StateMonitor {
 pub struct StateMonitorInner {
     // Incremented on each change, can be used by monitors to determine whether a child has
     // changed.
-    change_id: u64,
+    version: u64,
     values: BTreeMap<String, MonitoredValueHandle>,
     children: BTreeMap<String, Weak<StateMonitor>>,
     on_change: uninitialized_watch::Sender<()>,
@@ -34,7 +34,7 @@ impl StateMonitor {
             name: "".into(),
             parent: None,
             inner: Mutex::new(StateMonitorInner {
-                change_id: 0,
+                version: 0,
                 values: BTreeMap::new(),
                 children: BTreeMap::new(),
                 on_change: uninitialized_watch::channel().0,
@@ -56,7 +56,7 @@ impl StateMonitor {
                     name,
                     parent: Some(self.clone()),
                     inner: Mutex::new(StateMonitorInner {
-                        change_id: 0,
+                        version: 0,
                         values: BTreeMap::new(),
                         children: BTreeMap::new(),
                         on_change: uninitialized_watch::channel().0,
@@ -153,10 +153,10 @@ impl StateMonitor {
     }
 
     fn changed(&self, mut lock: MutexGuard<'_, StateMonitorInner>) {
-        lock.change_id += 1;
+        lock.version += 1;
         lock.on_change.send(()).unwrap_or(());
 
-        // When serializing, we lock from parent to child (to access the child's `change_id`), so
+        // When serializing, we lock from parent to child (to access the child's `version`), so
         // make sure we don't try to lock in the reverse direction as that could deadlock.
         drop(lock);
 
@@ -278,7 +278,7 @@ impl Serialize for StateMonitor {
         // When serializing into the messagepack format, the `serialize_struct(_, N)` is serialized
         // into a list of size N (use `unpackList` in Dart).
         let mut s = serializer.serialize_struct("StateMonitor", 3)?;
-        s.serialize_field("change_id", &lock.change_id)?;
+        s.serialize_field("version", &lock.version)?;
         s.serialize_field("values", &ValuesSerializer(&lock.values))?;
         s.serialize_field("children", &ChildrenSerializer(&lock.children))?;
         s.end()
@@ -311,7 +311,7 @@ impl<'a> Serialize for ChildrenSerializer<'a> {
         for (name, child) in self.0.iter() {
             // Unwrap OK because children are responsible for removing themselves from the map on
             // Drop.
-            map.serialize_entry(name, &child.upgrade().unwrap().lock().change_id)?;
+            map.serialize_entry(name, &child.upgrade().unwrap().lock().version)?;
         }
         map.end()
     }
