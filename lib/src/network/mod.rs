@@ -138,6 +138,8 @@ impl Network {
             .map(|sockets| sockets.as_ref().try_map(|socket| socket.local_addr()))
             .transpose()?;
 
+        let monitor = StateMonitor::make_root();
+
         let port_forwarder = if !options.disable_upnp {
             let dht_port_v4 = dht_sockets
                 .as_ref()
@@ -160,15 +162,14 @@ impl Network {
                     internal: port,
                     protocol: Protocol::Udp,
                 })),
+                monitor.make_child("UPnP"),
             ))
         } else {
             None
         };
 
-        let monitor = StateMonitor::make_root();
-
         let dht_discovery = if let Some(dht_sockets) = dht_sockets {
-            let monitor = monitor.make_child("dht-discovery");
+            let monitor = monitor.make_child("DhtDiscovery");
             Some(DhtDiscovery::new(dht_sockets, listener_local_addr.port(), monitor).await)
         } else {
             None
@@ -410,7 +411,7 @@ impl Inner {
     }
 
     async fn run_local_discovery(self: Arc<Self>, listener_port: u16) {
-        let monitor = self.monitor.make_child("local-discovery");
+        let monitor = self.monitor.make_child("LocalDiscovery");
 
         let discovery = match LocalDiscovery::new(self.this_runtime_id, listener_port, monitor) {
             Ok(discovery) => discovery,
