@@ -16,12 +16,13 @@ pub(super) struct BlockRequester {
 }
 
 impl BlockRequester {
-    pub fn new(shared: Arc<Shared>, tracker: BlockTrackerRequester) -> Self {
+    pub fn new(shared: Arc<Shared>) -> Self {
+        let tracker = shared.store.block_tracker.requester();
         Self { shared, tracker }
     }
 
     pub async fn run(self) {
-        let mut notify_rx = self.shared.index.subscribe();
+        let mut notify_rx = self.shared.store.index.subscribe();
 
         while notify_rx.recv().await.is_ok() {
             match self.process().await {
@@ -90,13 +91,13 @@ impl BlockRequester {
     }
 
     async fn request_missing_block(&self, id: &BlockId) -> Result<()> {
-        let mut conn = self.shared.index.pool.acquire().await?;
+        let mut conn = self.shared.store.db_pool().acquire().await?;
         self.tracker.request(&mut conn, id).await?;
         Ok(())
     }
 
     async fn request_missing_blocks(&self, mut ids: BlockIds) -> Result<()> {
-        let mut conn = self.shared.index.pool.acquire().await?;
+        let mut conn = self.shared.store.db_pool().acquire().await?;
 
         while let Some(id) = ids.next(&mut conn).await? {
             self.tracker.request(&mut conn, &id).await?;

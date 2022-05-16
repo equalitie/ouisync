@@ -29,7 +29,7 @@ impl GarbageCollector {
     }
 
     pub async fn run(mut self) {
-        let mut notify_rx = self.shared.index.subscribe();
+        let mut notify_rx = self.shared.store.index.subscribe();
 
         loop {
             select! {
@@ -97,7 +97,7 @@ impl GarbageCollector {
             match branch.open_root().await {
                 Ok(dir) => versions.push(dir),
                 Err(Error::BlockNotFound(block_id)) => {
-                    let mut conn = self.shared.index.pool.acquire().await?;
+                    let mut conn = self.shared.store.db_pool().acquire().await?;
                     block::mark_reachable(&mut conn, &block_id).await?;
                     continue;
                 }
@@ -149,7 +149,7 @@ impl GarbageCollector {
     }
 
     async fn mark_reachable(&self, mut block_ids: BlockIds) -> Result<()> {
-        let mut conn = self.shared.index.pool.acquire().await?;
+        let mut conn = self.shared.store.db_pool().acquire().await?;
 
         while let Some(block_id) = block_ids.next(&mut conn).await? {
             block::mark_reachable(&mut conn, &block_id).await?;
@@ -174,12 +174,12 @@ impl GarbageCollector {
     }
 
     async fn prepare_reachable_blocks(&self) -> Result<()> {
-        let mut conn = self.shared.index.pool.acquire().await?;
+        let mut conn = self.shared.store.db_pool().acquire().await?;
         block::clear_reachable(&mut conn).await
     }
 
     async fn remove_unreachable_blocks(&self) -> Result<()> {
-        let mut conn = self.shared.index.pool.acquire().await?;
+        let mut conn = self.shared.store.db_pool().acquire().await?;
         let count = block::remove_unreachable(&mut conn).await?;
 
         if count > 0 {

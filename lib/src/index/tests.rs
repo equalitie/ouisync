@@ -1,21 +1,13 @@
-use std::collections::HashSet;
-
-use super::{
-    node::RootNode,
-    node_test_utils::{receive_blocks, receive_nodes, Block, Snapshot},
-    *,
-};
+use super::{node::RootNode, node_test_utils::Snapshot, *};
 use crate::{
     block::{self, BLOCK_SIZE},
     crypto::sign::{Keypair, PublicKey},
-    progress::Progress,
-    store, test_utils,
+    store,
     version_vector::VersionVector,
 };
 use assert_matches::assert_matches;
 use futures_util::{future, StreamExt};
-use rand::{distributions::Standard, rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
-use test_strategy::proptest;
+use rand::{rngs::StdRng, Rng, SeedableRng};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn receive_valid_root_node() {
@@ -363,75 +355,6 @@ async fn does_not_delete_old_branch_until_new_branch_is_complete() {
         &snapshot0,
     )
     .await;
-}
-
-#[proptest]
-fn sync_progress(
-    #[strategy(1usize..16)] block_count: usize,
-    #[strategy(1usize..5)] branch_count: usize,
-    #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
-) {
-    test_utils::run(sync_progress_case(block_count, branch_count, rng_seed))
-}
-
-async fn sync_progress_case(block_count: usize, branch_count: usize, rng_seed: u64) {
-    let mut rng = StdRng::seed_from_u64(rng_seed);
-    let (index, write_keys) = setup_with_rng(&mut rng).await;
-
-    let all_blocks: Vec<(Block, Hash)> =
-        (&mut rng).sample_iter(Standard).take(block_count).collect();
-    let branches: Vec<(PublicKey, Snapshot)> = (0..branch_count)
-        .map(|_| {
-            let block_count = rng.gen_range(0..block_count);
-            let blocks = all_blocks.choose_multiple(&mut rng, block_count).cloned();
-            let snapshot = Snapshot::new(blocks);
-            let branch_id = PublicKey::generate(&mut rng);
-
-            (branch_id, snapshot)
-        })
-        .collect();
-
-    let mut expected_total_blocks = HashSet::new();
-    let mut expected_received_blocks = HashSet::new();
-
-    assert_eq!(
-        index.sync_progress().await.unwrap(),
-        Progress {
-            value: expected_received_blocks.len() as u64,
-            total: expected_total_blocks.len() as u64
-        }
-    );
-
-    for (branch_id, snapshot) in branches {
-        receive_nodes(
-            &index,
-            &write_keys,
-            branch_id,
-            VersionVector::first(branch_id),
-            &snapshot,
-        )
-        .await;
-        expected_total_blocks.extend(snapshot.blocks().keys().copied());
-
-        assert_eq!(
-            index.sync_progress().await.unwrap(),
-            Progress {
-                value: expected_received_blocks.len() as u64,
-                total: expected_total_blocks.len() as u64,
-            }
-        );
-
-        receive_blocks(&index, &snapshot).await;
-        expected_received_blocks.extend(snapshot.blocks().keys().copied());
-
-        assert_eq!(
-            index.sync_progress().await.unwrap(),
-            Progress {
-                value: expected_received_blocks.len() as u64,
-                total: expected_total_blocks.len() as u64,
-            }
-        );
-    }
 }
 
 async fn setup() -> (Index, Keypair) {

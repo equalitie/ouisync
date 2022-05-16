@@ -30,7 +30,7 @@ impl Merger {
     }
 
     pub async fn run(mut self) {
-        let mut rx = self.shared.index.subscribe();
+        let mut rx = self.shared.store.index.subscribe();
 
         loop {
             select! {

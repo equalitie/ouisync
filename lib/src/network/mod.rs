@@ -33,6 +33,7 @@ use crate::{
     repository::RepositoryId,
     scoped_task::{self, ScopedJoinHandle, ScopedTaskSet},
     state_monitor::StateMonitor,
+    store::Store,
     sync::uninitialized_watch,
 };
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
@@ -282,20 +283,20 @@ impl Handle {
     /// repositories of currently connected remote replicas as well as any replicas connected in
     /// the future. The repository is automatically deregistered when the returned handle is
     /// dropped.
-    pub fn register(&self, index: Index) -> Registration {
+    pub fn register(&self, store: Store) -> Registration {
         // TODO: consider disabling DHT by default, for privacy reasons.
         let dht = self
             .inner
-            .start_dht_lookup(repository_info_hash(index.repository_id()));
+            .start_dht_lookup(repository_info_hash(store.index.repository_id()));
 
         let mut network_state = self.inner.state.lock().unwrap();
 
         let key = network_state.registry.insert(RegistrationHolder {
-            index: index.clone(),
+            index: store.index.clone(),
             dht,
         });
 
-        network_state.create_link(index);
+        network_state.create_link(store.index);
 
         Registration {
             inner: self.inner.clone(),

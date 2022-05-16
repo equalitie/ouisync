@@ -25,9 +25,7 @@ use crate::{
     db,
     debug_printer::DebugPrinter,
     error::{Error, Result},
-    progress::Progress,
     repository::RepositoryId,
-    store,
     sync::{broadcast, RwLock, RwLockReadGuard},
 };
 use futures_util::TryStreamExt;
@@ -42,14 +40,14 @@ use thiserror::Error;
 type SnapshotId = u32;
 
 #[derive(Clone)]
-pub struct Index {
-    pub(crate) pool: db::Pool,
-    pub(crate) block_tracker: BlockTracker,
+pub(crate) struct Index {
+    pub pool: db::Pool,
+    pub block_tracker: BlockTracker,
     shared: Arc<Shared>,
 }
 
 impl Index {
-    pub(crate) async fn load(pool: db::Pool, repository_id: RepositoryId) -> Result<Self> {
+    pub async fn load(pool: db::Pool, repository_id: RepositoryId) -> Result<Self> {
         let notify_tx = broadcast::Sender::new(32);
         let branches = load_branches(&mut *pool.acquire().await?, notify_tx.clone()).await?;
 
@@ -64,15 +62,15 @@ impl Index {
         })
     }
 
-    pub(crate) fn repository_id(&self) -> &RepositoryId {
+    pub fn repository_id(&self) -> &RepositoryId {
         &self.shared.repository_id
     }
 
-    pub(crate) async fn branches(&self) -> RwLockReadGuard<'_, Branches> {
+    pub async fn branches(&self) -> RwLockReadGuard<'_, Branches> {
         self.shared.branches.read().await
     }
 
-    pub(crate) async fn create_branch(&self, proof: Proof) -> Result<Arc<BranchData>> {
+    pub async fn create_branch(&self, proof: Proof) -> Result<Arc<BranchData>> {
         let mut branches = self.shared.branches.write().await;
 
         match branches.entry(proof.writer_id) {
@@ -93,7 +91,7 @@ impl Index {
 
     /// Remove the branch including all its blocks, except those that are also referenced from
     /// other branch(es).
-    pub(crate) async fn remove_branch(&self, id: &PublicKey) -> Result<()> {
+    pub async fn remove_branch(&self, id: &PublicKey) -> Result<()> {
         let branch = self.shared.branches.write().await.remove(id);
         let branch = if let Some(branch) = branch {
             branch
@@ -116,29 +114,23 @@ impl Index {
     }
 
     /// Subscribe to change notification from all current and future branches.
-    pub(crate) fn subscribe(&self) -> broadcast::Receiver<PublicKey> {
+    pub fn subscribe(&self) -> broadcast::Receiver<PublicKey> {
         self.shared.notify_tx.subscribe()
     }
 
     /// Signal to all subscribers of this index that it is about to be terminated.
-    pub(crate) fn close(&self) {
+    pub fn close(&self) {
         self.shared.notify_tx.close();
     }
 
-    /// Retrieve the syncing progress of this repository (number of downloaded blocks / number of
-    /// all blocks)
-    pub(crate) async fn sync_progress(&self) -> Result<Progress> {
-        store::sync_progress(&mut *self.pool.acquire().await?).await
-    }
-
-    pub(crate) async fn debug_print(&self, print: DebugPrinter) {
+    pub async fn debug_print(&self, print: DebugPrinter) {
         let mut conn = self.pool.acquire().await.unwrap();
         RootNode::debug_print(&mut conn, print).await;
     }
 
     /// Receive `RootNode` from other replica and store it into the db. Returns whether the
     /// received node was more up-to-date than the corresponding branch stored by this replica.
-    pub(crate) async fn receive_root_node(
+    pub async fn receive_root_node(
         &self,
         proof: UntrustedProof,
         summary: Summary,
@@ -212,7 +204,7 @@ impl Index {
 
     /// Receive inner nodes from other replica and store them into the db.
     /// Returns hashes of those nodes that were more up to date than the locally stored ones.
-    pub(crate) async fn receive_inner_nodes(
+    pub async fn receive_inner_nodes(
         &self,
         nodes: CacheHash<InnerNodeMap>,
         receive_filter: &mut ReceiveFilter,
@@ -237,7 +229,7 @@ impl Index {
 
     /// Receive leaf nodes from other replica and store them into the db.
     /// Returns the ids of the blocks that the remote replica has but the local one has not.
-    pub(crate) async fn receive_leaf_nodes(
+    pub async fn receive_leaf_nodes(
         &self,
         nodes: CacheHash<LeafNodeSet>,
     ) -> Result<Vec<BlockId>, ReceiveError> {
