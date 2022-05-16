@@ -13,7 +13,7 @@ use crate::{
         BranchData, Index, Proof, RootNode,
     },
     repository::{self, RepositoryId},
-    store::{self, Store},
+    store::Store,
     test_utils,
     version_vector::VersionVector,
 };
@@ -66,7 +66,7 @@ async fn transfer_snapshot_between_two_replicas_case(
 
     let snapshot = Snapshot::generate(&mut rng, leaf_count);
     save_snapshot(&a_store.index, a_id, &write_keys, &snapshot).await;
-    receive_blocks(&a_store.index, &snapshot).await;
+    receive_blocks(&a_store, &snapshot).await;
 
     assert!(load_latest_root_node(&b_store.index, a_id).await.is_none());
 
@@ -124,7 +124,8 @@ async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed:
     let drive = async {
         for (id, block) in snapshot.blocks() {
             // Write the block by replica A.
-            store::write_received_block(&a_store.index, &block.data, &block.nonce)
+            a_store
+                .write_received_block(&block.data, &block.nonce)
                 .await
                 .unwrap();
 
@@ -148,7 +149,7 @@ async fn failed_block_only_peer() {
 
     let snapshot = Snapshot::generate(&mut rng, 1);
     save_snapshot(&a_store.index, a_id, &write_keys, &snapshot).await;
-    receive_blocks(&a_store.index, &snapshot).await;
+    receive_blocks(&a_store, &snapshot).await;
 
     let mut server = create_server(a_store.index.clone());
     let mut client = create_client(b_store.clone());
@@ -188,7 +189,7 @@ async fn failed_block_same_peer() {
 
     let snapshot = Snapshot::generate(&mut rng, 1);
     save_snapshot(&a_store.index, a_id, &write_keys, &snapshot).await;
-    receive_blocks(&a_store.index, &snapshot).await;
+    receive_blocks(&a_store, &snapshot).await;
 
     // [A]-(server_ac)---+
     //                   |
@@ -249,10 +250,10 @@ async fn failed_block_other_peer() {
     let snapshot = Snapshot::generate(&mut rng, 1);
 
     save_snapshot(&a_store.index, a_id, &write_keys, &snapshot).await;
-    receive_blocks(&a_store.index, &snapshot).await;
+    receive_blocks(&a_store, &snapshot).await;
 
     save_snapshot(&b_store.index, b_id, &write_keys, &snapshot).await;
-    receive_blocks(&b_store.index, &snapshot).await;
+    receive_blocks(&b_store, &snapshot).await;
 
     // [A]-(server_ac)---+
     //                   |

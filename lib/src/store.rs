@@ -47,34 +47,33 @@ impl Store {
         })
         .unwrap_or(Progress { value: 0, total: 0 }))
     }
-}
 
-/// Write a block received from a remote replica to the block store. The block must already be
-/// referenced by the index, otherwise an `BlockNotReferenced` error is returned.
-// TODO: move this to `impl Store`
-pub(crate) async fn write_received_block(
-    index: &Index,
-    data: &BlockData,
-    nonce: &BlockNonce,
-) -> Result<()> {
-    let mut cx = index.pool.acquire().await?;
-    let mut tx = cx.begin().await?;
+    /// Write a block received from a remote replica to the block store. The block must already be
+    /// referenced by the index, otherwise an `BlockNotReferenced` error is returned.
+    pub(crate) async fn write_received_block(
+        &self,
+        data: &BlockData,
+        nonce: &BlockNonce,
+    ) -> Result<()> {
+        let mut cx = self.db_pool().acquire().await?;
+        let mut tx = cx.begin().await?;
 
-    let writer_ids = index::receive_block(&mut tx, &data.id).await?;
-    block::write(&mut tx, &data.id, &data.content, nonce).await?;
-    tx.commit().await?;
+        let writer_ids = index::receive_block(&mut tx, &data.id).await?;
+        block::write(&mut tx, &data.id, &data.content, nonce).await?;
+        tx.commit().await?;
 
-    let branches = index.branches().await;
+        let branches = self.index.branches().await;
 
-    // Reload root nodes of the affected branches and notify them.
-    for writer_id in &writer_ids {
-        if let Some(branch) = branches.get(writer_id) {
-            branch.reload_root(&mut cx).await?;
-            branch.notify();
+        // Reload root nodes of the affected branches and notify them.
+        for writer_id in &writer_ids {
+            if let Some(branch) = branches.get(writer_id) {
+                branch.reload_root(&mut cx).await?;
+                branch.notify();
+            }
         }
-    }
 
-    Ok(())
+        Ok(())
+    }
 }
 
 /// Initialize database objects to support operations that affect both the index and the block
@@ -199,20 +198,24 @@ mod tests {
         let write_keys = Keypair::random();
         let repository_id = RepositoryId::from(write_keys.public);
         let index = Index::load(pool, repository_id).await.unwrap();
+        let store = Store {
+            index,
+            block_tracker: BlockTracker::new(),
+        };
 
         let snapshot = Snapshot::generate(&mut rand::thread_rng(), 5);
 
         receive_nodes(
-            &index,
+            &store.index,
             &write_keys,
             branch_id,
             VersionVector::first(branch_id),
             &snapshot,
         )
         .await;
-        receive_blocks(&index, &snapshot).await;
+        receive_blocks(&store, &snapshot).await;
 
-        let mut conn = index.pool.acquire().await.unwrap();
+        let mut conn = store.db_pool().acquire().await.unwrap();
 
         for (id, block) in snapshot.blocks() {
             let mut content = vec![0; BLOCK_SIZE];
@@ -230,17 +233,21 @@ mod tests {
 
         let repository_id = RepositoryId::random();
         let index = Index::load(pool, repository_id).await.unwrap();
+        let store = Store {
+            index,
+            block_tracker: BlockTracker::new(),
+        };
 
         let snapshot = Snapshot::generate(&mut rand::thread_rng(), 1);
 
         for block in snapshot.blocks().values() {
             assert_matches!(
-                write_received_block(&index, &block.data, &block.nonce).await,
+                store.write_received_block(&block.data, &block.nonce).await,
                 Err(Error::BlockNotReferenced)
             );
         }
 
-        let mut conn = index.pool.acquire().await.unwrap();
+        let mut conn = store.db_pool().acquire().await.unwrap();
         for id in snapshot.blocks().keys() {
             assert!(!block::exists(&mut conn, id).await.unwrap());
         }
@@ -310,7 +317,7 @@ mod tests {
                 }
             );
 
-            receive_blocks(&store.index, &snapshot).await;
+            receive_blocks(&store, &snapshot).await;
             expected_received_blocks.extend(snapshot.blocks().keys().copied());
 
             assert_eq!(

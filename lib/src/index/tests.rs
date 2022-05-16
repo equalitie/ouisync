@@ -1,8 +1,8 @@
 use super::{node::RootNode, node_test_utils::Snapshot, *};
 use crate::{
-    block::{self, BLOCK_SIZE},
+    block::{self, BlockTracker, BLOCK_SIZE},
     crypto::sign::{Keypair, PublicKey},
-    store,
+    store::{self, Store},
     version_vector::VersionVector,
 };
 use assert_matches::assert_matches;
@@ -277,11 +277,16 @@ async fn receive_child_nodes_with_missing_root_parent() {
 #[tokio::test(flavor = "multi_thread")]
 async fn does_not_delete_old_branch_until_new_branch_is_complete() {
     let (index, write_keys) = setup().await;
+    let store = Store {
+        index,
+        block_tracker: BlockTracker::new(),
+    };
 
     let mut rng = rand::thread_rng();
 
     let local_id = PublicKey::generate(&mut rng);
-    index
+    store
+        .index
         .create_branch(Proof::first(local_id, &write_keys))
         .await
         .unwrap();
@@ -293,7 +298,8 @@ async fn does_not_delete_old_branch_until_new_branch_is_complete() {
     let vv0 = VersionVector::first(remote_id);
 
     // Receive it all.
-    index
+    store
+        .index
         .receive_root_node(
             Proof::new(remote_id, vv0.clone(), *snapshot0.root_hash(), &write_keys).into(),
             Summary::FULL,
@@ -301,11 +307,12 @@ async fn does_not_delete_old_branch_until_new_branch_is_complete() {
         .await
         .unwrap();
 
-    let mut receive_filter = ReceiveFilter::new(index.pool.clone());
+    let mut receive_filter = ReceiveFilter::new(store.db_pool().clone());
 
     for layer in snapshot0.inner_layers() {
         for (_, nodes) in layer.inner_maps() {
-            index
+            store
+                .index
                 .receive_inner_nodes(nodes.clone().into(), &mut receive_filter)
                 .await
                 .unwrap();
@@ -313,23 +320,31 @@ async fn does_not_delete_old_branch_until_new_branch_is_complete() {
     }
 
     for (_, nodes) in snapshot0.leaf_sets() {
-        index
+        store
+            .index
             .receive_leaf_nodes(nodes.clone().into())
             .await
             .unwrap();
     }
 
     for block in snapshot0.blocks().values() {
-        store::write_received_block(&index, &block.data, &block.nonce)
+        store
+            .write_received_block(&block.data, &block.nonce)
             .await
             .unwrap();
     }
 
-    let remote_branch = index.branches().await.get(&remote_id).unwrap().clone();
+    let remote_branch = store
+        .index
+        .branches()
+        .await
+        .get(&remote_id)
+        .unwrap()
+        .clone();
 
     // Verify we can retrieve all the blocks.
     check_all_blocks_exist(
-        &mut index.pool.acquire().await.unwrap(),
+        &mut store.db_pool().acquire().await.unwrap(),
         &remote_branch,
         &snapshot0,
     )
@@ -340,7 +355,8 @@ async fn does_not_delete_old_branch_until_new_branch_is_complete() {
     let vv1 = vv0.incremented(remote_id);
 
     // Receive its root node only.
-    index
+    store
+        .index
         .receive_root_node(
             Proof::new(remote_id, vv1, *snapshot1.root_hash(), &write_keys).into(),
             Summary::FULL,
@@ -350,7 +366,7 @@ async fn does_not_delete_old_branch_until_new_branch_is_complete() {
 
     // All the original blocks are still retrievable
     check_all_blocks_exist(
-        &mut index.pool.acquire().await.unwrap(),
+        &mut store.db_pool().acquire().await.unwrap(),
         &remote_branch,
         &snapshot0,
     )

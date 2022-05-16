@@ -8,7 +8,6 @@ use crate::{
     crypto::{CacheHash, Hash, Hashable},
     error::{Error, Result},
     index::{InnerNodeMap, LeafNodeSet, ReceiveError, ReceiveFilter, Summary, UntrustedProof},
-    store,
     store::Store,
 };
 use std::{collections::VecDeque, sync::Arc};
@@ -227,7 +226,7 @@ impl Client {
     ) -> Result<(), ReceiveError> {
         log::trace!("{} handle_block({:?})", ChannelInfo::current(), data.id);
 
-        match store::write_received_block(&self.store.index, &data, &nonce).await {
+        match self.store.write_received_block(&data, &nonce).await {
             Ok(_) => Ok(()),
             // Ignore `BlockNotReferenced` errors as they only mean that the block is no longer
             // needed.
