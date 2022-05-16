@@ -32,11 +32,11 @@ impl Store {
         // TODO: should we use `COUNT(DISTINCT ... )` ?
         Ok(sqlx::query(
             "SELECT
-             COUNT(blocks.id),
-             COUNT(snapshot_leaf_nodes.block_id)
-         FROM
-             snapshot_leaf_nodes
-             LEFT JOIN blocks ON blocks.id = snapshot_leaf_nodes.block_id
+                 COUNT(blocks.id),
+                 COUNT(snapshot_leaf_nodes.block_id)
+             FROM
+                 snapshot_leaf_nodes
+                 LEFT JOIN blocks ON blocks.id = snapshot_leaf_nodes.block_id
          ",
         )
         .fetch_optional(&mut *conn)

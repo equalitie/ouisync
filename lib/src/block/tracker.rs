@@ -242,25 +242,16 @@ mod tests {
         client.accept(&block1.id).await.unwrap();
         assert_eq!(client.try_next().await.unwrap(), None);
 
-        // Requested + accepted blocks are returned
+        // Requested + accepted blocks are returned...
         client.accept(&block0.id).await.unwrap();
         assert_eq!(client.try_next().await.unwrap(), Some(block0.id));
 
-        // Inserted blocks are no longer returned
-        let nonce = rand::random();
-        store::write(
-            &mut *pool.acquire().await.unwrap(),
-            &block0.id,
-            &block0.content,
-            &nonce,
-        )
-        .await
-        .unwrap();
+        // ...but only once.
         assert_eq!(client.try_next().await.unwrap(), None);
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn fallback_on_reject() {
+    async fn fallback_on_reject_before_next() {
         let pool = setup().await;
         let tracker = BlockTracker::new();
 
@@ -284,7 +275,34 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn fallback_on_client_close_after_request() {
+    async fn fallback_on_reject_after_next() {
+        let pool = setup().await;
+        let tracker = BlockTracker::new();
+
+        let requester = tracker.requester();
+        let client0 = tracker.client(pool.clone());
+        let client1 = tracker.client(pool.clone());
+
+        let block = make_block();
+
+        requester
+            .request(&mut pool.acquire().await.unwrap(), &block.id)
+            .await
+            .unwrap();
+        client0.accept(&block.id).await.unwrap();
+        client1.accept(&block.id).await.unwrap();
+
+        assert_eq!(client0.try_next().await.unwrap(), Some(block.id));
+        assert_eq!(client1.try_next().await.unwrap(), None);
+
+        client0.reject(&block.id).await.unwrap();
+
+        assert_eq!(client0.try_next().await.unwrap(), None);
+        assert_eq!(client1.try_next().await.unwrap(), Some(block.id));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn fallback_on_client_close_after_request_before_next() {
         let pool = setup().await;
         let tracker = BlockTracker::new();
 
@@ -301,6 +319,33 @@ mod tests {
             .request(&mut pool.acquire().await.unwrap(), &block.id)
             .await
             .unwrap();
+
+        client0.close().await.unwrap();
+
+        assert_eq!(client1.try_next().await.unwrap(), Some(block.id));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn fallback_on_client_close_after_request_after_next() {
+        let pool = setup().await;
+        let tracker = BlockTracker::new();
+
+        let requester = tracker.requester();
+        let client0 = tracker.client(pool.clone());
+        let client1 = tracker.client(pool.clone());
+
+        let block = make_block();
+
+        client0.accept(&block.id).await.unwrap();
+        client1.accept(&block.id).await.unwrap();
+
+        requester
+            .request(&mut pool.acquire().await.unwrap(), &block.id)
+            .await
+            .unwrap();
+
+        assert_eq!(client0.try_next().await.unwrap(), Some(block.id));
+        assert_eq!(client1.try_next().await.unwrap(), None);
 
         client0.close().await.unwrap();
 
@@ -368,6 +413,35 @@ mod tests {
         let mut block_ids = block_ids.into_iter().flatten();
         assert_eq!(block_ids.next(), Some(block.id));
         assert_eq!(block_ids.next(), None);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn untrack_received_block() {
+        let pool = setup().await;
+        let tracker = BlockTracker::new();
+
+        let requester = tracker.requester();
+        let client = tracker.client(pool.clone());
+
+        let block = make_block();
+
+        client.accept(&block.id).await.unwrap();
+        requester
+            .request(&mut pool.acquire().await.unwrap(), &block.id)
+            .await
+            .unwrap();
+
+        let nonce = rand::random();
+        store::write(
+            &mut *pool.acquire().await.unwrap(),
+            &block.id,
+            &block.content,
+            &nonce,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(client.try_next().await.unwrap(), None);
     }
 
     // TODO: test that requested and accepted blocks are no longer returned when not
