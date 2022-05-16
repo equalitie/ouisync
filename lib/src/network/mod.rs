@@ -29,7 +29,6 @@ use self::{
 use crate::{
     config::{ConfigKey, ConfigStore},
     error::Error,
-    index::Index,
     repository::RepositoryId,
     scoped_task::{self, ScopedJoinHandle, ScopedTaskSet},
     state_monitor::StateMonitor,
@@ -292,11 +291,11 @@ impl Handle {
         let mut network_state = self.inner.state.lock().unwrap();
 
         let key = network_state.registry.insert(RegistrationHolder {
-            index: store.index.clone(),
+            store: store.clone(),
             dht,
         });
 
-        network_state.create_link(store.index);
+        network_state.create_link(store);
 
         Registration {
             inner: self.inner.clone(),
@@ -326,7 +325,7 @@ impl Registration {
         let holder = &mut state.registry[self.key];
         holder.dht = self
             .inner
-            .start_dht_lookup(repository_info_hash(holder.index.repository_id()));
+            .start_dht_lookup(repository_info_hash(holder.store.index.repository_id()));
     }
 
     pub fn disable_dht(&self) {
@@ -346,14 +345,14 @@ impl Drop for Registration {
 
         if let Some(holder) = state.registry.try_remove(self.key) {
             for broker in state.message_brokers.values_mut() {
-                broker.destroy_link(holder.index.repository_id());
+                broker.destroy_link(holder.store.index.repository_id());
             }
         }
     }
 }
 
 struct RegistrationHolder {
-    index: Index,
+    store: Store,
     dht: Option<dht_discovery::LookupRequest>,
 }
 
@@ -386,9 +385,9 @@ struct State {
 }
 
 impl State {
-    fn create_link(&mut self, index: Index) {
+    fn create_link(&mut self, store: Store) {
         for broker in self.message_brokers.values_mut() {
-            broker.create_link(index.clone())
+            broker.create_link(store.clone())
         }
     }
 }
@@ -644,7 +643,7 @@ impl Inner {
                     // lookup but make sure we correctly handle edge cases, for example, when we have
                     // more than one repository shared with the peer.
                     for (_, holder) in &state.registry {
-                        broker.create_link(holder.index.clone());
+                        broker.create_link(holder.store.clone());
                     }
 
                     entry.insert(broker);

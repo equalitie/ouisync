@@ -8,7 +8,9 @@ use super::{
     request::MAX_PENDING_REQUESTS,
     server::Server,
 };
-use crate::{index::Index, network::channel_info::ChannelInfo, repository::RepositoryId};
+use crate::{
+    index::Index, network::channel_info::ChannelInfo, repository::RepositoryId, store::Store,
+};
 use std::{
     collections::{hash_map::Entry, HashMap},
     future,
@@ -68,8 +70,8 @@ impl MessageBroker {
     /// Try to establish a link between a local repository and a remote repository. The remote
     /// counterpart needs to call this too with matching `local_name` and `remote_name` for the link
     /// to actually be created.
-    pub fn create_link(&mut self, index: Index) {
-        let channel = MessageChannel::from(index.repository_id());
+    pub fn create_link(&mut self, store: Store) {
+        let channel = MessageChannel::from(store.index.repository_id());
         let channel_info = ChannelInfo::new(channel, self.this_runtime_id, self.that_runtime_id);
         let (abort_tx, abort_rx) = oneshot::channel();
 
@@ -90,7 +92,7 @@ impl MessageBroker {
         log::debug!("{} creating link", channel_info);
 
         let role = Role::determine(
-            index.repository_id(),
+            store.index.repository_id(),
             &self.this_runtime_id,
             &self.that_runtime_id,
         );
@@ -101,7 +103,7 @@ impl MessageBroker {
 
         let task = async move {
             select! {
-                _ = maintain_link(role, stream, sink.clone(), index, request_limiter) => (),
+                _ = maintain_link(role, stream, sink.clone(), store, request_limiter) => (),
                 _ = abort_rx => (),
             }
 
@@ -123,7 +125,7 @@ async fn maintain_link(
     role: Role,
     mut stream: ContentStream,
     mut sink: ContentSink,
-    index: Index,
+    store: Store,
     request_limiter: Arc<Semaphore>,
 ) {
     loop {
@@ -133,13 +135,13 @@ async fn maintain_link(
         }
 
         let (crypto_stream, crypto_sink) =
-            match establish_channel(role, &mut stream, &mut sink, &index).await {
+            match establish_channel(role, &mut stream, &mut sink, &store.index).await {
                 Ok(io) => io,
                 Err(EstablishError::Crypto) => continue,
                 Err(EstablishError::Closed) => break,
             };
 
-        match run_link(crypto_stream, crypto_sink, &index, request_limiter.clone()).await {
+        match run_link(crypto_stream, crypto_sink, &store, request_limiter.clone()).await {
             ControlFlow::Continue => continue,
             ControlFlow::Break => break,
         }
@@ -187,7 +189,7 @@ async fn establish_channel<'a>(
 async fn run_link(
     stream: DecryptingStream<'_>,
     sink: EncryptingSink<'_>,
-    index: &Index,
+    store: &Store,
     request_limiter: Arc<Semaphore>,
 ) -> ControlFlow {
     let (request_tx, request_rx) = mpsc::channel(1);
@@ -196,8 +198,8 @@ async fn run_link(
 
     // Run everything in parallel:
     select! {
-        flow = run_client(index.clone(), content_tx.clone(), response_rx, request_limiter) => flow,
-        flow = run_server(index.clone(), content_tx, request_rx ) => flow,
+        flow = run_client(store.clone(), content_tx.clone(), response_rx, request_limiter) => flow,
+        flow = run_server(store.index.clone(), content_tx, request_rx ) => flow,
         flow = recv_messages(stream, request_tx, response_tx) => flow,
         flow = send_messages(content_rx, sink) => flow,
     }
@@ -286,12 +288,12 @@ async fn send_messages(
 
 // Create and run client. Returns only on error.
 async fn run_client(
-    index: Index,
+    store: Store,
     content_tx: mpsc::Sender<Content>,
     response_rx: mpsc::Receiver<Response>,
     request_limiter: Arc<Semaphore>,
 ) -> ControlFlow {
-    let mut client = Client::new(index, content_tx, response_rx, request_limiter);
+    let mut client = Client::new(store, content_tx, response_rx, request_limiter);
 
     match client.run().await {
         Ok(()) => forever().await,

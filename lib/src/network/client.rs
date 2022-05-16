@@ -7,10 +7,9 @@ use crate::{
     block::{BlockData, BlockId, BlockNonce, BlockTrackerClient},
     crypto::{CacheHash, Hash, Hashable},
     error::{Error, Result},
-    index::{
-        Index, InnerNodeMap, LeafNodeSet, ReceiveError, ReceiveFilter, Summary, UntrustedProof,
-    },
+    index::{InnerNodeMap, LeafNodeSet, ReceiveError, ReceiveFilter, Summary, UntrustedProof},
     store,
+    store::Store,
 };
 use std::{collections::VecDeque, sync::Arc};
 use tokio::{
@@ -19,7 +18,7 @@ use tokio::{
 };
 
 pub(crate) struct Client {
-    index: Index,
+    store: Store,
     tx: mpsc::Sender<Content>,
     rx: mpsc::Receiver<Response>,
     request_limiter: Arc<Semaphore>,
@@ -32,16 +31,16 @@ pub(crate) struct Client {
 
 impl Client {
     pub fn new(
-        index: Index,
+        store: Store,
         tx: mpsc::Sender<Content>,
         rx: mpsc::Receiver<Response>,
         request_limiter: Arc<Semaphore>,
     ) -> Self {
-        let pool = index.pool.clone();
-        let block_tracker = index.block_tracker.client(pool.clone());
+        let pool = store.db_pool().clone();
+        let block_tracker = store.block_tracker.client(pool.clone());
 
         Self {
-            index,
+            store,
             tx,
             rx,
             request_limiter,
@@ -170,7 +169,7 @@ impl Client {
         );
 
         let hash = proof.hash;
-        let updated = self.index.receive_root_node(proof, summary).await?;
+        let updated = self.store.index.receive_root_node(proof, summary).await?;
 
         if updated {
             self.send_queue.push_front(Request::ChildNodes(hash));
@@ -190,6 +189,7 @@ impl Client {
         );
 
         let updated = self
+            .store
             .index
             .receive_inner_nodes(nodes, &mut self.receive_filter)
             .await?;
@@ -211,7 +211,7 @@ impl Client {
             nodes.hash()
         );
 
-        let updated = self.index.receive_leaf_nodes(nodes).await?;
+        let updated = self.store.index.receive_leaf_nodes(nodes).await?;
 
         for block_id in updated {
             self.block_tracker.accept(&block_id).await?;
@@ -227,7 +227,7 @@ impl Client {
     ) -> Result<(), ReceiveError> {
         log::trace!("{} handle_block({:?})", ChannelInfo::current(), data.id);
 
-        match store::write_received_block(&self.index, &data, &nonce).await {
+        match store::write_received_block(&self.store.index, &data, &nonce).await {
             Ok(_) => Ok(()),
             // Ignore `BlockNotReferenced` errors as they only mean that the block is no longer
             // needed.

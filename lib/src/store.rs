@@ -51,6 +51,7 @@ impl Store {
 
 /// Write a block received from a remote replica to the block store. The block must already be
 /// referenced by the index, otherwise an `BlockNotReferenced` error is returned.
+// TODO: move this to `impl Store`
 pub(crate) async fn write_received_block(
     index: &Index,
     data: &BlockData,
