@@ -1,6 +1,6 @@
 use async_recursion::async_recursion;
 
-use super::Shared;
+use super::{utils, Shared};
 use crate::{
     blob::BlockIds,
     block::{BlockId, BlockTrackerRequester},
@@ -36,7 +36,7 @@ impl BlockRequester {
     }
 
     async fn process(&self) -> Result<()> {
-        let branches = self.shared.branches().await?;
+        let branches = utils::current_branches(self.shared.branches().await?).await;
         let mut versions = Vec::with_capacity(branches.len());
 
         for branch in branches {

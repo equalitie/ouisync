@@ -20,7 +20,7 @@ pub(crate) use self::{
 
 use self::proof::ProofError;
 use crate::{
-    block::BlockId,
+    block::{BlockId, BlockTracker},
     crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
     db,
     debug_printer::DebugPrinter,
@@ -44,6 +44,7 @@ type SnapshotId = u32;
 #[derive(Clone)]
 pub struct Index {
     pub(crate) pool: db::Pool,
+    pub(crate) block_tracker: BlockTracker,
     shared: Arc<Shared>,
 }
 
@@ -54,6 +55,7 @@ impl Index {
 
         Ok(Self {
             pool,
+            block_tracker: BlockTracker::new(),
             shared: Arc::new(Shared {
                 repository_id,
                 branches: RwLock::new(branches),

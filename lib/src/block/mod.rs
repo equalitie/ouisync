@@ -10,7 +10,7 @@ pub(crate) use self::{
         clear_reachable, count, exists, init, mark_reachable, pin, read, remove_unreachable,
         unpin_all, write, BlockNonce,
     },
-    tracker::{BlockTracker, BlockTrackerRequester},
+    tracker::{BlockTracker, BlockTrackerClient, BlockTrackerRequester},
 };
 
 /// Block size in bytes.

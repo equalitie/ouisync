@@ -8,6 +8,7 @@ use std::sync::{
 use tokio::{sync::Notify, task};
 
 /// Helper for tracking required missing blocks.
+#[derive(Clone)]
 pub(crate) struct BlockTracker {
     notify: Arc<Notify>,
 }
@@ -40,6 +41,7 @@ pub(crate) struct BlockTrackerRequester {
 
 impl BlockTrackerRequester {
     /// Request a block with the given id.
+    // TODO: only insert if block not exists
     pub async fn request(&self, conn: &mut db::Connection, block_id: &BlockId) -> Result<()> {
         sqlx::query(
             "INSERT INTO missing_blocks (block_id, requested)
@@ -163,18 +165,9 @@ impl BlockTrackerClient {
     /// Close this client by rejecting any accepted requests. Normally it's not necessary to call
     /// this as the cleanup happens automatically on drop. It's still useful if one wants to make
     /// sure the cleanup fully completed or to check its result (mostly in tests).
+    #[cfg(test)]
     pub async fn close(self) -> Result<()> {
         try_close_client(&self.db_pool, &self.notify, self.client_id).await
-    }
-}
-
-impl Clone for BlockTrackerClient {
-    fn clone(&self) -> Self {
-        Self {
-            db_pool: self.db_pool.clone(),
-            notify: self.notify.clone(),
-            client_id: next_client_id(),
-        }
     }
 }
 

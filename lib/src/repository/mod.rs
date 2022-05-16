@@ -15,7 +15,7 @@ use self::{
 };
 use crate::{
     access_control::{AccessMode, AccessSecrets, MasterSecret},
-    block::{self, BlockTracker, BLOCK_SIZE},
+    block::{self, BLOCK_SIZE},
     branch::Branch,
     crypto::{
         cipher,
@@ -46,7 +46,6 @@ use tokio::task;
 
 pub struct Repository {
     shared: Arc<Shared>,
-    block_tracker: BlockTracker,
     _merge_handle: Option<ScopedJoinHandle<()>>,
     garbage_collector_handle: GarbageCollectorHandle,
 }
@@ -190,8 +189,6 @@ impl Repository {
             None
         };
 
-        let block_tracker = BlockTracker::new();
-
         let merge_handle = local_branch.map(|local_branch| {
             scoped_task::spawn(Merger::new(shared.clone(), local_branch).run())
         });
@@ -203,7 +200,8 @@ impl Repository {
         if shared.secrets.can_read() {
             task::spawn(garbage_collector.run());
 
-            let block_requester = BlockRequester::new(shared.clone(), block_tracker.requester());
+            let block_requester =
+                BlockRequester::new(shared.clone(), shared.index.block_tracker.requester());
             task::spawn(block_requester.run());
         }
 
@@ -211,7 +209,6 @@ impl Repository {
 
         Ok(Self {
             shared,
-            block_tracker,
             _merge_handle: merge_handle,
             garbage_collector_handle,
         })
