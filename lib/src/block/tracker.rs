@@ -5,7 +5,7 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc,
 };
-use tokio::sync::Notify;
+use tokio::{sync::Notify, task};
 
 /// Helper for tracking required missing blocks.
 pub(crate) struct BlockTracker {
@@ -161,6 +161,13 @@ impl BlockTrackerClient {
 
         Ok(Some(block_id))
     }
+
+    /// Close this client by rejecting any accepted requests. Normally it's not necessary to call
+    /// this as the cleanup happens automatically on drop. It's still useful if one wants to make
+    /// sure the cleanup fully completed or to check its result (mostly in tests).
+    pub async fn close(self) -> Result<()> {
+        try_close_client(&self.db_pool, &self.notify, self.client_id).await
+    }
 }
 
 impl Clone for BlockTrackerClient {
@@ -171,6 +178,38 @@ impl Clone for BlockTrackerClient {
             client_id: next_client_id(),
         }
     }
+}
+
+impl Drop for BlockTrackerClient {
+    fn drop(&mut self) {
+        task::spawn(close_client(
+            self.db_pool.clone(),
+            self.notify.clone(),
+            self.client_id,
+        ));
+    }
+}
+
+async fn close_client(db_pool: db::Pool, notify: Arc<Notify>, client_id: u64) {
+    if let Err(error) = try_close_client(&db_pool, &notify, client_id).await {
+        log::error!(
+            "Failed to close BlockTrackerClient(client_id: {}): {:?}",
+            client_id,
+            error
+        );
+    }
+}
+
+async fn try_close_client(db_pool: &db::Pool, notify: &Notify, client_id: u64) -> Result<()> {
+    let mut conn = db_pool.acquire().await?;
+    sqlx::query("DELETE FROM block_requests WHERE client_id = ?")
+        .bind(db::encode_u64(client_id))
+        .execute(&mut *conn)
+        .await?;
+
+    notify.notify_waiters();
+
+    Ok(())
 }
 
 fn next_client_id() -> u64 {
@@ -226,6 +265,78 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(client.try_next().await.unwrap(), None);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn fallback_on_reject() {
+        let pool = setup().await;
+        let tracker = BlockTracker::new();
+
+        let requester = tracker.requester();
+        let client0 = tracker.client(pool.clone());
+        let client1 = tracker.client(pool.clone());
+
+        let block = make_block();
+
+        requester
+            .request(&mut pool.acquire().await.unwrap(), &block.id)
+            .await
+            .unwrap();
+        client0.accept(&block.id).await.unwrap();
+        client1.accept(&block.id).await.unwrap();
+
+        client0.reject(&block.id).await.unwrap();
+
+        assert_eq!(client0.try_next().await.unwrap(), None);
+        assert_eq!(client1.try_next().await.unwrap(), Some(block.id));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn fallback_on_client_close_after_request() {
+        let pool = setup().await;
+        let tracker = BlockTracker::new();
+
+        let requester = tracker.requester();
+        let client0 = tracker.client(pool.clone());
+        let client1 = tracker.client(pool.clone());
+
+        let block = make_block();
+
+        client0.accept(&block.id).await.unwrap();
+        client1.accept(&block.id).await.unwrap();
+
+        requester
+            .request(&mut pool.acquire().await.unwrap(), &block.id)
+            .await
+            .unwrap();
+
+        client0.close().await.unwrap();
+
+        assert_eq!(client1.try_next().await.unwrap(), Some(block.id));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn fallback_on_client_close_before_request() {
+        let pool = setup().await;
+        let tracker = BlockTracker::new();
+
+        let requester = tracker.requester();
+        let client0 = tracker.client(pool.clone());
+        let client1 = tracker.client(pool.clone());
+
+        let block = make_block();
+
+        client0.accept(&block.id).await.unwrap();
+        client1.accept(&block.id).await.unwrap();
+
+        client0.close().await.unwrap();
+
+        requester
+            .request(&mut pool.acquire().await.unwrap(), &block.id)
+            .await
+            .unwrap();
+
+        assert_eq!(client1.try_next().await.unwrap(), Some(block.id));
     }
 
     async fn setup() -> db::Pool {

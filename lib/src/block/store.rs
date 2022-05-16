@@ -54,11 +54,14 @@ pub async fn init(conn: &mut db::Connection) -> Result<()> {
              DELETE FROM missing_blocks WHERE block_id = new.id;
          END;
 
-         -- Delete unrequested missing block without any requests
+         -- Delete unrequested and unaccepted missing block
          CREATE TEMPORARY TRIGGER IF NOT EXISTS missing_blocks_delete_unrequested_and_unaccepted
          AFTER DELETE ON block_requests
          BEGIN
-             DELETE FROM missing_blocks WHERE id = old.missing_block_id AND requested = 0;
+             DELETE FROM missing_blocks
+             WHERE requested = 0
+               AND id = old.missing_block_id
+               AND id NOT IN (SELECT missing_block_id FROM block_requests);
          END;
         ",
     )
