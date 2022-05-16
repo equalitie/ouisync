@@ -3,7 +3,7 @@ use async_recursion::async_recursion;
 use super::Shared;
 use crate::{
     blob::BlockIds,
-    block::BlockId,
+    block::{BlockId, BlockTrackerRequester},
     error::{Error, Result},
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
 };
@@ -12,11 +12,12 @@ use std::sync::Arc;
 /// Requests blocks from other replicas.
 pub(super) struct BlockRequester {
     shared: Arc<Shared>,
+    tracker: BlockTrackerRequester,
 }
 
 impl BlockRequester {
-    pub fn new(shared: Arc<Shared>) -> Self {
-        Self { shared }
+    pub fn new(shared: Arc<Shared>, tracker: BlockTrackerRequester) -> Self {
+        Self { shared, tracker }
     }
 
     pub async fn run(self) {
@@ -90,8 +91,7 @@ impl BlockRequester {
 
     async fn request_missing_block(&self, id: &BlockId) -> Result<()> {
         let mut conn = self.shared.index.pool.acquire().await?;
-        // TODO
-
+        self.tracker.request(&mut conn, id).await?;
         Ok(())
     }
 
@@ -99,7 +99,7 @@ impl BlockRequester {
         let mut conn = self.shared.index.pool.acquire().await?;
 
         while let Some(id) = ids.next(&mut conn).await? {
-            // TODO
+            self.tracker.request(&mut conn, &id).await?;
         }
 
         Ok(())

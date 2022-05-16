@@ -10,14 +10,12 @@ use tokio::{sync::Notify, task};
 /// Helper for tracking required missing blocks.
 pub(crate) struct BlockTracker {
     notify: Arc<Notify>,
-    client_id: u64,
 }
 
 impl BlockTracker {
     pub fn new() -> Self {
         Self {
             notify: Arc::new(Notify::new()),
-            client_id: next_client_id(),
         }
     }
 
