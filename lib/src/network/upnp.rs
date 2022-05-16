@@ -102,14 +102,13 @@ impl PortForwarder {
                             return Ok(());
                         }
 
-                        if let Some((service, version)) = find_connection_service(&device) {
+                        if let Some(service) = find_connection_service(&device) {
                             let url = device.url().clone();
 
                             let per_igd_port_forwarder = PerIGDPortForwarder {
                                 device_url: url.clone(),
                                 service,
                                 mappings: (*mappings).clone(),
-                                _version: version,
                             };
 
                             per_igd_port_forwarder.run().await
@@ -175,19 +174,10 @@ impl PortForwarder {
     }
 }
 
-enum Version {
-    V1,
-    V2,
-}
-
 struct PerIGDPortForwarder {
     device_url: Uri,
     service: Service,
     mappings: Vec<Mapping>,
-    // Indicate whether we're talking to an IGDv1 or IGDv2 device. I though we might need it but
-    // currently we don't because the few calls we do are common for both versions. But keeping it
-    // here for posterity.
-    _version: Version,
 }
 
 impl PerIGDPortForwarder {
@@ -328,25 +318,34 @@ impl PerIGDPortForwarder {
     }
 }
 
-fn find_versioned_connection_service(
-    device: &rupnp::DeviceSpec,
-    version: u32,
-) -> Option<&rupnp::Service> {
-    const SCHEMA: &str = "schemas-upnp-org";
+const UPNP_SCHEMA: &str = "schemas-upnp-org";
 
+fn find_device_any_version<'a>(
+    device: &'a rupnp::DeviceSpec,
+    device_type: &'static str,
+) -> Option<&'a rupnp::DeviceSpec> {
     device
-        .find_device(&URN::device(SCHEMA, "WANDevice", version))
-        .and_then(|device| device.find_device(&URN::device(SCHEMA, "WANConnectionDevice", version)))
-        .and_then(|device| device.find_service(&URN::service(SCHEMA, "WANIPConnection", version)))
+        .find_device(&URN::device(UPNP_SCHEMA, device_type, 2))
+        .or_else(|| device.find_device(&URN::device(UPNP_SCHEMA, device_type, 1)))
 }
 
-fn find_connection_service(device: &rupnp::DeviceSpec) -> Option<(rupnp::Service, Version)> {
-    find_versioned_connection_service(device, 2)
-        .map(|service| (service.clone(), Version::V2))
-        .or_else(|| {
-            find_versioned_connection_service(device, 1)
-                .map(|service| (service.clone(), Version::V1))
+fn find_service_any_version<'a>(
+    device: &'a rupnp::DeviceSpec,
+    service_type: &'static str,
+) -> Option<&'a rupnp::Service> {
+    device
+        .find_service(&URN::service(UPNP_SCHEMA, service_type, 2))
+        .or_else(|| device.find_service(&URN::service(UPNP_SCHEMA, service_type, 1)))
+}
+
+fn find_connection_service(device: &rupnp::DeviceSpec) -> Option<rupnp::Service> {
+    find_device_any_version(device, "WANDevice")
+        .and_then(|device| find_device_any_version(device, "WANConnectionDevice"))
+        .and_then(|device| {
+            find_service_any_version(device, "WANIPConnection")
+                .or_else(|| find_service_any_version(device, "WANPPPConnection"))
         })
+        .cloned()
 }
 
 async fn local_address_to(url: &Uri) -> io::Result<net::IpAddr> {
