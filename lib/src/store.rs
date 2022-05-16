@@ -69,7 +69,7 @@ pub(crate) async fn init(conn: &mut db::Connection) -> Result<()> {
              DELETE FROM blocks WHERE id = old.block_id;
          END;
 
-         CREATE TEMPORARY TRIGGER IF NOT EXISTS blocks_delete_on_leaf_node_deleted
+         CREATE TEMPORARY TRIGGER IF NOT EXISTS missing_blocks_delete_on_leaf_node_deleted
          AFTER DELETE ON main.snapshot_leaf_nodes
          WHEN NOT EXISTS (SELECT 0 FROM main.snapshot_leaf_nodes WHERE block_id = old.block_id)
          BEGIN

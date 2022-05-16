@@ -224,6 +224,7 @@ mod tests {
         *,
     };
     use crate::repository;
+    use futures_util::future;
     use rand::Rng;
 
     #[tokio::test(flavor = "multi_thread")]
@@ -338,6 +339,48 @@ mod tests {
 
         assert_eq!(client1.try_next().await.unwrap(), Some(block.id));
     }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn race() {
+        let num_clients = 10;
+
+        let pool = setup().await;
+        let tracker = BlockTracker::new();
+
+        let requester = tracker.requester();
+        let clients: Vec<_> = (0..num_clients)
+            .map(|_| tracker.client(pool.clone()))
+            .collect();
+
+        let block = make_block();
+
+        for client in &clients {
+            client.accept(&block.id).await.unwrap();
+        }
+
+        requester
+            .request(&mut pool.acquire().await.unwrap(), &block.id)
+            .await
+            .unwrap();
+
+        // Run the clients in parallel
+        let handles = clients
+            .into_iter()
+            .map(|client| task::spawn(async move { client.try_next().await }));
+
+        let block_ids =
+            future::try_join_all(handles.map(|handle| async move { handle.await.unwrap() }))
+                .await
+                .unwrap();
+
+        // Exactly one client gets the block id
+        let mut block_ids = block_ids.into_iter().flatten();
+        assert_eq!(block_ids.next(), Some(block.id));
+        assert_eq!(block_ids.next(), None);
+    }
+
+    // TODO: test that requested and accepted blocks are no longer returned when not
+    // referenced
 
     async fn setup() -> db::Pool {
         repository::create_db(&db::Store::Temporary).await.unwrap()
