@@ -11,12 +11,23 @@ use tokio::{sync::Notify, task};
 #[derive(Clone)]
 pub(crate) struct BlockTracker {
     notify: Arc<Notify>,
+    mode: Mode,
 }
 
 impl BlockTracker {
-    pub fn new() -> Self {
+    /// Create block tracker with lazy block request mode.
+    pub fn lazy() -> Self {
         Self {
             notify: Arc::new(Notify::new()),
+            mode: Mode::Lazy,
+        }
+    }
+
+    /// Create block tracker with greedy block request mode.
+    pub fn greedy() -> Self {
+        Self {
+            notify: Arc::new(Notify::new()),
+            mode: Mode::Greedy,
         }
     }
 
@@ -30,6 +41,7 @@ impl BlockTracker {
         BlockTrackerClient {
             db_pool,
             notify: self.notify.clone(),
+            mode: self.mode,
             client_id: next_client_id(),
         }
     }
@@ -61,6 +73,7 @@ impl BlockTrackerRequester {
 pub(crate) struct BlockTrackerClient {
     db_pool: db::Pool,
     notify: Arc<Notify>,
+    mode: Mode,
     client_id: u64,
 }
 
@@ -69,10 +82,15 @@ impl BlockTrackerClient {
     pub async fn accept(&self, block_id: &BlockId) -> Result<()> {
         let mut conn = self.db_pool.acquire().await?;
 
+        let requested = match self.mode {
+            Mode::Greedy => true,
+            Mode::Lazy => false,
+        };
+
         sqlx::query(
             "INSERT INTO missing_blocks (block_id, requested)
-             VALUES (?, 0)
-             ON CONFLICT DO NOTHING;
+             VALUES (?, ?)
+             ON CONFLICT (block_id) DO UPDATE SET requested = ? WHERE requested = 0;
 
              INSERT INTO block_requests (missing_block_id, client_id, active)
              VALUES (
@@ -83,6 +101,8 @@ impl BlockTrackerClient {
             ",
         )
         .bind(block_id)
+        .bind(requested)
+        .bind(requested)
         .bind(block_id)
         .bind(db::encode_u64(self.client_id))
         .execute(&mut *conn)
@@ -208,6 +228,14 @@ fn next_client_id() -> u64 {
     NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
+#[derive(Copy, Clone)]
+enum Mode {
+    // Blocks are downloaded only when needed.
+    Lazy,
+    // Blocks are downloaded as soon as we learn about them from the index.
+    Greedy,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -220,9 +248,9 @@ mod tests {
     use tokio::sync::Barrier;
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn sanity() {
+    async fn lazy_simple() {
         let pool = setup().await;
-        let tracker = BlockTracker::new();
+        let tracker = BlockTracker::lazy();
 
         let requester = tracker.requester();
         let client = tracker.client(pool.clone());
@@ -252,9 +280,28 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn fallback_on_reject_before_next() {
+    async fn greedy_simple() {
         let pool = setup().await;
-        let tracker = BlockTracker::new();
+        let tracker = BlockTracker::greedy();
+
+        let client = tracker.client(pool.clone());
+
+        // Initially no blocks are returned
+        assert_eq!(client.try_next().await.unwrap(), None);
+
+        // Accepted blocks are returned...
+        let block = make_block();
+        client.accept(&block.id).await.unwrap();
+        assert_eq!(client.try_next().await.unwrap(), Some(block.id));
+
+        // ...but only once.
+        assert_eq!(client.try_next().await.unwrap(), None);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn lazy_fallback_on_reject_before_next() {
+        let pool = setup().await;
+        let tracker = BlockTracker::lazy();
 
         let requester = tracker.requester();
         let client0 = tracker.client(pool.clone());
@@ -276,9 +323,28 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn fallback_on_reject_after_next() {
+    async fn greedy_fallback_on_reject_before_next() {
         let pool = setup().await;
-        let tracker = BlockTracker::new();
+        let tracker = BlockTracker::greedy();
+
+        let client0 = tracker.client(pool.clone());
+        let client1 = tracker.client(pool.clone());
+
+        let block = make_block();
+
+        client0.accept(&block.id).await.unwrap();
+        client1.accept(&block.id).await.unwrap();
+
+        client0.reject(&block.id).await.unwrap();
+
+        assert_eq!(client0.try_next().await.unwrap(), None);
+        assert_eq!(client1.try_next().await.unwrap(), Some(block.id));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn lazy_fallback_on_reject_after_next() {
+        let pool = setup().await;
+        let tracker = BlockTracker::lazy();
 
         let requester = tracker.requester();
         let client0 = tracker.client(pool.clone());
@@ -303,9 +369,31 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn fallback_on_client_close_after_request_before_next() {
+    async fn greedy_fallback_on_reject_after_next() {
         let pool = setup().await;
-        let tracker = BlockTracker::new();
+        let tracker = BlockTracker::greedy();
+
+        let client0 = tracker.client(pool.clone());
+        let client1 = tracker.client(pool.clone());
+
+        let block = make_block();
+
+        client0.accept(&block.id).await.unwrap();
+        client1.accept(&block.id).await.unwrap();
+
+        assert_eq!(client0.try_next().await.unwrap(), Some(block.id));
+        assert_eq!(client1.try_next().await.unwrap(), None);
+
+        client0.reject(&block.id).await.unwrap();
+
+        assert_eq!(client0.try_next().await.unwrap(), None);
+        assert_eq!(client1.try_next().await.unwrap(), Some(block.id));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn lazy_fallback_on_client_close_after_request_before_next() {
+        let pool = setup().await;
+        let tracker = BlockTracker::lazy();
 
         let requester = tracker.requester();
         let client0 = tracker.client(pool.clone());
@@ -327,9 +415,9 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn fallback_on_client_close_after_request_after_next() {
+    async fn lazy_fallback_on_client_close_after_request_after_next() {
         let pool = setup().await;
-        let tracker = BlockTracker::new();
+        let tracker = BlockTracker::lazy();
 
         let requester = tracker.requester();
         let client0 = tracker.client(pool.clone());
@@ -354,9 +442,9 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn fallback_on_client_close_before_request() {
+    async fn lazy_fallback_on_client_close_before_request() {
         let pool = setup().await;
-        let tracker = BlockTracker::new();
+        let tracker = BlockTracker::lazy();
 
         let requester = tracker.requester();
         let client0 = tracker.client(pool.clone());
@@ -373,6 +461,45 @@ mod tests {
             .request(&mut pool.acquire().await.unwrap(), &block.id)
             .await
             .unwrap();
+
+        assert_eq!(client1.try_next().await.unwrap(), Some(block.id));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn greedy_fallback_on_client_close_before_next() {
+        let pool = setup().await;
+        let tracker = BlockTracker::greedy();
+
+        let client0 = tracker.client(pool.clone());
+        let client1 = tracker.client(pool.clone());
+
+        let block = make_block();
+
+        client0.accept(&block.id).await.unwrap();
+        client1.accept(&block.id).await.unwrap();
+
+        client0.close().await.unwrap();
+
+        assert_eq!(client1.try_next().await.unwrap(), Some(block.id));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn greedy_fallback_on_client_close_after_next() {
+        let pool = setup().await;
+        let tracker = BlockTracker::greedy();
+
+        let client0 = tracker.client(pool.clone());
+        let client1 = tracker.client(pool.clone());
+
+        let block = make_block();
+
+        client0.accept(&block.id).await.unwrap();
+        client1.accept(&block.id).await.unwrap();
+
+        assert_eq!(client0.try_next().await.unwrap(), Some(block.id));
+        assert_eq!(client1.try_next().await.unwrap(), None);
+
+        client0.close().await.unwrap();
 
         assert_eq!(client1.try_next().await.unwrap(), Some(block.id));
     }
@@ -382,7 +509,7 @@ mod tests {
         let num_clients = 10;
 
         let pool = setup().await;
-        let tracker = BlockTracker::new();
+        let tracker = BlockTracker::lazy();
 
         let requester = tracker.requester();
         let clients: Vec<_> = (0..num_clients)
@@ -430,7 +557,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn untrack_received_block() {
         let pool = setup().await;
-        let tracker = BlockTracker::new();
+        let tracker = BlockTracker::lazy();
 
         let requester = tracker.requester();
         let client = tracker.client(pool.clone());

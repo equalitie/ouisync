@@ -172,9 +172,17 @@ impl Repository {
         secrets: AccessSecrets,
         enable_merger: bool,
     ) -> Result<Self> {
+        // Lazy block downloading requires at least read access because it needs to be able to
+        // traverse the repository in order to enumarate reachable blocks.
+        let block_tracker = if secrets.can_read() {
+            BlockTracker::lazy()
+        } else {
+            BlockTracker::greedy()
+        };
+
         let store = Store {
             index,
-            block_tracker: BlockTracker::new(),
+            block_tracker,
         };
 
         let shared = Arc::new(Shared {

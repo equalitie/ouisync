@@ -279,7 +279,7 @@ async fn does_not_delete_old_branch_until_new_branch_is_complete() {
     let (index, write_keys) = setup().await;
     let store = Store {
         index,
-        block_tracker: BlockTracker::new(),
+        block_tracker: BlockTracker::lazy(),
     };
 
     let mut rng = rand::thread_rng();

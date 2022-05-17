@@ -324,7 +324,7 @@ async fn create_store<R: Rng + CryptoRng>(rng: &mut R, write_keys: &Keypair) -> 
 
     let store = Store {
         index,
-        block_tracker: BlockTracker::new(),
+        block_tracker: BlockTracker::greedy(),
     };
 
     (store, writer_id)

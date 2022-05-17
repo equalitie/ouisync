@@ -200,7 +200,7 @@ mod tests {
         let index = Index::load(pool, repository_id).await.unwrap();
         let store = Store {
             index,
-            block_tracker: BlockTracker::new(),
+            block_tracker: BlockTracker::lazy(),
         };
 
         let snapshot = Snapshot::generate(&mut rand::thread_rng(), 5);
@@ -235,7 +235,7 @@ mod tests {
         let index = Index::load(pool, repository_id).await.unwrap();
         let store = Store {
             index,
-            block_tracker: BlockTracker::new(),
+            block_tracker: BlockTracker::lazy(),
         };
 
         let snapshot = Snapshot::generate(&mut rand::thread_rng(), 1);
@@ -271,7 +271,7 @@ mod tests {
         let index = Index::load(pool, repository_id).await.unwrap();
         let store = Store {
             index,
-            block_tracker: BlockTracker::new(),
+            block_tracker: BlockTracker::lazy(),
         };
 
         let all_blocks: Vec<(Block, Hash)> =
