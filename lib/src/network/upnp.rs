@@ -1,7 +1,7 @@
 use super::ip_stack::Protocol;
 use crate::{
     scoped_task::{self, ScopedJoinHandle},
-    state_monitor::StateMonitor,
+    state_monitor::{MonitoredValue, StateMonitor},
 };
 use chrono::{offset::Local, DateTime};
 use futures_util::TryStreamExt;
@@ -34,6 +34,9 @@ pub(crate) struct Mapping {
 type JobHandles = HashMap<Uri, Option<ScopedJoinHandle<()>>>;
 
 pub(crate) struct PortForwarder {
+    // I saw the whole monitor sometimes disappear, so this is to debug what was the last line
+    // before the main scoped task ceases to exist.
+    _last_line: MonitoredValue<u32>,
     _task: ScopedJoinHandle<()>,
 }
 
@@ -42,26 +45,40 @@ impl PortForwarder {
     where
         I: IntoIterator<Item = Mapping>,
     {
-        let mappings: Vec<_> = mappings.into_iter().collect();
-        let task = scoped_task::spawn(async move {
-            for mapping in &mappings {
-                log::info!(
-                    "UPnP starting port forwarding EXT:{} -> INT:{} ({})",
-                    mapping.external,
-                    mapping.internal,
-                    mapping.protocol,
-                );
-            }
+        let last_line = monitor.make_value("last_line".into(), line!());
 
-            let result = Self::run(mappings, monitor).await;
-            // Warning, because we don't actually expect this to happen.
-            log::warn!("UPnP port forwarding ended ({:?})", result)
+        let mappings: Vec<_> = mappings.into_iter().collect();
+        let task = scoped_task::spawn({
+            let last_line = last_line.clone();
+            async move {
+                for mapping in &mappings {
+                    log::info!(
+                        "UPnP starting port forwarding EXT:{} -> INT:{} ({})",
+                        mapping.external,
+                        mapping.internal,
+                        mapping.protocol,
+                    );
+                }
+
+                *last_line.get() = line!();
+                let result = Self::run(mappings, monitor, last_line).await;
+                // Warning, because we don't actually expect this to happen.
+                log::warn!("UPnP port forwarding ended ({:?})", result)
+            }
         });
 
-        Self { _task: task }
+        Self {
+            _last_line: last_line,
+            _task: task,
+        }
     }
 
-    async fn run(mappings: Vec<Mapping>, monitor: Arc<StateMonitor>) -> Result<(), rupnp::Error> {
+    async fn run(
+        mappings: Vec<Mapping>,
+        monitor: Arc<StateMonitor>,
+        last_line: MonitoredValue<u32>,
+    ) -> Result<(), rupnp::Error> {
+        *last_line.get() = line!();
         // Devices may have a timeout period when they don't respond to repeated queries, the
         // DISCOVERY_RUDATION constant should be higher than that. The rupnp project internally
         // assumes this duration is three seconds.
@@ -73,26 +90,31 @@ impl PortForwarder {
 
         let job_handles = Arc::new(Mutex::new(JobHandles::new()));
 
+        *last_line.get() = line!();
         // Make it an Arc so we can clone lazily (only when we're not already running a spawned
         // coroutine on an IGD device).
         let mappings = Arc::new(mappings);
 
         let lookup_counter = monitor.make_value::<u64>("lookup_counter".into(), 0);
         let monitor = monitor.make_child("Devices");
+        *last_line.get() = line!();
 
         // Periodically check for new devices: maybe UPnP was enabled later after the app started,
         // maybe the device was swapped for another one,...
         loop {
+            *last_line.get() = line!();
             *lookup_counter.get() += 1;
 
             let mut device_urls = Box::pin(
                 discover_device_urls(&SearchTarget::RootDevice, DISCOVERY_DURATION).await?,
             );
 
+            *last_line.get() = line!();
             // NOTE: don't use `try_next().await?` here from the TryStreamExt interface as that
             // will quit on the first device that fails to respond. Whereas what we want is to just
             // ignore the device and go on trying the next one in line.
             while let Some(result) = device_urls.next().await {
+                *last_line.get() = line!();
                 let device_url = match result {
                     Ok(device_url) => device_url,
                     Err(e) => {
@@ -101,6 +123,7 @@ impl PortForwarder {
                     }
                 };
 
+                *last_line.get() = line!();
                 let mappings = mappings.clone();
                 let monitor = monitor.clone();
 
@@ -136,9 +159,12 @@ impl PortForwarder {
                         }
                     })
                 });
+                *last_line.get() = line!();
             }
 
+            *last_line.get() = line!();
             tokio::time::sleep(SLEEP_DURATION).await;
+            *last_line.get() = line!();
         }
     }
     fn spawn_if_not_running<JobMaker>(
