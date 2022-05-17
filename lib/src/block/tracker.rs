@@ -217,6 +217,7 @@ mod tests {
     use crate::repository;
     use futures_util::future;
     use rand::Rng;
+    use tokio::sync::Barrier;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn sanity() {
@@ -399,10 +400,21 @@ mod tests {
             .await
             .unwrap();
 
+        // Make sure all clients stay alive until we are done so that any acquired requests are not
+        // released prematurelly.
+        let barrier = Arc::new(Barrier::new(clients.len()));
+
         // Run the clients in parallel
-        let handles = clients
-            .into_iter()
-            .map(|client| task::spawn(async move { client.try_next().await }));
+        let handles = clients.into_iter().map(|client| {
+            task::spawn({
+                let barrier = barrier.clone();
+                async move {
+                    let result = client.try_next().await;
+                    barrier.wait().await;
+                    result
+                }
+            })
+        });
 
         let block_ids =
             future::try_join_all(handles.map(|handle| async move { handle.await.unwrap() }))
