@@ -31,10 +31,32 @@ impl BlockTracker {
         }
     }
 
-    pub fn requester(&self) -> BlockTrackerRequester {
-        BlockTrackerRequester {
-            notify: self.notify.clone(),
+    /// Request a block with the given id.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this tracker is in greedy mode.
+    pub async fn request(&self, conn: &mut db::Connection, block_id: &BlockId) -> Result<()> {
+        assert!(
+            matches!(self.mode, Mode::Lazy),
+            "`request` can be called only in lazy mode"
+        );
+
+        // TODO: only insert if block not exists
+        let query_result = sqlx::query(
+            "INSERT INTO missing_blocks (block_id, requested)
+             VALUES (?, 1)
+             ON CONFLICT (block_id) DO UPDATE SET requested = 1",
+        )
+        .bind(block_id)
+        .execute(conn)
+        .await?;
+
+        if query_result.rows_affected() > 0 {
+            self.notify.notify_waiters();
         }
+
+        Ok(())
     }
 
     pub fn client(&self, db_pool: db::Pool) -> BlockTrackerClient {
@@ -44,29 +66,6 @@ impl BlockTracker {
             mode: self.mode,
             client_id: next_client_id(),
         }
-    }
-}
-
-pub(crate) struct BlockTrackerRequester {
-    notify: Arc<Notify>,
-}
-
-impl BlockTrackerRequester {
-    /// Request a block with the given id.
-    // TODO: only insert if block not exists
-    pub async fn request(&self, conn: &mut db::Connection, block_id: &BlockId) -> Result<()> {
-        sqlx::query(
-            "INSERT INTO missing_blocks (block_id, requested)
-             VALUES (?, 1)
-             ON CONFLICT (block_id) DO UPDATE SET requested = 1",
-        )
-        .bind(block_id)
-        .execute(conn)
-        .await?;
-
-        self.notify.notify_waiters();
-
-        Ok(())
     }
 }
 
@@ -252,7 +251,6 @@ mod tests {
         let pool = setup().await;
         let tracker = BlockTracker::lazy();
 
-        let requester = tracker.requester();
         let client = tracker.client(pool.clone());
 
         // Initially no blocks are returned
@@ -260,7 +258,7 @@ mod tests {
 
         // Requested but not accepted blocks are not returned
         let block0 = make_block();
-        requester
+        tracker
             .request(&mut *pool.acquire().await.unwrap(), &block0.id)
             .await
             .unwrap();
@@ -303,13 +301,12 @@ mod tests {
         let pool = setup().await;
         let tracker = BlockTracker::lazy();
 
-        let requester = tracker.requester();
         let client0 = tracker.client(pool.clone());
         let client1 = tracker.client(pool.clone());
 
         let block = make_block();
 
-        requester
+        tracker
             .request(&mut pool.acquire().await.unwrap(), &block.id)
             .await
             .unwrap();
@@ -346,13 +343,12 @@ mod tests {
         let pool = setup().await;
         let tracker = BlockTracker::lazy();
 
-        let requester = tracker.requester();
         let client0 = tracker.client(pool.clone());
         let client1 = tracker.client(pool.clone());
 
         let block = make_block();
 
-        requester
+        tracker
             .request(&mut pool.acquire().await.unwrap(), &block.id)
             .await
             .unwrap();
@@ -395,7 +391,6 @@ mod tests {
         let pool = setup().await;
         let tracker = BlockTracker::lazy();
 
-        let requester = tracker.requester();
         let client0 = tracker.client(pool.clone());
         let client1 = tracker.client(pool.clone());
 
@@ -404,7 +399,7 @@ mod tests {
         client0.accept(&block.id).await.unwrap();
         client1.accept(&block.id).await.unwrap();
 
-        requester
+        tracker
             .request(&mut pool.acquire().await.unwrap(), &block.id)
             .await
             .unwrap();
@@ -419,7 +414,6 @@ mod tests {
         let pool = setup().await;
         let tracker = BlockTracker::lazy();
 
-        let requester = tracker.requester();
         let client0 = tracker.client(pool.clone());
         let client1 = tracker.client(pool.clone());
 
@@ -428,7 +422,7 @@ mod tests {
         client0.accept(&block.id).await.unwrap();
         client1.accept(&block.id).await.unwrap();
 
-        requester
+        tracker
             .request(&mut pool.acquire().await.unwrap(), &block.id)
             .await
             .unwrap();
@@ -446,7 +440,6 @@ mod tests {
         let pool = setup().await;
         let tracker = BlockTracker::lazy();
 
-        let requester = tracker.requester();
         let client0 = tracker.client(pool.clone());
         let client1 = tracker.client(pool.clone());
 
@@ -457,7 +450,7 @@ mod tests {
 
         client0.close().await.unwrap();
 
-        requester
+        tracker
             .request(&mut pool.acquire().await.unwrap(), &block.id)
             .await
             .unwrap();
@@ -509,9 +502,8 @@ mod tests {
         let num_clients = 10;
 
         let pool = setup().await;
-        let tracker = BlockTracker::lazy();
+        let tracker = BlockTracker::greedy();
 
-        let requester = tracker.requester();
         let clients: Vec<_> = (0..num_clients)
             .map(|_| tracker.client(pool.clone()))
             .collect();
@@ -521,11 +513,6 @@ mod tests {
         for client in &clients {
             client.accept(&block.id).await.unwrap();
         }
-
-        requester
-            .request(&mut pool.acquire().await.unwrap(), &block.id)
-            .await
-            .unwrap();
 
         // Make sure all clients stay alive until we are done so that any acquired requests are not
         // released prematurelly.
@@ -557,18 +544,13 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn untrack_received_block() {
         let pool = setup().await;
-        let tracker = BlockTracker::lazy();
+        let tracker = BlockTracker::greedy();
 
-        let requester = tracker.requester();
         let client = tracker.client(pool.clone());
 
         let block = make_block();
 
         client.accept(&block.id).await.unwrap();
-        requester
-            .request(&mut pool.acquire().await.unwrap(), &block.id)
-            .await
-            .unwrap();
 
         let nonce = rand::random();
         store::write(

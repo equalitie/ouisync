@@ -47,14 +47,22 @@ pub async fn init(conn: &mut db::Connection) -> Result<()> {
          CREATE INDEX IF NOT EXISTS index_block_requests_on_active
              ON block_requests (active);
 
-         -- Delete missing block when the block is no longer missing
+         -- Do not insert into missing_blocks if the block is not missing
+         CREATE TEMPORARY TRIGGER IF NOT EXISTS missing_blocks_ignore_insert_if_not_missing
+         BEFORE INSERT ON missing_blocks
+         WHEN EXISTS (SELECT 0 FROM blocks WHERE id = new.block_id)
+         BEGIN
+             SELECT RAISE (IGNORE);
+         END;
+
+         -- Delete from missing_block when the block is no longer missing
          CREATE TEMPORARY TRIGGER IF NOT EXISTS missing_blocks_delete_on_block_created
          AFTER INSERT ON blocks
          BEGIN
              DELETE FROM missing_blocks WHERE block_id = new.id;
          END;
 
-         -- Delete unrequested and unaccepted missing block
+         -- Delete unrequested and unaccepted missing_blocks rows
          CREATE TEMPORARY TRIGGER IF NOT EXISTS missing_blocks_delete_unrequested_and_unaccepted
          AFTER DELETE ON block_requests
          BEGIN
