@@ -136,6 +136,8 @@ async fn relay() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn transfer_large_file() {
+    // env_logger::init();
+
     let file_size = 4 * 1024 * 1024;
 
     let mut rng = StdRng::seed_from_u64(0);
@@ -155,7 +157,7 @@ async fn transfer_large_file() {
     drop(file);
 
     time::timeout(
-        Duration::from_secs(60),
+        Duration::from_secs(30),
         expect_file_content(&repo_b, "test.dat", &content),
     )
     .await

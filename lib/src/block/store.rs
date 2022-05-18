@@ -38,7 +38,8 @@ pub async fn init(conn: &mut db::Connection) -> Result<()> {
              client_id        INTEGER NOT NULL,
              accepted         INTEGER NOT NULL,
 
-             FOREIGN KEY(missing_block_id) REFERENCES missing_blocks(id) ON DELETE CASCADE
+             FOREIGN KEY(missing_block_id) REFERENCES missing_blocks(id) ON DELETE CASCADE,
+             UNIQUE(missing_block_id, client_id)
          );
 
          CREATE INDEX IF NOT EXISTS index_missing_block_offers_on_client_id

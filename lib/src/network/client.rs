@@ -55,7 +55,7 @@ impl Client {
         loop {
             select! {
                 result = self.block_tracker.accept() => {
-                    let block_id = result?;
+                    let block_id = result?.commit().await?;
                     self.send_queue.push_front(Request::Block(block_id));
                 }
                 response = self.rx.recv() => {

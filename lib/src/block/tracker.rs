@@ -102,7 +102,8 @@ impl BlockTrackerClient {
                  (SELECT id FROM missing_blocks WHERE block_id = ?),
                  ?,
                  0
-             );
+             )
+             ON CONFLICT (missing_block_id, client_id) DO NOTHING;
             ",
         )
         .bind(block_id)
@@ -137,10 +138,14 @@ impl BlockTrackerClient {
 
     /// Returns the next required and offered block request. If there is no such request at the
     /// moment this function is called, waits until one appears.
-    pub async fn accept(&self) -> Result<BlockId> {
+    ///
+    /// # Cancel safety
+    ///
+    /// This method is cancel safe. See `try_accept` for more details.
+    pub async fn accept(&self) -> Result<Accept> {
         loop {
-            if let Some(block_id) = self.try_accept().await? {
-                return Ok(block_id);
+            if let Some(accept) = self.try_accept().await? {
+                return Ok(accept);
             }
 
             self.notify.notified().await;
@@ -151,7 +156,24 @@ impl BlockTrackerClient {
     /// currently.
     /// Note this is still async because it accesses the db, but unlike `next`, the await time is
     /// bounded.
-    pub async fn try_accept(&self) -> Result<Option<BlockId>> {
+    ///
+    /// # Cancel safety
+    ///
+    /// This method is cancel safe (can be e.g. used as a branch in `select!`). However to actually
+    /// finalize the accept, one has to call `commit` on the returned handle which is *not* cancel
+    /// safe. The recommended usage is to call `try_accept` / `accept` as a branch in `select!` but
+    /// then call `commit` inside the branch:
+    ///
+    /// ```
+    /// select! {
+    ///     result = tracker.accept() => {
+    ///         let block_id = result?.commit().await?;
+    ///         // ...
+    ///     }
+    ///     _ = other_branch => { /* ... /* }
+    /// }
+    /// ```
+    pub async fn try_accept(&self) -> Result<Option<Accept>> {
         let mut conn = self.db_pool.acquire().await?;
 
         let row_id: Option<i64> = sqlx::query(
@@ -169,23 +191,20 @@ impl BlockTrackerClient {
         .fetch_optional(&mut *conn)
         .await?;
 
-        let row_id = if let Some(row_id) = row_id {
-            row_id
+        if let Some(row_id) = row_id {
+            Ok(Some(Accept { conn, row_id }))
         } else {
-            return Ok(None);
-        };
+            Ok(None)
+        }
+    }
 
-        let block_id = sqlx::query(
-            "UPDATE missing_block_offers SET accepted = 1
-             WHERE rowid = ?
-             RETURNING (SELECT block_id FROM missing_blocks WHERE id = missing_block_id)",
-        )
-        .bind(row_id)
-        .fetch_one(&mut *conn)
-        .await?
-        .get(0);
-
-        Ok(Some(block_id))
+    #[cfg(test)]
+    pub async fn try_accept_and_commit(&self) -> Result<Option<BlockId>> {
+        if let Some(accept) = self.try_accept().await? {
+            Ok(Some(accept.commit().await?))
+        } else {
+            Ok(None)
+        }
     }
 
     /// Close this client by canceling any accepted requests. Normally it's not necessary to call
@@ -204,6 +223,33 @@ impl Drop for BlockTrackerClient {
             self.notify.clone(),
             self.client_id,
         ));
+    }
+}
+
+/// Handle representing the first phase of accepting a block request. The second (and final) phase
+/// is triggered by calling `commit`. This split is anecessary to support cancel safety.
+pub(crate) struct Accept {
+    conn: db::PoolConnection,
+    row_id: i64,
+}
+
+impl Accept {
+    ///
+    /// # Cancel safety
+    ///
+    /// This method is *NOT* cancel safe.
+    pub async fn commit(mut self) -> Result<BlockId> {
+        let block_id = sqlx::query(
+            "UPDATE missing_block_offers SET accepted = 1
+             WHERE rowid = ?
+             RETURNING (SELECT block_id FROM missing_blocks WHERE id = missing_block_id)",
+        )
+        .bind(self.row_id)
+        .fetch_one(&mut *self.conn)
+        .await?
+        .get(0);
+
+        Ok(block_id)
     }
 }
 
@@ -263,7 +309,7 @@ mod tests {
         let client = tracker.client(pool.clone());
 
         // Initially no blocks are returned
-        assert_eq!(client.try_accept().await.unwrap(), None);
+        assert_eq!(client.try_accept_and_commit().await.unwrap(), None);
 
         // Required but not offered blocks are not returned
         let block0 = make_block();
@@ -271,19 +317,22 @@ mod tests {
             .require(&mut *pool.acquire().await.unwrap(), &block0.id)
             .await
             .unwrap();
-        assert_eq!(client.try_accept().await.unwrap(), None);
+        assert_eq!(client.try_accept_and_commit().await.unwrap(), None);
 
         // Offered but not required blocks are not returned
         let block1 = make_block();
         client.offer(&block1.id).await.unwrap();
-        assert_eq!(client.try_accept().await.unwrap(), None);
+        assert_eq!(client.try_accept_and_commit().await.unwrap(), None);
 
         // Required + offered blocks are returned...
         client.offer(&block0.id).await.unwrap();
-        assert_eq!(client.try_accept().await.unwrap(), Some(block0.id));
+        assert_eq!(
+            client.try_accept_and_commit().await.unwrap(),
+            Some(block0.id)
+        );
 
         // ...but only once.
-        assert_eq!(client.try_accept().await.unwrap(), None);
+        assert_eq!(client.try_accept_and_commit().await.unwrap(), None);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -294,15 +343,18 @@ mod tests {
         let client = tracker.client(pool.clone());
 
         // Initially no blocks are returned
-        assert_eq!(client.try_accept().await.unwrap(), None);
+        assert_eq!(client.try_accept_and_commit().await.unwrap(), None);
 
         // Offered blocks are returned...
         let block = make_block();
         client.offer(&block.id).await.unwrap();
-        assert_eq!(client.try_accept().await.unwrap(), Some(block.id));
+        assert_eq!(
+            client.try_accept_and_commit().await.unwrap(),
+            Some(block.id)
+        );
 
         // ...but only once.
-        assert_eq!(client.try_accept().await.unwrap(), None);
+        assert_eq!(client.try_accept_and_commit().await.unwrap(), None);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -324,8 +376,11 @@ mod tests {
 
         client0.cancel(&block.id).await.unwrap();
 
-        assert_eq!(client0.try_accept().await.unwrap(), None);
-        assert_eq!(client1.try_accept().await.unwrap(), Some(block.id));
+        assert_eq!(client0.try_accept_and_commit().await.unwrap(), None);
+        assert_eq!(
+            client1.try_accept_and_commit().await.unwrap(),
+            Some(block.id)
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -343,8 +398,11 @@ mod tests {
 
         client0.cancel(&block.id).await.unwrap();
 
-        assert_eq!(client0.try_accept().await.unwrap(), None);
-        assert_eq!(client1.try_accept().await.unwrap(), Some(block.id));
+        assert_eq!(client0.try_accept_and_commit().await.unwrap(), None);
+        assert_eq!(
+            client1.try_accept_and_commit().await.unwrap(),
+            Some(block.id)
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -364,13 +422,19 @@ mod tests {
         client0.offer(&block.id).await.unwrap();
         client1.offer(&block.id).await.unwrap();
 
-        assert_eq!(client0.try_accept().await.unwrap(), Some(block.id));
-        assert_eq!(client1.try_accept().await.unwrap(), None);
+        assert_eq!(
+            client0.try_accept_and_commit().await.unwrap(),
+            Some(block.id)
+        );
+        assert_eq!(client1.try_accept_and_commit().await.unwrap(), None);
 
         client0.cancel(&block.id).await.unwrap();
 
-        assert_eq!(client0.try_accept().await.unwrap(), None);
-        assert_eq!(client1.try_accept().await.unwrap(), Some(block.id));
+        assert_eq!(client0.try_accept_and_commit().await.unwrap(), None);
+        assert_eq!(
+            client1.try_accept_and_commit().await.unwrap(),
+            Some(block.id)
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -386,13 +450,19 @@ mod tests {
         client0.offer(&block.id).await.unwrap();
         client1.offer(&block.id).await.unwrap();
 
-        assert_eq!(client0.try_accept().await.unwrap(), Some(block.id));
-        assert_eq!(client1.try_accept().await.unwrap(), None);
+        assert_eq!(
+            client0.try_accept_and_commit().await.unwrap(),
+            Some(block.id)
+        );
+        assert_eq!(client1.try_accept_and_commit().await.unwrap(), None);
 
         client0.cancel(&block.id).await.unwrap();
 
-        assert_eq!(client0.try_accept().await.unwrap(), None);
-        assert_eq!(client1.try_accept().await.unwrap(), Some(block.id));
+        assert_eq!(client0.try_accept_and_commit().await.unwrap(), None);
+        assert_eq!(
+            client1.try_accept_and_commit().await.unwrap(),
+            Some(block.id)
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -415,7 +485,10 @@ mod tests {
 
         client0.close().await.unwrap();
 
-        assert_eq!(client1.try_accept().await.unwrap(), Some(block.id));
+        assert_eq!(
+            client1.try_accept_and_commit().await.unwrap(),
+            Some(block.id)
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -436,12 +509,18 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(client0.try_accept().await.unwrap(), Some(block.id));
-        assert_eq!(client1.try_accept().await.unwrap(), None);
+        assert_eq!(
+            client0.try_accept_and_commit().await.unwrap(),
+            Some(block.id)
+        );
+        assert_eq!(client1.try_accept_and_commit().await.unwrap(), None);
 
         client0.close().await.unwrap();
 
-        assert_eq!(client1.try_accept().await.unwrap(), Some(block.id));
+        assert_eq!(
+            client1.try_accept_and_commit().await.unwrap(),
+            Some(block.id)
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -464,7 +543,10 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(client1.try_accept().await.unwrap(), Some(block.id));
+        assert_eq!(
+            client1.try_accept_and_commit().await.unwrap(),
+            Some(block.id)
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -482,7 +564,10 @@ mod tests {
 
         client0.close().await.unwrap();
 
-        assert_eq!(client1.try_accept().await.unwrap(), Some(block.id));
+        assert_eq!(
+            client1.try_accept_and_commit().await.unwrap(),
+            Some(block.id)
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -498,12 +583,18 @@ mod tests {
         client0.offer(&block.id).await.unwrap();
         client1.offer(&block.id).await.unwrap();
 
-        assert_eq!(client0.try_accept().await.unwrap(), Some(block.id));
-        assert_eq!(client1.try_accept().await.unwrap(), None);
+        assert_eq!(
+            client0.try_accept_and_commit().await.unwrap(),
+            Some(block.id)
+        );
+        assert_eq!(client1.try_accept_and_commit().await.unwrap(), None);
 
         client0.close().await.unwrap();
 
-        assert_eq!(client1.try_accept().await.unwrap(), Some(block.id));
+        assert_eq!(
+            client1.try_accept_and_commit().await.unwrap(),
+            Some(block.id)
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -532,7 +623,7 @@ mod tests {
             task::spawn({
                 let barrier = barrier.clone();
                 async move {
-                    let result = client.try_accept().await;
+                    let result = client.try_accept_and_commit().await;
                     barrier.wait().await;
                     result
                 }
@@ -571,7 +662,7 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(client.try_accept().await.unwrap(), None);
+        assert_eq!(client.try_accept_and_commit().await.unwrap(), None);
     }
 
     #[proptest]
@@ -618,7 +709,7 @@ mod tests {
 
         let mut accepted_block_ids = HashSet::with_capacity(block_ids.len());
 
-        while let Some(block_id) = client.try_accept().await.unwrap() {
+        while let Some(block_id) = client.try_accept_and_commit().await.unwrap() {
             accepted_block_ids.insert(block_id);
         }
 

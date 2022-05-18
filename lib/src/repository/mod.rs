@@ -705,8 +705,8 @@ async fn report_sync_progress(store: Store) {
         if next_progress != prev_progress {
             prev_progress = next_progress;
             log::debug!(
-                "sync progress: {} MB ({:.1})",
-                prev_progress * BLOCK_SIZE as u64 / 1024 / 1024,
+                "sync progress: {} bytes ({:.1})",
+                prev_progress * BLOCK_SIZE as u64,
                 prev_progress.percent()
             );
         }
