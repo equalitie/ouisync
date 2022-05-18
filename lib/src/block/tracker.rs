@@ -42,18 +42,18 @@ impl BlockTracker {
             "`request` can be called only in lazy mode"
         );
 
-        // TODO: only insert if block not exists
         let query_result = sqlx::query(
             "INSERT INTO missing_blocks (block_id, requested)
              VALUES (?, 1)
-             ON CONFLICT (block_id) DO UPDATE SET requested = 1",
+             ON CONFLICT (block_id) DO UPDATE SET requested = 1 WHERE requested = 0",
         )
         .bind(block_id)
-        .execute(conn)
+        .execute(&mut *conn)
         .await?;
 
         if query_result.rows_affected() > 0 {
             self.notify.notify_waiters();
+        } else {
         }
 
         Ok(())
@@ -148,35 +148,36 @@ impl BlockTrackerClient {
     pub async fn try_next(&self) -> Result<Option<BlockId>> {
         let mut conn = self.db_pool.acquire().await?;
 
-        let row = sqlx::query(
-            "UPDATE block_requests SET active = 1
-             WHERE rowid = (
-                 SELECT rowid FROM block_requests
-                 WHERE client_id = ?
-                   AND missing_block_id IN
-                       (SELECT id FROM missing_blocks WHERE requested = 1)
-                   AND missing_block_id NOT IN
-                       (SELECT missing_block_id FROM block_requests WHERE active = 1)
-                 LIMIT 1
-             )
-             RETURNING missing_block_id
+        let row_id: Option<i64> = sqlx::query(
+            "SELECT rowid FROM block_requests
+             WHERE client_id = ?
+               AND missing_block_id IN
+                   (SELECT id FROM missing_blocks WHERE requested = 1)
+               AND missing_block_id NOT IN
+                   (SELECT missing_block_id FROM block_requests WHERE active = 1)
+             LIMIT 1
              ",
         )
         .bind(db::encode_u64(self.client_id))
+        .map(|row| row.get(0))
         .fetch_optional(&mut *conn)
         .await?;
 
-        let missing_block_id: i64 = if let Some(row) = row {
-            row.get(0)
+        let row_id = if let Some(row_id) = row_id {
+            row_id
         } else {
             return Ok(None);
         };
 
-        let block_id = sqlx::query("SELECT block_id FROM missing_blocks WHERE id = ?")
-            .bind(missing_block_id)
-            .fetch_one(&mut *conn)
-            .await?
-            .get(0);
+        let block_id = sqlx::query(
+            "UPDATE block_requests SET active = 1
+             WHERE rowid = ?
+             RETURNING (SELECT block_id FROM missing_blocks WHERE id = missing_block_id)",
+        )
+        .bind(row_id)
+        .fetch_one(&mut *conn)
+        .await?
+        .get(0);
 
         Ok(Some(block_id))
     }
