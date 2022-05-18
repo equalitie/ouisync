@@ -148,7 +148,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn remove_block() {
-        let mut conn = setup().await.acquire().await.unwrap().detach();
+        let mut conn = setup().await.acquire().await.unwrap();
 
         let read_key = SecretKey::random();
         let write_keys = Keypair::random();

@@ -53,13 +53,6 @@ pub type Connection = SqliteConnection;
 /// Pooled database connection
 pub(crate) type PoolConnection = DeadlockGuard<sqlx::pool::PoolConnection<Sqlite>>;
 
-#[cfg(test)]
-impl DeadlockGuard<sqlx::pool::PoolConnection<Sqlite>> {
-    pub fn detach(self) -> SqliteConnection {
-        self.into_inner().detach()
-    }
-}
-
 /// Database transaction
 pub type Transaction<'a> = sqlx::Transaction<'a, Sqlite>;
 

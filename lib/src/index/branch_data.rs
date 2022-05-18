@@ -463,19 +463,18 @@ mod tests {
             .is_some()
     }
 
-    async fn init_db() -> db::Connection {
+    async fn init_db() -> db::PoolConnection {
         let mut conn = db::open_or_create(&db::Store::Temporary)
             .await
             .unwrap()
             .acquire()
             .await
-            .unwrap()
-            .detach();
+            .unwrap();
         index::init(&mut conn).await.unwrap();
         conn
     }
 
-    async fn setup() -> (db::Connection, BranchData) {
+    async fn setup() -> (db::PoolConnection, BranchData) {
         let mut conn = init_db().await;
 
         let notify_tx = broadcast::Sender::new(1);

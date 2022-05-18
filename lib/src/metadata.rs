@@ -334,14 +334,13 @@ mod tests {
     use super::*;
     use crate::db;
 
-    async fn new_memory_db() -> db::Connection {
+    async fn new_memory_db() -> db::PoolConnection {
         let mut conn = db::open_or_create(&db::Store::Temporary)
             .await
             .unwrap()
             .acquire()
             .await
-            .unwrap()
-            .detach();
+            .unwrap();
         init(&mut conn).await.unwrap();
         conn
     }

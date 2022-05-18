@@ -275,14 +275,13 @@ mod tests {
         write(&mut conn, &id, &content0, &nonce).await.unwrap();
     }
 
-    async fn setup() -> db::Connection {
+    async fn setup() -> db::PoolConnection {
         let mut conn = db::open_or_create(&db::Store::Temporary)
             .await
             .unwrap()
             .acquire()
             .await
-            .unwrap()
-            .detach();
+            .unwrap();
         init(&mut conn).await.unwrap();
         conn
     }
