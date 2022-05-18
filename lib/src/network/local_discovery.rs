@@ -11,19 +11,21 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use tokio::{net::UdpSocket, task, time::sleep};
+use tokio::{net::UdpSocket, sync::Mutex, task, time::sleep};
 
 // Selected at random but to not clash with some reserved ones:
 // https://www.iana.org/assignments/multicast-addresses/multicast-addresses.xhtml
 const MULTICAST_ADDR: Ipv4Addr = Ipv4Addr::new(224, 0, 0, 137);
 const MULTICAST_PORT: u16 = 9271;
+// Time to wait when an error occurs on a socket.
+const ERROR_DELAY: Duration = Duration::from_secs(3);
 
 // Poor man's local discovery using UDP multicast.
 // XXX: We should probably use mDNS, but so far all libraries I tried had some issues.
 pub(super) struct LocalDiscovery {
     id: RuntimeId,
     listener_port: u16,
-    socket: Arc<UdpSocket>,
+    socket_provider: Arc<SocketProvider>,
     beacon_requests_received: MonitoredValue<u64>,
     beacon_responses_received: MonitoredValue<u64>,
     _beacon_handle: ScopedJoinHandle<()>,
@@ -35,19 +37,23 @@ impl LocalDiscovery {
     /// `LocalDiscovery` should call `forget` with the `RuntimeId` and the replica shall start
     /// reporting it again.
     pub fn new(id: RuntimeId, listener_port: u16, monitor: Arc<StateMonitor>) -> io::Result<Self> {
-        let socket = create_multicast_socket()?;
-        let socket = Arc::new(socket);
+        let socket_provider = Arc::new(SocketProvider::new());
 
-        let beacon_requests_received = monitor.make_value("beacon-requests-received".into(), 0);
-        let beacon_responses_received = monitor.make_value("beacon-responses-received".into(), 0);
+        let beacon_requests_received = monitor.make_value("beacon_requests_received".into(), 0);
+        let beacon_responses_received = monitor.make_value("beacon_responses_received".into(), 0);
 
-        let beacon_handle = task::spawn(run_beacon(socket.clone(), id, listener_port, monitor));
+        let beacon_handle = task::spawn(run_beacon(
+            socket_provider.clone(),
+            id,
+            listener_port,
+            monitor,
+        ));
         let beacon_handle = ScopedJoinHandle(beacon_handle);
 
         Ok(Self {
             id,
             listener_port,
-            socket,
+            socket_provider,
             beacon_requests_received,
             beacon_responses_received,
             _beacon_handle: beacon_handle,
@@ -57,12 +63,24 @@ impl LocalDiscovery {
     pub async fn recv(&self) -> Option<SocketAddr> {
         let mut recv_buffer = [0; 64];
 
-        let (port, is_request, addr) = loop {
-            let (size, addr) = match self.socket.recv_from(&mut recv_buffer).await {
-                Ok(pair) => pair,
+        let mut recv_error_reported = false;
+
+        let (socket, port, is_request, addr) = loop {
+            let socket = self.socket_provider.provide().await;
+
+            let (size, addr) = match socket.recv_from(&mut recv_buffer).await {
+                Ok(pair) => {
+                    recv_error_reported = false;
+                    pair
+                }
                 Err(error) => {
-                    log::error!("Failed to receive discovery message: {}", error);
-                    return None;
+                    if !recv_error_reported {
+                        recv_error_reported = true;
+                        log::error!("Failed to receive discovery message: {}", error);
+                    }
+                    self.socket_provider.mark_bad(socket).await;
+                    sleep(ERROR_DELAY).await;
+                    continue;
                 }
             };
 
@@ -78,26 +96,23 @@ impl LocalDiscovery {
                 Message::ImHereYouAll { id, .. } | Message::Reply { id, .. } if id == self.id => {
                     continue
                 }
-                Message::ImHereYouAll { port, .. } => break (port, true, addr),
-                Message::Reply { port, .. } => break (port, false, addr),
+                Message::ImHereYouAll { port, .. } => break (socket, port, true, addr),
+                Message::Reply { port, .. } => break (socket, port, false, addr),
             }
         };
 
         if is_request {
             *self.beacon_requests_received.get() += 1;
 
+            let msg = Message::Reply {
+                port: self.listener_port,
+                id: self.id,
+            };
+
             // TODO: Consider `spawn`ing this, so it doesn't block this function.
-            if let Err(error) = send(
-                &self.socket,
-                &Message::Reply {
-                    port: self.listener_port,
-                    id: self.id,
-                },
-                addr,
-            )
-            .await
-            {
+            if let Err(error) = send(&socket, &msg, addr).await {
                 log::error!("Failed to send discovery message: {}", error);
+                self.socket_provider.mark_bad(socket).await;
             }
         } else {
             *self.beacon_responses_received.get() += 1;
@@ -132,30 +147,39 @@ fn create_multicast_socket() -> io::Result<tokio::net::UdpSocket> {
 }
 
 async fn run_beacon(
-    socket: Arc<UdpSocket>,
+    socket_provider: Arc<SocketProvider>,
     id: RuntimeId,
     listener_port: u16,
     monitor: Arc<StateMonitor>,
 ) {
     let multicast_endpoint = SocketAddr::new(MULTICAST_ADDR.into(), MULTICAST_PORT);
-    let beacons_sent = monitor.make_value::<u64>("beacons-sent".into(), 0);
+    let beacons_sent = monitor.make_value::<u64>("beacons_sent".into(), 0);
+
+    let mut error_shown = false;
 
     loop {
-        if let Err(error) = send(
-            &socket,
-            &Message::ImHereYouAll {
-                id,
-                port: listener_port,
-            },
-            multicast_endpoint,
-        )
-        .await
-        {
-            log::error!("Failed to send discovery message: {}", error);
-            break;
-        }
+        let socket = socket_provider.provide().await;
 
-        *beacons_sent.get() += 1;
+        let msg = Message::ImHereYouAll {
+            id,
+            port: listener_port,
+        };
+
+        match send(&socket, &msg, multicast_endpoint).await {
+            Ok(()) => {
+                error_shown = false;
+                *beacons_sent.get() += 1;
+            }
+            Err(error) => {
+                if !error_shown {
+                    error_shown = true;
+                    log::error!("Failed to send discovery message: {}", error);
+                }
+                socket_provider.mark_bad(socket).await;
+                sleep(ERROR_DELAY).await;
+                continue;
+            }
+        }
 
         let delay = rand::thread_rng().gen_range(2..8);
         sleep(Duration::from_secs(delay)).await;
@@ -172,4 +196,45 @@ async fn send(socket: &UdpSocket, message: &Message, addr: SocketAddr) -> io::Re
 enum Message {
     ImHereYouAll { id: RuntimeId, port: u16 },
     Reply { id: RuntimeId, port: u16 },
+}
+
+struct SocketProvider {
+    socket: Mutex<Option<Arc<UdpSocket>>>,
+}
+
+impl SocketProvider {
+    fn new() -> Self {
+        Self {
+            socket: Mutex::new(None),
+        }
+    }
+
+    async fn provide(&self) -> Arc<UdpSocket> {
+        let mut guard = self.socket.lock().await;
+
+        match &*guard {
+            Some(socket) => socket.clone(),
+            None => {
+                let socket = loop {
+                    match create_multicast_socket() {
+                        Ok(socket) => break Arc::new(socket),
+                        Err(_) => sleep(ERROR_DELAY).await,
+                    }
+                };
+
+                *guard = Some(socket.clone());
+                socket
+            }
+        }
+    }
+
+    async fn mark_bad(&self, bad_socket: Arc<UdpSocket>) {
+        let mut guard = self.socket.lock().await;
+
+        if let Some(stored_socket) = &*guard {
+            if Arc::ptr_eq(&stored_socket, &bad_socket) {
+                *guard = None;
+            }
+        }
+    }
 }
