@@ -136,8 +136,6 @@ async fn relay() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn transfer_large_file() {
-    // env_logger::init();
-
     let file_size = 4 * 1024 * 1024;
 
     let mut rng = StdRng::seed_from_u64(0);

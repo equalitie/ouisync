@@ -248,9 +248,11 @@ mod tests {
         super::{store, BlockData, BLOCK_SIZE},
         *,
     };
-    use crate::repository;
+    use crate::{repository, test_utils};
     use futures_util::future;
-    use rand::Rng;
+    use rand::{distributions::Standard, rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
+    use std::collections::HashSet;
+    use test_strategy::proptest;
     use tokio::sync::Barrier;
 
     #[tokio::test(flavor = "multi_thread")]
@@ -570,6 +572,61 @@ mod tests {
         .unwrap();
 
         assert_eq!(client.try_accept().await.unwrap(), None);
+    }
+
+    #[proptest]
+    fn stress(
+        #[strategy(1usize..100)] num_blocks: usize,
+        #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
+    ) {
+        test_utils::run(stress_case(num_blocks, rng_seed))
+    }
+
+    async fn stress_case(num_blocks: usize, rng_seed: u64) {
+        let mut rng = StdRng::seed_from_u64(rng_seed);
+
+        let pool = setup().await;
+        let tracker = BlockTracker::lazy();
+
+        let client = tracker.client(pool.clone());
+
+        let block_ids: Vec<BlockId> = (&mut rng).sample_iter(Standard).take(num_blocks).collect();
+
+        enum Op {
+            Require,
+            Offer,
+        }
+
+        let mut ops: Vec<_> = block_ids
+            .iter()
+            .map(|block_id| (Op::Require, block_id))
+            .chain(block_ids.iter().map(|block_id| (Op::Offer, block_id)))
+            .collect();
+        ops.shuffle(&mut rng);
+
+        for (op, block_id) in ops {
+            match op {
+                Op::Require => {
+                    let mut conn = pool.acquire().await.unwrap();
+                    tracker.require(&mut conn, block_id).await.unwrap();
+                }
+                Op::Offer => {
+                    client.offer(block_id).await.unwrap();
+                }
+            }
+        }
+
+        let mut accepted_block_ids = HashSet::with_capacity(block_ids.len());
+
+        while let Some(block_id) = client.try_accept().await.unwrap() {
+            accepted_block_ids.insert(block_id);
+        }
+
+        assert_eq!(accepted_block_ids.len(), block_ids.len());
+
+        for block_id in &block_ids {
+            assert!(accepted_block_ids.contains(block_id));
+        }
     }
 
     // TODO: test that required and offered blocks are no longer returned when not
