@@ -60,15 +60,10 @@ impl PortForwarder {
             }
         });
 
-        Self {
-            _task: task,
-        }
+        Self { _task: task }
     }
 
-    async fn run(
-        mappings: Vec<Mapping>,
-        monitor: Arc<StateMonitor>,
-    ) -> Result<(), rupnp::Error> {
+    async fn run(mappings: Vec<Mapping>, monitor: Arc<StateMonitor>) -> Result<(), rupnp::Error> {
         // Devices may have a timeout period when they don't respond to repeated queries, the
         // DISCOVERY_RUDATION constant should be higher than that. The rupnp project internally
         // assumes this duration is three seconds.
@@ -96,22 +91,23 @@ impl PortForwarder {
         loop {
             *lookup_counter.get() += 1;
 
-            let mut device_urls = match discover_device_urls(&SearchTarget::RootDevice, DISCOVERY_DURATION).await {
-                Ok(device_urls) => {
-                    error_logged = false;
-                    Box::pin(device_urls)
-                },
-                Err(e) => {
-                    // This happens e.g. when a device has no connection to the internet. Let's log
-                    // the information but keep looping for when we get back online.
-                    if !error_logged {
-                        log::debug!("Error discovering device URLs: {:?}", e);
-                        error_logged = true;
+            let mut device_urls =
+                match discover_device_urls(&SearchTarget::RootDevice, DISCOVERY_DURATION).await {
+                    Ok(device_urls) => {
+                        error_logged = false;
+                        Box::pin(device_urls)
                     }
-                    sleep(ERROR_SLEEP_DURATION).await;
-                    continue;
-                }
-            };
+                    Err(e) => {
+                        // This happens e.g. when a device has no connection to the internet. Let's log
+                        // the information but keep looping for when we get back online.
+                        if !error_logged {
+                            log::debug!("Error discovering device URLs: {:?}", e);
+                            error_logged = true;
+                        }
+                        sleep(ERROR_SLEEP_DURATION).await;
+                        continue;
+                    }
+                };
 
             // NOTE: don't use `try_next().await?` here from the TryStreamExt interface as that
             // will quit on the first device that fails to respond. Whereas what we want is to just
