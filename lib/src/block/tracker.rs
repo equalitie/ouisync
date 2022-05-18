@@ -31,21 +31,21 @@ impl BlockTracker {
         }
     }
 
-    /// Request a block with the given id.
+    /// Mark the block with the given id as required.
     ///
     /// # Panics
     ///
     /// Panics if this tracker is in greedy mode.
-    pub async fn request(&self, conn: &mut db::Connection, block_id: &BlockId) -> Result<()> {
+    pub async fn require(&self, conn: &mut db::Connection, block_id: &BlockId) -> Result<()> {
         assert!(
             matches!(self.mode, Mode::Lazy),
-            "`request` can be called only in lazy mode"
+            "`require` can be called only in lazy mode"
         );
 
         let query_result = sqlx::query(
-            "INSERT INTO missing_blocks (block_id, requested)
+            "INSERT INTO missing_blocks (block_id, required)
              VALUES (?, 1)
-             ON CONFLICT (block_id) DO UPDATE SET requested = 1 WHERE requested = 0",
+             ON CONFLICT (block_id) DO UPDATE SET required = 1 WHERE required = 0",
         )
         .bind(block_id)
         .execute(&mut *conn)
@@ -56,6 +56,12 @@ impl BlockTracker {
         } else {
         }
 
+        Ok(())
+    }
+
+    /// Mark the block request as successfuly completed.
+    pub async fn complete(&self, _block_id: &BlockId) -> Result<()> {
+        // This is handled by db triggers so there is nothing else to do.
         Ok(())
     }
 
@@ -77,21 +83,21 @@ pub(crate) struct BlockTrackerClient {
 }
 
 impl BlockTrackerClient {
-    /// Accept a (existing or future) request for a block.
-    pub async fn accept(&self, block_id: &BlockId) -> Result<()> {
+    /// Offer to request the given block if it is, or will become, required.
+    pub async fn offer(&self, block_id: &BlockId) -> Result<()> {
         let mut conn = self.db_pool.acquire().await?;
 
-        let requested = match self.mode {
+        let required = match self.mode {
             Mode::Greedy => true,
             Mode::Lazy => false,
         };
 
         sqlx::query(
-            "INSERT INTO missing_blocks (block_id, requested)
+            "INSERT INTO missing_blocks (block_id, required)
              VALUES (?, ?)
-             ON CONFLICT (block_id) DO UPDATE SET requested = ? WHERE requested = 0;
+             ON CONFLICT (block_id) DO UPDATE SET required = ? WHERE required = 0;
 
-             INSERT INTO block_requests (missing_block_id, client_id, active)
+             INSERT INTO missing_block_offers (missing_block_id, client_id, accepted)
              VALUES (
                  (SELECT id FROM missing_blocks WHERE block_id = ?),
                  ?,
@@ -100,8 +106,8 @@ impl BlockTrackerClient {
             ",
         )
         .bind(block_id)
-        .bind(requested)
-        .bind(requested)
+        .bind(required)
+        .bind(required)
         .bind(block_id)
         .bind(db::encode_u64(self.client_id))
         .execute(&mut *conn)
@@ -110,13 +116,12 @@ impl BlockTrackerClient {
         Ok(())
     }
 
-    /// Reject a previously accepted block request. Call this after receiving a failed block
-    /// response.
-    pub async fn reject(&self, block_id: &BlockId) -> Result<()> {
+    /// Cancel a previously accepted request so it can be attempted by another client.
+    pub async fn cancel(&self, block_id: &BlockId) -> Result<()> {
         let mut conn = self.db_pool.acquire().await?;
 
         sqlx::query(
-            "DELETE FROM block_requests
+            "DELETE FROM missing_block_offers
              WHERE client_id = ?
                AND missing_block_id = (SELECT id FROM missing_blocks WHERE block_id = ?)",
         )
@@ -130,11 +135,11 @@ impl BlockTrackerClient {
         Ok(())
     }
 
-    /// Returns the next requested and accepted block. If there is no such block at the moment this
-    /// function is called, waits until one appears.
-    pub async fn next(&self) -> Result<BlockId> {
+    /// Returns the next required and offered block request. If there is no such request at the
+    /// moment this function is called, waits until one appears.
+    pub async fn accept(&self) -> Result<BlockId> {
         loop {
-            if let Some(block_id) = self.try_next().await? {
+            if let Some(block_id) = self.try_accept().await? {
                 return Ok(block_id);
             }
 
@@ -142,19 +147,20 @@ impl BlockTrackerClient {
         }
     }
 
-    /// Returns the next requested and accepted block or `None` if there is no such block currently.
+    /// Returns the next required and offered block request or `None` if there is no such request
+    /// currently.
     /// Note this is still async because it accesses the db, but unlike `next`, the await time is
     /// bounded.
-    pub async fn try_next(&self) -> Result<Option<BlockId>> {
+    pub async fn try_accept(&self) -> Result<Option<BlockId>> {
         let mut conn = self.db_pool.acquire().await?;
 
         let row_id: Option<i64> = sqlx::query(
-            "SELECT rowid FROM block_requests
+            "SELECT rowid FROM missing_block_offers
              WHERE client_id = ?
                AND missing_block_id IN
-                   (SELECT id FROM missing_blocks WHERE requested = 1)
+                   (SELECT id FROM missing_blocks WHERE required = 1)
                AND missing_block_id NOT IN
-                   (SELECT missing_block_id FROM block_requests WHERE active = 1)
+                   (SELECT missing_block_id FROM missing_block_offers WHERE accepted = 1)
              LIMIT 1
              ",
         )
@@ -170,7 +176,7 @@ impl BlockTrackerClient {
         };
 
         let block_id = sqlx::query(
-            "UPDATE block_requests SET active = 1
+            "UPDATE missing_block_offers SET accepted = 1
              WHERE rowid = ?
              RETURNING (SELECT block_id FROM missing_blocks WHERE id = missing_block_id)",
         )
@@ -182,7 +188,7 @@ impl BlockTrackerClient {
         Ok(Some(block_id))
     }
 
-    /// Close this client by rejecting any accepted requests. Normally it's not necessary to call
+    /// Close this client by canceling any accepted requests. Normally it's not necessary to call
     /// this as the cleanup happens automatically on drop. It's still useful if one wants to make
     /// sure the cleanup fully completed or to check its result (mostly in tests).
     #[cfg(test)]
@@ -213,7 +219,7 @@ async fn close_client(db_pool: db::Pool, notify: Arc<Notify>, client_id: u64) {
 
 async fn try_close_client(db_pool: &db::Pool, notify: &Notify, client_id: u64) -> Result<()> {
     let mut conn = db_pool.acquire().await?;
-    sqlx::query("DELETE FROM block_requests WHERE client_id = ?")
+    sqlx::query("DELETE FROM missing_block_offers WHERE client_id = ?")
         .bind(db::encode_u64(client_id))
         .execute(&mut *conn)
         .await?;
@@ -255,27 +261,27 @@ mod tests {
         let client = tracker.client(pool.clone());
 
         // Initially no blocks are returned
-        assert_eq!(client.try_next().await.unwrap(), None);
+        assert_eq!(client.try_accept().await.unwrap(), None);
 
-        // Requested but not accepted blocks are not returned
+        // Required but not offered blocks are not returned
         let block0 = make_block();
         tracker
-            .request(&mut *pool.acquire().await.unwrap(), &block0.id)
+            .require(&mut *pool.acquire().await.unwrap(), &block0.id)
             .await
             .unwrap();
-        assert_eq!(client.try_next().await.unwrap(), None);
+        assert_eq!(client.try_accept().await.unwrap(), None);
 
-        // Accepted but not requested blocks are not returned
+        // Offered but not required blocks are not returned
         let block1 = make_block();
-        client.accept(&block1.id).await.unwrap();
-        assert_eq!(client.try_next().await.unwrap(), None);
+        client.offer(&block1.id).await.unwrap();
+        assert_eq!(client.try_accept().await.unwrap(), None);
 
-        // Requested + accepted blocks are returned...
-        client.accept(&block0.id).await.unwrap();
-        assert_eq!(client.try_next().await.unwrap(), Some(block0.id));
+        // Required + offered blocks are returned...
+        client.offer(&block0.id).await.unwrap();
+        assert_eq!(client.try_accept().await.unwrap(), Some(block0.id));
 
         // ...but only once.
-        assert_eq!(client.try_next().await.unwrap(), None);
+        assert_eq!(client.try_accept().await.unwrap(), None);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -286,19 +292,19 @@ mod tests {
         let client = tracker.client(pool.clone());
 
         // Initially no blocks are returned
-        assert_eq!(client.try_next().await.unwrap(), None);
+        assert_eq!(client.try_accept().await.unwrap(), None);
 
-        // Accepted blocks are returned...
+        // Offered blocks are returned...
         let block = make_block();
-        client.accept(&block.id).await.unwrap();
-        assert_eq!(client.try_next().await.unwrap(), Some(block.id));
+        client.offer(&block.id).await.unwrap();
+        assert_eq!(client.try_accept().await.unwrap(), Some(block.id));
 
         // ...but only once.
-        assert_eq!(client.try_next().await.unwrap(), None);
+        assert_eq!(client.try_accept().await.unwrap(), None);
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn lazy_fallback_on_reject_before_next() {
+    async fn lazy_fallback_on_cancel_before_next() {
         let pool = setup().await;
         let tracker = BlockTracker::lazy();
 
@@ -308,20 +314,20 @@ mod tests {
         let block = make_block();
 
         tracker
-            .request(&mut pool.acquire().await.unwrap(), &block.id)
+            .require(&mut pool.acquire().await.unwrap(), &block.id)
             .await
             .unwrap();
-        client0.accept(&block.id).await.unwrap();
-        client1.accept(&block.id).await.unwrap();
+        client0.offer(&block.id).await.unwrap();
+        client1.offer(&block.id).await.unwrap();
 
-        client0.reject(&block.id).await.unwrap();
+        client0.cancel(&block.id).await.unwrap();
 
-        assert_eq!(client0.try_next().await.unwrap(), None);
-        assert_eq!(client1.try_next().await.unwrap(), Some(block.id));
+        assert_eq!(client0.try_accept().await.unwrap(), None);
+        assert_eq!(client1.try_accept().await.unwrap(), Some(block.id));
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn greedy_fallback_on_reject_before_next() {
+    async fn greedy_fallback_on_cancel_before_next() {
         let pool = setup().await;
         let tracker = BlockTracker::greedy();
 
@@ -330,17 +336,17 @@ mod tests {
 
         let block = make_block();
 
-        client0.accept(&block.id).await.unwrap();
-        client1.accept(&block.id).await.unwrap();
+        client0.offer(&block.id).await.unwrap();
+        client1.offer(&block.id).await.unwrap();
 
-        client0.reject(&block.id).await.unwrap();
+        client0.cancel(&block.id).await.unwrap();
 
-        assert_eq!(client0.try_next().await.unwrap(), None);
-        assert_eq!(client1.try_next().await.unwrap(), Some(block.id));
+        assert_eq!(client0.try_accept().await.unwrap(), None);
+        assert_eq!(client1.try_accept().await.unwrap(), Some(block.id));
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn lazy_fallback_on_reject_after_next() {
+    async fn lazy_fallback_on_cancel_after_next() {
         let pool = setup().await;
         let tracker = BlockTracker::lazy();
 
@@ -350,23 +356,23 @@ mod tests {
         let block = make_block();
 
         tracker
-            .request(&mut pool.acquire().await.unwrap(), &block.id)
+            .require(&mut pool.acquire().await.unwrap(), &block.id)
             .await
             .unwrap();
-        client0.accept(&block.id).await.unwrap();
-        client1.accept(&block.id).await.unwrap();
+        client0.offer(&block.id).await.unwrap();
+        client1.offer(&block.id).await.unwrap();
 
-        assert_eq!(client0.try_next().await.unwrap(), Some(block.id));
-        assert_eq!(client1.try_next().await.unwrap(), None);
+        assert_eq!(client0.try_accept().await.unwrap(), Some(block.id));
+        assert_eq!(client1.try_accept().await.unwrap(), None);
 
-        client0.reject(&block.id).await.unwrap();
+        client0.cancel(&block.id).await.unwrap();
 
-        assert_eq!(client0.try_next().await.unwrap(), None);
-        assert_eq!(client1.try_next().await.unwrap(), Some(block.id));
+        assert_eq!(client0.try_accept().await.unwrap(), None);
+        assert_eq!(client1.try_accept().await.unwrap(), Some(block.id));
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn greedy_fallback_on_reject_after_next() {
+    async fn greedy_fallback_on_cancel_after_next() {
         let pool = setup().await;
         let tracker = BlockTracker::greedy();
 
@@ -375,20 +381,20 @@ mod tests {
 
         let block = make_block();
 
-        client0.accept(&block.id).await.unwrap();
-        client1.accept(&block.id).await.unwrap();
+        client0.offer(&block.id).await.unwrap();
+        client1.offer(&block.id).await.unwrap();
 
-        assert_eq!(client0.try_next().await.unwrap(), Some(block.id));
-        assert_eq!(client1.try_next().await.unwrap(), None);
+        assert_eq!(client0.try_accept().await.unwrap(), Some(block.id));
+        assert_eq!(client1.try_accept().await.unwrap(), None);
 
-        client0.reject(&block.id).await.unwrap();
+        client0.cancel(&block.id).await.unwrap();
 
-        assert_eq!(client0.try_next().await.unwrap(), None);
-        assert_eq!(client1.try_next().await.unwrap(), Some(block.id));
+        assert_eq!(client0.try_accept().await.unwrap(), None);
+        assert_eq!(client1.try_accept().await.unwrap(), Some(block.id));
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn lazy_fallback_on_client_close_after_request_before_next() {
+    async fn lazy_fallback_on_client_close_after_require_before_next() {
         let pool = setup().await;
         let tracker = BlockTracker::lazy();
 
@@ -397,21 +403,21 @@ mod tests {
 
         let block = make_block();
 
-        client0.accept(&block.id).await.unwrap();
-        client1.accept(&block.id).await.unwrap();
+        client0.offer(&block.id).await.unwrap();
+        client1.offer(&block.id).await.unwrap();
 
         tracker
-            .request(&mut pool.acquire().await.unwrap(), &block.id)
+            .require(&mut pool.acquire().await.unwrap(), &block.id)
             .await
             .unwrap();
 
         client0.close().await.unwrap();
 
-        assert_eq!(client1.try_next().await.unwrap(), Some(block.id));
+        assert_eq!(client1.try_accept().await.unwrap(), Some(block.id));
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn lazy_fallback_on_client_close_after_request_after_next() {
+    async fn lazy_fallback_on_client_close_after_require_after_next() {
         let pool = setup().await;
         let tracker = BlockTracker::lazy();
 
@@ -420,20 +426,20 @@ mod tests {
 
         let block = make_block();
 
-        client0.accept(&block.id).await.unwrap();
-        client1.accept(&block.id).await.unwrap();
+        client0.offer(&block.id).await.unwrap();
+        client1.offer(&block.id).await.unwrap();
 
         tracker
-            .request(&mut pool.acquire().await.unwrap(), &block.id)
+            .require(&mut pool.acquire().await.unwrap(), &block.id)
             .await
             .unwrap();
 
-        assert_eq!(client0.try_next().await.unwrap(), Some(block.id));
-        assert_eq!(client1.try_next().await.unwrap(), None);
+        assert_eq!(client0.try_accept().await.unwrap(), Some(block.id));
+        assert_eq!(client1.try_accept().await.unwrap(), None);
 
         client0.close().await.unwrap();
 
-        assert_eq!(client1.try_next().await.unwrap(), Some(block.id));
+        assert_eq!(client1.try_accept().await.unwrap(), Some(block.id));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -446,17 +452,17 @@ mod tests {
 
         let block = make_block();
 
-        client0.accept(&block.id).await.unwrap();
-        client1.accept(&block.id).await.unwrap();
+        client0.offer(&block.id).await.unwrap();
+        client1.offer(&block.id).await.unwrap();
 
         client0.close().await.unwrap();
 
         tracker
-            .request(&mut pool.acquire().await.unwrap(), &block.id)
+            .require(&mut pool.acquire().await.unwrap(), &block.id)
             .await
             .unwrap();
 
-        assert_eq!(client1.try_next().await.unwrap(), Some(block.id));
+        assert_eq!(client1.try_accept().await.unwrap(), Some(block.id));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -469,12 +475,12 @@ mod tests {
 
         let block = make_block();
 
-        client0.accept(&block.id).await.unwrap();
-        client1.accept(&block.id).await.unwrap();
+        client0.offer(&block.id).await.unwrap();
+        client1.offer(&block.id).await.unwrap();
 
         client0.close().await.unwrap();
 
-        assert_eq!(client1.try_next().await.unwrap(), Some(block.id));
+        assert_eq!(client1.try_accept().await.unwrap(), Some(block.id));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -487,15 +493,15 @@ mod tests {
 
         let block = make_block();
 
-        client0.accept(&block.id).await.unwrap();
-        client1.accept(&block.id).await.unwrap();
+        client0.offer(&block.id).await.unwrap();
+        client1.offer(&block.id).await.unwrap();
 
-        assert_eq!(client0.try_next().await.unwrap(), Some(block.id));
-        assert_eq!(client1.try_next().await.unwrap(), None);
+        assert_eq!(client0.try_accept().await.unwrap(), Some(block.id));
+        assert_eq!(client1.try_accept().await.unwrap(), None);
 
         client0.close().await.unwrap();
 
-        assert_eq!(client1.try_next().await.unwrap(), Some(block.id));
+        assert_eq!(client1.try_accept().await.unwrap(), Some(block.id));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -512,7 +518,7 @@ mod tests {
         let block = make_block();
 
         for client in &clients {
-            client.accept(&block.id).await.unwrap();
+            client.offer(&block.id).await.unwrap();
         }
 
         // Make sure all clients stay alive until we are done so that any acquired requests are not
@@ -524,7 +530,7 @@ mod tests {
             task::spawn({
                 let barrier = barrier.clone();
                 async move {
-                    let result = client.try_next().await;
+                    let result = client.try_accept().await;
                     barrier.wait().await;
                     result
                 }
@@ -551,7 +557,7 @@ mod tests {
 
         let block = make_block();
 
-        client.accept(&block.id).await.unwrap();
+        client.offer(&block.id).await.unwrap();
 
         let nonce = rand::random();
         store::write(
@@ -563,10 +569,10 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(client.try_next().await.unwrap(), None);
+        assert_eq!(client.try_accept().await.unwrap(), None);
     }
 
-    // TODO: test that requested and accepted blocks are no longer returned when not
+    // TODO: test that required and offered blocks are no longer returned when not
     // referenced
 
     async fn setup() -> db::Pool {

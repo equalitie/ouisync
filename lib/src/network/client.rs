@@ -54,7 +54,7 @@ impl Client {
     pub async fn run(&mut self) -> Result<()> {
         loop {
             select! {
-                result = self.block_tracker.next() => {
+                result = self.block_tracker.accept() => {
                     let block_id = result?;
                     self.send_queue.push_front(Request::Block(block_id));
                 }
@@ -113,7 +113,7 @@ impl Client {
                 self.recv_queue.push_front(response);
             }
             ProcessedResponse::Failure(Failure::Block(block_id)) => {
-                self.block_tracker.reject(&block_id).await?;
+                self.block_tracker.cancel(&block_id).await?;
             }
             ProcessedResponse::Failure(Failure::ChildNodes(_)) => (),
         }
@@ -213,7 +213,7 @@ impl Client {
         let updated = self.store.index.receive_leaf_nodes(nodes).await?;
 
         for block_id in updated {
-            self.block_tracker.accept(&block_id).await?;
+            self.block_tracker.offer(&block_id).await?;
         }
 
         Ok(())

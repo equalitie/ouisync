@@ -42,7 +42,7 @@ impl BlockRequester {
             match branch.open_root().await {
                 Ok(dir) => versions.push(dir),
                 Err(Error::BlockNotFound(block_id)) => {
-                    self.request_missing_block(&block_id).await?;
+                    self.require_block(&block_id).await?;
                     continue;
                 }
                 Err(error) => return Err(error),
@@ -78,7 +78,7 @@ impl BlockRequester {
         }
 
         for entry in entries {
-            self.request_missing_blocks(entry).await?;
+            self.require_blocks(entry).await?;
         }
 
         for dir in subdirs {
@@ -88,24 +88,24 @@ impl BlockRequester {
         Ok(())
     }
 
-    async fn request_missing_block(&self, id: &BlockId) -> Result<()> {
+    async fn require_block(&self, id: &BlockId) -> Result<()> {
         let mut conn = self.shared.store.db_pool().acquire().await?;
         self.shared
             .store
             .block_tracker
-            .request(&mut conn, id)
+            .require(&mut conn, id)
             .await?;
         Ok(())
     }
 
-    async fn request_missing_blocks(&self, mut ids: BlockIds) -> Result<()> {
+    async fn require_blocks(&self, mut ids: BlockIds) -> Result<()> {
         let mut conn = self.shared.store.db_pool().acquire().await?;
 
         while let Some(id) = ids.next(&mut conn).await? {
             self.shared
                 .store
                 .block_tracker
-                .request(&mut conn, &id)
+                .require(&mut conn, &id)
                 .await?;
         }
 

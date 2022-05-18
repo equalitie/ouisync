@@ -3,7 +3,7 @@
 use crate::{
     block::{self, BlockData, BlockNonce, BlockTracker},
     db,
-    error::Result,
+    error::{Error, Result},
     index::{self, Index},
     progress::Progress,
 };
@@ -58,9 +58,23 @@ impl Store {
         let mut cx = self.db_pool().acquire().await?;
         let mut tx = cx.begin().await?;
 
-        let writer_ids = index::receive_block(&mut tx, &data.id).await?;
+        let writer_ids = match index::receive_block(&mut tx, &data.id).await {
+            Ok(writer_ids) => writer_ids,
+            Err(error) => {
+                if matches!(error, Error::BlockNotReferenced) {
+                    // We no longer need this block but we still need to un-track it.
+                    self.block_tracker.complete(&data.id).await?;
+                }
+
+                return Err(error);
+            }
+        };
+
         block::write(&mut tx, &data.id, &data.content, nonce).await?;
+
         tx.commit().await?;
+
+        self.block_tracker.complete(&data.id).await?;
 
         let branches = self.index.branches().await;
 

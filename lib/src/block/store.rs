@@ -23,29 +23,29 @@ pub async fn init(conn: &mut db::Connection) -> Result<()> {
          ) WITHOUT ROWID;
 
          CREATE TEMPORARY TABLE IF NOT EXISTS missing_blocks (
-             id        INTEGER PRIMARY KEY,
-             block_id  BLOB    NOT NULL,
-             requested INT     NOT NULL,
+             id       INTEGER PRIMARY KEY,
+             block_id BLOB    NOT NULL,
+             required INT     NOT NULL,
 
              UNIQUE(block_id)
          );
 
-         CREATE INDEX IF NOT EXISTS index_missing_blocks_on_requested
-             ON missing_blocks (requested);
+         CREATE INDEX IF NOT EXISTS index_missing_blocks_on_required
+             ON missing_blocks (required);
 
-         CREATE TEMPORARY TABLE IF NOT EXISTS block_requests (
+         CREATE TEMPORARY TABLE IF NOT EXISTS missing_block_offers (
              missing_block_id INTEGER NOT NULL,
              client_id        INTEGER NOT NULL,
-             active           INTEGER NOT NULL,
+             accepted         INTEGER NOT NULL,
 
              FOREIGN KEY(missing_block_id) REFERENCES missing_blocks(id) ON DELETE CASCADE
          );
 
-         CREATE INDEX IF NOT EXISTS index_block_requests_on_client_id
-             ON block_requests (client_id);
+         CREATE INDEX IF NOT EXISTS index_missing_block_offers_on_client_id
+             ON missing_block_offers (client_id);
 
-         CREATE INDEX IF NOT EXISTS index_block_requests_on_active
-             ON block_requests (active);
+         CREATE INDEX IF NOT EXISTS index_missing_block_offers_on_accepted
+             ON missing_block_offers (accepted);
 
          -- Do not insert into missing_blocks if the block is not missing
          CREATE TEMPORARY TRIGGER IF NOT EXISTS missing_blocks_ignore_insert_if_not_missing
@@ -62,14 +62,14 @@ pub async fn init(conn: &mut db::Connection) -> Result<()> {
              DELETE FROM missing_blocks WHERE block_id = new.id;
          END;
 
-         -- Delete unrequested and unaccepted missing_blocks rows
-         CREATE TEMPORARY TRIGGER IF NOT EXISTS missing_blocks_delete_unrequested_and_unaccepted
-         AFTER DELETE ON block_requests
+         -- Delete non-required and non-offered missing_blocks rows
+         CREATE TEMPORARY TRIGGER IF NOT EXISTS missing_blocks_delete_nonrequired_and_nonoffered
+         AFTER DELETE ON missing_block_offers
          BEGIN
              DELETE FROM missing_blocks
-             WHERE requested = 0
+             WHERE required = 0
                AND id = old.missing_block_id
-               AND id NOT IN (SELECT missing_block_id FROM block_requests);
+               AND id NOT IN (SELECT missing_block_id FROM missing_block_offers);
          END;
         ",
     )
