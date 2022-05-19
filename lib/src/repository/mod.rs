@@ -1,5 +1,4 @@
-mod block_requester;
-mod garbage_collector;
+mod block_scanner;
 mod id;
 mod merger;
 #[cfg(test)]
@@ -9,8 +8,7 @@ mod utils;
 pub use self::id::RepositoryId;
 
 use self::{
-    block_requester::BlockRequester,
-    garbage_collector::{GarbageCollector, GarbageCollectorHandle},
+    block_scanner::{BlockScanner, BlockScannerHandle},
     merger::Merger,
 };
 use crate::{
@@ -47,7 +45,7 @@ use tokio::task;
 pub struct Repository {
     shared: Arc<Shared>,
     _merge_handle: Option<ScopedJoinHandle<()>>,
-    garbage_collector_handle: GarbageCollectorHandle,
+    block_scanner_handle: BlockScannerHandle,
 }
 
 impl Repository {
@@ -206,15 +204,11 @@ impl Repository {
             scoped_task::spawn(Merger::new(shared.clone(), local_branch).run())
         });
 
-        let (garbage_collector, garbage_collector_handle) = GarbageCollector::new(shared.clone());
+        let (block_scanner, block_scanner_handle) = BlockScanner::new(shared.clone());
 
-        // GarbageCollector and BlockRequester require at least read access to be able to determine
-        // block reachability.
+        // BlockScanner requires at least read access to be able to traverse the repository.
         if shared.secrets.can_read() {
-            task::spawn(garbage_collector.run());
-
-            let block_requester = BlockRequester::new(shared.clone());
-            task::spawn(block_requester.run());
+            task::spawn(block_scanner.run());
         }
 
         task::spawn(report_sync_progress(shared.store.clone()));
@@ -222,7 +216,7 @@ impl Repository {
         Ok(Self {
             shared,
             _merge_handle: merge_handle,
-            garbage_collector_handle,
+            block_scanner_handle,
         })
     }
 
@@ -462,7 +456,7 @@ impl Repository {
     /// the background. It can still be useful if one wants to make sure the collection completed
     /// and/or to know whether it completed successfully or failed.
     pub async fn collect_garbage(&self) -> Result<()> {
-        self.garbage_collector_handle.collect_garbage().await
+        self.block_scanner_handle.collect().await
     }
 
     // Opens the root directory across all branches as JointDirectory.

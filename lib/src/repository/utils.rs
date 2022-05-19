@@ -2,15 +2,6 @@ use crate::{branch::Branch, crypto::sign::PublicKey, joint_directory::versioned}
 use futures_util::{stream, StreamExt};
 use std::collections::HashSet;
 
-/// Filter up-to-date branches
-pub(super) async fn current_branches(branches: Vec<Branch>) -> Vec<Branch> {
-    let current_ids = current_branch_ids(&branches).await;
-    branches
-        .into_iter()
-        .filter(|branch| current_ids.contains(branch.id()))
-        .collect()
-}
-
 /// Filter outdated branches
 pub(super) async fn outdated_branches(branches: Vec<Branch>) -> Vec<Branch> {
     let current_ids = current_branch_ids(&branches).await;
