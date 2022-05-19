@@ -1,4 +1,4 @@
-use super::{ip_stack::IpStack, socket};
+use super::{ip_stack::IpVersion, socket};
 use crate::{
     config::{ConfigKey, ConfigStore},
     scoped_task::{self, ScopedJoinHandle},
@@ -52,36 +52,23 @@ const LAST_USED_PORT_COMMENT: &str =
      default to manually setting up port forwarding on their routers.";
 
 pub(super) struct DhtDiscovery {
-    dhts: IpStack<MonitoredDht>,
+    dht_v4: RestartableDht,
+    dht_v6: RestartableDht,
     lookups: Arc<Mutex<Lookups>>,
     next_id: AtomicU64,
     monitor: Arc<StateMonitor>,
 }
 
 impl DhtDiscovery {
-    pub async fn new(
-        sockets: IpStack<UdpSocket>,
-        acceptor_port: u16,
-        monitor: Arc<StateMonitor>,
-    ) -> Self {
-        let (routers_v4, routers_v6) = dht_router_addresses().await;
+    pub async fn new(acceptor_port: u16, config: &ConfigStore, monitor: Arc<StateMonitor>) -> Self {
+        let dht_v4 = start_dht(IpVersion::V4, acceptor_port, &config, &monitor).await;
+        let dht_v6 = start_dht(IpVersion::V6, acceptor_port, &config, &monitor).await;
+
         let lookups = Arc::new(Mutex::new(HashMap::default()));
 
-        let dhts = match sockets {
-            IpStack::V4(socket) => {
-                IpStack::V4(start_dht(socket, acceptor_port, routers_v4, &monitor))
-            }
-            IpStack::V6(socket) => {
-                IpStack::V6(start_dht(socket, acceptor_port, routers_v6, &monitor))
-            }
-            IpStack::Dual { v4, v6 } => IpStack::Dual {
-                v4: start_dht(v4, acceptor_port, routers_v4, &monitor),
-                v6: start_dht(v6, acceptor_port, routers_v6, &monitor),
-            },
-        };
-
         Self {
-            dhts,
+            dht_v4,
+            dht_v6,
             lookups,
             next_id: AtomicU64::new(0),
             monitor,
@@ -107,7 +94,8 @@ impl DhtDiscovery {
             .entry(info_hash)
             .or_insert_with(|| {
                 Lookup::new(
-                    self.dhts.as_ref().map(|e| e.dht.clone()),
+                    self.dht_v4.clone(),
+                    self.dht_v6.clone(),
                     info_hash,
                     &self.monitor,
                 )
@@ -116,18 +104,31 @@ impl DhtDiscovery {
 
         request
     }
+
+    pub fn local_addr_v4(&self) -> Option<&SocketAddr> {
+        Some(&self.dht_v4.local_addr)
+    }
+
+    pub fn local_addr_v6(&self) -> Option<&SocketAddr> {
+        Some(&self.dht_v6.local_addr)
+    }
 }
 
-fn start_dht(
-    socket: UdpSocket,
+async fn start_dht(
+    ip_v: IpVersion,
     acceptor_port: u16,
-    routers: Vec<SocketAddr>,
+    config: &ConfigStore,
     monitor: &Arc<StateMonitor>,
-) -> MonitoredDht {
-    let protocol = match socket.local_addr() {
-        Ok(SocketAddr::V4(_)) => "IPv4",
-        Ok(SocketAddr::V6(_)) => "IPv6",
-        Err(_) => "?",
+) -> RestartableDht {
+    let routers = dht_router_addresses(ip_v).await;
+
+    // TODO: Unwraps
+    let socket = bind(ip_v, &config).await.unwrap();
+    let local_addr = socket.local_addr().unwrap();
+
+    let protocol = match ip_v {
+        IpVersion::V4 => "IPv4",
+        IpVersion::V6 => "IPv6",
     };
 
     let monitor = monitor.make_child(protocol);
@@ -187,15 +188,21 @@ fn start_dht(
         }
     });
 
-    MonitoredDht {
+    RestartableDht {
         dht,
-        _monitoring_task: monitoring_task,
+        local_addr,
+        _monitoring_task: Arc::new(monitoring_task),
     }
 }
 
-struct MonitoredDht {
+// A wrapper over MainlineDht that periodically retries to initialize and bootstrap (and
+// rebootstrap when/if all nodes disappear). This is necessary because the network may go up and
+// down.
+#[derive(Clone)]
+struct RestartableDht {
     dht: MainlineDht,
-    _monitoring_task: ScopedJoinHandle<()>,
+    local_addr: SocketAddr,
+    _monitoring_task: Arc<ScopedJoinHandle<()>>,
 }
 
 type Lookups = HashMap<InfoHash, Lookup>;
@@ -236,7 +243,12 @@ struct Lookup {
 }
 
 impl Lookup {
-    fn new(dhts: IpStack<MainlineDht>, info_hash: InfoHash, monitor: &Arc<StateMonitor>) -> Self {
+    fn new(
+        dht_v4: RestartableDht,
+        dht_v6: RestartableDht,
+        info_hash: InfoHash,
+        monitor: &Arc<StateMonitor>,
+    ) -> Self {
         let (wake_up_tx, mut wake_up_rx) = watch::channel(());
         // Mark the initial value as seen so the change notification is not triggered immediately
         // but only when we create the first request.
@@ -250,7 +262,8 @@ impl Lookup {
         let requests = Arc::new(Mutex::new(HashMap::new()));
 
         let task = Self::start_task(
-            dhts,
+            dht_v4,
+            dht_v6,
             info_hash,
             seen_peers.clone(),
             requests.clone(),
@@ -276,7 +289,8 @@ impl Lookup {
     }
 
     fn start_task(
-        dhts: IpStack<MainlineDht>,
+        dht_v4: RestartableDht,
+        dht_v6: RestartableDht,
         info_hash: InfoHash,
         seen_peers: Arc<RwLock<HashSet<SocketAddr>>>,
         requests: Arc<Mutex<HashMap<RequestId, mpsc::UnboundedSender<SocketAddr>>>>,
@@ -295,8 +309,11 @@ impl Lookup {
                 *state.get() = Cow::Borrowed("making request");
 
                 // find peers for the repo and also announce that we have it.
+                //let mut peers =
+                //    stream::iter(dhts.iter()).flat_map(|dht| dht.search(info_hash, true));
+                let dhts = [&dht_v4, &dht_v6];
                 let mut peers =
-                    stream::iter(dhts.iter()).flat_map(|dht| dht.search(info_hash, true));
+                    stream::iter(dhts.iter()).flat_map(|dht| dht.dht.search(info_hash, true));
 
                 *state.get() = Cow::Borrowed("awaiting results");
                 while let Some(peer) = peers.next().await {
@@ -340,51 +357,38 @@ impl Lookup {
     }
 }
 
-// Returns the router addresses split into ipv4 and ipv6 (in that order)
-pub async fn dht_router_addresses() -> (Vec<SocketAddr>, Vec<SocketAddr>) {
+// Returns the router IP addresses.
+async fn dht_router_addresses(ip_v: IpVersion) -> Vec<SocketAddr> {
     future::join_all(DHT_ROUTERS.iter().map(net::lookup_host))
         .await
         .into_iter()
         .filter_map(|result| result.ok())
         .flatten()
-        .partition(|addr| addr.is_ipv4())
+        .filter(|addr| match ip_v {
+            IpVersion::V4 => addr.is_ipv4(),
+            IpVersion::V6 => addr.is_ipv6(),
+        })
+        .collect()
 }
 
-pub(super) async fn bind(config: &ConfigStore) -> io::Result<IpStack<UdpSocket>> {
-    // TODO: [BEP-32](https://www.bittorrent.org/beps/bep_0032.html) says we should bind the ipv6
-    // socket to a concrete unicast address, not to an unspecified one. Consider finding somehow
-    // what the local ipv6 address of this device is and use that instead.
-    match (
-        socket::bind(
-            (Ipv4Addr::UNSPECIFIED, 0).into(),
-            config.entry(LAST_USED_PORT_V4),
-        )
-        .await,
-        socket::bind(
-            (Ipv6Addr::UNSPECIFIED, 0).into(),
-            config.entry(LAST_USED_PORT_V6),
-        )
-        .await,
-    ) {
-        (Ok(v4), Ok(v6)) => Ok(IpStack::Dual { v4, v6 }),
-        (Ok(v4), Err(error)) => {
-            log::warn!(
-                "failed to bind DHT to ipv6 address: {}, using ipv4 only",
-                error
-            );
-            Ok(IpStack::V4(v4))
+async fn bind(ip_v: IpVersion, config: &ConfigStore) -> io::Result<UdpSocket> {
+    match ip_v {
+        IpVersion::V4 => {
+            socket::bind(
+                (Ipv4Addr::UNSPECIFIED, 0).into(),
+                config.entry(LAST_USED_PORT_V4),
+            )
+            .await
         }
-        (Err(error), Ok(v6)) => {
-            log::warn!(
-                "failed to bind DHT to ipv4 address: {}, using ipv6 only",
-                error
-            );
-            Ok(IpStack::V6(v6))
-        }
-        (Err(error_v4), Err(error_v6)) => {
-            log::error!("failed to bind DHT to ipv4 address: {}", error_v4);
-            log::error!("failed to bind DHT to ipv6 address: {}", error_v6);
-            Err(error_v4) // we can return only one error - arbitrarily returning the v4 one.
+        // TODO: [BEP-32](https://www.bittorrent.org/beps/bep_0032.html) says we should bind the ipv6
+        // socket to a concrete unicast address, not to an unspecified one. Consider finding somehow
+        // what the local ipv6 address of this device is and use that instead.
+        IpVersion::V6 => {
+            socket::bind(
+                (Ipv6Addr::UNSPECIFIED, 0).into(),
+                config.entry(LAST_USED_PORT_V6),
+            )
+            .await
         }
     }
 }
