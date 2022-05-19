@@ -12,7 +12,7 @@ use rupnp::{
     Device, Service,
 };
 use std::{
-    collections::HashMap,
+    collections::{hash_map, HashMap},
     fmt,
     future::Future,
     io, net,
@@ -22,48 +22,69 @@ use std::{
 };
 use tokio::time::sleep;
 
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct Mapping {
-    pub internal: u16,
-    pub external: u16,
-    pub protocol: Protocol,
-}
-
 // `Option` is used to keep track of which Uris have already been tried so as to not flood the
 // debug log with repeated "device failure" warnings.
 type JobHandles = HashMap<Uri, Option<ScopedJoinHandle<()>>>;
 
 pub(crate) struct PortForwarder {
+    mappings: Arc<Mutex<Mappings>>,
     _task: ScopedJoinHandle<()>,
 }
 
 impl PortForwarder {
-    pub fn new<I>(mappings: I, monitor: Arc<StateMonitor>) -> Self
-    where
-        I: IntoIterator<Item = Mapping>,
-    {
-        let mappings: Vec<_> = mappings.into_iter().collect();
-        let task = scoped_task::spawn({
-            async move {
-                for mapping in &mappings {
-                    log::info!(
-                        "UPnP starting port forwarding EXT:{} -> INT:{} ({})",
-                        mapping.external,
-                        mapping.internal,
-                        mapping.protocol,
-                    );
-                }
+    pub fn new(monitor: Arc<StateMonitor>) -> Self {
+        let mappings = Arc::new(Mutex::new(HashMap::new()));
 
+        let task = scoped_task::spawn({
+            let mappings = mappings.clone();
+
+            async move {
                 let result = Self::run(mappings, monitor).await;
                 // Warning, because we don't actually expect this to happen.
                 log::warn!("UPnP port forwarding ended ({:?})", result)
             }
         });
 
-        Self { _task: task }
+        Self {
+            mappings,
+            _task: task,
+        }
     }
 
-    async fn run(mappings: Vec<Mapping>, monitor: Arc<StateMonitor>) -> Result<(), rupnp::Error> {
+    pub fn add_mapping(&self, internal: u16, external: u16, protocol: Protocol) -> Mapping {
+        let data = MappingData {
+            internal,
+            external,
+            protocol,
+        };
+
+        let mut mappings = self.mappings.lock().unwrap();
+
+        match mappings.entry(data) {
+            hash_map::Entry::Occupied(mut entry) => {
+                *entry.get_mut() += 1;
+            }
+            hash_map::Entry::Vacant(entry) => {
+                log::info!(
+                    "UPnP starting port forwarding EXT:{} -> INT:{} ({})",
+                    external,
+                    internal,
+                    protocol,
+                );
+                entry.insert(1);
+            }
+        }
+
+        Mapping {
+            data,
+            mappings: self.mappings.clone(),
+        }
+    }
+
+    async fn run(
+        mappings: Arc<Mutex<Mappings>>,
+        monitor: Arc<StateMonitor>,
+    ) -> Result<(), rupnp::Error> {
         // Devices may have a timeout period when they don't respond to repeated queries, the
         // DISCOVERY_RUDATION constant should be higher than that. The rupnp project internally
         // assumes this duration is three seconds.
@@ -76,10 +97,6 @@ impl PortForwarder {
         const ERROR_SLEEP_DURATION: Duration = Duration::from_secs(5);
 
         let job_handles = Arc::new(Mutex::new(JobHandles::new()));
-
-        // Make it an Arc so we can clone lazily (only when we're not already running a spawned
-        // coroutine on an IGD device).
-        let mappings = Arc::new(mappings);
 
         let lookup_counter = monitor.make_value::<u64>("lookup_counter".into(), 0);
         let monitor = monitor.make_child("Devices");
@@ -140,7 +157,7 @@ impl PortForwarder {
                             let per_igd_port_forwarder = PerIGDPortForwarder {
                                 device_url: url.clone(),
                                 service,
-                                mappings: (*mappings).clone(),
+                                mappings,
                                 monitor,
                             };
 
@@ -207,10 +224,45 @@ impl PortForwarder {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct MappingData {
+    pub internal: u16,
+    pub external: u16,
+    pub protocol: Protocol,
+}
+
+// The map value is a reference counter.
+type Mappings = HashMap<MappingData, usize>;
+
+pub(crate) struct Mapping {
+    data: MappingData,
+    mappings: Arc<Mutex<Mappings>>,
+}
+
+impl Drop for Mapping {
+    fn drop(&mut self) {
+        let mut mappings = self.mappings.lock().unwrap();
+
+        match mappings.entry(self.data) {
+            hash_map::Entry::Occupied(mut entry) => {
+                let refcount = entry.get_mut();
+                *refcount -= 1;
+
+                if *refcount == 0 {
+                    entry.remove();
+                }
+            }
+            hash_map::Entry::Vacant(_) => {
+                unreachable!();
+            }
+        }
+    }
+}
+
 struct PerIGDPortForwarder {
     device_url: Uri,
     service: Service,
-    mappings: Vec<Mapping>,
+    mappings: Arc<Mutex<Mappings>>,
     monitor: Arc<StateMonitor>,
 }
 
@@ -234,28 +286,25 @@ impl PerIGDPortForwarder {
         let ext_ip = self.monitor.make_value("external_ip".into(), None);
         let iteration = self.monitor.make_value("iteration".into(), 0);
         let _local_ip = self.monitor.make_value("local_ip".into(), local_ip);
-        let _mappings = {
-            let monitor = self.monitor.make_child("Mappings");
-            self.mappings
-                .iter()
-                .enumerate()
-                .map(|(i, map)| monitor.make_value(format!("{}", i), *map))
-                .collect::<Vec<_>>()
-        };
 
         loop {
+            let mappings = self.mappings_snapshot();
+
             *iteration.get() += 1;
             *state.get() = State::AddingPortMappingFirstStage;
-            self.add_port_mappings(&local_ip, lease_duration).await?;
+
+            self.add_port_mappings(&local_ip, lease_duration, &mappings)
+                .await?;
 
             if !ext_port_reported {
                 ext_port_reported = true;
 
-                for mapping in &self.mappings {
+                for mapping in &mappings {
                     log::info!(
-                        "UPnP port forwarding started on external port {}:{}",
+                        "UPnP port forwarding started on external port {}:{} {}",
                         mapping.protocol,
-                        mapping.external
+                        mapping.external,
+                        mapping.protocol
                     );
                 }
             }
@@ -304,7 +353,8 @@ impl PerIGDPortForwarder {
             // 2. We could try to update the lease, and then confirm that the lease has indeed been
             //    updated. Unfortunately, we've seen IGD devices which fail to report active
             //    leases (or report only the first one in their list or some other random subset).
-            self.add_port_mappings(&local_ip, lease_duration).await?;
+            self.add_port_mappings(&local_ip, lease_duration, &mappings)
+                .await?;
 
             *state.get() = State::SleepingSecondStage((SystemTime::now() + 2 * sleep_delta).into());
             sleep(sleep_delta * 2).await;
@@ -323,6 +373,7 @@ impl PerIGDPortForwarder {
         &self,
         local_ip: &net::IpAddr,
         lease_duration: Duration,
+        mappings: &Vec<MappingData>,
     ) -> Result<(), rupnp::Error> {
         let lease_duration = if lease_duration == Duration::ZERO {
             Duration::ZERO
@@ -332,7 +383,7 @@ impl PerIGDPortForwarder {
 
         const MAPPING_DESCRIPTION: &str = "OuiSync";
 
-        for mapping in &self.mappings {
+        for mapping in mappings {
             let args = format!(
                 "<NewRemoteHost></NewRemoteHost>\
                  <NewEnabled>1</NewEnabled>\
@@ -373,6 +424,15 @@ impl PerIGDPortForwarder {
             ))?
             .parse::<net::IpAddr>()
             .map_err(|_| InvalidResponse("failed to parse IP address").into())
+    }
+
+    fn mappings_snapshot(&self) -> Vec<MappingData> {
+        self.mappings
+            .lock()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>()
     }
 }
 

@@ -43,7 +43,7 @@ use std::{
     collections::{hash_map::Entry, HashMap},
     fmt,
     future::Future,
-    io, iter,
+    io,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::{Arc, Mutex as BlockingMutex, Weak},
     time::Duration,
@@ -145,27 +145,26 @@ impl Network {
             .and_then(|d| d.local_addr_v6())
             .cloned();
 
-        let port_forwarder = if !options.disable_upnp {
+        let (port_forwarder, listener_port_map, dht_port_map) = if !options.disable_upnp {
             let dht_port_v4 = dht_local_addr_v4.map(|addr| addr.port());
 
             // TODO: the ipv6 port typically doesn't need to be port-mapped but it might need to
             // be opened in the firewall ("pinholed"). Consider using UPnP for that as well.
 
-            Some(upnp::PortForwarder::new(
-                iter::once(upnp::Mapping {
-                    external: listener_local_addr.port(),
-                    internal: listener_local_addr.port(),
-                    protocol: Protocol::Tcp,
-                })
-                .chain(dht_port_v4.map(|port| upnp::Mapping {
-                    external: port,
-                    internal: port,
-                    protocol: Protocol::Udp,
-                })),
-                monitor.make_child("UPnP"),
-            ))
+            let port_forwarder = upnp::PortForwarder::new(monitor.make_child("UPnP"));
+
+            let listener_port_map = port_forwarder.add_mapping(
+                listener_local_addr.port(),
+                listener_local_addr.port(),
+                Protocol::Tcp,
+            );
+
+            let dht_port_map =
+                dht_port_v4.map(|port| port_forwarder.add_mapping(port, port, Protocol::Udp));
+
+            (Some(port_forwarder), Some(listener_port_map), dht_port_map)
         } else {
-            None
+            (None, None, None)
         };
 
         let tasks = Arc::new(Tasks::default());
@@ -182,6 +181,8 @@ impl Network {
                 message_brokers: HashMap::new(),
                 registry: Slab::new(),
             }),
+            _listener_port_map: listener_port_map,
+            _dht_port_map: dht_port_map,
             dht_local_addr_v4,
             dht_local_addr_v6,
             dht_discovery,
@@ -361,6 +362,8 @@ struct Inner {
     listener_local_addr: SocketAddr,
     this_runtime_id: RuntimeId,
     state: BlockingMutex<State>,
+    _listener_port_map: Option<upnp::Mapping>,
+    _dht_port_map: Option<upnp::Mapping>,
     dht_local_addr_v4: Option<SocketAddr>,
     dht_local_addr_v6: Option<SocketAddr>,
     dht_discovery: Option<DhtDiscovery>,
