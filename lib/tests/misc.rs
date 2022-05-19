@@ -18,8 +18,8 @@ async fn relink_repository() {
 
     let (repo_a, repo_b) = common::create_linked_repos(&mut rng).await;
 
-    let _reg_a = network_a.handle().register(repo_a.index().clone());
-    let reg_b = network_b.handle().register(repo_b.index().clone());
+    let _reg_a = network_a.handle().register(repo_a.store().clone());
+    let reg_b = network_b.handle().register(repo_b.store().clone());
 
     // Create a file by A
     let mut file_a = repo_a.create_file("test.txt").await.unwrap();
@@ -43,7 +43,7 @@ async fn relink_repository() {
     file_a.flush().await.unwrap();
 
     // Re-register B's repo
-    let _reg_b = network_b.handle().register(repo_b.index().clone());
+    let _reg_b = network_b.handle().register(repo_b.store().clone());
 
     // Wait until the file is updated
     time::timeout(
@@ -60,8 +60,8 @@ async fn remove_remote_file() {
 
     let (network_a, network_b) = common::create_connected_peers().await;
     let (repo_a, repo_b) = common::create_linked_repos(&mut rng).await;
-    let _reg_a = network_a.handle().register(repo_a.index().clone());
-    let _reg_b = network_b.handle().register(repo_b.index().clone());
+    let _reg_a = network_a.handle().register(repo_a.store().clone());
+    let _reg_b = network_b.handle().register(repo_b.store().clone());
 
     // Create a file by A and wait until B sees it.
     repo_a
@@ -105,15 +105,15 @@ async fn relay() {
     let network_b = common::create_peer_connected_to(*network_r.listener_local_addr()).await;
 
     let repo_a = common::create_repo(&mut rng).await;
-    let _reg_a = network_a.handle().register(repo_a.index().clone());
+    let _reg_a = network_a.handle().register(repo_a.store().clone());
 
     let repo_b = common::create_repo_with_secrets(&mut rng, repo_a.secrets().clone()).await;
-    let _reg_b = network_b.handle().register(repo_b.index().clone());
+    let _reg_b = network_b.handle().register(repo_b.store().clone());
 
     let repo_r =
         common::create_repo_with_secrets(&mut rng, repo_a.secrets().with_mode(AccessMode::Blind))
             .await;
-    let _reg_r = network_r.handle().register(repo_r.index().clone());
+    let _reg_r = network_r.handle().register(repo_r.store().clone());
 
     let mut content = vec![0; file_size];
     rng.fill(&mut content[..]);
@@ -144,8 +144,8 @@ async fn transfer_large_file() {
 
     let (network_a, network_b) = common::create_connected_peers().await;
     let (repo_a, repo_b) = common::create_linked_repos(&mut rng).await;
-    let _reg_a = network_a.handle().register(repo_a.index().clone());
-    let _reg_b = network_b.handle().register(repo_b.index().clone());
+    let _reg_a = network_a.handle().register(repo_a.store().clone());
+    let _reg_b = network_b.handle().register(repo_b.store().clone());
 
     let mut content = vec![0; file_size];
     rng.fill(&mut content[..]);
@@ -157,7 +157,7 @@ async fn transfer_large_file() {
     drop(file);
 
     time::timeout(
-        Duration::from_secs(60),
+        Duration::from_secs(30),
         expect_file_content(&repo_b, "test.dat", &content),
     )
     .await

@@ -1,45 +1,47 @@
-use super::Shared;
+use async_recursion::async_recursion;
+
+use super::{utils, Shared};
 use crate::{
     blob::BlockIds,
     blob_id::BlobId,
     block::{self, BlockId},
+    db,
     error::{Error, Result},
-    joint_directory::{versioned, JointDirectory, JointEntryRef, MissingVersionStrategy},
+    joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
 };
-use async_recursion::async_recursion;
-use futures_util::{stream, StreamExt};
-use std::{collections::HashSet, sync::Arc};
+use std::sync::Arc;
 use tokio::{
     select,
     sync::{mpsc, oneshot},
 };
 
-/// Takes care of requesting missing blocks and removing unneeded blocks.
-pub(super) struct BlockManager {
+/// Utility that traverses the repository scanning for missing and unreachable blocks. It then
+/// requests the missing blocks (from `BlockTracker`) and deletes the unreachable blocks.
+pub(super) struct BlockScanner {
     shared: Arc<Shared>,
     command_rx: mpsc::Receiver<Command>,
 }
 
-impl BlockManager {
-    pub fn new(shared: Arc<Shared>) -> (Self, BlockManagerHandle) {
+impl BlockScanner {
+    pub fn new(shared: Arc<Shared>) -> (Self, BlockScannerHandle) {
         let (command_tx, command_rx) = mpsc::channel(1);
         (
             Self { shared, command_rx },
-            BlockManagerHandle { command_tx },
+            BlockScannerHandle { command_tx },
         )
     }
 
     pub async fn run(mut self) {
-        let mut notify_rx = self.shared.index.subscribe();
+        let mut notify_rx = self.shared.store.index.subscribe();
 
         loop {
             select! {
                 result = notify_rx.recv() => {
                     if result.is_ok() {
-                        match self.process().await {
+                        match self.process(Mode::RequestAndCollect).await {
                             Ok(()) => (),
                             Err(error) => {
-                                log::error!("block manager failed: {:?}", error);
+                                log::error!("BlockScanner failed: {:?}", error);
                             }
                         }
                     } else {
@@ -48,8 +50,8 @@ impl BlockManager {
                 }
                 command = self.command_rx.recv() => {
                     match command {
-                        Some(Command::CollectGarbage(result_tx)) => {
-                            let result = self.process().await;
+                        Some(Command::Collect(result_tx)) => {
+                            let result = self.process(Mode::Collect).await;
                             result_tx.send(result).unwrap_or(());
                         }
                         None => break,
@@ -58,29 +60,19 @@ impl BlockManager {
             }
         }
 
-        log::debug!("block manager terminated");
+        log::trace!("BlockScanner terminated");
     }
 
-    async fn process(&self) -> Result<()> {
+    async fn process(&self, mode: Mode) -> Result<()> {
         self.remove_outdated_branches().await?;
-
-        // HACK: Currently we use greedy block downloading which means it can happen that blocks
-        // belonging to a file/directory are downloaded before blocks of its parent which would
-        // make those blocks seem unreachable. To avoid collecting them prematurelly, we proceed
-        // with the collection only if there are no missing blocks. Once we switch to lazy block
-        // downloading, we should remove this check.
-        if self.has_missing_blocks().await? {
-            return Ok(());
-        }
-
         self.prepare_reachable_blocks().await?;
-        self.traverse_root().await?;
+        self.traverse_root(mode).await?;
         self.remove_unreachable_blocks().await?;
 
         Ok(())
     }
 
-    async fn traverse_root(&self) -> Result<()> {
+    async fn traverse_root(&self, mode: Mode) -> Result<()> {
         let branches = self.shared.branches().await?;
         let mut versions = Vec::with_capacity(branches.len());
         let mut entries = Vec::new();
@@ -93,9 +85,7 @@ impl BlockManager {
             match branch.open_root().await {
                 Ok(dir) => versions.push(dir),
                 Err(Error::BlockNotFound(block_id)) => {
-                    let mut conn = self.shared.index.pool.acquire().await?;
-                    block::mark_reachable(&mut conn, &block_id).await?;
-                    self.handle_missing_block(block_id);
+                    self.process_missing_block(mode, block_id).await?;
                     continue;
                 }
                 Err(error) => return Err(error),
@@ -103,14 +93,15 @@ impl BlockManager {
         }
 
         for entry in entries {
-            self.mark_reachable(entry).await?;
+            self.process_blocks(Mode::Collect, entry).await?;
         }
 
-        self.traverse(JointDirectory::new(None, versions)).await
+        self.traverse(mode, JointDirectory::new(None, versions))
+            .await
     }
 
     #[async_recursion]
-    async fn traverse(&self, dir: JointDirectory) -> Result<()> {
+    async fn traverse(&self, mode: Mode, dir: JointDirectory) -> Result<()> {
         let mut entries = Vec::new();
         let mut subdirs = Vec::new();
 
@@ -135,52 +126,20 @@ impl BlockManager {
         }
 
         for entry in entries {
-            self.mark_reachable(entry).await?;
+            self.process_blocks(mode, entry).await?;
         }
 
         for dir in subdirs {
-            self.traverse(dir).await?;
-        }
-
-        Ok(())
-    }
-
-    async fn mark_reachable(&self, mut block_ids: BlockIds) -> Result<()> {
-        let mut conn = self.shared.index.pool.acquire().await?;
-
-        while let Some(block_id) = block_ids.next(&mut conn).await? {
-            block::mark_reachable(&mut conn, &block_id).await?;
-
-            if !block::exists(&mut conn, &block_id).await? {
-                self.handle_missing_block(block_id);
-            }
+            self.traverse(mode, dir).await?;
         }
 
         Ok(())
     }
 
     async fn remove_outdated_branches(&self) -> Result<()> {
-        let branches = self.shared.branches().await?;
-        let branch_infos: Vec<_> = stream::iter(&branches)
-            .then(|branch| async move {
-                let id = *branch.id();
-                let vv = branch.data().root().await.proof.version_vector.clone();
+        let outdated_branches = utils::outdated_branches(self.shared.branches().await?).await;
 
-                (id, vv)
-            })
-            .collect()
-            .await;
-
-        let keep: HashSet<_> = versioned::keep_maximal(branch_infos, None)
-            .into_iter()
-            .map(|(id, _)| id)
-            .collect();
-
-        for branch in branches {
-            if keep.contains(branch.id()) {
-                continue;
-            }
-
+        for branch in outdated_branches {
             // Avoid deleting empty local branch before any content is added to it.
             if branch.data().root().await.proof.version_vector.is_empty() {
                 continue;
@@ -193,12 +152,12 @@ impl BlockManager {
     }
 
     async fn prepare_reachable_blocks(&self) -> Result<()> {
-        let mut conn = self.shared.index.pool.acquire().await?;
+        let mut conn = self.shared.store.db_pool().acquire().await?;
         block::clear_reachable(&mut conn).await
     }
 
     async fn remove_unreachable_blocks(&self) -> Result<()> {
-        let mut conn = self.shared.index.pool.acquire().await?;
+        let mut conn = self.shared.store.db_pool().acquire().await?;
         let count = block::remove_unreachable(&mut conn).await?;
 
         if count > 0 {
@@ -208,32 +167,58 @@ impl BlockManager {
         Ok(())
     }
 
-    fn handle_missing_block(&self, _block_id: BlockId) {
-        // TODO
-    }
+    async fn process_blocks(&self, mode: Mode, mut block_ids: BlockIds) -> Result<()> {
+        let mut conn = self.shared.store.db_pool().acquire().await?;
 
-    async fn has_missing_blocks(&self) -> Result<bool> {
-        for branch in self.shared.branches().await? {
-            if branch.data().root().await.summary.missing_blocks_count() > 0 {
-                return Ok(true);
+        while let Some(block_id) = block_ids.next(&mut conn).await? {
+            block::mark_reachable(&mut conn, &block_id).await?;
+
+            if mode.should_request() {
+                self.require_missing_block(&mut conn, block_id).await?;
             }
         }
 
-        Ok(false)
+        Ok(())
+    }
+
+    async fn process_missing_block(&self, mode: Mode, block_id: BlockId) -> Result<()> {
+        let mut conn = self.shared.store.db_pool().acquire().await?;
+
+        block::mark_reachable(&mut conn, &block_id).await?;
+
+        if mode.should_request() {
+            self.shared.store.block_tracker.require(block_id);
+        }
+
+        Ok(())
+    }
+
+    async fn require_missing_block(
+        &self,
+        conn: &mut db::Connection,
+        block_id: BlockId,
+    ) -> Result<()> {
+        // TODO: check whether the block is already requested to avoid the potentially expensive db
+        // lookup.
+        if !block::exists(conn, &block_id).await? {
+            self.shared.store.block_tracker.require(block_id);
+        }
+
+        Ok(())
     }
 }
 
-pub(super) struct BlockManagerHandle {
+pub(super) struct BlockScannerHandle {
     command_tx: mpsc::Sender<Command>,
 }
 
-impl BlockManagerHandle {
+impl BlockScannerHandle {
     /// Trigger garbage collection and wait for it to complete.
-    pub async fn collect_garbage(&self) -> Result<()> {
+    pub async fn collect(&self) -> Result<()> {
         let (result_tx, result_rx) = oneshot::channel();
 
         self.command_tx
-            .send(Command::CollectGarbage(result_tx))
+            .send(Command::Collect(result_tx))
             .await
             .unwrap_or(());
 
@@ -244,5 +229,19 @@ impl BlockManagerHandle {
 }
 
 enum Command {
-    CollectGarbage(oneshot::Sender<Result<()>>),
+    Collect(oneshot::Sender<Result<()>>),
+}
+
+#[derive(Copy, Clone)]
+enum Mode {
+    // request missing blocks and collect unreachable blocks
+    RequestAndCollect,
+    // only collect unreachable blocks
+    Collect,
+}
+
+impl Mode {
+    fn should_request(&self) -> bool {
+        matches!(self, Self::RequestAndCollect)
+    }
 }

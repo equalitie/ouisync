@@ -53,13 +53,6 @@ pub type Connection = SqliteConnection;
 /// Pooled database connection
 pub(crate) type PoolConnection = DeadlockGuard<sqlx::pool::PoolConnection<Sqlite>>;
 
-#[cfg(test)]
-impl DeadlockGuard<sqlx::pool::PoolConnection<Sqlite>> {
-    pub fn detach(self) -> SqliteConnection {
-        self.into_inner().detach()
-    }
-}
-
 /// Database transaction
 pub type Transaction<'a> = sqlx::Transaction<'a, Sqlite>;
 
@@ -183,6 +176,12 @@ async fn open_temporary() -> Result<Pool> {
         // database.
         .max_lifetime(None)
         .idle_timeout(None)
+        // By default, `Pool::acquire` on an in-memory database is not cancel-safe because it can
+        // drop connections which then wipes out the database. By disabling this test we make sure
+        // that when a connection is removed from the idle queue it's immediately returned to the
+        // caller which makes it cancel-safe. Note also that the test makes some sense for
+        // client-server dbs but not much for embedded ones anyway.
+        .test_before_acquire(false)
         .connect_with(
             SqliteConnectOptions::from_str(MEMORY)
                 .unwrap()

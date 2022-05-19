@@ -142,7 +142,7 @@ async fn main() -> Result<()> {
             .await?
         };
 
-        let registration = network_handle.register(repo.index().clone());
+        let registration = network_handle.register(repo.store().clone());
         let mount_guard =
             virtual_filesystem::mount(tokio::runtime::Handle::current(), repo, value.clone())?;
 

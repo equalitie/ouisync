@@ -4,13 +4,11 @@ use super::{
     request::PendingRequests,
 };
 use crate::{
-    block::{BlockData, BlockId, BlockNonce},
+    block::{BlockData, BlockId, BlockNonce, BlockTrackerClient},
     crypto::{CacheHash, Hash, Hashable},
     error::{Error, Result},
-    index::{
-        Index, InnerNodeMap, LeafNodeSet, ReceiveError, ReceiveFilter, Summary, UntrustedProof,
-    },
-    store,
+    index::{InnerNodeMap, LeafNodeSet, ReceiveError, ReceiveFilter, Summary, UntrustedProof},
+    store::Store,
 };
 use std::{collections::VecDeque, sync::Arc};
 use tokio::{
@@ -19,7 +17,7 @@ use tokio::{
 };
 
 pub(crate) struct Client {
-    index: Index,
+    store: Store,
     tx: mpsc::Sender<Content>,
     rx: mpsc::Receiver<Response>,
     request_limiter: Arc<Semaphore>,
@@ -27,19 +25,21 @@ pub(crate) struct Client {
     send_queue: VecDeque<Request>,
     recv_queue: VecDeque<Success>,
     receive_filter: ReceiveFilter,
+    block_tracker: BlockTrackerClient,
 }
 
 impl Client {
     pub fn new(
-        index: Index,
+        store: Store,
         tx: mpsc::Sender<Content>,
         rx: mpsc::Receiver<Response>,
         request_limiter: Arc<Semaphore>,
     ) -> Self {
-        let pool = index.pool.clone();
+        let pool = store.db_pool().clone();
+        let block_tracker = store.block_tracker.client();
 
         Self {
-            index,
+            store,
             tx,
             rx,
             request_limiter,
@@ -47,15 +47,19 @@ impl Client {
             send_queue: VecDeque::new(),
             recv_queue: VecDeque::new(),
             receive_filter: ReceiveFilter::new(pool),
+            block_tracker,
         }
     }
 
     pub async fn run(&mut self) -> Result<()> {
         loop {
             select! {
+                block_id = self.block_tracker.accept() => {
+                    self.send_queue.push_front(Request::Block(block_id));
+                }
                 response = self.rx.recv() => {
                     if let Some(response) = response {
-                        self.enqueue_response(response);
+                        self.enqueue_response(response).await?;
                     } else {
                         break;
                     }
@@ -93,19 +97,27 @@ impl Client {
         self.tx.send(Content::Request(request)).await.unwrap_or(());
     }
 
-    fn enqueue_response(&mut self, response: Response) {
+    async fn enqueue_response(&mut self, response: Response) -> Result<()> {
         let response = ProcessedResponse::from(response);
 
         if let Some(request) = response.to_request() {
             if !self.pending_requests.remove(&request) {
                 // unsolicited response
-                return;
+                return Ok(());
             }
         }
 
-        if let ProcessedResponse::Success(response) = response {
-            self.recv_queue.push_front(response);
+        match response {
+            ProcessedResponse::Success(response) => {
+                self.recv_queue.push_front(response);
+            }
+            ProcessedResponse::Failure(Failure::Block(block_id)) => {
+                self.block_tracker.cancel(&block_id);
+            }
+            ProcessedResponse::Failure(Failure::ChildNodes(_)) => (),
         }
+
+        Ok(())
     }
 
     fn dequeue_response(&mut self) -> Option<Success> {
@@ -155,7 +167,7 @@ impl Client {
         );
 
         let hash = proof.hash;
-        let updated = self.index.receive_root_node(proof, summary).await?;
+        let updated = self.store.index.receive_root_node(proof, summary).await?;
 
         if updated {
             self.send_queue.push_front(Request::ChildNodes(hash));
@@ -175,6 +187,7 @@ impl Client {
         );
 
         let updated = self
+            .store
             .index
             .receive_inner_nodes(nodes, &mut self.receive_filter)
             .await?;
@@ -196,11 +209,10 @@ impl Client {
             nodes.hash()
         );
 
-        let updated = self.index.receive_leaf_nodes(nodes).await?;
+        let updated = self.store.index.receive_leaf_nodes(nodes).await?;
 
         for block_id in updated {
-            // TODO: avoid multiple clients downloading the same block
-            self.send_queue.push_front(Request::Block(block_id));
+            self.block_tracker.offer(block_id);
         }
 
         Ok(())
@@ -213,7 +225,7 @@ impl Client {
     ) -> Result<(), ReceiveError> {
         log::trace!("{} handle_block({:?})", ChannelInfo::current(), data.id);
 
-        match store::write_received_block(&self.index, &data, &nonce).await {
+        match self.store.write_received_block(&data, &nonce).await {
             Ok(_) => Ok(()),
             // Ignore `BlockNotReferenced` errors as they only mean that the block is no longer
             // needed.

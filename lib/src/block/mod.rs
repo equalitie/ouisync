@@ -3,10 +3,14 @@ use serde::{Deserialize, Serialize};
 use std::{array::TryFromSliceError, fmt};
 
 mod store;
+mod tracker;
 
-pub(crate) use self::store::{
-    clear_reachable, count, exists, init, mark_reachable, pin, read, remove_unreachable, unpin_all,
-    write, BlockNonce,
+pub(crate) use self::{
+    store::{
+        clear_reachable, count, exists, init, mark_reachable, pin, read, remove_unreachable,
+        unpin_all, write, BlockNonce,
+    },
+    tracker::{BlockTracker, BlockTrackerClient},
 };
 
 /// Block size in bytes.

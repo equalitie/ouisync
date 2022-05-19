@@ -1,21 +1,13 @@
-use std::collections::HashSet;
-
-use super::{
-    node::RootNode,
-    node_test_utils::{receive_blocks, receive_nodes, Block, Snapshot},
-    *,
-};
+use super::{node::RootNode, node_test_utils::Snapshot, *};
 use crate::{
-    block::{self, BLOCK_SIZE},
+    block::{self, BlockTracker, BLOCK_SIZE},
     crypto::sign::{Keypair, PublicKey},
-    progress::Progress,
-    store, test_utils,
+    store::{self, Store},
     version_vector::VersionVector,
 };
 use assert_matches::assert_matches;
 use futures_util::{future, StreamExt};
-use rand::{distributions::Standard, rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
-use test_strategy::proptest;
+use rand::{rngs::StdRng, Rng, SeedableRng};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn receive_valid_root_node() {
@@ -285,11 +277,16 @@ async fn receive_child_nodes_with_missing_root_parent() {
 #[tokio::test(flavor = "multi_thread")]
 async fn does_not_delete_old_branch_until_new_branch_is_complete() {
     let (index, write_keys) = setup().await;
+    let store = Store {
+        index,
+        block_tracker: BlockTracker::lazy(),
+    };
 
     let mut rng = rand::thread_rng();
 
     let local_id = PublicKey::generate(&mut rng);
-    index
+    store
+        .index
         .create_branch(Proof::first(local_id, &write_keys))
         .await
         .unwrap();
@@ -301,7 +298,8 @@ async fn does_not_delete_old_branch_until_new_branch_is_complete() {
     let vv0 = VersionVector::first(remote_id);
 
     // Receive it all.
-    index
+    store
+        .index
         .receive_root_node(
             Proof::new(remote_id, vv0.clone(), *snapshot0.root_hash(), &write_keys).into(),
             Summary::FULL,
@@ -309,11 +307,12 @@ async fn does_not_delete_old_branch_until_new_branch_is_complete() {
         .await
         .unwrap();
 
-    let mut receive_filter = ReceiveFilter::new(index.pool.clone());
+    let mut receive_filter = ReceiveFilter::new(store.db_pool().clone());
 
     for layer in snapshot0.inner_layers() {
         for (_, nodes) in layer.inner_maps() {
-            index
+            store
+                .index
                 .receive_inner_nodes(nodes.clone().into(), &mut receive_filter)
                 .await
                 .unwrap();
@@ -321,23 +320,31 @@ async fn does_not_delete_old_branch_until_new_branch_is_complete() {
     }
 
     for (_, nodes) in snapshot0.leaf_sets() {
-        index
+        store
+            .index
             .receive_leaf_nodes(nodes.clone().into())
             .await
             .unwrap();
     }
 
     for block in snapshot0.blocks().values() {
-        store::write_received_block(&index, &block.data, &block.nonce)
+        store
+            .write_received_block(&block.data, &block.nonce)
             .await
             .unwrap();
     }
 
-    let remote_branch = index.branches().await.get(&remote_id).unwrap().clone();
+    let remote_branch = store
+        .index
+        .branches()
+        .await
+        .get(&remote_id)
+        .unwrap()
+        .clone();
 
     // Verify we can retrieve all the blocks.
     check_all_blocks_exist(
-        &mut index.pool.acquire().await.unwrap(),
+        &mut store.db_pool().acquire().await.unwrap(),
         &remote_branch,
         &snapshot0,
     )
@@ -348,7 +355,8 @@ async fn does_not_delete_old_branch_until_new_branch_is_complete() {
     let vv1 = vv0.incremented(remote_id);
 
     // Receive its root node only.
-    index
+    store
+        .index
         .receive_root_node(
             Proof::new(remote_id, vv1, *snapshot1.root_hash(), &write_keys).into(),
             Summary::FULL,
@@ -358,80 +366,11 @@ async fn does_not_delete_old_branch_until_new_branch_is_complete() {
 
     // All the original blocks are still retrievable
     check_all_blocks_exist(
-        &mut index.pool.acquire().await.unwrap(),
+        &mut store.db_pool().acquire().await.unwrap(),
         &remote_branch,
         &snapshot0,
     )
     .await;
-}
-
-#[proptest]
-fn sync_progress(
-    #[strategy(1usize..16)] block_count: usize,
-    #[strategy(1usize..5)] branch_count: usize,
-    #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
-) {
-    test_utils::run(sync_progress_case(block_count, branch_count, rng_seed))
-}
-
-async fn sync_progress_case(block_count: usize, branch_count: usize, rng_seed: u64) {
-    let mut rng = StdRng::seed_from_u64(rng_seed);
-    let (index, write_keys) = setup_with_rng(&mut rng).await;
-
-    let all_blocks: Vec<(Block, Hash)> =
-        (&mut rng).sample_iter(Standard).take(block_count).collect();
-    let branches: Vec<(PublicKey, Snapshot)> = (0..branch_count)
-        .map(|_| {
-            let block_count = rng.gen_range(0..block_count);
-            let blocks = all_blocks.choose_multiple(&mut rng, block_count).cloned();
-            let snapshot = Snapshot::new(blocks);
-            let branch_id = PublicKey::generate(&mut rng);
-
-            (branch_id, snapshot)
-        })
-        .collect();
-
-    let mut expected_total_blocks = HashSet::new();
-    let mut expected_received_blocks = HashSet::new();
-
-    assert_eq!(
-        index.sync_progress().await.unwrap(),
-        Progress {
-            value: expected_received_blocks.len() as u64,
-            total: expected_total_blocks.len() as u64
-        }
-    );
-
-    for (branch_id, snapshot) in branches {
-        receive_nodes(
-            &index,
-            &write_keys,
-            branch_id,
-            VersionVector::first(branch_id),
-            &snapshot,
-        )
-        .await;
-        expected_total_blocks.extend(snapshot.blocks().keys().copied());
-
-        assert_eq!(
-            index.sync_progress().await.unwrap(),
-            Progress {
-                value: expected_received_blocks.len() as u64,
-                total: expected_total_blocks.len() as u64,
-            }
-        );
-
-        receive_blocks(&index, &snapshot).await;
-        expected_received_blocks.extend(snapshot.blocks().keys().copied());
-
-        assert_eq!(
-            index.sync_progress().await.unwrap(),
-            Progress {
-                value: expected_received_blocks.len() as u64,
-                total: expected_total_blocks.len() as u64,
-            }
-        );
-    }
 }
 
 async fn setup() -> (Index, Keypair) {

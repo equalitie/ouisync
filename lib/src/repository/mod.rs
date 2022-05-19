@@ -1,18 +1,19 @@
-mod block_manager;
+mod block_scanner;
 mod id;
 mod merger;
 #[cfg(test)]
 mod tests;
+mod utils;
 
 pub use self::id::RepositoryId;
 
 use self::{
-    block_manager::{BlockManager, BlockManagerHandle},
+    block_scanner::{BlockScanner, BlockScannerHandle},
     merger::Merger,
 };
 use crate::{
     access_control::{AccessMode, AccessSecrets, MasterSecret},
-    block::{self, BLOCK_SIZE},
+    block::{self, BlockTracker, BLOCK_SIZE},
     branch::Branch,
     crypto::{
         cipher,
@@ -29,7 +30,7 @@ use crate::{
     metadata, path,
     progress::Progress,
     scoped_task::{self, ScopedJoinHandle},
-    store,
+    store::{self, Store},
     sync::{broadcast::ThrottleReceiver, Mutex},
 };
 use camino::Utf8Path;
@@ -44,7 +45,7 @@ use tokio::task;
 pub struct Repository {
     shared: Arc<Shared>,
     _merge_handle: Option<ScopedJoinHandle<()>>,
-    block_manager_handle: BlockManagerHandle,
+    block_scanner_handle: BlockScannerHandle,
 }
 
 impl Repository {
@@ -169,8 +170,21 @@ impl Repository {
         secrets: AccessSecrets,
         enable_merger: bool,
     ) -> Result<Self> {
+        // Lazy block downloading requires at least read access because it needs to be able to
+        // traverse the repository in order to enumarate reachable blocks.
+        let block_tracker = if secrets.can_read() {
+            BlockTracker::lazy()
+        } else {
+            BlockTracker::greedy()
+        };
+
+        let store = Store {
+            index,
+            block_tracker,
+        };
+
         let shared = Arc::new(Shared {
-            index: index.clone(),
+            store,
             this_writer_id,
             secrets,
             branches: Mutex::new(HashMap::new()),
@@ -190,20 +204,19 @@ impl Repository {
             scoped_task::spawn(Merger::new(shared.clone(), local_branch).run())
         });
 
-        let (block_manager, block_manager_handle) = BlockManager::new(shared.clone());
+        let (block_scanner, block_scanner_handle) = BlockScanner::new(shared.clone());
 
-        // Garbage collection requires at least read access to be able to determine block
-        // reachability.
+        // BlockScanner requires at least read access to be able to traverse the repository.
         if shared.secrets.can_read() {
-            task::spawn(block_manager.run());
+            task::spawn(block_scanner.run());
         }
 
-        task::spawn(report_sync_progress(index));
+        task::spawn(report_sync_progress(shared.store.clone()));
 
         Ok(Self {
             shared,
             _merge_handle: merge_handle,
-            block_manager_handle,
+            block_scanner_handle,
         })
     }
 
@@ -211,8 +224,8 @@ impl Repository {
         &self.shared.secrets
     }
 
-    pub fn index(&self) -> &Index {
-        &self.shared.index
+    pub fn store(&self) -> &Store {
+        &self.shared.store
     }
 
     /// Looks up an entry by its path. The path must be relative to the repository root.
@@ -422,7 +435,7 @@ impl Repository {
 
     /// Subscribe to change notification from all current and future branches.
     pub fn subscribe(&self) -> async_broadcast::Receiver<PublicKey> {
-        self.shared.index.subscribe()
+        self.shared.store.index.subscribe()
     }
 
     /// Gets the access mode this repository is opened in.
@@ -433,7 +446,7 @@ impl Repository {
     /// Gets the syncing progress of this repository (number of downloaded blocks / number of
     /// all blocks)
     pub async fn sync_progress(&self) -> Result<Progress> {
-        self.shared.index.sync_progress().await
+        self.shared.store.sync_progress().await
     }
 
     /// Trigger manual garbage collection and wait for it to complete. Returns whether the
@@ -443,7 +456,7 @@ impl Repository {
     /// the background. It can still be useful if one wants to make sure the collection completed
     /// and/or to know whether it completed successfully or failed.
     pub async fn collect_garbage(&self) -> Result<()> {
-        self.block_manager_handle.collect_garbage().await
+        self.block_scanner_handle.collect().await
     }
 
     // Opens the root directory across all branches as JointDirectory.
@@ -485,7 +498,7 @@ impl Repository {
     /// Close all db connections held by this repository. After this function returns, any
     /// subsequent operation on this repository that requires to access the db returns an error.
     pub async fn close(&self) {
-        self.shared.index.pool.close().await;
+        self.shared.store.db_pool().close().await;
     }
 
     pub async fn debug_print_root(&self) {
@@ -518,13 +531,13 @@ impl Repository {
 
         print.display(&"Index");
         let print = print.indent();
-        self.index().debug_print(print).await;
+        self.shared.store.index.debug_print(print).await;
     }
 
     /// Returns the total number of blocks in this repository. This is useful for diagnostics and
     /// tests.
     pub async fn count_blocks(&self) -> Result<usize> {
-        block::count(&mut *self.shared.index.pool.acquire().await?).await
+        self.shared.store.count_blocks().await
     }
 
     // Create remote branch in this repository and returns it.
@@ -533,7 +546,7 @@ impl Repository {
     pub(crate) async fn create_remote_branch(&self, remote_id: PublicKey) -> Result<Branch> {
         let write_keys = self.secrets().write_keys().ok_or(Error::PermissionDenied)?;
         let proof = Proof::first(remote_id, write_keys);
-        let branch = self.index().create_branch(proof).await?;
+        let branch = self.shared.store.index.create_branch(proof).await?;
 
         self.shared.inflate(&branch).await
     }
@@ -541,7 +554,7 @@ impl Repository {
 
 impl Drop for Repository {
     fn drop(&mut self) {
-        self.shared.index.close()
+        self.shared.store.index.close()
     }
 }
 
@@ -570,7 +583,7 @@ async fn init_db(conn: &mut db::Connection) -> Result<()> {
 }
 
 struct Shared {
-    index: Index,
+    store: Store,
     this_writer_id: PublicKey,
     secrets: AccessSecrets,
     // Cache for `Branch` instances to make them persistent over the lifetime of the program.
@@ -579,14 +592,14 @@ struct Shared {
 
 impl Shared {
     pub async fn local_branch(&self) -> Option<Branch> {
-        match self.index.branches().await.get(&self.this_writer_id) {
+        match self.store.index.branches().await.get(&self.this_writer_id) {
             None => None,
             Some(data) => self.inflate(data).await.ok(),
         }
     }
 
     pub async fn get_or_create_local_branch(&self) -> Result<Branch> {
-        let branches = self.index.branches().await;
+        let branches = self.store.index.branches().await;
 
         let data = if let Some(data) = branches.get(&self.this_writer_id) {
             data.clone()
@@ -595,7 +608,7 @@ impl Shared {
 
             if let Some(write_keys) = self.secrets.write_keys() {
                 let proof = Proof::first(self.this_writer_id, write_keys);
-                self.index.create_branch(proof).await?
+                self.store.index.create_branch(proof).await?
             } else {
                 return Err(Error::PermissionDenied);
             }
@@ -606,7 +619,8 @@ impl Shared {
 
     pub async fn branch(&self, id: &PublicKey) -> Result<Branch> {
         self.inflate(
-            self.index
+            self.store
+                .index
                 .branches()
                 .await
                 .get(id)
@@ -618,7 +632,8 @@ impl Shared {
     // TODO: consider rewriting this to return `impl Stream` to avoid the Vec allocation.
     pub async fn branches(&self) -> Result<Vec<Branch>> {
         future::try_join_all(
-            self.index
+            self.store
+                .index
                 .branches()
                 .await
                 .values()
@@ -629,7 +644,7 @@ impl Shared {
 
     pub async fn remove_branch(&self, id: &PublicKey) -> Result<()> {
         self.branches.lock().await.remove(id);
-        self.index.remove_branch(id).await
+        self.store.index.remove_branch(id).await
     }
 
     // Create `Branch` wrapping the given `data`, reusing a previously cached one if it exists,
@@ -647,7 +662,7 @@ impl Shared {
                     keys.read_only()
                 };
 
-                let branch = Branch::new(self.index.pool.clone(), data.clone(), keys);
+                let branch = Branch::new(self.store.db_pool().clone(), data.clone(), keys);
                 entry.insert(branch.clone());
                 Ok(branch)
             }
@@ -668,12 +683,12 @@ async fn generate_writer_id(
     Ok(writer_id)
 }
 
-async fn report_sync_progress(index: Index) {
+async fn report_sync_progress(store: Store) {
     let mut prev_progress = Progress { value: 0, total: 0 };
-    let mut event_rx = ThrottleReceiver::new(index.subscribe(), Duration::from_secs(1));
+    let mut event_rx = ThrottleReceiver::new(store.index.subscribe(), Duration::from_secs(1));
 
     while event_rx.recv().await.is_ok() {
-        let next_progress = match index.sync_progress().await {
+        let next_progress = match store.sync_progress().await {
             Ok(progress) => progress,
             Err(error) => {
                 log::error!("failed to retrieve sync progress: {:?}", error);
@@ -684,8 +699,8 @@ async fn report_sync_progress(index: Index) {
         if next_progress != prev_progress {
             prev_progress = next_progress;
             log::debug!(
-                "sync progress: {} MB ({:.1})",
-                prev_progress * BLOCK_SIZE as u64 / 1024 / 1024,
+                "sync progress: {} bytes ({:.1})",
+                prev_progress * BLOCK_SIZE as u64,
                 prev_progress.percent()
             );
         }

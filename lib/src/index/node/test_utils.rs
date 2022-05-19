@@ -9,7 +9,7 @@ use crate::{
         Hash, Hashable,
     },
     index::ReceiveFilter,
-    store,
+    store::Store,
     version_vector::VersionVector,
 };
 use rand::{
@@ -184,9 +184,10 @@ pub(crate) async fn receive_nodes(
     }
 }
 
-pub(crate) async fn receive_blocks(index: &Index, snapshot: &Snapshot) {
+pub(crate) async fn receive_blocks(store: &Store, snapshot: &Snapshot) {
     for block in snapshot.blocks().values() {
-        store::write_received_block(index, &block.data, &block.nonce)
+        store
+            .write_received_block(&block.data, &block.nonce)
             .await
             .unwrap();
     }

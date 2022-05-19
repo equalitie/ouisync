@@ -18,8 +18,8 @@ pub async fn init(conn: &mut db::Connection) -> Result<()> {
          ) WITHOUT ROWID;
 
          CREATE TEMPORARY TABLE IF NOT EXISTS reachable_blocks (
-             id     BLOB NOT NULL PRIMARY KEY,
-             pinned INT  NOT NULL
+             id     BLOB    NOT NULL PRIMARY KEY,
+             pinned INTEGER NOT NULL
          ) WITHOUT ROWID;
         ",
     )
@@ -224,14 +224,13 @@ mod tests {
         write(&mut conn, &id, &content0, &nonce).await.unwrap();
     }
 
-    async fn setup() -> db::Connection {
+    async fn setup() -> db::PoolConnection {
         let mut conn = db::open_or_create(&db::Store::Temporary)
             .await
             .unwrap()
             .acquire()
             .await
-            .unwrap()
-            .detach();
+            .unwrap();
         init(&mut conn).await.unwrap();
         conn
     }
