@@ -4,7 +4,7 @@ use std::{
     collections::{HashMap, HashSet},
     sync::{Arc, Mutex as BlockingMutex},
 };
-use tokio::sync::Notify;
+use tokio::sync::watch;
 
 /// Helper for tracking required missing blocks.
 #[derive(Clone)]
@@ -24,6 +24,8 @@ impl BlockTracker {
     }
 
     fn new(mode: Mode) -> Self {
+        let (notify_tx, _) = watch::channel(());
+
         Self {
             shared: Arc::new(Shared {
                 mode,
@@ -31,7 +33,7 @@ impl BlockTracker {
                     missing_blocks: HashMap::new(),
                     clients: Slab::new(),
                 }),
-                notify: Notify::new(),
+                notify_tx,
             }),
         }
     }
@@ -57,7 +59,9 @@ impl BlockTracker {
                 state: MissingBlockState::Offered,
             });
 
-        switch_to_required(missing_block, &self.shared.notify);
+        if missing_block.state.switch_any_to_required() {
+            self.shared.notify();
+        }
     }
 
     /// Mark the block request as successfuly completed.
@@ -86,9 +90,12 @@ impl BlockTracker {
             .clients
             .insert(HashSet::new());
 
+        let notify_rx = self.shared.notify_tx.subscribe();
+
         BlockTrackerClient {
             shared: self.shared.clone(),
             client_id,
+            notify_rx,
         }
     }
 }
@@ -96,6 +103,7 @@ impl BlockTracker {
 pub(crate) struct BlockTrackerClient {
     shared: Arc<Shared>,
     client_id: ClientId,
+    notify_rx: watch::Receiver<()>,
 }
 
 impl BlockTrackerClient {
@@ -119,7 +127,11 @@ impl BlockTrackerClient {
         missing_block.offers.insert(self.client_id);
 
         match self.shared.mode {
-            Mode::Greedy => switch_to_required(missing_block, &self.shared.notify),
+            Mode::Greedy => {
+                if missing_block.state.switch_any_to_required() {
+                    self.shared.notify()
+                }
+            }
             Mode::Lazy => (),
         }
     }
@@ -135,17 +147,14 @@ impl BlockTrackerClient {
         // unwrap is ok because of the invariant in `Inner`
         let missing_block = inner.missing_blocks.get_mut(block_id).unwrap();
 
-        match missing_block.state {
-            MissingBlockState::Accepted(client_id) if client_id == self.client_id => {
-                missing_block.state = MissingBlockState::Required;
-                self.shared.notify.notify_waiters();
-            }
-            MissingBlockState::Accepted(_)
-            | MissingBlockState::Offered
-            | MissingBlockState::Required => (),
-        }
-
         missing_block.offers.remove(&self.client_id);
+
+        if missing_block
+            .state
+            .switch_accepted_to_required(self.client_id)
+        {
+            self.shared.notify();
+        }
     }
 
     /// Returns the next required and offered block request. If there is no such request at the
@@ -154,15 +163,14 @@ impl BlockTrackerClient {
     /// # Cancel safety
     ///
     /// This method is cancel safe.
-    pub async fn accept(&self) -> BlockId {
+    pub async fn accept(&mut self) -> BlockId {
         loop {
             if let Some(block_id) = self.try_accept() {
                 return block_id;
             }
 
-            // TODO: potential race condition here?
-
-            self.shared.notify.notified().await;
+            // unwrap is ok because the sender exists in self.shared.
+            self.notify_rx.changed().await.unwrap();
         }
     }
 
@@ -202,19 +210,16 @@ impl Drop for BlockTrackerClient {
 
             missing_block.offers.remove(&self.client_id);
 
-            match missing_block.state {
-                MissingBlockState::Accepted(client_id) if client_id == self.client_id => {
-                    missing_block.state = MissingBlockState::Required;
-                    notify = true;
-                }
-                MissingBlockState::Accepted(_)
-                | MissingBlockState::Offered
-                | MissingBlockState::Required => (),
+            if missing_block
+                .state
+                .switch_accepted_to_required(self.client_id)
+            {
+                notify = true;
             }
         }
 
         if notify {
-            self.shared.notify.notify_waiters();
+            self.shared.notify()
         }
     }
 }
@@ -222,7 +227,13 @@ impl Drop for BlockTrackerClient {
 struct Shared {
     mode: Mode,
     inner: BlockingMutex<Inner>,
-    notify: Notify,
+    notify_tx: watch::Sender<()>,
+}
+
+impl Shared {
+    fn notify(&self) {
+        self.notify_tx.send(()).unwrap_or(())
+    }
 }
 
 // Invariant: for all `block_id` and `client_id` such that
@@ -250,6 +261,30 @@ enum MissingBlockState {
     Accepted(ClientId),
 }
 
+impl MissingBlockState {
+    fn switch_any_to_required(&mut self) -> bool {
+        match self {
+            MissingBlockState::Offered => {
+                *self = MissingBlockState::Required;
+                true
+            }
+            MissingBlockState::Required | MissingBlockState::Accepted(_) => false,
+        }
+    }
+
+    fn switch_accepted_to_required(&mut self, acceptor_id: ClientId) -> bool {
+        match self {
+            MissingBlockState::Accepted(client_id) if *client_id == acceptor_id => {
+                *self = MissingBlockState::Required;
+                true
+            }
+            MissingBlockState::Accepted(_)
+            | MissingBlockState::Offered
+            | MissingBlockState::Required => false,
+        }
+    }
+}
+
 type ClientId = usize;
 
 #[derive(Copy, Clone)]
@@ -258,16 +293,6 @@ enum Mode {
     Lazy,
     // Blocks are downloaded as soon as we learn about them from the index.
     Greedy,
-}
-
-fn switch_to_required(missing_block: &mut MissingBlock, notify: &Notify) {
-    match missing_block.state {
-        MissingBlockState::Offered => {
-            missing_block.state = MissingBlockState::Required;
-            notify.notify_waiters();
-        }
-        MissingBlockState::Required | MissingBlockState::Accepted(_) => (),
-    }
 }
 
 #[cfg(test)]
