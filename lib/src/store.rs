@@ -63,7 +63,7 @@ impl Store {
             Err(error) => {
                 if matches!(error, Error::BlockNotReferenced) {
                     // We no longer need this block but we still need to un-track it.
-                    self.block_tracker.complete(&data.id).await?;
+                    self.block_tracker.complete(&data.id);
                 }
 
                 return Err(error);
@@ -74,7 +74,7 @@ impl Store {
 
         tx.commit().await?;
 
-        self.block_tracker.complete(&data.id).await?;
+        self.block_tracker.complete(&data.id);
 
         let branches = self.index.branches().await;
 
@@ -100,13 +100,6 @@ pub(crate) async fn init(conn: &mut db::Connection) -> Result<()> {
          WHEN NOT EXISTS (SELECT 0 FROM snapshot_leaf_nodes WHERE block_id = old.block_id)
          BEGIN
              DELETE FROM blocks WHERE id = old.block_id;
-         END;
-
-         CREATE TEMPORARY TRIGGER IF NOT EXISTS missing_blocks_delete_on_leaf_node_deleted
-         AFTER DELETE ON main.snapshot_leaf_nodes
-         WHEN NOT EXISTS (SELECT 0 FROM main.snapshot_leaf_nodes WHERE block_id = old.block_id)
-         BEGIN
-             DELETE FROM missing_blocks WHERE block_id = old.block_id;
          END;
          ",
     )

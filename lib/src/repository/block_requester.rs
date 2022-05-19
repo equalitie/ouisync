@@ -3,7 +3,7 @@ use async_recursion::async_recursion;
 use super::{utils, Shared};
 use crate::{
     blob::BlockIds,
-    block::BlockId,
+    block::{self, BlockId},
     error::{Error, Result},
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
 };
@@ -42,7 +42,7 @@ impl BlockRequester {
             match branch.open_root().await {
                 Ok(dir) => versions.push(dir),
                 Err(Error::BlockNotFound(block_id)) => {
-                    self.require_block(&block_id).await?;
+                    self.require_block(block_id);
                     continue;
                 }
                 Err(error) => return Err(error),
@@ -88,25 +88,19 @@ impl BlockRequester {
         Ok(())
     }
 
-    async fn require_block(&self, id: &BlockId) -> Result<()> {
-        let mut conn = self.shared.store.db_pool().acquire().await?;
-        self.shared
-            .store
-            .block_tracker
-            .require(&mut conn, id)
-            .await?;
-        Ok(())
+    fn require_block(&self, id: BlockId) {
+        self.shared.store.block_tracker.require(id)
     }
 
     async fn require_blocks(&self, mut ids: BlockIds) -> Result<()> {
         let mut conn = self.shared.store.db_pool().acquire().await?;
 
+        // TODO: create transaction for atomicity
+
         while let Some(id) = ids.next(&mut conn).await? {
-            self.shared
-                .store
-                .block_tracker
-                .require(&mut conn, &id)
-                .await?;
+            if !block::exists(&mut conn, &id).await? {
+                self.shared.store.block_tracker.require(id);
+            }
         }
 
         Ok(())

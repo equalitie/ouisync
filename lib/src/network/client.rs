@@ -36,7 +36,7 @@ impl Client {
         request_limiter: Arc<Semaphore>,
     ) -> Self {
         let pool = store.db_pool().clone();
-        let block_tracker = store.block_tracker.client(pool.clone());
+        let block_tracker = store.block_tracker.client();
 
         Self {
             store,
@@ -54,8 +54,7 @@ impl Client {
     pub async fn run(&mut self) -> Result<()> {
         loop {
             select! {
-                result = self.block_tracker.accept() => {
-                    let block_id = result?.commit().await?;
+                block_id = self.block_tracker.accept() => {
                     self.send_queue.push_front(Request::Block(block_id));
                 }
                 response = self.rx.recv() => {
@@ -113,7 +112,7 @@ impl Client {
                 self.recv_queue.push_front(response);
             }
             ProcessedResponse::Failure(Failure::Block(block_id)) => {
-                self.block_tracker.cancel(&block_id).await?;
+                self.block_tracker.cancel(&block_id);
             }
             ProcessedResponse::Failure(Failure::ChildNodes(_)) => (),
         }
@@ -213,7 +212,7 @@ impl Client {
         let updated = self.store.index.receive_leaf_nodes(nodes).await?;
 
         for block_id in updated {
-            self.block_tracker.offer(&block_id).await?;
+            self.block_tracker.offer(block_id);
         }
 
         Ok(())

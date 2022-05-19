@@ -21,57 +21,6 @@ pub async fn init(conn: &mut db::Connection) -> Result<()> {
              id     BLOB    NOT NULL PRIMARY KEY,
              pinned INTEGER NOT NULL
          ) WITHOUT ROWID;
-
-         CREATE TEMPORARY TABLE IF NOT EXISTS missing_blocks (
-             id       INTEGER PRIMARY KEY,
-             block_id BLOB    NOT NULL,
-             required INT     NOT NULL,
-
-             UNIQUE(block_id)
-         );
-
-         CREATE INDEX IF NOT EXISTS index_missing_blocks_on_required
-             ON missing_blocks (required);
-
-         CREATE TEMPORARY TABLE IF NOT EXISTS missing_block_offers (
-             missing_block_id INTEGER NOT NULL,
-             client_id        INTEGER NOT NULL,
-             accepted         INTEGER NOT NULL,
-
-             FOREIGN KEY(missing_block_id) REFERENCES missing_blocks(id) ON DELETE CASCADE,
-             UNIQUE(missing_block_id, client_id)
-         );
-
-         CREATE INDEX IF NOT EXISTS index_missing_block_offers_on_client_id
-             ON missing_block_offers (client_id);
-
-         CREATE INDEX IF NOT EXISTS index_missing_block_offers_on_accepted
-             ON missing_block_offers (accepted);
-
-         -- Do not insert into missing_blocks if the block is not missing
-         CREATE TEMPORARY TRIGGER IF NOT EXISTS missing_blocks_ignore_insert_if_not_missing
-         BEFORE INSERT ON missing_blocks
-         WHEN EXISTS (SELECT 0 FROM blocks WHERE id = new.block_id)
-         BEGIN
-             SELECT RAISE (IGNORE);
-         END;
-
-         -- Delete from missing_block when the block is no longer missing
-         CREATE TEMPORARY TRIGGER IF NOT EXISTS missing_blocks_delete_on_block_created
-         AFTER INSERT ON blocks
-         BEGIN
-             DELETE FROM missing_blocks WHERE block_id = new.id;
-         END;
-
-         -- Delete non-required and non-offered missing_blocks rows
-         CREATE TEMPORARY TRIGGER IF NOT EXISTS missing_blocks_delete_nonrequired_and_nonoffered
-         AFTER DELETE ON missing_block_offers
-         BEGIN
-             DELETE FROM missing_blocks
-             WHERE required = 0
-               AND id = old.missing_block_id
-               AND id NOT IN (SELECT missing_block_id FROM missing_block_offers);
-         END;
         ",
     )
     .execute(conn)
