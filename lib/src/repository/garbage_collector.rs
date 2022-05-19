@@ -62,21 +62,6 @@ impl GarbageCollector {
 
     async fn process(&self) -> Result<()> {
         self.remove_outdated_branches().await?;
-
-        // HACK: Currently we use greedy block downloading which means it can happen that blocks
-        // belonging to a file/directory are downloaded before blocks of its parent which would
-        // make those blocks seem unreachable. To avoid collecting them prematurely, we proceed
-        // with the collection only if there are no missing blocks. Once we switch to lazy block
-        // downloading, we should remove this check.
-        //
-        // FIXME: this might be racy. It's possible (although not very likely) that a new snapshot
-        // including some of its blocks is received after this call but before the
-        // `remove_unrechable blocks` call. If that happens, those blocks might get prematurely
-        // collected. Switching to lazy blocks should fix this problem as well.
-        if self.has_missing_blocks().await? {
-            return Ok(());
-        }
-
         self.prepare_reachable_blocks().await?;
         self.traverse_root().await?;
         self.remove_unreachable_blocks().await?;
@@ -187,16 +172,6 @@ impl GarbageCollector {
         }
 
         Ok(())
-    }
-
-    async fn has_missing_blocks(&self) -> Result<bool> {
-        for branch in self.shared.branches().await? {
-            if branch.data().root().await.summary.missing_blocks_count() > 0 {
-                return Ok(true);
-            }
-        }
-
-        Ok(false)
     }
 }
 
