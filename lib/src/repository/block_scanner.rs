@@ -84,16 +84,13 @@ impl BlockScanner {
 
             match branch.open_root().await {
                 Ok(dir) => versions.push(dir),
-                Err(Error::BlockNotFound(block_id)) => {
-                    self.process_missing_block(mode, block_id).await?;
-                    continue;
-                }
+                Err(Error::BlockNotFound(_)) => continue,
                 Err(error) => return Err(error),
             }
         }
 
         for entry in entries {
-            self.process_blocks(Mode::Collect, entry).await?;
+            self.process_blocks(mode, entry).await?;
         }
 
         self.traverse(mode, JointDirectory::new(None, versions))
@@ -176,18 +173,6 @@ impl BlockScanner {
             if mode.should_request() {
                 self.require_missing_block(&mut conn, block_id).await?;
             }
-        }
-
-        Ok(())
-    }
-
-    async fn process_missing_block(&self, mode: Mode, block_id: BlockId) -> Result<()> {
-        let mut conn = self.shared.store.db_pool().acquire().await?;
-
-        block::mark_reachable(&mut conn, &block_id).await?;
-
-        if mode.should_request() {
-            self.shared.store.block_tracker.require(block_id);
         }
 
         Ok(())

@@ -239,7 +239,7 @@ impl PerIGDPortForwarder {
             self.mappings
                 .iter()
                 .enumerate()
-                .map(|(i, map)| monitor.make_value(format!("{}", i), map.clone()))
+                .map(|(i, map)| monitor.make_value(format!("{}", i), *map))
                 .collect::<Vec<_>>()
         };
 

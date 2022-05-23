@@ -232,7 +232,7 @@ impl SocketProvider {
         let mut guard = self.socket.lock().await;
 
         if let Some(stored_socket) = &*guard {
-            if Arc::ptr_eq(&stored_socket, &bad_socket) {
+            if Arc::ptr_eq(stored_socket, &bad_socket) {
                 *guard = None;
             }
         }

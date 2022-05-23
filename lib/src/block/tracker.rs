@@ -56,10 +56,10 @@ impl BlockTracker {
             .entry(block_id)
             .or_insert_with(|| MissingBlock {
                 offers: HashSet::new(),
-                state: MissingBlockState::Offered,
+                state: MissingBlockState::Required,
             });
 
-        if missing_block.state.switch_any_to_required() {
+        if missing_block.state.switch_offered_to_required() {
             self.shared.notify();
         }
     }
@@ -128,7 +128,7 @@ impl BlockTrackerClient {
 
         match self.shared.mode {
             Mode::Greedy => {
-                if missing_block.state.switch_any_to_required() {
+                if missing_block.state.switch_offered_to_required() {
                     self.shared.notify()
                 }
             }
@@ -185,12 +185,11 @@ impl BlockTrackerClient {
             // unwrap is ok because of the invariant in `Inner`
             let missing_block = inner.missing_blocks.get_mut(block_id).unwrap();
 
-            match missing_block.state {
-                MissingBlockState::Required => {
-                    missing_block.state = MissingBlockState::Accepted(self.client_id);
-                    return Some(*block_id);
-                }
-                MissingBlockState::Offered | MissingBlockState::Accepted(_) => (),
+            if missing_block
+                .state
+                .switch_required_to_accepted(self.client_id)
+            {
+                return Some(*block_id);
             }
         }
 
@@ -262,25 +261,33 @@ enum MissingBlockState {
 }
 
 impl MissingBlockState {
-    fn switch_any_to_required(&mut self) -> bool {
+    fn switch_offered_to_required(&mut self) -> bool {
         match self {
-            MissingBlockState::Offered => {
-                *self = MissingBlockState::Required;
+            Self::Offered => {
+                *self = Self::Required;
                 true
             }
-            MissingBlockState::Required | MissingBlockState::Accepted(_) => false,
+            Self::Required | Self::Accepted(_) => false,
+        }
+    }
+
+    fn switch_required_to_accepted(&mut self, acceptor_id: ClientId) -> bool {
+        match self {
+            Self::Required => {
+                *self = Self::Accepted(acceptor_id);
+                true
+            }
+            Self::Offered | Self::Accepted(_) => false,
         }
     }
 
     fn switch_accepted_to_required(&mut self, acceptor_id: ClientId) -> bool {
         match self {
-            MissingBlockState::Accepted(client_id) if *client_id == acceptor_id => {
-                *self = MissingBlockState::Required;
+            Self::Accepted(client_id) if *client_id == acceptor_id => {
+                *self = Self::Required;
                 true
             }
-            MissingBlockState::Accepted(_)
-            | MissingBlockState::Offered
-            | MissingBlockState::Required => false,
+            Self::Accepted(_) | Self::Offered | Self::Required => false,
         }
     }
 }
