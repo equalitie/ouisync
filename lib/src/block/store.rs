@@ -8,28 +8,6 @@ use sqlx::{sqlite::SqliteRow, Row};
 pub(crate) const BLOCK_NONCE_SIZE: usize = 32;
 pub(crate) type BlockNonce = [u8; BLOCK_NONCE_SIZE];
 
-/// Initializes the block store. Creates the required database schema unless already exists.
-pub async fn init(conn: &mut db::Connection) -> Result<(), db::Error> {
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS blocks (
-             id       BLOB NOT NULL PRIMARY KEY,
-             nonce    BLOB NOT NULL,
-             content  BLOB NOT NULL
-         ) WITHOUT ROWID;
-
-         CREATE TEMPORARY TABLE IF NOT EXISTS reachable_blocks (
-             id     BLOB    NOT NULL PRIMARY KEY,
-             pinned INTEGER NOT NULL
-         ) WITHOUT ROWID;
-        ",
-    )
-    .execute(conn)
-    .await
-    .map_err(db::Error::CreateSchema)?;
-
-    Ok(())
-}
-
 /// Reads a block from the store into a buffer.
 ///
 /// # Panics
@@ -225,14 +203,12 @@ mod tests {
     }
 
     async fn setup() -> db::PoolConnection {
-        let mut conn = db::open_or_create(&db::Store::Temporary)
+        db::open_or_create(&db::Store::Temporary)
             .await
             .unwrap()
             .acquire()
             .await
-            .unwrap();
-        init(&mut conn).await.unwrap();
-        conn
+            .unwrap()
     }
 
     fn random_block_content() -> Vec<u8> {

@@ -156,7 +156,6 @@ mod tests {
         crypto::sign::PublicKey,
         db,
         index::BranchData,
-        repository,
         sync::broadcast,
     };
     use std::sync::Arc;
@@ -258,7 +257,7 @@ mod tests {
     }
 
     async fn setup() -> (Branch, Branch) {
-        let pool = repository::create_db(&db::Store::Temporary).await.unwrap();
+        let pool = db::open_or_create(&db::Store::Temporary).await.unwrap();
         let keys = AccessKeys::from(WriteSecrets::random());
 
         (

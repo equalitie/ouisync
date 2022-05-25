@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     access_control::WriteSecrets, branch::Branch, crypto::sign::PublicKey, db, index::BranchData,
-    repository, sync::broadcast, version_vector::VersionVector,
+    sync::broadcast, version_vector::VersionVector,
 };
 use assert_matches::assert_matches;
 use futures_util::future;
@@ -732,7 +732,7 @@ async fn setup(branch_count: usize) -> Vec<Branch> {
 
 // Useful for debugging non-deterministic failures.
 async fn setup_with_rng(mut rng: StdRng, branch_count: usize) -> Vec<Branch> {
-    let pool = repository::create_db(&db::Store::Temporary).await.unwrap();
+    let pool = db::open_or_create(&db::Store::Temporary).await.unwrap();
     let pool = &pool;
 
     let notify_tx = broadcast::Sender::new(1);

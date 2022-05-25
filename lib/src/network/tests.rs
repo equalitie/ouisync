@@ -12,7 +12,7 @@ use crate::{
         node_test_utils::{receive_blocks, receive_nodes, Snapshot},
         BranchData, Index, Proof, RootNode,
     },
-    repository::{self, RepositoryId},
+    repository::RepositoryId,
     store::Store,
     test_utils,
     version_vector::VersionVector,
@@ -314,7 +314,7 @@ async fn failed_block_other_peer() {
 }
 
 async fn create_store<R: Rng + CryptoRng>(rng: &mut R, write_keys: &Keypair) -> (Store, PublicKey) {
-    let db = repository::create_db(&db::Store::Temporary).await.unwrap();
+    let db = db::open_or_create(&db::Store::Temporary).await.unwrap();
     let writer_id = PublicKey::generate(rng);
     let repository_id = RepositoryId::from(write_keys.public);
 

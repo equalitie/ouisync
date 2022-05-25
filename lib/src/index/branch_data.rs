@@ -295,7 +295,7 @@ mod tests {
     use super::*;
     use crate::{
         crypto::{cipher::SecretKey, sign::Keypair},
-        index::{self, EMPTY_INNER_HASH},
+        index::EMPTY_INNER_HASH,
         locator::Locator,
         test_utils,
     };
@@ -464,14 +464,12 @@ mod tests {
     }
 
     async fn init_db() -> db::PoolConnection {
-        let mut conn = db::open_or_create(&db::Store::Temporary)
+        db::open_or_create(&db::Store::Temporary)
             .await
             .unwrap()
             .acquire()
             .await
-            .unwrap();
-        index::init(&mut conn).await.unwrap();
-        conn
+            .unwrap()
     }
 
     async fn setup() -> (db::PoolConnection, BranchData) {

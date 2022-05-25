@@ -21,41 +21,6 @@ const ACCESS_KEY: &[u8] = b"access_key"; // read key or write key
 const DEVICE_ID: &[u8] = b"device_id";
 const READ_KEY_VALIDATOR: &[u8] = b"read_key_validator";
 
-/// Initialize the metadata tables for storing Key:Value pairs.  One table stores plaintext values,
-/// the other one stores encrypted ones.
-pub(crate) async fn init(conn: &mut db::Connection) -> Result<(), db::Error> {
-    let mut tx = conn.begin().await?;
-
-    // For storing unencrypted values
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS metadata_public (
-             name  BLOB NOT NULL PRIMARY KEY,
-             value BLOB NOT NULL
-         ) WITHOUT ROWID",
-    )
-    .execute(&mut tx)
-    .await
-    .map_err(db::Error::CreateSchema)?;
-
-    // For storing encrypted values
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS metadata_secret (
-             name     BLOB NOT NULL PRIMARY KEY,
-             nonce    BLOB NOT NULL,
-             value    BLOB NOT NULL,
-
-             UNIQUE(nonce)
-         ) WITHOUT ROWID",
-    )
-    .execute(&mut tx)
-    .await
-    .map_err(db::Error::CreateSchema)?;
-
-    tx.commit().await?;
-
-    Ok(())
-}
-
 pub(crate) async fn secret_to_key(
     secret: MasterSecret,
     conn: &mut db::Connection,
@@ -335,14 +300,12 @@ mod tests {
     use crate::db;
 
     async fn new_memory_db() -> db::PoolConnection {
-        let mut conn = db::open_or_create(&db::Store::Temporary)
+        db::open_or_create(&db::Store::Temporary)
             .await
             .unwrap()
             .acquire()
             .await
-            .unwrap();
-        init(&mut conn).await.unwrap();
-        conn
+            .unwrap()
     }
 
     #[tokio::test(flavor = "multi_thread")]

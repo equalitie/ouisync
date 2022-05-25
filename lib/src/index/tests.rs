@@ -2,7 +2,7 @@ use super::{node::RootNode, node_test_utils::Snapshot, *};
 use crate::{
     block::{self, BlockTracker, BLOCK_SIZE},
     crypto::sign::{Keypair, PublicKey},
-    store::{self, Store},
+    store::Store,
     version_vector::VersionVector,
 };
 use assert_matches::assert_matches;
@@ -379,12 +379,6 @@ async fn setup() -> (Index, Keypair) {
 
 async fn setup_with_rng(rng: &mut StdRng) -> (Index, Keypair) {
     let pool = db::open_or_create(&db::Store::Temporary).await.unwrap();
-
-    let mut conn = pool.acquire().await.unwrap();
-    init(&mut conn).await.unwrap();
-    block::init(&mut conn).await.unwrap();
-    store::init(&mut conn).await.unwrap();
-    drop(conn);
 
     let write_keys = Keypair::generate(rng);
     let repository_id = RepositoryId::from(write_keys.public);

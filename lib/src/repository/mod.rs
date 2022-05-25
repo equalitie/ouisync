@@ -13,7 +13,7 @@ use self::{
 };
 use crate::{
     access_control::{AccessMode, AccessSecrets, MasterSecret},
-    block::{self, BlockTracker, BLOCK_SIZE},
+    block::{BlockTracker, BLOCK_SIZE},
     branch::Branch,
     crypto::{
         cipher,
@@ -25,12 +25,12 @@ use crate::{
     directory::{Directory, EntryType},
     error::{Error, Result},
     file::File,
-    index::{self, BranchData, Index, Proof},
+    index::{BranchData, Index, Proof},
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     metadata, path,
     progress::Progress,
     scoped_task::{self, ScopedJoinHandle},
-    store::{self, Store},
+    store::Store,
     sync::{broadcast::ThrottleReceiver, Mutex},
 };
 use camino::Utf8Path;
@@ -77,7 +77,6 @@ impl Repository {
         enable_merger: bool,
     ) -> Result<Self> {
         let mut tx = pool.begin().await?;
-        init_db(&mut tx).await?;
 
         let master_key = metadata::secret_to_key(master_secret, &mut tx).await?;
         let this_writer_id = generate_writer_id(&device_id, &master_key, &mut tx).await?;
@@ -124,7 +123,6 @@ impl Repository {
         enable_merger: bool,
     ) -> Result<Self> {
         let mut conn = pool.acquire().await?;
-        init_db(&mut conn).await?;
 
         let master_key = if let Some(master_secret) = master_secret {
             Some(metadata::secret_to_key(master_secret, &mut conn).await?)
@@ -556,30 +554,6 @@ impl Drop for Repository {
     fn drop(&mut self) {
         self.shared.store.index.close()
     }
-}
-
-/// Creates and initializes the repository database.
-#[cfg(test)]
-pub(crate) async fn create_db(store: &db::Store) -> Result<db::Pool> {
-    let pool = db::open_or_create(store).await?;
-    init_db(&mut *pool.acquire().await?).await?;
-
-    Ok(pool)
-}
-
-async fn init_db(conn: &mut db::Connection) -> Result<()> {
-    use sqlx::Connection;
-
-    let mut tx = conn.begin().await?;
-
-    block::init(&mut tx).await?;
-    index::init(&mut tx).await?;
-    store::init(&mut tx).await?;
-    metadata::init(&mut tx).await?;
-
-    tx.commit().await?;
-
-    Ok(())
 }
 
 struct Shared {

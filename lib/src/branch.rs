@@ -127,7 +127,6 @@ mod tests {
         db,
         index::{Index, Proof},
         locator::Locator,
-        repository,
     };
 
     #[tokio::test(flavor = "multi_thread")]
@@ -157,7 +156,7 @@ mod tests {
     }
 
     async fn setup() -> Branch {
-        let pool = repository::create_db(&db::Store::Temporary).await.unwrap();
+        let pool = db::open_or_create(&db::Store::Temporary).await.unwrap();
 
         let writer_id = PublicKey::random();
         let secrets = WriteSecrets::random();

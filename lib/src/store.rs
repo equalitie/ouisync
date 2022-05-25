@@ -90,25 +90,6 @@ impl Store {
     }
 }
 
-/// Initialize database objects to support operations that affect both the index and the block
-/// store.
-pub(crate) async fn init(conn: &mut db::Connection) -> Result<()> {
-    // Create trigger to delete orphaned blocks.
-    sqlx::query(
-        "CREATE TRIGGER IF NOT EXISTS blocks_delete_on_leaf_node_deleted
-         AFTER DELETE ON snapshot_leaf_nodes
-         WHEN NOT EXISTS (SELECT 0 FROM snapshot_leaf_nodes WHERE block_id = old.block_id)
-         BEGIN
-             DELETE FROM blocks WHERE id = old.block_id;
-         END;
-         ",
-    )
-    .execute(conn)
-    .await?;
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
@@ -124,7 +105,6 @@ mod tests {
         db,
         error::Error,
         index::{
-            self,
             node_test_utils::{receive_blocks, receive_nodes, Block, Snapshot},
             BranchData,
         },
@@ -338,13 +318,6 @@ mod tests {
     }
 
     async fn setup() -> db::Pool {
-        let pool = db::open_or_create(&db::Store::Temporary).await.unwrap();
-        let mut conn = pool.acquire().await.unwrap();
-
-        index::init(&mut conn).await.unwrap();
-        block::init(&mut conn).await.unwrap();
-        super::init(&mut conn).await.unwrap();
-
-        pool
+        db::open_or_create(&db::Store::Temporary).await.unwrap()
     }
 }

@@ -122,18 +122,26 @@ impl FromStr for Store {
 
 /// Opens a connection to the specified database. Fails if the db doesn't exist.
 pub(crate) async fn open(store: &Store) -> Result<Pool, Error> {
-    match store {
-        Store::Permanent(path) => open_permanent(path, false).await,
-        Store::Temporary => open_temporary().await,
-    }
+    let pool = match store {
+        Store::Permanent(path) => open_permanent(path, false).await?,
+        Store::Temporary => open_temporary().await?,
+    };
+
+    init(&pool).await?;
+
+    Ok(pool)
 }
 
 /// Opens a connection to the specified database. Creates the database if it doesn't already exist.
 pub(crate) async fn open_or_create(store: &Store) -> Result<Pool, Error> {
-    match store {
-        Store::Permanent(path) => open_permanent(path, true).await,
-        Store::Temporary => open_temporary().await,
-    }
+    let pool = match store {
+        Store::Permanent(path) => open_permanent(path, true).await?,
+        Store::Temporary => open_temporary().await?,
+    };
+
+    init(&pool).await?;
+
+    Ok(pool)
 }
 
 async fn open_permanent(path: &Path, create_if_missing: bool) -> Result<Pool, Error> {
@@ -189,6 +197,17 @@ async fn open_temporary() -> Result<Pool, Error> {
         .await
         .map(Pool::new)
         .map_err(Error::Open)
+}
+
+async fn init(pool: &Pool) -> Result<(), Error> {
+    let mut tx = pool.begin().await?;
+    sqlx::query(include_str!("../schema.sql"))
+        .execute(&mut *tx)
+        .await
+        .map_err(Error::CreateSchema)?;
+    tx.commit().await?;
+
+    Ok(())
 }
 
 // Explicit cast from `i64` to `u64` to work around the lack of native `u64` support in the sqlx

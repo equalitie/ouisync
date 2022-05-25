@@ -29,7 +29,6 @@ use crate::{
     sync::{broadcast, RwLock, RwLockReadGuard},
 };
 use futures_util::TryStreamExt;
-use sqlx::Connection;
 use std::{
     cmp::Ordering,
     collections::{hash_map::Entry, HashMap},
@@ -427,14 +426,4 @@ impl From<sqlx::Error> for ReceiveError {
     fn from(error: sqlx::Error) -> Self {
         Self::from(Error::from(error))
     }
-}
-
-/// Initializes the index. Creates the required database schema unless already exists.
-pub(crate) async fn init(conn: &mut db::Connection) -> Result<(), Error> {
-    let mut tx = conn.begin().await?;
-    node::init(&mut tx).await?;
-    receive_filter::init(&mut tx).await?;
-    tx.commit().await?;
-
-    Ok(())
 }

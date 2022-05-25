@@ -638,12 +638,10 @@ async fn summary_case(leaf_count: usize, rng_seed: u64) {
 }
 
 async fn setup() -> db::PoolConnection {
-    let mut conn = db::open_or_create(&db::Store::Temporary)
+    db::open_or_create(&db::Store::Temporary)
         .await
         .unwrap()
         .acquire()
         .await
-        .unwrap();
-    super::super::init(&mut conn).await.unwrap();
-    conn
+        .unwrap()
 }
