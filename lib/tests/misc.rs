@@ -157,7 +157,7 @@ async fn transfer_large_file() {
     drop(file);
 
     time::timeout(
-        Duration::from_secs(30),
+        Duration::from_secs(60),
         expect_file_content(&repo_b, "test.dat", &content),
     )
     .await
