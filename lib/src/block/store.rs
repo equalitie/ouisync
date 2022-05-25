@@ -9,7 +9,7 @@ pub(crate) const BLOCK_NONCE_SIZE: usize = 32;
 pub(crate) type BlockNonce = [u8; BLOCK_NONCE_SIZE];
 
 /// Initializes the block store. Creates the required database schema unless already exists.
-pub async fn init(conn: &mut db::Connection) -> Result<()> {
+pub async fn init(conn: &mut db::Connection) -> Result<(), db::Error> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS blocks (
              id       BLOB NOT NULL PRIMARY KEY,
@@ -25,7 +25,7 @@ pub async fn init(conn: &mut db::Connection) -> Result<()> {
     )
     .execute(conn)
     .await
-    .map_err(Error::CreateDbSchema)?;
+    .map_err(db::Error::CreateSchema)?;
 
     Ok(())
 }

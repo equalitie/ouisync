@@ -23,7 +23,7 @@ const READ_KEY_VALIDATOR: &[u8] = b"read_key_validator";
 
 /// Initialize the metadata tables for storing Key:Value pairs.  One table stores plaintext values,
 /// the other one stores encrypted ones.
-pub(crate) async fn init(conn: &mut db::Connection) -> Result<(), Error> {
+pub(crate) async fn init(conn: &mut db::Connection) -> Result<(), db::Error> {
     let mut tx = conn.begin().await?;
 
     // For storing unencrypted values
@@ -35,7 +35,7 @@ pub(crate) async fn init(conn: &mut db::Connection) -> Result<(), Error> {
     )
     .execute(&mut tx)
     .await
-    .map_err(Error::CreateDbSchema)?;
+    .map_err(db::Error::CreateSchema)?;
 
     // For storing encrypted values
     sqlx::query(
@@ -49,7 +49,7 @@ pub(crate) async fn init(conn: &mut db::Connection) -> Result<(), Error> {
     )
     .execute(&mut tx)
     .await
-    .map_err(Error::CreateDbSchema)?;
+    .map_err(db::Error::CreateSchema)?;
 
     tx.commit().await?;
 

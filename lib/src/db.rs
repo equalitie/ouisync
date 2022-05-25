@@ -1,7 +1,4 @@
-use crate::{
-    deadlock::{DeadlockGuard, DeadlockTracker},
-    error::{Error, Result},
-};
+use crate::deadlock::{DeadlockGuard, DeadlockTracker};
 use sqlx::{
     sqlite::{Sqlite, SqliteConnectOptions, SqliteConnection, SqlitePoolOptions},
     SqlitePool,
@@ -10,10 +7,12 @@ use std::{
     borrow::Cow,
     convert::Infallible,
     future::Future,
+    io,
     ops::{Deref, DerefMut},
     path::{Path, PathBuf},
     str::FromStr,
 };
+use thiserror::Error;
 use tokio::fs;
 
 /// Database connection pool.
@@ -122,7 +121,7 @@ impl FromStr for Store {
 }
 
 /// Opens a connection to the specified database. Fails if the db doesn't exist.
-pub(crate) async fn open(store: &Store) -> Result<Pool> {
+pub(crate) async fn open(store: &Store) -> Result<Pool, Error> {
     match store {
         Store::Permanent(path) => open_permanent(path, false).await,
         Store::Temporary => open_temporary().await,
@@ -130,19 +129,19 @@ pub(crate) async fn open(store: &Store) -> Result<Pool> {
 }
 
 /// Opens a connection to the specified database. Creates the database if it doesn't already exist.
-pub(crate) async fn open_or_create(store: &Store) -> Result<Pool> {
+pub(crate) async fn open_or_create(store: &Store) -> Result<Pool, Error> {
     match store {
         Store::Permanent(path) => open_permanent(path, true).await,
         Store::Temporary => open_temporary().await,
     }
 }
 
-async fn open_permanent(path: &Path, create_if_missing: bool) -> Result<Pool> {
+async fn open_permanent(path: &Path, create_if_missing: bool) -> Result<Pool, Error> {
     if create_if_missing {
         if let Some(dir) = path.parent() {
             fs::create_dir_all(dir)
                 .await
-                .map_err(Error::CreateDbDirectory)?;
+                .map_err(Error::CreateDirectory)?;
         }
     }
 
@@ -163,10 +162,10 @@ async fn open_permanent(path: &Path, create_if_missing: bool) -> Result<Pool> {
         )
         .await
         .map(Pool::new)
-        .map_err(Error::ConnectToDb)
+        .map_err(Error::Open)
 }
 
-async fn open_temporary() -> Result<Pool> {
+async fn open_temporary() -> Result<Pool, Error> {
     SqlitePoolOptions::new()
         // HACK: using only one connection to avoid having to use shared cache (which is
         // necessary when using multiple connections to a memory database, but it's extremely
@@ -189,7 +188,7 @@ async fn open_temporary() -> Result<Pool> {
         )
         .await
         .map(Pool::new)
-        .map_err(Error::ConnectToDb)
+        .map_err(Error::Open)
 }
 
 // Explicit cast from `i64` to `u64` to work around the lack of native `u64` support in the sqlx
@@ -202,6 +201,18 @@ pub(crate) const fn decode_u64(i: i64) -> u64 {
 // crate.
 pub(crate) const fn encode_u64(u: u64) -> i64 {
     u as i64
+}
+
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("failed to create database directory")]
+    CreateDirectory(#[source] io::Error),
+    #[error("failed to open database")]
+    Open(#[source] sqlx::Error),
+    #[error("failed to create database schema")]
+    CreateSchema(#[source] sqlx::Error),
+    #[error("failed to execute database query")]
+    Query(#[from] sqlx::Error),
 }
 
 #[cfg(test)]

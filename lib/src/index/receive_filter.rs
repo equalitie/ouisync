@@ -1,9 +1,5 @@
 use super::node::Summary;
-use crate::{
-    crypto::Hash,
-    db,
-    error::{Error, Result},
-};
+use crate::{crypto::Hash, db, error::Result};
 use sqlx::{Connection, Row};
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::task;
@@ -55,7 +51,7 @@ impl Drop for ReceiveFilter {
     }
 }
 
-pub(super) async fn init(conn: &mut db::Connection) -> Result<()> {
+pub(super) async fn init(conn: &mut db::Connection) -> Result<(), db::Error> {
     sqlx::query(
         "CREATE TEMPORARY TABLE IF NOT EXISTS received_inner_nodes (
              client_id               INTEGER NOT NULL,
@@ -99,7 +95,7 @@ pub(super) async fn init(conn: &mut db::Connection) -> Result<()> {
     )
     .execute(conn)
     .await
-    .map_err(Error::CreateDbSchema)?;
+    .map_err(db::Error::CreateSchema)?;
 
     Ok(())
 }

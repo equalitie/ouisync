@@ -19,12 +19,12 @@ use crate::{
     block::BlockId,
     crypto::{sign::PublicKey, Hash},
     db,
-    error::{Error, Result},
+    error::Result,
 };
 use futures_util::{future, TryStreamExt};
 use sqlx::Acquire;
 
-pub(super) async fn init(conn: &mut db::Connection) -> Result<()> {
+pub(super) async fn init(conn: &mut db::Connection) -> Result<(), db::Error> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS snapshot_root_nodes (
              snapshot_id             INTEGER PRIMARY KEY,
@@ -131,7 +131,7 @@ pub(super) async fn init(conn: &mut db::Connection) -> Result<()> {
     )
     .execute(conn)
     .await
-    .map_err(Error::CreateDbSchema)?;
+    .map_err(db::Error::CreateSchema)?;
 
     Ok(())
 }
