@@ -119,7 +119,7 @@ fn len(
 #[proptest]
 fn seek_from_start(
     #[strategy(0..2 * BLOCK_SIZE)] content_len: usize,
-    #[strategy(0..#content_len)] pos: usize,
+    #[strategy(0..=#content_len)] pos: usize,
     #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
 ) {
     test_utils::run(seek_from(
@@ -133,7 +133,7 @@ fn seek_from_start(
 #[proptest]
 fn seek_from_end(
     #[strategy(0..2 * BLOCK_SIZE)] content_len: usize,
-    #[strategy(0..#content_len)] pos: usize,
+    #[strategy(0..=#content_len)] pos: usize,
     #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
 ) {
     test_utils::run(seek_from(
