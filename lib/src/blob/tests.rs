@@ -4,7 +4,6 @@ use crate::{
     block::{self, BLOCK_SIZE},
     error::Error,
     index::BranchData,
-    repository,
     sign::PublicKey,
     sync::broadcast,
     test_utils,
@@ -119,7 +118,7 @@ fn len(
 #[proptest]
 fn seek_from_start(
     #[strategy(0..2 * BLOCK_SIZE)] content_len: usize,
-    #[strategy(0..#content_len)] pos: usize,
+    #[strategy(0..=#content_len)] pos: usize,
     #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
 ) {
     test_utils::run(seek_from(
@@ -133,7 +132,7 @@ fn seek_from_start(
 #[proptest]
 fn seek_from_end(
     #[strategy(0..2 * BLOCK_SIZE)] content_len: usize,
-    #[strategy(0..#content_len)] pos: usize,
+    #[strategy(0..=#content_len)] pos: usize,
     #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
 ) {
     test_utils::run(seek_from(
@@ -598,7 +597,7 @@ async fn block_ids_test() {
 async fn setup(rng_seed: u64) -> (StdRng, Branch) {
     let mut rng = StdRng::seed_from_u64(rng_seed);
     let secrets = WriteSecrets::generate(&mut rng);
-    let pool = repository::create_db(&db::Store::Temporary).await.unwrap();
+    let pool = db::open_or_create(&db::Store::Temporary).await.unwrap();
 
     let notify_tx = broadcast::Sender::new(1);
     let branch = BranchData::create(

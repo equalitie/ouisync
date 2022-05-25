@@ -36,10 +36,7 @@ pub(crate) trait ToErrorCode {
 impl ToErrorCode for Error {
     fn to_error_code(&self) -> ErrorCode {
         match self {
-            Self::CreateDbDirectory(_)
-            | Self::ConnectToDb(_)
-            | Self::CreateDbSchema(_)
-            | Self::QueryDb(_) => ErrorCode::Db,
+            Self::Db(_) => ErrorCode::Db,
             Self::DeviceIdConfig(_) => ErrorCode::DeviceIdConfig,
             Self::PermissionDenied => ErrorCode::PermissionDenied,
             Self::MalformedData | Self::MalformedDirectory(_) => ErrorCode::MalformedData,

@@ -1,4 +1,7 @@
-use crate::block::{BlockId, BLOCK_SIZE};
+use crate::{
+    block::{BlockId, BLOCK_SIZE},
+    db,
+};
 use std::{array::TryFromSliceError, fmt, io};
 use thiserror::Error;
 
@@ -7,14 +10,8 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("failed to create database directory")]
-    CreateDbDirectory(#[source] io::Error),
-    #[error("failed to establish database connection")]
-    ConnectToDb(#[source] sqlx::Error),
-    #[error("failed to create database schema")]
-    CreateDbSchema(#[source] sqlx::Error),
-    #[error("failed to execute database query")]
-    QueryDb(#[from] sqlx::Error),
+    #[error("database error")]
+    Db(#[from] db::Error),
     #[error("failed to read from or write into the device ID config file")]
     DeviceIdConfig(#[source] io::Error),
     #[error("permission denied")]
@@ -70,6 +67,12 @@ impl Error {
 impl From<TryFromSliceError> for Error {
     fn from(_: TryFromSliceError) -> Self {
         Self::MalformedData
+    }
+}
+
+impl From<sqlx::Error> for Error {
+    fn from(src: sqlx::Error) -> Self {
+        Self::Db(src.into())
     }
 }
 
