@@ -220,36 +220,33 @@ async fn init(pool: &Pool) -> Result<(), Error> {
 }
 
 async fn check_version(conn: &mut Connection) -> Result<(), Error> {
-    let magic: u32 = sqlx::query("PRAGMA application_id")
-        .fetch_one(&mut *conn)
-        .await?
-        .get(0);
-
-    match magic {
-        0 => {
-            // `bind` doesn't seem to be supported for setting PRAGMAs...
-            sqlx::query(&format!("PRAGMA application_id = {}", MAGIC))
-                .execute(&mut *conn)
-                .await?;
-        }
+    match get_pragma(conn, "application_id").await? {
+        0 => set_pragma(conn, "application_id", MAGIC).await?,
         MAGIC => (),
         _ => return Err(Error::VersionMismatch),
     }
 
-    let version: u32 = sqlx::query("PRAGMA user_version")
-        .fetch_one(&mut *conn)
-        .await?
-        .get(0);
-
-    match version {
-        0 => {
-            sqlx::query(&format!("PRAGMA user_version = {}", VERSION))
-                .execute(&mut *conn)
-                .await?;
-        }
+    match get_pragma(conn, "user_version").await? {
+        0 => set_pragma(conn, "user_version", VERSION).await?,
         VERSION => (),
         _ => return Err(Error::VersionMismatch),
     }
+
+    Ok(())
+}
+
+async fn get_pragma(conn: &mut Connection, name: &str) -> Result<u32, Error> {
+    Ok(sqlx::query(&format!("PRAGMA {}", name))
+        .fetch_one(&mut *conn)
+        .await?
+        .get(0))
+}
+
+async fn set_pragma(conn: &mut Connection, name: &str, value: u32) -> Result<(), Error> {
+    // `bind` doesn't seem to be supported for setting PRAGMAs...
+    sqlx::query(&format!("PRAGMA {} = {}", name, value))
+        .execute(&mut *conn)
+        .await?;
 
     Ok(())
 }
