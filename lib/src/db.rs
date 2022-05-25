@@ -1,7 +1,7 @@
 use crate::deadlock::{DeadlockGuard, DeadlockTracker};
 use sqlx::{
     sqlite::{Sqlite, SqliteConnectOptions, SqliteConnection, SqlitePoolOptions},
-    SqlitePool,
+    Row, SqlitePool,
 };
 use std::{
     borrow::Cow,
@@ -14,6 +14,13 @@ use std::{
 };
 use thiserror::Error;
 use tokio::fs;
+
+/// Number used as [application id](https://www.sqlite.org/pragma.html#pragma_application_id) to
+/// distinguish ouisync database from any other sqlite database.
+const MAGIC: u32 = 0x6f756973; // first 4 characters of "ouisync" converted to hex
+
+/// Current storage format version.
+const VERSION: u32 = 1;
 
 /// Database connection pool.
 #[derive(Clone)]
@@ -201,10 +208,48 @@ async fn open_temporary() -> Result<Pool, Error> {
 
 async fn init(pool: &Pool) -> Result<(), Error> {
     let mut tx = pool.begin().await?;
+
+    check_version(&mut *tx).await?;
+
     sqlx::query(include_str!("../schema.sql"))
         .execute(&mut *tx)
         .await?;
     tx.commit().await?;
+
+    Ok(())
+}
+
+async fn check_version(conn: &mut Connection) -> Result<(), Error> {
+    let magic: u32 = sqlx::query("PRAGMA application_id")
+        .fetch_one(&mut *conn)
+        .await?
+        .get(0);
+
+    match magic {
+        0 => {
+            // `bind` doesn't seem to be supported for setting PRAGMAs...
+            sqlx::query(&format!("PRAGMA application_id = {}", MAGIC))
+                .execute(&mut *conn)
+                .await?;
+        }
+        MAGIC => (),
+        _ => return Err(Error::VersionMismatch),
+    }
+
+    let version: u32 = sqlx::query("PRAGMA user_version")
+        .fetch_one(&mut *conn)
+        .await?
+        .get(0);
+
+    match version {
+        0 => {
+            sqlx::query(&format!("PRAGMA user_version = {}", VERSION))
+                .execute(&mut *conn)
+                .await?;
+        }
+        VERSION => (),
+        _ => return Err(Error::VersionMismatch),
+    }
 
     Ok(())
 }
@@ -227,6 +272,8 @@ pub enum Error {
     CreateDirectory(#[source] io::Error),
     #[error("failed to open database")]
     Open(#[source] sqlx::Error),
+    #[error("storage format version mismatch")]
+    VersionMismatch,
     #[error("failed to execute database query")]
     Query(#[from] sqlx::Error),
 }
