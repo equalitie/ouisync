@@ -203,8 +203,7 @@ async fn init(pool: &Pool) -> Result<(), Error> {
     let mut tx = pool.begin().await?;
     sqlx::query(include_str!("../schema.sql"))
         .execute(&mut *tx)
-        .await
-        .map_err(Error::CreateSchema)?;
+        .await?;
     tx.commit().await?;
 
     Ok(())
@@ -228,8 +227,6 @@ pub enum Error {
     CreateDirectory(#[source] io::Error),
     #[error("failed to open database")]
     Open(#[source] sqlx::Error),
-    #[error("failed to create database schema")]
-    CreateSchema(#[source] sqlx::Error),
     #[error("failed to execute database query")]
     Query(#[from] sqlx::Error),
 }
