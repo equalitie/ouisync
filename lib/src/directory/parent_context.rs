@@ -1,7 +1,7 @@
 use super::inner;
 use crate::{
-    blob_id::BlobId, branch::Branch, crypto::sign::PublicKey, db, directory::Directory,
-    error::Result, version_vector::VersionVector,
+    blob_id::BlobId, branch::Branch, db, directory::Directory, error::Result,
+    version_vector::VersionVector,
 };
 
 /// Info about an entry in the context of its parent directory.
@@ -11,17 +11,13 @@ pub(crate) struct ParentContext {
     directory: Directory,
     /// The name of the entry in its parent directory.
     entry_name: String,
-    /// Author of the particular version of entry, i.e. the ID of the replica last to have
-    /// incremented the version vector.
-    entry_author: PublicKey,
 }
 
 impl ParentContext {
-    pub(super) fn new(directory: Directory, entry_name: String, entry_author: PublicKey) -> Self {
+    pub(super) fn new(directory: Directory, entry_name: String) -> Self {
         Self {
             directory,
             entry_name,
-            entry_author,
         }
     }
 
@@ -40,7 +36,6 @@ impl ParentContext {
             tx,
             self.directory.inner.write().await,
             &self.entry_name,
-            &mut self.entry_author,
             increment,
         )
         .await
@@ -57,7 +52,7 @@ impl ParentContext {
             .inner
             .write()
             .await
-            .insert_file_entry(self.entry_name.clone(), self.entry_author, old_vv, blob_id)
+            .insert_file_entry(self.entry_name.clone(), old_vv, blob_id)
             .await?;
 
         self.directory = directory;
@@ -81,7 +76,7 @@ impl ParentContext {
             .inner
             .read()
             .await
-            .entry_version_vector(&self.entry_name, &self.entry_author)
+            .entry_version_vector(&self.entry_name)
             .cloned()
             .unwrap_or_default()
     }

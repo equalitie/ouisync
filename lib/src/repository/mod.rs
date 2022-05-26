@@ -321,7 +321,6 @@ impl Repository {
 
     /// Moves (renames) an entry from the source path to the destination path.
     /// If both source and destination refer to the same entry, this is a no-op.
-    /// Returns the parent directories of both `src` and `dst`.
     pub async fn move_entry<S: AsRef<Utf8Path>, D: AsRef<Utf8Path>>(
         &self,
         src_dir_path: S,
@@ -336,10 +335,9 @@ impl Repository {
         let src_joint_dir = self.open_directory(src_dir_path).await?;
         let src_joint_dir_r = src_joint_dir.read().await;
 
-        let (src_dir, src_name, src_author) = match src_joint_dir_r.lookup_unique(src_name)? {
+        let (src_dir, src_name) = match src_joint_dir_r.lookup_unique(src_name)? {
             JointEntryRef::File(entry) => {
                 let src_name = entry.name().to_string();
-                let src_author = *entry.author();
 
                 let mut file = entry.open().await?;
 
@@ -348,7 +346,7 @@ impl Repository {
 
                 file.fork(&local_branch).await?;
 
-                (file.parent(), Cow::Owned(src_name), src_author)
+                (file.parent(), Cow::Owned(src_name))
             }
             JointEntryRef::Directory(entry) => {
                 let dir_to_move = entry
@@ -365,7 +363,7 @@ impl Repository {
                     .await
                     .ok_or(Error::OperationNotSupported /* can't move root */)?;
 
-                (src_dir, Cow::Borrowed(src_name), *local_branch.id())
+                (src_dir, Cow::Borrowed(src_name))
             }
         };
 
@@ -374,11 +372,7 @@ impl Repository {
         // Get the entry here before we release the lock to the directory. This way the entry shall
         // contain version vector that we want to delete and if someone updates the entry between
         // now and when the entry is actually to be removed, the concurrent updates shall remain.
-        let src_entry = src_dir
-            .read()
-            .await
-            .lookup_version(&src_name, &src_author)?
-            .clone_data();
+        let src_entry = src_dir.read().await.lookup(&src_name)?.clone_data();
 
         let dst_joint_dir = self.open_directory(&dst_dir_path).await?;
         let dst_joint_reader = dst_joint_dir.read().await;
@@ -401,14 +395,7 @@ impl Repository {
         let dst_dir = self.create_directory(dst_dir_path).await?;
 
         src_dir
-            .move_entry(
-                &src_name,
-                &src_author,
-                src_entry,
-                &dst_dir,
-                dst_name,
-                dst_vv,
-            )
+            .move_entry(&src_name, src_entry, &dst_dir, dst_name, dst_vv)
             .await?;
 
         src_dir.flush().await?;

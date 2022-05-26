@@ -177,7 +177,7 @@ mod tests {
             .unwrap()
             .read()
             .await
-            .lookup_version("dog.jpg", branch0.id())
+            .lookup("dog.jpg")
             .unwrap()
             .file()
             .unwrap()
@@ -196,7 +196,7 @@ mod tests {
             .unwrap()
             .read()
             .await
-            .lookup_version("dog.jpg", branch0.id())
+            .lookup("dog.jpg")
             .unwrap()
             .file()
             .unwrap()
@@ -213,7 +213,7 @@ mod tests {
             .unwrap()
             .read()
             .await
-            .lookup_version("dog.jpg", branch1.id())
+            .lookup("dog.jpg")
             .unwrap()
             .file()
             .unwrap()
@@ -240,7 +240,7 @@ mod tests {
             .unwrap()
             .read()
             .await
-            .lookup_version("pig.jpg", branch0.id())
+            .lookup("pig.jpg")
             .unwrap()
             .file()
             .unwrap()

@@ -107,18 +107,17 @@ impl JointDirectory {
             .apply(&self.read().await)?
             .map(|entry| {
                 let name = entry.name().to_owned();
-                let author = *entry.author().unwrap_or_else(|| local_branch.id());
                 let vv = entry.version_vector().into_owned();
 
-                (name, author, vv)
+                (name, vv)
             })
             .collect();
 
         let mut local_writer = local.write().await;
 
-        for (name, author, vv) in entries {
+        for (name, vv) in entries {
             local_writer
-                .remove_entry(&name, &author, vv, OverwriteStrategy::Remove)
+                .remove_entry(&name, vv, OverwriteStrategy::Remove)
                 .await?;
         }
 
@@ -266,8 +265,7 @@ impl Reader<'_> {
         Merge::new(
             self.versions
                 .iter()
-                .filter_map(move |dir| dir.lookup(name).ok())
-                .flatten(),
+                .filter_map(move |dir| dir.lookup(name).ok()),
             self.local_branch,
         )
     }
@@ -308,7 +306,7 @@ impl Reader<'_> {
         let entries = self
             .entry_versions(name)
             .filter_map(|entry| entry.file().ok())
-            .filter(|entry| entry.author().starts_with(&branch_id_prefix));
+            .filter(|entry| entry.branch().id().starts_with(&branch_id_prefix));
 
         // At this point, `entries` contains files from only a single author. It may still be the
         // case however that there are multiple versions of the entry because each branch may
@@ -338,15 +336,17 @@ impl Reader<'_> {
     /// versions: either one is "happens after" the other, or they are identical. It's not possible
     /// for them to be concurrent. Because of this, this function can never return `AmbiguousEntry`
     /// error.
-    pub fn lookup_version(&self, name: &'_ str, branch_id: &'_ PublicKey) -> Result<FileRef> {
-        Merge::new(
-            self.versions
-                .iter()
-                .filter_map(|dir| dir.lookup_version(name, branch_id).ok()),
-            self.local_branch,
-        )
-        .find_map(|entry| entry.file().ok())
-        .ok_or(Error::EntryNotFound)
+    pub fn lookup_version(&self, _name: &'_ str, _branch_id: &'_ PublicKey) -> Result<FileRef> {
+        todo!()
+
+        // Merge::new(
+        //     self.versions
+        //         .iter()
+        //         .filter_map(|dir| dir.lookup(name, branch_id).ok()),
+        //     self.local_branch,
+        // )
+        // .find_map(|entry| entry.file().ok())
+        // .ok_or(Error::EntryNotFound)
     }
 
     /// Length of the directory in bytes. If there are multiple versions, returns the sum of their
@@ -372,7 +372,6 @@ impl Reader<'_> {
         self.versions
             .iter()
             .filter_map(move |r| r.lookup(name).ok())
-            .flatten()
     }
 }
 
@@ -411,14 +410,6 @@ impl<'a> JointEntryRef<'a> {
         }
     }
 
-    // If this is `Directory`, returns `None` because a joint directory can have multiple authors.
-    pub fn author(&self) -> Option<&'a PublicKey> {
-        match self {
-            Self::File(r) => Some(r.author()),
-            Self::Directory(_) => None,
-        }
-    }
-
     pub fn file(self) -> Result<FileRef<'a>> {
         match self {
             Self::File(r) => Ok(r.file),
@@ -447,7 +438,10 @@ impl<'a> JointFileRef<'a> {
 
     pub fn unique_name(&self) -> Cow<'a, str> {
         if self.needs_disambiguation {
-            Cow::from(versioned_file_name::create(self.name(), self.author()))
+            Cow::from(versioned_file_name::create(
+                self.name(),
+                self.file.branch().id(),
+            ))
         } else {
             Cow::from(self.name())
         }
@@ -459,12 +453,12 @@ impl<'a> JointFileRef<'a> {
         self.file.open()
     }
 
-    pub fn author(&self) -> &'a PublicKey {
-        self.file.author()
-    }
-
     pub fn version_vector(&self) -> &'a VersionVector {
         self.file.version_vector()
+    }
+
+    pub fn branch_id(&self) -> &PublicKey {
+        self.file.branch().id()
     }
 
     pub fn parent(&self) -> &Directory {

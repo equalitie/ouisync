@@ -8,9 +8,12 @@ use crate::{
 use std::collections::BTreeMap;
 
 /// Version of the Directory serialization format.
-pub(crate) const VERSION: u64 = 0;
+pub(crate) const VERSION: u64 = 1;
 
-pub(super) type Content = BTreeMap<String, BTreeMap<PublicKey, EntryData>>;
+pub(super) type Content = ContentV1;
+
+type ContentV0 = BTreeMap<String, BTreeMap<PublicKey, EntryData>>;
+type ContentV1 = BTreeMap<String, EntryData>;
 
 pub(super) fn serialize(content: &Content) -> Vec<u8> {
     let mut output = Vec::new();

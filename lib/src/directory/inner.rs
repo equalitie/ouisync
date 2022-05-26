@@ -9,7 +9,6 @@ use crate::{
     blob_id::BlobId,
     block,
     branch::Branch,
-    crypto::sign::PublicKey,
     db,
     error::{Error, Result},
     locator::Locator,
@@ -17,16 +16,10 @@ use crate::{
     version_vector::VersionVector,
 };
 use async_recursion::async_recursion;
-use std::{
-    cmp::Ordering,
-    collections::{btree_map, BTreeMap},
-    mem,
-    sync::Weak,
-};
+use std::{collections::btree_map, mem, sync::Weak};
 
 pub(super) struct Inner {
     pub blob: Blob,
-    // map of entry name to map of author to entry data
     pub entries: Content,
     // If this is an empty version vector it means this directory hasn't been modified. Otherwise
     // the version vector of this directory will be incremented by this on the next `flush`.
@@ -47,19 +40,15 @@ impl Inner {
         Ok(())
     }
 
-    // If `keep` is set to `true`, the existing blob won't be removed from the store. This is
+    // If `overwrite` is set to `Keep`, the existing blob won't be removed from the store. This is
     // useful when we want to move or rename a an entry.
     pub async fn insert_entry(
         &mut self,
         name: String,
-        author: PublicKey,
         mut new_data: EntryData,
         overwrite: OverwriteStrategy,
     ) -> Result<()> {
-        let versions = self.entries.entry(name).or_insert_with(Default::default);
-        let mut old_blob_ids = Vec::new();
-
-        let (old_vv, new_vv) = match versions.entry(author) {
+        let (old_vv, new_vv) = match self.entries.entry(name) {
             btree_map::Entry::Vacant(entry) => (
                 VersionVector::new(),
                 entry.insert(new_data).version_vector().clone(),
@@ -83,7 +72,9 @@ impl Inner {
                 }
 
                 if matches!(overwrite, OverwriteStrategy::Remove) {
-                    old_blob_ids.extend(old_data.blob_id().copied());
+                    if let Some(blob_id) = old_data.blob_id() {
+                        remove_blob(self.blob.branch(), *blob_id).await?;
+                    }
                 }
 
                 let new_vv = new_data.version_vector().clone();
@@ -95,21 +86,7 @@ impl Inner {
             }
         };
 
-        // Remove outdated versions
-        versions.retain(|_, data| {
-            if data.version_vector() < &new_vv {
-                old_blob_ids.extend(data.blob_id().copied());
-                false
-            } else {
-                true
-            }
-        });
-
         self.version_vector_increment += &(new_vv - old_vv);
-
-        // Remove blobs of the outdated versions.
-        // TODO: This should succeed/fail atomically with the above.
-        remove_outdated_blobs(self.blob.branch(), old_blob_ids).await?;
 
         Ok(())
     }
@@ -119,34 +96,18 @@ impl Inner {
     pub async fn insert_file_entry(
         &mut self,
         name: String,
-        author_id: PublicKey,
         version_vector: VersionVector,
         blob_id: BlobId,
     ) -> Result<()> {
         let data = EntryData::file(blob_id, version_vector, Weak::new());
-        self.insert_entry(name, author_id, data, OverwriteStrategy::Remove)
+        self.insert_entry(name, data, OverwriteStrategy::Remove)
             .await
     }
 
-    // Modify an entry in this directory with the specified name and author.
-    pub fn modify_entry(
-        &mut self,
-        name: &str,
-        author_id: &mut PublicKey,
-        increment: &VersionVector,
-    ) -> Result<()> {
-        let local_id = *self.branch().id();
-        let versions = self.entries.get_mut(name).ok_or(Error::EntryNotFound)?;
-
-        if !can_overwrite(versions, author_id, &local_id) {
-            return Err(Error::EntryExists);
-        }
-
-        let mut version = versions.remove(author_id).ok_or(Error::EntryNotFound)?;
-        *version.version_vector_mut() += increment;
-        versions.insert(local_id, version);
-
-        *author_id = local_id;
+    // Modify an entry in this directory with the specified name.
+    pub fn modify_entry(&mut self, name: &str, increment: &VersionVector) -> Result<()> {
+        let data = self.entries.get_mut(name).ok_or(Error::EntryNotFound)?;
+        *data.version_vector_mut() += increment;
         self.version_vector_increment += increment;
 
         Ok(())
@@ -180,37 +141,9 @@ impl Inner {
         }
     }
 
-    pub fn entry_version_vector(&self, name: &str, author: &PublicKey) -> Option<&VersionVector> {
-        Some(self.entries.get(name)?.get(author)?.version_vector())
+    pub fn entry_version_vector(&self, name: &str) -> Option<&VersionVector> {
+        Some(self.entries.get(name)?.version_vector())
     }
-
-    fn branch(&self) -> &Branch {
-        self.blob.branch()
-    }
-}
-
-fn can_overwrite(
-    versions: &BTreeMap<PublicKey, EntryData>,
-    lhs: &PublicKey,
-    rhs: &PublicKey,
-) -> bool {
-    if lhs == rhs {
-        return true;
-    }
-
-    let lhs_vv = if let Some(vv) = versions.get(lhs).map(|v| v.version_vector()) {
-        vv
-    } else {
-        return true;
-    };
-
-    let rhs_vv = if let Some(vv) = versions.get(rhs).map(|v| v.version_vector()) {
-        vv
-    } else {
-        return true;
-    };
-
-    lhs_vv.partial_cmp(rhs_vv) == Some(Ordering::Greater)
 }
 
 #[async_recursion]
@@ -218,10 +151,9 @@ pub(super) async fn modify_entry<'a>(
     mut tx: db::Transaction<'a>,
     inner: RwLockWriteGuard<'a, Inner>,
     name: &'a str,
-    author_id: &'a mut PublicKey,
     increment: &'a VersionVector,
 ) -> Result<()> {
-    let mut op = ModifyEntry::new(inner, name, author_id);
+    let mut op = ModifyEntry::new(inner, name);
     op.apply(increment)?;
     op.inner.flush(&mut tx).await?;
     op.inner.modify_self_entry(tx).await?;
@@ -234,29 +166,20 @@ pub(super) async fn modify_entry<'a>(
 struct ModifyEntry<'a> {
     inner: RwLockWriteGuard<'a, Inner>,
     name: &'a str,
-    author_id: &'a mut PublicKey,
-    orig_author_id: PublicKey,
-    orig_versions: Option<BTreeMap<PublicKey, EntryData>>,
+    orig_data: Option<EntryData>,
     orig_version_vector_increment: VersionVector,
     committed: bool,
 }
 
 impl<'a> ModifyEntry<'a> {
-    fn new(
-        inner: RwLockWriteGuard<'a, Inner>,
-        name: &'a str,
-        author_id: &'a mut PublicKey,
-    ) -> Self {
-        let orig_author_id = *author_id;
-        let orig_versions = inner.entries.get(name).cloned();
+    fn new(inner: RwLockWriteGuard<'a, Inner>, name: &'a str) -> Self {
+        let orig_data = inner.entries.get(name).cloned();
         let orig_version_vector_increment = inner.version_vector_increment.clone();
 
         Self {
             inner,
             name,
-            author_id,
-            orig_author_id,
-            orig_versions,
+            orig_data,
             orig_version_vector_increment,
             committed: false,
         }
@@ -264,8 +187,7 @@ impl<'a> ModifyEntry<'a> {
 
     // Apply the operation. The operation can still be undone after this by dropping `self`.
     fn apply(&mut self, increment: &VersionVector) -> Result<()> {
-        self.inner
-            .modify_entry(self.name, self.author_id, increment)
+        self.inner.modify_entry(self.name, increment)
     }
 
     // Commit the operation. After this is called the operation cannot be undone.
@@ -280,15 +202,10 @@ impl Drop for ModifyEntry<'_> {
             return;
         }
 
-        *self.author_id = self.orig_author_id;
         self.inner.version_vector_increment = mem::take(&mut self.orig_version_vector_increment);
 
-        if let Some(versions) = self.orig_versions.take() {
-            // `unwrap` is OK here because the existence of `versions_backup` implies that the
-            // entry for `name` exists because we never remove it during the `modify_entry` call.
-            // Also as the `ModifyEntry` struct is holding an exclusive lock (write lock) to the
-            // directory internals, it's impossible for someone to remove the entry in the meantime.
-            *self.inner.entries.get_mut(self.name).unwrap() = versions;
+        if let Some(data) = self.orig_data.take() {
+            self.inner.entries.insert(self.name.to_owned(), data);
         } else {
             self.inner.entries.remove(self.name);
         }
@@ -304,17 +221,9 @@ pub(crate) enum OverwriteStrategy {
     Keep,
 }
 
-async fn remove_outdated_blobs(branch: &Branch, remove: Vec<BlobId>) -> Result<()> {
-    for blob_id in remove {
-        Blob::open(
-            branch.clone(),
-            Locator::head(blob_id),
-            Shared::uninit().into(),
-        )
+async fn remove_blob(branch: &Branch, id: BlobId) -> Result<()> {
+    Blob::open(branch.clone(), Locator::head(id), Shared::uninit().into())
         .await?
         .remove()
-        .await?;
-    }
-
-    Ok(())
+        .await
 }
