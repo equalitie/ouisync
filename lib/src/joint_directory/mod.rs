@@ -161,6 +161,10 @@ impl JointDirectory {
         Ok(())
     }
 
+    /// Merge all versions of this `JointDirectory` into a single `Directory`.
+    ///
+    /// If there exists a file with multiple concurrent versions anywhere within this subtree, the
+    /// merge cannot proceed and fails with `Error::EntryExists`.
     #[async_recursion]
     pub async fn merge(&mut self) -> Result<Directory> {
         let local_branch = self.local_branch.as_ref().ok_or(Error::PermissionDenied)?;
@@ -188,20 +192,11 @@ impl JointDirectory {
             }
         }
 
-        // NOTE: we might consider doing the following concurrently using `try_join` or similar,
-        // but as they all need to access the same database there would probably be no benefit in
-        // it. It might actually end up being slower due to overhead.
-
         // Fork files
         // TODO: when a fork fails, we should still proceed with the remaining files and
         // directories and only then return the error.
         for mut file in files {
-            match file.fork(local_branch).await {
-                // `EntryExists` error means the file already exists locally at the same or greater
-                // version than the remote file which is OK and expected, so we ignore it.
-                Ok(()) | Err(Error::EntryExists) => (),
-                Err(error) => return Err(error),
-            }
+            file.fork(local_branch).await?;
         }
 
         // Merge subdirectories

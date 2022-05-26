@@ -371,33 +371,43 @@ async fn merge_locally_newer_file() {
     assert_eq!(local_content, content_v1);
 }
 
-// FIXME
-#[ignore]
 #[tokio::test(flavor = "multi_thread")]
-async fn merge_concurrent_file() {
-    todo!()
-    // let branches = setup(2).await;
+async fn attempt_to_merge_concurrent_file() {
+    let branches = setup(2).await;
 
-    // let local_root = branches[0].open_or_create_root().await.unwrap();
-    // let remote_root = branches[1].open_or_create_root().await.unwrap();
+    let local_root = branches[0].open_or_create_root().await.unwrap();
+    let remote_root = branches[1].open_or_create_root().await.unwrap();
 
-    // create_file(&remote_root, "cat.jpg", b"v0", &branches[1]).await;
+    create_file(&remote_root, "cat.jpg", b"v0", &branches[1]).await;
 
-    // let mut root = JointDirectory::new(
-    //     Some(branches[0].clone()),
-    //     [local_root.clone(), remote_root.clone()],
-    // );
-    // root.merge().await.unwrap();
+    let mut root = JointDirectory::new(
+        Some(branches[0].clone()),
+        [local_root.clone(), remote_root.clone()],
+    );
+    root.merge().await.unwrap();
 
-    // // Modify the file by both branches concurrently
-    // update_file(&local_root, "cat.jpg", b"v1", &branches[0]).await;
-    // update_file(&remote_root, "cat.jpg", b"v2", &branches[1]).await;
+    // Modify the file by both branches concurrently
+    update_file(&local_root, "cat.jpg", b"v1", &branches[0]).await;
+    update_file(&remote_root, "cat.jpg", b"v2", &branches[1]).await;
 
-    // let result = JointDirectory::new(Some(branches[0].clone()), [local_root.clone(), remote_root])
-    //     .merge()
-    //     .await;
+    // Merge fails because there are conflicting entry versions
+    let result = JointDirectory::new(Some(branches[0].clone()), [local_root.clone(), remote_root])
+        .merge()
+        .await;
+    assert_matches!(result.map(|_| ()), Err(Error::EntryExists));
 
-    // assert_matches!(result, Err(Error::Conflict));
+    // The local version is unchanged
+    assert_eq!(
+        open_file(&local_root, "cat.jpg")
+            .await
+            .read_to_end()
+            .await
+            .unwrap(),
+        b"v1"
+    );
+
+    // There is still only the local version in the local branch
+    assert_eq!(local_root.read().await.entries().count(), 1);
 }
 
 #[tokio::test(flavor = "multi_thread")]
