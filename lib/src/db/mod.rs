@@ -1,3 +1,5 @@
+mod migrations;
+
 use crate::deadlock::{DeadlockGuard, DeadlockTracker};
 use sqlx::{
     sqlite::{Sqlite, SqliteConnectOptions, SqliteConnection, SqlitePoolOptions},
@@ -14,13 +16,6 @@ use std::{
 };
 use thiserror::Error;
 use tokio::fs;
-
-/// Number used as [application id](https://www.sqlite.org/pragma.html#pragma_application_id) to
-/// distinguish ouisync database from any other sqlite database.
-const MAGIC: u32 = 0x6f756973; // first 4 characters of "ouisync" converted to hex
-
-/// Current storage format version.
-const VERSION: u32 = 1;
 
 /// Database connection pool.
 #[derive(Clone)]
@@ -148,16 +143,8 @@ pub(crate) async fn create(store: &Store) -> Result<Pool, Error> {
 
     let pool = create_pool(connect_options).await?;
 
-    let mut tx = pool.begin().await?;
-
-    set_pragma(&mut *tx, "application_id", MAGIC).await?;
-    set_pragma(&mut *tx, "user_version", VERSION).await?;
-
-    sqlx::query(include_str!("../schema.sql"))
-        .execute(&mut *tx)
-        .await?;
-
-    tx.commit().await?;
+    let mut conn = pool.acquire().await?;
+    migrations::run(&mut conn).await?;
 
     Ok(pool)
 }
@@ -174,15 +161,7 @@ pub(crate) async fn open(store: &Store) -> Result<Pool, Error> {
     let pool = create_pool(connect_options).await?;
 
     let mut conn = pool.acquire().await?;
-
-    if get_pragma(&mut conn, "application_id").await? != MAGIC {
-        return Err(Error::InvalidFormat);
-    }
-
-    // TODO: migrations
-    if get_pragma(&mut conn, "user_version").await? != VERSION {
-        return Err(Error::InvalidVersion);
-    }
+    migrations::run(&mut conn).await?;
 
     Ok(pool)
 }
@@ -228,22 +207,6 @@ async fn create_pool(connect_options: SqliteConnectOptions) -> Result<Pool, Erro
         .map_err(Error::Open)
 }
 
-async fn get_pragma(conn: &mut Connection, name: &str) -> Result<u32, Error> {
-    Ok(sqlx::query(&format!("PRAGMA {}", name))
-        .fetch_one(&mut *conn)
-        .await?
-        .get(0))
-}
-
-async fn set_pragma(conn: &mut Connection, name: &str, value: u32) -> Result<(), Error> {
-    // `bind` doesn't seem to be supported for setting PRAGMAs...
-    sqlx::query(&format!("PRAGMA {} = {}", name, value))
-        .execute(&mut *conn)
-        .await?;
-
-    Ok(())
-}
-
 // Explicit cast from `i64` to `u64` to work around the lack of native `u64` support in the sqlx
 // crate.
 pub(crate) const fn decode_u64(i: i64) -> u64 {
@@ -264,12 +227,24 @@ pub enum Error {
     Exists,
     #[error("failed to open database")]
     Open(#[source] sqlx::Error),
-    #[error("invalid storage format")]
-    InvalidFormat,
-    #[error("invalid storage version")]
-    InvalidVersion,
     #[error("failed to execute database query")]
     Query(#[from] sqlx::Error),
+}
+
+async fn get_pragma(conn: &mut Connection, name: &str) -> Result<u32, Error> {
+    Ok(sqlx::query(&format!("PRAGMA {}", name))
+        .fetch_one(&mut *conn)
+        .await?
+        .get(0))
+}
+
+async fn set_pragma(conn: &mut Connection, name: &str, value: u32) -> Result<(), Error> {
+    // `bind` doesn't seem to be supported for setting PRAGMAs...
+    sqlx::query(&format!("PRAGMA {} = {}", name, value))
+        .execute(&mut *conn)
+        .await?;
+
+    Ok(())
 }
 
 #[cfg(test)]
