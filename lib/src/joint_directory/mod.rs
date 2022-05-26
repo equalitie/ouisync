@@ -52,8 +52,14 @@ impl JointDirectory {
 
     /// Lock this joint directory for reading.
     pub async fn read(&self) -> Reader<'_> {
+        let mut versions = BTreeMap::new();
+
+        for (branch_id, dir) in &self.versions {
+            versions.insert(branch_id, dir.read().await);
+        }
+
         Reader {
-            versions: future::join_all(self.versions.values().map(|dir| dir.read())).await,
+            versions,
             local_branch: self.local_branch.as_ref(),
         }
     }
@@ -243,7 +249,7 @@ impl fmt::Debug for JointDirectory {
 
 /// View of a `JointDirectory` for performing read-only queries.
 pub struct Reader<'a> {
-    versions: Vec<directory::Reader<'a>>,
+    versions: BTreeMap<&'a PublicKey, directory::Reader<'a>>,
     local_branch: Option<&'a Branch>,
 }
 
@@ -252,7 +258,7 @@ impl Reader<'_> {
     /// same file are returned as separate `JointEntryRef::File` entries. Multiple concurrent
     /// versions of the same directory are returned as a single `JointEntryRef::Directory` entry.
     pub fn entries(&self) -> impl Iterator<Item = JointEntryRef> {
-        let entries = self.versions.iter().map(|directory| directory.entries());
+        let entries = self.versions.values().map(|directory| directory.entries());
         let entries = SortedUnion::new(entries, |entry| entry.name());
         let entries = Accumulate::new(entries, |entry| entry.name());
 
@@ -264,7 +270,7 @@ impl Reader<'_> {
     pub fn lookup<'a>(&'a self, name: &'a str) -> impl Iterator<Item = JointEntryRef<'a>> + 'a {
         Merge::new(
             self.versions
-                .iter()
+                .values()
                 .filter_map(move |dir| dir.lookup(name).ok()),
             self.local_branch,
         )
@@ -329,24 +335,12 @@ impl Reader<'_> {
     }
 
     /// Looks up a specific version of a file.
-    ///
-    /// NOTE: There can be multiple versions of the file with the same author, but due to the
-    /// invariant of there always being at most one version of a file per branch that is also
-    /// authored by that branch, there are only two possible outcomes for every pair of such
-    /// versions: either one is "happens after" the other, or they are identical. It's not possible
-    /// for them to be concurrent. Because of this, this function can never return `AmbiguousEntry`
-    /// error.
-    pub fn lookup_version(&self, _name: &'_ str, _branch_id: &'_ PublicKey) -> Result<FileRef> {
-        todo!()
-
-        // Merge::new(
-        //     self.versions
-        //         .iter()
-        //         .filter_map(|dir| dir.lookup(name, branch_id).ok()),
-        //     self.local_branch,
-        // )
-        // .find_map(|entry| entry.file().ok())
-        // .ok_or(Error::EntryNotFound)
+    pub fn lookup_version(&self, name: &'_ str, branch_id: &'_ PublicKey) -> Result<FileRef> {
+        self.versions
+            .get(branch_id)
+            .ok_or(Error::EntryNotFound)
+            .and_then(|dir| dir.lookup(name))
+            .and_then(|entry| entry.file())
     }
 
     /// Length of the directory in bytes. If there are multiple versions, returns the sum of their
@@ -354,7 +348,7 @@ impl Reader<'_> {
     #[allow(clippy::len_without_is_empty)]
     pub async fn len(&self) -> u64 {
         let mut sum = 0;
-        for dir in self.versions.iter() {
+        for dir in self.versions.values() {
             sum += dir.len().await;
         }
         sum
@@ -370,7 +364,7 @@ impl Reader<'_> {
 
     fn entry_versions<'a>(&'a self, name: &'a str) -> impl Iterator<Item = EntryRef<'a>> {
         self.versions
-            .iter()
+            .values()
             .filter_map(move |r| r.lookup(name).ok())
     }
 }

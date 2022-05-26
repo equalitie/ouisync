@@ -197,8 +197,6 @@ async fn conflict_file_and_directory() {
     assert_eq!(entry.file().unwrap().branch().id(), branches[0].id());
 }
 
-// FIXME
-#[ignore]
 #[tokio::test(flavor = "multi_thread")]
 async fn conflict_identical_versions() {
     let branches = setup(2).await;

@@ -885,8 +885,6 @@ async fn version_vector_empty_directory() {
     assert_eq!(dir.version_vector().await, vv![local_id => 1]);
 }
 
-// FIXME
-#[ignore]
 #[tokio::test(flavor = "multi_thread")]
 async fn file_conflict_modify_local() {
     let repo = Repository::create(
