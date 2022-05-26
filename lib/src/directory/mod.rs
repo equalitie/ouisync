@@ -17,7 +17,7 @@ pub use self::{
     entry_type::EntryType,
 };
 
-use self::{cache::SubdirectoryCache, entry_data::EntryTombstoneData, inner::Inner};
+use self::{cache::SubdirectoryCache, inner::Inner};
 use crate::{
     blob::{Blob, Shared},
     branch::Branch,
@@ -90,10 +90,20 @@ impl Directory {
 
     /// Removes a file or subdirectory from this directory. If the entry to be removed is a
     /// directory, it needs to be empty or a `DirectoryNotEmpty` error is returned.
-    pub async fn remove_entry(&self, name: &str, vv: VersionVector) -> Result<()> {
+    ///
+    /// Note: This operation does not simply remove the entry, instead, version vector of the local
+    /// entry with the same name is increased to be "happens after" `vv`. If the local version does
+    /// not exist, or if it is the one being removed (branch_id == self.branch_id), then a
+    /// tombstone is created.
+    pub async fn remove_entry(
+        &self,
+        name: &str,
+        branch_id: &PublicKey,
+        vv: VersionVector,
+    ) -> Result<()> {
         self.write()
             .await
-            .remove_entry(name, vv, OverwriteStrategy::Remove)
+            .remove_entry(name, branch_id, vv, OverwriteStrategy::Remove)
             .await
     }
 
@@ -121,6 +131,7 @@ impl Directory {
         src_dir_writer
             .remove_entry(
                 src_name,
+                &self.branch_id,
                 src_entry.version_vector().clone(),
                 OverwriteStrategy::Keep,
             )
@@ -431,6 +442,7 @@ impl Writer<'_> {
     pub async fn remove_entry(
         &mut self,
         name: &str,
+        branch_id: &PublicKey,
         vv: VersionVector,
         overwrite: OverwriteStrategy,
     ) -> Result<()> {
@@ -458,9 +470,21 @@ impl Writer<'_> {
             None
         };
 
-        let new_entry = EntryData::Tombstone(EntryTombstoneData {
-            version_vector: vv.incremented(*self.branch().id()),
-        });
+        let new_entry = if branch_id == self.branch().id() {
+            EntryData::tombstone(vv.incremented(*self.branch().id()))
+        } else {
+            match self.lookup(name) {
+                Ok(old_entry) => {
+                    let mut new_entry = old_entry.clone_data();
+                    new_entry.version_vector_mut().merge(&vv);
+                    new_entry
+                }
+                Err(Error::EntryNotFound) => {
+                    EntryData::tombstone(vv.incremented(*self.branch().id()))
+                }
+                Err(e) => return Err(e),
+            }
+        };
 
         self.inner
             .insert_entry(name.into(), new_entry, overwrite)

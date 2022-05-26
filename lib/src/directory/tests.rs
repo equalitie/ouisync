@@ -84,7 +84,10 @@ async fn remove_file() {
 
     // Reopen and remove the file
     let parent_dir = branch.open_root().await.unwrap();
-    parent_dir.remove_entry(name, file_vv).await.unwrap();
+    parent_dir
+        .remove_entry(name, branch.id(), file_vv)
+        .await
+        .unwrap();
     parent_dir.flush().await.unwrap();
 
     // Reopen again and check the file entry was removed.
@@ -330,7 +333,10 @@ async fn remove_subdirectory() {
 
     // Reopen and remove the subdirectory
     let parent_dir = branch.open_root().await.unwrap();
-    parent_dir.remove_entry(name, dir_vv).await.unwrap();
+    parent_dir
+        .remove_entry(name, branch.id(), dir_vv)
+        .await
+        .unwrap();
     parent_dir.flush().await.unwrap();
 
     // Reopen again and check the subdirectory entry was removed.
@@ -422,7 +428,10 @@ async fn fork_over_tombstone() {
         .unwrap()
         .version_vector()
         .clone();
-    root0.remove_entry("dir", vv).await.unwrap();
+    root0
+        .remove_entry("dir", branches[0].id(), vv)
+        .await
+        .unwrap();
 
     // Create a directory with the same name in branch 1.
     let root1 = branches[1].open_or_create_root().await.unwrap();
@@ -535,93 +544,68 @@ async fn insert_entry_newer_than_existing() {
     }
 }
 
-// FIXME
-#[ignore]
 #[tokio::test(flavor = "multi_thread")]
-async fn remove_concurrent_file_version() {
-    todo!()
+async fn remove_unique_remote_file() {
+    let local_branch = setup().await;
+    let root = local_branch.open_or_create_root().await.unwrap();
 
-    /*
     let name = "foo.txt";
 
-    // Test both cases - removing the local version and removing the remote version.
-    for index_to_remove in 0..2 {
-        let branches: [_; 2] = setup_multiple().await;
+    let remote_id = PublicKey::random();
+    let remote_vv = vv![remote_id => 1];
 
-        let local_id = branches[0].id();
-        let remote_id = branches[1].id();
+    root.write()
+        .await
+        .remove_entry(
+            name,
+            &remote_id,
+            remote_vv.clone(),
+            OverwriteStrategy::Remove,
+        )
+        .await
+        .unwrap();
 
-        let root = branches[0].open_or_create_root().await.unwrap();
+    let local_vv = assert_matches!(
+        root.read().await.lookup(name),
+        Ok(EntryRef::Tombstone(entry)) => entry.version_vector().clone()
+    );
 
-        let mut vvs = Vec::new();
+    assert!(local_vv > remote_vv);
+}
 
-        // Create the concurrent versions
-        for branch_id in branches.iter().map(|branch| *branch.id()) {
-            let vv = VersionVector::first(branch_id);
-            let blob_id = rand::random();
+#[tokio::test(flavor = "multi_thread")]
+async fn remove_concurrent_remote_file() {
+    let local_branch = setup().await;
+    let root = local_branch.open_or_create_root().await.unwrap();
 
-            vvs.push(vv.clone());
+    let name = "foo.txt";
+    root.create_file(name.to_owned())
+        .await
+        .unwrap()
+        .flush()
+        .await
+        .unwrap();
 
-            root.inner
-                .write()
-                .await
-                .insert_file_entry(name.into(), vv, blob_id)
-                .await
-                .unwrap();
+    let remote_id = PublicKey::random();
+    let remote_vv = vv![remote_id => 1];
 
-            Blob::create(
-                branches[0].clone(),
-                Locator::head(blob_id),
-                Shared::uninit(),
-            )
-            .flush()
-            .await
-            .unwrap();
-        }
+    root.write()
+        .await
+        .remove_entry(
+            name,
+            &remote_id,
+            remote_vv.clone(),
+            OverwriteStrategy::Remove,
+        )
+        .await
+        .unwrap();
 
-        let author_to_remove = branches[index_to_remove].id();
-        let vv_to_remove = &vvs[index_to_remove];
+    let local_vv = assert_matches!(
+        root.read().await.lookup(name),
+        Ok(EntryRef::File(entry)) => entry.version_vector().clone()
+    );
 
-        // Remove one of the versions
-        {
-            let mut writer = root.write().await;
-            writer
-                .remove_entry(
-                    name,
-                    author_to_remove,
-                    vv_to_remove.clone(),
-                    OverwriteStrategy::Remove,
-                )
-                .await
-                .unwrap();
-            writer.flush().await.unwrap();
-        }
-
-        // Verify the removed version is gone but the other version remains
-        let reader = root.read().await;
-
-        if author_to_remove == local_id {
-            // If we're removing a local version, then we replace the file with a tombstone.
-            assert_matches!(
-                reader.lookup_version(name, local_id),
-                Ok(EntryRef::Tombstone(_))
-            );
-            assert_matches!(
-                reader.lookup_version(name, remote_id),
-                Ok(EntryRef::File(_))
-            );
-        } else {
-            // If we're removing a remote version, then the VV of our version needs to be updated
-            // to "happen after" the remote version being removed, and the remote version should
-            // be removed together with its blob.
-            assert_matches!(reader.lookup_version(name, local_id), Ok(EntryRef::File(_)));
-            assert_matches!(
-                reader.lookup_version(name, remote_id),
-                Err(Error::EntryNotFound)
-            );
-        }
-    }
-    */
+    assert!(local_vv > remote_vv);
 }
 
 async fn setup() -> Branch {

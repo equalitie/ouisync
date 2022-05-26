@@ -113,17 +113,21 @@ impl JointDirectory {
             .apply(&self.read().await)?
             .map(|entry| {
                 let name = entry.name().to_owned();
+                let branch_id = match &entry {
+                    JointEntryRef::File(entry) => *entry.branch_id(),
+                    JointEntryRef::Directory(_) => *local_branch.id(),
+                };
                 let vv = entry.version_vector().into_owned();
 
-                (name, vv)
+                (name, branch_id, vv)
             })
             .collect();
 
         let mut local_writer = local.write().await;
 
-        for (name, vv) in entries {
+        for (name, branch_id, vv) in entries {
             local_writer
-                .remove_entry(&name, vv, OverwriteStrategy::Remove)
+                .remove_entry(&name, &branch_id, vv, OverwriteStrategy::Remove)
                 .await?;
         }
 
