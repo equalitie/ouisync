@@ -666,13 +666,13 @@ async fn remove_concurrent_file_version() {
 }
 
 async fn setup() -> Branch {
-    let pool = db::open_or_create(&db::Store::Temporary).await.unwrap();
+    let pool = db::create(&db::Store::Temporary).await.unwrap();
     let keys = WriteSecrets::random().into();
     create_branch(pool, keys).await
 }
 
 async fn setup_multiple<const N: usize>() -> [Branch; N] {
-    let pool = db::open_or_create(&db::Store::Temporary).await.unwrap();
+    let pool = db::create(&db::Store::Temporary).await.unwrap();
     let keys = AccessKeys::from(WriteSecrets::random());
     let branches: Vec<_> =
         future::join_all((0..N).map(|_| create_branch(pool.clone(), keys.clone()))).await;

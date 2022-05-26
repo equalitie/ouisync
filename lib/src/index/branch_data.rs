@@ -464,7 +464,7 @@ mod tests {
     }
 
     async fn init_db() -> db::PoolConnection {
-        db::open_or_create(&db::Store::Temporary)
+        db::create(&db::Store::Temporary)
             .await
             .unwrap()
             .acquire()

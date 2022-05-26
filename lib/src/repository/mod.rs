@@ -57,7 +57,7 @@ impl Repository {
         access_secrets: AccessSecrets,
         enable_merger: bool,
     ) -> Result<Self> {
-        let pool = db::open_or_create(store).await?;
+        let pool = db::create(store).await?;
         Self::create_in(
             pool,
             device_id,

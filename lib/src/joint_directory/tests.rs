@@ -732,7 +732,7 @@ async fn setup(branch_count: usize) -> Vec<Branch> {
 
 // Useful for debugging non-deterministic failures.
 async fn setup_with_rng(mut rng: StdRng, branch_count: usize) -> Vec<Branch> {
-    let pool = db::open_or_create(&db::Store::Temporary).await.unwrap();
+    let pool = db::create(&db::Store::Temporary).await.unwrap();
     let pool = &pool;
 
     let notify_tx = broadcast::Sender::new(1);

@@ -156,7 +156,7 @@ mod tests {
     }
 
     async fn setup() -> Branch {
-        let pool = db::open_or_create(&db::Store::Temporary).await.unwrap();
+        let pool = db::create(&db::Store::Temporary).await.unwrap();
 
         let writer_id = PublicKey::random();
         let secrets = WriteSecrets::random();

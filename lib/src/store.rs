@@ -318,6 +318,6 @@ mod tests {
     }
 
     async fn setup() -> db::Pool {
-        db::open_or_create(&db::Store::Temporary).await.unwrap()
+        db::create(&db::Store::Temporary).await.unwrap()
     }
 }

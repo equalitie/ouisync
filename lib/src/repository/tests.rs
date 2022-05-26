@@ -453,7 +453,7 @@ async fn append_to_file() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn blind_access_non_empty_repo() {
-    let pool = db::open_or_create(&db::Store::Temporary).await.unwrap();
+    let pool = db::create(&db::Store::Temporary).await.unwrap();
     let device_id = rand::random();
 
     // Create the repo and put a file in it.
@@ -510,7 +510,7 @@ async fn blind_access_non_empty_repo() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn blind_access_empty_repo() {
-    let pool = db::open_or_create(&db::Store::Temporary).await.unwrap();
+    let pool = db::create(&db::Store::Temporary).await.unwrap();
     let device_id = rand::random();
 
     // Create an empty repo.
@@ -541,7 +541,7 @@ async fn blind_access_empty_repo() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn read_access_same_replica() {
-    let pool = db::open_or_create(&db::Store::Temporary).await.unwrap();
+    let pool = db::create(&db::Store::Temporary).await.unwrap();
     let device_id = rand::random();
     let master_secret = MasterSecret::random();
 
@@ -600,7 +600,7 @@ async fn read_access_same_replica() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn read_access_different_replica() {
-    let pool = db::open_or_create(&db::Store::Temporary).await.unwrap();
+    let pool = db::create(&db::Store::Temporary).await.unwrap();
     let master_secret = MasterSecret::random();
 
     let device_id_a = rand::random();

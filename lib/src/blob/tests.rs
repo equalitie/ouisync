@@ -597,7 +597,7 @@ async fn block_ids_test() {
 async fn setup(rng_seed: u64) -> (StdRng, Branch) {
     let mut rng = StdRng::seed_from_u64(rng_seed);
     let secrets = WriteSecrets::generate(&mut rng);
-    let pool = db::open_or_create(&db::Store::Temporary).await.unwrap();
+    let pool = db::create(&db::Store::Temporary).await.unwrap();
 
     let notify_tx = broadcast::Sender::new(1);
     let branch = BranchData::create(
