@@ -936,8 +936,6 @@ async fn file_conflict_modify_local() {
     assert_eq!(remote_file.version_vector().await, vv![remote_id => 1]);
 }
 
-// FIXME
-#[ignore]
 #[tokio::test(flavor = "multi_thread")]
 async fn file_conflict_attempt_to_fork_and_modify_remote() {
     let repo = Repository::create(
@@ -968,9 +966,10 @@ async fn file_conflict_attempt_to_fork_and_modify_remote() {
         .open_file_version("test.txt", &remote_id)
         .await
         .unwrap();
-    remote_file.fork(&local_branch).await.unwrap();
-    remote_file.write(b"remote v2").await.unwrap();
-    assert_matches!(remote_file.flush().await, Err(Error::EntryExists));
+    assert_matches!(
+        remote_file.fork(&local_branch).await,
+        Err(Error::EntryExists)
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
