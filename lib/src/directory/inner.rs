@@ -1,4 +1,9 @@
-use super::{cache::SubdirectoryCache, entry_data::EntryData, parent_context::ParentContext};
+use super::{
+    cache::SubdirectoryCache,
+    content::{self, Content},
+    entry_data::EntryData,
+    parent_context::ParentContext,
+};
 use crate::{
     blob::{Blob, Shared},
     blob_id::BlobId,
@@ -22,7 +27,7 @@ use std::{
 pub(super) struct Inner {
     pub blob: Blob,
     // map of entry name to map of author to entry data
-    pub entries: BTreeMap<String, BTreeMap<PublicKey, EntryData>>,
+    pub entries: Content,
     // If this is an empty version vector it means this directory hasn't been modified. Otherwise
     // the version vector of this directory will be incremented by this on the next `flush`.
     pub version_vector_increment: VersionVector,
@@ -34,9 +39,7 @@ pub(super) struct Inner {
 
 impl Inner {
     pub async fn flush(&mut self, tx: &mut db::Transaction<'_>) -> Result<()> {
-        let buffer =
-            bincode::serialize(&self.entries).expect("failed to serialize directory content");
-
+        let buffer = content::serialize(&self.entries);
         self.blob.truncate_in_transaction(tx, 0).await?;
         self.blob.write_in_transaction(tx, &buffer).await?;
         self.blob.flush_in_transaction(tx).await?;
