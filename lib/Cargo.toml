@@ -50,6 +50,7 @@ tokio = "1.17.0"
 tokio-stream = "0.1.8"
 tokio-util = "0.7.1"
 urlencoding = "2.1.0"
+vint64 = "1.0.1"
 zeroize = "1.2.0"
 
 [target.'cfg(target_os = "android")'.dependencies]
