@@ -39,7 +39,7 @@ impl ToErrorCode for Error {
             Self::Db(_) => ErrorCode::Db,
             Self::DeviceIdConfig(_) => ErrorCode::DeviceIdConfig,
             Self::PermissionDenied => ErrorCode::PermissionDenied,
-            Self::MalformedData | Self::MalformedDirectory(_) => ErrorCode::MalformedData,
+            Self::MalformedData | Self::MalformedDirectory => ErrorCode::MalformedData,
             Self::EntryExists => ErrorCode::EntryExists,
             Self::EntryNotFound => ErrorCode::EntryNotFound,
             Self::AmbiguousEntry => ErrorCode::AmbiguousEntry,
@@ -56,7 +56,9 @@ impl ToErrorCode for Error {
             | Self::InitializeLogger(_)
             | Self::InitializeRuntime(_)
             | Self::Writer(_)
-            | Self::RequestTimeout => ErrorCode::Other,
+            | Self::RequestTimeout
+            // TODO: add separate code for `StorageVersionMismatch`
+            | Self::StorageVersionMismatch => ErrorCode::Other,
         }
     }
 }

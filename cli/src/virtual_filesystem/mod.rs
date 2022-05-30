@@ -915,12 +915,13 @@ fn to_error_code(error: &Error) -> libc::c_int {
         | Error::BlockNotFound(_)
         | Error::BlockNotReferenced
         | Error::MalformedData
-        | Error::MalformedDirectory(_)
+        | Error::MalformedDirectory
         | Error::WrongBlockLength(_)
         | Error::Network(_)
         | Error::InitializeLogger(_)
         | Error::InitializeRuntime(_)
-        | Error::Writer(_) => libc::EIO,
+        | Error::Writer(_)
+        | Error::StorageVersionMismatch => libc::EIO,
         Error::EntryNotFound | Error::AmbiguousEntry => libc::ENOENT,
         Error::EntryExists => libc::EEXIST,
         Error::EntryIsFile => libc::ENOTDIR,
