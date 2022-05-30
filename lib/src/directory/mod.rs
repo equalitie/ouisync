@@ -1,4 +1,5 @@
 mod cache;
+mod content;
 mod entry;
 mod entry_data;
 mod entry_type;
@@ -217,7 +218,7 @@ impl Directory {
         let branch_id = *owner_branch.id();
         let mut blob = Blob::open(owner_branch, locator, Shared::uninit().into()).await?;
         let buffer = blob.read_to_end().await?;
-        let entries = bincode::deserialize(&buffer).map_err(Error::MalformedDirectory)?;
+        let entries = content::deserialize(&buffer)?;
 
         Ok(Self {
             branch_id,

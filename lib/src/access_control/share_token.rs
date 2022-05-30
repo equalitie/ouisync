@@ -8,7 +8,7 @@ use std::{
 use zeroize::Zeroizing;
 
 pub const PREFIX: &str = "https://ouisync.net/r#";
-pub const VERSION: u8 = 0; // when this reaches 128, switch to variable-lengh encoding.
+pub const VERSION: u64 = 0;
 
 /// Token to share a repository which can be encoded as a URL-formatted string and transmitted to
 /// other replicas.
@@ -57,7 +57,7 @@ impl ShareToken {
     }
 
     pub fn encode(&self, out: &mut Vec<u8>) {
-        out.push(VERSION);
+        encode_version(out, VERSION);
         self.secrets.encode(out);
         out.extend_from_slice(self.name.as_bytes());
     }
@@ -110,10 +110,15 @@ fn parse_name(query: &str) -> Result<String, DecodeError> {
     Ok(urlencoding::decode(value)?.into_owned())
 }
 
-fn decode_version(input: &[u8]) -> Result<&[u8], DecodeError> {
-    let (first, rest) = input.split_first().ok_or(DecodeError)?;
-    if *first == VERSION {
-        Ok(rest)
+fn encode_version(output: &mut Vec<u8>, version: u64) {
+    let version = vint64::encode(version);
+    output.extend_from_slice(version.as_ref());
+}
+
+fn decode_version(mut input: &[u8]) -> Result<&[u8], DecodeError> {
+    let version = vint64::decode(&mut input).map_err(|_| DecodeError)?;
+    if version == VERSION {
+        Ok(input)
     } else {
         Err(DecodeError)
     }
@@ -123,7 +128,8 @@ impl fmt::Display for ShareToken {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", PREFIX)?;
 
-        let mut buffer = vec![VERSION];
+        let mut buffer = Vec::new();
+        encode_version(&mut buffer, VERSION);
         self.secrets.encode(&mut buffer);
 
         write!(

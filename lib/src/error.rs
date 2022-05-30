@@ -25,7 +25,7 @@ pub enum Error {
     #[error("block has wrong length (expected: {}, actual: {0})", BLOCK_SIZE)]
     WrongBlockLength(usize),
     #[error("not a directory or directory malformed")]
-    MalformedDirectory(#[source] bincode::Error),
+    MalformedDirectory,
     #[error("entry already exists")]
     EntryExists,
     #[error("entry not found")]
@@ -54,6 +54,8 @@ pub enum Error {
     Writer(#[source] io::Error),
     #[error("request timeout")]
     RequestTimeout,
+    #[error("storage version mismatch")]
+    StorageVersionMismatch,
 }
 
 impl Error {

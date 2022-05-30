@@ -34,21 +34,30 @@ impl RuntimeId {
 
 /// Protocol version
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Debug)]
-pub(super) struct Version(u8);
+pub(super) struct Version(u64);
 
 impl Version {
     pub async fn read_from<R>(io: &mut R) -> io::Result<Self>
     where
         R: AsyncRead + Unpin,
     {
-        Ok(Self(io.read_u8().await?))
+        let mut buffer = [0; vint64::MAX_BYTES];
+        io.read_exact(&mut buffer[..1]).await?;
+
+        let len = vint64::decoded_len(buffer[0]);
+        io.read_exact(&mut buffer[1..len]).await?;
+
+        let value = vint64::decode(&mut &buffer[..])
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?;
+
+        Ok(Self(value))
     }
 
     pub async fn write_into<W>(&self, io: &mut W) -> io::Result<()>
     where
         W: AsyncWrite + Unpin,
     {
-        io.write_u8(self.0).await
+        io.write_all(vint64::encode(self.0).as_ref()).await
     }
 }
 
