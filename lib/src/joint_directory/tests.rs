@@ -390,11 +390,11 @@ async fn attempt_to_merge_concurrent_file() {
     update_file(&local_root, "cat.jpg", b"v1", &branches[0]).await;
     update_file(&remote_root, "cat.jpg", b"v2", &branches[1]).await;
 
-    // Merge fails because there are conflicting entry versions
-    let result = JointDirectory::new(Some(branches[0].clone()), [local_root.clone(), remote_root])
+    // Merge succeeds but skips over the conflicting entries.
+    JointDirectory::new(Some(branches[0].clone()), [local_root.clone(), remote_root])
         .merge()
-        .await;
-    assert_matches!(result.map(|_| ()), Err(Error::EntryExists));
+        .await
+        .unwrap();
 
     // The local version is unchanged
     assert_eq!(
