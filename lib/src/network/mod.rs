@@ -21,7 +21,7 @@ mod upnp;
 use self::{
     connection::{ConnectionDeduplicator, ConnectionDirection, ConnectionPermit, PeerInfo},
     dht_discovery::DhtDiscovery,
-    ip_stack::{IpStack, Protocol},
+    ip_stack::Protocol,
     local_discovery::LocalDiscovery,
     message_broker::MessageBroker,
     protocol::{RuntimeId, Version, MAGIC, VERSION},
@@ -43,7 +43,7 @@ use std::{
     collections::{hash_map::Entry, HashMap},
     fmt,
     future::Future,
-    io, iter,
+    io,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::{Arc, Mutex as BlockingMutex, Weak},
     time::Duration,
@@ -127,52 +127,44 @@ impl Network {
         let listener = Self::bind_listener(options.listen_addr(), &config).await?;
         let listener_local_addr = listener.local_addr()?;
 
-        let dht_sockets = if !options.disable_dht {
-            Some(dht_discovery::bind(&config).await?)
+        let monitor = StateMonitor::make_root();
+
+        let dht_discovery = if !options.disable_dht {
+            let monitor = monitor.make_child("DhtDiscovery");
+            Some(DhtDiscovery::new(listener_local_addr.port(), &config, monitor).await)
         } else {
             None
         };
 
-        let dht_local_addrs = dht_sockets
+        let dht_local_addr_v4 = dht_discovery
             .as_ref()
-            .map(|sockets| sockets.as_ref().try_map(|socket| socket.local_addr()))
-            .transpose()?;
+            .and_then(|d| d.local_addr_v4())
+            .cloned();
+        let dht_local_addr_v6 = dht_discovery
+            .as_ref()
+            .and_then(|d| d.local_addr_v6())
+            .cloned();
 
-        let monitor = StateMonitor::make_root();
-
-        let port_forwarder = if !options.disable_upnp {
-            let dht_port_v4 = dht_sockets
-                .as_ref()
-                .and_then(|sockets| sockets.v4())
-                .map(|socket| socket.local_addr())
-                .transpose()?
-                .map(|addr| addr.port());
+        let (port_forwarder, listener_port_map, dht_port_map) = if !options.disable_upnp {
+            let dht_port_v4 = dht_local_addr_v4.map(|addr| addr.port());
 
             // TODO: the ipv6 port typically doesn't need to be port-mapped but it might need to
             // be opened in the firewall ("pinholed"). Consider using UPnP for that as well.
 
-            Some(upnp::PortForwarder::new(
-                iter::once(upnp::Mapping {
-                    external: listener_local_addr.port(),
-                    internal: listener_local_addr.port(),
-                    protocol: Protocol::Tcp,
-                })
-                .chain(dht_port_v4.map(|port| upnp::Mapping {
-                    external: port,
-                    internal: port,
-                    protocol: Protocol::Udp,
-                })),
-                monitor.make_child("UPnP"),
-            ))
-        } else {
-            None
-        };
+            let port_forwarder = upnp::PortForwarder::new(monitor.make_child("UPnP"));
 
-        let dht_discovery = if let Some(dht_sockets) = dht_sockets {
-            let monitor = monitor.make_child("DhtDiscovery");
-            Some(DhtDiscovery::new(dht_sockets, listener_local_addr.port(), monitor).await)
+            let listener_port_map = port_forwarder.add_mapping(
+                listener_local_addr.port(),
+                listener_local_addr.port(),
+                Protocol::Tcp,
+            );
+
+            let dht_port_map =
+                dht_port_v4.map(|port| port_forwarder.add_mapping(port, port, Protocol::Udp));
+
+            (Some(port_forwarder), Some(listener_port_map), dht_port_map)
         } else {
-            None
+            (None, None, None)
         };
 
         let tasks = Arc::new(Tasks::default());
@@ -189,7 +181,10 @@ impl Network {
                 message_brokers: HashMap::new(),
                 registry: Slab::new(),
             }),
-            dht_local_addrs,
+            _listener_port_map: listener_port_map,
+            _dht_port_map: dht_port_map,
+            dht_local_addr_v4,
+            dht_local_addr_v6,
             dht_discovery,
             dht_peer_found_tx,
             connection_deduplicator: ConnectionDeduplicator::new(),
@@ -236,11 +231,11 @@ impl Network {
     }
 
     pub fn dht_local_addr_v4(&self) -> Option<&SocketAddr> {
-        self.inner.dht_local_addrs.as_ref()?.v4()
+        self.inner.dht_local_addr_v4.as_ref()
     }
 
     pub fn dht_local_addr_v6(&self) -> Option<&SocketAddr> {
-        self.inner.dht_local_addrs.as_ref()?.v6()
+        self.inner.dht_local_addr_v6.as_ref()
     }
 
     pub fn handle(&self) -> Handle {
@@ -367,7 +362,10 @@ struct Inner {
     listener_local_addr: SocketAddr,
     this_runtime_id: RuntimeId,
     state: BlockingMutex<State>,
-    dht_local_addrs: Option<IpStack<SocketAddr>>,
+    _listener_port_map: Option<upnp::Mapping>,
+    _dht_port_map: Option<upnp::Mapping>,
+    dht_local_addr_v4: Option<SocketAddr>,
+    dht_local_addr_v6: Option<SocketAddr>,
     dht_discovery: Option<DhtDiscovery>,
     dht_peer_found_tx: mpsc::UnboundedSender<SocketAddr>,
     connection_deduplicator: ConnectionDeduplicator,
