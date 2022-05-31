@@ -128,11 +128,11 @@ impl File {
             return Ok(());
         }
 
-        let blob_id = rand::random();
-        self.blob
-            .fork(local_branch.clone(), Locator::head(blob_id))
+        // TODO: these two calls should happen attomically
+        self.parent
+            .fork_file(local_branch, *self.blob.locator().blob_id())
             .await?;
-        self.parent.fork_file(local_branch, blob_id).await?;
+        self.blob.fork(local_branch.clone()).await?;
 
         Ok(())
     }

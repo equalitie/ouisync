@@ -311,22 +311,21 @@ async fn merge_locally_older_file() {
     create_file(&remote_root, "cat.jpg", content_v0, &branches[1]).await;
 
     // Merge to transfer the file to the local branch
-    let mut root = JointDirectory::new(
-        Some(branches[0].clone()),
-        [local_root.clone(), remote_root.clone()],
-    );
-    root.merge().await.unwrap();
-
-    // Modify the file by the remote branch
-    update_file(&remote_root, "cat.jpg", content_v1, &branches[1]).await;
-
     JointDirectory::new(
         Some(branches[0].clone()),
-        vec![local_root.clone(), remote_root],
+        [local_root.clone(), remote_root.clone()],
     )
     .merge()
     .await
     .unwrap();
+
+    // Modify the file by the remote branch
+    update_file(&remote_root, "cat.jpg", content_v1, &branches[1]).await;
+
+    JointDirectory::new(Some(branches[0].clone()), [local_root.clone(), remote_root])
+        .merge()
+        .await
+        .unwrap();
 
     let reader = local_root.read().await;
     let entry = reader.lookup("cat.jpg").unwrap().file().unwrap();
