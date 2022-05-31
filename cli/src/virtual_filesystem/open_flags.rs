@@ -3,6 +3,16 @@ use std::fmt;
 // Type-safe wrapper around the file open flags.
 pub struct OpenFlags(i32);
 
+impl OpenFlags {
+    pub fn contains(&self, bit: i32) -> bool {
+        if bit == 0 {
+            self.0 & libc::O_ACCMODE == 0
+        } else {
+            self.0 & bit == bit
+        }
+    }
+}
+
 impl From<i32> for OpenFlags {
     fn from(raw: i32) -> Self {
         Self(raw)
@@ -19,7 +29,7 @@ impl fmt::Display for OpenFlags {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let mut bar = false;
         let mut write = |bit: i32, name: &'static str| {
-            if self.0 & bit != 0 {
+            if self.contains(bit) {
                 if bar {
                     write!(f, "|")?;
                 }
@@ -32,7 +42,10 @@ impl fmt::Display for OpenFlags {
         };
 
         // https://man7.org/linux/man-pages/man2/openat.2.html
-        write(libc::O_RDONLY, "RDONLY")?;
+
+        // NOTE: `O_RDONLY` and `O_LARGEFILE` are ignored because they are both 0 so they would
+        // otherwise always be printed.
+
         write(libc::O_WRONLY, "WRONLY")?;
         write(libc::O_RDWR, "RDWR")?;
         write(libc::O_APPEND, "APPEND")?;
@@ -43,7 +56,6 @@ impl fmt::Display for OpenFlags {
         write(libc::O_DIRECTORY, "DIRECTORY")?;
         write(libc::O_DSYNC, "DSYNC")?;
         write(libc::O_EXCL, "EXCL")?;
-        write(libc::O_LARGEFILE, "LARGEFILE")?;
         write(libc::O_NOATIME, "NOATIME")?;
         write(libc::O_NOCTTY, "NOCTTY")?;
         write(libc::O_NOFOLLOW, "NOFOLLOW")?;
