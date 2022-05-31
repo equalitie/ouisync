@@ -480,6 +480,7 @@ impl Inner {
         if let Some(size) = size {
             file.fork(&local_branch).await?;
             file.truncate(size).await?;
+            file.flush().await?;
         }
 
         Ok(make_file_attr(inode, EntryType::File, file.len().await))
