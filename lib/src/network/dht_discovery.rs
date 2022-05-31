@@ -358,7 +358,7 @@ impl Lookup {
 }
 
 // Returns the router IP addresses.
-async fn dht_router_addresses(ip_v: IpVersion) -> Vec<SocketAddr> {
+pub async fn dht_router_addresses(ip_v: IpVersion) -> Vec<SocketAddr> {
     future::join_all(DHT_ROUTERS.iter().map(net::lookup_host))
         .await
         .into_iter()

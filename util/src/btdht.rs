@@ -1,7 +1,7 @@
 use btdht::MainlineDht;
 use futures_util::StreamExt;
 use ouisync_lib::{
-    network::{self, dht_discovery},
+    network::{self, dht_discovery, ip_stack::IpVersion},
     ShareToken,
 };
 use std::{
@@ -30,7 +30,8 @@ async fn main() -> io::Result<()> {
     let socket_v6 = UdpSocket::bind((Ipv6Addr::UNSPECIFIED, 0)).await.ok();
 
     println!("Resolving DHT routers...");
-    let (ipv4_routers, ipv6_routers) = dht_discovery::dht_router_addresses().await;
+    let ipv4_routers = dht_discovery::dht_router_addresses(IpVersion::V4).await;
+    let ipv6_routers = dht_discovery::dht_router_addresses(IpVersion::V6).await;
 
     for router in ipv4_routers.iter().chain(ipv6_routers.iter()) {
         println!("  {:?}", router);

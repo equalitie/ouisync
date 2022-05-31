@@ -16,7 +16,7 @@ impl fmt::Display for Protocol {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) enum IpVersion {
+pub enum IpVersion {
     V4,
     V6,
 }

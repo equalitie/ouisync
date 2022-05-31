@@ -3,7 +3,7 @@ mod client;
 mod connection;
 mod crypto;
 pub mod dht_discovery;
-mod ip_stack;
+pub mod ip_stack;
 mod keep_alive;
 mod local_discovery;
 mod message;
