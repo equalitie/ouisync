@@ -52,7 +52,7 @@ impl<'a> EntryRef<'a> {
         }
     }
 
-    pub fn version_vector(&self) -> &VersionVector {
+    pub fn version_vector(&self) -> &'a VersionVector {
         match self {
             Self::File(f) => f.version_vector(),
             Self::Directory(d) => d.version_vector(),
@@ -101,6 +101,15 @@ impl<'a> EntryRef<'a> {
             Self::File(e) => EntryData::File(e.data().clone()),
             Self::Directory(e) => EntryData::Directory(e.data().clone()),
             Self::Tombstone(e) => EntryData::Tombstone(e.data().clone()),
+        }
+    }
+
+    // Returns the blob id of this entry or `EntryNotFound` if it is a tomstone.
+    pub(crate) fn blob_id(&self) -> Result<&'a BlobId> {
+        match self {
+            Self::File(entry) => Ok(entry.blob_id()),
+            Self::Directory(entry) => Ok(entry.blob_id()),
+            Self::Tombstone(_) => Err(Error::EntryNotFound),
         }
     }
 
@@ -221,7 +230,7 @@ impl<'a> DirectoryRef<'a> {
         self.entry_data
     }
 
-    pub fn version_vector(&self) -> &VersionVector {
+    pub fn version_vector(&self) -> &'a VersionVector {
         &self.entry_data.version_vector
     }
 }
@@ -253,7 +262,7 @@ impl<'a> TombstoneRef<'a> {
         self.entry_data
     }
 
-    pub fn version_vector(&self) -> &VersionVector {
+    pub fn version_vector(&self) -> &'a VersionVector {
         &self.entry_data.version_vector
     }
 }

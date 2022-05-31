@@ -128,10 +128,8 @@ impl File {
             return Ok(());
         }
 
-        // TODO: these two calls should happen attomically
-        self.parent
-            .fork_file(local_branch, *self.blob.locator().blob_id())
-            .await?;
+        // TODO: these two calls should happen atomically
+        self.parent.fork_file(local_branch).await?;
         self.blob.fork(local_branch.clone()).await?;
 
         Ok(())

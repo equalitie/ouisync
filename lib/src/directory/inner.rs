@@ -140,10 +140,6 @@ impl Inner {
             Ok(())
         }
     }
-
-    pub fn entry_version_vector(&self, name: &str) -> Option<&VersionVector> {
-        Some(self.entries.get(name)?.version_vector())
-    }
 }
 
 #[async_recursion]
