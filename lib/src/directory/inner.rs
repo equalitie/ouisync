@@ -73,6 +73,9 @@ impl Inner {
 
                 if matches!(overwrite, OverwriteStrategy::Remove) {
                     if let Some(blob_id) = old_data.blob_id() {
+                        // NOTE: The garbage collector removes only unreachable blocks, but does not
+                        // modify the index (i.e., it doesn't remove the nodes poitning to those
+                        // blocks). That is why we need to remove the blob explicitly here.
                         remove_blob(self.blob.branch(), *blob_id).await?;
                     }
                 }
