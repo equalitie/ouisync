@@ -1,12 +1,12 @@
-use super::{ip_stack::IpVersion, socket};
+use super::socket;
 use crate::{
     config::{ConfigKey, ConfigStore},
     scoped_task::{self, ScopedJoinHandle},
     state_monitor::StateMonitor,
 };
-use btdht::{InfoHash, MainlineDht};
+use btdht::{InfoHash, IpVersion, MainlineDht};
 use chrono::{offset::Local, DateTime};
-use futures_util::{future, stream, StreamExt};
+use futures_util::{stream, StreamExt};
 use rand::Rng;
 use std::{
     borrow::Cow,
@@ -21,7 +21,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 use tokio::{
-    net::{self, UdpSocket},
+    net::UdpSocket,
     select,
     sync::{mpsc, watch},
     time,
@@ -120,11 +120,14 @@ async fn start_dht(
     config: &ConfigStore,
     monitor: &Arc<StateMonitor>,
 ) -> RestartableDht {
-    let routers = dht_router_addresses(ip_v).await;
+    // TODO: Unwrap
+    let socket = bind(ip_v, &config).await.unwrap();
 
-    // TODO: Unwraps
-    let socket = bind(ip_v, config).await.unwrap();
-    let local_addr = socket.local_addr().unwrap();
+    // Unwrap OK because `Socket::new` only fails if it can't get `local_addr` out of it, but since
+    // we just succeeded in binding the socket above, that shouldn't happen.
+    let socket = btdht::Socket::new(socket).unwrap();
+
+    let local_addr = socket.local_addr();
 
     let protocol = match ip_v {
         IpVersion::V4 => "IPv4",
@@ -134,8 +137,9 @@ async fn start_dht(
     let monitor = monitor.make_child(protocol);
 
     // TODO: load the DHT state from a previous save if it exists.
+    // TODO: Unwrap
     let dht = MainlineDht::builder()
-        .add_routers(routers)
+        .add_routers(DHT_ROUTERS.iter().copied())
         .set_read_only(false)
         .set_announce_port(acceptor_port)
         .start(socket);
@@ -309,9 +313,8 @@ impl Lookup {
                 *state.get() = Cow::Borrowed("making request");
 
                 // find peers for the repo and also announce that we have it.
-                //let mut peers =
-                //    stream::iter(dhts.iter()).flat_map(|dht| dht.search(info_hash, true));
                 let dhts = [&dht_v4, &dht_v6];
+
                 let mut peers =
                     stream::iter(dhts.iter()).flat_map(|dht| dht.dht.search(info_hash, true));
 
@@ -355,20 +358,6 @@ impl Lookup {
             }
         })
     }
-}
-
-// Returns the router IP addresses.
-pub async fn dht_router_addresses(ip_v: IpVersion) -> Vec<SocketAddr> {
-    future::join_all(DHT_ROUTERS.iter().map(net::lookup_host))
-        .await
-        .into_iter()
-        .filter_map(|result| result.ok())
-        .flatten()
-        .filter(|addr| match ip_v {
-            IpVersion::V4 => addr.is_ipv4(),
-            IpVersion::V6 => addr.is_ipv6(),
-        })
-        .collect()
 }
 
 async fn bind(ip_v: IpVersion, config: &ConfigStore) -> io::Result<UdpSocket> {

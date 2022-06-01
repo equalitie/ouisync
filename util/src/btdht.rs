@@ -1,7 +1,7 @@
 use btdht::MainlineDht;
 use futures_util::StreamExt;
 use ouisync_lib::{
-    network::{self, dht_discovery, ip_stack::IpVersion},
+    network::{self, dht_discovery::DHT_ROUTERS},
     ShareToken,
 };
 use std::{
@@ -26,27 +26,26 @@ async fn main() -> io::Result<()> {
 
     env_logger::init();
 
-    let socket_v4 = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).await.ok();
-    let socket_v6 = UdpSocket::bind((Ipv6Addr::UNSPECIFIED, 0)).await.ok();
+    let socket_v4 = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))
+        .await
+        .ok()
+        .and_then(|s| btdht::Socket::new(s).ok());
 
-    println!("Resolving DHT routers...");
-    let ipv4_routers = dht_discovery::dht_router_addresses(IpVersion::V4).await;
-    let ipv6_routers = dht_discovery::dht_router_addresses(IpVersion::V6).await;
-
-    for router in ipv4_routers.iter().chain(ipv6_routers.iter()) {
-        println!("  {:?}", router);
-    }
+    let socket_v6 = UdpSocket::bind((Ipv6Addr::UNSPECIFIED, 0))
+        .await
+        .ok()
+        .and_then(|s| btdht::Socket::new(s).ok());
 
     let dht_v4 = socket_v4.map(|socket| {
         MainlineDht::builder()
-            .add_routers(ipv4_routers)
+            .add_routers(DHT_ROUTERS.iter().copied())
             .set_read_only(true)
             .start(socket)
     });
 
     let dht_v6 = socket_v6.map(|socket| {
         MainlineDht::builder()
-            .add_routers(ipv6_routers)
+            .add_routers(DHT_ROUTERS.iter().copied())
             .set_read_only(true)
             .start(socket)
     });
@@ -65,12 +64,14 @@ async fn main() -> io::Result<()> {
 
     task.await?;
 
+    // Uncomment to keep observing the DHT (for when debugging).
+    //std::future::pending::<()>().await;
+
     Ok(())
 }
 
 async fn lookup(prefix: &str, dht: &MainlineDht, token: &ShareToken) {
     println!("{} Bootstrapping...", prefix);
-
     if dht.bootstrapped().await {
         let mut seen_peers = HashSet::new();
         let info_hash = network::repository_info_hash(token.id());
