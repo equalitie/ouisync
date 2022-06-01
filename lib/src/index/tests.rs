@@ -8,6 +8,7 @@ use crate::{
 use assert_matches::assert_matches;
 use futures_util::{future, StreamExt};
 use rand::{rngs::StdRng, Rng, SeedableRng};
+use sqlx::Connection;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn receive_valid_root_node() {
@@ -147,13 +148,17 @@ async fn receive_root_node_with_existing_hash() {
     let locator = rng.gen();
 
     let mut conn = index.pool.acquire().await.unwrap();
-    block::write(&mut conn, &block_id, &content, &block_nonce)
+    let mut tx = conn.begin().await.unwrap();
+
+    block::write(&mut tx, &block_id, &content, &block_nonce)
         .await
         .unwrap();
     local_branch
-        .insert(&mut conn, &block_id, &locator, &write_keys)
+        .insert(&mut tx, &block_id, &locator, &write_keys)
         .await
         .unwrap();
+
+    tx.commit().await.unwrap();
     drop(conn);
 
     // Receive root node with the same hash as the current local one but different writer id.

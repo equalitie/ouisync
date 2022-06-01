@@ -16,8 +16,6 @@ use crate::{
     version_vector::VersionVector,
 };
 
-use sqlx::Acquire;
-
 type LocatorHash = Hash;
 
 pub(crate) struct BranchData {
@@ -67,20 +65,20 @@ impl BranchData {
     /// Inserts a new block into the index.
     pub async fn insert(
         &self,
-        conn: &mut db::Connection,
+        tx: &mut db::Transaction<'_>,
         block_id: &BlockId,
         encoded_locator: &LocatorHash,
         write_keys: &Keypair,
     ) -> Result<()> {
         let mut lock = self.root_node.write().await;
-        let mut path = load_path(conn, &lock.proof.hash, encoded_locator).await?;
+        let mut path = load_path(tx, &lock.proof.hash, encoded_locator).await?;
 
         // We shouldn't be inserting a block to a branch twice. If we do, the assumption is that we
         // hit one in 2^sizeof(BlockId) chance that we randomly generated the same BlockId twice.
         assert!(!path.has_leaf(block_id));
 
         path.set_leaf(block_id);
-        save_path(conn, &mut lock, &path, write_keys).await?;
+        save_path(tx, &mut lock, &path, write_keys).await?;
 
         Ok(())
     }
@@ -88,16 +86,16 @@ impl BranchData {
     /// Removes the block identified by encoded_locator from the index.
     pub async fn remove(
         &self,
-        conn: &mut db::Connection,
+        tx: &mut db::Transaction<'_>,
         encoded_locator: &Hash,
         write_keys: &Keypair,
     ) -> Result<()> {
         let mut lock = self.root_node.write().await;
-        let mut path = load_path(conn, &lock.proof.hash, encoded_locator).await?;
+        let mut path = load_path(tx, &lock.proof.hash, encoded_locator).await?;
 
         path.remove_leaf(encoded_locator)
             .ok_or(Error::EntryNotFound)?;
-        save_path(conn, &mut lock, &path, write_keys).await?;
+        save_path(tx, &mut lock, &path, write_keys).await?;
 
         Ok(())
     }
@@ -235,17 +233,15 @@ async fn count_leaf_nodes(
 }
 
 async fn save_path(
-    conn: &mut db::Connection,
+    tx: &mut db::Transaction<'_>,
     old_root: &mut RootNode,
     path: &Path,
     write_keys: &Keypair,
 ) -> Result<()> {
-    let mut tx = conn.begin().await?;
-
     for (i, inner_layer) in path.inner.iter().enumerate() {
         if let Some(parent_hash) = path.hash_at_layer(i) {
             for (bucket, node) in inner_layer {
-                node.save(&mut tx, &parent_hash, bucket).await?;
+                node.save(tx, &parent_hash, bucket).await?;
             }
         }
     }
@@ -253,7 +249,7 @@ async fn save_path(
     let layer = Path::total_layer_count() - 1;
     if let Some(parent_hash) = path.hash_at_layer(layer - 1) {
         for leaf in &path.leaves {
-            leaf.save(&mut tx, &parent_hash).await?;
+            leaf.save(tx, &parent_hash).await?;
         }
     }
 
@@ -263,11 +259,9 @@ async fn save_path(
         path.root_hash,
         write_keys,
     );
-    let new_root = RootNode::create(&mut tx, new_proof, old_root.summary).await?;
+    let new_root = RootNode::create(tx, new_proof, old_root.summary).await?;
 
-    replace_root(&mut tx, old_root, new_root).await?;
-
-    tx.commit().await?;
+    replace_root(tx, old_root, new_root).await?;
 
     Ok(())
 }
@@ -300,7 +294,7 @@ mod tests {
         test_utils,
     };
     use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
-    use sqlx::Row;
+    use sqlx::{Connection, Row};
     use test_strategy::proptest;
 
     #[tokio::test(flavor = "multi_thread")]
@@ -313,12 +307,13 @@ mod tests {
         let locator = random_head_locator();
         let encoded_locator = locator.encode(&read_key);
 
+        let mut tx = conn.begin().await.unwrap();
         branch
-            .insert(&mut conn, &block_id, &encoded_locator, &write_keys)
+            .insert(&mut tx, &block_id, &encoded_locator, &write_keys)
             .await
             .unwrap();
 
-        let r = branch.get(&mut conn, &encoded_locator).await.unwrap();
+        let r = branch.get(&mut tx, &encoded_locator).await.unwrap();
 
         assert_eq!(r, block_id);
     }
@@ -336,23 +331,25 @@ mod tests {
             let locator = random_head_locator();
             let encoded_locator = locator.encode(&read_key);
 
+            let mut tx = conn.begin().await.unwrap();
+
             branch
-                .insert(&mut conn, &b1, &encoded_locator, &write_keys)
+                .insert(&mut tx, &b1, &encoded_locator, &write_keys)
                 .await
                 .unwrap();
 
             branch
-                .insert(&mut conn, &b2, &encoded_locator, &write_keys)
+                .insert(&mut tx, &b2, &encoded_locator, &write_keys)
                 .await
                 .unwrap();
 
-            let r = branch.get(&mut conn, &encoded_locator).await.unwrap();
+            let r = branch.get(&mut tx, &encoded_locator).await.unwrap();
 
             assert_eq!(r, b2);
 
             assert_eq!(
                 INNER_LAYER_COUNT + 1,
-                count_branch_forest_entries(&mut conn).await
+                count_branch_forest_entries(&mut tx).await
             );
         }
     }
@@ -367,36 +364,34 @@ mod tests {
         let locator = random_head_locator();
         let encoded_locator = locator.encode(&read_key);
 
-        assert_eq!(0, count_branch_forest_entries(&mut conn).await);
+        let mut tx = conn.begin().await.unwrap();
 
-        {
-            branch
-                .insert(&mut conn, &b, &encoded_locator, &write_keys)
-                .await
-                .unwrap();
-            let r = branch.get(&mut conn, &encoded_locator).await.unwrap();
-            assert_eq!(r, b);
-        }
+        assert_eq!(0, count_branch_forest_entries(&mut tx).await);
+
+        branch
+            .insert(&mut tx, &b, &encoded_locator, &write_keys)
+            .await
+            .unwrap();
+        let r = branch.get(&mut tx, &encoded_locator).await.unwrap();
+        assert_eq!(r, b);
 
         assert_eq!(
             INNER_LAYER_COUNT + 1,
-            count_branch_forest_entries(&mut conn).await
+            count_branch_forest_entries(&mut tx).await
         );
 
-        {
-            branch
-                .remove(&mut conn, &encoded_locator, &write_keys)
-                .await
-                .unwrap();
+        branch
+            .remove(&mut tx, &encoded_locator, &write_keys)
+            .await
+            .unwrap();
 
-            match branch.get(&mut conn, &encoded_locator).await {
-                Err(Error::EntryNotFound) => { /* OK */ }
-                Err(_) => panic!("Error should have been EntryNotFound"),
-                Ok(_) => panic!("BranchData shouldn't have contained the block ID"),
-            }
+        match branch.get(&mut tx, &encoded_locator).await {
+            Err(Error::EntryNotFound) => { /* OK */ }
+            Err(_) => panic!("Error should have been EntryNotFound"),
+            Ok(_) => panic!("BranchData shouldn't have contained the block ID"),
         }
 
-        assert_eq!(0, count_branch_forest_entries(&mut conn).await);
+        assert_eq!(0, count_branch_forest_entries(&mut tx).await);
     }
 
     #[proptest]
@@ -413,6 +408,7 @@ mod tests {
         let write_keys = Keypair::generate(&mut rng);
 
         let mut locators = Vec::new();
+        let mut tx = conn.begin().await.unwrap();
 
         // Add blocks
         for _ in 0..leaf_count {
@@ -420,25 +416,22 @@ mod tests {
             let block_id = rng.gen();
 
             branch
-                .insert(&mut conn, &block_id, &locator, &write_keys)
+                .insert(&mut tx, &block_id, &locator, &write_keys)
                 .await
                 .unwrap();
 
             locators.push(locator);
 
-            assert!(!has_empty_inner_node(&mut conn).await);
+            assert!(!has_empty_inner_node(&mut tx).await);
         }
 
         // Remove blocks
         locators.shuffle(&mut rng);
 
         for locator in locators {
-            branch
-                .remove(&mut conn, &locator, &write_keys)
-                .await
-                .unwrap();
+            branch.remove(&mut tx, &locator, &write_keys).await.unwrap();
 
-            assert!(!has_empty_inner_node(&mut conn).await);
+            assert!(!has_empty_inner_node(&mut tx).await);
         }
     }
 
