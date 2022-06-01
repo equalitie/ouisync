@@ -76,9 +76,10 @@ impl Index {
                 let root_node =
                     RootNode::create(&mut *self.pool.acquire().await?, proof, Summary::FULL)
                         .await?;
-
-                let branch = BranchData::new(root_node, self.shared.notify_tx.clone());
+                let branch =
+                    BranchData::new(root_node.proof.writer_id, self.shared.notify_tx.clone());
                 let branch = Arc::new(branch);
+
                 entry.insert(branch.clone());
 
                 Ok(branch)
@@ -312,8 +313,6 @@ impl Index {
         for (id, complete) in statuses {
             if complete {
                 self.update_root_node(conn, id).await?;
-            } else {
-                self.reload_root_node(conn, &id).await?;
             }
         }
 
@@ -325,38 +324,19 @@ impl Index {
         conn: &mut db::Connection,
         writer_id: PublicKey,
     ) -> Result<()> {
-        let node = RootNode::load_latest_complete_by_writer(conn, writer_id).await?;
-
-        let created_branch = match self.shared.branches.write().await.entry(writer_id) {
+        match self.shared.branches.write().await.entry(writer_id) {
             Entry::Vacant(entry) => {
                 // We could have accumulated a bunch of incomplete root nodes before this
                 // particular one became complete. We want to remove those.
+                let node = RootNode::load_latest_complete_by_writer(conn, writer_id).await?;
                 node.remove_recursively_all_older(conn).await?;
 
-                let branch = Arc::new(BranchData::new(node, self.shared.notify_tx.clone()));
-                entry.insert(branch.clone());
-                Some(branch)
+                let branch = BranchData::new(node.proof.writer_id, self.shared.notify_tx.clone());
+                let branch = Arc::new(branch);
+
+                entry.insert(branch).notify()
             }
-            Entry::Occupied(entry) => {
-                entry.get().update_root(conn, node).await?;
-                None
-            }
-        };
-
-        if let Some(branch) = created_branch {
-            branch.notify();
-        }
-
-        Ok(())
-    }
-
-    async fn reload_root_node(
-        &self,
-        conn: &mut db::Connection,
-        writer_id: &PublicKey,
-    ) -> Result<()> {
-        if let Some(branch) = self.shared.branches.read().await.get(writer_id) {
-            branch.reload_root(conn).await?;
+            Entry::Occupied(entry) => entry.get().notify(),
         }
 
         Ok(())
@@ -391,7 +371,7 @@ async fn load_branches(
     RootNode::load_all_latest_complete(conn)
         .map_ok(|node| {
             let writer_id = node.proof.writer_id;
-            let branch = Arc::new(BranchData::new(node, notify_tx.clone()));
+            let branch = Arc::new(BranchData::new(writer_id, notify_tx.clone()));
 
             (writer_id, branch)
         })

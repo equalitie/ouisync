@@ -12,26 +12,21 @@ use crate::{
     db,
     error::{Error, Result},
     sync::broadcast,
-    sync::RwLock,
     version_vector::VersionVector,
 };
 
 type LocatorHash = Hash;
 
 pub(crate) struct BranchData {
-    writer_id: PublicKey, // copied from `root_node` to allow accessing it without locking.
-    root_node: RwLock<RootNode>,
+    writer_id: PublicKey,
     notify_tx: broadcast::OverflowSender<PublicKey>,
 }
 
 impl BranchData {
     /// Construct a branch data using the provided root node.
-    pub fn new(root_node: RootNode, notify_tx: broadcast::Sender<PublicKey>) -> Self {
-        assert!(root_node.summary.is_complete());
-
+    pub fn new(writer_id: PublicKey, notify_tx: broadcast::Sender<PublicKey>) -> Self {
         Self {
-            writer_id: root_node.proof.writer_id,
-            root_node: RwLock::new(root_node),
+            writer_id,
             notify_tx: broadcast::OverflowSender::new(notify_tx),
         }
     }
@@ -46,15 +41,14 @@ impl BranchData {
     ) -> Result<Self> {
         use super::node::Summary;
 
-        Ok(Self::new(
-            RootNode::create(conn, Proof::first(writer_id, write_keys), Summary::FULL).await?,
-            notify_tx,
-        ))
+        RootNode::create(conn, Proof::first(writer_id, write_keys), Summary::FULL).await?;
+
+        Ok(Self::new(writer_id, notify_tx))
     }
 
     /// Destroy this branch
     pub async fn destroy(&self, conn: &mut db::Connection) -> Result<()> {
-        let root = self.root_node.read().await;
+        let root = self.load_root(conn).await?;
 
         root.remove_recursively_all_older(conn).await?;
         root.remove_recursively(conn).await?;
@@ -82,6 +76,11 @@ impl BranchData {
     }
 
     /// Inserts a new block into the index.
+    ///
+    /// # Cancel safety
+    ///
+    /// This operation is atomic even in the presence of cancellation - it either executes fully or
+    /// it doesn't execute at all.
     pub async fn insert(
         &self,
         tx: &mut db::Transaction<'_>,
@@ -89,39 +88,44 @@ impl BranchData {
         encoded_locator: &LocatorHash,
         write_keys: &Keypair,
     ) -> Result<()> {
-        let mut lock = self.root_node.write().await;
-        let mut path = load_path(tx, &lock.proof.hash, encoded_locator).await?;
+        let root = self.load_root(tx).await?;
+        let mut path = load_path(tx, &root.proof.hash, encoded_locator).await?;
 
         // We shouldn't be inserting a block to a branch twice. If we do, the assumption is that we
         // hit one in 2^sizeof(BlockId) chance that we randomly generated the same BlockId twice.
         assert!(!path.has_leaf(block_id));
 
         path.set_leaf(block_id);
-        save_path(tx, &mut lock, &path, write_keys).await?;
+        save_path(tx, &root, &path, write_keys).await?;
 
         Ok(())
     }
 
     /// Removes the block identified by encoded_locator from the index.
+    ///
+    /// # Cancel safety
+    ///
+    /// This operation is atomic even in the presence of cancellation - it either executes fully or
+    /// it doesn't execute at all.
     pub async fn remove(
         &self,
         tx: &mut db::Transaction<'_>,
         encoded_locator: &Hash,
         write_keys: &Keypair,
     ) -> Result<()> {
-        let mut lock = self.root_node.write().await;
-        let mut path = load_path(tx, &lock.proof.hash, encoded_locator).await?;
+        let root = self.load_root(tx).await?;
+        let mut path = load_path(tx, &root.proof.hash, encoded_locator).await?;
 
         path.remove_leaf(encoded_locator)
             .ok_or(Error::EntryNotFound)?;
-        save_path(tx, &mut lock, &path, write_keys).await?;
+        save_path(tx, &root, &path, write_keys).await?;
 
         Ok(())
     }
 
     /// Retrieve `BlockId` of a block with the given encoded `Locator`.
     pub async fn get(&self, conn: &mut db::Connection, encoded_locator: &Hash) -> Result<BlockId> {
-        let root_hash = self.root_node.read().await.proof.hash;
+        let root_hash = self.load_root(conn).await?.proof.hash;
         let path = load_path(conn, &root_hash, encoded_locator).await?;
 
         match path.get_leaf() {
@@ -132,7 +136,7 @@ impl BranchData {
 
     #[cfg(test)]
     pub async fn count_leaf_nodes(&self, conn: &mut db::Connection) -> Result<usize> {
-        let root_hash = self.root_node.read().await.proof.hash;
+        let root_hash = self.load_root(conn).await?.proof.hash;
         count_leaf_nodes(conn, 0, &root_hash).await
     }
 
@@ -141,36 +145,19 @@ impl BranchData {
         self.notify_tx.broadcast(self.writer_id).unwrap_or(())
     }
 
-    /// Update the root node of this branch. Does nothing if the version of `new_root` is not
-    /// greater than the version of the current root.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `new_root` is not complete.
-    pub async fn update_root(&self, conn: &mut db::Connection, new_root: RootNode) -> Result<()> {
-        let mut old_root = self.root_node.write().await;
-
-        if new_root.proof.version_vector.get(&self.writer_id)
-            <= old_root.proof.version_vector.get(&self.writer_id)
-        {
-            return Ok(());
-        }
-
-        replace_root(conn, &mut old_root, new_root).await?;
-
-        self.notify();
-
-        Ok(())
-    }
-
     /// Update the root version vector of this branch.
+    ///
+    /// # Cancel safety
+    ///
+    /// This operation is atomic even in the presence of cancellation - it either executes fully or
+    /// it doesn't execute at all.
     pub async fn update_root_version_vector(
         &self,
-        tx: db::Transaction<'_>,
+        mut tx: db::Transaction<'_>,
         increment: &VersionVector,
         write_keys: &Keypair,
     ) -> Result<()> {
-        let mut root_node = self.root_node.write().await;
+        let root_node = self.load_root(&mut tx).await?;
 
         let mut new_version_vector = root_node.proof.version_vector.clone();
         new_version_vector += increment;
@@ -182,15 +169,13 @@ impl BranchData {
             write_keys,
         );
 
-        root_node.update_proof(tx, new_proof).await?;
+        root_node.update_proof(&mut tx, new_proof).await?;
+
+        tx.commit().await?;
 
         self.notify();
 
         Ok(())
-    }
-
-    pub async fn reload_root(&self, db: &mut db::Connection) -> Result<()> {
-        self.root_node.write().await.reload(db).await
     }
 }
 
@@ -228,7 +213,7 @@ async fn load_path(
 
 async fn save_path(
     tx: &mut db::Transaction<'_>,
-    old_root: &mut RootNode,
+    old_root: &RootNode,
     path: &Path,
     write_keys: &Keypair,
 ) -> Result<()> {
@@ -253,27 +238,13 @@ async fn save_path(
         path.root_hash,
         write_keys,
     );
+
     let new_root = RootNode::create(tx, new_proof, old_root.summary).await?;
-
-    replace_root(tx, old_root, new_root).await?;
-
-    Ok(())
-}
-
-// Panics if `new_root` is not complete.
-async fn replace_root(
-    conn: &mut db::Connection,
-    old_root: &mut RootNode,
-    new_root: RootNode,
-) -> Result<()> {
-    assert!(new_root.summary.is_complete());
 
     // NOTE: It is not enough to remove only the old_root because there may be a non zero
     // number of incomplete roots that have been downloaded prior to new_root becoming
     // complete.
-    new_root.remove_recursively_all_older(conn).await?;
-
-    *old_root = new_root;
+    new_root.remove_recursively_all_older(tx).await?;
 
     Ok(())
 }

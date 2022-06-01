@@ -78,10 +78,9 @@ impl Store {
 
         let branches = self.index.branches().await;
 
-        // Reload root nodes of the affected branches and notify them.
+        // Notify affected branches.
         for writer_id in &writer_ids {
             if let Some(branch) = branches.get(writer_id) {
-                branch.reload_root(&mut cx).await?;
                 branch.notify();
             }
         }
