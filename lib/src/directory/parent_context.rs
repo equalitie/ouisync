@@ -22,8 +22,8 @@ impl ParentContext {
     }
 
     /// Atomically finalizes any pending modifications to the entry that holds this parent context.
-    /// This updates the version vector and possibly author id of this entry and all its ancestors,
-    /// flushes them and finally commits the transaction.
+    /// This updates the version vector of this entry and all its ancestors, flushes them and
+    /// finally commits the transaction.
     ///
     /// If an error occurs anywhere in the process, all intermediate changes are rolled back and all
     /// the affected directories are reverted to their state before calling this function.

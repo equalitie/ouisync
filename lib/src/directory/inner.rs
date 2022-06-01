@@ -31,13 +31,36 @@ pub(super) struct Inner {
 }
 
 impl Inner {
-    pub async fn flush(&mut self, tx: &mut db::Transaction<'_>) -> Result<()> {
+    pub async fn flush(&mut self, mut tx: db::Transaction<'_>) -> Result<()> {
+        // Save the directory content into the store
         let buffer = content::serialize(&self.entries);
-        self.blob.truncate_in_transaction(tx, 0).await?;
-        self.blob.write_in_transaction(tx, &buffer).await?;
-        self.blob.flush_in_transaction(tx).await?;
+        self.blob.truncate_in_transaction(&mut tx, 0).await?;
+        self.blob.write_in_transaction(&mut tx, &buffer).await?;
+        self.blob.flush_in_transaction(&mut tx).await?;
 
-        Ok(())
+        // Update the version vector of this directory and all it's ancestors
+        let increment = mem::take(&mut self.version_vector_increment);
+
+        if let Some(ctx) = self.parent.as_mut() {
+            ctx.modify_entry(tx, &increment).await
+        } else {
+            // At this point all local newly created blocks should become reachable so they can be
+            // safely unpinned to become normal subjects of garbage collection.
+            block::unpin_all(&mut tx).await?;
+
+            let write_keys = self
+                .blob
+                .branch()
+                .keys()
+                .write()
+                .ok_or(Error::PermissionDenied)?;
+
+            self.blob
+                .branch()
+                .data()
+                .update_root_version_vector(tx, &increment, write_keys)
+                .await
+        }
     }
 
     // If `overwrite` is set to `Keep`, the existing blob won't be removed from the store. This is
@@ -106,56 +129,18 @@ impl Inner {
         self.insert_entry(name, data, OverwriteStrategy::Remove)
             .await
     }
-
-    // Modify an entry in this directory with the specified name.
-    pub fn modify_entry(&mut self, name: &str, increment: &VersionVector) -> Result<()> {
-        let data = self.entries.get_mut(name).ok_or(Error::EntryNotFound)?;
-        *data.version_vector_mut() += increment;
-        self.version_vector_increment += increment;
-
-        Ok(())
-    }
-
-    // Modify the entry of this directory in its parent.
-    pub async fn modify_self_entry(&mut self, mut tx: db::Transaction<'_>) -> Result<()> {
-        let increment = mem::take(&mut self.version_vector_increment);
-
-        if let Some(ctx) = self.parent.as_mut() {
-            ctx.modify_entry(tx, &increment).await
-        } else {
-            // At this point all local newly created blocks should become reachable so they can be
-            // safely unpinned to become normal subjects of garbage collection.
-            block::unpin_all(&mut tx).await?;
-
-            let write_keys = self
-                .blob
-                .branch()
-                .keys()
-                .write()
-                .ok_or(Error::PermissionDenied)?;
-
-            self.blob
-                .branch()
-                .data()
-                .update_root_version_vector(tx, &increment, write_keys)
-                .await?;
-
-            Ok(())
-        }
-    }
 }
 
 #[async_recursion]
 pub(super) async fn modify_entry<'a>(
-    mut tx: db::Transaction<'a>,
+    tx: db::Transaction<'a>,
     inner: RwLockWriteGuard<'a, Inner>,
     name: &'a str,
     increment: &'a VersionVector,
 ) -> Result<()> {
     let mut op = ModifyEntry::new(inner, name);
     op.apply(increment)?;
-    op.inner.flush(&mut tx).await?;
-    op.inner.modify_self_entry(tx).await?;
+    op.inner.flush(tx).await?;
     op.commit();
 
     Ok(())
@@ -186,7 +171,15 @@ impl<'a> ModifyEntry<'a> {
 
     // Apply the operation. The operation can still be undone after this by dropping `self`.
     fn apply(&mut self, increment: &VersionVector) -> Result<()> {
-        self.inner.modify_entry(self.name, increment)
+        let data = self
+            .inner
+            .entries
+            .get_mut(self.name)
+            .ok_or(Error::EntryNotFound)?;
+        *data.version_vector_mut() += increment;
+        self.inner.version_vector_increment += increment;
+
+        Ok(())
     }
 
     // Commit the operation. After this is called the operation cannot be undone.

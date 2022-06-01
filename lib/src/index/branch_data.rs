@@ -64,32 +64,6 @@ impl BranchData {
         self.root_node.read().await
     }
 
-    /// Update the root version vector of this branch.
-    pub async fn update_root_version_vector(
-        &self,
-        tx: db::Transaction<'_>,
-        increment: &VersionVector,
-        write_keys: &Keypair,
-    ) -> Result<()> {
-        let mut root_node = self.root_node.write().await;
-
-        let mut new_version_vector = root_node.proof.version_vector.clone();
-        new_version_vector += increment;
-
-        let new_proof = Proof::new(
-            root_node.proof.writer_id,
-            new_version_vector,
-            root_node.proof.hash,
-            write_keys,
-        );
-
-        root_node.update_proof(tx, new_proof).await?;
-
-        self.notify();
-
-        Ok(())
-    }
-
     /// Inserts a new block into the index.
     pub async fn insert(
         &self,
@@ -166,6 +140,32 @@ impl BranchData {
         }
 
         replace_root(conn, &mut old_root, new_root).await?;
+
+        self.notify();
+
+        Ok(())
+    }
+
+    /// Update the root version vector of this branch.
+    pub async fn update_root_version_vector(
+        &self,
+        tx: db::Transaction<'_>,
+        increment: &VersionVector,
+        write_keys: &Keypair,
+    ) -> Result<()> {
+        let mut root_node = self.root_node.write().await;
+
+        let mut new_version_vector = root_node.proof.version_vector.clone();
+        new_version_vector += increment;
+
+        let new_proof = Proof::new(
+            root_node.proof.writer_id,
+            new_version_vector,
+            root_node.proof.hash,
+            write_keys,
+        );
+
+        root_node.update_proof(tx, new_proof).await?;
 
         self.notify();
 

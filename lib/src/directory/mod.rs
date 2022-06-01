@@ -432,9 +432,8 @@ impl Writer<'_> {
         }
 
         let mut conn = self.inner.blob.db_pool().acquire().await?;
-        let mut tx = conn.begin().await?;
-        self.inner.flush(&mut tx).await?;
-        self.inner.modify_self_entry(tx).await?;
+        let tx = conn.begin().await?;
+        self.inner.flush(tx).await?;
 
         Ok(())
     }
