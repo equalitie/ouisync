@@ -162,11 +162,10 @@ async fn receive_root_node_with_existing_hash() {
     drop(conn);
 
     // Receive root node with the same hash as the current local one but different writer id.
-    let root = local_branch.root().await;
+    let root = local_branch.root().await.unwrap();
     assert!(root.summary.is_complete());
     let root_hash = root.proof.hash;
     let root_vv = root.proof.version_vector.clone();
-    drop(root);
 
     let proof = Proof::new(remote_id, root_vv, root_hash, &write_keys);
 
@@ -176,7 +175,7 @@ async fn receive_root_node_with_existing_hash() {
         .await
         .unwrap();
 
-    assert!(local_branch.root().await.summary.is_complete());
+    assert!(local_branch.root().await.unwrap().summary.is_complete());
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -185,7 +185,7 @@ impl<'a> Monitor<'a> {
             return Ok(());
         };
 
-        let root_node = branch.root().await;
+        let root_node = branch.root().await?;
 
         if !root_node.summary.is_complete() {
             // send only complete branches
@@ -202,12 +202,11 @@ impl<'a> Monitor<'a> {
         );
 
         let response = Response::RootNode {
-            proof: root_node.proof.clone().into(),
+            proof: root_node.proof.into(),
             summary: root_node.summary,
         };
 
         // Don't hold the locks while sending is in progress.
-        drop(root_node);
         drop(branches);
 
         self.tx.send(response).await;

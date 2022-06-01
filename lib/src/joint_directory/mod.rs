@@ -172,8 +172,8 @@ impl JointDirectory {
         let local_branch = self.local_branch.as_ref().ok_or(Error::PermissionDenied)?;
         let local_version = fork(&mut self.versions, local_branch).await?;
 
-        let new_version_vector = self.merge_version_vectors().await;
-        let old_version_vector = local_version.read().await.version_vector().await;
+        let new_version_vector = self.merge_version_vectors().await?;
+        let old_version_vector = local_version.read().await.version_vector().await?;
 
         if old_version_vector >= new_version_vector {
             // Local version already up to date, nothing to do.
@@ -216,14 +216,14 @@ impl JointDirectory {
     }
 
     // Merge the version vectors of all the versions in this joint directory.
-    async fn merge_version_vectors(&self) -> VersionVector {
+    async fn merge_version_vectors(&self) -> Result<VersionVector> {
         let mut outcome = VersionVector::new();
 
         for version in self.versions.values() {
-            outcome.merge(&version.read().await.version_vector().await);
+            outcome.merge(&version.read().await.version_vector().await?);
         }
 
-        outcome
+        Ok(outcome)
     }
 }
 

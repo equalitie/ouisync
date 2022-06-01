@@ -328,7 +328,7 @@ async fn remove_subdirectory() {
 
     let (dir_locator, dir_vv) = {
         let reader = dir.read().await;
-        (*reader.locator(), reader.version_vector().await)
+        (*reader.locator(), reader.version_vector().await.unwrap())
     };
 
     // Reopen and remove the subdirectory

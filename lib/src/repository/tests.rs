@@ -705,9 +705,15 @@ async fn version_vector_create_file() {
     // Initially the vvs are all empty
     let mut file = repo.create_file("parent/test.txt").await.unwrap();
     assert_eq!(file.version_vector().await, vv![]);
-    assert_eq!(file.parent().version_vector().await, vv![]);
+    assert_eq!(file.parent().version_vector().await.unwrap(), vv![]);
     assert_eq!(
-        file.parent().parent().await.unwrap().version_vector().await,
+        file.parent()
+            .parent()
+            .await
+            .unwrap()
+            .version_vector()
+            .await
+            .unwrap(),
         vv![]
     );
 
@@ -716,11 +722,20 @@ async fn version_vector_create_file() {
     assert_eq!(file.version_vector().await, vv![local_id => 1]);
     // +1 for the parent being created
     // +1 for inserting the file
-    assert_eq!(file.parent().version_vector().await, vv![local_id => 2]);
+    assert_eq!(
+        file.parent().version_vector().await.unwrap(),
+        vv![local_id => 2]
+    );
     // +1 for the root being created
     // +2 for inserting the parent
     assert_eq!(
-        file.parent().parent().await.unwrap().version_vector().await,
+        file.parent()
+            .parent()
+            .await
+            .unwrap()
+            .version_vector()
+            .await
+            .unwrap(),
         vv![local_id => 3]
     );
 
@@ -729,10 +744,19 @@ async fn version_vector_create_file() {
     // +1 for the file being modified
     assert_eq!(file.version_vector().await, vv![local_id => 2]);
     // +1 for the parent being modified due to file vv bump
-    assert_eq!(file.parent().version_vector().await, vv![local_id => 3]);
+    assert_eq!(
+        file.parent().version_vector().await.unwrap(),
+        vv![local_id => 3]
+    );
     // +1 for the root being modified due to parent vv bump
     assert_eq!(
-        file.parent().parent().await.unwrap().version_vector().await,
+        file.parent()
+            .parent()
+            .await
+            .unwrap()
+            .version_vector()
+            .await
+            .unwrap(),
         vv![local_id => 4]
     );
 }
@@ -770,7 +794,7 @@ async fn version_vector_deep_hierarchy() {
     // Each directory's local version is one less than its parent.
     for (index, dir) in dirs.iter().skip(1).enumerate() {
         assert_eq!(
-            dir.version_vector().await,
+            dir.version_vector().await.unwrap(),
             vv![local_id => (depth - index) as u64]
         );
     }
@@ -843,14 +867,16 @@ async fn version_vector_fork_files() {
         local_parent
             .version_vector()
             .await
-            .partial_cmp(&remote_parent.version_vector().await),
+            .unwrap()
+            .partial_cmp(&remote_parent.version_vector().await.unwrap()),
         None
     );
     assert_eq!(
         local_root
             .version_vector()
             .await
-            .partial_cmp(&remote_root.version_vector().await),
+            .unwrap()
+            .partial_cmp(&remote_root.version_vector().await.unwrap()),
         None
     );
 
@@ -860,8 +886,13 @@ async fn version_vector_fork_files() {
 
     // Parent and root are now newer.
     assert_eq!(file1.version_vector().await, remote_file1_vv);
-    assert!(local_parent.version_vector().await > remote_parent.version_vector().await);
-    assert!(local_root.version_vector().await > remote_root.version_vector().await);
+    assert!(
+        local_parent.version_vector().await.unwrap()
+            > remote_parent.version_vector().await.unwrap()
+    );
+    assert!(
+        local_root.version_vector().await.unwrap() > remote_root.version_vector().await.unwrap()
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -879,10 +910,10 @@ async fn version_vector_empty_directory() {
     let local_id = *repo.get_or_create_local_branch().await.unwrap().id();
 
     let dir = repo.create_directory("stuff").await.unwrap();
-    assert_eq!(dir.version_vector().await, vv![]);
+    assert_eq!(dir.version_vector().await.unwrap(), vv![]);
 
     dir.flush().await.unwrap();
-    assert_eq!(dir.version_vector().await, vv![local_id => 1]);
+    assert_eq!(dir.version_vector().await.unwrap(), vv![local_id => 1]);
 }
 
 #[tokio::test(flavor = "multi_thread")]

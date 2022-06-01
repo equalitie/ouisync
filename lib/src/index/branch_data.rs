@@ -12,7 +12,7 @@ use crate::{
     db,
     error::{Error, Result},
     sync::broadcast,
-    sync::{RwLock, RwLockReadGuard},
+    sync::RwLock,
     version_vector::VersionVector,
 };
 
@@ -52,14 +52,30 @@ impl BranchData {
         ))
     }
 
+    /// Destroy this branch
+    pub async fn destroy(&self, conn: &mut db::Connection) -> Result<()> {
+        let root = self.root_node.read().await;
+
+        root.remove_recursively_all_older(conn).await?;
+        root.remove_recursively(conn).await?;
+
+        self.notify();
+
+        Ok(())
+    }
+
     /// Returns the id of the replica that owns this branch.
     pub fn id(&self) -> &PublicKey {
         &self.writer_id
     }
 
-    /// Returns the root node of the latest snapshot of this branch.
-    pub async fn root(&self) -> RwLockReadGuard<'_, RootNode> {
-        self.root_node.read().await
+    /// Returns the latest complete root node of this branch.
+    pub async fn root(&self) -> Result<RootNode> {
+        Ok(self.root_node.read().await.clone())
+    }
+
+    pub async fn version_vector(&self) -> Result<VersionVector> {
+        Ok(self.root_node.read().await.proof.version_vector.clone())
     }
 
     /// Inserts a new block into the index.
@@ -207,31 +223,6 @@ async fn load_path(
     Ok(path)
 }
 
-#[cfg(test)]
-use async_recursion::async_recursion;
-
-#[async_recursion]
-#[cfg(test)]
-async fn count_leaf_nodes(
-    conn: &mut db::Connection,
-    current_layer: usize,
-    node: &Hash,
-) -> Result<usize> {
-    if current_layer < INNER_LAYER_COUNT {
-        let children = InnerNode::load_children(conn, node).await?;
-
-        let mut sum = 0;
-
-        for (_bucket, child) in children {
-            sum += count_leaf_nodes(conn, current_layer + 1, &child.hash).await?;
-        }
-
-        Ok(sum)
-    } else {
-        Ok(LeafNode::load_children(conn, node).await?.len())
-    }
-}
-
 async fn save_path(
     tx: &mut db::Transaction<'_>,
     old_root: &mut RootNode,
@@ -282,6 +273,31 @@ async fn replace_root(
     *old_root = new_root;
 
     Ok(())
+}
+
+#[cfg(test)]
+use async_recursion::async_recursion;
+
+#[async_recursion]
+#[cfg(test)]
+async fn count_leaf_nodes(
+    conn: &mut db::Connection,
+    current_layer: usize,
+    node: &Hash,
+) -> Result<usize> {
+    if current_layer < INNER_LAYER_COUNT {
+        let children = InnerNode::load_children(conn, node).await?;
+
+        let mut sum = 0;
+
+        for (_bucket, child) in children {
+            sum += count_leaf_nodes(conn, current_layer + 1, &child.hash).await?;
+        }
+
+        Ok(sum)
+    } else {
+        Ok(LeafNode::load_children(conn, node).await?.len())
+    }
 }
 
 #[cfg(test)]

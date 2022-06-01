@@ -82,17 +82,18 @@ impl Merger {
             return;
         };
 
-        let handle = scoped_task::spawn(async move {
-            if local.data().root().await.proof.version_vector
-                > remote.data().root().await.proof.version_vector
-            {
-                log::debug!(
-                    "merge with branch {:?} suppressed - local branch already up to date",
-                    remote_id
-                );
-                return remote_id;
-            }
+        let local_vv = local.data().version_vector().await.unwrap_or_default();
+        let remote_vv = remote.data().version_vector().await.unwrap_or_default();
 
+        if local_vv > remote_vv {
+            log::debug!(
+                "merge with branch {:?} suppressed - local branch already up to date",
+                remote_id
+            );
+            return;
+        }
+
+        let handle = scoped_task::spawn(async move {
             log::debug!("merge with branch {:?} started", remote_id);
 
             match merge_branches(local, remote).await {

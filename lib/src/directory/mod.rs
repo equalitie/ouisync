@@ -192,8 +192,8 @@ impl Directory {
             local_branch.open_or_create_root().await?
         };
 
-        let src_vv = self.read().await.version_vector().await;
-        dir.write().await.fork(&src_vv).await;
+        let src_vv = self.read().await.version_vector().await?;
+        dir.write().await.fork(&src_vv).await?;
 
         Ok(dir)
     }
@@ -340,7 +340,7 @@ impl Directory {
     }
 
     #[cfg(test)]
-    pub(crate) async fn version_vector(&self) -> VersionVector {
+    pub(crate) async fn version_vector(&self) -> Result<VersionVector> {
         self.read().await.version_vector().await
     }
 }
@@ -505,12 +505,12 @@ impl Writer<'_> {
     }
 
     /// Version vector of this directory.
-    pub async fn version_vector(&self) -> VersionVector {
+    pub async fn version_vector(&self) -> Result<VersionVector> {
         version_vector(&self.inner).await
     }
 
-    async fn fork(&mut self, src_vv: &VersionVector) {
-        let dst_vv = self.version_vector().await;
+    async fn fork(&mut self, src_vv: &VersionVector) -> Result<()> {
+        let dst_vv = self.version_vector().await?;
 
         for (id, version) in src_vv {
             if *version == 0 {
@@ -523,6 +523,8 @@ impl Writer<'_> {
 
             self.inner.version_vector_increment.increment(*id);
         }
+
+        Ok(())
     }
 }
 
@@ -558,7 +560,7 @@ impl Reader<'_> {
     }
 
     /// Version vector of this directory.
-    pub async fn version_vector(&self) -> VersionVector {
+    pub async fn version_vector(&self) -> Result<VersionVector> {
         version_vector(&self.inner).await
     }
 
@@ -577,18 +579,10 @@ fn lookup<'a>(outer: &'a Directory, inner: &'a Inner, name: &'_ str) -> Result<E
         .ok_or(Error::EntryNotFound)
 }
 
-async fn version_vector(inner: &Inner) -> VersionVector {
+async fn version_vector(inner: &Inner) -> Result<VersionVector> {
     if let Some(parent) = &inner.parent {
-        parent.entry_version_vector().await
+        Ok(parent.entry_version_vector().await)
     } else {
-        inner
-            .blob
-            .branch()
-            .data()
-            .root()
-            .await
-            .proof
-            .version_vector
-            .clone()
+        inner.blob.branch().data().version_vector().await
     }
 }

@@ -97,15 +97,7 @@ impl Index {
         };
 
         let mut conn = self.pool.acquire().await?;
-
-        let root = branch.root().await;
-        root.remove_recursively_all_older(&mut conn).await?;
-        root.remove_recursively(&mut conn).await?;
-
-        drop(root);
-        drop(conn);
-
-        branch.notify();
+        branch.destroy(&mut conn).await?;
 
         Ok(())
     }
@@ -142,7 +134,7 @@ impl Index {
                 continue;
             }
 
-            if proof.version_vector < branch.root().await.proof.version_vector {
+            if proof.version_vector < branch.version_vector().await? {
                 return Ok(false);
             }
         }
@@ -154,7 +146,7 @@ impl Index {
         let updated;
 
         if let Some(branch) = branches.get(&proof.writer_id) {
-            let old_node = branch.root().await;
+            let old_node = branch.root().await?;
 
             match proof
                 .version_vector
