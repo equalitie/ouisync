@@ -17,7 +17,7 @@ pub use self::{
     entry_type::EntryType,
 };
 
-use self::{cache::SubdirectoryCache, entry_data::EntryTombstoneData, inner::Inner};
+use self::{cache::SubdirectoryCache, inner::Inner};
 use crate::{
     blob::{Blob, Shared},
     branch::Branch,
@@ -93,17 +93,17 @@ impl Directory {
     ///
     /// Note: This operation does not simply remove the entry, instead, version vector of the local
     /// entry with the same name is increased to be "happens after" `vv`. If the local version does
-    /// not exist, or if it is the one being removed (author == this_writer_id), then a tombstone
-    /// is created.
+    /// not exist, or if it is the one being removed (branch_id == self.branch_id), then a
+    /// tombstone is created.
     pub async fn remove_entry(
         &self,
         name: &str,
-        author: &PublicKey,
+        branch_id: &PublicKey,
         vv: VersionVector,
     ) -> Result<()> {
         self.write()
             .await
-            .remove_entry(name, author, vv, OverwriteStrategy::Remove)
+            .remove_entry(name, branch_id, vv, OverwriteStrategy::Remove)
             .await
     }
 
@@ -121,7 +121,6 @@ impl Directory {
     pub(crate) async fn move_entry(
         &self,
         src_name: &str,
-        src_author: &PublicKey,
         src_entry: EntryData,
         dst_dir: &Directory,
         dst_name: &str,
@@ -132,7 +131,7 @@ impl Directory {
         src_dir_writer
             .remove_entry(
                 src_name,
-                src_author,
+                &self.branch_id,
                 src_entry.version_vector().clone(),
                 OverwriteStrategy::Keep,
             )
@@ -142,13 +141,11 @@ impl Directory {
         let mut dst_entry = src_entry;
         *dst_entry.version_vector_mut() = dst_vv;
 
-        let dst_author = dst_dir.branch_id;
-
         // TODO: We need to undo the `remove_file` action from above if this next one fails.
         dst_dir_writer
             .as_mut()
             .unwrap_or(&mut src_dir_writer)
-            .insert_entry(dst_name.into(), dst_author, dst_entry)
+            .insert_entry(dst_name.into(), dst_entry)
             .await
     }
 
@@ -180,10 +177,10 @@ impl Directory {
             let parent_dir = parent_dir.fork(local_branch).await?;
             let mut parent_dir = parent_dir.write().await;
 
-            match parent_dir.lookup_version(&parent_entry_name, local_branch.id()) {
+            match parent_dir.lookup(&parent_entry_name) {
                 Ok(EntryRef::Directory(entry)) => entry.open().await?,
                 Ok(EntryRef::File(_)) => {
-                    // FIXME: create the directory alongside the file somehow.
+                    // TODO: return some kind of `Error::Conflict`
                     return Err(Error::EntryIsFile);
                 }
                 Ok(EntryRef::Tombstone(_)) | Err(Error::EntryNotFound) => {
@@ -248,27 +245,15 @@ impl Directory {
         }
     }
 
-    pub async fn open_file(&self, name: &str, author: &PublicKey) -> Result<File> {
+    pub async fn open_file(&self, name: &str) -> Result<File> {
         // IMPORTANT: make sure the parent directory is unlocked before `await`-ing the `open`
         // future, to avoid deadlocks.
-        let open = {
-            self.read()
-                .await
-                .lookup_version(name, author)?
-                .file()?
-                .open()
-        };
-
+        let open = self.read().await.lookup(name)?.file()?.open();
         open.await
     }
 
-    pub async fn open_directory(&self, name: &str, author: &PublicKey) -> Result<Directory> {
-        self.read()
-            .await
-            .lookup_version(name, author)?
-            .directory()?
-            .open()
-            .await
+    pub async fn open_directory(&self, name: &str) -> Result<Directory> {
+        self.read().await.lookup(name)?.directory()?.open().await
     }
 
     // Lock this directory for writing.
@@ -281,77 +266,71 @@ impl Directory {
     pub async fn debug_print(&self, print: DebugPrinter) {
         let inner = self.inner.read().await;
 
-        for (name, versions) in &inner.entries {
-            print.display(name);
-            let print = print.indent();
+        for (name, entry_data) in &inner.entries {
+            print.display(&format_args!("{:?}: {:?}", name, entry_data));
 
-            for (author, entry_data) in versions {
-                print.display(&format!("{:?}: {:?}", author, entry_data));
+            match entry_data {
+                EntryData::File(file_data) => {
+                    let print = print.indent();
 
-                match entry_data {
-                    EntryData::File(file_data) => {
-                        let print = print.indent();
+                    let parent_context = ParentContext::new(self.clone(), name.into());
 
-                        let parent_context = ParentContext::new(self.clone(), name.into(), *author);
+                    let file = File::open(
+                        inner.blob.branch().clone(),
+                        Locator::head(file_data.blob_id),
+                        parent_context,
+                        Shared::uninit().into(),
+                    )
+                    .await;
 
-                        let file = File::open(
+                    match file {
+                        Ok(mut file) => {
+                            let mut buf = [0; 32];
+                            let lenght_result = file.read(&mut buf).await;
+                            match lenght_result {
+                                Ok(length) => {
+                                    let file_len = file.len().await;
+                                    let ellipsis = if file_len > length as u64 { ".." } else { "" };
+                                    print.display(&format!(
+                                        "Content: {:?}{}",
+                                        std::str::from_utf8(&buf[..length]),
+                                        ellipsis
+                                    ));
+                                }
+                                Err(e) => {
+                                    print.display(&format!("Failed to read {:?}", e));
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            print.display(&format!("Failed to open {:?}", e));
+                        }
+                    }
+                }
+                EntryData::Directory(data) => {
+                    let print = print.indent();
+
+                    let parent_context = ParentContext::new(self.clone(), name.into());
+
+                    let dir = inner
+                        .open_directories
+                        .open(
                             inner.blob.branch().clone(),
-                            Locator::head(file_data.blob_id),
+                            Locator::head(data.blob_id),
                             parent_context,
-                            Shared::uninit().into(),
                         )
                         .await;
 
-                        match file {
-                            Ok(mut file) => {
-                                let mut buf = [0; 32];
-                                let lenght_result = file.read(&mut buf).await;
-                                match lenght_result {
-                                    Ok(length) => {
-                                        let file_len = file.len().await;
-                                        let ellipsis =
-                                            if file_len > length as u64 { ".." } else { "" };
-                                        print.display(&format!(
-                                            "Content: {:?}{}",
-                                            std::str::from_utf8(&buf[..length]),
-                                            ellipsis
-                                        ));
-                                    }
-                                    Err(e) => {
-                                        print.display(&format!("Failed to read {:?}", e));
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                print.display(&format!("Failed to open {:?}", e));
-                            }
+                    match dir {
+                        Ok(dir) => {
+                            dir.debug_print(print).await;
+                        }
+                        Err(e) => {
+                            print.display(&format!("Failed to open {:?}", e));
                         }
                     }
-                    EntryData::Directory(data) => {
-                        let print = print.indent();
-
-                        let parent_context = ParentContext::new(self.clone(), name.into(), *author);
-
-                        let dir = inner
-                            .open_directories
-                            .open(
-                                inner.blob.branch().clone(),
-                                Locator::head(data.blob_id),
-                                parent_context,
-                            )
-                            .await;
-
-                        match dir {
-                            Ok(dir) => {
-                                dir.debug_print(print).await;
-                            }
-                            Err(e) => {
-                                print.display(&format!("Failed to open {:?}", e));
-                            }
-                        }
-                    }
-                    EntryData::Tombstone(_) => {}
                 }
+                EntryData::Tombstone(_) => {}
             }
         }
     }
@@ -415,14 +394,13 @@ pub(crate) struct Writer<'a> {
 
 impl Writer<'_> {
     pub async fn create_file(&mut self, name: String) -> Result<File> {
-        let author = *self.branch().id();
         let blob_id = rand::random();
         let shared = Shared::uninit();
         let data = EntryData::file(blob_id, VersionVector::new(), shared.downgrade());
-        let parent = ParentContext::new(self.outer.clone(), name.clone(), author);
+        let parent = ParentContext::new(self.outer.clone(), name.clone());
 
         self.inner
-            .insert_entry(name, author, data, OverwriteStrategy::Remove)
+            .insert_entry(name, data, OverwriteStrategy::Remove)
             .await?;
 
         Ok(File::create(
@@ -434,23 +412,18 @@ impl Writer<'_> {
     }
 
     pub async fn create_directory(&mut self, name: String) -> Result<Directory> {
-        let author = *self.branch().id();
         let blob_id = rand::random();
         let data = EntryData::directory(blob_id, VersionVector::new());
-        let parent = ParentContext::new(self.outer.clone(), name.clone(), author);
+        let parent = ParentContext::new(self.outer.clone(), name.clone());
 
         self.inner
-            .insert_entry(name, author, data, OverwriteStrategy::Remove)
+            .insert_entry(name, data, OverwriteStrategy::Remove)
             .await?;
 
         self.inner
             .open_directories
             .create(self.branch(), Locator::head(blob_id), parent)
             .await
-    }
-
-    pub fn lookup_version(&self, name: &'_ str, author: &PublicKey) -> Result<EntryRef> {
-        lookup_version(&*self.inner, self.outer, name, author)
     }
 
     pub async fn flush(&mut self) -> Result<()> {
@@ -469,13 +442,13 @@ impl Writer<'_> {
     pub async fn remove_entry(
         &mut self,
         name: &str,
-        author: &PublicKey,
+        branch_id: &PublicKey,
         vv: VersionVector,
         overwrite: OverwriteStrategy,
     ) -> Result<()> {
         // If we are removing a directory, ensure it's empty (recursive removal can still be
         // implemented at the upper layers).
-        let old_dir = match self.lookup_version(name, author) {
+        let old_dir = match self.lookup(name) {
             Ok(EntryRef::Directory(entry)) => Some(entry.open().await?),
             Ok(_) | Err(Error::EntryNotFound) => None,
             Err(error) => return Err(error),
@@ -497,40 +470,35 @@ impl Writer<'_> {
             None
         };
 
-        let this_writer_id = *self.branch().id();
-
-        let new_entry = if author == &this_writer_id {
-            EntryData::Tombstone(EntryTombstoneData {
-                version_vector: vv.incremented(this_writer_id),
-            })
+        let new_entry = if branch_id == self.branch().id() {
+            EntryData::tombstone(vv.incremented(*self.branch().id()))
         } else {
-            match self.lookup_version(name, &this_writer_id) {
-                Ok(local_entry) => {
-                    let mut new_entry = local_entry.clone_data();
+            match self.lookup(name) {
+                Ok(old_entry) => {
+                    let mut new_entry = old_entry.clone_data();
                     new_entry.version_vector_mut().merge(&vv);
                     new_entry
                 }
-                Err(Error::EntryNotFound) => EntryData::Tombstone(EntryTombstoneData {
-                    version_vector: vv.incremented(this_writer_id),
-                }),
+                Err(Error::EntryNotFound) => {
+                    EntryData::tombstone(vv.incremented(*self.branch().id()))
+                }
                 Err(e) => return Err(e),
             }
         };
 
         self.inner
-            .insert_entry(name.into(), this_writer_id, new_entry, overwrite)
+            .insert_entry(name.into(), new_entry, overwrite)
             .await
     }
 
-    pub async fn insert_entry(
-        &mut self,
-        name: String,
-        author: PublicKey,
-        entry: EntryData,
-    ) -> Result<()> {
+    pub async fn insert_entry(&mut self, name: String, entry: EntryData) -> Result<()> {
         self.inner
-            .insert_entry(name, author, entry, OverwriteStrategy::Remove)
+            .insert_entry(name, entry, OverwriteStrategy::Remove)
             .await
+    }
+
+    pub fn lookup(&self, name: &'_ str) -> Result<EntryRef> {
+        lookup(self.outer, &*self.inner, name)
     }
 
     pub fn branch(&self) -> &Branch {
@@ -568,23 +536,15 @@ pub struct Reader<'a> {
 impl Reader<'_> {
     /// Returns iterator over the entries of this directory.
     pub fn entries(&self) -> impl Iterator<Item = EntryRef> + DoubleEndedIterator + Clone {
-        self.inner.entries.iter().flat_map(move |(name, versions)| {
-            versions.iter().map(move |(author, data)| {
-                EntryRef::new(self.outer, &*self.inner, name, data, author)
-            })
-        })
+        self.inner
+            .entries
+            .iter()
+            .map(move |(name, data)| EntryRef::new(self.outer, &*self.inner, name, data))
     }
 
     /// Lookup an entry of this directory by name.
-    pub fn lookup(
-        &self,
-        name: &'_ str,
-    ) -> Result<impl Iterator<Item = EntryRef> + ExactSizeIterator> {
+    pub fn lookup(&self, name: &'_ str) -> Result<EntryRef> {
         lookup(self.outer, &*self.inner, name)
-    }
-
-    pub fn lookup_version(&self, name: &'_ str, author: &PublicKey) -> Result<EntryRef> {
-        lookup_version(&*self.inner, self.outer, name, author)
     }
 
     /// Length of this directory in bytes. Does not include the content, only the size of directory
@@ -610,36 +570,11 @@ impl Reader<'_> {
     }
 }
 
-fn lookup_version<'a>(
-    inner: &'a Inner,
-    outer: &'a Directory,
-    name: &str,
-    author: &PublicKey,
-) -> Result<EntryRef<'a>> {
+fn lookup<'a>(outer: &'a Directory, inner: &'a Inner, name: &'_ str) -> Result<EntryRef<'a>> {
     inner
         .entries
         .get_key_value(name)
-        .and_then(|(name, versions)| {
-            versions
-                .get_key_value(author)
-                .map(|(author, data)| EntryRef::new(outer, &*inner, name, data, author))
-        })
-        .ok_or(Error::EntryNotFound)
-}
-
-fn lookup<'a>(
-    outer: &'a Directory,
-    inner: &'a Inner,
-    name: &'_ str,
-) -> Result<impl Iterator<Item = EntryRef<'a>> + Clone + ExactSizeIterator> {
-    inner
-        .entries
-        .get_key_value(name)
-        .map(|(name, versions)| {
-            versions
-                .iter()
-                .map(move |(author, data)| EntryRef::new(outer, inner, name, data, author))
-        })
+        .map(|(name, data)| EntryRef::new(outer, inner, name, data))
         .ok_or(Error::EntryNotFound)
 }
 

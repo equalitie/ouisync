@@ -1,7 +1,7 @@
-use super::inner;
+use super::{entry::EntryRef, inner};
 use crate::{
-    blob_id::BlobId, branch::Branch, crypto::sign::PublicKey, db, directory::Directory,
-    error::Result, version_vector::VersionVector,
+    blob_id::BlobId, branch::Branch, db, directory::Directory, error::Result,
+    version_vector::VersionVector,
 };
 
 /// Info about an entry in the context of its parent directory.
@@ -11,17 +11,13 @@ pub(crate) struct ParentContext {
     directory: Directory,
     /// The name of the entry in its parent directory.
     entry_name: String,
-    /// Author of the particular version of entry, i.e. the ID of the replica last to have
-    /// incremented the version vector.
-    entry_author: PublicKey,
 }
 
 impl ParentContext {
-    pub(super) fn new(directory: Directory, entry_name: String, entry_author: PublicKey) -> Self {
+    pub(super) fn new(directory: Directory, entry_name: String) -> Self {
         Self {
             directory,
             entry_name,
-            entry_author,
         }
     }
 
@@ -40,15 +36,14 @@ impl ParentContext {
             tx,
             self.directory.inner.write().await,
             &self.entry_name,
-            &mut self.entry_author,
             increment,
         )
         .await
     }
 
-    /// Forks the parent directory and inserts the entry into it as file with the given blob id.
-    pub async fn fork_file(&mut self, local_branch: &Branch, blob_id: BlobId) -> Result<()> {
-        let old_vv = self.entry_version_vector().await;
+    /// Forks the parent directory and inserts the entry into it as file.
+    pub async fn fork_file(&mut self, local_branch: &Branch) -> Result<()> {
+        let (blob_id, old_vv) = self.entry_details().await;
 
         let directory = self.directory();
         let directory = directory.fork(local_branch).await?;
@@ -57,7 +52,7 @@ impl ParentContext {
             .inner
             .write()
             .await
-            .insert_file_entry(self.entry_name.clone(), self.entry_author, old_vv, blob_id)
+            .insert_file_entry(self.entry_name.clone(), old_vv, blob_id)
             .await?;
 
         self.directory = directory;
@@ -74,15 +69,41 @@ impl ParentContext {
         &self.directory
     }
 
-    // TODO: Can this be done without cloning the VersionVector? E.g. by returning some kind of
-    // read lock.
+    /// Returns the version vector and the blob id of this entry.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this `ParentContext` doesn't correspond to any existing entry in the parent
+    /// directory.
+    pub async fn entry_details(&self) -> (BlobId, VersionVector) {
+        self.map_entry(|entry| {
+            (
+                *entry.blob_id().expect("dangling ParentContext"),
+                entry.version_vector().clone(),
+            )
+        })
+        .await
+    }
+
+    /// Returns the version vector of this entry.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this `ParentContext` doesn't correspond to any existing entry in the parent
+    /// directory.
     pub async fn entry_version_vector(&self) -> VersionVector {
-        self.directory
-            .inner
+        self.map_entry(|entry| entry.version_vector().clone()).await
+    }
+
+    async fn map_entry<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(EntryRef) -> R,
+    {
+        f(self
+            .directory
             .read()
             .await
-            .entry_version_vector(&self.entry_name, &self.entry_author)
-            .cloned()
-            .unwrap_or_default()
+            .lookup(&self.entry_name)
+            .expect("dangling ParentContext"))
     }
 }

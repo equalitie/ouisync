@@ -185,7 +185,7 @@ impl PortForwarder {
                             // The above is expected to never exit. But even if it does (e.g. if
                             // the code changes), it should be Ok because the device is re-spawned
                             // the next time the discovery finds it.
-                            return Ok(());
+                            Ok(())
                         } else {
                             Err(rupnp::Error::InvalidResponse(
                                 format!(

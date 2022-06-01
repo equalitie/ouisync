@@ -256,18 +256,10 @@ impl<'a> Operations<'a> {
     }
 
     /// Creates a shallow copy (only the index nodes are copied, not blocks) of this blob into the
-    /// specified destination branch and locator.
-    pub async fn fork(
-        &mut self,
-        conn: &mut db::Connection,
-        dst_branch: Branch,
-        dst_head_locator: Locator,
-    ) -> Result<Blob> {
+    /// specified destination branch.
+    pub async fn fork(&mut self, conn: &mut db::Connection, dst_branch: Branch) -> Result<Blob> {
         // This should gracefuly handled in the Blob from where this function is invoked.
-        assert!(
-            self.unique.branch.id() != dst_branch.id()
-                || self.unique.head_locator != dst_head_locator
-        );
+        assert!(self.unique.branch.id() != dst_branch.id());
 
         let read_key = self.unique.branch.keys().read();
         // Take the write key from the dst branch, not the src branch, to protect us against
@@ -276,38 +268,30 @@ impl<'a> Operations<'a> {
 
         let mut tx = conn.begin().await?;
 
-        for (src_locator, dst_locator) in self.locators().zip(dst_head_locator.sequence()) {
-            let encoded_src_locator = src_locator.encode(read_key);
-            let encoded_dst_locator = dst_locator.encode(read_key);
+        for locator in self.locators() {
+            let encoded_locator = locator.encode(read_key);
 
             let block_id = self
                 .unique
                 .branch
                 .data()
-                .get(&mut tx, &encoded_src_locator)
+                .get(&mut tx, &encoded_locator)
                 .await?;
 
             dst_branch
                 .data()
-                .insert(&mut tx, &block_id, &encoded_dst_locator, write_keys)
+                .insert(&mut tx, &block_id, &encoded_locator, write_keys)
                 .await?;
         }
 
         tx.commit().await?;
 
-        let current_block = OpenBlock {
-            locator: dst_head_locator.nth(self.unique.current_block.locator.number()),
-            id: self.unique.current_block.id,
-            content: self.unique.current_block.content.clone(),
-            dirty: self.unique.current_block.dirty,
-        };
-
         Ok(Blob {
             shared: self.shared.deep_clone(),
             unique: Unique {
                 branch: dst_branch,
-                head_locator: dst_head_locator,
-                current_block,
+                head_locator: self.unique.head_locator,
+                current_block: self.unique.current_block.clone(),
                 len_dirty: self.unique.len_dirty,
             },
         })

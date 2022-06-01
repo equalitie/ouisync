@@ -314,7 +314,7 @@ async fn failed_block_other_peer() {
 }
 
 async fn create_store<R: Rng + CryptoRng>(rng: &mut R, write_keys: &Keypair) -> (Store, PublicKey) {
-    let db = db::open_or_create(&db::Store::Temporary).await.unwrap();
+    let db = db::create(&db::Store::Temporary).await.unwrap();
     let writer_id = PublicKey::generate(rng);
     let repository_id = RepositoryId::from(write_keys.public);
 

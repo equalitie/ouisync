@@ -30,13 +30,11 @@ impl<'a> EntryRef<'a> {
         parent_inner: &'a Inner,
         name: &'a str,
         entry_data: &'a EntryData,
-        author: &'a PublicKey,
     ) -> Self {
         let inner = RefInner {
             parent_outer,
             parent_inner,
             name,
-            author,
         };
 
         match entry_data {
@@ -54,11 +52,7 @@ impl<'a> EntryRef<'a> {
         }
     }
 
-    pub fn author(&self) -> &PublicKey {
-        self.inner().author
-    }
-
-    pub fn version_vector(&self) -> &VersionVector {
+    pub fn version_vector(&self) -> &'a VersionVector {
         match self {
             Self::File(f) => f.version_vector(),
             Self::Directory(d) => d.version_vector(),
@@ -110,6 +104,15 @@ impl<'a> EntryRef<'a> {
         }
     }
 
+    // Returns the blob id of this entry or `EntryNotFound` if it is a tomstone.
+    pub(crate) fn blob_id(&self) -> Result<&'a BlobId> {
+        match self {
+            Self::File(entry) => Ok(entry.blob_id()),
+            Self::Directory(entry) => Ok(entry.blob_id()),
+            Self::Tombstone(_) => Err(Error::EntryNotFound),
+        }
+    }
+
     fn inner(&self) -> &RefInner {
         match self {
             Self::File(r) => &r.inner,
@@ -136,10 +139,6 @@ impl<'a> FileRef<'a> {
 
     pub(crate) fn blob_id(&self) -> &'a BlobId {
         &self.entry_data.blob_id
-    }
-
-    pub fn author(&self) -> &'a PublicKey {
-        self.inner.author
     }
 
     pub fn version_vector(&self) -> &'a VersionVector {
@@ -186,7 +185,6 @@ impl fmt::Debug for FileRef<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("FileRef")
             .field("name", &self.inner.name)
-            .field("author", &self.inner.author)
             .field("vv", &self.entry_data.version_vector)
             .field("locator", &self.locator())
             .finish()
@@ -212,10 +210,6 @@ impl<'a> DirectoryRef<'a> {
         &self.entry_data.blob_id
     }
 
-    pub fn author(&self) -> &'a PublicKey {
-        self.inner.author
-    }
-
     pub async fn open(&self) -> Result<Directory> {
         self.inner
             .parent_inner
@@ -236,7 +230,7 @@ impl<'a> DirectoryRef<'a> {
         self.entry_data
     }
 
-    pub fn version_vector(&self) -> &VersionVector {
+    pub fn version_vector(&self) -> &'a VersionVector {
         &self.entry_data.version_vector
     }
 }
@@ -268,11 +262,7 @@ impl<'a> TombstoneRef<'a> {
         self.entry_data
     }
 
-    pub fn author(&self) -> &'a PublicKey {
-        self.inner.author
-    }
-
-    pub fn version_vector(&self) -> &VersionVector {
+    pub fn version_vector(&self) -> &'a VersionVector {
         &self.entry_data.version_vector
     }
 }
@@ -290,12 +280,11 @@ struct RefInner<'a> {
     parent_outer: &'a Directory,
     parent_inner: &'a Inner,
     name: &'a str,
-    author: &'a PublicKey,
 }
 
 impl<'a> RefInner<'a> {
     fn parent_context(&self) -> ParentContext {
-        ParentContext::new(self.parent_outer.clone(), self.name.into(), *self.author)
+        ParentContext::new(self.parent_outer.clone(), self.name.into())
     }
 
     fn branch(&self) -> &'a Branch {

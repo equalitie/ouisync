@@ -176,20 +176,14 @@ impl Blob {
     }
 
     /// Creates a shallow copy (only the index nodes are copied, not blocks) of this blob into the
-    /// specified destination branch and locator.
-    pub async fn fork(&mut self, dst_branch: Branch, dst_head_locator: Locator) -> Result<()> {
-        if self.unique.branch.id() == dst_branch.id()
-            && self.unique.head_locator == dst_head_locator
-        {
+    /// specified destination branch.
+    pub async fn fork(&mut self, dst_branch: Branch) -> Result<()> {
+        if self.unique.branch.id() == dst_branch.id() {
             return Ok(());
         }
 
         let mut conn = self.db_pool().acquire().await?;
-        let new_self = self
-            .lock()
-            .await
-            .fork(&mut conn, dst_branch, dst_head_locator)
-            .await?;
+        let new_self = self.lock().await.fork(&mut conn, dst_branch).await?;
 
         *self = new_self;
 

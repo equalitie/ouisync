@@ -99,11 +99,7 @@ async fn merge() {
     let mut rx = repo.subscribe();
 
     loop {
-        match local_root
-            .read()
-            .await
-            .lookup_version("test.txt", &remote_id)
-        {
+        match local_root.read().await.lookup("test.txt") {
             Ok(entry) => {
                 let content = entry
                     .file()
@@ -453,7 +449,7 @@ async fn append_to_file() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn blind_access_non_empty_repo() {
-    let pool = db::open_or_create(&db::Store::Temporary).await.unwrap();
+    let pool = db::create(&db::Store::Temporary).await.unwrap();
     let device_id = rand::random();
 
     // Create the repo and put a file in it.
@@ -510,7 +506,7 @@ async fn blind_access_non_empty_repo() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn blind_access_empty_repo() {
-    let pool = db::open_or_create(&db::Store::Temporary).await.unwrap();
+    let pool = db::create(&db::Store::Temporary).await.unwrap();
     let device_id = rand::random();
 
     // Create an empty repo.
@@ -541,7 +537,7 @@ async fn blind_access_empty_repo() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn read_access_same_replica() {
-    let pool = db::open_or_create(&db::Store::Temporary).await.unwrap();
+    let pool = db::create(&db::Store::Temporary).await.unwrap();
     let device_id = rand::random();
     let master_secret = MasterSecret::random();
 
@@ -600,7 +596,7 @@ async fn read_access_same_replica() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn read_access_different_replica() {
-    let pool = db::open_or_create(&db::Store::Temporary).await.unwrap();
+    let pool = db::create(&db::Store::Temporary).await.unwrap();
     let master_secret = MasterSecret::random();
 
     let device_id_a = rand::random();
@@ -970,9 +966,10 @@ async fn file_conflict_attempt_to_fork_and_modify_remote() {
         .open_file_version("test.txt", &remote_id)
         .await
         .unwrap();
-    remote_file.fork(&local_branch).await.unwrap();
-    remote_file.write(b"remote v2").await.unwrap();
-    assert_matches!(remote_file.flush().await, Err(Error::EntryExists));
+    assert_matches!(
+        remote_file.fork(&local_branch).await,
+        Err(Error::EntryExists)
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -67,7 +67,7 @@ impl Branch {
             match component {
                 Utf8Component::RootDir | Utf8Component::CurDir => (),
                 Utf8Component::Normal(name) => {
-                    let next = match curr.read().await.lookup_version(name, self.id()) {
+                    let next = match curr.read().await.lookup(name) {
                         Ok(EntryRef::Directory(entry)) => Some(entry.open().await?),
                         Ok(EntryRef::File(_)) => return Err(Error::EntryIsFile),
                         Ok(EntryRef::Tombstone(_)) | Err(Error::EntryNotFound) => None,
@@ -148,15 +148,11 @@ mod tests {
             .unwrap();
         dir.flush().await.unwrap();
 
-        let _ = root
-            .read()
-            .await
-            .lookup_version("dir", branch.id())
-            .unwrap();
+        let _ = root.read().await.lookup("dir").unwrap();
     }
 
     async fn setup() -> Branch {
-        let pool = db::open_or_create(&db::Store::Temporary).await.unwrap();
+        let pool = db::create(&db::Store::Temporary).await.unwrap();
 
         let writer_id = PublicKey::random();
         let secrets = WriteSecrets::random();

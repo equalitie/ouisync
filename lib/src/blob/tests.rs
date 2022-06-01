@@ -475,7 +475,6 @@ fn fork(
     #[strategy(0..=#src_len)] seek_pos: usize,
     #[strategy(1..BLOCK_SIZE)] write_len: usize,
     src_locator_is_root: bool,
-    dst_locator_same_as_src: bool,
     #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
 ) {
     test_utils::run(fork_case(
@@ -483,7 +482,6 @@ fn fork(
         seek_pos,
         write_len,
         src_locator_is_root,
-        dst_locator_same_as_src,
         rng_seed,
     ))
 }
@@ -493,7 +491,6 @@ async fn fork_case(
     seek_pos: usize,
     write_len: usize,
     src_locator_is_root: bool,
-    dst_locator_same_as_src: bool,
     rng_seed: u64,
 ) {
     let (mut rng, src_branch) = setup(rng_seed).await;
@@ -521,12 +518,6 @@ async fn fork_case(
         Locator::head(rng.gen())
     };
 
-    let dst_locator = if dst_locator_same_as_src {
-        src_locator
-    } else {
-        Locator::head(rng.gen())
-    };
-
     let src_content: Vec<u8> = (&mut rng).sample_iter(Standard).take(src_len).collect();
 
     let mut blob = Blob::create(src_branch.clone(), src_locator, Shared::uninit());
@@ -534,7 +525,7 @@ async fn fork_case(
     blob.flush().await.unwrap();
     blob.seek(SeekFrom::Start(seek_pos as u64)).await.unwrap();
 
-    blob.fork(dst_branch.clone(), dst_locator).await.unwrap();
+    blob.fork(dst_branch.clone()).await.unwrap();
 
     let write_content: Vec<u8> = rng.sample_iter(Standard).take(write_len).collect();
 
@@ -551,7 +542,7 @@ async fn fork_case(
     assert!(buffer == src_content);
 
     // Re-open the fork and verify the content is changed
-    let mut fork = Blob::open(dst_branch, dst_locator, Shared::uninit().into())
+    let mut fork = Blob::open(dst_branch, src_locator, Shared::uninit().into())
         .await
         .unwrap();
 
@@ -597,7 +588,7 @@ async fn block_ids_test() {
 async fn setup(rng_seed: u64) -> (StdRng, Branch) {
     let mut rng = StdRng::seed_from_u64(rng_seed);
     let secrets = WriteSecrets::generate(&mut rng);
-    let pool = db::open_or_create(&db::Store::Temporary).await.unwrap();
+    let pool = db::create(&db::Store::Temporary).await.unwrap();
 
     let notify_tx = broadcast::Sender::new(1);
     let branch = BranchData::create(

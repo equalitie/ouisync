@@ -128,11 +128,9 @@ impl File {
             return Ok(());
         }
 
-        let blob_id = rand::random();
-        self.blob
-            .fork(local_branch.clone(), Locator::head(blob_id))
-            .await?;
-        self.parent.fork_file(local_branch, blob_id).await?;
+        // TODO: these two calls should happen atomically
+        self.parent.fork_file(local_branch).await?;
+        self.blob.fork(local_branch.clone()).await?;
 
         Ok(())
     }
@@ -177,7 +175,7 @@ mod tests {
             .unwrap()
             .read()
             .await
-            .lookup_version("dog.jpg", branch0.id())
+            .lookup("dog.jpg")
             .unwrap()
             .file()
             .unwrap()
@@ -196,7 +194,7 @@ mod tests {
             .unwrap()
             .read()
             .await
-            .lookup_version("dog.jpg", branch0.id())
+            .lookup("dog.jpg")
             .unwrap()
             .file()
             .unwrap()
@@ -213,7 +211,7 @@ mod tests {
             .unwrap()
             .read()
             .await
-            .lookup_version("dog.jpg", branch1.id())
+            .lookup("dog.jpg")
             .unwrap()
             .file()
             .unwrap()
@@ -240,7 +238,7 @@ mod tests {
             .unwrap()
             .read()
             .await
-            .lookup_version("pig.jpg", branch0.id())
+            .lookup("pig.jpg")
             .unwrap()
             .file()
             .unwrap()
@@ -257,7 +255,7 @@ mod tests {
     }
 
     async fn setup() -> (Branch, Branch) {
-        let pool = db::open_or_create(&db::Store::Temporary).await.unwrap();
+        let pool = db::create(&db::Store::Temporary).await.unwrap();
         let keys = AccessKeys::from(WriteSecrets::random());
 
         (

@@ -39,6 +39,10 @@ impl EntryData {
         })
     }
 
+    pub fn tombstone(version_vector: VersionVector) -> Self {
+        Self::Tombstone(EntryTombstoneData { version_vector })
+    }
+
     pub fn version_vector(&self) -> &VersionVector {
         match self {
             Self::File(f) => &f.version_vector,

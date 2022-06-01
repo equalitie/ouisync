@@ -13,8 +13,8 @@ use self::{
     utils::{FormatOptionScope, MaybeOwnedMut},
 };
 use fuser::{
-    BackgroundSession, FileAttr, FileType, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory,
-    ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow,
+    BackgroundSession, FileAttr, FileType, KernelConfig, MountOption, ReplyAttr, ReplyCreate,
+    ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow,
 };
 use ouisync_lib::{
     debug_printer::DebugPrinter, EntryType, Error, File, JointDirectory, JointEntry, JointEntryRef,
@@ -24,9 +24,13 @@ use std::{
     convert::TryInto,
     ffi::OsStr,
     io::{self, SeekFrom},
+    os::raw::c_int,
     path::Path,
     time::{Duration, SystemTime},
 };
+
+// Name of the filesystem.
+const FS_NAME: &str = "ouisync";
 
 // NOTE: this is the unix implementation of virtual filesystem which is backed by fuse. Eventually
 // there will be one for windows as well with the same public API but backed (probably) by
@@ -39,10 +43,10 @@ pub fn mount(
     repository: Repository,
     mount_point: impl AsRef<Path>,
 ) -> Result<MountGuard, io::Error> {
-    let session = fuser::spawn_mount(
+    let session = fuser::spawn_mount2(
         VirtualFilesystem::new(runtime_handle, repository),
         mount_point,
-        &[],
+        &[MountOption::FSName(FS_NAME.into())],
     )?;
     Ok(MountGuard(session))
 }
@@ -53,6 +57,9 @@ pub struct MountGuard(BackgroundSession);
 // time-to-live for some fuse reply types.
 // TODO: find out what is this for and whether 0 is OK.
 const TTL: Duration = Duration::from_secs(0);
+
+// https://libfuse.github.io/doxygen/fuse__common_8h.html#a4c81f2838716f43fe493a61c87a62816
+const FUSE_CAP_ATOMIC_O_TRUNC: u32 = 8; // 0b0001
 
 // Convenience macro that unwraps the result or reports its error in the given reply and
 // returns.
@@ -88,6 +95,18 @@ impl VirtualFilesystem {
 }
 
 impl fuser::Filesystem for VirtualFilesystem {
+    fn init(&mut self, _req: &Request, config: &mut KernelConfig) -> Result<(), c_int> {
+        log::debug!("init (config: {:?})", config);
+
+        // Enable open with truncate
+        if config.add_capabilities(FUSE_CAP_ATOMIC_O_TRUNC).is_err() {
+            log::error!("required fuse capability FUSE_CAP_ATOMIC_O_TRUNC not supported");
+            return Err(libc::ENOSYS);
+        }
+
+        Ok(())
+    }
+
     fn lookup(&mut self, _req: &Request, parent: Inode, name: &OsStr, reply: ReplyEntry) {
         let attr = try_request!(self.rt.block_on(self.inner.lookup(parent, name)), reply);
         reply.entry(&TTL, &attr, 0)
@@ -385,7 +404,7 @@ impl Inner {
         let (len, repr) = match &entry {
             JointEntryRef::File(entry) => (
                 entry.open().await?.len().await,
-                Representation::File(*entry.author()),
+                Representation::File(*entry.branch_id()),
             ),
             JointEntryRef::Directory(entry) => (
                 entry
@@ -480,6 +499,7 @@ impl Inner {
         if let Some(size) = size {
             file.fork(&local_branch).await?;
             file.truncate(size).await?;
+            file.flush().await?;
         }
 
         Ok(make_file_attr(inode, EntryType::File, file.len().await))
@@ -684,9 +704,18 @@ impl Inner {
             flags
         );
 
-        // TODO: what about flags (parameter)?
+        let mut file = self.open_file_by_inode(inode).await?;
 
-        let file = self.open_file_by_inode(inode).await?;
+        if flags.contains(libc::O_TRUNC) {
+            let local_branch = self.repository.get_or_create_local_branch().await?;
+
+            file.fork(&local_branch).await?;
+            file.truncate(0).await?;
+            file.flush().await?;
+        }
+
+        // TODO: what about other flags (parameter)?
+
         let handle = self.entries.insert(JointEntry::File(file));
 
         // TODO: what about flags (return value)?

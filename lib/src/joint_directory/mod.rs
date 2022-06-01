@@ -52,8 +52,14 @@ impl JointDirectory {
 
     /// Lock this joint directory for reading.
     pub async fn read(&self) -> Reader<'_> {
+        let mut versions = BTreeMap::new();
+
+        for (branch_id, dir) in &self.versions {
+            versions.insert(branch_id, dir.read().await);
+        }
+
         Reader {
-            versions: future::join_all(self.versions.values().map(|dir| dir.read())).await,
+            versions,
             local_branch: self.local_branch.as_ref(),
         }
     }
@@ -107,18 +113,21 @@ impl JointDirectory {
             .apply(&self.read().await)?
             .map(|entry| {
                 let name = entry.name().to_owned();
-                let author = *entry.author().unwrap_or_else(|| local_branch.id());
+                let branch_id = match &entry {
+                    JointEntryRef::File(entry) => *entry.branch_id(),
+                    JointEntryRef::Directory(_) => *local_branch.id(),
+                };
                 let vv = entry.version_vector().into_owned();
 
-                (name, author, vv)
+                (name, branch_id, vv)
             })
             .collect();
 
         let mut local_writer = local.write().await;
 
-        for (name, author, vv) in entries {
+        for (name, branch_id, vv) in entries {
             local_writer
-                .remove_entry(&name, &author, vv, OverwriteStrategy::Remove)
+                .remove_entry(&name, &branch_id, vv, OverwriteStrategy::Remove)
                 .await?;
         }
 
@@ -152,6 +161,12 @@ impl JointDirectory {
         Ok(())
     }
 
+    /// Merge all versions of this `JointDirectory` into a single `Directory`.
+    ///
+    /// In the presence of conflicts (multiple concurrent versions of the same file) this function
+    /// still proceeds as far as it can, but the conflicting files remain unmerged.
+    ///
+    /// TODO: consider returning the conflicting paths as well.
     #[async_recursion]
     pub async fn merge(&mut self) -> Result<Directory> {
         let local_branch = self.local_branch.as_ref().ok_or(Error::PermissionDenied)?;
@@ -179,18 +194,13 @@ impl JointDirectory {
             }
         }
 
-        // NOTE: we might consider doing the following concurrently using `try_join` or similar,
-        // but as they all need to access the same database there would probably be no benefit in
-        // it. It might actually end up being slower due to overhead.
-
-        // Fork files
-        // TODO: when a fork fails, we should still proceed with the remaining files and
-        // directories and only then return the error.
+        // Fork files.
         for mut file in files {
             match file.fork(local_branch).await {
-                // `EntryExists` error means the file already exists locally at the same or greater
-                // version than the remote file which is OK and expected, so we ignore it.
-                Ok(()) | Err(Error::EntryExists) => (),
+                Ok(()) => (),
+                Err(Error::EntryExists) => {
+                    // Ignore conflicts
+                }
                 Err(error) => return Err(error),
             }
         }
@@ -244,7 +254,7 @@ impl fmt::Debug for JointDirectory {
 
 /// View of a `JointDirectory` for performing read-only queries.
 pub struct Reader<'a> {
-    versions: Vec<directory::Reader<'a>>,
+    versions: BTreeMap<&'a PublicKey, directory::Reader<'a>>,
     local_branch: Option<&'a Branch>,
 }
 
@@ -253,7 +263,7 @@ impl Reader<'_> {
     /// same file are returned as separate `JointEntryRef::File` entries. Multiple concurrent
     /// versions of the same directory are returned as a single `JointEntryRef::Directory` entry.
     pub fn entries(&self) -> impl Iterator<Item = JointEntryRef> {
-        let entries = self.versions.iter().map(|directory| directory.entries());
+        let entries = self.versions.values().map(|directory| directory.entries());
         let entries = SortedUnion::new(entries, |entry| entry.name());
         let entries = Accumulate::new(entries, |entry| entry.name());
 
@@ -265,9 +275,8 @@ impl Reader<'_> {
     pub fn lookup<'a>(&'a self, name: &'a str) -> impl Iterator<Item = JointEntryRef<'a>> + 'a {
         Merge::new(
             self.versions
-                .iter()
-                .filter_map(move |dir| dir.lookup(name).ok())
-                .flatten(),
+                .values()
+                .filter_map(move |dir| dir.lookup(name).ok()),
             self.local_branch,
         )
     }
@@ -308,7 +317,7 @@ impl Reader<'_> {
         let entries = self
             .entry_versions(name)
             .filter_map(|entry| entry.file().ok())
-            .filter(|entry| entry.author().starts_with(&branch_id_prefix));
+            .filter(|entry| entry.branch().id().starts_with(&branch_id_prefix));
 
         // At this point, `entries` contains files from only a single author. It may still be the
         // case however that there are multiple versions of the entry because each branch may
@@ -331,22 +340,12 @@ impl Reader<'_> {
     }
 
     /// Looks up a specific version of a file.
-    ///
-    /// NOTE: There can be multiple versions of the file with the same author, but due to the
-    /// invariant of there always being at most one version of a file per branch that is also
-    /// authored by that branch, there are only two possible outcomes for every pair of such
-    /// versions: either one is "happens after" the other, or they are identical. It's not possible
-    /// for them to be concurrent. Because of this, this function can never return `AmbiguousEntry`
-    /// error.
     pub fn lookup_version(&self, name: &'_ str, branch_id: &'_ PublicKey) -> Result<FileRef> {
-        Merge::new(
-            self.versions
-                .iter()
-                .filter_map(|dir| dir.lookup_version(name, branch_id).ok()),
-            self.local_branch,
-        )
-        .find_map(|entry| entry.file().ok())
-        .ok_or(Error::EntryNotFound)
+        self.versions
+            .get(branch_id)
+            .ok_or(Error::EntryNotFound)
+            .and_then(|dir| dir.lookup(name))
+            .and_then(|entry| entry.file())
     }
 
     /// Length of the directory in bytes. If there are multiple versions, returns the sum of their
@@ -354,7 +353,7 @@ impl Reader<'_> {
     #[allow(clippy::len_without_is_empty)]
     pub async fn len(&self) -> u64 {
         let mut sum = 0;
-        for dir in self.versions.iter() {
+        for dir in self.versions.values() {
             sum += dir.len().await;
         }
         sum
@@ -370,9 +369,8 @@ impl Reader<'_> {
 
     fn entry_versions<'a>(&'a self, name: &'a str) -> impl Iterator<Item = EntryRef<'a>> {
         self.versions
-            .iter()
+            .values()
             .filter_map(move |r| r.lookup(name).ok())
-            .flatten()
     }
 }
 
@@ -411,14 +409,6 @@ impl<'a> JointEntryRef<'a> {
         }
     }
 
-    // If this is `Directory`, returns `None` because a joint directory can have multiple authors.
-    pub fn author(&self) -> Option<&'a PublicKey> {
-        match self {
-            Self::File(r) => Some(r.author()),
-            Self::Directory(_) => None,
-        }
-    }
-
     pub fn file(self) -> Result<FileRef<'a>> {
         match self {
             Self::File(r) => Ok(r.file),
@@ -447,7 +437,10 @@ impl<'a> JointFileRef<'a> {
 
     pub fn unique_name(&self) -> Cow<'a, str> {
         if self.needs_disambiguation {
-            Cow::from(versioned_file_name::create(self.name(), self.author()))
+            Cow::from(versioned_file_name::create(
+                self.name(),
+                self.file.branch().id(),
+            ))
         } else {
             Cow::from(self.name())
         }
@@ -459,12 +452,12 @@ impl<'a> JointFileRef<'a> {
         self.file.open()
     }
 
-    pub fn author(&self) -> &'a PublicKey {
-        self.file.author()
-    }
-
     pub fn version_vector(&self) -> &'a VersionVector {
         self.file.version_vector()
+    }
+
+    pub fn branch_id(&self) -> &PublicKey {
+        self.file.branch().id()
     }
 
     pub fn parent(&self) -> &Directory {

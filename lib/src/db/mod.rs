@@ -1,3 +1,5 @@
+mod migrations;
+
 use crate::deadlock::{DeadlockGuard, DeadlockTracker};
 use sqlx::{
     sqlite::{Sqlite, SqliteConnectOptions, SqliteConnection, SqlitePoolOptions},
@@ -14,13 +16,6 @@ use std::{
 };
 use thiserror::Error;
 use tokio::fs;
-
-/// Number used as [application id](https://www.sqlite.org/pragma.html#pragma_application_id) to
-/// distinguish ouisync database from any other sqlite database.
-const MAGIC: u32 = 0x6f756973; // first 4 characters of "ouisync" converted to hex
-
-/// Current storage format version.
-const VERSION: u32 = 1;
 
 /// Database connection pool.
 #[derive(Clone)]
@@ -127,41 +122,67 @@ impl FromStr for Store {
     }
 }
 
+/// Creates a new database and opens a connection to it.
+pub(crate) async fn create(store: &Store) -> Result<Pool, Error> {
+    let connect_options = match store {
+        Store::Permanent(path) => {
+            create_directory(path).await?;
+
+            if fs::metadata(path).await.is_ok() {
+                return Err(Error::Exists);
+            }
+
+            SqliteConnectOptions::new()
+                .filename(path)
+                .create_if_missing(true)
+        }
+        Store::Temporary => SqliteConnectOptions::from_str(MEMORY)
+            .unwrap()
+            .shared_cache(false),
+    };
+
+    let pool = create_pool(connect_options).await?;
+
+    let mut conn = pool.acquire().await?;
+    migrations::run(&mut conn).await?;
+
+    Ok(pool)
+}
+
 /// Opens a connection to the specified database. Fails if the db doesn't exist.
 pub(crate) async fn open(store: &Store) -> Result<Pool, Error> {
-    let pool = match store {
-        Store::Permanent(path) => open_permanent(path, false).await?,
-        Store::Temporary => open_temporary().await?,
+    let connect_options = match store {
+        Store::Permanent(path) => SqliteConnectOptions::new().filename(path),
+        Store::Temporary => SqliteConnectOptions::from_str(MEMORY)
+            .unwrap()
+            .shared_cache(false),
     };
 
-    init(&pool).await?;
+    let pool = create_pool(connect_options).await?;
+
+    let mut conn = pool.acquire().await?;
+    migrations::run(&mut conn).await?;
 
     Ok(pool)
 }
 
-/// Opens a connection to the specified database. Creates the database if it doesn't already exist.
-pub(crate) async fn open_or_create(store: &Store) -> Result<Pool, Error> {
-    let pool = match store {
-        Store::Permanent(path) => open_permanent(path, true).await?,
-        Store::Temporary => open_temporary().await?,
-    };
-
-    init(&pool).await?;
-
-    Ok(pool)
-}
-
-async fn open_permanent(path: &Path, create_if_missing: bool) -> Result<Pool, Error> {
-    if create_if_missing {
-        if let Some(dir) = path.parent() {
-            fs::create_dir_all(dir)
-                .await
-                .map_err(Error::CreateDirectory)?;
-        }
+async fn create_directory(path: &Path) -> Result<(), Error> {
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir)
+            .await
+            .map_err(Error::CreateDirectory)?
     }
 
+    Ok(())
+}
+
+async fn create_pool(connect_options: SqliteConnectOptions) -> Result<Pool, Error> {
     SqlitePoolOptions::new()
-        // HACK: using only one connection to work around `SQLITE_BUSY` errors.
+        // HACK: using only one connection to work around various issues:
+        //
+        // - For persistent database, this avoids `SQLITE_BUSY` errors.
+        // - For memory database, this avoids having to use shared cache (which is necessary when
+        //   using multiple connections to a memory database, but it's extremely prone to deadlocks)
         //
         // TODO: After some experimentation, it seems that using `SqliteSynchornous::Normal` might
         // fix those errors but it needs more testing. But even if it works, we should try to avoid
@@ -170,85 +191,20 @@ async fn open_permanent(path: &Path, create_if_missing: bool) -> Result<Pool, Er
         // have to enable shared cache also for file databases. Both approaches have their
         // drawbacks.
         .max_connections(1)
-        .connect_with(
-            SqliteConnectOptions::new()
-                .filename(path)
-                .create_if_missing(create_if_missing),
-        )
-        .await
-        .map(Pool::new)
-        .map_err(Error::Open)
-}
-
-async fn open_temporary() -> Result<Pool, Error> {
-    SqlitePoolOptions::new()
-        // HACK: using only one connection to avoid having to use shared cache (which is
-        // necessary when using multiple connections to a memory database, but it's extremely
-        // prone to deadlocks)
-        .max_connections(1)
-        // Never reap connections because without shared cache it would also destroy the whole
-        // database.
+        // Never reap connections because for memory database and without shared cache it would
+        // also destroy the whole database.
         .max_lifetime(None)
         .idle_timeout(None)
         // By default, `Pool::acquire` on an in-memory database is not cancel-safe because it can
         // drop connections which then wipes out the database. By disabling this test we make sure
         // that when a connection is removed from the idle queue it's immediately returned to the
-        // caller which makes it cancel-safe. Note also that the test makes some sense for
-        // client-server dbs but not much for embedded ones anyway.
+        // caller which makes it cancel-safe. Note also that this test is useful for client-server
+        // dbs but not so much for embedded ones anyway.
         .test_before_acquire(false)
-        .connect_with(
-            SqliteConnectOptions::from_str(MEMORY)
-                .unwrap()
-                .shared_cache(false),
-        )
+        .connect_with(connect_options)
         .await
         .map(Pool::new)
         .map_err(Error::Open)
-}
-
-async fn init(pool: &Pool) -> Result<(), Error> {
-    let mut tx = pool.begin().await?;
-
-    check_version(&mut *tx).await?;
-
-    sqlx::query(include_str!("../schema.sql"))
-        .execute(&mut *tx)
-        .await?;
-    tx.commit().await?;
-
-    Ok(())
-}
-
-async fn check_version(conn: &mut Connection) -> Result<(), Error> {
-    match get_pragma(conn, "application_id").await? {
-        0 => set_pragma(conn, "application_id", MAGIC).await?,
-        MAGIC => (),
-        _ => return Err(Error::VersionMismatch),
-    }
-
-    match get_pragma(conn, "user_version").await? {
-        0 => set_pragma(conn, "user_version", VERSION).await?,
-        VERSION => (),
-        _ => return Err(Error::VersionMismatch),
-    }
-
-    Ok(())
-}
-
-async fn get_pragma(conn: &mut Connection, name: &str) -> Result<u32, Error> {
-    Ok(sqlx::query(&format!("PRAGMA {}", name))
-        .fetch_one(&mut *conn)
-        .await?
-        .get(0))
-}
-
-async fn set_pragma(conn: &mut Connection, name: &str, value: u32) -> Result<(), Error> {
-    // `bind` doesn't seem to be supported for setting PRAGMAs...
-    sqlx::query(&format!("PRAGMA {} = {}", name, value))
-        .execute(&mut *conn)
-        .await?;
-
-    Ok(())
 }
 
 // Explicit cast from `i64` to `u64` to work around the lack of native `u64` support in the sqlx
@@ -267,12 +223,28 @@ pub(crate) const fn encode_u64(u: u64) -> i64 {
 pub enum Error {
     #[error("failed to create database directory")]
     CreateDirectory(#[source] io::Error),
+    #[error("database already exists")]
+    Exists,
     #[error("failed to open database")]
     Open(#[source] sqlx::Error),
-    #[error("storage format version mismatch")]
-    VersionMismatch,
     #[error("failed to execute database query")]
     Query(#[from] sqlx::Error),
+}
+
+async fn get_pragma(conn: &mut Connection, name: &str) -> Result<u32, Error> {
+    Ok(sqlx::query(&format!("PRAGMA {}", name))
+        .fetch_one(&mut *conn)
+        .await?
+        .get(0))
+}
+
+async fn set_pragma(conn: &mut Connection, name: &str, value: u32) -> Result<(), Error> {
+    // `bind` doesn't seem to be supported for setting PRAGMAs...
+    sqlx::query(&format!("PRAGMA {} = {}", name, value))
+        .execute(&mut *conn)
+        .await?;
+
+    Ok(())
 }
 
 #[cfg(test)]

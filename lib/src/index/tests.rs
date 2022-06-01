@@ -378,7 +378,7 @@ async fn setup() -> (Index, Keypair) {
 }
 
 async fn setup_with_rng(rng: &mut StdRng) -> (Index, Keypair) {
-    let pool = db::open_or_create(&db::Store::Temporary).await.unwrap();
+    let pool = db::create(&db::Store::Temporary).await.unwrap();
 
     let write_keys = Keypair::generate(rng);
     let repository_id = RepositoryId::from(write_keys.public);

@@ -36,10 +36,8 @@ async fn create_and_list_entries() {
     assert_eq!(actual_names, expected_names);
 
     for &(file_name, expected_content) in &[("dog.txt", b"woof"), ("cat.txt", b"meow")] {
-        let mut versions: Vec<_> = dir.lookup(file_name).unwrap().collect();
-        assert_eq!(versions.len(), 1);
-        let mut file = versions
-            .first_mut()
+        let mut file = dir
+            .lookup(file_name)
             .unwrap()
             .file()
             .unwrap()
@@ -96,15 +94,7 @@ async fn remove_file() {
     let parent_dir = branch.open_root().await.unwrap();
     let parent_dir = parent_dir.read().await;
 
-    match parent_dir.lookup(name) {
-        Err(Error::EntryNotFound) => panic!("expected to find a tombstone, but found nothing"),
-        Err(error) => panic!("unexpected error {:?}", error),
-        Ok(mut entries) => {
-            assert_matches!(entries.next(), Some(EntryRef::Tombstone(_)));
-            assert_matches!(entries.next(), None);
-        }
-    }
-
+    assert_matches!(parent_dir.lookup(name), Ok(EntryRef::Tombstone(_)));
     assert_eq!(parent_dir.entries().count(), 1);
 
     // Check the file blob itself was removed as well.
@@ -144,14 +134,13 @@ async fn rename_file() {
     let entry_to_move = parent_dir
         .read()
         .await
-        .lookup_version(src_name, branch.id())
+        .lookup(src_name)
         .unwrap()
         .clone_data();
 
     parent_dir
         .move_entry(
             src_name,
-            branch.id(),
             entry_to_move,
             &parent_dir,
             dst_name,
@@ -167,7 +156,7 @@ async fn rename_file() {
     let parent_dir = parent_dir.read().await;
 
     let mut dst_file = parent_dir
-        .lookup_version(dst_name, branch.id())
+        .lookup(dst_name)
         .unwrap()
         .file()
         .unwrap()
@@ -178,7 +167,7 @@ async fn rename_file() {
     assert_eq!(&file_locator, dst_file.locator());
     assert_eq!(&content[..], &dst_file.read_to_end().await.unwrap()[..]);
 
-    let src_entry = parent_dir.lookup_version(src_name, branch.id()).unwrap();
+    let src_entry = parent_dir.lookup(src_name).unwrap();
 
     assert_matches!(src_entry, EntryRef::Tombstone(_));
 }
@@ -207,14 +196,13 @@ async fn move_file_within_branch() {
     let entry_to_move = root_dir
         .read()
         .await
-        .lookup_version(file_name, branch.id())
+        .lookup(file_name)
         .unwrap()
         .clone_data();
 
     root_dir
         .move_entry(
             file_name,
-            branch.id(),
             entry_to_move,
             &aux_dir,
             file_name,
@@ -227,10 +215,10 @@ async fn move_file_within_branch() {
         .open_root()
         .await
         .unwrap()
-        .open_directory("aux", branch.id())
+        .open_directory("aux")
         .await
         .unwrap()
-        .open_file(file_name, branch.id())
+        .open_file(file_name)
         .await
         .unwrap();
 
@@ -241,17 +229,12 @@ async fn move_file_within_branch() {
     // Now move it back from ./aux/ to ./
     //
 
-    let entry_to_move = aux_dir
-        .read()
-        .await
-        .lookup_version(file_name, branch.id())
-        .unwrap()
-        .clone_data();
+    let entry_to_move = aux_dir.read().await.lookup(file_name).unwrap().clone_data();
 
     let tombstone_vv = root_dir
         .read()
         .await
-        .lookup_version(file_name, branch.id())
+        .lookup(file_name)
         .unwrap()
         .version_vector()
         .clone();
@@ -259,7 +242,6 @@ async fn move_file_within_branch() {
     aux_dir
         .move_entry(
             file_name,
-            branch.id(),
             entry_to_move,
             &root_dir,
             file_name,
@@ -268,7 +250,7 @@ async fn move_file_within_branch() {
         .await
         .unwrap();
 
-    let mut file = root_dir.open_file(file_name, branch.id()).await.unwrap();
+    let mut file = root_dir.open_file(file_name).await.unwrap();
 
     assert_eq!(&content[..], &file.read_to_end().await.unwrap()[..]);
 }
@@ -303,17 +285,11 @@ async fn move_non_empty_directory() {
         .await
         .unwrap();
 
-    let entry_to_move = root_dir
-        .read()
-        .await
-        .lookup_version(dir_name, branch.id())
-        .unwrap()
-        .clone_data();
+    let entry_to_move = root_dir.read().await.lookup(dir_name).unwrap().clone_data();
 
     root_dir
         .move_entry(
             dir_name,
-            branch.id(),
             entry_to_move,
             &dst_dir,
             dir_name,
@@ -326,13 +302,13 @@ async fn move_non_empty_directory() {
         .open_root()
         .await
         .unwrap()
-        .open_directory(dst_dir_name, branch.id())
+        .open_directory(dst_dir_name)
         .await
         .unwrap()
-        .open_directory(dir_name, branch.id())
+        .open_directory(dir_name)
         .await
         .unwrap()
-        .open_file(file_name, branch.id())
+        .open_file(file_name)
         .await
         .unwrap();
 
@@ -366,10 +342,7 @@ async fn remove_subdirectory() {
     // Reopen again and check the subdirectory entry was removed.
     let parent_dir = branch.open_root().await.unwrap();
     let parent_dir = parent_dir.read().await;
-    assert_matches!(
-        parent_dir.lookup(name).unwrap().next(),
-        Some(EntryRef::Tombstone(_))
-    );
+    assert_matches!(parent_dir.lookup(name), Ok(EntryRef::Tombstone(_)));
 
     // Check the directory blob itself was removed as well.
     match Blob::open(branch, dir_locator, Shared::uninit().into()).await {
@@ -395,7 +368,7 @@ async fn fork() {
         .open_root()
         .await
         .unwrap()
-        .open_directory("dir", branches[0].id())
+        .open_directory("dir")
         .await
         .unwrap();
 
@@ -411,7 +384,7 @@ async fn fork() {
         .open_root()
         .await
         .unwrap()
-        .open_directory("dir", branches[0].id())
+        .open_directory("dir")
         .await
         .unwrap();
 
@@ -422,7 +395,7 @@ async fn fork() {
         .open_root()
         .await
         .unwrap()
-        .open_directory("dir", branches[1].id())
+        .open_directory("dir")
         .await
         .unwrap();
 
@@ -451,7 +424,7 @@ async fn fork_over_tombstone() {
     let vv = root0
         .read()
         .await
-        .lookup_version("dir", branches[0].id())
+        .lookup("dir")
         .unwrap()
         .version_vector()
         .clone();
@@ -472,10 +445,7 @@ async fn fork_over_tombstone() {
 
     // Open it by branch 0 and fork it.
     let root1_on_0 = branches[1].open_root().await.unwrap();
-    let dir1 = root1_on_0
-        .open_directory("dir", branches[1].id())
-        .await
-        .unwrap();
+    let dir1 = root1_on_0.open_directory("dir").await.unwrap();
 
     dir1.fork(&branches[0])
         .await
@@ -485,10 +455,7 @@ async fn fork_over_tombstone() {
         .unwrap();
 
     // Check the forked dir now exists in branch 0.
-    assert_matches!(
-        root0.read().await.lookup("dir").unwrap().next(),
-        Some(EntryRef::Directory(_))
-    );
+    assert_matches!(root0.read().await.lookup("dir"), Ok(EntryRef::Directory(_)));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -505,8 +472,6 @@ async fn modify_directory_concurrently() {
         .await
         .lookup("dir")
         .unwrap()
-        .next()
-        .unwrap()
         .directory()
         .unwrap()
         .open()
@@ -521,8 +486,6 @@ async fn modify_directory_concurrently() {
         .read()
         .await
         .lookup("file.txt")
-        .unwrap()
-        .next()
         .unwrap()
         .file()
         .unwrap()
@@ -550,7 +513,7 @@ async fn insert_entry_newer_than_existing() {
         root.inner
             .write()
             .await
-            .insert_file_entry(name.to_owned(), a_author, a_vv.clone(), blob_id)
+            .insert_file_entry(name.to_owned(), a_vv.clone(), blob_id)
             .await
             .unwrap();
 
@@ -567,7 +530,7 @@ async fn insert_entry_newer_than_existing() {
         root.inner
             .write()
             .await
-            .insert_file_entry(name.to_owned(), b_author, b_vv.clone(), blob_id)
+            .insert_file_entry(name.to_owned(), b_vv.clone(), blob_id)
             .await
             .unwrap();
 
@@ -575,7 +538,6 @@ async fn insert_entry_newer_than_existing() {
         let mut entries = reader.entries();
 
         let entry = entries.next().unwrap().file().unwrap();
-        assert_eq!(entry.author(), &b_author);
         assert_eq!(entry.version_vector(), &b_vv);
 
         assert!(entries.next().is_none());
@@ -583,96 +545,77 @@ async fn insert_entry_newer_than_existing() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn remove_concurrent_file_version() {
+async fn remove_unique_remote_file() {
+    let local_branch = setup().await;
+    let root = local_branch.open_or_create_root().await.unwrap();
+
     let name = "foo.txt";
 
-    // Test both cases - removing the local version and removing the remote version.
-    for index_to_remove in 0..2 {
-        let branches: [_; 2] = setup_multiple().await;
+    let remote_id = PublicKey::random();
+    let remote_vv = vv![remote_id => 1];
 
-        let local_id = branches[0].id();
-        let remote_id = branches[1].id();
+    root.write()
+        .await
+        .remove_entry(
+            name,
+            &remote_id,
+            remote_vv.clone(),
+            OverwriteStrategy::Remove,
+        )
+        .await
+        .unwrap();
 
-        let root = branches[0].open_or_create_root().await.unwrap();
+    let local_vv = assert_matches!(
+        root.read().await.lookup(name),
+        Ok(EntryRef::Tombstone(entry)) => entry.version_vector().clone()
+    );
 
-        let mut vvs = Vec::new();
+    assert!(local_vv > remote_vv);
+}
 
-        // Create the concurrent versions
-        for branch_id in branches.iter().map(|branch| *branch.id()) {
-            let vv = VersionVector::first(branch_id);
-            let blob_id = rand::random();
+#[tokio::test(flavor = "multi_thread")]
+async fn remove_concurrent_remote_file() {
+    let local_branch = setup().await;
+    let root = local_branch.open_or_create_root().await.unwrap();
 
-            vvs.push(vv.clone());
+    let name = "foo.txt";
+    root.create_file(name.to_owned())
+        .await
+        .unwrap()
+        .flush()
+        .await
+        .unwrap();
 
-            root.inner
-                .write()
-                .await
-                .insert_file_entry(name.into(), branch_id, vv, blob_id)
-                .await
-                .unwrap();
+    let remote_id = PublicKey::random();
+    let remote_vv = vv![remote_id => 1];
 
-            Blob::create(
-                branches[0].clone(),
-                Locator::head(blob_id),
-                Shared::uninit(),
-            )
-            .flush()
-            .await
-            .unwrap();
-        }
+    root.write()
+        .await
+        .remove_entry(
+            name,
+            &remote_id,
+            remote_vv.clone(),
+            OverwriteStrategy::Remove,
+        )
+        .await
+        .unwrap();
 
-        let author_to_remove = branches[index_to_remove].id();
-        let vv_to_remove = &vvs[index_to_remove];
+    let local_vv = assert_matches!(
+        root.read().await.lookup(name),
+        Ok(EntryRef::File(entry)) => entry.version_vector().clone()
+    );
 
-        // Remove one of the versions
-        {
-            let mut writer = root.write().await;
-            writer
-                .remove_entry(
-                    name,
-                    author_to_remove,
-                    vv_to_remove.clone(),
-                    OverwriteStrategy::Remove,
-                )
-                .await
-                .unwrap();
-            writer.flush().await.unwrap();
-        }
-
-        // Verify the removed version is gone but the other version remains
-        let reader = root.read().await;
-
-        if author_to_remove == local_id {
-            // If we're removing a local version, then we replace the file with a tombstone.
-            assert_matches!(
-                reader.lookup_version(name, local_id),
-                Ok(EntryRef::Tombstone(_))
-            );
-            assert_matches!(
-                reader.lookup_version(name, remote_id),
-                Ok(EntryRef::File(_))
-            );
-        } else {
-            // If we're removing a remote version, then the VV of our version needs to be updated
-            // to "happen after" the remote version being removed, and the remote version should
-            // be removed together with its blob.
-            assert_matches!(reader.lookup_version(name, local_id), Ok(EntryRef::File(_)));
-            assert_matches!(
-                reader.lookup_version(name, remote_id),
-                Err(Error::EntryNotFound)
-            );
-        }
-    }
+    assert!(local_vv > remote_vv);
 }
 
 async fn setup() -> Branch {
-    let pool = db::open_or_create(&db::Store::Temporary).await.unwrap();
+    let pool = db::create(&db::Store::Temporary).await.unwrap();
     let keys = WriteSecrets::random().into();
     create_branch(pool, keys).await
 }
 
 async fn setup_multiple<const N: usize>() -> [Branch; N] {
-    let pool = db::open_or_create(&db::Store::Temporary).await.unwrap();
+    let pool = db::create(&db::Store::Temporary).await.unwrap();
     let keys = AccessKeys::from(WriteSecrets::random());
     let branches: Vec<_> =
         future::join_all((0..N).map(|_| create_branch(pool.clone(), keys.clone()))).await;
