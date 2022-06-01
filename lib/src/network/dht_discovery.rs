@@ -61,8 +61,8 @@ pub(super) struct DhtDiscovery {
 
 impl DhtDiscovery {
     pub async fn new(acceptor_port: u16, config: &ConfigStore, monitor: Arc<StateMonitor>) -> Self {
-        let dht_v4 = start_dht(IpVersion::V4, acceptor_port, &config, &monitor).await;
-        let dht_v6 = start_dht(IpVersion::V6, acceptor_port, &config, &monitor).await;
+        let dht_v4 = start_dht(IpVersion::V4, acceptor_port, config, &monitor).await;
+        let dht_v6 = start_dht(IpVersion::V6, acceptor_port, config, &monitor).await;
 
         let lookups = Arc::new(Mutex::new(HashMap::default()));
 
@@ -123,7 +123,7 @@ async fn start_dht(
     let routers = dht_router_addresses(ip_v).await;
 
     // TODO: Unwraps
-    let socket = bind(ip_v, &config).await.unwrap();
+    let socket = bind(ip_v, config).await.unwrap();
     let local_addr = socket.local_addr().unwrap();
 
     let protocol = match ip_v {

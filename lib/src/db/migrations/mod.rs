@@ -5,6 +5,9 @@ use sqlx::Connection as _;
 pub(super) async fn run(conn: &mut Connection) -> Result<(), Error> {
     apply(conn, 1, include_str!("v1.sql")).await?;
 
+    // Temporary tables are created last, regardless of the version
+    sqlx::query(include_str!("temp.sql")).execute(conn).await?;
+
     Ok(())
 }
 
