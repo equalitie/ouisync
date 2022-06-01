@@ -11,6 +11,7 @@ use crate::{
     locator::Locator,
     path,
     sign::PublicKey,
+    version_vector::VersionVector,
 };
 use camino::{Utf8Component, Utf8Path};
 use std::sync::Arc;
@@ -43,6 +44,12 @@ impl Branch {
 
     pub(crate) fn db_pool(&self) -> &db::Pool {
         &self.pool
+    }
+
+    pub async fn version_vector(&self) -> Result<VersionVector> {
+        self.branch_data
+            .load_version_vector(&mut *self.pool.acquire().await?)
+            .await
     }
 
     pub(crate) fn keys(&self) -> &AccessKeys {

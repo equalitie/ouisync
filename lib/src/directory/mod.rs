@@ -583,6 +583,6 @@ async fn version_vector(inner: &Inner) -> Result<VersionVector> {
     if let Some(parent) = &inner.parent {
         Ok(parent.entry_version_vector().await)
     } else {
-        inner.blob.branch().data().version_vector().await
+        inner.blob.branch().version_vector().await
     }
 }

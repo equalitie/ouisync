@@ -69,13 +69,16 @@ impl BranchData {
         &self.writer_id
     }
 
-    /// Returns the latest complete root node of this branch.
-    pub async fn root(&self) -> Result<RootNode> {
-        Ok(self.root_node.read().await.clone())
+    /// Loads the current root node of this branch
+    pub async fn load_root(&self, conn: &mut db::Connection) -> Result<RootNode> {
+        RootNode::load_latest_complete_by_writer(conn, self.writer_id).await
     }
 
-    pub async fn version_vector(&self) -> Result<VersionVector> {
-        Ok(self.root_node.read().await.proof.version_vector.clone())
+    /// Loads the version vector of this branch.
+    pub async fn load_version_vector(&self, conn: &mut db::Connection) -> Result<VersionVector> {
+        // TODO: use a separate `RootNode::load_version_vector` function to avoid loading
+        // unnecessary data.
+        Ok(self.load_root(conn).await?.proof.into_version_vector())
     }
 
     /// Inserts a new block into the index.

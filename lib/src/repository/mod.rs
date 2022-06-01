@@ -509,7 +509,7 @@ impl Repository {
             let print = print.indent();
             print.display(&format_args!(
                 "/, vv: {:?}",
-                branch.data().version_vector().await.unwrap_or_default()
+                branch.version_vector().await.unwrap_or_default()
             ));
             branch.debug_print(print.indent()).await;
         }

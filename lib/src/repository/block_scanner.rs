@@ -138,7 +138,7 @@ impl BlockScanner {
 
         for branch in outdated_branches {
             // Avoid deleting empty local branch before any content is added to it.
-            if branch.data().version_vector().await?.is_empty() {
+            if branch.version_vector().await?.is_empty() {
                 continue;
             }
 

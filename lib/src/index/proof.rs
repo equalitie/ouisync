@@ -56,6 +56,10 @@ impl Proof {
             write_keys,
         )
     }
+
+    pub fn into_version_vector(self) -> VersionVector {
+        self.0.version_vector
+    }
 }
 
 impl Deref for Proof {

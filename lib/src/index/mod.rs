@@ -125,16 +125,23 @@ impl Index {
         summary: Summary,
     ) -> Result<bool, ReceiveError> {
         let proof = proof.verify(self.repository_id())?;
-        let branches = self.branches().await;
+
+        let mut conn = self.pool.acquire().await?;
+
+        // Load latest complete root nodes of all known branches.
+        let nodes: HashMap<_, _> = RootNode::load_all_latest_complete(&mut conn)
+            .map_ok(|node| (node.proof.writer_id, node))
+            .try_collect()
+            .await?;
 
         // If the received node is outdated relative to any branch we have, ignore it.
-        for branch in branches.values() {
-            if *branch.id() == proof.writer_id {
+        for node in nodes.values() {
+            if node.proof.writer_id == proof.writer_id {
                 // this will be checked further down.
                 continue;
             }
 
-            if proof.version_vector < branch.version_vector().await? {
+            if proof.version_vector < node.proof.version_vector {
                 return Ok(false);
             }
         }
@@ -145,9 +152,7 @@ impl Index {
         // Whether the remote replica's branch is more up-to-date than ours.
         let updated;
 
-        if let Some(branch) = branches.get(&proof.writer_id) {
-            let old_node = branch.root().await?;
-
+        if let Some(old_node) = nodes.get(&proof.writer_id) {
             match proof
                 .version_vector
                 .partial_cmp(&old_node.proof.version_vector)
@@ -174,11 +179,7 @@ impl Index {
             updated = proof.hash != *EMPTY_INNER_HASH;
         };
 
-        // Prevent deadlock.
-        drop(branches);
-
         if create {
-            let mut conn = self.pool.acquire().await?;
             let hash = proof.hash;
 
             match RootNode::create(&mut conn, proof, Summary::INCOMPLETE).await {

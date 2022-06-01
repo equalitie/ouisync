@@ -6,8 +6,9 @@ use crate::{
     block::{self, BlockId, BLOCK_SIZE},
     crypto::{sign::PublicKey, Hash},
     error::{Error, Result},
-    index::{Index, InnerNode, LeafNode},
+    index::{Index, InnerNode, LeafNode, RootNode},
 };
+use futures_util::TryStreamExt;
 use std::{fmt, time::Duration};
 use tokio::{
     select,
@@ -164,9 +165,9 @@ impl<'a> Monitor<'a> {
         let mut subscription = self.index.subscribe();
 
         // send initial branches
-        let branch_ids: Vec<_> = self.index.branches().await.keys().copied().collect();
-        for branch_id in branch_ids {
-            self.handle_branch_changed(branch_id).await?;
+        let root_nodes = self.load_all_root_nodes().await?;
+        for root_node in root_nodes {
+            self.handle_root_node_changed(root_node).await?;
         }
 
         while let Ok(branch_id) = subscription.recv().await {
@@ -177,16 +178,19 @@ impl<'a> Monitor<'a> {
     }
 
     async fn handle_branch_changed(&self, branch_id: PublicKey) -> Result<()> {
-        let branches = self.index.branches().await;
-        let branch = if let Some(branch) = branches.get(&branch_id) {
-            branch
-        } else {
-            // branch was removed after the notification was fired.
-            return Ok(());
+        let root_node = match self.load_root_node(branch_id).await {
+            Ok(node) => node,
+            Err(Error::EntryNotFound) => {
+                // branch was removed after the notification was fired.
+                return Ok(());
+            }
+            Err(error) => return Err(error),
         };
 
-        let root_node = branch.root().await?;
+        self.handle_root_node_changed(root_node).await
+    }
 
+    async fn handle_root_node_changed(&self, root_node: RootNode) -> Result<()> {
         if !root_node.summary.is_complete() {
             // send only complete branches
             return Ok(());
@@ -195,7 +199,7 @@ impl<'a> Monitor<'a> {
         log::trace!(
             "{} handle_branch_changed(branch_id: {:?}, hash: {:?}, vv: {:?}, missing blocks: {})",
             ChannelInfo::current(),
-            branch_id,
+            root_node.proof.writer_id,
             root_node.proof.hash,
             root_node.proof.version_vector,
             root_node.summary.missing_blocks_count(),
@@ -206,12 +210,21 @@ impl<'a> Monitor<'a> {
             summary: root_node.summary,
         };
 
-        // Don't hold the locks while sending is in progress.
-        drop(branches);
-
         self.tx.send(response).await;
 
         Ok(())
+    }
+
+    async fn load_all_root_nodes(&self) -> Result<Vec<RootNode>> {
+        let mut conn = self.index.pool.acquire().await?;
+        RootNode::load_all_latest_complete(&mut conn)
+            .try_collect()
+            .await
+    }
+
+    async fn load_root_node(&self, branch_id: PublicKey) -> Result<RootNode> {
+        let mut conn = self.index.pool.acquire().await?;
+        RootNode::load_latest_complete_by_writer(&mut conn, branch_id).await
     }
 }
 

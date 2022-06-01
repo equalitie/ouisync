@@ -416,7 +416,7 @@ async fn local_merge_is_idempotent() {
     let local_root = branches[0].open_or_create_root().await.unwrap();
     local_root.flush().await.unwrap();
 
-    let vv0 = branches[0].data().version_vector().await.unwrap();
+    let vv0 = branches[0].version_vector().await.unwrap();
 
     let remote_root = branches[1].open_or_create_root().await.unwrap();
 
@@ -430,7 +430,7 @@ async fn local_merge_is_idempotent() {
     .await
     .unwrap();
 
-    let vv1 = branches[0].data().version_vector().await.unwrap();
+    let vv1 = branches[0].version_vector().await.unwrap();
     assert!(vv1 > vv0);
 
     // Merge again. This time there is no local modification because there was no remote
@@ -443,7 +443,7 @@ async fn local_merge_is_idempotent() {
     .await
     .unwrap();
 
-    let vv2 = branches[0].data().version_vector().await.unwrap();
+    let vv2 = branches[0].version_vector().await.unwrap();
     assert_eq!(vv2, vv1);
 
     // Perform another remote modification and merge again - this causes local modification
@@ -457,7 +457,7 @@ async fn local_merge_is_idempotent() {
     .await
     .unwrap();
 
-    let vv3 = branches[0].data().version_vector().await.unwrap();
+    let vv3 = branches[0].version_vector().await.unwrap();
     assert!(vv3 > vv2);
 
     // Another idempotent merge which causes no local modification.
@@ -466,7 +466,7 @@ async fn local_merge_is_idempotent() {
         .await
         .unwrap();
 
-    let vv4 = branches[0].data().version_vector().await.unwrap();
+    let vv4 = branches[0].version_vector().await.unwrap();
     assert_eq!(vv4, vv3);
 }
 
@@ -491,7 +491,7 @@ async fn remote_merge_is_idempotent() {
     .await
     .unwrap();
 
-    let vv0 = branches[0].data().version_vector().await.unwrap();
+    let vv0 = branches[0].version_vector().await.unwrap();
 
     // Then merge local back into remote. This has no effect.
     JointDirectory::new(Some(branches[1].clone()), [remote_root, local_root])
@@ -499,7 +499,7 @@ async fn remote_merge_is_idempotent() {
         .await
         .unwrap();
 
-    let vv1 = branches[0].data().version_vector().await.unwrap();
+    let vv1 = branches[0].version_vector().await.unwrap();
     assert_eq!(vv1, vv0);
 }
 

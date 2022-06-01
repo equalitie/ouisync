@@ -82,8 +82,8 @@ impl Merger {
             return;
         };
 
-        let local_vv = local.data().version_vector().await.unwrap_or_default();
-        let remote_vv = remote.data().version_vector().await.unwrap_or_default();
+        let local_vv = local.version_vector().await.unwrap_or_default();
+        let remote_vv = remote.version_vector().await.unwrap_or_default();
 
         if local_vv > remote_vv {
             log::debug!(

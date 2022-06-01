@@ -159,10 +159,11 @@ async fn receive_root_node_with_existing_hash() {
         .unwrap();
 
     tx.commit().await.unwrap();
-    drop(conn);
 
     // Receive root node with the same hash as the current local one but different writer id.
-    let root = local_branch.root().await.unwrap();
+    let root = local_branch.load_root(&mut conn).await.unwrap();
+    drop(conn);
+
     assert!(root.summary.is_complete());
     let root_hash = root.proof.hash;
     let root_vv = root.proof.version_vector.clone();
@@ -175,7 +176,13 @@ async fn receive_root_node_with_existing_hash() {
         .await
         .unwrap();
 
-    assert!(local_branch.root().await.unwrap().summary.is_complete());
+    let mut conn = index.pool.acquire().await.unwrap();
+    assert!(local_branch
+        .load_root(&mut conn)
+        .await
+        .unwrap()
+        .summary
+        .is_complete());
 }
 
 #[tokio::test(flavor = "multi_thread")]

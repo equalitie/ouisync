@@ -15,7 +15,7 @@ async fn current_branch_ids(branches: &[Branch]) -> Result<HashSet<PublicKey>> {
     let infos: Vec<_> = stream::iter(branches)
         .then(|branch| async move {
             let id = *branch.id();
-            branch.data().version_vector().await.map(move |vv| (id, vv))
+            branch.version_vector().await.map(move |vv| (id, vv))
         })
         .try_collect()
         .await?;
