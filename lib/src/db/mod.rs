@@ -34,7 +34,10 @@ impl Pool {
 
     #[track_caller]
     pub fn acquire(&self) -> impl Future<Output = Result<PoolConnection, sqlx::Error>> {
-        DeadlockGuard::try_wrap(self.inner.acquire(), self.deadlock_tracker.clone())
+        // FIXME: deadlock detection temporarily disabled to work around misterious stack overflow
+        // errors.
+        // DeadlockGuard::try_wrap(self.inner.acquire(), self.deadlock_tracker.clone())
+        self.inner.acquire()
     }
 
     #[track_caller]
@@ -52,7 +55,10 @@ impl Pool {
 pub type Connection = SqliteConnection;
 
 /// Pooled database connection
-pub(crate) type PoolConnection = DeadlockGuard<sqlx::pool::PoolConnection<Sqlite>>;
+
+// FIXME: deadlock detection temporarily disabled to work around misterious stack overflow errors.
+// pub(crate) type PoolConnection = DeadlockGuard<sqlx::pool::PoolConnection<Sqlite>>;
+pub(crate) type PoolConnection = sqlx::pool::PoolConnection<Sqlite>;
 
 /// Database transaction
 pub type Transaction<'a> = sqlx::Transaction<'a, Sqlite>;
