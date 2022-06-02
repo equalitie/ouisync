@@ -13,7 +13,7 @@ use std::{
     collections::{HashMap, HashSet},
     future::pending,
     io,
-    net::{Ipv4Addr, Ipv6Addr, SocketAddr},
+    net::{Ipv4Addr, Ipv6Addr, IpAddr, SocketAddr},
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex, RwLock, Weak,
@@ -369,15 +369,43 @@ async fn bind(ip_v: IpVersion, config: &ConfigStore) -> io::Result<UdpSocket> {
             )
             .await
         }
-        // TODO: [BEP-32](https://www.bittorrent.org/beps/bep_0032.html) says we should bind the ipv6
-        // socket to a concrete unicast address, not to an unspecified one. Consider finding somehow
-        // what the local ipv6 address of this device is and use that instead.
         IpVersion::V6 => {
-            socket::bind(
-                (Ipv6Addr::UNSPECIFIED, 0).into(),
-                config.entry(LAST_USED_PORT_V6),
-            )
-            .await
+            let port = config.entry(LAST_USED_PORT_V6);
+
+            // [BEP-32](https://www.bittorrent.org/beps/bep_0032.html) says we should bind the ipv6
+            // socket to a concrete unicast address, not to an unspecified one.
+            match local_ipv6_address().await {
+                Some(addr) => {
+                    match socket::bind((addr, 0).into(), port.clone()).await {
+                        Ok(socket) => return Ok(socket),
+                        Err(_) => (),
+                    }
+                },
+                None => (),
+            }
+
+            socket::bind((Ipv6Addr::UNSPECIFIED, 0).into(), port).await
         }
     }
+}
+
+pub async fn local_ipv6_address() -> Option<IpAddr> {
+    let socket = match UdpSocket::bind((Ipv6Addr::UNSPECIFIED, 0)).await {
+        Ok(s) => s,
+        Err(_) => return None,
+    };
+
+    // We're not actually connecting to it. It's only being used to let the system chose interface
+    // that can connect to the outside internet.
+    let google_public_dns = "[2001:4860:4860::8888]:8888".parse::<std::net::SocketAddr>().ok()?;
+
+    match socket.connect(google_public_dns).await {
+        Ok(()) => (),
+        Err(_) => return None,
+    };
+
+    match socket.local_addr() {
+        Ok(addr) => return Some(addr.ip()),
+        Err(_) => return None,
+    };
 }

@@ -7,7 +7,7 @@ use ouisync_lib::{
 use std::{
     collections::HashSet,
     io,
-    net::{Ipv4Addr, Ipv6Addr},
+    net::{Ipv4Addr, Ipv6Addr, IpAddr},
 };
 use structopt::StructOpt;
 use tokio::{net::UdpSocket, task};
@@ -31,10 +31,17 @@ async fn main() -> io::Result<()> {
         .ok()
         .and_then(|s| btdht::Socket::new(s).ok());
 
-    let socket_v6 = UdpSocket::bind((Ipv6Addr::UNSPECIFIED, 0))
-        .await
-        .ok()
-        .and_then(|s| btdht::Socket::new(s).ok());
+    // Note: [BEP-32](https://www.bittorrent.org/beps/bep_0032.html) says we should bind the ipv6
+    // socket to a concrete unicast address, not to an unspecified one.
+    let socket_v6 = match network::dht_discovery::local_ipv6_address().await {
+        Some(ipv6_addr) => {
+            UdpSocket::bind((ipv6_addr, 0))
+                .await
+                .ok()
+                .and_then(|socket| btdht::Socket::new(socket).ok())
+        },
+        None => None,
+    };
 
     let dht_v4 = socket_v4.map(|socket| {
         MainlineDht::builder()
