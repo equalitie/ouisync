@@ -210,8 +210,9 @@ impl<'a> Operations<'a> {
             self.seek(tx, SeekFrom::End(0)).await?;
         }
 
-        self.remove_blocks(
+        remove_blocks(
             tx,
+            &self.unique.branch,
             self.unique
                 .head_locator
                 .sequence()
@@ -233,26 +234,6 @@ impl<'a> Operations<'a> {
         self.write_current_block(tx).await?;
 
         Ok(true)
-    }
-
-    /// Removes this blob.
-    pub async fn remove(&mut self, conn: &mut db::Connection) -> Result<()> {
-        let mut tx = conn.begin().await?;
-        self.remove_blocks(
-            &mut tx,
-            self.unique
-                .head_locator
-                .sequence()
-                .take(self.shared.block_count() as usize),
-        )
-        .await?;
-        tx.commit().await?;
-
-        self.unique.current_block = OpenBlock::new_head(self.unique.head_locator);
-        self.shared.len = 0;
-        self.unique.len_dirty = true;
-
-        Ok(())
     }
 
     /// Creates a shallow copy (only the index nodes are copied, not blocks) of this blob into the
@@ -403,29 +384,6 @@ impl<'a> Operations<'a> {
         Ok(())
     }
 
-    async fn remove_blocks<T>(&self, tx: &mut db::Transaction<'_>, locators: T) -> Result<()>
-    where
-        T: IntoIterator<Item = Locator>,
-    {
-        let read_key = self.unique.branch.keys().read();
-        let write_keys = self
-            .unique
-            .branch
-            .keys()
-            .write()
-            .ok_or(Error::PermissionDenied)?;
-
-        for locator in locators {
-            self.unique
-                .branch
-                .data()
-                .remove(tx, &locator.encode(read_key), write_keys)
-                .await?;
-        }
-
-        Ok(())
-    }
-
     // Returns the current seek position from the start of the blob.
     pub fn seek_position(&mut self) -> u64 {
         self.unique.current_block.locator.number() as u64 * BLOCK_SIZE as u64
@@ -524,4 +482,25 @@ pub(super) fn encrypt_block(
 ) {
     let block_key = SecretKey::derive_from_key(blob_key.as_ref(), block_nonce);
     block_key.encrypt_no_aead(&Nonce::default(), content);
+}
+
+pub(super) async fn remove_blocks<T>(
+    tx: &mut db::Transaction<'_>,
+    branch: &Branch,
+    locators: T,
+) -> Result<()>
+where
+    T: IntoIterator<Item = Locator>,
+{
+    let read_key = branch.keys().read();
+    let write_keys = branch.keys().write().ok_or(Error::PermissionDenied)?;
+
+    for locator in locators {
+        branch
+            .data()
+            .remove(tx, &locator.encode(read_key), write_keys)
+            .await?;
+    }
+
+    Ok(())
 }

@@ -246,27 +246,29 @@ async fn remove_blob() {
     blob.write(&content).await.unwrap();
     blob.flush().await.unwrap();
 
-    let locator0 = locator0.encode(branch.keys().read());
-    let locator1 = locator1.encode(branch.keys().read());
+    let encoded_locator0 = locator0.encode(branch.keys().read());
+    let encoded_locator1 = locator1.encode(branch.keys().read());
+
+    let mut tx = branch.db_pool().begin().await.unwrap();
 
     let block_ids = {
-        let mut tx = branch.db_pool().begin().await.unwrap();
-        let id0 = branch.data().get(&mut tx, &locator0).await.unwrap();
-        let id1 = branch.data().get(&mut tx, &locator1).await.unwrap();
+        let id0 = branch.data().get(&mut tx, &encoded_locator0).await.unwrap();
+        let id1 = branch.data().get(&mut tx, &encoded_locator1).await.unwrap();
         [id0, id1]
     };
 
     // Remove the blob
-    blob.remove().await.unwrap();
+    Blob::remove_in_transaction(&mut tx, &branch, locator0)
+        .await
+        .unwrap();
 
     // Check the block entries were deleted from the index.
-    let mut tx = branch.db_pool().begin().await.unwrap();
     assert_matches!(
-        branch.data().get(&mut tx, &locator0).await,
+        branch.data().get(&mut tx, &encoded_locator0).await,
         Err(Error::EntryNotFound)
     );
     assert_matches!(
-        branch.data().get(&mut tx, &locator1).await,
+        branch.data().get(&mut tx, &encoded_locator1).await,
         Err(Error::EntryNotFound)
     );
 

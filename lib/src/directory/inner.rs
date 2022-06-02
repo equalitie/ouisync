@@ -5,11 +5,9 @@ use super::{
     parent_context::ParentContext,
 };
 use crate::{
-    blob::{Blob, Shared},
+    blob::Blob,
     blob_id::BlobId,
-    block,
-    branch::Branch,
-    db,
+    block, db,
     error::{Error, Result},
     locator::Locator,
     sync::RwLockWriteGuard,
@@ -28,10 +26,34 @@ pub(super) struct Inner {
     // Cache of open subdirectories. Used to make sure that multiple instances of the same directory
     // all share the same internal state.
     pub open_directories: SubdirectoryCache,
+    // Blobs overwritten by `insert_entry`. Will be deleted on the next `flush`.
+    overwritten_blobs: Vec<BlobId>,
 }
 
 impl Inner {
+    pub fn new(
+        blob: Blob,
+        entries: Content,
+        version_vector_increment: VersionVector,
+        parent: Option<ParentContext>,
+    ) -> Self {
+        Self {
+            blob,
+            entries,
+            version_vector_increment,
+            parent,
+            open_directories: SubdirectoryCache::new(),
+            overwritten_blobs: Vec::new(),
+        }
+    }
+
     pub async fn flush(&mut self, mut tx: db::Transaction<'_>) -> Result<()> {
+        // Remove overwritten blocks
+        for blob_id in &self.overwritten_blobs {
+            Blob::remove_in_transaction(&mut tx, self.blob.branch(), Locator::head(*blob_id))
+                .await?
+        }
+
         // Save the directory content into the store
         let buffer = content::serialize(&self.entries);
         self.blob.truncate_in_transaction(&mut tx, 0).await?;
@@ -42,7 +64,7 @@ impl Inner {
         let increment = mem::take(&mut self.version_vector_increment);
 
         if let Some(ctx) = self.parent.as_mut() {
-            ctx.modify_entry(tx, &increment).await
+            ctx.modify_entry(tx, &increment).await?;
         } else {
             // At this point all local newly created blocks should become reachable so they can be
             // safely unpinned to become normal subjects of garbage collection.
@@ -59,13 +81,18 @@ impl Inner {
                 .branch()
                 .data()
                 .update_root_version_vector(tx, &increment, write_keys)
-                .await
+                .await?;
         }
+
+        // Clearing this here to make it cancel-safe.
+        self.overwritten_blobs.clear();
+
+        Ok(())
     }
 
     // If `overwrite` is set to `Keep`, the existing blob won't be removed from the store. This is
     // useful when we want to move or rename a an entry.
-    pub async fn insert_entry(
+    pub fn insert_entry(
         &mut self,
         name: String,
         mut new_data: EntryData,
@@ -95,12 +122,10 @@ impl Inner {
                 }
 
                 if matches!(overwrite, OverwriteStrategy::Remove) {
-                    if let Some(blob_id) = old_data.blob_id() {
-                        // NOTE: The garbage collector removes only unreachable blocks, but does not
-                        // modify the index (i.e., it doesn't remove the nodes poitning to those
-                        // blocks). That is why we need to remove the blob explicitly here.
-                        remove_blob(self.blob.branch(), *blob_id).await?;
-                    }
+                    // NOTE: The garbage collector removes only unreachable blocks, but does not
+                    // modify the index (i.e., it doesn't remove the nodes poitning to those
+                    // blocks). That is why we need to remove the blob explicitly here.
+                    self.overwritten_blobs.extend(old_data.blob_id().copied());
                 }
 
                 let new_vv = new_data.version_vector().clone();
@@ -119,7 +144,7 @@ impl Inner {
 
     /// Inserts a file entry into this directory. It's the responsibility of the caller to make
     /// sure the passed in `blob_id` eventually points to an actual file.
-    pub async fn insert_file_entry(
+    pub fn insert_file_entry(
         &mut self,
         name: String,
         version_vector: VersionVector,
@@ -127,7 +152,6 @@ impl Inner {
     ) -> Result<()> {
         let data = EntryData::file(blob_id, version_vector, Weak::new());
         self.insert_entry(name, data, OverwriteStrategy::Remove)
-            .await
     }
 }
 
@@ -211,11 +235,4 @@ pub(crate) enum OverwriteStrategy {
     // Keep it (useful when inserting a tombstone oven an entry which is to be moved somewhere
     // else)
     Keep,
-}
-
-async fn remove_blob(branch: &Branch, id: BlobId) -> Result<()> {
-    Blob::open(branch.clone(), Locator::head(id), Shared::uninit().into())
-        .await?
-        .remove()
-        .await
 }

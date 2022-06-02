@@ -514,7 +514,6 @@ async fn insert_entry_newer_than_existing() {
             .write()
             .await
             .insert_file_entry(name.to_owned(), a_vv.clone(), blob_id)
-            .await
             .unwrap();
 
         // Need to create this dummy blob here otherwise the subsequent `insert_entry` would
@@ -531,7 +530,6 @@ async fn insert_entry_newer_than_existing() {
             .write()
             .await
             .insert_file_entry(name.to_owned(), b_vv.clone(), blob_id)
-            .await
             .unwrap();
 
         let reader = root.read().await;

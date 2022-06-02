@@ -17,7 +17,7 @@ pub use self::{
     entry_type::EntryType,
 };
 
-use self::{cache::SubdirectoryCache, inner::Inner};
+use self::inner::Inner;
 use crate::{
     blob::{Blob, Shared},
     branch::Branch,
@@ -146,7 +146,6 @@ impl Directory {
             .as_mut()
             .unwrap_or(&mut src_dir_writer)
             .insert_entry(dst_name.into(), dst_entry)
-            .await
     }
 
     // Forks this directory into the local branch.
@@ -219,13 +218,12 @@ impl Directory {
 
         Ok(Self {
             branch_id,
-            inner: Arc::new(RwLock::new(Inner {
+            inner: Arc::new(RwLock::new(Inner::new(
                 blob,
                 entries,
-                version_vector_increment: VersionVector::new(),
+                VersionVector::new(),
                 parent,
-                open_directories: SubdirectoryCache::new(),
-            })),
+            ))),
         })
     }
 
@@ -235,13 +233,12 @@ impl Directory {
 
         Directory {
             branch_id,
-            inner: Arc::new(RwLock::new(Inner {
+            inner: Arc::new(RwLock::new(Inner::new(
                 blob,
-                entries: BTreeMap::new(),
-                version_vector_increment: VersionVector::first(branch_id),
+                BTreeMap::new(),
+                VersionVector::first(branch_id),
                 parent,
-                open_directories: SubdirectoryCache::new(),
-            })),
+            ))),
         }
     }
 
@@ -393,6 +390,7 @@ pub(crate) struct Writer<'a> {
 }
 
 impl Writer<'_> {
+    // TODO: currently `async` is redundant
     pub async fn create_file(&mut self, name: String) -> Result<File> {
         let blob_id = rand::random();
         let shared = Shared::uninit();
@@ -400,8 +398,7 @@ impl Writer<'_> {
         let parent = ParentContext::new(self.outer.clone(), name.clone());
 
         self.inner
-            .insert_entry(name, data, OverwriteStrategy::Remove)
-            .await?;
+            .insert_entry(name, data, OverwriteStrategy::Remove)?;
 
         Ok(File::create(
             self.branch().clone(),
@@ -417,8 +414,7 @@ impl Writer<'_> {
         let parent = ParentContext::new(self.outer.clone(), name.clone());
 
         self.inner
-            .insert_entry(name, data, OverwriteStrategy::Remove)
-            .await?;
+            .insert_entry(name, data, OverwriteStrategy::Remove)?;
 
         self.inner
             .open_directories
@@ -485,15 +481,12 @@ impl Writer<'_> {
             }
         };
 
-        self.inner
-            .insert_entry(name.into(), new_entry, overwrite)
-            .await
+        self.inner.insert_entry(name.into(), new_entry, overwrite)
     }
 
-    pub async fn insert_entry(&mut self, name: String, entry: EntryData) -> Result<()> {
+    pub fn insert_entry(&mut self, name: String, entry: EntryData) -> Result<()> {
         self.inner
             .insert_entry(name, entry, OverwriteStrategy::Remove)
-            .await
     }
 
     pub fn lookup(&self, name: &'_ str) -> Result<EntryRef> {

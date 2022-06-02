@@ -61,6 +61,27 @@ impl Blob {
         }
     }
 
+    /// Removes a blob.
+    pub async fn remove_in_transaction(
+        tx: &mut db::Transaction<'_>,
+        branch: &Branch,
+        head_locator: Locator,
+    ) -> Result<()> {
+        // TODO: we only need the first 8 bytes of the block, no need to read it all.
+        let mut current_block = OpenBlock::open_head(tx, branch, head_locator).await?;
+        let len = current_block.content.read_u64();
+        let block_count = inner::block_count(len);
+
+        operations::remove_blocks(
+            tx,
+            branch,
+            head_locator.sequence().take(block_count as usize),
+        )
+        .await?;
+
+        Ok(())
+    }
+
     pub async fn first_block_id(&self) -> Result<BlockId> {
         let mut conn = self.db_pool().acquire().await?;
 
@@ -167,12 +188,6 @@ impl Blob {
     /// Flushes this blob in a db transaction.
     pub async fn flush_in_transaction(&mut self, tx: &mut db::Transaction<'_>) -> Result<bool> {
         self.lock().await.flush(tx).await
-    }
-
-    /// Removes this blob.
-    pub async fn remove(&mut self) -> Result<()> {
-        let mut conn = self.db_pool().acquire().await?;
-        self.lock().await.remove(&mut conn).await
     }
 
     /// Creates a shallow copy (only the index nodes are copied, not blocks) of this blob into the
