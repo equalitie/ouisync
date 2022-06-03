@@ -7,7 +7,7 @@ use ouisync_lib::{
 use std::{
     collections::HashSet,
     io,
-    net::{Ipv4Addr, Ipv6Addr, IpAddr},
+    net::Ipv4Addr,
 };
 use structopt::StructOpt;
 use tokio::{net::UdpSocket, task};
@@ -17,8 +17,9 @@ use tokio::{net::UdpSocket, task};
 struct Options {
     /// Accept a share token.
     #[structopt(long, value_name = "TOKEN")]
-    pub token: ShareToken,
+    pub token: Option<ShareToken>,
 }
+
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
@@ -26,21 +27,32 @@ async fn main() -> io::Result<()> {
 
     env_logger::init();
 
-    let socket_v4 = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))
-        .await
-        .ok()
-        .and_then(|s| btdht::Socket::new(s).ok());
+    const WITH_IPV4: bool = true;
+    const WITH_IPV6: bool = true;
+
+    let socket_v4 = if WITH_IPV4 {
+        UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))
+            .await
+            .ok()
+            .and_then(|s| btdht::Socket::new(s).ok())
+    } else {
+        None
+    };
 
     // Note: [BEP-32](https://www.bittorrent.org/beps/bep_0032.html) says we should bind the ipv6
     // socket to a concrete unicast address, not to an unspecified one.
-    let socket_v6 = match network::dht_discovery::local_ipv6_address().await {
-        Some(ipv6_addr) => {
-            UdpSocket::bind((ipv6_addr, 0))
-                .await
-                .ok()
-                .and_then(|socket| btdht::Socket::new(socket).ok())
-        },
-        None => None,
+    let socket_v6 = if WITH_IPV6 {
+        match network::dht_discovery::local_ipv6_address().await {
+            Some(ipv6_addr) => {
+                UdpSocket::bind((ipv6_addr, 0))
+                    .await
+                    .ok()
+                    .and_then(|socket| btdht::Socket::new(socket).ok())
+            },
+            None => None,
+        }
+    } else {
+        None
     };
 
     let dht_v4 = socket_v4.map(|socket| {
@@ -57,22 +69,24 @@ async fn main() -> io::Result<()> {
             .start(socket)
     });
 
-    let task = task::spawn(async move {
-        if let Some(dht) = dht_v4 {
-            println!();
-            lookup("IPv4", &dht, &options.token).await;
-        }
+    if let Some(token) = options.token {
+        let task = task::spawn(async move {
+            if let Some(dht) = dht_v4 {
+                println!();
+                lookup("IPv4", &dht, &token).await;
+            }
 
-        if let Some(dht) = dht_v6 {
-            println!();
-            lookup("IPv6", &dht, &options.token).await;
-        }
-    });
+            if let Some(dht) = dht_v6 {
+                println!();
+                lookup("IPv6", &dht, &token).await;
+            }
+        });
 
-    task.await?;
-
-    // Uncomment to keep observing the DHT (for when debugging).
-    //std::future::pending::<()>().await;
+        task.await?;
+    } else {
+        // This never ends, useful mainly for debugging.
+        std::future::pending::<()>().await;
+    }
 
     Ok(())
 }
