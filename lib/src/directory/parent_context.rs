@@ -41,16 +41,15 @@ impl ParentContext {
     }
 
     /// Forks this parent context by forking the parent directory and inserting the forked entry
-    /// data into it.
+    /// data into it. This also flushes the new parent directory.
     pub async fn fork(&self, local_branch: &Branch) -> Result<Self> {
         let entry_data = self.fork_entry_data().await;
         let directory = self.directory().fork(local_branch).await?;
 
-        directory
-            .write()
-            .await
-            .insert_entry(self.entry_name.clone(), entry_data)
-            .await?;
+        let mut writer = directory.write().await;
+        writer.insert_entry(self.entry_name.clone(), entry_data)?;
+        writer.flush().await?;
+        drop(writer);
 
         Ok(Self {
             directory,

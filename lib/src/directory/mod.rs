@@ -83,14 +83,20 @@ impl Directory {
     /// Note: this also flushes this directory to make sure any subsequently created blocks in the
     /// returned file are immediately reachable.
     pub async fn create_file(&self, name: String) -> Result<File> {
-        self.write().await.create_file(name).await
+        let mut writer = self.write().await;
+        let file = writer.create_file(name).await?;
+        writer.flush().await?;
+        Ok(file)
     }
 
     /// Creates a new subdirectory of this directory.
     /// Note: this also flushes this directory to make sure any subsequently created blocks in the
     /// returned subdirectory are immediately reachable.
     pub async fn create_directory(&self, name: String) -> Result<Self> {
-        self.write().await.create_directory(name).await
+        let mut writer = self.write().await;
+        let dir = writer.create_directory(name).await?;
+        writer.flush().await?;
+        Ok(dir)
     }
 
     /// Removes a file or subdirectory from this directory. If the entry to be removed is a
@@ -150,7 +156,7 @@ impl Directory {
         dst_dir_writer
             .as_mut()
             .unwrap_or(&mut src_dir_writer)
-            .insert_moved_entry(dst_name.into(), dst_entry)
+            .insert_entry(dst_name.into(), dst_entry)
     }
 
     // Forks this directory into the local branch.
@@ -403,7 +409,6 @@ impl Writer<'_> {
 
         self.inner
             .insert_entry(name, data, OverwriteStrategy::Remove)?;
-        self.flush().await?;
 
         Ok(File::create(
             self.branch().clone(),
@@ -420,7 +425,6 @@ impl Writer<'_> {
 
         self.inner
             .insert_entry(name, data, OverwriteStrategy::Remove)?;
-        self.flush().await?;
 
         self.inner
             .open_directories
@@ -491,14 +495,7 @@ impl Writer<'_> {
     }
 
     /// Inserts existing entry into this directory and flushes it. Use only for moving and forking.
-    pub async fn insert_entry(&mut self, name: String, entry: EntryData) -> Result<()> {
-        self.inner
-            .insert_entry(name, entry, OverwriteStrategy::Remove)?;
-        self.flush().await
-    }
-
-    // TODO: remove this in favor of `insert_entry`
-    pub fn insert_moved_entry(&mut self, name: String, entry: EntryData) -> Result<()> {
+    pub fn insert_entry(&mut self, name: String, entry: EntryData) -> Result<()> {
         self.inner
             .insert_entry(name, entry, OverwriteStrategy::Remove)
     }
