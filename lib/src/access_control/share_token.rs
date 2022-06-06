@@ -7,7 +7,7 @@ use std::{
 };
 use zeroize::Zeroizing;
 
-pub const PREFIX: &str = "https://ouisync.net/r#";
+pub const PREFIX: &str = "https://ouisync.net/r";
 pub const VERSION: u64 = 0;
 
 /// Token to share a repository which can be encoded as a URL-formatted string and transmitted to
@@ -89,6 +89,14 @@ impl FromStr for ShareToken {
         let input = input.trim();
         let input = input.strip_prefix(PREFIX).ok_or(DecodeError)?;
 
+        // The '/' before '#...' is optional.
+        let input = match input.strip_prefix('/') {
+            Some(input) => input,
+            None => input
+        };
+
+        let input = input.strip_prefix('#').ok_or(DecodeError)?;
+
         let (input, params) = input.split_once('?').unwrap_or((input, ""));
 
         let input = Zeroizing::new(base64::decode_config(input, base64::URL_SAFE_NO_PAD)?);
@@ -126,7 +134,7 @@ fn decode_version(mut input: &[u8]) -> Result<&[u8], DecodeError> {
 
 impl fmt::Display for ShareToken {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", PREFIX)?;
+        write!(f, "{}#", PREFIX)?;
 
         let mut buffer = Vec::new();
         encode_version(&mut buffer, VERSION);
