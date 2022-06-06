@@ -137,11 +137,6 @@ impl BlockScanner {
         let outdated_branches = utils::outdated_branches(self.shared.branches().await?).await?;
 
         for branch in outdated_branches {
-            // Avoid deleting empty local branch before any content is added to it.
-            if branch.version_vector().await?.is_empty() {
-                continue;
-            }
-
             self.shared.remove_branch(branch.id()).await?;
         }
 

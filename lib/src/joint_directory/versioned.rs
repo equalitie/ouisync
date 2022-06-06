@@ -12,16 +12,6 @@ pub trait Versioned {
     fn branch_id(&self) -> &PublicKey;
 }
 
-impl Versioned for (PublicKey, VersionVector) {
-    fn version_vector(&self) -> &VersionVector {
-        &self.1
-    }
-
-    fn branch_id(&self) -> &PublicKey {
-        &self.0
-    }
-}
-
 impl Versioned for EntryRef<'_> {
     fn version_vector(&self) -> &VersionVector {
         EntryRef::version_vector(self)
@@ -60,7 +50,7 @@ impl<E> Container<E> for Discard {
 }
 
 // Partition the entries into those with the maximal versions and the rest.
-pub fn partition<I, M>(entries: I, local_branch_id: Option<&PublicKey>) -> (Vec<I::Item>, M)
+pub(crate) fn partition<I, M>(entries: I, local_branch_id: Option<&PublicKey>) -> (Vec<I::Item>, M)
 where
     I: IntoIterator,
     I::Item: Versioned,

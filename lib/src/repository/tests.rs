@@ -963,6 +963,7 @@ async fn file_conflict_modify_local() {
         .open_file_version("test.txt", &remote_id)
         .await
         .unwrap();
+
     assert_eq!(remote_file.read_to_end().await.unwrap(), b"remote v1");
     assert_eq!(remote_file.version_vector().await, vv![remote_id => 1]);
 }
