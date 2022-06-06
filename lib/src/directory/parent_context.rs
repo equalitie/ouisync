@@ -1,8 +1,4 @@
-use super::{
-    entry::EntryRef,
-    entry_data::EntryData,
-    inner::{self, OverwriteStrategy},
-};
+use super::{entry::EntryRef, entry_data::EntryData, inner};
 use crate::{
     branch::Branch, db, directory::Directory, error::Result, version_vector::VersionVector,
 };
@@ -50,11 +46,11 @@ impl ParentContext {
         let entry_data = self.fork_entry_data().await;
         let directory = self.directory().fork(local_branch).await?;
 
-        directory.inner.write().await.insert_entry(
-            self.entry_name.clone(),
-            entry_data,
-            OverwriteStrategy::Remove,
-        )?;
+        directory
+            .write()
+            .await
+            .insert_entry(self.entry_name.clone(), entry_data)
+            .await?;
 
         Ok(Self {
             directory,
