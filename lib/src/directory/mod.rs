@@ -74,6 +74,7 @@ impl Directory {
     /// Flushes this directory ensuring that any pending changes are written to the store and the
     /// version vectors of this and the ancestor directories are properly updated.
     /// Also flushes all ancestor directories.
+    // TODO: this function might not be needed.
     pub async fn flush(&self) -> Result<()> {
         self.write().await.flush().await
     }

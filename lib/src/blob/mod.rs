@@ -191,18 +191,57 @@ impl Blob {
     }
 
     /// Creates a shallow copy (only the index nodes are copied, not blocks) of this blob into the
-    /// specified destination branch.
-    pub async fn fork(&mut self, dst_branch: Branch) -> Result<()> {
+    /// specified destination branch unless the blob is already in `dst_branch`. In that case
+    /// returns `None`.
+    pub async fn try_fork(&self, dst_branch: Branch) -> Result<Option<Self>> {
         if self.unique.branch.id() == dst_branch.id() {
-            return Ok(());
+            return Ok(None);
         }
 
-        let mut conn = self.db_pool().acquire().await?;
-        let new_self = self.lock().await.fork(&mut conn, dst_branch).await?;
+        let read_key = self.unique.branch.keys().read();
+        // Take the write key from the dst branch, not the src branch, to protect us against
+        // accidentally forking into remote branch (remote branches don't have write access).
+        let write_keys = dst_branch.keys().write().ok_or(Error::PermissionDenied)?;
 
-        *self = new_self;
+        let mut tx = self.db_pool().begin().await?;
+        let shared = self.shared.lock().await;
 
-        Ok(())
+        let locators = self
+            .unique
+            .head_locator
+            .sequence()
+            .take(shared.block_count() as usize);
+
+        for locator in locators {
+            let encoded_locator = locator.encode(read_key);
+
+            let block_id = self
+                .unique
+                .branch
+                .data()
+                .get(&mut tx, &encoded_locator)
+                .await?;
+
+            dst_branch
+                .data()
+                .insert(&mut tx, &block_id, &encoded_locator, write_keys)
+                .await?;
+        }
+
+        let forked = Self {
+            shared: shared.deep_clone(),
+            unique: Unique {
+                branch: dst_branch,
+                head_locator: self.unique.head_locator,
+                current_block: self.unique.current_block.clone(),
+                len_dirty: self.unique.len_dirty,
+            },
+        };
+
+        drop(shared);
+        tx.commit().await?;
+
+        Ok(Some(forked))
     }
 
     /// Was this blob modified and not flushed yet?

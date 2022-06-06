@@ -1,7 +1,7 @@
 use super::{
     inner::Unique,
     open_block::{Buffer, Cursor, OpenBlock},
-    Blob, Shared, HEADER_SIZE,
+    Shared, HEADER_SIZE,
 };
 use crate::{
     block::{self, BlockId, BlockNonce, BLOCK_SIZE},
@@ -236,48 +236,6 @@ impl<'a> Operations<'a> {
         Ok(true)
     }
 
-    /// Creates a shallow copy (only the index nodes are copied, not blocks) of this blob into the
-    /// specified destination branch.
-    pub async fn fork(&mut self, conn: &mut db::Connection, dst_branch: Branch) -> Result<Blob> {
-        // This should gracefuly handled in the Blob from where this function is invoked.
-        assert!(self.unique.branch.id() != dst_branch.id());
-
-        let read_key = self.unique.branch.keys().read();
-        // Take the write key from the dst branch, not the src branch, to protect us against
-        // accidentally forking into remote branch (remote branches don't have write access).
-        let write_keys = dst_branch.keys().write().ok_or(Error::PermissionDenied)?;
-
-        let mut tx = conn.begin().await?;
-
-        for locator in self.locators() {
-            let encoded_locator = locator.encode(read_key);
-
-            let block_id = self
-                .unique
-                .branch
-                .data()
-                .get(&mut tx, &encoded_locator)
-                .await?;
-
-            dst_branch
-                .data()
-                .insert(&mut tx, &block_id, &encoded_locator, write_keys)
-                .await?;
-        }
-
-        tx.commit().await?;
-
-        Ok(Blob {
-            shared: self.shared.deep_clone(),
-            unique: Unique {
-                branch: dst_branch,
-                head_locator: self.unique.head_locator,
-                current_block: self.unique.current_block.clone(),
-                len_dirty: self.unique.len_dirty,
-            },
-        })
-    }
-
     async fn replace_current_block(
         &mut self,
         tx: &mut db::Transaction<'_>,
@@ -393,13 +351,6 @@ impl<'a> Operations<'a> {
 
     fn locator_at(&self, number: u32) -> Locator {
         self.unique.head_locator.nth(number)
-    }
-
-    fn locators(&self) -> impl Iterator<Item = Locator> {
-        self.unique
-            .head_locator
-            .sequence()
-            .take(self.shared.block_count() as usize)
     }
 }
 

@@ -527,7 +527,7 @@ async fn fork_case(
     blob.flush().await.unwrap();
     blob.seek(SeekFrom::Start(seek_pos as u64)).await.unwrap();
 
-    blob.fork(dst_branch.clone()).await.unwrap();
+    blob = blob.try_fork(dst_branch.clone()).await.unwrap().unwrap();
 
     let write_content: Vec<u8> = rng.sample_iter(Standard).take(write_len).collect();
 

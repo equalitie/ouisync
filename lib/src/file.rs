@@ -130,7 +130,10 @@ impl File {
 
         // TODO: these two calls should happen atomically
         self.parent.fork_file(local_branch).await?;
-        self.blob.fork(local_branch.clone()).await?;
+
+        if let Some(blob) = self.blob.try_fork(local_branch.clone()).await? {
+            self.blob = blob;
+        }
 
         Ok(())
     }
