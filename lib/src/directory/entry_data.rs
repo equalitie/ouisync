@@ -89,6 +89,17 @@ pub(crate) struct EntryFileData {
     pub blob_shared: BlockingMutex<Weak<AsyncMutex<blob::Shared>>>,
 }
 
+impl EntryFileData {
+    /// Almost the same as `clone` but does not clone `blob_shared`.
+    pub(super) fn fork(&self) -> Self {
+        Self {
+            blob_id: self.blob_id,
+            version_vector: self.version_vector.clone(),
+            blob_shared: BlockingMutex::new(Weak::new()),
+        }
+    }
+}
+
 impl Clone for EntryFileData {
     fn clone(&self) -> Self {
         Self {

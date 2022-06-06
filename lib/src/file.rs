@@ -129,10 +129,8 @@ impl File {
         }
 
         // TODO: these two calls should happen atomically
-        let new_parent = self.parent.fork_file(local_branch).await?;
-        // unwrap is OK because we already checked the blob is not in `local_branch` and we have
-        // exclusive access to it.
-        let new_blob = self.blob.try_fork(local_branch.clone()).await?.unwrap();
+        let new_parent = self.parent.fork(local_branch).await?;
+        let new_blob = self.blob.try_fork(local_branch.clone()).await?;
 
         self.blob = new_blob;
         self.parent = new_parent;

@@ -104,12 +104,11 @@ impl<'a> EntryRef<'a> {
         }
     }
 
-    // Returns the blob id of this entry or `EntryNotFound` if it is a tomstone.
-    pub(crate) fn blob_id(&self) -> Result<&'a BlobId> {
+    pub(crate) fn fork_data(&self) -> EntryData {
         match self {
-            Self::File(entry) => Ok(entry.blob_id()),
-            Self::Directory(entry) => Ok(entry.blob_id()),
-            Self::Tombstone(_) => Err(Error::EntryNotFound),
+            Self::File(e) => EntryData::File(e.data().fork()),
+            Self::Directory(e) => EntryData::Directory(e.data().clone()),
+            Self::Tombstone(e) => EntryData::Tombstone(e.data().clone()),
         }
     }
 

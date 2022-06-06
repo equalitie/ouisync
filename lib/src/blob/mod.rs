@@ -192,10 +192,10 @@ impl Blob {
 
     /// Creates a shallow copy (only the index nodes are copied, not blocks) of this blob into the
     /// specified destination branch unless the blob is already in `dst_branch`. In that case
-    /// returns `None`.
-    pub async fn try_fork(&self, dst_branch: Branch) -> Result<Option<Self>> {
+    /// returns `Error::EntryExists`.
+    pub async fn try_fork(&self, dst_branch: Branch) -> Result<Self> {
         if self.unique.branch.id() == dst_branch.id() {
-            return Ok(None);
+            return Err(Error::EntryExists);
         }
 
         let read_key = self.unique.branch.keys().read();
@@ -241,7 +241,7 @@ impl Blob {
         drop(shared);
         tx.commit().await?;
 
-        Ok(Some(forked))
+        Ok(forked)
     }
 
     /// Was this blob modified and not flushed yet?

@@ -8,7 +8,7 @@ use crate::{
 };
 use assert_matches::assert_matches;
 use futures_util::future;
-use std::{collections::BTreeSet, convert::TryInto};
+use std::{collections::BTreeSet, convert::TryInto, sync::Weak};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn create_and_list_entries() {
@@ -513,7 +513,11 @@ async fn insert_entry_newer_than_existing() {
         root.inner
             .write()
             .await
-            .insert_file_entry(name.to_owned(), a_vv.clone(), blob_id)
+            .insert_entry(
+                name.to_owned(),
+                EntryData::file(blob_id, a_vv.clone(), Weak::new()),
+                OverwriteStrategy::Remove,
+            )
             .unwrap();
 
         // Need to create this dummy blob here otherwise the subsequent `insert_entry` would
@@ -529,7 +533,11 @@ async fn insert_entry_newer_than_existing() {
         root.inner
             .write()
             .await
-            .insert_file_entry(name.to_owned(), b_vv.clone(), blob_id)
+            .insert_entry(
+                name.to_owned(),
+                EntryData::file(blob_id, b_vv.clone(), Weak::new()),
+                OverwriteStrategy::Remove,
+            )
             .unwrap();
 
         let reader = root.read().await;

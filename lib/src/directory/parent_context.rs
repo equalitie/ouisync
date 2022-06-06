@@ -1,7 +1,10 @@
-use super::{entry::EntryRef, inner};
+use super::{
+    entry::EntryRef,
+    entry_data::EntryData,
+    inner::{self, OverwriteStrategy},
+};
 use crate::{
-    blob_id::BlobId, branch::Branch, db, directory::Directory, error::Result,
-    version_vector::VersionVector,
+    branch::Branch, db, directory::Directory, error::Result, version_vector::VersionVector,
 };
 
 /// Info about an entry in the context of its parent directory.
@@ -41,15 +44,16 @@ impl ParentContext {
         .await
     }
 
-    /// Forks the parent directory and inserts the entry into it as file.
-    pub async fn fork_file(&self, local_branch: &Branch) -> Result<Self> {
-        let (blob_id, old_vv) = self.entry_details().await;
+    /// Forks this parent context by forking the parent directory and inserting the forked entry
+    /// data into it.
+    pub async fn fork(&self, local_branch: &Branch) -> Result<Self> {
+        let entry_data = self.fork_entry_data().await;
         let directory = self.directory().fork(local_branch).await?;
 
-        directory.inner.write().await.insert_file_entry(
+        directory.inner.write().await.insert_entry(
             self.entry_name.clone(),
-            old_vv,
-            blob_id,
+            entry_data,
+            OverwriteStrategy::Remove,
         )?;
 
         Ok(Self {
@@ -67,22 +71,6 @@ impl ParentContext {
         &self.directory
     }
 
-    /// Returns the version vector and the blob id of this entry.
-    ///
-    /// # Panics
-    ///
-    /// Panics if this `ParentContext` doesn't correspond to any existing entry in the parent
-    /// directory.
-    pub async fn entry_details(&self) -> (BlobId, VersionVector) {
-        self.map_entry(|entry| {
-            (
-                *entry.blob_id().expect("dangling ParentContext"),
-                entry.version_vector().clone(),
-            )
-        })
-        .await
-    }
-
     /// Returns the version vector of this entry.
     ///
     /// # Panics
@@ -91,6 +79,10 @@ impl ParentContext {
     /// directory.
     pub async fn entry_version_vector(&self) -> VersionVector {
         self.map_entry(|entry| entry.version_vector().clone()).await
+    }
+
+    async fn fork_entry_data(&self) -> EntryData {
+        self.map_entry(|entry| entry.fork_data()).await
     }
 
     async fn map_entry<F, R>(&self, f: F) -> R

@@ -14,7 +14,7 @@ use crate::{
     version_vector::VersionVector,
 };
 use async_recursion::async_recursion;
-use std::{collections::btree_map, mem, sync::Weak};
+use std::{collections::btree_map, mem};
 
 pub(super) struct Inner {
     pub blob: Blob,
@@ -140,18 +140,6 @@ impl Inner {
         self.version_vector_increment += &(new_vv - old_vv);
 
         Ok(())
-    }
-
-    /// Inserts a file entry into this directory. It's the responsibility of the caller to make
-    /// sure the passed in `blob_id` eventually points to an actual file.
-    pub fn insert_file_entry(
-        &mut self,
-        name: String,
-        version_vector: VersionVector,
-        blob_id: BlobId,
-    ) -> Result<()> {
-        let data = EntryData::file(blob_id, version_vector, Weak::new());
-        self.insert_entry(name, data, OverwriteStrategy::Remove)
     }
 }
 
