@@ -121,7 +121,7 @@ async fn start_dht(
     monitor: &Arc<StateMonitor>,
 ) -> RestartableDht {
     // TODO: Unwrap
-    let socket = bind(ip_v, &config).await.unwrap();
+    let socket = bind(ip_v, config).await.unwrap();
 
     // Unwrap OK because `Socket::new` only fails if it can't get `local_addr` out of it, but since
     // we just succeeded in binding the socket above, that shouldn't happen.

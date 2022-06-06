@@ -46,9 +46,9 @@ socket2 = "0.4.2" # To be able to setsockopts before a socket is bound
 sqlx = { version = "0.5.13", features = ["runtime-tokio-rustls", "sqlite"] }
 ssdp-client = "1.0"
 thiserror = "1.0.24"
-tokio = "1.17.0"
-tokio-stream = "0.1.8"
-tokio-util = "0.7.1"
+tokio = "1.19.1"
+tokio-stream = "0.1.9"
+tokio-util = "0.7.3"
 urlencoding = "2.1.0"
 vint64 = "1.0.1"
 zeroize = "1.2.0"
