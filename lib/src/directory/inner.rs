@@ -18,7 +18,10 @@ use std::{collections::btree_map, mem};
 
 pub(super) struct Inner {
     pub blob: Blob,
-    pub entries: Content,
+
+    entries: Content,
+    // entries_dirty: bool,
+
     // If this is an empty version vector it means this directory hasn't been modified. Otherwise
     // the version vector of this directory will be incremented by this on the next `flush`.
     pub version_vector_increment: VersionVector,
@@ -45,6 +48,10 @@ impl Inner {
             open_directories: SubdirectoryCache::new(),
             overwritten_blobs: Vec::new(),
         }
+    }
+
+    pub fn entries(&self) -> &Content {
+        &self.entries
     }
 
     pub async fn flush(&mut self, mut tx: db::Transaction<'_>) -> Result<()> {
@@ -141,6 +148,12 @@ impl Inner {
 
         Ok(())
     }
+
+    // pub fn modify_entry(&mut self, name: &str, vv: &VersionVector) -> Result<()> {
+    //     let data = self.entries.get_mut(name).ok_or(Error::EntryNotFound)?;
+    //     data.version_vector_mut().merge(vv);
+    //     Ok(())
+    // }
 }
 
 #[async_recursion]

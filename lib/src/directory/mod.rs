@@ -274,7 +274,7 @@ impl Directory {
     pub async fn debug_print(&self, print: DebugPrinter) {
         let inner = self.inner.read().await;
 
-        for (name, entry_data) in &inner.entries {
+        for (name, entry_data) in inner.entries() {
             print.display(&format_args!("{:?}: {:?}", name, entry_data));
 
             match entry_data {
@@ -495,10 +495,15 @@ impl Writer<'_> {
     }
 
     /// Inserts existing entry into this directory and flushes it. Use only for moving and forking.
-    pub fn insert_entry(&mut self, name: String, entry: EntryData) -> Result<()> {
+    fn insert_entry(&mut self, name: String, entry: EntryData) -> Result<()> {
         self.inner
             .insert_entry(name, entry, OverwriteStrategy::Remove)
     }
+
+    // /// Update the version vector of the entry by merging it with the supplied one.
+    // fn modify_entry(&mut self, name: &str, vv: &VersionVector) -> Result<()> {
+    //     self.inner.modify_entry(name, vv)
+    // }
 
     pub fn lookup(&self, name: &'_ str) -> Result<EntryRef> {
         lookup(self.outer, &*self.inner, name)
@@ -542,7 +547,7 @@ impl Reader<'_> {
     /// Returns iterator over the entries of this directory.
     pub fn entries(&self) -> impl Iterator<Item = EntryRef> + DoubleEndedIterator + Clone {
         self.inner
-            .entries
+            .entries()
             .iter()
             .map(move |(name, data)| EntryRef::new(self.outer, &*self.inner, name, data))
     }
@@ -577,7 +582,7 @@ impl Reader<'_> {
 
 fn lookup<'a>(outer: &'a Directory, inner: &'a Inner, name: &'_ str) -> Result<EntryRef<'a>> {
     inner
-        .entries
+        .entries()
         .get_key_value(name)
         .map(|(name, data)| EntryRef::new(outer, inner, name, data))
         .ok_or(Error::EntryNotFound)
