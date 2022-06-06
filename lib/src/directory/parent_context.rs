@@ -27,7 +27,7 @@ impl ParentContext {
     /// If an error occurs anywhere in the process, all intermediate changes are rolled back and all
     /// the affected directories are reverted to their state before calling this function.
     pub async fn modify_entry(
-        &mut self,
+        &self,
         tx: db::Transaction<'_>,
         increment: &VersionVector,
     ) -> Result<()> {

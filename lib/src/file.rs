@@ -128,7 +128,8 @@ impl File {
             return Ok(());
         }
 
-        // TODO: these two calls should happen atomically
+        // Make sure the parent is forked before the blob to prevent creating orphaned blob in case
+        // this function is cancelled.
         let new_parent = self.parent.fork(local_branch).await?;
         let new_blob = self.blob.try_fork(local_branch.clone()).await?;
 
