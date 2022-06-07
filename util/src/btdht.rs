@@ -7,7 +7,7 @@ use ouisync_lib::{
 use std::{
     collections::HashSet,
     io,
-    net::Ipv4Addr,
+    net::{Ipv4Addr, Ipv6Addr},
 };
 use structopt::StructOpt;
 use tokio::{net::UdpSocket, task};
