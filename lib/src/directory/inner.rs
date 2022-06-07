@@ -165,9 +165,9 @@ impl Inner {
                     return Err(Error::EntryExists);
                 }
                 EntryData::Tombstone(old_data) => {
-                    new_data
-                        .version_vector_mut()
-                        .bump(&old_data.version_vector, self.branch().id());
+                    let mut vv = old_data.version_vector.clone();
+                    vv.bump(new_data.version_vector(), self.branch().id());
+                    *new_data.version_vector_mut() = vv;
                 }
             }
         }
