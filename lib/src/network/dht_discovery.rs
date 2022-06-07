@@ -176,7 +176,7 @@ async fn start_dht(
             loop {
                 *i.get() += 1;
 
-                if let Some(state) = dht.get_debug_state().await {
+                if let Some(state) = dht.get_state().await {
                     *is_running.get() = Some(state.is_running);
                     *good_node_count.get() = Some(state.good_node_count);
                     *questionable_node_count.get() = Some(state.questionable_node_count);
