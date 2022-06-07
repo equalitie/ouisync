@@ -148,18 +148,18 @@ async fn start_dht(
     let monitoring_task = scoped_task::spawn({
         let dht = dht.clone();
 
-        let bootstrap_state =
-            monitor.make_value::<&'static str>("bootstrap_state".into(), "bootstrapping");
+        let first_bootstrap =
+            monitor.make_value::<&'static str>("first_bootstrap".into(), "in progress");
 
         async move {
             if dht.bootstrapped().await {
-                *bootstrap_state.get() = "bootstrapped";
+                *first_bootstrap.get() = "done";
                 log::info!("DHT {} bootstrap complete", protocol);
             } else {
-                *bootstrap_state.get() = "bootstrap failed";
+                *first_bootstrap.get() = "failed";
                 log::error!("DHT {} bootstrap failed", protocol);
 
-                // Don't `return`, instead halt here so that the `bootstrap_state` monitored value
+                // Don't `return`, instead halt here so that the `first_bootstrap` monitored value
                 // is preserved for the user to see.
                 pending::<()>().await;
             }
@@ -167,6 +167,7 @@ async fn start_dht(
             let i = monitor.make_value::<u64>("probe_counter".into(), 0);
 
             let is_running = monitor.make_value::<Option<bool>>("is_running".into(), None);
+            let bootstrapped = monitor.make_value::<Option<bool>>("bootstrapped".into(), None);
             let good_node_count =
                 monitor.make_value::<Option<usize>>("good_node_count".into(), None);
             let questionable_node_count =
@@ -178,11 +179,13 @@ async fn start_dht(
 
                 if let Some(state) = dht.get_state().await {
                     *is_running.get() = Some(state.is_running);
+                    *bootstrapped.get() = Some(state.bootstrapped);
                     *good_node_count.get() = Some(state.good_node_count);
                     *questionable_node_count.get() = Some(state.questionable_node_count);
                     *bucket_count.get() = Some(state.bucket_count);
                 } else {
                     *is_running.get() = None;
+                    *bootstrapped.get() = None;
                     *good_node_count.get() = None;
                     *questionable_node_count.get() = None;
                     *bucket_count.get() = None;
