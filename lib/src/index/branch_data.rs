@@ -154,17 +154,18 @@ impl BranchData {
     pub async fn update_root_version_vector(
         &self,
         mut tx: db::Transaction<'_>,
-        increment: &VersionVector,
+        merge: &VersionVector,
         write_keys: &Keypair,
     ) -> Result<()> {
         let root_node = self.load_root(&mut tx).await?;
 
-        let mut new_version_vector = root_node.proof.version_vector.clone();
-        new_version_vector += increment;
+        let mut new_vv = root_node.proof.version_vector.clone();
+        new_vv.merge(merge);
+        new_vv.increment(*self.id());
 
         let new_proof = Proof::new(
             root_node.proof.writer_id,
-            new_version_vector,
+            new_vv,
             root_node.proof.hash,
             write_keys,
         );

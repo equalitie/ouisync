@@ -410,7 +410,7 @@ async fn create_changeset(
     let mut cx = index.pool.acquire().await.unwrap();
     let tx = cx.begin().await.unwrap();
     branch
-        .update_root_version_vector(tx, &VersionVector::first(*writer_id), write_keys)
+        .update_root_version_vector(tx, &VersionVector::new(), write_keys)
         .await
         .unwrap();
 }

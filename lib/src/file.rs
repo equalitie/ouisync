@@ -2,6 +2,7 @@ use crate::{
     blob::{Blob, MaybeInitShared, UninitShared},
     block::BLOCK_SIZE,
     branch::Branch,
+    db,
     directory::{Directory, ParentContext},
     error::{Error, Result},
     locator::Locator,
@@ -84,21 +85,24 @@ impl File {
         self.blob.truncate(len).await
     }
 
-    /// Flushes this file, ensuring that all intermediately buffered contents gets written to the
-    /// store.
+    /// Atomically saves any pending modifications and updates the version vectors of this file and
+    /// all its ancestors.
     pub async fn flush(&mut self) -> Result<()> {
         if !self.blob.is_dirty() {
             return Ok(());
         }
 
-        let increment = VersionVector::first(*self.branch().id());
-
         let mut conn = self.blob.db_pool().acquire().await?;
         let mut tx = conn.begin().await?;
 
         self.blob.flush_in_transaction(&mut tx).await?;
-        self.parent.modify_entry(tx, &increment).await?;
+        self.parent.modify_entry(tx, VersionVector::new()).await
+    }
 
+    /// Saves any pending modifications but does not update the version vectors. For internal use
+    /// only.
+    pub(crate) async fn save(&mut self, tx: &mut db::Transaction<'_>) -> Result<()> {
+        self.blob.flush_in_transaction(tx).await?;
         Ok(())
     }
 
@@ -128,10 +132,7 @@ impl File {
             return Ok(());
         }
 
-        // Make sure the parent is forked before the blob to prevent creating orphaned blob in case
-        // this function is cancelled.
-        let new_parent = self.parent.fork(local_branch).await?;
-        let new_blob = self.blob.try_fork(local_branch.clone()).await?;
+        let (new_parent, new_blob) = self.parent.fork(&self.blob, local_branch).await?;
 
         self.blob = new_blob;
         self.parent = new_parent;

@@ -59,14 +59,6 @@ impl EntryData {
         }
     }
 
-    pub fn into_version_vector(self) -> VersionVector {
-        match self {
-            Self::File(f) => f.version_vector,
-            Self::Directory(d) => d.version_vector,
-            Self::Tombstone(t) => t.version_vector,
-        }
-    }
-
     pub fn blob_id(&self) -> Option<&BlobId> {
         match self {
             Self::File(f) => Some(&f.blob_id),

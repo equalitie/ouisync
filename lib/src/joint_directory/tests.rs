@@ -137,12 +137,10 @@ async fn conflict_directories() {
     let branches = setup(2).await;
 
     let root0 = branches[0].open_or_create_root().await.unwrap();
-    let dir0 = root0.create_directory("dir".to_owned()).await.unwrap();
-    dir0.flush().await.unwrap();
+    root0.create_directory("dir".to_owned()).await.unwrap();
 
     let root1 = branches[1].open_or_create_root().await.unwrap();
-    let dir1 = root1.create_directory("dir".to_owned()).await.unwrap();
-    dir1.flush().await.unwrap();
+    root1.create_directory("dir".to_owned()).await.unwrap();
 
     let root = JointDirectory::new(Some(branches[0].clone()), [root0, root1]);
     let root = root.read().await;
@@ -164,9 +162,7 @@ async fn conflict_file_and_directory() {
     create_file(&root0, "config", &[], &branches[0]).await;
 
     let root1 = branches[1].open_or_create_root().await.unwrap();
-
-    let dir1 = root1.create_directory("config".to_owned()).await.unwrap();
-    dir1.flush().await.unwrap();
+    root1.create_directory("config".to_owned()).await.unwrap();
 
     let root = JointDirectory::new(Some(branches[0].clone()), [root0, root1]);
     let root = root.read().await;
@@ -414,7 +410,6 @@ async fn local_merge_is_idempotent() {
     let branches = setup(2).await;
 
     let local_root = branches[0].open_or_create_root().await.unwrap();
-    local_root.flush().await.unwrap();
 
     let vv0 = branches[0].version_vector().await.unwrap();
 
@@ -475,10 +470,7 @@ async fn remote_merge_is_idempotent() {
     let branches = setup(2).await;
 
     let local_root = branches[0].open_or_create_root().await.unwrap();
-    local_root.flush().await.unwrap();
-
     let remote_root = branches[1].open_or_create_root().await.unwrap();
-    remote_root.flush().await.unwrap();
 
     create_file(&remote_root, "cat.jpg", b"v0", &branches[1]).await;
 
@@ -526,10 +518,7 @@ async fn merge_sequential_modifications() {
     let branches = setup_with_rng(StdRng::seed_from_u64(0), 2).await;
 
     let local_root = branches[0].open_or_create_root().await.unwrap();
-    local_root.flush().await.unwrap();
-
     let remote_root = branches[1].open_or_create_root().await.unwrap();
-    remote_root.flush().await.unwrap();
 
     // Create a file by local, then modify it by remote, then read it back by local verifying
     // the modification by remote got through.
@@ -615,25 +604,13 @@ async fn remove_non_empty_subdirectory() {
     let local_dir = local_root.create_directory("dir0".into()).await.unwrap();
     create_file(&local_dir, "foo.txt", &[], &branches[0]).await;
 
-    local_root
-        .create_directory("dir1".into())
-        .await
-        .unwrap()
-        .flush()
-        .await
-        .unwrap();
+    local_root.create_directory("dir1".into()).await.unwrap();
 
     let remote_root = branches[1].open_or_create_root().await.unwrap();
     let remote_dir = remote_root.create_directory("dir0".into()).await.unwrap();
     create_file(&remote_dir, "bar.txt", &[], &branches[1]).await;
 
-    remote_root
-        .create_directory("dir2".into())
-        .await
-        .unwrap()
-        .flush()
-        .await
-        .unwrap();
+    remote_root.create_directory("dir2".into()).await.unwrap();
 
     let mut root =
         JointDirectory::new(Some(branches[0].clone()), [local_root.clone(), remote_root]);

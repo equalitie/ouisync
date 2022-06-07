@@ -1,6 +1,9 @@
-use super::{entry::EntryRef, entry_data::EntryData, inner};
+use sqlx::Connection;
+
+use super::{entry::EntryRef, entry_data::EntryData, inner::OverwriteStrategy};
 use crate::{
-    branch::Branch, db, directory::Directory, error::Result, version_vector::VersionVector,
+    blob::Blob, branch::Branch, db, directory::Directory, error::Result,
+    version_vector::VersionVector,
 };
 
 /// Info about an entry in the context of its parent directory.
@@ -24,37 +27,59 @@ impl ParentContext {
     /// This updates the version vector of this entry and all its ancestors, flushes them and
     /// finally commits the transaction.
     ///
-    /// If an error occurs anywhere in the process, all intermediate changes are rolled back and all
-    /// the affected directories are reverted to their state before calling this function.
+    /// TODO: document cancel safety.
     pub async fn modify_entry(
         &self,
-        tx: db::Transaction<'_>,
-        increment: &VersionVector,
+        mut tx: db::Transaction<'_>,
+        merge: VersionVector,
     ) -> Result<()> {
-        inner::modify_entry(
-            tx,
-            self.directory.inner.write().await,
-            &self.entry_name,
-            increment,
-        )
-        .await
+        let mut writer = self.directory.write().await;
+        writer.inner.prepare(&mut tx).await?;
+        writer.inner.modify_entry(&self.entry_name, &merge)?;
+        writer.inner.save(&mut tx).await?;
+        writer.inner.commit(tx, merge).await
     }
 
-    /// Forks this parent context by forking the parent directory and inserting the forked entry
-    /// data into it. This also flushes the new parent directory.
-    pub async fn fork(&self, local_branch: &Branch) -> Result<Self> {
+    /// Atomically forks the blob into the local branch and returns it together with its updated
+    /// parent context.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `entry_blob` is not the blob of the entry corresponding to this parent context.
+    ///
+    pub async fn fork(&self, entry_blob: &Blob, local_branch: &Branch) -> Result<(Self, Blob)> {
         let entry_data = self.fork_entry_data().await;
+        assert_eq!(entry_data.blob_id(), Some(entry_blob.locator().blob_id()));
+
+        let entry_version_vector = entry_data.version_vector().clone();
         let directory = self.directory().fork(local_branch).await?;
 
+        // Make sure to acquire the db connection before write-locking the directory. By doing it
+        // in this order everywhere we avoid potential deadlocks.
+        let db_pool = directory.read().await.branch().db_pool().clone();
+        let mut conn = db_pool.acquire().await?;
+        let mut tx = conn.begin().await?;
+
         let mut writer = directory.write().await;
-        writer.insert_entry(self.entry_name.clone(), entry_data)?;
-        writer.flush().await?;
+
+        writer.inner.prepare(&mut tx).await?;
+        writer.inner.insert_entry(
+            self.entry_name.clone(),
+            entry_data,
+            OverwriteStrategy::Remove,
+        )?;
+        writer.inner.save(&mut tx).await?;
+        let new_blob = entry_blob.try_fork(&mut tx, local_branch.clone()).await?;
+        writer.inner.commit(tx, entry_version_vector).await?;
+
         drop(writer);
 
-        Ok(Self {
+        let new_context = Self {
             directory,
             entry_name: self.entry_name.clone(),
-        })
+        };
+
+        Ok((new_context, new_blob))
     }
 
     pub(super) fn entry_name(&self) -> &str {

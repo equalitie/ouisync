@@ -631,8 +631,6 @@ impl Inner {
         let path = self.inodes.get(parent).calculate_path().join(name);
         let dir = self.repository.create_directory(path).await?;
 
-        dir.flush().await?;
-
         let inode = self
             .inodes
             .lookup(parent, name, name, Representation::Directory);
@@ -658,9 +656,9 @@ impl Inner {
             datasync
         );
 
-        // TODO: what about `datasync`?
+        // All directory operations are immediatelly synced, so there is nothing to do here.
 
-        self.entries.get_directory_mut(handle)?.flush().await
+        Ok(())
     }
 
     async fn create(

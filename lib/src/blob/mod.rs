@@ -126,6 +126,14 @@ impl Blob {
         self.lock().await.read_to_end(&mut conn).await
     }
 
+    /// Read to end in a db connection.
+    pub async fn read_to_end_in_connection(
+        &mut self,
+        conn: &mut db::Connection,
+    ) -> Result<Vec<u8>> {
+        self.lock().await.read_to_end(conn).await
+    }
+
     /// Writes `buffer` into this blob, advancing the blob's internal cursor.
     pub async fn write(&mut self, buffer: &[u8]) -> Result<()> {
         let mut tx = self.db_pool().begin().await?;
@@ -154,6 +162,15 @@ impl Blob {
         let pos = self.lock().await.seek(&mut tx, pos).await?;
         tx.commit().await?;
         Ok(pos)
+    }
+
+    /// Seek in a db transaction.
+    pub async fn seek_in_transaction(
+        &mut self,
+        tx: &mut db::Transaction<'_>,
+        pos: SeekFrom,
+    ) -> Result<u64> {
+        self.lock().await.seek(tx, pos).await
     }
 
     /// Truncate the blob to the given length.
@@ -193,7 +210,7 @@ impl Blob {
     /// Creates a shallow copy (only the index nodes are copied, not blocks) of this blob into the
     /// specified destination branch unless the blob is already in `dst_branch`. In that case
     /// returns `Error::EntryExists`.
-    pub async fn try_fork(&self, dst_branch: Branch) -> Result<Self> {
+    pub async fn try_fork(&self, tx: &mut db::Transaction<'_>, dst_branch: Branch) -> Result<Self> {
         if self.unique.branch.id() == dst_branch.id() {
             return Err(Error::EntryExists);
         }
@@ -203,7 +220,6 @@ impl Blob {
         // accidentally forking into remote branch (remote branches don't have write access).
         let write_keys = dst_branch.keys().write().ok_or(Error::PermissionDenied)?;
 
-        let mut tx = self.db_pool().begin().await?;
         let shared = self.shared.lock().await;
 
         let locators = self
@@ -215,16 +231,11 @@ impl Blob {
         for locator in locators {
             let encoded_locator = locator.encode(read_key);
 
-            let block_id = self
-                .unique
-                .branch
-                .data()
-                .get(&mut tx, &encoded_locator)
-                .await?;
+            let block_id = self.unique.branch.data().get(tx, &encoded_locator).await?;
 
             dst_branch
                 .data()
-                .insert(&mut tx, &block_id, &encoded_locator, write_keys)
+                .insert(tx, &block_id, &encoded_locator, write_keys)
                 .await?;
         }
 
@@ -237,9 +248,6 @@ impl Blob {
                 len_dirty: self.unique.len_dirty,
             },
         };
-
-        drop(shared);
-        tx.commit().await?;
 
         Ok(forked)
     }

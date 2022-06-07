@@ -174,12 +174,7 @@ async fn recreate_previously_deleted_directory() {
     .unwrap();
 
     // Create dir
-    repo.create_directory("test")
-        .await
-        .unwrap()
-        .flush()
-        .await
-        .unwrap();
+    repo.create_directory("test").await.unwrap();
 
     // Check it exists
     assert_matches!(repo.open_directory("test").await, Ok(_));
@@ -189,12 +184,7 @@ async fn recreate_previously_deleted_directory() {
     assert_matches!(repo.open_directory("test").await, Err(Error::EntryNotFound));
 
     // Create another directory with the same name
-    repo.create_directory("test")
-        .await
-        .unwrap()
-        .flush()
-        .await
-        .unwrap();
+    repo.create_directory("test").await.unwrap();
 
     // Check it exists
     assert_matches!(repo.open_directory("test").await, Ok(_))
@@ -224,8 +214,7 @@ async fn concurrent_read_and_create_dir() {
     let create_dir = scoped_task::spawn({
         let repo = repo.clone();
         async move {
-            let dir = repo.create_directory(path).await.unwrap();
-            dir.flush().await.unwrap();
+            repo.create_directory(path).await.unwrap();
         }
     });
 
@@ -583,10 +572,11 @@ async fn read_access_same_replica() {
     // ...but flushing the file is not allowed.
     assert_matches!(file.flush().await, Err(Error::PermissionDenied));
 
-    // Creating files works...
-    let mut file = repo.create_file("hack.txt").await.unwrap();
-    // ...but flushing it is not allowed.
-    assert_matches!(file.flush().await, Err(Error::PermissionDenied));
+    // Creating files is not allowed.
+    assert_matches!(
+        repo.create_file("hack.txt").await,
+        Err(Error::PermissionDenied)
+    );
 
     // Removing files is not allowed.
     assert_matches!(
@@ -703,32 +693,18 @@ async fn version_vector_create_file() {
     let local_branch = repo.get_or_create_local_branch().await.unwrap();
     let local_id = *local_branch.id();
 
-    // Initially the vvs are all empty
     let mut file = repo.create_file("parent/test.txt").await.unwrap();
-    assert_eq!(file.version_vector().await, vv![]);
-    assert_eq!(file.parent().version_vector().await.unwrap(), vv![]);
-    assert_eq!(
-        file.parent()
-            .parent()
-            .await
-            .unwrap()
-            .version_vector()
-            .await
-            .unwrap(),
-        vv![]
-    );
-
-    file.flush().await.unwrap();
-    // +1 for the file being created
     assert_eq!(file.version_vector().await, vv![local_id => 1]);
-    // +1 for the parent being created
-    // +1 for inserting the file
+    // +1 for create
+    // +1 for the file insert
     assert_eq!(
         file.parent().version_vector().await.unwrap(),
         vv![local_id => 2]
     );
-    // +1 for the root being created
-    // +2 for inserting the parent
+    // +1 for the parent insert
+    // +1 for the parent modify due to the file insert
+    // NOTE: currently the root vv is not bumped when the root directory is created, only when it's
+    // modified.
     assert_eq!(
         file.parent()
             .parent()
@@ -737,19 +713,19 @@ async fn version_vector_create_file() {
             .version_vector()
             .await
             .unwrap(),
-        vv![local_id => 3]
+        vv![local_id => 2]
     );
 
     file.write(b"blah").await.unwrap();
     file.flush().await.unwrap();
-    // +1 for the file being modified
+    // +1 for the file update
     assert_eq!(file.version_vector().await, vv![local_id => 2]);
-    // +1 for the parent being modified due to file vv bump
+    // +1 for the parent modify due to the file vv bump
     assert_eq!(
         file.parent().version_vector().await.unwrap(),
         vv![local_id => 3]
     );
-    // +1 for the root being modified due to parent vv bump
+    // +1 for the root modify due to parent vv bump
     assert_eq!(
         file.parent()
             .parent()
@@ -758,7 +734,7 @@ async fn version_vector_create_file() {
             .version_vector()
             .await
             .unwrap(),
-        vv![local_id => 4]
+        vv![local_id => 3]
     );
 }
 
@@ -790,8 +766,6 @@ async fn version_vector_deep_hierarchy() {
         dirs.push(dir);
     }
 
-    dirs.last().unwrap().flush().await.unwrap();
-
     // Each directory's local version is one less than its parent.
     for (index, dir) in dirs.iter().skip(1).enumerate() {
         assert_eq!(
@@ -815,15 +789,12 @@ async fn version_vector_recreate_deleted_file() {
 
     let local_id = *repo.get_or_create_local_branch().await.unwrap().id();
 
-    let mut file = repo.create_file("test.txt").await.unwrap();
-    file.flush().await.unwrap();
+    let file = repo.create_file("test.txt").await.unwrap();
     drop(file);
 
     repo.remove_entry("test.txt").await.unwrap();
 
-    let mut file = repo.create_file("test.txt").await.unwrap();
-    file.flush().await.unwrap();
-
+    let file = repo.create_file("test.txt").await.unwrap();
     assert_eq!(file.version_vector().await, vv![local_id => 3]);
 }
 
@@ -860,8 +831,6 @@ async fn version_vector_fork_files() {
     let local_parent = file0.parent();
     let local_root = local_parent.parent().await.unwrap();
 
-    local_parent.flush().await.unwrap();
-
     // Parent and root are concurrent because the second file isn't forked yet.
     assert_eq!(file0.version_vector().await, remote_file0_vv);
     assert_eq!(
@@ -883,7 +852,6 @@ async fn version_vector_fork_files() {
 
     // Fork the second file
     file1.fork(&local_branch).await.unwrap();
-    local_parent.flush().await.unwrap();
 
     // Parent and root are now newer.
     assert_eq!(file1.version_vector().await, remote_file1_vv);
@@ -911,9 +879,6 @@ async fn version_vector_empty_directory() {
     let local_id = *repo.get_or_create_local_branch().await.unwrap().id();
 
     let dir = repo.create_directory("stuff").await.unwrap();
-    assert_eq!(dir.version_vector().await.unwrap(), vv![]);
-
-    dir.flush().await.unwrap();
     assert_eq!(dir.version_vector().await.unwrap(), vv![local_id => 1]);
 }
 
@@ -941,11 +906,11 @@ async fn file_conflict_modify_local() {
 
     // Create two concurrent versions of the same file.
     let local_file = create_file_in_branch(&local_branch, "test.txt", b"local v1").await;
-    assert_eq!(local_file.version_vector().await, vv![local_id => 1]);
+    assert_eq!(local_file.version_vector().await, vv![local_id => 2]);
     drop(local_file);
 
     let remote_file = create_file_in_branch(&remote_branch, "test.txt", b"remote v1").await;
-    assert_eq!(remote_file.version_vector().await, vv![remote_id => 1]);
+    assert_eq!(remote_file.version_vector().await, vv![remote_id => 2]);
     drop(remote_file);
 
     repo.collect_garbage().await.unwrap();
@@ -958,7 +923,7 @@ async fn file_conflict_modify_local() {
 
     let mut local_file = repo.open_file_version("test.txt", &local_id).await.unwrap();
     assert_eq!(local_file.read_to_end().await.unwrap(), b"local v2");
-    assert_eq!(local_file.version_vector().await, vv![local_id => 2]);
+    assert_eq!(local_file.version_vector().await, vv![local_id => 3]);
 
     let mut remote_file = repo
         .open_file_version("test.txt", &remote_id)
@@ -966,7 +931,7 @@ async fn file_conflict_modify_local() {
         .unwrap();
 
     assert_eq!(remote_file.read_to_end().await.unwrap(), b"remote v1");
-    assert_eq!(remote_file.version_vector().await, vv![remote_id => 1]);
+    assert_eq!(remote_file.version_vector().await, vv![remote_id => 2]);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1034,7 +999,6 @@ async fn remove_branch() {
 
     let mut file = repo.open_file("foo.txt").await.unwrap();
     file.fork(&local_branch).await.unwrap();
-    file.parent().flush().await.unwrap();
     drop(file);
 
     repo.shared.remove_branch(&remote_id).await.unwrap();

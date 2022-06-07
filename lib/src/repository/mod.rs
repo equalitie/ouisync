@@ -304,8 +304,7 @@ impl Repository {
         self.get_or_create_local_branch().await?;
 
         let mut parent = self.open_directory(parent).await?;
-        parent.remove_entry(name).await?;
-        parent.flush().await
+        parent.remove_entry(name).await
     }
 
     /// Removes the file or directory (including its content) and flushes its parent directory.
@@ -315,8 +314,7 @@ impl Repository {
 
         // TODO: fork the parent dir
 
-        parent.remove_entry_recursively(name).await?;
-        parent.flush().await
+        parent.remove_entry_recursively(name).await
     }
 
     /// Moves (renames) an entry from the source path to the destination path.
@@ -393,18 +391,9 @@ impl Repository {
         drop(dst_joint_dir);
 
         let dst_dir = self.create_directory(dst_dir_path).await?;
-
         src_dir
             .move_entry(&src_name, src_entry, &dst_dir, dst_name, dst_vv)
-            .await?;
-
-        src_dir.flush().await?;
-
-        if src_dir != dst_dir {
-            dst_dir.flush().await?;
-        }
-
-        Ok(())
+            .await
     }
 
     /// Returns the local branch if it exists.

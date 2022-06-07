@@ -1,6 +1,7 @@
 use super::*;
 use crate::{
     access_control::{AccessKeys, WriteSecrets},
+    blob::Blob,
     crypto::sign::Keypair,
     db,
     index::BranchData,
@@ -8,7 +9,7 @@ use crate::{
 };
 use assert_matches::assert_matches;
 use futures_util::future;
-use std::{collections::BTreeSet, convert::TryInto, sync::Weak};
+use std::{collections::BTreeSet, convert::TryInto};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn create_and_list_entries() {
@@ -24,8 +25,6 @@ async fn create_and_list_entries() {
     let mut file_cat = dir.create_file("cat.txt".into()).await.unwrap();
     file_cat.write(b"meow").await.unwrap();
     file_cat.flush().await.unwrap();
-
-    dir.flush().await.unwrap();
 
     // Reopen the dir and try to read the files.
     let dir = branch.open_root().await.unwrap();
@@ -54,18 +53,19 @@ async fn create_and_list_entries() {
 async fn add_entry_to_existing_directory() {
     let branch = setup().await;
 
-    // Create empty directory
+    // Create empty directory and add a file to it.
     let dir = branch.open_or_create_root().await.unwrap();
-    dir.flush().await.unwrap();
+    dir.create_file("one.txt".into()).await.unwrap();
 
-    // Reopen it and add a file to it.
+    // Reopen it and add another file to it.
     let dir = branch.open_root().await.unwrap();
-    dir.create_file("none.txt".into()).await.unwrap();
-    dir.flush().await.unwrap();
+    dir.create_file("two.txt".into()).await.unwrap();
 
-    // Reopen it again and check the file is still there.
+    // Reopen it again and check boths files are still there.
     let dir = branch.open_root().await.unwrap();
-    assert!(dir.read().await.lookup("none.txt").is_ok());
+    let reader = dir.read().await;
+    assert!(reader.lookup("one.txt").is_ok());
+    assert!(reader.lookup("two.txt").is_ok());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -88,7 +88,6 @@ async fn remove_file() {
         .remove_entry(name, branch.id(), file_vv)
         .await
         .unwrap();
-    parent_dir.flush().await.unwrap();
 
     // Reopen again and check the file entry was removed.
     let parent_dir = branch.open_root().await.unwrap();
@@ -148,8 +147,6 @@ async fn rename_file() {
         )
         .await
         .unwrap();
-
-    parent_dir.flush().await.unwrap();
 
     // Reopen again and check the file entry was removed.
     let parent_dir = branch.open_root().await.unwrap();
@@ -324,7 +321,6 @@ async fn remove_subdirectory() {
     // Create a directory with a single subdirectory.
     let parent_dir = branch.open_or_create_root().await.unwrap();
     let dir = parent_dir.create_directory(name.into()).await.unwrap();
-    dir.flush().await.unwrap();
 
     let (dir_locator, dir_vv) = {
         let reader = dir.read().await;
@@ -337,7 +333,6 @@ async fn remove_subdirectory() {
         .remove_entry(name, branch.id(), dir_vv)
         .await
         .unwrap();
-    parent_dir.flush().await.unwrap();
 
     // Reopen again and check the subdirectory entry was removed.
     let parent_dir = branch.open_root().await.unwrap();
@@ -358,10 +353,7 @@ async fn fork() {
 
     // Create a nested directory by branch 0
     let root0 = branches[0].open_or_create_root().await.unwrap();
-    root0.flush().await.unwrap();
-
-    let dir0 = root0.create_directory("dir".into()).await.unwrap();
-    dir0.flush().await.unwrap();
+    root0.create_directory("dir".into()).await.unwrap();
 
     // Fork it by branch 1 and modify it
     let dir0 = branches[0]
@@ -375,7 +367,6 @@ async fn fork() {
     let dir1 = dir0.fork(&branches[1]).await.unwrap();
 
     dir1.create_file("dog.jpg".into()).await.unwrap();
-    dir1.flush().await.unwrap();
 
     assert_eq!(dir1.read().await.branch().id(), branches[1].id());
 
@@ -414,13 +405,7 @@ async fn fork_over_tombstone() {
 
     // Create a directory in branch 0 and delete it.
     let root0 = branches[0].open_or_create_root().await.unwrap();
-    root0
-        .create_directory("dir".into())
-        .await
-        .unwrap()
-        .flush()
-        .await
-        .unwrap();
+    root0.create_directory("dir".into()).await.unwrap();
     let vv = root0
         .read()
         .await
@@ -435,24 +420,13 @@ async fn fork_over_tombstone() {
 
     // Create a directory with the same name in branch 1.
     let root1 = branches[1].open_or_create_root().await.unwrap();
-    root1
-        .create_directory("dir".into())
-        .await
-        .unwrap()
-        .flush()
-        .await
-        .unwrap();
+    root1.create_directory("dir".into()).await.unwrap();
 
     // Open it by branch 0 and fork it.
     let root1_on_0 = branches[1].open_root().await.unwrap();
     let dir1 = root1_on_0.open_directory("dir").await.unwrap();
 
-    dir1.fork(&branches[0])
-        .await
-        .unwrap()
-        .flush()
-        .await
-        .unwrap();
+    dir1.fork(&branches[0]).await.unwrap();
 
     // Check the forked dir now exists in branch 0.
     assert_matches!(root0.read().await.lookup("dir"), Ok(EntryRef::Directory(_)));
@@ -493,61 +467,6 @@ async fn modify_directory_concurrently() {
         .await
         .unwrap();
     assert_eq!(file1.read_to_end().await.unwrap(), b"hello");
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn insert_entry_newer_than_existing() {
-    let name = "foo.txt";
-    let id0 = PublicKey::random();
-    let id1 = PublicKey::random();
-
-    // Test all permutations of the replica ids, to detect any unwanted dependency on their
-    // order.
-    for (a_author, b_author) in [(id0, id1), (id1, id0)] {
-        let branch = setup().await;
-        let root = branch.open_or_create_root().await.unwrap();
-
-        let a_vv = VersionVector::first(a_author);
-
-        let blob_id = rand::random();
-        root.inner
-            .write()
-            .await
-            .insert_entry(
-                name.to_owned(),
-                EntryData::file(blob_id, a_vv.clone(), Weak::new()),
-                OverwriteStrategy::Remove,
-            )
-            .unwrap();
-
-        // Need to create this dummy blob here otherwise the subsequent `insert_entry` would
-        // fail when trying to delete it.
-        Blob::create(branch.clone(), Locator::head(blob_id), Shared::uninit())
-            .flush()
-            .await
-            .unwrap();
-
-        let b_vv = a_vv.incremented(b_author);
-
-        let blob_id = rand::random();
-        root.inner
-            .write()
-            .await
-            .insert_entry(
-                name.to_owned(),
-                EntryData::file(blob_id, b_vv.clone(), Weak::new()),
-                OverwriteStrategy::Remove,
-            )
-            .unwrap();
-
-        let reader = root.read().await;
-        let mut entries = reader.entries();
-
-        let entry = entries.next().unwrap().file().unwrap();
-        assert_eq!(entry.version_vector(), &b_vv);
-
-        assert!(entries.next().is_none());
-    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -595,14 +514,7 @@ async fn remove_concurrent_remote_file() {
     let remote_id = PublicKey::random();
     let remote_vv = vv![remote_id => 1];
 
-    root.write()
-        .await
-        .remove_entry(
-            name,
-            &remote_id,
-            remote_vv.clone(),
-            OverwriteStrategy::Remove,
-        )
+    root.remove_entry(name, &remote_id, remote_vv.clone())
         .await
         .unwrap();
 

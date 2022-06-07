@@ -131,7 +131,7 @@ impl JointDirectory {
                 .await?;
         }
 
-        local_writer.flush().await
+        Ok(())
     }
 
     #[async_recursion]
@@ -149,16 +149,6 @@ impl JointDirectory {
         }
 
         self.remove_entries(pattern).await
-    }
-
-    pub async fn flush(&mut self) -> Result<()> {
-        let local_branch = self.local_branch.as_ref().ok_or(Error::PermissionDenied)?;
-
-        if let Some(version) = self.versions.get(local_branch.id()) {
-            version.flush().await?
-        }
-
-        Ok(())
     }
 
     /// Merge all versions of this `JointDirectory` into a single `Directory`.
@@ -209,8 +199,6 @@ impl JointDirectory {
         for mut dir in subdirs {
             dir.merge().await?;
         }
-
-        local_version.flush().await?;
 
         Ok(local_version)
     }
