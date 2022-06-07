@@ -6,12 +6,7 @@ use sqlx::{
     sqlite::{SqliteArgumentValue, SqliteTypeInfo, SqliteValueRef},
     Decode, Encode, Sqlite, Type,
 };
-use std::{
-    cmp::Ordering,
-    collections::{btree_map, BTreeMap},
-    fmt,
-    ops::{AddAssign, Sub},
-};
+use std::{cmp::Ordering, collections::BTreeMap, fmt};
 
 /// [Version vector](https://en.wikipedia.org/wiki/Version_vector).
 ///
@@ -38,7 +33,7 @@ impl VersionVector {
 
     /// Inserts an entry into this version vector. If the entry already exists, it's overwritten
     /// only if the new version is higher than the existing version. Returns whether the existing
-    /// version was modified.
+    /// version was modified. This operation is idempotent.
     pub fn insert(&mut self, writer_id: PublicKey, version: u64) -> bool {
         let old = self.0.entry(writer_id).or_insert(0);
         if version > *old {
@@ -54,30 +49,24 @@ impl VersionVector {
         self.0.get(writer_id).copied().unwrap_or(0)
     }
 
-    /// Increments the version corresponding to the given replica id and returns it.
-    pub fn increment(&mut self, writer_id: PublicKey) -> u64 {
-        self.increment_by(writer_id, 1)
-    }
-
-    /// Increments the version corresponding to the given replica id by the given value and returns
-    /// it.
-    pub fn increment_by(&mut self, writer_id: PublicKey, value: u64) -> u64 {
+    /// Increments the version corresponding to the given replica id.
+    pub fn increment(&mut self, writer_id: PublicKey) {
         let version = self.0.entry(writer_id).or_insert(0);
-        *version += value;
-        *version
+        *version += 1;
     }
 
     /// Returns a version vector that is a copy of self but with the version corresponding to
     /// `writer_id` incremented.
     pub fn incremented(mut self, writer_id: PublicKey) -> Self {
-        let version = self.0.entry(writer_id).or_insert(0);
-        *version += 1;
+        self.increment(writer_id);
         self
     }
 
     /// Merge two version vectors into one. The version of each entry in the resulting vector is
     /// the maximum of the corresponding entries of the input vectors. Returns whether `self` was
     /// modified.
+    ///
+    /// This operation is commutative, associative and idempotent.
     pub fn merge(&mut self, other: &Self) -> bool {
         let mut modified = false;
 
@@ -100,10 +89,6 @@ impl VersionVector {
 
     pub fn is_empty(&self) -> bool {
         self.0.values().all(|version| *version == 0)
-    }
-
-    pub fn iter(&self) -> Iter {
-        self.0.iter()
     }
 }
 
@@ -149,39 +134,6 @@ impl PartialEq for VersionVector {
 }
 
 impl Eq for VersionVector {}
-
-impl AddAssign<&'_ Self> for VersionVector {
-    fn add_assign(&mut self, rhs: &'_ Self) {
-        for (writer_id, version) in &rhs.0 {
-            self.increment_by(*writer_id, *version);
-        }
-    }
-}
-
-impl Sub for VersionVector {
-    type Output = Self;
-
-    fn sub(mut self, rhs: Self) -> Self::Output {
-        for (writer_id, rhs_version) in &rhs.0 {
-            if let Some(lhs_version) = self.0.get_mut(writer_id) {
-                *lhs_version = lhs_version.saturating_sub(*rhs_version);
-            }
-        }
-
-        self
-    }
-}
-
-pub type Iter<'a> = btree_map::Iter<'a, PublicKey, u64>;
-
-impl<'a> IntoIterator for &'a VersionVector {
-    type Item = <Iter<'a> as Iterator>::Item;
-    type IntoIter = Iter<'a>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.iter()
-    }
-}
 
 // Support reading/writing `VersionVector` directly from/to the db:
 
@@ -347,7 +299,7 @@ mod tests {
         let mut vv = vv![];
         assert_eq!(vv.get(&id), 0);
 
-        assert_eq!(vv.increment(id), 1);
+        vv.increment(id);
         assert_eq!(vv.get(&id), 1);
     }
 
@@ -383,43 +335,5 @@ mod tests {
         let mut vv = vv![id0 => 1, id1 => 2];
         vv.merge(&vv![id0 => 2, id1 => 1]);
         assert_eq!(vv, vv![id0 => 2, id1 => 2]);
-    }
-
-    #[test]
-    fn add() {
-        let id0 = PublicKey::random();
-        let id1 = PublicKey::random();
-
-        let mut vv = vv![];
-        vv += &vv![];
-        assert_eq!(vv, vv![]);
-
-        vv += &vv![id0 => 1];
-        assert_eq!(vv, vv![id0 => 1]);
-
-        vv += &vv![id0 => 1];
-        assert_eq!(vv, vv![id0 => 2]);
-
-        vv += &vv![id1 => 1];
-        assert_eq!(vv, vv![id0 => 2, id1 => 1]);
-    }
-
-    #[test]
-    fn sub() {
-        let id0 = PublicKey::random();
-        let id1 = PublicKey::random();
-
-        assert_eq!(vv![id0 => 2, id1 => 2] - vv![], vv![id0 => 2, id1 => 2]);
-        assert_eq!(
-            vv![id0 => 2, id1 => 2] - vv![id0 => 1],
-            vv![id0 => 1, id1 => 2]
-        );
-        assert_eq!(
-            vv![id0 => 1, id1 => 2] - vv![id0 => 1, id1 => 1],
-            vv![id1 => 1]
-        );
-        assert_eq!(vv![id1 => 1] - vv![id0 => 1], vv![id1 => 1]);
-        assert_eq!(vv![id1 => 1] - vv![id1 => 2], vv![]);
-        assert_eq!(vv![] - vv![id0 => 1], vv![]);
     }
 }
