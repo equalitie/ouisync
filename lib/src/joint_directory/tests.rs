@@ -581,7 +581,10 @@ async fn merge_concurrent_directories() {
     assert_eq!(entry.name(), "dir");
     assert_matches!(entry, EntryRef::Directory(_));
 
-    let expected_vv = vv![*branches[0].id() => 2, *branches[1].id() => 2];
+    // +(2, 0) for creating local "dir" and "dog.jpg"
+    // +(0, 2) for creating remote "dir" and "cat.jpg"
+    // +(1, 0) for modifying local "dir" when the remote "cat.jpg" is merged into it
+    let expected_vv = vv![*branches[0].id() => 3, *branches[1].id() => 2];
     assert_eq!(entry.version_vector(), &expected_vv);
 
     let dir = entry.directory().unwrap().open().await.unwrap();
