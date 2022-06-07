@@ -151,16 +151,16 @@ impl BranchData {
     ///
     /// This operation is atomic even in the presence of cancellation - it either executes fully or
     /// it doesn't execute at all.
-    pub async fn update_root_version_vector(
+    pub async fn bump(
         &self,
         mut tx: db::Transaction<'_>,
-        merge: &VersionVector,
+        vv: &VersionVector,
         write_keys: &Keypair,
     ) -> Result<()> {
         let root_node = self.load_root(&mut tx).await?;
 
         let mut new_vv = root_node.proof.version_vector.clone();
-        new_vv.merge(merge);
+        new_vv.merge(vv);
         new_vv.increment(*self.id());
 
         let new_proof = Proof::new(

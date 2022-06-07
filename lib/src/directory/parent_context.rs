@@ -28,14 +28,10 @@ impl ParentContext {
     /// finally commits the transaction.
     ///
     /// TODO: document cancel safety.
-    pub async fn modify_entry(
-        &self,
-        mut tx: db::Transaction<'_>,
-        merge: VersionVector,
-    ) -> Result<()> {
+    pub async fn commit(&self, mut tx: db::Transaction<'_>, merge: VersionVector) -> Result<()> {
         let mut writer = self.directory.write().await;
         writer.inner.prepare(&mut tx).await?;
-        writer.inner.modify_entry(&self.entry_name, &merge)?;
+        writer.inner.bump(&self.entry_name, &merge)?;
         writer.inner.save(&mut tx).await?;
         writer.inner.commit(tx, merge).await
     }
@@ -51,7 +47,6 @@ impl ParentContext {
         let entry_data = self.fork_entry_data().await;
         assert_eq!(entry_data.blob_id(), Some(entry_blob.locator().blob_id()));
 
-        let entry_version_vector = entry_data.version_vector().clone();
         let directory = self.directory().fork(local_branch).await?;
 
         // Make sure to acquire the db connection before write-locking the directory. By doing it
@@ -63,14 +58,14 @@ impl ParentContext {
         let mut writer = directory.write().await;
 
         writer.inner.prepare(&mut tx).await?;
-        writer.inner.insert_entry(
+        writer.inner.insert(
             self.entry_name.clone(),
             entry_data,
             OverwriteStrategy::Remove,
         )?;
         writer.inner.save(&mut tx).await?;
         let new_blob = entry_blob.try_fork(&mut tx, local_branch.clone()).await?;
-        writer.inner.commit(tx, entry_version_vector).await?;
+        writer.inner.commit(tx, VersionVector::new()).await?;
 
         drop(writer);
 

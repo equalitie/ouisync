@@ -95,7 +95,7 @@ impl Inner {
                     .get(&pending.name)
                     .and_then(|data| data.blob_id())
                 {
-                    Blob::remove_in_transaction(tx, self.blob.branch(), Locator::head(*old_blob_id))
+                    Blob::remove_in_transaction(tx, self.branch(), Locator::head(*old_blob_id))
                         .await?
                 }
             }
@@ -125,24 +125,19 @@ impl Inner {
     ) -> Result<()> {
         // Update the version vector of this directory and all it's ancestors
         if let Some(ctx) = self.parent.as_mut() {
-            ctx.modify_entry(tx, merge).await?;
+            ctx.commit(tx, merge).await?;
         } else {
             // At this point all local newly created blocks should become reachable so they can be
             // safely unpinned to become normal subjects of garbage collection.
             block::unpin_all(&mut tx).await?;
 
             let write_keys = self
-                .blob
                 .branch()
                 .keys()
                 .write()
                 .ok_or(Error::PermissionDenied)?;
 
-            self.blob
-                .branch()
-                .data()
-                .update_root_version_vector(tx, &merge, write_keys)
-                .await?;
+            self.branch().data().bump(tx, &merge, write_keys).await?;
         }
 
         if let Some(pending) = self.pending_entry.take() {
@@ -154,7 +149,7 @@ impl Inner {
 
     // If `overwrite` is set to `Keep`, the existing blob won't be removed from the store. This is
     // useful when we want to move or rename an entry.
-    pub fn insert_entry(
+    pub fn insert(
         &mut self,
         name: String,
         mut new_data: EntryData,
@@ -173,6 +168,7 @@ impl Inner {
                     new_data
                         .version_vector_mut()
                         .merge(&old_data.version_vector);
+                    new_data.version_vector_mut().increment(*self.branch().id());
                 }
             }
         }
@@ -188,12 +184,11 @@ impl Inner {
 
     /// Updates the version vector of entry at `name`. The version vector is updated by merging it
     /// with `merge` and incrementing the local version.
-    pub fn modify_entry(&mut self, name: &str, merge: &VersionVector) -> Result<()> {
+    pub fn bump(&mut self, name: &str, merge: &VersionVector) -> Result<()> {
         let mut data = self.entries.get(name).ok_or(Error::EntryNotFound)?.clone();
 
         data.version_vector_mut().merge(merge);
-        data.version_vector_mut()
-            .increment(*self.blob.branch().id());
+        data.version_vector_mut().increment(*self.branch().id());
 
         self.pending_entry = Some(PendingEntry {
             name: name.to_owned(),
@@ -206,6 +201,10 @@ impl Inner {
 
     pub fn db_pool(&self) -> &db::Pool {
         self.blob.db_pool()
+    }
+
+    fn branch(&self) -> &Branch {
+        self.blob.branch()
     }
 }
 
@@ -223,7 +222,3 @@ struct PendingEntry {
     data: EntryData,
     overwrite: OverwriteStrategy,
 }
-
-// fn bump(local_id: &PublicKey, old: &mut VersionVector, new: &VersionVector) {
-
-// }

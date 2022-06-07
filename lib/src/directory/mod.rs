@@ -385,8 +385,7 @@ impl Writer<'_> {
         let mut tx = conn.begin().await?;
 
         self.inner.prepare(&mut tx).await?;
-        self.inner
-            .insert_entry(name, data, OverwriteStrategy::Remove)?;
+        self.inner.insert(name, data, OverwriteStrategy::Remove)?;
         file.save(&mut tx).await?;
         self.inner.save(&mut tx).await?;
         self.inner.commit(tx, VersionVector::new()).await?;
@@ -409,8 +408,7 @@ impl Writer<'_> {
         let mut tx = conn.begin().await?;
 
         self.inner.prepare(&mut tx).await?;
-        self.inner
-            .insert_entry(name, data, OverwriteStrategy::Remove)?;
+        self.inner.insert(name, data, OverwriteStrategy::Remove)?;
         dir.write().await.inner.save(&mut tx).await?;
         self.inner.save(&mut tx).await?;
         self.inner.commit(tx, VersionVector::new()).await?;
@@ -469,7 +467,7 @@ impl Writer<'_> {
         let mut tx = conn.begin().await?;
 
         self.inner.prepare(&mut tx).await?;
-        self.inner.insert_entry(name.into(), new_entry, overwrite)?;
+        self.inner.insert(name.into(), new_entry, overwrite)?;
         self.inner.save(&mut tx).await?;
         self.inner.commit(tx, VersionVector::new()).await
     }
@@ -483,8 +481,7 @@ impl Writer<'_> {
 
     /// Inserts existing entry into this directory and flushes it. Use only for moving and forking.
     fn insert_entry(&mut self, name: String, entry: EntryData) -> Result<()> {
-        self.inner
-            .insert_entry(name, entry, OverwriteStrategy::Remove)
+        self.inner.insert(name, entry, OverwriteStrategy::Remove)
     }
 
     pub fn lookup(&self, name: &'_ str) -> Result<EntryRef> {
