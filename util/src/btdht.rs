@@ -20,7 +20,6 @@ struct Options {
     pub token: Option<ShareToken>,
 }
 
-
 #[tokio::main]
 async fn main() -> io::Result<()> {
     let options = Options::from_args();
@@ -40,17 +39,15 @@ async fn main() -> io::Result<()> {
     };
 
     // Note: [BEP-32](https://www.bittorrent.org/beps/bep_0032.html) says we should bind the ipv6
-    // socket to a concrete unicast address, not to an unspecified one.
+    // socket to a concrete unicast address, not to an unspecified one. Not sure it's worth it
+    // though as (1) I'm not sure how multi-homing causes problems and (2) devices often change IP
+    // addresses (switch to a different wifi, or cellular,...) so we would need a mechanism to
+    // restart the DHT with a different socket if that happens.
     let socket_v6 = if WITH_IPV6 {
-        match network::dht_discovery::local_ipv6_address().await {
-            Some(ipv6_addr) => {
-                UdpSocket::bind((ipv6_addr, 0))
-                    .await
-                    .ok()
-                    .and_then(|socket| btdht::Socket::new(socket).ok())
-            },
-            None => None,
-        }
+        UdpSocket::bind((Ipv6Addr::UNSPECIFIED, 0))
+            .await
+            .ok()
+            .and_then(|s| btdht::Socket::new(s).ok())
     } else {
         None
     };
