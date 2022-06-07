@@ -160,8 +160,7 @@ impl BranchData {
         let root_node = self.load_root(&mut tx).await?;
 
         let mut new_vv = root_node.proof.version_vector.clone();
-        new_vv.merge(vv);
-        new_vv.increment(*self.id());
+        new_vv.bump(vv, self.id());
 
         let new_proof = Proof::new(
             root_node.proof.writer_id,

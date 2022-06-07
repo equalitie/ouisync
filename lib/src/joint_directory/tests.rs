@@ -410,7 +410,6 @@ async fn local_merge_is_idempotent() {
     let branches = setup(2).await;
 
     let local_root = branches[0].open_or_create_root().await.unwrap();
-
     let vv0 = branches[0].version_vector().await.unwrap();
 
     let remote_root = branches[1].open_or_create_root().await.unwrap();
@@ -419,7 +418,7 @@ async fn local_merge_is_idempotent() {
     create_file(&remote_root, "cat.jpg", b"v0", &branches[1]).await;
     JointDirectory::new(
         Some(branches[0].clone()),
-        vec![local_root.clone(), remote_root.clone()],
+        [local_root.clone(), remote_root.clone()],
     )
     .merge()
     .await
@@ -446,7 +445,7 @@ async fn local_merge_is_idempotent() {
     update_file(&remote_root, "cat.jpg", b"v1", &branches[1]).await;
     JointDirectory::new(
         Some(branches[0].clone()),
-        vec![local_root.clone(), remote_root.clone()],
+        [local_root.clone(), remote_root.clone()],
     )
     .merge()
     .await

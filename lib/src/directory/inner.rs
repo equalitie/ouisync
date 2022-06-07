@@ -121,11 +121,11 @@ impl Inner {
     pub async fn commit<'a>(
         &'a mut self,
         mut tx: db::Transaction<'a>,
-        merge: VersionVector,
+        bump: VersionVector,
     ) -> Result<()> {
         // Update the version vector of this directory and all it's ancestors
         if let Some(ctx) = self.parent.as_mut() {
-            ctx.commit(tx, merge).await?;
+            ctx.commit(tx, bump).await?;
         } else {
             // At this point all local newly created blocks should become reachable so they can be
             // safely unpinned to become normal subjects of garbage collection.
@@ -137,7 +137,7 @@ impl Inner {
                 .write()
                 .ok_or(Error::PermissionDenied)?;
 
-            self.branch().data().bump(tx, &merge, write_keys).await?;
+            self.branch().data().bump(tx, &bump, write_keys).await?;
         }
 
         if let Some(pending) = self.pending_entry.take() {
@@ -167,8 +167,7 @@ impl Inner {
                 EntryData::Tombstone(old_data) => {
                     new_data
                         .version_vector_mut()
-                        .merge(&old_data.version_vector);
-                    new_data.version_vector_mut().increment(*self.branch().id());
+                        .bump(&old_data.version_vector, self.branch().id());
                 }
             }
         }
@@ -182,13 +181,11 @@ impl Inner {
         Ok(())
     }
 
-    /// Updates the version vector of entry at `name`. The version vector is updated by merging it
-    /// with `merge` and incrementing the local version.
-    pub fn bump(&mut self, name: &str, merge: &VersionVector) -> Result<()> {
+    /// Updates the version vector of entry at `name`.
+    pub fn bump(&mut self, name: &str, bump: &VersionVector) -> Result<()> {
         let mut data = self.entries.get(name).ok_or(Error::EntryNotFound)?.clone();
 
-        data.version_vector_mut().merge(merge);
-        data.version_vector_mut().increment(*self.branch().id());
+        data.version_vector_mut().bump(bump, self.branch().id());
 
         self.pending_entry = Some(PendingEntry {
             name: name.to_owned(),

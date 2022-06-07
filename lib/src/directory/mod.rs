@@ -472,12 +472,12 @@ impl Writer<'_> {
         self.inner.commit(tx, VersionVector::new()).await
     }
 
-    // TODO:
-    // pub async fn bump(&mut self, vv: VersionVector) -> Result<()> {
-    //     let mut conn = self.inner.db_pool().acquire().await?;
-    //     let tx = conn.begin().await?;
-    //     self.inner.commit(tx, vv).await
-    // }
+    /// Updates the version vector of this directory by merging it with `vv`.
+    pub async fn bump(&mut self, vv: VersionVector) -> Result<()> {
+        let mut conn = self.inner.db_pool().acquire().await?;
+        let tx = conn.begin().await?;
+        self.inner.commit(tx, vv).await
+    }
 
     /// Inserts existing entry into this directory and flushes it. Use only for moving and forking.
     fn insert_entry(&mut self, name: String, entry: EntryData) -> Result<()> {

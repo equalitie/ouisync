@@ -200,6 +200,8 @@ impl JointDirectory {
             dir.merge().await?;
         }
 
+        local_version.write().await.bump(new_version_vector).await?;
+
         Ok(local_version)
     }
 

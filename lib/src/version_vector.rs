@@ -37,10 +37,16 @@ impl VersionVector {
     }
 
     /// Inserts an entry into this version vector. If the entry already exists, it's overwritten
-    /// only if the new version is higher than the existing version.
-    pub fn insert(&mut self, writer_id: PublicKey, version: u64) {
+    /// only if the new version is higher than the existing version. Returns whether the existing
+    /// version was modified.
+    pub fn insert(&mut self, writer_id: PublicKey, version: u64) -> bool {
         let old = self.0.entry(writer_id).or_insert(0);
-        *old = (*old).max(version);
+        if version > *old {
+            *old = version;
+            true
+        } else {
+            false
+        }
     }
 
     /// Retrieves the version corresponding to the given replica id.
@@ -69,11 +75,26 @@ impl VersionVector {
         self
     }
 
-    /// Merge two versio vectors into one. The version of each entry in the resulting vector is
-    /// the maximum of the corresponding entries of the input vectors.
-    pub fn merge(&mut self, other: &Self) {
+    /// Merge two version vectors into one. The version of each entry in the resulting vector is
+    /// the maximum of the corresponding entries of the input vectors. Returns whether `self` was
+    /// modified.
+    pub fn merge(&mut self, other: &Self) -> bool {
+        let mut modified = false;
+
         for (writer_id, version) in &other.0 {
-            self.insert(*writer_id, *version)
+            if self.insert(*writer_id, *version) {
+                modified = true;
+            }
+        }
+
+        modified
+    }
+
+    /// Merges `other` into `self` and optionally increments the version at `id` to make sure the
+    /// resulting vector is strictly greater than it was before.
+    pub fn bump(&mut self, other: &Self, id: &PublicKey) {
+        if !self.merge(other) {
+            self.increment(*id);
         }
     }
 
