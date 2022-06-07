@@ -57,6 +57,7 @@ impl<T> ConfigKey<T> {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct ConfigEntry<Value>
 where
     Value: fmt::Display + FromStr + 'static,
