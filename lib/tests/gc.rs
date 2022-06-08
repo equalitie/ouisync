@@ -14,12 +14,7 @@ async fn local_delete_local_file() {
 
     assert_eq!(repo.count_blocks().await.unwrap(), 0);
 
-    repo.create_file("test.dat")
-        .await
-        .unwrap()
-        .flush()
-        .await
-        .unwrap();
+    repo.create_file("test.dat").await.unwrap();
 
     // 1 block for the file + 1 block for the root directory
     assert_eq!(repo.count_blocks().await.unwrap(), 2);
@@ -39,24 +34,21 @@ async fn local_delete_remote_file() {
     let _reg_l = network_l.handle().register(repo_l.store().clone());
     let _reg_r = network_r.handle().register(repo_r.store().clone());
 
-    repo_r
-        .create_file("test.dat")
-        .await
-        .unwrap()
-        .flush()
-        .await
-        .unwrap();
+    let mut file = repo_r.create_file("test.dat").await.unwrap();
+    write_to_file(&mut rng, &mut file, 2 * BLOCK_SIZE - BLOB_HEADER_SIZE).await;
+    file.flush().await.unwrap();
 
-    // 1 block for the file + 1 block for the remote root directory
-    time::timeout(Duration::from_secs(5), expect_block_count(&repo_l, 2))
+    // 2 blocks for the file + 1 block for the remote root directory
+    time::timeout(Duration::from_secs(5), expect_block_count(&repo_l, 3))
         .await
         .unwrap();
 
     repo_l.remove_entry("test.dat").await.unwrap();
     repo_l.collect_garbage().await.unwrap();
 
-    // Both the remote file and the remote root directory are removed.
-    assert_eq!(repo_l.count_blocks().await.unwrap(), 1);
+    //  1 for the local root to track the tombstone
+    // +1 for the remote root (still there because merger is currently disabled)
+    assert_eq!(repo_l.count_blocks().await.unwrap(), 2);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -68,13 +60,7 @@ async fn remote_delete_remote_file() {
     let _reg_l = network_l.handle().register(repo_l.store().clone());
     let _reg_r = network_r.handle().register(repo_r.store().clone());
 
-    repo_r
-        .create_file("test.dat")
-        .await
-        .unwrap()
-        .flush()
-        .await
-        .unwrap();
+    repo_r.create_file("test.dat").await.unwrap();
 
     // 1 block for the file + 1 block for the remote root directory
     time::timeout(Duration::from_secs(5), expect_block_count(&repo_l, 2))
@@ -137,8 +123,8 @@ async fn local_truncate_remote_file() {
 
     //   1 block for the file (the original 2 blocks were removed)
     // + 1 block for the local root (created when the file was forked)
-    // + 0 blocks for the remote root (removed for being outdated)
-    assert_eq!(repo_l.count_blocks().await.unwrap(), 2);
+    // + 1 blocks for the remote root (still there because merger is currently disabled)
+    assert_eq!(repo_l.count_blocks().await.unwrap(), 3);
 }
 
 #[tokio::test(flavor = "multi_thread")]
