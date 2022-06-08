@@ -101,8 +101,10 @@ async fn relay() {
         .await
         .unwrap();
 
-    let network_a = common::create_peer_connected_to(*network_r.listener_local_addr()).await;
-    let network_b = common::create_peer_connected_to(*network_r.listener_local_addr()).await;
+    let network_a =
+        common::create_peer_connected_to(*network_r.listener_local_addr_v4().unwrap()).await;
+    let network_b =
+        common::create_peer_connected_to(*network_r.listener_local_addr_v4().unwrap()).await;
 
     let repo_a = common::create_repo(&mut rng).await;
     let _reg_a = network_a.handle().register(repo_a.store().clone());

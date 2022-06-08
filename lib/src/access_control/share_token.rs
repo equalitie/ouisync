@@ -92,7 +92,7 @@ impl FromStr for ShareToken {
         // The '/' before '#...' is optional.
         let input = match input.strip_prefix('/') {
             Some(input) => input,
-            None => input
+            None => input,
         };
 
         let input = input.strip_prefix('#').ok_or(DecodeError)?;

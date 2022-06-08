@@ -150,7 +150,12 @@ async fn main() -> Result<()> {
     }
 
     if options.print_port {
-        println!("Listening on port {}", network.listener_local_addr().port());
+        if let Some(addr) = network.listener_local_addr_v4() {
+            println!("Listening on IPv4 port {}", addr.port());
+        }
+        if let Some(addr) = network.listener_local_addr_v6() {
+            println!("Listening on IPv6 port {}", addr.port());
+        }
     }
 
     if options.print_device_id {

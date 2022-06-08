@@ -4,7 +4,7 @@ use ouisync::{
 use rand::{rngs::StdRng, Rng};
 use std::{
     future::Future,
-    net::{Ipv4Addr, SocketAddr},
+    net::{Ipv4Addr, Ipv6Addr, SocketAddr},
 };
 
 // Create two `Network` instances connected together.
@@ -13,7 +13,7 @@ pub(crate) async fn create_connected_peers() -> (Network, Network) {
         .await
         .unwrap();
 
-    let b = create_peer_connected_to(*a.listener_local_addr()).await;
+    let b = create_peer_connected_to(*a.listener_local_addr_v4().unwrap()).await;
 
     (a, b)
 }
@@ -60,7 +60,8 @@ pub(crate) async fn create_linked_repos(rng: &mut StdRng) -> (Repository, Reposi
 
 pub(crate) fn test_network_options() -> NetworkOptions {
     NetworkOptions {
-        bind: Ipv4Addr::LOCALHOST.into(),
+        bind_v4: Ipv4Addr::LOCALHOST.into(),
+        bind_v6: Ipv6Addr::LOCALHOST.into(),
         disable_local_discovery: true,
         disable_upnp: true,
         disable_dht: true,

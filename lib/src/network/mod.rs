@@ -44,7 +44,7 @@ use std::{
     fmt,
     future::Future,
     io,
-    net::{IpAddr, Ipv4Addr, SocketAddr},
+    net::{Ipv4Addr, Ipv6Addr, SocketAddr},
     sync::{Arc, Mutex as BlockingMutex, Weak},
     time::Duration,
 };
@@ -73,9 +73,13 @@ pub struct NetworkOptions {
     #[clap(short, long, default_value = "0")]
     pub port: u16,
 
-    /// IP address to bind to
-    #[clap(short, long, default_value = "0.0.0.0", value_name = "ip")]
-    pub bind: IpAddr,
+    /// IPv4 address to bind to
+    #[clap(long, default_value = "0.0.0.0", value_name = "ip")]
+    pub bind_v4: Ipv4Addr,
+
+    /// IPv6 address to bind to
+    #[clap(long, default_value = "::", value_name = "ip")]
+    pub bind_v6: Ipv6Addr,
 
     /// Disable local discovery
     #[clap(short, long)]
@@ -95,8 +99,12 @@ pub struct NetworkOptions {
 }
 
 impl NetworkOptions {
-    pub fn listen_addr(&self) -> SocketAddr {
-        SocketAddr::new(self.bind, self.port)
+    pub fn listen_addr_v4(&self) -> SocketAddr {
+        SocketAddr::new(self.bind_v4.into(), self.port)
+    }
+
+    pub fn listen_addr_v6(&self) -> SocketAddr {
+        SocketAddr::new(self.bind_v6.into(), self.port)
     }
 }
 
@@ -104,7 +112,8 @@ impl Default for NetworkOptions {
     fn default() -> Self {
         Self {
             port: 0,
-            bind: Ipv4Addr::UNSPECIFIED.into(),
+            bind_v4: Ipv4Addr::UNSPECIFIED,
+            bind_v6: Ipv6Addr::UNSPECIFIED,
             disable_local_discovery: false,
             disable_upnp: false,
             disable_dht: false,
@@ -124,14 +133,46 @@ pub struct Network {
 
 impl Network {
     pub async fn new(options: &NetworkOptions, config: ConfigStore) -> Result<Self, NetworkError> {
-        let listener = Self::bind_listener(options.listen_addr(), &config).await?;
-        let listener_local_addr = listener.local_addr()?;
+        let listener_v4 = match Self::bind_listener(options.listen_addr_v4(), &config).await {
+            Ok(listener) => Some(listener),
+            Err(err) => {
+                log::warn!(
+                    "Failed to bind listener to IPv4 address {:?}: {:?}",
+                    options.listen_addr_v4(),
+                    err
+                );
+                None
+            }
+        };
+
+        let listener_v6 = match Self::bind_listener(options.listen_addr_v6(), &config).await {
+            Ok(listener) => Some(listener),
+            Err(err) => {
+                log::warn!(
+                    "Failed to bind listener to IPv6 address {:?}: {:?}",
+                    options.listen_addr_v6(),
+                    err
+                );
+                None
+            }
+        };
+
+        let listener_local_addr_v4 = listener_v4.as_ref().and_then(|l| l.local_addr().ok());
+        let listener_local_addr_v6 = listener_v6.as_ref().and_then(|l| l.local_addr().ok());
 
         let monitor = StateMonitor::make_root();
 
         let dht_discovery = if !options.disable_dht {
             let monitor = monitor.make_child("DhtDiscovery");
-            Some(DhtDiscovery::new(listener_local_addr.port(), &config, monitor).await)
+            Some(
+                DhtDiscovery::new(
+                    listener_local_addr_v4.map(|addr| addr.port()),
+                    listener_local_addr_v6.map(|addr| addr.port()),
+                    &config,
+                    monitor,
+                )
+                .await,
+            )
         } else {
             None
         };
@@ -140,29 +181,34 @@ impl Network {
             .as_ref()
             .and_then(|d| d.local_addr_v4())
             .cloned();
+
         let dht_local_addr_v6 = dht_discovery
             .as_ref()
             .and_then(|d| d.local_addr_v6())
             .cloned();
 
         let (port_forwarder, listener_port_map, dht_port_map) = if !options.disable_upnp {
-            let dht_port_v4 = dht_local_addr_v4.map(|addr| addr.port());
+            if let Some(listener_local_addr_v4) = listener_local_addr_v4 {
+                let dht_port_v4 = dht_local_addr_v4.map(|addr| addr.port());
 
-            // TODO: the ipv6 port typically doesn't need to be port-mapped but it might need to
-            // be opened in the firewall ("pinholed"). Consider using UPnP for that as well.
+                // TODO: the ipv6 port typically doesn't need to be port-mapped but it might need to
+                // be opened in the firewall ("pinholed"). Consider using UPnP for that as well.
 
-            let port_forwarder = upnp::PortForwarder::new(monitor.make_child("UPnP"));
+                let port_forwarder = upnp::PortForwarder::new(monitor.make_child("UPnP"));
 
-            let listener_port_map = port_forwarder.add_mapping(
-                listener_local_addr.port(),
-                listener_local_addr.port(),
-                Protocol::Tcp,
-            );
+                let listener_port_map = port_forwarder.add_mapping(
+                    listener_local_addr_v4.port(), // internal
+                    listener_local_addr_v4.port(), // external
+                    Protocol::Tcp,
+                );
 
-            let dht_port_map =
-                dht_port_v4.map(|port| port_forwarder.add_mapping(port, port, Protocol::Udp));
+                let dht_port_map =
+                    dht_port_v4.map(|port| port_forwarder.add_mapping(port, port, Protocol::Udp));
 
-            (Some(port_forwarder), Some(listener_port_map), dht_port_map)
+                (Some(port_forwarder), Some(listener_port_map), dht_port_map)
+            } else {
+                (None, None, None)
+            }
         } else {
             (None, None, None)
         };
@@ -175,7 +221,8 @@ impl Network {
 
         let inner = Arc::new(Inner {
             monitor: monitor.clone(),
-            listener_local_addr,
+            listener_local_addr_v4,
+            listener_local_addr_v6,
             this_runtime_id: rand::random(),
             state: BlockingMutex::new(State {
                 message_brokers: HashMap::new(),
@@ -213,7 +260,13 @@ impl Network {
             }
         });
 
-        inner.spawn(inner.clone().run_listener(listener));
+        if let Some(listener_v4) = listener_v4 {
+            inner.spawn(inner.clone().run_listener(listener_v4));
+        }
+
+        if let Some(listener_v6) = listener_v6 {
+            inner.spawn(inner.clone().run_listener(listener_v6));
+        }
 
         inner
             .enable_local_discovery(!options.disable_local_discovery)
@@ -226,8 +279,12 @@ impl Network {
         Ok(network)
     }
 
-    pub fn listener_local_addr(&self) -> &SocketAddr {
-        &self.inner.listener_local_addr
+    pub fn listener_local_addr_v4(&self) -> Option<&SocketAddr> {
+        self.inner.listener_local_addr_v4.as_ref()
+    }
+
+    pub fn listener_local_addr_v6(&self) -> Option<&SocketAddr> {
+        self.inner.listener_local_addr_v6.as_ref()
     }
 
     pub fn dht_local_addr_v4(&self) -> Option<&SocketAddr> {
@@ -359,7 +416,8 @@ struct Tasks {
 
 struct Inner {
     monitor: Arc<StateMonitor>,
-    listener_local_addr: SocketAddr,
+    listener_local_addr_v4: Option<SocketAddr>,
+    listener_local_addr_v6: Option<SocketAddr>,
     this_runtime_id: RuntimeId,
     state: BlockingMutex<State>,
     _listener_port_map: Option<upnp::Mapping>,
@@ -404,8 +462,13 @@ impl Inner {
             return;
         }
 
-        let port = self.listener_local_addr.port();
-        *local_discovery = Some(scoped_task::spawn(self.clone().run_local_discovery(port)));
+        if let Some(addr) = self.listener_local_addr_v4 {
+            *local_discovery = Some(scoped_task::spawn(
+                self.clone().run_local_discovery(addr.port()),
+            ));
+        } else {
+            log::error!("Failed to enable local discovery because we don't have an IPv4 listener");
+        }
     }
 
     async fn run_local_discovery(self: Arc<Self>, listener_port: u16) {

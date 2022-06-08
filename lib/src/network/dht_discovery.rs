@@ -52,17 +52,31 @@ const LAST_USED_PORT_COMMENT: &str =
      default to manually setting up port forwarding on their routers.";
 
 pub(super) struct DhtDiscovery {
-    dht_v4: RestartableDht,
-    dht_v6: RestartableDht,
+    dht_v4: Option<RestartableDht>,
+    dht_v6: Option<RestartableDht>,
     lookups: Arc<Mutex<Lookups>>,
     next_id: AtomicU64,
     monitor: Arc<StateMonitor>,
 }
 
 impl DhtDiscovery {
-    pub async fn new(acceptor_port: u16, config: &ConfigStore, monitor: Arc<StateMonitor>) -> Self {
-        let dht_v4 = start_dht(IpVersion::V4, acceptor_port, config, &monitor).await;
-        let dht_v6 = start_dht(IpVersion::V6, acceptor_port, config, &monitor).await;
+    pub async fn new(
+        acceptor_port_v4: Option<u16>,
+        acceptor_port_v6: Option<u16>,
+        config: &ConfigStore,
+        monitor: Arc<StateMonitor>,
+    ) -> Self {
+        let dht_v4 = if let Some(port) = acceptor_port_v4 {
+            Some(start_dht(IpVersion::V4, port, config, &monitor).await)
+        } else {
+            None
+        };
+
+        let dht_v6 = if let Some(port) = acceptor_port_v6 {
+            Some(start_dht(IpVersion::V6, port, config, &monitor).await)
+        } else {
+            None
+        };
 
         let lookups = Arc::new(Mutex::new(HashMap::default()));
 
@@ -106,11 +120,11 @@ impl DhtDiscovery {
     }
 
     pub fn local_addr_v4(&self) -> Option<&SocketAddr> {
-        Some(&self.dht_v4.local_addr)
+        self.dht_v4.as_ref().map(|dht| &dht.local_addr)
     }
 
     pub fn local_addr_v6(&self) -> Option<&SocketAddr> {
-        Some(&self.dht_v6.local_addr)
+        self.dht_v6.as_ref().map(|dht| &dht.local_addr)
     }
 }
 
@@ -251,8 +265,8 @@ struct Lookup {
 
 impl Lookup {
     fn new(
-        dht_v4: RestartableDht,
-        dht_v6: RestartableDht,
+        dht_v4: Option<RestartableDht>,
+        dht_v6: Option<RestartableDht>,
         info_hash: InfoHash,
         monitor: &Arc<StateMonitor>,
     ) -> Self {
@@ -296,8 +310,8 @@ impl Lookup {
     }
 
     fn start_task(
-        dht_v4: RestartableDht,
-        dht_v6: RestartableDht,
+        dht_v4: Option<RestartableDht>,
+        dht_v6: Option<RestartableDht>,
         info_hash: InfoHash,
         seen_peers: Arc<RwLock<HashSet<SocketAddr>>>,
         requests: Arc<Mutex<HashMap<RequestId, mpsc::UnboundedSender<SocketAddr>>>>,
@@ -316,10 +330,9 @@ impl Lookup {
                 *state.get() = Cow::Borrowed("making request");
 
                 // find peers for the repo and also announce that we have it.
-                let dhts = [&dht_v4, &dht_v6];
+                let dhts = dht_v4.iter().chain(dht_v6.iter());
 
-                let mut peers =
-                    stream::iter(dhts.iter()).flat_map(|dht| dht.dht.search(info_hash, true));
+                let mut peers = stream::iter(dhts).flat_map(|dht| dht.dht.search(info_hash, true));
 
                 *state.get() = Cow::Borrowed("awaiting results");
                 while let Some(peer) = peers.next().await {
@@ -378,7 +391,11 @@ async fn bind(ip_v: IpVersion, config: &ConfigStore) -> io::Result<UdpSocket> {
             // problematic on especially on mobile devices when the IP may change (e.g. switch to a
             // different WiFi or cellular). At which point we would have to restart the DHT, by
             // using the UNSPECIFIED address we can avoid that problem.
-            socket::bind((Ipv6Addr::UNSPECIFIED, 0).into(), config.entry(LAST_USED_PORT_V6)).await
+            socket::bind(
+                (Ipv6Addr::UNSPECIFIED, 0).into(),
+                config.entry(LAST_USED_PORT_V6),
+            )
+            .await
         }
     }
 }

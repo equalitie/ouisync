@@ -49,19 +49,36 @@ pub unsafe extern "C" fn network_subscribe(port: Port<u8>) -> UniqueHandle<JoinH
     UniqueHandle::new(Box::new(handle))
 }
 
-/// Return the local network endpoint as string. The format is
-/// "<TCP or UDP>:<IPv4 or [IPv6]>:<PORT>". Examples:
+/// Return the local network endpoint as string. The format is "<TCP or UDP>:<IPv4>:<PORT>". The
+/// returned pointer may be null if we did not succeed at binding to an IPv4 address.
 ///
-/// For IPv4: "TCP:192.168.1.1:65522"
-/// For IPv6: "TCP:[2001:db8::1]:65522"
+/// Example: "TCP:192.168.1.1:65522"
 ///
 /// IMPORTANT: the caller is responsible for deallocating the returned pointer.
 #[no_mangle]
-pub unsafe extern "C" fn network_listener_local_addr() -> *mut c_char {
-    let local_addr = session::get().network().listener_local_addr();
+pub unsafe extern "C" fn network_listener_local_addr_v4() -> *mut c_char {
+    session::get()
+        .network()
+        .listener_local_addr_v4()
+        // TODO: Get <TCP or UDP> from the network object.
+        .map(|local_addr| utils::str_to_ptr(&format!("TCP:{}", local_addr)))
+        .unwrap_or(ptr::null_mut())
+}
 
-    // TODO: Get <TCP or UDP> from the network object.
-    utils::str_to_ptr(&format!("TCP:{}", local_addr))
+/// Return the local network endpoint as string. The format is "<TCP or UDP>:<[IPv6]>:<PORT>". The
+/// returned pointer pointer may be null if we did not succeed at binding to an IPv6 address.
+///
+/// Example: "TCP:[2001:db8::1]:65522"
+///
+/// IMPORTANT: the caller is responsible for deallocating the returned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn network_listener_local_addr_v6() -> *mut c_char {
+    session::get()
+        .network()
+        .listener_local_addr_v6()
+        // TODO: Get <TCP or UDP> from the network object.
+        .map(|local_addr| utils::str_to_ptr(&format!("TCP:{}", local_addr)))
+        .unwrap_or(ptr::null_mut())
 }
 
 /// Return the list of peers with which we're connected, serialized with msgpack.

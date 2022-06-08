@@ -193,7 +193,7 @@ fn wait_for_ready_message(
     stdout: &mut BufReader<ChildStdout>,
     id: &Id,
 ) -> u16 {
-    const PREFIX: &str = "Listening on port ";
+    const PREFIX: &str = "Listening on IPv4 port ";
     if let Some(line) = wait_for_line(stdout, PREFIX, "", id) {
         line[PREFIX.len()..].parse().unwrap()
     } else {
