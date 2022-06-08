@@ -45,7 +45,7 @@ pub(crate) async fn create_repo_with_secrets(
         rng.gen(),
         MasterSecret::generate(rng),
         secrets,
-        false,
+        true,
     )
     .await
     .unwrap()

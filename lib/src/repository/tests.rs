@@ -96,30 +96,22 @@ async fn merge() {
     let local_branch = repo.local_branch().await.unwrap();
     let local_root = local_branch.open_or_create_root().await.unwrap();
 
-    let mut rx = repo.subscribe();
+    repo.force_merge().await.unwrap();
 
-    loop {
-        // Note: `EntryNotFound` can happen in two cases: either the entry hasn't been inserted
-        // into the directory or the file blob han't been created yet. Both cases are expected and
-        // harmless in this case.
-        match local_root.read().await.lookup("test.txt") {
-            Ok(entry) => {
-                match entry.file().unwrap().open().await {
-                    Ok(mut file) => {
-                        let content = file.read_to_end().await.unwrap();
-                        assert_eq!(content, b"hello");
-                        break;
-                    }
-                    Err(Error::EntryNotFound) => (),
-                    Err(error) => panic!("unexpected error: {:?}", error),
-                };
-            }
-            Err(Error::EntryNotFound) => (),
-            Err(error) => panic!("unexpected error: {:?}", error),
-        }
-
-        rx.recv().await.unwrap();
-    }
+    let content = local_root
+        .read()
+        .await
+        .lookup("test.txt")
+        .unwrap()
+        .file()
+        .unwrap()
+        .open()
+        .await
+        .unwrap()
+        .read_to_end()
+        .await
+        .unwrap();
+    assert_eq!(content, b"hello");
 }
 
 #[tokio::test(flavor = "multi_thread")]

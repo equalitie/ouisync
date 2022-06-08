@@ -44,11 +44,12 @@ async fn local_delete_remote_file() {
         .unwrap();
 
     repo_l.remove_entry("test.dat").await.unwrap();
+    repo_l.force_merge().await.unwrap();
     repo_l.force_garbage_collection().await.unwrap();
 
-    //  1 for the local root to track the tombstone
-    // +1 for the remote root (still there because merger is currently disabled)
-    assert_eq!(repo_l.count_blocks().await.unwrap(), 2);
+    // Both the file and the remote root are deleted, only the local root remains to track the
+    // tombstone.
+    assert_eq!(repo_l.count_blocks().await.unwrap(), 1);
 }
 
 #[tokio::test(flavor = "multi_thread")]

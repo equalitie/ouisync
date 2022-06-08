@@ -83,7 +83,10 @@ impl BlockScanner {
 
             match branch.open_root().await {
                 Ok(dir) => versions.push(dir),
-                Err(Error::BlockNotFound(_)) => continue,
+                // `EntryNotFound` is ok because it means it's a newly created branch which doesn't
+                // have the root directory yet. It's safe to skip those.
+                // `BlockNotFound` is ok too as the missing blocks will be requested later.
+                Err(Error::EntryNotFound | Error::BlockNotFound(_)) => continue,
                 Err(error) => return Err(error),
             }
         }
