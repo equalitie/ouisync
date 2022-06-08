@@ -31,7 +31,7 @@ use crate::{
 };
 use async_recursion::async_recursion;
 use sqlx::Connection;
-use std::sync::Arc;
+use std::{mem, sync::Arc};
 
 #[derive(Clone)]
 pub struct Directory {
@@ -103,48 +103,57 @@ impl Directory {
     /// Adds a tombstone to where the entry is being moved from and creates a new entry at the
     /// destination.
     ///
-    /// Note on why we're passing the `src_entry` to the function instead of just looking it up
-    /// using `src_name` and `src_author`: it's because the version vector inside of the
-    /// `src_entry` is expected to be the one the caller of this function is trying to move. It
-    /// could, in theory, happen that the source entry has been modified between when the caller
-    /// last released the lock to the entry and when we would do the lookup.
+    /// Note on why we're passing the `src_data` to the function instead of just looking it up
+    /// using `src_name`: it's because the version vector inside of the `src_data` is expected to
+    /// be the one the caller of this function is trying to move. It could, in theory, happen that
+    /// the source entry has been modified between when the caller last released the lock to the
+    /// entry and when we would do the lookup.
     ///
     /// Thus using the "caller provided" version vector, we ensure that we don't accidentally
     /// delete data.
+    ///
+    /// # Cancel safety
+    ///
+    /// This function is partially cancel safe in the sense that it will never lose data. However,
+    /// in the case of cancellation, it can happen that the entry ends up being already inserted
+    /// into the destination but not yet removed from the source. This will behave similarly to a
+    /// hard link with the important difference that removing the entry from either location  would
+    /// leave it dangling in the other. The only way to currently resolve the situation without
+    /// removing the data is to copy it somewhere else, then remove both source and destination
+    /// entries and then move the data back.
+    ///
+    /// TODO: Improve cancel-safety either by making the whole operation atomic or by implementing
+    /// proper hard links.
     pub(crate) async fn move_entry(
         &self,
         src_name: &str,
-        src_entry: EntryData,
+        src_data: EntryData,
         dst_dir: &Directory,
         dst_name: &str,
         dst_vv: VersionVector,
     ) -> Result<()> {
-        let (mut src_dir_writer, mut dst_dir_writer) = write_pair(self, dst_dir).await;
+        let mut dst_data = src_data;
+        let src_vv = mem::replace(dst_data.version_vector_mut(), dst_vv);
 
-        src_dir_writer
-            .remove_entry(
-                src_name,
-                &self.branch_id,
-                src_entry.version_vector().clone(),
-                OverwriteStrategy::Keep,
-            )
-            .await?;
+        {
+            let mut dst_writer = dst_dir.write().await;
+            dst_writer
+                .insert_entry(dst_name.to_owned(), dst_data, OverwriteStrategy::Remove)
+                .await?;
+        }
 
-        // TODO: vv is needlessly created twice here.
-        let mut dst_entry = src_entry;
-        *dst_entry.version_vector_mut() = dst_vv;
+        {
+            let mut src_writer = self.write().await;
+            let branch_id = *src_writer.branch().id();
+            src_writer
+                .remove_entry(src_name, &branch_id, src_vv, OverwriteStrategy::Keep)
+                .await?;
+        }
 
-        // TODO: We need to undo the `remove_file` action from above if this next one fails.
-        dst_dir_writer
-            .as_mut()
-            .unwrap_or(&mut src_dir_writer)
-            .insert_entry(dst_name.into(), dst_entry)
+        Ok(())
     }
 
     // Forks this directory into the local branch.
-    // TODO: consider changing this to modify self instead of returning the forked dir, to be
-    //       consistent with `File::fork`.
-    // TODO: consider rewriting this to avoid recursion
     #[async_recursion]
     pub async fn fork(&self, local_branch: &Branch) -> Result<Directory> {
         let inner = self.read().await;
@@ -326,37 +335,6 @@ impl PartialEq for Directory {
 
 impl Eq for Directory {}
 
-/// Obtains a write lock for two directories at the same time in a way that prevents deadlock.
-///
-/// 1. Prevents deadlock when the two directories are actually two instances of the same directory.
-///    Returns `(Writer, None)` in that case.
-/// 2. Prevents deadlock when two tasks try to lock the same pair of directories concurrently, i.e.
-///    one tasks does `write_pair(A, B)` and another does `write_pair(B, A)`. This is achieved by
-///    doing the locks in the same order regardless of the order of the arguments. The `Writer`s are
-///    always returned in the same order as the arguments however.
-///
-/// # Panics
-///
-/// Panics if any of the directories is not in the local branch.
-pub(crate) async fn write_pair<'a, 'b>(
-    a: &'a Directory,
-    b: &'b Directory,
-) -> (Writer<'a>, Option<Writer<'b>>) {
-    if a == b {
-        (a.write().await, None)
-    } else if Arc::as_ptr(&a.inner) < Arc::as_ptr(&b.inner) {
-        let a = a.write().await;
-        let b = b.write().await;
-
-        (a, Some(b))
-    } else {
-        let b = b.write().await;
-        let a = a.write().await;
-
-        (a, Some(b))
-    }
-}
-
 /// View of a `Directory` for performing read and write queries.
 pub(crate) struct Writer<'a> {
     outer: &'a Directory,
@@ -463,13 +441,8 @@ impl Writer<'_> {
             }
         };
 
-        let mut conn = self.inner.db_pool().acquire().await?;
-        let mut tx = conn.begin().await?;
-
-        self.inner.prepare(&mut tx).await?;
-        self.inner.insert(name.into(), new_entry, overwrite)?;
-        self.inner.save(&mut tx).await?;
-        self.inner.commit(tx, VersionVector::new()).await
+        self.insert_entry(name.to_owned(), new_entry, overwrite)
+            .await
     }
 
     /// Updates the version vector of this directory by merging it with `vv`.
@@ -479,17 +452,28 @@ impl Writer<'_> {
         self.inner.commit(tx, vv).await
     }
 
-    /// Inserts existing entry into this directory and flushes it. Use only for moving and forking.
-    fn insert_entry(&mut self, name: String, entry: EntryData) -> Result<()> {
-        self.inner.insert(name, entry, OverwriteStrategy::Remove)
-    }
-
     pub fn lookup(&self, name: &'_ str) -> Result<EntryRef> {
         lookup(self.outer, &*self.inner, name)
     }
 
     pub fn branch(&self) -> &Branch {
         self.inner.blob.branch()
+    }
+
+    /// Atomically inserts the given entry into this directory and commits the change.
+    async fn insert_entry(
+        &mut self,
+        name: String,
+        entry: EntryData,
+        overwrite: OverwriteStrategy,
+    ) -> Result<()> {
+        let mut conn = self.inner.db_pool().acquire().await?;
+        let mut tx = conn.begin().await?;
+
+        self.inner.prepare(&mut tx).await?;
+        self.inner.insert(name, entry, overwrite)?;
+        self.inner.save(&mut tx).await?;
+        self.inner.commit(tx, VersionVector::new()).await
     }
 }
 
