@@ -44,7 +44,7 @@ async fn local_delete_remote_file() {
         .unwrap();
 
     repo_l.remove_entry("test.dat").await.unwrap();
-    repo_l.collect_garbage().await.unwrap();
+    repo_l.force_garbage_collection().await.unwrap();
 
     //  1 for the local root to track the tombstone
     // +1 for the remote root (still there because merger is currently disabled)
@@ -119,7 +119,7 @@ async fn local_truncate_remote_file() {
     file.truncate(0).await.unwrap();
     file.flush().await.unwrap();
 
-    repo_l.collect_garbage().await.unwrap();
+    repo_l.force_garbage_collection().await.unwrap();
 
     //   1 block for the file (the original 2 blocks were removed)
     // + 1 block for the local root (created when the file was forked)
@@ -181,7 +181,7 @@ async fn concurrent_delete_update() {
 
     // Local delete
     repo_l.remove_entry("test.dat").await.unwrap();
-    repo_l.collect_garbage().await.unwrap();
+    repo_l.force_garbage_collection().await.unwrap();
 
     // Sanity check
     assert_eq!(repo_l.count_blocks().await.unwrap(), 1);

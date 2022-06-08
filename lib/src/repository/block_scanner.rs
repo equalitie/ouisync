@@ -1,5 +1,3 @@
-use async_recursion::async_recursion;
-
 use super::{utils, Shared};
 use crate::{
     blob::BlockIds,
@@ -9,6 +7,7 @@ use crate::{
     error::{Error, Result},
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
 };
+use async_recursion::async_recursion;
 use std::sync::Arc;
 use tokio::{
     select,

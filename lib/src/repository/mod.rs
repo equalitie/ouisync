@@ -9,7 +9,7 @@ pub use self::id::RepositoryId;
 
 use self::{
     block_scanner::{BlockScanner, BlockScannerHandle},
-    merger::Merger,
+    merger::{Merger, MergerHandle},
 };
 use crate::{
     access_control::{AccessMode, AccessSecrets, MasterSecret},
@@ -29,7 +29,6 @@ use crate::{
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     metadata, path,
     progress::Progress,
-    scoped_task::{self, ScopedJoinHandle},
     store::Store,
     sync::{broadcast::ThrottleReceiver, Mutex},
 };
@@ -44,8 +43,8 @@ use tokio::task;
 
 pub struct Repository {
     shared: Arc<Shared>,
-    _merge_handle: Option<ScopedJoinHandle<()>>,
-    block_scanner_handle: BlockScannerHandle,
+    merger_handle: Option<MergerHandle>,
+    block_scanner_handle: Option<BlockScannerHandle>,
 }
 
 impl Repository {
@@ -198,22 +197,28 @@ impl Repository {
             None
         };
 
-        let merge_handle = local_branch.map(|local_branch| {
-            scoped_task::spawn(Merger::new(shared.clone(), local_branch).run())
-        });
-
-        let (block_scanner, block_scanner_handle) = BlockScanner::new(shared.clone());
+        let merger_handle = if let Some(local_branch) = local_branch {
+            let (merger, handle) = Merger::new(shared.clone(), local_branch);
+            task::spawn(merger.run());
+            Some(handle)
+        } else {
+            None
+        };
 
         // BlockScanner requires at least read access to be able to traverse the repository.
-        if shared.secrets.can_read() {
+        let block_scanner_handle = if shared.secrets.can_read() {
+            let (block_scanner, handle) = BlockScanner::new(shared.clone());
             task::spawn(block_scanner.run());
-        }
+            Some(handle)
+        } else {
+            None
+        };
 
         task::spawn(report_sync_progress(shared.store.clone()));
 
         Ok(Self {
             shared,
-            _merge_handle: merge_handle,
+            merger_handle,
             block_scanner_handle,
         })
     }
@@ -423,14 +428,28 @@ impl Repository {
         self.shared.store.sync_progress().await
     }
 
-    /// Trigger manual garbage collection and wait for it to complete. Returns whether the
-    /// collection completed successfully.
+    /// Force the garbage collection to run and wait for it to complete, returning its result.
     ///
-    /// It's not necessary to call this method as the garbage collection happens automatically in
-    /// the background. It can still be useful if one wants to make sure the collection completed
-    /// and/or to know whether it completed successfully or failed.
-    pub async fn collect_garbage(&self) -> Result<()> {
-        self.block_scanner_handle.collect().await
+    /// It's usually not necessary to call this method because the gc runs automatically in the
+    /// background.
+    pub async fn force_garbage_collection(&self) -> Result<()> {
+        self.block_scanner_handle
+            .as_ref()
+            .ok_or(Error::PermissionDenied)?
+            .collect()
+            .await
+    }
+
+    /// Force the merge to run and wait for it to complete, returning its result.
+    ///
+    /// It's usually not necessary to call this method because the merger runs automatically in the
+    /// background.
+    pub async fn force_merge(&self) -> Result<()> {
+        self.merger_handle
+            .as_ref()
+            .ok_or(Error::PermissionDenied)?
+            .merge()
+            .await
     }
 
     // Opens the root directory across all branches as JointDirectory.
@@ -565,18 +584,6 @@ impl Shared {
         };
 
         self.inflate(&data).await
-    }
-
-    pub async fn branch(&self, id: &PublicKey) -> Result<Branch> {
-        self.inflate(
-            self.store
-                .index
-                .branches()
-                .await
-                .get(id)
-                .ok_or(Error::EntryNotFound)?,
-        )
-        .await
     }
 
     // TODO: consider rewriting this to return `impl Stream` to avoid the Vec allocation.

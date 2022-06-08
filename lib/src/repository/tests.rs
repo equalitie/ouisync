@@ -1,5 +1,5 @@
 use super::*;
-use crate::{blob, block::BLOCK_SIZE, db};
+use crate::{blob, block::BLOCK_SIZE, db, scoped_task};
 use assert_matches::assert_matches;
 use rand::Rng;
 use std::io::SeekFrom;
@@ -669,7 +669,7 @@ async fn attempt_to_modify_remote_file() {
     // fail because they expect it to have read-only mode. To prevent this we manually trigger
     // the garbage collector and wait for it to finish, to make sure the root dir is dropped and
     // removed from the cache. Then `open_file` reopens the root dir correctly in read-only mode.
-    repo.collect_garbage().await.unwrap();
+    repo.force_garbage_collection().await.unwrap();
 
     let mut file = repo.open_file("test.txt").await.unwrap();
     assert_matches!(file.truncate(0).await, Err(Error::PermissionDenied));
@@ -890,7 +890,7 @@ async fn file_conflict_modify_local() {
     assert_eq!(remote_file.version_vector().await, vv![remote_id => 2]);
     drop(remote_file);
 
-    repo.collect_garbage().await.unwrap();
+    repo.force_garbage_collection().await.unwrap();
 
     // Modify the local version.
     let mut local_file = repo.open_file_version("test.txt", &local_id).await.unwrap();
