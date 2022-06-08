@@ -476,7 +476,7 @@ async fn remote_merge_is_idempotent() {
     // First merge remote into local
     JointDirectory::new(
         Some(branches[0].clone()),
-        vec![local_root.clone(), remote_root.clone()],
+        [local_root.clone(), remote_root.clone()],
     )
     .merge()
     .await

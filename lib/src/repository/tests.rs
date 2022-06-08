@@ -799,7 +799,7 @@ async fn version_vector_recreate_deleted_file() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn version_vector_fork_files() {
+async fn version_vector_fork_file() {
     let repo = Repository::create(
         &db::Store::Temporary,
         rand::random(),
@@ -811,6 +811,8 @@ async fn version_vector_fork_files() {
     .unwrap();
 
     let local_branch = repo.get_or_create_local_branch().await.unwrap();
+    let local_id = *local_branch.id();
+
     let remote_branch = repo
         .create_remote_branch(PublicKey::random())
         .await
@@ -819,48 +821,23 @@ async fn version_vector_fork_files() {
 
     let remote_root = remote_branch.open_or_create_root().await.unwrap();
     let remote_parent = remote_root.create_directory("parent".into()).await.unwrap();
-    let mut file0 = create_file_in_directory(&remote_parent, "foo.txt", &[]).await;
-    let mut file1 = create_file_in_directory(&remote_parent, "bar.txt", &[]).await;
+    let mut file = create_file_in_directory(&remote_parent, "foo.txt", &[]).await;
 
-    let remote_file0_vv = file0.version_vector().await;
-    let remote_file1_vv = file1.version_vector().await;
+    let remote_file_vv = file.version_vector().await;
 
-    // Fork the first file
-    file0.fork(&local_branch).await.unwrap();
+    file.fork(&local_branch).await.unwrap();
 
-    let local_parent = file0.parent();
+    let local_parent = file.parent();
     let local_root = local_parent.parent().await.unwrap();
 
-    // Parent and root are concurrent because the second file isn't forked yet.
-    assert_eq!(file0.version_vector().await, remote_file0_vv);
+    assert_eq!(file.version_vector().await, remote_file_vv);
     assert_eq!(
-        local_parent
-            .version_vector()
-            .await
-            .unwrap()
-            .partial_cmp(&remote_parent.version_vector().await.unwrap()),
-        None
+        local_parent.version_vector().await.unwrap(),
+        vv![local_id => 2]
     );
     assert_eq!(
-        local_root
-            .version_vector()
-            .await
-            .unwrap()
-            .partial_cmp(&remote_root.version_vector().await.unwrap()),
-        None
-    );
-
-    // Fork the second file
-    file1.fork(&local_branch).await.unwrap();
-
-    // Parent and root are now newer.
-    assert_eq!(file1.version_vector().await, remote_file1_vv);
-    assert!(
-        local_parent.version_vector().await.unwrap()
-            > remote_parent.version_vector().await.unwrap()
-    );
-    assert!(
-        local_root.version_vector().await.unwrap() > remote_root.version_vector().await.unwrap()
+        local_root.version_vector().await.unwrap(),
+        vv![local_id => 2]
     );
 }
 
