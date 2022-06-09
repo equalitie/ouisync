@@ -212,7 +212,13 @@ async fn move_file_within_branch() {
         .open_root()
         .await
         .unwrap()
-        .open_directory("aux")
+        .read()
+        .await
+        .lookup("aux")
+        .unwrap()
+        .directory()
+        .unwrap()
+        .open()
         .await
         .unwrap()
         .open_file(file_name)
@@ -299,10 +305,22 @@ async fn move_non_empty_directory() {
         .open_root()
         .await
         .unwrap()
-        .open_directory(dst_dir_name)
+        .read()
+        .await
+        .lookup(dst_dir_name)
+        .unwrap()
+        .directory()
+        .unwrap()
+        .open()
         .await
         .unwrap()
-        .open_directory(dir_name)
+        .read()
+        .await
+        .lookup(dir_name)
+        .unwrap()
+        .directory()
+        .unwrap()
+        .open()
         .await
         .unwrap()
         .open_file(file_name)
@@ -360,7 +378,13 @@ async fn fork() {
         .open_root()
         .await
         .unwrap()
-        .open_directory("dir")
+        .read()
+        .await
+        .lookup("dir")
+        .unwrap()
+        .directory()
+        .unwrap()
+        .open()
         .await
         .unwrap();
 
@@ -375,7 +399,13 @@ async fn fork() {
         .open_root()
         .await
         .unwrap()
-        .open_directory("dir")
+        .read()
+        .await
+        .lookup("dir")
+        .unwrap()
+        .directory()
+        .unwrap()
+        .open()
         .await
         .unwrap();
 
@@ -386,7 +416,13 @@ async fn fork() {
         .open_root()
         .await
         .unwrap()
-        .open_directory("dir")
+        .read()
+        .await
+        .lookup("dir")
+        .unwrap()
+        .directory()
+        .unwrap()
+        .open()
         .await
         .unwrap();
 
@@ -424,7 +460,16 @@ async fn fork_over_tombstone() {
 
     // Open it by branch 0 and fork it.
     let root1_on_0 = branches[1].open_root().await.unwrap();
-    let dir1 = root1_on_0.open_directory("dir").await.unwrap();
+    let dir1 = root1_on_0
+        .read()
+        .await
+        .lookup("dir")
+        .unwrap()
+        .directory()
+        .unwrap()
+        .open()
+        .await
+        .unwrap();
 
     dir1.fork(&branches[0]).await.unwrap();
 

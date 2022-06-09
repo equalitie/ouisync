@@ -245,11 +245,6 @@ impl Directory {
         open.await
     }
 
-    // TODO: remove this in favor of `read().await.lookup(name).open()...`
-    pub async fn open_directory(&self, name: &str) -> Result<Directory> {
-        self.read().await.lookup(name)?.directory()?.open().await
-    }
-
     #[async_recursion]
     pub async fn debug_print(&self, print: DebugPrinter) {
         let inner = self.inner.read().await;

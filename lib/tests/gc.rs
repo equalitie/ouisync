@@ -97,7 +97,7 @@ async fn local_truncate_local_file() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn local_truncate_remote_file() {
-    env_logger::init();
+    // env_logger::init();
 
     let mut rng = StdRng::seed_from_u64(0);
 
