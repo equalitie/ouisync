@@ -237,14 +237,6 @@ impl Directory {
         }
     }
 
-    // TODO: remove this in favor of `read().await.lookup(name).open()...`
-    pub async fn open_file(&self, name: &str) -> Result<File> {
-        // IMPORTANT: make sure the parent directory is unlocked before `await`-ing the `open`
-        // future, to avoid deadlocks.
-        let open = self.read().await.lookup(name)?.file()?.open();
-        open.await
-    }
-
     #[async_recursion]
     pub async fn debug_print(&self, print: DebugPrinter) {
         let inner = self.inner.read().await;

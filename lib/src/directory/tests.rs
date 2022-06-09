@@ -221,7 +221,13 @@ async fn move_file_within_branch() {
         .open()
         .await
         .unwrap()
-        .open_file(file_name)
+        .read()
+        .await
+        .lookup(file_name)
+        .unwrap()
+        .file()
+        .unwrap()
+        .open()
         .await
         .unwrap();
 
@@ -253,7 +259,16 @@ async fn move_file_within_branch() {
         .await
         .unwrap();
 
-    let mut file = root_dir.open_file(file_name).await.unwrap();
+    let mut file = root_dir
+        .read()
+        .await
+        .lookup(file_name)
+        .unwrap()
+        .file()
+        .unwrap()
+        .open()
+        .await
+        .unwrap();
 
     assert_eq!(&content[..], &file.read_to_end().await.unwrap()[..]);
 }
@@ -323,7 +338,13 @@ async fn move_non_empty_directory() {
         .open()
         .await
         .unwrap()
-        .open_file(file_name)
+        .read()
+        .await
+        .lookup(file_name)
+        .unwrap()
+        .file()
+        .unwrap()
+        .open()
         .await
         .unwrap();
 
