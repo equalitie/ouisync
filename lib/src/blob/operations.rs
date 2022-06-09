@@ -379,6 +379,10 @@ pub(super) async fn load_block(
     // expressions" (https://www.sqlite.org/lang_with.html)). If we decide to use transactions, we
     // need to be extra careful to not cause deadlock due the order tables are locked when shared
     // cache is enabled. The recursive query seems like the safer option.
+    //
+    // NOTE: the above comment was written when we were still using multiple db connections. Now
+    // with just one connection this function has exclusive access to the db and so the described
+    // situation is impossible. Leaving it here in case we ever go back to multiple connections.
 
     let id = branch.get(conn, &locator.encode(read_key)).await?;
     let mut content = Buffer::new();

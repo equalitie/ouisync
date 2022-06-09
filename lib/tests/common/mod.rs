@@ -45,7 +45,7 @@ pub(crate) async fn create_repo_with_secrets(
         rng.gen(),
         MasterSecret::generate(rng),
         secrets,
-        false,
+        true,
     )
     .await
     .unwrap()
@@ -60,8 +60,8 @@ pub(crate) async fn create_linked_repos(rng: &mut StdRng) -> (Repository, Reposi
 
 pub(crate) fn test_network_options() -> NetworkOptions {
     NetworkOptions {
-        bind_v4: Ipv4Addr::LOCALHOST.into(),
-        bind_v6: Ipv6Addr::LOCALHOST.into(),
+        bind_v4: Ipv4Addr::LOCALHOST,
+        bind_v6: Ipv6Addr::LOCALHOST,
         disable_local_discovery: true,
         disable_upnp: true,
         disable_dht: true,

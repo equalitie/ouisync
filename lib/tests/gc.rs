@@ -44,11 +44,12 @@ async fn local_delete_remote_file() {
         .unwrap();
 
     repo_l.remove_entry("test.dat").await.unwrap();
-    repo_l.collect_garbage().await.unwrap();
+    repo_l.force_merge().await.unwrap();
+    repo_l.force_garbage_collection().await.unwrap();
 
-    //  1 for the local root to track the tombstone
-    // +1 for the remote root (still there because merger is currently disabled)
-    assert_eq!(repo_l.count_blocks().await.unwrap(), 2);
+    // Both the file and the remote root are deleted, only the local root remains to track the
+    // tombstone.
+    assert_eq!(repo_l.count_blocks().await.unwrap(), 1);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -119,12 +120,12 @@ async fn local_truncate_remote_file() {
     file.truncate(0).await.unwrap();
     file.flush().await.unwrap();
 
-    repo_l.collect_garbage().await.unwrap();
+    repo_l.force_merge().await.unwrap();
+    repo_l.force_garbage_collection().await.unwrap();
 
     //   1 block for the file (the original 2 blocks were removed)
     // + 1 block for the local root (created when the file was forked)
-    // + 1 blocks for the remote root (still there because merger is currently disabled)
-    assert_eq!(repo_l.count_blocks().await.unwrap(), 3);
+    assert_eq!(repo_l.count_blocks().await.unwrap(), 2);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -181,7 +182,7 @@ async fn concurrent_delete_update() {
 
     // Local delete
     repo_l.remove_entry("test.dat").await.unwrap();
-    repo_l.collect_garbage().await.unwrap();
+    repo_l.force_garbage_collection().await.unwrap();
 
     // Sanity check
     assert_eq!(repo_l.count_blocks().await.unwrap(), 1);
@@ -205,7 +206,16 @@ async fn concurrent_delete_update() {
 async fn expect_block_count(repo: &Repository, expected_count: usize) {
     common::eventually(repo, || async {
         let actual_count = repo.count_blocks().await.unwrap();
-        actual_count == expected_count
+        if actual_count == expected_count {
+            true
+        } else {
+            log::debug!(
+                "block count - actual: {}, expected: {}",
+                actual_count,
+                expected_count
+            );
+            false
+        }
     })
     .await
 }

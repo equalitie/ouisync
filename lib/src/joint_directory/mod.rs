@@ -5,7 +5,7 @@ pub(crate) mod versioned;
 use crate::{
     branch::Branch,
     crypto::sign::PublicKey,
-    directory::{self, Directory, DirectoryRef, EntryRef, EntryType, FileRef, OverwriteStrategy},
+    directory::{self, Directory, DirectoryRef, EntryRef, EntryType, FileRef},
     error::{Error, Result},
     file::File,
     iterator::{Accumulate, SortedUnion},
@@ -123,12 +123,8 @@ impl JointDirectory {
             })
             .collect();
 
-        let mut local_writer = local.write().await;
-
         for (name, branch_id, vv) in entries {
-            local_writer
-                .remove_entry(&name, &branch_id, vv, OverwriteStrategy::Remove)
-                .await?;
+            local.remove_entry(&name, &branch_id, vv).await?;
         }
 
         Ok(())
@@ -163,7 +159,7 @@ impl JointDirectory {
         let local_version = fork(&mut self.versions, local_branch).await?;
 
         let new_version_vector = self.merge_version_vectors().await?;
-        let old_version_vector = local_version.read().await.version_vector().await?;
+        let old_version_vector = local_version.version_vector().await?;
 
         if old_version_vector >= new_version_vector {
             // Local version already up to date, nothing to do.
@@ -200,7 +196,7 @@ impl JointDirectory {
             dir.merge().await?;
         }
 
-        local_version.write().await.bump(new_version_vector).await?;
+        local_version.bump(new_version_vector).await?;
 
         Ok(local_version)
     }
@@ -210,7 +206,7 @@ impl JointDirectory {
         let mut outcome = VersionVector::new();
 
         for version in self.versions.values() {
-            outcome.merge(&version.read().await.version_vector().await?);
+            outcome.merge(&version.version_vector().await?);
         }
 
         Ok(outcome)

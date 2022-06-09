@@ -47,7 +47,7 @@ async fn main() -> Result<()> {
             device_id,
             secret,
             AccessSecrets::random_write(),
-            options.enable_merger,
+            !options.disable_merger,
         )
         .await?;
 
@@ -137,7 +137,7 @@ async fn main() -> Result<()> {
                 &options.repository_store(name)?,
                 device_id,
                 options.secret_for_repo(name).ok(),
-                options.enable_merger,
+                !options.disable_merger,
             )
             .await?
         };

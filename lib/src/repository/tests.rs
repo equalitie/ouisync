@@ -1,5 +1,5 @@
 use super::*;
-use crate::{blob, block::BLOCK_SIZE, db};
+use crate::{blob, block::BLOCK_SIZE, db, scoped_task};
 use assert_matches::assert_matches;
 use rand::Rng;
 use std::io::SeekFrom;
@@ -96,30 +96,22 @@ async fn merge() {
     let local_branch = repo.local_branch().await.unwrap();
     let local_root = local_branch.open_or_create_root().await.unwrap();
 
-    let mut rx = repo.subscribe();
+    repo.force_merge().await.unwrap();
 
-    loop {
-        // Note: `EntryNotFound` can happen in two cases: either the entry hasn't been inserted
-        // into the directory or the file blob han't been created yet. Both cases are expected and
-        // harmless in this case.
-        match local_root.read().await.lookup("test.txt") {
-            Ok(entry) => {
-                match entry.file().unwrap().open().await {
-                    Ok(mut file) => {
-                        let content = file.read_to_end().await.unwrap();
-                        assert_eq!(content, b"hello");
-                        break;
-                    }
-                    Err(Error::EntryNotFound) => (),
-                    Err(error) => panic!("unexpected error: {:?}", error),
-                };
-            }
-            Err(Error::EntryNotFound) => (),
-            Err(error) => panic!("unexpected error: {:?}", error),
-        }
-
-        rx.recv().await.unwrap();
-    }
+    let content = local_root
+        .read()
+        .await
+        .lookup("test.txt")
+        .unwrap()
+        .file()
+        .unwrap()
+        .open()
+        .await
+        .unwrap()
+        .read_to_end()
+        .await
+        .unwrap();
+    assert_eq!(content, b"hello");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -669,7 +661,7 @@ async fn attempt_to_modify_remote_file() {
     // fail because they expect it to have read-only mode. To prevent this we manually trigger
     // the garbage collector and wait for it to finish, to make sure the root dir is dropped and
     // removed from the cache. Then `open_file` reopens the root dir correctly in read-only mode.
-    repo.collect_garbage().await.unwrap();
+    repo.force_garbage_collection().await.unwrap();
 
     let mut file = repo.open_file("test.txt").await.unwrap();
     assert_matches!(file.truncate(0).await, Err(Error::PermissionDenied));
@@ -890,7 +882,7 @@ async fn file_conflict_modify_local() {
     assert_eq!(remote_file.version_vector().await, vv![remote_id => 2]);
     drop(remote_file);
 
-    repo.collect_garbage().await.unwrap();
+    repo.force_garbage_collection().await.unwrap();
 
     // Modify the local version.
     let mut local_file = repo.open_file_version("test.txt", &local_id).await.unwrap();

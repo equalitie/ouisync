@@ -1,146 +1,157 @@
 use super::Shared;
 use crate::{
     branch::Branch,
-    crypto::sign::PublicKey,
     error::{Error, Result},
     joint_directory::JointDirectory,
-    scoped_task::{self, ScopedJoinHandle},
 };
-use futures_util::{stream::FuturesUnordered, StreamExt};
 use log::Level;
-use std::{collections::HashMap, iter, sync::Arc};
-use tokio::select;
+use std::sync::Arc;
+use tokio::{
+    select,
+    sync::{mpsc, oneshot},
+};
 
-// The merge algorithm.
+/// Utility that merges remote branches into the local one.
 pub(super) struct Merger {
     shared: Arc<Shared>,
     local_branch: Branch,
-    tasks: FuturesUnordered<ScopedJoinHandle<PublicKey>>,
-    states: HashMap<PublicKey, MergeState>,
+    command_rx: mpsc::Receiver<Command>,
 }
 
 impl Merger {
-    pub fn new(shared: Arc<Shared>, local_branch: Branch) -> Self {
-        Self {
-            shared,
-            local_branch,
-            tasks: FuturesUnordered::new(),
-            states: HashMap::new(),
-        }
+    pub fn new(shared: Arc<Shared>, local_branch: Branch) -> (Self, MergerHandle) {
+        let (command_tx, command_rx) = mpsc::channel(1);
+
+        (
+            Self {
+                shared,
+                local_branch,
+                command_rx,
+            },
+            MergerHandle { command_tx },
+        )
     }
 
     pub async fn run(mut self) {
-        let mut rx = self.shared.store.index.subscribe();
+        // TODO: consider throttling / debouncing this stream
+        let mut notify_rx = self.shared.store.index.subscribe();
+        let mut wait = false;
 
         loop {
+            // Wait for notification or command.
+            if wait {
+                select! {
+                    event = notify_rx.recv() => {
+                        if event.is_err() {
+                            break;
+                        }
+                    }
+                    command = self.command_rx.recv() => {
+                        if let Some(command) = command {
+                            self.handle_command(command).await;
+                            continue;
+                        } else {
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Run the merge process but interrupt and restart it when we receive notification or
+            // command.
             select! {
-                branch_id = rx.recv() => {
-                    if let Ok(branch_id) = branch_id {
-                        self.handle_branch_changed(branch_id).await
+                event = notify_rx.recv() => {
+                    if event.is_ok() {
+                        wait = false;
+                        continue;
                     } else {
                         break;
                     }
                 }
-                branch_id = self.tasks.next(), if !self.tasks.is_empty() => {
-                    if let Some(Ok(branch_id)) = branch_id {
-                        self.handle_task_finished(branch_id).await
+                command = self.command_rx.recv() => {
+                    if let Some(command) = command {
+                        self.handle_command(command).await
+                    } else {
+                        break;
                     }
                 }
+                _ = process_and_log(&self.shared, &self.local_branch) => (),
+            }
+
+            wait = true;
+        }
+
+        log::trace!("Merger terminated");
+    }
+
+    async fn handle_command(&self, command: Command) {
+        match command {
+            Command::Merge(result_tx) => {
+                let result = process(&self.shared, &self.local_branch).await;
+                result_tx.send(result).unwrap_or(());
             }
         }
     }
-
-    async fn handle_branch_changed(&mut self, branch_id: PublicKey) {
-        if branch_id == *self.local_branch.id() {
-            // local branch change - ignore.
-            return;
-        }
-
-        if let Some(state) = self.states.get_mut(&branch_id) {
-            // Merge of this branch is already ongoing - schedule to run it again after it's
-            // finished.
-            *state = MergeState::Pending;
-            return;
-        }
-
-        self.spawn_task(branch_id).await
-    }
-
-    async fn handle_task_finished(&mut self, branch_id: PublicKey) {
-        if let Some(MergeState::Pending) = self.states.remove(&branch_id) {
-            self.spawn_task(branch_id).await
-        }
-    }
-
-    async fn spawn_task(&mut self, remote_id: PublicKey) {
-        let local = self.local_branch.clone();
-
-        let remote = if let Ok(remote) = self.shared.branch(&remote_id).await {
-            remote
-        } else {
-            // branch removed in the meantime - ignore.
-            return;
-        };
-
-        let local_vv = local.version_vector().await.unwrap_or_default();
-        let remote_vv = remote.version_vector().await.unwrap_or_default();
-
-        if local_vv > remote_vv {
-            log::debug!(
-                "merge with branch {:?} suppressed - local branch already up to date",
-                remote_id
-            );
-            return;
-        }
-
-        let handle = scoped_task::spawn(async move {
-            log::debug!("merge with branch {:?} started", remote_id);
-
-            match merge_branches(local, remote).await {
-                Ok(()) => {
-                    log::info!("merge with branch {:?} complete", remote_id)
-                }
-                Err(error) => {
-                    // `EntryNotFound` most likely means the remote snapshot is not fully
-                    // downloaded yet and `BlockNotFound` means that a block is not downloaded yet.
-                    // Both error are harmless because the merge will be attempted again on the
-                    // next change notification. We reduce the log severity for them to avoid log
-                    // spam.
-                    let level = if matches!(error, Error::EntryNotFound | Error::BlockNotFound(_)) {
-                        Level::Trace
-                    } else {
-                        Level::Error
-                    };
-
-                    log::log!(
-                        level,
-                        "merge with branch {:?} failed: {:?}",
-                        remote_id,
-                        error
-                    )
-                }
-            }
-
-            remote_id
-        });
-
-        self.tasks.push(handle);
-        self.states.insert(remote_id, MergeState::Ongoing);
-    }
 }
 
-enum MergeState {
-    // A merge is ongoing
-    Ongoing,
-    // A merge is ongoing and another one was already scheduled
-    Pending,
-}
+async fn process(shared: &Shared, local_branch: &Branch) -> Result<()> {
+    let branches = shared.branches().await?;
+    let mut roots = Vec::with_capacity(branches.len());
 
-async fn merge_branches(local: Branch, remote: Branch) -> Result<()> {
-    let remote_root = remote.open_root().await?;
-    JointDirectory::new(Some(local.clone()), iter::once(remote_root))
+    for branch in branches {
+        match branch.open_root().await {
+            Ok(dir) => roots.push(dir),
+            Err(Error::EntryNotFound | Error::BlockNotFound(_)) => continue,
+            Err(error) => return Err(error),
+        }
+    }
+
+    JointDirectory::new(Some(local_branch.clone()), roots)
         .merge()
         .await?;
-
     Ok(())
+}
+
+async fn process_and_log(shared: &Shared, local_branch: &Branch) {
+    log::trace!("merge started");
+
+    match process(shared, local_branch).await {
+        Ok(()) => log::trace!("merge completed"),
+        Err(error) => {
+            // `BlockNotFound` means that a block is not downloaded yet. This error
+            // is harmless because the merge will be attempted again on the next
+            // change notification. We reduce the log severity for them to avoid
+            // log spam.
+            let level = if let Error::BlockNotFound(_) = error {
+                Level::Trace
+            } else {
+                Level::Error
+            };
+
+            log::log!(level, "merge failed: {:?}", error)
+        }
+    }
+}
+
+pub(super) struct MergerHandle {
+    command_tx: mpsc::Sender<Command>,
+}
+
+impl MergerHandle {
+    pub async fn merge(&self) -> Result<()> {
+        let (result_tx, result_rx) = oneshot::channel();
+
+        self.command_tx
+            .send(Command::Merge(result_tx))
+            .await
+            .unwrap_or(());
+
+        // When this returns error it means the task has been terminated which can only happen when
+        // the repository itself was dropped. We treat it as if the merge completed successfully.
+        result_rx.await.unwrap_or(Ok(()))
+    }
+}
+
+enum Command {
+    Merge(oneshot::Sender<Result<()>>),
 }
