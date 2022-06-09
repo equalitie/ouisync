@@ -22,8 +22,9 @@ pub const ACCESS_MODE_BLIND: u8 = 0;
 pub const ACCESS_MODE_READ: u8 = 1;
 pub const ACCESS_MODE_WRITE: u8 = 2;
 
-// Merger is currently experimental.
-const ENABLE_MERGER: bool = false;
+// TODO: merger is still unstable and this flag allows us to quickly disable it for purposes of
+// testing and debugging. Once the kinks are ironed out, consider removing it.
+const ENABLE_MERGER: bool = true;
 
 pub struct RepositoryHolder {
     repository: Repository,
