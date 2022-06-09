@@ -18,6 +18,7 @@ mod socket;
 #[cfg(test)]
 mod tests;
 mod upnp;
+mod raw;
 
 pub use self::options::NetworkOptions;
 use self::{
@@ -453,7 +454,7 @@ impl Inner {
             {
                 self.spawn(
                     self.clone()
-                        .handle_new_connection(socket, PeerSource::Listener, permit),
+                        .handle_new_connection(raw::Stream::Tcp(socket), PeerSource::Listener, permit),
                 )
             }
         }
@@ -526,7 +527,7 @@ impl Inner {
             }
         };
 
-        self.handle_new_connection(socket, PeerSource::LocalDiscovery, permit)
+        self.handle_new_connection(raw::Stream::Tcp(socket), PeerSource::LocalDiscovery, permit)
             .await;
     }
 
@@ -555,7 +556,7 @@ impl Inner {
         }
     }
 
-    async fn connect_with_retries(&self, addr: SocketAddr) -> Option<TcpStream> {
+    async fn connect_with_retries(&self, addr: SocketAddr) -> Option<raw::Stream> {
         let mut backoff = ExponentialBackoffBuilder::new()
             .with_initial_interval(Duration::from_millis(200))
             .with_max_interval(Duration::from_secs(10))
@@ -565,7 +566,7 @@ impl Inner {
         loop {
             match TcpStream::connect(addr).await {
                 Ok(socket) => {
-                    return Some(socket);
+                    return Some(raw::Stream::Tcp(socket));
                 }
                 Err(_) => {
                     match backoff.next_backoff() {
@@ -596,7 +597,7 @@ impl Inner {
 
     async fn handle_new_connection(
         self: Arc<Self>,
-        mut stream: TcpStream,
+        mut stream: raw::Stream,
         peer_source: PeerSource,
         permit: ConnectionPermit,
     ) {
@@ -687,7 +688,7 @@ impl Inner {
 
 // Exchange runtime ids with the peer. Returns their runtime id.
 async fn perform_handshake(
-    stream: &mut TcpStream,
+    stream: &mut raw::Stream,
     this_version: Version,
     this_runtime_id: RuntimeId,
 ) -> Result<RuntimeId, HandshakeError> {
