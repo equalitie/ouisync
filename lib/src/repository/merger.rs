@@ -57,8 +57,6 @@ impl Merger {
                 }
             }
 
-            log::trace!("merge started");
-
             // Run the merge process but interrupt and restart it when we receive notification or
             // command.
             select! {
@@ -77,24 +75,7 @@ impl Merger {
                         break;
                     }
                 }
-                result = process(&self.shared, &self.local_branch) => {
-                    match result {
-                        Ok(()) => log::trace!("merge completed"),
-                        Err(error) => {
-                            // `BlockNotFound` means that a block is not downloaded yet. This error
-                            // is harmless because the merge will be attempted again on the next
-                            // change notification. We reduce the log severity for them to avoid
-                            // log spam.
-                            let level = if let Error::BlockNotFound(_) = error {
-                                Level::Trace
-                            } else {
-                                Level::Error
-                            };
-
-                            log::log!(level, "merge failed: {:?}", error)
-                        }
-                    }
-                }
+                _ = process_and_log(&self.shared, &self.local_branch) => (),
             }
 
             wait = true;
@@ -129,6 +110,27 @@ async fn process(shared: &Shared, local_branch: &Branch) -> Result<()> {
         .merge()
         .await?;
     Ok(())
+}
+
+async fn process_and_log(shared: &Shared, local_branch: &Branch) {
+    log::trace!("merge started");
+
+    match process(shared, local_branch).await {
+        Ok(()) => log::trace!("merge completed"),
+        Err(error) => {
+            // `BlockNotFound` means that a block is not downloaded yet. This error
+            // is harmless because the merge will be attempted again on the next
+            // change notification. We reduce the log severity for them to avoid
+            // log spam.
+            let level = if let Error::BlockNotFound(_) = error {
+                Level::Trace
+            } else {
+                Level::Error
+            };
+
+            log::log!(level, "merge failed: {:?}", error)
+        }
+    }
 }
 
 pub(super) struct MergerHandle {

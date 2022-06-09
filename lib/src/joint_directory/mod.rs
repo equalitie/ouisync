@@ -159,7 +159,7 @@ impl JointDirectory {
         let local_version = fork(&mut self.versions, local_branch).await?;
 
         let new_version_vector = self.merge_version_vectors().await?;
-        let old_version_vector = local_version.read().await.version_vector().await?;
+        let old_version_vector = local_version.version_vector().await?;
 
         if old_version_vector >= new_version_vector {
             // Local version already up to date, nothing to do.
@@ -206,7 +206,7 @@ impl JointDirectory {
         let mut outcome = VersionVector::new();
 
         for version in self.versions.values() {
-            outcome.merge(&version.read().await.version_vector().await?);
+            outcome.merge(&version.version_vector().await?);
         }
 
         Ok(outcome)

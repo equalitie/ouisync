@@ -314,9 +314,20 @@ impl Directory {
         &self.branch_id
     }
 
-    #[cfg(test)]
     pub(crate) async fn version_vector(&self) -> Result<VersionVector> {
-        self.read().await.version_vector().await
+        let reader = self.read().await;
+
+        if let Some(vv) = reader.version_vector().await {
+            return Ok(vv);
+        }
+
+        let branch = reader.inner.branch().clone();
+
+        // Make sure we don't hold the directory lock while retrieving the root version vector
+        // (which involves db access), to avoid deadlocks.
+        drop(reader);
+
+        branch.version_vector().await
     }
 }
 
@@ -361,12 +372,16 @@ impl Reader<'_> {
         self.inner.blob.branch()
     }
 
-    /// Version vector of this directory.
-    pub async fn version_vector(&self) -> Result<VersionVector> {
+    /// Version vector of this directory or `None` if this is the root. To return version vector of
+    /// any directory, use the more convenient and higher-level `Directory::version_vector`. The
+    /// reason it works like this is that because retrieving the root version vector requires
+    /// database access, we can enforce the order in which the directory lock and the database
+    /// connection are acquired to avoid deadlocks.
+    pub async fn version_vector(&self) -> Option<VersionVector> {
         if let Some(parent) = &self.inner.parent {
-            Ok(parent.entry_version_vector().await)
+            Some(parent.entry_version_vector().await)
         } else {
-            self.inner.blob.branch().version_vector().await
+            None
         }
     }
 

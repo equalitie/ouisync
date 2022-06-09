@@ -97,8 +97,6 @@ async fn local_truncate_local_file() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn local_truncate_remote_file() {
-    // env_logger::init();
-
     let mut rng = StdRng::seed_from_u64(0);
 
     let (network_l, network_r) = common::create_connected_peers().await;
@@ -116,12 +114,10 @@ async fn local_truncate_remote_file() {
         .unwrap();
 
     let mut file = repo_l.open_file("test.dat").await.unwrap();
-    // FIXME: deadlock here...
     file.fork(&repo_l.get_or_create_local_branch().await.unwrap())
         .await
         .unwrap();
     file.truncate(0).await.unwrap();
-    // FIXME: ...and sometimes also here
     file.flush().await.unwrap();
 
     repo_l.force_merge().await.unwrap();
@@ -210,7 +206,16 @@ async fn concurrent_delete_update() {
 async fn expect_block_count(repo: &Repository, expected_count: usize) {
     common::eventually(repo, || async {
         let actual_count = repo.count_blocks().await.unwrap();
-        actual_count == expected_count
+        if actual_count == expected_count {
+            true
+        } else {
+            log::debug!(
+                "block count - actual: {}, expected: {}",
+                actual_count,
+                expected_count
+            );
+            false
+        }
     })
     .await
 }

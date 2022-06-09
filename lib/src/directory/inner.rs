@@ -200,7 +200,7 @@ impl Inner {
         self.blob.db_pool()
     }
 
-    fn branch(&self) -> &Branch {
+    pub fn branch(&self) -> &Branch {
         self.blob.branch()
     }
 }
