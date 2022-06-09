@@ -71,6 +71,12 @@ impl Directory {
         }
     }
 
+    /// Lock this directory for writing.
+    async fn write(&self) -> Writer<'_> {
+        let inner = self.inner.write().await;
+        Writer { outer: self, inner }
+    }
+
     /// Creates a new file inside this directory.
     pub async fn create_file(&self, name: String) -> Result<File> {
         self.write().await.create_file(name).await
@@ -194,6 +200,14 @@ impl Directory {
         }
     }
 
+    /// Updates the version vector of this directory by merging it with `vv`.
+    pub(crate) async fn bump(&self, vv: VersionVector) -> Result<()> {
+        let mut writer = self.write().await;
+        let mut conn = writer.inner.db_pool().acquire().await?;
+        let tx = conn.begin().await?;
+        writer.inner.commit(tx, vv).await
+    }
+
     pub async fn parent(&self) -> Option<Directory> {
         let read = self.read().await;
 
@@ -234,12 +248,6 @@ impl Directory {
     // TODO: remove this in favor of `read().await.lookup(name).open()...`
     pub async fn open_directory(&self, name: &str) -> Result<Directory> {
         self.read().await.lookup(name)?.directory()?.open().await
-    }
-
-    // Lock this directory for writing.
-    pub(crate) async fn write(&self) -> Writer<'_> {
-        let inner = self.inner.write().await;
-        Writer { outer: self, inner }
     }
 
     #[async_recursion]
@@ -335,14 +343,61 @@ impl PartialEq for Directory {
 
 impl Eq for Directory {}
 
+/// View of a `Directory` for performing read-only queries.
+pub struct Reader<'a> {
+    outer: &'a Directory,
+    inner: RwLockReadGuard<'a, Inner>,
+}
+
+impl Reader<'_> {
+    /// Returns iterator over the entries of this directory.
+    pub fn entries(&self) -> impl Iterator<Item = EntryRef> + DoubleEndedIterator + Clone {
+        self.inner
+            .entries()
+            .iter()
+            .map(move |(name, data)| EntryRef::new(self.outer, &*self.inner, name, data))
+    }
+
+    /// Lookup an entry of this directory by name.
+    pub fn lookup(&self, name: &'_ str) -> Result<EntryRef> {
+        lookup(self.outer, &*self.inner, name)
+    }
+
+    /// Length of this directory in bytes. Does not include the content, only the size of directory
+    /// itself.
+    pub async fn len(&self) -> u64 {
+        self.inner.blob.len().await
+    }
+
+    /// Branch of this directory
+    pub fn branch(&self) -> &Branch {
+        self.inner.blob.branch()
+    }
+
+    /// Version vector of this directory.
+    pub async fn version_vector(&self) -> Result<VersionVector> {
+        if let Some(parent) = &self.inner.parent {
+            Ok(parent.entry_version_vector().await)
+        } else {
+            self.inner.blob.branch().version_vector().await
+        }
+    }
+
+    /// Locator of this directory
+    #[cfg(test)]
+    pub(crate) fn locator(&self) -> &Locator {
+        self.inner.blob.locator()
+    }
+}
+
 /// View of a `Directory` for performing read and write queries.
-pub(crate) struct Writer<'a> {
+struct Writer<'a> {
     outer: &'a Directory,
     inner: RwLockWriteGuard<'a, Inner>,
 }
 
 impl Writer<'_> {
-    pub async fn create_file(&mut self, name: String) -> Result<File> {
+    async fn create_file(&mut self, name: String) -> Result<File> {
         let blob_id = rand::random();
         let shared = Shared::uninit();
         let data = EntryData::file(
@@ -371,7 +426,7 @@ impl Writer<'_> {
         Ok(file)
     }
 
-    pub async fn create_directory(&mut self, name: String) -> Result<Directory> {
+    async fn create_directory(&mut self, name: String) -> Result<Directory> {
         let blob_id = rand::random();
         let data = EntryData::directory(blob_id, VersionVector::first(*self.branch().id()));
         let parent = ParentContext::new(self.outer.clone(), name.clone());
@@ -394,7 +449,7 @@ impl Writer<'_> {
         Ok(dir)
     }
 
-    pub async fn remove_entry(
+    async fn remove_entry(
         &mut self,
         name: &str,
         branch_id: &PublicKey,
@@ -445,18 +500,11 @@ impl Writer<'_> {
             .await
     }
 
-    /// Updates the version vector of this directory by merging it with `vv`.
-    pub async fn bump(&mut self, vv: VersionVector) -> Result<()> {
-        let mut conn = self.inner.db_pool().acquire().await?;
-        let tx = conn.begin().await?;
-        self.inner.commit(tx, vv).await
-    }
-
-    pub fn lookup(&self, name: &'_ str) -> Result<EntryRef> {
+    fn lookup(&self, name: &'_ str) -> Result<EntryRef> {
         lookup(self.outer, &*self.inner, name)
     }
 
-    pub fn branch(&self) -> &Branch {
+    fn branch(&self) -> &Branch {
         self.inner.blob.branch()
     }
 
@@ -474,53 +522,6 @@ impl Writer<'_> {
         self.inner.insert(name, entry, overwrite)?;
         self.inner.save(&mut tx).await?;
         self.inner.commit(tx, VersionVector::new()).await
-    }
-}
-
-/// View of a `Directory` for performing read-only queries.
-pub struct Reader<'a> {
-    outer: &'a Directory,
-    inner: RwLockReadGuard<'a, Inner>,
-}
-
-impl Reader<'_> {
-    /// Returns iterator over the entries of this directory.
-    pub fn entries(&self) -> impl Iterator<Item = EntryRef> + DoubleEndedIterator + Clone {
-        self.inner
-            .entries()
-            .iter()
-            .map(move |(name, data)| EntryRef::new(self.outer, &*self.inner, name, data))
-    }
-
-    /// Lookup an entry of this directory by name.
-    pub fn lookup(&self, name: &'_ str) -> Result<EntryRef> {
-        lookup(self.outer, &*self.inner, name)
-    }
-
-    /// Length of this directory in bytes. Does not include the content, only the size of directory
-    /// itself.
-    pub async fn len(&self) -> u64 {
-        self.inner.blob.len().await
-    }
-
-    /// Branch of this directory
-    pub fn branch(&self) -> &Branch {
-        self.inner.blob.branch()
-    }
-
-    /// Version vector of this directory.
-    pub async fn version_vector(&self) -> Result<VersionVector> {
-        if let Some(parent) = &self.inner.parent {
-            Ok(parent.entry_version_vector().await)
-        } else {
-            self.inner.blob.branch().version_vector().await
-        }
-    }
-
-    /// Locator of this directory
-    #[cfg(test)]
-    pub(crate) fn locator(&self) -> &Locator {
-        self.inner.blob.locator()
     }
 }
 

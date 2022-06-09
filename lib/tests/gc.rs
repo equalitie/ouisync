@@ -97,6 +97,8 @@ async fn local_truncate_local_file() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn local_truncate_remote_file() {
+    env_logger::init();
+
     let mut rng = StdRng::seed_from_u64(0);
 
     let (network_l, network_r) = common::create_connected_peers().await;
@@ -114,18 +116,20 @@ async fn local_truncate_remote_file() {
         .unwrap();
 
     let mut file = repo_l.open_file("test.dat").await.unwrap();
+    // FIXME: deadlock here...
     file.fork(&repo_l.get_or_create_local_branch().await.unwrap())
         .await
         .unwrap();
     file.truncate(0).await.unwrap();
+    // FIXME: ...and sometimes also here
     file.flush().await.unwrap();
 
+    repo_l.force_merge().await.unwrap();
     repo_l.force_garbage_collection().await.unwrap();
 
     //   1 block for the file (the original 2 blocks were removed)
     // + 1 block for the local root (created when the file was forked)
-    // + 1 blocks for the remote root (still there because merger is currently disabled)
-    assert_eq!(repo_l.count_blocks().await.unwrap(), 3);
+    assert_eq!(repo_l.count_blocks().await.unwrap(), 2);
 }
 
 #[tokio::test(flavor = "multi_thread")]

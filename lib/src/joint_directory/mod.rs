@@ -5,7 +5,7 @@ pub(crate) mod versioned;
 use crate::{
     branch::Branch,
     crypto::sign::PublicKey,
-    directory::{self, Directory, DirectoryRef, EntryRef, EntryType, FileRef, OverwriteStrategy},
+    directory::{self, Directory, DirectoryRef, EntryRef, EntryType, FileRef},
     error::{Error, Result},
     file::File,
     iterator::{Accumulate, SortedUnion},
@@ -123,12 +123,8 @@ impl JointDirectory {
             })
             .collect();
 
-        let mut local_writer = local.write().await;
-
         for (name, branch_id, vv) in entries {
-            local_writer
-                .remove_entry(&name, &branch_id, vv, OverwriteStrategy::Remove)
-                .await?;
+            local.remove_entry(&name, &branch_id, vv).await?;
         }
 
         Ok(())
@@ -200,7 +196,7 @@ impl JointDirectory {
             dir.merge().await?;
         }
 
-        local_version.write().await.bump(new_version_vector).await?;
+        local_version.bump(new_version_vector).await?;
 
         Ok(local_version)
     }
