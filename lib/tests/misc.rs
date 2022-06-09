@@ -138,8 +138,6 @@ async fn relay() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn transfer_large_file() {
-    // env_logger::init();
-
     let file_size = 4 * 1024 * 1024;
 
     let mut rng = StdRng::seed_from_u64(0);
@@ -172,13 +170,27 @@ async fn expect_file_content(repo: &Repository, path: &str, expected_content: &[
     common::eventually(repo, || async {
         let mut file = match repo.open_file(path).await {
             Ok(file) => file,
+            // `EntryNotFound` likely means that the parent directory hasn't yet been fully synced
+            // and so the file entry is not in it yet.
+            //
+            // `BlockNotFound` means the first block of the file hasn't been downloaded yet.
             Err(Error::EntryNotFound | Error::BlockNotFound(_)) => return false,
             Err(error) => panic!("unexpected error: {:?}", error),
         };
 
         let actual_content = match read_in_chunks(&mut file, 4096).await {
             Ok(content) => content,
-            Err(Error::BlockNotFound(_)) => return false,
+            // `EntryNotFound` can still happen even here if merge runs in the middle of reading
+            // the file - we opened the file while it was still in the remote branch but then that
+            // branch got merged into the local one and deleted. That means the file no longer
+            // exists in the remote branch and attempt to read from it further results in this
+            // error.
+            // TODO: this is not ideal as the only way to resolve this problem is to reopen the
+            // file (unlike the `BlockNotFound` error where we just need to read it again when the
+            // block gets downloaded). This should probably be considered a bug.
+            //
+            // `BlockNotFound` means just the some block of the file hasn't been downloaded yet.
+            Err(Error::EntryNotFound | Error::BlockNotFound(_)) => return false,
             Err(error) => panic!("unexpected error: {:?}", error),
         };
 
