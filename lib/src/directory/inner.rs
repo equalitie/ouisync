@@ -80,7 +80,7 @@ impl Inner {
         }
 
         // Note: To ensure cancel safety, `pending_entry` is cleared only at the end of `commit`
-        // (after `tx` is commited).
+        // (after `tx` is committed).
 
         Ok(())
     }
@@ -95,8 +95,19 @@ impl Inner {
                     .get(&pending.name)
                     .and_then(|data| data.blob_id())
                 {
-                    Blob::remove_in_transaction(tx, self.branch(), Locator::head(*old_blob_id))
-                        .await?
+                    match Blob::remove_in_transaction(
+                        tx,
+                        self.branch(),
+                        Locator::head(*old_blob_id),
+                    )
+                    .await
+                    {
+                        // If we get `EntryNotFound` or `BlockNotFound` it most likely means the
+                        // blob is already removed which can legitimately happen due to several
+                        // reasons so we don't treat it as an error.
+                        Ok(()) | Err(Error::EntryNotFound | Error::BlockNotFound(_)) => (),
+                        Err(error) => return Err(error),
+                    }
                 }
             }
         }
