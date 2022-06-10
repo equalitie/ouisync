@@ -12,13 +12,13 @@ mod message_dispatcher;
 mod message_io;
 mod options;
 mod protocol;
+mod raw;
 mod request;
 mod server;
 mod socket;
 #[cfg(test)]
 mod tests;
 mod upnp;
-mod raw;
 
 pub use self::options::NetworkOptions;
 use self::{
@@ -452,10 +452,11 @@ impl Inner {
                 .connection_deduplicator
                 .reserve(addr, ConnectionDirection::Incoming)
             {
-                self.spawn(
-                    self.clone()
-                        .handle_new_connection(raw::Stream::Tcp(socket), PeerSource::Listener, permit),
-                )
+                self.spawn(self.clone().handle_new_connection(
+                    raw::Stream::Tcp(socket),
+                    PeerSource::Listener,
+                    permit,
+                ))
             }
         }
     }

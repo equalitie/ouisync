@@ -1,10 +1,11 @@
-use tokio::{
-    net::{tcp, TcpStream},
-    io::{AsyncRead, AsyncWrite, ReadBuf},
-};
 use std::{
-    io, pin::Pin,
+    io,
+    pin::Pin,
     task::{Context, Poll},
+};
+use tokio::{
+    io::{AsyncRead, AsyncWrite, ReadBuf},
+    net::{tcp, TcpStream},
 };
 
 pub enum Stream {
@@ -29,7 +30,7 @@ impl AsyncRead for Stream {
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
         match self.get_mut() {
-            Stream::Tcp(s) => Pin::new(s).poll_read(cx, buf)
+            Stream::Tcp(s) => Pin::new(s).poll_read(cx, buf),
         }
     }
 }
@@ -41,7 +42,7 @@ impl AsyncWrite for Stream {
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
         match self.get_mut() {
-            Stream::Tcp(s) => Pin::new(s).poll_write(cx, buf)
+            Stream::Tcp(s) => Pin::new(s).poll_write(cx, buf),
         }
     }
 
@@ -51,25 +52,25 @@ impl AsyncWrite for Stream {
         bufs: &[io::IoSlice<'_>],
     ) -> Poll<io::Result<usize>> {
         match self.get_mut() {
-            Stream::Tcp(s) => Pin::new(s).poll_write_vectored(cx, bufs)
+            Stream::Tcp(s) => Pin::new(s).poll_write_vectored(cx, bufs),
         }
     }
 
     fn is_write_vectored(&self) -> bool {
         match self {
-            Stream::Tcp(s) => s.is_write_vectored()
+            Stream::Tcp(s) => s.is_write_vectored(),
         }
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         match self.get_mut() {
-            Stream::Tcp(s) => Pin::new(s).poll_flush(cx)
+            Stream::Tcp(s) => Pin::new(s).poll_flush(cx),
         }
     }
 
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         match self.get_mut() {
-            Stream::Tcp(s) => Pin::new(s).poll_shutdown(cx)
+            Stream::Tcp(s) => Pin::new(s).poll_shutdown(cx),
         }
     }
 }
@@ -85,7 +86,7 @@ impl AsyncRead for OwnedReadHalf {
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
         match self.get_mut() {
-            OwnedReadHalf::Tcp(rx) => Pin::new(rx).poll_read(cx, buf)
+            OwnedReadHalf::Tcp(rx) => Pin::new(rx).poll_read(cx, buf),
         }
     }
 }
@@ -101,7 +102,7 @@ impl AsyncWrite for OwnedWriteHalf {
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
         match self.get_mut() {
-            Self::Tcp(s) => Pin::new(s).poll_write(cx, buf)
+            Self::Tcp(s) => Pin::new(s).poll_write(cx, buf),
         }
     }
 
@@ -111,25 +112,25 @@ impl AsyncWrite for OwnedWriteHalf {
         bufs: &[io::IoSlice<'_>],
     ) -> Poll<io::Result<usize>> {
         match self.get_mut() {
-            Self::Tcp(s) => Pin::new(s).poll_write_vectored(cx, bufs)
+            Self::Tcp(s) => Pin::new(s).poll_write_vectored(cx, bufs),
         }
     }
 
     fn is_write_vectored(&self) -> bool {
         match self {
-            Self::Tcp(s) => s.is_write_vectored()
+            Self::Tcp(s) => s.is_write_vectored(),
         }
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         match self.get_mut() {
-            Self::Tcp(s) => Pin::new(s).poll_flush(cx)
+            Self::Tcp(s) => Pin::new(s).poll_flush(cx),
         }
     }
 
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         match self.get_mut() {
-            Self::Tcp(s) => Pin::new(s).poll_shutdown(cx)
+            Self::Tcp(s) => Pin::new(s).poll_shutdown(cx),
         }
     }
 }

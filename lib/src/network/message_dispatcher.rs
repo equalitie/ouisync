@@ -16,10 +16,7 @@ use std::{
     task::{Context, Poll, Waker},
     time::Duration,
 };
-use tokio::{
-    select,
-    sync::watch,
-};
+use tokio::{select, sync::watch};
 
 // Time after which if no message is received, the connection is dropped.
 const KEEP_ALIVE_RECV_INTERVAL: Duration = Duration::from_secs(60);

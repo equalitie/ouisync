@@ -5,9 +5,9 @@ use super::{
     message::{Content, MessageChannel, Request, Response},
     message_dispatcher::{ChannelClosed, ContentSink, ContentStream, MessageDispatcher},
     protocol::RuntimeId,
+    raw,
     request::MAX_PENDING_REQUESTS,
     server::Server,
-    raw,
 };
 use crate::{
     index::Index, network::channel_info::ChannelInfo, repository::RepositoryId, store::Store,
