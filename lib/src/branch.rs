@@ -55,12 +55,21 @@ impl Branch {
         &self.keys
     }
 
-    pub(crate) async fn open_root(&self) -> Result<Directory> {
-        self.root_directory.open(self.clone()).await
+    pub(crate) async fn open(&self, conn: &mut db::Connection) -> Result<Directory> {
+        self.root_directory.open(conn, self.clone()).await
     }
 
+    #[deprecated = "use `open_or_create_root_in_connection` instead"]
     pub(crate) async fn open_or_create_root(&self) -> Result<Directory> {
-        self.root_directory.open_or_create(self.clone()).await
+        let mut conn = self.pool.acquire().await?;
+        self.open_or_create_root_in_connection(&mut conn).await
+    }
+
+    pub(crate) async fn open_or_create_root_in_connection(
+        &self,
+        conn: &mut db::Connection,
+    ) -> Result<Directory> {
+        self.root_directory.open_or_create(conn, self.clone()).await
     }
 
     /// Ensures that the directory at the specified path exists including all its ancestors.
@@ -73,12 +82,15 @@ impl Branch {
             match component {
                 Utf8Component::RootDir | Utf8Component::CurDir => (),
                 Utf8Component::Normal(name) => {
+                    let mut conn = self.db_pool().acquire().await?;
                     let next = match curr.read().await.lookup(name) {
-                        Ok(EntryRef::Directory(entry)) => Some(entry.open().await?),
+                        Ok(EntryRef::Directory(entry)) => Some(entry.open(&mut conn).await?),
                         Ok(EntryRef::File(_)) => return Err(Error::EntryIsFile),
                         Ok(EntryRef::Tombstone(_)) | Err(Error::EntryNotFound) => None,
                         Err(error) => return Err(error),
                     };
+
+                    drop(conn);
 
                     let next = if let Some(next) = next {
                         next
@@ -111,8 +123,17 @@ impl Branch {
     }
 
     pub async fn debug_print(&self, print: DebugPrinter) {
-        if let Ok(root) = self.open_root().await {
-            root.debug_print(print).await;
+        match self.pool.acquire().await {
+            Ok(mut conn) => match self.open(&mut conn).await {
+                Ok(root) => root.debug_print(print).await,
+                Err(error) => {
+                    print.display(&format_args!("failed to open root directory: {:?}", error))
+                }
+            },
+            Err(error) => print.display(&format_args!(
+                "failed to open root directory - failed to acquire db connection: {:?}",
+                error
+            )),
         }
     }
 

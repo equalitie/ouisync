@@ -99,15 +99,17 @@ async fn process(shared: &Shared, local_branch: &Branch) -> Result<()> {
     let mut roots = Vec::with_capacity(branches.len());
 
     for branch in branches {
-        match branch.open_root().await {
+        let mut conn = shared.store.db_pool().acquire().await?;
+        match branch.open(&mut conn).await {
             Ok(dir) => roots.push(dir),
             Err(Error::EntryNotFound | Error::BlockNotFound(_)) => continue,
             Err(error) => return Err(error),
         }
     }
 
+    let mut conn = shared.store.db_pool().acquire().await?;
     JointDirectory::new(Some(local_branch.clone()), roots)
-        .merge()
+        .merge(&mut conn)
         .await?;
     Ok(())
 }

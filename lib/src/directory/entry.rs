@@ -146,6 +146,11 @@ impl<'a> FileRef<'a> {
     }
 
     pub async fn open(&self) -> Result<File> {
+        let mut conn = self.inner.branch().db_pool().acquire().await?;
+        self.open_in_connection(&mut conn).await
+    }
+
+    pub async fn open_in_connection(&self, conn: &mut db::Connection) -> Result<File> {
         let shared = {
             let mut slot = self.entry_data.blob_shared.lock().unwrap();
             if let Some(shared) = slot.upgrade() {
@@ -161,8 +166,7 @@ impl<'a> FileRef<'a> {
         let branch = self.inner.parent_inner.blob.branch().clone();
         let locator = self.locator();
 
-        let mut conn = branch.db_pool().acquire().await?;
-        File::open(&mut conn, branch, locator, parent_context, shared).await
+        File::open(conn, branch, locator, parent_context, shared).await
     }
 
     pub fn branch(&self) -> &Branch {
@@ -207,12 +211,7 @@ impl<'a> DirectoryRef<'a> {
         &self.entry_data.blob_id
     }
 
-    pub async fn open(&self) -> Result<Directory> {
-        let mut conn = self.branch().db_pool().acquire().await?;
-        self.open_in_connection(&mut conn).await
-    }
-
-    pub(crate) async fn open_in_connection(&self, conn: &mut db::Connection) -> Result<Directory> {
+    pub(crate) async fn open(&self, conn: &mut db::Connection) -> Result<Directory> {
         self.inner
             .parent_inner
             .open_directories

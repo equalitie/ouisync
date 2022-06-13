@@ -71,6 +71,15 @@ impl File {
         self.blob.read_to_end().await
     }
 
+    /// Read all data from this file from the current seek position until the end and return then
+    /// in a `Vec`.
+    pub async fn read_to_end_in_connection(
+        &mut self,
+        conn: &mut db::Connection,
+    ) -> Result<Vec<u8>> {
+        self.blob.read_to_end_in_connection(conn).await
+    }
+
     /// Writes `buffer` into this file.
     pub async fn write(&mut self, buffer: &[u8]) -> Result<()> {
         self.blob.write(buffer).await
@@ -126,19 +135,31 @@ impl File {
 
     /// Forks this file into the local branch. Ensure all its ancestor directories exist and live
     /// in the local branch as well. Should be called before any mutable operation.
-    pub async fn fork(&mut self, local_branch: &Branch) -> Result<()> {
+    pub async fn fork_in_connection(
+        &mut self,
+        conn: &mut db::Connection,
+        local_branch: &Branch,
+    ) -> Result<()> {
         if self.blob.branch().id() == local_branch.id() {
             // File already lives in the local branch. We assume the ancestor directories have been
             // already created as well so there is nothing else to do.
             return Ok(());
         }
 
-        let (new_parent, new_blob) = self.parent.fork(&self.blob, local_branch).await?;
+        let tx = conn.begin().await?;
+        let (new_parent, new_blob) = self.parent.fork(tx, &self.blob, local_branch).await?;
 
         self.blob = new_blob;
         self.parent = new_parent;
 
         Ok(())
+    }
+
+    /// Forks this file into the local branch. Ensure all its ancestor directories exist and live
+    /// in the local branch as well. Should be called before any mutable operation.
+    pub async fn fork(&mut self, local_branch: &Branch) -> Result<()> {
+        let mut conn = self.blob.db_pool().acquire().await?;
+        self.fork_in_connection(&mut conn, local_branch).await
     }
 
     pub async fn version_vector(&self) -> VersionVector {
@@ -175,55 +196,64 @@ mod tests {
         file0.flush().await.unwrap();
 
         // Open the file, fork it into branch 1 and modify it.
-        let mut file1 = branch0
-            .open_root()
-            .await
-            .unwrap()
-            .read()
-            .await
-            .lookup("dog.jpg")
-            .unwrap()
-            .file()
-            .unwrap()
-            .open()
-            .await
-            .unwrap();
+        let mut file1 = {
+            let mut conn = branch0.db_pool().acquire().await.unwrap();
+            branch0
+                .open(&mut conn)
+                .await
+                .unwrap()
+                .read()
+                .await
+                .lookup("dog.jpg")
+                .unwrap()
+                .file()
+                .unwrap()
+                .open_in_connection(&mut conn)
+                .await
+                .unwrap()
+        };
 
         file1.fork(&branch1).await.unwrap();
         file1.write(b"large").await.unwrap();
         file1.flush().await.unwrap();
 
         // Reopen orig file and verify it's unchanged
-        let mut file = branch0
-            .open_root()
-            .await
-            .unwrap()
-            .read()
-            .await
-            .lookup("dog.jpg")
-            .unwrap()
-            .file()
-            .unwrap()
-            .open()
-            .await
-            .unwrap();
+        let mut file = {
+            let mut conn = branch0.db_pool().acquire().await.unwrap();
+            branch0
+                .open(&mut conn)
+                .await
+                .unwrap()
+                .read()
+                .await
+                .lookup("dog.jpg")
+                .unwrap()
+                .file()
+                .unwrap()
+                .open_in_connection(&mut conn)
+                .await
+                .unwrap()
+        };
 
         assert_eq!(file.read_to_end().await.unwrap(), b"small");
 
         // Reopen forked file and verify it's modified
-        let mut file = branch1
-            .open_root()
-            .await
-            .unwrap()
-            .read()
-            .await
-            .lookup("dog.jpg")
-            .unwrap()
-            .file()
-            .unwrap()
-            .open()
-            .await
-            .unwrap();
+        let mut file = {
+            let mut conn = branch0.db_pool().acquire().await.unwrap();
+            branch1
+                .open(&mut conn)
+                .await
+                .unwrap()
+                .read()
+                .await
+                .lookup("dog.jpg")
+                .unwrap()
+                .file()
+                .unwrap()
+                .open_in_connection(&mut conn)
+                .await
+                .unwrap()
+        };
 
         assert_eq!(file.read_to_end().await.unwrap(), b"large");
     }
@@ -238,19 +268,22 @@ mod tests {
         let mut file0 = branch0.ensure_file_exists("/pig.jpg".into()).await.unwrap();
         file0.flush().await.unwrap();
 
-        let mut file1 = branch0
-            .open_root()
-            .await
-            .unwrap()
-            .read()
-            .await
-            .lookup("pig.jpg")
-            .unwrap()
-            .file()
-            .unwrap()
-            .open()
-            .await
-            .unwrap();
+        let mut file1 = {
+            let mut conn = branch0.db_pool().acquire().await.unwrap();
+            branch0
+                .open(&mut conn)
+                .await
+                .unwrap()
+                .read()
+                .await
+                .lookup("pig.jpg")
+                .unwrap()
+                .file()
+                .unwrap()
+                .open_in_connection(&mut conn)
+                .await
+                .unwrap()
+        };
 
         file1.fork(&branch1).await.unwrap();
 

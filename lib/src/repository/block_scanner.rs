@@ -81,7 +81,8 @@ impl BlockScanner {
             // directory version is up to date.
             entries.push(BlockIds::new(branch.clone(), BlobId::ROOT));
 
-            match branch.open_root().await {
+            let mut conn = self.shared.store.db_pool().acquire().await?;
+            match branch.open(&mut conn).await {
                 Ok(dir) => versions.push(dir),
                 // `EntryNotFound` is ok because it means it's a newly created branch which doesn't
                 // have the root directory yet. It's safe to skip those.
@@ -104,6 +105,8 @@ impl BlockScanner {
         let mut entries = Vec::new();
         let mut subdirs = Vec::new();
 
+        let mut conn = self.shared.store.db_pool().acquire().await?;
+
         // Collect the entries first, so we don't keep the directories locked while we are
         // processing the entries.
         for entry in dir.read().await.entries() {
@@ -119,10 +122,12 @@ impl BlockScanner {
                         entries.push(BlockIds::new(version.branch().clone(), *version.blob_id()));
                     }
 
-                    subdirs.push(entry.open(MissingVersionStrategy::Skip).await?);
+                    subdirs.push(entry.open(&mut conn, MissingVersionStrategy::Skip).await?);
                 }
             }
         }
+
+        drop(conn);
 
         for entry in entries {
             self.process_blocks(mode, entry).await?;

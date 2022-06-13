@@ -690,7 +690,10 @@ async fn version_vector_create_file() {
     // +1 for create
     // +1 for the file insert
     assert_eq!(
-        file.parent().version_vector().await.unwrap(),
+        file.parent()
+            .version_vector_in_connection(&mut *local_branch.db_pool().acquire().await.unwrap())
+            .await
+            .unwrap(),
         vv![local_id => 2]
     );
     // +1 for the parent insert
@@ -702,7 +705,7 @@ async fn version_vector_create_file() {
             .parent()
             .await
             .unwrap()
-            .version_vector()
+            .version_vector_in_connection(&mut *local_branch.db_pool().acquire().await.unwrap())
             .await
             .unwrap(),
         vv![local_id => 2]
@@ -714,7 +717,10 @@ async fn version_vector_create_file() {
     assert_eq!(file.version_vector().await, vv![local_id => 2]);
     // +1 for the parent modify due to the file vv bump
     assert_eq!(
-        file.parent().version_vector().await.unwrap(),
+        file.parent()
+            .version_vector_in_connection(&mut *local_branch.db_pool().acquire().await.unwrap())
+            .await
+            .unwrap(),
         vv![local_id => 3]
     );
     // +1 for the root modify due to parent vv bump
@@ -723,7 +729,7 @@ async fn version_vector_create_file() {
             .parent()
             .await
             .unwrap()
-            .version_vector()
+            .version_vector_in_connection(&mut *local_branch.db_pool().acquire().await.unwrap())
             .await
             .unwrap(),
         vv![local_id => 3]
@@ -761,7 +767,9 @@ async fn version_vector_deep_hierarchy() {
     // Each directory's local version is one less than its parent.
     for (index, dir) in dirs.iter().skip(1).enumerate() {
         assert_eq!(
-            dir.version_vector().await.unwrap(),
+            dir.version_vector_in_connection(&mut *local_branch.db_pool().acquire().await.unwrap())
+                .await
+                .unwrap(),
             vv![local_id => (depth - index) as u64]
         );
     }
@@ -824,11 +832,17 @@ async fn version_vector_fork_file() {
 
     assert_eq!(file.version_vector().await, remote_file_vv);
     assert_eq!(
-        local_parent.version_vector().await.unwrap(),
+        local_parent
+            .version_vector_in_connection(&mut *local_branch.db_pool().acquire().await.unwrap())
+            .await
+            .unwrap(),
         vv![local_id => 2]
     );
     assert_eq!(
-        local_root.version_vector().await.unwrap(),
+        local_root
+            .version_vector_in_connection(&mut *local_branch.db_pool().acquire().await.unwrap())
+            .await
+            .unwrap(),
         vv![local_id => 2]
     );
 }
@@ -845,10 +859,16 @@ async fn version_vector_empty_directory() {
     .await
     .unwrap();
 
-    let local_id = *repo.get_or_create_local_branch().await.unwrap().id();
+    let local_branch = repo.get_or_create_local_branch().await.unwrap();
+    let local_id = *local_branch.id();
 
     let dir = repo.create_directory("stuff").await.unwrap();
-    assert_eq!(dir.version_vector().await.unwrap(), vv![local_id => 1]);
+    assert_eq!(
+        dir.version_vector_in_connection(&mut *local_branch.db_pool().acquire().await.unwrap())
+            .await
+            .unwrap(),
+        vv![local_id => 1]
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

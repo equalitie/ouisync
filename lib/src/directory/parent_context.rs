@@ -1,5 +1,3 @@
-use sqlx::Connection;
-
 use super::{entry::EntryRef, entry_data::EntryData, inner::OverwriteStrategy};
 use crate::{
     blob::Blob, branch::Branch, db, directory::Directory, error::Result,
@@ -43,15 +41,16 @@ impl ParentContext {
     ///
     /// Panics if `entry_blob` is not the blob of the entry corresponding to this parent context.
     ///
-    pub async fn fork(&self, entry_blob: &Blob, local_branch: &Branch) -> Result<(Self, Blob)> {
+    pub async fn fork(
+        &self,
+        mut tx: db::Transaction<'_>,
+        entry_blob: &Blob,
+        local_branch: &Branch,
+    ) -> Result<(Self, Blob)> {
         let entry_data = self.fork_entry_data().await;
         assert_eq!(entry_data.blob_id(), Some(entry_blob.locator().blob_id()));
 
-        let directory = self.directory().fork(local_branch).await?;
-
-        let mut conn = directory.acquire_db().await?;
-        let mut tx = conn.begin().await?;
-
+        let directory = self.directory.fork(&mut tx, local_branch).await?;
         let mut writer = directory.write().await;
 
         writer.inner.prepare(&mut tx).await?;

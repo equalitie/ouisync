@@ -27,7 +27,8 @@ async fn create_and_list_entries() {
     file_cat.flush().await.unwrap();
 
     // Reopen the dir and try to read the files.
-    let dir = branch.open_root().await.unwrap();
+    let mut conn = branch.db_pool().acquire().await.unwrap();
+    let dir = branch.open(&mut conn).await.unwrap();
     let dir = dir.read().await;
 
     let expected_names: BTreeSet<_> = vec!["dog.txt", "cat.txt"].into_iter().collect();
@@ -40,10 +41,10 @@ async fn create_and_list_entries() {
             .unwrap()
             .file()
             .unwrap()
-            .open()
+            .open_in_connection(&mut conn)
             .await
             .unwrap();
-        let actual_content = file.read_to_end().await.unwrap();
+        let actual_content = file.read_to_end_in_connection(&mut conn).await.unwrap();
         assert_eq!(actual_content, expected_content);
     }
 }
@@ -58,11 +59,17 @@ async fn add_entry_to_existing_directory() {
     dir.create_file("one.txt".into()).await.unwrap();
 
     // Reopen it and add another file to it.
-    let dir = branch.open_root().await.unwrap();
+    let dir = {
+        let mut conn = branch.db_pool().acquire().await.unwrap();
+        branch.open(&mut conn).await.unwrap()
+    };
     dir.create_file("two.txt".into()).await.unwrap();
 
     // Reopen it again and check boths files are still there.
-    let dir = branch.open_root().await.unwrap();
+    let dir = {
+        let mut conn = branch.db_pool().acquire().await.unwrap();
+        branch.open(&mut conn).await.unwrap()
+    };
     let reader = dir.read().await;
     assert!(reader.lookup("one.txt").is_ok());
     assert!(reader.lookup("two.txt").is_ok());
@@ -82,40 +89,42 @@ async fn remove_file() {
     let file_vv = file.version_vector().await;
     let file_locator = *file.locator();
 
+    let mut conn = branch.db_pool().acquire().await.unwrap();
+
     // Reopen and remove the file
-    let parent_dir = branch.open_root().await.unwrap();
+    let parent_dir = branch.open(&mut conn).await.unwrap();
     parent_dir
-        .remove_entry(name, branch.id(), file_vv)
+        .remove_entry(&mut conn, name, branch.id(), file_vv)
         .await
         .unwrap();
 
     // Reopen again and check the file entry was removed.
-    let parent_dir = branch.open_root().await.unwrap();
+    let parent_dir = branch.open(&mut conn).await.unwrap();
     let parent_dir = parent_dir.read().await;
 
     assert_matches!(parent_dir.lookup(name), Ok(EntryRef::Tombstone(_)));
     assert_eq!(parent_dir.entries().count(), 1);
 
     // Check the file blob itself was removed as well.
+    match Blob::open(
+        &mut conn,
+        branch.clone(),
+        file_locator,
+        Shared::uninit().into(),
+    )
+    .await
     {
-        let mut conn = branch.db_pool().acquire().await.unwrap();
-        match Blob::open(
-            &mut conn,
-            branch.clone(),
-            file_locator,
-            Shared::uninit().into(),
-        )
-        .await
-        {
-            Err(Error::EntryNotFound) => (),
-            Err(error) => panic!("unexpected error {:?}", error),
-            Ok(_) => panic!("file blob should not exists but it does"),
-        }
+        Err(Error::EntryNotFound) => (),
+        Err(error) => panic!("unexpected error {:?}", error),
+        Ok(_) => panic!("file blob should not exists but it does"),
     }
 
     // Try re-creating the file again
     drop(parent_dir); // Drop the previous handle to avoid deadlock.
-    let parent_dir = branch.open_root().await.unwrap();
+    let parent_dir = branch.open(&mut conn).await.unwrap();
+
+    drop(conn);
+
     let mut file = parent_dir.create_file(name.into()).await.unwrap();
     file.flush().await.unwrap();
 }
@@ -138,7 +147,10 @@ async fn rename_file() {
     let file_locator = *file.locator();
 
     // Reopen and move the file
-    let parent_dir = branch.open_root().await.unwrap();
+    let parent_dir = {
+        let mut conn = branch.db_pool().acquire().await.unwrap();
+        branch.open(&mut conn).await.unwrap()
+    };
 
     let entry_to_move = parent_dir
         .read()
@@ -159,7 +171,10 @@ async fn rename_file() {
         .unwrap();
 
     // Reopen again and check the file entry was removed.
-    let parent_dir = branch.open_root().await.unwrap();
+    let parent_dir = {
+        let mut conn = branch.db_pool().acquire().await.unwrap();
+        branch.open(&mut conn).await.unwrap()
+    };
     let parent_dir = parent_dir.read().await;
 
     let mut dst_file = parent_dir
@@ -218,28 +233,31 @@ async fn move_file_within_branch() {
         .await
         .unwrap();
 
-    let mut file = branch
-        .open_root()
-        .await
-        .unwrap()
-        .read()
-        .await
-        .lookup("aux")
-        .unwrap()
-        .directory()
-        .unwrap()
-        .open()
-        .await
-        .unwrap()
-        .read()
-        .await
-        .lookup(file_name)
-        .unwrap()
-        .file()
-        .unwrap()
-        .open()
-        .await
-        .unwrap();
+    let mut file = {
+        let mut conn = branch.db_pool().acquire().await.unwrap();
+        branch
+            .open(&mut conn)
+            .await
+            .unwrap()
+            .read()
+            .await
+            .lookup("aux")
+            .unwrap()
+            .directory()
+            .unwrap()
+            .open(&mut conn)
+            .await
+            .unwrap()
+            .read()
+            .await
+            .lookup(file_name)
+            .unwrap()
+            .file()
+            .unwrap()
+            .open_in_connection(&mut conn)
+            .await
+            .unwrap()
+    };
 
     assert_eq!(&file_locator, file.locator());
     assert_eq!(&content[..], &file.read_to_end().await.unwrap()[..]);
@@ -326,37 +344,40 @@ async fn move_non_empty_directory() {
         .await
         .unwrap();
 
-    let file = branch
-        .open_root()
-        .await
-        .unwrap()
-        .read()
-        .await
-        .lookup(dst_dir_name)
-        .unwrap()
-        .directory()
-        .unwrap()
-        .open()
-        .await
-        .unwrap()
-        .read()
-        .await
-        .lookup(dir_name)
-        .unwrap()
-        .directory()
-        .unwrap()
-        .open()
-        .await
-        .unwrap()
-        .read()
-        .await
-        .lookup(file_name)
-        .unwrap()
-        .file()
-        .unwrap()
-        .open()
-        .await
-        .unwrap();
+    let file = {
+        let mut conn = branch.db_pool().acquire().await.unwrap();
+        branch
+            .open(&mut conn)
+            .await
+            .unwrap()
+            .read()
+            .await
+            .lookup(dst_dir_name)
+            .unwrap()
+            .directory()
+            .unwrap()
+            .open(&mut conn)
+            .await
+            .unwrap()
+            .read()
+            .await
+            .lookup(dir_name)
+            .unwrap()
+            .directory()
+            .unwrap()
+            .open(&mut conn)
+            .await
+            .unwrap()
+            .read()
+            .await
+            .lookup(file_name)
+            .unwrap()
+            .file()
+            .unwrap()
+            .open_in_connection(&mut conn)
+            .await
+            .unwrap()
+    };
 
     assert_eq!(&file_locator, file.locator());
 }
@@ -371,25 +392,29 @@ async fn remove_subdirectory() {
     let parent_dir = branch.open_or_create_root().await.unwrap();
     let dir = parent_dir.create_directory(name.into()).await.unwrap();
 
+    let mut conn = branch.db_pool().acquire().await.unwrap();
+
     let (dir_locator, dir_vv) = {
         let reader = dir.read().await;
-        (*reader.locator(), reader.version_vector().await.unwrap())
+        (
+            *reader.locator(),
+            reader.version_vector(&mut conn).await.unwrap(),
+        )
     };
 
     // Reopen and remove the subdirectory
-    let parent_dir = branch.open_root().await.unwrap();
+    let parent_dir = branch.open(&mut conn).await.unwrap();
     parent_dir
-        .remove_entry(name, branch.id(), dir_vv)
+        .remove_entry(&mut conn, name, branch.id(), dir_vv)
         .await
         .unwrap();
 
     // Reopen again and check the subdirectory entry was removed.
-    let parent_dir = branch.open_root().await.unwrap();
+    let parent_dir = branch.open(&mut conn).await.unwrap();
     let parent_dir = parent_dir.read().await;
     assert_matches!(parent_dir.lookup(name), Ok(EntryRef::Tombstone(_)));
 
     // Check the directory blob itself was removed as well.
-    let mut conn = branch.db_pool().acquire().await.unwrap();
     match Blob::open(&mut conn, branch, dir_locator, Shared::uninit().into()).await {
         Err(Error::EntryNotFound) => (),
         Err(error) => panic!("unexpected error {:?}", error),
@@ -406,29 +431,37 @@ async fn fork() {
     root0.create_directory("dir".into()).await.unwrap();
 
     // Fork it by branch 1 and modify it
-    let dir0 = branches[0]
-        .open_root()
-        .await
-        .unwrap()
-        .read()
-        .await
-        .lookup("dir")
-        .unwrap()
-        .directory()
-        .unwrap()
-        .open()
-        .await
-        .unwrap();
+    let dir0 = {
+        let mut conn = branches[0].db_pool().acquire().await.unwrap();
+        branches[0]
+            .open(&mut conn)
+            .await
+            .unwrap()
+            .read()
+            .await
+            .lookup("dir")
+            .unwrap()
+            .directory()
+            .unwrap()
+            .open(&mut conn)
+            .await
+            .unwrap()
+    };
 
-    let dir1 = dir0.fork(&branches[1]).await.unwrap();
+    let dir1 = {
+        let mut conn = branches[0].db_pool().acquire().await.unwrap();
+        dir0.fork(&mut conn, &branches[1]).await.unwrap()
+    };
 
     dir1.create_file("dog.jpg".into()).await.unwrap();
 
     assert_eq!(dir1.read().await.branch().id(), branches[1].id());
 
+    let mut conn = branches[0].db_pool().acquire().await.unwrap();
+
     // Reopen orig dir and verify it's unchanged
     let dir = branches[0]
-        .open_root()
+        .open(&mut conn)
         .await
         .unwrap()
         .read()
@@ -437,7 +470,7 @@ async fn fork() {
         .unwrap()
         .directory()
         .unwrap()
-        .open()
+        .open(&mut conn)
         .await
         .unwrap();
 
@@ -445,7 +478,7 @@ async fn fork() {
 
     // Reopen forked dir and verify it contains the new file
     let dir = branches[1]
-        .open_root()
+        .open(&mut conn)
         .await
         .unwrap()
         .read()
@@ -454,7 +487,7 @@ async fn fork() {
         .unwrap()
         .directory()
         .unwrap()
-        .open()
+        .open(&mut conn)
         .await
         .unwrap();
 
@@ -464,7 +497,7 @@ async fn fork() {
     );
 
     // Verify the root dir got forked as well
-    branches[1].open_root().await.unwrap();
+    branches[1].open(&mut conn).await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -481,29 +514,37 @@ async fn fork_over_tombstone() {
         .unwrap()
         .version_vector()
         .clone();
-    root0
-        .remove_entry("dir", branches[0].id(), vv)
-        .await
-        .unwrap();
+
+    {
+        let mut conn = branches[0].db_pool().acquire().await.unwrap();
+        root0
+            .remove_entry(&mut conn, "dir", branches[0].id(), vv)
+            .await
+            .unwrap()
+    };
 
     // Create a directory with the same name in branch 1.
     let root1 = branches[1].open_or_create_root().await.unwrap();
     root1.create_directory("dir".into()).await.unwrap();
 
     // Open it by branch 0 and fork it.
-    let root1_on_0 = branches[1].open_root().await.unwrap();
-    let dir1 = root1_on_0
-        .read()
-        .await
-        .lookup("dir")
-        .unwrap()
-        .directory()
-        .unwrap()
-        .open()
-        .await
-        .unwrap();
+    {
+        let mut conn = branches[1].db_pool().acquire().await.unwrap();
 
-    dir1.fork(&branches[0]).await.unwrap();
+        let root1_on_0 = branches[1].open(&mut conn).await.unwrap();
+        let dir1 = root1_on_0
+            .read()
+            .await
+            .lookup("dir")
+            .unwrap()
+            .directory()
+            .unwrap()
+            .open(&mut conn)
+            .await
+            .unwrap();
+
+        dir1.fork(&mut conn, &branches[0]).await.unwrap();
+    }
 
     // Check the forked dir now exists in branch 0.
     assert_matches!(root0.read().await.lookup("dir"), Ok(EntryRef::Directory(_)));
@@ -518,16 +559,18 @@ async fn modify_directory_concurrently() {
     // the file immediately exists in the other one as well.
 
     let dir0 = root.create_directory("dir".to_owned()).await.unwrap();
-    let dir1 = root
-        .read()
-        .await
-        .lookup("dir")
-        .unwrap()
-        .directory()
-        .unwrap()
-        .open()
-        .await
-        .unwrap();
+    let dir1 = {
+        let mut conn = branch.db_pool().acquire().await.unwrap();
+        root.read()
+            .await
+            .lookup("dir")
+            .unwrap()
+            .directory()
+            .unwrap()
+            .open(&mut conn)
+            .await
+            .unwrap()
+    };
 
     let mut file0 = dir0.create_file("file.txt".to_owned()).await.unwrap();
     file0.write(b"hello").await.unwrap();
@@ -595,7 +638,8 @@ async fn remove_concurrent_remote_file() {
     let remote_id = PublicKey::random();
     let remote_vv = vv![remote_id => 1];
 
-    root.remove_entry(name, &remote_id, remote_vv.clone())
+    let mut conn = local_branch.db_pool().acquire().await.unwrap();
+    root.remove_entry(&mut conn, name, &remote_id, remote_vv.clone())
         .await
         .unwrap();
 

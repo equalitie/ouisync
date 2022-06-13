@@ -277,7 +277,8 @@ impl Repository {
 
     /// Opens a directory at the given path (relative to the repository root)
     pub async fn open_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<JointDirectory> {
-        self.joint_root().await?.cd(path).await
+        let mut conn = self.shared.store.db_pool().acquire().await?;
+        self.cd(&mut conn, path).await
     }
 
     /// Creates a new file at the given path.
@@ -298,18 +299,18 @@ impl Repository {
 
         self.get_or_create_local_branch().await?;
 
-        let mut parent = self.open_directory(parent).await?;
-        parent.remove_entry(name).await
+        let mut conn = self.shared.store.db_pool().acquire().await?;
+        let mut parent = self.cd(&mut conn, parent).await?;
+        parent.remove_entry(&mut conn, name).await
     }
 
     /// Removes the file or directory (including its content) and flushes its parent directory.
     pub async fn remove_entry_recursively<P: AsRef<Utf8Path>>(&self, path: P) -> Result<()> {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::OperationNotSupported)?;
-        let mut parent = self.open_directory(parent).await?;
 
-        // TODO: fork the parent dir
-
-        parent.remove_entry_recursively(name).await
+        let mut conn = self.shared.store.db_pool().acquire().await?;
+        let mut parent = self.cd(&mut conn, parent).await?;
+        parent.remove_entry_recursively(&mut conn, name).await
     }
 
     /// Moves (renames) an entry from the source path to the destination path.
@@ -325,14 +326,16 @@ impl Repository {
 
         let local_branch = self.get_or_create_local_branch().await?;
 
-        let src_joint_dir = self.open_directory(src_dir_path).await?;
+        let mut conn = self.shared.store.db_pool().acquire().await?;
+
+        let src_joint_dir = self.cd(&mut conn, src_dir_path).await?;
         let src_joint_dir_r = src_joint_dir.read().await;
 
         let (src_dir, src_name) = match src_joint_dir_r.lookup_unique(src_name)? {
             JointEntryRef::File(entry) => {
                 let src_name = entry.name().to_string();
 
-                let mut file = entry.open().await?;
+                let mut file = entry.open(&mut conn).await?;
 
                 // Prevent deadlocks
                 drop(src_joint_dir_r);
@@ -343,9 +346,9 @@ impl Repository {
             }
             JointEntryRef::Directory(entry) => {
                 let dir_to_move = entry
-                    .open(MissingVersionStrategy::Skip)
+                    .open(&mut conn, MissingVersionStrategy::Skip)
                     .await?
-                    .merge()
+                    .merge(&mut conn)
                     .await?;
 
                 // Prevent deadlocks
@@ -361,6 +364,7 @@ impl Repository {
         };
 
         drop(src_joint_dir);
+        drop(conn);
 
         // Get the entry here before we release the lock to the directory. This way the entry shall
         // contain version vector that we want to delete and if someone updates the entry between
@@ -443,7 +447,7 @@ impl Repository {
     }
 
     // Opens the root directory across all branches as JointDirectory.
-    async fn joint_root(&self) -> Result<JointDirectory> {
+    async fn root(&self, conn: &mut db::Connection) -> Result<JointDirectory> {
         // If we have only blind access we can cut this short. Also this check is necessary to
         // distinguish *empty* repository with blind access from one with read access.
         if !self.shared.secrets.can_read() {
@@ -455,7 +459,7 @@ impl Repository {
         let mut dirs = Vec::with_capacity(branches.len());
 
         for branch in branches {
-            let dir = match branch.open_root().await {
+            let dir = match branch.open(conn).await {
                 Ok(dir) => dir,
                 Err(Error::EntryNotFound | Error::BlockNotFound(_)) => {
                     // Some branch roots may not have been loaded across the network yet. We'll
@@ -476,6 +480,14 @@ impl Repository {
         }
 
         Ok(JointDirectory::new(local_branch, dirs))
+    }
+
+    async fn cd<P: AsRef<Utf8Path>>(
+        &self,
+        conn: &mut db::Connection,
+        path: P,
+    ) -> Result<JointDirectory> {
+        self.root(conn).await?.cd(conn, path).await
     }
 
     /// Close all db connections held by this repository. After this function returns, any

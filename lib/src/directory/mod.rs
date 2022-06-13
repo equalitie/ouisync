@@ -46,19 +46,20 @@ pub struct Directory {
 impl Directory {
     /// Opens the root directory.
     /// For internal use only. Use [`Branch::open_root`] instead.
-    pub(crate) async fn open_root(owner_branch: Branch) -> Result<Self> {
-        let mut conn = owner_branch.db_pool().acquire().await?;
-        Self::open(&mut conn, owner_branch, Locator::ROOT, None).await
+    pub(crate) async fn open_root(conn: &mut db::Connection, owner_branch: Branch) -> Result<Self> {
+        Self::open(conn, owner_branch, Locator::ROOT, None).await
     }
 
     /// Opens the root directory or creates it if it doesn't exist.
     /// For internal use only. Use [`Branch::open_or_create_root`] instead.
-    pub(crate) async fn open_or_create_root(branch: Branch) -> Result<Self> {
+    pub(crate) async fn open_or_create_root(
+        conn: &mut db::Connection,
+        branch: Branch,
+    ) -> Result<Self> {
         // TODO: make sure this is atomic
         let locator = Locator::ROOT;
-        let mut conn = branch.db_pool().acquire().await?;
 
-        match Self::open(&mut conn, branch.clone(), locator, None).await {
+        match Self::open(conn, branch.clone(), locator, None).await {
             Ok(dir) => Ok(dir),
             Err(Error::EntryNotFound) => Ok(Self::create(branch, locator, None)),
             Err(error) => Err(error),
@@ -102,11 +103,11 @@ impl Directory {
     /// tombstone is created.
     pub async fn remove_entry(
         &self,
+        conn: &mut db::Connection,
         name: &str,
         branch_id: &PublicKey,
         vv: VersionVector,
     ) -> Result<()> {
-        let mut conn = self.acquire_db().await?;
         let tx = conn.begin().await?;
         self.write()
             .await
@@ -173,7 +174,11 @@ impl Directory {
 
     // Forks this directory into the local branch.
     #[async_recursion]
-    pub(crate) async fn fork(&self, local_branch: &Branch) -> Result<Directory> {
+    pub(crate) async fn fork(
+        &self,
+        conn: &mut db::Connection,
+        local_branch: &Branch,
+    ) -> Result<Directory> {
         let inner = self.read().await;
 
         if local_branch.id() == inner.branch().id() {
@@ -193,13 +198,11 @@ impl Directory {
         drop(inner);
 
         if let Some((parent_dir, entry_name)) = parent {
-            let parent_dir = parent_dir.fork(local_branch).await?;
-
-            let mut conn = parent_dir.acquire_db().await?;
+            let parent_dir = parent_dir.fork(conn, local_branch).await?;
             let mut writer = parent_dir.write().await;
 
             match writer.lookup(&entry_name) {
-                Ok(EntryRef::Directory(entry)) => entry.open_in_connection(&mut conn).await,
+                Ok(EntryRef::Directory(entry)) => entry.open(conn).await,
                 Ok(EntryRef::File(_)) => {
                     // TODO: return some kind of `Error::Conflict`
                     Err(Error::EntryIsFile)
@@ -211,13 +214,12 @@ impl Directory {
                 Err(error) => Err(error),
             }
         } else {
-            local_branch.open_or_create_root().await
+            local_branch.open_or_create_root_in_connection(conn).await
         }
     }
 
     /// Updates the version vector of this directory by merging it with `vv`.
-    pub(crate) async fn bump(&self, vv: VersionVector) -> Result<()> {
-        let mut conn = self.acquire_db().await?;
+    pub(crate) async fn bump(&self, conn: &mut db::Connection, vv: VersionVector) -> Result<()> {
         let tx = conn.begin().await?;
         let mut writer = self.write().await;
         writer.inner.commit(tx, vv).await
@@ -352,20 +354,11 @@ impl Directory {
         &self.branch_id
     }
 
-    pub(crate) async fn version_vector(&self) -> Result<VersionVector> {
-        let reader = self.read().await;
-
-        if let Some(vv) = reader.version_vector().await {
-            return Ok(vv);
-        }
-
-        let branch = reader.inner.branch().clone();
-
-        // Make sure we don't hold the directory lock while retrieving the root version vector
-        // (which involves db access), to avoid deadlocks.
-        drop(reader);
-
-        branch.version_vector().await
+    pub(crate) async fn version_vector_in_connection(
+        &self,
+        conn: &mut db::Connection,
+    ) -> Result<VersionVector> {
+        self.read().await.version_vector(conn).await
     }
 
     // Acquire a db connection in a deadlock-safe manner.
@@ -418,16 +411,12 @@ impl Reader<'_> {
         self.inner.blob.branch()
     }
 
-    /// Version vector of this directory or `None` if this is the root. To return version vector of
-    /// any directory, use the more convenient and higher-level `Directory::version_vector`. The
-    /// reason it works like this is that because retrieving the root version vector requires
-    /// database access, we can enforce the order in which the directory lock and the database
-    /// connection are acquired to avoid deadlocks.
-    pub async fn version_vector(&self) -> Option<VersionVector> {
+    /// Version vector of this directory.
+    pub async fn version_vector(&self, conn: &mut db::Connection) -> Result<VersionVector> {
         if let Some(parent) = &self.inner.parent {
-            Some(parent.entry_version_vector().await)
+            Ok(parent.entry_version_vector().await)
         } else {
-            None
+            self.branch().data().load_version_vector(conn).await
         }
     }
 
@@ -506,7 +495,7 @@ impl Writer<'_> {
         // If we are removing a directory, ensure it's empty (recursive removal can still be
         // implemented at the upper layers).
         let old_dir = match self.lookup(name) {
-            Ok(EntryRef::Directory(entry)) => Some(entry.open_in_connection(&mut tx).await?),
+            Ok(EntryRef::Directory(entry)) => Some(entry.open(&mut tx).await?),
             Ok(_) | Err(Error::EntryNotFound) => None,
             Err(error) => return Err(error),
         };

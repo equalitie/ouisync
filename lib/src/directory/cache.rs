@@ -19,7 +19,7 @@ impl RootDirectoryCache {
         Self(Mutex::new(Weak::new()))
     }
 
-    pub async fn open(&self, owner_branch: Branch) -> Result<Directory> {
+    pub async fn open(&self, conn: &mut db::Connection, owner_branch: Branch) -> Result<Directory> {
         let mut inner = self.0.lock().await;
 
         if let Some(inner) = inner.upgrade() {
@@ -28,13 +28,17 @@ impl RootDirectoryCache {
                 inner,
             })
         } else {
-            let dir = Directory::open_root(owner_branch).await?;
+            let dir = Directory::open_root(conn, owner_branch).await?;
             *inner = Arc::downgrade(&dir.inner);
             Ok(dir)
         }
     }
 
-    pub async fn open_or_create(&self, branch: Branch) -> Result<Directory> {
+    pub async fn open_or_create(
+        &self,
+        conn: &mut db::Connection,
+        branch: Branch,
+    ) -> Result<Directory> {
         let mut inner = self.0.lock().await;
 
         if let Some(inner) = inner.upgrade() {
@@ -43,7 +47,7 @@ impl RootDirectoryCache {
                 inner,
             })
         } else {
-            let dir = Directory::open_or_create_root(branch).await?;
+            let dir = Directory::open_or_create_root(conn, branch).await?;
             *inner = Arc::downgrade(&dir.inner);
             Ok(dir)
         }
