@@ -81,12 +81,7 @@ impl InnerNode {
     }
 
     /// Saves this inner node into the db unless it already exists.
-    pub async fn save(
-        &self,
-        tx: &mut db::Transaction<'_>,
-        parent: &Hash,
-        bucket: u8,
-    ) -> Result<()> {
+    pub async fn save(&self, conn: &mut db::Connection, parent: &Hash, bucket: u8) -> Result<()> {
         sqlx::query(
             "INSERT INTO snapshot_inner_nodes (
                  parent,
@@ -105,7 +100,7 @@ impl InnerNode {
         .bind(self.summary.is_complete)
         .bind(db::encode_u64(self.summary.missing_blocks_count))
         .bind(db::encode_u64(self.summary.missing_blocks_checksum))
-        .execute(tx)
+        .execute(conn)
         .await?;
 
         Ok(())

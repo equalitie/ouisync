@@ -73,9 +73,7 @@ impl Inner {
         }
 
         if self.pending_entry.is_some() {
-            self.blob
-                .seek_in_transaction(tx, SeekFrom::Start(0))
-                .await?;
+            self.blob.seek(tx, SeekFrom::Start(0)).await?;
             let buffer = self.blob.read_to_end_in_connection(tx).await?;
             self.entries = content::deserialize(&buffer)?;
         }

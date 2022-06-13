@@ -140,21 +140,8 @@ impl Blob {
     /// will be clamped to be within the range.
     ///
     /// Returns the new seek position from the start of the blob.
-    pub async fn seek(&mut self, pos: SeekFrom) -> Result<u64> {
-        let mut tx = self.db_pool().begin().await?;
-        let pos = self.lock().await.seek(&mut tx, pos).await?;
-        tx.commit().await?;
-        Ok(pos)
-    }
-
-    /// Seek in a db transaction.
-    // TODO: take connection, not transaction
-    pub async fn seek_in_transaction(
-        &mut self,
-        tx: &mut db::Transaction<'_>,
-        pos: SeekFrom,
-    ) -> Result<u64> {
-        self.lock().await.seek(tx, pos).await
+    pub async fn seek(&mut self, conn: &mut db::Connection, pos: SeekFrom) -> Result<u64> {
+        self.lock().await.seek(conn, pos).await
     }
 
     /// Truncate the blob to the given length.

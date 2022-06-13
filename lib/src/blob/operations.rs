@@ -145,7 +145,7 @@ impl<'a> Operations<'a> {
     /// will be clamped to be within the range.
     ///
     /// Returns the new seek position from the start of the blob.
-    pub async fn seek(&mut self, tx: &mut db::Transaction<'_>, pos: SeekFrom) -> Result<u64> {
+    pub async fn seek(&mut self, conn: &mut db::Connection, pos: SeekFrom) -> Result<u64> {
         let offset = match pos {
             SeekFrom::Start(n) => n.min(self.shared.len),
             SeekFrom::End(n) => {
@@ -174,13 +174,14 @@ impl<'a> Operations<'a> {
             let locator = self.locator_at(block_number);
 
             let (id, content) = read_block(
-                tx,
+                conn,
                 self.unique.branch.data(),
                 self.unique.branch.keys().read(),
                 &locator,
             )
             .await?;
-            self.replace_current_block(tx, locator, id, content).await?;
+            self.replace_current_block(conn, locator, id, content)
+                .await?;
         }
 
         self.unique.current_block.content.pos = block_offset;
@@ -238,12 +239,12 @@ impl<'a> Operations<'a> {
 
     async fn replace_current_block(
         &mut self,
-        tx: &mut db::Transaction<'_>,
+        conn: &mut db::Connection,
         locator: Locator,
         id: BlockId,
         content: Buffer,
     ) -> Result<()> {
-        self.write_current_block(tx).await?;
+        self.write_current_block(conn).await?;
 
         let mut content = Cursor::new(content);
 
@@ -263,7 +264,7 @@ impl<'a> Operations<'a> {
     }
 
     // Write the current block into the store.
-    async fn write_current_block(&mut self, tx: &mut db::Transaction<'_>) -> Result<()> {
+    async fn write_current_block(&mut self, conn: &mut db::Connection) -> Result<()> {
         if !self.unique.current_block.dirty {
             return Ok(());
         }
@@ -277,7 +278,7 @@ impl<'a> Operations<'a> {
             .ok_or(Error::PermissionDenied)?;
 
         let block_id = write_block(
-            tx,
+            conn,
             self.unique.branch.data(),
             read_key,
             write_keys,
@@ -392,7 +393,7 @@ pub(super) async fn load_block(
 }
 
 async fn write_block(
-    tx: &mut db::Transaction<'_>,
+    conn: &mut db::Connection,
     branch: &BranchData,
     read_key: &cipher::SecretKey,
     write_keys: &sign::Keypair,
@@ -407,16 +408,16 @@ async fn write_block(
     // `load_block` to prevent potential deadlocks when `load_block` and `write_block` run
     // concurrently and `load_block` runs inside a transaction.
     branch
-        .insert(tx, &id, &locator.encode(read_key), write_keys)
+        .insert(conn, &id, &locator.encode(read_key), write_keys)
         .await?;
-    block::write(tx, &id, &buffer, &nonce).await?;
+    block::write(conn, &id, &buffer, &nonce).await?;
 
     // Pin locally created blocks so they are not prematurelly collected. All pinned blocks are
     // unpinned when the current changeset is flushed at which point the block should already be
     // reachable. The pins are not persistent so if the app is terminated or crashes before the
     // current changeset is flushed, all unreachable blocks will be subject to collection on the
     // next app start.
-    block::pin(tx, &id).await?;
+    block::pin(conn, &id).await?;
 
     Ok(id)
 }
