@@ -321,7 +321,7 @@ async fn truncate_to_empty() {
         (id0, id1)
     };
 
-    blob.truncate_in_connection(&mut conn, 0).await.unwrap();
+    blob.truncate(&mut conn, 0).await.unwrap();
     blob.flush_in_connection(&mut conn).await.unwrap();
 
     // Check the blob is empty
@@ -366,9 +366,7 @@ async fn truncate_to_shorter() {
 
     let new_len = BLOCK_SIZE / 2;
 
-    blob.truncate_in_connection(&mut conn, new_len as u64)
-        .await
-        .unwrap();
+    blob.truncate(&mut conn, new_len as u64).await.unwrap();
     blob.flush_in_connection(&mut conn).await.unwrap();
 
     let mut buffer = vec![0; new_len];
@@ -404,7 +402,7 @@ async fn truncate_marks_as_dirty() {
     blob.write(&mut conn, &content).await.unwrap();
     blob.flush_in_connection(&mut conn).await.unwrap();
 
-    blob.truncate_in_connection(&mut conn, 0).await.unwrap();
+    blob.truncate(&mut conn, 0).await.unwrap();
     assert!(blob.is_dirty());
 }
 

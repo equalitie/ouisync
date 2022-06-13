@@ -96,7 +96,8 @@ impl File {
 
     /// Truncates the file to the given length.
     pub async fn truncate(&mut self, len: u64) -> Result<()> {
-        self.blob.truncate(len).await
+        let mut conn = self.blob.db_pool().acquire().await?;
+        self.blob.truncate(&mut conn, len).await
     }
 
     /// Atomically saves any pending modifications and updates the version vectors of this file and

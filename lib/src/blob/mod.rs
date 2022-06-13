@@ -124,19 +124,7 @@ impl Blob {
     }
 
     /// Truncate the blob to the given length.
-    pub async fn truncate(&mut self, len: u64) -> Result<()> {
-        let mut tx = self.db_pool().begin().await?;
-        self.lock().await.truncate(&mut tx, len).await?;
-        tx.commit().await?;
-        Ok(())
-    }
-
-    /// Truncate the blob to the given length in a db connection.
-    pub async fn truncate_in_connection(
-        &mut self,
-        conn: &mut db::Connection,
-        len: u64,
-    ) -> Result<()> {
+    pub async fn truncate(&mut self, conn: &mut db::Connection, len: u64) -> Result<()> {
         self.lock().await.truncate(conn, len).await
     }
 

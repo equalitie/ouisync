@@ -112,7 +112,7 @@ impl Inner {
                 .as_ref()
                 .map(|pending| (pending.name.as_str(), &pending.data)),
         );
-        self.blob.truncate_in_connection(tx, 0).await?;
+        self.blob.truncate(tx, 0).await?;
         self.blob.write(tx, &buffer).await?;
         self.blob.flush_in_connection(tx).await?;
 
