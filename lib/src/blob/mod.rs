@@ -98,9 +98,8 @@ impl Blob {
     /// Reads data from this blob into `buffer`, advancing the internal cursor. Returns the
     /// number of bytes actually read which might be less than `buffer.len()` if the portion of the
     /// blob past the internal cursor is smaller than `buffer.len()`.
-    pub async fn read(&mut self, buffer: &mut [u8]) -> Result<usize> {
-        let mut conn = self.db_pool().acquire().await?;
-        self.lock().await.read(&mut conn, buffer).await
+    pub async fn read(&mut self, conn: &mut db::Connection, buffer: &mut [u8]) -> Result<usize> {
+        self.lock().await.read(conn, buffer).await
     }
 
     /// Read all data from this blob from the current seek position until the end and return then
@@ -149,6 +148,7 @@ impl Blob {
     }
 
     /// Seek in a db transaction.
+    // TODO: take connection, not transaction
     pub async fn seek_in_transaction(
         &mut self,
         tx: &mut db::Transaction<'_>,

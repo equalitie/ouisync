@@ -62,7 +62,8 @@ impl File {
 
     /// Reads data from this file. See [`Blob::read`] for more info.
     pub async fn read(&mut self, buffer: &mut [u8]) -> Result<usize> {
-        self.blob.read(buffer).await
+        let mut conn = self.blob.branch().db_pool().acquire().await?;
+        self.blob.read(&mut conn, buffer).await
     }
 
     /// Read all data from this file from the current seek position until the end and return then
