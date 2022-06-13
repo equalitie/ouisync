@@ -82,7 +82,7 @@ impl BlockScanner {
             entries.push(BlockIds::new(branch.clone(), BlobId::ROOT));
 
             let mut conn = self.shared.store.db_pool().acquire().await?;
-            match branch.open(&mut conn).await {
+            match branch.open_root(&mut conn).await {
                 Ok(dir) => versions.push(dir),
                 // `EntryNotFound` is ok because it means it's a newly created branch which doesn't
                 // have the root directory yet. It's safe to skip those.

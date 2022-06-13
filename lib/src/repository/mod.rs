@@ -467,7 +467,7 @@ impl Repository {
         let mut dirs = Vec::with_capacity(branches.len());
 
         for branch in branches {
-            let dir = match branch.open(conn).await {
+            let dir = match branch.open_root(conn).await {
                 Ok(dir) => dir,
                 Err(Error::EntryNotFound | Error::BlockNotFound(_)) => {
                     // Some branch roots may not have been loaded across the network yet. We'll

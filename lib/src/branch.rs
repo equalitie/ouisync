@@ -55,7 +55,7 @@ impl Branch {
         &self.keys
     }
 
-    pub(crate) async fn open(&self, conn: &mut db::Connection) -> Result<Directory> {
+    pub(crate) async fn open_root(&self, conn: &mut db::Connection) -> Result<Directory> {
         self.root_directory.open(conn, self.clone()).await
     }
 
@@ -124,7 +124,7 @@ impl Branch {
 
     pub async fn debug_print(&self, print: DebugPrinter) {
         match self.pool.acquire().await {
-            Ok(mut conn) => match self.open(&mut conn).await {
+            Ok(mut conn) => match self.open_root(&mut conn).await {
                 Ok(root) => root.debug_print(print).await,
                 Err(error) => {
                     print.display(&format_args!("failed to open root directory: {:?}", error))

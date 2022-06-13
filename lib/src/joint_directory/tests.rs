@@ -127,7 +127,7 @@ async fn conflict_forked_files() {
     // Open branch 1's root dir which should have been created in the process.
     let root1 = {
         let mut conn = branches[1].db_pool().acquire().await.unwrap();
-        branches[1].open(&mut conn).await.unwrap()
+        branches[1].open_root(&mut conn).await.unwrap()
     };
 
     let root = JointDirectory::new(Some(branches[1].clone()), [root0, root1]);
@@ -232,7 +232,7 @@ async fn conflict_identical_versions() {
 
     let mut conn = branches[1].db_pool().acquire().await.unwrap();
 
-    let root1 = branches[1].open(&mut conn).await.unwrap();
+    let root1 = branches[1].open_root(&mut conn).await.unwrap();
 
     // Create joint directory using branch 1 as the local branch.
     let root = JointDirectory::new(Some(branches[1].clone()), [root0, root1]);
@@ -300,10 +300,16 @@ async fn merge_locally_non_existing_file() {
     let content = b"cat";
 
     // Create local root dir
-    let local_root = branches[0].open_or_create_root().await.unwrap();
+    let local_root = branches[0]
+        .open_or_create_root_in_connection(&mut *branches[0].db_pool().acquire().await.unwrap())
+        .await
+        .unwrap();
 
     // Create remote root dir
-    let remote_root = branches[1].open_or_create_root().await.unwrap();
+    let remote_root = branches[1]
+        .open_or_create_root_in_connection(&mut *branches[1].db_pool().acquire().await.unwrap())
+        .await
+        .unwrap();
 
     // Create a file in the remote root
     create_file(&remote_root, "cat.jpg", content, &branches[1]).await;
@@ -319,7 +325,7 @@ async fn merge_locally_non_existing_file() {
     // Verify the file now exists in the local branch.
     let local_content = open_file(&mut conn, &local_root, "cat.jpg")
         .await
-        .read_to_end()
+        .read_to_end_in_connection(&mut conn)
         .await
         .unwrap();
     assert_eq!(local_content, content);
@@ -414,8 +420,14 @@ async fn merge_locally_newer_file() {
 async fn attempt_to_merge_concurrent_file() {
     let branches = setup(2).await;
 
-    let local_root = branches[0].open_or_create_root().await.unwrap();
-    let remote_root = branches[1].open_or_create_root().await.unwrap();
+    let local_root = branches[0]
+        .open_or_create_root_in_connection(&mut *branches[0].db_pool().acquire().await.unwrap())
+        .await
+        .unwrap();
+    let remote_root = branches[1]
+        .open_or_create_root_in_connection(&mut *branches[1].db_pool().acquire().await.unwrap())
+        .await
+        .unwrap();
 
     create_file(&remote_root, "cat.jpg", b"v0", &branches[1]).await;
 
@@ -446,7 +458,7 @@ async fn attempt_to_merge_concurrent_file() {
     assert_eq!(
         open_file(&mut conn, &local_root, "cat.jpg")
             .await
-            .read_to_end()
+            .read_to_end_in_connection(&mut conn)
             .await
             .unwrap(),
         b"v1"
@@ -581,7 +593,7 @@ async fn merge_remote_only() {
         .await
         .unwrap();
 
-    let local_root = branches[0].open(&mut conn).await.unwrap();
+    let local_root = branches[0].open_root(&mut conn).await.unwrap();
     local_root.read().await.lookup("cat.jpg").unwrap();
 }
 
@@ -589,8 +601,14 @@ async fn merge_remote_only() {
 async fn merge_sequential_modifications() {
     let branches = setup_with_rng(StdRng::seed_from_u64(0), 2).await;
 
-    let local_root = branches[0].open_or_create_root().await.unwrap();
-    let remote_root = branches[1].open_or_create_root().await.unwrap();
+    let local_root = branches[0]
+        .open_or_create_root_in_connection(&mut *branches[0].db_pool().acquire().await.unwrap())
+        .await
+        .unwrap();
+    let remote_root = branches[1]
+        .open_or_create_root_in_connection(&mut *branches[1].db_pool().acquire().await.unwrap())
+        .await
+        .unwrap();
 
     // Create a file by local, then modify it by remote, then read it back by local verifying
     // the modification by remote got through.
@@ -634,7 +652,7 @@ async fn merge_sequential_modifications() {
         .open(&mut conn)
         .await
         .unwrap()
-        .read_to_end()
+        .read_to_end_in_connection(&mut conn)
         .await
         .unwrap();
     assert_eq!(content, b"v1");

@@ -100,7 +100,7 @@ async fn process(shared: &Shared, local_branch: &Branch) -> Result<()> {
 
     for branch in branches {
         let mut conn = shared.store.db_pool().acquire().await?;
-        match branch.open(&mut conn).await {
+        match branch.open_root(&mut conn).await {
             Ok(dir) => roots.push(dir),
             Err(Error::EntryNotFound | Error::BlockNotFound(_)) => continue,
             Err(error) => return Err(error),

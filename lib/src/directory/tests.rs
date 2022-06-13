@@ -28,7 +28,7 @@ async fn create_and_list_entries() {
 
     // Reopen the dir and try to read the files.
     let mut conn = branch.db_pool().acquire().await.unwrap();
-    let dir = branch.open(&mut conn).await.unwrap();
+    let dir = branch.open_root(&mut conn).await.unwrap();
     let dir = dir.read().await;
 
     let expected_names: BTreeSet<_> = vec!["dog.txt", "cat.txt"].into_iter().collect();
@@ -61,14 +61,14 @@ async fn add_entry_to_existing_directory() {
     // Reopen it and add another file to it.
     let dir = {
         let mut conn = branch.db_pool().acquire().await.unwrap();
-        branch.open(&mut conn).await.unwrap()
+        branch.open_root(&mut conn).await.unwrap()
     };
     dir.create_file("two.txt".into()).await.unwrap();
 
     // Reopen it again and check boths files are still there.
     let dir = {
         let mut conn = branch.db_pool().acquire().await.unwrap();
-        branch.open(&mut conn).await.unwrap()
+        branch.open_root(&mut conn).await.unwrap()
     };
     let reader = dir.read().await;
     assert!(reader.lookup("one.txt").is_ok());
@@ -92,14 +92,14 @@ async fn remove_file() {
     let mut conn = branch.db_pool().acquire().await.unwrap();
 
     // Reopen and remove the file
-    let parent_dir = branch.open(&mut conn).await.unwrap();
+    let parent_dir = branch.open_root(&mut conn).await.unwrap();
     parent_dir
         .remove_entry(&mut conn, name, branch.id(), file_vv)
         .await
         .unwrap();
 
     // Reopen again and check the file entry was removed.
-    let parent_dir = branch.open(&mut conn).await.unwrap();
+    let parent_dir = branch.open_root(&mut conn).await.unwrap();
     let parent_dir = parent_dir.read().await;
 
     assert_matches!(parent_dir.lookup(name), Ok(EntryRef::Tombstone(_)));
@@ -121,7 +121,7 @@ async fn remove_file() {
 
     // Try re-creating the file again
     drop(parent_dir); // Drop the previous handle to avoid deadlock.
-    let parent_dir = branch.open(&mut conn).await.unwrap();
+    let parent_dir = branch.open_root(&mut conn).await.unwrap();
 
     drop(conn);
 
@@ -152,7 +152,7 @@ async fn rename_file() {
     let mut conn = branch.db_pool().acquire().await.unwrap();
 
     // Reopen and move the file
-    let parent_dir = branch.open(&mut conn).await.unwrap();
+    let parent_dir = branch.open_root(&mut conn).await.unwrap();
 
     let entry_to_move = parent_dir
         .read()
@@ -174,7 +174,7 @@ async fn rename_file() {
         .unwrap();
 
     // Reopen again and check the file entry was removed.
-    let parent_dir = branch.open(&mut conn).await.unwrap();
+    let parent_dir = branch.open_root(&mut conn).await.unwrap();
     let parent_dir = parent_dir.read().await;
 
     let mut dst_file = parent_dir
@@ -243,7 +243,7 @@ async fn move_file_within_branch() {
         .unwrap();
 
     let mut file = branch
-        .open(&mut conn)
+        .open_root(&mut conn)
         .await
         .unwrap()
         .read()
@@ -364,7 +364,7 @@ async fn move_non_empty_directory() {
         .unwrap();
 
     let file = branch
-        .open(&mut conn)
+        .open_root(&mut conn)
         .await
         .unwrap()
         .read()
@@ -419,14 +419,14 @@ async fn remove_subdirectory() {
     };
 
     // Reopen and remove the subdirectory
-    let parent_dir = branch.open(&mut conn).await.unwrap();
+    let parent_dir = branch.open_root(&mut conn).await.unwrap();
     parent_dir
         .remove_entry(&mut conn, name, branch.id(), dir_vv)
         .await
         .unwrap();
 
     // Reopen again and check the subdirectory entry was removed.
-    let parent_dir = branch.open(&mut conn).await.unwrap();
+    let parent_dir = branch.open_root(&mut conn).await.unwrap();
     let parent_dir = parent_dir.read().await;
     assert_matches!(parent_dir.lookup(name), Ok(EntryRef::Tombstone(_)));
 
@@ -450,7 +450,7 @@ async fn fork() {
     let dir0 = {
         let mut conn = branches[0].db_pool().acquire().await.unwrap();
         branches[0]
-            .open(&mut conn)
+            .open_root(&mut conn)
             .await
             .unwrap()
             .read()
@@ -477,7 +477,7 @@ async fn fork() {
 
     // Reopen orig dir and verify it's unchanged
     let dir = branches[0]
-        .open(&mut conn)
+        .open_root(&mut conn)
         .await
         .unwrap()
         .read()
@@ -494,7 +494,7 @@ async fn fork() {
 
     // Reopen forked dir and verify it contains the new file
     let dir = branches[1]
-        .open(&mut conn)
+        .open_root(&mut conn)
         .await
         .unwrap()
         .read()
@@ -513,7 +513,7 @@ async fn fork() {
     );
 
     // Verify the root dir got forked as well
-    branches[1].open(&mut conn).await.unwrap();
+    branches[1].open_root(&mut conn).await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -547,7 +547,7 @@ async fn fork_over_tombstone() {
     {
         let mut conn = branches[1].db_pool().acquire().await.unwrap();
 
-        let root1_on_0 = branches[1].open(&mut conn).await.unwrap();
+        let root1_on_0 = branches[1].open_root(&mut conn).await.unwrap();
         let dir1 = root1_on_0
             .read()
             .await

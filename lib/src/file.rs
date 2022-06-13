@@ -204,7 +204,7 @@ mod tests {
         let mut file1 = {
             let mut conn = branch0.db_pool().acquire().await.unwrap();
             branch0
-                .open(&mut conn)
+                .open_root(&mut conn)
                 .await
                 .unwrap()
                 .read()
@@ -226,7 +226,7 @@ mod tests {
         let mut file = {
             let mut conn = branch0.db_pool().acquire().await.unwrap();
             branch0
-                .open(&mut conn)
+                .open_root(&mut conn)
                 .await
                 .unwrap()
                 .read()
@@ -246,7 +246,7 @@ mod tests {
         let mut file = {
             let mut conn = branch0.db_pool().acquire().await.unwrap();
             branch1
-                .open(&mut conn)
+                .open_root(&mut conn)
                 .await
                 .unwrap()
                 .read()
@@ -276,7 +276,7 @@ mod tests {
         let mut file1 = {
             let mut conn = branch0.db_pool().acquire().await.unwrap();
             branch0
-                .open(&mut conn)
+                .open_root(&mut conn)
                 .await
                 .unwrap()
                 .read()
