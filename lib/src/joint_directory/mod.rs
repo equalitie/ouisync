@@ -171,6 +171,8 @@ impl JointDirectory {
         let mut files = vec![];
         let mut subdirs = vec![];
 
+        // let mut conn = local_branch.db_pool().acquire().await?;
+
         for entry in self.read().await.entries() {
             match entry {
                 JointEntryRef::File(entry) => files.push(entry.open().await?),

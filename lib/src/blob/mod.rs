@@ -25,16 +25,6 @@ pub(crate) struct Blob {
 impl Blob {
     /// Opens an existing blob.
     pub async fn open(
-        branch: Branch,
-        head_locator: Locator,
-        shared: MaybeInitShared,
-    ) -> Result<Self> {
-        let mut conn = branch.db_pool().acquire().await?;
-        Self::open_in_connection(&mut conn, branch, head_locator, shared).await
-    }
-
-    /// Opens an existing blob using the provided db connection.
-    pub async fn open_in_connection(
         conn: &mut db::Connection,
         branch: Branch,
         head_locator: Locator,

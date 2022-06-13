@@ -22,9 +22,12 @@ async fn empty_blob() {
     blob.flush().await.unwrap();
 
     // Re-open the blob and read its contents.
-    let mut blob = Blob::open(branch, Locator::ROOT, Shared::uninit().into())
-        .await
-        .unwrap();
+    let mut blob = {
+        let mut conn = branch.db_pool().acquire().await.unwrap();
+        Blob::open(&mut conn, branch, Locator::ROOT, Shared::uninit().into())
+            .await
+            .unwrap()
+    };
 
     let mut buffer = [0; 1];
     assert_eq!(blob.read(&mut buffer[..]).await.unwrap(), 0);
@@ -70,9 +73,12 @@ async fn write_and_read_case(
     blob.flush().await.unwrap();
 
     // Re-open the blob and read from it in chunks of `read_len` bytes
-    let mut blob = Blob::open(branch.clone(), locator, Shared::uninit().into())
-        .await
-        .unwrap();
+    let mut blob = {
+        let mut conn = branch.db_pool().acquire().await.unwrap();
+        Blob::open(&mut conn, branch.clone(), locator, Shared::uninit().into())
+            .await
+            .unwrap()
+    };
 
     let mut read_content = vec![0; 0];
     let mut read_buffer = vec![0; read_len];
@@ -108,9 +114,12 @@ fn len(
         blob.flush().await.unwrap();
         assert_eq!(blob.len().await, content_len as u64);
 
-        let blob = Blob::open(branch, Locator::ROOT, Shared::uninit().into())
-            .await
-            .unwrap();
+        let blob = {
+            let mut conn = branch.db_pool().acquire().await.unwrap();
+            Blob::open(&mut conn, branch, Locator::ROOT, Shared::uninit().into())
+                .await
+                .unwrap()
+        };
         assert_eq!(blob.len().await, content_len as u64);
     })
 }
@@ -439,16 +448,24 @@ async fn append() {
     blob.write(b"foo").await.unwrap();
     blob.flush().await.unwrap();
 
-    let mut blob = Blob::open(branch.clone(), locator, Shared::uninit().into())
-        .await
-        .unwrap();
+    let mut blob = {
+        let mut conn = branch.db_pool().acquire().await.unwrap();
+        Blob::open(&mut conn, branch.clone(), locator, Shared::uninit().into())
+            .await
+            .unwrap()
+    };
+
     blob.seek(SeekFrom::End(0)).await.unwrap();
     blob.write(b"bar").await.unwrap();
     blob.flush().await.unwrap();
 
-    let mut blob = Blob::open(branch, locator, Shared::uninit().into())
-        .await
-        .unwrap();
+    let mut blob = {
+        let mut conn = branch.db_pool().acquire().await.unwrap();
+        Blob::open(&mut conn, branch, locator, Shared::uninit().into())
+            .await
+            .unwrap()
+    };
+
     let content = blob.read_to_end().await.unwrap();
     assert_eq!(content, b"foobar");
 }
@@ -464,9 +481,13 @@ async fn write_reopen_and_read() {
     blob.write(b"foo").await.unwrap();
     blob.flush().await.unwrap();
 
-    let mut blob = Blob::open(branch, locator, shared.init().into())
-        .await
-        .unwrap();
+    let mut blob = {
+        let mut conn = branch.db_pool().acquire().await.unwrap();
+        Blob::open(&mut conn, branch, locator, shared.init().into())
+            .await
+            .unwrap()
+    };
+
     let content = blob.read_to_end().await.unwrap();
     assert_eq!(content, b"foo");
 }
@@ -537,18 +558,24 @@ async fn fork_case(
     blob.flush().await.unwrap();
 
     // Re-open the orig and verify the content is unchanged
-    let mut orig = Blob::open(src_branch, src_locator, Shared::uninit().into())
-        .await
-        .unwrap();
+    let mut orig = {
+        let mut conn = src_branch.db_pool().acquire().await.unwrap();
+        Blob::open(&mut conn, src_branch, src_locator, Shared::uninit().into())
+            .await
+            .unwrap()
+    };
 
     let buffer = orig.read_to_end().await.unwrap();
     assert_eq!(buffer.len(), src_content.len());
     assert!(buffer == src_content);
 
     // Re-open the fork and verify the content is changed
-    let mut fork = Blob::open(dst_branch, src_locator, Shared::uninit().into())
-        .await
-        .unwrap();
+    let mut fork = {
+        let mut conn = dst_branch.db_pool().acquire().await.unwrap();
+        Blob::open(&mut conn, dst_branch, src_locator, Shared::uninit().into())
+            .await
+            .unwrap()
+    };
 
     let mut buffer = vec![0; seek_pos];
     let len = fork.read(&mut buffer[..]).await.unwrap();

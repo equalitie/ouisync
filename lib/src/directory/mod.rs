@@ -302,6 +302,7 @@ impl Directory {
                     let print = print.indent();
 
                     let parent_context = ParentContext::new(self.clone(), name.into());
+
                     let mut conn = match inner.branch().db_pool().acquire().await {
                         Ok(conn) => conn,
                         Err(e) => {

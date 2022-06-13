@@ -26,8 +26,20 @@ impl File {
         parent: ParentContext,
         blob_shared: MaybeInitShared,
     ) -> Result<Self> {
+        let mut conn = branch.db_pool().acquire().await?;
+        Self::open_in_connection(&mut conn, branch, locator, parent, blob_shared).await
+    }
+
+    /// Opens an existing file using the provided db connection.
+    pub(crate) async fn open_in_connection(
+        conn: &mut db::Connection,
+        branch: Branch,
+        locator: Locator,
+        parent: ParentContext,
+        blob_shared: MaybeInitShared,
+    ) -> Result<Self> {
         Ok(Self {
-            blob: Blob::open(branch, locator, blob_shared).await?,
+            blob: Blob::open(conn, branch, locator, blob_shared).await?,
             parent,
         })
     }

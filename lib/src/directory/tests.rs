@@ -97,10 +97,20 @@ async fn remove_file() {
     assert_eq!(parent_dir.entries().count(), 1);
 
     // Check the file blob itself was removed as well.
-    match Blob::open(branch.clone(), file_locator, Shared::uninit().into()).await {
-        Err(Error::EntryNotFound) => (),
-        Err(error) => panic!("unexpected error {:?}", error),
-        Ok(_) => panic!("file blob should not exists but it does"),
+    {
+        let mut conn = branch.db_pool().acquire().await.unwrap();
+        match Blob::open(
+            &mut conn,
+            branch.clone(),
+            file_locator,
+            Shared::uninit().into(),
+        )
+        .await
+        {
+            Err(Error::EntryNotFound) => (),
+            Err(error) => panic!("unexpected error {:?}", error),
+            Ok(_) => panic!("file blob should not exists but it does"),
+        }
     }
 
     // Try re-creating the file again
@@ -379,7 +389,8 @@ async fn remove_subdirectory() {
     assert_matches!(parent_dir.lookup(name), Ok(EntryRef::Tombstone(_)));
 
     // Check the directory blob itself was removed as well.
-    match Blob::open(branch, dir_locator, Shared::uninit().into()).await {
+    let mut conn = branch.db_pool().acquire().await.unwrap();
+    match Blob::open(&mut conn, branch, dir_locator, Shared::uninit().into()).await {
         Err(Error::EntryNotFound) => (),
         Err(error) => panic!("unexpected error {:?}", error),
         Ok(_) => panic!("directory blob should not exists but it does"),
