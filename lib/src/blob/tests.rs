@@ -476,7 +476,7 @@ async fn append() {
         .await
         .unwrap();
 
-    let content = blob.read_to_end_in_connection(&mut conn).await.unwrap();
+    let content = blob.read_to_end(&mut conn).await.unwrap();
     assert_eq!(content, b"foobar");
 }
 
@@ -491,14 +491,13 @@ async fn write_reopen_and_read() {
     blob.write(b"foo").await.unwrap();
     blob.flush().await.unwrap();
 
-    let mut blob = {
-        let mut conn = branch.db_pool().acquire().await.unwrap();
-        Blob::open(&mut conn, branch, locator, shared.init().into())
-            .await
-            .unwrap()
-    };
+    let mut conn = branch.db_pool().acquire().await.unwrap();
 
-    let content = blob.read_to_end().await.unwrap();
+    let mut blob = Blob::open(&mut conn, branch, locator, shared.init().into())
+        .await
+        .unwrap();
+
+    let content = blob.read_to_end(&mut conn).await.unwrap();
     assert_eq!(content, b"foo");
 }
 
@@ -569,19 +568,16 @@ async fn fork_case(
     blob.write(&write_content[..]).await.unwrap();
     blob.flush().await.unwrap();
 
-    // Re-open the orig and verify the content is unchanged
-    let mut orig = {
-        let mut conn = src_branch.db_pool().acquire().await.unwrap();
-        Blob::open(&mut conn, src_branch, src_locator, Shared::uninit().into())
-            .await
-            .unwrap()
-    };
+    let mut conn = src_branch.db_pool().acquire().await.unwrap();
 
-    let buffer = orig.read_to_end().await.unwrap();
+    // Re-open the orig and verify the content is unchanged
+    let mut orig = Blob::open(&mut conn, src_branch, src_locator, Shared::uninit().into())
+        .await
+        .unwrap();
+
+    let buffer = orig.read_to_end(&mut conn).await.unwrap();
     assert_eq!(buffer.len(), src_content.len());
     assert!(buffer == src_content);
-
-    let mut conn = dst_branch.db_pool().acquire().await.unwrap();
 
     // Re-open the fork and verify the content is changed
     let mut fork = Blob::open(&mut conn, dst_branch, src_locator, Shared::uninit().into())

@@ -104,16 +104,7 @@ impl Blob {
 
     /// Read all data from this blob from the current seek position until the end and return then
     /// in a `Vec`.
-    pub async fn read_to_end(&mut self) -> Result<Vec<u8>> {
-        let mut conn = self.db_pool().acquire().await?;
-        self.lock().await.read_to_end(&mut conn).await
-    }
-
-    /// Read to end in a db connection.
-    pub async fn read_to_end_in_connection(
-        &mut self,
-        conn: &mut db::Connection,
-    ) -> Result<Vec<u8>> {
+    pub async fn read_to_end(&mut self, conn: &mut db::Connection) -> Result<Vec<u8>> {
         self.lock().await.read_to_end(conn).await
     }
 

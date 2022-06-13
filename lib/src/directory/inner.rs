@@ -47,7 +47,7 @@ impl Inner {
         parent: Option<ParentContext>,
     ) -> Result<Self> {
         let mut blob = Blob::open(conn, owner_branch, locator, Shared::uninit().into()).await?;
-        let buffer = blob.read_to_end_in_connection(conn).await?;
+        let buffer = blob.read_to_end(conn).await?;
         let entries = content::deserialize(&buffer)?;
 
         Ok(Self {
@@ -74,7 +74,7 @@ impl Inner {
 
         if self.pending_entry.is_some() {
             self.blob.seek(tx, SeekFrom::Start(0)).await?;
-            let buffer = self.blob.read_to_end_in_connection(tx).await?;
+            let buffer = self.blob.read_to_end(tx).await?;
             self.entries = content::deserialize(&buffer)?;
         }
 

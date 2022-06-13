@@ -69,7 +69,8 @@ impl File {
     /// Read all data from this file from the current seek position until the end and return then
     /// in a `Vec`.
     pub async fn read_to_end(&mut self) -> Result<Vec<u8>> {
-        self.blob.read_to_end().await
+        let mut conn = self.blob.db_pool().acquire().await?;
+        self.blob.read_to_end(&mut conn).await
     }
 
     /// Read all data from this file from the current seek position until the end and return then
@@ -78,7 +79,7 @@ impl File {
         &mut self,
         conn: &mut db::Connection,
     ) -> Result<Vec<u8>> {
-        self.blob.read_to_end_in_connection(conn).await
+        self.blob.read_to_end(conn).await
     }
 
     /// Writes `buffer` into this file.
