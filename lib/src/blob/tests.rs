@@ -65,13 +65,13 @@ async fn write_and_read_case(
 
     let orig_content: Vec<u8> = rng.sample_iter(Standard).take(blob_len).collect();
 
+    let mut conn = branch.db_pool().acquire().await.unwrap();
+
     for chunk in orig_content.chunks(write_len) {
-        blob.write(chunk).await.unwrap();
+        blob.write(&mut conn, chunk).await.unwrap();
     }
 
-    blob.flush().await.unwrap();
-
-    let mut conn = branch.db_pool().acquire().await.unwrap();
+    blob.flush_in_connection(&mut conn).await.unwrap();
 
     // Re-open the blob and read from it in chunks of `read_len` bytes
     let mut blob = Blob::open(&mut conn, branch.clone(), locator, Shared::uninit().into())
@@ -102,22 +102,20 @@ fn len(
 ) {
     test_utils::run(async {
         let (rng, branch) = setup(rng_seed).await;
+        let mut conn = branch.db_pool().acquire().await.unwrap();
 
         let content: Vec<u8> = rng.sample_iter(Standard).take(content_len).collect();
 
         let mut blob = Blob::create(branch.clone(), Locator::ROOT, Shared::uninit());
-        blob.write(&content[..]).await.unwrap();
+        blob.write(&mut conn, &content[..]).await.unwrap();
         assert_eq!(blob.len().await, content_len as u64);
 
-        blob.flush().await.unwrap();
+        blob.flush_in_connection(&mut conn).await.unwrap();
         assert_eq!(blob.len().await, content_len as u64);
 
-        let blob = {
-            let mut conn = branch.db_pool().acquire().await.unwrap();
-            Blob::open(&mut conn, branch, Locator::ROOT, Shared::uninit().into())
-                .await
-                .unwrap()
-        };
+        let blob = Blob::open(&mut conn, branch, Locator::ROOT, Shared::uninit().into())
+            .await
+            .unwrap();
         assert_eq!(blob.len().await, content_len as u64);
     })
 }
@@ -152,14 +150,13 @@ fn seek_from_end(
 
 async fn seek_from(content_len: usize, seek_from: SeekFrom, expected_pos: usize, rng_seed: u64) {
     let (rng, branch) = setup(rng_seed).await;
+    let mut conn = branch.db_pool().acquire().await.unwrap();
 
     let content: Vec<u8> = rng.sample_iter(Standard).take(content_len).collect();
 
     let mut blob = Blob::create(branch.clone(), Locator::ROOT, Shared::uninit());
-    blob.write(&content[..]).await.unwrap();
-    blob.flush().await.unwrap();
-
-    let mut conn = branch.db_pool().acquire().await.unwrap();
+    blob.write(&mut conn, &content[..]).await.unwrap();
+    blob.flush_in_connection(&mut conn).await.unwrap();
 
     blob.seek(&mut conn, seek_from).await.unwrap();
 
@@ -176,14 +173,13 @@ fn seek_from_current(
 ) {
     test_utils::run(async {
         let (rng, branch) = setup(rng_seed).await;
+        let mut conn = branch.db_pool().acquire().await.unwrap();
 
         let content: Vec<u8> = rng.sample_iter(Standard).take(content_len).collect();
 
         let mut blob = Blob::create(branch.clone(), Locator::ROOT, Shared::uninit());
-        blob.write(&content[..]).await.unwrap();
-        blob.flush().await.unwrap();
-
-        let mut conn = branch.db_pool().acquire().await.unwrap();
+        blob.write(&mut conn, &content[..]).await.unwrap();
+        blob.flush_in_connection(&mut conn).await.unwrap();
 
         blob.seek(&mut conn, SeekFrom::Start(0)).await.unwrap();
 
@@ -204,14 +200,14 @@ fn seek_from_current(
 #[tokio::test(flavor = "multi_thread")]
 async fn seek_after_end() {
     let (_, branch) = setup(0).await;
+    let mut conn = branch.db_pool().acquire().await.unwrap();
 
     let content = b"content";
 
     let mut blob = Blob::create(branch.clone(), Locator::ROOT, Shared::uninit());
-    blob.write(&content[..]).await.unwrap();
-    blob.flush().await.unwrap();
+    blob.write(&mut conn, &content[..]).await.unwrap();
+    blob.flush_in_connection(&mut conn).await.unwrap();
 
-    let mut conn = branch.db_pool().acquire().await.unwrap();
     let mut read_buffer = [0];
 
     for &offset in &[0, 1, 2] {
@@ -226,14 +222,14 @@ async fn seek_after_end() {
 #[tokio::test(flavor = "multi_thread")]
 async fn seek_before_start() {
     let (_, branch) = setup(0).await;
+    let mut conn = branch.db_pool().acquire().await.unwrap();
 
     let content = b"content";
 
     let mut blob = Blob::create(branch.clone(), Locator::ROOT, Shared::uninit());
-    blob.write(&content[..]).await.unwrap();
-    blob.flush().await.unwrap();
+    blob.write(&mut conn, &content[..]).await.unwrap();
+    blob.flush_in_connection(&mut conn).await.unwrap();
 
-    let mut conn = branch.db_pool().acquire().await.unwrap();
     let mut read_buffer = vec![0; content.len()];
 
     for &offset in &[0, 1, 2] {
@@ -248,6 +244,7 @@ async fn seek_before_start() {
 #[tokio::test(flavor = "multi_thread")]
 async fn remove_blob() {
     let (mut rng, branch) = setup(0).await;
+    let mut conn = branch.db_pool().acquire().await.unwrap();
 
     let locator0 = random_head_locator(&mut rng);
     let locator1 = locator0.next();
@@ -258,42 +255,49 @@ async fn remove_blob() {
         .collect();
 
     let mut blob = Blob::create(branch.clone(), locator0, Shared::uninit());
-    blob.write(&content).await.unwrap();
-    blob.flush().await.unwrap();
+    blob.write(&mut conn, &content).await.unwrap();
+    blob.flush_in_connection(&mut conn).await.unwrap();
 
     let encoded_locator0 = locator0.encode(branch.keys().read());
     let encoded_locator1 = locator1.encode(branch.keys().read());
 
-    let mut tx = branch.db_pool().begin().await.unwrap();
-
     let block_ids = {
-        let id0 = branch.data().get(&mut tx, &encoded_locator0).await.unwrap();
-        let id1 = branch.data().get(&mut tx, &encoded_locator1).await.unwrap();
+        let id0 = branch
+            .data()
+            .get(&mut conn, &encoded_locator0)
+            .await
+            .unwrap();
+        let id1 = branch
+            .data()
+            .get(&mut conn, &encoded_locator1)
+            .await
+            .unwrap();
         [id0, id1]
     };
 
     // Remove the blob
-    Blob::remove(&mut tx, &branch, locator0).await.unwrap();
+    Blob::remove(&mut conn, &branch, locator0).await.unwrap();
 
     // Check the block entries were deleted from the index.
     assert_matches!(
-        branch.data().get(&mut tx, &encoded_locator0).await,
+        branch.data().get(&mut conn, &encoded_locator0).await,
         Err(Error::EntryNotFound)
     );
     assert_matches!(
-        branch.data().get(&mut tx, &encoded_locator1).await,
+        branch.data().get(&mut conn, &encoded_locator1).await,
         Err(Error::EntryNotFound)
     );
 
     // Check the blocks were deleted as well.
     for block_id in &block_ids {
-        assert!(!block::exists(&mut tx, block_id).await.unwrap());
+        assert!(!block::exists(&mut conn, block_id).await.unwrap());
     }
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn truncate_to_empty() {
     let (mut rng, branch) = setup(0).await;
+    let mut conn = branch.db_pool().acquire().await.unwrap();
 
     let locator0 = random_head_locator(&mut rng);
     let locator1 = locator0.next();
@@ -304,24 +308,21 @@ async fn truncate_to_empty() {
         .collect();
 
     let mut blob = Blob::create(branch.clone(), locator0, Shared::uninit());
-    blob.write(&content).await.unwrap();
-    blob.flush().await.unwrap();
+    blob.write(&mut conn, &content).await.unwrap();
+    blob.flush_in_connection(&mut conn).await.unwrap();
 
     let locator0 = locator0.encode(branch.keys().read());
     let locator1 = locator1.encode(branch.keys().read());
 
     let (old_block_id0, old_block_id1) = {
-        let mut conn = branch.db_pool().acquire().await.unwrap();
         let id0 = branch.data().get(&mut conn, &locator0).await.unwrap();
         let id1 = branch.data().get(&mut conn, &locator1).await.unwrap();
 
         (id0, id1)
     };
 
-    blob.truncate(0).await.unwrap();
-    blob.flush().await.unwrap();
-
-    let mut conn = branch.db_pool().acquire().await.unwrap();
+    blob.truncate_in_connection(&mut conn, 0).await.unwrap();
+    blob.flush_in_connection(&mut conn).await.unwrap();
 
     // Check the blob is empty
     let mut buffer = [0; 1];
@@ -348,6 +349,7 @@ async fn truncate_to_empty() {
 #[tokio::test(flavor = "multi_thread")]
 async fn truncate_to_shorter() {
     let (mut rng, branch) = setup(0).await;
+    let mut conn = branch.db_pool().acquire().await.unwrap();
 
     let locator0 = random_head_locator(&mut rng);
     let locator1 = locator0.next();
@@ -359,15 +361,15 @@ async fn truncate_to_shorter() {
         .collect();
 
     let mut blob = Blob::create(branch.clone(), locator0, Shared::uninit());
-    blob.write(&content).await.unwrap();
-    blob.flush().await.unwrap();
+    blob.write(&mut conn, &content).await.unwrap();
+    blob.flush_in_connection(&mut conn).await.unwrap();
 
     let new_len = BLOCK_SIZE / 2;
 
-    blob.truncate(new_len as u64).await.unwrap();
-    blob.flush().await.unwrap();
-
-    let mut conn = branch.db_pool().acquire().await.unwrap();
+    blob.truncate_in_connection(&mut conn, new_len as u64)
+        .await
+        .unwrap();
+    blob.flush_in_connection(&mut conn).await.unwrap();
 
     let mut buffer = vec![0; new_len];
     blob.seek(&mut conn, SeekFrom::Start(0)).await.unwrap();
@@ -389,6 +391,8 @@ async fn truncate_to_shorter() {
 #[tokio::test(flavor = "multi_thread")]
 async fn truncate_marks_as_dirty() {
     let (mut rng, branch) = setup(0).await;
+    let mut conn = branch.db_pool().acquire().await.unwrap();
+
     let locator = random_head_locator(&mut rng);
 
     let content: Vec<_> = (&mut rng)
@@ -397,45 +401,39 @@ async fn truncate_marks_as_dirty() {
         .collect();
 
     let mut blob = Blob::create(branch.clone(), locator, Shared::uninit());
-    blob.write(&content).await.unwrap();
-    blob.flush().await.unwrap();
+    blob.write(&mut conn, &content).await.unwrap();
+    blob.flush_in_connection(&mut conn).await.unwrap();
 
-    blob.truncate(0).await.unwrap();
+    blob.truncate_in_connection(&mut conn, 0).await.unwrap();
     assert!(blob.is_dirty());
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn modify_blob() {
     let (mut rng, branch) = setup(0).await;
+    let mut conn = branch.db_pool().acquire().await.unwrap();
 
     let locator0 = random_head_locator(&mut rng);
     let locator1 = locator0.next();
 
     let content = vec![0; 2 * BLOCK_SIZE];
     let mut blob = Blob::create(branch.clone(), locator0, Shared::uninit());
-    blob.write(&content).await.unwrap();
-    blob.flush().await.unwrap();
+    blob.write(&mut conn, &content).await.unwrap();
+    blob.flush_in_connection(&mut conn).await.unwrap();
 
     let locator0 = locator0.encode(branch.keys().read());
     let locator1 = locator1.encode(branch.keys().read());
 
     let (old_block_id0, old_block_id1) = {
-        let mut tx = branch.db_pool().begin().await.unwrap();
-        let id0 = branch.data().get(&mut tx, &locator0).await.unwrap();
-        let id1 = branch.data().get(&mut tx, &locator1).await.unwrap();
+        let id0 = branch.data().get(&mut conn, &locator0).await.unwrap();
+        let id1 = branch.data().get(&mut conn, &locator1).await.unwrap();
         (id0, id1)
     };
 
     let buffer = vec![1; 3 * BLOCK_SIZE / 2];
-
-    let mut conn = branch.db_pool().acquire().await.unwrap();
     blob.seek(&mut conn, SeekFrom::Start(0)).await.unwrap();
-    drop(conn);
-
-    blob.write(&buffer).await.unwrap();
-    blob.flush().await.unwrap();
-
-    let mut conn = branch.db_pool().acquire().await.unwrap();
+    blob.write(&mut conn, &buffer).await.unwrap();
+    blob.flush_in_connection(&mut conn).await.unwrap();
 
     let new_block_id0 = branch.data().get(&mut conn, &locator0).await.unwrap();
     let new_block_id1 = branch.data().get(&mut conn, &locator1).await.unwrap();
@@ -452,26 +450,21 @@ async fn modify_blob() {
 #[tokio::test(flavor = "multi_thread")]
 async fn append() {
     let (mut rng, branch) = setup(0).await;
+    let mut conn = branch.db_pool().acquire().await.unwrap();
 
     let locator = random_head_locator(&mut rng);
     let mut blob = Blob::create(branch.clone(), locator, Shared::uninit());
-    blob.write(b"foo").await.unwrap();
-    blob.flush().await.unwrap();
-
-    let mut conn = branch.db_pool().acquire().await.unwrap();
+    blob.write(&mut conn, b"foo").await.unwrap();
+    blob.flush_in_connection(&mut conn).await.unwrap();
 
     let mut blob = Blob::open(&mut conn, branch.clone(), locator, Shared::uninit().into())
         .await
         .unwrap();
 
     blob.seek(&mut conn, SeekFrom::End(0)).await.unwrap();
+    blob.write(&mut conn, b"bar").await.unwrap();
+    blob.flush_in_connection(&mut conn).await.unwrap();
 
-    drop(conn);
-
-    blob.write(b"bar").await.unwrap();
-    blob.flush().await.unwrap();
-
-    let mut conn = branch.db_pool().acquire().await.unwrap();
     let mut blob = Blob::open(&mut conn, branch, locator, Shared::uninit().into())
         .await
         .unwrap();
@@ -483,15 +476,14 @@ async fn append() {
 #[tokio::test(flavor = "multi_thread")]
 async fn write_reopen_and_read() {
     let (mut rng, branch) = setup(0).await;
+    let mut conn = branch.db_pool().acquire().await.unwrap();
 
     let locator = random_head_locator(&mut rng);
     let shared = Shared::uninit();
 
     let mut blob = Blob::create(branch.clone(), locator, shared.clone());
-    blob.write(b"foo").await.unwrap();
-    blob.flush().await.unwrap();
-
-    let mut conn = branch.db_pool().acquire().await.unwrap();
+    blob.write(&mut conn, b"foo").await.unwrap();
+    blob.flush_in_connection(&mut conn).await.unwrap();
 
     let mut blob = Blob::open(&mut conn, branch, locator, shared.init().into())
         .await
@@ -550,25 +542,23 @@ async fn fork_case(
         Locator::head(rng.gen())
     };
 
+    let mut conn = src_branch.db_pool().acquire().await.unwrap();
+
     let src_content: Vec<u8> = (&mut rng).sample_iter(Standard).take(src_len).collect();
 
     let mut blob = Blob::create(src_branch.clone(), src_locator, Shared::uninit());
-    blob.write(&src_content[..]).await.unwrap();
-    blob.flush().await.unwrap();
+    blob.write(&mut conn, &src_content[..]).await.unwrap();
+    blob.flush_in_connection(&mut conn).await.unwrap();
 
-    let mut tx = src_branch.db_pool().begin().await.unwrap();
-    blob.seek(&mut tx, SeekFrom::Start(seek_pos as u64))
+    blob.seek(&mut conn, SeekFrom::Start(seek_pos as u64))
         .await
         .unwrap();
-    blob = blob.try_fork(&mut tx, dst_branch.clone()).await.unwrap();
-    tx.commit().await.unwrap();
+    blob = blob.try_fork(&mut conn, dst_branch.clone()).await.unwrap();
 
     let write_content: Vec<u8> = rng.sample_iter(Standard).take(write_len).collect();
 
-    blob.write(&write_content[..]).await.unwrap();
-    blob.flush().await.unwrap();
-
-    let mut conn = src_branch.db_pool().acquire().await.unwrap();
+    blob.write(&mut conn, &write_content[..]).await.unwrap();
+    blob.flush_in_connection(&mut conn).await.unwrap();
 
     // Re-open the orig and verify the content is unchanged
     let mut orig = Blob::open(&mut conn, src_branch, src_locator, Shared::uninit().into())
@@ -600,6 +590,7 @@ async fn fork_case(
 #[tokio::test(flavor = "multi_thread")]
 async fn block_ids_test() {
     let (mut rng, branch) = setup(0).await;
+    let mut conn = branch.db_pool().acquire().await.unwrap();
 
     let blob_id: BlobId = rng.gen();
     let head_locator = Locator::head(blob_id);
@@ -609,10 +600,9 @@ async fn block_ids_test() {
         .sample_iter(Standard)
         .take(BLOCK_SIZE * 3 - HEADER_SIZE)
         .collect();
-    blob.write(&content).await.unwrap();
-    blob.flush().await.unwrap();
+    blob.write(&mut conn, &content).await.unwrap();
+    blob.flush_in_connection(&mut conn).await.unwrap();
 
-    let mut conn = branch.db_pool().acquire().await.unwrap();
     let mut block_ids = BlockIds::new(branch, blob_id);
     let mut actual_count = 0;
 

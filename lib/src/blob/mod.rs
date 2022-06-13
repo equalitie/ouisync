@@ -63,17 +63,17 @@ impl Blob {
 
     /// Removes a blob.
     pub async fn remove(
-        tx: &mut db::Transaction<'_>,
+        conn: &mut db::Connection,
         branch: &Branch,
         head_locator: Locator,
     ) -> Result<()> {
         // TODO: we only need the first 8 bytes of the block, no need to read it all.
-        let mut current_block = OpenBlock::open_head(tx, branch, head_locator).await?;
+        let mut current_block = OpenBlock::open_head(conn, branch, head_locator).await?;
         let len = current_block.content.read_u64();
         let block_count = inner::block_count(len);
 
         operations::remove_blocks(
-            tx,
+            conn,
             branch,
             head_locator.sequence().take(block_count as usize),
         )
@@ -109,20 +109,8 @@ impl Blob {
     }
 
     /// Writes `buffer` into this blob, advancing the blob's internal cursor.
-    pub async fn write(&mut self, buffer: &[u8]) -> Result<()> {
-        let mut tx = self.db_pool().begin().await?;
-        self.lock().await.write(&mut tx, buffer).await?;
-        tx.commit().await?;
-        Ok(())
-    }
-
-    /// Writes into this blob in a db transaction.
-    pub async fn write_in_transaction(
-        &mut self,
-        tx: &mut db::Transaction<'_>,
-        buffer: &[u8],
-    ) -> Result<()> {
-        self.lock().await.write(tx, buffer).await
+    pub async fn write(&mut self, conn: &mut db::Connection, buffer: &[u8]) -> Result<()> {
+        self.lock().await.write(conn, buffer).await
     }
 
     /// Seek to an offset in the blob.
@@ -143,13 +131,13 @@ impl Blob {
         Ok(())
     }
 
-    /// Truncate the blob to the given length in a db transaction.
-    pub async fn truncate_in_transaction(
+    /// Truncate the blob to the given length in a db connection.
+    pub async fn truncate_in_connection(
         &mut self,
-        tx: &mut db::Transaction<'_>,
+        conn: &mut db::Connection,
         len: u64,
     ) -> Result<()> {
-        self.lock().await.truncate(tx, len).await
+        self.lock().await.truncate(conn, len).await
     }
 
     /// Flushes this blob, ensuring that all intermediately buffered contents gets written to the
@@ -164,15 +152,15 @@ impl Blob {
         Ok(was_dirty)
     }
 
-    /// Flushes this blob in a db transaction.
-    pub async fn flush_in_transaction(&mut self, tx: &mut db::Transaction<'_>) -> Result<bool> {
-        self.lock().await.flush(tx).await
+    /// Flushes this blob in a db connection.
+    pub async fn flush_in_connection(&mut self, conn: &mut db::Connection) -> Result<bool> {
+        self.lock().await.flush(conn).await
     }
 
     /// Creates a shallow copy (only the index nodes are copied, not blocks) of this blob into the
     /// specified destination branch unless the blob is already in `dst_branch`. In that case
     /// returns `Error::EntryExists`.
-    pub async fn try_fork(&self, tx: &mut db::Transaction<'_>, dst_branch: Branch) -> Result<Self> {
+    pub async fn try_fork(&self, conn: &mut db::Connection, dst_branch: Branch) -> Result<Self> {
         if self.unique.branch.id() == dst_branch.id() {
             return Err(Error::EntryExists);
         }
@@ -193,11 +181,16 @@ impl Blob {
         for locator in locators {
             let encoded_locator = locator.encode(read_key);
 
-            let block_id = self.unique.branch.data().get(tx, &encoded_locator).await?;
+            let block_id = self
+                .unique
+                .branch
+                .data()
+                .get(conn, &encoded_locator)
+                .await?;
 
             dst_branch
                 .data()
-                .insert(tx, &block_id, &encoded_locator, write_keys)
+                .insert(conn, &block_id, &encoded_locator, write_keys)
                 .await?;
         }
 
