@@ -368,14 +368,13 @@ impl Repository {
         };
 
         drop(src_joint_dir);
-        drop(conn);
 
         // Get the entry here before we release the lock to the directory. This way the entry shall
         // contain version vector that we want to delete and if someone updates the entry between
         // now and when the entry is actually to be removed, the concurrent updates shall remain.
         let src_entry = src_dir.read().await.lookup(&src_name)?.clone_data();
 
-        let dst_joint_dir = self.open_directory(&dst_dir_path).await?;
+        let dst_joint_dir = self.cd(&mut conn, &dst_dir_path).await?;
         let dst_joint_reader = dst_joint_dir.read().await;
 
         let dst_vv = match dst_joint_reader.lookup_unique(dst_name) {
@@ -393,9 +392,14 @@ impl Repository {
         drop(dst_joint_reader);
         drop(dst_joint_dir);
 
+        // TODO: use `conn` to create `dst_dir`
+        drop(conn);
+
         let dst_dir = self.create_directory(dst_dir_path).await?;
+
+        let mut conn = self.shared.store.db_pool().acquire().await?;
         src_dir
-            .move_entry(&src_name, src_entry, &dst_dir, dst_name, dst_vv)
+            .move_entry(&mut conn, &src_name, src_entry, &dst_dir, dst_name, dst_vv)
             .await
     }
 

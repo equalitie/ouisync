@@ -141,6 +141,7 @@ impl Directory {
     /// proper hard links.
     pub(crate) async fn move_entry(
         &self,
+        conn: &mut db::Connection,
         src_name: &str,
         src_data: EntryData,
         dst_dir: &Directory,
@@ -149,8 +150,6 @@ impl Directory {
     ) -> Result<()> {
         let mut dst_data = src_data;
         let src_vv = mem::replace(dst_data.version_vector_mut(), dst_vv);
-
-        let mut conn = self.acquire_db().await?;
 
         {
             let tx = conn.begin().await?;

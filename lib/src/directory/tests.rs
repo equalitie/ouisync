@@ -139,18 +139,20 @@ async fn rename_file() {
     let content = b"hee-haw";
 
     // Create a directory with a single file.
-    let parent_dir = branch.open_or_create_root().await.unwrap();
+    let parent_dir = branch
+        .open_or_create_root_in_connection(&mut *branch.db_pool().acquire().await.unwrap())
+        .await
+        .unwrap();
     let mut file = parent_dir.create_file(src_name.into()).await.unwrap();
     file.write(content).await.unwrap();
     file.flush().await.unwrap();
 
     let file_locator = *file.locator();
 
+    let mut conn = branch.db_pool().acquire().await.unwrap();
+
     // Reopen and move the file
-    let parent_dir = {
-        let mut conn = branch.db_pool().acquire().await.unwrap();
-        branch.open(&mut conn).await.unwrap()
-    };
+    let parent_dir = branch.open(&mut conn).await.unwrap();
 
     let entry_to_move = parent_dir
         .read()
@@ -161,6 +163,7 @@ async fn rename_file() {
 
     parent_dir
         .move_entry(
+            &mut conn,
             src_name,
             entry_to_move,
             &parent_dir,
@@ -169,8 +172,6 @@ async fn rename_file() {
         )
         .await
         .unwrap();
-
-    let mut conn = branch.db_pool().acquire().await.unwrap();
 
     // Reopen again and check the file entry was removed.
     let parent_dir = branch.open(&mut conn).await.unwrap();
@@ -204,7 +205,10 @@ async fn move_file_within_branch() {
     let content = b"moo";
 
     // Create a directory with a single file.
-    let root_dir = branch.open_or_create_root().await.unwrap();
+    let root_dir = branch
+        .open_or_create_root_in_connection(&mut *branch.db_pool().acquire().await.unwrap())
+        .await
+        .unwrap();
     let aux_dir = root_dir.create_directory("aux".into()).await.unwrap();
 
     let mut file = root_dir.create_file(file_name.into()).await.unwrap();
@@ -217,6 +221,8 @@ async fn move_file_within_branch() {
     // Move the file from ./ to ./aux/
     //
 
+    let mut conn = branch.db_pool().acquire().await.unwrap();
+
     let entry_to_move = root_dir
         .read()
         .await
@@ -226,6 +232,7 @@ async fn move_file_within_branch() {
 
     root_dir
         .move_entry(
+            &mut conn,
             file_name,
             entry_to_move,
             &aux_dir,
@@ -235,34 +242,34 @@ async fn move_file_within_branch() {
         .await
         .unwrap();
 
-    let mut file = {
-        let mut conn = branch.db_pool().acquire().await.unwrap();
-        branch
-            .open(&mut conn)
-            .await
-            .unwrap()
-            .read()
-            .await
-            .lookup("aux")
-            .unwrap()
-            .directory()
-            .unwrap()
-            .open(&mut conn)
-            .await
-            .unwrap()
-            .read()
-            .await
-            .lookup(file_name)
-            .unwrap()
-            .file()
-            .unwrap()
-            .open(&mut conn)
-            .await
-            .unwrap()
-    };
+    let mut file = branch
+        .open(&mut conn)
+        .await
+        .unwrap()
+        .read()
+        .await
+        .lookup("aux")
+        .unwrap()
+        .directory()
+        .unwrap()
+        .open(&mut conn)
+        .await
+        .unwrap()
+        .read()
+        .await
+        .lookup(file_name)
+        .unwrap()
+        .file()
+        .unwrap()
+        .open(&mut conn)
+        .await
+        .unwrap();
 
     assert_eq!(&file_locator, file.locator());
-    assert_eq!(&content[..], &file.read_to_end().await.unwrap()[..]);
+    assert_eq!(
+        &content[..],
+        &file.read_to_end_in_connection(&mut conn).await.unwrap()[..]
+    );
 
     //
     // Now move it back from ./aux/ to ./
@@ -280,6 +287,7 @@ async fn move_file_within_branch() {
 
     aux_dir
         .move_entry(
+            &mut conn,
             file_name,
             entry_to_move,
             &root_dir,
@@ -288,8 +296,6 @@ async fn move_file_within_branch() {
         )
         .await
         .unwrap();
-
-    let mut conn = branch.db_pool().acquire().await.unwrap();
 
     let mut file = root_dir
         .read()
@@ -325,7 +331,10 @@ async fn move_non_empty_directory() {
     let content = b"moo";
 
     // Create a directory with a single file.
-    let root_dir = branch.open_or_create_root().await.unwrap();
+    let root_dir = branch
+        .open_or_create_root_in_connection(&mut *branch.db_pool().acquire().await.unwrap())
+        .await
+        .unwrap();
     let dir = root_dir.create_directory(dir_name.into()).await.unwrap();
 
     let mut file = dir.create_file(file_name.into()).await.unwrap();
@@ -340,8 +349,11 @@ async fn move_non_empty_directory() {
 
     let entry_to_move = root_dir.read().await.lookup(dir_name).unwrap().clone_data();
 
+    let mut conn = branch.db_pool().acquire().await.unwrap();
+
     root_dir
         .move_entry(
+            &mut conn,
             dir_name,
             entry_to_move,
             &dst_dir,
@@ -351,40 +363,37 @@ async fn move_non_empty_directory() {
         .await
         .unwrap();
 
-    let file = {
-        let mut conn = branch.db_pool().acquire().await.unwrap();
-        branch
-            .open(&mut conn)
-            .await
-            .unwrap()
-            .read()
-            .await
-            .lookup(dst_dir_name)
-            .unwrap()
-            .directory()
-            .unwrap()
-            .open(&mut conn)
-            .await
-            .unwrap()
-            .read()
-            .await
-            .lookup(dir_name)
-            .unwrap()
-            .directory()
-            .unwrap()
-            .open(&mut conn)
-            .await
-            .unwrap()
-            .read()
-            .await
-            .lookup(file_name)
-            .unwrap()
-            .file()
-            .unwrap()
-            .open(&mut conn)
-            .await
-            .unwrap()
-    };
+    let file = branch
+        .open(&mut conn)
+        .await
+        .unwrap()
+        .read()
+        .await
+        .lookup(dst_dir_name)
+        .unwrap()
+        .directory()
+        .unwrap()
+        .open(&mut conn)
+        .await
+        .unwrap()
+        .read()
+        .await
+        .lookup(dir_name)
+        .unwrap()
+        .directory()
+        .unwrap()
+        .open(&mut conn)
+        .await
+        .unwrap()
+        .read()
+        .await
+        .lookup(file_name)
+        .unwrap()
+        .file()
+        .unwrap()
+        .open(&mut conn)
+        .await
+        .unwrap();
 
     assert_eq!(&file_locator, file.locator());
 }
