@@ -69,7 +69,7 @@ impl File {
     /// Read all data from this file from the current seek position until the end and return then
     /// in a `Vec`.
     pub async fn read_to_end(&mut self) -> Result<Vec<u8>> {
-        let mut conn = self.blob.db_pool().acquire().await?;
+        let mut conn = self.blob.branch().db_pool().acquire().await?;
         self.blob.read_to_end(&mut conn).await
     }
 
@@ -84,19 +84,19 @@ impl File {
 
     /// Writes `buffer` into this file.
     pub async fn write(&mut self, buffer: &[u8]) -> Result<()> {
-        let mut conn = self.blob.db_pool().acquire().await?;
+        let mut conn = self.blob.branch().db_pool().acquire().await?;
         self.blob.write(&mut conn, buffer).await
     }
 
     /// Seeks to an offset in the file.
     pub async fn seek(&mut self, pos: SeekFrom) -> Result<u64> {
-        let mut conn = self.blob.db_pool().acquire().await?;
+        let mut conn = self.blob.branch().db_pool().acquire().await?;
         self.blob.seek(&mut conn, pos).await
     }
 
     /// Truncates the file to the given length.
     pub async fn truncate(&mut self, len: u64) -> Result<()> {
-        let mut conn = self.blob.db_pool().acquire().await?;
+        let mut conn = self.blob.branch().db_pool().acquire().await?;
         self.blob.truncate(&mut conn, len).await
     }
 
@@ -107,7 +107,7 @@ impl File {
             return Ok(());
         }
 
-        let mut conn = self.blob.db_pool().acquire().await?;
+        let mut conn = self.blob.branch().db_pool().acquire().await?;
         let mut tx = conn.begin().await?;
 
         self.blob.flush(&mut tx).await?;
@@ -163,7 +163,7 @@ impl File {
     /// Forks this file into the local branch. Ensure all its ancestor directories exist and live
     /// in the local branch as well. Should be called before any mutable operation.
     pub async fn fork(&mut self, local_branch: &Branch) -> Result<()> {
-        let mut conn = self.blob.db_pool().acquire().await?;
+        let mut conn = self.blob.branch().db_pool().acquire().await?;
         self.fork_in_connection(&mut conn, local_branch).await
     }
 

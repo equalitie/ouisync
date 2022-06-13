@@ -189,10 +189,6 @@ impl Blob {
         self.unique.current_block.dirty || self.unique.len_dirty
     }
 
-    pub fn db_pool(&self) -> &db::Pool {
-        self.unique.branch.db_pool()
-    }
-
     async fn lock(&mut self) -> Operations<'_> {
         Operations {
             shared: self.shared.lock().await,
