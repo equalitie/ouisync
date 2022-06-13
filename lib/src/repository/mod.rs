@@ -288,13 +288,19 @@ impl Repository {
     /// Creates a new file at the given path.
     pub async fn create_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<File> {
         let local_branch = self.get_or_create_local_branch().await?;
-        local_branch.ensure_file_exists(path.as_ref()).await
+        let mut conn = self.shared.store.db_pool().acquire().await?;
+        local_branch
+            .ensure_file_exists(&mut conn, path.as_ref())
+            .await
     }
 
     /// Creates a new directory at the given path.
     pub async fn create_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<Directory> {
         let local_branch = self.get_or_create_local_branch().await?;
-        local_branch.ensure_directory_exists(path.as_ref()).await
+        let mut conn = self.shared.store.db_pool().acquire().await?;
+        local_branch
+            .ensure_directory_exists(&mut conn, path.as_ref())
+            .await
     }
 
     /// Removes the file or directory (must be empty) and flushes its parent directory.

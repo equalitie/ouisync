@@ -81,15 +81,13 @@ impl Directory {
     }
 
     /// Creates a new file inside this directory.
-    pub async fn create_file(&self, name: String) -> Result<File> {
-        let mut conn = self.acquire_db().await?;
+    pub async fn create_file(&self, conn: &mut db::Connection, name: String) -> Result<File> {
         let tx = conn.begin().await?;
         self.write().await.create_file(tx, name).await
     }
 
     /// Creates a new subdirectory of this directory.
-    pub async fn create_directory(&self, name: String) -> Result<Self> {
-        let mut conn = self.acquire_db().await?;
+    pub async fn create_directory(&self, conn: &mut db::Connection, name: String) -> Result<Self> {
         let tx = conn.begin().await?;
         self.write().await.create_directory(tx, name).await
     }
@@ -358,14 +356,6 @@ impl Directory {
         conn: &mut db::Connection,
     ) -> Result<VersionVector> {
         self.read().await.version_vector(conn).await
-    }
-
-    // Acquire a db connection in a deadlock-safe manner.
-    async fn acquire_db(&self) -> Result<db::PoolConnection> {
-        // Make sure to acquire the db connection while the directory is not locked.
-        // TODO: optimize this by storing the pool directly in `Self`.
-        let pool = self.read().await.branch().db_pool().clone();
-        Ok(pool.acquire().await?)
     }
 }
 

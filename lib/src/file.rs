@@ -83,9 +83,19 @@ impl File {
     }
 
     /// Writes `buffer` into this file.
+    #[deprecated = "use `write_in_connection` instead"]
     pub async fn write(&mut self, buffer: &[u8]) -> Result<()> {
         let mut conn = self.blob.branch().db_pool().acquire().await?;
         self.blob.write(&mut conn, buffer).await
+    }
+
+    /// Writes `buffer` into this file.
+    pub async fn write_in_connection(
+        &mut self,
+        conn: &mut db::Connection,
+        buffer: &[u8],
+    ) -> Result<()> {
+        self.blob.write(conn, buffer).await
     }
 
     /// Seeks to an offset in the file.
@@ -95,13 +105,24 @@ impl File {
     }
 
     /// Truncates the file to the given length.
+    #[deprecated = "use `truncate_in_connection` instead"]
     pub async fn truncate(&mut self, len: u64) -> Result<()> {
         let mut conn = self.blob.branch().db_pool().acquire().await?;
         self.blob.truncate(&mut conn, len).await
     }
 
+    /// Truncates the file to the given length.
+    pub async fn truncate_in_connection(
+        &mut self,
+        conn: &mut db::Connection,
+        len: u64,
+    ) -> Result<()> {
+        self.blob.truncate(conn, len).await
+    }
+
     /// Atomically saves any pending modifications and updates the version vectors of this file and
     /// all its ancestors.
+    #[deprecated = "use `flush_in_connection` instead"]
     pub async fn flush(&mut self) -> Result<()> {
         if !self.blob.is_dirty() {
             return Ok(());
@@ -110,6 +131,18 @@ impl File {
         let mut conn = self.blob.branch().db_pool().acquire().await?;
         let mut tx = conn.begin().await?;
 
+        self.blob.flush(&mut tx).await?;
+        self.parent.commit(tx, VersionVector::new()).await
+    }
+
+    /// Atomically saves any pending modifications and updates the version vectors of this file and
+    /// all its ancestors.
+    pub async fn flush_in_connection(&mut self, conn: &mut db::Connection) -> Result<()> {
+        if !self.blob.is_dirty() {
+            return Ok(());
+        }
+
+        let mut tx = conn.begin().await?;
         self.blob.flush(&mut tx).await?;
         self.parent.commit(tx, VersionVector::new()).await
     }
@@ -193,74 +226,81 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn fork() {
         let (branch0, branch1) = setup().await;
+        let mut conn = branch0.db_pool().acquire().await.unwrap();
 
         // Create a file owned by branch 0
-        let mut file0 = branch0.ensure_file_exists("/dog.jpg".into()).await.unwrap();
+        let mut file0 = branch0
+            .ensure_file_exists(&mut conn, "/dog.jpg".into())
+            .await
+            .unwrap();
 
-        file0.write(b"small").await.unwrap();
-        file0.flush().await.unwrap();
+        file0
+            .write_in_connection(&mut conn, b"small")
+            .await
+            .unwrap();
+        file0.flush_in_connection(&mut conn).await.unwrap();
 
         // Open the file, fork it into branch 1 and modify it.
-        let mut file1 = {
-            let mut conn = branch0.db_pool().acquire().await.unwrap();
-            branch0
-                .open_root(&mut conn)
-                .await
-                .unwrap()
-                .read()
-                .await
-                .lookup("dog.jpg")
-                .unwrap()
-                .file()
-                .unwrap()
-                .open(&mut conn)
-                .await
-                .unwrap()
-        };
+        let mut file1 = branch0
+            .open_root(&mut conn)
+            .await
+            .unwrap()
+            .read()
+            .await
+            .lookup("dog.jpg")
+            .unwrap()
+            .file()
+            .unwrap()
+            .open(&mut conn)
+            .await
+            .unwrap();
 
-        file1.fork(&branch1).await.unwrap();
-        file1.write(b"large").await.unwrap();
-        file1.flush().await.unwrap();
+        file1.fork_in_connection(&mut conn, &branch1).await.unwrap();
+        file1
+            .write_in_connection(&mut conn, b"large")
+            .await
+            .unwrap();
+        file1.flush_in_connection(&mut conn).await.unwrap();
 
         // Reopen orig file and verify it's unchanged
-        let mut file = {
-            let mut conn = branch0.db_pool().acquire().await.unwrap();
-            branch0
-                .open_root(&mut conn)
-                .await
-                .unwrap()
-                .read()
-                .await
-                .lookup("dog.jpg")
-                .unwrap()
-                .file()
-                .unwrap()
-                .open(&mut conn)
-                .await
-                .unwrap()
-        };
+        let mut file = branch0
+            .open_root(&mut conn)
+            .await
+            .unwrap()
+            .read()
+            .await
+            .lookup("dog.jpg")
+            .unwrap()
+            .file()
+            .unwrap()
+            .open(&mut conn)
+            .await
+            .unwrap();
 
-        assert_eq!(file.read_to_end().await.unwrap(), b"small");
+        assert_eq!(
+            file.read_to_end_in_connection(&mut conn).await.unwrap(),
+            b"small"
+        );
 
         // Reopen forked file and verify it's modified
-        let mut file = {
-            let mut conn = branch0.db_pool().acquire().await.unwrap();
-            branch1
-                .open_root(&mut conn)
-                .await
-                .unwrap()
-                .read()
-                .await
-                .lookup("dog.jpg")
-                .unwrap()
-                .file()
-                .unwrap()
-                .open(&mut conn)
-                .await
-                .unwrap()
-        };
+        let mut file = branch1
+            .open_root(&mut conn)
+            .await
+            .unwrap()
+            .read()
+            .await
+            .lookup("dog.jpg")
+            .unwrap()
+            .file()
+            .unwrap()
+            .open(&mut conn)
+            .await
+            .unwrap();
 
-        assert_eq!(file.read_to_end().await.unwrap(), b"large");
+        assert_eq!(
+            file.read_to_end_in_connection(&mut conn).await.unwrap(),
+            b"large"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -269,32 +309,33 @@ mod tests {
         // subsequent modifications work correclty.
 
         let (branch0, branch1) = setup().await;
+        let mut conn = branch0.db_pool().acquire().await.unwrap();
 
-        let mut file0 = branch0.ensure_file_exists("/pig.jpg".into()).await.unwrap();
-        file0.flush().await.unwrap();
+        let mut file0 = branch0
+            .ensure_file_exists(&mut conn, "/pig.jpg".into())
+            .await
+            .unwrap();
+        file0.flush_in_connection(&mut conn).await.unwrap();
 
-        let mut file1 = {
-            let mut conn = branch0.db_pool().acquire().await.unwrap();
-            branch0
-                .open_root(&mut conn)
-                .await
-                .unwrap()
-                .read()
-                .await
-                .lookup("pig.jpg")
-                .unwrap()
-                .file()
-                .unwrap()
-                .open(&mut conn)
-                .await
-                .unwrap()
-        };
+        let mut file1 = branch0
+            .open_root(&mut conn)
+            .await
+            .unwrap()
+            .read()
+            .await
+            .lookup("pig.jpg")
+            .unwrap()
+            .file()
+            .unwrap()
+            .open(&mut conn)
+            .await
+            .unwrap();
 
-        file1.fork(&branch1).await.unwrap();
+        file1.fork_in_connection(&mut conn, &branch1).await.unwrap();
 
         for _ in 0..2 {
-            file1.write(b"oink").await.unwrap();
-            file1.flush().await.unwrap();
+            file1.write_in_connection(&mut conn, b"oink").await.unwrap();
+            file1.flush_in_connection(&mut conn).await.unwrap();
         }
     }
 

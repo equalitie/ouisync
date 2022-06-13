@@ -75,27 +75,28 @@ impl Branch {
     /// Ensures that the directory at the specified path exists including all its ancestors.
     /// Note: non-normalized paths (i.e. containing "..") or Windows-style drive prefixes
     /// (e.g. "C:") are not supported.
-    pub(crate) async fn ensure_directory_exists(&self, path: &Utf8Path) -> Result<Directory> {
-        let mut curr = self.open_or_create_root().await?;
+    pub(crate) async fn ensure_directory_exists(
+        &self,
+        conn: &mut db::Connection,
+        path: &Utf8Path,
+    ) -> Result<Directory> {
+        let mut curr = self.open_or_create_root_in_connection(conn).await?;
 
         for component in path.components() {
             match component {
                 Utf8Component::RootDir | Utf8Component::CurDir => (),
                 Utf8Component::Normal(name) => {
-                    let mut conn = self.db_pool().acquire().await?;
                     let next = match curr.read().await.lookup(name) {
-                        Ok(EntryRef::Directory(entry)) => Some(entry.open(&mut conn).await?),
+                        Ok(EntryRef::Directory(entry)) => Some(entry.open(conn).await?),
                         Ok(EntryRef::File(_)) => return Err(Error::EntryIsFile),
                         Ok(EntryRef::Tombstone(_)) | Err(Error::EntryNotFound) => None,
                         Err(error) => return Err(error),
                     };
 
-                    drop(conn);
-
                     let next = if let Some(next) = next {
                         next
                     } else {
-                        curr.create_directory(name.to_string()).await?
+                        curr.create_directory(conn, name.to_string()).await?
                     };
 
                     curr = next;
@@ -109,10 +110,14 @@ impl Branch {
         Ok(curr)
     }
 
-    pub(crate) async fn ensure_file_exists(&self, path: &Utf8Path) -> Result<File> {
+    pub(crate) async fn ensure_file_exists(
+        &self,
+        conn: &mut db::Connection,
+        path: &Utf8Path,
+    ) -> Result<File> {
         let (parent, name) = path::decompose(path).ok_or(Error::EntryIsDirectory)?;
-        let dir = self.ensure_directory_exists(parent).await?;
-        dir.create_file(name.to_string()).await
+        let dir = self.ensure_directory_exists(conn, parent).await?;
+        dir.create_file(conn, name.to_string()).await
     }
 
     pub(crate) async fn root_block_id(&self) -> Result<BlockId> {
@@ -161,17 +166,26 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn ensure_root_directory_exists() {
         let branch = setup().await;
-        let dir = branch.ensure_directory_exists("/".into()).await.unwrap();
+        let mut conn = branch.db_pool().acquire().await.unwrap();
+        let dir = branch
+            .ensure_directory_exists(&mut conn, "/".into())
+            .await
+            .unwrap();
         assert_eq!(dir.read().await.locator(), &Locator::ROOT);
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn ensure_subdirectory_exists() {
         let branch = setup().await;
-        let root = branch.open_or_create_root().await.unwrap();
+        let mut conn = branch.db_pool().acquire().await.unwrap();
+
+        let root = branch
+            .open_or_create_root_in_connection(&mut conn)
+            .await
+            .unwrap();
 
         branch
-            .ensure_directory_exists(Utf8Path::new("/dir"))
+            .ensure_directory_exists(&mut conn, Utf8Path::new("/dir"))
             .await
             .unwrap();
 

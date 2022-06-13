@@ -758,14 +758,20 @@ async fn version_vector_deep_hierarchy() {
     let local_id = *local_branch.id();
 
     let depth = 10;
+    let mut conn = repo.store().db_pool().acquire().await.unwrap();
     let mut dirs = Vec::new();
-    dirs.push(local_branch.open_or_create_root().await.unwrap());
+    dirs.push(
+        local_branch
+            .open_or_create_root_in_connection(&mut conn)
+            .await
+            .unwrap(),
+    );
 
     for i in 0..depth {
         let dir = dirs
             .last()
             .unwrap()
-            .create_directory(format!("dir-{}", i))
+            .create_directory(&mut conn, format!("dir-{}", i))
             .await
             .unwrap();
         dirs.push(dir);
@@ -774,9 +780,7 @@ async fn version_vector_deep_hierarchy() {
     // Each directory's local version is one less than its parent.
     for (index, dir) in dirs.iter().skip(1).enumerate() {
         assert_eq!(
-            dir.version_vector_in_connection(&mut *local_branch.db_pool().acquire().await.unwrap())
-                .await
-                .unwrap(),
+            dir.version_vector_in_connection(&mut conn).await.unwrap(),
             vv![local_id => (depth - index) as u64]
         );
     }
@@ -826,9 +830,17 @@ async fn version_vector_fork_file() {
         .unwrap()
         .reopen(repo.secrets().keys().unwrap());
 
-    let remote_root = remote_branch.open_or_create_root().await.unwrap();
-    let remote_parent = remote_root.create_directory("parent".into()).await.unwrap();
-    let mut file = create_file_in_directory(&remote_parent, "foo.txt", &[]).await;
+    let mut conn = repo.store().db_pool().acquire().await.unwrap();
+    let remote_root = remote_branch
+        .open_or_create_root_in_connection(&mut conn)
+        .await
+        .unwrap();
+    let remote_parent = remote_root
+        .create_directory(&mut conn, "parent".into())
+        .await
+        .unwrap();
+    let mut file = create_file_in_directory(&mut conn, &remote_parent, "foo.txt", &[]).await;
+    drop(conn);
 
     let remote_file_vv = file.version_vector().await;
 
@@ -988,10 +1000,15 @@ async fn remove_branch() {
         .reopen(repo.secrets().keys().unwrap());
 
     // Keep the root dir open until we create both files to make sure it keeps write access.
-    let remote_root = remote_branch.open_or_create_root().await.unwrap();
-    create_file_in_directory(&remote_root, "foo.txt", b"foo").await;
-    create_file_in_directory(&remote_root, "bar.txt", b"bar").await;
+    let mut conn = repo.store().db_pool().acquire().await.unwrap();
+    let remote_root = remote_branch
+        .open_or_create_root_in_connection(&mut conn)
+        .await
+        .unwrap();
+    create_file_in_directory(&mut conn, &remote_root, "foo.txt", b"foo").await;
+    create_file_in_directory(&mut conn, &remote_root, "bar.txt", b"bar").await;
     drop(remote_root);
+    drop(conn);
 
     let mut file = repo.open_file("foo.txt").await.unwrap();
     file.fork(&local_branch).await.unwrap();
@@ -1026,14 +1043,23 @@ async fn create_remote_file(repo: &Repository, remote_id: PublicKey, name: &str,
 }
 
 async fn create_file_in_branch(branch: &Branch, name: &str, content: &[u8]) -> File {
-    let root = branch.open_or_create_root().await.unwrap();
-    create_file_in_directory(&root, name, content).await
+    let mut conn = branch.db_pool().acquire().await.unwrap();
+    let root = branch
+        .open_or_create_root_in_connection(&mut conn)
+        .await
+        .unwrap();
+    create_file_in_directory(&mut conn, &root, name, content).await
 }
 
-async fn create_file_in_directory(dir: &Directory, name: &str, content: &[u8]) -> File {
-    let mut file = dir.create_file(name.into()).await.unwrap();
-    file.write(content).await.unwrap();
-    file.flush().await.unwrap();
+async fn create_file_in_directory(
+    conn: &mut db::Connection,
+    dir: &Directory,
+    name: &str,
+    content: &[u8],
+) -> File {
+    let mut file = dir.create_file(conn, name.into()).await.unwrap();
+    file.write_in_connection(conn, content).await.unwrap();
+    file.flush_in_connection(conn).await.unwrap();
     file
 }
 
