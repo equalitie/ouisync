@@ -248,19 +248,14 @@ impl Repository {
     pub async fn open_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<File> {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
 
-        // IMPORTANT: make sure the parent directory is unlocked before `await`-ing the `open`
-        // future, to avoid deadlocks.
-        let open = {
-            self.open_directory(parent)
-                .await?
-                .read()
-                .await
-                .lookup_unique(name)?
-                .file()?
-                .open()
-        };
-
-        open.await
+        self.open_directory(parent)
+            .await?
+            .read()
+            .await
+            .lookup_unique(name)?
+            .file()?
+            .open()
+            .await
     }
 
     /// Open a specific version of the file at the given path.
@@ -271,18 +266,13 @@ impl Repository {
     ) -> Result<File> {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
 
-        // IMPORTANT: make sure the parent directory is unlocked before `await`-ing the `open`
-        // future, to avoid deadlocks.
-        let open = {
-            self.open_directory(parent)
-                .await?
-                .read()
-                .await
-                .lookup_version(name, branch_id)?
-                .open()
-        };
-
-        open.await
+        self.open_directory(parent)
+            .await?
+            .read()
+            .await
+            .lookup_version(name, branch_id)?
+            .open()
+            .await
     }
 
     /// Opens a directory at the given path (relative to the repository root)

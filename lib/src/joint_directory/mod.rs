@@ -19,9 +19,7 @@ use futures_util::future;
 use std::{
     borrow::Cow,
     collections::{BTreeMap, VecDeque},
-    fmt,
-    future::Future,
-    iter, mem,
+    fmt, iter, mem,
 };
 
 /// Unified view over multiple concurrent versions of a directory.
@@ -434,10 +432,8 @@ impl<'a> JointFileRef<'a> {
         }
     }
 
-    // NOTE: deliberately returning explicit `impl Future` instead of using `async` to make it so
-    // the returned future does NOT borrow from `self`. See [FileRef::open] for details.
-    pub fn open(&self) -> impl Future<Output = Result<File>> {
-        self.file.open()
+    pub async fn open(&self) -> Result<File> {
+        self.file.open().await
     }
 
     pub fn version_vector(&self) -> &'a VersionVector {

@@ -266,13 +266,24 @@ impl Directory {
 
                     let parent_context = ParentContext::new(self.clone(), name.into());
 
+                    let mut conn = match inner.branch().db_pool().acquire().await {
+                        Ok(conn) => conn,
+                        Err(e) => {
+                            print.display(&format_args!("Failed to acquire db connection {:?}", e));
+                            continue;
+                        }
+                    };
+
                     let file = File::open(
+                        &mut conn,
                         inner.blob.branch().clone(),
                         Locator::head(file_data.blob_id),
                         parent_context,
                         Shared::uninit().into(),
                     )
                     .await;
+
+                    drop(conn);
 
                     match file {
                         Ok(mut file) => {
