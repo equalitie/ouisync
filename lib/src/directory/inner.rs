@@ -207,10 +207,6 @@ impl Inner {
         Ok(())
     }
 
-    pub fn db_pool(&self) -> &db::Pool {
-        self.blob.db_pool()
-    }
-
     pub fn branch(&self) -> &Branch {
         self.blob.branch()
     }

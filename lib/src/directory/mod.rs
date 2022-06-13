@@ -22,6 +22,7 @@ use crate::{
     blob::Shared,
     branch::Branch,
     crypto::sign::PublicKey,
+    db,
     debug_printer::DebugPrinter,
     error::{Error, Result},
     file::File,
@@ -79,12 +80,16 @@ impl Directory {
 
     /// Creates a new file inside this directory.
     pub async fn create_file(&self, name: String) -> Result<File> {
-        self.write().await.create_file(name).await
+        let mut conn = self.acquire_db().await?;
+        let tx = conn.begin().await?;
+        self.write().await.create_file(tx, name).await
     }
 
     /// Creates a new subdirectory of this directory.
     pub async fn create_directory(&self, name: String) -> Result<Self> {
-        self.write().await.create_directory(name).await
+        let mut conn = self.acquire_db().await?;
+        let tx = conn.begin().await?;
+        self.write().await.create_directory(tx, name).await
     }
 
     /// Removes a file or subdirectory from this directory. If the entry to be removed is a
@@ -100,9 +105,11 @@ impl Directory {
         branch_id: &PublicKey,
         vv: VersionVector,
     ) -> Result<()> {
+        let mut conn = self.acquire_db().await?;
+        let tx = conn.begin().await?;
         self.write()
             .await
-            .remove_entry(name, branch_id, vv, OverwriteStrategy::Remove)
+            .remove_entry(tx, name, branch_id, vv, OverwriteStrategy::Remove)
             .await
     }
 
@@ -141,18 +148,22 @@ impl Directory {
         let mut dst_data = src_data;
         let src_vv = mem::replace(dst_data.version_vector_mut(), dst_vv);
 
+        let mut conn = self.acquire_db().await?;
+
         {
+            let tx = conn.begin().await?;
             let mut dst_writer = dst_dir.write().await;
             dst_writer
-                .insert_entry(dst_name.to_owned(), dst_data, OverwriteStrategy::Remove)
+                .insert_entry(tx, dst_name.to_owned(), dst_data, OverwriteStrategy::Remove)
                 .await?;
         }
 
         {
+            let tx = conn.begin().await?;
             let mut src_writer = self.write().await;
             let branch_id = *src_writer.branch().id();
             src_writer
-                .remove_entry(src_name, &branch_id, src_vv, OverwriteStrategy::Keep)
+                .remove_entry(tx, src_name, &branch_id, src_vv, OverwriteStrategy::Keep)
                 .await?;
         }
 
@@ -161,7 +172,7 @@ impl Directory {
 
     // Forks this directory into the local branch.
     #[async_recursion]
-    pub async fn fork(&self, local_branch: &Branch) -> Result<Directory> {
+    pub(crate) async fn fork(&self, local_branch: &Branch) -> Result<Directory> {
         let inner = self.read().await;
 
         if local_branch.id() == inner.branch().id() {
@@ -180,20 +191,29 @@ impl Directory {
         // Prevent deadlock
         drop(inner);
 
-        if let Some((parent_dir, parent_entry_name)) = parent {
+        if let Some((parent_dir, entry_name)) = parent {
             let parent_dir = parent_dir.fork(local_branch).await?;
-            let mut parent_dir = parent_dir.write().await;
 
-            match parent_dir.lookup(&parent_entry_name) {
-                Ok(EntryRef::Directory(entry)) => entry.open().await,
+            // FIXME: we are acquiring the directory lock before db connection here which can lead
+            // to deadlocks (we should always do it in the other way around: first the db, then the
+            // lock).
+            // FIXME: this is not atomic. It's possible the directory might get created in some
+            // other thread after this `match` expression but before we call `create_directory`
+            // which would return error. A way to fix this is to make `create_directory` idempotent.
+            let dir = match parent_dir.read().await.lookup(&entry_name) {
+                Ok(EntryRef::Directory(entry)) => Some(entry.open().await?),
                 Ok(EntryRef::File(_)) => {
                     // TODO: return some kind of `Error::Conflict`
-                    Err(Error::EntryIsFile)
+                    return Err(Error::EntryIsFile);
                 }
-                Ok(EntryRef::Tombstone(_)) | Err(Error::EntryNotFound) => {
-                    parent_dir.create_directory(parent_entry_name).await
-                }
-                Err(error) => Err(error),
+                Ok(EntryRef::Tombstone(_)) | Err(Error::EntryNotFound) => None,
+                Err(error) => return Err(error),
+            };
+
+            if let Some(dir) = dir {
+                Ok(dir)
+            } else {
+                parent_dir.create_directory(entry_name).await
             }
         } else {
             local_branch.open_or_create_root().await
@@ -202,9 +222,9 @@ impl Directory {
 
     /// Updates the version vector of this directory by merging it with `vv`.
     pub(crate) async fn bump(&self, vv: VersionVector) -> Result<()> {
-        let mut writer = self.write().await;
-        let mut conn = writer.inner.db_pool().acquire().await?;
+        let mut conn = self.acquire_db().await?;
         let tx = conn.begin().await?;
+        let mut writer = self.write().await;
         writer.inner.commit(tx, vv).await
     }
 
@@ -329,6 +349,14 @@ impl Directory {
 
         branch.version_vector().await
     }
+
+    // Acquire a db connection in a deadlock-safe manner.
+    async fn acquire_db(&self) -> Result<db::PoolConnection> {
+        // Make sure to acquire the db connection while the directory is not locked.
+        // TODO: optimize this by storing the pool directly in `Self`.
+        let pool = self.read().await.branch().db_pool().clone();
+        Ok(pool.acquire().await?)
+    }
 }
 
 impl PartialEq for Directory {
@@ -399,7 +427,7 @@ struct Writer<'a> {
 }
 
 impl Writer<'_> {
-    async fn create_file(&mut self, name: String) -> Result<File> {
+    async fn create_file(&mut self, mut tx: db::Transaction<'_>, name: String) -> Result<File> {
         let blob_id = rand::random();
         let shared = Shared::uninit();
         let data = EntryData::file(
@@ -416,9 +444,6 @@ impl Writer<'_> {
             shared,
         );
 
-        let mut conn = self.inner.db_pool().acquire().await?;
-        let mut tx = conn.begin().await?;
-
         self.inner.prepare(&mut tx).await?;
         self.inner.insert(name, data, OverwriteStrategy::Remove)?;
         file.save(&mut tx).await?;
@@ -428,7 +453,11 @@ impl Writer<'_> {
         Ok(file)
     }
 
-    async fn create_directory(&mut self, name: String) -> Result<Directory> {
+    async fn create_directory(
+        &mut self,
+        mut tx: db::Transaction<'_>,
+        name: String,
+    ) -> Result<Directory> {
         let blob_id = rand::random();
         let data = EntryData::directory(blob_id, VersionVector::first(*self.branch().id()));
         let parent = ParentContext::new(self.outer.clone(), name.clone());
@@ -438,9 +467,6 @@ impl Writer<'_> {
             .open_directories
             .create(self.branch(), Locator::head(blob_id), parent)
             .await?;
-
-        let mut conn = self.inner.db_pool().acquire().await?;
-        let mut tx = conn.begin().await?;
 
         self.inner.prepare(&mut tx).await?;
         self.inner.insert(name, data, OverwriteStrategy::Remove)?;
@@ -453,6 +479,7 @@ impl Writer<'_> {
 
     async fn remove_entry(
         &mut self,
+        tx: db::Transaction<'_>,
         name: &str,
         branch_id: &PublicKey,
         vv: VersionVector,
@@ -498,7 +525,7 @@ impl Writer<'_> {
             }
         };
 
-        self.insert_entry(name.to_owned(), new_entry, overwrite)
+        self.insert_entry(tx, name.to_owned(), new_entry, overwrite)
             .await
     }
 
@@ -513,13 +540,11 @@ impl Writer<'_> {
     /// Atomically inserts the given entry into this directory and commits the change.
     async fn insert_entry(
         &mut self,
+        mut tx: db::Transaction<'_>,
         name: String,
         entry: EntryData,
         overwrite: OverwriteStrategy,
     ) -> Result<()> {
-        let mut conn = self.inner.db_pool().acquire().await?;
-        let mut tx = conn.begin().await?;
-
         self.inner.prepare(&mut tx).await?;
         self.inner.insert(name, entry, overwrite)?;
         self.inner.save(&mut tx).await?;

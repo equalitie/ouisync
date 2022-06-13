@@ -545,9 +545,13 @@ async fn remove_unique_remote_file() {
     let remote_id = PublicKey::random();
     let remote_vv = vv![remote_id => 1];
 
+    let mut conn = local_branch.db_pool().acquire().await.unwrap();
+    let tx = conn.begin().await.unwrap();
+
     root.write()
         .await
         .remove_entry(
+            tx,
             name,
             &remote_id,
             remote_vv.clone(),

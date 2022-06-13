@@ -49,10 +49,7 @@ impl ParentContext {
 
         let directory = self.directory().fork(local_branch).await?;
 
-        // Make sure to acquire the db connection before write-locking the directory. By doing it
-        // in this order everywhere we avoid potential deadlocks.
-        let db_pool = directory.read().await.branch().db_pool().clone();
-        let mut conn = db_pool.acquire().await?;
+        let mut conn = directory.acquire_db().await?;
         let mut tx = conn.begin().await?;
 
         let mut writer = directory.write().await;
