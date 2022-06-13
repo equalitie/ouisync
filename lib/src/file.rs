@@ -208,7 +208,7 @@ mod tests {
                 .unwrap()
                 .file()
                 .unwrap()
-                .open_in_connection(&mut conn)
+                .open(&mut conn)
                 .await
                 .unwrap()
         };
@@ -230,7 +230,7 @@ mod tests {
                 .unwrap()
                 .file()
                 .unwrap()
-                .open_in_connection(&mut conn)
+                .open(&mut conn)
                 .await
                 .unwrap()
         };
@@ -250,7 +250,7 @@ mod tests {
                 .unwrap()
                 .file()
                 .unwrap()
-                .open_in_connection(&mut conn)
+                .open(&mut conn)
                 .await
                 .unwrap()
         };
@@ -280,7 +280,7 @@ mod tests {
                 .unwrap()
                 .file()
                 .unwrap()
-                .open_in_connection(&mut conn)
+                .open(&mut conn)
                 .await
                 .unwrap()
         };

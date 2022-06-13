@@ -19,7 +19,7 @@ use tokio::fs;
 
 /// Database connection pool.
 #[derive(Clone)]
-pub(crate) struct Pool {
+pub struct Pool {
     inner: SqlitePool,
     deadlock_tracker: DeadlockTracker,
 }
@@ -41,12 +41,12 @@ impl Pool {
     }
 
     #[track_caller]
-    pub fn begin(&self) -> impl Future<Output = Result<PoolTransaction, sqlx::Error>> + '_ {
+    pub(crate) fn begin(&self) -> impl Future<Output = Result<PoolTransaction, sqlx::Error>> + '_ {
         let future = DeadlockGuard::try_wrap(self.inner.begin(), self.deadlock_tracker.clone());
         async move { Ok(PoolTransaction(future.await?)) }
     }
 
-    pub async fn close(&self) {
+    pub(crate) async fn close(&self) {
         self.inner.close().await
     }
 }

@@ -41,7 +41,7 @@ async fn create_and_list_entries() {
             .unwrap()
             .file()
             .unwrap()
-            .open_in_connection(&mut conn)
+            .open(&mut conn)
             .await
             .unwrap();
         let actual_content = file.read_to_end_in_connection(&mut conn).await.unwrap();
@@ -170,11 +170,10 @@ async fn rename_file() {
         .await
         .unwrap();
 
+    let mut conn = branch.db_pool().acquire().await.unwrap();
+
     // Reopen again and check the file entry was removed.
-    let parent_dir = {
-        let mut conn = branch.db_pool().acquire().await.unwrap();
-        branch.open(&mut conn).await.unwrap()
-    };
+    let parent_dir = branch.open(&mut conn).await.unwrap();
     let parent_dir = parent_dir.read().await;
 
     let mut dst_file = parent_dir
@@ -182,12 +181,15 @@ async fn rename_file() {
         .unwrap()
         .file()
         .unwrap()
-        .open()
+        .open(&mut conn)
         .await
         .unwrap();
 
     assert_eq!(&file_locator, dst_file.locator());
-    assert_eq!(&content[..], &dst_file.read_to_end().await.unwrap()[..]);
+    assert_eq!(
+        &content[..],
+        &dst_file.read_to_end_in_connection(&mut conn).await.unwrap()[..]
+    );
 
     let src_entry = parent_dir.lookup(src_name).unwrap();
 
@@ -254,7 +256,7 @@ async fn move_file_within_branch() {
             .unwrap()
             .file()
             .unwrap()
-            .open_in_connection(&mut conn)
+            .open(&mut conn)
             .await
             .unwrap()
     };
@@ -287,6 +289,8 @@ async fn move_file_within_branch() {
         .await
         .unwrap();
 
+    let mut conn = branch.db_pool().acquire().await.unwrap();
+
     let mut file = root_dir
         .read()
         .await
@@ -294,11 +298,14 @@ async fn move_file_within_branch() {
         .unwrap()
         .file()
         .unwrap()
-        .open()
+        .open(&mut conn)
         .await
         .unwrap();
 
-    assert_eq!(&content[..], &file.read_to_end().await.unwrap()[..]);
+    assert_eq!(
+        &content[..],
+        &file.read_to_end_in_connection(&mut conn).await.unwrap()[..]
+    );
 }
 
 // Move directory "dir/" with content "cow.txt" to directory "dst/".
@@ -374,7 +381,7 @@ async fn move_non_empty_directory() {
             .unwrap()
             .file()
             .unwrap()
-            .open_in_connection(&mut conn)
+            .open(&mut conn)
             .await
             .unwrap()
     };
@@ -576,6 +583,7 @@ async fn modify_directory_concurrently() {
     file0.write(b"hello").await.unwrap();
     file0.flush().await.unwrap();
 
+    let mut conn = branch.db_pool().acquire().await.unwrap();
     let mut file1 = dir1
         .read()
         .await
@@ -583,10 +591,13 @@ async fn modify_directory_concurrently() {
         .unwrap()
         .file()
         .unwrap()
-        .open()
+        .open(&mut conn)
         .await
         .unwrap();
-    assert_eq!(file1.read_to_end().await.unwrap(), b"hello");
+    assert_eq!(
+        file1.read_to_end_in_connection(&mut conn).await.unwrap(),
+        b"hello"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

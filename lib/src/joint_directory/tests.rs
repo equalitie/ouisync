@@ -97,17 +97,30 @@ async fn conflict_independent_files() {
 async fn conflict_forked_files() {
     let branches = setup(2).await;
 
-    let root0 = branches[0].open_or_create_root().await.unwrap();
+    let root0 = branches[0]
+        .open_or_create_root_in_connection(&mut *branches[0].db_pool().acquire().await.unwrap())
+        .await
+        .unwrap();
     create_file(&root0, "file.txt", b"one", &branches[0]).await;
 
     // Fork the file into branch 1 and then modify it.
-    let mut file1 = open_file(&root0, "file.txt").await;
+    let mut file1 = open_file(
+        &mut *branches[0].db_pool().acquire().await.unwrap(),
+        &root0,
+        "file.txt",
+    )
+    .await;
     file1.fork(&branches[1]).await.unwrap();
     file1.write(b"two").await.unwrap();
     file1.flush().await.unwrap();
 
     // Modify the file by branch 0 as well, to create concurrent versions
-    let mut file0 = open_file(&root0, "file.txt").await;
+    let mut file0 = open_file(
+        &mut *branches[0].db_pool().acquire().await.unwrap(),
+        &root0,
+        "file.txt",
+    )
+    .await;
     file0.write(b"three").await.unwrap();
     file0.flush().await.unwrap();
 
@@ -201,17 +214,25 @@ async fn conflict_identical_versions() {
     let branches = setup(2).await;
 
     // Create a file by one branch.
-    let root0 = branches[0].open_or_create_root().await.unwrap();
+    let root0 = branches[0]
+        .open_or_create_root_in_connection(&mut *branches[0].db_pool().acquire().await.unwrap())
+        .await
+        .unwrap();
     create_file(&root0, "file.txt", b"one", &branches[0]).await;
 
     // Fork it into the other branch, creating an identical version of it.
-    let mut file1 = open_file(&root0, "file.txt").await;
-    file1.fork(&branches[1]).await.unwrap();
+    {
+        let mut conn = branches[0].db_pool().acquire().await.unwrap();
+        let mut file1 = open_file(&mut conn, &root0, "file.txt").await;
+        file1
+            .fork_in_connection(&mut conn, &branches[1])
+            .await
+            .unwrap();
+    }
 
-    let root1 = {
-        let mut conn = branches[1].db_pool().acquire().await.unwrap();
-        branches[1].open(&mut conn).await.unwrap()
-    };
+    let mut conn = branches[1].db_pool().acquire().await.unwrap();
+
+    let root1 = branches[1].open(&mut conn).await.unwrap();
 
     // Create joint directory using branch 1 as the local branch.
     let root = JointDirectory::new(Some(branches[1].clone()), [root0, root1]);
@@ -227,7 +248,7 @@ async fn conflict_identical_versions() {
         .unwrap()
         .file()
         .unwrap()
-        .open()
+        .open(&mut conn)
         .await
         .unwrap();
     assert_eq!(file.branch().id(), branches[1].id());
@@ -287,17 +308,16 @@ async fn merge_locally_non_existing_file() {
     // Create a file in the remote root
     create_file(&remote_root, "cat.jpg", content, &branches[1]).await;
 
+    let mut conn = branches[0].db_pool().acquire().await.unwrap();
+
     // Construct a joint directory over both root dirs and merge it.
-    {
-        let mut conn = branches[0].db_pool().acquire().await.unwrap();
-        JointDirectory::new(Some(branches[0].clone()), [local_root.clone(), remote_root])
-            .merge(&mut conn)
-            .await
-            .unwrap();
-    }
+    JointDirectory::new(Some(branches[0].clone()), [local_root.clone(), remote_root])
+        .merge(&mut conn)
+        .await
+        .unwrap();
 
     // Verify the file now exists in the local branch.
-    let local_content = open_file(&local_root, "cat.jpg")
+    let local_content = open_file(&mut conn, &local_root, "cat.jpg")
         .await
         .read_to_end()
         .await
@@ -333,19 +353,18 @@ async fn merge_locally_older_file() {
     // Modify the file by the remote branch
     update_file(&remote_root, "cat.jpg", content_v1, &branches[1]).await;
 
-    {
-        let mut conn = branches[0].db_pool().acquire().await.unwrap();
-        JointDirectory::new(Some(branches[0].clone()), [local_root.clone(), remote_root])
-            .merge(&mut conn)
-            .await
-            .unwrap();
-    }
+    let mut conn = branches[0].db_pool().acquire().await.unwrap();
+
+    JointDirectory::new(Some(branches[0].clone()), [local_root.clone(), remote_root])
+        .merge(&mut conn)
+        .await
+        .unwrap();
 
     let reader = local_root.read().await;
     let entry = reader.lookup("cat.jpg").unwrap().file().unwrap();
 
-    let mut file = entry.open().await.unwrap();
-    let local_content = file.read_to_end().await.unwrap();
+    let mut file = entry.open(&mut conn).await.unwrap();
+    let local_content = file.read_to_end_in_connection(&mut conn).await.unwrap();
     assert_eq!(local_content, content_v1);
 }
 
@@ -375,20 +394,19 @@ async fn merge_locally_newer_file() {
     // Modify the file by the local branch
     update_file(&local_root, "cat.jpg", content_v1, &branches[0]).await;
 
-    {
-        let mut conn = branches[0].db_pool().acquire().await.unwrap();
-        JointDirectory::new(Some(branches[0].clone()), [local_root.clone(), remote_root])
-            .merge(&mut conn)
-            .await
-            .unwrap();
-    }
+    let mut conn = branches[0].db_pool().acquire().await.unwrap();
+
+    JointDirectory::new(Some(branches[0].clone()), [local_root.clone(), remote_root])
+        .merge(&mut conn)
+        .await
+        .unwrap();
 
     let reader = local_root.read().await;
 
     let entry = reader.lookup("cat.jpg").unwrap().file().unwrap();
 
-    let mut file = entry.open().await.unwrap();
-    let local_content = file.read_to_end().await.unwrap();
+    let mut file = entry.open(&mut conn).await.unwrap();
+    let local_content = file.read_to_end_in_connection(&mut conn).await.unwrap();
     assert_eq!(local_content, content_v1);
 }
 
@@ -416,18 +434,17 @@ async fn attempt_to_merge_concurrent_file() {
     update_file(&local_root, "cat.jpg", b"v1", &branches[0]).await;
     update_file(&remote_root, "cat.jpg", b"v2", &branches[1]).await;
 
+    let mut conn = branches[0].db_pool().acquire().await.unwrap();
+
     // Merge succeeds but skips over the conflicting entries.
-    {
-        let mut conn = branches[0].db_pool().acquire().await.unwrap();
-        JointDirectory::new(Some(branches[0].clone()), [local_root.clone(), remote_root])
-            .merge(&mut conn)
-            .await
-            .unwrap();
-    }
+    JointDirectory::new(Some(branches[0].clone()), [local_root.clone(), remote_root])
+        .merge(&mut conn)
+        .await
+        .unwrap();
 
     // The local version is unchanged
     assert_eq!(
-        open_file(&local_root, "cat.jpg")
+        open_file(&mut conn, &local_root, "cat.jpg")
             .await
             .read_to_end()
             .await
@@ -601,20 +618,25 @@ async fn merge_sequential_modifications() {
     let vv2 = read_version_vector(&remote_root, "dog.jpg").await;
     assert!(vv2 > vv1);
 
-    {
-        let mut conn = branches[0].db_pool().acquire().await.unwrap();
-        JointDirectory::new(Some(branches[0].clone()), [local_root.clone(), remote_root])
-            .merge(&mut conn)
-            .await
-            .unwrap();
-    }
+    let mut conn = branches[0].db_pool().acquire().await.unwrap();
+
+    JointDirectory::new(Some(branches[0].clone()), [local_root.clone(), remote_root])
+        .merge(&mut conn)
+        .await
+        .unwrap();
 
     let reader = local_root.read().await;
     let entry = reader.lookup("dog.jpg").unwrap().file().unwrap();
 
     assert_eq!(entry.version_vector(), &vv2);
 
-    let content = entry.open().await.unwrap().read_to_end().await.unwrap();
+    let content = entry
+        .open(&mut conn)
+        .await
+        .unwrap()
+        .read_to_end()
+        .await
+        .unwrap();
     assert_eq!(content, b"v1");
 }
 
@@ -783,7 +805,9 @@ async fn create_file(
 }
 
 async fn update_file(parent: &Directory, name: &str, content: &[u8], local_branch: &Branch) {
-    let mut file = open_file(parent, name).await;
+    let mut conn = local_branch.db_pool().acquire().await.unwrap();
+    let mut file = open_file(&mut conn, parent, name).await;
+    drop(conn);
 
     file.fork(local_branch).await.unwrap();
     file.truncate(0).await.unwrap();
@@ -791,7 +815,7 @@ async fn update_file(parent: &Directory, name: &str, content: &[u8], local_branc
     file.flush().await.unwrap();
 }
 
-async fn open_file(parent: &Directory, name: &str) -> File {
+async fn open_file(conn: &mut db::Connection, parent: &Directory, name: &str) -> File {
     parent
         .read()
         .await
@@ -799,7 +823,7 @@ async fn open_file(parent: &Directory, name: &str) -> File {
         .unwrap()
         .file()
         .unwrap()
-        .open()
+        .open(conn)
         .await
         .unwrap()
 }

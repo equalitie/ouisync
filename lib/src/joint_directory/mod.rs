@@ -448,7 +448,7 @@ impl<'a> JointFileRef<'a> {
     }
 
     pub async fn open(&self, conn: &mut db::Connection) -> Result<File> {
-        self.file.open_in_connection(conn).await
+        self.file.open(conn).await
     }
 
     pub fn version_vector(&self) -> &'a VersionVector {

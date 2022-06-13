@@ -94,10 +94,17 @@ async fn merge() {
 
     // Open the local root.
     let local_branch = repo.local_branch().await.unwrap();
-    let local_root = local_branch.open_or_create_root().await.unwrap();
+    let local_root = {
+        let mut conn = local_branch.db_pool().acquire().await.unwrap();
+        local_branch
+            .open_or_create_root_in_connection(&mut conn)
+            .await
+            .unwrap()
+    };
 
     repo.force_merge().await.unwrap();
 
+    let mut conn = local_branch.db_pool().acquire().await.unwrap();
     let content = local_root
         .read()
         .await
@@ -105,10 +112,10 @@ async fn merge() {
         .unwrap()
         .file()
         .unwrap()
-        .open()
+        .open(&mut conn)
         .await
         .unwrap()
-        .read_to_end()
+        .read_to_end_in_connection(&mut conn)
         .await
         .unwrap();
     assert_eq!(content, b"hello");

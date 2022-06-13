@@ -16,7 +16,7 @@ pub struct Store {
 }
 
 impl Store {
-    pub(crate) fn db_pool(&self) -> &db::Pool {
+    pub fn db_pool(&self) -> &db::Pool {
         &self.index.pool
     }
 

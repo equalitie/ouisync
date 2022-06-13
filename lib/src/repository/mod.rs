@@ -248,13 +248,15 @@ impl Repository {
     pub async fn open_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<File> {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
 
-        self.open_directory(parent)
+        let mut conn = self.shared.store.db_pool().acquire().await?;
+
+        self.cd(&mut conn, parent)
             .await?
             .read()
             .await
             .lookup_unique(name)?
             .file()?
-            .open()
+            .open(&mut conn)
             .await
     }
 
@@ -266,12 +268,14 @@ impl Repository {
     ) -> Result<File> {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
 
-        self.open_directory(parent)
+        let mut conn = self.shared.store.db_pool().acquire().await?;
+
+        self.cd(&mut conn, parent)
             .await?
             .read()
             .await
             .lookup_version(name, branch_id)?
-            .open()
+            .open(&mut conn)
             .await
     }
 

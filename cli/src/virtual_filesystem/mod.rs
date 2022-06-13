@@ -398,17 +398,19 @@ impl Inner {
 
         let parent_path = self.inodes.get(parent).calculate_path();
         let parent_dir = self.repository.open_directory(parent_path).await?;
+
+        let mut conn = self.repository.store().db_pool().acquire().await?;
         let parent_dir = parent_dir.read().await;
 
         let entry = parent_dir.lookup_unique(name)?;
         let (len, repr) = match &entry {
             JointEntryRef::File(entry) => (
-                entry.open().await?.len().await,
+                entry.open(&mut conn).await?.len().await,
                 Representation::File(*entry.branch_id()),
             ),
             JointEntryRef::Directory(entry) => (
                 entry
-                    .open(MissingVersionStrategy::Skip)
+                    .open(&mut conn, MissingVersionStrategy::Skip)
                     .await?
                     .read()
                     .await

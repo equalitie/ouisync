@@ -145,12 +145,7 @@ impl<'a> FileRef<'a> {
         &self.entry_data.version_vector
     }
 
-    pub async fn open(&self) -> Result<File> {
-        let mut conn = self.inner.branch().db_pool().acquire().await?;
-        self.open_in_connection(&mut conn).await
-    }
-
-    pub async fn open_in_connection(&self, conn: &mut db::Connection) -> Result<File> {
+    pub async fn open(&self, conn: &mut db::Connection) -> Result<File> {
         let shared = {
             let mut slot = self.entry_data.blob_shared.lock().unwrap();
             if let Some(shared) = slot.upgrade() {
