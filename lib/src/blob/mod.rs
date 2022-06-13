@@ -62,7 +62,7 @@ impl Blob {
     }
 
     /// Removes a blob.
-    pub async fn remove_in_transaction(
+    pub async fn remove(
         tx: &mut db::Transaction<'_>,
         branch: &Branch,
         head_locator: Locator,

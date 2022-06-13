@@ -267,9 +267,7 @@ async fn remove_blob() {
     };
 
     // Remove the blob
-    Blob::remove_in_transaction(&mut tx, &branch, locator0)
-        .await
-        .unwrap();
+    Blob::remove(&mut tx, &branch, locator0).await.unwrap();
 
     // Check the block entries were deleted from the index.
     assert_matches!(

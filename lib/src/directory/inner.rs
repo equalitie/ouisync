@@ -96,13 +96,7 @@ impl Inner {
                     .get(&pending.name)
                     .and_then(|data| data.blob_id())
                 {
-                    match Blob::remove_in_transaction(
-                        tx,
-                        self.branch(),
-                        Locator::head(*old_blob_id),
-                    )
-                    .await
-                    {
+                    match Blob::remove(tx, self.branch(), Locator::head(*old_blob_id)).await {
                         // If we get `EntryNotFound` or `BlockNotFound` it most likely means the
                         // blob is already removed which can legitimately happen due to several
                         // reasons so we don't treat it as an error.
