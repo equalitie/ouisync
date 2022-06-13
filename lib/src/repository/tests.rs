@@ -96,10 +96,7 @@ async fn merge() {
     let local_branch = repo.local_branch().await.unwrap();
     let local_root = {
         let mut conn = local_branch.db_pool().acquire().await.unwrap();
-        local_branch
-            .open_or_create_root_in_connection(&mut conn)
-            .await
-            .unwrap()
+        local_branch.open_or_create_root(&mut conn).await.unwrap()
     };
 
     repo.force_merge().await.unwrap();
@@ -760,12 +757,7 @@ async fn version_vector_deep_hierarchy() {
     let depth = 10;
     let mut conn = repo.store().db_pool().acquire().await.unwrap();
     let mut dirs = Vec::new();
-    dirs.push(
-        local_branch
-            .open_or_create_root_in_connection(&mut conn)
-            .await
-            .unwrap(),
-    );
+    dirs.push(local_branch.open_or_create_root(&mut conn).await.unwrap());
 
     for i in 0..depth {
         let dir = dirs
@@ -831,10 +823,7 @@ async fn version_vector_fork_file() {
         .reopen(repo.secrets().keys().unwrap());
 
     let mut conn = repo.store().db_pool().acquire().await.unwrap();
-    let remote_root = remote_branch
-        .open_or_create_root_in_connection(&mut conn)
-        .await
-        .unwrap();
+    let remote_root = remote_branch.open_or_create_root(&mut conn).await.unwrap();
     let remote_parent = remote_root
         .create_directory(&mut conn, "parent".into())
         .await
@@ -1001,10 +990,7 @@ async fn remove_branch() {
 
     // Keep the root dir open until we create both files to make sure it keeps write access.
     let mut conn = repo.store().db_pool().acquire().await.unwrap();
-    let remote_root = remote_branch
-        .open_or_create_root_in_connection(&mut conn)
-        .await
-        .unwrap();
+    let remote_root = remote_branch.open_or_create_root(&mut conn).await.unwrap();
     create_file_in_directory(&mut conn, &remote_root, "foo.txt", b"foo").await;
     create_file_in_directory(&mut conn, &remote_root, "bar.txt", b"bar").await;
     drop(remote_root);
@@ -1044,10 +1030,7 @@ async fn create_remote_file(repo: &Repository, remote_id: PublicKey, name: &str,
 
 async fn create_file_in_branch(branch: &Branch, name: &str, content: &[u8]) -> File {
     let mut conn = branch.db_pool().acquire().await.unwrap();
-    let root = branch
-        .open_or_create_root_in_connection(&mut conn)
-        .await
-        .unwrap();
+    let root = branch.open_or_create_root(&mut conn).await.unwrap();
     create_file_in_directory(&mut conn, &root, name, content).await
 }
 

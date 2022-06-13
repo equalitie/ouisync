@@ -45,10 +45,8 @@ impl Branch {
         &self.pool
     }
 
-    pub async fn version_vector(&self) -> Result<VersionVector> {
-        self.branch_data
-            .load_version_vector(&mut *self.pool.acquire().await?)
-            .await
+    pub async fn version_vector(&self, conn: &mut db::Connection) -> Result<VersionVector> {
+        self.branch_data.load_version_vector(conn).await
     }
 
     pub(crate) fn keys(&self) -> &AccessKeys {
@@ -59,16 +57,7 @@ impl Branch {
         self.root_directory.open(conn, self.clone()).await
     }
 
-    #[deprecated = "use `open_or_create_root_in_connection` instead"]
-    pub(crate) async fn open_or_create_root(&self) -> Result<Directory> {
-        let mut conn = self.pool.acquire().await?;
-        self.open_or_create_root_in_connection(&mut conn).await
-    }
-
-    pub(crate) async fn open_or_create_root_in_connection(
-        &self,
-        conn: &mut db::Connection,
-    ) -> Result<Directory> {
+    pub(crate) async fn open_or_create_root(&self, conn: &mut db::Connection) -> Result<Directory> {
         self.root_directory.open_or_create(conn, self.clone()).await
     }
 
@@ -80,7 +69,7 @@ impl Branch {
         conn: &mut db::Connection,
         path: &Utf8Path,
     ) -> Result<Directory> {
-        let mut curr = self.open_or_create_root_in_connection(conn).await?;
+        let mut curr = self.open_or_create_root(conn).await?;
 
         for component in path.components() {
             match component {
@@ -120,10 +109,9 @@ impl Branch {
         dir.create_file(conn, name.to_string()).await
     }
 
-    pub(crate) async fn root_block_id(&self) -> Result<BlockId> {
-        let mut conn = self.db_pool().acquire().await?;
+    pub(crate) async fn root_block_id(&self, conn: &mut db::Connection) -> Result<BlockId> {
         self.data()
-            .get(&mut conn, &Locator::ROOT.encode(self.keys().read()))
+            .get(conn, &Locator::ROOT.encode(self.keys().read()))
             .await
     }
 
@@ -179,10 +167,7 @@ mod tests {
         let branch = setup().await;
         let mut conn = branch.db_pool().acquire().await.unwrap();
 
-        let root = branch
-            .open_or_create_root_in_connection(&mut conn)
-            .await
-            .unwrap();
+        let root = branch.open_or_create_root(&mut conn).await.unwrap();
 
         branch
             .ensure_directory_exists(&mut conn, Utf8Path::new("/dir"))

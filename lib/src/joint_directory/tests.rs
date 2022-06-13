@@ -13,16 +13,10 @@ async fn no_conflict() {
     let branches = setup(2).await;
     let mut conn = branches[0].db_pool().acquire().await.unwrap();
 
-    let root0 = branches[0]
-        .open_or_create_root_in_connection(&mut conn)
-        .await
-        .unwrap();
+    let root0 = branches[0].open_or_create_root(&mut conn).await.unwrap();
     create_file(&mut conn, &root0, "file0.txt", &[], &branches[0]).await;
 
-    let root1 = branches[1]
-        .open_or_create_root_in_connection(&mut conn)
-        .await
-        .unwrap();
+    let root1 = branches[1].open_or_create_root(&mut conn).await.unwrap();
     create_file(&mut conn, &root1, "file1.txt", &[], &branches[1]).await;
 
     let root = JointDirectory::new(Some(branches[0].clone()), [root0, root1]);
@@ -53,16 +47,10 @@ async fn conflict_independent_files() {
     let branches = setup(2).await;
     let mut conn = branches[0].db_pool().acquire().await.unwrap();
 
-    let root0 = branches[0]
-        .open_or_create_root_in_connection(&mut conn)
-        .await
-        .unwrap();
+    let root0 = branches[0].open_or_create_root(&mut conn).await.unwrap();
     create_file(&mut conn, &root0, "file.txt", &[], &branches[0]).await;
 
-    let root1 = branches[1]
-        .open_or_create_root_in_connection(&mut conn)
-        .await
-        .unwrap();
+    let root1 = branches[1].open_or_create_root(&mut conn).await.unwrap();
     create_file(&mut conn, &root1, "file.txt", &[], &branches[1]).await;
 
     let root = JointDirectory::new(Some(branches[0].clone()), [root0, root1]);
@@ -112,10 +100,7 @@ async fn conflict_forked_files() {
     let branches = setup(2).await;
     let mut conn = branches[0].db_pool().acquire().await.unwrap();
 
-    let root0 = branches[0]
-        .open_or_create_root_in_connection(&mut conn)
-        .await
-        .unwrap();
+    let root0 = branches[0].open_or_create_root(&mut conn).await.unwrap();
     create_file(&mut conn, &root0, "file.txt", b"one", &branches[0]).await;
 
     // Fork the file into branch 1 and then modify it.
@@ -161,19 +146,13 @@ async fn conflict_directories() {
     let branches = setup(2).await;
     let mut conn = branches[0].db_pool().acquire().await.unwrap();
 
-    let root0 = branches[0]
-        .open_or_create_root_in_connection(&mut conn)
-        .await
-        .unwrap();
+    let root0 = branches[0].open_or_create_root(&mut conn).await.unwrap();
     root0
         .create_directory(&mut conn, "dir".to_owned())
         .await
         .unwrap();
 
-    let root1 = branches[1]
-        .open_or_create_root_in_connection(&mut conn)
-        .await
-        .unwrap();
+    let root1 = branches[1].open_or_create_root(&mut conn).await.unwrap();
     root1
         .create_directory(&mut conn, "dir".to_owned())
         .await
@@ -195,17 +174,11 @@ async fn conflict_file_and_directory() {
     let branches = setup(2).await;
     let mut conn = branches[0].db_pool().acquire().await.unwrap();
 
-    let root0 = branches[0]
-        .open_or_create_root_in_connection(&mut conn)
-        .await
-        .unwrap();
+    let root0 = branches[0].open_or_create_root(&mut conn).await.unwrap();
 
     create_file(&mut conn, &root0, "config", &[], &branches[0]).await;
 
-    let root1 = branches[1]
-        .open_or_create_root_in_connection(&mut conn)
-        .await
-        .unwrap();
+    let root1 = branches[1].open_or_create_root(&mut conn).await.unwrap();
     root1
         .create_directory(&mut conn, "config".to_owned())
         .await
@@ -246,10 +219,7 @@ async fn conflict_identical_versions() {
     let mut conn = branches[0].db_pool().acquire().await.unwrap();
 
     // Create a file by one branch.
-    let root0 = branches[0]
-        .open_or_create_root_in_connection(&mut conn)
-        .await
-        .unwrap();
+    let root0 = branches[0].open_or_create_root(&mut conn).await.unwrap();
     create_file(&mut conn, &root0, "file.txt", b"one", &branches[0]).await;
 
     // Fork it into the other branch, creating an identical version of it.
@@ -298,10 +268,7 @@ async fn cd_into_concurrent_directory() {
     let branches = setup(2).await;
     let mut conn = branches[0].db_pool().acquire().await.unwrap();
 
-    let root0 = branches[0]
-        .open_or_create_root_in_connection(&mut conn)
-        .await
-        .unwrap();
+    let root0 = branches[0].open_or_create_root(&mut conn).await.unwrap();
 
     let dir0 = root0
         .create_directory(&mut conn, "pics".to_owned())
@@ -309,10 +276,7 @@ async fn cd_into_concurrent_directory() {
         .unwrap();
     create_file(&mut conn, &dir0, "dog.jpg", &[], &branches[0]).await;
 
-    let root1 = branches[1]
-        .open_or_create_root_in_connection(&mut conn)
-        .await
-        .unwrap();
+    let root1 = branches[1].open_or_create_root(&mut conn).await.unwrap();
     let dir1 = root1
         .create_directory(&mut conn, "pics".to_owned())
         .await
@@ -338,16 +302,10 @@ async fn merge_locally_non_existing_file() {
     let content = b"cat";
 
     // Create local root dir
-    let local_root = branches[0]
-        .open_or_create_root_in_connection(&mut conn)
-        .await
-        .unwrap();
+    let local_root = branches[0].open_or_create_root(&mut conn).await.unwrap();
 
     // Create remote root dir
-    let remote_root = branches[1]
-        .open_or_create_root_in_connection(&mut conn)
-        .await
-        .unwrap();
+    let remote_root = branches[1].open_or_create_root(&mut conn).await.unwrap();
 
     // Create a file in the remote root
     create_file(&mut conn, &remote_root, "cat.jpg", content, &branches[1]).await;
@@ -375,14 +333,8 @@ async fn merge_locally_older_file() {
     let content_v0 = b"version 0";
     let content_v1 = b"version 1";
 
-    let local_root = branches[0]
-        .open_or_create_root_in_connection(&mut conn)
-        .await
-        .unwrap();
-    let remote_root = branches[1]
-        .open_or_create_root_in_connection(&mut conn)
-        .await
-        .unwrap();
+    let local_root = branches[0].open_or_create_root(&mut conn).await.unwrap();
+    let remote_root = branches[1].open_or_create_root(&mut conn).await.unwrap();
 
     // Create a file in the remote root
     create_file(&mut conn, &remote_root, "cat.jpg", content_v0, &branches[1]).await;
@@ -420,14 +372,8 @@ async fn merge_locally_newer_file() {
     let content_v0 = b"version 0";
     let content_v1 = b"version 1";
 
-    let local_root = branches[0]
-        .open_or_create_root_in_connection(&mut conn)
-        .await
-        .unwrap();
-    let remote_root = branches[1]
-        .open_or_create_root_in_connection(&mut conn)
-        .await
-        .unwrap();
+    let local_root = branches[0].open_or_create_root(&mut conn).await.unwrap();
+    let remote_root = branches[1].open_or_create_root(&mut conn).await.unwrap();
 
     create_file(&mut conn, &remote_root, "cat.jpg", content_v0, &branches[1]).await;
 
@@ -462,11 +408,11 @@ async fn attempt_to_merge_concurrent_file() {
     let mut conn = branches[0].db_pool().acquire().await.unwrap();
 
     let local_root = branches[0]
-        .open_or_create_root_in_connection(&mut *branches[0].db_pool().acquire().await.unwrap())
+        .open_or_create_root(&mut *branches[0].db_pool().acquire().await.unwrap())
         .await
         .unwrap();
     let remote_root = branches[1]
-        .open_or_create_root_in_connection(&mut *branches[1].db_pool().acquire().await.unwrap())
+        .open_or_create_root(&mut *branches[1].db_pool().acquire().await.unwrap())
         .await
         .unwrap();
 
@@ -509,16 +455,10 @@ async fn local_merge_is_idempotent() {
     let branches = setup(2).await;
     let mut conn = branches[0].db_pool().acquire().await.unwrap();
 
-    let local_root = branches[0]
-        .open_or_create_root_in_connection(&mut conn)
-        .await
-        .unwrap();
-    let vv0 = branches[0].version_vector().await.unwrap();
+    let local_root = branches[0].open_or_create_root(&mut conn).await.unwrap();
+    let vv0 = branches[0].version_vector(&mut conn).await.unwrap();
 
-    let remote_root = branches[1]
-        .open_or_create_root_in_connection(&mut conn)
-        .await
-        .unwrap();
+    let remote_root = branches[1].open_or_create_root(&mut conn).await.unwrap();
 
     // Merge after a remote modification - this causes local modification.
     create_file(&mut conn, &remote_root, "cat.jpg", b"v0", &branches[1]).await;
@@ -531,7 +471,7 @@ async fn local_merge_is_idempotent() {
     .await
     .unwrap();
 
-    let vv1 = branches[0].version_vector().await.unwrap();
+    let vv1 = branches[0].version_vector(&mut conn).await.unwrap();
     assert!(vv1 > vv0);
 
     // Merge again. This time there is no local modification because there was no remote
@@ -544,7 +484,7 @@ async fn local_merge_is_idempotent() {
     .await
     .unwrap();
 
-    let vv2 = branches[0].version_vector().await.unwrap();
+    let vv2 = branches[0].version_vector(&mut conn).await.unwrap();
     assert_eq!(vv2, vv1);
 
     // Perform another remote modification and merge again - this causes local modification
@@ -559,7 +499,7 @@ async fn local_merge_is_idempotent() {
     .await
     .unwrap();
 
-    let vv3 = branches[0].version_vector().await.unwrap();
+    let vv3 = branches[0].version_vector(&mut conn).await.unwrap();
     assert!(vv3 > vv2);
 
     // Another idempotent merge which causes no local modification.
@@ -568,7 +508,7 @@ async fn local_merge_is_idempotent() {
         .await
         .unwrap();
 
-    let vv4 = branches[0].version_vector().await.unwrap();
+    let vv4 = branches[0].version_vector(&mut conn).await.unwrap();
     assert_eq!(vv4, vv3);
 }
 
@@ -577,14 +517,8 @@ async fn remote_merge_is_idempotent() {
     let branches = setup(2).await;
     let mut conn = branches[0].db_pool().acquire().await.unwrap();
 
-    let local_root = branches[0]
-        .open_or_create_root_in_connection(&mut conn)
-        .await
-        .unwrap();
-    let remote_root = branches[1]
-        .open_or_create_root_in_connection(&mut conn)
-        .await
-        .unwrap();
+    let local_root = branches[0].open_or_create_root(&mut conn).await.unwrap();
+    let remote_root = branches[1].open_or_create_root(&mut conn).await.unwrap();
 
     create_file(&mut conn, &remote_root, "cat.jpg", b"v0", &branches[1]).await;
 
@@ -597,7 +531,7 @@ async fn remote_merge_is_idempotent() {
     .await
     .unwrap();
 
-    let vv0 = branches[0].version_vector().await.unwrap();
+    let vv0 = branches[0].version_vector(&mut conn).await.unwrap();
 
     // Then merge local back into remote. This has no effect.
     JointDirectory::new(Some(branches[1].clone()), [remote_root, local_root])
@@ -605,7 +539,7 @@ async fn remote_merge_is_idempotent() {
         .await
         .unwrap();
 
-    let vv1 = branches[0].version_vector().await.unwrap();
+    let vv1 = branches[0].version_vector(&mut conn).await.unwrap();
     assert_eq!(vv1, vv0);
 }
 
@@ -614,10 +548,7 @@ async fn merge_remote_only() {
     let branches = setup(2).await;
     let mut conn = branches[0].db_pool().acquire().await.unwrap();
 
-    let remote_root = branches[1]
-        .open_or_create_root_in_connection(&mut conn)
-        .await
-        .unwrap();
+    let remote_root = branches[1].open_or_create_root(&mut conn).await.unwrap();
 
     create_file(&mut conn, &remote_root, "cat.jpg", b"v0", &branches[1]).await;
 
@@ -636,14 +567,8 @@ async fn merge_sequential_modifications() {
     let branches = setup_with_rng(StdRng::seed_from_u64(0), 2).await;
     let mut conn = branches[0].db_pool().acquire().await.unwrap();
 
-    let local_root = branches[0]
-        .open_or_create_root_in_connection(&mut conn)
-        .await
-        .unwrap();
-    let remote_root = branches[1]
-        .open_or_create_root_in_connection(&mut conn)
-        .await
-        .unwrap();
+    let local_root = branches[0].open_or_create_root(&mut conn).await.unwrap();
+    let remote_root = branches[1].open_or_create_root(&mut conn).await.unwrap();
 
     // Create a file by local, then modify it by remote, then read it back by local verifying
     // the modification by remote got through.
@@ -693,20 +618,14 @@ async fn merge_concurrent_directories() {
     let branches = setup(2).await;
     let mut conn = branches[0].db_pool().acquire().await.unwrap();
 
-    let local_root = branches[0]
-        .open_or_create_root_in_connection(&mut conn)
-        .await
-        .unwrap();
+    let local_root = branches[0].open_or_create_root(&mut conn).await.unwrap();
     let local_dir = local_root
         .create_directory(&mut conn, "dir".into())
         .await
         .unwrap();
     create_file(&mut conn, &local_dir, "dog.jpg", &[], &branches[0]).await;
 
-    let remote_root = branches[1]
-        .open_or_create_root_in_connection(&mut conn)
-        .await
-        .unwrap();
+    let remote_root = branches[1].open_or_create_root(&mut conn).await.unwrap();
     let remote_dir = remote_root
         .create_directory(&mut conn, "dir".into())
         .await
@@ -748,10 +667,7 @@ async fn remove_non_empty_subdirectory() {
     let branches = setup(2).await;
     let mut conn = branches[0].db_pool().acquire().await.unwrap();
 
-    let local_root = branches[0]
-        .open_or_create_root_in_connection(&mut conn)
-        .await
-        .unwrap();
+    let local_root = branches[0].open_or_create_root(&mut conn).await.unwrap();
     let local_dir = local_root
         .create_directory(&mut conn, "dir0".into())
         .await
@@ -763,10 +679,7 @@ async fn remove_non_empty_subdirectory() {
         .await
         .unwrap();
 
-    let remote_root = branches[1]
-        .open_or_create_root_in_connection(&mut conn)
-        .await
-        .unwrap();
+    let remote_root = branches[1].open_or_create_root(&mut conn).await.unwrap();
     let remote_dir = remote_root
         .create_directory(&mut conn, "dir0".into())
         .await
