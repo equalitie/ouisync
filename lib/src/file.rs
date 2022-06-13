@@ -110,14 +110,14 @@ impl File {
         let mut conn = self.blob.db_pool().acquire().await?;
         let mut tx = conn.begin().await?;
 
-        self.blob.flush_in_connection(&mut tx).await?;
+        self.blob.flush(&mut tx).await?;
         self.parent.commit(tx, VersionVector::new()).await
     }
 
     /// Saves any pending modifications but does not update the version vectors. For internal use
     /// only.
     pub(crate) async fn save(&mut self, tx: &mut db::Transaction<'_>) -> Result<()> {
-        self.blob.flush_in_connection(tx).await?;
+        self.blob.flush(tx).await?;
         Ok(())
     }
 

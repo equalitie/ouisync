@@ -114,7 +114,7 @@ impl Inner {
         );
         self.blob.truncate(tx, 0).await?;
         self.blob.write(tx, &buffer).await?;
-        self.blob.flush_in_connection(tx).await?;
+        self.blob.flush(tx).await?;
 
         Ok(())
     }

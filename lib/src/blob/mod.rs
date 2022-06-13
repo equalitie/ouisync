@@ -130,18 +130,7 @@ impl Blob {
 
     /// Flushes this blob, ensuring that all intermediately buffered contents gets written to the
     /// store.
-    // NOTE: this is currently used only in tests. Everywhere else we use `flush_in_transaction`.
-    #[cfg(test)]
-    pub async fn flush(&mut self) -> Result<bool> {
-        let mut tx = self.db_pool().begin().await?;
-        let was_dirty = self.lock().await.flush(&mut tx).await?;
-        tx.commit().await?;
-
-        Ok(was_dirty)
-    }
-
-    /// Flushes this blob in a db connection.
-    pub async fn flush_in_connection(&mut self, conn: &mut db::Connection) -> Result<bool> {
+    pub async fn flush(&mut self, conn: &mut db::Connection) -> Result<bool> {
         self.lock().await.flush(conn).await
     }
 
