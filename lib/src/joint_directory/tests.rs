@@ -407,14 +407,8 @@ async fn attempt_to_merge_concurrent_file() {
     let branches = setup(2).await;
     let mut conn = branches[0].db_pool().acquire().await.unwrap();
 
-    let local_root = branches[0]
-        .open_or_create_root(&mut *branches[0].db_pool().acquire().await.unwrap())
-        .await
-        .unwrap();
-    let remote_root = branches[1]
-        .open_or_create_root(&mut *branches[1].db_pool().acquire().await.unwrap())
-        .await
-        .unwrap();
+    let local_root = branches[0].open_or_create_root(&mut conn).await.unwrap();
+    let remote_root = branches[1].open_or_create_root(&mut conn).await.unwrap();
 
     create_file(&mut conn, &remote_root, "cat.jpg", b"v0", &branches[1]).await;
 
