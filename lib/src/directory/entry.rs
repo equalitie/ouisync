@@ -9,6 +9,7 @@ use crate::{
     blob_id::BlobId,
     branch::Branch,
     crypto::sign::PublicKey,
+    db,
     error::{Error, Result},
     file::File,
     locator::Locator,
@@ -210,10 +211,16 @@ impl<'a> DirectoryRef<'a> {
     }
 
     pub async fn open(&self) -> Result<Directory> {
+        let mut conn = self.branch().db_pool().acquire().await?;
+        self.open_in_connection(&mut conn).await
+    }
+
+    pub(crate) async fn open_in_connection(&self, conn: &mut db::Connection) -> Result<Directory> {
         self.inner
             .parent_inner
             .open_directories
             .open(
+                conn,
                 self.inner.parent_inner.blob.branch().clone(),
                 self.locator(),
                 self.inner.parent_context(),

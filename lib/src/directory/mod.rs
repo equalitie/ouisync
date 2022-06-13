@@ -47,17 +47,18 @@ impl Directory {
     /// Opens the root directory.
     /// For internal use only. Use [`Branch::open_root`] instead.
     pub(crate) async fn open_root(owner_branch: Branch) -> Result<Self> {
-        Self::open(owner_branch, Locator::ROOT, None).await
+        let mut conn = owner_branch.db_pool().acquire().await?;
+        Self::open(&mut conn, owner_branch, Locator::ROOT, None).await
     }
 
     /// Opens the root directory or creates it if it doesn't exist.
     /// For internal use only. Use [`Branch::open_or_create_root`] instead.
     pub(crate) async fn open_or_create_root(branch: Branch) -> Result<Self> {
         // TODO: make sure this is atomic
-
         let locator = Locator::ROOT;
+        let mut conn = branch.db_pool().acquire().await?;
 
-        match Self::open(branch.clone(), locator, None).await {
+        match Self::open(&mut conn, branch.clone(), locator, None).await {
             Ok(dir) => Ok(dir),
             Err(Error::EntryNotFound) => Ok(Self::create(branch, locator, None)),
             Err(error) => Err(error),
@@ -194,26 +195,20 @@ impl Directory {
         if let Some((parent_dir, entry_name)) = parent {
             let parent_dir = parent_dir.fork(local_branch).await?;
 
-            // FIXME: we are acquiring the directory lock before db connection here which can lead
-            // to deadlocks (we should always do it in the other way around: first the db, then the
-            // lock).
-            // FIXME: this is not atomic. It's possible the directory might get created in some
-            // other thread after this `match` expression but before we call `create_directory`
-            // which would return error. A way to fix this is to make `create_directory` idempotent.
-            let dir = match parent_dir.read().await.lookup(&entry_name) {
-                Ok(EntryRef::Directory(entry)) => Some(entry.open().await?),
+            let mut conn = parent_dir.acquire_db().await?;
+            let mut writer = parent_dir.write().await;
+
+            match writer.lookup(&entry_name) {
+                Ok(EntryRef::Directory(entry)) => entry.open_in_connection(&mut conn).await,
                 Ok(EntryRef::File(_)) => {
                     // TODO: return some kind of `Error::Conflict`
-                    return Err(Error::EntryIsFile);
+                    Err(Error::EntryIsFile)
                 }
-                Ok(EntryRef::Tombstone(_)) | Err(Error::EntryNotFound) => None,
-                Err(error) => return Err(error),
-            };
-
-            if let Some(dir) = dir {
-                Ok(dir)
-            } else {
-                parent_dir.create_directory(entry_name).await
+                Ok(EntryRef::Tombstone(_)) | Err(Error::EntryNotFound) => {
+                    let tx = conn.begin().await?;
+                    writer.create_directory(tx, entry_name).await
+                }
+                Err(error) => Err(error),
             }
         } else {
             local_branch.open_or_create_root().await
@@ -238,6 +233,7 @@ impl Directory {
     }
 
     async fn open(
+        conn: &mut db::Connection,
         owner_branch: Branch,
         locator: Locator,
         parent: Option<ParentContext>,
@@ -245,7 +241,7 @@ impl Directory {
         Ok(Self {
             branch_id: *owner_branch.id(),
             inner: Arc::new(RwLock::new(
-                Inner::open(owner_branch, locator, parent).await?,
+                Inner::open(conn, owner_branch, locator, parent).await?,
             )),
         })
     }
@@ -306,15 +302,25 @@ impl Directory {
                     let print = print.indent();
 
                     let parent_context = ParentContext::new(self.clone(), name.into());
+                    let mut conn = match inner.branch().db_pool().acquire().await {
+                        Ok(conn) => conn,
+                        Err(e) => {
+                            print.display(&format_args!("Failed to acquire db connection {:?}", e));
+                            continue;
+                        }
+                    };
 
                     let dir = inner
                         .open_directories
                         .open(
+                            &mut conn,
                             inner.blob.branch().clone(),
                             Locator::head(data.blob_id),
                             parent_context,
                         )
                         .await;
+
+                    drop(conn);
 
                     match dir {
                         Ok(dir) => {
@@ -479,7 +485,7 @@ impl Writer<'_> {
 
     async fn remove_entry(
         &mut self,
-        tx: db::Transaction<'_>,
+        mut tx: db::Transaction<'_>,
         name: &str,
         branch_id: &PublicKey,
         vv: VersionVector,
@@ -488,7 +494,7 @@ impl Writer<'_> {
         // If we are removing a directory, ensure it's empty (recursive removal can still be
         // implemented at the upper layers).
         let old_dir = match self.lookup(name) {
-            Ok(EntryRef::Directory(entry)) => Some(entry.open().await?),
+            Ok(EntryRef::Directory(entry)) => Some(entry.open_in_connection(&mut tx).await?),
             Ok(_) | Err(Error::EntryNotFound) => None,
             Err(error) => return Err(error),
         };

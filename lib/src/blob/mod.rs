@@ -30,7 +30,17 @@ impl Blob {
         shared: MaybeInitShared,
     ) -> Result<Self> {
         let mut conn = branch.db_pool().acquire().await?;
-        let mut current_block = OpenBlock::open_head(&mut conn, &branch, head_locator).await?;
+        Self::open_in_connection(&mut conn, branch, head_locator, shared).await
+    }
+
+    /// Opens an existing blob using the provided db connection.
+    pub async fn open_in_connection(
+        conn: &mut db::Connection,
+        branch: Branch,
+        head_locator: Locator,
+        shared: MaybeInitShared,
+    ) -> Result<Self> {
+        let mut current_block = OpenBlock::open_head(conn, &branch, head_locator).await?;
 
         let len = current_block.content.read_u64();
         let shared = shared.ensure_init(len).await;
@@ -80,22 +90,6 @@ impl Blob {
         .await?;
 
         Ok(())
-    }
-
-    pub async fn first_block_id(&self) -> Result<BlockId> {
-        let mut conn = self.db_pool().acquire().await?;
-
-        self.unique
-            .branch
-            .data()
-            .get(
-                &mut conn,
-                &self
-                    .unique
-                    .head_locator
-                    .encode(self.unique.branch.keys().read()),
-            )
-            .await
     }
 
     pub fn branch(&self) -> &Branch {

@@ -1,6 +1,7 @@
 use super::{inner::Inner, parent_context::ParentContext, Directory};
 use crate::{
     branch::Branch,
+    db,
     error::{Error, Result},
     locator::Locator,
     sync::{Mutex, RwLock},
@@ -59,6 +60,7 @@ impl SubdirectoryCache {
 
     pub async fn open(
         &self,
+        conn: &mut db::Connection,
         owner_branch: Branch,
         locator: Locator,
         parent: ParentContext,
@@ -73,13 +75,13 @@ impl SubdirectoryCache {
                         inner,
                     }
                 } else {
-                    let dir = Directory::open(owner_branch, locator, Some(parent)).await?;
+                    let dir = Directory::open(conn, owner_branch, locator, Some(parent)).await?;
                     entry.insert(Arc::downgrade(&dir.inner));
                     dir
                 }
             }
             hash_map::Entry::Vacant(entry) => {
-                let dir = Directory::open(owner_branch, locator, Some(parent)).await?;
+                let dir = Directory::open(conn, owner_branch, locator, Some(parent)).await?;
                 entry.insert(Arc::downgrade(&dir.inner));
                 dir
             }

@@ -41,12 +41,14 @@ impl Inner {
     }
 
     pub async fn open(
+        conn: &mut db::Connection,
         owner_branch: Branch,
         locator: Locator,
         parent: Option<ParentContext>,
     ) -> Result<Self> {
-        let mut blob = Blob::open(owner_branch, locator, Shared::uninit().into()).await?;
-        let buffer = blob.read_to_end().await?;
+        let mut blob =
+            Blob::open_in_connection(conn, owner_branch, locator, Shared::uninit().into()).await?;
+        let buffer = blob.read_to_end_in_connection(conn).await?;
         let entries = content::deserialize(&buffer)?;
 
         Ok(Self {
