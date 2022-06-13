@@ -20,6 +20,9 @@ const MULTICAST_PORT: u16 = 9271;
 // Time to wait when an error occurs on a socket.
 const ERROR_DELAY: Duration = Duration::from_secs(3);
 
+const PROTOCOL_MAGIC: &[u8; 17] = b"OUISYNC_DISCOVERY";
+const PROTOCOL_VERSION: u8 = 0;
+
 // Poor man's local discovery using UDP multicast.
 // XXX: We should probably use mDNS, but so far all libraries I tried had some issues.
 pub(super) struct LocalDiscovery {
@@ -84,15 +87,27 @@ impl LocalDiscovery {
                 }
             };
 
-            let message = match bincode::deserialize(&recv_buffer[..size]) {
-                Ok(message) => message,
-                Err(error) => {
-                    log::error!("Malformed discovery message: {}", error);
-                    continue;
-                }
-            };
+            let versioned_message: VersionedMessage =
+                match bincode::deserialize(&recv_buffer[..size]) {
+                    Ok(versioned_message) => versioned_message,
+                    Err(error) => {
+                        log::error!("Malformed discovery message: {}", error);
+                        continue;
+                    }
+                };
 
-            match message {
+            if &versioned_message.magic != PROTOCOL_MAGIC
+                || versioned_message.version != PROTOCOL_VERSION
+            {
+                log::warn!(
+                    "Incompatible protocol version (our:{}, their:{})",
+                    PROTOCOL_VERSION,
+                    versioned_message.version
+                );
+                continue;
+            }
+
+            match versioned_message.message {
                 Message::ImHereYouAll { id, .. } | Message::Reply { id, .. } if id == self.id => {
                     continue
                 }
@@ -110,7 +125,7 @@ impl LocalDiscovery {
             };
 
             // TODO: Consider `spawn`ing this, so it doesn't block this function.
-            if let Err(error) = send(&socket, &msg, addr).await {
+            if let Err(error) = send(&socket, msg, addr).await {
                 log::error!("Failed to send discovery message: {}", error);
                 self.socket_provider.mark_bad(socket).await;
             }
@@ -165,7 +180,7 @@ async fn run_beacon(
             port: listener_port,
         };
 
-        match send(&socket, &msg, multicast_endpoint).await {
+        match send(&socket, msg, multicast_endpoint).await {
             Ok(()) => {
                 error_shown = false;
                 *beacons_sent.get() += 1;
@@ -186,10 +201,22 @@ async fn run_beacon(
     }
 }
 
-async fn send(socket: &UdpSocket, message: &Message, addr: SocketAddr) -> io::Result<()> {
-    let data = bincode::serialize(message).unwrap();
+async fn send(socket: &UdpSocket, message: Message, addr: SocketAddr) -> io::Result<()> {
+    let data = bincode::serialize(&VersionedMessage {
+        magic: PROTOCOL_MAGIC.clone(),
+        version: PROTOCOL_VERSION,
+        message,
+    })
+    .unwrap();
     socket.send_to(&data, addr).await?;
     Ok(())
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct VersionedMessage {
+    magic: [u8; 17],
+    version: u8,
+    message: Message,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
