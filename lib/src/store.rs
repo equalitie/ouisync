@@ -76,11 +76,9 @@ impl Store {
 
         self.block_tracker.complete(&data.id);
 
-        let branches = self.index.branches().await;
-
         // Notify affected branches.
         for writer_id in &writer_ids {
-            if let Some(branch) = branches.get(writer_id) {
+            if let Some(branch) = self.index.get_branch(writer_id).await {
                 branch.notify();
             }
         }

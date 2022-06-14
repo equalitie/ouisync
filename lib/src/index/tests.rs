@@ -345,13 +345,7 @@ async fn does_not_delete_old_branch_until_new_branch_is_complete() {
             .unwrap();
     }
 
-    let remote_branch = store
-        .index
-        .branches()
-        .await
-        .get(&remote_id)
-        .unwrap()
-        .clone();
+    let remote_branch = store.index.get_branch(&remote_id).await.unwrap();
 
     // Verify we can retrieve all the blocks.
     check_all_blocks_exist(

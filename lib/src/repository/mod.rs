@@ -575,7 +575,7 @@ impl Repository {
         let proof = Proof::first(remote_id, write_keys);
         let branch = self.shared.store.index.create_branch(proof).await?;
 
-        self.shared.inflate(&branch).await
+        self.shared.inflate(branch).await
     }
 }
 
@@ -595,29 +595,23 @@ struct Shared {
 
 impl Shared {
     pub async fn local_branch(&self) -> Option<Branch> {
-        match self.store.index.branches().await.get(&self.this_writer_id) {
-            None => None,
+        match self.store.index.get_branch(&self.this_writer_id).await {
             Some(data) => self.inflate(data).await.ok(),
+            None => None,
         }
     }
 
     pub async fn get_or_create_local_branch(&self) -> Result<Branch> {
-        let branches = self.store.index.branches().await;
-
-        let data = if let Some(data) = branches.get(&self.this_writer_id) {
-            data.clone()
+        let data = if let Some(data) = self.store.index.get_branch(&self.this_writer_id).await {
+            data
+        } else if let Some(write_keys) = self.secrets.write_keys() {
+            let proof = Proof::first(self.this_writer_id, write_keys);
+            self.store.index.create_branch(proof).await?
         } else {
-            drop(branches);
-
-            if let Some(write_keys) = self.secrets.write_keys() {
-                let proof = Proof::first(self.this_writer_id, write_keys);
-                self.store.index.create_branch(proof).await?
-            } else {
-                return Err(Error::PermissionDenied);
-            }
+            return Err(Error::PermissionDenied);
         };
 
-        self.inflate(&data).await
+        self.inflate(data).await
     }
 
     // TODO: consider rewriting this to return `impl Stream` to avoid the Vec allocation.
@@ -625,9 +619,9 @@ impl Shared {
         future::try_join_all(
             self.store
                 .index
-                .branches()
+                .collect_branches()
                 .await
-                .values()
+                .into_iter()
                 .map(|data| self.inflate(data)),
         )
         .await
@@ -640,7 +634,7 @@ impl Shared {
 
     // Create `Branch` wrapping the given `data`, reusing a previously cached one if it exists,
     // and putting it into the cache if it does not.
-    async fn inflate(&self, data: &Arc<BranchData>) -> Result<Branch> {
+    async fn inflate(&self, data: Arc<BranchData>) -> Result<Branch> {
         match self.branches.lock().await.entry(*data.id()) {
             Entry::Occupied(entry) => Ok(entry.get().clone()),
             Entry::Vacant(entry) => {
@@ -653,7 +647,7 @@ impl Shared {
                     keys.read_only()
                 };
 
-                let branch = Branch::new(data.clone(), keys);
+                let branch = Branch::new(data, keys);
                 entry.insert(branch.clone());
                 Ok(branch)
             }
