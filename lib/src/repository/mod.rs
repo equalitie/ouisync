@@ -653,7 +653,7 @@ impl Shared {
                     keys.read_only()
                 };
 
-                let branch = Branch::new(self.store.db().clone(), data.clone(), keys);
+                let branch = Branch::new(data.clone(), keys);
                 entry.insert(branch.clone());
                 Ok(branch)
             }

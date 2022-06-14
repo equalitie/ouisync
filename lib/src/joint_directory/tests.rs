@@ -726,7 +726,7 @@ async fn setup_with_rng(mut rng: StdRng, branch_count: usize) -> (db::Pool, Vec<
                 )
                 .await
                 .unwrap();
-                Branch::new(pool.clone(), Arc::new(data), secrets.into())
+                Branch::new(Arc::new(data), secrets.into())
             }
         }))
         .await

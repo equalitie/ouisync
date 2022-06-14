@@ -667,7 +667,7 @@ async fn remove_concurrent_remote_file() {
 async fn setup() -> (db::Pool, Branch) {
     let pool = db::create(&db::Store::Temporary).await.unwrap();
     let keys = WriteSecrets::random().into();
-    let branch = create_branch(pool.clone(), keys).await;
+    let branch = create_branch(&pool, keys).await;
 
     (pool, branch)
 }
@@ -676,13 +676,13 @@ async fn setup_multiple<const N: usize>() -> (db::Pool, [Branch; N]) {
     let pool = db::create(&db::Store::Temporary).await.unwrap();
     let keys = AccessKeys::from(WriteSecrets::random());
     let branches: Vec<_> =
-        future::join_all((0..N).map(|_| create_branch(pool.clone(), keys.clone()))).await;
+        future::join_all((0..N).map(|_| create_branch(&pool, keys.clone()))).await;
     let branches = branches.try_into().ok().unwrap();
 
     (pool, branches)
 }
 
-async fn create_branch(pool: db::Pool, keys: AccessKeys) -> Branch {
+async fn create_branch(pool: &db::Pool, keys: AccessKeys) -> Branch {
     let notify_tx = broadcast::Sender::new(1);
     let write_keys = Keypair::random();
     let branch_data = BranchData::create(
@@ -693,5 +693,5 @@ async fn create_branch(pool: db::Pool, keys: AccessKeys) -> Branch {
     )
     .await
     .unwrap();
-    Branch::new(pool, Arc::new(branch_data), keys)
+    Branch::new(Arc::new(branch_data), keys)
 }

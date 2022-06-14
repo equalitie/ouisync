@@ -17,16 +17,14 @@ use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct Branch {
-    pool: db::Pool,
     branch_data: Arc<BranchData>,
     keys: AccessKeys,
     root_directory: Arc<RootDirectoryCache>,
 }
 
 impl Branch {
-    pub(crate) fn new(pool: db::Pool, branch_data: Arc<BranchData>, keys: AccessKeys) -> Self {
+    pub(crate) fn new(branch_data: Arc<BranchData>, keys: AccessKeys) -> Self {
         Self {
-            pool,
             branch_data,
             keys,
             root_directory: Arc::new(RootDirectoryCache::new()),
@@ -39,11 +37,6 @@ impl Branch {
 
     pub(crate) fn data(&self) -> &BranchData {
         &self.branch_data
-    }
-
-    #[deprecated]
-    pub(crate) fn db_pool(&self) -> &db::Pool {
-        &self.pool
     }
 
     pub async fn version_vector(&self, conn: &mut db::Connection) -> Result<VersionVector> {
@@ -128,7 +121,6 @@ impl Branch {
     #[cfg(test)]
     pub(crate) fn reopen(self, keys: AccessKeys) -> Self {
         Self {
-            pool: self.pool,
             branch_data: self.branch_data,
             keys,
             root_directory: self.root_directory,
@@ -183,7 +175,7 @@ mod tests {
 
         let proof = Proof::first(writer_id, &secrets.write_keys);
         let branch = index.create_branch(proof).await.unwrap();
-        let branch = Branch::new(pool.clone(), branch, secrets.into());
+        let branch = Branch::new(branch, secrets.into());
 
         (pool, branch)
     }

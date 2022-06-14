@@ -527,7 +527,7 @@ async fn fork_case(
         .await
         .unwrap(),
     );
-    let dst_branch = Branch::new(pool.clone(), dst_branch, src_branch.keys().clone());
+    let dst_branch = Branch::new(dst_branch, src_branch.keys().clone());
 
     let src_locator = if src_locator_is_root {
         Locator::ROOT
@@ -618,7 +618,7 @@ async fn setup(rng_seed: u64) -> (StdRng, db::Pool, Branch) {
     )
     .await
     .unwrap();
-    let branch = Branch::new(pool.clone(), Arc::new(branch), secrets.into());
+    let branch = Branch::new(Arc::new(branch), secrets.into());
 
     (rng, pool, branch)
 }

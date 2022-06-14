@@ -275,14 +275,13 @@ mod tests {
         let pool = db::create(&db::Store::Temporary).await.unwrap();
         let keys = AccessKeys::from(WriteSecrets::random());
 
-        (
-            pool.clone(),
-            create_branch(pool.clone(), keys.clone()).await,
-            create_branch(pool, keys).await,
-        )
+        let branch0 = create_branch(&pool, keys.clone()).await;
+        let branch1 = create_branch(&pool, keys.clone()).await;
+
+        (pool, branch0, branch1)
     }
 
-    async fn create_branch(pool: db::Pool, keys: AccessKeys) -> Branch {
+    async fn create_branch(pool: &db::Pool, keys: AccessKeys) -> Branch {
         let notify_tx = broadcast::Sender::new(1);
         let branch_data = BranchData::create(
             &mut pool.acquire().await.unwrap(),
@@ -292,7 +291,7 @@ mod tests {
         )
         .await
         .unwrap();
-        Branch::new(pool, Arc::new(branch_data), keys)
+        Branch::new(Arc::new(branch_data), keys)
     }
 }
 
