@@ -107,9 +107,8 @@ async fn process(shared: &Shared, local_branch: &Branch) -> Result<()> {
         }
     }
 
-    let mut conn = shared.store.db().acquire().await?;
     JointDirectory::new(Some(local_branch.clone()), roots)
-        .merge(&mut conn)
+        .merge(shared.store.db())
         .await?;
     Ok(())
 }

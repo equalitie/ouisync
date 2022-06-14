@@ -164,16 +164,21 @@ impl JointDirectory {
     /// In the presence of conflicts (multiple concurrent versions of the same file) this function
     /// still proceeds as far as it can, but the conflicting files remain unmerged.
     ///
+    /// Note: unlikely all the other methods in `JointDirectory`, this one takes `db::Pool`, not
+    /// `db::Connection`. The reason is that for large repositories, this function can take long
+    /// time to complete and this allows it to periodically release (and re-acquire) the connection
+    /// to prevent starving other tasks.
+    ///
     /// TODO: consider returning the conflicting paths as well.
-    /// TODO: pass `impl Acquire` instead of `Connection` so that we can also pass `Pool` and avoid
-    /// holding the connection for too long.
     #[async_recursion]
-    pub async fn merge(&mut self, conn: &mut db::Connection) -> Result<Directory> {
-        let local_branch = self.local_branch.as_ref().ok_or(Error::PermissionDenied)?;
-        let local_version = fork(conn, &mut self.versions, local_branch).await?;
+    pub async fn merge(&mut self, db: &db::Pool) -> Result<Directory> {
+        let mut conn = db.acquire().await?;
 
-        let new_version_vector = self.merge_version_vectors(conn).await?;
-        let old_version_vector = local_version.version_vector(conn).await?;
+        let local_branch = self.local_branch.as_ref().ok_or(Error::PermissionDenied)?;
+        let local_version = fork(&mut conn, &mut self.versions, local_branch).await?;
+
+        let new_version_vector = self.merge_version_vectors(&mut conn).await?;
+        let old_version_vector = local_version.version_vector(&mut conn).await?;
 
         if old_version_vector >= new_version_vector {
             // Local version already up to date, nothing to do.
@@ -187,16 +192,22 @@ impl JointDirectory {
 
         for entry in self.read().await.entries() {
             match entry {
-                JointEntryRef::File(entry) => files.push(entry.open(conn).await?),
+                JointEntryRef::File(entry) => files.push(entry.open(&mut conn).await?),
                 JointEntryRef::Directory(entry) => {
-                    subdirs.push(entry.open(conn, MissingVersionStrategy::Fail).await?)
+                    subdirs.push(entry.open(&mut conn, MissingVersionStrategy::Fail).await?)
                 }
             }
         }
 
+        // Drop the connection now and re-acquire it for each file/subdirectory separately, to give
+        // other tasks chance to acquire it too.
+        drop(conn);
+
         // Fork files.
         for mut file in files {
-            match file.fork(conn, local_branch).await {
+            let mut conn = db.acquire().await?;
+
+            match file.fork(&mut conn, local_branch).await {
                 Ok(()) => (),
                 Err(Error::EntryExists) => {
                     // Ignore conflicts
@@ -207,10 +218,11 @@ impl JointDirectory {
 
         // Merge subdirectories
         for mut dir in subdirs {
-            dir.merge(conn).await?;
+            dir.merge(db).await?;
         }
 
-        local_version.bump(conn, new_version_vector).await?;
+        let mut conn = db.acquire().await?;
+        local_version.bump(&mut conn, new_version_vector).await?;
 
         Ok(local_version)
     }

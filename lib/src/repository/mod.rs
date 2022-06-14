@@ -339,7 +339,6 @@ impl Repository {
         use std::borrow::Cow;
 
         let local_branch = self.get_or_create_local_branch().await?;
-
         let mut conn = self.db().acquire().await?;
 
         let src_joint_dir = self.cd(&mut conn, src_dir_path).await?;
@@ -359,11 +358,16 @@ impl Repository {
                 (file.parent(), Cow::Owned(src_name))
             }
             JointEntryRef::Directory(entry) => {
-                let dir_to_move = entry
-                    .open(&mut conn, MissingVersionStrategy::Skip)
-                    .await?
-                    .merge(&mut conn)
-                    .await?;
+                let mut dir_to_move = entry.open(&mut conn, MissingVersionStrategy::Skip).await?;
+
+                // `merge` takes `Pool`, not `Connection` (to avoid holding the connection for too
+                // long) and so to avoid deadlock we need to temporarily release `conn`...
+                drop(conn);
+
+                let dir_to_move = dir_to_move.merge(self.db()).await?;
+
+                // ...and acquire it back again once `merge` is done.
+                conn = self.db().acquire().await?;
 
                 // Prevent deadlocks
                 drop(src_joint_dir_r);
@@ -402,12 +406,9 @@ impl Repository {
         drop(dst_joint_reader);
         drop(dst_joint_dir);
 
-        // TODO: use `conn` to create `dst_dir`
-        drop(conn);
-
-        let dst_dir = self.create_directory(dst_dir_path).await?;
-
-        let mut conn = self.db().acquire().await?;
+        let dst_dir = local_branch
+            .ensure_directory_exists(&mut conn, dst_dir_path.as_ref())
+            .await?;
         src_dir
             .move_entry(&mut conn, &src_name, src_entry, &dst_dir, dst_name, dst_vv)
             .await
