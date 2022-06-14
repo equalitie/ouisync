@@ -50,7 +50,7 @@ async fn create_and_list_entries() {
             .open(&mut conn)
             .await
             .unwrap();
-        let actual_content = file.read_to_end_in_connection(&mut conn).await.unwrap();
+        let actual_content = file.read_to_end(&mut conn).await.unwrap();
         assert_eq!(actual_content, expected_content);
     }
 }
@@ -192,7 +192,7 @@ async fn rename_file() {
     assert_eq!(&file_locator, dst_file.locator());
     assert_eq!(
         &content[..],
-        &dst_file.read_to_end_in_connection(&mut conn).await.unwrap()[..]
+        &dst_file.read_to_end(&mut conn).await.unwrap()[..]
     );
 
     let src_entry = parent_dir.lookup(src_name).unwrap();
@@ -273,7 +273,7 @@ async fn move_file_within_branch() {
     assert_eq!(&file_locator, file.locator());
     assert_eq!(
         &content[..],
-        &file.read_to_end_in_connection(&mut conn).await.unwrap()[..]
+        &file.read_to_end(&mut conn).await.unwrap()[..]
     );
 
     //
@@ -315,7 +315,7 @@ async fn move_file_within_branch() {
 
     assert_eq!(
         &content[..],
-        &file.read_to_end_in_connection(&mut conn).await.unwrap()[..]
+        &file.read_to_end(&mut conn).await.unwrap()[..]
     );
 }
 
@@ -616,10 +616,7 @@ async fn modify_directory_concurrently() {
         .open(&mut conn)
         .await
         .unwrap();
-    assert_eq!(
-        file1.read_to_end_in_connection(&mut conn).await.unwrap(),
-        b"hello"
-    );
+    assert_eq!(file1.read_to_end(&mut conn).await.unwrap(), b"hello");
 }
 
 #[tokio::test(flavor = "multi_thread")]

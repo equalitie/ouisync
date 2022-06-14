@@ -319,7 +319,7 @@ async fn merge_locally_non_existing_file() {
     // Verify the file now exists in the local branch.
     let local_content = open_file(&mut conn, &local_root, "cat.jpg")
         .await
-        .read_to_end_in_connection(&mut conn)
+        .read_to_end(&mut conn)
         .await
         .unwrap();
     assert_eq!(local_content, content);
@@ -360,7 +360,7 @@ async fn merge_locally_older_file() {
     let entry = reader.lookup("cat.jpg").unwrap().file().unwrap();
 
     let mut file = entry.open(&mut conn).await.unwrap();
-    let local_content = file.read_to_end_in_connection(&mut conn).await.unwrap();
+    let local_content = file.read_to_end(&mut conn).await.unwrap();
     assert_eq!(local_content, content_v1);
 }
 
@@ -398,7 +398,7 @@ async fn merge_locally_newer_file() {
     let entry = reader.lookup("cat.jpg").unwrap().file().unwrap();
 
     let mut file = entry.open(&mut conn).await.unwrap();
-    let local_content = file.read_to_end_in_connection(&mut conn).await.unwrap();
+    let local_content = file.read_to_end(&mut conn).await.unwrap();
     assert_eq!(local_content, content_v1);
 }
 
@@ -434,7 +434,7 @@ async fn attempt_to_merge_concurrent_file() {
     assert_eq!(
         open_file(&mut conn, &local_root, "cat.jpg")
             .await
-            .read_to_end_in_connection(&mut conn)
+            .read_to_end(&mut conn)
             .await
             .unwrap(),
         b"v1"
@@ -601,7 +601,7 @@ async fn merge_sequential_modifications() {
         .open(&mut conn)
         .await
         .unwrap()
-        .read_to_end_in_connection(&mut conn)
+        .read_to_end(&mut conn)
         .await
         .unwrap();
     assert_eq!(content, b"v1");

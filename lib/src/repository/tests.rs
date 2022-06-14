@@ -118,7 +118,7 @@ async fn merge() {
         .open(&mut conn)
         .await
         .unwrap()
-        .read_to_end_in_connection(&mut conn)
+        .read_to_end(&mut conn)
         .await
         .unwrap();
     assert_eq!(content, b"hello");
@@ -460,7 +460,7 @@ async fn append_to_file() {
 
     let mut file = repo.open_file("foo.txt").await.unwrap();
     let mut conn = repo.db().acquire().await.unwrap();
-    let content = file.read_to_end_in_connection(&mut conn).await.unwrap();
+    let content = file.read_to_end(&mut conn).await.unwrap();
     assert_eq!(content, b"foobar");
 }
 
@@ -598,7 +598,7 @@ async fn read_access_same_replica() {
     let mut file = repo.open_file("public.txt").await.unwrap();
     let mut conn = repo.db().acquire().await.unwrap();
 
-    let content = file.read_to_end_in_connection(&mut conn).await.unwrap();
+    let content = file.read_to_end(&mut conn).await.unwrap();
     assert_eq!(content, b"hello world");
 
     // Writing is not allowed.
@@ -674,7 +674,7 @@ async fn read_access_different_replica() {
 
     let mut file = repo.open_file("public.txt").await.unwrap();
     let mut conn = repo.db().acquire().await.unwrap();
-    let content = file.read_to_end_in_connection(&mut conn).await.unwrap();
+    let content = file.read_to_end(&mut conn).await.unwrap();
     assert_eq!(content, b"hello world");
 }
 
@@ -989,15 +989,23 @@ async fn file_conflict_modify_local() {
     drop(local_file);
 
     let mut local_file = repo.open_file_version("test.txt", &local_id).await.unwrap();
-    assert_eq!(local_file.read_to_end().await.unwrap(), b"local v2");
+    let mut conn = repo.db().acquire().await.unwrap();
+    assert_eq!(
+        local_file.read_to_end(&mut conn).await.unwrap(),
+        b"local v2"
+    );
     assert_eq!(local_file.version_vector().await, vv![local_id => 3]);
+    drop(conn);
 
     let mut remote_file = repo
         .open_file_version("test.txt", &remote_id)
         .await
         .unwrap();
-
-    assert_eq!(remote_file.read_to_end().await.unwrap(), b"remote v1");
+    let mut conn = repo.db().acquire().await.unwrap();
+    assert_eq!(
+        remote_file.read_to_end(&mut conn).await.unwrap(),
+        b"remote v1"
+    );
     assert_eq!(remote_file.version_vector().await, vv![remote_id => 2]);
 }
 
@@ -1084,7 +1092,7 @@ async fn remove_branch() {
 async fn read_file(repo: &Repository, path: impl AsRef<Utf8Path>) -> Vec<u8> {
     let mut file = repo.open_file(path).await.unwrap();
     let mut conn = repo.db().acquire().await.unwrap();
-    file.read_to_end_in_connection(&mut conn).await.unwrap()
+    file.read_to_end(&mut conn).await.unwrap()
 }
 
 async fn create_remote_file(repo: &Repository, remote_id: PublicKey, name: &str, content: &[u8]) {

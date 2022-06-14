@@ -67,18 +67,7 @@ impl File {
 
     /// Read all data from this file from the current seek position until the end and return then
     /// in a `Vec`.
-    #[deprecated]
-    pub async fn read_to_end(&mut self) -> Result<Vec<u8>> {
-        let mut conn = self.blob.branch().db_pool().acquire().await?;
-        self.blob.read_to_end(&mut conn).await
-    }
-
-    /// Read all data from this file from the current seek position until the end and return then
-    /// in a `Vec`.
-    pub async fn read_to_end_in_connection(
-        &mut self,
-        conn: &mut db::Connection,
-    ) -> Result<Vec<u8>> {
+    pub async fn read_to_end(&mut self, conn: &mut db::Connection) -> Result<Vec<u8>> {
         self.blob.read_to_end(conn).await
     }
 
@@ -292,10 +281,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(
-            file.read_to_end_in_connection(&mut conn).await.unwrap(),
-            b"small"
-        );
+        assert_eq!(file.read_to_end(&mut conn).await.unwrap(), b"small");
 
         // Reopen forked file and verify it's modified
         let mut file = branch1
@@ -312,10 +298,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(
-            file.read_to_end_in_connection(&mut conn).await.unwrap(),
-            b"large"
-        );
+        assert_eq!(file.read_to_end(&mut conn).await.unwrap(), b"large");
     }
 
     #[tokio::test(flavor = "multi_thread")]
